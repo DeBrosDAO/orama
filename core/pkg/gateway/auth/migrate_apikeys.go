@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
@@ -29,7 +28,7 @@ func (s *Service) MigratePlaintextAPIKeys(ctx context.Context) (int, error) {
 	}
 
 	internalCtx := client.WithInternalAuth(ctx)
-	res, err := db.Query(internalCtx, "SELECT id, key FROM api_keys WHERE key LIKE 'ak_%'")
+	res, err := db.Query(internalCtx, "SELECT id, key FROM api_keys WHERE key LIKE 'ak_%' OR key LIKE 'orama_%'")
 	if err != nil {
 		return 0, fmt.Errorf("list plaintext api keys: %w", err)
 	}
@@ -44,7 +43,7 @@ func (s *Service) MigratePlaintextAPIKeys(ctx context.Context) (int, error) {
 		}
 		id := row[0]
 		raw, _ := row[1].(string)
-		if !strings.HasPrefix(raw, "ak_") {
+		if !IsLegacyKey(raw) && !LooksLikeKey(raw) {
 			continue
 		}
 		hashed := s.HashAPIKey(raw)

@@ -98,12 +98,22 @@ func TestHasWalletJWT(t *testing.T) {
 		t.Error("wallet JWT should be recognized")
 	}
 	if hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "ak_abc:ns"})) {
-		t.Error("api-key-exchanged JWT (ak_ prefix) must NOT count as a wallet JWT")
+		t.Error("an api-key-exchanged JWT in the legacy key format counted as a wallet JWT")
 	}
-	// A colon-bearing but non-ak_ subject (e.g. a future DID/CAIP wallet) IS a
-	// user — only the ak_ prefix marks an exchanged key.
-	if !hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "did:ethr:0xabc"})) {
-		t.Error("non-ak_ subject must count as a wallet JWT")
+	if hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "orama_rk_2fJ8xQ_9Zc"})) {
+		t.Error("an api-key-exchanged JWT counted as a wallet JWT — this is the check that stops " +
+			"an extracted runtime key acting as a logged-in user")
+	}
+	// A subject that is neither an address nor a key shape is treated as a key,
+	// not as a user. It used to be the other way round — anything without the
+	// `ak_` prefix was a wallet — which is fail-open: the one thing that must
+	// never happen is a key being read as a logged-in user.
+	if hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "did:ethr:not-an-address"})) {
+		t.Error("a subject nothing recognises counted as a wallet JWT")
+	}
+	// A Solana address is a wallet, in whatever case it was normalised to.
+	if !hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"})) {
+		t.Error("a Solana wallet JWT was not recognised")
 	}
 	if hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: ""})) {
 		t.Error("empty subject must not count")

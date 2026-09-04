@@ -216,14 +216,16 @@ func requiresUserJWT(grant string) bool {
 	return false
 }
 
-// isAPIKeySubject reports whether a JWT subject is an API key (ak_<rand>:<ns>),
-// as minted by the API-key→JWT exchange, rather than a SIWE wallet address.
-// This is the single signal used to (a) decide a JWT is not a genuine user
-// (hasWalletJWT) and (b) decide whether to trust an embedded scopes claim
-// (callerScopes). Wallet subjects are plain addresses; only exchanged keys
-// carry the ak_ prefix.
+// isAPIKeySubject reports whether a JWT subject is an API key, as minted by the
+// API-key→JWT exchange, rather than a SIWE wallet address. This is the single
+// signal used to (a) decide a JWT is not a genuine user (hasWalletJWT) and (b)
+// decide whether to trust an embedded scopes claim (callerScopes).
+//
+// It asks whether the subject IS a wallet rather than whether it looks like a
+// key: a subject nothing recognises is then a key, which holds only what its
+// row says, rather than a logged-in user. See auth.IsWalletSubject.
 func isAPIKeySubject(sub string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(sub)), "ak_")
+	return auth.IsAPIKeySubject(sub)
 }
 
 // hasWalletJWT reports whether the request carries a genuine end-user (SIWE

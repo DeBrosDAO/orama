@@ -104,6 +104,7 @@ is the index.
     - [`orama namespace keys list`](#orama-namespace-keys-list) — List scoped API keys
     - [`orama namespace keys revoke`](#orama-namespace-keys-revoke) — Revoke a single API key by id
     - [`orama namespace keys revoke-legacy`](#orama-namespace-keys-revoke-legacy) — Revoke ALL legacy (unscoped) keys — the cutover step
+    - [`orama namespace keys rotate`](#orama-namespace-keys-rotate) — Mint a successor to a key and keep the old one working for an overlap
   - [`orama namespace list`](#orama-namespace-list) — List namespaces owned by the current wallet
   - [`orama namespace repair`](#orama-namespace-repair) — Repair an under-provisioned namespace cluster
   - [`orama namespace rqlite`](#orama-namespace-rqlite) — Manage the namespace's internal RQLite database
@@ -1233,7 +1234,7 @@ orama namespace keys
 
 Create, list, and revoke scoped API keys. Profiles: invoke-only | app-runtime | admin.
 
-Subcommands: `create`, `list`, `revoke-legacy`, `revoke`
+Subcommands: `create`, `list`, `revoke-legacy`, `revoke`, `rotate`
 
 ### orama namespace keys create
 
@@ -1245,6 +1246,7 @@ orama namespace keys create [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--expires-in-days` | `0` | How long the key lives, in days (default 90, max 365). A key that never expires is not on offer |
 | `--label` | — | Human label for the key |
 | `--namespace` | — | Namespace name |
 | `--scope` | — | Profile (invoke-only\|app-runtime\|admin) or a comma-separated grant list (admin, cache, invoke, proxy, pubsub, push, storage, webrtc) |
@@ -1288,6 +1290,29 @@ orama namespace keys revoke-legacy [flags]
 |------|---------|-------------|
 | `--force` | `false` | Skip confirmation prompt |
 | `--namespace` | — | Namespace name |
+
+### orama namespace keys rotate
+
+Mint a successor to a key and keep the old one working for an overlap
+
+```
+orama namespace keys rotate [flags]
+```
+
+Mint a new key with the same grants and label, and shorten the original's life
+to the overlap.
+
+Rotating by minting a new key and revoking the old one in the same breath is an
+outage: whatever is deployed with the old key stops the moment the new one
+exists. The overlap is the window in which to deploy the successor — both keys
+work, and the original then expires on its own.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--expires-in-days` | `0` | How long the successor lives, in days (default 90) |
+| `--id` | `0` | Key id to rotate |
+| `--namespace` | — | Namespace name |
+| `--overlap-days` | `0` | How long the old key keeps working (default 7, max 30) — the window to deploy the new one |
 
 ### orama namespace list
 

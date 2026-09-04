@@ -160,6 +160,15 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Existing tokens invalidated on upgrade (users re-authenticate)
 
 **API Key Hashing (Step 1.6)**
+**What an API key is**
+- `orama_<type>_<payload>_<checksum>`, base62. The type (`sk` control plane, `rk` data plane) is a label for whoever finds the string, and follows the key's grants rather than being chosen; the scopes column is what decides what it may reach
+- The checksum is not a security property — anybody can compute it — but it means a leaked key is recognisable offline, which is what secret-scanning partnerships work on, and a mistyped one is refused before a database is touched
+- The key no longer carries its namespace. `ak_<random>:<namespace>` published which tenant a key belonged to in every issue, log line and support ticket it was ever pasted into
+- Every key has an expiry: 90 days by default, a year at most, and no option for a key that never expires. Migration 051 rebuilds `api_keys` to make `expires_at` and `scopes` NOT NULL, and gives existing keys 90 days from the migration rather than 90 days from when they were minted — dating it from creation would expire every key older than three months the moment it ran
+- Rotation mints a successor with the same grants and shortens the original to an overlap (7 days by default) instead of revoking it. Revoking in the same breath as minting is an outage: whatever is deployed with the old key stops the moment the new one exists
+- A revoked key is refused within ten seconds rather than sixty. The lookup caches a key's namespace and grants for a minute, so a revocation used to take that long to bite on every gateway that had seen the key; the revocation list is replicated and reloaded every ten seconds and is consulted first
+- Signing in mints a **new** key rather than returning the wallet's existing one. It used to `SELECT api_keys.key` and hand that back — which is the HMAC, since production always configures the secret — so a returning owner's second login answered with a string that authenticates nothing. The raw key is shown once and is not recoverable
+
 - API keys stored as HMAC-SHA256 hashes using a server-side secret
 - HMAC secret generated at cluster genesis, stored in `~/.orama/secrets/api-key-hmac-secret`
 - Namespace and index gateway spawn refuse to start if that file is missing or empty

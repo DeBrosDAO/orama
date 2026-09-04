@@ -88,7 +88,8 @@ var keysCreateCmd = &cobra.Command{
 		scope, _ := cmd.Flags().GetString("scope")
 		label, _ := cmd.Flags().GetString("label")
 		ns, _ := cmd.Flags().GetString("namespace")
-		return cli.NamespaceKeysCreate(ns, scope, label)
+		days, _ := cmd.Flags().GetInt("expires-in-days")
+		return cli.NamespaceKeysCreate(ns, scope, label, days)
 	},
 }
 
@@ -129,6 +130,25 @@ happened to sign in first.
 	},
 }
 
+var keysRotateCmd = &cobra.Command{
+	Use:   "rotate",
+	Short: "Mint a successor to a key and keep the old one working for an overlap",
+	Long: `Mint a new key with the same grants and label, and shorten the original's life
+to the overlap.
+
+Rotating by minting a new key and revoking the old one in the same breath is an
+outage: whatever is deployed with the old key stops the moment the new one
+exists. The overlap is the window in which to deploy the successor — both keys
+work, and the original then expires on its own.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		id, _ := cmd.Flags().GetInt("id")
+		overlap, _ := cmd.Flags().GetInt("overlap-days")
+		expires, _ := cmd.Flags().GetInt("expires-in-days")
+		ns, _ := cmd.Flags().GetString("namespace")
+		return cli.NamespaceKeysRotate(ns, id, overlap, expires)
+	},
+}
+
 var keysRevokeLegacyCmd = &cobra.Command{
 	Use:   "revoke-legacy",
 	Short: "Revoke ALL legacy (unscoped) keys — the cutover step",
@@ -157,7 +177,16 @@ func init() {
 	keysRevokeCmd.Flags().String("namespace", "", "Namespace name")
 	keysRevokeLegacyCmd.Flags().Bool("force", false, "Skip confirmation prompt")
 	keysRevokeLegacyCmd.Flags().String("namespace", "", "Namespace name")
+	keysCreateCmd.Flags().Int("expires-in-days", 0,
+		"How long the key lives, in days (default 90, max 365). A key that never expires is not on offer")
+	keysRotateCmd.Flags().Int("id", 0, "Key id to rotate")
+	keysRotateCmd.Flags().Int("overlap-days", 0,
+		"How long the old key keeps working (default 7, max 30) — the window to deploy the new one")
+	keysRotateCmd.Flags().Int("expires-in-days", 0, "How long the successor lives, in days (default 90)")
+	keysRotateCmd.Flags().String("namespace", "", "Namespace name")
+
 	keysCmd.AddCommand(keysCreateCmd)
+	keysCmd.AddCommand(keysRotateCmd)
 	keysCmd.AddCommand(keysListCmd)
 	keysCmd.AddCommand(keysRevokeCmd)
 	keysCmd.AddCommand(keysRevokeLegacyCmd)

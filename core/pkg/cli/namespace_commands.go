@@ -105,7 +105,7 @@ func confirmExact(prompt, want string) error {
 // --- API keys (bugboard #148) ---------------------------------------------
 
 // NamespaceKeysCreate mints a scoped API key.
-func NamespaceKeysCreate(ns, scope, label string) error {
+func NamespaceKeysCreate(ns, scope, label string, expiresInDays int) error {
 	if strings.TrimSpace(scope) == "" {
 		return clierr.Usage("--scope is required: a profile (invoke-only, app-runtime, admin) " +
 			"or an explicit grant list such as \"invoke,storage,push\"")
@@ -116,7 +116,11 @@ func NamespaceKeysCreate(ns, scope, label string) error {
 		return err
 	}
 
-	payload, err := json.Marshal(map[string]string{"scope": scope, "label": label})
+	body := map[string]any{"scope": scope, "label": label}
+	if expiresInDays > 0 {
+		body["expires_in_days"] = expiresInDays
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return clierr.Failure("failed to encode the request: %w", err)
 	}
@@ -131,6 +135,7 @@ func NamespaceKeysCreate(ns, scope, label string) error {
 	fmt.Printf("  id:        %v\n", result["id"])
 	fmt.Printf("  scopes:    %v\n", result["scopes"])
 	fmt.Printf("  namespace: %v\n", result["namespace"])
+	fmt.Printf("  expires:   %v\n", result["expires_at"])
 	if l, _ := result["label"].(string); l != "" {
 		fmt.Printf("  label:     %s\n", l)
 	}
@@ -162,15 +167,60 @@ func NamespaceKeysList(ns string) error {
 		km, _ := k.(map[string]any)
 		scopes, _ := km["scopes"].(string)
 		if scopes == "" {
-			scopes = "(legacy: admin)"
+			scopes = "(no grants: denies)"
 		}
 		state := "active"
 		if rv, _ := km["revoked_at"].(string); rv != "" {
 			state = "REVOKED"
 		}
 		label, _ := km["name"].(string)
-		fmt.Printf("  #%-4v  %-8s  %-40s  %s\n", km["id"], state, scopes, label)
+		expires, _ := km["expires_at"].(string)
+		fmt.Printf("  #%-4v  %-8s  %-40s  expires %-20s  %s", km["id"], state, scopes, expires, label)
+		// A key that replaces another is a rotation in progress, and both are
+		// live until the original's shortened expiry.
+		if from, ok := km["rotated_from"]; ok && from != nil {
+			fmt.Printf("  (rotated from #%v)", from)
+		}
+		fmt.Println()
 	}
+	return nil
+}
+
+// NamespaceKeysRotate mints a successor to a key and shortens the original's
+// life to the overlap.
+func NamespaceKeysRotate(ns string, id, overlapDays, expiresInDays int) error {
+	if id <= 0 {
+		return clierr.Usage("--id must be a positive key id; 'orama namespace keys list' shows them")
+	}
+
+	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	if err != nil {
+		return err
+	}
+
+	body := map[string]any{}
+	if overlapDays > 0 {
+		body["overlap_days"] = overlapDays
+	}
+	if expiresInDays > 0 {
+		body["expires_in_days"] = expiresInDays
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return clierr.Failure("failed to encode the request: %w", err)
+	}
+
+	result, err := nsRequest("rotate the key", http.MethodPost,
+		fmt.Sprintf("%s/v1/namespace/keys/%d/rotate", gatewayURL, id), apiKey, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Key %d rotated.\n", id)
+	fmt.Printf("  new id:    %v\n", result["id"])
+	fmt.Printf("  expires:   %v\n", result["expires_at"])
+	fmt.Printf("  key #%d works until %v — deploy the new one before then.\n", id, result["previous_expires"])
+	fmt.Printf("\n  API KEY (shown once — store it now):\n  %v\n", result["api_key"])
 	return nil
 }
 

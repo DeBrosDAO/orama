@@ -33,7 +33,7 @@ func purgeTenantPlaintextAPIKeys(ctx context.Context, db apiKeyQuerier) (int, er
 	}
 
 	internalCtx := client.WithInternalAuth(ctx)
-	res, err := db.Query(internalCtx, "SELECT COUNT(*) FROM api_keys WHERE key LIKE 'ak_%'")
+	res, err := db.Query(internalCtx, "SELECT COUNT(*) FROM api_keys WHERE key LIKE 'ak_%' OR key LIKE 'orama_%'")
 	if err != nil {
 		// A namespace database that has not run the core migrations has no
 		// such table, and that is the state this function wants anyway.
@@ -44,7 +44,7 @@ func purgeTenantPlaintextAPIKeys(ctx context.Context, db apiKeyQuerier) (int, er
 	}
 
 	before := countFromResult(res)
-	if _, err := db.Query(internalCtx, "DELETE FROM api_keys WHERE key LIKE 'ak_%'"); err != nil {
+	if _, err := db.Query(internalCtx, "DELETE FROM api_keys WHERE key LIKE 'ak_%' OR key LIKE 'orama_%'"); err != nil {
 		return 0, fmt.Errorf("remove plaintext api keys from this namespace's database: %w", err)
 	}
 	return before, nil

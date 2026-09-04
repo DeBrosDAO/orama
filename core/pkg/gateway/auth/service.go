@@ -783,28 +783,16 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 		return "", err
 	}
 
-	// Try existing linkage
-	var apiKey string
-	r1, err := db.Query(internalCtx,
-		"SELECT api_keys.key FROM wallet_api_keys JOIN api_keys ON wallet_api_keys.api_key_id = api_keys.id WHERE wallet_api_keys.namespace_id = ? AND LOWER(wallet_api_keys.wallet) = LOWER(?) LIMIT 1",
-		nsID, wallet,
-	)
-	if err == nil && r1 != nil && r1.Count > 0 && len(r1.Rows) > 0 && len(r1.Rows[0]) > 0 {
-		if val, ok := r1.Rows[0][0].(string); ok {
-			apiKey = val
-		}
-	}
-
-	if apiKey != "" {
-		return apiKey, nil
-	}
-
-	// Create new API key
-	buf := make([]byte, 18)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("failed to generate api key: %w", err)
-	}
-	apiKey = "ak_" + base64.RawURLEncoding.EncodeToString(buf) + ":" + namespace
+	// The wallet's previous key, if it has one. Its id, not its value: what is
+	// stored is an HMAC of the key, and this used to SELECT that column and
+	// hand it back as the caller's API key.
+	//
+	// That worked only while no HMAC secret was configured. Production always
+	// configures one, so a returning owner's second login answered with the
+	// hash — a string that hashes to something else again and is refused
+	// everywhere. The raw key is shown once and is not recoverable, which is
+	// the point of storing a hash; there is nothing to return but a new one.
+	previousID := s.previousWalletKeyID(internalCtx, db, nsID, wallet)
 
 	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured.
 	//
@@ -812,23 +800,47 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 	// the grant is admin — the same access an empty column used to be read as,
 	// with the difference that it is now a decision on the row rather than an
 	// inference in the reader, and a key minted with no scopes denies.
-	hashedKey := s.HashAPIKey(apiKey)
 	ownerScopes := ScopeSet{ScopeAdmin: {}}.Canonical()
+	apiKey, err := NewKey(KeyTypeFor(ownerScopes))
+	if err != nil {
+		return "", err
+	}
+	hashedKey := s.HashAPIKey(apiKey)
+
+	// Every key has an expiry now. A key minted by a login is the owner's own
+	// key and lives no longer than any other: the point of the column is that
+	// no path produces a credential that works forever.
+	expiresAt := time.Now().Add(KeyLifetime).UTC().Format(sqliteTime)
+
+	// rotated_from records that this key replaces the wallet's previous one, so
+	// `keys list` shows the succession rather than two unrelated keys.
+	//
+	// The previous key is deliberately NOT revoked. It is very likely deployed
+	// somewhere — that is what an owner's key is for — and revoking it because
+	// somebody signed in on a laptop would take an application down with no
+	// warning. It expires on its own, and `orama namespace keys revoke` ends it
+	// sooner when the owner decides to.
+	var rotatedFrom interface{}
+	if previousID != 0 {
+		rotatedFrom = previousID
+	}
 	if _, err := db.Query(internalCtx,
-		"INSERT INTO api_keys(key, name, namespace_id, scopes) VALUES (?, ?, ?, ?)",
-		hashedKey, "", nsID, ownerScopes,
+		"INSERT INTO api_keys(key, name, namespace_id, scopes, expires_at, rotated_from) VALUES (?, ?, ?, ?, ?, ?)",
+		hashedKey, "", nsID, ownerScopes, expiresAt, rotatedFrom,
 	); err != nil {
 		return "", fmt.Errorf("failed to store api key: %w", err)
 	}
 
-	// Link wallet -> api_key. A key the caller cannot find again on their next
-	// login is a new key every time, so this is not best-effort.
+	// Point the wallet at its newest key. REPLACE rather than IGNORE: the row
+	// says which key is the wallet's current one, and leaving it pointing at
+	// the previous one would make `rotated_from` describe a succession the
+	// linkage disagrees with.
 	rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", hashedKey)
 	if err != nil || rid == nil || rid.Count == 0 || len(rid.Rows) == 0 || len(rid.Rows[0]) == 0 {
 		return "", fmt.Errorf("api key stored for namespace %q but its id could not be read back: %w", namespace, err)
 	}
 	if _, err := db.Query(internalCtx,
-		"INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)",
+		"INSERT OR REPLACE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)",
 		nsID, NormalizeWallet(wallet), rid.Rows[0][0],
 	); err != nil {
 		return "", fmt.Errorf("failed to link the api key to wallet in namespace %q: %w", namespace, err)
@@ -901,4 +913,17 @@ func (s *Service) Base58Decode(input string) ([]byte, error) {
 		res = append([]byte{0}, res...)
 	}
 	return res, nil
+}
+
+// previousWalletKeyID returns the id of the key this wallet was last given in a
+// namespace, or 0. It is the `rotated_from` of the key about to be minted.
+func (s *Service) previousWalletKeyID(internalCtx context.Context, db client.DatabaseClient, nsID interface{}, wallet string) int64 {
+	res, err := db.Query(internalCtx,
+		`SELECT api_key_id FROM wallet_api_keys
+		  WHERE namespace_id = ? AND wallet = ? LIMIT 1`,
+		nsID, NormalizeWallet(wallet))
+	if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return 0
+	}
+	return toInt64(res.Rows[0][0])
 }

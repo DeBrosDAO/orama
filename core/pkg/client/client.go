@@ -388,17 +388,20 @@ func (c *Client) deriveNamespace() (string, error) {
 			return ns, nil
 		}
 	}
-	// Fallback to API key format ak_<random>:<namespace>
+	// A legacy key carried its namespace in the string. A current one does
+	// not, deliberately — a key pasted into an issue or a log line published
+	// which tenant it belonged to — so this yields nothing for those and the
+	// configured application name is what names the namespace.
 	if strings.TrimSpace(c.config.APIKey) != "" {
-		ns, err := parseAPIKeyNamespace(c.config.APIKey)
-		if err != nil {
-			return "", err
-		}
-		if ns != "" {
+		if ns := parseAPIKeyNamespace(c.config.APIKey); ns != "" {
 			return ns, nil
 		}
 	}
-	return c.config.AppName, nil
+	if ns := strings.TrimSpace(c.config.AppName); ns != "" {
+		return ns, nil
+	}
+	return "", fmt.Errorf("no namespace: set AppName, or supply a JWT that carries one — " +
+		"an API key does not name its namespace")
 }
 
 // parseJWTNamespace decodes base64url payload to extract Namespace claim (no signature verification)
@@ -423,20 +426,16 @@ func parseJWTNamespace(token string) (string, error) {
 	return strings.TrimSpace(claims.Namespace), nil
 }
 
-// parseAPIKeyNamespace extracts the namespace from ak_<random>:<namespace>
-func parseAPIKeyNamespace(key string) (string, error) {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return "", fmt.Errorf("invalid API key: empty")
-	}
-	// Allow but ignore prefix ak_
-	parts := strings.Split(key, ":")
+// parseAPIKeyNamespace extracts the namespace from a legacy `ak_<random>:<ns>`
+// key, or returns "" for a key that does not carry one.
+//
+// It is not an error for a key to name no namespace: that is what every key
+// minted from here on looks like. The caller falls back to the configured
+// application name.
+func parseAPIKeyNamespace(key string) string {
+	parts := strings.Split(strings.TrimSpace(key), ":")
 	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid API key format: expected ak_<random>:<namespace>")
+		return ""
 	}
-	ns := strings.TrimSpace(parts[1])
-	if ns == "" {
-		return "", fmt.Errorf("invalid API key: empty namespace")
-	}
-	return ns, nil
+	return strings.TrimSpace(parts[1])
 }

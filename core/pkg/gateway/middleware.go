@@ -304,6 +304,18 @@ func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, q apiKe
 // so that is the only store that can ever resolve them. A namespace's own
 // RQLite is never authoritative for API keys.
 func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQuerier) (string, string, error) {
+	// A revoked key must stop working now, not when the cache entry ages out.
+	//
+	// The entry below is held for a minute, so revoking a key left it working
+	// for up to that long — on every gateway that had seen it. The revocation
+	// list is replicated and reloaded every ten seconds, so consulting it first
+	// is both shorter and cluster-wide. It is checked under both spellings
+	// because RevokeKey only ever has the hash.
+	if g.authService != nil &&
+		g.authService.Revocations().DeniesSubject(key, g.authService.HashAPIKey(key)) {
+		return "", "", fmt.Errorf("invalid API key")
+	}
+
 	// Cache uses raw key as cache key (in-memory only, never persisted)
 	if g.mwCache != nil {
 		if cachedNS, cachedScopes, ok := g.mwCache.GetAPIKeyEntry(key); ok {
@@ -316,9 +328,11 @@ func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQue
 	}
 
 	internalCtx := client.WithInternalAuth(ctx)
-	// Filter out revoked keys so a revoked key resolves to "invalid" (bounded by
-	// the 60s cache TTL). scopes is nullable — a NULL means a legacy key.
-	sqlQuery := "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
+	// Revoked and expired keys resolve to "invalid". The revocation check above
+	// is what bounds the cache; this is what makes the row itself the answer.
+	// expires_at is NOT NULL from migration 051: a key with no expiry is what
+	// that migration exists to end, so the comparison is unconditional.
+	sqlQuery := "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL AND api_keys.expires_at > datetime('now') LIMIT 1"
 
 	hashedKey := g.authService.HashAPIKey(key)
 	res, err := q.Query(internalCtx, sqlQuery, hashedKey)
@@ -866,12 +880,11 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 
 		if v := ctx.Value(ctxKeyJWT); v != nil {
 			if claims, ok := v.(*auth.JWTClaims); ok && claims != nil && strings.TrimSpace(claims.Sub) != "" {
-				// Determine subject type.
-				// If subject looks like an API key (e.g., ak_<random>:<namespace>),
-				// treat it as an API key owner; otherwise assume a wallet subject.
+				// Determine subject type. A subject that is not
+				// recognisably a wallet is a key: see auth.IsWalletSubject for
+				// why that is the safe direction.
 				subj := strings.TrimSpace(claims.Sub)
-				lowerSubj := strings.ToLower(subj)
-				if strings.HasPrefix(lowerSubj, "ak_") || strings.Contains(subj, ":") {
+				if auth.IsAPIKeySubject(subj) {
 					ownerType = "api_key"
 					ownerID = subj
 				} else {

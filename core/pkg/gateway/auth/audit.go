@@ -29,6 +29,7 @@ const (
 	AuditLoggedOut        = "auth.logout"
 	AuditKeyIssued        = "key.issue"
 	AuditKeyRevoked       = "key.revoke"
+	AuditKeyRotated       = "key.rotate"
 	AuditKeysRevokedBulk  = "key.revoke_all"
 	AuditNamespaceCreated = "namespace.create"
 	AuditOperatorAction   = "operator.action"
@@ -44,7 +45,7 @@ const (
 // they are showing.
 var AuditActions = []string{
 	AuditChallengeIssued, AuditVerifySucceeded, AuditRefreshed, AuditRefreshReplayed,
-	AuditLoggedOut, AuditKeyIssued, AuditKeyRevoked, AuditKeysRevokedBulk,
+	AuditLoggedOut, AuditKeyIssued, AuditKeyRevoked, AuditKeyRotated, AuditKeysRevokedBulk,
 	AuditNamespaceCreated, AuditOperatorAction,
 	AuditGrantAdded, AuditGrantRevoked, AuditOwnerTransferred,
 }

@@ -194,7 +194,7 @@ func (h *ServerlessHandlers) getCallerHasInvokeFromRequest(r *http.Request) bool
 	if v := ctx.Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
 			sub := strings.ToLower(strings.TrimSpace(claims.Sub))
-			if strings.HasPrefix(sub, "ak_") {
+			if auth.IsAPIKeySubject(sub) {
 				if claims.Custom != nil {
 					if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).Has(auth.ScopeInvoke) {
 						return true
@@ -227,7 +227,7 @@ func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
 	if v := ctx.Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
 			sub := strings.ToLower(strings.TrimSpace(claims.Sub))
-			if strings.HasPrefix(sub, "ak_") && claims.Custom != nil {
+			if auth.IsAPIKeySubject(sub) && claims.Custom != nil {
 				if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).IsAdmin() {
 					return true
 				}
@@ -250,56 +250,15 @@ func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
 // could otherwise set a header and impersonate any wallet — including the
 // namespace owner — defeating in-function admin gates.
 func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
-	// Import strings package functions inline to avoid circular dependencies
-	trimSpace := func(s string) string {
-		start := 0
-		end := len(s)
-		for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-			start++
-		}
-		for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-			end--
-		}
-		return s[start:end]
-	}
-
-	hasPrefix := func(s, prefix string) bool {
-		return len(s) >= len(prefix) && s[0:len(prefix)] == prefix
-	}
-
-	contains := func(s, substr string) bool {
-		return len(s) >= len(substr) && func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
-			return false
-		}()
-	}
-
-	toLower := func(s string) string {
-		result := make([]byte, len(s))
-		for i := 0; i < len(s); i++ {
-			c := s[i]
-			if c >= 'A' && c <= 'Z' {
-				result[i] = c + 32
-			} else {
-				result[i] = c
-			}
-		}
-		return string(result)
-	}
-
 	// Identity comes only from a VERIFIED JWT subject, else the API-key-derived
 	// namespace. A client-supplied X-Wallet header is NOT trusted (bugboard
 	// #152) — it let an unauthenticated caller impersonate any wallet on the
 	// public invoke paths.
 	if v := r.Context().Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
-			subj := trimSpace(claims.Sub)
+			subj := strings.TrimSpace(claims.Sub)
 			// Ensure it's not an API key (standard Orama logic)
-			if !hasPrefix(toLower(subj), "ak_") && !contains(subj, ":") {
+			if auth.IsWalletSubject(subj) {
 				return subj
 			}
 		}

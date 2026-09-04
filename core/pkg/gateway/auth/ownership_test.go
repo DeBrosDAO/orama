@@ -145,7 +145,15 @@ func (d *ownershipDB) Query(_ context.Context, sql string, args ...interface{}) 
 	case strings.Contains(sql, "SELECT id FROM api_keys"):
 		return rows(int64(7)), nil
 
-	case strings.Contains(sql, "INSERT OR IGNORE INTO wallet_api_keys"):
+	case strings.Contains(sql, "SELECT api_key_id FROM wallet_api_keys"):
+		ns := key(args[0])
+		if _, ok := d.walletLinks[ns]; ok {
+			return rows(int64(7)), nil
+		}
+		return &client.QueryResult{}, nil
+
+	case strings.Contains(sql, "INTO wallet_api_keys"):
+		d.walletLinks[key(args[0])] = "linked"
 		if d.failKeyLink {
 			return nil, errString("wallet link write failed")
 		}
@@ -312,21 +320,34 @@ func TestGetOrCreateAPIKey_mintsWithAnExplicitGrant(t *testing.T) {
 	}
 }
 
-func TestGetOrCreateAPIKey_returnsTheExistingKeyForTheOwner(t *testing.T) {
+// Signing in again mints a new key rather than handing back the old one.
+//
+// It used to SELECT api_keys.key and return that. What is stored is an HMAC of
+// the key — production always configures the secret — so a returning owner's
+// second login answered with the hash: a string that hashes to something else
+// again and is refused everywhere. The raw key is shown once and is not
+// recoverable, which is the point of storing a hash, so there is nothing to
+// return but a new one.
+func TestGetOrCreateAPIKey_mintsAFreshKeyRatherThanReturningTheStoredHash(t *testing.T) {
 	db := newOwnershipDB()
 	db.walletOwners["1"] = "0xcreator"
 	db.walletLinks["1"] = "already-minted"
 	s := serviceWith(t, db)
+	s.apiKeyHMACSecret = "secret"
 
 	apiKey, err := s.GetOrCreateAPIKey(context.Background(), "0xcreator", "anchat")
 	if err != nil {
 		t.Fatalf("the owner was refused: %v", err)
 	}
-	if apiKey != "already-minted" {
-		t.Errorf("got %q, want the key the wallet already had", apiKey)
+	if apiKey == "already-minted" {
+		t.Fatal("the stored value was handed back as the caller's key; it is a hash and authenticates nothing")
 	}
-	if len(db.keys) != 0 {
-		t.Error("a second key was minted for a wallet that already had one")
+	if _, err := ParseKey(apiKey); err != nil {
+		t.Errorf("the key returned is not a key: %v", err)
+	}
+	if _, stored := db.keys[s.HashAPIKey(apiKey)]; !stored {
+		t.Error("the key handed to the caller is not the one whose hash was stored, " +
+			"so it would be refused on its first use")
 	}
 }
 

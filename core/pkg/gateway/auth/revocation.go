@@ -352,3 +352,36 @@ func (s *Service) RevokeAllSessions(ctx context.Context, subject string) error {
 // Revocations exposes the list so the gateway can start its pruner and, in a
 // test, drive a refresh.
 func (s *Service) Revocations() *RevocationList { return s.revocations }
+
+// DeniesSubject reports whether a credential presented under any of these
+// subjects has been revoked.
+//
+// Denies compares a token's issue time against the revocation, because a token
+// minted after it is a new grant. A raw API key has no issue time to compare —
+// the string either is the revoked credential or is not — so any live
+// revocation of the subject denies.
+//
+// This is what closes the window the API-key cache opens: a key's namespace and
+// grants are cached for a minute, so a revoked key kept working for up to that
+// long. The list is replicated and reloaded every ten seconds, so it is the
+// shorter of the two.
+func (r *RevocationList) DeniesSubject(subjects ...string) bool {
+	if r == nil {
+		return false
+	}
+	r.refreshIfStale()
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, subject := range subjects {
+		subject = strings.ToLower(strings.TrimSpace(subject))
+		if subject == "" {
+			continue
+		}
+		if _, denied := r.bySubject[subject]; denied {
+			return true
+		}
+	}
+	return false
+}

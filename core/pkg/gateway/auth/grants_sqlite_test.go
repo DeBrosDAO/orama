@@ -322,3 +322,177 @@ func TestGrant_isIdempotentAgainstTheRealSchema(t *testing.T) {
 		t.Errorf("%d grants survived the revocation", n)
 	}
 }
+
+// --- keys, against the real schema ----------------------------------------
+
+// Every key has an expiry now. A key minted once used to be a bearer token that
+// worked until somebody remembered to revoke it, which is a thing nobody
+// remembers.
+func TestIssueScopedKey_expiresAndCarriesItsGrants(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	ctx := context.Background()
+
+	raw, id, err := s.IssueScopedKey(ctx, "anchat", "invoke,storage", KeyOptions{Label: "app"})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, err := ParseKey(raw); err != nil {
+		t.Errorf("the key handed back is not a key: %v", err)
+	}
+
+	var scopes string
+	var got time.Time
+	if err := db.db.QueryRow(
+		`SELECT scopes, expires_at FROM api_keys WHERE id = ?`, id).Scan(&scopes, &got); err != nil {
+		t.Fatalf("read the key back: %v", err)
+	}
+	if scopes != "invoke,storage" {
+		t.Errorf("scopes %q", scopes)
+	}
+	want := time.Now().Add(KeyLifetime).UTC()
+	if got.Sub(want) > time.Minute || want.Sub(got) > time.Minute {
+		t.Errorf("expiry %s, want about %s", got, want)
+	}
+}
+
+func TestIssueScopedKey_refusals(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
+
+	if _, _, err := s.IssueScopedKey(ctx, "anchat", "", KeyOptions{}); err == nil {
+		t.Error("a key with no grants was minted; an empty scope set denies, so it would be inert and confusing")
+	}
+	if _, _, err := s.IssueScopedKey(ctx, "anchat", "admin", KeyOptions{Lifetime: 2 * MaxKeyLifetime}); err == nil {
+		t.Error("a key was minted with a lifetime past the ceiling")
+	}
+	if _, _, err := s.IssueScopedKey(ctx, "anchat", "admin", KeyOptions{Lifetime: -time.Hour}); err == nil {
+		t.Error("a key was minted with a negative lifetime")
+	}
+}
+
+// Rotating by minting a successor and revoking the original in the same breath
+// is an outage. The overlap is the window in which to deploy the new key.
+func TestRotateKey_keepsTheOriginalWorkingForTheOverlap(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	ctx := context.Background()
+
+	original, id, err := s.IssueScopedKey(ctx, "anchat", "invoke,storage", KeyOptions{Label: "app"})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+
+	successor, newID, err := s.RotateKey(ctx, "anchat", id, RotateOptions{Overlap: 48 * time.Hour})
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if successor == original {
+		t.Fatal("rotation handed back the same key")
+	}
+
+	var scopes, label string
+	var rotatedFrom int64
+	if err := db.db.QueryRow(
+		`SELECT scopes, name, rotated_from FROM api_keys WHERE id = ?`, newID).Scan(&scopes, &label, &rotatedFrom); err != nil {
+		t.Fatalf("read the successor: %v", err)
+	}
+	// A rotation is the same credential with new material. Quietly widening or
+	// narrowing it would make rotating something people avoid.
+	if scopes != "invoke,storage" || label != "app" {
+		t.Errorf("the successor has scopes %q and label %q", scopes, label)
+	}
+	if rotatedFrom != id {
+		t.Errorf("rotated_from is %d, want %d — the succession is what makes two live keys legible", rotatedFrom, id)
+	}
+
+	// The original is shortened, not revoked: whatever is deployed with it
+	// keeps working until the overlap runs out.
+	var revoked interface{}
+	var got time.Time
+	if err := db.db.QueryRow(
+		`SELECT revoked_at, expires_at FROM api_keys WHERE id = ?`, id).Scan(&revoked, &got); err != nil {
+		t.Fatalf("read the original: %v", err)
+	}
+	if revoked != nil {
+		t.Error("the original was revoked, so anything deployed with it stopped the moment the successor existed")
+	}
+	if want := time.Now().Add(48 * time.Hour).UTC(); got.Sub(want) > time.Minute || want.Sub(got) > time.Minute {
+		t.Errorf("the original expires %s, want about %s", got, want)
+	}
+}
+
+// A key already expiring inside the overlap must not be given more life by
+// being rotated.
+func TestRotateKey_onlyEverShortens(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	ctx := context.Background()
+
+	_, id, err := s.IssueScopedKey(ctx, "anchat", "admin", KeyOptions{Lifetime: time.Hour})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, _, err := s.RotateKey(ctx, "anchat", id, RotateOptions{Overlap: 30 * 24 * time.Hour}); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	var got time.Time
+	if err := db.db.QueryRow(`SELECT expires_at FROM api_keys WHERE id = ?`, id).Scan(&got); err != nil {
+		t.Fatalf("read the original: %v", err)
+	}
+	if got.After(time.Now().Add(2 * time.Hour).UTC()) {
+		t.Errorf("rotating extended the original's life to %s", got)
+	}
+}
+
+func TestRotateKey_refusals(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
+
+	_, id, err := s.IssueScopedKey(ctx, "anchat", "admin", KeyOptions{})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+
+	if _, _, err := s.RotateKey(ctx, "anchat", 999, RotateOptions{}); err == nil {
+		t.Error("a key that does not exist was rotated")
+	}
+	if _, _, err := s.RotateKey(ctx, "anchat", id, RotateOptions{Overlap: 2 * MaxRotationOverlap}); err == nil {
+		t.Error("an overlap past the ceiling was accepted; that is two live keys, not a rotation")
+	}
+	if err := s.RevokeKey(ctx, "anchat", id); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if _, _, err := s.RotateKey(ctx, "anchat", id, RotateOptions{}); err == nil {
+		t.Error("a revoked key was rotated")
+	}
+}
+
+// ListKeys shows the expiry and the succession, or a rotation in progress reads
+// as two unrelated keys.
+func TestListKeys_showsExpiryAndSuccession(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
+
+	_, id, err := s.IssueScopedKey(ctx, "anchat", "admin", KeyOptions{Label: "ci"})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, _, err := s.RotateKey(ctx, "anchat", id, RotateOptions{}); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	keys, err := s.ListKeys(ctx, "anchat")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("%d keys, want 2 — both are live during the overlap", len(keys))
+	}
+	for _, k := range keys {
+		if k.ExpiresAt == "" {
+			t.Errorf("key %d has no expiry", k.ID)
+		}
+	}
+	if keys[1].RotatedFrom != keys[0].ID {
+		t.Errorf("the successor says it came from %d, want %d", keys[1].RotatedFrom, keys[0].ID)
+	}
+}

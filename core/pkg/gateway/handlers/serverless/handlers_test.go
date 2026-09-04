@@ -208,12 +208,12 @@ func TestGetWalletFromRequest_XWalletHeaderIgnored(t *testing.T) {
 func TestGetWalletFromRequest_JWTClaims(t *testing.T) {
 	h := newTestHandlers(nil)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	claims := &auth.JWTClaims{Sub: "wallet-from-jwt"}
+	claims := &auth.JWTClaims{Sub: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"}
 	ctx := context.WithValue(req.Context(), ctxkeys.JWT, claims)
 	req = req.WithContext(ctx)
 
 	got := h.getWalletFromRequest(req)
-	if got != "wallet-from-jwt" {
+	if got != "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB" {
 		t.Errorf("expected 'wallet-from-jwt', got %q", got)
 	}
 }

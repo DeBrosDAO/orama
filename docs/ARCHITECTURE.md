@@ -824,8 +824,21 @@ Function Invocation:
      namespace requires the owner
 
 3. **API Keys**
-   - Long-lived credentials
-   - Stored in RQLite
+   - `orama_<type>_<payload>_<checksum>`, all base62. `sk` labels a key holding
+     the control plane and `rk` one holding only the data plane — a label for
+     whoever finds a leaked string, not what decides its authority
+   - The checksum means a leaked key can be recognised offline, by a secret
+     scanner or by this code, and a mistyped one is refused without a lookup
+   - The key does **not** carry its namespace. It used to be
+     `ak_<random>:<namespace>`, so a key pasted into an issue or a log line
+     published which tenant it belonged to. The namespace is on the row
+   - Every key expires: 90 days by default, a year at most, and there is no way
+     to ask for one that does not. A key had no expiry column at all, so minting
+     one produced a bearer token that worked until somebody remembered to revoke it
+   - `orama namespace keys rotate` mints a successor with the same grants and
+     shortens the original's life to an overlap (7 days by default) rather than
+     revoking it, so there is a window in which to deploy the new one
+   - Stored in RQLite as an HMAC of the key, never the key
    - Namespace-scoped
    - Carry a grant set (`invoke`, `storage`, `push`, `webrtc`, `proxy`, `pubsub`, `cache`, or `admin`). HTTP `/v1/invoke` is a public path; private functions still require the `invoke` grant (or a SIWE wallet). Node command/logs/leave and network connect/disconnect require `admin`.
 
