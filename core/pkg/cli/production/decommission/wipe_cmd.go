@@ -2,7 +2,6 @@ package decommission
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -23,38 +22,18 @@ type WipeFlags struct {
 // Target-side only: it erases a node and says nothing to the cluster. Use it
 // when the node is already retired (a `decommission --offline` was run, or it
 // never joined), or to finish a decommission whose wipe failed.
-func HandleWipe(args []string) {
-	flags, err := parseWipeFlags(args)
-	if err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+func RunWipe(flags *WipeFlags) error {
+	if err := flags.validate(); err != nil {
+		return err
 	}
-	if err := executeWipe(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	return executeWipe(flags)
 }
 
-func parseWipeFlags(args []string) (*WipeFlags, error) {
-	fs := flag.NewFlagSet("wipe", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &WipeFlags{}
-	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	fs.StringVar(&flags.Node, "node", "", "Public IP of the node to wipe; omit to wipe every node in the environment")
-	fs.BoolVar(&flags.Nuclear, "nuclear", false, "Also remove shared binaries (rqlited, ipfs, caddy, ...)")
-	fs.BoolVar(&flags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
+func (f *WipeFlags) validate() error {
+	if f.Env == "" {
+		return fmt.Errorf("--env is required\nUsage: orama node wipe --env <devnet|testnet> [--node <ip>] --force")
 	}
-	if flags.Env == "" {
-		return nil, fmt.Errorf("--env is required\nUsage: orama node wipe --env <devnet|testnet> [--node <ip>] --force")
-	}
-	return flags, nil
+	return nil
 }
 
 func executeWipe(flags *WipeFlags) error {

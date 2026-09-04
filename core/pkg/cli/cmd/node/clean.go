@@ -5,6 +5,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var cleanFlags decommission.WipeFlags
+
 var cleanCmd = &cobra.Command{
 	Use:        "clean",
 	Short:      "Deprecated: use 'orama node wipe' or 'orama node decommission'",
@@ -25,8 +27,15 @@ This command now runs 'wipe'.
 Examples:
   orama node wipe --env testnet --node 1.2.3.4
   orama node decommission --env testnet --node 1.2.3.4`,
-	Run: func(cmd *cobra.Command, args []string) {
-		decommission.HandleWipe(args)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return decommission.RunWipe(&cleanFlags)
 	},
-	DisableFlagParsing: true,
+}
+
+func init() {
+	f := cleanCmd.Flags()
+	f.StringVar(&cleanFlags.Env, "env", "", "Target environment (devnet, testnet) [required]")
+	f.StringVar(&cleanFlags.Node, "node", "", "Public IP of the node to wipe; omit to wipe every node in the environment")
+	f.BoolVar(&cleanFlags.Nuclear, "nuclear", false, "Also remove shared binaries (rqlited, ipfs, caddy, ...)")
+	f.BoolVar(&cleanFlags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
 }

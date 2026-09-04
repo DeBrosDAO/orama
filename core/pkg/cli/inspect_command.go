@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -44,41 +43,35 @@ func loadDotEnv(path string) {
 }
 
 // HandleInspectCommand handles the "orama inspect" command.
-func HandleInspectCommand(args []string) {
+// InspectOptions holds the flags for the inspect command.
+type InspectOptions struct {
+	ConfigPath string
+	Env        string
+	Subsystem  string
+	Format     string
+	Timeout    time.Duration
+	Verbose    bool
+	OutputDir  string
+	AIEnabled  bool
+	AIModel    string
+	AIAPIKey   string
+}
+
+// RunInspect inspects cluster health over SSH.
+func RunInspect(opts InspectOptions) error {
 	// Load .env file from current directory (only sets unset vars)
 	loadDotEnv(".env")
 
-	fs := flag.NewFlagSet("inspect", flag.ExitOnError)
-
-	configPath := fs.String("config", "scripts/nodes.conf", "Path to nodes.conf")
-	env := fs.String("env", "", "Environment to inspect (devnet, testnet)")
-	subsystem := fs.String("subsystem", "all", "Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,anyone,all)")
-	format := fs.String("format", "table", "Output format (table, json)")
-	timeout := fs.Duration("timeout", 30*time.Second, "SSH command timeout")
-	verbose := fs.Bool("verbose", false, "Verbose output")
-	// Output flags
-	outputDir := fs.String("output", "", "Save results to directory as markdown (e.g., ./results)")
-	// AI flags
-	aiEnabled := fs.Bool("ai", false, "Enable AI analysis of failures")
-	aiModel := fs.String("model", "moonshotai/kimi-k2.5", "OpenRouter model for AI analysis")
-	aiAPIKey := fs.String("api-key", "", "OpenRouter API key (or OPENROUTER_API_KEY env)")
-
-	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: orama inspect [flags]\n\n")
-		fmt.Fprintf(os.Stderr, "Inspect cluster health by SSHing into nodes and running checks.\n\n")
-		fmt.Fprintf(os.Stderr, "Flags:\n")
-		fs.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  orama inspect --env devnet\n")
-		fmt.Fprintf(os.Stderr, "  orama inspect --env devnet --subsystem rqlite\n")
-		fmt.Fprintf(os.Stderr, "  orama inspect --env devnet --ai\n")
-		fmt.Fprintf(os.Stderr, "  orama inspect --env devnet --ai --model openai/gpt-4o\n")
-		fmt.Fprintf(os.Stderr, "  orama inspect --env devnet --ai --output ./results\n")
-	}
-
-	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
-	}
+	configPath := &opts.ConfigPath
+	env := &opts.Env
+	subsystem := &opts.Subsystem
+	format := &opts.Format
+	timeout := &opts.Timeout
+	verbose := &opts.Verbose
+	outputDir := &opts.OutputDir
+	aiEnabled := &opts.AIEnabled
+	aiModel := &opts.AIModel
+	aiAPIKey := &opts.AIAPIKey
 
 	if *env == "" {
 		fmt.Fprintf(os.Stderr, "Error: --env is required (devnet, testnet)\n")
@@ -191,8 +184,9 @@ func HandleInspectCommand(args []string) {
 		}
 	}
 
-	// Exit with non-zero if any failures
+	// A failed check is a failed command.
 	if failures := results.Failures(); len(failures) > 0 {
-		os.Exit(1)
+		return fmt.Errorf("%d health check(s) failed", len(failures))
 	}
+	return nil
 }

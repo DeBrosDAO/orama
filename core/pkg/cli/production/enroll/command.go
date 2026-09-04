@@ -18,11 +18,9 @@ import (
 )
 
 // Handle processes the enroll command.
-func Handle(args []string) {
-	flags, err := ParseFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+func Run(flags *Flags) error {
+	if err := flags.validate(); err != nil {
+		return err
 	}
 
 	// Step 1: Fetch registration code from the OramaOS node
@@ -55,6 +53,7 @@ func Handle(args []string) {
 	fmt.Printf("Node %s enrolled successfully.\n", flags.NodeIP)
 	fmt.Printf("The node is now configuring WireGuard and encrypting its data partition.\n")
 	fmt.Printf("This may take a few minutes. Check status with: orama node status --env %s\n", flags.Env)
+	return nil
 }
 
 // fetchRegistrationCode retrieves the one-time registration code from the OramaOS node.

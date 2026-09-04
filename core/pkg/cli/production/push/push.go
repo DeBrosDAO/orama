@@ -1,7 +1,6 @@
 package push
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,41 +18,19 @@ type Flags struct {
 	Direct bool   // Sequential upload to each node (no fanout)
 }
 
-// Handle is the entry point for the push command.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
-	if err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+// Run is the entry point for the push command.
+func Run(flags *Flags) error {
+	if err := flags.validate(); err != nil {
+		return err
 	}
-
-	if err := execute(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	return execute(flags)
 }
 
-func parseFlags(args []string) (*Flags, error) {
-	fs := flag.NewFlagSet("push", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &Flags{}
-	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	fs.StringVar(&flags.Node, "node", "", "Push to a single node IP only")
-	fs.BoolVar(&flags.Direct, "direct", false, "Upload directly to each node (no hub fanout)")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
+func (f *Flags) validate() error {
+	if f.Env == "" {
+		return fmt.Errorf("--env is required\nUsage: orama node push --env <devnet|testnet>")
 	}
-
-	if flags.Env == "" {
-		return nil, fmt.Errorf("--env is required\nUsage: orama node push --env <devnet|testnet>")
-	}
-
-	return flags, nil
+	return nil
 }
 
 func execute(flags *Flags) error {

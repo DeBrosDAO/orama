@@ -56,61 +56,12 @@ type Flags struct {
 	DryRun bool
 }
 
-// Handle is the `orama node migrate-raft-id` entry point.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
-		usage()
-		os.Exit(1)
+// Run is the `orama node migrate-raft-id` entry point.
+func Run(flags *Flags) error {
+	if flags.Env == "" {
+		return fmt.Errorf("--env is required")
 	}
-	if err := execute(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func usage() {
-	fmt.Print(`Usage: orama node migrate-raft-id --env <env> [--node <ip>] [--dry-run] [--force]
-
-Moves nodes from address-derived raft ids to stable peer-id-based ones, one at
-a time, checking that quorum survives each step.
-
-  --env      Environment (required)
-  --node     Migrate only this public IP. Default: every node that needs it
-  --dry-run  Report what would change and exit
-  --force    Skip the confirmation prompt
-`)
-}
-
-func parseFlags(args []string) (*Flags, error) {
-	f := &Flags{}
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--env":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--env needs a value")
-			}
-			i++
-			f.Env = args[i]
-		case "--node":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--node needs a value")
-			}
-			i++
-			f.Node = args[i]
-		case "--dry-run":
-			f.DryRun = true
-		case "--force":
-			f.Force = true
-		default:
-			return nil, fmt.Errorf("unknown flag %q", args[i])
-		}
-	}
-	if f.Env == "" {
-		return nil, fmt.Errorf("--env is required")
-	}
-	return f, nil
+	return execute(flags)
 }
 
 // requireStableIDSupport refuses to migrate until every node in the

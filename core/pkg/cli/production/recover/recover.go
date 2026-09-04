@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -39,45 +38,22 @@ const (
 	rqlitePort     = constants.RQLiteHTTPPort
 )
 
-// Handle is the entry point for the recover-raft command.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
-	if err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+// Run is the entry point for the recover-raft command.
+func Run(flags *Flags) error {
+	if err := flags.validate(); err != nil {
+		return err
 	}
-
-	if err := execute(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	return execute(flags)
 }
 
-func parseFlags(args []string) (*Flags, error) {
-	fs := flag.NewFlagSet("recover-raft", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &Flags{}
-	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	fs.StringVar(&flags.Leader, "leader", "", "Leader node IP (node with highest commit index) [required]")
-	fs.StringVar(&flags.LeaderRaftAddr, "leader-raft-addr", "", "Explicit leader raft address host:port (e.g. 10.0.0.1:10101). Use when quorum is already lost so the leader can't be auto-resolved; bypasses the live-Leader check.")
-	fs.BoolVar(&flags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
+func (f *Flags) validate() error {
+	if f.Env == "" {
+		return fmt.Errorf("--env is required\nUsage: orama node recover-raft --env <devnet|testnet> --leader <ip>")
 	}
-
-	if flags.Env == "" {
-		return nil, fmt.Errorf("--env is required\nUsage: orama node recover-raft --env <devnet|testnet> --leader <ip>")
+	if f.Leader == "" {
+		return fmt.Errorf("--leader is required\nUsage: orama node recover-raft --env <devnet|testnet> --leader <ip>")
 	}
-	if flags.Leader == "" {
-		return nil, fmt.Errorf("--leader is required\nUsage: orama node recover-raft --env <devnet|testnet> --leader <ip>")
-	}
-
-	return flags, nil
+	return nil
 }
 
 func execute(flags *Flags) error {

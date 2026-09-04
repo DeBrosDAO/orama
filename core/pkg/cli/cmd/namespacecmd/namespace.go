@@ -1,8 +1,6 @@
 package namespacecmd
 
 import (
-	"fmt"
-
 	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/spf13/cobra"
 )
@@ -20,12 +18,7 @@ var deleteCmd = &cobra.Command{
 	Short: "Delete the current namespace and all its resources",
 	Run: func(cmd *cobra.Command, args []string) {
 		forceFlag, _ := cmd.Flags().GetBool("force")
-		var cliArgs []string
-		cliArgs = append(cliArgs, "delete")
-		if forceFlag {
-			cliArgs = append(cliArgs, "--force")
-		}
-		cli.HandleNamespaceCommand(cliArgs)
+		cli.HandleNamespaceDelete(forceFlag)
 	},
 }
 
@@ -34,7 +27,7 @@ var listCmd = &cobra.Command{
 	Aliases: []string{"ls"},
 	Short:   "List namespaces owned by the current wallet",
 	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleNamespaceCommand([]string{"list"})
+		cli.HandleNamespaceList()
 	},
 }
 
@@ -43,7 +36,7 @@ var repairCmd = &cobra.Command{
 	Short: "Repair an under-provisioned namespace cluster",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleNamespaceCommand(append([]string{"repair"}, args...))
+		cli.HandleNamespaceRepair(args[0])
 	},
 }
 
@@ -54,11 +47,7 @@ var enableCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		ns, _ := cmd.Flags().GetString("namespace")
-		cliArgs := []string{"enable", args[0]}
-		if ns != "" {
-			cliArgs = append(cliArgs, "--namespace", ns)
-		}
-		cli.HandleNamespaceCommand(cliArgs)
+		cli.HandleNamespaceEnable(args[0], ns)
 	},
 }
 
@@ -69,11 +58,7 @@ var disableCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		ns, _ := cmd.Flags().GetString("namespace")
-		cliArgs := []string{"disable", args[0]}
-		if ns != "" {
-			cliArgs = append(cliArgs, "--namespace", ns)
-		}
-		cli.HandleNamespaceCommand(cliArgs)
+		cli.HandleNamespaceDisable(args[0], ns)
 	},
 }
 
@@ -82,11 +67,7 @@ var webrtcStatusCmd = &cobra.Command{
 	Short: "Show WebRTC service status for a namespace",
 	Run: func(cmd *cobra.Command, args []string) {
 		ns, _ := cmd.Flags().GetString("namespace")
-		cliArgs := []string{"webrtc-status"}
-		if ns != "" {
-			cliArgs = append(cliArgs, "--namespace", ns)
-		}
-		cli.HandleNamespaceCommand(cliArgs)
+		cli.HandleNamespaceWebRTCStatus(ns)
 	},
 }
 
@@ -103,14 +84,7 @@ var keysCreateCmd = &cobra.Command{
 		scope, _ := cmd.Flags().GetString("scope")
 		label, _ := cmd.Flags().GetString("label")
 		ns, _ := cmd.Flags().GetString("namespace")
-		cliArgs := []string{"keys", "create", "--scope", scope}
-		if label != "" {
-			cliArgs = append(cliArgs, "--label", label)
-		}
-		if ns != "" {
-			cliArgs = append(cliArgs, "--namespace", ns)
-		}
-		cli.HandleNamespaceCommand(cliArgs)
+		cli.HandleNamespaceKeysCreate(ns, scope, label)
 	},
 }
 
@@ -120,11 +94,7 @@ var keysListCmd = &cobra.Command{
 	Short:   "List scoped API keys",
 	Run: func(cmd *cobra.Command, args []string) {
 		ns, _ := cmd.Flags().GetString("namespace")
-		cliArgs := []string{"keys", "list"}
-		if ns != "" {
-			cliArgs = append(cliArgs, "--namespace", ns)
-		}
-		cli.HandleNamespaceCommand(cliArgs)
+		cli.HandleNamespaceKeysList(ns)
 	},
 }
 
@@ -134,11 +104,7 @@ var keysRevokeCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		id, _ := cmd.Flags().GetInt("id")
 		ns, _ := cmd.Flags().GetString("namespace")
-		cliArgs := []string{"keys", "revoke", "--id", fmt.Sprintf("%d", id)}
-		if ns != "" {
-			cliArgs = append(cliArgs, "--namespace", ns)
-		}
-		cli.HandleNamespaceCommand(cliArgs)
+		cli.HandleNamespaceKeysRevoke(ns, id)
 	},
 }
 
@@ -148,14 +114,7 @@ var keysRevokeLegacyCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		force, _ := cmd.Flags().GetBool("force")
 		ns, _ := cmd.Flags().GetString("namespace")
-		cliArgs := []string{"keys", "revoke-legacy"}
-		if force {
-			cliArgs = append(cliArgs, "--force")
-		}
-		if ns != "" {
-			cliArgs = append(cliArgs, "--namespace", ns)
-		}
-		cli.HandleNamespaceCommand(cliArgs)
+		cli.HandleNamespaceKeysRevokeLegacy(ns, force)
 	},
 }
 

@@ -1,15 +1,12 @@
 package rollout
 
 import (
-	"flag"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/build"
 	"github.com/DeBrosOfficial/network/pkg/cli/production/push"
 	"github.com/DeBrosOfficial/network/pkg/cli/production/upgrade"
-	rolloutplan "github.com/DeBrosOfficial/network/pkg/rollout"
 )
 
 // Flags holds rollout command flags.
@@ -20,43 +17,19 @@ type Flags struct {
 	Delay   int    // Seconds a node has to rejoin before the rollout stops
 }
 
-// Handle is the entry point for the rollout command.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
-	if err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+// Run is the entry point for the rollout command.
+func Run(flags *Flags) error {
+	if err := flags.validate(); err != nil {
+		return err
 	}
-
-	if err := execute(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	return execute(flags)
 }
 
-func parseFlags(args []string) (*Flags, error) {
-	fs := flag.NewFlagSet("rollout", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &Flags{}
-	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	fs.BoolVar(&flags.NoBuild, "no-build", false, "Skip build step (use existing archive)")
-	fs.BoolVar(&flags.Yes, "yes", false, "Skip confirmation")
-	fs.IntVar(&flags.Delay, "delay", int(rolloutplan.GateBudget.Seconds()),
-		"Seconds a node has to rejoin the cluster after its upgrade before the rollout stops")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
+func (f *Flags) validate() error {
+	if f.Env == "" {
+		return fmt.Errorf("--env is required\nUsage: orama node rollout --env <devnet|testnet>")
 	}
-
-	if flags.Env == "" {
-		return nil, fmt.Errorf("--env is required\nUsage: orama node rollout --env <devnet|testnet>")
-	}
-
-	return flags, nil
+	return nil
 }
 
 func execute(flags *Flags) error {
@@ -83,19 +56,24 @@ func execute(flags *Flags) error {
 
 	// Step 2: Push
 	fmt.Printf("Step 2/3: Pushing to all %s nodes...\n\n", flags.Env)
-	push.Handle([]string{"--env", flags.Env})
+	if err := push.Run(&push.Flags{Env: flags.Env}); err != nil {
+		return fmt.Errorf("push failed: %w", err)
+	}
 
 	fmt.Println()
 
-	// Step 3: Rolling upgrade
+	// Step 3: Rolling upgrade.
+	//
+	// Yes is forwarded, or the rolling upgrade prints its plan and stops —
+	// after the build and push have already run.
 	fmt.Printf("Step 3/3: Rolling upgrade across %s...\n\n", flags.Env)
-	upgradeArgs := []string{"--env", flags.Env, "--delay", fmt.Sprintf("%d", flags.Delay)}
-	if flags.Yes {
-		// Forward it, or the rolling upgrade prints its plan and stops — after
-		// the build and push have already run.
-		upgradeArgs = append(upgradeArgs, "--yes")
+	if err := upgrade.Run(&upgrade.Flags{
+		Env:   flags.Env,
+		Delay: flags.Delay,
+		Yes:   flags.Yes,
+	}); err != nil {
+		return fmt.Errorf("rolling upgrade failed: %w", err)
 	}
-	upgrade.Handle(upgradeArgs)
 
 	elapsed := time.Since(start).Round(time.Second)
 	fmt.Printf("\nRollout complete in %s\n", elapsed)

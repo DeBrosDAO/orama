@@ -5,6 +5,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var raftIDFlags raftid.Flags
+
 var migrateRaftIDCmd = &cobra.Command{
 	Use:   "migrate-raft-id",
 	Short: "Move nodes to stable, peer-id-based raft identities (one-time)",
@@ -32,8 +34,15 @@ Examples:
   orama node migrate-raft-id --env testnet --dry-run
   orama node migrate-raft-id --env testnet
   orama node migrate-raft-id --env testnet --node 1.2.3.4`,
-	Run: func(cmd *cobra.Command, args []string) {
-		raftid.Handle(args)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return raftid.Run(&raftIDFlags)
 	},
-	DisableFlagParsing: true,
+}
+
+func init() {
+	f := migrateRaftIDCmd.Flags()
+	f.StringVar(&raftIDFlags.Env, "env", "", "Target environment [required]")
+	f.StringVar(&raftIDFlags.Node, "node", "", "Migrate only this public IP. Default: every node that needs it")
+	f.BoolVar(&raftIDFlags.DryRun, "dry-run", false, "Report what would change and exit")
+	f.BoolVar(&raftIDFlags.Force, "force", false, "Skip the confirmation prompt")
 }

@@ -5,6 +5,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var unlockFlags unlock.Flags
+
 var unlockCmd = &cobra.Command{
 	Use:   "unlock",
 	Short: "Unlock an OramaOS genesis node",
@@ -20,7 +22,12 @@ Usage:
 
 The node must be reachable over WireGuard on port 9998.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		unlock.Handle(args)
+		unlock.Run(&unlockFlags)
 	},
-	DisableFlagParsing: true,
+}
+
+func init() {
+	unlockCmd.Flags().StringVar(&unlockFlags.NodeIP, "node-ip", "", "WireGuard IP of the OramaOS node (required)")
+	unlockCmd.Flags().BoolVar(&unlockFlags.Genesis, "genesis", false, "Confirm genesis node unlock")
+	unlockCmd.Flags().StringVar(&unlockFlags.KeyFile, "key-file", "", "Path to encrypted genesis key file (optional)")
 }

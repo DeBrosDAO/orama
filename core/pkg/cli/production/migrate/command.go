@@ -1,27 +1,20 @@
 package migrate
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 )
 
-// Handle executes the migrate command
-func Handle(args []string) {
-	// Parse flags
-	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	dryRun := fs.Bool("dry-run", false, "Show what would be migrated without making changes")
+// Options holds the flags for the migrate command.
+type Options struct {
+	DryRun bool
+}
 
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "❌ Failed to parse flags: %v\n", err)
-		os.Exit(1)
-	}
+// Run executes the migrate command.
+func Run(opts Options) {
+	dryRun := &opts.DryRun
 
 	if os.Geteuid() != 0 && !*dryRun {
 		fmt.Fprintf(os.Stderr, "❌ Migration must be run as root (use sudo)\n")

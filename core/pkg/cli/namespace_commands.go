@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,62 +16,6 @@ import (
 )
 
 // HandleNamespaceCommand handles namespace management commands
-func HandleNamespaceCommand(args []string) {
-	if len(args) == 0 {
-		showNamespaceHelp()
-		return
-	}
-
-	subcommand := args[0]
-	switch subcommand {
-	case "delete":
-		var force bool
-		fs := flag.NewFlagSet("namespace delete", flag.ExitOnError)
-		fs.BoolVar(&force, "force", false, "Skip confirmation prompt")
-		_ = fs.Parse(args[1:])
-		handleNamespaceDelete(force)
-	case "list":
-		handleNamespaceList()
-	case "repair":
-		if len(args) < 2 {
-			fmt.Fprintf(os.Stderr, "Usage: orama namespace repair <namespace_name>\n")
-			os.Exit(1)
-		}
-		handleNamespaceRepair(args[1])
-	case "enable":
-		if len(args) < 2 {
-			fmt.Fprintf(os.Stderr, "Usage: orama namespace enable <feature> --namespace <name>\n")
-			fmt.Fprintf(os.Stderr, "Features: webrtc\n")
-			os.Exit(1)
-		}
-		handleNamespaceEnable(args[1:])
-	case "disable":
-		if len(args) < 2 {
-			fmt.Fprintf(os.Stderr, "Usage: orama namespace disable <feature> --namespace <name>\n")
-			fmt.Fprintf(os.Stderr, "Features: webrtc\n")
-			os.Exit(1)
-		}
-		handleNamespaceDisable(args[1:])
-	case "webrtc-status":
-		var ns string
-		fs := flag.NewFlagSet("namespace webrtc-status", flag.ExitOnError)
-		fs.StringVar(&ns, "namespace", "", "Namespace name")
-		_ = fs.Parse(args[1:])
-		if ns == "" {
-			fmt.Fprintf(os.Stderr, "Usage: orama namespace webrtc-status --namespace <name>\n")
-			os.Exit(1)
-		}
-		handleNamespaceWebRTCStatus(ns)
-	case "keys":
-		handleNamespaceKeys(args[1:])
-	case "help":
-		showNamespaceHelp()
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown namespace command: %s\n", subcommand)
-		showNamespaceHelp()
-		os.Exit(1)
-	}
-}
 
 // handleNamespaceKeys drives scoped API-key management (bugboard #148):
 //
@@ -80,25 +23,6 @@ func HandleNamespaceCommand(args []string) {
 //	orama namespace keys list
 //	orama namespace keys revoke --id <n>
 //	orama namespace keys revoke-legacy
-func handleNamespaceKeys(args []string) {
-	if len(args) == 0 {
-		showNamespaceKeysHelp()
-		return
-	}
-	switch args[0] {
-	case "create":
-		handleNamespaceKeysCreate(args[1:])
-	case "list", "ls":
-		handleNamespaceKeysList(args[1:])
-	case "revoke":
-		handleNamespaceKeysRevoke(args[1:])
-	case "revoke-legacy":
-		handleNamespaceKeysRevokeLegacy(args[1:])
-	default:
-		showNamespaceKeysHelp()
-		os.Exit(1)
-	}
-}
 
 func showNamespaceKeysHelp() {
 	fmt.Printf("Scoped API-key management (bugboard #148)\n\n")
@@ -145,13 +69,8 @@ func keysErr(result map[string]interface{}) string {
 	return "unknown error"
 }
 
-func handleNamespaceKeysCreate(args []string) {
-	var ns, scope, label string
-	fs := flag.NewFlagSet("namespace keys create", flag.ExitOnError)
-	fs.StringVar(&ns, "namespace", "", "Namespace name")
-	fs.StringVar(&scope, "scope", "", "Profile (invoke-only|app-runtime|admin) or grant list")
-	fs.StringVar(&label, "label", "", "Human label for the key")
-	_ = fs.Parse(args)
+// HandleNamespaceKeysCreate mints a scoped API key. Flags are parsed by cobra.
+func HandleNamespaceKeysCreate(ns, scope, label string) {
 	if strings.TrimSpace(scope) == "" {
 		fmt.Fprintf(os.Stderr, "Usage: orama namespace keys create --scope <profile|grants> [--label L] [--namespace NS]\n")
 		os.Exit(1)
@@ -173,11 +92,8 @@ func handleNamespaceKeysCreate(args []string) {
 	fmt.Printf("\n  API KEY (shown once — store it now):\n  %v\n", result["api_key"])
 }
 
-func handleNamespaceKeysList(args []string) {
-	var ns string
-	fs := flag.NewFlagSet("namespace keys list", flag.ExitOnError)
-	fs.StringVar(&ns, "namespace", "", "Namespace name")
-	_ = fs.Parse(args)
+// HandleNamespaceKeysList lists a namespace's API keys.
+func HandleNamespaceKeysList(ns string) {
 	gatewayURL, apiKey := loadAuthForNamespace(ns)
 	result, status := keysDo(http.MethodGet, gatewayURL+"/v1/namespace/keys", apiKey, nil)
 	if status != http.StatusOK {
@@ -205,13 +121,8 @@ func handleNamespaceKeysList(args []string) {
 	}
 }
 
-func handleNamespaceKeysRevoke(args []string) {
-	var ns string
-	var id int
-	fs := flag.NewFlagSet("namespace keys revoke", flag.ExitOnError)
-	fs.StringVar(&ns, "namespace", "", "Namespace name")
-	fs.IntVar(&id, "id", 0, "Key id to revoke")
-	_ = fs.Parse(args)
+// HandleNamespaceKeysRevoke revokes one API key by id.
+func HandleNamespaceKeysRevoke(ns string, id int) {
 	if id <= 0 {
 		fmt.Fprintf(os.Stderr, "Usage: orama namespace keys revoke --id <n> [--namespace NS]\n")
 		os.Exit(1)
@@ -225,13 +136,8 @@ func handleNamespaceKeysRevoke(args []string) {
 	fmt.Printf("Key %d revoked.\n", id)
 }
 
-func handleNamespaceKeysRevokeLegacy(args []string) {
-	var ns string
-	var force bool
-	fs := flag.NewFlagSet("namespace keys revoke-legacy", flag.ExitOnError)
-	fs.StringVar(&ns, "namespace", "", "Namespace name")
-	fs.BoolVar(&force, "force", false, "Skip confirmation prompt")
-	_ = fs.Parse(args)
+// HandleNamespaceKeysRevokeLegacy revokes every unscoped (legacy) key.
+func HandleNamespaceKeysRevokeLegacy(ns string, force bool) {
 	gatewayURL, apiKey := loadAuthForNamespace(ns)
 	if !force {
 		fmt.Printf("This will revoke ALL legacy (unscoped) API keys for this namespace.\n")
@@ -278,7 +184,8 @@ func showNamespaceHelp() {
 	fmt.Printf("  orama namespace webrtc-status --namespace myapp\n")
 }
 
-func handleNamespaceRepair(namespaceName string) {
+// HandleNamespaceRepair repairs an under-provisioned namespace cluster.
+func HandleNamespaceRepair(namespaceName string) {
 	fmt.Printf("Repairing namespace cluster '%s'...\n", namespaceName)
 
 	// Call the internal repair endpoint on the local gateway
@@ -316,7 +223,8 @@ func handleNamespaceRepair(namespaceName string) {
 	}
 }
 
-func handleNamespaceDelete(force bool) {
+// HandleNamespaceDelete deletes the current namespace.
+func HandleNamespaceDelete(force bool) {
 	// Load credentials
 	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
@@ -408,21 +316,16 @@ func handleNamespaceDelete(force bool) {
 	fmt.Printf("Run 'orama auth login' to create a new namespace.\n")
 }
 
-func handleNamespaceEnable(args []string) {
-	feature := args[0]
+// HandleNamespaceEnable enables a namespace feature. Flags are parsed by cobra.
+func HandleNamespaceEnable(feature, ns string) {
 	if feature == "webrtc-stealth" {
-		handleNamespaceStealthToggle(args[1:], true)
+		handleNamespaceStealthToggle(ns, true)
 		return
 	}
 	if feature != "webrtc" {
 		fmt.Fprintf(os.Stderr, "Unknown feature: %s\nSupported features: webrtc, webrtc-stealth\n", feature)
 		os.Exit(1)
 	}
-
-	var ns string
-	fs := flag.NewFlagSet("namespace enable webrtc", flag.ExitOnError)
-	fs.StringVar(&ns, "namespace", "", "Namespace name")
-	_ = fs.Parse(args[1:])
 
 	if ns == "" {
 		fmt.Fprintf(os.Stderr, "Usage: orama namespace enable webrtc --namespace <name>\n")
@@ -473,16 +376,11 @@ func handleNamespaceEnable(args []string) {
 
 // handleNamespaceStealthToggle drives /v1/namespace/webrtc/stealth/{enable|disable}
 // (feat-124 — censorship-resistant TURNS over :443).
-func handleNamespaceStealthToggle(args []string, enable bool) {
+func handleNamespaceStealthToggle(ns string, enable bool) {
 	verb := "disable"
 	if enable {
 		verb = "enable"
 	}
-
-	var ns string
-	fs := flag.NewFlagSet("namespace "+verb+" webrtc-stealth", flag.ExitOnError)
-	fs.StringVar(&ns, "namespace", "", "Namespace name")
-	_ = fs.Parse(args)
 
 	if ns == "" {
 		fmt.Fprintf(os.Stderr, "Usage: orama namespace %s webrtc-stealth --namespace <name>\n", verb)
@@ -539,21 +437,16 @@ func handleNamespaceStealthToggle(args []string, enable bool) {
 	}
 }
 
-func handleNamespaceDisable(args []string) {
-	feature := args[0]
+// HandleNamespaceDisable disables a namespace feature.
+func HandleNamespaceDisable(feature, ns string) {
 	if feature == "webrtc-stealth" {
-		handleNamespaceStealthToggle(args[1:], false)
+		handleNamespaceStealthToggle(ns, false)
 		return
 	}
 	if feature != "webrtc" {
 		fmt.Fprintf(os.Stderr, "Unknown feature: %s\nSupported features: webrtc, webrtc-stealth\n", feature)
 		os.Exit(1)
 	}
-
-	var ns string
-	fs := flag.NewFlagSet("namespace disable webrtc", flag.ExitOnError)
-	fs.StringVar(&ns, "namespace", "", "Namespace name")
-	_ = fs.Parse(args[1:])
 
 	if ns == "" {
 		fmt.Fprintf(os.Stderr, "Usage: orama namespace disable webrtc --namespace <name>\n")
@@ -600,7 +493,8 @@ func handleNamespaceDisable(args []string) {
 	fmt.Printf("  SFU and TURN services stopped, ports deallocated, DNS records removed.\n")
 }
 
-func handleNamespaceWebRTCStatus(ns string) {
+// HandleNamespaceWebRTCStatus reports a namespace's WebRTC configuration.
+func HandleNamespaceWebRTCStatus(ns string) {
 	gatewayURL, apiKey := loadAuthForNamespace(ns)
 
 	url := fmt.Sprintf("%s/v1/namespace/webrtc/status", gatewayURL)
@@ -681,7 +575,8 @@ func loadAuthForNamespace(ns string) (gatewayURL, apiKey string) {
 	return gatewayURL, creds.APIKey
 }
 
-func handleNamespaceList() {
+// HandleNamespaceList lists namespaces owned by the current wallet.
+func HandleNamespaceList() {
 	// Load credentials
 	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {

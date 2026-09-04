@@ -2,7 +2,6 @@ package decommission
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -22,43 +21,22 @@ type Flags struct {
 	Force   bool
 }
 
-// Handle is the entry point for `orama node decommission`.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
-	if err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+// Run is the entry point for `orama node decommission`.
+func Run(flags *Flags) error {
+	if err := flags.validate(); err != nil {
+		return err
 	}
-	if err := execute(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	return execute(flags)
 }
 
-func parseFlags(args []string) (*Flags, error) {
-	fs := flag.NewFlagSet("decommission", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &Flags{}
-	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	fs.StringVar(&flags.Node, "node", "", "Public IP of the node to remove [required]")
-	fs.BoolVar(&flags.Offline, "offline", false, "The node is already gone: retire it cluster-side only, do not try to wipe it")
-	fs.BoolVar(&flags.Nuclear, "nuclear", false, "When wiping, also remove shared binaries")
-	fs.BoolVar(&flags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
+func (f *Flags) validate() error {
+	if f.Env == "" {
+		return fmt.Errorf("--env is required\nUsage: orama node decommission --env <devnet|testnet> --node <ip> [--offline] [--force]")
 	}
-	if flags.Env == "" {
-		return nil, fmt.Errorf("--env is required\nUsage: orama node decommission --env <devnet|testnet> --node <ip> [--offline] [--force]")
+	if f.Node == "" {
+		return fmt.Errorf("--node is required: decommission removes ONE node")
 	}
-	if flags.Node == "" {
-		return nil, fmt.Errorf("--node is required: decommission removes ONE node")
-	}
-	return flags, nil
+	return nil
 }
 
 func execute(flags *Flags) error {

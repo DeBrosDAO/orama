@@ -18,7 +18,13 @@ import (
 )
 
 // Handle processes the invite command
-func Handle(args []string) {
+// Options holds the flags for the invite command.
+type Options struct {
+	Expiry time.Duration
+}
+
+// Run creates a new invite token.
+func Run(opts Options) {
 	// Must run on a cluster node with RQLite running locally
 	domain, err := readNodeDomain()
 	if err != nil {
@@ -35,17 +41,9 @@ func Handle(args []string) {
 	}
 	token := hex.EncodeToString(tokenBytes)
 
-	// Determine expiry (default 1 hour, --expiry flag for override)
-	expiry := time.Hour
-	for i, arg := range args {
-		if arg == "--expiry" && i+1 < len(args) {
-			d, err := time.ParseDuration(args[i+1])
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Invalid expiry duration: %v\n", err)
-				os.Exit(1)
-			}
-			expiry = d
-		}
+	expiry := opts.Expiry
+	if expiry <= 0 {
+		expiry = time.Hour
 	}
 
 	expiresAt := time.Now().UTC().Add(expiry).Format("2006-01-02 15:04:05")

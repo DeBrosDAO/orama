@@ -10,31 +10,18 @@ import (
 )
 
 // Handle executes the logs command
-func Handle(args []string) {
-	if len(args) == 0 {
-		showUsage()
-		os.Exit(1)
-	}
-
-	serviceAlias := args[0]
-	follow := false
-	if len(args) > 1 && (args[1] == "--follow" || args[1] == "-f") {
-		follow = true
-	}
-
+// Run streams logs for one service.
+func Run(serviceAlias string, follow bool) error {
 	// Resolve service alias to actual service names
 	serviceNames, err := utils.ResolveServiceName(serviceAlias)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		fmt.Fprintf(os.Stderr, "\nAvailable service aliases: node, ipfs, cluster, gateway, olric\n")
-		fmt.Fprintf(os.Stderr, "Or use full service name like: orama-node\n")
-		os.Exit(1)
+		return fmt.Errorf("%w\n\nAvailable service aliases: node, ipfs, cluster, gateway, olric\nOr use a full service name like: orama-node", err)
 	}
 
 	// If multiple services match, show all of them
 	if len(serviceNames) > 1 {
 		handleMultipleServices(serviceNames, serviceAlias, follow)
-		return
+		return nil
 	}
 
 	// Single service
@@ -44,14 +31,7 @@ func Handle(args []string) {
 	} else {
 		showServiceLogs(service)
 	}
-}
-
-func showUsage() {
-	fmt.Fprintf(os.Stderr, "Usage: orama node logs <service> [--follow]\n")
-	fmt.Fprintf(os.Stderr, "\nService aliases:\n")
-	fmt.Fprintf(os.Stderr, "  node, ipfs, cluster, gateway, olric\n")
-	fmt.Fprintf(os.Stderr, "\nOr use full service name:\n")
-	fmt.Fprintf(os.Stderr, "  orama-node, orama-gateway, etc.\n")
+	return nil
 }
 
 func handleMultipleServices(serviceNames []string, serviceAlias string, follow bool) {

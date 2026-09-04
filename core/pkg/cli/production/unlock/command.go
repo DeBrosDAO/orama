@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,10 +26,9 @@ type Flags struct {
 	KeyFile string // Path to the encrypted genesis key file (optional override)
 }
 
-// Handle processes the unlock command.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
-	if err != nil {
+// Run processes the unlock command.
+func Run(flags *Flags) {
+	if err := flags.validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -77,24 +75,12 @@ func Handle(args []string) {
 	fmt.Println("The node is decrypting and mounting its data partition.")
 }
 
-func parseFlags(args []string) (*Flags, error) {
-	fs := flag.NewFlagSet("unlock", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &Flags{}
-	fs.StringVar(&flags.NodeIP, "node-ip", "", "WireGuard IP of the OramaOS node (required)")
-	fs.BoolVar(&flags.Genesis, "genesis", false, "Confirm genesis node unlock")
-	fs.StringVar(&flags.KeyFile, "key-file", "", "Path to encrypted genesis key file (optional)")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
+// validate checks the flag combination.
+func (f *Flags) validate() error {
+	if f.NodeIP == "" {
+		return fmt.Errorf("--node-ip is required")
 	}
-
-	if flags.NodeIP == "" {
-		return nil, fmt.Errorf("--node-ip is required")
-	}
-
-	return flags, nil
+	return nil
 }
 
 // fetchGenesisKey retrieves the encrypted genesis key from the node.

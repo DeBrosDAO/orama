@@ -2,13 +2,17 @@ package cli
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
 )
+
+// HandleAuthLogin authenticates with a wallet. Flags are parsed by cobra.
+func HandleAuthLogin(wallet, namespace string, simple bool) {
+	handleAuthLogin(wallet, namespace, simple)
+}
 
 // HandleAuthCommand handles authentication commands
 func HandleAuthCommand(args []string) {
@@ -19,15 +23,6 @@ func HandleAuthCommand(args []string) {
 
 	subcommand := args[0]
 	switch subcommand {
-	case "login":
-		var wallet, namespace string
-		var simple bool
-		fs := flag.NewFlagSet("auth login", flag.ExitOnError)
-		fs.StringVar(&wallet, "wallet", "", "Wallet address (implies --simple)")
-		fs.StringVar(&namespace, "namespace", "", "Namespace name")
-		fs.BoolVar(&simple, "simple", false, "Use simple auth without signature verification")
-		_ = fs.Parse(args[1:])
-		handleAuthLogin(wallet, namespace, simple)
 	case "logout":
 		handleAuthLogout()
 	case "whoami":
