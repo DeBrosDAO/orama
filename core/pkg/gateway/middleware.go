@@ -922,66 +922,68 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		}
 		nsID := nres.Rows[0][0]
 
-		q := "SELECT 1 FROM namespace_ownership WHERE namespace_id = ? AND owner_type = ? AND owner_id = ? LIMIT 1"
-
-		// ownsBy reports whether (ot, oid) owns this namespace. API keys are
-		// stored HMAC-hashed in namespace_ownership (see service.HashAPIKey),
-		// while the presented value here is the RAW key — so for api_key owners
-		// we check the hashed form first and the raw form second (rolling-
-		// upgrade legacy), mirroring lookupAPIKeyNamespace. Without this, an
-		// api_key-authenticated owner never matched and got a 403 on a
-		// namespace they actually own (blocked function deploy / push config).
-		ownsBy := func(ot, oid string) bool {
+		// grantFor reports the live grant (ot, oid) holds in this namespace, if
+		// any. API keys are stored HMAC-hashed (see service.HashAPIKey) while
+		// the presented value here is the RAW key — so for a key we look under
+		// the hashed form first and the raw form second (rolling-upgrade
+		// legacy), mirroring lookupAPIKeyNamespace. Without this, a
+		// key-authenticated member never matched and got a 403 on a namespace
+		// they actually belong to (blocked function deploy / push config).
+		grantFor := func(ot, oid string) *auth.Grant {
 			hashed := ""
+			ptype := auth.PrincipalWallet
 			if ot == "api_key" {
+				ptype = auth.PrincipalServiceAccount
 				hashed = g.authService.HashAPIKey(oid)
 			}
-			for _, c := range apiKeyOwnerCandidates(ot, oid, hashed) {
-				res, qerr := db.Query(internalCtx, q, nsID, ot, c)
-				if qerr == nil && res != nil && res.Count > 0 {
-					return true
+			for _, c := range principalIdentifierCandidates(ot, oid, hashed) {
+				grant, gerr := g.authService.GrantIn(internalCtx, db, nsID, ptype, c)
+				if gerr == nil {
+					return grant
 				}
 			}
-			return false
+			return nil
 		}
 
-		owns := ownsBy(ownerType, ownerID)
+		grant := grantFor(ownerType, ownerID)
 		// A JWT wallet can also fall back to its API key (also stored hashed).
-		if !owns && ownerType == "wallet" && apiKeyFallback != "" {
-			owns = ownsBy("api_key", apiKeyFallback)
+		if grant == nil && ownerType == "wallet" && apiKeyFallback != "" {
+			grant = grantFor("api_key", apiKeyFallback)
 		}
 
-		if !owns {
-			forbidden(w, CodeOwnershipRequired, "this credential is not an owner of this namespace", nil)
+		if grant == nil {
+			forbidden(w, CodeOwnershipRequired, "this credential holds no grant in this namespace", nil)
 			return
 		}
 
-		// A verified SIWE wallet owner may act as admin via a wallet JWT — record
-		// it so the scope gate grants admin to the owner without granting it to
-		// every authenticated user (bugboard #148).
+		// The role travels with the request. It used to be a boolean — "a SIWE
+		// wallet owner was confirmed" — which is why every human with access
+		// was an admin: there was nothing else the flag could say. The scope
+		// gate reads the role now, so a wallet granted `runtime` gets the data
+		// plane and not the control plane (bugboard #148, feat-367).
 		if ownerType == "wallet" {
-			r = markOwnerConfirmed(r)
+			r = markGrant(r, grant)
 		}
 
 		next.ServeHTTP(w, r)
 	})
 }
 
-// apiKeyOwnerCandidates returns the owner_id values to test for a namespace
-// ownership check.
+// principalIdentifierCandidates returns the identifiers to look a principal up
+// under.
 //
-// API keys are stored HMAC-hashed in namespace_ownership, so for an api_key
-// owner the hashed form is checked first and the raw key second (rolling-
-// upgrade legacy, mirroring lookupAPIKeyNamespace).
+// API keys are stored HMAC-hashed, so for a key the hashed form is checked
+// first and the raw key second (rolling-upgrade legacy, mirroring
+// lookupAPIKeyNamespace).
 //
-// Wallets are stored normalised (auth.NormalizeWallet), but rows written
-// before that was true kept whatever case the client sent — so a checksummed
-// address could own a namespace under a spelling no later login matched. The
-// normalised form is checked first and the presented form second, which keeps
-// those rows working until migration 042 has run everywhere.
+// Wallets are stored normalised (auth.NormalizeWallet), but rows written before
+// that was true kept whatever case the client sent — so a checksummed address
+// could hold a grant under a spelling no later login matched. The normalised
+// form is checked first and the presented form second, which keeps those rows
+// working until migration 042 has run everywhere.
 //
 // For every other owner type the value is used as-is.
-func apiKeyOwnerCandidates(ownerType, ownerID, hashed string) []string {
+func principalIdentifierCandidates(ownerType, ownerID, hashed string) []string {
 	if ownerType == "api_key" && hashed != "" && hashed != ownerID {
 		return []string{hashed, ownerID}
 	}
@@ -1029,6 +1031,12 @@ func requiresNamespaceOwnership(p string) bool {
 	// lets a verified owner wallet (OwnerConfirmed) manage keys, not just an
 	// admin API key (bugboard #148).
 	if p == "/v1/namespace/keys" || strings.HasPrefix(p, "/v1/namespace/keys/") {
+		return true
+	}
+	// Membership management is namespace-scoped, and the ownership gate is
+	// also what resolves the caller's own role — which the transfer handler
+	// needs, since only the owner may hand the namespace over.
+	if p == "/v1/namespace/members" || strings.HasPrefix(p, "/v1/namespace/members/") {
 		return true
 	}
 	return false

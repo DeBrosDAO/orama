@@ -236,9 +236,11 @@ func (h *CreateHandler) countOwned(ctx context.Context, wallet string) (int, err
 		N int `db:"n"`
 	}
 	if err := h.ormClient.Query(ctx, &rows,
-		`SELECT COUNT(*) AS n FROM namespace_ownership
-		  WHERE owner_type = 'wallet' AND LOWER(owner_id) = ?`,
-		strings.ToLower(wallet)); err != nil {
+		`SELECT COUNT(*) AS n
+		   FROM grants g JOIN principals p ON p.id = g.principal_id
+		  WHERE p.type = 'wallet' AND p.identifier = ?
+		    AND g.role = 'owner' AND g.revoked_at IS NULL`,
+		auth.NormalizeWallet(wallet)); err != nil {
 		return 0, err
 	}
 	if len(rows) == 0 {
@@ -247,7 +249,7 @@ func (h *CreateHandler) countOwned(ctx context.Context, wallet string) (int, err
 	return rows[0].N, nil
 }
 
-// create writes the namespace and its owner grant.
+// create writes the namespace, its owner principal and the owner grant.
 //
 // The grant is what makes the namespace someone's. Writing the namespace
 // without it would leave a row anybody could then claim by signing in, which
@@ -265,10 +267,18 @@ func (h *CreateHandler) create(ctx context.Context, name, wallet string) (int64,
 		return 0, fmt.Errorf("the namespace was created but its id could not be read back: %w", err)
 	}
 
+	owner := auth.NormalizeWallet(wallet)
 	if _, err := h.ormClient.Exec(ctx,
-		"INSERT INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'wallet', ?)",
-		rows[0].ID, strings.ToLower(wallet)); err != nil {
+		"INSERT OR IGNORE INTO principals(type, identifier, created_by) VALUES ('wallet', ?, ?)",
+		owner, owner); err != nil {
 		return 0, fmt.Errorf("the namespace was created but its owner could not be recorded, "+
+			"so it would be unowned and claimable: %w", err)
+	}
+	if _, err := h.ormClient.Exec(ctx,
+		`INSERT INTO grants(principal_id, namespace_id, role, created_by)
+		 SELECT id, ?, 'owner', ? FROM principals WHERE type = 'wallet' AND identifier = ?`,
+		rows[0].ID, owner, owner); err != nil {
+		return 0, fmt.Errorf("the namespace was created but its owner grant could not be recorded, "+
 			"so it would be unowned and claimable: %w", err)
 	}
 	return rows[0].ID, nil

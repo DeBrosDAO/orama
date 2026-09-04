@@ -13,6 +13,10 @@ type memKeyDB struct {
 	rows    map[int64]string
 	failID  int64
 	updates int
+	// principalMoves counts the grants that followed a rehashed key. A key
+	// whose hash changed and whose principal did not authenticates and holds
+	// no grant anywhere.
+	principalMoves int
 }
 
 func (m *memKeyDB) Query(_ context.Context, sql string, args ...interface{}) (*client.QueryResult, error) {
@@ -38,8 +42,9 @@ func (m *memKeyDB) Query(_ context.Context, sql string, args ...interface{}) (*c
 		m.rows[id] = hashed
 		m.updates++
 		return &client.QueryResult{Count: 1}, nil
-	case strings.Contains(sql, "UPDATE namespace_ownership"):
-		return &client.QueryResult{Count: 0}, nil
+	case strings.Contains(sql, "UPDATE OR IGNORE principals"):
+		m.principalMoves++
+		return &client.QueryResult{Count: 1}, nil
 	default:
 		return nil, errString("unexpected sql: " + sql)
 	}
@@ -107,5 +112,28 @@ func TestMigratePlaintextAPIKeys_noSecretIsNoop(t *testing.T) {
 	}
 	if db.rows[1] != "ak_one:ns" {
 		t.Fatal("must not rewrite without a secret")
+	}
+}
+
+// A key's principal is the key itself, spelled the way the authorization gate
+// looks it up. Rehashing the key without moving its principal leaves it
+// authenticating and refused everywhere — which is not a smaller failure than
+// not migrating at all, it is a harder one to diagnose.
+func TestMigratePlaintextAPIKeys_movesTheKeysPrincipalToo(t *testing.T) {
+	db := &memKeyDB{rows: map[int64]string{1: "ak_one", 2: "ak_two"}}
+	s := createTestService(t)
+	s.orm = &memNet{db: db}
+	s.apiKeyORM = nil
+	s.apiKeyHMACSecret = "secret"
+
+	n, err := s.MigratePlaintextAPIKeys(context.Background())
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("migrated %d keys, want 2", n)
+	}
+	if db.principalMoves != 2 {
+		t.Errorf("%d principals followed %d rehashed keys", db.principalMoves, n)
 	}
 }

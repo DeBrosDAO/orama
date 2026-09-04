@@ -9,7 +9,7 @@ import (
 // own database handle. On a namespace gateway that handle points at the
 // namespace's rqlite — which is both the tenant's application database and the
 // database that authenticates the namespace. The core migrations run there, so
-// api_keys, namespace_ownership, refresh_tokens, nonces, operators,
+// api_keys, principals, grants, refresh_tokens, nonces, operators,
 // wireguard_peers and function_secrets sit in the same schema as the tenant's
 // own tables, and a function could read and write all of them.
 //
@@ -42,7 +42,8 @@ var protectedTables = map[string]string{
 	"nonces":                     "authentication",
 	"invite_tokens":              "cluster membership",
 	"operators":                  "operator identity",
-	"namespace_ownership":        "namespace ownership",
+	"principals":                 "who the platform will authenticate",
+	"grants":                     "who may do what in a namespace",
 	"wireguard_peers":            "mesh membership and node agent tokens",
 	"namespace_push_credentials": "push credentials",
 	"function_secrets":           "every function's secrets",

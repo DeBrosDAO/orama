@@ -54,7 +54,7 @@ func (r *registry) Query(_ context.Context, dest any, query string, args ...any)
 			rows.Set(reflect.Append(rows, row))
 		}
 		return nil
-	case strings.Contains(query, "FROM namespace_ownership"):
+	case strings.Contains(query, "FROM grants"):
 		wallet, _ := args[0].(string)
 		row := reflect.New(rows.Type().Elem()).Elem()
 		row.Field(0).SetInt(int64(r.owned[wallet]))
@@ -71,7 +71,7 @@ func (r *registry) Exec(_ context.Context, query string, args ...any) (sql.Resul
 		r.existing[name] = r.nextID
 		r.nextID++
 	}
-	if strings.Contains(query, "INSERT INTO namespace_ownership") {
+	if strings.Contains(query, "INSERT INTO grants") {
 		wallet, _ := args[1].(string)
 		r.owned[wallet]++
 	}

@@ -806,13 +806,30 @@ Function Invocation:
      key, not freshness
    - Issues JWT tokens after verification
 
-2. **API Keys**
+2. **Principals and grants**
+   - A **principal** is who the platform authenticates: a wallet, or a service
+     account (an API key). A **grant** is what one principal may do in one
+     namespace — a role, optionally narrowed to a resource, optionally expiring
+   - Roles: `owner` (exactly one per namespace, enforced by a partial unique
+     index), `admin` (the control plane), `runtime` (the data plane) and
+     `reader` (a member holding nothing). The role the authorization middleware
+     resolves is what the scope gate turns into the caller's grant set
+   - This replaced a single boolean — a row in `namespace_ownership` meant
+     owner and its absence meant refused — which is why everybody with access
+     to a namespace was an admin. Migration 050 moves the rows and drops the
+     table
+   - Resource selectors are stored and validated but not enforced, so a grant
+     carrying one authorises nothing. See `docs/SECURITY.md`
+   - `/v1/namespace/members` and `orama members` manage them; transferring the
+     namespace requires the owner
+
+3. **API Keys**
    - Long-lived credentials
    - Stored in RQLite
    - Namespace-scoped
    - Carry a grant set (`invoke`, `storage`, `push`, `webrtc`, `proxy`, `pubsub`, `cache`, or `admin`). HTTP `/v1/invoke` is a public path; private functions still require the `invoke` grant (or a SIWE wallet). Node command/logs/leave and network connect/disconnect require `admin`.
 
-3. **JWT Tokens**
+4. **JWT Tokens**
    - Short-lived (15 min default)
    - Refresh token support
    - Claims-based authorization

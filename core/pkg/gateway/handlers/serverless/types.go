@@ -234,8 +234,11 @@ func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
 			}
 		}
 	}
-	if confirmed, _ := ctx.Value(ctxkeys.OwnerConfirmed).(bool); confirmed {
-		return true
+	// The grant the authorization middleware resolved for this namespace. It
+	// used to be a boolean meaning "owner confirmed", so every member of a
+	// namespace was an admin here; a runtime or reader member is not.
+	if grant, _ := ctx.Value(ctxkeys.Grant).(*auth.Grant); grant != nil {
+		return grant.Scopes().IsAdmin()
 	}
 	return false
 }

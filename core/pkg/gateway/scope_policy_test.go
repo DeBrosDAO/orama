@@ -153,11 +153,37 @@ func TestCallerScopes(t *testing.T) {
 		t.Error("wallet JWT with injected scopes:admin escalated to admin — claims-provider injection hole open")
 	}
 
-	// Wallet JWT + confirmed owner → admin.
+	// Wallet JWT + an owner grant → admin.
 	rOwner := reqWithJWT(&auth.JWTClaims{Sub: "0xOWNER"})
-	rOwner = rOwner.WithContext(context.WithValue(rOwner.Context(), ctxKeyOwnerConfirmed, true))
+	rOwner = markGrant(rOwner, &auth.Grant{Role: auth.RoleOwner})
 	if s := g.callerScopes(rOwner); !s.IsAdmin() {
-		t.Error("confirmed owner wallet should be admin")
+		t.Error("the namespace owner's wallet should be admin")
+	}
+
+	// The whole point of the roles: a member who is not an owner or an admin
+	// does not get the control plane. This used to be a boolean, so everyone
+	// the authorization gate let through was an admin.
+	rRuntime := reqWithJWT(&auth.JWTClaims{Sub: "0xTEAMMATE"})
+	rRuntime = markGrant(rRuntime, &auth.Grant{Role: auth.RoleRuntime})
+	if s := g.callerScopes(rRuntime); s.IsAdmin() {
+		t.Error("a runtime member reached the control plane")
+	} else if !s.Has(auth.ScopeStorage) {
+		t.Error("a runtime member should hold the data plane")
+	}
+
+	rReader := reqWithJWT(&auth.JWTClaims{Sub: "0xREADER"})
+	rReader = markGrant(rReader, &auth.Grant{Role: auth.RoleReader})
+	if s := g.callerScopes(rReader); s.IsAdmin() || s.Has(auth.ScopeStorage) {
+		t.Error("a reader holds no grant at all")
+	}
+
+	// A grant narrowed to a resource authorises nothing until the data plane
+	// can enforce the selector. Handing over the whole role would turn a
+	// narrower-looking grant into the wide one.
+	rScoped := reqWithJWT(&auth.JWTClaims{Sub: "0xSCOPED"})
+	rScoped = markGrant(rScoped, &auth.Grant{Role: auth.RoleRuntime, Resource: "storage:avatars/*"})
+	if s := g.callerScopes(rScoped); s.Has(auth.ScopeStorage) {
+		t.Error("a grant narrowed to storage:avatars/* was read as all of storage")
 	}
 }
 

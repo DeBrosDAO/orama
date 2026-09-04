@@ -126,6 +126,12 @@ func requiredScope(method, path string) string {
 	if path == "/v1/namespace/keys" || strings.HasPrefix(path, "/v1/namespace/keys/") {
 		return auth.ScopeAdmin
 	}
+	// Handing out authority in a namespace is the control plane's own control
+	// plane. Transferring goes further and needs the owner, which the handler
+	// checks — a grant set cannot express "owner", only what an owner may do.
+	if path == "/v1/namespace/members" || strings.HasPrefix(path, "/v1/namespace/members/") {
+		return auth.ScopeAdmin
+	}
 	if path == "/v1/namespace/delete" || path == "/v1/namespace/list" {
 		return auth.ScopeAdmin
 	}
@@ -172,9 +178,17 @@ func (g *Gateway) callerScopes(r *http.Request) auth.ScopeSet {
 					return auth.ParseScopes(raw)
 				}
 			}
-			if confirmed, _ := ctx.Value(ctxKeyOwnerConfirmed).(bool); confirmed {
-				return auth.ScopeSet{auth.ScopeAdmin: {}}
+			// The grant the authorization middleware resolved for this
+			// namespace decides what a wallet JWT may reach. An owner or an
+			// admin gets the control plane; a runtime member gets the data
+			// plane; a reader gets nothing beyond the routes that ask for no
+			// grant at all.
+			if grant, _ := ctx.Value(ctxKeyGrant).(*auth.Grant); grant != nil {
+				return grant.Scopes()
 			}
+			// No grant was resolved, which is every route the ownership gate
+			// does not cover. A logged-in user gets the data plane there, as
+			// they always have.
 			return auth.DataPlaneScopes()
 		}
 	}
@@ -312,9 +326,13 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// markOwnerConfirmed returns a shallow copy of the request whose context records
-// that a SIWE wallet owner was verified for the namespace (used by callerScopes
-// to grant the owner admin via a wallet JWT).
-func markOwnerConfirmed(r *http.Request) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), ctxkeys.OwnerConfirmed, true))
+// markGrant returns a shallow copy of the request whose context carries the
+// grant the caller holds in the namespace, as resolved by the authorization
+// middleware. callerScopes turns it into the scope set a wallet JWT gets.
+//
+// This used to be a bare `true`: "a SIWE wallet owner was verified". A boolean
+// has one thing to say, so everybody it was set for became an admin. That is
+// what the roles exist to end.
+func markGrant(r *http.Request, grant *auth.Grant) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), ctxkeys.Grant, grant))
 }

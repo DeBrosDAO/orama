@@ -32,6 +32,11 @@ const (
 	AuditKeysRevokedBulk  = "key.revoke_all"
 	AuditNamespaceCreated = "namespace.create"
 	AuditOperatorAction   = "operator.action"
+	// Who was given authority in a namespace, and who took it away. A grant is
+	// the thing an incident asks about after the fact.
+	AuditGrantAdded       = "grant.add"
+	AuditGrantRevoked     = "grant.revoke"
+	AuditOwnerTransferred = "namespace.transfer"
 )
 
 // AuditActions is every action this gateway records. A new one has to be added
@@ -41,6 +46,7 @@ var AuditActions = []string{
 	AuditChallengeIssued, AuditVerifySucceeded, AuditRefreshed, AuditRefreshReplayed,
 	AuditLoggedOut, AuditKeyIssued, AuditKeyRevoked, AuditKeysRevokedBulk,
 	AuditNamespaceCreated, AuditOperatorAction,
+	AuditGrantAdded, AuditGrantRevoked, AuditOwnerTransferred,
 }
 
 const (

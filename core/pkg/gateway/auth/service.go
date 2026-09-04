@@ -834,14 +834,12 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 		return "", fmt.Errorf("failed to link the api key to wallet in namespace %q: %w", namespace, err)
 	}
 
-	// The key owns the namespace as well: that row is how the namespace gate
-	// recognizes a request authenticated by the key rather than by the wallet.
-	// Without it the caller holds a key that is refused everywhere.
-	if _, err := db.Query(internalCtx,
-		"INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)",
-		nsID, hashedKey,
-	); err != nil {
-		return "", fmt.Errorf("failed to record key ownership of namespace %q: %w", namespace, err)
+	// The key belongs to the namespace as well: that grant is how the
+	// authorization gate recognizes a request authenticated by the key rather
+	// than by the wallet. Without it the caller holds a key that is refused
+	// everywhere.
+	if err := s.grantServiceAccount(ctx, db, nsID, namespace, hashedKey, RoleForScopes(ownerScopes)); err != nil {
+		return "", err
 	}
 
 	return apiKey, nil

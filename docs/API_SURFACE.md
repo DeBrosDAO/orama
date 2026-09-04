@@ -152,6 +152,8 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/namespace/keys` | CLI | Mint and list scoped API keys. `orama namespace keys`. |
 | `/v1/namespace/keys/` | CLI | Revoke a key. |
 | `/v1/namespace/list` | CLI | Namespaces owned by the calling wallet. |
+| `/v1/namespace/members` | CLI | Who else may work in this namespace, and at what role. `orama members list|add`. |
+| `/v1/namespace/members/` | CLI | Remove a member, or transfer the namespace. `orama members remove|transfer`. |
 | `/v1/namespaces` | CLI | Create a namespace: writes the owner grant and starts provisioning. |
 | `/v1/namespace/rate-limit` | CLI | Per-namespace rate limit. |
 | `/v1/namespace/status` | CLI | Provisioning progress, polled by `orama namespace create`. |

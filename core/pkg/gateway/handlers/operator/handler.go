@@ -78,7 +78,7 @@ func (h *Handler) resolveWallet(r *http.Request) string {
 }
 
 // resolveWalletFromAPIKey looks up the wallet address linked to an API key.
-// It queries namespace_ownership for a wallet-type owner of the namespace.
+// It reads the namespace's owner grant.
 func (h *Handler) resolveWalletFromAPIKey(ctx context.Context, apiKeySub string) string {
 	if h.rqliteClient == nil {
 		return ""
@@ -91,10 +91,12 @@ func (h *Handler) resolveWalletFromAPIKey(ctx context.Context, apiKeySub string)
 		OwnerID string `db:"owner_id"`
 	}
 	if err := h.rqliteClient.Query(ctx, &rows,
-		`SELECT no.owner_id FROM namespace_ownership no
-		 JOIN namespaces n ON no.namespace_id = n.id
-		 WHERE n.name = ? AND no.owner_type = 'wallet'
-		 LIMIT 1`,
+		`SELECT p.identifier AS owner_id
+		   FROM grants g
+		   JOIN principals p ON p.id = g.principal_id
+		   JOIN namespaces n ON g.namespace_id = n.id
+		  WHERE n.name = ? AND g.role = 'owner' AND g.revoked_at IS NULL AND p.type = 'wallet'
+		  LIMIT 1`,
 		ns); err != nil || len(rows) == 0 {
 		return ""
 	}

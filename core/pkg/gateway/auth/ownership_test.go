@@ -9,26 +9,35 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
 
-// ownershipDB is namespace_ownership and api_keys, enough of them to answer the
-// statements the credential paths issue.
+// ownershipDB is principals, grants and api_keys — enough of them to answer
+// the statements the credential paths issue.
 //
-// The unique index migration 043 adds is modelled too: the insert of a second
-// wallet owner fails, the way it does on a real registry. Without that the
-// race the guard exists to lose is untestable.
+// The partial unique index migration 050 carries is modelled too: the insert of
+// a second owner grant fails, the way it does on a real registry. Without that
+// the race the guard exists to lose is untestable.
 type ownershipDB struct {
 	client.DatabaseClient
 
-	walletOwners map[string]string   // namespace id -> wallet
-	keyOwners    map[string][]string // namespace id -> hashed keys
+	walletOwners map[string]string   // namespace id -> owning wallet
+	keyOwners    map[string][]string // namespace id -> hashed keys with a grant
 	keys         map[string]string   // hashed key -> stored scopes
 	walletLinks  map[string]string   // namespace id -> hashed key
+
+	// principals is the principals table: an id per (type, identifier), so the
+	// grants insert can say which principal it is for the way the real one
+	// does — by id, not by name.
+	principals map[int64]string
+	nextID     int64
 
 	failOwnerRead  bool
 	failOwnerWrite bool
 	failKeyLink    bool
 	// raceWinner, when set, is the wallet that appears as owner the moment an
-	// insert is attempted — the other wallet got there first.
-	raceWinner string
+	// insert is attempted — the other wallet got there first. Before the
+	// insert it is invisible, which is the whole point: both callers read no
+	// owner and both try to write one.
+	raceWinner      string
+	insertAttempted bool
 }
 
 func newOwnershipDB() *ownershipDB {
@@ -37,17 +46,51 @@ func newOwnershipDB() *ownershipDB {
 		keyOwners:    map[string][]string{},
 		keys:         map[string]string{},
 		walletLinks:  map[string]string{},
+		principals:   map[int64]string{},
 	}
+}
+
+func (d *ownershipDB) principalID(identifier string) int64 {
+	for id, name := range d.principals {
+		if name == identifier {
+			return id
+		}
+	}
+	d.nextID++
+	d.principals[d.nextID] = identifier
+	return d.nextID
 }
 
 func (d *ownershipDB) Query(_ context.Context, sql string, args ...interface{}) (*client.QueryResult, error) {
 	switch {
-	case strings.Contains(sql, "SELECT owner_id FROM namespace_ownership"):
+	case strings.Contains(sql, "SELECT g.role, g.resource"):
+		// GrantIn: (namespace id, principal type, identifier).
+		if d.failOwnerRead {
+			return nil, errString("grant read failed")
+		}
+		ns, ptype, identifier := key(args[0]), getStringVal(args[1]), getStringVal(args[2])
+		if ptype == string(PrincipalWallet) && d.walletOwners[ns] == identifier && identifier != "" {
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{
+				{"owner", nil, nil, "", "", ""},
+			}}, nil
+		}
+		if ptype == string(PrincipalServiceAccount) {
+			for _, held := range d.keyOwners[ns] {
+				if held == identifier {
+					return &client.QueryResult{Count: 1, Rows: [][]interface{}{
+						{"admin", nil, nil, "", "", ""},
+					}}, nil
+				}
+			}
+		}
+		return &client.QueryResult{}, nil
+
+	case strings.Contains(sql, "SELECT p.identifier FROM grants"):
 		if d.failOwnerRead {
 			return nil, errString("owner read failed")
 		}
 		ns := key(args[0])
-		if d.raceWinner != "" {
+		if d.raceWinner != "" && d.insertAttempted {
 			return rows(d.raceWinner), nil
 		}
 		if owner, ok := d.walletOwners[ns]; ok {
@@ -55,21 +98,29 @@ func (d *ownershipDB) Query(_ context.Context, sql string, args ...interface{}) 
 		}
 		return &client.QueryResult{}, nil
 
-	case strings.Contains(sql, "INSERT INTO namespace_ownership"):
+	case strings.Contains(sql, "INSERT OR IGNORE INTO principals"):
+		d.principalID(getStringVal(args[1]))
+		return &client.QueryResult{Count: 1}, nil
+
+	case strings.Contains(sql, "SELECT id FROM principals"):
+		return rows(d.principalID(getStringVal(args[1]))), nil
+
+	case strings.Contains(sql, "INSERT INTO grants") && strings.Contains(sql, "'owner'"):
+		d.insertAttempted = true
 		if d.failOwnerWrite {
 			return nil, errString("owner write failed")
 		}
-		ns := key(args[0])
+		ns := key(args[1])
 		if _, taken := d.walletOwners[ns]; taken || d.raceWinner != "" {
-			// The partial unique index from migration 043.
-			return nil, errString("UNIQUE constraint failed: namespace_ownership.namespace_id")
+			// The partial unique index from migration 050.
+			return nil, errString("UNIQUE constraint failed: grants.namespace_id")
 		}
-		d.walletOwners[ns] = getStringVal(args[1])
+		d.walletOwners[ns] = d.principals[toInt64(args[0])]
 		return &client.QueryResult{Count: 1}, nil
 
-	case strings.Contains(sql, "INSERT OR IGNORE INTO namespace_ownership"):
-		ns := key(args[0])
-		d.keyOwners[ns] = append(d.keyOwners[ns], getStringVal(args[1]))
+	case strings.Contains(sql, "INSERT OR IGNORE INTO grants"):
+		ns := key(args[1])
+		d.keyOwners[ns] = append(d.keyOwners[ns], d.principals[toInt64(args[0])])
 		return &client.QueryResult{Count: 1}, nil
 
 	case strings.Contains(sql, "INSERT OR IGNORE INTO namespaces"),

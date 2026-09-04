@@ -23,8 +23,10 @@ func TestCheckGuestSQL_refusesTheTablesThatGrantAuthority(t *testing.T) {
 	for _, query := range []string{
 		"SELECT key, scopes FROM api_keys",
 		"UPDATE api_keys SET scopes = 'admin' WHERE id = 1",
-		"INSERT INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (1, 'wallet', '0xattacker')",
-		"DELETE FROM namespace_ownership",
+		"INSERT INTO grants(principal_id, namespace_id, role) VALUES (1, 1, 'owner')",
+		"DELETE FROM grants",
+		"UPDATE grants SET role = 'owner' WHERE id = 1",
+		"INSERT INTO principals(type, identifier) VALUES ('wallet', '0xattacker')",
 		"SELECT * FROM function_secrets",
 		"SELECT value FROM function_env_vars",
 		"SELECT token FROM refresh_tokens",

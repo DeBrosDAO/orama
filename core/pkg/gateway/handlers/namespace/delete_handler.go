@@ -292,7 +292,7 @@ func (h *DeleteHandler) unpinNamespaceContent(ctx context.Context, ns string) {
 var namespaceFKChildren = []string{
 	"wallet_api_keys",
 	"api_keys",
-	"namespace_ownership",
+	"grants",
 	"apps",
 	"nonces",
 	"subscriptions",

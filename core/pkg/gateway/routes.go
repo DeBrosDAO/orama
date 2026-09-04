@@ -125,6 +125,10 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/namespace/keys", g.namespaceKeysHandler)
 	mux.HandleFunc("/v1/namespace/keys/", g.namespaceKeysByIDHandler)
 
+	// Who else may work in this namespace, and at what role.
+	mux.HandleFunc("/v1/namespace/members", g.namespaceMembersHandler)
+	mux.HandleFunc("/v1/namespace/members/", g.namespaceMemberByIDHandler)
+
 	// network
 	mux.HandleFunc("/v1/network/status", g.networkStatusHandler)
 	mux.HandleFunc("/v1/network/peers", g.networkPeersHandler)

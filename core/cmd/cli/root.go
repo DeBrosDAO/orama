@@ -19,6 +19,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/functioncmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/inspectcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/invitecmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/memberscmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/namespacecmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/node"
@@ -80,6 +81,7 @@ and interacting with the Orama distributed network.`,
 
 	// Namespace commands
 	rootCmd.AddCommand(namespacecmd.Cmd)
+	rootCmd.AddCommand(memberscmd.Cmd)
 
 	// Environment commands
 	rootCmd.AddCommand(envcmd.Cmd)

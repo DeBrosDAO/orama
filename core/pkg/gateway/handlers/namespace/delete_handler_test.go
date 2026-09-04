@@ -25,7 +25,7 @@ func TestDeleteNamespaceRows_removesKeysAndNamespace(t *testing.T) {
 		`CREATE TABLE namespaces (id INTEGER PRIMARY KEY, name TEXT)`,
 		`CREATE TABLE api_keys (id INTEGER PRIMARY KEY, key TEXT, namespace_id INTEGER, revoked_at TEXT)`,
 		`CREATE TABLE wallet_api_keys (id INTEGER PRIMARY KEY, namespace_id INTEGER)`,
-		`CREATE TABLE namespace_ownership (id INTEGER PRIMARY KEY, namespace_id INTEGER)`,
+		`CREATE TABLE grants (id INTEGER PRIMARY KEY, namespace_id INTEGER)`,
 		`CREATE TABLE apps (id INTEGER PRIMARY KEY, namespace_id INTEGER)`,
 		`CREATE TABLE nonces (id INTEGER PRIMARY KEY, namespace_id INTEGER)`,
 		`CREATE TABLE subscriptions (id INTEGER PRIMARY KEY, namespace_id INTEGER)`,

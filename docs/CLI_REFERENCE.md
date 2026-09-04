@@ -79,6 +79,11 @@ is the index.
   - [`orama function versions`](#orama-function-versions) — List all versions of a function
 - [`orama inspect`](#orama-inspect) — Inspect cluster health via SSH
 - [`orama invite`](#orama-invite) — Mint an invite for a new node
+- [`orama members`](#orama-members) — Manage who may work in a namespace
+  - [`orama members add`](#orama-members-add) — Give a wallet a role in this namespace
+  - [`orama members list`](#orama-members-list) — List who holds a grant in this namespace
+  - [`orama members remove`](#orama-members-remove) — Take a wallet's grant away
+  - [`orama members transfer`](#orama-members-transfer) — Hand this namespace to another wallet
 - [`orama monitor`](#orama-monitor) — Monitor cluster health from your local machine
   - [`orama monitor alerts`](#orama-monitor-alerts) — Active alerts and warnings (one-shot)
   - [`orama monitor cluster`](#orama-monitor-cluster) — Cluster overview (one-shot)
@@ -969,6 +974,90 @@ an existing node instead of from here.
 |------|---------|-------------|
 | `--env` | — | Environment to invite into (default: active) |
 | `--expiry` | `1h0m0s` | How long the invite stays usable |
+
+### orama members
+
+Manage who may work in a namespace
+
+```
+orama members
+```
+
+List, add and remove the wallets that hold a grant in a namespace, and
+transfer the namespace itself.
+
+A namespace has exactly one owner. Everybody else holds a role:
+
+  admin    the control plane — deployments, functions, secrets, keys, raw database
+  runtime  the data plane — invoke, storage, push, webrtc, proxy, pubsub, cache
+  reader   a member with no grant at all
+
+Ownership is not a role you can hand out: use 'orama members transfer'.
+
+Subcommands: `add`, `list`, `remove`, `transfer`
+
+### orama members add
+
+Give a wallet a role in this namespace
+
+```
+orama members add <wallet> [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--expires-in-hours` | `0` | Expire the grant after this many hours (default: never) |
+| `--name` | — | Human label for this member |
+| `--namespace` | — | Namespace name |
+| `--resource` | — | Narrow the role to a resource, e.g. storage:avatars/* — RECORDED BUT NOT ENFORCED YET, so a grant carrying one authorises nothing |
+| `--role` | — | Role to grant (reader, runtime, admin) |
+
+### orama members list
+
+List who holds a grant in this namespace
+
+```
+orama members list [flags]
+```
+
+Aliases: `ls`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--namespace` | — | Namespace name |
+
+### orama members remove
+
+Take a wallet's grant away
+
+```
+orama members remove <wallet> [flags]
+```
+
+Aliases: `rm`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--namespace` | — | Namespace name |
+
+### orama members transfer
+
+Hand this namespace to another wallet
+
+```
+orama members transfer <wallet> [flags]
+```
+
+Make another wallet the owner of this namespace.
+
+Only the current owner may do this, and it is one step rather than a removal and
+a grant: a namespace with no owner is claimable by whoever signs in to it next.
+You keep an admin grant, so handing a project over does not lock you out of it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | `false` | Skip confirmation prompt |
+| `--namespace` | — | Namespace name |
 
 ### orama monitor
 

@@ -889,9 +889,14 @@ func TestGetCallerIsAdminFromRequest(t *testing.T) {
 	if h.getCallerIsAdminFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "0xWALLET", Custom: map[string]string{"scopes": "admin"}})) {
 		t.Error("wallet JWT must not self-assert admin via an injected scopes claim")
 	}
-	// Confirmed namespace owner → admin.
-	if !h.getCallerIsAdminFromRequest(withCtx(ctxkeys.OwnerConfirmed, true)) {
-		t.Error("confirmed owner should resolve to admin")
+	// An owner's grant → admin.
+	if !h.getCallerIsAdminFromRequest(withCtx(ctxkeys.Grant, &auth.Grant{Role: auth.RoleOwner})) {
+		t.Error("the namespace owner should resolve to admin")
+	}
+	// A member who is not an admin → NOT admin. This was a boolean meaning
+	// "owner confirmed", so every member of the namespace was an admin here.
+	if h.getCallerIsAdminFromRequest(withCtx(ctxkeys.Grant, &auth.Grant{Role: auth.RoleRuntime})) {
+		t.Error("a runtime member resolved to admin")
 	}
 	// Bare request (no identity) → NOT admin.
 	if h.getCallerIsAdminFromRequest(httptest.NewRequest(http.MethodPost, "/v1/invoke/ns/fn", nil)) {

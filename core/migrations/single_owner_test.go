@@ -15,7 +15,6 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
@@ -61,7 +60,10 @@ func takenOverRegistry(t *testing.T) *sql.DB {
 	exec(`INSERT INTO api_keys(id, key, name, namespace_id, scopes, revoked_at) VALUES
 		(204, 'hash-e', '', 10, NULL, '2026-01-01 00:00:00')`)
 
-	if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrations.FS, zap.NewNop()); err != nil {
+	// Through 043 and no further. 050 replaces namespace_ownership with
+	// principals and grants and drops the table, so a database at the version
+	// these assertions are about is a database at 43.
+	if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrationsBefore(t, "044"), zap.NewNop()); err != nil {
 		t.Fatalf("apply 043: %v", err)
 	}
 	return db

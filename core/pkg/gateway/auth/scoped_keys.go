@@ -62,15 +62,12 @@ func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes, l
 		return "", 0, fmt.Errorf("failed to store api key: %w", err)
 	}
 
-	// Record namespace ownership (hashed, mirroring GetOrCreateAPIKey) so the
-	// authorization middleware recognizes the key as an owner of the namespace.
-	// A key with no ownership row is refused everywhere, so a failure here is
-	// the caller's problem and not something to swallow.
-	if _, err := db.Query(internalCtx,
-		"INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)",
-		nsID, hashedKey,
-	); err != nil {
-		return "", 0, fmt.Errorf("failed to record key ownership of namespace %q: %w", namespace, err)
+	// Record the key's membership of the namespace (hashed, mirroring
+	// GetOrCreateAPIKey) so the authorization middleware recognizes it. A key
+	// with no grant is refused everywhere, so a failure here is the caller's
+	// problem and not something to swallow.
+	if err := s.grantServiceAccount(ctx, db, nsID, namespace, hashedKey, RoleForScopes(storedScopes)); err != nil {
+		return "", 0, err
 	}
 
 	var id int64
@@ -135,10 +132,12 @@ func (s *Service) RevokeKey(ctx context.Context, namespace string, id int64) err
 		"UPDATE api_keys SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND namespace_id = ?", id, nsID); err != nil {
 		return fmt.Errorf("failed to revoke key %d: %w", id, err)
 	}
-	// Defense-in-depth: also drop the ownership row so no stale path can match.
+	// Defense-in-depth: end the key's membership too, so no stale path can
+	// match it.
 	if hashedKey != "" {
-		_, _ = db.Query(internalCtx,
-			"DELETE FROM namespace_ownership WHERE namespace_id = ? AND owner_type = 'api_key' AND owner_id = ?", nsID, hashedKey)
+		if err := s.revokeServiceAccount(ctx, db, nsID, hashedKey); err != nil {
+			return fmt.Errorf("key %d was revoked but its grant was not, so a stale path could still match it: %w", id, err)
+		}
 	}
 
 	// The key stops authenticating here, but the JWTs already exchanged from
@@ -206,8 +205,9 @@ func (s *Service) RevokeAllLegacy(ctx context.Context, namespace string) (int, e
 		return 0, fmt.Errorf("failed to revoke legacy keys: %w", err)
 	}
 	for _, h := range hashes {
-		_, _ = db.Query(internalCtx,
-			"DELETE FROM namespace_ownership WHERE namespace_id = ? AND owner_type = 'api_key' AND owner_id = ?", nsID, h)
+		if err := s.revokeServiceAccount(ctx, db, nsID, h); err != nil {
+			return len(hashes), fmt.Errorf("the legacy keys were revoked but their grants were not: %w", err)
+		}
 
 		// Same reason as RevokeKey: the key stops authenticating, and the
 		// tokens exchanged from it do not until they expire.

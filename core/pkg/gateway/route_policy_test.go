@@ -150,6 +150,8 @@ var routeClasses = map[string]routeClass{
 	"/v1/namespace/delete":                 classCredential,
 	"/v1/namespace/keys":                   classCredential,
 	"/v1/namespace/keys/":                  classCredential,
+	"/v1/namespace/members":                classCredential,
+	"/v1/namespace/members/":               classCredential,
 	"/v1/namespace/rate-limit":             classCredential,
 	"/v1/namespace/push-credentials":       classCredential,
 	"/v1/namespace/push-credentials/":      classCredential,
