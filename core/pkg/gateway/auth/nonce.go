@@ -66,11 +66,9 @@ func (s *Service) nonceNamespace(namespace string) string {
 }
 
 // normalizeNonceWallet canonicalises a wallet address for nonce storage and
-// lookup. Addresses arrive in mixed case (EIP-55 checksummed on one call,
-// lowercase on the next), and the nonce row is matched by exact string
-// equality, so both sides must normalise identically.
+// lookup. See NormalizeWallet for why.
 func normalizeNonceWallet(wallet string) string {
-	return strings.ToLower(strings.TrimSpace(wallet))
+	return NormalizeWallet(wallet)
 }
 
 // lookupNamespaceID resolves a namespace name to its id without creating it.

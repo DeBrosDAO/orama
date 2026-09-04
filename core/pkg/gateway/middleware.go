@@ -981,13 +981,27 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 }
 
 // apiKeyOwnerCandidates returns the owner_id values to test for a namespace
-// ownership check. API keys are stored HMAC-hashed in namespace_ownership, so
-// for an api_key owner the hashed form is checked first and the raw key second
-// (rolling-upgrade legacy, mirroring lookupAPIKeyNamespace). For every other
-// owner type the value is used as-is.
+// ownership check.
+//
+// API keys are stored HMAC-hashed in namespace_ownership, so for an api_key
+// owner the hashed form is checked first and the raw key second (rolling-
+// upgrade legacy, mirroring lookupAPIKeyNamespace).
+//
+// Wallets are stored normalised (auth.NormalizeWallet), but rows written
+// before that was true kept whatever case the client sent — so a checksummed
+// address could own a namespace under a spelling no later login matched. The
+// normalised form is checked first and the presented form second, which keeps
+// those rows working until migration 042 has run everywhere.
+//
+// For every other owner type the value is used as-is.
 func apiKeyOwnerCandidates(ownerType, ownerID, hashed string) []string {
 	if ownerType == "api_key" && hashed != "" && hashed != ownerID {
 		return []string{hashed, ownerID}
+	}
+	if ownerType == "wallet" {
+		if normalized := auth.NormalizeWallet(ownerID); normalized != ownerID {
+			return []string{normalized, ownerID}
+		}
 	}
 	return []string{ownerID}
 }

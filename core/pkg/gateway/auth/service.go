@@ -185,6 +185,17 @@ func (s *Service) reuseLastKnownClaims(ctx context.Context, nsID interface{}, wa
 // guarantees is safer than rotating non-atomically.
 var ErrRotationNotConfigured = fmt.Errorf("auth service not configured for atomic refresh-token rotation (missing rqlite client)")
 
+// NormalizeWallet canonicalises a wallet address for storage and lookup.
+//
+// The same wallet reaches the gateway in different cases: EIP-55 checksummed
+// from one client, lowercase from another. Every row keyed by a wallet is
+// matched by exact string equality, so unless both the write and the read
+// normalise the same way one login records ownership that a later login cannot
+// find, and the wallet ends up owning the namespace twice under two spellings.
+func NormalizeWallet(wallet string) string {
+	return strings.ToLower(strings.TrimSpace(wallet))
+}
+
 // HashAPIKey returns the HMAC-SHA256 hash of an API key if the HMAC secret is set,
 // or returns the raw key for backward compatibility during rolling upgrade.
 func (s *Service) HashAPIKey(key string) string {
@@ -757,7 +768,7 @@ func (s *Service) RegisterApp(ctx context.Context, wallet, namespace, name, publ
 	}
 
 	// Record ownership
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, ?, ?)", nsID, "wallet", wallet)
+	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, ?, ?)", nsID, "wallet", NormalizeWallet(wallet))
 
 	return appID, nil
 }
@@ -805,12 +816,12 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 	rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", hashedKey)
 	if err == nil && rid != nil && rid.Count > 0 && len(rid.Rows) > 0 && len(rid.Rows[0]) > 0 {
 		apiKeyID := rid.Rows[0][0]
-		_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)", nsID, strings.ToLower(wallet), apiKeyID)
+		_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)", nsID, NormalizeWallet(wallet), apiKeyID)
 	}
 
 	// Record ownerships — store the hash in ownership too
 	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)", nsID, hashedKey)
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'wallet', ?)", nsID, wallet)
+	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'wallet', ?)", nsID, NormalizeWallet(wallet))
 
 	return apiKey, nil
 }

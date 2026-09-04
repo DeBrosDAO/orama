@@ -339,5 +339,5 @@ the node holds no ipfs-cluster identity, i.e. it has never joined a cluster.
 - **Check service logs:** `journalctl -u orama-namespace-olric@<name>.service --no-pager -n 50`
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes
 - **Check gateway health:** `curl http://localhost:<port>/v1/health` from the node itself
-- **Node IPs:** Check `scripts/remote-nodes.conf` for credentials, `wg show wg0` for WG IPs
+- **Node IPs:** `orama nodes --env <env>` lists them from the network API; `core/scripts/nodes.conf` is the local fallback inventory. `wg show wg0` for WG IPs. SSH keys come from the RootWallet vault, never from a file.
 - **OramaOS nodes:** No SSH access — use Gateway API endpoints (`/v1/node/status`, `/v1/node/logs`) for diagnostics

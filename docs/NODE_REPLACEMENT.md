@@ -14,7 +14,9 @@ Related docs:
 - [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md) — NS / glue DNS
 - [COMMON_PROBLEMS.md](COMMON_PROBLEMS.md) — WireGuard / Olric / vault issues
 
-Inventory file: `core/scripts/nodes.conf`
+Inventory file: `core/scripts/nodes.conf` — gitignored, created from
+`core/scripts/nodes.conf.example`. It lists the hosts you operate, so it is not
+committed; the network API is the primary source and this file is the fallback.
 
 ---
 

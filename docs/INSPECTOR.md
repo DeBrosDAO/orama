@@ -166,6 +166,8 @@ The AI receives the full check results plus cluster metadata and returns a struc
 ## Configuration
 
 The inspector reads node definitions from a pipe-delimited config file (default: `scripts/nodes.conf`).
+That file is gitignored — copy `core/scripts/nodes.conf.example` to
+`core/scripts/nodes.conf` and fill in your own hosts.
 
 ### Format
 
