@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -41,6 +42,12 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 	if topic == "" {
 		p.logger.ComponentWarn("gateway", "pubsub ws: missing topic")
 		writeError(w, http.StatusBadRequest, "missing 'topic'")
+		return
+	}
+
+	// Before the upgrade: a refusal after it is a WebSocket close frame the
+	// client has to decode, where this is a plain 403.
+	if !authorizeTopic(w, r, topic, gwauth.ActionRead) {
 		return
 	}
 

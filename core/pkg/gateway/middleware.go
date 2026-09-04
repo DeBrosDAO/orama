@@ -966,14 +966,16 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// The role travels with the request. It used to be a boolean — "a SIWE
-		// wallet owner was confirmed" — which is why every human with access
-		// was an admin: there was nothing else the flag could say. The scope
-		// gate reads the role now, so a wallet granted `runtime` gets the data
-		// plane and not the control plane (bugboard #148, feat-367).
-		if ownerType == "wallet" {
-			r = markGrant(r, grant)
-		}
+		// The grant travels with the request. It used to be a boolean — "a
+		// SIWE wallet owner was confirmed" — which is why every human with
+		// access was an admin: there was nothing else the flag could say.
+		//
+		// It is set for a key-authenticated caller too, not only a wallet. The
+		// scope gate reads it only for a wallet JWT (a key's own scopes column
+		// is what says what it may reach), but the data paths read its selector
+		// for either — a service account narrowed to one topic pattern is as
+		// real a thing as a teammate narrowed to one (feat-371).
+		r = markGrant(r, grant)
 
 		next.ServeHTTP(w, r)
 	})

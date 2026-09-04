@@ -45,6 +45,39 @@ var selectorDomains = map[SelectorDomain]string{
 	SelectorPush:    ScopePush,
 }
 
+// enforcedDomains are the domains whose data path can name the resource a
+// request is about, and therefore apply a selector to it.
+//
+// A grant may only carry a selector in one of these. The alternative is to let
+// somebody record `storage:avatars/*` and have it silently authorise nothing —
+// which is what a stored-but-unenforced selector amounts to, and it reads as a
+// working restriction in `orama members list`. Refusing at the point of writing
+// is the honest version: a selector you can create is a selector that is
+// applied.
+//
+// The rest arrive as their data paths learn to name their resource: storage
+// needs a path on the ownership row, `db` needs the statement parsed for the
+// tables it touches, `push` and `cache` need their handlers to say what they
+// are touching.
+var enforcedDomains = map[SelectorDomain]bool{
+	SelectorPubsub: true,
+	SelectorFn:     true,
+}
+
+// SelectorEnforced reports whether a selector in this domain is applied by the
+// data path.
+func SelectorEnforced(domain SelectorDomain) bool { return enforcedDomains[domain] }
+
+// EnforcedSelectorDomains returns the domains a grant may be narrowed to today.
+func EnforcedSelectorDomains() []string {
+	out := make([]string, 0, len(enforcedDomains))
+	for d := range enforcedDomains {
+		out = append(out, string(d))
+	}
+	sort.Strings(out)
+	return out
+}
+
 // maxSelectorLength bounds what goes in the column. A selector is a short
 // pattern; anything longer is a mistake or an attempt to put something else in
 // the row.

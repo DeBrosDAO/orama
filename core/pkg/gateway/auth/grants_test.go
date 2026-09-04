@@ -77,11 +77,11 @@ func TestParseRole(t *testing.T) {
 // storage:avatars/*" into "may write to all storage".
 func TestGrant_aResourceScopedGrantAuthorisesNothingYet(t *testing.T) {
 	whole := Grant{Role: RoleRuntime}
-	if !whole.Scopes().Has(ScopeStorage) {
-		t.Fatal("a whole-role runtime grant does not hold storage")
+	if !whole.Scopes().Has(ScopePubsub) {
+		t.Fatal("a whole-role runtime grant does not hold pubsub")
 	}
 
-	narrowed := Grant{Role: RoleRuntime, Resource: "storage:avatars/*"}
+	narrowed := Grant{Role: RoleRuntime, Resource: "pubsub:topic=chat.*"}
 	if len(narrowed.Scopes()) != 0 {
 		t.Errorf("a grant narrowed to a selector authorised %v", narrowed.Scopes().Canonical())
 	}
@@ -350,10 +350,13 @@ func TestGrant_validatesTheSelector(t *testing.T) {
 		name, resource string
 		role           Role
 	}{
-		{"not a selector at all", "avatars/*", RoleRuntime},
+		{"not a selector at all", "chat.*", RoleRuntime},
 		{"an unknown domain", "filesystem:/etc/passwd", RoleRuntime},
-		{"an empty pattern", "storage:", RoleRuntime},
-		{"a domain the role cannot reach", "storage:avatars/*", RoleReader},
+		{"an empty pattern", "pubsub:", RoleRuntime},
+		{"a domain the role cannot reach", "pubsub:topic=chat.*", RoleReader},
+		// A selector nothing applies would show as a narrowed grant and
+		// authorise nothing, which is the worse of the two ways to be wrong.
+		{"a domain the data path cannot enforce yet", "storage:avatars/*", RoleRuntime},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := s.Grant(context.Background(), GrantRequest{
@@ -368,7 +371,7 @@ func TestGrant_validatesTheSelector(t *testing.T) {
 
 	if err := s.Grant(context.Background(), GrantRequest{
 		Namespace: "anchat", PrincipalType: PrincipalWallet, Identifier: "0xteammate",
-		Role: RoleRuntime, Resource: "storage:avatars/*",
+		Role: RoleRuntime, Resource: "pubsub:topic=chat.*",
 	}); err != nil {
 		t.Errorf("a valid selector on a role that holds the grant was refused: %v", err)
 	}

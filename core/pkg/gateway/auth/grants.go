@@ -274,6 +274,14 @@ func (s *Service) writeGrant(ctx context.Context, req GrantRequest) error {
 			return fmt.Errorf("role %q does not hold the %q grant that selector %q narrows",
 				req.Role, want, resource)
 		}
+		// A selector nothing applies is a restriction that is not there. It
+		// would show in `orama members list` as a narrowed grant and authorise
+		// nothing, which is the worse of the two ways to be wrong.
+		if !SelectorEnforced(selector.Domain) {
+			return fmt.Errorf("a %s selector is not applied by the data path yet, so this grant "+
+				"would authorise nothing: narrow a grant in %s, or leave the selector off",
+				selector.Domain, strings.Join(EnforcedSelectorDomains(), " or "))
+		}
 		resource = selector.String()
 	}
 
