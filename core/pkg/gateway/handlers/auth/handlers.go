@@ -86,6 +86,10 @@ type Handlers struct {
 	clusterProvisioner ClusterProvisioner         // Optional: for namespace cluster provisioning
 	solanaVerifier     *authsvc.SolanaNFTVerifier // Server-side NFT ownership verifier
 
+	// challengeLimiter caps how fast challenges can be issued for one wallet,
+	// whoever asks. See wallet_rate_limit.go.
+	challengeLimiter *walletLimiter
+
 	// apiKeyDB is the global/core API-key registry querier, wired via
 	// SetAPIKeyDB (see gateway.Gateway.apiKeyDB). When set,
 	// APIKeyToJWTHandler's self-query fallback uses it instead of
@@ -104,13 +108,18 @@ func NewHandlers(
 	defaultNamespace string,
 	internalAuthFn func(context.Context) context.Context,
 ) *Handlers {
-	return &Handlers{
-		logger:         logger,
-		authService:    authService,
-		netClient:      netClient,
-		defaultNS:      defaultNamespace,
-		internalAuthFn: internalAuthFn,
+	h := &Handlers{
+		logger:           logger,
+		authService:      authService,
+		netClient:        netClient,
+		defaultNS:        defaultNamespace,
+		internalAuthFn:   internalAuthFn,
+		challengeLimiter: newWalletLimiter(walletChallengeRate, walletChallengeBurst),
 	}
+	// A bucket per wallet ever seen would grow without bound on a busy
+	// gateway, and a wallet idle for half an hour has a full budget anyway.
+	h.startChallengeLimiterCleanup()
+	return h
 }
 
 // SetClusterProvisioner sets the cluster provisioner for namespace cluster management

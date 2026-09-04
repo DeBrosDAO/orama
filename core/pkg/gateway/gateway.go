@@ -161,7 +161,10 @@ type Gateway struct {
 	logBatcher *requestLogBatcher
 
 	// Rate limiters
-	rateLimiter          *RateLimiter
+	rateLimiter *RateLimiter
+	// authRateLimiter caps the endpoints that mint or exchange credentials,
+	// far below the general limit. See isAuthRateLimitPath.
+	authRateLimiter      *RateLimiter
 	namespaceRateLimiter *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
 	// rateLimitManager (feature #69) handles per-namespace rate limits with
 	// tenant self-service config via /v1/namespace/rate-limit. When set,
@@ -582,8 +585,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	//
 	// Per-IP: token bucket against the client IP. Generous so legitimate
 	// users behind shared NATs aren't squeezed.
-	gw.rateLimiter = NewRateLimiter(10000, 5000)
-	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+	configureRateLimiters(gw)
 
 	// Per-namespace: feature #69 — backed by an LRU manager with
 	// per-namespace overrides via /v1/namespace/rate-limit (config in
@@ -1559,4 +1561,19 @@ func (g *Gateway) namespaceWebRTCStatusHandler(w http.ResponseWriter, r *http.Re
 	} else {
 		json.NewEncoder(w).Encode(config)
 	}
+}
+
+// configureRateLimiters sets both buckets, so their relative size is one
+// decision in one place and a test can check it.
+//
+// 30 credential operations a minute from one address, bursting to 10, against
+// a general 10,000 a minute. A person signing in does two or three; anyone
+// grinding nonces, signatures or token exchanges does far more, and the
+// general limit is no obstacle at all to that.
+func configureRateLimiters(gw *Gateway) {
+	gw.rateLimiter = NewRateLimiter(10000, 5000)
+	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+
+	gw.authRateLimiter = NewRateLimiter(30, 10)
+	gw.authRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
 }

@@ -35,6 +35,16 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The wallet in the body is not the caller's to prove, and each challenge
+	// writes a nonce row for it. Limiting the address alone caps one client,
+	// not a distributed grind against one victim's wallet.
+	if h.challengeLimiter != nil && !h.challengeLimiter.allow(req.Wallet) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests,
+			"too many challenges for this wallet — wait a minute and try again")
+		return
+	}
+
 	nonce, err := h.authService.CreateNonce(r.Context(), req.Wallet, req.Purpose, req.Namespace)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

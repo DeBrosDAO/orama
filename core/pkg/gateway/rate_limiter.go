@@ -129,17 +129,35 @@ func (nrl *NamespaceRateLimiter) Allow(namespace string) bool {
 }
 
 // rateLimitMiddleware returns 429 when a client exceeds the rate limit.
-// Internal traffic from the WireGuard subnet is exempt.
+// Traffic from another node over the overlay, and from a process on this
+// machine, is exempt.
+//
+// The client is resolved from the peer address, not from getClientIP: that
+// reads the first X-Forwarded-For entry, which any caller can write, and an
+// address in the WireGuard subnet was exempt from every limit. One header
+// removed all rate limiting from the endpoints that mint credentials. See
+// rate_limit_key.go.
 func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 	if g.rateLimiter == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := getClientIP(r)
-
-		// Exempt internal cluster traffic (WireGuard subnet)
-		if isInternalIP(ip) {
+		ip, exempt := rateLimitClient(r)
+		if exempt {
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		// The credential-minting endpoints have their own, much tighter
+		// bucket. They are cheap to call and expensive to serve, and they are
+		// the ones worth grinding.
+		if g.authRateLimiter != nil && isAuthRateLimitPath(r.URL.Path) && !g.authRateLimiter.Allow(ip) {
+			w.Header().Set("Retry-After", "60")
+			httputil.WriteRPCError(w, http.StatusTooManyRequests,
+				httputil.ErrCodeRateLimited,
+				"too many authentication attempts — wait a minute and try again",
+				httputil.WithRetryable(),
+				httputil.WithRetryAfter(60))
 			return
 		}
 

@@ -912,16 +912,36 @@ See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 
 Order matches `Gateway.withMiddleware` (outermost first). Rate limiting runs **before** authentication so the auth path itself is capped.
 
-1. **Logger** — request/response logging
-2. **Security headers**
-3. **Rate limiting** — per-client, before auth
-4. **CORS**
-5. **Domain routing**
-6. **Authentication** — JWT / API key
-7. **Authorization** — namespace access control
-8. **Scope gate** — tightens an already-authorized request
-9. **Namespace rate limiting**
-10. Handler (errors are returned as HTTP status, not a separate middleware)
+1. **Internal-auth gate** — drops every `X-Internal-Auth-*` header that did not arrive with a valid MAC
+2. **Logger** — request/response logging
+3. **Security headers**
+4. **Rate limiting** — per-client, before auth
+5. **CORS**
+6. **Domain routing**
+7. **Authentication** — JWT / API key
+8. **Authorization** — namespace access control
+9. **Scope gate** — tightens an already-authorized request
+10. **Namespace rate limiting**
+11. Handler (errors are returned as HTTP status, not a separate middleware)
+
+The client a rate limit is charged to is the peer address, not
+`X-Forwarded-For`. The header is honoured only when the peer is the local
+reverse proxy, and only its last entry, which is the address Caddy is actually
+talking to — everything before it is whatever the caller wrote. Traffic from
+another node over the overlay is exempt, and so is a process on this machine
+that reached the gateway directly, with nothing forwarded. Loopback **with** a
+forwarding header is not exempt: every public request arrives from `127.0.0.1`
+because Caddy proxies to localhost, so exempting it would exempt the internet.
+
+The endpoints that mint or exchange credentials — challenge, verify, api-key,
+token, refresh, and the Phantom paths — have their own bucket, 30 a minute per
+address bursting to 10, against a general limit of 10,000 a minute. They are
+cheap to call and expensive to serve, and the general limit is no obstacle to
+grinding them.
+
+`/v1/auth/challenge` is limited **per wallet** as well, wherever the request
+comes from: it writes a nonce row for a wallet the caller does not have to own,
+so a distributed grind against one victim is not capped by a per-address limit.
 
 ## Scalability
 

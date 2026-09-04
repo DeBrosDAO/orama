@@ -24,6 +24,11 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - A gateway with no cluster secret configured now refuses these endpoints (`503`) instead of allowing them, since there is no way to authenticate the caller
 - `node_id` and `public_key` on peer registration are parsed (libp2p peer id; base64 32-byte Curve25519, control characters rejected) before they are stored, because both are rendered into `wg0.conf` on every node
 
+**Rate limiting**
+- The client is the peer address. It used to be the first `X-Forwarded-For` entry, and any address in the WireGuard subnet was exempt from every limit — so one header removed all rate limiting, including from the endpoints that mint credentials
+- `X-Forwarded-For` is honoured only when the peer is the local reverse proxy, and only its last entry: Caddy appends the address it is talking to, so the last entry is real and the ones before it are the caller's. Loopback with a forwarding header is **not** exempt, because every public request arrives from `127.0.0.1`
+- Credential endpoints get a separate bucket, 30 a minute per address against a general 10,000. `/v1/auth/challenge` is limited per wallet too, since it writes a row for a wallet the caller does not have to own
+
 **Inter-gateway trust (`X-Internal-Auth-*`)**
 - The main gateway validates a request and forwards the result to a namespace gateway in these headers: the namespace it resolved, the JWT subject it verified, and the grant set of the API key it looked up. The namespace gateway believes all three without re-checking anything, and skips its ownership gate on the strength of them
 - Whether to believe them is answered by an `X-Internal-Auth-MAC` header: HMAC-SHA256 over the request's method and path plus every field the headers assert plus a timestamp, keyed by `HKDF(cluster secret, "internal-auth-hop")`. Every node in a cluster derives the same key and nobody outside it can. The first middleware in the chain deletes every `X-Internal-Auth-*` header that did not arrive with a valid MAC, so nothing below it has to ask whether what it sees is authentic
