@@ -46,7 +46,7 @@ wg show wg0 dump
 sudo grep -A3 '\[Peer\]' /etc/wireguard/wg0.conf
 
 # the sync's own account of the last round
-journalctl -u orama-node --no-pager | grep 'WireGuard peer sync completed' | tail -3
+sudo orama node logs node --since -10min | grep 'WireGuard peer sync completed' | tail -3
 ```
 
 The sync log line reports `added`, `updated`, `removed` and `persisted`
@@ -86,7 +86,7 @@ This was fixed in code (BindAddr validation in `SpawnOlric`), so new namespaces 
 ### Check 3: Olric logs show "Failed UDP ping" constantly
 
 ```bash
-journalctl -u orama-namespace-olric@<name>.service --no-pager -n 30
+sudo orama node logs orama-namespace-olric@<name> -n 30
 ```
 
 If every UDP ping fails but TCP stream connections succeed, it's the WireGuard packet loss issue (see Check 1).
@@ -370,7 +370,7 @@ desktop app is closed. Open it.
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands
 - **Namespace data lives at:** `/opt/orama/.orama/data/namespaces/<name>/`
-- **Check service logs:** `sudo orama node logs orama-namespace-olric@<name>` — it wraps `journalctl` and knows the unit names
+- **Check service logs:** `sudo orama node logs orama-namespace-olric@<name>` — it wraps `journalctl`, resolves template instances, and takes `-n` and `-f`
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes
 - **Check gateway health:** `curl http://localhost:<port>/v1/health` from the node itself
 - **Node IPs:** `orama nodes --env <env>` lists them from the network API. The local fallback inventory is `nodes.conf`, looked for in the working directory, then `../scripts/`, then `~/.orama/` — see [INSPECTOR.md](INSPECTOR.md#configuration) for the full search order. `wg show wg0` for WG IPs. SSH keys come from the RootWallet vault, never from a file.

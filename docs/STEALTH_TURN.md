@@ -152,8 +152,8 @@ active relays are never dropped by a renewal.
 ## Monitoring
 
 ```bash
-journalctl -u orama-namespace-sni-router@index -f
-journalctl -u orama-namespace-caddy@index -f
+sudo orama node logs orama-namespace-sni-router@index -f
+sudo orama node logs caddy -f
 ```
 
 Watch for:

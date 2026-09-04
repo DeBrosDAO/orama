@@ -192,7 +192,7 @@ Check:
 SSH into the node to debug:
 ```bash
 orama sandbox ssh 1
-journalctl -u orama-node -f
+sudo orama node logs node -f
 ```
 
 The sandbox will be left in "error" state. You can destroy and recreate it.

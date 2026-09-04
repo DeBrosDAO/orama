@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -61,58 +63,130 @@ func DefaultPorts() []PortSpec {
 	}
 }
 
-// ResolveServiceName resolves service aliases to actual systemd service names
-func ResolveServiceName(alias string) ([]string, error) {
-	// Service alias mapping (unified - no bootstrap/node distinction)
-	aliases := map[string][]string{
-		"node":         {"orama-node"},
-		"ipfs":         {"orama-ipfs"},
-		"cluster":      {"orama-ipfs-cluster"},
-		"ipfs-cluster": {"orama-ipfs-cluster"},
-		"gateway":      {"orama-node"}, // Gateway is embedded in orama-node
-		"olric":        {"orama-olric"},
-		"rqlite":       {"orama-node"}, // RQLite logs are in node logs
-	}
+// systemdUnitDir is where install and upgrade write unit files. A variable so
+// the resolver can be exercised against a directory a test controls.
+var systemdUnitDir = "/etc/systemd/system"
 
-	// Check if it's an alias
-	if serviceNames, ok := aliases[strings.ToLower(alias)]; ok {
-		// Filter to only existing services
-		var existing []string
-		for _, svc := range serviceNames {
-			unitPath := filepath.Join("/etc/systemd/system", svc+".service")
-			if _, err := os.Stat(unitPath); err == nil {
-				existing = append(existing, svc)
+// unitSuffixes are the unit types the resolver understands. A name ending in
+// anything else is a unit name, so "orama-node" means "orama-node.service".
+var unitSuffixes = []string{".service", ".timer"}
+
+// indexUnit is the unit name of one of the node's own services.
+func indexUnit(serviceType systemd.ServiceType) string {
+	return systemd.NamespaceUnit(serviceType, systemd.IndexNamespace)
+}
+
+// serviceAliases maps the short names the CLI accepts to the unit that serves
+// that role, current name first.
+//
+// Every one of these runs as a namespace instance on a current node. The
+// gateway and the index rqlite are their own units — orama-node does not bind
+// the gateway port and never was rqlited's parent — and IPFS, Olric, Caddy and
+// IPFS-Cluster moved off host-level units, which install still writes for
+// rollback and deliberately disables. An alias therefore has to name the
+// instance on a current node and the host unit only on one that predates the
+// move, or `orama node logs olric` reads a journal that has had nothing in it
+// since the migration. This is the precedence pkg/inspector/checks/system.go
+// applies.
+var serviceAliases = map[string][]string{
+	"node":         {"orama-node"},
+	"gateway":      {indexUnit(systemd.ServiceTypeGateway), "orama-node"},
+	"rqlite":       {indexUnit(systemd.ServiceTypeRQLite), "orama-node"},
+	"ipfs":         {indexUnit(systemd.ServiceTypeIPFS), "orama-ipfs"},
+	"cluster":      {indexUnit(systemd.ServiceTypeIPFSCluster), "orama-ipfs-cluster"},
+	"ipfs-cluster": {indexUnit(systemd.ServiceTypeIPFSCluster), "orama-ipfs-cluster"},
+	"olric":        {indexUnit(systemd.ServiceTypeOlric), "orama-olric"},
+	"caddy":        {indexUnit(systemd.ServiceTypeCaddy), "caddy"},
+	"coredns":      {systemd.NamespaceUnit(systemd.ServiceTypeCoreDNS, systemd.NameserverNamespace), "coredns"},
+	"turn":         {strings.TrimSuffix(systemd.HostTURNServiceName, ".service")}, // one shared host unit, every namespace
+}
+
+// validUnitName is systemd's unit-name charset, plus the single '@' that
+// separates a template from its instance and an optional unit-type suffix.
+//
+// The name reaches two places that read more than a literal string: it becomes
+// a path under systemdUnitDir, where "../" walks out of the directory, and it
+// becomes the argument of journalctl -u, which takes a glob — so
+// "orama-namespace-olric@*" would read every namespace's journal in one
+// command. Excluding '/' makes the first impossible and excluding the glob
+// metacharacters makes the second name exactly one unit.
+var validUnitName = regexp.MustCompile(`^[A-Za-z0-9:_.-]+(@[A-Za-z0-9:_.-]*)?(\.(service|timer))?$`)
+
+// ResolveServiceName resolves an alias or unit name to the unit installed on
+// this node, and reports which units it looked for when there is none.
+func ResolveServiceName(alias string) (string, error) {
+	if units, ok := serviceAliases[strings.ToLower(alias)]; ok {
+		for _, unit := range units {
+			if unitFileExists(unit) {
+				return unit, nil
 			}
 		}
-		if len(existing) == 0 {
-			return nil, fmt.Errorf("no services found for alias %q", alias)
+		return "", fmt.Errorf("alias %q resolves to %s, and this node has no unit file for it",
+			alias, strings.Join(units, " or "))
+	}
+
+	// A leading dash would be a flag rather than a name if this string ever
+	// reached a command line in a position that is not already an option value.
+	if strings.HasPrefix(alias, "-") || !validUnitName.MatchString(alias) {
+		return "", fmt.Errorf("%q is not a unit name. Use one of %s, or a full unit name "+
+			"such as orama-namespace-olric@<namespace>", alias, strings.Join(ServiceAliases(), ", "))
+	}
+
+	if unitFileExists(alias) {
+		return strings.TrimSuffix(alias, ".service"), nil
+	}
+
+	return "", fmt.Errorf("no unit named %q on this node. Use one of %s, or a full unit name "+
+		"such as orama-namespace-olric@<namespace>", alias, strings.Join(ServiceAliases(), ", "))
+}
+
+// ServiceAliases lists the accepted aliases, sorted. The CLI's own help reads
+// it, so adding an alias documents it.
+func ServiceAliases() []string {
+	names := make([]string, 0, len(serviceAliases))
+	for name := range serviceAliases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// unitFileExists reports whether a unit file able to serve this unit name is
+// installed.
+//
+// A template instance — "orama-namespace-olric@anchat" — has no file of its
+// own: systemd instantiates it from the template, "orama-namespace-olric@.service",
+// and that is what is on disk. Statting the instance name says "not found" for
+// every tenant service on the node, which is what made `orama node logs
+// orama-namespace-olric@<namespace>` fail even though the unit was running.
+func unitFileExists(unit string) bool {
+	name, suffix := unit, ".service"
+	for _, s := range unitSuffixes {
+		if strings.HasSuffix(unit, s) {
+			name, suffix = strings.TrimSuffix(unit, s), s
+			break
 		}
-		return existing, nil
 	}
 
-	// Check if it's already a full service name
-	unitPath := filepath.Join("/etc/systemd/system", alias+".service")
-	if _, err := os.Stat(unitPath); err == nil {
-		return []string{alias}, nil
-	}
-
-	// Try without .service suffix
-	if !strings.HasSuffix(alias, ".service") {
-		unitPath = filepath.Join("/etc/systemd/system", alias+".service")
-		if _, err := os.Stat(unitPath); err == nil {
-			return []string{alias}, nil
+	// "foo@bar" is instantiated from "foo@.service". "foo@" is the template
+	// itself: systemd will not run it, and journalctl -u against it reads
+	// nothing, so it is refused here rather than resolved to an empty journal.
+	if at := strings.IndexByte(name, '@'); at >= 0 {
+		if at == len(name)-1 {
+			return false
 		}
+		name = name[:at+1]
 	}
 
-	return nil, fmt.Errorf("service %q not found. Use: node, ipfs, cluster, gateway, olric, or full service name", alias)
+	_, err := os.Stat(filepath.Join(systemdUnitDir, name+suffix))
+	return err == nil
 }
 
 // ServiceUnitExists reports whether a systemd unit file is installed for the
 // given service name (e.g. "caddy"). Used to guard restart/start logic so it
 // only touches services actually present on this node.
 func ServiceUnitExists(service string) bool {
-	_, err := os.Stat(filepath.Join("/etc/systemd/system", service+".service"))
-	return err == nil
+	return unitFileExists(service)
 }
 
 // IsServiceActive checks if a systemd service is currently active (running)

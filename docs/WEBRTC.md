@@ -377,13 +377,15 @@ mean it relays for a given namespace.
 
 ```bash
 # SFU logs
-journalctl -u orama-namespace-sfu@myapp -f
+sudo orama node logs orama-namespace-sfu@myapp -f
 
 # TURN logs — one shared server per host, serving every namespace on it
-journalctl -u orama-turn -f
+sudo orama node logs turn -f
 
-# Check service status
-systemctl status orama-namespace-sfu@myapp
+# The node's units, with their state
+sudo orama node status
+
+# The shared TURN unit is host-level, so it is not in that list yet
 systemctl status orama-turn
 ```
 

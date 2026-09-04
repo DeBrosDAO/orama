@@ -110,9 +110,31 @@ func NewManager(namespaceBase string, logger *zap.Logger) *Manager {
 	}
 }
 
+// IndexNamespace is the reserved namespace holding the node's own services —
+// the gateway, rqlite, IPFS, Olric, Caddy and the rest that serve the node
+// itself rather than a tenant.
+const IndexNamespace = "index"
+
+// NameserverNamespace is the reserved namespace holding CoreDNS on a
+// nameserver node.
+const NameserverNamespace = "nameserver"
+
+// NamespaceUnit returns the systemd unit name of one namespace service, with no
+// type suffix: NamespaceUnit(ServiceTypeGateway, IndexNamespace) is
+// "orama-namespace-gateway@index".
+//
+// These names were spelled out as literals wherever something needed one, and
+// the copies drifted: `orama node logs gateway` read orama-node's journal,
+// which has never carried the gateway's logs, because a copy of the table said
+// the gateway ran inside orama-node. One spelling, in the package that owns
+// unit naming.
+func NamespaceUnit(serviceType ServiceType, namespace string) string {
+	return fmt.Sprintf("orama-namespace-%s@%s", serviceType, namespace)
+}
+
 // serviceName returns the systemd service name for a namespace and service type
 func (m *Manager) serviceName(namespace string, serviceType ServiceType) string {
-	return fmt.Sprintf("orama-namespace-%s@%s.service", serviceType, namespace)
+	return NamespaceUnit(serviceType, namespace) + ".service"
 }
 
 // systemctl builds an exec.Command for systemctl, prepending sudo when

@@ -238,8 +238,8 @@ announcing maintenance on shutdown.
 
 The state is published in discovery metadata. `orama monitor report` does not
 render it today; read it from the node's own log
-(`journalctl -u orama-node | grep "Node lifecycle state changed"`), which also
-lists the components that have not converged.
+(`sudo orama node logs node --since -1h | grep "Node lifecycle state changed"`),
+which also lists the components that have not converged.
 
 **DNS degrades rather than failing.** The CoreDNS rqlite plugin serves stale
 answers when the backend is unreachable: an entry stays usable for 24 hours past

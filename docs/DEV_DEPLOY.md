@@ -369,7 +369,7 @@ So a node in `degraded` is serving. Check which components have not converged
 before reaching for a recovery command:
 
 ```bash
-journalctl -u orama-node -n 100 | grep "Boot component"
+sudo orama node logs node -n 100 | grep "Boot component"
 ```
 
 Every failed attempt logs the component name, the attempt count, the retry delay

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 // `orama push` and `orama node push` were two separate implementations with
@@ -40,12 +39,19 @@ func findCommand(t *testing.T, root *cobra.Command, path []string) *cobra.Comman
 	return cur
 }
 
-// flagSpec is every flag of a command as "name=default".
+// flagSpec is every flag a command declares itself, as "name=default".
+//
+// Not cmd.Flags(): running a command merges its inherited flags into its own
+// set and leaves them there, and cobra injects --help on first run, so the
+// answer depends on what else ran first in the process. The two spellings sit
+// under different parents — root and node — so their inherited flags differ
+// legitimately; only the flags they declare themselves have to match. ownFlags
+// (reference_test.go) computes exactly that, the same way for both.
 func flagSpec(cmd *cobra.Command) []string {
 	var out []string
-	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+	for _, f := range ownFlags(cmd) {
 		out = append(out, f.Name+"="+f.DefValue)
-	})
+	}
 	sort.Strings(out)
 	return out
 }

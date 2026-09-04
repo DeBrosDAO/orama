@@ -1430,12 +1430,25 @@ View production service logs
 orama node logs <service> [flags]
 ```
 
-Stream logs for a specific Orama production service.
-Service aliases: node, ipfs, cluster, gateway, olric
+Stream the journal of one service on this node.
+
+<service> is an alias or a unit name. A tenant service is a systemd template
+instance, so name it in full:
+
+  orama node logs orama-namespace-olric@anchat
+
+--since takes a window rather than a line count, which is what a diagnostic
+that greps for a periodic line needs:
+
+  orama node logs node --since -30min | grep 'WireGuard peer sync completed'
+
+Aliases: caddy, cluster, coredns, gateway, ipfs, ipfs-cluster, node, olric, rqlite, turn
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--since` | — | Show entries newer than this, e.g. -30min or "2 hours ago" (overrides --lines) |
 | `-f`, `--follow` | `false` | Stream new log lines as they arrive |
+| `-n`, `--lines` | `50` | How many lines of history to show |
 
 ### orama node migrate
 

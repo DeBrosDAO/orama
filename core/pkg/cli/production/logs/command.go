@@ -4,81 +4,83 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
+	"strconv"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 )
 
-// Handle executes the logs command
-// Run streams logs for one service.
-func Run(serviceAlias string, follow bool) error {
-	// Resolve service alias to actual service names
-	serviceNames, err := utils.ResolveServiceName(serviceAlias)
+// DefaultLines is how much history `orama node logs` shows when neither
+// --lines nor --since says otherwise.
+const DefaultLines = 50
+
+// Options are the ways to choose how much journal to read.
+//
+// Lines bounds the output to the last N entries. Since bounds it by time and is
+// passed to journalctl verbatim ("-30min", "2 hours ago", a timestamp). When
+// Since is set, Lines applies only if the caller asked for it — a diagnostic
+// that greps for a line that fires once a minute wants a window, not a count.
+type Options struct {
+	Follow   bool
+	Lines    int
+	LinesSet bool
+	Since    string
+}
+
+// Run streams one service's journal.
+//
+// The unit is resolved rather than passed through, so an alias, a plain unit
+// name and a template instance ("orama-namespace-olric@anchat") all work and an
+// unknown name is refused before journalctl is asked for a unit that cannot
+// exist.
+func Run(serviceAlias string, opts Options) error {
+	unit, err := utils.ResolveServiceName(serviceAlias)
 	if err != nil {
-		return fmt.Errorf("%w\n\nAvailable service aliases: node, ipfs, cluster, gateway, olric\nOr use a full service name like: orama-node", err)
+		return err
 	}
 
-	// If multiple services match, show all of them
-	if len(serviceNames) > 1 {
-		handleMultipleServices(serviceNames, serviceAlias, follow)
-		return nil
+	if opts.Follow {
+		fmt.Fprintf(os.Stderr, "Following logs for %s (press Ctrl+C to stop)...\n\n", unit)
 	}
 
-	// Single service
-	service := serviceNames[0]
-	if follow {
-		followServiceLogs(service)
-	} else {
-		showServiceLogs(service)
+	cmd := exec.Command("journalctl", journalctlArgs(unit, opts)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		// A journalctl killed by a signal is never a failure worth reporting:
+		// Ctrl+C is how a follow ends, and `orama node logs node | head` sends
+		// SIGPIPE to a read the caller deliberately cut short.
+		if isInterrupted(cmd) {
+			return nil
+		}
+		return fmt.Errorf("reading the journal for %s failed: %w", unit, err)
 	}
 	return nil
 }
 
-func handleMultipleServices(serviceNames []string, serviceAlias string, follow bool) {
-	if follow {
-		fmt.Fprintf(os.Stderr, "⚠️  Multiple services match alias %q:\n", serviceAlias)
-		for _, svc := range serviceNames {
-			fmt.Fprintf(os.Stderr, "  - %s\n", svc)
-		}
-		fmt.Fprintf(os.Stderr, "\nShowing logs for all matching services...\n\n")
+// isInterrupted reports whether the process was ended by a signal rather than
+// by exiting on its own.
+func isInterrupted(cmd *exec.Cmd) bool {
+	state := cmd.ProcessState
+	return state != nil && !state.Exited()
+}
 
-		// Use journalctl with multiple units (build args correctly)
-		args := []string{}
-		for _, svc := range serviceNames {
-			args = append(args, "-u", svc)
-		}
-		args = append(args, "-f")
-		cmd := exec.Command("journalctl", args...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-		cmd.Run()
-	} else {
-		for i, svc := range serviceNames {
-			if i > 0 {
-				fmt.Print("\n" + strings.Repeat("=", 70) + "\n\n")
-			}
-			fmt.Printf("📋 Logs for %s:\n\n", svc)
-			cmd := exec.Command("journalctl", "-u", svc, "-n", "50")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			cmd.Run()
-		}
+// journalctlArgs is the argument list a read of one unit's journal needs.
+//
+// --since and -n together silently truncate the window to the last N entries
+// inside it, so a window replaces the count unless the caller asked for both.
+func journalctlArgs(unit string, opts Options) []string {
+	args := []string{"-u", unit, "--no-pager"}
+	if opts.Since != "" {
+		// One argv element, so a value beginning with '-' — "-30min" is the
+		// common one — is the option's value and never a flag of its own.
+		args = append(args, "--since="+opts.Since)
 	}
-}
-
-func followServiceLogs(service string) {
-	fmt.Printf("Following logs for %s (press Ctrl+C to stop)...\n\n", service)
-	cmd := exec.Command("journalctl", "-u", service, "-f")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	cmd.Run()
-}
-
-func showServiceLogs(service string) {
-	cmd := exec.Command("journalctl", "-u", service, "-n", "50")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Run()
+	if opts.Since == "" || opts.LinesSet {
+		args = append(args, "-n", strconv.Itoa(opts.Lines))
+	}
+	if opts.Follow {
+		args = append(args, "-f")
+	}
+	return args
 }

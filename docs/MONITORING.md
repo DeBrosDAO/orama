@@ -389,7 +389,7 @@ Two safety rules:
 Watch it with:
 
 ```bash
-journalctl -u orama-node --no-pager | grep -E 'namespace DNS round-robin'
+sudo orama node logs node --since -1h | grep -E 'namespace DNS round-robin'
 ```
 
 ## Configuration
