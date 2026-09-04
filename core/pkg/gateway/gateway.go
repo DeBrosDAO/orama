@@ -544,6 +544,20 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// validate against it.
 		gw.authHandlers.SetAPIKeyDB(&authDatabaseAdapter{db: gw.apiKeyDB()})
 
+		// A namespace gateway's own database is not the key registry, and the
+		// api_keys rows in it are leftovers — the pre-#163 ones being raw
+		// credentials the tenant can read. They are removed here, on the only
+		// gateways where the local database is provably not the registry.
+		if usesSeparateAPIKeyRegistry(cfg) && gw.client != nil {
+			if n, perr := purgeTenantPlaintextAPIKeys(context.Background(), gw.client.Database()); perr != nil {
+				logger.ComponentWarn(logging.ComponentGeneral,
+					"plaintext API keys are still on disk in this namespace's own database", zap.Error(perr))
+			} else if n > 0 {
+				logger.ComponentInfo(logging.ComponentGeneral,
+					"Removed leftover plaintext API keys from this namespace's database", zap.Int("count", n))
+			}
+		}
+
 		if strings.TrimSpace(cfg.APIKeyHMACSecret) != "" {
 			n, merr := deps.AuthService.MigratePlaintextAPIKeys(context.Background())
 			if merr != nil {

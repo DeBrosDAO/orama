@@ -862,22 +862,19 @@ type SFUInstanceConfig struct {
 	RQLiteDSN      string                 // Namespace-local RQLite DSN
 }
 
-// SpawnSFU starts an SFU instance using systemd
-func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string, cfg SFUInstanceConfig) error {
-	s.logger.Info("Spawning SFU via systemd",
-		zap.String("namespace", namespace),
-		zap.String("node_id", nodeID),
-		zap.String("listen_addr", cfg.ListenAddr))
+// sfuConfigMode is the mode of an SFU config file.
+//
+// It carries the namespace's TURN shared secret and its rqlite DSN, which has
+// the database password in it. The file was written 0644, so any local account
+// on the node could mint TURN credentials for the namespace and read its
+// database.
+const sfuConfigMode = 0600
 
-	// Create config directory
-	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	configPath := filepath.Join(configDir, fmt.Sprintf("sfu-%s.yaml", nodeID))
-
-	// Build SFU YAML config
+// writeSFUConfig renders and writes one SFU config.
+//
+// The write is atomic: a 0600 temp file is renamed over the path, so a file an
+// earlier release left at 0644 is replaced rather than left as it was.
+func writeSFUConfig(configPath string, cfg SFUInstanceConfig) error {
 	sfuConfig := sfu.Config{
 		ListenAddr:        cfg.ListenAddr,
 		Namespace:         cfg.Namespace,
@@ -893,9 +890,28 @@ func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string,
 	if err != nil {
 		return fmt.Errorf("failed to marshal SFU config: %w", err)
 	}
-
-	if err := writeConfigAtomic(configPath, configBytes, 0644); err != nil {
+	if err := writeConfigAtomic(configPath, configBytes, sfuConfigMode); err != nil {
 		return fmt.Errorf("failed to write SFU config: %w", err)
+	}
+	return nil
+}
+
+// SpawnSFU starts an SFU instance using systemd
+func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string, cfg SFUInstanceConfig) error {
+	s.logger.Info("Spawning SFU via systemd",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID),
+		zap.String("listen_addr", cfg.ListenAddr))
+
+	// Create config directory
+	configDir := filepath.Join(s.namespaceBase, namespace, "configs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, fmt.Sprintf("sfu-%s.yaml", nodeID))
+	if err := writeSFUConfig(configPath, cfg); err != nil {
+		return err
 	}
 
 	s.logger.Info("Created SFU config file",

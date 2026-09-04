@@ -241,6 +241,12 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - This is not the fix. The fix is a policy declared where the route is registered, which is Phase 2; the classification is what keeps the lists honest until then
 - The middleware chain itself now has tests: anonymous, a runtime key, an admin key, a key from another namespace, a key the registry does not know, a signed-in wallet, and a wallet signed in to another namespace. Cross-namespace isolation had been covered only in a `//go:build e2e` suite that `make test` does not run, and `scopeMiddleware` and `authorizationMiddleware` were never invoked by a unit test at all
 
+**Secrets on disk, and on the way in**
+- A namespace's SFU config carries the namespace's TURN shared secret and its rqlite DSN, which has the database password in it, and was written 0644. Any local account on the node could mint TURN credentials for the namespace and read its database. It is 0600, written atomically so a file an older release left world-readable is replaced rather than adjusted
+- Joining a cluster sends the invite token, which is a credential for every secret the cluster holds. Without a fingerprint to pin, the client set `InsecureSkipVerify` and checked nothing at all, so the token went to whoever answered the address. It refuses to join now. Every invite carries the fingerprint — `orama node invite` reads this node's certificate and will not mint an invite without it, and `orama node install` decodes it from the token — so the refusal only affects a bare token from somewhere else, and the error says so
+- A namespace's own rqlite has an `api_keys` table, because the core migrations run there. Nothing validates against it, but rows written before keys were hashed hold the raw `ak_…` value — working credentials for the platform, in the clear, in a database the tenant can read. `MigratePlaintextAPIKeys` hashes such rows but runs against the registry and never sees these. A namespace gateway removes them at boot, and only the plaintext ones: a hashed row is inert too, but it is not a credential
+- Still open, and split out as its own ticket: a TURN credential is `<expiry>:<namespace>` with nothing per-user in it, so one credential relays for every user of the namespace and nothing can be revoked before it expires. Changing that is a protocol change on both ends and interacts with a TTL that was set deliberately for a live tenant
+
 ### Supply Chain
 
 **Binary Signing (Step 1.13)**
