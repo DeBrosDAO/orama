@@ -87,7 +87,6 @@ type Handlers struct {
 	netClient      NetworkClient
 	defaultNS      string
 	internalAuthFn func(context.Context) context.Context
-	solanaVerifier *authsvc.SolanaNFTVerifier // Server-side NFT ownership verifier
 
 	// challengeLimiter caps how fast challenges can be issued for one wallet,
 	// whoever asks. See wallet_rate_limit.go.
@@ -123,11 +122,6 @@ func NewHandlers(
 	// gateway, and a wallet idle for half an hour has a full budget anyway.
 	h.startChallengeLimiterCleanup()
 	return h
-}
-
-// SetSolanaVerifier sets the server-side NFT ownership verifier for Phantom auth
-func (h *Handlers) SetSolanaVerifier(verifier *authsvc.SolanaNFTVerifier) {
-	h.solanaVerifier = verifier
 }
 
 // SetAPIKeyDB wires the global/core API-key registry querier into this

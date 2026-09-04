@@ -84,5 +84,5 @@ func isAuthRateLimitPath(path string) bool {
 		"/v1/auth/token", "/v1/auth/refresh":
 		return true
 	}
-	return strings.HasPrefix(path, "/v1/auth/phantom/")
+	return false
 }

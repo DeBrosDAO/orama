@@ -934,8 +934,8 @@ forwarding header is not exempt: every public request arrives from `127.0.0.1`
 because Caddy proxies to localhost, so exempting it would exempt the internet.
 
 The endpoints that mint or exchange credentials — challenge, verify, api-key,
-token, refresh, and the Phantom paths — have their own bucket, 30 a minute per
-address bursting to 10, against a general limit of 10,000 a minute. They are
+token and refresh — have their own bucket, 30 a minute per address bursting to
+10, against a general limit of 10,000 a minute. They are
 cheap to call and expensive to serve, and the general limit is no obstacle to
 grinding them.
 

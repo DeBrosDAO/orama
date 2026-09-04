@@ -65,32 +65,14 @@ func AuthLogin(namespace string) error {
 		}
 	}
 
-	// Choose authentication method
-	var creds *auth.Credentials
-	reader := bufio.NewReader(os.Stdin)
-
-	// Show auth method selection
-	fmt.Println("How would you like to authenticate?")
-	fmt.Println("  1. RootWallet (EVM signature)")
-	fmt.Println("  2. Phantom (Solana + NFT required)")
-	fmt.Print("\nSelect [1/2]: ")
-
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
-
-	switch choice {
-	case "2":
-		creds, err = auth.PerformPhantomAuthentication(gatewayURL, namespace)
-	default:
-		// Default to RootWallet
-		if auth.IsRootWalletInstalled() {
-			creds, err = auth.PerformRootWalletAuthentication(gatewayURL, namespace)
-		} else {
-			return clierr.Usage("RootWallet CLI (rw) not found in PATH\n" +
-				"  Install it: cd rootwallet/cli && ./install.sh")
-		}
+	// RootWallet signs the gateway's challenge with the wallet's key without
+	// the key leaving it, and is the only way in.
+	if !auth.IsRootWalletInstalled() {
+		return clierr.Usage("RootWallet CLI (rw) not found in PATH\n" +
+			"  Install it: cd rootwallet/cli && ./install.sh")
 	}
 
+	creds, err := auth.PerformRootWalletAuthentication(gatewayURL, namespace)
 	if err != nil {
 		return clierr.Auth("authentication failed: %w", err)
 	}

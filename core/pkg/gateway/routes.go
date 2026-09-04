@@ -88,10 +88,6 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)
 		mux.HandleFunc("/v1/audit", g.authHandlers.AuditHandler)
-		// Phantom Solana auth (QR code + deep link)
-		mux.HandleFunc("/v1/auth/phantom/session", g.authHandlers.PhantomSessionHandler)
-		mux.HandleFunc("/v1/auth/phantom/session/", g.authHandlers.PhantomSessionStatusHandler)
-		mux.HandleFunc("/v1/auth/phantom/complete", g.authHandlers.PhantomCompleteHandler)
 	}
 
 	// RQLite native backup/restore proxy (namespace auth via /v1/rqlite/ prefix)

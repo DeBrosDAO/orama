@@ -10,7 +10,7 @@ var Cmd = &cobra.Command{
 	Use:   "auth",
 	Short: "Authentication management",
 	Long: `Manage authentication with the Orama network.
-Supports RootWallet (EVM) and Phantom (Solana) authentication methods.`,
+Authentication is a RootWallet (rw) signature over a gateway challenge.`,
 }
 
 var loginNamespace string

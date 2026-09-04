@@ -42,9 +42,6 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/auth/challenge` | SDK | `auth.challenge()` |
 | `/v1/auth/jwks` | direct | JWKS. See `/.well-known/jwks.json`. |
 | `/v1/auth/logout` | SDK | `auth.logout()` |
-| `/v1/auth/phantom/complete` | direct | Phantom wallet deep-link completion. |
-| `/v1/auth/phantom/session` | direct | Phantom wallet deep-link session. Browser redirect flow, not an SDK call. |
-| `/v1/auth/phantom/session/` | direct | Phantom wallet deep-link session by id. |
 | `/v1/auth/refresh` | SDK | Session renewal, called by the client on a 401. |
 | `/v1/auth/token` | direct | Exchange an API key for a JWT. A server-side concern; the SDK sends the key itself. |
 | `/v1/auth/verify` | SDK | `auth.verify()` |

@@ -2,7 +2,6 @@ package auth
 
 import (
 	"encoding/hex"
-	"os"
 	"strings"
 	"testing"
 )
@@ -294,57 +293,6 @@ func TestGenerateRandomString(t *testing.T) {
 		const hexChars = "0123456789abcdef"
 		if !strings.Contains(hexChars, s) {
 			t.Errorf("GenerateRandomString(1) = %q, not a valid hex character", s)
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// phantomAuthURL
-// ---------------------------------------------------------------------------
-
-func TestPhantomAuthURL(t *testing.T) {
-	t.Run("returns default when env var not set", func(t *testing.T) {
-		// Ensure the env var is not set
-		os.Unsetenv("ORAMA_PHANTOM_AUTH_URL")
-
-		got := phantomAuthURL()
-		if got != defaultPhantomAuthURL {
-			t.Errorf("phantomAuthURL() = %q, want default %q", got, defaultPhantomAuthURL)
-		}
-	})
-
-	t.Run("returns custom URL when env var is set", func(t *testing.T) {
-		custom := "https://custom-phantom.example.com"
-		os.Setenv("ORAMA_PHANTOM_AUTH_URL", custom)
-		defer os.Unsetenv("ORAMA_PHANTOM_AUTH_URL")
-
-		got := phantomAuthURL()
-		if got != custom {
-			t.Errorf("phantomAuthURL() = %q, want %q", got, custom)
-		}
-	})
-
-	t.Run("trailing slash stripped from env var", func(t *testing.T) {
-		custom := "https://custom-phantom.example.com/"
-		os.Setenv("ORAMA_PHANTOM_AUTH_URL", custom)
-		defer os.Unsetenv("ORAMA_PHANTOM_AUTH_URL")
-
-		got := phantomAuthURL()
-		want := "https://custom-phantom.example.com"
-		if got != want {
-			t.Errorf("phantomAuthURL() = %q, want %q (trailing slash should be stripped)", got, want)
-		}
-	})
-
-	t.Run("multiple trailing slashes stripped from env var", func(t *testing.T) {
-		custom := "https://custom-phantom.example.com///"
-		os.Setenv("ORAMA_PHANTOM_AUTH_URL", custom)
-		defer os.Unsetenv("ORAMA_PHANTOM_AUTH_URL")
-
-		got := phantomAuthURL()
-		want := "https://custom-phantom.example.com"
-		if got != want {
-			t.Errorf("phantomAuthURL() = %q, want %q (trailing slashes should be stripped)", got, want)
 		}
 	})
 }

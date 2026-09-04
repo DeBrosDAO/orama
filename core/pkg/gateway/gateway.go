@@ -530,11 +530,6 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.withInternalAuth,
 		)
 
-		// Configure Solana NFT verifier for Phantom auth (hardcoded collection + RPC)
-		solanaVerifier := auth.NewDefaultSolanaNFTVerifier()
-		gw.authHandlers.SetSolanaVerifier(solanaVerifier)
-		logger.ComponentInfo(logging.ComponentGeneral, "Solana NFT verifier configured")
-
 		// Wire the global-registry API-key querier (gw.apiKeyDB(), preferring
 		// gw.authClient when GlobalRQLiteDSN is configured, else gw.client —
 		// see apikey_querier.go) into the JWT-exchange handler's self-query

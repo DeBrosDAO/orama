@@ -102,13 +102,16 @@ func TestRateLimitClient_ignoresAnUnparseableForwardedFor(t *testing.T) {
 func TestIsAuthRateLimitPath(t *testing.T) {
 	for _, path := range []string{
 		"/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/api-key",
-		"/v1/auth/token", "/v1/auth/refresh", "/v1/auth/phantom/session",
+		"/v1/auth/token", "/v1/auth/refresh",
 	} {
 		if !isAuthRateLimitPath(path) {
 			t.Errorf("%s is not rate limited as a credential path", path)
 		}
 	}
-	for _, path := range []string{"/v1/health", "/v1/db/query", "/v1/auth/whoami"} {
+	for _, path := range []string{"/v1/health", "/v1/db/query", "/v1/auth/whoami",
+		// Removed with the Phantom flow: a prefix here would give a tight
+		// bucket to paths that no longer exist.
+		"/v1/auth/phantom/session"} {
 		if isAuthRateLimitPath(path) {
 			t.Errorf("%s is rate limited as a credential path", path)
 		}

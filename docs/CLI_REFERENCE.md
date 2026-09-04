@@ -282,7 +282,7 @@ orama auth
 ```
 
 Manage authentication with the Orama network.
-Supports RootWallet (EVM) and Phantom (Solana) authentication methods.
+Authentication is a RootWallet (rw) signature over a gateway challenge.
 
 Subcommands: `list`, `login`, `logout`, `status`, `switch`, `whoami`
 

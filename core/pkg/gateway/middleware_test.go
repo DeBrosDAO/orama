@@ -187,8 +187,12 @@ func TestIsPublicPath(t *testing.T) {
 		// Guard: the PUBLIC webrtc mgmt path must STILL require auth (only
 		// the /internal/ variant is exempt).
 		{"public webrtc enable still requires auth", "/v1/namespace/webrtc/enable", false},
-		{"phantom session", "/v1/auth/phantom/session", true},
-		{"phantom complete", "/v1/auth/phantom/complete", true},
+		// The Phantom browser-session flow was removed. Its whole prefix was
+		// public — the status poll handed out a minted API key to anyone who
+		// knew a session id — so nothing under it may be public again.
+		{"phantom session", "/v1/auth/phantom/session", false},
+		{"phantom session status", "/v1/auth/phantom/session/abc", false},
+		{"phantom complete", "/v1/auth/phantom/complete", false},
 
 		// Namespace status
 		{"namespace status", "/v1/namespace/status", true},

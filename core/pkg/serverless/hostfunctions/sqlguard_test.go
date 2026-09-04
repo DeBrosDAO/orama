@@ -271,64 +271,41 @@ func TestDBTransaction_checksEveryOp(t *testing.T) {
 	}
 }
 
+// Tables a function may name. Each is here because a tenant may already
+// be using the name as their own — a namespace database has exactly one
+// table called `apps`, and it belongs to whoever wrote to it first — or
+// because reading it tells a tenant only about their own namespace.
+var reachableTables = map[string]bool{
+	"apps": true, "audit_events": true, "namespaces": true, "namespaces_new": true,
+	"deployments": true, "deployment_domains": true, "deployment_events": true,
+	"deployment_health_checks": true, "deployment_history": true,
+	"deployment_replicas": true, "port_allocations": true,
+	"home_node_assignments": true,
+	"functions":             true, "function_invocations": true, "function_logs": true,
+	"function_jobs": true, "function_timers": true, "function_rate_limits": true,
+	"function_cron_triggers": true, "function_db_triggers": true,
+	"function_pubsub_triggers": true, "function_db_change_tracking": true,
+	"ipfs_content_ownership": true, "namespace_sqlite_backups": true,
+	"namespace_sqlite_databases": true, "namespace_publish_seq": true,
+	"namespace_webrtc_config": true, "namespace_push_config": true,
+	"namespace_cluster_events": true, "namespace_pending_cleanup": true,
+	"node_health_events": true, "request_logs": true, "rqlite_backups": true,
+	"push_devices": true, "webrtc_rooms": true, "webrtc_port_allocations": true,
+	"schema_migrations": true, "subscriptions": true,
+}
+
 // The protected list is a decision about each core table. A migration that adds
 // one has to be triaged rather than defaulting to reachable, so this fails until
 // somebody says which side the new table is on.
 func TestProtectedTables_everyCoreTableIsTriaged(t *testing.T) {
-	// Tables a function may name. Each is here because a tenant may already
-	// be using the name as their own — a namespace database has exactly one
-	// table called `apps`, and it belongs to whoever wrote to it first — or
-	// because reading it tells a tenant only about their own namespace.
-	reachable := map[string]bool{
-		"apps": true, "audit_events": true, "namespaces": true, "namespaces_new": true,
-		"deployments": true, "deployment_domains": true, "deployment_events": true,
-		"deployment_health_checks": true, "deployment_history": true,
-		"deployment_replicas": true, "deployment_env_vars": true,
-		"port_allocations": true, "home_node_assignments": true,
-		"functions": true, "function_invocations": true, "function_logs": true,
-		"function_jobs": true, "function_timers": true, "function_rate_limits": true,
-		"function_cron_triggers": true, "function_db_triggers": true,
-		"function_pubsub_triggers": true, "function_db_change_tracking": true,
-		"ipfs_content_ownership": true, "namespace_sqlite_backups": true,
-		"namespace_sqlite_databases": true, "namespace_publish_seq": true,
-		"namespace_webrtc_config": true, "namespace_push_config": true,
-		"namespace_cluster_events": true, "namespace_pending_cleanup": true,
-		"node_health_events": true, "request_logs": true, "rqlite_backups": true,
-		"push_devices": true, "webrtc_rooms": true, "webrtc_port_allocations": true,
-		"schema_migrations": true, "subscriptions": true,
-	}
-
-	entries, err := migrations.FS.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read migrations: %v", err)
-	}
-	createTable := regexp.MustCompile(`(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?["'` + "`" + `\[]?([a-z_][a-z0-9_]*)`)
-
-	seen := map[string]bool{}
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		body, err := migrations.FS.ReadFile(entry.Name())
-		if err != nil {
-			t.Fatalf("read %s: %v", entry.Name(), err)
-		}
-		for _, m := range createTable.FindAllStringSubmatch(string(body), -1) {
-			seen[strings.ToLower(m[1])] = true
-		}
-	}
-	if len(seen) < 30 {
-		t.Fatalf("found only %d core tables; this test is not reading the migrations", len(seen))
-	}
-
-	for table := range seen {
+	for table := range coreTables(t) {
 		_, protected := protectedTables[table]
-		if !protected && !reachable[table] {
+		if !protected && !reachableTables[table] {
 			t.Errorf("the core migrations create %q and nothing here says whether a function may name it. "+
 				"Add it to protectedTables if it grants authority, holds a credential or configures the "+
 				"platform; add it to the reachable list here, with a reason, if it does not.", table)
 		}
-		if protected && reachable[table] {
+		if protected && reachableTables[table] {
 			t.Errorf("%q is on both lists", table)
 		}
 	}
@@ -337,11 +314,59 @@ func TestProtectedTables_everyCoreTableIsTriaged(t *testing.T) {
 // A protected name that no migration creates is a name that has been renamed or
 // removed, and a stale entry reads as protection that is not there.
 func TestProtectedTables_everyEntryStillExists(t *testing.T) {
+	tables := coreTables(t)
+
+	for table := range protectedTables {
+		// orama_schema_migrations is created by the namespace migration
+		// runner, not by a migration file.
+		if table == "orama_schema_migrations" {
+			continue
+		}
+		if !tables[table] {
+			t.Errorf("%q is protected but the migrations leave no such table; a stale entry reads as protection that is not there", table)
+		}
+	}
+}
+
+// The reachable list is the other half of the triage, and nothing was checking
+// it against the schema. deployment_env_vars sat on it after migration 046
+// dropped the table, which reads as a decision that a function may name it
+// when there is nothing to name.
+func TestReachableTables_allStillExist(t *testing.T) {
+	tables := coreTables(t)
+
+	for table := range reachableTables {
+		if !tables[table] {
+			t.Errorf("%q is listed as reachable but the migrations leave no such table; "+
+				"a stale entry reads as a decision about something that is not there", table)
+		}
+	}
+}
+
+// coreTables returns the tables the core migrations leave behind: every table
+// they create, less every table they later drop.
+//
+// Reading the CREATEs alone is not the same thing. Migration 046 dropped
+// deployment_env_vars and 049 dropped phantom_auth_sessions, and a set built
+// from CREATEs still contains both — so a dropped table has to be declared
+// either protected or reachable, and both readings are false. A name that is
+// not there is neither.
+func coreTables(t *testing.T) map[string]bool {
+	t.Helper()
+
 	entries, err := migrations.FS.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read migrations: %v", err)
 	}
-	var all strings.Builder
+	// ReadDir sorts by name, and migrations are numbered, so the statements
+	// are visited in the order the runner applies them. A rename counts as
+	// both: 009 builds dns_records_new, drops dns_records and renames the new
+	// one into its place.
+	ident := `["'` + "`" + `\[]?([a-z_][a-z0-9_]*)`
+	stmt := regexp.MustCompile(`(?i)(create|drop)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?` + ident)
+	rename := regexp.MustCompile(`(?i)alter\s+table\s+` + ident + `\s+rename\s+to\s+` + ident)
+
+	tables := map[string]bool{}
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
@@ -350,18 +375,22 @@ func TestProtectedTables_everyEntryStillExists(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", entry.Name(), err)
 		}
-		all.WriteString(strings.ToLower(string(body)))
-	}
-	body := all.String()
-
-	for table := range protectedTables {
-		// orama_schema_migrations is created by the namespace migration
-		// runner, not by a migration file.
-		if table == "orama_schema_migrations" {
-			continue
+		text := string(body)
+		for _, m := range stmt.FindAllStringSubmatch(text, -1) {
+			name := strings.ToLower(m[2])
+			if strings.EqualFold(m[1], "create") {
+				tables[name] = true
+			} else {
+				delete(tables, name)
+			}
 		}
-		if !strings.Contains(body, table) {
-			t.Errorf("%q is protected but no migration mentions it; a stale entry reads as protection that is not there", table)
+		for _, m := range rename.FindAllStringSubmatch(text, -1) {
+			delete(tables, strings.ToLower(m[1]))
+			tables[strings.ToLower(m[2])] = true
 		}
 	}
+	if len(tables) < 30 {
+		t.Fatalf("found only %d core tables; this test is not reading the migrations", len(tables))
+	}
+	return tables
 }
