@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GuardianClient, GuardianError } from '../../../src/vault/transport/guardian';
+import { GuardianClient, GuardianError } from '../../../src/transport/guardian';
 
 describe('GuardianClient', () => {
   it('constructs with endpoint', () => {

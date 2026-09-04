@@ -215,8 +215,9 @@ Addition and subtraction in GF(2^8) are both XOR. Multiplication uses log/exp ta
 
 ### Why All-Node Replication
 
-Every guardian stores one share per user. In a 14-node cluster, each user has 14 shares with an adaptive threshold K = max(3, floor(N/3)). This means:
+Every guardian stores one share per user. In a 14-node cluster, each user has 14 shares with an adaptive threshold K = max(2, floor(N/3)). This means:
 
+- With 5 nodes: K=2, so any 2 guardians can reconstruct.
 - With 14 nodes: K=4, so any 4 guardians can reconstruct.
 - With 100 nodes: K=33, so any 33 guardians can reconstruct.
 - Up to N-K nodes can be completely destroyed before data is lost.

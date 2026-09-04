@@ -578,39 +578,19 @@ console.log(result.messageId);
 
 ### Vault (Distributed Secrets)
 
-The vault client provides Shamir-split secret storage across guardian nodes. Secrets are split into shares, distributed to guardians, and reconstructed only when enough shares are collected (quorum).
+The vault is not part of this package. `client.vault` and the twenty
+cryptography primitives that came with it were removed: the client they belonged
+to talks to guardian daemons on the WireGuard overlay (`10.0.0.x`), which an
+application running outside the cluster cannot reach, and it pulled two
+cryptography libraries into every consumer's bundle for an API none of them
+could call.
 
-```typescript
-const client = createClient({
-  baseURL: "https://ns-myapp.orama-devnet.network",
-  apiKey: "ak_your_key:namespace",
-  vaultConfig: {
-    guardians: [
-      { address: "10.0.0.1", port: 8443 },
-      { address: "10.0.0.2", port: 8443 },
-      { address: "10.0.0.3", port: 8443 },
-    ],
-    hmacKey: yourHmacKey, // Uint8Array — HMAC key for guardian authentication
-    identityHex: "your-identity-hex", // 64-char hex identity hash
-  },
-});
-
-// Store a secret (Shamir-split across guardians)
-const data = new TextEncoder().encode("my-secret-data");
-const storeResult = await client.vault.store("api-key", data, 1);
-console.log(storeResult.quorumMet); // true if enough guardians ACKed
-
-// Retrieve and reconstruct a secret
-const retrieved = await client.vault.retrieve("api-key");
-console.log(new TextDecoder().decode(retrieved.data)); // "my-secret-data"
-
-// List all secrets for this identity
-const secrets = await client.vault.list();
-console.log(secrets.secrets);
-
-// Delete a secret from all guardians
-await client.vault.delete("api-key");
-```
+- **Applications** reach the vault through the gateway's `/v1/vault/push` and
+  `/v1/vault/pull` endpoints over HTTPS. The gateway does the Shamir split, and
+  each request carries a per-request Ed25519 ownership signature. See
+  [the vault documentation](https://docs.orama.network/developer/vault).
+- **Software on the mesh** — node agents, operator tooling, RootWallet — uses
+  `@debros/orama-vault`, which speaks to guardians directly.
 
 ### Wallet-Based Authentication
 

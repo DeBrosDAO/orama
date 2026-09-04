@@ -27,51 +27,54 @@ This means:
 
 The vault has two access paths:
 
-### Direct (SDK → Guardians)
-
-The SDK connects directly to guardian nodes using the V2 API. This is the recommended path for applications. The SDK handles authentication, Shamir splitting/combining, and fan-out to all guardians.
-
 ### Gateway Proxy (Client → Gateway → Guardians)
 
-The Orama gateway exposes V1 vault endpoints that perform Shamir splitting/combining server-side. This path is for clients that cannot connect directly to guardians (e.g., the gateway runs on the WireGuard mesh while guardians bind to internal IPs).
+**This is the path for applications.** The Orama gateway exposes V1 vault
+endpoints over HTTPS and performs the Shamir splitting and combining
+server-side. Each request proves ownership of the identity with a fresh Ed25519
+signature.
 
-| Path | API Version | Who splits/combines | Auth |
-|------|-------------|-------------------|------|
-| SDK → Guardians | V2 | Client (SDK) | HMAC session tokens |
-| Client → Gateway | V1 | Gateway | Per-request Ed25519 ownership signature |
+### Direct (Tooling → Guardians)
+
+Guardians listen on the WireGuard overlay (`10.0.0.x`), so only software running
+on the mesh can reach them: node agents, operator tooling and RootWallet. That
+client is published separately as `@debros/orama-vault`. It used to ship inside
+`@debros/orama`, which offered every application an API it had no route to.
+
+| Path | API Version | Who splits/combines | Auth | For |
+|------|-------------|-------------------|------|-----|
+| Client → Gateway | V1 | Gateway | Per-request Ed25519 ownership signature | Applications |
+| Tooling → Guardians | V2 | Client | Guardian session token | Software on the WireGuard overlay |
 
 ---
 
 ## Setup
 
-Install the SDK and create a client with vault configuration:
+The direct client is its own package. Install it only where the guardians are
+reachable:
+
+```bash
+npm install @debros/orama-vault
+```
 
 ```typescript
-import { createClient } from "@debros/orama";
+import { VaultClient } from "@debros/orama-vault";
 
-const client = createClient({
-  baseURL: "https://gateway.example.com",
-  apiKey: "ak_your_key:namespace",
-  vaultConfig: {
-    guardians: [
-      { address: "10.0.0.1", port: 7500 },
-      { address: "10.0.0.2", port: 7500 },
-      { address: "10.0.0.3", port: 7500 },
-    ],
-    hmacKey: derivedHmacKey,
-    identityHex: "your-identity-hex",
-    timeoutMs: 5000,
-  },
+const vault = new VaultClient({
+  guardians: [
+    { address: "10.0.0.1", port: 7500 },
+    { address: "10.0.0.2", port: 7500 },
+    { address: "10.0.0.3", port: 7500 },
+  ],
+  identityHex: "your-identity-hex",
+  timeoutMs: 5000,
 });
 ```
 
-If you omit `vaultConfig`, `client.vault` will be `null`.
-
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `guardians` | `GuardianEndpoint[]` | Yes | Guardian nodes that hold shares. Each needs `address` and `port`. |
-| `hmacKey` | `Uint8Array` | Yes | HMAC key for authentication, derived from your secret (e.g., via `deriveKeyHKDF`). |
-| `identityHex` | `string` | Yes | Your identity in hex. Used for challenge-response authentication and secret scoping. |
+| `guardians` | `GuardianEndpoint[]` | Yes | Guardian nodes that hold shares. Each needs `address` and `port`. This list is the unit of redundancy: a secret is split into one share per guardian listed, and the write quorum is computed from its size. |
+| `identityHex` | `string` | Yes | Your identity in hex. Scopes the secrets and names the session. |
 | `timeoutMs` | `number` | No | Request timeout in milliseconds per guardian. |
 
 ---
@@ -82,16 +85,18 @@ Pass a name, the secret as a `Uint8Array`, and a version number:
 
 ```typescript
 const data = new TextEncoder().encode("my-secret-data");
-const result = await client.vault.store("api-key", data, 1);
+const result = await vault.store("api-key", data, 1);
 
-console.log(result.quorumMet);       // true if enough guardians ACKed
 console.log(result.ackCount);         // number of successful writes
-console.log(result.totalContacted);   // total guardians contacted
+console.log(result.totalContacted);   // guardians the write was addressed to
 console.log(result.failCount);        // number of write failures
 console.log(result.guardianResults);  // per-guardian results
 ```
 
-The write succeeds when `quorumMet` is `true`, meaning a majority of guardians acknowledged the share.
+A write that does not reach quorum throws a `QuorumError` carrying `ackCount`,
+`required` and the per-guardian results, so anything `store` returns is durable.
+It used to resolve with `quorumMet: false`, which a caller who did not inspect
+that field — the obvious way to use a promise that resolves — read as success.
 
 ### Secret Name Constraints
 
@@ -107,33 +112,48 @@ The write succeeds when `quorumMet` is `true`, meaning a majority of guardians a
 The SDK automatically gathers the minimum number of shares from guardians and reconstructs the original value:
 
 ```typescript
-const retrieved = await client.vault.retrieve("api-key");
+const retrieved = await vault.retrieve("api-key");
 
 console.log(new TextDecoder().decode(retrieved.data)); // "my-secret-data"
 console.log(retrieved.sharesCollected);                // number of shares used
+console.log(retrieved.version);                        // the version returned
 ```
 
-Reconstruction requires at least the read threshold number of shares. The threshold is calculated automatically from the guardian count.
+Reconstruction requires at least the read threshold number of shares, calculated
+automatically from the guardian count.
+
+Shares are grouped by the version they belong to and only shares of one version
+are ever combined. A guardian that missed the last write still answers, with a
+share of the previous split; mixing it with newer shares reconstructs neither
+version and raises no error. If the newest version is short of the threshold —
+a write that did not reach quorum — the newest version that is complete is
+returned, and `version` says which. When no version has enough shares,
+`retrieve` throws a `QuorumError` naming what it collected.
 
 ## Listing Secrets
 
 List all secrets stored under your identity:
 
 ```typescript
-const secrets = await client.vault.list();
+const secrets = await vault.list();
 console.log(secrets.secrets);
 ```
+
+A secret is listed when at least the read threshold of guardians report holding
+a share of it, because that is exactly the condition under which it can be
+reconstructed. The version reported is the newest any guardian holds.
 
 ## Deleting Secrets
 
 Delete a secret from all guardians:
 
 ```typescript
-const deleteResult = await client.vault.delete("api-key");
-console.log(deleteResult.quorumMet); // true if enough guardians deleted the shares
+const deleteResult = await vault.delete("api-key");
+console.log(deleteResult.ackCount); // guardians that dropped their share
 ```
 
-Like writes, deletion requires a quorum acknowledgment to be considered successful.
+Like a write, a delete that does not reach quorum throws a `QuorumError`: enough
+guardians still hold a share to reconstruct the secret, so it is not gone.
 
 ---
 
@@ -250,15 +270,28 @@ These paths are public in the gateway's routing — the namespace API key is not
 
 ## Authentication
 
-Vault uses HMAC-based challenge-response authentication:
+The direct V2 path issues session tokens:
 
 1. Client requests a challenge from the guardian (`/v2/vault/auth/challenge`)
-2. Guardian generates a random nonce
-3. Client computes an HMAC tag using the shared `hmacKey` and nonce
-4. Client sends the tag back to get a session token (`/v2/vault/auth/session`)
-5. Session token is used for all subsequent requests via `X-Session-Token`
+2. Guardian returns a nonce, a timestamp, and an HMAC tag over both computed
+   with the guardian's own server secret
+3. Client sends those three values back (`/v2/vault/auth/session`)
+4. Guardian recomputes the tag with the same server secret and issues a session
+   token, used for all subsequent requests via `X-Session-Token`
 
-The SDK handles this automatically. Sessions are cached per-guardian and refreshed transparently when they expire.
+The client is cached per guardian and refreshed transparently when it expires.
+
+**No client secret takes part in this exchange.** The guardian verifies a tag it
+produced itself, so possession of an identity hash is all it takes to obtain a
+session for that identity — which is why the SDK never had a use for the
+`hmacKey` its configuration used to demand. The Ed25519 proof this needs is
+tracked as bug-51/bug-52 and is the "Phase 3" the guardian's own source refers
+to. Until then, a guardian's reachability on the WireGuard overlay is the real
+boundary: treat anything on the mesh as able to read any identity's shares.
+
+Requests through the gateway (`/v1/vault/push` and `/v1/vault/pull`) are a
+different mechanism and do carry a real per-request Ed25519 ownership
+signature.
 
 ### Session Lifecycle
 
@@ -294,7 +327,9 @@ More guardians means higher fault tolerance. With three guardians, losing one st
 
 ## Crypto Utilities
 
-The SDK exports low-level cryptographic primitives that the vault uses internally:
+`@debros/orama-vault` exports the low-level cryptographic primitives it uses
+internally. They were exported from `@debros/orama` until they moved with the
+rest of the vault client:
 
 ```typescript
 import {
@@ -326,7 +361,7 @@ import {
 
   // Validation
   isValidEncryptedData,
-} from "@debros/orama";
+} from "@debros/orama-vault";
 ```
 
 | Function | Description |

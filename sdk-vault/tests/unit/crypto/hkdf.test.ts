@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveKeyHKDF } from '../../../src/vault/crypto/hkdf';
+import { deriveKeyHKDF } from '../../../src/crypto/hkdf';
 
 describe('HKDF Derivation', () => {
   it('derives 32-byte key by default', () => {

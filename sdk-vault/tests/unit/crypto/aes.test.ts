@@ -15,7 +15,7 @@ import {
   isValidEncryptedData,
   KEY_SIZE,
   NONCE_SIZE,
-} from '../../../src/vault/crypto/aes';
+} from '../../../src/crypto/aes';
 
 describe('AES-256-GCM', () => {
   it('encrypt/decrypt round-trip', () => {

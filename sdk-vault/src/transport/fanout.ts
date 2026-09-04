@@ -61,14 +61,18 @@ export async function fanOutIndexed<T>(
 
 /**
  * Race a promise against a timeout.
+ *
+ * The timer is cleared once the race settles. It used to be left running, so
+ * every call — one per guardian per read — held the event loop open for the
+ * full timeout after the work had finished, and a CLI that fetched a secret sat
+ * there for ten seconds before exiting.
  */
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms),
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, expiry]).finally(() => clearTimeout(timer));
 }
 
 /**

@@ -81,7 +81,7 @@ When an enrolled node reboots:
 
 1. Agent starts, brings up WireGuard
 2. Contacts peer vault-guardians over WireGuard
-3. Fetches K shares (threshold = max(3, N/3))
+3. Fetches K shares (threshold = max(2, floor(N/3)))
 4. Reconstructs the LUKS key via Lagrange interpolation
 5. Decrypts and mounts the data partition
 6. Zeros the key from memory
@@ -176,7 +176,7 @@ Check that port 9999 is open in your VPS provider's external firewall (Hetzner f
 
 ### LUKS unlock fails after reboot
 
-Not enough peer nodes are online. The node needs at least K peers reachable over WireGuard (K = max(3, N/3)). Ensure cluster nodes are running. For the genesis node, which has no peers to reconstruct shares from, unlock it manually (see [Genesis Node](#genesis-node)).
+Not enough peer nodes are online. The node needs at least K peers reachable over WireGuard (K = max(2, floor(N/3))). Ensure cluster nodes are running. For the genesis node, which has no peers to reconstruct shares from, unlock it manually (see [Genesis Node](#genesis-node)).
 
 ### Update rolled back
 

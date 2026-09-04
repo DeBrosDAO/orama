@@ -112,7 +112,7 @@ When an enrolled OramaOS node reboots:
 
 1. Agent starts, brings up WireGuard
 2. Contacts peer vault-guardians over WireGuard
-3. Fetches K Shamir shares (K = threshold, typically `max(3, N/3)`)
+3. Fetches K Shamir shares (K = threshold, `max(2, floor(N/3))`)
 4. Reconstructs LUKS key via Lagrange interpolation over GF(256)
 5. Decrypts and mounts data partition
 6. Starts all services

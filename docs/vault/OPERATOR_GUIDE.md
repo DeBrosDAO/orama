@@ -405,7 +405,7 @@ When a new node joins the Orama network:
    - **Client push:** When clients push new versions, they include the new node.
    - **Repair protocol:** The re-sharing protocol redistributes shares to include the new node (Phase 2).
 
-The threshold K is recomputed based on the alive count: `K = max(3, floor(N/3))`.
+The threshold K is recomputed based on the alive count: `K = max(2, floor(N/3))`.
 
 ### Removing Nodes
 
@@ -421,12 +421,15 @@ When a node leaves (graceful shutdown or failure):
 The threshold is dynamic and automatic:
 
 ```
-K = max(3, floor(alive_count / 3))
+K = max(2, floor(alive_count / 3))
 ```
 
 - Adding nodes generally does not change K until the cluster grows significantly.
 - Removing nodes may reduce K if the alive count drops enough.
-- K never drops below 3, ensuring a minimum collusion resistance.
+- K never drops below 2. One guardian must never hold enough to reconstruct on
+  its own, and the write quorum W = min(N, max(K+1, ceil(2N/3))) is always
+  greater than K, so a write reported successful stores more shares than a read
+  needs.
 
 ### Write Quorum
 

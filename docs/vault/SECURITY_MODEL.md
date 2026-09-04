@@ -39,25 +39,42 @@ For a multi-byte secret of length L, this applies independently to each byte pos
 
 ### Threshold and Share Count
 
-The system uses an adaptive threshold:
+The system uses an adaptive read threshold and a write quorum derived from it:
 
 ```
-K = max(3, floor(N/3))
+K = max(2, floor(N/3))
+W = min(N, max(K + 1, ceil(2N/3)))
 ```
 
-Where N is the number of alive guardians. This means:
+Where N is the number of alive guardians. K is the number of shares a read must
+collect; W is the number of guardians that must acknowledge before a write is
+reported successful.
 
-| Alive Nodes (N) | Threshold (K) | Fault Tolerance (N-K) |
-|------------------|---------------|------------------------|
-| 3 | 3 | 0 |
-| 5 | 3 | 2 |
-| 9 | 3 | 6 |
-| 10 | 3 | 7 |
-| 14 | 4 | 10 |
-| 50 | 16 | 34 |
-| 100 | 33 | 67 |
+| Alive Nodes (N) | Threshold (K) | Write Quorum (W) | Read Fault Tolerance (N-K) |
+|------------------|---------------|------------------|-----------------------------|
+| 3 | 2 | 3 | 1 |
+| 5 | 2 | 4 | 3 |
+| 9 | 3 | 6 | 6 |
+| 10 | 3 | 7 | 7 |
+| 14 | 4 | 10 | 10 |
+| 50 | 16 | 34 | 34 |
+| 100 | 33 | 67 | 67 |
 
-The minimum threshold of 3 ensures that at least 3 guardians must cooperate to reconstruct, even in small clusters. This prevents trivial collusion.
+Two is the smallest threshold that keeps the secret secret: with K = 1 a single
+guardian holds enough to reconstruct on its own.
+
+`W > K` is the durability guarantee. A write reported successful has persisted
+strictly more shares than a read requires, so it is always recoverable and
+survives the loss of at least one guardian. The floor used to be 3, which broke
+that guarantee in the other direction: at N = 3 it gave K = 3 against W = 2, so
+a write the system called successful had stored fewer shares than a read needed
+and was permanently unrecoverable, with nothing at the time of the write to say
+so.
+
+The three implementations — `vault/src/membership/quorum.zig`,
+`core/pkg/shamir/shamir.go` and `sdk-vault/src/quorum.ts` — must agree exactly.
+A client that believes a write needed two acknowledgements where the guardian
+required three reports a write as successful that the guardian refused.
 
 ---
 

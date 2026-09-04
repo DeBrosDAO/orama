@@ -18,11 +18,25 @@ permissions:
 
 jobs:
   publish:
-    name: Build & Publish @debros/orama
+    # Both packages are cut from the same /VERSION and published together. The
+    # vault client moved out of @debros/orama into its own package; leaving it
+    # unpublished would mean nothing ships it at all.
+    name: Build & Publish ${{ matrix.package }}
     runs-on: ubuntu-latest
+    strategy:
+      # One at a time, and the first failure cancels the rest, so a broken
+      # build cannot publish half a release.
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        include:
+          - directory: sdk
+            package: "@debros/orama"
+          - directory: sdk-vault
+            package: "@debros/orama-vault"
     defaults:
       run:
-        working-directory: sdk
+        working-directory: ${{ matrix.directory }}
 
     steps:
       - name: Checkout code
@@ -77,7 +91,7 @@ jobs:
         run: pnpm build
 
       - name: Run unit tests
-        run: pnpm vitest run tests/unit
+        run: pnpm test:unit
 
       - name: Publish (dry run)
         if: inputs.dry-run == true
@@ -115,8 +129,10 @@ jobs:
         id: version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
+      # One tag per release, cut from the app SDK's version. Both packages
+      # carry the same version, so a second tag would only collide.
       - name: Create git tag
-        if: github.event_name != 'release' && inputs.dry-run != true
+        if: matrix.directory == 'sdk' && github.event_name != 'release' && inputs.dry-run != true
         working-directory: .
         run: |
           git config user.name "github-actions[bot]"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adaptiveThreshold, writeQuorum } from '../../../src/vault/quorum';
+import { adaptiveThreshold, writeQuorum } from '../../src/quorum';
 
 /**
  * These mirror vault/src/membership/quorum.zig, which is the implementation

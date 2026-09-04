@@ -15,7 +15,7 @@ pub fn handle(writer: anytype, ctx: *const router.RouteContext) !void {
             if (node.state == .alive) alive_count += 1;
         }
 
-        const threshold = guardian.nodes.threshold();
+        const threshold = guardian.readThreshold();
         const total = guardian.nodes.nodes.len;
 
         // Build JSON manually with a buffer

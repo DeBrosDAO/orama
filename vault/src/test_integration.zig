@@ -324,18 +324,18 @@ test "integration: Shamir + AES-256-GCM encryption round-trip" {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test "integration: adaptive threshold + quorum consistency" {
-    // readQuorum is the Shamir threshold K = max(3, floor(N/3))
-    // writeQuorum is ceil(2/3 * N)
+    // readQuorum is the Shamir threshold K = max(2, floor(N/3)).
+    // writeQuorum is W = min(N, max(K + 1, ceil(2N/3))).
     //
-    // Invariants that always hold:
-    //   - threshold >= 3 (minimum security)
-    //   - writeQuorum > N/2 (majority) for N >= 3
+    // This test asserted the retired contract — K = max(3, floor(N/3)), with a
+    // comment explaining that small clusters therefore needed every node for a
+    // write and a read to both succeed. Both implementations moved to a floor
+    // of 2 (see quorum.zig, core/pkg/shamir/shamir.go and the TypeScript
+    // client, which must agree exactly), and the test kept asserting the old
+    // one, so `zig build test` failed at N = 3 on every run.
     //
-    // For production-sized clusters (N >= 9), an additional invariant holds:
-    //   - threshold <= writeQuorum (enough shares stored for reconstruction)
-    // For small clusters (N < 9), the minimum threshold of 3 can exceed the
-    // write quorum. This is a known tradeoff: small clusters require ALL nodes
-    // for write+read to succeed, which is acceptable for tiny deployments.
+    // K = 2 is the smallest threshold that keeps the secret secret: with K = 1
+    // a single guardian could reconstruct on its own.
 
     const test_values = [_]usize{ 3, 5, 7, 10, 14, 50, 100 };
 
@@ -343,16 +343,18 @@ test "integration: adaptive threshold + quorum consistency" {
         const threshold = quorum.readQuorum(n);
         const wq = quorum.writeQuorum(n);
 
-        // threshold >= 3 (minimum security)
-        try std.testing.expect(threshold >= 3);
+        // Two guardians must cooperate to reconstruct, however small the cluster.
+        try std.testing.expect(threshold >= 2);
 
-        // writeQuorum > N/2 (majority) for N >= 3
+        // A write is a majority, so two writes cannot both succeed on disjoint sets.
         try std.testing.expect(wq > n / 2);
 
-        // For production clusters (N >= 9), threshold must fit within write quorum
-        if (n >= 9) {
-            try std.testing.expect(threshold <= wq);
-        }
+        // W > K is the durability guarantee: a write reported successful has
+        // persisted strictly more shares than a read needs, so it is always
+        // recoverable and survives losing at least one guardian. The old
+        // formula gave W = 2 < K = 3 at N = 3 — a successful write that was
+        // permanently unrecoverable.
+        try std.testing.expect(wq > threshold);
 
         // writeQuorum + threshold >= N (read+write overlap guarantees consistency)
         // This is the fundamental quorum intersection property: any write set

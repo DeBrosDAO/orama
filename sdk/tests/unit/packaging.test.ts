@@ -156,3 +156,54 @@ describe('the end-to-end suite', () => {
     );
   });
 });
+
+/**
+ * The vault client moved to `@debros/orama-vault`. It talked to guardian
+ * daemons on the WireGuard overlay, which an application outside the cluster
+ * cannot reach, and it pulled two cryptography libraries and twenty top-level
+ * primitives into every consumer's bundle for an API none of them could call.
+ */
+describe('the app SDK carries no vault', () => {
+  it('declares no cryptography dependency', () => {
+    const deps = Object.keys(pkg.dependencies ?? {});
+    expect(deps.filter((d) => d.startsWith('@noble/'))).toEqual([]);
+  });
+
+  it('has no vault module in its source tree', () => {
+    expect(existsSync(join(root, 'src/vault'))).toBe(false);
+  });
+
+  it('does not mention a vault in the client it builds', () => {
+    const entry = readFileSync(join(root, 'src/index.ts'), 'utf8');
+    expect(entry).not.toMatch(/vault/i);
+  });
+
+  it.skipIf(!distBuilt)('ships no cryptography code in the bundle', () => {
+    for (const file of ['dist/index.js', 'dist/index.cjs']) {
+      const bundle = readFileSync(join(root, file), 'utf8');
+      expect(bundle, `${file} still contains shamir code`).not.toMatch(/shamir/i);
+      expect(bundle, `${file} still bundles @noble`).not.toMatch(/@noble\//);
+    }
+  });
+
+  it.skipIf(!distBuilt)('exports no vault symbol', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orama-vault-exports-'));
+    try {
+      const script = join(dir, 'check.cjs');
+      writeFileSync(
+        script,
+        `const sdk = require(${JSON.stringify(join(root, 'dist/index.cjs'))});\n` +
+          `console.log(Object.keys(sdk).join(','));\n`,
+      );
+      const names = execFileSync(process.execPath, [script], { encoding: 'utf8' }).trim().split(',');
+      const vaultish = names.filter((n) =>
+        /vault|shamir|encrypt|decrypt|quorum|guardian|KEY_SIZE|NONCE_SIZE|TAG_SIZE|deriveKey/i.test(n),
+      );
+      expect(vaultish).toEqual([]);
+      // Sanity: the check ran against a real module.
+      expect(names).toContain('createClient');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

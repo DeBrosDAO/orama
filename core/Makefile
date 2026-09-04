@@ -163,8 +163,9 @@ bump:
 	@echo "$(VER)" > ../VERSION
 	@printf '%s\n' "$(VER)" > pkg/version/version.txt
 	@cd ../sdk && npm version $(VER) --no-git-tag-version > /dev/null
-	@echo "Bumped VERSION, pkg/version/version.txt and sdk/package.json to $(VER)"
-	@echo "Next: git add ../VERSION pkg/version/version.txt ../sdk/package.json && git commit -m 'release: $(VER)'"
+	@cd ../sdk-vault && npm version $(VER) --no-git-tag-version > /dev/null
+	@echo "Bumped VERSION, pkg/version/version.txt, sdk/package.json and sdk-vault/package.json to $(VER)"
+	@echo "Next: git add ../VERSION pkg/version/version.txt ../sdk/package.json ../sdk-vault/package.json && git commit -m 'release: $(VER)'"
 
 # Interactive release workflow (tag + push)
 release:

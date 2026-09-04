@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AuthClient } from '../../../src/vault/auth';
+import { AuthClient } from '../../src/auth';
 
 describe('AuthClient', () => {
   it('constructs with identity', () => {

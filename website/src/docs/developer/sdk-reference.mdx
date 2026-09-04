@@ -38,7 +38,6 @@ const client = createClient({
 | `fetch` | `typeof fetch` | No | `globalThis.fetch` | Custom fetch implementation |
 | `wsConfig` | `Partial<WSClientConfig>` | No | -- | WebSocket configuration for PubSub |
 | `functionsConfig` | `FunctionsClientConfig` | No | -- | Functions module configuration (requires `namespace`) |
-| `vaultConfig` | `VaultConfig` | No | -- | Vault module configuration (required for vault access) |
 | `onNetworkError` | `NetworkErrorCallback` | No | -- | Callback invoked on network errors after all retries are exhausted |
 
 ### Return Value
@@ -54,7 +53,6 @@ interface Client {
   cache: CacheClient;
   storage: StorageClient;
   functions: FunctionsClient;
-  vault: VaultClient | null; // null if no vaultConfig provided
 }
 ```
 
@@ -558,63 +556,13 @@ Functions are managed through the CLI (see [Functions](/docs/developer/functions
 
 ## vault
 
-Encrypted secret storage distributed across guardian nodes using Shamir secret sharing. Only available when `vaultConfig` is provided to `createClient()`.
+The vault client is not part of this package. It talks to guardian daemons on
+the WireGuard overlay (`10.0.0.x`), which an application outside the cluster
+cannot reach.
 
-### VaultConfig
-
-```typescript
-interface VaultConfig {
-  guardians: GuardianEndpoint[]; // { address: string, port: number }
-  hmacKey: Uint8Array;           // HMAC key for authentication
-  identityHex: string;           // Identity hash (hex string, 64 chars)
-  timeoutMs?: number;            // Request timeout, default: 10000ms
-}
-```
-
-### `vault.store(name, data, version): Promise<StoreResult>`
-
-Store a secret across guardian nodes using Shamir splitting.
-
-```typescript
-const result = await client.vault.store(
-  "API_KEY",
-  new TextEncoder().encode("sk-secret-value"),
-  1 // monotonic version number, must be > previous
-);
-// Returns: { ackCount, totalContacted, failCount, quorumMet, guardianResults }
-```
-
-### `vault.retrieve(name): Promise<RetrieveResult>`
-
-Retrieve and reconstruct a secret from guardian nodes.
-
-```typescript
-const result = await client.vault.retrieve("API_KEY");
-const secret = new TextDecoder().decode(result.data);
-// Returns: { data: Uint8Array, sharesCollected: number }
-```
-
-### `vault.list(): Promise<ListResult>`
-
-List all secrets for the current identity.
-
-```typescript
-const result = await client.vault.list();
-// Returns: { secrets: [{ name, version, size }] }
-```
-
-### `vault.delete(name): Promise<DeleteResult>`
-
-Delete a secret from all guardian nodes.
-
-```typescript
-const result = await client.vault.delete("API_KEY");
-// Returns: { ackCount, totalContacted, quorumMet }
-```
-
-### `vault.clearSessions(): void`
-
-Clear all cached authentication sessions with guardians.
+Applications use the gateway's `/v1/vault/push` and `/v1/vault/pull` endpoints
+over HTTPS; software running on the mesh uses `@debros/orama-vault`. Both are
+documented under [Vault](/docs/developer/vault).
 
 ---
 
@@ -656,45 +604,13 @@ import {
   // Functions
   FunctionsClient,
 
-  // Vault
-  VaultClient,
-  VaultAuthClient,
-  GuardianClient,
-  GuardianError,
-
-  // Vault crypto utilities
-  encrypt,
-  decrypt,
-  encryptString,
-  decryptString,
-  serializeEncrypted,
-  deserializeEncrypted,
-  encryptAndSerialize,
-  deserializeAndDecrypt,
-  encryptedToHex,
-  encryptedFromHex,
-  encryptedToBase64,
-  encryptedFromBase64,
-  generateKey,
-  generateNonce,
-  clearKey,
-  isValidEncryptedData,
-  shamirSplit,
-  shamirCombine,
-  deriveKeyHKDF,
-  KEY_SIZE,
-  NONCE_SIZE,
-  TAG_SIZE,
-
-  // Vault transport utilities
-  fanOut,
-  fanOutIndexed,
-  withTimeout,
-  withRetry,
-  adaptiveThreshold,
-  writeQuorum,
+  // Diagnostics
+  Logger,
 } from "@debros/orama";
 ```
+
+The vault client and its cryptography primitives are published separately as
+`@debros/orama-vault`. See [Vault](/docs/developer/vault).
 
 ---
 

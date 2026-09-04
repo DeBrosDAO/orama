@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { split, combine } from '../../../src/vault/crypto/shamir';
+import { split, combine } from '../../../src/crypto/shamir';
 
 describe('Shamir SSS', () => {
   it('2-of-3 round-trip', () => {
