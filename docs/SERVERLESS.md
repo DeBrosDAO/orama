@@ -144,7 +144,7 @@ If you see the runtime error `failed to instantiate module: module[X] not instan
 |----------|-------------|
 | `get_caller_wallet()` → string | Resolved caller wallet (JWT subject if Bearer auth, else namespace pseudo-id when API-key auth). |
 | `get_caller_jwt_subject()` → string | JWT `sub` claim explicitly. Empty when the request was not JWT-authenticated. Use this when binding on the JWT-signed identity matters (e.g. signup flows verifying the caller signed for the wallet they're registering). |
-| `get_caller_claim(name)` → string | Custom JWT claim by name (tier, subscription, etc.). Empty if missing or non-JWT request. |
+| `get_caller_claim(name)` → string | Custom JWT claim by name (tier, subscription, etc.). Empty if missing or non-JWT request. See [Device attribution](#device-attribution) for the gateway-owned `device_fp` / `device_since` claims. |
 | `get_request_id()` → string | Unique invocation ID |
 | `get_env(key)` → string | Environment variable from function.yaml |
 | `get_secret(name)` → string | Decrypted secret value (see [Managing Secrets](#managing-secrets)) |
@@ -653,3 +653,105 @@ orama function secrets set APNS_TEAM_ID "TEAM456"
 # Wire the PubSub trigger
 orama function triggers add call-push-handler --topic calls:invite
 ```
+
+## Device attribution
+
+A function can learn **which device** of an account is calling, not only which
+account (bugboard feat-384).
+
+Without it, every device of an account produces an identical JWT subject. That
+is fine for delivery, where the app controls fan-out, but not for retrieval:
+retrieval is authenticated per account, so anyone holding the account seed can
+call history endpoints as the account without being one of its devices.
+
+### Two claims
+
+| claim | meaning |
+|---|---|
+| `device_fp` | Fingerprint of the device key that signed this login. Derived by the gateway from the public key — never client-supplied. |
+| `device_since` | Unix seconds when **this gateway first observed** that key for this account. |
+
+Read them like any other claim:
+
+```go
+fp := oh.GetCallerClaim("device_fp")
+if fp == "" {
+    // No device assertion was presented. DENY if your function requires
+    // device attribution — absence is not permission.
+}
+```
+
+### Obtaining them
+
+`POST /v1/auth/verify` accepts two optional fields alongside the normal wallet
+signature:
+
+```json
+{
+  "wallet": "0x…", "nonce": "…", "signature": "…", "namespace": "myapp",
+  "device_public_key": "<base64 ed25519 public key>",
+  "device_signature":  "<base64 ed25519 signature>"
+}
+```
+
+The device signs `"orama-device-assertion:v1:" + nonce` — the **same** nonce the
+account signed, with a distinct prefix so neither signature can be replayed as
+the other. Both fields must be present or neither: supplying one is a **400** (a client
+bug, not a credential failure), a signature that does not verify is a **401**,
+and an infrastructure failure while recording the binding is a **503** so
+clients retry instead of tearing the session down. A failed assertion is never
+silently downgraded to a token without the claim.
+
+The assertion is optional at the protocol level because the CLI, the SDK and
+RootWallet-signed operator logins cannot produce one. Functions that require
+device attribution enforce it by denying when `device_fp` is empty.
+
+### Why `device_since` comes from the gateway
+
+An app's own device roster cannot establish when a device joined, if that roster
+is signed by a key derived from the account seed: an attacker holding the seed
+signs a roster backdating their device and claims the whole archive — the exact
+scenario a "new devices sync forward only" rule exists to bound. `device_since`
+records when this server first saw the key, which such an attacker cannot move.
+
+The gateway asserts **possession** ("this key signed this login"). Your function
+asserts **authorization** ("this fingerprint is on my current roster"). The
+gateway stores no roster and has no opinion about which devices an account may
+have.
+
+### What the claim is and is not proof of
+
+`device_fp` is minted only from a signature the gateway verified, and it is
+stripped from the internal proxy hop between gateways, so it cannot be asserted
+by a header from elsewhere on the cluster network. On a namespace gateway the
+caller's own JWT is re-verified against the cluster-wide signing key, so the
+claims a function sees come from a signature rather than from a forwarded
+header.
+
+It is **not** proof that the device is currently authorized — that is your
+roster's job — and it is not proof of freshness beyond the login that minted it:
+the token lives 15 minutes and the binding rides the refresh chain until the
+device is revoked.
+
+### Revoking a device
+
+```
+POST /v1/auth/device/revoke
+{ "subject": "<account>", "device_fingerprint": "<device_fp>" }
+```
+
+Namespace admin credentials required. This marks the binding revoked **and**
+revokes every refresh token that device obtained, which is what bounds a revoked
+device to one access-token TTL (15 minutes) instead of the refresh chain's
+30-day life. The response reports `refresh_tokens_revoked` — the difference
+between "marked revoked" and "actually stopped".
+
+A revoked device cannot log back in and re-acquire its claim — `BindDevice`
+refuses a revoked binding, so the login fails rather than silently resurrecting
+it. **There is no un-revoke endpoint**: revocation is currently permanent for
+that (account, device key) pair, and a device that is meant to return must be
+re-enrolled under a new key. If you need reinstatement, say so and it can be
+added — the column supports it, the API does not expose it.
+
+Revoking something that does not exist returns **404**, not 200. A revocation
+that silently matched nothing would be indistinguishable from one that worked.

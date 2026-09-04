@@ -87,6 +87,14 @@ func requiredScope(method, path string) string {
 	}
 
 	// --- Control-plane (admin only) ---
+	// Device revocation (feat-384) is namespace administration, NOT a user
+	// action. An end-user JWT sets CtxKeyNamespaceOverride from its own
+	// `namespace` claim, so without this classification any authenticated user
+	// of the namespace could revoke devices — including other accounts' — and a
+	// compromised device could revoke the legitimate ones.
+	if path == "/v1/auth/device/revoke" {
+		return auth.ScopeAdmin
+	}
 	if path == "/rqlite" || path == "/v1/rqlite" || strings.HasPrefix(path, "/v1/rqlite/") {
 		return auth.ScopeAdmin
 	}

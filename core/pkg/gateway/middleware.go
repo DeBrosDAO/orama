@@ -180,9 +180,52 @@ func claimsFromInternalAuthHeaders(h http.Header, namespace string) *auth.JWTCla
 		if decoded, err := base64.StdEncoding.DecodeString(raw); err == nil {
 			var custom map[string]string
 			if json.Unmarshal(decoded, &custom) == nil && len(custom) > 0 {
-				claims.Custom = custom
+				// Drop gateway-owned claims (feat-384). These are minted by the
+				// gateway from evidence it verified itself — a device signature,
+				// an API-key grant — and a header is not that evidence. Carrying
+				// them across this hop would let anything that can reach a
+				// namespace gateway on the mesh assert a device identity, which
+				// is exactly the forgery the device claim exists to prevent.
+				// Verified-JWT callers are unaffected: their claims come from the
+				// signature, not from here.
+				for k := range custom {
+					if _, reserved := reservedClaimKeys[k]; reserved {
+						delete(custom, k)
+					}
+				}
+				if len(custom) > 0 {
+					claims.Custom = custom
+				}
 			}
 		}
+	}
+	return claims
+}
+
+// verifiedBearerClaims returns the claims of the request's Bearer JWT, verified
+// against this gateway's own signing key, or nil when there is no parseable and
+// valid token.
+//
+// Returning nil for an INVALID token (rather than failing the request) keeps
+// this a pure upgrade of the internal-auth path: the caller then falls back to
+// the header-derived identity exactly as before, so a legitimately proxied
+// API-key request is unaffected. What it removes is the ability to assert a
+// verified-only claim through a header.
+func (g *Gateway) verifiedBearerClaims(r *http.Request) *auth.JWTClaims {
+	if g == nil || g.authService == nil {
+		return nil
+	}
+	authz := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(strings.ToLower(authz), "bearer ") {
+		return nil
+	}
+	tok := strings.TrimSpace(authz[len("bearer "):])
+	if tok == "" || strings.Count(tok, ".") != 2 {
+		return nil
+	}
+	claims, err := g.authService.ParseAndVerifyJWT(tok)
+	if err != nil {
+		return nil
 	}
 	return claims
 }
@@ -530,15 +573,29 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 				if ns != "" {
 					// Pre-authenticated by main gateway - trust the namespace
 					reqCtx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, ns)
-					// Bug #215: also rebuild ctxKeyJWT from the trusted
-					// internal-auth headers (subject + custom claims) so
-					// serverless host functions see a non-empty
-					// caller_jwt_subject. We deliberately do NOT re-verify
-					// the JWT here — namespace gateways may not share the
-					// signing key with the main gateway, and the main gateway
-					// already verified before forwarding. Trust gate is the
-					// source-IP check above.
-					if claims := claimsFromInternalAuthHeaders(r.Header, ns); claims != nil {
+					// Identity for this request.
+					//
+					// Prefer VERIFYING the caller's own Bearer JWT over trusting
+					// the forwarded headers (feat-384). The old comment here said
+					// namespace gateways may not share the signing key — that
+					// stopped being true with bug #215, which derives the Ed25519
+					// signing key deterministically from the cluster secret on
+					// every gateway precisely so JWTs verify cross-node. So the
+					// token IS verifiable here, and a signature beats a header.
+					//
+					// It matters because the source-IP gate above is weaker than
+					// it looks: it trusts the whole WireGuard /8 and loopback, and
+					// a serverless function can reach a namespace gateway directly
+					// via http_fetch. Header-asserted identity is therefore
+					// forgeable by anything on the mesh — including another
+					// tenant. Claims taken from a verified signature are not.
+					//
+					// The headers remain the fallback for callers that have no JWT
+					// to verify (API-key auth), with gateway-owned claims filtered
+					// out of them by claimsFromInternalAuthHeaders.
+					if claims := g.verifiedBearerClaims(r); claims != nil {
+						reqCtx = context.WithValue(reqCtx, ctxKeyJWT, claims)
+					} else if claims := claimsFromInternalAuthHeaders(r.Header, ns); claims != nil {
 						reqCtx = context.WithValue(reqCtx, ctxKeyJWT, claims)
 					}
 					// #148: hydrate the API-key caller's effective scopes from the
