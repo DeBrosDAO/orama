@@ -425,7 +425,12 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
-	// Order: logging -> security headers -> rate limit -> CORS -> readiness -> domain routing -> auth -> authorization -> scope -> namespace rate limit -> handler
+	// Order: internal-auth -> logging -> security headers -> rate limit -> CORS -> readiness -> domain routing -> auth -> authorization -> scope -> namespace rate limit -> handler
+	//
+	// The internal-auth gate is first, before anything else can read a header.
+	// It deletes every X-Internal-Auth-* header that did not arrive with a
+	// valid MAC, so no middleware below it has to ask whether the ones it sees
+	// are authentic — they are, or they are not there.
 	//
 	// The readiness gate sits directly INSIDE CORS, not above it. A gateway
 	// that is still starting refuses with a 503 carrying the reason, and a
@@ -437,16 +442,17 @@ func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 	//
 	// The scope gate (bugboard #148) runs after ownership so it only ever
 	// tightens an already-authorized request; it never authorizes on its own.
-	return g.loggingMiddleware(
-		g.securityHeadersMiddleware(
-			g.rateLimitMiddleware(
-				g.corsMiddleware(
-					g.readinessGate(
-						g.domainRoutingMiddleware(
-							g.authMiddleware(
-								g.authorizationMiddleware(
-									g.scopeMiddleware(
-										g.namespaceRateLimitMiddleware(next))))))))))
+	return g.internalAuthMiddleware(
+		g.loggingMiddleware(
+			g.securityHeadersMiddleware(
+				g.rateLimitMiddleware(
+					g.corsMiddleware(
+						g.readinessGate(
+							g.domainRoutingMiddleware(
+								g.authMiddleware(
+									g.authorizationMiddleware(
+										g.scopeMiddleware(
+											g.namespaceRateLimitMiddleware(next)))))))))))
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses
@@ -520,40 +526,40 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 
 		isPublic := isPublicPath(r.URL.Path)
 
-		// 0) Trust internal auth headers from internal IPs (WireGuard network or localhost)
-		// This allows the main gateway to pre-authenticate requests before proxying to namespace gateways
-		// IMPORTANT: Use r.RemoteAddr (actual TCP peer), NOT getClientIP() which reads
-		// X-Forwarded-For and would return the original client IP instead of the proxy's IP.
+		// 0) Trust the internal-auth headers the main gateway forwarded.
+		//
+		// These reached this point only because internalAuthMiddleware verified
+		// a MAC over them keyed by the cluster secret; anything unsigned was
+		// deleted before this middleware ran. The source IP is not consulted:
+		// it used to be the only check, and the source IP of every public
+		// request is 127.0.0.1 because Caddy proxies to localhost.
 		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
-			clientIP := remoteAddrIP(r)
-			if isInternalIP(clientIP) {
-				ns := strings.TrimSpace(r.Header.Get(HeaderInternalAuthNamespace))
-				if ns != "" {
-					// Pre-authenticated by main gateway - trust the namespace
-					reqCtx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, ns)
-					// Bug #215: also rebuild ctxKeyJWT from the trusted
-					// internal-auth headers (subject + custom claims) so
-					// serverless host functions see a non-empty
-					// caller_jwt_subject. We deliberately do NOT re-verify
-					// the JWT here — namespace gateways may not share the
-					// signing key with the main gateway, and the main gateway
-					// already verified before forwarding. Trust gate is the
-					// source-IP check above.
-					if claims := claimsFromInternalAuthHeaders(r.Header, ns); claims != nil {
-						reqCtx = context.WithValue(reqCtx, ctxKeyJWT, claims)
-					}
-					// #148: hydrate the API-key caller's effective scopes from the
-					// trusted internal-auth header so scopeMiddleware can enforce
-					// them (the namespace gateway does not re-look-up the key).
-					if raw := strings.TrimSpace(r.Header.Get(HeaderInternalAuthScopes)); raw != "" {
-						reqCtx = context.WithValue(reqCtx, ctxKeyScopes, auth.ParseScopes(raw))
-					}
-					next.ServeHTTP(w, r.WithContext(reqCtx))
-					return
+			ns := strings.TrimSpace(r.Header.Get(HeaderInternalAuthNamespace))
+			if ns != "" {
+				// Pre-authenticated by main gateway - trust the namespace
+				reqCtx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, ns)
+				// Bug #215: also rebuild ctxKeyJWT from the trusted
+				// internal-auth headers (subject + custom claims) so
+				// serverless host functions see a non-empty
+				// caller_jwt_subject. We deliberately do NOT re-verify
+				// the JWT here — namespace gateways may not share the
+				// signing key with the main gateway, and the main gateway
+				// already verified before forwarding. The trust gate is
+				// the MAC, checked in internalAuthMiddleware.
+				if claims := claimsFromInternalAuthHeaders(r.Header, ns); claims != nil {
+					reqCtx = context.WithValue(reqCtx, ctxKeyJWT, claims)
 				}
+				// #148: hydrate the API-key caller's effective scopes from the
+				// trusted internal-auth header so scopeMiddleware can enforce
+				// them (the namespace gateway does not re-look-up the key).
+				if raw := strings.TrimSpace(r.Header.Get(HeaderInternalAuthScopes)); raw != "" {
+					reqCtx = context.WithValue(reqCtx, ctxKeyScopes, auth.ParseScopes(raw))
+				}
+				next.ServeHTTP(w, r.WithContext(reqCtx))
+				return
 			}
-			// If internal auth header is present but invalid (wrong IP or missing namespace),
-			// fall through to normal auth flow
+			// A validated header with no namespace asserts nothing usable, so
+			// the request authenticates on its own credentials or is refused.
 		}
 
 		// 1) Try JWT Bearer first if Authorization looks like one
@@ -814,12 +820,13 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// The main gateway already validated the API key and resolved the namespace
 		// before proxying, so re-checking ownership against the namespace RQLite is
 		// redundant and adds ~300ms of unnecessary latency (3 DB round-trips).
+		//
+		// The header is here only because internalAuthMiddleware verified its
+		// MAC. It used to be believed on the strength of the source IP, which
+		// made this the shortest unauthenticated path to any namespace's data.
 		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
-			clientIP := remoteAddrIP(r)
-			if isInternalIP(clientIP) {
-				next.ServeHTTP(w, r)
-				return
-			}
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		// Cross-namespace access control for namespace gateways
@@ -1559,6 +1566,17 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 			if validatedScopes != "" {
 				r.Header.Set(HeaderInternalAuthScopes, validatedScopes)
 			}
+			// The MAC is what makes any of this believable on the other side.
+			// Without it the namespace gateway would drop every header above,
+			// so a hop that cannot be signed is refused rather than sent as an
+			// assertion this gateway cannot back.
+			if err := signInternalAuthHeaders(g.internalAuthKey, r.Header, r.Method, r.URL.Path, time.Now()); err != nil {
+				g.logger.ComponentError("gateway", "cannot delegate auth to the namespace gateway",
+					zap.String("namespace", validatedNamespace), zap.Error(err))
+				writeError(w, http.StatusServiceUnavailable,
+					"this gateway has no cluster secret, so it cannot authenticate itself to the namespace gateway")
+				return
+			}
 		}
 		r.URL.Scheme = "http"
 		r.URL.Host = targetHost
@@ -1625,6 +1643,20 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		// #148: forward the API-key caller's effective scopes.
 		if validatedScopes != "" {
 			proxyReq.Header.Set(HeaderInternalAuthScopes, validatedScopes)
+		}
+		// The MAC is what makes any of this believable on the other side.
+		// Without it the namespace gateway would drop every header above, so a
+		// hop that cannot be signed is refused rather than sent as an assertion
+		// this gateway cannot back.
+		//
+		// The MAC covers the proxied request's own method and path, not the
+		// inbound one, because that is what the other end will verify against.
+		if err := signInternalAuthHeaders(g.internalAuthKey, proxyReq.Header, proxyReq.Method, proxyReq.URL.Path, time.Now()); err != nil {
+			g.logger.ComponentError("gateway", "cannot delegate auth to the namespace gateway",
+				zap.String("namespace", validatedNamespace), zap.Error(err))
+			writeError(w, http.StatusServiceUnavailable,
+				"this gateway has no cluster secret, so it cannot authenticate itself to the namespace gateway")
+			return
 		}
 	}
 

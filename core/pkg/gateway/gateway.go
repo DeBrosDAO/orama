@@ -147,6 +147,13 @@ type Gateway struct {
 	processManager      *process.Manager
 	healthChecker       *health.HealthChecker
 
+	// internalAuthKey authenticates the X-Internal-Auth-* headers across a
+	// proxy hop (see internal_auth_hop.go). Derived from the cluster secret,
+	// so every node in a cluster has the same one and nobody outside it does.
+	// Empty when this gateway has no cluster secret, and an empty key trusts
+	// nothing.
+	internalAuthKey []byte
+
 	// Middleware cache for auth/routing lookups (eliminates redundant DB queries)
 	mwCache *middlewareCache
 
@@ -355,6 +362,20 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
+	// The hop key is what lets a namespace gateway believe this one validated
+	// a request. Without a cluster secret there is no key, no internal-auth
+	// header is ever trusted, and the proxy hop refuses rather than forwarding
+	// an assertion it cannot back — which is the same configuration that
+	// already breaks cross-gateway JWT verification.
+	if key, err := internalAuthKey(cfg.ClusterSecret); err == nil {
+		gw.internalAuthKey = key
+	} else {
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"No cluster secret: internal-auth headers will never be trusted and this "+
+				"gateway cannot delegate auth to a namespace gateway",
+			zap.Error(err))
+	}
+
 	// Wire the JWT verifier so the persistent WS handler can apply
 	// mid-session auth refresh on the open WS (bugboard #321 control
 	// frame). Skipped when either dep is nil — the handler then acks

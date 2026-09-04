@@ -24,6 +24,14 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - A gateway with no cluster secret configured now refuses these endpoints (`503`) instead of allowing them, since there is no way to authenticate the caller
 - `node_id` and `public_key` on peer registration are parsed (libp2p peer id; base64 32-byte Curve25519, control characters rejected) before they are stored, because both are rendered into `wg0.conf` on every node
 
+**Inter-gateway trust (`X-Internal-Auth-*`)**
+- The main gateway validates a request and forwards the result to a namespace gateway in these headers: the namespace it resolved, the JWT subject it verified, and the grant set of the API key it looked up. The namespace gateway believes all three without re-checking anything, and skips its ownership gate on the strength of them
+- Whether to believe them is answered by an `X-Internal-Auth-MAC` header: HMAC-SHA256 over the request's method and path plus every field the headers assert plus a timestamp, keyed by `HKDF(cluster secret, "internal-auth-hop")`. Every node in a cluster derives the same key and nobody outside it can. The first middleware in the chain deletes every `X-Internal-Auth-*` header that did not arrive with a valid MAC, so nothing below it has to ask whether what it sees is authentic
+- Covering the method and path means a MAC observed on a harmless read cannot be replayed onto a write, and the ±60s window bounds replay of the request it was minted for. The MAC is consumed at the hop it authenticates and never forwarded
+- The source IP is not consulted. It used to be the only check — loopback or `10.0.0.0/24` — and **the source IP of every public request is 127.0.0.1**, because Caddy terminates TLS and reverse-proxies to `localhost`. Caddy forwards client headers by default, so `X-Internal-Auth-Validated: true` with a namespace and `admin` in the scopes header was an unauthenticated admin bypass on every gateway, from the internet
+- Caddy strips all six headers on the way up (`header_up -X-Internal-Auth-*` in every `reverse_proxy` block) as defence in depth: two independent places have to fail before a forged header is believed
+- A gateway with no cluster secret derives no key. It trusts no internal-auth header, and it refuses to proxy a request it cannot sign rather than forwarding an assertion it cannot back
+
 **Node join (`/v1/internal/join`)**
 - An invite token is checked for liveness before any work is done on its behalf, and consumed atomically only once the request is known to be serviceable
 - A join is refused if the public IP, WireGuard key or peer id is already registered to a node that is up — liveness being `confirmed_at` **or** a `dns_nodes` row at the same overlay address, since a node on an older binary clears its own `confirmed_at`
@@ -209,6 +217,7 @@ Stated so the gaps above are known positions, not implied protections:
 - **dm-verity at boot** — hashes may exist in the OramaOS image; they are not wired into the boot path
 - **RQLite HTTP auth** — `rqlited -auth` is not enabled; overlay + firewall are the control. The clients are ready (see above); the gateway/namespace DSNs are not
 - **ntfy** — no auth-file in v1; listen-localhost is the control
+- **Namespace gateways bind every interface** (`:PORT`, not the overlay address). Reaching one directly still requires a MAC to assert anything, so this is exposure of a listener rather than of an authorization decision. Moving it needs the two local health checks in `pkg/namespace/cluster_manager.go` moved with it — see the bugboard issue
 - **A captured disk snapshot of RQLite** — plaintext application data, including `deployment_env_vars`
 - **Immediate erase of deleted rows** — a SQL `DELETE` is a Raft log entry; the original INSERT remains in `raft.db` until size-driven compaction, not a privacy TTL
 - **Olric memberlist AES-GCM** — v0.7.0 YAML has no `encryptionKey`; WireGuard is the control
