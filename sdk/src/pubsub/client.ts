@@ -1,4 +1,5 @@
 import { HttpClient } from "../core/http";
+import { Logger } from "../core/logger";
 import { WSClient, WSClientConfig } from "../core/ws";
 import {
   PubSubMessage,
@@ -140,13 +141,18 @@ export class PubSubClient {
       ...this.wsConfig,
       wsURL: wsUrl.toString(),
       authToken,
+      logger: this.httpClient.logger("WSClient"),
     });
 
     await wsClient.connect();
 
     // Create subscription wrapper
-    const subscription = new Subscription(wsClient, topic, presence, () =>
-      this.getPresence(topic)
+    const subscription = new Subscription(
+      wsClient,
+      topic,
+      presence,
+      () => this.getPresence(topic),
+      this.httpClient.logger("Subscription")
     );
 
     if (options.onMessage) {
@@ -178,17 +184,26 @@ export class Subscription {
   private wsErrorHandler: ((error: Error) => void) | null = null;
   private wsCloseHandler: ((code: number, reason: string) => void) | null = null;
   private getPresenceFn: () => Promise<PresenceResponse>;
+  private readonly log: Logger;
 
+  /**
+   * @param logger Defaults to a logger that prints nothing. `PubSubClient`
+   * always supplies one carrying the client's `debug` setting; the parameter
+   * is optional only because `Subscription` is exported and so can be built
+   * directly.
+   */
   constructor(
     wsClient: WSClient,
     topic: string,
     presenceOptions: PresenceOptions | undefined,
-    getPresenceFn: () => Promise<PresenceResponse>
+    getPresenceFn: () => Promise<PresenceResponse>,
+    logger: Logger = Logger.disabled()
   ) {
     this.wsClient = wsClient;
     this.topic = topic;
     this.presenceOptions = presenceOptions;
     this.getPresenceFn = getPresenceFn;
+    this.log = logger;
 
     // Register message handler
     this.wsMessageHandler = (data) => {
@@ -207,7 +222,7 @@ export class Subscription {
           envelope.type === "presence.leave"
         ) {
           if (!envelope.member_id) {
-            console.warn("[Subscription] Presence event missing member_id");
+            this.log.warn("Presence event missing member_id");
             return;
           }
 
@@ -252,10 +267,10 @@ export class Subscription {
           timestamp: envelope.timestamp,
         };
 
-        console.log("[Subscription] Received message on topic:", this.topic);
+        this.log.log(`Received message on topic: ${this.topic}`);
         this.messageHandlers.forEach((handler) => handler(message));
       } catch (error) {
-        console.error("[Subscription] Error processing message:", error);
+        this.log.error("Error processing message:", error);
         this.errorHandlers.forEach((handler) =>
           handler(error instanceof Error ? error : new Error(String(error)))
         );

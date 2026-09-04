@@ -1,6 +1,7 @@
 import WebSocket from "isomorphic-ws";
 import { SDKError } from "../errors";
 import { NetworkErrorCallback } from "./http";
+import { Logger } from "./logger";
 
 export interface WSClientConfig {
   wsURL: string;
@@ -12,6 +13,12 @@ export interface WSClientConfig {
    * Use this to trigger gateway failover at the application layer.
    */
   onNetworkError?: NetworkErrorCallback;
+  /**
+   * Where to write debug lines. Defaults to a logger that prints nothing:
+   * a WebSocket client built directly, rather than through `createClient`,
+   * has no `debug` setting to inherit.
+   */
+  logger?: Logger;
 }
 
 export type WSMessageHandler = (data: string) => void;
@@ -30,6 +37,7 @@ export class WSClient {
   private authToken?: string;
   private WebSocketClass: typeof WebSocket;
   private onNetworkError?: NetworkErrorCallback;
+  private readonly log: Logger;
 
   private ws?: WebSocket;
   private messageHandlers: Set<WSMessageHandler> = new Set();
@@ -44,6 +52,7 @@ export class WSClient {
     this.authToken = config.authToken;
     this.WebSocketClass = config.WebSocket ?? WebSocket;
     this.onNetworkError = config.onNetworkError;
+    this.log = config.logger ?? Logger.disabled();
   }
 
   /**
@@ -89,7 +98,7 @@ export class WSClient {
 
         this.ws.addEventListener("open", () => {
           clearTimeout(timeout);
-          console.log("[WSClient] Connected to", this.wsURL);
+          this.log.log(`Connected to ${this.wsURL}`);
           this.openHandlers.forEach((handler) => handler());
           resolve();
         });
@@ -100,7 +109,7 @@ export class WSClient {
         });
 
         this.ws.addEventListener("error", (event: Event) => {
-          console.error("[WSClient] WebSocket error:", event);
+          this.log.error("WebSocket error:", event);
           clearTimeout(timeout);
           // Extract useful details from the event — raw Event objects don't serialize
           const details: Record<string, any> = { type: event.type };
@@ -128,7 +137,9 @@ export class WSClient {
           const closeEvent = event as CloseEvent;
           const code = closeEvent.code ?? 1006;
           const reason = closeEvent.reason ?? "";
-          console.log(`[WSClient] Connection closed (code: ${code}, reason: ${reason || "none"})`);
+          this.log.log(
+            `Connection closed (code: ${code}, reason: ${reason || "none"})`
+          );
           this.closeHandlers.forEach((handler) => handler(code, reason));
         });
       } catch (error) {

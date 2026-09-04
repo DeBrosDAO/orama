@@ -1,4 +1,5 @@
 import { SDKError } from "../errors";
+import { Logger } from "./logger";
 
 /**
  * Context provided to the onNetworkError callback
@@ -59,6 +60,52 @@ export interface HttpClientConfig {
   onNetworkError?: NetworkErrorCallback;
 }
 
+/**
+ * A one-line description of an rqlite request, for the debug log.
+ *
+ * Returns null for anything that is not an rqlite call, and for a body that
+ * does not parse — a request is never failed because its log line could not be
+ * assembled.
+ */
+function describeQuery(path: string, body: unknown): string | null {
+  if (!path.includes("/v1/rqlite/") || body === undefined || body === null) {
+    return null;
+  }
+
+  let parsed: any;
+  try {
+    parsed = typeof body === "string" ? JSON.parse(body) : body;
+  } catch {
+    return null;
+  }
+
+  if (parsed?.sql) {
+    let details = `SQL: ${parsed.sql}`;
+    if (parsed.args?.length > 0) {
+      const args = parsed.args
+        .map((a: unknown) => (typeof a === "string" ? `"${a}"` : a))
+        .join(", ");
+      details += ` | Args: [${args}]`;
+    }
+    return details;
+  }
+
+  if (parsed?.table) {
+    let details = `Table: ${parsed.table}`;
+    if (parsed.criteria && Object.keys(parsed.criteria).length > 0) {
+      details += ` | Criteria: ${JSON.stringify(parsed.criteria)}`;
+    }
+    if (parsed.options) details += ` | Options: ${JSON.stringify(parsed.options)}`;
+    if (parsed.select) details += ` | Select: ${JSON.stringify(parsed.select)}`;
+    if (parsed.where) details += ` | Where: ${JSON.stringify(parsed.where)}`;
+    if (parsed.limit) details += ` | Limit: ${parsed.limit}`;
+    if (parsed.offset) details += ` | Offset: ${parsed.offset}`;
+    return details;
+  }
+
+  return null;
+}
+
 export class HttpClient {
   private baseURL: string;
   private timeout: number;
@@ -67,8 +114,9 @@ export class HttpClient {
   private fetch: typeof fetch;
   private apiKey?: string;
   private jwt?: string;
-  private debug: boolean;
   private onNetworkError?: NetworkErrorCallback;
+  private readonly rootLogger: Logger;
+  private readonly log: Logger;
 
   constructor(config: HttpClientConfig) {
     this.baseURL = config.baseURL.replace(/\/$/, "");
@@ -78,8 +126,18 @@ export class HttpClient {
     // The platform's fetch, unless the caller supplied one. See the `fetch`
     // option for how to reach a gateway with an untrusted certificate.
     this.fetch = config.fetch ?? globalThis.fetch;
-    this.debug = config.debug ?? false;
     this.onNetworkError = config.onNetworkError;
+    this.rootLogger = new Logger(config.debug ?? false);
+    this.log = this.rootLogger.child("HttpClient");
+  }
+
+  /**
+   * A logger for another part of the SDK, sharing this client's `debug`
+   * setting. Every client in a `createClient` tree is built around one
+   * HttpClient, so this is how `debug: true` reaches all of them.
+   */
+  logger(scope: string): Logger {
+    return this.rootLogger.child(scope);
   }
 
   /**
@@ -97,14 +155,9 @@ export class HttpClient {
   setJwt(jwt?: string) {
     this.jwt = jwt;
     // Don't clear API key - allow both to coexist
-    if (typeof console !== "undefined") {
-      console.log(
-        "[HttpClient] JWT set:",
-        !!jwt,
-        "API key still present:",
-        !!this.apiKey
-      );
-    }
+    this.log.log(
+      `JWT set: ${!!jwt}, API key still present: ${!!this.apiKey}`
+    );
   }
 
   private getAuthHeaders(path: string): Record<string, string> {
@@ -241,50 +294,11 @@ export class HttpClient {
       fetchOptions.body = JSON.stringify(options.body);
     }
 
-    // Extract and log SQL query details for rqlite operations
-    const isRqliteOperation = path.includes("/v1/rqlite/");
-    let queryDetails: string | null = null;
-    if (isRqliteOperation && options.body) {
-      try {
-        const body =
-          typeof options.body === "string"
-            ? JSON.parse(options.body)
-            : options.body;
-
-        if (body.sql) {
-          // Direct SQL query (query/exec endpoints)
-          queryDetails = `SQL: ${body.sql}`;
-          if (body.args && body.args.length > 0) {
-            queryDetails += ` | Args: [${body.args
-              .map((a: any) => (typeof a === "string" ? `"${a}"` : a))
-              .join(", ")}]`;
-          }
-        } else if (body.table) {
-          // Table-based query (find/find-one/select endpoints)
-          queryDetails = `Table: ${body.table}`;
-          if (body.criteria && Object.keys(body.criteria).length > 0) {
-            queryDetails += ` | Criteria: ${JSON.stringify(body.criteria)}`;
-          }
-          if (body.options) {
-            queryDetails += ` | Options: ${JSON.stringify(body.options)}`;
-          }
-          if (body.select) {
-            queryDetails += ` | Select: ${JSON.stringify(body.select)}`;
-          }
-          if (body.where) {
-            queryDetails += ` | Where: ${JSON.stringify(body.where)}`;
-          }
-          if (body.limit) {
-            queryDetails += ` | Limit: ${body.limit}`;
-          }
-          if (body.offset) {
-            queryDetails += ` | Offset: ${body.offset}`;
-          }
-        }
-      } catch (e) {
-        // Failed to parse body, ignore
-      }
-    }
+    // Describing the query parses the request body, so only do it when there
+    // is somewhere for the description to go.
+    const queryDetails = this.log.isEnabled
+      ? describeQuery(path, options.body)
+      : null;
 
     try {
       const result = await this.requestWithRetry(
@@ -294,43 +308,34 @@ export class HttpClient {
         startTime
       );
       const duration = performance.now() - startTime;
-      if (typeof console !== "undefined") {
-        const logMessage = `[HttpClient] ${method} ${path} completed in ${duration.toFixed(
-          2
-        )}ms`;
-        if (queryDetails && this.debug) {
-          console.log(logMessage);
-          console.log(`[HttpClient]   ${queryDetails}`);
-        } else {
-          console.log(logMessage);
-        }
+      this.log.log(`${method} ${path} completed in ${duration.toFixed(2)}ms`);
+      if (queryDetails) {
+        this.log.log(`  ${queryDetails}`);
       }
       return result;
     } catch (error) {
       const duration = performance.now() - startTime;
-      if (typeof console !== "undefined") {
-        // For 404 errors on find-one calls, log at warn level (not error) since "not found" is expected
-        // Application layer handles these cases in try-catch blocks
-        const is404FindOne =
-          path === "/v1/rqlite/find-one" &&
-          error instanceof SDKError &&
-          error.httpStatus === 404;
 
-        if (is404FindOne) {
-          // Log as warning for visibility, but not as error since it's expected behavior
-          console.warn(
-            `[HttpClient] ${method} ${path} returned 404 after ${duration.toFixed(
-              2
-            )}ms (expected for optional lookups)`
-          );
-        } else {
-          const errorMessage = `[HttpClient] ${method} ${path} failed after ${duration.toFixed(
+      // A 404 from find-one is the documented "no such row" answer, not a
+      // fault: callers branch on it. Log it as a warning, not an error.
+      const is404FindOne =
+        path === "/v1/rqlite/find-one" &&
+        error instanceof SDKError &&
+        error.httpStatus === 404;
+
+      if (is404FindOne) {
+        this.log.warn(
+          `${method} ${path} returned 404 after ${duration.toFixed(
             2
-          )}ms:`;
-          console.error(errorMessage, error);
-          if (queryDetails && this.debug) {
-            console.error(`[HttpClient]   ${queryDetails}`);
-          }
+          )}ms (expected for optional lookups)`
+        );
+      } else {
+        this.log.error(
+          `${method} ${path} failed after ${duration.toFixed(2)}ms:`,
+          error
+        );
+        if (queryDetails) {
+          this.log.error(`  ${queryDetails}`);
         }
       }
 
@@ -392,11 +397,9 @@ export class HttpClient {
 
       // Retry on same gateway for retryable HTTP errors
       if (isRetryableError && attempt < this.maxRetries && !aborted) {
-        if (typeof console !== "undefined") {
-          console.warn(
-            `[HttpClient] Retrying request (attempt ${attempt + 1}/${this.maxRetries})`
-          );
-        }
+        this.log.warn(
+          `Retrying request (attempt ${attempt + 1}/${this.maxRetries})`
+        );
         await new Promise((resolve) =>
           setTimeout(resolve, this.retryDelayMs * (attempt + 1))
         );
@@ -500,13 +503,9 @@ export class HttpClient {
         startTime
       );
       const duration = performance.now() - startTime;
-      if (typeof console !== "undefined") {
-        console.log(
-          `[HttpClient] POST ${path} (upload) completed in ${duration.toFixed(
-            2
-          )}ms`
-        );
-      }
+      this.log.log(
+        `POST ${path} (upload) completed in ${duration.toFixed(2)}ms`
+      );
       return result;
     } catch (error) {
       const duration = performance.now() - startTime;
@@ -515,26 +514,20 @@ export class HttpClient {
       // a timeout, and not surfaced through the network-error callback (it's not
       // a network failure, it's a user action).
       if (abortedByCaller) {
-        if (typeof console !== "undefined") {
-          console.log(
-            `[HttpClient] POST ${path} (upload) aborted by caller after ${duration.toFixed(
-              2
-            )}ms`
-          );
-        }
+        this.log.log(
+          `POST ${path} (upload) aborted by caller after ${duration.toFixed(
+            2
+          )}ms`
+        );
         throw new SDKError("upload aborted by caller", 0, "ABORTED", {
           cause: "caller-abort",
         });
       }
 
-      if (typeof console !== "undefined") {
-        console.error(
-          `[HttpClient] POST ${path} (upload) failed after ${duration.toFixed(
-            2
-          )}ms:`,
-          error
-        );
-      }
+      this.log.error(
+        `POST ${path} (upload) failed after ${duration.toFixed(2)}ms:`,
+        error
+      );
 
       // Normalize an internal-timeout AbortError to a TIMEOUT SDKError; a real
       // HTTP SDKError passes through unchanged.

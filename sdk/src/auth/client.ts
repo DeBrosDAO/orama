@@ -1,4 +1,5 @@
 import { HttpClient } from "../core/http";
+import { Logger } from "../core/logger";
 import { WhoAmI, StorageAdapter, MemoryStorage } from "./types";
 
 export class AuthClient {
@@ -6,6 +7,7 @@ export class AuthClient {
   private storage: StorageAdapter;
   private currentApiKey?: string;
   private currentJwt?: string;
+  private readonly log: Logger;
 
   constructor(config: {
     httpClient: HttpClient;
@@ -17,6 +19,7 @@ export class AuthClient {
     this.storage = config.storage ?? new MemoryStorage();
     this.currentApiKey = config.apiKey;
     this.currentJwt = config.jwt;
+    this.log = config.httpClient.logger("Auth");
 
     if (this.currentApiKey) {
       this.httpClient.setApiKey(this.currentApiKey);
@@ -110,7 +113,7 @@ export class AuthClient {
         await this.httpClient.post("/v1/auth/logout", { all: true });
       } catch (error) {
         // Log warning but don't fail - local cleanup is more important
-        console.warn(
+        this.log.warn(
           "Server-side logout failed, continuing with local cleanup:",
           error
         );
@@ -134,9 +137,9 @@ export class AuthClient {
     // Restore API key as the active auth method
     if (this.currentApiKey) {
       this.httpClient.setApiKey(this.currentApiKey);
-      console.log("[Auth] API key restored after user logout");
+      this.log.log("API key restored after user logout");
     } else {
-      console.warn("[Auth] No API key available after logout");
+      this.log.warn("No API key available after logout");
     }
   }
 
@@ -152,7 +155,7 @@ export class AuthClient {
         await this.httpClient.post("/v1/auth/logout", { all: true });
       } catch (error) {
         // Log warning but don't fail - local cleanup is more important
-        console.warn(
+        this.log.warn(
           "Server-side logout failed, continuing with local cleanup:",
           error
         );

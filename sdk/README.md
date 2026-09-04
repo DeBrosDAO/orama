@@ -370,15 +370,34 @@ interface ClientConfig {
   baseURL: string; // Gateway URL
   apiKey?: string; // API key (optional, if using JWT instead)
   jwt?: string; // JWT token (optional, if using API key instead)
-  timeout?: number; // Request timeout in ms (default: 30000)
+  timeout?: number; // Request timeout in ms (default: 60000)
   maxRetries?: number; // Max retry attempts (default: 3)
   retryDelayMs?: number; // Delay between retries (default: 1000)
-  debug?: boolean; // Enable debug logging with full SQL queries (default: false)
+  debug?: boolean; // Print diagnostics to the console (default: false)
   storage?: StorageAdapter; // For persisting JWT/API key (default: MemoryStorage)
   wsConfig?: Partial<WSClientConfig>; // WebSocket configuration
   fetch?: typeof fetch; // Custom fetch implementation
 }
 ```
+
+### Logging
+
+With `debug` unset the SDK writes nothing to the console. It reports failure by
+throwing a typed `SDKError` and by calling the handlers you registered:
+`onNetworkError` for transport failures, and a subscription's `onError` for a
+message that could not be processed.
+
+Set `debug: true` and it prints, prefixed by the component:
+
+```
+[HttpClient] POST /v1/rqlite/query completed in 41.20ms
+[HttpClient]   SQL: SELECT * FROM messages WHERE room = ? | Args: ["general"]
+[WSClient] Connected to wss://gw.example/v1/pubsub/ws?topic=general
+[Subscription] Received message on topic: general
+```
+
+The flag reaches every module built by `createClient` — HTTP, WebSocket,
+pubsub, auth and cache — so one setting turns all of it on and off.
 
 ### Connecting to a gateway with an untrusted certificate
 

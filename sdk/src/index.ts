@@ -88,6 +88,8 @@ export function createClient(config: ClientConfig): Client {
 export { HttpClient } from "./core/http";
 export type { NetworkErrorCallback, NetworkErrorContext } from "./core/http";
 export { WSClient } from "./core/ws";
+export { Logger } from "./core/logger";
+export type { LogSink } from "./core/logger";
 export { AuthClient } from "./auth/client";
 export { DBClient } from "./db/client";
 export { QueryBuilder } from "./db/qb";

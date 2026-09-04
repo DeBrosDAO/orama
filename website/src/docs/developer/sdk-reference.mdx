@@ -33,7 +33,7 @@ const client = createClient({
 | `timeout` | `number` | No | `60000` | Request timeout in milliseconds |
 | `maxRetries` | `number` | No | `3` | Maximum retry attempts for retryable errors (408, 429, 500, 502, 503, 504) |
 | `retryDelayMs` | `number` | No | `1000` | Base delay between retries (multiplied by attempt number) |
-| `debug` | `boolean` | No | `false` | Enable debug logging (includes SQL queries and args) |
+| `debug` | `boolean` | No | `false` | Print diagnostics to the console (HTTP timings, SQL and args, WebSocket and pubsub events). With it off the SDK writes nothing to the console. |
 | `storage` | `StorageAdapter` | No | `MemoryStorage` | Token storage adapter for persisting auth state |
 | `fetch` | `typeof fetch` | No | `globalThis.fetch` | Custom fetch implementation |
 | `wsConfig` | `Partial<WSClientConfig>` | No | -- | WebSocket configuration for PubSub |
