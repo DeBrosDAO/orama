@@ -40,16 +40,27 @@ function base64EncodeBytes(bytes: Uint8Array): string {
   throw new Error("No base64 encoding method available");
 }
 
-function base64Decode(b64: string): string {
+/**
+ * Decode a base64 payload to the bytes that were published.
+ *
+ * The receive path used to go straight to a UTF-8 string, so a `Uint8Array`
+ * published through `publish` — which the README advertises and the publish
+ * path supports — came back through a lossy text decode and could not be
+ * recovered. Decoding to bytes is what the wire actually carries; the text view
+ * is derived from it.
+ */
+function base64DecodeBytes(b64: string): Uint8Array {
   if (typeof Buffer !== "undefined") {
-    return Buffer.from(b64, "base64").toString("utf-8");
-  } else if (typeof atob !== "undefined") {
+    const buf = Buffer.from(b64, "base64");
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+  if (typeof atob !== "undefined") {
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return new TextDecoder().decode(bytes);
+    return bytes;
   }
   throw new Error("No base64 decoding method available");
 }
@@ -258,12 +269,12 @@ export class Subscription {
           );
         }
 
-        // Decode base64 data
-        const messageData = base64Decode(envelope.data);
+        const bytes = base64DecodeBytes(envelope.data);
 
         const message: PubSubMessage = {
           topic: envelope.topic,
-          data: messageData,
+          bytes,
+          data: new TextDecoder().decode(bytes),
           timestamp: envelope.timestamp,
         };
 

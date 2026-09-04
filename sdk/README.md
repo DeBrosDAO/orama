@@ -9,7 +9,7 @@ A modern, isomorphic TypeScript SDK for the Orama Network gateway. Works seamles
 - **Pub/Sub Messaging**: WebSocket subscriptions with automatic reconnection
 - **Authentication**: API key and JWT support with automatic token management
 - **TypeScript First**: Full type safety and IntelliSense
-- **Error Handling**: Unified SDKError with HTTP status and code
+- **Error Handling**: `SDKError` with HTTP status and code, and `AuthError` / `ScopeError` / `NotFoundError` / `NetworkError` for the cases you handle differently
 
 ## Installation
 
@@ -144,7 +144,7 @@ The SDK provides a robust pub/sub client with:
 - **Multi-subscriber support**: Multiple connections can subscribe to the same topic
 - **Namespace isolation**: Topics are scoped to your authenticated namespace
 - **Server timestamps**: Messages preserve server-side timestamps
-- **Binary-safe**: Supports both string and binary (`Uint8Array`) payloads
+- **Binary-safe**: String and binary (`Uint8Array`) payloads in both directions — every message carries `bytes` alongside the text view
 - **Strict envelope validation**: Type-safe message parsing with error handling
 
 #### Publish a Message
@@ -158,13 +158,35 @@ const binaryData = new Uint8Array([1, 2, 3, 4]);
 await client.pubsub.publish("binary-topic", binaryData);
 ```
 
+#### Reconnection
+
+A connection that drops is re-established with exponential backoff and up to ten
+attempts, and the subscription resumes on the new socket. `onClose` fires only
+when the subscription is finished — the caller closed it, or the attempts ran
+out — so an application is not told a subscription has ended while it is being
+restored.
+
+```typescript
+const client = createClient({
+  baseURL,
+  apiKey,
+  wsConfig: {
+    // Defaults: enabled, 10 attempts, 500ms growing to 30s.
+    reconnect: { maxAttempts: 20, maxDelayMs: 10_000 },
+  },
+});
+```
+
+Set `reconnect: { enabled: false }` to handle it yourself.
+
 #### Subscribe to Topics
 
 ```typescript
 const subscription = await client.pubsub.subscribe("notifications", {
   onMessage: (msg) => {
     console.log("Topic:", msg.topic);
-    console.log("Data:", msg.data);
+    console.log("Data:", msg.data); // the payload decoded as UTF-8 text
+    console.log("Bytes:", msg.bytes); // the payload exactly as published
     console.log("Server timestamp:", new Date(msg.timestamp));
   },
   onError: (err) => {
@@ -626,7 +648,7 @@ console.log(apiKey.api_key);
 
 ## Error Handling
 
-The SDK throws `SDKError` for all errors:
+Every failure is an `SDKError`, so one `catch` covers the SDK:
 
 ```typescript
 import { SDKError } from "@debros/orama";
@@ -642,6 +664,79 @@ try {
   }
 }
 ```
+
+Four subclasses cover the cases an application usually handles differently.
+They all extend `SDKError`, so the `catch` above still catches them:
+
+| Class | When | Extra |
+|-------|------|-------|
+| `AuthError` | 401 — the credential is missing, expired, or not enough on its own | `requiredScope` when the gateway named a grant |
+| `ScopeError` | 403 — the credential is valid but its grants do not cover the operation | `requiredScope` |
+| `NotFoundError` | 404 | |
+| `NetworkError` | No HTTP response at all: DNS, connection refused, TLS, timeout, or a caller's abort. `httpStatus` is always 0 | `code` is `NETWORK_ERROR`, `TIMEOUT` or `ABORTED` |
+
+```typescript
+import { NetworkError, ScopeError } from "@debros/orama";
+
+try {
+  await client.storage.upload(file, file.name);
+} catch (error) {
+  if (error instanceof ScopeError) {
+    // e.g. "this key needs the storage grant"
+    console.log(`this key needs the ${error.requiredScope} grant`);
+  } else if (error instanceof NetworkError) {
+    // The gateway was never reached — retrying later may work.
+  }
+}
+```
+
+### API key grants
+
+A key carries a set of grants, and the gateway refuses an operation whose grant
+the key does not hold. The grants and the named profiles are exported so you can
+name them in code rather than in comments:
+
+```typescript
+import { SCOPES, PROFILE_SCOPES, satisfiesScope } from "@debros/orama";
+
+PROFILE_SCOPES["app-runtime"]; // ["invoke", "storage", "push", "webrtc", "proxy"]
+satisfiesScope(["admin"], "storage"); // true — admin is a wildcard
+```
+
+Mint a key with `orama namespace keys create --scope <profile|grant list>`.
+
+## Cancelling a request
+
+Every request method takes an `AbortSignal`, so work an application no longer
+needs can be stopped at the socket rather than left to arrive into nothing:
+
+```typescript
+const controller = new AbortController();
+const results = client.db.query("SELECT * FROM big_table", [], {
+  signal: controller.signal,
+});
+
+controller.abort(); // rejects with a NetworkError whose code is "ABORTED"
+```
+
+A cancelled request is never retried and is not reported through
+`onNetworkError`: pressing Cancel is not a network failure.
+
+## Sessions
+
+When a JWT expires the SDK renews it and replays the request once, so a 401 does
+not reach the application. Renewal needs a refresh token, which `auth.verify()`
+stores. Concurrent requests that all expire together share a single renewal.
+
+```typescript
+await client.auth.logout();                    // tell the gateway, clear everything
+await client.auth.logout({ keepApiKey: true }); // user signs out, app key stays
+await client.auth.logout({ server: false });    // clear local state only
+```
+
+`auth.whoami()` answers `{ authenticated: false }` for a rejected credential and
+throws for anything else, so a gateway that is down is not reported as a signed
+out user.
 
 ## Browser Usage
 

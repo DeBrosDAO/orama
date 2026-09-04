@@ -257,8 +257,14 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 				zap.String("path", r.URL.Path),
 				zap.String("required_scope", required),
 			)
-			writeError(w, http.StatusForbidden,
-				"insufficient scope: this credential lacks the '"+required+"' grant required for "+r.URL.Path)
+			// The grant goes in a field, not only in the prose. A client that
+			// has to regex the message to find out what it lacks cannot act on
+			// it; @debros/orama turns this into a ScopeError naming the grant.
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":          "insufficient scope: this credential lacks the '" + required + "' grant required for " + r.URL.Path,
+				"code":           "INSUFFICIENT_SCOPE",
+				"required_scope": required,
+			})
 			return
 		}
 		if requiresUserJWT(required) && !scopes.IsAdmin() && !hasWalletJWT(r) {
@@ -277,8 +283,11 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 				zap.String("path", r.URL.Path),
 				zap.String("required_scope", required),
 			)
-			writeError(w, http.StatusUnauthorized,
-				"user authentication required (JWT): the '"+required+"' operation requires a logged-in user; an API key alone is not sufficient")
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":          "user authentication required (JWT): the '" + required + "' operation requires a logged-in user; an API key alone is not sufficient",
+				"code":           "USER_JWT_REQUIRED",
+				"required_scope": required,
+			})
 			return
 		}
 		next.ServeHTTP(w, r)

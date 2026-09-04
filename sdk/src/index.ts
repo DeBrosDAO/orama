@@ -90,7 +90,23 @@ export { NetworkClient } from "./network/client";
 export { CacheClient } from "./cache/client";
 export { StorageClient } from "./storage/client";
 export { FunctionsClient } from "./functions/client";
-export { SDKError } from "./errors";
+export {
+  SDKError,
+  AuthError,
+  ScopeError,
+  NotFoundError,
+  NetworkError,
+} from "./errors";
+export { SCOPES, DATA_PLANE_SCOPES, KEY_PROFILES, PROFILE_SCOPES, isScope, satisfiesScope } from "./scopes";
+export type { Scope, KeyProfile } from "./scopes";
+export type { RequestOptions, TokenRefresher } from "./core/http";
+export type { LogoutOptions } from "./auth/client";
+export type {
+  WSClientConfig,
+  ReconnectConfig,
+  WSReconnectingHandler,
+  WSReconnectedHandler,
+} from "./core/ws";
 export { MemoryStorage, LocalStorageAdapter } from "./auth/types";
 export type { StorageAdapter, AuthConfig, WhoAmI } from "./auth/types";
 export type * from "./db/types";

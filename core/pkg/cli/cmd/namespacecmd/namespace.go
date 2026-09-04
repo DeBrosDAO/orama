@@ -1,8 +1,11 @@
 package namespacecmd
 
 import (
+	"strings"
+
 	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/DeBrosOfficial/network/pkg/cli/printer"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/spf13/cobra"
 )
 
@@ -125,7 +128,11 @@ func init() {
 	disableCmd.Flags().String("namespace", "", "Namespace name")
 	webrtcStatusCmd.Flags().String("namespace", "", "Namespace name")
 
-	keysCreateCmd.Flags().String("scope", "", "Profile (invoke-only|app-runtime|admin) or grant list")
+	// The grant list comes from the gateway rather than a hand-written string,
+	// which is how the help came to advertise grants the validator refused.
+	keysCreateCmd.Flags().String("scope", "",
+		"Profile (invoke-only|app-runtime|admin) or a comma-separated grant list ("+
+			strings.Join(auth.AllGrants(), ", ")+")")
 	keysCreateCmd.Flags().String("label", "", "Human label for the key")
 	keysCreateCmd.Flags().String("namespace", "", "Namespace name")
 	keysListCmd.Flags().String("namespace", "", "Namespace name")

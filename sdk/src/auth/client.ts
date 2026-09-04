@@ -1,6 +1,22 @@
 import { HttpClient } from "../core/http";
 import { Logger } from "../core/logger";
+import { AuthError, SDKError } from "../errors";
 import { WhoAmI, StorageAdapter, MemoryStorage } from "./types";
+
+/** What to clear, and whether to tell the gateway. */
+export interface LogoutOptions {
+  /**
+   * Keep the API key and make it the active credential again. Use this when
+   * the key is an application-level credential and only the signed-in user is
+   * leaving. Default: false.
+   */
+  keepApiKey?: boolean;
+  /**
+   * Ask the gateway to invalidate the session before clearing locally.
+   * Default: true. Set it to false to reset local state only.
+   */
+  server?: boolean;
+}
 
 export class AuthClient {
   private httpClient: HttpClient;
@@ -27,6 +43,16 @@ export class AuthClient {
     if (this.currentJwt) {
       this.httpClient.setJwt(this.currentJwt);
     }
+
+    // A 401 now renews the session and replays the request once. `refresh()`
+    // has existed since the first release with nothing calling it, so every
+    // application built its own refresh-and-retry loop around every call.
+    this.httpClient.setTokenRefresher(async () => {
+      if (!(await this.storage.get("refreshToken"))) {
+        return null;
+      }
+      return this.refresh();
+    });
   }
 
   setApiKey(apiKey: string) {
@@ -47,12 +73,23 @@ export class AuthClient {
     return this.httpClient.getToken();
   }
 
+  /**
+   * Ask the gateway who this client is authenticated as.
+   *
+   * A rejected credential is an answer: `{ authenticated: false }`. Anything
+   * else — an unreachable gateway, a 500, a timeout — is a failure and is
+   * thrown. This used to catch everything and report "not authenticated", so an
+   * application could not tell a bad API key from a gateway that was down, and
+   * a connectivity problem looked like a login problem.
+   */
   async whoami(): Promise<WhoAmI> {
     try {
-      const response = await this.httpClient.get<WhoAmI>("/v1/auth/whoami");
-      return response;
-    } catch {
-      return { authenticated: false };
+      return await this.httpClient.get<WhoAmI>("/v1/auth/whoami");
+    } catch (error) {
+      if (error instanceof AuthError || (error instanceof SDKError && error.httpStatus === 401)) {
+        return { authenticated: false };
+      }
+      throw error;
     }
   }
 
@@ -103,16 +140,29 @@ export class AuthClient {
   }
 
   /**
-   * Logout user and clear JWT, but preserve API key
-   * Use this for user logout in apps where API key is app-level credential
+   * End the session.
+   *
+   * There used to be three methods for this — `logout`, `logoutUser` and
+   * `clear` — differing in two independent ways that their names did not
+   * convey: whether the gateway is told, and whether the API key survives.
+   * Both are options now.
+   *
+   * @param options.keepApiKey Keep the API key and make it the active
+   * credential again. For a signed-in user leaving an application whose key is
+   * application-level.
+   * @param options.server Ask the gateway to invalidate the session first.
    */
-  async logoutUser(): Promise<void> {
-    // Attempt server-side logout if using JWT
-    if (this.currentJwt) {
+  async logout(options: LogoutOptions = {}): Promise<void> {
+    const { keepApiKey = false, server = true } = options;
+
+    // Only a JWT has a server-side session; an API key has nothing to end.
+    if (server && this.currentJwt) {
       try {
         await this.httpClient.post("/v1/auth/logout", { all: true });
       } catch (error) {
-        // Log warning but don't fail - local cleanup is more important
+        // Local cleanup matters more than the gateway's acknowledgement, so
+        // this is reported and not raised. Tracked separately: an application
+        // cannot currently tell that the server was not told.
         this.log.warn(
           "Server-side logout failed, continuing with local cleanup:",
           error
@@ -120,21 +170,27 @@ export class AuthClient {
       }
     }
 
-    // Clear JWT only, preserve API key
     this.currentJwt = undefined;
     this.httpClient.setJwt(undefined);
-    await this.storage.set("jwt", ""); // Clear JWT from storage
 
-    // Ensure API key is loaded and set as active auth method
+    if (!keepApiKey) {
+      this.currentApiKey = undefined;
+      this.httpClient.setApiKey(undefined);
+      await this.storage.clear();
+      return;
+    }
+
+    await this.storage.set("jwt", "");
+
+    // The key may only exist in storage, if this client was built from a
+    // stored session rather than from a config.
     if (!this.currentApiKey) {
-      // Try to load from storage
-      const storedApiKey = await this.storage.get("apiKey");
-      if (storedApiKey) {
-        this.currentApiKey = storedApiKey;
+      const stored = await this.storage.get("apiKey");
+      if (stored) {
+        this.currentApiKey = stored;
       }
     }
 
-    // Restore API key as the active auth method
     if (this.currentApiKey) {
       this.httpClient.setApiKey(this.currentApiKey);
       this.log.log("API key restored after user logout");
@@ -144,38 +200,19 @@ export class AuthClient {
   }
 
   /**
-   * Full logout - clears both JWT and API key
-   * Use this to completely reset authentication state
+   * @deprecated Use `logout({ keepApiKey: true })`.
    */
-  async logout(): Promise<void> {
-    // Only attempt server-side logout if using JWT
-    // API keys don't support server-side logout with all=true
-    if (this.currentJwt) {
-      try {
-        await this.httpClient.post("/v1/auth/logout", { all: true });
-      } catch (error) {
-        // Log warning but don't fail - local cleanup is more important
-        this.log.warn(
-          "Server-side logout failed, continuing with local cleanup:",
-          error
-        );
-      }
-    }
-
-    // Always clear local state
-    this.currentApiKey = undefined;
-    this.currentJwt = undefined;
-    this.httpClient.setApiKey(undefined);
-    this.httpClient.setJwt(undefined);
-    await this.storage.clear();
+  async logoutUser(): Promise<void> {
+    return this.logout({ keepApiKey: true });
   }
 
+  /**
+   * Reset local authentication state without telling the gateway.
+   *
+   * @deprecated Use `logout({ server: false })`.
+   */
   async clear(): Promise<void> {
-    this.currentApiKey = undefined;
-    this.currentJwt = undefined;
-    this.httpClient.setApiKey(undefined);
-    this.httpClient.setJwt(undefined);
-    await this.storage.clear();
+    return this.logout({ server: false });
   }
 
   /**

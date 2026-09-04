@@ -1,4 +1,4 @@
-import { SDKError } from "../errors";
+import { NetworkError, SDKError } from "../errors";
 import { Logger } from "./logger";
 
 /**
@@ -61,6 +61,64 @@ export interface HttpClientConfig {
 }
 
 /**
+ * Obtains a fresh access token. Returning null means the session cannot be
+ * renewed, and the original 401 is raised unchanged.
+ *
+ * `AuthClient` installs one on the client it is built with, so an expired JWT
+ * is renewed and the request retried once without the application seeing it.
+ */
+export type TokenRefresher = () => Promise<string | null>;
+
+/** Per-request options shared by every verb. */
+export interface RequestOptions {
+  headers?: Record<string, string>;
+  query?: Record<string, string | number | boolean>;
+  /** Per-request timeout override, in milliseconds. */
+  timeout?: number;
+  /**
+   * Caller's cancellation signal. When it fires the in-flight request is
+   * terminated at the socket and the promise rejects with a `NetworkError`
+   * whose code is "ABORTED" — never retried, and never reported through
+   * `onNetworkError`, because a user pressing Cancel is not a network failure.
+   */
+  signal?: AbortSignal;
+  /**
+   * Send this one request to a different origin, with the same credentials.
+   *
+   * For a service that lives behind its own gateway. Passing an absolute URL as
+   * the path does not work: the path is appended to the client's base URL, so
+   * an absolute one produced `http://localhost:10104https://…`.
+   */
+  baseURL?: string;
+}
+
+/**
+ * Longest a single retry will wait. A gateway that asks for an hour is asking
+ * for more patience than a request can reasonably hold.
+ */
+const MAX_RETRY_DELAY_MS = 30_000;
+
+/** Fraction of the computed delay added as random jitter. */
+const RETRY_JITTER_RATIO = 0.25;
+
+/**
+ * Parse a `Retry-After` header, which is either a number of seconds or an
+ * HTTP date. Returns undefined for anything else, including a date in the past.
+ */
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+
+  const seconds = Number(value.trim());
+  if (Number.isFinite(seconds)) {
+    return seconds > 0 ? seconds * 1000 : 0;
+  }
+
+  const when = Date.parse(value);
+  if (Number.isNaN(when)) return undefined;
+  return Math.max(0, when - Date.now());
+}
+
+/**
  * A one-line description of an rqlite request, for the debug log.
  *
  * Returns null for anything that is not an rqlite call, and for a body that
@@ -115,6 +173,9 @@ export class HttpClient {
   private apiKey?: string;
   private jwt?: string;
   private onNetworkError?: NetworkErrorCallback;
+  private refresher?: TokenRefresher;
+  /** In-flight renewal, so concurrent 401s renew once between them. */
+  private refreshing?: Promise<string | null>;
   private readonly rootLogger: Logger;
   private readonly log: Logger;
 
@@ -145,6 +206,18 @@ export class HttpClient {
    */
   setOnNetworkError(callback: NetworkErrorCallback | undefined): void {
     this.onNetworkError = callback;
+  }
+
+  /**
+   * Install the hook used to renew an expired session.
+   *
+   * Without it a 401 propagates to the application, which is why every
+   * application built on this SDK grew its own refresh-and-retry loop around
+   * every call: `AuthClient.refresh()` existed from the start and nothing ever
+   * called it.
+   */
+  setTokenRefresher(refresher: TokenRefresher | undefined): void {
+    this.refresher = refresher;
   }
 
   setApiKey(apiKey?: string) {
@@ -234,65 +307,40 @@ export class HttpClient {
    * In every network case httpStatus is 0 (no HTTP response was received), which
    * is how the app distinguishes "couldn't reach the gateway" from a real 4xx/5xx.
    */
-  private normalizeError(error: unknown, timeoutMs: number): SDKError {
+  private normalizeError(
+    error: unknown,
+    timeoutMs: number,
+    abortedByCaller = false
+  ): SDKError {
     if (error instanceof SDKError) {
       return error;
     }
     const name = (error as { name?: string })?.name;
     const message = error instanceof Error ? error.message : String(error);
+    if (abortedByCaller) {
+      return new NetworkError("request aborted by caller", "ABORTED", {
+        cause: "caller-abort",
+      });
+    }
     if (name === "AbortError") {
-      return new SDKError(
+      return new NetworkError(
         `request timed out after ${timeoutMs}ms`,
-        0,
         "TIMEOUT",
         { cause: name }
       );
     }
-    return new SDKError(
-      message || "network request failed",
-      0,
-      "NETWORK_ERROR",
-      { cause: name }
-    );
+    return new NetworkError(message || "network request failed", "NETWORK_ERROR", {
+      cause: name,
+    });
   }
 
   async request<T = any>(
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
-    options: {
-      body?: any;
-      headers?: Record<string, string>;
-      query?: Record<string, string | number | boolean>;
-      timeout?: number; // Per-request timeout override
-    } = {}
+    options: RequestOptions & { body?: any } = {}
   ): Promise<T> {
     const startTime = performance.now(); // Track request start time
-    const url = new URL(this.baseURL + path);
-    if (options.query) {
-      Object.entries(options.query).forEach(([key, value]) => {
-        url.searchParams.append(key, String(value));
-      });
-    }
-
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...this.getAuthHeaders(path),
-      ...options.headers,
-    };
-
-    const controller = new AbortController();
-    const requestTimeout = options.timeout ?? this.timeout; // Use override or default
-    const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
-
-    const fetchOptions: RequestInit = {
-      method,
-      headers,
-      signal: controller.signal,
-    };
-
-    if (options.body !== undefined) {
-      fetchOptions.body = JSON.stringify(options.body);
-    }
+    const requestTimeout = options.timeout ?? this.timeout;
 
     // Describing the query parses the request body, so only do it when there
     // is somewhere for the description to go.
@@ -301,12 +349,23 @@ export class HttpClient {
       : null;
 
     try {
-      const result = await this.requestWithRetry(
-        url.toString(),
-        fetchOptions,
-        0,
-        startTime
-      );
+      let result: T;
+      try {
+        result = await this.send<T>(method, path, options, startTime);
+      } catch (error) {
+        // An expired session is renewed once and the request replayed, so an
+        // application does not have to wrap every call in its own refresh loop.
+        if (!this.canRenewFor(path, error)) {
+          throw error;
+        }
+        const renewed = await this.renewSession();
+        if (!renewed) {
+          throw error;
+        }
+        this.log.log(`${method} ${path} retried after renewing the session`);
+        result = await this.send<T>(method, path, options, startTime);
+      }
+
       const duration = performance.now() - startTime;
       this.log.log(`${method} ${path} completed in ${duration.toFixed(2)}ms`);
       if (queryDetails) {
@@ -339,14 +398,13 @@ export class HttpClient {
         }
       }
 
-      // Normalize native errors (TypeError, AbortError) into a typed SDKError
-      // so the app gets a stable `.code`/`.httpStatus` instead of a bare
-      // platform "Network request failed" (bugboard #129).
-      const sdkError = this.normalizeError(error, requestTimeout);
-
-      // Call the network error callback if configured. This allows the app to
-      // trigger gateway failover.
-      if (this.onNetworkError) {
+      // A deliberate caller cancel is not a network failure and is not
+      // reported as one (bugboard #144): the application asked for it.
+      const sdkError =
+        error instanceof SDKError
+          ? error
+          : this.normalizeError(error, requestTimeout);
+      if (this.onNetworkError && sdkError.code !== "ABORTED") {
         this.onNetworkError(sdkError, {
           method,
           path,
@@ -356,9 +414,136 @@ export class HttpClient {
       }
 
       throw sdkError;
-    } finally {
-      clearTimeout(timeoutId);
     }
+  }
+
+  /**
+   * One attempt at a request, including its own retries for retryable
+   * statuses. Headers are built here rather than by the caller so a replay
+   * after a session renewal picks up the new token.
+   */
+  private async send<T>(
+    method: "GET" | "POST" | "PUT" | "DELETE",
+    path: string,
+    options: RequestOptions & { body?: any },
+    startTime: number
+  ): Promise<T> {
+    const origin = (options.baseURL ?? this.baseURL).replace(/\/$/, "");
+    const url = new URL(origin + path);
+    if (options.query) {
+      Object.entries(options.query).forEach(([key, value]) => {
+        url.searchParams.append(key, String(value));
+      });
+    }
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.getAuthHeaders(path),
+      ...options.headers,
+    };
+
+    // Fail before opening a connection the caller has already cancelled.
+    if (options.signal?.aborted) {
+      throw new NetworkError("request aborted by caller", "ABORTED", {
+        cause: "caller-abort",
+      });
+    }
+
+    const requestTimeout = options.timeout ?? this.timeout;
+    const cancel = this.linkAbort(options.signal, requestTimeout);
+
+    const fetchOptions: RequestInit = {
+      method,
+      headers,
+      signal: cancel.signal,
+    };
+
+    if (options.body !== undefined) {
+      fetchOptions.body = JSON.stringify(options.body);
+    }
+
+    try {
+      return await this.requestWithRetry(
+        url.toString(),
+        fetchOptions,
+        0,
+        startTime
+      );
+    } catch (error) {
+      throw this.normalizeError(error, requestTimeout, cancel.abortedByCaller());
+    } finally {
+      cancel.dispose();
+    }
+  }
+
+  /**
+   * Combine the caller's cancellation signal with this request's timeout into
+   * one signal, and remember which of the two fired: a timeout may be retried,
+   * a caller's cancel never is.
+   */
+  private linkAbort(signal: AbortSignal | undefined, timeoutMs: number) {
+    const controller = new AbortController();
+    let byCaller = false;
+
+    if (signal?.aborted) {
+      byCaller = true;
+      controller.abort();
+    }
+
+    const onCallerAbort = () => {
+      byCaller = true;
+      controller.abort();
+    };
+    signal?.addEventListener("abort", onCallerAbort, { once: true });
+
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    let timerCleared = false;
+    const clearTimer = () => {
+      if (!timerCleared) {
+        clearTimeout(timer);
+        timerCleared = true;
+      }
+    };
+
+    return {
+      signal: controller.signal,
+      abortedByCaller: () => byCaller,
+      /** Stop the deadline without detaching the caller's signal. */
+      clearTimer,
+      dispose: () => {
+        clearTimer();
+        signal?.removeEventListener("abort", onCallerAbort);
+      },
+    };
+  }
+
+  /** Whether a failure is an expired session this client can renew and replay. */
+  private canRenewFor(path: string, error: unknown): boolean {
+    if (!this.refresher) return false;
+    // Renewing the session by calling the endpoint that renews the session
+    // would recurse.
+    if (path.startsWith("/v1/auth/refresh")) return false;
+    return error instanceof SDKError && error.httpStatus === 401;
+  }
+
+  /**
+   * Renew the session, at most once at a time. Concurrent requests that all hit
+   * a 401 share one renewal instead of racing several against the gateway.
+   */
+  private async renewSession(): Promise<string | null> {
+    if (!this.refreshing) {
+      const refresher = this.refresher!;
+      this.refreshing = refresher()
+        .catch((error) => {
+          this.log.warn("session renewal failed:", error);
+          return null;
+        })
+        .finally(() => {
+          this.refreshing = undefined;
+        });
+    }
+    return this.refreshing;
   }
 
   private async requestWithRetry(
@@ -367,10 +552,13 @@ export class HttpClient {
     attempt: number = 0,
     startTime?: number // Track start time for timing across retries
   ): Promise<any> {
+    let retryAfterMs: number | undefined;
+
     try {
       const response = await this.fetch(url, options);
 
       if (!response.ok) {
+        retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
         let body: any;
         try {
           body = await response.json();
@@ -397,12 +585,11 @@ export class HttpClient {
 
       // Retry on same gateway for retryable HTTP errors
       if (isRetryableError && attempt < this.maxRetries && !aborted) {
+        const delay = this.retryDelay(attempt, retryAfterMs);
         this.log.warn(
-          `Retrying request (attempt ${attempt + 1}/${this.maxRetries})`
+          `Retrying request in ${delay}ms (attempt ${attempt + 1}/${this.maxRetries})`
         );
-        await new Promise((resolve) =>
-          setTimeout(resolve, this.retryDelayMs * (attempt + 1))
-        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
         return this.requestWithRetry(url, options, attempt + 1, startTime);
       }
 
@@ -411,17 +598,35 @@ export class HttpClient {
     }
   }
 
-  async get<T = any>(
-    path: string,
-    options?: Omit<Parameters<typeof this.request>[2], "body">
-  ): Promise<T> {
+  /**
+   * How long to wait before the next attempt.
+   *
+   * A `Retry-After` from the gateway wins: it is the server saying when it will
+   * be ready, and ignoring it — which this did — turns a rate limit into a
+   * burst of three more rejected requests.
+   *
+   * Otherwise the delay grows with the attempt and carries up to 25% jitter.
+   * Without jitter every client that failed against the same gateway at the
+   * same moment comes back at the same moment, which is how a recovering
+   * gateway is knocked over again.
+   */
+  private retryDelay(attempt: number, retryAfterMs?: number): number {
+    if (retryAfterMs !== undefined) {
+      return Math.min(retryAfterMs, MAX_RETRY_DELAY_MS);
+    }
+    const base = this.retryDelayMs * (attempt + 1);
+    const jitter = base * RETRY_JITTER_RATIO * Math.random();
+    return Math.min(Math.round(base + jitter), MAX_RETRY_DELAY_MS);
+  }
+
+  async get<T = any>(path: string, options?: RequestOptions): Promise<T> {
     return this.request<T>("GET", path, options);
   }
 
   async post<T = any>(
     path: string,
     body?: any,
-    options?: Omit<Parameters<typeof this.request>[2], "body">
+    options?: RequestOptions
   ): Promise<T> {
     return this.request<T>("POST", path, { ...options, body });
   }
@@ -429,15 +634,12 @@ export class HttpClient {
   async put<T = any>(
     path: string,
     body?: any,
-    options?: Omit<Parameters<typeof this.request>[2], "body">
+    options?: RequestOptions
   ): Promise<T> {
     return this.request<T>("PUT", path, { ...options, body });
   }
 
-  async delete<T = any>(
-    path: string,
-    options?: Omit<Parameters<typeof this.request>[2], "body">
-  ): Promise<T> {
+  async delete<T = any>(path: string, options?: RequestOptions): Promise<T> {
     return this.request<T>("DELETE", path, options);
   }
 
@@ -448,17 +650,7 @@ export class HttpClient {
   async uploadFile<T = any>(
     path: string,
     formData: FormData,
-    options?: {
-      timeout?: number;
-      /**
-       * Optional caller AbortSignal (bugboard #144). When it fires, the
-       * in-flight upload is terminated at the socket and the promise rejects
-       * with an SDKError whose code is "ABORTED" — distinct from an internal
-       * timeout ("TIMEOUT") — and it is never retried. Lets a UI Cancel button
-       * actually stop the bytes going out.
-       */
-      signal?: AbortSignal;
-    }
+    options?: Pick<RequestOptions, "timeout" | "signal">
   ): Promise<T> {
     const startTime = performance.now(); // Track upload start time
     const url = new URL(this.baseURL + path);
@@ -469,30 +661,19 @@ export class HttpClient {
 
     // Fail fast if the caller already aborted before we even start.
     if (options?.signal?.aborted) {
-      throw new SDKError("upload aborted by caller", 0, "ABORTED", {
+      throw new NetworkError("upload aborted by caller", "ABORTED", {
         cause: "caller-abort",
       });
     }
 
-    const controller = new AbortController();
     const requestTimeout = options?.timeout ?? this.timeout * 5; // 5x timeout for uploads
-    const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
-
-    // Forward a caller abort to the in-flight request (socket-level) and record
-    // that the cancel was caller-initiated so it is distinguishable from the
-    // internal timeout (which may retry; a caller abort must NOT).
-    let abortedByCaller = false;
-    const onCallerAbort = () => {
-      abortedByCaller = true;
-      controller.abort();
-    };
-    options?.signal?.addEventListener("abort", onCallerAbort, { once: true });
+    const cancel = this.linkAbort(options?.signal, requestTimeout);
 
     const fetchOptions: RequestInit = {
       method: "POST",
       headers,
       body: formData,
-      signal: controller.signal,
+      signal: cancel.signal,
     };
 
     try {
@@ -513,13 +694,13 @@ export class HttpClient {
       // A deliberate caller cancel is a distinct, non-retryable outcome — never
       // a timeout, and not surfaced through the network-error callback (it's not
       // a network failure, it's a user action).
-      if (abortedByCaller) {
+      if (cancel.abortedByCaller()) {
         this.log.log(
           `POST ${path} (upload) aborted by caller after ${duration.toFixed(
             2
           )}ms`
         );
-        throw new SDKError("upload aborted by caller", 0, "ABORTED", {
+        throw new NetworkError("upload aborted by caller", "ABORTED", {
           cause: "caller-abort",
         });
       }
@@ -529,7 +710,7 @@ export class HttpClient {
         error
       );
 
-      // Normalize an internal-timeout AbortError to a TIMEOUT SDKError; a real
+      // Normalize an internal-timeout AbortError to a TIMEOUT error; a real
       // HTTP SDKError passes through unchanged.
       const normalized = this.normalizeError(error, requestTimeout);
       if (this.onNetworkError) {
@@ -543,33 +724,43 @@ export class HttpClient {
 
       throw normalized;
     } finally {
-      clearTimeout(timeoutId);
-      options?.signal?.removeEventListener("abort", onCallerAbort);
+      cancel.dispose();
     }
   }
 
   /**
    * Get a binary response (returns Response object for streaming)
    */
-  async getBinary(path: string): Promise<Response> {
+  async getBinary(
+    path: string,
+    options?: Pick<RequestOptions, "timeout" | "signal">
+  ): Promise<Response> {
     const url = new URL(this.baseURL + path);
     const headers: Record<string, string> = {
       ...this.getAuthHeaders(path),
     };
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout * 5); // 5x timeout for downloads
+    const requestTimeout = options?.timeout ?? this.timeout * 5; // 5x timeout for downloads
+    const cancel = this.linkAbort(options?.signal, requestTimeout);
 
     const fetchOptions: RequestInit = {
       method: "GET",
       headers,
-      signal: controller.signal,
+      signal: cancel.signal,
     };
 
     try {
       const response = await this.fetch(url.toString(), fetchOptions);
+
+      // The timeout covers reaching the gateway, not draining the body. It
+      // used to be left armed on the success path, so a download still
+      // arriving was aborted mid-stream once it passed the deadline. The
+      // caller's own signal stays attached, so cancelling a download still
+      // works.
+      cancel.clearTimer();
+
       if (!response.ok) {
-        clearTimeout(timeoutId);
+        cancel.dispose();
         const errorBody = await response.json().catch(() => ({
           error: response.statusText,
         }));
@@ -577,27 +768,21 @@ export class HttpClient {
       }
       return response;
     } catch (error) {
-      clearTimeout(timeoutId);
-
-      // Call the network error callback if configured
-      if (this.onNetworkError) {
-        const sdkError =
-          error instanceof SDKError
-            ? error
-            : new SDKError(
-                error instanceof Error ? error.message : String(error),
-                0,
-                "NETWORK_ERROR"
-              );
-        this.onNetworkError(sdkError, {
+      cancel.dispose();
+      const normalized = this.normalizeError(
+        error,
+        requestTimeout,
+        cancel.abortedByCaller()
+      );
+      if (this.onNetworkError && normalized.code !== "ABORTED") {
+        this.onNetworkError(normalized, {
           method: "GET",
           path,
           isRetry: false,
           attempt: 0,
         });
       }
-
-      throw error;
+      throw normalized;
     }
   }
 
