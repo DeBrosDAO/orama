@@ -124,7 +124,9 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 ### Tenant isolation
 
 - **SQLite ATTACH:** tenant query connections register `sqlite3_tenant_noattach` with `SQLITE_LIMIT_ATTACHED=0`. `ATTACH`/`DETACH` and extra statements in one query are rejected before exec
-- **WASM `http_fetch` / `anyone_fetch`:** loopback, private, link-local, unspecified, and multicast destinations are rejected so tenant code cannot reach RQLite/agent/Olric on the host
+- **WASM `http_fetch` / `anyone_fetch`:** the destination is checked on the socket, in `net.Dialer.Control`, with the address the connection is about to be made to — once per attempt, for every address the resolver returned and for every hop of a redirect. Loopback, RFC 1918, link-local, unspecified, multicast, carrier-grade NAT, and the IPv6 forms that wrap an IPv4 address (`::ffff:`, NAT64, 6to4) are refused, so tenant code cannot reach rqlite, Olric, the node agent or another namespace's services
+- The check used to read the URL string, and it returned "allowed" for any host that was not an IP literal. `http://rqlite.internal/`, or any name the tenant controlled pointed at `10.0.0.5`, went straight through. A name is not an address: the resolver decides what it becomes, the answer can change between the check and the connection, and a redirect goes somewhere the first URL never named
+- What is still checked on the URL is what can be settled from the text: the scheme, the names that mean the machine itself (`localhost`, `*.localhost`, `metadata.google.internal`), and an IP literal that is already refusable — answered as a clear message rather than as a connection failure
 - **WASM memory:** wazero runtime `WithMemoryLimitPages` from `MaxMemoryLimitMB` (default 256 MB)
 - **WASM concurrency:** global semaphore plus a per-namespace slot so one tenant cannot fill the process
 - **Private function invoke:** HTTP `/v1/invoke` is unauthenticated at the middleware; `canInvokeFn` requires the `invoke` grant (or a SIWE wallet) for private functions. Storage-only API keys cannot invoke
@@ -210,6 +212,19 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - `deployments.environment` held plaintext JSON, and it is where the platform's own guide tells people to put their secrets, so every tenant's keys and passwords sat in a Raft-replicated table and in every backup of it. It is encrypted with AES-256-GCM under a key derived from the cluster secret. Rows written before this are read as plaintext and rewritten encrypted on the next change
 - `PORT`, `ENTRY_POINT` and the `ORAMA_*` names are set by the platform and refused from a tenant: a deployment that could set `ORAMA_GATEWAY_URL` could point itself at another namespace's gateway
 - `deployment_env_vars`, created with the comment "separate for security" and never written to, is dropped. It claimed environment variables were held somewhere deliberate while they were stored in the clear elsewhere
+
+**Function SQL (`db_query`, `db_execute`, and the batch forms)**
+- A function's SQL runs on the gateway's own database handle. On a namespace gateway that is the namespace's rqlite — which is both the tenant's application database and the database that authenticates the namespace, because the core migrations run there. `api_keys`, `namespace_ownership`, `refresh_tokens`, `nonces`, `operators`, `wireguard_peers` and `function_secrets` sit in the same schema as the tenant's own tables
+- So a function could `UPDATE api_keys SET scopes = 'admin'`, make any wallet the namespace's owner, or read every other function's secrets — from guest code, with no further credential
+- A statement that names one of those tables is refused, however the name is written: bare, `"quoted"`, `[bracketed]`, `` `backticked` ``, `'as a string literal'` (SQLite accepts one where a table name goes), schema-qualified, or hidden behind a comment. `ATTACH`, `DETACH`, `PRAGMA` and `VACUUM` are refused outright, and one host call runs one statement
+- The refused list is what grants authority, holds a credential, or configures the platform — not every table the core migrations create. Several of those have generic names a tenant may already be using as their own; a namespace database has exactly one table called `apps`, and it belongs to whoever wrote to it first. A test fails when a migration adds a table that nobody has put on one side or the other
+- **This is a filter, and it is not the fix.** A view or trigger created before the filter existed can still reach a protected table when queried by its own name, because the statement doing the querying never names it. The fix is that platform state should not live in a database a tenant's SQL can name at all; the filter closes the direct path while that is built
+
+**Function invocation**
+- A cron row firing, a pubsub trigger matching or the JWT claims provider running has no per-invocation caller, so it skips the caller check. What says so is an explicit flag the gateway's own dispatchers set. It used to be inferred from the trigger type, and a nested `function_invoke` from a system-triggered parent was given a trigger type that counted as system — so a value meaning "skip authorization" travelled with the work as an ordinary field
+- A persistent-WebSocket upgrade makes the same authorization decision as every other path. It used to check only that an internal function had an admin caller, so a merely private function was reachable over a persistent socket by a caller with no wallet and no invoke grant, while the identical function over HTTP refused them
+- A nested call carries the caller's invoke grant. It did not, so a caller who could run a function directly was refused by that same function's own nested call
+- `Invoker.InvokeByID` and the exported `Invoker.CanInvoke` are gone. The first ran a function with no authorization at all; the second re-read the function from the registry and then passed the invoke grant as a hardcoded `true`. Neither had a caller outside its own tests
 
 ### Supply Chain
 

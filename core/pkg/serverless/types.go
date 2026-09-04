@@ -316,10 +316,21 @@ type InvocationContext struct {
 	// CallerIsAdmin marks the caller as holding the admin (control-plane)
 	// grant (bugboard #152). Propagated into child WASM→WASM invocations so
 	// an internal→internal call works while external→internal stays blocked.
-	CallerIsAdmin bool              `json:"caller_is_admin,omitempty"`
-	TriggerType   TriggerType       `json:"trigger_type"`
-	WSClientID    string            `json:"ws_client_id,omitempty"`
-	EnvVars       map[string]string `json:"env_vars,omitempty"`
+	CallerIsAdmin bool `json:"caller_is_admin,omitempty"`
+	// CallerHasInvoke mirrors InvokeRequest.CallerHasInvoke so a nested
+	// function_invoke can pass on the grant the caller actually holds. It was
+	// not carried, so a caller with the invoke grant but no admin bit reached
+	// a private function directly and was refused by the same function's own
+	// nested call.
+	CallerHasInvoke bool `json:"caller_has_invoke,omitempty"`
+	// SystemOriginated marks an invocation the gateway itself started; see
+	// InvokeRequest.SystemOriginated. A nested call made from inside such an
+	// invocation carries it on, so the chain keeps the authority the trigger
+	// had without the trigger type having to stand in for it.
+	SystemOriginated bool              `json:"-"`
+	TriggerType      TriggerType       `json:"trigger_type"`
+	WSClientID       string            `json:"ws_client_id,omitempty"`
+	EnvVars          map[string]string `json:"env_vars,omitempty"`
 	// CallerClaims holds custom JWT claims set on the caller's token (beyond
 	// the standard sub/namespace fields). Read via host fn `get_caller_claim`.
 	// Populated by auth handlers from JWTClaims.Custom; empty for non-JWT auth.

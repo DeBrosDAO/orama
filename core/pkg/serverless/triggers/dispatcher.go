@@ -561,6 +561,8 @@ func (d *PubSubDispatcher) bufferEvent(match TriggerMatch, event PubSubEvent) {
 				Input:        payload,
 				TriggerType:  serverless.TriggerTypePubSub,
 				TriggerDepth: event.TriggerDepth, // event was built with depth+1 by the caller
+				// A registered trigger matching is the gateway's own work.
+				SystemOriginated: true,
 			}
 			if _, err := d.invoker.Invoke(ctx, req); err != nil {
 				d.logger.Warn("Aggregated PubSub invocation failed",
@@ -690,6 +692,8 @@ func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte, 
 		Input:        eventJSON,
 		TriggerType:  serverless.TriggerTypePubSub,
 		TriggerDepth: handlerDepth,
+		// A registered trigger matching is the gateway's own work.
+		SystemOriginated: true,
 	}
 
 	resp, err := d.invoker.Invoke(ctx, req)

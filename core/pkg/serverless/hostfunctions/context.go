@@ -79,36 +79,22 @@ func (h *HostFunctions) SetTriggerDispatcher(d *triggers.PubSubDispatcher) {
 	h.triggerDispatcher = d
 }
 
-// nestedTriggerType decides the trigger type for a function_invoke made from
-// inside another function, given the PARENT invocation's trigger type.
+// A function_invoke is an internal call, and it says so. The trigger type used
+// to decide the callee's authorization: a system-triggered parent produced a
+// type that the invoker counted as "system", so the nested call skipped the
+// caller check, and an externally-triggered parent produced a type that did
+// not. That made a label the invoker read as authority, on a request built
+// inside a running function.
 //
-// Bugboard #159: this used to be hardcoded to TriggerTypeWebSocket, which made
-// every nested call re-enter the authorization gate as an ordinary external
-// caller. For a system-triggered parent (cron, pubsub, db-watcher, timer, job)
-// there is no caller identity by design — CallerWallet is "" and CallerIsAdmin
-// is false — so canInvokeFn("", false) rejected the nested call and any
-// `public: false` callee was unreachable from a cron. AnChat's cron-driven
-// payment reconciler reported SUCCESS on ~25 consecutive runs while settling
-// zero payments, because the settlement function it invoked was non-public.
+// The authority now travels as InvokeRequest.SystemOriginated, copied from the
+// parent's own invocation context, which only a gateway-internal dispatcher can
+// have set. The type is free to describe the call honestly.
 //
-// A system-originated parent therefore propagates as TriggerTypeInternal, which
-// isSystemTrigger already recognises: the gateway is the trusted invoker and the
-// auth boundary for a system trigger is at REGISTRATION time, not at fire time.
 // The call stays inside the parent's own namespace (the caller sets Namespace
 // from the parent context). NOTE: TriggerDepth does NOT bound function_invoke
 // chains — it is only incremented on the pubsub dispatch path — so a
 // function_invoke cycle is bounded by the parent's context deadline and the
 // executor's concurrency limit, not by maxTriggerDepth.
-//
-// An externally-triggered parent (HTTP/WebSocket) is unchanged: it keeps the
-// WebSocket type and is still gated, so external→internal stays blocked
-// (bugboard #152).
-func nestedTriggerType(parent serverless.TriggerType) serverless.TriggerType {
-	if serverless.IsSystemTrigger(parent) {
-		return serverless.TriggerTypeInternal
-	}
-	return serverless.TriggerTypeWebSocket
-}
 
 // FunctionInvoke synchronously runs another function in the same namespace
 // and returns its output bytes. Caller wallet, JWT claims, and WS client
@@ -142,12 +128,18 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 		Namespace:    cur.Namespace,
 		FunctionName: name,
 		Input:        payload,
-		TriggerType:  nestedTriggerType(cur.TriggerType),
+		TriggerType:  serverless.TriggerTypeInternal,
 		CallerWallet: cur.CallerWallet,
 		// Inherit the parent's admin bit so an internal→internal call works
 		// while external→internal stays blocked (bugboard #152). When the
 		// parent context never carried admin (external caller), this is false.
-		CallerIsAdmin:    cur.CallerIsAdmin,
+		CallerIsAdmin: cur.CallerIsAdmin,
+		// And the invoke grant, so a caller who may run this function directly
+		// is not refused by the same function's own nested call.
+		CallerHasInvoke: cur.CallerHasInvoke,
+		// A gateway-started invocation stays gateway-started down the chain.
+		// A caller-started one never becomes gateway-started.
+		SystemOriginated: cur.SystemOriginated,
 		CallerIP:         cur.CallerIP,
 		WSClientID:       cur.WSClientID,
 		CallerClaims:     cur.CallerClaims,
@@ -242,11 +234,13 @@ func (h *HostFunctions) FunctionInvokeAsync(ctx context.Context, name string, pa
 			Namespace:    snapshot.Namespace,
 			FunctionName: name,
 			Input:        payloadCopy,
-			TriggerType:  nestedTriggerType(snapshot.TriggerType),
+			TriggerType:  serverless.TriggerTypeInternal,
 			CallerWallet: snapshot.CallerWallet,
 			// Inherit the parent's admin bit (bugboard #152): internal→internal
 			// async calls work; external→internal stay blocked.
 			CallerIsAdmin:    snapshot.CallerIsAdmin,
+			CallerHasInvoke:  snapshot.CallerHasInvoke,
+			SystemOriginated: snapshot.SystemOriginated,
 			CallerIP:         snapshot.CallerIP,
 			WSClientID:       snapshot.WSClientID,
 			CallerClaims:     snapshot.CallerClaims,

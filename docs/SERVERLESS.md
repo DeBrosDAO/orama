@@ -309,7 +309,7 @@ if !res.Committed {
 
 | Function | Description |
 |----------|-------------|
-| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. Loopback, private, link-local, unspecified, and multicast destinations are rejected (same for `anyone_fetch`). |
+| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. The destination is checked on the socket, so a hostname that resolves to an internal address and a redirect to one are both refused, not just an internal address written literally in the URL (same for `anyone_fetch`). |
 
 ### Storage (IPFS)
 
@@ -446,7 +446,9 @@ exact config to set.
 
 ## Managing Secrets
 
-Secrets are encrypted at rest (AES-256-GCM) and scoped to your namespace. Functions read them via `get_secret("name")` at runtime.
+Secrets are encrypted at rest (AES-256-GCM) and stored in your namespace's own database. Functions read them via `get_secret("name")` at runtime.
+
+The encryption key is derived from the cluster secret and is the same across the cluster, so what separates one namespace's secrets from another's is the database they are in, not a key only that namespace holds. A function cannot read them with SQL either: `function_secrets` is one of the tables a function's own SQL may not name.
 
 ### CLI Commands
 
@@ -471,7 +473,7 @@ orama function secrets delete APNS_KEY_ID --force
 
 1. **You set secrets** via the CLI → encrypted and stored in the database
 2. **Functions read secrets** at runtime via `get_secret("name")` → decrypted on demand
-3. **Namespace isolation** → each namespace has its own secret store; functions in namespace A cannot read secrets from namespace B
+3. **Namespace separation** → a namespace's secrets are stored in that namespace's own database, so a function in namespace A has no route to namespace B's. What this is not is a separate key per namespace: the encryption key is derived once from the cluster secret and is the same across the cluster, so the separation is the database boundary, not cryptography. Anything holding the cluster secret can read any namespace's secrets
 
 ## PubSub Triggers
 

@@ -177,6 +177,9 @@ func (s *CronScheduler) dispatch(ctx context.Context, row CronDueRow, now time.T
 		FunctionName: row.FunctionName,
 		Input:        []byte(`{"trigger":"cron"}`),
 		TriggerType:  serverless.TriggerTypeCron,
+		// The gateway is firing a row an authenticated operator registered.
+		// There is no per-fire caller to authorize.
+		SystemOriginated: true,
 	}
 	resp, invErr := s.invoker.Invoke(ctx, req)
 	status := "ok"
