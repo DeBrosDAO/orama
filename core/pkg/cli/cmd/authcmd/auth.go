@@ -13,25 +13,19 @@ var Cmd = &cobra.Command{
 Supports RootWallet (EVM) and Phantom (Solana) authentication methods.`,
 }
 
-var (
-	loginWallet    string
-	loginNamespace string
-	loginSimple    bool
-)
+var loginNamespace string
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate with wallet",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return cli.AuthLogin(loginWallet, loginNamespace, loginSimple)
+		return cli.AuthLogin(loginNamespace)
 	},
 }
 
 func init() {
 	f := loginCmd.Flags()
-	f.StringVar(&loginWallet, "wallet", "", "Wallet address (implies --simple)")
 	f.StringVar(&loginNamespace, "namespace", "", "Namespace name")
-	f.BoolVar(&loginSimple, "simple", false, "Use simple auth without signature verification")
 }
 
 var logoutCmd = &cobra.Command{

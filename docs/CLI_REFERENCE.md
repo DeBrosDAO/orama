@@ -304,8 +304,6 @@ orama auth login [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--namespace` | — | Namespace name |
-| `--simple` | `false` | Use simple auth without signature verification |
-| `--wallet` | — | Wallet address (implies --simple) |
 
 ### orama auth logout
 

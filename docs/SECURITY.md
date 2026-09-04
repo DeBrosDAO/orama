@@ -48,6 +48,10 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - The pre-join cleanup deletes only rows the refusal check exempted: residue of the caller's own unfinished joins, never a live node's row. `public_ip` is caller-supplied and unverified against the source address, so an unscoped delete here is a node-eviction primitive
 - A uniqueness conflict returns 409 and keeps the token spent; only a cluster fault releases it. Releasing on a caller-triggerable failure makes a single-use token replayable
 
+**`/v1/auth/simple-key` was removed**
+- It required that *some* API key was present, then took the wallet and the namespace from the request body with no cross-check against the authenticated key, and minted a key for that namespace. A runtime key scraped from a browser bundle minted an admin key for anyone's namespace. It had no scope entry and no ownership entry either
+- Its only first-party caller was `orama auth login --simple`, a convenience for re-authenticating when credentials already existed. That flag is gone; `orama auth switch` picks a stored credential without a server call, which is what the convenience was for
+
 **Namespace ownership (`/v1/auth/verify`, `/v1/auth/api-key`)**
 - A namespace has at most one wallet owner, enforced by a partial unique index rather than by a check the code remembers to make. The first wallet to sign in to a namespace nobody owns becomes its owner; every later wallet is refused with `403` and the code `NAMESPACE_NOT_OWNED`, before a JWT, a refresh-token row, an API key or cluster provisioning exists
 - Ownership used to be written as a side effect of minting a key, unconditionally. Any wallet that signed a fresh nonce and named an existing namespace in the request body became an admin co-owner of it: the row satisfied the namespace gate, the gate marked the caller a confirmed owner, and a confirmed owner's wallet JWT carries admin

@@ -11,7 +11,7 @@ import (
 )
 
 // AuthLogin authenticates with a wallet and stores the credential.
-func AuthLogin(wallet, namespace string, simple bool) error {
+func AuthLogin(namespace string) error {
 	gatewayURL, err := getGatewayURL()
 	if err != nil {
 		return err
@@ -69,34 +69,25 @@ func AuthLogin(wallet, namespace string, simple bool) error {
 	var creds *auth.Credentials
 	reader := bufio.NewReader(os.Stdin)
 
-	if simple || wallet != "" {
-		// Explicit simple auth — requires existing credentials
-		existingCreds := store.GetDefaultCredential(gatewayURL)
-		if existingCreds == nil || !existingCreds.IsValid() {
-			return clierr.Auth("simple auth requires existing credentials; authenticate with RootWallet first")
-		}
-		creds, err = auth.PerformSimpleAuthentication(gatewayURL, wallet, namespace, existingCreds.APIKey)
-	} else {
-		// Show auth method selection
-		fmt.Println("How would you like to authenticate?")
-		fmt.Println("  1. RootWallet (EVM signature)")
-		fmt.Println("  2. Phantom (Solana + NFT required)")
-		fmt.Print("\nSelect [1/2]: ")
+	// Show auth method selection
+	fmt.Println("How would you like to authenticate?")
+	fmt.Println("  1. RootWallet (EVM signature)")
+	fmt.Println("  2. Phantom (Solana + NFT required)")
+	fmt.Print("\nSelect [1/2]: ")
 
-		choice, _ := reader.ReadString('\n')
-		choice = strings.TrimSpace(choice)
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
 
-		switch choice {
-		case "2":
-			creds, err = auth.PerformPhantomAuthentication(gatewayURL, namespace)
-		default:
-			// Default to RootWallet
-			if auth.IsRootWalletInstalled() {
-				creds, err = auth.PerformRootWalletAuthentication(gatewayURL, namespace)
-			} else {
-				return clierr.Usage("RootWallet CLI (rw) not found in PATH\n" +
-					"  Install it: cd rootwallet/cli && ./install.sh")
-			}
+	switch choice {
+	case "2":
+		creds, err = auth.PerformPhantomAuthentication(gatewayURL, namespace)
+	default:
+		// Default to RootWallet
+		if auth.IsRootWalletInstalled() {
+			creds, err = auth.PerformRootWalletAuthentication(gatewayURL, namespace)
+		} else {
+			return clierr.Usage("RootWallet CLI (rw) not found in PATH\n" +
+				"  Install it: cd rootwallet/cli && ./install.sh")
 		}
 	}
 

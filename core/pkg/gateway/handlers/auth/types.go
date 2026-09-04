@@ -26,12 +26,6 @@ type APIKeyRequest struct {
 	Plan      string `json:"plan"`
 }
 
-// SimpleAPIKeyRequest is the request body for simple API key generation (no signature)
-type SimpleAPIKeyRequest struct {
-	Wallet    string `json:"wallet"`
-	Namespace string `json:"namespace"`
-}
-
 // RefreshRequest is the request body for token refresh
 type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
