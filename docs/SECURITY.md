@@ -195,6 +195,22 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Units that do not need cluster secrets set `InaccessiblePaths=…/secrets`; the gateway and node keep `ReadOnlyPaths` on `secrets/`
 - Applied to both template files (`pkg/environments/templates/`) and hardcoded unit generators (`pkg/environments/production/services.go`) plus `core/systemd/orama-namespace-*@.service`
 
+**Tenant deployments**
+- A deployment is a tenant's own code, uploaded through the API and run on a node that also runs the cluster's control plane. Its unit had none of the hardening above: no `User=`, so it ran as root, and only `PrivateTmp`
+- Each deployment now runs under `DynamicUser=yes` — systemd allocates a user for the unit and reclaims it when the unit stops, so no two deployments share an identity and none of them is root — plus the block above, `RestrictSUIDSGID`, `RestrictRealtime`, `LockPersonality`, `RemoveIPC` and `ProtectControlGroups`
+- `IPAddressDeny` keeps tenant code off the private ranges. The WireGuard overlay on `10.0.0.0/8` carries rqlite, Olric and every other namespace's services, and the deployment sits on the same host; loopback stays allowed because that is how the node's own reverse proxy reaches the app
+- The app's own directory is read-only. `StateDirectory` and `CacheDirectory` give it somewhere to write, exported as `ORAMA_STATE_DIR` and `ORAMA_CACHE_DIR`
+- `MemoryMax`, `CPUQuota` and `TasksMax` come from the deployment's recorded limits, with the platform defaults when it has none. `MemoryMax=0M` is never written for a deployment that simply has no limit recorded
+
+**Deployment environment variables**
+- The values are the tenant's and were interpolated into the unit as `Environment="{{.}}"`, unescaped. A value carrying a double quote and a newline closed the assignment and wrote whatever unit directives it liked, into a unit that ran as root
+- They are written to an `EnvironmentFile` instead, mode `0600` in a `0700` directory, outside the deployment's own world-readable directory. systemd reads it as PID 1 before dropping privileges, so the deployment's own user never sees the file. It is deleted when the deployment stops
+- The encoding is read off systemd's parser (`src/basic/env-file.c`): the value is double-quoted and exactly the four characters systemd unescapes inside double quotes — `"`, `\`, `` ` ``, `$` — are escaped. Every other byte, newlines and spaces included, is literal. The encoder is tested against a transcription of that parser, not against its own rules
+- A value must be valid UTF-8 and free of NUL, because systemd discards an assignment that is not and the variable would simply be missing at runtime. One value is capped at 64 KiB: every value is replicated to every node
+- `deployments.environment` held plaintext JSON, and it is where the platform's own guide tells people to put their secrets, so every tenant's keys and passwords sat in a Raft-replicated table and in every backup of it. It is encrypted with AES-256-GCM under a key derived from the cluster secret. Rows written before this are read as plaintext and rewritten encrypted on the next change
+- `PORT`, `ENTRY_POINT` and the `ORAMA_*` names are set by the platform and refused from a tenant: a deployment that could set `ORAMA_GATEWAY_URL` could point itself at another namespace's gateway
+- `deployment_env_vars`, created with the comment "separate for security" and never written to, is dropped. It claimed environment variables were held somewhere deliberate while they were stored in the clear elsewhere
+
 ### Supply Chain
 
 **Binary Signing (Step 1.13)**

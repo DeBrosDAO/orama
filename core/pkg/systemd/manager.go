@@ -137,9 +137,15 @@ func (m *Manager) serviceName(namespace string, serviceType ServiceType) string 
 	return NamespaceUnit(serviceType, namespace) + ".service"
 }
 
-// systemctl builds an exec.Command for systemctl, prepending sudo when
-// the current process is not running as root.
-func systemctl(args ...string) *exec.Cmd {
+// Systemctl builds an exec.Command for systemctl, prepending sudo when the
+// current process is not running as root.
+//
+// Everything on a node that drives systemd goes through this. The deployment
+// runner had its own copy that called systemctl directly, which works only
+// while the process is root — which it is today, and which the hardened
+// gateway unit ends. Going through here is what reaches the sudoers rule that
+// grants the orama user systemctl over orama-deploy-* units.
+func Systemctl(args ...string) *exec.Cmd {
 	if os.Getuid() == 0 {
 		return exec.Command("systemctl", args...)
 	}
@@ -153,7 +159,7 @@ func (m *Manager) StartTimer(namespace string, serviceType ServiceType) error {
 		zap.String("timer", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := systemctl("start", svcName)
+	cmd := Systemctl("start", svcName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		m.logger.Error("Failed to start timer",
@@ -172,7 +178,7 @@ func (m *Manager) StartService(namespace string, serviceType ServiceType) error 
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := systemctl("start", svcName)
+	cmd := Systemctl("start", svcName)
 	m.logger.Debug("Executing systemctl command",
 		zap.String("cmd", cmd.String()),
 		zap.Strings("args", cmd.Args))
@@ -200,7 +206,7 @@ func (m *Manager) StopService(namespace string, serviceType ServiceType) error {
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := systemctl("stop", svcName)
+	cmd := Systemctl("stop", svcName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// Don't error if service is already stopped or doesn't exist
 		if strings.Contains(string(output), "not loaded") || strings.Contains(string(output), "inactive") {
@@ -221,7 +227,7 @@ func (m *Manager) RestartService(namespace string, serviceType ServiceType) erro
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := systemctl("restart", svcName)
+	cmd := Systemctl("restart", svcName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to restart %s: %w; output: %s", svcName, err, string(output))
 	}
@@ -237,7 +243,7 @@ func (m *Manager) EnableService(namespace string, serviceType ServiceType) error
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := systemctl("enable", svcName)
+	cmd := Systemctl("enable", svcName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to enable %s: %w; output: %s", svcName, err, string(output))
 	}
@@ -253,7 +259,7 @@ func (m *Manager) DisableService(namespace string, serviceType ServiceType) erro
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := systemctl("disable", svcName)
+	cmd := Systemctl("disable", svcName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// Don't error if service is already disabled or doesn't exist
 		if strings.Contains(string(output), "not loaded") {
@@ -310,7 +316,7 @@ func (m *Manager) IsServiceActive(namespace string, serviceType ServiceType) (bo
 // ReloadDaemon reloads systemd daemon configuration
 func (m *Manager) ReloadDaemon() error {
 	m.logger.Info("Reloading systemd daemon")
-	cmd := systemctl("daemon-reload")
+	cmd := Systemctl("daemon-reload")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to reload systemd daemon: %w; output: %s", err, string(output))
 	}
@@ -413,7 +419,7 @@ func (m *Manager) StopAllNamespaceServicesGlobally() error {
 
 	for _, svc := range services {
 		m.logger.Info("Stopping service", zap.String("service", svc))
-		cmd := systemctl("stop", svc)
+		cmd := Systemctl("stop", svc)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			m.logger.Warn("Failed to stop service",
 				zap.String("service", svc),
@@ -461,7 +467,7 @@ func (m *Manager) StopDeploymentServicesForNamespace(namespace string) {
 		svc := fields[0]
 
 		// Stop the service
-		if stopOut, stopErr := systemctl("stop", svc).CombinedOutput(); stopErr != nil {
+		if stopOut, stopErr := Systemctl("stop", svc).CombinedOutput(); stopErr != nil {
 			m.logger.Warn("Failed to stop deployment service",
 				zap.String("service", svc),
 				zap.Error(stopErr),
@@ -469,7 +475,7 @@ func (m *Manager) StopDeploymentServicesForNamespace(namespace string) {
 		}
 
 		// Disable the service
-		if disOut, disErr := systemctl("disable", svc).CombinedOutput(); disErr != nil {
+		if disOut, disErr := Systemctl("disable", svc).CombinedOutput(); disErr != nil {
 			m.logger.Warn("Failed to disable deployment service",
 				zap.String("service", svc),
 				zap.Error(disErr),
@@ -610,11 +616,11 @@ const HostTURNServiceName = "orama-turn.service"
 // every boot. Idempotent, so it is safe on every start.
 func (m *Manager) StartHostTURN() error {
 	m.logger.Info("Starting shared TURN service", zap.String("service", HostTURNServiceName))
-	if output, err := systemctl("enable", HostTURNServiceName).CombinedOutput(); err != nil {
+	if output, err := Systemctl("enable", HostTURNServiceName).CombinedOutput(); err != nil {
 		m.logger.Warn("Failed to enable shared TURN service; it will not start on boot",
 			zap.String("service", HostTURNServiceName), zap.String("output", string(output)), zap.Error(err))
 	}
-	output, err := systemctl("start", HostTURNServiceName).CombinedOutput()
+	output, err := Systemctl("start", HostTURNServiceName).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to start %s: %w; output: %s", HostTURNServiceName, err, string(output))
 	}
@@ -625,7 +631,7 @@ func (m *Manager) StartHostTURN() error {
 // unit is not an error — this runs on every node, including ones that hold no
 // TURN allocation at all.
 func (m *Manager) StopHostTURN() error {
-	output, err := systemctl("stop", HostTURNServiceName).CombinedOutput()
+	output, err := Systemctl("stop", HostTURNServiceName).CombinedOutput()
 	if err != nil {
 		if strings.Contains(string(output), "not loaded") || strings.Contains(string(output), "inactive") {
 			return nil
@@ -638,7 +644,7 @@ func (m *Manager) StopHostTURN() error {
 
 // IsHostTURNActive reports whether the shared TURN unit is running.
 func (m *Manager) IsHostTURNActive() (bool, error) {
-	// Deliberately NOT the sudo-aware systemctl() helper: `is-active` is a query
+	// Deliberately NOT the sudo-aware Systemctl() helper: `is-active` is a query
 	// that needs no privilege, and the sudoers drop-in grants only
 	// start/stop/restart/enable for this unit — routing it through sudo makes it
 	// fail always, which reads as "TURN is down" and silently disables the whole

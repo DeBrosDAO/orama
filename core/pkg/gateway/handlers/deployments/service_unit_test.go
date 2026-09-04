@@ -7,6 +7,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// testEnvCodec is the environment codec these tests use. The service refuses
+// to build without one, because a deployment environment is where the tenant's
+// secrets are.
+func testEnvCodec() *deployments.EnvCodec {
+	codec, err := deployments.NewEnvCodec("test-cluster-secret")
+	if err != nil {
+		panic(err)
+	}
+	return codec
+}
+
 // newTestService creates a DeploymentService with a no-op rqlite mock and the
 // given base domain. Only pure/in-memory methods are exercised by these tests,
 // so the DB mock never needs to return real data.
@@ -18,6 +29,7 @@ func newTestService(baseDomain string) *DeploymentService {
 		nil,                 // replicaManager  — unused by tested methods
 		zap.NewNop(),        // silent logger
 		baseDomain,
+		testEnvCodec(),
 	)
 }
 

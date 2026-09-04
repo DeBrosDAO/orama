@@ -634,22 +634,38 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.operatorHandler = operatorhandlers.NewHandler(logger.Logger, deps.ORMClient)
 	}
 
-	// Initialize deployment system
-	if deps.ORMClient != nil && deps.IPFSClient != nil {
+	// Initialize deployment system.
+	//
+	// A deployment's environment is where the platform tells people to put
+	// their secrets, and it is encrypted with a key derived from the cluster
+	// secret. Without that secret there is no key, so the deployment system
+	// does not start rather than storing every tenant's credentials in the
+	// clear in a Raft-replicated table.
+	envCodec, envCodecErr := deployments.NewEnvCodec(cfg.ClusterSecret)
+	if envCodecErr != nil {
+		logger.Logger.Error("deployments are unavailable on this gateway: without a cluster secret "+
+			"there is no key to encrypt deployment environments with",
+			zap.Error(envCodecErr))
+	}
+	if deps.ORMClient != nil && deps.IPFSClient != nil && envCodec != nil {
 		// Convert rqlite.Client to database.Database interface for health checker
 		dbAdapter := &deploymentDatabaseAdapter{client: deps.ORMClient}
-
-		// Create deployment service components
-		gw.portAllocator = deployments.NewPortAllocator(deps.ORMClient, logger.Logger)
-		gw.homeNodeManager = deployments.NewHomeNodeManager(deps.ORMClient, gw.portAllocator, logger.Logger)
-		gw.replicaManager = deployments.NewReplicaManager(deps.ORMClient, gw.homeNodeManager, gw.portAllocator, logger.Logger)
-		gw.processManager = process.NewManager(logger.Logger)
 
 		// Create deployment service
 		baseDomain := gw.cfg.BaseDomain
 		if baseDomain == "" {
 			baseDomain = "dbrs.space"
 		}
+
+		// Create deployment service components
+		gw.portAllocator = deployments.NewPortAllocator(deps.ORMClient, logger.Logger)
+		gw.homeNodeManager = deployments.NewHomeNodeManager(deps.ORMClient, gw.portAllocator, logger.Logger)
+		gw.replicaManager = deployments.NewReplicaManager(deps.ORMClient, gw.homeNodeManager, gw.portAllocator, logger.Logger)
+		gw.processManager = process.NewManager(logger.Logger, process.Config{
+			EnvDir:     deploymentEnvDir(cfg.DataDir),
+			BaseDomain: baseDomain,
+		})
+
 		gw.deploymentService = deploymentshandlers.NewDeploymentService(
 			deps.ORMClient,
 			gw.homeNodeManager,
@@ -657,6 +673,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.replicaManager,
 			logger.Logger,
 			baseDomain,
+			envCodec,
 		)
 		// Set node peer ID so deployments run on the node that receives the request
 		if gw.cfg.NodePeerID != "" {
@@ -1588,4 +1605,15 @@ func configureRateLimiters(gw *Gateway) {
 
 	gw.authRateLimiter = NewRateLimiter(30, 10)
 	gw.authRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+}
+
+// deploymentEnvDir is where the deployments' environment files live: beside
+// their code, not inside it. A deployment's own directory has to be readable by
+// the unprivileged user the deployment runs as, and its environment must not
+// be.
+func deploymentEnvDir(dataDir string) string {
+	if strings.TrimSpace(dataDir) == "" {
+		return ""
+	}
+	return filepath.Join(dataDir, "deployment-env")
 }

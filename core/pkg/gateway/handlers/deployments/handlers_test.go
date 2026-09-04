@@ -94,6 +94,7 @@ func TestStaticHandler_Upload(t *testing.T) {
 		homeNodeManager: homeNodeMgr,
 		portAllocator:   portAlloc,
 		logger:          zap.NewNop(),
+		envCodec:        testEnvCodec(),
 	}
 	handler := NewStaticDeploymentHandler(service, mockIPFS, zap.NewNop())
 
@@ -156,6 +157,7 @@ func TestStaticHandler_Upload_InvalidTarball(t *testing.T) {
 		homeNodeManager: homeNodeMgr,
 		portAllocator:   portAlloc,
 		logger:          zap.NewNop(),
+		envCodec:        testEnvCodec(),
 	}
 	handler := NewStaticDeploymentHandler(service, mockIPFS, zap.NewNop())
 
@@ -205,6 +207,7 @@ func TestStaticHandler_Serve(t *testing.T) {
 		homeNodeManager: homeNodeMgr,
 		portAllocator:   portAlloc,
 		logger:          zap.NewNop(),
+		envCodec:        testEnvCodec(),
 	}
 	handler := NewStaticDeploymentHandler(service, mockIPFS, zap.NewNop())
 
@@ -252,8 +255,9 @@ func TestStaticHandler_Serve_CSS(t *testing.T) {
 	mockDB := &mockRQLiteClient{}
 
 	service := &DeploymentService{
-		db:     mockDB,
-		logger: zap.NewNop(),
+		db:       mockDB,
+		logger:   zap.NewNop(),
+		envCodec: testEnvCodec(),
 	}
 	handler := NewStaticDeploymentHandler(service, mockIPFS, zap.NewNop())
 
@@ -293,8 +297,9 @@ func TestStaticHandler_Serve_JS(t *testing.T) {
 	mockDB := &mockRQLiteClient{}
 
 	service := &DeploymentService{
-		db:     mockDB,
-		logger: zap.NewNop(),
+		db:       mockDB,
+		logger:   zap.NewNop(),
+		envCodec: testEnvCodec(),
 	}
 	handler := NewStaticDeploymentHandler(service, mockIPFS, zap.NewNop())
 
@@ -341,8 +346,9 @@ func TestStaticHandler_Serve_SPAFallback(t *testing.T) {
 	mockDB := &mockRQLiteClient{}
 
 	service := &DeploymentService{
-		db:     mockDB,
-		logger: zap.NewNop(),
+		db:       mockDB,
+		logger:   zap.NewNop(),
+		envCodec: testEnvCodec(),
 	}
 	handler := NewStaticDeploymentHandler(service, mockIPFS, zap.NewNop())
 
@@ -397,6 +403,7 @@ func TestListHandler_AllDeployments(t *testing.T) {
 		homeNodeManager: homeNodeMgr,
 		portAllocator:   portAlloc,
 		logger:          zap.NewNop(),
+		envCodec:        testEnvCodec(),
 	}
 	handler := NewListHandler(service, nil, nil, zap.NewNop(), "")
 

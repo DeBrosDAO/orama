@@ -175,7 +175,6 @@ func (h *DeleteHandler) cleanupDeployments(ctx context.Context, ns string) {
 		h.ormClient.Exec(ctx, "DELETE FROM port_allocations WHERE deployment_id = ?", dep.ID)
 		h.ormClient.Exec(ctx, "DELETE FROM deployment_domains WHERE deployment_id = ?", dep.ID)
 		h.ormClient.Exec(ctx, "DELETE FROM deployment_history WHERE deployment_id = ?", dep.ID)
-		h.ormClient.Exec(ctx, "DELETE FROM deployment_env_vars WHERE deployment_id = ?", dep.ID)
 		h.ormClient.Exec(ctx, "DELETE FROM deployment_events WHERE deployment_id = ?", dep.ID)
 		h.ormClient.Exec(ctx, "DELETE FROM deployment_health_checks WHERE deployment_id = ?", dep.ID)
 		// Tables with no FK constraint

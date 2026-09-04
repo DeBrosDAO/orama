@@ -533,11 +533,52 @@ live, so an endpoint that echoed them would put every secret behind nothing more
 than a read scope, and into whatever terminal scrollback or CI log the caller is
 writing to. To change a value, set it again.
 
-### Reserved names
+### What the platform sets for you
 
-`PORT` and `ENTRY_POINT` are set by the platform and cannot be overwritten or
-removed. `PORT` is how the gateway reaches your app; `ENTRY_POINT` is how a
-Node.js deployment knows what to run.
+These names are set by the platform and cannot be overwritten or removed:
+
+| Name | What it is |
+|------|------------|
+| `PORT` | The port your app must listen on. It is how the gateway reaches you |
+| `ENTRY_POINT` | What a Node.js deployment runs |
+| `ORAMA_NAMESPACE` | The namespace this deployment belongs to |
+| `ORAMA_GATEWAY_URL` | Your namespace's own gateway, `https://ns-<namespace>.<domain>` |
+| `ORAMA_STATE_DIR` | A directory your app may write to that survives restarts |
+| `ORAMA_CACHE_DIR` | A directory your app may write to that it must not rely on |
+
+An app that talks back to Orama previously had nothing to go on: no address, no
+namespace name. Every such app baked both into its own image.
+
+There is no credential among these yet. Handing every deployment a long-lived
+namespace key would mean any application compromise is a namespace takeover, so
+the token a deployment gets will be short-lived and scoped to the deployment
+itself, and it is being built with the rest of the workload-identity work.
+
+### Where your app may write
+
+Your app's own directory is read-only. The files there are its build output, and
+a process that can rewrite its own code cannot be rolled back to a known
+version. Write to `$ORAMA_STATE_DIR` instead, which is yours alone and survives
+restarts, or `$ORAMA_CACHE_DIR` for anything you can regenerate.
+
+### How the values are handled
+
+Values are held encrypted in the cluster database, with a key derived from the
+cluster secret. On the node they are written to a file only the system can read,
+which systemd hands to your process — they are not written into the app's
+systemd unit, and they are removed from the node when the deployment stops.
+
+A value may contain anything that is valid UTF-8, including quotes,
+backslashes, spaces and newlines, so a PEM key or a JSON blob goes in as it is.
+It may not contain a NUL byte, and one value may be at most 64 KiB: every value
+is replicated to every node in the cluster.
+
+### What your app runs as
+
+Each deployment runs as its own unprivileged user, allocated for it and
+reclaimed when it stops, so no two deployments share an identity and none of
+them is root. It cannot reach the cluster's internal network, and it has the
+memory, CPU and process limits recorded on the deployment.
 
 ### Health check path
 

@@ -33,10 +33,19 @@ type DeploymentService struct {
 	logger          *zap.Logger
 	baseDomain      string // Base domain for deployments (e.g., "dbrs.space")
 	nodePeerID      string // Current node's peer ID (deployments run on this node)
+
+	// envCodec seals a deployment's environment before it is stored. The
+	// column held plaintext JSON, and it is where the platform's own guide
+	// tells people to put their secrets, so every tenant's API keys and
+	// database passwords sat in a Raft-replicated table and in every backup of
+	// it.
+	envCodec *deployments.EnvCodec
 }
 
 // NewDeploymentService creates a new deployment service.
 // baseDomain is required and sets the domain used for deployment URLs (e.g., "dbrs.space").
+// envCodec is required: it is what keeps deployment environments out of the
+// database in the clear.
 func NewDeploymentService(
 	db rqlite.Client,
 	homeNodeManager *deployments.HomeNodeManager,
@@ -44,6 +53,7 @@ func NewDeploymentService(
 	replicaManager *deployments.ReplicaManager,
 	logger *zap.Logger,
 	baseDomain string,
+	envCodec *deployments.EnvCodec,
 ) *DeploymentService {
 	return &DeploymentService{
 		db:              db,
@@ -52,7 +62,26 @@ func NewDeploymentService(
 		replicaManager:  replicaManager,
 		logger:          logger,
 		baseDomain:      baseDomain,
+		envCodec:        envCodec,
 	}
+}
+
+// EncodeEnvironment returns the stored form of a deployment's environment.
+func (s *DeploymentService) EncodeEnvironment(env map[string]string) (string, error) {
+	return s.envCodec.Encode(env)
+}
+
+// decodeEnvironment reads a stored environment back.
+//
+// A failure here is returned, not swallowed. An environment that cannot be read
+// is not an empty one: starting the app without its database URL looks like the
+// tenant's own bug and is far harder to diagnose than a refusal.
+func (s *DeploymentService) decodeEnvironment(namespace, name, stored string) (map[string]string, error) {
+	env, err := s.envCodec.Decode(stored)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the environment of deployment %s/%s: %w", namespace, name, err)
+	}
+	return env, nil
 }
 
 // SetBaseDomain sets the base domain for deployments
@@ -204,10 +233,10 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		deployment.Port = port
 	}
 
-	// Serialize environment variables
-	envJSON, err := json.Marshal(deployment.Environment)
+	// Seal the environment before it is stored.
+	storedEnv, err := s.EncodeEnvironment(deployment.Environment)
 	if err != nil {
-		return fmt.Errorf("failed to marshal environment: %w", err)
+		return fmt.Errorf("failed to encode the environment of %s/%s: %w", deployment.Namespace, deployment.Name, err)
 	}
 
 	// Insert deployment + record history in a single transaction
@@ -223,7 +252,7 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		`
 		_, insertErr := tx.Exec(ctx, insertQuery,
 			deployment.ID, deployment.Namespace, deployment.Name, deployment.Type, deployment.Version, deployment.Status,
-			deployment.ContentCID, deployment.BuildCID, deployment.HomeNodeID, deployment.Port, deployment.Subdomain, string(envJSON),
+			deployment.ContentCID, deployment.BuildCID, deployment.HomeNodeID, deployment.Port, deployment.Subdomain, storedEnv,
 			deployment.MemoryLimitMB, deployment.CPULimitPercent, deployment.DiskLimitMB,
 			deployment.HealthCheckPath, deployment.HealthCheckInterval, deployment.RestartPolicy, deployment.MaxRestartCount,
 			deployment.CreatedAt, deployment.UpdatedAt, deployment.DeployedBy,
@@ -360,8 +389,18 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 		return
 	}
 
-	// Call the internal API on the target node
-	envJSON, _ := json.Marshal(deployment.Environment)
+	// Call the internal API on the target node. The environment goes over as
+	// the sealed form: every node derives the same key from the cluster
+	// secret, so there is no reason to put it back in the clear on the wire.
+	storedEnv, envErr := s.EncodeEnvironment(deployment.Environment)
+	if envErr != nil {
+		s.logger.Error("Failed to encode the environment for the replica",
+			zap.String("deployment_id", deployment.ID),
+			zap.Error(envErr),
+		)
+		s.replicaManager.UpdateReplicaStatus(ctx, deployment.ID, nodeID, deployments.ReplicaStatusFailed)
+		return
+	}
 
 	payload := map[string]interface{}{
 		"deployment_id":     deployment.ID,
@@ -370,7 +409,7 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 		"type":              deployment.Type,
 		"content_cid":       deployment.ContentCID,
 		"build_cid":         deployment.BuildCID,
-		"environment":       string(envJSON),
+		"environment":       storedEnv,
 		"health_check_path": deployment.HealthCheckPath,
 		"memory_limit_mb":   deployment.MemoryLimitMB,
 		"cpu_limit_percent": deployment.CPULimitPercent,
@@ -501,9 +540,9 @@ func (s *DeploymentService) GetDeployment(ctx context.Context, namespace, name s
 	}
 
 	row := rows[0]
-	var env map[string]string
-	if err := json.Unmarshal([]byte(row.Environment), &env); err != nil {
-		env = make(map[string]string)
+	env, err := s.decodeEnvironment(row.Namespace, row.Name, row.Environment)
+	if err != nil {
+		return nil, err
 	}
 
 	return &deployments.Deployment{
@@ -571,9 +610,9 @@ func (s *DeploymentService) GetDeploymentByID(ctx context.Context, namespace, id
 	}
 
 	row := rows[0]
-	var env map[string]string
-	if err := json.Unmarshal([]byte(row.Environment), &env); err != nil {
-		env = make(map[string]string)
+	env, err := s.decodeEnvironment(row.Namespace, row.Name, row.Environment)
+	if err != nil {
+		return nil, err
 	}
 
 	return &deployments.Deployment{

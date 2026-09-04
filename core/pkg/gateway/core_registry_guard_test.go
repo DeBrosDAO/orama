@@ -71,7 +71,7 @@ func walletRequest(path, wallet string) *http.Request {
 
 // The bug: the gateway that fronts the cluster serves the registry —
 // api_keys, namespace_ownership, refresh_tokens, wireguard_peers,
-// deployment_env_vars, invite_tokens — and any tenant's admin key could
+// node_agent_tokens, invite_tokens — and any tenant's admin key could
 // export it.
 func TestCoreRegistryGuard_refusesATenantOnTheClusterGateway(t *testing.T) {
 	g, _ := registryGateway(t, "default", "0xoperator")

@@ -43,10 +43,18 @@ func NewEnvHandler(service *DeploymentService, processManager *process.Manager, 
 // PORT is written into the unit by the process manager and is how the gateway
 // reaches the app; ENTRY_POINT is how a Node.js deployment knows what to run.
 // Letting a user set either would break the deployment in a way that looks like
-// their own code failing.
-var reservedEnvKeys = map[string]bool{
-	"PORT":        true,
-	"ENTRY_POINT": true,
+// their own code failing. The ORAMA_* names are the deployment's own identity —
+// which namespace it belongs to, which gateway is its own, where it may write —
+// and a deployment that could rewrite them could point itself at another
+// namespace's gateway.
+var reservedEnvKeys = buildReservedEnvKeys()
+
+func buildReservedEnvKeys() map[string]bool {
+	reserved := map[string]bool{"ENTRY_POINT": true}
+	for _, key := range process.PlatformEnvKeys {
+		reserved[key] = true
+	}
+	return reserved
 }
 
 // HandleGetEnv returns the deployment's environment variable names.
@@ -207,6 +215,12 @@ func applyEnvChanges(current, set map[string]string, unset []string) (map[string
 		if err := validateEnvKey(key); err != nil {
 			return nil, err
 		}
+		// The value has to survive the trip to the process's environment. A
+		// value systemd would discard is refused where it is set, not lost
+		// where it is used.
+		if err := deployments.ValidateEnvValue(key, value); err != nil {
+			return nil, err
+		}
 		updated[key] = value
 	}
 	for _, key := range unset {
@@ -218,37 +232,32 @@ func applyEnvChanges(current, set map[string]string, unset []string) (map[string
 	return updated, nil
 }
 
-// validateEnvKey rejects a name that is not a usable environment variable.
+// validateEnvKey rejects a name that is not a usable environment variable, or
+// one the platform owns.
 //
-// The names end up in a systemd unit as Environment= lines, so a name carrying
-// a newline or an '=' would write a line the unit file did not intend.
+// The syntax rule lives with the environment-file writer, so the name a caller
+// is allowed to set and the name that can actually be written are one rule
+// rather than two that drift.
 func validateEnvKey(key string) error {
-	if key == "" {
-		return fmt.Errorf("an environment variable name cannot be empty")
-	}
 	if reservedEnvKeys[key] {
 		return fmt.Errorf("%s is set by the platform and cannot be overwritten", key)
 	}
-	for i, r := range key {
-		isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-		isDigit := r >= '0' && r <= '9'
-		if isLetter || r == '_' || (isDigit && i > 0) {
-			continue
-		}
-		return fmt.Errorf("invalid environment variable name %q: use letters, digits and underscore, not starting with a digit", key)
-	}
-	return nil
+	return deployments.ValidateEnvName(key)
 }
 
-// persistEnv writes the environment back to the deployment row.
+// persistEnv writes the environment back to the deployment row, sealed.
+//
+// This is also what migrates a deployment created before the column was
+// encrypted: the row is read as plaintext and written back encrypted, so the
+// plaintext form is not a permanent second format.
 func (h *EnvHandler) persistEnv(ctx context.Context, deployment *deployments.Deployment, env map[string]string) error {
-	encoded, err := json.Marshal(env)
+	encoded, err := h.service.EncodeEnvironment(env)
 	if err != nil {
-		return fmt.Errorf("marshal environment: %w", err)
+		return fmt.Errorf("encode environment: %w", err)
 	}
 	_, err = h.service.db.Exec(ctx,
 		`UPDATE deployments SET environment = ?, updated_at = ? WHERE namespace = ? AND name = ?`,
-		string(encoded), time.Now(), deployment.Namespace, deployment.Name)
+		encoded, time.Now(), deployment.Namespace, deployment.Name)
 	if err != nil {
 		return fmt.Errorf("update deployments: %w", err)
 	}
@@ -287,6 +296,9 @@ func parseFormEnv(values map[string][]string) (map[string]string, error) {
 		}
 		name := strings.TrimPrefix(key, "env_")
 		if err := validateEnvKey(name); err != nil {
+			return nil, err
+		}
+		if err := deployments.ValidateEnvValue(name, vals[0]); err != nil {
 			return nil, err
 		}
 		env[name] = vals[0]

@@ -11,7 +11,7 @@ import (
 // The raw-database routes serve whatever database the gateway they reach is
 // configured against. On a namespace gateway that is the tenant's own; on the
 // gateway that fronts the cluster it is the registry — api_keys,
-// namespace_ownership, refresh_tokens, wireguard_peers, deployment_env_vars,
+// namespace_ownership, refresh_tokens, wireguard_peers, node_agent_tokens,
 // invite_tokens.
 //
 // Reaching them needed the admin grant and ownership of *some* namespace, and

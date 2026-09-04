@@ -1,7 +1,6 @@
 package process
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,17 +10,36 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"text/template"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"go.uber.org/zap"
 )
+
+// systemdUnitDir is where unit files live. Named once so the write and the
+// removal cannot drift apart.
+const systemdUnitDir = "/etc/systemd/system"
+
+// Config is what the process manager needs from the gateway that owns it.
+type Config struct {
+	// EnvDir holds one environment file per deployment. It is separate from
+	// the deployment's own directory, which is world-readable so that the
+	// deployment's unprivileged user can read the code it runs; the
+	// environment is where the tenant's secrets are, and it is 0600.
+	EnvDir string
+
+	// BaseDomain is the cluster's domain, used to tell a deployment the URL of
+	// its own namespace's gateway.
+	BaseDomain string
+}
 
 // Manager manages deployment processes via systemd (Linux) or direct process spawning (macOS/other)
 type Manager struct {
 	logger     *zap.Logger
 	useSystemd bool
+	envDir     string
+	baseDomain string
 
 	// For non-systemd mode: track running processes
 	processes   map[string]*exec.Cmd
@@ -29,15 +47,97 @@ type Manager struct {
 }
 
 // NewManager creates a new process manager
-func NewManager(logger *zap.Logger) *Manager {
+func NewManager(logger *zap.Logger, cfg Config) *Manager {
 	// Use systemd only on Linux
 	useSystemd := runtime.GOOS == "linux"
 
 	return &Manager{
 		logger:     logger,
 		useSystemd: useSystemd,
+		envDir:     strings.TrimSpace(cfg.EnvDir),
+		baseDomain: strings.TrimSpace(cfg.BaseDomain),
 		processes:  make(map[string]*exec.Cmd),
 	}
+}
+
+// gatewayURL is the URL of the deployment's own namespace gateway, handed to
+// the app as ORAMA_GATEWAY_URL.
+//
+// A deployment that wants to use the platform it runs on had nothing to go on:
+// no gateway address, no namespace name, no credential. Every app that talked
+// to Orama therefore baked an address and a permanent key into its own image.
+func (m *Manager) gatewayURL(namespace string) string {
+	if m.baseDomain == "" || namespace == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://ns-%s.%s", namespace, m.baseDomain)
+}
+
+// deploymentEnv is the full environment of one deployment: what the tenant set,
+// with the platform's own variables applied last so they cannot be displaced.
+func (m *Manager) deploymentEnv(deployment *deployments.Deployment, serviceName string) map[string]string {
+	return mergeEnv(deployment.Environment, platformEnv(
+		deployment.Namespace,
+		serviceName,
+		m.gatewayURL(deployment.Namespace),
+		deployment.Port,
+	))
+}
+
+// envFilePath is where one deployment's environment file lives.
+func (m *Manager) envFilePath(serviceName string) string {
+	return filepath.Join(m.envDir, serviceName+".env")
+}
+
+// writeEnvFile writes the deployment's environment where only root can read it.
+//
+// systemd reads EnvironmentFile= as PID 1, before it drops to the deployment's
+// own user, so the file never has to be readable by the deployment itself —
+// and it must not be, because it holds the tenant's secrets and the deployment
+// is the tenant's code.
+func (m *Manager) writeEnvFile(deployment *deployments.Deployment, serviceName string) (string, error) {
+	if m.envDir == "" {
+		return "", fmt.Errorf("no environment directory is configured, so a deployment's environment " +
+			"has nowhere to go that is not world-readable")
+	}
+	if err := os.MkdirAll(m.envDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create the deployment environment directory %s: %w", m.envDir, err)
+	}
+	// MkdirAll and WriteFile only apply their mode when they create the thing,
+	// and the umask can only narrow it further, so the mode is set explicitly
+	// afterwards as well. Both are kept: the mode on creation means the file
+	// never exists in a looser mode even for the moment between the two calls,
+	// and the chmod is what fixes a directory or file an earlier version left
+	// behind.
+	if err := os.Chmod(m.envDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to restrict the deployment environment directory %s: %w", m.envDir, err)
+	}
+
+	contents, err := deployments.RenderEnvFile(m.deploymentEnv(deployment, serviceName))
+	if err != nil {
+		return "", fmt.Errorf("failed to render the environment of %s: %w", serviceName, err)
+	}
+
+	path := m.envFilePath(serviceName)
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		return "", fmt.Errorf("failed to write the environment file %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return "", fmt.Errorf("failed to restrict the environment file %s: %w", path, err)
+	}
+	return path, nil
+}
+
+// removeEnvFile deletes a stopped deployment's environment file. Leaving it
+// behind leaves the tenant's secrets on the node after the deployment is gone.
+func (m *Manager) removeEnvFile(serviceName string) error {
+	if m.envDir == "" {
+		return nil
+	}
+	if err := os.Remove(m.envFilePath(serviceName)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove the environment file for %s: %w", serviceName, err)
+	}
+	return nil
 }
 
 // Start starts a deployment process
@@ -97,12 +197,9 @@ func (m *Manager) startDirect(ctx context.Context, deployment *deployments.Deplo
 	cmd := exec.Command(parts[0], parts[1:]...)
 	cmd.Dir = workDir
 
-	// Set environment
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, fmt.Sprintf("PORT=%d", deployment.Port))
-	for key, value := range deployment.Environment {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
-	}
+	// Set environment. Same set as the unit gets, so a deployment behaves the
+	// same way whether it is run by systemd or spawned directly.
+	cmd.Env = append(os.Environ(), sortedEnv(m.deploymentEnv(deployment, serviceName))...)
 
 	// Create log file for output
 	logDir := filepath.Join(os.Getenv("HOME"), ".orama", "logs", "deployments")
@@ -179,10 +276,16 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 	}
 
 	// Remove service file
-	serviceFile := filepath.Join("/etc/systemd/system", serviceName+".service")
+	serviceFile := filepath.Join(systemdUnitDir, serviceName+".service")
 	cmd := exec.Command("rm", "-f", serviceFile)
 	if err := cmd.Run(); err != nil {
 		m.logger.Warn("Failed to remove service file", zap.Error(err))
+	}
+
+	// The environment file holds the tenant's secrets. Leaving it behind
+	// leaves them on the node after the deployment is gone.
+	if err := m.removeEnvFile(serviceName); err != nil {
+		m.logger.Error("the deployment's secrets are still on disk", zap.Error(err))
 	}
 
 	// Reload systemd
@@ -324,92 +427,36 @@ func (m *Manager) GetLogs(ctx context.Context, deployment *deployments.Deploymen
 	return cmd.Output()
 }
 
-// createSystemdService creates a systemd service file
+// createSystemdService writes the deployment's environment file and its unit.
 func (m *Manager) createSystemdService(deployment *deployments.Deployment, workDir string) error {
 	serviceName := m.getServiceName(deployment)
-	serviceFile := filepath.Join("/etc/systemd/system", serviceName+".service")
 
-	// Determine the start command based on deployment type
-	startCmd := m.getStartCommand(deployment, workDir)
-
-	// Build environment variables
-	envVars := make([]string, 0)
-	envVars = append(envVars, fmt.Sprintf("PORT=%d", deployment.Port))
-	for key, value := range deployment.Environment {
-		envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
-	}
-
-	// Create service from template
-	tmpl := `[Unit]
-Description=Orama Deployment - {{.Namespace}}/{{.Name}}
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory={{.WorkDir}}
-
-{{range .Env}}Environment="{{.}}"
-{{end}}
-
-ExecStart={{.StartCmd}}
-
-Restart={{.RestartPolicy}}
-RestartSec=5s
-
-# Resource limits
-MemoryLimit={{.MemoryLimitMB}}M
-CPUQuota={{.CPULimitPercent}}%
-
-# Security - minimal restrictions for deployments in home directory
-PrivateTmp=true
-
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier={{.ServiceName}}
-
-[Install]
-WantedBy=multi-user.target
-`
-
-	t, err := template.New("service").Parse(tmpl)
+	envFile, err := m.writeEnvFile(deployment, serviceName)
 	if err != nil {
 		return err
 	}
 
-	data := struct {
-		Namespace       string
-		Name            string
-		ServiceName     string
-		WorkDir         string
-		StartCmd        string
-		Env             []string
-		RestartPolicy   string
-		MemoryLimitMB   int
-		CPULimitPercent int
-	}{
+	unit, err := RenderUnit(UnitSpec{
+		ServiceName:     serviceName,
 		Namespace:       deployment.Namespace,
 		Name:            deployment.Name,
-		ServiceName:     serviceName,
 		WorkDir:         workDir,
-		StartCmd:        startCmd,
-		Env:             envVars,
+		StartCmd:        m.getStartCommand(deployment, workDir),
+		EnvFilePath:     envFile,
 		RestartPolicy:   m.mapRestartPolicy(deployment.RestartPolicy),
 		MemoryLimitMB:   deployment.MemoryLimitMB,
 		CPULimitPercent: deployment.CPULimitPercent,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to render the unit for %s: %w", serviceName, err)
 	}
 
-	// Execute template to buffer
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
-		return err
-	}
-
-	// Use tee to write to systemd directory
+	serviceFile := filepath.Join(systemdUnitDir, serviceName+".service")
 	cmd := exec.Command("tee", serviceFile)
-	cmd.Stdin = &buf
+	cmd.Stdin = strings.NewReader(unit)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to write service file: %s: %w", string(output), err)
+		return fmt.Errorf("failed to write service file %s: %s: %w", serviceFile, string(output), err)
 	}
 
 	return nil
@@ -467,35 +514,47 @@ func (m *Manager) getServiceName(deployment *deployments.Deployment) string {
 	return fmt.Sprintf("orama-deploy-%s-%s", namespace, name)
 }
 
-// systemd helper methods
+// systemd helper methods.
+//
+// These called systemctl directly, which only works as root. The gateway is
+// still root on the running fleet, which is why deployments work at all today
+// and why they run as root; the hardened gateway unit moves it to the
+// unprivileged orama user, and then a direct systemctl stops working.
+// systemd.Systemctl is the same call the rest of the node makes: it is a plain
+// systemctl as root and adds the sudo that the sudoers rule for
+// orama-deploy-* units was written for otherwise.
 func (m *Manager) systemdReload() error {
-	cmd := exec.Command("systemctl", "daemon-reload")
-	return cmd.Run()
+	return runSystemctl("daemon-reload")
 }
 
 func (m *Manager) systemdEnable(serviceName string) error {
-	cmd := exec.Command("systemctl", "enable", serviceName)
-	return cmd.Run()
+	return runSystemctl("enable", serviceName)
 }
 
 func (m *Manager) systemdDisable(serviceName string) error {
-	cmd := exec.Command("systemctl", "disable", serviceName)
-	return cmd.Run()
+	return runSystemctl("disable", serviceName)
 }
 
 func (m *Manager) systemdStart(serviceName string) error {
-	cmd := exec.Command("systemctl", "start", serviceName)
-	return cmd.Run()
+	return runSystemctl("start", serviceName)
 }
 
 func (m *Manager) systemdStop(serviceName string) error {
-	cmd := exec.Command("systemctl", "stop", serviceName)
-	return cmd.Run()
+	return runSystemctl("stop", serviceName)
 }
 
 func (m *Manager) systemdRestart(serviceName string) error {
-	cmd := exec.Command("systemctl", "restart", serviceName)
-	return cmd.Run()
+	return runSystemctl("restart", serviceName)
+}
+
+// runSystemctl reports what systemctl said, not just that it failed.
+func runSystemctl(args ...string) error {
+	cmd := systemd.Systemctl(args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 // WaitForHealthy waits for a deployment to become healthy
