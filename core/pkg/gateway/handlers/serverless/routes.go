@@ -134,3 +134,16 @@ func (h *ServerlessHandlers) handleFunctionByName(w http.ResponseWriter, r *http
 		http.Error(w, "Unknown action", http.StatusNotFound)
 	}
 }
+
+// Routes is every pattern RegisterRoutes registers. The gateway checks each
+// against its policy table before wiring them, so a route added here without a
+// declared policy fails to start rather than serving one nobody decided about.
+func Routes() []string {
+	return []string{
+		"/v1/functions",
+		"/v1/functions/",
+		"/v1/invoke/",
+		"/v1/serverless/ws/connections",
+		"/v1/serverless/ws/connections/",
+	}
+}

@@ -7,9 +7,10 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 )
 
-func TestRequiredScope(t *testing.T) {
+func TestRouteScope(t *testing.T) {
 	tests := []struct {
 		path string
 		want string
@@ -17,6 +18,7 @@ func TestRequiredScope(t *testing.T) {
 		// public / invoke — no scope
 		{"/health", ""},
 		{"/v1/invoke/ns/fn", ""},
+		{"/v1/node/enroll", ""},
 		{"/v1/functions/fn/invoke", ""},
 		{"/v1/auth/token", ""},  // not public, but any key may exchange
 		{"/v1/auth/whoami", ""}, // any valid credential
@@ -58,7 +60,6 @@ func TestRequiredScope(t *testing.T) {
 		{"/v1/node/command", auth.ScopeAdmin},
 		{"/v1/node/logs", auth.ScopeAdmin},
 		{"/v1/node/leave", auth.ScopeAdmin},
-		{"/v1/node/enroll", ""},
 		{"/v1/network/connect", auth.ScopeAdmin},
 		{"/v1/network/disconnect", auth.ScopeAdmin},
 		{"/v1/network/status", ""},
@@ -66,24 +67,37 @@ func TestRequiredScope(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			if got := requiredScope(http.MethodPost, tt.path); got != tt.want {
-				t.Errorf("requiredScope(%q) = %q, want %q", tt.path, got, tt.want)
+			if got := policyOf(http.MethodPost, tt.path).Scope; got != tt.want {
+				t.Errorf("%q requires scope %q, want %q", tt.path, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestRequiresUserJWT(t *testing.T) {
-	yes := []string{auth.ScopeStorage, auth.ScopeWebRTC, auth.ScopeProxy}
-	no := []string{auth.ScopeInvoke, auth.ScopePush, auth.ScopeAdmin, auth.ScopePubsub, auth.ScopeCache, ""}
-	for _, g := range yes {
-		if !requiresUserJWT(g) {
-			t.Errorf("requiresUserJWT(%q) = false, want true", g)
+// The token a route asks for beyond the grant. It used to be derived from the
+// grant name, so every route sharing a grant shared the requirement whether or
+// not that was intended; it is declared per route now, and this is the set that
+// must still ask for a logged-in user.
+func TestRouteToken(t *testing.T) {
+	wallet := []string{
+		"/v1/storage/upload", "/v1/storage/pin", "/v1/storage/get/Qm1", "/v1/storage/status/Qm1",
+		"/v1/webrtc/signal", "/v1/webrtc/rooms", "/v1/webrtc/turn/credentials",
+		"/v1/proxy/anon", "/v1/proxy/tunnel",
+	}
+	for _, path := range wallet {
+		if got := policyOf(http.MethodPost, path).Token; got != routepolicy.WalletToken {
+			t.Errorf("%q asks for token %v, want a logged-in user — an extracted runtime "+
+				"key would otherwise reach it on its own", path, got)
 		}
 	}
-	for _, g := range no {
-		if requiresUserJWT(g) {
-			t.Errorf("requiresUserJWT(%q) = true, want false", g)
+
+	anyCredential := []string{
+		"/v1/pubsub/publish", "/v1/push/devices", "/v1/cache/get",
+		"/v1/functions/fn/ws", "/v1/deployments/list", "/v1/audit",
+	}
+	for _, path := range anyCredential {
+		if got := policyOf(http.MethodPost, path).Token; got != routepolicy.AnyCredential {
+			t.Errorf("%q asks for token %v, want none beyond the grant", path, got)
 		}
 	}
 }
@@ -224,39 +238,55 @@ func TestHasAnyJWT(t *testing.T) {
 	}
 }
 
-func TestIsStorageUnpinPath(t *testing.T) {
-	if !isStorageUnpinPath(http.MethodDelete, "/v1/storage/unpin/Qm123") {
-		t.Error("DELETE /v1/storage/unpin/:cid should match")
+// Unpinning is the one storage operation a userless job may reach: it is
+// ownership-checked in its handler and can only drop the namespace's own pins.
+// Every other storage operation keeps the strict requirement, and so does every
+// other method on the unpin route.
+func TestStorageUnpinToken(t *testing.T) {
+	if got := policyOf(http.MethodDelete, "/v1/storage/unpin/Qm123").Token; got != routepolicy.AnyToken {
+		t.Errorf("DELETE unpin asks for token %v, want any exchanged token (#151)", got)
 	}
-	if isStorageUnpinPath(http.MethodPost, "/v1/storage/unpin/Qm123") {
-		t.Error("only DELETE should match the unpin exception")
+	if got := policyOf(http.MethodPost, "/v1/storage/unpin/Qm123").Token; got != routepolicy.WalletToken {
+		t.Errorf("POST to the unpin route asks for token %v; only DELETE is the reclaim", got)
 	}
-	// Every OTHER storage op keeps the strict wallet-JWT requirement.
-	for _, p := range []string{"/v1/storage/upload", "/v1/storage/get/Qm1", "/v1/storage/pin", "/v1/storage/status/Qm1"} {
-		if isStorageUnpinPath(http.MethodDelete, p) {
-			t.Errorf("%q must NOT be treated as the unpin exception", p)
+	for _, path := range []string{"/v1/storage/upload", "/v1/storage/get/Qm1", "/v1/storage/pin", "/v1/storage/status/Qm1"} {
+		if got := policyOf(http.MethodDelete, path).Token; got != routepolicy.WalletToken {
+			t.Errorf("%q asks for token %v, want a logged-in user", path, got)
 		}
+	}
+	// And the grant is unchanged: the relaxation is about the token, not the
+	// scope. A key with no storage grant reaches none of it.
+	if got := policyOf(http.MethodDelete, "/v1/storage/unpin/Qm123").Scope; got != auth.ScopeStorage {
+		t.Errorf("DELETE unpin requires scope %q, want %q", got, auth.ScopeStorage)
 	}
 }
 
-// TestUnpinException_decision locks in the exact layer-1 relaxation used by
-// scopeMiddleware for bugboard #151: unpin + any scoped JWT is allowed; a bare
-// api key (no JWT) is not; and the exception never leaks to other storage ops.
+// The exact relaxation scopeMiddleware applies for bugboard #151: unpin with
+// any exchanged token is allowed, a bare API key is not, and it never leaks to
+// another storage operation.
 func TestUnpinException_decision(t *testing.T) {
-	// unpin + exchanged storage-scoped JWT → allowed.
-	exchanged := reqDelJWT("/v1/storage/unpin/Qm1", &auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "invoke,storage,push,webrtc,proxy"}})
-	if !(isStorageUnpinPath(exchanged.Method, exchanged.URL.Path) && hasAnyJWT(exchanged)) {
-		t.Error("unpin with an exchanged storage-scoped JWT must be allowed (#151)")
+	g := &Gateway{}
+	storage := auth.ParseScopes("invoke,storage,push,webrtc,proxy")
+
+	exchanged := reqDelJWT("/v1/storage/unpin/Qm1", &auth.JWTClaims{Sub: "ak_x:ns"})
+	if !g.hasRequiredToken(exchanged, policyOf(http.MethodDelete, exchanged.URL.Path), storage) {
+		t.Error("unpin with an exchanged storage-scoped token must be allowed (#151)")
 	}
-	// unpin + BARE api key (no JWT) → NOT allowed.
+
 	bare := httptest.NewRequest(http.MethodDelete, "/v1/storage/unpin/Qm1", nil)
-	if isStorageUnpinPath(bare.Method, bare.URL.Path) && hasAnyJWT(bare) {
-		t.Error("unpin with a bare api key (no JWT) must NOT be allowed")
+	if g.hasRequiredToken(bare, policyOf(http.MethodDelete, bare.URL.Path), storage) {
+		t.Error("unpin with a bare API key (no token) must NOT be allowed")
 	}
-	// The exception must never apply to upload (a DELETE-shaped probe still
-	// fails because the path isn't the unpin path).
-	if isStorageUnpinPath(http.MethodDelete, "/v1/storage/upload") {
-		t.Error("upload must keep the strict wallet-JWT requirement, not the unpin exception")
+
+	upload := reqDelJWT("/v1/storage/upload", &auth.JWTClaims{Sub: "ak_x:ns"})
+	if g.hasRequiredToken(upload, policyOf(http.MethodDelete, upload.URL.Path), storage) {
+		t.Error("upload must keep the strict logged-in-user requirement")
+	}
+
+	// An admin credential is exempt everywhere: the requirement exists to make
+	// a leaked data-plane key inert, and an admin key is not one.
+	if !g.hasRequiredToken(bare, policyOf(http.MethodPost, "/v1/storage/upload"), auth.ParseScopes("admin")) {
+		t.Error("an admin credential must not be asked for a user token")
 	}
 }
 
@@ -264,14 +294,14 @@ func TestUnpinException_decision(t *testing.T) {
 // the JWT signing key is derived from one of them. These paths had no entry at
 // all, so they fell through to "any valid credential is enough" — and a key out
 // of a public app bundle is a valid credential.
-func TestRequiredScope_operatorEndpointsNeedAdmin(t *testing.T) {
+func TestRouteScope_operatorEndpointsNeedAdmin(t *testing.T) {
 	for _, path := range []string{
 		"/v1/operator/invite",
 		"/v1/operator/nodes",
 		"/v1/operator/node/register",
 	} {
-		if got := requiredScope("POST", path); got != auth.ScopeAdmin {
-			t.Errorf("requiredScope(%s) = %q, want %q — an invoke-only key must not "+
+		if got := policyOf(http.MethodPost, path).Scope; got != auth.ScopeAdmin {
+			t.Errorf("%s requires scope %q, want %q — an invoke-only key must not "+
 				"reach it", path, got, auth.ScopeAdmin)
 		}
 	}

@@ -4,11 +4,15 @@ import (
 	"net/http"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 )
 
 // Routes returns the http.Handler with all routes and middleware configured
 func (g *Gateway) Routes() http.Handler {
-	mux := http.NewServeMux()
+	// Routes register against the policy table: a pattern with no declared
+	// policy cannot be wired here at all. See route_policy.go.
+	mux := routepolicy.NewMux(gatewayRoutes)
 
 	// root and v1 health/status
 	mux.HandleFunc("/health", g.healthHandler)
@@ -89,10 +93,12 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/rqlite/export", g.rqliteExportHandler)
 	mux.HandleFunc("/v1/rqlite/import", g.rqliteImportHandler)
 
-	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints)
+	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints). It composes its
+	// own patterns, so it reports them and they are checked against the policy
+	// table before its handlers go on.
 	if g.ormHTTP != nil {
-		g.ormHTTP.BasePath = "/v1/rqlite"
-		g.ormHTTP.RegisterRoutes(mux)
+		g.ormHTTP.BasePath = ormBasePath
+		mux.RegisterAll(g.ormHTTP.Routes(), g.ormHTTP.RegisterRoutes)
 	}
 
 	// namespace cluster status (public endpoint for polling during provisioning)
@@ -233,7 +239,7 @@ func (g *Gateway) Routes() http.Handler {
 
 	// serverless functions (if enabled)
 	if g.serverlessHandlers != nil {
-		g.serverlessHandlers.RegisterRoutes(mux)
+		mux.RegisterAll(serverlesshandlers.Routes(), g.serverlessHandlers.RegisterRoutes)
 	}
 
 	// deployment endpoints

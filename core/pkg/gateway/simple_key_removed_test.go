@@ -4,6 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -49,8 +51,8 @@ func TestSimpleKeyRouteIsGone(t *testing.T) {
 // routing rather than assuming.
 func TestSimpleKeyPathIsNotRoutedByPrefix(t *testing.T) {
 	for _, path := range []string{"/v1/auth/simple-key", "/v1/auth/simple-key/"} {
-		if isPublicPath(path) {
-			t.Errorf("%s is still in the public allowlist", path)
+		if gatewayRoutes.For(httptest.NewRequest(http.MethodPost, path, nil)).Access.Anonymous() {
+			t.Errorf("%s is still reachable without a credential", path)
 		}
 	}
 }

@@ -970,16 +970,22 @@ See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 Order matches `Gateway.withMiddleware` (outermost first). Rate limiting runs **before** authentication so the auth path itself is capped.
 
 1. **Internal-auth gate** — drops every `X-Internal-Auth-*` header that did not arrive with a valid MAC
-2. **Logger** — request/response logging
-3. **Security headers**
-4. **Rate limiting** — per-client, before auth
-5. **CORS**
-6. **Domain routing**
-7. **Authentication** — JWT / API key
-8. **Authorization** — namespace access control
-9. **Scope gate** — tightens an already-authorized request
-10. **Namespace rate limiting**
-11. Handler (errors are returned as HTTP status, not a separate middleware)
+2. **Route policy** — resolves what the matched route requires and puts it on the request, so the four gates below cannot answer differently
+3. **Logger** — request/response logging
+4. **Security headers**
+5. **Rate limiting** — per-client, before auth
+6. **CORS**
+7. **Domain routing**
+8. **Authentication** — JWT / API key
+9. **Authorization** — namespace access control
+10. **Scope gate** — tightens an already-authorized request
+11. **Namespace rate limiting**
+12. Handler (errors are returned as HTTP status, not a separate middleware)
+
+Every gate reads the policy the route declared, never the request path. A route
+with no declared policy cannot be registered at all. The declaration is
+`pkg/gateway/route_policy.go`; `pkg/gateway/routepolicy` is what enforces it.
+See `docs/SECURITY.md` for what the three path-prefix lists this replaced cost.
 
 The client a rate limit is charged to is the peer address, not
 `X-Forwarded-For`. The header is honoured only when the peer is the local

@@ -165,10 +165,15 @@ func TestIsPublicPath(t *testing.T) {
 		{"network peers", "/v1/network/peers", true},
 
 		// Prefix-matched public paths
-		{"acme challenge", "/.well-known/acme-challenge/abc", true},
+		// Caddy answers the HTTP-01 challenge; nothing here serves it, and a
+		// path with no route is not an open one.
+		{"acme challenge", "/.well-known/acme-challenge/abc", false},
 		{"invoke function", "/v1/invoke/func1", true},
 		{"functions invoke", "/v1/functions/myfn/invoke", true},
-		{"internal replica", "/v1/internal/deployments/replica/xyz", true},
+		// The four replica endpoints are exact routes; a fifth path under the
+		// same prefix is not one of them and is not open.
+		{"internal replica setup", "/v1/internal/deployments/replica/setup", true},
+		{"internal replica made up", "/v1/internal/deployments/replica/xyz", false},
 		{"internal wg peers", "/v1/internal/wg/peers", true},
 		{"internal join", "/v1/internal/join", true},
 		{"internal namespace spawn", "/v1/internal/namespace/spawn", true},
@@ -198,7 +203,7 @@ func TestIsPublicPath(t *testing.T) {
 
 		// Namespace status
 		{"namespace status", "/v1/namespace/status", true},
-		{"namespace status with id", "/v1/namespace/status/xyz", true},
+		{"namespace status with id is not a route", "/v1/namespace/status/xyz", false},
 
 		// NON-public paths
 		{"deployments list", "/v1/deployments/list", false},
@@ -212,9 +217,9 @@ func TestIsPublicPath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := isPublicPath(tc.path)
+			got := policyOf(http.MethodGet, tc.path).Access.Anonymous()
 			if got != tc.want {
-				t.Errorf("isPublicPath(%q) = %v, want %v", tc.path, got, tc.want)
+				t.Errorf("%q reachable without a credential = %v, want %v", tc.path, got, tc.want)
 			}
 		})
 	}
@@ -498,37 +503,42 @@ func TestGetAllowedOrigin(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRequiresNamespaceOwnership
+// TestRouteOwnership
 // ---------------------------------------------------------------------------
 
-func TestRequiresNamespaceOwnership(t *testing.T) {
+func TestRouteOwnership(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
 		want bool
 	}{
-		// Paths that require ownership
-		{"rqlite root", "/rqlite", true},
-		{"v1 rqlite", "/v1/rqlite", true},
-		{"v1 rqlite query", "/v1/rqlite/query", true},
-		{"pubsub", "/v1/pubsub", true},
+		// Routes whose grant is resolved in the namespace
+		{"rqlite query", "/v1/rqlite/query", true},
 		{"pubsub publish", "/v1/pubsub/publish", true},
-		{"proxy something", "/v1/proxy/something", true},
+		{"proxy anon", "/v1/proxy/anon", true},
 		{"functions root", "/v1/functions", true},
 		{"functions specific", "/v1/functions/myfn", true},
+		{"namespace members", "/v1/namespace/members", true},
 
-		// Paths that do NOT require ownership
+		// Routes with no ownership check
 		{"auth challenge", "/v1/auth/challenge", false},
 		{"deployments list", "/v1/deployments/list", false},
 		{"health", "/health", false},
+		// Storage resolves no grant, which is why a resource selector on a
+		// storage grant authorises nothing yet (chg-392).
 		{"storage upload", "/v1/storage/upload", false},
+		{"cache get", "/v1/cache/get", false},
+
+		// Not routes at all
+		{"rqlite root", "/rqlite", false},
+		{"pubsub with no operation", "/v1/pubsub", false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := requiresNamespaceOwnership(tc.path)
+			got := policyOf(http.MethodPost, tc.path).Ownership
 			if got != tc.want {
-				t.Errorf("requiresNamespaceOwnership(%q) = %v, want %v", tc.path, got, tc.want)
+				t.Errorf("%q requires a namespace grant = %v, want %v", tc.path, got, tc.want)
 			}
 		})
 	}

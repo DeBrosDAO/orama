@@ -439,7 +439,13 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
-	// Order: internal-auth -> logging -> security headers -> rate limit -> CORS -> readiness -> domain routing -> auth -> authorization -> scope -> namespace rate limit -> handler
+	// Order: internal-auth -> route policy -> logging -> security headers ->
+	// rate limit -> CORS -> readiness -> domain routing -> auth ->
+	// authorization -> scope -> namespace rate limit -> handler
+	//
+	// The route-policy gate resolves what the matched route requires and puts
+	// it on the request, so the four places that ask cannot answer differently.
+	// It sits above domain routing because that is the first of them.
 	//
 	// The internal-auth gate is first, before anything else can read a header.
 	// It deletes every X-Internal-Auth-* header that did not arrive with a
@@ -457,16 +463,17 @@ func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 	// The scope gate (bugboard #148) runs after ownership so it only ever
 	// tightens an already-authorized request; it never authorizes on its own.
 	return g.internalAuthMiddleware(
-		g.loggingMiddleware(
-			g.securityHeadersMiddleware(
-				g.rateLimitMiddleware(
-					g.corsMiddleware(
-						g.readinessGate(
-							g.domainRoutingMiddleware(
-								g.authMiddleware(
-									g.authorizationMiddleware(
-										g.scopeMiddleware(
-											g.namespaceRateLimitMiddleware(next)))))))))))
+		g.routePolicyMiddleware(
+			g.loggingMiddleware(
+				g.securityHeadersMiddleware(
+					g.rateLimitMiddleware(
+						g.corsMiddleware(
+							g.readinessGate(
+								g.domainRoutingMiddleware(
+									g.authMiddleware(
+										g.authorizationMiddleware(
+											g.scopeMiddleware(
+												g.namespaceRateLimitMiddleware(next))))))))))))
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses
@@ -538,7 +545,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		isPublic := isPublicPath(r.URL.Path)
+		isPublic := g.policyFor(r).Access.Anonymous()
 
 		// 0) Trust the internal-auth headers the main gateway forwarded.
 		//
@@ -691,88 +698,6 @@ func extractAPIKey(r *http.Request) string {
 	return auth.APIKeyFromRequest(r, isWebSocketUpgrade(r))
 }
 
-// isPublicPath returns true for routes that should be accessible without API key auth
-func isPublicPath(p string) bool {
-	// Allow ACME challenges for Let's Encrypt certificate provisioning
-	if strings.HasPrefix(p, "/.well-known/acme-challenge/") {
-		return true
-	}
-
-	// Serverless invocation is public (authorization is handled within the invoker)
-	if strings.HasPrefix(p, "/v1/invoke/") || (strings.HasPrefix(p, "/v1/functions/") && strings.HasSuffix(p, "/invoke")) {
-		return true
-	}
-
-	// Internal replica coordination endpoints (auth handled by replica handler)
-	if strings.HasPrefix(p, "/v1/internal/deployments/replica/") {
-		return true
-	}
-
-	// WireGuard peer exchange (auth handled by cluster secret in handler)
-	if strings.HasPrefix(p, "/v1/internal/wg/") {
-		return true
-	}
-
-	// Node join and node enrollment (auth handled by the invite token in the
-	// handler, which validates and consumes it single-use).
-	//
-	// Enrollment was exempted from the scope check on exactly those grounds
-	// and then not listed here, so the API-key middleware got the request
-	// first. The CLI sends the invite token as `Authorization: Bearer
-	// <token>`; extractAPIKey takes any Bearer token that is not a JWT as an
-	// API key, looked it up, found nothing, and answered 401 — which the CLI
-	// reported as "invalid or expired invite token". Enrolling a node could
-	// not work, and the error blamed the token.
-	if p == "/v1/internal/join" || p == "/v1/node/enroll" {
-		return true
-	}
-
-	// Namespace spawn endpoint (auth handled by internal auth header)
-	if p == "/v1/internal/namespace/spawn" {
-		return true
-	}
-
-	// Namespace cluster repair endpoint (auth handled by internal auth header)
-	if p == "/v1/internal/namespace/repair" {
-		return true
-	}
-
-	// Namespace WebRTC management endpoints (enable/disable/status). Auth is
-	// handled INSIDE the handlers by the X-Orama-Internal-Auth header +
-	// WireGuard-peer source check (same as spawn/repair above). Without this
-	// exemption the API-key middleware rejects them with "missing API key"
-	// before the handler's internal-auth check runs, making the internal
-	// endpoints unreachable — so `orama namespace enable webrtc` had no
-	// working path (the public endpoint hits a gateway without the WebRTC
-	// manager wired). Bugboard: internal webrtc mgmt endpoints unreachable.
-
-	// Internal storage eviction endpoint (bugboard #153). Auth is handled INSIDE
-	// the handler by the X-Orama-Internal-Auth header + WireGuard-peer source
-	// check (same as spawn/repair/webrtc above). Without this exemption the
-	// API-key middleware 401s the cross-node evict fan-out before the handler's
-	// internal-auth check runs, so immediate eviction would silently never
-	// execute (the unpin would report "partial" while the blob survived).
-	if p == "/v1/internal/storage/evict" {
-		return true
-	}
-
-	// Vault proxy endpoints (no auth — rate-limited per identity hash within handler)
-	if strings.HasPrefix(p, "/v1/vault/") {
-		return true
-	}
-
-	switch p {
-	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/network/status", "/v1/network/peers", "/v1/internal/tls/check", "/v1/internal/acme/present", "/v1/internal/acme/cleanup", "/v1/internal/ping":
-		return true
-	default:
-		// Also exempt namespace status polling endpoint
-		if strings.HasPrefix(p, "/v1/namespace/status") {
-			return true
-		}
-		return false
-	}
-}
-
 // authorizationMiddleware enforces that the authenticated actor owns the namespace
 // for certain protected paths (e.g., apps CRUD and storage APIs).
 // Also enforces cross-namespace access control:
@@ -780,20 +705,11 @@ func isPublicPath(p string) bool {
 // - Other namespaces: API key must belong to that specific namespace
 func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Skip for public/OPTIONS paths only
-		if r.Method == http.MethodOptions || isPublicPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Exempt whoami from ownership enforcement so users can inspect their session
-		if r.URL.Path == "/v1/auth/whoami" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Exempt namespace status endpoint
-		if strings.HasPrefix(r.URL.Path, "/v1/namespace/status") {
+		// Skip for public/OPTIONS paths only. What is public is the route's
+		// declared policy; whoami and namespace status used to need their own
+		// exemptions here because the path lists disagreed about them.
+		policy := g.policyFor(r)
+		if r.Method == http.MethodOptions || policy.Access.Anonymous() {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -848,8 +764,8 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Only enforce ownership for specific resource paths
-		if !requiresNamespaceOwnership(r.URL.Path) {
+		// Only enforce ownership where the route asks for it
+		if !policy.Ownership {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1005,53 +921,6 @@ func principalIdentifierCandidates(ownerType, ownerID, hashed string) []string {
 		}
 	}
 	return []string{ownerID}
-}
-
-// requiresNamespaceOwnership returns true if the path should be guarded by
-// namespace ownership checks.
-func requiresNamespaceOwnership(p string) bool {
-	if p == "/rqlite" || p == "/v1/rqlite" || strings.HasPrefix(p, "/v1/rqlite/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/pubsub") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/rqlite/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/proxy/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/functions") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/webrtc/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/push/") {
-		return true
-	}
-	// push-credentials is admin-scoped; also require ownership so it is
-	// double-gated like /v1/push/ (defense-in-depth, review follow-up).
-	if p == "/v1/namespace/push-credentials" || strings.HasPrefix(p, "/v1/namespace/push-credentials/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/serverless/") {
-		return true
-	}
-	// Scoped API-key management is namespace-scoped: the ownership check also
-	// lets a verified owner wallet (OwnerConfirmed) manage keys, not just an
-	// admin API key (bugboard #148).
-	if p == "/v1/namespace/keys" || strings.HasPrefix(p, "/v1/namespace/keys/") {
-		return true
-	}
-	// Membership management is namespace-scoped, and the ownership gate is
-	// also what resolves the caller's own role — which the transfer handler
-	// needs, since only the owner may hand the namespace over.
-	if p == "/v1/namespace/members" || strings.HasPrefix(p, "/v1/namespace/members/") {
-		return true
-	}
-	return false
 }
 
 // corsMiddleware applies CORS headers. Allows requests from the configured base
@@ -1230,7 +1099,7 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 				// so proxying these writes would land keys in the wrong DB (they'd
 				// never authenticate). Serve them on the main gateway instead,
 				// pinning the namespace from the subdomain.
-				if isKeyMgmtPath(r.URL.Path) {
+				if g.policyFor(r).MainGateway {
 					r = r.WithContext(context.WithValue(r.Context(), CtxKeyNamespaceOverride, namespaceName))
 					next.ServeHTTP(w, r)
 					return
@@ -1291,7 +1160,7 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 	// This ensures API keys work even though they're not in the namespace's RQLite
 	validatedNamespace, validatedClaims, validatedScopes, authErr := g.validateAuthForNamespaceProxy(r)
 	isWS := isWebSocketUpgrade(r)
-	isPublic := isPublicPath(r.URL.Path)
+	isPublic := g.policyFor(r).Access.Anonymous()
 
 	// Bug #240/#249 root-cause hardening: previously, when
 	// validateAuthForNamespaceProxy returned an empty namespace AND empty
