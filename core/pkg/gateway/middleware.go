@@ -655,7 +655,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 2) Fallback to API key (validate against DB)
-		key := extractAPIKey(r)
+		key, form := extractAPIKeyAndForm(r)
+		// Said on the response whether or not the key turns out to be valid:
+		// the spelling is going away regardless of what it carries.
+		markDeprecatedCredential(w, form)
 		if key == "" {
 			if isPublic {
 				next.ServeHTTP(w, r)
@@ -685,6 +688,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		reqCtx := context.WithValue(r.Context(), ctxKeyAPIKey, key)
 		reqCtx = context.WithValue(reqCtx, CtxKeyNamespaceOverride, ns)
 		reqCtx = context.WithValue(reqCtx, ctxKeyScopes, auth.ScopesFromStored(rawScopes))
+		g.recordDeprecatedCredential(r, ns, form)
 		next.ServeHTTP(w, r.WithContext(reqCtx))
 	})
 }
@@ -696,6 +700,11 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 // log, in the Referer of the next request the page makes, and in history.
 func extractAPIKey(r *http.Request) string {
 	return auth.APIKeyFromRequest(r, isWebSocketUpgrade(r))
+}
+
+// extractAPIKeyAndForm reads the key and the spelling it arrived in.
+func extractAPIKeyAndForm(r *http.Request) (string, auth.KeyForm) {
+	return auth.APIKeyAndFormFromRequest(r, isWebSocketUpgrade(r))
 }
 
 // authorizationMiddleware enforces that the authenticated actor owns the namespace

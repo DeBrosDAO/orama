@@ -61,6 +61,11 @@ type Gateway struct {
 	startedAt        time.Time
 
 	// rqlite SQL connection and HTTP ORM gateway
+	// credentialDeprecations remembers which namespaces have already been
+	// recorded using a credential form that is going away, so the audit trail
+	// says who still has to move without a row per request.
+	credentialDeprecations *deprecationLog
+
 	// shutdownCtx is cancelled by Close. Background work owned by the gateway
 	// derives from it so nothing keeps running against torn-down dependencies.
 	shutdownCtx context.Context
@@ -339,29 +344,30 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating gateway instance...")
 	shutdownCtx, shutdown := context.WithCancel(context.Background())
 	gw := &Gateway{
-		logger:             logger,
-		cfg:                cfg,
-		client:             deps.Client,
-		nodePeerID:         cfg.NodePeerID,
-		startedAt:          time.Now(),
-		tunnelLimiter:      newTunnelLimiter(),
-		ready:              newReadiness(),
-		shutdownCtx:        shutdownCtx,
-		shutdown:           shutdown,
-		sqlDB:              deps.SQLDB,
-		ormClient:          deps.ORMClient,
-		ormHTTP:            deps.ORMHTTP,
-		olricClient:        deps.OlricClient,
-		ipfsClient:         deps.IPFSClient,
-		serverlessEngine:   deps.ServerlessEngine,
-		serverlessRegistry: deps.ServerlessRegistry,
-		serverlessInvoker:  deps.ServerlessInvoker,
-		serverlessWSMgr:    deps.ServerlessWSMgr,
-		serverlessHandlers: deps.ServerlessHandlers,
-		authService:        deps.AuthService,
-		localSubscribers:   make(map[string][]*localSubscriber),
-		presenceMembers:    make(map[string][]PresenceMember),
-		circuitBreakers:    NewCircuitBreakerRegistry(),
+		logger:                 logger,
+		cfg:                    cfg,
+		client:                 deps.Client,
+		nodePeerID:             cfg.NodePeerID,
+		startedAt:              time.Now(),
+		tunnelLimiter:          newTunnelLimiter(),
+		ready:                  newReadiness(),
+		credentialDeprecations: newDeprecationLog(),
+		shutdownCtx:            shutdownCtx,
+		shutdown:               shutdown,
+		sqlDB:                  deps.SQLDB,
+		ormClient:              deps.ORMClient,
+		ormHTTP:                deps.ORMHTTP,
+		olricClient:            deps.OlricClient,
+		ipfsClient:             deps.IPFSClient,
+		serverlessEngine:       deps.ServerlessEngine,
+		serverlessRegistry:     deps.ServerlessRegistry,
+		serverlessInvoker:      deps.ServerlessInvoker,
+		serverlessWSMgr:        deps.ServerlessWSMgr,
+		serverlessHandlers:     deps.ServerlessHandlers,
+		authService:            deps.AuthService,
+		localSubscribers:       make(map[string][]*localSubscriber),
+		presenceMembers:        make(map[string][]PresenceMember),
+		circuitBreakers:        NewCircuitBreakerRegistry(),
 		proxyTransport: &http.Transport{
 			MaxIdleConns:        200,
 			MaxIdleConnsPerHost: 20,

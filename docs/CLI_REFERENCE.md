@@ -294,7 +294,7 @@ grants given and taken away, deployments, functions, secrets and namespace chang
 Events are shown oldest first. --follow keeps the command running and prints new
 ones as they are recorded.
 
-Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, grant.add, grant.revoke, namespace.transfer
+Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer
 
 | Flag | Default | Description |
 |------|---------|-------------|

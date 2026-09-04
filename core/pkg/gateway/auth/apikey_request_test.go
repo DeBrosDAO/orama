@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -93,6 +94,46 @@ func TestScopesFromStored_anEmptyColumnGrantsNothing(t *testing.T) {
 		}
 		if got.Has(ScopeAdmin) {
 			t.Errorf("ScopesFromStored(%q) grants admin", stored)
+		}
+	}
+}
+
+// A Bearer token is a JWT if it has exactly two dots, and a key otherwise. That
+// is only sound while no key format can contain a dot: a key with two in it
+// would be handed to the JWT verifier and refused as a bad token, and a JWT
+// with any other number would be looked up as a key.
+//
+// Both key formats are checked here rather than reasoned about: `orama_…` is
+// base62 with underscores, and the legacy `ak_<payload>:<namespace>` is
+// base64url with a colon. Neither alphabet has a dot, and this fails if one
+// ever gains it.
+func TestKeyFormatsContainNoDot(t *testing.T) {
+	if strings.Contains(base62Alphabet, ".") {
+		t.Error("the key alphabet contains a dot, so a key can be mistaken for a JWT")
+	}
+	if strings.Contains(KeyPrefix, ".") {
+		t.Error("the key prefix contains a dot")
+	}
+
+	for i := 0; i < 200; i++ {
+		key, err := NewKey(KeyTypeService)
+		if err != nil {
+			t.Fatalf("NewKey: %v", err)
+		}
+		if strings.Contains(key, ".") {
+			t.Fatalf("minted key %q contains a dot", key)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/v1/cache/get", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		if got, form := APIKeyAndFormFromRequest(req, false); got != key || form != KeyFormBearer {
+			t.Fatalf("a minted key sent as Bearer read back as (%q, %q)", got, form)
+		}
+	}
+
+	// The legacy format is base64url plus a colon.
+	for _, legacy := range []string{"ak_abcDEF-123_xyz:acme", "ak_A:default"} {
+		if strings.Contains(legacy, ".") {
+			t.Fatalf("legacy key %q contains a dot", legacy)
 		}
 	}
 }

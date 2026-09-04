@@ -45,6 +45,9 @@ const (
 	AuditDeploymentCreated = "deployment.deploy"
 	AuditDeploymentDeleted = "deployment.delete"
 	AuditOperatorAction    = "operator.action"
+	// A credential that arrived in a spelling that is going away. Recorded
+	// once per namespace per form, not once per request.
+	AuditLegacyCredential = "auth.legacy_credential"
 	// Who was given authority in a namespace, and who took it away. A grant is
 	// the thing an incident asks about after the fact.
 	AuditGrantAdded       = "grant.add"
@@ -60,7 +63,7 @@ var AuditActions = []string{
 	AuditLoggedOut, AuditKeyIssued, AuditKeyRevoked, AuditKeyRotated, AuditKeysRevokedBulk,
 	AuditNamespaceCreated, AuditNamespaceDeleted, AuditSecretSet, AuditSecretDeleted,
 	AuditFunctionDeployed, AuditFunctionDeleted, AuditDeploymentCreated, AuditDeploymentDeleted,
-	AuditOperatorAction,
+	AuditOperatorAction, AuditLegacyCredential,
 	AuditGrantAdded, AuditGrantRevoked, AuditOwnerTransferred,
 }
 

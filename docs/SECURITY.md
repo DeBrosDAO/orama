@@ -1,5 +1,8 @@
 # Security Hardening
 
+The model itself — identities, roles, grants, tokens, error codes — is
+[AUTH.md](AUTH.md). This page is the record of what each piece replaced and why.
+
 This document describes all security measures applied to the Orama Network, covering both Phase 1 (service hardening on existing Ubuntu nodes) and Phase 2 (OramaOS locked-down image).
 
 ## Phase 1: Service Hardening

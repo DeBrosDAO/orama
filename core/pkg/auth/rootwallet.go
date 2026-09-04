@@ -76,7 +76,7 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 		return nil, fmt.Errorf("failed to get wallet address: %w", err)
 	}
 
-	if !ValidateWalletAddress(wallet) {
+	if !validateEVMWalletAddress(wallet) {
 		return nil, fmt.Errorf("invalid wallet address from rw: %s", wallet)
 	}
 

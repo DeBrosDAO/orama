@@ -35,6 +35,7 @@ make vault-build
 | [Architecture](docs/ARCHITECTURE.md) | System architecture and design patterns |
 | [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Deploy apps, databases, and domains |
 | [Dev & Deploy](docs/DEV_DEPLOY.md) | Building, deploying to VPS, rolling upgrades |
+| [Authentication](docs/AUTH.md) | Who someone is, what they may do, and how the gateway decides |
 | [Security](docs/SECURITY.md) | Security hardening and threat model |
 | [Monitoring](docs/MONITORING.md) | Cluster health monitoring |
 | [TypeScript SDK](docs/TS_SDK.md) | `@debros/orama` — the client applications use |

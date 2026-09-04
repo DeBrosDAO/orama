@@ -867,8 +867,8 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **WireGuard IPs:** Each node gets a private IP (10.0.0.x/24) used for all cluster traffic
 - **UFW Firewall:** Only public ports are exposed: 22 (SSH; Ubuntu/sandbox only — OramaOS has no SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
 - **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
-- **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are only accessible via WireGuard or localhost
-- **Invite tokens:** Single-use, time-limited tokens for secure node joining. No shared secrets on the CLI
+- **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are reachable only from the overlay **because the firewall says so, not because of where they listen**. A namespace's RQLite is spawned with `HTTP_ADDR=0.0.0.0:<port>` and `RAFT_ADDR=0.0.0.0:<port>`, and a namespace gateway with `ListenAddr: ":<port>"` (`pkg/namespace/systemd_spawner.go`), so all of them are bound to every interface and one wrong UFW rule exposes them. Moving the namespace gateway onto the overlay address is chg-387, which explains why it is not a one-liner; the same is true of the RQLite listeners. Until then the firewall is the only thing between them and the internet
+- **Invite tokens:** Single-use and time-limited, and there is no standing cluster password. The token is still a secret passed as a command-line argument, so it is visible to `ps` and lands in shell history on the machine that runs `orama node install`
 - **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh. The joining node establishes its libp2p identity before it asks to join, so the request carries the peer id the cluster will key it by
 
 **Join ordering.** `/v1/internal/join` does everything that can fail without

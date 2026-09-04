@@ -94,6 +94,42 @@ the key does not hold, naming the one it needed. `--scope` takes a profile
 (`invoke-only`, `app-runtime`, `admin`) or an explicit grant list. See
 [Where a key belongs](TS_SDK.md#where-a-key-belongs).
 
+Every key expires — 90 days by default, a year at most — and `orama namespace
+keys rotate --id <id>` mints a successor with the same grants while leaving the
+original alive for a week, so there is a window in which to deploy the new one.
+
+### Working with other people
+
+A namespace has one owner and any number of members, and a member holds a role:
+
+```bash
+orama members list
+orama members add 0xabc… --role admin     # the control plane
+orama members add 0xdef… --role runtime   # the data plane
+orama members remove 0xabc…
+orama members transfer 0xabc…             # hand the namespace over
+```
+
+`admin` is everything except ownership; `runtime` is invoke, storage, push,
+webrtc, proxy, pubsub and cache; `reader` is a member with no grant at all.
+Ownership is transferred rather than granted, because a namespace with no owner
+is claimable by whoever signs in to it next — you keep an admin grant, so
+handing a project over does not lock you out of it.
+
+### What happened, and who did it
+
+```bash
+orama audit                 # oldest first
+orama audit --follow        # and keep printing
+```
+
+Sign-ins, keys minted and revoked, grants given and taken away, deployments,
+functions, secrets and namespace changes, each with who did it and from where.
+Events are kept 90 days.
+
+The whole model — identities, roles, grants, tokens, and what each refusal
+means — is in [AUTH.md](AUTH.md).
+
 ---
 
 ## Deploying Static Sites
