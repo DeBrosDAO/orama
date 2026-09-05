@@ -75,6 +75,20 @@ var TemplateUnits = []string{
 	"orama-namespace-coredns@.service",
 }
 
+// DeploymentTemplateUnits are the per-runtime templates a tenant's deployment
+// runs as.
+//
+// The gateway used to write a unit per deployment, with `tee` into /etc, which
+// only worked because it ran as root. It does not any more — User=orama,
+// ProtectSystem=strict, NoNewPrivileges=yes — so the units are installed once,
+// here, and the gateway only ever writes the environment file it owns and
+// starts an instance of the template.
+var DeploymentTemplateUnits = []string{
+	"orama-deploy-node@.service",
+	"orama-deploy-npm@.service",
+	"orama-deploy-go@.service",
+}
+
 // UnitFilesToInstall is every unit file copied into /etc/systemd/system by
 // install and upgrade: the orama-namespace-*@ templates plus the shared,
 // host-level TURN unit.
@@ -88,8 +102,9 @@ var TemplateUnits = []string{
 //
 // A fresh slice is returned so callers cannot alias TemplateUnits.
 func UnitFilesToInstall() []string {
-	units := make([]string, 0, len(TemplateUnits)+1)
+	units := make([]string, 0, len(TemplateUnits)+len(DeploymentTemplateUnits)+1)
 	units = append(units, TemplateUnits...)
+	units = append(units, DeploymentTemplateUnits...)
 	units = append(units, HostTURNServiceName)
 	return units
 }
@@ -433,13 +448,16 @@ func (m *Manager) StopAllNamespaceServicesGlobally() error {
 }
 
 // StopDeploymentServicesForNamespace stops all deployment systemd units for a given namespace.
-// Deployment units follow the naming pattern: orama-deploy-{namespace}-{name}.service
-// (with dots replaced by hyphens, matching process/manager.go:getServiceName).
+//
+// A deployment runs as an instance of a per-runtime template:
+// orama-deploy-{runtime}@{namespace}-{name}.service, with dots replaced by
+// hyphens. The glob has to name the runtime segment too — `orama-deploy-<ns>-*`
+// matched the units the gateway used to write itself and matches none of these.
 // This is best-effort: individual failures are logged but do not abort the operation.
 func (m *Manager) StopDeploymentServicesForNamespace(namespace string) {
-	// Match the sanitization from deployments/process/manager.go:getServiceName
+	// Match the sanitization from deployments/process.InstanceName.
 	sanitizedNS := strings.ReplaceAll(namespace, ".", "-")
-	pattern := fmt.Sprintf("orama-deploy-%s-*", sanitizedNS)
+	pattern := fmt.Sprintf("orama-deploy-*@%s-*", sanitizedNS)
 
 	m.logger.Info("Stopping deployment services for namespace",
 		zap.String("namespace", namespace),

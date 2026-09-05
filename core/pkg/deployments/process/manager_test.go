@@ -180,51 +180,6 @@ func TestGetStartCommand(t *testing.T) {
 	}
 }
 
-func TestMapRestartPolicy(t *testing.T) {
-	m := NewManager(zap.NewNop(), Config{})
-
-	tests := []struct {
-		name   string
-		policy deployments.RestartPolicy
-		want   string
-	}{
-		{
-			name:   "always",
-			policy: deployments.RestartPolicyAlways,
-			want:   "always",
-		},
-		{
-			name:   "on-failure",
-			policy: deployments.RestartPolicyOnFailure,
-			want:   "on-failure",
-		},
-		{
-			name:   "never maps to no",
-			policy: deployments.RestartPolicyNever,
-			want:   "no",
-		},
-		{
-			name:   "empty string defaults to on-failure",
-			policy: deployments.RestartPolicy(""),
-			want:   "on-failure",
-		},
-		{
-			name:   "unknown policy defaults to on-failure",
-			policy: deployments.RestartPolicy("unknown"),
-			want:   "on-failure",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := m.mapRestartPolicy(tt.policy)
-			if got != tt.want {
-				t.Errorf("mapRestartPolicy(%q) = %q, want %q", tt.policy, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestParseSystemctlShow(t *testing.T) {
 	tests := []struct {
 		name  string

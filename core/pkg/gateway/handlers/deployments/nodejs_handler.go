@@ -146,7 +146,7 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 // deploy deploys a Node.js backend
 func (h *NodeJSHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string, skipInstall bool, envVars map[string]string) (*deployments.Deployment, error) {
 	// Create deployment directory
-	deployPath := filepath.Join(h.baseDeployPath, namespace, name)
+	deployPath := process.DeployDir(h.baseDeployPath, namespace, name)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create deployment directory: %w", err)
 	}

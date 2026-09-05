@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"go.uber.org/zap"
@@ -217,7 +218,7 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 	)
 
 	// Extract to staging directory
-	stagingPath := fmt.Sprintf("%s.new", h.nextjsHandler.baseDeployPath+"/"+existing.Namespace+"/"+existing.Name)
+	stagingPath := process.DeployDir(h.nextjsHandler.baseDeployPath, existing.Namespace, existing.Name) + ".new"
 	if err := os.MkdirAll(stagingPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create staging directory: %w", err)
 	}
@@ -226,7 +227,7 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 	}
 
 	// Atomic swap: rename old to .old, new to current
-	deployPath := h.nextjsHandler.baseDeployPath + "/" + existing.Namespace + "/" + existing.Name
+	deployPath := process.DeployDir(h.nextjsHandler.baseDeployPath, existing.Namespace, existing.Name)
 	oldPath := deployPath + ".old"
 
 	// Backup current

@@ -76,3 +76,48 @@ func TestInstallTemplateUnits_unwritable_destination_fails(t *testing.T) {
 		t.Fatalf("error does not identify the write failure: %v", err)
 	}
 }
+
+// A deployment's unit is a template installed with the release. If it is not on
+// the install list it is not on the node, and the first tenant deploy after an
+// upgrade fails with "Unit orama-deploy-node@… not found".
+func TestUnitFilesToInstall_includesTheDeploymentTemplates(t *testing.T) {
+	installed := map[string]bool{}
+	for _, unit := range UnitFilesToInstall() {
+		installed[unit] = true
+	}
+	for _, unit := range DeploymentTemplateUnits {
+		if !installed[unit] {
+			t.Errorf("%s is a deployment template and is never installed", unit)
+		}
+	}
+}
+
+// And it has to exist in the tree that ships, or the install fails outright.
+func TestDeploymentTemplateUnits_shipWithTheRelease(t *testing.T) {
+	root := repoRootDir(t)
+	for _, unit := range DeploymentTemplateUnits {
+		path := filepath.Join(root, "systemd", unit)
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s is on the install list and not in the tree: %v", unit, err)
+		}
+	}
+}
+
+// repoRootDir walks up to the directory holding go.mod.
+func repoRootDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod above the working directory")
+		}
+		dir = parent
+	}
+}

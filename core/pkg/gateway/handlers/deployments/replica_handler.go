@@ -110,7 +110,7 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Create the deployment directory
-	deployPath := filepath.Join(h.baseDeployPath, req.Namespace, req.Name)
+	deployPath := process.DeployDir(h.baseDeployPath, req.Namespace, req.Name)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
 		http.Error(w, "Failed to create deployment directory", http.StatusInternalServerError)
 		return
@@ -243,7 +243,7 @@ func (h *ReplicaHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		cid = req.ContentCID
 	}
 
-	deployPath := filepath.Join(h.baseDeployPath, req.Namespace, req.Name)
+	deployPath := process.DeployDir(h.baseDeployPath, req.Namespace, req.Name)
 	stagingPath := deployPath + ".new"
 	oldPath := deployPath + ".old"
 
@@ -393,7 +393,7 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Remove deployment files
-	deployPath := filepath.Join(h.baseDeployPath, req.Namespace, req.Name)
+	deployPath := process.DeployDir(h.baseDeployPath, req.Namespace, req.Name)
 	if err := os.RemoveAll(deployPath); err != nil {
 		h.logger.Warn("Failed to remove replica files", zap.Error(err))
 	}

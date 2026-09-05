@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -231,7 +230,7 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Remove deployment files from disk
 	if h.baseDeployPath != "" {
-		deployDir := filepath.Join(h.baseDeployPath, deployment.Namespace, deployment.Name)
+		deployDir := process.DeployDir(h.baseDeployPath, deployment.Namespace, deployment.Name)
 		if err := os.RemoveAll(deployDir); err != nil {
 			h.logger.Warn("Failed to remove deployment files", zap.Error(err), zap.String("path", deployDir))
 		}

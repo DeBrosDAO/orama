@@ -17,10 +17,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// systemdUnitDir is where unit files live. Named once so the write and the
-// removal cannot drift apart.
-const systemdUnitDir = "/etc/systemd/system"
-
 // Config is what the process manager needs from the gateway that owns it.
 type Config struct {
 	// EnvDir holds one environment file per deployment. It is separate from
@@ -76,10 +72,14 @@ func (m *Manager) gatewayURL(namespace string) string {
 // deploymentEnv is the full environment of one deployment: what the tenant set,
 // with the platform's own variables applied last so they cannot be displaced.
 func (m *Manager) deploymentEnv(deployment *deployments.Deployment, serviceName string) map[string]string {
+	// A deployment with no runtime is served rather than run, so it has no
+	// entry point and the template that would use one is never instantiated.
+	_, entryPoint, _ := RuntimeFor(deployment)
 	return mergeEnv(deployment.Environment, platformEnv(
 		deployment.Namespace,
 		serviceName,
 		m.gatewayURL(deployment.Namespace),
+		entryPoint,
 		deployment.Port,
 	))
 }
@@ -155,23 +155,31 @@ func (m *Manager) Start(ctx context.Context, deployment *deployments.Deployment,
 		return m.startDirect(ctx, deployment, workDir)
 	}
 
-	// Create systemd service file
-	if err := m.createSystemdService(deployment, workDir); err != nil {
-		return fmt.Errorf("failed to create systemd service: %w", err)
+	unit, err := m.unitName(deployment)
+	if err != nil {
+		return err
 	}
 
-	// Reload systemd
-	if err := m.systemdReload(); err != nil {
-		return fmt.Errorf("failed to reload systemd: %w", err)
+	// The environment file is the only thing the gateway writes. The unit is a
+	// template installed at install time, because a gateway that is not root
+	// cannot write into /etc — and must not be root, which is the whole point
+	// of the hardened gateway unit.
+	if _, err := m.writeEnvFile(deployment, serviceName); err != nil {
+		return err
 	}
 
-	// Enable service
-	if err := m.systemdEnable(serviceName); err != nil {
+	// Limits the tenant asked for. The template carries the defaults, so this
+	// runs only when they differ — it is the one call here that writes a
+	// root-owned file, and systemd writes it on our behalf.
+	if err := m.applyResourceLimits(deployment, unit); err != nil {
+		return err
+	}
+
+	if err := m.systemdEnable(unit); err != nil {
 		return fmt.Errorf("failed to enable service: %w", err)
 	}
 
-	// Start service
-	if err := m.systemdStart(serviceName); err != nil {
+	if err := m.systemdStart(unit); err != nil {
 		return fmt.Errorf("failed to start service: %w", err)
 	}
 
@@ -265,22 +273,21 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 		return m.stopDirect(serviceName)
 	}
 
-	// Stop service
-	if err := m.systemdStop(serviceName); err != nil {
+	unit, err := m.unitName(deployment)
+	if err != nil {
+		return err
+	}
+
+	if err := m.systemdStop(unit); err != nil {
 		m.logger.Warn("Failed to stop service", zap.Error(err))
 	}
 
-	// Disable service
-	if err := m.systemdDisable(serviceName); err != nil {
+	if err := m.systemdDisable(unit); err != nil {
 		m.logger.Warn("Failed to disable service", zap.Error(err))
 	}
 
-	// Remove service file
-	serviceFile := filepath.Join(systemdUnitDir, serviceName+".service")
-	cmd := exec.Command("rm", "-f", serviceFile)
-	if err := cmd.Run(); err != nil {
-		m.logger.Warn("Failed to remove service file", zap.Error(err))
-	}
+	// There is no unit file to remove: the unit is a template instance, and
+	// the instance stops existing when nothing references it.
 
 	// The environment file holds the tenant's secrets. Leaving it behind
 	// leaves them on the node after the deployment is gone.
@@ -288,9 +295,39 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 		m.logger.Error("the deployment's secrets are still on disk", zap.Error(err))
 	}
 
-	// Reload systemd
-	m.systemdReload()
+	return nil
+}
 
+// unitName is the template instance that runs a deployment.
+func (m *Manager) unitName(deployment *deployments.Deployment) (string, error) {
+	runtime, _, err := RuntimeFor(deployment)
+	if err != nil {
+		return "", err
+	}
+	return UnitName(runtime, deployment.Namespace, deployment.Name), nil
+}
+
+// applyResourceLimits sets the memory and CPU a deployment asked for.
+//
+// `systemctl set-property` writes the drop-in as root on our behalf, which is
+// what keeps the gateway out of /etc. Only the values that differ from the
+// template's defaults are sent, so a deployment that asked for nothing costs
+// no call at all.
+func (m *Manager) applyResourceLimits(deployment *deployments.Deployment, unit string) error {
+	var props []string
+	if mb := deployment.MemoryLimitMB; mb > 0 && mb != deployments.DefaultMemoryLimitMB {
+		props = append(props, fmt.Sprintf("MemoryMax=%dM", mb))
+	}
+	if cpu := deployment.CPULimitPercent; cpu > 0 && cpu != deployments.DefaultCPULimitPercent {
+		props = append(props, fmt.Sprintf("CPUQuota=%d%%", cpu))
+	}
+	if len(props) == 0 {
+		return nil
+	}
+	args := append([]string{"set-property", unit}, props...)
+	if err := runSystemctl(args...); err != nil {
+		return fmt.Errorf("failed to apply the resource limits of %s: %w", unit, err)
+	}
 	return nil
 }
 
@@ -331,20 +368,21 @@ func (m *Manager) Restart(ctx context.Context, deployment *deployments.Deploymen
 		return nil
 	}
 
-	return m.systemdRestart(serviceName)
+	unit, err := m.unitName(deployment)
+	if err != nil {
+		return err
+	}
+	return m.systemdRestart(unit)
 }
 
-// Reconfigure rewrites the deployment's unit file from its current
-// configuration and restarts it.
+// Reconfigure rewrites the deployment's environment and restarts it.
 //
-// Restart alone is not enough to change a deployment's environment: the
-// variables live in the systemd unit, which is written once at Start and never
-// touched again. `systemctl restart` re-executes the same unit with the same
-// Environment= lines, so an environment change made in the database would take
-// effect only the next time the app was redeployed.
-//
-// workDir is the deployment's directory, which the unit's start command and
-// WorkingDirectory are built from.
+// Restart alone was not enough while the variables lived in the unit, which was
+// written once at Start and never touched again: `systemctl restart`
+// re-executed the same unit with the same Environment= lines, so a change made
+// in the database took effect only on the next deploy. They live in a file the
+// unit reads at every start now, so rewriting it and restarting is the whole
+// operation.
 func (m *Manager) Reconfigure(ctx context.Context, deployment *deployments.Deployment, workDir string) error {
 	if !m.useSystemd {
 		// Direct mode holds the environment in the process it spawned, so the
@@ -353,13 +391,17 @@ func (m *Manager) Reconfigure(ctx context.Context, deployment *deployments.Deplo
 		return m.startDirect(ctx, deployment, workDir)
 	}
 
-	if err := m.createSystemdService(deployment, workDir); err != nil {
-		return fmt.Errorf("failed to rewrite systemd service: %w", err)
+	unit, err := m.unitName(deployment)
+	if err != nil {
+		return err
 	}
-	if err := m.systemdReload(); err != nil {
-		return fmt.Errorf("failed to reload systemd: %w", err)
+	if _, err := m.writeEnvFile(deployment, m.getServiceName(deployment)); err != nil {
+		return fmt.Errorf("failed to rewrite the environment of %s: %w", unit, err)
 	}
-	if err := m.systemdRestart(m.getServiceName(deployment)); err != nil {
+	if err := m.applyResourceLimits(deployment, unit); err != nil {
+		return err
+	}
+	if err := m.systemdRestart(unit); err != nil {
 		return fmt.Errorf("failed to restart service: %w", err)
 	}
 
@@ -384,7 +426,11 @@ func (m *Manager) Status(ctx context.Context, deployment *deployments.Deployment
 		return "inactive", nil
 	}
 
-	cmd := exec.CommandContext(ctx, "systemctl", "is-active", serviceName)
+	unit, err := m.unitName(deployment)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, "systemctl", "is-active", unit)
 	output, err := cmd.Output()
 	if err != nil {
 		return "unknown", err
@@ -415,7 +461,11 @@ func (m *Manager) GetLogs(ctx context.Context, deployment *deployments.Deploymen
 		return data, nil
 	}
 
-	args := []string{"-u", serviceName, "--no-pager"}
+	unit, err := m.unitName(deployment)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"-u", unit, "--no-pager"}
 	if lines > 0 {
 		args = append(args, "-n", fmt.Sprintf("%d", lines))
 	}
@@ -425,41 +475,6 @@ func (m *Manager) GetLogs(ctx context.Context, deployment *deployments.Deploymen
 
 	cmd := exec.CommandContext(ctx, "journalctl", args...)
 	return cmd.Output()
-}
-
-// createSystemdService writes the deployment's environment file and its unit.
-func (m *Manager) createSystemdService(deployment *deployments.Deployment, workDir string) error {
-	serviceName := m.getServiceName(deployment)
-
-	envFile, err := m.writeEnvFile(deployment, serviceName)
-	if err != nil {
-		return err
-	}
-
-	unit, err := RenderUnit(UnitSpec{
-		ServiceName:     serviceName,
-		Namespace:       deployment.Namespace,
-		Name:            deployment.Name,
-		WorkDir:         workDir,
-		StartCmd:        m.getStartCommand(deployment, workDir),
-		EnvFilePath:     envFile,
-		RestartPolicy:   m.mapRestartPolicy(deployment.RestartPolicy),
-		MemoryLimitMB:   deployment.MemoryLimitMB,
-		CPULimitPercent: deployment.CPULimitPercent,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to render the unit for %s: %w", serviceName, err)
-	}
-
-	serviceFile := filepath.Join(systemdUnitDir, serviceName+".service")
-	cmd := exec.Command("tee", serviceFile)
-	cmd.Stdin = strings.NewReader(unit)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to write service file %s: %s: %w", serviceFile, string(output), err)
-	}
-
-	return nil
 }
 
 // getStartCommand determines the start command for a deployment
@@ -489,20 +504,6 @@ func (m *Manager) getStartCommand(deployment *deployments.Deployment, workDir st
 		return filepath.Join(workDir, "app")
 	default:
 		return "echo 'Unknown deployment type'"
-	}
-}
-
-// mapRestartPolicy maps deployment restart policy to systemd restart policy
-func (m *Manager) mapRestartPolicy(policy deployments.RestartPolicy) string {
-	switch policy {
-	case deployments.RestartPolicyAlways:
-		return "always"
-	case deployments.RestartPolicyOnFailure:
-		return "on-failure"
-	case deployments.RestartPolicyNever:
-		return "no"
-	default:
-		return "on-failure"
 	}
 }
 
@@ -609,10 +610,11 @@ func (m *Manager) GetStats(ctx context.Context, deployment *deployments.Deployme
 	}
 
 	// Systemd mode (Linux) — get PID, CPU, RAM, uptime
-	serviceName := m.getServiceName(deployment)
-
-	// Get MainPID and ActiveEnterTimestamp
-	cmd := exec.CommandContext(ctx, "systemctl", "show", serviceName,
+	unit, err := m.unitName(deployment)
+	if err != nil {
+		return stats, err
+	}
+	cmd := exec.CommandContext(ctx, "systemctl", "show", unit,
 		"--property=MainPID,ActiveEnterTimestamp")
 	output, err := cmd.Output()
 	if err != nil {

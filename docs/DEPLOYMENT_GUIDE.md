@@ -560,8 +560,8 @@ orama app env set my-api --env-file .env.production
 orama app env unset my-api OLD_FLAG DEBUG_MODE
 ```
 
-Setting or removing a variable rewrites the app's systemd unit and restarts it,
-so the change takes effect immediately. A static site has no process, so its
+Setting or removing a variable rewrites the app's environment file and restarts
+it, so the change takes effect immediately. A static site has no process, so its
 variables are recorded and nothing is restarted.
 
 **`list` shows names, never values.** Environment variables are where secrets
@@ -577,6 +577,7 @@ These names are set by the platform and cannot be overwritten or removed:
 |------|------------|
 | `PORT` | The port your app must listen on. It is how the gateway reaches you |
 | `ENTRY_POINT` | What a Node.js deployment runs |
+| `ORAMA_ENTRYPOINT` | The script the runtime starts, derived from `ENTRY_POINT` |
 | `ORAMA_NAMESPACE` | The namespace this deployment belongs to |
 | `ORAMA_GATEWAY_URL` | Your namespace's own gateway, `https://ns-<namespace>.<domain>` |
 | `ORAMA_STATE_DIR` | A directory your app may write to that survives restarts |
@@ -608,6 +609,23 @@ A value may contain anything that is valid UTF-8, including quotes,
 backslashes, spaces and newlines, so a PEM key or a JSON blob goes in as it is.
 It may not contain a NUL byte, and one value may be at most 64 KiB: every value
 is replicated to every node in the cluster.
+
+### What runs your app
+
+Your app is an instance of a systemd template installed with the platform —
+`orama-deploy-node@`, `orama-deploy-npm@` or `orama-deploy-go@` — named
+`orama-deploy-<runtime>@<namespace>-<name>`. Which one you get follows from the
+deployment type and, for Node.js, from `ENTRY_POINT`: `npm:start` runs
+`npm start`, anything else runs `node <that file>`, and no value runs
+`node index.js`.
+
+The gateway does not write a unit for your app. It writes only the environment
+file, and starts the template. That is not an implementation detail you can
+ignore if you are running a node: the gateway runs as an unprivileged user with
+`ProtectSystem=strict` and `NoNewPrivileges=yes`, so it *cannot* write into
+`/etc`, and a node whose templates were not installed will refuse every deploy
+with "Unit orama-deploy-node@… not found". They are installed by
+`orama node install` and by every upgrade.
 
 ### What your app runs as
 

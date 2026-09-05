@@ -152,7 +152,7 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 // deploySSR deploys Next.js in SSR mode
 func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomain, cid string) (*deployments.Deployment, error) {
 	// Create deployment directory
-	deployPath := filepath.Join(h.baseDeployPath, namespace, name)
+	deployPath := process.DeployDir(h.baseDeployPath, namespace, name)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create deployment directory: %w", err)
 	}

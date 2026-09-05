@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"go.uber.org/zap"
 )
 
@@ -239,7 +240,7 @@ func (h *RollbackHandler) rollbackDynamic(ctx context.Context, current *deployme
 		cid = history.ContentCID
 	}
 
-	deployPath := h.updateHandler.nextjsHandler.baseDeployPath + "/" + current.Namespace + "/" + current.Name
+	deployPath := process.DeployDir(h.updateHandler.nextjsHandler.baseDeployPath, current.Namespace, current.Name)
 	stagingPath := deployPath + ".rollback"
 
 	// Extract historical version
