@@ -60,6 +60,15 @@ function loadFixtures(): Fixture[] {
 function clientFor(fixture: Fixture) {
   const seen: { url?: string; method?: string; body?: unknown } = {};
   const fetchImpl = vi.fn(async (url: any, init: any) => {
+    // The client exchanges its key for a token before the first request, so
+    // the transport has to answer that too. It is the only request the SDK
+    // makes that the caller did not ask for.
+    if (String(url).endsWith('/v1/auth/token')) {
+      return new Response(
+        JSON.stringify({ access_token: 'header.payload.signature', expires_in: 900 }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }
     seen.url = String(url);
     seen.method = init?.method;
     seen.body = init?.body ? JSON.parse(init.body) : undefined;

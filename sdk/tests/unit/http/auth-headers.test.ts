@@ -2,106 +2,137 @@ import { describe, expect, it, vi } from 'vitest';
 import { HttpClient } from '../../../src/core/http';
 
 /**
- * The complete credential matrix, asserted against the client that actually
- * sends the requests.
+ * One credential, one header, on every route.
  *
- * These rules used to exist twice: once in `HttpClient.getAuthHeaders` and once
- * in a `PathBasedAuthStrategy` class that nothing constructed and that never
- * reached the published bundle. The tests were written against the copy that
- * did not run. The copy is gone; the assertions moved here, where a change to
- * the live rules breaks them.
+ * There used to be a path-substring switch: database, pubsub and cache calls
+ * sent `X-API-Key`, auth calls sent both, everything else sent both the other
+ * way round — three spellings chosen by looking at the URL, and the raw key on
+ * every request. These are the rules that replaced it.
  */
 
-const KEY = 'ak_runtime:anchat-test';
+const KEY = 'orama_rk_3kFj9sPqR2vX7mNb_1a2b3c';
 const JWT = 'eyJhbGciOi.wallet.jwt';
+const EXCHANGED = 'header.exchanged.signature';
 
-function client(apiKey?: string, jwt?: string) {
-  const seen: { headers: Record<string, string> } = { headers: {} };
-  const fetchImpl = vi.fn(async (_url: any, options: any) => {
-    seen.headers = options?.headers ?? {};
+/** A client whose transport records what it was sent. */
+function client(options: { apiKey?: string; jwt?: string } = {}) {
+  const seen: { headers: Record<string, string>; urls: string[] } = { headers: {}, urls: [] };
+  const fetchImpl = vi.fn(async (url: any, init: any) => {
+    seen.urls.push(String(url));
+    if (String(url).endsWith('/v1/auth/token')) {
+      return new Response(JSON.stringify({ access_token: EXCHANGED, expires_in: 900 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    seen.headers = init?.headers ?? {};
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
   });
+
   const http = new HttpClient({
     baseURL: 'https://gw.example',
     maxRetries: 0,
     fetch: fetchImpl as any,
   });
-  if (apiKey) http.setApiKey(apiKey);
-  if (jwt) http.setJwt(jwt);
-  return { http, seen };
+  if (options.apiKey) {
+    http.setApiKey(options.apiKey);
+    // The auth client installs this; here it is inline, because what is being
+    // tested is what the transport sends once a key becomes a token.
+    http.setKeyExchanger(async () => {
+      const res = await http.request<{ access_token: string; expires_in: number }>(
+        'POST',
+        '/v1/auth/token',
+        { ownCredential: true, headers: { Authorization: `Bearer ${options.apiKey}` } }
+      );
+      return { token: res.access_token, expiresAt: Date.now() + res.expires_in * 1000 };
+    });
+  }
+  if (options.jwt) {
+    http.setJwt(options.jwt);
+  }
+  return { http, seen, fetchImpl };
 }
 
-async function headersFor(path: string, apiKey?: string, jwt?: string) {
-  const { http, seen } = client(apiKey, jwt);
-  await http.post(path, {});
-  return seen.headers;
-}
+const routes = [
+  '/v1/rqlite/query',
+  '/v1/pubsub/publish',
+  '/v1/cache/get',
+  '/v1/storage/upload',
+  '/v1/proxy/anon',
+  '/v1/push/devices',
+  '/v1/webrtc/signal',
+  '/v1/auth/whoami',
+];
 
-describe('HttpClient credential selection by path', () => {
-  // Namespace data planes are authorised by the API key alone. A user JWT
-  // riding along would add a user context the gateway then has to reconcile
-  // with namespace-level authorisation.
-  it.each(['/v1/rqlite/query', '/v1/pubsub/publish', '/v1/cache/get'])(
-    'sends only the API key on %s',
-    async (path) => {
-      const headers = await headersFor(path, KEY, JWT);
-      expect(headers['X-API-Key']).toBe(KEY);
-      expect(headers['Authorization']).toBeUndefined();
-    },
-  );
+describe('every route carries the same one credential', () => {
+  it.each(routes)('%s sends only Authorization: Bearer', async (route) => {
+    const { http, seen } = client({ apiKey: KEY });
+    await http.request('POST', route, {});
 
-  // Without an API key those same paths have nothing else to offer, so the JWT
-  // goes instead of nothing.
-  it.each(['/v1/rqlite/query', '/v1/pubsub/publish', '/v1/cache/get'])(
-    'falls back to the JWT on %s when no API key is set',
-    async (path) => {
-      const headers = await headersFor(path, undefined, JWT);
-      expect(headers['X-API-Key']).toBeUndefined();
-      expect(headers['Authorization']).toBe(`Bearer ${JWT}`);
-    },
-  );
-
-  // Bugboard #148/#149: the gateway enforces a per-user wallet JWT on proxy.
-  // An API key alone is rejected 401 "requires a logged-in user".
-  it.each(['/v1/proxy/anon', '/v1/storage/upload', '/v1/push/devices', '/v1/webrtc/signal'])(
-    'sends both credentials on %s',
-    async (path) => {
-      const headers = await headersFor(path, KEY, JWT);
-      expect(headers['X-API-Key']).toBe(KEY);
-      expect(headers['Authorization']).toBe(`Bearer ${JWT}`);
-    },
-  );
-
-  it('sends both credentials on auth endpoints', async () => {
-    const headers = await headersFor('/v1/auth/whoami', KEY, JWT);
-    expect(headers['X-API-Key']).toBe(KEY);
-    expect(headers['Authorization']).toBe(`Bearer ${JWT}`);
+    expect(seen.headers['Authorization']).toBe(`Bearer ${EXCHANGED}`);
+    expect(seen.headers['X-API-Key']).toBeUndefined();
   });
 
-  it('degrades to the API key alone when no JWT has been set', async () => {
-    const headers = await headersFor('/v1/proxy/anon', KEY, undefined);
-    expect(headers['X-API-Key']).toBe(KEY);
-    expect(headers['Authorization']).toBeUndefined();
-  });
+  it.each(routes)('%s never carries the key itself', async (route) => {
+    const { http, seen } = client({ apiKey: KEY });
+    await http.request('POST', route, {});
 
-  it('sends no credential header when neither is set', async () => {
-    const headers = await headersFor('/v1/network/status');
-    expect(headers['X-API-Key']).toBeUndefined();
-    expect(headers['Authorization']).toBeUndefined();
+    for (const value of Object.values(seen.headers)) {
+      expect(value).not.toContain(KEY);
+    }
   });
+});
 
-  it('keeps both credentials when each is set in turn', async () => {
-    const { http, seen } = client();
-    http.setApiKey(KEY);
-    http.setJwt(JWT);
-    await http.post('/v1/storage/upload', {});
-    expect(seen.headers['X-API-Key']).toBe(KEY);
+describe('which credential is sent', () => {
+  it('a user JWT wins over the key, and nothing else is sent alongside it', async () => {
+    const { http, seen } = client({ apiKey: KEY, jwt: JWT });
+    await http.request('GET', '/v1/storage/pin', {});
+
     expect(seen.headers['Authorization']).toBe(`Bearer ${JWT}`);
-    expect(http.getApiKey()).toBe(KEY);
-    // getToken prefers the JWT: it is the more specific identity.
-    expect(http.getToken()).toBe(JWT);
+    expect(seen.headers['X-API-Key']).toBeUndefined();
+  });
+
+  it('a client with no credential sends no Authorization header at all', async () => {
+    const { http, seen } = client();
+    await http.request('GET', '/v1/health', {});
+
+    expect(seen.headers['Authorization']).toBeUndefined();
+  });
+});
+
+describe('the exchange', () => {
+  it('happens once, not once per request', async () => {
+    const { http, seen } = client({ apiKey: KEY });
+
+    await http.request('GET', '/v1/cache/get', {});
+    await http.request('GET', '/v1/cache/get', {});
+    await http.request('GET', '/v1/cache/get', {});
+
+    const exchanges = seen.urls.filter((u) => u.endsWith('/v1/auth/token'));
+    expect(exchanges).toHaveLength(1);
+  });
+
+  it('carries the key in its own request and nowhere else', async () => {
+    const { http, fetchImpl } = client({ apiKey: KEY });
+    await http.request('GET', '/v1/cache/get', {});
+
+    const calls = fetchImpl.mock.calls as any[];
+    const exchange = calls.find(([url]) => String(url).endsWith('/v1/auth/token'));
+    const other = calls.filter(([url]) => !String(url).endsWith('/v1/auth/token'));
+
+    expect(exchange?.[1]?.headers?.['Authorization']).toBe(`Bearer ${KEY}`);
+    for (const [, init] of other) {
+      expect(JSON.stringify(init?.headers ?? {})).not.toContain(KEY);
+    }
+  });
+
+  it('is not attempted for a client that was given a token rather than a key', async () => {
+    const { http, seen } = client({ jwt: JWT });
+    await http.request('GET', '/v1/cache/get', {});
+
+    expect(seen.urls.filter((u) => u.endsWith('/v1/auth/token'))).toHaveLength(0);
   });
 });

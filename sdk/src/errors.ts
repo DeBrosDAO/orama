@@ -47,6 +47,9 @@ export class SDKError extends Error {
       return new AuthError(errorMsg, status, code, details);
     }
     if (status === 403) {
+      if (code === AuthCode.NamespaceMismatch) {
+        return new NamespaceError(errorMsg, status, code, details);
+      }
       return new ScopeError(errorMsg, status, code, details);
     }
     if (status === 404) {
@@ -207,6 +210,36 @@ export class NetworkError extends SDKError {
  * work. Distinct from every other 401 because the answer is "sign in again"
  * rather than "check what you sent".
  */
+/**
+ * The credential belongs to a different namespace than the one being reached.
+ *
+ * Its own class because the fix is never "sign in again" or "ask for more
+ * grants": it is that the client is pointed at the wrong gateway, or the key
+ * came from the wrong environment. `namespace` is the one the gateway serves;
+ * `credentialNamespace` is the one the credential belongs to.
+ */
+export class NamespaceError extends SDKError {
+  constructor(
+    message: string,
+    httpStatus = 403,
+    code: string = AuthCode.NamespaceMismatch,
+    details: Record<string, any> = {}
+  ) {
+    super(message, httpStatus, code, details);
+    this.name = "NamespaceError";
+  }
+
+  /** The namespace the gateway serves. */
+  get namespace(): string | undefined {
+    return this.details?.namespace;
+  }
+
+  /** The namespace the credential belongs to. */
+  get credentialNamespace(): string | undefined {
+    return this.details?.credential_namespace;
+  }
+}
+
 export class RevokedCredentialError extends AuthError {
   constructor(
     message: string,

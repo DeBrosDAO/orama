@@ -9,6 +9,12 @@ function gateway(routes: Record<string, () => Response>) {
   const fetchImpl = vi.fn(async (url: any) => {
     const path = new URL(String(url)).pathname;
     calls.push(path);
+    // A client holding a key exchanges it for a token before its first
+    // request, so every stub has to answer that. It is the only request the
+    // SDK makes that the caller did not ask for.
+    if (path === '/v1/auth/token' && !routes[path]) {
+      return json(200, { access_token: 'header.exchanged.signature', expires_in: 900 });
+    }
     const route = routes[path];
     if (!route) {
       return new Response(JSON.stringify({ error: 'no route' }), {
@@ -110,15 +116,23 @@ describe('logout', () => {
     expect(await storage.get('apiKey')).toBeNull();
   });
 
-  it('keeps the API key when asked, and makes it the active credential', async () => {
+  it('keeps the API key when asked, and the next request carries a token from it', async () => {
     const { fetchImpl } = logoutGateway();
     const { http, auth } = build(fetchImpl);
     auth.setJwt('a.jwt');
 
     await auth.logout({ keepApiKey: true });
 
-    expect(http.getToken()).toBe('ak_test:ns');
+    // The key is still the client's credential; what goes on the wire is a
+    // token exchanged from it, which is why getToken() is empty until the next
+    // request rather than holding the key itself.
     expect(http.getApiKey()).toBe('ak_test:ns');
+    expect(http.getToken()).toBeUndefined();
+
+    // The route itself does not matter; what matters is that the exchange
+    // happened and the token is what the client now holds.
+    await http.request('GET', '/v1/auth/whoami', {}).catch(() => undefined);
+    expect(http.getToken()).toBe('header.exchanged.signature');
   });
 
   it('can clear local state without telling the gateway', async () => {
