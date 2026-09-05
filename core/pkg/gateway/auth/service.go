@@ -78,7 +78,10 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 	}
 	// Always present, database or not: a gateway with no database still has to
 	// verify what it minted itself.
-	s.signingKeys = NewSigningKeys(orm, logger)
+	// The registry is resolved per call, so a namespace gateway that learns
+	// where its core registry is after construction publishes its key there
+	// rather than into the tenant's own database.
+	s.signingKeys = NewSigningKeys(s.registryDatabase, logger)
 
 	if signingKeyPEM != "" {
 		block, _ := pem.Decode([]byte(signingKeyPEM))
@@ -124,6 +127,21 @@ func (s *Service) keyORM() client.NetworkClient {
 		return s.apiKeyORM
 	}
 	return s.orm
+}
+
+// registryDatabase is the cluster registry's database, or nil when this gateway
+// has none.
+//
+// Platform state — who may authenticate, and which keys may sign — belongs
+// here and not in a tenant's own database. It is a method rather than a
+// captured handle because a namespace gateway is told where its registry is
+// after the auth service is built.
+func (s *Service) registryDatabase() client.DatabaseClient {
+	orm := s.keyORM()
+	if orm == nil {
+		return nil
+	}
+	return orm.Database()
 }
 
 // SetRqliteClient injects the lower-level rqlite client. Required for code
@@ -252,7 +270,7 @@ func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey, namespace string) {
 		// A Service built as a struct literal rather than by NewService — the
 		// shape several tests use — has no key set yet, and a gateway that
 		// signs a token has to be able to verify it.
-		s.signingKeys = NewSigningKeys(s.orm, s.logger)
+		s.signingKeys = NewSigningKeys(s.registryDatabase, s.logger)
 	}
 	s.edSigningKey = privKey
 	pub := privKey.Public().(ed25519.PublicKey)

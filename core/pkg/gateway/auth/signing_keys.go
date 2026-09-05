@@ -102,8 +102,14 @@ const signingKeyReloadInterval = 30 * time.Second
 
 // SigningKeys is every key this gateway will verify a token from.
 type SigningKeys struct {
-	orm    client.NetworkClient
-	logger *logging.ColoredLogger
+	// registry resolves the database the published keys live in, at call
+	// time rather than at construction. A namespace gateway learns where its
+	// registry is *after* the auth service is built (SetAPIKeyRegistry), and
+	// a set that captured the handle it was built with published its key into
+	// the tenant's own database — where the index would never see it, and
+	// where the tenant could write one.
+	registry func() client.DatabaseClient
+	logger   *logging.ColoredLogger
 
 	mu        sync.RWMutex
 	keys      map[string]SigningKey
@@ -112,16 +118,26 @@ type SigningKeys struct {
 	published map[string]struct{}
 }
 
-// NewSigningKeys returns an empty set. A nil orm makes it local-only, which is
-// the single-node and test case: the gateway still verifies its own key.
-func NewSigningKeys(orm client.NetworkClient, logger *logging.ColoredLogger) *SigningKeys {
+// NewSigningKeys returns an empty set. A registry that resolves to nil makes it
+// local-only, which is the single-node and test case: the gateway still
+// verifies its own key.
+func NewSigningKeys(registry func() client.DatabaseClient, logger *logging.ColoredLogger) *SigningKeys {
 	return &SigningKeys{
-		orm:       orm,
+		registry:  registry,
 		logger:    logger,
 		keys:      map[string]SigningKey{},
 		now:       time.Now,
 		published: map[string]struct{}{},
 	}
+}
+
+// database is where published keys are read and written, or nil when this
+// gateway has none to reach.
+func (s *SigningKeys) database() client.DatabaseClient {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	return s.registry()
 }
 
 // Add puts a key in the set without publishing it. It is how a gateway trusts
@@ -138,10 +154,7 @@ func (s *SigningKeys) Add(key SigningKey) {
 // cheap.
 func (s *SigningKeys) Publish(ctx context.Context, key SigningKey) error {
 	s.Add(key)
-	if s == nil || s.orm == nil {
-		return nil
-	}
-	db := s.orm.Database()
+	db := s.database()
 	if db == nil {
 		return nil
 	}
@@ -168,10 +181,7 @@ func (s *SigningKeys) Publish(ctx context.Context, key SigningKey) error {
 // outgoing key rather than deleting it, so tokens already issued keep working
 // until they expire on their own.
 func (s *SigningKeys) Retire(ctx context.Context, kid string, at time.Time) error {
-	if s == nil || s.orm == nil {
-		return nil
-	}
-	db := s.orm.Database()
+	db := s.database()
 	if db == nil {
 		return nil
 	}
@@ -248,10 +258,7 @@ func (s *SigningKeys) Reload(ctx context.Context) error {
 		s.mu.Unlock()
 	}()
 
-	if s.orm == nil {
-		return nil
-	}
-	db := s.orm.Database()
+	db := s.database()
 	if db == nil {
 		return nil
 	}

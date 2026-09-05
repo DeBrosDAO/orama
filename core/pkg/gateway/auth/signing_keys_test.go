@@ -12,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
@@ -42,7 +43,7 @@ func signingKeyStore(t *testing.T) (*SigningKeys, *sql.DB) {
 	if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrations.FS, zap.NewNop()); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
-	return NewSigningKeys(&sqliteNet{db: &sqliteDatabase{db: db}}, nil), db
+	return NewSigningKeys(registryOf(&sqliteNet{db: &sqliteDatabase{db: db}}), nil), db
 }
 
 // A key bound to a namespace signs for that namespace and nothing else. This is
@@ -121,7 +122,7 @@ func TestSigningKeys_aPublishedKeyIsVisibleToAnotherGateway(t *testing.T) {
 	}
 
 	// A second gateway reading the same registry.
-	elsewhere := NewSigningKeys(&sqliteNet{db: &sqliteDatabase{db: db}}, nil)
+	elsewhere := NewSigningKeys(registryOf(&sqliteNet{db: &sqliteDatabase{db: db}}), nil)
 	if err := elsewhere.Reload(context.Background()); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
@@ -188,7 +189,7 @@ func TestSigningKeys_reloadKeepsTheLocalKeys(t *testing.T) {
 // A failed read must not empty the set: forgetting every key because one query
 // failed would refuse every token in the cluster.
 func TestSigningKeys_aFailedReloadKeepsWhatIsKnown(t *testing.T) {
-	keys := NewSigningKeys(&failingNet{}, nil)
+	keys := NewSigningKeys(registryOf(&failingNet{}), nil)
 	pub, _ := newKey(t)
 	key := SigningKey{KID: KeyIDFor(pub), Public: pub}
 	keys.Add(key)
@@ -316,7 +317,7 @@ func shareKeys(t *testing.T, from, to *Service) {
 func TestRotate_leavesTheOutgoingKeyVerifiable(t *testing.T) {
 	svc := serviceWithKey(t, "acme")
 	keys, db := signingKeyStore(t)
-	svc.signingKeys.orm = keys.orm
+	svc.signingKeys.registry = keys.registry
 	_ = db
 
 	before, _, err := svc.GenerateJWT("acme", "0xowner", time.Minute, nil)
@@ -360,7 +361,7 @@ func TestRotate_leavesTheOutgoingKeyVerifiable(t *testing.T) {
 func TestRotate_writesTheReplacementWhereTheNextBootReadsIt(t *testing.T) {
 	svc := serviceWithKey(t, "acme")
 	keys, _ := signingKeyStore(t)
-	svc.signingKeys.orm = keys.orm
+	svc.signingKeys.registry = keys.registry
 
 	dir := t.TempDir()
 	next, err := svc.Rotate(context.Background(), dir)
@@ -411,5 +412,85 @@ func TestRetirementFrom_readsEveryShapeTheDatabaseReturns(t *testing.T) {
 	}
 	if unreadable.After(time.Now()) {
 		t.Errorf("an unreadable retirement resolved to %v, which is in the future", unreadable)
+	}
+}
+
+// registryOf adapts a network client to the resolver NewSigningKeys takes.
+//
+// The resolver is a function rather than a handle because a namespace gateway
+// is told where its registry is after the auth service is built; a set that
+// captured the handle it was constructed with published its key into the
+// tenant's own database.
+func registryOf(orm client.NetworkClient) func() client.DatabaseClient {
+	return func() client.DatabaseClient {
+		if orm == nil {
+			return nil
+		}
+		return orm.Database()
+	}
+}
+
+// A namespace gateway holds two databases: the tenant's own, and the cluster
+// registry it validates credentials against. It is told about the second one
+// *after* the auth service is built.
+//
+// A signing-key set that captured the handle it was constructed with published
+// the gateway's key into the tenant's database. Two things followed. The index
+// never saw the key, so every token that gateway minted was refused anywhere
+// else in the cluster. And the key list a gateway will accept tokens from sat
+// in a database the tenant can write — including an *unbound* key, which by
+// design signs for any namespace.
+func TestSigningKeys_publishToTheRegistryAndNotTheTenantsDatabase(t *testing.T) {
+	tenant, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tenant.Close() })
+	registry, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = registry.Close() })
+
+	for _, db := range []*sql.DB{tenant, registry} {
+		if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrations.FS, zap.NewNop()); err != nil {
+			t.Fatalf("apply migrations: %v", err)
+		}
+	}
+
+	logger, err := logging.NewColoredLogger(logging.ComponentGateway, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Built the way a namespace gateway is: the tenant's database is what the
+	// service is constructed with, and the registry arrives afterwards.
+	svc, err := NewService(logger, &sqliteNet{db: &sqliteDatabase{db: tenant}}, "", "acme")
+	if err != nil {
+		t.Fatalf("auth service: %v", err)
+	}
+	svc.SetAPIKeyRegistry(&sqliteNet{db: &sqliteDatabase{db: registry}})
+
+	pub, _, keyErr := ed25519.GenerateKey(rand.Reader)
+	if keyErr != nil {
+		t.Fatal(keyErr)
+	}
+	key := SigningKey{KID: KeyIDFor(pub), Namespace: "acme", Public: pub}
+	if err := svc.signingKeys.Publish(context.Background(), key); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	var inRegistry, inTenant int
+	if err := registry.QueryRow(`SELECT COUNT(*) FROM signing_keys WHERE kid = ?`, key.KID).Scan(&inRegistry); err != nil {
+		t.Fatal(err)
+	}
+	if err := tenant.QueryRow(`SELECT COUNT(*) FROM signing_keys WHERE kid = ?`, key.KID).Scan(&inTenant); err != nil {
+		t.Fatal(err)
+	}
+
+	if inRegistry != 1 {
+		t.Error("the key was not published to the cluster registry, so no other gateway will accept a token it signs")
+	}
+	if inTenant != 0 {
+		t.Error("the key was published into the tenant's own database, where the tenant can add one of their own")
 	}
 }

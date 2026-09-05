@@ -389,8 +389,9 @@ permission to treat them as one.
 ## Which key signed a token
 
 Every gateway generates its own Ed25519 signing key at first boot, keeps it
-`0600` in its own secrets directory, and publishes the public half so the rest
-of the cluster can verify what it mints. A token's `kid` names the key.
+`0600` in its own secrets directory, and publishes the public half **to the
+cluster registry** — not to the tenant database it may also be holding — so the
+rest of the cluster can verify what it mints. A token's `kid` names the key.
 
 **A namespace gateway's key is bound to its namespace.** A token signed with it
 is refused — everywhere, including on the gateway that signed it — unless its
