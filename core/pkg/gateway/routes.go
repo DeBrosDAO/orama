@@ -86,7 +86,14 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/auth/refresh", g.authHandlers.RefreshHandler)
 		mux.HandleFunc("/v1/auth/renew", g.authHandlers.RenewHandler)
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
+		// Signing in from a machine with no wallet on it (RFC 8628).
+		mux.HandleFunc("/v1/auth/device", g.authHandlers.DeviceAuthorizationHandler)
+		mux.HandleFunc("/v1/auth/device/approve", g.authHandlers.DeviceApprovalHandler)
+		mux.HandleFunc("/v1/auth/device/token", g.authHandlers.DeviceTokenHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)
+		// Which machines are signed in as you, and ending one of them.
+		mux.HandleFunc("/v1/auth/sessions", g.authHandlers.SessionsHandler)
+		mux.HandleFunc("/v1/auth/sessions/", g.authHandlers.SessionByIDHandler)
 		mux.HandleFunc("/v1/audit", g.authHandlers.AuditHandler)
 	}
 

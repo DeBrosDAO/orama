@@ -68,6 +68,10 @@ func buildRoutePolicies() *routepolicy.Table {
 		// The login handshake. Nobody has a credential yet, which is the point.
 		"/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/refresh",
 		"/v1/auth/logout", "/v1/auth/api-key",
+		// The device authorization grant. The machine asking has no credential
+		// — that is what it is asking for — and approving one costs a wallet
+		// signature, which the handler verifies exactly as /v1/auth/verify does.
+		"/v1/auth/device", "/v1/auth/device/approve", "/v1/auth/device/token",
 		"/v1/network/status", "/v1/network/peers",
 		// Polled while a namespace's cluster is still provisioning, by a client
 		// that has not been given anything to poll it with yet.
@@ -101,6 +105,9 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(policyCredential,
 		// Exchanging a key for a token, and asking what the credential is.
 		"/v1/auth/token", "/v1/auth/whoami",
+		// A wallet's own sessions. The handler refuses anything but a token
+		// from a signed-in wallet, and reads whose sessions from that token.
+		"/v1/auth/sessions", "/v1/auth/sessions/",
 		// A workload renewing its own token. It needs the token it is renewing
 		// and nothing else, which is what the handler checks.
 		"/v1/auth/renew",

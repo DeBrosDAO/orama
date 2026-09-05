@@ -54,6 +54,59 @@ second attempt fails and is recorded.
 `orama auth login` does this with RootWallet, which signs without the key
 leaving it.
 
+### Signing in from a machine with no wallet on it
+
+The handshake above needs a wallet on the same machine. On a server reached over
+SSH, in a container, or in CI there is none, and the answer used to be a
+permanent API key in an environment variable.
+
+The device authorization grant (RFC 8628) splits the two halves:
+
+```
+waiting machine                 gateway                 a machine with a wallet
+  |  POST /v1/auth/device          |                             |
+  |------------------------------->|  records a pending login    |
+  |  <-- device code + user code --|                             |
+  |                                |                             |
+  |  prints the user code          |                             |
+  |                                |   POST /v1/auth/device/approve
+  |                                |   { user_code, message, signature }
+  |                                |<----------------------------|
+  |                                |  the same signature check   |
+  |                                |  /v1/auth/verify makes      |
+  |  POST /v1/auth/device/token    |                             |
+  |  { device_code }               |                             |
+  |------------------------------->|                             |
+  |  <-- access + refresh token ---|                             |
+```
+
+Nothing secret crosses between the two machines. The user code is short so it
+can be read aloud; it is worthless on its own, because approving it still costs
+a wallet signature. The device code is the waiting machine's own credential: it
+is 256 bits, stored only as a SHA-256 hash, and collects a session exactly once.
+
+A pending login lasts ten minutes. Polling faster than the interval the gateway
+handed back answers `slow_down`; before approval, `authorization_pending`; after
+a refusal, `access_denied`. A login nobody came back for is swept away by the
+next one.
+
+There is no `verification_uri` in the response. The RFC's field names a page a
+human opens, and there is no such page yet — `orama auth approve <code>` is the
+client for the approval endpoint today, and it is what the waiting machine tells
+you to run. When a web approval page exists it adds the field and nothing else
+changes.
+
+### Which machines are signed in as you
+
+`GET /v1/auth/sessions` lists the live refresh tokens of the calling wallet —
+never the tokens themselves, which would turn a fifteen-minute access token into
+a thirty-day one. `DELETE /v1/auth/sessions/{id}` ends one.
+
+Ending a session stops it minting new access tokens. An access token already
+minted from it keeps working until it expires, at most fifteen minutes; the
+response says so. `POST /v1/auth/logout` with `all` is the immediate one, and it
+is all-or-nothing by nature.
+
 ---
 
 ## What a credential may do
@@ -350,5 +403,8 @@ from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.
 - Resource selectors are enforced on pubsub and function invocation. Storage and
   the database resolve no grant on the request, so a selector naming them
   authorises nothing yet (chg-392).
-- Namespace gateways and namespace RQLite bind every interface; the firewall,
-  not the bind address, is what keeps them off the internet (chg-387).
+- A namespace's RQLite binds every interface; the firewall, not the bind
+  address, is what keeps it off the internet. The namespace gateway in front of
+  it now binds the overlay (chg-387).
+- There is no web page to approve a device login at, so the flow above is
+  approved from a second machine's CLI rather than from a browser.

@@ -40,9 +40,12 @@ var protectedTables = map[string]string{
 	"wallet_api_keys": "authentication",
 	"refresh_tokens":  "authentication",
 	"nonces":          "authentication",
-	"invite_tokens":   "cluster membership",
-	"operators":       "operator identity",
-	"principals":      "who the platform will authenticate",
+	// A pending device login. Reading one hands out the code that collects
+	// somebody else's session; writing one approves it.
+	"device_authorizations": "pending logins",
+	"invite_tokens":         "cluster membership",
+	"operators":             "operator identity",
+	"principals":            "who the platform will authenticate",
 	// Public keys, but writing one publishes a key the cluster will accept
 	// tokens from — which is minting authority by another route.
 	"signing_keys":               "which keys may sign a token",

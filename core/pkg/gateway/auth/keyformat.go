@@ -2,6 +2,8 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"hash/crc32"
 	"math/big"
@@ -207,4 +209,19 @@ const base58SubjectAlphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopq
 func IsAPIKeySubject(sub string) bool {
 	sub = strings.TrimSpace(sub)
 	return sub != "" && !IsWalletSubject(sub)
+}
+
+// KeyFingerprint names a credential without being one.
+//
+// HashAPIKey returns the key unchanged when no HMAC secret is configured — it
+// has to, because that is the value in the api_keys column on a cluster that
+// has not been given one — so it is the wrong thing to put in a response. This
+// is always a hash, so a gateway missing a secret cannot echo a credential.
+func KeyFingerprint(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key))
+	return "key_" + hex.EncodeToString(sum[:6])
 }

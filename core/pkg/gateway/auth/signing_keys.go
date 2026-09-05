@@ -268,17 +268,17 @@ func (s *SigningKeys) Reload(ctx context.Context) error {
 			if len(row) < 4 {
 				continue
 			}
-			pub, err := decodePublicKey(cellString(row[2]))
+			pub, err := decodePublicKey(getStringVal(row[2]))
 			if err != nil {
 				if s.logger != nil {
 					s.logger.ComponentWarn(logging.ComponentGeneral,
-						"a published signing key could not be read", zap.String("kid", cellString(row[0])), zap.Error(err))
+						"a published signing key could not be read", zap.String("kid", getStringVal(row[0])), zap.Error(err))
 				}
 				continue
 			}
-			loaded[cellString(row[0])] = SigningKey{
-				KID:       cellString(row[0]),
-				Namespace: cellString(row[1]),
+			loaded[getStringVal(row[0])] = SigningKey{
+				KID:       getStringVal(row[0]),
+				Namespace: getStringVal(row[1]),
 				Public:    pub,
 				RetiredAt: retirementFrom(row[3]),
 			}
@@ -306,35 +306,14 @@ func (s *SigningKeys) Reload(ctx context.Context) error {
 // live: a key somebody retired and a key nobody can parse are the same risk,
 // and the failure is visible immediately instead of a year later.
 func retirementFrom(cell any) time.Time {
-	switch value := cell.(type) {
-	case nil:
+	at, present, readable := parseTimestamp(cell)
+	switch {
+	case !present:
 		return time.Time{}
-	case time.Time:
-		return value.UTC()
-	}
-
-	text := strings.TrimSpace(cellString(cell))
-	if text == "" {
-		return time.Time{}
-	}
-	for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339, "2006-01-02 15:04:05Z07:00", "2006-01-02 15:04:05 -0700 MST"} {
-		if t, err := time.Parse(layout, text); err == nil {
-			return t.UTC()
-		}
-	}
-	return time.Unix(0, 0).UTC()
-}
-
-func cellString(v any) string {
-	switch value := v.(type) {
-	case string:
-		return value
-	case []byte:
-		return string(value)
-	case nil:
-		return ""
+	case !readable:
+		return time.Unix(0, 0).UTC()
 	default:
-		return fmt.Sprintf("%v", value)
+		return at
 	}
 }
 

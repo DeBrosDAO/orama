@@ -330,16 +330,6 @@ func toInt64(v interface{}) int64 {
 	return 0
 }
 
-func getStringVal(v interface{}) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
-}
-
 const (
 	// DefaultRotationOverlap is how long a rotated key keeps working.
 	//

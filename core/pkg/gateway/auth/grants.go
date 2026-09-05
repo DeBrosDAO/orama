@@ -493,3 +493,21 @@ func RoleForScopes(stored string) Role {
 	}
 	return RoleRuntime
 }
+
+// WhoIs returns the grant a principal holds in a namespace, by name.
+//
+// GrantIn takes a database handle and a resolved namespace id because it is the
+// read every authenticated request makes and those are already in hand. This is
+// for the callers that have neither — `/v1/auth/whoami` above all, which has to
+// answer "what am I allowed to do here" and could not, so it answered with the
+// caller's own API key instead.
+func (s *Service) WhoIs(ctx context.Context, namespace string, ptype PrincipalType, identifier string) (*Grant, error) {
+	if s.keyORM() == nil {
+		return nil, fmt.Errorf("client not initialized")
+	}
+	nsID, err := s.resolveKeyNamespaceID(ctx, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
+	}
+	return s.GrantIn(ctx, s.keyORM().Database(), nsID, ptype, identifier)
+}

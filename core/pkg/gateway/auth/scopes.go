@@ -81,18 +81,24 @@ func (s ScopeSet) IsAdmin() bool {
 	return ok
 }
 
+// List renders the set as a stable, sorted slice — what a JSON response
+// carries, where a comma-separated string would make the reader split it.
+func (s ScopeSet) List() []string {
+	out := make([]string, 0, len(s))
+	for g := range s {
+		out = append(out, g)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Canonical renders the set as a stable, sorted, comma-separated string —
 // suitable for storage in api_keys.scopes and for embedding in a JWT claim.
 func (s ScopeSet) Canonical() string {
 	if len(s) == 0 {
 		return ""
 	}
-	out := make([]string, 0, len(s))
-	for g := range s {
-		out = append(out, g)
-	}
-	sort.Strings(out)
-	return strings.Join(out, ",")
+	return strings.Join(s.List(), ",")
 }
 
 // ParseScopes parses a literal comma-separated grant string into a set. It does
