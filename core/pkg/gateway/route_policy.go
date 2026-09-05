@@ -118,6 +118,11 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/internal/join", "/v1/node/enroll",
 		// Cluster secret in the handler.
 		"/v1/internal/wg/peer", "/v1/internal/wg/peers", "/v1/internal/wg/peer/remove",
+		// A MAC over the request, keyed by a value derived from the cluster
+		// secret, naming the node the claim is about. The handler acts on that
+		// name and never on the body's. Declared MainGateway below: `dns_nodes`
+		// lives in the cluster registry, and a namespace gateway's isolated
+		// RQLite does not have it.
 		// Signed internal header plus a WireGuard-peer source check.
 		"/v1/internal/namespace/spawn", "/v1/internal/namespace/repair",
 		"/v1/internal/storage/evict",
@@ -239,6 +244,19 @@ func buildRoutePolicies() *routepolicy.Table {
 	keyManagement := owned(auth.DomainMembers, auth.ActionWrite)
 	keyManagement.MainGateway = true
 	t.Add(keyManagement, "/v1/namespace/keys", "/v1/namespace/keys/")
+
+	// A node recording itself. The handler checks a MAC over the request, keyed
+	// by a value derived from the cluster secret, naming the node the claim is
+	// about; it acts on that name and never on the body's.
+	//
+	// MainGateway for the same reason as the keys above: `dns_nodes` lives in
+	// the cluster registry, and a namespace gateway's isolated RQLite does not
+	// have it. Without this, addressing the request at `ns-<name>.<domain>`
+	// proxies it into a tenant's gateway and lands the row in the wrong
+	// database.
+	nodeSelfRegistration := policyHandlerAuth
+	nodeSelfRegistration.MainGateway = true
+	t.Add(nodeSelfRegistration, "/v1/internal/node/register", "/v1/internal/node/heartbeat")
 
 	// --- Data plane ----------------------------------------------------
 	//

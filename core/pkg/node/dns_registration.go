@@ -11,68 +11,64 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/nodeapi"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"go.uber.org/zap"
 )
 
-// registerDNSNode registers this node in the dns_nodes table for deployment routing
+// registerDNSNode records this node in the dns_nodes table for deployment
+// routing.
+//
+// The row is written by the index gateway on this host rather than by this
+// process: it is a promise every consumer trusts — `status = 'active' AND
+// last_seen > ?` is what routes real traffic — and a request can be
+// authenticated where a direct INSERT could not be. Which node the row is about
+// comes from the stamp on that request, so this node can only ever register
+// itself.
 func (n *Node) registerDNSNode(ctx context.Context) error {
-	if n.getRQLiteAdapter() == nil {
-		return fmt.Errorf("rqlite adapter not initialized")
+	client, err := n.coreAPIClient()
+	if err != nil {
+		return fmt.Errorf("cannot record this node: %w", err)
 	}
 
-	// Get node ID (use peer ID)
-	nodeID := n.GetPeerID()
-	if nodeID == "" {
-		return fmt.Errorf("node peer ID not available")
-	}
-
-	// Get external IP address
+	// A node that cannot work out its own address does not register. This used
+	// to fall back to 127.0.0.1, which every consumer of `status = 'active'`
+	// then handed out as the address to reach this node on — a node that could
+	// not answer the question published a wrong answer instead of none.
 	ipAddress, err := n.getNodeIPAddress()
 	if err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "Failed to determine node IP, using localhost", zap.Error(err))
-		ipAddress = "127.0.0.1"
+		return fmt.Errorf("cannot determine this node's address, so it must not advertise itself: %w", err)
 	}
 
-	// Get internal IP from WireGuard interface (for cross-node communication over VPN)
-	internalIP := ipAddress
-	if wgIP, err := n.getWireGuardIP(); err == nil && wgIP != "" {
-		internalIP = wgIP
+	// The overlay address is what other nodes dial for raft, namespace cluster
+	// membership and eviction. The gateway checks it against the address the
+	// cluster allocated, so a node that is not on the mesh yet says so rather
+	// than offering its public address in that column.
+	internalIP, err := n.getWireGuardIP()
+	if err != nil {
+		return fmt.Errorf("cannot determine this node's overlay address: %w", err)
+	}
+	if internalIP == "" {
+		return fmt.Errorf("this node has no overlay address yet, so it cannot be reached by other nodes")
 	}
 
 	// Determine region (defaulting to "local" for now, could be from cloud metadata in future)
 	region := "local"
 
-	// Read optional metadata from node config
-	sshUser := n.config.Node.SSHUser
-	environment := n.config.Node.Environment
-	operatorWallet := n.config.Node.OperatorWallet
-
-	// Insert or update node record
-	query := `
-		INSERT INTO dns_nodes (id, ip_address, internal_ip, region, status, ssh_user, environment, operator_wallet, last_seen, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 'active', ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
-		ON CONFLICT(id) DO UPDATE SET
-			ip_address = excluded.ip_address,
-			internal_ip = excluded.internal_ip,
-			region = excluded.region,
-			status = 'active',
-			ssh_user = COALESCE(NULLIF(excluded.ssh_user, ''), dns_nodes.ssh_user),
-			environment = COALESCE(NULLIF(excluded.environment, ''), dns_nodes.environment),
-			operator_wallet = COALESCE(NULLIF(excluded.operator_wallet, ''), dns_nodes.operator_wallet),
-			last_seen = datetime('now'),
-			updated_at = datetime('now')
-	`
-
-	db := n.getRQLiteAdapter().GetSQLDB()
-	_, err = rqlite.SafeExecContext(db, ctx, query, nodeID, ipAddress, internalIP, region, sshUser, environment, operatorWallet)
-	if err != nil {
+	if err := client.Register(ctx, nodeapi.RegisterRequest{
+		IPAddress:      ipAddress,
+		InternalIP:     internalIP,
+		Region:         region,
+		SSHUser:        n.config.Node.SSHUser,
+		Environment:    n.config.Node.Environment,
+		OperatorWallet: n.config.Node.OperatorWallet,
+	}); err != nil {
 		return fmt.Errorf("failed to register DNS node: %w", err)
 	}
 
 	n.logger.ComponentInfo(logging.ComponentNode, "Registered DNS node",
-		zap.String("node_id", nodeID),
+		zap.String("node_id", n.GetPeerID()),
 		zap.String("ip_address", ipAddress),
 		zap.String("region", region),
 	)
@@ -121,34 +117,26 @@ func (n *Node) startDNSHeartbeat(ctx context.Context) {
 	n.logger.ComponentInfo(logging.ComponentNode, "Started DNS heartbeat (30s interval)")
 }
 
-// updateDNSHeartbeat updates the node's last_seen timestamp in dns_nodes
+// updateDNSHeartbeat refreshes this node's last_seen timestamp in dns_nodes.
+//
+// The gateway re-asserts 'active' as well as refreshing last_seen: a live,
+// heartbeating node must count as active, which heals a node that was reaped to
+// 'inactive' during a restart window without a fresh registration.
 func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
-	if n.getRQLiteAdapter() == nil {
-		return fmt.Errorf("rqlite adapter not initialized")
+	client, err := n.coreAPIClient()
+	if err != nil {
+		return fmt.Errorf("cannot record this heartbeat: %w", err)
 	}
 
-	nodeID := n.GetPeerID()
-	if nodeID == "" {
-		return fmt.Errorf("node peer ID not available")
-	}
-
-	// Re-assert 'active' as well as refreshing last_seen: a live, heartbeating
-	// node must count as active. This self-heals a node that was reaped to
-	// 'inactive' during a restart window without a fresh registration.
-	query := `UPDATE dns_nodes SET status = 'active', last_seen = datetime('now'), updated_at = datetime('now') WHERE id = ?`
-	db := n.getRQLiteAdapter().GetSQLDB()
-	res, err := rqlite.SafeExecContext(db, ctx, query, nodeID)
+	registered, err := client.Heartbeat(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update DNS heartbeat: %w", err)
 	}
-
-	// If the row is missing entirely (initial registration never landed), register now.
-	if res != nil {
-		if affected, aerr := res.RowsAffected(); aerr == nil && affected == 0 {
-			return n.registerDNSNode(ctx)
-		}
+	// The row is missing entirely — the initial registration never landed, or
+	// it was purged while this node was away. Register now.
+	if !registered {
+		return n.registerDNSNode(ctx)
 	}
-
 	return nil
 }
 
@@ -165,6 +153,15 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 
 	if baseDomain == "" && nodeDomain == "" {
 		return nil // No domain configured, skip
+	}
+
+	// The DNS record loop writes zone data directly, unlike the two writes
+	// above it that record this node's identity — see the note on
+	// registerDNSNode. It is the caller of this handle, so it is the one that
+	// has to have it: registerDNSNode used to hold the only guard, and it no
+	// longer touches the database at all.
+	if n.getRQLiteAdapter() == nil {
+		return fmt.Errorf("rqlite adapter not initialized")
 	}
 
 	ipAddress, err := n.getNodeIPAddress()

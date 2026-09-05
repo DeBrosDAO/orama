@@ -10,6 +10,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
+	"github.com/DeBrosOfficial/network/pkg/nodeapi"
 )
 
 // Who may call what used to be three hand-maintained lists of path prefixes —
@@ -90,6 +91,8 @@ var publicRoutes = []string{
 	"/v1/internal/join",
 	"/v1/internal/namespace/repair",
 	"/v1/internal/namespace/spawn",
+	"/v1/internal/node/heartbeat",
+	"/v1/internal/node/register",
 	"/v1/internal/ping",
 	"/v1/internal/storage/evict",
 	"/v1/internal/tls/check",
@@ -292,6 +295,25 @@ func TestRoutePolicy_serverlessReportsEveryRouteItRegisters(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("serverless reports %s and does not register it", pattern)
+		}
+	}
+}
+
+// The node client calls these paths by the constants in pkg/nodeapi; the
+// gateway registers them as literals, because the guard above reads the
+// registrations out of the source and a constant would be invisible to it.
+// This is what keeps the two spellings the same.
+func TestRoutePolicy_theNodeSelfRegistrationPathsMatchTheContract(t *testing.T) {
+	for _, path := range []string{nodeapi.PathRegister, nodeapi.PathHeartbeat} {
+		found := false
+		for _, pattern := range gatewayRoutes.Patterns() {
+			if pattern == path {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("pkg/nodeapi says a node posts to %s, and the gateway serves no such route — "+
+				"every node's registration would 404", path)
 		}
 	}
 }

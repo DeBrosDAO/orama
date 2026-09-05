@@ -41,6 +41,12 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/internal/wg/peer/remove", g.wireguardHandler.HandleRemovePeer)
 	}
 
+	// A node recording itself in the core cluster (internal, node-stamped)
+	if g.nodeAPIHandler != nil {
+		mux.HandleFunc("/v1/internal/node/register", g.nodeAPIHandler.HandleRegister)
+		mux.HandleFunc("/v1/internal/node/heartbeat", g.nodeAPIHandler.HandleHeartbeat)
+	}
+
 	// Node join endpoint (token-authenticated, no middleware auth needed)
 	if g.joinHandler != nil {
 		mux.HandleFunc("/v1/internal/join", g.joinHandler.HandleJoin)

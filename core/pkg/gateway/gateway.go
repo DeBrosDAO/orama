@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -28,6 +29,7 @@ import (
 	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 	enrollhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/enroll"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
+	nodeapihandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/nodeapi"
 	operatorhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
 	pushhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/push"
@@ -191,6 +193,7 @@ type Gateway struct {
 
 	// WireGuard peer exchange
 	wireguardHandler *wireguardhandlers.Handler
+	nodeAPIHandler   *nodeapihandlers.Handler
 
 	// Node join handler
 	joinHandler *joinhandlers.Handler
@@ -634,6 +637,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// Initialize WireGuard peer exchange handler
 	if deps.ORMClient != nil {
 		gw.wireguardHandler = wireguardhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.ClusterSecret)
+		// A gateway with no cluster secret gets a nil resolver, and the handler
+		// refuses every call rather than serving one unauthenticated.
+		var nodeKeys nodeauth.NodeAPIKeyFor
+		if strings.TrimSpace(cfg.ClusterSecret) != "" {
+			nodeKeys = nodeauth.SharedClusterKey(cfg.ClusterSecret)
+		}
+		gw.nodeAPIHandler = nodeapihandlers.NewHandler(logger.Logger, deps.ORMClient, nodeKeys)
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.joinHandler.SetAuditLog(deps.AuthService.Audit())
 		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/node/coreapi"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,6 +89,12 @@ type Node struct {
 	// wgSyncMu serialises wg0.conf writes between a supervisor retry and the
 	// periodic sync loop.
 	wgSyncMu sync.Mutex
+
+	// coreAPI records this node's own existence and liveness in the core
+	// cluster, over the index gateway on this host. It is built on first use
+	// because it needs the cluster secret from disk, which the join writes.
+	coreAPIMu sync.Mutex
+	coreAPI   *coreapi.Client
 }
 
 // NewNode creates a new network node
