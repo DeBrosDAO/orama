@@ -362,111 +362,6 @@ func readUserChoice(maxChoice int) (int, error) {
 	return choice, nil
 }
 
-// GetOrPromptForCredentials handles the complete authentication flow
-func GetOrPromptForCredentials(gatewayURL string) (*Credentials, error) {
-	store, err := LoadEnhancedCredentials()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load credential store: %w", err)
-	}
-
-	// Check if we have a valid default credential
-	defaultCreds := store.GetDefaultCredential(gatewayURL)
-	if defaultCreds != nil && defaultCreds.IsValid() {
-		// Update last used time
-		defaultCreds.UpdateLastUsed()
-		if err := store.Save(); err != nil {
-			// Log warning but don't fail
-			fmt.Fprintf(os.Stderr, "Warning: failed to update last used time: %v\n", err)
-		}
-		return defaultCreds, nil
-	}
-
-	// Need to prompt user for credential selection
-	for {
-		choice, credIndex, err := store.DisplayCredentialMenu(gatewayURL)
-		if err != nil {
-			return nil, fmt.Errorf("menu selection failed: %w", err)
-		}
-
-		switch choice {
-		case AuthChoiceUseCredential:
-			gatewayCredentials := store.Gateways[gatewayURL]
-			if gatewayCredentials == nil || credIndex < 0 || credIndex >= len(gatewayCredentials.Credentials) {
-				fmt.Println("❌ Invalid credential selection")
-				continue
-			}
-
-			selectedCreds := gatewayCredentials.Credentials[credIndex]
-			if !selectedCreds.IsValid() {
-				fmt.Println("❌ Selected credentials are invalid or expired")
-				continue
-			}
-
-			// Update default and last used
-			store.SetDefaultCredential(gatewayURL, credIndex)
-			selectedCreds.UpdateLastUsed()
-
-			if err := store.Save(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to save credentials: %v\n", err)
-			}
-
-			return selectedCreds, nil
-
-		case AuthChoiceAddCredential:
-			fmt.Println("\n🌐 Opening browser for wallet authentication...")
-			newCreds, err := PerformWalletAuthentication(gatewayURL)
-			if err != nil {
-				fmt.Printf("❌ Authentication failed: %v\n", err)
-				continue
-			}
-
-			// Add the new credential
-			store.AddCredential(gatewayURL, newCreds)
-
-			// Set as default if it's the first credential
-			gatewayCredentials := store.Gateways[gatewayURL]
-			if gatewayCredentials != nil && len(gatewayCredentials.Credentials) == 1 {
-				store.SetDefaultCredential(gatewayURL, 0)
-			}
-
-			if err := store.Save(); err != nil {
-				return nil, fmt.Errorf("failed to save new credentials: %w", err)
-			}
-
-			fmt.Printf("✅ Wallet %s added successfully\n", newCreds.Wallet)
-			return newCreds, nil
-
-		case AuthChoiceLogout:
-			store.ClearAllCredentials()
-			if err := store.Save(); err != nil {
-				return nil, fmt.Errorf("failed to clear credentials: %w", err)
-			}
-			fmt.Println("✅ All credentials cleared")
-			continue
-
-		case AuthChoiceExit:
-			return nil, fmt.Errorf("authentication cancelled by user")
-
-		default:
-			fmt.Println("❌ Invalid choice")
-			continue
-		}
-	}
-}
-
-// HasValidEnhancedCredentials checks if there are valid credentials for the default gateway
-func HasValidEnhancedCredentials() (bool, error) {
-	store, err := LoadEnhancedCredentials()
-	if err != nil {
-		return false, err
-	}
-
-	gatewayURL := GetDefaultGatewayURL()
-	defaultCreds := store.GetDefaultCredential(gatewayURL)
-
-	return defaultCreds != nil && defaultCreds.IsValid(), nil
-}
-
 // GetValidEnhancedCredentials returns valid credentials for the default gateway
 func GetValidEnhancedCredentials() (*Credentials, error) {
 	store, err := LoadEnhancedCredentials()
@@ -474,7 +369,10 @@ func GetValidEnhancedCredentials() (*Credentials, error) {
 		return nil, err
 	}
 
-	gatewayURL := GetDefaultGatewayURL()
+	gatewayURL, err := ResolveGatewayURL()
+	if err != nil {
+		return nil, err
+	}
 	defaultCreds := store.GetDefaultCredential(gatewayURL)
 
 	if defaultCreds == nil {

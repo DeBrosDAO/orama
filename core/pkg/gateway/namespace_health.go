@@ -35,6 +35,15 @@ type namespaceHealthState struct {
 	// healthyStreak counts consecutive healthy local probes per namespace. Used
 	// to damp the DNS reclaim so a flapping service cannot flap DNS.
 	healthyStreak map[string]int
+	// unhealthyStreak is the same damping in the withdraw direction.
+	unhealthyStreak map[string]int
+	// selfDisabled records the fqdns THIS process withdrew, so they can be
+	// re-enabled as soon as the local probe recovers instead of waiting out
+	// staleDisableReclaimAfter. That wait exists to avoid overriding a peer's
+	// live suspect verdict; it should not apply to our own verdict about our
+	// own gateway. Cleared on restart, at which point the stale path is the
+	// safety net - which is what it was built for.
+	selfDisabled map[string]bool
 }
 
 // healthyProbesBeforeDNSReclaim is how many consecutive healthy 30s probes a
@@ -43,9 +52,44 @@ type namespaceHealthState struct {
 // trigger a reclaim, short enough to recover well inside a human response time.
 const healthyProbesBeforeDNSReclaim = 3
 
+// unhealthyProbesBeforeDNSWithdraw is how many consecutive unhealthy 30s probes
+// a namespace must fail before this node withdraws itself from the round-robin.
+// Symmetric with the reclaim so a service that restarts mid-probe does not
+// remove the node, and a genuinely broken one is out within ~90s.
+const unhealthyProbesBeforeDNSWithdraw = 3
+
+// withdrawNamespaceHostRecordSQL soft-disables THIS node's record for a
+// namespace host, but only while another node is still advertising it.
+//
+// The count and the write are one statement on purpose. Every node probes
+// independently, so two nodes deciding "I am unhealthy" against a snapshot each
+// read separately can withdraw the last two records between them and take the
+// namespace off DNS entirely. Evaluating the guard inside the UPDATE makes that
+// impossible: whichever write lands second sees the count the first one left.
+const withdrawNamespaceHostRecordSQL = `UPDATE dns_records
+	SET is_active = 0, updated_at = ?
+	WHERE fqdn = ? AND record_type = 'A' AND value = ?
+	  AND is_active = 1
+	  AND (SELECT COUNT(*) FROM dns_records other
+	       WHERE other.fqdn = ? AND other.record_type = 'A' AND other.is_active = 1) > 1`
+
+// restoreOwnNamespaceHostRecordSQL re-enables a record this process withdrew,
+// with no staleness requirement.
+const restoreOwnNamespaceHostRecordSQL = `UPDATE dns_records
+	SET is_active = 1, updated_at = ?
+	WHERE fqdn = ? AND record_type = 'A' AND value = ?
+	  AND is_active = 0`
+
 // startNamespaceHealthLoop runs two periodic tasks:
 //  1. Every 30s: probe local namespace services and cache health state
-//  2. Every 1h: (leader-only) check for under-provisioned namespaces and trigger repair
+//  2. Every 5m: (leader-only) check for under-provisioned namespaces and trigger repair
+//  3. Every 5m: drop circuit breakers for targets that no longer receive traffic
+//
+// breakerIdleTTL is how long a circuit breaker survives with no traffic before
+// it is dropped. Comfortably longer than the open duration, so a breaker that is
+// deliberately fast-failing a sick target is never mistaken for an idle one.
+const breakerIdleTTL = 30 * time.Minute
+
 func (g *Gateway) startNamespaceHealthLoop(ctx context.Context) {
 	g.nsHealth = &namespaceHealthState{
 		cache: make(map[string]*NamespaceHealth),
@@ -68,6 +112,15 @@ func (g *Gateway) startNamespaceHealthLoop(ctx context.Context) {
 			g.probeLocalNamespaces(ctx)
 		case <-reconcileTicker.C:
 			g.reconcileNamespaces(ctx)
+			// The breaker registry is keyed by target IP and never shed entries:
+			// every node ever removed from the cluster, and every namespace ever
+			// proxied, stayed in the map for the life of the process.
+			if g.circuitBreakers != nil {
+				if dropped := g.circuitBreakers.Prune(breakerIdleTTL); dropped > 0 {
+					g.logger.ComponentInfo(logging.ComponentGeneral,
+						"pruned idle circuit breakers", zap.Int("dropped", dropped))
+				}
+			}
 		}
 	}
 }
@@ -134,17 +187,13 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 		}
 		nsHealth.Services["olric"] = probeTCP(olricHost, olricPort)
 
-		// Probe Gateway (HTTP on all interfaces)
-		nsHealth.Services["gateway"] = probeTCP("127.0.0.1", gatewayPort)
+		// Probe the Gateway's readiness, not just its port. A namespace gateway
+		// binds and answers long before it has a usable schema; a TCP dial
+		// cannot tell the difference, so a gateway that could not serve a
+		// single request stayed in the DNS round-robin.
+		nsHealth.Services["gateway"] = probeGatewayReadiness(ctx, "127.0.0.1", gatewayPort)
 
-		// Aggregate status
-		nsHealth.Status = "healthy"
-		for _, svc := range nsHealth.Services {
-			if svc.Status == "error" {
-				nsHealth.Status = "unhealthy"
-				break
-			}
-		}
+		nsHealth.Status = aggregateNamespaceStatus(nsHealth.Services)
 
 		health[name] = nsHealth
 	}
@@ -153,12 +202,17 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 	g.nsHealth.cache = health
 	g.nsHealth.mu.Unlock()
 
-	g.reclaimStaleNamespaceDNS(ctx, health)
+	g.reconcileLocalNamespaceDNS(ctx, health)
 }
 
-// reclaimStaleNamespaceDNS re-advertises this node in the `ns-<ns>` round-robin
-// when its own record was soft-disabled and nothing has refreshed that decision
-// since.
+// reconcileLocalNamespaceDNS keeps this node's presence in each `ns-<ns>`
+// round-robin matching what the local probe actually observes.
+//
+// Both directions matter, and only one of them existed. The probe computed
+// "unhealthy" every 30s and threw it away: a node whose namespace gateway was
+// crash-looping stayed in DNS, so clients kept resolving to it, timing out, and
+// opening platform circuit breakers - the "all upstream circuits are open"
+// incident, whose documented fix was a manual UPDATE on dns_records.
 //
 // DisableNamespaceRecord writes durable state, but the only re-enable path
 // (HandleSuspectRecovery) fires on an IN-MEMORY suspect→healthy transition in
@@ -167,14 +221,19 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 // removed from DNS with no path back. Reclaiming here is the level-triggered
 // counterpart to that edge.
 //
-// Deliberately conservative:
-//   - only namespaces this node currently serves, and only when the local
-//     probe says every one of their services is healthy;
-//   - only after healthyProbesBeforeDNSReclaim consecutive healthy probes, so a
-//     flapping service does not flap DNS;
-//   - only this node's own row, and only when the disable is already stale, so
-//     a live peer verdict is never overridden (see ReclaimStaleNamespaceHostRecord).
-func (g *Gateway) reclaimStaleNamespaceDNS(ctx context.Context, health map[string]*NamespaceHealth) {
+// Deliberately conservative in both directions:
+//   - only namespaces this node currently serves, and only on this node's own
+//     row - a node never edits a peer's record here;
+//   - only after N consecutive probes agree, so a service restarting mid-probe
+//     cannot flap DNS;
+//   - a withdrawal never removes the LAST active record for a name. Advertising
+//     a node that might still answer beats having no answer at all, and the
+//     guard is evaluated inside the UPDATE so two nodes withdrawing at once
+//     cannot both believe they are not the last;
+//   - a record this process withdrew is restored as soon as the probe recovers,
+//     but one a PEER disabled still waits out staleDisableReclaimAfter, so a
+//     live peer verdict is never overridden.
+func (g *Gateway) reconcileLocalNamespaceDNS(ctx context.Context, health map[string]*NamespaceHealth) {
 	if g.sqlDB == nil || g.nodePeerID == "" || g.nsHealth == nil {
 		return
 	}
@@ -183,12 +242,21 @@ func (g *Gateway) reclaimStaleNamespaceDNS(ctx context.Context, health map[strin
 	if g.nsHealth.healthyStreak == nil {
 		g.nsHealth.healthyStreak = make(map[string]int)
 	}
+	if g.nsHealth.unhealthyStreak == nil {
+		g.nsHealth.unhealthyStreak = make(map[string]int)
+	}
 	ready := make([]string, 0, len(health))
+	failing := make([]string, 0, len(health))
 	for name, h := range health {
 		if h == nil || h.Status != "healthy" {
 			delete(g.nsHealth.healthyStreak, name)
+			g.nsHealth.unhealthyStreak[name]++
+			if g.nsHealth.unhealthyStreak[name] >= unhealthyProbesBeforeDNSWithdraw {
+				failing = append(failing, name)
+			}
 			continue
 		}
+		delete(g.nsHealth.unhealthyStreak, name)
 		g.nsHealth.healthyStreak[name]++
 		if g.nsHealth.healthyStreak[name] >= healthyProbesBeforeDNSReclaim {
 			ready = append(ready, name)
@@ -200,9 +268,14 @@ func (g *Gateway) reclaimStaleNamespaceDNS(ctx context.Context, health map[strin
 			delete(g.nsHealth.healthyStreak, name)
 		}
 	}
+	for name := range g.nsHealth.unhealthyStreak {
+		if _, still := health[name]; !still {
+			delete(g.nsHealth.unhealthyStreak, name)
+		}
+	}
 	g.nsHealth.mu.Unlock()
 
-	if len(ready) == 0 {
+	if len(ready) == 0 && len(failing) == 0 {
 		return
 	}
 
@@ -222,12 +295,74 @@ func (g *Gateway) reclaimStaleNamespaceDNS(ctx context.Context, health map[strin
 	}
 
 	now := time.Now()
+
+	// Withdraw first: a node that cannot serve a namespace should stop being
+	// advertised for it before anything else happens this tick.
+	for _, name := range failing {
+		for _, fqdn := range namespaceHostFQDNs(name, baseDomain) {
+			res, werr := g.sqlDB.ExecContext(ctx, withdrawNamespaceHostRecordSQL, now, fqdn, publicIP, fqdn)
+			if werr != nil {
+				g.logger.ComponentWarn(logging.ComponentGeneral,
+					"Failed to withdraw this node's namespace DNS record",
+					zap.String("namespace", name), zap.String("fqdn", fqdn), zap.Error(werr))
+				continue
+			}
+			if n, aerr := res.RowsAffected(); aerr == nil && n > 0 {
+				g.nsHealth.mu.Lock()
+				if g.nsHealth.selfDisabled == nil {
+					g.nsHealth.selfDisabled = make(map[string]bool)
+				}
+				g.nsHealth.selfDisabled[fqdn] = true
+				g.nsHealth.mu.Unlock()
+				g.logger.ComponentWarn(logging.ComponentGeneral,
+					"Withdrew this node from a namespace DNS round-robin after consecutive unhealthy probes",
+					zap.String("namespace", name),
+					zap.String("fqdn", fqdn),
+					zap.String("ip", publicIP))
+			} else {
+				// The guard held: this is the last active record. Removing it
+				// would take the namespace off DNS entirely, which is worse than
+				// advertising a node that might still answer.
+				g.logger.ComponentWarn(logging.ComponentGeneral,
+					"Namespace is unhealthy on this node but its record is the last one advertised; keeping it",
+					zap.String("namespace", name), zap.String("fqdn", fqdn))
+			}
+		}
+	}
+
+	// Records this process withdrew are restored as soon as the local probe
+	// recovers. The staleness wait below exists so a peer's live suspect verdict
+	// is not overridden; it should not apply to our own verdict about our own
+	// gateway.
+	for _, name := range ready {
+		for _, fqdn := range namespaceHostFQDNs(name, baseDomain) {
+			g.nsHealth.mu.Lock()
+			mine := g.nsHealth.selfDisabled[fqdn]
+			g.nsHealth.mu.Unlock()
+			if !mine {
+				continue
+			}
+			res, rerr := g.sqlDB.ExecContext(ctx, restoreOwnNamespaceHostRecordSQL, now, fqdn, publicIP)
+			if rerr != nil {
+				g.logger.ComponentWarn(logging.ComponentGeneral,
+					"Failed to restore this node's namespace DNS record",
+					zap.String("namespace", name), zap.String("fqdn", fqdn), zap.Error(rerr))
+				continue
+			}
+			g.nsHealth.mu.Lock()
+			delete(g.nsHealth.selfDisabled, fqdn)
+			g.nsHealth.mu.Unlock()
+			if n, aerr := res.RowsAffected(); aerr == nil && n > 0 {
+				g.logger.ComponentInfo(logging.ComponentGeneral,
+					"Restored this node to a namespace DNS round-robin after it recovered",
+					zap.String("namespace", name), zap.String("fqdn", fqdn), zap.String("ip", publicIP))
+			}
+		}
+	}
+
 	cutoff := now.Add(-staleDisableReclaimAfter)
 	for _, name := range ready {
-		for _, fqdn := range []string{
-			fmt.Sprintf("ns-%s.%s.", name, baseDomain),
-			fmt.Sprintf("*.ns-%s.%s.", name, baseDomain),
-		} {
+		for _, fqdn := range namespaceHostFQDNs(name, baseDomain) {
 			res, rerr := g.sqlDB.ExecContext(ctx, reclaimStaleNamespaceHostRecordSQL, now, fqdn, publicIP, cutoff)
 			if rerr != nil {
 				g.logger.ComponentWarn(logging.ComponentGeneral,
@@ -389,5 +524,117 @@ func probeTCP(host string, port int) NamespaceServiceHealth {
 		Status:  "ok",
 		Port:    port,
 		Latency: latency.String(),
+	}
+}
+
+// aggregateNamespaceStatus rolls per-service statuses up into the namespace
+// status the DNS reconcile keys on.
+//
+// Only "error" and "starting" keep this node out of the ns-<name> round-robin:
+// "error" is unreachable or unusable, and "starting" is a gateway that cannot
+// serve yet. "degraded" deliberately does not — a node whose cache or IPFS is
+// down still serves everything that does not need them, and withdrawing it
+// would turn one unavailable subsystem into an unavailable node. "starting"
+// stays distinguishable from "unhealthy" so an operator can tell a node that is
+// coming up from one that is broken.
+func aggregateNamespaceStatus(services map[string]NamespaceServiceHealth) string {
+	status := "healthy"
+	for _, svc := range services {
+		switch svc.Status {
+		case "error":
+			return "unhealthy"
+		case "starting":
+			status = "starting"
+		}
+	}
+	return status
+}
+
+// gatewayProbeTimeout bounds one readiness probe of a local namespace gateway.
+const gatewayProbeTimeout = 2 * time.Second
+
+// gatewayProbeClient is the HTTP client the readiness probe uses. It only ever
+// talks to localhost.
+var gatewayProbeClient = &http.Client{Timeout: gatewayProbeTimeout}
+
+// probeGatewayReadiness asks a local namespace gateway whether it can serve,
+// rather than only whether its port is open.
+//
+// A gateway reports 503 with `status: starting` while it is waiting for its
+// database schema, and 503 with `status: blocked` when the schema is below what
+// its binary requires. Both are reported here as their own status so the DNS
+// reconcile treats them as not-servable while an operator can still tell a node
+// that is coming up from one that needs attention.
+func probeGatewayReadiness(ctx context.Context, host string, port int) NamespaceServiceHealth {
+	start := time.Now()
+	result := NamespaceServiceHealth{Port: port}
+
+	probeCtx, cancel := context.WithTimeout(ctx, gatewayProbeTimeout)
+	defer cancel()
+
+	url := fmt.Sprintf("http://%s/v1/health", net.JoinHostPort(host, strconv.Itoa(port)))
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
+	if err != nil {
+		result.Status = "error"
+		result.Error = err.Error()
+		return result
+	}
+
+	// A dedicated client, not http.DefaultClient: the default has no timeout of
+	// its own and its connection pool is shared with every other caller in the
+	// process. The context above bounds the request either way; this keeps a
+	// 30s probe cadence from parking idle connections in a pool other code
+	// depends on.
+	resp, err := gatewayProbeClient.Do(req)
+	result.Latency = time.Since(start).String()
+	if err != nil {
+		result.Status = "error"
+		result.Error = "gateway not reachable"
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		result.Status = "ok"
+		return result
+	}
+
+	// A non-200 carries the reason. Anything unparseable is not servable.
+	var body struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Status == "" {
+		result.Status = "error"
+		result.Error = fmt.Sprintf("gateway returned HTTP %d", resp.StatusCode)
+		return result
+	}
+
+	// This probe decides on READINESS, and nothing else. The gateway also
+	// answers 503 for "degraded" (a non-critical subsystem such as the cache or
+	// IPFS is down) and "unhealthy" (a critical one is) — but subsystem health
+	// never gated DNS before this change and must not start now: withdrawing a
+	// node because its IPFS daemon blipped turns one unavailable subsystem into
+	// an unavailable node, and rqlite and Olric already have their own probes
+	// above. Only the gateway's own inability to serve counts here.
+	switch body.Status {
+	case string(ReadinessStarting):
+		result.Status = "starting"
+	case string(ReadinessBlocked):
+		result.Status = "error"
+	default:
+		result.Status = "ok"
+	}
+	result.Error = body.Reason
+	return result
+}
+
+// namespaceHostFQDNs is the pair of records a node advertises for a namespace:
+// the host itself and its wildcard. Both must move together, or a client
+// resolving the wildcard reaches a node the apex no longer advertises.
+func namespaceHostFQDNs(namespace, baseDomain string) []string {
+	return []string{
+		fmt.Sprintf("ns-%s.%s.", namespace, baseDomain),
+		fmt.Sprintf("*.ns-%s.%s.", namespace, baseDomain),
 	}
 }

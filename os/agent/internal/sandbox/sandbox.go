@@ -54,14 +54,7 @@ func Start(cfg Config) (*Process, error) {
 
 	cmd := exec.Command(cfg.Binary, cfg.Args...)
 
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWNS | // mount namespace
-			syscall.CLONE_NEWUTS, // hostname namespace
-		Credential: &syscall.Credential{
-			Uid: cfg.User,
-			Gid: cfg.Group,
-		},
-	}
+	cmd.SysProcAttr = isolationAttrs(cfg.User, cfg.Group)
 
 	// Redirect output to log file
 	if cfg.LogFile != "" {

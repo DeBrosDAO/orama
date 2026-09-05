@@ -173,10 +173,10 @@ func forcePrivateMode(path string) error {
 // runs `wg-quick up` without rewriting wg0.conf. If the interface is already
 // up, this is a no-op (never bounce the mesh).
 func (wp *WireGuardProvisioner) Enable() error {
-	if exec.Command("wg", "show", "wg0").Run() == nil {
+	if exec.Command("wg", "show", WireGuardInterface).Run() == nil {
 		return nil
 	}
-	cmd := exec.Command("wg-quick", "up", "wg0")
+	cmd := exec.Command("wg-quick", "up", WireGuardInterface)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to start wg0: %w\n%s", err, string(output))
 	}
@@ -194,13 +194,13 @@ func (wp *WireGuardProvisioner) Restart() error {
 
 // IsActive checks if the WireGuard interface is up
 func (wp *WireGuardProvisioner) IsActive() bool {
-	return exec.Command("wg", "show", "wg0").Run() == nil
+	return exec.Command("wg", "show", WireGuardInterface).Run() == nil
 }
 
 // AddPeer adds a peer to the running WireGuard interface without restart
 func (wp *WireGuardProvisioner) AddPeer(peer WireGuardPeer) error {
 	// Add peer to running interface
-	args := []string{"wg", "set", "wg0", "peer", peer.PublicKey, "allowed-ips", peer.AllowedIP, "persistent-keepalive", "25"}
+	args := []string{"wg", "set", WireGuardInterface, "peer", peer.PublicKey, "allowed-ips", peer.AllowedIP, "persistent-keepalive", "25"}
 	if peer.Endpoint != "" {
 		args = append(args, "endpoint", peer.Endpoint)
 	}
@@ -217,7 +217,7 @@ func (wp *WireGuardProvisioner) AddPeer(peer WireGuardPeer) error {
 
 // RemovePeer removes a peer from the running WireGuard interface
 func (wp *WireGuardProvisioner) RemovePeer(publicKey string) error {
-	cmd := exec.Command("wg", "set", "wg0", "peer", publicKey, "remove")
+	cmd := exec.Command("wg", "set", WireGuardInterface, "peer", publicKey, "remove")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to remove peer: %w\n%s", err, string(output))
 	}
@@ -235,7 +235,7 @@ func (wp *WireGuardProvisioner) RemovePeer(publicKey string) error {
 
 // GetStatus returns the current WireGuard interface status
 func (wp *WireGuardProvisioner) GetStatus() (string, error) {
-	cmd := exec.Command("wg", "show", "wg0")
+	cmd := exec.Command("wg", "show", WireGuardInterface)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to get wg status: %w\n%s", err, string(output))

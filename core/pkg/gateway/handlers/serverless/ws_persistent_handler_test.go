@@ -34,7 +34,7 @@ func TestBuildPersistentInvocationContext_PropagatesJWTSubject(t *testing.T) {
 	// Simulate a JWT-authenticated request: middleware would have stashed
 	// the *auth.JWTClaims on the request context under ctxkeys.JWT.
 	claims := &auth.JWTClaims{
-		Sub:    "wallet-from-jwt-subject",
+		Sub:    "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB",
 		Custom: map[string]string{"role": "admin"},
 	}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -57,9 +57,9 @@ func TestBuildPersistentInvocationContext_PropagatesJWTSubject(t *testing.T) {
 	// field, every function_invoke from inside a persistent WS instance
 	// loses the caller identity — see comment on the helper for the full
 	// story.
-	if got.CallerJWTSubject != "wallet-from-jwt-subject" {
+	if got.CallerJWTSubject != "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB" {
 		t.Errorf("CallerJWTSubject = %q; want %q (Layer 7 regression — see Feature #73)",
-			got.CallerJWTSubject, "wallet-from-jwt-subject")
+			got.CallerJWTSubject, "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB")
 	}
 
 	// Other identity fields the persistent invCtx is responsible for. These

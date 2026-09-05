@@ -3,6 +3,7 @@ package install
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -21,10 +22,17 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
-	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // Orchestrator manages the install process
+// DNS seeding retry budget. The gateway health check in Phase8Verify has
+// already established that migrations ran, so these cover a write racing the
+// tail of start-up rather than a wait for readiness.
+const (
+	seedAttempts   = 3
+	seedRetryDelay = 3 * time.Second
+)
+
 type Orchestrator struct {
 	oramaHome string
 	oramaDir  string
@@ -69,6 +77,45 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 }
 
 // Execute runs the installation process
+// pinnedTLSConfig verifies the far end against one certificate fingerprint,
+// and refuses to build a client without one.
+func pinnedTLSConfig(fingerprint string) (*tls.Config, error) {
+	fingerprint = strings.TrimSpace(fingerprint)
+	if fingerprint == "" {
+		return nil, fmt.Errorf("refusing to join without a certificate to pin: the invite token carries " +
+			"the cluster's TLS fingerprint, so pass the encoded invite to --token rather than a bare " +
+			"token, or give --ca-fingerprint explicitly. Joining sends a credential for every secret " +
+			"the cluster holds, and there is nothing to verify the far end with")
+	}
+	expected, err := hex.DecodeString(fingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --ca-fingerprint: must be hex-encoded SHA-256: %w", err)
+	}
+	if len(expected) != sha256.Size {
+		return nil, fmt.Errorf("invalid --ca-fingerprint: a SHA-256 fingerprint is %d bytes, got %d",
+			sha256.Size, len(expected))
+	}
+
+	// InsecureSkipVerify turns off the chain check; VerifyPeerCertificate then
+	// does the only check that matters here, which is that the certificate is
+	// the exact one the invite named. A cluster node's certificate is issued
+	// for its own domain and there is no CA to chain to at this point.
+	return &tls.Config{
+		InsecureSkipVerify: true,
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("the server presented no TLS certificate")
+			}
+			hash := sha256.Sum256(rawCerts[0])
+			if !bytes.Equal(hash[:], expected) {
+				return fmt.Errorf("TLS certificate fingerprint mismatch: the invite named %s, the server "+
+					"presented %x — something is between this node and the cluster", fingerprint, hash[:])
+			}
+			return nil
+		},
+	}, nil
+}
+
 func (o *Orchestrator) Execute() error {
 	fmt.Printf("🚀 Starting production installation...\n\n")
 
@@ -172,36 +219,61 @@ func (o *Orchestrator) executeGenesisFlow() error {
 		return fmt.Errorf("service initialization failed: %w", err)
 	}
 
+	// Namespace templates BEFORE the services that use them. Phase 5 starts
+	// orama-node, whose first act is to start orama-namespace-wireguard@index;
+	// with no template installed systemd answers "Unit not found", the
+	// supervisor exits, and systemd restarts it. Install used to depend on that
+	// retry loop to converge, which worked well enough that nobody noticed the
+	// ordering was backwards.
+	fmt.Printf("\n🔧 Phase 4b: Installing namespace systemd templates...\n")
+	if err := o.setup.InstallNamespaceTemplates(); err != nil {
+		return fmt.Errorf("namespace template installation failed: %w", err)
+	}
+
 	// Phase 5: Create systemd services
 	fmt.Printf("\n🔧 Phase 5: Creating systemd services...\n")
 	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		return fmt.Errorf("service creation failed: %w", err)
 	}
 
-	// Install namespace systemd template units
-	fmt.Printf("\n🔧 Phase 5b: Installing namespace systemd templates...\n")
-	if err := o.installNamespaceTemplates(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Template installation warning: %v\n", err)
+	// Verify BEFORE seeding. Seeding needs a working rqlite, so a node whose
+	// rqlite never reached consensus would otherwise report "DNS seeding
+	// failed" — a symptom — instead of naming the component that did not come
+	// up.
+	if err := o.setup.Phase8Verify(context.Background()); err != nil {
+		return err
 	}
 
-	// Phase 7: Seed DNS records (with retry — migrations may still be running)
+	// Phase 7: Seed DNS records
 	if o.flags.Nameserver && o.flags.BaseDomain != "" {
 		fmt.Printf("\n🌐 Phase 7: Seeding DNS records...\n")
+
+		// The gateway answering /health is the readiness signal: it only does
+		// so once it holds its database, which means migrations have run. This
+		// replaces six escalating sleeps totalling 105 seconds that waited for
+		// exactly that and could not tell "still migrating" from "broken".
 		var seedErr error
-		for attempt := 1; attempt <= 6; attempt++ {
-			waitSec := 5 * attempt
-			fmt.Printf("  Waiting for RQLite + migrations (%ds, attempt %d/6)...\n", waitSec, attempt)
-			time.Sleep(time.Duration(waitSec) * time.Second)
+		for attempt := 1; attempt <= seedAttempts; attempt++ {
 			seedErr = o.setup.SeedDNSRecords(o.flags.BaseDomain, o.flags.VpsIP, o.peers)
 			if seedErr == nil {
 				fmt.Printf("  ✓ DNS records seeded\n")
 				break
 			}
-			fmt.Fprintf(os.Stderr, "  ⚠️  Attempt %d failed: %v\n", attempt, seedErr)
+			fmt.Fprintf(os.Stderr, "  ⚠️  Attempt %d/%d failed: %v\n", attempt, seedAttempts, seedErr)
+			if attempt < seedAttempts {
+				time.Sleep(seedRetryDelay)
+			}
 		}
+
+		// Fatal here, advisory elsewhere. This is genesis on a --nameserver
+		// node: it is the node that serves the zone, and nothing else will
+		// create these records. The heartbeat "self-heal" the old warning
+		// promised re-advertises a node's own A record; it does not seed a
+		// zone's NS, SOA or delegation. Printing a green tick over a nameserver
+		// with no zone left the operator to find out from a resolver.
 		if seedErr != nil {
-			fmt.Fprintf(os.Stderr, "  ⚠️  Warning: DNS seeding failed after all attempts.\n")
-			fmt.Fprintf(os.Stderr, "     Records will self-heal via node heartbeat once running.\n")
+			return fmt.Errorf("DNS seeding failed after %d attempts on a --nameserver genesis node, "+
+				"which leaves the zone %s unserved: %w", seedAttempts, o.flags.BaseDomain, seedErr)
 		}
 	}
 
@@ -213,6 +285,20 @@ func (o *Orchestrator) executeGenesisFlow() error {
 
 // executeJoinFlow runs the install for a node joining an existing cluster via invite token
 func (o *Orchestrator) executeJoinFlow() error {
+	// Step 0: Establish this node's identity before asking to join.
+	//
+	// The peer id is how every store in the cluster keys this machine, so the
+	// join request has to carry it. It used to be generated in Phase 3, well
+	// after the join, which left the receiving node no choice but to invent a
+	// synthetic "node-<wgip>" for the wireguard_peers row — an id that matched
+	// no dns_nodes row and never would.
+	fmt.Printf("\n🪪 Establishing node identity...\n")
+	peerID, err := o.setup.EnsureNodeIdentity()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("  ✓ Node identity: %s\n", peerID)
+
 	// Step 1: Generate WG keypair
 	fmt.Printf("\n🔑 Generating WireGuard keypair...\n")
 	privKey, pubKey, err := production.GenerateKeyPair()
@@ -223,7 +309,7 @@ func (o *Orchestrator) executeJoinFlow() error {
 
 	// Step 2: Call join endpoint on existing node
 	fmt.Printf("\n🤝 Requesting cluster join from %s...\n", o.flags.JoinAddress)
-	joinResp, err := o.callJoinEndpoint(pubKey)
+	joinResp, err := o.callJoinEndpoint(pubKey, peerID)
 	if err != nil {
 		return fmt.Errorf("join request failed: %w", err)
 	}
@@ -309,16 +395,25 @@ func (o *Orchestrator) executeJoinFlow() error {
 		return fmt.Errorf("service initialization failed: %w", err)
 	}
 
+	// Namespace templates BEFORE the services that use them. Phase 5 starts
+	// orama-node, whose first act is to start orama-namespace-wireguard@index;
+	// with no template installed systemd answers "Unit not found", the
+	// supervisor exits, and systemd restarts it. Install used to depend on that
+	// retry loop to converge, which worked well enough that nobody noticed the
+	// ordering was backwards.
+	fmt.Printf("\n🔧 Installing namespace systemd templates...\n")
+	if err := o.setup.InstallNamespaceTemplates(); err != nil {
+		return fmt.Errorf("namespace template installation failed: %w", err)
+	}
+
 	// Step 9: Create systemd services
 	fmt.Printf("\n🔧 Creating systemd services...\n")
 	if err := o.setup.Phase5CreateSystemdServices(enableHTTPS); err != nil {
 		return fmt.Errorf("service creation failed: %w", err)
 	}
 
-	// Install namespace systemd template units
-	fmt.Printf("\n🔧 Installing namespace systemd templates...\n")
-	if err := o.installNamespaceTemplates(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Template installation warning: %v\n", err)
+	if err := o.setup.Phase8Verify(context.Background()); err != nil {
+		return err
 	}
 
 	o.setup.LogSetupComplete(o.setup.NodePeerID)
@@ -327,11 +422,12 @@ func (o *Orchestrator) executeJoinFlow() error {
 }
 
 // callJoinEndpoint sends the join request to the existing node's HTTPS endpoint
-func (o *Orchestrator) callJoinEndpoint(wgPubKey string) (*joinhandlers.JoinResponse, error) {
+func (o *Orchestrator) callJoinEndpoint(wgPubKey, peerID string) (*joinhandlers.JoinResponse, error) {
 	reqBody := joinhandlers.JoinRequest{
 		Token:       o.flags.Token,
 		WGPublicKey: wgPubKey,
 		PublicIP:    o.flags.VpsIP,
+		PeerID:      peerID,
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -340,28 +436,20 @@ func (o *Orchestrator) callJoinEndpoint(wgPubKey string) (*joinhandlers.JoinResp
 
 	url := strings.TrimRight(o.flags.JoinAddress, "/") + "/v1/internal/join"
 
-	tlsConfig := &tls.Config{}
-	if o.flags.CAFingerprint != "" {
-		// TOFU: verify the server's TLS cert fingerprint matches the one from the invite
-		expectedFP, err := hex.DecodeString(o.flags.CAFingerprint)
-		if err != nil {
-			return nil, fmt.Errorf("invalid --ca-fingerprint: must be hex-encoded SHA-256: %w", err)
-		}
-		tlsConfig.InsecureSkipVerify = true
-		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
-				return fmt.Errorf("server presented no TLS certificates")
-			}
-			hash := sha256.Sum256(rawCerts[0])
-			if !bytes.Equal(hash[:], expectedFP) {
-				return fmt.Errorf("TLS certificate fingerprint mismatch: expected %s, got %x (possible MITM attack)",
-					o.flags.CAFingerprint, hash[:])
-			}
-			return nil
-		}
-	} else {
-		// No fingerprint provided — fall back to insecure for backward compatibility
-		tlsConfig.InsecureSkipVerify = true
+	// Joining sends the invite token, which is a credential for every secret
+	// the cluster holds. Without a fingerprint to pin, this fell back to
+	// InsecureSkipVerify with nothing checked at all — the token went to
+	// whoever answered the address, and a machine in the path could take it
+	// and join the cluster itself.
+	//
+	// Every invite carries the fingerprint: `orama node invite` reads this
+	// node's certificate and refuses to mint an invite without it, and
+	// `orama node install` decodes it from the token. An invocation with no
+	// fingerprint is a bare token from somewhere else, and there is nothing to
+	// verify the far end with.
+	tlsConfig, err := pinnedTLSConfig(o.flags.CAFingerprint)
+	if err != nil {
+		return nil, err
 	}
 
 	client := &http.Client{
@@ -526,7 +614,7 @@ func extractHost(addr string) string {
 func (o *Orchestrator) printFirstNodeSecrets() {
 	fmt.Printf("📋 To add more nodes to this cluster:\n\n")
 	fmt.Printf("  1. Generate an invite token:\n")
-	fmt.Printf("     orama invite\n\n")
+	fmt.Printf("     orama node invite\n\n")
 	fmt.Printf("  2. Run the printed command on the new VPS.\n\n")
 	fmt.Printf("  Node Peer ID: %s\n\n", o.setup.NodePeerID)
 }
@@ -578,50 +666,6 @@ func promptForBaseDomain() string {
 		fmt.Println("⚠️  Invalid option, using orama-devnet.network")
 		return "orama-devnet.network"
 	}
-}
-
-// installNamespaceTemplates installs systemd template unit files for namespace services
-func (o *Orchestrator) installNamespaceTemplates() error {
-	// Check pre-built archive path first, fall back to source path
-	sourceDir := production.OramaSystemdDir
-	if _, err := os.Stat(sourceDir); os.IsNotExist(err) {
-		sourceDir = filepath.Join(o.oramaHome, "src", "systemd")
-	}
-	systemdDir := "/etc/systemd/system"
-
-	templates := systemd.UnitFilesToInstall()
-
-	installedCount := 0
-	for _, template := range templates {
-		sourcePath := filepath.Join(sourceDir, template)
-		destPath := filepath.Join(systemdDir, template)
-
-		// Read template file
-		data, err := os.ReadFile(sourcePath)
-		if err != nil {
-			fmt.Printf("  ⚠️  Warning: Failed to read %s: %v\n", template, err)
-			continue
-		}
-
-		// Write to systemd directory
-		if err := os.WriteFile(destPath, data, 0644); err != nil {
-			fmt.Printf("  ⚠️  Warning: Failed to install %s: %v\n", template, err)
-			continue
-		}
-
-		installedCount++
-		fmt.Printf("  ✓ Installed %s\n", template)
-	}
-
-	if installedCount > 0 {
-		// Reload systemd daemon to pick up new templates
-		if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
-			return fmt.Errorf("failed to reload systemd daemon: %w", err)
-		}
-		fmt.Printf("  ✓ Systemd daemon reloaded (%d templates installed)\n", installedCount)
-	}
-
-	return nil
 }
 
 // generateNodeDomain creates a random subdomain like "node-a3f8k2.example.com"

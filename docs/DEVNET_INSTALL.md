@@ -1,21 +1,76 @@
-# Devnet Installation Commands
+# Installing a Devnet Cluster
 
-This document contains example installation commands for a multi-node devnet cluster.
-
-Anyone is installed as a **client** on every node by default (SOCKS5 on `:9050` for `/v1/proxy/anon`). There is no relay/ORPort mode.
+Anyone is installed as a **client** on every node by default (SOCKS5 on `:9050`
+for `/v1/proxy/anon`). There is no relay/ORPort mode.
 
 **Note:** Store credentials securely (not in version control).
 
 ## Installation Order
 
-Install nodes **one at a time**, waiting for each to complete before starting the next:
+Install nodes **one at a time**, waiting for each to complete before starting
+the next:
 
 1. ns1 (genesis nameserver)
 2. ns2 (nameserver)
 3. ns3 (nameserver)
-4. Additional workers as needed (no `--nameserver`)
+4. Additional workers as needed (no `--role nameserver`)
 
-## ns1 - Genesis nameserver
+---
+
+## The path: `orama node setup`
+
+One command per node, from your own machine. It creates an SSH key in
+RootWallet, installs it on the VPS, uploads the binary archive, mints an invite
+where one is needed, and runs the install. You never SSH in yourself.
+
+It needs an unlocked RootWallet.
+
+```bash
+# ns1 — genesis nameserver, creates the cluster
+orama node setup --ip <ns1-ip> --password '<vps-pass>' --env devnet \
+  --base-domain <your-domain.com> --role nameserver --genesis
+
+# ns2 / ns3 — join as nameservers
+orama node setup --ip <ns-ip> --password '<vps-pass>' --env devnet \
+  --base-domain <your-domain.com> --role nameserver
+
+# Worker — domain is auto-generated, e.g. node-a3f8k2.<your-domain.com>
+orama node setup --ip <node-ip> --password '<vps-pass>' --env devnet \
+  --base-domain <your-domain.com>
+```
+
+Pass `--host-key SHA256:...` to pin the VPS host key instead of confirming it
+interactively.
+
+---
+
+## Appendix: installing by hand
+
+Use this when `orama node setup` cannot be used — no RootWallet, or a VPS you
+reach some other way. It does the same thing with more steps.
+
+### 1. Mint an invite (not needed for the genesis node)
+
+From your own machine:
+
+```bash
+orama invite --expiry 24h
+```
+
+Or from an existing node:
+
+```bash
+sudo orama node invite --expiry 24h
+```
+
+Either prints one string. It carries the gateway to join **and** the
+fingerprint of that gateway's TLS certificate, which the joining node pins
+instead of trusting whatever certificate it is first shown. There is nothing
+else to copy across, and nothing to get the wrong way round.
+
+Invites are **single-use**. Mint one per join.
+
+### 2. Genesis node
 
 ```bash
 # SSH: <user>@<ns1-ip>
@@ -27,38 +82,36 @@ sudo orama node install \
   --nameserver
 ```
 
-After ns1 is installed, generate invite tokens:
-```bash
-sudo orama node invite --expiry 24h
-```
-
-## ns2 / ns3 - Joining nameservers
+### 3. Joining nodes
 
 ```bash
 # SSH: <user>@<ns-ip>
 
 sudo orama node install \
-  --join http://<ns1-ip> --token <TOKEN> \
+  --token <INVITE> \
   --vps-ip <ns-ip> \
   --domain <your-domain.com> \
   --base-domain <your-domain.com> \
   --nameserver
 ```
 
-## Worker (non-nameserver)
+A worker is the same without `--nameserver` and without `--domain`; the domain
+is auto-generated.
 
-Domain is auto-generated (e.g., `node-a3f8k2.<your-domain.com>`). No `--domain` flag needed.
+Or drive it from your own machine over SSH:
 
 ```bash
-# SSH: <user>@<node-ip>
-
-sudo orama node install \
-  --join http://<ns1-ip> --token <TOKEN> \
-  --vps-ip <node-ip> \
-  --base-domain <your-domain.com>
+orama node install --remote --token <INVITE> \
+  --vps-ip <node-ip> --base-domain <your-domain.com>
 ```
 
+`--remote` is required to install a machine other than the one you are on. It
+used to be inferred from whether you had used sudo, so the same command line
+meant two different things on two different machines.
+
 ## Verification
+
+`orama node install` verifies the node itself before printing `✅` — supervisor active and not crash-looping, rqlite in `Leader`/`Follower`, `wg0` up, gateway `/health` 200 — and exits non-zero naming the first component that did not come up. A successful install therefore already means the node works; the checks below verify the **cluster**.
 
 After all nodes are installed, verify cluster health:
 

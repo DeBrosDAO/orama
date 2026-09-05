@@ -143,32 +143,25 @@ func TestJWTFlow(t *testing.T) {
 	}
 }
 
-func TestVerifyEthSignature(t *testing.T) {
+// A signature that is the right shape and the wrong bytes. Real signatures over
+// real messages are exercised in challenge_test.go; this is the degenerate
+// input, which used to be the only coverage there was.
+func TestVerifyEthSignature_refusesAZeroSignature(t *testing.T) {
 	s := &Service{}
-
-	// This is a bit hard to test without a real ETH signature
-	// but we can check if it returns false for obviously wrong signatures
-	wallet := "0x1234567890abcdef1234567890abcdef12345678"
-	nonce := "test-nonce"
-	sig := hex.EncodeToString(make([]byte, 65))
-
-	ok, err := s.VerifySignature(context.Background(), wallet, nonce, sig, "ETH")
+	ok, err := s.verifyEthSignature(
+		"0x1234567890abcdef1234567890abcdef12345678",
+		"a message",
+		hex.EncodeToString(make([]byte, 65)))
 	if err == nil && ok {
-		t.Error("VerifySignature should have failed for zero signature")
+		t.Error("a signature of 65 zero bytes verified")
 	}
 }
 
-func TestVerifySolSignature(t *testing.T) {
+func TestVerifySolSignature_refusesSomethingThatIsNotBase64(t *testing.T) {
 	s := &Service{}
-
-	// Solana address (base58)
-	wallet := "HN7cABqL367i3jkj9684C9C3W197m8q5q1C9C3W197m8"
-	nonce := "test-nonce"
-	sig := "invalid-sig"
-
-	_, err := s.VerifySignature(context.Background(), wallet, nonce, sig, "SOL")
-	if err == nil {
-		t.Error("VerifySignature should have failed for invalid base64 signature")
+	if _, err := s.verifySolSignature(
+		"HN7cABqL367i3jkj9684C9C3W197m8q5q1C9C3W197m8", "a message", "invalid-sig"); err == nil {
+		t.Error("a signature that is not base64 was decoded")
 	}
 }
 

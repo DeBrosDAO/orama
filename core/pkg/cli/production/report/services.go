@@ -77,10 +77,34 @@ func collectServiceInfo(ctx context.Context, name string) ServiceInfo {
 		info.Enabled = true
 	}
 
-	// Restart loop detection: restarted more than 3 times and running for less than 5 minutes.
-	info.RestartLoopRisk = info.NRestarts > 3 && info.ActiveSinceSec > 0 && info.ActiveSinceSec < 300
+	info.RestartLoopRisk = restartLoopRisk(info.NRestarts, info.ActiveSinceSec)
 
 	return info
+}
+
+// restartLoopThreshold is how many restarts make a unit suspicious, and
+// restartLoopUptime is how long it must have stayed up to be considered
+// recovered rather than looping.
+const (
+	restartLoopThreshold = 3
+	restartLoopUptime    = 300
+)
+
+// restartLoopRisk reports whether a unit looks like it is crash-looping.
+//
+// activeSinceSec is 0 when systemd reports ActiveEnterTimestamp as "n/a" —
+// which is the case for a unit that has never reached active at all. That is
+// the worst kind of loop, not the absence of one: a unit whose binary is
+// missing or whose config will not parse restarts forever in
+// `activating (auto-restart)`. It used to land in `failed` and raise a critical
+// alert; since the supervised units carry StartLimitIntervalSec=0 (see "Unit
+// restart policy" in docs/ARCHITECTURE.md) nothing parks them any more, so the
+// restart counter is the only signal left and this is where it has to be read.
+func restartLoopRisk(nRestarts int, activeSinceSec int64) bool {
+	if nRestarts <= restartLoopThreshold {
+		return false
+	}
+	return activeSinceSec == 0 || activeSinceSec < restartLoopUptime
 }
 
 // parseProperties parses "Key=Value" lines from systemctl show output into a map.

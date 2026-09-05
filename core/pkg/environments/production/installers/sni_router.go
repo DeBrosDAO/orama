@@ -145,7 +145,8 @@ routes: []
 // generateSystemdUnit renders /etc/systemd/system/orama-sni-router.service.
 // Runs as the orama user with CAP_NET_BIND_SERVICE so it can bind :443 without
 // root. Ordered Before=caddy.service so the router is ready before Caddy
-// switches to :8443. Restart=on-failure.
+// switches to :8443. Restarts always, with no start limit — see "Unit restart
+// policy" in docs/ARCHITECTURE.md.
 func (si *SNIRouterInstaller) generateSystemdUnit() string {
 	return fmt.Sprintf(`[Unit]
 Description=Orama SNI Router (TLS-level :443 → backend forwarder)
@@ -153,6 +154,10 @@ Documentation=https://github.com/DeBrosOfficial/network
 After=network.target
 Before=caddy.service
 PartOf=orama-node.service
+# No start limit - same reasoning as the orama-namespace-*@ templates: this
+# unit is reconciled rather than hand-started, and a rate-limited unit refuses
+# systemctl start until someone runs reset-failed.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -176,7 +181,7 @@ TimeoutStopSec=15s
 KillMode=mixed
 KillSignal=SIGTERM
 
-Restart=on-failure
+Restart=always
 RestartSec=5s
 
 StandardOutput=journal

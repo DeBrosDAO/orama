@@ -12,7 +12,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
-	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 )
@@ -73,10 +72,12 @@ func NewHostFunctions(
 		turnDomain:       cfg.TURNDomain,
 		turnSecret:       cfg.TURNSecret,
 		stealthCDNDomain: cfg.StealthCDNDomain,
-		httpClient:       tlsutil.NewHTTPClient(httpTimeout),
-		logger:           logger,
-		logs:             make([]serverless.LogEntry, 0),
-		asyncInvokeSem:   make(chan struct{}, asyncInvokeMaxInFlight),
+		// Every dial this client makes is checked against the internal
+		// networks; see egress.go.
+		httpClient:     newGuardedHTTPClient(httpTimeout),
+		logger:         logger,
+		logs:           make([]serverless.LogEntry, 0),
+		asyncInvokeSem: make(chan struct{}, asyncInvokeMaxInFlight),
 	}
 
 	// Ephemeral-state store (bugboard #710). Publishes synthetic set/clear

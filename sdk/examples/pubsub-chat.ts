@@ -8,6 +8,21 @@
 import { createClient } from '../src/index';
 import type { PresenceMember } from '../src/index';
 
+/**
+ * The gateway and credentials come from the environment, so an example can be
+ * run against a real namespace without editing it:
+ *
+ *   GATEWAY_BASE_URL=https://ns-myapp.orama-devnet.network \
+ *   ORAMA_API_KEY=ak_... pnpm example
+ *
+ * The default is a node's index gateway on this machine. This used to be a
+ * hardcoded port that no gateway has listened on since the port block moved
+ * to 10100, so the examples could not be run as written.
+ */
+const baseURL = process.env.GATEWAY_BASE_URL ?? 'http://localhost:10104';
+const apiKey = process.env.ORAMA_API_KEY ?? 'ak_your_key:default';
+
+
 interface ChatMessage {
   user: string;
   text: string;
@@ -16,8 +31,8 @@ interface ChatMessage {
 
 async function createChatClient(userName: string, roomName: string) {
   const client = createClient({
-    baseURL: 'http://localhost:6001',
-    apiKey: 'ak_your_key:default',
+    baseURL,
+    apiKey,
   });
 
   console.log(`[${userName}] Joining room: ${roomName}...`);

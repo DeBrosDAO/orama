@@ -94,8 +94,8 @@ func checkNamespacesCrossNode(data *inspector.ClusterData) []inspector.CheckResu
 	var r []inspector.CheckResult
 
 	// Collect all namespace names across nodes
-	nsNodes := map[string]int{}    // namespace name → count of nodes running it
-	nsHealthy := map[string]int{}  // namespace name → count of nodes where all services are up
+	nsNodes := map[string]int{}   // namespace name → count of nodes running it
+	nsHealthy := map[string]int{} // namespace name → count of nodes where all services are up
 
 	for _, nd := range data.Nodes {
 		for _, ns := range nd.Namespaces {

@@ -13,6 +13,11 @@ After=network.target
 # stale relay binary is a worse failure than a bounded restart, and matches
 # orama-sni-router.service, the other host-level public listener.
 PartOf=orama-node.service
+# No start limit. orama-node reconciles these units and retries with backoff,
+# and `systemctl start` on a rate-limited unit fails with "Start request
+# repeated too quickly" until someone runs `reset-failed` — so the default
+# limit would turn a transient failure into one that needs a human.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -50,7 +55,7 @@ TimeoutStopSec=30s
 KillMode=mixed
 KillSignal=SIGTERM
 
-Restart=on-failure
+Restart=always
 RestartSec=5s
 
 StandardOutput=journal

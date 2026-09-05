@@ -1,0 +1,26 @@
+{
+  "route": "/v1/storage/pin",
+  "method": "POST",
+  "sdk": "storage.pin()",
+  "goStruct": "storage.StoragePinRequest",
+  "call": {
+    "module": "storage",
+    "method": "pin",
+    "args": [
+      "bafybeigd",
+      "avatar.png"
+    ]
+  },
+  "request": {
+    "cid": "bafybeigd",
+    "name": "avatar.png"
+  },
+  "response": {
+    "cid": "bafybeigd",
+    "name": "avatar.png"
+  },
+  "returns": {
+    "cid": "bafybeigd",
+    "name": "avatar.png"
+  }
+}

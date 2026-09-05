@@ -16,35 +16,35 @@ Available default environments: production, devnet, testnet.`,
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all available environments",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleEnvCommand([]string{"list"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.EnvList()
 	},
 }
 
 var currentCmd = &cobra.Command{
 	Use:   "current",
 	Short: "Show current active environment",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleEnvCommand([]string{"current"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.EnvCurrent()
 	},
 }
 
 var useCmd = &cobra.Command{
 	Use:     "use <name>",
-	Aliases: []string{"switch"},
+	Aliases: []string{"switch", "enable"},
 	Short:   "Switch to a different environment",
 	Args:    cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleEnvCommand(append([]string{"switch"}, args...))
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.EnvSwitch(args)
 	},
 }
 
 var addCmd = &cobra.Command{
 	Use:   "add <name> <gateway_url> [description]",
 	Short: "Add a custom environment",
-	Args:  cobra.MinimumNArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleEnvCommand(append([]string{"add"}, args...))
+	Args:  cobra.RangeArgs(2, 3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.EnvAdd(args)
 	},
 }
 
@@ -52,8 +52,8 @@ var removeCmd = &cobra.Command{
 	Use:   "remove <name>",
 	Short: "Remove an environment",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleEnvCommand(append([]string{"remove"}, args...))
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.EnvRemove(args)
 	},
 }
 

@@ -36,14 +36,14 @@ func StatusCode(err error) int {
 
 	// Check for specific error types
 	var (
-		validationErr  *ValidationError
-		notFoundErr    *NotFoundError
+		validationErr   *ValidationError
+		notFoundErr     *NotFoundError
 		unauthorizedErr *UnauthorizedError
-		forbiddenErr   *ForbiddenError
-		conflictErr    *ConflictError
-		timeoutErr     *TimeoutError
-		rateLimitErr   *RateLimitError
-		serviceErr     *ServiceError
+		forbiddenErr    *ForbiddenError
+		conflictErr     *ConflictError
+		timeoutErr      *TimeoutError
+		rateLimitErr    *RateLimitError
+		serviceErr      *ServiceError
 	)
 
 	switch {
@@ -162,15 +162,15 @@ func ToHTTPError(err error, traceID string) *HTTPError {
 
 	// Add type-specific details
 	var (
-		validationErr  *ValidationError
-		notFoundErr    *NotFoundError
+		validationErr   *ValidationError
+		notFoundErr     *NotFoundError
 		unauthorizedErr *UnauthorizedError
-		forbiddenErr   *ForbiddenError
-		conflictErr    *ConflictError
-		timeoutErr     *TimeoutError
-		rateLimitErr   *RateLimitError
-		serviceErr     *ServiceError
-		internalErr    *InternalError
+		forbiddenErr    *ForbiddenError
+		conflictErr     *ConflictError
+		timeoutErr      *TimeoutError
+		rateLimitErr    *RateLimitError
+		serviceErr      *ServiceError
+		internalErr     *InternalError
 	)
 
 	switch {

@@ -12,7 +12,7 @@ import (
 // FailureGroup groups identical check failures/warnings across nodes.
 type FailureGroup struct {
 	ID        string
-	Name      string   // from first check in group
+	Name      string // from first check in group
 	Status    Status
 	Severity  Severity
 	Subsystem string

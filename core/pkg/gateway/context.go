@@ -13,7 +13,7 @@ const (
 	ctxKeyJWT               = ctxkeys.JWT
 	CtxKeyNamespaceOverride = ctxkeys.NamespaceOverride
 	ctxKeyScopes            = ctxkeys.Scopes
-	ctxKeyOwnerConfirmed    = ctxkeys.OwnerConfirmed
+	ctxKeyGrant             = ctxkeys.Grant
 )
 
 // withInternalAuth creates a context for internal gateway operations that bypass authentication.

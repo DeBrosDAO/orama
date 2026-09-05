@@ -17,28 +17,28 @@ func TestCheckBaseURLSyntax(t *testing.T) {
 		url     string
 		wantErr bool
 	}{
-		{"", false},                          // empty = use default
-		{"https://push.example.com", false},  // public host
+		{"", false},                         // empty = use default
+		{"https://push.example.com", false}, // public host
 		{"http://push.example.com:8090", false},
-		{"https://1.1.1.1", false},           // public literal IP
+		{"https://1.1.1.1", false},                // public literal IP
 		{"https://[2606:4700:4700::1111]", false}, // public v6
-		{"ftp://push.example.com", true},     // bad scheme
-		{"notaurl", true},                    // no scheme/host
-		{"http://", true},                    // missing host
-		{"http://169.254.169.254", true},     // cloud metadata (link-local)
-		{"http://127.0.0.1", true},           // loopback
-		{"http://127.0.0.1:8090", true},      // loopback + port
-		{"http://10.0.0.5", true},            // RFC1918 (WireGuard mesh)
-		{"http://192.168.1.1", true},         // RFC1918
-		{"http://172.16.0.1", true},          // RFC1918
-		{"http://100.64.0.1", true},          // CGNAT
-		{"http://0.0.0.0", true},             // unspecified
-		{"http://[::1]", true},               // v6 loopback
-		{"http://[fd00::1]", true},           // v6 ULA
-		{"http://[64:ff9b::a00:5]", true},    // NAT64-embedded 10.0.0.5
-		{"http://0x7f000001", true},          // hex-encoded 127.0.0.1
-		{"http://2130706433", true},          // decimal-encoded 127.0.0.1
-		{"http://0177.0.0.1", true},          // octal-encoded 127.0.0.1
+		{"ftp://push.example.com", true},          // bad scheme
+		{"notaurl", true},                         // no scheme/host
+		{"http://", true},                         // missing host
+		{"http://169.254.169.254", true},          // cloud metadata (link-local)
+		{"http://127.0.0.1", true},                // loopback
+		{"http://127.0.0.1:8090", true},           // loopback + port
+		{"http://10.0.0.5", true},                 // RFC1918 (WireGuard mesh)
+		{"http://192.168.1.1", true},              // RFC1918
+		{"http://172.16.0.1", true},               // RFC1918
+		{"http://100.64.0.1", true},               // CGNAT
+		{"http://0.0.0.0", true},                  // unspecified
+		{"http://[::1]", true},                    // v6 loopback
+		{"http://[fd00::1]", true},                // v6 ULA
+		{"http://[64:ff9b::a00:5]", true},         // NAT64-embedded 10.0.0.5
+		{"http://0x7f000001", true},               // hex-encoded 127.0.0.1
+		{"http://2130706433", true},               // decimal-encoded 127.0.0.1
+		{"http://0177.0.0.1", true},               // octal-encoded 127.0.0.1
 	}
 	for _, tc := range cases {
 		err := CheckBaseURLSyntax(tc.url)

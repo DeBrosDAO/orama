@@ -133,4 +133,3 @@ func (cm *ClusterConfigManager) ensureRequiredSection(m map[string]interface{}, 
 	}
 	return m[key].(map[string]interface{})
 }
-

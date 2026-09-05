@@ -175,8 +175,13 @@ The service is `PartOf=orama-node.service`, meaning:
 
 ### Restart Behavior
 
-- `Restart=on-failure`: The guardian restarts if it exits with a non-zero status.
+- `Restart=always`: The guardian restarts whenever it exits, including a clean
+  exit it was not asked to make. A vault that has quietly gone away is worse
+  than one that keeps coming back.
 - `RestartSec=5s`: Wait 5 seconds between restarts.
+- `StartLimitIntervalSec=0`: No start limit. `orama-node` reconciles this unit,
+  and `systemctl start` on a rate-limited unit refuses until someone runs
+  `reset-failed`. See "Unit restart policy" in `docs/ARCHITECTURE.md`.
 - The guardian generates a new server secret on each start, which invalidates all existing session tokens. This is intentional -- sessions should not survive restarts.
 
 ---

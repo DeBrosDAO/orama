@@ -54,7 +54,7 @@ Without a subcommand, launches the interactive TUI.
 | `--env` | *(required)* | Environment: `devnet`, `testnet`, `mainnet` |
 | `--json` | `false` | Machine-readable JSON output (for one-shot subcommands) |
 | `--node` | | Filter to a specific node host/IP |
-| `--config` | `scripts/nodes.conf` | Path to node configuration file |
+| `--config` | *(resolver)* | Read nodes from this file instead of resolving them |
 
 ### Subcommands
 
@@ -243,7 +243,43 @@ These checks compare data across all nodes:
 - **Applied Index Lag**: Followers within 100 entries of the leader
 - **WireGuard Peer Symmetry**: Each node has N-1 peers
 - **Clock Skew**: Node clocks within 5 seconds of each other
-- **Binary Version**: All nodes running the same version. Currently inert: `orama node report` always emits an empty `version`, so every node reads as "unknown" and this alert never fires.
+- **Binary Version**: All nodes running the same version. `orama node report` used to emit an empty `version`, so every node read as "unknown" and the alert could never fire; the version is compiled into the binary now, so it carries a real value.
+
+### The lifecycle harness
+
+`e2e/lifecycle` consumes `orama monitor report --json` as its only view of the
+cluster, so the report's schema is a test contract. Its predicates assert:
+
+- **`Converged(n)`** — exactly `n` nodes, quorum `ok`, a leader, WG mesh `ok`,
+  zero critical alerts, and per node: responsive rqlite in `Leader`/`Follower`,
+  gateway 200, `wg0` up with N-1 peers, no crash-looping service, no failed unit.
+- **`LeaderAgreement()`** — every responsive node names the same leader. Split
+  brain is failed on by name, because both halves look healthy from inside.
+- **`Forgotten(wgIP)`** — no surviving node lists the address, in the node list
+  *or* as a WireGuard peer. A node evicted from raft but left in the mesh is the
+  failure that survives a restart.
+- **`Serving()`** — gateways respond and nameservers run CoreDNS, with raft
+  ignored entirely. A cluster mid-election must still serve.
+
+Adding a field is safe; renaming one that these read will fail
+`go test ./e2e/lifecycle/...` in `make test`.
+
+### The rolling-upgrade gate
+
+`orama node upgrade --env <env>` uses the same signals, in `pkg/nodehealth`, as
+its gate between nodes. A node passes when **all** of these hold:
+
+| Signal | Why |
+|--------|-----|
+| Raft state is `Leader` or `Follower` | `Candidate` means an election is running; restarting the next voter during one is how a rollout loses quorum |
+| A leader is known (`leader_id` non-empty) | A follower that reports no leader is in a cluster that cannot commit a write |
+| Applied index within 200 of the commit index | A follower tens of thousands of entries behind is not carrying reads |
+| Gateway `/health` returns 200 | The node serves no traffic until it does |
+
+Anything short of all four stops the rollout, leaving the remaining voters
+untouched. The same package backs `orama node install`'s post-install
+verification, `orama node start`, and `orama node post-upgrade`, so "ready"
+means one thing across the CLI.
 
 ### Per-Node Checks
 
@@ -272,9 +308,94 @@ Both tools check cluster health, but they serve different purposes:
 
 Use `monitor` for day-to-day health checks and the interactive TUI. Use `inspect` for deep diagnostics when something is already known to be broken.
 
+## In-cluster failure detection (the ring monitor)
+
+Separate from the SSH tooling above, every node runs a ring-based failure
+detector inside its **index gateway** process. It is what drives automatic
+recovery, so its thresholds decide how fast a dead node is noticed and how
+easily a healthy one is wrongly evicted.
+
+| Property | Value | Where |
+|---|---|---|
+| Runs on | index gateway only | a tenant gateway's RQLite has no `dns_nodes` rows |
+| Ring | the K nodes after this one in `dns_nodes` sorted by id | K = 3 |
+| Probe | `GET http://<internal_ip>:10104/v1/internal/ping` | port from `constants.GatewayAPIPort` |
+| Probe interval | 10s | |
+| Suspect | 3 consecutive misses (~30s) | disables that node's namespace DNS records |
+| Dead | 12 consecutive misses (~2min) | needs ≥2 distinct observers to agree |
+| Startup grace | 5min | no node is declared dead during it |
+
+**The probe port is configuration, not a literal.** It is the *index gateway*
+port on the peer, because the ring monitors nodes rather than namespaces and
+only the index gateway serves `/v1/internal/ping`. `health.NewMonitor` returns
+an error if it is unset: the port was hardcoded once, survived the move of the
+index internals into the 10100–10109 block untouched, and every probe on a
+healthy fleet then failed — which the ring turns into a cluster-wide false
+eviction about seven minutes after the gateways start.
+
+**A recent heartbeat outranks the probe.** Before issuing HTTP, the monitor
+checks whether the peer updated `dns_nodes.last_seen` within the last 65
+seconds (two heartbeat ticks). That row is a raft write, so a fresh value
+proves the peer was alive *and* had quorum — evidence that does not depend on
+the HTTP path. A stale heartbeat proves nothing either way and falls through to
+the probe rather than counting as a miss.
+
+Observations land in `node_health_events`; recovery is triggered only by the
+lowest-id observer once quorum agrees, so a confirmed death produces one
+recovery action rather than one per observer.
+
+## Namespace DNS self-management
+
+Separately from the ring monitor, each node probes the namespaces it hosts every
+30s and keeps its own DNS records in step. rqlite and Olric are probed by
+dialling their ports; the gateway is asked `GET /v1/health`, because it binds
+and answers long before it has a usable schema and a TCP dial cannot tell the
+difference — a gateway that could not serve a single request used to stay in the
+round-robin.
+
+The gateway probe reads **readiness only**. `starting` (waiting for its schema)
+and `blocked` (schema below what the binary requires) count against the
+namespace; `degraded` and `unhealthy` do not, because those are subsystem
+health — rqlite and Olric have their own probes above, and withdrawing a node
+because its IPFS daemon blipped would turn one unavailable subsystem into an
+unavailable node.
+
+| Namespace status | When | In DNS |
+|---|---|---|
+| `healthy` | every service reachable and the gateway is ready | yes |
+| `starting` | the gateway is up but waiting for its schema | no |
+| `unhealthy` | a service is unreachable, or the gateway is blocked | no |
+
+| Transition | Threshold | Effect |
+|---|---|---|
+| healthy → not healthy | 3 consecutive non-healthy probes (~90s) | withdraws this node's `ns-<ns>` and `*.ns-<ns>` A records |
+| not healthy → healthy | 3 consecutive healthy probes (~90s) | restores the records it withdrew |
+
+A gateway that is `starting` therefore adds its convergence time to the
+re-advertise lag after a restart (bug-286).
+
+Two safety rules:
+
+- **Never the last record.** A withdrawal is refused when this node's record is
+  the only active one for that name. The count is evaluated inside the UPDATE,
+  so simultaneous withdrawals on different nodes cannot empty the round-robin
+  between them.
+- **A peer's verdict outranks a stale one, not a live one.** Records this
+  process withdrew are restored as soon as its own probe recovers. A record a
+  *peer* disabled (the ring monitor's suspect path) is only reclaimed after it
+  has sat untouched for 10 minutes, so a monitor that still considers this node
+  suspect keeps it out.
+
+Watch it with:
+
+```bash
+sudo orama node logs node --since -1h | grep -E 'namespace DNS round-robin'
+```
+
 ## Configuration
 
-Uses the same `scripts/nodes.conf` as the inspector. See [INSPECTOR.md](INSPECTOR.md#configuration) for format details.
+Resolves nodes the same way the inspector does — network API first, `nodes.conf`
+as the fallback. See [INSPECTOR.md](INSPECTOR.md#configuration) for the file format.
 
 ## Prerequisites
 

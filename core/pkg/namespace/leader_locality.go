@@ -86,7 +86,7 @@ func measurePeerRTTs(nodes rqlite.RQLiteNodes, selfID string) (map[string]time.D
 			allReachable = false
 			continue
 		}
-		dialAddr := n.Address
+		dialAddr := n.Addr
 		if dialAddr == "" {
 			dialAddr = n.ID
 		}

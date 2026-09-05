@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -46,7 +47,7 @@ type Config struct {
 	// If empty, defaults to "http://localhost:9094"
 	ClusterAPIURL string
 
-	// IPFSAPIURL is the base URL for IPFS daemon API (e.g., "http://localhost:4501")
+	// IPFSAPIURL is the base URL for IPFS daemon API (e.g., "http://localhost:10107")
 	// Used for operations that require IPFS daemon directly (like directory uploads)
 	IPFSAPIURL string
 
@@ -122,7 +123,7 @@ func NewClient(cfg Config, logger *zap.Logger) (*Client, error) {
 
 	ipfsAPIURL := cfg.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:4501"
+		ipfsAPIURL = constants.LocalIPFSAPIURL()
 	}
 
 	timeout := cfg.Timeout
@@ -626,34 +627,99 @@ func (c *Client) Unpin(ctx context.Context, cid string) error {
 }
 
 // Get retrieves content from IPFS by CID
-// Note: This uses the IPFS HTTP API (typically on port 5001), not the Cluster API
+// Note: This uses the IPFS HTTP API, not the Cluster API
 func (c *Client) Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error) {
 	// Use the client's configured IPFS API URL if not provided
 	if ipfsAPIURL == "" {
 		ipfsAPIURL = c.ipfsAPIURL
 	}
 
+	// Offline first.
+	//
+	// Content this node has pinned is on its own disk, and `cat` without
+	// offline=true still consults the DHT and bitswap before answering — so a
+	// local read could sit behind a network fetch for the caller's whole
+	// budget. That is the mechanism behind the cold-fetch stalls in bug-167.
+	// dagBlocks already does this correctly; Get did not.
+	if body, err := c.catOnce(ctx, ipfsAPIURL, cid, true, offlineCatTimeout); err == nil {
+		return body, nil
+	} else if !isContentNotFound(err) {
+		// A local read that failed for any reason OTHER than "we do not have
+		// it" is a real failure of this node, and retrying it over the network
+		// would hide that.
+		return nil, err
+	}
+
+	// Not held locally, so fetch it from the network, on the caller's budget.
+	body, err := c.catOnce(ctx, ipfsAPIURL, cid, false, 0)
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+// offlineCatTimeout bounds the local-only attempt. It reads from disk, so this
+// is generous; its purpose is to stop a wedged daemon eating the whole budget
+// before the networked attempt gets a turn.
+const offlineCatTimeout = 2 * time.Second
+
+// errContentNotFound marks a CID this node does not hold, which is the one
+// failure that justifies falling through to a networked fetch.
+var errContentNotFound = errors.New("content not found")
+
+func isContentNotFound(err error) bool { return errors.Is(err, errContentNotFound) }
+
+// catOnce performs one `cat`, optionally restricted to local blocks.
+func (c *Client) catOnce(ctx context.Context, ipfsAPIURL, cid string, offline bool, timeout time.Duration) (io.ReadCloser, error) {
+	// The response body outlives this function, so a deferred cancel would
+	// close the stream the caller is about to read. Cancel on every failure
+	// path, and hand ownership to the body on success.
+	cancel := func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	}
+
 	url := fmt.Sprintf("%s/api/v0/cat?arg=%s", ipfsAPIURL, cid)
+	if offline {
+		url += "&offline=true"
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to create get request: %w", err)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("get request failed: %w", err)
+		cancel()
+		return nil, fmt.Errorf("get %s from %s (offline=%v): %w", cid, ipfsAPIURL, offline, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		cancel()
 		if resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("content not found (CID: %s). The content may not be available on the IPFS node, or the IPFS API may not be accessible at %s", cid, ipfsAPIURL)
+			return nil, fmt.Errorf("%w (CID: %s, node %s, offline=%v)", errContentNotFound, cid, ipfsAPIURL, offline)
 		}
-		return nil, fmt.Errorf("get failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("get %s from %s failed with status %d: %s", cid, ipfsAPIURL, resp.StatusCode, string(body))
 	}
 
-	return resp.Body, nil
+	return &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}, nil
+}
+
+// cancelOnCloseBody releases the request context when the caller is done with
+// the stream, rather than when the function that opened it returned.
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
 }
 
 // EvictLocal immediately reclaims the blocks of a CID from THIS node's local

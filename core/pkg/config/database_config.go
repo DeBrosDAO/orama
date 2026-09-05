@@ -22,12 +22,31 @@ type DatabaseConfig struct {
 	NodeCACert   string `yaml:"node_ca_cert"`   // Path to CA certificate (optional, uses system CA if not set)
 	NodeNoVerify bool   `yaml:"node_no_verify"` // Skip certificate verification (for testing/self-signed certs)
 
-	// RQLite HTTP Basic Auth credentials.
-	// When RQLiteAuthFile is set, rqlited is launched with `-auth <file>`.
-	// Username/password are embedded in all client DSNs (harmless when auth not enforced).
+	// RQLite HTTP Basic Auth credentials, used by every client this node opens:
+	// the SQL DSN and the admin API (AdminClient).
+	//
+	// Setting these is always safe: rqlite ignores credentials it does not
+	// require, so a node can send them long before any node enforces them.
 	RQLiteUsername string `yaml:"rqlite_username"`
 	RQLitePassword string `yaml:"rqlite_password"`
-	RQLiteAuthFile string `yaml:"rqlite_auth_file"` // Path to RQLite auth JSON file. Empty = auth not enforced.
+
+	// RQLiteAuthFile is the rqlite auth JSON. It supplies the credentials the
+	// admin client sends, and is the file rqlited is pointed at when
+	// RQLiteEnforceAuth is set.
+	RQLiteAuthFile string `yaml:"rqlite_auth_file"`
+
+	// RQLiteEnforceAuth starts rqlited with `-auth`, making it reject
+	// unauthenticated requests.
+	//
+	// Separate from RQLiteAuthFile on purpose. The two used to be one setting,
+	// so the only way to give clients credentials was to simultaneously start
+	// refusing everyone who had none — including every peer still running the
+	// previous release, whose /join, /status and /remove calls would 401 in the
+	// middle of a rolling upgrade and look exactly like raft breaking.
+	//
+	// The rollout is therefore two passes: first every node ships credentials
+	// (RQLiteAuthFile, enforcement off), then enforcement is switched on.
+	RQLiteEnforceAuth bool `yaml:"rqlite_enforce_auth"`
 
 	// Raft tuning (passed through to rqlited CLI flags).
 	// Higher defaults than rqlited's 1s suit WireGuard latency.
@@ -42,7 +61,7 @@ type DatabaseConfig struct {
 	MinClusterSize      int           `yaml:"min_cluster_size"`      // default: 1
 
 	// Olric cache configuration
-	OlricHTTPPort       int `yaml:"olric_http_port"`       // Olric HTTP API port (default: 3320)
+	OlricHTTPPort       int `yaml:"olric_http_port"`       // Olric HTTP API port (default: 10102)
 	OlricMemberlistPort int `yaml:"olric_memberlist_port"` // Olric memberlist port (default: 3322)
 
 	// IPFS storage configuration
@@ -55,8 +74,8 @@ type IPFSConfig struct {
 	// If empty, IPFS storage is disabled for this node
 	ClusterAPIURL string `yaml:"cluster_api_url"`
 
-	// APIURL is the IPFS HTTP API URL for content retrieval (e.g., "http://localhost:4501")
-	// If empty, defaults to "http://localhost:4501"
+	// APIURL is the IPFS HTTP API URL for content retrieval (e.g., "http://localhost:10107")
+	// If empty, defaults to "http://localhost:10107"
 	APIURL string `yaml:"api_url"`
 
 	// Timeout for IPFS operations

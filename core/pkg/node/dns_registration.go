@@ -18,7 +18,7 @@ import (
 
 // registerDNSNode registers this node in the dns_nodes table for deployment routing
 func (n *Node) registerDNSNode(ctx context.Context) error {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return fmt.Errorf("rqlite adapter not initialized")
 	}
 
@@ -65,7 +65,7 @@ func (n *Node) registerDNSNode(ctx context.Context) error {
 			updated_at = datetime('now')
 	`
 
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 	_, err = rqlite.SafeExecContext(db, ctx, query, nodeID, ipAddress, internalIP, region, sshUser, environment, operatorWallet)
 	if err != nil {
 		return fmt.Errorf("failed to register DNS node: %w", err)
@@ -123,7 +123,7 @@ func (n *Node) startDNSHeartbeat(ctx context.Context) {
 
 // updateDNSHeartbeat updates the node's last_seen timestamp in dns_nodes
 func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return fmt.Errorf("rqlite adapter not initialized")
 	}
 
@@ -136,7 +136,7 @@ func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
 	// node must count as active. This self-heals a node that was reaped to
 	// 'inactive' during a restart window without a fresh registration.
 	query := `UPDATE dns_nodes SET status = 'active', last_seen = datetime('now'), updated_at = datetime('now') WHERE id = ?`
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 	res, err := rqlite.SafeExecContext(db, ctx, query, nodeID)
 	if err != nil {
 		return fmt.Errorf("failed to update DNS heartbeat: %w", err)
@@ -172,7 +172,7 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 		return fmt.Errorf("failed to determine node IP: %w", err)
 	}
 
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 
 	// Clean up any private IP A records left by old code versions.
 	// Old code could insert WireGuard IPs (10.0.0.x) into dns_records.
@@ -241,7 +241,7 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 // These are normally seeded during install Phase 7, but if that fails (e.g. migrations
 // not yet run), the heartbeat self-heals them here.
 func (n *Node) ensureSOAAndNSRecords(ctx context.Context, baseDomain string) {
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 	fqdn := baseDomain + "."
 
 	// Check if SOA exists
@@ -286,7 +286,7 @@ func (n *Node) ensureSOAAndNSRecords(ctx context.Context, baseDomain string) {
 // nameserver node (bugboard #858), with failover. Thin wrapper over
 // pinPushDesignated that logs failures.
 func (n *Node) ensurePushDesignatedRecord(ctx context.Context, baseDomain string) {
-	if _, err := pinPushDesignated(ctx, n.rqliteAdapter.GetSQLDB(), baseDomain); err != nil {
+	if _, err := pinPushDesignated(ctx, n.getRQLiteAdapter().GetSQLDB(), baseDomain); err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to pin push DNS record (bugboard #858)", zap.Error(err))
 	}
 }
@@ -350,7 +350,7 @@ func pinPushDesignated(ctx context.Context, db *sql.DB, baseDomain string) (stri
 // If the node already has a slot, it updates the IP. If no slot is available, it does nothing.
 func (n *Node) claimNameserverSlot(ctx context.Context, domain, ipAddress string) {
 	nodeID := n.GetPeerID()
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 
 	// Check if this node already has a slot
 	var existingHostname string
@@ -414,7 +414,7 @@ func (n *Node) claimNameserverSlot(ctx context.Context, domain, ipAddress string
 // cleanupStaleNodeRecords removes A records for nodes that have stopped heartbeating.
 // This ensures DNS only returns IPs for healthy, active nodes.
 func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
 
@@ -426,7 +426,7 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 		return
 	}
 
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 
 	// Find nodes that haven't sent a heartbeat in over 2 minutes
 	staleQuery := `SELECT id, ip_address FROM dns_nodes WHERE status = 'active' AND last_seen < datetime('now', '-120 seconds')`
@@ -535,7 +535,7 @@ func staleCutoff() string {
 // different rows on different nodes and diverge the cluster. A bound constant
 // travels identically to every replica.
 //
-// The IS NOT NULL / != '' filter is explicit rather than incidental: a single NULL
+// The IS NOT NULL / != ” filter is explicit rather than incidental: a single NULL
 // ip_address would make the outer `value NOT IN (…)` evaluate to NULL for every
 // row (SQL three-valued logic), silently turning the whole purge into a no-op.
 const inactiveNodeIPsSQL = `SELECT ip_address FROM dns_nodes WHERE status != 'active'
@@ -669,7 +669,7 @@ const ensureNamespaceHostRecordsSQL = `INSERT INTO dns_records (fqdn, record_typ
 //
 // Additive and per-node: inserts only THIS node's own value, only when absent.
 func (n *Node) ensureNamespaceHostRecords(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
 	nodeID := n.GetPeerID()
@@ -693,7 +693,7 @@ func (n *Node) ensureNamespaceHostRecords(ctx context.Context) {
 		return
 	}
 
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	// The apex host and the deployment wildcard are always advertised together.
 	for _, prefix := range []string{"", "*."} {
@@ -749,7 +749,7 @@ const retractForeignTURNRecordsSQL = `DELETE FROM dns_records
 // retractForeignTURNRecords drops this node's TURN/stealth A records for any
 // namespace it holds no TURN allocation for. See retractForeignTURNRecordsSQL.
 func (n *Node) retractForeignTURNRecords(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
 	nodeID := n.GetPeerID()
@@ -760,7 +760,7 @@ func (n *Node) retractForeignTURNRecords(ctx context.Context) {
 	if err != nil {
 		return // already logged by the ensure on the same sweep
 	}
-	res, err := rqlite.SafeExecContext(n.rqliteAdapter.GetSQLDB(), ctx,
+	res, err := rqlite.SafeExecContext(n.getRQLiteAdapter().GetSQLDB(), ctx,
 		retractForeignTURNRecordsSQL, ip, nodeID)
 	if err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode,
@@ -797,10 +797,10 @@ func (n *Node) retractForeignTURNRecords(ctx context.Context) {
 // Idempotent DELETE-by-value — safe to run from every node on every sweep (same
 // model as cleanupStaleNodeRecords, no leader gating needed).
 func (n *Node) purgeInactiveNodeRecords(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 
 	cutoff := staleCutoff()
 
@@ -847,14 +847,14 @@ func (n *Node) isNameserverPreference() bool {
 // isNameserverNode checks if this node has claimed a nameserver slot (ns1/ns2/ns3).
 // Only nameserver nodes claim NS slots, so only they should be in base domain DNS.
 func (n *Node) isNameserverNode(ctx context.Context) bool {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return false
 	}
 	nodeID := n.GetPeerID()
 	if nodeID == "" {
 		return false
 	}
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 	var count int
 	err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM dns_nameservers WHERE node_id = ?`, nodeID,

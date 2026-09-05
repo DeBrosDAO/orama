@@ -5,14 +5,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"net"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -30,57 +31,34 @@ type Flags struct {
 // reset the Raft configuration on the leader while preserving all data.
 const (
 	rqliteRoot     = "/opt/orama/.orama/data/rqlite"
-	raftDBFile     = rqliteRoot + "/raft.db"           // Raft log + stable store (BoltDB)
-	raftSubdir     = rqliteRoot + "/raft"              // recovery peers.json lives here
-	peersFile      = rqliteRoot + "/raft/peers.json"   // rqlite reads this iff raft.db is absent
+	raftDBFile     = rqliteRoot + "/raft.db"         // Raft log + stable store (BoltDB)
+	raftSubdir     = rqliteRoot + "/raft"            // recovery peers.json lives here
+	peersFile      = rqliteRoot + "/raft/peers.json" // rqlite reads this iff raft.db is absent
 	discoveryPeers = rqliteRoot + "/discovery-peers.json"
 	rqliteOwner    = "orama:orama"
-	rqlitePort     = 5001
+	rqlitePort     = constants.RQLiteHTTPPort
 )
 
-// Handle is the entry point for the recover-raft command.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
-	if err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+// Run is the entry point for the recover-raft command.
+func Run(flags *Flags) error {
+	if err := flags.validate(); err != nil {
+		return err
 	}
-
-	if err := execute(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	return execute(flags)
 }
 
-func parseFlags(args []string) (*Flags, error) {
-	fs := flag.NewFlagSet("recover-raft", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &Flags{}
-	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	fs.StringVar(&flags.Leader, "leader", "", "Leader node IP (node with highest commit index) [required]")
-	fs.StringVar(&flags.LeaderRaftAddr, "leader-raft-addr", "", "Explicit leader raft address host:port (e.g. 10.0.0.1:7001). Use when quorum is already lost so the leader can't be auto-resolved; bypasses the live-Leader check.")
-	fs.BoolVar(&flags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
+func (f *Flags) validate() error {
+	if f.Env == "" {
+		return fmt.Errorf("--env is required\nUsage: orama node recover-raft --env <devnet|testnet>")
 	}
-
-	if flags.Env == "" {
-		return nil, fmt.Errorf("--env is required\nUsage: orama node recover-raft --env <devnet|testnet> --leader <ip>")
-	}
-	if flags.Leader == "" {
-		return nil, fmt.Errorf("--leader is required\nUsage: orama node recover-raft --env <devnet|testnet> --leader <ip>")
-	}
-
-	return flags, nil
+	// --leader is optional: without it the command reads every node's applied
+	// index and keeps the furthest-ahead one, printing what it found so the
+	// operator can check before approving.
+	return nil
 }
 
 func execute(flags *Flags) error {
-	nodes, err := remotessh.LoadEnvNodes(flags.Env)
+	nodes, err := noderesolver.ResolveNodes(flags.Env)
 	if err != nil {
 		return err
 	}
@@ -91,12 +69,17 @@ func execute(flags *Flags) error {
 	}
 	defer cleanup()
 
-	// Find leader node
-	leaderNodes := remotessh.FilterByIP(nodes, flags.Leader)
-	if len(leaderNodes) == 0 {
-		return fmt.Errorf("leader %s not found in %s environment", flags.Leader, flags.Env)
+	// Choose whose data survives.
+	//
+	// This used to be --leader, required, described as "the node with the
+	// highest commit index" and never computed. It decides which copy of the
+	// cluster's data is kept: every other node's raft log and database are
+	// deleted. Working that out by hand, across six nodes, while quorum is
+	// already lost, is how the wrong one gets named.
+	leader, err := chooseLeader(nodes, flags.Leader)
+	if err != nil {
+		return err
 	}
-	leader := leaderNodes[0]
 
 	// Separate leader from followers
 	var followers []inspector.Node
@@ -106,7 +89,7 @@ func execute(flags *Flags) error {
 		}
 	}
 
-	// Resolve the leader's own Raft address (e.g. "10.0.0.1:7001"). This becomes
+	// Resolve the leader's own Raft address (e.g. "10.0.0.1:10101"). This becomes
 	// the sole member of the recovery peers.json.
 	//   - If --leader-raft-addr is given, trust it (validated). This is the
 	//     correct path when quorum is ALREADY lost (the usual recovery case),
@@ -191,7 +174,7 @@ func execute(flags *Flags) error {
 
 // resolveLeaderRaftAddr queries the given node's live /nodes endpoint and
 // returns the raft address of whichever member reports leader==true. This is
-// the node's own WireGuard raft address (e.g. "10.0.0.1:7001").
+// the node's own WireGuard raft address (e.g. "10.0.0.1:10101").
 func resolveLeaderRaftAddr(leader inspector.Node) (string, error) {
 	// Cross-check: the node the operator named must ITSELF currently be the raft
 	// leader. Otherwise its /nodes view could name a different (partitioned)
@@ -244,7 +227,7 @@ func parseLeaderRaftID(nodesJSON []byte) (string, error) {
 }
 
 // validateRaftAddr checks that s is a well-formed raft address: a WireGuard
-// host:port with an IP host (e.g. "10.0.0.1:7001"). Rejects shell-injection or
+// host:port with an IP host (e.g. "10.0.0.1:10101"). Rejects shell-injection or
 // corrupt values before they can reach a recovery peers.json.
 func validateRaftAddr(s string) error {
 	host, port, err := net.SplitHostPort(s)
@@ -612,4 +595,28 @@ func raftState(node inspector.Node) string {
 		return ""
 	}
 	return status.Store.Raft.State
+}
+
+// chooseLeader resolves the node whose data a recovery keeps.
+//
+// An explicit --leader wins and is only checked for membership: an operator who
+// names one has a reason, and this command exists for situations the automatic
+// answer may not cover.
+func chooseLeader(nodes []inspector.Node, explicit string) (inspector.Node, error) {
+	if explicit != "" {
+		named := remotessh.FilterByIP(nodes, explicit)
+		if len(named) == 0 {
+			return inspector.Node{}, fmt.Errorf("--leader %s is not a node in this environment", explicit)
+		}
+		return named[0], nil
+	}
+
+	fmt.Printf("Reading the applied index of %d node(s)...\n\n", len(nodes))
+	picked, indexes, err := PickLeader(nodes)
+	if err != nil {
+		return inspector.Node{}, err
+	}
+	fmt.Print(FormatIndexes(indexes, picked))
+	fmt.Println()
+	return picked, nil
 }

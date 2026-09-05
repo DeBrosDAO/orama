@@ -62,20 +62,33 @@ func TestWalletFromRequest_apiKeyContext(t *testing.T) {
 	}
 }
 
-func TestExtractNamespace(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"ak_abc123:myns", "myns"},
-		{"ak_abc123", "ak_abc123"},
-		{"", ""},
+// The namespace used to be parsed out of the key string — `ak_<random>:<ns>`.
+// A key does not carry one now, so it comes from the token's claim or from what
+// the middleware resolved, and a caller with neither is nobody.
+func TestResolveWallet_takesTheNamespaceFromTheCredentialNotTheKeyString(t *testing.T) {
+	h := NewHandler(nil, nil)
+
+	// A wallet JWT is its own answer.
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(context.WithValue(r.Context(), ctxkeys.JWT,
+		&auth.JWTClaims{Sub: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}))
+	if got := h.resolveWallet(r); got != "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Errorf("a wallet JWT resolved to %q", got)
 	}
-	for _, tt := range tests {
-		got := extractNamespace(tt.input)
-		if got != tt.want {
-			t.Errorf("extractNamespace(%q) = %q, want %q", tt.input, got, tt.want)
-		}
+
+	// A key-exchanged JWT carries its namespace as a claim. No database here,
+	// so the lookup answers empty — what matters is that it did not read a
+	// namespace out of the subject.
+	r = httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(context.WithValue(r.Context(), ctxkeys.JWT,
+		&auth.JWTClaims{Sub: "orama_sk_abc_def", Namespace: "myns"}))
+	if got := h.resolveWallet(r); got != "" {
+		t.Errorf("resolveWallet = %q with no database", got)
+	}
+
+	// Nothing at all.
+	if got := h.resolveWallet(httptest.NewRequest(http.MethodGet, "/", nil)); got != "" {
+		t.Errorf("a request with no credential resolved to %q", got)
 	}
 }
 
@@ -166,7 +179,10 @@ func TestHandleRegister_noAuth(t *testing.T) {
 }
 
 func TestHandleRegister_missingFields(t *testing.T) {
-	h := NewHandler(nil, nil)
+	// Authorization runs first now, so the caller has to be an operator before
+	// the request body is looked at: an unauthorized caller should not learn
+	// which inputs are valid.
+	h, _ := operatorHandler(t, "0xabc")
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/operator/node/register", strings.NewReader(`{}`))
 	claims := &auth.JWTClaims{Sub: "0xabc"}
@@ -180,7 +196,7 @@ func TestHandleRegister_missingFields(t *testing.T) {
 }
 
 func TestHandleRegister_invalidEnvironment(t *testing.T) {
-	h := NewHandler(nil, nil)
+	h, _ := operatorHandler(t, "0xabc")
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/operator/node/register",
 		strings.NewReader(`{"node_id":"test","environment":"<script>alert(1)</script>"}`))
@@ -195,7 +211,7 @@ func TestHandleRegister_invalidEnvironment(t *testing.T) {
 }
 
 func TestHandleRegister_invalidRole(t *testing.T) {
-	h := NewHandler(nil, nil)
+	h, _ := operatorHandler(t, "0xabc")
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/v1/operator/node/register",
 		strings.NewReader(`{"node_id":"test","role":"admin"}`))

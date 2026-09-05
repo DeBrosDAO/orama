@@ -54,6 +54,28 @@ test-e2e-production:
 	@echo "Running production-only E2E tests..."
 	go test -v -tags "e2e production" -timeout 15m ./e2e/production/...
 
+# Lifecycle harness (change-287). Drives a real 3-node cluster through the
+# orama CLI: reboot, kill a voter, join, decommission, rolling upgrade, DNS
+# with the index rqlite down.
+#
+# Build tag `lifecycle`, so `make test` never picks these up. Requires a
+# DISPOSABLE environment — these scenarios reboot nodes and destroy VMs.
+#
+#   ORAMA_LIFECYCLE_ENV=lifecycle make test-lifecycle
+#
+# Scenarios whose infrastructure hook is not configured SKIP rather than pass;
+# see docs/DEV_DEPLOY.md, "Lifecycle harness", for the hook variables.
+.PHONY: test-lifecycle
+test-lifecycle:
+	@if [ -z "$$ORAMA_LIFECYCLE_ENV" ]; then \
+		echo "❌ ORAMA_LIFECYCLE_ENV not set"; \
+		echo "Usage: ORAMA_LIFECYCLE_ENV=<disposable-env> make test-lifecycle"; \
+		echo "These scenarios reboot nodes and destroy VMs. Never point them at testnet or mainnet."; \
+		exit 1; \
+	fi
+	@echo "Running the lifecycle harness against $$ORAMA_LIFECYCLE_ENV..."
+	go test -v -tags lifecycle -timeout 120m ./e2e/lifecycle/...
+
 test-e2e-quick:
 	@echo "Running quick E2E smoke tests..."
 	go test -v -tags e2e -timeout 5m -run "TestStatic|TestHealth" ./e2e/...
@@ -61,7 +83,7 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
+.PHONY: build clean test test-contracts docs deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
 
 # Single source of truth — repo-root VERSION file. Update with `make bump VER=X.Y.Z`
 # or by editing /VERSION directly. Release workflows verify this matches the tag.
@@ -133,15 +155,31 @@ rollout-testnet:
 	./bin/orama node rollout --env testnet --yes
 
 # Bump the repo-root VERSION file and sync sdk/package.json.
+# Regenerate ../docs/CLI_REFERENCE.md from the cobra command tree.
+#
+# The reference is not written by hand, so command documentation cannot drift
+# from the code. `go test ./cmd/cli` fails when the file and the tree disagree.
+docs:
+	go test -count=1 ./cmd/cli -run TestCLIReference -update-cli-reference
+
+# Contract tests against the fixtures in ../contracts.
+#
+# -count=1 is required: the fixtures live above this Go module, so the test
+# cache does not see them change and would report a stale pass.
+test-contracts:
+	go test -count=1 -run Contract ./...
+
 # Usage: make bump VER=0.122.9
 bump:
 	@if [ -z "$(VER)" ]; then \
 		echo "Usage: make bump VER=X.Y.Z"; exit 1; \
 	fi
 	@echo "$(VER)" > ../VERSION
+	@printf '%s\n' "$(VER)" > pkg/version/version.txt
 	@cd ../sdk && npm version $(VER) --no-git-tag-version > /dev/null
-	@echo "Bumped VERSION and sdk/package.json to $(VER)"
-	@echo "Next: git add ../VERSION ../sdk/package.json && git commit -m 'release: $(VER)'"
+	@cd ../sdk-vault && npm version $(VER) --no-git-tag-version > /dev/null
+	@echo "Bumped VERSION, pkg/version/version.txt, sdk/package.json and sdk-vault/package.json to $(VER)"
+	@echo "Next: git add ../VERSION pkg/version/version.txt ../sdk/package.json ../sdk-vault/package.json && git commit -m 'release: $(VER)'"
 
 # Interactive release workflow (tag + push)
 release:

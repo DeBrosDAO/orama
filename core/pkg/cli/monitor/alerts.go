@@ -2,9 +2,11 @@ package monitor
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/production/report"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // AlertSeverity represents the severity of an alert.
@@ -487,7 +489,7 @@ func checkNodeRQLite(r *report.NodeReport, host string, nodeCtxMap map[string]*n
 	// may not have succeeded yet and this is expected transient behavior.
 	for nodeAddr, info := range r.RQLite.Nodes {
 		if !info.Reachable {
-			// nodeAddr is like "10.0.0.4:7001" — extract the IP to look up context
+			// nodeAddr is like "10.0.0.4:10101" — extract the IP to look up context
 			targetIP := strings.Split(nodeAddr, ":")[0]
 			if targetCtx, ok := nodeCtxMap[targetIP]; ok && targetCtx.isJoining {
 				alerts = append(alerts, Alert{AlertInfo, "rqlite", host,
@@ -604,8 +606,12 @@ func checkNodeServices(r *report.NodeReport, host string, nc *nodeContext) []Ale
 				fmt.Sprintf("Service %s is %s", svc.Name, svc.ActiveState)})
 		}
 		if svc.RestartLoopRisk {
+			detail := fmt.Sprintf("active for %ds", svc.ActiveSinceSec)
+			if svc.ActiveSinceSec == 0 {
+				detail = "never reached active"
+			}
 			alerts = append(alerts, Alert{AlertCritical, "service", host,
-				fmt.Sprintf("Service %s restart loop: %d restarts, active for %ds", svc.Name, svc.NRestarts, svc.ActiveSinceSec)})
+				fmt.Sprintf("Service %s restart loop: %d restarts, %s", svc.Name, svc.NRestarts, detail)})
 		}
 	}
 	for _, unit := range r.Services.FailedUnits {
@@ -757,9 +763,17 @@ func checkNodeNetwork(r *report.NodeReport, host string) []Alert {
 			fmt.Sprintf("High TCP retransmission rate: %.1f%%", r.Network.TCPRetransRate)})
 	}
 
-	// Check for internal ports exposed in UFW rules.
-	// Ports 5001 (RQLite), 6001 (Gateway), 3320 (Olric), 4501 (IPFS API) should be internal only.
-	internalPorts := []string{"5001", "6001", "3320", "4501"}
+	// Check for internal ports exposed in UFW rules. Index internals are
+	// reachable over the WireGuard overlay and localhost only; a UFW ALLOW that
+	// is not scoped to the overlay subnet exposes them to the internet.
+	internalPorts := []string{
+		strconv.Itoa(constants.RQLiteHTTPPort),
+		strconv.Itoa(constants.RQLiteRaftPort),
+		strconv.Itoa(constants.OlricHTTPPort),
+		strconv.Itoa(constants.GatewayAPIPort),
+		strconv.Itoa(constants.IPFSAPIPort),
+		strconv.Itoa(constants.IPFSClusterAPIPort),
+	}
 	for _, rule := range r.Network.UFWRules {
 		ruleLower := strings.ToLower(rule)
 		// Only flag ALLOW rules (not deny/reject).
@@ -767,7 +781,7 @@ func checkNodeNetwork(r *report.NodeReport, host string) []Alert {
 			continue
 		}
 		for _, port := range internalPorts {
-			// Match rules like "5001 ALLOW Anywhere" or "5001/tcp ALLOW IN"
+			// Match rules like "10100 ALLOW Anywhere" or "10100/tcp ALLOW IN"
 			// but not rules restricted to 10.0.0.0/24 (WG subnet).
 			if strings.Contains(rule, port) && !strings.Contains(rule, "10.0.0.") {
 				alerts = append(alerts, Alert{AlertCritical, "network", host,

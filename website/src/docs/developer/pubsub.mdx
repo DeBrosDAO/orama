@@ -17,7 +17,11 @@ All topics are scoped to your namespace automatically.
 
 ## Publishing Messages
 
-Publish string or binary payloads to any topic. Messages are base64-encoded on the wire and decoded transparently by the SDK.
+Publish string or binary payloads to any topic. Messages are base64-encoded on
+the wire. Every delivered message carries both `bytes`, the payload exactly as
+published, and `data`, the same payload decoded as UTF-8 text — use `bytes` for
+anything that is not text, because the text view replaces bytes that do not form
+valid UTF-8.
 
 ### SDK
 
@@ -91,11 +95,15 @@ Every message delivered to subscribers has the following shape:
 
 ```typescript
 interface PubSubMessage {
-  data: string;      // The decoded message payload
+  data: string;      // The payload decoded as UTF-8 text
+  bytes: Uint8Array; // The payload exactly as it was published
   topic: string;     // The topic the message was published to
   timestamp: number; // Server-assigned Unix timestamp in milliseconds
 }
 ```
+
+`data` is lossy for a payload that is not text: bytes that do not form valid
+UTF-8 are replaced with U+FFFD. Read `bytes` for anything binary.
 
 Server-side timestamps are applied to all messages, so you never need to rely on client clocks for ordering.
 

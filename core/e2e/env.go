@@ -24,6 +24,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/gorilla/websocket"
 	_ "github.com/mattn/go-sqlite3"
@@ -41,22 +42,41 @@ var (
 	cacheMutex       sync.RWMutex
 )
 
-// createAPIKeyWithProvisioning creates an API key for a namespace, handling async provisioning
-// For non-default namespaces, this may trigger cluster provisioning and wait for it to complete.
-func createAPIKeyWithProvisioning(gatewayURL, wallet, namespace string, timeout time.Duration) (string, error) {
+// createAPIKeyWithProvisioning signs in a fresh wallet and returns its API key,
+// waiting out the namespace's provisioning if it has just been created.
+//
+// It used to POST a made-up wallet address to /v1/auth/simple-key, which minted
+// a key for whoever asked. That endpoint is gone; this signs the gateway's
+// challenge with a real key, which is what every other caller does.
+func createAPIKeyWithProvisioning(gatewayURL, namespace string, timeout time.Duration) (string, error) {
+	wallet, err := newTestWallet()
+	if err != nil {
+		return "", err
+	}
 	httpClient := NewHTTPClient(10 * time.Second)
 
-	makeRequest := func() (*http.Response, []byte, error) {
-		reqBody := map[string]string{
-			"wallet":    wallet,
-			"namespace": namespace,
+	// One key per attempt: the nonce in a challenge is single-use, so a retry
+	// has to start from a new one rather than re-sending a consumed signature.
+	attempt := func() (*http.Response, []byte, error) {
+		message, err := wallet.challenge(gatewayURL, namespace)
+		if err != nil {
+			return nil, nil, err
 		}
-		bodyBytes, _ := json.Marshal(reqBody)
+		signature, err := wallet.sign(message)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		bodyBytes, _ := json.Marshal(map[string]string{
+			"message":   message,
+			"signature": signature,
+		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		req, err := http.NewRequestWithContext(ctx, "POST", gatewayURL+"/v1/auth/simple-key", bytes.NewReader(bodyBytes))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			gatewayURL+"/v1/auth/api-key", bytes.NewReader(bodyBytes))
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create request: %w", err)
 		}
@@ -78,7 +98,7 @@ func createAPIKeyWithProvisioning(gatewayURL, wallet, namespace string, timeout 
 			return "", fmt.Errorf("timeout waiting for namespace provisioning")
 		}
 
-		resp, respBody, err := makeRequest()
+		resp, respBody, err := attempt()
 		if err != nil {
 			return "", err
 		}
@@ -368,8 +388,8 @@ func queryAPIKeyFromRemoteRQLite(gatewayURL string) (string, error) {
 		return "", fmt.Errorf("failed to parse gateway URL: %w", err)
 	}
 
-	// RQLite HTTP API runs on port 5001 (not the gateway port 6001)
-	rqliteURL := fmt.Sprintf("http://%s:5001/db/query", parsed.Hostname())
+	// The RQLite HTTP API is a different port from the gateway.
+	rqliteURL := constants.RQLiteURLFor(parsed.Hostname()) + "/db/query"
 
 	// Create request body
 	reqBody := `["SELECT key FROM api_keys LIMIT 1"]`
@@ -1230,18 +1250,9 @@ func LoadTestEnv() (*E2ETestEnv, error) {
 			namespace = "default-test-ns"
 		}
 
-		// Generate a unique wallet address for this namespace
-		wallet := fmt.Sprintf("0x%x", []byte(namespace+fmt.Sprintf("%d", time.Now().UnixNano())))
-		if len(wallet) < 42 {
-			wallet = wallet + strings.Repeat("0", 42-len(wallet))
-		}
-		if len(wallet) > 42 {
-			wallet = wallet[:42]
-		}
-
 		// Create an API key for this namespace (handles async provisioning for non-default namespaces)
 		var err error
-		apiKey, err = createAPIKeyWithProvisioning(gatewayURL, wallet, namespace, 2*time.Minute)
+		apiKey, err = createAPIKeyWithProvisioning(gatewayURL, namespace, 2*time.Minute)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create API key for namespace %s: %w", namespace, err)
 		}
@@ -1278,18 +1289,8 @@ func LoadTestEnvWithNamespace(namespace string) (*E2ETestEnv, error) {
 
 	skipCleanup := os.Getenv("ORAMA_SKIP_CLEANUP") == "true"
 
-	// Generate a unique wallet address for this namespace
-	// Using namespace as part of the wallet address for uniqueness
-	wallet := fmt.Sprintf("0x%x", []byte(namespace+fmt.Sprintf("%d", time.Now().UnixNano())))
-	if len(wallet) < 42 {
-		wallet = wallet + strings.Repeat("0", 42-len(wallet))
-	}
-	if len(wallet) > 42 {
-		wallet = wallet[:42]
-	}
-
 	// Create an API key for this namespace (handles async provisioning for non-default namespaces)
-	apiKey, err := createAPIKeyWithProvisioning(gatewayURL, wallet, namespace, 2*time.Minute)
+	apiKey, err := createAPIKeyWithProvisioning(gatewayURL, namespace, 2*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API key for namespace %s: %w", namespace, err)
 	}

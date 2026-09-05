@@ -16,16 +16,16 @@ import (
 // which is nil — any test that calls them will panic, which is intentional.
 type fakeBatchClient struct {
 	rqlite.Client
-	calls           int
-	lastOps         []rqlite.BatchOp
-	seqCalls        int
-	lastSeqNS       string
-	queryCalls      int
-	lastQueryOps    []rqlite.BatchOp
-	respond         func(ops []rqlite.BatchOp) (*rqlite.BatchResult, error)
-	respondSeq      func(ns string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error)
-	respondQuery    func(ops []rqlite.BatchOp) ([]rqlite.OpResult, error)
-	nextSeq         int64
+	calls        int
+	lastOps      []rqlite.BatchOp
+	seqCalls     int
+	lastSeqNS    string
+	queryCalls   int
+	lastQueryOps []rqlite.BatchOp
+	respond      func(ops []rqlite.BatchOp) (*rqlite.BatchResult, error)
+	respondSeq   func(ns string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error)
+	respondQuery func(ops []rqlite.BatchOp) ([]rqlite.OpResult, error)
+	nextSeq      int64
 }
 
 func (f *fakeBatchClient) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {

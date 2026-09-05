@@ -110,7 +110,7 @@ func validateListenAddr(addr string) error {
 		return fmt.Errorf("port must be a number between 1 and 65535; got %q", port)
 	}
 
-	// Allow empty host (for wildcard binds like :6001)
+	// Allow empty host (for wildcard binds like :10104)
 	if host != "" && net.ParseIP(host) == nil {
 		// Try as hostname (may fail later during bind, but basic validation)
 		_, err := net.LookupHost(host)

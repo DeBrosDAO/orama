@@ -1,6 +1,9 @@
 [Unit]
 Description=Orama Namespace IPFS repo garbage collection (%i)
 Documentation=https://github.com/DeBrosOfficial/network
+# Requires is deliberate: `ipfs repo gc` operates on the running daemon's repo
+# through its API. With the daemon down there is nothing to collect, and the
+# timer firing would only log a connection failure every six hours.
 After=orama-namespace-ipfs@%i.service
 Requires=orama-namespace-ipfs@%i.service
 PartOf=orama-node.service

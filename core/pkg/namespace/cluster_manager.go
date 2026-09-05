@@ -11,10 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -31,7 +33,7 @@ type ClusterManagerConfig struct {
 	GlobalRQLiteDSN string // Global RQLite DSN for API key validation (e.g., "http://localhost:4001")
 	// IPFS configuration for namespace gateways (defaults used if not set)
 	IPFSClusterAPIURL     string        // IPFS Cluster API URL (default: "http://localhost:9094")
-	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:4501")
+	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:10107")
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // IPFS replication factor (default: 3)
 
@@ -122,6 +124,10 @@ type ClusterManager struct {
 
 	// drivers is the tenant ServiceDriver registry (rqlite, olric, gateway).
 	drivers *driverRegistry
+
+	// clusterSecretPath is where this node keeps the cluster secret. It is
+	// what a node-to-node coordination request is signed with.
+	clusterSecretPath string
 }
 
 // NewClusterManager creates a new cluster manager
@@ -156,6 +162,7 @@ func NewClusterManager(
 	}
 
 	cm := &ClusterManager{
+		clusterSecretPath:     cfg.ClusterSecretPath,
 		db:                    db,
 		portAllocator:         portAllocator,
 		webrtcPortAllocator:   webrtcPortAllocator,
@@ -208,6 +215,7 @@ func NewClusterManagerWithComponents(
 	}
 
 	cm := &ClusterManager{
+		clusterSecretPath:     cfg.ClusterSecretPath,
 		db:                    db,
 		portAllocator:         portAllocator,
 		webrtcPortAllocator:   NewWebRTCPortAllocator(db, logger),
@@ -250,6 +258,152 @@ func (cm *ClusterManager) spawnOlricWithSystemd(ctx context.Context, cfg olric.I
 	// SystemdSpawner now handles config file creation
 	return cm.systemdSpawner.SpawnOlric(ctx, cfg.Namespace, cfg.NodeID, cfg)
 }
+
+// peersJSONSource says where the peer list for a disk restore came from.
+type peersJSONSource int
+
+const (
+	// peersFromDB: live membership was readable and is authoritative.
+	peersFromDB peersJSONSource = iota
+	// peersSkip: a peer is reachable, so rqlited can rejoin on its own raft
+	// state. Writing nothing is strictly safer than writing a guess.
+	peersSkip
+	// peersSelfOnly: nothing else is reachable and the DB is unreadable. A
+	// single-node configuration at least yields a leader; asserting a
+	// membership we cannot verify does not.
+	peersSelfOnly
+)
+
+func (s peersJSONSource) String() string {
+	switch s {
+	case peersFromDB:
+		return "live-membership"
+	case peersSkip:
+		return "skipped-peer-reachable"
+	case peersSelfOnly:
+		return "self-only"
+	}
+	return "unknown"
+}
+
+// choosePeersJSONSource decides what a disk restore may assert about raft
+// membership.
+//
+// peers.json is rqlite's FORCE RECOVERY mechanism: it overwrites the raft
+// configuration at startup. The disk path used to build it from
+// cluster-state.json's AllNodes, which is refreshed only by a best-effort HTTP
+// push - so the node most likely to hold a stale copy is exactly the node that
+// was down while the cluster changed. On its next boot it reinstated a removed
+// member as a voter, and the namespace went back to 2-of-3-with-a-corpse or to
+// Candidate with no leader. That is the recorded "namespace RQLite lost quorum"
+// incident.
+//
+// Preference order: verified membership, then no assertion at all, then the
+// minimal assertion that can still produce a leader.
+func choosePeersJSONSource(dbOK bool, anyPeerReachable bool) peersJSONSource {
+	switch {
+	case dbOK:
+		return peersFromDB
+	case anyPeerReachable:
+		return peersSkip
+	default:
+		return peersSelfOnly
+	}
+}
+
+// writeRestorePeersJSON applies choosePeersJSONSource for one namespace.
+func (cm *ClusterManager) writeRestorePeersJSON(ctx context.Context, state *ClusterLocalState, dataDir string) {
+	dbPeers, dbErr := cm.liveRaftPeers(ctx, state.ClusterID)
+	dbOK := dbErr == nil && len(dbPeers) > 0
+
+	anyReachable := false
+	if !dbOK {
+		for _, np := range state.AllNodes {
+			if np.NodeID == cm.localNodeID {
+				continue
+			}
+			if raftPortReachable(np.InternalIP, np.RQLiteRaftPort) {
+				anyReachable = true
+				break
+			}
+		}
+	}
+
+	switch choosePeersJSONSource(dbOK, anyReachable) {
+	case peersFromDB:
+		if err := cm.writePeersJSON(dataDir, dbPeers); err != nil {
+			cm.logger.Error("Failed to write peers.json from live membership",
+				zap.String("namespace", state.NamespaceName), zap.Error(err))
+			return
+		}
+		cm.logger.Info("Wrote peers.json from live membership",
+			zap.String("namespace", state.NamespaceName), zap.Int("peers", len(dbPeers)))
+
+	case peersSkip:
+		cm.logger.Warn("Not writing peers.json: membership unreadable but a peer is reachable, so rqlited can rejoin on its own raft state",
+			zap.String("namespace", state.NamespaceName),
+			zap.String("state_saved_at", state.SavedAt.Format(time.RFC3339)),
+			zap.Error(dbErr))
+
+	case peersSelfOnly:
+		self := rqlite.RaftPeer{
+			ID:       fmt.Sprintf("%s:%d", state.LocalIP, state.LocalPorts.RQLiteRaftPort),
+			Address:  fmt.Sprintf("%s:%d", state.LocalIP, state.LocalPorts.RQLiteRaftPort),
+			NonVoter: false,
+		}
+		if err := cm.writePeersJSON(dataDir, []rqlite.RaftPeer{self}); err != nil {
+			cm.logger.Error("Failed to write single-node peers.json",
+				zap.String("namespace", state.NamespaceName), zap.Error(err))
+			return
+		}
+		cm.logger.Warn("Wrote a SINGLE-NODE peers.json: membership is unreadable and no peer is reachable. The namespace will serve from this node alone until the others return and are re-added.",
+			zap.String("namespace", state.NamespaceName),
+			zap.String("state_saved_at", state.SavedAt.Format(time.RFC3339)))
+	}
+}
+
+// liveRaftPeers reads current membership for a namespace cluster from the index
+// database. This is the same query the DB-backed restore path uses.
+func (cm *ClusterManager) liveRaftPeers(ctx context.Context, clusterID string) ([]rqlite.RaftPeer, error) {
+	if cm.db == nil {
+		return nil, fmt.Errorf("no index database handle")
+	}
+	var rows []struct {
+		InternalIP     string `db:"internal_ip"`
+		RQLiteRaftPort int    `db:"rqlite_raft_port"`
+	}
+	const q = `
+		SELECT COALESCE(dn.internal_ip, dn.ip_address) as internal_ip, pa.rqlite_raft_port
+		FROM namespace_port_allocations pa
+		JOIN dns_nodes dn ON pa.node_id = dn.id
+		WHERE pa.namespace_cluster_id = ?
+	`
+	if err := cm.db.Query(ctx, &rows, q, clusterID); err != nil {
+		return nil, err
+	}
+	peers := make([]rqlite.RaftPeer, 0, len(rows))
+	for _, r := range rows {
+		addr := fmt.Sprintf("%s:%d", r.InternalIP, r.RQLiteRaftPort)
+		peers = append(peers, rqlite.RaftPeer{ID: addr, Address: addr, NonVoter: false})
+	}
+	return peers, nil
+}
+
+// raftPortReachable reports whether a peer is accepting raft connections. Used
+// only to decide whether asserting a membership is necessary at all.
+func raftPortReachable(host string, port int) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), raftReachableTimeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// raftReachableTimeout is short: this runs per peer during boot, and a peer
+// that cannot answer a TCP handshake promptly is not one this node should be
+// deferring to.
+const raftReachableTimeout = 2 * time.Second
 
 // writePeersJSON writes RQLite peers.json file for Raft cluster recovery
 func (cm *ClusterManager) writePeersJSON(dataDir string, peers []rqlite.RaftPeer) error {
@@ -344,10 +498,17 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 		return nil, err
 	}
 
-	// Create DNS records for namespace gateway
+	// DNS is part of provisioning, not an optional extra. Without records the
+	// namespace resolves nowhere, so a cluster marked ready without them is a
+	// cluster nobody can reach — reported as a success. This used to log a
+	// warning and continue.
 	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
-		cm.logger.Warn("Failed to create DNS records", zap.Error(err))
-		// Don't fail provisioning for DNS errors
+		cm.logger.Error("Failed to create DNS records for a new namespace",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return nil, fmt.Errorf("namespace cluster has no DNS records, so nothing can reach it: %w", err)
 	}
 
 	// Bugboard #277: verify the services actually came up before calling this
@@ -600,13 +761,13 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 		}
 	}
 
-	// All instances started — give memberlist time to converge.
-	// Olric's memberlist retries peer joins every ~1s for ~10 attempts.
-	// Since all instances are now up, they should discover each other quickly.
-	cm.logger.Info("All Olric instances started, waiting for memberlist convergence",
+	// No sleep here. Readiness is the driver's Ready probe, which walkServices
+	// runs against every node before the next service starts — the gateway was
+	// the thing this five-second guess was protecting, and it is now gated on
+	// Olric actually answering rather than on a timer.
+	cm.logger.Info("All Olric instances started",
 		zap.Int("node_count", len(nodes)),
 	)
-	time.Sleep(5 * time.Second)
 
 	// Log events and record cluster nodes
 	for i, node := range nodes {
@@ -826,7 +987,9 @@ func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, r
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
+	if err := cm.signCoordination(httpReq); err != nil {
+		return nil, err
+	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(httpReq)
@@ -887,11 +1050,18 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 		"node_id":   nodeID,
 	})
 	if err != nil {
-		cm.logger.Warn("Failed to send stop request to remote node",
+		// A stop that did not happen is work still owed, not a warning. The
+		// unit keeps running and keeps holding a port the allocator has
+		// already released — and the next namespace to be given that port
+		// finds it occupied and joins a foreign raft group (bugboard #275).
+		cm.logger.Warn("Failed to send stop request to remote node; recording it for retry",
 			zap.String("node_ip", nodeIP),
 			zap.String("action", action),
 			zap.Error(err),
 		)
+		cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, action, err)
+	} else {
+		cm.clearPendingCleanup(ctx, namespace, nodeID, action)
 	}
 	return err
 }
@@ -1427,10 +1597,15 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 		return
 	}
 
-	// Create DNS records for namespace gateway
+	// Same rule as the synchronous path: no DNS records means nothing can reach
+	// the namespace, so it is not ready.
 	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
-		cm.logger.Warn("Failed to create DNS records", zap.Error(err))
-		// Don't fail provisioning for DNS errors
+		cm.logger.Error("Failed to create DNS records for a new namespace",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return
 	}
 
 	// Bugboard #277: verify the services actually came up before calling this
@@ -1579,7 +1754,12 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 
 	// 1. Restore RQLite
 	// Check if RQLite systemd service is already running
-	rqliteRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, systemd.ServiceTypeRQLite)
+	// A transient systemctl/D-Bus failure is not "the service is down", and
+	// treating it as such re-spawns a service that is running fine.
+	rqliteRunning, known := serviceRunning(cm, namespaceName, systemd.ServiceTypeRQLite)
+	if !known {
+		return fmt.Errorf("cannot determine whether rqlite is running for %s, so not acting on a guess", namespaceName)
+	}
 	if !rqliteRunning {
 		// Check if RQLite data directory exists (has existing data)
 		dataDir := filepath.Join(cm.baseDataDir, namespaceName, "rqlite", cm.localNodeID)
@@ -1862,58 +2042,47 @@ type ClusterLocalStateNode struct {
 // service to actually answer before declaring the cluster ready.
 const clusterReadyTimeout = 90 * time.Second
 
-// verifyClusterHealthy polls every node's spawned services until they respond, or
-// the timeout expires (bugboard #277).
+// verifyClusterHealthy waits for every service on every node to be genuinely
+// serving, and reports the first one that is not.
 //
-// Provisioning used to mark a cluster `ready` — and every node row `running` —
-// purely because the spawn RPCs returned. On devnet that produced a cluster
-// reported ready while 6 of its 9 processes were crash-looping on a port
-// collision, RQLite had no quorum, and the one surviving node had joined another
-// namespace's raft group. The operator saw a green result and would have handed
-// the namespace over. This is the check that turns every other provisioning
-// failure into a visible one.
+// It probes what each service does, not whether its port accepts a connection.
+// A TCP probe was the previous implementation and it is barely stronger than
+// the systemd `active` check it was written to replace: rqlite binds its HTTP
+// listener long before it has elected a leader, and a gateway answers TCP while
+// failing every request because it never reached Olric. Both would pass, and a
+// namespace with six of nine processes crash-looping was handed over as ready.
 func (cm *ClusterManager) verifyClusterHealthy(ctx context.Context, nodes []NodeCapacity, portBlocks []*PortBlock) error {
 	timeout := cm.readyTimeout
 	if timeout <= 0 {
 		timeout = clusterReadyTimeout
 	}
-	deadline := time.Now().Add(timeout)
-	var lastErr error
+	for i, node := range nodes {
+		if i >= len(portBlocks) || portBlocks[i] == nil {
+			return fmt.Errorf("node %s has no port block allocated, so it cannot be verified", node.NodeID)
+		}
+		block := portBlocks[i]
 
-	for {
-		lastErr = nil
-		for i, node := range nodes {
-			if i >= len(portBlocks) || portBlocks[i] == nil {
-				continue
-			}
-			addr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].GatewayHTTPPort)
-			if err := probeTCP(addr); err != nil {
-				lastErr = fmt.Errorf("gateway on node %s (%s) not answering: %w", node.NodeID, addr, err)
-				break
-			}
-			raftAddr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteHTTPPort)
-			if err := probeTCP(raftAddr); err != nil {
-				lastErr = fmt.Errorf("rqlite on node %s (%s) not answering: %w", node.NodeID, raftAddr, err)
-				break
-			}
+		checks := []struct {
+			what  string
+			probe func(context.Context) error
+		}{
+			{"rqlite", func(ctx context.Context) error {
+				return rqliteReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.RQLiteHTTPPort))
+			}},
+			{"olric", func(ctx context.Context) error {
+				return olricReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.OlricHTTPPort))
+			}},
+			{"gateway", func(ctx context.Context) error {
+				return gatewayReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.GatewayHTTPPort))
+			}},
 		}
-		if lastErr == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("cluster did not become healthy within %s: %w", timeout, lastErr)
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
 
-// probeTCP reports whether something is accepting connections at addr.
-func probeTCP(addr string) error {
-	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
-	if err != nil {
-		return err
+		for _, check := range checks {
+			if err := awaitReady(ctx, timeout, fmt.Sprintf("%s on node %s", check.what, node.NodeID), check.probe); err != nil {
+				return err
+			}
+		}
 	}
-	_ = conn.Close()
 	return nil
 }
 
@@ -2276,7 +2445,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 
 	// 1. Restore RQLite
 	// Check if RQLite systemd service is already running
-	rqliteRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeRQLite)
+	rqliteRunning, known := serviceRunning(cm, state.NamespaceName, systemd.ServiceTypeRQLite)
+	if !known {
+		cm.logger.Warn("Cannot determine whether rqlite is running; skipping this pass rather than acting on a guess",
+			zap.String("namespace", state.NamespaceName))
+		return nil
+	}
 	if !rqliteRunning {
 		// Check if RQLite data directory exists (has existing data)
 		dataDir := filepath.Join(cm.baseDataDir, state.NamespaceName, "rqlite", cm.localNodeID)
@@ -2286,14 +2460,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		}
 
 		if hasExistingData {
-			var peers []rqlite.RaftPeer
-			for _, np := range state.AllNodes {
-				raftAddr := fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)
-				peers = append(peers, rqlite.RaftPeer{ID: raftAddr, Address: raftAddr, NonVoter: false})
-			}
-			if err := cm.writePeersJSON(dataDir, peers); err != nil {
-				cm.logger.Error("Failed to write peers.json", zap.String("namespace", state.NamespaceName), zap.Error(err))
-			}
+			cm.writeRestorePeersJSON(ctx, state, dataDir)
 		}
 
 		var joinAddrs []string
@@ -2663,7 +2830,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		sfuAllocated = sfuPortBlockSpawnable(blk)
 	}
 	if sfuAllocated {
-		sfuRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeSFU)
+		sfuRunning, sfuKnown := serviceRunning(cm, state.NamespaceName, systemd.ServiceTypeSFU)
+		if !sfuKnown {
+			cm.logger.Warn("Cannot determine whether the SFU is running; leaving it alone this pass",
+				zap.String("namespace", state.NamespaceName))
+			sfuRunning = true // treat as running, so nothing is spawned on a guess
+		}
 		if !sfuRunning {
 			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 			if err == nil && webrtcCfg != nil {
@@ -2738,4 +2910,28 @@ func (cm *ClusterManager) GetClusterStatusByID(ctx context.Context, clusterID st
 		"dns_ready":     status.DNSReady,
 		"error":         status.Error,
 	}, nil
+}
+
+// signCoordination stamps a node-to-node request as coming from inside the
+// cluster.
+//
+// The header this replaces was `X-Orama-Internal-Auth: namespace-coordination`
+// — a constant in this repository — guarded only by the source address being on
+// the WireGuard overlay. Every namespace's services are on that mesh, so any
+// tenant workload that could reach a node's gateway port could spawn or stop
+// services for any namespace on it.
+//
+// The secret is read per request rather than cached, so a rotation does not
+// require restarting every node before coordination works again.
+func (cm *ClusterManager) signCoordination(r *http.Request) error {
+	secret, err := os.ReadFile(cm.clusterSecretPath)
+	if err != nil {
+		return fmt.Errorf("cannot read the cluster secret at %s, so this node cannot prove a "+
+			"coordination request came from inside the cluster: %w", cm.clusterSecretPath, err)
+	}
+	key, err := auth.CoordinationKey(string(secret))
+	if err != nil {
+		return err
+	}
+	return auth.SignCoordination(key, r, time.Now())
 }

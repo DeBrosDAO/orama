@@ -100,10 +100,10 @@ func collectSystem() *SystemReport {
 	// 7. Disk usage: run `df -h /` and `df -h /opt/orama`, use whichever has higher usage
 	{
 		type diskInfo struct {
-			total   string
-			used    string
-			avail   string
-			usePct  int
+			total  string
+			used   string
+			avail  string
+			usePct int
 		}
 
 		parseDf := func(out string) *diskInfo {

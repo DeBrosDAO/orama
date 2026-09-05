@@ -1,7 +1,11 @@
-/// Write quorum logic for multi-guardian operations.
+/// Quorum logic for multi-guardian operations.
 ///
-/// W = ceil(2/3 * alive_nodes) — requires supermajority for writes.
-/// R = 1 (any single guardian can serve a read).
+/// W = min(N, max(K+1, ceil(2N/3))) — a supermajority, and always more than a
+/// read needs. K = max(2, floor(N/3)) is the Shamir threshold.
+///
+/// The header used to say W = ceil(2N/3), which the function below has not
+/// done since the K+1 floor was added: at N=3 that gave W=2 against K=3, so a
+/// write reported successful had persisted fewer shares than a read requires.
 ///
 /// Push: fan out to all alive guardians, succeed if W respond with ACK.
 /// Pull: contact guardians until K shares are collected.

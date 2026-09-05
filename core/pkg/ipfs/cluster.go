@@ -60,9 +60,11 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 		}
 	}
 
-	secret, err := loadOrGenerateClusterSecret(secretPath)
+	// clusterPath tells the loader whether this node has joined before, which
+	// decides whether generating a secret is safe or a way to partition it.
+	secret, err := loadOrGenerateClusterSecret(secretPath, clusterPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load/generate cluster secret: %w", err)
+		return nil, fmt.Errorf("ipfs-cluster secret: %w", err)
 	}
 
 	return &ClusterConfigManager{

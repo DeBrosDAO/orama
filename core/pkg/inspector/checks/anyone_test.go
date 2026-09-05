@@ -70,11 +70,11 @@ func TestCheckAnyone_LeftoverRelayWarns(t *testing.T) {
 func TestCheckAnyone_ClientNotBootstrapped(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "nameserver")
 	nd.Anyone = &inspector.AnyoneData{
-		ClientActive:    true,
-		Mode:            "client",
-		SocksListening:  true,
-		BootstrapPct:    0,
-		Bootstrapped:    false,
+		ClientActive:   true,
+		Mode:           "client",
+		SocksListening: true,
+		BootstrapPct:   0,
+		Bootstrapped:   false,
 	}
 
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
@@ -86,11 +86,11 @@ func TestCheckAnyone_ClientNotBootstrapped(t *testing.T) {
 func TestCheckAnyone_ClientPartialBootstrap(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "nameserver")
 	nd.Anyone = &inspector.AnyoneData{
-		ClientActive:    true,
-		Mode:            "client",
-		SocksListening:  true,
-		BootstrapPct:    50,
-		Bootstrapped:    false,
+		ClientActive:   true,
+		Mode:           "client",
+		SocksListening: true,
+		BootstrapPct:   50,
+		Bootstrapped:   false,
 	}
 
 	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})

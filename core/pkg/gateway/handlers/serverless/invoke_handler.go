@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
@@ -82,6 +83,18 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 
 	if namespace == "" {
 		writeError(w, http.StatusBadRequest, "namespace required")
+		return
+	}
+
+	// A grant may be narrowed to one function — `fn:name=checkout`. A
+	// credential with no selector is unaffected: whether it may invoke at all
+	// is the invoker's decision (public, private, the invoke grant), and this
+	// only ever takes access away.
+	if err := auth.AuthorizeResource(r.Context(), auth.Resource{
+		Domain: auth.SelectorFn,
+		Name:   name,
+	}); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 

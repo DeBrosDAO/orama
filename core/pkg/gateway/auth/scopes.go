@@ -29,6 +29,13 @@ const (
 
 // knownGrants is the set of every valid grant. Used to validate issuance input
 // so a typo can't mint a key with a grant no route will ever satisfy.
+//
+// It must list every Scope* constant. ScopePubsub was missing, so
+// NormalizeGrants rejected "pubsub" as unknown — in an error message that
+// listed "pubsub" among the valid grants — and no key could be minted with it.
+// requiredScope demands that grant for every /v1/pubsub/ path, and no profile
+// includes it, so the pub/sub REST API was reachable only by an admin key or a
+// wallet JWT.
 var knownGrants = map[string]struct{}{
 	ScopeAdmin:   {},
 	ScopeInvoke:  {},
@@ -36,7 +43,19 @@ var knownGrants = map[string]struct{}{
 	ScopePush:    {},
 	ScopeWebRTC:  {},
 	ScopeProxy:   {},
+	ScopePubsub:  {},
 	ScopeCache:   {},
+}
+
+// AllGrants returns every valid grant, sorted. It is the list clients are told
+// about, so it and knownGrants cannot drift apart.
+func AllGrants() []string {
+	out := make([]string, 0, len(knownGrants))
+	for g := range knownGrants {
+		out = append(out, g)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ScopeSet is a parsed, membership-tested set of grants held by a key.
@@ -90,15 +109,15 @@ func ParseScopes(raw string) ScopeSet {
 	return set
 }
 
-// ScopesFromStored converts a stored api_keys.scopes value into a ScopeSet,
-// applying the grandfather policy: a NULL/empty scopes column means the key was
-// minted before scoping existed, so it is treated as admin (full access). This
-// keeps every legacy key working across the rolling upgrade; the cutover then
-// revokes all legacy (NULL-scope) keys so this branch stops mattering.
+// ScopesFromStored converts a stored api_keys.scopes value into a ScopeSet.
+//
+// An empty column grants nothing. It used to mean "minted before scoping
+// existed" and was read as admin, which made every key minted by a wallet login
+// an admin key — GetOrCreateAPIKey wrote no scopes column at all — and undid
+// the legacy-key cutover on every login. Migration 043 writes the grant those
+// keys were relying on onto the rows themselves, so the inference has nothing
+// left to do and an empty set is what it says it is.
 func ScopesFromStored(raw string) ScopeSet {
-	if strings.TrimSpace(raw) == "" {
-		return ScopeSet{ScopeAdmin: {}}
-	}
 	return ParseScopes(raw)
 }
 
@@ -154,7 +173,7 @@ func NormalizeGrants(requested string) (string, error) {
 			continue
 		}
 		if _, ok := knownGrants[g]; !ok {
-			return "", fmt.Errorf("unknown grant %q (valid: admin, invoke, storage, push, webrtc, proxy, pubsub, cache)", g)
+			return "", fmt.Errorf("unknown grant %q (valid: %s)", g, strings.Join(AllGrants(), ", "))
 		}
 		set[g] = struct{}{}
 	}

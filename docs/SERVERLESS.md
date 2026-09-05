@@ -118,8 +118,15 @@ tinygo build -o function.wasm -target wasi function.go
 > ℹ️ **Deploys are per-gateway.** `orama function deploy` targets the gateway of your
 > **active CLI environment** (`orama env`). To deploy into a namespace, point the CLI
 > at that namespace's gateway (`orama env add <name> https://ns-<ns>.<domain>` then
-> `orama env use <name>`), or set `ORAMA_GATEWAY_URL`. Verify against the same
+> `orama env use <name>`), or set `ORAMA_API_URL`. Verify against the same
 > namespace host — the bare/main gateway has a different function registry + DB view.
+>
+> `ORAMA_API_URL`, `ORAMA_GATEWAY_URL` and `ORAMA_GATEWAY` all name the gateway
+> and are read in that order; the credential is always the one stored for
+> whichever gateway wins, so pointing the CLI at a namespace gateway you have
+> not authenticated against fails instead of sending another gateway's key. With
+> none of them set and no active environment, commands stop with an error rather
+> than defaulting to a network.
 
 ## Host Functions API
 
@@ -302,7 +309,7 @@ if !res.Committed {
 
 | Function | Description |
 |----------|-------------|
-| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. Loopback, private, link-local, unspecified, and multicast destinations are rejected (same for `anyone_fetch`). |
+| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. The destination is checked on the socket, so a hostname that resolves to an internal address and a redirect to one are both refused, not just an internal address written literally in the URL (same for `anyone_fetch`). |
 
 ### Storage (IPFS)
 
@@ -439,7 +446,9 @@ exact config to set.
 
 ## Managing Secrets
 
-Secrets are encrypted at rest (AES-256-GCM) and scoped to your namespace. Functions read them via `get_secret("name")` at runtime.
+Secrets are encrypted at rest (AES-256-GCM) and stored in your namespace's own database. Functions read them via `get_secret("name")` at runtime.
+
+The encryption key is derived from the cluster secret and is the same across the cluster, so what separates one namespace's secrets from another's is the database they are in, not a key only that namespace holds. A function cannot read them with SQL either: `function_secrets` is one of the tables a function's own SQL may not name.
 
 ### CLI Commands
 
@@ -464,7 +473,7 @@ orama function secrets delete APNS_KEY_ID --force
 
 1. **You set secrets** via the CLI → encrypted and stored in the database
 2. **Functions read secrets** at runtime via `get_secret("name")` → decrypted on demand
-3. **Namespace isolation** → each namespace has its own secret store; functions in namespace A cannot read secrets from namespace B
+3. **Namespace separation** → a namespace's secrets are stored in that namespace's own database, so a function in namespace A has no route to namespace B's. What this is not is a separate key per namespace: the encryption key is derived once from the cluster secret and is the same across the cluster, so the separation is the database boundary, not cryptography. Anything holding the cluster secret can read any namespace's secrets
 
 ## PubSub Triggers
 
@@ -525,6 +534,9 @@ orama function logs my-function
 
 ## CLI Reference
 
+Every flag of every command is in the [CLI reference](CLI_REFERENCE.md), which
+is generated from the command tree.
+
 | Command | Description |
 |---------|-------------|
 | `orama function init <name>` | Scaffold a new function project |
@@ -536,6 +548,8 @@ orama function logs my-function
 | `orama function delete <name>` | Delete a function |
 | `orama function logs <name>` | View invocation logs |
 | `orama function versions <name>` | List function versions |
+| `orama function disable <name>` | Stop serving a function without deleting it |
+| `orama function enable <name>` | Serve a previously disabled function again |
 | `orama function secrets set <name> <value>` | Set an encrypted secret |
 | `orama function secrets list` | List secret names |
 | `orama function secrets delete <name>` | Delete a secret |
@@ -562,6 +576,27 @@ orama function logs my-function
 | GET | `/v1/functions/{name}/triggers` | List triggers |
 | DELETE | `/v1/functions/{name}/triggers/{id}` | Delete trigger |
 | POST | `/v1/invoke/{namespace}/{name}` | Direct invoke (alt endpoint) |
+
+## Invoking from application code
+
+The TypeScript SDK calls the direct-invoke endpoint for you:
+
+```typescript
+import { createClient } from "@debros/orama";
+
+const client = createClient({
+  baseURL: "https://ns-myapp.orama-devnet.network",
+  apiKey: process.env.ORAMA_API_KEY,
+  functionsConfig: { namespace: "myapp" },
+});
+
+const result = await client.functions.invoke("my-function", { name: "World" });
+```
+
+Invoking needs the `invoke` grant, which the `invoke-only` and `app-runtime` key
+profiles both carry; deploying, secrets and triggers are control-plane and need
+an `admin` key. See [TS_SDK.md](TS_SDK.md), and
+[GO_CLIENT_SDK.md](GO_CLIENT_SDK.md) for the Go client.
 
 ## Example: Call Push Handler
 

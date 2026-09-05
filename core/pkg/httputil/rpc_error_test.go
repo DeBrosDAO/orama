@@ -121,8 +121,8 @@ func TestWriteRPCError_default_retryable_for_transient_codes(t *testing.T) {
 		{ErrCodeRateLimited, true},
 		{ErrCodeServiceUnavailable, true},
 		{ErrCodeTimeout, true},
-		{ErrCodeFunctionUnavailable, true},  // transient cold-WASM infra failure
-		{ErrCodeFunctionExecution, false},   // genuine function error
+		{ErrCodeFunctionUnavailable, true}, // transient cold-WASM infra failure
+		{ErrCodeFunctionExecution, false},  // genuine function error
 		{ErrCodeValidationFailed, false},
 		{ErrCodeNotFound, false},
 		{ErrCodeForbidden, false},

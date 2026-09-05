@@ -1,0 +1,38 @@
+{
+  "route": "/v1/rqlite/query",
+  "method": "POST",
+  "sdk": "db.query()",
+  "goStruct": "rqlite.queryRequest",
+  "call": {
+    "module": "db",
+    "method": "query",
+    "args": [
+      "SELECT * FROM messages WHERE room = ?",
+      [
+        "general"
+      ]
+    ]
+  },
+  "request": {
+    "sql": "SELECT * FROM messages WHERE room = ?",
+    "args": [
+      "general"
+    ]
+  },
+  "response": {
+    "items": [
+      {
+        "id": 1,
+        "room": "general",
+        "body": "hi"
+      }
+    ]
+  },
+  "returns": [
+    {
+      "id": 1,
+      "room": "general",
+      "body": "hi"
+    }
+  ]
+}

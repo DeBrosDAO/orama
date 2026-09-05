@@ -6,6 +6,16 @@ Troubleshooting guide for known issues in the Orama Network.
 
 ## 1. Namespace Gateway: "Olric unavailable"
 
+> **First, check whether this is drift the reconciler has already fixed.** When
+> a namespace member is replaced, the survivors used to keep the departed node's
+> overlay address in `configs/olric-<node>.yaml` peers and `configs/gateway-<node>.yaml`
+> `olric_servers` for ever — nothing rewrote them, so every gateway restart
+> stalled for minutes timing out against a machine that was gone. The tenant
+> reconciler now rewrites both within 60s of the membership changing, and
+> restarts the service only when the config actually differs. If the config
+> still names a node that is gone, the reconciler is not running or not
+> converging; that is the bug, not the config.
+
 **Symptom:** `ns-<name>.orama-devnet.network/v1/health` returns `"olric": {"status": "unavailable"}`.
 
 **Cause:** The Olric memberlist gossip between namespace nodes is broken. Olric uses UDP pings for health checks — if those fail, the cluster can't bootstrap and the gateway reports Olric as unavailable.
@@ -20,7 +30,31 @@ ping -c 10 -W 2 10.0.0.X   # replace with the WG IP of each peer
 
 If you see packet loss over WireGuard but **not** over the public IP (`ping <public-ip>`), the WireGuard peer session is corrupted.
 
-**Fix — Reset the WireGuard peer on both sides:**
+**This should no longer be needed.** The 60s peer sync now re-applies any peer
+whose endpoint or allowed IPs drifted from what cluster membership says, and
+persists the result to `/etc/wireguard/wg0.conf`. A peer whose public IP moved
+converges on its own within a minute. If you still have to reset a peer by hand,
+that is a bug worth filing rather than a routine fix.
+
+Check what the node believes before reaching for `wg set`:
+
+```bash
+# what the interface holds, with endpoints (machine-readable)
+wg show wg0 dump
+
+# what membership says it should hold
+sudo grep -A3 '\[Peer\]' /etc/wireguard/wg0.conf
+
+# the sync's own account of the last round
+sudo orama node logs node --since -10min | grep 'WireGuard peer sync completed' | tail -3
+```
+
+The sync log line reports `added`, `updated`, `removed` and `persisted`
+separately. `persisted=false` means the mesh is correct **now** but will regress
+on the next `wg-quick up` — a different problem from a peer that never reached
+the interface.
+
+**Break-glass reset (both sides), if you genuinely need it:**
 
 ```bash
 # On Node A — replace <pubkey> and <endpoint> with Node B's values
@@ -32,9 +66,8 @@ wg set wg0 peer <NodeA-pubkey> remove
 wg set wg0 peer <NodeA-pubkey> endpoint <NodeA-public-ip>:51820 allowed-ips <NodeA-wg-ip>/32 persistent-keepalive 25
 ```
 
-Then restart services: `sudo orama node restart`
-
-You can find peer public keys with `wg show wg0`.
+The next sync round re-persists whatever the interface ends up holding, so you
+do not need to edit `wg0.conf` by hand.
 
 ### Check 2: Olric bound to 0.0.0.0 instead of WireGuard IP
 
@@ -53,7 +86,7 @@ This was fixed in code (BindAddr validation in `SpawnOlric`), so new namespaces 
 ### Check 3: Olric logs show "Failed UDP ping" constantly
 
 ```bash
-journalctl -u orama-namespace-olric@<name>.service --no-pager -n 30
+sudo orama node logs orama-namespace-olric@<name> -n 30
 ```
 
 If every UDP ping fails but TCP stream connections succeed, it's the WireGuard packet loss issue (see Check 1).
@@ -98,7 +131,14 @@ This was fixed in code, so new namespaces get the correct config.
 ls /opt/orama/.orama/data/namespaces/<name>/cluster-state.json
 ```
 
-If the file doesn't exist, the node can't restore the namespace.
+If the file doesn't exist, the node can't restore the namespace **from disk** —
+but that is no longer terminal. The disk pass runs once at boot for speed; the
+tenant reconciler then converges from the database every 60s, so a node with no
+state file recovers as soon as its rqlite has a leader.
+
+Before this, the boot restore tried the database twelve times and gave up. A
+node whose cluster had no leader for two minutes left every tenant down until
+someone restarted the gateway by hand.
 
 **Fix:** Create the file manually from another node that has it, or reconstruct it. The format is:
 
@@ -113,6 +153,23 @@ If the file doesn't exist, the node can't restore the namespace.
 
 This was fixed in code — `ProvisionCluster` now saves state to all nodes (including remote ones via the `save-cluster-state` spawn action).
 
+**The state file is no longer trusted for raft membership.** `cluster-state.json`
+is refreshed by a best-effort push, so the node most likely to hold a stale copy
+is exactly the one that was down while the cluster changed. On restore, the peer
+list written into `peers.json` (rqlite's force-recovery mechanism) now comes from:
+
+1. **live membership in the index DB** when it is readable — authoritative, and
+   it outranks anything on local disk;
+2. **nothing at all** when the DB is unreadable but another member answers on
+   its raft port — rqlited rejoins using its own raft state, and writing a guess
+   would overwrite the real configuration;
+3. **a single-node entry for this node** only when the DB is unreadable *and*
+   no peer answers. That produces a working leader instead of a Candidate; the
+   other members must be re-added once they return.
+
+The state file is still used for everything else about the restore (ports, local
+IP, WebRTC roles) — just not for asserting who the voters are.
+
 ---
 
 ## 4. Namespace gateway processes not restarting after upgrade
@@ -121,7 +178,12 @@ This was fixed in code — `ProvisionCluster` now saves state to all nodes (incl
 
 **Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services. Index host units (`@index`) are started by the supervisor on node start and do not need to be enabled.
 
-**Fix:** Re-enable the **tenant** services before restarting:
+**Fix:** `sudo orama node restart` — the upgrade orchestrator re-enables `@`
+services before restarting them, so nothing has to be enabled by hand.
+
+If you are on a node old enough not to do that, re-enable the tenant services
+first. Raw `systemctl` bypasses the CLI's dependency ordering, quorum checks and
+health verification, so this is a last resort, not a routine step:
 
 ```bash
 systemctl enable orama-namespace-rqlite@<name>.service
@@ -130,7 +192,10 @@ systemctl enable orama-namespace-gateway@<name>.service
 sudo orama node restart
 ```
 
-This was fixed in code — the upgrade orchestrator now re-enables `@` services before restarting.
+If a tenant service is still down after that, the tenant reconciler restarts it
+within a minute; it no longer needs a hand-run restore. A service that stays
+down across several sweeps is a real failure — check its unit's logs rather than
+re-running the commands above.
 
 ---
 
@@ -156,9 +221,25 @@ ssh -n user@host 'command'
 
 **Symptom:** RQLite queries fail with HTTP 401.
 
-**Cause:** Not a configuration problem you can hit today. `rqlited` is not started with `-auth` — the `RQLiteAuthFile` field in `core/pkg/config/database_config.go` is never assigned, so the flag in `core/pkg/rqlite/process.go` is never added. RQLite's HTTP API accepts unauthenticated requests, and `rqlite-auth.json` is generated but unused by the server.
+**Cause:** `rqlited` is started with `-auth` only when `database.rqlite_enforce_auth` is set, which is off by default. Two possibilities:
 
-**Fix:** A 401 from RQLite means something other than Orama's own auth is in front of it — check for a reverse proxy or a hand-edited unit file. If HTTP auth is later enabled by setting `RQLiteAuthFile`, every client must send the credentials from `/opt/orama/.orama/secrets/rqlite-auth.json`, including standalone clients such as the CoreDNS plugin.
+1. **Enforcement is off** (the normal state) — then the 401 is not Orama's. Something else is in front of RQLite: a reverse proxy, or a hand-edited unit file.
+2. **Enforcement was switched on** while some caller still has no credentials.
+
+**Fix:**
+
+```bash
+grep -E 'rqlite_(auth_file|enforce_auth|username|password)' /opt/orama/.orama/configs/node.yaml
+```
+
+If `rqlite_enforce_auth: true`, every client must send the credentials from `/opt/orama/.orama/secrets/rqlite-auth.json`. The node's own admin calls do (`core/pkg/rqlite/adminclient.go` reads `rqlite_auth_file`), and so does its SQL DSN. **The gateway and namespace DSNs do not** — `gateway.Config.RQLiteUsername`/`RQLitePassword` are never assigned — so enforcement is not yet safe to switch on fleet-wide.
+
+Errors from `AdminClient` name a 401 explicitly ("rqlite rejected the credentials (401)"). A 401 that reads instead as reconciliation or backups silently stopping means some caller is still bypassing `AdminClient`.
+
+**Enabling enforcement is two passes, in this order** (doing them in one 401s every peer still on the old binary — see `docs/SECURITY.md`):
+
+1. Roll out configs carrying `rqlite_auth_file`, enforcement off, to **every** node.
+2. Only then set `rqlite_enforce_auth: true`, restarting followers first and the leader last.
 
 ---
 
@@ -220,12 +301,77 @@ orama node unlock --genesis --node-ip <wg-ip>
 
 ---
 
+## 12. IPFS-Cluster: node starts but its pins never replicate
+
+**Symptom:** `ipfs-cluster` is running and `/v1/health` reports `ipfs: ok`, but
+content pinned on this node never appears on the others (or vice versa). The
+ipfs-cluster log shows only generic connection failures to peers.
+
+**Cause:** the shared secret differs from the rest of the fleet. It is the key to
+the cluster's libp2p **private network**, so a node holding a different value
+completes no handshake with any peer — while looking healthy to every local
+check.
+
+**Check:** compare the first characters across nodes (never paste the whole
+value into a ticket):
+
+```bash
+sudo head -c 8 /opt/orama/.orama/secrets/cluster-secret; echo
+```
+
+They must be identical on every node.
+
+**Fix:** copy the value from a healthy node and restart `orama-node`. The join
+handshake distributes this secret, so a node that joined properly has the right
+one.
+
+**This should no longer happen on its own.** The node used to generate a fresh
+secret whenever the file could not be read (permissions, a transient I/O error,
+a file the join handshake had not written yet) or was not exactly 64 characters,
+and it discarded write errors — so a failed write produced a *different* secret
+on each restart. It now refuses to start ipfs-cluster in all of those cases and
+says why. A secret is generated only when the file is genuinely absent **and**
+the node holds no ipfs-cluster identity, i.e. it has never joined a cluster.
+
+---
+
+## 13. RootWallet agent: locked, waiting, or unreachable
+
+Commands that need an SSH key or a wallet signature — `orama node setup`,
+`orama push`, `orama auth login` — talk to the RootWallet desktop app's agent
+over a Unix socket at `~/.rootwallet/agent.sock`. Override the path with
+`RW_AGENT_SOCK`.
+
+The agent answers with a code, and the CLI turns each one into an instruction:
+
+| Code | What happened | What to do |
+|------|---------------|------------|
+| `AGENT_LOCKED` (423) | A vault operation waited for an unlock and gave up | Unlock the desktop app and run the command again |
+| `AGENT_LOCKED` (401) | A wallet operation refused at once; these do not wait | Unlock the desktop app first, then run the command |
+| `APPROVAL_TIMEOUT` | The approval prompt went unanswered for two minutes | Run it again and approve it |
+| `APPROVAL_DENIED` | Someone refused the request | Approve this application in the desktop app |
+| `PERMISSION_DENIED` | The application lacks the capability | Grant it under app permissions |
+| `PEER_VANISHED` | The `orama` binary changed while the request was open | Run it again |
+| `NOT_FOUND` | No such vault entry | Nothing to do; the CLI creates SSH entries on demand |
+
+**A first run against a locked wallet can take four minutes.** The agent waits
+up to two minutes for approval, then up to two more for the unlock, and the CLI
+waits longer than both so the agent's own answer arrives instead of a timeout
+from this side. If `orama node setup` seems to hang, look at the desktop app:
+there is probably a prompt on it. `orama sandbox` reports how many prompts are
+waiting.
+
+**"rootwallet agent is not reachable"** means the socket is not there: the
+desktop app is closed. Open it.
+
+---
+
 ## General Debugging Tips
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands
 - **Namespace data lives at:** `/opt/orama/.orama/data/namespaces/<name>/`
-- **Check service logs:** `journalctl -u orama-namespace-olric@<name>.service --no-pager -n 50`
+- **Check service logs:** `sudo orama node logs orama-namespace-olric@<name>` — it wraps `journalctl`, resolves template instances, and takes `-n` and `-f`
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes
 - **Check gateway health:** `curl http://localhost:<port>/v1/health` from the node itself
-- **Node IPs:** Check `scripts/remote-nodes.conf` for credentials, `wg show wg0` for WG IPs
+- **Node IPs:** `orama nodes --env <env>` lists them from the network API. The local fallback inventory is `nodes.conf`, looked for in the working directory, then `../scripts/`, then `~/.orama/` — see [INSPECTOR.md](INSPECTOR.md#configuration) for the full search order. `wg show wg0` for WG IPs. SSH keys come from the RootWallet vault, never from a file.
 - **OramaOS nodes:** No SSH access — use Gateway API endpoints (`/v1/node/status`, `/v1/node/logs`) for diagnostics

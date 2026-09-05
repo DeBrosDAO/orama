@@ -27,6 +27,9 @@ func (h *HostFunctions) DBQuery(ctx context.Context, query string, args []interf
 	if h.db == nil {
 		return nil, &serverless.HostFunctionError{Function: "db_query", Cause: serverless.ErrDatabaseUnavailable}
 	}
+	if err := checkGuestSQL(query); err != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_query", Cause: err}
+	}
 
 	var results []map[string]interface{}
 	if err := h.db.Query(ctx, &results, query, args...); err != nil {
@@ -50,6 +53,9 @@ func (h *HostFunctions) DBQuery(ctx context.Context, query string, args []interf
 func (h *HostFunctions) DBExecute(ctx context.Context, query string, args []interface{}) (int64, error) {
 	if h.db == nil {
 		return 0, &serverless.HostFunctionError{Function: "db_execute", Cause: serverless.ErrDatabaseUnavailable}
+	}
+	if err := checkGuestSQL(query); err != nil {
+		return 0, &serverless.HostFunctionError{Function: "db_execute", Cause: err}
 	}
 
 	result, err := h.db.Exec(ctx, query, args...)
@@ -80,6 +86,9 @@ func (h *HostFunctions) DBExecuteV2(ctx context.Context, query string, args []in
 			Function: "db_execute_v2",
 			Cause:    serverless.ErrDatabaseUnavailable,
 		}
+	}
+	if err := checkGuestSQL(query); err != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_execute_v2", Cause: err}
 	}
 
 	out := dbExecuteV2Result{}
@@ -117,6 +126,9 @@ func (h *HostFunctions) DBQueryV2(ctx context.Context, query string, args []inte
 			Function: "db_query_v2",
 			Cause:    serverless.ErrDatabaseUnavailable,
 		}
+	}
+	if err := checkGuestSQL(query); err != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_query_v2", Cause: err}
 	}
 
 	out := dbQueryV2Result{Rows: []map[string]interface{}{}}
@@ -164,6 +176,15 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 		return nil, &serverless.HostFunctionError{
 			Function: "db_transaction",
 			Cause:    fmt.Errorf("too many ops: max %d", rqlite.MaxBatchOps),
+		}
+	}
+
+	for i, op := range req.Ops {
+		if err := checkGuestSQL(op.SQL); err != nil {
+			return nil, &serverless.HostFunctionError{
+				Function: "db_transaction",
+				Cause:    fmt.Errorf("op %d: %w", i, err),
+			}
 		}
 	}
 
@@ -384,6 +405,15 @@ func (h *HostFunctions) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byt
 	// ops from being silently dropped by the rqlite-side validator.
 	for i := range req.Ops {
 		req.Ops[i].Kind = rqlite.BatchOpQuery
+	}
+
+	for i, op := range req.Ops {
+		if err := checkGuestSQL(op.SQL); err != nil {
+			return nil, &serverless.HostFunctionError{
+				Function: "db_query_batch",
+				Cause:    fmt.Errorf("op %d: %w", i, err),
+			}
+		}
 	}
 
 	// Explicit batch-level deadline. The caller's ctx already carries the

@@ -11,6 +11,7 @@ Complete guide for deploying applications and managing databases on Orama Networ
 - [Deploying Go Backends](#deploying-go-backends)
 - [Deploying Node.js Backends](#deploying-nodejs-backends)
 - [Managing SQLite Databases](#managing-sqlite-databases)
+- [Environment Variables](#environment-variables)
 - [How Domains Work](#how-domains-work)
 - [Full-Stack Application Example](#full-stack-application-example)
 - [Managing Deployments](#managing-deployments)
@@ -43,14 +44,91 @@ Orama Network provides a decentralized platform for deploying web applications a
 Before deploying, authenticate with your wallet:
 
 ```bash
-# Authenticate
+# Authenticate with your wallet
 orama auth login
 
-# Check authentication status
+# Who am I, and against which gateway?
 orama auth whoami
+orama auth status
 ```
 
 Your API key is stored securely and used for all deployment operations.
+
+Creating a namespace is its own step, and the wallet that makes it owns it:
+
+```bash
+orama namespace create myapp
+orama auth login --namespace myapp
+```
+
+Signing in to a namespace that does not exist used to create it, so a typo made
+a namespace and one belonged to whoever happened to sign in first. It answers
+404 now, naming the command above.
+
+One machine can hold credentials for several environments. `orama auth list`
+shows them, `orama auth switch` changes the active one, and `orama auth logout`
+clears it. Which gateway a command talks to is decided by the active
+environment — see `orama env` — not by a flag on each command.
+
+Every command and flag is in the [CLI reference](CLI_REFERENCE.md), which is
+generated from the command tree rather than written by hand.
+
+### API keys for your application
+
+Deploying uses your own credentials. An application that talks to the gateway at
+runtime needs a key of its own, and which one depends on where the code runs:
+
+```bash
+# Safe in a browser bundle: data-plane grants only
+orama namespace keys create --scope app-runtime --label web
+
+# Server-side only: the whole control plane
+orama namespace keys create --scope admin --label ci
+
+orama namespace keys list
+orama namespace keys revoke --id <id>
+```
+
+A key carries a set of grants and the gateway refuses an operation whose grant
+the key does not hold, naming the one it needed. `--scope` takes a profile
+(`invoke-only`, `app-runtime`, `admin`) or an explicit grant list. See
+[Where a key belongs](TS_SDK.md#where-a-key-belongs).
+
+Every key expires — 90 days by default, a year at most — and `orama namespace
+keys rotate --id <id>` mints a successor with the same grants while leaving the
+original alive for a week, so there is a window in which to deploy the new one.
+
+### Working with other people
+
+A namespace has one owner and any number of members, and a member holds a role:
+
+```bash
+orama members list
+orama members add 0xabc… --role admin     # the control plane
+orama members add 0xdef… --role runtime   # the data plane
+orama members remove 0xabc…
+orama members transfer 0xabc…             # hand the namespace over
+```
+
+`admin` is everything except ownership; `runtime` is invoke, storage, push,
+webrtc, proxy, pubsub and cache; `reader` is a member with no grant at all.
+Ownership is transferred rather than granted, because a namespace with no owner
+is claimable by whoever signs in to it next — you keep an admin grant, so
+handing a project over does not lock you out of it.
+
+### What happened, and who did it
+
+```bash
+orama audit                 # oldest first
+orama audit --follow        # and keep printing
+```
+
+Sign-ins, keys minted and revoked, grants given and taken away, deployments,
+functions, secrets and namespace changes, each with who did it and from where.
+Events are kept 90 days.
+
+The whole model — identities, roles, grants, tokens, and what each refusal
+means — is in [AUTH.md](AUTH.md).
 
 ---
 
@@ -422,6 +500,23 @@ orama db backups my-database
 # QmZxxx...         15.1 KB     2024-01-22 14:20
 ```
 
+### Deleting a Database
+
+```bash
+orama db delete my-database
+
+# This permanently deletes "my-database" and its file. There is no undo.
+# Type the database name to confirm: my-database
+# ✓ my-database deleted (3 file(s) removed).
+```
+
+Typing the name back is the confirmation, not a y/n prompt: a y/n is answered
+reflexively, and the mistake this guards against is the right command aimed at
+the wrong database. `--yes` skips the prompt for scripts.
+
+The database file and its write-ahead log are removed from the node that holds
+them. Back up first with `orama db backup` if you may want the data again.
+
 ### Database Features
 
 - ✅ **WAL Mode**: Write-Ahead Logging for better concurrency
@@ -429,6 +524,115 @@ orama db backups my-database
 - ✅ **On-Demand Backups**: Back up to IPFS anytime with `orama db backup`
 - ✅ **ACID Transactions**: Full SQLite transactional support
 - ✅ **Concurrent Reads**: Multiple readers can query simultaneously
+
+---
+
+## Environment Variables
+
+Go, Node.js and Next.js SSR deployments run as a process, and that process reads
+its configuration from environment variables. Set them at deploy time, or change
+them afterwards without redeploying.
+
+### At deploy time
+
+```bash
+orama deploy go ./my-api --name my-api \
+  --env DATABASE_URL=postgres://... \
+  --env LOG_LEVEL=debug
+
+# Or read them from a file
+orama deploy go ./my-api --name my-api --env-file .env.production
+```
+
+`--env` is repeatable and splits on the first `=` only, so a value may contain
+one. `--env-file` reads a `.env`: `KEY=VALUE` per line, `#` comments and blank
+lines skipped, one layer of surrounding quotes removed. It does **not** expand
+`$VAR` — the literal text in the file is what gets sent, not whatever the
+machine running the deploy happens to have set. A `--env` on the command line
+overrides the same name from the file.
+
+### After deploying
+
+```bash
+orama app env list my-api
+orama app env set my-api --env DATABASE_URL=postgres://...
+orama app env set my-api --env-file .env.production
+orama app env unset my-api OLD_FLAG DEBUG_MODE
+```
+
+Setting or removing a variable rewrites the app's systemd unit and restarts it,
+so the change takes effect immediately. A static site has no process, so its
+variables are recorded and nothing is restarted.
+
+**`list` shows names, never values.** Environment variables are where secrets
+live, so an endpoint that echoed them would put every secret behind nothing more
+than a read scope, and into whatever terminal scrollback or CI log the caller is
+writing to. To change a value, set it again.
+
+### What the platform sets for you
+
+These names are set by the platform and cannot be overwritten or removed:
+
+| Name | What it is |
+|------|------------|
+| `PORT` | The port your app must listen on. It is how the gateway reaches you |
+| `ENTRY_POINT` | What a Node.js deployment runs |
+| `ORAMA_NAMESPACE` | The namespace this deployment belongs to |
+| `ORAMA_GATEWAY_URL` | Your namespace's own gateway, `https://ns-<namespace>.<domain>` |
+| `ORAMA_STATE_DIR` | A directory your app may write to that survives restarts |
+| `ORAMA_CACHE_DIR` | A directory your app may write to that it must not rely on |
+
+An app that talks back to Orama previously had nothing to go on: no address, no
+namespace name. Every such app baked both into its own image.
+
+There is no credential among these yet. Handing every deployment a long-lived
+namespace key would mean any application compromise is a namespace takeover, so
+the token a deployment gets will be short-lived and scoped to the deployment
+itself, and it is being built with the rest of the workload-identity work.
+
+### Where your app may write
+
+Your app's own directory is read-only. The files there are its build output, and
+a process that can rewrite its own code cannot be rolled back to a known
+version. Write to `$ORAMA_STATE_DIR` instead, which is yours alone and survives
+restarts, or `$ORAMA_CACHE_DIR` for anything you can regenerate.
+
+### How the values are handled
+
+Values are held encrypted in the cluster database, with a key derived from the
+cluster secret. On the node they are written to a file only the system can read,
+which systemd hands to your process — they are not written into the app's
+systemd unit, and they are removed from the node when the deployment stops.
+
+A value may contain anything that is valid UTF-8, including quotes,
+backslashes, spaces and newlines, so a PEM key or a JSON blob goes in as it is.
+It may not contain a NUL byte, and one value may be at most 64 KiB: every value
+is replicated to every node in the cluster.
+
+### What your app runs as
+
+Each deployment runs as its own unprivileged user, allocated for it and
+reclaimed when it stops, so no two deployments share an identity and none of
+them is root. It cannot reach the cluster's internal network, and it has the
+memory, CPU and process limits recorded on the deployment.
+
+### Health check path
+
+```bash
+orama deploy go ./my-api --name my-api --health-check /healthz
+```
+
+The platform polls this path to decide the app has started. It defaults to
+`/health`.
+
+### Why there is no `orama.yaml`
+
+Repeated deploys still retype `--name`. A project file holding the name, type,
+environment and health-check path would remove that, and it is worth doing — but
+it is a design commitment, not a convenience: it needs precedence rules against
+flags, a version field, validation, and an answer for what a checked-in file
+does with secrets. `--env-file` already covers the part that hurt most. The
+project file is tracked separately rather than half-built here.
 
 ---
 
@@ -501,14 +705,44 @@ This is **transparent to users** - your app works regardless of which node handl
 
 ### Custom Domains
 
-The gateway supports attaching custom domains (e.g., `www.myapp.com`) to a deployment via HTTP API (no CLI subcommand yet):
+Attach a custom domain (e.g. `www.myapp.com`) to a deployment with `orama domain`.
+A domain does not serve traffic until you prove you own it with a TXT record.
 
-- `POST /v1/deployments/domains/add` — registers the domain and returns a verification token
-- `POST /v1/deployments/domains/verify` — checks for a TXT record at `_orama-verify.{domain}` matching the token
-- `GET /v1/deployments/domains/list` — lists domains for a deployment
-- `POST /v1/deployments/domains/remove` — detaches a domain
+```bash
+# Register the domain and print the TXT record to create
+orama domain add www.myapp.com --app my-api
+
+# After creating the record, activate the domain
+orama domain verify www.myapp.com --wait 5m
+
+# Or do both in one step
+orama domain add www.myapp.com --app my-api --verify
+
+orama domain list                    # every domain in the namespace
+orama domain list --app my-api       # one app's domains
+orama domain remove www.myapp.com
+```
+
+Every subcommand takes `--json`, which prints the gateway's reply verbatim.
+
+`verify --wait` re-asks the gateway every 10 seconds until the record resolves
+or the wait runs out. Only "the record is not visible yet" is retried; a domain
+that was never added fails immediately.
 
 After verification, point your domain's A record to your deployment's node IP.
+
+#### HTTP API
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/v1/deployments/domains/add` | Register the domain, return a verification token |
+| `POST` | `/v1/deployments/domains/verify` | Check for a TXT record at `_orama-verify.{domain}` matching the token |
+| `GET` | `/v1/deployments/domains/list` | List domains — the whole namespace, or one app with `?deployment_name=` |
+| `DELETE` | `/v1/deployments/domains/remove?domain=` | Detach a domain (`POST` also accepted) |
+
+Methods are enforced. These endpoints used to accept any verb, so a `GET` to
+`remove` deleted the domain and the documentation disagreed with itself about
+which verb each one took.
 
 ---
 
@@ -879,7 +1113,7 @@ Namespaces can enable WebRTC support for real-time communication (voice calls, v
 ### Enable WebRTC
 
 ```bash
-# Enable WebRTC for a namespace (must be run on a cluster node)
+# Enable WebRTC for a namespace
 orama namespace enable webrtc --namespace myapp
 
 # Check WebRTC status
@@ -1010,7 +1244,7 @@ orama auth status
 ### Need Help?
 
 - **Documentation**: Check `/docs` directory
-- **Logs**: Gateway logs at `~/.orama/logs/gateway.log`
+- **Logs**: `orama app logs <app>` for an application. The gateway's own log is at `~/.orama/logs/gateway.log` **on a node**, not on your machine — reach it with `orama node logs`.
 - **Issues**: Report bugs at GitHub repository
 - **Community**: Join our Discord/Telegram
 
@@ -1020,7 +1254,7 @@ orama auth status
 
 ### Security
 
-1. **Never commit sensitive data**: Use environment variables for secrets
+1. **Never commit sensitive data**: Keep secrets in environment variables, set with `orama app env set --env-file` rather than a flag so they stay out of shell history. See [Environment Variables](#environment-variables)
 2. **Validate inputs**: Always sanitize user input in your backend
 3. **HTTPS only**: All deployments automatically use HTTPS in production
 4. **CORS**: Configure CORS appropriately for your API
@@ -1044,10 +1278,11 @@ orama auth status
 
 ## Next Steps
 
-- **Explore the API**: See `/docs/GATEWAY_API.md` for HTTP API details
-- **Advanced Features**: Custom domains (via gateway API, see [How Domains Work](#how-domains-work)); load balancing and autoscaling coming soon
+- **Every command and flag**: [CLI reference](CLI_REFERENCE.md), generated from the command tree
+- **Every gateway route**: [API surface](API_SURFACE.md), with which client owns each one
+- **Custom domains**: `orama domain add|verify|list|remove`, and [How Domains Work](#how-domains-work)
 - **Production Deployment**: Install nodes with `orama node install` for production clusters
-- **Client SDK**: Use the Go/JS SDK for programmatic deployments
+- **From code**: the [TypeScript SDK](TS_SDK.md) or the [Go client](GO_CLIENT_SDK.md)
 
 ---
 

@@ -151,9 +151,9 @@ func TestValidateCredentials(t *testing.T) {
 
 func TestConfigValidation(t *testing.T) {
 	tests := []struct {
-		name      string
-		config    Config
-		wantErrs  int
+		name     string
+		config   Config
+		wantErrs int
 	}{
 		{
 			name: "valid config",
@@ -169,7 +169,7 @@ func TestConfigValidation(t *testing.T) {
 			wantErrs: 0,
 		},
 		{
-			name: "missing all fields",
+			name:   "missing all fields",
 			config: Config{},
 			// bugboard #283: the separate auth_secret and namespace errors collapsed
 			// into one "no tenants configured" — a config with neither the legacy

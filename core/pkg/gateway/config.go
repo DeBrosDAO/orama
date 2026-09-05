@@ -17,6 +17,19 @@ type Config struct {
 	// If empty, uses RQLiteDSN (for main/global gateways)
 	GlobalRQLiteDSN string
 
+	// RQLiteReadyTimeout bounds ONE attempt at reaching a raft leader before
+	// the schema work is retried. Zero takes defaultRQLiteReadyTimeout.
+	//
+	// It is a per-attempt budget, not a deadline on the whole gateway: the
+	// readiness loop keeps retrying for as long as the process lives, so
+	// shortening this makes the gateway notice a recovered leader sooner
+	// rather than giving up on it earlier.
+	RQLiteReadyTimeout time.Duration
+
+	// SchemaApplyTimeout bounds applying the embedded migrations once a leader
+	// is reachable. Zero takes defaultSchemaApplyTimeout.
+	SchemaApplyTimeout time.Duration
+
 	// HTTPS configuration
 	EnableHTTPS bool   // Enable HTTPS with ACME (Let's Encrypt)
 	DomainName  string // Domain name for HTTPS certificate
@@ -29,12 +42,12 @@ type Config struct {
 	DataDir string // Base directory for node-local data (SQLite databases, deployments). Defaults to ~/.orama
 
 	// Olric cache configuration
-	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:3320"]). If empty, defaults to ["localhost:3320"]
+	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:10102"]). If empty, defaults to the index Olric on localhost
 	OlricTimeout time.Duration // Timeout for Olric operations (default: 10s)
 
 	// IPFS Cluster configuration
 	IPFSClusterAPIURL     string        // IPFS Cluster HTTP API URL (e.g., "http://localhost:9094"). If empty, gateway will discover from node configs
-	IPFSAPIURL            string        // IPFS HTTP API URL for content retrieval (e.g., "http://localhost:4501"). If empty, gateway will discover from node configs
+	IPFSAPIURL            string        // IPFS HTTP API URL for content retrieval (e.g., "http://localhost:10107"). If empty, gateway will discover from node configs
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // Replication factor for pins (default: 3)
 
@@ -82,4 +95,43 @@ type Config struct {
 	NtfyBaseURL     string // ntfy server URL (e.g. "http://localhost:8080")
 	NtfyAuthToken   string // optional bearer token for ntfy
 	ExpoAccessToken string // optional Expo access token
+}
+
+// isNamespaceGateway reports whether this process serves a tenant namespace
+// rather than the index.
+//
+// A tenant gateway is the one configured with a GlobalRQLiteDSN pointing at a
+// DIFFERENT database from its own: its RQLiteDSN is the namespace's rqlite and
+// GlobalRQLiteDSN is the cluster registry. The index gateway is its own
+// registry, so EnsureGateway leaves GlobalRQLiteDSN empty.
+func isNamespaceGateway(cfg *Config) bool {
+	return cfg != nil && cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN
+}
+
+// Schema-readiness budget defaults.
+const (
+	// defaultRQLiteReadyTimeout is short because failing it is no longer
+	// terminal — the readiness loop retries. It used to be 90s, which made
+	// sense when giving up meant the gateway was broken; now a long budget only
+	// delays the gateway reporting WHY it is not ready, and two consecutive
+	// attempts could outlast the 120s window InstanceSpawner.waitForInstanceReady
+	// allows, turning a slow election into a failed spawn.
+	defaultRQLiteReadyTimeout = 20 * time.Second
+
+	// defaultSchemaApplyTimeout bounds the migration apply itself.
+	defaultSchemaApplyTimeout = 30 * time.Second
+)
+
+func (c *Config) rqliteReadyTimeout() time.Duration {
+	if c.RQLiteReadyTimeout > 0 {
+		return c.RQLiteReadyTimeout
+	}
+	return defaultRQLiteReadyTimeout
+}
+
+func (c *Config) schemaApplyTimeout() time.Duration {
+	if c.SchemaApplyTimeout > 0 {
+		return c.SchemaApplyTimeout
+	}
+	return defaultSchemaApplyTimeout
 }

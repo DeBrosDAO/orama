@@ -3,8 +3,8 @@ package gateway
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -43,13 +43,6 @@ const (
 	olricInitMaxAttempts    = 5
 	olricInitInitialBackoff = 500 * time.Millisecond
 	olricInitMaxBackoff     = 5 * time.Second
-
-	// rqliteReadyTimeout bounds how long gateway startup waits for the local
-	// RQLite to become leader-reachable before giving up. Generous enough to
-	// cover a cold node whose raft is still replaying (a large namespace log
-	// can take tens of seconds), short enough that a genuinely broken cluster
-	// surfaces a clear error instead of hanging forever.
-	rqliteReadyTimeout = 90 * time.Second
 )
 
 // Dependencies holds all service clients and components required by the Gateway.
@@ -74,6 +67,13 @@ type Dependencies struct {
 
 	// Olric distributed cache client
 	OlricClient *olric.Client
+
+	// OlricServers is the address list the client above was built from, after
+	// discovery has resolved it. The supervisor needs it to reconnect: it used
+	// to fall back to a hardcoded "localhost:10102" while the resolved list
+	// sat here unused, so a namespace gateway that lost its cache tried to
+	// reconnect to the wrong place for ever.
+	OlricServers []string
 
 	// IPFS storage client
 	IPFSClient ipfs.IPFSClient
@@ -164,9 +164,14 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 
 	deps.Client = c
 
-	// Initialize RQLite ORM HTTP gateway
+	// Open the RQLite handles. This does not touch the database — sql.Open is
+	// lazy — so it fails only on a malformed DSN. The work that needs a live
+	// database (the leader wait, the migrations, the schema contract) runs in
+	// the background afterwards and is reported as readiness; see readiness.go.
 	if err := initializeRQLite(logger, cfg, deps); err != nil {
-		logger.ComponentWarn(logging.ComponentGeneral, "RQLite initialization failed", zap.Error(err))
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"RQLite handles could not be opened; the gateway will report itself as starting until this is fixed",
+			zap.Error(err))
 	}
 
 	// Initialize Olric cache client (with retry and background reconnection)
@@ -241,6 +246,35 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 		return err
 	}
 
+	return nil
+}
+
+// errSchemaContract marks the one schema failure retrying cannot fix: a leader
+// answered, and the applied version is below what this binary requires.
+var errSchemaContract = errors.New("schema contract violation")
+
+// isSchemaContractViolation reports whether err is that failure.
+func isSchemaContractViolation(err error) bool {
+	return errors.Is(err, errSchemaContract)
+}
+
+// prepareSchema waits for a leader, applies the embedded migrations, and
+// asserts the schema contract.
+//
+// Every error it returns except errSchemaContract means "not yet": the caller
+// retries. That distinction is the whole point — "the local rqlite has no
+// leader" and "this database is behind the binary" used to be the same fatal
+// error, so a slow cross-region follower during a rolling upgrade was
+// indistinguishable from real schema drift.
+func prepareSchema(ctx context.Context, logger *logging.ColoredLogger, cfg *Config, deps *Dependencies) error {
+	db := deps.SQLDB
+	if db == nil {
+		// Only a malformed DSN gets here — sql.Open is lazy and fails on
+		// nothing else — so retrying cannot help any more than it can for a
+		// schema mismatch.
+		return fmt.Errorf("%w: no database handle, check the configured rqlite DSN", errSchemaContract)
+	}
+
 	// Wait for the local RQLite to actually be able to serve a leader-routed
 	// read before touching the schema.
 	//
@@ -250,9 +284,10 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// rqlite unit does not help: for Type=simple it orders process start, not
 	// readiness. Gating on the real signal turns "gateway dies at boot because
 	// the database was 3 seconds behind it" into "gateway waits 3 seconds".
-	readyCtx, readyCancel := context.WithTimeout(context.Background(), rqliteReadyTimeout)
+	readyTimeout := cfg.rqliteReadyTimeout()
+	readyCtx, readyCancel := context.WithTimeout(ctx, readyTimeout)
 	defer readyCancel()
-	if err := rqlite.WaitForLeader(readyCtx, db, rqliteReadyTimeout); err != nil {
+	if err := rqlite.WaitForLeader(readyCtx, db, readyTimeout); err != nil {
 		return fmt.Errorf("rqlite not ready for schema work: %w", err)
 	}
 	logger.ComponentInfo(logging.ComponentGeneral, "RQLite ready (leader reachable), applying schema")
@@ -260,7 +295,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// Apply embedded migrations to ensure schema is up-to-date.
 	// This is critical for namespace gateways whose RQLite instances
 	// don't get migrations from the main cluster RQLiteManager.
-	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	migCtx, migCancel := context.WithTimeout(ctx, cfg.schemaApplyTimeout())
 	defer migCancel()
 
 	// A NAMESPACE gateway's RQLite is ALSO the tenant app's own database (they
@@ -270,11 +305,11 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	// "subscriptions" — so core and app schema never collide (bugboard #150).
 	// Detection mirrors the global-auth-client check: a namespace gateway is the
 	// one configured with a separate GlobalRQLiteDSN pointing at the main cluster.
-	if cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN {
+	if isNamespaceGateway(cfg) {
 		if err := rqlite.ApplyEmbeddedMigrationsNamespace(migCtx, db, migrations.FS, logger.Logger); err != nil {
 			return fmt.Errorf("apply namespace embedded migrations failed: %w "+
-				"(hint: this namespace gateway can't safely run without its required schema; "+
-				"check the namespace RQLite health and re-run startup)", err)
+				"(hint: this namespace gateway will not serve without its required schema; "+
+				"check the namespace RQLite health — this is retried automatically)", err)
 		}
 		logger.ComponentInfo(logging.ComponentGeneral, "Namespace-isolated migrations applied to gateway RQLite")
 
@@ -286,7 +321,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 			return fmt.Errorf("namespace schema contract read failed: %w", err)
 		}
 		if required := migrations.RequiredVersion(); applied < required {
-			return fmt.Errorf("namespace schema contract violation: applied=%d, required=%d", applied, required)
+			return fmt.Errorf("%w: namespace schema applied=%d, required=%d", errSchemaContract, applied, required)
 		}
 		logger.ComponentInfo(logging.ComponentGeneral, "Namespace schema contract satisfied",
 			zap.Int("required_version", migrations.RequiredVersion()))
@@ -295,11 +330,12 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 
 	// Main cluster: full core schema, tracked in the standard schema_migrations.
 	//
-	// Failures here are FATAL: a gateway that can't bring its schema up
-	// to the version its binary expects will silently corrupt deploys
-	// later (e.g. INSERTing into missing columns and surfacing as a
-	// cryptic SQL error to end users). Better to refuse to start with
-	// a clear actionable error.
+	// An apply failure is retryable — it is almost always the leader going
+	// away mid-apply. A gateway that cannot bring its schema up to the version
+	// its binary expects must never serve, because it would silently corrupt
+	// deploys later (INSERTing into missing columns, surfacing as a cryptic SQL
+	// error to end users); that is what the readiness state below enforces, by
+	// refusing every request until the schema is right.
 	if err := rqlite.ApplyEmbeddedMigrations(migCtx, db, migrations.FS, logger.Logger); err != nil {
 		return fmt.Errorf("apply embedded migrations failed: %w "+
 			"(hint: this gateway can't safely run without its required schema; "+
@@ -314,7 +350,17 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	//   - clusters where the binary was upgraded but RQLite has stale schema
 	//   - operator manually deleted rows from schema_migrations
 	if err := migrations.AssertSchema(migCtx, db); err != nil {
-		return fmt.Errorf("schema contract violation: %w", err)
+		// AssertSchema returns two very different things: a real version
+		// mismatch, and a failure to READ schema_migrations at all. Only the
+		// first is permanent. Treating both as the contract violation would
+		// let a lost leader or a context deadline between the wait above and
+		// this read latch the gateway into blocked forever — a 200ms hiccup
+		// taking a namespace down until someone restarts it.
+		var mismatch *migrations.SchemaMismatchError
+		if errors.As(err, &mismatch) {
+			return fmt.Errorf("%w: %w", errSchemaContract, err)
+		}
+		return fmt.Errorf("schema contract read failed: %w", err)
 	}
 	logger.ComponentInfo(logging.ComponentGeneral, "Schema contract satisfied",
 		zap.Int("required_version", migrations.RequiredVersion()))
@@ -383,9 +429,10 @@ func initializeOlric(logger *logging.ColoredLogger, cfg *Config, deps *Dependenc
 			logger.ComponentInfo(logging.ComponentGeneral, "Discovered Olric servers from LibP2P peers",
 				zap.Strings("servers", olricServers))
 		} else {
-			// Fallback to localhost for local development
-			olricServers = []string{"localhost:10102"}
-			logger.ComponentInfo(logging.ComponentGeneral, "No Olric servers discovered, using localhost fallback")
+			// Fallback to the local index Olric, through the constant.
+			olricServers = []string{constants.OlricAddrFor("localhost")}
+			logger.ComponentInfo(logging.ComponentGeneral, "No Olric servers discovered, using localhost fallback",
+				zap.Strings("servers", olricServers))
 		}
 	} else {
 		logger.ComponentInfo(logging.ComponentGeneral, "Using explicitly configured Olric servers",
@@ -396,6 +443,10 @@ func initializeOlric(logger *logging.ColoredLogger, cfg *Config, deps *Dependenc
 		Servers: olricServers,
 		Timeout: cfg.OlricTimeout,
 	}
+
+	// Recorded whether or not the connection works, so the supervisor
+	// reconnects to where Olric actually is rather than to a guess.
+	deps.OlricServers = olricServers
 
 	olricClient, err := initializeOlricClientWithRetry(olricCfg, logger)
 	if err != nil {
@@ -747,21 +798,6 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	// the knob); 5000 is a sensible default per plan 06.
 	deps.PersistentWSManager = persistent.NewManager(5000, logger.Logger)
 
-	// Create HTTP handlers
-	deps.ServerlessHandlers = serverlesshandlers.NewServerlessHandlers(
-		deps.ServerlessInvoker,
-		deps.ServerlessEngine,
-		registry,
-		deps.ServerlessWSMgr,
-		triggerStore,
-		cronStore,
-		deps.PubSubDispatcher,
-		deps.PersistentWSManager,
-		deps.WSBridge,
-		secretsMgr,
-		logger.Logger,
-	)
-
 	// Initialize auth service with persistent signing keys (RSA + EdDSA)
 	keyPEM, err := loadOrCreateSigningKey(cfg.DataDir, logger)
 	if err != nil {
@@ -819,6 +855,23 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 
 	deps.AuthService = authService
 
+	// Create HTTP handlers. Built after the auth service because the deploy,
+	// delete and secret endpoints write to the audit trail.
+	deps.ServerlessHandlers = serverlesshandlers.NewServerlessHandlers(
+		deps.ServerlessInvoker,
+		deps.ServerlessEngine,
+		registry,
+		deps.ServerlessWSMgr,
+		triggerStore,
+		cronStore,
+		deps.PubSubDispatcher,
+		deps.PersistentWSManager,
+		deps.WSBridge,
+		secretsMgr,
+		authService.Audit(),
+		logger.Logger,
+	)
+
 	logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",
 		zap.Int("default_memory_mb", engineCfg.DefaultMemoryLimitMB),
 		zap.Int("default_timeout_sec", engineCfg.DefaultTimeoutSeconds),
@@ -829,7 +882,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 }
 
 // discoverOlricServers discovers Olric server addresses from LibP2P peers.
-// Returns a list of IP:port addresses where Olric servers are expected to run (port 3320).
+// Returns a list of IP:port addresses where index Olric servers are expected to run.
 func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger) []string {
 	// Get network info to access peer information
 	networkInfo := networkClient.Network()
@@ -868,13 +921,12 @@ func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger
 				continue
 			}
 
-			// Skip localhost loopback addresses (we'll use localhost:3320 as fallback)
+			// Skip localhost loopback addresses (the local Olric is the fallback)
 			if ip == "localhost" || ip == "::1" {
 				continue
 			}
 
-			// Build Olric server address (standard port 3320)
-			olricAddr := net.JoinHostPort(ip, "3320")
+			olricAddr := constants.OlricAddrFor(ip)
 			if !seen[olricAddr] {
 				olricServers = append(olricServers, olricAddr)
 				seen[olricAddr] = true
@@ -904,7 +956,7 @@ func discoverOlricServers(networkClient client.NetworkClient, logger *zap.Logger
 				continue
 			}
 
-			olricAddr := net.JoinHostPort(ip, "3320")
+			olricAddr := constants.OlricAddrFor(ip)
 			if !seen[olricAddr] {
 				olricServers = append(olricServers, olricAddr)
 				seen[olricAddr] = true
@@ -1005,7 +1057,7 @@ func resolveDatabaseEndpoints(cfg *Config, defaultEndpoints []string) []string {
 
 // injectRQLiteAuth injects HTTP basic auth credentials into a RQLite DSN URL.
 // If username or password is empty, the DSN is returned unchanged.
-// Input: "http://localhost:5001" → Output: "http://orama:secret@localhost:5001"
+// Input: "http://localhost:10100" → Output: "http://orama:secret@localhost:10100"
 func injectRQLiteAuth(dsn, username, password string) string {
 	if username == "" || password == "" {
 		return dsn

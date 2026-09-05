@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -108,7 +109,7 @@ func Status(name string) error {
 	genesis := state.GenesisServer()
 	genesisNode := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
-	out, err := runSSHOutput(genesisNode, "curl -sf http://localhost:5001/status 2>/dev/null")
+	out, err := runSSHOutput(genesisNode, fmt.Sprintf("curl -sf %s/status 2>/dev/null", constants.LocalRQLiteURL()))
 	if err != nil {
 		fmt.Println("  RQLite: UNREACHABLE")
 	} else {

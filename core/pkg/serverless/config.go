@@ -168,7 +168,7 @@ func (c *Config) Validate() []error {
 	// into a runaway-scheduler corner.
 	if c.CronPollInterval != 0 && c.CronPollInterval < MinCronPollInterval {
 		errs = append(errs, &ConfigError{
-			Field:   "CronPollInterval",
+			Field: "CronPollInterval",
 			Message: fmt.Sprintf("must be >= %s (current=%s); see bugboard #109 — below this the scheduler can't keep up with per-tick rqlite cost and queues ticks indefinitely",
 				MinCronPollInterval, c.CronPollInterval),
 		})

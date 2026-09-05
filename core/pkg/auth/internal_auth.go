@@ -1,9 +1,13 @@
 package auth
 
-import "net"
+import (
+	"net"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
+)
 
 // WireGuardSubnet is the internal WireGuard mesh CIDR.
-const WireGuardSubnet = "10.0.0.0/24"
+const WireGuardSubnet = constants.WireGuardSubnet
 
 // IsWireGuardPeer checks whether remoteAddr (host:port format) originates
 // from the WireGuard mesh subnet. This provides cryptographic peer

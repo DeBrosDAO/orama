@@ -411,7 +411,7 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 	)
 
 	var (
-		eventJSON []byte
+		eventJSON  []byte
 		marshalErr error
 	)
 
@@ -561,6 +561,8 @@ func (d *PubSubDispatcher) bufferEvent(match TriggerMatch, event PubSubEvent) {
 				Input:        payload,
 				TriggerType:  serverless.TriggerTypePubSub,
 				TriggerDepth: event.TriggerDepth, // event was built with depth+1 by the caller
+				// A registered trigger matching is the gateway's own work.
+				SystemOriginated: true,
 			}
 			if _, err := d.invoker.Invoke(ctx, req); err != nil {
 				d.logger.Warn("Aggregated PubSub invocation failed",
@@ -674,7 +676,6 @@ func (d *PubSubDispatcher) getMatches(ctx context.Context, namespace, topic stri
 	return d.store.GetByTopicAndNamespace(ctx, topic, namespace)
 }
 
-
 // invokeFunction invokes a single function for a trigger match.
 //
 // `handlerDepth` is the depth at which the INVOKED handler runs (the
@@ -691,6 +692,8 @@ func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte, 
 		Input:        eventJSON,
 		TriggerType:  serverless.TriggerTypePubSub,
 		TriggerDepth: handlerDepth,
+		// A registered trigger matching is the gateway's own work.
+		SystemOriginated: true,
 	}
 
 	resp, err := d.invoker.Invoke(ctx, req)
@@ -712,4 +715,3 @@ func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte, 
 		zap.Int64("duration_ms", resp.DurationMS),
 	)
 }
-

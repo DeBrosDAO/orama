@@ -1,9 +1,13 @@
 package node
 
 import (
+	"time"
+
 	"github.com/DeBrosOfficial/network/pkg/cli/production/invite"
 	"github.com/spf13/cobra"
 )
+
+var inviteOpts invite.Options
 
 var inviteCmd = &cobra.Command{
 	Use:   "invite",
@@ -12,7 +16,10 @@ var inviteCmd = &cobra.Command{
 Running without a subcommand creates a new token (same as 'invite create').`,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Default behavior: create a new invite token
-		invite.Handle(args)
+		invite.Run(inviteOpts)
 	},
-	DisableFlagParsing: true,
+}
+
+func init() {
+	inviteCmd.Flags().DurationVar(&inviteOpts.Expiry, "expiry", time.Hour, "How long the token stays valid")
 }

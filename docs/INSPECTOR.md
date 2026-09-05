@@ -37,7 +37,7 @@ orama inspect [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--config` | `scripts/nodes.conf` | Path to node configuration file |
+| `--config` | *(resolver)* | Read nodes from this file instead of resolving them |
 | `--env` | *(required)* | Environment to inspect (`devnet`, `testnet`) |
 | `--subsystem` | `all` | Comma-separated subsystems to inspect |
 | `--format` | `table` | Output format: `table` or `json` |
@@ -165,7 +165,15 @@ The AI receives the full check results plus cluster metadata and returns a struc
 
 ## Configuration
 
-The inspector reads node definitions from a pipe-delimited config file (default: `scripts/nodes.conf`).
+By default the inspector resolves nodes the same way every other command does:
+it asks the network API for the nodes your wallet owns, falling back to
+`nodes.conf` when the API is unreachable. It used to read `scripts/nodes.conf`
+relative to the working directory, so an installed binary only worked from
+inside the source tree.
+
+`--config` overrides that with a pipe-delimited file. `nodes.conf` is gitignored
+— copy `core/scripts/nodes.conf.example` to `core/scripts/nodes.conf`, or put it
+at `~/.orama/nodes.conf` where it does not depend on the working directory.
 
 ### Format
 
@@ -181,7 +189,8 @@ devnet|ubuntu@5.6.7.8|nameserver-ns1
 | `user@host` | SSH credentials |
 | `role` | `node` or `nameserver-ns1`, `nameserver-ns2`, etc. |
 
-SSH keys are resolved from rootwallet (`rw vault ssh get <host>/<user> --priv`).
+SSH keys are resolved from the RootWallet agent over its Unix socket, not by
+shelling out to `rw`. See [Troubleshooting](COMMON_PROBLEMS.md#13-rootwallet-agent-locked-waiting-or-unreachable).
 
 Blank lines and lines starting with `#` are ignored.
 

@@ -12,18 +12,18 @@ type NodeReport struct {
 	CollectMS int64     `json:"collect_ms"`
 	Errors    []string  `json:"errors,omitempty"`
 
-	System     *SystemReport      `json:"system"`
-	Services   *ServicesReport    `json:"services"`
-	RQLite     *RQLiteReport      `json:"rqlite,omitempty"`
-	Olric      *OlricReport       `json:"olric,omitempty"`
-	IPFS       *IPFSReport        `json:"ipfs,omitempty"`
-	Vault      *VaultReport       `json:"vault,omitempty"`
-	Gateway    *GatewayReport     `json:"gateway,omitempty"`
-	WireGuard  *WireGuardReport   `json:"wireguard,omitempty"`
-	DNS        *DNSReport         `json:"dns,omitempty"`
-	Anyone     *AnyoneReport      `json:"anyone,omitempty"`
-	Network    *NetworkReport     `json:"network"`
-	Processes  *ProcessReport     `json:"processes"`
+	System      *SystemReport      `json:"system"`
+	Services    *ServicesReport    `json:"services"`
+	RQLite      *RQLiteReport      `json:"rqlite,omitempty"`
+	Olric       *OlricReport       `json:"olric,omitempty"`
+	IPFS        *IPFSReport        `json:"ipfs,omitempty"`
+	Vault       *VaultReport       `json:"vault,omitempty"`
+	Gateway     *GatewayReport     `json:"gateway,omitempty"`
+	WireGuard   *WireGuardReport   `json:"wireguard,omitempty"`
+	DNS         *DNSReport         `json:"dns,omitempty"`
+	Anyone      *AnyoneReport      `json:"anyone,omitempty"`
+	Network     *NetworkReport     `json:"network"`
+	Processes   *ProcessReport     `json:"processes"`
 	Namespaces  []NamespaceReport  `json:"namespaces,omitempty"`
 	Deployments *DeploymentsReport `json:"deployments,omitempty"`
 	Serverless  *ServerlessReport  `json:"serverless,omitempty"`
@@ -78,27 +78,27 @@ type ServiceInfo struct {
 // --- RQLite ---
 
 type RQLiteReport struct {
-	Responsive  bool                       `json:"responsive"`
-	Ready       bool                       `json:"ready"`
-	StrongRead  bool                       `json:"strong_read"`
-	RaftState   string                     `json:"raft_state,omitempty"`
-	LeaderAddr  string                     `json:"leader_addr,omitempty"`
-	LeaderID    string                     `json:"leader_id,omitempty"`
-	NodeID      string                     `json:"node_id,omitempty"`
-	Term        uint64                     `json:"term,omitempty"`
-	Applied     uint64                     `json:"applied_index,omitempty"`
-	Commit      uint64                     `json:"commit_index,omitempty"`
-	FsmPending  uint64                     `json:"fsm_pending,omitempty"`
-	LastContact string                     `json:"last_contact,omitempty"`
-	NumPeers    int                        `json:"num_peers,omitempty"`
-	Voter       bool                       `json:"voter,omitempty"`
-	DBSize      string                     `json:"db_size,omitempty"`
-	Uptime      string                     `json:"uptime,omitempty"`
-	Version     string                     `json:"version,omitempty"`
-	Goroutines  int                        `json:"goroutines,omitempty"`
-	HeapMB      int                        `json:"heap_mb,omitempty"`
-	Nodes       map[string]RQLiteNodeInfo  `json:"nodes,omitempty"`
-	DebugVars   *RQLiteDebugVarsReport     `json:"debug_vars,omitempty"`
+	Responsive  bool                      `json:"responsive"`
+	Ready       bool                      `json:"ready"`
+	StrongRead  bool                      `json:"strong_read"`
+	RaftState   string                    `json:"raft_state,omitempty"`
+	LeaderAddr  string                    `json:"leader_addr,omitempty"`
+	LeaderID    string                    `json:"leader_id,omitempty"`
+	NodeID      string                    `json:"node_id,omitempty"`
+	Term        uint64                    `json:"term,omitempty"`
+	Applied     uint64                    `json:"applied_index,omitempty"`
+	Commit      uint64                    `json:"commit_index,omitempty"`
+	FsmPending  uint64                    `json:"fsm_pending,omitempty"`
+	LastContact string                    `json:"last_contact,omitempty"`
+	NumPeers    int                       `json:"num_peers,omitempty"`
+	Voter       bool                      `json:"voter,omitempty"`
+	DBSize      string                    `json:"db_size,omitempty"`
+	Uptime      string                    `json:"uptime,omitempty"`
+	Version     string                    `json:"version,omitempty"`
+	Goroutines  int                       `json:"goroutines,omitempty"`
+	HeapMB      int                       `json:"heap_mb,omitempty"`
+	Nodes       map[string]RQLiteNodeInfo `json:"nodes,omitempty"`
+	DebugVars   *RQLiteDebugVarsReport    `json:"debug_vars,omitempty"`
 }
 
 type RQLiteNodeInfo struct {
@@ -265,11 +265,11 @@ type PortInfo struct {
 // --- Processes ---
 
 type ProcessReport struct {
-	ZombieCount  int           `json:"zombie_count"`
-	Zombies      []ProcessInfo `json:"zombies,omitempty"`
-	OrphanCount  int           `json:"orphan_count"`
-	Orphans      []ProcessInfo `json:"orphans,omitempty"`
-	PanicCount   int           `json:"panic_count_1h"`
+	ZombieCount int           `json:"zombie_count"`
+	Zombies     []ProcessInfo `json:"zombies,omitempty"`
+	OrphanCount int           `json:"orphan_count"`
+	Orphans     []ProcessInfo `json:"orphans,omitempty"`
+	PanicCount  int           `json:"panic_count_1h"`
 }
 
 type ProcessInfo struct {

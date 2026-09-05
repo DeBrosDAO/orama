@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"encoding/json"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"strconv"
 	"strings"
 	"time"
@@ -42,7 +43,7 @@ func collectVault() *VaultReport {
 	}
 
 	// 5. Query vault status via gateway (provides guardian health)
-	if body, err := httpGet(ctx, "http://localhost:6001/v1/vault/status"); err == nil {
+	if body, err := httpGet(ctx, constants.LocalGatewayURL()+"/v1/vault/status"); err == nil {
 		var status struct {
 			Guardians   int `json:"guardians"`
 			Healthy     int `json:"healthy"`
@@ -59,7 +60,7 @@ func collectVault() *VaultReport {
 	}
 
 	// 6. Query vault health status
-	if body, err := httpGet(ctx, "http://localhost:6001/v1/vault/health"); err == nil {
+	if body, err := httpGet(ctx, constants.LocalGatewayURL()+"/v1/vault/health"); err == nil {
 		var health struct {
 			Status string `json:"status"`
 		}

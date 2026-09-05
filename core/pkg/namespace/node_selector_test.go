@@ -14,11 +14,11 @@ func TestCalculateCapacityScore_EmptyNode(t *testing.T) {
 
 	// Empty node should have score of 1.0 (100% available)
 	score := selector.calculateCapacityScore(
-		0, 100,   // deployments
-		0, 9900,  // ports
-		0, 8192,  // memory
-		0, 400,   // cpu
-		0, 20,    // namespace instances
+		0, 100, // deployments
+		0, 9900, // ports
+		0, 8192, // memory
+		0, 400, // cpu
+		0, 20, // namespace instances
 	)
 
 	if score != 1.0 {
@@ -34,11 +34,11 @@ func TestCalculateCapacityScore_FullNode(t *testing.T) {
 
 	// Full node should have score of 0.0 (0% available)
 	score := selector.calculateCapacityScore(
-		100, 100,   // deployments (full)
+		100, 100, // deployments (full)
 		9900, 9900, // ports (full)
 		8192, 8192, // memory (full)
-		400, 400,   // cpu (full)
-		20, 20,     // namespace instances (full)
+		400, 400, // cpu (full)
+		20, 20, // namespace instances (full)
 	)
 
 	if score != 0.0 {
@@ -54,11 +54,11 @@ func TestCalculateCapacityScore_HalfCapacity(t *testing.T) {
 
 	// Half-full node should have score of approximately 0.5
 	score := selector.calculateCapacityScore(
-		50, 100,    // 50% deployments
+		50, 100, // 50% deployments
 		4950, 9900, // 50% ports
 		4096, 8192, // 50% memory
-		200, 400,   // 50% cpu
-		10, 20,     // 50% namespace instances
+		200, 400, // 50% cpu
+		10, 20, // 50% namespace instances
 	)
 
 	// With all components at 50%, the weighted average should be 0.5
@@ -80,10 +80,10 @@ func TestCalculateCapacityScore_Weights(t *testing.T) {
 	// Only deployments full (other metrics empty)
 	deploymentOnlyScore := selector.calculateCapacityScore(
 		100, 100, // deployments full (contributes 0 * 0.30 = 0)
-		0, 9900,  // ports empty (contributes 1.0 * 0.15 = 0.15)
-		0, 8192,  // memory empty (contributes 1.0 * 0.15 = 0.15)
-		0, 400,   // cpu empty (contributes 1.0 * 0.15 = 0.15)
-		0, 20,    // namespace instances empty (contributes 1.0 * 0.25 = 0.25)
+		0, 9900, // ports empty (contributes 1.0 * 0.15 = 0.15)
+		0, 8192, // memory empty (contributes 1.0 * 0.15 = 0.15)
+		0, 400, // cpu empty (contributes 1.0 * 0.15 = 0.15)
+		0, 20, // namespace instances empty (contributes 1.0 * 0.25 = 0.25)
 	)
 	// Expected: 0 + 0.15 + 0.15 + 0.15 + 0.25 = 0.70
 	expectedDeploymentOnly := 0.70
@@ -95,11 +95,11 @@ func TestCalculateCapacityScore_Weights(t *testing.T) {
 
 	// Only namespace instances full (other metrics empty)
 	namespaceOnlyScore := selector.calculateCapacityScore(
-		0, 100,   // deployments empty (contributes 1.0 * 0.30 = 0.30)
-		0, 9900,  // ports empty (contributes 1.0 * 0.15 = 0.15)
-		0, 8192,  // memory empty (contributes 1.0 * 0.15 = 0.15)
-		0, 400,   // cpu empty (contributes 1.0 * 0.15 = 0.15)
-		20, 20,   // namespace instances full (contributes 0 * 0.25 = 0)
+		0, 100, // deployments empty (contributes 1.0 * 0.30 = 0.30)
+		0, 9900, // ports empty (contributes 1.0 * 0.15 = 0.15)
+		0, 8192, // memory empty (contributes 1.0 * 0.15 = 0.15)
+		0, 400, // cpu empty (contributes 1.0 * 0.15 = 0.15)
+		20, 20, // namespace instances full (contributes 0 * 0.25 = 0)
 	)
 	// Expected: 0.30 + 0.15 + 0.15 + 0.15 + 0 = 0.75
 	expectedNamespaceOnly := 0.75
@@ -117,11 +117,11 @@ func TestCalculateCapacityScore_NegativeValues(t *testing.T) {
 
 	// Test that over-capacity values (which would produce negative scores) are clamped to 0
 	score := selector.calculateCapacityScore(
-		200, 100,     // 200% deployments (should clamp to 0)
-		20000, 9900,  // over ports (should clamp to 0)
-		16000, 8192,  // over memory (should clamp to 0)
-		800, 400,     // over cpu (should clamp to 0)
-		40, 20,       // over namespace instances (should clamp to 0)
+		200, 100, // 200% deployments (should clamp to 0)
+		20000, 9900, // over ports (should clamp to 0)
+		16000, 8192, // over memory (should clamp to 0)
+		800, 400, // over cpu (should clamp to 0)
+		40, 20, // over namespace instances (should clamp to 0)
 	)
 
 	if score != 0.0 {
@@ -131,9 +131,9 @@ func TestCalculateCapacityScore_NegativeValues(t *testing.T) {
 
 func TestNodeCapacity_AvailableSlots(t *testing.T) {
 	tests := []struct {
-		name               string
-		instanceCount      int
-		expectedAvailable  int
+		name              string
+		instanceCount     int
+		expectedAvailable int
 	}{
 		{"Empty node", 0, 20},
 		{"One instance", 1, 19},
@@ -205,20 +205,20 @@ func TestScoreRanking(t *testing.T) {
 
 	// Node A: Light load
 	scoreA := selector.calculateCapacityScore(
-		10, 100,   // 10% deployments
+		10, 100, // 10% deployments
 		500, 9900, // ~5% ports
-		1000, 8192,// ~12% memory
-		50, 400,   // ~12% cpu
-		2, 20,     // 10% namespace instances
+		1000, 8192, // ~12% memory
+		50, 400, // ~12% cpu
+		2, 20, // 10% namespace instances
 	)
 
 	// Node B: Heavy load
 	scoreB := selector.calculateCapacityScore(
-		80, 100,    // 80% deployments
+		80, 100, // 80% deployments
 		8000, 9900, // ~80% ports
 		7000, 8192, // ~85% memory
-		350, 400,   // ~87% cpu
-		18, 20,     // 90% namespace instances
+		350, 400, // ~87% cpu
+		18, 20, // 90% namespace instances
 	)
 
 	if scoreA <= scoreB {

@@ -2,6 +2,7 @@ package installers
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"io"
 	"strings"
 	"testing"
@@ -143,5 +144,61 @@ func TestGenerateCaddyfile_SNIRouterEnabledMovesHTTPSTo8443(t *testing.T) {
 	// Plain HTTP :80 catch-all must be unchanged.
 	if !strings.Contains(cf, ":80 {") {
 		t.Errorf("HTTP :80 block must remain when SNI router enabled; got:\n%s", cf)
+	}
+}
+
+// Caddy is where the internet ends. It terminates TLS and reverse-proxies to
+// localhost, so every public request reaches the gateway from 127.0.0.1 — which
+// is exactly what the gateway used to accept as proof that a request came from
+// another gateway. Caddy forwards client headers by default, so anyone could
+// send X-Internal-Auth-Validated: true and be believed.
+//
+// The gateway now requires a MAC on those headers. Caddy dropping them a hop
+// earlier means two independent things have to fail before a forged one is
+// trusted.
+func TestGenerateCaddyfile_StripsInternalAuthHeaders(t *testing.T) {
+	ci := newTestCaddyInstaller()
+	ci.EnableNtfyProxy("push.dbrs.space")
+	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
+		"http://localhost:10104/v1/internal/acme", "dbrs.space")
+
+	proxies := strings.Count(cf, "reverse_proxy ")
+	if proxies == 0 {
+		t.Fatal("no reverse_proxy directives at all — this test proves nothing")
+	}
+
+	for _, header := range internalAuthHeaders {
+		got := strings.Count(cf, "header_up -"+header)
+		if got != proxies {
+			t.Errorf("%s is stripped in %d of %d reverse_proxy blocks; every block "+
+				"that fronts the internet has to drop it", header, got, proxies)
+		}
+	}
+}
+
+// A header the gateway trusts but Caddy does not strip is the whole bug again,
+// so the two lists have to be the same list.
+func TestInternalAuthHeadersMatchTheGateway(t *testing.T) {
+	fromGateway := []string{
+		gateway.HeaderInternalAuthValidated,
+		gateway.HeaderInternalAuthNamespace,
+		gateway.HeaderInternalAuthJWTSub,
+		gateway.HeaderInternalAuthJWTCustom,
+		gateway.HeaderInternalAuthScopes,
+		gateway.HeaderInternalAuthMAC,
+	}
+
+	stripped := map[string]bool{}
+	for _, h := range internalAuthHeaders {
+		stripped[h] = true
+	}
+	for _, h := range fromGateway {
+		if !stripped[h] {
+			t.Errorf("the gateway reads %s and Caddy does not strip it", h)
+		}
+	}
+	if len(internalAuthHeaders) != len(fromGateway) {
+		t.Errorf("Caddy strips %d headers, the gateway defines %d — one of the lists moved",
+			len(internalAuthHeaders), len(fromGateway))
 	}
 }

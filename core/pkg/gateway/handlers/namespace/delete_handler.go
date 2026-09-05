@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -25,15 +27,17 @@ type DeleteHandler struct {
 	deprovisioner NamespaceDeprovisioner
 	ormClient     rqlite.Client
 	ipfsClient    ipfs.IPFSClient // can be nil
+	audit         *auth.AuditLog
 	logger        *zap.Logger
 }
 
 // NewDeleteHandler creates a new delete handler
-func NewDeleteHandler(dp NamespaceDeprovisioner, orm rqlite.Client, ipfsClient ipfs.IPFSClient, logger *zap.Logger) *DeleteHandler {
+func NewDeleteHandler(dp NamespaceDeprovisioner, orm rqlite.Client, ipfsClient ipfs.IPFSClient, audit *auth.AuditLog, logger *zap.Logger) *DeleteHandler {
 	return &DeleteHandler{
 		deprovisioner: dp,
 		ormClient:     orm,
 		ipfsClient:    ipfsClient,
+		audit:         audit,
 		logger:        logger.With(zap.String("component", "namespace-delete-handler")),
 	}
 }
@@ -105,13 +109,27 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Delete FK children explicitly (ON DELETE CASCADE is decorative:
 	// rqlited is not started with -fk, bugboard #164). Check every error.
-	if err := h.deleteNamespaceRows(r.Context(), namespaceID); err != nil {
+	if err := h.deleteNamespaceRows(r.Context(), namespaceID, ns); err != nil {
 		h.logger.Error("Failed to delete namespace rows", zap.Error(err))
 		writeDeleteResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
 	}
 
 	h.logger.Info("Namespace deleted successfully", zap.String("namespace", ns))
+
+	// Deleting a namespace takes every deployment, key and grant in it with
+	// it. It is the most destructive thing an owner can do, so it belongs in
+	// the record.
+	//
+	// Recorded at cluster level rather than against the namespace: names are
+	// reusable, and whoever creates this one next would otherwise open their
+	// audit trail on the previous tenant's wallet.
+	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		Actor:    auth.ActorFromRequest(r),
+		Action:   auth.AuditNamespaceDeleted,
+		Resource: ns,
+		Result:   auth.AuditSuccess,
+	})
 
 	writeDeleteResponse(w, http.StatusOK, map[string]interface{}{
 		"status":    "deleted",
@@ -174,7 +192,6 @@ func (h *DeleteHandler) cleanupDeployments(ctx context.Context, ns string) {
 		h.ormClient.Exec(ctx, "DELETE FROM port_allocations WHERE deployment_id = ?", dep.ID)
 		h.ormClient.Exec(ctx, "DELETE FROM deployment_domains WHERE deployment_id = ?", dep.ID)
 		h.ormClient.Exec(ctx, "DELETE FROM deployment_history WHERE deployment_id = ?", dep.ID)
-		h.ormClient.Exec(ctx, "DELETE FROM deployment_env_vars WHERE deployment_id = ?", dep.ID)
 		h.ormClient.Exec(ctx, "DELETE FROM deployment_events WHERE deployment_id = ?", dep.ID)
 		h.ormClient.Exec(ctx, "DELETE FROM deployment_health_checks WHERE deployment_id = ?", dep.ID)
 		// Tables with no FK constraint
@@ -225,7 +242,7 @@ func (h *DeleteHandler) teardownDeploymentReplicas(ctx context.Context, ns, depl
 	}
 
 	for _, node := range nodes {
-		url := fmt.Sprintf("http://%s:6001/v1/internal/deployments/replica/teardown", node.InternalIP)
+		url := constants.GatewayURLFor(node.InternalIP) + "/v1/internal/deployments/replica/teardown"
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
 		if err != nil {
 			h.logger.Warn("Failed to create teardown request",
@@ -292,20 +309,32 @@ func (h *DeleteHandler) unpinNamespaceContent(ctx context.Context, ns string) {
 var namespaceFKChildren = []string{
 	"wallet_api_keys",
 	"api_keys",
-	"namespace_ownership",
+	"grants",
 	"apps",
 	"nonces",
 	"subscriptions",
 	"refresh_tokens",
-	"audit_events",
 	"namespace_clusters",
 }
 
-func (h *DeleteHandler) deleteNamespaceRows(ctx context.Context, namespaceID int64) error {
+// deleteNamespaceRows empties every table that belongs to a namespace, then the
+// namespace row itself.
+//
+// audit_events is not in namespaceFKChildren because it is not keyed the same
+// way: migration 048 rebuilt it with the namespace's NAME, so that an event
+// against a namespace that does not exist can still be recorded. Deleting it by
+// namespace_id fails on the missing column and leaves the namespace half
+// removed — its cluster already gone.
+func (h *DeleteHandler) deleteNamespaceRows(ctx context.Context, namespaceID int64, name string) error {
 	for _, table := range namespaceFKChildren {
 		if _, err := h.ormClient.Exec(ctx, "DELETE FROM "+table+" WHERE namespace_id = ?", namespaceID); err != nil {
 			return fmt.Errorf("delete %s for namespace %d: %w", table, namespaceID, err)
 		}
+	}
+	// The trail goes with the namespace: a namespace created later under the
+	// same name would otherwise inherit a stranger's history.
+	if _, err := h.ormClient.Exec(ctx, "DELETE FROM audit_events WHERE namespace = ?", name); err != nil {
+		return fmt.Errorf("delete audit_events for namespace %s: %w", name, err)
 	}
 	if _, err := h.ormClient.Exec(ctx, "DELETE FROM namespaces WHERE id = ?", namespaceID); err != nil {
 		return fmt.Errorf("delete namespaces id %d: %w", namespaceID, err)

@@ -180,7 +180,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.discoveredPeer = disc.PeerID
 
 		// Resolve peer domain to IP for direct RQLite TLS connection
-		// RQLite uses native TLS on port 7002 (not SNI gateway on 7001)
+		// RQLite uses native TLS on its own raft port, not the SNI gateway.
 		peerIPs, err := net.LookupIP(peerDomain)
 		if err != nil || len(peerIPs) == 0 {
 			m.err = fmt.Errorf("failed to resolve peer domain %s to IP: %w", peerDomain, err)
@@ -199,8 +199,8 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		m.config.PeerIP = peerIP
 
-		// Auto-populate join address using port 7001 (standard RQLite Raft port)
-		// config.go will adjust to 7002 if HTTPS/SNI is enabled
+		// Auto-populate the join address with the standard RQLite raft port.
+		// config.go adjusts it when HTTPS/SNI is enabled.
 		m.config.JoinAddress = fmt.Sprintf("%s:%d", peerIP, constants.RQLiteRaftPort)
 		m.config.Peers = []string{
 			fmt.Sprintf("/dns4/%s/tcp/4001/p2p/%s", peerDomain, disc.PeerID),

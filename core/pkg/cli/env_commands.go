@@ -2,155 +2,83 @@ package cli
 
 import (
 	"fmt"
-	"os"
+
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 )
 
-// HandleEnvCommand handles the 'env' command and its subcommands
-func HandleEnvCommand(args []string) {
-	if len(args) == 0 {
-		showEnvHelp()
-		return
-	}
-
-	subcommand := args[0]
-	subargs := args[1:]
-
-	switch subcommand {
-	case "list":
-		handleEnvList()
-	case "current":
-		handleEnvCurrent()
-	case "switch":
-		handleEnvSwitch(subargs)
-	case "enable":
-		handleEnvEnable(subargs)
-	case "add":
-		handleEnvAdd(subargs)
-	case "remove":
-		handleEnvRemove(subargs)
-	case "help":
-		showEnvHelp()
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown env subcommand: %s\n", subcommand)
-		showEnvHelp()
-		os.Exit(1)
-	}
-}
-
-func showEnvHelp() {
-	fmt.Printf("🌍 Environment Management Commands\n\n")
-	fmt.Printf("Usage: orama env <subcommand>\n\n")
-	fmt.Printf("Subcommands:\n")
-	fmt.Printf("  list       - List all available environments\n")
-	fmt.Printf("  current    - Show current active environment\n")
-	fmt.Printf("  switch     - Switch to a different environment\n")
-	fmt.Printf("  enable     - Alias for 'switch' (e.g., 'devnet enable')\n\n")
-	fmt.Printf("Available Environments:\n")
-	fmt.Printf("  devnet     - Development network (https://orama-devnet.network)\n")
-	fmt.Printf("  testnet    - Test network (https://orama-testnet.network)\n\n")
-	fmt.Printf("Examples:\n")
-	fmt.Printf("  orama env list\n")
-	fmt.Printf("  orama env current\n")
-	fmt.Printf("  orama env switch devnet\n")
-	fmt.Printf("  orama env enable testnet\n")
-	fmt.Printf("  orama devnet enable      # Shorthand for switch to devnet\n")
-	fmt.Printf("  orama testnet enable     # Shorthand for switch to testnet\n")
-}
-
-func handleEnvList() {
-	// Initialize environments if needed
+// EnvList prints every configured environment, marking the active one.
+func EnvList() error {
 	if err := InitializeEnvironments(); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to initialize environments: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to initialize environments: %w", err)
 	}
 
 	envConfig, err := LoadEnvironmentConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to load environment config: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to load environment config: %w", err)
 	}
 
-	fmt.Printf("🌍 Available Environments:\n\n")
+	fmt.Printf("Available environments:\n\n")
 	for _, env := range envConfig.Environments {
 		active := ""
 		if env.Name == envConfig.ActiveEnvironment {
-			active = " ✅ (active)"
+			active = "  (active)"
 		}
 		fmt.Printf("  %s%s\n", env.Name, active)
 		fmt.Printf("    Gateway: %s\n", env.GatewayURL)
 		fmt.Printf("    Description: %s\n\n", env.Description)
 	}
+	return nil
 }
 
-func handleEnvCurrent() {
-	// Initialize environments if needed
+// EnvCurrent prints the active environment and its gateway URL.
+func EnvCurrent() error {
 	if err := InitializeEnvironments(); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to initialize environments: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to initialize environments: %w", err)
 	}
 
 	env, err := GetActiveEnvironment()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to get active environment: %v\n", err)
-		os.Exit(1)
+		return clierr.NotFound("no active environment: %w", err)
 	}
 
-	fmt.Printf("✅ Current Environment: %s\n", env.Name)
+	fmt.Printf("Current environment: %s\n", env.Name)
 	fmt.Printf("   Gateway URL: %s\n", env.GatewayURL)
 	fmt.Printf("   Description: %s\n", env.Description)
+	return nil
 }
 
-func handleEnvSwitch(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: orama env switch <environment>\n")
-		fmt.Fprintf(os.Stderr, "Available: devnet, testnet\n")
-		os.Exit(1)
-	}
-
+// EnvSwitch makes the named environment active. args[0] is the name; cobra
+// guarantees it is present.
+func EnvSwitch(args []string) error {
 	envName := args[0]
 
-	// Initialize environments if needed
 	if err := InitializeEnvironments(); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to initialize environments: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to initialize environments: %w", err)
 	}
 
-	// Get old environment
 	oldEnv, _ := GetActiveEnvironment()
 
-	// Switch environment
 	if err := SwitchEnvironment(envName); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to switch environment: %v\n", err)
-		os.Exit(1)
+		return clierr.NotFound("failed to switch to %q: %w", envName, err)
 	}
 
-	// Get new environment
 	newEnv, err := GetActiveEnvironment()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to get new environment: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("switched, but could not read the new environment back: %w", err)
 	}
 
 	if oldEnv != nil && oldEnv.Name != newEnv.Name {
-		fmt.Printf("✅ Switched environment: %s → %s\n", oldEnv.Name, newEnv.Name)
+		fmt.Printf("Switched environment: %s -> %s\n", oldEnv.Name, newEnv.Name)
 	} else {
-		fmt.Printf("✅ Environment set to: %s\n", newEnv.Name)
+		fmt.Printf("Environment set to: %s\n", newEnv.Name)
 	}
 	fmt.Printf("   Gateway URL: %s\n", newEnv.GatewayURL)
+	return nil
 }
 
-func handleEnvEnable(args []string) {
-	// 'enable' is just an alias for 'switch'
-	handleEnvSwitch(args)
-}
-
-func handleEnvAdd(args []string) {
-	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: orama env add <name> <gateway_url> [description]\n")
-		fmt.Fprintf(os.Stderr, "Example: orama env add production http://dbrs.space \"Production network\"\n")
-		os.Exit(1)
-	}
-
+// EnvAdd registers a custom environment pointing at a gateway URL. args are
+// name, gateway URL and an optional description; cobra guarantees the count.
+func EnvAdd(args []string) error {
 	name := args[0]
 	gatewayURL := args[1]
 	description := ""
@@ -158,36 +86,31 @@ func handleEnvAdd(args []string) {
 		description = args[2]
 	}
 
-	// Initialize environments if needed
 	if err := InitializeEnvironments(); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to initialize environments: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to initialize environments: %w", err)
 	}
 
 	if err := AddEnvironment(name, gatewayURL, description); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to add environment: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to add environment %q: %w", name, err)
 	}
 
-	fmt.Printf("✅ Added environment: %s\n", name)
+	fmt.Printf("Added environment: %s\n", name)
 	fmt.Printf("   Gateway URL: %s\n", gatewayURL)
 	if description != "" {
 		fmt.Printf("   Description: %s\n", description)
 	}
+	return nil
 }
 
-func handleEnvRemove(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: orama env remove <name>\n")
-		os.Exit(1)
-	}
-
+// EnvRemove deletes a configured environment named by args[0]; cobra
+// guarantees it is present.
+func EnvRemove(args []string) error {
 	name := args[0]
 
 	if err := RemoveEnvironment(name); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to remove environment: %v\n", err)
-		os.Exit(1)
+		return clierr.NotFound("failed to remove environment %q: %w", name, err)
 	}
 
-	fmt.Printf("✅ Removed environment: %s\n", name)
+	fmt.Printf("Removed environment: %s\n", name)
+	return nil
 }

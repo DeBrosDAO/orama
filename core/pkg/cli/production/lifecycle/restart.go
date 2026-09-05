@@ -2,7 +2,7 @@ package lifecycle
 
 import (
 	"fmt"
-	"os"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os/exec"
 	"time"
 
@@ -10,28 +10,25 @@ import (
 )
 
 // HandleRestart restarts all production services
-func HandleRestart() {
-	HandleRestartWithFlags(false)
+func HandleRestart() error {
+	return HandleRestartWithFlags(false)
 }
 
 // HandleRestartForce restarts all production services, bypassing quorum checks
-func HandleRestartForce() {
-	HandleRestartWithFlags(true)
+func HandleRestartForce() error {
+	return HandleRestartWithFlags(true)
 }
 
 // HandleRestartWithFlags restarts all production services with optional force flag
-func HandleRestartWithFlags(force bool) {
-	if os.Geteuid() != 0 {
-		fmt.Fprintf(os.Stderr, "Error: Production commands must be run as root (use sudo)\n")
-		os.Exit(1)
+func HandleRestartWithFlags(force bool) error {
+	if err := clierr.RequireRoot("restarting the node services"); err != nil {
+		return err
 	}
 
 	// Pre-flight: check if restarting this node would temporarily break quorum
 	if !force {
 		if warning := checkQuorumSafety(); warning != "" {
-			fmt.Fprintf(os.Stderr, "\nWARNING: %s\n", warning)
-			fmt.Fprintf(os.Stderr, "Use 'orama node restart --force' to proceed anyway.\n\n")
-			os.Exit(1)
+			return clierr.Conflict("%s\n  Use 'orama node restart --force' to proceed anyway.", warning)
 		}
 	}
 
@@ -40,7 +37,7 @@ func HandleRestartWithFlags(force bool) {
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
 		fmt.Printf("  No Orama services found\n")
-		return
+		return nil
 	}
 
 	// The TLS/DNS frontend (caddy, coredns) is NOT part of GetProductionServices,
@@ -98,12 +95,10 @@ func HandleRestartWithFlags(force bool) {
 	// Check port availability before restarting
 	ports, err := utils.CollectPortsForServices(services, false)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("Error: %v", err)
 	}
 	if err := utils.EnsurePortsAvailable("prod restart", ports); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("Error: %v", err)
 	}
 
 	// Start all services in dependency order
@@ -112,7 +107,7 @@ func HandleRestartWithFlags(force bool) {
 
 	// Bring the TLS/DNS frontend back up (see capture above). Done last so the
 	// embedded gateway is already started; caddy's ExecStartPre then clears its
-	// localhost:6001/health wait quickly instead of timing out.
+	// index gateway /health wait quickly instead of timing out.
 	for _, svc := range frontendToRestore {
 		if err := exec.Command("systemctl", "start", svc).Run(); err != nil {
 			fmt.Printf("  Warning: Failed to start %s: %v\n", svc, err)
@@ -122,6 +117,7 @@ func HandleRestartWithFlags(force bool) {
 	}
 
 	fmt.Printf("\n All services restarted\n")
+	return nil
 }
 
 // frontendServices are the TLS/DNS units that sit in front of the node and are

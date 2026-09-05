@@ -345,10 +345,10 @@ func TestCreateDatabase_InvalidName(t *testing.T) {
 	handler.basePath = tmpDir
 
 	invalidNames := []string{
-		"test db",       // Space
-		"test@db",       // Special char
-		"test/db",       // Slash
-		"",              // Empty
+		"test db",                // Space
+		"test@db",                // Special char
+		"test/db",                // Slash
+		"",                       // Empty
 		strings.Repeat("a", 100), // Too long
 	}
 
@@ -511,10 +511,10 @@ func TestIsValidDatabaseName(t *testing.T) {
 		{"valid-db", true},
 		{"ValidDB123", true},
 		{"test_db_123", true},
-		{"test db", false},      // Space
-		{"test@db", false},      // Special char
-		{"test/db", false},      // Slash
-		{"", false},             // Empty
+		{"test db", false},               // Space
+		{"test@db", false},               // Special char
+		{"test/db", false},               // Slash
+		{"", false},                      // Empty
 		{strings.Repeat("a", 65), false}, // Too long
 	}
 

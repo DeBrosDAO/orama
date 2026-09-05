@@ -101,10 +101,10 @@ func (c *HetznerClient) delete(path string) error {
 
 // HetznerServer represents a Hetzner Cloud server.
 type HetznerServer struct {
-	ID         int64            `json:"id"`
-	Name       string           `json:"name"`
-	Status     string           `json:"status"` // initializing, running, off, ...
-	PublicNet  HetznerPublicNet `json:"public_net"`
+	ID         int64             `json:"id"`
+	Name       string            `json:"name"`
+	Status     string            `json:"status"` // initializing, running, off, ...
+	PublicNet  HetznerPublicNet  `json:"public_net"`
 	Labels     map[string]string `json:"labels"`
 	ServerType struct {
 		Name string `json:"name"`
@@ -120,11 +120,11 @@ type HetznerPublicNet struct {
 
 // HetznerFloatingIP represents a Hetzner floating IP.
 type HetznerFloatingIP struct {
-	ID          int64             `json:"id"`
-	IP          string            `json:"ip"`
-	Server      *int64            `json:"server"` // nil if unassigned
-	Labels      map[string]string `json:"labels"`
-	Description string            `json:"description"`
+	ID           int64             `json:"id"`
+	IP           string            `json:"ip"`
+	Server       *int64            `json:"server"` // nil if unassigned
+	Labels       map[string]string `json:"labels"`
+	Description  string            `json:"description"`
 	HomeLocation struct {
 		Name string `json:"name"`
 	} `json:"home_location"`
@@ -140,9 +140,9 @@ type HetznerSSHKey struct {
 
 // HetznerFirewall represents a Hetzner firewall.
 type HetznerFirewall struct {
-	ID    int64             `json:"id"`
-	Name  string            `json:"name"`
-	Rules []HetznerFWRule   `json:"rules"`
+	ID     int64             `json:"id"`
+	Name   string            `json:"name"`
+	Rules  []HetznerFWRule   `json:"rules"`
 	Labels map[string]string `json:"labels"`
 }
 
@@ -263,10 +263,10 @@ func (c *HetznerClient) WaitForServer(id int64, timeout time.Duration) (*Hetzner
 // CreateFloatingIP creates a new floating IP.
 func (c *HetznerClient) CreateFloatingIP(location, description string, labels map[string]string) (*HetznerFloatingIP, error) {
 	payload := map[string]interface{}{
-		"type":         "ipv4",
+		"type":          "ipv4",
 		"home_location": location,
-		"description":  description,
-		"labels":       labels,
+		"description":   description,
+		"labels":        labels,
 	}
 
 	body, err := c.post("/floating_ips", payload)
@@ -452,15 +452,15 @@ type HetznerLocation struct {
 
 // HetznerServerType represents a Hetzner server type with pricing.
 type HetznerServerType struct {
-	ID          int64   `json:"id"`
-	Name        string  `json:"name"`        // e.g., "cx22", "cx23"
-	Description string  `json:"description"` // e.g., "CX23"
-	Cores       int     `json:"cores"`
-	Memory      float64 `json:"memory"` // GB
-	Disk        int     `json:"disk"`   // GB
-	Architecture string `json:"architecture"`
-	Deprecation *struct {
-		Announced    string `json:"announced"`
+	ID           int64   `json:"id"`
+	Name         string  `json:"name"`        // e.g., "cx22", "cx23"
+	Description  string  `json:"description"` // e.g., "CX23"
+	Cores        int     `json:"cores"`
+	Memory       float64 `json:"memory"` // GB
+	Disk         int     `json:"disk"`   // GB
+	Architecture string  `json:"architecture"`
+	Deprecation  *struct {
+		Announced        string `json:"announced"`
 		UnavailableAfter string `json:"unavailable_after"`
 	} `json:"deprecation"` // nil = not deprecated
 	Prices []struct {

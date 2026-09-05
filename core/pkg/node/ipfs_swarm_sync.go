@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -19,7 +20,7 @@ import (
 // Uses `ipfs swarm connect` for immediate connectivity without requiring
 // config file changes or IPFS restarts.
 func (n *Node) syncIPFSSwarmPeers(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
 
@@ -35,7 +36,7 @@ func (n *Node) syncIPFSSwarmPeers(ctx context.Context) {
 	}
 
 	// Query all peers with IPFS peer IDs from RQLite
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 	rows, err := db.QueryContext(ctx,
 		"SELECT wg_ip, ipfs_peer_id FROM wireguard_peers WHERE ipfs_peer_id != '' AND wg_ip != ?",
 		myWGIP)
@@ -73,7 +74,7 @@ func (n *Node) syncIPFSSwarmPeers(ctx context.Context) {
 			continue // already connected
 		}
 
-		multiaddr := fmt.Sprintf("/ip4/%s/tcp/4101/p2p/%s", p.wgIP, p.peerID)
+		multiaddr := fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", p.wgIP, constants.IPFSSwarmPort, p.peerID)
 		if err := ipfsSwarmConnect(multiaddr); err != nil {
 			n.logger.ComponentWarn(logging.ComponentNode, "Failed to connect IPFS swarm peer",
 				zap.String("peer", p.peerID[:12]+"..."),
@@ -99,7 +100,7 @@ func getConnectedIPFSPeers() map[string]bool {
 	peers := make(map[string]bool)
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post("http://localhost:4501/api/v0/swarm/peers", "", nil)
+	resp, err := client.Post(constants.LocalIPFSAPIURL()+"/api/v0/swarm/peers", "", nil)
 	if err != nil {
 		return peers
 	}
@@ -126,7 +127,7 @@ func getConnectedIPFSPeers() map[string]bool {
 // ipfsSwarmConnect connects to an IPFS peer via the HTTP API
 func ipfsSwarmConnect(multiaddr string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
-	apiURL := fmt.Sprintf("http://localhost:4501/api/v0/swarm/connect?arg=%s", url.QueryEscape(multiaddr))
+	apiURL := fmt.Sprintf("%s/api/v0/swarm/connect?arg=%s", constants.LocalIPFSAPIURL(), url.QueryEscape(multiaddr))
 	resp, err := client.Post(apiURL, "", nil)
 	if err != nil {
 		return err
@@ -157,30 +158,41 @@ func getLocalWGIP() string {
 	return ""
 }
 
-// startIPFSSwarmSyncLoop periodically syncs IPFS swarm connections with cluster peers
-func (n *Node) startIPFSSwarmSyncLoop(ctx context.Context) {
-	// Initial sync after a short delay (give IPFS time to start)
-	go func() {
+// IPFS swarm sync cadence. The first sync is delayed so the local IPFS daemon
+// has finished opening its API before the node asks it to dial peers.
+const (
+	ipfsSwarmSyncWarmup   = 30 * time.Second
+	ipfsSwarmSyncInterval = 60 * time.Second
+)
+
+// startIPFSSwarmSync makes sure the swarm sync loop is running. The boot
+// supervisor may call it again after a failure; only the first call starts the
+// loop.
+func (n *Node) startIPFSSwarmSync(ctx context.Context) error {
+	n.ipfsSwarmSyncOnce.Do(func() {
+		go n.ipfsSwarmSyncLoop(ctx)
+		n.logger.ComponentInfo(logging.ComponentNode, "IPFS swarm sync loop started")
+	})
+	return nil
+}
+
+func (n *Node) ipfsSwarmSyncLoop(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(ipfsSwarmSyncWarmup):
+	}
+
+	n.syncIPFSSwarmPeers(ctx)
+
+	ticker := time.NewTicker(ipfsSwarmSyncInterval)
+	defer ticker.Stop()
+	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(30 * time.Second):
+		case <-ticker.C:
+			n.syncIPFSSwarmPeers(ctx)
 		}
-
-		n.syncIPFSSwarmPeers(ctx)
-
-		// Then sync every 60 seconds
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				n.syncIPFSSwarmPeers(ctx)
-			}
-		}
-	}()
-
-	n.logger.ComponentInfo(logging.ComponentNode, "IPFS swarm sync loop started")
+	}
 }

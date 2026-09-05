@@ -18,9 +18,9 @@ type HealthResponse struct {
 
 // StatusResponse is returned for GET /v1/vault/status.
 type StatusResponse struct {
-	Guardians  int `json:"guardians"`   // Total guardian nodes
-	Healthy    int `json:"healthy"`     // Reachable guardians
-	Threshold  int `json:"threshold"`   // Read quorum (K)
+	Guardians   int `json:"guardians"`    // Total guardian nodes
+	Healthy     int `json:"healthy"`      // Reachable guardians
+	Threshold   int `json:"threshold"`    // Read quorum (K)
 	WriteQuorum int `json:"write_quorum"` // Write quorum (W)
 }
 

@@ -85,7 +85,10 @@ func TestGenerateSystemdUnit_shape(t *testing.T) {
 	for _, want := range []string{
 		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
 		"User=orama",
-		"Restart=on-failure",
+		// Always, not on-failure: the router is reconciled by orama-node, and
+		// on-failure leaves it down after a clean exit.
+		"Restart=always",
+		"StartLimitIntervalSec=0",
 		"EnvironmentFile=-/opt/orama/.orama/data/sni-router.env",
 		// ExecStart must point at the ABSOLUTE config path so it doesn't
 		// depend on WorkingDirectory/$HOME resolution at runtime.

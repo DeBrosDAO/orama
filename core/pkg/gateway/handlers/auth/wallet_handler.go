@@ -1,9 +1,7 @@
 package auth
 
 import (
-	"encoding/json"
 	"net/http"
-	"strings"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
@@ -56,65 +54,3 @@ func (h *Handlers) WhoamiHandler(w http.ResponseWriter, r *http.Request) {
 		"namespace":     ns,
 	})
 }
-
-// RegisterHandler registers a new application/client after wallet signature verification.
-// This allows wallets to register applications and obtain client credentials.
-//
-// POST /v1/auth/register
-// Request body: RegisterRequest
-// Response: { "client_id", "app": { ... }, "signature_verified" }
-func (h *Handlers) RegisterHandler(w http.ResponseWriter, r *http.Request) {
-	if h.authService == nil {
-		writeError(w, http.StatusServiceUnavailable, "auth service not initialized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // 64KB
-	var req RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-	if strings.TrimSpace(req.Wallet) == "" || strings.TrimSpace(req.Nonce) == "" || strings.TrimSpace(req.Signature) == "" {
-		writeError(w, http.StatusBadRequest, "wallet, nonce and signature are required")
-		return
-	}
-
-	ctx := r.Context()
-	verified, err := h.authService.VerifySignature(ctx, req.Wallet, req.Nonce, req.Signature, req.ChainType)
-	if err != nil || !verified {
-		writeError(w, http.StatusUnauthorized, "signature verification failed")
-		return
-	}
-
-	// Mark nonce used
-	nsID, _ := h.resolveNamespace(ctx, req.Namespace)
-	h.markNonceUsed(ctx, nsID, strings.ToLower(req.Wallet), req.Nonce)
-
-	// In a real app we'd derive the public key from the signature, but for simplicity here
-	// we just use a placeholder or expect it in the request if needed.
-	// For Ethereum, we can recover it.
-	publicKey := "recovered-pk"
-
-	appID, err := h.authService.RegisterApp(ctx, req.Wallet, req.Namespace, req.Name, publicKey)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"client_id": appID,
-		"app": map[string]any{
-			"app_id":    appID,
-			"name":      req.Name,
-			"namespace": req.Namespace,
-			"wallet":    strings.ToLower(req.Wallet),
-		},
-		"signature_verified": true,
-	})
-}
-

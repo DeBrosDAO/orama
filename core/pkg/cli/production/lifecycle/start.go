@@ -2,18 +2,26 @@ package lifecycle
 
 import (
 	"fmt"
-	"os"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os/exec"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/utils"
+
+	"context"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
+
+	"github.com/DeBrosOfficial/network/pkg/nodehealth"
 )
 
 // HandleStart starts all production services
-func HandleStart() {
-	if os.Geteuid() != 0 {
-		fmt.Fprintf(os.Stderr, "❌ Production commands must be run as root (use sudo)\n")
-		os.Exit(1)
+// startReadyBudget is how long the node has to come up after a start.
+const startReadyBudget = 3 * time.Minute
+
+func HandleStart() error {
+	if err := clierr.RequireRoot("starting the node services"); err != nil {
+		return err
 	}
 
 	fmt.Printf("Starting all Orama production services...\n")
@@ -21,7 +29,7 @@ func HandleStart() {
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
 		fmt.Printf("  ⚠️  No Orama services found\n")
-		return
+		return nil
 	}
 
 	// Reset failed state for all services before starting
@@ -67,18 +75,16 @@ func HandleStart() {
 
 	if len(inactive) == 0 {
 		fmt.Printf("\n✅ All services already running\n")
-		return
+		return nil
 	}
 
 	// Check port availability for services we're about to start
 	ports, err := utils.CollectPortsForServices(inactive, false)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("%v", err)
 	}
 	if err := utils.EnsurePortsAvailable("prod start", ports); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("%v", err)
 	}
 
 	// Re-enable inactive services first (in case they were disabled by 'orama node stop')
@@ -96,9 +102,17 @@ func HandleStart() {
 	// Start services in dependency order (namespace: rqlite → olric → gateway)
 	utils.StartServicesOrdered(inactive, "start")
 
-	// Give services more time to fully initialize before verification
-	fmt.Printf("  ⏳ Waiting for services to initialize...\n")
-	time.Sleep(5 * time.Second)
+	// Wait for the node to be serving, not for a fixed five seconds. A sleep
+	// cannot tell a node that came up in two seconds from one that never came
+	// up, and "✅ All services started" printed either way.
+	fmt.Printf("  ⏳ Waiting for the node to come up...\n")
+	if err := nodehealth.WaitReady(context.Background(), nodehealth.Target{
+		RQLiteBase:  fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort),
+		GatewayBase: fmt.Sprintf("http://localhost:%d", constants.GatewayAPIPort),
+	}, nodehealth.Options{Budget: startReadyBudget}); err != nil {
+		return clierr.Failure("Services were started but the node is not serving: %v", err)
+	}
 
-	fmt.Printf("\n✅ All services started\n")
+	fmt.Printf("\n✅ All services started and the node is serving\n")
+	return nil
 }

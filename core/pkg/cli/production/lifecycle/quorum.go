@@ -6,132 +6,208 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/cli/utils"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
-// checkQuorumSafety queries local RQLite to determine if stopping this node
-// would break quorum. Returns a warning message if unsafe, empty string if safe.
+// indexRQLiteUnit is the systemd unit backing the index RQLite on this node.
+const indexRQLiteUnit = "orama-namespace-rqlite@index"
+
+// quorumHTTPTimeout bounds each control-plane read. Short, because this runs
+// interactively in front of a stop and an operator waiting on a hung request is
+// an operator who reaches for --force.
+const quorumHTTPTimeout = 5 * time.Second
+
+// checkQuorumSafety reports why stopping this node would be unsafe, or "" when
+// it is safe. Callers refuse the operation on a non-empty result unless the
+// operator passed --force.
+//
+// It fails CLOSED. The previous version returned "" — safe — whenever the local
+// RQLite could not be read, which is the one situation where the answer is
+// genuinely unknown. Combined with a stale port that made every read fail, the
+// guard silently approved stopping the leader or two of three voters. A guard
+// whose whole purpose is preventing quorum loss must not treat "I could not
+// look" as "go ahead".
+//
+// The one case that is genuinely safe without a reading: rqlited is not
+// running. Then this node is already contributing nothing to quorum and
+// stopping the rest of the stack cannot remove a voter the cluster still counts
+// on. That is checked explicitly rather than inferred from a failed request.
 func checkQuorumSafety() string {
-	// Query local RQLite status to check if we're a voter
-	status, err := getLocalRQLiteStatus()
-	if err != nil {
-		// RQLite may not be running — safe to stop
-		return ""
+	status, statusErr := localRQLiteStatus()
+	in := quorumInputs{status: status, statusErr: statusErr}
+	if statusErr != nil {
+		active, checkErr := serviceActive(indexRQLiteUnit)
+		in.rqliteRunning = checkErr != nil || active
 	}
-
-	raftState, _ := status["state"].(string)
-	isVoter, _ := status["voter"].(bool)
-
-	// If we're not a voter, stopping is always safe for quorum
-	if !isVoter {
-		return ""
+	if statusErr == nil && status.Store.Raft.Voter {
+		in.nodes, in.nodesErr = localRQLiteNodes()
 	}
+	return evaluateQuorumSafety(in)
+}
 
-	// Query /nodes to count reachable voters
-	nodes, err := getLocalRQLiteNodes()
-	if err != nil {
-		return fmt.Sprintf("Cannot verify quorum safety (failed to query nodes: %v). This node is a %s voter.", err, raftState)
-	}
+// quorumInputs is everything the decision depends on, gathered separately so
+// the policy below can be exercised without a live cluster.
+type quorumInputs struct {
+	status    *rqlite.RQLiteStatus
+	statusErr error
+	nodes     []rqliteNode
+	nodesErr  error
+	// rqliteRunning is only consulted when statusErr != nil. A failed check is
+	// itself treated as "running", so an unreadable systemd never becomes a
+	// second way to accidentally approve a stop.
+	rqliteRunning bool
+}
 
-	reachableVoters := 0
-	totalVoters := 0
-	for _, node := range nodes {
-		voter, _ := node["voter"].(bool)
-		reachable, _ := node["reachable"].(bool)
-		if voter {
-			totalVoters++
-			if reachable {
-				reachableVoters++
-			}
+// evaluateQuorumSafety returns why stopping this node is unsafe, or "" when it
+// is safe.
+func evaluateQuorumSafety(in quorumInputs) string {
+	if in.statusErr != nil {
+		if !in.rqliteRunning {
+			// rqlited is down, so this node already contributes nothing to
+			// quorum and stopping the rest of the stack removes no voter the
+			// cluster still counts on.
+			return ""
 		}
+		return fmt.Sprintf(
+			"Cannot verify quorum safety: %s is running but its status could not be read (%v). "+
+				"Stopping a voter blind can leave the cluster without quorum. "+
+				"Check `orama node status`, or re-run with --force if you know this node is not a voter.",
+			indexRQLiteUnit, in.statusErr)
 	}
 
-	// After removing this voter, remaining voters must form quorum:
-	// quorum = (totalVoters / 2) + 1, so we need reachableVoters - 1 >= quorum
+	raft := in.status.Store.Raft
+
+	// rqlite reports the node's own voter flag; a non-voter never counts toward
+	// quorum, so stopping it is always safe.
+	if !raft.Voter {
+		return ""
+	}
+
+	if in.nodesErr != nil {
+		return fmt.Sprintf(
+			"Cannot verify quorum safety: this node is a %s VOTER but the cluster member list could not be read (%v). "+
+				"Re-run with --force only if you have confirmed the remaining voters can still form quorum.",
+			raft.State, in.nodesErr)
+	}
+
+	reachableVoters, totalVoters := countVoters(in.nodes)
+	if totalVoters == 0 {
+		return fmt.Sprintf(
+			"Cannot verify quorum safety: this node is a %s VOTER but the cluster member list reported no voters at all. "+
+				"That is not a state a healthy cluster produces; investigate before stopping anything.",
+			raft.State)
+	}
+
+	// This node answered /status and reports itself a voter, so it is one of the
+	// reachable voters counted above.
+	//
+	// Quorum is a majority of the CONFIGURED voters, and stopping a node does
+	// not remove it from the raft configuration - it just makes it unreachable.
+	// The previous version computed the threshold over totalVoters-1, as though
+	// the node had been removed, which under-counted what the cluster needs: on
+	// two voters it concluded that stopping one left "1 of 1, need 1" and
+	// allowed it, when raft still requires 2 of 2 and the survivor cannot elect
+	// a leader. Membership only shrinks through an explicit remove, which is
+	// `orama node decommission`, not a stop.
 	remainingVoters := reachableVoters - 1
-	quorumNeeded := (totalVoters-1)/2 + 1
+	quorumNeeded := totalVoters/2 + 1
 
 	if remainingVoters < quorumNeeded {
-		role := raftState
+		role := raft.State
 		if role == "Leader" {
 			role = "the LEADER"
 		}
 		return fmt.Sprintf(
-			"Stopping this node (%s, %s) would break RQLite quorum (%d/%d reachable voters would remain, need %d).",
-			role, "voter", remainingVoters, totalVoters-1, quorumNeeded)
+			"Stopping this node (%s, voter) would break RQLite quorum: %d of %d configured voters would remain reachable, need %d.",
+			role, remainingVoters, totalVoters, quorumNeeded)
 	}
 
-	if raftState == "Leader" {
-		// Not quorum-breaking but warn about leadership
-		fmt.Printf("  Note: This node is the RQLite leader. Leadership will transfer on shutdown.\n")
+	if raft.State == "Leader" {
+		fmt.Printf("  Note: this node is the RQLite leader; leadership transfers on shutdown.\n")
 	}
+	fmt.Printf("  Quorum check: %d/%d voters reachable, %d would remain (need %d).\n",
+		reachableVoters, totalVoters, remainingVoters, quorumNeeded)
 
 	return ""
 }
 
-// getLocalRQLiteStatus queries local RQLite /status and extracts raft info
-func getLocalRQLiteStatus() (map[string]interface{}, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:5001/status")
-	if err != nil {
-		return nil, err
+// countVoters returns how many cluster members are voters and how many of those
+// are currently reachable.
+func countVoters(nodes []rqliteNode) (reachable, total int) {
+	for _, n := range nodes {
+		if !n.Voter {
+			continue
+		}
+		total++
+		if n.Reachable {
+			reachable++
+		}
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var status map[string]interface{}
-	if err := json.Unmarshal(body, &status); err != nil {
-		return nil, err
-	}
-
-	// Extract raft state from nested structure
-	store, _ := status["store"].(map[string]interface{})
-	if store == nil {
-		return nil, fmt.Errorf("no store in status")
-	}
-	raft, _ := store["raft"].(map[string]interface{})
-	if raft == nil {
-		return nil, fmt.Errorf("no raft in status")
-	}
-
-	// Add voter status from the node info
-	result := map[string]interface{}{
-		"state": raft["state"],
-		"voter": true, // Local node queries /status which doesn't include voter flag, assume voter if we got here
-	}
-
-	return result, nil
+	return reachable, total
 }
 
-// getLocalRQLiteNodes queries local RQLite /nodes?nonvoters to get cluster members
-func getLocalRQLiteNodes() ([]map[string]interface{}, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:5001/nodes?nonvoters&timeout=3s")
+// Indirection so the policy above can be tested against a fake server and a
+// fake systemd, without either being reachable.
+var (
+	rqliteBaseURL = constants.LocalRQLiteURL
+	serviceActive = utils.IsServiceActive
+)
+
+// localRQLiteStatus reads the index RQLite's own view of itself.
+func localRQLiteStatus() (*rqlite.RQLiteStatus, error) {
+	body, err := quorumGet(rqliteBaseURL() + "/status")
+	if err != nil {
+		return nil, err
+	}
+	var status rqlite.RQLiteStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return nil, fmt.Errorf("decode status: %w", err)
+	}
+	if status.Store.Raft.State == "" {
+		return nil, fmt.Errorf("status carried no raft state")
+	}
+	return &status, nil
+}
+
+// rqliteNode is one member of the cluster as reported by /nodes.
+type rqliteNode struct {
+	Voter     bool `json:"voter"`
+	Reachable bool `json:"reachable"`
+}
+
+// localRQLiteNodes reads cluster membership, including non-voters so the voter
+// total is not inflated by them.
+func localRQLiteNodes() ([]rqliteNode, error) {
+	body, err := quorumGet(rqliteBaseURL() + "/nodes?nonvoters&timeout=3s")
+	if err != nil {
+		return nil, err
+	}
+	// rqlite returns node_id -> node_info.
+	var byID map[string]rqliteNode
+	if err := json.Unmarshal(body, &byID); err != nil {
+		return nil, fmt.Errorf("decode nodes: %w", err)
+	}
+	nodes := make([]rqliteNode, 0, len(byID))
+	for _, n := range byID {
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
+}
+
+func quorumGet(url string) ([]byte, error) {
+	client := &http.Client{Timeout: quorumHTTPTimeout}
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-
-	// RQLite /nodes returns a map of node_id -> node_info
-	var nodesMap map[string]map[string]interface{}
-	if err := json.Unmarshal(body, &nodesMap); err != nil {
-		return nil, err
-	}
-
-	var nodes []map[string]interface{}
-	for _, node := range nodesMap {
-		nodes = append(nodes, node)
-	}
-
-	return nodes, nil
+	return io.ReadAll(resp.Body)
 }
 
 // containsService checks if a service name exists in the service list

@@ -217,17 +217,17 @@ var wasmCallsLogInfo = []byte{
 	0x09,                   // section size = 9
 	0x02,                   // 2 types
 	0x60, 0x02, 0x7f, 0x7f, // type 0: func (i32, i32) -> ...
-	0x00,                   // type 0 results = 0
-	0x60, 0x00,             // type 1: func () -> ...
-	0x00,                   // type 1 results = 0
+	0x00,       // type 0 results = 0
+	0x60, 0x00, // type 1: func () -> ...
+	0x00, // type 1 results = 0
 
 	// Import section (id=2) — body=16 bytes
-	0x02,                                                       // section id
-	0x10,                                                       // section size = 16
-	0x01,                                                       // 1 import
-	0x03, 0x65, 0x6e, 0x76,                                     // module = "env" (3 bytes)
-	0x08, 0x6c, 0x6f, 0x67, 0x5f, 0x69, 0x6e, 0x66, 0x6f,       // fn = "log_info" (8 bytes)
-	0x00, 0x00,                                                 // kind=func, type idx=0
+	0x02,                   // section id
+	0x10,                   // section size = 16
+	0x01,                   // 1 import
+	0x03, 0x65, 0x6e, 0x76, // module = "env" (3 bytes)
+	0x08, 0x6c, 0x6f, 0x67, 0x5f, 0x69, 0x6e, 0x66, 0x6f, // fn = "log_info" (8 bytes)
+	0x00, 0x00, // kind=func, type idx=0
 
 	// Function section (id=3)
 	0x03,       // section id
@@ -244,18 +244,18 @@ var wasmCallsLogInfo = []byte{
 	0x13,                                     // section size = 19
 	0x02,                                     // 2 exports
 	0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, // "memory" (6 bytes)
-	0x02, 0x00,                               // kind=memory, idx=0
+	0x02, 0x00, // kind=memory, idx=0
 	0x06, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, // "_start" (6 bytes)
-	0x00, 0x01,                               // kind=func, idx=1 (import is func idx 0)
+	0x00, 0x01, // kind=func, idx=1 (import is func idx 0)
 
 	// Code section (id=10)
-	0x0a, // section id
-	0x0a, // section size = 10
-	0x01, // 1 function body
-	0x08, // body size = 8
-	0x00, // 0 local groups
+	0x0a,       // section id
+	0x0a,       // section size = 10
+	0x01,       // 1 function body
+	0x08,       // body size = 8
+	0x00,       // 0 local groups
 	0x41, 0x00, // i32.const 0
 	0x41, 0x00, // i32.const 0
 	0x10, 0x00, // call 0 (calls log_info import)
-	0x0b,       // end
+	0x0b, // end
 }

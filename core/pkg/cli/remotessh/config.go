@@ -8,8 +8,14 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
-// FindNodesConf searches for the nodes.conf file
-// in common locations relative to the current directory or project root.
+// FindNodesConf locates nodes.conf, the legacy node inventory.
+//
+// The inventory of record is the network API, read through
+// noderesolver.ResolveNodes; nodes.conf is only what that falls back to when
+// the API is unreachable or the operator has not logged in yet. Its stable
+// home is ~/.orama/nodes.conf. The three relative paths are a source-tree
+// convenience and depend on the working directory, so no command may resolve
+// nodes through them by default.
 func FindNodesConf() string {
 	candidates := []string{
 		"scripts/nodes.conf",
@@ -33,10 +39,14 @@ func FindNodesConf() string {
 
 // LoadEnvNodes loads all nodes for a given environment from nodes.conf.
 // SSHKey fields are NOT set — caller must call PrepareNodeKeys() after this.
+//
+// Call noderesolver.ResolveNodes instead: it asks the network first and calls
+// this only as its fallback. Commands that read nodes.conf directly saw a
+// different fleet than the ones that did not.
 func LoadEnvNodes(env string) ([]inspector.Node, error) {
 	confPath := FindNodesConf()
 	if confPath == "" {
-		return nil, fmt.Errorf("nodes.conf not found (checked scripts/, ../scripts/, network/scripts/)")
+		return nil, fmt.Errorf("nodes.conf not found (checked ~/.orama/nodes.conf, scripts/, ../scripts/, network/scripts/)")
 	}
 
 	nodes, err := inspector.LoadNodes(confPath)

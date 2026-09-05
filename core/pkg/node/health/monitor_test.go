@@ -157,7 +157,7 @@ func TestRingNeighbors_KLargerThanRing(t *testing.T) {
 // ---------------------------------------------------------------
 
 func TestStateTransitions(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:             "self",
 		ProbeInterval:      time.Second,
 		Neighbors:          3,
@@ -221,7 +221,7 @@ func TestProbe_Healthy(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:       "self",
 		ProbeTimeout: 2 * time.Second,
 	})
@@ -247,7 +247,7 @@ func TestProbe_Healthy(t *testing.T) {
 }
 
 func TestProbe_Unhealthy(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:       "self",
 		ProbeTimeout: 100 * time.Millisecond,
 	})
@@ -265,7 +265,7 @@ func TestProbe_Unhealthy(t *testing.T) {
 // ---------------------------------------------------------------
 
 func TestPruneStaleState(t *testing.T) {
-	m := NewMonitor(Config{NodeID: "self"})
+	m := newTestMonitor(t, Config{NodeID: "self"})
 
 	m.mu.Lock()
 	m.peers["A"] = &peerState{status: "healthy"}
@@ -299,7 +299,7 @@ func TestPruneStaleState(t *testing.T) {
 func TestOnNodeDead_Callback(t *testing.T) {
 	var called atomic.Int32
 
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:             "self",
 		Neighbors:          3,
 		StartupGracePeriod: 1 * time.Millisecond,
@@ -326,7 +326,7 @@ func TestOnNodeDead_Callback(t *testing.T) {
 // ---------------------------------------------------------------
 
 func TestStartupGrace_PreventsDead(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:             "self",
 		Neighbors:          3,
 		StartupGracePeriod: 1 * time.Hour, // very long grace
@@ -350,7 +350,7 @@ func TestStartupGrace_PreventsDead(t *testing.T) {
 }
 
 func TestStartupGrace_AllowsDeadAfterExpiry(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:             "self",
 		Neighbors:          3,
 		StartupGracePeriod: 1 * time.Millisecond,
@@ -386,8 +386,8 @@ func (m *mockMetadataReader) GetPeerLifecycleState(nodeID string) (string, time.
 }
 
 func TestProbeNode_MaintenanceCountsHealthy(t *testing.T) {
-	m := NewMonitor(Config{
-		NodeID:   "self",
+	m := newTestMonitor(t, Config{
+		NodeID: "self",
 		MetadataReader: &mockMetadataReader{
 			state:    "maintenance",
 			lastSeen: time.Now(),
@@ -403,8 +403,8 @@ func TestProbeNode_MaintenanceCountsHealthy(t *testing.T) {
 }
 
 func TestProbeNode_RecentActiveSkipsHTTP(t *testing.T) {
-	m := NewMonitor(Config{
-		NodeID:   "self",
+	m := newTestMonitor(t, Config{
+		NodeID: "self",
 		MetadataReader: &mockMetadataReader{
 			state:    "active",
 			lastSeen: time.Now(),
@@ -421,7 +421,7 @@ func TestProbeNode_RecentActiveSkipsHTTP(t *testing.T) {
 }
 
 func TestProbeNode_StaleMetadataFallsToHTTP(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:       "self",
 		ProbeTimeout: 100 * time.Millisecond,
 		MetadataReader: &mockMetadataReader{
@@ -439,7 +439,7 @@ func TestProbeNode_StaleMetadataFallsToHTTP(t *testing.T) {
 }
 
 func TestProbeNode_UnknownPeerFallsToHTTP(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:       "self",
 		ProbeTimeout: 100 * time.Millisecond,
 		MetadataReader: &mockMetadataReader{
@@ -460,7 +460,7 @@ func TestProbeNode_NoMetadataReader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:         "self",
 		ProbeTimeout:   2 * time.Second,
 		MetadataReader: nil, // no metadata reader
@@ -479,7 +479,7 @@ func TestProbeNode_NoMetadataReader(t *testing.T) {
 // ---------------------------------------------------------------
 
 func TestRecoveryCallback_InvokedWithoutLock(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:             "self",
 		Neighbors:          3,
 		StartupGracePeriod: 1 * time.Millisecond,
@@ -527,7 +527,7 @@ func TestRecoveryCallback_InvokedWithoutLock(t *testing.T) {
 // ---------------------------------------------------------------
 
 func TestOnNodeSuspect_Callback(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:             "self",
 		Neighbors:          3,
 		StartupGracePeriod: 1 * time.Millisecond,
@@ -559,7 +559,7 @@ func TestOnNodeSuspect_Callback(t *testing.T) {
 }
 
 func TestOnNodeSuspect_DoesNotFireOnSubsequentMisses(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:             "self",
 		Neighbors:          3,
 		StartupGracePeriod: 1 * time.Millisecond,
@@ -592,7 +592,7 @@ func TestOnNodeSuspect_DoesNotFireOnSubsequentMisses(t *testing.T) {
 }
 
 func TestRecoveredFromSuspect_Callback(t *testing.T) {
-	m := NewMonitor(Config{
+	m := newTestMonitor(t, Config{
 		NodeID:             "self",
 		Neighbors:          3,
 		StartupGracePeriod: 1 * time.Millisecond,
@@ -631,4 +631,43 @@ func TestRecoveredFromSuspect_Callback(t *testing.T) {
 		t.Fatal("expected healthy after recovery from suspect")
 	}
 	m.mu.Unlock()
+}
+
+// newTestMonitor builds a Monitor with a valid ProbePort so each test states
+// only the field it exercises.
+func newTestMonitor(t *testing.T, cfg Config) *Monitor {
+	t.Helper()
+	if cfg.ProbePort == 0 {
+		cfg.ProbePort = 10104
+	}
+	m, err := NewMonitor(cfg)
+	if err != nil {
+		t.Fatalf("NewMonitor: %v", err)
+	}
+	return m
+}
+
+// The health ring has to keep probing a node the reaper has already flipped to
+// `inactive`. It used to drop out at exactly that moment — the ring window and
+// the reaper window were both two minutes — so no observer could ever
+// accumulate the consecutive misses needed to declare it dead, and
+// HandleDeadNode never fired for the failure it exists to catch.
+func TestRingMembershipWindow_outlivesTheDeadThreshold(t *testing.T) {
+	// The threshold is reached after DefaultDeadAfter consecutive misses,
+	// one per probe interval. The ring must hold a node for longer than that.
+	needed := time.Duration(DefaultDeadAfter) * DefaultProbeInterval
+	if ringMembershipWindow <= needed {
+		t.Fatalf("ringMembershipWindow is %s but reaching the dead threshold takes %s; "+
+			"a node drops out of the ring before it can be declared dead", ringMembershipWindow, needed)
+	}
+}
+
+func TestRingMembershipWindow_outlivesTheInactiveReaper(t *testing.T) {
+	// The reaper flips a silent node to `inactive` after 120s. If the ring
+	// window matches it, the node leaves the ring the moment it goes quiet.
+	const reaperWindow = 2 * time.Minute
+	if ringMembershipWindow <= reaperWindow {
+		t.Fatalf("ringMembershipWindow (%s) must outlive the %s inactive reaper, "+
+			"or a node leaves every ring at the moment it stops heartbeating", ringMembershipWindow, reaperWindow)
+	}
 }

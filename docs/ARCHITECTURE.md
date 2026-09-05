@@ -75,6 +75,420 @@ Reserved namespace names: **`index`** and **`nameserver`**. They are not tenant-
 
 Drive nodes through the `orama` CLI (`orama node …`). Do not `systemctl start` leftover host units (`orama-ipfs`, `orama-olric`, `caddy.service`, `coredns.service`, `wg-quick@wg0`). Those files may still exist on disk for rollback; they are disabled. Inter-node traffic uses the WireGuard overlay (`10.0.0.x`). Rolling upgrades never restart multiple index RQLite voters at once.
 
+**The overlay is not a child of the supervisor.** Install enables two units:
+`orama-node.service` and `orama-namespace-wireguard@index.service`. The mesh
+comes up at boot on its own, so a node whose supervisor cannot start — a bad
+`node.yaml`, a failed config validation, a missing binary — is still reachable
+on `10.0.0.x` for diagnosis. The WireGuard unit is deliberately **not**
+`PartOf=orama-node.service` and its `ExecStop` is a no-op: `PartOf` propagates
+restart, so `orama node restart` used to tear `wg0` down and sever every
+namespace raft and Olric memberlist on the node. Bring the interface down
+explicitly (`wg-quick down wg0`) when that is the actual intent.
+
+Every unit that binds or reaches across the overlay — `rqlite@`, `olric@`,
+`gateway@`, `pubsub@`, `sfu@`, `turn@`, `ipfs@`, `vault@` — is ordered
+`After=orama-namespace-wireguard@index.service`, so a cold boot cannot start
+Olric or the SFU against an address that does not exist yet.
+
+**Unit dependencies express ordering, not lifecycle.** `Requires=` propagates
+stop *and* restart, so it is reserved for the cases where one unit is genuinely
+useless without another. Two qualify: `ipfs-cluster@` and `ipfs-gc@` on
+`ipfs@` — a controller with no daemon has nothing to control, and `ipfs repo gc`
+works through the running daemon's API.
+
+Every other unit `orama-node` manages uses `Wants=` + `After=`. In particular
+`gateway@` no longer
+declares `Requires=` on `rqlite@` and `olric@`: a
+`systemctl restart orama-namespace-rqlite@<ns>` — which the split-brain recovery
+path issues by itself — used to bounce the gateway with it, restarting the
+leader wait, the health monitor, the cluster manager, every reconciler and the
+tenant restore, for a database restart the gateway is built to ride out. The
+gateway waits for rqlite itself (90s, then it exits and systemd restarts it —
+until the gateway starting-state work lands) and reconnects to Olric
+indefinitely in the background (`initializeOlricClientWithRetry`, then
+`startOlricReconnectLoop`) with its cache endpoints returning 503 meanwhile. So
+ordering is all either backend owes it. `olric@` dropped its rqlite dependency entirely: it is an
+in-memory cache with its own memberlist and never reads the database, so the
+only thing that coupling ever did was throw away the node's cache whenever
+rqlite restarted.
+
+**Gateway readiness.** A gateway reports its own start-up state on `/health`
+and `/v1/health`, separately from the health of the things it talks to:
+
+| State | Meaning | HTTP |
+|---|---|---|
+| `starting` | Listening, but the database schema is not yet at the version this binary requires — almost always because the local rqlite has no leader. Retried with backoff for as long as the process lives. | 503 |
+| `ready` | Schema is at the required version; the gateway serves. | 200 |
+| `blocked` | A leader answered and the schema is genuinely *below* what the binary requires. Retrying cannot fix it: migrate the database or roll the binary back. | 503 |
+
+While not `ready` the gateway refuses every request except a short passthrough
+list — `/health`, `/v1/health`, `/status`, `/v1/status`, `/v1/version`,
+`/v1/internal/ping`, `/v1/internal/tls/check` and the ACME challenge path — so a
+caller gets "gateway is starting, waiting for rqlite leader" instead of a
+cryptic SQL error from a handler talking to a leaderless database. That list is
+deliberately not the same as the "no API key needed" list: most of *those*
+endpoints (`/v1/auth/verify`, `/v1/invoke`, `/v1/vault/*`) write to the
+database, and letting them through would defeat the point of `blocked`.
+
+The refusal is issued inside the CORS middleware, so a browser client can read
+the reason rather than seeing an opaque network error. Background work that
+touches the database — the health checker, the health monitor, the namespace
+health loop, peer discovery — waits for `ready` before its first tick.
+
+This replaces a start-up path where the leader wait, the migrations and the
+schema contract were one call whose error the caller logged as a warning and
+carried on from. A namespace whose raft had no leader therefore ended up with
+every gateway serving on an unmigrated database. The two failures are now told
+apart: the transient one is retried, the permanent one refuses to serve.
+
+The per-attempt budgets are `gateway.Config.RQLiteReadyTimeout` (default 20s)
+and `SchemaApplyTimeout` (default 30s). They bound one attempt, not the
+gateway's patience — shortening them makes it notice a recovered leader sooner,
+not give up on one earlier.
+
+Only a genuine version mismatch is `blocked`. A failure to *read* the migration
+tracker — a leader lost mid-check, a context deadline — stays retryable, or a
+200ms blip would latch a namespace out of service until someone restarted it.
+
+The node's namespace-health probe asks each local gateway's `/v1/health` rather
+than dialling its port, so a gateway that is up but `starting` is withdrawn from
+the `ns-<name>` DNS round-robin instead of being sent traffic it cannot serve.
+
+**Unit restart policy.** Every long-running unit orama-node manages uses
+`Restart=always`, `RestartSec=5s` and `StartLimitIntervalSec=0`. Always, because
+`on-failure` leaves a daemon down after a clean exit that was not asked for. No
+start limit, because the boot supervisor reconciles these units and `systemctl
+start` on a rate-limited unit fails with "Start request repeated too quickly"
+until someone runs `reset-failed` — the default limit would turn a transient
+failure into one that needs a human. Retrying forever was already the effective
+behaviour for anything that takes a moment to fail (`RestartSec=5` never trips
+the default five-starts-in-ten-seconds window); it is now deliberate rather than
+accidental, and it also covers the unit that fails *instantly* — a missing
+binary, an unparseable config — which used to reach `failed` within ten seconds.
+Since nothing parks those any more, `orama monitor report` reads the restart
+counter instead: `restartLoopRisk` treats a unit that has restarted repeatedly
+and never reached active as a crash loop, and raises the same critical alert
+`failed` state used to.
+
+### Boot: components, not a sequence
+
+`orama-node` converges its services; it does not start them in a line. Every
+piece of start-up is a **component** with declared dependencies
+(`pkg/node/boot`), and a supervisor runs each one whose dependencies are ready,
+retrying failures with exponential backoff (1s → 60s) instead of exiting.
+
+Components come in two tiers:
+
+| Tier | Components | Needs |
+|---|---|---|
+| **local** | `data-dir`, `wireguard`, `libp2p`, `peer-info`, `monitoring`, `pubsub`, `ipfs-cluster-config`, `storage`, `cluster-discovery`, `rqlite-local`, `nameserver`, `gateway`, `edge-serving`, `edge-aux`, `wireguard-sync`, `ipfs-swarm-sync` | this machine only |
+| **cluster** | `rqlite-cluster`, `dns-registration` | a raft quorum |
+
+`edge-serving` is vault, the optional SNI router and Caddy; `edge-aux` is ntfy
+and the anyone-client. They are separate because `dns-registration` depends on
+the first and not the second: a `dns_nodes` row saying `active` is a promise
+that this node terminates TLS and proxies tenants, so a node whose Caddy never
+started must not advertise itself — while a broken ntfy, which serves no
+traffic, must not take a healthy node out of DNS.
+
+Two components carry health checks, polled every 30s:
+
+- `rqlite-local` — `LocalHealthy`: the local `rqlited` answers `/status` and the
+  connection handle is open. It does *not* require a leader. A failure restarts
+  the unit and reopens the handle, and blocks everything that reads the local
+  replica until it is back.
+- `rqlite-cluster` — `LeaderReachable`: a leader-routed read still succeeds.
+  This is the single component that waits for consensus; it runs
+  `WaitForRaftReady` and the read under short per-attempt budgets, so losing
+  quorum puts it — and only it and its dependents — back into retry.
+
+Because components are reconciled repeatedly, spawning is idempotent: a port
+held by the unit a spawn is about to start is not a conflict (`ensurePortsFree`
+short-circuits on an already-active unit), so a retry after a transient failure
+does not report a port conflict against itself.
+
+That split is what the tiers buy: a node that boots with every peer down still
+brings up WireGuard, IPFS, the local rqlite replica, CoreDNS, the index gateway,
+Caddy, ntfy and its tenants. It announces itself as **degraded** rather than
+active, and returns to active on its own when quorum comes back — with no
+restart, because nothing exited.
+
+The mesh and swarm syncs are deliberately in the local tier even though they
+read cluster tables. Raft runs *over* the mesh, so `loadDesiredWireGuardPeers`
+falls back to this node's own replica and applies peers additively; gating that
+repair on a quorum would make fixing the transport depend on the transport.
+
+`orama-node.service` carries `StartLimitIntervalSec=0` and `TimeoutStopSec=60`.
+The process no longer exits because the cluster is unreachable, so a restart now
+means a real crash and systemd should keep restarting rather than park the unit
+in `failed`; the stop timeout leaves room for the shutdown sequence (announce
+maintenance → wait up to 10s for the supervisor → tear down → hand raft
+leadership over). `orama upgrade` rewrites the unit in Phase 5, so an existing
+fleet picks both settings up on the next upgrade, after `daemon-reload` and a
+node restart.
+
+**Lifecycle states** (`pkg/node/lifecycle`): `joining` → `active` ⇄ `degraded`,
+with `draining` and `maintenance` driven by operators and never overridden by
+the supervisor. `degraded` is a *serving* state, so a degraded node is not taken
+out of rotation; the leader's health monitor deliberately does not short-circuit
+it and verifies the claim with an HTTP probe instead. A node leaves `joining`
+once its **serving core** — `rqlite-local` and `gateway` — is up, so one local
+component that can never converge cannot pin it out of `IsAvailable` and stop it
+announcing maintenance on shutdown.
+
+The state is published in discovery metadata. `orama monitor report` does not
+render it today; read it from the node's own log
+(`sudo orama node logs node --since -1h | grep "Node lifecycle state changed"`),
+which also lists the components that have not converged.
+
+**DNS degrades rather than failing.** The CoreDNS rqlite plugin serves stale
+answers when the backend is unreachable: an entry stays usable for 24 hours past
+its TTL and is returned with a 30-second TTL so a resolver comes back promptly
+once the database recovers. Any backend error used to become SERVFAIL for the
+whole zone, so an index rqlite with no leader took every name in the fleet
+offline — including the names an operator needs to reach the machines and fix
+it.
+
+NXDOMAIN is cached for 30 seconds and never served stale. Without the cache a
+flood of random subdomains was a query amplifier pointed straight at index
+rqlite; without the "never stale" rule, a name that appeared moments later would
+stay invisible for a day.
+
+Wildcard lookup walks outward — `*.b.c.d.`, `*.c.d.`, `*.d.` — most specific
+first, stopping at the edge of the zone. It used to rebuild only the first three
+labels, so `x.ns-anchat.orama-devnet.network.` became
+`*.ns-anchat.orama-devnet.` with the TLD dropped, matching none of the
+`*.ns-<ns>.<base>.` rows the namespace manager writes. Every per-namespace
+sub-name, `turn.ns-<ns>.<base>` included, was unresolvable.
+
+**Olric is supervised, not connected once.** The gateway keeps a background
+supervisor that probes its Olric client every 10s and, after three consecutive
+failures, drops it so cache handlers answer 503 — the honest answer — instead of
+returning transport errors from a client that cannot reach anything. It then
+reconnects with backoff, and re-wires without a restart.
+
+It replaces a one-shot loop that returned as soon as it connected once, and
+which was armed only when the INITIAL connection had failed. So the common case
+— Olric up at start, dies later — left a stale client wired in for ever, with
+`/health` reporting healthy while namespace requests hung. Note that the "Olric
+client doesn't retry" line in the older operational notes is stale twice over:
+it did retry, and now it supervises.
+
+The supervisor reconnects to the address list discovery actually resolved. The
+old fallback read an empty config field and then a hardcoded `localhost:10102`,
+so a namespace gateway that lost its cache spent the rest of its life
+reconnecting to the wrong place.
+
+**The tenant plane converges.** rqlite, Olric and the gateway for each
+namespace used to be edge-triggered — provisioned once, repaired on a dead-node
+event, restored once at boot by a loop that gave up after twelve attempts.
+Anything that happened outside those moments stayed broken until someone ran a
+runbook, which is why seven manual steps existed.
+
+`pkg/namespace.StartTenantReconciler` runs every 60s with two legs. The
+**per-node** leg is what a node owes the namespaces it hosts: start what is
+missing, and rewrite a config that has drifted from live membership
+(`ReconcileOlric` / `ReconcileGateway`, which restart only on a real
+difference — peer lists are compared ignoring order, since that order comes
+from a query and means nothing to Olric). The **coordinator** leg is
+cluster-wide state and runs on exactly one member per namespace, elected as the
+lowest-sorted live node id: prune members that are permanently gone, release
+their ports, and remove them from that namespace's raft.
+
+The raft address is read BEFORE the prune, because pruning deletes the port
+allocation the address is built from — after that there is nothing left to name
+in the removal, and the departed node stays a configured voter for ever. That
+was the gap: pruning released the ports and the membership row and stopped.
+
+A remote stop that fails is recorded in `namespace_pending_cleanup` and retried
+every sweep, rather than logged. The unit keeps running and keeps holding a port
+the allocator has already released, and the next namespace given that port finds
+it occupied and joins a foreign raft group.
+
+**One writer for membership.** A node's existence is recorded in five places —
+`dns_nodes`, `wireguard_peers`, the index raft configuration, ipfs-cluster's
+peer list and IPFS's peering config — each with its own liveness definition and
+its own timer, and until now with no single writer. A machine deleted without
+ceremony left a different residue in each: an `inactive` `dns_nodes` row that
+was never deleted, a `wireguard_peers` row re-applied to the interface every 60
+seconds for ever, a raft voter still counted toward quorum.
+
+`pkg/node/membership` computes what the membership should be and diffs it
+against what the stores hold. It runs on the raft leader only, every 60s, as the
+`membership` boot component. Removal needs positive evidence of departure — a
+raft eviction tombstone — and *any* sign of life vetoes it: discovery seeing the
+peer, or a heartbeat inside the 30-minute liveness grace. A node that merely
+stopped answering is missing, not gone; turning the first into the second is the
+raft eviction path's job, and it writes the tombstone when it does. `dns_nodes`
+rows survive a further 6-hour tombstone grace so an operator looking at the
+table right after a node disappears still sees what was removed.
+
+`wireguard_peers` rows are matched to nodes on the **overlay address**, not on
+`node_id`. A joining node now sends its libp2p peer id in the join request and
+the row carries it, but rows predating that carry a synthetic `node-<wgip>`
+(migration 038 backfills what it can from `dns_nodes`), so the overlay address
+remains the reliable join between the two tables.
+
+A row whose overlay address matches no node is resolved by `confirmed_at`, which
+is never cleared once set. There are two writers, and both only ever set it:
+each node sets it on its own row when it self-registers — a node writing its own
+row is the strongest evidence there is that it came up, and the self-register
+upsert keeps any existing value with `COALESCE` — and the reconciler sets it for
+any row whose node it can see in `dns_nodes`. An unmatched row is then read as:
+
+- **never confirmed, older than the 30-minute join grace** — a join that did not
+  finish. Dropped. Before `confirmed_at` existed this row was indistinguishable
+  from a live peer and every survivor re-applied it to `wg0` every 60 seconds
+  indefinitely.
+- **never confirmed, recent** — a join still in flight. Left alone: a node gets
+  its WireGuard row before its `dns_nodes` row, so absence is not departure.
+- **never confirmed, no usable `created_at`** — nothing distinguishes it from
+  either of the above. Kept, and reported, so it is not invisible.
+- **confirmed** — a node that came up and then vanished from `dns_nodes`.
+  Reported only. Deleting the mesh entry of a machine that may still be running
+  would sever it.
+
+The delete carries `AND confirmed_at IS NULL`, so a node that came up between
+the evidence read and the write is never cut off by a stale plan.
+
+**Dead voters are evicted.** A voter that is gone for good used to stay in the
+raft configuration for ever — quorum arithmetic kept counting a machine that no
+longer existed, so on a three-voter cluster the second such event was permanent
+quorum loss with `recover-raft` the only way out. The leader now removes one,
+but only when three separate sources agree, because the leader's own view of
+reachability has a failure mode where a healthy node looks dead — a route lost,
+a firewall change, a WireGuard key rotation:
+
+1. **raft**, sustained: the member is an unreachable *voter* on 10 consecutive
+   2-minute ticks. (A non-voter costs the cluster nothing, so there is no
+   availability argument for touching one.)
+2. **libp2p discovery** no longer knows the peer at all, which takes at least
+   the 2-hour inactivity window.
+3. **other nodes**: at least two *different* nodes recorded it `dead` in
+   `node_health_events` within the last 30 minutes, with no later `recovered`.
+
+Only the third is independent of this node. It is also the one that has to
+cross an identifier boundary: the health monitor keys on libp2p peer ids, while
+a raft node id is the peer id only after migration and the raft advertise
+address before it, so the candidate is resolved through `dns_nodes.internal_ip`
+before the corroboration query. Comparing the two id spaces directly matches
+nothing, silently.
+
+The removal is refused unless the reachable voters still meet quorum afterwards,
+the raft term has been stable for three ticks, and at most one member changes
+per tick.
+
+An eviction writes a tombstone to `raft_evicted_nodes`. Without one,
+`recoverOrphanedNodes` re-added the node within five minutes — it re-adds every
+discovery peer absent from the raft configuration, so the eviction was undone
+automatically. `orama node remove` and `orama node migrate-raft-id` both write one, so a
+removal made by hand is no longer undone within five minutes.
+
+Tombstones expire after 24 hours, and that expiry is load-bearing rather than
+housekeeping: an evicted node is the one node that *cannot* clear its own
+tombstone, because it is outside the raft configuration, so its local rqlite has
+no leader and it cannot write to the cluster at all. Without expiry, a node
+evicted after a long partition would be permanently removed with no automatic
+way back. The TTL is far longer than the 2-hour discovery window on purpose — a
+node that is genuinely gone has dropped out of discovery long before its
+tombstone lifts, so nothing is offering it for re-adding by then.
+
+Discovery itself now forgets an unanswering peer after 2 hours rather than 24.
+The same constant governs `waitForMinClusterSizeBeforeStart`, so a node
+restarting during an outage that has already lasted 2 hours sees fewer peers and
+waits out its (bounded) minimum-cluster-size window before continuing.
+
+Voter demotion is an in-place `POST /join` with `voter:false`. It used to be
+remove-then-rejoin, which left the node outside the configuration for up to 59
+seconds while it retried with backoff; a leader change inside that window
+orphaned it, and the rollback path could fail too.
+
+**RQLite identity is the libp2p peer id, once migrated.** rqlited defaults its
+raft node id to the raft advertise address, which made identity and routing the
+same value: change a node's WireGuard IP and the same machine became a second
+member while the old entry stayed, counting toward quorum. Two such events on a
+five-voter cluster leave quorum at 3-of-7 with five live voters.
+
+The id a node starts under is recorded in `raft-node-id`, beside `raft.db` in
+its rqlite data directory, and that file is authoritative — it is what rqlite's
+persisted configuration has this node under, and starting on anything else
+creates a second member. Three cases, distinguished by what is on disk:
+
+| marker | raft state | id used |
+|---|---|---|
+| present | either | whatever it records |
+| absent | none | the libp2p peer id (a fresh node) |
+| absent | present | none passed; rqlite keeps defaulting to the address |
+
+So a fresh node is on a stable id from its first boot, and an existing node
+keeps the id it is registered under until it is migrated deliberately. rqlite
+cannot rename a member in place — the only supported paths are remove-then-rejoin
+and the `peers.json` disaster procedure — so an upgrade that simply started
+passing `-node-id` would make every node join as a NEW member and abandon its
+old id as an unreachable voter: the exact failure this prevents, applied
+fleet-wide at once.
+
+`orama node migrate-raft-id` performs the transition, one node at a time. It
+first refuses to start unless **every** node in the environment has booted on a
+binary that understands stable ids: an old-binary leader cannot see a migrated
+node's peer-id member, so it re-adds it as a duplicate every five minutes.
+Finish the rolling upgrade everywhere, then migrate.
+
+Per node: check the quorum arithmetic, remove the old id from the raft
+configuration, tombstone it so orphan recovery does not put it back, discard the
+node's local raft state, rewrite its unit's env file with the new `-node-id` and
+a `-join` pointing at a survivor, restart it, and wait for it to come back as a
+**reachable voter** before touching the next one. The env rewrite is not
+optional: `-node-id` and `-join` reach rqlited only through that file, and a
+wiped data directory with neither makes the node bootstrap a solo cluster on an
+empty database and elect itself leader.
+
+It is safe to re-run. Nodes already on a stable id are skipped, and a node a
+previous run removed but did not finish is recognised from its own marker and
+resumed rather than treated as un-migratable.
+
+Identity and routing are separate at every point they meet, and each of these
+was a way to mint a duplicate voter or lose a safety check once ids stopped
+being addresses:
+
+- **Orphan recovery** matches a peer against the configuration by id *and* by
+  address, and passes the two to `POST /join` as the distinct values they are.
+  They used to be the same variable, so re-adding a node whose address had
+  changed created a second member rather than moving the existing one.
+- **`/nodes` decoding** reads the address from `addr`, which is the field rqlite
+  actually sends. It was decoded as `address`, so it was silently always empty
+  and every consumer that wanted an address reached for the id instead.
+- **Dead-voter eviction** looks the candidate up in discovery, and resolves its
+  peer id, by address. Given the id, neither could match a migrated node, so
+  eviction would have become a permanent no-op.
+- **The voter set** is computed over addresses at all three call sites. One
+  computed it over ids, so the sites disagreed and fought: one promoting a node
+  the next demoted, indefinitely.
+- **`peers.json`** carries each peer's announced id. Writing addresses there
+  would revert every migrated node in one step, because rqlite resets the raft
+  configuration to that file.
+- **Self-detection** matches on the raft address through one helper. Eight sites
+  compared the announced id against this node's address, which works only while
+  an id is an address; afterwards a node stops recognising itself and starts
+  counting itself as a peer.
+- **`orama node remove`** resolves the member's id from the configuration
+  before removing it. Removing by address matched nothing on a migrated cluster
+  and reported success, leaving the retired machine a configured voter for ever.
+
+Two rules govern removal. `SafeToRemoveVoter` is the eviction rule and refuses a
+member that is still answering — that is a demotion, not an eviction.
+`SafeToRemoveMember` is the quorum arithmetic alone, for a removal or a
+migration, which remove a live member on purpose. `RaftMember` and
+`RQLiteNodeMetadata.NodeID` carry the id as an opaque identifier that must not
+be dialled.
+
+Two related consequences. Advertised addresses are always rewritten to a
+WireGuard address — selection used to prefer a *public* IP and fall back to the
+overlay, which replaced a reachable raft endpoint with one UFW blocks; with no
+overlay candidate it now refuses to rewrite rather than substituting a public
+IP. And a node that finds itself in the raft configuration under a different id
+logs it at Error on every start instead of discarding the result.
+
 RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index` (`127.0.0.1:10105`); gateways call that HTTP API. Caddy reverse_proxies to `localhost:10104`. CoreDNS reads index RQLite `dns_records` at `localhost:10100`. Olric v0.7.0 is in-memory only (`olric-server` is not given a data directory); a cold disk snapshot of the cache dir yields nothing.
 
 ## Core Components
@@ -289,7 +703,7 @@ Every node runs Anyone as a **client** only: a local SOCKS5 proxy on `127.0.0.1:
   `?host=&port=` through the Anyone network. TLS is negotiated end-to-end
   between the client and the destination *through* the tunnel, so the gateway
   relays ciphertext and sees only the destination host and port. See
-  "Anonymity Tunnel" in `docs/CLIENT_SDK.md`.
+  "Anonymity Tunnel" in `docs/GO_CLIENT_SDK.md`.
 
 Both require the `proxy` grant **and** a genuine end-user (SIWE wallet) JWT — an
 app-runtime API key alone is refused.
@@ -368,21 +782,83 @@ Function Invocation:
 
 ### Authentication Methods
 
-1. **Wallet Signatures** (Ethereum-style)
-   - Challenge/response flow
-   - Nonce-based to prevent replay attacks
+1. **Wallet Signatures** (EVM and Solana)
+   - Challenge/response. `/v1/auth/challenge` returns a Sign-In with Ethereum
+     message (EIP-4361), or the Solana equivalent — the same grammar with one
+     word changed in the header line — and the wallet signs that text verbatim.
+     `/v1/auth/verify` and `/v1/auth/api-key` take the message back and read the
+     wallet, the nonce and the namespace out of it; nothing beside it in the
+     request body is trusted, because nothing beside it was signed
+   - The message carries the gateway's own host as its domain, so a signature
+     collected by any other site does not verify here. It used to be a bare
+     32-byte nonce: a signature over that says only that someone holding the key
+     signed some bytes, so any signature that wallet had ever produced was in
+     principle an Orama login, and the wallet dialog showed the user a blob they
+     had no way to judge
+   - The message states its own five-minute expiry, and names the namespace both
+     in words the user reads and as a `urn:orama:namespace:<name>` resource the
+     gateway acts on
+   - The challenge is single-use. Every signature endpoint consumes it with one
+     conditional `UPDATE nonces … WHERE used_at IS NULL AND expires_at > now`
+     and refuses the request unless that statement affected a row, so a
+     captured signature cannot be replayed and an expired challenge is dead.
+     Verifying the signature alone is not enough — it proves possession of the
+     key, not freshness
    - Issues JWT tokens after verification
 
-2. **API Keys**
-   - Long-lived credentials
-   - Stored in RQLite
+2. **Principals and grants**
+   - A **principal** is who the platform authenticates: a wallet, or a service
+     account (an API key). A **grant** is what one principal may do in one
+     namespace — a role, optionally narrowed to a resource, optionally expiring
+   - Roles: `owner` (exactly one per namespace, enforced by a partial unique
+     index), `admin` (the control plane), `runtime` (the data plane) and
+     `reader` (a member holding nothing). The role the authorization middleware
+     resolves is what the scope gate turns into the caller's grant set
+   - This replaced a single boolean — a row in `namespace_ownership` meant
+     owner and its absence meant refused — which is why everybody with access
+     to a namespace was an admin. Migration 050 moves the rows and drops the
+     table
+   - A grant may be narrowed to a resource: `pubsub:topic=chat.*`,
+     `fn:name=checkout`. Publish, subscribe and invoke apply it, so a tenant
+     can isolate its own end users. A selector in a domain the data path cannot
+     yet name is refused when the grant is written, rather than stored and
+     silently ignored. See `docs/SECURITY.md`
+   - `/v1/namespace/members` and `orama members` manage them; transferring the
+     namespace requires the owner
+
+3. **API Keys**
+   - `orama_<type>_<payload>_<checksum>`, all base62. `sk` labels a key holding
+     the control plane and `rk` one holding only the data plane — a label for
+     whoever finds a leaked string, not what decides its authority
+   - The checksum means a leaked key can be recognised offline, by a secret
+     scanner or by this code, and a mistyped one is refused without a lookup
+   - The key does **not** carry its namespace. It used to be
+     `ak_<random>:<namespace>`, so a key pasted into an issue or a log line
+     published which tenant it belonged to. The namespace is on the row
+   - Every key expires: 90 days by default, a year at most, and there is no way
+     to ask for one that does not. A key had no expiry column at all, so minting
+     one produced a bearer token that worked until somebody remembered to revoke it
+   - `orama namespace keys rotate` mints a successor with the same grants and
+     shortens the original's life to an overlap (7 days by default) rather than
+     revoking it, so there is a window in which to deploy the new one
+   - Stored in RQLite as an HMAC of the key, never the key
    - Namespace-scoped
    - Carry a grant set (`invoke`, `storage`, `push`, `webrtc`, `proxy`, `pubsub`, `cache`, or `admin`). HTTP `/v1/invoke` is a public path; private functions still require the `invoke` grant (or a SIWE wallet). Node command/logs/leave and network connect/disconnect require `admin`.
 
-3. **JWT Tokens**
+4. **JWT Tokens**
    - Short-lived (15 min default)
    - Refresh token support
    - Claims-based authorization
+
+5. **The audit trail**
+   - `audit_events` records what changed and who changed it: sign-ins, keys,
+     grants, namespaces, deployments, functions, secrets, operator actions. It
+     is a Raft-replicated table, so a timer removes anything past 90 days —
+     without that it grows for ever
+   - Actors are never credentials. The JWT the API-key exchange mints carries
+     the key as its subject, so a non-wallet actor is recorded as a fingerprint
+   - `GET /v1/audit` and `orama audit [--follow]` read it, scoped to the
+     caller's own namespace. See `docs/SECURITY.md`
 
 ### Network Security (WireGuard Mesh)
 
@@ -391,16 +867,72 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **WireGuard IPs:** Each node gets a private IP (10.0.0.x/24) used for all cluster traffic
 - **UFW Firewall:** Only public ports are exposed: 22 (SSH; Ubuntu/sandbox only — OramaOS has no SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
 - **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
-- **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are only accessible via WireGuard or localhost
-- **Invite tokens:** Single-use, time-limited tokens for secure node joining. No shared secrets on the CLI
-- **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh
+- **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are reachable only from the overlay **because the firewall says so, not because of where they listen**. A namespace's RQLite is spawned with `HTTP_ADDR=0.0.0.0:<port>` and `RAFT_ADDR=0.0.0.0:<port>`, and a namespace gateway with `ListenAddr: ":<port>"` (`pkg/namespace/systemd_spawner.go`), so all of them are bound to every interface and one wrong UFW rule exposes them. Moving the namespace gateway onto the overlay address is chg-387, which explains why it is not a one-liner; the same is true of the RQLite listeners. Until then the firewall is the only thing between them and the internet
+- **Invite tokens:** Single-use and time-limited, and there is no standing cluster password. The token is still a secret passed as a command-line argument, so it is visible to `ps` and lands in shell history on the machine that runs `orama node install`
+- **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh. The joining node establishes its libp2p identity before it asks to join, so the request carries the peer id the cluster will key it by
+
+**Join ordering.** `/v1/internal/join` does everything that can fail without
+touching cluster state first — validate every field, check the invite token is
+live (without consuming it), refuse the request if any identity in it is already
+registered, read the secrets, read the local WireGuard identity, build the peer
+list — and only then burns the token and writes the `wireguard_peers` row.
+
+That ordering is what makes the token safe to release on failure. `public_ip` is
+a string the caller chooses and nothing checks against the source address, and
+the pre-join cleanup deletes rows by it, so releasing the token would otherwise
+let one invite evict any node in the fleet, repeatedly: name its IP, collide
+deliberately so the registration fails, get the token back.
+
+Three rules close that, and each is load-bearing:
+
+- **The refusal set is the complement of the cleanup set.** The check rejects
+  every row matching the submitted IP, key or peer id *except* the ones the
+  cleanup is about to delete. Restricting it to live rows was not enough — an
+  unconfirmed row at a different public IP is invisible to both, yet still
+  collides with the `INSERT`.
+- **Liveness is `confirmed_at IS NOT NULL` OR a `dns_nodes` row at the same
+  overlay address**, and it needs both halves. A node still on the old binary
+  nulls its own `confirmed_at` every 60s, so during the rolling upgrade of this
+  change `confirmed_at` alone would read every un-upgraded node as free to
+  displace. `dns_nodes` has no such hole; and a node mid-join has no `dns_nodes`
+  row yet, so neither signal suffices alone.
+- **A uniqueness conflict does not release the token.** It means the request
+  named a bad identity — the caller's problem. Only a genuine cluster fault
+  releases, so nothing an attacker controls makes the token replayable.
+
+The token-liveness gate exists because the refusal check answers whether a given
+IP, key or peer id belongs to a live node. Reachable without a token, that is a
+fleet-enumeration oracle, so the 409 body also names no field. The order used to be the reverse, so any failure
+after the write (an unreadable `swarm.key`, a joining node that died mid-install)
+cost the operator a token they could not reuse *and* left a ghost peer row. If
+the write itself fails the token is released.
+
+**Overlay address allocation** (`pkg/overlay`) is the single path every
+allocating writer uses — the join handler, `/v1/internal/wg/peer` and the
+OramaOS enrolment handler. A node's own WireGuard self-registration stays
+outside it because it allocates nothing: it re-asserts the row it was already
+given, keyed by its own node id, and so upserts (`ON CONFLICT(node_id) DO
+UPDATE`) rather than replacing. `INSERT OR REPLACE` there was deleting and
+re-inserting the row every 60 seconds, silently resetting every column it did
+not name — `operator_wallet` among them. It allocates the **lowest free** address in `10.0.0.2-254` with a plain
+`INSERT`, retrying only on a `UNIQUE` violation naming `wg_ip` — a conflict on
+the public key or the node id means the peer is already registered under another
+address, which no retry can fix. The client-supplied peer id is parsed before it
+is stored, since it becomes the row's primary key. The two
+previous implementations each read the table and wrote it in separate statements
+and wrote with `INSERT OR REPLACE`, so the loser of a race silently deleted the
+winner's row and took its address, cutting a node that had just joined out of
+the mesh. Allocating the lowest free address rather than `max+1` also keeps a
+cluster that has churned through nodes from rolling past `10.0.0.254` into
+`10.0.1.x`, which is outside the `/24` that the `wg0` PostUp rule and the
+internal-auth check both accept.
 
 ### Service Authentication
 
-- **RQLite:** credentials are generated at genesis; `rqlited` is **not** started with `-auth` today. Overlay + firewall keep the HTTP API off the public internet
+- **RQLite:** credentials are generated at genesis and written into every generated `node.yaml` (`database.rqlite_auth_file` / `rqlite_username` / `rqlite_password`). `rqlited` is **not** started with `-auth` today — that is a separate setting, `database.rqlite_enforce_auth`, default off — so overlay + firewall keep the HTTP API off the public internet. Every admin call (`/status`, `/nodes`, `/join`, `/remove`, `/db/backup`, transfer-leadership) goes through one client, `pkg/rqlite/adminclient.go`, which sends those credentials. The gateway and namespace SQL DSNs still do not, which is what blocks enforcement; see `docs/SECURITY.md`
 - **Olric:** memberlist binds the WireGuard address. Olric v0.7.0 YAML has no `encryptionKey`; overlay is the control
 - **IPFS Cluster:** TrustedPeers restricted to known cluster peer IDs (not `*`). The systemd unit is not written if `CLUSTER_SECRET` is missing or empty
-- **Internal endpoints:** `/v1/internal/wg/peers` and `/v1/internal/wg/peer/remove` require cluster secret
+- **Internal endpoints:** every `/v1/internal/wg/*` endpoint requires the caller to be on the WireGuard overlay **and** to present the cluster secret. A gateway with no cluster secret configured refuses them outright rather than serving them unauthenticated
 - **Vault:** V1 push/pull endpoints require session token authentication when guardian is configured
 - **WebSockets:** Origin header validated against the node's configured domain
 - **Tenant SQLite:** opened with `SQLITE_LIMIT_ATTACHED=0`; `ATTACH`/`DETACH` and multi-statement queries are rejected
@@ -437,16 +969,42 @@ See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 
 Order matches `Gateway.withMiddleware` (outermost first). Rate limiting runs **before** authentication so the auth path itself is capped.
 
-1. **Logger** — request/response logging
-2. **Security headers**
-3. **Rate limiting** — per-client, before auth
-4. **CORS**
-5. **Domain routing**
-6. **Authentication** — JWT / API key
-7. **Authorization** — namespace access control
-8. **Scope gate** — tightens an already-authorized request
-9. **Namespace rate limiting**
-10. Handler (errors are returned as HTTP status, not a separate middleware)
+1. **Internal-auth gate** — drops every `X-Internal-Auth-*` header that did not arrive with a valid MAC
+2. **Route policy** — resolves what the matched route requires and puts it on the request, so the four gates below cannot answer differently
+3. **Logger** — request/response logging
+4. **Security headers**
+5. **Rate limiting** — per-client, before auth
+6. **CORS**
+7. **Domain routing**
+8. **Authentication** — JWT / API key
+9. **Authorization** — namespace access control
+10. **Scope gate** — tightens an already-authorized request
+11. **Namespace rate limiting**
+12. Handler (errors are returned as HTTP status, not a separate middleware)
+
+Every gate reads the policy the route declared, never the request path. A route
+with no declared policy cannot be registered at all. The declaration is
+`pkg/gateway/route_policy.go`; `pkg/gateway/routepolicy` is what enforces it.
+See `docs/SECURITY.md` for what the three path-prefix lists this replaced cost.
+
+The client a rate limit is charged to is the peer address, not
+`X-Forwarded-For`. The header is honoured only when the peer is the local
+reverse proxy, and only its last entry, which is the address Caddy is actually
+talking to — everything before it is whatever the caller wrote. Traffic from
+another node over the overlay is exempt, and so is a process on this machine
+that reached the gateway directly, with nothing forwarded. Loopback **with** a
+forwarding header is not exempt: every public request arrives from `127.0.0.1`
+because Caddy proxies to localhost, so exempting it would exempt the internet.
+
+The endpoints that mint or exchange credentials — challenge, verify, api-key,
+token and refresh — have their own bucket, 30 a minute per address bursting to
+10, against a general limit of 10,000 a minute. They are
+cheap to call and expensive to serve, and the general limit is no obstacle to
+grinding them.
+
+`/v1/auth/challenge` is limited **per wallet** as well, wherever the request
+comes from: it writes a nonce row for a wallet the caller does not have to own,
+so a distributed grind against one victim is not capped by a per-address limit.
 
 ## Scalability
 

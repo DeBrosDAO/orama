@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"go.uber.org/zap"
 )
@@ -107,16 +108,20 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		"new_version": updated.Version,
 	})
 
+	// An update replaces what is running under an existing name, so it is a
+	// deploy in the record.
+	h.service.RecordAudit(r, updated.Namespace, auth.AuditDeploymentCreated, updated.Name)
+
 	// Return response
 	resp := map[string]interface{}{
-		"deployment_id":  updated.ID,
-		"name":           updated.Name,
-		"namespace":      updated.Namespace,
-		"status":         updated.Status,
-		"version":        updated.Version,
+		"deployment_id":    updated.ID,
+		"name":             updated.Name,
+		"namespace":        updated.Namespace,
+		"status":           updated.Status,
+		"version":          updated.Version,
 		"previous_version": existing.Version,
-		"content_cid":    updated.ContentCID,
-		"updated_at":     updated.UpdatedAt,
+		"content_cid":      updated.ContentCID,
+		"updated_at":       updated.UpdatedAt,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -2,9 +2,8 @@ package functions
 
 import (
 	"fmt"
-	"os"
-	"text/tabwriter"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"github.com/spf13/cobra"
 )
 
@@ -23,38 +22,38 @@ func runList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	functions, ok := result["functions"].([]interface{})
-	if !ok || len(functions) == 0 {
-		fmt.Println("No functions deployed.")
+	out := printer.For(cmd)
+	functions, _ := result["functions"].([]interface{})
+
+	if len(functions) == 0 && !out.JSONMode() {
+		out.Printf("No functions deployed.\n")
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tVERSION\tSTATUS\tMEMORY\tTIMEOUT\tPUBLIC")
-	fmt.Fprintln(w, "----\t-------\t------\t------\t-------\t------")
-
+	rows := make([][]string, 0, len(functions))
 	for _, f := range functions {
 		fn, ok := f.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		name := valStr(fn, "name")
-		version := valNum(fn, "version")
-		status := valStr(fn, "status")
-		memory := valNum(fn, "memory_limit_mb")
-		timeout := valNum(fn, "timeout_seconds")
-		public := valBool(fn, "is_public")
-
 		publicStr := "no"
-		if public {
+		if valBool(fn, "is_public") {
 			publicStr = "yes"
 		}
-
-		fmt.Fprintf(w, "%s\t%d\t%s\t%dMB\t%ds\t%s\n", name, version, status, memory, timeout, publicStr)
+		rows = append(rows, []string{
+			valStr(fn, "name"),
+			fmt.Sprintf("%d", valNum(fn, "version")),
+			valStr(fn, "status"),
+			fmt.Sprintf("%dMB", valNum(fn, "memory_limit_mb")),
+			fmt.Sprintf("%ds", valNum(fn, "timeout_seconds")),
+			publicStr,
+		})
 	}
-	w.Flush()
 
-	fmt.Printf("\nTotal: %d function(s)\n", len(functions))
+	if err := out.Table([]string{"NAME", "VERSION", "STATUS", "MEMORY", "TIMEOUT", "PUBLIC"}, rows); err != nil {
+		return err
+	}
+	out.Printf("\nTotal: %d function(s)\n", len(functions))
 	return nil
 }
 

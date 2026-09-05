@@ -8,8 +8,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,6 +31,33 @@ const (
 	// DefaultStartupGracePeriod prevents false dead declarations after
 	// cluster-wide restart. During this period, no nodes are declared dead.
 	DefaultStartupGracePeriod = 5 * time.Minute
+
+	// ringMembershipWindow is how stale dns_nodes.last_seen may be before a peer
+	// drops out of every ring. A peer outside every ring cannot be probed and so
+	// can never reach the dead threshold.
+	//
+	// It was two minutes, which is the same window the dns_nodes reaper uses to
+	// flip a silent node to `inactive` — so a node left every ring at the exact
+	// moment it went quiet, long before any observer had accumulated the
+	// consecutive misses needed to declare it dead. HandleDeadNode could
+	// therefore never fire for the failure it exists to catch, and the gap was
+	// papered over downstream by pruneStaleClusterNodes.
+	//
+	// Fifteen minutes is comfortably past the dead threshold at the probe
+	// interval, so the decision can actually be reached. A node that is
+	// genuinely gone drops out afterwards; one that is merely restarting is
+	// back long before then.
+	ringMembershipWindow = 15 * time.Minute
+
+	// freshHeartbeatWindow is how recent a peer's heartbeat must be to stand in
+	// for an HTTP probe. The heartbeat ticks every 30s
+	// (pkg/node/dns_registration.go), so this is two ticks: long enough that a
+	// single missed tick does not force a probe, short enough that a node which
+	// stopped heartbeating is probed on the next round.
+	freshHeartbeatWindow = 65 * time.Second
+
+	// sqlTimeLayout matches rqlite's datetime('now'), which is always UTC.
+	sqlTimeLayout = "2006-01-02 15:04:05"
 )
 
 // MetadataReader provides lifecycle metadata for peers. Implemented by
@@ -52,6 +81,17 @@ type Config struct {
 	// before falling through to HTTP probes.
 	MetadataReader MetadataReader
 
+	// ProbePort is the TCP port carrying /v1/internal/ping on a peer. It is the
+	// INDEX gateway's port: the ring monitors nodes, not namespaces, and only
+	// the index gateway serves the internal ping on every node.
+	//
+	// It is a field rather than a constant because the port was hardcoded once
+	// before, survived a port migration untouched, and turned the failure
+	// detector into a fleet-wide false-eviction cascade — every probe failed on
+	// a healthy cluster. A caller that forgets it now gets a loud zero-port
+	// failure at construction instead of silent nonsense at runtime.
+	ProbePort int
+
 	// StartupGracePeriod prevents false dead declarations after cluster-wide
 	// restart. During this period, nodes can be marked suspect but never dead.
 	// Default: 5 minutes.
@@ -62,6 +102,13 @@ type Config struct {
 type nodeInfo struct {
 	ID         string
 	InternalIP string // WireGuard IP (or public IP fallback)
+
+	// HeartbeatFresh is true when this peer updated dns_nodes.last_seen within
+	// freshHeartbeatWindow. Writing that row is a raft write, so it is proof
+	// the peer was alive and had quorum — evidence that does not depend on the
+	// HTTP path being reachable, computed in the same query that builds the
+	// ring rather than in a second round trip.
+	HeartbeatFresh bool
 }
 
 // peerState tracks the in-memory health state for a single monitored peer.
@@ -88,7 +135,12 @@ type Monitor struct {
 }
 
 // NewMonitor creates a new health monitor.
-func NewMonitor(cfg Config) *Monitor {
+//
+// It returns an error rather than defaulting a missing ProbePort: the port was
+// hardcoded once, survived a port migration untouched, and turned the failure
+// detector into a fleet-wide false-eviction cascade. A silent default would
+// reintroduce exactly that failure mode the next time the port moves.
+func NewMonitor(cfg Config) (*Monitor, error) {
 	if cfg.ProbeInterval == 0 {
 		cfg.ProbeInterval = DefaultProbeInterval
 	}
@@ -104,6 +156,9 @@ func NewMonitor(cfg Config) *Monitor {
 	if cfg.Logger == nil {
 		cfg.Logger = zap.NewNop()
 	}
+	if cfg.ProbePort <= 0 {
+		return nil, fmt.Errorf("health.NewMonitor: ProbePort must be the index gateway port, got %d", cfg.ProbePort)
+	}
 
 	return &Monitor{
 		cfg: cfg,
@@ -113,7 +168,7 @@ func NewMonitor(cfg Config) *Monitor {
 		logger:    cfg.Logger.With(zap.String("component", "health-monitor")),
 		startTime: time.Now(),
 		peers:     make(map[string]*peerState),
-	}
+	}, nil
 }
 
 // OnNodeDead registers a callback invoked when a node is confirmed dead by
@@ -193,6 +248,16 @@ func (m *Monitor) probeRound(ctx context.Context) {
 // probeNode checks a node's health. It first checks LibP2P metadata (if
 // available) to avoid unnecessary HTTP probes, then falls through to HTTP.
 func (m *Monitor) probeNode(ctx context.Context, node nodeInfo) bool {
+	// A peer that wrote its heartbeat within the last freshHeartbeatWindow was
+	// demonstrably alive and able to reach quorum. Believing that over an HTTP
+	// probe means a node is never declared dead because one port was wrong, one
+	// request was dropped, or its gateway was mid-restart while the node itself
+	// was fine. A stale heartbeat proves nothing either way, so it falls through
+	// to the probe rather than counting as a miss.
+	if node.HeartbeatFresh {
+		return true
+	}
+
 	if m.cfg.MetadataReader != nil {
 		state, lastSeen, found := m.cfg.MetadataReader.GetPeerLifecycleState(node.ID)
 		if found {
@@ -201,7 +266,10 @@ func (m *Monitor) probeNode(ctx context.Context, node nodeInfo) bool {
 				return true
 			}
 
-			// Recently seen active node → count as healthy (no HTTP needed)
+			// Recently seen active node → count as healthy (no HTTP needed).
+			// "degraded" is deliberately not short-circuited here: such a node
+			// claims to be serving from its local replica, and the probe below
+			// is what verifies the claim.
 			if state == "active" && time.Since(lastSeen) < 30*time.Second {
 				return true
 			}
@@ -214,7 +282,8 @@ func (m *Monitor) probeNode(ctx context.Context, node nodeInfo) bool {
 
 // probe sends an HTTP ping to a single node. Returns true if healthy.
 func (m *Monitor) probe(ctx context.Context, node nodeInfo) bool {
-	url := fmt.Sprintf("http://%s:6001/v1/internal/ping", node.InternalIP)
+	url := fmt.Sprintf("http://%s/v1/internal/ping",
+		net.JoinHostPort(node.InternalIP, strconv.Itoa(m.cfg.ProbePort)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false
@@ -391,7 +460,7 @@ func (m *Monitor) checkQuorum(ctx context.Context, targetID string) {
 	m.onDeadFn(targetID)
 }
 
-// getRingNeighbors queries dns_nodes for active nodes, sorts them, and
+// getRingNeighbors queries dns_nodes for the ring's members, sorts them, and
 // returns the K nodes after this node in the ring.
 func (m *Monitor) getRingNeighbors(ctx context.Context) ([]nodeInfo, error) {
 	if m.cfg.DB == nil {
@@ -399,10 +468,26 @@ func (m *Monitor) getRingNeighbors(ctx context.Context) ([]nodeInfo, error) {
 	}
 
 	// Bugboard #282: compare in UTC — last_seen is stored UTC.
-	cutoff := time.Now().UTC().Add(-2 * time.Minute).Format("2006-01-02 15:04:05")
-	query := `SELECT id, COALESCE(internal_ip, ip_address) AS internal_ip FROM dns_nodes WHERE status = 'active' AND last_seen > ? ORDER BY id`
+	now := time.Now().UTC()
+	ringCutoff := now.Add(-ringMembershipWindow).Format("2006-01-02 15:04:05")
+	freshCutoff := now.Add(-freshHeartbeatWindow).Format("2006-01-02 15:04:05")
 
-	rows, err := m.cfg.DB.QueryContext(ctx, query, cutoff)
+	// Three columns, because the scan wants three. It selected two and scanned
+	// three, so QueryContext succeeded and every Scan failed — getRingNeighbors
+	// returned an error on EVERY call and the health monitor never probed
+	// anything at all.
+	//
+	// Membership is not filtered on status: a node the reaper has already
+	// flipped to `inactive` is exactly the node this needs to keep probing.
+	query := `
+		SELECT id,
+		       COALESCE(internal_ip, ip_address) AS internal_ip,
+		       CASE WHEN COALESCE(last_seen, '') > ? THEN 1 ELSE 0 END AS heartbeat_fresh
+		  FROM dns_nodes
+		 WHERE COALESCE(last_seen, '') > ?
+		 ORDER BY id`
+
+	rows, err := m.cfg.DB.QueryContext(ctx, query, freshCutoff, ringCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("query dns_nodes: %w", err)
 	}
@@ -411,7 +496,7 @@ func (m *Monitor) getRingNeighbors(ctx context.Context) ([]nodeInfo, error) {
 	var nodes []nodeInfo
 	for rows.Next() {
 		var n nodeInfo
-		if err := rows.Scan(&n.ID, &n.InternalIP); err != nil {
+		if err := rows.Scan(&n.ID, &n.InternalIP, &n.HeartbeatFresh); err != nil {
 			return nil, fmt.Errorf("scan dns_nodes: %w", err)
 		}
 		nodes = append(nodes, n)

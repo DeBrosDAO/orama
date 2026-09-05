@@ -167,6 +167,43 @@ func TestGenerateNodeService_supervisorOnly(t *testing.T) {
 	}
 }
 
+// The node no longer exits because the cluster is unreachable, so a restart
+// means a real crash and systemd must keep restarting rather than park the unit
+// in failed state. StartLimitIntervalSec belongs in [Unit]: systemd moved it out
+// of [Service] in v229 and warns about the old placement.
+func TestGenerateNodeService_disablesTheStartLimitInTheUnitSection(t *testing.T) {
+	ssg := &SystemdServiceGenerator{
+		oramaHome: "/opt/orama",
+		oramaDir:  "/opt/orama/.orama",
+	}
+	unit := ssg.GenerateNodeService()
+
+	if !strings.Contains(unit, "StartLimitIntervalSec=0") {
+		t.Fatalf("node unit does not disable the start limit, got:\n%s", unit)
+	}
+
+	unitSection := unit[strings.Index(unit, "[Unit]"):strings.Index(unit, "\n[Service]\n")]
+	if !strings.Contains(unitSection, "StartLimitIntervalSec=0") {
+		t.Errorf("StartLimitIntervalSec must be in [Unit], not [Service], got:\n%s", unit)
+	}
+}
+
+// Shutdown announces maintenance, waits up to bootShutdownGrace (10s) for the
+// boot supervisor, then tears services down and hands raft leadership over. If
+// TimeoutStopSec matched the grace, systemd would SIGKILL exactly as the
+// leadership transfer began.
+func TestGenerateNodeService_stopTimeoutLeavesRoomForLeadershipTransfer(t *testing.T) {
+	ssg := &SystemdServiceGenerator{
+		oramaHome: "/opt/orama",
+		oramaDir:  "/opt/orama/.orama",
+	}
+	unit := ssg.GenerateNodeService()
+
+	if !strings.Contains(unit, "TimeoutStopSec=60") {
+		t.Errorf("node unit needs a stop timeout well above the 10s boot-supervisor grace, got:\n%s", unit)
+	}
+}
+
 // TestGenerateIPFSGCService verifies the one-shot GC unit: it must run
 // `ipfs repo gc`, be ordered after (and require) the IPFS daemon, point at the
 // repo via IPFS_PATH, and — being timer-triggered — must NOT install itself.

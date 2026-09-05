@@ -37,6 +37,53 @@ The build runs in the `core/` module and outputs binaries to `core/bin/`. You ca
 | Flag | Description |
 |------|-------------|
 | `--help` | Show help for any command |
+| `--json` | Print machine-readable JSON instead of tables and status lines |
+
+`--json` works on every command, not only the ones that render a table. A
+command that prints a table emits one JSON object per row, keyed by the column
+headers lowercased with spaces as underscores, so `NODE ID` becomes `node_id`.
+Commands that forward a gateway reply print it verbatim, so a field the CLI
+does not render is still there for whatever is parsing it.
+
+Status lines and progress output are suppressed under `--json`, so the output
+is one parseable document.
+
+## Colour and emoji
+
+Colour and emoji appear only when the output is a terminal. Piping to a file,
+to `grep`, or into a CI log gives plain ASCII markers (`OK`, `WARN`, `ERROR`)
+instead. Setting `NO_COLOR` to any value, including empty, turns styling off
+even on a terminal ([no-color.org](https://no-color.org)).
+
+## Exit Codes
+
+Every failure used to exit `1`, so a script could not tell a mistyped flag from
+a cluster that had lost quorum. The codes are now:
+
+| Code | Meaning | Worth retrying? |
+|------|---------|-----------------|
+| `0` | Success | — |
+| `1` | Failed, with no more specific classification | Maybe |
+| `2` | The command line was wrong: a missing flag, a bad value, an unknown subcommand | No |
+| `3` | Not authenticated, or the credential is not permitted. Run `orama auth login` | No, until you log in |
+| `4` | The named thing does not exist | No |
+| `5` | The gateway or a node could not be reached | Yes |
+| `6` | The cluster refused because doing it would break an invariant, most often quorum | No, not unchanged |
+| `7` | You declined a confirmation. Nothing happened | — |
+
+## Version
+
+```bash
+orama version
+# orama 0.122.108
+```
+
+The version is compiled in, so `go build`, `go install` and a release build all
+report the real number. A release build additionally stamps the commit and the
+build date.
+
+`orama node upgrade` expects the CLI and the node to be on the same version.
+See [Release & Rollout](/docs/developer/release-and-rollout).
 
 ---
 
@@ -184,6 +231,15 @@ Deploy a Node.js application.
 | `--subdomain <domain>` | string | — | Custom subdomain for the deployment |
 | `--update` | boolean | `false` | Update an existing deployment instead of creating new |
 | `--ssr` | boolean | `false` | Enable server-side rendering (Next.js only) |
+| `--env KEY=VALUE` | string, repeatable | — | An environment variable for the app |
+| `--env-file <path>` | string | — | Read environment variables from a `.env` file |
+| `--health-check <path>` | string | `/health` | Path the platform polls to decide the app is up (not static) |
+
+`--env` splits on the first `=` only, so a value may contain one. `--env-file`
+reads `KEY=VALUE` per line, skipping `#` comments and blank lines and removing
+one layer of surrounding quotes; it does not expand `$VAR`. A `--env` on the
+command line overrides the same name from the file. Change variables after
+deploying with `orama app env set`.
 
 ### Examples
 
@@ -202,6 +258,13 @@ orama deploy static ./dist --name my-website --update
 
 # Deploy a Go application
 orama deploy go ./my-go-app --name my-api
+
+# Deploy with configuration
+orama deploy go ./my-go-app --name my-api \
+  --env DATABASE_URL=postgres://... --health-check /healthz
+
+# Or read the whole environment from a file
+orama deploy go ./my-go-app --name my-api --env-file .env.production
 
 # Deploy a Node.js application
 orama deploy nodejs ./my-node-app --name my-service
@@ -225,6 +288,20 @@ orama app <subcommand>
 | `rollback <name> --version <n>` | Rollback to a previous version |
 | `logs <name>` | Stream deployment logs |
 | `stats <name>` | Show resource usage (CPU, RAM, disk) |
+| `env list <name>` | List the app's environment variable names |
+| `env set <name>` | Set variables and restart the app |
+| `env unset <name> <KEY>...` | Remove variables and restart the app |
+
+### App Env Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--env KEY=VALUE` | string, repeatable | One variable to set |
+| `--env-file <path>` | string | Read variables from a `.env` file |
+| `--json` | boolean | Print the gateway's reply as JSON (`list` only) |
+
+`env list` shows names, never values: environment variables are where secrets
+live. `PORT` and `ENTRY_POINT` are set by the platform and cannot be changed.
 
 ### App Logs Flags
 
@@ -238,6 +315,12 @@ orama app <subcommand>
 ```bash
 # List all deployments
 orama app list
+
+# Configure a running app
+orama app env list my-website
+orama app env set my-website --env LOG_LEVEL=debug
+orama app env set my-website --env-file .env.production
+orama app env unset my-website OLD_FLAG
 
 # Get details about a specific app
 orama app get my-website
@@ -275,6 +358,10 @@ orama db <subcommand>
 | `query <name> "<sql>"` | Execute a SQL query |
 | `backup <name>` | Backup database to IPFS |
 | `backups <name>` | List available backups |
+| `delete <name>` | Permanently delete a database and its file |
+
+`delete` asks you to type the database name back rather than answer y/n, and
+`--yes` skips the prompt for scripts. There is no undo.
 
 ### Examples
 

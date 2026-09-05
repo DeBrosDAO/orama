@@ -3,14 +3,16 @@
 // the local RQLite instance.
 //
 // `orama node schema status` — non-destructive: shows binary's required
-//                              schema version, applied version, and pending
-//                              migrations. Useful in rolling-upgrade
-//                              monitoring.
+//
+//	schema version, applied version, and pending
+//	migrations. Useful in rolling-upgrade
+//	monitoring.
 //
 // `orama node schema apply`  — applies any pending migrations. Idempotent
-//                              and safe to re-run; ALTER TABLE failures for
-//                              existing columns are tolerated. Confirms
-//                              before running unless --yes is passed.
+//
+//	and safe to re-run; ALTER TABLE failures for
+//	existing columns are tolerated. Confirms
+//	before running unless --yes is passed.
 //
 // These are the long-term fix for the "schema lag after gateway-only
 // upgrade" class of incident. See migrations/contract.go for the contract.
@@ -31,6 +33,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	_ "github.com/rqlite/gorqlite/stdlib"
 )
 
@@ -162,7 +165,7 @@ migration is independently versioned.`,
 
 // openSchemaDB returns a *sql.DB connected to the local RQLite instance,
 // using the --dsn flag if provided, else discovering from the node config
-// or falling back to localhost:5001.
+// or falling back to the index RQLite port on localhost.
 func openSchemaDB() (*sql.DB, string, error) {
 	dsn := schemaDSN
 	if dsn == "" {
@@ -184,9 +187,9 @@ func openSchemaDB() (*sql.DB, string, error) {
 }
 
 // discoverLocalRQLiteDSN reads the node config to find the local RQLite
-// port + credentials, falling back to localhost:5001 with no auth.
+// port + credentials, falling back to the index RQLite port with no auth.
 func discoverLocalRQLiteDSN() string {
-	const fallback = "http://localhost:5001"
+	fallback := constants.LocalRQLiteURL()
 
 	cfgPath, err := config.DefaultPath("node.yaml")
 	if err != nil {
@@ -202,7 +205,7 @@ func discoverLocalRQLiteDSN() string {
 
 	port := readRQLitePortFromConfig(cfgPath)
 	if port == 0 {
-		port = 5001
+		port = constants.RQLiteHTTPPort
 	}
 	if user == "" {
 		return fmt.Sprintf("http://localhost:%d", port)
@@ -255,7 +258,7 @@ func readRQLitePortFromConfig(path string) int {
 
 func init() {
 	schemaCmd.PersistentFlags().StringVar(&schemaDSN, "dsn", "",
-		"RQLite DSN (default: discover from node config or localhost:5001)")
+		fmt.Sprintf("RQLite DSN (default: discover from node config or %s)", constants.LocalRQLiteURL()))
 	schemaApplyCmd.Flags().BoolVar(&schemaYes, "yes", false,
 		"Skip the confirmation prompt")
 

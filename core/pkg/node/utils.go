@@ -129,4 +129,3 @@ func extractPEMFromTLSCert(tlsCert *tls.Certificate, certPath, keyPath string) e
 	}
 	return nil
 }
-

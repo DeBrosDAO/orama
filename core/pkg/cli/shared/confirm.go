@@ -3,6 +3,7 @@ package shared
 import (
 	"bufio"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os"
 	"strings"
 )
@@ -24,10 +25,10 @@ func ConfirmExact(prompt, expected string) bool {
 	return strings.TrimSpace(scanner.Text()) == expected
 }
 
-// RequireRoot exits with an error if the current user is not root.
-func RequireRoot() {
-	if os.Geteuid() != 0 {
-		fmt.Fprintf(os.Stderr, "Error: This command must be run as root (use sudo)\n")
-		os.Exit(1)
-	}
+// RequireRoot returns an error if the current user is not root.
+//
+// It delegates to clierr so the message and the exit code are the same
+// wherever the check is made.
+func RequireRoot() error {
+	return clierr.RequireRoot("this command")
 }

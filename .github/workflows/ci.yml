@@ -38,8 +38,57 @@ jobs:
         working-directory: core
         run: go test -race -timeout 5m ./...
 
+      # The contract fixtures live above the Go module, so the test cache does
+      # not treat them as an input and a fixture-only change would report a
+      # stale pass. -count=1 is the point of this step.
+      - name: Contract tests
+        working-directory: core
+        run: go test -count=1 -run Contract ./...
+
+      # The CLI reference is generated from the cobra tree; this fails when the
+      # committed file and the tree disagree. It lives above the module too, so
+      # it needs the same -count=1.
+      - name: CLI reference is current
+        working-directory: core
+        run: go test -count=1 ./cmd/cli -run TestCLIReference
+
+  agent-test:
+    name: OramaOS agent tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.7"
+          cache-dependency-path: os/agent/go.sum
+
+      - name: Vet
+        working-directory: os/agent
+        run: go vet ./...
+
+      # Nothing built or tested this module. It is the only root process on an
+      # OramaOS node, and its command receiver had no authentication at all.
+      - name: Test
+        working-directory: os/agent
+        run: go test -race -timeout 5m ./...
+
+      # The enrollment seal has a copy in each of two Go modules, and the
+      # shared vector lives above both, so the test cache does not treat it as
+      # an input.
+      - name: Enrollment seal matches the gateway
+        working-directory: os/agent
+        run: go test -count=1 -run TestSeal ./internal/enroll/
+
+      # The agent ships as a Linux binary; the non-Linux build exists only so
+      # the module can be tested on a developer's machine.
+      - name: Build for the target
+        working-directory: os/agent
+        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+
   sdk-build:
-    name: SDK typecheck, build, unit tests
+    name: SDK lint, typecheck, build, unit tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,6 +109,48 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # `pnpm lint` had no ESLint configuration anywhere in the package, so it
+      # exited 2 before linting anything and was never run here.
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      # The unit suite runs after the build so the packaging tests have a dist
+      # to check: they assert the built package can be both required and
+      # imported, which is the thing that was broken.
+      - name: Unit tests
+        run: pnpm test:unit
+
+  vault-sdk-build:
+    name: Vault SDK lint, typecheck, build, unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-vault
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -67,10 +158,36 @@ jobs:
         run: pnpm build
 
       - name: Unit tests
-        run: pnpm vitest run tests/unit
+        run: pnpm test:unit
+
+  vault-guardian:
+    name: Vault guardian (Zig) build and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vault
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the version in vault/build.zig.zon. The guardian does not
+      # compile on 0.16, where std.crypto.random was removed, so an unpinned
+      # toolchain fails on a change that has nothing to do with the code.
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build
+        run: zig build
+
+      # These had never run anywhere: the suite asserted a Shamir threshold of
+      # at least 3 while every implementation had moved to 2, so it failed at
+      # N=3 and nobody saw it.
+      - name: Test
+        run: zig build test
 
   version-sanity:
-    name: Verify VERSION ↔ sdk/package.json sync
+    name: Verify VERSION ↔ package.json sync
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,8 +195,9 @@ jobs:
         run: |
           ROOT=$(tr -d '[:space:]' < VERSION)
           SDK=$(node -p "require('./sdk/package.json').version")
-          if [ "$ROOT" != "$SDK" ]; then
-            echo "::warning::/VERSION ($ROOT) and sdk/package.json ($SDK) differ. Run 'make -C core bump VER=$ROOT' to sync."
+          VAULT=$(node -p "require('./sdk-vault/package.json').version")
+          if [ "$ROOT" != "$SDK" ] || [ "$ROOT" != "$VAULT" ]; then
+            echo "::warning::/VERSION ($ROOT), sdk/package.json ($SDK) and sdk-vault/package.json ($VAULT) differ. Run 'make -C core bump VER=$ROOT' to sync."
           else
             echo "Versions in sync: $ROOT"
           fi

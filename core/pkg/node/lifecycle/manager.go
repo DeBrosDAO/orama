@@ -10,8 +10,15 @@ import (
 type State string
 
 const (
-	StateJoining     State = "joining"
-	StateActive      State = "active"
+	StateJoining State = "joining"
+	StateActive  State = "active"
+	// StateDegraded means the node's local services are up and serving, but at
+	// least one component that needs the cluster — a raft leader, the schema,
+	// the DNS tables — has not converged. It is a serving state, not a failure
+	// state: a degraded node answers HTTPS, DNS and tenant traffic from its
+	// local replicas, and returns to active on its own when the cluster comes
+	// back. The boot supervisor drives a node in and out of it.
+	StateDegraded    State = "degraded"
 	StateDraining    State = "draining"
 	StateMaintenance State = "maintenance"
 )
@@ -24,10 +31,11 @@ const MaxMaintenanceTTL = 15 * time.Minute
 // validTransitions defines the allowed state machine transitions.
 // Each entry maps from-state → set of valid to-states.
 var validTransitions = map[State]map[State]bool{
-	StateJoining:     {StateActive: true},
-	StateActive:      {StateDraining: true, StateMaintenance: true},
+	StateJoining:     {StateActive: true, StateDegraded: true},
+	StateActive:      {StateDegraded: true, StateDraining: true, StateMaintenance: true},
+	StateDegraded:    {StateActive: true, StateDraining: true, StateMaintenance: true},
 	StateDraining:    {StateMaintenance: true},
-	StateMaintenance: {StateActive: true},
+	StateMaintenance: {StateActive: true, StateDegraded: true},
 }
 
 // StateChangeCallback is called when the lifecycle state changes.
@@ -85,8 +93,31 @@ func (m *Manager) OnStateChange(cb StateChangeCallback) {
 // TransitionTo moves the node to a new lifecycle state.
 // Returns an error if the transition is not valid.
 func (m *Manager) TransitionTo(newState State) error {
+	return m.transition(newState, "")
+}
+
+// TransitionToFrom moves to newState only if the current state is still
+// expected. It exists for callers that decided on a state they read earlier:
+// the boot supervisor picks a target from a snapshot, and without the compare a
+// concurrent EnterMaintenance on the shutdown path can land in between and have
+// its announcement silently undone.
+func (m *Manager) TransitionToFrom(expected, newState State) error {
+	if expected == "" {
+		return fmt.Errorf("lifecycle: TransitionToFrom needs an expected state")
+	}
+	return m.transition(newState, expected)
+}
+
+// transition applies newState. A non-empty expected state makes the change
+// conditional on the current state still being that one.
+func (m *Manager) transition(newState, expected State) error {
 	m.mu.Lock()
 	old := m.state
+
+	if expected != "" && old != expected {
+		m.mu.Unlock()
+		return fmt.Errorf("lifecycle: state moved from %s to %s while %s was being decided", expected, old, newState)
+	}
 
 	allowed, exists := validTransitions[old]
 	if !exists || !allowed[newState] {
@@ -128,7 +159,7 @@ func (m *Manager) EnterMaintenance(ttl time.Duration) error {
 	m.mu.Lock()
 	old := m.state
 
-	// Allow both active→maintenance and draining→maintenance
+	// Reachable from active, degraded and draining.
 	allowed, exists := validTransitions[old]
 	if !exists || !allowed[StateMaintenance] {
 		m.mu.Unlock()
@@ -162,10 +193,14 @@ func (m *Manager) IsMaintenanceExpired() bool {
 }
 
 // IsAvailable returns true if the node is in a state that can serve requests.
+// Degraded counts: the node is up and answering, it just has not finished
+// converging on the cluster. Treating it as unavailable would take a node that
+// is serving perfectly good local traffic out of rotation for the duration of
+// someone else's outage.
 func (m *Manager) IsAvailable() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.state == StateActive
+	return m.state == StateActive || m.state == StateDegraded
 }
 
 // IsInMaintenance returns true if the node is in maintenance mode.

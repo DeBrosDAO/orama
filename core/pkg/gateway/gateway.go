@@ -12,13 +12,13 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
-	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/health"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
@@ -26,18 +26,18 @@ import (
 	authhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/cache"
 	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
-	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
-	pushhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/push"
-	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	enrollhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/enroll"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
-	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
 	operatorhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
-	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
-	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
+	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
+	pushhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/push"
 	ratelimithandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/ratelimit"
+	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	sqlitehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/sqlite"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
+	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
+	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
+	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	nodehealth "github.com/DeBrosOfficial/network/pkg/node/health"
@@ -52,16 +52,34 @@ import (
 	"go.uber.org/zap"
 )
 
-
 type Gateway struct {
-	logger     *logging.ColoredLogger
-	cfg        *Config
-	client     client.NetworkClient
+	logger           *logging.ColoredLogger
+	cfg              *Config
+	client           client.NetworkClient
 	nodePeerID       string // The node's actual peer ID from its identity file (overrides client's peer ID)
 	localWireGuardIP string // WireGuard IP of this node, used to prefer local namespace gateways
 	startedAt        time.Time
 
 	// rqlite SQL connection and HTTP ORM gateway
+	// credentialDeprecations remembers which namespaces have already been
+	// recorded using a credential form that is going away, so the audit trail
+	// says who still has to move without a row per request.
+	credentialDeprecations *deprecationLog
+
+	// shutdownCtx is cancelled by Close. Background work owned by the gateway
+	// derives from it so nothing keeps running against torn-down dependencies.
+	shutdownCtx context.Context
+	shutdown    context.CancelFunc
+
+	// ready is the gateway's own start-up state — see readiness.go. Separate
+	// from the subsystem health in /health, which is about what the gateway
+	// talks to rather than whether the gateway itself can serve.
+	//
+	// A value, not a pointer, so a Gateway assembled without New cannot nil-
+	// deref here and cannot accidentally read as ready. Gateway is only ever
+	// used through a pointer, so the mutex inside is never copied.
+	ready readiness
+
 	sqlDB     *sql.DB
 	ormClient rqlite.Client
 	ormHTTP   *rqlite.HTTPGateway
@@ -77,8 +95,8 @@ type Gateway struct {
 	tunnelIsolationSecret string
 
 	// Olric cache client
-	olricClient *olric.Client
-	olricMu     sync.RWMutex
+	olricClient   *olric.Client
+	olricMu       sync.RWMutex
 	cacheHandlers *cache.CacheHandlers
 
 	// Health check result cache (5s TTL)
@@ -98,39 +116,47 @@ type Gateway struct {
 	pushHandlers     *pushhandlers.Handlers
 
 	// Serverless function engine
-	serverlessEngine     *serverless.Engine
-	serverlessRegistry   *serverless.Registry
-	serverlessInvoker    *serverless.Invoker
-	serverlessWSMgr      *serverless.WSManager
-	serverlessHandlers   *serverlesshandlers.ServerlessHandlers
-	pubsubDispatcher     *triggers.PubSubDispatcher
-	persistentWSManager  *persistent.Manager
-	cronScheduler        *triggers.CronScheduler
+	serverlessEngine    *serverless.Engine
+	serverlessRegistry  *serverless.Registry
+	serverlessInvoker   *serverless.Invoker
+	serverlessWSMgr     *serverless.WSManager
+	serverlessHandlers  *serverlesshandlers.ServerlessHandlers
+	pubsubDispatcher    *triggers.PubSubDispatcher
+	persistentWSManager *persistent.Manager
+	cronScheduler       *triggers.CronScheduler
 
 	// Authentication service
 	authService  *auth.Service
 	authHandlers *authhandlers.Handlers
 
 	// Deployment system
-	deploymentService    *deploymentshandlers.DeploymentService
-	staticHandler        *deploymentshandlers.StaticDeploymentHandler
-	nextjsHandler        *deploymentshandlers.NextJSHandler
-	goHandler            *deploymentshandlers.GoHandler
-	nodejsHandler        *deploymentshandlers.NodeJSHandler
-	listHandler          *deploymentshandlers.ListHandler
-	updateHandler        *deploymentshandlers.UpdateHandler
-	rollbackHandler      *deploymentshandlers.RollbackHandler
-	logsHandler          *deploymentshandlers.LogsHandler
-	statsHandler         *deploymentshandlers.StatsHandler
-	domainHandler        *deploymentshandlers.DomainHandler
-	sqliteHandler        *sqlitehandlers.SQLiteHandler
-	sqliteBackupHandler  *sqlitehandlers.BackupHandler
-	replicaHandler       *deploymentshandlers.ReplicaHandler
-	portAllocator        *deployments.PortAllocator
-	homeNodeManager      *deployments.HomeNodeManager
-	replicaManager       *deployments.ReplicaManager
-	processManager       *process.Manager
-	healthChecker        *health.HealthChecker
+	deploymentService   *deploymentshandlers.DeploymentService
+	staticHandler       *deploymentshandlers.StaticDeploymentHandler
+	nextjsHandler       *deploymentshandlers.NextJSHandler
+	goHandler           *deploymentshandlers.GoHandler
+	nodejsHandler       *deploymentshandlers.NodeJSHandler
+	listHandler         *deploymentshandlers.ListHandler
+	envHandler          *deploymentshandlers.EnvHandler
+	updateHandler       *deploymentshandlers.UpdateHandler
+	rollbackHandler     *deploymentshandlers.RollbackHandler
+	logsHandler         *deploymentshandlers.LogsHandler
+	statsHandler        *deploymentshandlers.StatsHandler
+	domainHandler       *deploymentshandlers.DomainHandler
+	sqliteHandler       *sqlitehandlers.SQLiteHandler
+	sqliteBackupHandler *sqlitehandlers.BackupHandler
+	replicaHandler      *deploymentshandlers.ReplicaHandler
+	portAllocator       *deployments.PortAllocator
+	homeNodeManager     *deployments.HomeNodeManager
+	replicaManager      *deployments.ReplicaManager
+	processManager      *process.Manager
+	healthChecker       *health.HealthChecker
+
+	// internalAuthKey authenticates the X-Internal-Auth-* headers across a
+	// proxy hop (see internal_auth_hop.go). Derived from the cluster secret,
+	// so every node in a cluster has the same one and nobody outside it does.
+	// Empty when this gateway has no cluster secret, and an empty key trusts
+	// nothing.
+	internalAuthKey []byte
 
 	// Middleware cache for auth/routing lookups (eliminates redundant DB queries)
 	mwCache *middlewareCache
@@ -139,15 +165,18 @@ type Gateway struct {
 	logBatcher *requestLogBatcher
 
 	// Rate limiters
-	rateLimiter          *RateLimiter
+	rateLimiter *RateLimiter
+	// authRateLimiter caps the endpoints that mint or exchange credentials,
+	// far below the general limit. See isAuthRateLimitPath.
+	authRateLimiter      *RateLimiter
 	namespaceRateLimiter *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
 	// rateLimitManager (feature #69) handles per-namespace rate limits with
 	// tenant self-service config via /v1/namespace/rate-limit. When set,
 	// namespaceRateLimitMiddleware uses it instead of the legacy
 	// hardcoded-defaults limiter above. nil = falls back to namespaceRateLimiter.
-	rateLimitManager       *ratelimit.Manager
-	rateLimitConfigStore   ratelimit.ConfigStore
-	rateLimitHandlers      *ratelimithandlers.Handlers
+	rateLimitManager     *ratelimit.Manager
+	rateLimitConfigStore ratelimit.ConfigStore
+	rateLimitHandlers    *ratelimithandlers.Handlers
 
 	// WebRTC signaling and TURN credentials
 	webrtcHandlers *webrtchandlers.WebRTCHandlers
@@ -181,6 +210,10 @@ type Gateway struct {
 	// Namespace list handler
 	namespaceListHandler http.Handler
 
+	// namespaceCreateHandler serves POST /v1/namespaces. Creating a namespace
+	// used to be a side effect of asking for a login challenge.
+	namespaceCreateHandler http.Handler
+
 	// Peer discovery for namespace gateways (libp2p mesh formation)
 	peerDiscovery *PeerDiscovery
 
@@ -200,8 +233,8 @@ type Gateway struct {
 	proxyTransport *http.Transport
 
 	// Vault proxy handlers
-	vaultHandlers    *vaulthandlers.Handlers
-	operatorHandler  *operatorhandlers.Handler
+	vaultHandlers   *vaulthandlers.Handlers
+	operatorHandler *operatorhandlers.Handler
 
 	// Namespace health state (local service probes + hourly reconciliation)
 	nsHealth *namespaceHealthState
@@ -309,33 +342,52 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating gateway instance...")
+	shutdownCtx, shutdown := context.WithCancel(context.Background())
 	gw := &Gateway{
-		logger:             logger,
-		cfg:                cfg,
-		client:             deps.Client,
-		nodePeerID:         cfg.NodePeerID,
-		startedAt:          time.Now(),
-		tunnelLimiter:      newTunnelLimiter(),
-		sqlDB:              deps.SQLDB,
-		ormClient:          deps.ORMClient,
-		ormHTTP:            deps.ORMHTTP,
-		olricClient:        deps.OlricClient,
-		ipfsClient:         deps.IPFSClient,
-		serverlessEngine:   deps.ServerlessEngine,
-		serverlessRegistry: deps.ServerlessRegistry,
-		serverlessInvoker:  deps.ServerlessInvoker,
-		serverlessWSMgr:    deps.ServerlessWSMgr,
-		serverlessHandlers: deps.ServerlessHandlers,
-		authService:        deps.AuthService,
-		localSubscribers:   make(map[string][]*localSubscriber),
-		presenceMembers:    make(map[string][]PresenceMember),
-		circuitBreakers:    NewCircuitBreakerRegistry(),
+		logger:                 logger,
+		cfg:                    cfg,
+		client:                 deps.Client,
+		nodePeerID:             cfg.NodePeerID,
+		startedAt:              time.Now(),
+		tunnelLimiter:          newTunnelLimiter(),
+		ready:                  newReadiness(),
+		credentialDeprecations: newDeprecationLog(),
+		shutdownCtx:            shutdownCtx,
+		shutdown:               shutdown,
+		sqlDB:                  deps.SQLDB,
+		ormClient:              deps.ORMClient,
+		ormHTTP:                deps.ORMHTTP,
+		olricClient:            deps.OlricClient,
+		ipfsClient:             deps.IPFSClient,
+		serverlessEngine:       deps.ServerlessEngine,
+		serverlessRegistry:     deps.ServerlessRegistry,
+		serverlessInvoker:      deps.ServerlessInvoker,
+		serverlessWSMgr:        deps.ServerlessWSMgr,
+		serverlessHandlers:     deps.ServerlessHandlers,
+		authService:            deps.AuthService,
+		localSubscribers:       make(map[string][]*localSubscriber),
+		presenceMembers:        make(map[string][]PresenceMember),
+		circuitBreakers:        NewCircuitBreakerRegistry(),
 		proxyTransport: &http.Transport{
 			MaxIdleConns:        200,
 			MaxIdleConnsPerHost: 20,
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
+	// The hop key is what lets a namespace gateway believe this one validated
+	// a request. Without a cluster secret there is no key, no internal-auth
+	// header is ever trusted, and the proxy hop refuses rather than forwarding
+	// an assertion it cannot back — which is the same configuration that
+	// already breaks cross-gateway JWT verification.
+	if key, err := internalAuthKey(cfg.ClusterSecret); err == nil {
+		gw.internalAuthKey = key
+	} else {
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"No cluster secret: internal-auth headers will never be trusted and this "+
+				"gateway cannot delegate auth to a namespace gateway",
+			zap.Error(err))
+	}
+
 	// Wire the JWT verifier so the persistent WS handler can apply
 	// mid-session auth refresh on the open WS (bugboard #321 control
 	// frame). Skipped when either dep is nil — the handler then acks
@@ -362,34 +414,17 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// each gateway restart, so a stable node-local input is preferred.
 	gw.tunnelIsolationSecret = tunnelSecretFrom(cfg)
 
-	// Create separate auth client for global RQLite if GlobalRQLiteDSN is provided
-	// This allows namespace gateways to validate API keys against the global database
-	if cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN {
-		logger.ComponentInfo(logging.ComponentGeneral, "Creating global auth client...",
-			zap.String("global_dsn", cfg.GlobalRQLiteDSN),
-		)
-
-		// Create client config for global namespace
-		authCfg := client.DefaultClientConfig("default") // Use "default" namespace for global
-		authCfg.DatabaseEndpoints = []string{injectRQLiteAuth(cfg.GlobalRQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)}
-		if len(cfg.BootstrapPeers) > 0 {
-			authCfg.BootstrapPeers = cfg.BootstrapPeers
+	// A gateway configured with its own API-key registry must reach it.
+	registryClient, err := connectAPIKeyRegistry(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	if registryClient != nil {
+		gw.authClient = registryClient
+		if deps.AuthService != nil {
+			deps.AuthService.SetAPIKeyRegistry(registryClient)
 		}
-
-		authClient, err := client.NewClient(authCfg)
-		if err != nil {
-			logger.ComponentWarn(logging.ComponentGeneral, "Failed to create global auth client", zap.Error(err))
-		} else {
-			if err := authClient.Connect(); err != nil {
-				logger.ComponentWarn(logging.ComponentGeneral, "Failed to connect global auth client", zap.Error(err))
-			} else {
-				gw.authClient = authClient
-				if deps.AuthService != nil {
-					deps.AuthService.SetAPIKeyRegistry(authClient)
-				}
-				logger.ComponentInfo(logging.ComponentGeneral, "Global auth client connected")
-			}
-		}
+		logger.ComponentInfo(logging.ComponentGeneral, "Global auth client connected")
 	}
 
 	// Initialize handler instances
@@ -500,11 +535,6 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.withInternalAuth,
 		)
 
-		// Configure Solana NFT verifier for Phantom auth (hardcoded collection + RPC)
-		solanaVerifier := auth.NewDefaultSolanaNFTVerifier()
-		gw.authHandlers.SetSolanaVerifier(solanaVerifier)
-		logger.ComponentInfo(logging.ComponentGeneral, "Solana NFT verifier configured")
-
 		// Wire the global-registry API-key querier (gw.apiKeyDB(), preferring
 		// gw.authClient when GlobalRQLiteDSN is configured, else gw.client —
 		// see apikey_querier.go) into the JWT-exchange handler's self-query
@@ -513,6 +543,20 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// registry, never in a namespace's own RQLite, so every gateway must
 		// validate against it.
 		gw.authHandlers.SetAPIKeyDB(&authDatabaseAdapter{db: gw.apiKeyDB()})
+
+		// A namespace gateway's own database is not the key registry, and the
+		// api_keys rows in it are leftovers — the pre-#163 ones being raw
+		// credentials the tenant can read. They are removed here, on the only
+		// gateways where the local database is provably not the registry.
+		if usesSeparateAPIKeyRegistry(cfg) && gw.client != nil {
+			if n, perr := purgeTenantPlaintextAPIKeys(context.Background(), gw.client.Database()); perr != nil {
+				logger.ComponentWarn(logging.ComponentGeneral,
+					"plaintext API keys are still on disk in this namespace's own database", zap.Error(perr))
+			} else if n > 0 {
+				logger.ComponentInfo(logging.ComponentGeneral,
+					"Removed leftover plaintext API keys from this namespace's database", zap.Int("count", n))
+			}
+		}
 
 		if strings.TrimSpace(cfg.APIKeyHMACSecret) != "" {
 			n, merr := deps.AuthService.MigratePlaintextAPIKeys(context.Background())
@@ -524,6 +568,15 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 					zap.Int("count", n))
 			}
 		}
+		// Expired revocations deny nothing. Pruning keeps the table the size
+		// of the revocations still in flight rather than growing forever.
+		deps.AuthService.Revocations().StartPruning(context.Background())
+
+		// Same reason, different table: every authenticated request can add to
+		// the audit trail, and it is replicated to every node, so without this
+		// it grows for ever (the shape of bug-237).
+		deps.AuthService.Audit().StartPruning(context.Background())
+
 		if on, oerr := deps.AuthService.RevokeOrphanedAPIKeys(context.Background()); oerr != nil {
 			logger.ComponentWarn(logging.ComponentGeneral, "revoke orphaned API keys failed", zap.Error(oerr))
 		} else if on > 0 {
@@ -542,8 +595,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	//
 	// Per-IP: token bucket against the client IP. Generous so legitimate
 	// users behind shared NATs aren't squeezed.
-	gw.rateLimiter = NewRateLimiter(10000, 5000)
-	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+	configureRateLimiters(gw)
+
+	// Challenges are Raft-replicated rows that stop being claimable the moment
+	// they expire, and nothing removed them: the table only ever grew.
+	if deps.AuthService != nil {
+		deps.AuthService.StartNonceReaper(gw.shutdownCtx)
+	}
 
 	// Per-namespace: feature #69 — backed by an LRU manager with
 	// per-namespace overrides via /v1/namespace/rate-limit (config in
@@ -577,27 +635,47 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	if deps.ORMClient != nil {
 		gw.wireguardHandler = wireguardhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.ClusterSecret)
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
+		gw.joinHandler.SetAuditLog(deps.AuthService.Audit())
 		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.vaultHandlers = vaulthandlers.NewHandlers(logger, deps.Client)
 		gw.operatorHandler = operatorhandlers.NewHandler(logger.Logger, deps.ORMClient)
+		if deps.AuthService != nil {
+			gw.operatorHandler.SetAuditLog(deps.AuthService.Audit())
+		}
 	}
 
-	// Initialize deployment system
-	if deps.ORMClient != nil && deps.IPFSClient != nil {
+	// Initialize deployment system.
+	//
+	// A deployment's environment is where the platform tells people to put
+	// their secrets, and it is encrypted with a key derived from the cluster
+	// secret. Without that secret there is no key, so the deployment system
+	// does not start rather than storing every tenant's credentials in the
+	// clear in a Raft-replicated table.
+	envCodec, envCodecErr := deployments.NewEnvCodec(cfg.ClusterSecret)
+	if envCodecErr != nil {
+		logger.Logger.Error("deployments are unavailable on this gateway: without a cluster secret "+
+			"there is no key to encrypt deployment environments with",
+			zap.Error(envCodecErr))
+	}
+	if deps.ORMClient != nil && deps.IPFSClient != nil && envCodec != nil {
 		// Convert rqlite.Client to database.Database interface for health checker
 		dbAdapter := &deploymentDatabaseAdapter{client: deps.ORMClient}
-
-		// Create deployment service components
-		gw.portAllocator = deployments.NewPortAllocator(deps.ORMClient, logger.Logger)
-		gw.homeNodeManager = deployments.NewHomeNodeManager(deps.ORMClient, gw.portAllocator, logger.Logger)
-		gw.replicaManager = deployments.NewReplicaManager(deps.ORMClient, gw.homeNodeManager, gw.portAllocator, logger.Logger)
-		gw.processManager = process.NewManager(logger.Logger)
 
 		// Create deployment service
 		baseDomain := gw.cfg.BaseDomain
 		if baseDomain == "" {
 			baseDomain = "dbrs.space"
 		}
+
+		// Create deployment service components
+		gw.portAllocator = deployments.NewPortAllocator(deps.ORMClient, logger.Logger)
+		gw.homeNodeManager = deployments.NewHomeNodeManager(deps.ORMClient, gw.portAllocator, logger.Logger)
+		gw.replicaManager = deployments.NewReplicaManager(deps.ORMClient, gw.homeNodeManager, gw.portAllocator, logger.Logger)
+		gw.processManager = process.NewManager(logger.Logger, process.Config{
+			EnvDir:     deploymentEnvDir(cfg.DataDir),
+			BaseDomain: baseDomain,
+		})
+
 		gw.deploymentService = deploymentshandlers.NewDeploymentService(
 			deps.ORMClient,
 			gw.homeNodeManager,
@@ -605,6 +683,8 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.replicaManager,
 			logger.Logger,
 			baseDomain,
+			envCodec,
+			deps.AuthService.Audit(),
 		)
 		// Set node peer ID so deployments run on the node that receives the request
 		if gw.cfg.NodePeerID != "" {
@@ -652,6 +732,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.deploymentService,
 			gw.processManager,
 			deps.IPFSClient,
+			logger.Logger,
+			baseDeployPath,
+		)
+
+		gw.envHandler = deploymentshandlers.NewEnvHandler(
+			gw.deploymentService,
+			gw.processManager,
 			logger.Logger,
 			baseDeployPath,
 		)
@@ -714,22 +801,52 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// Start health checker
 		gw.healthChecker = health.NewHealthChecker(dbAdapter, logger.Logger, cfg.NodePeerID, gw.processManager)
 		gw.healthChecker.SetReconciler(cfg.RQLiteDSN, gw.replicaManager, gw.deploymentService)
-		go gw.healthChecker.Start(context.Background())
+		// Waits for readiness: it queries the deployment tables, which do not
+		// exist until the migrations this gateway is still applying have run.
+		go func() {
+			if gw.AwaitReady(context.Background()) {
+				gw.healthChecker.Start(context.Background())
+			}
+		}()
 
 		logger.ComponentInfo(logging.ComponentGeneral, "Deployment system initialized")
 	}
 
-	// Start background Olric reconnection if initial connection failed
-	if deps.OlricClient == nil {
+	// Re-allocate IPFS content that has dropped below its replication factor.
+	// One node per interval does the work; the cluster lock decides which.
+	if ipfsClient, ok := deps.IPFSClient.(*ipfs.Client); ok && ipfsClient != nil {
+		gw.StartPinSweep(gw.shutdownCtx, ipfsClient, cfg.IPFSReplicationFactor)
+	}
+
+	// Supervise Olric for the life of the process, whether or not the initial
+	// connection worked. Arming this only on an initial failure meant the
+	// common case — up at start, dies later — was never covered.
+	{
 		olricCfg := olric.Config{
 			Servers: cfg.OlricServers,
 			Timeout: cfg.OlricTimeout,
 		}
 		if len(olricCfg.Servers) == 0 {
-			olricCfg.Servers = []string{"localhost:10102"}
+			// The list discovery actually resolved, not a guess. The old
+			// fallback used cfg.OlricServers (empty on a namespace gateway)
+			// and then a hardcoded localhost, so a gateway that lost its cache
+			// spent the rest of its life reconnecting to the wrong address.
+			olricCfg.Servers = deps.OlricServers
 		}
-		gw.startOlricReconnectLoop(olricCfg)
+		if len(olricCfg.Servers) == 0 {
+			olricCfg.Servers = []string{constants.OlricAddrFor("localhost")}
+		}
+		gw.startOlricSupervisor(gw.shutdownCtx, olricCfg)
 	}
+
+	// Bring the schema up in the background. Until it succeeds the gateway
+	// serves /health as "starting" and refuses everything else; see
+	// readiness.go for why this is not part of start-up.
+	//
+	// Bound to the gateway's own lifetime: Close closes the database, and a
+	// loop still retrying against a closed handle would spin on
+	// "sql: database is closed" until the process exited.
+	gw.startSchemaReadiness(gw.shutdownCtx, cfg, deps)
 
 	// Initialize peer discovery for namespace gateways
 	// This allows the 3 namespace gateway instances to discover each other
@@ -757,29 +874,51 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 				logger.Logger,
 			)
 
-			// Start peer discovery
-			ctx := context.Background()
-			if err := gw.peerDiscovery.Start(ctx); err != nil {
-				logger.ComponentWarn(logging.ComponentGeneral, "Failed to start peer discovery",
-					zap.Error(err))
-			} else {
+			// Start peer discovery once the schema exists: it registers into
+			// gateway_peers, a table the migrations this gateway is still
+			// applying create.
+			go func() {
+				ctx := context.Background()
+				if !gw.AwaitReady(ctx) {
+					return
+				}
+				if err := gw.peerDiscovery.Start(ctx); err != nil {
+					logger.ComponentWarn(logging.ComponentGeneral, "Failed to start peer discovery",
+						zap.Error(err))
+					return
+				}
 				logger.ComponentInfo(logging.ComponentGeneral, "Peer discovery started successfully",
 					zap.String("namespace", cfg.ClientNamespace))
-			}
+			}()
 		} else {
 			logger.ComponentWarn(logging.ComponentGeneral, "Cannot initialize peer discovery: libp2p host not available")
 		}
 	}
 
-	// Start node health monitor (ring-based peer failure detection)
-	if cfg.NodePeerID != "" && deps.SQLDB != nil {
-		gw.healthMonitor = nodehealth.NewMonitor(nodehealth.Config{
+	// Start node health monitor (ring-based peer failure detection).
+	//
+	// Index gateway only. The ring is built from dns_nodes, which is written by
+	// the node heartbeat into the INDEX rqlite; a tenant gateway's SQLDB is its
+	// own namespace rqlite, where core migrations create dns_nodes but nothing
+	// ever inserts a row (bugboard #153). Running the monitor there gave every
+	// tenant gateway an empty ring — wasted work at best, and one schema change
+	// away from acting on a half-populated table.
+	if cfg.NodePeerID != "" && deps.SQLDB != nil && !isNamespaceGateway(cfg) {
+		healthMonitor, healthErr := nodehealth.NewMonitor(nodehealth.Config{
 			NodeID:        cfg.NodePeerID,
 			DB:            deps.SQLDB,
 			Logger:        logger.Logger,
 			ProbeInterval: 10 * time.Second,
 			Neighbors:     3,
+			// Peers are probed on their index gateway, not on this process's
+			// own port: a tenant gateway listens on a namespace port that no
+			// other node serves /v1/internal/ping on.
+			ProbePort: constants.GatewayAPIPort,
 		})
+		if healthErr != nil {
+			return nil, fmt.Errorf("start node health monitor: %w", healthErr)
+		}
+		gw.healthMonitor = healthMonitor
 		gw.healthMonitor.OnNodeDead(func(nodeID string) {
 			logger.ComponentError(logging.ComponentGeneral, "Node confirmed dead by quorum — starting recovery",
 				zap.String("dead_node", nodeID))
@@ -802,14 +941,22 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 				go gw.nodeRecoverer.HandleSuspectNode(context.Background(), nodeID)
 			}
 		})
-		go gw.healthMonitor.Start(context.Background())
+		go func() {
+			if gw.AwaitReady(context.Background()) {
+				gw.healthMonitor.Start(context.Background())
+			}
+		}()
 		logger.ComponentInfo(logging.ComponentGeneral, "Node health monitor started",
 			zap.String("node_id", cfg.NodePeerID))
 	}
 
 	// Start namespace health monitoring loop (local probes every 30s, reconciliation every 1h)
 	if cfg.NodePeerID != "" && deps.SQLDB != nil {
-		go gw.startNamespaceHealthLoop(context.Background())
+		go func() {
+			if gw.AwaitReady(context.Background()) {
+				gw.startNamespaceHealthLoop(context.Background())
+			}
+		}()
 		logger.ComponentInfo(logging.ComponentGeneral, "Namespace health monitor started")
 	}
 
@@ -876,9 +1023,6 @@ func (g *Gateway) getLocalSubscribers(topic, namespace string) []*localSubscribe
 // This enables automatic RQLite/Olric/Gateway cluster provisioning when new namespaces are created.
 func (g *Gateway) SetClusterProvisioner(cp authhandlers.ClusterProvisioner) {
 	g.clusterProvisioner = cp
-	if g.authHandlers != nil {
-		g.authHandlers.SetClusterProvisioner(cp)
-	}
 }
 
 // SetNodeRecoverer sets the handler for dead node recovery and revived node cleanup.
@@ -906,12 +1050,26 @@ func (g *Gateway) SetNamespaceListHandler(h http.Handler) {
 	g.namespaceListHandler = h
 }
 
+// SetNamespaceCreateHandler sets the handler for namespace creation.
+func (g *Gateway) SetNamespaceCreateHandler(h http.Handler) {
+	g.namespaceCreateHandler = h
+}
+
 // GetORMClient returns the RQLite ORM client for external use (e.g., by ClusterManager)
 func (g *Gateway) GetORMClient() rqlite.Client {
 	return g.ormClient
 }
 
 // GetIPFSClient returns the IPFS client for external use (e.g., by namespace delete handler)
+// GetAuditLog returns the record of auth events, so handlers wired from
+// outside this package can write to the same one.
+func (g *Gateway) GetAuditLog() *auth.AuditLog {
+	if g.authService == nil {
+		return nil
+	}
+	return g.authService.Audit()
+}
+
 func (g *Gateway) GetIPFSClient() ipfs.IPFSClient {
 	return g.ipfsClient
 }
@@ -933,36 +1091,122 @@ func (g *Gateway) getOlricClient() *olric.Client {
 	return g.olricClient
 }
 
-// startOlricReconnectLoop starts a background goroutine that continuously attempts
-// to reconnect to the Olric cluster with exponential backoff.
-func (g *Gateway) startOlricReconnectLoop(cfg olric.Config) {
+// Olric supervision bounds.
+const (
+	// olricProbeInterval is how often a connected client is re-checked. Short
+	// enough that a namespace stops hanging on a dead cache within a probe or
+	// two, long enough not to be its own load.
+	olricProbeInterval = 10 * time.Second
+
+	// olricUnhealthyThreshold is how many consecutive failed probes before the
+	// client is dropped. One failure is a blip; three across half a minute is
+	// the cache being gone.
+	olricUnhealthyThreshold = 3
+
+	// olricReconnectBase / olricReconnectMax bound the retry while
+	// disconnected.
+	olricReconnectBase = 5 * time.Second
+	olricReconnectMax  = 30 * time.Second
+)
+
+// startOlricSupervisor keeps the Olric client in step with reality for the life
+// of the process.
+//
+// It replaces a one-shot reconnect loop that returned as soon as it connected
+// once, and which was only armed when the INITIAL connect had failed. So the
+// common case — Olric up at start, dies later — left a stale client wired in
+// for ever: handlers returned transport errors on every request instead of the
+// honest 503 the nil-client branch produces, and /health kept saying healthy
+// while namespace requests hung.
+//
+// Two states. Connected: probe, and on sustained failure drop the client so
+// handlers answer 503. Disconnected: retry with backoff until one works. It
+// never returns.
+func (g *Gateway) startOlricSupervisor(ctx context.Context, cfg olric.Config) {
 	go func() {
-		retryDelay := 5 * time.Second
-		maxBackoff := 30 * time.Second
+		failures := 0
+		retryDelay := olricReconnectBase
 
 		for {
+			if g.getOlricClient() != nil {
+				if err := g.probeOlric(ctx); err != nil {
+					failures++
+					g.logger.ComponentWarn(logging.ComponentGeneral, "Olric probe failed",
+						zap.Int("consecutive_failures", failures),
+						zap.Int("threshold", olricUnhealthyThreshold),
+						zap.Error(err))
+
+					if failures >= olricUnhealthyThreshold {
+						// Drop it. A client that cannot reach its cluster
+						// returns errors from every call; a nil one returns a
+						// 503, which is the truthful answer and the one a
+						// caller can act on.
+						g.logger.ComponentError(logging.ComponentGeneral,
+							"Olric is unreachable; cache requests will return 503 until it recovers",
+							zap.Int("consecutive_failures", failures))
+						g.setOlricClient(nil)
+						failures = 0
+						retryDelay = olricReconnectBase
+					}
+				} else {
+					failures = 0
+				}
+
+				if !sleepCtx(ctx, olricProbeInterval) {
+					return
+				}
+				continue
+			}
+
 			client, err := olric.NewClient(cfg, g.logger.Logger)
 			if err == nil {
 				g.setOlricClient(client)
-				g.logger.ComponentInfo(logging.ComponentGeneral, "Olric cache client connected after background retries",
+				g.logger.ComponentInfo(logging.ComponentGeneral, "Olric cache client connected",
 					zap.Strings("servers", cfg.Servers),
 					zap.Duration("timeout", cfg.Timeout))
-				return
+				retryDelay = olricReconnectBase
+				if !sleepCtx(ctx, olricProbeInterval) {
+					return
+				}
+				continue
 			}
 
 			g.logger.ComponentWarn(logging.ComponentGeneral, "Olric cache client reconnect failed",
 				zap.Duration("retry_in", retryDelay),
 				zap.Error(err))
 
-			time.Sleep(retryDelay)
-			if retryDelay < maxBackoff {
-				retryDelay *= 2
-				if retryDelay > maxBackoff {
-					retryDelay = maxBackoff
-				}
+			if !sleepCtx(ctx, retryDelay) {
+				return
+			}
+			retryDelay *= 2
+			if retryDelay > olricReconnectMax {
+				retryDelay = olricReconnectMax
 			}
 		}
 	}()
+}
+
+// probeOlric checks that the current client can still reach its cluster.
+func (g *Gateway) probeOlric(ctx context.Context) error {
+	client := g.getOlricClient()
+	if client == nil {
+		return fmt.Errorf("no olric client")
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, olricProbeInterval)
+	defer cancel()
+	return client.Health(probeCtx)
+}
+
+// sleepCtx waits for d, and reports false if the context ended first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // Cache handler wrappers - these check cacheHandlers dynamically to support
@@ -1074,9 +1318,8 @@ func (g *Gateway) namespaceClusterRepairHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Internal auth check: header + WireGuard subnet verification
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	if !g.verifyCoordination(r) {
+		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
 		return
 	}
 
@@ -1115,7 +1358,7 @@ func (g *Gateway) namespaceWebRTCEnablePublicHandler(w http.ResponseWriter, r *h
 
 	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
 	if namespaceName == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 
@@ -1148,7 +1391,7 @@ func (g *Gateway) namespaceWebRTCDisablePublicHandler(w http.ResponseWriter, r *
 
 	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
 	if namespaceName == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 
@@ -1182,7 +1425,7 @@ func (g *Gateway) namespaceWebRTCStealthPublicHandler(w http.ResponseWriter, r *
 
 	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
 	if namespaceName == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 
@@ -1223,7 +1466,7 @@ func (g *Gateway) namespaceWebRTCStatusPublicHandler(w http.ResponseWriter, r *h
 
 	namespaceName, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
 	if namespaceName == "" {
-		writeError(w, http.StatusForbidden, "namespace not resolved")
+		forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 		return
 	}
 
@@ -1250,121 +1493,98 @@ func (g *Gateway) namespaceWebRTCStatusPublicHandler(w http.ResponseWriter, r *h
 	}
 }
 
-// namespaceWebRTCEnableHandler handles POST /v1/internal/namespace/webrtc/enable?namespace={name}
-// Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
-func (g *Gateway) namespaceWebRTCEnableHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
+// configureRateLimiters sets both buckets, so their relative size is one
+// decision in one place and a test can check it.
+//
+// 30 credential operations a minute from one address, bursting to 10, against
+// a general 10,000 a minute. A person signing in does two or three; anyone
+// grinding nonces, signatures or token exchanges does far more, and the
+// general limit is no obstacle at all to that.
+func configureRateLimiters(gw *Gateway) {
+	gw.rateLimiter = NewRateLimiter(10000, 5000)
+	gw.rateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
 
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	namespaceName := r.URL.Query().Get("namespace")
-	if namespaceName == "" {
-		writeError(w, http.StatusBadRequest, "namespace parameter required")
-		return
-	}
-
-	if g.webrtcManager == nil {
-		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
-		return
-	}
-
-	if err := g.webrtcManager.EnableWebRTC(r.Context(), namespaceName, "cli"); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    "ok",
-		"namespace": namespaceName,
-		"message":   "WebRTC enabled successfully",
-	})
+	gw.authRateLimiter = NewRateLimiter(30, 10)
+	gw.authRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
 }
 
-// namespaceWebRTCDisableHandler handles POST /v1/internal/namespace/webrtc/disable?namespace={name}
-// Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
-func (g *Gateway) namespaceWebRTCDisableHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
+// apiKeyRegistryProbeTimeout bounds the one query that proves the registry is
+// there. Short: this runs on the boot path, and a registry that cannot answer
+// a trivial read in this long is not one to start serving against.
+const apiKeyRegistryProbeTimeout = 15 * time.Second
 
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	namespaceName := r.URL.Query().Get("namespace")
-	if namespaceName == "" {
-		writeError(w, http.StatusBadRequest, "namespace parameter required")
-		return
-	}
-
-	if g.webrtcManager == nil {
-		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
-		return
-	}
-
-	if err := g.webrtcManager.DisableWebRTC(r.Context(), namespaceName); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    "ok",
-		"namespace": namespaceName,
-		"message":   "WebRTC disabled successfully",
-	})
+// usesSeparateAPIKeyRegistry reports whether this gateway validates API keys
+// against a registry other than its own database.
+//
+// A namespace gateway does: its own rqlite is the tenant's, and keys live in
+// the cluster's. The index gateway does not — there, its own database is the
+// registry.
+func usesSeparateAPIKeyRegistry(cfg *Config) bool {
+	return cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN
 }
 
-// namespaceWebRTCStatusHandler handles GET /v1/internal/namespace/webrtc/status?namespace={name}
-// Internal-only: authenticated by X-Orama-Internal-Auth header + WireGuard subnet.
-func (g *Gateway) namespaceWebRTCStatusHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
+// connectAPIKeyRegistry opens the client API-key validation reads from, or
+// returns (nil, nil) when this gateway's own database is the registry.
+//
+// A failure here used to be a warning. The gateway then carried on with no
+// registry client, and apiKeyDB() fell back to the local database — which on a
+// namespace gateway is the tenant's own rqlite, holding an api_keys table the
+// core migrations created there and the tenant can write. A gateway that could
+// not reach the registry did not stop authenticating; it started authenticating
+// against a table the tenant controls.
+//
+// There is no safe store to fall back to, so this is fatal. The consequence is
+// deliberate: while the cluster's registry is unreachable, a namespace gateway
+// does not start. Serving with the wrong idea of who holds which key is worse
+// than not serving.
+func connectAPIKeyRegistry(cfg *Config, logger *logging.ColoredLogger) (client.NetworkClient, error) {
+	if !usesSeparateAPIKeyRegistry(cfg) {
+		return nil, nil
 	}
 
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
+	logger.ComponentInfo(logging.ComponentGeneral, "Creating global auth client...",
+		zap.String("global_dsn", cfg.GlobalRQLiteDSN),
+	)
+
+	authCfg := client.DefaultClientConfig("default") // the registry is not a tenant namespace
+	authCfg.DatabaseEndpoints = []string{injectRQLiteAuth(cfg.GlobalRQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)}
+	if len(cfg.BootstrapPeers) > 0 {
+		authCfg.BootstrapPeers = cfg.BootstrapPeers
 	}
 
-	namespaceName := r.URL.Query().Get("namespace")
-	if namespaceName == "" {
-		writeError(w, http.StatusBadRequest, "namespace parameter required")
-		return
-	}
-
-	if g.webrtcManager == nil {
-		writeError(w, http.StatusServiceUnavailable, "WebRTC management not enabled")
-		return
-	}
-
-	config, err := g.webrtcManager.GetWebRTCStatus(r.Context(), namespaceName)
+	registryClient, err := client.NewClient(authCfg)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, fmt.Errorf("this gateway validates API keys against the registry at %s, but the client "+
+			"could not be created and there is no safe store to use instead: %w", cfg.GlobalRQLiteDSN, err)
+	}
+	// Connect brings up the client's own P2P side. It reports success without
+	// having spoken to the database, so it is not evidence that the registry
+	// is there — the probe below is. It is still checked, because a client
+	// that could not start is a different failure and says so.
+	if err := registryClient.Connect(); err != nil {
+		return nil, fmt.Errorf("this gateway validates API keys against the registry at %s, but its client "+
+			"could not start and there is no safe store to use instead: %w", cfg.GlobalRQLiteDSN, err)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if config == nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"namespace": namespaceName,
-			"enabled":   false,
-		})
-	} else {
-		json.NewEncoder(w).Encode(config)
+	// Ask the registry a question only the registry can answer.
+	probeCtx, cancel := context.WithTimeout(context.Background(), apiKeyRegistryProbeTimeout)
+	defer cancel()
+	if _, err := registryClient.Database().Query(probeCtx, "SELECT 1 FROM api_keys LIMIT 1"); err != nil {
+		registryClient.Disconnect()
+		return nil, fmt.Errorf("this gateway validates API keys against the registry at %s, but it did not "+
+			"answer and there is no safe store to use instead: %w", cfg.GlobalRQLiteDSN, err)
 	}
+
+	return registryClient, nil
 }
 
+// deploymentEnvDir is where the deployments' environment files live: beside
+// their code, not inside it. A deployment's own directory has to be readable by
+// the unprivileged user the deployment runs as, and its environment must not
+// be.
+func deploymentEnvDir(dataDir string) string {
+	if strings.TrimSpace(dataDir) == "" {
+		return ""
+	}
+	return filepath.Join(dataDir, "deployment-env")
+}

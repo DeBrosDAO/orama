@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"strings"
 )
 
@@ -77,7 +78,7 @@ func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 	fmt.Printf("  External (must be open in firewall):\n")
 	fmt.Printf("    - 80   (HTTP for ACME/Let's Encrypt)\n")
 	fmt.Printf("    - 443  (HTTPS gateway)\n")
-	fmt.Printf("    - 4101 (IPFS swarm)\n")
+	fmt.Printf("    - %d (IPFS swarm)\n", constants.IPFSSwarmPort)
 	fmt.Printf("    - 10101 (RQLite Raft)\n")
 	fmt.Printf("  Internal (localhost / overlay):\n")
 	fmt.Printf("    - 10100 (RQLite HTTP)\n")

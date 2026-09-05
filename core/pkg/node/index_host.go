@@ -14,11 +14,7 @@ func (n *Node) indexSupervisor() (*namespace.IndexSupervisor, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	nodeID := n.config.Node.ID
-	if nodeID == "" {
-		nodeID = "node"
-	}
-	return namespace.NewIndexSupervisor(filepath.Dir(dataDir), n.logger.Logger), nodeID, nil
+	return namespace.NewIndexSupervisor(filepath.Dir(dataDir), n.logger.Logger), n.nodeID(), nil
 }
 
 // startIndexWireGuard brings up existing wg0 before libp2p / rqlite need the mesh.
@@ -49,9 +45,15 @@ func (n *Node) startIndexStorage(_ context.Context) error {
 	return nil
 }
 
-// startIndexEdge starts vault, optional SNI router, Caddy, ntfy, and anyone-client
-// after the index gateway is on :6001 (Caddy reverse_proxies that port).
-func (n *Node) startIndexEdge(_ context.Context) error {
+// startIndexEdgeServing starts the units that make this node able to answer
+// public traffic: the vault guardian, the optional SNI router, and Caddy, which
+// terminates TLS and reverse_proxies the index gateway.
+//
+// These are separated from the auxiliary units below because registering in
+// dns_nodes is a promise that this node serves. Sending traffic to a node whose
+// Caddy never started is a fail-open, and gating the registration on ntfy —
+// which serves nothing — would be a fail-closed for no reason.
+func (n *Node) startIndexEdgeServing(_ context.Context) error {
 	sup, nodeID, err := n.indexSupervisor()
 	if err != nil {
 		return err
@@ -64,6 +66,17 @@ func (n *Node) startIndexEdge(_ context.Context) error {
 	}
 	if err := sup.EnsureCaddy(nodeID); err != nil {
 		return fmt.Errorf("index caddy: %w", err)
+	}
+	return nil
+}
+
+// startIndexEdgeAux starts ntfy and the anyone-client. Neither terminates
+// traffic for this node, so a failure here degrades it without taking it out of
+// DNS.
+func (n *Node) startIndexEdgeAux(_ context.Context) error {
+	sup, nodeID, err := n.indexSupervisor()
+	if err != nil {
+		return err
 	}
 	if err := sup.EnsureNtfy(nodeID); err != nil {
 		return fmt.Errorf("index ntfy: %w", err)

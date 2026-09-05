@@ -127,7 +127,7 @@ func (b *Builder) Build() error {
 	// Step 12: Create archive
 	outputPath := b.flags.Output
 	if outputPath == "" {
-		outputPath = fmt.Sprintf("/tmp/orama-%s-linux-%s.tar.gz", b.version, b.flags.Arch)
+		outputPath = filepath.Join(ArchiveDir, ArchiveName(b.version, b.flags.Arch))
 	}
 
 	if err := b.createArchive(outputPath, manifest); err != nil {
@@ -743,7 +743,7 @@ func init() {
 // Provider wraps the Orama DNS provider for Caddy.
 type Provider struct {
 	// Endpoint is the URL of the Orama gateway's ACME API
-	// Default: http://localhost:6001/v1/internal/acme
+	// Default: the index gateway /v1/internal/acme
 	Endpoint string ` + "`json:\"endpoint,omitempty\"`" + `
 }
 

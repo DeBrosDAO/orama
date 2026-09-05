@@ -21,6 +21,22 @@ func (cm *ClusterManager) initTenantDrivers() {
 	cm.drivers.Register(&gatewayClusterDriver{cm: cm})
 }
 
+// probeTarget builds the overlay host:port a readiness probe dials.
+//
+// Probes go over the WireGuard address, not the public one: the tenant service
+// ports are only reachable there, and a probe that dialled a public IP would be
+// testing the firewall rather than the service.
+func probeTarget(cm *ClusterManager, nodeID string, ports []int) (string, error) {
+	if len(ports) == 0 || ports[0] == 0 {
+		return "", fmt.Errorf("no port allocated")
+	}
+	internalIP, err := cm.nodeInternalIP(nodeID)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%d", internalIP, ports[0]), nil
+}
+
 func tenantSpec(name ServiceName) ServiceSpec {
 	for _, spec := range BlueprintTenant().Services {
 		if spec.Name == name {
@@ -38,8 +54,18 @@ func (d *rqliteClusterDriver) PortNeeds() []PortNeed { return tenantSpec(Service
 func (d *rqliteClusterDriver) Stop(context.Context, string, string) error {
 	return nil
 }
-func (d *rqliteClusterDriver) Ready(context.Context, string, string, []int) error {
-	return nil
+
+// Ready waits for this node's tenant rqlite to be participating in raft and
+// able to serve a read. ports carries the node's block; the first entry is the
+// HTTP port, per the driver's PortNeeds.
+func (d *rqliteClusterDriver) Ready(ctx context.Context, ns, node string, ports []int) error {
+	hostPort, err := probeTarget(d.cm, node, ports)
+	if err != nil {
+		return fmt.Errorf("rqlite readiness for %s on %s: %w", ns, node, err)
+	}
+	return awaitReady(ctx, readyTimeout, fmt.Sprintf("rqlite for %s on %s", ns, node), func(ctx context.Context) error {
+		return rqliteReady(ctx, hostPort)
+	})
 }
 func (d *rqliteClusterDriver) Spawn(ctx context.Context, req SpawnRequest) error {
 	inst, err := d.cm.startRQLiteCluster(ctx, req.Cluster, req.Nodes, req.PortBlocks)
@@ -60,8 +86,16 @@ func (d *olricClusterDriver) PortNeeds() []PortNeed { return tenantSpec(ServiceO
 func (d *olricClusterDriver) Stop(context.Context, string, string) error {
 	return nil
 }
-func (d *olricClusterDriver) Ready(context.Context, string, string, []int) error {
-	return nil
+
+// Ready waits for this node's tenant Olric to answer.
+func (d *olricClusterDriver) Ready(ctx context.Context, ns, node string, ports []int) error {
+	hostPort, err := probeTarget(d.cm, node, ports)
+	if err != nil {
+		return fmt.Errorf("olric readiness for %s on %s: %w", ns, node, err)
+	}
+	return awaitReady(ctx, readyTimeout, fmt.Sprintf("olric for %s on %s", ns, node), func(ctx context.Context) error {
+		return olricReady(ctx, hostPort)
+	})
 }
 func (d *olricClusterDriver) Spawn(ctx context.Context, req SpawnRequest) error {
 	inst, err := d.cm.startOlricCluster(ctx, req.Cluster, req.Nodes, req.PortBlocks)
@@ -82,8 +116,18 @@ func (d *gatewayClusterDriver) PortNeeds() []PortNeed { return tenantSpec(Servic
 func (d *gatewayClusterDriver) Stop(context.Context, string, string) error {
 	return nil
 }
-func (d *gatewayClusterDriver) Ready(context.Context, string, string, []int) error {
-	return nil
+
+// Ready waits for this node's tenant gateway to report that it can reach both
+// rqlite and Olric. This is the probe that makes `ready` mean anything: the
+// gateway is the only component that talks to both.
+func (d *gatewayClusterDriver) Ready(ctx context.Context, ns, node string, ports []int) error {
+	hostPort, err := probeTarget(d.cm, node, ports)
+	if err != nil {
+		return fmt.Errorf("gateway readiness for %s on %s: %w", ns, node, err)
+	}
+	return awaitReady(ctx, readyTimeout, fmt.Sprintf("gateway for %s on %s", ns, node), func(ctx context.Context) error {
+		return gatewayReady(ctx, hostPort)
+	})
 }
 func (d *gatewayClusterDriver) Spawn(ctx context.Context, req SpawnRequest) error {
 	state := req.State

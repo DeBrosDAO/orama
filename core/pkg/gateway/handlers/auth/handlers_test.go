@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -46,21 +47,6 @@ func (m *mockNetworkClient) Database() DatabaseClient {
 	return m.db
 }
 
-// mockClusterProvisioner implements ClusterProvisioner as a no-op.
-type mockClusterProvisioner struct{}
-
-func (m *mockClusterProvisioner) CheckNamespaceCluster(_ context.Context, _ string) (string, string, bool, error) {
-	return "", "", false, nil
-}
-
-func (m *mockClusterProvisioner) ProvisionNamespaceCluster(_ context.Context, _ int, _, _ string) (string, string, error) {
-	return "", "", nil
-}
-
-func (m *mockClusterProvisioner) GetClusterStatusByID(_ context.Context, _ string) (interface{}, error) {
-	return nil, nil
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -93,12 +79,6 @@ func TestNewHandlers(t *testing.T) {
 	if h == nil {
 		t.Fatal("NewHandlers returned nil")
 	}
-}
-
-func TestSetClusterProvisioner(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-	// Should not panic.
-	h.SetClusterProvisioner(&mockClusterProvisioner{})
 }
 
 // --- ChallengeHandler tests -----------------------------------------------
@@ -693,87 +673,28 @@ func TestApiKeyLookupCandidates(t *testing.T) {
 	}
 }
 
-// --- RegisterHandler tests ------------------------------------------------
+// --- consumeNonce ---------------------------------------------------------
 
-func TestRegisterHandler_MissingFields(t *testing.T) {
+// A challenge that cannot be claimed must stop the request. This is the gate
+// that makes a wallet signature single-use, so it fails closed: when the
+// service cannot guarantee single use, the handler answers 503 rather than
+// letting the request through.
+func TestConsumeNonce_FailsClosedWhenSingleUseNotGuaranteed(t *testing.T) {
+	// A service with no rqlite client cannot perform the conditional UPDATE
+	// that makes consumption atomic.
 	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
 	if err != nil {
-		t.Fatalf("failed to create auth service: %v", err)
+		t.Fatalf("NewService: %v", err)
 	}
 	h := NewHandlers(testLogger(), svc, nil, "default", noopInternalAuth)
 
-	tests := []struct {
-		name string
-		req  RegisterRequest
-	}{
-		{"missing wallet", RegisterRequest{Nonce: "n", Signature: "s"}},
-		{"missing nonce", RegisterRequest{Wallet: "0x123", Signature: "s"}},
-		{"missing signature", RegisterRequest{Wallet: "0x123", Nonce: "n"}},
-		{"all empty", RegisterRequest{}},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			body, _ := json.Marshal(tc.req)
-			req := httptest.NewRequest(http.MethodPost, "/v1/auth/register", bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			rec := httptest.NewRecorder()
-
-			h.RegisterHandler(rec, req)
-
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
-			}
-
-			m := decodeBody(t, rec)
-			if errMsg, ok := m["error"].(string); !ok || errMsg != "wallet, nonce and signature are required" {
-				t.Fatalf("expected error 'wallet, nonce and signature are required', got %v", m["error"])
-			}
-		})
-	}
-}
-
-func TestRegisterHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
-	if err != nil {
-		t.Fatalf("failed to create auth service: %v", err)
-	}
-	h := NewHandlers(testLogger(), svc, nil, "default", noopInternalAuth)
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth/register", nil)
 	rec := httptest.NewRecorder()
-
-	h.RegisterHandler(rec, req)
-
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
+	if h.consumeNonce(context.Background(), rec, "0xWallet", "nonce123", "default") {
+		t.Fatal("consumeNonce reported success without atomic single-use")
 	}
-}
-
-func TestRegisterHandler_NilAuthService(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-
-	body, _ := json.Marshal(RegisterRequest{Wallet: "0x123", Nonce: "n", Signature: "s"})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	h.RegisterHandler(rec, req)
-
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
 	}
-}
-
-// --- markNonceUsed (tested indirectly via nil safety) ----------------------
-
-func TestMarkNonceUsed_NilNetClient(t *testing.T) {
-	// markNonceUsed is unexported but returns early when h.netClient == nil.
-	// We verify it does not panic by constructing a Handlers with nil netClient
-	// and invoking it through the struct directly (same-package test).
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-	// This should not panic.
-	h.markNonceUsed(context.Background(), 1, "0xwallet", "nonce123")
 }
 
 // --- resolveNamespace (tested indirectly via nil safety) --------------------
@@ -829,21 +750,31 @@ func TestExtractAPIKey_ApiKeyScheme(t *testing.T) {
 	}
 }
 
-func TestExtractAPIKey_QueryParam(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/?api_key=ak_query", nil)
-
-	got := extractAPIKey(req)
-	if got != "ak_query" {
-		t.Fatalf("expected 'ak_query', got '%s'", got)
+// A credential in a URL reaches the access log, the Referer of whatever the
+// page loads next, and the browser's history. This handler used to accept one,
+// unlike the middleware, which takes a query-string key only on a WebSocket
+// upgrade — and /v1/auth/token is never an upgrade.
+func TestExtractAPIKey_refusesAQueryStringCredential(t *testing.T) {
+	for _, target := range []string{
+		"/v1/auth/token?api_key=ak_query",
+		"/v1/auth/token?token=ak_tokenval",
+		"/v1/auth/token?api_key=ak_query&token=ak_tokenval",
+	} {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		if got := extractAPIKey(req); got != "" {
+			t.Errorf("%s: took a key from the URL: %q", target, got)
+		}
 	}
 }
 
-func TestExtractAPIKey_TokenQueryParam(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/?token=ak_tokenval", nil)
+// A header still works on the same request, so refusing the query string is
+// not refusing the caller.
+func TestExtractAPIKey_takesTheHeaderOnARequestThatAlsoHasAQueryString(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token?api_key=ak_from_url", nil)
+	req.Header.Set("X-API-Key", "ak_from_header")
 
-	got := extractAPIKey(req)
-	if got != "ak_tokenval" {
-		t.Fatalf("expected 'ak_tokenval', got '%s'", got)
+	if got := extractAPIKey(req); got != "ak_from_header" {
+		t.Fatalf("got %q, want the header's key", got)
 	}
 }
 
@@ -961,4 +892,104 @@ func TestRefreshHandler_InvalidJSON(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
 	}
+}
+
+// The exchanged token used to carry the raw API key as its subject. A JWT
+// payload is base64, not encryption, so anyone who saw such a token — in an
+// access log, a proxy trace, a devtools tab, the internal-auth header on the
+// hop to a namespace gateway, or the `subject` /v1/auth/whoami echoes back —
+// could decode a live 90-day credential out of a 15-minute one.
+func TestAPIKeyToJWTHandler_theTokenDoesNotCarryTheKey(t *testing.T) {
+	const rawKey = "orama_sk_3kFj9sPqR2vX7mNb_1a2b3c"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+
+	db := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	rec := httptest.NewRecorder()
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	token, _ := decodeBody(t, rec)["access_token"].(string)
+	if token == "" {
+		t.Fatal("no access token")
+	}
+
+	// The whole token, decoded the way anyone holding it can.
+	if strings.Contains(decodedJWTPayload(t, token), rawKey) {
+		t.Fatal("the API key is recoverable from the access token")
+	}
+
+	claims, err := svc.ParseAndVerifyJWT(token)
+	if err != nil {
+		t.Fatalf("the token does not verify: %v", err)
+	}
+	if claims.Sub != hashed {
+		t.Errorf("subject = %q, want the stored form of the key", claims.Sub)
+	}
+}
+
+// The subject has to stay the one the rest of the system already writes and
+// looks under, or revoking a key stops reaching the tokens exchanged from it.
+func TestAPIKeyToJWTHandler_theSubjectIsWhatRevocationWrites(t *testing.T) {
+	const rawKey = "orama_sk_3kFj9sPqR2vX7mNb_1a2b3c"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+
+	db := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	rec := httptest.NewRecorder()
+	h.APIKeyToJWTHandler(rec, req)
+
+	token, _ := decodeBody(t, rec)["access_token"].(string)
+	claims, err := svc.ParseAndVerifyJWT(token)
+	if err != nil {
+		t.Fatalf("the token does not verify: %v", err)
+	}
+	// RevokeKey records the hash; the token's subject must be the same string
+	// or the revocation covers nothing.
+	if claims.Sub != svc.HashAPIKey(rawKey) {
+		t.Errorf("subject %q is not what RevokeKey records", claims.Sub)
+	}
+}
+
+// decodedJWTPayload returns a token's header and payload as text, which is all
+// anyone holding the token has to do to read them.
+func decodedJWTPayload(t *testing.T, token string) string {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("not a JWT: %q", token)
+	}
+	out := ""
+	for _, part := range parts[:2] {
+		raw, err := base64.RawURLEncoding.DecodeString(part)
+		if err != nil {
+			t.Fatalf("decode %q: %v", part, err)
+		}
+		out += string(raw)
+	}
+	return out
 }

@@ -20,4 +20,5 @@ func init() {
 	Cmd.AddCommand(deployments.RollbackCmd)
 	Cmd.AddCommand(deployments.LogsCmd)
 	Cmd.AddCommand(deployments.StatsCmd)
+	Cmd.AddCommand(deployments.EnvCmd)
 }

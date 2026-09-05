@@ -19,14 +19,14 @@ import (
 var timeAfter = func(d time.Duration) <-chan time.Time { return time.After(d) }
 
 const (
-	reconnectTimeout  = 15 * time.Second
-	emptyRoomTTL      = 60 * time.Second
-	rtpBufferSize     = 8192
+	reconnectTimeout = 15 * time.Second
+	emptyRoomTTL     = 60 * time.Second
+	rtpBufferSize    = 8192
 )
 
 var (
-	ErrRoomFull    = errors.New("room is full")
-	ErrRoomClosed  = errors.New("room is closed")
+	ErrRoomFull     = errors.New("room is full")
+	ErrRoomClosed   = errors.New("room is closed")
 	ErrPeerNotFound = errors.New("peer not found")
 )
 

@@ -47,12 +47,23 @@ func logDetailedPeerInfo(n *Node, currentPeerCount int, peers []peer.ID) {
 	}
 }
 
-func GetCPUUsagePercent(n *Node, interval time.Duration) (uint64, error) {
+// GetCPUUsagePercent samples CPU utilisation across interval. It blocks for
+// that long, so it takes a context: on shutdown the sample is abandoned rather
+// than holding the monitoring loop open for the rest of the window.
+func GetCPUUsagePercent(ctx context.Context, interval time.Duration) (uint64, error) {
 	before, err := cpu.Get()
 	if err != nil {
 		return 0, err
 	}
-	time.Sleep(interval)
+
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-timer.C:
+	}
+
 	after, err := cpu.Get()
 	if err != nil {
 		return 0, err
@@ -66,12 +77,17 @@ func GetCPUUsagePercent(n *Node, interval time.Duration) (uint64, error) {
 	return uint64(usagePercent), nil
 }
 
-func logSystemUsage(n *Node) (*memory.Stats, uint64) {
+// cpuSampleWindow is how long a single CPU utilisation sample spans.
+const cpuSampleWindow = 3 * time.Second
+
+func logSystemUsage(ctx context.Context, n *Node) (*memory.Stats, uint64) {
 	mem, _ := memory.Get()
 
-	totalCpu, err := GetCPUUsagePercent(n, 3*time.Second)
+	totalCpu, err := GetCPUUsagePercent(ctx, cpuSampleWindow)
 	if err != nil {
-		n.logger.Error("Failed to get CPU usage", zap.Error(err))
+		if ctx.Err() == nil {
+			n.logger.Error("Failed to get CPU usage", zap.Error(err))
+		}
 		return mem, 0
 	}
 
@@ -110,8 +126,8 @@ func announceMetrics(n *Node, peers []peer.ID, cpuUsage uint64, memUsage *memory
 	}
 
 	// Add cluster health metrics if available
-	if n.clusterDiscovery != nil {
-		metrics := n.clusterDiscovery.GetMetrics()
+	if cd := n.getClusterDiscovery(); cd != nil {
+		metrics := cd.GetMetrics()
 		msg.ClusterHealth = map[string]interface{}{
 			"cluster_size":        metrics.ClusterSize,
 			"active_nodes":        metrics.ActiveNodes,
@@ -138,13 +154,14 @@ func announceMetrics(n *Node, peers []peer.ID, cpuUsage uint64, memUsage *memory
 
 // GetClusterHealth returns cluster health information
 func (n *Node) GetClusterHealth() map[string]interface{} {
-	if n.clusterDiscovery == nil {
+	cd := n.getClusterDiscovery()
+	if cd == nil {
 		return map[string]interface{}{
 			"status": "not_initialized",
 		}
 	}
 
-	metrics := n.clusterDiscovery.GetMetrics()
+	metrics := cd.GetMetrics()
 	return map[string]interface{}{
 		"cluster_size":        metrics.ClusterSize,
 		"active_nodes":        metrics.ActiveNodes,
@@ -158,14 +175,15 @@ func (n *Node) GetClusterHealth() map[string]interface{} {
 
 // GetDiscoveryStatus returns discovery service status
 func (n *Node) GetDiscoveryStatus() map[string]interface{} {
-	if n.clusterDiscovery == nil {
+	cd := n.getClusterDiscovery()
+	if cd == nil {
 		return map[string]interface{}{
 			"status":  "disabled",
 			"message": "cluster discovery not initialized",
 		}
 	}
 
-	metrics := n.clusterDiscovery.GetMetrics()
+	metrics := cd.GetMetrics()
 	status := "healthy"
 	if metrics.DiscoveryStatus == "no_peers" {
 		status = "warning"
@@ -180,74 +198,87 @@ func (n *Node) GetDiscoveryStatus() map[string]interface{} {
 	}
 }
 
-// startConnectionMonitoring starts minimal connection monitoring for the lightweight client.
-// Unlike nodes which need extensive monitoring, clients only need basic health checks.
-func (n *Node) startConnectionMonitoring() {
-	go func() {
-		ticker := time.NewTicker(30 * time.Second) // Ticks every 30 seconds
-		defer ticker.Stop()
+// monitoringInterval is how often the connection monitor samples peers and
+// system usage.
+const monitoringInterval = 30 * time.Second
 
-		var lastPeerCount int
-		firstCheck := true
-		tickCount := 0
+// startConnectionMonitoring starts the peer and system-usage monitoring loop.
+// It is safe to call more than once: only the first call starts the loop.
+func (n *Node) startConnectionMonitoring(ctx context.Context) {
+	n.monitoringOnce.Do(func() {
+		go n.monitorConnections(ctx)
+		n.logger.Debug("Lightweight connection monitoring started")
+	})
+}
 
-		for range ticker.C {
-			if n.host == nil {
-				return
+func (n *Node) monitorConnections(ctx context.Context) {
+	ticker := time.NewTicker(monitoringInterval)
+	defer ticker.Stop()
+
+	var lastPeerCount int
+	firstCheck := true
+	tickCount := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		if n.host == nil {
+			return
+		}
+		tickCount++
+
+		// Get current peer count
+		peers := n.host.Network().Peers()
+		currentPeerCount := len(peers)
+
+		// Only log if peer count changed or on first check
+		lastPeerCount, firstCheck = logPeerStatus(n, currentPeerCount, lastPeerCount, firstCheck)
+
+		// Log detailed peer info at debug level occasionally (every 5 minutes)
+		logDetailedPeerInfo(n, currentPeerCount, peers)
+
+		// Log system usage
+		mem, cpuUsage := logSystemUsage(ctx, n)
+
+		// Announce metrics
+		if err := announceMetrics(n, peers, cpuUsage, mem); err != nil {
+			n.logger.Error("Failed to announce metrics", zap.Error(err))
+		}
+
+		// Periodically update IPFS Cluster peer addresses
+		// This discovers all cluster peers and updates peer_addresses in service.json
+		// so IPFS Cluster can automatically connect to all discovered peers
+		if cm := n.getClusterConfigManager(); cm != nil {
+			// Discover from LibP2P connections every 2 ticks (once per minute)
+			// Works even if cluster peers aren't connected yet
+			if tickCount%2 == 0 {
+				if err := n.discoverClusterPeers(cm); err != nil {
+					n.logger.ComponentWarn(logging.ComponentNode, "Failed to discover cluster peers from LibP2P", zap.Error(err))
+				} else {
+					n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses discovered from LibP2P")
+				}
 			}
-			tickCount++
 
-			// Get current peer count
-			peers := n.host.Network().Peers()
-			currentPeerCount := len(peers)
-
-			// Only log if peer count changed or on first check
-			lastPeerCount, firstCheck = logPeerStatus(n, currentPeerCount, lastPeerCount, firstCheck)
-
-			// Log detailed peer info at debug level occasionally (every 5 minutes)
-			logDetailedPeerInfo(n, currentPeerCount, peers)
-
-			// Log system usage
-			mem, cpuUsage := logSystemUsage(n)
-
-			// Announce metrics
-			if err := announceMetrics(n, peers, cpuUsage, mem); err != nil {
-				n.logger.Error("Failed to announce metrics", zap.Error(err))
-			}
-
-			// Periodically update IPFS Cluster peer addresses
-			// This discovers all cluster peers and updates peer_addresses in service.json
-			// so IPFS Cluster can automatically connect to all discovered peers
-			if n.clusterConfigManager != nil {
-				// Discover from LibP2P connections every 2 ticks (once per minute)
-				// Works even if cluster peers aren't connected yet
-				if tickCount%2 == 0 {
-					if err := n.clusterConfigManager.DiscoverClusterPeersFromLibP2P(n.host); err != nil {
-						n.logger.ComponentWarn(logging.ComponentNode, "Failed to discover cluster peers from LibP2P", zap.Error(err))
-					} else {
-						n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses discovered from LibP2P")
-					}
+			// Update from cluster API every 4 ticks (once per 2 minutes)
+			// Works once peers are already connected
+			if tickCount%4 == 0 {
+				if err := n.updateClusterPeers(cm); err != nil {
+					n.logger.ComponentWarn(logging.ComponentNode, "Failed to update cluster peers during monitoring", zap.Error(err))
+				} else {
+					n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses updated during monitoring")
 				}
 
-				// Update from cluster API every 4 ticks (once per 2 minutes)
-				// Works once peers are already connected
-				if tickCount%4 == 0 {
-					if err := n.clusterConfigManager.UpdateAllClusterPeers(); err != nil {
-						n.logger.ComponentWarn(logging.ComponentNode, "Failed to update cluster peers during monitoring", zap.Error(err))
-					} else {
-						n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses updated during monitoring")
-					}
-
-					// Try to repair peer configuration
-					if err := n.clusterConfigManager.RepairPeerConfiguration(); err != nil {
-						n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair peer addresses during monitoring", zap.Error(err))
-					} else {
-						n.logger.ComponentInfo(logging.ComponentNode, "Peer configuration repaired during monitoring")
-					}
+				// Try to repair peer configuration
+				if err := n.repairClusterPeers(cm); err != nil {
+					n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair peer addresses during monitoring", zap.Error(err))
+				} else {
+					n.logger.ComponentInfo(logging.ComponentNode, "Peer configuration repaired during monitoring")
 				}
 			}
 		}
-	}()
-
-	n.logger.Debug("Lightweight connection monitoring started")
+	}
 }

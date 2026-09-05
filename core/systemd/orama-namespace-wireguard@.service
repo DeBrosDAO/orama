@@ -3,7 +3,12 @@ Description=Orama Namespace WireGuard (%i)
 Documentation=https://github.com/DeBrosOfficial/network
 After=network-online.target
 Wants=network-online.target
-PartOf=orama-node.service
+# Deliberately NOT PartOf=orama-node.service. PartOf propagates stop AND
+# restart, so `orama node restart` used to tear wg0 down and bring it back -
+# severing every namespace raft and Olric memberlist on the node, and (before
+# the peer sync owned wg0.conf) bringing the mesh back as it was at install
+# time. The overlay is infrastructure: it must outlive the supervisor that
+# happens to manage the services riding on it.
 
 [Service]
 # Adopt in place: existing /etc/wireguard/wg0.conf. This unit must never
@@ -12,7 +17,11 @@ Type=oneshot
 RemainAfterExit=yes
 # If wg0 is already up (leftover wg-quick@wg0), do not bounce it.
 ExecStart=/bin/sh -c 'wg show wg0 >/dev/null 2>&1 || wg-quick up wg0'
-ExecStop=/usr/bin/wg-quick down wg0
+# No ExecStop. Stopping this unit must not take the interface down: an operator
+# stopping node services still needs 10.0.0.x reachability to diagnose the node.
+# Bring the mesh down explicitly with `wg-quick down wg0` when that is the
+# actual intent.
+ExecStop=/bin/true
 TimeoutStartSec=30
 TimeoutStopSec=30
 StandardOutput=journal

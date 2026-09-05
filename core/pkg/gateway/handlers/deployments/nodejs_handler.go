@@ -13,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -73,6 +74,14 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Environment variables arrive as env_<NAME> form fields. Only the Go
+	// handler read these, so a Node.js app could not be configured at all.
+	envVars, err := parseFormEnv(r.MultipartForm.Value)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	if healthCheckPath == "" {
 		healthCheckPath = "/health"
 	}
@@ -104,7 +113,7 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	cid := addResp.Cid
 
 	// Deploy the Node.js backend
-	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath, skipInstall)
+	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath, skipInstall, envVars)
 	if err != nil {
 		h.logger.Error("Failed to deploy Node.js backend", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -112,6 +121,8 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build response
+	h.service.RecordAudit(r, deployment.Namespace, auth.AuditDeploymentCreated, deployment.Name)
+
 	urls := h.service.BuildDeploymentURLs(deployment)
 
 	resp := map[string]interface{}{
@@ -133,7 +144,7 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // deploy deploys a Node.js backend
-func (h *NodeJSHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string, skipInstall bool) (*deployments.Deployment, error) {
+func (h *NodeJSHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string, skipInstall bool, envVars map[string]string) (*deployments.Deployment, error) {
 	// Create deployment directory
 	deployPath := filepath.Join(h.baseDeployPath, namespace, name)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
@@ -187,7 +198,7 @@ func (h *NodeJSHandler) deploy(ctx context.Context, namespace, name, subdomain, 
 		Status:              deployments.DeploymentStatusDeploying,
 		ContentCID:          cid,
 		Subdomain:           subdomain,
-		Environment:         map[string]string{"ENTRY_POINT": entryPoint},
+		Environment:         withEntryPoint(envVars, entryPoint),
 		MemoryLimitMB:       512,
 		CPULimitPercent:     100,
 		HealthCheckPath:     healthCheckPath,

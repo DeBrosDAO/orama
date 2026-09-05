@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"io"
 	"net/http"
 	"os"
@@ -122,7 +123,7 @@ func (b *Builder) createArchive(outputPath string, manifest *Manifest) error {
 
 	info, err := f.Stat()
 	if err == nil {
-		fmt.Printf("  size:      %s\n", formatBytes(info.Size()))
+		fmt.Printf("  size:      %s\n", printer.FormatBytes(info.Size()))
 	}
 
 	return nil
@@ -301,18 +302,4 @@ func extractFileFromTarball(tarPath, targetFile, destPath string) error {
 	}
 
 	return fmt.Errorf("file %s not found in archive %s", targetFile, tarPath)
-}
-
-// formatBytes formats bytes into a human-readable string.
-func formatBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }

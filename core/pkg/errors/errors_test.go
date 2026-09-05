@@ -112,10 +112,10 @@ func TestUnauthorizedError(t *testing.T) {
 
 func TestForbiddenError(t *testing.T) {
 	tests := []struct {
-		name          string
-		resource      string
-		action        string
-		expectedMsg   string
+		name        string
+		resource    string
+		action      string
+		expectedMsg string
 	}{
 		{
 			name:        "with resource and action",
@@ -146,11 +146,11 @@ func TestForbiddenError(t *testing.T) {
 
 func TestConflictError(t *testing.T) {
 	tests := []struct {
-		name          string
-		resource      string
-		field         string
-		value         string
-		expectedMsg   string
+		name        string
+		resource    string
+		field       string
+		value       string
+		expectedMsg string
 	}{
 		{
 			name:        "with field",

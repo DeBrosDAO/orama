@@ -4,6 +4,11 @@ Documentation=https://caddyserver.com/docs/
 After=network-online.target orama-namespace-gateway@%i.service orama-namespace-coredns@nameserver.service
 Wants=network-online.target
 PartOf=orama-node.service
+# No start limit. orama-node reconciles these units and retries with backoff,
+# and `systemctl start` on a rate-limited unit fails with "Start request
+# repeated too quickly" until someone runs `reset-failed` — so the default
+# limit would turn a transient failure into one that needs a human.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -33,8 +38,8 @@ TimeoutStopSec=5s
 LimitNOFILE=1048576
 LimitNPROC=512
 PrivateTmp=true
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=5s
 SyslogIdentifier=orama-caddy-%i
 KillMode=mixed
 MemoryMax=2G

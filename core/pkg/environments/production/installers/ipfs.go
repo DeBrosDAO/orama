@@ -196,7 +196,7 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 	}
 
 	// Configure IPFS addresses (API, Gateway, Swarm) by modifying the config file directly
-	// This ensures the ports are set correctly and avoids conflicts with RQLite on port 5001
+	// This ensures the ports are set correctly and avoids conflicts with RQLite
 	fmt.Fprintf(ii.logWriter, "    Configuring IPFS addresses (API: %d, Gateway: %d, Swarm: %d)...\n", apiPort, gatewayPort, swarmPort)
 	if err := ii.configureAddresses(ipfsRepoPath, apiPort, gatewayPort, swarmPort, bindIP); err != nil {
 		return fmt.Errorf("failed to configure IPFS addresses: %w", err)

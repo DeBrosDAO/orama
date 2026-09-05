@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -54,7 +55,7 @@ func nodeIP(addr string) string {
 }
 
 // lookupInLeaderNodes finds a node in the leader's /nodes map by matching IP.
-// Leader's /nodes keys use HTTP port (5001), while node IDs use Raft port (7001).
+// Leader's /nodes keys use the RQLite HTTP port, while node IDs use the Raft port.
 func lookupInLeaderNodes(leaderNodes map[string]*inspector.RQLiteNode, nodeID string) *inspector.RQLiteNode {
 	if leaderNodes == nil {
 		return nil
@@ -80,7 +81,7 @@ func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData, lea
 		return r
 	}
 	r = append(r, inspector.Pass("rqlite.responsive", "RQLite HTTP endpoint responsive", rqliteSub, node,
-		"responding on port 5001", inspector.Critical))
+		fmt.Sprintf("responding on port %d", constants.RQLiteHTTPPort), inspector.Critical))
 
 	// 1.3 Full readiness (/readyz)
 	if rq.Readyz != nil {

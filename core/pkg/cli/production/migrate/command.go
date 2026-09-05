@@ -1,31 +1,26 @@
 package migrate
 
 import (
-	"flag"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os"
 	"os/exec"
 	"path/filepath"
 )
 
-// Handle executes the migrate command
-func Handle(args []string) {
-	// Parse flags
-	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	dryRun := fs.Bool("dry-run", false, "Show what would be migrated without making changes")
+// Options holds the flags for the migrate command.
+type Options struct {
+	DryRun bool
+}
 
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return
+// Run executes the migrate command.
+func Run(opts Options) error {
+	dryRun := &opts.DryRun
+
+	if !*dryRun {
+		if err := clierr.RequireRoot("migrating the installation"); err != nil {
+			return err
 		}
-		fmt.Fprintf(os.Stderr, "❌ Failed to parse flags: %v\n", err)
-		os.Exit(1)
-	}
-
-	if os.Geteuid() != 0 && !*dryRun {
-		fmt.Fprintf(os.Stderr, "❌ Migration must be run as root (use sudo)\n")
-		os.Exit(1)
 	}
 
 	oramaDir := "/opt/orama/.orama"
@@ -37,14 +32,14 @@ func Handle(args []string) {
 	needsMigration := validator.CheckNeedsMigration()
 
 	if !needsMigration {
-		fmt.Printf("\n✅ No migration needed - installation already uses unified structure\n")
-		return
+		fmt.Printf("\nNo migration needed: the installation already uses the unified structure\n")
+		return nil
 	}
 
 	if *dryRun {
-		fmt.Printf("\n📋 Dry run - no changes made\n")
-		fmt.Printf("   Run without --dry-run to perform migration\n")
-		return
+		fmt.Printf("\nDry run: no changes made\n")
+		fmt.Printf("   Run without --dry-run to perform the migration\n")
+		return nil
 	}
 
 	fmt.Printf("\n🔄 Starting migration...\n")
@@ -64,8 +59,9 @@ func Handle(args []string) {
 	// Reload systemd
 	exec.Command("systemctl", "daemon-reload").Run()
 
-	fmt.Printf("\n✅ Migration complete!\n")
-	fmt.Printf("   Run 'sudo orama upgrade --restart' to regenerate services with new names\n\n")
+	fmt.Printf("\nMigration complete.\n")
+	fmt.Printf("   Run 'sudo orama node upgrade --restart' to regenerate services with new names\n\n")
+	return nil
 }
 
 func stopOldServices() {

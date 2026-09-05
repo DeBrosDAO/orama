@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/monitor"
@@ -102,8 +103,8 @@ func renderPeerLine(p report.WGPeerInfo) string {
 	}
 
 	// Transfer
-	rx := formatBytes(p.TransferRx)
-	tx := formatBytes(p.TransferTx)
+	rx := printer.FormatBytes(p.TransferRx)
+	tx := printer.FormatBytes(p.TransferTx)
 
 	return fmt.Sprintf("    key=%s  endpoint=%-22s  hs=%s  rx=%s tx=%s  ips=%s\n",
 		styleMuted.Render(keyShort),
@@ -112,18 +113,4 @@ func renderPeerLine(p report.WGPeerInfo) string {
 		rx, tx,
 		p.AllowedIPs,
 	)
-}
-
-// formatBytes formats bytes into a human-readable string.
-func formatBytes(b int64) string {
-	switch {
-	case b >= 1<<30:
-		return fmt.Sprintf("%.1fGB", float64(b)/(1<<30))
-	case b >= 1<<20:
-		return fmt.Sprintf("%.1fMB", float64(b)/(1<<20))
-	case b >= 1<<10:
-		return fmt.Sprintf("%.1fKB", float64(b)/(1<<10))
-	default:
-		return fmt.Sprintf("%dB", b)
-	}
 }

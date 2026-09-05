@@ -189,9 +189,9 @@ func TestReactorPool_warmRacingInvalidate_noLeak(t *testing.T) {
 	}
 	p := newReactorPool(blockingWarm, 1, 8, zap.NewNop())
 
-	p.Acquire("cid")         // kicks off a warm that now blocks on <-release
-	p.Invalidate("cid")      // tear the pool down while the warm is in flight
-	close(release)           // let the warm complete
+	p.Acquire("cid")    // kicks off a warm that now blocks on <-release
+	p.Invalidate("cid") // tear the pool down while the warm is in flight
+	close(release)      // let the warm complete
 
 	waitFor(t, func() bool { return built.Load() }, "the in-flight warm completes")
 	waitFor(t, func() bool { return leaked != nil && leaked.closed.Load() },

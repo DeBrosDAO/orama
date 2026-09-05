@@ -10,10 +10,20 @@ import (
 // fakeProvisioner records reconciler decisions instead of touching a real
 // WireGuard interface.
 type fakeProvisioner struct {
-	added   []production.WireGuardPeer
-	removed []string
-	addErr  error
-	rmErr   error
+	added      []production.WireGuardPeer
+	removed    []string
+	persisted  [][]production.WireGuardPeer
+	addErr     error
+	rmErr      error
+	persistErr error
+}
+
+func (f *fakeProvisioner) PersistPeers(peers []production.WireGuardPeer) error {
+	if f.persistErr != nil {
+		return f.persistErr
+	}
+	f.persisted = append(f.persisted, peers)
+	return nil
 }
 
 func (f *fakeProvisioner) AddPeer(peer production.WireGuardPeer) error {
@@ -41,10 +51,13 @@ func testNode(t *testing.T) *Node {
 	return &Node{logger: lg}
 }
 
-func peerSet(keys ...string) map[string]struct{} {
-	s := make(map[string]struct{}, len(keys))
+// peerSet builds a live-interface peer map. The endpoint and allowed IP match
+// what desired() produces, so an existing key looks converged rather than
+// drifted unless a test says otherwise.
+func peerSet(keys ...string) map[string]production.WireGuardPeer {
+	s := make(map[string]production.WireGuardPeer, len(keys))
 	for _, k := range keys {
-		s[k] = struct{}{}
+		s[k] = production.WireGuardPeer{PublicKey: k, AllowedIP: "10.0.0.9/32", Endpoint: "203.0.113.9:51820"}
 	}
 	return s
 }
@@ -167,3 +180,113 @@ type fakeErr string
 func (e fakeErr) Error() string { return string(e) }
 
 var errFake = fakeErr("wg set failed")
+
+// A peer whose public IP moved keeps the same key, so the old reconciler
+// skipped it and the dead endpoint survived forever. That is the manual
+// "reset the peer on both sides" recipe in docs/COMMON_PROBLEMS.md.
+func TestReconcileWireGuardPeers_appliesEndpointDrift(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{}
+
+	live := peerSet("A")
+	moved := live["A"]
+	moved.Endpoint = "198.51.100.7:51820" // was 203.0.113.9
+	live["A"] = moved
+
+	n.reconcileWireGuardPeersWith(f, live, desired(true, "leader", "A"))
+
+	if len(f.added) != 1 || f.added[0].PublicKey != "A" {
+		t.Fatalf("expected the moved peer to be re-applied, got %+v", f.added)
+	}
+	if f.added[0].Endpoint != "203.0.113.9:51820" {
+		t.Errorf("re-applied endpoint = %q, want the desired one", f.added[0].Endpoint)
+	}
+}
+
+func TestReconcileWireGuardPeers_allowedIPDriftIsApplied(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{}
+
+	live := peerSet("A")
+	moved := live["A"]
+	moved.AllowedIP = "10.0.0.99/32"
+	live["A"] = moved
+
+	n.reconcileWireGuardPeersWith(f, live, desired(true, "leader", "A"))
+	if len(f.added) != 1 {
+		t.Fatalf("expected the re-addressed peer to be re-applied, got %+v", f.added)
+	}
+}
+
+// A converged mesh must not churn: no kernel calls, and no rewrite of the conf.
+func TestReconcileWireGuardPeers_noDriftIsQuiet(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{}
+
+	n.reconcileWireGuardPeersWith(f, peerSet("A", "B"), desired(true, "leader", "A", "B"))
+
+	if len(f.added) != 0 || len(f.removed) != 0 {
+		t.Errorf("converged mesh churned: added=%+v removed=%+v", f.added, f.removed)
+	}
+	if len(f.persisted) != 0 {
+		t.Errorf("converged mesh rewrote the conf %d times", len(f.persisted))
+	}
+}
+
+// The whole point of the ticket: what reaches the interface must also reach the
+// file, or the mesh regresses on the next `wg-quick up`.
+func TestReconcileWireGuardPeers_persistsResultingSet(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{}
+
+	// live A,B — cluster says B,C => add C, remove A => persist {B, C}
+	n.reconcileWireGuardPeersWith(f, peerSet("A", "B"), desired(true, "leader", "B", "C"))
+
+	if len(f.persisted) != 1 {
+		t.Fatalf("expected exactly one persist, got %d", len(f.persisted))
+	}
+	got := map[string]bool{}
+	for _, p := range f.persisted[0] {
+		got[p.PublicKey] = true
+	}
+	if len(got) != 2 || !got["B"] || !got["C"] {
+		t.Errorf("persisted set = %v, want exactly B and C", got)
+	}
+}
+
+// A non-authoritative read never removes, so the peers it could not confirm
+// must still be persisted rather than dropped from the file.
+func TestReconcileWireGuardPeers_nonAuthoritativeKeepsUnknownPeers(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{}
+
+	n.reconcileWireGuardPeersWith(f, peerSet("A"), desired(false, "local-replica", "B"))
+
+	if len(f.removed) != 0 {
+		t.Errorf("non-authoritative read removed peers: %v", f.removed)
+	}
+	if len(f.persisted) != 1 {
+		t.Fatalf("expected one persist, got %d", len(f.persisted))
+	}
+	got := map[string]bool{}
+	for _, p := range f.persisted[0] {
+		got[p.PublicKey] = true
+	}
+	if !got["A"] || !got["B"] {
+		t.Errorf("persisted set = %v, want both the unconfirmed A and the new B", got)
+	}
+}
+
+// A peer that reached the interface is live even if the file write failed. The
+// two outcomes are reported separately so an operator can tell "the mesh is
+// broken now" from "the mesh will break at next boot".
+func TestReconcileWireGuardPeers_persistFailureDoesNotUndoKernelChanges(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{persistErr: errFake}
+
+	n.reconcileWireGuardPeersWith(f, peerSet("A"), desired(true, "leader", "A", "B"))
+
+	if len(f.added) != 1 || f.added[0].PublicKey != "B" {
+		t.Errorf("kernel add did not happen: %+v", f.added)
+	}
+}

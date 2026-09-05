@@ -126,6 +126,39 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 // without masking a genuine conflict.
 const portFreeWaitTimeout = 10 * time.Second
 
+// serviceIsActive is the systemd query ensurePortsFree uses to recognise its
+// own unit. A variable so tests can exercise the already-running path on a host
+// without systemd.
+var serviceIsActive = func(m *systemd.Manager, namespace string, serviceType systemd.ServiceType) (bool, error) {
+	return m.IsServiceActive(namespace, serviceType)
+}
+
+// ownsItsPorts reports whether this call is reconciling a service that is
+// already up on exactly the ports it is being asked to bind.
+//
+// Both halves matter. "Unit is active" alone is not enough: for a Type=simple
+// unit that only proves the process exists, so a service still running on a
+// previous port allocation would exempt a completely different port block from
+// the check. "Every port is in use" alone is not enough either: that is equally
+// true when a foreign process holds them, which is bug-276 exactly. Together
+// they say the thing that is actually safe to skip — a no-op reconcile of a
+// running service — and every other shape falls through to the strict check.
+func (s *SystemdSpawner) ownsItsPorts(namespace string, serviceType systemd.ServiceType, ports map[string]int) bool {
+	active, err := serviceIsActive(s.systemdMgr, namespace, serviceType)
+	if err != nil || !active {
+		return false
+	}
+	for _, port := range ports {
+		if port <= 0 {
+			continue
+		}
+		if !portInUse(port) {
+			return false
+		}
+	}
+	return true
+}
+
 // ensurePortsFree fails loudly when a port this namespace is about to bind is
 // held by something else (bugboard #276).
 //
@@ -137,7 +170,21 @@ const portFreeWaitTimeout = 10 * time.Second
 // the ports happened to be free the collision escalated into joining a FOREIGN
 // namespace's raft group (bugboard #275). Refusing to start, with the port named,
 // turns a silent corruption into an operator-actionable error.
-func (s *SystemdSpawner) ensurePortsFree(namespace string, ports map[string]int) error {
+//
+// "Something else" excludes the unit this call is about to start. Spawning is a
+// reconcile, not a one-shot: the boot supervisor calls it again after any
+// failure, and on the second call the service started by the first one is
+// legitimately holding its own port. Without this check that retry waited ten
+// seconds and then reported a port conflict against itself, which no amount of
+// retrying could clear.
+func (s *SystemdSpawner) ensurePortsFree(namespace string, serviceType systemd.ServiceType, ports map[string]int) error {
+	if s.ownsItsPorts(namespace, serviceType, ports) {
+		s.logger.Debug("Service already active on the ports it is being asked to bind; not a conflict",
+			zap.String("namespace", namespace),
+			zap.String("service", string(serviceType)))
+		return nil
+	}
+
 	deadline := time.Now().Add(portFreeWaitTimeout)
 	for name, port := range ports {
 		if port <= 0 {
@@ -190,6 +237,19 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 	// trusting delete to have succeeded) is what makes re-creating a namespace
 	// deterministic.
 	if cfg.FreshStart {
+		// A fresh cluster must never adopt a running unit. ensurePortsFree
+		// below treats an already-active service's own port as legitimate, so
+		// that a reconcile is idempotent — but "fresh" is the one case where an
+		// active unit means a leftover namespace is still live (bugboard #275),
+		// and where the clear below would be deleting the raft directory out
+		// from under a running rqlited.
+		if active, err := serviceIsActive(s.systemdMgr, namespace, systemd.ServiceTypeRQLite); err == nil && active {
+			return fmt.Errorf(
+				"cannot fresh-start RQLite for namespace %s: its unit is already running — "+
+					"a leftover namespace of the same name is still live; stop and delete it before re-creating",
+				namespace)
+		}
+
 		raftDir := filepath.Join(s.namespaceBase, namespace, "rqlite", nodeID)
 		if _, statErr := os.Stat(raftDir); statErr == nil {
 			s.logger.Warn("Clearing leftover RQLite state for a fresh namespace cluster (bugboard #281)",
@@ -204,7 +264,7 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 		}
 	}
 
-	if err := s.ensurePortsFree(namespace, map[string]int{
+	if err := s.ensurePortsFree(namespace, systemd.ServiceTypeRQLite, map[string]int{
 		"RQLite HTTP": cfg.HTTPPort,
 		"RQLite Raft": cfg.RaftPort,
 	}); err != nil {
@@ -244,7 +304,7 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 	}
 
 	// Wait for service to be active
-	if err := s.waitForService(namespace, systemd.ServiceTypeRQLite, 30*time.Second); err != nil {
+	if err := s.waitForService(ctx, namespace, systemd.ServiceTypeRQLite, 30*time.Second); err != nil {
 		return fmt.Errorf("RQLite service did not become active: %w", err)
 	}
 
@@ -256,12 +316,134 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 }
 
 // SpawnOlric starts an Olric instance using systemd
+// Olric's on-disk config, shared by the spawn and reconcile paths so the two
+// cannot drift in what they consider a complete config.
+type olricServerConfig struct {
+	BindAddr string `yaml:"bindAddr"`
+	BindPort int    `yaml:"bindPort"`
+}
+
+type olricMemberlistConfig struct {
+	Environment string   `yaml:"environment"`
+	BindAddr    string   `yaml:"bindAddr"`
+	BindPort    int      `yaml:"bindPort"`
+	Peers       []string `yaml:"peers,omitempty"`
+}
+
+type olricConfig struct {
+	Server         olricServerConfig     `yaml:"server"`
+	Memberlist     olricMemberlistConfig `yaml:"memberlist"`
+	PartitionCount uint64                `yaml:"partitionCount"`
+}
+
+// olricPartitionCount is tuned for namespace clusters, against Olric's 256
+// default.
+const olricPartitionCount = 12
+
+func buildOlricConfig(cfg olric.InstanceConfig) olricConfig {
+	return olricConfig{
+		Server: olricServerConfig{
+			BindAddr: cfg.BindAddr,
+			BindPort: cfg.HTTPPort,
+		},
+		Memberlist: olricMemberlistConfig{
+			Environment: "lan",
+			BindAddr:    cfg.BindAddr,
+			BindPort:    cfg.MemberlistPort,
+			Peers:       cfg.PeerAddresses,
+		},
+		PartitionCount: olricPartitionCount,
+	}
+}
+
+// olricConfigInSync reports whether the on-disk config already expresses the
+// desired one.
+//
+// Peers are compared as a SET. Their order comes from a database query and is
+// not meaningful to Olric, so comparing slices directly would report drift on
+// every sweep and restart the cache in a loop.
+func olricConfigInSync(onDisk, desired olricConfig) bool {
+	if onDisk.Server != desired.Server {
+		return false
+	}
+	if onDisk.Memberlist.Environment != desired.Memberlist.Environment ||
+		onDisk.Memberlist.BindAddr != desired.Memberlist.BindAddr ||
+		onDisk.Memberlist.BindPort != desired.Memberlist.BindPort {
+		return false
+	}
+	if onDisk.PartitionCount != desired.PartitionCount {
+		return false
+	}
+	return sameStringSet(onDisk.Memberlist.Peers, desired.Memberlist.Peers)
+}
+
+// sameStringSet compares two lists ignoring ORDER but not multiplicity.
+//
+// Order is meaningless here — it comes from a database query — so ignoring it
+// is what stops every sweep reporting drift. Duplicates are a different matter:
+// the desired list is generated fresh and never contains one, so a duplicate on
+// disk is residue worth rewriting rather than accepting.
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, v := range a {
+		counts[v]++
+	}
+	for _, v := range b {
+		counts[v]--
+		if counts[v] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ReconcileOlric rewrites this node's Olric config and restarts it ONLY when it
+// has drifted from the desired one.
+//
+// The counterpart to ReconcileGateway, which existed while this did not — so
+// when a namespace member was replaced, the survivors' `memberlist.peers` kept
+// the dead node's overlay address indefinitely and nothing but a hand-edit
+// removed it. That is one of the manual runbook steps this reconciler exists to
+// delete.
+func (s *SystemdSpawner) ReconcileOlric(ctx context.Context, namespace, nodeID string, cfg olric.InstanceConfig) error {
+	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("olric-%s.yaml", nodeID))
+
+	existing, err := os.ReadFile(configPath)
+	if err != nil {
+		// No readable config to compare against. Restarting a healthy Olric on
+		// that basis would be guessing; a missing config is the cold-spawn
+		// path's problem.
+		return fmt.Errorf("read olric config for reconcile: %w", err)
+	}
+
+	var onDisk olricConfig
+	if err := yaml.Unmarshal(existing, &onDisk); err != nil {
+		return fmt.Errorf("parse olric config for reconcile: %w", err)
+	}
+
+	desired := buildOlricConfig(cfg)
+	if olricConfigInSync(onDisk, desired) {
+		return nil
+	}
+
+	s.logger.Info("Olric config drifted from desired; reconciling (rewrite + restart)",
+		zap.String("namespace", namespace),
+		zap.String("node_id", nodeID),
+		zap.Strings("ondisk_peers", onDisk.Memberlist.Peers),
+		zap.Strings("desired_peers", desired.Memberlist.Peers))
+
+	return s.SpawnOlric(ctx, namespace, nodeID, cfg)
+}
+
 func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID string, cfg olric.InstanceConfig) error {
 	s.logger.Info("Spawning Olric via systemd",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
 
-	if err := s.ensurePortsFree(namespace, map[string]int{
+	if err := s.ensurePortsFree(namespace, systemd.ServiceTypeOlric, map[string]int{
 		"Olric HTTP":       cfg.HTTPPort,
 		"Olric memberlist": cfg.MemberlistPort,
 	}); err != nil {
@@ -293,36 +475,7 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("olric-%s.yaml", nodeID))
 
-	// Generate Olric YAML config
-	type olricServerConfig struct {
-		BindAddr string `yaml:"bindAddr"`
-		BindPort int    `yaml:"bindPort"`
-	}
-	type olricMemberlistConfig struct {
-		Environment string   `yaml:"environment"`
-		BindAddr    string   `yaml:"bindAddr"`
-		BindPort    int      `yaml:"bindPort"`
-		Peers       []string `yaml:"peers,omitempty"`
-	}
-	type olricConfig struct {
-		Server         olricServerConfig     `yaml:"server"`
-		Memberlist     olricMemberlistConfig `yaml:"memberlist"`
-		PartitionCount uint64                `yaml:"partitionCount"`
-	}
-
-	config := olricConfig{
-		Server: olricServerConfig{
-			BindAddr: cfg.BindAddr,
-			BindPort: cfg.HTTPPort,
-		},
-		Memberlist: olricMemberlistConfig{
-			Environment: "lan",
-			BindAddr:    cfg.BindAddr,
-			BindPort:    cfg.MemberlistPort,
-			Peers:       cfg.PeerAddresses,
-		},
-		PartitionCount: 12, // Optimized for namespace clusters (vs 256 default)
-	}
+	config := buildOlricConfig(cfg)
 
 	configBytes, err := yaml.Marshal(config)
 	if err != nil {
@@ -353,7 +506,7 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 	}
 
 	// Wait for service to be active
-	if err := s.waitForService(namespace, systemd.ServiceTypeOlric, 30*time.Second); err != nil {
+	if err := s.waitForService(ctx, namespace, systemd.ServiceTypeOlric, 30*time.Second); err != nil {
 		return fmt.Errorf("Olric service did not become active: %w", err)
 	}
 
@@ -386,7 +539,7 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
 
-	if err := s.ensurePortsFree(namespace, map[string]int{"Gateway HTTP": cfg.HTTPPort}); err != nil {
+	if err := s.ensurePortsFree(namespace, systemd.ServiceTypeGateway, map[string]int{"Gateway HTTP": cfg.HTTPPort}); err != nil {
 		return err
 	}
 
@@ -450,7 +603,7 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 	}
 
 	// Wait for service to be active
-	if err := s.waitForService(namespace, systemd.ServiceTypeGateway, 30*time.Second); err != nil {
+	if err := s.waitForService(ctx, namespace, systemd.ServiceTypeGateway, 30*time.Second); err != nil {
 		return fmt.Errorf("Gateway service did not become active: %w", err)
 	}
 
@@ -689,15 +842,12 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 	return s.RestartGateway(ctx, namespace, nodeID, cfg)
 }
 
-
 // turnSecretDrift reports whether the on-disk TURN auth_secret differs from the
 // desired (current DB) secret — i.e. a rewrite+restart is needed. Pure function
 // so the reconcile decision is unit-testable.
 func turnSecretDrift(onDiskSecret, dbSecret string) bool {
 	return onDiskSecret != dbSecret
 }
-
-
 
 // SFUInstanceConfig holds configuration for spawning an SFU instance
 type SFUInstanceConfig struct {
@@ -710,6 +860,40 @@ type SFUInstanceConfig struct {
 	TURNSecret     string                 // HMAC-SHA1 shared secret
 	TURNCredTTL    int                    // Credential TTL in seconds
 	RQLiteDSN      string                 // Namespace-local RQLite DSN
+}
+
+// sfuConfigMode is the mode of an SFU config file.
+//
+// It carries the namespace's TURN shared secret and its rqlite DSN, which has
+// the database password in it. The file was written 0644, so any local account
+// on the node could mint TURN credentials for the namespace and read its
+// database.
+const sfuConfigMode = 0600
+
+// writeSFUConfig renders and writes one SFU config.
+//
+// The write is atomic: a 0600 temp file is renamed over the path, so a file an
+// earlier release left at 0644 is replaced rather than left as it was.
+func writeSFUConfig(configPath string, cfg SFUInstanceConfig) error {
+	sfuConfig := sfu.Config{
+		ListenAddr:        cfg.ListenAddr,
+		Namespace:         cfg.Namespace,
+		MediaPortStart:    cfg.MediaPortStart,
+		MediaPortEnd:      cfg.MediaPortEnd,
+		TURNServers:       cfg.TURNServers,
+		TURNSecret:        cfg.TURNSecret,
+		TURNCredentialTTL: cfg.TURNCredTTL,
+		RQLiteDSN:         cfg.RQLiteDSN,
+	}
+
+	configBytes, err := yaml.Marshal(sfuConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal SFU config: %w", err)
+	}
+	if err := writeConfigAtomic(configPath, configBytes, sfuConfigMode); err != nil {
+		return fmt.Errorf("failed to write SFU config: %w", err)
+	}
+	return nil
 }
 
 // SpawnSFU starts an SFU instance using systemd
@@ -726,26 +910,8 @@ func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string,
 	}
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("sfu-%s.yaml", nodeID))
-
-	// Build SFU YAML config
-	sfuConfig := sfu.Config{
-		ListenAddr:        cfg.ListenAddr,
-		Namespace:         cfg.Namespace,
-		MediaPortStart:    cfg.MediaPortStart,
-		MediaPortEnd:      cfg.MediaPortEnd,
-		TURNServers:       cfg.TURNServers,
-		TURNSecret:        cfg.TURNSecret,
-		TURNCredentialTTL: cfg.TURNCredTTL,
-		RQLiteDSN:         cfg.RQLiteDSN,
-	}
-
-	configBytes, err := yaml.Marshal(sfuConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal SFU config: %w", err)
-	}
-
-	if err := writeConfigAtomic(configPath, configBytes, 0644); err != nil {
-		return fmt.Errorf("failed to write SFU config: %w", err)
+	if err := writeSFUConfig(configPath, cfg); err != nil {
+		return err
 	}
 
 	s.logger.Info("Created SFU config file",
@@ -768,7 +934,7 @@ func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string,
 	}
 
 	// Wait for service to be active
-	if err := s.waitForService(namespace, systemd.ServiceTypeSFU, 30*time.Second); err != nil {
+	if err := s.waitForService(ctx, namespace, systemd.ServiceTypeSFU, 30*time.Second); err != nil {
 		return fmt.Errorf("SFU service did not become active: %w", err)
 	}
 
@@ -787,7 +953,6 @@ func (s *SystemdSpawner) StopSFU(ctx context.Context, namespace, nodeID string) 
 
 	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeSFU)
 }
-
 
 // acmeInternalEndpoint is the gateway's internal ACME endpoint that the
 // Caddyfile TURN-cert blocks point the orama DNS provider at.
@@ -918,7 +1083,6 @@ func isSingleLabelSubdomain(host, base string) bool {
 	return label != "" && !strings.Contains(label, ".")
 }
 
-
 // StopTURN stops a TURN instance
 func (s *SystemdSpawner) StopTURN(ctx context.Context, namespace, nodeID string) error {
 	s.logger.Info("Stopping TURN via systemd",
@@ -999,7 +1163,14 @@ func (s *SystemdSpawner) StopAll(ctx context.Context, namespace string) error {
 }
 
 // waitForService waits for a systemd service to become active
-func (s *SystemdSpawner) waitForService(namespace string, serviceType systemd.ServiceType, timeout time.Duration) error {
+// waitForService polls until the unit reports active, the timeout elapses, or
+// ctx is cancelled.
+//
+// The context matters at shutdown: this used to poll with a bare time.Sleep,
+// so a spawn already in flight when the node was asked to stop kept running for
+// the full 30s per call — long enough for the node's teardown to race the
+// reconcile that was still writing to it.
+func (s *SystemdSpawner) waitForService(ctx context.Context, namespace string, serviceType systemd.ServiceType, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
@@ -1012,11 +1183,18 @@ func (s *SystemdSpawner) waitForService(namespace string, serviceType systemd.Se
 			return nil
 		}
 
-		time.Sleep(1 * time.Second)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for %s/%s to become active: %w", namespace, serviceType, ctx.Err())
+		case <-time.After(serviceActivePollInterval):
+		}
 	}
 
 	return fmt.Errorf("service did not become active within %v", timeout)
 }
+
+// serviceActivePollInterval is how often waitForService re-checks systemd.
+const serviceActivePollInterval = 1 * time.Second
 
 // writeConfigAtomic writes a service config via temp-file + rename.
 //

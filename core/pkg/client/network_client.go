@@ -137,7 +137,7 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 // queryIPFSPeerInfo queries the local IPFS API for peer information
 // Returns nil if IPFS is not running or unavailable
 func queryIPFSPeerInfo() *IPFSPeerInfo {
-	// IPFS API typically runs on port 4501 in our setup
+	// IPFS API runs on constants.IPFSAPIPort in our setup
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Post(fmt.Sprintf("http://localhost:%d/api/v0/id", constants.IPFSAPIPort), "", nil)
 	if err != nil {

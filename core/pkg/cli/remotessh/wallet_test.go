@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
@@ -17,6 +18,12 @@ const testPrivateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake-key-data\n----
 type mockClient struct {
 	getSSHKey      func(ctx context.Context, host, username, format string) (*rwagent.VaultSSHData, error)
 	createSSHEntry func(ctx context.Context, host, username string) (*rwagent.VaultSSHData, error)
+
+	// keepaliveStarted counts KeepUnlocked calls and keepaliveStopped counts
+	// the stop functions that were run, so a test can prove the agent is kept
+	// awake for exactly the length of the operation.
+	keepaliveStarted int
+	keepaliveStopped int
 }
 
 func (m *mockClient) GetSSHKey(ctx context.Context, host, username, format string) (*rwagent.VaultSSHData, error) {
@@ -25,6 +32,11 @@ func (m *mockClient) GetSSHKey(ctx context.Context, host, username, format strin
 
 func (m *mockClient) CreateSSHEntry(ctx context.Context, host, username string) (*rwagent.VaultSSHData, error) {
 	return m.createSSHEntry(ctx, host, username)
+}
+
+func (m *mockClient) KeepUnlocked(time.Duration) func() {
+	m.keepaliveStarted++
+	return func() { m.keepaliveStopped++ }
 }
 
 // withMockClient replaces newClient for the duration of a test.
@@ -64,10 +76,10 @@ func TestParseVaultTarget(t *testing.T) {
 
 func TestWrapAgentError_notRunning(t *testing.T) {
 	err := wrapAgentError(rwagent.ErrAgentNotRunning, "test action")
-	if !strings.Contains(err.Error(), "not running") {
-		t.Errorf("expected 'not running' message, got: %s", err)
+	if !strings.Contains(err.Error(), "not reachable") {
+		t.Errorf("expected 'not reachable' message, got: %s", err)
 	}
-	if !strings.Contains(err.Error(), "rw agent start") {
+	if !strings.Contains(err.Error(), "RootWallet desktop app") {
 		t.Errorf("expected actionable hint, got: %s", err)
 	}
 }
@@ -78,7 +90,7 @@ func TestWrapAgentError_locked(t *testing.T) {
 	if !strings.Contains(err.Error(), "locked") {
 		t.Errorf("expected 'locked' message, got: %s", err)
 	}
-	if !strings.Contains(err.Error(), "rw agent unlock") {
+	if !strings.Contains(err.Error(), "RootWallet desktop app") {
 		t.Errorf("expected actionable hint, got: %s", err)
 	}
 }
@@ -90,6 +102,60 @@ func TestWrapAgentError_generic(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "some error") {
 		t.Errorf("expected wrapped error, got: %s", err)
+	}
+}
+
+// Every long command takes its keys here and defers cleanup for the whole
+// operation, so this is where the agent's auto-lock window is held open. A
+// rolling upgrade that fetched keys and then spent twenty-five minutes in SSH
+// used to find the wallet locked at the next health gate.
+func TestPrepareNodeKeys_holdsTheAgentAwakeForTheOperation(t *testing.T) {
+	mock := &mockClient{
+		getSSHKey: func(_ context.Context, _, _, _ string) (*rwagent.VaultSSHData, error) {
+			return &rwagent.VaultSSHData{PrivateKey: testPrivateKey}, nil
+		},
+	}
+	withMockClient(t, mock)
+
+	nodes := []inspector.Node{{Host: "10.0.0.1", User: "root"}}
+	cleanup, err := PrepareNodeKeys(nodes)
+	if err != nil {
+		t.Fatalf("PrepareNodeKeys: %v", err)
+	}
+
+	if mock.keepaliveStarted != 1 {
+		t.Errorf("keepalive started %d times, want 1", mock.keepaliveStarted)
+	}
+	if mock.keepaliveStopped != 0 {
+		t.Error("the keepalive stopped before the operation did")
+	}
+
+	cleanup()
+
+	if mock.keepaliveStopped != 1 {
+		t.Errorf("keepalive stopped %d times after cleanup, want 1 — the wallet is held open past the operation",
+			mock.keepaliveStopped)
+	}
+}
+
+// A failure part-way through must not leave a goroutine pinging the agent for
+// the life of the process.
+func TestPrepareNodeKeys_stopsTheKeepaliveOnFailure(t *testing.T) {
+	mock := &mockClient{
+		getSSHKey: func(_ context.Context, _, _, _ string) (*rwagent.VaultSSHData, error) {
+			return nil, &rwagent.AgentError{Code: rwagent.CodeNotFound, Message: "no such entry"}
+		},
+	}
+	withMockClient(t, mock)
+
+	nodes := []inspector.Node{{Host: "10.0.0.1", User: "root"}}
+	if _, err := PrepareNodeKeys(nodes); err == nil {
+		t.Fatal("expected a failure")
+	}
+
+	if mock.keepaliveStarted != 1 || mock.keepaliveStopped != 1 {
+		t.Errorf("keepalive started %d, stopped %d — a failed run left it running",
+			mock.keepaliveStarted, mock.keepaliveStopped)
 	}
 }
 
@@ -196,8 +262,8 @@ func TestPrepareNodeKeys_agentNotRunning(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "not running") {
-		t.Errorf("expected 'not running' error, got: %s", err)
+	if !strings.Contains(err.Error(), "not reachable") {
+		t.Errorf("expected 'not reachable' error, got: %s", err)
 	}
 }
 
@@ -366,11 +432,40 @@ func TestResolveVaultPublicKey_notFound(t *testing.T) {
 	}
 }
 
-func TestLoadAgentKeys_emptyNodes(t *testing.T) {
-	mock := &mockClient{}
-	withMockClient(t, mock)
+// Wallet-derived node keys are handed to ssh only as ephemeral 0600 files that
+// PrepareNodeKeys zero-overwrites on cleanup. They must never be added to the
+// operator's ssh-agent: an agent holds a key until it is explicitly removed or
+// the agent dies, which outlives the deploy and defeats keeping the key in a
+// lockable vault. Push fanout stages each target's key on the hub and
+// authenticates with "-i <key> -o IdentitiesOnly=yes", so agent forwarding is
+// not needed by anything.
+//
+// This reads the package source because the property being protected is the
+// absence of code — a behavioural test cannot observe a call that is not there.
+func TestPackageNeverLoadsKeysIntoSSHAgent(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
 
-	if err := LoadAgentKeys(nil); err != nil {
-		t.Fatalf("expected no error for empty nodes, got: %v", err)
+	forbidden := map[string]string{
+		"ssh-add": "adds a wallet-derived key to the operator's ssh-agent, where it outlives the deploy",
+		`"-A"`:    "enables ssh agent forwarding, which exposes every loaded key to the remote host",
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for needle, why := range forbidden {
+			if strings.Contains(string(src), needle) {
+				t.Errorf("%s contains %s, which %s", name, needle, why)
+			}
+		}
 	}
 }

@@ -1,0 +1,32 @@
+{
+  "route": "/v1/cache/get",
+  "method": "POST",
+  "sdk": "cache.get()",
+  "goStruct": "cache.GetRequest",
+  "call": {
+    "module": "cache",
+    "method": "get",
+    "args": [
+      "sessions",
+      "user-1"
+    ]
+  },
+  "request": {
+    "dmap": "sessions",
+    "key": "user-1"
+  },
+  "response": {
+    "key": "user-1",
+    "value": {
+      "seen": 1
+    },
+    "dmap": "sessions"
+  },
+  "returns": {
+    "key": "user-1",
+    "value": {
+      "seen": 1
+    },
+    "dmap": "sessions"
+  }
+}

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/production/report"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/cli/sandbox"
@@ -121,11 +122,23 @@ func loadNodes(cfg CollectorConfig) ([]inspector.Node, func(), error) {
 		return loadSandboxNodes(cfg)
 	}
 
-	nodes, err := inspector.LoadNodes(cfg.ConfigPath)
-	if err != nil {
-		return nil, noop, fmt.Errorf("load nodes: %w", err)
+	// With no explicit --config, nodes come from the same resolver every other
+	// command uses. Reading a path relative to the working directory meant an
+	// installed binary only worked from inside the source tree.
+	var nodes []inspector.Node
+	var err error
+	if cfg.ConfigPath == "" {
+		nodes, err = noderesolver.ResolveNodes(cfg.Env)
+		if err != nil {
+			return nil, noop, fmt.Errorf("resolve nodes for %q: %w", cfg.Env, err)
+		}
+	} else {
+		nodes, err = inspector.LoadNodes(cfg.ConfigPath)
+		if err != nil {
+			return nil, noop, fmt.Errorf("load nodes: %w", err)
+		}
+		nodes = inspector.FilterByEnv(nodes, cfg.Env)
 	}
-	nodes = inspector.FilterByEnv(nodes, cfg.Env)
 	if cfg.NodeFilter != "" {
 		nodes = filterByHost(nodes, cfg.NodeFilter)
 	}

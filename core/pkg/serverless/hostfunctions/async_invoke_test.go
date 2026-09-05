@@ -83,8 +83,13 @@ func TestFunctionInvokeAsync_runsTargetWithInheritedIdentity(t *testing.T) {
 		if string(req.Input) != `{"x":1}` {
 			t.Errorf("Input = %q; want {\"x\":1}", req.Input)
 		}
-		if req.TriggerType != serverless.TriggerTypeWebSocket {
-			t.Errorf("TriggerType = %v; want WebSocket", req.TriggerType)
+		// A function_invoke is an internal call and is labelled as one. It
+		// used to inherit the parent's label, because the label decided the
+		// callee's authorization; the authority is explicit now, so the type
+		// is free to say what the call actually is. The WS client id is
+		// carried separately, which is what lets the target ws_send its reply.
+		if req.TriggerType != serverless.TriggerTypeInternal {
+			t.Errorf("TriggerType = %v; want internal", req.TriggerType)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("target was never invoked")

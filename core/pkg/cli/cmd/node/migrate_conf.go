@@ -10,7 +10,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/cli"
-	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +35,7 @@ Requires: orama auth login (for API authentication)`,
 		}
 
 		// Load nodes from nodes.conf
-		nodes, err := remotessh.LoadEnvNodes(env)
+		nodes, err := noderesolver.ResolveNodes(env)
 		if err != nil {
 			return fmt.Errorf("failed to load nodes.conf: %w", err)
 		}

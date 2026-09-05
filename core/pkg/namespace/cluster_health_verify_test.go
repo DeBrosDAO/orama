@@ -2,7 +2,11 @@ package namespace
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,6 +26,10 @@ import (
 // visible one, so these tests pin it.
 
 // listener occupies an address and returns its host/port split.
+//
+// A bare TCP listener, which accepts connections and speaks no protocol. It is
+// what a crash-looping service looks like to a port probe, and the reason
+// readiness asks each service a question it has to answer.
 func listener(t *testing.T) (string, int) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -31,6 +39,66 @@ func listener(t *testing.T) (string, int) {
 	t.Cleanup(func() { _ = ln.Close() })
 	a := ln.Addr().(*net.TCPAddr)
 	return "127.0.0.1", a.Port
+}
+
+// serveRQLite stands up something that answers /status and /db/query the way a
+// healthy rqlite does.
+func serveRQLite(t *testing.T, raftState string) int {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"store":{"raft":{"state":%q}}}`, raftState)
+	})
+	mux.HandleFunc("/db/query", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"results":[{"columns":["1"],"values":[[1]]}]}`)
+	})
+	return servePort(t, mux)
+}
+
+// serveOlric answers the stats endpoint an Olric readiness probe reads.
+func serveOlric(t *testing.T) int {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/stats", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"member":{"name":"test"}}`)
+	})
+	return servePort(t, mux)
+}
+
+// serveGateway answers /v1/health with the given per-service states.
+func serveGateway(t *testing.T, services map[string]string) int {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, _ *http.Request) {
+		body, _ := json.Marshal(map[string]any{"status": "ok", "services": services})
+		_, _ = w.Write(body)
+	})
+	return servePort(t, mux)
+}
+
+func servePort(t *testing.T, h http.Handler) int {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split %s: %v", srv.URL, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("port %q: %v", portStr, err)
+	}
+	return port
+}
+
+// healthyNode stands up all three services for one node and returns its block.
+func healthyNode(t *testing.T) *PortBlock {
+	t.Helper()
+	return &PortBlock{
+		RQLiteHTTPPort:  serveRQLite(t, "Leader"),
+		OlricHTTPPort:   serveOlric(t),
+		GatewayHTTPPort: serveGateway(t, map[string]string{"rqlite": "ok", "olric": "ok"}),
+	}
 }
 
 // deadPort returns a port nothing is listening on.
@@ -46,34 +114,83 @@ func deadPort(t *testing.T) int {
 }
 
 func TestVerifyClusterHealthy_passesWhenAllServicesAnswer(t *testing.T) {
-	ip, gwPort := listener(t)
-	_, rqPort := listener(t)
-
 	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: 2 * time.Second}
-	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: ip}}
-	blocks := []*PortBlock{{GatewayHTTPPort: gwPort, RQLiteHTTPPort: rqPort}}
+	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: "127.0.0.1"}}
+	blocks := []*PortBlock{healthyNode(t)}
 
 	if err := cm.verifyClusterHealthy(context.Background(), nodes, blocks); err != nil {
 		t.Errorf("verifyClusterHealthy failed while everything was answering: %v", err)
 	}
 }
 
+// The check this replaces was a TCP dial, which a crash-looping service passes
+// as long as something is bound. Every service here accepts connections and
+// answers nothing.
+func TestVerifyClusterHealthy_failsOnAPortThatAnswersNothing(t *testing.T) {
+	ip, dumbPort := listener(t)
+
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
+	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: ip}}
+	blocks := []*PortBlock{{RQLiteHTTPPort: dumbPort, OlricHTTPPort: dumbPort, GatewayHTTPPort: dumbPort}}
+
+	if err := cm.verifyClusterHealthy(context.Background(), nodes, blocks); err == nil {
+		t.Fatal("a listening socket that speaks no protocol passed verification")
+	}
+}
+
+// rqlite binds its HTTP listener long before it elects anything, so a node
+// still holding an election is not ready however healthy the port looks.
+func TestVerifyClusterHealthy_failsWhileRQLiteIsStillElecting(t *testing.T) {
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
+	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: "127.0.0.1"}}
+	blocks := []*PortBlock{{
+		RQLiteHTTPPort:  serveRQLite(t, "Candidate"),
+		OlricHTTPPort:   serveOlric(t),
+		GatewayHTTPPort: serveGateway(t, map[string]string{"rqlite": "ok", "olric": "ok"}),
+	}}
+
+	err := cm.verifyClusterHealthy(context.Background(), nodes, blocks)
+	if err == nil {
+		t.Fatal("a node in raft state Candidate passed verification")
+	}
+	if !strings.Contains(err.Error(), "Candidate") {
+		t.Errorf("the error should say what state it saw: %v", err)
+	}
+}
+
+// The gateway is the only component that talks to both rqlite and Olric, so a
+// gateway that cannot reach one of them is the signal that matters most.
+func TestVerifyClusterHealthy_failsWhenTheGatewayCannotReachOlric(t *testing.T) {
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
+	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: "127.0.0.1"}}
+	blocks := []*PortBlock{{
+		RQLiteHTTPPort:  serveRQLite(t, "Leader"),
+		OlricHTTPPort:   serveOlric(t),
+		GatewayHTTPPort: serveGateway(t, map[string]string{"rqlite": "ok", "olric": "unavailable"}),
+	}}
+
+	err := cm.verifyClusterHealthy(context.Background(), nodes, blocks)
+	if err == nil {
+		t.Fatal("a gateway reporting olric unavailable passed verification")
+	}
+	if !strings.Contains(err.Error(), "olric") {
+		t.Errorf("the error should name the dependency: %v", err)
+	}
+}
+
 // The reproduction: a node whose gateway never came up must fail verification, so
 // the cluster is marked failed instead of ready.
 func TestVerifyClusterHealthy_failsWhenAGatewayIsDown(t *testing.T) {
-	ip, gwPort := listener(t)
-	_, rqPort := listener(t)
-	downPort := deadPort(t)
+	healthy := healthyNode(t)
+	broken := healthyNode(t)
+	broken.GatewayHTTPPort = deadPort(t)
 
-	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: 2 * time.Second}
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
 	nodes := []NodeCapacity{
-		{NodeID: "node-1", InternalIP: ip},
-		{NodeID: "node-2", InternalIP: ip},
+		{NodeID: "node-1", InternalIP: "127.0.0.1"},
+		{NodeID: "node-2", InternalIP: "127.0.0.1"},
 	}
-	blocks := []*PortBlock{
-		{GatewayHTTPPort: gwPort, RQLiteHTTPPort: rqPort},
-		{GatewayHTTPPort: downPort, RQLiteHTTPPort: rqPort},
-	}
+	blocks := []*PortBlock{healthy, broken}
 
 	err := cm.verifyClusterHealthy(context.Background(), nodes, blocks)
 	if err == nil {
@@ -89,12 +206,12 @@ func TestVerifyClusterHealthy_failsWhenAGatewayIsDown(t *testing.T) {
 
 // A crash-looping RQLite must be caught too — that was the actual devnet failure.
 func TestVerifyClusterHealthy_failsWhenRQLiteIsDown(t *testing.T) {
-	ip, gwPort := listener(t)
-	downPort := deadPort(t)
+	block := healthyNode(t)
+	block.RQLiteHTTPPort = deadPort(t)
 
-	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: 2 * time.Second}
-	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: ip}}
-	blocks := []*PortBlock{{GatewayHTTPPort: gwPort, RQLiteHTTPPort: downPort}}
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
+	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: "127.0.0.1"}}
+	blocks := []*PortBlock{block}
 
 	err := cm.verifyClusterHealthy(context.Background(), nodes, blocks)
 	if err == nil {

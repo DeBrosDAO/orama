@@ -1,0 +1,14 @@
+{
+  "route": "/v1/auth/logout",
+  "method": "POST",
+  "sdk": "auth.logout()",
+  "goStruct": "auth.LogoutRequest",
+  "call": null,
+  "request": {
+    "all": true
+  },
+  "response": {
+    "status": "ok"
+  },
+  "returns": null
+}

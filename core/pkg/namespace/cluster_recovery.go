@@ -252,24 +252,22 @@ func (cm *ClusterManager) HandleSuspectNode(ctx context.Context, suspectNodeID s
 	disabledCount := 0
 
 	for _, cluster := range clusters {
-		// Safety check: never disable the last active record
-		activeCount, err := dnsManager.CountActiveNamespaceRecords(ctx, cluster.NamespaceName)
+		// The "never disable the last active record" guard now lives inside the
+		// UPDATE. It was a separate COUNT followed by an unconditional write,
+		// and every node observing a suspect node runs this — so two observers
+		// could both read a count of 2, both conclude they were not the last,
+		// and both disable, leaving the namespace resolving nowhere.
+		//
+		// A statement that changes nothing means the guard held, which is a
+		// normal outcome rather than a failure.
+		disabled, err := dnsManager.DisableNamespaceRecord(ctx, cluster.NamespaceName, ips.IPAddress)
+		if disabled == 0 && err == nil {
+			cm.logger.Warn("Not disabling DNS — it would leave the namespace with no active records",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.String("suspect_node", suspectNodeID))
+			continue
+		}
 		if err != nil {
-			cm.logger.Warn("Failed to count active DNS records, skipping namespace",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.Error(err))
-			continue
-		}
-
-		if activeCount <= 1 {
-			cm.logger.Warn("Not disabling DNS — would leave namespace with no active records",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.String("suspect_node", suspectNodeID),
-				zap.Int("active_records", activeCount))
-			continue
-		}
-
-		if err := dnsManager.DisableNamespaceRecord(ctx, cluster.NamespaceName, ips.IPAddress); err != nil {
 			cm.logger.Warn("Failed to disable DNS record for suspect node",
 				zap.String("namespace", cluster.NamespaceName),
 				zap.String("ip", ips.IPAddress),

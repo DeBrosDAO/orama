@@ -10,8 +10,17 @@ func TestFirewallProvisioner_GenerateRules_StandardNode(t *testing.T) {
 
 	rules := fp.GenerateRules()
 
+	// Never a reset. This runs on every upgrade with every service up; between
+	// the reset and the closing enable the node is firewalled to nothing and
+	// then to default-deny with no rules. Reconcile converges to this set
+	// instead.
+	for _, rule := range rules {
+		if strings.Contains(rule, "reset") {
+			t.Fatalf("GenerateRules still resets a live firewall: %q", rule)
+		}
+	}
+
 	// Should contain defaults
-	assertContainsRule(t, rules, "ufw --force reset")
 	assertContainsRule(t, rules, "ufw default deny incoming")
 	assertContainsRule(t, rules, "ufw default allow outgoing")
 	assertContainsRule(t, rules, "ufw allow 22/tcp")
@@ -132,4 +141,93 @@ func assertContainsRule(t *testing.T, rules []string, expected string) {
 		}
 	}
 	t.Errorf("rules should contain '%s', got: %v", expected, rules)
+}
+
+// A correct live rule set must reconcile to no changes. That is the property
+// an upgrade needs: running the firewall phase on a healthy node changes
+// nothing and drops no packets.
+func TestParseUFWAllowRules_roundTrips_the_desired_set(t *testing.T) {
+	fp := NewFirewallProvisioner(FirewallConfig{
+		SSHPort:        22,
+		WireGuardPort:  51820,
+		IsNameserver:   true,
+		TURNEnabled:    true,
+		TURNRelayStart: 49152,
+		TURNRelayEnd:   65535,
+	})
+	desired := fp.DesiredAllowRules()
+
+	// The ufw status a node with exactly this rule set reports.
+	var status strings.Builder
+	status.WriteString("Status: active\n\nTo                         Action      From\n--                         ------      ----\n")
+	for _, rule := range desired {
+		switch {
+		case strings.HasPrefix(rule, "from "):
+			status.WriteString("Anywhere                   ALLOW       " + strings.TrimPrefix(rule, "from ") + "\n")
+		default:
+			status.WriteString(rule + "                   ALLOW       Anywhere\n")
+		}
+	}
+
+	live := parseUFWAllowRules(status.String())
+
+	liveSet := map[string]bool{}
+	for _, r := range live {
+		liveSet[r] = true
+	}
+	for _, want := range desired {
+		if !liveSet[want] {
+			t.Errorf("desired rule %q was not recognised in live status; reconcile would re-add it forever", want)
+		}
+	}
+
+	desiredSet := map[string]bool{}
+	for _, r := range desired {
+		desiredSet[r] = true
+	}
+	for _, got := range live {
+		if !desiredSet[got] {
+			t.Errorf("live rule %q is not in the desired set; reconcile would delete a rule it just added", got)
+		}
+	}
+}
+
+// IPv6 mirror rows must be ignored. ufw creates one for every v4 rule; counting
+// them as extra would make Reconcile delete rules it had just added, forever.
+func TestParseUFWAllowRules_ignores_v6_mirrors(t *testing.T) {
+	status := `Status: active
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     ALLOW       Anywhere
+22/tcp (v6)                ALLOW       Anywhere (v6)
+Anywhere                   ALLOW       10.0.0.0/24
+`
+	got := parseUFWAllowRules(status)
+	if len(got) != 2 {
+		t.Fatalf("got %d rules %v, want 2 (the v6 mirror must be ignored)", len(got), got)
+	}
+	if got[0] != "22/tcp" || got[1] != "from 10.0.0.0/24" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+// A DENY row is not an allow rule and must not be reported as one — Reconcile
+// would then try to `ufw delete allow` a rule that does not exist.
+func TestParseUFWAllowRules_ignores_non_allow_rows(t *testing.T) {
+	status := `To                         Action      From
+--                         ------      ----
+25/tcp                     DENY        Anywhere
+22/tcp                     ALLOW       Anywhere
+`
+	got := parseUFWAllowRules(status)
+	if len(got) != 1 || got[0] != "22/tcp" {
+		t.Fatalf("got %v, want just [22/tcp]", got)
+	}
+}
+
+func TestParseUFWAllowRules_empty_status(t *testing.T) {
+	if got := parseUFWAllowRules("Status: inactive\n"); len(got) != 0 {
+		t.Fatalf("got %v, want none", got)
+	}
 }

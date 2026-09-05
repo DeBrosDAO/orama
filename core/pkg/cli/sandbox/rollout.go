@@ -2,12 +2,15 @@ package sandbox
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/build"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -37,13 +40,13 @@ func Rollout(name string, flags RolloutFlags) error {
 	fmt.Printf("Rolling out to sandbox %q (%d nodes)\n\n", state.Name, len(state.Servers))
 
 	// Step 1: Find or require binary archive
-	archivePath := findNewestArchive()
+	archivePath := build.FindNewestArchive()
 	if archivePath == "" {
 		return fmt.Errorf("no binary archive found in /tmp/ (run `orama build` first)")
 	}
 
 	info, _ := os.Stat(archivePath)
-	fmt.Printf("Archive: %s (%s)\n\n", filepath.Base(archivePath), formatBytes(info.Size()))
+	fmt.Printf("Archive: %s (%s)\n\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
 	// Build extra flags string for upgrade command
 	extraFlags := flags.upgradeFlags()
@@ -103,7 +106,7 @@ func (f RolloutFlags) upgradeFlags() string {
 func findLeaderIndex(state *SandboxState, sshKeyPath string) int {
 	for i, srv := range state.Servers {
 		node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
-		out, err := runSSHOutput(node, "curl -sf http://localhost:5001/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'")
+		out, err := runSSHOutput(node, fmt.Sprintf("curl -sf %s/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'", constants.LocalRQLiteURL()))
 		if err == nil && contains(out, "Leader") {
 			return i
 		}

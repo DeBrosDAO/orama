@@ -56,8 +56,8 @@ var walltimeProbeWasm = []byte{
 	0x0b,                         // size = 11
 	0x02,                         // 2 types
 	0x60, 0x03, 0x7f, 0x7e, 0x7f, // type 0: func(i32, i64, i32)
-	0x01, 0x7f,                   // -> (i32)
-	0x60, 0x00, 0x00,             // type 1: func() -> ()
+	0x01, 0x7f, // -> (i32)
+	0x60, 0x00, 0x00, // type 1: func() -> ()
 
 	// Import section (id=2) — body=0x29 (41 bytes)
 	0x02,
@@ -87,23 +87,23 @@ var walltimeProbeWasm = []byte{
 	0x13,
 	0x02,                                     // 2 exports
 	0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, // "memory"
-	0x02, 0x00,                               // kind=memory, idx=0
+	0x02, 0x00, // kind=memory, idx=0
 	0x06, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, // "_start"
-	0x00, 0x01,                               // kind=func, idx=1 (after the 1 import)
+	0x00, 0x01, // kind=func, idx=1 (after the 1 import)
 
 	// Code section (id=10) — body=13 bytes (0x0d)
 	// = count(1) + body_size_byte(1) + body(11) = 13
 	0x0a,
 	0x0d,
-	0x01,                   // 1 function body
-	0x0b,                   // body size = 11 (locals_count + 10 instr bytes)
-	0x00,                   // 0 local groups
-	0x41, 0x00,             // i32.const 0  (clock_id)
-	0x42, 0x00,             // i64.const 0  (precision)
-	0x41, 0x00,             // i32.const 0  (out_ptr)
-	0x10, 0x00,             // call func 0 (the imported clock_time_get)
-	0x1a,                   // drop (errno return)
-	0x0b,                   // end
+	0x01,       // 1 function body
+	0x0b,       // body size = 11 (locals_count + 10 instr bytes)
+	0x00,       // 0 local groups
+	0x41, 0x00, // i32.const 0  (clock_id)
+	0x42, 0x00, // i64.const 0  (precision)
+	0x41, 0x00, // i32.const 0  (out_ptr)
+	0x10, 0x00, // call func 0 (the imported clock_time_get)
+	0x1a, // drop (errno return)
+	0x0b, // end
 }
 
 func TestModuleConfig_walltimeIsRealNotFrozenSentinel(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -20,7 +21,7 @@ const (
 	// internalGatewayPort is the per-node internal gateway HTTP port on the
 	// WireGuard mesh, where /v1/internal/* endpoints (including storage evict)
 	// are served. Matches the port used by deployment replica coordination.
-	internalGatewayPort = 6001
+	internalGatewayPort = constants.GatewayAPIPort
 
 	// storageInternalAuthMarker is the X-Orama-Internal-Auth value for
 	// storage-coordination internal calls. The real security is the WireGuard

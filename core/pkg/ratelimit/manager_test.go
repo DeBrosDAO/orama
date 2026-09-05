@@ -8,8 +8,8 @@ import (
 
 // memStore is an in-memory ConfigStore for tests.
 type memStore struct {
-	mu    sync.Mutex
-	rows  map[string]Config
+	mu     sync.Mutex
+	rows   map[string]Config
 	getErr error
 }
 

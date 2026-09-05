@@ -21,12 +21,12 @@ import (
 
 // mockPubSubClient implements client.PubSubClient for testing
 type mockPubSubClient struct {
-	PublishFunc       func(ctx context.Context, topic string, data []byte) error
-	PublishBatchFunc  func(ctx context.Context, msgs []client.TopicMessage, opts client.PublishBatchOptions) error
-	PublishSameFunc   func(ctx context.Context, topics []string, data []byte, opts client.PublishBatchOptions) error
-	SubscribeFunc     func(ctx context.Context, topic string, handler client.MessageHandler) error
-	UnsubscribeFunc   func(ctx context.Context, topic string) error
-	ListTopicsFunc    func(ctx context.Context) ([]string, error)
+	PublishFunc      func(ctx context.Context, topic string, data []byte) error
+	PublishBatchFunc func(ctx context.Context, msgs []client.TopicMessage, opts client.PublishBatchOptions) error
+	PublishSameFunc  func(ctx context.Context, topics []string, data []byte, opts client.PublishBatchOptions) error
+	SubscribeFunc    func(ctx context.Context, topic string, handler client.MessageHandler) error
+	UnsubscribeFunc  func(ctx context.Context, topic string) error
+	ListTopicsFunc   func(ctx context.Context) ([]string, error)
 }
 
 func (m *mockPubSubClient) Publish(ctx context.Context, topic string, data []byte) error {
@@ -78,10 +78,10 @@ type mockNetworkClient struct {
 
 func (m *mockNetworkClient) Database() client.DatabaseClient { return nil }
 func (m *mockNetworkClient) PubSub() client.PubSubClient     { return m.pubsub }
-func (m *mockNetworkClient) Network() client.NetworkInfo      { return nil }
-func (m *mockNetworkClient) Storage() client.StorageClient    { return nil }
-func (m *mockNetworkClient) Connect() error                   { return nil }
-func (m *mockNetworkClient) Disconnect() error                { return nil }
+func (m *mockNetworkClient) Network() client.NetworkInfo     { return nil }
+func (m *mockNetworkClient) Storage() client.StorageClient   { return nil }
+func (m *mockNetworkClient) Connect() error                  { return nil }
+func (m *mockNetworkClient) Disconnect() error               { return nil }
 func (m *mockNetworkClient) Health() (*client.HealthStatus, error) {
 	return &client.HealthStatus{Status: "healthy"}, nil
 }

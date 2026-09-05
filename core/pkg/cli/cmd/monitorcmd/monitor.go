@@ -8,6 +8,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/monitor"
 	"github.com/DeBrosOfficial/network/pkg/cli/monitor/display"
 	"github.com/DeBrosOfficial/network/pkg/cli/monitor/tui"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"github.com/spf13/cobra"
 )
 
@@ -23,18 +24,17 @@ Without a subcommand, launches the interactive TUI.`,
 }
 
 // Shared persistent flags.
+// --json is a persistent flag on the root, so it is not defined here.
 var (
 	flagEnv    string
-	flagJSON   bool
 	flagNode   string
 	flagConfig string
 )
 
 func init() {
 	Cmd.PersistentFlags().StringVar(&flagEnv, "env", "", "Environment: devnet, testnet, mainnet (required)")
-	Cmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "Machine-readable JSON output")
 	Cmd.PersistentFlags().StringVar(&flagNode, "node", "", "Filter to specific node host/IP")
-	Cmd.PersistentFlags().StringVar(&flagConfig, "config", "scripts/nodes.conf", "Path to nodes.conf")
+	Cmd.PersistentFlags().StringVar(&flagConfig, "config", "", "Read nodes from this file instead of resolving them")
 	Cmd.MarkPersistentFlagRequired("env")
 
 	Cmd.AddCommand(liveCmd)
@@ -66,7 +66,7 @@ var clusterCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if flagJSON {
+		if printer.For(cmd).JSONMode() {
 			return display.ClusterJSON(snap, os.Stdout)
 		}
 		return display.ClusterTable(snap, os.Stdout)
@@ -81,7 +81,7 @@ var nodeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if flagJSON {
+		if printer.For(cmd).JSONMode() {
 			return display.NodeJSON(snap, os.Stdout)
 		}
 		return display.NodeTable(snap, os.Stdout)
@@ -96,7 +96,7 @@ var serviceCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if flagJSON {
+		if printer.For(cmd).JSONMode() {
 			return display.ServiceJSON(snap, os.Stdout)
 		}
 		return display.ServiceTable(snap, os.Stdout)
@@ -111,7 +111,7 @@ var meshCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if flagJSON {
+		if printer.For(cmd).JSONMode() {
 			return display.MeshJSON(snap, os.Stdout)
 		}
 		return display.MeshTable(snap, os.Stdout)
@@ -126,7 +126,7 @@ var dnsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if flagJSON {
+		if printer.For(cmd).JSONMode() {
 			return display.DNSJSON(snap, os.Stdout)
 		}
 		return display.DNSTable(snap, os.Stdout)
@@ -141,7 +141,7 @@ var namespacesCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if flagJSON {
+		if printer.For(cmd).JSONMode() {
 			return display.NamespacesJSON(snap, os.Stdout)
 		}
 		return display.NamespacesTable(snap, os.Stdout)
@@ -156,7 +156,7 @@ var alertsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if flagJSON {
+		if printer.For(cmd).JSONMode() {
 			return display.AlertsJSON(snap, os.Stdout)
 		}
 		return display.AlertsTable(snap, os.Stdout)
@@ -197,4 +197,3 @@ func runLive(cmd *cobra.Command, args []string) error {
 	cfg := newConfig()
 	return tui.Run(cfg)
 }
-

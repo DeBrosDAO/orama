@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/production/report"
@@ -72,4 +73,60 @@ func (cs *ClusterSnapshot) HealthyCount() int {
 // TotalCount returns the total number of nodes attempted.
 func (cs *ClusterSnapshot) TotalCount() int {
 	return len(cs.Nodes)
+}
+
+// NodeHealth is the one-word verdict for a node, the summary `orama status`
+// shows. It answers "can this node serve traffic and is it part of the raft
+// cluster", which is coarser than the per-subsystem detail in the full report.
+type NodeHealth string
+
+const (
+	// HealthUnreachable means the SSH collection itself failed.
+	HealthUnreachable NodeHealth = "unreachable"
+	// HealthHealthy means the gateway answers and raft has a settled role.
+	HealthHealthy NodeHealth = "healthy"
+	// HealthDegraded means the node answered but is not fully serving.
+	HealthDegraded NodeHealth = "degraded"
+)
+
+// Health classifies one node's collection result.
+func (c CollectionStatus) Health() NodeHealth {
+	if c.Error != nil || c.Report == nil {
+		return HealthUnreachable
+	}
+	gatewayUp := c.Report.Gateway != nil && c.Report.Gateway.Responsive
+	raftSettled := c.Report.RQLite != nil &&
+		(c.Report.RQLite.RaftState == "Leader" || c.Report.RQLite.RaftState == "Follower")
+	if gatewayUp && raftSettled {
+		return HealthHealthy
+	}
+	return HealthDegraded
+}
+
+// Detail is the human-readable reason a node is not healthy, empty when it is.
+func (c CollectionStatus) Detail() string {
+	switch c.Health() {
+	case HealthHealthy:
+		return ""
+	case HealthUnreachable:
+		if c.Error != nil {
+			return c.Error.Error()
+		}
+		return "no report returned"
+	}
+
+	var missing []string
+	if c.Report.Gateway == nil || !c.Report.Gateway.Responsive {
+		missing = append(missing, "gateway down")
+	}
+	if c.Report.RQLite == nil {
+		missing = append(missing, "no rqlite report")
+	} else if c.Report.RQLite.RaftState != "Leader" && c.Report.RQLite.RaftState != "Follower" {
+		state := c.Report.RQLite.RaftState
+		if state == "" {
+			state = "unknown"
+		}
+		missing = append(missing, "raft "+state)
+	}
+	return strings.Join(missing, ", ")
 }

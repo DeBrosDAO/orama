@@ -99,9 +99,61 @@ func walkServices(ctx context.Context, bp Blueprint, reg *driverRegistry, req Sp
 	specs := append([]ServiceSpec(nil), bp.Services...)
 	sort.SliceStable(specs, func(i, j int) bool { return specs[i].Order < specs[j].Order })
 	for _, spec := range specs {
-		if err := reg.MustDriver(spec.Name).Spawn(ctx, req); err != nil {
+		driver := reg.MustDriver(spec.Name)
+		if err := driver.Spawn(ctx, req); err != nil {
+			return err
+		}
+
+		// Wait for the service to actually work before starting the next one.
+		//
+		// The blueprint's Order encodes a real dependency — the gateway cannot
+		// initialise its Olric client if Olric is not up, and does not retry —
+		// but "spawned" only ever meant the systemd unit reported active, which
+		// for a Type=simple unit means the binary was exec'd. The gap was
+		// covered by a fixed sleep, which is a guess.
+		if err := awaitServiceReady(ctx, driver, req); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// awaitServiceReady probes one service on every node it was spawned on.
+//
+// It stops at the first node that does not come up, and names it: a namespace
+// that is broken on one of five nodes is a different problem from one that is
+// broken everywhere, and the error is the only place that distinction survives.
+func awaitServiceReady(ctx context.Context, driver ServiceDriver, req SpawnRequest) error {
+	if req.Cluster == nil {
+		return nil
+	}
+	for i, node := range req.Nodes {
+		if i >= len(req.PortBlocks) || req.PortBlocks[i] == nil {
+			return fmt.Errorf("%s on %s: no port block allocated, so it cannot be probed",
+				driver.Name(), node.NodeID)
+		}
+		ports := servicePorts(driver.Name(), req.PortBlocks[i])
+		if len(ports) == 0 {
+			continue
+		}
+		if err := driver.Ready(ctx, req.Cluster.NamespaceName, node.NodeID, ports); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// servicePorts picks the ports a service's readiness probe needs from a node's
+// block. The first entry is the one the probe dials.
+func servicePorts(name ServiceName, block *PortBlock) []int {
+	switch name {
+	case ServiceRQLite:
+		return []int{block.RQLiteHTTPPort, block.RQLiteRaftPort}
+	case ServiceOlric:
+		return []int{block.OlricHTTPPort, block.OlricMemberlistPort}
+	case ServiceGateway:
+		return []int{block.GatewayHTTPPort}
+	default:
+		return nil
+	}
 }

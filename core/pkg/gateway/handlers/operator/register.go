@@ -5,16 +5,17 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"go.uber.org/zap"
 )
 
 // RegisterRequest is the body for POST /v1/operator/node/register.
 type RegisterRequest struct {
-	NodeID      string `json:"node_id"`                // dns_nodes.id (peer ID or hostname)
-	IPAddress   string `json:"ip_address,omitempty"`    // Public IP (alternative lookup key)
-	Environment string `json:"environment,omitempty"`   // e.g., "devnet", "sandbox"
-	Role        string `json:"role,omitempty"`          // e.g., "node", "nameserver"
-	SSHUser     string `json:"ssh_user,omitempty"`      // SSH user (default: "root")
+	NodeID      string `json:"node_id"`               // dns_nodes.id (peer ID or hostname)
+	IPAddress   string `json:"ip_address,omitempty"`  // Public IP (alternative lookup key)
+	Environment string `json:"environment,omitempty"` // e.g., "devnet", "sandbox"
+	Role        string `json:"role,omitempty"`        // e.g., "node", "nameserver"
+	SSHUser     string `json:"ssh_user,omitempty"`    // SSH user (default: "root")
 }
 
 var (
@@ -37,9 +38,8 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wallet := h.walletFromRequest(r)
-	if wallet == "" {
-		writeError(w, http.StatusUnauthorized, "wallet authentication required")
+	wallet, ok := h.requireOperator(w, r)
+	if !ok {
 		return
 	}
 
@@ -121,6 +121,15 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 			h.logger.Warn("failed to update operator_wallet on wireguard_peers", zap.Error(err))
 		}
 	}
+
+	// Claiming a node is what puts it under an operator's control.
+	h.audit.RecordFromRequest(ctx, r, auth.AuditEvent{
+		Actor:    wallet,
+		Action:   auth.AuditOperatorAction,
+		Resource: "node.register",
+		Result:   auth.AuditSuccess,
+		Metadata: map[string]string{"node_id": req.NodeID, "ip_address": req.IPAddress},
+	})
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "registered",

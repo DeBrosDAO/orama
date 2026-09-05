@@ -2,9 +2,11 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -170,22 +172,37 @@ func (creds *Credentials) UpdateLastUsed() {
 	creds.LastUsedAt = time.Now()
 }
 
-// GetDefaultGatewayURL returns the default gateway URL from environment config, env vars, or fallback
-func GetDefaultGatewayURL() string {
-	// Check environment variables first (for backwards compatibility)
-	if envURL := os.Getenv("ORAMA_GATEWAY_URL"); envURL != "" {
-		return envURL
-	}
-	if envURL := os.Getenv("ORAMA_GATEWAY"); envURL != "" {
-		return envURL
+// ErrNoGateway means no gateway is configured for this shell.
+var ErrNoGateway = errors.New("no gateway configured: set ORAMA_API_URL, or run 'orama env add <name> <url>' and 'orama env use <name>'")
+
+// gatewayEnvVars are the environment variables that name a gateway, in the
+// order they are consulted. All three exist for historical reasons; keeping
+// them in one list is what stops different commands from honouring different
+// subsets, which is how a request could be sent to one gateway with the
+// credential stored for another.
+var gatewayEnvVars = []string{"ORAMA_API_URL", "ORAMA_GATEWAY_URL", "ORAMA_GATEWAY"}
+
+// ResolveGatewayURL returns the gateway this shell talks to.
+//
+// Precedence: environment variable, then the active environment in
+// ~/.orama/environments.json. There is deliberately no built-in default —
+// silently falling back to a hardcoded network meant a misconfigured shell
+// quietly talked to devnet, and credentials were then looked up for a gateway
+// the caller never asked for.
+//
+// Every caller that needs a credential must key it on the URL this returns.
+func ResolveGatewayURL() (string, error) {
+	for _, name := range gatewayEnvVars {
+		if url := strings.TrimSpace(os.Getenv(name)); url != "" {
+			return url, nil
+		}
 	}
 
-	// Try to read from environment config file
 	if gwURL := getGatewayFromEnvConfig(); gwURL != "" {
-		return gwURL
+		return gwURL, nil
 	}
 
-	return "https://orama-devnet.network"
+	return "", ErrNoGateway
 }
 
 // getGatewayFromEnvConfig reads the active environment's gateway URL from the config file
@@ -230,7 +247,10 @@ func HasValidCredentials() (bool, error) {
 		return false, err
 	}
 
-	gatewayURL := GetDefaultGatewayURL()
+	gatewayURL, err := ResolveGatewayURL()
+	if err != nil {
+		return false, err
+	}
 	creds, exists := store.GetCredentialsForGateway(gatewayURL)
 
 	return exists && creds.IsValid(), nil
@@ -243,7 +263,10 @@ func SaveCredentialsForDefaultGateway(creds *Credentials) error {
 		return err
 	}
 
-	gatewayURL := GetDefaultGatewayURL()
+	gatewayURL, err := ResolveGatewayURL()
+	if err != nil {
+		return err
+	}
 	store.SetCredentialsForGateway(gatewayURL, creds)
 
 	return store.SaveCredentials()

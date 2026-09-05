@@ -3,48 +3,45 @@ package invite
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
+	"github.com/DeBrosOfficial/network/pkg/invite"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"gopkg.in/yaml.v3"
 )
 
 // Handle processes the invite command
-func Handle(args []string) {
+// Options holds the flags for the invite command.
+type Options struct {
+	Expiry time.Duration
+}
+
+// Run creates a new invite token.
+func Run(opts Options) error {
 	// Must run on a cluster node with RQLite running locally
 	domain, err := readNodeDomain()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: could not read node config: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Make sure you're running this on an installed node.\n")
-		os.Exit(1)
+		return clierr.NotFound("could not read the node config: %w\n"+
+			"  Run this on an installed node", err)
 	}
 
 	// Generate random token
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		fmt.Fprintf(os.Stderr, "Error generating token: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("failed to generate the token: %w", err)
 	}
 	token := hex.EncodeToString(tokenBytes)
 
-	// Determine expiry (default 1 hour, --expiry flag for override)
-	expiry := time.Hour
-	for i, arg := range args {
-		if arg == "--expiry" && i+1 < len(args) {
-			d, err := time.ParseDuration(args[i+1])
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Invalid expiry duration: %v\n", err)
-				os.Exit(1)
-			}
-			expiry = d
-		}
+	expiry := opts.Expiry
+	if expiry <= 0 {
+		expiry = time.Hour
 	}
 
 	expiresAt := time.Now().UTC().Add(expiry).Format("2006-01-02 15:04:05")
@@ -57,47 +54,40 @@ func Handle(args []string) {
 
 	// Insert token into RQLite via HTTP API
 	if err := insertToken(token, nodeID, expiresAt); err != nil {
-		fmt.Fprintf(os.Stderr, "Error storing invite token: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Make sure RQLite is running on this node.\n")
-		os.Exit(1)
+		return clierr.Unavailable("failed to store the invite token: %w\n"+
+			"  Make sure RQLite is running on this node", err)
 	}
 
-	// Get TLS certificate fingerprint for TOFU verification
-	certFingerprint := getTLSCertFingerprint(domain)
+	joinURL := "https://" + domain
 
-	// Print the invite command
-	fmt.Printf("\nInvite token created (expires in %s)\n\n", expiry)
+	// The fingerprint the joining node pins instead of trusting whatever
+	// certificate it is first shown. Failing to read it is reported rather
+	// than quietly producing an invite with no pinning.
+	fingerprint, err := invite.Fingerprint(domain)
+	if err != nil {
+		return clierr.Unavailable("could not read this node's TLS certificate: %w\n"+
+			"  The joining node needs its fingerprint to verify the cluster", err)
+	}
+
+	encoded, err := invite.Encode(invite.Invite{
+		JoinURL:       joinURL,
+		Token:         token,
+		CAFingerprint: fingerprint,
+	})
+	if err != nil {
+		return clierr.Failure("could not encode the invite: %w", err)
+	}
+
+	fmt.Printf("\nInvite created (expires in %s)\n\n", expiry)
 	fmt.Printf("Run this on the new node:\n\n")
-	if certFingerprint != "" {
-		fmt.Printf("  sudo orama install --join https://%s --token %s --ca-fingerprint %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token, certFingerprint)
-	} else {
-		fmt.Printf("  sudo orama install --join https://%s --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", domain, token)
-	}
+	fmt.Printf("  sudo orama node install --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", encoded)
 	fmt.Printf("Replace <NEW_NODE_IP> with the new node's public IP address.\n")
+	fmt.Printf("The invite carries the gateway to join and the certificate to pin,\n")
+	fmt.Printf("so there is nothing else to copy across.\n")
+	return nil
 }
 
 // getTLSCertFingerprint connects to the domain over TLS and returns the
-// SHA-256 fingerprint of the leaf certificate. Returns empty string on failure.
-func getTLSCertFingerprint(domain string) string {
-	conn, err := tls.DialWithDialer(
-		&net.Dialer{Timeout: 5 * time.Second},
-		"tcp",
-		domain+":443",
-		&tls.Config{MinVersion: tls.VersionTLS12},
-	)
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-
-	certs := conn.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		return ""
-	}
-
-	hash := sha256.Sum256(certs[0].Raw)
-	return hex.EncodeToString(hash[:])
-}
 
 // readNodeDomain reads the domain from the node config file
 func readNodeDomain() (string, error) {
@@ -123,18 +113,22 @@ func readNodeDomain() (string, error) {
 	return config.Node.Domain, nil
 }
 
-// insertToken inserts an invite token into RQLite via HTTP API using parameterized queries
+// insertToken inserts an invite token into RQLite via HTTP API using parameterized queries.
+//
+// What is stored is the hash. The token itself is printed to the operator once
+// and exists nowhere else — a registry that holds a usable invite token holds a
+// key to every secret the cluster has.
 func insertToken(token, createdBy, expiresAt string) error {
 	stmt := []interface{}{
 		"INSERT INTO invite_tokens (token, created_by, expires_at) VALUES (?, ?, ?)",
-		token, createdBy, expiresAt,
+		operator.HashInviteToken(token), createdBy, expiresAt,
 	}
 	payload, err := json.Marshal([]interface{}{stmt})
 	if err != nil {
 		return fmt.Errorf("failed to marshal query: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", "http://localhost:5001/db/execute", bytes.NewReader(payload))
+	req, err := http.NewRequest("POST", constants.LocalRQLiteURL()+"/db/execute", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}

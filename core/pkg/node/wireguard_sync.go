@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/environments/production"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -67,14 +68,14 @@ type desiredWGPeers struct {
 // has since left is self-correcting (it simply never handshakes, and the next
 // authoritative sync removes it); failing to add one is not.
 func (n *Node) loadDesiredWireGuardPeers(ctx context.Context, localPubKey string) (desiredWGPeers, error) {
-	leaderDB := n.rqliteAdapter.GetSQLDB()
+	leaderDB := n.getRQLiteAdapter().GetSQLDB()
 	peers, err := scanWGPeers(ctx, leaderDB, localPubKey)
 	if err == nil {
 		return desiredWGPeers{peers: peers, authoritative: true, source: "leader"}, nil
 	}
 	leaderErr := err
 
-	localDB, localErr := n.rqliteAdapter.LocalDB()
+	localDB, localErr := n.getRQLiteAdapter().LocalDB()
 	if localErr != nil {
 		return desiredWGPeers{}, fmt.Errorf("failed to query wireguard_peers (leader: %v; local handle: %w)", leaderErr, localErr)
 	}
@@ -134,10 +135,17 @@ func scanWGPeers(ctx context.Context, db *sql.DB, localPubKey string) (map[strin
 
 // syncWireGuardPeers reads the mesh membership and reconciles the local
 // WireGuard interface against it. Called at startup and every syncInterval.
+//
+// The lock matters: a retry on the supervisor goroutine can land on the same
+// moment as a tick of the periodic loop, and both write wg0.conf. `wg set` is
+// idempotent, but the config file rewrite is not.
 func (n *Node) syncWireGuardPeers(ctx context.Context) error {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return fmt.Errorf("rqlite adapter not initialized")
 	}
+
+	n.wgSyncMu.Lock()
+	defer n.wgSyncMu.Unlock()
 
 	// Check if WireGuard is installed and active
 	if _, err := exec.LookPath("wg"); err != nil {
@@ -152,9 +160,15 @@ func (n *Node) syncWireGuardPeers(ctx context.Context) error {
 		return nil
 	}
 
-	// Parse current peers from wg show output
-	currentPeers := parseWGShowPeers(string(out))
 	localPubKey := parseWGShowLocalKey(string(out))
+
+	// Read the live peers WITH their endpoints and allowed IPs. `wg show` alone
+	// only yields keys, which is why an endpoint that moved could never be
+	// detected as drift.
+	currentPeers, err := production.ReadLiveWGPeers("wg0")
+	if err != nil {
+		return fmt.Errorf("read live wireguard peers: %w", err)
+	}
 
 	desired, err := n.loadDesiredWireGuardPeers(ctx, localPubKey)
 	if err != nil {
@@ -172,6 +186,11 @@ func (n *Node) syncWireGuardPeers(ctx context.Context) error {
 type wgPeerProvisioner interface {
 	AddPeer(peer production.WireGuardPeer) error
 	RemovePeer(publicKey string) error
+	// PersistPeers writes the resulting peer set to wg0.conf so the mesh
+	// survives the next `wg-quick up`. Kernel state and file state are applied
+	// separately and reported separately: a peer that reached the interface is
+	// live even if the file could not be written.
+	PersistPeers(peers []production.WireGuardPeer) error
 }
 
 // reconcileWireGuardPeers applies desired onto the live interface.
@@ -183,22 +202,44 @@ type wgPeerProvisioner interface {
 // migration in flight all produce an empty read. Treating that as "remove every
 // peer" severs the mesh, and severing the mesh is what makes the loss
 // unrecoverable. Adding peers is always safe, so adds are unconditional.
-func (n *Node) reconcileWireGuardPeers(currentPeers map[string]struct{}, desired desiredWGPeers) {
-	n.reconcileWireGuardPeersWith(&production.WireGuardProvisioner{}, currentPeers, desired)
+func (n *Node) reconcileWireGuardPeers(currentPeers map[string]production.WireGuardPeer, desired desiredWGPeers) {
+	n.reconcileWireGuardPeersWith(production.NewWGPeerManager(""), currentPeers, desired)
 }
 
 // reconcileWireGuardPeersWith is reconcileWireGuardPeers against an injected
 // provisioner.
-func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers map[string]struct{}, desired desiredWGPeers) {
-	added := 0
+func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers map[string]production.WireGuardPeer, desired desiredWGPeers) {
+	// live tracks what the interface holds as we change it, so the file we
+	// persist at the end describes the mesh that actually exists.
+	live := make(map[string]production.WireGuardPeer, len(currentPeers))
+	for k, v := range currentPeers {
+		live[k] = v
+	}
+
+	added, updated := 0, 0
 	for pubKey, peer := range desired.peers {
-		if _, exists := currentPeers[pubKey]; exists {
+		existing, exists := live[pubKey]
+		if exists && !wgPeerDrifted(existing, peer) {
 			continue
 		}
 		if err := wp.AddPeer(peer); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "failed to add WG peer",
+			n.logger.ComponentWarn(logging.ComponentNode, "failed to apply WG peer to the interface",
 				zap.String("public_key", shortWGKey(pubKey)),
 				zap.Error(err))
+			continue
+		}
+		live[pubKey] = peer
+		if exists {
+			// `wg set` is idempotent, so re-applying a known key is how an
+			// endpoint or allowed-ips change is rolled out. Skipping known keys
+			// meant a peer that moved to a new public IP kept the dead endpoint
+			// forever, which is the manual "reset the peer on both sides" in
+			// docs/COMMON_PROBLEMS.md.
+			updated++
+			n.logger.ComponentInfo(logging.ComponentNode, "updated WG peer",
+				zap.String("public_key", shortWGKey(pubKey)),
+				zap.String("endpoint", peer.Endpoint),
+				zap.String("allowed_ip", peer.AllowedIP))
 			continue
 		}
 		added++
@@ -220,6 +261,7 @@ func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers ma
 					zap.Error(err))
 				continue
 			}
+			delete(live, pubKey)
 			removed++
 			n.logger.ComponentInfo(logging.ComponentNode, "removed stale WG peer",
 				zap.String("public_key", shortWGKey(pubKey)))
@@ -232,13 +274,54 @@ func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers ma
 			zap.String("source", desired.source))
 	}
 
+	// Persist whatever the interface now holds. Reported separately from the
+	// kernel result: a failure here means the mesh is correct now but will come
+	// back stale after the next `wg-quick up`, which is a different problem from
+	// a peer that never reached the interface at all.
+	persisted := true
+	if added+removed+updated > 0 {
+		if err := wp.PersistPeers(mapToPeerSlice(live)); err != nil {
+			persisted = false
+			n.logger.ComponentError(logging.ComponentNode,
+				"WG peers applied to the interface but NOT persisted — the mesh will regress on the next wg-quick up",
+				zap.Error(err))
+		}
+	}
+
 	n.logger.ComponentInfo(logging.ComponentNode, "WireGuard peer sync completed",
 		zap.Int("desired_peers", len(desired.peers)),
 		zap.Int("current_peers", len(currentPeers)),
 		zap.Int("added", added),
+		zap.Int("updated", updated),
 		zap.Int("removed", removed),
+		zap.Bool("persisted", persisted),
 		zap.Bool("authoritative", desired.authoritative),
 		zap.String("source", desired.source))
+}
+
+// wgPeerDrifted reports whether the live peer differs from what membership says
+// it should be. AllowedIP is compared with the /32 suffix normalised away
+// because `wg show dump` always prints a prefix length and the desired set may
+// not.
+func wgPeerDrifted(live, desired production.WireGuardPeer) bool {
+	if desired.Endpoint != "" && live.Endpoint != desired.Endpoint {
+		return true
+	}
+	return normalizeAllowedIP(live.AllowedIP) != normalizeAllowedIP(desired.AllowedIP)
+}
+
+func normalizeAllowedIP(v string) string {
+	v = strings.TrimSpace(v)
+	return strings.TrimSuffix(v, "/32")
+}
+
+// mapToPeerSlice flattens the live peer map for persistence.
+func mapToPeerSlice(peers map[string]production.WireGuardPeer) []production.WireGuardPeer {
+	out := make([]production.WireGuardPeer, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, p)
+	}
+	return out
 }
 
 // shortWGKey truncates a WireGuard public key for logging. Full keys are not
@@ -254,7 +337,7 @@ func shortWGKey(pubKey string) string {
 // wireguard_peers table. Without this, joining nodes get an empty peer list
 // from the /v1/internal/join endpoint and can't establish WG tunnels.
 func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
 
@@ -304,19 +387,52 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 	// Query local IPFS peer ID
 	ipfsPeerID := queryLocalIPFSPeerID()
 
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 
 	// Clean up stale entries for this public IP with a different node_id.
 	// This prevents ghost peers from previous installs or from the temporary
 	// "node-10.0.0.X" ID that the join handler creates.
+	//
+	// Scoped to unconfirmed rows. Two nodes can legitimately share a public IP
+	// — anything behind one NAT — and without the scope each would delete the
+	// other's mesh row every 60 seconds, indefinitely. A confirmed row belongs
+	// to a machine that came up, and removing those is the membership
+	// reconciler's job, under evidence this function does not have.
 	if _, err := rqlite.SafeExecContext(db, ctx,
-		"DELETE FROM wireguard_peers WHERE public_ip = ? AND node_id != ?",
+		"DELETE FROM wireguard_peers WHERE public_ip = ? AND node_id != ? AND confirmed_at IS NULL",
 		publicIP, nodeID); err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to clean stale WG entries", zap.Error(err))
 	}
 
+	// confirmed_at is set here, not left to the membership reconciler to infer
+	// from dns_nodes. A node writing its own row from its own boot process is
+	// the strongest evidence there is that it came up, and without it a running
+	// node whose dns_nodes row was missing for any reason would have this row
+	// garbage-collected as a failed join and be severed from the mesh.
+	//
+	// An upsert, not INSERT OR REPLACE. OR REPLACE deletes the conflicting row
+	// and inserts a new one, so every column absent from the statement is
+	// silently reset — this runs every 60 seconds, and it was quietly wiping
+	// the operator_wallet the join handler wrote and resetting created_at on
+	// every tick. Naming the columns to update leaves the rest alone.
+	//
+	// The upsert resolves a conflict on node_id — this node re-asserting its
+	// own row — and nothing else. A row held by a DIFFERENT node at this
+	// node's wg_ip or public key now fails loudly instead of being deleted:
+	// silently taking another machine's row is the same class of bug the join
+	// path was just fixed for, and the membership reconciler is what removes
+	// rows whose node has genuinely departed.
 	_, err = rqlite.SafeExecContext(db, ctx,
-		"INSERT OR REPLACE INTO wireguard_peers (node_id, wg_ip, public_key, public_ip, wg_port, ipfs_peer_id) VALUES (?, ?, ?, ?, ?, ?)",
+		`INSERT INTO wireguard_peers
+		   (node_id, wg_ip, public_key, public_ip, wg_port, ipfs_peer_id, confirmed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(node_id) DO UPDATE SET
+		   wg_ip        = excluded.wg_ip,
+		   public_key   = excluded.public_key,
+		   public_ip    = excluded.public_ip,
+		   wg_port      = excluded.wg_port,
+		   ipfs_peer_id = excluded.ipfs_peer_id,
+		   confirmed_at = COALESCE(wireguard_peers.confirmed_at, excluded.confirmed_at)`,
 		nodeID, wgIP, localPubKey, publicIP, defaultWireGuardPort, ipfsPeerID)
 	if err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to self-register WG peer", zap.Error(err))
@@ -331,7 +447,7 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 // queryLocalIPFSPeerID queries the local IPFS daemon for its peer ID
 func queryLocalIPFSPeerID() string {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post("http://localhost:4501/api/v0/id", "", nil)
+	resp, err := client.Post(constants.LocalIPFSAPIURL()+"/api/v0/id", "", nil)
 	if err != nil {
 		return ""
 	}
@@ -346,49 +462,43 @@ func queryLocalIPFSPeerID() string {
 	return result.ID
 }
 
-// startWireGuardSyncLoop runs syncWireGuardPeers periodically
-func (n *Node) startWireGuardSyncLoop(ctx context.Context) {
+// startWireGuardSync registers this node in wireguard_peers, reconciles the
+// local interface once, and makes sure the periodic sync is running.
+//
+// The boot supervisor retries it after any failure, so the periodic loop starts
+// once while the immediate sync runs on every attempt — which is what you want
+// while the mesh is still being repaired: catch up now, then fall back to the
+// normal cadence.
+func (n *Node) startWireGuardSync(ctx context.Context) error {
+	n.wgSyncOnce.Do(func() { go n.wireGuardSyncLoop(ctx) })
+
 	// Ensure this node is registered in wireguard_peers (critical for join flow)
 	n.ensureWireGuardSelfRegistered(ctx)
 
-	// Run initial sync
 	if err := n.syncWireGuardPeers(ctx); err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "initial WireGuard peer sync failed", zap.Error(err))
+		return fmt.Errorf("WireGuard peer sync failed: %w", err)
 	}
-
-	// Periodic sync every wgSyncInterval
-	go func() {
-		ticker := time.NewTicker(wgSyncInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// Re-register self on every tick to pick up IPFS peer ID if it wasn't
-				// ready at startup (INSERT OR REPLACE is idempotent)
-				n.ensureWireGuardSelfRegistered(ctx)
-				if err := n.syncWireGuardPeers(ctx); err != nil {
-					n.logger.ComponentWarn(logging.ComponentNode, "WireGuard peer sync failed", zap.Error(err))
-				}
-			}
-		}
-	}()
+	return nil
 }
 
-// parseWGShowPeers extracts public keys of current peers from `wg show wg0` output
-func parseWGShowPeers(output string) map[string]struct{} {
-	peers := make(map[string]struct{})
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "peer:") {
-			key := strings.TrimSpace(strings.TrimPrefix(line, "peer:"))
-			if key != "" {
-				peers[key] = struct{}{}
+// wireGuardSyncLoop reconciles the local WireGuard interface every
+// wgSyncInterval until ctx is done.
+func (n *Node) wireGuardSyncLoop(ctx context.Context) {
+	ticker := time.NewTicker(wgSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Re-register self on every tick to pick up IPFS peer ID if it wasn't
+			// ready at startup (INSERT OR REPLACE is idempotent)
+			n.ensureWireGuardSelfRegistered(ctx)
+			if err := n.syncWireGuardPeers(ctx); err != nil {
+				n.logger.ComponentWarn(logging.ComponentNode, "WireGuard peer sync failed", zap.Error(err))
 			}
 		}
 	}
-	return peers
 }
 
 // parseWGShowLocalKey extracts the local public key from `wg show wg0` output
@@ -407,10 +517,10 @@ func parseWGShowLocalKey(output string) string {
 //
 // This is the recovery path for a node whose mesh membership was lost. Raft
 // runs over the mesh, so such a node reaches no voter and its rqlite never
-// elects a leader; meanwhile the steady-state sync loop
-// (startWireGuardSyncLoop) runs later in Node.Start, which is never reached
-// because the leader wait fails first. The result is a node that cannot recover
-// without hands, while the peer rows sit readable on its own disk.
+// elects a leader; the steady-state sync (startWireGuardSync) cannot run yet
+// either, because it needs the adapter that rqlite start-up has not finished
+// building. The result would be a node that cannot recover without hands,
+// while the peer rows sit readable on its own disk.
 //
 // Running here breaks that cycle. It reads the local replica directly rather
 // than going through the adapter, because the adapter is only constructed after
@@ -425,8 +535,15 @@ func (n *Node) bootstrapWireGuardMesh(ctx context.Context) {
 	if err != nil {
 		return // wg0 not active
 	}
-	currentPeers := parseWGShowPeers(string(out))
 	localPubKey := parseWGShowLocalKey(string(out))
+
+	currentPeers, err := production.ReadLiveWGPeers("wg0")
+	if err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode,
+			"WireGuard bootstrap: cannot read live peers — mesh repair skipped",
+			zap.Error(err))
+		return
+	}
 
 	db, err := n.openLocalRQLiteForBootstrap()
 	if err != nil {

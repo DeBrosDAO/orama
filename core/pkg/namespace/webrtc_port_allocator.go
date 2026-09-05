@@ -531,5 +531,3 @@ func (wpa *WebRTCPortAllocator) getAllocatedValues(ctx context.Context, nodeIDs 
 	}
 	return result, nil
 }
-
-

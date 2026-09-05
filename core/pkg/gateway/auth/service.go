@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -41,13 +42,37 @@ type Service struct {
 	// on a namespace gateway (bugboard #162). Nil means use s.orm (the
 	// main/index gateway, where orm already is the registry).
 	apiKeyORM client.NetworkClient
+
+	// revocations is the list of tokens this gateway refuses. Built in
+	// NewService whenever there is a database to read it from.
+	revocations *RevocationList
+
+	// audit records the auth events worth keeping. Built alongside the
+	// revocations, for the same reason: a Service with a database has one.
+	audit *AuditLog
 }
+
+// minRSAKeyBits is the smallest RSA signing key this gateway will use. 2048 is
+// the floor everyone agrees on; below it the signature on an access token is
+// not worth checking.
+const minRSAKeyBits = 2048
+
+// ErrTokenRevoked is returned for a token whose signature verifies but which
+// has been revoked — a key that was revoked, or a session that was ended.
+var ErrTokenRevoked = errors.New("token revoked")
 
 func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signingKeyPEM string, defaultNS string) (*Service, error) {
 	s := &Service{
 		logger:    logger,
 		orm:       orm,
 		defaultNS: defaultNS,
+	}
+
+	// Every Service with a database consults the revocations. There is no way
+	// to build one that verifies tokens against a database and does not.
+	if orm != nil {
+		s.revocations = NewRevocationList(orm, logger)
+		s.audit = NewAuditLog(orm, logger)
 	}
 
 	if signingKeyPEM != "" {
@@ -58,6 +83,12 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse RSA private key: %w", err)
+		}
+		// A short RSA key signs tokens anybody can forge. The size was never
+		// checked, so whatever PEM the operator supplied was used.
+		if bits := key.N.BitLen(); bits < minRSAKeyBits {
+			return nil, fmt.Errorf("the configured RSA signing key is %d bits; %d is the minimum, "+
+				"below which the signature on an access token is not worth checking", bits, minRSAKeyBits)
 		}
 		s.signingKey = key
 
@@ -185,6 +216,17 @@ func (s *Service) reuseLastKnownClaims(ctx context.Context, nsID interface{}, wa
 // guarantees is safer than rotating non-atomically.
 var ErrRotationNotConfigured = fmt.Errorf("auth service not configured for atomic refresh-token rotation (missing rqlite client)")
 
+// NormalizeWallet canonicalises a wallet address for storage and lookup.
+//
+// The same wallet reaches the gateway in different cases: EIP-55 checksummed
+// from one client, lowercase from another. Every row keyed by a wallet is
+// matched by exact string equality, so unless both the write and the read
+// normalise the same way one login records ownership that a later login cannot
+// find, and the wallet ends up owning the namespace twice under two spellings.
+func NormalizeWallet(wallet string) string {
+	return strings.ToLower(strings.TrimSpace(wallet))
+}
+
 // HashAPIKey returns the HMAC-SHA256 hash of an API key if the HMAC secret is set,
 // or returns the raw key for backward compatibility during rolling upgrade.
 func (s *Service) HashAPIKey(key string) string {
@@ -204,67 +246,50 @@ func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey) {
 	s.preferEdDSA = true
 }
 
-// CreateNonce generates a new nonce and stores it in the database
-func (s *Service) CreateNonce(ctx context.Context, wallet, purpose, namespace string) (string, error) {
-	// Generate a URL-safe random nonce (32 bytes)
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("failed to generate nonce: %w", err)
-	}
-	nonce := base64.RawURLEncoding.EncodeToString(buf)
-
-	// Use internal context to bypass authentication for system operations
+// insertNonce records a challenge this gateway has just issued, so that
+// ConsumeNonce can claim it exactly once later.
+//
+// The namespace must already exist. This used to be an INSERT OR IGNORE, so an
+// unauthenticated POST to /v1/auth/challenge created a namespace for any name
+// at all — squatting a name was free, and signing in to a name nobody had taken
+// silently created it. Creating one is its own authenticated call now.
+func (s *Service) insertNonce(ctx context.Context, wallet, nonce, purpose, namespace string) error {
 	internalCtx := client.WithInternalAuth(ctx)
 	db := s.orm.Database()
 
-	if namespace == "" {
-		namespace = s.defaultNS
-		if namespace == "" {
-			namespace = "default"
-		}
-	}
-
-	// Ensure namespace exists
-	if _, err := db.Query(internalCtx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", namespace); err != nil {
-		return "", fmt.Errorf("failed to ensure namespace: %w", err)
-	}
-
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
+	nsID, err := s.lookupNamespaceID(ctx, namespace)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve namespace ID: %w", err)
+		return fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
+	}
+	if nsID == nil {
+		return &ErrNamespaceUnknown{Namespace: namespace}
 	}
 
-	// Store nonce with 5 minute expiry
-	walletLower := strings.ToLower(strings.TrimSpace(wallet))
+	// A challenge writes a Raft-replicated row, and nothing proves the caller
+	// owns the wallet it names. Without a ceiling on how many can be
+	// outstanding at once, a grind fills the table for that wallet.
+	walletKey := normalizeNonceWallet(wallet)
+	if err := s.checkOutstandingNonces(internalCtx, db, nsID, walletKey, namespace); err != nil {
+		return err
+	}
+
+	// ConsumeNonce matches this row by exact string equality, so both sides
+	// normalise the wallet the same way. The expiry here and the Expiration
+	// Time in the signed message are the same ChallengeTTL, checked
+	// independently: the message is what the wallet showed the user, this row
+	// is what the gateway will honour.
 	if _, err := db.Query(internalCtx,
-		"INSERT INTO nonces(namespace_id, wallet, nonce, purpose, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+5 minutes'))",
-		nsID, walletLower, nonce, purpose,
+		"INSERT INTO nonces(namespace_id, wallet, nonce, purpose, expires_at) VALUES (?, ?, ?, ?, datetime('now', ?))",
+		nsID, walletKey, nonce, purpose, fmt.Sprintf("+%d seconds", int64(ChallengeTTL.Seconds())),
 	); err != nil {
-		return "", fmt.Errorf("failed to store nonce: %w", err)
+		return fmt.Errorf("failed to store nonce: %w", err)
 	}
-
-	return nonce, nil
+	return nil
 }
 
-// VerifySignature verifies a wallet signature for a given nonce
-func (s *Service) VerifySignature(ctx context.Context, wallet, nonce, signature, chainType string) (bool, error) {
-	chainType = strings.ToUpper(strings.TrimSpace(chainType))
-	if chainType == "" {
-		chainType = "ETH"
-	}
-
-	switch chainType {
-	case "ETH":
-		return s.verifyEthSignature(wallet, nonce, signature)
-	case "SOL":
-		return s.verifySolSignature(wallet, nonce, signature)
-	default:
-		return false, fmt.Errorf("unsupported chain type: %s", chainType)
-	}
-}
-
-func (s *Service) verifyEthSignature(wallet, nonce, signature string) (bool, error) {
-	msg := []byte(nonce)
+// verifyEthSignature checks an EIP-191 personal_sign signature over message.
+func (s *Service) verifyEthSignature(wallet, message, signature string) (bool, error) {
+	msg := []byte(message)
 	prefix := []byte("\x19Ethereum Signed Message:\n" + strconv.Itoa(len(msg)))
 	hash := ethcrypto.Keccak256(prefix, msg)
 
@@ -293,7 +318,9 @@ func (s *Service) verifyEthSignature(wallet, nonce, signature string) (bool, err
 	return got == want, nil
 }
 
-func (s *Service) verifySolSignature(wallet, nonce, signature string) (bool, error) {
+// verifySolSignature checks a raw ed25519 signature over message. Solana signs
+// the message bytes with no prefix, which is what SIWS specifies.
+func (s *Service) verifySolSignature(wallet, message, signature string) (bool, error) {
 	sig, err := base64.StdEncoding.DecodeString(signature)
 	if err != nil {
 		return false, fmt.Errorf("invalid base64 signature: %w", err)
@@ -310,8 +337,7 @@ func (s *Service) verifySolSignature(wallet, nonce, signature string) (bool, err
 		return false, fmt.Errorf("invalid public key length: expected 32 bytes, got %d", len(pubKeyBytes))
 	}
 
-	message := []byte(nonce)
-	return ed25519.Verify(ed25519.PublicKey(pubKeyBytes), message, sig), nil
+	return ed25519.Verify(ed25519.PublicKey(pubKeyBytes), []byte(message), sig), nil
 }
 
 // IssueTokens generates access and refresh tokens for a verified wallet
@@ -736,35 +762,14 @@ func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all 
 	return fmt.Errorf("nothing to revoke")
 }
 
-// RegisterApp registers a new client application
-func (s *Service) RegisterApp(ctx context.Context, wallet, namespace, name, publicKey string) (string, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
-
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
-	if err != nil {
-		return "", err
-	}
-
-	// Generate client app_id
-	buf := make([]byte, 12)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("failed to generate app id: %w", err)
-	}
-	appID := "app_" + base64.RawURLEncoding.EncodeToString(buf)
-
-	// Persist app
-	if _, err := db.Query(internalCtx, "INSERT INTO apps(namespace_id, app_id, name, public_key) VALUES (?, ?, ?, ?)", nsID, appID, name, publicKey); err != nil {
-		return "", err
-	}
-
-	// Record ownership
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, ?, ?)", nsID, "wallet", wallet)
-
-	return appID, nil
-}
-
-// GetOrCreateAPIKey returns an existing API key or creates a new one for a wallet in a namespace
+// GetOrCreateAPIKey returns an existing API key or creates a new one for a wallet in a namespace.
+//
+// It refuses when the namespace belongs to another wallet. This used to be the
+// takeover: the ownership row it wrote unconditionally made any wallet that
+// named an existing namespace an admin co-owner of it, and the key it returned
+// carried no scopes, which the read path treated as admin. Both halves are
+// closed here — ownership is claimed before anything is minted, and the key is
+// minted with the grant written down.
 func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace string) (string, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 	db := s.keyORM().Database()
@@ -774,45 +779,80 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 		return "", err
 	}
 
-	// Try existing linkage
-	var apiKey string
-	r1, err := db.Query(internalCtx,
-		"SELECT api_keys.key FROM wallet_api_keys JOIN api_keys ON wallet_api_keys.api_key_id = api_keys.id WHERE wallet_api_keys.namespace_id = ? AND LOWER(wallet_api_keys.wallet) = LOWER(?) LIMIT 1",
-		nsID, wallet,
-	)
-	if err == nil && r1 != nil && r1.Count > 0 && len(r1.Rows) > 0 && len(r1.Rows[0]) > 0 {
-		if val, ok := r1.Rows[0][0].(string); ok {
-			apiKey = val
-		}
+	if err := s.ClaimNamespaceOwnership(ctx, db, nsID, namespace, wallet); err != nil {
+		return "", err
 	}
 
-	if apiKey != "" {
-		return apiKey, nil
-	}
+	// The wallet's previous key, if it has one. Its id, not its value: what is
+	// stored is an HMAC of the key, and this used to SELECT that column and
+	// hand it back as the caller's API key.
+	//
+	// That worked only while no HMAC secret was configured. Production always
+	// configures one, so a returning owner's second login answered with the
+	// hash — a string that hashes to something else again and is refused
+	// everywhere. The raw key is shown once and is not recoverable, which is
+	// the point of storing a hash; there is nothing to return but a new one.
+	previousID := s.previousWalletKeyID(internalCtx, db, nsID, wallet)
 
-	// Create new API key
-	buf := make([]byte, 18)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("failed to generate api key: %w", err)
+	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured.
+	//
+	// The scope set is written, never left NULL. This is the owner's own key, so
+	// the grant is admin — the same access an empty column used to be read as,
+	// with the difference that it is now a decision on the row rather than an
+	// inference in the reader, and a key minted with no scopes denies.
+	ownerScopes := ScopeSet{ScopeAdmin: {}}.Canonical()
+	apiKey, err := NewKey(KeyTypeFor(ownerScopes))
+	if err != nil {
+		return "", err
 	}
-	apiKey = "ak_" + base64.RawURLEncoding.EncodeToString(buf) + ":" + namespace
-
-	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured
 	hashedKey := s.HashAPIKey(apiKey)
-	if _, err := db.Query(internalCtx, "INSERT INTO api_keys(key, name, namespace_id) VALUES (?, ?, ?)", hashedKey, "", nsID); err != nil {
+
+	// Every key has an expiry now. A key minted by a login is the owner's own
+	// key and lives no longer than any other: the point of the column is that
+	// no path produces a credential that works forever.
+	expiresAt := time.Now().Add(KeyLifetime).UTC().Format(sqliteTime)
+
+	// rotated_from records that this key replaces the wallet's previous one, so
+	// `keys list` shows the succession rather than two unrelated keys.
+	//
+	// The previous key is deliberately NOT revoked. It is very likely deployed
+	// somewhere — that is what an owner's key is for — and revoking it because
+	// somebody signed in on a laptop would take an application down with no
+	// warning. It expires on its own, and `orama namespace keys revoke` ends it
+	// sooner when the owner decides to.
+	var rotatedFrom interface{}
+	if previousID != 0 {
+		rotatedFrom = previousID
+	}
+	if _, err := db.Query(internalCtx,
+		"INSERT INTO api_keys(key, name, namespace_id, scopes, expires_at, rotated_from) VALUES (?, ?, ?, ?, ?, ?)",
+		hashedKey, "", nsID, ownerScopes, expiresAt, rotatedFrom,
+	); err != nil {
 		return "", fmt.Errorf("failed to store api key: %w", err)
 	}
 
-	// Link wallet -> api_key
+	// Point the wallet at its newest key. REPLACE rather than IGNORE: the row
+	// says which key is the wallet's current one, and leaving it pointing at
+	// the previous one would make `rotated_from` describe a succession the
+	// linkage disagrees with.
 	rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", hashedKey)
-	if err == nil && rid != nil && rid.Count > 0 && len(rid.Rows) > 0 && len(rid.Rows[0]) > 0 {
-		apiKeyID := rid.Rows[0][0]
-		_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)", nsID, strings.ToLower(wallet), apiKeyID)
+	if err != nil || rid == nil || rid.Count == 0 || len(rid.Rows) == 0 || len(rid.Rows[0]) == 0 {
+		return "", fmt.Errorf("api key stored for namespace %q but its id could not be read back: %w", namespace, err)
+	}
+	if _, err := db.Query(internalCtx,
+		"INSERT OR REPLACE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)",
+		nsID, NormalizeWallet(wallet), rid.Rows[0][0],
+	); err != nil {
+		return "", fmt.Errorf("failed to link the api key to wallet in namespace %q: %w", namespace, err)
 	}
 
-	// Record ownerships — store the hash in ownership too
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)", nsID, hashedKey)
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'wallet', ?)", nsID, wallet)
+	// The key belongs to the namespace as well: that grant is how the
+	// authorization gate recognizes a request authenticated by the key rather
+	// than by the wallet. Without it the caller holds a key that is refused
+	// everywhere.
+	if err := s.grantServiceAccount(ctx, db, nsID, namespace, hashedKey, RoleForScopes(ownerScopes)); err != nil {
+		return "", err
+	}
 
 	return apiKey, nil
 }
@@ -873,4 +913,17 @@ func (s *Service) Base58Decode(input string) ([]byte, error) {
 		res = append([]byte{0}, res...)
 	}
 	return res, nil
+}
+
+// previousWalletKeyID returns the id of the key this wallet was last given in a
+// namespace, or 0. It is the `rotated_from` of the key about to be minted.
+func (s *Service) previousWalletKeyID(internalCtx context.Context, db client.DatabaseClient, nsID interface{}, wallet string) int64 {
+	res, err := db.Query(internalCtx,
+		`SELECT api_key_id FROM wallet_api_keys
+		  WHERE namespace_id = ? AND wallet = ? LIMIT 1`,
+		nsID, NormalizeWallet(wallet))
+	if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return 0
+	}
+	return toInt64(res.Rows[0][0])
 }

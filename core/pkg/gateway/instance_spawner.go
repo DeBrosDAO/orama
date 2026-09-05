@@ -87,7 +87,7 @@ type InstanceConfig struct {
 	DataDir         string        // Data directory for deployments, SQLite, etc.
 	// IPFS configuration for storage endpoints
 	IPFSClusterAPIURL     string        // IPFS Cluster API URL (e.g., "http://localhost:9094")
-	IPFSAPIURL            string        // IPFS API URL (e.g., "http://localhost:5001")
+	IPFSAPIURL            string        // IPFS API URL (e.g., "http://localhost:10107")
 	IPFSTimeout           time.Duration // Timeout for IPFS operations
 	IPFSReplicationFactor int           // IPFS replication factor
 	// WebRTC configuration (populated when WebRTC is enabled for the namespace)

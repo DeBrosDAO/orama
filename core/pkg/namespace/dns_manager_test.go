@@ -2,6 +2,7 @@ package namespace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -241,36 +242,89 @@ func TestUpdateNamespaceRecord_SetsActiveTrue(t *testing.T) {
 	}
 }
 
-func TestCountActiveNamespaceRecords(t *testing.T) {
+// The guard against disabling a namespace's last DNS record has to live inside
+// the UPDATE. Every node that observes a suspect node runs this path, so a
+// separate COUNT followed by an unconditional write lets two observers both
+// read a count of 2, both conclude they are not the last, and both disable —
+// leaving the namespace resolving nowhere.
+func TestDisableNamespaceRecord_guardIsInsideTheStatement(t *testing.T) {
 	mockDB := newMockRQLiteClient()
-	logger := zap.NewNop()
-	manager := NewDNSRecordManager(mockDB, "orama-devnet.network", logger)
+	manager := NewDNSRecordManager(mockDB, "orama-devnet.network", zap.NewNop())
 
-	ctx := context.Background()
-	count, err := manager.CountActiveNamespaceRecords(ctx, "alice")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := manager.DisableNamespaceRecord(context.Background(), "alice", "203.0.113.1"); err != nil {
+		t.Fatalf("DisableNamespaceRecord: %v", err)
 	}
 
-	// With mock returning empty results, count should be 0
-	if count != 0 {
-		t.Fatalf("expected 0, got %d", count)
+	if len(mockDB.execCalls) == 0 {
+		t.Fatal("expected an UPDATE")
+	}
+	guarded := 0
+	for _, call := range mockDB.execCalls {
+		if !strings.Contains(call.Query, "UPDATE dns_records") {
+			continue
+		}
+		guarded++
+		if !strings.Contains(call.Query, "SELECT COUNT(*)") {
+			t.Fatalf("the last-record guard is not part of the UPDATE:\n%s", call.Query)
+		}
+		if !strings.Contains(call.Query, "> 1") {
+			t.Fatalf("the UPDATE does not require more than one active record:\n%s", call.Query)
+		}
+		// Each name must be guarded on its own count: guarding the wildcard on
+		// the primary's count would let the last wildcard record go.
+		if !strings.Contains(call.Query, "d2.fqdn = dns_records.fqdn") {
+			t.Fatalf("the guard does not correlate on the record's own fqdn:\n%s", call.Query)
+		}
+	}
+	if guarded != 2 {
+		t.Fatalf("expected both the primary and the wildcard name to be guarded, got %d", guarded)
+	}
+}
+
+func TestDisableNamespaceRecord_surfacesAWriteFailure(t *testing.T) {
+	// The UPDATE's error used to be discarded with `_, _ =` and the function
+	// always returned nil, so a failure to withdraw a dead node was invisible.
+	mockDB := newMockRQLiteClient()
+	manager := NewDNSRecordManager(mockDB, "orama-devnet.network", zap.NewNop())
+	// Fail whichever UPDATE the manager issues first.
+	if _, err := manager.DisableNamespaceRecord(context.Background(), "alice", "203.0.113.1"); err != nil {
+		t.Fatalf("setup call: %v", err)
+	}
+	for _, call := range mockDB.execCalls {
+		mockDB.execResults[call.Query] = errors.New("no leader")
 	}
 
-	// Verify the correct query was made
-	if len(mockDB.queryCalls) == 0 {
-		t.Fatal("expected a query call")
+	if _, err := manager.DisableNamespaceRecord(context.Background(), "alice", "203.0.113.1"); err == nil {
+		t.Fatal("a failed withdrawal was reported as success")
 	}
-	lastCall := mockDB.queryCalls[len(mockDB.queryCalls)-1]
-	if !strings.Contains(lastCall.Query, "COUNT(*)") || !strings.Contains(lastCall.Query, "is_active = TRUE") {
-		t.Fatalf("unexpected query: %s", lastCall.Query)
+}
+
+func TestAddNamespaceRecord_revivesASoftDisabledRow(t *testing.T) {
+	// dns_records has UNIQUE(fqdn, record_type, value) and
+	// DisableNamespaceRecord leaves the row in place with is_active = 0. A bare
+	// INSERT therefore hit the constraint on the repair path — so a repaired
+	// node was never re-advertised, and the repair reported success.
+	mockDB := newMockRQLiteClient()
+	manager := NewDNSRecordManager(mockDB, "orama-devnet.network", zap.NewNop())
+
+	if err := manager.AddNamespaceRecord(context.Background(), "alice", "203.0.113.1"); err != nil {
+		t.Fatalf("AddNamespaceRecord: %v", err)
 	}
-	// Verify the FQDN arg
-	expectedFQDN := "ns-alice.orama-devnet.network."
-	if len(lastCall.Args) == 0 {
-		t.Fatal("expected query args")
+
+	inserts := 0
+	for _, call := range mockDB.execCalls {
+		if !strings.Contains(call.Query, "INSERT INTO dns_records") {
+			continue
+		}
+		inserts++
+		if !strings.Contains(call.Query, "ON CONFLICT(fqdn, record_type, value)") {
+			t.Fatalf("the insert is not an upsert, so it fails on a disabled row:\n%s", call.Query)
+		}
+		if !strings.Contains(call.Query, "is_active = TRUE") {
+			t.Fatalf("the upsert does not re-enable the row, so the node stays withdrawn:\n%s", call.Query)
+		}
 	}
-	if fqdn, ok := lastCall.Args[0].(string); !ok || fqdn != expectedFQDN {
-		t.Fatalf("expected FQDN arg %q, got %v", expectedFQDN, lastCall.Args[0])
+	if inserts != 2 {
+		t.Fatalf("expected both the primary and the wildcard name to be written, got %d", inserts)
 	}
 }

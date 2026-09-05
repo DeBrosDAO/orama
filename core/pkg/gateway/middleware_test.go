@@ -152,7 +152,9 @@ func TestIsPublicPath(t *testing.T) {
 		{"v1 status", "/v1/status", true},
 		{"auth challenge", "/v1/auth/challenge", true},
 		{"auth verify", "/v1/auth/verify", true},
-		{"auth register", "/v1/auth/register", true},
+		// /v1/auth/register was removed: nothing called it, the apps row it wrote
+		// was never read, and it made the caller an owner of any namespace.
+		{"auth register", "/v1/auth/register", false},
 		{"auth refresh", "/v1/auth/refresh", true},
 		{"auth logout", "/v1/auth/logout", true},
 		{"auth api-key", "/v1/auth/api-key", true},
@@ -163,20 +165,27 @@ func TestIsPublicPath(t *testing.T) {
 		{"network peers", "/v1/network/peers", true},
 
 		// Prefix-matched public paths
-		{"acme challenge", "/.well-known/acme-challenge/abc", true},
+		// Caddy answers the HTTP-01 challenge; nothing here serves it, and a
+		// path with no route is not an open one.
+		{"acme challenge", "/.well-known/acme-challenge/abc", false},
 		{"invoke function", "/v1/invoke/func1", true},
 		{"functions invoke", "/v1/functions/myfn/invoke", true},
-		{"internal replica", "/v1/internal/deployments/replica/xyz", true},
+		// The four replica endpoints are exact routes; a fifth path under the
+		// same prefix is not one of them and is not open.
+		{"internal replica setup", "/v1/internal/deployments/replica/setup", true},
+		{"internal replica made up", "/v1/internal/deployments/replica/xyz", false},
 		{"internal wg peers", "/v1/internal/wg/peers", true},
 		{"internal join", "/v1/internal/join", true},
 		{"internal namespace spawn", "/v1/internal/namespace/spawn", true},
 		{"internal namespace repair", "/v1/internal/namespace/repair", true},
-		// Internal WebRTC mgmt endpoints — exempt from API-key middleware
-		// (handler enforces internal-auth header + WireGuard peer). Without
-		// these, `orama namespace enable webrtc` had no working path.
-		{"internal webrtc enable", "/v1/internal/namespace/webrtc/enable", true},
-		{"internal webrtc disable", "/v1/internal/namespace/webrtc/disable", true},
-		{"internal webrtc status", "/v1/internal/namespace/webrtc/status", true},
+		// The internal WebRTC mgmt endpoints were removed: nothing in the
+		// repository called them — `orama namespace enable webrtc` goes to the
+		// public route, which does the work itself — and they were three paths
+		// exempt from the API-key middleware and authenticated by a constant
+		// that is in this source.
+		{"internal webrtc enable", "/v1/internal/namespace/webrtc/enable", false},
+		{"internal webrtc disable", "/v1/internal/namespace/webrtc/disable", false},
+		{"internal webrtc status", "/v1/internal/namespace/webrtc/status", false},
 		// Internal storage eviction (bugboard #153) — exempt from API-key
 		// middleware; handler enforces internal-auth header + WireGuard peer.
 		// Without this the cross-node evict fan-out 401s and immediate reclaim
@@ -185,12 +194,16 @@ func TestIsPublicPath(t *testing.T) {
 		// Guard: the PUBLIC webrtc mgmt path must STILL require auth (only
 		// the /internal/ variant is exempt).
 		{"public webrtc enable still requires auth", "/v1/namespace/webrtc/enable", false},
-		{"phantom session", "/v1/auth/phantom/session", true},
-		{"phantom complete", "/v1/auth/phantom/complete", true},
+		// The Phantom browser-session flow was removed. Its whole prefix was
+		// public — the status poll handed out a minted API key to anyone who
+		// knew a session id — so nothing under it may be public again.
+		{"phantom session", "/v1/auth/phantom/session", false},
+		{"phantom session status", "/v1/auth/phantom/session/abc", false},
+		{"phantom complete", "/v1/auth/phantom/complete", false},
 
 		// Namespace status
 		{"namespace status", "/v1/namespace/status", true},
-		{"namespace status with id", "/v1/namespace/status/xyz", true},
+		{"namespace status with id is not a route", "/v1/namespace/status/xyz", false},
 
 		// NON-public paths
 		{"deployments list", "/v1/deployments/list", false},
@@ -204,9 +217,9 @@ func TestIsPublicPath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := isPublicPath(tc.path)
+			got := policyOf(http.MethodGet, tc.path).Access.Anonymous()
 			if got != tc.want {
-				t.Errorf("isPublicPath(%q) = %v, want %v", tc.path, got, tc.want)
+				t.Errorf("%q reachable without a credential = %v, want %v", tc.path, got, tc.want)
 			}
 		})
 	}
@@ -490,37 +503,42 @@ func TestGetAllowedOrigin(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRequiresNamespaceOwnership
+// TestRouteOwnership
 // ---------------------------------------------------------------------------
 
-func TestRequiresNamespaceOwnership(t *testing.T) {
+func TestRouteOwnership(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
 		want bool
 	}{
-		// Paths that require ownership
-		{"rqlite root", "/rqlite", true},
-		{"v1 rqlite", "/v1/rqlite", true},
-		{"v1 rqlite query", "/v1/rqlite/query", true},
-		{"pubsub", "/v1/pubsub", true},
+		// Routes whose grant is resolved in the namespace
+		{"rqlite query", "/v1/rqlite/query", true},
 		{"pubsub publish", "/v1/pubsub/publish", true},
-		{"proxy something", "/v1/proxy/something", true},
+		{"proxy anon", "/v1/proxy/anon", true},
 		{"functions root", "/v1/functions", true},
 		{"functions specific", "/v1/functions/myfn", true},
+		{"namespace members", "/v1/namespace/members", true},
 
-		// Paths that do NOT require ownership
+		// Routes with no ownership check
 		{"auth challenge", "/v1/auth/challenge", false},
 		{"deployments list", "/v1/deployments/list", false},
 		{"health", "/health", false},
+		// Storage resolves no grant, which is why a resource selector on a
+		// storage grant authorises nothing yet (chg-392).
 		{"storage upload", "/v1/storage/upload", false},
+		{"cache get", "/v1/cache/get", false},
+
+		// Not routes at all
+		{"rqlite root", "/rqlite", false},
+		{"pubsub with no operation", "/v1/pubsub", false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := requiresNamespaceOwnership(tc.path)
+			got := policyOf(http.MethodPost, tc.path).Ownership
 			if got != tc.want {
-				t.Errorf("requiresNamespaceOwnership(%q) = %v, want %v", tc.path, got, tc.want)
+				t.Errorf("%q requires a namespace grant = %v, want %v", tc.path, got, tc.want)
 			}
 		})
 	}

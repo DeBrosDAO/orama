@@ -381,9 +381,10 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	dataDir := filepath.Join(ps.oramaDir, "data")
 
 	// Initialize IPFS repo with correct path structure
-	// Use port 4501 for API (to avoid conflict with RQLite on 5001), 8080 for gateway (standard), 4101 for swarm (to avoid conflict with LibP2P on 4001)
+	// API on constants.IPFSAPIPort, Kubo gateway on IPFSGatewayPort, swarm on
+	// IPFSSwarmPort (kept off 4001 so it cannot collide with the node's libp2p host).
 	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
-	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), constants.IPFSAPIPort, 8080, 4101, vpsIP, ipfsPeer); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), constants.IPFSAPIPort, constants.IPFSGatewayPort, constants.IPFSSwarmPort, vpsIP, ipfsPeer); err != nil {
 		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
@@ -525,15 +526,33 @@ func (ps *ProductionSetup) Phase3GenerateSecrets() error {
 	ps.logf("  ✓ TURN secret ensured")
 
 	// Node identity (unified architecture)
-	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
+	peerID, err := ps.EnsureNodeIdentity()
 	if err != nil {
-		return fmt.Errorf("failed to ensure node identity: %w", err)
+		return err
 	}
-	peerIDStr := peerID.String()
-	ps.NodePeerID = peerIDStr // Capture for later display
-	ps.logf("  ✓ Node identity ensured (Peer ID: %s)", peerIDStr)
+	ps.logf("  ✓ Node identity ensured (Peer ID: %s)", peerID)
 
 	return nil
+}
+
+// EnsureNodeIdentity creates the node's libp2p identity if it does not exist
+// and records the peer id on the setup, returning it.
+//
+// It is exported because the join flow needs the identity BEFORE it asks to
+// join: the peer id is what the cluster keys this machine by in every store, so
+// a join that cannot name it forces the receiving node to invent a synthetic id
+// that matches nothing and has to be backfilled later.
+//
+// Calling it early is safe and does not change what Phase 3 does: it creates
+// its own directory, and reads back the identity it already wrote rather than
+// generating a second one.
+func (ps *ProductionSetup) EnsureNodeIdentity() (string, error) {
+	peerID, err := ps.secretGenerator.EnsureNodeIdentity()
+	if err != nil {
+		return "", fmt.Errorf("failed to ensure node identity: %w", err)
+	}
+	ps.NodePeerID = peerID.String()
+	return ps.NodePeerID, nil
 }
 
 // Phase4GenerateConfigs generates node, gateway, and service configs
@@ -693,7 +712,7 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 }
 
 // Phase5CreateSystemdServices creates and enables systemd units
-// enableHTTPS determines the RQLite Raft port (7002 when SNI is enabled, 7001 otherwise)
+// enableHTTPS selects the SNI-aware RQLite Raft advertise port.
 func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
@@ -841,9 +860,18 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	// Enable only orama-node. Host daemons are orama-namespace-*@index;
-	// CoreDNS is orama-namespace-coredns@nameserver. The supervisor starts both.
-	enable := []string{"orama-node.service"}
+	// orama-node is the supervisor: it starts the orama-namespace-*@index host
+	// daemons and, on nameservers, orama-namespace-coredns@nameserver.
+	//
+	// The WireGuard unit is enabled alongside it, NOT left to the supervisor.
+	// wg0 previously existed only if Node.Start got as far as
+	// startIndexWireGuard, so a bad node.yaml, a failed config validation or a
+	// missing binary left the node with no overlay at all - unreachable on
+	// 10.0.0.x by every orama CLI path, and diagnosable only over public-IP SSH.
+	// The overlay must come up at boot on its own; the unit is idempotent
+	// (`wg show wg0 || wg-quick up wg0`), so the supervisor starting it again is
+	// a no-op.
+	enable := []string{"orama-node.service", "orama-namespace-wireguard@index.service"}
 	for _, svc := range enable {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
@@ -989,14 +1017,14 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 		IsNameserver:  ps.isNameserver,
 		WireGuardPort: 51820,
 	}
-	// TURN relay ports (bugboard #846): this `ufw --force reset` also runs on
-	// every upgrade, so if this node hosts a TURN instance we MUST re-open the
-	// relay ports here — otherwise the reset closes them and the relay silently
-	// stops forwarding (calls reach ICE "checking" but never connect). This is
-	// the only firewall step that runs as root; orama-node itself runs as a
-	// non-root user and cannot re-add ufw rules, so the reconcile has to live
-	// here. The relay range is the full default (49152-65535), a superset of
-	// every namespace's per-tenant sub-range.
+	// TURN relay ports (bugboard #846). This node's rule set must include the
+	// relay range whenever it hosts a TURN instance, or the relay silently
+	// stops forwarding (calls reach ICE "checking" but never connect).
+	//
+	// This used to be a re-add after `ufw --force reset` closed the ports.
+	// Reconcile never resets, so the range is simply part of the desired set
+	// and stays open throughout. The relay range is the full default
+	// (49152-65535), a superset of every namespace's per-tenant sub-range.
 	if ps.hostRunsTURN() {
 		ps.logf("  TURN instance detected — opening relay ports")
 		fwCfg.TURNEnabled = true
@@ -1006,11 +1034,16 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 
 	fp := NewFirewallProvisioner(fwCfg)
 
-	if err := fp.Setup(); err != nil {
-		return fmt.Errorf("firewall setup failed: %w", err)
+	// Reconcile, not Setup. Setup starts with `ufw --force reset`, and this
+	// phase runs on every upgrade — with every service already up. Between the
+	// reset and the re-enable the node is firewalled to nothing and then to
+	// default-deny with no rules; that window is why the TURN relay range
+	// needed a dedicated re-add to survive an upgrade.
+	if err := fp.Reconcile(); err != nil {
+		return fmt.Errorf("firewall reconcile failed: %w", err)
 	}
 
-	ps.logf("  ✓ UFW firewall configured and enabled")
+	ps.logf("  ✓ UFW firewall reconciled")
 	return nil
 }
 

@@ -38,13 +38,13 @@ func TestValidatePattern_valid_patterns_no_error(t *testing.T) {
 
 func TestIsWildcard(t *testing.T) {
 	cases := map[string]bool{
-		"foo":          false,
-		"foo:bar":      false,
-		"foo:*":        true,
-		"foo?bar":      true,
-		"[abc]xyz":     true,
-		"foo:**":       true,
-		"a:b:c:d:e:f":  false,
+		"foo":         false,
+		"foo:bar":     false,
+		"foo:*":       true,
+		"foo?bar":     true,
+		"[abc]xyz":    true,
+		"foo:**":      true,
+		"a:b:c:d:e:f": false,
 	}
 	for in, want := range cases {
 		if got := IsWildcard(in); got != want {

@@ -2,7 +2,7 @@ package sandboxcmd
 
 import (
 	"fmt"
-	"os"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 
 	"github.com/DeBrosOfficial/network/pkg/cli/sandbox"
 	"github.com/spf13/cobra"
@@ -104,8 +104,7 @@ var sshCmd = &cobra.Command{
 		name, _ := cmd.Flags().GetString("name")
 		var nodeNum int
 		if _, err := fmt.Sscanf(args[0], "%d", &nodeNum); err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid node number: %s (expected 1-5)\n", args[0])
-			os.Exit(1)
+			return clierr.Usage("invalid node number %q: expected 1-5", args[0])
 		}
 		return sandbox.SSHInto(name, nodeNum)
 	},

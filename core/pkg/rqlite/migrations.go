@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	_ "github.com/rqlite/gorqlite/stdlib"
@@ -36,6 +37,18 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, dir string, logger *zap.Lo
 		return nil
 	}
 
+	lock, err := acquireMigrationLock(ctx, db, logger)
+	if err != nil {
+		return err
+	}
+	defer releaseMigrationLock(ctx, lock, logger)
+
+	// Re-read INSIDE the lock. The snapshot was taken before, so N gateways
+	// starting together each saw the same "nothing applied" set and each ran
+	// the whole pending list. DDL is guarded by IF NOT EXISTS and survives
+	// that; DML is not — migration 019 revokes every refresh token that has no
+	// revoked_at, so a second node reaching it a minute later logs out
+	// everyone who signed in during that minute, silently.
 	applied, err := loadAppliedVersions(ctx, db)
 	if err != nil {
 		return fmt.Errorf("load applied versions: %w", err)
@@ -88,6 +101,18 @@ func ApplyMigrationsDirs(ctx context.Context, db *sql.DB, dirs []string, logger 
 		return nil
 	}
 
+	lock, err := acquireMigrationLock(ctx, db, logger)
+	if err != nil {
+		return err
+	}
+	defer releaseMigrationLock(ctx, lock, logger)
+
+	// Re-read INSIDE the lock. The snapshot was taken before, so N gateways
+	// starting together each saw the same "nothing applied" set and each ran
+	// the whole pending list. DDL is guarded by IF NOT EXISTS and survives
+	// that; DML is not — migration 019 revokes every refresh token that has no
+	// revoked_at, so a second node reaching it a minute later logs out
+	// everyone who signed in during that minute, silently.
 	applied, err := loadAppliedVersions(ctx, db)
 	if err != nil {
 		return fmt.Errorf("load applied versions: %w", err)
@@ -479,6 +504,18 @@ func ApplyEmbeddedMigrations(ctx context.Context, db *sql.DB, fsys fs.FS, logger
 		return nil
 	}
 
+	lock, err := acquireMigrationLock(ctx, db, logger)
+	if err != nil {
+		return err
+	}
+	defer releaseMigrationLock(ctx, lock, logger)
+
+	// Re-read INSIDE the lock. The snapshot was taken before, so N gateways
+	// starting together each saw the same "nothing applied" set and each ran
+	// the whole pending list. DDL is guarded by IF NOT EXISTS and survives
+	// that; DML is not — migration 019 revokes every refresh token that has no
+	// revoked_at, so a second node reaching it a minute later logs out
+	// everyone who signed in during that minute, silently.
 	applied, err := loadAppliedVersions(ctx, db)
 	if err != nil {
 		return fmt.Errorf("load applied versions: %w", err)
@@ -548,4 +585,49 @@ func readMigrationFilesFromFS(fsys fs.FS) ([]migrationFile, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Version < out[j].Version })
 	return out, nil
+}
+
+// Migration lock bounds.
+const (
+	// migrationLockName is the single lock every migration runner contends for.
+	migrationLockName = "schema-migrations"
+
+	// migrationLockTTL is how long a runner may hold it. Long enough for the
+	// slowest migration over a raft round trip per statement, short enough that
+	// a node that died mid-apply does not block the fleet for an hour.
+	migrationLockTTL = 10 * time.Minute
+
+	// migrationLockWait is how long to wait for another node to finish. A
+	// fleet-wide restart has every node arriving at once, so this has to cover
+	// one full apply plus the wait.
+	migrationLockWait = 12 * time.Minute
+)
+
+// acquireMigrationLock takes the cluster-wide migration lock.
+//
+// Failing to take it is fatal to the apply, deliberately: proceeding without it
+// is exactly the concurrent replay the lock exists to prevent, and a caller
+// that tolerates the error would reintroduce it.
+func acquireMigrationLock(ctx context.Context, db *sql.DB, logger *zap.Logger) (*ClusterLock, error) {
+	holder, err := os.Hostname()
+	if err != nil || holder == "" {
+		holder = "unknown-host"
+	}
+
+	logger.Info("Waiting for the cluster-wide migration lock", zap.String("holder", holder))
+	lock, err := AcquireClusterLock(ctx, db, migrationLockName, holder, migrationLockTTL, migrationLockWait)
+	if err != nil {
+		return nil, fmt.Errorf("could not take the migration lock, so migrations were not applied "+
+			"(running them concurrently replays non-idempotent statements): %w", err)
+	}
+	logger.Info("Holding the cluster-wide migration lock", zap.String("holder", holder))
+	return lock, nil
+}
+
+// releaseMigrationLock frees the lock, logging rather than failing: the work is
+// already done and recorded, and the TTL frees it regardless.
+func releaseMigrationLock(ctx context.Context, lock *ClusterLock, logger *zap.Logger) {
+	if err := lock.Release(ctx); err != nil {
+		logger.Warn("Could not release the migration lock; it will expire on its own", zap.Error(err))
+	}
 }

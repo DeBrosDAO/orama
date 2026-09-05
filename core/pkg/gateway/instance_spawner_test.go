@@ -101,13 +101,13 @@ func TestGatewayYAMLConfig_secretsEncryptionKeyRoundTrip(t *testing.T) {
 		TURNSecret string `yaml:"turn_secret"`
 	}
 	type yamlCfgMirror struct {
-		ListenAddr           string `yaml:"listen_addr"`
-		ClientNamespace      string `yaml:"client_namespace"`
-		RQLiteDSN            string `yaml:"rqlite_dsn"`
+		ListenAddr           string   `yaml:"listen_addr"`
+		ClientNamespace      string   `yaml:"client_namespace"`
+		RQLiteDSN            string   `yaml:"rqlite_dsn"`
 		OlricServers         []string `yaml:"olric_servers"`
-		WebRTC               webrtc `yaml:"webrtc"`
-		SecretsEncryptionKey string `yaml:"secrets_encryption_key"`
-		ClusterSecretPath    string `yaml:"cluster_secret_path"`
+		WebRTC               webrtc   `yaml:"webrtc"`
+		SecretsEncryptionKey string   `yaml:"secrets_encryption_key"`
+		ClusterSecretPath    string   `yaml:"cluster_secret_path"`
 	}
 	var parsed yamlCfgMirror
 	if err := yaml.Unmarshal(out, &parsed); err != nil {

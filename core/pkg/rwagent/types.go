@@ -12,6 +12,11 @@ type StatusResponse struct {
 	Uptime        int    `json:"uptime"`
 	PID           int    `json:"pid"`
 	ConnectedApps int    `json:"connectedApps"`
+	// PendingUnlocks is how many approval prompts are waiting for someone to
+	// answer them. The agent has always sent it; this client dropped it, so a
+	// command could sit through a 120-second approval timeout with no way to
+	// say that a prompt was open on the user's screen.
+	PendingUnlocks int `json:"pendingUnlocks"`
 }
 
 // VaultSSHData from GET /v1/vault/ssh/:host/:user.
@@ -38,11 +43,11 @@ type WalletSignData struct {
 
 // AppPermission represents an approved app in the permission database.
 type AppPermission struct {
-	BinaryHash   string               `json:"binaryHash"`
-	BinaryPath   string               `json:"binaryPath"`
-	Name         string               `json:"name"`
-	FirstSeen    string               `json:"firstSeen"`
-	LastUsed     string               `json:"lastUsed"`
+	BinaryHash   string                `json:"binaryHash"`
+	BinaryPath   string                `json:"binaryPath"`
+	Name         string                `json:"name"`
+	FirstSeen    string                `json:"firstSeen"`
+	LastUsed     string                `json:"lastUsed"`
 	Capabilities []PermittedCapability `json:"capabilities"`
 }
 

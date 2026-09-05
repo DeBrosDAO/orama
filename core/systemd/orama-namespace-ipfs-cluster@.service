@@ -1,10 +1,18 @@
 [Unit]
 Description=Orama Namespace IPFS Cluster (%i)
 Documentation=https://github.com/DeBrosOfficial/network
+# Requires is deliberate here, unlike gateway→rqlite. ipfs-cluster is a
+# controller for exactly this node's IPFS daemon: without it there is nothing to
+# pin to, no API to answer on, and no useful degraded mode to sit in. Stopping
+# or restarting the daemon should take the controller with it.
 After=orama-namespace-ipfs@%i.service
-Wants=orama-namespace-ipfs@%i.service
 Requires=orama-namespace-ipfs@%i.service
 PartOf=orama-node.service
+# No start limit. orama-node reconciles these units and retries with backoff,
+# and `systemctl start` on a rate-limited unit fails with "Start request
+# repeated too quickly" until someone runs `reset-failed` — so the default
+# limit would turn a transient failure into one that needs a human.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -27,7 +35,7 @@ ExecStartPre=/bin/bash -c 'mkdir -p ${IPFS_CLUSTER_PATH} && chmod 700 ${IPFS_CLU
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do curl -sf -X POST http://127.0.0.1:10107/api/v0/id > /dev/null 2>&1 && exit 0; sleep 1; done; echo "IPFS API not ready after 30s"; exit 1'
 ExecStart=/usr/local/bin/ipfs-cluster-service daemon
 Restart=always
-RestartSec=5
+RestartSec=5s
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=orama-ipfs-cluster-%i

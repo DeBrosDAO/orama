@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/encryption"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
@@ -83,9 +82,10 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 	apiGateway.SetWebRTCManager(clusterManager)
 
 	systemdSpawner := namespacepkg.NewSystemdSpawner(baseDataDir, clusterSecretPath, logger)
-	apiGateway.SetSpawnHandler(NewSpawnHandler(systemdSpawner, logger))
-	apiGateway.SetNamespaceDeleteHandler(NewDeleteHandler(clusterManager, ormClient, apiGateway.GetIPFSClient(), logger))
+	apiGateway.SetSpawnHandler(NewSpawnHandler(systemdSpawner, clusterSecretPath, logger))
+	apiGateway.SetNamespaceDeleteHandler(NewDeleteHandler(clusterManager, ormClient, apiGateway.GetIPFSClient(), apiGateway.GetAuditLog(), logger))
 	apiGateway.SetNamespaceListHandler(NewListHandler(ormClient, logger))
+	apiGateway.SetNamespaceCreateHandler(NewCreateHandler(ormClient, clusterManager, apiGateway.GetAuditLog(), logger))
 
 	logger.Info("Namespace cluster provisioning enabled on index gateway",
 		zap.String("base_domain", clusterCfg.BaseDomain),
@@ -94,28 +94,19 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 	clusterManager.StartLeaderLocalityReconciler(ctx)
 	clusterManager.StartWebRTCReconciler(ctx)
 
-	go restoreTenantClusters(ctx, clusterManager, logger)
-	return nil
-}
-
-func restoreTenantClusters(ctx context.Context, clusterManager *namespacepkg.ClusterManager, logger *zap.Logger) {
-	time.Sleep(5 * time.Second)
-	restored, err := clusterManager.RestoreLocalClustersFromDisk(ctx)
-	if err != nil {
-		logger.Warn("Disk-based namespace restore failed", zap.Error(err))
-	}
-	if restored > 0 {
-		logger.Info("Restored namespace clusters from local state", zap.Int("count", restored))
-	}
-	time.Sleep(5 * time.Second)
-	for attempt := 1; attempt <= 12; attempt++ {
-		if err := clusterManager.RestoreLocalClusters(ctx); err == nil {
-			return
-		} else {
-			logger.Warn("Namespace cluster DB restore failed, retrying",
-				zap.Int("attempt", attempt), zap.Error(err))
+	// The disk-backed pass runs once, immediately: it needs nothing but local
+	// state, and it is what gets this node's tenants up before rqlite has a
+	// leader. Everything after that is the reconciler's, which converges on a
+	// 60s loop instead of restoring once and stopping.
+	go func() {
+		restored, err := clusterManager.RestoreLocalClustersFromDisk(ctx)
+		if err != nil {
+			logger.Warn("Disk-based namespace restore failed", zap.Error(err))
 		}
-		time.Sleep(10 * time.Second)
-	}
-	logger.Error("Failed to restore namespace clusters from DB after all retries")
+		if restored > 0 {
+			logger.Info("Restored namespace clusters from local state", zap.Int("count", restored))
+		}
+		clusterManager.StartTenantReconciler(ctx)
+	}()
+	return nil
 }

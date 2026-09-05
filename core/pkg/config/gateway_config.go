@@ -66,10 +66,10 @@ type HTTPSConfig struct {
 	Email         string `yaml:"email"`           // Email for Let's Encrypt account
 }
 
-// SNIConfig contains SNI-based TCP routing configuration for port 7001
+// SNIConfig contains SNI-based TCP routing configuration.
 type SNIConfig struct {
 	Enabled    bool              `yaml:"enabled"`     // Enable SNI-based TCP routing
-	ListenAddr string            `yaml:"listen_addr"` // Address to listen on (e.g., ":7001")
+	ListenAddr string            `yaml:"listen_addr"` // Address to listen on (e.g., ":8443")
 	Routes     map[string]string `yaml:"routes"`      // SNI hostname -> backend address mapping
 	CertFile   string            `yaml:"cert_file"`   // Path to certificate file
 	KeyFile    string            `yaml:"key_file"`    // Path to key file

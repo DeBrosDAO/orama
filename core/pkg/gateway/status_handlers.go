@@ -37,6 +37,23 @@ type cachedHealthResult struct {
 const healthCacheTTL = 5 * time.Second
 
 func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
+	// A gateway that has not finished starting reports that, and why, instead
+	// of the subsystem fan-out below. The checks would mostly pass — the
+	// process is up, the port answers — which is exactly the misleading
+	// "healthy" that let a gateway with no usable schema stay in rotation.
+	if state, reason, since := g.ready.snapshot(); state != ReadinessReady {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status": string(state),
+			"reason": reason,
+			"since":  since,
+			"server": map[string]any{
+				"started_at": g.startedAt,
+				"uptime":     time.Since(g.startedAt).String(),
+			},
+		})
+		return
+	}
+
 	// Serve from cache if fresh
 	g.healthCacheMu.RLock()
 	cached := g.healthCache

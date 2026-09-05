@@ -48,9 +48,11 @@ func (h *ListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var owners []ownerRow
 	if err := h.ormClient.Query(r.Context(), &owners,
-		`SELECT owner_id FROM namespace_ownership
-		 WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ? LIMIT 1)
-		 LIMIT 1`, ns); err != nil || len(owners) == 0 {
+		`SELECT p.identifier AS owner_id
+		   FROM grants g JOIN principals p ON p.id = g.principal_id
+		  WHERE g.namespace_id = (SELECT id FROM namespaces WHERE name = ? LIMIT 1)
+		    AND g.role = 'owner' AND g.revoked_at IS NULL
+		  LIMIT 1`, ns); err != nil || len(owners) == 0 {
 		h.logger.Warn("Failed to resolve namespace owner",
 			zap.String("namespace", ns), zap.Error(err))
 		writeListResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to resolve namespace owner"})
@@ -69,9 +71,10 @@ func (h *ListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.ormClient.Query(r.Context(), &namespaces,
 		`SELECT n.name, n.created_at, COALESCE(nc.status, 'none') as cluster_status
 		 FROM namespaces n
-		 JOIN namespace_ownership no2 ON no2.namespace_id = n.id
+		 JOIN grants g ON g.namespace_id = n.id AND g.role = 'owner' AND g.revoked_at IS NULL
+		 JOIN principals p ON p.id = g.principal_id
 		 LEFT JOIN namespace_clusters nc ON nc.namespace_id = n.id
-		 WHERE no2.owner_id = ?
+		 WHERE p.identifier = ?
 		 ORDER BY n.created_at DESC`, ownerID); err != nil {
 		h.logger.Error("Failed to list namespaces", zap.Error(err))
 		writeListResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to list namespaces"})

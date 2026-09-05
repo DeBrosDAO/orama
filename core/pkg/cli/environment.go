@@ -97,10 +97,14 @@ func SaveEnvironmentConfig(envConfig *EnvironmentConfig) error {
 		return err
 	}
 
-	// Ensure config directory exists
+	// Ensure config directory exists, with the same mode every other writer
+	// uses. This directory sits next to credentials.json.
 	configDir := filepath.Dir(path)
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+	if err := os.Chmod(configDir, 0700); err != nil {
+		return fmt.Errorf("failed to secure config directory: %w", err)
 	}
 
 	data, err := json.MarshalIndent(envConfig, "", "  ")
@@ -108,7 +112,7 @@ func SaveEnvironmentConfig(envConfig *EnvironmentConfig) error {
 		return fmt.Errorf("failed to marshal environment config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write environment config: %w", err)
 	}
 

@@ -21,11 +21,11 @@ import (
 
 // HTTPGateway is the main reverse proxy router
 type HTTPGateway struct {
-	logger         *logging.ColoredLogger
-	config         *config.HTTPGatewayConfig
+	logger *logging.ColoredLogger
+	config *config.HTTPGatewayConfig
 	router chi.Router
 	mu     sync.RWMutex
-	server         *http.Server
+	server *http.Server
 }
 
 // NewHTTPGateway creates a new HTTP reverse proxy gateway
@@ -43,8 +43,8 @@ func NewHTTPGateway(logger *logging.ColoredLogger, cfg *config.HTTPGatewayConfig
 	}
 
 	gateway := &HTTPGateway{
-		logger:         logger,
-		config:         cfg,
+		logger: logger,
+		config: cfg,
 		router: chi.NewRouter(),
 	}
 

@@ -6,6 +6,10 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"net/http"
+
+	"go.uber.org/zap"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
@@ -35,7 +39,11 @@ type QueryResult struct {
 	Rows  []interface{} `json:"rows"`
 }
 
-// ClusterProvisioner defines the interface for namespace cluster provisioning
+// ClusterProvisioner defines the interface for namespace cluster provisioning.
+//
+// The auth handlers no longer hold one: signing in does not provision anything.
+// Creating a namespace does, and that is POST /v1/namespaces. The gateway keeps
+// a provisioner for /v1/namespace/status, which reads a cluster's progress.
 type ClusterProvisioner interface {
 	// CheckNamespaceCluster checks if a namespace has a cluster and returns its status
 	// Returns: (clusterID, status, needsProvisioning, error)
@@ -74,13 +82,15 @@ type WebRTCManager interface {
 
 // Handlers holds dependencies for authentication HTTP handlers
 type Handlers struct {
-	logger             *logging.ColoredLogger
-	authService        *authsvc.Service
-	netClient          NetworkClient
-	defaultNS          string
-	internalAuthFn     func(context.Context) context.Context
-	clusterProvisioner ClusterProvisioner        // Optional: for namespace cluster provisioning
-	solanaVerifier     *authsvc.SolanaNFTVerifier // Server-side NFT ownership verifier
+	logger         *logging.ColoredLogger
+	authService    *authsvc.Service
+	netClient      NetworkClient
+	defaultNS      string
+	internalAuthFn func(context.Context) context.Context
+
+	// challengeLimiter caps how fast challenges can be issued for one wallet,
+	// whoever asks. See wallet_rate_limit.go.
+	challengeLimiter *walletLimiter
 
 	// apiKeyDB is the global/core API-key registry querier, wired via
 	// SetAPIKeyDB (see gateway.Gateway.apiKeyDB). When set,
@@ -100,23 +110,18 @@ func NewHandlers(
 	defaultNamespace string,
 	internalAuthFn func(context.Context) context.Context,
 ) *Handlers {
-	return &Handlers{
-		logger:         logger,
-		authService:    authService,
-		netClient:      netClient,
-		defaultNS:      defaultNamespace,
-		internalAuthFn: internalAuthFn,
+	h := &Handlers{
+		logger:           logger,
+		authService:      authService,
+		netClient:        netClient,
+		defaultNS:        defaultNamespace,
+		internalAuthFn:   internalAuthFn,
+		challengeLimiter: newWalletLimiter(walletChallengeRate, walletChallengeBurst),
 	}
-}
-
-// SetClusterProvisioner sets the cluster provisioner for namespace cluster management
-func (h *Handlers) SetClusterProvisioner(cp ClusterProvisioner) {
-	h.clusterProvisioner = cp
-}
-
-// SetSolanaVerifier sets the server-side NFT ownership verifier for Phantom auth
-func (h *Handlers) SetSolanaVerifier(verifier *authsvc.SolanaNFTVerifier) {
-	h.solanaVerifier = verifier
+	// A bucket per wallet ever seen would grow without bound on a busy
+	// gateway, and a wallet idle for half an hour has a full budget anyway.
+	h.startChallengeLimiterCleanup()
+	return h
 }
 
 // SetAPIKeyDB wires the global/core API-key registry querier into this
@@ -125,17 +130,29 @@ func (h *Handlers) SetAPIKeyDB(db DatabaseClient) {
 	h.apiKeyDB = db
 }
 
-// markNonceUsed marks a nonce as used in the database
-func (h *Handlers) markNonceUsed(ctx context.Context, namespaceID interface{}, wallet, nonce string) {
-	if h.netClient == nil {
-		return
+// consumeNonce claims the challenge that authorised this request, writing the
+// HTTP error itself when the challenge cannot be claimed. It reports whether
+// the caller may continue.
+//
+// Every signature-authenticated handler must call this and stop on false.
+// Verifying the signature only proves possession of the wallet key; consuming
+// the nonce is what proves the signature is fresh and was issued by this
+// gateway. Without it a single captured signature is a permanent credential.
+func (h *Handlers) consumeNonce(ctx context.Context, w http.ResponseWriter, wallet, nonce, namespace string) bool {
+	err := h.authService.ConsumeNonce(ctx, wallet, nonce, namespace)
+	if err == nil {
+		return true
 	}
-	db := h.netClient.Database()
-	internalCtx := h.internalAuthFn(ctx)
-	_, _ = db.Query(internalCtx, "UPDATE nonces SET used_at = datetime('now') WHERE namespace_id = ? AND wallet = ? AND nonce = ?", namespaceID, wallet, nonce)
+	if !errors.Is(err, authsvc.ErrNonceInvalid) {
+		// Registry unreachable or single-use not guaranteed: fail closed, and
+		// do not report it as an authentication failure.
+		h.logger.Error("failed to consume authentication challenge", zap.Error(err))
+	}
+	writeChallengeConsumeError(w, err)
+	return false
 }
 
-// resolveNamespace resolves namespace ID for nonce marking
+// resolveNamespace resolves a namespace name to its registry id
 func (h *Handlers) resolveNamespace(ctx context.Context, namespace string) (interface{}, error) {
 	if h.authService == nil {
 		return nil, sql.ErrNoRows

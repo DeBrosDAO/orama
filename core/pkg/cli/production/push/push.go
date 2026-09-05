@@ -1,73 +1,91 @@
 package push
 
 import (
-	"flag"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/build"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/DeBrosOfficial/network/pkg/cli"
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
 // Flags holds push command flags.
 type Flags struct {
-	Env    string // Target environment (devnet, testnet)
-	Node   string // Single node IP (optional)
-	Direct bool   // Sequential upload to each node (no fanout)
+	Env    string // Target environment; empty means the active one
+	Node   string // Restrict to a single node IP from the inventory
+	Host   string // Push to a node that is not in the inventory
+	User   string // SSH user for Host (default root)
+	Direct bool   // Upload from here to each node in turn, instead of fanning out
 }
 
-// Handle is the entry point for the push command.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
-	if err != nil {
-		if err == flag.ErrHelp {
-			return
+// Run is the entry point for the push command.
+func Run(flags *Flags) error {
+	if err := flags.validate(); err != nil {
+		return err
+	}
+	return execute(flags)
+}
+
+func (f *Flags) validate() error {
+	if f.Env == "" && f.Host == "" {
+		return fmt.Errorf("specify --env <devnet|testnet> or --host <ip>")
+	}
+	return nil
+}
+
+// resolveTargets returns the nodes to push to.
+//
+// A --host names a machine that is not in the inventory yet, which is how a
+// node is seeded before it can be resolved. Otherwise the environment's nodes
+// come from the resolver, so this command sees the same fleet as every other.
+func resolveTargets(flags *Flags) ([]inspector.Node, error) {
+	env := flags.Env
+	if env == "" {
+		active, err := cli.GetActiveEnvironment()
+		if err != nil {
+			return nil, fmt.Errorf("no --env given and no active environment: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		env = active.Name
 	}
 
-	if err := execute(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	if flags.Host != "" {
+		return []inspector.Node{noderesolver.NewNode(flags.Host, flags.User, env)}, nil
 	}
-}
 
-func parseFlags(args []string) (*Flags, error) {
-	fs := flag.NewFlagSet("push", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &Flags{}
-	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	fs.StringVar(&flags.Node, "node", "", "Push to a single node IP only")
-	fs.BoolVar(&flags.Direct, "direct", false, "Upload directly to each node (no hub fanout)")
-
-	if err := fs.Parse(args); err != nil {
+	nodes, err := noderesolver.ResolveNodes(env)
+	if err != nil {
 		return nil, err
 	}
-
-	if flags.Env == "" {
-		return nil, fmt.Errorf("--env is required\nUsage: orama node push --env <devnet|testnet>")
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("no nodes found for environment %q", env)
 	}
 
-	return flags, nil
+	if flags.Node != "" {
+		nodes = remotessh.FilterByIP(nodes, flags.Node)
+		if len(nodes) == 0 {
+			return nil, fmt.Errorf("node %s not found in %s environment", flags.Node, env)
+		}
+	}
+	return nodes, nil
 }
 
 func execute(flags *Flags) error {
 	// Find archive
-	archivePath := findNewestArchive()
+	archivePath := build.FindNewestArchive()
 	if archivePath == "" {
 		return fmt.Errorf("no binary archive found in /tmp/ (run `orama build` first)")
 	}
 
 	info, _ := os.Stat(archivePath)
-	fmt.Printf("Archive: %s (%s)\n", filepath.Base(archivePath), formatBytes(info.Size()))
+	fmt.Printf("Archive: %s (%s)\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
-	// Resolve nodes
-	nodes, err := remotessh.LoadEnvNodes(flags.Env)
+	nodes, err := resolveTargets(flags)
 	if err != nil {
 		return err
 	}
@@ -79,23 +97,10 @@ func execute(flags *Flags) error {
 	}
 	defer cleanup()
 
-	// Filter to single node if specified
-	if flags.Node != "" {
-		nodes = remotessh.FilterByIP(nodes, flags.Node)
-		if len(nodes) == 0 {
-			return fmt.Errorf("node %s not found in %s environment", flags.Node, flags.Env)
-		}
-	}
-
-	fmt.Printf("Environment: %s (%d nodes)\n\n", flags.Env, len(nodes))
+	fmt.Printf("Targets: %d node(s)\n\n", len(nodes))
 
 	if flags.Direct || len(nodes) == 1 {
 		return pushDirect(archivePath, nodes)
-	}
-
-	// Load keys into ssh-agent for fanout forwarding
-	if err := remotessh.LoadAgentKeys(nodes); err != nil {
-		return fmt.Errorf("load agent keys for fanout: %w", err)
 	}
 
 	return pushFanout(archivePath, nodes)
@@ -256,43 +261,4 @@ func extractOnNodeVia(hub, target inspector.Node, remotePath, keyPath string) er
 		keyPath, target.User, target.Host, extractCmd)
 
 	return remotessh.RunSSHStreaming(hub, sshCmd)
-}
-
-// findNewestArchive finds the newest binary archive in /tmp/.
-func findNewestArchive() string {
-	entries, err := os.ReadDir("/tmp")
-	if err != nil {
-		return ""
-	}
-
-	var best string
-	var bestMod int64
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, "orama-") && strings.Contains(name, "-linux-") && strings.HasSuffix(name, ".tar.gz") {
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if info.ModTime().Unix() > bestMod {
-				best = filepath.Join("/tmp", name)
-				bestMod = info.ModTime().Unix()
-			}
-		}
-	}
-
-	return best
-}
-
-func formatBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }

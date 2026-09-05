@@ -143,7 +143,7 @@ func (m *mockProcessManager) getStopCalls() []string {
 // of the destination's element type and copying field values by name.
 func appendRows(dest interface{}, rows []map[string]interface{}) {
 	dv := reflect.ValueOf(dest).Elem() // []T
-	elemType := dv.Type().Elem()        // T
+	elemType := dv.Type().Elem()       // T
 
 	for _, row := range rows {
 		elem := reflect.New(elemType).Elem()
@@ -731,10 +731,10 @@ func TestGetHealthStatus_DatabaseError(t *testing.T) {
 // ---- h) reconcileDeployments ----------------------------------------------
 
 type mockReconciler struct {
-	mu               sync.Mutex
-	selectCalls      []string // primaryNodeIDs
-	selectResult     []string
-	selectErr        error
+	mu                sync.Mutex
+	selectCalls       []string // primaryNodeIDs
+	selectResult      []string
+	selectErr         error
 	updateStatusCalls []struct {
 		deploymentID string
 		nodeID       string
@@ -761,7 +761,7 @@ func (m *mockReconciler) UpdateReplicaStatus(_ context.Context, deploymentID, no
 }
 
 type mockProvisioner struct {
-	mu        sync.Mutex
+	mu         sync.Mutex
 	setupCalls []struct {
 		deploymentID string
 		nodeID       string

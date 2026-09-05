@@ -76,9 +76,9 @@ func (d Defaults) IsEmpty() bool {
 // on gateway A, gateway B's CACHED dispatcher still holds an APNs
 // provider constructed from the OLD key — until either:
 //
-//   1. The dispatcher entry is evicted by LRU pressure (only when
-//      activeCacheCap namespaces are also active), or
-//   2. The entry's TTL elapses (cacheEntryTTL, default 30s).
+//  1. The dispatcher entry is evicted by LRU pressure (only when
+//     activeCacheCap namespaces are also active), or
+//  2. The entry's TTL elapses (cacheEntryTTL, default 30s).
 //
 // The TTL is the defense-in-depth bound — same model as pkg/ratelimit.
 // Without it, low-traffic namespaces would never see rotated creds on

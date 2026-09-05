@@ -3,6 +3,8 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/build"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/cli"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
@@ -53,13 +56,13 @@ func Create(name string) error {
 	fmt.Println(" ok")
 
 	// 4. Check binary archive — auto-build if missing
-	archivePath := findNewestArchive()
+	archivePath := build.FindNewestArchive()
 	if archivePath == "" {
 		fmt.Println("  [--] No binary archive found, building...")
 		if err := autoBuildArchive(); err != nil {
 			return fmt.Errorf("auto-build archive: %w", err)
 		}
-		archivePath = findNewestArchive()
+		archivePath = build.FindNewestArchive()
 		if archivePath == "" {
 			return fmt.Errorf("build succeeded but no archive found in /tmp/")
 		}
@@ -68,7 +71,7 @@ func Create(name string) error {
 	if err != nil {
 		return fmt.Errorf("stat archive %s: %w", archivePath, err)
 	}
-	fmt.Printf("  [ok] Binary archive: %s (%s)\n", filepath.Base(archivePath), formatBytes(info.Size()))
+	fmt.Printf("  [ok] Binary archive: %s (%s)\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
 	// 5. Verify Hetzner API token works
 	client := NewHetznerClient(cfg.HetznerAPIToken)
@@ -171,7 +174,7 @@ func checkAgentReady() error {
 	status, err := client.Status(ctx)
 	if err != nil {
 		if rwagent.IsNotRunning(err) {
-			return fmt.Errorf("rootwallet agent is not running\n\n  Start it with:\n    rw agent start && rw agent unlock")
+			return fmt.Errorf("rootwallet agent is not reachable\n\n  Open the RootWallet desktop app and unlock it.")
 		}
 		return fmt.Errorf("rootwallet agent: %w", err)
 	}
@@ -183,7 +186,13 @@ func checkAgentReady() error {
 // Separated from checkAgentReady for testability.
 func validateAgentStatus(status *rwagent.StatusResponse) error {
 	if status.Locked {
-		return fmt.Errorf("rootwallet agent is locked\n\n  Unlock it with:\n    rw agent unlock")
+		// A prompt already on screen is the difference between "unlock it" and
+		// "you have one waiting" — the agent reports the count and this client
+		// used to drop it.
+		if status.PendingUnlocks > 0 {
+			return fmt.Errorf("rootwallet agent is locked\n\n  %d approval prompt(s) are already waiting in the RootWallet desktop app — answer them.", status.PendingUnlocks)
+		}
+		return fmt.Errorf("rootwallet agent is locked\n\n  Unlock it in the RootWallet desktop app.")
 	}
 
 	if status.ConnectedApps == 0 {
@@ -475,7 +484,7 @@ func phase6Verify(cfg *Config, state *SandboxState, sshKeyPath string) {
 	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
 	// Check RQLite cluster
-	out, err := runSSHOutput(node, "curl -s http://localhost:5001/status | grep -o '\"state\":\"[^\"]*\"' | head -1")
+	out, err := runSSHOutput(node, fmt.Sprintf("curl -s %s/status | grep -o '\"state\":\"[^\"]*\"' | head -1", constants.LocalRQLiteURL()))
 	if err == nil {
 		fmt.Printf("  RQLite: %s\n", strings.TrimSpace(out))
 	}
@@ -494,7 +503,7 @@ func phase6Verify(cfg *Config, state *SandboxState, sshKeyPath string) {
 func waitForRQLiteHealth(node inspector.Node, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		out, err := runSSHOutput(node, "curl -sf http://localhost:5001/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'")
+		out, err := runSSHOutput(node, fmt.Sprintf("curl -sf %s/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'", constants.LocalRQLiteURL()))
 		if err == nil {
 			result := strings.TrimSpace(out)
 			if strings.Contains(result, "Leader") || strings.Contains(result, "Follower") {
@@ -514,7 +523,7 @@ func generateInviteToken(node inspector.Node) (string, error) {
 	}
 
 	// Parse token from output — the invite command outputs:
-	//   "sudo orama install --join https://... --token <64-char-hex> --vps-ip ..."
+	//   "sudo orama node install --join https://... --token <64-char-hex> --vps-ip ..."
 	// Look for the --token flag value first
 	fields := strings.Fields(out)
 	for i, field := range fields {
@@ -579,46 +588,6 @@ func execCommand(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).Output()
 }
 
-// findNewestArchive finds the newest binary archive in /tmp/.
-func findNewestArchive() string {
-	entries, err := os.ReadDir("/tmp")
-	if err != nil {
-		return ""
-	}
-
-	var best string
-	var bestMod int64
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, "orama-") && strings.Contains(name, "-linux-") && strings.HasSuffix(name, ".tar.gz") {
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if info.ModTime().Unix() > bestMod {
-				best = filepath.Join("/tmp", name)
-				bestMod = info.ModTime().Unix()
-			}
-		}
-	}
-
-	return best
-}
-
-// formatBytes formats a byte count as human-readable.
-func formatBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
-}
-
 // printCreateSummary prints the cluster summary after creation.
 func printCreateSummary(cfg *Config, state *SandboxState) {
 	fmt.Printf("\nSandbox %q ready (%d nodes)\n", state.Name, len(state.Servers))
@@ -670,7 +639,7 @@ func registerNodesWithOperator(state *SandboxState, sshKeyPath string) {
 	// Use RQLite's parameterized query to avoid any injection risk.
 	// The JSON payload has the wallet as a parameter, not interpolated into SQL.
 	payload := fmt.Sprintf(`[["UPDATE dns_nodes SET operator_wallet = ?, environment = 'sandbox' WHERE operator_wallet IS NULL OR operator_wallet = ''", %q]]`, wallet)
-	cmd := fmt.Sprintf(`curl -sf -X POST http://localhost:5001/db/execute -H 'Content-Type: application/json' -d '%s'`, payload)
+	cmd := fmt.Sprintf(`curl -sf -X POST %s/db/execute -H 'Content-Type: application/json' -d '%s'`, constants.LocalRQLiteURL(), payload)
 	if _, err := runSSHOutput(node, cmd); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to tag nodes with operator wallet: %v\n", err)
 	}

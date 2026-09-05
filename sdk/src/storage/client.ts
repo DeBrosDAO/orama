@@ -1,4 +1,29 @@
 import { HttpClient } from "../core/http";
+import { SDKError } from "../errors";
+
+/**
+ * How long a read will keep re-asking while an upload's pin propagates across
+ * the IPFS Cluster peers: 1s + 2s + 3s + 3s + 3s + 3s + 3s = 18s of waiting
+ * over 8 attempts.
+ */
+const PIN_PROPAGATION_ATTEMPTS = 8;
+const PIN_PROPAGATION_BACKOFF_STEP_MS = 1000;
+const PIN_PROPAGATION_BACKOFF_CAP_MS = 3000;
+
+/**
+ * Whether a failure means "the cluster does not have this CID yet".
+ *
+ * `httpClient.getBinary` throws an `SDKError` carrying the HTTP status, which
+ * is the reliable signal. The message check covers a transport that reports the
+ * status only in text.
+ */
+function isNotFound(error: unknown): boolean {
+  if (error instanceof SDKError) {
+    return error.httpStatus === 404;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("not found") || message.includes("404");
+}
 
 export interface StorageUploadResponse {
   cid: string;
@@ -89,7 +114,7 @@ export class StorageClient {
       // This is a limitation - in practice, pass File/Blob/Buffer
       const chunks: ArrayBuffer[] = [];
       const reader = file.getReader();
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         const buffer = value.buffer.slice(
@@ -159,47 +184,15 @@ export class StorageClient {
    * ```
    */
   async get(cid: string): Promise<ReadableStream<Uint8Array>> {
-    // Retry logic for content retrieval - content may not be immediately available
-    // after upload due to eventual consistency in IPFS Cluster
-    // IPFS Cluster pins can take 2-3+ seconds to complete across all nodes
-    const maxAttempts = 8;
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const response = await this.httpClient.getBinary(
-          `/v1/storage/get/${cid}`
-        );
-
-        if (!response.body) {
-          throw new Error("Response body is null");
-        }
-
-        return response.body;
-      } catch (error: any) {
-        lastError = error;
-
-        // Check if this is a 404 error (content not found)
-        const isNotFound =
-          error?.httpStatus === 404 ||
-          error?.message?.includes("not found") ||
-          error?.message?.includes("404");
-
-        // If it's not a 404 error, or this is the last attempt, give up
-        if (!isNotFound || attempt === maxAttempts) {
-          throw error;
-        }
-
-        // Wait before retrying with bounded exponential backoff
-        // Max 3 seconds per retry to fit within 30s test timeout
-        // Total: 1s + 2s + 3s + 3s + 3s + 3s + 3s + 3s = 21 seconds
-        const backoffMs = Math.min(attempt * 1000, 3000);
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
-      }
+    const response = await this.fetchWhilePinPropagates(cid);
+    if (!response.body) {
+      throw new SDKError(
+        `storage returned no body for ${cid}`,
+        response.status,
+        "EMPTY_BODY"
+      );
     }
-
-    // This should never be reached, but TypeScript needs it
-    throw lastError || new Error("Failed to retrieve content");
+    return response.body;
   }
 
   /**
@@ -218,47 +211,37 @@ export class StorageClient {
    * ```
    */
   async getBinary(cid: string): Promise<Response> {
-    // Retry logic for content retrieval - content may not be immediately available
-    // after upload due to eventual consistency in IPFS Cluster
-    // IPFS Cluster pins can take 2-3+ seconds to complete across all nodes
-    const maxAttempts = 8;
-    let lastError: Error | null = null;
+    return this.fetchWhilePinPropagates(cid);
+  }
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  /**
+   * Fetch a CID, re-asking while the cluster still answers 404.
+   *
+   * A CID is addressable the moment the upload returns, but the pin has to
+   * propagate across the IPFS Cluster peers before every node can serve it, so
+   * a read that closely follows a write can legitimately 404 for a few seconds.
+   * Only a 404 is retried: any other failure is the caller's answer straight
+   * away.
+   *
+   * Both `get` and `getBinary` come through here. They used to carry a
+   * character-for-character copy of this loop each, which is two places to fix
+   * when the propagation window changes and two places to get it wrong.
+   */
+  private async fetchWhilePinPropagates(cid: string): Promise<Response> {
+    for (let attempt = 1; ; attempt++) {
       try {
-        const response = await this.httpClient.getBinary(
-          `/v1/storage/get/${cid}`
-        );
-
-        if (!response) {
-          throw new Error("Response is null");
-        }
-
-        return response;
-      } catch (error: any) {
-        lastError = error;
-
-        // Check if this is a 404 error (content not found)
-        const isNotFound =
-          error?.httpStatus === 404 ||
-          error?.message?.includes("not found") ||
-          error?.message?.includes("404");
-
-        // If it's not a 404 error, or this is the last attempt, give up
-        if (!isNotFound || attempt === maxAttempts) {
+        return await this.httpClient.getBinary(`/v1/storage/get/${cid}`);
+      } catch (error) {
+        if (attempt >= PIN_PROPAGATION_ATTEMPTS || !isNotFound(error)) {
           throw error;
         }
-
-        // Wait before retrying with bounded exponential backoff
-        // Max 3 seconds per retry to fit within 30s test timeout
-        // Total: 1s + 2s + 3s + 3s + 3s + 3s + 3s + 3s = 21 seconds
-        const backoffMs = Math.min(attempt * 1000, 3000);
+        const backoffMs = Math.min(
+          attempt * PIN_PROPAGATION_BACKOFF_STEP_MS,
+          PIN_PROPAGATION_BACKOFF_CAP_MS
+        );
         await new Promise((resolve) => setTimeout(resolve, backoffMs));
       }
     }
-
-    // This should never be reached, but TypeScript needs it
-    throw lastError || new Error("Failed to retrieve content");
   }
 
   /**

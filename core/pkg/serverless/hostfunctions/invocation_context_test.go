@@ -92,8 +92,8 @@ func TestCurrentInvocationContext_NoCrossTenantLeak_Concurrent(t *testing.T) {
 	h := &HostFunctions{}
 
 	const (
-		numGoroutines  = 32
-		opsPerRoutine  = 200
+		numGoroutines = 32
+		opsPerRoutine = 200
 	)
 
 	var leaks int64

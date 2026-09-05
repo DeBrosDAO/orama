@@ -153,4 +153,3 @@ func TestPublishBatchHandler_happy_calls_PublishBatch(t *testing.T) {
 		t.Errorf("unexpected second message: %+v", gotMessages[1])
 	}
 }
-

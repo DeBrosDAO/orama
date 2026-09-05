@@ -1,6 +1,7 @@
 package remotessh
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,14 +13,7 @@ import (
 type SSHOption func(*sshOptions)
 
 type sshOptions struct {
-	agentForward   bool
 	noHostKeyCheck bool
-}
-
-// WithAgentForward enables SSH agent forwarding (-A flag).
-// Used by push fanout so the hub can reach targets via the forwarded agent.
-func WithAgentForward() SSHOption {
-	return func(o *sshOptions) { o.agentForward = true }
 }
 
 // WithNoHostKeyCheck disables host key verification and uses /dev/null as known_hosts.
@@ -79,9 +73,6 @@ func RunSSHStreaming(node inspector.Node, command string, opts ...SSHOption) err
 	} else {
 		args = append([]string{"-o", "StrictHostKeyChecking=accept-new"}, args...)
 	}
-	if cfg.agentForward {
-		args = append(args, "-A")
-	}
 	args = append(args, fmt.Sprintf("%s@%s", node.User, node.Host), command)
 
 	cmd := exec.Command("ssh", args...)
@@ -101,4 +92,16 @@ func SudoPrefix(node inspector.Node) string {
 		return ""
 	}
 	return "sudo "
+}
+
+// RunSSHOutput runs a command on the node and returns its stdout.
+//
+// Distinct from RunSSHStreaming, which relays output to the operator's terminal
+// and returns nothing: this is for reading a value back.
+func RunSSHOutput(node inspector.Node, command string, opts ...SSHOption) (string, error) {
+	res := inspector.RunSSH(context.Background(), node, command)
+	if !res.OK() {
+		return "", fmt.Errorf("run on %s: %v (stderr: %s)", node.Host, res.Err, res.Stderr)
+	}
+	return res.Stdout, nil
 }

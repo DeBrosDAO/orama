@@ -9,6 +9,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"go.uber.org/zap"
@@ -267,6 +268,8 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		zap.String("namespace", namespace),
 		zap.String("name", name),
 	)
+
+	h.service.RecordAudit(r, namespace, auth.AuditDeploymentDeleted, deployment.Name)
 
 	resp := map[string]interface{}{
 		"message": "Deployment deleted successfully",

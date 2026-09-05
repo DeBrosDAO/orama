@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,7 +66,15 @@ type InstanceSpawner struct {
 	baseDataDir string // Base directory for namespace data (e.g., ~/.orama/data/namespaces)
 	rqlitePath  string // Path to rqlited binary
 	logger      *zap.Logger
+
+	// authFile is the rqlite auth JSON used when probing spawned instances.
+	// Empty means unauthenticated, which is correct while rqlited runs
+	// without -auth.
+	authFile string
 }
+
+// SetAuthFile supplies the rqlite auth file used when probing instances.
+func (is *InstanceSpawner) SetAuthFile(path string) { is.authFile = path }
 
 // NewInstanceSpawner creates a new RQLite instance spawner
 func NewInstanceSpawner(baseDataDir string, logger *zap.Logger) *InstanceSpawner {
@@ -180,33 +187,15 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	return instance, nil
 }
 
-// waitForReady waits for the RQLite instance to be ready to accept connections
+// waitForReady waits for the RQLite instance to join raft, not merely to open
+// its port.
+//
+// The budget must exceed the join retry window (30 attempts * 10s) so a
+// follower still waiting for its leader is not killed mid-join.
+const instanceReadyTimeout = 6 * time.Minute
+
 func (is *InstanceSpawner) waitForReady(ctx context.Context, httpPort int) error {
-	url := fmt.Sprintf("http://localhost:%d/status", httpPort)
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	// 6 minutes: must exceed the join retry window (30 attempts * 10s = 5min)
-	// so we don't kill followers that are still waiting for the leader
-	deadline := time.Now().Add(6 * time.Minute)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		resp, err := client.Get(url)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	return fmt.Errorf("timeout waiting for RQLite to be ready on port %d", httpPort)
+	return WaitForRaftReady(ctx, httpPort, instanceReadyTimeout)
 }
 
 // StopInstance stops a running RQLite instance
@@ -272,17 +261,16 @@ func (is *InstanceSpawner) StopInstanceByPID(pid int) error {
 	return nil
 }
 
-// IsInstanceRunning checks if a RQLite instance is running
+// IsInstanceRunning checks if a RQLite instance is running.
+//
+// Through the admin client, with the spawner's auth file when one is set: a
+// tenant rqlite started with -auth answers 401 rather than 200, and reading
+// that as "not running" would re-spawn a healthy instance.
 func (is *InstanceSpawner) IsInstanceRunning(httpPort int) bool {
-	url := fmt.Sprintf("http://localhost:%d/status", httpPort)
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	user, pass := adminCredentialsFromFile(is.authFile)
+	client := NewAdminClient(fmt.Sprintf("http://localhost:%d", httpPort), user, pass)
+	_, err := client.Status(context.Background())
+	return err == nil
 }
 
 // HasExistingData checks if a RQLite instance has existing data (raft.db indicates prior startup)

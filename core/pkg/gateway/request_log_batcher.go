@@ -26,12 +26,12 @@ type requestLogEntry struct {
 // requestLogBatcher aggregates request logs and flushes them to RQLite in bulk
 // instead of issuing 3 DB writes per request (INSERT log + SELECT api_key_id + UPDATE last_used).
 type requestLogBatcher struct {
-	gw        *Gateway
-	entries   []requestLogEntry
-	mu        sync.Mutex
-	interval  time.Duration
-	maxBatch  int
-	stopCh    chan struct{}
+	gw       *Gateway
+	entries  []requestLogEntry
+	mu       sync.Mutex
+	interval time.Duration
+	maxBatch int
+	stopCh   chan struct{}
 }
 
 func newRequestLogBatcher(gw *Gateway, interval time.Duration, maxBatch int) *requestLogBatcher {

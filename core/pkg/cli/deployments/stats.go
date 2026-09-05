@@ -20,7 +20,10 @@ var StatsCmd = &cobra.Command{
 func statsDeployment(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := fmt.Sprintf("%s/v1/deployments/stats?name=%s", apiURL, name)
 
 	req, err := http.NewRequest("GET", url, nil)
