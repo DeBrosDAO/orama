@@ -170,13 +170,13 @@ func TestAuthorizeResource(t *testing.T) {
 		t.Errorf("a request with no grant was narrowed: %v", err)
 	}
 
-	whole := context.WithValue(context.Background(), ctxkeys.Grant, &Grant{Role: RoleRuntime})
+	whole := context.WithValue(context.Background(), ctxkeys.Permissions, PermissionsFor(RoleRuntime, ""))
 	if err := AuthorizeResource(whole, resource); err != nil {
 		t.Errorf("a whole-role grant was narrowed: %v", err)
 	}
 
-	narrow := context.WithValue(context.Background(), ctxkeys.Grant,
-		&Grant{Role: RoleRuntime, Resource: "pubsub:topic=chat.*"})
+	narrow := context.WithValue(context.Background(), ctxkeys.Permissions,
+		PermissionsFor(RoleRuntime, "pubsub:topic=chat.*"))
 	if err := AuthorizeResource(narrow, resource); err == nil {
 		t.Error("a grant for chat.* authorised billing.invoices")
 	}

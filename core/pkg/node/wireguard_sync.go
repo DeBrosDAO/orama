@@ -404,6 +404,14 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to clean stale WG entries", zap.Error(err))
 	}
 
+	// This one write stays a direct INSERT while the node's other
+	// self-assertions (dns_nodes register and heartbeat) go through the index
+	// gateway on this host. Routing it the same way would make the mesh repair
+	// depend on the gateway, which depends on storage and pubsub — and Raft
+	// runs over the mesh, so the repair would become conditional on things that
+	// need the mesh to work. That is the same trap the component ordering above
+	// avoids, one layer up.
+	//
 	// confirmed_at is set here, not left to the membership reconciler to infer
 	// from dns_nodes. A node writing its own row from its own boot process is
 	// the strongest evidence there is that it came up, and without it a running

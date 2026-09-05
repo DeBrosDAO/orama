@@ -96,7 +96,8 @@ func (e *Executor) nsSlot(ns string) chan struct{} {
 }
 
 // ExecuteModule instantiates and runs a WASM module with the given input.
-// The contextSetter callback is used to set invocation context on host services.
+// The invocation's identity rides ctx; there is nothing to set on the host
+// services, which hold no per-invocation state.
 //
 // Bug #221 fix: each invocation gets an ANONYMOUS module instance (no name
 // in the wazero runtime registry). Previously we used the function name
@@ -111,14 +112,8 @@ func (e *Executor) nsSlot(ns string) chan struct{} {
 // function name is still surfaced via WithArgs(moduleName) so WASI
 // `argv[0]` shows it inside the function (matches the prior behavior
 // that user code may depend on).
-func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledModule, moduleName string, input []byte, contextSetter func(), contextClearer func()) ([]byte, error) {
+func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledModule, moduleName string, input []byte) ([]byte, error) {
 	// Set invocation context for host functions
-	if contextSetter != nil {
-		contextSetter()
-		if contextClearer != nil {
-			defer contextClearer()
-		}
-	}
 
 	// Create buffers for stdin/stdout (WASI uses these for I/O)
 	stdin := bytes.NewReader(input)

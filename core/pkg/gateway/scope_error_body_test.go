@@ -103,8 +103,8 @@ func serveWithScopes(t *testing.T, method, path string, scopes auth.ScopeSet) *h
 // route declaring a token requirement and no grant got neither. That made the
 // requirement silent, which is worse than absent.
 func TestNamespaceCreation_needsAWalletTokenAndNoGrant(t *testing.T) {
-	if policy := policyOf(http.MethodPost, "/v1/namespaces"); policy.Scope != "" {
-		t.Fatalf("/v1/namespaces requires the %q grant; this test is about the case where it requires none", policy.Scope)
+	if policy := policyOf(http.MethodPost, "/v1/namespaces"); policy.Domain != "" {
+		t.Fatalf("/v1/namespaces requires the %q grant; this test is about the case where it requires none", policy.Domain)
 	}
 
 	t.Run("a bare key is refused", func(t *testing.T) {

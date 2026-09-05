@@ -136,53 +136,78 @@ is all-or-nothing by nature.
 
 ## What a credential may do
 
-Three things narrow a request, in this order.
+One sentence, three parts: **in this domain, this action, on this resource.**
 
-**1. The route's policy.** Every route declares what it needs — a credential at
-all, which grant, whether the caller must hold a live grant in the namespace,
-and what kind of token. The middleware reads the policy of the route the request
-matched; it never looks at the path. A route with no declared policy cannot be
-registered. See `pkg/gateway/route_policy.go`.
+```
+storage:read:avatars/*      read anything under avatars/
+db:write:posts              write one table
+fn:invoke:checkout          run one function
+deploy:*:*                  everything about deployments
+*:*:*                       everything
+```
 
-**2. The grant set.** A key carries grants; a wallet gets the grants of its role
-in the namespace. The gateway refuses an operation whose grant the credential
-does not hold, and the refusal names the grant that was missing.
+A domain is a part of the platform: `storage`, `pubsub`, `cache`, `push`,
+`webrtc`, `proxy`, `fn` on the data plane; `db`, `deploy`, `secrets`, `members`,
+`namespace`, `audit`, `operator` on the control plane. An action is `read`,
+`write`, `invoke` or `manage`. A resource is a glob, and `*` in it matches any
+run of characters — including `/`, deliberately, so `avatars/*` covers
+`avatars/2026/03/me.png`.
 
-| Grant | What it reaches |
-|-------|-----------------|
-| `admin` | the control plane: deployments, functions, secrets, keys, members, the raw database |
-| `invoke` | invoking a private function |
-| `storage` | upload, pin, get, unpin |
-| `pubsub` | publish, subscribe, presence |
-| `push` | registering a device for push |
-| `webrtc` | TURN credentials, signalling, rooms |
-| `proxy` | the anonymising proxy and the tunnel |
-| `cache` | the cache |
+There used to be two models. A **scope** was one of eight words on a key, seven
+data-plane ones and `admin`, which was the entire control plane — 58 routes
+required it. A **selector** was a `domain:pattern` string on a grant. Neither
+could express the other, so a translation sat between them, and it cost more
+than complexity: there could be no `developer` role, because every
+control-plane route needed the one word; and a grant could not be narrowed to a
+table or a deployment, because doing so would have left it holding `admin`
+everywhere else.
 
-**3. The kind of token.** `storage`, `webrtc` and `proxy` additionally require a
-genuine logged-in user — a wallet JWT, not a key and not a JWT exchanged from
-one. That is what makes a key extracted from an app bundle worthless on those
-paths: it reaches nothing without a user behind it. An admin credential is
-exempt, and so is the one server-side reclaim (`DELETE /v1/storage/unpin/:cid`),
-which a userless job may reach by exchanging its key for a token.
+### The check happens twice, and they are different questions
+
+The **gate**, before the handler runs, asks whether the credential reaches this
+domain and action at all. It cannot ask about the object, because nothing has
+parsed the request yet.
+
+The **handler** asks again with the object: this CID, this topic, this key. A
+credential that reaches storage and is narrowed to `avatars/*` passes the first
+and is refused at the second for anything else.
+
+An object nothing could name — a CID this namespace recorded no name for — is
+refused by a narrowed permission and reached by an unrestricted one. "I could
+not work out what you are touching" is not a reason to allow it.
+
+### What is on disk is unchanged
+
+A key still carries a comma-separated scope string; a grant still carries a role
+and an optional selector. One place turns them into permissions, and nothing
+about a credential's authority changes in the translation: `admin` is every
+permission there is, a data-plane word is its whole domain, `storage:avatars/*`
+is `storage:*:avatars/*`, and `db:table=posts:read` is `db:read:posts`.
 
 ---
 
 ## Roles
 
 A namespace has exactly one owner and any number of members. A member holds a
-role, and a role is a grant set.
+role, and a role is a set of permissions.
 
 | Role | Holds |
 |------|-------|
 | `owner` | everything, and only one wallet at a time |
-| `admin` | the control plane |
-| `runtime` | the data plane |
-| `reader` | nothing beyond the routes that ask for no grant |
+| `admin` | everything the owner does, except being the owner |
+| `developer` | the data plane, plus `db`, `deploy`, `secrets` and `fn:manage` — and **not** `members`, `namespace` or `operator` |
+| `runtime` | the data plane: storage, pubsub, cache, push, webrtc, proxy, and invoking functions |
+| `reader` | nothing beyond the routes that ask for no permission |
+
+`developer` is new, and it could not exist before: every control-plane route
+required the single `admin` word, so the role would have resolved to exactly the
+same authority and been a label claiming a boundary that was not there. It is
+the role for somebody who builds and runs the application but does not decide
+who else may.
 
 ```bash
 orama members list
-orama members add 0xabc… --role admin
+orama members add 0xabc… --role developer
 orama members remove 0xabc…
 orama members transfer 0xabc…      # the owner, and only the owner
 ```
@@ -193,7 +218,7 @@ owner.
 
 ### Narrowing a grant
 
-A grant may be narrowed to a resource, and four domains apply it:
+A grant may be narrowed to a resource, and four domains apply it today:
 
 | Selector | What it matches |
 |----------|-----------------|
@@ -202,16 +227,6 @@ A grant may be narrowed to a resource, and four domains apply it:
 | `storage:avatars/*` | upload, get, pin and unpin, against the name the object was uploaded with |
 | `cache:key=sessions/*` | get, mget, put, delete and scan, against `<map>/<key>` |
 
-Two steps, not one. A grant with a selector holds exactly the scope that
-selector narrows — `storage:avatars/*` holds `storage` and nothing else — and
-the data path then narrows that scope to what the selector matches. The scope
-gate decides whether a caller may touch this class of thing at all and cannot
-see which object is being touched.
-
-`*` stands for any run of characters and crosses `/` deliberately:
-`avatars/*` is meant to cover `avatars/2026/03/me.png`, and stopping at the
-separator would grant less than it appears to.
-
 A storage name is normalised before it is compared, so `/avatars/me.png` and
 `avatars//me.png` are the same object. `..` in a name is **refused**, not
 resolved: a storage name is a label rather than a filesystem path, and resolving
@@ -219,18 +234,15 @@ one would let `avatars/../keys/x` match `avatars/*`. A cache key is not a path
 and is not normalised — `sessions/../tokens/x` is a key called `../tokens/x` in
 the `sessions` map, and the map is what the grant names.
 
-An object a selector cannot be compared against — a CID this namespace recorded
-no name for — is refused for a narrowed grant and reached as before by an
-unnarrowed one. "I could not work out what you are touching" is not a reason to
-allow it.
+A selector can only narrow. `storage:avatars/*` on a `reader`, who holds
+nothing, grants nothing: a narrowing that widens is not a narrowing.
 
-A selector in a domain the data path cannot yet enforce is refused when the
-grant is written, rather than stored and silently ignored. `db` and deployments
-are the two: both narrow `admin`, and `admin` is the whole control plane, so a
-grant narrowed to `db:table=posts:read` would hold admin everywhere except the
-database routes that narrowed it — a wider grant wearing a narrower name. They
-wait on the control-plane vocabulary being split. `push` waits on something
-smaller: its API has no topic.
+A selector in a domain whose **resource** no data path checks is refused when
+the grant is written, rather than stored and silently ignored. `db` and
+deployments are the two left: the permission is now expressible and the domain
+is now narrow — `db:read:posts` no longer implies the rest of the control plane
+— but nothing yet parses a statement for the tables it touches, so the table
+half would not be applied.
 
 ---
 
@@ -289,6 +301,25 @@ clients still has to move. Neither the CLI nor the SDK sends one any more.
 `ORAMA_TOKEN` is the CI credential and takes either shape. A token is sent as it
 is; a key is exchanged for a session once per run, rather than being sent on
 every request that run makes.
+
+---
+
+## How long a change takes to land
+
+| Change | When it takes effect |
+|--------|----------------------|
+| Revoking a key | at once, everywhere — the revocation list is replicated and consulted before any cache |
+| Revoking a token | at once, by its `jti` |
+| Narrowing a **wallet's** grant | on the next request; the grant is resolved per request |
+| Narrowing a **key** — editing its scopes, or revoking a grant it holds | within one minute, on every gateway that had seen it |
+
+That minute is `CredentialStaleness`, and it is a promise rather than a tuning
+knob: it is the middleware cache's TTL, and it is named so an operator who
+narrows a key knows when it lands.
+
+What a credential may do is read from the grant on every request, not from the
+token it is carrying. A token that carried its own answer was a token whose
+answer could not be changed until it expired.
 
 ---
 
@@ -449,6 +480,32 @@ orama app grants list
 
 ---
 
+## Where this is all kept
+
+Everything above — who somebody is, what they may do, which sessions are live,
+which tokens are refused, and the record of it — lives in the **cluster
+registry**, the RQLite the index gateway owns.
+
+That matters because a namespace gateway holds a second database: the tenant's
+own. The tenant reads and writes it, and a namespace admin can export it whole
+and import a replacement. Anything of the platform's kept there is state its
+subject can rewrite, and state the rest of the cluster never sees.
+
+Keys and grants moved to the registry first. Sessions, challenges, revocations,
+the audit trail, pending device logins and signing keys followed. A namespace
+gateway learns where its registry is after it starts, so each of these resolves
+the database per call rather than capturing the handle it was built with — which
+is exactly how they ended up in the wrong one.
+
+A namespace id is resolved there too, and resolving a name does not create it.
+
+The namespace's own RQLite no longer has those tables at all. Which database
+each of the platform's tables belongs in is recorded in one place, the list of
+what a namespace database is not given is derived from it, and a test fails when
+a migration creates a table nobody has placed.
+
+---
+
 ## Between nodes
 
 The main gateway validates a request and forwards the result to a namespace
@@ -467,7 +524,10 @@ from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.
 
 - A **function** has no identity of its own yet. Host calls still run on the
   gateway's handles, so what a function does is not attributable to the function
-  (the remaining half of feat-372). Deployed apps do have one — see below.
+  (the remaining half of feat-372). Deployed apps do have one — see below. The
+  object those host calls hang off now holds no per-invocation state, which is
+  what makes giving them one a matter of passing an identity rather than of
+  finding somewhere to put it.
 - Resource selectors are enforced on pubsub, function invocation, storage and
   the cache. `db` and deployments both narrow `admin`, which is the whole
   control plane, so they cannot be narrowed until that vocabulary is split; a

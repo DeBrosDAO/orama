@@ -371,10 +371,7 @@ func (s *Service) pruneDeviceAuthorizations(ctx context.Context, db client.Datab
 // login ends in IssueTokens, and a row written somewhere that cannot mint the
 // session it authorises is a login that can never complete.
 func (s *Service) deviceDB() (client.DatabaseClient, error) {
-	if s == nil || s.orm == nil {
-		return nil, fmt.Errorf("this gateway has no registry, so it cannot hold a pending login")
-	}
-	db := s.orm.Database()
+	db := s.registryDatabase()
 	if db == nil {
 		return nil, fmt.Errorf("this gateway has no registry, so it cannot hold a pending login")
 	}

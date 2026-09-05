@@ -10,65 +10,85 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 )
 
-func TestRouteScope(t *testing.T) {
+// What each route requires, in the model that replaced the single `admin` word.
+//
+// The table is the review: fifty-eight routes used to declare `admin`, so a
+// credential that could deploy could also mint keys and transfer the namespace.
+// Each line here is a decision about which of those a route actually needs.
+func TestRoutePermission(t *testing.T) {
 	tests := []struct {
-		path string
-		want string
+		path   string
+		domain auth.Domain
+		action auth.Action
 	}{
-		// public / invoke — no scope
-		{"/health", ""},
-		{"/v1/invoke/ns/fn", ""},
-		{"/v1/node/enroll", ""},
-		{"/v1/functions/fn/invoke", ""},
-		{"/v1/auth/token", ""},  // not public, but any key may exchange
-		{"/v1/auth/whoami", ""}, // any valid credential
+		// public / invoke — nothing required
+		{"/health", "", ""},
+		{"/v1/invoke/ns/fn", "", ""},
+		{"/v1/node/enroll", "", ""},
+		{"/v1/functions/fn/invoke", "", ""},
+		{"/v1/auth/token", "", ""},  // not public, but any key may exchange
+		{"/v1/auth/whoami", "", ""}, // any valid credential
 		// invoke transport
-		{"/v1/functions/fn/ws", auth.ScopeInvoke},
-		// functions control-plane
-		{"/v1/functions", auth.ScopeAdmin},
-		{"/v1/functions/fn", auth.ScopeAdmin},
-		{"/v1/functions/secrets", auth.ScopeAdmin},
-		// storage (data-plane)
-		{"/v1/storage/upload", auth.ScopeStorage},
-		{"/v1/storage/get/Qm123", auth.ScopeStorage},
-		{"/v1/storage/unpin/Qm123", auth.ScopeStorage},
+		{"/v1/functions/fn/ws", auth.DomainFn, auth.ActionInvoke},
+		// functions control-plane: managing one is not invoking it
+		{"/v1/functions", auth.DomainFn, auth.ActionManage},
+		{"/v1/functions/fn", auth.DomainFn, auth.ActionManage},
+		{"/v1/functions/secrets", auth.DomainFn, auth.ActionManage},
+		// storage (data-plane), read and write told apart
+		{"/v1/storage/upload", auth.DomainStorage, auth.ActionWrite},
+		{"/v1/storage/get/Qm123", auth.DomainStorage, auth.ActionRead},
+		{"/v1/storage/unpin/Qm123", auth.DomainStorage, auth.ActionWrite},
 		// push — mixed prefix
-		{"/v1/push/devices", auth.ScopePush},
-		{"/v1/push/devices/42", auth.ScopePush},
-		{"/v1/push/config", auth.ScopeAdmin},
-		{"/v1/push/send", auth.ScopeAdmin},
-		{"/v1/namespace/push-credentials", auth.ScopeAdmin},
-		{"/v1/namespace/push-credentials/apns", auth.ScopeAdmin},
-		// webrtc (data-plane) vs namespace webrtc mgmt (admin) vs status (read)
-		{"/v1/webrtc/signal", auth.ScopeWebRTC},
-		{"/v1/webrtc/turn/credentials", auth.ScopeWebRTC},
-		{"/v1/namespace/webrtc/enable", auth.ScopeAdmin},
-		{"/v1/namespace/webrtc/status", ""},
+		{"/v1/push/devices", auth.DomainPush, auth.ActionWrite},
+		{"/v1/push/devices/42", auth.DomainPush, auth.ActionWrite},
+		{"/v1/push/send", auth.DomainPush, auth.ActionWrite},
+		// a push provider's credentials are secrets, not push
+		{"/v1/push/config", auth.DomainSecrets, auth.ActionWrite},
+		{"/v1/namespace/push-credentials", auth.DomainSecrets, auth.ActionWrite},
+		{"/v1/namespace/push-credentials/apns", auth.DomainSecrets, auth.ActionWrite},
+		// webrtc (data-plane) vs the namespace's own switches vs status (read)
+		{"/v1/webrtc/signal", auth.DomainWebRTC, auth.ActionRead},
+		{"/v1/webrtc/turn/credentials", auth.DomainWebRTC, auth.ActionRead},
+		{"/v1/namespace/webrtc/enable", auth.DomainNamespace, auth.ActionWrite},
+		{"/v1/namespace/webrtc/status", "", ""},
 		// proxy / pubsub / cache
-		{"/v1/proxy/anon", auth.ScopeProxy},
-		{"/v1/pubsub/publish", auth.ScopePubsub},
-		{"/v1/cache/get", auth.ScopeCache},
-		// control-plane
-		{"/v1/rqlite/query", auth.ScopeAdmin},
-		{"/v1/deployments/list", auth.ScopeAdmin},
-		{"/v1/db/sqlite/query", auth.ScopeAdmin},
-		{"/v1/serverless/ws/connections", auth.ScopeAdmin},
-		{"/v1/namespace/rate-limit", auth.ScopeAdmin},
-		{"/v1/namespace/keys", auth.ScopeAdmin},
-		{"/v1/namespace/keys/5", auth.ScopeAdmin},
-		{"/v1/node/status", auth.ScopeAdmin},
-		{"/v1/node/command", auth.ScopeAdmin},
-		{"/v1/node/logs", auth.ScopeAdmin},
-		{"/v1/node/leave", auth.ScopeAdmin},
-		{"/v1/network/connect", auth.ScopeAdmin},
-		{"/v1/network/disconnect", auth.ScopeAdmin},
-		{"/v1/network/status", ""},
-		{"/v1/network/peers", ""},
+		{"/v1/proxy/anon", auth.DomainProxy, auth.ActionWrite},
+		{"/v1/pubsub/publish", auth.DomainPubsub, auth.ActionWrite},
+		{"/v1/pubsub/topics", auth.DomainPubsub, auth.ActionRead},
+		{"/v1/cache/get", auth.DomainCache, auth.ActionRead},
+		{"/v1/cache/put", auth.DomainCache, auth.ActionWrite},
+		// control plane, in parts rather than in one word
+		{"/v1/rqlite/query", auth.DomainDB, auth.ActionWrite},
+		{"/v1/db/sqlite/query", auth.DomainDB, auth.ActionWrite},
+		{"/v1/db/sqlite/list", auth.DomainDB, auth.ActionRead},
+		{"/v1/deployments/list", auth.DomainDeploy, auth.ActionRead},
+		{"/v1/deployments/delete", auth.DomainDeploy, auth.ActionWrite},
+		{"/v1/deployments/env", auth.DomainSecrets, auth.ActionRead},
+		{"/v1/deployments/grants", auth.DomainMembers, auth.ActionWrite},
+		{"/v1/audit", auth.DomainAudit, auth.ActionRead},
+		{"/v1/serverless/ws/connections", auth.DomainFn, auth.ActionRead},
+		{"/v1/namespace/rate-limit", auth.DomainNamespace, auth.ActionWrite},
+		{"/v1/namespace/keys", auth.DomainMembers, auth.ActionWrite},
+		{"/v1/namespace/keys/5", auth.DomainMembers, auth.ActionWrite},
+		{"/v1/namespace/members", auth.DomainMembers, auth.ActionWrite},
+		{"/v1/node/status", auth.DomainOperator, auth.ActionRead},
+		{"/v1/node/command", auth.DomainOperator, auth.ActionWrite},
+		{"/v1/node/logs", auth.DomainOperator, auth.ActionRead},
+		{"/v1/node/leave", auth.DomainOperator, auth.ActionWrite},
+		{"/v1/network/connect", auth.DomainOperator, auth.ActionWrite},
+		{"/v1/network/disconnect", auth.DomainOperator, auth.ActionWrite},
+		// the one route that still asks for everything, because that is what
+		// it hands out
+		{"/v1/operator/invite", auth.PermissionWildcard, auth.PermissionWildcard},
+		{"/v1/network/status", "", ""},
+		{"/v1/network/peers", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			if got := policyOf(http.MethodPost, tt.path).Scope; got != tt.want {
-				t.Errorf("%q requires scope %q, want %q", tt.path, got, tt.want)
+			policy := policyOf(http.MethodPost, tt.path)
+			if policy.Domain != string(tt.domain) || policy.Action != string(tt.action) {
+				t.Errorf("%q requires %q, want %q", tt.path,
+					policy.Domain+":"+policy.Action, string(tt.domain)+":"+string(tt.action))
 			}
 		})
 	}
@@ -137,89 +157,113 @@ func TestHasWalletJWT(t *testing.T) {
 	}
 }
 
-func TestCallerScopes(t *testing.T) {
+func TestCallerPermissions(t *testing.T) {
 	g := &Gateway{}
 
-	// API-key identity: scopes come from ctx.
+	// The gate's question: does this reach the domain at all, whatever the
+	// object. The handler asks again with the object.
+	reachesStorage := func(p auth.PermissionSet) bool {
+		return p.PermitsDomain(auth.DomainStorage, auth.ActionWrite)
+	}
+	reachesPubsub := func(p auth.PermissionSet) bool {
+		return p.PermitsDomain(auth.DomainPubsub, auth.ActionWrite)
+	}
+
+	// API-key identity: the key's own permissions, from the row.
 	rKey := httptest.NewRequest(http.MethodPost, "/x", nil)
-	rKey = rKey.WithContext(context.WithValue(rKey.Context(), ctxKeyScopes, auth.ScopeSet{auth.ScopeInvoke: {}, auth.ScopeStorage: {}}))
-	if s := g.callerScopes(rKey); !s.Has(auth.ScopeStorage) || s.Has(auth.ScopeAdmin) {
-		t.Errorf("api-key scopes wrong: %v", s)
+	rKey = rKey.WithContext(context.WithValue(rKey.Context(), ctxKeyScopes,
+		auth.ScopeSet{auth.ScopeInvoke: {}, auth.ScopeStorage: {}}))
+	if p := g.callerPermissions(rKey); !reachesStorage(p) || p.IsAdmin() {
+		t.Errorf("api-key permissions wrong: %v", p.List())
 	}
 
-	// Exchanged RUNTIME key JWT must NOT escalate to admin.
-	rRun := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "invoke,storage"}})
-	if s := g.callerScopes(rRun); s.Has(auth.ScopeAdmin) {
-		t.Error("exchanged runtime-key JWT escalated to admin — escalation hole open")
+	// An exchanged RUNTIME key's token must not escalate to admin.
+	rRun := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "admin"}})
+	rRun = rRun.WithContext(context.WithValue(rRun.Context(), ctxKeyScopes,
+		auth.ScopeSet{auth.ScopeInvoke: {}, auth.ScopeStorage: {}}))
+	if g.callerPermissions(rRun).IsAdmin() {
+		t.Error("a token's own scopes claim was trusted over the key's row — that is the claim-injection hole, " +
+			"and it is also why narrowing a key took a token lifetime to bite")
 	}
 
-	// Exchanged ADMIN key JWT keeps admin.
-	rAdm := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "admin"}})
-	if s := g.callerScopes(rAdm); !s.IsAdmin() {
-		t.Error("exchanged admin-key JWT should be admin")
+	// An exchanged ADMIN key keeps admin, from its row.
+	rAdm := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns"})
+	rAdm = rAdm.WithContext(context.WithValue(rAdm.Context(), ctxKeyScopes, auth.ScopeSet{auth.ScopeAdmin: {}}))
+	if !g.callerPermissions(rAdm).IsAdmin() {
+		t.Error("an admin key's token is not admin")
 	}
 
-	// Wallet JWT, no owner confirmation → data-plane, never admin.
+	// Wallet JWT, no grant resolved → the data plane, never the control plane.
 	rWallet := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})
-	s := g.callerScopes(rWallet)
-	if s.IsAdmin() {
-		t.Error("plain wallet JWT must not be admin")
+	wallet := g.callerPermissions(rWallet)
+	if wallet.IsAdmin() {
+		t.Error("a plain wallet JWT is admin")
 	}
-	if !s.Has(auth.ScopeStorage) {
-		t.Error("wallet JWT should hold data-plane storage grant")
+	if !reachesStorage(wallet) {
+		t.Error("a wallet JWT does not hold the data plane")
 	}
 
-	// CRITICAL regression (claims-provider injection): a WALLET JWT that carries
-	// an injected custom["scopes"]="admin" must NOT be trusted — a non-ak_
-	// subject's scopes claim is ignored, so it stays data-plane.
+	// A wallet JWT carrying an injected scopes claim must not be trusted: a
+	// tenant's claims provider sets those.
 	rInjected := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET", Custom: map[string]string{"scopes": "admin"}})
-	if g.callerScopes(rInjected).IsAdmin() {
-		t.Error("wallet JWT with injected scopes:admin escalated to admin — claims-provider injection hole open")
+	if g.callerPermissions(rInjected).IsAdmin() {
+		t.Error("a wallet JWT with an injected scopes claim escalated to admin")
 	}
 
-	// Wallet JWT + an owner grant → admin.
-	rOwner := reqWithJWT(&auth.JWTClaims{Sub: "0xOWNER"})
-	rOwner = markGrant(rOwner, &auth.Grant{Role: auth.RoleOwner})
-	if s := g.callerScopes(rOwner); !s.IsAdmin() {
-		t.Error("the namespace owner's wallet should be admin")
+	// A grant decides, whatever the token says.
+	rOwner := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xOWNER"}), &auth.Grant{Role: auth.RoleOwner})
+	if !g.callerPermissions(rOwner).IsAdmin() {
+		t.Error("the namespace owner's wallet is not admin")
 	}
 
-	// The whole point of the roles: a member who is not an owner or an admin
-	// does not get the control plane. This used to be a boolean, so everyone
-	// the authorization gate let through was an admin.
-	rRuntime := reqWithJWT(&auth.JWTClaims{Sub: "0xTEAMMATE"})
-	rRuntime = markGrant(rRuntime, &auth.Grant{Role: auth.RoleRuntime})
-	if s := g.callerScopes(rRuntime); s.IsAdmin() {
+	rRuntime := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xTEAMMATE"}), &auth.Grant{Role: auth.RoleRuntime})
+	runtime := g.callerPermissions(rRuntime)
+	if runtime.IsAdmin() {
 		t.Error("a runtime member reached the control plane")
-	} else if !s.Has(auth.ScopeStorage) {
-		t.Error("a runtime member should hold the data plane")
+	}
+	if !reachesStorage(runtime) {
+		t.Error("a runtime member does not hold the data plane")
 	}
 
-	rReader := reqWithJWT(&auth.JWTClaims{Sub: "0xREADER"})
-	rReader = markGrant(rReader, &auth.Grant{Role: auth.RoleReader})
-	if s := g.callerScopes(rReader); s.IsAdmin() || s.Has(auth.ScopeStorage) {
-		t.Error("a reader holds no grant at all")
+	// The role that could not exist while `admin` was one word.
+	rDev := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xDEV"}), &auth.Grant{Role: auth.RoleDeveloper})
+	dev := g.callerPermissions(rDev)
+	if !dev.PermitsDomain(auth.DomainDeploy, auth.ActionWrite) {
+		t.Error("a developer cannot deploy")
+	}
+	if dev.PermitsDomain(auth.DomainMembers, auth.ActionWrite) {
+		t.Error("a developer can hand out authority, so the role is a label on admin")
 	}
 
-	// A grant with a selector holds the scope that selector narrows and nothing
-	// else. The scope gate lets it reach storage; AuthorizeResource in the
-	// handler is what decides which object.
-	rScoped := reqWithJWT(&auth.JWTClaims{Sub: "0xSCOPED"})
-	rScoped = markGrant(rScoped, &auth.Grant{Role: auth.RoleRuntime, Resource: "storage:avatars/*"})
-	scoped := g.callerScopes(rScoped)
-	if !scoped.Has(auth.ScopeStorage) {
+	rReader := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xREADER"}), &auth.Grant{Role: auth.RoleReader})
+	if p := g.callerPermissions(rReader); p.IsAdmin() || reachesStorage(p) {
+		t.Error("a reader holds something")
+	}
+
+	// A grant with a selector holds that permission and nothing else. The gate
+	// lets it reach the domain; the handler decides which object.
+	rScoped := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xSCOPED"}),
+		&auth.Grant{Role: auth.RoleRuntime, Resource: "storage:avatars/*"})
+	scoped := g.callerPermissions(rScoped)
+	if !reachesStorage(scoped) {
 		t.Error("a grant narrowed to storage:avatars/* cannot reach storage at all")
 	}
-	if scoped.Has(auth.ScopePubsub) || scoped.IsAdmin() {
-		t.Errorf("it holds %q; a storage selector says nothing about anything else", scoped.Canonical())
+	if reachesPubsub(scoped) || scoped.IsAdmin() {
+		t.Errorf("it holds %v; a storage selector says nothing about anything else", scoped.List())
+	}
+	if !scoped.Permits(auth.Resource{Domain: auth.DomainStorage, Name: "avatars/me.png", Action: auth.ActionWrite}) {
+		t.Error("it cannot reach the object it names")
+	}
+	if scoped.Permits(auth.Resource{Domain: auth.DomainStorage, Name: "keys/private.pem", Action: auth.ActionRead}) {
+		t.Error("it reaches an object outside the prefix")
 	}
 
-	// A selector in a domain nothing narrows still authorises nothing, or the
-	// narrower-looking grant is the wide one.
-	rUnenforced := reqWithJWT(&auth.JWTClaims{Sub: "0xUNENFORCED"})
-	rUnenforced = markGrant(rUnenforced, &auth.Grant{Role: auth.RoleAdmin, Resource: "db:table=posts:read"})
-	if s := g.callerScopes(rUnenforced); len(s) != 0 {
-		t.Errorf("a grant narrowed to a domain no data path applies holds %q", s.Canonical())
+	// A selector for something the role never had grants nothing, or a
+	// selector could widen a grant.
+	rWidening := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xWIDE"}),
+		&auth.Grant{Role: auth.RoleRuntime, Resource: "db:table=posts:read"})
+	if p := g.callerPermissions(rWidening); len(p) != 0 {
+		t.Errorf("a runtime member narrowed to a table was given %v", p.List())
 	}
 }
 
@@ -266,10 +310,11 @@ func TestStorageUnpinToken(t *testing.T) {
 			t.Errorf("%q asks for token %v, want a logged-in user", path, got)
 		}
 	}
-	// And the grant is unchanged: the relaxation is about the token, not the
-	// scope. A key with no storage grant reaches none of it.
-	if got := policyOf(http.MethodDelete, "/v1/storage/unpin/Qm123").Scope; got != auth.ScopeStorage {
-		t.Errorf("DELETE unpin requires scope %q, want %q", got, auth.ScopeStorage)
+	// And the permission is unchanged: the relaxation is about the token, not
+	// what the credential must hold. A key with no storage permission reaches
+	// none of it.
+	if got := policyOf(http.MethodDelete, "/v1/storage/unpin/Qm123"); got.Domain != string(auth.DomainStorage) {
+		t.Errorf("DELETE unpin requires %q, want storage", got.Domain+":"+got.Action)
 	}
 }
 
@@ -278,7 +323,7 @@ func TestStorageUnpinToken(t *testing.T) {
 // another storage operation.
 func TestUnpinException_decision(t *testing.T) {
 	g := &Gateway{}
-	storage := auth.ParseScopes("invoke,storage,push,webrtc,proxy")
+	storage := auth.PermissionsFromScopes("invoke,storage,push,webrtc,proxy")
 
 	exchanged := reqDelJWT("/v1/storage/unpin/Qm1", &auth.JWTClaims{Sub: "ak_x:ns"})
 	if !g.hasRequiredToken(exchanged, policyOf(http.MethodDelete, exchanged.URL.Path), storage) {
@@ -297,7 +342,7 @@ func TestUnpinException_decision(t *testing.T) {
 
 	// An admin credential is exempt everywhere: the requirement exists to make
 	// a leaked data-plane key inert, and an admin key is not one.
-	if !g.hasRequiredToken(bare, policyOf(http.MethodPost, "/v1/storage/upload"), auth.ParseScopes("admin")) {
+	if !g.hasRequiredToken(bare, policyOf(http.MethodPost, "/v1/storage/upload"), auth.PermissionsFromScopes("admin")) {
 		t.Error("an admin credential must not be asked for a user token")
 	}
 }
@@ -306,15 +351,70 @@ func TestUnpinException_decision(t *testing.T) {
 // the JWT signing key is derived from one of them. These paths had no entry at
 // all, so they fell through to "any valid credential is enough" — and a key out
 // of a public app bundle is a valid credential.
-func TestRouteScope_operatorEndpointsNeedAdmin(t *testing.T) {
+func TestRoutePermission_operatorEndpointsNeedOperator(t *testing.T) {
+	runtime := auth.PermissionsFromScopes("invoke,storage,push,webrtc,proxy,pubsub,cache")
+	developer := auth.RoleDeveloper.Permissions()
+	reaches := func(p auth.PermissionSet, r auth.Resource) bool { return p.PermitsDomain(r.Domain, r.Action) }
+
 	for _, path := range []string{
 		"/v1/operator/invite",
 		"/v1/operator/nodes",
 		"/v1/operator/node/register",
 	} {
-		if got := policyOf(http.MethodPost, path).Scope; got != auth.ScopeAdmin {
-			t.Errorf("%s requires scope %q, want %q — an invoke-only key must not "+
-				"reach it", path, got, auth.ScopeAdmin)
+		policy := policyOf(http.MethodPost, path)
+		required := auth.Resource{Domain: auth.Domain(policy.Domain), Action: auth.Action(policy.Action)}
+
+		if reaches(runtime, required) {
+			t.Errorf("%s is reachable by a runtime key", path)
 		}
+		// The split is only worth having if it draws a line somebody can be on
+		// the wrong side of: a developer builds and runs the application and
+		// does not operate the cluster.
+		if reaches(developer, required) {
+			t.Errorf("%s is reachable by a developer", path)
+		}
+		if !reaches(auth.RoleAdmin.Permissions(), required) {
+			t.Errorf("%s is not reachable by an admin", path)
+		}
+	}
+}
+
+// What a credential may do is read from the grant, per request. A token that
+// carries its own answer is a token whose answer cannot be changed until it
+// expires — which is the asymmetry this replaced: narrowing a grant took effect
+// at once for a wallet and only at the next token for a key.
+func TestCallerPermissions_readsTheGrantAndNotTheToken(t *testing.T) {
+	g := &Gateway{}
+
+	// A token minted when the key held admin, presented after the key was
+	// narrowed to storage. The row is what counts.
+	stale := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "admin"}})
+	stale = stale.WithContext(context.WithValue(stale.Context(), ctxKeyScopes, auth.ScopeSet{auth.ScopeStorage: {}}))
+
+	perms := g.callerPermissions(stale)
+	if perms.IsAdmin() {
+		t.Fatal("a token minted before the key was narrowed still holds what it was minted with")
+	}
+	if !perms.PermitsDomain(auth.DomainStorage, auth.ActionWrite) {
+		t.Error("it does not hold what the key holds now")
+	}
+
+	// And a grant resolved on the request wins over both.
+	narrowed := markGrant(stale, &auth.Grant{Role: auth.RoleReader})
+	if p := g.callerPermissions(narrowed); len(p) != 0 {
+		t.Errorf("a reader grant was overridden by the token or the key: %v", p.List())
+	}
+}
+
+// The one number that says how long narrowing a key takes to bite. It is a
+// promise, not a tuning knob, so it is named and it is the cache's TTL.
+func TestCredentialStaleness_isTheCachesTTL(t *testing.T) {
+	cache := newMiddlewareCache(CredentialStaleness)
+	if cache.ttl != CredentialStaleness {
+		t.Errorf("the cache holds a credential for %v, and the documented staleness is %v",
+			cache.ttl, CredentialStaleness)
+	}
+	if CredentialStaleness <= 0 {
+		t.Error("a credential is cached for ever")
 	}
 }

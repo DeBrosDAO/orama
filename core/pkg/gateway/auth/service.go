@@ -73,8 +73,8 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 	// Every Service with a database consults the revocations. There is no way
 	// to build one that verifies tokens against a database and does not.
 	if orm != nil {
-		s.revocations = NewRevocationList(orm, logger)
-		s.audit = NewAuditLog(orm, logger)
+		s.revocations = NewRevocationList(s.registryDatabase, logger)
+		s.audit = NewAuditLog(s.registryDatabase, logger)
 	}
 	// Always present, database or not: a gateway with no database still has to
 	// verify what it minted itself.
@@ -188,7 +188,10 @@ func (s *Service) resolveCustomClaims(ctx context.Context, wallet, namespace str
 // missing history simply mints without custom claims (the pre-existing behaviour).
 func (s *Service) lastKnownCustomClaims(ctx context.Context, nsID interface{}, subject string) map[string]string {
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.registryDatabase()
+	if db == nil {
+		return nil
+	}
 	// bugboard #154: exclude revoked rows. Without this a logged-out / rotated
 	// row (or a stale row for a deleted-then-recreated identity) whose
 	// expires_at is still in the future could resurrect stale claims (e.g. a
@@ -308,7 +311,10 @@ func (s *Service) PublishSigningKey(ctx context.Context) error {
 // silently created it. Creating one is its own authenticated call now.
 func (s *Service) insertNonce(ctx context.Context, wallet, nonce, purpose, namespace string) error {
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.registryDatabase()
+	if db == nil {
+		return fmt.Errorf("client not initialized")
+	}
 
 	nsID, err := s.lookupNamespaceID(ctx, namespace)
 	if err != nil {
@@ -425,7 +431,10 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 	refresh := base64.RawURLEncoding.EncodeToString(rbuf)
 
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.registryDatabase()
+	if db == nil {
+		return "", "", 0, fmt.Errorf("client not initialized")
+	}
 	hashedRefresh := sha256Hex(refresh)
 	if _, err := db.Query(internalCtx,
 		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?)",
@@ -515,7 +524,10 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	}
 
 	internalCtx := client.WithInternalAuth(ctx)
-	ormDB := s.orm.Database()
+	ormDB := s.registryDatabase()
+	if ormDB == nil {
+		return "", "", "", 0, fmt.Errorf("client not initialized")
+	}
 
 	nsID, err := s.ResolveNamespaceID(ctx, namespace)
 	if err != nil {
@@ -788,7 +800,10 @@ func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.Databas
 // RevokeToken revokes a specific refresh token or all tokens for a subject
 func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all bool, subject string) error {
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.registryDatabase()
+	if db == nil {
+		return fmt.Errorf("client not initialized")
+	}
 
 	nsID, err := s.ResolveNamespaceID(ctx, namespace)
 	if err != nil {
@@ -926,38 +941,48 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 	return apiKey, nil
 }
 
-// ResolveNamespaceID ensures the given namespace exists and returns its primary key ID.
+// ResolveNamespaceID returns a namespace's primary key in the cluster registry.
+//
+// It used to `INSERT OR IGNORE INTO namespaces` first, so resolving a name
+// created it — the same create-by-lookup that made `/v1/auth/challenge` a
+// namespace-creation endpoint (bug-357). Creating a namespace is
+// `POST /v1/namespaces` and nothing else; a name nobody has created does not
+// resolve.
+//
+// It resolves against the registry, not against whatever database this gateway
+// happens to hold. Every row it is used to key — a refresh token, a nonce, a
+// grant — lives there, so an id from anywhere else would point at a different
+// namespace or at nothing.
 func (s *Service) ResolveNamespaceID(ctx context.Context, ns string) (interface{}, error) {
-	return s.resolveNamespaceIDOn(ctx, s.orm, ns)
-}
-
-func (s *Service) resolveKeyNamespaceID(ctx context.Context, ns string) (interface{}, error) {
-	return s.resolveNamespaceIDOn(ctx, s.keyORM(), ns)
-}
-
-func (s *Service) resolveNamespaceIDOn(ctx context.Context, orm client.NetworkClient, ns string) (interface{}, error) {
-	if orm == nil {
+	db := s.registryDatabase()
+	if db == nil {
 		return nil, fmt.Errorf("client not initialized")
 	}
 	ns = strings.TrimSpace(ns)
 	if ns == "" {
-		ns = "default"
+		ns = LobbyNamespace
 	}
 
-	internalCtx := client.WithInternalAuth(ctx)
-	db := orm.Database()
-
-	if _, err := db.Query(internalCtx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", ns); err != nil {
-		return nil, err
-	}
-	res, err := db.Query(internalCtx, "SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns)
+	res, err := db.Query(client.WithInternalAuth(ctx),
+		"SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns)
 	if err != nil {
 		return nil, err
 	}
 	if res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
-		return nil, fmt.Errorf("failed to resolve namespace")
+		return nil, &ErrNoSuchNamespace{Namespace: ns}
 	}
 	return res.Rows[0][0], nil
+}
+
+// ErrNoSuchNamespace names a namespace nobody has created.
+type ErrNoSuchNamespace struct{ Namespace string }
+
+func (e *ErrNoSuchNamespace) Error() string {
+	return fmt.Sprintf("no such namespace: %q — create it with 'orama namespace create %s'", e.Namespace, e.Namespace)
+}
+
+func (s *Service) resolveKeyNamespaceID(ctx context.Context, ns string) (interface{}, error) {
+	return s.ResolveNamespaceID(ctx, ns)
 }
 
 // Base58Decode decodes a base58-encoded string

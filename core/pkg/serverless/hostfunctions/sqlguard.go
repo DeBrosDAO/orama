@@ -48,7 +48,10 @@ var protectedTables = map[string]string{
 	"principals":            "who the platform will authenticate",
 	// Public keys, but writing one publishes a key the cluster will accept
 	// tokens from — which is minting authority by another route.
-	"signing_keys":               "which keys may sign a token",
+	"signing_keys": "which keys may sign a token",
+	// Public keys too, but writing one is deciding which machine the cluster
+	// will accept as a node, and deleting a row un-revokes a retired one.
+	"node_credentials":           "which key the cluster accepts as a node",
 	"grants":                     "who may do what in a namespace",
 	"wireguard_peers":            "mesh membership and node agent tokens",
 	"namespace_push_credentials": "push credentials",
@@ -56,6 +59,9 @@ var protectedTables = map[string]string{
 	"function_env_vars":          "every function's environment",
 	// Deleting a row here un-revokes a credential somebody revoked.
 	"revoked_tokens": "which tokens are refused",
+	// The record of who was given what and when. A record its own subject can
+	// delete is not a record.
+	"audit_events": "the audit trail",
 
 	// Platform limits. Writing these lifts the caller's own ceilings.
 	"namespace_quotas":            "storage and resource quotas",

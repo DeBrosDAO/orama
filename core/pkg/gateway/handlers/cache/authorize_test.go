@@ -29,8 +29,8 @@ func requestWithGrant(t *testing.T, path string, body any, selector string) *htt
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(encoded)))
 	ctx := context.WithValue(r.Context(), ctxkeys.NamespaceOverride, "anchat")
 	if selector != "" {
-		ctx = context.WithValue(ctx, ctxkeys.Grant,
-			&gwauth.Grant{Role: gwauth.RoleRuntime, Resource: selector})
+		ctx = context.WithValue(ctx, ctxkeys.Permissions,
+			gwauth.PermissionsFor(gwauth.RoleRuntime, selector))
 	}
 	return r.WithContext(ctx)
 }

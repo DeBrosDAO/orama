@@ -88,7 +88,7 @@ func (n *revocationNet) Database() client.DatabaseClient { return n.db }
 func newTestRevocations(t *testing.T) (*RevocationList, *revocationDB, *time.Time) {
 	t.Helper()
 	db := &revocationDB{}
-	list := NewRevocationList(&revocationNet{db: db}, nil)
+	list := NewRevocationList(registryOf(&revocationNet{db: db}), nil)
 	clock := time.Unix(1_000_000, 0)
 	list.now = func() time.Time { return clock }
 	return list, db, &clock

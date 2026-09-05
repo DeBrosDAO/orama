@@ -84,7 +84,7 @@ func (s *Service) checkOutstandingNonces(internalCtx context.Context, db client.
 // Raft-replicated table forever, and the ones that matter — unexpired and
 // unanswered — are a vanishing fraction of it.
 func (s *Service) StartNonceReaper(ctx context.Context) {
-	if s.orm == nil {
+	if s.registryDatabase() == nil {
 		return
 	}
 	go func() {
@@ -103,7 +103,7 @@ func (s *Service) StartNonceReaper(ctx context.Context) {
 
 // reapNonces deletes challenges that can no longer be claimed.
 func (s *Service) reapNonces(ctx context.Context) {
-	res, err := s.orm.Database().Query(client.WithInternalAuth(ctx),
+	res, err := s.registryDatabase().Query(client.WithInternalAuth(ctx),
 		`DELETE FROM nonces
 		  WHERE expires_at < datetime('now', ?)
 		     OR (used_at IS NOT NULL AND used_at < datetime('now', ?))`,

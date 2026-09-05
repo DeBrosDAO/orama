@@ -191,6 +191,22 @@ that this node terminates TLS and proxies tenants, so a node whose Caddy never
 started must not advertise itself — while a broken ntfy, which serves no
 traffic, must not take a healthy node out of DNS.
 
+The `dns_nodes` row itself is written by the index gateway on this host, not by
+the node process: the node POSTs to `/v1/internal/node/register` and
+`/v1/internal/node/heartbeat` stamped with an Ed25519 signature naming which
+node it is, and the handler acts on that name rather than on anything in the
+body. The key is generated on the node at `<orama>/secrets/node-key.pem` and
+recorded — public half only — in `node_credentials` on its first call. That
+first call is stamped with the node's libp2p identity key, which its peer id
+carries, so the cluster can check who is enrolling without having been told
+anything in advance. That is why
+`dns-registration` depends on `gateway` for a second reason as well as the
+first. The DNS *record* loop in the same component still writes zone data
+directly; it is the `dns_nodes` row — the promise consumers route on — that
+moved. `wireguard_peers` self-registration deliberately did not: Raft runs over
+the mesh, so making the mesh repair depend on the gateway would make it
+conditional on services that need the mesh.
+
 Two components carry health checks, polled every 30s:
 
 - `rqlite-local` — `LocalHealthy`: the local `rqlited` answers `/status` and the

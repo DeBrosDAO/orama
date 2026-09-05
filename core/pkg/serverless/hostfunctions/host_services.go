@@ -76,7 +76,6 @@ func NewHostFunctions(
 		// networks; see egress.go.
 		httpClient:     newGuardedHTTPClient(httpTimeout),
 		logger:         logger,
-		logs:           make([]serverless.LogEntry, 0),
 		asyncInvokeSem: make(chan struct{}, asyncInvokeMaxInFlight),
 	}
 

@@ -49,8 +49,13 @@ type revocation struct {
 
 // RevocationList is the set of tokens this gateway refuses.
 type RevocationList struct {
-	orm    client.NetworkClient
-	logger *logging.ColoredLogger
+	// registry resolves the database the revocations live in, at call time.
+	// See SigningKeys.registry: a namespace gateway is told where its cluster
+	// registry is after the auth service is built, and a list bound to the
+	// handle it was built with consulted the tenant's own database — where a
+	// revocation written on the index never appears.
+	registry func() client.DatabaseClient
+	logger   *logging.ColoredLogger
 
 	mu          sync.RWMutex
 	byJTI       map[string]int64 // jti -> expiry, so a stale entry can be dropped
@@ -63,9 +68,9 @@ type RevocationList struct {
 }
 
 // NewRevocationList builds the list a Service consults.
-func NewRevocationList(orm client.NetworkClient, logger *logging.ColoredLogger) *RevocationList {
+func NewRevocationList(registry func() client.DatabaseClient, logger *logging.ColoredLogger) *RevocationList {
 	return &RevocationList{
-		orm:       orm,
+		registry:  registry,
 		logger:    logger,
 		byJTI:     map[string]int64{},
 		bySubject: map[string]int64{},
@@ -305,10 +310,10 @@ func (r *RevocationList) StartPruning(ctx context.Context) {
 }
 
 func (r *RevocationList) database() client.DatabaseClient {
-	if r == nil || r.orm == nil {
+	if r == nil || r.registry == nil {
 		return nil
 	}
-	return r.orm.Database()
+	return r.registry()
 }
 
 // RevokeSession refuses one access token from now on.

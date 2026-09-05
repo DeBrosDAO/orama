@@ -84,9 +84,16 @@ type Policy struct {
 	// Access is the credential the middleware itself insists on.
 	Access Access
 
-	// Scope is the grant the credential must hold. Empty means any valid
-	// credential will do.
-	Scope string
+	// Domain and Action are what the route does: which part of the platform,
+	// and what to it. Empty means any valid credential will do.
+	//
+	// They replace a single `Scope` word. A word could say "the control
+	// plane" and nothing narrower, so 58 routes declared the same one and a
+	// grant could not be narrowed to any of them without holding all of them.
+	// These are strings rather than the auth package's types because a policy
+	// table must not depend on the thing it is describing.
+	Domain string
+	Action string
 
 	// Ownership requires the caller to hold a live grant in the namespace. It
 	// is also what resolves that grant onto the request, which the data paths

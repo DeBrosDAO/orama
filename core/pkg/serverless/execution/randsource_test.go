@@ -201,7 +201,7 @@ func TestExecuteModule_recordsInstantiateTiming(t *testing.T) {
 	ex := NewExecutor(runtime, zap.NewNop(), 0)
 
 	tctx, timing := WithInstantiateTiming(ctx)
-	if _, err := ex.ExecuteModule(tctx, compiled, "probe", nil, nil, nil); err != nil {
+	if _, err := ex.ExecuteModule(tctx, compiled, "probe", nil); err != nil {
 		t.Fatalf("ExecuteModule: %v", err)
 	}
 	if timing.InstantiateNs <= 0 {

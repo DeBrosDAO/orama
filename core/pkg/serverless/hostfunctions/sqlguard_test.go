@@ -94,7 +94,6 @@ func TestCheckGuestSQL_allowsATenantsOwnSQL(t *testing.T) {
 		"WITH recent AS (SELECT * FROM messages LIMIT 10) SELECT * FROM recent",
 		"SELECT * FROM apps",              // core owns the name, but a tenant may already be using it
 		"SELECT * FROM deployments",       // likewise
-		"SELECT * FROM audit_events",      // likewise
 		"SELECT * FROM schema_migrations", // the tenant's own migration tracker
 	} {
 		t.Run(query, func(t *testing.T) {
@@ -277,8 +276,12 @@ func TestDBTransaction_checksEveryOp(t *testing.T) {
 // be using the name as their own — a namespace database has exactly one
 // table called `apps`, and it belongs to whoever wrote to it first — or
 // because reading it tells a tenant only about their own namespace.
+//
+// `audit_events` used to be on this list for the second reason. It moved to the
+// registry, where it holds every namespace's trail, so the reason stopped being
+// true.
 var reachableTables = map[string]bool{
-	"apps": true, "audit_events": true, "namespaces": true, "namespaces_new": true,
+	"apps": true, "namespaces": true,
 	"deployments": true, "deployment_domains": true, "deployment_events": true,
 	"deployment_health_checks": true, "deployment_history": true,
 	"deployment_replicas": true, "port_allocations": true,
@@ -395,4 +398,23 @@ func coreTables(t *testing.T) map[string]bool {
 		t.Fatalf("found only %d core tables; this test is not reading the migrations", len(tables))
 	}
 	return tables
+}
+
+// The denylist and the table placement have to agree in one direction: a table
+// that exists only in the cluster registry is platform state by definition, and
+// a function must not name it.
+//
+// It is a cross-check rather than a derivation because the two lists answer
+// different questions. Placement says which database a table lives in; this list
+// says which names guest SQL may not use, and it also covers tables that do live
+// in a namespace database and still hold the platform's secrets —
+// `function_secrets` is the clearest.
+func TestProtectedTables_coverEveryClusterOnlyTable(t *testing.T) {
+	for _, table := range rqlite.ClusterOnlyTables() {
+		if _, protected := protectedTables[table]; !protected {
+			t.Errorf("%q lives only in the cluster registry and guest SQL may still name it. "+
+				"Stripping it from a namespace database makes the query fail anyway, but the "+
+				"refusal should say what it is rather than 'no such table'.", table)
+		}
+	}
 }

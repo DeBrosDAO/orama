@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"go.uber.org/zap"
 )
 
 // TestCurrentInvocationContext_CtxOverridesSingleton verifies the basic
@@ -21,7 +22,7 @@ func TestCurrentInvocationContext_CtxOverridesSingleton(t *testing.T) {
 	h := &HostFunctions{}
 
 	// Singleton has identity for "userA".
-	h.SetInvocationContext(&serverless.InvocationContext{
+	invCtx := invocationCtx(&serverless.InvocationContext{
 		CallerJWTSubject: "userA",
 		WSClientID:       "clientA",
 		Namespace:        "nsA",
@@ -29,7 +30,7 @@ func TestCurrentInvocationContext_CtxOverridesSingleton(t *testing.T) {
 
 	// ctx carries identity for "userB" — what a per-instance persistent
 	// WS connection's ctx would carry.
-	ctxB := serverless.WithInvocationContext(context.Background(), &serverless.InvocationContext{
+	ctxB := serverless.WithInvocationContext(invCtx, &serverless.InvocationContext{
 		CallerJWTSubject: "userB",
 		WSClientID:       "clientB",
 		Namespace:        "nsB",
@@ -43,7 +44,7 @@ func TestCurrentInvocationContext_CtxOverridesSingleton(t *testing.T) {
 	}
 
 	// Sanity: singleton path still works for callers that don't propagate ctx.
-	if got := h.GetCallerJWTSubject(context.Background()); got != "userA" {
+	if got := h.GetCallerJWTSubject(invCtx); got != "userA" {
 		t.Errorf("singleton fallback broke: got %q, want %q", got, "userA")
 	}
 }
@@ -54,10 +55,10 @@ func TestCurrentInvocationContext_CtxOverridesSingleton(t *testing.T) {
 // InvocationContextFromCtx nil check).
 func TestCurrentInvocationContext_NilInvCtxReturnsCtxUnchanged(t *testing.T) {
 	h := &HostFunctions{}
-	h.SetInvocationContext(&serverless.InvocationContext{CallerJWTSubject: "fallback"})
+	invCtx := invocationCtx(&serverless.InvocationContext{CallerJWTSubject: "fallback"})
 
 	// nil invCtx → ctx unchanged → falls back to singleton.
-	ctx := serverless.WithInvocationContext(context.Background(), nil)
+	ctx := serverless.WithInvocationContext(invCtx, nil)
 	if got := h.GetCallerJWTSubject(ctx); got != "fallback" {
 		t.Errorf("nil invCtx should fall through to singleton: got %q, want %q", got, "fallback")
 	}
@@ -153,19 +154,12 @@ func TestCurrentInvocationContext_NoCrossTenantLeak_Concurrent(t *testing.T) {
 		}(g)
 	}
 
-	// Concurrently churn the singleton field so any accessor that
-	// accidentally falls back to it would see whatever was set last.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < numGoroutines*opsPerRoutine; i++ {
-			h.SetInvocationContext(&serverless.InvocationContext{
-				CallerJWTSubject: "intruder",
-				WSClientID:       "intruder",
-				Namespace:        "intruder",
-			})
-		}
-	}()
+	// There used to be a goroutine here churning a field on the shared
+	// HostFunctions, so that any accessor falling back to it would see
+	// whatever was set last. The field is gone: identity rides the context and
+	// nothing else, so there is no longer anything to churn. What is left is
+	// the property itself — concurrent host calls, each with its own context,
+	// never see each other's identity.
 
 	wg.Wait()
 	if atomic.LoadInt64(&leaks) != 0 {
@@ -192,4 +186,44 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(digits)
+}
+
+// invocationCtx is a context carrying an invocation, which is how a host call
+// learns whose it is.
+//
+// The shared HostFunctions holds no per-invocation state, so this is the only
+// way to give a host call an identity. It used to be a field on the shared
+// object, set before each execution and cleared after — which two concurrent
+// invocations overwrote for each other.
+func invocationCtx(inv *serverless.InvocationContext) context.Context {
+	return serverless.WithInvocationContext(context.Background(), inv)
+}
+
+// A host call that is not part of an invocation has no identity, and is
+// refused rather than served with whoever ran last.
+//
+// That is the property the shared field made impossible to have: it always had
+// *some* value, so a call outside an invocation was answered with the previous
+// invocation's namespace — silently, and across tenants.
+func TestHostCall_outsideAnInvocationIsRefused(t *testing.T) {
+	h := &HostFunctions{
+		logger:     zap.NewNop(),
+		turnDomain: "turn.example.com",
+		turnSecret: "shared-secret",
+	}
+
+	if h.currentInvocationContext(context.Background()) != nil {
+		t.Fatal("a call outside an invocation was given one")
+	}
+
+	// And one inside is: the two are told apart by the context and by nothing
+	// else, so a call made after another invocation finished gets nothing
+	// rather than that invocation's namespace.
+	inside := invocationCtx(&serverless.InvocationContext{Namespace: "acme"})
+	if got := h.currentInvocationContext(inside); got == nil || got.Namespace != "acme" {
+		t.Fatalf("a call inside an invocation resolved %v", got)
+	}
+	if h.currentInvocationContext(context.Background()) != nil {
+		t.Error("the invocation was remembered after it ended, which is the leak this removes")
+	}
 }

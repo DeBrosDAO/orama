@@ -61,7 +61,7 @@ func TestRevokeKey_alsoRevokesTheTokensAlreadyIssuedFromTheKey(t *testing.T) {
 	s := &Service{apiKeyHMACSecret: "test-hmac-secret"}
 	db := &keyRegistryDB{hashedKey: s.HashAPIKey(rawKey)}
 	s.orm = &keyRegistryNet{db: db}
-	s.revocations = NewRevocationList(s.orm, nil)
+	s.revocations = NewRevocationList(s.registryDatabase, nil)
 
 	if err := s.RevokeKey(context.Background(), "acme", 7); err != nil {
 		t.Fatalf("RevokeKey: %v", err)
@@ -91,8 +91,8 @@ func TestRevokeKey_isRecorded(t *testing.T) {
 	s := &Service{apiKeyHMACSecret: "test-hmac-secret"}
 	db := &keyRegistryDB{hashedKey: "hashed"}
 	s.orm = &keyRegistryNet{db: db}
-	s.revocations = NewRevocationList(s.orm, nil)
-	s.audit = NewAuditLog(s.orm, nil)
+	s.revocations = NewRevocationList(s.registryDatabase, nil)
+	s.audit = NewAuditLog(s.registryDatabase, nil)
 
 	if err := s.RevokeKey(context.Background(), "acme", 7); err != nil {
 		t.Fatalf("RevokeKey: %v", err)

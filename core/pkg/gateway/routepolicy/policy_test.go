@@ -13,13 +13,13 @@ import (
 func testTable() *Table {
 	t := NewTable()
 	t.Add(Policy{Access: Open}, "/health", "/v1/invoke/")
-	t.Add(Policy{Scope: "admin", Ownership: true}, "/v1/functions")
-	t.Add(Policy{Scope: "storage", Token: WalletToken}, "/v1/storage/get/")
+	t.Add(Policy{Domain: "admin", Ownership: true}, "/v1/functions")
+	t.Add(Policy{Domain: "storage", Token: WalletToken}, "/v1/storage/get/")
 	t.AddDynamic("/v1/storage/unpin/", func(r *http.Request) Policy {
 		if r.Method == http.MethodDelete {
-			return Policy{Scope: "storage", Token: AnyToken}
+			return Policy{Domain: "storage", Token: AnyToken}
 		}
-		return Policy{Scope: "storage", Token: WalletToken}
+		return Policy{Domain: "storage", Token: WalletToken}
 	})
 	return t
 }
@@ -35,7 +35,7 @@ func TestTable_exactAndPrefixMatch(t *testing.T) {
 	if !policyFor(http.MethodPost, "/v1/invoke/greet").Access.Anonymous() {
 		t.Error("a path under an open prefix is not open")
 	}
-	if got := policyFor(http.MethodGet, "/v1/storage/get/Qm1").Scope; got != "storage" {
+	if got := policyFor(http.MethodGet, "/v1/storage/get/Qm1").Domain; got != "storage" {
 		t.Errorf("scope = %q, want storage", got)
 	}
 }
@@ -54,7 +54,7 @@ func TestTable_dynamicPolicyDependsOnTheRequest(t *testing.T) {
 func TestTable_unmatchedPathGetsTheClosedPolicy(t *testing.T) {
 	for _, path := range []string{"/nope", "/HEALTH", "/health/", "/v1/storage", "/v1/functions/"} {
 		p := policyFor(http.MethodGet, path)
-		if p.Access.Anonymous() || p.Scope != "" || p.Ownership {
+		if p.Access.Anonymous() || p.Domain != "" || p.Ownership {
 			t.Errorf("%q resolved to %+v, want the closed zero policy", path, p)
 		}
 	}
@@ -69,16 +69,16 @@ func TestTable_aRedirectCarriesItsDestinationsPolicy(t *testing.T) {
 	if !policyFor(http.MethodGet, "/v1/invoke").Access.Anonymous() {
 		t.Error("/v1/invoke redirects to an open route and must be answered as one")
 	}
-	if got := policyFor(http.MethodGet, "/v1/storage/get").Scope; got != "storage" {
+	if got := policyFor(http.MethodGet, "/v1/storage/get").Domain; got != "storage" {
 		t.Errorf("/v1/storage/get redirects into storage but resolved to scope %q", got)
 	}
 }
 
 func TestTable_matchingIsNotStringPrefixing(t *testing.T) {
-	if got := policyFor(http.MethodGet, "/v1//storage/get/Qm1").Scope; got != "storage" {
+	if got := policyFor(http.MethodGet, "/v1//storage/get/Qm1").Domain; got != "storage" {
 		t.Errorf("a doubled slash resolved to scope %q, want storage", got)
 	}
-	if got := policyFor(http.MethodGet, "/v1/storage/get/../../health").Scope; got != "" {
+	if got := policyFor(http.MethodGet, "/v1/storage/get/../../health").Domain; got != "" {
 		t.Errorf("a traversal resolved to scope %q; it matches no route", got)
 	}
 }
@@ -89,7 +89,7 @@ func TestTable_declaringAPatternTwicePanics(t *testing.T) {
 			t.Error("declaring a pattern twice did not panic; the second policy would silently win")
 		}
 	}()
-	NewTable().Add(Policy{Access: Open}, "/health").Add(Policy{Scope: "admin"}, "/health")
+	NewTable().Add(Policy{Access: Open}, "/health").Add(Policy{Domain: "admin"}, "/health")
 }
 
 func TestMux_registeringAnUndeclaredRoutePanics(t *testing.T) {

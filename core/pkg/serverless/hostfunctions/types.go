@@ -32,7 +32,20 @@ type HostFunctionsConfig struct {
 }
 
 // HostFunctions provides the bridge between WASM functions and Orama services.
-// It implements the HostServices interface and is injected into the execution context.
+// It implements the HostServices interface and is injected into the execution
+// context.
+//
+// It holds **no per-invocation state**. One of these exists for the life of the
+// gateway and is shared by every invocation running on it, so anything about
+// "the current invocation" kept here is a field two concurrent invocations
+// overwrite for each other. It had two — the invocation context and the
+// captured logs — and both produced exactly that: bugboard #348 was a
+// cross-tenant identity leak through the first, and #108 was one invocation's
+// log lines appearing in another's record through the second.
+//
+// Identity and logs ride the context instead, attached per invocation by the
+// engine. A host call with no invocation on its context is a host call outside
+// any invocation, and says so rather than picking up whoever ran last.
 type HostFunctions struct {
 	db          rqlite.Client
 	cacheClient olriclib.Client
@@ -103,14 +116,6 @@ type HostFunctions struct {
 	// registers a disconnect hook on the WS manager so a client's owned state
 	// auto-clears the instant its WebSocket disconnects.
 	ephemeralStore *serverless.EphemeralStore
-
-	// Current invocation context (set per-execution)
-	invCtx     *serverless.InvocationContext
-	invCtxLock sync.RWMutex
-
-	// Captured logs for this invocation
-	logs     []serverless.LogEntry
-	logsLock sync.Mutex
 }
 
 // Ensure HostFunctions implements HostServices interface.

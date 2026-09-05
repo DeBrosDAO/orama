@@ -39,7 +39,7 @@ func (n *auditNet) Database() client.DatabaseClient { return n.db }
 
 func newTestAudit() (*AuditLog, *auditDB) {
 	db := &auditDB{}
-	return NewAuditLog(&auditNet{db: db}, nil), db
+	return NewAuditLog(registryOf(&auditNet{db: db}), nil), db
 }
 
 func TestAuditLog_recordsTheEvent(t *testing.T) {

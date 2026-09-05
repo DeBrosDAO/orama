@@ -43,8 +43,8 @@ func uploadWithGrant(t *testing.T, name, selector string) *http.Request {
 
 	ctx := context.WithValue(r.Context(), ctxkeys.NamespaceOverride, "anchat")
 	if selector != "" {
-		ctx = context.WithValue(ctx, ctxkeys.Grant,
-			&gwauth.Grant{Role: gwauth.RoleRuntime, Resource: selector})
+		ctx = context.WithValue(ctx, ctxkeys.Permissions,
+			gwauth.PermissionsFor(gwauth.RoleRuntime, selector))
 	}
 	return r.WithContext(ctx)
 }
@@ -125,8 +125,8 @@ func TestAuthorizeCID_refusesAnUnnamedObjectForANarrowedGrant(t *testing.T) {
 	h := storageHandlers(t)
 
 	r := httptest.NewRequest(http.MethodGet, "/v1/storage/get/bafyunknown", nil)
-	ctx := context.WithValue(r.Context(), ctxkeys.Grant,
-		&gwauth.Grant{Role: gwauth.RoleRuntime, Resource: "storage:avatars/*"})
+	ctx := context.WithValue(r.Context(), ctxkeys.Permissions,
+		gwauth.PermissionsFor(gwauth.RoleRuntime, "storage:avatars/*"))
 	rec := httptest.NewRecorder()
 
 	// h.db is nil, so no name can be read — the same shape as a CID with no row.

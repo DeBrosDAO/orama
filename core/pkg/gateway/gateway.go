@@ -28,6 +28,7 @@ import (
 	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 	enrollhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/enroll"
 	joinhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/join"
+	nodeapihandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/nodeapi"
 	operatorhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	pubsubhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/pubsub"
 	pushhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/push"
@@ -191,6 +192,7 @@ type Gateway struct {
 
 	// WireGuard peer exchange
 	wireguardHandler *wireguardhandlers.Handler
+	nodeAPIHandler   *nodeapihandlers.Handler
 
 	// Node join handler
 	joinHandler *joinhandlers.Handler
@@ -586,7 +588,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	}
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)
-	gw.mwCache = newMiddlewareCache(60 * time.Second)
+	gw.mwCache = newMiddlewareCache(CredentialStaleness)
 
 	// Initialize request log batcher (flush every 5 seconds)
 	gw.logBatcher = newRequestLogBatcher(gw, 5*time.Second, 100)
@@ -634,6 +636,15 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// Initialize WireGuard peer exchange handler
 	if deps.ORMClient != nil {
 		gw.wireguardHandler = wireguardhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.ClusterSecret)
+		// Nothing derived from the cluster secret is involved: a node is
+		// verified against the key it enrolled, and an enrolment against the
+		// key carried inside its own peer id.
+		var nodeAudit *auth.AuditLog
+		if deps.AuthService != nil {
+			nodeAudit = deps.AuthService.Audit()
+		}
+		gw.nodeAPIHandler = nodeapihandlers.NewHandler(logger.Logger, deps.ORMClient,
+			nodeapihandlers.NewCredentials(deps.ORMClient), nodeAudit)
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.joinHandler.SetAuditLog(deps.AuthService.Audit())
 		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)

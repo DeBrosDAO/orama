@@ -41,6 +41,12 @@ func membershipDB(t *testing.T) *sql.DB {
 			reason TEXT NOT NULL,
 			evicted_by TEXT NOT NULL DEFAULT '',
 			evicted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE node_credentials (
+			node_id TEXT PRIMARY KEY,
+			public_key TEXT NOT NULL,
+			enrolled_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			revoked_at TIMESTAMP
 		);`); err != nil {
 		t.Fatalf("schema: %v", err)
 	}
@@ -322,5 +328,36 @@ func TestReconcile_doesNothingOnAFollower(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatal("a follower made a cluster-wide write")
+	}
+}
+
+// A departed node's key is revoked when the reconciler drops its record, not
+// only when an operator runs `orama node remove`. Without this the machine
+// keeps a live credential: registering is an upsert that sets `status =
+// 'active'`, and the overlay-address check passes for a node whose
+// wireguard_peers row this same reconciler just deleted — so it would
+// resurrect itself into DNS at an address of its choosing.
+func TestReconcile_revokesTheKeyOfADepartedNode(t *testing.T) {
+	db := membershipDB(t)
+	seedNode(t, db, "peerGone", "10.0.0.9", 86400)
+	seedTombstone(t, db, "10.0.0.9:10101", "peerGone", int(TombstoneGrace.Seconds())+3600)
+	if _, err := db.Exec(
+		`INSERT INTO node_credentials (node_id, public_key) VALUES (?, ?)`,
+		"peerGone", "a-public-key"); err != nil {
+		t.Fatalf("seed credential: %v", err)
+	}
+
+	r := NewReconciler(db, fakeDiscovery{}, func() bool { return true }, nil)
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var revoked sql.NullString
+	if err := db.QueryRow(
+		`SELECT revoked_at FROM node_credentials WHERE node_id = ?`, "peerGone").Scan(&revoked); err != nil {
+		t.Fatalf("read credential: %v", err)
+	}
+	if !revoked.Valid || revoked.String == "" {
+		t.Error("a departed node kept a live credential, so its disk still speaks for it")
 	}
 }

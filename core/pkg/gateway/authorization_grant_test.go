@@ -107,11 +107,11 @@ func TestAuthorizationMiddleware_putsTheRoleInTheContext(t *testing.T) {
 		t.Run(role, func(t *testing.T) {
 			g := grantGateway(t, role)
 
-			var scopes auth.ScopeSet
+			var perms auth.PermissionSet
 			var reached bool
 			chain := g.authorizationMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 				reached = true
-				scopes = g.callerScopes(r)
+				perms = g.callerPermissions(r)
 			}))
 
 			w := httptest.NewRecorder()
@@ -120,7 +120,7 @@ func TestAuthorizationMiddleware_putsTheRoleInTheContext(t *testing.T) {
 			if !reached {
 				t.Fatalf("a %s was refused: %d %s", role, w.Code, strings.TrimSpace(w.Body.String()))
 			}
-			if got := scopes.IsAdmin(); got != wantAdmin {
+			if got := perms.IsAdmin(); got != wantAdmin {
 				t.Errorf("a %s resolves to admin=%v, want %v", role, got, wantAdmin)
 			}
 		})
