@@ -31,6 +31,15 @@ const ErrCodeNotAnOperator = "NOT_AN_OPERATOR"
 //
 // It reports and writes the response on refusal; a false return means the
 // handler must return immediately.
+// Authorize is requireOperator for a handler outside this package.
+//
+// An operator endpoint served from elsewhere — rotating the gateway's signing
+// key — has to make the same check, and making it twice in two places is how
+// the two drift apart.
+func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) (string, bool) {
+	return h.requireOperator(w, r)
+}
+
 func (h *Handler) requireOperator(w http.ResponseWriter, r *http.Request) (string, bool) {
 	wallet := h.walletFromRequest(r)
 	if wallet == "" {

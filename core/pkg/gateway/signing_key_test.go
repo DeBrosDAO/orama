@@ -9,9 +9,9 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
-// TestDeriveEd25519Seed_deterministic guards bug #215: every gateway in a
-// cluster must end up with the same Ed25519 keypair so JWTs verify on any
-// node. Same cluster secret + same purpose label MUST produce the same seed.
+// The derivation is kept for one reason: tokens minted before every gateway
+// got its own key carry the kid of the key it produced, and have to keep
+// verifying across the upgrade. Nothing signs with it.
 func TestDeriveEd25519Seed_deterministic(t *testing.T) {
 	a, err := deriveEd25519Seed("super-secret-cluster-key")
 	if err != nil {
@@ -51,97 +51,107 @@ func TestDeriveEd25519Seed_emptySecret(t *testing.T) {
 	}
 }
 
-// TestLoadOrCreateEdSigningKey_clusterSecretSharedAcrossNodes simulates two
-// gateways with separate dataDirs but the same cluster secret. They MUST end
-// up with the same Ed25519 private key so JWTs verify cross-node.
-func TestLoadOrCreateEdSigningKey_clusterSecretSharedAcrossNodes(t *testing.T) {
-	dirA := t.TempDir()
-	dirB := t.TempDir()
-	const clusterSecret = "shared-cluster-secret-for-test"
+// The signing key is this gateway's own now, not one every node in the cluster
+// can derive from a secret they all hold.
 
-	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
+func TestLoadOrCreateEdSigningKey_isDifferentOnEveryGateway(t *testing.T) {
+	logger := newSigningKeyLogger(t)
 
-	keyA, err := loadOrCreateEdSigningKey(dirA, clusterSecret, logger)
+	first, err := loadOrCreateEdSigningKey(t.TempDir(), logger)
 	if err != nil {
-		t.Fatalf("node A: %v", err)
+		t.Fatalf("first gateway: %v", err)
 	}
-	keyB, err := loadOrCreateEdSigningKey(dirB, clusterSecret, logger)
+	second, err := loadOrCreateEdSigningKey(t.TempDir(), logger)
 	if err != nil {
-		t.Fatalf("node B: %v", err)
+		t.Fatalf("second gateway: %v", err)
 	}
-	if !ed25519.PrivateKey(keyA).Equal(keyB) {
-		t.Fatal("two nodes with same cluster secret produced different Ed25519 keys")
-	}
-	// PEMs should also be persisted.
-	if _, err := os.Stat(filepath.Join(dirA, "secrets", eddsaKeyFileName)); err != nil {
-		t.Errorf("PEM not written on node A: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dirB, "secrets", eddsaKeyFileName)); err != nil {
-		t.Errorf("PEM not written on node B: %v", err)
+
+	if first.Equal(second) {
+		t.Fatal("two gateways generated the same signing key, so either could mint the other's tokens")
 	}
 }
 
-// TestLoadOrCreateEdSigningKey_emptySecretFallback verifies the legacy
-// per-node behaviour is preserved when no cluster secret is available
-// (single-node test rigs, dev). Two nodes get DIFFERENT random keys.
-func TestLoadOrCreateEdSigningKey_emptySecretFallback(t *testing.T) {
-	dirA := t.TempDir()
-	dirB := t.TempDir()
-	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
-
-	keyA, err := loadOrCreateEdSigningKey(dirA, "", logger)
-	if err != nil {
-		t.Fatalf("node A: %v", err)
-	}
-	keyB, err := loadOrCreateEdSigningKey(dirB, "", logger)
-	if err != nil {
-		t.Fatalf("node B: %v", err)
-	}
-	if ed25519.PrivateKey(keyA).Equal(keyB) {
-		t.Error("two nodes without cluster secret unexpectedly produced identical keys")
-	}
-}
-
-// TestLoadOrCreateEdSigningKey_overwritesStaleOnDiskKey covers the upgrade
-// path: a gateway that previously generated a per-node random key (fix #215
-// not yet deployed) now restarts with cluster-secret derivation enabled. The
-// random key on disk MUST be replaced with the canonical cluster-derived one.
-func TestLoadOrCreateEdSigningKey_overwritesStaleOnDiskKey(t *testing.T) {
+func TestLoadOrCreateEdSigningKey_survivesARestart(t *testing.T) {
 	dir := t.TempDir()
-	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
+	logger := newSigningKeyLogger(t)
 
-	// First boot: no cluster secret -> per-node random key.
-	keyV1, err := loadOrCreateEdSigningKey(dir, "", logger)
+	first, err := loadOrCreateEdSigningKey(dir, logger)
 	if err != nil {
-		t.Fatalf("v1: %v", err)
+		t.Fatalf("first boot: %v", err)
 	}
+	second, err := loadOrCreateEdSigningKey(dir, logger)
+	if err != nil {
+		t.Fatalf("second boot: %v", err)
+	}
+	if !first.Equal(second) {
+		t.Error("a restart generated a new key, which invalidates every token already issued")
+	}
+}
 
-	// Second boot: cluster secret now configured -> must rewrite to canonical.
-	const clusterSecret = "now-i-have-a-secret"
-	keyV2, err := loadOrCreateEdSigningKey(dir, clusterSecret, logger)
-	if err != nil {
-		t.Fatalf("v2: %v", err)
-	}
-	if ed25519.PrivateKey(keyV1).Equal(keyV2) {
-		t.Fatal("stale per-node key was not replaced when cluster secret became available")
-	}
-
-	// And the new key must match a fresh derivation from the same secret.
-	seed, err := deriveEd25519Seed(clusterSecret)
-	if err != nil {
-		t.Fatalf("derive seed: %v", err)
-	}
-	canonical := ed25519.NewKeyFromSeed(seed)
-	if !ed25519.PrivateKey(keyV2).Equal(canonical) {
-		t.Error("rewritten key does not match canonical derivation")
+func TestLoadOrCreateEdSigningKey_writesTheKeyUnreadableToAnyoneElse(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadOrCreateEdSigningKey(dir, newSigningKeyLogger(t)); err != nil {
+		t.Fatal(err)
 	}
 
-	// Third boot with same secret: must be stable, no rewrite, same key.
-	keyV3, err := loadOrCreateEdSigningKey(dir, clusterSecret, logger)
+	info, err := os.Stat(filepath.Join(dir, "secrets", eddsaKeyFileName))
 	if err != nil {
-		t.Fatalf("v3: %v", err)
+		t.Fatal(err)
 	}
-	if !ed25519.PrivateKey(keyV2).Equal(keyV3) {
-		t.Error("canonical key is not stable across restarts")
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("the signing key is mode %o, want 0600", perm)
 	}
+}
+
+// Generating a replacement would silently invalidate every token this gateway
+// has issued, and overwrite the only copy of a key that might be recoverable.
+func TestLoadOrCreateEdSigningKey_refusesAnUnreadableKeyRatherThanReplacingIt(t *testing.T) {
+	dir := t.TempDir()
+	secrets := filepath.Join(dir, "secrets")
+	if err := os.MkdirAll(secrets, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secrets, eddsaKeyFileName), []byte("not a key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loadOrCreateEdSigningKey(dir, newSigningKeyLogger(t)); err == nil {
+		t.Fatal("an unreadable key was silently replaced")
+	}
+}
+
+// The previous key has to keep verifying across the upgrade, and only across
+// it: every node can derive it, so a node that kept accepting it could forge
+// any namespace's tokens for ever.
+func TestLegacyClusterSigningKey_isTheKeyEveryNodeUsedToDerive(t *testing.T) {
+	const secret = "cluster-secret-for-the-test"
+
+	pub, err := LegacyClusterSigningKey(secret)
+	if err != nil {
+		t.Fatalf("LegacyClusterSigningKey: %v", err)
+	}
+
+	seed, err := deriveEd25519Seed(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	if !pub.Equal(want) {
+		t.Error("the legacy key is not the one tokens were signed with, so they will be refused after the upgrade")
+	}
+
+	if _, err := LegacyClusterSigningKey(""); err == nil {
+		t.Error("a legacy key was derived from an empty cluster secret")
+	}
+}
+
+// newSigningKeyLogger is the logger these tests pass in; nothing reads what it
+// writes.
+func newSigningKeyLogger(t *testing.T) *logging.ColoredLogger {
+	t.Helper()
+	logger, err := logging.NewColoredLogger(logging.ComponentGeneral, false)
+	if err != nil {
+		t.Fatalf("logger: %v", err)
+	}
+	return logger
 }

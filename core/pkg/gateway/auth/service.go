@@ -34,6 +34,8 @@ type Service struct {
 	keyID            string
 	edSigningKey     ed25519.PrivateKey
 	edKeyID          string
+	edKeyNamespace   string
+	signingKeys      *SigningKeys
 	preferEdDSA      bool
 	defaultNS        string
 	apiKeyHMACSecret string         // HMAC secret for hashing API keys before storage
@@ -74,6 +76,9 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 		s.revocations = NewRevocationList(orm, logger)
 		s.audit = NewAuditLog(orm, logger)
 	}
+	// Always present, database or not: a gateway with no database still has to
+	// verify what it minted itself.
+	s.signingKeys = NewSigningKeys(orm, logger)
 
 	if signingKeyPEM != "" {
 		block, _ := pem.Decode([]byte(signingKeyPEM))
@@ -236,14 +241,44 @@ func (s *Service) HashAPIKey(key string) string {
 	return HmacSHA256Hex(key, s.apiKeyHMACSecret)
 }
 
-// SetEdDSAKey configures an Ed25519 signing key for EdDSA JWT support.
-// When set, new tokens are signed with EdDSA; RS256 is still accepted for verification.
-func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey) {
+// SetEdDSAKey configures the Ed25519 key this gateway signs with.
+//
+// namespace is what the key is bound to: a namespace gateway signs only for its
+// own tenant, and a token signed with its key is refused if it claims another.
+// An empty namespace is the index gateway's key, which is the control plane and
+// is bound to nothing.
+func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey, namespace string) {
+	if s.signingKeys == nil {
+		// A Service built as a struct literal rather than by NewService — the
+		// shape several tests use — has no key set yet, and a gateway that
+		// signs a token has to be able to verify it.
+		s.signingKeys = NewSigningKeys(s.orm, s.logger)
+	}
 	s.edSigningKey = privKey
-	pubBytes := []byte(privKey.Public().(ed25519.PublicKey))
-	sum := sha256.Sum256(pubBytes)
-	s.edKeyID = "ed_" + hex.EncodeToString(sum[:8])
+	pub := privKey.Public().(ed25519.PublicKey)
+	s.edKeyID = KeyIDFor(pub)
+	s.edKeyNamespace = namespace
 	s.preferEdDSA = true
+	s.signingKeys.Add(SigningKey{KID: s.edKeyID, Namespace: namespace, Public: pub})
+}
+
+// SigningKeys is every key this gateway will accept a token from.
+func (s *Service) SigningKeys() *SigningKeys { return s.signingKeys }
+
+// SigningKID is the key this gateway signs with.
+func (s *Service) SigningKID() string { return s.edKeyID }
+
+// PublishSigningKey records this gateway's key so the rest of the cluster will
+// accept what it mints.
+func (s *Service) PublishSigningKey(ctx context.Context) error {
+	if s.edSigningKey == nil {
+		return nil
+	}
+	return s.signingKeys.Publish(ctx, SigningKey{
+		KID:       s.edKeyID,
+		Namespace: s.edKeyNamespace,
+		Public:    s.edSigningKey.Public().(ed25519.PublicKey),
+	})
 }
 
 // insertNonce records a challenge this gateway has just issued, so that

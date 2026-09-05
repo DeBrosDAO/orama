@@ -141,6 +141,8 @@ is the index.
   - [`orama node upgrade`](#orama-node-upgrade) — Upgrade existing installation (requires sudo)
   - [`orama node wipe`](#orama-node-wipe) — Erase Orama from remote nodes (target-side only)
 - [`orama nodes`](#orama-nodes) — List your nodes across environments
+- [`orama operator`](#orama-operator) — Operate the cluster
+  - [`orama operator rotate-signing-key`](#orama-operator-rotate-signing-key) — Replace the key this gateway signs tokens with
 - [`orama push`](#orama-push) — Push the binary archive to your nodes
 - [`orama rollout`](#orama-rollout) — Build, push, and rolling upgrade every node in an environment
 - [`orama sandbox`](#orama-sandbox) — Manage ephemeral Hetzner Cloud clusters for testing
@@ -2087,6 +2089,40 @@ Requires: orama auth login (for API-based resolution)
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--env` | — | Filter by environment (default: active environment) |
+
+### orama operator
+
+Operate the cluster
+
+```
+orama operator
+```
+
+Commands for the wallets on the cluster's operator list.
+
+Every one of them needs the admin grant and a wallet on that list; a namespace's
+own admin key is not enough.
+
+Subcommands: `rotate-signing-key`
+
+### orama operator rotate-signing-key
+
+Replace the key this gateway signs tokens with
+
+```
+orama operator rotate-signing-key
+```
+
+Generate a new signing key for the gateway, publish it, and start signing
+with it.
+
+Nobody is signed out. The outgoing key keeps verifying the tokens it already
+signed until they expire on their own, so both keys are accepted for one
+access-token lifetime and then the old one stops.
+
+The key used to be derived from the cluster secret, which meant there was
+nothing to rotate to: changing it meant changing the cluster secret, which
+invalidates every token in the cluster at once.
 
 ### orama push
 

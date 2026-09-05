@@ -185,6 +185,7 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)
 		mux.HandleFunc("/v1/operator/nodes", g.operatorHandler.HandleListNodes)
 		mux.HandleFunc("/v1/operator/node/register", g.operatorHandler.HandleRegister)
+		mux.HandleFunc("/v1/operator/rotate-signing-key", g.handleRotateSigningKey)
 	}
 
 	// vault proxy (public, rate-limited per identity within handler)

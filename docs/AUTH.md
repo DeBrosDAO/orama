@@ -266,6 +266,39 @@ permission to treat them as one.
 
 ---
 
+## Which key signed a token
+
+Every gateway generates its own Ed25519 signing key at first boot, keeps it
+`0600` in its own secrets directory, and publishes the public half so the rest
+of the cluster can verify what it mints. A token's `kid` names the key.
+
+**A namespace gateway's key is bound to its namespace.** A token signed with it
+is refused — everywhere, including on the gateway that signed it — unless its
+`namespace` claim matches. That is what stops one tenant's gateway minting a
+token for another. The index gateway's key is bound to nothing: it is the
+control plane, and it is what `orama auth login --namespace X` signs in with.
+
+The key used to be HKDF-derived from the cluster secret with a fixed label. Every
+node holds that secret, so every node held the private key that signs for every
+namespace — and there was nothing to rotate to, because one derivation has one
+output. Tokens minted before the change keep verifying for one access-token
+lifetime after each gateway restarts, and then that key is refused: a key every
+node can derive must not outlive the upgrade.
+
+```bash
+orama operator rotate-signing-key
+```
+
+Publishes a new key, starts signing with it, and leaves the outgoing one
+verifying the tokens it already signed until they expire. Two `kid`s are in
+flight for that window. Nobody is signed out and nothing restarts. It needs the
+admin grant **and** a wallet on the operator list.
+
+`GET /v1/auth/jwks` serves every live key, each carrying the namespace it is
+bound to alongside the standard members.
+
+---
+
 ## Between nodes
 
 The main gateway validates a request and forwards the result to a namespace

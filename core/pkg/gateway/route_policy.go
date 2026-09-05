@@ -137,6 +137,7 @@ func buildRoutePolicies() *routepolicy.Table {
 		// and every other secret the cluster holds. This had no entry at all
 		// and fell through to "any valid credential".
 		"/v1/operator/invite", "/v1/operator/nodes", "/v1/operator/node/register",
+		"/v1/operator/rotate-signing-key",
 	)
 
 	// --- Control plane on a namespace's own resources ------------------

@@ -849,6 +849,14 @@ Function Invocation:
    - Short-lived (15 min default)
    - Refresh token support
    - Claims-based authorization
+   - Every gateway signs with its own Ed25519 key, generated at first boot and
+     kept `0600`; the public halves are published in `signing_keys` so the rest
+     of the cluster verifies. A namespace gateway's key is **bound to its
+     namespace** — a token signed with it and claiming another is refused. The
+     key used to be derived from the cluster secret, which every node holds, so
+     every node could sign for every tenant
+   - `orama operator rotate-signing-key` publishes a successor and leaves the
+     outgoing key verifying what it already signed for one token lifetime
 
 5. **The audit trail**
    - `audit_events` records what changed and who changed it: sign-ins, keys,

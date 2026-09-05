@@ -480,7 +480,7 @@ func jwtCapableService(t *testing.T, hmacSecret string) *authsvc.Service {
 	if err != nil {
 		t.Fatalf("ed25519 keygen failed: %v", err)
 	}
-	svc.SetEdDSAKey(edPriv)
+	svc.SetEdDSAKey(edPriv, "")
 	return svc
 }
 

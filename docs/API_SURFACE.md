@@ -212,6 +212,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/node/status` | CLI | `orama node status`. |
 | `/v1/operator/invite` | CLI | Mint a node invite. `orama invite`. |
 | `/v1/operator/node/register` | CLI | Record a node in the inventory. |
+| `/v1/operator/rotate-signing-key` | CLI | Generate a new signing key for this gateway, publish it, and leave the outgoing one verifying what it already signed for one access-token lifetime. Admin grant **and** a wallet on the operator list. `orama operator rotate-signing-key`. |
 | `/v1/operator/nodes` | CLI | Fleet inventory. |
 
 ### Internal (node to node)

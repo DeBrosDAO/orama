@@ -44,16 +44,25 @@ func (s *Service) JWKSHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Ed25519 key (EdDSA)
-	if s.edSigningKey != nil {
-		pubKey := s.edSigningKey.Public().(ed25519.PublicKey)
+	// Every Ed25519 key this cluster will accept a token from, not only this
+	// gateway's own. A client that verifies a token locally needs the key that
+	// signed it, and after key separation that is a different key per
+	// namespace — a JWKS carrying one of them would make every other token
+	// unverifiable.
+	//
+	// The namespace a key is bound to is published with it. It is not part of
+	// the JWK standard, so it goes in as an additional member: a client that
+	// does not know about it ignores it, and one that does can refuse a token
+	// whose claim disagrees without asking the gateway.
+	for _, key := range s.signingKeys.All() {
 		keys = append(keys, map[string]string{
-			"kty": "OKP",
-			"use": "sig",
-			"alg": "EdDSA",
-			"kid": s.edKeyID,
-			"crv": "Ed25519",
-			"x":   base64.RawURLEncoding.EncodeToString(pubKey),
+			"kty":       "OKP",
+			"use":       "sig",
+			"alg":       "EdDSA",
+			"kid":       key.KID,
+			"crv":       "Ed25519",
+			"x":         base64.RawURLEncoding.EncodeToString(key.Public),
+			"namespace": key.Namespace,
 		})
 	}
 
@@ -152,16 +161,24 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 	signingInput := parts[0] + "." + parts[1]
 
 	// Key selection by kid (not alg) — prevents algorithm confusion (C3 fix)
+	//
+	// bound is the namespace the selected key may sign for. It is checked
+	// against the claim after the claims are parsed: a namespace gateway's key
+	// signs only for its own tenant, which is what stops one compromised
+	// namespace gateway minting a token for another.
+	var bound SigningKey
+	edKey, edFound := s.signingKeys.Lookup(header.Kid)
+
 	switch {
-	case header.Kid != "" && header.Kid == s.edKeyID && s.edSigningKey != nil:
+	case header.Kid != "" && edFound:
 		// EdDSA key matched by kid — cross-check alg
 		if header.Alg != "EdDSA" {
 			return nil, errors.New("algorithm mismatch for key")
 		}
-		pubKey := s.edSigningKey.Public().(ed25519.PublicKey)
-		if !ed25519.Verify(pubKey, []byte(signingInput), sb) {
+		if !ed25519.Verify(edKey.Public, []byte(signingInput), sb) {
 			return nil, errors.New("invalid signature")
 		}
+		bound = edKey
 
 	case header.Kid != "" && header.Kid == s.keyID && s.signingKey != nil:
 		// RSA key matched by kid — cross-check alg
@@ -192,6 +209,14 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 	if claims.Iss != "orama-gateway" {
 		return nil, errors.New("invalid issuer")
 	}
+	// A key bound to a namespace signs only for that namespace. Without this
+	// the binding is a label: the signature is what a verifier trusts, and a
+	// namespace gateway that could sign any claim would be back where it
+	// started.
+	if !bound.Binds(claims.Namespace) {
+		return nil, fmt.Errorf("the key %s signs for %q, and this token claims %q",
+			bound.KID, bound.Namespace, claims.Namespace)
+	}
 	// A signature that verifies says the gateway minted this token, not that
 	// the token is still good. Revoking a key used to stop the key and leave
 	// its tokens working for the rest of their lifetime.
@@ -215,6 +240,11 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 	}
 	return &claims, nil
 }
+
+// AccessTokenLifetime is how long a minted access token is good for. It is the
+// window a rotation has to leave the outgoing key verifiable for, and the
+// window the previous cluster-derived key is accepted across an upgrade.
+const AccessTokenLifetime = 15 * time.Minute
 
 // GenerateJWT mints a signed access token. `custom` carries additive
 // app-defined claims (e.g. the namespace's account_id from the claims-provider

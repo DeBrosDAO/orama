@@ -60,7 +60,7 @@ func chainGateway(t *testing.T, servesNamespace string, key *stubKeyDatabase) *G
 	if err != nil {
 		t.Fatalf("signing key: %v", err)
 	}
-	svc.SetEdDSAKey(priv)
+	svc.SetEdDSAKey(priv, "")
 	return &Gateway{
 		logger:      logger,
 		authService: svc,

@@ -298,6 +298,15 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - A token that names no key is refused. There used to be a branch accepting a token with no `kid` at all and verifying it against the RSA key, so a token that named no key selected one by omission
 - An RSA signing key under 2048 bits is refused at boot. The size was never checked
 
+**Which key signs a token**
+- The Ed25519 signing key was `HKDF(cluster secret, "orama-jwt-eddsa-v1")`. Every node and every namespace gateway holds the cluster secret, so every one of them held the private key that signs tokens for **every** namespace and every subject. A compromised namespace gateway could mint a token for any tenant
+- There was also nothing to rotate to. One derivation has one output, so changing the key meant changing the cluster secret, which invalidates every token in the cluster at once
+- Each gateway generates its own key now, `0600` in its own secrets directory, and publishes the public half in `signing_keys` so the rest of the cluster verifies what it mints. A namespace gateway's key is **bound to its namespace**: a token signed with it is refused unless its `namespace` claim matches, on every verifier including the one that signed it
+- The index gateway's key is bound to nothing, deliberately. It is the control plane and it mints what the CLI signs in with for every namespace; a compromise of it is not a tenant-boundary problem
+- `orama operator rotate-signing-key` publishes a successor, signs with it, and leaves the outgoing key verifying what it already signed for one access-token lifetime. Two `kid`s in flight, no forced logouts, nothing restarted. It needs the operator list, not just the admin grant
+- The old cluster-derived key is accepted for one access-token lifetime after each gateway boots, so tokens issued before the upgrade do not break — and no longer, because a key every node can derive would otherwise keep the hole open for ever
+- A key that is retired and a key whose retirement cannot be parsed are treated the same way: refused. `signing_keys` is on the list of tables a tenant's SQL may not name, because publishing a key is minting authority by another route
+
 **The record**
 - `audit_events` has existed since the first migration and had never been written to. Nothing recorded who minted a key, who was granted what, who revoked it, or who signed in — so the first question anyone asks about a credential, when did this appear and who made it, had no answer anywhere
 - Recorded now: a challenge issued, a sign-in succeeding or failing, a refresh, the refresh-replay tripwire, a logout, a key minted, rotated or revoked, the legacy-key sweep, a grant added or revoked, an ownership transfer, a namespace created or deleted, a function deployed or deleted, an app deployed or deleted, a secret set or deleted, an operator minting an invite, a node joining the cluster and a node being claimed. Each with the actor, the namespace, the client's address, the user agent and whether it succeeded

@@ -26,7 +26,7 @@ func serviceWithRevocations(t *testing.T) (*Service, *revocationDB) {
 	}
 	db := &revocationDB{}
 	s := &Service{apiKeyHMACSecret: "test-hmac-secret"}
-	s.SetEdDSAKey(priv)
+	s.SetEdDSAKey(priv, "")
 	s.revocations = NewRevocationList(&revocationNet{db: db}, nil)
 	return s, db
 }
