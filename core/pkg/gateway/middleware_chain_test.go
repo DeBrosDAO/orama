@@ -139,8 +139,11 @@ func TestChain_aRuntimeKeyGetsItsOwnGrantsAndNoMore(t *testing.T) {
 	if !strings.Contains(body, "INSUFFICIENT_SCOPE") {
 		t.Errorf("the refusal does not name the missing grant: %s", strings.TrimSpace(body))
 	}
-	if !strings.Contains(body, "admin") {
-		t.Errorf("the refusal does not say which grant is required: %s", strings.TrimSpace(body))
+	// The refusal names the permission, which is the thing you would grant —
+	// not "admin", which was the whole control plane and told you nothing about
+	// what this route actually needs.
+	if !strings.Contains(body, "deploy:read") {
+		t.Errorf("the refusal does not say which permission is required: %s", strings.TrimSpace(body))
 	}
 }
 

@@ -56,15 +56,12 @@ func TestRole_atLeast(t *testing.T) {
 }
 
 func TestParseRole(t *testing.T) {
-	for _, in := range []string{"owner", "OWNER", " admin ", "runtime", "reader"} {
+	for _, in := range []string{"owner", "OWNER", " admin ", "developer", "runtime", "reader"} {
 		if _, err := ParseRole(in); err != nil {
 			t.Errorf("ParseRole(%q): %v", in, err)
 		}
 	}
-	// `developer` is deliberately not a role yet: every control-plane route
-	// requires the single admin grant, so it would be an alias for admin
-	// claiming a boundary that is not there.
-	for _, in := range []string{"", "developer", "superuser"} {
+	for _, in := range []string{"", "superuser", "root"} {
 		var unknown *ErrUnknownRole
 		if _, err := ParseRole(in); !errors.As(err, &unknown) {
 			t.Errorf("ParseRole(%q) = %v, want an unknown-role error", in, err)

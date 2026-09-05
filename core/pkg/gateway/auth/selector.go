@@ -22,15 +22,21 @@ import (
 // anyone typed.
 
 // SelectorDomain is the part of a namespace a selector narrows.
-type SelectorDomain string
+//
+// It is the permission model's Domain under its older name. The two were
+// separate vocabularies describing the same thing, which is most of why a
+// selector and a scope could not express each other; they are one now, and
+// these names remain so the data paths did not all have to move in the same
+// commit.
+type SelectorDomain = Domain
 
 const (
-	SelectorStorage SelectorDomain = "storage"
-	SelectorDB      SelectorDomain = "db"
-	SelectorPubsub  SelectorDomain = "pubsub"
-	SelectorFn      SelectorDomain = "fn"
-	SelectorCache   SelectorDomain = "cache"
-	SelectorPush    SelectorDomain = "push"
+	SelectorStorage = DomainStorage
+	SelectorDB      = DomainDB
+	SelectorPubsub  = DomainPubsub
+	SelectorFn      = DomainFn
+	SelectorCache   = DomainCache
+	SelectorPush    = DomainPush
 )
 
 // selectorDomains are the domains a selector may name, each tied to the grant

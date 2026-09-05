@@ -34,13 +34,34 @@ var (
 	// credential is a route any valid credential reaches.
 	policyCredential = routepolicy.Policy{}
 
-	// admin is the control plane.
-	policyAdmin = routepolicy.Policy{Scope: auth.ScopeAdmin}
-
-	// adminOwned is the control plane on a namespace's own resources: the
-	// caller must also hold a live grant in it.
-	policyAdminOwned = routepolicy.Policy{Scope: auth.ScopeAdmin, Ownership: true}
+	// unrestricted is what the single `admin` scope used to be: every domain,
+	// every action. It is left for the routes that genuinely are the whole
+	// control plane — operating the cluster — and nothing else uses it.
+	policyUnrestricted = routepolicy.Policy{Domain: PermissionWildcard, Action: PermissionWildcard}
 )
+
+// PermissionWildcard matches anything in its position; see the auth package.
+const PermissionWildcard = auth.PermissionWildcard
+
+// control declares a control-plane route: which part of the platform, and what
+// this route does to it.
+//
+// Fifty-eight routes used to declare the one word `admin`. So a credential that
+// could deploy could also mint keys, transfer the namespace and read the audit
+// trail — and a grant could not be narrowed to any of them without holding all
+// of them. That is why there was no `developer` role and why a `db:table=`
+// selector could not be enforced.
+func control(domain auth.Domain, action auth.Action) routepolicy.Policy {
+	return routepolicy.Policy{Domain: string(domain), Action: string(action)}
+}
+
+// owned is a control-plane route on a namespace's own resources: the caller
+// must also hold a live grant in it.
+func owned(domain auth.Domain, action auth.Action) routepolicy.Policy {
+	p := control(domain, action)
+	p.Ownership = true
+	return p
+}
 
 // dataPlane is a data-plane grant, with the kind of token it requires.
 //
@@ -48,8 +69,13 @@ var (
 // namespace. Storage and cache do not ask for one, which is why a resource
 // selector on a storage grant authorises nothing yet: no grant is resolved on
 // those requests to carry a selector. See chg-392.
-func dataPlane(scope string, ownership bool, token routepolicy.TokenRequirement) routepolicy.Policy {
-	return routepolicy.Policy{Scope: scope, Ownership: ownership, Token: token}
+func dataPlane(domain auth.Domain, action auth.Action, ownership bool, token routepolicy.TokenRequirement) routepolicy.Policy {
+	return routepolicy.Policy{
+		Domain:    string(domain),
+		Action:    string(action),
+		Ownership: ownership,
+		Token:     token,
+	}
 }
 
 // gatewayRoutes is the policy of every route. It is built once and read from
@@ -117,56 +143,86 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/namespace/webrtc/status",
 	)
 
-	// --- Control plane, cluster-wide -----------------------------------
-	t.Add(policyAdmin,
-		// The record of who was given what and when. It names the namespace's
-		// wallets and the times they sign in, so reading it is the owner's, not
-		// any credential that happens to belong to the namespace.
-		"/v1/audit",
-		"/v1/db/sqlite/create", "/v1/db/sqlite/query", "/v1/db/sqlite/list",
-		"/v1/db/sqlite/delete", "/v1/db/sqlite/backup", "/v1/db/sqlite/backups",
-		"/v1/deployments/list", "/v1/deployments/get", "/v1/deployments/delete",
-		"/v1/deployments/rollback", "/v1/deployments/versions", "/v1/deployments/logs",
-		"/v1/deployments/stats", "/v1/deployments/events",
-		"/v1/deployments/env", "/v1/deployments/env/set",
-		"/v1/deployments/grants",
+	// --- Control plane -------------------------------------------------
+	//
+	// Each of these says what it does rather than that it is "admin". A key
+	// or a grant narrowed to one of these domains reaches it and nothing
+	// else, which is the whole point of the split.
+
+	// The record of who was given what and when. It names the namespace's
+	// wallets and the times they sign in, so reading it is the owner's, not
+	// any credential that happens to belong to the namespace.
+	t.Add(control(auth.DomainAudit, auth.ActionRead), "/v1/audit")
+
+	// The tenant's databases. `query` runs whatever SQL the caller sends, so
+	// it is a write however it is spelled.
+	t.Add(control(auth.DomainDB, auth.ActionRead), "/v1/db/sqlite/list", "/v1/db/sqlite/backups")
+	t.Add(control(auth.DomainDB, auth.ActionWrite),
+		"/v1/db/sqlite/create", "/v1/db/sqlite/query", "/v1/db/sqlite/delete", "/v1/db/sqlite/backup")
+
+	// Deployments: reading what is there, and changing it.
+	t.Add(control(auth.DomainDeploy, auth.ActionRead),
+		"/v1/deployments/list", "/v1/deployments/get", "/v1/deployments/versions",
+		"/v1/deployments/logs", "/v1/deployments/stats", "/v1/deployments/events",
+		"/v1/deployments/domains/list")
+	t.Add(control(auth.DomainDeploy, auth.ActionWrite),
+		"/v1/deployments/delete", "/v1/deployments/rollback",
 		"/v1/deployments/static/upload", "/v1/deployments/static/update",
 		"/v1/deployments/nextjs/upload", "/v1/deployments/nextjs/update",
 		"/v1/deployments/go/upload", "/v1/deployments/go/update",
 		"/v1/deployments/nodejs/upload", "/v1/deployments/nodejs/update",
 		"/v1/deployments/domains/add", "/v1/deployments/domains/verify",
-		"/v1/deployments/domains/list", "/v1/deployments/domains/remove",
-		"/v1/namespace/delete", "/v1/namespace/list",
-		"/v1/namespace/rate-limit",
+		"/v1/deployments/domains/remove")
+
+	// A deployment's environment is its secrets, and handing a deployment its
+	// grants is handing out authority — so that one is `members`, not `deploy`.
+	t.Add(control(auth.DomainSecrets, auth.ActionRead), "/v1/deployments/env")
+	t.Add(control(auth.DomainSecrets, auth.ActionWrite), "/v1/deployments/env/set")
+	t.Add(control(auth.DomainMembers, auth.ActionWrite), "/v1/deployments/grants")
+
+	// A namespace's own settings, and its deletion.
+	t.Add(control(auth.DomainNamespace, auth.ActionRead), "/v1/namespace/list")
+	t.Add(control(auth.DomainNamespace, auth.ActionWrite),
+		"/v1/namespace/delete", "/v1/namespace/rate-limit",
 		"/v1/namespace/webrtc/enable", "/v1/namespace/webrtc/disable",
-		"/v1/namespace/webrtc/stealth/enable", "/v1/namespace/webrtc/stealth/disable",
-		// Topology mutation and node operation: an operator's. The handlers
-		// additionally require the caller's wallet to be on the operator list.
+		"/v1/namespace/webrtc/stealth/enable", "/v1/namespace/webrtc/stealth/disable")
+
+	// Topology mutation and node operation: an operator's. The handlers
+	// additionally require the caller's wallet to be on the operator list.
+	//
+	// Minting a cluster invite hands out the cluster secret, the swarm key and
+	// every other secret the cluster holds — so this is the one place that
+	// still asks for everything, because that is what it gives.
+	t.Add(control(auth.DomainOperator, auth.ActionRead), "/v1/node/status", "/v1/node/logs")
+	t.Add(control(auth.DomainOperator, auth.ActionWrite),
 		"/v1/network/connect", "/v1/network/disconnect",
-		"/v1/node/status", "/v1/node/command", "/v1/node/logs", "/v1/node/leave",
-		// Minting a cluster invite hands out the cluster secret, the swarm key
-		// and every other secret the cluster holds. This had no entry at all
-		// and fell through to "any valid credential".
-		"/v1/operator/invite", "/v1/operator/nodes", "/v1/operator/node/register",
-		"/v1/operator/rotate-signing-key",
-	)
+		"/v1/node/command", "/v1/node/leave",
+		"/v1/operator/nodes", "/v1/operator/node/register",
+		"/v1/operator/rotate-signing-key")
+	t.Add(policyUnrestricted, "/v1/operator/invite")
 
 	// --- Control plane on a namespace's own resources ------------------
-	t.Add(policyAdminOwned,
-		// The raw database.
-		"/v1/rqlite/export", "/v1/rqlite/import",
-		// Handing out authority in a namespace is the control plane's own
-		// control plane. Transferring goes further and needs the owner, which
-		// the handler checks: a grant set cannot express "owner", only what an
-		// owner may do.
-		"/v1/namespace/members", "/v1/namespace/members/",
+
+	// The raw database: an export is every row in it, an import replaces them.
+	t.Add(owned(auth.DomainDB, auth.ActionRead), "/v1/rqlite/export")
+	t.Add(owned(auth.DomainDB, auth.ActionWrite), "/v1/rqlite/import")
+
+	// Handing out authority in a namespace is the control plane's own control
+	// plane. Transferring goes further and needs the owner, which the handler
+	// checks: a permission set cannot express "owner", only what an owner may
+	// do.
+	t.Add(owned(auth.DomainMembers, auth.ActionWrite),
+		"/v1/namespace/members", "/v1/namespace/members/")
+
+	t.Add(owned(auth.DomainSecrets, auth.ActionWrite),
 		"/v1/namespace/push-credentials", "/v1/namespace/push-credentials/",
-		"/v1/push/config", "/v1/push/send",
-		"/v1/serverless/ws/connections", "/v1/serverless/ws/connections/",
-		// Function management. /v1/functions/ is one handler serving several
-		// operations and is declared below.
-		"/v1/functions",
-	)
+		"/v1/push/config")
+	t.Add(owned(auth.DomainPush, auth.ActionWrite), "/v1/push/send")
+
+	t.Add(owned(auth.DomainFn, auth.ActionRead), "/v1/serverless/ws/connections", "/v1/serverless/ws/connections/")
+	// Function management. /v1/functions/ is one handler serving several
+	// operations and is declared below.
+	t.Add(owned(auth.DomainFn, auth.ActionManage), "/v1/functions")
 
 	// Creating a namespace is the one control-plane act that cannot require an
 	// existing grant: a wallet with no namespace has no grant anywhere, and
@@ -180,7 +236,7 @@ func buildRoutePolicies() *routepolicy.Table {
 	// Scoped API-key management operates on the MAIN cluster registry, where
 	// keys are validated. A namespace gateway's own RQLite has no authoritative
 	// api_keys table, so a key written there would never authenticate.
-	keyManagement := policyAdminOwned
+	keyManagement := owned(auth.DomainMembers, auth.ActionWrite)
 	keyManagement.MainGateway = true
 	t.Add(keyManagement, "/v1/namespace/keys", "/v1/namespace/keys/")
 
@@ -189,20 +245,24 @@ func buildRoutePolicies() *routepolicy.Table {
 	// storage, webrtc and proxy additionally require a genuine logged-in user.
 	// That is what makes an extracted runtime key worthless: the key alone
 	// reaches none of them.
-	t.Add(dataPlane(auth.ScopeStorage, false, routepolicy.WalletToken),
-		"/v1/storage/upload", "/v1/storage/pin", "/v1/storage/get/", "/v1/storage/status/")
-	t.Add(dataPlane(auth.ScopeWebRTC, true, routepolicy.WalletToken),
+	t.Add(dataPlane(auth.DomainStorage, auth.ActionRead, false, routepolicy.WalletToken),
+		"/v1/storage/get/", "/v1/storage/status/")
+	t.Add(dataPlane(auth.DomainStorage, auth.ActionWrite, false, routepolicy.WalletToken),
+		"/v1/storage/upload", "/v1/storage/pin")
+	t.Add(dataPlane(auth.DomainWebRTC, auth.ActionRead, true, routepolicy.WalletToken),
 		"/v1/webrtc/turn/credentials", "/v1/webrtc/signal", "/v1/webrtc/rooms")
-	t.Add(dataPlane(auth.ScopeProxy, true, routepolicy.WalletToken),
+	t.Add(dataPlane(auth.DomainProxy, auth.ActionWrite, true, routepolicy.WalletToken),
 		"/v1/proxy/anon", "/v1/proxy/tunnel")
-	t.Add(dataPlane(auth.ScopePubsub, true, routepolicy.AnyCredential),
-		"/v1/pubsub/ws", "/v1/pubsub/publish", "/v1/pubsub/publish-batch",
-		"/v1/pubsub/topics", "/v1/pubsub/presence")
-	t.Add(dataPlane(auth.ScopePush, true, routepolicy.AnyCredential),
+	t.Add(dataPlane(auth.DomainPubsub, auth.ActionRead, true, routepolicy.AnyCredential),
+		"/v1/pubsub/ws", "/v1/pubsub/topics", "/v1/pubsub/presence")
+	t.Add(dataPlane(auth.DomainPubsub, auth.ActionWrite, true, routepolicy.AnyCredential),
+		"/v1/pubsub/publish", "/v1/pubsub/publish-batch")
+	t.Add(dataPlane(auth.DomainPush, auth.ActionWrite, true, routepolicy.AnyCredential),
 		"/v1/push/devices", "/v1/push/devices/")
-	t.Add(dataPlane(auth.ScopeCache, false, routepolicy.AnyCredential),
-		"/v1/cache/health", "/v1/cache/get", "/v1/cache/mget",
-		"/v1/cache/put", "/v1/cache/delete", "/v1/cache/scan")
+	t.Add(dataPlane(auth.DomainCache, auth.ActionRead, false, routepolicy.AnyCredential),
+		"/v1/cache/health", "/v1/cache/get", "/v1/cache/mget", "/v1/cache/scan")
+	t.Add(dataPlane(auth.DomainCache, auth.ActionWrite, false, routepolicy.AnyCredential),
+		"/v1/cache/put", "/v1/cache/delete")
 
 	// Unpinning is the one storage operation that does not need a logged-in
 	// user (bugboard #151). It is namespace-ownership-checked in its handler
@@ -212,14 +272,14 @@ func buildRoutePolicies() *routepolicy.Table {
 	// fails. Upload, get and pin keep the strict requirement.
 	t.AddDynamic("/v1/storage/unpin/", func(r *http.Request) routepolicy.Policy {
 		if r.Method == http.MethodDelete {
-			return dataPlane(auth.ScopeStorage, false, routepolicy.AnyToken)
+			return dataPlane(auth.DomainStorage, auth.ActionWrite, false, routepolicy.AnyToken)
 		}
-		return dataPlane(auth.ScopeStorage, false, routepolicy.WalletToken)
+		return dataPlane(auth.DomainStorage, auth.ActionWrite, false, routepolicy.WalletToken)
 	})
 
 	// The rqlite ORM composes its own patterns from a base path and reports
 	// them, so they are declared from the same list it registers.
-	t.Add(policyAdminOwned, ormGatewayRoutes()...)
+	t.Add(owned(auth.DomainDB, auth.ActionWrite), ormGatewayRoutes()...)
 
 	// One registered route serves every operation on a named function, and the
 	// handler dispatches on the rest of the path. Its policy has to dispatch
@@ -265,9 +325,9 @@ func functionRoutePolicy(r *http.Request) routepolicy.Policy {
 	case strings.HasSuffix(path, "/invoke"):
 		return policyOpen
 	case strings.HasSuffix(path, "/ws"):
-		return routepolicy.Policy{Scope: auth.ScopeInvoke, Ownership: true}
+		return owned(auth.DomainFn, auth.ActionInvoke)
 	default:
-		return policyAdminOwned
+		return owned(auth.DomainFn, auth.ActionManage)
 	}
 }
 

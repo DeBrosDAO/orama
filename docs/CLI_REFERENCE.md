@@ -1150,7 +1150,7 @@ orama members add <wallet> [flags]
 | `--name` | — | Human label for this member |
 | `--namespace` | — | Namespace name |
 | `--resource` | — | Narrow the role to a resource, e.g. storage:avatars/* — RECORDED BUT NOT ENFORCED YET, so a grant carrying one authorises nothing |
-| `--role` | — | Role to grant (reader, runtime, admin) |
+| `--role` | — | Role to grant (reader, runtime, developer, admin) |
 
 ### orama members list
 

@@ -23,8 +23,10 @@ import (
 // because "I could not work out what you are touching" is not a reason to allow
 // it.
 
-// Action is what is being done to a resource. It is only meaningful for domains
-// that distinguish reading from writing.
+// Action is what is being done to a resource.
+//
+// The full vocabulary is in permission.go: read, write, invoke, manage and the
+// wildcard. These two are here because they are what the data paths pass.
 type Action string
 
 const (
@@ -43,22 +45,40 @@ type Resource struct {
 	Action Action
 }
 
+// String is how a resource appears in a refusal. It is `domain:action:name`,
+// the same shape a permission is written in, so the answer to "what do I need"
+// is the thing you would grant.
 func (r Resource) String() string {
-	if r.Action == "" {
-		return string(r.Domain) + " " + r.Name
+	action := string(r.Action)
+	if action == "" {
+		action = PermissionWildcard
 	}
-	return string(r.Domain) + " " + r.Name + " (" + string(r.Action) + ")"
+	name := r.Name
+	if name == "" {
+		name = PermissionWildcard
+	}
+	return string(r.Domain) + ":" + action + ":" + name
 }
 
-// ErrResourceNotPermitted is returned when a grant's selector does not cover
-// the resource a request is about.
+// ErrResourceNotPermitted is returned when a credential does not cover the
+// resource a request is about.
 type ErrResourceNotPermitted struct {
 	Resource Resource
+	Held     PermissionSet
+	// Selector is the grant's raw selector, kept for the paths that still
+	// report one.
 	Selector string
 }
 
 func (e *ErrResourceNotPermitted) Error() string {
-	return fmt.Sprintf("this credential is granted %q, which does not cover %s", e.Selector, e.Resource)
+	held := e.Selector
+	if held == "" {
+		held = e.Held.String()
+	}
+	if held == "" {
+		held = "nothing"
+	}
+	return fmt.Sprintf("this credential holds %s, which does not cover %s", held, e.Resource)
 }
 
 // Permits reports whether this grant covers a resource.
@@ -86,18 +106,25 @@ func (g Grant) Permits(r Resource) error {
 	return nil
 }
 
-// AuthorizeResource refuses a request whose grant does not cover the resource
-// it is about.
+// AuthorizeResource refuses a request whose credential does not cover the
+// resource it is about.
 //
-// A request with no grant in its context is not narrowed: the caller reached
-// here through the scope gate, which is what decides whether they may touch
-// this class of thing at all. This only ever takes access away.
+// It reads the permission set the scope middleware computed, so the gate and
+// the handler narrow the same answer: the gate asked whether the credential
+// reaches this domain at all, before the handler knew which object, and this is
+// the same question asked again with the object.
+//
+// A request carrying no permission set is one that never went through the gate
+// — a public route — and is not narrowed here.
 func AuthorizeResource(ctx context.Context, r Resource) error {
-	grant, _ := ctx.Value(ctxkeys.Grant).(*Grant)
-	if grant == nil {
+	perms, ok := ctx.Value(ctxkeys.Permissions).(PermissionSet)
+	if !ok {
 		return nil
 	}
-	return grant.Permits(r)
+	if perms.Permits(r) {
+		return nil
+	}
+	return &ErrResourceNotPermitted{Resource: r, Held: perms}
 }
 
 // matchesSelectorValue applies a selector's value to a resource.

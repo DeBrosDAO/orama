@@ -140,9 +140,9 @@ func TestRoutePolicy_aPublicRouteCarriesNoRequirementThatCannotRun(t *testing.T)
 			if !policy.Access.Anonymous() {
 				continue
 			}
-			if policy.Scope != "" {
+			if policy.Domain != "" {
 				t.Errorf("%s %s is public but requires the %q grant; the scope gate returns early "+
-					"for a public route, so that grant is never checked", method, pattern, policy.Scope)
+					"for a public route, so that grant is never checked", method, pattern, policy.Domain)
 			}
 			if policy.Ownership {
 				t.Errorf("%s %s is public but requires a namespace grant; the authorization gate "+
@@ -166,8 +166,8 @@ func TestRoutePolicy_aTokenRequirementStandsWithoutAGrant(t *testing.T) {
 	if policy.Token != routepolicy.WalletToken {
 		t.Fatalf("/v1/namespaces token requirement = %v, want a wallet token", policy.Token)
 	}
-	if policy.Scope != "" {
-		t.Errorf("/v1/namespaces requires the %q grant; a wallet with no namespace holds none", policy.Scope)
+	if policy.Domain != "" {
+		t.Errorf("/v1/namespaces requires the %q grant; a wallet with no namespace holds none", policy.Domain)
 	}
 	if policy.Access.Anonymous() {
 		t.Error("/v1/namespaces is reachable with no credential at all")
@@ -186,20 +186,38 @@ func TestRoutePolicy_ownershipImpliesACredential(t *testing.T) {
 	}
 }
 
-// Every grant a route names has to be one the scope model knows, or the route
-// is unreachable by anything: no credential can hold a grant that does not
-// exist.
-func TestRoutePolicy_everyRequiredGrantIsAKnownOne(t *testing.T) {
-	known := map[string]bool{auth.ScopeAdmin: true}
-	for _, scope := range auth.AllGrants() {
-		known[scope] = true
+// Every permission a route names has to be one a credential can hold: a domain
+// the model knows and an action it knows. A typo would make the route
+// unreachable by anything, and only in production.
+func TestRoutePolicy_everyRequiredPermissionIsAKnownOne(t *testing.T) {
+	for _, pattern := range gatewayRoutes.Patterns() {
+		policy := policyOf(http.MethodPost, pattern)
+		if policy.Domain == "" {
+			if policy.Action != "" {
+				t.Errorf("%s names the action %q with no domain, so nothing is checked", pattern, policy.Action)
+			}
+			continue
+		}
+		if _, err := auth.ParsePermission(policy.Domain + ":" + policy.Action + ":*"); err != nil {
+			t.Errorf("%s requires %q, which no credential can hold: %v", pattern, policy.Domain+":"+policy.Action, err)
+		}
+	}
+}
+
+// A control-plane route that still asks for everything is a route that has not
+// been classified. There is one, and it is the one that hands out every secret
+// the cluster holds.
+func TestRoutePolicy_onlyMintingAnInviteAsksForEverything(t *testing.T) {
+	var unrestricted []string
+	for _, pattern := range gatewayRoutes.Patterns() {
+		if policyOf(http.MethodPost, pattern).Domain == auth.PermissionWildcard {
+			unrestricted = append(unrestricted, pattern)
+		}
 	}
 
-	for _, pattern := range gatewayRoutes.Patterns() {
-		scope := policyOf(http.MethodPost, pattern).Scope
-		if scope != "" && !known[scope] {
-			t.Errorf("%s requires the %q grant, which no credential can hold", pattern, scope)
-		}
+	if len(unrestricted) != 1 || unrestricted[0] != "/v1/operator/invite" {
+		t.Errorf("routes asking for every permission: %v — want only /v1/operator/invite, "+
+			"which returns the cluster secret and every other secret the cluster holds", unrestricted)
 	}
 }
 
@@ -228,7 +246,7 @@ func TestRoutePolicy_anUnmatchedPathIsNotPublic(t *testing.T) {
 		if policy.Access.Anonymous() {
 			t.Errorf("%q matches no route and is reachable without a credential", path)
 		}
-		if policy.Scope != "" || policy.Ownership {
+		if policy.Domain != "" || policy.Ownership {
 			t.Errorf("%q matches no route but carries a requirement: %+v", path, policy)
 		}
 	}

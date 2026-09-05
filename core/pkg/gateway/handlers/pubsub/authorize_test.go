@@ -30,8 +30,8 @@ func topicRequest(t *testing.T, topic, selector string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/v1/pubsub/publish", bytes.NewReader(body))
 	ctx := context.WithValue(r.Context(), ctxkeys.NamespaceOverride, "anchat")
 	if selector != "" {
-		ctx = context.WithValue(ctx, ctxkeys.Grant,
-			&gwauth.Grant{Role: gwauth.RoleRuntime, Resource: selector})
+		ctx = context.WithValue(ctx, ctxkeys.Permissions,
+			gwauth.PermissionsFor(gwauth.RoleRuntime, selector))
 	}
 	return r.WithContext(ctx)
 }
@@ -104,8 +104,8 @@ func TestPublishBatchHandler_refusesTheWholeBatchForOneBadTopic(t *testing.T) {
 	}
 	r := httptest.NewRequest(http.MethodPost, "/v1/pubsub/publish-batch", bytes.NewReader(body))
 	ctx := context.WithValue(r.Context(), ctxkeys.NamespaceOverride, "anchat")
-	ctx = context.WithValue(ctx, ctxkeys.Grant,
-		&gwauth.Grant{Role: gwauth.RoleRuntime, Resource: "pubsub:topic=chat.*"})
+	ctx = context.WithValue(ctx, ctxkeys.Permissions,
+		gwauth.PermissionsFor(gwauth.RoleRuntime, "pubsub:topic=chat.*"))
 
 	w := httptest.NewRecorder()
 	h.PublishBatchHandler(w, r.WithContext(ctx))

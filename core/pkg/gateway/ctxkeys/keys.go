@@ -26,4 +26,13 @@ const (
 	// everyone with access to a namespace was an admin: a boolean has one thing
 	// to say. See pkg/gateway/auth/grants.go.
 	Grant ContextKey = "namespace_grant"
+
+	// Permissions holds the auth.PermissionSet this request's credential
+	// amounts to, computed once by the scope middleware.
+	//
+	// It exists so that the gate and the handler ask the same question of the
+	// same answer. The gate asks "does this reach the domain at all", before
+	// the handler knows which object; the handler asks again with the object.
+	// They used to be computed separately, from different inputs.
+	Permissions ContextKey = "permissions"
 )

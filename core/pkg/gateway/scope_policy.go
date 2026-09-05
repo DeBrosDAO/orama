@@ -11,53 +11,52 @@ import (
 	"go.uber.org/zap"
 )
 
-// callerScopes resolves the effective grant set for the authenticated request.
+// callerPermissions is what this request's credential may do.
 //
-//   - API-key-exchanged JWT (from /v1/auth/token): carries the key's exact
-//     scopes in a custom claim — this is what closes the exchange-then-escalate
-//     hole (a runtime key exchanged for a JWT keeps its narrow scope).
-//   - SIWE wallet JWT: a confirmed namespace owner gets admin; any other
-//     authenticated user gets the data-plane set (never admin).
-//   - Raw API key: the scopes stashed at lookup time.
-func (g *Gateway) callerScopes(r *http.Request) auth.ScopeSet {
+// One path, deliberately. There were three, and they could disagree: an
+// API-key-exchanged JWT carried an authoritative `scopes` claim, a wallet JWT
+// ignored any claim and used the grant the authorization middleware resolved,
+// and a bare API key used the scope set the auth middleware put on the context.
+// Three answers to one question is three places for them to drift, and it
+// produced an asymmetry nobody chose — narrowing a grant took effect at once
+// for a wallet and only at the next token for a key.
+//
+// A token says who you are. What you may do is read from the grant, here.
+func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 	ctx := r.Context()
 
-	if v := ctx.Value(ctxKeyJWT); v != nil {
-		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
-			// Only an API-key-exchanged JWT (ak_ subject) may carry an
-			// authoritative scopes claim. A SIWE wallet JWT must NOT be trusted
-			// here even if a custom["scopes"] is present, because a tenant
-			// claims-provider could otherwise inject "admin" for every end-user
-			// (defense-in-depth alongside reserving "scopes" in the provider).
-			if isAPIKeySubject(claims.Sub) && claims.Custom != nil {
-				if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" {
-					return auth.ParseScopes(raw)
-				}
-			}
-			// The grant the authorization middleware resolved for this
-			// namespace decides what a wallet JWT may reach. An owner or an
-			// admin gets the control plane; a runtime member gets the data
-			// plane; a reader gets nothing beyond the routes that ask for no
-			// grant at all.
-			if grant, _ := ctx.Value(ctxKeyGrant).(*auth.Grant); grant != nil {
-				return grant.Scopes()
-			}
-			// No grant was resolved, which is every route the ownership gate
-			// does not cover. A logged-in user gets the data plane there, as
-			// they always have.
-			return auth.DataPlaneScopes()
-		}
+	// The grant the authorization middleware resolved for this namespace, for
+	// whichever principal the credential named. It is the answer whenever the
+	// route resolves one.
+	if grant, _ := ctx.Value(ctxKeyGrant).(*auth.Grant); grant != nil {
+		return auth.PermissionsFor(grant.Role, grant.Resource)
 	}
 
-	if v := ctx.Value(ctxKeyScopes); v != nil {
-		if s, ok := v.(auth.ScopeSet); ok {
-			return s
+	// No grant was resolved: every route the ownership gate does not cover.
+	// What the credential is decides what it gets there.
+	if claims, ok := ctx.Value(ctxKeyJWT).(*auth.JWTClaims); ok && claims != nil {
+		if isAPIKeySubject(claims.Sub) {
+			// A key's own permissions, from the row rather than from the claim
+			// the token carries. The claim is what made a narrowed grant take
+			// a token lifetime to bite.
+			if scopes, ok := ctx.Value(ctxKeyScopes).(auth.ScopeSet); ok {
+				return auth.PermissionsFromScopes(scopes.Canonical())
+			}
+			return auth.PermissionSet{}
 		}
+		// A logged-in user with no grant in this namespace gets the data
+		// plane, as they always have.
+		return auth.DataPlanePermissions()
 	}
 
-	// No identity resolved (should not happen for a non-public path, which the
-	// auth middleware already gated) — deny by returning an empty set.
-	return auth.ScopeSet{}
+	if scopes, ok := ctx.Value(ctxKeyScopes).(auth.ScopeSet); ok {
+		return auth.PermissionsFromScopes(scopes.Canonical())
+	}
+
+	// No identity resolved. The auth middleware has already gated every
+	// non-public route, so this is a route that needs none — and it holds
+	// nothing either way.
+	return auth.PermissionSet{}
 }
 
 // isAPIKeySubject reports whether a JWT subject is an API key, as minted by the
@@ -119,38 +118,48 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		scopes := g.callerScopes(r)
+		perms := g.callerPermissions(r)
+		// Carried on the request so the handler narrows the same answer the
+		// gate widened. Two computations of one thing is two things to keep
+		// in step.
+		r = r.WithContext(context.WithValue(r.Context(), ctxkeys.Permissions, perms))
 
-		if required := policy.Scope; required != "" {
-			if !scopes.Has(required) {
-				g.logger.ComponentWarn("gateway", "request rejected: insufficient scope",
+		if policy.Domain != "" {
+			required := auth.Resource{
+				Domain: auth.Domain(policy.Domain),
+				Action: auth.Action(policy.Action),
+			}
+			// The gate's question, not the handler's: does this credential
+			// reach the domain at all, before anything knows which object.
+			if !perms.PermitsDomain(required.Domain, required.Action) {
+				g.logger.ComponentWarn("gateway", "request rejected: insufficient permission",
 					zap.String("path", r.URL.Path),
-					zap.String("required_scope", required),
+					zap.String("required", required.String()),
 				)
-				// The grant goes in a field, not only in the prose. A client
-				// that has to regex the message to find out what it lacks
-				// cannot act on it; @debros/orama turns this into a ScopeError
-				// naming the grant.
+				// What is missing goes in a field, not only in the prose. A
+				// client that has to regex the message to find out what it
+				// lacks cannot act on it.
 				forbidden(w, CodeScopeMissing,
-					"insufficient scope: this credential lacks the '"+required+"' grant required for "+r.URL.Path,
-					map[string]any{"required_scope": required})
+					"insufficient permission: this credential does not hold "+required.String()+
+						", required for "+r.URL.Path,
+					map[string]any{"required_scope": policy.Domain, "required_permission": required.String()})
 				return
 			}
 		}
 
-		// The token requirement is checked whether or not a grant was, because
-		// the two are independent: creating a namespace needs a logged-in
-		// wallet and no grant at all, and a wallet with no namespace holds no
-		// grant anywhere. Returning early on an empty scope made a declared
-		// token requirement do nothing, silently.
-		if !g.hasRequiredToken(r, policy, scopes) {
+		// The token requirement is checked whether or not a permission was,
+		// because the two are independent: creating a namespace needs a
+		// logged-in wallet and no permission at all, and a wallet with no
+		// namespace holds none anywhere. Returning early when a route required
+		// nothing made a declared token requirement do nothing, silently.
+		if !g.hasRequiredToken(r, policy, perms) {
 			g.logger.ComponentWarn("gateway", "request rejected: user JWT required",
 				zap.String("path", r.URL.Path),
-				zap.String("required_scope", policy.Scope),
+				zap.String("required", policy.Domain),
 			)
 			unauthorized(w, CodeAuthUserJWTRequired,
 				"user authentication required (JWT): "+r.URL.Path+" requires a logged-in user; an API key alone is not sufficient",
-				map[string]any{"required_scope": policy.Scope})
+				map[string]any{"required_scope": policy.Domain})
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -162,8 +171,8 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 //
 // An admin caller is exempt: the requirement exists to make a leaked data-plane
 // key inert, and an admin credential is not one.
-func (g *Gateway) hasRequiredToken(r *http.Request, policy routepolicy.Policy, scopes auth.ScopeSet) bool {
-	if policy.Token == routepolicy.AnyCredential || scopes.IsAdmin() {
+func (g *Gateway) hasRequiredToken(r *http.Request, policy routepolicy.Policy, perms auth.PermissionSet) bool {
+	if policy.Token == routepolicy.AnyCredential || perms.IsAdmin() {
 		return true
 	}
 	if policy.Token == routepolicy.AnyToken {

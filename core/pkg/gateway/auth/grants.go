@@ -37,14 +37,6 @@ const (
 )
 
 // Role is what a principal may do.
-//
-// The vocabulary is deliberately short of what the epic proposes. `developer`
-// — deployments, functions, database, keys, but not everything — cannot be
-// expressed today: every control-plane route requires the single `admin` grant
-// (see scopes.go), so a `developer` role would resolve to exactly the same
-// scope set as `admin` and be a label claiming a boundary that is not there.
-// It arrives when the control-plane vocabulary is split, which is the route
-// policy work in Phase 2.
 type Role string
 
 const (
@@ -56,6 +48,17 @@ const (
 	// RoleAdmin is the full control plane: deployments, functions, secrets,
 	// keys, raw database. Everything the owner can do except being the owner.
 	RoleAdmin Role = "admin"
+
+	// RoleDeveloper builds and runs the application: deployments, functions,
+	// the database, secrets and the whole data plane — and not who may do it.
+	// Members, the namespace's own settings and the cluster stay with the
+	// owner and the admin.
+	//
+	// It could not exist while `admin` was one word covering every
+	// control-plane route: it would have resolved to the same authority and
+	// been a label claiming a boundary that was not there. The permission
+	// model is what makes it a real boundary.
+	RoleDeveloper Role = "developer"
 
 	// RoleRuntime is the data plane: invoke, storage, push, webrtc, proxy,
 	// pubsub, cache. What an application does, not what an operator does.
@@ -71,10 +74,11 @@ const (
 // a list of cases. It is not the scope set: RoleOwner and RoleAdmin resolve to
 // the same grants, and differ in what they may do to the grants themselves.
 var roleRank = map[Role]int{
-	RoleReader:  1,
-	RoleRuntime: 2,
-	RoleAdmin:   3,
-	RoleOwner:   4,
+	RoleReader:    1,
+	RoleRuntime:   2,
+	RoleDeveloper: 3,
+	RoleAdmin:     4,
+	RoleOwner:     5,
 }
 
 // ErrUnknownRole names what was asked for and what exists.
