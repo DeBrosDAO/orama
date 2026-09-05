@@ -27,7 +27,7 @@ import (
 // comes from the stamp on that request, so this node can only ever register
 // itself.
 func (n *Node) registerDNSNode(ctx context.Context) error {
-	client, err := n.coreAPIClient()
+	client, err := n.coreAPIClient(ctx)
 	if err != nil {
 		return fmt.Errorf("cannot record this node: %w", err)
 	}
@@ -123,7 +123,7 @@ func (n *Node) startDNSHeartbeat(ctx context.Context) {
 // heartbeating node must count as active, which heals a node that was reaped to
 // 'inactive' during a restart window without a fresh registration.
 func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
-	client, err := n.coreAPIClient()
+	client, err := n.coreAPIClient(ctx)
 	if err != nil {
 		return fmt.Errorf("cannot record this heartbeat: %w", err)
 	}

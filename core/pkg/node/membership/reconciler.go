@@ -129,6 +129,17 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	}
 
 	for _, peerID := range plan.DropDNSNodes {
+		// Revoked before the row is dropped, and in the same loop, so the two
+		// cannot diverge. A departed node that keeps a live credential can
+		// still sign for its own id, and registering is an upsert that sets
+		// `status = 'active'` — so it would resurrect itself into DNS with an
+		// address of its choosing. Doing this first means a crash between the
+		// two leaves the safe half done.
+		if _, err := rqlite.SafeExecContext(r.db, ctx,
+			`UPDATE node_credentials SET revoked_at = CURRENT_TIMESTAMP
+			  WHERE node_id = ? AND revoked_at IS NULL`, peerID); err != nil {
+			return fmt.Errorf("revoke the key of departed node %s: %w", peerID, err)
+		}
 		if _, err := rqlite.SafeExecContext(r.db, ctx,
 			`DELETE FROM dns_nodes WHERE id = ?`, peerID); err != nil {
 			return fmt.Errorf("drop dns node %s: %w", peerID, err)

@@ -45,6 +45,7 @@ func (g *Gateway) Routes() http.Handler {
 	if g.nodeAPIHandler != nil {
 		mux.HandleFunc("/v1/internal/node/register", g.nodeAPIHandler.HandleRegister)
 		mux.HandleFunc("/v1/internal/node/heartbeat", g.nodeAPIHandler.HandleHeartbeat)
+		mux.HandleFunc("/v1/internal/node/enrol-key", g.nodeAPIHandler.HandleEnrolKey)
 	}
 
 	// Node join endpoint (token-authenticated, no middleware auth needed)

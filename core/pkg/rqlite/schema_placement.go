@@ -65,6 +65,7 @@ var tablePlacement = map[string]tableNote{
 	"refresh_tokens":        {PlacementCluster, "a session must be refreshable and revocable from anywhere"},
 	"revoked_tokens":        {PlacementCluster, "a revocation that reaches one gateway refuses nothing"},
 	"signing_keys":          {PlacementCluster, "publishing a key is minting authority; the cluster verifies against it"},
+	"node_credentials":      {PlacementCluster, "a node's own key; every gateway in the cluster verifies its stamps against this"},
 	"device_authorizations": {PlacementCluster, "started on one gateway, approved on another"},
 	"operators":             {PlacementCluster, "who may operate the cluster"},
 	"audit_events":          {PlacementCluster, "a record its own subject could delete is not a record"},

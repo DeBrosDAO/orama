@@ -31,6 +31,7 @@ func TestRetirementPlan_covers_every_store_that_keeps_the_node(t *testing.T) {
 		"namespace_port_allocations",
 		"webrtc_port_allocations",
 		"dns_nodes",
+		"node_credentials",
 	} {
 		if !strings.Contains(sql, table) {
 			t.Errorf("the plan never touches %s; a departed node stays listed there", table)
@@ -102,5 +103,20 @@ func TestRetirementPlan_is_idempotent(t *testing.T) {
 		if verb != "DELETE" && verb != "UPDATE" {
 			t.Errorf("%s is not repeatable: %s", verb, step.SQL)
 		}
+	}
+}
+
+// A retired node's credential is revoked, not deleted. A row with revoked_at
+// set verifies nothing AND cannot be enrolled again; deleting it would send the
+// machine back down the never-seen path, where it could enrol a key of its own
+// choosing and speak as that node again.
+func TestRetirementPlan_revokesTheNodeKeyRatherThanDeletingIt(t *testing.T) {
+	sql := planSQL(t, "peerA")
+
+	if strings.Contains(sql, "DELETE FROM node_credentials") {
+		t.Error("retirement deletes the node's credential, which lets the machine re-enrol itself")
+	}
+	if !strings.Contains(sql, "UPDATE node_credentials SET revoked_at") {
+		t.Error("retirement does not revoke the node's credential, so its disk stays a working credential")
 	}
 }

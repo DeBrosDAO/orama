@@ -283,6 +283,24 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		// Non-fatal: proceed with join
 	}
 
+	// A machine joining is an operator's decision — the invite token was minted
+	// by one and is consumed single-use — so it is also the moment a retired
+	// machine can be re-admitted, and the only one. Clearing the credential
+	// lets the joining node enrol a fresh key; without this, `orama node
+	// remove` is a one-way door and a rebuilt machine with the same peer id can
+	// never register again.
+	//
+	// It is safe because enrolling still requires the libp2p identity behind
+	// that peer id: an operator's invite plus the machine's own identity, which
+	// is what re-admitting a node means.
+	if err := h.forgetNodeCredential(ctx, req.PeerID); err != nil {
+		// Fatal, not a warning: the node would come up, fail to enrol, and
+		// never register — with nothing at the join to say why.
+		h.logger.Error("failed to clear the recorded key of a joining node", zap.Error(err))
+		http.Error(w, "failed to admit this node", http.StatusInternalServerError)
+		return
+	}
+
 	// 3. Allocate an overlay address and register the peer, as one retryable step.
 	wgIP, err := overlay.Register(ctx, h.rqliteClient, overlay.Peer{
 		NodeID:         req.PeerID,
@@ -530,6 +548,23 @@ func (h *Handler) removeUnfinishedJoinRows(ctx context.Context, publicIP string)
 		    WHERE w.public_ip = ? AND NOT `+liveRowPredicate+`)`,
 		publicIP); err != nil {
 		return fmt.Errorf("delete unfinished join rows for %s: %w", publicIP, err)
+	}
+	return nil
+}
+
+// forgetNodeCredential drops any key recorded for a joining node.
+//
+// Deleting rather than clearing `revoked_at`: the row is the cluster's record
+// of which key this node holds, and a machine that is rejoining is presenting a
+// new one. Leaving the old key live would refuse the enrolment; leaving the
+// tombstone would refuse it too.
+func (h *Handler) forgetNodeCredential(ctx context.Context, peerID string) error {
+	if peerID == "" {
+		return nil
+	}
+	if _, err := h.rqliteClient.Exec(ctx,
+		`DELETE FROM node_credentials WHERE node_id = ?`, peerID); err != nil {
+		return fmt.Errorf("clear the recorded key of joining node %s: %w", peerID, err)
 	}
 	return nil
 }

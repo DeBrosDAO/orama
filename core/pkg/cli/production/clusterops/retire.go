@@ -59,6 +59,16 @@ func RetirementPlan(rec NodeRecord) []RetireStep {
 			What: "free its TURN and SFU allocations so those roles get re-placed",
 			SQL:  fmt.Sprintf(`DELETE FROM webrtc_port_allocations WHERE node_id = '%s'`, peer),
 		},
+		{
+			// Revoked, not deleted. A row with revoked_at set verifies nothing
+			// AND cannot be enrolled again, so the retired machine's disk stops
+			// being a credential and the machine cannot re-admit itself through
+			// the first-use path. Deleting the row would restore exactly that.
+			What: "revoke its key so the machine can no longer speak as this node",
+			SQL: fmt.Sprintf(
+				`UPDATE node_credentials SET revoked_at = datetime('now') WHERE node_id = '%s' AND revoked_at IS NULL`,
+				peer),
+		},
 	}
 }
 

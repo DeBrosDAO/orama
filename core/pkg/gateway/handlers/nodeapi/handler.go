@@ -7,11 +7,11 @@
 // last_seen > ?` — and nothing checked who made it, because there was no
 // request to check. These endpoints are that request.
 //
-// What they change today is where the claim is checked, not who may make it:
-// the stamp is keyed by the cluster secret, which every node holds. What they
-// make possible is the rest — the node id acted on comes from the stamp rather
-// than the body, and the key is resolved per node, so a per-node credential is
-// a change of resolver.
+// The node id acted on comes from the stamp rather than the body, so a node can
+// only ever register itself. The stamp is made with a key that node generated
+// and the cluster only ever saw the public half of, and recording that key is
+// itself checked against the identity carried inside the node's peer id — so
+// nothing shared across the fleet authorises any of this.
 package nodeapi
 
 import (
@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/nodeapi"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -57,19 +58,26 @@ var sshUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 type Handler struct {
 	logger *zap.Logger
 	db     rqlite.Client
-	keyFor auth.NodeAPIKeyFor
+	creds  *Credentials
+	audit  *gwauth.AuditLog
 	now    func() time.Time
+	// recorder is how an audit line is written. It is a field so a test can
+	// read what would have been recorded without standing up a database — the
+	// question "is the heartbeat audited" has no other observable answer.
+	recorder func(*http.Request, gwauth.AuditEvent)
 }
 
 // NewHandler builds the handler.
 //
-// keyFor is nil on a gateway with no cluster secret. That gateway refuses these
-// calls rather than serving them unauthenticated, which is the failure the
-// WireGuard peer endpoint shipped with for a year: it read
+// creds is nil on a gateway that cannot check who is calling. That gateway
+// refuses these calls rather than serving them unauthenticated, which is the
+// failure the WireGuard peer endpoint shipped with for a year: it read
 // `if secret != "" && mismatch`, so a gateway configured without one let
 // everything through.
-func NewHandler(logger *zap.Logger, db rqlite.Client, keyFor auth.NodeAPIKeyFor) *Handler {
-	return &Handler{logger: logger, db: db, keyFor: keyFor, now: time.Now}
+func NewHandler(logger *zap.Logger, db rqlite.Client, creds *Credentials, audit *gwauth.AuditLog) *Handler {
+	h := &Handler{logger: logger, db: db, creds: creds, audit: audit, now: time.Now}
+	h.recorder = h.write
+	return h
 }
 
 // HandleRegister serves POST /v1/internal/node/register.
@@ -119,7 +127,67 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		zap.String("node_id", nodeID),
 		zap.String("ip_address", req.IPAddress),
 		zap.String("region", req.Region))
+	h.record(r, gwauth.AuditEvent{
+		Actor:    nodeID,
+		Action:   gwauth.AuditNodeRegistered,
+		Resource: nodeID,
+		Result:   gwauth.AuditSuccess,
+		Metadata: map[string]string{
+			"ip_address":  req.IPAddress,
+			"internal_ip": req.InternalIP,
+			"region":      req.Region,
+		},
+	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleEnrolKey serves POST /v1/internal/node/enrol-key.
+//
+// A node presents the public half of a key it generated and holds. From the
+// moment it is recorded, the cluster accepts nothing else for that node.
+func (h *Handler) HandleEnrolKey(w http.ResponseWriter, r *http.Request) {
+	// Checked against the key carried inside the node's own peer id, not
+	// against anything the cluster has recorded — which is what lets this
+	// authenticate the very first call a node makes, and what means the only
+	// machine that can enrol a key for node X is the one holding X's libp2p
+	// identity.
+	nodeID, body, ok := h.authenticateAgainst(w, r, auth.NodeIdentityVerifier)
+	if !ok {
+		return
+	}
+
+	var req nodeapi.EnrolKeyRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		h.refuse(w, nodeID, "the enrolment body could not be read", err)
+		return
+	}
+
+	outcome, err := h.creds.Enrol(r.Context(), nodeID, strings.TrimSpace(req.PublicKey))
+	if err != nil {
+		// A refused enrolment is worth an audit line whether or not it is an
+		// attack: it is either a node trying to change a key it does not get to
+		// change, or a machine that was retired trying to come back.
+		h.record(r, gwauth.AuditEvent{
+			Actor:    nodeID,
+			Action:   gwauth.AuditNodeKeyEnrolled,
+			Resource: nodeID,
+			Result:   gwauth.AuditFailure,
+			Metadata: map[string]string{"reason": err.Error()},
+		})
+		h.refuse(w, nodeID, err.Error(), err)
+		return
+	}
+
+	if outcome == enrolRecorded {
+		h.logger.Info("node key enrolled", zap.String("node_id", nodeID))
+		h.record(r, gwauth.AuditEvent{
+			Actor:    nodeID,
+			Action:   gwauth.AuditNodeKeyEnrolled,
+			Resource: nodeID,
+			Result:   gwauth.AuditSuccess,
+		})
+	}
+	h.writeJSON(w, nodeID, nodeapi.EnrolKeyResponse{Recorded: outcome == enrolRecorded})
 }
 
 // HandleHeartbeat serves POST /v1/internal/node/heartbeat.
@@ -155,7 +223,21 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticate decides whether to act on a request, and on whose behalf.
+//
+// The caller is checked against the key the cluster has on record for it, so a
+// node that has not enrolled — or has been retired — is refused.
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (string, []byte, bool) {
+	if h.creds == nil {
+		h.logger.Warn("refusing a node self-registration: this gateway cannot check which node " +
+			"is calling, so the caller cannot be authenticated")
+		http.Error(w, "node registration unavailable: this gateway cannot authenticate a node", http.StatusServiceUnavailable)
+		return "", nil, false
+	}
+	return h.authenticateAgainst(w, r, h.creds.VerifierFor(r.Context()))
+}
+
+// authenticateAgainst is the common path, given how to check the stamp.
+func (h *Handler) authenticateAgainst(w http.ResponseWriter, r *http.Request, verifierFor auth.NodeVerifierFor) (string, []byte, bool) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return "", nil, false
@@ -163,7 +245,7 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (string, 
 
 	// Caddy reverse-proxies every path on this node's domains to the gateway,
 	// so without this these endpoints are reachable from the internet and the
-	// stamp is the only thing between a leaked cluster secret and a stranger
+	// stamp is the only thing between a stolen node key and a stranger
 	// rewriting the table the cluster routes on. The sibling `/v1/internal/wg/*`
 	// endpoints carry an overlay check for exactly this reason; this one cannot
 	// use it verbatim, because the caller is a process on this host rather than
@@ -176,13 +258,6 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (string, 
 		return "", nil, false
 	}
 
-	if h.keyFor == nil {
-		h.logger.Warn("refusing a node self-registration: this gateway has no cluster secret " +
-			"configured, so the caller cannot be authenticated")
-		http.Error(w, "node registration unavailable: no cluster secret configured", http.StatusServiceUnavailable)
-		return "", nil, false
-	}
-
 	// The body has to be read before the stamp is checked, because the MAC
 	// covers it. That is why it is bounded here rather than in each handler.
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
@@ -192,12 +267,20 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (string, 
 		return "", nil, false
 	}
 
-	nodeID, ok := auth.VerifyNodeAPI(h.keyFor, r, body, h.now())
+	nodeID, resolveErr, ok := auth.VerifyNodeAPI(verifierFor, r, body, h.now())
 	if !ok {
 		// One answer for every reason it failed. Telling a caller whether a
 		// node id is known, or whether the id was right and only the stamp was
 		// wrong, is an oracle for both.
-		h.logger.Warn("a node request arrived without a valid stamp", zap.String("path", r.URL.Path))
+		//
+		// The log says which, because "the cluster could not be read" and
+		// "somebody is forging stamps" want different people out of bed.
+		if resolveErr != nil {
+			h.logger.Error("a node could not be checked, so it was refused",
+				zap.String("path", r.URL.Path), zap.Error(resolveErr))
+		} else {
+			h.logger.Warn("a node request arrived without a valid stamp", zap.String("path", r.URL.Path))
+		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return "", nil, false
 	}
@@ -293,6 +376,29 @@ func (h *Handler) refuse(w http.ResponseWriter, nodeID, message string, err erro
 		zap.String("reason", message),
 		zap.Error(err))
 	http.Error(w, message, http.StatusBadRequest)
+}
+
+// record writes one line of the audit trail.
+//
+// Registration and enrolment are recorded; the heartbeat is not, deliberately.
+// It fires every 30 seconds from every node, so recording it would add tens of
+// thousands of rows a day — replicated to every node — that say only that a
+// live node is still live, and would bury the lines somebody would actually
+// look for. `dns_nodes.last_seen` already answers "when was this node last
+// heard from", which is the question a heartbeat record would be answering.
+func (h *Handler) record(r *http.Request, event gwauth.AuditEvent) {
+	if h.recorder == nil {
+		return
+	}
+	h.recorder(r, event)
+}
+
+// write is the real recorder.
+func (h *Handler) write(r *http.Request, event gwauth.AuditEvent) {
+	if h.audit == nil {
+		return
+	}
+	h.audit.RecordFromRequest(r.Context(), r, event)
 }
 
 func (h *Handler) writeJSON(w http.ResponseWriter, nodeID string, v any) {

@@ -256,7 +256,8 @@ func buildRoutePolicies() *routepolicy.Table {
 	// database.
 	nodeSelfRegistration := policyHandlerAuth
 	nodeSelfRegistration.MainGateway = true
-	t.Add(nodeSelfRegistration, "/v1/internal/node/register", "/v1/internal/node/heartbeat")
+	t.Add(nodeSelfRegistration, "/v1/internal/node/register", "/v1/internal/node/heartbeat",
+		"/v1/internal/node/enrol-key")
 
 	// --- Data plane ----------------------------------------------------
 	//

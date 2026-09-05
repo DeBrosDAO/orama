@@ -60,6 +60,12 @@ const (
 	AuditDeviceLoginApproved = "auth.device.approve"
 	AuditDeviceLoginDenied   = "auth.device.deny"
 	AuditDeviceLoginClaimed  = "auth.device.claim"
+
+	// A node recording itself, and a node's own key being recorded. The
+	// heartbeat is deliberately not here: it fires every 30 seconds from every
+	// node and `dns_nodes.last_seen` already answers what it would record.
+	AuditNodeRegistered  = "node.register"
+	AuditNodeKeyEnrolled = "node.key.enrol"
 )
 
 // AuditActions is every action this gateway records. A new one has to be added
@@ -73,6 +79,7 @@ var AuditActions = []string{
 	AuditOperatorAction, AuditLegacyCredential,
 	AuditGrantAdded, AuditGrantRevoked, AuditOwnerTransferred,
 	AuditDeviceLoginStarted, AuditDeviceLoginApproved, AuditDeviceLoginDenied, AuditDeviceLoginClaimed,
+	AuditNodeRegistered, AuditNodeKeyEnrolled,
 }
 
 const (

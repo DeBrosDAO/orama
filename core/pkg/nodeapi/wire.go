@@ -16,6 +16,9 @@ const (
 
 	// PathHeartbeat refreshes this node's liveness.
 	PathHeartbeat = "/v1/internal/node/heartbeat"
+
+	// PathEnrolKey records the public half of this node's own key.
+	PathEnrolKey = "/v1/internal/node/enrol-key"
 )
 
 // RegisterRequest is a node's account of itself.
@@ -38,4 +41,18 @@ type RegisterRequest struct {
 // so, and registers.
 type HeartbeatResponse struct {
 	Registered bool `json:"registered"`
+}
+
+// EnrolKeyRequest presents the public half of the key a node generated and
+// holds. The private half never leaves that machine.
+type EnrolKeyRequest struct {
+	PublicKey string `json:"public_key"`
+}
+
+// EnrolKeyResponse says whether this call was the one that recorded the key.
+//
+// A node re-asserts its key on every start, so "already on record, unchanged"
+// is the normal answer and is not a failure.
+type EnrolKeyResponse struct {
+	Recorded bool `json:"recorded"`
 }

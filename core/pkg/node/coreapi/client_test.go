@@ -2,6 +2,7 @@ package coreapi
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,12 +13,36 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/nodeapi"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-const (
-	testSecret = "cluster-secret-for-tests"
-	testNodeID = "12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEg"
-)
+// nodeIdentity generates a libp2p identity and the peer id that carries its
+// public key. Enrolment is checked against the key inside the id, so a made-up
+// peer id could never enrol.
+func nodeIdentity(t *testing.T) (string, crypto.PrivKey) {
+	t.Helper()
+	priv, pub, err := crypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateEd25519Key: %v", err)
+	}
+	id, err := peer.IDFromPublicKey(pub)
+	if err != nil {
+		t.Fatalf("IDFromPublicKey: %v", err)
+	}
+	return id.String(), priv
+}
+
+// verifyAnything accepts any well-formed stamp. The tests that use it are about
+// what the client sends and how it reports an answer, not about who may sign;
+// the tests that are about that resolve the real way.
+var verifyAnything = auth.NodeVerifierFor(func(nodeID string) (auth.NodeStampVerifier, error) {
+	return anySignature{}, nil
+})
+
+type anySignature struct{}
+
+func (anySignature) Verify(_, sig []byte) bool { return len(sig) > 0 }
 
 // verifying is a gateway that checks the stamp the way the real handler does,
 // so these tests prove the client and the handler agree about what is signed
@@ -30,7 +55,7 @@ func verifying(t *testing.T, answer func(w http.ResponseWriter, nodeID string, b
 			http.Error(w, "unreadable", http.StatusBadRequest)
 			return
 		}
-		nodeID, ok := auth.VerifyNodeAPI(auth.SharedClusterKey(testSecret), r, body, time.Now())
+		nodeID, _, ok := auth.VerifyNodeAPI(verifyAnything, r, body, time.Now())
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -41,7 +66,12 @@ func verifying(t *testing.T, answer func(w http.ResponseWriter, nodeID string, b
 
 func client(t *testing.T, baseURL string) *Client {
 	t.Helper()
-	c, err := New(baseURL, testNodeID, testSecret)
+	own, err := auth.NewNodeKeyPair()
+	if err != nil {
+		t.Fatalf("NewNodeKeyPair: %v", err)
+	}
+	nodeID, identity := nodeIdentity(t)
+	c, err := New(baseURL, nodeID, own, identity)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -73,8 +103,8 @@ func TestRegister_isAcceptedAndNamesThisNode(t *testing.T) {
 	if err := client(t, srv.URL).Register(context.Background(), sent); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if seenNode != testNodeID {
-		t.Errorf("the gateway read the node as %q, want %q", seenNode, testNodeID)
+	if seenNode == "" {
+		t.Error("the gateway could not read which node sent the registration")
 	}
 	if seen != sent {
 		t.Errorf("the gateway received %+v, want %+v", seen, sent)
@@ -121,8 +151,10 @@ func TestHeartbeat_reportsWhetherTheRowExists(t *testing.T) {
 // A refusal is surfaced with what the gateway said and where it was called, so
 // the log line says what to fix rather than "request failed".
 func TestPost_aRefusalSaysWhatAndWhere(t *testing.T) {
+	// Not a 401: that one means "the cluster does not have this node's key" and
+	// is handled by recording it again, which the tests below cover.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		http.Error(w, "internal_ip does not match this node's overlay allocation", http.StatusBadRequest)
 	}))
 	defer srv.Close()
 
@@ -130,7 +162,7 @@ func TestPost_aRefusalSaysWhatAndWhere(t *testing.T) {
 	if err == nil {
 		t.Fatal("a refused registration was reported as success")
 	}
-	for _, want := range []string{"/v1/internal/node/register", srv.URL, "401", "unauthorized"} {
+	for _, want := range []string{"/v1/internal/node/register", srv.URL, "400", "overlay allocation"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error does not mention %q: %v", want, err)
 		}
@@ -184,14 +216,24 @@ func TestPost_respectsACancelledContext(t *testing.T) {
 // A client that cannot sign is refused at construction rather than one request
 // at a time, in a warning log.
 func TestNew_refusesAClientThatCouldNotSign(t *testing.T) {
-	cases := map[string]struct{ url, node, secret string }{
-		"no gateway address": {"", testNodeID, testSecret},
-		"no node id":         {"http://127.0.0.1:1", "  ", testSecret},
-		"no cluster secret":  {"http://127.0.0.1:1", testNodeID, ""},
+	own, err := auth.NewNodeKeyPair()
+	if err != nil {
+		t.Fatalf("NewNodeKeyPair: %v", err)
+	}
+	nodeID, identity := nodeIdentity(t)
+	cases := map[string]struct {
+		url, node string
+		key       *auth.NodeKeyPair
+		identity  crypto.PrivKey
+	}{
+		"no gateway address": {"", nodeID, own, identity},
+		"no node id":         {"http://127.0.0.1:1", "  ", own, identity},
+		"no key of its own":  {"http://127.0.0.1:1", nodeID, nil, identity},
+		"no libp2p identity": {"http://127.0.0.1:1", nodeID, own, nil},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := New(c.url, c.node, c.secret); err == nil {
+			if _, err := New(c.url, c.node, c.key, c.identity); err == nil {
 				t.Errorf("a client with %s was built", name)
 			}
 		})
@@ -213,7 +255,12 @@ func TestNew_toleratesATrailingSlashOnTheAddress(t *testing.T) {
 		inner.ServeHTTP(w, r)
 	})
 
-	c, err := New(srv.URL+"/", testNodeID, testSecret)
+	own, err := auth.NewNodeKeyPair()
+	if err != nil {
+		t.Fatalf("NewNodeKeyPair: %v", err)
+	}
+	nodeID, identity := nodeIdentity(t)
+	c, err := New(srv.URL+"/", nodeID, own, identity)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -222,5 +269,175 @@ func TestNew_toleratesATrailingSlashOnTheAddress(t *testing.T) {
 	}
 	if path != "/v1/internal/node/register" {
 		t.Errorf("called %q, want /v1/internal/node/register", path)
+	}
+}
+
+// Enrolment is signed with this node's libp2p identity and everything else
+// with the key it enrolled — including on the second and every later start,
+// which is the path that would brick the fleet if it were wrong.
+func TestEnrolKey_isSignedByTheIdentityAndEverythingElseByTheKey(t *testing.T) {
+	own, err := auth.NewNodeKeyPair()
+	if err != nil {
+		t.Fatalf("NewNodeKeyPair: %v", err)
+	}
+	pub, err := auth.ParseNodePublicKey(own.PublicKey())
+	if err != nil {
+		t.Fatalf("ParseNodePublicKey: %v", err)
+	}
+	nodeID, identity := nodeIdentity(t)
+
+	// The gateway applies the real rule: enrolment against the key inside the
+	// peer id, everything else against the key the node enrolled.
+	var enrolments, heartbeats int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "unreadable", http.StatusBadRequest)
+			return
+		}
+		verifier := auth.NodeVerifierFor(func(string) (auth.NodeStampVerifier, error) { return pub, nil })
+		if r.URL.Path == nodeapi.PathEnrolKey {
+			verifier = auth.NodeIdentityVerifier
+		}
+		if _, _, ok := auth.VerifyNodeAPI(verifier, r, body, time.Now()); !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case nodeapi.PathEnrolKey:
+			enrolments++
+			_ = json.NewEncoder(w).Encode(nodeapi.EnrolKeyResponse{Recorded: enrolments == 1})
+		default:
+			heartbeats++
+			_ = json.NewEncoder(w).Encode(nodeapi.HeartbeatResponse{Registered: true})
+		}
+	}))
+	defer srv.Close()
+
+	c, err := New(srv.URL, nodeID, own, identity)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := c.EnrolKey(context.Background()); err != nil {
+		t.Fatalf("EnrolKey: %v", err)
+	}
+	if _, err := c.Heartbeat(context.Background()); err != nil {
+		t.Fatalf("the client did not sign with its enrolled key: %v", err)
+	}
+
+	// The second start: a fresh client with the same key against a cluster that
+	// already has the row. This is what every restart does, and signing the
+	// enrolment with anything the cluster cannot check would refuse it.
+	second, err := New(srv.URL, nodeID, own, identity)
+	if err != nil {
+		t.Fatalf("New again: %v", err)
+	}
+	if err := second.EnrolKey(context.Background()); err != nil {
+		t.Fatalf("a node could not re-assert its key on a second start: %v", err)
+	}
+	if _, err := second.Heartbeat(context.Background()); err != nil {
+		t.Fatalf("a restarted node could not heartbeat: %v", err)
+	}
+	if enrolments != 2 || heartbeats != 2 {
+		t.Errorf("enrolments=%d heartbeats=%d, want 2 and 2", enrolments, heartbeats)
+	}
+}
+
+// A row can disappear under a running node — a registry restored from an older
+// backup, an operator clearing it. The node records its key again and carries
+// on, rather than being refused every 30 seconds until somebody restarts it.
+func TestPost_reEnrolsWhenTheClusterNoLongerHasTheKey(t *testing.T) {
+	own, err := auth.NewNodeKeyPair()
+	if err != nil {
+		t.Fatalf("NewNodeKeyPair: %v", err)
+	}
+	pub, err := auth.ParseNodePublicKey(own.PublicKey())
+	if err != nil {
+		t.Fatalf("ParseNodePublicKey: %v", err)
+	}
+	nodeID, identity := nodeIdentity(t)
+
+	recorded := false
+	var enrolments, registrations int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path == nodeapi.PathEnrolKey {
+			if _, _, ok := auth.VerifyNodeAPI(auth.NodeIdentityVerifier, r, body, time.Now()); !ok {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			enrolments++
+			recorded = true
+			_ = json.NewEncoder(w).Encode(nodeapi.EnrolKeyResponse{Recorded: true})
+			return
+		}
+		// The cluster has forgotten this node until it enrols again.
+		verifier := auth.NodeVerifierFor(func(string) (auth.NodeStampVerifier, error) {
+			if recorded {
+				return pub, nil
+			}
+			return nil, nil
+		})
+		if _, _, ok := auth.VerifyNodeAPI(verifier, r, body, time.Now()); !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		registrations++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c, err := New(srv.URL, nodeID, own, identity)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// No enrolment yet, so the first attempt is refused — and the client
+	// records its key and retries rather than giving up.
+	if err := c.Register(context.Background(), nodeapi.RegisterRequest{}); err != nil {
+		t.Fatalf("the client did not recover from the cluster forgetting its key: %v", err)
+	}
+	if enrolments != 1 || registrations != 1 {
+		t.Errorf("enrolments=%d registrations=%d, want 1 and 1", enrolments, registrations)
+	}
+}
+
+// The retry happens once. A cluster refusing for some other reason surfaces
+// that refusal rather than being asked forever.
+func TestPost_reEnrolsAtMostOnce(t *testing.T) {
+	var enrolments, attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == nodeapi.PathEnrolKey {
+			enrolments++
+			_ = json.NewEncoder(w).Encode(nodeapi.EnrolKeyResponse{Recorded: true})
+			return
+		}
+		attempts++
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	if err := client(t, srv.URL).Register(context.Background(), nodeapi.RegisterRequest{}); err == nil {
+		t.Fatal("a request refused twice was reported as success")
+	}
+	if attempts != 2 || enrolments != 1 {
+		t.Errorf("attempts=%d enrolments=%d, want 2 and 1", attempts, enrolments)
+	}
+}
+
+// A refused enrolment is reported rather than leaving the client signing with
+// the shared credential and looking like it worked.
+func TestEnrolKey_aRefusalIsReported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "this node already has a different key on record", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	err := client(t, srv.URL).EnrolKey(context.Background())
+	if err == nil {
+		t.Fatal("a refused enrolment was reported as success")
+	}
+	if !strings.Contains(err.Error(), "already has a different key") {
+		t.Errorf("the error does not say what the gateway said: %v", err)
 	}
 }

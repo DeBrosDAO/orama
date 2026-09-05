@@ -661,3 +661,57 @@ func TestHandleJoin_serverFailureDoesReleaseTheToken(t *testing.T) {
 		t.Fatal("a cluster fault burned the operator's token")
 	}
 }
+
+// Removing a node revokes its key rather than deleting the row, so the machine
+// cannot re-admit itself. That makes the join the only way back, and the join
+// has to clear the row — otherwise `orama node remove` is a one-way door and a
+// rebuilt machine with the same peer id can never register again.
+//
+// The same applies to a node that lost its key file while keeping its
+// identity.key: its new key would not match the recorded one, and enrolment
+// refuses that.
+func TestHandleJoin_clearsTheRecordedKeyOfTheJoiningNode(t *testing.T) {
+	c := &claimQuery{}
+	h := joinableHandler(t, c)
+
+	body, err := json.Marshal(JoinRequest{
+		Token:       "a-valid-token",
+		PublicIP:    "203.0.113.9",
+		PeerID:      "12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEg",
+		WGPublicKey: base64.StdEncoding.EncodeToString(make([]byte, 32)),
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.HandleJoin(rec, httptest.NewRequest(http.MethodPost, "/v1/internal/join", bytes.NewReader(body)))
+
+	cleared := false
+	for _, stmt := range c.execs {
+		if strings.Contains(stmt, "DELETE FROM node_credentials") {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Errorf("the join did not clear the joining node's recorded key, so a removed or rebuilt "+
+			"machine can never register again: %q", c.execs)
+	}
+}
+
+// A join that names no peer id has no credential to clear, and must not issue a
+// delete with an empty id — every row with an empty node_id would go.
+func TestHandleJoin_withNoPeerIdClearsNothing(t *testing.T) {
+	c := &claimQuery{}
+	h := joinableHandler(t, c)
+
+	rec := httptest.NewRecorder()
+	h.HandleJoin(rec, httptest.NewRequest(http.MethodPost, "/v1/internal/join",
+		bytes.NewReader(joinBody(t, "203.0.113.9"))))
+
+	for _, stmt := range c.execs {
+		if strings.Contains(stmt, "node_credentials") {
+			t.Errorf("a join with no peer id touched node_credentials: %q", stmt)
+		}
+	}
+}

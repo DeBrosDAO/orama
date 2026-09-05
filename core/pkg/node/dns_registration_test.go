@@ -94,7 +94,7 @@ func TestCoreAPIClient_aFailureIsNotRemembered(t *testing.T) {
 	// cluster secret being unreadable is the same shape — a file, a mode, a
 	// mount — and it is the one this actually guards.
 	n.config.HTTPGateway.Enabled = false
-	first, err := n.coreAPIClient()
+	first, err := n.coreAPIClient(context.Background())
 	if err == nil {
 		t.Fatal("a node running no gateway built a client to call one")
 	}
@@ -105,7 +105,7 @@ func TestCoreAPIClient_aFailureIsNotRemembered(t *testing.T) {
 	// The operator fixes it. The next attempt has to look again, and fail for
 	// the next reason rather than repeating the first one forever.
 	n.config.HTTPGateway.Enabled = true
-	_, err = n.coreAPIClient()
+	_, err = n.coreAPIClient(context.Background())
 	if err == nil {
 		t.Fatal("a client was built with no peer id")
 	}
@@ -114,46 +114,6 @@ func TestCoreAPIClient_aFailureIsNotRemembered(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "peer ID") {
 		t.Errorf("the error does not name what is still missing: %v", err)
-	}
-}
-
-// The cluster secret is read from disk on every attempt until one succeeds, so
-// a secret that appears late is picked up rather than needing a restart.
-func TestClusterSecret_isReadEachTimeUntilItIsThere(t *testing.T) {
-	n := testNodeForDNS(t)
-	dir := t.TempDir()
-	n.config.Node.DataDir = dir + "/data"
-
-	if _, err := n.clusterSecret(); err == nil {
-		t.Fatal("a missing cluster secret was read successfully")
-	} else if !strings.Contains(err.Error(), "cluster-secret") {
-		t.Errorf("the error does not name the file: %v", err)
-	}
-
-	if err := os.MkdirAll(dir+"/secrets", 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(dir+"/secrets/cluster-secret", []byte("  a-cluster-secret\n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	secret, err := n.clusterSecret()
-	if err != nil {
-		t.Fatalf("a secret that appeared later was not read: %v", err)
-	}
-	// Trimmed, because one node's copy carrying a newline while another's does
-	// not would derive two different keys (bugboard #837).
-	if secret != "a-cluster-secret" {
-		t.Errorf("clusterSecret = %q, want it trimmed", secret)
-	}
-
-	// An empty file is not a secret. Deriving a key from one would silently
-	// give every node with an empty file the same key.
-	if err := os.WriteFile(dir+"/secrets/cluster-secret", []byte("   \n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if _, err := n.clusterSecret(); err == nil {
-		t.Error("an empty cluster secret file was accepted")
 	}
 }
 
@@ -166,7 +126,7 @@ func TestCoreAPIClient_aNodeWithNoGatewaySaysSo(t *testing.T) {
 	n.config.Node.DataDir = t.TempDir() + "/data"
 	n.config.HTTPGateway.Enabled = false
 
-	_, err := n.coreAPIClient()
+	_, err := n.coreAPIClient(context.Background())
 	if err == nil {
 		t.Fatal("a node running no gateway built a client to call one")
 	}

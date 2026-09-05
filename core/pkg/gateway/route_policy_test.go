@@ -91,6 +91,7 @@ var publicRoutes = []string{
 	"/v1/internal/join",
 	"/v1/internal/namespace/repair",
 	"/v1/internal/namespace/spawn",
+	"/v1/internal/node/enrol-key",
 	"/v1/internal/node/heartbeat",
 	"/v1/internal/node/register",
 	"/v1/internal/ping",
@@ -304,7 +305,7 @@ func TestRoutePolicy_serverlessReportsEveryRouteItRegisters(t *testing.T) {
 // registrations out of the source and a constant would be invisible to it.
 // This is what keeps the two spellings the same.
 func TestRoutePolicy_theNodeSelfRegistrationPathsMatchTheContract(t *testing.T) {
-	for _, path := range []string{nodeapi.PathRegister, nodeapi.PathHeartbeat} {
+	for _, path := range []string{nodeapi.PathRegister, nodeapi.PathHeartbeat, nodeapi.PathEnrolKey} {
 		found := false
 		for _, pattern := range gatewayRoutes.Patterns() {
 			if pattern == path {

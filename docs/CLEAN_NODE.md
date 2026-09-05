@@ -170,3 +170,26 @@ orama node remove --env testnet --node 1.2.3.4 --offline   # VPS already gone
 The manual steps earlier in this document remain useful for a node the CLI
 cannot reach — one whose SSH key is lost, or that was never enrolled. Run them
 over your own SSH session on that host.
+
+## Bringing a removed machine back
+
+`remove` revokes the node's key: the row in `node_credentials` keeps its
+`node_id` and gains a `revoked_at`, so the machine's disk stops being a working
+credential and cannot re-admit itself. That is deliberate — a retired node must
+not be able to walk back in on its own.
+
+**Re-admitting it is a join.** Mint an invite and install as you would for a new
+node:
+
+```bash
+orama operator invite --env testnet
+```
+
+The join clears the revoked row, and the machine records a fresh key on its next
+start. Nothing else is needed, and no manual SQL is involved.
+
+The same applies to a node that lost `secrets/node-key.pem` — a restore that
+missed it, a rebuilt disk — while keeping `data/identity.key` and so keeping its
+peer id. Its new key will not match the one on record, the cluster will refuse
+it, and the gateway log will say so. Re-join it; do not try to repair the row by
+hand.
