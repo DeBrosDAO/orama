@@ -1889,7 +1889,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 
 	if hasGateway {
 		gwRunning := false
-		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))
+		resp, err := http.Get(namespaceGatewayHealthURL(namespaceName, pb.GatewayHTTPPort))
 		if err == nil {
 			resp.Body.Close()
 			gwRunning = true
@@ -2681,7 +2681,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			}
 		}
 
-		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))
+		resp, err := http.Get(namespaceGatewayHealthURL(state.NamespaceName, pb.GatewayHTTPPort))
 		if err == nil {
 			resp.Body.Close()
 			switch {
@@ -2934,4 +2934,17 @@ func (cm *ClusterManager) signCoordination(r *http.Request) error {
 		return err
 	}
 	return auth.SignCoordination(key, r, time.Now())
+}
+
+// namespaceGatewayHealthURL is where this node's copy of a namespace gateway
+// answers a health check.
+//
+// A tenant's gateway binds the overlay address rather than every interface, so
+// a probe on localhost reads every healthy gateway as dead — which is why
+// moving the bind and moving the probe are one change and not two.
+func namespaceGatewayHealthURL(namespace string, port int) string {
+	if ip, err := overlayIP(); err == nil && !isIndexNamespace(namespace) {
+		return fmt.Sprintf("http://%s:%d/v1/health", ip, port)
+	}
+	return fmt.Sprintf("http://localhost:%d/v1/health", port)
 }
