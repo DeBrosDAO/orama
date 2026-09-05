@@ -47,12 +47,52 @@ Before deploying, authenticate with your wallet:
 # Authenticate with your wallet
 orama auth login
 
-# Who am I, and against which gateway?
+# Who am I, and what may I do? (asks the gateway)
 orama auth whoami
+
+# What is stored on this machine? (asks nobody)
 orama auth status
 ```
 
-Your API key is stored securely and used for all deployment operations.
+What is stored is a **session**, not a key: an access token lasting 15 minutes,
+renewed transparently from a 30-day refresh token. The CLI used to store an API
+key and send it as the credential of every request it made.
+
+On a machine with RootWallet running, the challenge is signed here. On one
+without — a server reached over SSH, a container, CI — `orama auth login` prints
+a code instead:
+
+```
+    Your code:  BCDF-GHJK
+
+  On a machine where RootWallet is running, run:
+
+    orama auth approve BCDF-GHJK
+```
+
+Approving costs the same wallet signature signing in does, which is what makes
+the code on its own worthless. `orama auth approve <code> --deny` refuses, and
+the waiting machine stops rather than polling until the code expires.
+
+### In CI
+
+Set `ORAMA_TOKEN` to either an API key or a token. A key is exchanged for a
+session once per run rather than sent on every request the run makes:
+
+```bash
+export ORAMA_TOKEN="$(orama namespace keys create --scope app-runtime --label ci)"
+```
+
+### Which machines are signed in
+
+```bash
+orama auth sessions                  # every live session for this wallet
+orama auth sessions revoke <id>      # end one
+orama auth sessions revoke --all     # end all of them
+```
+
+Ending a session stops it minting new access tokens. One already minted keeps
+working until it expires, at most 15 minutes.
 
 Creating a namespace is its own step, and the wallet that makes it owns it:
 
@@ -1281,12 +1321,12 @@ orama db query my-db "SELECT sql FROM sqlite_master WHERE name='users'"
 ### Authentication Issues
 
 ```bash
-# Re-authenticate
+# Re-authenticate. logout ends the session on the gateway as well as here.
 orama auth logout
 orama auth login
 
-# Check token validity
-orama auth status
+# Ask the gateway whether this credential still works, and what it holds
+orama auth whoami
 ```
 
 ### Need Help?

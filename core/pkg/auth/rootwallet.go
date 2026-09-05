@@ -240,33 +240,27 @@ func verifySignature(client *http.Client, gatewayURL, message, signature, namesp
 		return nil, fmt.Errorf("no api_key in verify response")
 	}
 
-	// Build namespace gateway URL
-	namespaceURL := ""
-	if d := extractDomainFromURL(gatewayURL); d != "" {
-		if namespace == "default" {
-			namespaceURL = fmt.Sprintf("https://%s", d)
-		} else {
-			namespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, d)
-		}
-	}
-
 	creds := &Credentials{
 		APIKey:       result.APIKey,
-		RefreshToken: result.RefreshToken,
 		Namespace:    result.Namespace,
 		UserID:       result.Subject,
 		Wallet:       result.Subject,
 		IssuedAt:     time.Now(),
-		NamespaceURL: namespaceURL,
+		NamespaceURL: namespaceGatewayURL(gatewayURL, namespace),
 	}
+	// The session this login was handed. Both of these were read out of the
+	// response and dropped, and the API key was sent as the bearer credential
+	// of every request afterwards instead.
+	creds.SetSession(result.AccessToken, result.RefreshToken, result.ExpiresIn)
 
 	// If 202, namespace cluster is being provisioned — set poll URL
 	if resp.StatusCode == http.StatusAccepted && result.PollURL != "" {
 		creds.ProvisioningPollURL = result.PollURL
 	}
 
-	// Note: result.ExpiresIn is the JWT access token lifetime (15min),
-	// NOT the API key lifetime. Don't set ExpiresAt — the API key is permanent.
+	// ExpiresAt stays unset: it is the API key's own life, and result.ExpiresIn
+	// is the access token's. They are different clocks and conflating them made
+	// a fifteen-minute number look like the key's expiry.
 
 	return creds, nil
 }

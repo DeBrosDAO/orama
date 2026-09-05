@@ -52,7 +52,11 @@ hashed, and rotates on every use: presenting one twice is a replay, and the
 second attempt fails and is recorded.
 
 `orama auth login` does this with RootWallet, which signs without the key
-leaving it.
+leaving it. What it keeps is the session — the access and refresh tokens above.
+It used to read them out of the response, drop them, and store the API key that
+came alongside, which then went in front of every gateway the CLI was pointed at
+for the next ninety days. The key is now presented once, to exchange it, and
+only when there is no session to renew.
 
 ### Signing in from a machine with no wallet on it
 
@@ -89,6 +93,10 @@ A pending login lasts ten minutes. Polling faster than the interval the gateway
 handed back answers `slow_down`; before approval, `authorization_pending`; after
 a refusal, `access_denied`. A login nobody came back for is swept away by the
 next one.
+
+`orama auth login` prints the user code and the command to run; `orama auth
+approve <code>` on a machine that has a wallet is what approves it, and
+`--deny` refuses.
 
 There is no `verification_uri` in the response. The RFC's field names a page a
 human opens, and there is no such page yet — `orama auth approve <code>` is the
@@ -223,7 +231,11 @@ Three other spellings are still accepted and are going away: `X-API-Key`,
 request that uses one comes back with `Deprecation: true` and an
 `X-Orama-Deprecation` header saying what to send instead, and the first use by
 each namespace is recorded in the audit trail so an owner can see which of their
-clients still has to move.
+clients still has to move. Neither the CLI nor the SDK sends one any more.
+
+`ORAMA_TOKEN` is the CI credential and takes either shape. A token is sent as it
+is; a key is exchanged for a session once per run, rather than being sent on
+every request that run makes.
 
 ---
 

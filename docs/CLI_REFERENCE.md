@@ -31,12 +31,15 @@ is the index.
   - [`orama app stats`](#orama-app-stats) — Show resource usage for a deployment
 - [`orama audit`](#orama-audit) — Read this namespace's audit trail
 - [`orama auth`](#orama-auth) — Authentication management
+  - [`orama auth approve`](#orama-auth-approve) — Approve a login waiting on another machine
   - [`orama auth list`](#orama-auth-list) — List all stored credentials
-  - [`orama auth login`](#orama-auth-login) — Authenticate with wallet
-  - [`orama auth logout`](#orama-auth-logout) — Clear stored credentials
-  - [`orama auth status`](#orama-auth-status) — Show detailed authentication info
+  - [`orama auth login`](#orama-auth-login) — Sign in, here or from another machine
+  - [`orama auth logout`](#orama-auth-logout) — End this session on the gateway and clear it here
+  - [`orama auth sessions`](#orama-auth-sessions) — Which machines are signed in as this wallet
+    - [`orama auth sessions revoke`](#orama-auth-sessions-revoke) — End one session, or every one
+  - [`orama auth status`](#orama-auth-status) — Show what is stored on this machine, without asking the gateway
   - [`orama auth switch`](#orama-auth-switch) — Switch between stored credentials
-  - [`orama auth whoami`](#orama-auth-whoami) — Show current authentication status
+  - [`orama auth whoami`](#orama-auth-whoami) — Ask the gateway who this credential is and what it may do
 - [`orama build`](#orama-build) — Build pre-compiled binary archive for deployment
 - [`orama db`](#orama-db) — Manage SQLite databases
   - [`orama db backup`](#orama-db-backup) — Backup database to IPFS
@@ -367,9 +370,35 @@ orama auth
 ```
 
 Manage authentication with the Orama network.
-Authentication is a RootWallet (rw) signature over a gateway challenge.
 
-Subcommands: `list`, `login`, `logout`, `status`, `switch`, `whoami`
+Signing in is a wallet signature over a gateway challenge. On a machine with
+RootWallet running it is signed here; on one without — a server reached over
+SSH, a container, CI — 'orama auth login' prints a code and 'orama auth approve'
+on a machine that does have a wallet approves it.
+
+What is stored is a session, not a key: an access token lasting 15 minutes,
+renewed transparently from a refresh token.
+
+Subcommands: `approve`, `list`, `login`, `logout`, `sessions`, `status`, `switch`, `whoami`
+
+### orama auth approve
+
+Approve a login waiting on another machine
+
+```
+orama auth approve <code> [flags]
+```
+
+Approve the code 'orama auth login' printed on a machine with no wallet on it.
+
+It costs the same wallet signature signing in does, which is what makes the code
+on its own worthless. --deny refuses instead, so the waiting machine stops
+rather than polling until the code expires.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--deny` | `false` | Refuse the login instead of approving it |
+| `--namespace` | — | Namespace to sign in to (defaults to the one this machine is signed in to) |
 
 ### orama auth list
 
@@ -381,7 +410,7 @@ orama auth list
 
 ### orama auth login
 
-Authenticate with wallet
+Sign in, here or from another machine
 
 ```
 orama auth login [flags]
@@ -393,15 +422,46 @@ orama auth login [flags]
 
 ### orama auth logout
 
-Clear stored credentials
+End this session on the gateway and clear it here
 
 ```
-orama auth logout
+orama auth logout [flags]
 ```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--all` | `false` | End every session for this wallet, not only this machine's |
+
+### orama auth sessions
+
+Which machines are signed in as this wallet
+
+```
+orama auth sessions
+```
+
+Subcommands: `revoke`
+
+### orama auth sessions revoke
+
+End one session, or every one
+
+```
+orama auth sessions revoke [id] [flags]
+```
+
+End a session listed by 'orama auth sessions'.
+
+Ending a session stops it minting new access tokens. One already minted keeps
+working until it expires, at most 15 minutes.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--all` | `false` | End every session for this wallet |
 
 ### orama auth status
 
-Show detailed authentication info
+Show what is stored on this machine, without asking the gateway
 
 ```
 orama auth status
@@ -417,7 +477,7 @@ orama auth switch
 
 ### orama auth whoami
 
-Show current authentication status
+Ask the gateway who this credential is and what it may do
 
 ```
 orama auth whoami

@@ -3,6 +3,9 @@ package shared
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,27 +147,52 @@ func TestGatewayURL_Precedence(t *testing.T) {
 	})
 }
 
+// exchangeGateway is a gateway that answers the one request the CLI makes with
+// a key: trading it for a session. It records what it was given.
+func exchangeGateway(t *testing.T, token string) (url string, presented *string) {
+	t.Helper()
+	seen := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/auth/token" {
+			t.Errorf("the CLI called %s; the only request it should make with a key is the exchange", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		seen = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"access_token":%q,"token_type":"Bearer","expires_in":900}`, token)
+	}))
+	t.Cleanup(server.Close)
+	return server.URL, &seen
+}
+
 // The defect this change exists for.
 func TestAuthToken_NeverSendsAnotherGatewaysKey(t *testing.T) {
 	home := isolatedHome(t)
-	writeActiveEnvironment(t, home, "devnet", "https://gateway-a")
-	storeCredential(t, home, "https://gateway-a", "ak_gateway_a_key:default")
+	gatewayA, presented := exchangeGateway(t, "token-for-a")
+	writeActiveEnvironment(t, home, "devnet", gatewayA)
+	storeCredential(t, home, gatewayA, "ak_gateway_a_key:default")
 
-	// Sanity: against gateway A the stored key is returned.
-	if token, err := GetAuthToken(); err != nil || token != "ak_gateway_a_key:default" {
-		t.Fatalf("expected gateway A's key, got %q / %v", token, err)
+	// Sanity: against gateway A the stored key buys a session, and the key
+	// itself goes only to the exchange.
+	token, err := GetAuthToken()
+	if err != nil || token != "token-for-a" {
+		t.Fatalf("expected gateway A's session, got %q / %v", token, err)
+	}
+	if *presented != "ak_gateway_a_key:default" {
+		t.Fatalf("the exchange was given %q, want gateway A's key", *presented)
 	}
 
 	// Now point the CLI at a different gateway. There is no credential for it,
 	// so the call must fail rather than attach gateway A's key.
 	t.Setenv("ORAMA_API_URL", "https://gateway-b")
 
-	token, err := GetAuthToken()
+	token, err = GetAuthToken()
 	if err == nil {
 		t.Fatalf("expected an error for a gateway with no credential, got token %q", token)
 	}
-	if token == "ak_gateway_a_key:default" {
-		t.Fatal("sent gateway A's key to gateway B")
+	if token == "ak_gateway_a_key:default" || token == "token-for-a" {
+		t.Fatal("sent gateway A's credential to gateway B")
 	}
 	if !strings.Contains(err.Error(), "https://gateway-b") {
 		t.Fatalf("the error should name the gateway actually being called, got: %v", err)
@@ -173,42 +201,60 @@ func TestAuthToken_NeverSendsAnotherGatewaysKey(t *testing.T) {
 
 func TestAuthToken_UsesTheCredentialForTheOverriddenGateway(t *testing.T) {
 	home := isolatedHome(t)
+	gatewayB, presented := exchangeGateway(t, "token-for-b")
 	writeActiveEnvironment(t, home, "devnet", "https://gateway-a")
 	storeCredential(t, home, "https://gateway-a", "ak_gateway_a_key:default")
-	storeCredentialAppend(t, home, "https://gateway-b", "ak_gateway_b_key:default")
+	storeCredentialAppend(t, home, gatewayB, "ak_gateway_b_key:default")
 
-	t.Setenv("ORAMA_API_URL", "https://gateway-b")
+	t.Setenv("ORAMA_API_URL", gatewayB)
 
 	token, err := GetAuthToken()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if token != "ak_gateway_b_key:default" {
-		t.Fatalf("got %q, want gateway B's own key", token)
+	if token != "token-for-b" {
+		t.Fatalf("got %q, want a session from gateway B", token)
+	}
+	if *presented != "ak_gateway_b_key:default" {
+		t.Fatalf("the exchange was given %q, want gateway B's own key", *presented)
 	}
 }
 
-func TestAuthToken_EnvTokenShortCircuits(t *testing.T) {
+// A key in the environment is a CI credential. It is exchanged once per run
+// rather than sent on every request the run makes.
+func TestAuthToken_EnvKeyIsExchangedForASession(t *testing.T) {
+	home := isolatedHome(t)
+	gateway, presented := exchangeGateway(t, "token-for-ci")
+	writeActiveEnvironment(t, home, "devnet", gateway)
+	t.Setenv(TokenEnvVar, "ak_ci_token:default")
+
+	token, err := GetAuthToken()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "token-for-ci" {
+		t.Fatalf("got %q, want the exchanged session", token)
+	}
+	if *presented != "ak_ci_token:default" {
+		t.Fatalf("the exchange was given %q, want the key from the environment", *presented)
+	}
+}
+
+// ORAMA_TOKEN takes either. A token is already the thing to send, and
+// exchanging it would be a round trip to be told it is not a key.
+func TestAuthToken_EnvTokenIsSentAsItIs(t *testing.T) {
 	home := isolatedHome(t)
 	writeActiveEnvironment(t, home, "devnet", "https://gateway-a")
-	t.Setenv(TokenEnvVar, "ak_ci_token:default")
+	const jwt = "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiIweG93bmVyIn0.c2ln"
+	t.Setenv(TokenEnvVar, jwt)
 
+	// No server is stood up: a request would fail, which is the assertion.
 	token, err := GetAuthToken()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if token != "ak_ci_token:default" {
-		t.Fatalf("got %q, want the token from the environment", token)
-	}
-}
-
-// A pre-issued token still requires a gateway to send it to.
-func TestAuthToken_EnvTokenStillNeedsAGateway(t *testing.T) {
-	isolatedHome(t)
-	t.Setenv(TokenEnvVar, "ak_ci_token:default")
-
-	if _, err := GetAuthToken(); !errors.Is(err, auth.ErrNoGateway) {
-		t.Fatalf("expected ErrNoGateway, got %v", err)
+	if token != jwt {
+		t.Fatalf("got %q, want the token from the environment unchanged", token)
 	}
 }
 

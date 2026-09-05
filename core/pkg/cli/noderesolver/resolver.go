@@ -56,23 +56,23 @@ func resolveFromNetwork(env string) ([]inspector.Node, error) {
 	}
 
 	// 2. Load stored credentials for this gateway
-	apiKey, err := loadAPIKey(gatewayURL)
+	token, err := loadBearer(gatewayURL)
 	if err != nil {
 		return nil, fmt.Errorf("no credentials for %s: %w (run 'orama auth login' first)", gatewayURL, err)
 	}
 
-	return resolveFromNetworkWithURL(gatewayURL, apiKey, env)
+	return resolveFromNetworkWithURL(gatewayURL, token, env)
 }
 
-// resolveFromNetworkWithURL queries a specific gateway URL with an API key.
+// resolveFromNetworkWithURL queries a specific gateway URL with a credential.
 // Exported for testing.
-func resolveFromNetworkWithURL(gatewayURL, apiKey, env string) ([]inspector.Node, error) {
+func resolveFromNetworkWithURL(gatewayURL, token, env string) ([]inspector.Node, error) {
 	endpoint := fmt.Sprintf("%s/v1/operator/nodes?env=%s", gatewayURL, url.QueryEscape(env))
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -160,17 +160,17 @@ func gatewayURLForEnv(env string) (string, error) {
 	return e.GatewayURL, nil
 }
 
-// loadAPIKey loads the stored API key for a gateway URL.
-func loadAPIKey(gatewayURL string) (string, error) {
+// loadBearer returns a short-lived credential for a gateway, renewing the
+// stored session if it has to.
+func loadBearer(gatewayURL string) (string, error) {
 	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
 		return "", fmt.Errorf("failed to load credentials: %w", err)
 	}
 
 	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil || creds.APIKey == "" {
+	if creds == nil {
 		return "", fmt.Errorf("no credentials found for %s", gatewayURL)
 	}
-
-	return creds.APIKey, nil
+	return auth.Bearer(gatewayURL, store, creds)
 }
