@@ -7,11 +7,14 @@ package command
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,9 +22,15 @@ import (
 )
 
 const (
-	// ListenAddr is the address for the command receiver (WG-only).
-	ListenAddr = ":9998"
+	// ListenPort is the port the command receiver listens on. The address it
+	// binds is the node's WireGuard address, passed in at construction — the
+	// constant used to be ":9998" with a comment claiming it was WireGuard
+	// only, which bound every interface including the public one.
+	ListenPort = 9998
 	logsDir    = "/opt/orama/.orama/logs"
+
+	// HeaderAuthorization carries the node's agent token as a bearer.
+	HeaderAuthorization = "Authorization"
 )
 
 // knownLogServices is the only set of log files the agent will read
@@ -54,34 +63,76 @@ type Command struct {
 type Receiver struct {
 	supervisor *sandbox.Supervisor
 	server     *http.Server
+
+	// wgIP is the node's address on the overlay. It is kept as the address
+	// rather than as a joined "host:port" because net.JoinHostPort("", port)
+	// is ":9998" — a non-empty string that binds every interface, which is
+	// exactly the state this exists to prevent.
+	wgIP string
+
+	// token is this node's own credential, minted at enrollment. Every request
+	// has to present it. Without it, restarting any service on any OramaOS node
+	// took one unauthenticated POST from anywhere that could route to the node.
+	token string
 }
 
-// NewReceiver creates a new command receiver.
-func NewReceiver(supervisor *sandbox.Supervisor) *Receiver {
+// NewReceiver creates a command receiver bound to the node's WireGuard address
+// and authenticated by the node's agent token.
+func NewReceiver(supervisor *sandbox.Supervisor, wgIP, token string) *Receiver {
 	return &Receiver{
 		supervisor: supervisor,
+		wgIP:       strings.TrimSpace(wgIP),
+		token:      strings.TrimSpace(token),
 	}
 }
 
 // Listen starts the HTTP server for receiving commands.
+//
+// It refuses to start without an address and a token: a receiver that binds
+// everything and authenticates nothing is what this exists to prevent, and
+// falling back to that on a misconfiguration would defeat the point.
 func (r *Receiver) Listen() {
-	mux := http.NewServeMux()
+	if r.wgIP == "" || r.token == "" {
+		log.Printf("command receiver not started: it needs the node's WireGuard address " +
+			"and agent token, and will not listen on every interface without a credential")
+		return
+	}
+	listenAddr := net.JoinHostPort(r.wgIP, strconv.Itoa(ListenPort))
 
-	mux.HandleFunc("/v1/agent/command", r.handleCommand)
-	mux.HandleFunc("/v1/agent/status", r.handleStatus)
-	mux.HandleFunc("/v1/agent/health", r.handleHealth)
-	mux.HandleFunc("/v1/agent/logs", r.handleLogs)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/agent/command", r.authenticated(r.handleCommand))
+	mux.HandleFunc("/v1/agent/status", r.authenticated(r.handleStatus))
+	mux.HandleFunc("/v1/agent/health", r.authenticated(r.handleHealth))
+	mux.HandleFunc("/v1/agent/logs", r.authenticated(r.handleLogs))
 
 	r.server = &http.Server{
-		Addr:         ListenAddr,
+		Addr:         listenAddr,
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
-	log.Printf("command receiver listening on %s", ListenAddr)
+	log.Printf("command receiver listening on %s", listenAddr)
 	if err := r.server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Printf("command receiver error: %v", err)
+	}
+}
+
+// authenticated refuses anything that does not present the node's agent token.
+//
+// Being on the WireGuard mesh is not the credential: every namespace's services
+// are on that mesh, and one of them being compromised should not mean every
+// node's services can be restarted.
+func (r *Receiver) authenticated(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		presented := strings.TrimPrefix(req.Header.Get(HeaderAuthorization), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(presented)), []byte(r.token)) != 1 {
+			log.Printf("refused an unauthenticated agent request from %s for %s",
+				req.RemoteAddr, req.URL.Path)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, req)
 	}
 }
 

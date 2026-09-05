@@ -798,21 +798,6 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	// the knob); 5000 is a sensible default per plan 06.
 	deps.PersistentWSManager = persistent.NewManager(5000, logger.Logger)
 
-	// Create HTTP handlers
-	deps.ServerlessHandlers = serverlesshandlers.NewServerlessHandlers(
-		deps.ServerlessInvoker,
-		deps.ServerlessEngine,
-		registry,
-		deps.ServerlessWSMgr,
-		triggerStore,
-		cronStore,
-		deps.PubSubDispatcher,
-		deps.PersistentWSManager,
-		deps.WSBridge,
-		secretsMgr,
-		logger.Logger,
-	)
-
 	// Initialize auth service with persistent signing keys (RSA + EdDSA)
 	keyPEM, err := loadOrCreateSigningKey(cfg.DataDir, logger)
 	if err != nil {
@@ -869,6 +854,23 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	}
 
 	deps.AuthService = authService
+
+	// Create HTTP handlers. Built after the auth service because the deploy,
+	// delete and secret endpoints write to the audit trail.
+	deps.ServerlessHandlers = serverlesshandlers.NewServerlessHandlers(
+		deps.ServerlessInvoker,
+		deps.ServerlessEngine,
+		registry,
+		deps.ServerlessWSMgr,
+		triggerStore,
+		cronStore,
+		deps.PubSubDispatcher,
+		deps.PersistentWSManager,
+		deps.WSBridge,
+		secretsMgr,
+		authService.Audit(),
+		logger.Logger,
+	)
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",
 		zap.Int("default_memory_mb", engineCfg.DefaultMemoryLimitMB),

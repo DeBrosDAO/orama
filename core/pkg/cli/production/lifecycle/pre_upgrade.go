@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"bufio"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,10 +35,9 @@ const (
 //  3. Transfers leadership on the index RQLite if leader
 //  4. Transfers leadership on each namespace RQLite
 //  5. Waits 15s for metadata propagation (H5 fix)
-func HandlePreUpgrade() {
-	if os.Geteuid() != 0 {
-		fmt.Fprintf(os.Stderr, "Error: pre-upgrade must be run as root (use sudo)\n")
-		os.Exit(1)
+func HandlePreUpgrade() error {
+	if err := clierr.RequireRoot("the pre-upgrade step"); err != nil {
+		return err
 	}
 
 	fmt.Printf("Pre-upgrade: preparing node for safe restart...\n")
@@ -45,8 +45,7 @@ func HandlePreUpgrade() {
 	// 1. Check quorum safety
 	if warning := checkQuorumSafety(); warning != "" {
 		fmt.Fprintf(os.Stderr, "  UNSAFE: %s\n", warning)
-		fmt.Fprintf(os.Stderr, "  Aborting pre-upgrade. Use 'orama stop --force' to override.\n")
-		os.Exit(1)
+		return clierr.Failure("  Aborting pre-upgrade. Use 'orama node stop --force' to override.")
 	}
 	fmt.Printf("  Quorum check passed\n")
 
@@ -68,8 +67,7 @@ func HandlePreUpgrade() {
 	if err := rqlite.TransferLeadership(constants.RQLiteHTTPPort, logger); err != nil {
 		fmt.Fprintf(os.Stderr, "  UNSAFE: this node still leads the index RQLite: %v\n", err)
 		fmt.Fprintf(os.Stderr, "  Restarting it now forces an election and fails in-flight writes.\n")
-		fmt.Fprintf(os.Stderr, "  Aborting pre-upgrade. Check the other voters are reachable, then retry.\n")
-		os.Exit(1)
+		return clierr.Failure("  Aborting pre-upgrade. Check the other voters are reachable, then retry.")
 	}
 	fmt.Printf("  Index RQLite leadership handled\n")
 
@@ -107,12 +105,12 @@ func HandlePreUpgrade() {
 	if err := waitForOtherLeader(constants.RQLiteHTTPPort, leaderHandoverBudget); err != nil {
 		fmt.Fprintf(os.Stderr, "  UNSAFE: %v\n", err)
 		fmt.Fprintf(os.Stderr, "  Stopping this node now would remove a voter from a cluster with no leader.\n")
-		fmt.Fprintf(os.Stderr, "  Aborting pre-upgrade. Check the other voters are reachable, then retry.\n")
-		os.Exit(1)
+		return clierr.Failure("  Aborting pre-upgrade. Check the other voters are reachable, then retry.")
 	}
 	fmt.Printf("  Another node is leading; safe to restart\n")
 
 	fmt.Printf("Pre-upgrade complete. Node is ready for restart.\n")
+	return nil
 }
 
 // getNamespaceRQLitePorts scans namespace env files to find RQLite HTTP ports.
@@ -198,4 +196,16 @@ func waitForOtherLeader(port int, budget time.Duration) error {
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// ClearMaintenanceFlag removes the flag HandlePreUpgrade wrote.
+//
+// It is separate from HandlePostUpgrade because the upgrade orchestrator
+// restarts the services itself and only needs this last step; calling the whole
+// post-upgrade would start everything a second time.
+func ClearMaintenanceFlag() error {
+	if err := os.Remove(maintenanceFlagPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove the maintenance flag: %w", err)
+	}
+	return nil
 }

@@ -242,8 +242,13 @@ type claimQuery struct {
 	rows     []claimRow
 	queryErr error
 	tokenErr error
-	// tokenDead makes the liveness gate report no matching token.
+	// tokenDead makes the liveness gate find no row at all: the token was
+	// never issued.
 	tokenDead bool
+	// tokenUsed and tokenExpired make the row exist but not be live, which is
+	// what the two refusals the operator can act on look like.
+	tokenUsed    bool
+	tokenExpired bool
 	// insertErr fails the peer INSERT, the one step after the token is spent.
 	insertErr error
 	sawQuery  string
@@ -280,17 +285,27 @@ func (c *claimQuery) Query(_ context.Context, dest any, query string, args ...an
 			return c.tokenErr
 		}
 		if c.tokenDead {
+			// No row at all: the token was never issued.
 			return nil
 		}
 		out, ok := dest.(*[]struct {
-			Token string `db:"token"`
+			Used    int `db:"used"`
+			Expired int `db:"expired"`
 		})
 		if !ok {
 			return fmt.Errorf("unexpected token destination type %T", dest)
 		}
-		*out = append(*out, struct {
-			Token string `db:"token"`
-		}{"a-valid-token"})
+		row := struct {
+			Used    int `db:"used"`
+			Expired int `db:"expired"`
+		}{}
+		if c.tokenUsed {
+			row.Used = 1
+		}
+		if c.tokenExpired {
+			row.Expired = 1
+		}
+		*out = append(*out, row)
 		return nil
 	}
 

@@ -130,9 +130,20 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 	return data, nil
 }
 
-// denyInternalURL blocks fetches to loopback, private, link-local, and
-// unspecified addresses so tenant WASM cannot reach RQLite/agent/Olric
-// on the gateway host (bugboard #83).
+// denyInternalURL rejects a URL that is refusable from its text alone.
+//
+// It is the first of two checks and not the load-bearing one. It used to be the
+// only one, and it let through every URL whose host was a name rather than an
+// IP literal — `http://rqlite.internal/`, or any name the tenant controlled
+// pointed at 10.0.0.x. A name cannot be checked: the resolver decides what it
+// becomes, the answer can change between this check and the connection, and a
+// redirect goes somewhere this URL never named.
+//
+// The real check is guardEgressAddress, which runs on the socket itself with
+// the resolved address, for every attempt and every redirect hop. What is left
+// here is what can be settled without resolving anything: the scheme, the names
+// that mean the machine itself, and an IP literal that is already refusable —
+// answered as a clear message rather than as a connection failure.
 func denyInternalURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
@@ -146,11 +157,7 @@ func denyInternalURL(raw string) error {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "metadata.google.internal" {
 		return fmt.Errorf("url host not allowed")
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return nil
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+	if ip := net.ParseIP(host); ip != nil && blockedIP(ip) {
 		return fmt.Errorf("url host not allowed")
 	}
 	return nil

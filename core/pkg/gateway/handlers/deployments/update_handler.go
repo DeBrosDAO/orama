@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"go.uber.org/zap"
 )
@@ -106,6 +107,10 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	h.service.FanOutToReplicas(ctx, updated, "/v1/internal/deployments/replica/update", map[string]interface{}{
 		"new_version": updated.Version,
 	})
+
+	// An update replaces what is running under an existing name, so it is a
+	// deploy in the record.
+	h.service.RecordAudit(r, updated.Namespace, auth.AuditDeploymentCreated, updated.Name)
 
 	// Return response
 	resp := map[string]interface{}{

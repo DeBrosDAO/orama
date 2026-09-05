@@ -31,6 +31,9 @@ func NewDomainHandler(service *DeploymentService, logger *zap.Logger) *DomainHan
 
 // HandleAddDomain adds a custom domain to a deployment
 func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodPost) {
+		return
+	}
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -150,6 +153,9 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 
 // HandleVerifyDomain verifies domain ownership via TXT record
 func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodPost) {
+		return
+	}
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -251,6 +257,9 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 
 // HandleListDomains lists all domains for a deployment
 func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -259,36 +268,46 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 	}
 	deploymentName := r.URL.Query().Get("deployment_name")
 
-	if deploymentName == "" {
-		http.Error(w, "deployment_name query parameter is required", http.StatusBadRequest)
-		return
-	}
-
-	// Get deployment
-	deployment, err := h.service.GetDeployment(ctx, namespace, deploymentName)
-	if err != nil {
-		http.Error(w, "Deployment not found", http.StatusNotFound)
-		return
-	}
-
-	// Query domains
+	// Query domains. Without a deployment_name this lists every domain in the
+	// namespace, which is what an operator asking "what domains do I have"
+	// wants; naming a deployment narrows it to that one. It used to reject the
+	// request, so answering that question meant listing the deployments first
+	// and calling this once per deployment.
 	type domainRow struct {
+		DeploymentName     string     `db:"name"`
 		Domain             string     `db:"domain"`
 		VerificationStatus string     `db:"verification_status"`
 		CreatedAt          time.Time  `db:"created_at"`
 		VerifiedAt         *time.Time `db:"verified_at"`
 	}
 
-	var rows []domainRow
 	query := `
-		SELECT domain, verification_status, created_at, verified_at
-		FROM deployment_domains
-		WHERE deployment_id = ?
-		ORDER BY created_at DESC
+		SELECT d.name, dd.domain, dd.verification_status, dd.created_at, dd.verified_at
+		FROM deployment_domains dd
+		JOIN deployments d ON dd.deployment_id = d.id
+		WHERE d.namespace = ?
+		ORDER BY dd.created_at DESC
 	`
+	args := []interface{}{namespace}
 
-	err = h.service.db.Query(ctx, &rows, query, deployment.ID)
-	if err != nil {
+	if deploymentName != "" {
+		deployment, err := h.service.GetDeployment(ctx, namespace, deploymentName)
+		if err != nil {
+			http.Error(w, "Deployment not found", http.StatusNotFound)
+			return
+		}
+		query = `
+			SELECT d.name, dd.domain, dd.verification_status, dd.created_at, dd.verified_at
+			FROM deployment_domains dd
+			JOIN deployments d ON dd.deployment_id = d.id
+			WHERE d.namespace = ? AND dd.deployment_id = ?
+			ORDER BY dd.created_at DESC
+		`
+		args = append(args, deployment.ID)
+	}
+
+	var rows []domainRow
+	if err := h.service.db.Query(ctx, &rows, query, args...); err != nil {
 		h.logger.Error("Failed to query domains", zap.Error(err))
 		http.Error(w, "Failed to query domains", http.StatusInternalServerError)
 		return
@@ -297,6 +316,7 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 	domains := make([]map[string]interface{}, len(rows))
 	for i, row := range rows {
 		domains[i] = map[string]interface{}{
+			"deployment_name":     row.DeploymentName,
 			"domain":              row.Domain,
 			"verification_status": row.VerificationStatus,
 			"created_at":          row.CreatedAt,
@@ -318,6 +338,9 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 
 // HandleRemoveDomain removes a custom domain
 func (h *DomainHandler) HandleRemoveDomain(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodDelete, http.MethodPost) {
+		return
+	}
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -382,6 +405,25 @@ func (h *DomainHandler) HandleRemoveDomain(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// allowMethod rejects a request whose method is not one of allowed, and sets
+// Allow so a client is told what the endpoint takes.
+//
+// These endpoints accepted any method: `list` and `remove` read query
+// parameters, so a GET to `remove` deleted the domain, and the docs and the
+// website disagreed about which verb each one took because nothing enforced an
+// answer. Remove takes DELETE, and POST as well because that is what the
+// deployment guide has told people to send.
+func allowMethod(w http.ResponseWriter, r *http.Request, allowed ...string) bool {
+	for _, m := range allowed {
+		if r.Method == m {
+			return true
+		}
+	}
+	w.Header().Set("Allow", strings.Join(allowed, ", "))
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	return false
 }
 
 // Helper functions

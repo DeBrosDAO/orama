@@ -1,4 +1,5 @@
 import { HttpClient } from "../core/http";
+import { Logger } from "../core/logger";
 import { WSClient, WSClientConfig } from "../core/ws";
 import {
   PubSubMessage,
@@ -39,16 +40,27 @@ function base64EncodeBytes(bytes: Uint8Array): string {
   throw new Error("No base64 encoding method available");
 }
 
-function base64Decode(b64: string): string {
+/**
+ * Decode a base64 payload to the bytes that were published.
+ *
+ * The receive path used to go straight to a UTF-8 string, so a `Uint8Array`
+ * published through `publish` — which the README advertises and the publish
+ * path supports — came back through a lossy text decode and could not be
+ * recovered. Decoding to bytes is what the wire actually carries; the text view
+ * is derived from it.
+ */
+function base64DecodeBytes(b64: string): Uint8Array {
   if (typeof Buffer !== "undefined") {
-    return Buffer.from(b64, "base64").toString("utf-8");
-  } else if (typeof atob !== "undefined") {
+    const buf = Buffer.from(b64, "base64");
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+  if (typeof atob !== "undefined") {
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return new TextDecoder().decode(bytes);
+    return bytes;
   }
   throw new Error("No base64 decoding method available");
 }
@@ -140,13 +152,18 @@ export class PubSubClient {
       ...this.wsConfig,
       wsURL: wsUrl.toString(),
       authToken,
+      logger: this.httpClient.logger("WSClient"),
     });
 
     await wsClient.connect();
 
     // Create subscription wrapper
-    const subscription = new Subscription(wsClient, topic, presence, () =>
-      this.getPresence(topic)
+    const subscription = new Subscription(
+      wsClient,
+      topic,
+      presence,
+      () => this.getPresence(topic),
+      this.httpClient.logger("Subscription")
     );
 
     if (options.onMessage) {
@@ -178,17 +195,26 @@ export class Subscription {
   private wsErrorHandler: ((error: Error) => void) | null = null;
   private wsCloseHandler: ((code: number, reason: string) => void) | null = null;
   private getPresenceFn: () => Promise<PresenceResponse>;
+  private readonly log: Logger;
 
+  /**
+   * @param logger Defaults to a logger that prints nothing. `PubSubClient`
+   * always supplies one carrying the client's `debug` setting; the parameter
+   * is optional only because `Subscription` is exported and so can be built
+   * directly.
+   */
   constructor(
     wsClient: WSClient,
     topic: string,
     presenceOptions: PresenceOptions | undefined,
-    getPresenceFn: () => Promise<PresenceResponse>
+    getPresenceFn: () => Promise<PresenceResponse>,
+    logger: Logger = Logger.disabled()
   ) {
     this.wsClient = wsClient;
     this.topic = topic;
     this.presenceOptions = presenceOptions;
     this.getPresenceFn = getPresenceFn;
+    this.log = logger;
 
     // Register message handler
     this.wsMessageHandler = (data) => {
@@ -207,7 +233,7 @@ export class Subscription {
           envelope.type === "presence.leave"
         ) {
           if (!envelope.member_id) {
-            console.warn("[Subscription] Presence event missing member_id");
+            this.log.warn("Presence event missing member_id");
             return;
           }
 
@@ -243,19 +269,19 @@ export class Subscription {
           );
         }
 
-        // Decode base64 data
-        const messageData = base64Decode(envelope.data);
+        const bytes = base64DecodeBytes(envelope.data);
 
         const message: PubSubMessage = {
           topic: envelope.topic,
-          data: messageData,
+          bytes,
+          data: new TextDecoder().decode(bytes),
           timestamp: envelope.timestamp,
         };
 
-        console.log("[Subscription] Received message on topic:", this.topic);
+        this.log.log(`Received message on topic: ${this.topic}`);
         this.messageHandlers.forEach((handler) => handler(message));
       } catch (error) {
-        console.error("[Subscription] Error processing message:", error);
+        this.log.error("Error processing message:", error);
         this.errorHandlers.forEach((handler) =>
           handler(error instanceof Error ? error : new Error(String(error)))
         );

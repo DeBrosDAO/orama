@@ -1,16 +1,19 @@
 package db
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/cli/shared"
 	"github.com/spf13/cobra"
 )
 
@@ -71,7 +74,10 @@ func init() {
 func createDatabase(cmd *cobra.Command, args []string) error {
 	dbName := args[0]
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/db/sqlite/create"
 
 	payload := map[string]string{
@@ -130,7 +136,10 @@ func queryDatabase(cmd *cobra.Command, args []string) error {
 	dbName := args[0]
 	sql := args[1]
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/db/sqlite/query"
 
 	payload := map[string]interface{}{
@@ -211,7 +220,10 @@ func queryDatabase(cmd *cobra.Command, args []string) error {
 }
 
 func listDatabases(cmd *cobra.Command, args []string) error {
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/db/sqlite/list"
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -247,22 +259,27 @@ func listDatabases(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	databases, ok := result["databases"].([]interface{})
-	if !ok || len(databases) == 0 {
-		fmt.Println("No databases found")
+	out := printer.For(cmd)
+	if out.JSONMode() {
+		// The gateway's reply verbatim, including the exact byte counts rather
+		// than the rounded sizes the table shows.
+		fmt.Fprintln(out.Out(), string(body))
 		return nil
 	}
 
-	// Print table
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSIZE\tBACKUP CID\tCREATED")
+	databases, ok := result["databases"].([]interface{})
+	if !ok || len(databases) == 0 {
+		out.Printf("No databases found\n")
+		return nil
+	}
 
+	rows := make([][]string, 0, len(databases))
 	for _, db := range databases {
-		d := db.(map[string]interface{})
+		d, _ := db.(map[string]interface{})
 
 		size := "0 B"
 		if sizeBytes, ok := d["size_bytes"].(float64); ok {
-			size = formatBytes(int64(sizeBytes))
+			size = printer.FormatBytes(int64(sizeBytes))
 		}
 
 		backupCID := "-"
@@ -281,18 +298,13 @@ func listDatabases(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			d["database_name"],
-			size,
-			backupCID,
-			createdAt,
-		)
+		rows = append(rows, []string{fmt.Sprint(d["database_name"]), size, backupCID, createdAt})
 	}
 
-	w.Flush()
-
-	fmt.Printf("\nTotal: %v\n", result["total"])
-
+	if err := out.Table([]string{"NAME", "SIZE", "BACKUP CID", "CREATED"}, rows); err != nil {
+		return err
+	}
+	out.Printf("\nTotal: %v\n", result["total"])
 	return nil
 }
 
@@ -301,7 +313,10 @@ func backupDatabase(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("📦 Backing up database '%s' to IPFS...\n", dbName)
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := apiURL + "/v1/db/sqlite/backup"
 
 	payload := map[string]string{
@@ -359,7 +374,10 @@ func backupDatabase(cmd *cobra.Command, args []string) error {
 func listBackups(cmd *cobra.Command, args []string) error {
 	dbName := args[0]
 
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return err
+	}
 	url := fmt.Sprintf("%s/v1/db/sqlite/backups?database_name=%s", apiURL, dbName)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -415,7 +433,7 @@ func listBackups(cmd *cobra.Command, args []string) error {
 
 		size := "0 B"
 		if sizeBytes, ok := b["size_bytes"].(float64); ok {
-			size = formatBytes(int64(sizeBytes))
+			size = printer.FormatBytes(int64(sizeBytes))
 		}
 
 		backedUpAt := ""
@@ -435,46 +453,66 @@ func listBackups(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func getAPIURL() string {
-	if url := os.Getenv("ORAMA_API_URL"); url != "" {
-		return url
-	}
-	return auth.GetDefaultGatewayURL()
+// getAPIURL and getAuthToken resolve the gateway and its credential through
+// the one shared resolver, so a request can never carry another gateway's key.
+func getAPIURL() (string, error)    { return shared.GetAPIURL() }
+func getAuthToken() (string, error) { return shared.GetAuthToken() }
+
+// DeleteCmd deletes a database and its file.
+var DeleteCmd = &cobra.Command{
+	Use:   "delete <database_name>",
+	Short: "Delete a database and its file",
+	Long: `Permanently delete a database.
+
+The file and its write-ahead log are removed from the node that holds them.
+There is no undo: restore from a backup with 'orama db backups' if you need the
+data again.`,
+	Args: cobra.ExactArgs(1),
+	RunE: deleteDatabase,
 }
 
-func getAuthToken() (string, error) {
-	if token := os.Getenv("ORAMA_TOKEN"); token != "" {
-		return token, nil
+var dbDeleteYes bool
+
+func init() {
+	DeleteCmd.Flags().BoolVar(&dbDeleteYes, "yes", false, "Skip the confirmation prompt")
+	DBCmd.AddCommand(DeleteCmd)
+}
+
+// deleteDatabase removes a database after the operator types its name back.
+//
+// A y/n prompt is answered reflexively; typing the name is not, and it is the
+// one check that catches the case that matters here — the right command aimed
+// at the wrong database.
+func deleteDatabase(cmd *cobra.Command, args []string) error {
+	dbName := args[0]
+
+	if !dbDeleteYes {
+		fmt.Printf("This permanently deletes %q and its file. There is no undo.\n", dbName)
+		fmt.Printf("Type the database name to confirm: ")
+
+		typed, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read confirmation: %w", err)
+		}
+		if strings.TrimSpace(typed) != dbName {
+			fmt.Println("Names do not match. Nothing was deleted.")
+			return nil
+		}
 	}
 
-	// Try to get from enhanced credentials store
-	store, err := auth.LoadEnhancedCredentials()
+	raw, err := shared.Request("POST", "/v1/db/sqlite/delete",
+		map[string]string{"database_name": dbName})
 	if err != nil {
-		return "", fmt.Errorf("failed to load credentials: %w", err)
+		return err
 	}
 
-	gatewayURL := auth.GetDefaultGatewayURL()
-	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil {
-		return "", fmt.Errorf("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
+	var resp struct {
+		FilesRemoved []string `json:"files_removed"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return fmt.Errorf("parse gateway response: %w", err)
 	}
 
-	if !creds.IsValid() {
-		return "", fmt.Errorf("credentials expired for %s. Run 'orama auth login' to re-authenticate", gatewayURL)
-	}
-
-	return creds.APIKey, nil
-}
-
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+	fmt.Printf("✓ %s deleted (%d file(s) removed).\n", dbName, len(resp.FilesRemoved))
+	return nil
 }

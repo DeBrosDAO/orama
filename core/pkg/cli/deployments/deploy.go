@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/cli/shared"
 	"github.com/spf13/cobra"
 )
 
@@ -58,33 +58,62 @@ var DeployNodeJSCmd = &cobra.Command{
 }
 
 var (
-	deployName      string
-	deploySubdomain string
-	deploySSR       bool
-	deployUpdate    bool
+	deployName        string
+	deploySubdomain   string
+	deploySSR         bool
+	deployUpdate      bool
+	deployEnv         []string
+	deployEnvFile     string
+	deployHealthCheck string
 )
 
+// addRuntimeFlags registers the flags every deployment type takes.
+//
+// Registering them per command by hand is how --env came to exist on the
+// server, be parsed only by the Go handler, and be sent by nothing.
+func addRuntimeFlags(cmd *cobra.Command, withHealthCheck bool) {
+	cmd.Flags().StringVar(&deployName, "name", "", "Deployment name (required)")
+	cmd.Flags().StringVar(&deploySubdomain, "subdomain", "", "Custom subdomain")
+	cmd.Flags().BoolVar(&deployUpdate, "update", false, "Update existing deployment")
+	cmd.Flags().StringArrayVar(&deployEnv, "env", nil, "Environment variable as KEY=VALUE (repeatable)")
+	cmd.Flags().StringVar(&deployEnvFile, "env-file", "", "Read environment variables from a .env file")
+	if withHealthCheck {
+		cmd.Flags().StringVar(&deployHealthCheck, "health-check", "",
+			"Path the platform polls to decide the app is up (default /health)")
+	}
+	_ = cmd.MarkFlagRequired("name")
+}
+
+// deployForm builds the upload form fields shared by every deployment type.
+func deployForm(withHealthCheck bool) (map[string]string, error) {
+	env, err := envPairs(deployEnv, deployEnvFile)
+	if err != nil {
+		return nil, err
+	}
+
+	form := map[string]string{
+		"name":      deployName,
+		"subdomain": deploySubdomain,
+	}
+	addEnvFields(form, env)
+
+	if withHealthCheck && deployHealthCheck != "" {
+		form["health_check_path"] = deployHealthCheck
+	}
+	if len(env) > 0 {
+		fmt.Printf("   Environment: %s\n", strings.Join(sortedEnvKeys(env), ", "))
+	}
+	return form, nil
+}
+
 func init() {
-	DeployStaticCmd.Flags().StringVar(&deployName, "name", "", "Deployment name (required)")
-	DeployStaticCmd.Flags().StringVar(&deploySubdomain, "subdomain", "", "Custom subdomain")
-	DeployStaticCmd.Flags().BoolVar(&deployUpdate, "update", false, "Update existing deployment")
-	DeployStaticCmd.MarkFlagRequired("name")
-
-	DeployNextJSCmd.Flags().StringVar(&deployName, "name", "", "Deployment name (required)")
-	DeployNextJSCmd.Flags().StringVar(&deploySubdomain, "subdomain", "", "Custom subdomain")
+	// Static and Next.js static have no process, so nothing polls a health
+	// check path for them.
+	addRuntimeFlags(DeployStaticCmd, false)
+	addRuntimeFlags(DeployNextJSCmd, true)
 	DeployNextJSCmd.Flags().BoolVar(&deploySSR, "ssr", false, "Deploy with SSR (server-side rendering)")
-	DeployNextJSCmd.Flags().BoolVar(&deployUpdate, "update", false, "Update existing deployment")
-	DeployNextJSCmd.MarkFlagRequired("name")
-
-	DeployGoCmd.Flags().StringVar(&deployName, "name", "", "Deployment name (required)")
-	DeployGoCmd.Flags().StringVar(&deploySubdomain, "subdomain", "", "Custom subdomain")
-	DeployGoCmd.Flags().BoolVar(&deployUpdate, "update", false, "Update existing deployment")
-	DeployGoCmd.MarkFlagRequired("name")
-
-	DeployNodeJSCmd.Flags().StringVar(&deployName, "name", "", "Deployment name (required)")
-	DeployNodeJSCmd.Flags().StringVar(&deploySubdomain, "subdomain", "", "Custom subdomain")
-	DeployNodeJSCmd.Flags().BoolVar(&deployUpdate, "update", false, "Update existing deployment")
-	DeployNodeJSCmd.MarkFlagRequired("name")
+	addRuntimeFlags(DeployGoCmd, true)
+	addRuntimeFlags(DeployNodeJSCmd, true)
 
 	DeployCmd.AddCommand(DeployStaticCmd)
 	DeployCmd.AddCommand(DeployNextJSCmd)
@@ -117,10 +146,12 @@ func deployStatic(cmd *cobra.Command, args []string) error {
 		endpoint = "/v1/deployments/static/update?name=" + deployName
 	}
 
-	resp, err := uploadDeployment(endpoint, tarball, map[string]string{
-		"name":      deployName,
-		"subdomain": deploySubdomain,
-	})
+	form, err := deployForm(false)
+	if err != nil {
+		return err
+	}
+
+	resp, err := uploadDeployment(endpoint, tarball, form)
 	if err != nil {
 		return err
 	}
@@ -205,11 +236,13 @@ func deployNextJS(cmd *cobra.Command, args []string) error {
 		endpoint = "/v1/deployments/nextjs/update?name=" + deployName
 	}
 
-	resp, err := uploadDeployment(endpoint, tarball, map[string]string{
-		"name":      deployName,
-		"subdomain": deploySubdomain,
-		"ssr":       fmt.Sprintf("%t", deploySSR),
-	})
+	form, err := deployForm(true)
+	if err != nil {
+		return err
+	}
+	form["ssr"] = fmt.Sprintf("%t", deploySSR)
+
+	resp, err := uploadDeployment(endpoint, tarball, form)
 	if err != nil {
 		return err
 	}
@@ -261,10 +294,12 @@ func deployGo(cmd *cobra.Command, args []string) error {
 		endpoint = "/v1/deployments/go/update?name=" + deployName
 	}
 
-	resp, err := uploadDeployment(endpoint, tarball, map[string]string{
-		"name":      deployName,
-		"subdomain": deploySubdomain,
-	})
+	form, err := deployForm(true)
+	if err != nil {
+		return err
+	}
+
+	resp, err := uploadDeployment(endpoint, tarball, form)
 	if err != nil {
 		return err
 	}
@@ -316,10 +351,12 @@ func deployNodeJS(cmd *cobra.Command, args []string) error {
 		endpoint = "/v1/deployments/nodejs/update?name=" + deployName
 	}
 
-	resp, err := uploadDeployment(endpoint, tarball, map[string]string{
-		"name":      deployName,
-		"subdomain": deploySubdomain,
-	})
+	form, err := deployForm(true)
+	if err != nil {
+		return err
+	}
+
+	resp, err := uploadDeployment(endpoint, tarball, form)
 	if err != nil {
 		return err
 	}
@@ -540,7 +577,10 @@ func uploadDeployment(endpoint, tarballPath string, formData map[string]string) 
 	writer.Close()
 
 	// Get API URL from config
-	apiURL := getAPIURL()
+	apiURL, err := getAPIURL()
+	if err != nil {
+		return nil, err
+	}
 	url := apiURL + endpoint
 
 	// Create request
@@ -603,36 +643,7 @@ func printDeploymentInfo(resp map[string]interface{}) {
 	}
 }
 
-func getAPIURL() string {
-	// Check environment variable first
-	if url := os.Getenv("ORAMA_API_URL"); url != "" {
-		return url
-	}
-	// Get from active environment config
-	return auth.GetDefaultGatewayURL()
-}
-
-func getAuthToken() (string, error) {
-	// Check environment variable first
-	if token := os.Getenv("ORAMA_TOKEN"); token != "" {
-		return token, nil
-	}
-
-	// Try to get from enhanced credentials store
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		return "", fmt.Errorf("failed to load credentials: %w", err)
-	}
-
-	gatewayURL := auth.GetDefaultGatewayURL()
-	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil {
-		return "", fmt.Errorf("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
-	}
-
-	if !creds.IsValid() {
-		return "", fmt.Errorf("credentials expired for %s. Run 'orama auth login' to re-authenticate", gatewayURL)
-	}
-
-	return creds.APIKey, nil
-}
+// getAPIURL and getAuthToken resolve the gateway and its credential through
+// the one shared resolver, so a request can never carry another gateway's key.
+func getAPIURL() (string, error)    { return shared.GetAPIURL() }
+func getAuthToken() (string, error) { return shared.GetAuthToken() }

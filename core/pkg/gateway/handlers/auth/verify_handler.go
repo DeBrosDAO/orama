@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
 
 // VerifyHandler verifies a wallet signature and issues JWT tokens and an API key.
@@ -32,107 +34,62 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if strings.TrimSpace(req.Wallet) == "" || strings.TrimSpace(req.Nonce) == "" || strings.TrimSpace(req.Signature) == "" {
-		writeError(w, http.StatusBadRequest, "wallet, nonce and signature are required")
+	if strings.TrimSpace(req.Message) == "" || strings.TrimSpace(req.Signature) == "" {
+		writeError(w, http.StatusBadRequest, "message and signature are required: sign the message "+
+			"returned by /v1/auth/challenge and send it back verbatim")
 		return
 	}
 
 	ctx := r.Context()
-	verified, err := h.authService.VerifySignature(ctx, req.Wallet, req.Nonce, req.Signature, req.ChainType)
-	if err != nil || !verified {
-		writeError(w, http.StatusUnauthorized, "signature verification failed")
+	in, ok := h.signIn(w, r, req.Message, req.Signature)
+	if !ok {
+		return
+	}
+	wallet, namespace := in.Wallet, in.Namespace
+
+	// Refuse before anything is issued or provisioned: a namespace that belongs
+	// to another wallet is not this caller's to sign in to.
+	if err := h.authService.RequireNamespaceOwner(ctx, wallet, namespace); err != nil {
+		writeCredentialError(w, namespace, err)
 		return
 	}
 
-	// Mark nonce used
-	nsID, _ := h.resolveNamespace(ctx, req.Namespace)
-	h.markNonceUsed(ctx, nsID, strings.ToLower(req.Wallet), req.Nonce)
+	// Signing in does not provision anything. It used to: a challenge created
+	// the namespace and verifying the signature spun up its cluster, so an
+	// anonymous caller could create infrastructure by naming a name. Creating a
+	// namespace is POST /v1/namespaces, and that is what provisions it.
+	//
+	// A namespace whose cluster is still coming up is reported by
+	// /v1/namespace/status, which the create path hands back a poll URL for.
 
-	// Check if namespace cluster provisioning is needed (for non-default namespaces)
-	namespace := strings.TrimSpace(req.Namespace)
-	if namespace == "" {
-		namespace = "default"
-	}
-
-	if h.clusterProvisioner != nil && namespace != "default" {
-		clusterID, status, needsProvisioning, checkErr := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
-		if checkErr != nil {
-			_ = checkErr // Log but don't fail
-		} else if needsProvisioning || status == "provisioning" {
-			// Issue tokens and API key before returning provisioning status
-			token, refresh, expUnix, tokenErr := h.authService.IssueTokens(ctx, req.Wallet, req.Namespace)
-			if tokenErr != nil {
-				writeError(w, http.StatusInternalServerError, tokenErr.Error())
-				return
-			}
-			apiKey, keyErr := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
-			if keyErr != nil {
-				writeError(w, http.StatusInternalServerError, keyErr.Error())
-				return
-			}
-
-			pollURL := ""
-			if needsProvisioning {
-				nsIDInt := 0
-				if id, ok := nsID.(int); ok {
-					nsIDInt = id
-				} else if id, ok := nsID.(int64); ok {
-					nsIDInt = int(id)
-				} else if id, ok := nsID.(float64); ok {
-					nsIDInt = int(id)
-				}
-
-				newClusterID, newPollURL, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
-				if provErr != nil {
-					writeError(w, http.StatusInternalServerError, "failed to start cluster provisioning")
-					return
-				}
-				clusterID = newClusterID
-				pollURL = newPollURL
-			} else {
-				pollURL = "/v1/namespace/status?id=" + clusterID
-			}
-
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":                 "provisioning",
-				"cluster_id":             clusterID,
-				"poll_url":               pollURL,
-				"estimated_time_seconds": 60,
-				"access_token":           token,
-				"token_type":             "Bearer",
-				"expires_in":             int(expUnix - time.Now().Unix()),
-				"refresh_token":          refresh,
-				"api_key":                apiKey,
-				"namespace":              req.Namespace,
-				"subject":                req.Wallet,
-				"nonce":                  req.Nonce,
-				"signature_verified":     true,
-			})
-			return
-		}
-	}
-
-	token, refresh, expUnix, err := h.authService.IssueTokens(ctx, req.Wallet, req.Namespace)
+	token, refresh, expUnix, err := h.authService.IssueTokens(ctx, wallet, namespace)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
+	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, wallet, namespace)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeCredentialError(w, namespace, err)
 		return
 	}
+
+	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+		Namespace: namespace,
+		Actor:     wallet,
+		Action:    authsvc.AuditVerifySucceeded,
+		Result:    authsvc.AuditSuccess,
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":       token,
 		"token_type":         "Bearer",
 		"expires_in":         int(expUnix - time.Now().Unix()),
 		"refresh_token":      refresh,
-		"subject":            req.Wallet,
-		"namespace":          req.Namespace,
+		"subject":            wallet,
+		"namespace":          namespace,
 		"api_key":            apiKey,
-		"nonce":              req.Nonce,
+		"nonce":              in.Message.Nonce,
 		"signature_verified": true,
 	})
 }

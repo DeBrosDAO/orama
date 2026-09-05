@@ -3,6 +3,7 @@ package uninstall
 import (
 	"bufio"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,10 +13,9 @@ import (
 )
 
 // Handle executes the uninstall command
-func Handle() {
-	if os.Geteuid() != 0 {
-		fmt.Fprintf(os.Stderr, "❌ Production uninstall must be run as root (use sudo)\n")
-		os.Exit(1)
+func Handle() error {
+	if err := clierr.RequireRoot("uninstalling the node services"); err != nil {
+		return err
 	}
 
 	fmt.Printf("⚠️  This will stop and remove all Orama production services\n")
@@ -27,8 +27,7 @@ func Handle() {
 	response = strings.ToLower(strings.TrimSpace(response))
 
 	if response != "yes" && response != "y" {
-		fmt.Printf("Uninstall cancelled\n")
-		return
+		return clierr.Aborted("uninstall cancelled")
 	}
 
 	// Stop and remove namespace services first
@@ -63,6 +62,7 @@ func Handle() {
 	fmt.Printf("✅ Services uninstalled\n")
 	fmt.Printf("   Configuration and data preserved in /opt/orama/.orama\n")
 	fmt.Printf("   To remove all data: rm -rf /opt/orama/.orama\n\n")
+	return nil
 }
 
 // stopNamespaceServices discovers and stops all running namespace services

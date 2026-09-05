@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { createTestClient, skipIfNoGateway } from "./setup";
+import { createTestClient, hasGateway } from "./setup";
 
-describe("Storage", () => {
+describe.skipIf(!hasGateway())("Storage", () => {
   beforeAll(() => {
-    if (skipIfNoGateway()) {
+    if (hasGateway()) {
       console.log("Skipping storage tests");
     }
   });

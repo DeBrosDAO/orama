@@ -3,10 +3,10 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -86,7 +86,10 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	// 5. Check Gateway health
-	resp, err = client.Get("http://localhost:8443/health")
+	// 8443 was never the gateway's port on a node; the index gateway listens on
+	// constants.GatewayAPIPort. The check therefore always failed, which is
+	// half of why doctor exited 1 on a healthy node.
+	resp, err = client.Get(constants.LocalGatewayURL() + "/health")
 	if err != nil {
 		checks = append(checks, check{"Gateway reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
 	} else {
@@ -172,7 +175,14 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\nSummary: %d passed, %d failed, %d warnings\n", pass, fail, warn)
 
 	if fail > 0 {
-		os.Exit(1)
+		// A failing check is the answer this command exists to give, so the
+		// message is the summary above, not a second error line.
+		return clierr.Wrap(clierr.CodeFailure, errCheckFailed(fail))
 	}
 	return nil
+}
+
+// errCheckFailed names how many diagnostics failed.
+func errCheckFailed(n int) error {
+	return fmt.Errorf("%d diagnostic check(s) failed", n)
 }

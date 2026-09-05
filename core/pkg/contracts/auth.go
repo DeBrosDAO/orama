@@ -5,20 +5,22 @@ import (
 	"time"
 )
 
-// AuthService handles wallet-based authentication and authorization.
-// Provides nonce generation, signature verification, JWT lifecycle management,
-// and application registration for the gateway.
+// AuthService handles the token and key half of authentication: JWT lifecycle,
+// refresh-token rotation, API keys and namespace resolution. Wallet sign-in
+// itself is not declared here — see the note inside.
 type AuthService interface {
-	// CreateNonce generates a cryptographic nonce for wallet authentication.
-	// The nonce is valid for a limited time and used to prevent replay attacks.
-	// wallet is the wallet address, purpose describes the nonce usage,
-	// and namespace isolates nonces across different contexts.
-	CreateNonce(ctx context.Context, wallet, purpose, namespace string) (string, error)
-
-	// VerifySignature validates a cryptographic signature from a wallet.
-	// Supports multiple blockchain types (ETH, SOL) for signature verification.
-	// Returns true if the signature is valid for the given nonce.
-	VerifySignature(ctx context.Context, wallet, nonce, signature, chainType string) (bool, error)
+	// The wallet-login half of the service is not declared here.
+	//
+	// It used to be CreateNonce and VerifySignature, both of which took and
+	// returned nothing but strings. What a wallet signs is a Sign-In-With
+	// message now — EIP-4361 for EVM, its Solana counterpart for SOL — and the
+	// pair is CreateChallenge / VerifySignedMessage in pkg/gateway/auth, which
+	// exchange a rendered message and a parsed one. Declaring them here would
+	// mean importing those types into a package whose whole rule is that no
+	// concrete type appears in a signature, or restating them and having two
+	// definitions of one message format.
+	//
+	// See pkg/gateway/auth/challenge.go and pkg/gateway/auth/siw.
 
 	// IssueTokens generates a new access token and refresh token pair.
 	// Access tokens are short-lived (typically 15 minutes).
@@ -47,10 +49,6 @@ type AuthService interface {
 	// optional additive custom claims (nil = none; bugboard #548).
 	// Returns: token, expirationUnix, error.
 	GenerateJWT(namespace, subject string, ttl time.Duration, custom map[string]string) (string, int64, error)
-
-	// RegisterApp registers a new client application with the gateway.
-	// Returns an application ID that can be used for OAuth flows.
-	RegisterApp(ctx context.Context, wallet, namespace, name, publicKey string) (string, error)
 
 	// GetOrCreateAPIKey retrieves an existing API key or creates a new one.
 	// API keys provide programmatic access without interactive authentication.

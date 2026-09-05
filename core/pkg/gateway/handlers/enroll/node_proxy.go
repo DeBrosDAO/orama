@@ -186,12 +186,23 @@ func (h *Handler) HandleNodeLeave(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// proxyToAgent sends an HTTP request to the OramaOS agent over WireGuard.
+// proxyToAgent sends an HTTP request to the OramaOS agent over WireGuard,
+// carrying the credential that node minted for this gateway at enrollment.
+//
+// Being on the mesh is not the credential: every namespace's services are on
+// that mesh, and one of them being compromised must not mean every node's
+// services can be restarted. A node with no stored token cannot be commanded,
+// and this says so rather than sending a request the agent will refuse.
 func (h *Handler) proxyToAgent(wgIP, method, path string, body []byte) ([]byte, int, error) {
 	url := fmt.Sprintf("http://%s:9998%s", wgIP, path)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+
+	token, err := h.AgentToken(ctx, nodeIDForOverlayIP(wgIP))
+	if err != nil {
+		return nil, 0, err
+	}
 
 	var reqBody io.Reader
 	if body != nil {
@@ -202,6 +213,7 @@ func (h *Handler) proxyToAgent(wgIP, method, path string, body []byte) ([]byte, 
 	if err != nil {
 		return nil, 0, err
 	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -269,4 +281,13 @@ func (h *Handler) removeWGPeerLocally(wgIP string) {
 			return
 		}
 	}
+}
+
+// nodeIDForOverlayIP is the node id an enrolled OramaOS node was given.
+//
+// HandleEnroll builds it as "node-<overlay ip>", and the agent token is stored
+// against it, so the proxy has to spell it the same way. Phase 1 replaces both
+// with a real node principal.
+func nodeIDForOverlayIP(wgIP string) string {
+	return "node-" + wgIP
 }

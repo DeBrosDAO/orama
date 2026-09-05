@@ -35,10 +35,14 @@ type ServerlessHandlers struct {
 	wsBridge       *wsbridge.Bridge    // optional; nil = no client→ns registration
 	secretsManager serverless.SecretsManager
 	jwtVerifier    JWTVerifier // optional; when nil, mid-session auth.refresh is disabled
+	audit          *auth.AuditLog
 	logger         *zap.Logger
 }
 
 // NewServerlessHandlers creates a new ServerlessHandlers instance.
+//
+// audit records the deploy, delete and secret events; a nil one drops them,
+// which is the test case.
 //
 // engine, persistentMgr, and wsBridge may be nil — persistent-WS
 // functions then return 503 on upgrade, and bridged WS clients can't
@@ -55,6 +59,7 @@ func NewServerlessHandlers(
 	persistentMgr *persistent.Manager,
 	wsBridge *wsbridge.Bridge,
 	secretsManager serverless.SecretsManager,
+	audit *auth.AuditLog,
 	logger *zap.Logger,
 ) *ServerlessHandlers {
 	return &ServerlessHandlers{
@@ -68,6 +73,7 @@ func NewServerlessHandlers(
 		persistentMgr:  persistentMgr,
 		wsBridge:       wsBridge,
 		secretsManager: secretsManager,
+		audit:          audit,
 		logger:         logger,
 	}
 }
@@ -194,7 +200,7 @@ func (h *ServerlessHandlers) getCallerHasInvokeFromRequest(r *http.Request) bool
 	if v := ctx.Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
 			sub := strings.ToLower(strings.TrimSpace(claims.Sub))
-			if strings.HasPrefix(sub, "ak_") {
+			if auth.IsAPIKeySubject(sub) {
 				if claims.Custom != nil {
 					if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).Has(auth.ScopeInvoke) {
 						return true
@@ -227,15 +233,18 @@ func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
 	if v := ctx.Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
 			sub := strings.ToLower(strings.TrimSpace(claims.Sub))
-			if strings.HasPrefix(sub, "ak_") && claims.Custom != nil {
+			if auth.IsAPIKeySubject(sub) && claims.Custom != nil {
 				if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).IsAdmin() {
 					return true
 				}
 			}
 		}
 	}
-	if confirmed, _ := ctx.Value(ctxkeys.OwnerConfirmed).(bool); confirmed {
-		return true
+	// The grant the authorization middleware resolved for this namespace. It
+	// used to be a boolean meaning "owner confirmed", so every member of a
+	// namespace was an admin here; a runtime or reader member is not.
+	if grant, _ := ctx.Value(ctxkeys.Grant).(*auth.Grant); grant != nil {
+		return grant.Scopes().IsAdmin()
 	}
 	return false
 }
@@ -247,56 +256,15 @@ func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
 // could otherwise set a header and impersonate any wallet — including the
 // namespace owner — defeating in-function admin gates.
 func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
-	// Import strings package functions inline to avoid circular dependencies
-	trimSpace := func(s string) string {
-		start := 0
-		end := len(s)
-		for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-			start++
-		}
-		for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-			end--
-		}
-		return s[start:end]
-	}
-
-	hasPrefix := func(s, prefix string) bool {
-		return len(s) >= len(prefix) && s[0:len(prefix)] == prefix
-	}
-
-	contains := func(s, substr string) bool {
-		return len(s) >= len(substr) && func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
-			return false
-		}()
-	}
-
-	toLower := func(s string) string {
-		result := make([]byte, len(s))
-		for i := 0; i < len(s); i++ {
-			c := s[i]
-			if c >= 'A' && c <= 'Z' {
-				result[i] = c + 32
-			} else {
-				result[i] = c
-			}
-		}
-		return string(result)
-	}
-
 	// Identity comes only from a VERIFIED JWT subject, else the API-key-derived
 	// namespace. A client-supplied X-Wallet header is NOT trusted (bugboard
 	// #152) — it let an unauthenticated caller impersonate any wallet on the
 	// public invoke paths.
 	if v := r.Context().Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
-			subj := trimSpace(claims.Sub)
+			subj := strings.TrimSpace(claims.Sub)
 			// Ensure it's not an API key (standard Orama logic)
-			if !hasPrefix(toLower(subj), "ak_") && !contains(subj, ":") {
+			if auth.IsWalletSubject(subj) {
 				return subj
 			}
 		}
@@ -310,4 +278,17 @@ func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
 	}
 
 	return ""
+}
+
+// recordAudit records one control-plane event for this namespace: who deployed,
+// deleted, or changed a secret, and when. Invokes are not recorded — they are
+// the data plane, and one row per call would fill a replicated table.
+func (h *ServerlessHandlers) recordAudit(r *http.Request, namespace, action, resource string) {
+	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		Namespace: namespace,
+		Actor:     auth.ActorFromRequest(r),
+		Action:    action,
+		Resource:  resource,
+		Result:    auth.AuditSuccess,
+	})
 }

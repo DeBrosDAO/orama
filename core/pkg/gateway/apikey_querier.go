@@ -24,9 +24,15 @@ type apiKeyQuerier interface {
 // global-registry client (g.authClient, built from cfg.GlobalRQLiteDSN -- see
 // New in gateway.go) when available, falling back to g.client only when no
 // dedicated global client was configured (the index gateway, where
-// rqlite_dsn IS the registry). g.client on a namespace gateway is the
-// tenant RQLite after bugboard #162 (explicit rqlite_dsn wins) and must
-// not be used for keys when authClient exists.
+// rqlite_dsn IS the registry).
+//
+// The fallback is reachable only on a gateway that was never configured with a
+// registry of its own. A gateway that was configured with one and could not
+// reach it does not finish booting, so this cannot quietly become "validate
+// keys against whatever database is at hand": g.client on a namespace gateway
+// is the tenant's own rqlite (bugboard #162), whose api_keys table the tenant
+// can write.
+//
 // g.sqlDB (this gateway's own namespace RQLite) must NEVER be used here --
 // its api_keys table is not authoritative, and querying it split key
 // validation into two disagreeing registries (bugboard #151/#152

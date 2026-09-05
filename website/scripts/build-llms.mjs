@@ -31,7 +31,10 @@ const MANIFEST = {
   ],
   Reference: [
     ["ARCHITECTURE.md", "architecture", "Architecture", "System architecture: gateway, namespaces, RQLite, Olric cache, IPFS storage, WASM runtime."],
-    ["CLIENT_SDK.md", "client-sdk", "Client SDK", "Go client SDK for talking to an Orama gateway from application code."],
+    ["CLI_REFERENCE.md", "cli-reference", "CLI Reference", "Every orama command and flag, generated from the command tree."],
+    ["API_SURFACE.md", "api-surface", "API Surface", "Every gateway route and which client owns it: SDK, CLI, direct, or internal."],
+    ["TS_SDK.md", "typescript-sdk", "TypeScript SDK", "@debros/orama — database, pub/sub, cache, storage, functions and auth from application code."],
+    ["GO_CLIENT_SDK.md", "go-client-sdk", "Go Client SDK", "Go client for talking to an Orama gateway from application code."],
     ["MONITORING.md", "monitoring", "Monitoring", "Cluster health and per-node reporting with the orama monitor / node report commands."],
     ["COMMON_PROBLEMS.md", "troubleshooting", "Troubleshooting", "Known failure modes and how to diagnose them."],
   ],

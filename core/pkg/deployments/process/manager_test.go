@@ -12,7 +12,7 @@ import (
 
 func TestNewManager(t *testing.T) {
 	logger := zap.NewNop()
-	m := NewManager(logger)
+	m := NewManager(logger, Config{})
 
 	if m == nil {
 		t.Fatal("NewManager returned nil")
@@ -26,7 +26,7 @@ func TestNewManager(t *testing.T) {
 }
 
 func TestGetServiceName(t *testing.T) {
-	m := NewManager(zap.NewNop())
+	m := NewManager(zap.NewNop(), Config{})
 
 	tests := []struct {
 		name      string
@@ -87,7 +87,7 @@ func TestGetServiceName(t *testing.T) {
 }
 
 func TestGetStartCommand(t *testing.T) {
-	m := NewManager(zap.NewNop())
+	m := NewManager(zap.NewNop(), Config{})
 	// On macOS (test environment), useSystemd will be false, so node/npm use short paths.
 	// We explicitly set it to test both modes.
 
@@ -181,7 +181,7 @@ func TestGetStartCommand(t *testing.T) {
 }
 
 func TestMapRestartPolicy(t *testing.T) {
-	m := NewManager(zap.NewNop())
+	m := NewManager(zap.NewNop(), Config{})
 
 	tests := []struct {
 		name   string

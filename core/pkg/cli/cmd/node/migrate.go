@@ -5,11 +5,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var migrateOpts migrate.Options
+
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
 	Short: "Migrate from old unified setup (requires sudo)",
-	Run: func(cmd *cobra.Command, args []string) {
-		migrate.Handle(args)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return migrate.Run(migrateOpts)
 	},
-	DisableFlagParsing: true,
+}
+
+func init() {
+	migrateCmd.Flags().BoolVar(&migrateOpts.DryRun, "dry-run", false, "Show what would be migrated without making changes")
 }

@@ -15,6 +15,37 @@ const (
 	xcaddyRepo = "github.com/caddyserver/xcaddy/cmd/xcaddy@latest"
 )
 
+// internalAuthHeaders are the request headers a gateway uses to tell another
+// gateway that it already authenticated the caller. They are meaningful only
+// between gateways, so nothing arriving from the internet may carry one.
+//
+// The gateway itself refuses any that are not accompanied by a MAC keyed on the
+// cluster secret. Caddy drops them a hop earlier because it is where the
+// internet ends: it terminates TLS and reverse-proxies to localhost, so every
+// public request reaches the gateway from 127.0.0.1 and forged headers travel
+// with it by default. Two independent places have to fail before a forged
+// header is believed.
+var internalAuthHeaders = []string{
+	"X-Internal-Auth-Validated",
+	"X-Internal-Auth-Namespace",
+	"X-Internal-Auth-JWT-Sub",
+	"X-Internal-Auth-JWT-Custom",
+	"X-Internal-Auth-Scopes",
+	"X-Internal-Auth-MAC",
+}
+
+// proxyBlock renders a reverse_proxy directive that strips the internal-auth
+// headers on the way up. The indentation matches the surrounding site block.
+func proxyBlock(upstream string) string {
+	var sb strings.Builder
+	sb.WriteString("    reverse_proxy " + upstream + " {\n")
+	for _, h := range internalAuthHeaders {
+		sb.WriteString("        header_up -" + h + "\n")
+	}
+	sb.WriteString("    }")
+	return sb.String()
+}
+
 // CaddyInstaller handles Caddy installation with custom DNS module
 type CaddyInstaller struct {
 	*BaseInstaller
@@ -454,23 +485,23 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
 	gw := fmt.Sprintf("localhost:%d", constants.GatewayAPIPort)
 
 	// Node domain blocks (e.g., node1.dbrs.space, *.node1.dbrs.space)
-	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy %s\n}\n", domain, tlsBlock, gw))
-	sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy %s\n}\n", domain, tlsBlock, gw))
+	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n%s\n}\n", domain, tlsBlock, proxyBlock(gw)))
+	sb.WriteString(fmt.Sprintf("\n%s {\n%s\n%s\n}\n", domain, tlsBlock, proxyBlock(gw)))
 
 	// Base domain blocks (e.g., dbrs.space, *.dbrs.space) — for app routing
 	if baseDomain != "" && baseDomain != domain {
-		sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n    reverse_proxy %s\n}\n", baseDomain, tlsBlock, gw))
-		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy %s\n}\n", baseDomain, tlsBlock, gw))
+		sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n%s\n}\n", baseDomain, tlsBlock, proxyBlock(gw)))
+		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n%s\n}\n", baseDomain, tlsBlock, proxyBlock(gw)))
 	}
 
 	// HTTP blocks — serve traffic over plain HTTP so the gateway is reachable
 	// even when TLS certificates are unavailable (e.g., Let's Encrypt rate limits).
 	// Without these, Caddy auto-redirects HTTP→HTTPS for the named domain blocks above.
-	sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n    reverse_proxy %s\n}\n", domain, gw))
-	sb.WriteString(fmt.Sprintf("\nhttp://%s {\n    reverse_proxy %s\n}\n", domain, gw))
+	sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n%s\n}\n", domain, proxyBlock(gw)))
+	sb.WriteString(fmt.Sprintf("\nhttp://%s {\n%s\n}\n", domain, proxyBlock(gw)))
 	if baseDomain != "" && baseDomain != domain {
-		sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n    reverse_proxy %s\n}\n", baseDomain, gw))
-		sb.WriteString(fmt.Sprintf("\nhttp://%s {\n    reverse_proxy %s\n}\n", baseDomain, gw))
+		sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n%s\n}\n", baseDomain, proxyBlock(gw)))
+		sb.WriteString(fmt.Sprintf("\nhttp://%s {\n%s\n}\n", baseDomain, proxyBlock(gw)))
 	}
 
 	// Self-hosted ntfy reverse-proxy (feature #72). Emitted only when
@@ -479,12 +510,12 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
 	// own block so the cert lives separately from the namespace gateway
 	// cert (different rotation cadence, different blast radius).
 	if ci.withNtfy && ci.ntfyHostname != "" {
-		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n    reverse_proxy localhost:%d\n}\n",
-			ci.ntfyHostname, tlsBlock, NtfyListenPort))
+		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n%s\n}\n",
+			ci.ntfyHostname, tlsBlock, proxyBlock(fmt.Sprintf("localhost:%d", NtfyListenPort))))
 	}
 
 	// HTTP catch-all fallback (handles remaining plain HTTP traffic)
-	sb.WriteString(fmt.Sprintf("\n:80 {\n    reverse_proxy %s\n}\n", gw))
+	sb.WriteString(fmt.Sprintf("\n:80 {\n%s\n}\n", proxyBlock(gw)))
 
 	return sb.String()
 }

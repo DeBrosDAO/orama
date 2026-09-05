@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/rollout"
@@ -21,7 +22,7 @@ func NewRemoteUpgrader(flags *Flags) *RemoteUpgrader {
 
 // Execute runs the remote rolling upgrade.
 func (r *RemoteUpgrader) Execute() error {
-	nodes, err := remotessh.LoadEnvNodes(r.flags.Env)
+	nodes, err := noderesolver.ResolveNodes(r.flags.Env)
 	if err != nil {
 		return err
 	}

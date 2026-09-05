@@ -38,6 +38,13 @@ func EnsureConfigDir() (string, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create config directory %s: %w", dir, err)
 	}
+	// MkdirAll leaves an existing directory's mode alone, and an older release
+	// created this one 0755 from the `orama env` path. The directory holds
+	// credentials, so repair the mode rather than depending on whichever
+	// command happened to create it first.
+	if err := os.Chmod(dir, 0700); err != nil {
+		return "", fmt.Errorf("failed to secure config directory %s: %w", dir, err)
+	}
 	return dir, nil
 }
 

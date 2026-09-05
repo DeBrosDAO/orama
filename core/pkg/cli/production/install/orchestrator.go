@@ -77,6 +77,45 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 }
 
 // Execute runs the installation process
+// pinnedTLSConfig verifies the far end against one certificate fingerprint,
+// and refuses to build a client without one.
+func pinnedTLSConfig(fingerprint string) (*tls.Config, error) {
+	fingerprint = strings.TrimSpace(fingerprint)
+	if fingerprint == "" {
+		return nil, fmt.Errorf("refusing to join without a certificate to pin: the invite token carries " +
+			"the cluster's TLS fingerprint, so pass the encoded invite to --token rather than a bare " +
+			"token, or give --ca-fingerprint explicitly. Joining sends a credential for every secret " +
+			"the cluster holds, and there is nothing to verify the far end with")
+	}
+	expected, err := hex.DecodeString(fingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --ca-fingerprint: must be hex-encoded SHA-256: %w", err)
+	}
+	if len(expected) != sha256.Size {
+		return nil, fmt.Errorf("invalid --ca-fingerprint: a SHA-256 fingerprint is %d bytes, got %d",
+			sha256.Size, len(expected))
+	}
+
+	// InsecureSkipVerify turns off the chain check; VerifyPeerCertificate then
+	// does the only check that matters here, which is that the certificate is
+	// the exact one the invite named. A cluster node's certificate is issued
+	// for its own domain and there is no CA to chain to at this point.
+	return &tls.Config{
+		InsecureSkipVerify: true,
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("the server presented no TLS certificate")
+			}
+			hash := sha256.Sum256(rawCerts[0])
+			if !bytes.Equal(hash[:], expected) {
+				return fmt.Errorf("TLS certificate fingerprint mismatch: the invite named %s, the server "+
+					"presented %x — something is between this node and the cluster", fingerprint, hash[:])
+			}
+			return nil
+		},
+	}, nil
+}
+
 func (o *Orchestrator) Execute() error {
 	fmt.Printf("🚀 Starting production installation...\n\n")
 
@@ -397,28 +436,20 @@ func (o *Orchestrator) callJoinEndpoint(wgPubKey, peerID string) (*joinhandlers.
 
 	url := strings.TrimRight(o.flags.JoinAddress, "/") + "/v1/internal/join"
 
-	tlsConfig := &tls.Config{}
-	if o.flags.CAFingerprint != "" {
-		// TOFU: verify the server's TLS cert fingerprint matches the one from the invite
-		expectedFP, err := hex.DecodeString(o.flags.CAFingerprint)
-		if err != nil {
-			return nil, fmt.Errorf("invalid --ca-fingerprint: must be hex-encoded SHA-256: %w", err)
-		}
-		tlsConfig.InsecureSkipVerify = true
-		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
-				return fmt.Errorf("server presented no TLS certificates")
-			}
-			hash := sha256.Sum256(rawCerts[0])
-			if !bytes.Equal(hash[:], expectedFP) {
-				return fmt.Errorf("TLS certificate fingerprint mismatch: expected %s, got %x (possible MITM attack)",
-					o.flags.CAFingerprint, hash[:])
-			}
-			return nil
-		}
-	} else {
-		// No fingerprint provided — fall back to insecure for backward compatibility
-		tlsConfig.InsecureSkipVerify = true
+	// Joining sends the invite token, which is a credential for every secret
+	// the cluster holds. Without a fingerprint to pin, this fell back to
+	// InsecureSkipVerify with nothing checked at all — the token went to
+	// whoever answered the address, and a machine in the path could take it
+	// and join the cluster itself.
+	//
+	// Every invite carries the fingerprint: `orama node invite` reads this
+	// node's certificate and refuses to mint an invite without it, and
+	// `orama node install` decodes it from the token. An invocation with no
+	// fingerprint is a bare token from somewhere else, and there is nothing to
+	// verify the far end with.
+	tlsConfig, err := pinnedTLSConfig(o.flags.CAFingerprint)
+	if err != nil {
+		return nil, err
 	}
 
 	client := &http.Client{
@@ -583,7 +614,7 @@ func extractHost(addr string) string {
 func (o *Orchestrator) printFirstNodeSecrets() {
 	fmt.Printf("📋 To add more nodes to this cluster:\n\n")
 	fmt.Printf("  1. Generate an invite token:\n")
-	fmt.Printf("     orama invite\n\n")
+	fmt.Printf("     orama node invite\n\n")
 	fmt.Printf("  2. Run the printed command on the new VPS.\n\n")
 	fmt.Printf("  Node Peer ID: %s\n\n", o.setup.NodePeerID)
 }

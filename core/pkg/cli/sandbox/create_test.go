@@ -50,19 +50,6 @@ func TestFindProjectRoot_NoGoMod(t *testing.T) {
 	}
 }
 
-func TestFindNewestArchive_NoArchives(t *testing.T) {
-	// findNewestArchive scans /tmp — just verify it returns "" when
-	// no matching files exist (this is the normal case in CI).
-	// We can't fully control /tmp, but we can verify the function doesn't crash.
-	result := findNewestArchive()
-	// Result is either "" or a valid path — both are acceptable
-	if result != "" {
-		if _, err := os.Stat(result); err != nil {
-			t.Errorf("findNewestArchive() returned non-existent path: %s", result)
-		}
-	}
-}
-
 func TestIsSafeDNSName(t *testing.T) {
 	tests := []struct {
 		input string
@@ -119,6 +106,38 @@ func TestValidateAgentStatus_Locked(t *testing.T) {
 	}
 }
 
+// A prompt already on screen is the difference between "unlock it" and "you
+// have one waiting". The agent reports the count; this client used to drop it,
+// so someone with an unanswered prompt was told to go and unlock a wallet that
+// was already asking them to.
+func TestValidateAgentStatus_LockedWithPendingPrompt(t *testing.T) {
+	status := &rwagent.StatusResponse{Locked: true, ConnectedApps: 1, PendingUnlocks: 2}
+	err := validateAgentStatus(status)
+	if err == nil {
+		t.Fatal("expected error for locked agent")
+	}
+	if !strings.Contains(err.Error(), "2 approval prompt") {
+		t.Errorf("error should say how many prompts are waiting, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "waiting") {
+		t.Errorf("error should say the prompts are waiting to be answered, got: %v", err)
+	}
+}
+
+func TestValidateAgentStatus_LockedWithNoPendingPrompt(t *testing.T) {
+	status := &rwagent.StatusResponse{Locked: true, ConnectedApps: 1, PendingUnlocks: 0}
+	err := validateAgentStatus(status)
+	if err == nil {
+		t.Fatal("expected error for locked agent")
+	}
+	if strings.Contains(err.Error(), "approval prompt") {
+		t.Errorf("no prompt is waiting, so none should be mentioned: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Unlock it") {
+		t.Errorf("error should say to unlock it, got: %v", err)
+	}
+}
+
 func TestValidateAgentStatus_NoDesktopApp(t *testing.T) {
 	status := &rwagent.StatusResponse{Locked: false, ConnectedApps: 0}
 	err := validateAgentStatus(status)
@@ -134,25 +153,5 @@ func TestValidateAgentStatus_Ready(t *testing.T) {
 	status := &rwagent.StatusResponse{Locked: false, ConnectedApps: 1}
 	if err := validateAgentStatus(status); err != nil {
 		t.Errorf("expected no error for ready agent, got: %v", err)
-	}
-}
-
-func TestFormatBytes(t *testing.T) {
-	tests := []struct {
-		input int64
-		want  string
-	}{
-		{0, "0 B"},
-		{500, "500 B"},
-		{1024, "1.0 KB"},
-		{1536, "1.5 KB"},
-		{1048576, "1.0 MB"},
-		{1073741824, "1.0 GB"},
-	}
-	for _, tt := range tests {
-		got := formatBytes(tt.input)
-		if got != tt.want {
-			t.Errorf("formatBytes(%d) = %q, want %q", tt.input, got, tt.want)
-		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -126,6 +127,8 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build response
+	h.service.RecordAudit(r, deployment.Namespace, auth.AuditDeploymentCreated, deployment.Name)
+
 	urls := h.service.BuildDeploymentURLs(deployment)
 
 	resp := map[string]interface{}{

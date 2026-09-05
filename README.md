@@ -35,10 +35,14 @@ make vault-build
 | [Architecture](docs/ARCHITECTURE.md) | System architecture and design patterns |
 | [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Deploy apps, databases, and domains |
 | [Dev & Deploy](docs/DEV_DEPLOY.md) | Building, deploying to VPS, rolling upgrades |
+| [Authentication](docs/AUTH.md) | Who someone is, what they may do, and how the gateway decides |
 | [Security](docs/SECURITY.md) | Security hardening and threat model |
 | [Monitoring](docs/MONITORING.md) | Cluster health monitoring |
-| [Client SDK](docs/CLIENT_SDK.md) | Go SDK documentation |
+| [TypeScript SDK](docs/TS_SDK.md) | `@debros/orama` — the client applications use |
+| [Go Client SDK](docs/GO_CLIENT_SDK.md) | The Go client for the same gateway |
 | [Serverless](docs/SERVERLESS.md) | WASM serverless functions |
+| [API Surface](docs/API_SURFACE.md) | Every gateway route and which client owns it |
+| [CLI Reference](docs/CLI_REFERENCE.md) | Every command and flag, generated from the code |
 | [Common Problems](docs/COMMON_PROBLEMS.md) | Troubleshooting known issues |
 
 ## Contributing

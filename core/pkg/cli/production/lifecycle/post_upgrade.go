@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os"
 	"os/exec"
 	"time"
@@ -24,10 +25,9 @@ import (
 // indexReadyBudget is how long the index rqlite has to rejoin after a restart.
 const indexReadyBudget = 2 * time.Minute
 
-func HandlePostUpgrade() {
-	if os.Geteuid() != 0 {
-		fmt.Fprintf(os.Stderr, "Error: post-upgrade must be run as root (use sudo)\n")
-		os.Exit(1)
+func HandlePostUpgrade() error {
+	if err := clierr.RequireRoot("the post-upgrade step"); err != nil {
+		return err
 	}
 
 	fmt.Printf("Post-upgrade: bringing node back online...\n")
@@ -36,7 +36,7 @@ func HandlePostUpgrade() {
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
 		fmt.Printf("  Warning: no Orama services found\n")
-		return
+		return nil
 	}
 
 	// Reset failed state
@@ -69,8 +69,7 @@ func HandlePostUpgrade() {
 	fmt.Printf("  Waiting for index RQLite (port %d)...\n", constants.RQLiteHTTPPort)
 	if err := waitForRQLiteReady(constants.RQLiteHTTPPort, indexReadyBudget); err != nil {
 		fmt.Fprintf(os.Stderr, "  The index RQLite did not come back: %v\n", err)
-		fmt.Fprintf(os.Stderr, "  Leaving the maintenance flag in place — this node is not serving.\n")
-		os.Exit(1)
+		return clierr.Failure("  Leaving the maintenance flag in place — this node is not serving.")
 	}
 	fmt.Printf("  Global RQLite ready\n")
 
@@ -113,6 +112,7 @@ func HandlePostUpgrade() {
 	}
 
 	fmt.Printf("Post-upgrade complete. Node is back online.\n")
+	return nil
 }
 
 // waitForRQLiteReady waits for an rqlite instance to be carrying its share.

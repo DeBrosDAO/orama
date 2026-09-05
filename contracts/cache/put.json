@@ -1,0 +1,36 @@
+{
+  "route": "/v1/cache/put",
+  "method": "POST",
+  "sdk": "cache.put()",
+  "goStruct": "cache.PutRequest",
+  "call": {
+    "module": "cache",
+    "method": "put",
+    "args": [
+      "sessions",
+      "user-1",
+      {
+        "seen": 1
+      },
+      "1h"
+    ]
+  },
+  "request": {
+    "dmap": "sessions",
+    "key": "user-1",
+    "value": {
+      "seen": 1
+    },
+    "ttl": "1h"
+  },
+  "response": {
+    "status": "ok",
+    "key": "user-1",
+    "dmap": "sessions"
+  },
+  "returns": {
+    "status": "ok",
+    "key": "user-1",
+    "dmap": "sessions"
+  }
+}

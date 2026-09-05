@@ -162,9 +162,11 @@ func (p *jwtClaimsProvider) invokeOnce(ctx context.Context, namespace string, in
 		Namespace:    namespace,
 		FunctionName: claimsProviderFnName,
 		Input:        input,
-		// Gateway-initiated, no end-user caller → system trigger skips the
-		// per-caller authorization check.
-		TriggerType: serverless.TriggerTypeInternal,
+		// Gateway-initiated, no end-user caller. The gateway is minting a
+		// token and asking a fixed, operator-registered function for extra
+		// claims; there is no caller to authorize.
+		TriggerType:      serverless.TriggerTypeInternal,
+		SystemOriginated: true,
 	})
 }
 

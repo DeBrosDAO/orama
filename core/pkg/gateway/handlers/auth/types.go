@@ -1,45 +1,35 @@
 package auth
 
-// ChallengeRequest is the request body for challenge generation
+// ChallengeRequest is the request body for challenge generation.
+//
+// ChainType decides which of the two message grammars the gateway renders —
+// "Ethereum account" or "Solana account" in the header line — and therefore
+// which signature scheme will verify the answer. Empty means ETH.
 type ChallengeRequest struct {
 	Wallet    string `json:"wallet"`
 	Purpose   string `json:"purpose"`
 	Namespace string `json:"namespace"`
+	ChainType string `json:"chain_type"`
 }
 
-// VerifyRequest is the request body for signature verification
+// VerifyRequest is the request body for signature verification.
+//
+// Message is the sign-in message the wallet signed, verbatim. Everything the
+// gateway needs is inside it — the wallet, the nonce, the namespace, the domain
+// it was signed for and when it expires — and reading any of those from beside
+// it in the request body would mean acting on a field the user never saw and
+// the signature does not cover.
 type VerifyRequest struct {
-	Wallet    string `json:"wallet"`
-	Nonce     string `json:"nonce"`
+	Message   string `json:"message"`
 	Signature string `json:"signature"`
-	Namespace string `json:"namespace"`
-	ChainType string `json:"chain_type"`
 }
 
-// APIKeyRequest is the request body for API key generation
+// APIKeyRequest is the request body for API key generation. See VerifyRequest
+// for why the message is the whole credential.
 type APIKeyRequest struct {
-	Wallet    string `json:"wallet"`
-	Nonce     string `json:"nonce"`
+	Message   string `json:"message"`
 	Signature string `json:"signature"`
-	Namespace string `json:"namespace"`
-	ChainType string `json:"chain_type"`
 	Plan      string `json:"plan"`
-}
-
-// SimpleAPIKeyRequest is the request body for simple API key generation (no signature)
-type SimpleAPIKeyRequest struct {
-	Wallet    string `json:"wallet"`
-	Namespace string `json:"namespace"`
-}
-
-// RegisterRequest is the request body for app registration
-type RegisterRequest struct {
-	Wallet    string `json:"wallet"`
-	Nonce     string `json:"nonce"`
-	Signature string `json:"signature"`
-	Namespace string `json:"namespace"`
-	ChainType string `json:"chain_type"`
-	Name      string `json:"name"`
 }
 
 // RefreshRequest is the request body for token refresh

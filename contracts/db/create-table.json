@@ -1,0 +1,20 @@
+{
+  "route": "/v1/rqlite/create-table",
+  "method": "POST",
+  "sdk": "db.createTable()",
+  "goStruct": "rqlite.createTableRequest",
+  "call": {
+    "module": "db",
+    "method": "createTable",
+    "args": [
+      "CREATE TABLE posts (id INTEGER PRIMARY KEY)"
+    ]
+  },
+  "request": {
+    "schema": "CREATE TABLE posts (id INTEGER PRIMARY KEY)"
+  },
+  "response": {
+    "status": "ok"
+  },
+  "returns": null
+}

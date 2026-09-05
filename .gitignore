@@ -45,6 +45,7 @@ core/coverage.html
 core/profile.out
 core/e2e/config.yaml
 core/scripts/remote-nodes.conf
+core/scripts/nodes.conf
 
 # Go build artifacts
 *.exe

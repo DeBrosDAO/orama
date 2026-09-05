@@ -7,40 +7,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
-func TestParseFlags(t *testing.T) {
-	tests := []struct {
-		name    string
-		args    []string
-		want    Flags
-		wantErr bool
-	}{
-		{"env only", []string{"--env", "testnet"}, Flags{Env: "testnet"}, false},
-		{"single node", []string{"--env", "testnet", "--node", "1.2.3.4"},
-			Flags{Env: "testnet", Node: "1.2.3.4"}, false},
-		{"dry run", []string{"--env", "testnet", "--dry-run"}, Flags{Env: "testnet", DryRun: true}, false},
-		{"force", []string{"--env", "testnet", "--force"}, Flags{Env: "testnet", Force: true}, false},
-		{"env is required", []string{"--dry-run"}, Flags{}, true},
-		{"env needs a value", []string{"--env"}, Flags{}, true},
-		{"node needs a value", []string{"--env", "testnet", "--node"}, Flags{}, true},
-		{"unknown flag", []string{"--env", "testnet", "--wat"}, Flags{}, true},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseFlags(tc.args)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
-			}
-			if tc.wantErr {
-				return
-			}
-			if *got != tc.want {
-				t.Fatalf("got %+v, want %+v", *got, tc.want)
-			}
-		})
-	}
-}
-
 func TestPlan_needsMigration(t *testing.T) {
 	tests := []struct {
 		name string

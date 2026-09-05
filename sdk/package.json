@@ -1,9 +1,10 @@
 {
   "name": "@debros/orama",
   "version": "0.122.103",
-  "description": "TypeScript SDK for Orama Network - Database, PubSub, Cache, Storage, Vault, and more",
+  "description": "TypeScript SDK for Orama Network - Database, PubSub, Cache, Storage, Functions, and more",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "license": "MIT",
   "author": "DeBrosOfficial",
@@ -23,27 +24,30 @@
     "wasm",
     "serverless",
     "distributed",
-    "gateway",
-    "vault",
-    "secrets",
-    "shamir",
-    "encryption",
-    "guardian"
+    "gateway"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/DeBrosOfficial/network",
+    "url": "git+https://github.com/DeBrosDAO/orama.git",
     "directory": "sdk"
   },
   "bugs": {
-    "url": "https://github.com/DeBrosOfficial/network/issues"
+    "url": "https://github.com/DeBrosDAO/orama/issues"
   },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
   },
+  "sideEffects": false,
   "files": [
     "dist",
     "src"
@@ -53,15 +57,24 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests",
-    "test": "vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
     "test:e2e": "vitest run tests/e2e",
+    "example": "tsx examples/basic-usage.ts",
     "release:npm": "npm publish --access public --registry=https://registry.npmjs.org/",
     "release:gh": "npm publish --registry=https://npm.pkg.github.com"
   },
   "dependencies": {
-    "@noble/ciphers": "^0.5.3",
-    "@noble/hashes": "^1.4.0",
     "isomorphic-ws": "^5.0.0"
+  },
+  "peerDependencies": {
+    "ws": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ws": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -71,6 +84,8 @@
     "dotenv": "^17.2.3",
     "eslint": "^8.0.0",
     "tsup": "^8.0.0",
+    "tsx": "^4.19.2",
+    "ws": "^8.18.3",
     "typedoc": "^0.25.0",
     "typescript": "^5.3.0",
     "vitest": "^1.0.0"

@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
@@ -29,7 +28,7 @@ func (s *Service) MigratePlaintextAPIKeys(ctx context.Context) (int, error) {
 	}
 
 	internalCtx := client.WithInternalAuth(ctx)
-	res, err := db.Query(internalCtx, "SELECT id, key FROM api_keys WHERE key LIKE 'ak_%'")
+	res, err := db.Query(internalCtx, "SELECT id, key FROM api_keys WHERE key LIKE 'ak_%' OR key LIKE 'orama_%'")
 	if err != nil {
 		return 0, fmt.Errorf("list plaintext api keys: %w", err)
 	}
@@ -44,7 +43,7 @@ func (s *Service) MigratePlaintextAPIKeys(ctx context.Context) (int, error) {
 		}
 		id := row[0]
 		raw, _ := row[1].(string)
-		if !strings.HasPrefix(raw, "ak_") {
+		if !IsLegacyKey(raw) && !LooksLikeKey(raw) {
 			continue
 		}
 		hashed := s.HashAPIKey(raw)
@@ -55,9 +54,15 @@ func (s *Service) MigratePlaintextAPIKeys(ctx context.Context) (int, error) {
 			"UPDATE api_keys SET key = ? WHERE id = ? AND key = ?", hashed, id, raw); err != nil {
 			return n, fmt.Errorf("hash api key id %v: %w", id, err)
 		}
-		_, _ = db.Query(internalCtx,
-			"UPDATE namespace_ownership SET owner_id = ? WHERE owner_type = 'api_key' AND owner_id = ?",
-			hashed, raw)
+		// The principal is the key, spelled the way the authorization gate
+		// looks it up. Rehashing the key without moving its principal would
+		// leave the key authenticating and holding no grant anywhere.
+		if _, err := db.Query(internalCtx,
+			"UPDATE OR IGNORE principals SET identifier = ? WHERE type = 'service_account' AND identifier = ?",
+			hashed, raw); err != nil {
+			return n, fmt.Errorf("api key id %v was hashed but its grants were left under the raw key, "+
+				"so it would authenticate and be refused everywhere: %w", id, err)
+		}
 		n++
 	}
 	return n, nil

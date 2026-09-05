@@ -5,6 +5,39 @@
 - Go 1.26.7+ (see `go.mod`)
 - Node.js 18+ (for anyone-client in dev mode)
 - macOS or Linux
+- **The RootWallet desktop app, open and unlocked** — every command in the
+  "Deploying to VPS" section below needs it
+
+### RootWallet
+
+There are no SSH keys on disk. Every command that reaches a node — `orama push`,
+`orama rollout`, `orama node setup`, `orama monitor report`, `orama ssh` — asks
+the RootWallet desktop app's agent for a wallet-derived key over a Unix socket
+at `~/.rootwallet/agent.sock`, writes it to a `0600` temp file for the length of
+the command, and wipes it afterwards. `RW_AGENT_SOCK` overrides the path.
+
+**Before a rollout: open the app and unlock it.** Then expect this:
+
+- **First run after a rebuild, one approval prompt.** Approval is keyed on the
+  hash of the calling binary, so every `make build` produces a new `orama` that
+  RootWallet has not seen before and asks about once.
+- **One unlock for the whole run.** The agent locks itself after 30 minutes of
+  no traffic, and a six-node rolling upgrade spends far longer than that in SSH
+  sessions the agent never sees. The CLI touches the agent every five minutes
+  for as long as it holds keys, so the window stays open until the command
+  finishes and closes immediately after.
+- **A command that seems to hang is usually a prompt.** Look at the desktop app.
+  A first run against a locked wallet waits up to two minutes for approval and
+  two more for the unlock before it gives up.
+
+If a command fails with a RootWallet error, the message says what to do; the
+codes are listed in
+[Troubleshooting](COMMON_PROBLEMS.md#13-rootwallet-agent-locked-waiting-or-unreachable).
+
+Every command and flag the CLI defines is in the
+[CLI reference](CLI_REFERENCE.md), which is generated from the command tree and
+checked by a test, so it cannot drift from the code. This page covers the
+workflows.
 
 ## Building
 
@@ -165,13 +198,18 @@ What the rolling upgrade does:
    could not be read. An unreachable node is never assumed to be a healthy
    follower.
 4. **Requires `--yes`.** Without it the plan is printed and nothing is restarted.
-5. **Gates on each node actually rejoining** before touching the next: raft state
+5. **Hands leadership to another voter** before restarting a node that is
+   leading, and refuses to restart it if no other voter takes it. The plan said
+   "leader — last, after leadership transfer" while nothing performed the
+   transfer, so restarting the leader forced an election that failed every
+   in-flight write.
+6. **Gates on each node actually rejoining** before touching the next: raft state
    `Leader` or `Follower`, a leader known to exist, an applied index caught up to
    the leader's commit index, and a gateway serving `/health`.
-6. **Stops the rollout** the moment a node fails that gate, leaving the remaining
+7. **Stops the rollout** the moment a node fails that gate, leaving the remaining
    voters untouched and the cluster serving.
 
-`--delay` is now the per-node budget for step 5 (how long a node has to rejoin
+`--delay` is now the per-node budget for step 6 (how long a node has to rejoin
 before the rollout stops), not an unconditional sleep between nodes. A sleep
 cannot tell a node that rejoined in 20 seconds from one that never came back, so
 the old rollout restarted the next voter either way — which is how a rolling
@@ -294,6 +332,53 @@ statement refreshes `created_at`, keeping the row inside the 30-minute join
 grace, and a row is only ever dropped when it is *also* unmatched in `dns_nodes`.
 Once every node is on the new binary this resolves on the next 60s sync tick.
 
+#### Mixed-version window: unscoped API keys (migration 043)
+
+Migration 043 writes `scopes = 'admin'` onto every live key whose scopes column
+was empty, because an empty column used to be *read* as admin and the new
+binary reads it as no access at all. Access does not change: the grant that was
+being inferred is written down.
+
+The window is one-directional. An old binary still mints a key with no scopes on
+every wallet login, and a new binary denies that key everywhere. So during the
+roll a wallet that logs in against a not-yet-upgraded node can come away with a
+key that an upgraded node refuses. Logging in again once the node is upgraded
+mints a correct one, and `orama namespace keys revoke-legacy` sweeps any that
+were left behind.
+
+The same migration makes one wallet owner per namespace a database invariant. If
+a namespace has several wallet owners today — which the takeover bug allowed —
+only the earliest survives the migration, and the others lose access to it. That
+is the fix, not a side effect: they should never have had it.
+
+#### Cutover: invite tokens and the operator list (migration 044)
+
+Migration 044 deletes every invite token in the registry. They were stored in
+plaintext, and SQLite has no hash function, so there is no way to convert them
+from inside a migration. **Any invite minted before the upgrade stops working**;
+re-mint with `orama node invite`. The maximum lifetime is also now one hour,
+down from seven days.
+
+It also creates the `operators` table and seeds it from
+`dns_nodes.operator_wallet` — what `orama node install --operator-wallet` wrote.
+`/v1/operator/*` refuses a wallet that is not on that list, so **a cluster
+installed without `--operator-wallet` seeds nothing and no one can mint an
+invite or list nodes** until a row is inserted:
+
+```sql
+INSERT INTO operators (wallet, added_by) VALUES (LOWER('0x…'), 'manual');
+```
+
+Check what was seeded before upgrading the first node:
+
+```bash
+sudo orama node logs node --since -5min | grep -i migration
+```
+
+```sql
+SELECT wallet, added_by FROM operators;
+```
+
 **Pattern B — pre-apply migrations explicitly via the CLI.**
 On any node:
 ```bash
@@ -331,7 +416,7 @@ So a node in `degraded` is serving. Check which components have not converged
 before reaching for a recovery command:
 
 ```bash
-journalctl -u orama-node -n 100 | grep "Boot component"
+sudo orama node logs node -n 100 | grep "Boot component"
 ```
 
 Every failed attempt logs the component name, the attempt count, the retry delay
@@ -344,16 +429,32 @@ whole cluster is leaderless, not when one node reports `degraded`.
 If nodes get stuck in "Candidate" state or show "leader not found" errors:
 
 ```bash
-# Recover the Raft cluster (specify the node with highest commit index as leader)
+# Reads every node's applied index, keeps the furthest ahead, and prints what
+# each one reported before asking you to confirm.
+orama node recover-raft --env testnet
+
+# Or name the node whose data to keep yourself.
 orama node recover-raft --env testnet --leader 1.2.3.4
+
+# When rqlite is not answering anywhere, so the leader's raft address cannot be
+# read from the cluster.
+orama node recover-raft --env testnet --leader-raft-addr 10.0.0.1:10101
 ```
 
-This will:
-1. Stop orama-node on ALL nodes
-2. Backup + delete raft/ on non-leader nodes
-3. Start the leader, wait for Leader state
-4. Start remaining nodes in batches
-5. Verify cluster health
+**One node's data is kept. Every other node's raft log and database are
+DELETED.** Nothing is backed up: there is no copy to restore from afterwards.
+Take a backup yourself first if the surviving node might not be the right one.
+This document used to say "backup + delete"; there was never a backup.
+
+What happens:
+1. Stop orama-node on every node
+2. Reset the kept node to a single-member cluster, preserving its data
+3. Start it and confirm it comes back as Leader with its data intact — before
+   touching any other node, so a failed recovery leaves every copy intact
+4. Delete `raft.db`, `raft/`, `db.sqlite` (+`-shm`/`-wal`) and `rsnapshots` on
+   every other node
+5. Start them one at a time; each pulls a full snapshot from the kept node
+6. Verify cluster health
 
 ### Replacing a nameserver VPS (keep cluster alive)
 
@@ -366,21 +467,31 @@ cutover; use the same process for testnet.
 There are two operations, and picking the wrong one is how a deleted VPS ends up
 still counted toward raft quorum.
 
-**`decommission`** retires a node from the cluster and then erases it. Run this
-for a node that is or was a member. It works from a *survivor*: takes the node
-out of the raft configuration (refusing if that would cost the cluster its
-quorum), writes an eviction tombstone so nothing re-adds it automatically, and
-deletes its `wireguard_peers` and `dns_nodes` rows. Then it wipes the target.
+**`remove`** retires a node from the cluster and then erases it. Run this for a
+node that is or was a member. It works from a *survivor*: prints what the
+removal costs every raft cluster the node is a voter in — the platform cluster
+and each namespace it serves — and refuses if any would lose quorum; takes the
+node out of the platform raft configuration; writes an eviction tombstone so
+nothing re-adds it automatically; releases its mesh address, nameserver slot,
+namespace memberships, namespace port blocks and its TURN and SFU allocations;
+and marks it retired so the cluster purges its DNS records. Then it wipes the
+target. `decommission` is accepted as an alias.
 
 ```bash
-orama node decommission --env testnet --node 1.2.3.4 --force
+# Show the quorum impact and the statements, change nothing.
+orama node remove --env testnet --node 1.2.3.4 --dry-run
+
+orama node remove --env testnet --node 1.2.3.4 --force
 
 # The machine is already gone: do the cluster-side removal only.
-orama node decommission --env testnet --node 1.2.3.4 --offline --force
+orama node remove --env testnet --node 1.2.3.4 --offline --force
 ```
 
+Every step is keyed on the node and safe to repeat, so a removal that failed
+part way through is finished by running it again.
+
 **`wipe`** erases a node and says nothing to the cluster. Use it for a node that
-is already retired, that never joined, or to finish a decommission whose wipe
+is already retired, that never joined, or to finish a removal whose wipe
 failed.
 
 ```bash
@@ -398,11 +509,17 @@ deleted — both fixed in `wipe`.
 
 ### Push Options
 
+`orama push` and `orama node push` are the same command; so are `orama rollout`
+and `orama node rollout`, and `orama nodes` and `orama node list`.
+
 ```bash
-orama node push --env devnet                     # Fanout via hub (default, fastest)
-orama node push --env testnet --node 1.2.3.4     # Single node
-orama node push --env testnet --direct            # Sequential, no fanout
+orama push --env devnet                     # Fanout via hub (default, fastest)
+orama push --env testnet --node 1.2.3.4     # A single node from the inventory
+orama push --env testnet --direct           # Sequential, no fanout
+orama push --host 1.2.3.4                   # A node not in the inventory yet
 ```
+
+With no `--env`, push targets the active environment (`orama env current`).
 
 ### CLI Flags Reference
 
@@ -450,15 +567,20 @@ orama node push --env testnet --direct            # Sequential, no fanout
 | `--output <path>` | Output archive path |
 | `--verbose` | Verbose build output |
 
-#### `orama node push`
+#### `orama push` / `orama node push`
 
 | Flag | Description |
 |------|-------------|
-| `--env <env>` | Target environment (required) |
-| `--node <ip>` | Push to a single node only |
+| `--env <env>` | Target environment (default: the active one) |
+| `--node <ip>` | Push to a single node IP from the inventory |
+| `--host <ip>` | Push to a node that is not in the inventory yet |
+| `--user <user>` | SSH user for `--host` (default: root) |
 | `--direct` | Sequential upload (no hub fanout) |
 
-#### `orama node rollout`
+`--ip` and `--fanout` are deprecated. `--ip` is now `--host`; fanning out is the
+default, so `--fanout` is accepted and ignored, and `--direct` opts out.
+
+#### `orama rollout` / `orama node rollout`
 
 | Flag | Description |
 |------|-------------|
@@ -467,12 +589,13 @@ orama node push --env testnet --direct            # Sequential, no fanout
 | `--yes` | Skip confirmation |
 | `--delay <seconds>` | Delay between nodes (default: 30) |
 
-#### `orama node decommission`
+#### `orama node remove` (alias: `decommission`)
 
 | Flag | Description |
 |------|-------------|
 | `--env <env>` | Target environment (required) |
 | `--node <ip>` | Node to remove (required) |
+| `--dry-run` | Print the quorum impact and the statements, change nothing |
 | `--offline` | The node is already gone: cluster-side removal only |
 | `--nuclear` | When wiping, also remove shared binaries |
 | `--force` | Skip confirmation (DESTRUCTIVE) |
@@ -495,7 +618,8 @@ Deprecated; runs `wipe`. See "Removing a node".
 | Flag | Description |
 |------|-------------|
 | `--env <env>` | Target environment (required) |
-| `--leader <ip>` | Leader node IP — highest commit index (required) |
+| `--leader <ip>` | IP of the node whose data to keep. Default: the node with the highest applied index, which the command reads and prints |
+| `--leader-raft-addr <host:port>` | The kept node's raft address, e.g. `10.0.0.1:10101`. Use when rqlite is not answering anywhere, so it cannot be read from the cluster |
 | `--force` | Skip confirmation (DESTRUCTIVE) |
 
 #### `orama node` (Service Management)
@@ -601,10 +725,9 @@ sudo orama node install --vps-ip 1.2.3.4 --domain example.com \
 
 # 2. On genesis node, generate an invite
 orama node invite --expiry 24h
-# Prints: sudo orama install --join https://example.com --token <TOKEN> \
+# Prints: sudo orama node install --join https://example.com --token <TOKEN> \
 #           [--ca-fingerprint <FP>] --vps-ip <NEW_NODE_IP> --nameserver
-# Note: the printed command says `orama install`; the registered command is
-# `orama node install`. Drop --nameserver when joining as a regular node.
+# Drop --nameserver when joining as a regular node.
 
 # 3a. Join as nameserver (requires --domain set to base domain)
 sudo orama node install --join http://1.2.3.4 --token abc123... \

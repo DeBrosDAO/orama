@@ -2,134 +2,169 @@ package hostfunctions
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"go.uber.org/zap"
 )
 
-// Bugboard #159 — a cron-triggered function could not FunctionInvoke another
-// function. The nested call was hardcoded to TriggerTypeWebSocket, so it
-// re-entered the authorization gate as an anonymous external caller
-// (CallerWallet "" / CallerIsAdmin false, which a system trigger never carries)
-// and every `public: false` callee was rejected. AnChat's cron reconciler
-// reported SUCCESS on ~25 runs while settling zero payments.
-//
-// The invariant: a system-originated parent propagates as a system trigger; an
-// externally-triggered parent stays gated (bugboard #152 must not regress).
-func TestNestedTriggerType(t *testing.T) {
-	systemParents := []serverless.TriggerType{
-		serverless.TriggerTypeCron,
-		serverless.TriggerTypePubSub,
-		serverless.TriggerTypeDatabase,
-		serverless.TriggerTypeTimer,
-		serverless.TriggerTypeJob,
-		serverless.TriggerTypeInternal,
+// nestedRecordingInvoker records the request a nested function_invoke builds, which
+// is what carries the callee's authorization.
+type nestedRecordingInvoker struct {
+	mu   sync.Mutex
+	reqs []*serverless.InvokeRequest
+}
+
+func (c *nestedRecordingInvoker) Invoke(_ context.Context, req *serverless.InvokeRequest) (*serverless.InvokeResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	copied := *req
+	c.reqs = append(c.reqs, &copied)
+	return &serverless.InvokeResponse{Status: serverless.InvocationStatusSuccess}, nil
+}
+
+func (c *nestedRecordingInvoker) last() *serverless.InvokeRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.reqs) == 0 {
+		return nil
 	}
-	for _, p := range systemParents {
-		got := nestedTriggerType(p)
-		if got != serverless.TriggerTypeInternal {
-			t.Errorf("parent %q: nested trigger = %q, want %q — a system-triggered parent must be able to invoke a non-public function in its own namespace",
-				p, got, serverless.TriggerTypeInternal)
-		}
-		if !serverless.IsSystemTrigger(got) {
-			t.Errorf("parent %q: nested trigger %q must satisfy IsSystemTrigger so the auth gate is skipped", p, got)
-		}
+	return c.reqs[len(c.reqs)-1]
+}
+
+func hostWithInvoker(inv *nestedRecordingInvoker) *HostFunctions {
+	h := &HostFunctions{logger: zap.NewNop(), asyncInvokeSem: make(chan struct{}, 4)}
+	h.SetInvoker(inv)
+	return h
+}
+
+func parentCtx(parent *serverless.InvocationContext) context.Context {
+	return serverless.WithInvocationContext(context.Background(), parent)
+}
+
+// bugboard #159: a cron-triggered function could not invoke another function.
+// The nested call was rebuilt as an ordinary external one and every non-public
+// callee was refused, so AnChat's cron reconciler reported success on ~25 runs
+// while settling zero payments.
+//
+// The authority is the parent's own, carried across explicitly.
+func TestFunctionInvoke_aGatewayStartedParentPassesOnItsAuthority(t *testing.T) {
+	inv := &nestedRecordingInvoker{}
+	h := hostWithInvoker(inv)
+
+	ctx := parentCtx(&serverless.InvocationContext{
+		Namespace:        "anchat-test",
+		TriggerType:      serverless.TriggerTypeCron,
+		SystemOriginated: true,
+	})
+	if _, err := h.FunctionInvoke(ctx, "settle-payments", []byte(`{}`)); err != nil {
+		t.Fatalf("FunctionInvoke: %v", err)
 	}
 
-	// External parents must remain gated — this is the #152 boundary.
-	externalParents := []serverless.TriggerType{
+	req := inv.last()
+	if req == nil {
+		t.Fatal("no request was made")
+	}
+	if !req.SystemOriginated {
+		t.Error("a cron-started parent's nested call lost the gateway's authority")
+	}
+	if req.TriggerType != serverless.TriggerTypeInternal {
+		t.Errorf("trigger type = %q, want %q — a function_invoke is an internal call", req.TriggerType, serverless.TriggerTypeInternal)
+	}
+	if req.Namespace != "anchat-test" {
+		t.Errorf("namespace = %q; a nested call stays in its parent's namespace", req.Namespace)
+	}
+}
+
+// bugboard #152: the boundary that must not move. A caller-started invocation
+// never becomes a gateway-started one, however many hops it makes.
+func TestFunctionInvoke_aCallerStartedParentNeverGainsAuthority(t *testing.T) {
+	for _, parent := range []serverless.TriggerType{
 		serverless.TriggerTypeHTTP,
 		serverless.TriggerTypeWebSocket,
-	}
-	for _, p := range externalParents {
-		got := nestedTriggerType(p)
-		if serverless.IsSystemTrigger(got) {
-			t.Errorf("parent %q: nested trigger = %q must NOT be a system trigger — external→internal must stay blocked (bugboard #152)", p, got)
-		}
-		if got != serverless.TriggerTypeWebSocket {
-			t.Errorf("parent %q: nested trigger = %q, want %q (unchanged behavior)", p, got, serverless.TriggerTypeWebSocket)
-		}
-	}
+		serverless.TriggerTypeInternal, // the label alone is not authority
+		serverless.TriggerType(""),
+		serverless.TriggerType("something-new"),
+	} {
+		t.Run(string(parent), func(t *testing.T) {
+			inv := &nestedRecordingInvoker{}
+			h := hostWithInvoker(inv)
 
-	// An unknown/empty parent must fail CLOSED (gated), never escalate.
-	if serverless.IsSystemTrigger(nestedTriggerType("")) {
-		t.Error("an empty parent trigger must not escalate to a system trigger")
-	}
-	if serverless.IsSystemTrigger(nestedTriggerType("something-new")) {
-		t.Error("an unrecognised parent trigger must fail closed, not escalate")
+			ctx := parentCtx(&serverless.InvocationContext{
+				Namespace:    "anchat-test",
+				TriggerType:  parent,
+				CallerWallet: "0xExternal",
+			})
+			if _, err := h.FunctionInvoke(ctx, "migrate", []byte(`{}`)); err != nil {
+				t.Fatalf("FunctionInvoke: %v", err)
+			}
+			if inv.last().SystemOriginated {
+				t.Errorf("a %q parent's nested call claimed the gateway's authority", parent)
+			}
+		})
 	}
 }
 
-// The helper test above pins the DECISION; these pin the CALL SITES. Without
-// them, re-hardcoding `TriggerType: TriggerTypeWebSocket` in FunctionInvoke or
-// FunctionInvokeAsync would reintroduce bugboard #159 with the helper test
-// still green.
-func TestFunctionInvoke_propagatesSystemOriginToNestedCall(t *testing.T) {
-	inv := &recordingInvoker{}
-	h := newAsyncHF(inv, 4)
+// A caller who may run a function directly must not be refused by that same
+// function's own nested call. The grant was simply not carried.
+func TestFunctionInvoke_carriesTheCallersGrants(t *testing.T) {
+	inv := &nestedRecordingInvoker{}
+	h := hostWithInvoker(inv)
 
-	// Parent fired by cron — the exact shape of AnChat's payment reconciler.
-	ctx := serverless.WithInvocationContext(context.Background(), &serverless.InvocationContext{
-		Namespace:   "ns-test",
-		TriggerType: serverless.TriggerTypeCron,
+	ctx := parentCtx(&serverless.InvocationContext{
+		Namespace:       "anchat-test",
+		TriggerType:     serverless.TriggerTypeHTTP,
+		CallerWallet:    "0xUser",
+		CallerIsAdmin:   true,
+		CallerHasInvoke: true,
 	})
-	if _, err := h.FunctionInvoke(ctx, "settle-payments", []byte(`{}`)); err != nil {
+	if _, err := h.FunctionInvoke(ctx, "callee", []byte(`{}`)); err != nil {
 		t.Fatalf("FunctionInvoke: %v", err)
 	}
 
-	inv.mu.Lock()
-	defer inv.mu.Unlock()
-	if len(inv.reqs) != 1 {
-		t.Fatalf("got %d invocations, want 1", len(inv.reqs))
+	req := inv.last()
+	if req.CallerWallet != "0xUser" {
+		t.Errorf("caller wallet = %q", req.CallerWallet)
 	}
-	got := inv.reqs[0]
-	if !serverless.IsSystemTrigger(got.TriggerType) {
-		t.Errorf("nested TriggerType = %q — a cron parent's nested invoke must stay system-originated, else a public:false callee is refused (bugboard #159)", got.TriggerType)
+	if !req.CallerIsAdmin {
+		t.Error("the caller's admin bit was dropped")
 	}
-	if got.Namespace != "ns-test" {
-		t.Errorf("nested Namespace = %q, want the parent's own namespace (containment)", got.Namespace)
+	if !req.CallerHasInvoke {
+		t.Error("the caller's invoke grant was dropped, so a caller who may run this function directly is refused by its own nested call")
 	}
 }
 
-// External parent must remain gated at the call site — the #152 boundary.
-func TestFunctionInvoke_externalParentStaysGated(t *testing.T) {
-	inv := &recordingInvoker{}
-	h := newAsyncHF(inv, 4)
+func TestFunctionInvokeAsync_carriesTheSameAuthorityAsTheSyncPath(t *testing.T) {
+	inv := &nestedRecordingInvoker{}
+	h := hostWithInvoker(inv)
 
-	ctx := serverless.WithInvocationContext(context.Background(), &serverless.InvocationContext{
-		Namespace:   "ns-test",
-		TriggerType: serverless.TriggerTypeHTTP,
+	ctx := parentCtx(&serverless.InvocationContext{
+		Namespace:        "anchat-test",
+		TriggerType:      serverless.TriggerTypeCron,
+		SystemOriginated: true,
+		CallerHasInvoke:  true,
 	})
-	if _, err := h.FunctionInvoke(ctx, "settle-payments", []byte(`{}`)); err != nil {
-		t.Fatalf("FunctionInvoke: %v", err)
-	}
-
-	inv.mu.Lock()
-	defer inv.mu.Unlock()
-	if serverless.IsSystemTrigger(inv.reqs[0].TriggerType) {
-		t.Errorf("nested TriggerType = %q — an HTTP-triggered parent must NOT escalate to a system trigger (bugboard #152)", inv.reqs[0].TriggerType)
-	}
-}
-
-func TestFunctionInvokeAsync_propagatesSystemOriginToNestedCall(t *testing.T) {
-	inv := &recordingInvoker{called: make(chan *serverless.InvokeRequest, 1)}
-	h := newAsyncHF(inv, 4)
-
-	ctx := serverless.WithInvocationContext(context.Background(), &serverless.InvocationContext{
-		Namespace:   "ns-test",
-		TriggerType: serverless.TriggerTypePubSub,
-	})
-	if err := h.FunctionInvokeAsync(ctx, "settle-payments", []byte(`{}`)); err != nil {
+	if err := h.FunctionInvokeAsync(ctx, "fanout", []byte(`{}`)); err != nil {
 		t.Fatalf("FunctionInvokeAsync: %v", err)
 	}
 
-	select {
-	case req := <-inv.called:
-		if !serverless.IsSystemTrigger(req.TriggerType) {
-			t.Errorf("async nested TriggerType = %q — a pubsub parent's nested invoke must stay system-originated", req.TriggerType)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("async invoke never reached the invoker")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && inv.last() == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+	req := inv.last()
+	if req == nil {
+		t.Fatal("the async invoke never reached the invoker")
+	}
+	if !req.SystemOriginated {
+		t.Error("the async path lost the gateway's authority")
+	}
+	if !req.CallerHasInvoke {
+		t.Error("the async path dropped the caller's invoke grant")
+	}
+	if req.TriggerType != serverless.TriggerTypeInternal {
+		t.Errorf("trigger type = %q, want %q", req.TriggerType, serverless.TriggerTypeInternal)
 	}
 }

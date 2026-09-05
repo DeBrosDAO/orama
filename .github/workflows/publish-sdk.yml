@@ -18,11 +18,25 @@ permissions:
 
 jobs:
   publish:
-    name: Build & Publish @debros/orama
+    # Both packages are cut from the same /VERSION and published together. The
+    # vault client moved out of @debros/orama into its own package; leaving it
+    # unpublished would mean nothing ships it at all.
+    name: Build & Publish ${{ matrix.package }}
     runs-on: ubuntu-latest
+    strategy:
+      # One at a time, and the first failure cancels the rest, so a broken
+      # build cannot publish half a release.
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        include:
+          - directory: sdk
+            package: "@debros/orama"
+          - directory: sdk-vault
+            package: "@debros/orama-vault"
     defaults:
       run:
-        working-directory: sdk
+        working-directory: ${{ matrix.directory }}
 
     steps:
       - name: Checkout code
@@ -77,7 +91,7 @@ jobs:
         run: pnpm build
 
       - name: Run unit tests
-        run: pnpm vitest run tests/unit
+        run: pnpm test:unit
 
       - name: Publish (dry run)
         if: inputs.dry-run == true
@@ -85,13 +99,27 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # The dist-tag is decided by the version, not by the branch.
+      #
+      # It used to be "not main means nightly", so a release cut from main
+      # carrying a -nightly version published with no tag — and npm's default
+      # tag is `latest` regardless of whether the version is a prerelease. That
+      # is how `latest` came to be 0.122.80-nightly while the repo was 23
+      # versions ahead, so `npm install @debros/orama` installed a stale
+      # prerelease.
+      #
+      # A version with a prerelease component can now only ever reach the
+      # `nightly` tag, whatever branch it was cut from.
       - name: Publish
         if: github.event_name == 'release' || inputs.dry-run != true
         run: |
-          if [[ "${{ github.event.release.target_commitish }}" != "main" && "${{ github.event_name }}" == "release" ]]; then
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$VERSION" == *-* ]]; then
+            echo "$VERSION is a prerelease — publishing under the 'nightly' tag"
             npm publish --access public --tag nightly
           else
-            npm publish --access public
+            echo "$VERSION is a release — publishing under 'latest'"
+            npm publish --access public --tag latest
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -101,8 +129,10 @@ jobs:
         id: version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
+      # One tag per release, cut from the app SDK's version. Both packages
+      # carry the same version, so a second tag would only collide.
       - name: Create git tag
-        if: github.event_name != 'release' && inputs.dry-run != true
+        if: matrix.directory == 'sdk' && github.event_name != 'release' && inputs.dry-run != true
         working-directory: .
         run: |
           git config user.name "github-actions[bot]"

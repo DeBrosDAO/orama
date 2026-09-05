@@ -4,11 +4,15 @@ import (
 	"net/http"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 )
 
 // Routes returns the http.Handler with all routes and middleware configured
 func (g *Gateway) Routes() http.Handler {
-	mux := http.NewServeMux()
+	// Routes register against the policy table: a pattern with no declared
+	// policy cannot be wired here at all. See route_policy.go.
+	mux := routepolicy.NewMux(gatewayRoutes)
 
 	// root and v1 health/status
 	mux.HandleFunc("/health", g.healthHandler)
@@ -59,11 +63,6 @@ func (g *Gateway) Routes() http.Handler {
 	// Namespace cluster repair (internal, handler does its own auth)
 	mux.HandleFunc("/v1/internal/namespace/repair", g.namespaceClusterRepairHandler)
 
-	// Namespace WebRTC enable/disable/status (internal, handler does its own auth)
-	mux.HandleFunc("/v1/internal/namespace/webrtc/enable", g.namespaceWebRTCEnableHandler)
-	mux.HandleFunc("/v1/internal/namespace/webrtc/disable", g.namespaceWebRTCDisableHandler)
-	mux.HandleFunc("/v1/internal/namespace/webrtc/status", g.namespaceWebRTCStatusHandler)
-
 	// Namespace WebRTC enable/disable/status (public, JWT/API key auth via middleware)
 	mux.HandleFunc("/v1/namespace/webrtc/enable", g.namespaceWebRTCEnablePublicHandler)
 	mux.HandleFunc("/v1/namespace/webrtc/disable", g.namespaceWebRTCDisablePublicHandler)
@@ -84,25 +83,22 @@ func (g *Gateway) Routes() http.Handler {
 		// Issue JWT from API key; create or return API key for a wallet after verification
 		mux.HandleFunc("/v1/auth/token", g.authHandlers.APIKeyToJWTHandler)
 		mux.HandleFunc("/v1/auth/api-key", g.authHandlers.IssueAPIKeyHandler)
-		mux.HandleFunc("/v1/auth/simple-key", g.authHandlers.SimpleAPIKeyHandler)
-		mux.HandleFunc("/v1/auth/register", g.authHandlers.RegisterHandler)
 		mux.HandleFunc("/v1/auth/refresh", g.authHandlers.RefreshHandler)
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)
-		// Phantom Solana auth (QR code + deep link)
-		mux.HandleFunc("/v1/auth/phantom/session", g.authHandlers.PhantomSessionHandler)
-		mux.HandleFunc("/v1/auth/phantom/session/", g.authHandlers.PhantomSessionStatusHandler)
-		mux.HandleFunc("/v1/auth/phantom/complete", g.authHandlers.PhantomCompleteHandler)
+		mux.HandleFunc("/v1/audit", g.authHandlers.AuditHandler)
 	}
 
 	// RQLite native backup/restore proxy (namespace auth via /v1/rqlite/ prefix)
 	mux.HandleFunc("/v1/rqlite/export", g.rqliteExportHandler)
 	mux.HandleFunc("/v1/rqlite/import", g.rqliteImportHandler)
 
-	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints)
+	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints). It composes its
+	// own patterns, so it reports them and they are checked against the policy
+	// table before its handlers go on.
 	if g.ormHTTP != nil {
-		g.ormHTTP.BasePath = "/v1/rqlite"
-		g.ormHTTP.RegisterRoutes(mux)
+		g.ormHTTP.BasePath = ormBasePath
+		mux.RegisterAll(g.ormHTTP.Routes(), g.ormHTTP.RegisterRoutes)
 	}
 
 	// namespace cluster status (public endpoint for polling during provisioning)
@@ -118,10 +114,21 @@ func (g *Gateway) Routes() http.Handler {
 		mux.Handle("/v1/namespace/list", g.namespaceListHandler)
 	}
 
+	// namespace create (authenticated — writes the namespace and its owner
+	// grant, and is the only thing that starts provisioning). Creating one
+	// used to be a side effect of asking for a login challenge.
+	if g.namespaceCreateHandler != nil {
+		mux.Handle("/v1/namespaces", g.namespaceCreateHandler)
+	}
+
 	// Scoped API-key management (bugboard #148) — admin-scoped + namespace-scoped.
 	// GET list / POST create; DELETE /{id} revoke one; POST /revoke-legacy sweep.
 	mux.HandleFunc("/v1/namespace/keys", g.namespaceKeysHandler)
 	mux.HandleFunc("/v1/namespace/keys/", g.namespaceKeysByIDHandler)
+
+	// Who else may work in this namespace, and at what role.
+	mux.HandleFunc("/v1/namespace/members", g.namespaceMembersHandler)
+	mux.HandleFunc("/v1/namespace/members/", g.namespaceMemberByIDHandler)
 
 	// network
 	mux.HandleFunc("/v1/network/status", g.networkStatusHandler)
@@ -232,7 +239,7 @@ func (g *Gateway) Routes() http.Handler {
 
 	// serverless functions (if enabled)
 	if g.serverlessHandlers != nil {
-		g.serverlessHandlers.RegisterRoutes(mux)
+		mux.RegisterAll(serverlesshandlers.Routes(), g.serverlessHandlers.RegisterRoutes)
 	}
 
 	// deployment endpoints
@@ -267,6 +274,11 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/deployments/stats", g.withHomeNodeProxy(g.statsHandler.HandleStats))
 		mux.HandleFunc("/v1/deployments/events", g.logsHandler.HandleGetEvents)
 
+		// Environment variables. The write runs on the home node because the
+		// variables live in a systemd unit on the machine the process runs on.
+		mux.HandleFunc("/v1/deployments/env", g.envHandler.HandleGetEnv)
+		mux.HandleFunc("/v1/deployments/env/set", g.withHomeNodeProxy(g.envHandler.HandleSetEnv))
+
 		// Internal replica coordination endpoints
 		if g.replicaHandler != nil {
 			mux.HandleFunc("/v1/internal/deployments/replica/setup", g.replicaHandler.HandleSetup)
@@ -287,6 +299,7 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/db/sqlite/create", g.sqliteHandler.CreateDatabase)
 		mux.HandleFunc("/v1/db/sqlite/query", g.sqliteHandler.QueryDatabase)
 		mux.HandleFunc("/v1/db/sqlite/list", g.sqliteHandler.ListDatabases)
+		mux.HandleFunc("/v1/db/sqlite/delete", g.sqliteHandler.DeleteDatabase)
 		mux.HandleFunc("/v1/db/sqlite/backup", g.sqliteBackupHandler.BackupDatabase)
 		mux.HandleFunc("/v1/db/sqlite/backups", g.sqliteBackupHandler.ListBackups)
 	}

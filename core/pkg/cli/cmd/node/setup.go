@@ -42,5 +42,6 @@ func init() {
 	setupCmd.Flags().StringVar(&setupOpts.BaseDomain, "base-domain", "", "Base domain for the network")
 	setupCmd.Flags().StringVar(&setupOpts.Gateway, "gateway", "", "Gateway URL for invite tokens (e.g., http://1.2.3.4)")
 	setupCmd.Flags().BoolVar(&setupOpts.Genesis, "genesis", false, "Create a new cluster (first node)")
+	setupCmd.Flags().StringVar(&setupOpts.HostKey, "host-key", "", "Expected SSH host-key fingerprint (SHA256:...) of the VPS; omit to confirm it interactively")
 	setupCmd.MarkFlagRequired("ip")
 }

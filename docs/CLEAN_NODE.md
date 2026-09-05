@@ -3,13 +3,14 @@
 How to completely remove all Orama Network state from a VPS so it can be reinstalled fresh.
 
 > **Prefer the CLI.** For a node that is or was a cluster member, run
-> `orama node decommission --env <env> --node <ip>`: it retires the node from
-> raft, the mesh and the node registry from a *survivor* first, then erases it.
-> Doing only the erase — which is all this guide, and the deprecated
-> `orama node clean`, ever did — leaves the node a configured raft voter counted
-> toward quorum, with its `wireguard_peers` row still applied to every
-> survivor's interface. Use `orama node wipe` when the node is already retired,
-> and the manual steps below only when the CLI cannot reach the machine.
+> `orama node remove --env <env> --node <ip>`: from a *survivor* it checks that
+> no cluster loses quorum, retires the node from raft, the mesh, every namespace
+> it served and the node registry, and only then erases it. Doing only the erase
+> — which is all this guide, and the deprecated `orama node clean`, ever did —
+> leaves the node a configured raft voter counted toward quorum, with its
+> `wireguard_peers` row still applied to every survivor's interface. Use
+> `orama node wipe` when the node is already retired, and the manual steps below
+> only when the CLI cannot reach the machine.
 
 > **OramaOS nodes:** This guide applies to Ubuntu-based nodes only. OramaOS has no SSH or shell access. To remove an OramaOS node: use `POST /v1/node/leave` via the Gateway API for graceful departure, or reflash the OramaOS image via your VPS provider's dashboard for a factory reset. See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for details.
 
@@ -145,40 +146,27 @@ sudo rm -f /usr/local/bin/orama-sni-router
 
 ## Multi-Node Clean
 
-To clean all nodes at once from your local machine:
+Use the CLI. It resolves the environment's nodes and authenticates with the
+wallet-derived SSH key held in RootWallet, so no password is ever typed,
+pasted into a script, or left in shell history:
 
 ```bash
-# Define your nodes
-NODES=(
-  "ubuntu@141.227.165.168:password1"
-  "ubuntu@141.227.165.154:password2"
-  "ubuntu@141.227.156.51:password3"
-)
-
-for entry in "${NODES[@]}"; do
-  IFS=: read -r userhost pass <<< "$entry"
-  echo "Cleaning $userhost..."
-  sshpass -p "$pass" ssh -o StrictHostKeyChecking=no "$userhost" 'bash -s' << 'CLEAN'
-sudo systemctl stop orama-node 2>/dev/null
-sudo systemctl stop 'orama-namespace-*@*' 2>/dev/null
-sudo systemctl disable orama-node 2>/dev/null
-sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
-sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
-sudo rm -f /etc/systemd/system/orama-*.service /etc/systemd/system/orama-*.timer /etc/systemd/system/coredns.service /etc/systemd/system/caddy.service /etc/systemd/system/orama-deploy-*.service /etc/systemd/system/ntfy.service
-sudo systemctl daemon-reload
-sudo systemctl stop wg-quick@wg0 2>/dev/null
-sudo wg-quick down wg0 2>/dev/null
-sudo systemctl disable wg-quick@wg0 2>/dev/null
-sudo rm -f /etc/wireguard/wg0.conf
-sudo ufw --force reset && sudo ufw allow 22/tcp && sudo ufw --force enable
-sudo rm -rf /opt/orama
-sudo userdel -r orama 2>/dev/null
-sudo rm -rf /home/orama
-sudo rm -f /etc/sudoers.d/orama-namespaces /etc/sudoers.d/orama-access /etc/sudoers.d/orama-deployments /etc/sudoers.d/orama-wireguard
-sudo rm -rf /etc/coredns /etc/caddy /var/lib/caddy
-sudo rm -f /tmp/orama /tmp/network-source.tar.gz
-sudo rm -rf /tmp/network-extract /tmp/coredns-build /tmp/caddy-build
-echo "Done"
-CLEAN
-done
+orama node wipe --env testnet                  # every node in the environment
+orama node wipe --env testnet --node 1.2.3.4   # one node
+orama node wipe --env testnet --nuclear        # also remove shared binaries
 ```
+
+`wipe` erases the target only. If the node is still part of a running cluster,
+use `remove` instead — it takes the node out of the cluster first (raft
+membership, WireGuard peer, nameserver slot, namespace memberships and ports,
+TURN and SFU allocations, DNS) and then erases it, which `wipe` does not do:
+
+```bash
+orama node remove --env testnet --node 1.2.3.4 --dry-run   # Show the plan only
+orama node remove --env testnet --node 1.2.3.4
+orama node remove --env testnet --node 1.2.3.4 --offline   # VPS already gone
+```
+
+The manual steps earlier in this document remain useful for a node the CLI
+cannot reach — one whose SSH key is lost, or that was never enrolled. Run them
+over your own SSH session on that host.

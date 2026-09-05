@@ -128,13 +128,15 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse environment
-	var env map[string]string
-	if req.Environment != "" {
-		json.Unmarshal([]byte(req.Environment), &env)
-	}
-	if env == nil {
-		env = make(map[string]string)
+	// Read the environment. It arrives sealed with the cluster key, which
+	// every node derives identically. An environment that cannot be read is
+	// not an empty environment: starting the replica without its database URL
+	// would look like the tenant's own bug.
+	env, envErr := h.service.decodeEnvironment(req.Namespace, req.Name, req.Environment)
+	if envErr != nil {
+		h.logger.Error("Failed to read the replica's environment", zap.Error(envErr))
+		http.Error(w, "Failed to read the deployment environment", http.StatusBadRequest)
+		return
 	}
 
 	// Build a Deployment struct for the process manager

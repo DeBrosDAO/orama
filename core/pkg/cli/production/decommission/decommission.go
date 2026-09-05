@@ -2,11 +2,11 @@ package decommission
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/cli/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/cli/production/clusterops"
 	"github.com/DeBrosOfficial/network/pkg/cli/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -20,49 +20,46 @@ type Flags struct {
 	Offline bool
 	Nuclear bool
 	Force   bool
+	DryRun  bool
 }
 
-// Handle is the entry point for `orama node decommission`.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
+// Run is the entry point for `orama node decommission`.
+func Run(flags *Flags) error {
+	if err := flags.validate(); err != nil {
+		return err
+	}
+	return execute(flags)
+}
+
+func (f *Flags) validate() error {
+	if f.Env == "" {
+		return fmt.Errorf("--env is required\nUsage: orama node decommission --env <devnet|testnet> --node <ip> [--offline] [--force]")
+	}
+	if f.Node == "" {
+		return fmt.Errorf("--node is required: decommission removes ONE node")
+	}
+	return nil
+}
+
+// resolveRaftID finds the target's id in the platform raft configuration.
+//
+// Members are keyed by id, which on a cluster that has run
+// `orama node migrate-raft-id` is a peer id and before it is the raft address.
+// Removing by address matched nothing on a migrated cluster and reported
+// success, leaving the retired machine a configured voter for ever.
+func resolveRaftID(survivor inspector.Node, raftAddr string) (string, error) {
+	members, err := clusterops.RaftMembers(survivor)
 	if err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return "", err
 	}
-	if err := execute(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	if id := clusterops.IDForAddr(members, raftAddr); id != "" {
+		return id, nil
 	}
-}
-
-func parseFlags(args []string) (*Flags, error) {
-	fs := flag.NewFlagSet("decommission", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &Flags{}
-	fs.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	fs.StringVar(&flags.Node, "node", "", "Public IP of the node to remove [required]")
-	fs.BoolVar(&flags.Offline, "offline", false, "The node is already gone: retire it cluster-side only, do not try to wipe it")
-	fs.BoolVar(&flags.Nuclear, "nuclear", false, "When wiping, also remove shared binaries")
-	fs.BoolVar(&flags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
-	}
-	if flags.Env == "" {
-		return nil, fmt.Errorf("--env is required\nUsage: orama node decommission --env <devnet|testnet> --node <ip> [--offline] [--force]")
-	}
-	if flags.Node == "" {
-		return nil, fmt.Errorf("--node is required: decommission removes ONE node")
-	}
-	return flags, nil
+	return raftAddr, nil
 }
 
 func execute(flags *Flags) error {
-	nodes, err := remotessh.LoadEnvNodes(flags.Env)
+	nodes, err := noderesolver.ResolveNodes(flags.Env)
 	if err != nil {
 		return err
 	}
@@ -90,8 +87,48 @@ func execute(flags *Flags) error {
 	}
 	fmt.Println()
 
+	record, err := clusterops.ResolveNodeRecord(survivor, target.Host)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("  Node record: peer %s, overlay %s\n", record.PeerID, record.InternalIP)
+
+	raftAddr := fmt.Sprintf("%s:%d", record.InternalIP, constants.RQLiteRaftPort)
+	raftNodeID, err := resolveRaftID(survivor, raftAddr)
+	if err != nil {
+		return err
+	}
+
+	// The quorum arithmetic comes before the confirmation prompt, and covers
+	// every namespace this node holds a voter in as well as the platform
+	// cluster. Checking only the platform cluster, at the point of the raft
+	// removal, is how an operator retired a node that held two of three voters
+	// for a namespace and learned about it when that namespace stopped
+	// accepting writes.
+	impacts, err := clusterops.PlanRemoval(survivor, raftNodeID, record.PeerID)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\n  Quorum after removing %s:\n%s", target.Host, clusterops.FormatImpacts(impacts))
+
+	if !clusterops.Safe(impacts) {
+		return fmt.Errorf("refusing to remove %s: it would cost a cluster its quorum (see above)", target.Host)
+	}
+
+	if flags.DryRun {
+		fmt.Printf("\n  --dry-run, so nothing was changed. This would run:\n")
+		for _, step := range clusterops.RetirementPlan(record) {
+			fmt.Printf("    %s\n      %s\n", step.What, step.SQL)
+		}
+		fmt.Printf("    remove raft member %s\n", raftNodeID)
+		if !flags.Offline {
+			fmt.Printf("    wipe %s\n", target.Host)
+		}
+		return nil
+	}
+
 	if !flags.Force {
-		fmt.Printf("This removes %s from raft, the mesh and the node registry", target.Host)
+		fmt.Printf("\nThis removes %s from raft, the mesh and every namespace it serves", target.Host)
 		if !flags.Offline {
 			fmt.Printf(", then ERASES it")
 		}
@@ -104,28 +141,6 @@ func execute(flags *Flags) error {
 		fmt.Println()
 	}
 
-	record, err := clusterops.ResolveNodeRecord(survivor, target.Host)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("  Node record: peer %s, overlay %s\n", record.PeerID, record.InternalIP)
-
-	raftAddr := fmt.Sprintf("%s:%d", record.InternalIP, constants.RQLiteRaftPort)
-
-	// Resolve the raft ID from the configuration rather than assuming it is the
-	// address. On a cluster that has run `orama node migrate-raft-id` the member
-	// is registered under its peer id, and removing by address matched nothing
-	// and reported success — leaving the decommissioned machine a configured
-	// voter for ever.
-	members, err := clusterops.RaftMembers(survivor)
-	if err != nil {
-		return err
-	}
-	raftNodeID := clusterops.IDForAddr(members, raftAddr)
-	if raftNodeID == "" {
-		raftNodeID = raftAddr
-	}
-
 	if err := clusterops.RemoveRaftMember(survivor, raftNodeID); err != nil {
 		return err
 	}
@@ -135,10 +150,9 @@ func execute(flags *Flags) error {
 	}
 	fmt.Printf("  ✓ tombstoned, so nothing re-adds it automatically\n")
 
-	if err := deleteMembershipRows(survivor, record); err != nil {
+	if err := clusterops.Retire(survivor, record); err != nil {
 		return err
 	}
-	fmt.Printf("  ✓ removed from wireguard_peers and dns_nodes\n")
 
 	if flags.Offline {
 		fmt.Printf("\n✓ %s retired cluster-side. It was not wiped (--offline).\n", target.Host)
@@ -153,24 +167,5 @@ func execute(flags *Flags) error {
 
 	fmt.Printf("\n✓ %s decommissioned and wiped\n", target.Host)
 	fmt.Printf("  rm -rf is unlink, not cryptographic erase. Provider disks remain readable.\n")
-	return nil
-}
-
-// deleteMembershipRows removes the node from the stores the reconciler would
-// otherwise take hours to catch up on.
-//
-// The reconciler would get there on its own — that is the point of it — but an
-// operator who asked for a removal should not have to wait out a liveness grace
-// to see it happen.
-func deleteMembershipRows(survivor inspector.Node, rec clusterops.NodeRecord) error {
-	stmts := []string{
-		fmt.Sprintf(`DELETE FROM wireguard_peers WHERE wg_ip = '%s'`, clusterops.SQLLiteral(rec.InternalIP)),
-		fmt.Sprintf(`DELETE FROM dns_nodes WHERE id = '%s'`, clusterops.SQLLiteral(rec.PeerID)),
-	}
-	for _, stmt := range stmts {
-		if err := clusterops.ExecSQL(survivor, stmt); err != nil {
-			return err
-		}
-	}
 	return nil
 }

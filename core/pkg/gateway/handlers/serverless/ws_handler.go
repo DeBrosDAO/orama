@@ -76,13 +76,22 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	fn, lookupErr := h.registry.Get(r.Context(), namespace, name, version)
 	if lookupErr == nil && fn != nil && fn.WSPersistent {
 		// The persistent path builds its InvocationContext directly and never
-		// routes through canInvokeFn, so enforce the internal-function gate HERE
-		// (bugboard #152). An internal function is admin/system-trigger only; a
-		// persistent-WS client upgrade is neither, so reject a non-admin caller
-		// before upgrading — the stateless path below is gated per-frame via
-		// Invoke → canInvokeFn.
-		if fn.IsInternal && !h.getCallerIsAdminFromRequest(r) {
-			http.Error(w, "forbidden: internal function requires an admin caller", http.StatusForbidden)
+		// reaches Invoke, so the authorization that the stateless path gets
+		// per-frame has to happen here, before the upgrade.
+		//
+		// It used to check only that an internal function had an admin caller
+		// (bugboard #152). That left the rest of the same decision out: a
+		// function that is merely private — not public, not internal — was
+		// reachable over a persistent WebSocket by a caller with no wallet and
+		// no invoke grant, while the identical function over the stateless
+		// path or over HTTP refused them. Same decision, one place.
+		if !serverless.CanInvokeFunction(
+			fn,
+			h.getWalletFromRequest(r),
+			h.getCallerIsAdminFromRequest(r),
+			h.getCallerHasInvokeFromRequest(r),
+		) {
+			http.Error(w, "forbidden: not authorized to invoke this function", http.StatusForbidden)
 			return
 		}
 		h.handlePersistentWebSocket(w, r, fn, namespace)

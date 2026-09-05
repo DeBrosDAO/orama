@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // IssueAPIKeyHandler issues an API key after signature verification.
@@ -31,188 +30,44 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if strings.TrimSpace(req.Wallet) == "" || strings.TrimSpace(req.Nonce) == "" || strings.TrimSpace(req.Signature) == "" {
-		writeError(w, http.StatusBadRequest, "wallet, nonce and signature are required")
+	if strings.TrimSpace(req.Message) == "" || strings.TrimSpace(req.Signature) == "" {
+		writeError(w, http.StatusBadRequest, "message and signature are required: sign the message "+
+			"returned by /v1/auth/challenge and send it back verbatim")
 		return
 	}
 
 	ctx := r.Context()
-	verified, err := h.authService.VerifySignature(ctx, req.Wallet, req.Nonce, req.Signature, req.ChainType)
-	if err != nil || !verified {
-		writeError(w, http.StatusUnauthorized, "signature verification failed")
+	in, ok := h.signIn(w, r, req.Message, req.Signature)
+	if !ok {
+		return
+	}
+	wallet, namespace := in.Wallet, in.Namespace
+
+	// Refuse before anything is issued or provisioned: a namespace that belongs
+	// to another wallet is not this caller's to sign in to.
+	if err := h.authService.RequireNamespaceOwner(ctx, wallet, namespace); err != nil {
+		writeCredentialError(w, namespace, err)
 		return
 	}
 
-	// Mark nonce used
-	nsID, _ := h.resolveNamespace(ctx, req.Namespace)
-	h.markNonceUsed(ctx, nsID, strings.ToLower(req.Wallet), req.Nonce)
+	// Issuing a key does not provision anything. See VerifyHandler: creating a
+	// namespace is POST /v1/namespaces, and that is what provisions it.
 
-	// Check if namespace cluster provisioning is needed (for non-default namespaces)
-	namespace := strings.TrimSpace(req.Namespace)
-	if namespace == "" {
-		namespace = "default"
-	}
-
-	if h.clusterProvisioner != nil && namespace != "default" {
-		clusterID, status, needsProvisioning, err := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
-		if err != nil {
-			// Log but don't fail - cluster provisioning is optional (error may just mean no cluster yet)
-			_ = err
-		} else if needsProvisioning {
-			// Trigger provisioning for new namespace
-			nsIDInt := 0
-			if id, ok := nsID.(int); ok {
-				nsIDInt = id
-			} else if id, ok := nsID.(int64); ok {
-				nsIDInt = int(id)
-			} else if id, ok := nsID.(float64); ok {
-				nsIDInt = int(id)
-			}
-
-			newClusterID, pollURL, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
-			if provErr != nil {
-				writeError(w, http.StatusInternalServerError, "failed to start cluster provisioning")
-				return
-			}
-
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":                 "provisioning",
-				"cluster_id":             newClusterID,
-				"poll_url":               pollURL,
-				"estimated_time_seconds": 60,
-				"message":                "Namespace cluster is being provisioned. Poll the status URL for updates.",
-			})
-			return
-		} else if status == "provisioning" {
-			// Already provisioning, return poll URL
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":                 "provisioning",
-				"cluster_id":             clusterID,
-				"poll_url":               "/v1/namespace/status?id=" + clusterID,
-				"estimated_time_seconds": 60,
-				"message":                "Namespace cluster is being provisioned. Poll the status URL for updates.",
-			})
-			return
-		}
-		// If status is "ready" or "default", proceed with API key generation
-	}
-
-	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
+	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, wallet, namespace)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeCredentialError(w, namespace, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"api_key":   apiKey,
-		"namespace": req.Namespace,
+		"namespace": namespace,
 		"plan": func() string {
 			if strings.TrimSpace(req.Plan) == "" {
 				return "free"
 			}
 			return req.Plan
 		}(),
-		"wallet": strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(req.Wallet, "0x"), "0X")),
-	})
-}
-
-// SimpleAPIKeyHandler generates an API key without signature verification.
-// Requires an existing valid API key (convenience re-auth only, not standalone).
-//
-// POST /v1/auth/simple-key
-// Request body: SimpleAPIKeyRequest
-// Headers: X-API-Key or Authorization required
-// Response: { "api_key", "namespace", "wallet", "created" }
-func (h *Handlers) SimpleAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
-	if h.authService == nil {
-		writeError(w, http.StatusServiceUnavailable, "auth service not initialized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	// Require existing API key — simple auth is a convenience shortcut, not standalone
-	existingKey, _ := r.Context().Value(CtxKeyAPIKey).(string)
-	if existingKey == "" {
-		writeError(w, http.StatusUnauthorized, "simple auth requires an existing API key")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // 64KB
-	var req SimpleAPIKeyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-	if strings.TrimSpace(req.Wallet) == "" {
-		writeError(w, http.StatusBadRequest, "wallet is required")
-		return
-	}
-
-	// Check if namespace cluster provisioning is needed (for non-default namespaces)
-	namespace := strings.TrimSpace(req.Namespace)
-	if namespace == "" {
-		namespace = "default"
-	}
-
-	ctx := r.Context()
-	if h.clusterProvisioner != nil && namespace != "default" {
-		clusterID, status, needsProvisioning, err := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
-		if err != nil {
-			// Log but don't fail - cluster provisioning is optional
-			_ = err
-		} else if needsProvisioning {
-			// Trigger provisioning for new namespace
-			nsID, _ := h.resolveNamespace(ctx, namespace)
-			nsIDInt := 0
-			if id, ok := nsID.(int); ok {
-				nsIDInt = id
-			} else if id, ok := nsID.(int64); ok {
-				nsIDInt = int(id)
-			} else if id, ok := nsID.(float64); ok {
-				nsIDInt = int(id)
-			}
-
-			newClusterID, pollURL, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
-			if provErr != nil {
-				writeError(w, http.StatusInternalServerError, "failed to start cluster provisioning")
-				return
-			}
-
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":                 "provisioning",
-				"cluster_id":             newClusterID,
-				"poll_url":               pollURL,
-				"estimated_time_seconds": 60,
-				"message":                "Namespace cluster is being provisioned. Poll the status URL for updates.",
-			})
-			return
-		} else if status == "provisioning" {
-			// Already provisioning, return poll URL
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":                 "provisioning",
-				"cluster_id":             clusterID,
-				"poll_url":               "/v1/namespace/status?id=" + clusterID,
-				"estimated_time_seconds": 60,
-				"message":                "Namespace cluster is being provisioned. Poll the status URL for updates.",
-			})
-			return
-		}
-		// If status is "ready" or "default", proceed with API key generation
-	}
-
-	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"api_key":   apiKey,
-		"namespace": req.Namespace,
-		"wallet":    strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(req.Wallet, "0x"), "0X")),
-		"created":   time.Now().Format(time.RFC3339),
+		"wallet": wallet,
 	})
 }

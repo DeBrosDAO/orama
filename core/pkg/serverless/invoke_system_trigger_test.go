@@ -3,50 +3,15 @@ package serverless
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 )
-
-// TestIsSystemTrigger covers every trigger type exhaustively. The list
-// matters: user-driven triggers MUST go through CanInvoke (auth middleware
-// is the source of truth for caller identity); system triggers MUST bypass
-// it (they have no caller — the trigger row IS the authorization, set at
-// registration time).
-//
-// If a future contributor adds a new TriggerType, this test forces them to
-// classify it here. Without that, the default (false → goes through
-// CanInvoke) is the safer choice — but if the new type is system-internal
-// and the contributor doesn't update isSystemTrigger, the symptom is the
-// exact bug we just fixed: every fire returns "unauthorized" silently.
-func TestIsSystemTrigger(t *testing.T) {
-	cases := []struct {
-		trigger TriggerType
-		system  bool
-	}{
-		// User-driven — must NOT be system.
-		{TriggerTypeHTTP, false},
-		{TriggerTypeWebSocket, false},
-
-		// System-driven — fires from gateway-internal state.
-		{TriggerTypeCron, true},
-		{TriggerTypePubSub, true},
-		{TriggerTypeDatabase, true},
-		{TriggerTypeTimer, true},
-		{TriggerTypeJob, true},
-
-		// Unknown trigger types default to user-driven (safe default — go
-		// through CanInvoke and fail closed if there's no caller).
-		{TriggerType("future-unknown"), false},
-		{TriggerType(""), false},
-	}
-	for _, c := range cases {
-		got := isSystemTrigger(c.trigger)
-		if got != c.system {
-			t.Errorf("isSystemTrigger(%q) = %v, want %v", c.trigger, got, c.system)
-		}
-	}
-}
 
 // invokeMockRegistry is a minimal FunctionRegistry that returns a single
 // canned function. Anything else panics so accidental drift is loud.
@@ -60,215 +25,280 @@ func (m *invokeMockRegistry) Get(_ context.Context, _, _ string, _ int) (*Functi
 	return m.fn, nil
 }
 
-// TestInvoke_systemTriggerBypassesAuth is the regression guard for
-// bugboard #264: a private function registered with a cron trigger fired
-// every minute with `"unauthorized"` because Invoke called CanInvoke with
-// an empty CallerWallet, which is a 100% blocker for private functions.
-//
-// The fix gates CanInvoke on !isSystemTrigger(req.TriggerType). This test
-// asserts the gate works for every system trigger type (cron, pubsub,
-// database, timer, job) AND that user-driven triggers (http, websocket)
-// still hit the auth check.
-//
-// Implementation note: we use a cancelled ctx so the call short-circuits
-// inside executeWithRetry's ctx.Err() check at line 223 BEFORE touching
-// engine (which is nil in this test). That lets us distinguish "blocked at
-// auth" (err = ErrUnauthorized) from "passed auth, blocked later" (err =
-// context.Canceled) without standing up a real WASM engine.
-func TestInvoke_systemTriggerBypassesAuth(t *testing.T) {
-	privateFn := &Function{
-		ID:        "fn-id",
-		Namespace: "anchat-test",
-		Name:      "push-fanout",
-		IsPublic:  false,
-	}
-	inv := &Invoker{
-		registry: &invokeMockRegistry{fn: privateFn},
-		logger:   zap.NewNop(),
-		// engine intentionally nil — cancelled-ctx short-circuit prevents reach.
-	}
+// The invocations below use a cancelled ctx so the call short-circuits inside
+// executeWithRetry's ctx.Err() check before touching the engine, which is nil
+// here. That separates "blocked at authorization" (ErrUnauthorized) from
+// "passed authorization, stopped later" (context.Canceled) without standing up
+// a WASM engine.
+func cancelledCtx() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
 
-	cases := []struct {
-		name     string
-		trigger  TriggerType
-		wantAuth bool // true → must hit ErrUnauthorized; false → must NOT
-	}{
-		// System triggers — must bypass auth. The original bug was every
-		// one of these returning ErrUnauthorized.
-		{"cron bypasses auth", TriggerTypeCron, false},
-		{"pubsub bypasses auth", TriggerTypePubSub, false},
-		{"database bypasses auth", TriggerTypeDatabase, false},
-		{"timer bypasses auth", TriggerTypeTimer, false},
-		{"job bypasses auth", TriggerTypeJob, false},
+// A cron row firing has no caller. Gating it on CallerWallet returned false
+// every time and silently blocked every fire for 19 hours (bugboard #264).
+// What says the gateway started this is SystemOriginated.
+func TestInvoke_aGatewayStartedInvocationSkipsTheCallerCheck(t *testing.T) {
+	privateFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "push-fanout", IsPublic: false}
+	inv := &Invoker{registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
 
-		// User-driven triggers — must STILL block anonymous callers on
-		// private functions. The fix narrows the gate; it does NOT
-		// remove it.
-		{"http blocks anonymous", TriggerTypeHTTP, true},
-		{"websocket blocks anonymous", TriggerTypeWebSocket, true},
+	_, err := inv.Invoke(cancelledCtx(), &InvokeRequest{
+		Namespace:        "anchat-test",
+		FunctionName:     "push-fanout",
+		TriggerType:      TriggerTypeCron,
+		CallerWallet:     "", // what a cron fire naturally has
+		SystemOriginated: true,
+	})
+	if errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("a cron fire was refused for having no caller: %v", err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel() // pre-cancelled so executeWithRetry short-circuits
+}
 
-			req := &InvokeRequest{
+// The hardening. The trigger type used to be what said "skip authorization",
+// so any request carrying one of those type values skipped it — a value that
+// travels with the work and gets copied onto derived requests. A request that
+// merely says it is a cron does not get the gateway's authority.
+func TestInvoke_aSystemTriggerTypeAloneIsNotAuthority(t *testing.T) {
+	privateFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "push-fanout", IsPublic: false}
+	inv := &Invoker{registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
+
+	for _, trigger := range []TriggerType{
+		TriggerTypeCron, TriggerTypePubSub, TriggerTypeDatabase,
+		TriggerTypeTimer, TriggerTypeJob, TriggerTypeInternal,
+	} {
+		t.Run(string(trigger), func(t *testing.T) {
+			resp, err := inv.Invoke(cancelledCtx(), &InvokeRequest{
 				Namespace:    "anchat-test",
 				FunctionName: "push-fanout",
-				Input:        []byte(`{"trigger":"test"}`),
-				TriggerType:  tc.trigger,
-				CallerWallet: "", // anonymous — what cron/pubsub/etc. naturally have
-			}
-			resp, err := inv.Invoke(ctx, req)
-
-			if tc.wantAuth {
-				// User-driven path: must hit the auth wall.
-				if !errors.Is(err, ErrUnauthorized) {
-					t.Errorf("trigger=%s wallet='': err=%v, want ErrUnauthorized", tc.trigger, err)
-				}
-				if resp == nil || resp.Error != "unauthorized" {
-					t.Errorf("trigger=%s: expected response.Error=\"unauthorized\", got %+v", tc.trigger, resp)
-				}
-			} else {
-				// System trigger: must NOT hit auth. Any other error is
-				// fine (we forced a cancelled ctx so we expect ctx.Err()
-				// or a wrapped version of it). The key invariant is
-				// "ErrUnauthorized must not appear".
-				if errors.Is(err, ErrUnauthorized) {
-					t.Errorf("trigger=%s: system trigger blocked at auth (regression of bugboard #264): %+v", tc.trigger, resp)
-				}
+				TriggerType:  trigger,
+				CallerWallet: "",
+				// SystemOriginated deliberately absent.
+			})
+			if !errors.Is(err, ErrUnauthorized) {
+				t.Fatalf("trigger type %q alone got past the caller check: err=%v resp=%+v", trigger, err, resp)
 			}
 		})
 	}
 }
 
-// TestInvoke_systemTriggerStillAllowsPublic is a sanity check: public
-// functions invoked by a system trigger should work exactly the same as
-// before (the auth gate was a no-op for them anyway). The bypass must
-// not change semantics for public functions.
-func TestInvoke_systemTriggerStillAllowsPublic(t *testing.T) {
-	publicFn := &Function{
-		ID:        "fn-id",
-		Namespace: "anchat-test",
-		Name:      "ping",
-		IsPublic:  true,
-	}
-	inv := &Invoker{
-		registry: &invokeMockRegistry{fn: publicFn},
-		logger:   zap.NewNop(),
-	}
+func TestInvoke_anExternalCallerIsStillChecked(t *testing.T) {
+	privateFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "push-fanout", IsPublic: false}
+	inv := &Invoker{registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	req := &InvokeRequest{
-		Namespace:    "anchat-test",
-		FunctionName: "ping",
-		Input:        []byte(`{}`),
-		TriggerType:  TriggerTypeCron,
-		CallerWallet: "",
-	}
-	_, err := inv.Invoke(ctx, req)
-	if errors.Is(err, ErrUnauthorized) {
-		t.Errorf("public function + system trigger should never be unauthorized: %v", err)
+	for _, trigger := range []TriggerType{TriggerTypeHTTP, TriggerTypeWebSocket} {
+		t.Run(string(trigger), func(t *testing.T) {
+			resp, err := inv.Invoke(cancelledCtx(), &InvokeRequest{
+				Namespace:    "anchat-test",
+				FunctionName: "push-fanout",
+				TriggerType:  trigger,
+				CallerWallet: "",
+			})
+			if !errors.Is(err, ErrUnauthorized) {
+				t.Errorf("an anonymous %s caller reached a private function: %v", trigger, err)
+			}
+			if resp == nil || resp.Error != "unauthorized" {
+				t.Errorf("response = %+v, want an unauthorized response", resp)
+			}
+		})
 	}
 }
 
-// TestInvoke_internalFunctionGate is the bugboard #152 integration guard on
-// the full Invoke gate: an `internal: true` function may be invoked by an
-// admin caller or a system trigger, but a normal (non-admin) app-runtime key
-// invoking it by name over HTTP is rejected `unauthorized` — even though it
-// carries a valid identity that would satisfy a plain private function.
+func TestInvoke_aPublicFunctionIsOpenToEveryone(t *testing.T) {
+	publicFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "ping", IsPublic: true}
+	inv := &Invoker{registry: &invokeMockRegistry{fn: publicFn}, logger: zap.NewNop()}
+
+	for _, req := range []*InvokeRequest{
+		{Namespace: "anchat-test", FunctionName: "ping", TriggerType: TriggerTypeCron, SystemOriginated: true},
+		{Namespace: "anchat-test", FunctionName: "ping", TriggerType: TriggerTypeHTTP},
+	} {
+		if _, err := inv.Invoke(cancelledCtx(), req); errors.Is(err, ErrUnauthorized) {
+			t.Errorf("a public function refused %s: %v", req.TriggerType, err)
+		}
+	}
+}
+
+// bugboard #152: an internal function is for admins and for the gateway. A
+// non-admin caller with a real identity — which a merely private function would
+// accept — must not reach it.
 func TestInvoke_internalFunctionGate(t *testing.T) {
 	internalFn := &Function{
-		ID:         "fn-id",
-		Namespace:  "anchat-test",
-		Name:       "migrate",
-		IsPublic:   false,
-		IsInternal: true,
+		ID: "fn-id", Namespace: "anchat-test", Name: "migrate",
+		IsPublic: false, IsInternal: true,
 	}
-	inv := &Invoker{
-		registry: &invokeMockRegistry{fn: internalFn},
-		logger:   zap.NewNop(),
-		// engine nil — cancelled-ctx short-circuit prevents reaching it.
-	}
+	inv := &Invoker{registry: &invokeMockRegistry{fn: internalFn}, logger: zap.NewNop()}
 
-	cases := []struct {
-		name          string
-		trigger       TriggerType
-		callerWallet  string
-		callerIsAdmin bool
-		wantAuth      bool // true → must hit ErrUnauthorized
+	for _, tc := range []struct {
+		name     string
+		req      InvokeRequest
+		wantAuth bool
 	}{
-		// Non-admin app-runtime key with a real identity: the exact hole
-		// #152 closes. A private function would allow this; an internal one
-		// must not.
-		{"http non-admin identified caller denied", TriggerTypeHTTP, "0xAppRuntime", false, true},
-		// Admin caller: allowed to reach execution (no auth error).
-		{"http admin caller allowed", TriggerTypeHTTP, "0xAdmin", true, false},
-		// System trigger (cron): bypasses canInvokeFn entirely, so an
-		// internal function still fires — this is how internal functions are
-		// meant to be driven.
-		{"cron system trigger bypasses gate", TriggerTypeCron, "", false, false},
-	}
-	for _, tc := range cases {
+		{"identified non-admin caller denied",
+			InvokeRequest{TriggerType: TriggerTypeHTTP, CallerWallet: "0xAppRuntime", CallerHasInvoke: true}, true},
+		{"admin caller allowed",
+			InvokeRequest{TriggerType: TriggerTypeHTTP, CallerWallet: "0xAdmin", CallerIsAdmin: true}, false},
+		{"gateway-started invocation allowed",
+			InvokeRequest{TriggerType: TriggerTypeCron, SystemOriginated: true}, false},
+		{"a request that only claims to be a cron is denied",
+			InvokeRequest{TriggerType: TriggerTypeCron}, true},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel() // pre-cancelled so executeWithRetry short-circuits post-auth
-
-			req := &InvokeRequest{
-				Namespace:     "anchat-test",
-				FunctionName:  "migrate",
-				Input:         []byte(`{}`),
-				TriggerType:   tc.trigger,
-				CallerWallet:  tc.callerWallet,
-				CallerIsAdmin: tc.callerIsAdmin,
-			}
-			resp, err := inv.Invoke(ctx, req)
+			req := tc.req
+			req.Namespace = "anchat-test"
+			req.FunctionName = "migrate"
+			resp, err := inv.Invoke(cancelledCtx(), &req)
 
 			if tc.wantAuth {
 				if !errors.Is(err, ErrUnauthorized) {
 					t.Errorf("err=%v, want ErrUnauthorized", err)
 				}
 				if resp == nil || resp.Error != "unauthorized" {
-					t.Errorf("expected response.Error=\"unauthorized\", got %+v", resp)
+					t.Errorf("response = %+v", resp)
 				}
 			} else if errors.Is(err, ErrUnauthorized) {
-				t.Errorf("internal function wrongly blocked at auth: %+v", resp)
+				t.Errorf("wrongly refused: %+v", resp)
 			}
 		})
 	}
 }
 
-// TestInvoke_userTriggerWithCallerStillWorks verifies the fix doesn't
-// regress the happy path for user-driven triggers: an HTTP request with a
-// real CallerWallet on a private function still succeeds at the auth gate.
-func TestInvoke_userTriggerWithCallerStillWorks(t *testing.T) {
-	privateFn := &Function{
-		ID:        "fn-id",
-		Namespace: "anchat-test",
-		Name:      "user-create",
-		IsPublic:  false,
-		CreatedBy: "0xdeployer",
-	}
-	inv := &Invoker{
-		registry: &invokeMockRegistry{fn: privateFn},
-		logger:   zap.NewNop(),
-	}
+func TestInvoke_anAuthenticatedCallerReachesAPrivateFunction(t *testing.T) {
+	privateFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "user-create", IsPublic: false}
+	inv := &Invoker{registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	req := &InvokeRequest{
+	_, err := inv.Invoke(cancelledCtx(), &InvokeRequest{
 		Namespace:       "anchat-test",
 		FunctionName:    "user-create",
-		Input:           []byte(`{}`),
 		TriggerType:     TriggerTypeHTTP,
 		CallerWallet:    "0xRealUser",
 		CallerHasInvoke: true,
-	}
-	_, err := inv.Invoke(ctx, req)
+	})
 	if errors.Is(err, ErrUnauthorized) {
-		t.Errorf("authenticated HTTP caller on private function must pass auth: %v", err)
+		t.Errorf("an authenticated caller with the invoke grant was refused: %v", err)
+	}
+}
+
+// The authority to skip the caller check must stay something only the gateway's
+// own dispatchers set. This walks the source rather than the call graph,
+// because a new dispatcher is exactly the place the flag would be added without
+// anyone noticing, and because a request built from anything a caller sends
+// must never carry it.
+func TestSystemOriginated_isOnlySetByGatewayInternalDispatchers(t *testing.T) {
+	allowed := map[string]bool{
+		// The cron scheduler firing a registered row.
+		"../serverless/triggers/cron_scheduler.go": true,
+		// The pubsub dispatcher matching a registered trigger.
+		"../serverless/triggers/dispatcher.go": true,
+		// The gateway asking a fixed function for extra JWT claims.
+		"../gateway/claims_provider.go": true,
+		// A nested call inheriting its parent's, never inventing one.
+		"../serverless/hostfunctions/context.go": true,
+		// This package: the field's definition and its copy into the
+		// invocation context.
+		"invoke.go": true,
+		"types.go":  true,
+	}
+
+	found := map[string]int{}
+	roots := []string{".", "../serverless/triggers", "../serverless/hostfunctions", "../gateway"}
+	for _, root := range roots {
+		fset := token.NewFileSet()
+		pkgs, err := parser.ParseDir(fset, root, func(fi fs.FileInfo) bool {
+			return !strings.HasSuffix(fi.Name(), "_test.go")
+		}, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("parse %s: %v", root, err)
+		}
+		for _, pkg := range pkgs {
+			for path, file := range pkg.Files {
+				ast.Inspect(file, func(n ast.Node) bool {
+					kv, ok := n.(*ast.KeyValueExpr)
+					if !ok {
+						return true
+					}
+					ident, ok := kv.Key.(*ast.Ident)
+					if !ok || ident.Name != "SystemOriginated" {
+						return true
+					}
+					found[path]++
+					return true
+				})
+			}
+		}
+	}
+
+	if len(found) == 0 {
+		t.Fatal("no assignment of SystemOriginated was found at all; this test is not looking where it thinks it is")
+	}
+	for path := range found {
+		normalized := strings.TrimPrefix(path, "./")
+		if !allowed[normalized] {
+			t.Errorf("%s sets SystemOriginated. Only a gateway-internal dispatcher may: it is the "+
+				"authority to skip the caller check. If this is a new dispatcher, add it to the list "+
+				"above and say why it has that authority.", normalized)
+		}
+	}
+}
+
+// What the running function carries is what its own nested calls will be
+// authorized on. A field dropped here is a grant lost one hop later, or an
+// authority handed over that was never given.
+func TestNewInvocationContext_carriesTheCallersIdentityAndGrants(t *testing.T) {
+	fn := &Function{ID: "fn-1", Name: "settle", Namespace: "anchat-test"}
+	req := &InvokeRequest{
+		CallerWallet:     "0xUser",
+		CallerIP:         "203.0.113.4",
+		CallerIsAdmin:    true,
+		CallerHasInvoke:  true,
+		SystemOriginated: true,
+		TriggerType:      TriggerTypeCron,
+		WSClientID:       "client-9",
+		CallerClaims:     map[string]string{"tier": "pro"},
+		CallerJWTSubject: "0xUser",
+		TriggerDepth:     2,
+	}
+	got := newInvocationContext(req, fn, "req-1", map[string]string{"K": "v"})
+
+	if got.CallerWallet != "0xUser" {
+		t.Errorf("caller wallet = %q", got.CallerWallet)
+	}
+	if !got.CallerIsAdmin {
+		t.Error("the admin bit was dropped")
+	}
+	if !got.CallerHasInvoke {
+		t.Error("the invoke grant was dropped, so a nested call would be refused for a caller who may run this function")
+	}
+	if !got.SystemOriginated {
+		t.Error("the gateway's authority was dropped, so a nested call from a cron would be refused")
+	}
+	if got.TriggerType != TriggerTypeCron {
+		t.Errorf("trigger type = %q", got.TriggerType)
+	}
+	if got.CallerIP != "203.0.113.4" || got.WSClientID != "client-9" ||
+		got.CallerJWTSubject != "0xUser" || got.TriggerDepth != 2 {
+		t.Errorf("context = %+v", got)
+	}
+	if got.CallerClaims["tier"] != "pro" {
+		t.Errorf("caller claims = %#v", got.CallerClaims)
+	}
+	if got.EnvVars["K"] != "v" {
+		t.Errorf("env vars = %#v", got.EnvVars)
+	}
+	if got.RequestID != "req-1" || got.FunctionID != "fn-1" ||
+		got.FunctionName != "settle" || got.Namespace != "anchat-test" {
+		t.Errorf("context = %+v", got)
+	}
+}
+
+// A caller-started request must not produce a context that says otherwise.
+func TestNewInvocationContext_doesNotInventAuthority(t *testing.T) {
+	fn := &Function{ID: "fn-1", Name: "settle", Namespace: "anchat-test"}
+	got := newInvocationContext(&InvokeRequest{TriggerType: TriggerTypeHTTP}, fn, "req-1", nil)
+
+	if got.SystemOriginated {
+		t.Error("a caller-started request produced a gateway-started context")
+	}
+	if got.CallerIsAdmin || got.CallerHasInvoke {
+		t.Error("a request with no grants produced a context with grants")
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -123,6 +124,10 @@ type ClusterManager struct {
 
 	// drivers is the tenant ServiceDriver registry (rqlite, olric, gateway).
 	drivers *driverRegistry
+
+	// clusterSecretPath is where this node keeps the cluster secret. It is
+	// what a node-to-node coordination request is signed with.
+	clusterSecretPath string
 }
 
 // NewClusterManager creates a new cluster manager
@@ -157,6 +162,7 @@ func NewClusterManager(
 	}
 
 	cm := &ClusterManager{
+		clusterSecretPath:     cfg.ClusterSecretPath,
 		db:                    db,
 		portAllocator:         portAllocator,
 		webrtcPortAllocator:   webrtcPortAllocator,
@@ -209,6 +215,7 @@ func NewClusterManagerWithComponents(
 	}
 
 	cm := &ClusterManager{
+		clusterSecretPath:     cfg.ClusterSecretPath,
 		db:                    db,
 		portAllocator:         portAllocator,
 		webrtcPortAllocator:   NewWebRTCPortAllocator(db, logger),
@@ -980,7 +987,9 @@ func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, r
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
+	if err := cm.signCoordination(httpReq); err != nil {
+		return nil, err
+	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(httpReq)
@@ -2901,4 +2910,28 @@ func (cm *ClusterManager) GetClusterStatusByID(ctx context.Context, clusterID st
 		"dns_ready":     status.DNSReady,
 		"error":         status.Error,
 	}, nil
+}
+
+// signCoordination stamps a node-to-node request as coming from inside the
+// cluster.
+//
+// The header this replaces was `X-Orama-Internal-Auth: namespace-coordination`
+// — a constant in this repository — guarded only by the source address being on
+// the WireGuard overlay. Every namespace's services are on that mesh, so any
+// tenant workload that could reach a node's gateway port could spawn or stop
+// services for any namespace on it.
+//
+// The secret is read per request rather than cached, so a rotation does not
+// require restarting every node before coordination works again.
+func (cm *ClusterManager) signCoordination(r *http.Request) error {
+	secret, err := os.ReadFile(cm.clusterSecretPath)
+	if err != nil {
+		return fmt.Errorf("cannot read the cluster secret at %s, so this node cannot prove a "+
+			"coordination request came from inside the cluster: %w", cm.clusterSecretPath, err)
+	}
+	key, err := auth.CoordinationKey(string(secret))
+	if err != nil {
+		return err
+	}
+	return auth.SignCoordination(key, r, time.Now())
 }

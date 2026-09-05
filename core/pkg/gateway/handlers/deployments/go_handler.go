@@ -14,6 +14,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -77,13 +78,11 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		healthCheckPath = "/health"
 	}
 
-	// Parse environment variables (form fields starting with "env_")
-	envVars := make(map[string]string)
-	for key, values := range r.MultipartForm.Value {
-		if strings.HasPrefix(key, "env_") && len(values) > 0 {
-			envName := strings.TrimPrefix(key, "env_")
-			envVars[envName] = values[0]
-		}
+	// Environment variables arrive as env_<NAME> form fields.
+	envVars, err := parseFormEnv(r.MultipartForm.Value)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// Get tarball file
@@ -120,6 +119,8 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build response
+	h.service.RecordAudit(r, deployment.Namespace, auth.AuditDeploymentCreated, deployment.Name)
+
 	urls := h.service.BuildDeploymentURLs(deployment)
 
 	resp := map[string]interface{}{

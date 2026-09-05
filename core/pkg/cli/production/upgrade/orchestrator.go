@@ -3,6 +3,7 @@ package upgrade
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/production/lifecycle"
 	"io"
 	"net"
 	"net/http"
@@ -128,7 +129,7 @@ func (o *Orchestrator) Execute() error {
 			fmt.Printf("  Detected existing installation\n")
 		} else {
 			fmt.Printf("  ⚠️  No existing installation detected, treating as fresh install\n")
-			fmt.Printf("  Use 'orama install' for fresh installation\n")
+			fmt.Printf("  Use 'orama node install' for fresh installation\n")
 		}
 	}
 
@@ -654,6 +655,21 @@ func (o *Orchestrator) regenerateConfigs() error {
 }
 
 func (o *Orchestrator) restartServices() error {
+	// Step down before restarting.
+	//
+	// The rolling upgrade plan says "leader — last, after leadership transfer",
+	// and lifecycle.HandlePreUpgrade is what performs that transfer: it checks
+	// quorum, announces maintenance, hands leadership to another voter and
+	// confirms one has taken it. Nothing called it, so the promise in the plan
+	// was not kept and restarting the leader forced an election that failed
+	// every in-flight write.
+	//
+	// It refuses rather than warns when the transfer does not happen, which is
+	// the point: a node that is still the leader must not be restarted.
+	if err := lifecycle.HandlePreUpgrade(); err != nil {
+		return fmt.Errorf("this node is not safe to restart: %w", err)
+	}
+
 	fmt.Printf("\n🔄 Restarting services with rolling restart...\n")
 
 	// Reload systemd daemon
@@ -773,6 +789,12 @@ func (o *Orchestrator) restartServices() error {
 		} else {
 			fmt.Printf("   ✓ DNS records seeded\n")
 		}
+	}
+
+	// The node is serving again, so it is no longer in maintenance. Leaving the
+	// flag set keeps it out of rotation for anything that reads it.
+	if err := lifecycle.ClearMaintenanceFlag(); err != nil {
+		fmt.Fprintf(os.Stderr, "   ⚠️  Warning: %v\n", err)
 	}
 
 	return nil

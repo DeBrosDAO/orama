@@ -7,8 +7,10 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -66,17 +68,52 @@ type jwtHeader struct {
 }
 
 type JWTClaims struct {
-	Iss       string `json:"iss"`
-	Sub       string `json:"sub"`
-	Aud       string `json:"aud"`
-	Iat       int64  `json:"iat"`
-	Nbf       int64  `json:"nbf"`
-	Exp       int64  `json:"exp"`
+	Iss string `json:"iss"`
+	Sub string `json:"sub"`
+	Aud string `json:"aud"`
+	Iat int64  `json:"iat"`
+	Nbf int64  `json:"nbf"`
+	Exp int64  `json:"exp"`
+	// Jti names this token. Without one a token could not be revoked
+	// individually: logging out dropped the refresh token and left the access
+	// token valid until it expired. Tokens minted before this have no jti and
+	// are covered only by a revocation of their subject.
+	Jti       string `json:"jti,omitempty"`
 	Namespace string `json:"namespace"`
 	// Custom holds app-defined claims (e.g. tier, subscription state).
 	// Read by serverless functions via the get_caller_claim host call.
 	// May be nil if the token has no custom claims.
 	Custom map[string]string `json:"custom,omitempty"`
+}
+
+// revocationSubjectKeys returns the names a token's subject may have been
+// revoked under.
+//
+// A wallet subject is revoked under itself. A token exchanged from an API key
+// carries the raw key as its subject, while RevokeKey only ever has the hash —
+// so the hash is the other name to look under.
+func (s *Service) revocationSubjectKeys(subject string) []string {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return nil
+	}
+	keys := []string{subject}
+	if hashed := s.HashAPIKey(subject); hashed != "" && hashed != subject {
+		keys = append(keys, hashed)
+	}
+	return keys
+}
+
+// newTokenID mints the name a token is revoked by.
+//
+// 128 bits from crypto/rand: it only has to be unique, and a guessable one
+// would let somebody revoke a session they do not hold.
+func newTokenID() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("could not generate a token id: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // ParseAndVerifyJWT verifies a JWT created by this gateway using kid-based key
@@ -137,21 +174,12 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 			return nil, errors.New("invalid signature")
 		}
 
-	case header.Kid == "":
-		// Legacy token without kid — RS256 only (backward compat)
-		if header.Alg != "RS256" {
-			return nil, errors.New("legacy token must be RS256")
-		}
-		if s.signingKey == nil {
-			return nil, errors.New("signing key unavailable")
-		}
-		sum := sha256.Sum256([]byte(signingInput))
-		pub := s.signingKey.Public().(*rsa.PublicKey)
-		if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, sum[:], sb); err != nil {
-			return nil, errors.New("invalid signature")
-		}
-
 	default:
+		// A token with no kid, or one naming a key this gateway does not have.
+		// There used to be a branch here that accepted a token with no kid at
+		// all, verifying it against the RSA key — so a token that named no key
+		// selected one by omission, which is the shape of an algorithm
+		// confusion attack. This gateway has always put a kid in what it mints.
 		return nil, errors.New("unknown key ID")
 	}
 
@@ -163,6 +191,12 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 	// Validate issuer
 	if claims.Iss != "orama-gateway" {
 		return nil, errors.New("invalid issuer")
+	}
+	// A signature that verifies says the gateway minted this token, not that
+	// the token is still good. Revoking a key used to stop the key and leave
+	// its tokens working for the rest of their lifetime.
+	if s.revocations.Denies(&claims, s.revocationSubjectKeys(claims.Sub)) {
+		return nil, ErrTokenRevoked
 	}
 	// Validate registered claims
 	now := time.Now().Unix()
@@ -209,6 +243,10 @@ func (s *Service) generateEdDSAJWT(ns, subject string, ttl time.Duration, custom
 	hb, _ := json.Marshal(header)
 	now := time.Now().UTC()
 	exp := now.Add(ttl)
+	jti, err := newTokenID()
+	if err != nil {
+		return "", 0, err
+	}
 	payload := map[string]any{
 		"iss":       "orama-gateway",
 		"sub":       subject,
@@ -216,6 +254,7 @@ func (s *Service) generateEdDSAJWT(ns, subject string, ttl time.Duration, custom
 		"iat":       now.Unix(),
 		"nbf":       now.Unix(),
 		"exp":       exp.Unix(),
+		"jti":       jti,
 		"namespace": ns,
 	}
 	if len(custom) > 0 {
@@ -242,6 +281,10 @@ func (s *Service) generateRSAJWT(ns, subject string, ttl time.Duration, custom m
 	hb, _ := json.Marshal(header)
 	now := time.Now().UTC()
 	exp := now.Add(ttl)
+	jti, err := newTokenID()
+	if err != nil {
+		return "", 0, err
+	}
 	payload := map[string]any{
 		"iss":       "orama-gateway",
 		"sub":       subject,
@@ -249,6 +292,7 @@ func (s *Service) generateRSAJWT(ns, subject string, ttl time.Duration, custom m
 		"iat":       now.Unix(),
 		"nbf":       now.Unix(),
 		"exp":       exp.Unix(),
+		"jti":       jti,
 		"namespace": ns,
 	}
 	if len(custom) > 0 {

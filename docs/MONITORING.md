@@ -54,7 +54,7 @@ Without a subcommand, launches the interactive TUI.
 | `--env` | *(required)* | Environment: `devnet`, `testnet`, `mainnet` |
 | `--json` | `false` | Machine-readable JSON output (for one-shot subcommands) |
 | `--node` | | Filter to a specific node host/IP |
-| `--config` | `scripts/nodes.conf` | Path to node configuration file |
+| `--config` | *(resolver)* | Read nodes from this file instead of resolving them |
 
 ### Subcommands
 
@@ -243,7 +243,7 @@ These checks compare data across all nodes:
 - **Applied Index Lag**: Followers within 100 entries of the leader
 - **WireGuard Peer Symmetry**: Each node has N-1 peers
 - **Clock Skew**: Node clocks within 5 seconds of each other
-- **Binary Version**: All nodes running the same version. Currently inert: `orama node report` always emits an empty `version`, so every node reads as "unknown" and this alert never fires.
+- **Binary Version**: All nodes running the same version. `orama node report` used to emit an empty `version`, so every node read as "unknown" and the alert could never fire; the version is compiled into the binary now, so it carries a real value.
 
 ### The lifecycle harness
 
@@ -389,12 +389,13 @@ Two safety rules:
 Watch it with:
 
 ```bash
-journalctl -u orama-node --no-pager | grep -E 'namespace DNS round-robin'
+sudo orama node logs node --since -1h | grep -E 'namespace DNS round-robin'
 ```
 
 ## Configuration
 
-Uses the same `scripts/nodes.conf` as the inspector. See [INSPECTOR.md](INSPECTOR.md#configuration) for format details.
+Resolves nodes the same way the inspector does — network API first, `nodes.conf`
+as the fallback. See [INSPECTOR.md](INSPECTOR.md#configuration) for the file format.
 
 ## Prerequisites
 

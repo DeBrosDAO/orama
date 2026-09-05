@@ -1,10 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createTestClient, skipIfNoGateway, delay } from "./setup";
+import { createTestClient, hasGateway, delay } from "./setup";
 
-describe("PubSub", () => {
-  if (skipIfNoGateway()) {
-    console.log("Skipping PubSub tests");
-  }
+describe.skipIf(!hasGateway())("PubSub", () => {
 
   let topicName: string;
 
@@ -37,7 +34,7 @@ describe("PubSub", () => {
       onMessage: (msg) => {
         receivedMessage = msg;
       },
-      onError: (err) => {
+      onError: () => {
         console.error("Subscription error:", err);
       },
     });
@@ -67,7 +64,7 @@ describe("PubSub", () => {
       onMessage: () => {
         events.push("message");
       },
-      onError: (err) => {
+      onError: () => {
         events.push("error");
       },
       onClose: () => {

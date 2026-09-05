@@ -1,7 +1,6 @@
 package build
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,39 +16,9 @@ type Flags struct {
 }
 
 // Handle is the entry point for the build command.
-func Handle(args []string) {
-	flags, err := parseFlags(args)
-	if err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	b := NewBuilder(flags)
-	if err := b.Build(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func parseFlags(args []string) (*Flags, error) {
-	fs := flag.NewFlagSet("build", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	flags := &Flags{}
-
-	fs.StringVar(&flags.Arch, "arch", "amd64", "Target architecture (amd64, arm64)")
-	fs.StringVar(&flags.Output, "output", "", "Output archive path (default: /tmp/orama-<version>-linux-<arch>.tar.gz)")
-	fs.BoolVar(&flags.Verbose, "verbose", false, "Verbose output")
-	fs.BoolVar(&flags.Sign, "sign", false, "Sign the manifest with rootwallet (requires rw in PATH)")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
-	}
-
-	return flags, nil
+// Run executes the build command.
+func Run(flags *Flags) error {
+	return NewBuilder(flags).Build()
 }
 
 // findProjectRoot walks up from the current directory looking for go.mod.

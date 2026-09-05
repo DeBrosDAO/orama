@@ -103,7 +103,8 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		// Embed the key's effective scopes (grandfather NULL→admin).
+		// Embed the key's scopes. An empty column is an empty set, so an
+		// unscoped key cannot be exchanged for a JWT that reaches anything.
 		scopesCanonical = authsvc.ScopesFromStored(rawScopes).Canonical()
 	}
 
@@ -115,7 +116,20 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 	// Embed the key's effective scopes so the gateway scope gate enforces them on
 	// the exchanged JWT exactly as on the raw key (bugboard #148).
 	custom := map[string]string{"scopes": scopesCanonical}
-	token, expUnix, err := h.authService.GenerateJWT(ns, key, 15*time.Minute, custom)
+
+	// The subject is the key as it is STORED, never the key as it was
+	// presented. A JWT payload is base64, not encryption, so a token minted
+	// with the raw key carries a live 90-day credential to everywhere a
+	// 15-minute token goes: an access log, a proxy trace, a browser devtools
+	// tab, the internal-auth header on the hop to a namespace gateway, and the
+	// `subject` field /v1/auth/whoami echoes back.
+	//
+	// The stored form is what everything else already uses: RevokeKey writes
+	// the hash, the revocation check looks under it, and the grant lookup tries
+	// it first. It looks under the raw form too, which is what carries tokens
+	// minted before this through their remaining 15 minutes.
+	subject := h.authService.HashAPIKey(key)
+	token, expUnix, err := h.authService.GenerateJWT(ns, subject, 15*time.Minute, custom)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -175,9 +189,29 @@ func (h *Handlers) RefreshHandler(w http.ResponseWriter, r *http.Request) {
 		// replay (ErrRefreshTokenReplay) so the operator can investigate. We
 		// surface a generic 401 regardless — leaking "your token was already
 		// used" would help an attacker confirm a stolen token was rotated.
+		//
+		// The replay tripwire is the one refusal worth a durable record: it
+		// means either two clients raced or somebody is using a token they
+		// should not have, and a WARN in a log nobody reads is not a record.
+		action := authsvc.AuditRefreshed
+		if errors.Is(err, authsvc.ErrRefreshTokenReplay) {
+			action = authsvc.AuditRefreshReplayed
+		}
+		h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
+			Namespace: req.Namespace,
+			Action:    action,
+			Result:    authsvc.AuditFailure,
+		})
 		writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
 		return
 	}
+
+	h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
+		Namespace: req.Namespace,
+		Actor:     authsvc.RedactSubject(subject),
+		Action:    authsvc.AuditRefreshed,
+		Result:    authsvc.AuditSuccess,
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":  token,
@@ -215,12 +249,15 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	var claims *authsvc.JWTClaims
+	if v := ctx.Value(CtxKeyJWT); v != nil {
+		claims, _ = v.(*authsvc.JWTClaims)
+	}
+
 	var subject string
 	if req.All {
-		if v := ctx.Value(CtxKeyJWT); v != nil {
-			if claims, ok := v.(*authsvc.JWTClaims); ok && claims != nil {
-				subject = strings.TrimSpace(claims.Sub)
-			}
+		if claims != nil {
+			subject = strings.TrimSpace(claims.Sub)
 		}
 		if subject == "" {
 			writeError(w, http.StatusUnauthorized, "jwt required for all=true")
@@ -233,7 +270,49 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Dropping the refresh token stops the caller getting a new access token.
+	// It did nothing to the one they are holding, which stayed valid until it
+	// expired — so logging out did not log anybody out.
+	if req.All {
+		if err := h.authService.RevokeAllSessions(ctx, subject); err != nil {
+			writeError(w, http.StatusInternalServerError,
+				"the refresh token was dropped but the access tokens already issued were not, "+
+					"so they would keep working until they expire: "+err.Error())
+			return
+		}
+	} else if claims != nil && claims.Jti != "" {
+		if err := h.authService.RevokeSession(ctx, claims); err != nil {
+			writeError(w, http.StatusInternalServerError,
+				"the refresh token was dropped but this access token was not, "+
+					"so it would keep working until it expires: "+err.Error())
+			return
+		}
+	}
+
+	actor := subject
+	if actor == "" && claims != nil {
+		actor = claims.Sub
+	}
+	// A subject is not necessarily an identity: the exchange endpoint mints
+	// tokens whose subject is the API key itself.
+	actor = authsvc.RedactSubject(actor)
+	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+		Namespace: req.Namespace,
+		Actor:     actor,
+		Action:    authsvc.AuditLoggedOut,
+		Result:    authsvc.AuditSuccess,
+		Metadata:  map[string]string{"all_sessions": boolText(req.All)},
+	})
+
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+// boolText keeps the metadata blob string-to-string.
+func boolText(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // apiKeyLookupCandidates returns the api_keys.key values to try, hashed first
@@ -247,40 +326,13 @@ func apiKeyLookupCandidates(rawKey, hashedKey string) []string {
 	return []string{hashedKey}
 }
 
-// extractAPIKey extracts API key from Authorization, X-API-Key header, or query parameters
+// extractAPIKey reads the API key this handler's caller presents.
+//
+// It never reads the query string. Its own copy of this used to, unlike the
+// middleware's, so a POST to /v1/auth/token could carry a key in its URL —
+// into the access log, the Referer of anything the page loaded next, and the
+// browser's history. This endpoint is never a WebSocket upgrade, which is the
+// only place a query-string credential is defensible.
 func extractAPIKey(r *http.Request) string {
-	// Prefer X-API-Key header (most explicit)
-	if v := strings.TrimSpace(r.Header.Get("X-API-Key")); v != "" {
-		return v
-	}
-
-	// Check Authorization header for ApiKey scheme or non-JWT Bearer tokens
-	auth := r.Header.Get("Authorization")
-	if auth != "" {
-		lower := strings.ToLower(auth)
-		if strings.HasPrefix(lower, "bearer ") {
-			tok := strings.TrimSpace(auth[len("Bearer "):])
-			// Skip Bearer tokens that look like JWTs (have 2 dots)
-			if strings.Count(tok, ".") != 2 {
-				return tok
-			}
-		} else if strings.HasPrefix(lower, "apikey ") {
-			return strings.TrimSpace(auth[len("ApiKey "):])
-		} else if !strings.Contains(auth, " ") {
-			// If header has no scheme, treat the whole value as token
-			tok := strings.TrimSpace(auth)
-			if strings.Count(tok, ".") != 2 {
-				return tok
-			}
-		}
-	}
-
-	// Fallback to query parameter
-	if v := strings.TrimSpace(r.URL.Query().Get("api_key")); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(r.URL.Query().Get("token")); v != "" {
-		return v
-	}
-	return ""
+	return authsvc.APIKeyFromRequest(r, false)
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
@@ -151,6 +152,11 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		zap.String("name", def.Name),
 		zap.String("namespace", def.Namespace),
 	)
+
+	// Recorded here rather than beside either writeJSON below: the function is
+	// already in the registry at this point, and both of those returns are the
+	// same deploy.
+	h.recordAudit(r, def.Namespace, auth.AuditFunctionDeployed, def.Name)
 
 	// Fetch the deployed function to return
 	fn, err := h.registry.Get(ctx, def.Namespace, def.Name, def.Version)

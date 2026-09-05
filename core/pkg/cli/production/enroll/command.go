@@ -11,18 +11,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"io"
 	"net/http"
-	"os"
 	"time"
 )
 
 // Handle processes the enroll command.
-func Handle(args []string) {
-	flags, err := ParseFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+func Run(flags *Flags) error {
+	if err := flags.validate(); err != nil {
+		return err
 	}
 
 	// Step 1: Fetch registration code from the OramaOS node
@@ -35,9 +33,8 @@ func Handle(args []string) {
 	} else {
 		fetchedCode, err := fetchRegistrationCode(flags.NodeIP)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: could not reach OramaOS node: %v\n", err)
-			fmt.Fprintf(os.Stderr, "Make sure the node is booted and port 9999 is reachable.\n")
-			os.Exit(1)
+			return clierr.Unavailable("could not reach the OramaOS node: %w\n"+
+				"  Make sure the node is booted and port 9999 is reachable", err)
 		}
 		code = fetchedCode
 	}
@@ -48,13 +45,13 @@ func Handle(args []string) {
 	fmt.Printf("Sending enrollment to Gateway at %s...\n", flags.GatewayURL)
 
 	if err := enrollWithGateway(flags.GatewayURL, flags.Token, code, flags.NodeIP); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: enrollment failed: %v\n", err)
-		os.Exit(1)
+		return clierr.Failure("enrollment failed: %w", err)
 	}
 
 	fmt.Printf("Node %s enrolled successfully.\n", flags.NodeIP)
 	fmt.Printf("The node is now configuring WireGuard and encrypting its data partition.\n")
 	fmt.Printf("This may take a few minutes. Check status with: orama node status --env %s\n", flags.Env)
+	return nil
 }
 
 // fetchRegistrationCode retrieves the one-time registration code from the OramaOS node.

@@ -106,25 +106,40 @@ func resolveFromNetworkWithURL(gatewayURL, apiKey, env string) ([]inspector.Node
 
 	nodes := make([]inspector.Node, 0, len(result.Nodes))
 	for _, n := range result.Nodes {
-		user := n.SSHUser
-		if user == "" {
-			user = "root"
-		}
-		// Sandbox nodes share a single SSH key; production nodes use per-host keys.
-		vaultTarget := fmt.Sprintf("%s/%s", n.IPAddress, user)
-		if n.Environment == "sandbox" {
-			vaultTarget = "sandbox/root"
-		}
-		nodes = append(nodes, inspector.Node{
-			Environment: n.Environment,
-			User:        user,
-			Host:        n.IPAddress,
-			Role:        n.Role,
-			VaultTarget: vaultTarget,
-		})
+		node := NewNode(n.IPAddress, n.SSHUser, n.Environment)
+		node.Role = n.Role
+		nodes = append(nodes, node)
 	}
 
 	return nodes, nil
+}
+
+// sandboxVaultTarget is the single SSH key every ephemeral sandbox node shares.
+const sandboxVaultTarget = "sandbox/root"
+
+// defaultSSHUser is who the CLI logs in as when the inventory names no user.
+const defaultSSHUser = "root"
+
+// NewNode builds an inspector.Node for a host, filling in the SSH user and the
+// vault target that says which wallet key opens it. Sandbox nodes are created
+// from one shared key; every other node has a key of its own, keyed by host and
+// user. Callers that reach a machine the inventory does not know about yet --
+// `orama push --host` seeding a fresh node -- go through here too, so a target
+// is addressed the same way whether or not it has been registered.
+func NewNode(host, user, env string) inspector.Node {
+	if user == "" {
+		user = defaultSSHUser
+	}
+	vaultTarget := fmt.Sprintf("%s/%s", host, user)
+	if env == "sandbox" {
+		vaultTarget = sandboxVaultTarget
+	}
+	return inspector.Node{
+		Environment: env,
+		User:        user,
+		Host:        host,
+		VaultTarget: vaultTarget,
+	}
 }
 
 // gatewayURLForEnv returns the gateway URL for a given environment name.

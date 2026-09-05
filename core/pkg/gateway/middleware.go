@@ -274,9 +274,8 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 		return "", nil, "", "" // No credentials provided
 	}
 
-	// Resolve namespace AND the key's effective (grandfather-applied) scopes so
-	// they can be forwarded to the namespace gateway, which does not re-look-up
-	// the key (bugboard #148).
+	// Resolve namespace AND the key's scopes so they can be forwarded to the
+	// namespace gateway, which does not re-look-up the key (bugboard #148).
 	ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, g.apiKeyDB())
 	if err != nil {
 		return "", nil, "", "invalid API key"
@@ -305,6 +304,18 @@ func (g *Gateway) lookupAPIKeyNamespace(ctx context.Context, key string, q apiKe
 // so that is the only store that can ever resolve them. A namespace's own
 // RQLite is never authoritative for API keys.
 func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQuerier) (string, string, error) {
+	// A revoked key must stop working now, not when the cache entry ages out.
+	//
+	// The entry below is held for a minute, so revoking a key left it working
+	// for up to that long — on every gateway that had seen it. The revocation
+	// list is replicated and reloaded every ten seconds, so consulting it first
+	// is both shorter and cluster-wide. It is checked under both spellings
+	// because RevokeKey only ever has the hash.
+	if g.authService != nil &&
+		g.authService.Revocations().DeniesSubject(key, g.authService.HashAPIKey(key)) {
+		return "", "", fmt.Errorf("invalid API key")
+	}
+
 	// Cache uses raw key as cache key (in-memory only, never persisted)
 	if g.mwCache != nil {
 		if cachedNS, cachedScopes, ok := g.mwCache.GetAPIKeyEntry(key); ok {
@@ -317,9 +328,11 @@ func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQue
 	}
 
 	internalCtx := client.WithInternalAuth(ctx)
-	// Filter out revoked keys so a revoked key resolves to "invalid" (bounded by
-	// the 60s cache TTL). scopes is nullable — a NULL means a legacy key.
-	sqlQuery := "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL LIMIT 1"
+	// Revoked and expired keys resolve to "invalid". The revocation check above
+	// is what bounds the cache; this is what makes the row itself the answer.
+	// expires_at is NOT NULL from migration 051: a key with no expiry is what
+	// that migration exists to end, so the comparison is unconditional.
+	sqlQuery := "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL AND api_keys.expires_at > datetime('now') LIMIT 1"
 
 	hashedKey := g.authService.HashAPIKey(key)
 	res, err := q.Query(internalCtx, sqlQuery, hashedKey)
@@ -426,7 +439,18 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
-	// Order: logging -> security headers -> rate limit -> CORS -> readiness -> domain routing -> auth -> authorization -> scope -> namespace rate limit -> handler
+	// Order: internal-auth -> route policy -> logging -> security headers ->
+	// rate limit -> CORS -> readiness -> domain routing -> auth ->
+	// authorization -> scope -> namespace rate limit -> handler
+	//
+	// The route-policy gate resolves what the matched route requires and puts
+	// it on the request, so the four places that ask cannot answer differently.
+	// It sits above domain routing because that is the first of them.
+	//
+	// The internal-auth gate is first, before anything else can read a header.
+	// It deletes every X-Internal-Auth-* header that did not arrive with a
+	// valid MAC, so no middleware below it has to ask whether the ones it sees
+	// are authentic — they are, or they are not there.
 	//
 	// The readiness gate sits directly INSIDE CORS, not above it. A gateway
 	// that is still starting refuses with a 503 carrying the reason, and a
@@ -438,16 +462,18 @@ func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 	//
 	// The scope gate (bugboard #148) runs after ownership so it only ever
 	// tightens an already-authorized request; it never authorizes on its own.
-	return g.loggingMiddleware(
-		g.securityHeadersMiddleware(
-			g.rateLimitMiddleware(
-				g.corsMiddleware(
-					g.readinessGate(
-						g.domainRoutingMiddleware(
-							g.authMiddleware(
-								g.authorizationMiddleware(
-									g.scopeMiddleware(
-										g.namespaceRateLimitMiddleware(next))))))))))
+	return g.internalAuthMiddleware(
+		g.routePolicyMiddleware(
+			g.loggingMiddleware(
+				g.securityHeadersMiddleware(
+					g.rateLimitMiddleware(
+						g.corsMiddleware(
+							g.readinessGate(
+								g.domainRoutingMiddleware(
+									g.authMiddleware(
+										g.authorizationMiddleware(
+											g.scopeMiddleware(
+												g.namespaceRateLimitMiddleware(next))))))))))))
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses
@@ -519,57 +545,66 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		isPublic := isPublicPath(r.URL.Path)
+		isPublic := g.policyFor(r).Access.Anonymous()
 
-		// 0) Trust internal auth headers from internal IPs (WireGuard network or localhost)
-		// This allows the main gateway to pre-authenticate requests before proxying to namespace gateways
-		// IMPORTANT: Use r.RemoteAddr (actual TCP peer), NOT getClientIP() which reads
-		// X-Forwarded-For and would return the original client IP instead of the proxy's IP.
+		// 0) Trust the internal-auth headers the main gateway forwarded.
+		//
+		// These reached this point only because internalAuthMiddleware verified
+		// a MAC over them keyed by the cluster secret; anything unsigned was
+		// deleted before this middleware ran. The source IP is not consulted:
+		// it used to be the only check, and the source IP of every public
+		// request is 127.0.0.1 because Caddy proxies to localhost.
 		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
-			clientIP := remoteAddrIP(r)
-			if isInternalIP(clientIP) {
-				ns := strings.TrimSpace(r.Header.Get(HeaderInternalAuthNamespace))
-				if ns != "" {
-					// Pre-authenticated by main gateway - trust the namespace
-					reqCtx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, ns)
-					// Bug #215: also rebuild ctxKeyJWT from the trusted
-					// internal-auth headers (subject + custom claims) so
-					// serverless host functions see a non-empty
-					// caller_jwt_subject. We deliberately do NOT re-verify
-					// the JWT here — namespace gateways may not share the
-					// signing key with the main gateway, and the main gateway
-					// already verified before forwarding. Trust gate is the
-					// source-IP check above.
-					if claims := claimsFromInternalAuthHeaders(r.Header, ns); claims != nil {
-						reqCtx = context.WithValue(reqCtx, ctxKeyJWT, claims)
-					}
-					// #148: hydrate the API-key caller's effective scopes from the
-					// trusted internal-auth header so scopeMiddleware can enforce
-					// them (the namespace gateway does not re-look-up the key).
-					if raw := strings.TrimSpace(r.Header.Get(HeaderInternalAuthScopes)); raw != "" {
-						reqCtx = context.WithValue(reqCtx, ctxKeyScopes, auth.ParseScopes(raw))
-					}
-					next.ServeHTTP(w, r.WithContext(reqCtx))
-					return
+			ns := strings.TrimSpace(r.Header.Get(HeaderInternalAuthNamespace))
+			if ns != "" {
+				// Pre-authenticated by main gateway - trust the namespace
+				reqCtx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, ns)
+				// Bug #215: also rebuild ctxKeyJWT from the trusted
+				// internal-auth headers (subject + custom claims) so
+				// serverless host functions see a non-empty
+				// caller_jwt_subject. We deliberately do NOT re-verify
+				// the JWT here — namespace gateways may not share the
+				// signing key with the main gateway, and the main gateway
+				// already verified before forwarding. The trust gate is
+				// the MAC, checked in internalAuthMiddleware.
+				if claims := claimsFromInternalAuthHeaders(r.Header, ns); claims != nil {
+					reqCtx = context.WithValue(reqCtx, ctxKeyJWT, claims)
 				}
+				// #148: hydrate the API-key caller's effective scopes from the
+				// trusted internal-auth header so scopeMiddleware can enforce
+				// them (the namespace gateway does not re-look-up the key).
+				if raw := strings.TrimSpace(r.Header.Get(HeaderInternalAuthScopes)); raw != "" {
+					reqCtx = context.WithValue(reqCtx, ctxKeyScopes, auth.ParseScopes(raw))
+				}
+				next.ServeHTTP(w, r.WithContext(reqCtx))
+				return
 			}
-			// If internal auth header is present but invalid (wrong IP or missing namespace),
-			// fall through to normal auth flow
+			// A validated header with no namespace asserts nothing usable, so
+			// the request authenticates on its own credentials or is refused.
 		}
 
 		// 1) Try JWT Bearer first if Authorization looks like one
-		if auth := r.Header.Get("Authorization"); auth != "" {
-			lower := strings.ToLower(auth)
+		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+			lower := strings.ToLower(authHeader)
 			if strings.HasPrefix(lower, "bearer ") {
-				tok := strings.TrimSpace(auth[len("Bearer "):])
+				tok := strings.TrimSpace(authHeader[len("Bearer "):])
 				if strings.Count(tok, ".") == 2 {
-					if claims, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+					claims, err := g.authService.ParseAndVerifyJWT(tok)
+					if err == nil {
 						// Attach JWT claims and namespace to context
 						ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
 						if ns := strings.TrimSpace(claims.Namespace); ns != "" {
 							ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, ns)
 						}
 						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+					// A revoked token is not a malformed one. Falling through
+					// would have it looked up as an API key and refused as an
+					// unknown credential, which tells the holder nothing about
+					// why their session stopped working.
+					if errors.Is(err, auth.ErrTokenRevoked) && !isPublic {
+						unauthorized(w, CodeAuthRevoked, "this session was ended, or the key it came from was revoked", nil)
 						return
 					}
 					// If it looked like a JWT but failed verification, fall through to API key check
@@ -620,14 +655,16 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 2) Fallback to API key (validate against DB)
-		key := extractAPIKey(r)
+		key, form := extractAPIKeyAndForm(r)
+		// Said on the response whether or not the key turns out to be valid:
+		// the spelling is going away regardless of what it carries.
+		markDeprecatedCredential(w, form)
 		if key == "" {
 			if isPublic {
 				next.ServeHTTP(w, r)
 				return
 			}
-			w.Header().Set("WWW-Authenticate", "Bearer realm=\"gateway\", charset=\"UTF-8\"")
-			writeError(w, http.StatusUnauthorized, "missing API key")
+			unauthorized(w, CodeAuthMissing, "no credential was presented", nil)
 			return
 		}
 
@@ -641,149 +678,33 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
-			writeError(w, http.StatusUnauthorized, "invalid API key")
+			unauthorized(w, CodeAuthInvalidKey, "this API key is not one this cluster knows", nil)
 			return
 		}
 
 		// Attach auth metadata to context for downstream use. The scope set
-		// (bugboard #148) is applied by scopeMiddleware; a NULL/empty scopes
-		// column grandfathers to admin (ScopesFromStored).
+		// (bugboard #148) is applied by scopeMiddleware; a key whose scopes
+		// column is empty grants nothing.
 		reqCtx := context.WithValue(r.Context(), ctxKeyAPIKey, key)
 		reqCtx = context.WithValue(reqCtx, CtxKeyNamespaceOverride, ns)
 		reqCtx = context.WithValue(reqCtx, ctxKeyScopes, auth.ScopesFromStored(rawScopes))
+		g.recordDeprecatedCredential(r, ns, form)
 		next.ServeHTTP(w, r.WithContext(reqCtx))
 	})
 }
 
-// extractAPIKey extracts API key from Authorization, X-API-Key header, or query parameters
-// Note: Bearer tokens that look like JWTs (have 2 dots) are skipped (they're JWTs, handled separately)
-// X-API-Key header is preferred when both Authorization and X-API-Key are present
+// extractAPIKey reads the API key a request presents.
+//
+// The query string is read only on a WebSocket upgrade, where a browser cannot
+// set a header. Everywhere else a credential in a URL ends up in the access
+// log, in the Referer of the next request the page makes, and in history.
 func extractAPIKey(r *http.Request) string {
-	// Prefer X-API-Key header (most explicit) - check this first
-	if v := strings.TrimSpace(r.Header.Get("X-API-Key")); v != "" {
-		return v
-	}
-
-	// Check Authorization header for ApiKey scheme or non-JWT Bearer tokens
-	auth := r.Header.Get("Authorization")
-	if auth != "" {
-		lower := strings.ToLower(auth)
-		if strings.HasPrefix(lower, "bearer ") {
-			tok := strings.TrimSpace(auth[len("Bearer "):])
-			// Skip Bearer tokens that look like JWTs (have 2 dots) - they're JWTs
-			// But allow Bearer tokens that don't look like JWTs (for backward compatibility)
-			if strings.Count(tok, ".") == 2 {
-				// This is a JWT, skip it
-			} else {
-				// This doesn't look like a JWT, treat as API key (backward compatibility)
-				return tok
-			}
-		} else if strings.HasPrefix(lower, "apikey ") {
-			return strings.TrimSpace(auth[len("ApiKey "):])
-		} else if !strings.Contains(auth, " ") {
-			// If header has no scheme, treat the whole value as token (lenient for dev)
-			// But skip if it looks like a JWT (has 2 dots)
-			tok := strings.TrimSpace(auth)
-			if strings.Count(tok, ".") != 2 {
-				return tok
-			}
-		}
-	}
-
-	// Fallback to query parameter ONLY for WebSocket upgrade requests.
-	// WebSocket clients cannot set custom headers, so query params are the
-	// only way to authenticate. For regular HTTP requests, require headers.
-	if isWebSocketUpgrade(r) {
-		if v := strings.TrimSpace(r.URL.Query().Get("api_key")); v != "" {
-			return v
-		}
-		if v := strings.TrimSpace(r.URL.Query().Get("token")); v != "" {
-			return v
-		}
-	}
-	return ""
+	return auth.APIKeyFromRequest(r, isWebSocketUpgrade(r))
 }
 
-// isPublicPath returns true for routes that should be accessible without API key auth
-func isPublicPath(p string) bool {
-	// Allow ACME challenges for Let's Encrypt certificate provisioning
-	if strings.HasPrefix(p, "/.well-known/acme-challenge/") {
-		return true
-	}
-
-	// Serverless invocation is public (authorization is handled within the invoker)
-	if strings.HasPrefix(p, "/v1/invoke/") || (strings.HasPrefix(p, "/v1/functions/") && strings.HasSuffix(p, "/invoke")) {
-		return true
-	}
-
-	// Internal replica coordination endpoints (auth handled by replica handler)
-	if strings.HasPrefix(p, "/v1/internal/deployments/replica/") {
-		return true
-	}
-
-	// WireGuard peer exchange (auth handled by cluster secret in handler)
-	if strings.HasPrefix(p, "/v1/internal/wg/") {
-		return true
-	}
-
-	// Node join endpoint (auth handled by invite token in handler)
-	if p == "/v1/internal/join" {
-		return true
-	}
-
-	// Namespace spawn endpoint (auth handled by internal auth header)
-	if p == "/v1/internal/namespace/spawn" {
-		return true
-	}
-
-	// Namespace cluster repair endpoint (auth handled by internal auth header)
-	if p == "/v1/internal/namespace/repair" {
-		return true
-	}
-
-	// Namespace WebRTC management endpoints (enable/disable/status). Auth is
-	// handled INSIDE the handlers by the X-Orama-Internal-Auth header +
-	// WireGuard-peer source check (same as spawn/repair above). Without this
-	// exemption the API-key middleware rejects them with "missing API key"
-	// before the handler's internal-auth check runs, making the internal
-	// endpoints unreachable — so `orama namespace enable webrtc` had no
-	// working path (the public endpoint hits a gateway without the WebRTC
-	// manager wired). Bugboard: internal webrtc mgmt endpoints unreachable.
-	if strings.HasPrefix(p, "/v1/internal/namespace/webrtc/") {
-		return true
-	}
-
-	// Internal storage eviction endpoint (bugboard #153). Auth is handled INSIDE
-	// the handler by the X-Orama-Internal-Auth header + WireGuard-peer source
-	// check (same as spawn/repair/webrtc above). Without this exemption the
-	// API-key middleware 401s the cross-node evict fan-out before the handler's
-	// internal-auth check runs, so immediate eviction would silently never
-	// execute (the unpin would report "partial" while the blob survived).
-	if p == "/v1/internal/storage/evict" {
-		return true
-	}
-
-	// Vault proxy endpoints (no auth — rate-limited per identity hash within handler)
-	if strings.HasPrefix(p, "/v1/vault/") {
-		return true
-	}
-
-	// Phantom auth endpoints are public (session creation, status polling, completion)
-	if strings.HasPrefix(p, "/v1/auth/phantom/") {
-		return true
-	}
-
-	switch p {
-	case "/health", "/v1/health", "/status", "/v1/status", "/v1/auth/jwks", "/.well-known/jwks.json", "/v1/version", "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/register", "/v1/auth/refresh", "/v1/auth/logout", "/v1/auth/api-key", "/v1/network/status", "/v1/network/peers", "/v1/internal/tls/check", "/v1/internal/acme/present", "/v1/internal/acme/cleanup", "/v1/internal/ping":
-		return true
-	default:
-		// Also exempt namespace status polling endpoint
-		if strings.HasPrefix(p, "/v1/namespace/status") {
-			return true
-		}
-		return false
-	}
+// extractAPIKeyAndForm reads the key and the spelling it arrived in.
+func extractAPIKeyAndForm(r *http.Request) (string, auth.KeyForm) {
+	return auth.APIKeyAndFormFromRequest(r, isWebSocketUpgrade(r))
 }
 
 // authorizationMiddleware enforces that the authenticated actor owns the namespace
@@ -793,20 +714,11 @@ func isPublicPath(p string) bool {
 // - Other namespaces: API key must belong to that specific namespace
 func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Skip for public/OPTIONS paths only
-		if r.Method == http.MethodOptions || isPublicPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Exempt whoami from ownership enforcement so users can inspect their session
-		if r.URL.Path == "/v1/auth/whoami" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Exempt namespace status endpoint
-		if strings.HasPrefix(r.URL.Path, "/v1/namespace/status") {
+		// Skip for public/OPTIONS paths only. What is public is the route's
+		// declared policy; whoami and namespace status used to need their own
+		// exemptions here because the path lists disagreed about them.
+		policy := g.policyFor(r)
+		if r.Method == http.MethodOptions || policy.Access.Anonymous() {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -815,12 +727,22 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// The main gateway already validated the API key and resolved the namespace
 		// before proxying, so re-checking ownership against the namespace RQLite is
 		// redundant and adds ~300ms of unnecessary latency (3 DB round-trips).
+		//
+		// The header is here only because internalAuthMiddleware verified its
+		// MAC. It used to be believed on the strength of the source IP, which
+		// made this the shortest unauthenticated path to any namespace's data.
 		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
-			clientIP := remoteAddrIP(r)
-			if isInternalIP(clientIP) {
-				next.ServeHTTP(w, r)
-				return
-			}
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// The raw-database routes on the gateway that serves the cluster
+		// registry are an operator's. The cross-namespace check below runs
+		// only when this gateway serves a named namespace, which the cluster
+		// gateway does not — so nothing stopped a tenant's admin key from
+		// exporting the registry, or importing over it.
+		if !g.requireOperatorForCoreRegistry(w, r) {
+			return
 		}
 
 		// Cross-namespace access control for namespace gateways
@@ -846,12 +768,13 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 				zap.String("gateway_namespace", gatewayNamespace),
 				zap.String("path", r.URL.Path),
 			)
-			writeError(w, http.StatusForbidden, "API key does not belong to this namespace")
+			forbidden(w, CodeNamespaceMismatch, "this credential belongs to another namespace",
+				map[string]any{"namespace": gatewayNamespace, "credential_namespace": userNamespace})
 			return
 		}
 
-		// Only enforce ownership for specific resource paths
-		if !requiresNamespaceOwnership(r.URL.Path) {
+		// Only enforce ownership where the route asks for it
+		if !policy.Ownership {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -868,7 +791,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			ns = strings.TrimSpace(g.cfg.ClientNamespace)
 		}
 		if ns == "" {
-			writeError(w, http.StatusForbidden, "namespace not resolved")
+			forbidden(w, CodeNamespaceMismatch, "the namespace this credential belongs to could not be resolved", nil)
 			return
 		}
 
@@ -879,12 +802,11 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 
 		if v := ctx.Value(ctxKeyJWT); v != nil {
 			if claims, ok := v.(*auth.JWTClaims); ok && claims != nil && strings.TrimSpace(claims.Sub) != "" {
-				// Determine subject type.
-				// If subject looks like an API key (e.g., ak_<random>:<namespace>),
-				// treat it as an API key owner; otherwise assume a wallet subject.
+				// Determine subject type. A subject that is not
+				// recognisably a wallet is a key: see auth.IsWalletSubject for
+				// why that is the safe direction.
 				subj := strings.TrimSpace(claims.Sub)
-				lowerSubj := strings.ToLower(subj)
-				if strings.HasPrefix(lowerSubj, "ak_") || strings.Contains(subj, ":") {
+				if auth.IsAPIKeySubject(subj) {
 					ownerType = "api_key"
 					ownerID = subj
 				} else {
@@ -910,7 +832,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		}
 
 		if ownerType == "" || ownerID == "" {
-			writeError(w, http.StatusForbidden, "missing identity")
+			forbidden(w, CodeAuthMissing, "this route needs an identity and the credential carries none", nil)
 			return
 		}
 
@@ -930,107 +852,84 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		}
 		nres, err := db.Query(internalCtx, "SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns)
 		if err != nil || nres == nil || nres.Count == 0 || len(nres.Rows) == 0 || len(nres.Rows[0]) == 0 {
-			writeError(w, http.StatusForbidden, "namespace not found")
+			forbidden(w, CodeNamespaceMismatch, "no such namespace", nil)
 			return
 		}
 		nsID := nres.Rows[0][0]
 
-		q := "SELECT 1 FROM namespace_ownership WHERE namespace_id = ? AND owner_type = ? AND owner_id = ? LIMIT 1"
-
-		// ownsBy reports whether (ot, oid) owns this namespace. API keys are
-		// stored HMAC-hashed in namespace_ownership (see service.HashAPIKey),
-		// while the presented value here is the RAW key — so for api_key owners
-		// we check the hashed form first and the raw form second (rolling-
-		// upgrade legacy), mirroring lookupAPIKeyNamespace. Without this, an
-		// api_key-authenticated owner never matched and got a 403 on a
-		// namespace they actually own (blocked function deploy / push config).
-		ownsBy := func(ot, oid string) bool {
+		// grantFor reports the live grant (ot, oid) holds in this namespace, if
+		// any. API keys are stored HMAC-hashed (see service.HashAPIKey) while
+		// the presented value here is the RAW key — so for a key we look under
+		// the hashed form first and the raw form second (rolling-upgrade
+		// legacy), mirroring lookupAPIKeyNamespace. Without this, a
+		// key-authenticated member never matched and got a 403 on a namespace
+		// they actually belong to (blocked function deploy / push config).
+		grantFor := func(ot, oid string) *auth.Grant {
 			hashed := ""
+			ptype := auth.PrincipalWallet
 			if ot == "api_key" {
+				ptype = auth.PrincipalServiceAccount
 				hashed = g.authService.HashAPIKey(oid)
 			}
-			for _, c := range apiKeyOwnerCandidates(ot, oid, hashed) {
-				res, qerr := db.Query(internalCtx, q, nsID, ot, c)
-				if qerr == nil && res != nil && res.Count > 0 {
-					return true
+			for _, c := range principalIdentifierCandidates(ot, oid, hashed) {
+				grant, gerr := g.authService.GrantIn(internalCtx, db, nsID, ptype, c)
+				if gerr == nil {
+					return grant
 				}
 			}
-			return false
+			return nil
 		}
 
-		owns := ownsBy(ownerType, ownerID)
+		grant := grantFor(ownerType, ownerID)
 		// A JWT wallet can also fall back to its API key (also stored hashed).
-		if !owns && ownerType == "wallet" && apiKeyFallback != "" {
-			owns = ownsBy("api_key", apiKeyFallback)
+		if grant == nil && ownerType == "wallet" && apiKeyFallback != "" {
+			grant = grantFor("api_key", apiKeyFallback)
 		}
 
-		if !owns {
-			writeError(w, http.StatusForbidden, "forbidden: not an owner of namespace")
+		if grant == nil {
+			forbidden(w, CodeOwnershipRequired, "this credential holds no grant in this namespace", nil)
 			return
 		}
 
-		// A verified SIWE wallet owner may act as admin via a wallet JWT — record
-		// it so the scope gate grants admin to the owner without granting it to
-		// every authenticated user (bugboard #148).
-		if ownerType == "wallet" {
-			r = markOwnerConfirmed(r)
-		}
+		// The grant travels with the request. It used to be a boolean — "a
+		// SIWE wallet owner was confirmed" — which is why every human with
+		// access was an admin: there was nothing else the flag could say.
+		//
+		// It is set for a key-authenticated caller too, not only a wallet. The
+		// scope gate reads it only for a wallet JWT (a key's own scopes column
+		// is what says what it may reach), but the data paths read its selector
+		// for either — a service account narrowed to one topic pattern is as
+		// real a thing as a teammate narrowed to one (feat-371).
+		r = markGrant(r, grant)
 
 		next.ServeHTTP(w, r)
 	})
 }
 
-// apiKeyOwnerCandidates returns the owner_id values to test for a namespace
-// ownership check. API keys are stored HMAC-hashed in namespace_ownership, so
-// for an api_key owner the hashed form is checked first and the raw key second
-// (rolling-upgrade legacy, mirroring lookupAPIKeyNamespace). For every other
-// owner type the value is used as-is.
-func apiKeyOwnerCandidates(ownerType, ownerID, hashed string) []string {
+// principalIdentifierCandidates returns the identifiers to look a principal up
+// under.
+//
+// API keys are stored HMAC-hashed, so for a key the hashed form is checked
+// first and the raw key second (rolling-upgrade legacy, mirroring
+// lookupAPIKeyNamespace).
+//
+// Wallets are stored normalised (auth.NormalizeWallet), but rows written before
+// that was true kept whatever case the client sent — so a checksummed address
+// could hold a grant under a spelling no later login matched. The normalised
+// form is checked first and the presented form second, which keeps those rows
+// working until migration 042 has run everywhere.
+//
+// For every other owner type the value is used as-is.
+func principalIdentifierCandidates(ownerType, ownerID, hashed string) []string {
 	if ownerType == "api_key" && hashed != "" && hashed != ownerID {
 		return []string{hashed, ownerID}
 	}
+	if ownerType == "wallet" {
+		if normalized := auth.NormalizeWallet(ownerID); normalized != ownerID {
+			return []string{normalized, ownerID}
+		}
+	}
 	return []string{ownerID}
-}
-
-// requiresNamespaceOwnership returns true if the path should be guarded by
-// namespace ownership checks.
-func requiresNamespaceOwnership(p string) bool {
-	if p == "/rqlite" || p == "/v1/rqlite" || strings.HasPrefix(p, "/v1/rqlite/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/pubsub") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/rqlite/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/proxy/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/functions") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/webrtc/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/push/") {
-		return true
-	}
-	// push-credentials is admin-scoped; also require ownership so it is
-	// double-gated like /v1/push/ (defense-in-depth, review follow-up).
-	if p == "/v1/namespace/push-credentials" || strings.HasPrefix(p, "/v1/namespace/push-credentials/") {
-		return true
-	}
-	if strings.HasPrefix(p, "/v1/serverless/") {
-		return true
-	}
-	// Scoped API-key management is namespace-scoped: the ownership check also
-	// lets a verified owner wallet (OwnerConfirmed) manage keys, not just an
-	// admin API key (bugboard #148).
-	if p == "/v1/namespace/keys" || strings.HasPrefix(p, "/v1/namespace/keys/") {
-		return true
-	}
-	return false
 }
 
 // corsMiddleware applies CORS headers. Allows requests from the configured base
@@ -1209,7 +1108,7 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 				// so proxying these writes would land keys in the wrong DB (they'd
 				// never authenticate). Serve them on the main gateway instead,
 				// pinning the namespace from the subdomain.
-				if isKeyMgmtPath(r.URL.Path) {
+				if g.policyFor(r).MainGateway {
 					r = r.WithContext(context.WithValue(r.Context(), CtxKeyNamespaceOverride, namespaceName))
 					next.ServeHTTP(w, r)
 					return
@@ -1270,7 +1169,7 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 	// This ensures API keys work even though they're not in the namespace's RQLite
 	validatedNamespace, validatedClaims, validatedScopes, authErr := g.validateAuthForNamespaceProxy(r)
 	isWS := isWebSocketUpgrade(r)
-	isPublic := isPublicPath(r.URL.Path)
+	isPublic := g.policyFor(r).Access.Anonymous()
 
 	// Bug #240/#249 root-cause hardening: previously, when
 	// validateAuthForNamespaceProxy returned an empty namespace AND empty
@@ -1311,8 +1210,7 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 				zap.String("user_agent", r.Header.Get("User-Agent")),
 			)
 		}
-		w.Header().Set("WWW-Authenticate", "Bearer error=\"invalid_token\"")
-		writeError(w, http.StatusUnauthorized, authErr)
+		unauthorized(w, CodeAuthInvalidKey, authErr, nil)
 		return
 	}
 
@@ -1339,9 +1237,7 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 			zap.String("user_agent", r.Header.Get("User-Agent")),
 			zap.Int("raw_query_len", len(r.URL.RawQuery)),
 		)
-		w.Header().Set("WWW-Authenticate", "Bearer realm=\"gateway\"")
-		writeError(w, http.StatusUnauthorized,
-			"authentication required for namespace endpoint (no api_key/token/jwt extracted)")
+		unauthorized(w, CodeAuthMissing, "no credential was presented", nil)
 		return
 	}
 
@@ -1355,7 +1251,8 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 			zap.Bool("is_ws_upgrade", isWS),
 			zap.String("client_ip", getClientIP(r)),
 		)
-		writeError(w, http.StatusForbidden, "API key does not belong to this namespace")
+		forbidden(w, CodeNamespaceMismatch, "this credential belongs to another namespace",
+			map[string]any{"namespace": namespaceName, "credential_namespace": validatedNamespace})
 		return
 	}
 
@@ -1546,6 +1443,17 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 			if validatedScopes != "" {
 				r.Header.Set(HeaderInternalAuthScopes, validatedScopes)
 			}
+			// The MAC is what makes any of this believable on the other side.
+			// Without it the namespace gateway would drop every header above,
+			// so a hop that cannot be signed is refused rather than sent as an
+			// assertion this gateway cannot back.
+			if err := signInternalAuthHeaders(g.internalAuthKey, r.Header, r.Method, r.URL.Path, time.Now()); err != nil {
+				g.logger.ComponentError("gateway", "cannot delegate auth to the namespace gateway",
+					zap.String("namespace", validatedNamespace), zap.Error(err))
+				writeError(w, http.StatusServiceUnavailable,
+					"this gateway has no cluster secret, so it cannot authenticate itself to the namespace gateway")
+				return
+			}
 		}
 		r.URL.Scheme = "http"
 		r.URL.Host = targetHost
@@ -1612,6 +1520,20 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		// #148: forward the API-key caller's effective scopes.
 		if validatedScopes != "" {
 			proxyReq.Header.Set(HeaderInternalAuthScopes, validatedScopes)
+		}
+		// The MAC is what makes any of this believable on the other side.
+		// Without it the namespace gateway would drop every header above, so a
+		// hop that cannot be signed is refused rather than sent as an assertion
+		// this gateway cannot back.
+		//
+		// The MAC covers the proxied request's own method and path, not the
+		// inbound one, because that is what the other end will verify against.
+		if err := signInternalAuthHeaders(g.internalAuthKey, proxyReq.Header, proxyReq.Method, proxyReq.URL.Path, time.Now()); err != nil {
+			g.logger.ComponentError("gateway", "cannot delegate auth to the namespace gateway",
+				zap.String("namespace", validatedNamespace), zap.Error(err))
+			writeError(w, http.StatusServiceUnavailable,
+				"this gateway has no cluster secret, so it cannot authenticate itself to the namespace gateway")
+			return
 		}
 	}
 

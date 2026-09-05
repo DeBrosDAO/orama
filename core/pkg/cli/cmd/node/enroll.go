@@ -5,6 +5,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var enrollFlags enroll.Flags
+
 var enrollCmd = &cobra.Command{
 	Use:   "enroll",
 	Short: "Enroll an OramaOS node into the cluster",
@@ -19,8 +21,16 @@ Usage:
 
 The node must be reachable over the public internet on port 9999 (enrollment only).
 After enrollment, port 9999 is permanently closed and all communication goes over WireGuard.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		enroll.Handle(args)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return enroll.Run(&enrollFlags)
 	},
-	DisableFlagParsing: true,
+}
+
+func init() {
+	f := enrollCmd.Flags()
+	f.StringVar(&enrollFlags.NodeIP, "node-ip", "", "Public IP of the OramaOS node (required)")
+	f.StringVar(&enrollFlags.Code, "code", "", "Registration code from the node (auto-fetched if not provided)")
+	f.StringVar(&enrollFlags.Token, "token", "", "Invite token for cluster joining (required)")
+	f.StringVar(&enrollFlags.GatewayURL, "gateway", "", "Gateway URL (required, e.g. https://gateway.example.com)")
+	f.StringVar(&enrollFlags.Env, "env", "production", "Environment name")
 }

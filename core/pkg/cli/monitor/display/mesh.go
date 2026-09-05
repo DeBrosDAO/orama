@@ -2,6 +2,7 @@ package display
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/printer"
 	"io"
 	"strings"
 
@@ -94,8 +95,8 @@ func MeshTable(snap *monitor.ClusterSnapshot, w io.Writer) error {
 		localIP := wg.WgIP
 		for _, p := range wg.Peers {
 			hsAge := formatDuration(p.HandshakeAgeSec)
-			rx := formatBytes(p.TransferRx)
-			tx := formatBytes(p.TransferTx)
+			rx := printer.FormatBytes(p.TransferRx)
+			tx := printer.FormatBytes(p.TransferTx)
 
 			peerIP := p.AllowedIPs
 			// Strip CIDR if present
@@ -172,23 +173,4 @@ func formatDuration(sec int64) string {
 		return fmt.Sprintf("%dm ago", sec/60)
 	}
 	return fmt.Sprintf("%dh ago", sec/3600)
-}
-
-// formatBytes formats bytes into a human-readable string.
-func formatBytes(b int64) string {
-	const (
-		kb = 1024
-		mb = 1024 * kb
-		gb = 1024 * mb
-	)
-	switch {
-	case b >= gb:
-		return fmt.Sprintf("%.1fGB", float64(b)/float64(gb))
-	case b >= mb:
-		return fmt.Sprintf("%.1fMB", float64(b)/float64(mb))
-	case b >= kb:
-		return fmt.Sprintf("%.1fKB", float64(b)/float64(kb))
-	default:
-		return fmt.Sprintf("%dB", b)
-	}
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"net/http"
 	"time"
 
@@ -31,9 +32,8 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wallet := h.walletFromRequest(r)
-	if wallet == "" {
-		writeError(w, http.StatusUnauthorized, "wallet authentication required")
+	wallet, ok := h.requireOperator(w, r)
+	if !ok {
 		return
 	}
 
@@ -45,12 +45,16 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 			expiryMinutes = req.ExpiryMinutes
 		}
 	}
-	const maxExpiryMinutes = 10080 // 7 days
+	// An invite token is a credential for every secret the cluster holds, so it
+	// is short-lived by design. A week was long enough to outlive the reason it
+	// was minted.
+	const maxExpiryMinutes = 60
 	if expiryMinutes > maxExpiryMinutes {
 		expiryMinutes = maxExpiryMinutes
 	}
 
-	// Generate random 32-byte token.
+	// Generate random 32-byte token. What is returned below is the only copy
+	// of it that will exist: the registry stores a hash.
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		h.logger.Error("failed to generate invite token", zap.Error(err))
@@ -65,12 +69,22 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	_, err := h.rqliteClient.Exec(ctx,
 		"INSERT INTO invite_tokens (token, created_by, expires_at, operator_wallet) VALUES (?, ?, ?, ?)",
-		token, fmt.Sprintf("operator:%s", wallet), expiresAtStr, wallet)
+		HashInviteToken(token), fmt.Sprintf("operator:%s", wallet), expiresAtStr, wallet)
 	if err != nil {
 		h.logger.Error("failed to store invite token", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to create invite token")
 		return
 	}
+
+	// An invite is a credential for every secret this cluster holds, and
+	// nothing recorded that one had been minted.
+	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		Actor:    wallet,
+		Action:   auth.AuditOperatorAction,
+		Resource: "invite",
+		Result:   auth.AuditSuccess,
+		Metadata: map[string]string{"expires_at": expiresAtStr},
+	})
 
 	writeJSON(w, http.StatusOK, InviteResponse{
 		Token:     token,

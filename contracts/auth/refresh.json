@@ -1,0 +1,16 @@
+{
+  "route": "/v1/auth/refresh",
+  "method": "POST",
+  "sdk": "auth.refresh()",
+  "goStruct": "auth.RefreshRequest",
+  "call": null,
+  "request": {
+    "refresh_token": "rt-1",
+    "namespace": "default"
+  },
+  "response": {
+    "access_token": "jwt-2",
+    "refresh_token": "rt-2"
+  },
+  "returns": null
+}

@@ -5,6 +5,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var buildFlags build.Flags
+
 // Cmd is the top-level build command.
 var Cmd = &cobra.Command{
 	Use:   "build",
@@ -17,8 +19,15 @@ then package them into a deployment archive. The archive includes:
   - manifest.json with checksums
 
 The resulting archive can be pushed to nodes with 'orama node push'.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		build.Handle(args)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return build.Run(&buildFlags)
 	},
-	DisableFlagParsing: true,
+}
+
+func init() {
+	f := Cmd.Flags()
+	f.StringVar(&buildFlags.Arch, "arch", "amd64", "Target architecture (amd64, arm64)")
+	f.StringVar(&buildFlags.Output, "output", "", "Output archive path (default: /tmp/orama-<version>-linux-<arch>.tar.gz)")
+	f.BoolVar(&buildFlags.Verbose, "verbose", false, "Verbose output")
+	f.BoolVar(&buildFlags.Sign, "sign", false, "Sign the manifest with rootwallet (requires rw in PATH)")
 }

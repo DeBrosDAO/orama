@@ -10,55 +10,61 @@ var Cmd = &cobra.Command{
 	Use:   "auth",
 	Short: "Authentication management",
 	Long: `Manage authentication with the Orama network.
-Supports RootWallet (EVM) and Phantom (Solana) authentication methods.`,
+Authentication is a RootWallet (rw) signature over a gateway challenge.`,
 }
+
+var loginNamespace string
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate with wallet",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand(append([]string{"login"}, args...))
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthLogin(loginNamespace)
 	},
-	DisableFlagParsing: true,
+}
+
+func init() {
+	f := loginCmd.Flags()
+	f.StringVar(&loginNamespace, "namespace", "", "Namespace name")
 }
 
 var logoutCmd = &cobra.Command{
 	Use:   "logout",
 	Short: "Clear stored credentials",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"logout"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthLogout()
 	},
 }
 
 var whoamiCmd = &cobra.Command{
 	Use:   "whoami",
 	Short: "Show current authentication status",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"whoami"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthWhoami()
 	},
 }
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show detailed authentication info",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"status"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthStatus()
 	},
 }
 
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all stored credentials",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"list"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthList()
 	},
 }
 
 var switchCmd = &cobra.Command{
 	Use:   "switch",
 	Short: "Switch between stored credentials",
-	Run: func(cmd *cobra.Command, args []string) {
-		cli.HandleAuthCommand([]string{"switch"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cli.AuthSwitch()
 	},
 }
 

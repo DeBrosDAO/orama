@@ -427,8 +427,8 @@ func shamirCombine(shares [][]byte) ([]byte, error) {
 				if i == j {
 					continue
 				}
-				num = gf256Mul(num, xj)           // 0 - xj = xj in GF(256) (additive inverse = self)
-				den = gf256Mul(den, xi^xj)         // xi - xj = xi XOR xj
+				num = gf256Mul(num, xj)    // 0 - xj = xj in GF(256) (additive inverse = self)
+				den = gf256Mul(den, xi^xj) // xi - xj = xi XOR xj
 			}
 			lagrange := gf256Mul(num, gf256Inv(den))
 			val ^= gf256Mul(shares[i][byteIdx], lagrange)
@@ -501,4 +501,3 @@ func loadNodeID() (string, error) {
 	}
 	return strings.TrimSpace(string(data)), nil
 }
-

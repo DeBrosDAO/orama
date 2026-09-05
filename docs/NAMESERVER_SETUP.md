@@ -244,12 +244,12 @@ Use online tools to verify global propagation:
 
 1. **Check CoreDNS is running:**
    ```bash
-   sudo systemctl status coredns
+   sudo orama node status
    ```
 
 2. **Check CoreDNS logs:**
    ```bash
-   sudo journalctl -u coredns -f
+   sudo orama node logs coredns -f
    ```
 
 3. **Verify port 53 is open:**

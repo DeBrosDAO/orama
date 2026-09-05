@@ -60,20 +60,49 @@ func NewHTTPGateway(c Client, base string) *HTTPGateway {
 }
 
 // RegisterRoutes registers all handlers onto the provided mux under BasePath.
-func (g *HTTPGateway) RegisterRoutes(mux *http.ServeMux) {
-	base := g.base()
-	mux.HandleFunc(base+"/query", g.handleQuery)
-	mux.HandleFunc(base+"/exec", g.handleExec)
-	mux.HandleFunc(base+"/find", g.handleFind)
-	mux.HandleFunc(base+"/find-one", g.handleFindOne)
-	mux.HandleFunc(base+"/select", g.handleSelect)
-	// Keep "transaction" for compatibility with existing routes.
-	mux.HandleFunc(base+"/transaction", g.handleTransaction)
+// route is one mounted pattern and the handler behind it.
+type route struct {
+	Pattern string
+	Handler http.HandlerFunc
+}
 
-	// Schema helpers
-	mux.HandleFunc(base+"/schema", g.handleSchema)
-	mux.HandleFunc(base+"/create-table", g.handleCreateTable)
-	mux.HandleFunc(base+"/drop-table", g.handleDropTable)
+// routes is the single list of what this gateway serves. RegisterRoutes mounts
+// it and Routes reports it, so the two cannot disagree.
+func (g *HTTPGateway) routes() []route {
+	base := g.base()
+	return []route{
+		{base + "/query", g.handleQuery},
+		{base + "/exec", g.handleExec},
+		{base + "/find", g.handleFind},
+		{base + "/find-one", g.handleFindOne},
+		{base + "/select", g.handleSelect},
+		// Keep "transaction" for compatibility with existing routes.
+		{base + "/transaction", g.handleTransaction},
+		// Schema helpers
+		{base + "/schema", g.handleSchema},
+		{base + "/create-table", g.handleCreateTable},
+		{base + "/drop-table", g.handleDropTable},
+	}
+}
+
+func (g *HTTPGateway) RegisterRoutes(mux *http.ServeMux) {
+	for _, r := range g.routes() {
+		mux.HandleFunc(r.Pattern, r.Handler)
+	}
+}
+
+// Routes returns every pattern RegisterRoutes mounts.
+//
+// These are composed from the base path rather than written as literals, so the
+// route inventory in docs/API_SURFACE.md cannot discover them by reading the
+// source. It asks here instead.
+func (g *HTTPGateway) Routes() []string {
+	table := g.routes()
+	out := make([]string, 0, len(table))
+	for _, r := range table {
+		out = append(out, r.Pattern)
+	}
+	return out
 }
 
 func (g *HTTPGateway) base() string {

@@ -46,7 +46,7 @@ wg show wg0 dump
 sudo grep -A3 '\[Peer\]' /etc/wireguard/wg0.conf
 
 # the sync's own account of the last round
-journalctl -u orama-node --no-pager | grep 'WireGuard peer sync completed' | tail -3
+sudo orama node logs node --since -10min | grep 'WireGuard peer sync completed' | tail -3
 ```
 
 The sync log line reports `added`, `updated`, `removed` and `persisted`
@@ -86,7 +86,7 @@ This was fixed in code (BindAddr validation in `SpawnOlric`), so new namespaces 
 ### Check 3: Olric logs show "Failed UDP ping" constantly
 
 ```bash
-journalctl -u orama-namespace-olric@<name>.service --no-pager -n 30
+sudo orama node logs orama-namespace-olric@<name> -n 30
 ```
 
 If every UDP ping fails but TCP stream connections succeed, it's the WireGuard packet loss issue (see Check 1).
@@ -178,7 +178,12 @@ IP, WebRTC roles) — just not for asserting who the voters are.
 
 **Cause:** `orama node stop` disables systemd template services (`orama-namespace-gateway@<name>.service`). They have `PartOf=orama-node.service`, but that only propagates restart to **enabled** services. Index host units (`@index`) are started by the supervisor on node start and do not need to be enabled.
 
-**Fix:** Re-enable the **tenant** services before restarting:
+**Fix:** `sudo orama node restart` — the upgrade orchestrator re-enables `@`
+services before restarting them, so nothing has to be enabled by hand.
+
+If you are on a node old enough not to do that, re-enable the tenant services
+first. Raw `systemctl` bypasses the CLI's dependency ordering, quorum checks and
+health verification, so this is a last resort, not a routine step:
 
 ```bash
 systemctl enable orama-namespace-rqlite@<name>.service
@@ -186,8 +191,6 @@ systemctl enable orama-namespace-olric@<name>.service
 systemctl enable orama-namespace-gateway@<name>.service
 sudo orama node restart
 ```
-
-This was fixed in code — the upgrade orchestrator now re-enables `@` services before restarting.
 
 If a tenant service is still down after that, the tenant reconciler restarts it
 within a minute; it no longer needs a hand-run restore. A service that stays
@@ -332,12 +335,43 @@ the node holds no ipfs-cluster identity, i.e. it has never joined a cluster.
 
 ---
 
+## 13. RootWallet agent: locked, waiting, or unreachable
+
+Commands that need an SSH key or a wallet signature — `orama node setup`,
+`orama push`, `orama auth login` — talk to the RootWallet desktop app's agent
+over a Unix socket at `~/.rootwallet/agent.sock`. Override the path with
+`RW_AGENT_SOCK`.
+
+The agent answers with a code, and the CLI turns each one into an instruction:
+
+| Code | What happened | What to do |
+|------|---------------|------------|
+| `AGENT_LOCKED` (423) | A vault operation waited for an unlock and gave up | Unlock the desktop app and run the command again |
+| `AGENT_LOCKED` (401) | A wallet operation refused at once; these do not wait | Unlock the desktop app first, then run the command |
+| `APPROVAL_TIMEOUT` | The approval prompt went unanswered for two minutes | Run it again and approve it |
+| `APPROVAL_DENIED` | Someone refused the request | Approve this application in the desktop app |
+| `PERMISSION_DENIED` | The application lacks the capability | Grant it under app permissions |
+| `PEER_VANISHED` | The `orama` binary changed while the request was open | Run it again |
+| `NOT_FOUND` | No such vault entry | Nothing to do; the CLI creates SSH entries on demand |
+
+**A first run against a locked wallet can take four minutes.** The agent waits
+up to two minutes for approval, then up to two more for the unlock, and the CLI
+waits longer than both so the agent's own answer arrives instead of a timeout
+from this side. If `orama node setup` seems to hang, look at the desktop app:
+there is probably a prompt on it. `orama sandbox` reports how many prompts are
+waiting.
+
+**"rootwallet agent is not reachable"** means the socket is not there: the
+desktop app is closed. Open it.
+
+---
+
 ## General Debugging Tips
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands
 - **Namespace data lives at:** `/opt/orama/.orama/data/namespaces/<name>/`
-- **Check service logs:** `journalctl -u orama-namespace-olric@<name>.service --no-pager -n 50`
+- **Check service logs:** `sudo orama node logs orama-namespace-olric@<name>` — it wraps `journalctl`, resolves template instances, and takes `-n` and `-f`
 - **Check WireGuard:** `wg show wg0` — look for recent handshakes and transfer bytes
 - **Check gateway health:** `curl http://localhost:<port>/v1/health` from the node itself
-- **Node IPs:** Check `scripts/remote-nodes.conf` for credentials, `wg show wg0` for WG IPs
+- **Node IPs:** `orama nodes --env <env>` lists them from the network API. The local fallback inventory is `nodes.conf`, looked for in the working directory, then `../scripts/`, then `~/.orama/` — see [INSPECTOR.md](INSPECTOR.md#configuration) for the full search order. `wg show wg0` for WG IPs. SSH keys come from the RootWallet vault, never from a file.
 - **OramaOS nodes:** No SSH access — use Gateway API endpoints (`/v1/node/status`, `/v1/node/logs`) for diagnostics

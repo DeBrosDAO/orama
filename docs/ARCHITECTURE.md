@@ -238,8 +238,8 @@ announcing maintenance on shutdown.
 
 The state is published in discovery metadata. `orama monitor report` does not
 render it today; read it from the node's own log
-(`journalctl -u orama-node | grep "Node lifecycle state changed"`), which also
-lists the components that have not converged.
+(`sudo orama node logs node --since -1h | grep "Node lifecycle state changed"`),
+which also lists the components that have not converged.
 
 **DNS degrades rather than failing.** The CoreDNS rqlite plugin serves stale
 answers when the backend is unreachable: an entry stays usable for 24 hours past
@@ -381,7 +381,7 @@ per tick.
 An eviction writes a tombstone to `raft_evicted_nodes`. Without one,
 `recoverOrphanedNodes` re-added the node within five minutes — it re-adds every
 discovery peer absent from the raft configuration, so the eviction was undone
-automatically. `orama node decommission` and `orama node migrate-raft-id` both write one, so a
+automatically. `orama node remove` and `orama node migrate-raft-id` both write one, so a
 removal made by hand is no longer undone within five minutes.
 
 Tombstones expire after 24 hours, and that expiry is load-bearing rather than
@@ -471,13 +471,13 @@ being addresses:
   compared the announced id against this node's address, which works only while
   an id is an address; afterwards a node stops recognising itself and starts
   counting itself as a peer.
-- **`orama node decommission`** resolves the member's id from the configuration
+- **`orama node remove`** resolves the member's id from the configuration
   before removing it. Removing by address matched nothing on a migrated cluster
   and reported success, leaving the retired machine a configured voter for ever.
 
 Two rules govern removal. `SafeToRemoveVoter` is the eviction rule and refuses a
 member that is still answering — that is a demotion, not an eviction.
-`SafeToRemoveMember` is the quorum arithmetic alone, for a decommission or a
+`SafeToRemoveMember` is the quorum arithmetic alone, for a removal or a
 migration, which remove a live member on purpose. `RaftMember` and
 `RQLiteNodeMetadata.NodeID` carry the id as an opaque identifier that must not
 be dialled.
@@ -703,7 +703,7 @@ Every node runs Anyone as a **client** only: a local SOCKS5 proxy on `127.0.0.1:
   `?host=&port=` through the Anyone network. TLS is negotiated end-to-end
   between the client and the destination *through* the tunnel, so the gateway
   relays ciphertext and sees only the destination host and port. See
-  "Anonymity Tunnel" in `docs/CLIENT_SDK.md`.
+  "Anonymity Tunnel" in `docs/GO_CLIENT_SDK.md`.
 
 Both require the `proxy` grant **and** a genuine end-user (SIWE wallet) JWT — an
 app-runtime API key alone is refused.
@@ -782,21 +782,83 @@ Function Invocation:
 
 ### Authentication Methods
 
-1. **Wallet Signatures** (Ethereum-style)
-   - Challenge/response flow
-   - Nonce-based to prevent replay attacks
+1. **Wallet Signatures** (EVM and Solana)
+   - Challenge/response. `/v1/auth/challenge` returns a Sign-In with Ethereum
+     message (EIP-4361), or the Solana equivalent — the same grammar with one
+     word changed in the header line — and the wallet signs that text verbatim.
+     `/v1/auth/verify` and `/v1/auth/api-key` take the message back and read the
+     wallet, the nonce and the namespace out of it; nothing beside it in the
+     request body is trusted, because nothing beside it was signed
+   - The message carries the gateway's own host as its domain, so a signature
+     collected by any other site does not verify here. It used to be a bare
+     32-byte nonce: a signature over that says only that someone holding the key
+     signed some bytes, so any signature that wallet had ever produced was in
+     principle an Orama login, and the wallet dialog showed the user a blob they
+     had no way to judge
+   - The message states its own five-minute expiry, and names the namespace both
+     in words the user reads and as a `urn:orama:namespace:<name>` resource the
+     gateway acts on
+   - The challenge is single-use. Every signature endpoint consumes it with one
+     conditional `UPDATE nonces … WHERE used_at IS NULL AND expires_at > now`
+     and refuses the request unless that statement affected a row, so a
+     captured signature cannot be replayed and an expired challenge is dead.
+     Verifying the signature alone is not enough — it proves possession of the
+     key, not freshness
    - Issues JWT tokens after verification
 
-2. **API Keys**
-   - Long-lived credentials
-   - Stored in RQLite
+2. **Principals and grants**
+   - A **principal** is who the platform authenticates: a wallet, or a service
+     account (an API key). A **grant** is what one principal may do in one
+     namespace — a role, optionally narrowed to a resource, optionally expiring
+   - Roles: `owner` (exactly one per namespace, enforced by a partial unique
+     index), `admin` (the control plane), `runtime` (the data plane) and
+     `reader` (a member holding nothing). The role the authorization middleware
+     resolves is what the scope gate turns into the caller's grant set
+   - This replaced a single boolean — a row in `namespace_ownership` meant
+     owner and its absence meant refused — which is why everybody with access
+     to a namespace was an admin. Migration 050 moves the rows and drops the
+     table
+   - A grant may be narrowed to a resource: `pubsub:topic=chat.*`,
+     `fn:name=checkout`. Publish, subscribe and invoke apply it, so a tenant
+     can isolate its own end users. A selector in a domain the data path cannot
+     yet name is refused when the grant is written, rather than stored and
+     silently ignored. See `docs/SECURITY.md`
+   - `/v1/namespace/members` and `orama members` manage them; transferring the
+     namespace requires the owner
+
+3. **API Keys**
+   - `orama_<type>_<payload>_<checksum>`, all base62. `sk` labels a key holding
+     the control plane and `rk` one holding only the data plane — a label for
+     whoever finds a leaked string, not what decides its authority
+   - The checksum means a leaked key can be recognised offline, by a secret
+     scanner or by this code, and a mistyped one is refused without a lookup
+   - The key does **not** carry its namespace. It used to be
+     `ak_<random>:<namespace>`, so a key pasted into an issue or a log line
+     published which tenant it belonged to. The namespace is on the row
+   - Every key expires: 90 days by default, a year at most, and there is no way
+     to ask for one that does not. A key had no expiry column at all, so minting
+     one produced a bearer token that worked until somebody remembered to revoke it
+   - `orama namespace keys rotate` mints a successor with the same grants and
+     shortens the original's life to an overlap (7 days by default) rather than
+     revoking it, so there is a window in which to deploy the new one
+   - Stored in RQLite as an HMAC of the key, never the key
    - Namespace-scoped
    - Carry a grant set (`invoke`, `storage`, `push`, `webrtc`, `proxy`, `pubsub`, `cache`, or `admin`). HTTP `/v1/invoke` is a public path; private functions still require the `invoke` grant (or a SIWE wallet). Node command/logs/leave and network connect/disconnect require `admin`.
 
-3. **JWT Tokens**
+4. **JWT Tokens**
    - Short-lived (15 min default)
    - Refresh token support
    - Claims-based authorization
+
+5. **The audit trail**
+   - `audit_events` records what changed and who changed it: sign-ins, keys,
+     grants, namespaces, deployments, functions, secrets, operator actions. It
+     is a Raft-replicated table, so a timer removes anything past 90 days —
+     without that it grows for ever
+   - Actors are never credentials. The JWT the API-key exchange mints carries
+     the key as its subject, so a non-wallet actor is recorded as a fingerprint
+   - `GET /v1/audit` and `orama audit [--follow]` read it, scoped to the
+     caller's own namespace. See `docs/SECURITY.md`
 
 ### Network Security (WireGuard Mesh)
 
@@ -805,8 +867,8 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **WireGuard IPs:** Each node gets a private IP (10.0.0.x/24) used for all cluster traffic
 - **UFW Firewall:** Only public ports are exposed: 22 (SSH; Ubuntu/sandbox only — OramaOS has no SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
 - **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
-- **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are only accessible via WireGuard or localhost
-- **Invite tokens:** Single-use, time-limited tokens for secure node joining. No shared secrets on the CLI
+- **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are reachable only from the overlay **because the firewall says so, not because of where they listen**. A namespace's RQLite is spawned with `HTTP_ADDR=0.0.0.0:<port>` and `RAFT_ADDR=0.0.0.0:<port>`, and a namespace gateway with `ListenAddr: ":<port>"` (`pkg/namespace/systemd_spawner.go`), so all of them are bound to every interface and one wrong UFW rule exposes them. Moving the namespace gateway onto the overlay address is chg-387, which explains why it is not a one-liner; the same is true of the RQLite listeners. Until then the firewall is the only thing between them and the internet
+- **Invite tokens:** Single-use and time-limited, and there is no standing cluster password. The token is still a secret passed as a command-line argument, so it is visible to `ps` and lands in shell history on the machine that runs `orama node install`
 - **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh. The joining node establishes its libp2p identity before it asks to join, so the request carries the peer id the cluster will key it by
 
 **Join ordering.** `/v1/internal/join` does everything that can fail without
@@ -907,16 +969,42 @@ See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 
 Order matches `Gateway.withMiddleware` (outermost first). Rate limiting runs **before** authentication so the auth path itself is capped.
 
-1. **Logger** — request/response logging
-2. **Security headers**
-3. **Rate limiting** — per-client, before auth
-4. **CORS**
-5. **Domain routing**
-6. **Authentication** — JWT / API key
-7. **Authorization** — namespace access control
-8. **Scope gate** — tightens an already-authorized request
-9. **Namespace rate limiting**
-10. Handler (errors are returned as HTTP status, not a separate middleware)
+1. **Internal-auth gate** — drops every `X-Internal-Auth-*` header that did not arrive with a valid MAC
+2. **Route policy** — resolves what the matched route requires and puts it on the request, so the four gates below cannot answer differently
+3. **Logger** — request/response logging
+4. **Security headers**
+5. **Rate limiting** — per-client, before auth
+6. **CORS**
+7. **Domain routing**
+8. **Authentication** — JWT / API key
+9. **Authorization** — namespace access control
+10. **Scope gate** — tightens an already-authorized request
+11. **Namespace rate limiting**
+12. Handler (errors are returned as HTTP status, not a separate middleware)
+
+Every gate reads the policy the route declared, never the request path. A route
+with no declared policy cannot be registered at all. The declaration is
+`pkg/gateway/route_policy.go`; `pkg/gateway/routepolicy` is what enforces it.
+See `docs/SECURITY.md` for what the three path-prefix lists this replaced cost.
+
+The client a rate limit is charged to is the peer address, not
+`X-Forwarded-For`. The header is honoured only when the peer is the local
+reverse proxy, and only its last entry, which is the address Caddy is actually
+talking to — everything before it is whatever the caller wrote. Traffic from
+another node over the overlay is exempt, and so is a process on this machine
+that reached the gateway directly, with nothing forwarded. Loopback **with** a
+forwarding header is not exempt: every public request arrives from `127.0.0.1`
+because Caddy proxies to localhost, so exempting it would exempt the internet.
+
+The endpoints that mint or exchange credentials — challenge, verify, api-key,
+token and refresh — have their own bucket, 30 a minute per address bursting to
+10, against a general limit of 10,000 a minute. They are
+cheap to call and expensive to serve, and the general limit is no obstacle to
+grinding them.
+
+`/v1/auth/challenge` is limited **per wallet** as well, wherever the request
+comes from: it writes a nonce row for a wallet the caller does not have to own,
+so a distributed grind against one victim is not capped by a per-address limit.
 
 ## Scalability
 

@@ -14,7 +14,9 @@ Related docs:
 - [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md) — NS / glue DNS
 - [COMMON_PROBLEMS.md](COMMON_PROBLEMS.md) — WireGuard / Olric / vault issues
 
-Inventory file: `core/scripts/nodes.conf`
+Inventory file: `core/scripts/nodes.conf` — gitignored, created from
+`core/scripts/nodes.conf.example`. It lists the hosts you operate, so it is not
+committed; the network API is the primary source and this file is the fallback.
 
 ---
 
@@ -120,33 +122,51 @@ If the victim is a **namespace RQLite voter**, removing it without recovery can 
 # On an existing node
 cat /opt/orama/manifest.json   # version, e.g. 0.122.99
 
+# What your local CLI is
+orama version
+
 # Locally you need the same archive, e.g.
 # /tmp/orama-0.122.99-linux-amd64.tar.gz
 # or: orama build  (then use the produced archive)
 ```
 
+`orama version` is truthful in every build path: the version is compiled in
+rather than injected only by `make build`, so a binary built with `go build` or
+installed with `go install` reports its real number instead of `dev`.
+
 ### 5. Secrets / SSH
 
 - Prefer SSH key on the new VPS (`debros-nodes` or rootwallet vault).
-- `orama node setup` needs unlocked rootwallet; manual path below does not.
+- `orama node setup` is the path (one command per node, no SSH by hand) and needs an unlocked RootWallet. The manual path below does not. See [DEVNET_INSTALL.md](DEVNET_INSTALL.md).
 
 ---
 
 ## Phase A — Join new node (old node stays fully up)
 
-### A1. Invite token (on an existing installed node)
+### A1. Invite
+
+From your own machine:
+
+```bash
+orama invite --expiry 2h
+```
+
+Or on an existing installed node:
 
 ```bash
 sudo /opt/orama/bin/orama node invite --expiry 2h
 ```
 
-Save:
+Either prints **one** string to save. It carries the gateway to join and the
+fingerprint of that gateway's TLS certificate, so there is no separate
+`--join`, no separate `--ca-fingerprint`, and nothing to get the wrong way
+round. It used to be three values, two of them indistinguishable strings of
+hex, and the fingerprint was the one people left out — which silently dropped
+the join to trust-on-first-use.
 
-- `--token …`
-- `--ca-fingerprint …` (if printed)
-- Join URL hint (HTTPS domain or `http://<hub-public-ip>`)
-
-Tokens are **single-use**. Generate one per join.
+Invites are **single-use**. Mint one per join. A retry after a failed install
+is told the invite was already used, rather than that it was "invalid or
+expired".
 
 ### A2. Bootstrap new VPS
 
@@ -165,9 +185,7 @@ systemctl disable docker docker.socket 2>/dev/null || true
 
 ```bash
 sudo orama node install \
-  --join http://<HUB_PUBLIC_IP> \
-  --token <TOKEN> \
-  --ca-fingerprint <FP> \
+  --token <INVITE> \
   --vps-ip <NEW_PUBLIC_IP> \
   --domain <base-domain> \
   --base-domain <base-domain> \
@@ -176,9 +194,26 @@ sudo orama node install \
   --ssh-user ubuntu
 ```
 
+Or from your own machine, which drives the same install over SSH:
+
+```bash
+orama node install --remote \
+  --token <INVITE> \
+  --vps-ip <NEW_PUBLIC_IP> \
+  --base-domain <base-domain> \
+  --nameserver --environment <devnet|testnet> --ssh-user ubuntu
+```
+
+`--remote` is required: which machine gets installed used to be inferred from
+whether you had used sudo. A remote install now forwards every flag, including
+`--ca-fingerprint`, `--environment`, `--ssh-user` and `--operator-wallet` —
+they were silently dropped, so a laptop-driven join fell back to
+trust-on-first-use and the node registered with no environment or owner.
+
 Notes:
 
-- Prefer **`http://<hub-ip>`** if DNS/TLS is flaky during cutover (docs allow this).
+- The invite carries the join URL. To override it — `http://<hub-ip>` if DNS or
+  TLS is flaky during cutover — pass `--join` as well; an explicit flag wins.
 - Never join via `:10104` (blocked by UFW).
 - Installer may warn that the base domain does not yet resolve to the new IP — expected until DNS update.
 - Assigned WG IP example: `10.0.0.17`.
@@ -351,9 +386,18 @@ Do **not** blindly map old IP → new IP for all namespace rows unless the new n
 ### Ideal path (HA preserved)
 
 1. Join new platform node (Phase A) — done.
-2. **Before** removing old node: rebalance each namespace so the new node (or another survivor) hosts gateway/rqlite/olric, **or** ensure ≥2 live namespace voters remain after remove.
-3. Only then remove old platform voter.
-4. Update namespace DNS to the live set.
+2. Check what the removal costs every namespace:
+   ```bash
+   orama node remove --env <env> --node <OLD_PUBLIC_IP> --dry-run
+   ```
+   It prints the voters, quorum and reachable count for the platform cluster and
+   for every namespace the node is a voter in. This is the check that used to be
+   done by hand, and getting it wrong is what the postmortem below records.
+3. If a namespace would lose quorum, rebalance it first so the new node or
+   another survivor hosts its gateway, rqlite and olric. `orama node remove`
+   refuses to run until every cluster survives.
+4. Remove the old platform voter.
+5. Update namespace DNS to the live set.
 
 If automatic cluster recovery does not reassign in time, use manual recovery below.
 
@@ -496,14 +540,22 @@ Only when:
 One command does both phases, from a survivor:
 
 ```bash
-orama node decommission --env <env> --node <OLD_PUBLIC_IP>
+orama node remove --env <env> --node <OLD_PUBLIC_IP>
 ```
 
-It takes the old node out of the raft configuration — refusing if that would
-cost the cluster its quorum — writes an eviction tombstone so orphan recovery
-does not put it back within five minutes, deletes its `wireguard_peers` and
-`dns_nodes` rows, and then erases the machine. Add `--offline` if the VPS is
-already gone.
+First it prints what the removal costs every raft cluster the node is a voter
+in — the platform cluster and each namespace it serves — and refuses if any of
+them would lose quorum. Then it takes the node out of the platform raft
+configuration, writes an eviction tombstone so orphan recovery does not put it
+back within five minutes, releases its mesh address, its nameserver slot, its
+namespace memberships, its namespace port blocks and its TURN and SFU
+allocations, marks it retired so the cluster purges its DNS records, and erases
+the machine. Add `--offline` if the VPS is already gone, `--dry-run` to see the
+plan without changing anything.
+
+`decommission` is accepted as an alias. Every step is keyed on the node and safe
+to repeat, so a removal that failed part way through is finished by running it
+again.
 
 **Raft identity.** A node whose raft id has been migrated to its libp2p peer id
 keeps that id across an address change, so replacing the machine's overlay
@@ -544,13 +596,23 @@ curl -sS -u "$AUTH" -X DELETE http://127.0.0.1:10100/remove \
 ```
 
 Then write the tombstone, or orphan recovery re-adds the node within five
-minutes:
+minutes, and take the node out of every membership store:
 
 ```sql
 INSERT INTO raft_evicted_nodes (node_id, raft_addr, peer_id, reason, evicted_by)
   VALUES ('10.0.0.6:10101','10.0.0.6:10101','<OLD_LIBP2P_ID>','operator','<THIS_NODE>');
-DELETE FROM wireguard_peers WHERE wg_ip = '10.0.0.6';
-DELETE FROM dns_nodes WHERE id = '<OLD_LIBP2P_ID>';
+
+DELETE FROM wireguard_peers          WHERE node_id = '<OLD_LIBP2P_ID>';
+DELETE FROM dns_nameservers          WHERE node_id = '<OLD_LIBP2P_ID>';
+DELETE FROM namespace_cluster_nodes  WHERE node_id = '<OLD_LIBP2P_ID>';
+DELETE FROM namespace_port_allocations WHERE node_id = '<OLD_LIBP2P_ID>';
+DELETE FROM webrtc_port_allocations  WHERE node_id = '<OLD_LIBP2P_ID>';
+
+-- Mark, do not delete. Every DNS cleanup the cluster performs finds the IP
+-- through a dns_nodes row that is not active; deleting the row strands the
+-- node's A records, its NS glue and the namespace records pointing at it.
+UPDATE dns_nodes SET status = 'inactive', last_seen = '1970-01-01 00:00:00',
+  updated_at = datetime('now') WHERE id = '<OLD_LIBP2P_ID>';
 ```
 
 Finally erase the box with `orama node wipe --env <env> --node <OLD_PUBLIC_IP>`,
@@ -564,7 +626,8 @@ Optional: repurpose the erased box (e.g. new `jarvis` operator host).
 
 ## Phase F — Inventory & SSH
 
-1. Update `core/scripts/nodes.conf` — victim IP → new IP for that role.
+1. Update `core/scripts/nodes.conf` — victim IP → new IP for that role. This is
+   the fallback inventory; the network API is what `orama nodes` reads first.
 2. Update `~/.ssh/config` host aliases (and keep a break-glass alias for any leftover public workloads).
 3. Optional: store SSH key in rootwallet vault for the new host.
 
@@ -667,7 +730,7 @@ testnet|ubuntu@51.38.130.69|nameserver-ns1     # hulk
 
 | Symptom | Action |
 |---------|--------|
-| Platform no leader / Candidate | [DEV_DEPLOY.md](DEV_DEPLOY.md) `orama node recover-raft --env … --leader <ip>` |
+| Platform no leader / Candidate | [DEV_DEPLOY.md](DEV_DEPLOY.md) `orama node recover-raft --env …` — it picks the node with the highest applied index and prints what each one reported. Every other node's data is DELETED, with no backup |
 | New node never becomes voter | Check WG ping, logs, re-invite + reinstall if partial |
 | Namespace health 503 circuit open | Fix DNS to live gateways; restart one platform gateway |
 | Namespace rqlite `leader not found` | Single-node `peers.json` recovery on survivor |

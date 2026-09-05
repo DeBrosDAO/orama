@@ -83,7 +83,7 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
+.PHONY: build clean test test-contracts docs deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
 
 # Single source of truth — repo-root VERSION file. Update with `make bump VER=X.Y.Z`
 # or by editing /VERSION directly. Release workflows verify this matches the tag.
@@ -155,15 +155,31 @@ rollout-testnet:
 	./bin/orama node rollout --env testnet --yes
 
 # Bump the repo-root VERSION file and sync sdk/package.json.
+# Regenerate ../docs/CLI_REFERENCE.md from the cobra command tree.
+#
+# The reference is not written by hand, so command documentation cannot drift
+# from the code. `go test ./cmd/cli` fails when the file and the tree disagree.
+docs:
+	go test -count=1 ./cmd/cli -run TestCLIReference -update-cli-reference
+
+# Contract tests against the fixtures in ../contracts.
+#
+# -count=1 is required: the fixtures live above this Go module, so the test
+# cache does not see them change and would report a stale pass.
+test-contracts:
+	go test -count=1 -run Contract ./...
+
 # Usage: make bump VER=0.122.9
 bump:
 	@if [ -z "$(VER)" ]; then \
 		echo "Usage: make bump VER=X.Y.Z"; exit 1; \
 	fi
 	@echo "$(VER)" > ../VERSION
+	@printf '%s\n' "$(VER)" > pkg/version/version.txt
 	@cd ../sdk && npm version $(VER) --no-git-tag-version > /dev/null
-	@echo "Bumped VERSION and sdk/package.json to $(VER)"
-	@echo "Next: git add ../VERSION ../sdk/package.json && git commit -m 'release: $(VER)'"
+	@cd ../sdk-vault && npm version $(VER) --no-git-tag-version > /dev/null
+	@echo "Bumped VERSION, pkg/version/version.txt, sdk/package.json and sdk-vault/package.json to $(VER)"
+	@echo "Next: git add ../VERSION pkg/version/version.txt ../sdk/package.json ../sdk-vault/package.json && git commit -m 'release: $(VER)'"
 
 # Interactive release workflow (tag + push)
 release:

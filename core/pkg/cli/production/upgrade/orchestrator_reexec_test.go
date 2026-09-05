@@ -22,36 +22,6 @@ import (
 // re-exec can only be verified on a real install (tests can't safely
 // call syscall.Exec).
 
-func TestFlags_ReexecedAfterBinarySwap_parses(t *testing.T) {
-	// The hidden flag must be parseable; orchestrator sets it on the
-	// re-execed argv. If this regresses (e.g. someone removes the
-	// fs.BoolVar registration to clean up the help output), the
-	// re-execed process would fail with "flag provided but not defined"
-	// and the upgrade would error mid-way.
-	flags, err := ParseFlags([]string{"--reexeced-after-binary-swap"})
-	if err != nil {
-		t.Fatalf("ParseFlags must accept the hidden flag: %v", err)
-	}
-	if !flags.ReexecedAfterBinarySwap {
-		t.Error("flag value not surfaced on Flags struct")
-	}
-}
-
-func TestFlags_ReexecedAfterBinarySwap_defaultFalse(t *testing.T) {
-	// Default value MUST be false. If it ever defaults to true, the
-	// orchestrator would skip its own pre-binary phases on the FIRST
-	// user-initiated upgrade and bricks would happen — Phase 2b would
-	// never run.
-	flags, err := ParseFlags([]string{})
-	if err != nil {
-		t.Fatalf("ParseFlags empty args: %v", err)
-	}
-	if flags.ReexecedAfterBinarySwap {
-		t.Fatal("FATAL DEFAULT: ReexecedAfterBinarySwap defaults to true; this would skip " +
-			"Phase 2b (binary install) on every upgrade. MUST be false by default.")
-	}
-}
-
 func TestReexecAfterBinarySwap_missingBinaryReturnsError(t *testing.T) {
 	// When the new binary isn't on disk at the expected path, the
 	// helper must surface an error so the orchestrator can fall back

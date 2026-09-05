@@ -101,6 +101,7 @@ func newSecretsTestHandlers(sm serverless.SecretsManager) *ServerlessHandlers {
 		nil, // persistentMgr
 		nil, // wsBridge
 		sm,
+		nil, // audit
 		logger,
 	)
 }

@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/cli/clierr"
 	"os"
 	"os/exec"
 	"strings"
@@ -11,28 +12,25 @@ import (
 )
 
 // HandleStop stops all production services
-func HandleStop() {
-	HandleStopWithFlags(false)
+func HandleStop() error {
+	return HandleStopWithFlags(false)
 }
 
 // HandleStopForce stops all production services, bypassing quorum checks
-func HandleStopForce() {
-	HandleStopWithFlags(true)
+func HandleStopForce() error {
+	return HandleStopWithFlags(true)
 }
 
 // HandleStopWithFlags stops all production services with optional force flag
-func HandleStopWithFlags(force bool) {
-	if os.Geteuid() != 0 {
-		fmt.Fprintf(os.Stderr, "Error: Production commands must be run as root (use sudo)\n")
-		os.Exit(1)
+func HandleStopWithFlags(force bool) error {
+	if err := clierr.RequireRoot("stopping the node services"); err != nil {
+		return err
 	}
 
 	// Pre-flight: check if stopping this node would break RQLite quorum
 	if !force {
 		if warning := checkQuorumSafety(); warning != "" {
-			fmt.Fprintf(os.Stderr, "\nWARNING: %s\n", warning)
-			fmt.Fprintf(os.Stderr, "Use 'orama node stop --force' to proceed anyway.\n\n")
-			os.Exit(1)
+			return clierr.Conflict("%s\n  Use 'orama node stop --force' to proceed anyway.", warning)
 		}
 	}
 
@@ -45,7 +43,7 @@ func HandleStopWithFlags(force bool) {
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
 		fmt.Printf("  No Orama services found\n")
-		return
+		return nil
 	}
 
 	fmt.Printf("\n  Stopping main services (ordered)...\n")
@@ -149,6 +147,7 @@ func HandleStopWithFlags(force bool) {
 		fmt.Printf("\n✅ All services stopped and masked (will not auto-start on boot)\n")
 		fmt.Printf("   Use 'orama node start' to unmask and start services\n")
 	}
+	return nil
 }
 
 // stopAllNamespaceServices stops all running namespace services

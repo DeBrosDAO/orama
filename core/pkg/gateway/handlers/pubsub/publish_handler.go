@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"go.uber.org/zap"
 )
@@ -41,6 +42,10 @@ func (p *PubSubHandlers) PublishHandler(w http.ResponseWriter, r *http.Request) 
 	data, err := base64.StdEncoding.DecodeString(body.DataB64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid base64 data")
+		return
+	}
+
+	if !authorizeTopic(w, r, body.Topic, gwauth.ActionWrite) {
 		return
 	}
 
@@ -138,6 +143,11 @@ func (p *PubSubHandlers) PublishBatchHandler(w http.ResponseWriter, r *http.Requ
 		}
 		if len(data) > MaxPerMessageBytes {
 			writeError(w, http.StatusBadRequest, "message too large at index "+strconv.Itoa(i))
+			return
+		}
+		// Every topic in the batch, before any of them is delivered: a batch
+		// that is half refused is worse than one that is refused.
+		if !authorizeTopic(w, r, m.Topic, gwauth.ActionWrite) {
 			return
 		}
 		decoded = append(decoded, pubsub.TopicMessage{Topic: m.Topic, Data: data})

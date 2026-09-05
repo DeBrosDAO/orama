@@ -10,8 +10,8 @@ var forceFlag bool
 var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start all production services (requires sudo)",
-	Run: func(cmd *cobra.Command, args []string) {
-		lifecycle.HandleStart()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return lifecycle.HandleStart()
 	},
 }
 
@@ -21,9 +21,9 @@ var stopCmd = &cobra.Command{
 	Long: `Stop all Orama services in dependency order and disable auto-start.
 Includes namespace services, global services, and supporting services.
 Use --force to bypass quorum safety check.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
-		lifecycle.HandleStopWithFlags(force)
+		return lifecycle.HandleStopWithFlags(force)
 	},
 }
 
@@ -33,9 +33,9 @@ var restartCmd = &cobra.Command{
 	Long: `Restart all Orama services. Stops in dependency order then restarts.
 Includes explicit namespace service restart.
 Use --force to bypass quorum safety check.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
-		lifecycle.HandleRestartWithFlags(force)
+		return lifecycle.HandleRestartWithFlags(force)
 	},
 }
 
