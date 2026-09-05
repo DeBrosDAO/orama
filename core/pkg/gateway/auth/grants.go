@@ -150,15 +150,36 @@ type Grant struct {
 
 // Scopes is what this grant actually authorises.
 //
-// A grant narrowed to a resource authorises nothing until the data plane can
-// enforce the selector. Returning the role's full scope set would turn "may
-// write to storage:avatars/*" into "may write to all storage" — a narrower
-// grant that is in fact the wide one, which is worse than refusing.
+// A grant with no selector is the whole role. A grant with one holds exactly
+// the scope its selector narrows and nothing else, and the data path then
+// narrows that scope to what the selector matches (see AuthorizeResource). Two
+// steps, because the scope gate decides whether a caller may touch this class
+// of thing at all and cannot see which object is being touched.
+//
+// It returns nothing at all in three cases, all of which mean the same thing —
+// this selector is not a boundary this binary can apply:
+//
+//   - the selector does not parse, so it was written by something that
+//     understood it and this process does not;
+//   - its domain is not enforced, so no data path would narrow the scope and
+//     handing over the whole scope would turn "may write to storage:avatars/*"
+//     into "may write to all storage";
+//   - the role does not hold the scope the selector narrows, so the selector
+//     describes something the grant never reached.
 func (g Grant) Scopes() ScopeSet {
-	if strings.TrimSpace(g.Resource) != "" {
+	selector := strings.TrimSpace(g.Resource)
+	if selector == "" {
+		return g.Role.Scopes()
+	}
+	parsed, err := ParseSelector(selector)
+	if err != nil || !SelectorEnforced(parsed.Domain) {
 		return ScopeSet{}
 	}
-	return g.Role.Scopes()
+	scope := parsed.RequiredScope()
+	if scope == "" || !g.Role.Scopes().Has(scope) {
+		return ScopeSet{}
+	}
+	return ScopeSet{scope: {}}
 }
 
 // sqliteTime is how a timestamp is written into a column the schema compares

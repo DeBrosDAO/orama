@@ -72,18 +72,44 @@ func TestParseRole(t *testing.T) {
 	}
 }
 
-// A grant narrowed to a resource authorises nothing until the data plane can
-// enforce the selector. Handing over the whole role would turn "may write to
-// storage:avatars/*" into "may write to all storage".
-func TestGrant_aResourceScopedGrantAuthorisesNothingYet(t *testing.T) {
+// A grant with a selector holds exactly the scope that selector narrows, and
+// the data path narrows that scope to what the selector matches. Two steps,
+// because the scope gate decides whether the caller may touch this class of
+// thing at all and cannot see which object is being touched.
+func TestGrant_aResourceScopedGrantHoldsOnlyItsOwnDomain(t *testing.T) {
 	whole := Grant{Role: RoleRuntime}
 	if !whole.Scopes().Has(ScopePubsub) {
 		t.Fatal("a whole-role runtime grant does not hold pubsub")
 	}
 
 	narrowed := Grant{Role: RoleRuntime, Resource: "pubsub:topic=chat.*"}
-	if len(narrowed.Scopes()) != 0 {
-		t.Errorf("a grant narrowed to a selector authorised %v", narrowed.Scopes().Canonical())
+	if !narrowed.Scopes().Has(ScopePubsub) {
+		t.Error("a grant narrowed to a pubsub topic cannot reach pubsub at all")
+	}
+	if narrowed.Scopes().Canonical() != ScopePubsub {
+		t.Errorf("it holds %q; a pubsub selector says nothing about anything else",
+			narrowed.Scopes().Canonical())
+	}
+}
+
+// Handing over the whole scope for a selector nothing applies would turn "may
+// write to storage:avatars/*" into "may write to all storage" — a narrower
+// grant that is in fact the wide one.
+func TestGrant_aSelectorNothingAppliesAuthorisesNothing(t *testing.T) {
+	for name, grant := range map[string]Grant{
+		"a domain no data path narrows":  {Role: RoleAdmin, Resource: "db:table=posts:read"},
+		"a selector that does not parse": {Role: RoleRuntime, Resource: "this is not a selector"},
+		// An enforced domain whose scope the role does not hold. Handing over
+		// the scope here would let a selector *widen* a grant: a reader holds
+		// nothing, and `storage:avatars/*` would give it storage.
+		"a domain the role never reached":     {Role: RoleReader, Resource: "storage:avatars/*"},
+		"an admin selector on a runtime role": {Role: RoleRuntime, Resource: "db:table=posts:read"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if scopes := grant.Scopes(); len(scopes) != 0 {
+				t.Errorf("it authorised %q", scopes.Canonical())
+			}
+		})
 	}
 }
 
@@ -356,7 +382,9 @@ func TestGrant_validatesTheSelector(t *testing.T) {
 		{"a domain the role cannot reach", "pubsub:topic=chat.*", RoleReader},
 		// A selector nothing applies would show as a narrowed grant and
 		// authorise nothing, which is the worse of the two ways to be wrong.
-		{"a domain the data path cannot enforce yet", "storage:avatars/*", RoleRuntime},
+		// `db` narrows `admin`, and until the control-plane vocabulary is split
+		// there is no scope to hand over but the whole of it.
+		{"a domain the data path cannot enforce yet", "db:table=posts:read", RoleAdmin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := s.Grant(context.Background(), GrantRequest{

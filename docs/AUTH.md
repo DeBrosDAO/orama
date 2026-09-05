@@ -187,14 +187,50 @@ orama members remove 0xabc…
 orama members transfer 0xabc…      # the owner, and only the owner
 ```
 
-Ownership is transferred rather than granted: a namespace with no owner is
-claimable by whoever signs in to it next, so handing it over is one step. The
-outgoing owner keeps an admin grant.
+Ownership is transferred rather than granted, and it is one step: the outgoing
+owner keeps an admin grant, and there is no moment where the namespace has no
+owner.
 
-A grant may be narrowed to a resource — `pubsub:topic=chat.*`,
-`fn:name=checkout` — and publish, subscribe and invoke apply it. A selector in a
-domain the data path cannot yet enforce is refused when the grant is written,
-rather than stored and silently ignored.
+### Narrowing a grant
+
+A grant may be narrowed to a resource, and four domains apply it:
+
+| Selector | What it matches |
+|----------|-----------------|
+| `pubsub:topic=chat.*` | publish, publish-batch, and the subscribe WebSocket |
+| `fn:name=checkout` | function invocation |
+| `storage:avatars/*` | upload, get, pin and unpin, against the name the object was uploaded with |
+| `cache:key=sessions/*` | get, mget, put, delete and scan, against `<map>/<key>` |
+
+Two steps, not one. A grant with a selector holds exactly the scope that
+selector narrows — `storage:avatars/*` holds `storage` and nothing else — and
+the data path then narrows that scope to what the selector matches. The scope
+gate decides whether a caller may touch this class of thing at all and cannot
+see which object is being touched.
+
+`*` stands for any run of characters and crosses `/` deliberately:
+`avatars/*` is meant to cover `avatars/2026/03/me.png`, and stopping at the
+separator would grant less than it appears to.
+
+A storage name is normalised before it is compared, so `/avatars/me.png` and
+`avatars//me.png` are the same object. `..` in a name is **refused**, not
+resolved: a storage name is a label rather than a filesystem path, and resolving
+one would let `avatars/../keys/x` match `avatars/*`. A cache key is not a path
+and is not normalised — `sessions/../tokens/x` is a key called `../tokens/x` in
+the `sessions` map, and the map is what the grant names.
+
+An object a selector cannot be compared against — a CID this namespace recorded
+no name for — is refused for a narrowed grant and reached as before by an
+unnarrowed one. "I could not work out what you are touching" is not a reason to
+allow it.
+
+A selector in a domain the data path cannot yet enforce is refused when the
+grant is written, rather than stored and silently ignored. `db` and deployments
+are the two: both narrow `admin`, and `admin` is the whole control plane, so a
+grant narrowed to `db:table=posts:read` would hold admin everywhere except the
+database routes that narrowed it — a wider grant wearing a narrower name. They
+wait on the control-plane vocabulary being split. `push` waits on something
+smaller: its API has no topic.
 
 ---
 
@@ -431,9 +467,10 @@ from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.
 - A **function** has no identity of its own yet. Host calls still run on the
   gateway's handles, so what a function does is not attributable to the function
   (the remaining half of feat-372). Deployed apps do have one — see below.
-- Resource selectors are enforced on pubsub and function invocation. Storage and
-  the database resolve no grant on the request, so a selector naming them
-  authorises nothing yet (chg-392).
+- Resource selectors are enforced on pubsub, function invocation, storage and
+  the cache. `db` and deployments both narrow `admin`, which is the whole
+  control plane, so they cannot be narrowed until that vocabulary is split; a
+  push selector has no topic in the push API to name (feat-394).
 - A namespace's RQLite binds every interface; the firewall, not the bind
   address, is what keeps it off the internet. The namespace gateway in front of
   it now binds the overlay (chg-387).

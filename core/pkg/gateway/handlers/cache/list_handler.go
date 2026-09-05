@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	olriclib "github.com/olric-data/olric"
 )
 
@@ -30,11 +31,6 @@ import (
 //	  "dmap": "my-cache"
 //	}
 func (h *CacheHandlers) ScanHandler(w http.ResponseWriter, r *http.Request) {
-	if h.olricClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -49,6 +45,13 @@ func (h *CacheHandlers) ScanHandler(w http.ResponseWriter, r *http.Request) {
 
 	if strings.TrimSpace(req.DMap) == "" {
 		writeError(w, http.StatusBadRequest, "dmap is required")
+		return
+	}
+
+	// The availability check comes after the request has been read, so a
+	// malformed one is reported as malformed whether or not the cache is up.
+	if h.olricClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
 
@@ -83,9 +86,21 @@ func (h *CacheHandlers) ScanHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer iterator.Close()
 
+	// A scan asks "what is here", so the answer is what this credential may
+	// see. That is filtering rather than refusing, and the two are different on
+	// purpose: mget names its keys and a missing one reads as unset, where a
+	// scan's whole answer is the set it returns.
 	var keys []string
 	for iterator.Next() {
-		keys = append(keys, iterator.Key())
+		key := iterator.Key()
+		if gwauth.AuthorizeResource(r.Context(), gwauth.Resource{
+			Domain: gwauth.SelectorCache,
+			Name:   cacheResourceName(req.DMap, key),
+			Action: gwauth.ActionRead,
+		}) != nil {
+			continue
+		}
+		keys = append(keys, key)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

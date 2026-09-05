@@ -55,13 +55,24 @@ var selectorDomains = map[SelectorDomain]string{
 // is the honest version: a selector you can create is a selector that is
 // applied.
 //
-// The rest arrive as their data paths learn to name their resource: storage
-// needs a path on the ownership row, `db` needs the statement parsed for the
-// tables it touches, `push` and `cache` need their handlers to say what they
-// are touching.
+// `db` is not here and cannot be until the control-plane vocabulary is split.
+// It narrows `admin`, and `admin` is the whole control plane — so a grant
+// narrowed to `db:table=posts:read` would hold `admin` everywhere except the
+// database routes that narrow it, which is a wider grant wearing a narrower
+// name. The same is true of deployments. Both wait on the scope split that
+// feat-367's `developer` note describes.
+//
+// `push` is not here for a different reason: the push API has no topic. A send
+// names a user and optionally a channel, so `push:topic=` names a field that
+// does not exist, and what a push actually touches is somebody's device.
+//
+// `db` also needs the statement parsed for the tables it touches and in which
+// direction, which is a bigger job than the denylist in sqlguard.go.
 var enforcedDomains = map[SelectorDomain]bool{
-	SelectorPubsub: true,
-	SelectorFn:     true,
+	SelectorPubsub:  true,
+	SelectorFn:      true,
+	SelectorStorage: true,
+	SelectorCache:   true,
 }
 
 // SelectorEnforced reports whether a selector in this domain is applied by the
@@ -136,3 +147,46 @@ func SelectorDomains() []string {
 	sort.Strings(out)
 	return out
 }
+
+// NormalizeStoragePath is the name a storage selector matches against.
+//
+// The name comes from the client — a multipart filename, or the `name` field of
+// a JSON upload — and it is the only thing a `storage:avatars/*` selector has
+// to compare against. So it has to be one canonical string: `/avatars/me.png`,
+// `avatars//me.png` and `avatars/me.png` are the same object, and a selector
+// that matched one and not the others would be a boundary that depends on how
+// the caller typed the request.
+//
+// `..` is refused rather than resolved. Resolving it is how `avatars/../keys/x`
+// matches `avatars/*` while naming something else entirely; refusing it costs a
+// caller nothing, because a storage name is a label and not a filesystem path.
+func NormalizeStoragePath(name string) (string, error) {
+	cleaned := strings.TrimSpace(name)
+	if cleaned == "" {
+		return "", nil
+	}
+	if len(cleaned) > maxStoragePathLength {
+		return "", fmt.Errorf("a storage name is at most %d characters", maxStoragePathLength)
+	}
+
+	segments := strings.Split(cleaned, "/")
+	out := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		switch segment {
+		case "":
+			// A repeated separator. Two names that differ only by one are the
+			// same object.
+			continue
+		case ".":
+			continue
+		case "..":
+			return "", fmt.Errorf("a storage name cannot contain \"..\": it is a label, not a path, " +
+				"and resolving one would let a name match a prefix it is not under")
+		}
+		out = append(out, segment)
+	}
+	return strings.Join(out, "/"), nil
+}
+
+// maxStoragePathLength bounds the name column and the selector comparison.
+const maxStoragePathLength = 1024

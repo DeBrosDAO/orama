@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -56,6 +57,11 @@ func (h *Handlers) PinHandler(w http.ResponseWriter, r *http.Request) {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "namespace attempted to pin CID they don't own",
 			zap.String("cid", req.Cid), zap.String("namespace", namespace))
 		httputil.WriteError(w, http.StatusForbidden, "access denied: CID not owned by namespace")
+		return
+	}
+
+	// Pinning is what makes the platform keep an object, so it is a write.
+	if !h.authorizeCID(w, r, req.Cid, namespace, gwauth.ActionWrite) {
 		return
 	}
 

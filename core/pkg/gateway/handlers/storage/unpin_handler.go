@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -56,6 +57,10 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "namespace attempted to unpin CID they don't own",
 			zap.String("cid", path), zap.String("namespace", namespace))
 		httputil.WriteError(w, http.StatusForbidden, "access denied: CID not owned by namespace")
+		return
+	}
+
+	if !h.authorizeCID(w, r, path, namespace, gwauth.ActionWrite) {
 		return
 	}
 
