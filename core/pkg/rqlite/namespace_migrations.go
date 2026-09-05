@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
+	"sort"
 	"strings"
 
 	"go.uber.org/zap"
@@ -100,15 +101,78 @@ func ApplyEmbeddedMigrationsNamespace(ctx context.Context, db *sql.DB, fsys fs.F
 		}
 	}
 
-	// Free the generic table names the tenant app needs to own.
+	// Free the generic table names the tenant app needs to own, and remove the
+	// platform tables earlier releases created here.
 	if err := isolateNamespaceSchema(ctx, db, logger); err != nil {
 		return fmt.Errorf("isolate namespace schema: %w", err)
+	}
+	if err := dropClusterOnlyTables(ctx, db, logger); err != nil {
+		return fmt.Errorf("remove cluster-only tables: %w", err)
+	}
+	return nil
+}
+
+// dropClusterOnlyTables removes platform tables an earlier release created in a
+// namespace RQLite.
+//
+// Only an empty one is dropped. A table with rows in it is left where it is and
+// named in a warning: the rows are almost certainly the platform's — legacy API
+// keys from before key validation moved to the registry — but a tenant may have
+// created a table under the same name, and destroying a tenant's data to tidy
+// up the platform's is not a trade this gets to make. The rows are inert either
+// way, because nothing reads them here any more.
+func dropClusterOnlyTables(ctx context.Context, db *sql.DB, logger *zap.Logger) error {
+	for _, table := range ClusterOnlyTables() {
+		exists, err := tableExists(ctx, db, table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		n, err := tableRowCount(ctx, db, table)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			logger.Warn("namespace isolation: a cluster-only table here has rows; leaving it untouched",
+				zap.String("table", table), zap.Int("rows", n))
+			continue
+		}
+		if !safeIdent.MatchString(table) {
+			return fmt.Errorf("invalid table identifier %q", table)
+		}
+		if _, err := SafeExecContext(db, ctx, `DROP TABLE `+table); err != nil {
+			return fmt.Errorf("drop cluster-only table %s: %w", table, err)
+		}
+		logger.Info("namespace isolation: dropped a cluster-only table",
+			zap.String("table", table))
 	}
 	return nil
 }
 
 // namespaceStrippedTables are the core tables whose DDL/DML must NOT be applied
-// to a namespace RQLite (bugboard #150):
+// to a namespace RQLite.
+//
+// Two reasons, and they are different. Most of the list is
+// ClusterOnlyTables(): platform state that exists only in the cluster registry,
+// and that had no business being created in a tenant's database at all — see
+// schema_placement.go. The two below it are older (bugboard #150) and are about
+// names rather than placement: a tenant's own table would collide.
+//
+// It is derived rather than written out, because a list that has to agree with
+// the placements is a list that will stop agreeing with them.
+var namespaceStrippedTables = buildNamespaceStrippedTables()
+
+func buildNamespaceStrippedTables() []string {
+	out := append([]string{}, ClusterOnlyTables()...)
+	out = append(out, nameCollisionTables...)
+	sort.Strings(out)
+	return out
+}
+
+// nameCollisionTables are stripped because the tenant owns the name, not
+// because of where the data belongs (bugboard #150):
 //
 //   - schema_migrations: 13 migration files embed `INSERT OR IGNORE INTO
 //     schema_migrations(version) VALUES (N)` as redundant self-recording. In the
@@ -123,9 +187,17 @@ func ApplyEmbeddedMigrationsNamespace(ctx context.Context, db *sql.DB, fsys fs.F
 //
 // Any statement whose target is one of these tables (INSERT INTO / CREATE TABLE /
 // CREATE INDEX ... ON) is filtered out of a namespace migration before execution.
-var namespaceStrippedTables = []string{"schema_migrations", "subscriptions"}
+var nameCollisionTables = []string{"schema_migrations", "subscriptions"}
 
-var stmtTargetRe = regexp.MustCompile(`(?is)\b(?:into|table|on)\s+(?:if\s+not\s+exists\s+)?["'` + "`" + `]?([A-Za-z_][A-Za-z0-9_]*)`)
+// stmtTargetRe finds the tables a statement names.
+//
+// It covers every keyword a migration puts a table name after, not only the
+// three that create one. A migration that UPDATEs or DELETEs FROM a stripped
+// table fails "no such table" if it is not filtered too, and a table rebuild's
+// `ALTER TABLE x_new RENAME TO x` fails "there is already another table with
+// this name" — both of which is exactly what happened the first time the strip
+// list grew past its original two.
+var stmtTargetRe = regexp.MustCompile(`(?is)\b(?:into|table|on|update|from|join|rename\s+to)\s+(?:if\s+(?:not\s+)?exists\s+)?["'` + "`" + `]?([A-Za-z_][A-Za-z0-9_]*)`)
 
 // stmtTargetsStrippedTable reports whether a SQL statement's target table (the
 // object of INTO/TABLE/ON) is one of namespaceStrippedTables.

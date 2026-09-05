@@ -468,6 +468,11 @@ is exactly how they ended up in the wrong one.
 
 A namespace id is resolved there too, and resolving a name does not create it.
 
+The namespace's own RQLite no longer has those tables at all. Which database
+each of the platform's tables belongs in is recorded in one place, the list of
+what a namespace database is not given is derived from it, and a test fails when
+a migration creates a table nobody has placed.
+
 ---
 
 ## Between nodes

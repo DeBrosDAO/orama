@@ -253,6 +253,21 @@ func TestStmtTargetsStrippedTable(t *testing.T) {
 		`CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER)`,
 		`CREATE INDEX idx ON subscriptions(namespace_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_subscriptions_ns ON subscriptions(topic)`,
+		// Cluster-only tables, which have no business in a tenant's database
+		// at all. Every keyword a migration puts one after has to be covered:
+		// the first version of this matched only INTO/TABLE/ON, so a migration
+		// that UPDATEd a stripped table failed "no such table".
+		`CREATE TABLE IF NOT EXISTS refresh_tokens (id INTEGER)`,
+		`CREATE INDEX idx ON refresh_tokens(subject)`,
+		`CREATE TABLE nonces (wallet TEXT)`,
+		`UPDATE refresh_tokens SET revoked_at = datetime('now')`,
+		`DELETE FROM nonces WHERE expires_at < datetime('now')`,
+		`INSERT INTO grants(principal_id) SELECT id FROM principals`,
+		// A table rebuild renames its scratch table over the real one. The
+		// source is not stripped and the target is, and missing this failed
+		// with "there is already another table with this name" on any
+		// namespace database that still had the old table.
+		`ALTER TABLE api_keys_new RENAME TO api_keys`,
 	}
 	for _, s := range strip {
 		if !stmtTargetsStrippedTable(s) {
@@ -263,8 +278,8 @@ func TestStmtTargetsStrippedTable(t *testing.T) {
 		`CREATE TABLE IF NOT EXISTS functions (id INTEGER)`,
 		`CREATE TABLE IF NOT EXISTS user_subscriptions (id INTEGER)`, // not our table
 		`INSERT OR IGNORE INTO orama_schema_migrations(version) VALUES (2)`,
-		`CREATE INDEX idx ON refresh_tokens(subject)`,
-		`CREATE TABLE nonces (wallet TEXT)`,
+		`CREATE TABLE IF NOT EXISTS deployments (id INTEGER)`,
+		`CREATE INDEX idx ON push_devices(user_id)`,
 	}
 	for _, s := range keep {
 		if stmtTargetsStrippedTable(s) {
@@ -333,5 +348,66 @@ func TestIsCoreSubscriptionsShape(t *testing.T) {
 	// missing column must NOT match
 	if isCoreSubscriptionsShape([]string{"id", "namespace_id", "app_id", "topic", "endpoint"}) {
 		t.Error("subset must not match core")
+	}
+}
+
+// A namespace database migrated by an earlier release already holds the
+// platform's tables — the strip list only stops them being created again. They
+// have to be removed, or the tenant keeps a copy of `api_keys` and `grants` in
+// the database they can export whole.
+func TestNamespaceApply_removesClusterOnlyTablesAnEarlierReleaseCreated(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	// The shape an earlier release left behind.
+	for _, ddl := range []string{
+		`CREATE TABLE api_keys (id INTEGER PRIMARY KEY, key TEXT)`,
+		`CREATE TABLE grants (id INTEGER PRIMARY KEY, role TEXT)`,
+		`CREATE TABLE refresh_tokens (id INTEGER PRIMARY KEY, token TEXT)`,
+	} {
+		if _, err := db.ExecContext(ctx, ddl); err != nil {
+			t.Fatalf("seed %q: %v", ddl, err)
+		}
+	}
+
+	if err := ApplyEmbeddedMigrationsNamespace(ctx, db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	for _, table := range []string{"api_keys", "grants", "refresh_tokens"} {
+		if exists, _ := tableExists(ctx, db, table); exists {
+			t.Errorf("%q is still in the tenant's database", table)
+		}
+	}
+}
+
+// A table with rows in it is left where it is. The rows are almost certainly
+// the platform's — legacy keys from before validation moved to the registry —
+// but a tenant may have created a table under the same name, and destroying a
+// tenant's data to tidy up the platform's is not a trade to make silently.
+func TestNamespaceApply_leavesAClusterOnlyTableThatHasRows(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE api_keys (id INTEGER PRIMARY KEY, key TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO api_keys(id, key) VALUES (1, 'something')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyEmbeddedMigrationsNamespace(ctx, db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	exists, err := tableExists(ctx, db, "api_keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("a table with rows in it was dropped")
+	}
+	if n, _ := tableRowCount(ctx, db, "api_keys"); n != 1 {
+		t.Errorf("%d rows remain, want the one that was there", n)
 	}
 }
