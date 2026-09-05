@@ -59,13 +59,6 @@ func persistentFriendlyProcExit(ctx context.Context, mod api.Module, exitCode ui
 	panic(sys.NewExitError(exitCode))
 }
 
-// contextAwareHostServices is an internal interface for services that need to know about
-// the current invocation context.
-type contextAwareHostServices interface {
-	SetInvocationContext(invCtx *InvocationContext)
-	ClearContext()
-}
-
 // Ensure Engine implements FunctionExecutor interface.
 var _ FunctionExecutor = (*Engine)(nil)
 
@@ -349,11 +342,9 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	// nil singleton ("no namespace in invocation context" error — the
 	// observable empty-envelope symptom AnChat reported).
 	//
-	// The singleton SetInvocationContext/ClearContext block below
-	// stays as defense-in-depth — host fns prefer ctx via
-	// currentInvocationContext (hostfunctions/invocation_context.go),
-	// so this is the live source; the singleton path serves any future
-	// caller that hasn't been migrated yet.
+	// This is the only source. There used to be a field on the shared
+	// HostFunctions as well, set before each execution and cleared after;
+	// the two invocations above are exactly what overwrote it.
 	execCtx = WithInvocationContext(execCtx, invCtx)
 
 	// Fresh per-invocation pubsub publish counter so the pubsub host
@@ -380,12 +371,6 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	}
 	moduleLoadedAt = time.Now()
 
-	// Execute the module with context setters
-	var contextSetter, contextClearer func()
-	if hf, ok := e.hostServices.(contextAwareHostServices); ok {
-		contextSetter = func() { hf.SetInvocationContext(invCtx) }
-		contextClearer = func() { hf.ClearContext() }
-	}
 	// Attach a collector so ExecuteModule reports how long instantiate (TinyGo
 	// _start cold-start) took, letting the slow-invoke diagnostic split the
 	// execute phase into cold-start vs handler work (bugboard #27).
@@ -399,7 +384,7 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 		output, err = e.invokeReactor(execCtx, fn.WASMCID, fn.Name, input, instTiming)
 	} else {
 		execCtx = execution.WithNamespace(execCtx, fn.Namespace)
-		output, err = e.executor.ExecuteModule(execCtx, module, fn.Name, input, contextSetter, contextClearer)
+		output, err = e.executor.ExecuteModule(execCtx, module, fn.Name, input)
 	}
 	executeDoneAt = time.Now()
 	if err != nil {
@@ -892,16 +877,12 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 		record.ErrorMessage = err.Error()
 	}
 
-	// Collect logs: prefer the per-invocation LogBuffer (bugboard #108),
-	// fall back to the legacy singleton for callers that haven't been
-	// migrated yet. The singleton path was the source of the
-	// cross-contamination bug; once every Execute path passes a real
-	// buffer here, the GetLogs() singleton read is dead code that
-	// can be removed in a future cleanup.
+	// The invocation's own log buffer, and nothing else. There used to be a
+	// fallback to a slice shared by every invocation on the gateway, which is
+	// how one invocation's log lines ended up in another's record (bugboard
+	// #108). Every Execute path attaches a buffer.
 	if logBuf != nil {
 		record.Logs = logBuf.Snapshot()
-	} else if hf, ok := e.hostServices.(interface{ GetLogs() []LogEntry }); ok {
-		record.Logs = hf.GetLogs()
 	}
 
 	// Enqueue is non-blocking: a full queue drops the record (counted) rather

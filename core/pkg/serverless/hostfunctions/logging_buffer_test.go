@@ -10,12 +10,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// TestLogInfo_writesToCtxBuffer is the regression guard for bugboard
-// #108. When the caller attaches a per-invocation LogBuffer to ctx,
-// LogInfo MUST write to that buffer (not to the singleton h.logs).
+// The regression guard for bugboard #108. A log line belongs to the invocation
+// that wrote it, so it goes to that invocation's own buffer.
 //
-// Pre-fix, LogInfo always wrote to h.logs, causing cross-contamination
-// between concurrent invocations.
+// It used to go to a slice on the shared HostFunctions, which is how
+// push-fanout's invocation record came to contain rpc-router's log lines.
 func TestLogInfo_writesToCtxBuffer(t *testing.T) {
 	h := &HostFunctions{logger: zap.NewNop()}
 	buf := serverless.NewLogBuffer()
@@ -35,26 +34,28 @@ func TestLogInfo_writesToCtxBuffer(t *testing.T) {
 		t.Errorf("error entry wrong: %+v", snap[1])
 	}
 
-	// The singleton must NOT have been touched.
-	if len(h.logs) != 0 {
-		t.Errorf("singleton h.logs got %d entries; want 0 (ctx buffer should have absorbed them)",
-			len(h.logs))
-	}
 }
 
-// TestLogInfo_fallsBackToSingletonWhenNoBuffer preserves the legacy
-// behavior for callers (tests, mostly) that haven't migrated to the
-// ctx-attached buffer path yet. Without this fallback, every test that
-// constructed a HostFunctions directly and called LogInfo without
-// wrapping ctx would silently lose log entries.
-func TestLogInfo_fallsBackToSingletonWhenNoBuffer(t *testing.T) {
+// A log call outside any invocation goes to the gateway's own log and to no
+// invocation record, because there is no invocation for it to belong to.
+//
+// There used to be a fallback to a slice shared by every invocation on the
+// gateway. It existed for callers that had not migrated, and it was the thing
+// bugboard #108 was about.
+func TestLogInfo_outsideAnInvocationBelongsToNoRecord(t *testing.T) {
 	h := &HostFunctions{logger: zap.NewNop()}
-	// No buffer attached to ctx.
-	h.LogInfo(context.Background(), "legacy call")
-	h.LogError(context.Background(), "legacy error")
 
-	if len(h.logs) != 2 {
-		t.Errorf("singleton h.logs got %d entries; want 2 (legacy fallback)", len(h.logs))
+	// No buffer on ctx: nothing to write into, and nothing shared to leak into
+	// the next invocation that does have one.
+	h.LogInfo(context.Background(), "outside any invocation")
+	h.LogError(context.Background(), "also outside")
+
+	buf := serverless.NewLogBuffer()
+	h.LogInfo(serverless.WithLogBuffer(context.Background(), buf), "inside one")
+
+	snap := buf.Snapshot()
+	if len(snap) != 1 || snap[0].Message != "inside one" {
+		t.Errorf("an invocation's record picked up lines written outside it: %+v", snap)
 	}
 }
 
@@ -68,9 +69,8 @@ func TestLogInfo_fallsBackToSingletonWhenNoBuffer(t *testing.T) {
 // HostFunctions.LogInfo. After all goroutines complete, each buffer
 // must contain ONLY its own entries — zero cross-talk.
 //
-// Run with -race for stronger signal. Pre-fix (singleton h.logs), every
-// goroutine wrote into the shared slice and a different goroutine's
-// GetLogs() snapshot would scoop them up.
+// Run with -race for stronger signal. Before the fix every goroutine wrote into
+// one shared slice, and a different goroutine's snapshot scooped them up.
 func TestLogInfo_concurrentInvocations_noCrossContamination(t *testing.T) {
 	h := &HostFunctions{logger: zap.NewNop()}
 
@@ -116,11 +116,6 @@ func TestLogInfo_concurrentInvocations_noCrossContamination(t *testing.T) {
 			atomic.LoadInt64(&failures), goroutines)
 	}
 
-	// Singleton must NOT have grown — every write went to a ctx buffer.
-	if len(h.logs) != 0 {
-		t.Errorf("singleton h.logs got %d entries; want 0 (all should have gone to ctx buffers)",
-			len(h.logs))
-	}
 }
 
 func workloadMarker(g int) string {

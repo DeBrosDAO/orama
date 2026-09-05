@@ -24,36 +24,6 @@ const asyncInvokeMaxInFlight = 256
 // invocation eventually frees its in-flight slot.
 const asyncInvokeTimeout = 30 * time.Second
 
-// SetInvocationContext sets the current invocation context on the
-// singleton field. STATELESS execution path uses this (paired with
-// ClearContext) for per-call binding via the executor's setter/clearer
-// hook. PERSISTENT WS uses ctx-propagation instead — see
-// invocation_context.go for the cross-tenant race rationale.
-func (h *HostFunctions) SetInvocationContext(invCtx *serverless.InvocationContext) {
-	h.invCtxLock.Lock()
-	defer h.invCtxLock.Unlock()
-	h.invCtx = invCtx
-	h.logs = make([]serverless.LogEntry, 0) // Reset logs for new invocation
-}
-
-// GetLogs returns the captured logs for the current invocation.
-func (h *HostFunctions) GetLogs() []serverless.LogEntry {
-	h.logsLock.Lock()
-	defer h.logsLock.Unlock()
-	logsCopy := make([]serverless.LogEntry, len(h.logs))
-	copy(logsCopy, h.logs)
-	return logsCopy
-}
-
-// ClearContext clears the singleton invocation context after stateless
-// execution. No-op effect for persistent WS (which never uses the
-// singleton field).
-func (h *HostFunctions) ClearContext() {
-	h.invCtxLock.Lock()
-	defer h.invCtxLock.Unlock()
-	h.invCtx = nil
-}
-
 // SetInvoker wires the function invoker used by FunctionInvoke. Must be
 // called once after both HostFunctions and Invoker exist (Invoker depends
 // on HostServices, so the cycle is broken via this setter rather than a

@@ -524,7 +524,10 @@ from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.
 
 - A **function** has no identity of its own yet. Host calls still run on the
   gateway's handles, so what a function does is not attributable to the function
-  (the remaining half of feat-372). Deployed apps do have one — see below.
+  (the remaining half of feat-372). Deployed apps do have one — see below. The
+  object those host calls hang off now holds no per-invocation state, which is
+  what makes giving them one a matter of passing an identity rather than of
+  finding somewhere to put it.
 - Resource selectors are enforced on pubsub, function invocation, storage and
   the cache. `db` and deployments both narrow `admin`, which is the whole
   control plane, so they cannot be narrowed until that vocabulary is split; a
