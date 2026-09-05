@@ -76,8 +76,11 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 **Namespace creation**
 - Creating a namespace is `POST /v1/namespaces` (`orama namespace create`), authenticated by a wallet JWT. It writes the namespace and its single owner grant together, applies a per-wallet quota of 10, and is the only thing that starts provisioning
 - It used to be a side effect of asking for a login challenge: `/v1/auth/challenge` ran `INSERT OR IGNORE INTO namespaces`, unauthenticated, for whatever name the body carried. Squatting a name was free, a typo made a namespace, and verifying the signature afterwards spun up a real cluster — so an anonymous caller could create infrastructure
-- A challenge for a namespace that does not exist is a 404 with the code `NAMESPACE_UNKNOWN`. A challenge with no namespace uses the gateway's default, which is how a wallet signs in before it owns anything
-- A key-authenticated caller cannot create a namespace: a namespace's owner is a wallet, and one with no wallet owner is claimable by whoever signs in to it next
+- A challenge for a namespace that does not exist is a 404 with the code `NAMESPACE_UNKNOWN`. A challenge with no namespace uses `default`, the **lobby**: signing in there needs no grant, writes none, and hands back a session and no key. The one thing that session reaches is `POST /v1/namespaces`
+- Signing in no longer claims. It used to: the first wallet to reach a namespace with no owner became its owner, which is how `default` — created by migration 001 with no owner — ended up belonging to whichever wallet signed in first on each cluster, and every wallet after it got a 403 on the namespace that is supposed to be where you stand before you own anything. Creating a namespace is now the only thing that writes an owner grant
+- A namespace that has no owner is one nobody may sign in to (`NAMESPACE_UNOWNED`), rather than one the next caller takes
+- A key-authenticated caller cannot create a namespace: `/v1/namespaces` requires a wallet token, and the handler reads the owner from it
+- The key a login mints carries the caller's own role. It used to carry admin whatever the role was, so a `reader` or `runtime` member was handed the full control plane by the act of signing in; a role that resolves to no grants mints no key at all
 - The name is validated as what it becomes — a DNS label, a systemd instance name and a directory — and platform names are reserved
 
 **What a wallet signs (`/v1/auth/challenge`)**

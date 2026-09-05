@@ -16,7 +16,8 @@ import (
 //
 // POST /v1/auth/verify
 // Request body: VerifyRequest
-// Response 200: { "access_token", "token_type", "expires_in", "refresh_token", "subject", "namespace", "api_key", "nonce", "signature_verified" }
+// Response 200: { "access_token", "token_type", "expires_in", "refresh_token", "subject", "namespace", "nonce", "signature_verified" }
+// plus "api_key", except in the lobby namespace, which has none.
 // Response 202: { "status": "provisioning", "cluster_id", "poll_url", "access_token", "refresh_token", "api_key", ... }
 func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	if h.authService == nil {
@@ -68,10 +69,16 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, wallet, namespace)
-	if err != nil {
-		writeCredentialError(w, namespace, err)
-		return
+	// The lobby has no keys. A wallet signing in there gets a session and
+	// nothing else; the one thing that session reaches is POST /v1/namespaces,
+	// which creates a namespace and makes the caller its owner.
+	apiKey := ""
+	if !authsvc.IsLobbyNamespace(namespace) {
+		apiKey, err = h.authService.GetOrCreateAPIKey(ctx, wallet, namespace)
+		if err != nil {
+			writeCredentialError(w, namespace, err)
+			return
+		}
 	}
 
 	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
@@ -81,15 +88,18 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		Result:    authsvc.AuditSuccess,
 	})
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"access_token":       token,
 		"token_type":         "Bearer",
 		"expires_in":         int(expUnix - time.Now().Unix()),
 		"refresh_token":      refresh,
 		"subject":            wallet,
 		"namespace":          namespace,
-		"api_key":            apiKey,
 		"nonce":              in.Message.Nonce,
 		"signature_verified": true,
-	})
+	}
+	if apiKey != "" {
+		body["api_key"] = apiKey
+	}
+	writeJSON(w, http.StatusOK, body)
 }

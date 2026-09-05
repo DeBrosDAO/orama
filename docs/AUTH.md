@@ -58,6 +58,23 @@ came alongside, which then went in front of every gateway the CLI was pointed at
 for the next ninety days. The key is now presented once, to exchange it, and
 only when there is no session to renew.
 
+### The lobby
+
+A challenge with no namespace signs you in to `default`. That is the **lobby**:
+it belongs to nobody, needs no grant, and writes none. What you get there is a
+session and no key, and the one thing that session reaches is
+`POST /v1/namespaces` — which creates a namespace and makes you its owner.
+
+Signing in used to claim: the first wallet to reach a namespace with no owner
+became its owner. `default` is created by migration 001 with no owner, so on
+each cluster it belonged to whichever wallet signed in first, and everyone after
+that got a 403 on the namespace that is supposed to be where you stand before
+you own anything. Creating a namespace is now the only thing that writes an
+owner grant.
+
+A namespace with no owner is one nobody may sign in to (`NAMESPACE_UNOWNED`),
+not one the next caller takes.
+
 ### Signing in from a machine with no wallet on it
 
 The handshake above needs a wallet on the same machine. On a server reached over
@@ -285,6 +302,8 @@ the wrong message" are different problems:
 | `AUTH_CHALLENGE_INVALID` | the nonce is unknown, already used, or expired |
 | `NAMESPACE_UNKNOWN` | no such namespace — `orama namespace create` makes one |
 | `NAMESPACE_NOT_OWNED` | the namespace belongs to another wallet |
+| `NAMESPACE_UNOWNED` | the namespace has no owner, so nobody may sign in to it |
+| `NAMESPACE_HAS_NO_KEYS` | the lobby namespace has no keys; create a namespace first |
 | `TOO_MANY_CHALLENGES` | too many challenges asked for; slow down |
 
 The TypeScript SDK mirrors these as a typed error hierarchy; see

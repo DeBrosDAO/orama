@@ -229,22 +229,39 @@ func TestListMembers_againstTheRealSchema(t *testing.T) {
 	}
 }
 
-// The single-owner invariant is the database's, not the code's: two callers
-// racing both read no owner, and one of the inserts has to fail.
-func TestClaimNamespaceOwnership_againstTheRealSchema(t *testing.T) {
+// giveOwner records an owner grant the way namespace creation does. Signing in
+// no longer writes one — that is the whole of bug-393 — so a test that needs an
+// owned namespace has to say so.
+func giveOwner(t *testing.T, s *Service, db client.DatabaseClient, nsID interface{}, wallet string) {
+	t.Helper()
+	ctx := context.Background()
+	owner := NormalizeWallet(wallet)
+	principalID, err := s.ensurePrincipal(ctx, db, PrincipalWallet, owner, "", "test")
+	if err != nil {
+		t.Fatalf("record the principal: %v", err)
+	}
+	if _, err := db.Query(client.WithInternalAuth(ctx),
+		"INSERT INTO grants(principal_id, namespace_id, role, created_by) VALUES (?, ?, 'owner', 'test')",
+		principalID, nsID); err != nil {
+		t.Fatalf("record the owner grant: %v", err)
+	}
+}
+
+// The single-owner invariant is the database's, not the code's: a second owner
+// grant has to fail against the partial unique index migration 050 carries.
+func TestOwnerGrant_isSingleAgainstTheRealSchema(t *testing.T) {
 	s, db, nsID := realRegistry(t)
 	ctx := context.Background()
 
-	if err := s.ClaimNamespaceOwnership(ctx, db, nsID, "anchat", "0xCreator"); err != nil {
-		t.Fatalf("the first wallet was refused: %v", err)
-	}
-	if err := s.ClaimNamespaceOwnership(ctx, db, nsID, "anchat", "0xcreator"); err != nil {
+	giveOwner(t, s, db, nsID, "0xCreator")
+
+	if err := s.RequireNamespaceMember(ctx, "0xcreator", "anchat"); err != nil {
 		t.Errorf("the owner was refused on their own namespace: %v", err)
 	}
 
 	var owned *ErrNamespaceOwnedByAnother
-	if err := s.ClaimNamespaceOwnership(ctx, db, nsID, "anchat", "0xsquatter"); !errors.As(err, &owned) {
-		t.Fatalf("a second wallet claimed the namespace: %v", err)
+	if err := s.RequireNamespaceMember(ctx, "0xsquatter", "anchat"); !errors.As(err, &owned) {
+		t.Fatalf("a second wallet was let in: %v", err)
 	}
 
 	owner, err := s.OwnerOf(ctx, "anchat")
@@ -256,13 +273,126 @@ func TestClaimNamespaceOwnership_againstTheRealSchema(t *testing.T) {
 	}
 }
 
+// Signing in used to claim an unowned namespace, which is how `default` ended
+// up belonging to whichever wallet reached it first on each cluster.
+func TestRequireNamespaceMember_doesNotClaimAnUnownedNamespace(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	ctx := context.Background()
+
+	err := s.RequireNamespaceMember(ctx, "0xpasserby", "anchat")
+	if !errors.Is(err, ErrNamespaceUnowned) {
+		t.Fatalf("an unowned namespace answered %v, want ErrNamespaceUnowned", err)
+	}
+
+	if owner, err := s.ownerOf(ctx, db, nsID); err != nil || owner != "" {
+		t.Errorf("signing in wrote an owner: %q, %v", owner, err)
+	}
+}
+
+// The lobby needs no grant and is given none: it is where a wallet stands
+// before it owns anything, and the one thing it reaches is creating a
+// namespace.
+func TestRequireNamespaceMember_theLobbyNeedsNoGrant(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	ctx := context.Background()
+	// Migration 001 creates it, with no owner.
+	var lobbyID int64
+	if err := db.db.QueryRow(`SELECT id FROM namespaces WHERE name = ?`, LobbyNamespace).Scan(&lobbyID); err != nil {
+		t.Fatalf("the lobby namespace is not in the schema: %v", err)
+	}
+
+	for _, wallet := range []string{"0xfirst", "0xsecond", "0xthird"} {
+		if err := s.RequireNamespaceMember(ctx, wallet, LobbyNamespace); err != nil {
+			t.Fatalf("%s was refused the lobby: %v", wallet, err)
+		}
+	}
+
+	var grants int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM grants WHERE namespace_id = ?`, lobbyID).Scan(&grants); err != nil {
+		t.Fatal(err)
+	}
+	if grants != 0 {
+		t.Errorf("%d grants were written in the lobby; signing in there gives a session and nothing else", grants)
+	}
+
+	// And there is nothing to mint there. Which refusal it is matters: falling
+	// through to "you hold no grant here" would be true of the lobby by
+	// accident rather than by decision, and would start minting keys the
+	// moment anything wrote a grant there.
+	_, err := s.GetOrCreateAPIKey(ctx, "0xfirst", LobbyNamespace)
+	if !errors.Is(err, ErrNoKeysInLobby) {
+		t.Errorf("minting in the lobby answered %v, want ErrNoKeysInLobby", err)
+	}
+}
+
+// A key minted by a login used to carry admin whatever the caller's role was,
+// so a reader or a runtime member was handed the full control plane by the act
+// of signing in.
+func TestGetOrCreateAPIKey_carriesTheCallersOwnRole(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	ctx := context.Background()
+	giveOwner(t, s, db, nsID, "0xowner")
+
+	if err := s.Grant(ctx, GrantRequest{
+		Namespace: "anchat", PrincipalType: PrincipalWallet, Identifier: "0xapp",
+		Role: RoleRuntime, CreatedBy: "0xowner",
+	}); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	if err := s.Grant(ctx, GrantRequest{
+		Namespace: "anchat", PrincipalType: PrincipalWallet, Identifier: "0xguest",
+		Role: RoleReader, CreatedBy: "0xowner",
+	}); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+
+	if _, err := s.GetOrCreateAPIKey(ctx, "0xowner", "anchat"); err != nil {
+		t.Fatalf("the owner could not mint a key: %v", err)
+	}
+	if _, err := s.GetOrCreateAPIKey(ctx, "0xapp", "anchat"); err != nil {
+		t.Fatalf("a runtime member could not mint a key: %v", err)
+	}
+
+	scopes := map[string]string{}
+	rows, err := db.db.Query(`SELECT scopes FROM api_keys ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var scope string
+		if err := rows.Scan(&scope); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, scope)
+	}
+	if len(got) != 2 {
+		t.Fatalf("%d keys, want 2: %v", len(got), got)
+	}
+	scopes["owner"], scopes["runtime"] = got[0], got[1]
+
+	if !ParseScopes(scopes["owner"]).IsAdmin() {
+		t.Errorf("the owner's key holds %q, want admin", scopes["owner"])
+	}
+	if ParseScopes(scopes["runtime"]).IsAdmin() {
+		t.Errorf("a runtime member's key holds admin (%q); signing in handed them the control plane", scopes["runtime"])
+	}
+	if scopes["runtime"] == "" {
+		t.Error("a runtime member's key holds nothing, so it denies everywhere")
+	}
+
+	// A reader holds nothing, so there is nothing to mint.
+	if _, err := s.GetOrCreateAPIKey(ctx, "0xguest", "anchat"); err == nil {
+		t.Error("a reader was handed a key")
+	}
+}
+
 func TestTransferOwnership_againstTheRealSchema(t *testing.T) {
 	s, db, nsID := realRegistry(t)
 	ctx := context.Background()
 
-	if err := s.ClaimNamespaceOwnership(ctx, db, nsID, "anchat", "0xcreator"); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	giveOwner(t, s, db, nsID, "0xcreator")
 	if err := s.TransferOwnership(ctx, "anchat", "0xcreator", "0xnext"); err != nil {
 		t.Fatalf("transfer: %v", err)
 	}

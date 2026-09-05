@@ -136,7 +136,7 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/deployments/nodejs/upload", "/v1/deployments/nodejs/update",
 		"/v1/deployments/domains/add", "/v1/deployments/domains/verify",
 		"/v1/deployments/domains/list", "/v1/deployments/domains/remove",
-		"/v1/namespace/delete", "/v1/namespace/list", "/v1/namespaces",
+		"/v1/namespace/delete", "/v1/namespace/list",
 		"/v1/namespace/rate-limit",
 		"/v1/namespace/webrtc/enable", "/v1/namespace/webrtc/disable",
 		"/v1/namespace/webrtc/stealth/enable", "/v1/namespace/webrtc/stealth/disable",
@@ -167,6 +167,15 @@ func buildRoutePolicies() *routepolicy.Table {
 		// operations and is declared below.
 		"/v1/functions",
 	)
+
+	// Creating a namespace is the one control-plane act that cannot require an
+	// existing grant: a wallet with no namespace has no grant anywhere, and
+	// requiring one would mean nobody could ever start. What it does require is
+	// a signed-in wallet — the handler reads the owner from the token and
+	// writes the owner grant — so a key cannot create a namespace and a leaked
+	// one cannot fill the registry with them. The per-wallet cap is in the
+	// handler.
+	t.Add(routepolicy.Policy{Token: routepolicy.WalletToken}, "/v1/namespaces")
 
 	// Scoped API-key management operates on the MAIN cluster registry, where
 	// keys are validated. A namespace gateway's own RQLite has no authoritative

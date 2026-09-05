@@ -350,8 +350,12 @@ export class AuthClient {
   }
 
   /**
-   * Get an API key for the wallet that signed the message (creates namespace
-   * ownership). Takes the same signed message as {@link verify}.
+   * Get an API key for a namespace the wallet is already a member of. Takes
+   * the same signed message as {@link verify}.
+   *
+   * It does not create ownership — it used to, which is how naming a namespace
+   * you did not own made you its owner. Ownership comes from creating the
+   * namespace, and the lobby namespace has no keys at all.
    */
   async getApiKey(params: {
     message: string;

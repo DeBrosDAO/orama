@@ -814,8 +814,27 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 		return "", err
 	}
 
-	if err := s.ClaimNamespaceOwnership(ctx, db, nsID, namespace, wallet); err != nil {
+	// The lobby has no keys. A wallet there holds no role and owns nothing;
+	// what it gets from signing in is a session, and the one thing that session
+	// reaches is POST /v1/namespaces. Minting a key here would hand every
+	// wallet on the internet a credential in the index gateway's own namespace.
+	if IsLobbyNamespace(namespace) {
+		return "", fmt.Errorf("%w: %q is where a wallet stands before it owns anything; "+
+			"create a namespace with 'orama namespace create <name>'", ErrNoKeysInLobby, LobbyNamespace)
+	}
+
+	// Membership first, and the role it carries decides what the key holds.
+	// The key used to be minted with admin whatever the caller's role was, so
+	// a reader or a runtime member signing in was handed the full control
+	// plane by the login itself.
+	grant, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, NormalizeWallet(wallet))
+	if err != nil {
 		return "", err
+	}
+	ownerScopes := grant.Scopes().Canonical()
+	if ownerScopes == "" {
+		return "", fmt.Errorf("this wallet's role in %q is %s, which holds nothing, so there is no key to mint",
+			namespace, grant.Role)
 	}
 
 	// The wallet's previous key, if it has one. Its id, not its value: what is
@@ -831,11 +850,8 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 
 	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured.
 	//
-	// The scope set is written, never left NULL. This is the owner's own key, so
-	// the grant is admin — the same access an empty column used to be read as,
-	// with the difference that it is now a decision on the row rather than an
-	// inference in the reader, and a key minted with no scopes denies.
-	ownerScopes := ScopeSet{ScopeAdmin: {}}.Canonical()
+	// The scope set is written, never left NULL: a key minted with no scopes
+	// denies, where an empty column used to be read as admin.
 	apiKey, err := NewKey(KeyTypeFor(ownerScopes))
 	if err != nil {
 		return "", err

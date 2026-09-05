@@ -82,23 +82,25 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 
 	fmt.Printf("✅ Wallet: %s\n", wallet)
 
-	// 2. Prompt for namespace if not provided
+	// 2. Prompt for namespace if not provided.
+	//
+	// Blank is a real answer: a wallet that owns nothing yet signs in to the
+	// lobby, which is where you stand before you own anything, and creates a
+	// namespace from there. It used to loop until you typed one, and typing a
+	// name you did not own made you its owner.
 	if namespace == "" {
-		for {
-			fmt.Print("Enter namespace (required): ")
-			nsInput, err := reader.ReadString('\n')
-			if err != nil {
-				return nil, fmt.Errorf("failed to read namespace: %w", err)
-			}
-
-			namespace = strings.TrimSpace(nsInput)
-			if namespace != "" {
-				break
-			}
-			fmt.Println("⚠️  Namespace cannot be empty. Please enter a namespace.")
+		fmt.Printf("Enter namespace (blank to sign in without one, then 'orama namespace create <name>'): ")
+		nsInput, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("failed to read namespace: %w", err)
 		}
+		namespace = strings.TrimSpace(nsInput)
 	}
-	fmt.Printf("✅ Namespace: %s\n", namespace)
+	if namespace == "" {
+		fmt.Println("✅ Signing in without a namespace")
+	} else {
+		fmt.Printf("✅ Namespace: %s\n", namespace)
+	}
 
 	// 3. Request challenge nonce from gateway
 	fmt.Println("⏳ Requesting authentication challenge...")
@@ -234,10 +236,6 @@ func verifySignature(client *http.Client, gatewayURL, message, signature, namesp
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	if result.APIKey == "" {
-		return nil, fmt.Errorf("no api_key in verify response")
 	}
 
 	creds := &Credentials{
