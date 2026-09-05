@@ -586,7 +586,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	}
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)
-	gw.mwCache = newMiddlewareCache(60 * time.Second)
+	gw.mwCache = newMiddlewareCache(CredentialStaleness)
 
 	// Initialize request log batcher (flush every 5 seconds)
 	gw.logBatcher = newRequestLogBatcher(gw, 5*time.Second, 100)

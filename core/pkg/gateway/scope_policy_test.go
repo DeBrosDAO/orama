@@ -378,3 +378,43 @@ func TestRoutePermission_operatorEndpointsNeedOperator(t *testing.T) {
 		}
 	}
 }
+
+// What a credential may do is read from the grant, per request. A token that
+// carries its own answer is a token whose answer cannot be changed until it
+// expires — which is the asymmetry this replaced: narrowing a grant took effect
+// at once for a wallet and only at the next token for a key.
+func TestCallerPermissions_readsTheGrantAndNotTheToken(t *testing.T) {
+	g := &Gateway{}
+
+	// A token minted when the key held admin, presented after the key was
+	// narrowed to storage. The row is what counts.
+	stale := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "admin"}})
+	stale = stale.WithContext(context.WithValue(stale.Context(), ctxKeyScopes, auth.ScopeSet{auth.ScopeStorage: {}}))
+
+	perms := g.callerPermissions(stale)
+	if perms.IsAdmin() {
+		t.Fatal("a token minted before the key was narrowed still holds what it was minted with")
+	}
+	if !perms.PermitsDomain(auth.DomainStorage, auth.ActionWrite) {
+		t.Error("it does not hold what the key holds now")
+	}
+
+	// And a grant resolved on the request wins over both.
+	narrowed := markGrant(stale, &auth.Grant{Role: auth.RoleReader})
+	if p := g.callerPermissions(narrowed); len(p) != 0 {
+		t.Errorf("a reader grant was overridden by the token or the key: %v", p.List())
+	}
+}
+
+// The one number that says how long narrowing a key takes to bite. It is a
+// promise, not a tuning knob, so it is named and it is the cache's TTL.
+func TestCredentialStaleness_isTheCachesTTL(t *testing.T) {
+	cache := newMiddlewareCache(CredentialStaleness)
+	if cache.ttl != CredentialStaleness {
+		t.Errorf("the cache holds a credential for %v, and the documented staleness is %v",
+			cache.ttl, CredentialStaleness)
+	}
+	if CredentialStaleness <= 0 {
+		t.Error("a credential is cached for ever")
+	}
+}

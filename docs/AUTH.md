@@ -304,6 +304,25 @@ every request that run makes.
 
 ---
 
+## How long a change takes to land
+
+| Change | When it takes effect |
+|--------|----------------------|
+| Revoking a key | at once, everywhere — the revocation list is replicated and consulted before any cache |
+| Revoking a token | at once, by its `jti` |
+| Narrowing a **wallet's** grant | on the next request; the grant is resolved per request |
+| Narrowing a **key** — editing its scopes, or revoking a grant it holds | within one minute, on every gateway that had seen it |
+
+That minute is `CredentialStaleness`, and it is a promise rather than a tuning
+knob: it is the middleware cache's TTL, and it is named so an operator who
+narrows a key knows when it lands.
+
+What a credential may do is read from the grant on every request, not from the
+token it is carrying. A token that carried its own answer was a token whose
+answer could not be changed until it expired.
+
+---
+
 ## Revoking
 
 Revoking a key stops the key **and** the tokens exchanged from it. A JWT
