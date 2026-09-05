@@ -22,6 +22,9 @@ is the index.
     - [`orama app env set`](#orama-app-env-set) — Set environment variables and restart the app
     - [`orama app env unset`](#orama-app-env-unset) — Remove environment variables and restart the app
   - [`orama app get`](#orama-app-get) — Get deployment details
+  - [`orama app grants`](#orama-app-grants) — Say what a deployed app may do, as itself
+    - [`orama app grants list`](#orama-app-grants-list) — Show what deployments in this namespace may do
+    - [`orama app grants set`](#orama-app-grants-set) — Grant a deployment a role
   - [`orama app list`](#orama-app-list) — List all deployments
   - [`orama app logs`](#orama-app-logs) — Stream deployment logs
   - [`orama app rollback`](#orama-app-rollback) — Rollback a deployment to a previous version
@@ -172,7 +175,7 @@ Aliases: `apps`
 
 List, get, delete, rollback, and view logs/stats for your deployed applications.
 
-Subcommands: `delete`, `env`, `get`, `list`, `logs`, `rollback`, `stats`
+Subcommands: `delete`, `env`, `get`, `grants`, `list`, `logs`, `rollback`, `stats`
 
 ### orama app delete
 
@@ -240,6 +243,54 @@ Get deployment details
 ```
 orama app get <name>
 ```
+
+### orama app grants
+
+Say what a deployed app may do, as itself
+
+```
+orama app grants
+```
+
+Read and change what a deployment is allowed to reach.
+
+Your app is handed a short-lived token of its own at start, in the file named by
+$ORAMA_TOKEN_FILE, and renews it with the gateway before it expires. It reaches
+nothing until you grant it something — which is the point: an app that ships
+with no credential cannot leak one.
+
+A deployment cannot be granted the control plane. If something needs to deploy
+or mint keys, that is a person or a CI key, not an app.
+
+Subcommands: `list`, `set`
+
+### orama app grants list
+
+Show what deployments in this namespace may do
+
+```
+orama app grants list [app]
+```
+
+### orama app grants set
+
+Grant a deployment a role
+
+```
+orama app grants set <app> <role> [flags]
+```
+
+Give a deployment a role in its own namespace.
+
+  runtime  the data plane: invoke, storage, push, webrtc, proxy, pubsub, cache
+  reader   nothing beyond the routes that ask for no grant
+
+The change reaches a running app on its next token renewal, or immediately if
+you redeploy.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--resource` | — | Narrow the role to a resource, e.g. pubsub:topic=orders.* |
 
 ### orama app list
 

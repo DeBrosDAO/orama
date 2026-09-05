@@ -51,6 +51,17 @@ CacheDirectory=orama-deploy-%i
 
 EnvironmentFile=/opt/orama/.orama/data/deployment-env/orama-deploy-%i.env
 
+# The deployment's own credential.
+#
+# systemd reads this as PID 1, before it drops to the deployment's user, and
+# exposes it at $CREDENTIALS_DIRECTORY owned by that user and mode 0400. That
+# is what lets an unprivileged gateway hand a token to a process running as
+# somebody else: the gateway writes a file only it can read, and systemd stages
+# it. The app reads $ORAMA_TOKEN_FILE and renews the token with itself before it
+# expires; nothing long-lived is left on the node.
+LoadCredential=orama_token:/opt/orama/.orama/data/deployment-env/orama-deploy-%i.token
+Environment=ORAMA_TOKEN_FILE=%d/orama_token
+
 # The Go builder always produces `app` in the deployment directory.
 ExecStart=/opt/orama/.orama/data/deployments/%i/app
 

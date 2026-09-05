@@ -37,9 +37,27 @@ type Manager struct {
 	envDir     string
 	baseDomain string
 
+	// mintWorkloadToken issues the credential a deployment runs with. It is
+	// injected rather than imported so this package does not depend on the
+	// auth service, and so a test can watch what a deployment is handed.
+	mintWorkloadToken WorkloadTokenMinter
+
 	// For non-systemd mode: track running processes
 	processes   map[string]*exec.Cmd
 	processesMu sync.RWMutex
+}
+
+// WorkloadTokenMinter issues the token a deployment runs with.
+type WorkloadTokenMinter func(ctx context.Context, namespace, name string) (string, error)
+
+// SetWorkloadTokenMinter wires the credential a deployment is started with.
+//
+// Without it a deployment cannot start at all on systemd: its unit stages the
+// credential with LoadCredential= and refuses to run without the file. That is
+// deliberate — a deployment with no identity is the permanent key this
+// replaces.
+func (m *Manager) SetWorkloadTokenMinter(mint WorkloadTokenMinter) {
+	m.mintWorkloadToken = mint
 }
 
 // NewManager creates a new process manager
@@ -82,6 +100,50 @@ func (m *Manager) deploymentEnv(deployment *deployments.Deployment, serviceName 
 		entryPoint,
 		deployment.Port,
 	))
+}
+
+// tokenFilePath is where one deployment's credential lives before systemd
+// stages it. Only the gateway can read it; systemd reads it as PID 1 and hands
+// the deployment a copy owned by the deployment's own user.
+func (m *Manager) tokenFilePath(serviceName string) string {
+	return filepath.Join(m.envDir, serviceName+".token")
+}
+
+// writeWorkloadToken mints the deployment's credential and writes it where the
+// unit's LoadCredential= will find it.
+//
+// A failure here fails the deploy. The unit refuses to start without the file,
+// and a deployment started with no identity is the permanent-key situation this
+// replaces: it would work, and nothing it did would be attributable.
+func (m *Manager) writeWorkloadToken(ctx context.Context, deployment *deployments.Deployment, serviceName string) error {
+	if m.envDir == "" {
+		return fmt.Errorf("no environment directory is configured, so a deployment's credential has nowhere to go")
+	}
+	if m.mintWorkloadToken == nil {
+		return fmt.Errorf("this gateway cannot mint a workload token, so %s would run with no identity", serviceName)
+	}
+
+	token, err := m.mintWorkloadToken(ctx, deployment.Namespace, deployment.Name)
+	if err != nil {
+		return fmt.Errorf("mint the credential for %s: %w", serviceName, err)
+	}
+
+	path := m.tokenFilePath(serviceName)
+	if err := os.WriteFile(path, []byte(token), 0600); err != nil {
+		return fmt.Errorf("write the credential for %s: %w", serviceName, err)
+	}
+	return os.Chmod(path, 0600)
+}
+
+// removeWorkloadToken deletes a stopped deployment's credential.
+func (m *Manager) removeWorkloadToken(serviceName string) error {
+	if m.envDir == "" {
+		return nil
+	}
+	if err := os.Remove(m.tokenFilePath(serviceName)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove the credential for %s: %w", serviceName, err)
+	}
+	return nil
 }
 
 // envFilePath is where one deployment's environment file lives.
@@ -165,6 +227,9 @@ func (m *Manager) Start(ctx context.Context, deployment *deployments.Deployment,
 	// cannot write into /etc — and must not be root, which is the whole point
 	// of the hardened gateway unit.
 	if _, err := m.writeEnvFile(deployment, serviceName); err != nil {
+		return err
+	}
+	if err := m.writeWorkloadToken(ctx, deployment, serviceName); err != nil {
 		return err
 	}
 
@@ -294,6 +359,9 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 	if err := m.removeEnvFile(serviceName); err != nil {
 		m.logger.Error("the deployment's secrets are still on disk", zap.Error(err))
 	}
+	if err := m.removeWorkloadToken(serviceName); err != nil {
+		m.logger.Error("the deployment's credential is still on disk", zap.Error(err))
+	}
 
 	return nil
 }
@@ -397,6 +465,12 @@ func (m *Manager) Reconfigure(ctx context.Context, deployment *deployments.Deplo
 	}
 	if _, err := m.writeEnvFile(deployment, m.getServiceName(deployment)); err != nil {
 		return fmt.Errorf("failed to rewrite the environment of %s: %w", unit, err)
+	}
+	// A restart re-reads the credential, so it is minted fresh here too: a
+	// deployment that has been running for a day should not restart holding a
+	// token issued a day ago.
+	if err := m.writeWorkloadToken(ctx, deployment, m.getServiceName(deployment)); err != nil {
+		return err
 	}
 	if err := m.applyResourceLimits(deployment, unit); err != nil {
 		return err

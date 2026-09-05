@@ -586,10 +586,40 @@ These names are set by the platform and cannot be overwritten or removed:
 An app that talks back to Orama previously had nothing to go on: no address, no
 namespace name. Every such app baked both into its own image.
 
-There is no credential among these yet. Handing every deployment a long-lived
-namespace key would mean any application compromise is a namespace takeover, so
-the token a deployment gets will be short-lived and scoped to the deployment
-itself, and it is being built with the rest of the workload-identity work.
+### Your app's own credential
+
+Your app is a principal of its own. At start it is handed a short-lived token in
+the file named by `$ORAMA_TOKEN_FILE`, and it renews that token with the gateway
+before it expires:
+
+```js
+const token = await readFile(process.env.ORAMA_TOKEN_FILE, "utf8");
+
+// Before it expires, ask for the next one with the one you have.
+const res = await fetch(`${process.env.ORAMA_GATEWAY_URL}/v1/auth/renew`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}` },
+});
+const { access_token, expires_in } = await res.json();
+```
+
+Nothing long-lived is on the node. systemd reads the file as PID 1 and hands
+your process a copy owned by your app's own user; the gateway never has to write
+anything your app could read directly.
+
+**It reaches nothing until you grant it something**, which is the point — an app
+that ships with no credential cannot leak one:
+
+```bash
+orama app grants set my-api runtime      # invoke, storage, push, webrtc, proxy, pubsub, cache
+orama app grants list
+```
+
+A deployment cannot be granted the control plane. If something needs to deploy
+or mint keys, that is a person or a CI key, not an app.
+
+A grant you change reaches a running app on its next renewal, or immediately if
+you redeploy.
 
 ### Where your app may write
 

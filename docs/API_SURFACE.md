@@ -43,6 +43,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/auth/jwks` | direct | JWKS. See `/.well-known/jwks.json`. |
 | `/v1/auth/logout` | SDK | `auth.logout()` |
 | `/v1/auth/refresh` | SDK | Session renewal, called by the client on a 401. |
+| `/v1/auth/renew` | SDK | A deployment renewing its own workload token with the token it is holding. Refuses anything that is not a workload token. |
 | `/v1/auth/token` | direct | Exchange an API key for a JWT. A server-side concern; the SDK sends the key itself. |
 | `/v1/auth/verify` | SDK | `auth.verify()` |
 | `/v1/auth/whoami` | SDK | `auth.whoami()` |
@@ -173,6 +174,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/deployments/domains/remove` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
 | `/v1/deployments/domains/verify` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
 | `/v1/deployments/env` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/grants` | CLI | What a deployment may do as itself. `orama app grants list\|set`. Admin grant; a deployment cannot be granted the control plane. |
 | `/v1/deployments/env/set` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
 | `/v1/deployments/events` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
 | `/v1/deployments/get` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |

@@ -101,6 +101,9 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(policyCredential,
 		// Exchanging a key for a token, and asking what the credential is.
 		"/v1/auth/token", "/v1/auth/whoami",
+		// A workload renewing its own token. It needs the token it is renewing
+		// and nothing else, which is what the handler checks.
+		"/v1/auth/renew",
 		// A read of the gateway's own schema version.
 		"/v1/schema-status",
 		// Whether WebRTC is on. The switches beside it are admin.
@@ -119,6 +122,7 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/deployments/rollback", "/v1/deployments/versions", "/v1/deployments/logs",
 		"/v1/deployments/stats", "/v1/deployments/events",
 		"/v1/deployments/env", "/v1/deployments/env/set",
+		"/v1/deployments/grants",
 		"/v1/deployments/static/upload", "/v1/deployments/static/update",
 		"/v1/deployments/nextjs/upload", "/v1/deployments/nextjs/update",
 		"/v1/deployments/go/upload", "/v1/deployments/go/update",

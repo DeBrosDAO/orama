@@ -299,6 +299,35 @@ bound to alongside the standard members.
 
 ---
 
+## A workload's identity
+
+A deployed app is a principal — `app:<namespace>/<name>` — with grants its owner
+chooses, and it holds a token rather than a key.
+
+The token is minted at start, staged by systemd from a file only the gateway can
+read, and exposed to the app at `$ORAMA_TOKEN_FILE` owned by the app's own user.
+It lasts an hour and the app renews it at `POST /v1/auth/renew` with the token it
+is holding — so nothing long-lived is on the node, and nothing privileged has to
+rewrite anything while the app runs.
+
+Grants are resolved when the token is minted, not baked in at deploy: taking one
+away reaches a running app on its next renewal. An app nobody has granted
+anything to holds a token that reaches nothing, which is the only safe default —
+the alternative is every app starting with the namespace's whole data plane,
+which is the permanent key this replaces wearing a different hat.
+
+A deployment cannot be granted the control plane. Only a workload token may be
+renewed; a user session is renewed by its refresh token, which rotates and can be
+revoked, and letting any access token mint its own successor would make a stolen
+one good for ever.
+
+```bash
+orama app grants set my-api runtime
+orama app grants list
+```
+
+---
+
 ## Between nodes
 
 The main gateway validates a request and forwards the result to a namespace
@@ -315,9 +344,9 @@ from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.
 
 ## What is not done yet
 
-- A workload — a deployed app or a function — has no identity of its own. Apps
-  receive `ORAMA_NAMESPACE` and `ORAMA_GATEWAY_URL` but no credential, so one
-  that talks to the platform still carries a key somebody put there (feat-372).
+- A **function** has no identity of its own yet. Host calls still run on the
+  gateway's handles, so what a function does is not attributable to the function
+  (the remaining half of feat-372). Deployed apps do have one — see below.
 - Resource selectors are enforced on pubsub and function invocation. Storage and
   the database resolve no grant on the request, so a selector naming them
   authorises nothing yet (chg-392).

@@ -46,6 +46,10 @@ var PlatformEnvKeys = []string{
 	"ORAMA_STATE_DIR",
 	"ORAMA_CACHE_DIR",
 	entryPointEnvKey,
+	// Where the deployment's own credential is. Set by the unit rather than
+	// written here, because it is built from the credentials directory only
+	// systemd can name.
+	"ORAMA_TOKEN_FILE",
 }
 
 // platformEnv returns the variables the platform sets for one deployment.

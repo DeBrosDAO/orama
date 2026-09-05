@@ -675,6 +675,16 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			EnvDir:     deploymentEnvDir(cfg.DataDir),
 			BaseDomain: baseDomain,
 		})
+		// What a deployment runs as. It used to run as whatever key somebody
+		// had pasted into its image; it is a principal of its own now, and the
+		// credential it gets is short-lived and renews itself.
+		gw.processManager.SetWorkloadTokenMinter(func(ctx context.Context, namespace, name string) (string, error) {
+			if err := deps.AuthService.EnsureWorkloadPrincipal(ctx, namespace, name); err != nil {
+				return "", err
+			}
+			token, _, err := deps.AuthService.MintWorkloadToken(ctx, namespace, name)
+			return token, err
+		})
 
 		gw.deploymentService = deploymentshandlers.NewDeploymentService(
 			deps.ORMClient,

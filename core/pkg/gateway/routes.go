@@ -84,6 +84,7 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/auth/token", g.authHandlers.APIKeyToJWTHandler)
 		mux.HandleFunc("/v1/auth/api-key", g.authHandlers.IssueAPIKeyHandler)
 		mux.HandleFunc("/v1/auth/refresh", g.authHandlers.RefreshHandler)
+		mux.HandleFunc("/v1/auth/renew", g.authHandlers.RenewHandler)
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)
 		mux.HandleFunc("/v1/audit", g.authHandlers.AuditHandler)
@@ -277,6 +278,9 @@ func (g *Gateway) Routes() http.Handler {
 
 		// Environment variables. The write runs on the home node because the
 		// variables live in a systemd unit on the machine the process runs on.
+		// What a deployment may do, as itself.
+		mux.HandleFunc("/v1/deployments/grants", g.appGrantsHandler)
+
 		mux.HandleFunc("/v1/deployments/env", g.envHandler.HandleGetEnv)
 		mux.HandleFunc("/v1/deployments/env/set", g.withHomeNodeProxy(g.envHandler.HandleSetEnv))
 
