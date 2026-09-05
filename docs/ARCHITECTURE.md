@@ -819,10 +819,13 @@ Function Invocation:
      to a namespace was an admin. Migration 050 moves the rows and drops the
      table
    - A grant may be narrowed to a resource: `pubsub:topic=chat.*`,
-     `fn:name=checkout`. Publish, subscribe and invoke apply it, so a tenant
-     can isolate its own end users. A selector in a domain the data path cannot
-     yet name is refused when the grant is written, rather than stored and
-     silently ignored. See `docs/SECURITY.md`
+     `fn:name=checkout`, `storage:avatars/*`, `cache:key=sessions/*`. Publish,
+     subscribe, invoke, the storage endpoints and the cache endpoints apply it,
+     so a tenant can isolate its own end users. A grant with a selector holds
+     exactly the scope that selector narrows, and the data path narrows that
+     scope to what it matches. A selector in a domain the data path cannot yet
+     name is refused when the grant is written, rather than stored and silently
+     ignored. See `docs/SECURITY.md`
    - `/v1/namespace/members` and `orama members` manage them; transferring the
      namespace requires the owner
 

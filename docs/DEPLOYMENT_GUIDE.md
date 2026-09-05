@@ -152,9 +152,9 @@ orama members transfer 0xabc…             # hand the namespace over
 
 `admin` is everything except ownership; `runtime` is invoke, storage, push,
 webrtc, proxy, pubsub and cache; `reader` is a member with no grant at all.
-Ownership is transferred rather than granted, because a namespace with no owner
-is claimable by whoever signs in to it next — you keep an admin grant, so
-handing a project over does not lock you out of it.
+Ownership is transferred rather than granted, and it is one step rather than a
+removal and a grant, so there is no moment where the namespace has no owner. You
+keep an admin grant, so handing a project over does not lock you out of it.
 
 ### What happened, and who did it
 

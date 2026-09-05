@@ -74,25 +74,24 @@ orama namespace disable webrtc --namespace myapp
 
 ### Authentication
 
-All WebRTC endpoints require authentication. Use one of:
+Every WebRTC endpoint requires a **signed-in user's token**, not an API key:
 
 ```
-# Option A: API Key via header (recommended)
-X-API-Key: <your-namespace-api-key>
-
-# Option B: API Key via Authorization header
-Authorization: ApiKey <your-namespace-api-key>
-
-# Option C: JWT Bearer token
-Authorization: Bearer <jwt>
+Authorization: Bearer <access token>
 ```
+
+An API key on its own is refused. WebRTC is a layer-1 route — it needs a genuine
+logged-in user — which is what makes a runtime key extracted from an app bundle
+worthless against it. The SDK gets that token by exchanging your key, or from
+`auth.verify()` after a wallet signs in; `X-API-Key` and `Authorization: ApiKey`
+are the deprecated spellings and are going away.
 
 ### 1. Get TURN Credentials
 
 ```javascript
 const response = await fetch('https://ns-myapp.orama-devnet.network/v1/webrtc/turn/credentials', {
   method: 'POST',
-  headers: { 'X-API-Key': apiKey }
+  headers: { Authorization: `Bearer ${accessToken}` }
 });
 
 const { uris, username, password, ttl } = await response.json();
@@ -125,7 +124,11 @@ const pc = new RTCPeerConnection({
 
 ```javascript
 const ws = new WebSocket(
-  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&api_key=${apiKey}`
+  // A browser cannot set a header on a WebSocket upgrade, so the credential
+  // goes in the query string — and it is a short-lived token, never a key: a
+  // query string ends up in the access log, the Referer of the next request
+  // the page makes, and history.
+  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&token=${encodeURIComponent(accessToken)}`
 );
 
 ws.onmessage = (event) => {
@@ -150,7 +153,7 @@ ws.onmessage = (event) => {
 ### 4. Room Management (REST)
 
 ```javascript
-const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
+const headers = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
 
 // Create room
 await fetch('/v1/webrtc/rooms', {
@@ -394,7 +397,7 @@ systemctl status orama-turn
 - **Forced relay**: `iceTransportPolicy: relay` enforced server-side. Clients cannot bypass TURN.
 - **HMAC credentials**: Per-namespace TURN shared secret. REST/host-fn credentials expire after 24h (long enough to outlast any call, since they are not refreshed mid-call); SFU-signaled credentials use the shorter per-namespace TTL and are refreshed over the signaling channel.
 - **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
-- **Authentication required**: All WebRTC endpoints require API key or JWT (`X-API-Key` header, `Authorization: ApiKey`, or `Authorization: Bearer`).
+- **A logged-in user, not a key**: every WebRTC endpoint requires a wallet token (`Authorization: Bearer`). An API key alone is refused, which is what makes a runtime key extracted from an app bundle worthless here. On the signalling WebSocket the token goes in `?token=`, because a browser cannot set a header on an upgrade.
 - **Room management**: Creating/closing rooms requires namespace ownership.
 - **SFU on WireGuard only**: SFU binds to 10.0.0.x, never 0.0.0.0. Only reachable via TURN relay.
 - **Permissions-Policy**: `camera=(self), microphone=(self)` — only same-origin can access media devices.
