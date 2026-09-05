@@ -28,7 +28,7 @@ func realAuditLog(t *testing.T) (*AuditLog, *sql.DB) {
 	if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrations.FS, zap.NewNop()); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
-	return NewAuditLog(&sqliteNet{db: &sqliteDatabase{db: db}}, nil), db
+	return NewAuditLog(registryOf(&sqliteNet{db: &sqliteDatabase{db: db}}), nil), db
 }
 
 // insertAuditEvent writes one row aged by the given SQLite modifier, e.g.

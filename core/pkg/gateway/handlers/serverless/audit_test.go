@@ -64,7 +64,7 @@ func auditingHandlers(t *testing.T, sm serverless.SecretsManager, reg serverless
 		nil, nil, reg, serverless.NewWSManager(logger),
 		nil, nil, nil, nil, nil,
 		sm,
-		auth.NewAuditLog(&recordingAuditNet{db: db}, nil),
+		auth.NewAuditLog(func() client.DatabaseClient { return (&recordingAuditNet{db: db}).Database() }, nil),
 		logger,
 	)
 	return h, db

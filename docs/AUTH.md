@@ -449,6 +449,27 @@ orama app grants list
 
 ---
 
+## Where this is all kept
+
+Everything above — who somebody is, what they may do, which sessions are live,
+which tokens are refused, and the record of it — lives in the **cluster
+registry**, the RQLite the index gateway owns.
+
+That matters because a namespace gateway holds a second database: the tenant's
+own. The tenant reads and writes it, and a namespace admin can export it whole
+and import a replacement. Anything of the platform's kept there is state its
+subject can rewrite, and state the rest of the cluster never sees.
+
+Keys and grants moved to the registry first. Sessions, challenges, revocations,
+the audit trail, pending device logins and signing keys followed. A namespace
+gateway learns where its registry is after it starts, so each of these resolves
+the database per call rather than capturing the handle it was built with — which
+is exactly how they ended up in the wrong one.
+
+A namespace id is resolved there too, and resolving a name does not create it.
+
+---
+
 ## Between nodes
 
 The main gateway validates a request and forwards the result to a namespace

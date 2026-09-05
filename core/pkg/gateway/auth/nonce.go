@@ -77,10 +77,11 @@ func normalizeNonceWallet(wallet string) string {
 // establishing a namespace but wrong on an authentication path: a failed login
 // must not leave a namespace row behind.
 func (s *Service) lookupNamespaceID(ctx context.Context, namespace string) (interface{}, error) {
-	if s.orm == nil {
+	db := s.registryDatabase()
+	if db == nil {
 		return nil, fmt.Errorf("client not initialized")
 	}
-	res, err := s.orm.Database().Query(
+	res, err := db.Query(
 		client.WithInternalAuth(ctx),
 		"SELECT id FROM namespaces WHERE name = ? LIMIT 1",
 		namespace,

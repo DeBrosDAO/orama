@@ -105,14 +105,23 @@ const maxAuditFieldLength = 512
 
 // AuditLog writes the record.
 type AuditLog struct {
-	orm    client.NetworkClient
-	logger *logging.ColoredLogger
+	registry func() client.DatabaseClient
+	logger   *logging.ColoredLogger
 }
 
-// NewAuditLog builds the writer. A nil orm makes every write a no-op, which is
-// the test case; a gateway always has one.
-func NewAuditLog(orm client.NetworkClient, logger *logging.ColoredLogger) *AuditLog {
-	return &AuditLog{orm: orm, logger: logger}
+// NewAuditLog builds the writer. A registry that resolves to nil makes every
+// write a no-op, which is the test case; a gateway always has one.
+func NewAuditLog(registry func() client.DatabaseClient, logger *logging.ColoredLogger) *AuditLog {
+	return &AuditLog{registry: registry, logger: logger}
+}
+
+// database is where the record is kept, or nil when this gateway has nowhere to
+// keep it.
+func (a *AuditLog) database() client.DatabaseClient {
+	if a == nil || a.registry == nil {
+		return nil
+	}
+	return a.registry()
 }
 
 // Record writes one event.
@@ -122,10 +131,7 @@ func NewAuditLog(orm client.NetworkClient, logger *logging.ColoredLogger) *Audit
 // turn a database blip into an outage, and the caller has already been
 // authenticated or refused on its own merits by the time this runs.
 func (a *AuditLog) Record(ctx context.Context, event AuditEvent) {
-	if a == nil || a.orm == nil {
-		return
-	}
-	db := a.orm.Database()
+	db := a.database()
 	if db == nil {
 		return
 	}
@@ -238,10 +244,7 @@ const (
 // would be made up — and a made-up count is worse than none, because it reads
 // like a measurement.
 func (a *AuditLog) Prune(ctx context.Context) error {
-	if a == nil || a.orm == nil {
-		return nil
-	}
-	db := a.orm.Database()
+	db := a.database()
 	if db == nil {
 		return nil
 	}
@@ -261,7 +264,7 @@ func (a *AuditLog) Prune(ctx context.Context) error {
 
 // StartPruning removes expired events on a timer until ctx is done.
 func (a *AuditLog) StartPruning(ctx context.Context) {
-	if a == nil || a.orm == nil {
+	if a.database() == nil {
 		return
 	}
 	go func() {
