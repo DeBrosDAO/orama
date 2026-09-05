@@ -288,13 +288,13 @@ export class WSClient {
     let url = this.wsURL;
 
     if (this.authToken) {
+      // Always `token`, always a token. This used to look at the credential
+      // and send `api_key=<the key itself>` when it started with `ak_`, so a
+      // long-lived key went into the URL — into the gateway's access log, and
+      // into the browser's history. The SDK exchanges a key for a token before
+      // it opens a socket.
       const separator = url.includes("?") ? "&" : "?";
-      const paramName = this.authToken.startsWith("ak_") ? "api_key" : "token";
-      // API keys contain a colon (ak_xxx:namespace) that must not be percent-encoded
-      const encodedToken = this.authToken.startsWith("ak_")
-        ? this.authToken
-        : encodeURIComponent(this.authToken);
-      url += `${separator}${paramName}=${encodedToken}`;
+      url += `${separator}token=${encodeURIComponent(this.authToken)}`;
     }
 
     return url;

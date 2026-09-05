@@ -12,16 +12,23 @@ import (
 
 // Credentials represents authentication credentials for a specific gateway
 type Credentials struct {
-	APIKey       string    `json:"api_key"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	Namespace    string    `json:"namespace"`
-	UserID       string    `json:"user_id,omitempty"`
-	Wallet       string    `json:"wallet,omitempty"`
-	ExpiresAt    time.Time `json:"expires_at,omitempty"`
-	IssuedAt     time.Time `json:"issued_at"`
-	LastUsedAt   time.Time `json:"last_used_at,omitempty"`
-	Plan         string    `json:"plan,omitempty"`
-	NamespaceURL string    `json:"namespace_url,omitempty"`
+	APIKey       string `json:"api_key"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	// AccessToken is the short-lived credential every request carries. Login
+	// has always returned one; it used to be read out of the response and
+	// dropped, and the API key was sent instead.
+	AccessToken string `json:"access_token,omitempty"`
+	// AccessTokenExpiresAt is when it stops being worth sending. It is not
+	// ExpiresAt below, which is the credential's own life.
+	AccessTokenExpiresAt time.Time `json:"access_token_expires_at,omitempty"`
+	Namespace            string    `json:"namespace"`
+	UserID               string    `json:"user_id,omitempty"`
+	Wallet               string    `json:"wallet,omitempty"`
+	ExpiresAt            time.Time `json:"expires_at,omitempty"`
+	IssuedAt             time.Time `json:"issued_at"`
+	LastUsedAt           time.Time `json:"last_used_at,omitempty"`
+	Plan                 string    `json:"plan,omitempty"`
+	NamespaceURL         string    `json:"namespace_url,omitempty"`
 
 	// ProvisioningPollURL is set when namespace cluster is being provisioned.
 	// Used only during the login flow, not persisted.

@@ -43,7 +43,7 @@ import { createClient } from "@debros/orama";
 
 const client = createClient({
   baseURL: "https://ns-myapp.orama-devnet.network",
-  apiKey: "ak_your_api_key:namespace",
+  apiKey: "orama_rk_...",  // exchanged for a short-lived token before the first request
 });
 
 // Or with JWT

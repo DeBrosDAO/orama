@@ -150,15 +150,36 @@ type Grant struct {
 
 // Scopes is what this grant actually authorises.
 //
-// A grant narrowed to a resource authorises nothing until the data plane can
-// enforce the selector. Returning the role's full scope set would turn "may
-// write to storage:avatars/*" into "may write to all storage" — a narrower
-// grant that is in fact the wide one, which is worse than refusing.
+// A grant with no selector is the whole role. A grant with one holds exactly
+// the scope its selector narrows and nothing else, and the data path then
+// narrows that scope to what the selector matches (see AuthorizeResource). Two
+// steps, because the scope gate decides whether a caller may touch this class
+// of thing at all and cannot see which object is being touched.
+//
+// It returns nothing at all in three cases, all of which mean the same thing —
+// this selector is not a boundary this binary can apply:
+//
+//   - the selector does not parse, so it was written by something that
+//     understood it and this process does not;
+//   - its domain is not enforced, so no data path would narrow the scope and
+//     handing over the whole scope would turn "may write to storage:avatars/*"
+//     into "may write to all storage";
+//   - the role does not hold the scope the selector narrows, so the selector
+//     describes something the grant never reached.
 func (g Grant) Scopes() ScopeSet {
-	if strings.TrimSpace(g.Resource) != "" {
+	selector := strings.TrimSpace(g.Resource)
+	if selector == "" {
+		return g.Role.Scopes()
+	}
+	parsed, err := ParseSelector(selector)
+	if err != nil || !SelectorEnforced(parsed.Domain) {
 		return ScopeSet{}
 	}
-	return g.Role.Scopes()
+	scope := parsed.RequiredScope()
+	if scope == "" || !g.Role.Scopes().Has(scope) {
+		return ScopeSet{}
+	}
+	return ScopeSet{scope: {}}
 }
 
 // sqliteTime is how a timestamp is written into a column the schema compares
@@ -492,4 +513,22 @@ func RoleForScopes(stored string) Role {
 		return RoleAdmin
 	}
 	return RoleRuntime
+}
+
+// WhoIs returns the grant a principal holds in a namespace, by name.
+//
+// GrantIn takes a database handle and a resolved namespace id because it is the
+// read every authenticated request makes and those are already in hand. This is
+// for the callers that have neither — `/v1/auth/whoami` above all, which has to
+// answer "what am I allowed to do here" and could not, so it answered with the
+// caller's own API key instead.
+func (s *Service) WhoIs(ctx context.Context, namespace string, ptype PrincipalType, identifier string) (*Grant, error) {
+	if s.keyORM() == nil {
+		return nil, fmt.Errorf("client not initialized")
+	}
+	nsID, err := s.resolveKeyNamespaceID(ctx, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
+	}
+	return s.GrantIn(ctx, s.keyORM().Database(), nsID, ptype, identifier)
 }

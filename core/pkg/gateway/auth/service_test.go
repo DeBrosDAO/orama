@@ -173,7 +173,7 @@ func createDualKeyService(t *testing.T) *Service {
 	if err != nil {
 		t.Fatalf("failed to generate ed25519 key: %v", err)
 	}
-	s.SetEdDSAKey(edPriv)
+	s.SetEdDSAKey(edPriv, "")
 	return s
 }
 
@@ -425,7 +425,7 @@ func TestEdDSACrossServiceVerify(t *testing.T) {
 
 	makeService := func() *Service {
 		s := createTestService(t) // RSA + mock client
-		s.SetEdDSAKey(shared)
+		s.SetEdDSAKey(shared, "")
 		return s
 	}
 
@@ -465,11 +465,11 @@ func TestEdDSACrossServiceVerify(t *testing.T) {
 func TestEdDSACrossServiceVerify_differentKeysFail(t *testing.T) {
 	signer := createTestService(t)
 	_, signKey, _ := ed25519.GenerateKey(rand.Reader)
-	signer.SetEdDSAKey(signKey)
+	signer.SetEdDSAKey(signKey, "")
 
 	verifier := createTestService(t)
 	_, verKey, _ := ed25519.GenerateKey(rand.Reader)
-	verifier.SetEdDSAKey(verKey)
+	verifier.SetEdDSAKey(verKey, "")
 
 	token, _, err := signer.GenerateJWT("ns", "sub", 15*time.Minute, nil)
 	if err != nil {

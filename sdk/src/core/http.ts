@@ -69,6 +69,22 @@ export interface HttpClientConfig {
  */
 export type TokenRefresher = () => Promise<string | null>;
 
+/**
+ * How an API key becomes a token.
+ *
+ * The key is exchanged once, before the first request, and the token is what
+ * every request carries. That is what keeps the key out of access logs, proxy
+ * traces and browser devtools — and it is why nothing in the SDK sends
+ * `X-API-Key` any more.
+ */
+export type KeyExchanger = (apiKey: string) => Promise<{ token: string; expiresAt: number }>;
+
+/**
+ * How long before a token expires it is exchanged again. A request that starts
+ * inside this window would otherwise arrive after the token expired.
+ */
+const TOKEN_RENEWAL_MARGIN_MS = 60_000;
+
 /** Per-request options shared by every verb. */
 export interface RequestOptions {
   headers?: Record<string, string>;
@@ -90,6 +106,15 @@ export interface RequestOptions {
    * an absolute one produced `http://localhost:10104https://…`.
    */
   baseURL?: string;
+  /**
+   * Carry the credential in this request's own headers and do not exchange the
+   * client's key for a token first.
+   *
+   * It is how the exchange itself is sent: without it, exchanging a key would
+   * call the request pipeline, which would exchange the key, for ever. Nothing
+   * else should set it.
+   */
+  ownCredential?: boolean;
 }
 
 /**
@@ -174,6 +199,11 @@ export class HttpClient {
   private jwt?: string;
   private onNetworkError?: NetworkErrorCallback;
   private refresher?: TokenRefresher;
+  /** How a key becomes a token, and the token it became. */
+  private exchangeKey?: KeyExchanger;
+  private exchangedToken?: string;
+  private exchangedExpiresAt = 0;
+  private exchanging?: Promise<void>;
   /** In-flight renewal, so concurrent 401s renew once between them. */
   private refreshing?: Promise<string | null>;
   private readonly rootLogger: Logger;
@@ -233,54 +263,97 @@ export class HttpClient {
     );
   }
 
-  private getAuthHeaders(path: string): Record<string, string> {
-    const headers: Record<string, string> = {};
-
-    // Database, pubsub, and cache operations use ONLY the API key, to avoid a JWT
-    // user context interfering with namespace-level authorization.
-    //
-    // NOTE: /v1/proxy/* is deliberately NOT in this list (bugboard #149). The
-    // gateway enforces a per-user wallet (SIWE) JWT on proxy — layer-1, #148 —
-    // so an API key alone is rejected 401 "requires a logged-in user". Proxy must
-    // send BOTH the API key and the wallet JWT, so it falls through to the default
-    // branch below — exactly like /v1/storage/*, which is the working reference.
-    const isDbOperation = path.includes("/v1/rqlite/");
-    const isPubSubOperation = path.includes("/v1/pubsub/");
-    const isCacheOperation = path.includes("/v1/cache/");
-
-    // For auth operations, prefer API key over JWT to ensure proper authentication
-    const isAuthOperation = path.includes("/v1/auth/");
-
-    if (isDbOperation || isPubSubOperation || isCacheOperation) {
-      // For database/pubsub/proxy/cache operations: use only API key (preferred for namespace operations)
-      if (this.apiKey) {
-        headers["X-API-Key"] = this.apiKey;
-      } else if (this.jwt) {
-        // Fallback to JWT if no API key
-        headers["Authorization"] = `Bearer ${this.jwt}`;
-      }
-    } else if (isAuthOperation) {
-      // For auth operations: prefer API key over JWT (auth endpoints should use explicit API key)
-      if (this.apiKey) {
-        headers["X-API-Key"] = this.apiKey;
-      }
-      if (this.jwt) {
-        headers["Authorization"] = `Bearer ${this.jwt}`;
-      }
-    } else {
-      // For other operations: send both JWT and API key
-      if (this.jwt) {
-        headers["Authorization"] = `Bearer ${this.jwt}`;
-      }
-      if (this.apiKey) {
-        headers["X-API-Key"] = this.apiKey;
-      }
+  /**
+   * The one header a request carries.
+   *
+   * There used to be a path-substring switch here: database, pubsub and cache
+   * calls sent `X-API-Key`, auth calls sent both, everything else sent both the
+   * other way round. Three spellings, chosen by looking at the URL, with a
+   * comment explaining which of them each route needed — and the raw key on
+   * every request, in a header the gateway now answers with a deprecation
+   * notice.
+   *
+   * There is one credential now: a token. A key is exchanged for one before the
+   * first request, so the key itself never leaves the process it was given to.
+   */
+  private getAuthHeaders(_path: string, ownCredential = false): Record<string, string> {
+    if (ownCredential) {
+      // The caller is carrying its own; adding the client's would send two.
+      return {};
     }
-    return headers;
+    const token = this.jwt ?? this.exchangedToken;
+    if (!token) {
+      return {};
+    }
+    return { Authorization: `Bearer ${token}` };
+  }
+
+  /**
+   * Exchange the configured key for a token, if that has not been done or the
+   * one held is about to expire.
+   *
+   * Called before every request. It returns undefined — no promise, no
+   * microtask — when there is nothing to do, so a client that was given a
+   * token, or none at all, reaches `fetch` in the same tick it was called in.
+   * That matters: a caller that cancels immediately after the call must find
+   * the request already in flight, not still waiting on a resolved promise.
+   */
+  private ensureToken(): Promise<void> | undefined {
+    if (this.jwt || !this.apiKey || !this.exchangeKey) {
+      return undefined;
+    }
+    if (this.exchangedToken && Date.now() < this.exchangedExpiresAt - TOKEN_RENEWAL_MARGIN_MS) {
+      return undefined;
+    }
+    // One exchange between concurrent callers, not one per request in flight.
+    if (!this.exchanging) {
+      this.exchanging = this.exchangeKey(this.apiKey)
+        .then((result) => {
+          this.exchangedToken = result.token;
+          this.exchangedExpiresAt = result.expiresAt;
+          this.log.log("exchanged the API key for a token");
+        })
+        .finally(() => {
+          this.exchanging = undefined;
+        });
+    }
+    return this.exchanging;
+  }
+
+  /**
+   * Install how a key becomes a token. Set by the auth client, which is what
+   * knows the endpoint.
+   */
+  setKeyExchanger(exchange: KeyExchanger | undefined): void {
+    this.exchangeKey = exchange;
+    this.exchangedToken = undefined;
+    this.exchangedExpiresAt = 0;
+  }
+
+  /**
+   * Obtain the token this client will present, exchanging the key for one if
+   * that has not happened yet.
+   *
+   * For the WebSocket, which cannot set a header and so has to put the
+   * credential in the URL: what goes there must be the short-lived token, not
+   * the key.
+   */
+  async ensureCredential(): Promise<string | undefined> {
+    const exchanging = this.ensureToken();
+    if (exchanging) {
+      await exchanging;
+    }
+    return this.getToken();
+  }
+
+  /** Forget the exchanged token, so the next request gets a fresh one. */
+  clearExchangedToken(): void {
+    this.exchangedToken = undefined;
+    this.exchangedExpiresAt = 0;
   }
 
   private getAuthToken(): string | undefined {
-    return this.jwt || this.apiKey;
+    return this.jwt ?? this.exchangedToken;
   }
 
   getApiKey(): string | undefined {
@@ -428,6 +501,16 @@ export class HttpClient {
     options: RequestOptions & { body?: any },
     startTime: number
   ): Promise<T> {
+    // The key becomes a token before the first request, and again before the
+    // token expires. It does nothing when one is already held, and nothing at
+    // all for the exchange itself.
+    if (!options.ownCredential) {
+      const exchanging = this.ensureToken();
+      if (exchanging) {
+        await exchanging;
+      }
+    }
+
     const origin = (options.baseURL ?? this.baseURL).replace(/\/$/, "");
     const url = new URL(origin + path);
     if (options.query) {
@@ -438,7 +521,7 @@ export class HttpClient {
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      ...this.getAuthHeaders(path),
+      ...this.getAuthHeaders(path, options.ownCredential),
       ...options.headers,
     };
 
@@ -652,6 +735,15 @@ export class HttpClient {
     formData: FormData,
     options?: Pick<RequestOptions, "timeout" | "signal">
   ): Promise<T> {
+    // A request the caller has already cancelled does no work at all — not
+    // the upload, and not the key exchange that would otherwise precede it.
+    if (options?.signal?.aborted) {
+      throw new NetworkError("request aborted by caller", "ABORTED", { cause: "caller-abort" });
+    }
+    const uploadExchange = this.ensureToken();
+    if (uploadExchange) {
+      await uploadExchange;
+    }
     const startTime = performance.now(); // Track upload start time
     const url = new URL(this.baseURL + path);
     const headers: Record<string, string> = {
@@ -735,6 +827,13 @@ export class HttpClient {
     path: string,
     options?: Pick<RequestOptions, "timeout" | "signal">
   ): Promise<Response> {
+    if (options?.signal?.aborted) {
+      throw new NetworkError("request aborted by caller", "ABORTED", { cause: "caller-abort" });
+    }
+    const binaryExchange = this.ensureToken();
+    if (binaryExchange) {
+      await binaryExchange;
+    }
     const url = new URL(this.baseURL + path);
     const headers: Record<string, string> = {
       ...this.getAuthHeaders(path),

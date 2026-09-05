@@ -155,65 +155,80 @@ func TestChallengeHandler_NilAuthService(t *testing.T) {
 
 // --- WhoamiHandler tests --------------------------------------------------
 
-func TestWhoamiHandler_NoAuth(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
+// whoamiHandlers builds handlers with a real service and no database, which is
+// what a gateway that can answer "who is this credential" but not "what may it
+// do" looks like.
+func whoamiHandlers(t *testing.T) *Handlers {
+	t.Helper()
+	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	if err != nil {
+		t.Fatalf("auth service: %v", err)
+	}
+	return NewHandlers(testLogger(), svc, nil, "default", noopInternalAuth)
+}
 
+// Reaching whoami takes a credential the middleware accepted, so an empty
+// context is the gateway that has no auth layer in front of it. The honest
+// answer is nobody, not a blank identity that reads as one.
+func TestWhoamiHandler_NoAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/whoami", nil)
 	rec := httptest.NewRecorder()
 
-	h.WhoamiHandler(rec, req)
+	whoamiHandlers(t).WhoamiHandler(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
-
 	m := decodeBody(t, rec)
-	// When no auth context is set, "authenticated" should be false.
-	if auth, ok := m["authenticated"].(bool); !ok || auth {
+	if authed, ok := m["authenticated"].(bool); !ok || authed {
 		t.Fatalf("expected authenticated=false, got %v", m["authenticated"])
 	}
-	if method, ok := m["method"].(string); !ok || method != "api_key" {
-		t.Fatalf("expected method='api_key', got %v", m["method"])
+	if method, _ := m["method"].(string); method != "none" {
+		t.Fatalf("expected method='none', got %v", m["method"])
 	}
-	if ns, ok := m["namespace"].(string); !ok || ns != "default" {
+	if ns, _ := m["namespace"].(string); ns != "default" {
 		t.Fatalf("expected namespace='default', got %v", m["namespace"])
 	}
 }
 
-func TestWhoamiHandler_WithAPIKey(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
+// The answer used to contain the caller's own API key, which put a 90-day
+// credential into a terminal, a shell history and whatever logged the response.
+func TestWhoamiHandler_neverReturnsTheKeyItWasCalledWith(t *testing.T) {
+	const key = "ak_test123:default"
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/whoami", nil)
-	ctx := req.Context()
-	ctx = context.WithValue(ctx, CtxKeyAPIKey, "ak_test123:default")
+	ctx := context.WithValue(req.Context(), CtxKeyAPIKey, key)
 	ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, "default")
-	req = req.WithContext(ctx)
-
 	rec := httptest.NewRecorder()
-	h.WhoamiHandler(rec, req)
+
+	whoamiHandlers(t).WhoamiHandler(rec, req.WithContext(ctx))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
+	if body := rec.Body.String(); strings.Contains(body, key) {
+		t.Fatalf("the response contains the caller's own key:\n%s", body)
+	}
 
 	m := decodeBody(t, rec)
-	if auth, ok := m["authenticated"].(bool); !ok || !auth {
+	if authed, ok := m["authenticated"].(bool); !ok || !authed {
 		t.Fatalf("expected authenticated=true, got %v", m["authenticated"])
 	}
-	if method, ok := m["method"].(string); !ok || method != "api_key" {
+	if method, _ := m["method"].(string); method != "api_key" {
 		t.Fatalf("expected method='api_key', got %v", m["method"])
 	}
-	if key, ok := m["api_key"].(string); !ok || key != "ak_test123:default" {
-		t.Fatalf("expected api_key='ak_test123:default', got %v", m["api_key"])
+	if _, present := m["api_key"]; present {
+		t.Error("the response still has an api_key member")
 	}
-	if ns, ok := m["namespace"].(string); !ok || ns != "default" {
-		t.Fatalf("expected namespace='default', got %v", m["namespace"])
+	if sub, _ := m["subject"].(string); sub == "" {
+		t.Error("a key credential has no subject, so nothing identifies it")
+	}
+	if p, _ := m["principal"].(string); p != string(authsvc.PrincipalServiceAccount) {
+		t.Errorf("principal = %v, want %s", m["principal"], authsvc.PrincipalServiceAccount)
 	}
 }
 
 func TestWhoamiHandler_WithJWT(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-
 	claims := &authsvc.JWTClaims{
 		Iss:       "orama-gateway",
 		Sub:       "0xWALLET",
@@ -227,27 +242,39 @@ func TestWhoamiHandler_WithJWT(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/whoami", nil)
 	ctx := context.WithValue(req.Context(), CtxKeyJWT, claims)
 	ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, "myns")
-	req = req.WithContext(ctx)
-
 	rec := httptest.NewRecorder()
-	h.WhoamiHandler(rec, req)
+
+	whoamiHandlers(t).WhoamiHandler(rec, req.WithContext(ctx))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
-
 	m := decodeBody(t, rec)
-	if auth, ok := m["authenticated"].(bool); !ok || !auth {
+	if authed, ok := m["authenticated"].(bool); !ok || !authed {
 		t.Fatalf("expected authenticated=true, got %v", m["authenticated"])
 	}
-	if method, ok := m["method"].(string); !ok || method != "jwt" {
+	if method, _ := m["method"].(string); method != "jwt" {
 		t.Fatalf("expected method='jwt', got %v", m["method"])
 	}
-	if sub, ok := m["subject"].(string); !ok || sub != "0xWALLET" {
+	if sub, _ := m["subject"].(string); sub != "0xWALLET" {
 		t.Fatalf("expected subject='0xWALLET', got %v", m["subject"])
 	}
-	if ns, ok := m["namespace"].(string); !ok || ns != "myns" {
+	if ns, _ := m["namespace"].(string); ns != "myns" {
 		t.Fatalf("expected namespace='myns', got %v", m["namespace"])
+	}
+	// A wallet subject is a wallet principal, whatever the grant lookup can or
+	// cannot reach.
+	if p, _ := m["principal"].(string); p != string(authsvc.PrincipalWallet) {
+		t.Errorf("principal = %v, want %s", m["principal"], authsvc.PrincipalWallet)
+	}
+	// No database, so no grant can be read. The answer is "holds nothing here",
+	// not a role invented from the fact that the token verified.
+	if role := m["role"]; role != nil {
+		t.Errorf("role = %v, want null when no grant could be read", role)
+	}
+	grants, ok := m["grants"].([]any)
+	if !ok || len(grants) != 0 {
+		t.Errorf("grants = %v, want an empty list", m["grants"])
 	}
 }
 
@@ -480,7 +507,7 @@ func jwtCapableService(t *testing.T, hmacSecret string) *authsvc.Service {
 	if err != nil {
 		t.Fatalf("ed25519 keygen failed: %v", err)
 	}
-	svc.SetEdDSAKey(edPriv)
+	svc.SetEdDSAKey(edPriv, "")
 	return svc
 }
 
@@ -835,7 +862,7 @@ func TestChallengeHandler_InvalidJSON(t *testing.T) {
 // --- WhoamiHandler with namespace override --------------------------------
 
 func TestWhoamiHandler_NamespaceOverride(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
+	h := whoamiHandlers(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/whoami", nil)
 	ctx := context.WithValue(req.Context(), CtxKeyNamespaceOverride, "custom-ns")

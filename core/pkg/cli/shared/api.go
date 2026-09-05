@@ -32,8 +32,14 @@ func GetAPIURL() (string, error) {
 	return GatewayURL("")
 }
 
-// AuthToken returns the API key stored for the gateway that resolves from the
-// same inputs, so the credential always belongs to the gateway being called.
+// AuthToken returns the credential to send to the gateway that resolves from
+// the same inputs, so it always belongs to the gateway being called.
+//
+// It is a short-lived token, not the API key. The key used to be the bearer
+// credential of every request the CLI made — a ninety-day credential in front
+// of every gateway, in every access log along the way — while the session the
+// login had already been handed was thrown away. The key is now presented
+// once, to exchange it, and only when there is no session to renew.
 func AuthToken(override string) (string, error) {
 	gatewayURL, err := GatewayURL(override)
 	if err != nil {
@@ -41,7 +47,7 @@ func AuthToken(override string) (string, error) {
 	}
 
 	if token := envToken(); token != "" {
-		return token, nil
+		return auth.BearerFromEnv(gatewayURL, token)
 	}
 
 	store, err := auth.LoadEnhancedCredentials()
@@ -53,11 +59,7 @@ func AuthToken(override string) (string, error) {
 	if creds == nil {
 		return "", fmt.Errorf("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
 	}
-	if !creds.IsValid() {
-		return "", fmt.Errorf("credentials expired for %s. Run 'orama auth login' to re-authenticate", gatewayURL)
-	}
-
-	return creds.APIKey, nil
+	return auth.Bearer(gatewayURL, store, creds)
 }
 
 // GetAuthToken returns the credential for commands that have no --gateway flag.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -61,6 +62,13 @@ func (h *Handlers) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.ComponentDebug(logging.ComponentGeneral, "CID ownership check passed", zap.String("cid", path))
+
+	// Owning the CID is the namespace boundary; the selector is the one inside
+	// it. A grant narrowed to `storage:avatars/*` owns everything its namespace
+	// uploaded and may read only part of it.
+	if !h.authorizeCID(w, r, path, namespace, gwauth.ActionRead) {
+		return
+	}
 
 	// Get IPFS API URL from config
 	ipfsAPIURL := h.config.IPFSAPIURL

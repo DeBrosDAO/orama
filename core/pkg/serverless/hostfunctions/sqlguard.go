@@ -36,13 +36,19 @@ import (
 // platform.
 var protectedTables = map[string]string{
 	// Credentials and identity. Writing any of these mints authority.
-	"api_keys":                   "authentication",
-	"wallet_api_keys":            "authentication",
-	"refresh_tokens":             "authentication",
-	"nonces":                     "authentication",
-	"invite_tokens":              "cluster membership",
-	"operators":                  "operator identity",
-	"principals":                 "who the platform will authenticate",
+	"api_keys":        "authentication",
+	"wallet_api_keys": "authentication",
+	"refresh_tokens":  "authentication",
+	"nonces":          "authentication",
+	// A pending device login. Reading one hands out the code that collects
+	// somebody else's session; writing one approves it.
+	"device_authorizations": "pending logins",
+	"invite_tokens":         "cluster membership",
+	"operators":             "operator identity",
+	"principals":            "who the platform will authenticate",
+	// Public keys, but writing one publishes a key the cluster will accept
+	// tokens from — which is minting authority by another route.
+	"signing_keys":               "which keys may sign a token",
 	"grants":                     "who may do what in a namespace",
 	"wireguard_peers":            "mesh membership and node agent tokens",
 	"namespace_push_credentials": "push credentials",

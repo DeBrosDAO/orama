@@ -93,12 +93,12 @@ func TestGatewayWebRTCInSync_bothDisabled_returnsTrue(t *testing.T) {
 }
 
 func cfgInSync(onDisk gateway.GatewayYAMLConfig, cfg gateway.InstanceConfig, hmac string) bool {
-	return gatewayConfigInSync(onDisk, cfg, hmac, "")
+	return gatewayConfigInSync(onDisk, cfg, hmac, "", "10.0.0.5:10104")
 }
 
 func TestGatewayConfigInSync_secretsKeyMissingOnDisk_returnsFalse(t *testing.T) {
 	cfg := gateway.InstanceConfig{SecretsEncryptionKey: "the-key"}
-	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	onDisk := gatewayYAMLFromInstance(cfg, "", "", "10.0.0.5:10104")
 	onDisk.SecretsEncryptionKey = ""
 	if cfgInSync(onDisk, cfg, "") {
 		t.Fatal("empty on-disk secrets key vs non-empty desired must be out-of-sync (needs restart to enable secrets)")
@@ -107,7 +107,7 @@ func TestGatewayConfigInSync_secretsKeyMissingOnDisk_returnsFalse(t *testing.T) 
 
 func TestGatewayConfigInSync_secretsKeyMatches_returnsTrue(t *testing.T) {
 	cfg := gateway.InstanceConfig{SecretsEncryptionKey: "the-key"}
-	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	onDisk := gatewayYAMLFromInstance(cfg, "", "", "10.0.0.5:10104")
 	if !cfgInSync(onDisk, cfg, "") {
 		t.Error("matching secrets key must be in-sync (no restart) — else restart loop on every boot")
 	}
@@ -115,7 +115,7 @@ func TestGatewayConfigInSync_secretsKeyMatches_returnsTrue(t *testing.T) {
 
 func TestGatewayConfigInSync_bothSecretsKeysEmpty_returnsTrue(t *testing.T) {
 	cfg := gateway.InstanceConfig{}
-	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	onDisk := gatewayYAMLFromInstance(cfg, "", "", "10.0.0.5:10104")
 	if !cfgInSync(onDisk, cfg, "") {
 		t.Error("empty on-disk + empty desired secrets key must be in-sync (no restart loop)")
 	}
@@ -123,7 +123,7 @@ func TestGatewayConfigInSync_bothSecretsKeysEmpty_returnsTrue(t *testing.T) {
 
 func TestGatewayConfigInSync_secretsKeyRotated_returnsFalse(t *testing.T) {
 	cfg := gateway.InstanceConfig{SecretsEncryptionKey: "new-key"}
-	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	onDisk := gatewayYAMLFromInstance(cfg, "", "", "10.0.0.5:10104")
 	onDisk.SecretsEncryptionKey = "old-key"
 	if cfgInSync(onDisk, cfg, "") {
 		t.Error("rotated secrets key (old != new) must be out-of-sync")
@@ -132,7 +132,7 @@ func TestGatewayConfigInSync_secretsKeyRotated_returnsFalse(t *testing.T) {
 
 func TestGatewayConfigInSync_webrtcDriftStillDetected(t *testing.T) {
 	cfg := gateway.InstanceConfig{WebRTCEnabled: true, SFUPort: 30000}
-	onDisk := gatewayYAMLFromInstance(gateway.InstanceConfig{}, "", "")
+	onDisk := gatewayYAMLFromInstance(gateway.InstanceConfig{}, "", "", "10.0.0.5:10104")
 	if cfgInSync(onDisk, cfg, "") {
 		t.Error("WebRTC drift must still be detected by the combined in-sync check")
 	}
@@ -140,7 +140,7 @@ func TestGatewayConfigInSync_webrtcDriftStillDetected(t *testing.T) {
 
 func TestGatewayConfigInSync_hmacSecretMissingOnDisk_returnsFalse(t *testing.T) {
 	cfg := gateway.InstanceConfig{Namespace: "ns", HTTPPort: 6101}
-	onDisk := gatewayYAMLFromInstance(cfg, "the-hmac", "")
+	onDisk := gatewayYAMLFromInstance(cfg, "the-hmac", "", "10.0.0.5:10104")
 	onDisk.APIKeyHMACSecret = ""
 	if cfgInSync(onDisk, cfg, "the-hmac") {
 		t.Fatal("empty on-disk HMAC secret vs non-empty desired must be out-of-sync (bugboard #165)")
@@ -149,7 +149,7 @@ func TestGatewayConfigInSync_hmacSecretMissingOnDisk_returnsFalse(t *testing.T) 
 
 func TestGatewayConfigInSync_hmacSecretMatches_returnsTrue(t *testing.T) {
 	cfg := gateway.InstanceConfig{Namespace: "ns", HTTPPort: 6101}
-	onDisk := gatewayYAMLFromInstance(cfg, "the-hmac", "")
+	onDisk := gatewayYAMLFromInstance(cfg, "the-hmac", "", "10.0.0.5:10104")
 	if !cfgInSync(onDisk, cfg, "the-hmac") {
 		t.Error("matching HMAC secret must be in-sync (no restart loop)")
 	}
@@ -157,7 +157,7 @@ func TestGatewayConfigInSync_hmacSecretMatches_returnsTrue(t *testing.T) {
 
 func TestGatewayConfigInSync_bothHmacSecretsEmpty_returnsTrue(t *testing.T) {
 	cfg := gateway.InstanceConfig{Namespace: "ns", HTTPPort: 6101}
-	onDisk := gatewayYAMLFromInstance(cfg, "", "")
+	onDisk := gatewayYAMLFromInstance(cfg, "", "", "10.0.0.5:10104")
 	if !cfgInSync(onDisk, cfg, "") {
 		t.Error("empty on-disk + empty desired HMAC must be in-sync")
 	}
@@ -165,7 +165,7 @@ func TestGatewayConfigInSync_bothHmacSecretsEmpty_returnsTrue(t *testing.T) {
 
 func TestGatewayConfigInSync_hmacSecretRotated_returnsFalse(t *testing.T) {
 	cfg := gateway.InstanceConfig{Namespace: "ns", HTTPPort: 6101}
-	onDisk := gatewayYAMLFromInstance(cfg, "new-hmac", "")
+	onDisk := gatewayYAMLFromInstance(cfg, "new-hmac", "", "10.0.0.5:10104")
 	onDisk.APIKeyHMACSecret = "old-hmac"
 	if cfgInSync(onDisk, cfg, "new-hmac") {
 		t.Error("rotated HMAC secret must be out-of-sync")
@@ -180,7 +180,7 @@ func TestGatewayYAMLEqual_anyFieldChangeIsDrift(t *testing.T) {
 		Namespace:            "ns",
 		HTTPPort:             6101,
 		SecretsEncryptionKey: "k",
-	}, "hmac", "/cluster-secret")
+	}, "hmac", "/cluster-secret", "10.0.0.5:6101")
 	if !gatewayYAMLEqual(base, base) {
 		t.Fatal("a config must equal itself")
 	}
@@ -250,6 +250,7 @@ func writeGatewayConfig(t *testing.T, base, ns, nodeID string, wr gateway.Gatewa
 }
 
 func TestReconcileGateway_inSyncIsNoOpNoError(t *testing.T) {
+	withOverlayIP(t, "10.0.0.5", nil)
 	root, nsBase := setupOramaDirs(t)
 	writeAPIKeyHMACSecret(t, root, "the-hmac-secret\n")
 	ns, node := "anchat-test", "node-1"
@@ -265,7 +266,11 @@ func TestReconcileGateway_inSyncIsNoOpNoError(t *testing.T) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	b, err := yaml.Marshal(gatewayYAMLFromInstance(cfg, hmac, ""))
+	listenAddr, err := gatewayListenAddr(cfg.Namespace, cfg.HTTPPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := yaml.Marshal(gatewayYAMLFromInstance(cfg, hmac, "", listenAddr))
 	if err != nil {
 		t.Fatal(err)
 	}

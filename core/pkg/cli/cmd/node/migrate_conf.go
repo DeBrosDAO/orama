@@ -52,8 +52,12 @@ Requires: orama auth login (for API authentication)`,
 			return fmt.Errorf("failed to load credentials: %w", err)
 		}
 		creds := store.GetDefaultCredential(envConfig.GatewayURL)
-		if creds == nil || creds.APIKey == "" {
+		if creds == nil {
 			return fmt.Errorf("no credentials for %s — run 'orama auth login' first", envConfig.GatewayURL)
+		}
+		token, err := auth.Bearer(envConfig.GatewayURL, store, creds)
+		if err != nil {
+			return err
 		}
 
 		if len(nodes) == 0 {
@@ -83,7 +87,7 @@ Requires: orama auth login (for API authentication)`,
 				continue
 			}
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-API-Key", creds.APIKey)
+			req.Header.Set("Authorization", "Bearer "+token)
 
 			resp, err := httpClient.Do(req)
 			if err != nil {

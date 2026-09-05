@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
@@ -33,11 +34,6 @@ import (
 //	  "dmap": "my-cache"
 //	}
 func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
-	if h.olricClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -52,6 +48,19 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 
 	if strings.TrimSpace(req.DMap) == "" || strings.TrimSpace(req.Key) == "" {
 		writeError(w, http.StatusBadRequest, "dmap and key are required")
+		return
+	}
+
+	if !h.authorizeKey(w, r, req.DMap, req.Key, gwauth.ActionRead) {
+		return
+	}
+
+	// The availability check comes after the request has been read and
+	// authorized. A caller who may not touch this key is refused whether or not
+	// the cache happens to be up, and a 503 would otherwise tell them the cache
+	// exists and is down — an answer they are not entitled to.
+	if h.olricClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
 
@@ -126,11 +135,6 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 //	  "dmap": "my-cache"
 //	}
 func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) {
-	if h.olricClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -150,6 +154,18 @@ func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) 
 
 	if len(req.Keys) == 0 {
 		writeError(w, http.StatusBadRequest, "keys array is required and cannot be empty")
+		return
+	}
+
+	// All or nothing. A partial answer to mget is indistinguishable from keys
+	// that were never set, so a caller would read a silently narrowed result as
+	// a complete one.
+	if !h.authorizeKeys(w, r, req.DMap, req.Keys, gwauth.ActionRead) {
+		return
+	}
+
+	if h.olricClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
 

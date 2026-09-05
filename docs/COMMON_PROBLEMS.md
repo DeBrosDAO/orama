@@ -338,9 +338,14 @@ the node holds no ipfs-cluster identity, i.e. it has never joined a cluster.
 ## 13. RootWallet agent: locked, waiting, or unreachable
 
 Commands that need an SSH key or a wallet signature — `orama node setup`,
-`orama push`, `orama auth login` — talk to the RootWallet desktop app's agent
+`orama push`, `orama auth approve` — talk to the RootWallet desktop app's agent
 over a Unix socket at `~/.rootwallet/agent.sock`. Override the path with
 `RW_AGENT_SOCK`.
+
+`orama auth login` uses the agent when it is reachable and does not need it when
+it is not: on a machine with no wallet it prints a code and waits for
+`orama auth approve <code>` on one that has. So "the agent is unreachable" is a
+reason to approve from elsewhere rather than a reason the login cannot happen.
 
 The agent answers with a code, and the CLI turns each one into an instruction:
 

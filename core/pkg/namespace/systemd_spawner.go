@@ -564,7 +564,11 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 		return err
 	}
 
-	gatewayConfig := gatewayYAMLFromInstance(cfg, apiKeyHMACSecret, s.clusterSecretPath)
+	listenAddr, err := gatewayListenAddr(cfg.Namespace, cfg.HTTPPort)
+	if err != nil {
+		return err
+	}
+	gatewayConfig := gatewayYAMLFromInstance(cfg, apiKeyHMACSecret, s.clusterSecretPath, listenAddr)
 
 	configBytes, err := yaml.Marshal(gatewayConfig)
 	if err != nil {
@@ -689,9 +693,9 @@ func (s *SystemdSpawner) readAPIKeyHMACSecret() (string, error) {
 // ReconcileGateway share. Adding a field to GatewayYAMLConfig without
 // putting it here makes spawn and reconcile diverge; the field-coverage
 // test in reconcile_gateway_test.go fails when that happens.
-func gatewayYAMLFromInstance(cfg gateway.InstanceConfig, hmacSecret, clusterSecretPath string) gateway.GatewayYAMLConfig {
+func gatewayYAMLFromInstance(cfg gateway.InstanceConfig, hmacSecret, clusterSecretPath, listenAddr string) gateway.GatewayYAMLConfig {
 	return gateway.GatewayYAMLConfig{
-		ListenAddr:            fmt.Sprintf(":%d", cfg.HTTPPort),
+		ListenAddr:            listenAddr,
 		ClientNamespace:       cfg.Namespace,
 		RQLiteDSN:             cfg.RQLiteDSN,
 		GlobalRQLiteDSN:       cfg.GlobalRQLiteDSN,
@@ -778,8 +782,8 @@ func gatewayYAMLEqual(a, b gateway.GatewayYAMLConfig) bool {
 // gatewayConfigInSync reports whether on-disk YAML matches what spawn would
 // write for cfg. Comparison is exhaustive over GatewayYAMLConfig (bugboard
 // #165): a new YAML field that spawn writes cannot silently skip reconcile.
-func gatewayConfigInSync(onDisk gateway.GatewayYAMLConfig, cfg gateway.InstanceConfig, hmacSecret, clusterSecretPath string) bool {
-	return gatewayYAMLEqual(onDisk, gatewayYAMLFromInstance(cfg, hmacSecret, clusterSecretPath))
+func gatewayConfigInSync(onDisk gateway.GatewayYAMLConfig, cfg gateway.InstanceConfig, hmacSecret, clusterSecretPath, listenAddr string) bool {
+	return gatewayYAMLEqual(onDisk, gatewayYAMLFromInstance(cfg, hmacSecret, clusterSecretPath, listenAddr))
 }
 
 // ReconcileGateway is the WARM counterpart to SpawnGateway: when a
@@ -823,7 +827,14 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 		hmacSecret = ""
 	}
 
-	if gatewayConfigInSync(onDisk, cfg, hmacSecret, s.clusterSecretPath) {
+	// Resolved by the caller rather than inside the comparison: where a gateway
+	// should listen depends on the node, and a comparison that can fail is one
+	// that reports drift when WireGuard blinks.
+	listenAddr, err := gatewayListenAddr(cfg.Namespace, cfg.HTTPPort)
+	if err != nil {
+		return err
+	}
+	if gatewayConfigInSync(onDisk, cfg, hmacSecret, s.clusterSecretPath, listenAddr) {
 		return nil
 	}
 
@@ -1233,4 +1244,42 @@ func writeConfigAtomic(configPath string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("rename temp config into place: %w", err)
 	}
 	return nil
+}
+
+// gatewayListenAddr is where a namespace gateway binds.
+//
+// A tenant's gateway binds the overlay address, not every interface. It used to
+// bind `:port`, so the only thing between a tenant's gateway and the internet
+// was a firewall rule — and a firewall rule is a thing that can be wrong,
+// whereas a listener that is not on a public interface cannot be reached from
+// one however the rules are written.
+//
+// The index gateway keeps binding everything: Caddy reverse-proxies to
+// localhost, and the ACME internal endpoint is reached there too.
+func gatewayListenAddr(namespace string, port int) (string, error) {
+	if isIndexNamespace(namespace) {
+		return fmt.Sprintf(":%d", port), nil
+	}
+	ip, err := overlayIP()
+	if err != nil {
+		// Refusing is right. A gateway that cannot find the overlay is a node
+		// whose WireGuard is not up, and binding every interface instead would
+		// silently put a tenant's gateway on the public one.
+		return "", fmt.Errorf("cannot bind the %s gateway to the overlay: WireGuard is not up on this node (%w)", namespace, err)
+	}
+	return fmt.Sprintf("%s:%d", ip, port), nil
+}
+
+// overlayIP is this node's address on the WireGuard mesh. A variable so a test
+// can run without an interface; nothing else replaces it.
+var overlayIP = getWireGuardIP
+
+// isIndexNamespace reports whether a namespace is the cluster's own rather than
+// a tenant's.
+func isIndexNamespace(namespace string) bool {
+	switch strings.TrimSpace(namespace) {
+	case "", "index", "default":
+		return true
+	}
+	return false
 }

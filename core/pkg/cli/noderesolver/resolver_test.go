@@ -30,8 +30,14 @@ func TestResolveFromMockServer_happyPath(t *testing.T) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		if r.Header.Get("X-API-Key") != "test-key" {
+		// One header, and it carries a session rather than the key. The
+		// gateway still accepts X-API-Key and is going to stop.
+		if r.Header.Get("Authorization") != "Bearer test-token" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("X-API-Key") != "" {
+			http.Error(w, "the credential was sent twice, in a header that is going away", http.StatusUnauthorized)
 			return
 		}
 
@@ -47,7 +53,7 @@ func TestResolveFromMockServer_happyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	nodes, err := resolveFromNetworkWithURL(server.URL, "test-key", "devnet")
+	nodes, err := resolveFromNetworkWithURL(server.URL, "test-token", "devnet")
 	if err != nil {
 		t.Fatalf("resolveFromNetworkWithURL: %v", err)
 	}

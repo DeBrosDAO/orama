@@ -25,6 +25,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/namespacecmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/node"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/nodescmd"
+	"github.com/DeBrosOfficial/network/pkg/cli/cmd/operatorcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/pushcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/rolloutcmd"
 	"github.com/DeBrosOfficial/network/pkg/cli/cmd/sandboxcmd"
@@ -92,6 +93,9 @@ and interacting with the Orama distributed network.`,
 
 	// The audit trail
 	rootCmd.AddCommand(auditcmd.Cmd)
+
+	// Cluster operations
+	rootCmd.AddCommand(operatorcmd.Cmd)
 
 	// Inspect command
 	rootCmd.AddCommand(inspectcmd.Cmd)

@@ -84,8 +84,16 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/auth/token", g.authHandlers.APIKeyToJWTHandler)
 		mux.HandleFunc("/v1/auth/api-key", g.authHandlers.IssueAPIKeyHandler)
 		mux.HandleFunc("/v1/auth/refresh", g.authHandlers.RefreshHandler)
+		mux.HandleFunc("/v1/auth/renew", g.authHandlers.RenewHandler)
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
+		// Signing in from a machine with no wallet on it (RFC 8628).
+		mux.HandleFunc("/v1/auth/device", g.authHandlers.DeviceAuthorizationHandler)
+		mux.HandleFunc("/v1/auth/device/approve", g.authHandlers.DeviceApprovalHandler)
+		mux.HandleFunc("/v1/auth/device/token", g.authHandlers.DeviceTokenHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)
+		// Which machines are signed in as you, and ending one of them.
+		mux.HandleFunc("/v1/auth/sessions", g.authHandlers.SessionsHandler)
+		mux.HandleFunc("/v1/auth/sessions/", g.authHandlers.SessionByIDHandler)
 		mux.HandleFunc("/v1/audit", g.authHandlers.AuditHandler)
 	}
 
@@ -185,6 +193,7 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)
 		mux.HandleFunc("/v1/operator/nodes", g.operatorHandler.HandleListNodes)
 		mux.HandleFunc("/v1/operator/node/register", g.operatorHandler.HandleRegister)
+		mux.HandleFunc("/v1/operator/rotate-signing-key", g.handleRotateSigningKey)
 	}
 
 	// vault proxy (public, rate-limited per identity within handler)
@@ -276,6 +285,9 @@ func (g *Gateway) Routes() http.Handler {
 
 		// Environment variables. The write runs on the home node because the
 		// variables live in a systemd unit on the machine the process runs on.
+		// What a deployment may do, as itself.
+		mux.HandleFunc("/v1/deployments/grants", g.appGrantsHandler)
+
 		mux.HandleFunc("/v1/deployments/env", g.envHandler.HandleGetEnv)
 		mux.HandleFunc("/v1/deployments/env/set", g.withHomeNodeProxy(g.envHandler.HandleSetEnv))
 

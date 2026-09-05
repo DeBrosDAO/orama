@@ -34,6 +34,8 @@ type Service struct {
 	keyID            string
 	edSigningKey     ed25519.PrivateKey
 	edKeyID          string
+	edKeyNamespace   string
+	signingKeys      *SigningKeys
 	preferEdDSA      bool
 	defaultNS        string
 	apiKeyHMACSecret string         // HMAC secret for hashing API keys before storage
@@ -74,6 +76,12 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 		s.revocations = NewRevocationList(orm, logger)
 		s.audit = NewAuditLog(orm, logger)
 	}
+	// Always present, database or not: a gateway with no database still has to
+	// verify what it minted itself.
+	// The registry is resolved per call, so a namespace gateway that learns
+	// where its core registry is after construction publishes its key there
+	// rather than into the tenant's own database.
+	s.signingKeys = NewSigningKeys(s.registryDatabase, logger)
 
 	if signingKeyPEM != "" {
 		block, _ := pem.Decode([]byte(signingKeyPEM))
@@ -119,6 +127,21 @@ func (s *Service) keyORM() client.NetworkClient {
 		return s.apiKeyORM
 	}
 	return s.orm
+}
+
+// registryDatabase is the cluster registry's database, or nil when this gateway
+// has none.
+//
+// Platform state — who may authenticate, and which keys may sign — belongs
+// here and not in a tenant's own database. It is a method rather than a
+// captured handle because a namespace gateway is told where its registry is
+// after the auth service is built.
+func (s *Service) registryDatabase() client.DatabaseClient {
+	orm := s.keyORM()
+	if orm == nil {
+		return nil
+	}
+	return orm.Database()
 }
 
 // SetRqliteClient injects the lower-level rqlite client. Required for code
@@ -236,14 +259,44 @@ func (s *Service) HashAPIKey(key string) string {
 	return HmacSHA256Hex(key, s.apiKeyHMACSecret)
 }
 
-// SetEdDSAKey configures an Ed25519 signing key for EdDSA JWT support.
-// When set, new tokens are signed with EdDSA; RS256 is still accepted for verification.
-func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey) {
+// SetEdDSAKey configures the Ed25519 key this gateway signs with.
+//
+// namespace is what the key is bound to: a namespace gateway signs only for its
+// own tenant, and a token signed with its key is refused if it claims another.
+// An empty namespace is the index gateway's key, which is the control plane and
+// is bound to nothing.
+func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey, namespace string) {
+	if s.signingKeys == nil {
+		// A Service built as a struct literal rather than by NewService — the
+		// shape several tests use — has no key set yet, and a gateway that
+		// signs a token has to be able to verify it.
+		s.signingKeys = NewSigningKeys(s.registryDatabase, s.logger)
+	}
 	s.edSigningKey = privKey
-	pubBytes := []byte(privKey.Public().(ed25519.PublicKey))
-	sum := sha256.Sum256(pubBytes)
-	s.edKeyID = "ed_" + hex.EncodeToString(sum[:8])
+	pub := privKey.Public().(ed25519.PublicKey)
+	s.edKeyID = KeyIDFor(pub)
+	s.edKeyNamespace = namespace
 	s.preferEdDSA = true
+	s.signingKeys.Add(SigningKey{KID: s.edKeyID, Namespace: namespace, Public: pub})
+}
+
+// SigningKeys is every key this gateway will accept a token from.
+func (s *Service) SigningKeys() *SigningKeys { return s.signingKeys }
+
+// SigningKID is the key this gateway signs with.
+func (s *Service) SigningKID() string { return s.edKeyID }
+
+// PublishSigningKey records this gateway's key so the rest of the cluster will
+// accept what it mints.
+func (s *Service) PublishSigningKey(ctx context.Context) error {
+	if s.edSigningKey == nil {
+		return nil
+	}
+	return s.signingKeys.Publish(ctx, SigningKey{
+		KID:       s.edKeyID,
+		Namespace: s.edKeyNamespace,
+		Public:    s.edSigningKey.Public().(ed25519.PublicKey),
+	})
 }
 
 // insertNonce records a challenge this gateway has just issued, so that
@@ -779,8 +832,27 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 		return "", err
 	}
 
-	if err := s.ClaimNamespaceOwnership(ctx, db, nsID, namespace, wallet); err != nil {
+	// The lobby has no keys. A wallet there holds no role and owns nothing;
+	// what it gets from signing in is a session, and the one thing that session
+	// reaches is POST /v1/namespaces. Minting a key here would hand every
+	// wallet on the internet a credential in the index gateway's own namespace.
+	if IsLobbyNamespace(namespace) {
+		return "", fmt.Errorf("%w: %q is where a wallet stands before it owns anything; "+
+			"create a namespace with 'orama namespace create <name>'", ErrNoKeysInLobby, LobbyNamespace)
+	}
+
+	// Membership first, and the role it carries decides what the key holds.
+	// The key used to be minted with admin whatever the caller's role was, so
+	// a reader or a runtime member signing in was handed the full control
+	// plane by the login itself.
+	grant, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, NormalizeWallet(wallet))
+	if err != nil {
 		return "", err
+	}
+	ownerScopes := grant.Scopes().Canonical()
+	if ownerScopes == "" {
+		return "", fmt.Errorf("this wallet's role in %q is %s, which holds nothing, so there is no key to mint",
+			namespace, grant.Role)
 	}
 
 	// The wallet's previous key, if it has one. Its id, not its value: what is
@@ -796,11 +868,8 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 
 	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured.
 	//
-	// The scope set is written, never left NULL. This is the owner's own key, so
-	// the grant is admin — the same access an empty column used to be read as,
-	// with the difference that it is now a decision on the row rather than an
-	// inference in the reader, and a key minted with no scopes denies.
-	ownerScopes := ScopeSet{ScopeAdmin: {}}.Canonical()
+	// The scope set is written, never left NULL: a key minted with no scopes
+	// denies, where an empty column used to be read as admin.
 	apiKey, err := NewKey(KeyTypeFor(ownerScopes))
 	if err != nil {
 		return "", err

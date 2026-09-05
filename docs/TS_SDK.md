@@ -55,7 +55,7 @@ const client = createClient({
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `baseURL` | `string` | — | Gateway URL. Required. |
-| `apiKey` | `string` | — | API key, in the form `ak_<id>:<namespace>` |
+| `apiKey` | `string` | — | API key, `orama_<type>_<payload>_<checksum>`. Exchanged for a token before the first request; the key itself never goes on the wire again |
 | `jwt` | `string` | — | An existing session token |
 | `timeout` | `number` | `60000` | Per-request timeout in milliseconds |
 | `maxRetries` | `number` | `3` | Attempts for a retryable status (408, 429, 5xx) |
@@ -95,11 +95,41 @@ environment; do not commit it.
 
 ## Authentication
 
+### One credential, one header
+
+Every request carries `Authorization: Bearer <token>` and nothing else. The SDK
+used to choose between `X-API-Key` and `Authorization` by looking at the path —
+three spellings, and the raw key on every request. There is one now.
+
 ### API key
 
 ```typescript
 const client = createClient({ baseURL, apiKey: process.env.ORAMA_API_KEY });
 ```
+
+The key is **exchanged once**, before the first request, for a 15-minute token
+carrying the key's own grants. Every request after that carries the token, and
+the SDK exchanges again before it expires and once more if the gateway says the
+token has expired. So the key stays in the process it was given to: it is not in
+an access log, a proxy trace, a devtools tab or a WebSocket URL.
+
+You do not have to do anything for this. It is why `getToken()` returns a token
+rather than the key you configured.
+
+### A deployed app
+
+An app running on Orama is handed a token of its own, in the file named by
+`$ORAMA_TOKEN_FILE`, and holds no key at all:
+
+```typescript
+import { createWorkloadClient } from "@debros/orama";
+
+const client = await createWorkloadClient();
+```
+
+It reads `ORAMA_GATEWAY_URL` and `ORAMA_TOKEN_FILE` from the environment the
+platform set up, and renews the token before it expires. What it may reach is
+whatever `orama app grants set <app> …` gave it — nothing, until you do.
 
 ### Wallet login
 
@@ -318,15 +348,21 @@ A cancelled request is never retried and is not reported through
 
 ## Errors
 
-Every failure is an `SDKError`, so one `catch` covers the SDK. Four subclasses
+Every failure is an `SDKError`, so one `catch` covers the SDK. The subclasses
 name the cases an application usually handles differently:
 
 | Class | When | Extra |
 |-------|------|-------|
 | `AuthError` | 401 — credential missing, expired, or not enough alone | `requiredScope` |
+| `RevokedCredentialError` | 401 with `AUTH_REVOKED` — the answer is "sign in again", not "retry" | |
 | `ScopeError` | 403 — the credential's grants do not cover the operation | `requiredScope` |
+| `NamespaceError` | 403 with `NAMESPACE_MISMATCH` — the client is pointed at the wrong gateway, or the key came from the wrong environment | `namespace`, `credentialNamespace` |
 | `NotFoundError` | 404 | |
 | `NetworkError` | No HTTP response at all. `httpStatus` is always 0 | `code` is `NETWORK_ERROR`, `TIMEOUT` or `ABORTED` |
+
+`error.code` is the gateway's own; every code is listed in [AUTH.md](AUTH.md).
+`Scope` and `Role` are exported as types, so a grant name that does not exist is
+a compile error rather than a 403 in production.
 
 ```typescript
 import { NetworkError, ScopeError } from "@debros/orama";

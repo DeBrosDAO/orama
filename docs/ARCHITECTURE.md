@@ -819,10 +819,13 @@ Function Invocation:
      to a namespace was an admin. Migration 050 moves the rows and drops the
      table
    - A grant may be narrowed to a resource: `pubsub:topic=chat.*`,
-     `fn:name=checkout`. Publish, subscribe and invoke apply it, so a tenant
-     can isolate its own end users. A selector in a domain the data path cannot
-     yet name is refused when the grant is written, rather than stored and
-     silently ignored. See `docs/SECURITY.md`
+     `fn:name=checkout`, `storage:avatars/*`, `cache:key=sessions/*`. Publish,
+     subscribe, invoke, the storage endpoints and the cache endpoints apply it,
+     so a tenant can isolate its own end users. A grant with a selector holds
+     exactly the scope that selector narrows, and the data path narrows that
+     scope to what it matches. A selector in a domain the data path cannot yet
+     name is refused when the grant is written, rather than stored and silently
+     ignored. See `docs/SECURITY.md`
    - `/v1/namespace/members` and `orama members` manage them; transferring the
      namespace requires the owner
 
@@ -849,6 +852,14 @@ Function Invocation:
    - Short-lived (15 min default)
    - Refresh token support
    - Claims-based authorization
+   - Every gateway signs with its own Ed25519 key, generated at first boot and
+     kept `0600`; the public halves are published in `signing_keys` so the rest
+     of the cluster verifies. A namespace gateway's key is **bound to its
+     namespace** — a token signed with it and claiming another is refused. The
+     key used to be derived from the cluster secret, which every node holds, so
+     every node could sign for every tenant
+   - `orama operator rotate-signing-key` publishes a successor and leaves the
+     outgoing key verifying what it already signed for one token lifetime
 
 5. **The audit trail**
    - `audit_events` records what changed and who changed it: sign-ins, keys,
@@ -867,7 +878,9 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **WireGuard IPs:** Each node gets a private IP (10.0.0.x/24) used for all cluster traffic
 - **UFW Firewall:** Only public ports are exposed: 22 (SSH; Ubuntu/sandbox only — OramaOS has no SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
 - **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
-- **Internal services** (RQLite 10100/10101, IPFS swarm 4001 + API 10107, Olric 10102/10103, Gateway 10104) are reachable only from the overlay **because the firewall says so, not because of where they listen**. A namespace's RQLite is spawned with `HTTP_ADDR=0.0.0.0:<port>` and `RAFT_ADDR=0.0.0.0:<port>`, and a namespace gateway with `ListenAddr: ":<port>"` (`pkg/namespace/systemd_spawner.go`), so all of them are bound to every interface and one wrong UFW rule exposes them. Moving the namespace gateway onto the overlay address is chg-387, which explains why it is not a one-liner; the same is true of the RQLite listeners. Until then the firewall is the only thing between them and the internet
+- **A tenant's namespace gateway binds the overlay address**, not every interface, so it cannot be reached from a public one however the firewall is written. The index gateway keeps binding everything: Caddy reverse-proxies to localhost and the ACME internal endpoint is reached there. A node whose WireGuard is not up refuses to configure a tenant gateway rather than putting it on the public interface
+- **A namespace's RQLite still binds every interface** (`HTTP_ADDR=0.0.0.0:<port>`, `RAFT_ADDR=0.0.0.0:<port>`), so for that one the firewall is still the only thing between it and the internet. Moving it needs the DSN moved with it — the namespace gateway reaches its own database at `http://localhost:<port>` — and that is chg-387's remaining half
+- **UFW is still the outer boundary** for everything on the node, but it is no longer the only one for the gateway
 - **Invite tokens:** Single-use and time-limited, and there is no standing cluster password. The token is still a secret passed as a command-line argument, so it is visible to `ps` and lands in shell history on the machine that runs `orama node install`
 - **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh. The joining node establishes its libp2p identity before it asks to join, so the request carries the peer id the cluster will key it by
 

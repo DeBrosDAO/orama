@@ -145,7 +145,12 @@ export class PubSubClient {
       }
     }
 
-    const authToken = this.httpClient.getApiKey() ?? this.httpClient.getToken();
+    // A token, never the key. A browser cannot set a header on an upgrade, so
+    // whatever goes here ends up in the gateway's access log and in the
+    // browser's own history — which is exactly where a 90-day credential
+    // should not be. The token expires in fifteen minutes.
+    await this.httpClient.ensureCredential();
+    const authToken = this.httpClient.getToken();
 
     // Create WebSocket client
     const wsClient = new WSClient({

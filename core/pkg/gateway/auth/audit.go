@@ -53,6 +53,13 @@ const (
 	AuditGrantAdded       = "grant.add"
 	AuditGrantRevoked     = "grant.revoke"
 	AuditOwnerTransferred = "namespace.transfer"
+	// A login from a machine with no wallet on it. All four are recorded
+	// because the interesting question afterwards is not "did someone log in"
+	// but "who approved the code that logged this machine in".
+	AuditDeviceLoginStarted  = "auth.device.start"
+	AuditDeviceLoginApproved = "auth.device.approve"
+	AuditDeviceLoginDenied   = "auth.device.deny"
+	AuditDeviceLoginClaimed  = "auth.device.claim"
 )
 
 // AuditActions is every action this gateway records. A new one has to be added
@@ -65,6 +72,7 @@ var AuditActions = []string{
 	AuditFunctionDeployed, AuditFunctionDeleted, AuditDeploymentCreated, AuditDeploymentDeleted,
 	AuditOperatorAction, AuditLegacyCredential,
 	AuditGrantAdded, AuditGrantRevoked, AuditOwnerTransferred,
+	AuditDeviceLoginStarted, AuditDeviceLoginApproved, AuditDeviceLoginDenied, AuditDeviceLoginClaimed,
 }
 
 const (

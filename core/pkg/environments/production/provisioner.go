@@ -171,7 +171,7 @@ func lockOramaBinDir(binDir string) error {
 // leaving the node with no TURN at all.
 func oramaSudoersRule(systemctlPath, ufwPath string) string {
 	return fmt.Sprintf(
-		"orama ALL=(root) NOPASSWD: %[1]s start orama-namespace-*, %[1]s stop orama-namespace-*, %[1]s enable orama-namespace-*, %[1]s disable orama-namespace-*, %[1]s restart orama-namespace-*, %[1]s start orama-deploy-*, %[1]s stop orama-deploy-*, %[1]s enable orama-deploy-*, %[1]s disable orama-deploy-*, %[1]s restart orama-deploy-*, %[1]s start orama-turn.service, %[1]s stop orama-turn.service, %[1]s restart orama-turn.service, %[1]s enable orama-turn.service, %[1]s daemon-reload, %[2]s allow *, %[2]s delete allow *, %[2]s reload, %[2]s status, %[2]s status verbose\n",
+		"orama ALL=(root) NOPASSWD: %[1]s start orama-namespace-*, %[1]s stop orama-namespace-*, %[1]s enable orama-namespace-*, %[1]s disable orama-namespace-*, %[1]s restart orama-namespace-*, %[1]s start orama-deploy-*, %[1]s stop orama-deploy-*, %[1]s enable orama-deploy-*, %[1]s disable orama-deploy-*, %[1]s restart orama-deploy-*, %[1]s set-property orama-deploy-* MemoryMax=*, %[1]s set-property orama-deploy-* CPUQuota=*, %[1]s set-property orama-deploy-* MemoryMax=* CPUQuota=*, %[1]s start orama-turn.service, %[1]s stop orama-turn.service, %[1]s restart orama-turn.service, %[1]s enable orama-turn.service, %[1]s daemon-reload, %[2]s allow *, %[2]s delete allow *, %[2]s reload, %[2]s status, %[2]s status verbose\n",
 		systemctlPath, ufwPath,
 	)
 }

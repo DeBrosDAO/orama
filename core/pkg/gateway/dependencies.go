@@ -824,27 +824,44 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		authService.SetClaimsResolver(newJWTClaimsProvider(deps.ServerlessInvoker, logger.Logger))
 	}
 
-	// Load or create EdDSA key for new JWT tokens. Bug #215 fix: when
-	// cfg.ClusterSecret is set, the key is derived deterministically from
-	// it via HKDF, so every gateway in the cluster shares the same Ed25519
-	// keypair and JWTs verify cross-node. With an empty ClusterSecret the
-	// per-node legacy behaviour is retained (single-node test deployments).
-	if cfg.ClusterSecret == "" {
-		// Loud warning: a multi-node cluster booted without a cluster
-		// secret reproduces bug #215 (per-gateway random keys, JWTs
-		// unverifiable cross-node). Single-node test rigs are the only
-		// legitimate case.
-		logger.ComponentWarn(logging.ComponentGeneral,
-			"ClusterSecret is empty; JWT signing keys will be random per-node. "+
-				"Multi-node clusters MUST set ClusterSecret or JWTs will not verify across gateways (bug #215).")
-	}
-	edKey, err := loadOrCreateEdSigningKey(cfg.DataDir, cfg.ClusterSecret, logger)
+	// The key this gateway signs with.
+	//
+	// It used to be HKDF-derived from the cluster secret, so every node in the
+	// cluster held the same private key and could mint a token for any
+	// namespace and any subject. Each gateway generates its own now; the
+	// public halves are published so the others verify, and a namespace
+	// gateway's key is bound to its namespace so it can sign only for its own
+	// tenant.
+	edKey, err := loadOrCreateEdSigningKey(cfg.DataDir, logger)
 	if err != nil {
-		logger.ComponentWarn(logging.ComponentGeneral, "Failed to load EdDSA signing key; new JWTs will use RS256",
-			zap.Error(err))
-	} else {
-		authService.SetEdDSAKey(edKey)
-		logger.ComponentInfo(logging.ComponentGeneral, "EdDSA signing key loaded; new JWTs will use EdDSA")
+		return fmt.Errorf("this gateway has no signing key and cannot mint a token: %w", err)
+	}
+	authService.SetEdDSAKey(edKey, signingKeyNamespace(cfg.ClientNamespace))
+
+	// Tokens minted before this change carry the old cluster-derived kid, and
+	// have to keep verifying across the upgrade. Only for one access-token
+	// lifetime: after that a key every node can derive verifies nothing, which
+	// is the whole point.
+	if cfg.ClusterSecret != "" {
+		if legacy, lerr := LegacyClusterSigningKey(cfg.ClusterSecret); lerr == nil {
+			authService.SigningKeys().Add(auth.SigningKey{
+				KID:       auth.KeyIDFor(legacy),
+				Public:    legacy,
+				RetiredAt: time.Now().Add(auth.AccessTokenLifetime),
+			})
+		} else {
+			logger.ComponentWarn(logging.ComponentGeneral,
+				"could not derive the previous cluster signing key; tokens issued before this upgrade will be refused",
+				zap.Error(lerr))
+		}
+	}
+
+	// Publish before anything is minted, or the first token this gateway
+	// issues is refused everywhere else until the next reload.
+	if perr := authService.PublishSigningKey(context.Background()); perr != nil {
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"could not publish this gateway's signing key; other gateways will refuse the tokens it mints",
+			zap.Error(perr))
 	}
 
 	// Configure API key HMAC secret if available
@@ -1330,4 +1347,18 @@ func buildPushDispatcher(
 		"push subsystem initialized; tenants can self-serve via PUT /v1/push/config")
 
 	return legacy, store, manager, cfgStore, credManager, nil
+}
+
+// signingKeyNamespace is what a gateway's signing key is bound to.
+//
+// A namespace gateway's key signs only for its own tenant. The index gateway's
+// is bound to nothing: it is the control plane, it mints the tokens the CLI
+// signs in with for every namespace, and a compromise of it is not a tenant
+// boundary problem.
+func signingKeyNamespace(clientNamespace string) string {
+	ns := strings.TrimSpace(clientNamespace)
+	if ns == "" || ns == "default" {
+		return ""
+	}
+	return ns
 }

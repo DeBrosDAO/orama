@@ -38,12 +38,12 @@ var nsClient = &http.Client{
 // A non-2xx reply becomes an error carrying an exit code, so a script can tell
 // "you are not authenticated" from "the gateway is unreachable" from "that
 // namespace does not exist".
-func nsRequest(what, method, url, apiKey string, body io.Reader) (map[string]any, error) {
+func nsRequest(what, method, url, token string, body io.Reader) (map[string]any, error) {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, clierr.Failure("failed to build the %s request: %w", what, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -65,11 +65,19 @@ func nsRequest(what, method, url, apiKey string, body io.Reader) (map[string]any
 	return result, nil
 }
 
-// nsError classifies a gateway refusal by status.
+// nsError classifies a gateway refusal by status, and says what to do about it
+// by code.
+//
+// The two answer different questions and both are needed: the status decides
+// the exit code a script branches on, and the code decides the sentence a
+// person reads. Reporting only the gateway's own message left "insufficient
+// scope" as the whole of the advice.
 func nsError(what string, status int, result map[string]any) error {
 	message := "unknown error"
-	if e, ok := result["error"].(string); ok && e != "" {
-		message = e
+	if encoded, err := json.Marshal(result); err == nil {
+		if refusal := auth.GatewayErrorFrom(status, encoded); refusal.Code != "" || refusal.Message != "" {
+			message = refusal.Error()
+		}
 	}
 
 	switch status {
@@ -112,7 +120,7 @@ func NamespaceKeysCreate(ns, scope, label string, expiresInDays int) error {
 			"or an explicit grant list such as \"invoke,storage,push\"")
 	}
 
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -127,7 +135,7 @@ func NamespaceKeysCreate(ns, scope, label string, expiresInDays int) error {
 	}
 
 	result, err := nsRequest("create the key", http.MethodPost,
-		gatewayURL+"/v1/namespace/keys", apiKey, bytes.NewReader(payload))
+		gatewayURL+"/v1/namespace/keys", token, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -146,13 +154,13 @@ func NamespaceKeysCreate(ns, scope, label string, expiresInDays int) error {
 
 // NamespaceKeysList lists a namespace's API keys.
 func NamespaceKeysList(ns string) error {
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
 
 	result, err := nsRequest("list the keys", http.MethodGet,
-		gatewayURL+"/v1/namespace/keys", apiKey, nil)
+		gatewayURL+"/v1/namespace/keys", token, nil)
 	if err != nil {
 		return err
 	}
@@ -194,7 +202,7 @@ func NamespaceKeysRotate(ns string, id, overlapDays, expiresInDays int) error {
 		return clierr.Usage("--id must be a positive key id; 'orama namespace keys list' shows them")
 	}
 
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -212,7 +220,7 @@ func NamespaceKeysRotate(ns string, id, overlapDays, expiresInDays int) error {
 	}
 
 	result, err := nsRequest("rotate the key", http.MethodPost,
-		fmt.Sprintf("%s/v1/namespace/keys/%d/rotate", gatewayURL, id), apiKey, bytes.NewReader(payload))
+		fmt.Sprintf("%s/v1/namespace/keys/%d/rotate", gatewayURL, id), token, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -231,13 +239,13 @@ func NamespaceKeysRevoke(ns string, id int) error {
 		return clierr.Usage("--id must be a positive key id; 'orama namespace keys list' shows them")
 	}
 
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
 
 	if _, err := nsRequest("revoke the key", http.MethodDelete,
-		fmt.Sprintf("%s/v1/namespace/keys/%d", gatewayURL, id), apiKey, nil); err != nil {
+		fmt.Sprintf("%s/v1/namespace/keys/%d", gatewayURL, id), token, nil); err != nil {
 		return err
 	}
 
@@ -247,7 +255,7 @@ func NamespaceKeysRevoke(ns string, id int) error {
 
 // NamespaceKeysRevokeLegacy revokes every unscoped (legacy) key.
 func NamespaceKeysRevokeLegacy(ns string, force bool) error {
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -261,7 +269,7 @@ func NamespaceKeysRevokeLegacy(ns string, force bool) error {
 	}
 
 	result, err := nsRequest("revoke the legacy keys", http.MethodPost,
-		gatewayURL+"/v1/namespace/keys/revoke-legacy", apiKey, nil)
+		gatewayURL+"/v1/namespace/keys/revoke-legacy", token, nil)
 	if err != nil {
 		return err
 	}
@@ -457,7 +465,7 @@ func namespaceWebRTCToggle(ns string, enable bool) error {
 		return clierr.Usage("--namespace is required: orama namespace %s webrtc --namespace <name>", verb)
 	}
 
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -470,7 +478,7 @@ func namespaceWebRTCToggle(ns string, enable bool) error {
 	}
 
 	if _, err := nsRequest(verb+" WebRTC", http.MethodPost,
-		fmt.Sprintf("%s/v1/namespace/webrtc/%s", gatewayURL, verb), apiKey, nil); err != nil {
+		fmt.Sprintf("%s/v1/namespace/webrtc/%s", gatewayURL, verb), token, nil); err != nil {
 		return err
 	}
 
@@ -496,7 +504,7 @@ func namespaceStealthToggle(ns string, enable bool) error {
 		return clierr.Usage("--namespace is required: orama namespace %s webrtc-stealth --namespace <name>", verb)
 	}
 
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -509,7 +517,7 @@ func namespaceStealthToggle(ns string, enable bool) error {
 	}
 
 	if _, err := nsRequest(verb+" WebRTC stealth", http.MethodPost,
-		fmt.Sprintf("%s/v1/namespace/webrtc/stealth/%s", gatewayURL, verb), apiKey, nil); err != nil {
+		fmt.Sprintf("%s/v1/namespace/webrtc/stealth/%s", gatewayURL, verb), token, nil); err != nil {
 		return err
 	}
 
@@ -525,13 +533,13 @@ func namespaceStealthToggle(ns string, enable bool) error {
 
 // NamespaceWebRTCStatus reports a namespace's WebRTC configuration.
 func NamespaceWebRTCStatus(ns string) error {
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
 
 	result, err := nsRequest("read the WebRTC status", http.MethodGet,
-		gatewayURL+"/v1/namespace/webrtc/status", apiKey, nil)
+		gatewayURL+"/v1/namespace/webrtc/status", token, nil)
 	if err != nil {
 		return err
 	}
@@ -564,7 +572,7 @@ func NamespaceWebRTCStatus(ns string) error {
 }
 
 // loadAuthForNamespace resolves the gateway and the API key to call it with.
-func loadAuthForNamespace(ns string) (gatewayURL, apiKey string, err error) {
+func loadAuthForNamespace(ns string) (gatewayURL, token string, err error) {
 	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
 		return "", "", clierr.Failure("failed to load credentials: %w", err)
@@ -576,10 +584,16 @@ func loadAuthForNamespace(ns string) (gatewayURL, apiKey string, err error) {
 	}
 
 	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil || !creds.IsValid() {
+	if creds == nil {
 		return "", "", clierr.Auth("not authenticated for %s: run 'orama auth login'", gatewayURL)
 	}
-	return gatewayURL, creds.APIKey, nil
+	// A short-lived token, not the key. Key management is the last place to
+	// send a key on every request.
+	token, err = auth.Bearer(gatewayURL, store, creds)
+	if err != nil {
+		return "", "", clierr.Auth("%w", err)
+	}
+	return gatewayURL, token, nil
 }
 
 // NamespaceCreate creates a namespace and starts its cluster.

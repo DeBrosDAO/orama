@@ -29,6 +29,10 @@ type ownershipDB struct {
 	principals map[int64]string
 	nextID     int64
 
+	// failGrantRead fails only GrantIn, where failOwnerRead fails both reads.
+	// Telling them apart is what makes "an unreadable grant is not the absence
+	// of a grant" a thing a test can hold.
+	failGrantRead  bool
 	failOwnerRead  bool
 	failOwnerWrite bool
 	failKeyLink    bool
@@ -65,7 +69,7 @@ func (d *ownershipDB) Query(_ context.Context, sql string, args ...interface{}) 
 	switch {
 	case strings.Contains(sql, "SELECT g.role, g.resource"):
 		// GrantIn: (namespace id, principal type, identifier).
-		if d.failOwnerRead {
+		if d.failOwnerRead || d.failGrantRead {
 			return nil, errString("grant read failed")
 		}
 		ns, ptype, identifier := key(args[0]), getStringVal(args[1]), getStringVal(args[2])
@@ -183,19 +187,25 @@ func serviceWith(t *testing.T, db *ownershipDB) *Service {
 	return s
 }
 
-func TestClaimNamespaceOwnership_anUnownedNamespaceTakesTheFirstWallet(t *testing.T) {
+// Signing in used to claim: the first wallet to reach a namespace with no owner
+// became its owner. That is how `default` — created by migration 001 with no
+// owner — ended up belonging to whichever wallet happened to sign in first on
+// each cluster, and every wallet after it got a 403 on the namespace the docs
+// called "where a wallet signs in before it owns anything".
+func TestRequireNamespaceMember_doesNotClaim(t *testing.T) {
 	db := newOwnershipDB()
 	s := serviceWith(t, db)
 
-	if err := s.ClaimNamespaceOwnership(context.Background(), db, int64(1), "anchat", "0xCreator"); err != nil {
-		t.Fatalf("the first wallet was refused: %v", err)
+	err := s.RequireNamespaceMember(context.Background(), "0xCreator", "anchat")
+	if !errors.Is(err, ErrNamespaceUnowned) {
+		t.Fatalf("an unowned namespace answered %v, want ErrNamespaceUnowned", err)
 	}
-	if got := db.walletOwners["1"]; got != "0xcreator" {
-		t.Errorf("owner recorded as %q, want the normalized wallet", got)
+	if owner := db.walletOwners["1"]; owner != "" {
+		t.Errorf("signing in recorded %q as the owner", owner)
 	}
 }
 
-func TestClaimNamespaceOwnership_theOwnerIsAcceptedAgain(t *testing.T) {
+func TestRequireNamespaceMember_theOwnerIsAcceptedAgain(t *testing.T) {
 	db := newOwnershipDB()
 	db.walletOwners["1"] = "0xcreator"
 	s := serviceWith(t, db)
@@ -203,23 +213,23 @@ func TestClaimNamespaceOwnership_theOwnerIsAcceptedAgain(t *testing.T) {
 	// Different spelling, same wallet: ownership is normalized, and a login
 	// that fails on capitalization would lock an owner out of their own
 	// namespace.
-	if err := s.ClaimNamespaceOwnership(context.Background(), db, int64(1), "anchat", "0xCREATOR"); err != nil {
+	if err := s.RequireNamespaceMember(context.Background(), "0xCREATOR", "anchat"); err != nil {
 		t.Fatalf("the owner was refused on their own namespace: %v", err)
 	}
 }
 
 // This is the takeover: any wallet that signed a fresh nonce and named an
 // existing namespace became a co-owner of it, and got an admin key back.
-func TestClaimNamespaceOwnership_aSecondWalletIsRefused(t *testing.T) {
+func TestRequireNamespaceMember_aSecondWalletIsRefused(t *testing.T) {
 	db := newOwnershipDB()
 	db.walletOwners["1"] = "0xcreator"
 	s := serviceWith(t, db)
 
-	err := s.ClaimNamespaceOwnership(context.Background(), db, int64(1), "anchat", "0xsquatter")
+	err := s.RequireNamespaceMember(context.Background(), "0xsquatter", "anchat")
 
 	var owned *ErrNamespaceOwnedByAnother
 	if !errors.As(err, &owned) {
-		t.Fatalf("a second wallet claimed the namespace: %v", err)
+		t.Fatalf("a second wallet was let in: %v", err)
 	}
 	if owned.Namespace != "anchat" {
 		t.Errorf("the error names namespace %q, want anchat", owned.Namespace)
@@ -229,47 +239,58 @@ func TestClaimNamespaceOwnership_aSecondWalletIsRefused(t *testing.T) {
 	}
 }
 
-// Two wallets arriving together both read no owner. The database decides, and
-// the loser has to be told it lost rather than told the gateway broke.
-func TestClaimNamespaceOwnership_theLoserOfARaceIsRefusedNotErrored(t *testing.T) {
+// The lobby is where a wallet stands before it owns anything: no grant is
+// needed there and none is written, however many wallets arrive.
+func TestRequireNamespaceMember_theLobbyIsOpenAndWritesNothing(t *testing.T) {
 	db := newOwnershipDB()
 	s := serviceWith(t, db)
-	db.raceWinner = "0xfaster"
 
-	err := s.ClaimNamespaceOwnership(context.Background(), db, int64(1), "anchat", "0xslower")
-
-	var owned *ErrNamespaceOwnedByAnother
-	if !errors.As(err, &owned) {
-		t.Fatalf("the loser of the race got %v, want a not-owned error", err)
+	for _, wallet := range []string{"0xfirst", "0xsecond"} {
+		if err := s.RequireNamespaceMember(context.Background(), wallet, LobbyNamespace); err != nil {
+			t.Fatalf("%s was refused the lobby: %v", wallet, err)
+		}
 	}
-}
-
-// The same wallet twice concurrently is one wallet, not a conflict.
-func TestClaimNamespaceOwnership_losingToYourselfIsSuccess(t *testing.T) {
-	db := newOwnershipDB()
-	s := serviceWith(t, db)
-	db.raceWinner = "0xcreator"
-
-	if err := s.ClaimNamespaceOwnership(context.Background(), db, int64(1), "anchat", "0xCreator"); err != nil {
-		t.Fatalf("a wallet that raced itself was refused: %v", err)
+	if len(db.walletOwners) != 0 || len(db.principals) != 0 {
+		t.Errorf("signing in to the lobby wrote something: owners=%v principals=%v",
+			db.walletOwners, db.principals)
 	}
 }
 
 // A read that fails says so. Treating "cannot tell who owns this" as "nobody
 // owns it" is how the guard would be bypassed by a flaky query.
-func TestClaimNamespaceOwnership_anUnreadableOwnerIsAnError(t *testing.T) {
+func TestRequireNamespaceMember_anUnreadableGrantIsAnError(t *testing.T) {
+	// Only the grant read fails. The owner read still answers, and answers
+	// "nobody" — so a caller that treats the failed read as "holds no grant"
+	// falls through to the unowned branch and reports the wrong thing about a
+	// namespace it could not read.
 	db := newOwnershipDB()
-	db.failOwnerRead = true
+	db.failGrantRead = true
 	s := serviceWith(t, db)
 
-	err := s.ClaimNamespaceOwnership(context.Background(), db, int64(1), "anchat", "0xanyone")
+	err := s.RequireNamespaceMember(context.Background(), "0xanyone", "anchat")
 	if err == nil {
-		t.Fatal("an unreadable ownership table let the claim through")
+		t.Fatal("an unreadable grants table let the caller through")
 	}
-	var owned *ErrNamespaceOwnedByAnother
-	if errors.As(err, &owned) {
-		t.Error("a read failure was reported as someone else's namespace")
+	if errors.Is(err, ErrNamespaceUnowned) {
+		t.Error("a failed grant read was reported as an unowned namespace")
 	}
+	if !strings.Contains(err.Error(), "read the grants") {
+		t.Errorf("the error does not say what could not be read: %v", err)
+	}
+
+	t.Run("and an owner read that fails is an error too", func(t *testing.T) {
+		db := newOwnershipDB()
+		db.failOwnerRead = true
+		s := serviceWith(t, db)
+
+		err := s.RequireNamespaceMember(context.Background(), "0xanyone", "anchat")
+		if err == nil {
+			t.Fatal("an unreadable ownership table let the caller through")
+		}
+		if errors.Is(err, ErrNamespaceUnowned) {
+			t.Error("a read failure was reported as an unowned namespace")
+		}
+	})
 }
 
 func TestGetOrCreateAPIKey_refusesANamespaceOwnedByAnother(t *testing.T) {
@@ -279,9 +300,8 @@ func TestGetOrCreateAPIKey_refusesANamespaceOwnedByAnother(t *testing.T) {
 
 	apiKey, err := s.GetOrCreateAPIKey(context.Background(), "0xsquatter", "anchat")
 
-	var owned *ErrNamespaceOwnedByAnother
-	if !errors.As(err, &owned) {
-		t.Fatalf("got (%q, %v), want a not-owned error and no key", apiKey, err)
+	if !errors.Is(err, ErrNotAMember) {
+		t.Fatalf("got (%q, %v), want a not-a-member error and no key", apiKey, err)
 	}
 	if apiKey != "" {
 		t.Errorf("a key was minted anyway: %q", apiKey)
@@ -296,6 +316,7 @@ func TestGetOrCreateAPIKey_refusesANamespaceOwnedByAnother(t *testing.T) {
 // key by inference, and so was anyone else's.
 func TestGetOrCreateAPIKey_mintsWithAnExplicitGrant(t *testing.T) {
 	db := newOwnershipDB()
+	db.walletOwners["1"] = "0xcreator"
 	s := serviceWith(t, db)
 
 	apiKey, err := s.GetOrCreateAPIKey(context.Background(), "0xcreator", "anchat")
@@ -368,18 +389,21 @@ func TestRequireNamespaceOwner_refusesANamespaceOwnedByAnother(t *testing.T) {
 	}
 }
 
-func TestRequireNamespaceOwner_acceptsTheOwnerAndClaimsAnUnownedNamespace(t *testing.T) {
+func TestRequireNamespaceOwner_acceptsTheOwner(t *testing.T) {
 	db := newOwnershipDB()
+	db.walletOwners["1"] = "0xcreator"
 	s := serviceWith(t, db)
 
+	// Both spellings, twice: a login is a read now, and reading twice changes
+	// nothing.
 	if err := s.RequireNamespaceOwner(context.Background(), "0xCreator", "anchat"); err != nil {
-		t.Fatalf("the first wallet was refused: %v", err)
-	}
-	if db.walletOwners["1"] != "0xcreator" {
-		t.Errorf("owner recorded as %q", db.walletOwners["1"])
+		t.Fatalf("the owner was refused on their own namespace: %v", err)
 	}
 	if err := s.RequireNamespaceOwner(context.Background(), "0xcreator", "anchat"); err != nil {
 		t.Errorf("the owner was refused on their second login: %v", err)
+	}
+	if db.walletOwners["1"] != "0xcreator" {
+		t.Errorf("owner recorded as %q", db.walletOwners["1"])
 	}
 }
 
@@ -388,7 +412,7 @@ func TestRequireNamespaceOwner_needsAWallet(t *testing.T) {
 	s := serviceWith(t, db)
 
 	if err := s.RequireNamespaceOwner(context.Background(), "  ", "anchat"); err == nil {
-		t.Fatal("an empty wallet claimed a namespace")
+		t.Fatal("an empty wallet was let into a namespace")
 	}
 }
 
@@ -396,6 +420,7 @@ func TestRequireNamespaceOwner_needsAWallet(t *testing.T) {
 // time, and the row that links them was written with its error dropped.
 func TestGetOrCreateAPIKey_aFailedWalletLinkIsReported(t *testing.T) {
 	db := newOwnershipDB()
+	db.walletOwners["1"] = "0xcreator"
 	db.failKeyLink = true
 	s := serviceWith(t, db)
 

@@ -40,9 +40,15 @@ unit test read, so a shape change on either side fails without a cluster.
 |-------|-------|-------|
 | `/v1/auth/api-key` | SDK | `auth.getApiKey()` |
 | `/v1/auth/challenge` | SDK | `auth.challenge()` |
+| `/v1/auth/device` | CLI | Starts a login from a machine with no wallet on it (RFC 8628). Returns a device code the machine polls with and a short code the human approves. `orama auth login` on a server or in CI. |
+| `/v1/auth/device/approve` | CLI | Approves — or, with `deny`, refuses — a pending device login. Costs a wallet signature over the gateway's own challenge, exactly as `/v1/auth/verify` does. `orama auth approve <code>`. |
+| `/v1/auth/device/token` | CLI | The waiting machine's poll. Answers `authorization_pending`, `slow_down`, `expired_token` or `access_denied` until it is approved, then returns the session once. |
 | `/v1/auth/jwks` | direct | JWKS. See `/.well-known/jwks.json`. |
 | `/v1/auth/logout` | SDK | `auth.logout()` |
 | `/v1/auth/refresh` | SDK | Session renewal, called by the client on a 401. |
+| `/v1/auth/renew` | SDK | A deployment renewing its own workload token with the token it is holding. Refuses anything that is not a workload token. |
+| `/v1/auth/sessions` | CLI | The live sessions signed in as the calling wallet. Never returns a refresh token. `orama auth sessions`. |
+| `/v1/auth/sessions/` | CLI | `DELETE /v1/auth/sessions/{id}` ends one session. An access token already minted from it keeps working until it expires. `orama auth sessions revoke <id>`. |
 | `/v1/auth/token` | direct | Exchange an API key for a JWT. A server-side concern; the SDK sends the key itself. |
 | `/v1/auth/verify` | SDK | `auth.verify()` |
 | `/v1/auth/whoami` | SDK | `auth.whoami()` |
@@ -173,6 +179,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/deployments/domains/remove` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
 | `/v1/deployments/domains/verify` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
 | `/v1/deployments/env` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/grants` | CLI | What a deployment may do as itself. `orama app grants list\|set`. Admin grant; a deployment cannot be granted the control plane. |
 | `/v1/deployments/env/set` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
 | `/v1/deployments/events` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
 | `/v1/deployments/get` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
@@ -212,6 +219,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/node/status` | CLI | `orama node status`. |
 | `/v1/operator/invite` | CLI | Mint a node invite. `orama invite`. |
 | `/v1/operator/node/register` | CLI | Record a node in the inventory. |
+| `/v1/operator/rotate-signing-key` | CLI | Generate a new signing key for this gateway, publish it, and leave the outgoing one verifying what it already signed for one access-token lifetime. Admin grant **and** a wallet on the operator list. `orama operator rotate-signing-key`. |
 | `/v1/operator/nodes` | CLI | Fleet inventory. |
 
 ### Internal (node to node)

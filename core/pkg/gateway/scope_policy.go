@@ -119,33 +119,38 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		required := policy.Scope
-		if required == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
 		scopes := g.callerScopes(r)
-		if !scopes.Has(required) {
-			g.logger.ComponentWarn("gateway", "request rejected: insufficient scope",
-				zap.String("path", r.URL.Path),
-				zap.String("required_scope", required),
-			)
-			// The grant goes in a field, not only in the prose. A client that
-			// has to regex the message to find out what it lacks cannot act on
-			// it; @debros/orama turns this into a ScopeError naming the grant.
-			forbidden(w, CodeScopeMissing,
-				"insufficient scope: this credential lacks the '"+required+"' grant required for "+r.URL.Path,
-				map[string]any{"required_scope": required})
-			return
+
+		if required := policy.Scope; required != "" {
+			if !scopes.Has(required) {
+				g.logger.ComponentWarn("gateway", "request rejected: insufficient scope",
+					zap.String("path", r.URL.Path),
+					zap.String("required_scope", required),
+				)
+				// The grant goes in a field, not only in the prose. A client
+				// that has to regex the message to find out what it lacks
+				// cannot act on it; @debros/orama turns this into a ScopeError
+				// naming the grant.
+				forbidden(w, CodeScopeMissing,
+					"insufficient scope: this credential lacks the '"+required+"' grant required for "+r.URL.Path,
+					map[string]any{"required_scope": required})
+				return
+			}
 		}
+
+		// The token requirement is checked whether or not a grant was, because
+		// the two are independent: creating a namespace needs a logged-in
+		// wallet and no grant at all, and a wallet with no namespace holds no
+		// grant anywhere. Returning early on an empty scope made a declared
+		// token requirement do nothing, silently.
 		if !g.hasRequiredToken(r, policy, scopes) {
 			g.logger.ComponentWarn("gateway", "request rejected: user JWT required",
 				zap.String("path", r.URL.Path),
-				zap.String("required_scope", required),
+				zap.String("required_scope", policy.Scope),
 			)
 			unauthorized(w, CodeAuthUserJWTRequired,
-				"user authentication required (JWT): the '"+required+"' operation requires a logged-in user; an API key alone is not sufficient",
-				map[string]any{"required_scope": required})
+				"user authentication required (JWT): "+r.URL.Path+" requires a logged-in user; an API key alone is not sufficient",
+				map[string]any{"required_scope": policy.Scope})
 			return
 		}
 		next.ServeHTTP(w, r)

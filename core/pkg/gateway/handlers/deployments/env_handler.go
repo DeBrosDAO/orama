@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -182,7 +181,7 @@ func (h *EnvHandler) HandleSetEnv(w http.ResponseWriter, r *http.Request) {
 	// build step may read them.
 	restarted := false
 	if deployment.Type != deployments.DeploymentTypeStatic && deployment.Type != deployments.DeploymentTypeNextJSStatic {
-		workDir := filepath.Join(h.baseDeployPath, deployment.Namespace, deployment.Name)
+		workDir := process.DeployDir(h.baseDeployPath, deployment.Namespace, deployment.Name)
 		if err := h.processManager.Reconfigure(ctx, deployment, workDir); err != nil {
 			h.logger.Error("Failed to reconfigure process", zap.Error(err))
 			http.Error(w, fmt.Sprintf(

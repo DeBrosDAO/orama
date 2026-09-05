@@ -82,3 +82,18 @@ export function satisfiesScope(held: readonly Scope[], required: Scope | "" | un
   if (held.includes("admin")) return true;
   return held.includes(required);
 }
+
+/**
+ * A member's role in a namespace, mirrored from the gateway.
+ *
+ * A role is a grant set: `owner` and `admin` reach the control plane, `runtime`
+ * the data plane, `reader` nothing beyond the routes that ask for no grant.
+ * Ownership is transferred rather than granted — a namespace with no owner is
+ * claimable by whoever signs in to it next.
+ */
+export const ROLES = ["owner", "admin", "runtime", "reader"] as const;
+
+export type Role = (typeof ROLES)[number];
+
+/** The roles that can be handed out. Ownership is transferred instead. */
+export const GRANTABLE_ROLES: readonly Role[] = ["admin", "runtime", "reader"];

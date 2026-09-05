@@ -48,6 +48,7 @@ func writeAPIKeyHMACSecret(t *testing.T, root, contents string) string {
 }
 
 func TestSpawnGateway_apiKeyHMACSecretPresent_renderedYAMLContainsSecret(t *testing.T) {
+	withOverlayIP(t, "10.0.0.5", nil)
 	root, namespaceBase := setupOramaDirs(t)
 	// Trailing whitespace/newline must be trimmed, same as the main gateway
 	// (pkg/node/gateway.go:52).

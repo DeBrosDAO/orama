@@ -44,15 +44,54 @@ export class AuthClient {
       this.httpClient.setJwt(this.currentJwt);
     }
 
+    // How a key becomes a token. The key is exchanged once, before the first
+    // request, and the token is what every request carries — so the key itself
+    // never reaches an access log, a proxy trace or a devtools tab.
+    this.httpClient.setKeyExchanger(async (apiKey) => this.exchangeKey(apiKey));
+
     // A 401 now renews the session and replays the request once. `refresh()`
     // has existed since the first release with nothing calling it, so every
     // application built its own refresh-and-retry loop around every call.
     this.httpClient.setTokenRefresher(async () => {
-      if (!(await this.storage.get("refreshToken"))) {
-        return null;
+      if (await this.storage.get("refreshToken")) {
+        return this.refresh();
       }
-      return this.refresh();
+      // No user session. If this client was given a key, the way back is to
+      // exchange it again — the token it was carrying has expired, and the key
+      // has not.
+      if (this.currentApiKey) {
+        this.httpClient.clearExchangedToken();
+        const { token } = await this.exchangeKey(this.currentApiKey);
+        return token;
+      }
+      return null;
     });
+  }
+
+  /**
+   * Exchange an API key for a short-lived token.
+   *
+   * The gateway answers with the key's own grants embedded, so the token
+   * reaches exactly what the key reached and nothing more. It is a plain
+   * request rather than one through the client's own pipeline, because the
+   * pipeline is what calls this.
+   */
+  private async exchangeKey(apiKey: string): Promise<{ token: string; expiresAt: number }> {
+    const res = await this.httpClient.request<{
+      access_token: string;
+      expires_in: number;
+    }>("POST", "/v1/auth/token", {
+      ownCredential: true,
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+
+    if (!res?.access_token) {
+      throw new SDKError("the gateway exchanged the key for no token", 500, "AUTH_EXCHANGE_FAILED");
+    }
+    return {
+      token: res.access_token,
+      expiresAt: Date.now() + (res.expires_in ?? 900) * 1000,
+    };
   }
 
   setApiKey(apiKey: string) {
@@ -67,6 +106,17 @@ export class AuthClient {
     // Don't clear API key - keep it as fallback for after logout
     this.httpClient.setJwt(jwt);
     this.storage.set("jwt", jwt);
+  }
+
+  /**
+   * Renew a workload's token with the token it is holding.
+   *
+   * Only a deployment's own token renews this way. A user session is renewed by
+   * its refresh token, which rotates and can be revoked; letting any access
+   * token mint its own successor would make a stolen one good for ever.
+   */
+  async renew(): Promise<{ access_token: string; expires_in: number }> {
+    return this.httpClient.request("POST", "/v1/auth/renew", {});
   }
 
   getToken(): string | undefined {
@@ -300,8 +350,12 @@ export class AuthClient {
   }
 
   /**
-   * Get an API key for the wallet that signed the message (creates namespace
-   * ownership). Takes the same signed message as {@link verify}.
+   * Get an API key for a namespace the wallet is already a member of. Takes
+   * the same signed message as {@link verify}.
+   *
+   * It does not create ownership — it used to, which is how naming a namespace
+   * you did not own made you its owner. Ownership comes from creating the
+   * namespace, and the lobby namespace has no keys at all.
    */
   async getApiKey(params: {
     message: string;

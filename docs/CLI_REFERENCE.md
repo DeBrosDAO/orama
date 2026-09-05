@@ -22,18 +22,24 @@ is the index.
     - [`orama app env set`](#orama-app-env-set) — Set environment variables and restart the app
     - [`orama app env unset`](#orama-app-env-unset) — Remove environment variables and restart the app
   - [`orama app get`](#orama-app-get) — Get deployment details
+  - [`orama app grants`](#orama-app-grants) — Say what a deployed app may do, as itself
+    - [`orama app grants list`](#orama-app-grants-list) — Show what deployments in this namespace may do
+    - [`orama app grants set`](#orama-app-grants-set) — Grant a deployment a role
   - [`orama app list`](#orama-app-list) — List all deployments
   - [`orama app logs`](#orama-app-logs) — Stream deployment logs
   - [`orama app rollback`](#orama-app-rollback) — Rollback a deployment to a previous version
   - [`orama app stats`](#orama-app-stats) — Show resource usage for a deployment
 - [`orama audit`](#orama-audit) — Read this namespace's audit trail
 - [`orama auth`](#orama-auth) — Authentication management
+  - [`orama auth approve`](#orama-auth-approve) — Approve a login waiting on another machine
   - [`orama auth list`](#orama-auth-list) — List all stored credentials
-  - [`orama auth login`](#orama-auth-login) — Authenticate with wallet
-  - [`orama auth logout`](#orama-auth-logout) — Clear stored credentials
-  - [`orama auth status`](#orama-auth-status) — Show detailed authentication info
+  - [`orama auth login`](#orama-auth-login) — Sign in, here or from another machine
+  - [`orama auth logout`](#orama-auth-logout) — End this session on the gateway and clear it here
+  - [`orama auth sessions`](#orama-auth-sessions) — Which machines are signed in as this wallet
+    - [`orama auth sessions revoke`](#orama-auth-sessions-revoke) — End one session, or every one
+  - [`orama auth status`](#orama-auth-status) — Show what is stored on this machine, without asking the gateway
   - [`orama auth switch`](#orama-auth-switch) — Switch between stored credentials
-  - [`orama auth whoami`](#orama-auth-whoami) — Show current authentication status
+  - [`orama auth whoami`](#orama-auth-whoami) — Ask the gateway who this credential is and what it may do
 - [`orama build`](#orama-build) — Build pre-compiled binary archive for deployment
 - [`orama db`](#orama-db) — Manage SQLite databases
   - [`orama db backup`](#orama-db-backup) — Backup database to IPFS
@@ -141,6 +147,8 @@ is the index.
   - [`orama node upgrade`](#orama-node-upgrade) — Upgrade existing installation (requires sudo)
   - [`orama node wipe`](#orama-node-wipe) — Erase Orama from remote nodes (target-side only)
 - [`orama nodes`](#orama-nodes) — List your nodes across environments
+- [`orama operator`](#orama-operator) — Operate the cluster
+  - [`orama operator rotate-signing-key`](#orama-operator-rotate-signing-key) — Replace the key this gateway signs tokens with
 - [`orama push`](#orama-push) — Push the binary archive to your nodes
 - [`orama rollout`](#orama-rollout) — Build, push, and rolling upgrade every node in an environment
 - [`orama sandbox`](#orama-sandbox) — Manage ephemeral Hetzner Cloud clusters for testing
@@ -170,7 +178,7 @@ Aliases: `apps`
 
 List, get, delete, rollback, and view logs/stats for your deployed applications.
 
-Subcommands: `delete`, `env`, `get`, `list`, `logs`, `rollback`, `stats`
+Subcommands: `delete`, `env`, `get`, `grants`, `list`, `logs`, `rollback`, `stats`
 
 ### orama app delete
 
@@ -239,6 +247,54 @@ Get deployment details
 orama app get <name>
 ```
 
+### orama app grants
+
+Say what a deployed app may do, as itself
+
+```
+orama app grants
+```
+
+Read and change what a deployment is allowed to reach.
+
+Your app is handed a short-lived token of its own at start, in the file named by
+$ORAMA_TOKEN_FILE, and renews it with the gateway before it expires. It reaches
+nothing until you grant it something — which is the point: an app that ships
+with no credential cannot leak one.
+
+A deployment cannot be granted the control plane. If something needs to deploy
+or mint keys, that is a person or a CI key, not an app.
+
+Subcommands: `list`, `set`
+
+### orama app grants list
+
+Show what deployments in this namespace may do
+
+```
+orama app grants list [app]
+```
+
+### orama app grants set
+
+Grant a deployment a role
+
+```
+orama app grants set <app> <role> [flags]
+```
+
+Give a deployment a role in its own namespace.
+
+  runtime  the data plane: invoke, storage, push, webrtc, proxy, pubsub, cache
+  reader   nothing beyond the routes that ask for no grant
+
+The change reaches a running app on its next token renewal, or immediately if
+you redeploy.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--resource` | — | Narrow the role to a resource, e.g. pubsub:topic=orders.* |
+
 ### orama app list
 
 List all deployments
@@ -294,7 +350,7 @@ grants given and taken away, deployments, functions, secrets and namespace chang
 Events are shown oldest first. --follow keeps the command running and prints new
 ones as they are recorded.
 
-Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer
+Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer, auth.device.start, auth.device.approve, auth.device.deny, auth.device.claim
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -314,9 +370,35 @@ orama auth
 ```
 
 Manage authentication with the Orama network.
-Authentication is a RootWallet (rw) signature over a gateway challenge.
 
-Subcommands: `list`, `login`, `logout`, `status`, `switch`, `whoami`
+Signing in is a wallet signature over a gateway challenge. On a machine with
+RootWallet running it is signed here; on one without — a server reached over
+SSH, a container, CI — 'orama auth login' prints a code and 'orama auth approve'
+on a machine that does have a wallet approves it.
+
+What is stored is a session, not a key: an access token lasting 15 minutes,
+renewed transparently from a refresh token.
+
+Subcommands: `approve`, `list`, `login`, `logout`, `sessions`, `status`, `switch`, `whoami`
+
+### orama auth approve
+
+Approve a login waiting on another machine
+
+```
+orama auth approve <code> [flags]
+```
+
+Approve the code 'orama auth login' printed on a machine with no wallet on it.
+
+It costs the same wallet signature signing in does, which is what makes the code
+on its own worthless. --deny refuses instead, so the waiting machine stops
+rather than polling until the code expires.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--deny` | `false` | Refuse the login instead of approving it |
+| `--namespace` | — | Namespace to sign in to (defaults to the one this machine is signed in to) |
 
 ### orama auth list
 
@@ -328,7 +410,7 @@ orama auth list
 
 ### orama auth login
 
-Authenticate with wallet
+Sign in, here or from another machine
 
 ```
 orama auth login [flags]
@@ -340,15 +422,46 @@ orama auth login [flags]
 
 ### orama auth logout
 
-Clear stored credentials
+End this session on the gateway and clear it here
 
 ```
-orama auth logout
+orama auth logout [flags]
 ```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--all` | `false` | End every session for this wallet, not only this machine's |
+
+### orama auth sessions
+
+Which machines are signed in as this wallet
+
+```
+orama auth sessions
+```
+
+Subcommands: `revoke`
+
+### orama auth sessions revoke
+
+End one session, or every one
+
+```
+orama auth sessions revoke [id] [flags]
+```
+
+End a session listed by 'orama auth sessions'.
+
+Ending a session stops it minting new access tokens. One already minted keeps
+working until it expires, at most 15 minutes.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--all` | `false` | End every session for this wallet |
 
 ### orama auth status
 
-Show detailed authentication info
+Show what is stored on this machine, without asking the gateway
 
 ```
 orama auth status
@@ -364,7 +477,7 @@ orama auth switch
 
 ### orama auth whoami
 
-Show current authentication status
+Ask the gateway who this credential is and what it may do
 
 ```
 orama auth whoami
@@ -1078,7 +1191,7 @@ orama members transfer <wallet> [flags]
 Make another wallet the owner of this namespace.
 
 Only the current owner may do this, and it is one step rather than a removal and
-a grant: a namespace with no owner is claimable by whoever signs in to it next.
+a grant, so there is no moment where the namespace has no owner.
 You keep an admin grant, so handing a project over does not lock you out of it.
 
 | Flag | Default | Description |
@@ -2087,6 +2200,40 @@ Requires: orama auth login (for API-based resolution)
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--env` | — | Filter by environment (default: active environment) |
+
+### orama operator
+
+Operate the cluster
+
+```
+orama operator
+```
+
+Commands for the wallets on the cluster's operator list.
+
+Every one of them needs the admin grant and a wallet on that list; a namespace's
+own admin key is not enough.
+
+Subcommands: `rotate-signing-key`
+
+### orama operator rotate-signing-key
+
+Replace the key this gateway signs tokens with
+
+```
+orama operator rotate-signing-key
+```
+
+Generate a new signing key for the gateway, publish it, and start signing
+with it.
+
+Nobody is signed out. The outgoing key keeps verifying the tokens it already
+signed until they expire on their own, so both keys are accepted for one
+access-token lifetime and then the old one stops.
+
+The key used to be derived from the cluster secret, which meant there was
+nothing to rotate to: changing it meant changing the cluster secret, which
+invalidates every token in the cluster at once.
 
 ### orama push
 

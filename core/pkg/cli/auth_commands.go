@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
@@ -65,14 +63,17 @@ func AuthLogin(namespace string) error {
 		}
 	}
 
-	// RootWallet signs the gateway's challenge with the wallet's key without
-	// the key leaving it, and is the only way in.
-	if !auth.IsRootWalletInstalled() {
-		return clierr.Usage("RootWallet CLI (rw) not found in PATH\n" +
-			"  Install it: cd rootwallet/cli && ./install.sh")
+	// RootWallet signs the gateway's challenge without the key leaving it, and
+	// is the fast path when it is here. When it is not — a server reached over
+	// SSH, a container, CI — the login moves to a machine that does have a
+	// wallet, rather than being refused. That refusal is why the documented way
+	// onto a server was a permanent key in an environment variable.
+	var creds *auth.Credentials
+	if auth.IsRootWalletInstalled() {
+		creds, err = auth.PerformRootWalletAuthentication(gatewayURL, namespace)
+	} else {
+		creds, err = deviceLogin(gatewayURL, namespace)
 	}
-
-	creds, err := auth.PerformRootWalletAuthentication(gatewayURL, namespace)
 	if err != nil {
 		return clierr.Auth("authentication failed: %w", err)
 	}
@@ -92,7 +93,7 @@ func AuthLogin(namespace string) error {
 
 	credsPath, _ := auth.GetCredentialsPath()
 	fmt.Printf("Authentication successful.\n")
-	fmt.Printf("  Credentials saved to: %s\n", credsPath)
+	fmt.Printf("  Session saved to: %s\n", credsPath)
 	fmt.Printf("  Wallet:    %s\n", creds.Wallet)
 	fmt.Printf("  Namespace: %s\n", creds.Namespace)
 	if creds.NamespaceURL != "" {
@@ -101,52 +102,28 @@ func AuthLogin(namespace string) error {
 	return nil
 }
 
-// AuthLogout clears every stored credential.
-func AuthLogout() error {
-	if err := auth.ClearAllCredentials(); err != nil {
-		return clierr.Failure("failed to clear credentials: %w", err)
-	}
-	fmt.Println("Logged out. All credentials have been cleared.")
-	return nil
+// AuthLogout ends the session on the gateway and clears what is stored here.
+//
+// It used to only do the second half, so logging out of a machine you were
+// worried about left everything that machine could do intact.
+func AuthLogout(all bool) error {
+	return AuthLogoutOnline(all)
 }
 
-// AuthWhoami prints who the active credential belongs to.
+// AuthWhoami asks the gateway who this credential is.
+//
+// It used to read ~/.orama/credentials.json, which cannot know that a key has
+// been revoked: a credential the gateway refuses was reported as authenticated
+// until somebody tried to use it for something.
 func AuthWhoami() error {
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		return clierr.Failure("failed to load credentials: %w", err)
-	}
-
-	gatewayURL, err := getGatewayURL()
-	if err != nil {
-		return err
-	}
-	creds := store.GetDefaultCredential(gatewayURL)
-
-	if creds == nil || !creds.IsValid() {
-		return clierr.Auth("not authenticated: run 'orama auth login'")
-	}
-
-	fmt.Println("Authenticated")
-	fmt.Printf("  Wallet:    %s\n", creds.Wallet)
-	fmt.Printf("  Namespace: %s\n", creds.Namespace)
-	if creds.NamespaceURL != "" {
-		fmt.Printf("  NS Gateway: %s\n", creds.NamespaceURL)
-	}
-	fmt.Printf("  Issued At: %s\n", creds.IssuedAt.Format("2006-01-02 15:04:05"))
-	if !creds.ExpiresAt.IsZero() {
-		fmt.Printf("  Expires At: %s\n", creds.ExpiresAt.Format("2006-01-02 15:04:05"))
-	}
-	if !creds.LastUsedAt.IsZero() {
-		fmt.Printf("  Last Used: %s\n", creds.LastUsedAt.Format("2006-01-02 15:04:05"))
-	}
-	if creds.Plan != "" {
-		fmt.Printf("  Plan:      %s\n", creds.Plan)
-	}
-	return nil
+	return AuthWhoamiOnline()
 }
 
-// AuthStatus prints the active gateway and credential in detail.
+// AuthStatus prints what this machine has stored, without asking anybody.
+//
+// It is deliberately the local view — "what would this shell send, and to
+// where" — and says so, because the question of whether the gateway still
+// accepts it is what `orama auth whoami` answers.
 func AuthStatus() error {
 	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
@@ -163,7 +140,7 @@ func AuthStatus() error {
 		fmt.Printf("Active environment: %s\n", env.Name)
 	}
 
-	fmt.Println("Authentication status")
+	fmt.Println("Stored on this machine (run 'orama auth whoami' to ask the gateway)")
 	fmt.Printf("  Gateway URL: %s\n", gatewayURL)
 
 	// Not being authenticated is the answer to the question this command asks,
@@ -194,57 +171,6 @@ func AuthStatus() error {
 		fmt.Printf("  Last Used:  %s\n", creds.LastUsedAt.Format("2006-01-02 15:04:05"))
 	}
 	return nil
-}
-
-// promptForGatewayURL interactively prompts for the gateway URL
-// Uses the active environment or allows entering a custom domain
-func promptForGatewayURL() string {
-	// Check environment variable first (allows override without prompting)
-	if url := os.Getenv("ORAMA_GATEWAY_URL"); url != "" {
-		return url
-	}
-
-	// Try active environment
-	env, err := GetActiveEnvironment()
-	if err == nil {
-		reader := bufio.NewReader(os.Stdin)
-
-		fmt.Println("\n🌐 Node Connection")
-		fmt.Println("==================")
-		fmt.Printf("1. Use active environment: %s (%s)\n", env.Name, env.GatewayURL)
-		fmt.Println("2. Enter custom domain")
-		fmt.Print("\nSelect option [1/2]: ")
-
-		choice, _ := reader.ReadString('\n')
-		choice = strings.TrimSpace(choice)
-
-		if choice == "1" || choice == "" {
-			return env.GatewayURL
-		}
-
-		if choice == "2" {
-			fmt.Print("Enter node domain (e.g., node-hk19de.orama.network): ")
-			domain, _ := reader.ReadString('\n')
-			domain = strings.TrimSpace(domain)
-
-			if domain == "" {
-				fmt.Printf("⚠️  No domain entered, using %s\n", env.Name)
-				return env.GatewayURL
-			}
-
-			// Remove any protocol prefix if user included it
-			domain = strings.TrimPrefix(domain, "https://")
-			domain = strings.TrimPrefix(domain, "http://")
-			// Remove trailing slash
-			domain = strings.TrimSuffix(domain, "/")
-
-			return fmt.Sprintf("https://%s", domain)
-		}
-
-		return env.GatewayURL
-	}
-
-	return "https://orama-devnet.network"
 }
 
 // getGatewayURL returns the gateway URL based on environment or env var
@@ -367,5 +293,75 @@ func AuthSwitch() error {
 	case auth.AuthChoiceExit:
 		return clierr.Aborted("cancelled")
 	}
+	return nil
+}
+
+// deviceLogin signs in from a machine with no wallet on it.
+func deviceLogin(gatewayURL, namespace string) (*auth.Credentials, error) {
+	login, err := auth.StartDeviceLogin(gatewayURL, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println("\nThere is no wallet on this machine, so the login moves to one that has it.")
+	fmt.Printf("\n    Your code:  %s\n\n", login.UserCode)
+	fmt.Println("  On a machine where RootWallet is running, run:")
+	fmt.Printf("\n    orama auth approve %s\n\n", login.UserCode)
+	if namespace != "" {
+		fmt.Printf("  It will sign you in to namespace %q.\n", namespace)
+	}
+	fmt.Printf("  This code is good for %s. Waiting", auth.DeviceLoginWindow)
+
+	creds, err := auth.PollDeviceLogin(gatewayURL, login, func() { fmt.Print(".") })
+	fmt.Println()
+	if err != nil {
+		return nil, err
+	}
+	return creds, nil
+}
+
+// AuthApprove approves, or refuses, a login waiting on another machine.
+func AuthApprove(userCode, namespace string, deny bool) error {
+	if strings.TrimSpace(userCode) == "" {
+		return clierr.Usage("which login: orama auth approve <code>, the code the other machine printed")
+	}
+
+	gatewayURL, err := getGatewayURL()
+	if err != nil {
+		return err
+	}
+
+	// The namespace is part of what is being approved, and it is what the
+	// signed message will name — so it has to be settled before signing, not
+	// inferred afterwards.
+	if strings.TrimSpace(namespace) == "" {
+		store, storeErr := auth.LoadEnhancedCredentials()
+		if storeErr != nil {
+			return clierr.Failure("failed to load credentials: %w", storeErr)
+		}
+		if creds := store.GetDefaultCredential(gatewayURL); creds != nil {
+			namespace = creds.Namespace
+		}
+	}
+	if strings.TrimSpace(namespace) == "" {
+		return clierr.Usage("which namespace is this login for: orama auth approve <code> --namespace <name>")
+	}
+
+	verb := "Approving"
+	if deny {
+		verb = "Refusing"
+	}
+	fmt.Printf("%s a login for namespace %s at %s...\n", verb, namespace, gatewayURL)
+
+	wallet, err := auth.ApproveDeviceLogin(gatewayURL, userCode, namespace, deny)
+	if err != nil {
+		return clierr.Auth("%w", err)
+	}
+
+	if deny {
+		fmt.Printf("Refused. The machine waiting on %s has stopped.\n", userCode)
+		return nil
+	}
+	fmt.Printf("Approved as %s. The machine waiting on %s has its session.\n", wallet, userCode)
 	return nil
 }

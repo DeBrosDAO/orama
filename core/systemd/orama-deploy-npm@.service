@@ -1,0 +1,88 @@
+[Unit]
+# A tenant's Node.js or Next.js deployment. One template, one instance per
+# deployment: %i is "<namespace>-<name>", the same string the gateway uses for
+# the deployment's directories.
+#
+# This is a template rather than a unit the gateway writes because the gateway
+# no longer runs as root and must not: it used to `tee` a unit into /etc and
+# `rm -f` it again, which only worked because it was root, and the hardened
+# gateway unit (User=orama, ProtectSystem=strict, NoNewPrivileges=yes) takes
+# both away. Everything that varies per deployment is either derived from %i or
+# read from the environment file, which the gateway owns.
+Description=Orama Deployment (npm) - %i
+After=network-online.target
+Wants=network-online.target
+# No start limit. A crash-looping deployment would otherwise reach "Start
+# request repeated too quickly" and stay down until someone ran reset-failed by
+# hand, which turns a tenant's bad build into an operator's ticket.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/orama/.orama/data/deployments/%i
+
+# DynamicUser is what gives each deployment its own identity: systemd allocates
+# a UID for the unit and reclaims it when the unit stops, so there is no
+# per-deployment account to create, leak, or forget to delete, and no two
+# deployments ever share a user.
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+ProtectProc=invisible
+# Every node reaches the cluster's control plane — rqlite, Olric, every other
+# namespace's services — over the WireGuard overlay, and a deployment sits on
+# the same host as that overlay. Tenant code has no business on it.
+IPAddressAllow=localhost
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10
+
+StateDirectory=orama-deploy-%i
+CacheDirectory=orama-deploy-%i
+
+EnvironmentFile=/opt/orama/.orama/data/deployment-env/orama-deploy-%i.env
+
+# The deployment's own credential.
+#
+# systemd reads this as PID 1, before it drops to the deployment's user, and
+# exposes it at $CREDENTIALS_DIRECTORY owned by that user and mode 0400. That
+# is what lets an unprivileged gateway hand a token to a process running as
+# somebody else: the gateway writes a file only it can read, and systemd stages
+# it. The app reads $ORAMA_TOKEN_FILE and renews the token with itself before it
+# expires; nothing long-lived is left on the node.
+LoadCredential=orama_token:/opt/orama/.orama/data/deployment-env/orama-deploy-%i.token
+Environment=ORAMA_TOKEN_FILE=%d/orama_token
+
+# npm start reads the deployment's own package.json scripts.
+ExecStart=/usr/bin/npm start
+
+# Every deployment is a long-running server and every handler creates it with
+# the same policy; there is no API to ask for another. on-failure would leave a
+# server that exited cleanly — an unhandled promise rejection, a SIGTERM from
+# an OOM — down until someone noticed.
+Restart=always
+RestartSec=5s
+
+# The defaults. A deployment that asks for more or less gets a drop-in from
+# `systemctl set-property`, which is the one thing here the gateway cannot
+# write itself.
+MemoryMax=512M
+MemorySwapMax=0
+CPUQuota=50%
+TasksMax=512
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-deploy-%i
+
+[Install]
+WantedBy=multi-user.target

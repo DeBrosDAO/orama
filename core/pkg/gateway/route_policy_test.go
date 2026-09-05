@@ -73,6 +73,9 @@ var publicRoutes = []string{
 	"/status",
 	"/v1/auth/api-key",
 	"/v1/auth/challenge",
+	"/v1/auth/device",
+	"/v1/auth/device/approve",
+	"/v1/auth/device/token",
 	"/v1/auth/jwks",
 	"/v1/auth/logout",
 	"/v1/auth/refresh",
@@ -152,15 +155,22 @@ func TestRoutePolicy_aPublicRouteCarriesNoRequirementThatCannotRun(t *testing.T)
 	}
 }
 
-// A token requirement is enforced only once a grant has been checked, so a
-// route asking for one without a grant asks for nothing.
-func TestRoutePolicy_aTokenRequirementNeedsAGrantToHangOn(t *testing.T) {
-	for _, pattern := range gatewayRoutes.Patterns() {
-		policy := policyOf(http.MethodPost, pattern)
-		if policy.Token != routepolicy.AnyCredential && policy.Scope == "" {
-			t.Errorf("%s asks for a token but no grant; the scope gate returns before the token "+
-				"check when no grant is required", pattern)
-		}
+// A token requirement used to be enforced only after a grant had been checked,
+// so a route asking for one without a grant asked for nothing. The two are
+// independent — creating a namespace needs a logged-in wallet and no grant,
+// because a wallet with no namespace holds no grant anywhere — and this is the
+// route that made the difference visible.
+func TestRoutePolicy_aTokenRequirementStandsWithoutAGrant(t *testing.T) {
+	policy := policyOf(http.MethodPost, "/v1/namespaces")
+
+	if policy.Token != routepolicy.WalletToken {
+		t.Fatalf("/v1/namespaces token requirement = %v, want a wallet token", policy.Token)
+	}
+	if policy.Scope != "" {
+		t.Errorf("/v1/namespaces requires the %q grant; a wallet with no namespace holds none", policy.Scope)
+	}
+	if policy.Access.Anonymous() {
+		t.Error("/v1/namespaces is reachable with no credential at all")
 	}
 }
 

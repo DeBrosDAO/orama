@@ -59,9 +59,15 @@ func TestKeepUnlockedStopsWhenTold(t *testing.T) {
 	time.Sleep(60 * time.Millisecond)
 	stop()
 
+	// stop() waits for the ticking goroutine, so nothing new is sent after it
+	// returns — but a request that was already on the wire when it fired is
+	// counted by the server's own handler goroutine, which may not have run
+	// yet. Sampling immediately reads a count that then goes up by one, and
+	// the test fails on the request that arrived *before* the stop.
+	time.Sleep(50 * time.Millisecond)
 	atStop := calls()
-	time.Sleep(120 * time.Millisecond)
 
+	time.Sleep(120 * time.Millisecond)
 	if after := calls(); after != atStop {
 		t.Errorf("the agent was touched %d more times after stop — the wallet is being held open past the operation", after-atStop)
 	}

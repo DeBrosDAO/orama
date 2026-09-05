@@ -94,3 +94,74 @@ func serveWithScopes(t *testing.T, method, path string, scopes auth.ScopeSet) *h
 	g.scopeMiddleware(next).ServeHTTP(rec, r)
 	return rec
 }
+
+// Creating a namespace requires a logged-in wallet and no grant at all: a
+// wallet with no namespace holds a grant nowhere, so requiring one would mean
+// nobody could ever start.
+//
+// The token check used to be reached only after a grant had been checked, so a
+// route declaring a token requirement and no grant got neither. That made the
+// requirement silent, which is worse than absent.
+func TestNamespaceCreation_needsAWalletTokenAndNoGrant(t *testing.T) {
+	if policy := policyOf(http.MethodPost, "/v1/namespaces"); policy.Scope != "" {
+		t.Fatalf("/v1/namespaces requires the %q grant; this test is about the case where it requires none", policy.Scope)
+	}
+
+	t.Run("a bare key is refused", func(t *testing.T) {
+		rec := serveWithScopes(t, http.MethodPost, "/v1/namespaces", auth.ScopeSet{auth.ScopePubsub: {}})
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d — a key created a namespace: %s",
+				rec.Code, http.StatusUnauthorized, rec.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body["code"] != "USER_JWT_REQUIRED" {
+			t.Errorf("code = %v, want USER_JWT_REQUIRED", body["code"])
+		}
+	})
+
+	t.Run("an exchanged-key token is refused too", func(t *testing.T) {
+		rec := serveAsSubject(t, "/v1/namespaces", "orama_sk_payload_check", auth.ScopeSet{})
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want %d — a key proved possession of itself and created a namespace",
+				rec.Code, http.StatusUnauthorized)
+		}
+	})
+
+	t.Run("a signed-in wallet passes", func(t *testing.T) {
+		rec := serveAsSubject(t, "/v1/namespaces", "0xowner", auth.ScopeSet{})
+
+		if rec.Code != http.StatusTeapot {
+			t.Errorf("status = %d, want the handler's 418 — a wallet with no grant could not create a namespace: %s",
+				rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// serveAsSubject runs the scope middleware for a caller carrying a JWT with the
+// given subject.
+func serveAsSubject(t *testing.T, path, subject string, scopes auth.ScopeSet) *httptest.ResponseRecorder {
+	t.Helper()
+
+	logger, err := logging.NewColoredLogger(logging.ComponentGateway, false)
+	if err != nil {
+		t.Fatalf("logger: %v", err)
+	}
+	g := &Gateway{logger: logger}
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+
+	r := httptest.NewRequest(http.MethodPost, path, nil)
+	ctx := context.WithValue(r.Context(), ctxKeyScopes, scopes)
+	ctx = context.WithValue(ctx, ctxKeyJWT, &auth.JWTClaims{Sub: subject})
+	rec := httptest.NewRecorder()
+
+	g.scopeMiddleware(next).ServeHTTP(rec, r.WithContext(ctx))
+	return rec
+}

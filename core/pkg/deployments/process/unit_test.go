@@ -1,56 +1,69 @@
 package process
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/DeBrosOfficial/network/pkg/deployments"
 )
 
-func validSpec() UnitSpec {
-	return UnitSpec{
-		ServiceName:     "orama-deploy-acme-api",
-		Namespace:       "acme",
-		Name:            "api",
-		WorkDir:         "/opt/orama/.orama/deployments/acme/api",
-		StartCmd:        "/usr/bin/node server.js",
-		EnvFilePath:     "/opt/orama/.orama/deployment-env/orama-deploy-acme-api.env",
-		RestartPolicy:   "on-failure",
-		MemoryLimitMB:   512,
-		CPULimitPercent: 50,
-	}
-}
+// The unit a deployment runs as is a template shipped with the release, not a
+// file this package writes: the gateway used to `tee` one into /etc, which only
+// worked because it ran as root, and the hardened gateway unit takes that away.
+// These read the templates that actually ship.
 
-func renderOrFail(t *testing.T, spec UnitSpec) string {
+// deployTemplate returns one of the shipped deployment templates.
+func deployTemplate(t *testing.T, runtime Runtime) string {
 	t.Helper()
-	unit, err := RenderUnit(spec)
+	path := filepath.Join(repoRoot(t), "systemd", "orama-deploy-"+string(runtime)+"@.service")
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("RenderUnit: %v", err)
+		t.Fatalf("read %s: %v", path, err)
 	}
-	return unit
+	return string(data)
 }
 
-// A deployment is a tenant's own code running on a node that also runs the
-// cluster's control plane. Its unit had no User= at all, so it ran as root.
-func TestRenderUnit_doesNotRunTheTenantsCodeAsRoot(t *testing.T) {
-	unit := renderOrFail(t, validSpec())
-
-	if strings.Contains(unit, "User=root") {
-		t.Fatal("the unit names root as its user")
+// repoRoot walks up to the directory holding go.mod.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(unit, "DynamicUser=yes") {
-		t.Fatal("the unit has no user of its own, so it runs as whatever systemd defaults to, which is root")
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod above the working directory")
+		}
+		dir = parent
 	}
 }
 
-// Every directive here was absent, and each one is load-bearing. A test that
-// only checked a couple of them would let the rest be dropped by a later edit
-// without anything failing.
-func TestRenderUnit_carriesTheWholeHardeningSet(t *testing.T) {
-	unit := renderOrFail(t, validSpec())
+func eachDeployTemplate(t *testing.T, check func(t *testing.T, runtime Runtime, unit string)) {
+	t.Helper()
+	for _, runtime := range []Runtime{RuntimeNode, RuntimeNPM, RuntimeGo} {
+		t.Run(string(runtime), func(t *testing.T) {
+			check(t, runtime, deployTemplate(t, runtime))
+		})
+	}
+}
 
-	for _, directive := range []string{
-		"DynamicUser=yes",
+func TestDeployTemplate_doesNotRunTheTenantsCodeAsRoot(t *testing.T) {
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		if !strings.Contains(unit, "DynamicUser=yes") {
+			t.Error("no DynamicUser: the deployment runs as whatever systemd defaults to, which is root")
+		}
+		if strings.Contains(unit, "User=root") {
+			t.Error("the unit names root outright")
+		}
+	})
+}
+
+func TestDeployTemplate_carriesTheWholeHardeningSet(t *testing.T) {
+	want := []string{
 		"ProtectSystem=strict",
 		"ProtectHome=yes",
 		"NoNewPrivileges=yes",
@@ -65,177 +78,136 @@ func TestRenderUnit_carriesTheWholeHardeningSet(t *testing.T) {
 		"LockPersonality=yes",
 		"RemoveIPC=yes",
 		"ProtectProc=invisible",
-	} {
-		if !strings.Contains(unit, directive) {
-			t.Errorf("the unit is missing %s:\n%s", directive, unit)
-		}
 	}
-}
-
-// The WireGuard overlay is the cluster's control plane: rqlite, Olric, and
-// every other namespace's services are on it, and a deployment sits on the same
-// host. Tenant code has no business there.
-func TestRenderUnit_keepsTheTenantOffTheOverlay(t *testing.T) {
-	unit := renderOrFail(t, validSpec())
-
-	if !strings.Contains(unit, "IPAddressDeny=") {
-		t.Fatal("the unit does not restrict where the deployment may connect")
-	}
-	deny := ""
-	for _, line := range strings.Split(unit, "\n") {
-		if strings.HasPrefix(line, "IPAddressDeny=") {
-			deny = line
-		}
-	}
-	if !strings.Contains(deny, "10.0.0.0/8") {
-		t.Errorf("the overlay range is reachable from tenant code: %s", deny)
-	}
-	if !strings.Contains(deny, "169.254.0.0/16") {
-		t.Errorf("the link-local metadata range is reachable from tenant code: %s", deny)
-	}
-	if !strings.Contains(unit, "IPAddressAllow=localhost") {
-		t.Error("loopback is denied, so the node's own reverse proxy cannot reach the app")
-	}
-}
-
-// The values used to be interpolated into the unit itself. They are in a file
-// systemd reads as root, which the deployment's own user never sees.
-func TestRenderUnit_takesItsEnvironmentFromAFileAndNotFromTheUnit(t *testing.T) {
-	unit := renderOrFail(t, validSpec())
-
-	if !strings.Contains(unit, "EnvironmentFile=/opt/orama/.orama/deployment-env/orama-deploy-acme-api.env") {
-		t.Fatalf("the unit does not point at the environment file:\n%s", unit)
-	}
-	for _, line := range strings.Split(unit, "\n") {
-		if strings.HasPrefix(line, "Environment=") {
-			t.Errorf("a value is written into the unit itself: %s", line)
-		}
-	}
-}
-
-func TestRenderUnit_writesTheDeploymentsOwnLimits(t *testing.T) {
-	unit := renderOrFail(t, validSpec())
-
-	for _, want := range []string{"MemoryMax=512M", "MemorySwapMax=0", "CPUQuota=50%", "TasksMax=512"} {
-		if !strings.Contains(unit, want) {
-			t.Errorf("the unit is missing %s:\n%s", want, unit)
-		}
-	}
-	// MemoryLimit= is the obsolete spelling; systemd maps it but every other
-	// unit on the node uses MemoryMax.
-	if strings.Contains(unit, "MemoryLimit=") {
-		t.Error("the unit uses the obsolete MemoryLimit= spelling")
-	}
-}
-
-// A deployment with no recorded limit is a deployment with the default limit,
-// not one with a limit of zero — MemoryMax=0M would let it allocate nothing.
-func TestRenderUnit_unsetLimitsFallToTheDefaultsAndNotToZero(t *testing.T) {
-	spec := validSpec()
-	spec.MemoryLimitMB = 0
-	spec.CPULimitPercent = 0
-	unit := renderOrFail(t, spec)
-
-	if strings.Contains(unit, "MemoryMax=0M") || strings.Contains(unit, "CPUQuota=0%") {
-		t.Fatalf("an unset limit became a limit of zero:\n%s", unit)
-	}
-	if !strings.Contains(unit, "MemoryMax=256M") {
-		t.Errorf("expected the default memory limit of %dMB:\n%s", deployments.DefaultMemoryLimitMB, unit)
-	}
-	if !strings.Contains(unit, "CPUQuota=50%") {
-		t.Errorf("expected the default CPU limit of %d%%:\n%s", deployments.DefaultCPULimitPercent, unit)
-	}
-}
-
-func TestRenderUnit_givesTheDeploymentSomewhereToWrite(t *testing.T) {
-	unit := renderOrFail(t, validSpec())
-
-	if !strings.Contains(unit, "StateDirectory=orama-deploy-acme-api") {
-		t.Errorf("the deployment has no writable directory:\n%s", unit)
-	}
-	if !strings.Contains(unit, "CacheDirectory=orama-deploy-acme-api") {
-		t.Errorf("the deployment has no cache directory:\n%s", unit)
-	}
-	if got := StateDirectoryPath("orama-deploy-acme-api"); got != "/var/lib/orama-deploy-acme-api" {
-		t.Errorf("StateDirectoryPath = %q", got)
-	}
-	if got := CacheDirectoryPath("orama-deploy-acme-api"); got != "/var/cache/orama-deploy-acme-api" {
-		t.Errorf("CacheDirectoryPath = %q", got)
-	}
-}
-
-func TestRenderUnit_writesTheDescriptionAndIdentity(t *testing.T) {
-	unit := renderOrFail(t, validSpec())
-
-	if !strings.Contains(unit, "Description=Orama Deployment - acme/api") {
-		t.Error("the unit does not say which deployment it is")
-	}
-	if !strings.Contains(unit, "SyslogIdentifier=orama-deploy-acme-api") {
-		t.Error("the unit's logs are not attributable to the deployment")
-	}
-	if !strings.Contains(unit, "ExecStart=/usr/bin/node server.js") {
-		t.Error("the unit does not start the deployment")
-	}
-	if !strings.Contains(unit, "Restart=on-failure") {
-		t.Error("the unit does not carry the deployment's restart policy")
-	}
-	if !strings.Contains(unit, "WorkingDirectory=/opt/orama/.orama/deployments/acme/api") {
-		t.Error("the unit does not run in the deployment's directory")
-	}
-}
-
-// Every field is interpolated into a line of a unit file, where a newline
-// starts a new directive. "It is constrained upstream" is exactly the
-// assumption that put unescaped tenant input into this file to begin with.
-func TestRenderUnit_refusesAFieldThatWouldWriteItsOwnDirective(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		spoil func(*UnitSpec)
-	}{
-		{"service name", func(s *UnitSpec) { s.ServiceName = "a\nExecStartPre=/bin/sh -c id" }},
-		{"namespace", func(s *UnitSpec) { s.Namespace = "a\nUser=root" }},
-		{"deployment name", func(s *UnitSpec) { s.Name = "a\nUser=root" }},
-		{"working directory", func(s *UnitSpec) { s.WorkDir = "/tmp\nUser=root" }},
-		{"start command", func(s *UnitSpec) { s.StartCmd = "/bin/true\nUser=root" }},
-		{"environment file", func(s *UnitSpec) { s.EnvFilePath = "/tmp/x\nUser=root" }},
-		{"restart policy", func(s *UnitSpec) { s.RestartPolicy = "always\nUser=root" }},
-		{"carriage return", func(s *UnitSpec) { s.Name = "a\rUser=root" }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			spec := validSpec()
-			tc.spoil(&spec)
-			if _, err := RenderUnit(spec); err == nil {
-				t.Fatalf("RenderUnit accepted a %s carrying a newline", tc.name)
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		for _, directive := range want {
+			if !strings.Contains(unit, directive) {
+				t.Errorf("missing %s", directive)
 			}
-		})
-	}
+		}
+	})
 }
 
-func TestRenderUnit_refusesAnIncompleteSpec(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		spoil func(*UnitSpec)
-	}{
-		{"no service name", func(s *UnitSpec) { s.ServiceName = "" }},
-		{"no namespace", func(s *UnitSpec) { s.Namespace = "" }},
-		{"no name", func(s *UnitSpec) { s.Name = "" }},
-		{"no work dir", func(s *UnitSpec) { s.WorkDir = "" }},
-		{"no start command", func(s *UnitSpec) { s.StartCmd = "" }},
-		{"no environment file", func(s *UnitSpec) { s.EnvFilePath = "  " }},
-		{"no restart policy", func(s *UnitSpec) { s.RestartPolicy = "" }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			spec := validSpec()
-			tc.spoil(&spec)
-			if _, err := RenderUnit(spec); err == nil {
-				t.Fatalf("RenderUnit wrote a unit with %s", tc.name)
+// A deployment sits on the same host as the WireGuard overlay that carries
+// rqlite, Olric, the node agent and every other namespace's services.
+func TestDeployTemplate_keepsTheTenantOffTheOverlay(t *testing.T) {
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		if !strings.Contains(unit, "IPAddressDeny=") {
+			t.Fatal("nothing denies the overlay")
+		}
+		for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"} {
+			if !strings.Contains(unit, cidr) {
+				t.Errorf("%s is reachable from tenant code", cidr)
 			}
-		})
+		}
+		if !strings.Contains(unit, "IPAddressAllow=localhost") {
+			t.Error("loopback is denied, so the node's own reverse proxy cannot reach the app")
+		}
+	})
+}
+
+// The tenant's secrets are in the environment file, which is root-owned and
+// read by systemd as PID 1 before it drops to the deployment's own user. A
+// tenant value in the unit would be readable by anyone who can run
+// `systemctl cat`.
+//
+// The platform's own variables are a different thing: ORAMA_TOKEN_FILE has to
+// be in the unit because it is built from %d, the credentials directory, which
+// only systemd can expand. Everything inlined has to be one of them.
+func TestDeployTemplate_inlinesNoTenantValue(t *testing.T) {
+	platform := map[string]bool{}
+	for _, key := range PlatformEnvKeys {
+		platform[key] = true
 	}
+
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		if !strings.Contains(unit, "EnvironmentFile=") {
+			t.Error("no EnvironmentFile")
+		}
+		for _, line := range strings.Split(unit, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "Environment=") {
+				continue
+			}
+			name, _, _ := strings.Cut(strings.TrimPrefix(line, "Environment="), "=")
+			if !platform[name] {
+				t.Errorf("%q is inlined in the unit and is not one of the platform's own variables, "+
+					"so a tenant value can end up readable by anyone who can run `systemctl cat`", name)
+			}
+		}
+	})
+}
+
+// The credential has to reach the deployment, and only the deployment. systemd
+// stages it as PID 1 and hands it over owned by the unit's own user, which is
+// what lets an unprivileged gateway give a token to a process running as
+// somebody else.
+func TestDeployTemplate_stagesTheWorkloadCredential(t *testing.T) {
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		if !strings.Contains(unit, "LoadCredential=orama_token:") {
+			t.Error("the deployment is started with no credential of its own")
+		}
+		if !strings.Contains(unit, "Environment=ORAMA_TOKEN_FILE=%d/") {
+			t.Error("nothing tells the deployment where its credential is")
+		}
+	})
+}
+
+// Everything that varies per deployment has to come from the instance or the
+// environment file, because nothing writes a unit per deployment any more.
+func TestDeployTemplate_derivesEveryPathFromTheInstance(t *testing.T) {
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		for _, directive := range []string{"WorkingDirectory=", "EnvironmentFile=", "StateDirectory=", "CacheDirectory="} {
+			line := directiveValue(t, unit, directive)
+			if !strings.Contains(line, "%i") {
+				t.Errorf("%s%s does not derive from the instance, so one template cannot serve every deployment",
+					directive, line)
+			}
+		}
+	})
+}
+
+// systemd expands a variable in an argument but never in the executable, which
+// is the whole reason there is a template per runtime rather than one template
+// the gateway fills in.
+func TestDeployTemplate_startsWithALiteralExecutable(t *testing.T) {
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		exec := directiveValue(t, unit, "ExecStart=")
+		binary := strings.Fields(exec)[0]
+		if !strings.HasPrefix(binary, "/") {
+			t.Errorf("ExecStart begins with %q, which systemd will not resolve", binary)
+		}
+		if strings.Contains(binary, "$") {
+			t.Errorf("ExecStart's executable is a variable (%q); systemd does not expand one there", binary)
+		}
+	})
+}
+
+func TestDeployTemplate_boundsWhatOneDeploymentCanTakeFromTheNode(t *testing.T) {
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		for _, directive := range []string{"MemoryMax=", "CPUQuota=", "TasksMax=", "MemorySwapMax=0"} {
+			if !strings.Contains(unit, directive) {
+				t.Errorf("missing %s: one deployment can take the node down", directive)
+			}
+		}
+	})
+}
+
+// directiveValue returns the value of the first occurrence of a directive.
+func directiveValue(t *testing.T, unit, directive string) string {
+	t.Helper()
+	for _, line := range strings.Split(unit, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, directive) {
+			return strings.TrimPrefix(line, directive)
+		}
+	}
+	t.Fatalf("no %s in the unit", directive)
+	return ""
 }
 
 func TestPlatformEnv_tellsTheDeploymentWhoAndWhereItIs(t *testing.T) {
-	env := platformEnv("acme", "orama-deploy-acme-api", "https://ns-acme.dbrs.space", 8080)
+	env := platformEnv("acme", "orama-deploy-acme-api", "https://ns-acme.dbrs.space", "server.js", 8080)
 
 	for key, want := range map[string]string{
 		"PORT":              "8080",
@@ -251,7 +223,7 @@ func TestPlatformEnv_tellsTheDeploymentWhoAndWhereItIs(t *testing.T) {
 }
 
 func TestPlatformEnv_omitsTheGatewayURLWhenThereIsNoDomain(t *testing.T) {
-	env := platformEnv("acme", "orama-deploy-acme-api", "", 8080)
+	env := platformEnv("acme", "orama-deploy-acme-api", "", "server.js", 8080)
 	if _, present := env["ORAMA_GATEWAY_URL"]; present {
 		t.Error("a gateway URL was invented from an empty base domain")
 	}
@@ -268,7 +240,7 @@ func TestMergeEnv_thePlatformsVariablesWinOverTheTenants(t *testing.T) {
 			"ORAMA_GATEWAY_URL": "https://attacker.example",
 			"MY_OWN":            "kept",
 		},
-		platformEnv("acme", "orama-deploy-acme-api", "https://ns-acme.dbrs.space", 8080),
+		platformEnv("acme", "orama-deploy-acme-api", "https://ns-acme.dbrs.space", "server.js", 8080),
 	)
 
 	if merged["PORT"] != "8080" {
@@ -285,20 +257,51 @@ func TestMergeEnv_thePlatformsVariablesWinOverTheTenants(t *testing.T) {
 	}
 }
 
-// The reserved-name list in the API and the set the platform actually writes
+// The reserved-name list in the API and the names the platform actually sets
 // have to be the same set, or a tenant can set a name that is then silently
 // overwritten.
-func TestPlatformEnvKeys_matchesWhatThePlatformActuallyWrites(t *testing.T) {
-	written := platformEnv("acme", "orama-deploy-acme-api", "https://ns-acme.dbrs.space", 8080)
-	if len(written) != len(PlatformEnvKeys) {
-		t.Fatalf("the platform writes %d variables but declares %d: %v vs %v",
-			len(written), len(PlatformEnvKeys), written, PlatformEnvKeys)
+//
+// Every name is either written into the environment file or set by the unit;
+// ORAMA_TOKEN_FILE is the second kind, because it is built from the
+// credentials directory that only systemd can name.
+func TestPlatformEnvKeys_matchesWhatThePlatformActuallySets(t *testing.T) {
+	written := platformEnv("acme", "orama-deploy-acme-api", "https://ns-acme.dbrs.space", "server.js", 8080)
+
+	fromUnit := map[string]bool{}
+	for _, line := range strings.Split(deployTemplate(t, RuntimeNode), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Environment=") {
+			continue
+		}
+		name, _, _ := strings.Cut(strings.TrimPrefix(line, "Environment="), "=")
+		fromUnit[name] = true
 	}
+
 	for _, key := range PlatformEnvKeys {
-		if _, ok := written[key]; !ok {
-			t.Errorf("%s is declared as a platform variable but is never written", key)
+		_, inFile := written[key]
+		if !inFile && !fromUnit[key] {
+			t.Errorf("%s is reserved as a platform variable and nothing sets it", key)
 		}
 	}
+	for key := range written {
+		if !contains(PlatformEnvKeys, key) {
+			t.Errorf("the platform writes %s and does not reserve it, so a tenant can set it", key)
+		}
+	}
+	for key := range fromUnit {
+		if !contains(PlatformEnvKeys, key) {
+			t.Errorf("the unit sets %s and the platform does not reserve it", key)
+		}
+	}
+}
+
+func contains(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSortedEnv_isStableAndComplete(t *testing.T) {

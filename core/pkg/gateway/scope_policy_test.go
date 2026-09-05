@@ -201,13 +201,25 @@ func TestCallerScopes(t *testing.T) {
 		t.Error("a reader holds no grant at all")
 	}
 
-	// A grant narrowed to a resource authorises nothing until the data plane
-	// can enforce the selector. Handing over the whole role would turn a
-	// narrower-looking grant into the wide one.
+	// A grant with a selector holds the scope that selector narrows and nothing
+	// else. The scope gate lets it reach storage; AuthorizeResource in the
+	// handler is what decides which object.
 	rScoped := reqWithJWT(&auth.JWTClaims{Sub: "0xSCOPED"})
 	rScoped = markGrant(rScoped, &auth.Grant{Role: auth.RoleRuntime, Resource: "storage:avatars/*"})
-	if s := g.callerScopes(rScoped); s.Has(auth.ScopeStorage) {
-		t.Error("a grant narrowed to storage:avatars/* was read as all of storage")
+	scoped := g.callerScopes(rScoped)
+	if !scoped.Has(auth.ScopeStorage) {
+		t.Error("a grant narrowed to storage:avatars/* cannot reach storage at all")
+	}
+	if scoped.Has(auth.ScopePubsub) || scoped.IsAdmin() {
+		t.Errorf("it holds %q; a storage selector says nothing about anything else", scoped.Canonical())
+	}
+
+	// A selector in a domain nothing narrows still authorises nothing, or the
+	// narrower-looking grant is the wide one.
+	rUnenforced := reqWithJWT(&auth.JWTClaims{Sub: "0xUNENFORCED"})
+	rUnenforced = markGrant(rUnenforced, &auth.Grant{Role: auth.RoleAdmin, Resource: "db:table=posts:read"})
+	if s := g.callerScopes(rUnenforced); len(s) != 0 {
+		t.Errorf("a grant narrowed to a domain no data path applies holds %q", s.Canonical())
 	}
 }
 

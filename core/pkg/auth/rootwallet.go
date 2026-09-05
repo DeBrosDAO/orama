@@ -82,23 +82,25 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 
 	fmt.Printf("✅ Wallet: %s\n", wallet)
 
-	// 2. Prompt for namespace if not provided
+	// 2. Prompt for namespace if not provided.
+	//
+	// Blank is a real answer: a wallet that owns nothing yet signs in to the
+	// lobby, which is where you stand before you own anything, and creates a
+	// namespace from there. It used to loop until you typed one, and typing a
+	// name you did not own made you its owner.
 	if namespace == "" {
-		for {
-			fmt.Print("Enter namespace (required): ")
-			nsInput, err := reader.ReadString('\n')
-			if err != nil {
-				return nil, fmt.Errorf("failed to read namespace: %w", err)
-			}
-
-			namespace = strings.TrimSpace(nsInput)
-			if namespace != "" {
-				break
-			}
-			fmt.Println("⚠️  Namespace cannot be empty. Please enter a namespace.")
+		fmt.Printf("Enter namespace (blank to sign in without one, then 'orama namespace create <name>'): ")
+		nsInput, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("failed to read namespace: %w", err)
 		}
+		namespace = strings.TrimSpace(nsInput)
 	}
-	fmt.Printf("✅ Namespace: %s\n", namespace)
+	if namespace == "" {
+		fmt.Println("✅ Signing in without a namespace")
+	} else {
+		fmt.Printf("✅ Namespace: %s\n", namespace)
+	}
 
 	// 3. Request challenge nonce from gateway
 	fmt.Println("⏳ Requesting authentication challenge...")
@@ -236,37 +238,27 @@ func verifySignature(client *http.Client, gatewayURL, message, signature, namesp
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	if result.APIKey == "" {
-		return nil, fmt.Errorf("no api_key in verify response")
-	}
-
-	// Build namespace gateway URL
-	namespaceURL := ""
-	if d := extractDomainFromURL(gatewayURL); d != "" {
-		if namespace == "default" {
-			namespaceURL = fmt.Sprintf("https://%s", d)
-		} else {
-			namespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, d)
-		}
-	}
-
 	creds := &Credentials{
 		APIKey:       result.APIKey,
-		RefreshToken: result.RefreshToken,
 		Namespace:    result.Namespace,
 		UserID:       result.Subject,
 		Wallet:       result.Subject,
 		IssuedAt:     time.Now(),
-		NamespaceURL: namespaceURL,
+		NamespaceURL: namespaceGatewayURL(gatewayURL, namespace),
 	}
+	// The session this login was handed. Both of these were read out of the
+	// response and dropped, and the API key was sent as the bearer credential
+	// of every request afterwards instead.
+	creds.SetSession(result.AccessToken, result.RefreshToken, result.ExpiresIn)
 
 	// If 202, namespace cluster is being provisioned — set poll URL
 	if resp.StatusCode == http.StatusAccepted && result.PollURL != "" {
 		creds.ProvisioningPollURL = result.PollURL
 	}
 
-	// Note: result.ExpiresIn is the JWT access token lifetime (15min),
-	// NOT the API key lifetime. Don't set ExpiresAt — the API key is permanent.
+	// ExpiresAt stays unset: it is the API key's own life, and result.ExpiresIn
+	// is the access token's. They are different clocks and conflating them made
+	// a fifteen-minute number look like the key's expiry.
 
 	return creds, nil
 }

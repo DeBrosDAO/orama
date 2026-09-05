@@ -68,6 +68,10 @@ func buildRoutePolicies() *routepolicy.Table {
 		// The login handshake. Nobody has a credential yet, which is the point.
 		"/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/refresh",
 		"/v1/auth/logout", "/v1/auth/api-key",
+		// The device authorization grant. The machine asking has no credential
+		// — that is what it is asking for — and approving one costs a wallet
+		// signature, which the handler verifies exactly as /v1/auth/verify does.
+		"/v1/auth/device", "/v1/auth/device/approve", "/v1/auth/device/token",
 		"/v1/network/status", "/v1/network/peers",
 		// Polled while a namespace's cluster is still provisioning, by a client
 		// that has not been given anything to poll it with yet.
@@ -101,6 +105,12 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(policyCredential,
 		// Exchanging a key for a token, and asking what the credential is.
 		"/v1/auth/token", "/v1/auth/whoami",
+		// A wallet's own sessions. The handler refuses anything but a token
+		// from a signed-in wallet, and reads whose sessions from that token.
+		"/v1/auth/sessions", "/v1/auth/sessions/",
+		// A workload renewing its own token. It needs the token it is renewing
+		// and nothing else, which is what the handler checks.
+		"/v1/auth/renew",
 		// A read of the gateway's own schema version.
 		"/v1/schema-status",
 		// Whether WebRTC is on. The switches beside it are admin.
@@ -119,13 +129,14 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/deployments/rollback", "/v1/deployments/versions", "/v1/deployments/logs",
 		"/v1/deployments/stats", "/v1/deployments/events",
 		"/v1/deployments/env", "/v1/deployments/env/set",
+		"/v1/deployments/grants",
 		"/v1/deployments/static/upload", "/v1/deployments/static/update",
 		"/v1/deployments/nextjs/upload", "/v1/deployments/nextjs/update",
 		"/v1/deployments/go/upload", "/v1/deployments/go/update",
 		"/v1/deployments/nodejs/upload", "/v1/deployments/nodejs/update",
 		"/v1/deployments/domains/add", "/v1/deployments/domains/verify",
 		"/v1/deployments/domains/list", "/v1/deployments/domains/remove",
-		"/v1/namespace/delete", "/v1/namespace/list", "/v1/namespaces",
+		"/v1/namespace/delete", "/v1/namespace/list",
 		"/v1/namespace/rate-limit",
 		"/v1/namespace/webrtc/enable", "/v1/namespace/webrtc/disable",
 		"/v1/namespace/webrtc/stealth/enable", "/v1/namespace/webrtc/stealth/disable",
@@ -137,6 +148,7 @@ func buildRoutePolicies() *routepolicy.Table {
 		// and every other secret the cluster holds. This had no entry at all
 		// and fell through to "any valid credential".
 		"/v1/operator/invite", "/v1/operator/nodes", "/v1/operator/node/register",
+		"/v1/operator/rotate-signing-key",
 	)
 
 	// --- Control plane on a namespace's own resources ------------------
@@ -155,6 +167,15 @@ func buildRoutePolicies() *routepolicy.Table {
 		// operations and is declared below.
 		"/v1/functions",
 	)
+
+	// Creating a namespace is the one control-plane act that cannot require an
+	// existing grant: a wallet with no namespace has no grant anywhere, and
+	// requiring one would mean nobody could ever start. What it does require is
+	// a signed-in wallet — the handler reads the owner from the token and
+	// writes the owner grant — so a key cannot create a namespace and a leaked
+	// one cannot fill the registry with them. The per-wallet cap is in the
+	// handler.
+	t.Add(routepolicy.Policy{Token: routepolicy.WalletToken}, "/v1/namespaces")
 
 	// Scoped API-key management operates on the MAIN cluster registry, where
 	// keys are validated. A namespace gateway's own RQLite has no authoritative

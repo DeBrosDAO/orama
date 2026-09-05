@@ -339,8 +339,12 @@ func requestInviteToken(gatewayURL string) (string, error) {
 		return "", fmt.Errorf("failed to load credentials: %w", err)
 	}
 	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil || creds.APIKey == "" {
+	if creds == nil {
 		return "", fmt.Errorf("no credentials for %s — run 'orama auth login' first", gatewayURL)
+	}
+	token, err := auth.Bearer(gatewayURL, store, creds)
+	if err != nil {
+		return "", err
 	}
 
 	body, _ := json.Marshal(map[string]int{"expiry_minutes": 60})
@@ -349,7 +353,7 @@ func requestInviteToken(gatewayURL string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", creds.APIKey)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)

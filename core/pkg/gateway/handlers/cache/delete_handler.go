@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	olriclib "github.com/olric-data/olric"
 )
 
@@ -31,11 +32,6 @@ import (
 //	  "dmap": "my-cache"
 //	}
 func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
-	if h.olricClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -50,6 +46,19 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	if strings.TrimSpace(req.DMap) == "" || strings.TrimSpace(req.Key) == "" {
 		writeError(w, http.StatusBadRequest, "dmap and key are required")
+		return
+	}
+
+	if !h.authorizeKey(w, r, req.DMap, req.Key, gwauth.ActionWrite) {
+		return
+	}
+
+	// The availability check comes after the request has been read and
+	// authorized. A caller who may not touch this key is refused whether or not
+	// the cache happens to be up, and a 503 would otherwise tell them the cache
+	// exists and is down — an answer they are not entitled to.
+	if h.olricClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
 		return
 	}
 

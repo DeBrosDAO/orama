@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -103,6 +104,20 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	// The name is the only thing a `storage:avatars/*` selector has to compare
+	// against, and it comes from the client. Normalising it first is what makes
+	// the comparison mean one thing: `/avatars/me.png` and `avatars//me.png`
+	// are the same object, and `avatars/../keys/x` is not under `avatars/` at
+	// all however it is spelled.
+	name, err := gwauth.NormalizeStoragePath(name)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.authorizeStoragePath(w, r, name, gwauth.ActionWrite) {
+		return
+	}
 
 	// Server-side per-namespace storage quota (bugboard #141). Reject BEFORE we
 	// add/pin so the namespace's RF-inclusive budget is a real ceiling, not a

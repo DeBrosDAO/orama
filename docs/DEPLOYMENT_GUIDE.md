@@ -47,12 +47,52 @@ Before deploying, authenticate with your wallet:
 # Authenticate with your wallet
 orama auth login
 
-# Who am I, and against which gateway?
+# Who am I, and what may I do? (asks the gateway)
 orama auth whoami
+
+# What is stored on this machine? (asks nobody)
 orama auth status
 ```
 
-Your API key is stored securely and used for all deployment operations.
+What is stored is a **session**, not a key: an access token lasting 15 minutes,
+renewed transparently from a 30-day refresh token. The CLI used to store an API
+key and send it as the credential of every request it made.
+
+On a machine with RootWallet running, the challenge is signed here. On one
+without — a server reached over SSH, a container, CI — `orama auth login` prints
+a code instead:
+
+```
+    Your code:  BCDF-GHJK
+
+  On a machine where RootWallet is running, run:
+
+    orama auth approve BCDF-GHJK
+```
+
+Approving costs the same wallet signature signing in does, which is what makes
+the code on its own worthless. `orama auth approve <code> --deny` refuses, and
+the waiting machine stops rather than polling until the code expires.
+
+### In CI
+
+Set `ORAMA_TOKEN` to either an API key or a token. A key is exchanged for a
+session once per run rather than sent on every request the run makes:
+
+```bash
+export ORAMA_TOKEN="$(orama namespace keys create --scope app-runtime --label ci)"
+```
+
+### Which machines are signed in
+
+```bash
+orama auth sessions                  # every live session for this wallet
+orama auth sessions revoke <id>      # end one
+orama auth sessions revoke --all     # end all of them
+```
+
+Ending a session stops it minting new access tokens. One already minted keeps
+working until it expires, at most 15 minutes.
 
 Creating a namespace is its own step, and the wallet that makes it owns it:
 
@@ -112,9 +152,9 @@ orama members transfer 0xabc…             # hand the namespace over
 
 `admin` is everything except ownership; `runtime` is invoke, storage, push,
 webrtc, proxy, pubsub and cache; `reader` is a member with no grant at all.
-Ownership is transferred rather than granted, because a namespace with no owner
-is claimable by whoever signs in to it next — you keep an admin grant, so
-handing a project over does not lock you out of it.
+Ownership is transferred rather than granted, and it is one step rather than a
+removal and a grant, so there is no moment where the namespace has no owner. You
+keep an admin grant, so handing a project over does not lock you out of it.
 
 ### What happened, and who did it
 
@@ -560,8 +600,8 @@ orama app env set my-api --env-file .env.production
 orama app env unset my-api OLD_FLAG DEBUG_MODE
 ```
 
-Setting or removing a variable rewrites the app's systemd unit and restarts it,
-so the change takes effect immediately. A static site has no process, so its
+Setting or removing a variable rewrites the app's environment file and restarts
+it, so the change takes effect immediately. A static site has no process, so its
 variables are recorded and nothing is restarted.
 
 **`list` shows names, never values.** Environment variables are where secrets
@@ -577,6 +617,7 @@ These names are set by the platform and cannot be overwritten or removed:
 |------|------------|
 | `PORT` | The port your app must listen on. It is how the gateway reaches you |
 | `ENTRY_POINT` | What a Node.js deployment runs |
+| `ORAMA_ENTRYPOINT` | The script the runtime starts, derived from `ENTRY_POINT` |
 | `ORAMA_NAMESPACE` | The namespace this deployment belongs to |
 | `ORAMA_GATEWAY_URL` | Your namespace's own gateway, `https://ns-<namespace>.<domain>` |
 | `ORAMA_STATE_DIR` | A directory your app may write to that survives restarts |
@@ -585,10 +626,40 @@ These names are set by the platform and cannot be overwritten or removed:
 An app that talks back to Orama previously had nothing to go on: no address, no
 namespace name. Every such app baked both into its own image.
 
-There is no credential among these yet. Handing every deployment a long-lived
-namespace key would mean any application compromise is a namespace takeover, so
-the token a deployment gets will be short-lived and scoped to the deployment
-itself, and it is being built with the rest of the workload-identity work.
+### Your app's own credential
+
+Your app is a principal of its own. At start it is handed a short-lived token in
+the file named by `$ORAMA_TOKEN_FILE`, and it renews that token with the gateway
+before it expires:
+
+```js
+const token = await readFile(process.env.ORAMA_TOKEN_FILE, "utf8");
+
+// Before it expires, ask for the next one with the one you have.
+const res = await fetch(`${process.env.ORAMA_GATEWAY_URL}/v1/auth/renew`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}` },
+});
+const { access_token, expires_in } = await res.json();
+```
+
+Nothing long-lived is on the node. systemd reads the file as PID 1 and hands
+your process a copy owned by your app's own user; the gateway never has to write
+anything your app could read directly.
+
+**It reaches nothing until you grant it something**, which is the point — an app
+that ships with no credential cannot leak one:
+
+```bash
+orama app grants set my-api runtime      # invoke, storage, push, webrtc, proxy, pubsub, cache
+orama app grants list
+```
+
+A deployment cannot be granted the control plane. If something needs to deploy
+or mint keys, that is a person or a CI key, not an app.
+
+A grant you change reaches a running app on its next renewal, or immediately if
+you redeploy.
 
 ### Where your app may write
 
@@ -608,6 +679,23 @@ A value may contain anything that is valid UTF-8, including quotes,
 backslashes, spaces and newlines, so a PEM key or a JSON blob goes in as it is.
 It may not contain a NUL byte, and one value may be at most 64 KiB: every value
 is replicated to every node in the cluster.
+
+### What runs your app
+
+Your app is an instance of a systemd template installed with the platform —
+`orama-deploy-node@`, `orama-deploy-npm@` or `orama-deploy-go@` — named
+`orama-deploy-<runtime>@<namespace>-<name>`. Which one you get follows from the
+deployment type and, for Node.js, from `ENTRY_POINT`: `npm:start` runs
+`npm start`, anything else runs `node <that file>`, and no value runs
+`node index.js`.
+
+The gateway does not write a unit for your app. It writes only the environment
+file, and starts the template. That is not an implementation detail you can
+ignore if you are running a node: the gateway runs as an unprivileged user with
+`ProtectSystem=strict` and `NoNewPrivileges=yes`, so it *cannot* write into
+`/etc`, and a node whose templates were not installed will refuse every deploy
+with "Unit orama-deploy-node@… not found". They are installed by
+`orama node install` and by every upgrade.
 
 ### What your app runs as
 
@@ -1233,12 +1321,12 @@ orama db query my-db "SELECT sql FROM sqlite_master WHERE name='users'"
 ### Authentication Issues
 
 ```bash
-# Re-authenticate
+# Re-authenticate. logout ends the session on the gateway as well as here.
 orama auth logout
 orama auth login
 
-# Check token validity
-orama auth status
+# Ask the gateway whether this credential still works, and what it holds
+orama auth whoami
 ```
 
 ### Need Help?
