@@ -67,9 +67,9 @@ export const ROUTES = {
   investors: {
     path: "/investors",
     title: "Investors",
-    headTitle: "Invest in a decentralized cloud",
+    headTitle: "Invest in Orama Network and RootWallet",
     description:
-      "€1,000,000 to take Orama from a working prototype to a network anyone can join.",
+      "€1.5M equity round for one Swiss company with two products: Orama Network, the cloud, and RootWallet, the keys. No token.",
   },
   donate: {
     path: "/donate",

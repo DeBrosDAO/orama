@@ -21,7 +21,7 @@ function sourceFiles(dir: string): string[] {
     if (statSync(full).isDirectory()) {
       return EXEMPT_DIRS.has(name) && dir === SRC ? [] : sourceFiles(full);
     }
-    return TEXT_FILES.test(name) && !name.endsWith(".test.ts") ? [full] : [];
+    return TEXT_FILES.test(name) && !/\.test\.tsx?$/.test(name) ? [full] : [];
   });
 }
 
@@ -48,7 +48,8 @@ describe("brand and claims", () => {
   });
 
   it("TestSite_no_token_or_sale_language", () => {
-    expect(offending(/\$ORAMA|presale|pre-sale|token sale|staking|airdrop|node licen[cs]e/i)).toEqual([]);
+    // "staking" is allowed: RootWallet earns a commission when users stake.
+    expect(offending(/\$ORAMA|presale|pre-sale|token sale|airdrop|node licen[cs]e|passive income|earn while/i)).toEqual([]);
   });
 
   it("TestSite_no_old_partners", () => {
