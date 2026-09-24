@@ -39,8 +39,8 @@ function InviteTile() {
       <Lightbulb size={28} strokeWidth={1.25} className="text-fg" />
       <h3 className="font-display font-semibold text-lg text-fg leading-tight">What would you build?</h3>
       <p className="text-sm text-muted flex-1">Tell us the idea. We read everything.</p>
-      <a href={`mailto:${EMAILS.dev}`} className="font-mono text-xs text-accent hover:text-fg transition-colors">
-        {EMAILS.dev}
+      <a href={`mailto:${EMAILS.team}`} className="font-mono text-xs text-accent hover:text-fg transition-colors">
+        {EMAILS.team}
       </a>
     </li>
   );

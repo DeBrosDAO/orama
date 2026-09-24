@@ -73,9 +73,9 @@ export const APPS: AppShowcase[] = [
   },
 ];
 
-/** Screens shown on /apps, left to right; width and height are the files' own. */
+/** Screens shown on /apps, left to right, taken from anchat.io; width and height are the files' own. */
 export const ANCHAT_SCREENS = [
-  { src: "/images/apps/anchat-login.jpg", width: 480, height: 912, alt: "AnChat sign-in with an EVM or Solana wallet" },
-  { src: "/images/apps/anchat-chat.jpg", width: 480, height: 909, alt: "An AnChat conversation" },
-  { src: "/images/apps/anchat-call.jpg", width: 480, height: 916, alt: "An AnChat call in progress" },
+  { src: "/images/apps/anchat-login.webp", width: 948, height: 1922, alt: "AnChat sign-in: create an account with a keypair, no email or phone" },
+  { src: "/images/apps/anchat-chat.webp", width: 948, height: 1922, alt: "An encrypted AnChat conversation" },
+  { src: "/images/apps/anchat-call.webp", width: 948, height: 1922, alt: "A private AnChat video call" },
 ];

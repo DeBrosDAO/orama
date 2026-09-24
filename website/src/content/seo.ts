@@ -12,7 +12,7 @@ const ORGANIZATION = {
   name: SITE_NAME,
   url: `${SITE_URL}/`,
   logo: `${SITE_URL}/logo.png`,
-  email: EMAILS.info,
+  email: EMAILS.support,
   sameAs: [GITHUB_URL, X_URL, ANCHAT_GROUP_URL],
 };
 

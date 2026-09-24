@@ -12,8 +12,6 @@ export const X_URL = "https://x.com/orama_network";
 export const ANCHAT_GROUP_URL = "https://g.anchat.io/orama";
 
 export const EMAILS = {
-  info: "info@orama.network",
-  dev: "dev@orama.network",
   support: "support@orama.network",
   team: "team@orama.network",
 } as const;
@@ -27,8 +25,6 @@ export interface ContactEmail {
 }
 
 export const CONTACT_EMAILS: ContactEmail[] = [
-  { label: "General", address: EMAILS.info },
-  { label: "Developers", address: EMAILS.dev },
   { label: "Support", address: EMAILS.support },
   { label: "Team & investors", address: EMAILS.team },
 ];

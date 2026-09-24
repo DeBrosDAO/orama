@@ -62,6 +62,7 @@ function AppBody({ app }: { app: AppShowcase }) {
   );
 }
 
+/** The screenshots already include the phone frame, so no border or radius here. */
 function AnChatScreens() {
   return (
     <div className="relative flex justify-center gap-3 sm:gap-4">
@@ -74,7 +75,7 @@ function AnChatScreens() {
           width={s.width}
           height={s.height}
           className={cn(
-            "w-[30%] max-w-[190px] h-auto rounded-[1.4rem] border border-border/60 shadow-[0_20px_60px_rgba(0,0,0,0.6)]",
+            "w-[30%] max-w-[190px] h-auto drop-shadow-[0_20px_40px_rgba(0,0,0,0.6)]",
             i === 1 ? "-translate-y-4 sm:-translate-y-8" : "opacity-80",
           )}
         />
