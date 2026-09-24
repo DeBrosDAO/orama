@@ -20,7 +20,7 @@ export interface RouteMeta {
 export const ROUTES = {
   home: {
     path: "/",
-    title: "Orama Network: the decentralized cloud, owned by no one",
+    title: "Orama Network: the cloud, with nobody in the middle",
     description:
       "Everything an app needs (database, storage, hosting, functions, calls, notifications), built for machines run by independent people, not one giant company.",
   },

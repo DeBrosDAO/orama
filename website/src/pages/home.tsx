@@ -22,7 +22,7 @@ function Hero() {
   return (
     <section className="relative -mt-16 min-h-[100svh] flex items-center justify-center overflow-hidden">
       <HeroMesh />
-      <div className="relative z-10 flex flex-col items-center text-center gap-7 max-w-3xl mx-auto px-4 sm:px-6 pt-28 pb-20">
+      <div className="relative z-10 flex flex-col items-center text-center gap-7 max-w-5xl mx-auto px-4 sm:px-6 pt-28 pb-20">
         <span className="inline-flex items-center gap-2 px-3 py-1 text-[11px] font-mono tracking-widest uppercase rounded-full border border-dashed border-border text-muted">
           <span className="w-1.5 h-1.5 rounded-full bg-signal" />
           Early · working proof of concept
@@ -30,7 +30,8 @@ function Hero() {
         <h1 className="font-display font-bold text-[2.5rem] leading-[1.04] sm:text-6xl lg:text-7xl tracking-tight text-fg text-balance">
           The cloud,
           <br />
-          owned by no one.
+          <span className="whitespace-nowrap">with nobody</span>{" "}
+          <span className="whitespace-nowrap">in the middle.</span>
         </h1>
         <p className="text-muted text-lg sm:text-xl max-w-xl text-pretty">
           Everything an app needs to run, built for machines run by independent people, not one giant company.

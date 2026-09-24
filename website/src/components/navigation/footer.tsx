@@ -65,7 +65,7 @@ export function Footer() {
               <img src={oramaIcon} alt="Orama" className="h-6 w-6" />
               <span className="font-display text-base font-bold tracking-widest text-fg">ORAMA</span>
             </Link>
-            <p className="text-muted text-sm max-w-xs">The cloud, owned by no one. Open source, built in the open.</p>
+            <p className="text-muted text-sm max-w-xs">The cloud, with nobody in the middle. Open source, built in the open.</p>
             <ul className="flex flex-col gap-1">
               {CONTACT_EMAILS.map((e) => (
                 <li key={e.address} className="flex items-baseline gap-2 text-xs">
