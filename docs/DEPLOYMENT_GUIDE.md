@@ -819,6 +819,8 @@ that was never added fails immediately.
 
 After verification, point your domain's A record to your deployment's node IP.
 
+> **No certificate for custom domains yet.** The gateway's TLS check allows only subdomains of the network's base domain (`core/pkg/gateway/status_handlers.go`), so HTTPS works on your deployment's own address, not on the custom domain.
+
 #### HTTP API
 
 | Method | Endpoint | Purpose |

@@ -1,10 +1,10 @@
 # Vault
 
-Orama Vault is a zero-knowledge secret storage service built on Shamir's Secret Sharing. It splits secrets client-side and distributes shares across guardian nodes so that no single node ever sees the full secret. Guardian nodes run the `vault-guardian` service, written in Zig, and authenticate requests using HMAC-based challenge-response with per-identity session tokens.
+Orama Vault is a zero-knowledge secret storage service built on Shamir's Secret Sharing. It splits secrets into shares across guardian nodes so that no guardian holds the full secret. Status: partial; guardians do not yet discover each other, so do not use it as the only copy of anything important. Guardian nodes run the `vault-guardian` service, written in Zig, and authenticate requests using HMAC-based challenge-response with per-identity session tokens.
 
 ## How It Works
 
-When you store a secret, the SDK performs the following entirely on the client:
+With the vault SDK (from inside the mesh), storing a secret works like this; through the gateway's `/v1/vault` routes, the gateway performs the same split in its own memory:
 
 1. The secret is split into shares using Shamir's Secret Sharing over GF(2^8) polynomial interpolation.
 2. Each share is encrypted and sent to a different guardian node over an authenticated session.
@@ -15,7 +15,7 @@ To retrieve the secret, the SDK collects shares from guardians and reconstructs 
 This means:
 
 - **Zero-knowledge** — No single guardian ever sees the full secret.
-- **Client-side splitting** — Secrets are split before leaving the client.
+- **Splitting before storage** — With the SDK, secrets are split before leaving the client; via the gateway, they are split in the gateway's memory.
 - **Fault tolerant** — Secrets survive guardian failures as long as the read threshold is met.
 - **Cryptographically secure** — Based on polynomial interpolation over finite fields (GF(2^8)).
 - **Write quorum** — A majority of guardians must acknowledge before a write is considered successful.

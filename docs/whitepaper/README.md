@@ -1,55 +1,26 @@
-# Orama Network — Technical Whitepaper
+# Orama Network — Whitepaper
 
-The source of record for the Orama Network whitepaper. `whitepaper.html` is a
-single self-contained file — the stylesheet is inline and the only external
-dependency is Google Fonts, fetched at render time.
+`WHITEPAPER.md` is the canonical source of the Orama Network whitepaper. The
+website renders it at `/whitepaper`. There is no separate HTML or PDF copy to
+keep in sync. Edit the Markdown and nothing else.
 
-| File | What it is |
-|------|-----------|
-| `whitepaper.html` | The document. Edit this. |
-| `render.mjs` | Renders the HTML to PDF via headless Chrome, with running footers and page numbers. |
-| `orama-network-whitepaper.pdf` | The rendered output, committed so it can be read without a build. |
+## Format
 
-## Rebuilding the PDF
+The website renders the file through an MDX pipeline in plain `md` mode, so
+the file must stay plain CommonMark with GFM tables:
 
-```bash
-node docs/whitepaper/render.mjs docs/whitepaper/whitepaper.html docs/whitepaper/orama-network-whitepaper.pdf
-```
+- no raw HTML or JSX;
+- no curly braces outside code spans or code blocks;
+- no bare `<` outside code. Write "less than" or use a code span.
 
-`render.mjs` imports `puppeteer` by absolute path; adjust that import if your
-install lives elsewhere. Re-render and commit the PDF whenever the HTML
-changes, so the two never drift.
+## What this document is
 
-## What this document is, and is not
+It describes the system that exists in the code today, marks what is only
+partially done, and lists the roadmap separately. It is not an offering
+document and makes no financial claim.
 
-It is a technical description of a working system and an honest statement of
-what it does not do. It is **not** an offering document, it does not describe a
-token, and it makes no financial claim. Part V is the only forward-looking
-section; every item in it is written as an open question with its blockers.
+## Keeping it true
 
-The document is deliberately monochrome and set as a two-column academic paper.
-Emphasis is carried by rule weight and fill value rather than colour, so it
-prints correctly in greyscale.
-
-## Accuracy
-
-Every factual claim was checked against the source tree rather than against
-project documentation, and where the two disagreed the source won. Eighteen
-claims were corrected during review after being verified against specific
-files, including three that our own documentation still asserts:
-
-- The cluster database does not enforce HTTP authentication — the config field
-  that would pass credentials to it is never assigned.
-- Secret custody: applications use the gateway's `/v1/vault/push` and `/v1/vault/pull` (server-side Shamir of a client-encrypted envelope, Ed25519 ownership). Overlay clients use `@debros/orama-vault` against guardian `:10106` with the same ownership proof. OramaOS LUKS unseal is not a fleet path.
-- The dedicated node image has never been booted.
-
-If you change platform behaviour that this document describes, update the
-document in the same change — the repository rule that documentation must not
-lie applies here too.
-
-## Companion documents
-
-Three longer documents sit alongside this one and are referenced by it: the
-*Orama Network Atlas* (architecture reference), *The Hardening Playbook*
-(security series II) and *Rewrite or Replace?* (security series III). They are
-not in this repository.
+The code is the source of truth. If you change platform behaviour that the
+whitepaper describes, update `WHITEPAPER.md` in the same change. A claim in
+the whitepaper that the code contradicts is a defect.

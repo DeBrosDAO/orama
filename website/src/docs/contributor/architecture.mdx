@@ -113,11 +113,10 @@ Real-time video, voice, and data channels:
 
 ### Anyone Protocol
 
-Privacy relay integration on every node:
+Privacy client integration on every node:
 
-- **Client mode** — SOCKS5 proxy for anonymized outbound requests (`/v1/proxy/anon`)
-- **Relay mode** — Participates in the Anyone relay network for rewards
-- **Dual rewards** — Node operators earn both $ORAMA and $ANYONE tokens
+- **Client mode** — SOCKS5 proxy for anonymized outbound requests (`/v1/proxy/anon`), bound to `127.0.0.1:9050`
+- **Relay operator mode is not supported** — every node runs an Anyone client only
 
 ## Network Layer
 
@@ -141,7 +140,7 @@ All inter-node communication uses a full-mesh WireGuard topology:
 | SFU Signaling | 30000-30099 | WireGuard only |
 | SFU Media | 20000-29999 | WireGuard only |
 | TURN | 3478, 5349 | Public |
-| Anyone | 9050 | Public |
+| Anyone | 9050 | Localhost only (`127.0.0.1`) |
 
 ### Service Dependency Chain
 
@@ -194,7 +193,7 @@ All services run as a dedicated `orama` user (not root) with systemd hardening (
 
 ## OramaOS
 
-For mainnet, devnet, and testnet, nodes run **OramaOS** — a custom minimal Linux image built with Buildroot:
+**OramaOS** is in development; today devnet and testnet nodes run Ubuntu with systemd hardening. OramaOS is a custom minimal Linux image built with Buildroot:
 
 - **No SSH, no shell** — operators cannot access the filesystem or read data
 - **LUKS full-disk encryption** — key split via Shamir's Secret Sharing across peers

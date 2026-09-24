@@ -71,10 +71,7 @@ go.work
 website/remote.conf
 website/node_modules/
 website/dist/
-website/invest-api/invest-api
-website/invest-api/*.db
-website/invest-api/*.db-shm
-website/invest-api/*.db-wal
+website/dist-server/
 
 # === SDK (TypeScript) ===
 sdk/node_modules/

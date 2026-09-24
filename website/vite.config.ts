@@ -6,7 +6,40 @@ import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import type { Plugin } from "vite";
+
+/**
+ * Repository facts shown on the site (commit count, first commit date). Read
+ * from git at build time so the numbers can't drift from the history. A build
+ * outside a git checkout fails here, loudly, rather than shipping made-up
+ * numbers.
+ */
+function readRepoStats() {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: __dirname, encoding: "utf-8" }).trim();
+  let shallow: string, commits: number, firstCommit: string;
+  try {
+    shallow = git("rev-parse", "--is-shallow-repository");
+    commits = Number(git("rev-list", "--count", "HEAD"));
+    firstCommit = git("log", "--reverse", "--format=%ad", "--date=short").split("\n")[0];
+  } catch (err) {
+    throw new Error(
+      `vite.config: cannot read repository stats from git (build from a git checkout of the orama repo): ${String(err)}`,
+    );
+  }
+  // A shallow clone (CI default) counts only the fetched commits and dates
+  // the "first" commit to the newest one: numbers that look real and aren't.
+  if (shallow === "true") {
+    throw new Error("vite.config: shallow git clone; fetch full history (git fetch --unshallow) to build the site");
+  }
+  if (!Number.isInteger(commits) || commits < 1 || !/^\d{4}-\d{2}-\d{2}$/.test(firstCommit)) {
+    throw new Error(`vite.config: unexpected git output (commits=${commits}, first=${firstCommit})`);
+  }
+  return { commits, firstCommit };
+}
+
+const repoStats = readRepoStats();
 
 /**
  * Vite plugin that generates a search index from MDX heading markers.
@@ -79,6 +112,25 @@ function docsSearchIndexPlugin(): Plugin {
 }
 
 export default defineConfig({
+  define: {
+    __REPO_COMMITS__: JSON.stringify(repoStats.commits),
+    __REPO_FIRST_COMMIT__: JSON.stringify(repoStats.firstCommit),
+    // Fixed at build time so the prerendered footer and the hydrated one agree.
+    __BUILD_YEAR__: JSON.stringify(new Date().getUTCFullYear()),
+  },
+  build: {
+    // scripts/prerender.mjs reads it to preload each page's own chunks.
+    manifest: true,
+  },
+  server: {
+    // The whitepaper's source lives in the repo-root docs/ tree.
+    fs: { allow: [__dirname, path.resolve(__dirname, "../docs/whitepaper")] },
+  },
+  resolve: {
+    // ...and a file out there has no node_modules of its own: resolve the
+    // runtime its compiled MDX imports from this package, as one copy.
+    dedupe: ["react", "react-dom", "@mdx-js/react"],
+  },
   plugins: [
     docsSearchIndexPlugin(),
     {

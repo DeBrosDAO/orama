@@ -4,32 +4,27 @@ import { Page } from "../components/layout/page";
 import { Section } from "../components/layout/section";
 import { Button } from "../components/ui/button";
 
+const NOT_FOUND_ROUTE = {
+  path: "/404",
+  title: "Page not found",
+  description: "This page doesn't exist.",
+};
+
 export default function NotFound() {
   return (
-    <Page title="Not Found">
+    <Page route={NOT_FOUND_ROUTE} noindex>
       <Section padding="wide">
         <div className="flex flex-col items-center text-center gap-6 py-24">
-          <span className="font-mono text-xs tracking-widest uppercase text-muted">
-            404
-          </span>
+          <span className="font-mono text-xs tracking-widest uppercase text-muted">404</span>
           <h1 className="font-display font-bold text-3xl md:text-4xl text-fg tracking-tight">
             This page doesn't exist.
           </h1>
-          <p className="text-sm text-muted max-w-md leading-relaxed">
-            This site is a landing page and the documentation, nothing else.
-            Whatever you were after is most likely in the docs.
-          </p>
-          <div className="flex flex-wrap gap-3 justify-center pt-2">
-            <Button asChild>
-              <Link to="/docs">
-                Read the docs
-                <ArrowRight className="w-3.5 h-3.5 ml-2" />
-              </Link>
-            </Button>
-            <Button asChild variant="ghost">
-              <Link to="/">Back home</Link>
-            </Button>
-          </div>
+          <Button asChild>
+            <Link to="/">
+              Back home
+              <ArrowRight className="w-3.5 h-3.5 ml-2" />
+            </Link>
+          </Button>
         </div>
       </Section>
     </Page>

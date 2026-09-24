@@ -178,7 +178,7 @@ Every subcommand takes `--json`. `verify --wait` re-asks the gateway every 10 se
 2. Add a TXT record at `_orama-verify.<your-domain>` with the verification token as its value
 3. Call the verify endpoint with your domain (the API will check the TXT record)
 4. Point your domain's A record to your deployment's node IP
-5. A certificate is automatically provisioned for the custom domain
+5. No certificate is issued for custom domains yet: HTTPS works on your deployment's address under the network's own domain, and a custom domain is served over HTTP until custom-domain certificates land
 
 ---
 

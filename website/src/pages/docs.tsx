@@ -26,6 +26,15 @@ function getDocModule(slug: string) {
   return modules[key];
 }
 
+function DocLoadFailed() {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 gap-4">
+      <p className="font-mono text-xs tracking-wider uppercase text-muted">Couldn't load this page</p>
+      <p className="text-sm text-muted">Reload the page to get the latest version.</p>
+    </div>
+  );
+}
+
 function DocNotFound({ slug }: { slug: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 gap-4">
@@ -65,14 +74,28 @@ export default function DocsPage() {
       return;
     }
 
-    loader().then((mod) => {
-      setContent(() => (mod as { default: ComponentType }).default);
-      setLoading(false);
-    });
+    loader()
+      .then((mod) => {
+        setContent(() => (mod as { default: ComponentType }).default);
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        // Usually a stale tab after a deploy: the chunk it asks for is gone.
+        console.error(`docs: failed to load ${effectiveSlug}`, err);
+        setContent(() => DocLoadFailed);
+        setLoading(false);
+      });
   }, [effectiveSlug]);
 
   return (
-    <Page title={`${pageTitle} — Docs`}>
+    <Page
+      route={{
+        path: pathname,
+        title: `${pageTitle} · Docs`,
+        description: "Orama Network documentation.",
+      }}
+      noindex
+    >
       <DocsSidebar />
       <TableOfContents />
       <div className="lg:ml-56 min-h-screen">

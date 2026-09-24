@@ -1,6 +1,6 @@
 # Getting Started as a Node Operator
 
-Node operators are the backbone of the Orama Network. By running a node, you contribute compute, storage, and bandwidth to the decentralized infrastructure and earn rewards in return. This guide covers what operators do, what you need, and how to join the network.
+Node operators are the backbone of the Orama Network. By running a node, you contribute compute, storage, and bandwidth to the decentralized infrastructure. This guide covers what operators do, what you need, and how to join the network.
 
 ## What Operators Do
 
@@ -12,30 +12,21 @@ As a node operator, your server becomes part of the Orama mesh network. Your nod
 - **Execute functions** in the WASM serverless runtime
 - **Relay messages** through the PubSub system
 - **Serve DNS** if configured as a nameserver node (CoreDNS)
-- **Run an Anyone relay** if configured, earning dual rewards
+- **Route outbound requests anonymously** through a local Anyone client (SOCKS5 proxy)
 
 All inter-node communication happens over an encrypted WireGuard mesh network on the `10.0.0.0/24` subnet.
 
 ## Hardware Requirements
 
-| Resource | Minimum |
-|----------|---------|
+| Resource | Recommended |
+|----------|-------------|
 | CPU | 4 vCPUs |
 | RAM | 8 GB |
 | Storage | 160 GB SSD |
 | Network | 1 Gbps, unmetered or high bandwidth cap |
 | OS | Ubuntu 22.04 LTS |
 
-A stable network connection with low latency is important for Raft consensus and mesh connectivity.
-
-## Rewards
-
-Node operators earn dual rewards for contributing resources:
-
-- **$ORAMA** -- native network token
-- **$ANYONE** -- earned through the Anyone privacy relay running on every node
-
-Rewards are distributed based on uptime, performance, and the volume of traffic your node handles.
+The installer enforces a hard minimum of 2 vCPUs, 2 GB RAM, and 10 GB free disk (`orama node install --skip-checks` bypasses this, but is not recommended). A stable network connection with low latency is important for Raft consensus and mesh connectivity.
 
 ## Getting the CLI Binary
 
@@ -97,14 +88,6 @@ orama node setup \
   --password '<VPS_PASSWORD>' \
   --env devnet \
   --base-domain <BASE_DOMAIN>
-
-# Add a node with Anyone relay
-orama node setup \
-  --ip <VPS_IP> \
-  --password '<VPS_PASSWORD>' \
-  --env devnet \
-  --base-domain <BASE_DOMAIN> \
-  --anyone-relay
 ```
 
 The setup command automatically:
@@ -128,25 +111,6 @@ The `--password` flag is only needed for the initial SSH key installation. After
 | `--user` | No | SSH user (default: `root`) |
 | `--gateway` | No | Gateway URL override for invite tokens |
 | `--genesis` | No | Create a new cluster (first node only) |
-| `--anyone-relay` | No | Run as Anyone relay operator |
-
-#### Anyone Relay Flags
-
-`orama node setup` only accepts `--anyone-relay`. The finer-grained Anyone flags below belong to `orama node install` (and `orama node upgrade`), which run directly on the VPS:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--anyone-relay` | `false` | Run as Anyone relay operator (earn rewards) |
-| `--anyone-client` | `false` | Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay) |
-| `--anyone-exit` | `false` | Run as exit relay (requires `--anyone-relay`, legal implications) |
-| `--anyone-migrate` | `false` | Migrate existing Anyone installation into Orama Network |
-| `--anyone-nickname` | -- | Relay nickname (1-19 alphanumeric chars) |
-| `--anyone-wallet` | -- | Ethereum wallet address for rewards |
-| `--anyone-contact` | -- | Contact info (email or @telegram) |
-| `--anyone-orport` | `9001` | ORPort for the relay |
-| `--anyone-family` | -- | Comma-separated fingerprints of other relays you operate |
-| `--anyone-bandwidth` | `30` | Limit relay to N% of VPS bandwidth (0 = unlimited, runs speedtest) |
-| `--anyone-accounting` | `0` | Monthly data cap for relay in GB (0 = unlimited) |
 
 ## What the Installer Does
 
@@ -159,7 +123,7 @@ The `orama node install` command configures the entire node automatically:
 5. Configures and starts IPFS + IPFS Cluster (distributed storage)
 6. Configures and starts the API gateway
 7. If `--nameserver`: configures CoreDNS and Caddy for DNS and TLS
-8. If `--anyone-relay`: configures the Anyone relay daemon
+8. Installs the Anyone client (SOCKS5 proxy on port 9050, used for `/v1/proxy/anon`)
 9. Sets up systemd services with dependency ordering
 10. Configures the UFW firewall (unless `--skip-firewall`)
 11. Registers the node with the cluster

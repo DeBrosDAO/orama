@@ -37,9 +37,6 @@ Back up encryption keys, TLS certificates, or signing keys to the guardian netwo
 ### End-to-End Encrypted Backup
 Store encrypted data blobs where the decryption key is itself split across guardians. The encrypted payload can live on IPFS or any storage — only the key holders (the guardians collectively) can enable decryption.
 
-### Hardware Node Integration (Orama One)
-Pre-built Orama One hardware nodes run a vault guardian out of the box, contributing to the distributed secrets network. Node operators earn dual rewards ($ORAMA + $ANYONE) while strengthening the network's fault tolerance.
-
 ## Tech Stack
 
 - **Language:** Zig 0.15.2+

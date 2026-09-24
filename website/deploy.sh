@@ -1,27 +1,37 @@
 #!/bin/bash
-set -e
+# Build the site, run its tests, and publish dist/ to the web host.
+#
+# remote.conf (gitignored) sets:
+#   REMOTE       ssh destination, e.g. root@185.185.83.89 or a ~/.ssh/config alias
+#   REMOTE_PATH  directory nginx serves, e.g. /opt/orama-website
+#   DOMAIN       public hostname, for the final message
+#
+# Authentication is by SSH key only. The nginx site config lives in
+# deploy/orama.network.nginx.conf and is installed once, not by this script.
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF="$SCRIPT_DIR/remote.conf"
 
 if [ ! -f "$CONF" ]; then
-  echo "Error: remote.conf not found. Create it with REMOTE_USER, REMOTE_HOST, REMOTE_PASS, REMOTE_PATH."
+  echo "Error: $CONF not found. Create it with REMOTE, REMOTE_PATH and DOMAIN." >&2
   exit 1
 fi
 
+# shellcheck source=/dev/null
 source "$CONF"
+: "${REMOTE:?remote.conf must set REMOTE}"
+: "${REMOTE_PATH:?remote.conf must set REMOTE_PATH}"
+: "${DOMAIN:?remote.conf must set DOMAIN}"
 
-echo "Building website..."
 cd "$SCRIPT_DIR"
+echo "Testing..."
+pnpm test
+echo "Building..."
 pnpm build
 
-echo "Deploying to $REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH..."
-# Force password-only auth. Without this, an ssh-agent holding several keys
-# offers them all first and trips the server's MaxAuthTries ("Too many
-# authentication failures") before sshpass ever sends the password.
-sshpass -p "$REMOTE_PASS" rsync -avz --delete \
-  -e "ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-  dist/ \
-  "$REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH/"
+echo "Publishing to $REMOTE:$REMOTE_PATH..."
+ssh -o BatchMode=yes "$REMOTE" "mkdir -p '$REMOTE_PATH'"
+rsync -az --delete -e "ssh -o BatchMode=yes" dist/ "$REMOTE:$REMOTE_PATH/"
 
 echo "Done. Live at https://$DOMAIN"

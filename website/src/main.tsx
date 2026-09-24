@@ -1,32 +1,33 @@
-import { StrictMode, lazy, Suspense } from "react";
-import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route } from "react-router";
+import { StrictMode } from "react";
+import { createRoot, hydrateRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router";
+// Fonts are bundled with the site, not fetched from a third party: a
+// privacy-first network shouldn't hand every visitor's IP to Google.
+import "@fontsource-variable/inter";
+import "@fontsource-variable/inter-tight";
+import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
-import { Shell } from "./components/layout/shell";
-import { LoadingSpinner } from "./components/ui/loading-spinner";
+import { App } from "./app";
+import { normalizePath } from "./content/routes";
 
-const Home = lazy(() => import("./pages/home"));
-const Docs = lazy(() => import("./pages/docs"));
-const NotFound = lazy(() => import("./pages/not-found"));
+const container = document.getElementById("root");
+if (!container) throw new Error("main: #root element missing from index.html");
 
-createRoot(document.getElementById("root")!).render(
+const app = (
   <StrictMode>
     <BrowserRouter>
-      <Suspense
-        fallback={
-          <div className="flex items-center justify-center min-h-screen bg-surface">
-            <LoadingSpinner />
-          </div>
-        }
-      >
-        <Routes>
-          <Route element={<Shell />}>
-            <Route index element={<Home />} />
-            <Route path="docs/*" element={<Docs />} />
-            <Route path="*" element={<NotFound />} />
-          </Route>
-        </Routes>
-      </Suspense>
+      <App />
     </BrowserRouter>
-  </StrictMode>,
+  </StrictMode>
 );
+
+// Every public page ships as prerendered HTML stamped with the path it was
+// rendered for. Hydrate only when that matches where we are: the static host
+// answers unknown paths (the docs, a 404) with the home page's HTML, and
+// hydrating that as another page would be a mismatch.
+if (container.dataset.prerendered === normalizePath(window.location.pathname)) {
+  hydrateRoot(container, app);
+} else {
+  container.replaceChildren();
+  createRoot(container).render(app);
+}

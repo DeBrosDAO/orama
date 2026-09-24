@@ -8,7 +8,7 @@ A decentralized infrastructure platform combining distributed SQL, IPFS storage,
 |---------|----------|-------------|
 | [core/](core/) | Go | API gateway, distributed node, CLI, and client SDK |
 | [sdk/](sdk/) | TypeScript | `@debros/orama` — JavaScript/TypeScript SDK ([npm](https://www.npmjs.com/package/@debros/orama)) |
-| [website/](website/) | TypeScript | Marketing website and invest portal |
+| [website/](website/) | TypeScript | Public website (orama.network), whitepaper and docs |
 | [vault/](vault/) | Zig | Distributed secrets vault (Shamir's Secret Sharing) |
 | [os/](os/) | Go + Buildroot | OramaOS — hardened minimal Linux for network nodes |
 
@@ -32,6 +32,7 @@ make vault-build
 
 | Document | Description |
 |----------|-------------|
+| [Whitepaper](docs/whitepaper/WHITEPAPER.md) | What Orama is, how it works, what runs on it today |
 | [Architecture](docs/ARCHITECTURE.md) | System architecture and design patterns |
 | [Client surface](docs/CLIENT_SURFACE.md) | Humans use the CLI; programs use the SDK / HTTP. No dashboard, no Orama MCP |
 | [One-VPS eval](docs/EVAL.md) | Single machine: index + tenant, not HA |

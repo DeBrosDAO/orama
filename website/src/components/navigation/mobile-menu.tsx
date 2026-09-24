@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router";
-import { ExternalLink, X } from "lucide-react";
-import { NAV_LINKS } from "../../data/navigation";
+import { X } from "lucide-react";
+import { NAV_ROUTES, ROUTES } from "../../content/routes";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
@@ -21,11 +21,16 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
   }, [location.pathname, onClose]);
 
   useEffect(() => {
-    if (open) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
     return () => {
       document.body.style.overflow = "";
     };
@@ -34,10 +39,9 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
   return (
     <div
       className={cn(
-        "fixed inset-0 z-[60] bg-bg/95 md:hidden flex flex-col transition-opacity duration-300",
-        // backdrop-blur is only applied while open: a full-screen backdrop-filter
-        // on a permanently mounted element rasterizes over the page even at
-        // opacity 0, and costs a compositing layer on every frame.
+        "fixed inset-0 z-[60] bg-bg/95 lg:hidden flex flex-col transition-opacity duration-300",
+        // backdrop-blur only while open: a permanently mounted full-screen
+        // backdrop-filter costs a compositing layer on every frame.
         open
           ? "opacity-100 pointer-events-auto backdrop-blur-md"
           : "opacity-0 pointer-events-none invisible",
@@ -54,44 +58,24 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
         </button>
       </div>
 
-      <nav className="flex flex-col px-6 gap-1">
-        {NAV_LINKS.map((link) => {
-          if (link.external) {
-            return (
-              <a
-                key={link.href}
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={cn(
-                  menuLinkClass,
-                  "flex items-center gap-2 text-muted hover:text-fg",
-                )}
-              >
-                {link.label}
-                <ExternalLink className="w-4 h-4" />
-              </a>
-            );
-          }
-          const isActive = location.pathname.startsWith(link.href);
-          return (
-            <Link
-              key={link.href}
-              to={link.href}
-              className={cn(
-                menuLinkClass,
-                isActive ? "text-fg" : "text-muted hover:text-fg",
-              )}
-            >
-              {link.label}
-            </Link>
-          );
-        })}
+      <nav aria-label="Mobile" className="flex flex-col px-6 gap-1">
+        {[...NAV_ROUTES, ROUTES.whitepaper, ROUTES.donate].map((route) => (
+          <Link
+            key={route.path}
+            to={route.path}
+            className={cn(
+              menuLinkClass,
+              location.pathname.startsWith(route.path) ? "text-fg" : "text-muted hover:text-fg",
+            )}
+          >
+            {"nav" in route ? route.nav : route.title}
+          </Link>
+        ))}
       </nav>
 
       <div className="mt-auto px-6 pb-8">
-        <Button variant="primary" size="lg" className="w-full" asChild>
-          <Link to="/docs/developer/getting-started">Get Started</Link>
+        <Button variant="primary" size="lg" className="w-full rounded-full" asChild>
+          <Link to={ROUTES.investors.path}>Investors</Link>
         </Button>
       </div>
     </div>

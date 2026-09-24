@@ -31,11 +31,11 @@ The sections below describe the manual installation process for advanced users o
 
 Provision a VPS with the following minimum specifications:
 
-| Resource | Minimum | Recommended |
+| Resource | Minimum (enforced by installer) | Recommended |
 |----------|---------|-------------|
 | CPU | 2 vCPUs | 4 vCPUs (dedicated) |
-| RAM | 4 GB | 8 GB |
-| Storage | 80 GB SSD | 160 GB NVMe |
+| RAM | 2 GB | 8 GB |
+| Storage | 10 GB free | 160 GB NVMe |
 | OS | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS (clean install) |
 | Network | Public static IPv4 | 1 Gbps, unmetered |
 
@@ -47,9 +47,8 @@ Provision a VPS with the following minimum specifications:
 | 80 | TCP | ACME challenges / HTTP-to-HTTPS redirect |
 | 443 | TCP | HTTPS (external traffic via Caddy) |
 | 51820 | UDP | WireGuard mesh tunnel |
-| 9001 | TCP | Anyone relay ORPort (only if running a relay) |
 
-All other inter-node communication travels over the WireGuard overlay (`10.0.0.x` subnet) and does not require public port exposure.
+All other inter-node communication travels over the WireGuard overlay (`10.0.0.x` subnet) and does not require public port exposure. The Anyone client's SOCKS5 proxy binds to `127.0.0.1:9050` and is never exposed publicly.
 
 ## OS Preparation
 
@@ -131,17 +130,9 @@ The join process registers the new node with the cluster, exchanges WireGuard ke
 
 ## Anyone Protocol Integration
 
-Orama nodes can participate in the [Anyone Protocol](https://anyone.io) network, providing privacy relay capabilities. Anyone flags are passed to `orama node install` alongside the standard flags.
+Every Orama node installs an [Anyone Protocol](https://anyone.io) client for anonymized outbound requests (`/v1/proxy/anon`). Relay operator mode is not supported — nodes only run as clients.
 
-### Relay Modes
-
-There are three mutually exclusive modes:
-
-- **Client only** (`--anyone-client`) — Installs Anyone as a local SOCKS5 proxy on port 9050. No relay traffic is served.
-- **Relay** (`--anyone-relay`) — Operates as a middle relay, forwarding encrypted traffic. This is the recommended mode for most operators.
-- **Exit relay** (`--anyone-exit`) — Operates as an exit relay, where traffic leaves the Anyone network. This has legal implications depending on your jurisdiction. Understand the risks before enabling.
-
-### Example: Installing with an Anyone Relay
+### Example: Installing with the Anyone Client
 
 ```bash
 sudo orama node install \
@@ -149,30 +140,16 @@ sudo orama node install \
   --base-domain dbrs.space \
   --join https://existing-node.dbrs.space \
   --token eyJhbGciOi... \
-  --anyone-relay \
-  --anyone-nickname MyRelay01 \
-  --anyone-contact operator@example.com \
-  --anyone-wallet 0x1234...abcd \
-  --anyone-bandwidth 30
+  --anyone-client
 ```
 
 ### Anyone Flag Reference
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--anyone-client` | bool | `false` | Install Anyone as SOCKS5 proxy only (port 9050) |
-| `--anyone-relay` | bool | `false` | Run as an Anyone relay operator |
-| `--anyone-exit` | bool | `false` | Run as an exit relay (legal implications apply) |
-| `--anyone-migrate` | bool | `false` | Migrate an existing Anyone installation |
-| `--anyone-nickname` | string | — | Relay nickname (1-19 alphanumeric characters) |
-| `--anyone-contact` | string | — | Contact info (email address or @telegram handle) |
-| `--anyone-wallet` | string | — | Ethereum wallet address for relay rewards |
-| `--anyone-orport` | int | `9001` | ORPort used for relay traffic |
-| `--anyone-family` | string | — | Comma-separated fingerprints for MyFamily directive |
-| `--anyone-bandwidth` | int | `30` | Limit relay to N% of VPS bandwidth (0 = unlimited) |
-| `--anyone-accounting` | int | `0` | Monthly data cap in GB (0 = unlimited) |
+| `--anyone-client` | bool | `false` | Install Anyone as a local SOCKS5 proxy (port 9050, localhost only) |
 
-Running an Anyone relay earns additional rewards in `$ANYONE` tokens alongside the standard `$ORAMA` node operator rewards.
+The SOCKS5 proxy binds to `127.0.0.1:9050` and is never reachable off-host.
 
 ## Service Stack
 
@@ -271,7 +248,7 @@ orama node upgrade --force
 orama node upgrade --skip-checks
 ```
 
-The upgrade command also accepts all `--anyone-*` flags to reconfigure the Anyone relay during an upgrade, plus `--env`, `--node`, and `--delay` for targeting specific environments and nodes.
+The upgrade command also accepts `--anyone-client` to reinstall the Anyone client during an upgrade, plus `--env`, `--node`, and `--delay` for targeting specific environments and nodes.
 
 ### Rolling Upgrades
 

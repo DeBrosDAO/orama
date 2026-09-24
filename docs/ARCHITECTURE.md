@@ -989,10 +989,10 @@ See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 
 ### TLS/HTTPS
 
-- Automatic ACME (Let's Encrypt) certificate management via Caddy
+- Automatic ACME (Let's Encrypt) certificates via Caddy, using DNS-01 challenges answered by the network's own DNS
 - TLS 1.3 support
-- HTTP/2 enabled
-- On-demand TLS for deployment custom domains
+- HTTP/1.1 only: HTTP/2 and HTTP/3 are disabled (HTTP/2 strips WebSocket upgrade headers, bug #249; HTTP/3 would take UDP 443 from TURN). See `core/pkg/install/installers/caddy.go`.
+- Certificates cover the network's own base domains and their subdomains. Custom domains can be verified by TXT record, but no certificate is issued for them: the TLS check (`core/pkg/gateway/status_handlers.go`) allows only subdomains of the base domain.
 
 ### Middleware Stack
 

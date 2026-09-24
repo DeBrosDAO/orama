@@ -138,7 +138,7 @@ The `orama node report` command runs locally on a VPS node and collects all syst
 | **gateway** | HTTP health check, subsystem status |
 | **wireguard** | Interface state, WireGuard IP, peers, handshake ages, MTU, config permissions |
 | **dns** | CoreDNS and Caddy state, port bindings, resolution tests, TLS cert expiry |
-| **anyone** | Relay and client state, bootstrap progress, fingerprint |
+| **anyone** | Client state, bootstrap progress, fingerprint |
 | **network** | Internet reachability, TCP stats, retransmission rate, listening ports, UFW rules |
 | **processes** | Zombie count, orphan orama processes, panic/fatal count in logs |
 | **namespaces** | Per-namespace service probes (RQLite, Olric, Gateway) |
@@ -174,7 +174,7 @@ The monitor compares data across all nodes to detect cluster-wide issues:
 - **System** — Memory, disk, load average, OOM kills, swap
 - **Services** — Systemd state for all services, restart loop detection
 - **DNS** — CoreDNS and Caddy running, TLS cert expiry, SOA resolution
-- **Anyone** — Bootstrap progress for the privacy relay
+- **Anyone** — Bootstrap progress for the Anyone client
 - **Processes** — Zombies, orphans, panics in logs
 - **Namespaces** — Gateway and RQLite health per namespace
 - **Network** — UFW active, internet reachability, TCP retransmission rate
@@ -218,7 +218,7 @@ Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 | **wg** | Interface up, correct 10.0.0.x IP, listen port 51820, peer count, MTU 1420, config permissions 600, handshake freshness, peer traffic, cross-node consistency |
 | **system** | Core service states, failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user, panic count, expected ports |
 | **network** | Internet reachability, default route, WireGuard route, TCP connection count, TIME_WAIT count, retransmission rate, WireGuard mesh ping to all peers |
-| **anyone** | Anyone relay/client state, bootstrap progress, fingerprint, configuration validation |
+| **anyone** | Anyone client state, bootstrap progress, fingerprint, configuration validation |
 
 ### Severity Levels
 

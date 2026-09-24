@@ -1,12 +1,9 @@
 import { useState, useEffect } from "react";
-import { useLocation } from "react-router";
 import { ArrowUp } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 export function ScrollToTop() {
   const [visible, setVisible] = useState(false);
-  const location = useLocation();
-  const hasPlayer = location.pathname === "/about";
 
   useEffect(() => {
     const handleScroll = () => {
@@ -25,7 +22,7 @@ export function ScrollToTop() {
         "bg-surface-2/90 backdrop-blur-sm border border-border/60 rounded-full",
         "text-muted hover:text-fg hover:border-border transition-all duration-200",
         "shadow-[0_4px_12px_rgba(0,0,0,0.4)]",
-        hasPlayer ? "bottom-20 sm:bottom-16" : "bottom-6",
+        "bottom-6",
         visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4 pointer-events-none",
       )}
       aria-label="Scroll to top"

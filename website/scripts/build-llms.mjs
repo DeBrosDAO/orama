@@ -14,20 +14,21 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DOCS = resolve(HERE, "../../docs");
 const DIST = resolve(HERE, "../dist");
-const BASE = "https://iofo4ifs.orama.network";
+const BASE = "https://orama.network";
 
 const PROJECT = "Orama Network";
 const SUMMARY =
   "Orama Network is a decentralized platform for deploying web apps, " +
-  "SQLite databases, custom domains, and serverless WASM functions across a " +
-  "peer-to-peer node network, reached through a single API gateway per namespace.";
+  "SQLite databases and serverless WASM functions across a peer-to-peer node " +
+  "network, reached through a single API gateway per namespace. Custom domains " +
+  "can be verified, but certificates are issued only on the network's own domain.";
 
 // section -> [ [sourceDocPath, slug, title, description] ]
 const MANIFEST = {
   Deploying: [
     ["DEPLOYMENT_GUIDE.md", "deploying-apps", "Deploying Apps", "Deploy static, Next.js, Go, and Node.js apps; manage SQLite databases and custom domains via the orama CLI."],
     ["SERVERLESS.md", "functions", "Serverless Functions", "Write, deploy, and invoke WASM functions; host-function API, secrets, pubsub triggers, lifecycle."],
-    ["DEV_DEPLOY.md", "release-and-rollout", "Release & Rollout", "Build binaries, deploy to VPS nodes, enroll OramaOS, and run rolling cluster upgrades."],
+    ["DEV_DEPLOY.md", "release-and-rollout", "Release & Rollout", "Build binaries, deploy to VPS nodes, enroll OramaOS (in development), and run rolling cluster upgrades."],
   ],
   Reference: [
     ["CLIENT_SURFACE.md", "client-surface", "Client Surface", "Humans use the orama CLI; programs use the SDK and gateway HTTP. No dashboard, no Orama MCP."],
