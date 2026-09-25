@@ -60,7 +60,9 @@ func TestServerlessHandlers_ListFunctions(t *testing.T) {
 
 	h := serverlesshandlers.NewServerlessHandlers(nil, nil, registry, nil, nil, nil, nil, nil, nil, nil, nil, logger)
 
-	req, _ := http.NewRequest("GET", "/v1/functions?namespace=ns1", nil)
+	req, _ := http.NewRequest("GET", "/v1/functions", nil)
+	// The namespace listed is the credential's, as authMiddleware resolved it.
+	req = req.WithContext(context.WithValue(req.Context(), CtxKeyNamespaceOverride, "ns1"))
 	rr := httptest.NewRecorder()
 
 	h.ListFunctions(rr, req)
@@ -88,6 +90,7 @@ func TestServerlessHandlers_DeployFunction(t *testing.T) {
 	writer := httptest.NewRecorder()
 	req, _ := http.NewRequest("POST", "/v1/functions", bytes.NewBufferString(`{"name": "test"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), CtxKeyNamespaceOverride, "ns1"))
 
 	h.DeployFunction(writer, req)
 

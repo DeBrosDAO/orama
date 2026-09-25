@@ -724,6 +724,11 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		TURNDomain:       cfg.TURNDomain,
 		TURNSecret:       cfg.TURNSecret,
 		StealthCDNDomain: cfg.StealthCDNDomain,
+		// deps.ORMClient is this gateway's own database: the tenant's rqlite
+		// on a namespace gateway, which only that namespace's functions may
+		// reach; the cluster registry on the cluster gateway, which no
+		// function may (bugboard #427).
+		DatabaseNamespace: functionDatabaseNamespace(cfg),
 	}
 	// WS-PubSub bridge: wire PubSub topics directly to WS clients without
 	// per-event WASM invocation. The bridge is a thin layer over the
@@ -762,7 +767,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	deps.ServerlessEngine = engine
 
 	// Create invoker
-	deps.ServerlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, logger.Logger)
+	deps.ServerlessInvoker = serverless.NewInvoker(engine, registry, hostFuncs, ownNamespace(cfg), logger.Logger)
 
 	// Wire the invoker back into hostFuncs so the function_invoke host
 	// function can dispatch sub-invocations from inside a WASM function

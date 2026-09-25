@@ -840,6 +840,23 @@ Function Invocation:
     Execute in Sandbox → Return Result → Log Invocation
 ```
 
+A namespace's functions are deployed to, stored in and run by that namespace's
+own gateway (`ns-<namespace>.<base domain>`), against the namespace's own
+RQLite. A gateway's invoker runs only its own namespace's functions, whichever
+path asks (`Invoker.checkServed`). The cluster gateway (`client_namespace:
+default`, whose database is the cluster registry) is the `default`
+namespace's, and gives no function a database: every other serverless request
+that reaches it — `/v1/functions…`, `/v1/invoke/…`,
+`/v1/serverless/…`, on any host — is proxied to the namespace's gateway, to the
+namespace the request names (`/v1/invoke/<namespace>/…` or `?namespace=`), else
+to the credential's (`clusterServerlessRoutingMiddleware`,
+`pkg/gateway/serverless_routing.go`). Independently of that routing, the
+database host functions serve a function only when its namespace owns the
+gateway's database (`hostfunctions.checkDatabaseAccess`). Management requests
+act on the credential's namespace; one naming another namespace is refused. The
+namespace gateway reads a forwarded JWT caller's grant from the cluster registry
+when a control-plane route needs it (`forwardedCallerNeedsGrant`).
+
 ## Security Architecture
 
 ### Authentication Methods

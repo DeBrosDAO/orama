@@ -79,6 +79,15 @@ var protectedTables = map[string]string{
 	"raft_evicted_nodes":           "cluster membership",
 	"cluster_locks":                "cluster coordination",
 	"orama_schema_migrations":      "the platform's own schema bookkeeping",
+
+	// Which namespace is which. API-key authentication resolves a key's
+	// namespace by joining this table, so renaming a row hands one tenant's
+	// keys another tenant's namespace (bugboard #427).
+	"namespaces": "namespace identity",
+	// Which namespace may read which CID. /v1/storage/get serves a CID to any
+	// namespace holding a row here, decrypted with the cluster-wide wrap key,
+	// so writing one is reading another tenant's content (bugboard #431).
+	"ipfs_content_ownership": "which namespace may read stored content",
 }
 
 // deniedStatements are statement kinds a function has no use for and that step

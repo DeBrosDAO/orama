@@ -32,7 +32,7 @@ func handlersWith(fn *serverless.Function) *ServerlessHandlers {
 }
 
 func upgradeRequest(ctxValues map[any]any) *http.Request {
-	req := httptest.NewRequest(http.MethodGet, "/?namespace=anchat-test", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/?namespace=anchat-test", nil), "anchat-test")
 	ctx := req.Context()
 	for k, v := range ctxValues {
 		ctx = context.WithValue(ctx, k, v)

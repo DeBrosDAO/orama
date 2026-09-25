@@ -11,14 +11,8 @@ import (
 // ListFunctions handles GET /v1/functions
 // Lists all functions in a namespace.
 func (h *ServerlessHandlers) ListFunctions(w http.ResponseWriter, r *http.Request) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		// Get namespace from JWT if available
-		namespace = h.getNamespaceFromRequest(r)
-	}
-
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 

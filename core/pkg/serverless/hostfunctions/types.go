@@ -29,6 +29,13 @@ type HostFunctionsConfig struct {
 	TURNDomain       string
 	TURNSecret       string
 	StealthCDNDomain string // optional; non-empty adds turns:<domain>:443 URI
+
+	// DatabaseNamespace is the namespace whose functions may use the database
+	// handle: a namespace gateway's own client_namespace. A database host call
+	// from a function in any other namespace is refused (bugboard #427). Empty
+	// means no function may use it — the cluster gateway's database is the
+	// cluster registry.
+	DatabaseNamespace string
 }
 
 // HostFunctions provides the bridge between WASM functions and Orama services.
@@ -47,7 +54,10 @@ type HostFunctionsConfig struct {
 // engine. A host call with no invocation on its context is a host call outside
 // any invocation, and says so rather than picking up whoever ran last.
 type HostFunctions struct {
-	db          rqlite.Client
+	db rqlite.Client
+	// dbNamespace is the namespace db belongs to; see checkDatabaseAccess.
+	dbNamespace string
+
 	cacheClient olriclib.Client
 	storage     ipfs.IPFSClient
 	ipfsAPIURL  string

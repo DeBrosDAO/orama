@@ -41,7 +41,7 @@ func cancelledCtx() context.Context {
 // What says the gateway started this is SystemOriginated.
 func TestInvoke_aGatewayStartedInvocationSkipsTheCallerCheck(t *testing.T) {
 	privateFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "push-fanout", IsPublic: false}
-	inv := &Invoker{registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
+	inv := &Invoker{servedNamespace: "anchat-test", registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
 
 	_, err := inv.Invoke(cancelledCtx(), &InvokeRequest{
 		Namespace:        "anchat-test",
@@ -61,7 +61,7 @@ func TestInvoke_aGatewayStartedInvocationSkipsTheCallerCheck(t *testing.T) {
 // merely says it is a cron does not get the gateway's authority.
 func TestInvoke_aSystemTriggerTypeAloneIsNotAuthority(t *testing.T) {
 	privateFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "push-fanout", IsPublic: false}
-	inv := &Invoker{registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
+	inv := &Invoker{servedNamespace: "anchat-test", registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
 
 	for _, trigger := range []TriggerType{
 		TriggerTypeCron, TriggerTypePubSub, TriggerTypeDatabase,
@@ -84,7 +84,7 @@ func TestInvoke_aSystemTriggerTypeAloneIsNotAuthority(t *testing.T) {
 
 func TestInvoke_anExternalCallerIsStillChecked(t *testing.T) {
 	privateFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "push-fanout", IsPublic: false}
-	inv := &Invoker{registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
+	inv := &Invoker{servedNamespace: "anchat-test", registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
 
 	for _, trigger := range []TriggerType{TriggerTypeHTTP, TriggerTypeWebSocket} {
 		t.Run(string(trigger), func(t *testing.T) {
@@ -106,7 +106,7 @@ func TestInvoke_anExternalCallerIsStillChecked(t *testing.T) {
 
 func TestInvoke_aPublicFunctionIsOpenToEveryone(t *testing.T) {
 	publicFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "ping", IsPublic: true}
-	inv := &Invoker{registry: &invokeMockRegistry{fn: publicFn}, logger: zap.NewNop()}
+	inv := &Invoker{servedNamespace: "anchat-test", registry: &invokeMockRegistry{fn: publicFn}, logger: zap.NewNop()}
 
 	for _, req := range []*InvokeRequest{
 		{Namespace: "anchat-test", FunctionName: "ping", TriggerType: TriggerTypeCron, SystemOriginated: true},
@@ -126,7 +126,7 @@ func TestInvoke_internalFunctionGate(t *testing.T) {
 		ID: "fn-id", Namespace: "anchat-test", Name: "migrate",
 		IsPublic: false, IsInternal: true,
 	}
-	inv := &Invoker{registry: &invokeMockRegistry{fn: internalFn}, logger: zap.NewNop()}
+	inv := &Invoker{servedNamespace: "anchat-test", registry: &invokeMockRegistry{fn: internalFn}, logger: zap.NewNop()}
 
 	for _, tc := range []struct {
 		name     string
@@ -164,7 +164,7 @@ func TestInvoke_internalFunctionGate(t *testing.T) {
 
 func TestInvoke_anAuthenticatedCallerReachesAPrivateFunction(t *testing.T) {
 	privateFn := &Function{ID: "fn-id", Namespace: "anchat-test", Name: "user-create", IsPublic: false}
-	inv := &Invoker{registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
+	inv := &Invoker{servedNamespace: "anchat-test", registry: &invokeMockRegistry{fn: privateFn}, logger: zap.NewNop()}
 
 	_, err := inv.Invoke(cancelledCtx(), &InvokeRequest{
 		Namespace:       "anchat-test",

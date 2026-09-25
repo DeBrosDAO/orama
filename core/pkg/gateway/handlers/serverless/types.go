@@ -101,28 +101,6 @@ func (h *ServerlessHandlers) HealthStatus() map[string]interface{} {
 	}
 }
 
-// getNamespaceFromRequest extracts namespace from JWT or query param.
-func (h *ServerlessHandlers) getNamespaceFromRequest(r *http.Request) string {
-	// Try context first (set by auth middleware) - most secure
-	if v := r.Context().Value(ctxkeys.NamespaceOverride); v != nil {
-		if ns, ok := v.(string); ok && ns != "" {
-			return ns
-		}
-	}
-
-	// Try query param as fallback (e.g. for public access or admin)
-	if ns := r.URL.Query().Get("namespace"); ns != "" {
-		return ns
-	}
-
-	// Try header as fallback
-	if ns := r.Header.Get("X-Namespace"); ns != "" {
-		return ns
-	}
-
-	return "default"
-}
-
 // getCallerClaimsFromRequest returns the JWT custom claims for the caller,
 // or nil if the request was not JWT-authenticated. The map is safe to share
 // (read-only on the engine side); we copy to avoid retaining the JWT struct.

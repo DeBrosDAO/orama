@@ -128,6 +128,12 @@ func (p *jwtClaimsProvider) ResolveClaims(ctx context.Context, wallet, namespace
 			// No provider deployed — the normal no-claims case. Stay silent, no retry.
 			return nil
 		}
+		if errors.Is(err, serverless.ErrNamespaceNotServed) {
+			// This gateway does not run the namespace's functions (bugboard
+			// #427): a token it mints carries no custom claims, on every such
+			// sign-in, so it is the normal case here and not a failure.
+			return nil
+		}
 		if !p.retryable(err) {
 			// A clean non-success result is the app's own logic, and a non-
 			// transient invoke error is not going to recover on retry — fail

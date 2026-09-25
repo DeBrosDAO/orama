@@ -124,7 +124,7 @@ func TestHandleSetSecret_Success(t *testing.T) {
 	h := newSecretsTestHandlers(sm)
 
 	body := `{"name":"API_KEY","value":"secret123"}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=myns", strings.NewReader(body))
+	req := asCredentialOf(httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=myns", strings.NewReader(body)), "myns")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -149,7 +149,7 @@ func TestHandleSetSecret_MissingName(t *testing.T) {
 	h := newSecretsTestHandlers(newMockSecretsManager())
 
 	body := `{"value":"secret123"}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=myns", strings.NewReader(body))
+	req := asCredentialOf(httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=myns", strings.NewReader(body)), "myns")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -164,7 +164,7 @@ func TestHandleSetSecret_MissingValue(t *testing.T) {
 	h := newSecretsTestHandlers(newMockSecretsManager())
 
 	body := `{"name":"API_KEY"}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=myns", strings.NewReader(body))
+	req := asCredentialOf(httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=myns", strings.NewReader(body)), "myns")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -179,7 +179,7 @@ func TestHandleSetSecret_NilManager(t *testing.T) {
 	h := newSecretsTestHandlers(nil)
 
 	body := `{"name":"API_KEY","value":"secret123"}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=myns", strings.NewReader(body))
+	req := asCredentialOf(httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=myns", strings.NewReader(body)), "myns")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -193,7 +193,7 @@ func TestHandleSetSecret_NilManager(t *testing.T) {
 func TestHandleListSecrets_Empty(t *testing.T) {
 	h := newSecretsTestHandlers(newMockSecretsManager())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions/secrets?namespace=myns", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions/secrets?namespace=myns", nil), "myns")
 	rec := httptest.NewRecorder()
 
 	h.HandleListSecrets(rec, req)
@@ -216,7 +216,7 @@ func TestHandleListSecrets_Populated(t *testing.T) {
 	}
 	h := newSecretsTestHandlers(sm)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions/secrets?namespace=myns", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions/secrets?namespace=myns", nil), "myns")
 	rec := httptest.NewRecorder()
 
 	h.HandleListSecrets(rec, req)
@@ -234,7 +234,7 @@ func TestHandleListSecrets_Populated(t *testing.T) {
 func TestHandleListSecrets_NilManager(t *testing.T) {
 	h := newSecretsTestHandlers(nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions/secrets?namespace=myns", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions/secrets?namespace=myns", nil), "myns")
 	rec := httptest.NewRecorder()
 
 	h.HandleListSecrets(rec, req)
@@ -249,7 +249,7 @@ func TestHandleDeleteSecret_Success(t *testing.T) {
 	sm.secrets["myns"] = map[string]string{"API_KEY": "val"}
 	h := newSecretsTestHandlers(sm)
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/functions/secrets/API_KEY?namespace=myns", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodDelete, "/v1/functions/secrets/API_KEY?namespace=myns", nil), "myns")
 	rec := httptest.NewRecorder()
 
 	h.HandleDeleteSecret(rec, req, "API_KEY")
@@ -266,7 +266,7 @@ func TestHandleDeleteSecret_Success(t *testing.T) {
 func TestHandleDeleteSecret_NotFound(t *testing.T) {
 	h := newSecretsTestHandlers(newMockSecretsManager())
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/functions/secrets/MISSING?namespace=myns", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodDelete, "/v1/functions/secrets/MISSING?namespace=myns", nil), "myns")
 	rec := httptest.NewRecorder()
 
 	h.HandleDeleteSecret(rec, req, "MISSING")
@@ -279,7 +279,7 @@ func TestHandleDeleteSecret_NotFound(t *testing.T) {
 func TestHandleDeleteSecret_NilManager(t *testing.T) {
 	h := newSecretsTestHandlers(nil)
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/functions/secrets/KEY?namespace=myns", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodDelete, "/v1/functions/secrets/KEY?namespace=myns", nil), "myns")
 	rec := httptest.NewRecorder()
 
 	h.HandleDeleteSecret(rec, req, "KEY")
@@ -298,7 +298,7 @@ func TestRouting_SecretsSet(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	body := `{"name":"MY_SECRET","value":"myval"}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=test", strings.NewReader(body))
+	req := asCredentialOf(httptest.NewRequest(http.MethodPut, "/v1/functions/secrets?namespace=test", strings.NewReader(body)), "test")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -315,7 +315,7 @@ func TestRouting_SecretsList(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions/secrets?namespace=test", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions/secrets?namespace=test", nil), "test")
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -333,7 +333,7 @@ func TestRouting_SecretsDelete(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/functions/secrets/KEY?namespace=test", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodDelete, "/v1/functions/secrets/KEY?namespace=test", nil), "test")
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)

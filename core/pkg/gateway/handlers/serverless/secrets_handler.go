@@ -26,9 +26,8 @@ func (h *ServerlessHandlers) HandleSetSecret(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	namespace := h.getNamespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -84,9 +83,8 @@ func (h *ServerlessHandlers) HandleListSecrets(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	namespace := h.getNamespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -117,9 +115,8 @@ func (h *ServerlessHandlers) HandleDeleteSecret(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	namespace := h.getNamespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 

@@ -137,6 +137,14 @@ If no `function.wasm` file exists when you run `deploy`, it is built automatical
 
 Each deploy creates a new version. The WASM binary is stored on IPFS (content-addressed) and metadata is stored in RQLite.
 
+### Where a function lives
+
+A function belongs to the namespace of the credential that deploys it, and it is stored in and run by that namespace's own gateway, `https://ns-<namespace>.<domain>`. Point the CLI or your requests there.
+
+Every management request — deploy, delete, enable and disable, get, versions, logs, list, triggers, secrets — acts on the credential's namespace. A request that names a different namespace, in the deploy metadata, the `namespace` form field, `?namespace=` or an `X-Namespace` header, is refused with 403.
+
+A gateway runs only its own namespace's functions, and the cluster's main gateway is the `default` namespace's. A function request sent there for any other namespace is forwarded to that namespace's gateway: the namespace in `/v1/invoke/<namespace>/<name>` or `?namespace=`, otherwise the credential's. A credential of another namespace is refused, and an unauthenticated request that names no namespace is refused with a message pointing at the namespace gateway.
+
 ### REST API
 
 Deploy by uploading a multipart form with the compiled WASM binary and configuration:
@@ -209,6 +217,8 @@ curl -X POST https://gateway.example.com/v1/invoke/my-namespace/hello-world \
   -H "Content-Type: application/json" \
   -d '{"name": "World"}'
 ```
+
+A public function can be invoked without a credential, but the request has to name the namespace: `/v1/invoke/<namespace>/<name>`, or `/v1/functions/<name>/invoke?namespace=<namespace>`. With a credential and no namespace named, the credential's namespace is used.
 
 ### WebSocket Invoke
 

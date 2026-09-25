@@ -28,6 +28,7 @@ import (
 // isLongRunningProxyPath returns true for paths whose expected work bound
 // exceeds the default 30s proxy timeout. New classes go here, alphabetically.
 //
+//   - /v1/functions (deploy)                              — WASM upload + IPFS pin
 //   - /v1/functions/.../invoke and /v1/invoke/...        — up to 300s per fn
 //   - /v1/functions/.../ws                                — long-lived WS
 //   - /v1/storage/upload, /v1/storage/pin                 — IPFS add can be slow
@@ -38,6 +39,9 @@ func isLongRunningProxyPath(p string) bool {
 	switch {
 	case strings.HasPrefix(p, "/v1/storage/upload"),
 		strings.HasPrefix(p, "/v1/storage/pin"),
+		// Deploys reach a namespace gateway through this proxy since bugboard
+		// #427, and the handler itself allows the upload a minute.
+		p == "/v1/functions",
 		isFunctionInvokePath(p):
 		return true
 	}
@@ -270,16 +274,16 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 
 	// 1b) WS upgrade fallback: JWT via `?jwt=` query. Same rationale as in
 	// authMiddleware — browser / React Native WS clients can't set custom
-	// headers reliably. Bug #240. Strip-after-verify is applied here too
-	// so the JWT doesn't propagate to the namespace gateway over the proxy
-	// hop (where it would otherwise live in the proxied request's RawQuery
-	// + the inner gateway's logs).
+	// headers reliably. Bug #240. The request is not modified here: the
+	// cluster gateway's serverless routing validates a request it may still
+	// serve itself (bugboard #427), and authMiddleware must then find the
+	// token where the client put it. proxyToNamespaceGateway strips it before
+	// the proxy hop instead.
 	if isWebSocketUpgrade(r) {
 		tok := strings.TrimSpace(r.URL.Query().Get("jwt"))
 		if tok != "" && len(tok) <= maxQueryJWTLength && strings.Count(tok, ".") == 2 {
 			if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
 				if ns := strings.TrimSpace(c.Namespace); ns != "" {
-					stripJWTQueryParam(r)
 					return ns, c, "", ""
 				}
 			}
@@ -458,8 +462,15 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
 func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 	// Order: internal-auth -> route policy -> logging -> security headers ->
-	// rate limit -> CORS -> readiness -> domain routing -> auth ->
-	// authorization -> scope -> namespace rate limit -> handler
+	// rate limit -> CORS -> readiness -> domain routing -> cluster serverless
+	// routing -> auth -> authorization -> scope -> namespace rate limit ->
+	// handler
+	//
+	// Cluster serverless routing sits beside domain routing and does the same
+	// kind of thing: on the cluster gateway it proxies a tenant's function
+	// traffic to the tenant's gateway, whatever host the request arrived on
+	// (bugboard #427). It is above auth because the proxy validates the
+	// credential itself, against the registry.
 	//
 	// The route-policy gate resolves what the matched route requires and puts
 	// it on the request, so the four places that ask cannot answer differently.
@@ -488,10 +499,11 @@ func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 						g.corsMiddleware(
 							g.readinessGate(
 								g.domainRoutingMiddleware(
-									g.authMiddleware(
-										g.authorizationMiddleware(
-											g.scopeMiddleware(
-												g.namespaceRateLimitMiddleware(next))))))))))))
+									g.clusterServerlessRoutingMiddleware(
+										g.authMiddleware(
+											g.authorizationMiddleware(
+												g.scopeMiddleware(
+													g.namespaceRateLimitMiddleware(next)))))))))))))
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses
@@ -574,6 +586,16 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		// request is 127.0.0.1 because Caddy proxies to localhost.
 		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
 			ns := strings.TrimSpace(r.Header.Get(HeaderInternalAuthNamespace))
+			// The MAC says a gateway of this cluster vouched for the caller;
+			// it does not say the caller belongs here. A namespace gateway
+			// serves one namespace, and an identity forwarded for another —
+			// a stale target row sending one tenant's traffic to another's
+			// gateway — is refused rather than served.
+			if ns != "" && g.cfg != nil && !g.servesCoreRegistry() && ns != ownNamespace(g.cfg) {
+				forbidden(w, CodeNamespaceMismatch, "this credential belongs to another namespace",
+					map[string]any{"namespace": ownNamespace(g.cfg), "credential_namespace": ns})
+				return
+			}
 			if ns != "" {
 				// Pre-authenticated by main gateway - trust the namespace
 				reqCtx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, ns)
@@ -741,15 +763,23 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Skip ownership checks for requests pre-authenticated by the main gateway.
-		// The main gateway already validated the API key and resolved the namespace
-		// before proxying, so re-checking ownership against the namespace RQLite is
-		// redundant and adds ~300ms of unnecessary latency (3 DB round-trips).
+		// A request pre-authenticated by the main gateway skips the grant
+		// lookup when what it was forwarded with already reaches the route —
+		// an API key's scopes, a wallet's data plane. The main gateway
+		// validated the credential and resolved the namespace, and the lookup
+		// is ~300ms of registry round trips on every publish.
+		//
+		// The hop carries identity, not the grant, so a forwarded JWT caller
+		// on a control-plane route (deploying a function, managing secrets)
+		// has its grant resolved here. Skipping that refused every one of
+		// them with INSUFFICIENT_SCOPE, which left a namespace's functions
+		// manageable only by an API key (bugboard #427 made the namespace
+		// gateway the only place they are managed).
 		//
 		// The header is here only because internalAuthMiddleware verified its
 		// MAC. It used to be believed on the strength of the source IP, which
 		// made this the shortest unauthenticated path to any namespace's data.
-		if r.Header.Get(HeaderInternalAuthValidated) == "true" {
+		if r.Header.Get(HeaderInternalAuthValidated) == "true" && !g.forwardedCallerNeedsGrant(r, policy) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -860,8 +890,8 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			zap.String("owner_id", ownerID),
 		)
 
-		// Check ownership in DB using internal auth context
-		db := g.client.Database()
+		// Check ownership in the registry, where grants live.
+		db := g.grantDB()
 		internalCtx := client.WithInternalAuth(ctx)
 		// Ensure namespace exists and get id
 		if _, err := db.Query(internalCtx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", ns); err != nil {
@@ -1185,7 +1215,29 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.Request, namespaceName string) {
 	// Validate auth against main cluster RQLite BEFORE proxying
 	// This ensures API keys work even though they're not in the namespace's RQLite
-	validatedNamespace, validatedClaims, validatedScopes, authErr := g.validateAuthForNamespaceProxy(r)
+	g.proxyToNamespaceGateway(w, r, namespaceName, g.namespaceProxyAuthFor(r))
+}
+
+// namespaceProxyAuth is the outcome of validateAuthForNamespaceProxy, carried
+// to the proxy so a caller that already validated the request does not do it
+// twice.
+type namespaceProxyAuth struct {
+	namespace string
+	claims    *auth.JWTClaims
+	scopes    string
+	errMsg    string
+}
+
+func (g *Gateway) namespaceProxyAuthFor(r *http.Request) namespaceProxyAuth {
+	ns, claims, scopes, errMsg := g.validateAuthForNamespaceProxy(r)
+	return namespaceProxyAuth{namespace: ns, claims: claims, scopes: scopes, errMsg: errMsg}
+}
+
+// proxyToNamespaceGateway refuses a request whose credential does not belong
+// to namespaceName and forwards the rest to that namespace's gateway, carrying
+// the validated identity in signed internal-auth headers.
+func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request, namespaceName string, a namespaceProxyAuth) {
+	validatedNamespace, validatedClaims, validatedScopes, authErr := a.namespace, a.claims, a.scopes, a.errMsg
 	isWS := isWebSocketUpgrade(r)
 	isPublic := g.policyFor(r).Access.Anonymous()
 
@@ -1440,6 +1492,13 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 
 	// Handle WebSocket upgrade requests specially (http.Client can't handle 101 Switching Protocols)
 	if isWebSocketUpgrade(r) {
+		// The identity travels in the signed headers below, so a `?jwt=` the
+		// credential may have been read from is not carried over the hop, where
+		// it would sit in the proxied request's RawQuery and the inner
+		// gateway's logs.
+		if validatedNamespace != "" {
+			stripJWTQueryParam(r)
+		}
 		// Set forwarding headers on the original request
 		r.Header.Set("X-Forwarded-For", getClientIP(r))
 		r.Header.Set("X-Forwarded-Proto", "https")

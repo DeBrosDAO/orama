@@ -31,13 +31,8 @@ import (
 //	  "count":       N
 //	}
 func (h *ServerlessHandlers) GetFunctionLogs(w http.ResponseWriter, r *http.Request, name string) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = h.getNamespaceFromRequest(r)
-	}
-
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 

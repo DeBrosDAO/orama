@@ -1,7 +1,6 @@
 package hostfunctions
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -15,7 +14,7 @@ import (
 
 func execV2(t *testing.T, h *HostFunctions, sql string, args ...interface{}) dbExecuteV2Result {
 	t.Helper()
-	out, err := h.DBExecuteV2(context.Background(), sql, args)
+	out, err := h.DBExecuteV2(nsCtx(), sql, args)
 	if err != nil {
 		t.Fatalf("DBExecuteV2(%q): Go error %v; SQL failures belong in the envelope", sql, err)
 	}
@@ -28,7 +27,7 @@ func execV2(t *testing.T, h *HostFunctions, sql string, args ...interface{}) dbE
 
 func queryV2(t *testing.T, h *HostFunctions, sql string) dbQueryV2Result {
 	t.Helper()
-	out, err := h.DBQueryV2(context.Background(), sql, nil)
+	out, err := h.DBQueryV2(nsCtx(), sql, nil)
 	if err != nil {
 		t.Fatalf("DBQueryV2(%q): Go error %v; SQL failures belong in the envelope", sql, err)
 	}

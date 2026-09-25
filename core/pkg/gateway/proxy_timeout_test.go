@@ -21,6 +21,7 @@ func TestIsLongRunningProxyPath(t *testing.T) {
 		{"/v1/storage/pin", true},
 		{"/v1/invoke/myns/myfn", true},
 		{"/v1/functions/abc/invoke", true},
+		{"/v1/functions", true}, // deploy: WASM upload + IPFS pin
 		{"/v1/functions/abc/ws", true},
 
 		// Fast paths — must default to the 30s budget.

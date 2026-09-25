@@ -7,6 +7,8 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/registry"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // Bugboard #548: the claims-provider sanitizer is the security boundary —
@@ -155,6 +157,28 @@ func TestResolveClaims_transientAllAttemptsFailsOpen(t *testing.T) {
 	}
 	if f.calls != claimsProviderMaxAttempts {
 		t.Errorf("expected %d attempts, got %d", claimsProviderMaxAttempts, f.calls)
+	}
+}
+
+// A gateway that does not run the namespace's functions (bugboard #427) mints
+// without custom claims, silently and without retrying: it is every main-domain
+// sign-in to a tenant namespace, not a provider failure.
+func TestResolveClaims_namespaceNotServedIsSilent(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	f := &fakeClaimsInvoker{results: []invokeResult{
+		{err: fmt.Errorf("%w: %w", serverless.ErrFunctionNotFound, serverless.ErrNamespaceNotServed)},
+	}}
+	p := newJWTClaimsProvider(nil, zap.New(core))
+	p.invoker = f
+
+	if out := p.ResolveClaims(context.Background(), "0xW", "tenant-a"); out != nil {
+		t.Fatalf("expected nil, got %v", out)
+	}
+	if f.calls != 1 {
+		t.Errorf("expected 1 attempt, got %d", f.calls)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("a namespace this gateway does not serve was logged as a failure: %v", logs.All())
 	}
 }
 

@@ -2,6 +2,7 @@ package hostfunctions
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/anonproxy"
@@ -50,6 +51,7 @@ func NewHostFunctions(
 
 	hf := &HostFunctions{
 		db:               db,
+		dbNamespace:      strings.TrimSpace(cfg.DatabaseNamespace),
 		cacheClient:      cacheClient,
 		storage:          storage,
 		ipfsAPIURL:       cfg.IPFSAPIURL,

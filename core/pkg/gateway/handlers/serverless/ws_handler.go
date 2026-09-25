@@ -62,13 +62,10 @@ func checkWSOrigin(r *http.Request) bool {
 //   - WSPersistent=true: persistent per-connection WASM instance (plan 06)
 //   - WSPersistent=false (default): per-frame stateless invocation
 func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Request, name string, version int) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = h.getNamespaceFromRequest(r)
-	}
-
-	if namespace == "" {
-		http.Error(w, "namespace required", http.StatusBadRequest)
+	// The WebSocket needs a credential, and it runs functions of that
+	// credential's namespace (bugboard #423).
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 

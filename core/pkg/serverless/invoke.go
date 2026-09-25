@@ -28,17 +28,40 @@ type Invoker struct {
 	engine       *Engine
 	registry     FunctionRegistry
 	hostServices HostServices
-	logger       *zap.Logger
+	// servedNamespace is the one namespace whose functions this gateway runs:
+	// its own client_namespace. See checkServed.
+	servedNamespace string
+	logger          *zap.Logger
 }
 
 // NewInvoker creates a new function invoker.
-func NewInvoker(engine *Engine, registry FunctionRegistry, hostServices HostServices, logger *zap.Logger) *Invoker {
+//
+// servedNamespace is the namespace whose functions it runs — the gateway's own
+// client_namespace. An invocation for any other namespace is refused.
+func NewInvoker(engine *Engine, registry FunctionRegistry, hostServices HostServices, servedNamespace string, logger *zap.Logger) *Invoker {
 	return &Invoker{
-		engine:       engine,
-		registry:     registry,
-		hostServices: hostServices,
-		logger:       logger,
+		engine:          engine,
+		registry:        registry,
+		hostServices:    hostServices,
+		servedNamespace: strings.TrimSpace(servedNamespace),
+		logger:          logger,
 	}
+}
+
+// checkServed refuses an invocation of another namespace's function.
+//
+// Bugboard #427: the cluster gateway ran every namespace's functions, from
+// function rows in the cluster registry. HTTP traffic for a tenant is now
+// proxied to the tenant's gateway, but the cron scheduler, the pubsub
+// dispatcher, the JWT claims provider and nested function_invoke all reach the
+// invoker directly, and would have kept running tenant rows left in the
+// registry. One gateway runs one namespace's functions, whichever path asks.
+func (i *Invoker) checkServed(namespace string) error {
+	if namespace == i.servedNamespace {
+		return nil
+	}
+	return fmt.Errorf("%w: %w: this gateway runs the %q namespace's functions, and namespace %q's run on its own gateway",
+		ErrFunctionNotFound, ErrNamespaceNotServed, i.servedNamespace, namespace)
 }
 
 // InvokeRequest contains the parameters for invoking a function.
@@ -119,6 +142,10 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 
 	requestID := uuid.New().String()
 	startTime := time.Now()
+
+	if err := i.checkServed(req.Namespace); err != nil {
+		return &InvokeResponse{RequestID: requestID, Status: InvocationStatusError, Error: err.Error()}, err
+	}
 
 	// Get function from registry
 	fn, err := i.registry.Get(ctx, req.Namespace, req.FunctionName, req.Version)

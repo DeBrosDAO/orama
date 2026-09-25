@@ -115,11 +115,33 @@ tinygo build -o function.wasm -target wasi function.go
 > deploy`. Redeploys otherwise take effect immediately (new version → new WASM CID →
 > the runtime loads it on the next invoke).
 
-> ℹ️ **Deploys are per-gateway.** `orama function deploy` targets the gateway of your
-> **active CLI environment** (`orama env`). To deploy into a namespace, point the CLI
-> at that namespace's gateway (`orama env add <name> https://ns-<ns>.<domain>` then
-> `orama env use <name>`), or set `ORAMA_API_URL`. Verify against the same
-> namespace host — the bare/main gateway has a different function registry + DB view.
+> ℹ️ **A function lives on its namespace's gateway.** A function is deployed into
+> the namespace of the credential that deploys it, and stored in and run by that
+> namespace's own gateway, `https://ns-<ns>.<domain>`, against the namespace's own
+> RQLite. `orama function deploy` targets the gateway of your **active CLI
+> environment** (`orama env`); point it at the namespace gateway (`orama env add
+> <name> https://ns-<ns>.<domain>` then `orama env use <name>`), or set
+> `ORAMA_API_URL`.
+>
+> A gateway runs only its own namespace's functions, whichever path asks — an
+> HTTP or WebSocket invoke, a cron or pubsub trigger, the JWT claims provider,
+> a nested `function_invoke`. The cluster's main gateway is the `default`
+> namespace's. Any other function request that reaches it — deploy, list, logs,
+> secrets, triggers, invoke, the function WebSocket — is proxied to the
+> namespace's gateway: the namespace named by `/v1/invoke/<ns>/<name>` or
+> `?namespace=`, otherwise the credential's. A credential of another namespace
+> is refused (`NAMESPACE_MISMATCH`), and an anonymous request that names no
+> namespace is refused with a message pointing at
+> `https://ns-<namespace>.<domain>`. A signed-in wallet or an exchanged-key
+> token managing functions through that proxy has its grant read from the
+> cluster registry by the namespace gateway.
+>
+> Tenant functions deployed into the main gateway's registry before 0.200.0 are
+> no longer run there — not by requests, which are proxied to the namespace
+> gateway, and not by the triggers that pointed at them, which the main gateway
+> now refuses to fire. Redeploy them to the namespace gateway. A token minted by
+> the main gateway runs no tenant's `auth-claims-provider`; sign in through the
+> namespace gateway for its custom claims.
 >
 > `ORAMA_API_URL`, `ORAMA_GATEWAY_URL` and `ORAMA_GATEWAY` all name the gateway
 > and are read in that order; the credential is always the one stored for
@@ -209,8 +231,20 @@ The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `function_env_vars`, `revoked_tokens`, `audit_events`, `namespace_quotas`,
 `namespace_rate_limit_config`, `namespace_clusters`, `namespace_cluster_nodes`,
 `namespace_port_allocations`, `global_deployment_subdomains`, `dns_records`,
-`dns_nodes`, `dns_nameservers`, `raft_evicted_nodes`, `cluster_locks` and
-`orama_schema_migrations` (the list in `core/pkg/serverless/hostfunctions/sqlguard.go`).
+`dns_nodes`, `dns_nameservers`, `raft_evicted_nodes`, `cluster_locks`,
+`orama_schema_migrations`, `namespaces` and `ipfs_content_ownership`
+(the list in `core/pkg/serverless/hostfunctions/sqlguard.go`).
+
+**A function's database is its own namespace's.** Every database host function
+also refuses a call from a function whose namespace is not the one the
+gateway's database belongs to — the gateway's own `client_namespace` — and a
+call made outside an invocation (a warm-pool module's `_initialize`), where
+there is no namespace to check. On a namespace gateway that is the tenant's own
+namespace. On the cluster gateway no function gets a database, the `default`
+namespace's included: its database is the cluster registry, which holds every
+tenant's `deployments`, `deployment_domains`, `functions` and trigger rows side
+by side, so a function reaching it could rewrite another tenant's routing. The
+refusal is a host call error naming the function's namespace gateway.
 
 #### Database Transactions
 
@@ -351,8 +385,8 @@ if !res.Committed {
 | `cache_incr_by(key, delta)` → int64 | Atomically increment by delta. |
 
 Each namespace has its own cache map (`:serverless_cache:<namespace>`), so a
-function reaches only its own namespace's keys, including on the cluster
-gateway, which runs functions for every namespace against one Olric. The cache
+function reaches only its own namespace's keys, whichever Olric the gateway
+running it talks to. The cache
 host functions need an invocation, so they are unavailable while a warm-pool
 (stateless) reactor module runs `_initialize`; call them from `handle()`.
 
@@ -639,6 +673,14 @@ is generated from the command tree.
 | GET | `/v1/functions/{name}/triggers` | List triggers |
 | DELETE | `/v1/functions/{name}/triggers/{id}` | Delete trigger |
 | POST | `/v1/invoke/{namespace}/{name}` | Direct invoke (alt endpoint) |
+
+Every route except invoke acts on the namespace of the credential that calls it.
+A request that names a different namespace — the deploy metadata's or form's
+`namespace`, `?namespace=`, or an `X-Namespace` header — is refused with 403
+rather than acted on. `POST /v1/functions/{name}/invoke` runs the function of
+the namespace named by `?namespace=`, otherwise the credential's; an anonymous
+call that names neither is refused with 400. A public function is invocable
+without a credential, but the request has to say whose it is.
 
 ## Invoking from application code
 

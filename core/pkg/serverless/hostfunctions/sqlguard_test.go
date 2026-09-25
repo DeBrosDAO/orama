@@ -42,6 +42,12 @@ func TestCheckGuestSQL_refusesTheTablesThatGrantAuthority(t *testing.T) {
 		"UPDATE namespace_quotas SET storage_bytes = 0",
 		"INSERT INTO dns_records(name, value) VALUES ('x', 'y')",
 		"SELECT * FROM orama_schema_migrations",
+		// bugboard #427: renaming a namespace re-points every API key of it.
+		"UPDATE namespaces SET name = ? WHERE name = ?",
+		"SELECT id, name FROM namespaces",
+		// bugboard #431: an ownership row is a read grant on another tenant's CID.
+		"INSERT INTO ipfs_content_ownership(cid, namespace, uploaded_by) VALUES (?, ?, ?)",
+		"SELECT cid FROM ipfs_content_ownership",
 	} {
 		t.Run(query, func(t *testing.T) {
 			if err := checkGuestSQL(query); err == nil {
@@ -322,30 +328,32 @@ func TestCheckGuestSQL_emptyAndTrivial(t *testing.T) {
 // Every DB host function has to ask. One that does not is the whole hole
 // reopened through a different name.
 func TestDBHostFunctions_allRefuseAProtectedTable(t *testing.T) {
-	h := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}}
-	ctx := context.Background()
+	h := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, dbNamespace: testNamespace}
+	// Inside an invocation of the database's own namespace, so the refusal
+	// that comes back is the guard's and not the namespace check's.
+	ctx := nsCtx()
 	protected := "SELECT * FROM api_keys"
+	ops := []byte(`{"ops":[{"kind":"exec","sql":"SELECT * FROM api_keys"}]}`)
 
-	if _, err := h.DBQuery(ctx, protected, nil); err == nil {
-		t.Error("db_query ran it")
+	calls := map[string]func() error{
+		"db_query":       func() error { _, err := h.DBQuery(ctx, protected, nil); return err },
+		"db_execute":     func() error { _, err := h.DBExecute(ctx, protected, nil); return err },
+		"db_execute_v2":  func() error { _, err := h.DBExecuteV2(ctx, protected, nil); return err },
+		"db_query_v2":    func() error { _, err := h.DBQueryV2(ctx, protected, nil); return err },
+		"db_transaction": func() error { _, err := h.DBTransaction(ctx, ops); return err },
+		"db_query_batch": func() error {
+			_, err := h.DBQueryBatch(ctx, []byte(`{"ops":[{"sql":"SELECT * FROM api_keys"}]}`))
+			return err
+		},
 	}
-	if _, err := h.DBExecute(ctx, protected, nil); err == nil {
-		t.Error("db_execute ran it")
+	for fn, call := range calls {
+		var refused *ErrSQLNotAllowed
+		if err := call(); !errors.As(err, &refused) {
+			t.Errorf("%s: err = %v, want the SQL guard's refusal", fn, err)
+		}
 	}
-	if _, err := h.DBExecuteV2(ctx, protected, nil); err == nil {
-		t.Error("db_execute_v2 ran it")
-	}
-	if _, err := h.DBQueryV2(ctx, protected, nil); err == nil {
-		t.Error("db_query_v2 ran it")
-	}
-	if _, err := h.DBTransaction(ctx, []byte(`{"ops":[{"kind":"exec","sql":"SELECT * FROM api_keys"}]}`)); err == nil {
-		t.Error("db_transaction ran it")
-	}
-	if _, err := h.DBQueryBatch(ctx, []byte(`{"ops":[{"sql":"SELECT * FROM api_keys"}]}`)); err == nil {
-		t.Error("db_query_batch ran it")
-	}
-	pubCtx := invocationCtx(&serverless.InvocationContext{Namespace: "anchat"})
-	withBus := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, pubsub: &publishingBus{}}
+	pubCtx := invocationCtx(&serverless.InvocationContext{Namespace: testNamespace})
+	withBus := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, dbNamespace: testNamespace, pubsub: &publishingBus{}}
 	if _, err := withBus.ExecAndPublish(pubCtx, []byte(`{"ops":[{"kind":"exec","sql":"SELECT * FROM api_keys"}]}`), "wake", []byte("{}")); err == nil {
 		t.Error("exec_and_publish ran it")
 	}
@@ -369,8 +377,8 @@ func (b *publishingBus) Publish(context.Context, string, []byte) error {
 // it would panic.
 func TestExecAndPublish_refusesAProtectedTable(t *testing.T) {
 	bus := &publishingBus{}
-	h := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, pubsub: bus}
-	ctx := serverless.WithPublishCounter(invocationCtx(&serverless.InvocationContext{Namespace: "anchat"}))
+	h := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, dbNamespace: testNamespace, pubsub: bus}
+	ctx := serverless.WithPublishCounter(invocationCtx(&serverless.InvocationContext{Namespace: testNamespace}))
 
 	for _, ops := range []string{
 		`{"ops":[{"kind":"exec","sql":"UPDATE api_keys SET scopes='admin'"}]}`,
@@ -395,8 +403,8 @@ func TestExecAndPublish_refusesAProtectedTable(t *testing.T) {
 
 // A protected table hidden behind an innocent first op still has to be caught.
 func TestDBTransaction_checksEveryOp(t *testing.T) {
-	h := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}}
-	_, err := h.DBTransaction(context.Background(),
+	h := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, dbNamespace: testNamespace}
+	_, err := h.DBTransaction(nsCtx(),
 		[]byte(`{"ops":[{"kind":"exec","sql":"INSERT INTO messages(body) VALUES ('x')"},{"kind":"exec","sql":"UPDATE api_keys SET scopes='admin'"}]}`))
 	if err == nil {
 		t.Fatal("a protected table in the second op ran")
@@ -415,7 +423,7 @@ func TestDBTransaction_checksEveryOp(t *testing.T) {
 // registry, where it holds every namespace's trail, so the reason stopped being
 // true.
 var reachableTables = map[string]bool{
-	"apps": true, "namespaces": true,
+	"apps":        true,
 	"deployments": true, "deployment_domains": true, "deployment_events": true,
 	"deployment_health_checks": true, "deployment_history": true,
 	"deployment_replicas": true, "port_allocations": true,
@@ -424,7 +432,7 @@ var reachableTables = map[string]bool{
 	"function_jobs": true, "function_timers": true, "function_rate_limits": true,
 	"function_cron_triggers": true, "function_db_triggers": true,
 	"function_pubsub_triggers": true, "function_db_change_tracking": true,
-	"ipfs_content_ownership": true, "namespace_sqlite_backups": true,
+	"namespace_sqlite_backups":   true,
 	"namespace_sqlite_databases": true, "namespace_publish_seq": true,
 	"namespace_webrtc_config": true, "namespace_push_config": true,
 	"namespace_cluster_events": true, "namespace_pending_cleanup": true,

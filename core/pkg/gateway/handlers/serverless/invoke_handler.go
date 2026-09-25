@@ -75,14 +75,12 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		name = nameWithNS[idx+1:]
 	} else {
 		name = nameWithNS
-		namespace = r.URL.Query().Get("namespace")
-		if namespace == "" {
-			namespace = h.getNamespaceFromRequest(r)
-		}
+		namespace = invokeNamespace(r)
 	}
 
 	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+		writeError(w, http.StatusBadRequest,
+			"name the namespace whose function to invoke: POST /v1/invoke/<namespace>/<function>")
 		return
 	}
 
@@ -242,13 +240,8 @@ func (h *ServerlessHandlers) HandleInvoke(w http.ResponseWriter, r *http.Request
 // GetFunctionInfo handles GET /v1/functions/{name}
 // Returns detailed information about a specific function.
 func (h *ServerlessHandlers) GetFunctionInfo(w http.ResponseWriter, r *http.Request, name string, version int) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = h.getNamespaceFromRequest(r)
-	}
-
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -271,13 +264,8 @@ func (h *ServerlessHandlers) GetFunctionInfo(w http.ResponseWriter, r *http.Requ
 // ListVersions handles GET /v1/functions/{name}/versions
 // Lists all versions of a specific function.
 func (h *ServerlessHandlers) ListVersions(w http.ResponseWriter, r *http.Request, name string) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = h.getNamespaceFromRequest(r)
-	}
-
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 

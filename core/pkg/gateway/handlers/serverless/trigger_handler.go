@@ -21,9 +21,8 @@ type addTriggerRequest struct {
 // Branches between PubSub (topic) and Cron (cron_expression) based on the
 // request body. Both stores must be wired for their respective branches.
 func (h *ServerlessHandlers) HandleAddTrigger(w http.ResponseWriter, r *http.Request, functionName string) {
-	namespace := h.getNamespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -132,9 +131,8 @@ func (h *ServerlessHandlers) HandleListTriggers(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	namespace := h.getNamespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -201,9 +199,8 @@ func (h *ServerlessHandlers) HandleDeleteTrigger(w http.ResponseWriter, r *http.
 		return
 	}
 
-	namespace := h.getNamespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 

@@ -23,6 +23,7 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 
 	var def serverless.FunctionDefinition
 	var wasmBytes []byte
+	var formNamespace string
 
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		// Parse multipart form
@@ -45,10 +46,9 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 			def.Name = r.FormValue("name")
 		}
 
-		// Get namespace from form if not in metadata
-		if def.Namespace == "" {
-			def.Namespace = r.FormValue("namespace")
-		}
+		// A namespace named in the form is checked against the credential's
+		// below, never used in its place.
+		formNamespace = r.FormValue("namespace")
 
 		// Get other configuration fields from form
 		if v := r.FormValue("is_public"); v != "" {
@@ -104,17 +104,16 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Get namespace from JWT if not provided
-	if def.Namespace == "" {
-		def.Namespace = h.getNamespaceFromRequest(r)
+	// The function is deployed into the credential's namespace. One named in
+	// the metadata or the form is only allowed to agree with it (bugboard #423).
+	namespace, ok := managedNamespace(w, r, def.Namespace, formNamespace)
+	if !ok {
+		return
 	}
+	def.Namespace = namespace
 
 	if def.Name == "" {
 		writeError(w, http.StatusBadRequest, "Function name required")
-		return
-	}
-	if def.Namespace == "" {
-		writeError(w, http.StatusBadRequest, "Namespace required")
 		return
 	}
 	if len(wasmBytes) == 0 {

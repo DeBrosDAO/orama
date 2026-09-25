@@ -268,10 +268,11 @@ func TestMiddlewareChain_forgedInternalAuthDoesNotAuthenticate(t *testing.T) {
 
 func TestMiddlewareChain_aGenuineHopStillAuthenticates(t *testing.T) {
 	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	// The namespace gateway the hop was addressed to.
 	g := &Gateway{
 		logger:          logger,
 		internalAuthKey: testHopKey(t),
-		cfg:             &Config{ClientNamespace: "index"},
+		cfg:             &Config{ClientNamespace: "someone-elses-namespace"},
 	}
 
 	var gotNamespace string

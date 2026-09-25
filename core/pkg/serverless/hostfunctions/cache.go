@@ -16,10 +16,11 @@ const maxCacheTTLSeconds = int64(olric.MaxEntryTTL / time.Second)
 
 // cacheDMap opens the calling namespace's cache map.
 //
-// The map is named per namespace. A gateway that runs functions for more than
-// one namespace (the cluster gateway does) talks to a single Olric cluster, so
-// a shared map name would let one namespace's function read, overwrite and
-// delete another's keys.
+// The map is named per namespace. The cluster gateway used to run every
+// namespace's functions against one Olric, where a shared map name let one
+// namespace's function read, overwrite and delete another's keys; a gateway
+// now runs only its own namespace's functions (bugboard #427), and the name
+// still keeps each namespace's keys apart on any Olric more than one reaches.
 func (h *HostFunctions) cacheDMap(ctx context.Context, fn string) (olriclib.DMap, error) {
 	if h.cacheClient == nil {
 		return nil, &serverless.HostFunctionError{Function: fn, Cause: serverless.ErrCacheUnavailable}

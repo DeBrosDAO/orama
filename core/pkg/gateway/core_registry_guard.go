@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	"go.uber.org/zap"
 )
@@ -38,8 +39,31 @@ func (g *Gateway) servesCoreRegistry() bool {
 	if g.cfg == nil {
 		return false
 	}
-	ns := strings.TrimSpace(g.cfg.ClientNamespace)
-	return ns == "" || ns == "default"
+	return ownNamespace(g.cfg) == auth.LobbyNamespace
+}
+
+// functionDatabaseNamespace is the namespace whose functions may use a
+// gateway's database, or "" when no function may.
+//
+// The cluster registry is never a function's database (bugboard #427). Its
+// namespace-placed tables hold every tenant's rows side by side, which a SQL
+// denylist cannot tell apart, and the lobby namespace it nominally belongs to
+// owns nothing — grants in it were handed to whichever wallet signed in first.
+func functionDatabaseNamespace(cfg *Config) string {
+	if ns := ownNamespace(cfg); ns != auth.LobbyNamespace {
+		return ns
+	}
+	return ""
+}
+
+// ownNamespace is the namespace a gateway's database belongs to: its
+// client_namespace, where an empty one is read as the cluster gateway's
+// "default".
+func ownNamespace(cfg *Config) string {
+	if ns := strings.TrimSpace(cfg.ClientNamespace); ns != "" {
+		return ns
+	}
+	return auth.LobbyNamespace
 }
 
 // requireOperatorForCoreRegistry refuses a non-operator on the raw-database
