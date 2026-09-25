@@ -225,7 +225,7 @@ Node operation is invite-only, and operators are vetted, because an operator of 
 
 | Requirement | Minimum |
 |---|---|
-| Operating system | Ubuntu 22.04 or 24.04, or Debian 12 (releases the Tor Project publishes packages for) |
+| Operating system | Ubuntu 22.04, 24.04 or 26.04, or Debian 12 or 13 (releases the Tor Project publishes packages for) |
 | Architecture | amd64 or arm64 |
 | CPU | 2 cores |
 | Memory | 2 GB |

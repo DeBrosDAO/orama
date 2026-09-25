@@ -143,10 +143,10 @@ func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 	ps.osInfo = osInfo
 	ps.logf("  ✓ Detected OS: %s", osInfo.Name)
 
-	// Check if supported
+	// An unsupported release used to log a warning and carry on, then fail
+	// minutes later in Phase 2d when the Tor Project had no apt suite for it.
 	if !ps.osDetector.IsSupportedOS(osInfo) {
-		ps.logf("  ⚠️  OS %s is not officially supported (Ubuntu 22.04/24.04, Debian 12)", osInfo.Name)
-		ps.logf("     Proceeding anyway, but issues may occur")
+		return fmt.Errorf("OS %s is not supported (supported: %s); reinstall the VPS with a supported release or upgrade it with do-release-upgrade", osInfo.Name, SupportedReleasesText())
 	}
 
 	// Detect architecture
@@ -204,12 +204,13 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 	}
 	ps.logf("  ✓ Directory structure created")
 
-	// Create dedicated orama user for running services (non-root)
+	// Create the dedicated orama user the services run as. Fatal: the units
+	// say User=orama, so without it nothing starts — the old message that the
+	// services would "run as root" instead was never true.
 	if err := ps.fsProvisioner.EnsureOramaUser(); err != nil {
-		ps.logf("  ⚠️  Could not create orama user: %v (services will run as root)", err)
-	} else {
-		ps.logf("  ✓ orama user ensured")
+		return fmt.Errorf("create the orama user: %w", err)
 	}
+	ps.logf("  ✓ orama user ensured")
 
 	return nil
 }
@@ -238,6 +239,10 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		if err := ps.installFromSource(); err != nil {
 			return err
 		}
+	}
+
+	if err := ps.EnsurePrivHelper(); err != nil {
+		return err
 	}
 
 	ps.logf("  ✓ All binaries installed")

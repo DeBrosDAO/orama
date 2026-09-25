@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -81,17 +82,40 @@ func (od *OSDetector) Detect() (*OSInfo, error) {
 //
 // Every release here must be one the Tor Project publishes packages for
 // (installers.TorSuiteFor): the Tor client is installed on every node, and
-// Phase 2d fails on any other release. Ubuntu 25.04 was dropped for that
-// reason — it is past end of life and deb.torproject.org has no suite for it.
+// Phase 2d fails on any other release. Interim Ubuntu releases (24.10, 25.04,
+// 25.10) are absent for that reason — they are past end of life and
+// deb.torproject.org has no suite for them.
 var supportedReleases = map[string]map[string]string{
-	"ubuntu": {"22.04": "jammy", "24.04": "noble"},
-	"debian": {"12": "bookworm"},
+	"ubuntu": {"22.04": "jammy", "24.04": "noble", "26.04": "resolute"},
+	"debian": {"12": "bookworm", "13": "trixie"},
 }
 
 // IsSupportedOS checks if the OS is supported for production deployment.
 func (od *OSDetector) IsSupportedOS(info *OSInfo) bool {
 	_, ok := supportedReleases[info.ID][info.Version]
 	return ok
+}
+
+// SupportedReleasesText lists the supported releases for an error message,
+// e.g. "debian 12, 13; ubuntu 22.04, 24.04, 26.04". It is built from
+// supportedReleases so the message cannot drift from the check.
+func SupportedReleasesText() string {
+	ids := make([]string, 0, len(supportedReleases))
+	for id := range supportedReleases {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		versions := make([]string, 0, len(supportedReleases[id]))
+		for v := range supportedReleases[id] {
+			versions = append(versions, v)
+		}
+		sort.Strings(versions)
+		parts = append(parts, id+" "+strings.Join(versions, ", "))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // ArchitectureDetector detects the system architecture

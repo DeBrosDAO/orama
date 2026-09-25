@@ -7,6 +7,9 @@ SOCKS5 on `127.0.0.1:9050` for `/v1/proxy/anon`, `/v1/proxy/tunnel` and the
 A single VPS (index + one tenant, not HA) is [EVAL.md](EVAL.md). This page is
 the three-nameserver cluster path.
 
+**Supported OS:** Ubuntu 22.04, 24.04 or 26.04, or Debian 12 or 13. The
+installer refuses anything else in its first phase.
+
 **Note:** Store credentials securely (not in version control).
 
 ## Installation Order
@@ -34,17 +37,44 @@ It needs an unlocked RootWallet.
 orama node setup --ip <ns1-ip> --password '<vps-pass>' --env devnet \
   --base-domain <your-domain.com> --role nameserver --genesis
 
-# ns2 / ns3 — join as nameservers
+# ns2 / ns3 — join as nameservers; the invite is minted on ns1 over SSH
 orama node setup --ip <ns-ip> --password '<vps-pass>' --env devnet \
-  --base-domain <your-domain.com> --role nameserver
+  --base-domain <your-domain.com> --role nameserver --join-via root@<ns1-ip>
 
 # Worker — domain is auto-generated, e.g. node-a3f8k2.<your-domain.com>
 orama node setup --ip <node-ip> --password '<vps-pass>' --env devnet \
   --base-domain <your-domain.com>
 ```
 
-Pass `--host-key SHA256:...` to pin the VPS host key instead of confirming it
-interactively.
+Setup pins the VPS host key before it uses any credential — pass
+`--host-key SHA256:...` to pin it non-interactively, or confirm the fingerprint
+it shows against your provider's console — and every connection of the run
+(enrollment, archive upload, install) uses only that key.
+
+`--genesis` records the environment as `https://<base-domain>` in
+`~/.orama/environments.json` and leaves the active environment alone; name it
+with `--env` in later commands. Joins need the genesis node reachable at that
+name with its certificate issued, because the invite carries the gateway URL
+and its certificate fingerprint — delegate the domain to the cluster
+([NAMESERVER_SETUP.md](NAMESERVER_SETUP.md)) before joining more nodes.
+
+`--join-via <user>@<ip>` mints the invite on a node already in the cluster, over
+SSH with its RootWallet key, so joining needs no `orama auth login`. That node's
+host key must already be in your `known_hosts` (from its own setup). Without
+`--join-via`, setup asks the environment's gateway for an invite and needs a
+login. `--archive <path>` picks the build to install (default: the newest in
+`/tmp`); a node already running that exact build is not re-uploaded.
+
+**Key-only VPS images** (a non-root user such as `ubuntu` or `debian`, no
+password login — the default on OVH and most clouds): replace `--password` with
+the private key that opens the VPS today. It is used once to install the
+RootWallet key and never stored. The user needs passwordless sudo; setup checks
+it before installing.
+
+```bash
+orama node setup --ip <ip> --user ubuntu --bootstrap-key ~/.ssh/id_ed25519 \
+  --env devnet --base-domain <your-domain.com> --role nameserver
+```
 
 ---
 
