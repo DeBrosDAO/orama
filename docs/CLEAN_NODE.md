@@ -73,7 +73,7 @@ sudo swapoff -a 2>/dev/null || true
 #    so services must be stopped first or userdel fails with "user in use")
 sudo userdel -r orama 2>/dev/null
 sudo rm -rf /home/orama
-sudo rm -f /etc/sudoers.d/orama-namespaces
+sudo rm -f /etc/sudoers.d/orama-namespaces /usr/local/bin/orama-privhelper
 sudo rm -f /etc/sudoers.d/orama-access
 sudo rm -f /etc/sudoers.d/orama-deployments
 sudo rm -f /etc/sudoers.d/orama-wireguard

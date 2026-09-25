@@ -410,8 +410,8 @@ func tenantNames(tenants []hostTURNTenant) []string {
 // from and that the root-level firewall phase uses, so the two cannot drift into
 // a server relaying on ports UFW drops.
 //
-// orama-node runs unprivileged; the sudoers drop-in grants exactly the `ufw`
-// verbs this needs.
+// orama-node runs unprivileged; orama-privhelper allows exactly these TURN
+// rules and no others (pkg/privhelper).
 func (cm *ClusterManager) openTURNRelayPorts() {
 	fw := install.NewFirewallProvisioner(install.FirewallConfig{})
 	if err := fw.AddWebRTCRules(TURNRelayPortRangeStart, TURNRelayPortRangeEnd); err != nil {

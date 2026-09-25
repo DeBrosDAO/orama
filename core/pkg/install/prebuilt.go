@@ -185,7 +185,9 @@ func (ps *ProductionSetup) installMinimalSystemDeps() error {
 	}
 
 	// Only install runtime deps — no build-essential, make, nodejs, npm needed
-	cmd = exec.Command("apt-get", "install", "-y", "curl", "wget", "unzip")
+	// sudo: the orama user's root actions go through `sudo orama-privhelper`,
+	// and minimal Debian images ship without it.
+	cmd = exec.Command("apt-get", "install", "-y", "curl", "wget", "unzip", "sudo")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install minimal dependencies: %w", err)
 	}
@@ -296,11 +298,10 @@ func copyBinary(src, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer destFile.Close()
-
 	if _, err := io.Copy(destFile, srcFile); err != nil {
+		destFile.Close()
 		return err
 	}
-
-	return nil
+	// Close reports a failed write (a full disk surfaces here, not in Copy).
+	return destFile.Close()
 }

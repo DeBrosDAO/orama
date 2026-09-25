@@ -2,6 +2,7 @@ package systemd
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -151,19 +152,14 @@ func (m *Manager) serviceName(namespace string, serviceType ServiceType) string 
 	return NamespaceUnit(serviceType, namespace) + ".service"
 }
 
-// Systemctl builds an exec.Command for systemctl, prepending sudo when the
-// current process is not running as root.
+// Systemctl builds an exec.Command for a systemctl call that changes state,
+// run as root: directly when this process is root, otherwise through sudo and
+// orama-privhelper, which allows only Orama's own units (pkg/privhelper).
 //
-// Everything on a node that drives systemd goes through this. The deployment
-// runner had its own copy that called systemctl directly, which works only
-// while the process is root — which it is today, and which the hardened
-// gateway unit ends. Going through here is what reaches the sudoers rule that
-// grants the orama user systemctl over orama-deploy-* units.
+// Everything on a node that drives systemd goes through this. Read-only
+// queries (is-active, show) need no privilege and call systemctl directly.
 func Systemctl(args ...string) *exec.Cmd {
-	if os.Getuid() == 0 {
-		return exec.Command("systemctl", args...)
-	}
-	return exec.Command("sudo", append([]string{"systemctl"}, args...)...)
+	return privhelper.Command(privhelper.ToolSystemctl, args...)
 }
 
 // StartTimer starts a namespace instantiated timer (e.g. ipfs-gc@index.timer).
@@ -401,7 +397,7 @@ func (m *Manager) StartAllNamespaceServices(namespace string) error {
 
 // ListNamespaceServices returns all namespace services currently registered in systemd
 func (m *Manager) ListNamespaceServices() ([]string, error) {
-	cmd := exec.Command("systemctl", "list-units", "--all", "--no-legend", "orama-namespace-*@*.service")
+	cmd := exec.Command("systemctl", "list-units", "--all", "--no-legend", "--plain", "orama-namespace-*@*.service")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list namespace services: %w; output: %s", err, string(output))
@@ -462,7 +458,7 @@ func (m *Manager) StopDeploymentServicesForNamespace(namespace string) {
 		zap.String("namespace", namespace),
 		zap.String("pattern", pattern))
 
-	cmd := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend", pattern)
+	cmd := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend", "--plain", pattern)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		m.logger.Warn("Failed to list deployment services",
@@ -661,9 +657,9 @@ func (m *Manager) StopHostTURN() error {
 
 // IsHostTURNActive reports whether the shared TURN unit is running.
 func (m *Manager) IsHostTURNActive() (bool, error) {
-	// Deliberately NOT the sudo-aware Systemctl() helper: `is-active` is a query
-	// that needs no privilege, and the sudoers drop-in grants only
-	// start/stop/restart/enable for this unit — routing it through sudo makes it
+	// Deliberately NOT the privileged Systemctl() helper: `is-active` is a query
+	// that needs no privilege, and orama-privhelper allows only
+	// start/stop/restart/enable/disable for this unit — routing it there makes it
 	// fail always, which reads as "TURN is down" and silently disables the whole
 	// host-TURN reconcile. IsServiceActive uses a bare command for the same reason.
 	output, err := exec.Command("systemctl", "is-active", HostTURNServiceName).CombinedOutput()

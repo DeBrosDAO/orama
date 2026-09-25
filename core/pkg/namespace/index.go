@@ -204,15 +204,11 @@ func (s *IndexSupervisor) EnsureGateway(ctx context.Context, cfg gatewayspec.Ins
 	return nil
 }
 
-func systemctlCmd(args ...string) *exec.Cmd {
-	if os.Getuid() == 0 {
-		return exec.Command("systemctl", args...)
-	}
-	return exec.Command("sudo", append([]string{"systemctl"}, args...)...)
-}
-
+// unitActive asks systemd whether unit is active. It is a query and needs no
+// privilege; it used to go through sudo, which the orama user was never
+// granted for is-active, so it reported every unit inactive.
 func unitActive(unit string) bool {
-	return systemctlCmd("is-active", "--quiet", unit).Run() == nil
+	return exec.Command("systemctl", "is-active", "--quiet", unit).Run() == nil
 }
 
 // disableLeftoverUnits removes boot enablement without stopping the process.
@@ -220,7 +216,7 @@ func unitActive(unit string) bool {
 func disableLeftoverUnits(units ...string) error {
 	var first error
 	for _, unit := range units {
-		cmd := systemctlCmd("disable", unit)
+		cmd := systemd.Systemctl("disable", unit)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			msg := string(out)
 			if strings.Contains(msg, "No such file") || strings.Contains(msg, "not found") || strings.Contains(msg, "does not exist") {
@@ -239,7 +235,7 @@ func disableLeftoverUnits(units ...string) error {
 func stopLeftoverUnits(units ...string) error {
 	var first error
 	for _, unit := range units {
-		cmd := systemctlCmd("stop", unit)
+		cmd := systemd.Systemctl("stop", unit)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			msg := string(out)
 			if strings.Contains(msg, "not loaded") || strings.Contains(msg, "not found") || strings.Contains(msg, "inactive") || strings.Contains(msg, "does not exist") {

@@ -33,7 +33,7 @@ func TestUnitName_namesTheRuntimeAndTheInstance(t *testing.T) {
 		t.Errorf("UnitName = %q", got)
 	}
 	if !strings.HasPrefix(got, UnitPrefix) {
-		t.Errorf("%q does not start with %q, so the sudoers grant does not cover it", got, UnitPrefix)
+		t.Errorf("%q does not start with %q, so the privileged helper refuses it", got, UnitPrefix)
 	}
 }
 

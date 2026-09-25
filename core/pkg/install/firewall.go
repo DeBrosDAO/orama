@@ -2,22 +2,19 @@ package install
 
 import (
 	"fmt"
-	"os"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"os/exec"
 	"strings"
 )
 
-// ufwCommand builds an exec.Command for ufw, prepending sudo when the current
-// process is not running as root. At install time the provisioner runs as root;
-// at runtime the orama-node/gateway process runs as the unprivileged "orama"
-// user and relies on the NOPASSWD sudoers rule for ufw (see provisioner.go).
-// Without this, runtime firewall changes (AddWebRTCRules on `webrtc enable`)
-// silently failed and TURN relay ports stayed firewalled.
+// ufwCommand builds an exec.Command for ufw run as root. At install time the
+// provisioner is root and runs ufw directly; at runtime orama-node runs as the
+// unprivileged "orama" user and goes through sudo and orama-privhelper, which
+// allows only the TURN rules (pkg/privhelper). Without a root path, runtime
+// firewall changes (AddWebRTCRules on `webrtc enable`) silently failed and
+// TURN relay ports stayed firewalled.
 func ufwCommand(args ...string) *exec.Cmd {
-	if os.Getuid() == 0 {
-		return exec.Command("ufw", args...)
-	}
-	return exec.Command("sudo", append([]string{"ufw"}, args...)...)
+	return privhelper.Command(privhelper.ToolUFW, args...)
 }
 
 // defaultTURNRelayPortStart / defaultTURNRelayPortEnd are the full TURN relay
@@ -274,8 +271,17 @@ func (fp *FirewallProvisioner) IsActive() bool {
 // AddWebRTCRules dynamically adds TURN port rules without a full firewall reset.
 // Used when enabling WebRTC on a namespace.
 func (fp *FirewallProvisioner) AddWebRTCRules(relayStart, relayEnd int) error {
-	// ufw argv (the "ufw" binary is supplied by ufwCommand). Built as arg
-	// slices rather than strings so the sudo-aware helper runs them directly.
+	for _, args := range webRTCRuleArgs(relayStart, relayEnd) {
+		if output, err := ufwCommand(args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to add firewall rule 'ufw %s': %w\n%s", strings.Join(args, " "), err, string(output))
+		}
+	}
+	return nil
+}
+
+// webRTCRuleArgs is the ufw argv (after "ufw") of each TURN rule. Built as arg
+// slices rather than strings so the privileged helper receives them intact.
+func webRTCRuleArgs(relayStart, relayEnd int) [][]string {
 	rules := [][]string{
 		{"allow", "3478/udp"},
 		{"allow", "3478/tcp"},
@@ -284,32 +290,7 @@ func (fp *FirewallProvisioner) AddWebRTCRules(relayStart, relayEnd int) error {
 	if relayStart > 0 && relayEnd > 0 {
 		rules = append(rules, []string{"allow", fmt.Sprintf("%d:%d/udp", relayStart, relayEnd)})
 	}
-
-	for _, args := range rules {
-		if output, err := ufwCommand(args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to add firewall rule 'ufw %s': %w\n%s", strings.Join(args, " "), err, string(output))
-		}
-	}
-	return nil
-}
-
-// RemoveWebRTCRules dynamically removes TURN port rules without a full firewall reset.
-// Used when disabling WebRTC on a namespace.
-func (fp *FirewallProvisioner) RemoveWebRTCRules(relayStart, relayEnd int) error {
-	rules := [][]string{
-		{"delete", "allow", "3478/udp"},
-		{"delete", "allow", "3478/tcp"},
-		{"delete", "allow", "5349/tcp"},
-	}
-	if relayStart > 0 && relayEnd > 0 {
-		rules = append(rules, []string{"delete", "allow", fmt.Sprintf("%d:%d/udp", relayStart, relayEnd)})
-	}
-
-	for _, args := range rules {
-		// Ignore errors on delete — rule may not exist
-		ufwCommand(args...).CombinedOutput()
-	}
-	return nil
+	return rules
 }
 
 // GetStatus returns the current UFW status

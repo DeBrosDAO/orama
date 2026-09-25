@@ -595,9 +595,11 @@ func (m *Manager) getServiceName(deployment *deployments.Deployment) string {
 // still root on the running fleet, which is why deployments work at all today
 // and why they run as root; the hardened gateway unit moves it to the
 // unprivileged orama user, and then a direct systemctl stops working.
-// systemd.Systemctl is the same call the rest of the node makes: it is a plain
-// systemctl as root and adds the sudo that the sudoers rule for
-// orama-deploy-* units was written for otherwise.
+// systemd.Systemctl is the same call the rest of the node makes: a plain
+// systemctl as root, and otherwise sudo through orama-privhelper, which allows
+// these verbs on orama-deploy-* units (pkg/privhelper). A process whose unit
+// sets NoNewPrivileges — the hardened gateway unit does — cannot gain root
+// through sudo at all.
 func (m *Manager) systemdReload() error {
 	return runSystemctl("daemon-reload")
 }

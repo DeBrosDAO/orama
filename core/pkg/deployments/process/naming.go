@@ -53,15 +53,16 @@ func UnitName(runtime Runtime, namespace, name string) string {
 	return fmt.Sprintf("orama-deploy-%s@%s.service", runtime, InstanceName(namespace, name))
 }
 
-// UnitPrefix is what every deployment unit starts with. It is what the sudoers
-// grant and the namespace teardown glob are written against.
+// UnitPrefix is what every deployment unit starts with. It is what
+// orama-privhelper's unit check and the namespace teardown glob are written
+// against.
 const UnitPrefix = "orama-deploy-"
 
 // SystemctlVerbs is everything this package asks systemctl to do to a
 // deployment unit, as an unprivileged user.
 //
-// It is a list rather than prose because the sudoers grant has to cover exactly
-// it: a verb the gateway uses and the grant does not name fails at the moment a
+// It is a list rather than prose because orama-privhelper has to allow exactly
+// it: a verb the gateway uses and the helper refuses fails at the moment a
 // tenant deploys, on a node, with an error about permissions rather than about
 // the deployment. A test holds the two together.
 var SystemctlVerbs = []string{"enable", "disable", "start", "stop", "restart", "set-property"}

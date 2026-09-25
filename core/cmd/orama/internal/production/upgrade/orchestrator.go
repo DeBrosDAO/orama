@@ -69,6 +69,36 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	}
 }
 
+// upgradeStep is one step of an upgrade that runs under the new binary.
+type upgradeStep struct {
+	name   string
+	banner string
+	run    func() error
+}
+
+// preRestartSteps run under the NEW binary after the post-swap re-exec, in
+// order, before Phase 5 restarts orama-node.
+//
+//   - Tor: on the upgrade that introduces Tor, everything before the re-exec
+//     ran the OLD binary, which knew nothing of Tor and whose Phase 2b still
+//     installed Anyone. This removes Anyone and installs Tor before the
+//     supervisor that starts orama-namespace-tor@index restarts. When the
+//     pre-stop Phase 2d already ran it, this touches no network.
+//   - The privileged helper and its sudoers grant: the pre-re-exec phases were
+//     the previous release's code, which neither installs the helper nor
+//     replaces the old wildcard sudoers rules, and orama-node's first act after
+//     the restart is starting @index units through the helper.
+//   - Templates before the services that use them: orama-node's first act is
+//     starting orama-namespace-wireguard@index, so an upgrade that adds a
+//     template unit would otherwise land it after the restart that needs it.
+func (o *Orchestrator) preRestartSteps() []upgradeStep {
+	return []upgradeStep{
+		{name: "tor setup failed", banner: "\nPhase 2d: Ensuring the Tor client...\n", run: o.setup.PhaseTorEnsure},
+		{name: "privileged helper", banner: "\n🔑 Ensuring the privileged helper...\n", run: o.setup.EnsurePrivHelper},
+		{name: "namespace template installation failed", banner: "\n🔧 Phase 4b: Installing namespace systemd templates...\n", run: o.setup.InstallNamespaceTemplates},
+	}
+}
+
 // Execute runs the upgrade process
 func (o *Orchestrator) Execute() error {
 	fmt.Printf("🔄 Upgrading production installation...\n")
@@ -181,24 +211,11 @@ func (o *Orchestrator) Execute() error {
 		return fmt.Errorf("service initialization failed: %w", err)
 	}
 
-	// Phase 2d again, under the NEW binary: on the upgrade that introduces
-	// Tor, everything before the re-exec ran the OLD binary, which knew nothing
-	// of Tor and whose Phase 2b still installed Anyone. This removes Anyone and
-	// installs Tor before Phase 5 restarts the supervisor that starts
-	// orama-namespace-tor@index. When the pre-stop Phase 2d already ran it,
-	// this touches no network.
-	fmt.Printf("\nPhase 2d: Ensuring the Tor client...\n")
-	if err := o.setup.PhaseTorEnsure(); err != nil {
-		return fmt.Errorf("tor setup failed: %w", err)
-	}
-
-	// Templates before the services that use them: Phase 5 restarts orama-node,
-	// whose first act is to start orama-namespace-wireguard@index. An upgrade
-	// that adds a template unit would otherwise land it after the restart that
-	// needs it.
-	fmt.Printf("\n🔧 Phase 4b: Installing namespace systemd templates...\n")
-	if err := o.setup.InstallNamespaceTemplates(); err != nil {
-		return fmt.Errorf("namespace template installation failed: %w", err)
+	for _, step := range o.preRestartSteps() {
+		fmt.Print(step.banner)
+		if err := step.run(); err != nil {
+			return fmt.Errorf("%s: %w", step.name, err)
+		}
 	}
 
 	// Phase 5: Update systemd services.

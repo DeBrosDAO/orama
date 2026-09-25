@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -181,10 +181,7 @@ func (r *RQLiteManager) recoverCluster(ctx context.Context, peersJSONPath string
 	}
 	time.Sleep(2 * time.Second)
 
-	cmd := exec.Command("systemctl", "restart", "orama-namespace-rqlite@index.service")
-	if os.Getuid() != 0 {
-		cmd = exec.Command("sudo", "systemctl", "restart", "orama-namespace-rqlite@index.service")
-	}
+	cmd := privhelper.Command(privhelper.ToolSystemctl, "restart", "orama-namespace-rqlite@index.service")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("restart orama-namespace-rqlite@index: %w (%s)", err, out)
 	}
