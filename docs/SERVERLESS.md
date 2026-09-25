@@ -163,8 +163,8 @@ If you see the runtime error `failed to instantiate module: module[X] not instan
 
 | Function | Description |
 |----------|-------------|
-| `db_query_v2(sql, argsJSON)` → JSON | **Recommended.** Execute SELECT. Returns `{"rows": [...], "error": "..."}` — distinguishes empty result from query failure. |
-| `db_execute_v2(sql, argsJSON)` → JSON | **Recommended.** Execute INSERT/UPDATE/DELETE. Returns `{"rows_affected": N, "last_insert_id": M, "error": "..."}` — distinguishes 0-rows-affected from a real failure. |
+| `db_query_v2(sql, argsJSON)` → JSON | **Recommended.** Execute SELECT. Returns `{"rows": [...], "error": "...", "code": "..."}` — distinguishes empty result from query failure. `code` classifies the failure; see the table under Database Transactions. |
+| `db_execute_v2(sql, argsJSON)` → JSON | **Recommended.** Execute INSERT/UPDATE/DELETE. Returns `{"rows_affected": N, "last_insert_id": M, "error": "...", "code": "..."}` — distinguishes 0-rows-affected from a real failure. A duplicate on a unique key is `code: "CONSTRAINT_VIOLATION"` with `error` naming the constraint. |
 | `db_query(sql, argsJSON)` → JSON | Legacy. Execute SELECT, returns JSON array of rows. No way to surface query errors — prefer `db_query_v2`. |
 | `db_execute(sql, argsJSON)` → int | Legacy. Returns affected rows ONLY. **Returns 0 for both "0 rows" and "SQL error" — caller can't distinguish.** Prefer `db_execute_v2`. |
 | `db_transaction(opsJSON)` → JSON | Atomic batch — see "Database Transactions" below. |
@@ -239,16 +239,30 @@ Always check `committed`. A non-empty return does **not** imply the writes lande
   single statement: a limit violation, an expired deadline, a lost leader, a
   transport fault. `code` classifies it.
 
-**`code` values** — always set together with `error`, never on success:
+Every failed op's `results` entry carries its own `code` as well, next to its
+`error`. For `db_transaction` a statement failure — a `CONSTRAINT_VIOLATION`
+included — is reported **only** there, in `results[failed_index]`; the
+top-level `error`/`code` stay empty. `exec_and_publish` additionally copies the
+failing op's reason to its top-level `error`/`code`. Branch on the code; the
+SQLite wording in `error` is for logs, not a contract.
+
+Batch-level `code` is sent from 0.122.103; per-op `code` and the `code` on
+`db_execute_v2` / `db_query_v2` from 0.200.0. An older gateway sends `error`
+without `code`: treat a missing code as unclassified.
+
+**`code` values** — always set together with `error`, never on success. The
+same codes appear on batch-level failures, on each failed op, and on
+`db_execute_v2` / `db_query_v2`:
 
 | Code | Meaning | Retry? |
 |---|---|---|
+| `CONSTRAINT_VIOLATION` | A statement violated a UNIQUE, PRIMARY KEY, NOT NULL, CHECK or FOREIGN KEY constraint. Which one is in `error`. A trigger's `RAISE(ABORT, …)` whose message contains one of those `<KIND> constraint failed` phrases produces it too, so check `error` before treating it as "already recorded" | No — the same write fails the same way every time |
 | `TOO_MANY_STATEMENTS` | Over the per-batch statement cap | No — split the batch |
 | `PAYLOAD_TOO_LARGE` | Result rows/bytes over the caps | No — paginate |
 | `DEADLINE_EXCEEDED` | The call ran past its deadline | Yes |
 | `UNAVAILABLE` | Database unreachable, or leader lost mid-call | Yes |
 | `INVALID_ARGUMENT` | Malformed request (bad JSON, unknown op kind) | No — fix the caller |
-| `INTERNAL` | Unclassified — read `error` | Depends |
+| `INTERNAL` | Unclassified — read `error`. Every other statement SQLite rejects (missing table or column, syntax error) is `INTERNAL`: a statement failure is never given a transport code, whatever identifiers its message names | Depends; a statement failure usually will not succeed on retry (a full disk or a locked database can) |
 
 The same `error` + `code` pair is returned by `db_query_batch` and
 `exec_and_publish` when they fail at the host level. None of the three ever
@@ -265,7 +279,10 @@ namespace outage diagnosable only by guessing (bugboard #175).
   own `results` entry gets `error` and `committed` stays `true`.
 - Result order always matches input order.
 
-**Limits** — exceeding any of these fails the whole batch with `error` set:
+**Limits** — exceeding the statement cap or the deadline fails the whole batch
+with `error` set. The row cap truncates only that op's rows; the byte cap is
+per batch, and every op after the budget runs out comes back with no rows. Both
+set that op's `code: PAYLOAD_TOO_LARGE`:
 
 | Limit | Value | Applies to |
 |---|---|---|
@@ -284,6 +301,10 @@ namespace outage diagnosable only by guessing (bugboard #175).
 resultBytes := callDBTransaction(ops)
 
 var res struct {
+    Results []struct {
+        Error string `json:"error"`
+        Code  string `json:"code"`
+    } `json:"results"`
     Committed   bool   `json:"committed"`
     FailedIndex int    `json:"failed_index"`
     Error       string `json:"error"`
@@ -300,7 +321,11 @@ if res.Error != "" {
     }
 }
 if !res.Committed {
-    return fmt.Errorf("batch rolled back at op %d", res.FailedIndex)
+    failed := res.Results[res.FailedIndex]
+    if failed.Code == "CONSTRAINT_VIOLATION" {
+        return errAlreadyRecorded(failed.Error)          // do not retry
+    }
+    return fmt.Errorf("batch rolled back at op %d [%s]: %s", res.FailedIndex, failed.Code, failed.Error)
 }
 ```
 

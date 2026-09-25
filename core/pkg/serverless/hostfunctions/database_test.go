@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/rqlite/gorqlite"
 )
 
 // fakeBatchClient is a tiny rqlite.Client stub that only implements Batch,
@@ -272,6 +274,9 @@ func TestDBExecuteV2_sql_error_populates_error_field(t *testing.T) {
 	if !strings.Contains(res.Error, "no such column") {
 		t.Errorf("error should preserve SQL message, got %q", res.Error)
 	}
+	if res.Code != rqlite.BatchCodeInternal {
+		t.Errorf("code = %q, want %q for an unrecognised failure", res.Code, rqlite.BatchCodeInternal)
+	}
 	if res.RowsAffected != 0 {
 		t.Errorf("rows_affected should be 0 on failure, got %d", res.RowsAffected)
 	}
@@ -325,6 +330,63 @@ func TestDBQueryV2_query_error_populates_error_field(t *testing.T) {
 	}
 	if res.Rows == nil {
 		t.Error("rows must be non-nil even on error (stable shape)")
+	}
+}
+
+// bugboard #267: the v2 envelopes carry a code, and a statement error is
+// classified by type, never by its text.
+func TestDBV2_codes(t *testing.T) {
+	constraint := gorqlite.StatementErrors{errors.New("UNIQUE constraint failed: payments.tx")}
+	columnNamedTimeout := gorqlite.StatementErrors{errors.New("no such column: timeout")}
+	transport := errFakeDBFailure{msg: "Post \"http://127.0.0.1:10001/db/execute\": dial tcp: connect: connection refused"}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"constraint", constraint, rqlite.BatchCodeConstraintViolation},
+		{"column named timeout", columnNamedTimeout, rqlite.BatchCodeInternal},
+		{"transport", transport, rqlite.BatchCodeUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHFWithDB(&fakeExecClient{execErr: tc.err, queryErr: tc.err})
+
+			out, err := h.DBExecuteV2(context.Background(), "INSERT ...", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ex dbExecuteV2Result
+			if err := json.Unmarshal(out, &ex); err != nil {
+				t.Fatal(err)
+			}
+			if ex.Code != tc.want || ex.Error == "" {
+				t.Errorf("db_execute_v2 = %+v, want an error coded %q", ex, tc.want)
+			}
+
+			out, err = h.DBQueryV2(context.Background(), "SELECT 1", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var q dbQueryV2Result
+			if err := json.Unmarshal(out, &q); err != nil {
+				t.Fatal(err)
+			}
+			if q.Code != tc.want || q.Error == "" {
+				t.Errorf("db_query_v2 = %+v, want an error coded %q", q, tc.want)
+			}
+		})
+	}
+}
+
+func TestDBV2_successCarriesNoCode(t *testing.T) {
+	h := newHFWithDB(&fakeExecClient{execRows: 1})
+	out, err := h.DBExecuteV2(context.Background(), "INSERT ...", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `"code"`) || strings.Contains(string(out), `"error"`) {
+		t.Errorf("success envelope carries error fields: %s", out)
 	}
 }
 

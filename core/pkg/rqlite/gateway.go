@@ -137,6 +137,18 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
 }
 
+// batchFailureStatus is the HTTP status for a batch-level failure: 400 for a
+// request the caller must change, 503 for one worth retrying, 500 otherwise.
+func batchFailureStatus(code string) int {
+	switch code {
+	case BatchCodeTooManyStatements, BatchCodeInvalidArgument:
+		return http.StatusBadRequest
+	case BatchCodeUnavailable, BatchCodeDeadlineExceeded:
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusInternalServerError
+}
+
 func onlyMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	if r.Method != method {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -494,21 +506,36 @@ func (g *HTTPGateway) handleTransaction(w http.ResponseWriter, r *http.Request) 
 
 	batchRes, err := g.Client.Batch(ctx, batchOps)
 	if err != nil && batchRes == nil {
-		// Setup/transport failure (no native conn, oversized batch, etc.)
-		writeError(w, http.StatusInternalServerError, err.Error())
+		// Refused before it ran: an oversized batch, an unknown op kind, no
+		// native connection.
+		code := ClassifyBatchError(err)
+		writeJSON(w, batchFailureStatus(code), map[string]any{"error": err.Error(), "code": code})
+		return
+	}
+
+	// A batch with no statement result — lost leader, transport fault,
+	// deadline — is a server-side failure, not a rollback of the caller's op.
+	// For a deadline or reset after the request was sent, whether the writes
+	// landed is unknown.
+	if batchRes != nil && batchRes.Error != "" {
+		writeJSON(w, batchFailureStatus(batchRes.Code), map[string]any{
+			"error": batchRes.Error,
+			"code":  batchRes.Code,
+		})
 		return
 	}
 
 	// Rollback path: 4xx-style response so callers can branch.
 	if batchRes != nil && !batchRes.Committed {
-		failingErr := ""
+		var failing OpResult
 		if batchRes.FailedIndex < len(batchRes.Results) {
-			failingErr = batchRes.Results[batchRes.FailedIndex].Error
+			failing = batchRes.Results[batchRes.FailedIndex]
 		}
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"status":       "rollback",
 			"failed_index": batchRes.FailedIndex,
-			"error":        failingErr,
+			"error":        failing.Error,
+			"code":         failing.Code,
 		})
 		return
 	}

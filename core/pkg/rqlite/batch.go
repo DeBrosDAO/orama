@@ -17,6 +17,7 @@ package rqlite
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync/atomic"
@@ -72,6 +73,28 @@ type OpResult struct {
 	LastInsertID int64                    `json:"last_insert_id,omitempty"`
 	Rows         []map[string]interface{} `json:"rows,omitempty"`
 	Error        string                   `json:"error,omitempty"`
+	// Code classifies Error — one of the BatchCode* constants. Set whenever
+	// Error is, so a caller branches on the code and logs the message; the
+	// SQLite wording in Error is not a contract.
+	Code string `json:"code,omitempty"`
+}
+
+// failedOp is the result of an op that failed with err. Error and Code are
+// always set together.
+func failedOp(kind BatchOpKind, err error) OpResult {
+	return OpResult{Kind: kind, Error: err.Error(), Code: ClassifyBatchError(err)}
+}
+
+// capExceededOp is the result of an op cut off by a result-size cap.
+func capExceededOp(rows []map[string]interface{}, msg string) OpResult {
+	return OpResult{Kind: BatchOpQuery, Rows: rows, Error: msg, Code: BatchCodePayloadTooLarge}
+}
+
+// failedStatement is the result of an op whose statement SQLite rejected.
+// rqlite reports that as plain text on the op, so it is marked here as a
+// statement error before it is classified.
+func failedStatement(kind BatchOpKind, err error) OpResult {
+	return failedOp(kind, &StatementError{Err: err})
 }
 
 // BatchResult is the response from a transactional batch.
@@ -138,7 +161,7 @@ func (c *client) BatchWithSeq(ctx context.Context, namespace string, userOps []B
 		return nil, 0, fmt.Errorf("rqlite.BatchWithSeq: namespace required")
 	}
 	if c.conn == nil {
-		return nil, 0, fmt.Errorf("rqlite.BatchWithSeq: native gorqlite connection not configured")
+		return nil, 0, fmt.Errorf("rqlite.BatchWithSeq: %w", ErrNoNativeConnection)
 	}
 
 	now := time.Now().Unix()
@@ -213,6 +236,8 @@ func trimWrappedResults(res *BatchResult, userOpCount int) *BatchResult {
 	}
 	out := &BatchResult{
 		Committed: res.Committed,
+		Error:     res.Error,
+		Code:      res.Code,
 	}
 	// Drop the first (seq UPSERT) and trailing (seq SELECT) entries.
 	end := len(res.Results) - 1
@@ -306,7 +331,7 @@ func (c *client) BatchQueryConsistency(ctx context.Context, ops []BatchOp, rc Re
 	}
 	conn := c.queryConn(rc)
 	if conn == nil {
-		return nil, fmt.Errorf("rqlite.BatchQuery: native gorqlite connection not configured (use NewClientWithDSN or NewClientWithConn)")
+		return nil, fmt.Errorf("rqlite.BatchQuery: %w", ErrNoNativeConnection)
 	}
 
 	// #1022: gate none-reads on local-follower freshness. When the dedicated
@@ -332,12 +357,14 @@ func (c *client) BatchQueryConsistency(ctx context.Context, ops []BatchOp, rc Re
 
 	qrs, err := conn.QueryParameterizedContext(ctx, stmts)
 	if err != nil {
-		// gorqlite returns a slice of QueryResult even on partial failure;
-		// extract per-op errors if available, else surface the joined err.
-		if len(qrs) == 0 {
+		// A statement SQLite rejected is reported on its own op (qr.Err) and
+		// the others still carry their rows. Anything else never reached a
+		// statement — gorqlite then puts the error on a single first result,
+		// which would read as "op 0 failed" — so it fails the whole batch.
+		var stmtErrs gorqlite.StatementErrors
+		if !errors.As(err, &stmtErrs) || len(qrs) == 0 {
 			return nil, fmt.Errorf("rqlite.BatchQuery: %w", err)
 		}
-		// Fall through to map qrs → OpResults; per-op errors are in qr.Err.
 	}
 
 	// Track aggregate result size across all ops as a defense-in-depth
@@ -349,11 +376,8 @@ func (c *client) BatchQueryConsistency(ctx context.Context, ops []BatchOp, rc Re
 	out := make([]OpResult, len(ops))
 	for i, qr := range qrs {
 		if totalBytes >= MaxBatchQueryTotalBytes {
-			out[i] = OpResult{
-				Kind: BatchOpQuery,
-				Error: fmt.Sprintf("rqlite.BatchQuery: aggregate result bytes exceeded cap (%d) — earlier ops consumed the budget; this op result truncated",
-					MaxBatchQueryTotalBytes),
-			}
+			out[i] = capExceededOp(nil, fmt.Sprintf("rqlite.BatchQuery: aggregate result bytes exceeded cap (%d) — earlier ops consumed the budget; this op result truncated",
+				MaxBatchQueryTotalBytes))
 			continue
 		}
 		opRes := queryResultToOpResult(qr)
@@ -366,6 +390,7 @@ func (c *client) BatchQueryConsistency(ctx context.Context, ops []BatchOp, rc Re
 		out[i] = OpResult{
 			Kind:  BatchOpQuery,
 			Error: "rqlite.BatchQuery: no result returned for op " + fmt.Sprint(i),
+			Code:  BatchCodeInternal,
 		}
 	}
 	return out, nil
@@ -437,15 +462,13 @@ func (c *client) BatchQueryFresh(ctx context.Context, ops []BatchOp, freshness t
 			out = append(out, OpResult{
 				Kind:  BatchOpQuery,
 				Error: "rqlite.BatchQueryFresh: no result returned for op " + fmt.Sprint(i),
+				Code:  BatchCodeInternal,
 			})
 			continue
 		}
 		if totalBytes >= MaxBatchQueryTotalBytes {
-			out = append(out, OpResult{
-				Kind: BatchOpQuery,
-				Error: fmt.Sprintf("rqlite.BatchQueryFresh: aggregate result bytes exceeded cap (%d) — earlier ops consumed the budget; this op result truncated",
-					MaxBatchQueryTotalBytes),
-			})
+			out = append(out, capExceededOp(nil, fmt.Sprintf("rqlite.BatchQueryFresh: aggregate result bytes exceeded cap (%d) — earlier ops consumed the budget; this op result truncated",
+				MaxBatchQueryTotalBytes)))
 			continue
 		}
 		opRes := rqliteResultToOpResult(results[i])
@@ -493,22 +516,15 @@ func estimateOpResultBytes(r OpResult) int {
 // `SELECT * FROM <large_table>` could OOM the gateway.
 func queryResultToOpResult(qr gorqlite.QueryResult) OpResult {
 	if qr.Err != nil {
-		return OpResult{
-			Kind:  BatchOpQuery,
-			Error: qr.Err.Error(),
-		}
+		return failedStatement(BatchOpQuery, qr.Err)
 	}
 	// Materialize all rows as map[string]interface{} via the associative
 	// iterator — matches how c.Query consumers expect rows to look.
 	var rows []map[string]interface{}
 	for qr.Next() {
 		if len(rows) >= MaxBatchQueryRowsPerOp {
-			return OpResult{
-				Kind: BatchOpQuery,
-				Rows: rows,
-				Error: fmt.Sprintf("rqlite.BatchQuery: row cap exceeded (%d) — paginate via LIMIT/OFFSET",
-					MaxBatchQueryRowsPerOp),
-			}
+			return capExceededOp(rows, fmt.Sprintf("rqlite.BatchQuery: row cap exceeded (%d) — paginate via LIMIT/OFFSET",
+				MaxBatchQueryRowsPerOp))
 		}
 		row, mapErr := qr.Map()
 		if mapErr != nil {
@@ -516,6 +532,7 @@ func queryResultToOpResult(qr gorqlite.QueryResult) OpResult {
 				Kind:  BatchOpQuery,
 				Rows:  rows,
 				Error: "rqlite.BatchQuery: row map: " + mapErr.Error(),
+				Code:  BatchCodeInternal,
 			}
 		}
 		rows = append(rows, row)
@@ -540,9 +557,14 @@ func queryResultToOpResult(qr gorqlite.QueryResult) OpResult {
 //
 // Returns:
 //   - (result, nil) when all execs commit. result.Committed is true.
-//   - (result, err) when an exec fails. result.Committed is false and
-//     result.FailedIndex points to the failing op. The error is nil-safe to
-//     ignore if you only need the structured result.
+//   - (result, err) when an exec statement fails. result.Committed is false,
+//     result.FailedIndex points to the failing op, whose entry carries the
+//     error and code; err wraps a *StatementError.
+//   - (result, err) when no statement result was received (transport
+//     fault, lost leader, deadline). result.Committed is false,
+//     result.Error/Code carry the reason, and no op is blamed. For a deadline
+//     or reset after the request was sent, whether the writes landed is
+//     unknown.
 //   - (nil, err) for setup failures (no native connection, validation, etc.).
 func (c *client) Batch(ctx context.Context, ops []BatchOp) (*BatchResult, error) {
 	if len(ops) == 0 {
@@ -552,7 +574,7 @@ func (c *client) Batch(ctx context.Context, ops []BatchOp) (*BatchResult, error)
 		return nil, fmt.Errorf("rqlite.Batch: too many ops (%d > max %d)", len(ops), MaxBatchOps)
 	}
 	if c.conn == nil {
-		return nil, fmt.Errorf("rqlite.Batch: native gorqlite connection not configured (use NewClientWithDSN or NewClientWithConn)")
+		return nil, fmt.Errorf("rqlite.Batch: %w", ErrNoNativeConnection)
 	}
 
 	// Split exec vs. query, preserving original index for result ordering.
@@ -589,17 +611,21 @@ func (c *client) Batch(ctx context.Context, ops []BatchOp) (*BatchResult, error)
 		}
 		wrs, err := c.conn.WriteParameterizedContext(ctx, stmts)
 		if err != nil {
-			// gorqlite returns one WriteResult per statement, even on error.
-			// Find the first failing one to populate FailedIndex.
-			for i, wr := range wrs {
-				if wr.Err != nil {
-					result.FailedIndex = execs[i].idx
-					result.Results[execs[i].idx] = OpResult{
-						Kind:  BatchOpExec,
-						Error: wr.Err.Error(),
+			// A statement SQLite rejected: gorqlite returns one WriteResult
+			// per statement and marks the batch error StatementErrors. Find
+			// the first failing one to populate FailedIndex. A transport
+			// failure is not StatementErrors; gorqlite puts it on a single
+			// first result, which must not be read as "op 0 failed".
+			var stmtErrs gorqlite.StatementErrors
+			if errors.As(err, &stmtErrs) {
+				for i, wr := range wrs {
+					if wr.Err != nil {
+						stmtErr := &StatementError{Err: wr.Err}
+						result.FailedIndex = execs[i].idx
+						result.Results[execs[i].idx] = failedOp(BatchOpExec, stmtErr)
+						return result, fmt.Errorf("rqlite.Batch: exec failed at op %d: %w",
+							execs[i].idx, stmtErr)
 					}
-					return result, fmt.Errorf("rqlite.Batch: exec failed at op %d: %w",
-						execs[i].idx, wr.Err)
 				}
 			}
 			// No per-statement error: the batch never reached a statement — a
@@ -629,10 +655,7 @@ func (c *client) Batch(ctx context.Context, ops []BatchOp) (*BatchResult, error)
 		var rows []map[string]interface{}
 		err := c.Query(ctx, &rows, t.op.SQL, t.op.Args...)
 		if err != nil {
-			result.Results[t.idx] = OpResult{
-				Kind:  BatchOpQuery,
-				Error: err.Error(),
-			}
+			result.Results[t.idx] = failedOp(BatchOpQuery, err)
 			continue
 		}
 		result.Results[t.idx] = OpResult{

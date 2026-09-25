@@ -3,7 +3,10 @@ package rqlite
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
+
+	"github.com/rqlite/gorqlite"
 )
 
 // Batch-level error codes (bugboard #175).
@@ -36,6 +39,12 @@ const (
 	// leader mid-call. Transient.
 	BatchCodeUnavailable = "UNAVAILABLE"
 
+	// BatchCodeConstraintViolation — a statement violated a UNIQUE, PRIMARY
+	// KEY, NOT NULL, CHECK or FOREIGN KEY constraint. Deterministic: the same
+	// write fails the same way every time, so retrying it cannot succeed. For
+	// an INSERT guarded by a unique key this is how "already recorded" reads.
+	BatchCodeConstraintViolation = "CONSTRAINT_VIOLATION"
+
 	// BatchCodeInvalidArgument — the request itself was malformed: unparseable
 	// JSON, an unknown op kind, a missing required field, an illegal
 	// consistency/freshness combination. Deterministic; fix the caller.
@@ -46,7 +55,16 @@ const (
 	BatchCodeInternal = "INTERNAL"
 )
 
-// ClassifyBatchError maps a batch failure to one of the codes above.
+// ClassifyBatchError maps a failure to one of the codes above. It classifies
+// both batch-level failures and the error of a single op (OpResult.Code).
+//
+// A statement error — one SQLite reported for a statement it ran, as opposed
+// to a failure to reach or use the database — is recognised by its type, never
+// by its text, and only ever gets a statement code. Its text contains the
+// statement's own identifiers: matched against the transport patterns below,
+// "no such column: timeout" would read as a deadline and "no such table:
+// geofences" as an EOF, and the caller would retry a statement that can never
+// succeed.
 //
 // Matching is by sentinel error first and message substring second. The
 // substring arm exists because the failures worth distinguishing here come from
@@ -68,6 +86,15 @@ func ClassifyBatchError(err error) string {
 		return BatchCodeDeadlineExceeded
 	case errors.Is(err, ErrFreshnessViolation):
 		return BatchCodeUnavailable
+	}
+
+	if isStatementError(err) {
+		return classifyStatementError(err)
+	}
+	if errors.Is(err, ErrNoNativeConnection) {
+		// A gateway built without the connection stays that way; retrying
+		// cannot help.
+		return BatchCodeInternal
 	}
 
 	msg := strings.ToLower(err.Error())
@@ -100,3 +127,49 @@ func ClassifyBatchError(err error) string {
 	}
 	return BatchCodeInternal
 }
+
+// StatementError is a failure SQLite reported for one statement it ran — a
+// constraint, a missing table, a syntax error — as opposed to a failure to
+// reach or use the database. rqlite reports these per statement as plain
+// text; wrapping them in this type is what lets ClassifyBatchError tell them
+// from a transport fault.
+type StatementError struct {
+	Err error
+}
+
+func (e *StatementError) Error() string { return e.Err.Error() }
+
+func (e *StatementError) Unwrap() error { return e.Err }
+
+// isStatementError reports whether err is, or wraps, a statement failure:
+// ours, or gorqlite's StatementErrors, which is what its database/sql driver
+// returns for a statement rqlite rejected.
+func isStatementError(err error) bool {
+	var ours *StatementError
+	if errors.As(err, &ours) {
+		return true
+	}
+	var theirs gorqlite.StatementErrors
+	return errors.As(err, &theirs)
+}
+
+// classifyStatementError codes a statement failure. SQLite words every
+// constraint failure "<KIND> constraint failed: ..." (UNIQUE, PRIMARY KEY,
+// NOT NULL, CHECK, FOREIGN KEY). Every other statement failure has no
+// dedicated code.
+func classifyStatementError(err error) string {
+	if constraintFailure.MatchString(err.Error()) {
+		return BatchCodeConstraintViolation
+	}
+	return BatchCodeInternal
+}
+
+// constraintFailure is SQLite's wording for each constraint kind. Anchored on
+// the kind so a quoted identifier that merely contains "constraint failed" is
+// not read as one.
+var constraintFailure = regexp.MustCompile(`\b(UNIQUE|PRIMARY KEY|NOT NULL|CHECK|FOREIGN KEY) constraint failed\b`)
+
+// ErrNoNativeConnection is returned by the batch APIs on a client built
+// without a native gorqlite connection (NewClient rather than
+// NewClientWithDSN). A configuration fault, not a transient one.
+var ErrNoNativeConnection = errors.New("native gorqlite connection not configured (use NewClientWithDSN or NewClientWithConn)")

@@ -72,6 +72,10 @@ type dbExecuteV2Result struct {
 	RowsAffected int64  `json:"rows_affected"`
 	LastInsertID int64  `json:"last_insert_id,omitempty"`
 	Error        string `json:"error,omitempty"`
+	// Code classifies Error — one of the rqlite.BatchCode* constants, e.g.
+	// CONSTRAINT_VIOLATION (never retry) or UNAVAILABLE (retry). Set whenever
+	// Error is (bugboard #267).
+	Code string `json:"code,omitempty"`
 }
 
 // DBExecuteV2 is the typed equivalent of DBExecute. Returns the same shape
@@ -95,6 +99,7 @@ func (h *HostFunctions) DBExecuteV2(ctx context.Context, query string, args []in
 	result, err := h.db.Exec(ctx, query, args...)
 	if err != nil {
 		out.Error = err.Error()
+		out.Code = rqlite.ClassifyBatchError(err)
 		buf, mErr := json.Marshal(out)
 		if mErr != nil {
 			return nil, &serverless.HostFunctionError{Function: "db_execute_v2", Cause: mErr}
@@ -116,6 +121,9 @@ func (h *HostFunctions) DBExecuteV2(ctx context.Context, query string, args []in
 type dbQueryV2Result struct {
 	Rows  []map[string]interface{} `json:"rows"`
 	Error string                   `json:"error,omitempty"`
+	// Code classifies Error — one of the rqlite.BatchCode* constants. Set
+	// whenever Error is (bugboard #267).
+	Code string `json:"code,omitempty"`
 }
 
 // DBQueryV2 is the typed equivalent of DBQuery. Distinguishes "empty
@@ -134,6 +142,7 @@ func (h *HostFunctions) DBQueryV2(ctx context.Context, query string, args []inte
 	out := dbQueryV2Result{Rows: []map[string]interface{}{}}
 	if err := h.db.Query(ctx, &out.Rows, query, args...); err != nil {
 		out.Error = err.Error()
+		out.Code = rqlite.ClassifyBatchError(err)
 		// Reset rows to non-nil empty on error so callers get a stable shape.
 		out.Rows = []map[string]interface{}{}
 	}
