@@ -86,6 +86,7 @@ func (d Defaults) IsEmpty() bool {
 type Manager struct {
 	store    ConfigStore
 	devices  PushDeviceStore
+	topics   PushTopicStore // FEAT-265; set with SetTopicStore
 	defaults Defaults
 	factory  ProviderFactory
 	logger   *zap.Logger

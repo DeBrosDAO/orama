@@ -336,7 +336,7 @@ func TestSend_dispatcher_called_for_user(t *testing.T) {
 	h := newHandlers(&fakeStore{}, dispatcher)
 
 	body, _ := json.Marshal(SendRequest{
-		UserID: "target-user", Title: "hi", Body: "world",
+		UserID: "target-user", PushContent: PushContent{Title: "hi", Body: "world"},
 	})
 	req := withAuth(httptest.NewRequest(http.MethodPost, "/v1/push/send", bytes.NewReader(body)), "myapp", "u1")
 	rr := httptest.NewRecorder()
@@ -431,7 +431,7 @@ func TestSend_adminApiKeyWithoutJWTIsAccepted(t *testing.T) {
 	})
 	h := newHandlers(&fakeStore{}, dispatcher)
 
-	body, _ := json.Marshal(SendRequest{UserID: "target-user", Title: "hi", Body: "world"})
+	body, _ := json.Marshal(SendRequest{UserID: "target-user", PushContent: PushContent{Title: "hi", Body: "world"}})
 	// namespace set (as an API key does), userID empty (no JWT).
 	req := withAuth(httptest.NewRequest(http.MethodPost, "/v1/push/send", bytes.NewReader(body)), "anchat-v2", "")
 	rr := httptest.NewRecorder()
@@ -451,7 +451,7 @@ func TestSend_withoutNamespaceIsRejected(t *testing.T) {
 	dispatcher := push.New(&fakeStore{}, zap.NewNop())
 	h := newHandlers(&fakeStore{}, dispatcher)
 
-	body, _ := json.Marshal(SendRequest{UserID: "target-user", Title: "hi"})
+	body, _ := json.Marshal(SendRequest{UserID: "target-user", PushContent: PushContent{Title: "hi"}})
 	req := httptest.NewRequest(http.MethodPost, "/v1/push/send", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
 	h.SendHandler(rr, req)
@@ -474,7 +474,7 @@ func TestSend_walletJWTStillAccepted(t *testing.T) {
 	})
 	h := newHandlers(&fakeStore{}, dispatcher)
 
-	body, _ := json.Marshal(SendRequest{UserID: "target-user", Title: "hi"})
+	body, _ := json.Marshal(SendRequest{UserID: "target-user", PushContent: PushContent{Title: "hi"}})
 	req := withAuth(httptest.NewRequest(http.MethodPost, "/v1/push/send", bytes.NewReader(body)), "anchat-v2", "0xOwner")
 	rr := httptest.NewRecorder()
 	h.SendHandler(rr, req)

@@ -106,6 +106,7 @@ var tablePlacement = map[string]tableNote{
 	"namespace_rate_limit_config": {PlacementNamespace, "read on every request to this namespace"},
 	"namespace_webrtc_config":     {PlacementNamespace, "read on the WebRTC path, per namespace"},
 	"push_devices":                {PlacementNamespace, "the tenant's devices"},
+	"push_topics":                 {PlacementNamespace, "the tenant's devices, addressed by rotating topic (FEAT-265)"},
 	"webrtc_rooms":                {PlacementNamespace, "the tenant's rooms"},
 	"request_logs":                {PlacementNamespace, "this gateway's own request log"},
 	"subscriptions":               {PlacementNamespace, "dead since 002_core; stripped separately by name collision"},

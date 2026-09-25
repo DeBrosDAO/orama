@@ -937,6 +937,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hPubSubPublishBatch).Export("pubsub_publish_batch").
 			NewFunctionBuilder().WithFunc(e.hPushSend).Export("push_send").
 			NewFunctionBuilder().WithFunc(e.hPushSendV2).Export("push_send_v2").
+			NewFunctionBuilder().WithFunc(e.hPushSendTopic).Export("push_send_topic").
 			NewFunctionBuilder().WithFunc(e.hTurnCredentials).Export("turn_credentials").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubBridge).Export("ws_pubsub_bridge").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubUnbridge).Export("ws_pubsub_unbridge").
@@ -1778,6 +1779,28 @@ func (e *Engine) hPushSendV2(ctx context.Context, mod api.Module,
 		e.logger.Warn("host function push_send_v2 failed",
 			zap.String("user_id", string(userID)),
 			zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// hPushSendTopic is the WASM-callable wrapper for PushSendTopic (FEAT-265):
+// push to the device registered under a rotating topic id. Same result
+// convention as push_send_v2 — a packed uint64 (ptr<<32 | len) of the JSON
+// envelope, or 0 on a setup/validation error. The topic id is not logged.
+func (e *Engine) hPushSendTopic(ctx context.Context, mod api.Module,
+	topicIDPtr, topicIDLen, msgPtr, msgLen uint32) uint64 {
+	topicID, ok := e.executor.ReadFromGuest(mod, topicIDPtr, topicIDLen)
+	if !ok {
+		return 0
+	}
+	msgJSON, ok := e.executor.ReadFromGuest(mod, msgPtr, msgLen)
+	if !ok {
+		return 0
+	}
+	out, err := e.hostServices.PushSendTopic(ctx, string(topicID), msgJSON)
+	if err != nil {
+		e.logger.Warn("host function push_send_topic failed", zap.Error(err))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)

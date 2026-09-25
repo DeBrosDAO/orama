@@ -6,7 +6,10 @@
 //	GET    /v1/push/devices         — list caller's registered devices (tokens omitted)
 //	POST   /v1/push/devices         — register / update a device
 //	DELETE /v1/push/devices/{id}    — unregister a device
-//	POST   /v1/push/send            — send a push to a user (admin/internal scope)
+//	POST   /v1/push/send            — send a push to a user (push:write grant)
+//	POST   /v1/push/topics          — register / refresh a rotating topic (topics.go)
+//	DELETE /v1/push/topics          — remove a rotating topic
+//	POST   /v1/push/topics/send     — send a push to a topic (/v1/push/send's grant)
 //
 // Device tokens are stored AES-256-GCM-encrypted in RQLite via the
 // pkg/push.RqliteDeviceStore. Tokens are NEVER returned by any endpoint —
@@ -123,7 +126,14 @@ type PushDeviceView struct {
 // requires the caller to act on behalf of their own namespace; finer
 // per-user authorization is the app's responsibility.
 type SendRequest struct {
-	UserID   string                 `json:"user_id"`
+	UserID string `json:"user_id"`
+	PushContent
+}
+
+// PushContent is the message both send routes deliver: POST /v1/push/send
+// (to an account's devices) and POST /v1/push/topics/send (to a topic).
+// Embedded, so its fields sit at the top level of the JSON body.
+type PushContent struct {
 	Title    string                 `json:"title"`
 	Body     string                 `json:"body"`
 	Channel  string                 `json:"channel,omitempty"`
@@ -135,6 +145,20 @@ type SendRequest struct {
 	// map it to apns-collapse-id / Expo collapseId so a superseded push
 	// replaces the prior one on-device instead of stacking.
 	MessageID string `json:"message_id,omitempty"`
+}
+
+// message converts the wire content to the provider-agnostic message.
+func (c PushContent) message() push.PushMessage {
+	return push.PushMessage{
+		Title:     c.Title,
+		Body:      c.Body,
+		Channel:   c.Channel,
+		Priority:  pickPriority(c.Priority),
+		Badge:     c.Badge,
+		Sound:     c.Sound,
+		Data:      c.Data,
+		MessageID: c.MessageID,
+	}
 }
 
 // SendResponse is the body of POST /v1/push/send.

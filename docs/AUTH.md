@@ -537,7 +537,9 @@ from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.
 - Resource selectors are enforced on pubsub, function invocation, storage and
   the cache. `db` and deployments both narrow `admin`, which is the whole
   control plane, so they cannot be narrowed until that vocabulary is split; a
-  push selector has no topic in the push API to name (feat-394).
+  push selector has nothing in the push API to name (feat-394) — the rotating
+  push topics of FEAT-265 are random ids a device picks, not something a grant
+  could be written against.
 - A namespace's RQLite binds every interface; the firewall, not the bind
   address, is what keeps it off the internet. The namespace gateway in front of
   it now binds the overlay (chg-387).

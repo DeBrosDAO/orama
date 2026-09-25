@@ -11,26 +11,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// validProviders is the allowlist for the `provider` field on RegisterDevice.
-// Keep in sync with what the dispatcher actually has registered at startup.
-//
-// "apns_voip" (bugboard #408) is the PushKit/CallKit variant of "apns" —
-// same underlying credentials, distinct dispatcher entry. Tenants
-// register a second PushDevice row per iPhone with the PushKit
-// voipPushToken to enable CallKit-triggering incoming-call pushes,
-// keyed by a distinct device_id (typically `<base>:voip`) so the
-// `device_id` PK doesn't collide with the alert-path row.
-var validProviders = map[string]struct{}{
-	"ntfy":      {},
-	"expo":      {},
-	"apns":      {},
-	"apns_voip": {},
-}
-
-// MaxTokenBytes caps the device-token length to prevent abuse.
-// Real ntfy topic paths and Expo tokens are well under this.
-const MaxTokenBytes = 512
-
 // RegisterDeviceHandler handles POST /v1/push/devices.
 //
 // The caller must be authenticated; their JWT subject (Sub) is used as the
@@ -59,7 +39,7 @@ func (h *Handlers) RegisterDeviceHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)
 	var body RegisterDeviceRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -73,16 +53,8 @@ func (h *Handlers) RegisterDeviceHandler(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "device_id required")
 		return
 	}
-	if _, ok := validProviders[body.Provider]; !ok {
-		writeError(w, http.StatusBadRequest, "unknown provider: "+body.Provider)
-		return
-	}
-	if body.Token == "" {
-		writeError(w, http.StatusBadRequest, "token required")
-		return
-	}
-	if len(body.Token) > MaxTokenBytes {
-		writeError(w, http.StatusBadRequest, "token too long")
+	if err := validateProviderToken(body.Provider, body.Token); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -262,7 +234,7 @@ func (h *Handlers) SendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // generous for Data payloads
+	r.Body = http.MaxBytesReader(w, r.Body, maxSendBodyBytes)
 	var body SendRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -274,16 +246,7 @@ func (h *Handlers) SendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := push.PushMessage{
-		Title:     body.Title,
-		Body:      body.Body,
-		Channel:   body.Channel,
-		Priority:  pickPriority(body.Priority),
-		Badge:     body.Badge,
-		Sound:     body.Sound,
-		Data:      body.Data,
-		MessageID: body.MessageID,
-	}
+	msg := body.message()
 	// Prefer the per-namespace Manager when present so per-namespace
 	// config (set via PUT /v1/push/config) takes effect. Fall back to the
 	// legacy single dispatcher only when no Manager is wired.

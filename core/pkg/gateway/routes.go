@@ -172,6 +172,11 @@ func (g *Gateway) Routes() http.Handler {
 	// net/http mux doesn't extract path params; the handler parses {id}.
 	mux.HandleFunc("/v1/push/devices/", g.pushDevicesByIDHandler)
 	mux.HandleFunc("/v1/push/send", g.pushSendHandler)
+	// Registrations addressed by a rotating topic instead of the caller's
+	// account (FEAT-265). POST registers/refreshes, DELETE removes; both
+	// prove the topic by its secret. /send carries /v1/push/send's grant.
+	mux.HandleFunc("/v1/push/topics", g.pushTopicsHandler)
+	mux.HandleFunc("/v1/push/topics/send", g.pushTopicsSendHandler)
 
 	// Per-namespace push provider configuration (bug #220 follow-up):
 	// GET / PUT / DELETE — tenants self-serve their ntfy/expo credentials

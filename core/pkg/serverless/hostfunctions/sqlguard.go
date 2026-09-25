@@ -56,8 +56,13 @@ var protectedTables = map[string]string{
 	"grants":                     "who may do what in a namespace",
 	"wireguard_peers":            "mesh membership and node agent tokens",
 	"namespace_push_credentials": "push credentials",
-	"function_secrets":           "every function's secrets",
-	"function_env_vars":          "every function's environment",
+	// A topic row is only ever written by whoever holds the topic's secret, and
+	// its rows say nothing about which account a device belongs to (FEAT-265).
+	// SQL that could write one re-points a topic without the secret; SQL that
+	// could read one could join it against the caller of each invocation.
+	"push_topics":       "push registrations addressed by rotating topic",
+	"function_secrets":  "every function's secrets",
+	"function_env_vars": "every function's environment",
 	// Deleting a row here un-revokes a credential somebody revoked.
 	"revoked_tokens": "which tokens are refused",
 	// The record of who was given what and when. A record its own subject can

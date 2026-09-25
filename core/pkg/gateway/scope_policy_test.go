@@ -42,6 +42,9 @@ func TestRoutePermission(t *testing.T) {
 		{"/v1/push/devices", auth.DomainPush, auth.ActionWrite},
 		{"/v1/push/devices/42", auth.DomainPush, auth.ActionWrite},
 		{"/v1/push/send", auth.DomainPush, auth.ActionWrite},
+		// rotating topics (FEAT-265) carry the same grants as their account twins
+		{"/v1/push/topics", auth.DomainPush, auth.ActionWrite},
+		{"/v1/push/topics/send", auth.DomainPush, auth.ActionWrite},
 		// a push provider's credentials are secrets, not push
 		{"/v1/push/config", auth.DomainSecrets, auth.ActionWrite},
 		{"/v1/namespace/push-credentials", auth.DomainSecrets, auth.ActionWrite},
@@ -112,12 +115,29 @@ func TestRouteToken(t *testing.T) {
 	}
 
 	anyCredential := []string{
-		"/v1/pubsub/publish", "/v1/push/devices", "/v1/cache/get",
+		"/v1/pubsub/publish", "/v1/push/devices", "/v1/push/topics", "/v1/cache/get",
 		"/v1/functions/fn/ws", "/v1/deployments/list", "/v1/audit",
 	}
 	for _, path := range anyCredential {
 		if got := policyOf(http.MethodPost, path).Token; got != routepolicy.AnyCredential {
 			t.Errorf("%q asks for token %v, want none beyond the grant", path, got)
+		}
+	}
+}
+
+// FEAT-265: registering a topic is registering a device by another key, and a
+// topic send is a send. Each must ask for exactly what its account-path twin
+// asks for — grant, ownership and token — no more and no less.
+func TestRoutePolicy_pushTopicsMatchTheirAccountTwins(t *testing.T) {
+	for topicPath, twin := range map[string]string{
+		"/v1/push/topics":      "/v1/push/devices",
+		"/v1/push/topics/send": "/v1/push/send",
+	} {
+		for _, method := range []string{http.MethodPost, http.MethodDelete} {
+			got, want := policyOf(method, topicPath), policyOf(method, twin)
+			if got != want {
+				t.Errorf("%s %s policy = %+v, want its twin %s's %+v", method, topicPath, got, twin, want)
+			}
 		}
 	}
 }

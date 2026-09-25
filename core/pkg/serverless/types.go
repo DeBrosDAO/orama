@@ -556,6 +556,13 @@ type HostServices interface {
 	// envelope. Same shape as DBTransaction's "structured per-op result".
 	PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error)
 
+	// PushSendTopic delivers to the device registered under a rotating push
+	// topic (FEAT-265) in the function's namespace, and returns the same JSON
+	// envelope as PushSendV2. topicID is the lowercase hex SHA-256 of the
+	// device's topic secret. An unknown or expired topic is reported in the
+	// envelope (reason "TopicNotFound"), not as a Go error.
+	PushSendTopic(ctx context.Context, topicID string, msgJSON []byte) ([]byte, error)
+
 	// TurnCredentials mints per-namespace TURN HMAC credentials for the
 	// caller's namespace (derived from invocation context — caller
 	// cannot spoof). Returns a JSON envelope matching the HTTP endpoint

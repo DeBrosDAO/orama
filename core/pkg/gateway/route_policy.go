@@ -225,7 +225,7 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(owned(auth.DomainSecrets, auth.ActionWrite),
 		"/v1/namespace/push-credentials", "/v1/namespace/push-credentials/",
 		"/v1/push/config")
-	t.Add(owned(auth.DomainPush, auth.ActionWrite), "/v1/push/send")
+	t.Add(owned(auth.DomainPush, auth.ActionWrite), "/v1/push/send", "/v1/push/topics/send")
 
 	t.Add(owned(auth.DomainFn, auth.ActionRead), "/v1/serverless/ws/connections", "/v1/serverless/ws/connections/")
 	// Function management. /v1/functions/ is one handler serving several
@@ -279,8 +279,10 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/pubsub/ws", "/v1/pubsub/topics", "/v1/pubsub/presence")
 	t.Add(dataPlane(auth.DomainPubsub, auth.ActionWrite, true, routepolicy.AnyCredential),
 		"/v1/pubsub/publish", "/v1/pubsub/publish-batch")
+	// Topic registration (FEAT-265) carries the same grant as device
+	// registration; the handler binds nothing about the caller to the topic.
 	t.Add(dataPlane(auth.DomainPush, auth.ActionWrite, true, routepolicy.AnyCredential),
-		"/v1/push/devices", "/v1/push/devices/")
+		"/v1/push/devices", "/v1/push/devices/", "/v1/push/topics")
 	t.Add(dataPlane(auth.DomainCache, auth.ActionRead, false, routepolicy.AnyCredential),
 		"/v1/cache/health", "/v1/cache/get", "/v1/cache/mget", "/v1/cache/scan")
 	t.Add(dataPlane(auth.DomainCache, auth.ActionWrite, false, routepolicy.AnyCredential),

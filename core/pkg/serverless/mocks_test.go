@@ -225,6 +225,10 @@ func (m *MockHostServices) PushSendV2(ctx context.Context, userID string, msgJSO
 	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
 }
 
+func (m *MockHostServices) PushSendTopic(ctx context.Context, topicID string, msgJSON []byte) ([]byte, error) {
+	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+}
+
 func (m *MockHostServices) TurnCredentials(ctx context.Context) ([]byte, error) {
 	// Mirror PushSendV2's silent-noop-style envelope when not configured —
 	// matches the documented host-fn contract for TURN being absent.

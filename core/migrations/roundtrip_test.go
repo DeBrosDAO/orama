@@ -214,6 +214,40 @@ func TestSchemaRoundtrip_PlatformExemplars(t *testing.T) {
 			exec: true,
 		},
 
+		// push_topics — migration 059 (FEAT-265). Mirror RqliteTopicStore; the
+		// DELETE and UPSERT run as one Batch there.
+		{
+			name: "push_topics evict same-token and expired DELETE",
+			sql: `DELETE FROM push_topics
+				WHERE namespace = ? AND topic_id != ? AND (token_fp = ? OR expires_at <= ?)`,
+			args: []any{"ns", "topic-a", "fp", 0},
+			exec: true,
+		},
+		{
+			name: "push_topics UPSERT",
+			sql: `INSERT INTO push_topics
+				(namespace, topic_id, provider, token_encrypted, token_fp, expires_at)
+				VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT(namespace, topic_id) DO UPDATE SET
+					provider = excluded.provider,
+					token_encrypted = excluded.token_encrypted,
+					token_fp = excluded.token_fp,
+					expires_at = excluded.expires_at`,
+			args: []any{"ns", "topic-a", "apns", "enc:...", "fp", 1},
+			exec: true,
+		},
+		{
+			name: "push_topics live SELECT",
+			sql: `SELECT provider, token_encrypted, expires_at
+				FROM push_topics WHERE namespace = ? AND topic_id = ? AND expires_at > ?`,
+		},
+		{
+			name: "push_topics unregister DELETE",
+			sql:  `DELETE FROM push_topics WHERE namespace = ? AND topic_id = ?`,
+			args: []any{"ns", "topic-a"},
+			exec: true,
+		},
+
 		// namespace_publish_seq — sequence counter from plan 08.
 		{
 			name: "namespace_publish_seq UPSERT",

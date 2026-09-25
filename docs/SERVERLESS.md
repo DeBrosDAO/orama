@@ -227,7 +227,7 @@ instead. The refusal is returned as the host call's error.
 The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `nonces`, `device_authorizations`, `invite_tokens`, `operators`, `principals`,
 `signing_keys`, `node_credentials`, `encryption_roots`, `grants`,
-`wireguard_peers`, `namespace_push_credentials`, `function_secrets`,
+`wireguard_peers`, `namespace_push_credentials`, `push_topics`, `function_secrets`,
 `function_env_vars`, `revoked_tokens`, `audit_events`, `namespace_quotas`,
 `namespace_rate_limit_config`, `namespace_clusters`, `namespace_cluster_nodes`,
 `namespace_port_allocations`, `global_deployment_subdomains`, `dns_records`,
@@ -427,6 +427,22 @@ API (`POST /v1/storage/upload`, `GET /v1/storage/get/:cid`).
 | Function | Description |
 |----------|-------------|
 | `pubsub_publish(topic, dataJSON)` → bool | Publish message to a PubSub topic. Returns true on success. |
+
+### Push
+
+| Function | Description |
+|----------|-------------|
+| `push_send(userID, msgJSON)` → u32 | Push to every device the user registered in this namespace. 1 = ok, 0 = failure. Silent no-op (1) when push is not configured. |
+| `push_send_v2(userID, msgJSON)` → u64 | Same, returning a packed `ptr<<32\|len` JSON envelope with a result per device (HTTP status, reason, unregistered). 0 on an invalid call. |
+| `push_send_topic(topicID, msgJSON)` → u64 | Push to the device registered under a rotating push topic (FEAT-265) in this namespace. Same envelope as `push_send_v2`; an unknown or expired topic is `ok:false` with one result whose reason is `TopicNotFound`. 0 on an invalid call or when the gateway cannot look the topic up. |
+
+The namespace is always the invocation's own. `msgJSON`, the topic model and
+the envelope are described in [PUSH_NOTIFICATIONS.md](PUSH_NOTIFICATIONS.md).
+
+```go
+//go:wasmimport env push_send_topic
+func pushSendTopic(topicIDPtr *byte, topicIDLen uint32, msgPtr *byte, msgLen uint32) uint64 // ptr<<32|len of JSON
+```
 
 ### Ephemeral State (WS-subscribe-tracked)
 

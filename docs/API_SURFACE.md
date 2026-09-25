@@ -5,7 +5,7 @@ are is [CLIENT_SURFACE.md](CLIENT_SURFACE.md): humans use the CLI, programs use
 the SDK and this HTTP API, and there is no Orama dashboard.
 
 The TypeScript SDK's coverage is a decision rather than an accident: it reaches
-35 of 136 routes, and the other 101 are here with a reason.
+36 of 147 routes, and the other 111 are here with a reason.
 
 `core/pkg/gateway/api_surface_test.go` keeps this document honest in both
 directions. A route registered in the gateway and missing here fails the Go
@@ -14,10 +14,10 @@ route therefore means deciding who calls it.
 
 | Owner | Meaning | Count |
 |-------|---------|-------|
-| `SDK` | `@debros/orama` calls it | 35 |
-| `CLI` | The `orama` CLI calls it. An application has no reason to: deploying, minting keys and managing nodes are operator actions. | 59 |
-| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 22 |
-| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 20 |
+| `SDK` | `@debros/orama` calls it | 36 |
+| `CLI` | The `orama` CLI calls it. An application has no reason to: deploying, minting keys and managing nodes are operator actions. | 71 |
+| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 19 |
+| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 21 |
 
 The request and response shapes of the `SDK` routes are pinned by the fixtures
 in [`contracts/`](../contracts), which both a Go handler test and a TypeScript
@@ -151,7 +151,9 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/push/config` | CLI | Per-namespace push credentials. `orama namespace push-credentials`. |
 | `/v1/push/devices` | direct | Register a device for push. A mobile client concern; a native SDK owns it, not this one. |
 | `/v1/push/devices/` | direct | One registered device. |
-| `/v1/push/send` | CLI | Server-side send. Admin-scoped; a function or a backend calls it directly. |
+| `/v1/push/send` | CLI | Server-side send, on the namespace's `push:write` grant (which the `runtime` role holds); a function or a backend calls it directly. |
+| `/v1/push/topics` | direct | Register (POST) or remove (DELETE) a rotating push topic, proved by its secret (FEAT-265). A mobile client concern, as `/v1/push/devices` is. |
+| `/v1/push/topics/send` | direct | Server-side send to a topic, with `/v1/push/send`'s grant; a backend calls it directly, and a function uses `push_send_topic`. |
 
 ### Namespace management
 

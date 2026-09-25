@@ -24,6 +24,9 @@ func TestPushRoutes_returns_503_with_actionable_message_when_unconfigured(t *tes
 		{"register", http.MethodPost, "/v1/push/devices", g.pushDevicesHandler},
 		{"delete", http.MethodDelete, "/v1/push/devices/abc", g.pushDevicesByIDHandler},
 		{"send", http.MethodPost, "/v1/push/send", g.pushSendHandler},
+		{"topic register", http.MethodPost, "/v1/push/topics", g.pushTopicsHandler},
+		{"topic unregister", http.MethodDelete, "/v1/push/topics", g.pushTopicsHandler},
+		{"topic send", http.MethodPost, "/v1/push/topics/send", g.pushTopicsSendHandler},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

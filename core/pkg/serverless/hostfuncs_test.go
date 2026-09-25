@@ -114,6 +114,10 @@ func (m *mockHostServices) PushSendV2(ctx context.Context, userID string, msgJSO
 	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
 }
 
+func (m *mockHostServices) PushSendTopic(ctx context.Context, topicID string, msgJSON []byte) ([]byte, error) {
+	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+}
+
 func (m *mockHostServices) TurnCredentials(ctx context.Context) ([]byte, error) {
 	return []byte(`{"configured":false}`), nil
 }

@@ -257,7 +257,7 @@ func (p *Provider) postOne(ctx context.Context, httpClient *http.Client, base, t
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("ntfy: post: %w", err)
+		return fmt.Errorf("ntfy: post: %w", push.RedactRequestURL(err))
 	}
 	defer resp.Body.Close()
 

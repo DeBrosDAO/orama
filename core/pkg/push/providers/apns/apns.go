@@ -210,7 +210,7 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		// Transport-level failure (network, ctx cancel, etc.) — no
 		// HTTP response to dissect. Plain wrap so callers can still
 		// errors.Is against the underlying.
-		return fmt.Errorf("apns: push: %w", sendErr)
+		return fmt.Errorf("apns: push: %w", push.RedactRequestURL(sendErr))
 	}
 	if resp == nil {
 		return fmt.Errorf("apns: nil response")

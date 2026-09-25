@@ -22,6 +22,7 @@ func NamespaceColumns() []Column {
 	return []Column{
 		{Table: "function_secrets", Column: "encrypted_value", IDCols: []string{"id"}, Purpose: "orama-secrets-encryption-v1"},
 		{Table: "push_devices", Column: "token_encrypted", IDCols: []string{"id"}, Purpose: "push-device-tokens"},
+		{Table: "push_topics", Column: "token_encrypted", IDCols: []string{"namespace", "topic_id"}, Purpose: "push-topic-tokens"},
 		{Table: "namespace_push_config", Column: "ntfy_auth_token_encrypted", IDCols: []string{"namespace"}, Purpose: "namespace-push-config"},
 		{Table: "namespace_push_config", Column: "expo_access_token_encrypted", IDCols: []string{"namespace"}, Purpose: "namespace-push-config"},
 		{Table: "namespace_push_credentials", Column: "credentials_json", IDCols: []string{"namespace", "provider"}, Purpose: "namespace-push-credentials"},

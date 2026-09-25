@@ -1350,6 +1350,17 @@ func buildPushDispatcher(
 	}
 	manager := push.NewManager(store, cfgStore, defaults, factory, logger.Logger)
 
+	// Registrations addressed by a rotating topic rather than an account
+	// (FEAT-265). Same namespace database and encryption root as the devices;
+	// the token fingerprint is keyed from the cluster secret, which a secrets
+	// rotate does not change, so fingerprints keep matching across a rotate.
+	topicStore, err := push.NewRqliteTopicStore(db, ikm, cfg.ClusterSecret)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("init push topic store: %w", err)
+	}
+	topicStore.SetHolder(holder)
+	manager.SetTopicStore(topicStore)
+
 	// Legacy single-tier dispatcher kept ONLY when YAML defaults exist —
 	// some non-Manager code paths (notably the WASM push_send hostfunc
 	// before its migration to Manager) still expect a populated
