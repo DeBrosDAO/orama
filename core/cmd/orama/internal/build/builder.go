@@ -17,6 +17,8 @@ type oramaBinary struct {
 	Package string // Go package path relative to project root
 	// Extra ldflags beyond the standard ones
 	ExtraLDFlags string
+	// CGO builds the binary with cgo through zig cc (see cgo.go).
+	CGO bool
 }
 
 // Builder orchestrates the entire build process.
@@ -28,6 +30,9 @@ type Builder struct {
 	version    string
 	commit     string
 	date       string
+	// zig is the zig binary for the vault and the cgo cross-compiles,
+	// resolved and version-checked before anything is built.
+	zig string
 }
 
 // NewBuilder creates a new Builder.
@@ -45,6 +50,11 @@ func (b *Builder) Build() error {
 		return err
 	}
 	b.projectDir = projectDir
+
+	b.zig, err = resolveZig(filepath.Join(projectDir, "..", "vault"))
+	if err != nil {
+		return err
+	}
 
 	// Read version from Makefile or use "dev"
 	b.version = b.readVersion()
@@ -150,31 +160,20 @@ func (b *Builder) buildOramaBinaries() error {
 	gatewayLDFlags := fmt.Sprintf("%s -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=%s' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=%s' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=%s'",
 		ldflags, b.version, b.commit, b.date)
 
-	binaries := []oramaBinary{
-		{Name: "orama", Package: "./cmd/orama/"},
-		{Name: "orama-node", Package: "./cmd/node/"},
-		{Name: "gateway", Package: "./cmd/gateway/", ExtraLDFlags: gatewayLDFlags},
-		{Name: "identity", Package: "./cmd/identity/"},
-		{Name: "sfu", Package: "./cmd/sfu/"},
-		{Name: "turn", Package: "./cmd/turn/"},
-		{Name: "orama-sni-router", Package: "./cmd/sni-router/"},
-		{Name: "pubsub", Package: "./cmd/pubsub/"},
-	}
-
-	for _, bin := range binaries {
+	for _, bin := range oramaBinaries(gatewayLDFlags) {
 		flags := ldflags
 		if bin.ExtraLDFlags != "" {
 			flags = bin.ExtraLDFlags
 		}
 
+		env, err := b.buildEnvFor(bin)
+		if err != nil {
+			return err
+		}
 		output := filepath.Join(b.binDir, bin.Name)
-		cmd := exec.Command("go", "build",
-			"-ldflags", flags,
-			"-trimpath",
-			"-o", output,
-			bin.Package)
+		cmd := exec.Command("go", goBuildArgs(bin, flags, output)...)
 		cmd.Dir = b.projectDir
-		cmd.Env = b.crossEnv()
+		cmd.Env = env
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 
@@ -191,13 +190,23 @@ func (b *Builder) buildOramaBinaries() error {
 	return nil
 }
 
+// oramaBinaries lists the Go binaries in the archive.
+func oramaBinaries(gatewayLDFlags string) []oramaBinary {
+	return []oramaBinary{
+		{Name: "orama", Package: "./cmd/orama/"},
+		{Name: "orama-node", Package: "./cmd/node/"},
+		{Name: "orama-privhelper", Package: "./cmd/privhelper/"},
+		{Name: "gateway", Package: "./cmd/gateway/", ExtraLDFlags: gatewayLDFlags, CGO: true},
+		{Name: "identity", Package: "./cmd/identity/"},
+		{Name: "sfu", Package: "./cmd/sfu/"},
+		{Name: "turn", Package: "./cmd/turn/"},
+		{Name: "orama-sni-router", Package: "./cmd/sni-router/"},
+		{Name: "pubsub", Package: "./cmd/pubsub/"},
+	}
+}
+
 func (b *Builder) buildVaultGuardian() error {
 	fmt.Println("[2/8] Cross-compiling Vault Guardian (Zig)...")
-
-	// Ensure zig is available
-	if _, err := exec.LookPath("zig"); err != nil {
-		return fmt.Errorf("zig not found in PATH — install from https://ziglang.org/download/")
-	}
 
 	// Vault source is sibling to core/ within the orama monorepo
 	vaultDir := filepath.Join(b.projectDir, "..", "vault")
@@ -205,15 +214,9 @@ func (b *Builder) buildVaultGuardian() error {
 		return fmt.Errorf("vault source not found at %s — expected orama-vault as sibling directory: %w", vaultDir, err)
 	}
 
-	// Map Go arch to Zig target triple
-	var zigTarget string
-	switch b.flags.Arch {
-	case "amd64":
-		zigTarget = "x86_64-linux-musl"
-	case "arm64":
-		zigTarget = "aarch64-linux-musl"
-	default:
-		return fmt.Errorf("unsupported architecture for vault: %s", b.flags.Arch)
+	zigTarget, err := zigTargetFor(b.flags.Arch)
+	if err != nil {
+		return fmt.Errorf("vault: %w", err)
 	}
 
 	// Emit directly into zig-out/bin so the copy step below is unchanged.
@@ -234,7 +237,7 @@ func (b *Builder) buildVaultGuardian() error {
 	// single executable built from src/main.zig, so build-exe is equivalent and
 	// sidesteps the broken host runner. On platforms where `zig build` works,
 	// this produces an identical binary.
-	cmd := exec.Command("zig", "build-exe",
+	cmd := exec.Command(b.zig, "build-exe",
 		"src/main.zig",
 		"-target", zigTarget,
 		"-O", "ReleaseSafe",
