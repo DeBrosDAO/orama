@@ -312,6 +312,8 @@ every request that run makes.
 | Revoking a token | at once, by its `jti` |
 | Narrowing a **wallet's** grant | on the next request; the grant is resolved per request |
 | Narrowing a **key** — editing its scopes, or revoking a grant it holds | within one minute, on every gateway that had seen it |
+| Revoking the token an open WebSocket was opened with | the socket is closed within 10 seconds (`4403`) |
+| The token an open WebSocket was opened with expiring | the socket is closed within 10 seconds of two minutes past its `exp` (`4401`), unless it was refreshed on the socket |
 
 That minute is `CredentialStaleness`, and it is a promise rather than a tuning
 knob: it is the middleware cache's TTL, and it is named so an operator who
@@ -336,6 +338,34 @@ staleness: a revocation takes effect within it.
 
 Logging out revokes the refresh token **and** the access token, so "log me out"
 does not mean "stop me getting a new one".
+
+### Open WebSockets
+
+A WebSocket is authorized once, at the upgrade, and then stays open. It used to
+stay open on trust: a socket opened with a fifteen-minute token kept serving for
+as long as the client kept it, and no revocation reached it.
+
+Every socket opened with a token — a function socket, stateless or persistent,
+and a pub/sub subscription — is now registered with that token's claims. Every
+10 seconds, the revocation list's own staleness, each gateway reloads the list
+and re-checks all of its open sockets against it, so a revocation recorded on any
+gateway closes the sockets it covers on every gateway within that interval:
+
+| Close code | Means |
+|------------|-------|
+| `4401` | the token expired more than two minutes ago and was not refreshed on the socket — reconnect with a fresh token |
+| `4403` | the token, its session or its subject was revoked — sign in again |
+
+The two minutes cover clock skew and a client refreshing its token on the
+socket: a persistent function socket takes `{"__orama":"auth.refresh","jwt":…}`
+and is held to the new token from then on (see
+[SERVERLESS.md](SERVERLESS.md#websockets)). A refresh must be for the **same
+subject** the socket was opened with, and a socket opened with an API key or no
+credential cannot take one on — a refresh keeps a socket open, it does not hand
+it to somebody else.
+
+A socket opened with an API key has no token, and is not re-checked: revoking the
+key stops it opening new sockets, not the ones it has open.
 
 ---
 
@@ -515,11 +545,33 @@ a migration creates a table nobody has placed.
 ## Between nodes
 
 The main gateway validates a request and forwards the result to a namespace
-gateway in headers: the namespace it resolved, the JWT subject it verified, and
-the grants of the key it looked up. Whether to believe them is answered by an
-HMAC over the request's method, path, every asserted field and a timestamp,
-keyed from the cluster secret. The first middleware in the chain deletes every
-`X-Internal-Auth-*` header that did not arrive with a valid MAC.
+gateway in headers: the namespace it resolved, the JWT subject, custom claims,
+`exp`, `iat` and `jti` it verified, and the grants of the key it looked up.
+Whether to believe them is answered by an HMAC over the request's method, path,
+every asserted field and a timestamp, keyed from the cluster secret. The first
+middleware in the chain deletes every `X-Internal-Auth-*` header that did not
+arrive with a valid MAC.
+
+The token's times and id are what let a namespace gateway hold a socket to the
+token that opened it. Before they crossed the hop, a socket proxied from the main
+gateway had no expiry and no revocation could name it.
+
+They are covered by a second MAC, `X-Internal-Auth-MAC-V2`, over every field; the
+first still covers the original four, so a namespace gateway that predates the
+second keeps accepting an upgraded main gateway during a rolling upgrade (it
+ignores the new headers, and passes them on as it passes on everything else it
+does not know). A request carrying the second MAC is judged by it alone. One
+carrying only the first — from a main gateway not yet upgraded — has the fields
+it does not cover deleted. Its token is given the most time any token can have
+left (`MaxTokenLifetime`, an hour), so a socket it opens still ends within the
+hour, and an issue time one revocation-list staleness back, so a revocation the
+main gateway's list might not yet have held still reaches it. Refusing it instead
+would have treated every signed-in request an older main gateway proxied to an
+upgraded namespace gateway as anonymous, for as long as the rollout took.
+
+Accepting the first MAC alone gives nobody anything they did not have: removing
+the second from a genuine hop takes a position inside the WireGuard mesh, which
+is a node, and every node holds the cluster secret both are keyed from.
 
 The source IP is not consulted, and must not be: every public request arrives
 from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.

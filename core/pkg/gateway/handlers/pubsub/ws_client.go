@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -53,6 +54,19 @@ func checkWSOrigin(r *http.Request) bool {
 	}
 	originHost := parsed.Hostname()
 	return originHost == host || strings.HasSuffix(originHost, "."+host)
+}
+
+// subscriberCloser is how the session sweeper ends a subscriber socket: a
+// close frame saying why, then the connection, which ends the reader loop and
+// with it the subscription. The frame is best-effort — the connection is
+// closed whether or not the client read it — and closing a connection its
+// handler has already closed has nothing left to do.
+func subscriberCloser(conn *websocket.Conn) func(code int, reason string) {
+	return func(code int, reason string) {
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(code, reason), time.Now().Add(wssession.CloseFrameTimeout))
+		_ = conn.Close()
+	}
 }
 
 // wsClient wraps a WebSocket connection with message handling

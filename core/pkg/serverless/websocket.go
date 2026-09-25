@@ -1,6 +1,7 @@
 package serverless
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -164,6 +165,41 @@ func (m *WSManager) Unregister(clientID string) {
 		zap.String("client_id", clientID),
 		zap.Int("remaining_connections", m.GetConnectionCount()),
 	)
+}
+
+// closeFrameWriteTimeout bounds the close frame CloseClient sends. The
+// connection is closed after it whether or not the client read it. It is the
+// same second as wssession.CloseFrameTimeout, the bound the gateway's other
+// socket closers use; this package sits below the gateway and cannot import it.
+const closeFrameWriteTimeout = time.Second
+
+// CloseClient ends one client's connection from outside its handler: a close
+// frame with code and reason, then the connection itself. The handler's read
+// loop sees the connection end and runs its own teardown, which is what
+// unregisters the client — so this does not.
+//
+// It exists because nothing could end one socket: an open WebSocket whose token
+// expired or was revoked stayed open until the client left.
+func (m *WSManager) CloseClient(clientID string, code int, reason string) error {
+	m.connectionsMu.RLock()
+	conn, exists := m.connections[clientID]
+	m.connectionsMu.RUnlock()
+	if !exists {
+		return ErrWSClientNotFound
+	}
+
+	frameErr := conn.conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(code, reason), time.Now().Add(closeFrameWriteTimeout))
+	if err := conn.conn.Close(); err != nil {
+		return fmt.Errorf("close WebSocket client %s: %w", clientID, err)
+	}
+	if frameErr != nil {
+		// The connection is closed regardless; the client learns why only if
+		// the frame reached it.
+		m.logger.Debug("close frame not delivered before closing the connection",
+			zap.String("client_id", clientID), zap.Error(frameErr))
+	}
+	return nil
 }
 
 // Send sends data to a specific client.

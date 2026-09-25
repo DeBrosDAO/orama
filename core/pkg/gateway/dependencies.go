@@ -17,6 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
@@ -86,6 +87,11 @@ type Dependencies struct {
 	ServerlessWSMgr    *serverless.WSManager
 	ServerlessHandlers *serverlesshandlers.ServerlessHandlers
 
+	// WSSessions is every token-authorized WebSocket open on this gateway. The
+	// function and pubsub handlers register their sockets in it, and the
+	// gateway's sweeper closes the ones whose token expires or is revoked.
+	WSSessions *wssession.Registry
+
 	// PubSub trigger dispatcher (used to wire into PubSubHandlers)
 	PubSubDispatcher *triggers.PubSubDispatcher
 
@@ -136,7 +142,7 @@ type Dependencies struct {
 // It establishes connections to RQLite, Olric, IPFS, initializes the serverless engine, and creates
 // the authentication service.
 func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies, error) {
-	deps := &Dependencies{}
+	deps := &Dependencies{WSSessions: wssession.NewRegistry(logger.Logger)}
 
 	// Create and connect network client
 	logger.ComponentInfo(logging.ComponentGeneral, "Building client config...")
@@ -898,6 +904,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		deps.ServerlessEngine,
 		registry,
 		deps.ServerlessWSMgr,
+		deps.WSSessions,
 		triggerStore,
 		cronStore,
 		deps.PubSubDispatcher,

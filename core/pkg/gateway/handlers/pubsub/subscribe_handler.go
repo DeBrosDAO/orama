@@ -9,6 +9,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -72,6 +73,13 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer conn.Close()
+
+	// The subscription is only as good as the token that opened it: the
+	// gateway's sweeper closes the socket once that token expires or is
+	// revoked.
+	claims, _ := r.Context().Value(ctxkeys.JWT).(*gwauth.JWTClaims)
+	sock := p.sessions.Register(claims, subscriberCloser(conn))
+	defer sock.Unregister()
 
 	// Channel to deliver PubSub messages to WS writer
 	msgs := make(chan []byte, 128)

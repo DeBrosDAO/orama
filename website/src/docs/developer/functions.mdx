@@ -230,6 +230,8 @@ WS /v1/functions/{name}/ws
 
 You can also invoke a specific version by appending `@version` to the name (e.g., `hello-world@2`).
 
+A socket is authorized at the upgrade and then held to the token that opened it: the gateway closes it with `4403` within 10 seconds of that token being revoked, and with `4401` two minutes after it expires. A persistent (`ws_persistent: true`) socket stays open across token rotation by sending `{"__orama":"auth.refresh","jwt":"<new token>"}` — for the same account the socket was opened with; a token for anyone else is refused.
+
 ## Host Functions API
 
 Host functions let your WASM code interact with Orama platform services. They are available to every function without additional configuration.

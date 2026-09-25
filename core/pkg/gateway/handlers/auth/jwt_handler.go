@@ -129,7 +129,7 @@ func (h *Handlers) APIKeyToJWTHandler(w http.ResponseWriter, r *http.Request) {
 	// it first. It looks under the raw form too, which is what carries tokens
 	// minted before this through their remaining 15 minutes.
 	subject := h.authService.HashAPIKey(key)
-	token, expUnix, err := h.authService.GenerateJWT(ns, subject, 15*time.Minute, custom)
+	token, expUnix, err := h.authService.GenerateJWT(ns, subject, authsvc.AccessTokenLifetime, custom)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

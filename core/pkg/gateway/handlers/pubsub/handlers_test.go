@@ -12,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/libp2p/go-libp2p/core/host"
 	"go.uber.org/zap"
@@ -93,7 +94,7 @@ func (m *mockNetworkClient) Host() host.Host              { return nil }
 // newTestHandlers creates a PubSubHandlers with the given mock client for testing.
 func newTestHandlers(nc client.NetworkClient) *PubSubHandlers {
 	logger := &logging.ColoredLogger{Logger: zap.NewNop()}
-	return NewPubSubHandlers(nc, logger)
+	return NewPubSubHandlers(nc, wssession.NewRegistry(nil), logger)
 }
 
 // withNamespace adds a namespace to the request context.
@@ -263,7 +264,7 @@ func TestPublishHandler_Success(t *testing.T) {
 
 func TestPublishHandler_NilClient(t *testing.T) {
 	logger := &logging.ColoredLogger{Logger: zap.NewNop()}
-	h := NewPubSubHandlers(nil, logger)
+	h := NewPubSubHandlers(nil, wssession.NewRegistry(nil), logger)
 
 	body, _ := json.Marshal(PublishRequest{Topic: "chat", DataB64: "aGVsbG8="})
 	req := httptest.NewRequest(http.MethodPost, "/v1/pubsub/publish", bytes.NewReader(body))
@@ -354,7 +355,7 @@ func TestTopicsHandler_MissingNamespace(t *testing.T) {
 
 func TestTopicsHandler_NilClient(t *testing.T) {
 	logger := &logging.ColoredLogger{Logger: zap.NewNop()}
-	h := NewPubSubHandlers(nil, logger)
+	h := NewPubSubHandlers(nil, wssession.NewRegistry(nil), logger)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/pubsub/topics", nil)
 	req = withNamespace(req, "test-ns")

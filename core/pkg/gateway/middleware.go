@@ -133,6 +133,13 @@ func setInternalAuthJWTHeaders(h http.Header, claims *auth.JWTClaims) {
 			h.Set(HeaderInternalAuthJWTCustom, base64.StdEncoding.EncodeToString(buf))
 		}
 	}
+	// The token's times and id, so the namespace gateway can hold a socket this
+	// request opens to the token's expiry and to its revocation.
+	h.Set(HeaderInternalAuthJWTExp, strconv.FormatInt(claims.Exp, 10))
+	h.Set(HeaderInternalAuthJWTIat, strconv.FormatInt(claims.Iat, 10))
+	if jti := strings.TrimSpace(claims.Jti); jti != "" {
+		h.Set(HeaderInternalAuthJWTJti, jti)
+	}
 }
 
 // stripInboundInternalAuthHeaders deletes the X-Internal-Auth-* headers from
@@ -156,6 +163,9 @@ func stripInboundInternalAuthHeaders(h http.Header) {
 	h.Del(HeaderInternalAuthJWTSub)
 	h.Del(HeaderInternalAuthJWTCustom)
 	h.Del(HeaderInternalAuthScopes)
+	for _, name := range internalAuthV2OnlyHeaders {
+		h.Del(name)
+	}
 }
 
 // maxQueryJWTLength caps the size of a JWT accepted via `?jwt=` query
@@ -190,14 +200,27 @@ func stripJWTQueryParam(r *http.Request) {
 // the proxy hop has stripped any inbound copies of these headers (see
 // stripInboundInternalAuthHeaders). Skipping any of those would let any
 // client forge JWT identities.
-func claimsFromInternalAuthHeaders(h http.Header, namespace string) *auth.JWTClaims {
+//
+// The claims carry the token's exp, iat and jti, which is what holds a socket
+// opened by this request to the token's expiry and revocation (see
+// hopTokenTimes for a hop that cannot say). A time that is present and
+// unreadable asserts something that cannot be honoured, so the identity is
+// refused with an error.
+func claimsFromInternalAuthHeaders(h http.Header, namespace string, now time.Time) (*auth.JWTClaims, error) {
 	sub := strings.TrimSpace(h.Get(HeaderInternalAuthJWTSub))
 	if sub == "" {
-		return nil
+		return nil, nil
+	}
+	exp, iat, err := hopTokenTimes(h, now)
+	if err != nil {
+		return nil, err
 	}
 	claims := &auth.JWTClaims{
 		Sub:       sub,
 		Namespace: namespace,
+		Jti:       strings.TrimSpace(h.Get(HeaderInternalAuthJWTJti)),
+		Exp:       exp,
+		Iat:       iat,
 	}
 	if raw := strings.TrimSpace(h.Get(HeaderInternalAuthJWTCustom)); raw != "" {
 		if decoded, err := base64.StdEncoding.DecodeString(raw); err == nil {
@@ -207,7 +230,7 @@ func claimsFromInternalAuthHeaders(h http.Header, namespace string) *auth.JWTCla
 			}
 		}
 	}
-	return claims
+	return claims, nil
 }
 
 // validateAuthForNamespaceProxy validates the request's auth credentials against the MAIN
@@ -607,7 +630,15 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 				// signing key with the main gateway, and the main gateway
 				// already verified before forwarding. The trust gate is
 				// the MAC, checked in internalAuthMiddleware.
-				if claims := claimsFromInternalAuthHeaders(r.Header, ns); claims != nil {
+				claims, err := claimsFromInternalAuthHeaders(r.Header, ns, time.Now())
+				if err != nil {
+					// The MAC verified, so this is the main gateway's own
+					// bug rather than a forgery; the identity is dropped
+					// rather than guessed at.
+					g.logger.ComponentWarn("gateway", "dropped a hop identity whose token times cannot be read",
+						zap.String("path", r.URL.Path), zap.Error(err))
+				}
+				if claims != nil {
 					reqCtx = context.WithValue(reqCtx, ctxKeyJWT, claims)
 				}
 				// #148: hydrate the API-key caller's effective scopes from the

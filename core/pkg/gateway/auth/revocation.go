@@ -28,9 +28,9 @@ import (
 // Fifteen minutes became ten seconds, which is the point.
 
 const (
-	// revocationRefreshInterval is how stale the in-memory list may be, and so
+	// RevocationRefreshInterval is how stale the in-memory list may be, and so
 	// how long a revoked token may still be accepted.
-	revocationRefreshInterval = 10 * time.Second
+	RevocationRefreshInterval = 10 * time.Second
 
 	// revocationPruneInterval is how often expired rows are deleted. They deny
 	// nothing once past expires_at; this keeps the table the size of the
@@ -201,7 +201,7 @@ func nullable(s string) any {
 // refresh interval.
 func (r *RevocationList) refreshIfStale() {
 	r.mu.RLock()
-	fresh := r.loaded && r.now().Sub(r.lastRefresh) < revocationRefreshInterval
+	fresh := r.loaded && r.now().Sub(r.lastRefresh) < RevocationRefreshInterval
 	r.mu.RUnlock()
 	if fresh {
 		return
@@ -353,6 +353,26 @@ func (s *Service) RevokeAllSessions(ctx context.Context, subject string) error {
 // Revocations exposes the list so the gateway can start its pruner and, in a
 // test, drive a refresh.
 func (s *Service) Revocations() *RevocationList { return s.revocations }
+
+// Revoked reports whether a token, already verified, has been revoked since —
+// by its jti, or under any name its subject may have been revoked by.
+//
+// ParseAndVerifyJWT asks this once, when a token is presented. An open
+// WebSocket was authorized by a token presented once, at the upgrade, so the
+// socket sweeper asks it again for as long as the socket stays open.
+func (s *Service) Revoked(claims *JWTClaims) bool {
+	if claims == nil {
+		return false
+	}
+	return s.revocations.Denies(claims, s.revocationSubjectKeys(claims.Sub))
+}
+
+// RefreshRevocations reloads the revocation list now rather than when it next
+// goes stale. The socket sweeper calls it before each pass, so a pass applies
+// every revocation recorded before it began.
+func (s *Service) RefreshRevocations(ctx context.Context) {
+	s.revocations.Refresh(ctx)
+}
 
 // DeniesSubject reports whether a credential presented under any of these
 // subjects has been revoked.

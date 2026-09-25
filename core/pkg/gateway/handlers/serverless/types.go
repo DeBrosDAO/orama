@@ -6,6 +6,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
@@ -35,14 +36,22 @@ type ServerlessHandlers struct {
 	wsBridge       *wsbridge.Bridge    // optional; nil = no client→ns registration
 	secretsManager serverless.SecretsManager
 	jwtVerifier    JWTVerifier // optional; when nil, mid-session auth.refresh is disabled
-	audit          *auth.AuditLog
-	logger         *zap.Logger
+	// sessions holds every token-authorized function WebSocket to its token's
+	// expiry and revocation. It is the gateway's one registry, the one its
+	// sweeper runs over.
+	sessions *wssession.Registry
+	audit    *auth.AuditLog
+	logger   *zap.Logger
 }
 
 // NewServerlessHandlers creates a new ServerlessHandlers instance.
 //
 // audit records the deploy, delete and secret events; a nil one drops them,
 // which is the test case.
+//
+// sessions is the gateway's WebSocket session registry: every token-authorized
+// socket these handlers open is registered there, and the gateway's sweeper
+// closes the ones whose token expires or is revoked. It is required.
 //
 // engine, persistentMgr, and wsBridge may be nil — persistent-WS
 // functions then return 503 on upgrade, and bridged WS clients can't
@@ -53,6 +62,7 @@ func NewServerlessHandlers(
 	engine *serverless.Engine,
 	registry serverless.FunctionRegistry,
 	wsManager *serverless.WSManager,
+	sessions *wssession.Registry,
 	triggerStore *triggers.PubSubTriggerStore,
 	cronStore *triggers.CronTriggerStore,
 	dispatcher *triggers.PubSubDispatcher,
@@ -73,6 +83,7 @@ func NewServerlessHandlers(
 		persistentMgr:  persistentMgr,
 		wsBridge:       wsBridge,
 		secretsManager: secretsManager,
+		sessions:       sessions,
 		audit:          audit,
 		logger:         logger,
 	}
@@ -141,22 +152,13 @@ func (h *ServerlessHandlers) getJWTSubjectFromRequest(r *http.Request) string {
 	return strings.TrimSpace(claims.Sub)
 }
 
-// getJWTExpiryFromRequest returns the Bearer JWT's `exp` claim (unix seconds)
-// if the request was JWT-authenticated, or 0 otherwise (e.g. API-key auth, or
-// a token without an exp). Persistent WS connections capture this at upgrade
-// to enforce mid-session expiry — a long-lived socket must stop serving RPCs
-// once its authorizing token expires, unless refreshed via the #321
-// auth.refresh control frame. Bugboard #868.
-func (h *ServerlessHandlers) getJWTExpiryFromRequest(r *http.Request) int64 {
-	v := r.Context().Value(ctxkeys.JWT)
-	if v == nil {
-		return 0
-	}
-	claims, ok := v.(*auth.JWTClaims)
-	if !ok || claims == nil {
-		return 0
-	}
-	return claims.Exp
+// getJWTClaimsFromRequest returns the verified token claims the request was
+// authorized with, or nil for an API key or no credential. A WebSocket is
+// registered with these, so it is held to the token's expiry and revocation
+// for as long as it is open.
+func (h *ServerlessHandlers) getJWTClaimsFromRequest(r *http.Request) *auth.JWTClaims {
+	claims, _ := r.Context().Value(ctxkeys.JWT).(*auth.JWTClaims)
+	return claims
 }
 
 // getCallerHasInvokeFromRequest reports whether the caller may invoke a

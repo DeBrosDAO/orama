@@ -3,6 +3,7 @@ package serverless
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -10,9 +11,10 @@ import (
 // fakeWSConn is a no-op WebSocketConn for exercising WSManager lifecycle.
 type fakeWSConn struct{}
 
-func (fakeWSConn) WriteMessage(int, []byte) error    { return nil }
-func (fakeWSConn) ReadMessage() (int, []byte, error) { return 0, nil, nil }
-func (fakeWSConn) Close() error                      { return nil }
+func (fakeWSConn) WriteMessage(int, []byte) error            { return nil }
+func (fakeWSConn) WriteControl(int, []byte, time.Time) error { return nil }
+func (fakeWSConn) ReadMessage() (int, []byte, error)         { return 0, nil, nil }
+func (fakeWSConn) Close() error                              { return nil }
 
 // TestWSManager_DisconnectHookClearsEphemeralState verifies the wiring that
 // makes Feature #710's auto-clear work: a disconnect hook registered on the

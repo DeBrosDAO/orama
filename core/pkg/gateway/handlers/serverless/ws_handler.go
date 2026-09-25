@@ -3,11 +3,13 @@ package serverless
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -52,6 +54,18 @@ func checkWSOrigin(r *http.Request) bool {
 	}
 	originHost := parsed.Hostname()
 	return originHost == host || strings.HasSuffix(originHost, "."+host)
+}
+
+// closeClient is how the session sweeper ends one function WebSocket. The
+// handler's read loop sees the connection go and tears the rest down.
+func (h *ServerlessHandlers) closeClient(clientID string) wssession.Closer {
+	return func(code int, reason string) {
+		err := h.wsManager.CloseClient(clientID, code, reason)
+		if err != nil && !errors.Is(err, serverless.ErrWSClientNotFound) {
+			h.logger.Warn("could not close a WebSocket whose token no longer authorizes it",
+				zap.String("client_id", clientID), zap.Int("code", code), zap.Error(err))
+		}
+	}
 }
 
 // HandleWebSocket handles WebSocket connections for function streaming.
@@ -114,6 +128,12 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	// Register connection
 	h.wsManager.Register(clientID, wsConn)
 	defer h.wsManager.Unregister(clientID)
+
+	// Every frame is invoked with the identity captured below, so the socket
+	// is only as good as the token that opened it: the gateway's sweeper
+	// closes it once that token expires or is revoked.
+	sock := h.sessions.Register(h.getJWTClaimsFromRequest(r), h.closeClient(clientID))
+	defer sock.Unregister()
 
 	// Track client → namespace for ws_pubsub_bridge auth checks, and
 	// auto-clean any bridged topics when the connection ends.

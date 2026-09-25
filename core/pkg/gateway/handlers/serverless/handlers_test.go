@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -105,6 +106,7 @@ func newTestHandlers(reg serverless.FunctionRegistry) *ServerlessHandlers {
 		nil, // engine
 		reg,
 		wsManager,
+		wssession.NewRegistry(nil),
 		nil, // triggerStore
 		nil, // cronStore
 		nil, // dispatcher

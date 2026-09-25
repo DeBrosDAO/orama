@@ -11,6 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -61,7 +62,7 @@ func auditingHandlers(t *testing.T, sm serverless.SecretsManager, reg serverless
 		reg = newMockRegistry()
 	}
 	h := NewServerlessHandlers(
-		nil, nil, reg, serverless.NewWSManager(logger),
+		nil, nil, reg, serverless.NewWSManager(logger), wssession.NewRegistry(nil),
 		nil, nil, nil, nil, nil,
 		sm,
 		auth.NewAuditLog(func() client.DatabaseClient { return (&recordingAuditNet{db: db}).Database() }, nil),

@@ -698,6 +698,43 @@ the namespace named by `?namespace=`, otherwise the credential's; an anonymous
 call that names neither is refused with 400. A public function is invocable
 without a credential, but the request has to say whose it is.
 
+## WebSockets
+
+`/v1/functions/{name}/ws` runs a function over a WebSocket. With
+`ws_persistent: true` in function.yaml one WASM instance is bound to the socket
+for its lifetime (`ws_open` / `ws_frame` / `ws_close`); otherwise every frame is
+a separate invocation.
+
+The socket is authorized once, at the upgrade: `Authorization: Bearer <jwt>`,
+or `?jwt=<token>` where a client cannot set a header. Every frame then runs as
+the identity the upgrade established, so a socket is held to the token that
+opened it for as long as it stays open:
+
+- The gateway re-checks every open socket every 10 seconds. One whose token was
+  revoked — the token, its session, or its subject — is closed with **`4403`**;
+  sign in again. One whose token expired more than two minutes ago is closed with
+  **`4401`**; reconnect with a fresh token. A persistent socket also refuses an
+  application frame past that point without waiting for the next check.
+- A persistent socket stays open across token rotation with a control frame,
+  answered with an `__orama_ack`:
+
+  ```json
+  {"__orama":"auth.refresh","jwt":"<new token>"}
+  {"__orama_ack":"auth.refresh","ok":true,"subject":"<wallet>"}
+  ```
+
+  The new token must be for the **same subject** and namespace the socket was
+  opened with; any other is refused with `ok:false` and the socket keeps its
+  current token. A socket opened with an API key, or with no credential on a
+  public function, has no token and cannot take one on — reconnect instead.
+- A socket opened with an API key is not re-checked; revoking the key refuses
+  its next upgrade.
+
+A stateless function socket and a `/v1/pubsub/ws` subscription are re-checked
+the same way. Neither takes `auth.refresh`, so either one is closed with `4401`
+two minutes after its token expires and has to reconnect with a fresh one. See
+[AUTH.md](AUTH.md#open-websockets).
+
 ## Invoking from application code
 
 The TypeScript SDK calls the direct-invoke endpoint for you:

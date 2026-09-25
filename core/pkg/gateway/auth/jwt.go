@@ -246,6 +246,13 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 // window the previous cluster-derived key is accepted across an upgrade.
 const AccessTokenLifetime = 15 * time.Minute
 
+// MaxTokenLifetime bounds every access token this cluster mints: a session's
+// lasts AccessTokenLifetime, and one exchanged from a key or held by a workload
+// lasts up to an hour. It is what a gateway may assume about a token whose
+// times it was not told — the most it can have left, and the earliest it can
+// have been issued.
+const MaxTokenLifetime = maxExchangedTokenLifetime
+
 // GenerateJWT mints a signed access token. `custom` carries additive
 // app-defined claims (e.g. the namespace's account_id from the claims-provider
 // hook, bugboard #548) under the top-level "custom" object — read back via

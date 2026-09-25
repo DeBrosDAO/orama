@@ -217,8 +217,12 @@ type WebSocketManager interface {
 }
 
 // WebSocketConn abstracts a WebSocket connection for testability.
+//
+// WriteControl and Close must be safe to call concurrently with the reader and
+// the writer: they are how another goroutine ends the connection.
 type WebSocketConn interface {
 	WriteMessage(messageType int, data []byte) error
+	WriteControl(messageType int, data []byte, deadline time.Time) error
 	ReadMessage() (messageType int, p []byte, err error)
 	Close() error
 }

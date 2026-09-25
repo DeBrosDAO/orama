@@ -188,9 +188,9 @@ func TestRevocationList_picksUpARevocationMadeElsewhere(t *testing.T) {
 		t.Error("the list refreshed sooner than its interval; that is a query per request")
 	}
 
-	*clock = clock.Add(revocationRefreshInterval + time.Second)
+	*clock = clock.Add(RevocationRefreshInterval + time.Second)
 	if !list.Denies(claims, []string{"ak_key:ns"}) {
-		t.Errorf("a revocation made elsewhere was not honoured within %s", revocationRefreshInterval)
+		t.Errorf("a revocation made elsewhere was not honoured within %s", RevocationRefreshInterval)
 	}
 }
 
@@ -209,7 +209,7 @@ func TestRevocationList_keepsTheListWhenAReloadFails(t *testing.T) {
 	db.mu.Lock()
 	db.failNext = true
 	db.mu.Unlock()
-	*clock = clock.Add(revocationRefreshInterval + time.Second)
+	*clock = clock.Add(RevocationRefreshInterval + time.Second)
 
 	if !list.Denies(claims, []string{"ak_key:ns"}) {
 		t.Error("a failed reload cleared the list, so every revoked token would work again")

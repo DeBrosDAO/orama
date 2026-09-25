@@ -418,7 +418,7 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 	custom = s.reuseLastKnownClaims(ctx, nsID, wallet, namespace, custom)
 
 	// Issue access token (15m)
-	token, expUnix, err := s.GenerateJWT(namespace, wallet, 15*time.Minute, custom)
+	token, expUnix, err := s.GenerateJWT(namespace, wallet, AccessTokenLifetime, custom)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to generate JWT: %w", err)
 	}
@@ -691,7 +691,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 
 	// Step 3: mint the new access JWT, carrying forward the stored custom
 	// claims so a rotated token keeps the same account_id etc. (bugboard #548).
-	accessToken, expUnix, err = s.GenerateJWT(namespace, subject, 15*time.Minute, custom)
+	accessToken, expUnix, err = s.GenerateJWT(namespace, subject, AccessTokenLifetime, custom)
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
@@ -24,6 +25,11 @@ type PubSubHandlers struct {
 	// onPublish is called when a message is published, to dispatch PubSub triggers.
 	// Set via SetOnPublish. May be nil if serverless triggers are not configured.
 	onPublish func(ctx context.Context, namespace, topic string, data []byte)
+
+	// sessions holds every token-authorized subscriber socket to its token's
+	// expiry and revocation. It is the gateway's one registry, the one its
+	// sweeper runs over.
+	sessions *wssession.Registry
 }
 
 // SetOnPublish sets the callback invoked when messages are published.
@@ -32,13 +38,16 @@ func (p *PubSubHandlers) SetOnPublish(fn func(ctx context.Context, namespace, to
 	p.onPublish = fn
 }
 
-// NewPubSubHandlers creates a new PubSubHandlers instance
-func NewPubSubHandlers(client client.NetworkClient, logger *logging.ColoredLogger) *PubSubHandlers {
+// NewPubSubHandlers creates a new PubSubHandlers instance. sessions is the
+// gateway's WebSocket session registry, which subscriber sockets register in so
+// its sweeper can close the ones whose token expires or is revoked.
+func NewPubSubHandlers(client client.NetworkClient, sessions *wssession.Registry, logger *logging.ColoredLogger) *PubSubHandlers {
 	return &PubSubHandlers{
 		client:           client,
 		logger:           logger,
 		localSubscribers: make(map[string][]*localSubscriber),
 		presenceMembers:  make(map[string][]PresenceMember),
+		sessions:         sessions,
 	}
 }
 

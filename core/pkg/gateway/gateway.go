@@ -39,6 +39,7 @@ import (
 	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
 	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
 	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
@@ -136,6 +137,10 @@ type Gateway struct {
 	// Authentication service
 	authService  *auth.Service
 	authHandlers *authhandlers.Handlers
+
+	// wsSessions is every token-authorized WebSocket open on this gateway,
+	// swept for expired and revoked tokens (see ws_sessions.go).
+	wsSessions *wssession.Registry
 
 	// Deployment system
 	deploymentService   *deploymentshandlers.DeploymentService
@@ -376,6 +381,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		serverlessWSMgr:        deps.ServerlessWSMgr,
 		serverlessHandlers:     deps.ServerlessHandlers,
 		authService:            deps.AuthService,
+		wsSessions:             deps.WSSessions,
 		localSubscribers:       make(map[string][]*localSubscriber),
 		presenceMembers:        make(map[string][]PresenceMember),
 		circuitBreakers:        NewCircuitBreakerRegistry(),
@@ -439,7 +445,8 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	}
 
 	// Initialize handler instances
-	gw.pubsubHandlers = pubsubhandlers.NewPubSubHandlers(deps.Client, logger)
+	gw.pubsubHandlers = pubsubhandlers.NewPubSubHandlers(deps.Client, deps.WSSessions, logger)
+	gw.startWSSessionSweeper()
 
 	// Wire PubSub trigger dispatch if serverless is available
 	if deps.PubSubDispatcher != nil {

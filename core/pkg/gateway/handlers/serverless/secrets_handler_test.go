@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -95,6 +96,7 @@ func newSecretsTestHandlers(sm serverless.SecretsManager) *ServerlessHandlers {
 		nil, // engine
 		newMockRegistry(),
 		wsManager,
+		wssession.NewRegistry(nil),
 		nil, // triggerStore
 		nil, // cronStore
 		nil, // dispatcher
