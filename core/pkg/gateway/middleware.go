@@ -38,11 +38,29 @@ func isLongRunningProxyPath(p string) bool {
 	switch {
 	case strings.HasPrefix(p, "/v1/storage/upload"),
 		strings.HasPrefix(p, "/v1/storage/pin"),
-		strings.HasPrefix(p, "/v1/invoke/"),
-		strings.HasPrefix(p, "/v1/functions/") && (strings.HasSuffix(p, "/invoke") || strings.HasSuffix(p, "/ws")):
+		isFunctionInvokePath(p):
 		return true
 	}
 	return false
+}
+
+// proxyTimeoutMessage explains a proxy timeout in terms of the request that
+// timed out. Only a function invocation has a timeout its caller can raise;
+// telling an SDK storage read to edit function.yaml sent the reader to a file
+// that does not exist for them (bugboard #414).
+func proxyTimeoutMessage(path string, budget time.Duration) string {
+	if isFunctionInvokePath(path) {
+		return "function exceeded the proxy budget (" + budget.String() +
+			"). Increase the function's timeout: in function.yaml (max 300s) or split the work into smaller invocations."
+	}
+	return "the namespace gateway did not answer within the proxy budget (" + budget.String() + "); a write may already have taken effect, so retry only what is safe to repeat"
+}
+
+// isFunctionInvokePath reports whether a path invokes a function, over HTTP
+// or WebSocket.
+func isFunctionInvokePath(p string) bool {
+	return strings.HasPrefix(p, "/v1/invoke/") ||
+		strings.HasPrefix(p, "/v1/functions/") && (strings.HasSuffix(p, "/invoke") || strings.HasSuffix(p, "/ws"))
 }
 
 // isProxyTimeoutErr returns true when an HTTP client error is a timeout —
@@ -1568,11 +1586,7 @@ func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.R
 		// debug path.
 		if isProxyTimeoutErr(err) {
 			httputil.WriteRPCError(w, http.StatusGatewayTimeout,
-				httputil.ErrCodeTimeout,
-				"function or upstream call exceeded the proxy budget ("+
-					proxyTimeout.String()+
-					"). Increase the function's timeout: in function.yaml (max 300s) or split the work into smaller invocations.",
-			)
+				httputil.ErrCodeTimeout, proxyTimeoutMessage(r.URL.Path, proxyTimeout))
 			return
 		}
 		httputil.WriteRPCError(w, http.StatusServiceUnavailable,

@@ -18,6 +18,26 @@ import {
  */
 
 describe('SDKError.fromResponse', () => {
+  // bugboard #414: endpoints that answer with the RPC envelope used to surface
+  // as message "[object Object]" and code "HTTP_<status>".
+  it('unwraps the RPC error envelope', () => {
+    const error = SDKError.fromResponse(404, {
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'content Qm is not stored', retryable: false },
+    });
+    expect(error).toBeInstanceOf(NotFoundError);
+    expect(error.message).toBe('content Qm is not stored');
+    expect(error.code).toBe('NOT_FOUND');
+    expect(error.retryable).toBe(false);
+  });
+
+  it('reports retryable only when the gateway said so', () => {
+    expect(
+      SDKError.fromResponse(504, { ok: false, error: { code: 'TIMEOUT', message: 't', retryable: true } }).retryable
+    ).toBe(true);
+    expect(SDKError.fromResponse(500, { error: 'boom' }).retryable).toBeUndefined();
+  });
+
   it('returns an AuthError for 401', () => {
     const error = SDKError.fromResponse(401, { error: 'token expired' });
     expect(error).toBeInstanceOf(AuthError);

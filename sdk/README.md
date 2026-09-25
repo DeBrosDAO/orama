@@ -675,9 +675,10 @@ try {
 } catch (error) {
   if (error instanceof SDKError) {
     console.log(error.httpStatus); // e.g., 400
-    console.log(error.code); // e.g., "HTTP_400"
+    console.log(error.code); // the gateway's code, e.g. "NOT_FOUND"; "HTTP_400" when it sent none
     console.log(error.message); // Error message
-    console.log(error.details); // Full error response
+    console.log(error.retryable); // true/false when the gateway said, undefined otherwise
+    console.log(error.details); // The gateway's error object
   }
 }
 ```

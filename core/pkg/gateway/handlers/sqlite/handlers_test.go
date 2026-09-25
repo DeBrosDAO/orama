@@ -169,6 +169,10 @@ func (m *mockIPFSClient) Unpin(ctx context.Context, cid string) error {
 	return nil
 }
 
+func (m *mockIPFSClient) GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error) {
+	return m.Get(ctx, cid, ipfsAPIURL)
+}
+
 func (m *mockIPFSClient) EvictLocal(ctx context.Context, cid string) (int, error) {
 	return 0, nil
 }

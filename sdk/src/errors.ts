@@ -31,14 +31,21 @@ export class SDKError extends Error {
   /**
    * Build the right error for a gateway response.
    *
-   * The gateway's error body is `{error, code?, …}`; anything else in it is
-   * kept in `details`, which is where a structured hint like `required_scope`
-   * arrives.
+   * The gateway answers errors in one of two shapes:
+   * - `{error: "message", code?, …}`; anything else in it is kept in
+   *   `details`, which is where a structured hint like `required_scope`
+   *   arrives.
+   * - the RPC envelope `{ok: false, error: {code, message, retryable, …}}`,
+   *   whose inner object is unwrapped so `message`, `code` and `retryable`
+   *   read the same as the flat shape. Passing the object through as the
+   *   message used to produce "[object Object]" and a code of `HTTP_<status>`.
    */
   static fromResponse(status: number, body: any, message?: string): SDKError {
-    const errorMsg = message || body?.error || `HTTP ${status}`;
-    const code = body?.code || `HTTP_${status}`;
-    const details = body && typeof body === "object" ? body : {};
+    const envelope =
+      body && typeof body.error === "object" && body.error !== null ? body.error : undefined;
+    const errorMsg = message || envelope?.message || (envelope ? undefined : body?.error) || `HTTP ${status}`;
+    const code = envelope?.code || body?.code || `HTTP_${status}`;
+    const details = envelope ?? (body && typeof body === "object" ? body : {});
 
     if (status === 401) {
       if (code === AuthCode.Revoked) {
@@ -56,6 +63,15 @@ export class SDKError extends Error {
       return new NotFoundError(errorMsg, status, code, details);
     }
     return new SDKError(errorMsg, status, code, details);
+  }
+
+  /**
+   * Whether the gateway said a retry may succeed, when it said. `undefined`
+   * means the gateway gave no verdict (an older gateway, or a flat error).
+   */
+  get retryable(): boolean | undefined {
+    const r = this.details?.retryable;
+    return typeof r === "boolean" ? r : undefined;
   }
 
   /**

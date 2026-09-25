@@ -51,7 +51,7 @@ console.log(result.size); // bytes
 
 ### Upload Options
 
-Files are pinned by default. To skip pinning, pass `{ pin: false }`:
+Uploads are always pinned: the storage cluster pins content as part of adding it. `{ pin: false }` only skips the follow-up pin that applies the namespace's replication factor:
 
 ```typescript
 const result = await client.storage.upload(buffer, "temp-file.dat", {
@@ -95,7 +95,7 @@ const contentLength = response.headers.get("content-length");
 const body = response.body; // ReadableStream
 ```
 
-Both `get` and `getBinary` include retry logic -- up to 8 attempts with exponential backoff (max 3 seconds per retry) -- to handle eventual consistency across IPFS nodes.
+Both `get` and `getBinary` retry a 404 -- up to 8 attempts over about 18 seconds -- while a freshly uploaded pin propagates across IPFS nodes. The gateway marks a 404 retryable only in the two minutes after the upload or pin; a 404 for content that is gone is returned at once.
 
 ### REST API
 
@@ -104,6 +104,8 @@ curl https://gateway.example.com/v1/storage/get/<cid> \
   -H "Authorization: Bearer <token>" \
   -o output-file
 ```
+
+A failed download returns an error `code`. `NOT_FOUND` (404) means the cluster does not hold the content (never pinned, or unpinned and reclaimed) and is answered immediately; it carries `retryable: true` only in the two minutes after the upload or pin, while the pin propagates, and is final after that. A node serves content it holds straight from disk, without asking the cluster. `TIMEOUT` (504) means the content could not be retrieved in time (the local IPFS daemon did not answer, or fetching it from other nodes took longer than 20 seconds), and `SERVICE_UNAVAILABLE` (503) that the storage cluster could not be reached; both are worth retrying. An invalid CID is `VALIDATION_FAILED` (400).
 
 ## Pinning
 

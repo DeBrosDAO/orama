@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -57,8 +60,16 @@ type mockIPFSClient struct {
 	pinStatErr error
 	getReader  io.ReadCloser
 	getErr     error
-	unpinErr   error
-	unpinCalls int
+	// GetStored (bugboard #414): heldLocally serves without the pinset;
+	// otherwise notInPinset / pinsetErr decide, and pinsetCalls counts.
+	heldLocally bool
+	notInPinset bool
+	pinsetErr   error
+	pinsetCalls int
+	// getDeadline records the deadline Get was called with.
+	getDeadline time.Time
+	unpinErr    error
+	unpinCalls  int
 	// evict tracking (bugboard #153)
 	evictRemoved int
 	evictErr     error
@@ -78,7 +89,24 @@ func (m *mockIPFSClient) PinStatus(_ context.Context, _ string) (*ipfs.PinStatus
 	return m.pinStatus, m.pinStatErr
 }
 
-func (m *mockIPFSClient) Get(_ context.Context, _ string, _ string) (io.ReadCloser, error) {
+// GetStored models ipfs.Client.GetStored: a local hit is served without the
+// pinset; on a miss the pinset decides between NOT_FOUND and a network fetch.
+func (m *mockIPFSClient) GetStored(ctx context.Context, cid, url string) (io.ReadCloser, error) {
+	if m.heldLocally {
+		return m.Get(ctx, cid, url)
+	}
+	m.pinsetCalls++
+	switch {
+	case m.pinsetErr != nil:
+		return nil, fmt.Errorf("%w: %v", ipfs.ErrPinsetUnavailable, m.pinsetErr)
+	case m.notInPinset:
+		return nil, fmt.Errorf("%w: %s", ipfs.ErrNotInPinset, cid)
+	}
+	return m.Get(ctx, cid, url)
+}
+
+func (m *mockIPFSClient) Get(ctx context.Context, _ string, _ string) (io.ReadCloser, error) {
+	m.getDeadline, _ = ctx.Deadline()
 	return m.getReader, m.getErr
 }
 
@@ -357,9 +385,9 @@ func TestDownloadHandler_MissingCID(t *testing.T) {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
 	body := decodeBody(t, rec)
-	errMsg, _ := body["error"].(string)
-	if !strings.Contains(errMsg, "cid required") {
-		t.Errorf("expected 'cid required' error, got %q", errMsg)
+	detail, _ := body["error"].(map[string]any)
+	if msg, _ := detail["message"].(string); !strings.Contains(msg, "cid required") {
+		t.Errorf("expected 'cid required' error, got %v", body)
 	}
 }
 
@@ -384,7 +412,7 @@ func TestDownloadHandler_Success(t *testing.T) {
 	}
 	h := newTestHandlers(mock)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/storage/get/QmTestCID", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/storage/get/"+testCID, nil)
 	req = withNamespace(req, "test-ns")
 	rec := httptest.NewRecorder()
 
@@ -398,6 +426,156 @@ func TestDownloadHandler_Success(t *testing.T) {
 	}
 	if rec.Body.String() != "file contents" {
 		t.Errorf("expected 'file contents', got %q", rec.Body.String())
+	}
+}
+
+// testCID is a real CIDv0 (the one bugboard #414 was reported against).
+const testCID = "QmfYzxZHqYpmy29rVWqs6f4igzYngACaxSxPWdf7FspuDV"
+
+// download runs the handler for testCID and decodes the RPC error, if any.
+func download(t *testing.T, mock *mockIPFSClient) (int, map[string]any) {
+	t.Helper()
+	h := newTestHandlers(mock)
+	req := withNamespace(httptest.NewRequest(http.MethodGet, "/v1/storage/get/"+testCID, nil), "test-ns")
+	rec := httptest.NewRecorder()
+	h.DownloadHandler(rec, req)
+	if rec.Code == http.StatusOK {
+		return rec.Code, nil
+	}
+	body := decodeBody(t, rec)
+	detail, _ := body["error"].(map[string]any)
+	return rec.Code, detail
+}
+
+// bugboard #414: a client must be able to tell content that is gone from
+// content that is slow, and a gone object must not cost the full proxy budget.
+func TestDownloadHandler_notInPinsetIsAFinalNotFound(t *testing.T) {
+	mock := &mockIPFSClient{notInPinset: true, getErr: errors.New("Get must not be called")}
+	status, detail := download(t, mock)
+	if status != http.StatusNotFound || detail["code"] != "NOT_FOUND" || detail["retryable"] != false {
+		t.Fatalf("status = %d, error = %v; want 404 NOT_FOUND, not retryable", status, detail)
+	}
+}
+
+func TestDownloadHandler_slowFetchIsARetryableTimeout(t *testing.T) {
+	mock := &mockIPFSClient{getErr: fmt.Errorf("cat: %w", context.DeadlineExceeded)}
+	status, detail := download(t, mock)
+	if status != http.StatusGatewayTimeout || detail["code"] != "TIMEOUT" || detail["retryable"] != true {
+		t.Fatalf("status = %d, error = %v; want 504 TIMEOUT, retryable", status, detail)
+	}
+	if msg, _ := detail["message"].(string); strings.Contains(msg, "function.yaml") {
+		t.Errorf("a storage timeout points at function.yaml: %q", msg)
+	}
+}
+
+func TestDownloadHandler_clusterUnreachableIsRetryable(t *testing.T) {
+	mock := &mockIPFSClient{pinsetErr: errors.New("dial tcp 127.0.0.1:9094: connect: connection refused")}
+	status, detail := download(t, mock)
+	if status != http.StatusServiceUnavailable || detail["code"] != "SERVICE_UNAVAILABLE" || detail["retryable"] != true {
+		t.Fatalf("status = %d, error = %v; want 503 SERVICE_UNAVAILABLE, retryable", status, detail)
+	}
+}
+
+func TestDownloadHandler_fetchIsBoundedBelowTheProxyBudget(t *testing.T) {
+	mock := &mockIPFSClient{getReader: io.NopCloser(strings.NewReader("x"))}
+	start := time.Now()
+	if status, _ := download(t, mock); status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	if mock.getDeadline.IsZero() || mock.getDeadline.After(start.Add(storageFetchTimeout+time.Second)) {
+		t.Errorf("Get deadline = %v, want one within %s", mock.getDeadline, storageFetchTimeout)
+	}
+}
+
+func TestDownloadHandler_heldLocallyIsServedWithoutThePinset(t *testing.T) {
+	// A node that holds the content serves it even when the cluster peer is
+	// down, and whether or not it was ever pinned.
+	mock := &mockIPFSClient{heldLocally: true, pinsetErr: errors.New("cluster down"),
+		getReader: io.NopCloser(strings.NewReader("local"))}
+	if status, _ := download(t, mock); status != http.StatusOK || mock.pinsetCalls != 0 {
+		t.Fatalf("status = %d, pinset asked %d times; want 200 with no pinset lookup", status, mock.pinsetCalls)
+	}
+}
+
+func TestDownloadHandler_aFailedReadDoesNotLeakInternals(t *testing.T) {
+	mock := &mockIPFSClient{getErr: errors.New("get X from http://127.0.0.1:4501 failed with status 500: kubo internals")}
+	status, detail := download(t, mock)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", status)
+	}
+	if msg, _ := detail["message"].(string); strings.Contains(msg, "127.0.0.1") || strings.Contains(msg, "kubo internals") {
+		t.Errorf("the response carries the internal error: %q", msg)
+	}
+}
+
+// ownershipDB answers the ownership and upload-recency queries.
+type ownershipDB struct {
+	rqlite.Client
+	owned, recent bool
+}
+
+func (d *ownershipDB) Query(_ context.Context, dest any, query string, args ...any) error {
+	out := dest.(*[]map[string]interface{})
+	hit := d.owned
+	if strings.Contains(query, "pin_requested_at, uploaded_at) >=") {
+		if len(args) != 3 || args[2] != "-120 seconds" {
+			return fmt.Errorf("pin-request window queried with %v, want the 2-minute window", args)
+		}
+		hit = d.recent
+	}
+	n := int64(0)
+	if hit {
+		n = 1
+	}
+	*out = []map[string]interface{}{{"count": n}}
+	return nil
+}
+
+// Authorization comes before anything asks IPFS about the CID, so the
+// responses cannot reveal whether the cluster holds a CID the caller does not
+// own.
+func TestDownloadHandler_unownedIsRefusedBeforeThePinsetIsAsked(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := New(mock, newTestLogger(), Config{}, &ownershipDB{owned: false}, nil)
+	req := withNamespace(httptest.NewRequest(http.MethodGet, "/v1/storage/get/"+testCID, nil), "test-ns")
+	rec := httptest.NewRecorder()
+	h.DownloadHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.pinsetCalls != 0 {
+		t.Fatalf("status = %d, pinset asked %d times; want 403 and no pinset lookup", rec.Code, mock.pinsetCalls)
+	}
+}
+
+// A CID missing from this node's pinset moments after its upload is a pin
+// still propagating: NOT_FOUND, but retryable.
+func TestDownloadHandler_aFreshUploadNotYetVisibleIsRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		recent        bool
+		wantRetryable bool
+	}{{true, true}, {false, false}} {
+		mock := &mockIPFSClient{notInPinset: true}
+		h := New(mock, newTestLogger(), Config{}, &ownershipDB{owned: true, recent: tc.recent}, nil)
+		req := withNamespace(httptest.NewRequest(http.MethodGet, "/v1/storage/get/"+testCID, nil), "test-ns")
+		rec := httptest.NewRecorder()
+		h.DownloadHandler(rec, req)
+		body := decodeBody(t, rec)
+		detail, _ := body["error"].(map[string]any)
+		if rec.Code != http.StatusNotFound || detail["retryable"] != tc.wantRetryable {
+			t.Errorf("recent=%v: status = %d, error = %v; want 404 retryable=%v", tc.recent, rec.Code, detail, tc.wantRetryable)
+		}
+	}
+}
+
+func TestDownloadHandler_invalidCIDIsRefused(t *testing.T) {
+	// Garbage, and a valid CID in a non-canonical spelling (upper-case
+	// base32): only the form an upload records is passed on to IPFS.
+	for _, cid := range []string{"not-a-cid", "BAFKREIHDWDCEFGH4DQKJV67UZCMW7OJEE6XEDZDETOJUZJEVTENXQUVYKU"} {
+		h := newTestHandlers(&mockIPFSClient{})
+		req := withNamespace(httptest.NewRequest(http.MethodGet, "/v1/storage/get/"+cid, nil), "test-ns")
+		rec := httptest.NewRecorder()
+		h.DownloadHandler(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", cid, rec.Code)
+		}
 	}
 }
 

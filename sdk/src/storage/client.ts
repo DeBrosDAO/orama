@@ -14,12 +14,16 @@ const PIN_PROPAGATION_BACKOFF_CAP_MS = 3000;
  * Whether a failure means "the cluster does not have this CID yet".
  *
  * `httpClient.getBinary` throws an `SDKError` carrying the HTTP status, which
- * is the reliable signal. The message check covers a transport that reports the
- * status only in text.
+ * is the reliable signal. A gateway that says whether a 404 is worth retrying
+ * is believed: it marks a 404 retryable only while a fresh upload's pin is
+ * still propagating, and final once the content is gone, so a read of a gone
+ * object stops at once instead of retrying for eighteen seconds. An older
+ * gateway says nothing, and every 404 is retried as before. The message check
+ * covers a transport that reports the status only in text.
  */
 function isNotFound(error: unknown): boolean {
   if (error instanceof SDKError) {
-    return error.httpStatus === 404;
+    return error.httpStatus === 404 && error.retryable !== false;
   }
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("not found") || message.includes("404");

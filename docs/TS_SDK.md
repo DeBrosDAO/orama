@@ -309,8 +309,25 @@ await client.storage.unpin(cid);
 ```
 
 A read that closely follows a write can legitimately 404 while the pin
-propagates across the cluster, so reads retry on 404 for about eighteen seconds
-before giving up. Any other failure is returned immediately.
+propagates across the cluster, so reads retry a 404 for about eighteen seconds
+before giving up — but only while the gateway marks it retryable, which it does
+for a CID uploaded or pinned in the last two minutes. A 404 for content that is
+gone is returned at once. Any other failure is returned immediately. The error's
+`code`, `message` and `retryable` are the gateway's.
+
+A node serves content it holds straight from disk, so a download does not need
+the cluster to be reachable.
+
+A failed read carries an error `code`:
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 404 | `NOT_FOUND` | The cluster does not hold the content: it was never pinned, or was unpinned and reclaimed. Answered at once, without searching the network. `retryable: true` only in the two minutes after the upload or pin, while the pin propagates; after that it is final: stop asking and tell the user the object is unavailable |
+| 403 | `FORBIDDEN` | The namespace does not own the CID, or the credential's grant does not cover it |
+| 504 | `TIMEOUT` (`retryable: true`) | The content could not be retrieved in time: the local IPFS daemon did not answer, or fetching it from other nodes took longer than 20 seconds. Worth retrying later |
+| 503 | `SERVICE_UNAVAILABLE` (`retryable: true`) | The storage cluster could not be reached |
+| 400 | `VALIDATION_FAILED` | Not a valid CID in canonical form |
+| 500 | `INTERNAL` | The storage node failed to read the content |
 
 ---
 
@@ -364,7 +381,9 @@ name the cases an application usually handles differently:
 | `NotFoundError` | 404 | |
 | `NetworkError` | No HTTP response at all. `httpStatus` is always 0 | `code` is `NETWORK_ERROR`, `TIMEOUT` or `ABORTED` |
 
-`error.code` is the gateway's own; every code is listed in [AUTH.md](AUTH.md).
+`error.code` is the gateway's own; every auth code is listed in [AUTH.md](AUTH.md).
+When the gateway says whether a retry can succeed, `error.retryable` is `true` or
+`false`; otherwise it is `undefined`.
 `Scope` and `Role` are exported as types, so a grant name that does not exist is
 a compile error rather than a 403 in production.
 

@@ -19,6 +19,7 @@ type IPFSClient interface {
 	Pin(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error)
 	PinStatus(ctx context.Context, cid string) (*ipfs.PinStatus, error)
 	Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
+	GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
 	Unpin(ctx context.Context, cid string) error
 	EvictLocal(ctx context.Context, cid string) (int, error)
 }
@@ -84,9 +85,11 @@ func (h *Handlers) recordCIDOwnership(ctx context.Context, cid, namespace, name,
 		return nil
 	}
 
-	query := `INSERT INTO ipfs_content_ownership (id, cid, namespace, name, size_bytes, is_pinned, uploaded_at, uploaded_by)
-		VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
-		ON CONFLICT(cid, namespace) DO NOTHING`
+	// A re-upload of content the namespace already owns keeps the row (and
+	// its first uploaded_at) but is a fresh pin request.
+	query := `INSERT INTO ipfs_content_ownership (id, cid, namespace, name, size_bytes, is_pinned, uploaded_at, uploaded_by, pin_requested_at)
+		VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, datetime('now'))
+		ON CONFLICT(cid, namespace) DO UPDATE SET pin_requested_at = datetime('now')`
 
 	id := cid + ":" + namespace // Simple unique ID
 	_, err := h.db.Exec(ctx, query, id, cid, namespace, name, sizeBytes, false, uploadedBy)
@@ -221,6 +224,11 @@ func (h *Handlers) updatePinStatus(ctx context.Context, cid, namespace string, i
 	}
 
 	query := `UPDATE ipfs_content_ownership SET is_pinned = ? WHERE cid = ? AND namespace = ?`
+	if isPinned {
+		// A pin is a pin request: a download right after it may find the
+		// pin still propagating (see pinPropagationWindow).
+		query = `UPDATE ipfs_content_ownership SET is_pinned = ?, pin_requested_at = datetime('now') WHERE cid = ? AND namespace = ?`
+	}
 	_, err := h.db.Exec(ctx, query, isPinned, cid, namespace)
 	return err
 }

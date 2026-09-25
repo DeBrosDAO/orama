@@ -143,3 +143,22 @@ describe('StorageClient retries only while the pin is still propagating', () => 
     expect(waits).toEqual([1000, 2000, 3000, 3000, 3000, 3000, 3000]);
   });
 });
+
+describe('a 404 the gateway marks final', () => {
+  // bugboard #414: a gone object used to cost eight attempts and eighteen
+  // seconds, because every 404 was read as a pin still propagating.
+  it('is not retried', async () => {
+    const gone = new SDKError('content is not stored', 404, 'NOT_FOUND', { retryable: false });
+    const { storage, calls } = storageWith([gone, body('never reached')]);
+    await expect(withoutWaiting(() => storage.getBinary('Qm'))).rejects.toBe(gone);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('is retried while the gateway marks it retryable', async () => {
+    const propagating = new SDKError('not yet visible', 404, 'NOT_FOUND', { retryable: true });
+    const { storage, calls } = storageWith([propagating, body('here now')]);
+    const res = await withoutWaiting(() => storage.getBinary('Qm'));
+    expect(await res.text()).toBe('here now');
+    expect(calls).toHaveLength(2);
+  });
+});

@@ -26,6 +26,7 @@ type IPFSClient interface {
 	Pin(ctx context.Context, cid string, name string, replicationFactor int) (*PinResponse, error)
 	PinStatus(ctx context.Context, cid string) (*PinStatus, error)
 	Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
+	GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
 	Unpin(ctx context.Context, cid string) error
 	EvictLocal(ctx context.Context, cid string) (int, error)
 	Health(ctx context.Context) error
@@ -640,6 +641,44 @@ func (c *Client) Unpin(ctx context.Context, cid string) error {
 	return nil
 }
 
+// clusterNotInPinset is how IPFS Cluster (v1.1.2) words the 404 for a CID its
+// pinset does not hold: {"code":404,"message":"pin is not part of the pinset"},
+// seen live on devnet. Only that answer means "absent"; any other 404 is a
+// failure, so a state error is never read as "gone".
+const clusterNotInPinset = "not part of the pinset"
+
+// InPinset reports whether cid is in the pinset, i.e. whether any node is
+// meant to hold it. It asks the local cluster peer (GET /allocations/<cid>),
+// which answers from its own copy of the CRDT state: no per-peer status
+// aggregation and no network search for the content. That copy can lag a
+// fresh pin by seconds, and a peer whose state is still loading holds the
+// request until it is ready, so callers bound it with their own deadline.
+//
+// A CID that is not in the pinset is not stored anywhere the cluster knows
+// of — never pinned, or unpinned and since reclaimed — and a networked cat
+// for it can only run out its deadline (bugboard #414).
+func (c *Client) InPinset(ctx context.Context, cid string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiURL+"/allocations/"+url.PathEscape(cid), nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to create allocations request for %s: %w", cid, err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("allocations request for %s to IPFS Cluster at %s failed: %w", cid, c.apiURL, err)
+	}
+	defer resp.Body.Close()
+
+	// Read (and so drained, letting the connection be reused) either way.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		return true, nil
+	case resp.StatusCode == http.StatusNotFound && strings.Contains(string(body), clusterNotInPinset):
+		return false, nil
+	}
+	return false, fmt.Errorf("allocations for %s failed with status %d: %s", cid, resp.StatusCode, string(body))
+}
+
 // Get retrieves content from IPFS by CID
 // Note: This uses the IPFS HTTP API, not the Cluster API
 func (c *Client) Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error) {
@@ -655,16 +694,28 @@ func (c *Client) Get(ctx context.Context, cid string, ipfsAPIURL string) (io.Rea
 	// local read could sit behind a network fetch for the caller's whole
 	// budget. That is the mechanism behind the cold-fetch stalls in bug-167.
 	// dagBlocks already does this correctly; Get did not.
-	if body, err := c.catOnce(ctx, ipfsAPIURL, cid, true, offlineCatTimeout); err == nil {
-		return c.unwrapGet(body)
-	} else if !isContentNotFound(err) {
-		// A local read that failed for any reason OTHER than "we do not have
-		// it" is a real failure of this node, and retrying it over the network
-		// would hide that.
+	if r, err := c.getLocal(ctx, ipfsAPIURL, cid); !isContentNotFound(err) {
+		// Served locally, or a local read that failed for any reason OTHER
+		// than "we do not have it": a real failure of this node, which
+		// retrying over the network would hide.
+		return r, err
+	}
+	return c.getNetworked(ctx, ipfsAPIURL, cid)
+}
+
+// getLocal reads cid from this node's blocks only. A miss — at the root, or
+// partway through the DAG — is errContentNotFound.
+func (c *Client) getLocal(ctx context.Context, ipfsAPIURL, cid string) (io.ReadCloser, error) {
+	body, err := c.catOnce(ctx, ipfsAPIURL, cid, true, offlineCatTimeout)
+	if err != nil {
 		return nil, err
 	}
+	return c.unwrapGet(body)
+}
 
-	// Not held locally, so fetch it from the network, on the caller's budget.
+// getNetworked fetches cid through Kubo's normal path, peers included, on the
+// caller's budget.
+func (c *Client) getNetworked(ctx context.Context, ipfsAPIURL, cid string) (io.ReadCloser, error) {
 	body, err := c.catOnce(ctx, ipfsAPIURL, cid, false, 0)
 	if err != nil {
 		return nil, err
@@ -685,9 +736,14 @@ func (c *Client) unwrapGet(body io.ReadCloser) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(plain)), nil
 }
 
-// offlineCatTimeout bounds the local-only attempt. It reads from disk, so this
-// is generous; its purpose is to stop a wedged daemon eating the whole budget
-// before the networked attempt gets a turn.
+// maxErrorBodyBytes bounds how much of an error response is read into an
+// error message.
+const maxErrorBodyBytes = 4 << 10
+
+// offlineCatTimeout bounds how long the local-only attempt waits for Kubo to
+// answer. It reads from disk, so this is generous; its purpose is to stop a
+// wedged daemon eating the whole budget before the networked attempt gets a
+// turn. It does not bound reading the object.
 const offlineCatTimeout = 2 * time.Second
 
 // errContentNotFound marks a CID this node does not hold, which is the one
@@ -696,45 +752,93 @@ var errContentNotFound = errors.New("content not found")
 
 func isContentNotFound(err error) bool { return errors.Is(err, errContentNotFound) }
 
+// kuboLocalMiss is how Kubo words an offline `cat` of a block it does not
+// hold. It answers such a request with HTTP 500 and this message, never 404:
+// verified against Kubo 0.38.2 (bugboard #414). Recognising only a 404 meant a
+// node that did not hold an object never fetched it from its peers.
+const kuboLocalMiss = "not found locally"
+
 // catOnce performs one `cat`, optionally restricted to local blocks.
-func (c *Client) catOnce(ctx context.Context, ipfsAPIURL, cid string, offline bool, timeout time.Duration) (io.ReadCloser, error) {
+//
+// headerTimeout, when set, bounds only the wait for Kubo's response headers:
+// the time to find the first block. Reading the body is bounded by ctx alone,
+// so a large object this node does hold is not cut off by a deadline meant to
+// stop a wedged daemon.
+func (c *Client) catOnce(ctx context.Context, ipfsAPIURL, cid string, offline bool, headerTimeout time.Duration) (io.ReadCloser, error) {
 	// The response body outlives this function, so a deferred cancel would
 	// close the stream the caller is about to read. Cancel on every failure
 	// path, and hand ownership to the body on success.
-	cancel := func() {}
-	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithCancel(ctx)
+	var headerTimer *time.Timer
+	if headerTimeout > 0 {
+		headerTimer = time.AfterFunc(headerTimeout, cancel)
 	}
 
-	url := fmt.Sprintf("%s/api/v0/cat?arg=%s", ipfsAPIURL, cid)
+	endpoint := fmt.Sprintf("%s/api/v0/cat?arg=%s", ipfsAPIURL, url.QueryEscape(cid))
 	if offline {
-		url += "&offline=true"
+		endpoint += "&offline=true"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, nil)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create get request: %w", err)
 	}
 
 	resp, err := c.httpClient.Do(req)
+	if headerTimer != nil && !headerTimer.Stop() {
+		// The timer fired: whether Do failed on it or the headers arrived just
+		// as it did, this is Kubo not answering in time, not a cancellation.
+		if err == nil {
+			resp.Body.Close()
+		}
+		err = fmt.Errorf("no response within %s: %w", headerTimeout, context.DeadlineExceeded)
+	}
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("get %s from %s (offline=%v): %w", cid, ipfsAPIURL, offline, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		resp.Body.Close()
 		cancel()
-		if resp.StatusCode == http.StatusNotFound {
+		if resp.StatusCode == http.StatusNotFound || (offline && strings.Contains(string(body), kuboLocalMiss)) {
 			return nil, fmt.Errorf("%w (CID: %s, node %s, offline=%v)", errContentNotFound, cid, ipfsAPIURL, offline)
 		}
 		return nil, fmt.Errorf("get %s from %s failed with status %d: %s", cid, ipfsAPIURL, resp.StatusCode, string(body))
 	}
 
-	return &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}, nil
+	return &cancelOnCloseBody{ReadCloser: &streamErrorBody{resp: resp, offline: offline}, cancel: cancel}, nil
 }
+
+// streamErrorBody surfaces an error Kubo reports after the body has started.
+// `cat` streams: Kubo sends 200 and the first bytes, and a failure later in
+// the DAG arrives only in the X-Stream-Error trailer, after which the body
+// simply ends. Read as a clean EOF, that was a truncated object served as a
+// success. An offline read that stopped on a block this node lacks is a miss.
+type streamErrorBody struct {
+	resp    *http.Response
+	offline bool
+}
+
+func (b *streamErrorBody) Read(p []byte) (int, error) {
+	n, err := b.resp.Body.Read(p)
+	if err != io.EOF {
+		return n, err
+	}
+	msg := b.resp.Trailer.Get("X-Stream-Error")
+	switch {
+	case msg == "":
+		return n, err
+	case b.offline && strings.Contains(msg, kuboLocalMiss):
+		return n, fmt.Errorf("%w partway through the DAG: %s", errContentNotFound, msg)
+	default:
+		return n, fmt.Errorf("kubo stream failed: %s", msg)
+	}
+}
+
+func (b *streamErrorBody) Close() error { return b.resp.Body.Close() }
 
 // cancelOnCloseBody releases the request context when the caller is done with
 // the stream, rather than when the function that opened it returned.

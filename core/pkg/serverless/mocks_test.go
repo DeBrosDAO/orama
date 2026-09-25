@@ -372,7 +372,11 @@ func (m *MockIPFSClient) Get(ctx context.Context, cid, apiURL string) (io.ReadCl
 	return io.NopCloser(strings.NewReader(string(data))), nil
 }
 
-func (m *MockIPFSClient) Unpin(ctx context.Context, cid string) error             { return nil }
+func (m *MockIPFSClient) Unpin(ctx context.Context, cid string) error { return nil }
+func (m *MockIPFSClient) GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error) {
+	return m.Get(ctx, cid, ipfsAPIURL)
+}
+
 func (m *MockIPFSClient) EvictLocal(ctx context.Context, cid string) (int, error) { return 0, nil }
 func (m *MockIPFSClient) Health(ctx context.Context) error                        { return nil }
 func (m *MockIPFSClient) GetPeerCount(ctx context.Context) (int, error)           { return 1, nil }
