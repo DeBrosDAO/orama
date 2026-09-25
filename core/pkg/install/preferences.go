@@ -9,9 +9,8 @@ import (
 
 // NodePreferences contains persistent node configuration that survives upgrades
 type NodePreferences struct {
-	Branch       string `yaml:"branch"`
-	Nameserver   bool   `yaml:"nameserver"`
-	AnyoneClient bool   `yaml:"anyone_client"`
+	Branch     string `yaml:"branch"`
+	Nameserver bool   `yaml:"nameserver"`
 }
 
 const preferencesFile = "preferences.yaml"

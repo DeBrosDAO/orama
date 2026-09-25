@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"go.uber.org/zap"
 )
@@ -118,13 +119,14 @@ func (s *IndexSupervisor) EnsureNtfy(nodeID string) error {
 	})
 }
 
-// EnsureAnyoneClient starts orama-namespace-anyone-client@index when anonrc exists.
-func (s *IndexSupervisor) EnsureAnyoneClient(nodeID string) error {
-	if _, err := os.Stat("/etc/anon/anonrc"); err != nil {
-		s.logger.Info("anyone client not installed; skipping")
-		return disableLeftoverUnits("orama-anyone-client.service")
+// EnsureTor starts orama-namespace-tor@index, the node's client-only Tor
+// daemon. Every node has it: install and upgrade write the torrc, so a missing
+// one means that phase did not run, and is reported rather than skipped.
+func (s *IndexSupervisor) EnsureTor(nodeID string) error {
+	if _, err := os.Stat(constants.TorConfigPath); err != nil {
+		return fmt.Errorf("tor: missing %s (written by `orama node install`/`upgrade`; re-run the upgrade on this node): %w", constants.TorConfigPath, err)
 	}
-	return s.adoptReplace(nodeID, systemd.ServiceTypeAnyoneClient, []string{"orama-anyone-client.service"}, map[string]string{
+	return s.writeEnvAndStart(nodeID, systemd.ServiceTypeTor, map[string]string{
 		"NODE_ID": nodeID,
 	})
 }

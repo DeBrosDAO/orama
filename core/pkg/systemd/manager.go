@@ -14,22 +14,22 @@ import (
 type ServiceType string
 
 const (
-	ServiceTypeRQLite       ServiceType = "rqlite"
-	ServiceTypeOlric        ServiceType = "olric"
-	ServiceTypeGateway      ServiceType = "gateway"
-	ServiceTypeSFU          ServiceType = "sfu"
-	ServiceTypeTURN         ServiceType = "turn"
-	ServiceTypePubsub       ServiceType = "pubsub"
-	ServiceTypeWireGuard    ServiceType = "wireguard"
-	ServiceTypeIPFS         ServiceType = "ipfs"
-	ServiceTypeIPFSCluster  ServiceType = "ipfs-cluster"
-	ServiceTypeIPFSGC       ServiceType = "ipfs-gc"
-	ServiceTypeVault        ServiceType = "vault"
-	ServiceTypeCaddy        ServiceType = "caddy"
-	ServiceTypeNtfy         ServiceType = "ntfy"
-	ServiceTypeAnyoneClient ServiceType = "anyone-client"
-	ServiceTypeSNIRouter    ServiceType = "sni-router"
-	ServiceTypeCoreDNS      ServiceType = "coredns"
+	ServiceTypeRQLite      ServiceType = "rqlite"
+	ServiceTypeOlric       ServiceType = "olric"
+	ServiceTypeGateway     ServiceType = "gateway"
+	ServiceTypeSFU         ServiceType = "sfu"
+	ServiceTypeTURN        ServiceType = "turn"
+	ServiceTypePubsub      ServiceType = "pubsub"
+	ServiceTypeWireGuard   ServiceType = "wireguard"
+	ServiceTypeIPFS        ServiceType = "ipfs"
+	ServiceTypeIPFSCluster ServiceType = "ipfs-cluster"
+	ServiceTypeIPFSGC      ServiceType = "ipfs-gc"
+	ServiceTypeVault       ServiceType = "vault"
+	ServiceTypeCaddy       ServiceType = "caddy"
+	ServiceTypeNtfy        ServiceType = "ntfy"
+	ServiceTypeTor         ServiceType = "tor"
+	ServiceTypeSNIRouter   ServiceType = "sni-router"
+	ServiceTypeCoreDNS     ServiceType = "coredns"
 )
 
 // LeftoverHostUnits are pre-factory host daemons. The installer still writes
@@ -41,7 +41,6 @@ var LeftoverHostUnits = []string{
 	"orama-ipfs-gc.timer",
 	"orama-olric.service",
 	"orama-vault.service",
-	"orama-anyone-client.service",
 	"caddy.service",
 	"ntfy.service",
 	"orama-sni-router.service",
@@ -70,7 +69,7 @@ var TemplateUnits = []string{
 	"orama-namespace-vault@.service",
 	"orama-namespace-caddy@.service",
 	"orama-namespace-ntfy@.service",
-	"orama-namespace-anyone-client@.service",
+	"orama-namespace-tor@.service",
 	"orama-namespace-sni-router@.service",
 	"orama-namespace-coredns@.service",
 }

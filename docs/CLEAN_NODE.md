@@ -23,8 +23,8 @@ Run this as root or with sudo on the target VPS:
 sudo systemctl stop orama-node 2>/dev/null
 sudo systemctl stop 'orama-namespace-*@*' 2>/dev/null
 sudo systemctl disable orama-node 2>/dev/null
-sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
-sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric orama-anyone-relay orama-anyone-client coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
+sudo systemctl stop orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
+sudo systemctl disable orama-vault orama-ipfs orama-ipfs-cluster orama-ipfs-gc.timer orama-olric coredns caddy ntfy orama-sni-router wg-quick@wg0 2>/dev/null
 
 # 1b. Kill leftover processes (binaries may run outside systemd)
 sudo pkill -f orama-node 2>/dev/null; sudo pkill -f ipfs-cluster-service 2>/dev/null
@@ -57,9 +57,15 @@ sudo ufw --force enable
 # 5. Remove orama data directory
 sudo rm -rf /opt/orama
 sudo rm -rf /var/lib/ntfy /run/ntfy
-sudo rm -rf /etc/anon
-# /var/lib/anon (Anyone identity) is preserved unless you also:
-#   sudo rm -rf /var/lib/anon
+# Tor client config and state (the tor package itself: see Nuclear Clean)
+sudo rm -rf /etc/orama/tor /var/lib/orama-tor
+# The removed Anyone network, if this node was never upgraded past it
+sudo systemctl stop orama-namespace-anyone-client@index orama-anyone-client orama-anyone-relay anon 2>/dev/null
+sudo systemctl disable orama-namespace-anyone-client@index orama-anyone-client orama-anyone-relay anon 2>/dev/null
+sudo DEBIAN_FRONTEND=noninteractive apt-get purge -y anon 2>/dev/null
+sudo DEBIAN_FRONTEND=noninteractive apt-get purge -y nyx 2>/dev/null
+sudo rm -rf /etc/anon /var/lib/anon /var/log/anon /etc/logrotate.d/anon \
+  /etc/apt/sources.list.d/anon.list /etc/apt/trusted.gpg.d/anon.asc
 sudo swapoff -a 2>/dev/null || true
 # rm -rf is unlink, not cryptographic erase. Assume decommissioned provider disks are readable.
 
@@ -103,7 +109,8 @@ echo "Node cleaned. Ready for fresh install."
 | **User** | `orama` system user, `/etc/sudoers.d/orama-*` (incl. `orama-namespaces`) |
 | **CoreDNS** | `/etc/coredns/Corefile` |
 | **Caddy** | `/etc/caddy/Caddyfile`, `/var/lib/caddy/` (TLS certs) |
-| **Anyone** | `orama-namespace-anyone-client@index` (and leftover `orama-anyone-client.service` / `orama-anyone-relay.service` if present) |
+| **Tor** | `orama-namespace-tor@index`, `/etc/orama/tor/torrc`, `/var/lib/orama-tor/` (the `tor` package and its apt source stay; see Nuclear Clean) |
+| **Anyone (removed)** | Any Anyone network leftovers on a node never upgraded past it: its units, the `anon` package, apt source and key, `/etc/anon`, `/var/lib/anon`, `/var/log/anon` |
 | **Temp files** | `/tmp/orama`, `/tmp/network-source.*`, build dirs |
 
 ## What This Does NOT Remove
@@ -126,6 +133,7 @@ Binaries installed to `/usr/local/bin` (and Caddy in `/usr/bin`) are left in pla
 | Identity | `/usr/local/bin/identity` | `sudo rm /usr/local/bin/identity` |
 | SFU | `/usr/local/bin/sfu` | `sudo rm /usr/local/bin/sfu` |
 | TURN | `/usr/local/bin/turn` | `sudo rm /usr/local/bin/turn` |
+| Tor | `tor` apt package (`/usr/bin/tor`), `/etc/apt/sources.list.d/tor.sources` | see Nuclear Clean |
 
 ## Nuclear Clean (Remove Everything Including Binaries)
 
@@ -142,6 +150,10 @@ sudo rm -f /usr/local/bin/orama
 sudo rm -f /usr/local/bin/orama-node /usr/local/bin/gateway
 sudo rm -f /usr/local/bin/identity /usr/local/bin/sfu /usr/local/bin/turn
 sudo rm -f /usr/local/bin/orama-sni-router
+# Tor client package, its apt source and key; unmask the distro units
+sudo DEBIAN_FRONTEND=noninteractive apt-get purge -y tor deb.torproject.org-keyring
+sudo rm -f /etc/apt/sources.list.d/tor.sources /usr/share/keyrings/deb.torproject.org-keyring.gpg
+sudo systemctl unmask tor.service tor@default.service
 ```
 
 ## Multi-Node Clean
@@ -153,7 +165,7 @@ pasted into a script, or left in shell history:
 ```bash
 orama node wipe --env testnet                  # every node in the environment
 orama node wipe --env testnet --node 1.2.3.4   # one node
-orama node wipe --env testnet --nuclear        # also remove shared binaries
+orama node wipe --env testnet --nuclear        # also remove shared binaries and the tor package
 ```
 
 `wipe` erases the target only. If the node is still part of a running cluster,

@@ -1,7 +1,8 @@
 # Installing a Devnet Cluster
 
-Anyone is installed as a **client** on every node by default (SOCKS5 on `:9050`
-for `/v1/proxy/anon`). There is no relay/ORPort mode.
+Every node installs a **Tor client** (client only, from `deb.torproject.org`;
+SOCKS5 on `127.0.0.1:9050` for `/v1/proxy/anon`, `/v1/proxy/tunnel` and the
+`anon_fetch` host function). There is no relay mode and no flag to choose one.
 
 A single VPS (index + one tenant, not HA) is [EVAL.md](EVAL.md). This page is
 the three-nameserver cluster path.
@@ -128,5 +129,5 @@ After all nodes are installed, verify cluster health:
 # Or manually from any VPS:
 curl -s http://localhost:10100/status | jq -r '.store.raft.state, .store.raft.num_peers'
 curl -s http://localhost:10104/health
-systemctl status orama-anyone-client
+systemctl status orama-namespace-tor@index
 ```

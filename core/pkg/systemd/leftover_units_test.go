@@ -27,7 +27,6 @@ func TestIsLeftoverHostUnit(t *testing.T) {
 		"orama-namespace-rqlite@index.service",
 		"orama-namespace-gateway@index.service",
 		"orama-namespace-wireguard@index.service",
-		"orama-anyone-relay.service",
 	} {
 		if IsLeftoverHostUnit(name) {
 			t.Errorf("%s must not be treated as a leftover unit", name)

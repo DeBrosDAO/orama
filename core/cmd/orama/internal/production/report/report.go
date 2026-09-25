@@ -97,8 +97,8 @@ func Handle(compact bool, version string) error {
 		}
 	})
 
-	safeGo(&wg, "anyone", func() {
-		rpt.Anyone = collectAnyone()
+	safeGo(&wg, "tor", func() {
+		rpt.Tor = collectTor()
 	})
 
 	safeGo(&wg, "network", func() {

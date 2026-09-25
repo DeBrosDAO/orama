@@ -10,9 +10,14 @@ package decommission
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/install/installers"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 )
 
 // wipeScript erases an Orama installation from a node.
@@ -36,7 +41,7 @@ func wipeScript(nuclear bool) string {
 	}
 
 	return fmt.Sprintf(`bash -c '
-%s
+%[1]s
 
 # Stop every namespace unit FIRST. These are template instances
 # (orama-namespace-rqlite@index, ...@<tenant>) and match none of the legacy
@@ -49,11 +54,21 @@ systemctl stop "orama-namespace-*@*.service" 2>/dev/null || true
 
 # Then the supervisor and the legacy host units.
 for svc in orama-node orama-turn orama-sni-router caddy coredns ntfy \
-           orama-gateway orama-ipfs-cluster orama-ipfs orama-olric orama-vault \
-           orama-anyone-relay orama-anyone-client; do
+           orama-gateway orama-ipfs-cluster orama-ipfs orama-olric orama-vault; do
     systemctl stop "$svc" 2>/dev/null
     systemctl disable "$svc" 2>/dev/null
 done
+
+# The removed Anyone network, on a node that was never upgraded past it:
+# units, package, apt source, config, state (relay keys included) and logs.
+for svc in %[2]s; do
+    systemctl stop "$svc" 2>/dev/null
+    systemctl disable "$svc" 2>/dev/null
+done
+for pkg in %[4]s; do
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y "$pkg" 2>/dev/null || true
+done
+rm -rf %[3]s
 
 # Kill stragglers. Every pattern is anchored to a full path or a binary name so
 # it cannot match an unrelated command line that merely mentions the word.
@@ -87,33 +102,37 @@ ufw --force enable 2>/dev/null || true
 rm -rf /opt/orama
 rm -rf /var/lib/ntfy /run/ntfy
 rm -rf /var/log/journal
-rm -rf /etc/anon
 swapoff -a 2>/dev/null || true
 
 # Clean configs
 rm -rf /etc/coredns
 rm -rf /etc/caddy
+rm -rf %[5]s
 rm -f /tmp/orama-*.sh /tmp/network-source.tar.gz /tmp/orama-*.tar.gz
 
-# Nuclear: remove binaries
+# Nuclear: remove binaries, and Tor with its apt source. The distro Tor units
+# stay masked otherwise, so a reinstall never finds tor@default on the port.
 if [ -n "$NUCLEAR" ]; then
     rm -f /usr/local/bin/orama /usr/local/bin/orama-node /usr/local/bin/gateway
     rm -f /usr/local/bin/identity /usr/local/bin/sfu /usr/local/bin/turn /usr/local/bin/orama-sni-router
     rm -f /usr/local/bin/olric-server /usr/local/bin/ipfs /usr/local/bin/ipfs-cluster-service
     rm -f /usr/local/bin/rqlited /usr/local/bin/coredns
     rm -f /usr/bin/caddy
-fi
-
-# Anyone identity: preserved unless DESTROY_ANON=1
-if [ -n "$DESTROY_ANON" ]; then
-    rm -rf /var/lib/anon
-    echo "  Anyone relay keys destroyed"
-elif [ -d /var/lib/anon ]; then
-    echo "  Anyone relay keys preserved at /var/lib/anon/"
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y %[6]s 2>/dev/null || true
+    rm -f %[7]s
+    systemctl unmask %[8]s 2>/dev/null || true
 fi
 
 echo "  Node wiped"
-'`, nuclearFlag)
+'`, nuclearFlag,
+		strings.Join(installers.LegacyAnyoneUnits, " "),
+		strings.Join(installers.LegacyAnyonePaths(install.OramaDir), " "),
+		strings.Join(installers.LegacyAnyonePackages, " "),
+		strings.Join([]string{filepath.Dir(constants.TorConfigPath), installers.TorDataDir}, " "),
+		strings.Join(installers.TorAptPackages, " "),
+		strings.Join([]string{installers.TorAptSourcePath, installers.TorKeyringPath}, " "),
+		strings.Join(installers.TorDistroUnits, " "),
+	)
 }
 
 // wipeNode erases the target node.

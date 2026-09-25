@@ -100,7 +100,7 @@ export const SERVICES: Service[] = [
     id: "proxy",
     icon: VenetianMask,
     name: "Anonymous proxy",
-    line: "Send requests out through the Anyone privacy network.",
+    line: "Send requests out through the Tor network.",
   },
   {
     id: "identity",

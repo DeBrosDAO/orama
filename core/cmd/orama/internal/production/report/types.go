@@ -21,7 +21,7 @@ type NodeReport struct {
 	Gateway     *GatewayReport     `json:"gateway,omitempty"`
 	WireGuard   *WireGuardReport   `json:"wireguard,omitempty"`
 	DNS         *DNSReport         `json:"dns,omitempty"`
-	Anyone      *AnyoneReport      `json:"anyone,omitempty"`
+	Tor         *TorReport         `json:"tor,omitempty"`
 	Network     *NetworkReport     `json:"network"`
 	Processes   *ProcessReport     `json:"processes"`
 	Namespaces  []NamespaceReport  `json:"namespaces,omitempty"`
@@ -227,19 +227,19 @@ type DNSReport struct {
 	WildTLSDaysLeft  int  `json:"wild_tls_days_left"`
 }
 
-// --- Anyone ---
+// --- Tor ---
 
-type AnyoneReport struct {
-	RelayActive      bool   `json:"relay_active"`
-	ClientActive     bool   `json:"client_active"`
-	Mode             string `json:"mode,omitempty"`
-	ORPortListening  bool   `json:"orport_listening"`
-	SocksListening   bool   `json:"socks_listening"`
-	ControlListening bool   `json:"control_listening"`
-	Bootstrapped     bool   `json:"bootstrapped"`
-	BootstrapPct     int    `json:"bootstrap_pct"`
-	Fingerprint      string `json:"fingerprint,omitempty"`
-	Nickname         string `json:"nickname,omitempty"`
+// TorReport is the node's client-only Tor daemon (orama-namespace-tor@index).
+type TorReport struct {
+	ClientActive   bool `json:"client_active"`
+	SocksListening bool `json:"socks_listening"`
+	Bootstrapped   bool `json:"bootstrapped"`
+	// BootstrapPct is the running process's last bootstrap percentage, or -1
+	// when its journal no longer has a "Bootstrapped" line.
+	BootstrapPct int `json:"bootstrap_pct"`
+	// LegacyAnyone is true while the removed Anyone network is still on the
+	// node (an active unit, /etc/anon, /var/lib/anon or its apt source).
+	LegacyAnyone bool `json:"legacy_anyone"`
 }
 
 // --- Network ---

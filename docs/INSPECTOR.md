@@ -50,7 +50,7 @@ orama inspect [flags]
 
 ### Subsystem Names
 
-`rqlite`, `olric`, `ipfs`, `dns`, `wireguard` (alias: `wg`), `system`, `network`, `namespace`, `anyone`, `webrtc`
+`rqlite`, `olric`, `ipfs`, `dns`, `wireguard` (alias: `wg`), `system`, `network`, `namespace`, `tor`, `webrtc`
 
 Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 
@@ -66,7 +66,7 @@ Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 | **system** | Core services (`orama-node`, `orama-namespace-{olric,ipfs,ipfs-cluster,caddy,wireguard}@index`; leftover unit names still accepted during rolling upgrade), nameserver `orama-namespace-coredns@nameserver` (leftover `coredns` accepted), failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user (orama), panic count, expected ports |
 | **network** | Internet reachability, default route, WireGuard route, TCP connection count, TIME_WAIT count, TCP retransmission rate, WireGuard mesh ping (all peers) |
 | **namespace** | Per-namespace: RQLite up + raft state + readyz, Olric memberlist, Gateway HTTP health. Cross-namespace: all-healthy check, RQLite quorum per namespace |
-| **anyone** | Anyone client: SOCKS5 `:9050` + control `:9051`, bootstrap %. Leftover `orama-anyone-relay` is a warning. Skipped on nodes with neither unit |
+| **tor** | Tor client on every node: `orama-namespace-tor@index` active (fail if not), SOCKS5 `:9050` bound, bootstrap % of the running process from its own journal invocation (unknown when vacuumed — low-severity warning), and a warning if Anyone network leftovers remain (an active `orama-namespace-anyone-client@index`, `/etc/anon`, `/var/lib/anon` or its apt source) |
 | **webrtc** | Per-namespace SFU/TURN services active, cross-node SFU coverage (3 nodes) and TURN redundancy (2 nodes). Only applies to namespaces with WebRTC provisioned |
 
 ## Severity Levels

@@ -56,7 +56,7 @@ What could prevent this in the future? (omit if not applicable)`
 // SubsystemAnalysis holds the AI analysis for a single subsystem or failure group.
 type SubsystemAnalysis struct {
 	Subsystem string
-	GroupID   string // e.g. "anyone.bootstrapped" — empty when analyzing whole subsystem
+	GroupID   string // e.g. "tor.client_bootstrapped" — empty when analyzing whole subsystem
 	Analysis  string
 	Duration  time.Duration
 	Error     error
@@ -407,8 +407,8 @@ func buildSubsystemContext(subsystem string, data *ClusterData) string {
 		return buildNetworkContext(data)
 	case "namespace":
 		return buildNamespaceContext(data)
-	case "anyone":
-		return buildAnyoneContext(data)
+	case "tor":
+		return buildTorContext(data)
 	default:
 		return ""
 	}
@@ -609,19 +609,16 @@ func buildNamespaceContext(data *ClusterData) string {
 	return b.String()
 }
 
-func buildAnyoneContext(data *ClusterData) string {
+func buildTorContext(data *ClusterData) string {
 	var b strings.Builder
 	for host, nd := range data.Nodes {
-		if nd.Anyone == nil {
+		if nd.Tor == nil {
 			continue
 		}
-		a := nd.Anyone
-		if !a.RelayActive && !a.ClientActive {
-			continue
-		}
+		t := nd.Tor
 		b.WriteString(fmt.Sprintf("### %s\n", host))
-		b.WriteString(fmt.Sprintf("  client=%v leftover_relay=%v socks=%v control=%v bootstrap=%d%%\n",
-			a.ClientActive, a.RelayActive, a.SocksListening, a.ControlListening, a.BootstrapPct))
+		b.WriteString(fmt.Sprintf("  client=%v socks=%v bootstrap=%d%% legacy_anyone=%v\n",
+			t.ClientActive, t.SocksListening, t.BootstrapPct, t.LegacyAnyone))
 	}
 	return b.String()
 }

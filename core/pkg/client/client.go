@@ -134,7 +134,7 @@ func (c *Client) Connect() error {
 	}
 	c.resolvedNamespace = ns
 
-	// Create LibP2P host with optional Anyone proxy for TCP and optional QUIC disable
+	// Create LibP2P host (TCP transport)
 	var opts []libp2p.Option
 	opts = append(opts,
 		libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"), // Random port

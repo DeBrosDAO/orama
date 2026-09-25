@@ -70,7 +70,6 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 		"ipfs-cluster.log",
 		"node.log",
 		"vault.log",
-		"anyone-client.log",
 	}
 
 	for _, logFile := range logFiles {

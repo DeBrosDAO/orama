@@ -171,13 +171,6 @@ func (ps *ProductionSetup) installFromPreBuilt(manifest *PreBuiltManifest) error
 		}
 	}
 
-	// Install Anyone (anon) from .deb if this node runs the SOCKS client
-	if ps.IsAnyoneClient() {
-		if err := ps.installAnyonFromPreBuilt(); err != nil {
-			ps.logf("  ⚠️  Anyone install warning: %v", err)
-		}
-	}
-
 	ps.logf("  ✓ All pre-built binaries installed")
 	return nil
 }
@@ -276,34 +269,6 @@ func (ps *ProductionSetup) setCapabilities() error {
 func (ps *ProductionSetup) disableResolvedStub() error {
 	// Delegate to the coredns installer's method
 	return ps.binaryInstaller.coredns.DisableResolvedStubListener()
-}
-
-// installAnyonFromPreBuilt installs the Anyone relay .deb from the packages dir,
-// falling back to apt install if the .deb is not bundled.
-func (ps *ProductionSetup) installAnyonFromPreBuilt() error {
-	debPath := filepath.Join(OramaPackagesDir, "anon.deb")
-	if _, err := os.Stat(debPath); err == nil {
-		ps.logf("  Installing Anyone from bundled .deb...")
-		cmd := exec.Command("dpkg", "-i", debPath)
-		if err := cmd.Run(); err != nil {
-			ps.logf("  ⚠️  dpkg -i failed, falling back to apt...")
-			cmd = exec.Command("apt-get", "install", "-y", "anon")
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("failed to install anon: %w", err)
-			}
-		}
-		ps.logf("  ✓ Anyone installed from .deb")
-		return nil
-	}
-
-	// No .deb bundled — fall back to apt (the existing path in source mode)
-	ps.logf("  Installing Anyone via apt (not bundled in archive)...")
-	cmd := exec.Command("apt-get", "install", "-y", "anon")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to install anon via apt: %w", err)
-	}
-	ps.logf("  ✓ Anyone installed via apt")
-	return nil
 }
 
 // copyBinary copies a file from src to dest, preserving executable permissions.

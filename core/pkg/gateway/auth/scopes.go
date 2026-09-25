@@ -22,7 +22,7 @@ const (
 	ScopeStorage = "storage" // IPFS storage upload/pin/get
 	ScopePush    = "push"    // push device registration
 	ScopeWebRTC  = "webrtc"  // TURN credentials + SFU signaling
-	ScopeProxy   = "proxy"   // Anyone-routed anon proxy
+	ScopeProxy   = "proxy"   // Tor-routed anon proxy
 	ScopePubsub  = "pubsub"  // pub/sub REST
 	ScopeCache   = "cache"   // Olric cache REST
 )

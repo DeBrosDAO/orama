@@ -30,20 +30,20 @@ const (
 type ServiceName string
 
 const (
-	ServiceRQLite       ServiceName = "rqlite"
-	ServiceOlric        ServiceName = "olric"
-	ServiceGateway      ServiceName = "gateway"
-	ServiceIPFS         ServiceName = "ipfs"
-	ServiceIPFSCluster  ServiceName = "ipfs-cluster"
-	ServiceIPFSGC       ServiceName = "ipfs-gc"
-	ServiceWireGuard    ServiceName = "wireguard"
-	ServiceVault        ServiceName = "vault"
-	ServiceCaddy        ServiceName = "caddy"
-	ServiceNtfy         ServiceName = "ntfy"
-	ServiceAnyoneClient ServiceName = "anyone-client"
-	ServiceSNIRouter    ServiceName = "sni-router"
-	ServiceCoreDNS      ServiceName = "coredns"
-	ServicePubsub       ServiceName = "pubsub"
+	ServiceRQLite      ServiceName = "rqlite"
+	ServiceOlric       ServiceName = "olric"
+	ServiceGateway     ServiceName = "gateway"
+	ServiceIPFS        ServiceName = "ipfs"
+	ServiceIPFSCluster ServiceName = "ipfs-cluster"
+	ServiceIPFSGC      ServiceName = "ipfs-gc"
+	ServiceWireGuard   ServiceName = "wireguard"
+	ServiceVault       ServiceName = "vault"
+	ServiceCaddy       ServiceName = "caddy"
+	ServiceNtfy        ServiceName = "ntfy"
+	ServiceTor         ServiceName = "tor"
+	ServiceSNIRouter   ServiceName = "sni-router"
+	ServiceCoreDNS     ServiceName = "coredns"
+	ServicePubsub      ServiceName = "pubsub"
 )
 
 // Named blueprints. Index and nameserver are reserved; they are not
@@ -183,11 +183,11 @@ func BlueprintIndex() Blueprint {
 				},
 			},
 			{
-				Name:  ServiceAnyoneClient,
+				Name:  ServiceTor,
 				Order: 13,
 				Scope: ScopeIndex,
 				PortNeeds: []PortNeed{
-					{Fixed: IndexAnyoneSOCKSPort},
+					{Fixed: IndexTorSOCKSPort},
 				},
 			},
 		},

@@ -23,18 +23,6 @@ ProtectKernelModules=yes
 RestrictNamespaces=yes
 ProtectProc=invisible`
 
-// anyoneClientHardening is the host-service block for debian-anon (bugboard #244).
-const anyoneClientHardening = `User=debian-anon
-Group=debian-anon
-ProtectSystem=strict
-ProtectHome=yes
-NoNewPrivileges=yes
-PrivateDevices=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-RestrictNamespaces=yes
-ProtectProc=invisible`
-
 // oramaNodeHardening is like oramaServiceHardening but WITHOUT NoNewPrivileges.
 // The supervisor starts namespace systemd units and needs sudo for that.
 // NoNewPrivileges prevents sudo from working.
@@ -441,38 +429,6 @@ MemorySwapMax=0
 [Install]
 WantedBy=multi-user.target
 `, ssg.oramaHome, ssg.oramaDir, logFile, oramaServiceHardening, dataDir, logsDir, configsDir, tlsCache, secretsDir)
-}
-
-// GenerateAnyoneClientService generates the Anyone Client SOCKS5 proxy systemd unit.
-// Uses the same anon binary as the relay, but with a client-only config (SocksPort only, no relay).
-func (ssg *SystemdServiceGenerator) GenerateAnyoneClientService() string {
-	logFile := filepath.Join(ssg.oramaDir, "logs", "anyone-client.log")
-
-	return fmt.Sprintf(`[Unit]
-Description=Anyone Client SOCKS5 Proxy
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-%[2]s
-ExecStart=/usr/bin/anon -f /etc/anon/anonrc
-Restart=on-failure
-RestartSec=5
-StandardOutput=append:%[1]s
-StandardError=append:%[1]s
-SyslogIdentifier=anyone-client
-
-PrivateTmp=yes
-LimitNOFILE=65536
-TimeoutStopSec=30
-KillMode=mixed
-MemoryMax=1G
-MemorySwapMax=0
-
-[Install]
-WantedBy=multi-user.target
-`, logFile, anyoneClientHardening)
 }
 
 // GenerateCoreDNSService generates the CoreDNS systemd unit

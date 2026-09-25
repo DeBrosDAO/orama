@@ -104,10 +104,10 @@ const (
 	IndexNtfyPort            = constants.NtfyListenPort
 
 	// Host-stack edge / singleton ports. Not in 10100.
-	IndexWireGuardPort   = constants.WireGuardPort
-	IndexCaddyHTTPPort   = 80
-	IndexCaddyHTTPSPort  = 443
-	IndexAnyoneSOCKSPort = 9050
+	IndexWireGuardPort  = constants.WireGuardPort
+	IndexCaddyHTTPPort  = 80
+	IndexCaddyHTTPSPort = 443
+	IndexTorSOCKSPort   = constants.TorSOCKSPort
 
 	// NameserverDNSPort is CoreDNS on the nameserver blueprint. Edge; not 10100.
 	NameserverDNSPort = 53

@@ -70,7 +70,7 @@ func (n *Node) startIndexEdgeServing(_ context.Context) error {
 	return nil
 }
 
-// startIndexEdgeAux starts ntfy and the anyone-client. Neither terminates
+// startIndexEdgeAux starts ntfy and the Tor client. Neither terminates
 // traffic for this node, so a failure here degrades it without taking it out of
 // DNS.
 func (n *Node) startIndexEdgeAux(_ context.Context) error {
@@ -81,8 +81,8 @@ func (n *Node) startIndexEdgeAux(_ context.Context) error {
 	if err := sup.EnsureNtfy(nodeID); err != nil {
 		return fmt.Errorf("index ntfy: %w", err)
 	}
-	if err := sup.EnsureAnyoneClient(nodeID); err != nil {
-		return fmt.Errorf("index anyone-client: %w", err)
+	if err := sup.EnsureTor(nodeID); err != nil {
+		return fmt.Errorf("index tor: %w", err)
 	}
 	return nil
 }

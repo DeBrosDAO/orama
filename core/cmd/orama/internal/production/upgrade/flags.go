@@ -38,9 +38,4 @@ type Flags struct {
 	// Hidden flag — set programmatically by orchestrator.go via os.Args,
 	// not a documented user-facing option.
 	ReexecedAfterBinarySwap bool
-
-	// Anyone flags
-	AnyoneClient bool
 }
-
-// ParseFlags parses upgrade command flags

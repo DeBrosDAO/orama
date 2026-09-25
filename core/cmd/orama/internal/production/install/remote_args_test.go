@@ -37,7 +37,6 @@ func fullFlags() *Flags {
 		SkipChecks:        true,
 		SkipFirewall:      true,
 		DryRun:            true,
-		AnyoneClient:      true,
 	}
 }
 
@@ -66,7 +65,6 @@ func TestRemoteInstallArgs_forwardsEveryFlag(t *testing.T) {
 		"--skip-checks",
 		"--skip-firewall",
 		"--dry-run",
-		"--anyone-client",
 	} {
 		if !strings.Contains(line, want) {
 			t.Errorf("%q is not forwarded:\n%s", want, line)

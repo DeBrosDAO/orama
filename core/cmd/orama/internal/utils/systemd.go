@@ -242,9 +242,8 @@ func IsServiceMasked(service string) (bool, error) {
 func GetProductionServices() []string {
 	// Global/default service names.
 	//
-	// orama-node and orama-anyone-relay only. The pre-factory host daemons —
-	// orama-olric, orama-ipfs, orama-ipfs-cluster, orama-vault,
-	// orama-anyone-client — are systemd.LeftoverHostUnits: the installer still
+	// orama-node only. The pre-factory host daemons — orama-olric, orama-ipfs,
+	// orama-ipfs-cluster, orama-vault — are systemd.LeftoverHostUnits: the installer still
 	// writes their unit files for rollback but deliberately disables them,
 	// because IndexSupervisor runs orama-namespace-*@index instead.
 	//
@@ -255,7 +254,6 @@ func GetProductionServices() []string {
 	// disk, so a presence check could never tell the difference.
 	globalServices := []string{
 		"orama-node",
-		"orama-anyone-relay",
 	}
 
 	var existing []string
@@ -282,7 +280,7 @@ func GetProductionServices() []string {
 		serviceTypes := []string{
 			"rqlite", "olric", "gateway", "sfu", "turn", "pubsub",
 			"wireguard", "ipfs", "ipfs-cluster", "ipfs-gc", "vault",
-			"caddy", "ntfy", "anyone-client", "sni-router", "coredns",
+			"caddy", "ntfy", "tor", "sni-router", "coredns",
 		}
 		for _, nsEntry := range nsEntries {
 			if !nsEntry.IsDir() {

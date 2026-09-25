@@ -71,7 +71,7 @@ func TestBlueprintTenant_rejectsIndexSingletons(t *testing.T) {
 		{Name: ServiceVault, Scope: ScopeIndex, Order: 99},
 		{Name: ServiceCaddy, Scope: ScopeIndex, Order: 99},
 		{Name: ServiceNtfy, Scope: ScopeIndex, Order: 99},
-		{Name: ServiceAnyoneClient, Scope: ScopeIndex, Order: 99},
+		{Name: ServiceTor, Scope: ScopeIndex, Order: 99},
 		{Name: ServiceSNIRouter, Scope: ScopeIndex, Order: 99},
 		{Name: ServiceCoreDNS, Scope: ScopeNameserver, Order: 99},
 		{Name: ServicePubsub, Scope: ScopeIndex, Order: 99},
@@ -126,7 +126,7 @@ func TestBlueprintIndex_fixedPortsNotTenantRange(t *testing.T) {
 	want := []ServiceName{
 		ServiceWireGuard, ServiceIPFS, ServiceIPFSCluster, ServiceIPFSGC,
 		ServiceRQLite, ServiceOlric, ServicePubsub,
-		ServiceVault, ServiceSNIRouter, ServiceCaddy, ServiceNtfy, ServiceAnyoneClient,
+		ServiceVault, ServiceSNIRouter, ServiceCaddy, ServiceNtfy, ServiceTor,
 	}
 	if len(bp.Services) != len(want) {
 		t.Fatalf("len(Services) = %d, want %d (%v)", len(bp.Services), len(want), serviceNames(bp))

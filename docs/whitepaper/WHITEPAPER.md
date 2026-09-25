@@ -106,7 +106,7 @@ Everything below is reached through the `orama` CLI, the TypeScript SDK, the Go 
 | Voice and video | Selective forwarding plus TURN relay, relay-only by design | Pion SFU and TURN | Live |
 | Stealth TURN | TURN over TLS on port 443, routed by SNI, so relayed calls look like HTTPS | SNI router | Live, optional per node |
 | Push notifications | Direct APNs, a self-hosted ntfy server for Android and web, and Expo for Android via Google | APNs, ntfy, Expo | Live |
-| Anonymity proxy | Outbound HTTP and TCP tunnels through the Anyone relay network | Anyone client | Live |
+| Anonymity proxy | Outbound HTTP and TCP tunnels through the Tor network | Tor client (client only) | Live |
 | Vault | Secrets split with Shamir's scheme across guardian nodes | Zig guardian | Partial |
 
 ### Hosting
@@ -135,7 +135,7 @@ Tenants bring their own push credentials, which are stored encrypted, and no pus
 
 ### Anonymity proxy
 
-Every node runs an Anyone network client. An application can send a single HTTP request through it (the gateway sees the request, because it performs it) or open a WebSocket tunnel that carries an end-to-end TLS stream (the gateway sees only the destination host and port). Functions have the same capability through `anyone_fetch`. Both paths require a signed-in wallet user, not just an app key.
+Every node runs a Tor client (client only — it relays nothing). An application can send a single HTTP request through it (the gateway sees the request, because it performs it) or open a WebSocket tunnel that carries an end-to-end TLS stream (the gateway sees only the destination host and port). Functions have the same capability through `anon_fetch` (the older name `anyone_fetch` remains as a deprecated alias). Both paths require a signed-in wallet user, not just an app key.
 
 ### Vault (partial)
 
@@ -186,7 +186,7 @@ Orama's privacy properties come from careful arrangement of ordinary components,
 - **Callers hidden from each other.** Relay-only calls mean participants never learn each other's IP addresses.
 - **Calls that do not look like calls.** Stealth TURN on port 443 makes a relayed call look like HTTPS.
 - **Push without a middleman.** Direct APNs and self-hosted ntfy mean notification metadata does not pass through a third-party push broker unless a tenant chooses Expo.
-- **Outbound anonymity.** Apps and functions can make requests through the Anyone network without revealing the server's own address.
+- **Outbound anonymity.** Apps and functions can make requests through the Tor network without revealing the server's own address.
 - **Operator diversity as a security property.** The more independent operators and jurisdictions a network spans, the more parties an adversary must compel. This is why the network needs to grow beyond its current operators, and why it should do so only once a hostile node cannot harm a tenant (Section 10).
 
 The goal is modest and honest: move secrets and plaintext out of cheap, bulk, after-the-fact capture, such as disk images and backups, and into expensive, targeted, live capture. That is a real improvement. It is not invisibility.
@@ -225,7 +225,7 @@ Node operation is invite-only, and operators are vetted, because an operator of 
 
 | Requirement | Minimum |
 |---|---|
-| Operating system | Ubuntu 22.04, 24.04 or 25.04, or Debian 12 |
+| Operating system | Ubuntu 22.04 or 24.04, or Debian 12 (releases the Tor Project publishes packages for) |
 | Architecture | amd64 or arm64 |
 | CPU | 2 cores |
 | Memory | 2 GB |

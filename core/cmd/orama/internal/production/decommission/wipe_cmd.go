@@ -71,7 +71,7 @@ func executeWipe(flags *WipeFlags) error {
 	}
 
 	if !flags.Force {
-		fmt.Printf("This will DESTROY all data on these nodes. Anyone relay keys are preserved.\n")
+		fmt.Printf("This will DESTROY all data on these nodes.\n")
 		fmt.Printf("Type 'yes' to confirm: ")
 		input, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		if strings.TrimSpace(input) != "yes" {
@@ -97,7 +97,6 @@ func executeWipe(flags *WipeFlags) error {
 	}
 
 	fmt.Printf("✓ Wipe complete (%d nodes)\n", len(nodes))
-	fmt.Printf("  Anyone relay keys preserved at /var/lib/anon/ (DESTROY_ANON=1 to remove)\n")
 	fmt.Printf("  rm -rf is unlink, not cryptographic erase. Provider disks remain readable.\n")
 	fmt.Printf("  To reinstall: orama node install --vps-ip <ip> ...\n")
 	return nil

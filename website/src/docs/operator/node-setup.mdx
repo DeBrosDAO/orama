@@ -48,7 +48,7 @@ Provision a VPS with the following minimum specifications:
 | 443 | TCP | HTTPS (external traffic via Caddy) |
 | 51820 | UDP | WireGuard mesh tunnel |
 
-All other inter-node communication travels over the WireGuard overlay (`10.0.0.x` subnet) and does not require public port exposure. The Anyone client's SOCKS5 proxy binds to `127.0.0.1:9050` and is never exposed publicly.
+All other inter-node communication travels over the WireGuard overlay (`10.0.0.x` subnet) and does not require public port exposure. The Tor client's SOCKS5 proxy binds to `127.0.0.1:9050` and is never exposed publicly.
 
 ## OS Preparation
 
@@ -128,28 +128,15 @@ The join process registers the new node with the cluster, exchanges WireGuard ke
 | `--skip-checks` | bool | `false` | Skip system resource checks (RAM/CPU) |
 | `--skip-firewall` | bool | `false` | Skip UFW firewall setup |
 
-## Anyone Protocol Integration
+## Tor Client
 
-Every Orama node installs an [Anyone Protocol](https://anyone.io) client for anonymized outbound requests (`/v1/proxy/anon`). Relay operator mode is not supported — nodes only run as clients.
+Every Orama node installs a [Tor](https://www.torproject.org) client for anonymized outbound requests (`/v1/proxy/anon`, `/v1/proxy/tunnel` and the `anon_fetch` function host call). It is client only — no relay, no exit, no inbound port — and there is no flag for it: `orama node install` and `orama node upgrade` always set it up.
 
-### Example: Installing with the Anyone Client
+- Installed from the Tor Project's repository (`deb.torproject.org`), with the archive key pinned by fingerprint. The OS must be one the Tor Project publishes for: Ubuntu 22.04 (`jammy`), 24.04 (`noble`), 26.04 (`resolute`), Debian 12 (`bookworm`) or 13 (`trixie`).
+- Runs as `orama-namespace-tor@index` (user `debian-tor`), with its config in `/etc/orama/tor/torrc` and its state in `/var/lib/orama-tor`. The package's own `tor.service` is masked.
+- The SOCKS5 proxy binds to `127.0.0.1:9050` and is never reachable off-host.
 
-```bash
-sudo orama node install \
-  --vps-ip 203.0.113.10 \
-  --base-domain dbrs.space \
-  --join https://existing-node.dbrs.space \
-  --token eyJhbGciOi... \
-  --anyone-client
-```
-
-### Anyone Flag Reference
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--anyone-client` | bool | `false` | Install Anyone as a local SOCKS5 proxy (port 9050, localhost only) |
-
-The SOCKS5 proxy binds to `127.0.0.1:9050` and is never reachable off-host.
+Nodes installed before Tor replaced the Anyone network have Anyone removed on their next upgrade — units, the `anon` package, its apt source and all of `/etc/anon`, `/var/lib/anon` and `/var/log/anon`. The old `--anyone-*` flags now fail with an error explaining that Tor is installed automatically.
 
 ## Service Stack
 
@@ -248,7 +235,7 @@ orama node upgrade --force
 orama node upgrade --skip-checks
 ```
 
-The upgrade command also accepts `--anyone-client` to reinstall the Anyone client during an upgrade, plus `--env`, `--node`, and `--delay` for targeting specific environments and nodes.
+The upgrade command also accepts `--env`, `--node`, and `--delay` for targeting specific environments and nodes. Every upgrade also upgrades the Tor client from `deb.torproject.org` before the node's services stop, and on a node that still has it removes the Anyone network.
 
 ### Rolling Upgrades
 

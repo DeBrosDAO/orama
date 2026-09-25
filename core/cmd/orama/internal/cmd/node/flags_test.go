@@ -121,15 +121,75 @@ func TestHelpSucceedsForEveryNodeSubcommand(t *testing.T) {
 	}
 }
 
-// --anyone-relay was removed: every node's gateway serves /v1/proxy/anon and
-// needs the local SOCKS proxy, so relay mode is not a choice. An operator who
-// still passes it must be told, not silently ignored.
-func TestInstall_RemovedAnyoneRelayFlagIsRejected(t *testing.T) {
-	err := runParse(t, installCmd, "--anyone-relay")
-	if err == nil {
-		t.Fatal("the removed --anyone-relay flag must be an error")
+// The Anyone network was removed; every node installs the Tor client, so none
+// of the --anyone-* flags choose anything any more. An operator who still
+// passes one must be told why, not silently ignored.
+func TestInstallAndUpgrade_RemovedAnyoneFlagsAreRejectedWithAReason(t *testing.T) {
+	cases := map[*cobra.Command][]string{
+		installCmd: {"--anyone-client", "--anyone-relay", "--anyone-migrate"},
+		// upgrade's --anyone-client is refused in RunE; see the tests below.
+		upgradeCmd: {"--anyone-relay", "--anyone-migrate"},
 	}
-	if !strings.Contains(err.Error(), "anyone-relay") {
-		t.Errorf("the error should name the flag, got: %v", err)
+	for cmd, flags := range cases {
+		for _, flag := range flags {
+			err := runParse(t, cmd, flag)
+			if err == nil {
+				t.Fatalf("%s %s: the removed flag must be an error", cmd.Name(), flag)
+			}
+			if !strings.Contains(err.Error(), strings.TrimPrefix(flag, "--")) {
+				t.Errorf("%s %s: the error should name the flag, got: %v", cmd.Name(), flag, err)
+			}
+			if !strings.Contains(err.Error(), "Tor client is installed on every node") {
+				t.Errorf("%s %s: the error should say what replaced it, got: %v", cmd.Name(), flag, err)
+			}
+		}
+	}
+}
+
+// An operator passing --anyone-client to upgrade is refused with the reason.
+func TestCheckUpgradeAnyoneClient_operatorIsRefused(t *testing.T) {
+	err := checkUpgradeAnyoneClient(true, false)
+	if err == nil {
+		t.Fatal("--anyone-client from an operator must be an error")
+	}
+	if !strings.Contains(err.Error(), "anyone-client") || !strings.Contains(err.Error(), "Tor client is installed on every node") {
+		t.Errorf("error should name the flag and what replaced it: %v", err)
+	}
+}
+
+// The upgrade that introduces Tor is started by the old binary, which accepts
+// --anyone-client and forwards its argv to the new binary after swapping it
+// in. Refusing it there would abort the upgrade with services stopped.
+func TestCheckUpgradeAnyoneClient_reexecCarriesItThrough(t *testing.T) {
+	if err := checkUpgradeAnyoneClient(true, true); err != nil {
+		t.Errorf("--anyone-client forwarded by the re-exec must be accepted: %v", err)
+	}
+	if err := checkUpgradeAnyoneClient(false, false); err != nil {
+		t.Errorf("no flag must be fine: %v", err)
+	}
+}
+
+func TestUpgrade_ReexecAnyoneClientFlagParsesAndIsHidden(t *testing.T) {
+	upgradeAnyoneClient = false
+	t.Cleanup(func() { upgradeAnyoneClient = false })
+	if err := runParse(t, upgradeCmd, "--anyone-client", "--reexeced-after-binary-swap"); err != nil {
+		t.Fatalf("the re-exec argv must parse: %v", err)
+	}
+	if !upgradeAnyoneClient {
+		t.Error("flag value not surfaced")
+	}
+	if f := upgradeCmd.Flags().Lookup("anyone-client"); f == nil || !f.Hidden {
+		t.Error("--anyone-client must stay hidden from help")
+	}
+}
+
+// Any other unknown flag keeps cobra's plain error.
+func TestExplainRemovedFlags_leavesOtherErrorsAlone(t *testing.T) {
+	err := runParse(t, installCmd, "--no-such-flag")
+	if err == nil {
+		t.Fatal("an unknown flag must be an error")
+	}
+	if strings.Contains(err.Error(), "Anyone") {
+		t.Errorf("an unrelated unknown flag must not mention Anyone: %v", err)
 	}
 }

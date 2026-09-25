@@ -182,7 +182,7 @@ sudo orama node report --json
 | **gateway** | HTTP health check, subsystem status |
 | **wireguard** | Interface state, WG IP, peers, handshake ages, MTU, config permissions |
 | **dns** | CoreDNS/Caddy state, port bindings, resolution tests, TLS cert expiry |
-| **anyone** | Relay/client state, bootstrap progress, fingerprint |
+| **tor** | Tor client unit state, SOCKS port bound, bootstrap % of the running process (`-1` when its journal no longer has it), Anyone-network leftovers |
 | **network** | Internet reachability, TCP stats, retransmission rate, listening ports, UFW rules |
 | **processes** | Zombie count, orphan orama processes, panic/fatal count in logs |
 | **namespaces** | Per-namespace service probes (RQLite, Olric, Gateway) |
@@ -212,7 +212,7 @@ All 15 collectors run in parallel with goroutines. Typical collection time is **
   "gateway": { "responsive": true, "http_status": 200, ... },
   "wireguard": { "interface_up": true, "wg_ip": "10.0.0.1", "peers": [...], ... },
   "dns": { "coredns_active": true, "caddy_active": true, "base_tls_days_left": 88, ... },
-  "anyone": { "relay_active": true, "bootstrapped": true, ... },
+  "tor": { "client_active": true, "socks_listening": true, "bootstrapped": true, "bootstrap_pct": 100, "legacy_anyone": false },
   "network": { "internet_reachable": true, "ufw_active": true, ... },
   "processes": { "zombie_count": 0, "orphan_count": 0, "panic_count": 0, ... },
   "namespaces": [],
@@ -230,7 +230,7 @@ Alerts are derived from cross-node analysis of all collected reports. Each alert
 | Severity | Examples |
 |----------|----------|
 | **critical** | SSH collection failed (node unreachable), no RQLite leader, split brain, RQLite unresponsive, WireGuard interface down, WG peer never handshaked, OOM kills, service failed, UFW inactive |
-| **warning** | Strong read failed, memory > 90%, disk > 85%, stale WG handshake (> 3min), Raft term inconsistency, applied index lag > 100, restart loop detected, TLS cert < 14 days, DNS down, namespace gateway down, Anyone not bootstrapped, clock skew > 5s, internet unreachable, high TCP retransmission |
+| **warning** | Strong read failed, memory > 90%, disk > 85%, stale WG handshake (> 3min), Raft term inconsistency, applied index lag > 100, restart loop detected, TLS cert < 14 days, DNS down, namespace gateway down, Tor SOCKS port not bound or not bootstrapped, Anyone-network leftovers, clock skew > 5s, internet unreachable, high TCP retransmission |
 | **info** | Zombie processes, orphan orama processes, swap usage > 30% |
 
 ### Cross-Node Checks
@@ -288,7 +288,7 @@ means one thing across the CLI.
 - **System**: Memory, disk, load, OOM kills, swap
 - **Services**: Systemd state, restart loops
 - **DNS**: CoreDNS/Caddy up, TLS cert expiry, SOA resolution
-- **Anyone**: Bootstrap progress
+- **Tor**: SOCKS port bound while active, bootstrap below 100% (an unknown bootstrap is not an alert), Anyone-network leftovers
 - **Processes**: Zombies, orphans, panics in logs
 - **Namespaces**: Gateway and RQLite per namespace
 - **Network**: UFW, internet reachability, TCP retransmission

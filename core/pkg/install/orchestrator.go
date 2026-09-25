@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
-	"github.com/DeBrosOfficial/network/pkg/install/installers"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
@@ -25,7 +24,6 @@ type ProductionSetup struct {
 	skipOptionalDeps   bool
 	skipResourceChecks bool
 	isNameserver       bool // Whether this node is a nameserver (runs CoreDNS)
-	isAnyoneClient     bool // Whether this node runs Anyone as client-only (SOCKS5 proxy)
 	privChecker        *PrivilegeChecker
 	osDetector         *OSDetector
 	archDetector       *ArchitectureDetector
@@ -121,38 +119,6 @@ func (ps *ProductionSetup) IsNameserver() bool {
 	return ps.isNameserver
 }
 
-// SetAnyoneClient sets whether this node runs Anyone as client-only
-func (ps *ProductionSetup) SetAnyoneClient(enabled bool) {
-	ps.isAnyoneClient = enabled
-}
-
-// IsAnyoneClient returns whether this node runs Anyone as client-only
-func (ps *ProductionSetup) IsAnyoneClient() bool {
-	return ps.isAnyoneClient
-}
-
-// disableConflictingAnyoneService stops, disables, and removes a conflicting
-// Anyone service file. A node must run client, never both.
-// This is best-effort: errors are logged but do not abort the operation.
-func (ps *ProductionSetup) disableConflictingAnyoneService(serviceName string) {
-	unitPath := filepath.Join("/etc/systemd/system", serviceName)
-	if _, err := os.Stat(unitPath); os.IsNotExist(err) {
-		return // Nothing to clean up
-	}
-
-	ps.logf("  Removing conflicting Anyone service: %s", serviceName)
-
-	if err := ps.serviceController.StopService(serviceName); err != nil {
-		ps.logf("  ⚠️  Warning: failed to stop %s: %v", serviceName, err)
-	}
-	if err := ps.serviceController.DisableService(serviceName); err != nil {
-		ps.logf("  ⚠️  Warning: failed to disable %s: %v", serviceName, err)
-	}
-	if err := ps.serviceController.RemoveServiceUnit(serviceName); err != nil {
-		ps.logf("  ⚠️  Warning: failed to remove %s: %v", serviceName, err)
-	}
-}
-
 // Phase1CheckPrerequisites performs initial environment validation
 func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 	ps.logf("Phase 1: Checking prerequisites...")
@@ -179,7 +145,7 @@ func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 
 	// Check if supported
 	if !ps.osDetector.IsSupportedOS(osInfo) {
-		ps.logf("  ⚠️  OS %s is not officially supported (Ubuntu 22/24/25, Debian 12)", osInfo.Name)
+		ps.logf("  ⚠️  OS %s is not officially supported (Ubuntu 22.04/24.04, Debian 12)", osInfo.Name)
 		ps.logf("     Proceeding anyway, but issues may occur")
 	}
 
@@ -274,13 +240,6 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 		}
 	}
 
-	// Anyone client configuration runs after BOTH paths.
-	// Pre-built mode installs the anon binary via .deb/apt;
-	// Configuration (anonrc, bandwidth, migration) is always needed.
-	if err := ps.configureAnyone(); err != nil {
-		ps.logf("  ⚠️  Anyone configuration warning: %v", err)
-	}
-
 	ps.logf("  ✓ All binaries installed")
 	return nil
 }
@@ -340,27 +299,6 @@ func (ps *ProductionSetup) installFromSource() error {
 
 	if err := ps.binaryInstaller.InstallIPFSCluster(); err != nil {
 		ps.logf("  ⚠️  IPFS Cluster install warning: %v", err)
-	}
-
-	return nil
-}
-
-// configureAnyone handles Anyone client installation and configuration.
-// This runs after both pre-built and source mode binary installation.
-func (ps *ProductionSetup) configureAnyone() error {
-	if ps.IsAnyoneClient() {
-		ps.logf("  Installing Anyone client-only mode (SOCKS5 proxy)...")
-		clientInstaller := installers.NewAnyoneInstaller(ps.arch, ps.logWriter)
-
-		// Install the anon binary
-		if err := clientInstaller.Install(); err != nil {
-			ps.logf("  ⚠️  Anyone client install warning: %v", err)
-		}
-
-		// Configure as client-only (SocksPort 9050, no ORPort)
-		if err := clientInstaller.ConfigureClient(); err != nil {
-			ps.logf("  ⚠️  Anyone client config warning: %v", err)
-		}
 	}
 
 	return nil
@@ -802,20 +740,6 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 		return fmt.Errorf("failed to write Vault service: %w", err)
 	}
 	ps.logf("  ✓ Vault service created: orama-vault.service")
-
-	// Anyone client (SOCKS :9050 for /v1/proxy/anon). Always disable a leftover
-	// orama-anyone-relay unit if one is still on disk from older installs.
-	if ps.IsAnyoneClient() {
-		anyoneUnit := ps.serviceGenerator.GenerateAnyoneClientService()
-		if err := ps.serviceController.WriteServiceUnit("orama-anyone-client.service", anyoneUnit); err != nil {
-			return fmt.Errorf("failed to write Anyone client service: %w", err)
-		}
-		ps.logf("  ✓ Anyone client service created (SocksPort 9050)")
-		ps.disableConflictingAnyoneService("orama-anyone-relay.service")
-	} else {
-		ps.disableConflictingAnyoneService("orama-anyone-client.service")
-		ps.disableConflictingAnyoneService("orama-anyone-relay.service")
-	}
 
 	// CoreDNS service (only for nameserver nodes)
 	if ps.isNameserver {

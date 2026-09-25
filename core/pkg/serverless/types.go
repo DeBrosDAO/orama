@@ -674,14 +674,15 @@ type HostServices interface {
 	// HTTP operations
 	HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
 
-	// AnyoneFetch is HTTPFetch routed through the Anyone (ANyONe
-	// protocol) SOCKS5 proxy so the external endpoint sees an Anyone
-	// exit IP, not the gateway's. Feat-11 — server-side analog of the
+	// AnonFetch is HTTPFetch routed through the node's Tor client
+	// (SOCKS5) so the external endpoint sees a Tor exit IP, not the
+	// gateway's. Feat-11 — server-side analog of the
 	// client-side proxy, for serverless functions fronting third-party
 	// APIs (e.g. wallet RPC) that shouldn't expose a gateway↔upstream
 	// metadata trail. NO silent fallback to direct: returns a typed
-	// error envelope when Anyone routing is unavailable.
-	AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
+	// error envelope when Tor routing is unavailable. Exported to WASM
+	// as anon_fetch and as the deprecated alias anyone_fetch.
+	AnonFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
 
 	// Context operations
 	GetEnv(ctx context.Context, key string) (string, error)

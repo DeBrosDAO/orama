@@ -351,7 +351,7 @@ fmt.Printf("Topics: %v\n", topics)
 
 ## Anonymity Proxy
 
-Two endpoints route traffic through the Anyone network so the destination never
+Two endpoints route traffic through Tor (the client every node runs) so the destination never
 learns the end user's IP. Both require the `proxy` grant **and** a genuine
 end-user (SIWE wallet) JWT — an app-runtime API key alone is refused, because
 these are per-user capabilities and an extracted bundle key must not carry them.
@@ -420,7 +420,7 @@ carrier-grade NAT, multicast and `localhost` are all rejected, so a tunnel
 cannot be aimed at the WireGuard mesh or a cloud metadata endpoint.
 
 **Circuit isolation.** Each user gets their own circuit through the anonymity
-network, selected by an HMAC of their identity under a node-local secret. Users
+network (Tor stream isolation by SOCKS credentials), selected by an HMAC of their identity under a node-local secret. Users
 on the same node are therefore not linkable to one another at the exit, and the
 anonymity client never receives a wallet address.
 

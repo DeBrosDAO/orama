@@ -8,8 +8,8 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 )
 
 // RemoteOrchestrator orchestrates a remote install via SSH.
@@ -225,7 +225,6 @@ func remoteInstallArgs(flags *Flags) []string {
 		{"skip-checks", flags.SkipChecks},
 		{"skip-firewall", flags.SkipFirewall},
 		{"dry-run", flags.DryRun},
-		{"anyone-client", flags.AnyoneClient},
 	}
 	for _, f := range boolFlags {
 		if f.set {

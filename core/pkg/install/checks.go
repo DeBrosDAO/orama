@@ -77,25 +77,21 @@ func (od *OSDetector) Detect() (*OSInfo, error) {
 	}, nil
 }
 
-// IsSupportedOS checks if the OS is supported for production deployment
+// supportedReleases maps each supported OS ID and version to its codename.
+//
+// Every release here must be one the Tor Project publishes packages for
+// (installers.TorSuiteFor): the Tor client is installed on every node, and
+// Phase 2d fails on any other release. Ubuntu 25.04 was dropped for that
+// reason — it is past end of life and deb.torproject.org has no suite for it.
+var supportedReleases = map[string]map[string]string{
+	"ubuntu": {"22.04": "jammy", "24.04": "noble"},
+	"debian": {"12": "bookworm"},
+}
+
+// IsSupportedOS checks if the OS is supported for production deployment.
 func (od *OSDetector) IsSupportedOS(info *OSInfo) bool {
-	supported := map[string][]string{
-		"ubuntu": {"22.04", "24.04", "25.04"},
-		"debian": {"12"},
-	}
-
-	versions, ok := supported[info.ID]
-	if !ok {
-		return false
-	}
-
-	for _, v := range versions {
-		if info.Version == v {
-			return true
-		}
-	}
-
-	return false
+	_, ok := supportedReleases[info.ID][info.Version]
+	return ok
 }
 
 // ArchitectureDetector detects the system architecture
@@ -221,12 +217,6 @@ func (etc *ExternalToolChecker) CheckRQLiteAvailable() bool {
 // CheckOlricAvailable checks if Olric Server is available
 func (etc *ExternalToolChecker) CheckOlricAvailable() bool {
 	_, err := exec.LookPath("olric-server")
-	return err == nil
-}
-
-// CheckAnonAvailable checks if Anon is available (optional)
-func (etc *ExternalToolChecker) CheckAnonAvailable() bool {
-	_, err := exec.LookPath("anon")
 	return err == nil
 }
 

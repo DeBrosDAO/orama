@@ -17,7 +17,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/anonproxy"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -318,11 +318,11 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !anyoneproxy.Running() {
+	if !anonproxy.Running() {
 		g.logger.ComponentWarn(logging.ComponentGeneral, "tunnel refused: anonymity proxy not available",
-			zap.String("socks_addr", anyoneproxy.Address()))
+			zap.String("socks_addr", anonproxy.Address()))
 		writeError(w, http.StatusServiceUnavailable,
-			fmt.Sprintf("anonymity network not available at %s", anyoneproxy.Address()))
+			"anonymity network not available on this node")
 		return
 	}
 
@@ -337,7 +337,7 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 	// can read, instead of a WebSocket that opens and immediately closes with a
 	// reason most clients surface poorly.
 	dialCtx, cancelDial := context.WithTimeout(r.Context(), tunnelDialTimeout)
-	upstream, dialErr := anyoneproxy.DialThrough(dialCtx, target.addr(),
+	upstream, dialErr := anonproxy.DialThrough(dialCtx, target.addr(),
 		tunnelIsolationKey(g.tunnelIsolationSecret, identity))
 	cancelDial()
 	if dialErr != nil {

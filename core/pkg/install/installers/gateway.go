@@ -179,97 +179,12 @@ func (gi *GatewayInstaller) InstallSystemDependencies() error {
 		fmt.Fprintf(gi.logWriter, "    Warning: apt update failed\n")
 	}
 
-	// Install dependencies including Node.js for anyone-client and unzip for source downloads
+	// Install dependencies including Node.js (node/npm deployments) and unzip for source downloads
 	cmd = exec.Command("apt-get", "install", "-y", "curl", "make", "build-essential", "wget", "unzip", "nodejs", "npm")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install dependencies: %w", err)
 	}
 
 	fmt.Fprintf(gi.logWriter, "  ✓ System dependencies installed\n")
-	return nil
-}
-
-// InstallAnyoneClient installs the anyone-client npm package globally
-func (gi *GatewayInstaller) InstallAnyoneClient() error {
-	// Check if anyone-client is already available via npx (more reliable for scoped packages)
-	// Note: the CLI binary is "anyone-client", not the full scoped package name
-	if cmd := exec.Command("npx", "anyone-client", "--help"); cmd.Run() == nil {
-		fmt.Fprintf(gi.logWriter, "  ✓ anyone-client already installed\n")
-		return nil
-	}
-
-	fmt.Fprintf(gi.logWriter, "  Installing anyone-client...\n")
-
-	// Initialize NPM cache structure to ensure all directories exist
-	// This prevents "mkdir" errors when NPM tries to create nested cache directories
-	fmt.Fprintf(gi.logWriter, "    Initializing NPM cache...\n")
-
-	// Create nested cache directories with proper permissions
-	oramaHome := "/opt/orama"
-	npmCacheDirs := []string{
-		filepath.Join(oramaHome, ".npm"),
-		filepath.Join(oramaHome, ".npm", "_cacache"),
-		filepath.Join(oramaHome, ".npm", "_cacache", "tmp"),
-		filepath.Join(oramaHome, ".npm", "_logs"),
-	}
-
-	for _, dir := range npmCacheDirs {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			fmt.Fprintf(gi.logWriter, "    ⚠️  Failed to create %s: %v\n", dir, err)
-			continue
-		}
-	}
-
-	// Run npm cache verify
-	cacheInitCmd := exec.Command("npm", "cache", "verify", "--silent")
-	cacheInitCmd.Env = append(os.Environ(), "HOME="+oramaHome)
-	if err := cacheInitCmd.Run(); err != nil {
-		fmt.Fprintf(gi.logWriter, "    ⚠️  NPM cache verify warning: %v (continuing anyway)\n", err)
-	}
-
-	// Install anyone-client globally via npm (using scoped package name)
-	cmd := exec.Command("npm", "install", "-g", "@anyone-protocol/anyone-client")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to install anyone-client: %w\n%s", err, string(output))
-	}
-
-	// Create terms-agreement file to bypass interactive prompt when running as a service
-	termsFile := filepath.Join(oramaHome, "terms-agreement")
-	if err := os.WriteFile(termsFile, []byte("agreed"), 0644); err != nil {
-		fmt.Fprintf(gi.logWriter, "    ⚠️  Warning: failed to create terms-agreement: %v\n", err)
-	}
-
-	// Verify installation - try npx with the correct CLI name (anyone-client, not full scoped package name)
-	verifyCmd := exec.Command("npx", "anyone-client", "--help")
-	if err := verifyCmd.Run(); err != nil {
-		// Fallback: check if binary exists in common locations
-		possiblePaths := []string{
-			"/usr/local/bin/anyone-client",
-			"/usr/bin/anyone-client",
-		}
-		found := false
-		for _, path := range possiblePaths {
-			if info, err := os.Stat(path); err == nil && !info.IsDir() {
-				found = true
-				break
-			}
-		}
-		if !found {
-			// Try npm bin -g to find global bin directory
-			cmd := exec.Command("npm", "bin", "-g")
-			if output, err := cmd.Output(); err == nil {
-				npmBinDir := strings.TrimSpace(string(output))
-				candidate := filepath.Join(npmBinDir, "anyone-client")
-				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-					found = true
-				}
-			}
-		}
-		if !found {
-			return fmt.Errorf("anyone-client installation verification failed - package may not provide a binary, but npx should work")
-		}
-	}
-
-	fmt.Fprintf(gi.logWriter, "  ✓ anyone-client installed\n")
 	return nil
 }

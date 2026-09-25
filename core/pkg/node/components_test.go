@@ -423,7 +423,7 @@ func TestBootComponents_dnsRegistrationDependsOnEverythingItPromises(t *testing.
 		}
 	}
 
-	// ntfy and the anyone-client serve no traffic for this node. Gating the
+	// ntfy and the Tor client serve no traffic for this node. Gating the
 	// registration on them would take a healthy node out of DNS for nothing.
 	if declared[compEdgeAux] {
 		t.Error("dns-registration must not depend on edge-aux — a broken ntfy would remove a serving node from DNS")

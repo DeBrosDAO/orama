@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/anonproxy"
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
 
@@ -139,23 +139,9 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		ch <- nr
 	}()
 
-	// Anyone proxy (SOCKS5)
+	// Anonymity proxy: the node's Tor SOCKS port.
 	go func() {
-		nr := namedResult{name: "anyone"}
-		if !anyoneproxy.Enabled() {
-			nr.result = checkResult{Status: "unavailable"}
-		} else {
-			start := time.Now()
-			if anyoneproxy.Running() {
-				nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
-			} else {
-				// SOCKS5 port not reachable — Anyone relay is not installed/running.
-				// Treat as "unavailable" rather than "error" so nodes without Anyone
-				// don't report as degraded.
-				nr.result = checkResult{Status: "unavailable"}
-			}
-		}
-		ch <- nr
+		ch <- namedResult{name: anonProxyCheckName, result: anonProxyCheck(anonproxy.Running)}
 	}()
 
 	// Vault Guardian (TCP connect on WireGuard IP:7500)
@@ -230,6 +216,22 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, httpStatus, resp)
 }
 
+// anonProxyCheckName is the /v1/health key that reports the Tor SOCKS port
+// behind /v1/proxy/anon, /v1/proxy/tunnel and the anon_fetch host function.
+const anonProxyCheckName = "anon_proxy"
+
+// anonProxyCheck reports the Tor SOCKS port. An unreachable port is
+// "unavailable", not "error": /v1/health decides DNS membership, and a node
+// whose Tor client is down still serves everything but the anonymity proxy.
+// orama monitor and the inspector alert on a stopped Tor client instead.
+func anonProxyCheck(running func() bool) checkResult {
+	start := time.Now()
+	if !running() {
+		return checkResult{Status: "unavailable"}
+	}
+	return checkResult{Status: "ok", Latency: time.Since(start).String()}
+}
+
 // pingHandler is a lightweight internal endpoint used for peer-to-peer
 // health probing over the WireGuard mesh. No subsystem checks — just
 // confirms the gateway process is alive and returns its node ID.
@@ -275,7 +277,7 @@ func (g *Gateway) versionHandler(w http.ResponseWriter, r *http.Request) {
 
 // aggregateHealthStatus determines the overall health status from individual checks.
 // Critical: rqlite or vault down → "unhealthy"
-// Non-critical (olric, ipfs, libp2p, anyone, wireguard) error → "degraded"
+// Non-critical (olric, ipfs, libp2p, anon_proxy, wireguard) error → "degraded"
 // "unavailable" means the client was never configured — not an error.
 func aggregateHealthStatus(checks map[string]checkResult) string {
 	// Critical services — any error means unhealthy

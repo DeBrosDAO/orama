@@ -1090,7 +1090,7 @@ Supports AI-powered failure analysis and result export.
 | `--format` | `table` | Output format (table, json) |
 | `--model` | `moonshotai/kimi-k2.5` | OpenRouter model for AI analysis |
 | `--output` | — | Save results to directory as markdown (e.g., ./results) |
-| `--subsystem` | `all` | Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,anyone,all) |
+| `--subsystem` | `all` | Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,tor,all) |
 | `--timeout` | `30s` | SSH command timeout |
 | `--verbose` | `false` | Verbose output |
 
@@ -1641,7 +1641,6 @@ be decided by whether you had used sudo.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--anyone-client` | `false` | Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay) |
 | `--base-domain` | — | Base domain for deployment routing (e.g., dbrs.space) |
 | `--ca-fingerprint` | — | SHA-256 fingerprint of the gateway's TLS cert; the invite carries this, so it is only needed to override it |
 | `--domain` | — | Domain for HTTPS (auto-generated for non-nameserver nodes if omitted) |
@@ -1910,7 +1909,7 @@ Examples:
 | `--env` | — | Target environment (devnet, testnet) [required] |
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
 | `--node` | — | Public IP of the node to remove [required] |
-| `--nuclear` | `false` | When wiping, also remove shared binaries |
+| `--nuclear` | `false` | When wiping, also remove shared binaries and the Tor package |
 | `--offline` | `false` | The node is already gone: retire it cluster-side only, do not try to wipe it |
 
 ### orama node report
@@ -2149,7 +2148,6 @@ Uses rolling restart with quorum safety to ensure zero downtime.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--anyone-client` | `false` | Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay) |
 | `--delay` | `300` | Seconds a node has to rejoin the cluster after its upgrade before the rollout stops |
 | `--env` | — | Target environment for remote rolling upgrade (devnet, testnet) |
 | `--force` | `false` | Reconfigure all settings |
@@ -2168,7 +2166,7 @@ orama node wipe [flags]
 ```
 
 Remove all Orama data, services and configuration from remote nodes.
-Anyone relay keys at /var/lib/anon/ are preserved.
+Tor is left installed (its config and state are removed); --nuclear purges it.
 
 Target-side only: this says nothing to the cluster. If the node is still a
 member, use 'orama node decommission' instead — otherwise the survivors keep
@@ -2186,7 +2184,7 @@ Examples:
 | `--env` | — | Target environment (devnet, testnet) [required] |
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
 | `--node` | — | Public IP of the node to wipe; omit to wipe every node in the environment |
-| `--nuclear` | `false` | Also remove shared binaries (rqlited, ipfs, caddy, ...) |
+| `--nuclear` | `false` | Also remove shared binaries (rqlited, ipfs, caddy, ...) and the Tor package |
 
 ### orama nodes
 
@@ -2404,7 +2402,6 @@ orama sandbox rollout [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--anyone-client` | `false` | Enable Anyone client (SOCKS5 proxy) on all nodes |
 | `--name` | — | Sandbox name (uses active if not specified) |
 
 ### orama sandbox setup

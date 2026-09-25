@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/install/installers"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
@@ -42,8 +44,6 @@ func Handle() error {
 		"orama-olric",
 		"orama-ipfs-cluster",
 		"orama-ipfs",
-		"orama-anyone-client",
-		"orama-anyone-relay",
 		"coredns",
 		"caddy",
 	}
@@ -58,6 +58,13 @@ func Handle() error {
 
 	// Remove namespace template unit files
 	removeNamespaceTemplates()
+
+	// The Anyone network is no longer part of Orama at all; a node that was
+	// never upgraded past it still has its units running.
+	fmt.Printf("Removing the legacy Anyone network...\n")
+	if err := installers.NewLegacyAnyoneCleaner(install.OramaDir, os.Stdout).Remove(); err != nil {
+		return fmt.Errorf("remove the legacy Anyone network: %w", err)
+	}
 
 	exec.Command("systemctl", "daemon-reload").Run()
 	fmt.Printf("✅ Services uninstalled\n")

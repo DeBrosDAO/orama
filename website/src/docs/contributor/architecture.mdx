@@ -15,7 +15,7 @@ graph TD
     PubSub["PubSub<br/>(LibP2P)"]
     Vault["Vault<br/>(Zig)"]
     WebRTC["WebRTC<br/>(SFU + TURN)"]
-    Anyone["Anyone<br/>Relay"]
+    Tor["Tor<br/>Client"]
     WG["WireGuard Mesh (10.0.0.0/24)<br/>Encrypted node-to-node tunnels"]
 
     Clients -->|"HTTPS (port 443)"| Gateway
@@ -26,7 +26,7 @@ graph TD
     Gateway --> PubSub
     Gateway --> Vault
     Gateway --> WebRTC
-    Gateway --> Anyone
+    Gateway --> Tor
     RQLite --> WG
     Olric --> WG
     IPFS --> WG
@@ -111,12 +111,12 @@ Real-time video, voice, and data channels:
 - **Forced relay** — All client traffic goes through TURN (`iceTransportPolicy: "relay"`)
 - **Per-namespace** — Opt-in via `orama namespace enable webrtc`
 
-### Anyone Protocol
+### Tor
 
-Privacy client integration on every node:
+Anonymity client on every node:
 
-- **Client mode** — SOCKS5 proxy for anonymized outbound requests (`/v1/proxy/anon`), bound to `127.0.0.1:9050`
-- **Relay operator mode is not supported** — every node runs an Anyone client only
+- **Client only** — `orama-namespace-tor@index`, a SOCKS5 proxy for anonymized outbound requests (`/v1/proxy/anon`, `/v1/proxy/tunnel`, the `anon_fetch` host function), bound to `127.0.0.1:9050`
+- **No relay, no exit** — the torrc sets `ClientOnly 1`, `ORPort 0`, `DirPort 0`, `ExitRelay 0`; nothing is opened in the firewall for Tor
 
 ## Network Layer
 
@@ -140,7 +140,7 @@ All inter-node communication uses a full-mesh WireGuard topology:
 | SFU Signaling | 30000-30099 | WireGuard only |
 | SFU Media | 20000-29999 | WireGuard only |
 | TURN | 3478, 5349 | Public |
-| Anyone | 9050 | Localhost only (`127.0.0.1`) |
+| Tor (SOCKS5) | 9050 | Localhost only (`127.0.0.1`) |
 
 ### Service Dependency Chain
 

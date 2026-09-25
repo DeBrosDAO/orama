@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Go 1.26.7+ (see `go.mod`)
-- Node.js 18+ (for anyone-client in dev mode)
+- Node.js 18+ (for the TypeScript SDK in `sdk/`)
 - macOS or Linux
 - **The RootWallet desktop app, open and unlocked** — every command in the
   "Deploying to VPS" section below needs it
@@ -168,6 +168,14 @@ Two related orderings changed in the same commit:
 The installer enables **only** `orama-node`. That unit is the supervisor: it starts `orama-namespace-*@index` (WireGuard, IPFS, rqlite, olric, pubsub, gateway, vault, Caddy, …) and, on `--nameserver` nodes, `orama-namespace-coredns@nameserver`. Tenant clusters are `orama-namespace-{rqlite,olric,gateway}@<name>`.
 
 Use `orama node …` (start/stop/restart/upgrade). Do not enable leftover `orama-ipfs.service`, `orama-olric.service`, `caddy.service`, or `coredns.service` — the installer writes their unit files for rollback and disables them on purpose. Upgrade and restart used to start them again (they were listed in `GetProductionServices` and the restart priority order), so they raced `@index` for 10102, 10107, `:53` and `:443` until `IndexSupervisor` stopped them on its next start. `systemd.IsLeftoverHostUnit` now keeps them out of both lists. Index RQLite data stays at `~/.orama/data/rqlite`. Internals are `10100–10109`; do not mix a voter still on 5001 with one on 10100.
+
+Every node also runs a client-only **Tor** daemon, `orama-namespace-tor@index`, whose SOCKS port `127.0.0.1:9050` serves `/v1/proxy/anon`, `/v1/proxy/tunnel` and the `anon_fetch` host function. Install and upgrade set it up in **Phase 2d**: remove the Anyone network if present, mask the package's own `tor.service`/`tor@default.service`, add the Tor Project's apt repository if it is not already in place for this OS release (`deb.torproject.org`, key pinned by fingerprint), `apt-get update` and `apt-get install tor deb.torproject.org-keyring` — which installs Tor or upgrades it to the repository's current release — and write `/etc/orama/tor/torrc`. apt is run with `DPkg::Lock::Timeout=300`, so installs and purges wait up to 300 s for a dpkg lock held by unattended-upgrades. Any error fails the install/upgrade.
+
+**Tor is upgraded on every Orama upgrade, before the node's services stop.** `orama node upgrade` runs Phase 2d right after Phase 2, while the node still serves; it needs outbound HTTPS to `deb.torproject.org`, and a failure aborts the upgrade with nothing stopped. The Orama unit keeps running the old Tor binary until the upgrade's stop step; the new one starts when `orama-node` brings `@index` back up. After the post-swap re-exec, Phase 2d runs again under the new binary in "ensure" form: with Tor installed and its repository current it only re-masks the distro units and rewrites the torrc, touching no network. Between Orama upgrades nothing updates Tor — default unattended-upgrades takes only the distribution's own origins. The OS must be one the Tor Project publishes packages for (`jammy`, `noble`, `resolute`, `bookworm`, `trixie`); on any other codename Phase 2d stops with an error naming them, before fetching anything. `IsSupportedOS` lists Ubuntu 22.04/24.04 and Debian 12 (Ubuntu 25.04 is no longer listed: it has no Tor Project suite).
+
+#### Tor replaces Anyone (first upgrade to this release)
+
+The first upgrade of a node that ran the Anyone network removes it for good: `orama-namespace-anyone-client@index`, `orama-anyone-client`, `orama-anyone-relay` and `anon.service` are stopped and disabled (unmasked first if `orama node stop` masked them), the `anon` package and `nyx` (installed only for the anon control port) are purged, and its apt source and key, `/etc/anon`, `/var/lib/anon` (relay keys included), `/var/log/anon` and the Orama-written unit/env/log files are deleted. This runs in the post-swap Phase 2d under the **new** binary — everything before the re-exec, including Phase 2b, still runs the old binary, which knows nothing of Tor and installs Anyone again. So on this one upgrade Tor is first installed with the node's services already stopped, and a failure to reach `deb.torproject.org` leaves the node stopped and halts the rollout at it; fix connectivity and re-run the upgrade on that node. The old binary may re-exec the new one with `--anyone-client` on its command line; the new `orama node upgrade` accepts that flag only together with the hidden re-exec marker and refuses it from an operator. Every step checks before it acts, so re-running the upgrade, or upgrading a node that never had Anyone, does nothing extra. Nothing opens a firewall port for Tor: a client needs no inbound port. Afterwards `orama monitor report` and `orama inspect --subsystem tor` flag any node where Anyone leftovers remain.
 
 ### Upgrading a Multi-Node Cluster (CRITICAL)
 
@@ -536,7 +544,6 @@ With no `--env`, push targets the active environment (`orama env current`).
 | `--force` | Force reconfiguration even if already installed |
 | `--skip-firewall` | Skip UFW firewall setup |
 | `--skip-checks` | Skip minimum resource checks (RAM/CPU) |
-| `--anyone-client` | Install Anyone as a SOCKS5 client on `:9050` (this is already the default) |
 
 #### `orama node invite`
 

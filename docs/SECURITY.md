@@ -177,7 +177,8 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 ### Tenant isolation
 
 - **SQLite ATTACH:** tenant query connections register `sqlite3_tenant_noattach` with `SQLITE_LIMIT_ATTACHED=0`. `ATTACH`/`DETACH` and extra statements in one query are rejected before exec
-- **WASM `http_fetch` / `anyone_fetch`:** the destination is checked on the socket, in `net.Dialer.Control`, with the address the connection is about to be made to — once per attempt, for every address the resolver returned and for every hop of a redirect. Loopback, RFC 1918, link-local, unspecified, multicast, carrier-grade NAT, and the IPv6 forms that wrap an IPv4 address (`::ffff:`, NAT64, 6to4) are refused, so tenant code cannot reach rqlite, Olric, the node agent or another namespace's services
+- **WASM `anon_fetch` (and its deprecated alias `anyone_fetch`):** every connection goes to the node's Tor SOCKS port — there is no direct path, whatever the destination. The URL checks below still run first; after that, host names are resolved by the Tor exit, and Tor itself refuses private and local addresses (`ClientRejectInternalAddresses 1`), including on a redirect. The client used to dial loopback and private addresses directly, bypassing the proxy, so a redirect to `10.0.0.x` reached the overlay; that bypass is gone
+- **WASM `http_fetch`:** the destination is checked on the socket, in `net.Dialer.Control`, with the address the connection is about to be made to — once per attempt, for every address the resolver returned and for every hop of a redirect. Loopback, RFC 1918, link-local, unspecified, multicast, carrier-grade NAT, and the IPv6 forms that wrap an IPv4 address (`::ffff:`, NAT64, 6to4) are refused, so tenant code cannot reach rqlite, Olric, the node agent or another namespace's services
 - The check used to read the URL string, and it returned "allowed" for any host that was not an IP literal. `http://rqlite.internal/`, or any name the tenant controlled pointed at `10.0.0.5`, went straight through. A name is not an address: the resolver decides what it becomes, the answer can change between the check and the connection, and a redirect goes somewhere the first URL never named
 - What is still checked on the URL is what can be settled from the text: the scheme, the names that mean the machine itself (`localhost`, `*.localhost`, `metadata.google.internal`), and an IP literal that is already refusable — answered as a clear message rather than as a connection failure
 - **WASM memory:** wazero runtime `WithMemoryLimitPages` from `MaxMemoryLimitMB` (default 256 MB)
@@ -239,7 +240,7 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Host and namespace daemons (gateway, rqlite, olric, sfu, turn, pubsub, ipfs, caddy, coredns) run as `User=orama`
 - Caddy and CoreDNS get `AmbientCapabilities=CAP_NET_BIND_SERVICE` for ports 80/443 and 53
 - WireGuard stays as root (kernel netlink requires it)
-- Anyone client/relay stay `debian-anon`
+- The Tor client runs as `debian-tor` in `orama-namespace-tor@index`: `ProtectSystem=strict`, `NoNewPrivileges`, an empty capability set, `SystemCallFilter=@system-service`, `MemoryDenyWriteExecute`, and `IPAddressDeny` for RFC 1918, link-local, CGNAT and ULA ranges (loopback allowed for the SOCKS listener) — it can reach public relays and nothing on the overlay
 - vault-guardian already had proper hardening
 - `/opt/orama/bin` is `root:orama` mode `0750` so the orama user can execute binaries but cannot replace them
 

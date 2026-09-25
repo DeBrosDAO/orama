@@ -58,7 +58,7 @@ func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 	fmt.Printf("  - IPFS/Kubo 0.38.2\n")
 	fmt.Printf("  - IPFS Cluster (latest)\n")
 	fmt.Printf("  - Olric 0.7.0\n")
-	fmt.Printf("  - anon (Anyone client via apt)\n")
+	fmt.Printf("  - tor (client only, from deb.torproject.org)\n")
 	fmt.Printf("  - Orama binaries (built from %s branch)\n", branch)
 
 	fmt.Printf("\n🔐 Secrets that would be generated:\n")
@@ -87,7 +87,7 @@ func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 	fmt.Printf("    - 10107 (IPFS API)\n")
 	fmt.Printf("    - 10108 (IPFS Cluster API)\n")
 	fmt.Printf("    - 8080 (IPFS gateway)\n")
-	fmt.Printf("    - 9050 (Anyone SOCKS5)\n")
+	fmt.Printf("    - %d (Tor SOCKS5, loopback only)\n", constants.TorSOCKSPort)
 
 	fmt.Print("\n" + strings.Repeat("=", 70) + "\n")
 	fmt.Printf("To proceed with installation, run without --dry-run\n")

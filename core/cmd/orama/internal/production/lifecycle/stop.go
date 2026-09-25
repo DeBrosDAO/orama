@@ -50,12 +50,11 @@ func HandleStopWithFlags(force bool) error {
 
 	// Ordered shutdown: node first (supervisor + @index via PartOf), then leftover host units
 	shutdownOrder := [][]string{
-		{"orama-node"},                                // 1. Stop node (includes gateway + RQLite with leadership transfer)
-		{"orama-olric"},                               // 2. Stop cache
-		{"orama-ipfs-cluster", "orama-ipfs"},          // 3. Stop storage
-		{"orama-vault"},                               // 4. Stop vault
-		{"orama-anyone-relay", "orama-anyone-client"}, // 5. Stop privacy relay
-		{"coredns", "caddy"},                          // 6. Stop DNS/TLS last
+		{"orama-node"},                       // 1. Stop node (includes gateway + RQLite with leadership transfer)
+		{"orama-olric"},                      // 2. Stop cache
+		{"orama-ipfs-cluster", "orama-ipfs"}, // 3. Stop storage
+		{"orama-vault"},                      // 4. Stop vault
+		{"coredns", "caddy"},                 // 5. Stop DNS/TLS last
 	}
 
 	// Mask all services to immediately prevent Restart=always from reviving them.

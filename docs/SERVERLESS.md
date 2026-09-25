@@ -370,7 +370,9 @@ cluster gateway.
 
 | Function | Description |
 |----------|-------------|
-| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. The destination is checked on the socket, so a hostname that resolves to an internal address and a redirect to one are both refused, not just an internal address written literally in the URL (same for `anyone_fetch`). |
+| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. The destination is checked on the socket, so a hostname that resolves to an internal address and a redirect to one are both refused, not just an internal address written literally in the URL. |
+| `anon_fetch(method, url, headersJSON, body)` → JSON | `http_fetch` through the node's **Tor** client: the destination sees a Tor exit address, not the gateway's. Same signature, same envelope and 30s timeout. Every connection goes through Tor — there is no fallback to a direct request. The host name is resolved by the exit, and Tor refuses private and local addresses, including on a redirect. When Tor is down the call returns `{"status": 0, "error": "..."}`. |
+| `anyone_fetch(method, url, headersJSON, body)` → JSON | **Deprecated** alias of `anon_fetch`: the same implementation, routed through **Tor**. It keeps the name it had while the anonymity backend was the Anyone network, which Orama no longer uses, because deployed functions import it and a module with a missing import fails to instantiate. New code imports `anon_fetch`. |
 
 ### Storage (IPFS)
 

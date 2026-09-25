@@ -12,7 +12,7 @@ As a node operator, your server becomes part of the Orama mesh network. Your nod
 - **Execute functions** in the WASM serverless runtime
 - **Relay messages** through the PubSub system
 - **Serve DNS** if configured as a nameserver node (CoreDNS)
-- **Route outbound requests anonymously** through a local Anyone client (SOCKS5 proxy)
+- **Route outbound requests anonymously** through a local Tor client (SOCKS5 proxy)
 
 All inter-node communication happens over an encrypted WireGuard mesh network on the `10.0.0.0/24` subnet.
 
@@ -123,7 +123,7 @@ The `orama node install` command configures the entire node automatically:
 5. Configures and starts IPFS + IPFS Cluster (distributed storage)
 6. Configures and starts the API gateway
 7. If `--nameserver`: configures CoreDNS and Caddy for DNS and TLS
-8. Installs the Anyone client (SOCKS5 proxy on port 9050, used for `/v1/proxy/anon`)
+8. Installs the Tor client from `deb.torproject.org` (client only; SOCKS5 on `127.0.0.1:9050`, used for `/v1/proxy/anon`), removing the Anyone network first if an older install left it
 9. Sets up systemd services with dependency ordering
 10. Configures the UFW firewall (unless `--skip-firewall`)
 11. Registers the node with the cluster

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/anonproxy"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -37,7 +37,7 @@ const (
 	maxProxyTimeout     = 60 * time.Second
 )
 
-// anonProxyHandler handles proxied HTTP requests through the Anyone network
+// anonProxyHandler handles proxied HTTP requests through the Tor network
 func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Only accept POST requests
 	if r.Method != http.MethodPost {
@@ -92,18 +92,18 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if Anyone proxy is running (after all validation)
-	if !anyoneproxy.Running() {
-		g.logger.ComponentWarn(logging.ComponentGeneral, "Anyone proxy not available",
-			zap.String("socks_addr", anyoneproxy.Address()))
+	// Check the Tor SOCKS port is up (after all validation)
+	if !anonproxy.Running() {
+		g.logger.ComponentWarn(logging.ComponentGeneral, "Tor proxy not available",
+			zap.String("socks_addr", anonproxy.Address()))
 		writeJSON(w, http.StatusServiceUnavailable, anonProxyResponse{
-			Error: fmt.Sprintf("Anyone proxy not available at %s", anyoneproxy.Address()),
+			Error: "Tor proxy not available on this node",
 		})
 		return
 	}
 
-	// Create HTTP client with Anyone proxy
-	client := anyoneproxy.NewHTTPClient()
+	// Every connection of this client goes through Tor
+	client := anonproxy.NewHTTPClient()
 	client.Timeout = maxProxyTimeout
 
 	// Create the proxied request
@@ -131,10 +131,10 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Log the proxy request
-	g.logger.ComponentInfo(logging.ComponentGeneral, "proxying request through Anyone",
+	g.logger.ComponentInfo(logging.ComponentGeneral, "proxying request through Tor",
 		zap.String("method", method),
 		zap.String("url", req.URL),
-		zap.String("socks_addr", anyoneproxy.Address()))
+		zap.String("socks_addr", anonproxy.Address()))
 
 	// Execute the request
 	start := time.Now()
@@ -147,7 +147,7 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 			zap.String("url", req.URL),
 			zap.Duration("duration", duration))
 		writeJSON(w, http.StatusBadGateway, anonProxyResponse{
-			Error: fmt.Sprintf("proxy request failed: %v", err),
+			Error: "could not reach the destination through the anonymity network",
 		})
 		return
 	}
@@ -159,7 +159,7 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 		g.logger.ComponentError(logging.ComponentGeneral, "failed to read proxy response",
 			zap.Error(err))
 		writeJSON(w, http.StatusBadGateway, anonProxyResponse{
-			Error: fmt.Sprintf("failed to read response: %v", err),
+			Error: "the destination's response could not be read through the anonymity network",
 		})
 		return
 	}

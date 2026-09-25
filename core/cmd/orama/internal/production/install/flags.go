@@ -32,9 +32,6 @@ type Flags struct {
 	SkipFirewall  bool   // Skip UFW firewall setup (for users who manage their own firewall)
 	CAFingerprint string // SHA-256 fingerprint of server TLS cert for TOFU verification
 
-	// Anyone flags
-	AnyoneClient bool // Run Anyone as client-only (SOCKS5 proxy on port 9050, no relay)
-
 	// Remote drives the install over SSH against VpsIP instead of installing
 	// on this machine. This used to be inferred from whether the process was
 	// root, so the same command line meant two different things.

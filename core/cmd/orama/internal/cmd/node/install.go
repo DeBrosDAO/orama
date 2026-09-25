@@ -23,6 +23,7 @@ be decided by whether you had used sudo.`,
 }
 
 func init() {
+	installCmd.SetFlagErrorFunc(explainRemovedFlags)
 	f := installCmd.Flags()
 	f.StringVar(&installFlags.VpsIP, "vps-ip", "", "Public IP of this VPS (required)")
 	f.BoolVar(&installFlags.Remote, "remote", false,
@@ -40,7 +41,6 @@ func init() {
 	f.StringVar(&installFlags.CAFingerprint, "ca-fingerprint", "",
 		"SHA-256 fingerprint of the gateway's TLS cert; the invite carries this, so it is only needed to override it")
 	f.BoolVar(&installFlags.SkipFirewall, "skip-firewall", false, "Skip UFW firewall setup (for users who manage their own firewall)")
-	f.BoolVar(&installFlags.AnyoneClient, "anyone-client", false, "Install Anyone as client-only (SOCKS5 proxy on port 9050, no relay)")
 	f.StringVar(&installFlags.SSHUser, "ssh-user", "", "SSH user for remote management")
 	f.StringVar(&installFlags.Environment, "environment", "", "Environment name (devnet, testnet, etc.)")
 	f.StringVar(&installFlags.OperatorWallet, "operator-wallet", "", "Operator wallet address")

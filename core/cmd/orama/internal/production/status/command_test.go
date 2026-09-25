@@ -25,7 +25,7 @@ func TestSplitNamespaceUnit(t *testing.T) {
 		{"orama-namespace-gateway@index", "gateway", "index", true},
 		{"orama-namespace-olric@my-ns", "olric", "my-ns", true},
 		{"orama-node", "", "", false},
-		{"orama-anyone-relay", "", "", false},
+		{"coredns", "", "", false},
 		{"orama-namespace-rqlite", "", "", false},  // template, no instance
 		{"orama-namespace-@anchat", "", "", false}, // no role
 		{"orama-namespace-rqlite@", "", "", false}, // no namespace

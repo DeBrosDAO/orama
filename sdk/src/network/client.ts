@@ -83,12 +83,12 @@ export class NetworkClient {
   }
 
   /**
-   * Proxy an HTTP request through the Anyone network.
+   * Proxy an HTTP request through the Tor network (the node's Tor client).
    * Requires authentication (API key or JWT).
    *
    * @param request - The proxy request configuration
    * @returns The proxied response
-   * @throws {SDKError} If the Anyone proxy is not available or the request fails
+   * @throws {SDKError} If the node's Tor proxy is not available or the request fails
    *
    * @example
    * ```ts

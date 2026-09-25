@@ -23,10 +23,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
@@ -274,7 +274,6 @@ func installPublicKey(ip, user, password, pubKey, knownHostsPath string) error {
 func buildInstallCommand(opts Options, node inspector.Node, agentClient *rwagent.Client) (string, error) {
 	parts := []string{"sudo /opt/orama/bin/orama node install"}
 	parts = append(parts, "--vps-ip", opts.IP)
-	parts = append(parts, "--anyone-client")
 
 	if opts.BaseDomain != "" {
 		parts = append(parts, "--base-domain", opts.BaseDomain)

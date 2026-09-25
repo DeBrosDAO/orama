@@ -71,19 +71,6 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
-	// 6.2 Anyone client (only check if installed; leftover relay is handled in CheckAnyone)
-	anyoneStatus := serviceStatus(sys.Services, "orama-namespace-anyone-client@index", "orama-anyone-client")
-	if anyoneStatus != "unknown" && anyoneStatus != "inactive" {
-		id := "system.svc_orama_anyone_client"
-		name := "orama-anyone-client service active"
-		if anyoneStatus == "active" {
-			r = append(r, inspector.Pass(id, name, systemSub, node, "active", inspector.High))
-		} else {
-			r = append(r, inspector.Fail(id, name, systemSub, node,
-				fmt.Sprintf("status=%s (should be active or uninstalled)", anyoneStatus), inspector.High))
-		}
-	}
-
 	// 6.5 WireGuard service
 	if status := serviceStatus(sys.Services, "orama-namespace-wireguard@index", "wg-quick@wg0"); status != "unknown" {
 		if status == "active" {

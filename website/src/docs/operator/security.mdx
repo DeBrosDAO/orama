@@ -6,7 +6,7 @@ The Orama Network implements defense-in-depth security across network, authentic
 
 ### WireGuard Mesh
 
-All inter-node communication travels over an encrypted WireGuard VPN mesh (`10.0.0.0/24`). No cluster ports are exposed publicly — only SSH (22), HTTPS (443), and WireGuard (51820). The Anyone client's SOCKS5 proxy (9050) binds to `127.0.0.1` only.
+All inter-node communication travels over an encrypted WireGuard VPN mesh (`10.0.0.0/24`). No cluster ports are exposed publicly — only SSH (22), HTTPS (443), and WireGuard (51820). The Tor client's SOCKS5 proxy (9050) binds to `127.0.0.1` only, and Tor opens no inbound port.
 
 Internal services (RQLite, Olric, IPFS, Gateway) bind to WireGuard IPs and are unreachable from the public internet.
 

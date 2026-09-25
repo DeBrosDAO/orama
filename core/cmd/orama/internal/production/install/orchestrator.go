@@ -56,9 +56,6 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 	setup := oramainstall.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(flags.Nameserver)
 
-	// Configure Anyone mode
-	setup.SetAnyoneClient(true)
-
 	// Set operator metadata (from orama node setup)
 	setup.SSHUser = flags.SSHUser
 	setup.Environment = flags.Environment
@@ -135,11 +132,10 @@ func (o *Orchestrator) Execute() error {
 		}
 	}
 
-	// Save preferences for future upgrades. Anyone is always client-only.
+	// Save preferences for future upgrades.
 	prefs := &oramainstall.NodePreferences{
-		Branch:       "main",
-		Nameserver:   o.flags.Nameserver,
-		AnyoneClient: true,
+		Branch:     "main",
+		Nameserver: o.flags.Nameserver,
 	}
 	if err := oramainstall.SavePreferences(o.oramaDir, prefs); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save preferences: %v\n", err)
@@ -164,6 +160,12 @@ func (o *Orchestrator) Execute() error {
 	fmt.Printf("\nPhase 2b: Installing binaries...\n")
 	if err := o.setup.Phase2bInstallBinaries(); err != nil {
 		return fmt.Errorf("binary installation failed: %w", err)
+	}
+
+	// Phase 2d: Tor client (the node's anonymity proxy)
+	fmt.Printf("\nPhase 2d: Installing the Tor client...\n")
+	if err := o.setup.PhaseTorSetup(); err != nil {
+		return fmt.Errorf("tor setup failed: %w", err)
 	}
 
 	// Branch: genesis node vs joining node

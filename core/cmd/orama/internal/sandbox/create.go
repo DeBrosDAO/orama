@@ -419,7 +419,7 @@ func phase4InstallGenesis(cfg *Config, state *SandboxState, sshKeyPath string) e
 	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
 	// Install genesis
-	installCmd := fmt.Sprintf("/opt/orama/bin/orama node install --vps-ip %s --domain %s --base-domain %s --nameserver --anyone-client --skip-checks",
+	installCmd := fmt.Sprintf("/opt/orama/bin/orama node install --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
 		genesis.IP, cfg.Domain, cfg.Domain)
 	fmt.Printf("  Installing on %s (%s)...\n", genesis.Name, genesis.IP)
 	if err := remotessh.RunSSHStreaming(node, installCmd, remotessh.WithNoHostKeyCheck()); err != nil {
@@ -454,10 +454,10 @@ func phase5JoinNodes(cfg *Config, state *SandboxState, sshKeyPath string) error 
 
 		var installCmd string
 		if srv.Role == "nameserver" {
-			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --domain %s --base-domain %s --nameserver --anyone-client --skip-checks",
+			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
 				genesis.IP, token, srv.IP, cfg.Domain, cfg.Domain)
 		} else {
-			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --base-domain %s --anyone-client --skip-checks",
+			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --base-domain %s --skip-checks",
 				genesis.IP, token, srv.IP, cfg.Domain)
 		}
 

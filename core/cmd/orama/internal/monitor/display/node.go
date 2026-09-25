@@ -109,26 +109,11 @@ func NodeTable(snap *monitor.ClusterSnapshot, w io.Writer) error {
 			fmt.Fprintln(w, "  IPFS:      "+styleMuted.Render("not configured"))
 		}
 
-		// Anyone
-		if r.Anyone != nil {
-			an := r.Anyone
-			mode := an.Mode
-			if mode == "" {
-				if an.RelayActive {
-					mode = "relay"
-				} else if an.ClientActive {
-					mode = "client"
-				} else {
-					mode = "inactive"
-				}
-			}
-			bootStr := styleRed.Render("not bootstrapped")
-			if an.Bootstrapped {
-				bootStr = styleGreen.Render("bootstrapped")
-			}
-			fmt.Fprintf(w, "  Anyone:    %s | %s\n", mode, bootStr)
+		// Tor client
+		if r.Tor != nil {
+			fmt.Fprintf(w, "  Tor:       %s\n", torSummary(r.Tor))
 		} else {
-			fmt.Fprintln(w, "  Anyone:    "+styleMuted.Render("not configured"))
+			fmt.Fprintln(w, "  Tor:       "+styleMuted.Render("not reported"))
 		}
 	}
 

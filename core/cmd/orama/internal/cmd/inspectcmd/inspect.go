@@ -33,7 +33,7 @@ func init() {
 	f := Cmd.Flags()
 	f.StringVar(&inspectOpts.ConfigPath, "config", "", "Read nodes from this file instead of resolving them")
 	f.StringVar(&inspectOpts.Env, "env", "", "Environment to inspect (devnet, testnet)")
-	f.StringVar(&inspectOpts.Subsystem, "subsystem", "all", "Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,anyone,all)")
+	f.StringVar(&inspectOpts.Subsystem, "subsystem", "all", "Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,tor,all)")
 	f.StringVar(&inspectOpts.Format, "format", "table", "Output format (table, json)")
 	f.DurationVar(&inspectOpts.Timeout, "timeout", 30*time.Second, "SSH command timeout")
 	f.BoolVar(&inspectOpts.Verbose, "verbose", false, "Verbose output")

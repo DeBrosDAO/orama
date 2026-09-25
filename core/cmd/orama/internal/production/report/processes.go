@@ -92,7 +92,7 @@ var managedServiceUnits = []string{
 	"orama-namespace-ipfs@index",
 	"orama-namespace-ipfs-cluster@index",
 	"orama-namespace-vault@index",
-	"orama-namespace-anyone-client@index",
+	"orama-namespace-tor@index",
 	"orama-namespace-caddy@index",
 	"orama-namespace-wireguard@index",
 	"orama-namespace-rqlite@index",
@@ -122,7 +122,7 @@ func collectManagedPIDs() map[int]bool {
 		nsServiceTypes := []string{
 			"rqlite", "olric", "gateway", "sfu", "turn", "pubsub",
 			"wireguard", "ipfs", "ipfs-cluster", "vault", "caddy",
-			"ntfy", "anyone-client", "sni-router", "coredns",
+			"ntfy", "tor", "sni-router", "coredns",
 		}
 		for _, nsEntry := range nsEntries {
 			if !nsEntry.IsDir() {

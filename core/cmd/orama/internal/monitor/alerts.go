@@ -120,7 +120,7 @@ func DeriveAlerts(snap *ClusterSnapshot) []Alert {
 		alerts = append(alerts, checkNodeSystem(r, host)...)
 		alerts = append(alerts, checkNodeServices(r, host, nc)...)
 		alerts = append(alerts, checkNodeDNS(r, host, nc)...)
-		alerts = append(alerts, checkNodeAnyone(r, host)...)
+		alerts = append(alerts, checkNodeTor(r, host)...)
 		alerts = append(alerts, checkNodeProcesses(r, host)...)
 		alerts = append(alerts, checkNodeNamespaces(r, host)...)
 		alerts = append(alerts, checkNodeNetwork(r, host)...)
@@ -594,7 +594,7 @@ func checkNodeServices(r *report.NodeReport, host string, nc *nodeContext) []Ale
 	var alerts []Alert
 	for _, svc := range r.Services.Services {
 		// Skip services that are expected to be inactive based on node role/mode
-		if shouldSkipServiceAlert(svc.Name, svc.ActiveState, r, nc) {
+		if shouldSkipServiceAlert(svc.Name, svc.ActiveState, nc) {
 			continue
 		}
 
@@ -622,22 +622,14 @@ func checkNodeServices(r *report.NodeReport, host string, nc *nodeContext) []Ale
 }
 
 // shouldSkipServiceAlert returns true if this service being inactive is expected
-// given the node's role and anyone mode.
-func shouldSkipServiceAlert(svcName, state string, r *report.NodeReport, nc *nodeContext) bool {
+// given the node's role.
+func shouldSkipServiceAlert(svcName, state string, nc *nodeContext) bool {
 	if state == "active" || state == "failed" {
 		return false // always report active (no alert) and failed (always alert)
 	}
 
 	// CoreDNS: only expected on nameserver nodes
 	if svcName == "coredns" && (nc == nil || !nc.isNameserver) {
-		return true
-	}
-
-	// Leftover relay unit is not required; skip inactive. Client down should alert.
-	if svcName == "orama-anyone-relay" {
-		return true
-	}
-	if r.Anyone == nil && svcName == "orama-anyone-client" {
 		return true
 	}
 
@@ -700,14 +692,28 @@ func checkNodeDNS(r *report.NodeReport, host string, nc *nodeContext) []Alert {
 	return alerts
 }
 
-func checkNodeAnyone(r *report.NodeReport, host string) []Alert {
-	if r.Anyone == nil {
+// checkNodeTor alerts on the node's Tor client beyond its unit state, which
+// checkNodeServices already covers: a SOCKS port that is not bound, a client
+// that has not finished bootstrapping, and Anyone leftovers from an
+// incomplete migration.
+func checkNodeTor(r *report.NodeReport, host string) []Alert {
+	if r.Tor == nil {
 		return nil
 	}
 	var alerts []Alert
-	if (r.Anyone.RelayActive || r.Anyone.ClientActive) && !r.Anyone.Bootstrapped {
-		alerts = append(alerts, Alert{AlertWarning, "anyone", host,
-			fmt.Sprintf("Anyone bootstrap at %d%%", r.Anyone.BootstrapPct)})
+	t := r.Tor
+	if t.ClientActive && !t.SocksListening {
+		alerts = append(alerts, Alert{AlertWarning, "tor", host,
+			fmt.Sprintf("Tor active but SOCKS port %d not bound (/v1/proxy/anon is down)", constants.TorSOCKSPort)})
+	}
+	// A negative percentage means the journal no longer says; not an alert.
+	if t.ClientActive && t.BootstrapPct >= 0 && !t.Bootstrapped {
+		alerts = append(alerts, Alert{AlertWarning, "tor", host,
+			fmt.Sprintf("Tor bootstrap at %d%%", t.BootstrapPct)})
+	}
+	if t.LegacyAnyone {
+		alerts = append(alerts, Alert{AlertWarning, "tor", host,
+			"Anyone network still present; run `orama node upgrade` on this node"})
 	}
 	return alerts
 }

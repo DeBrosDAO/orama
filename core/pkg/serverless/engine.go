@@ -930,7 +930,8 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hCacheIncr).Export("cache_incr").
 			NewFunctionBuilder().WithFunc(e.hCacheIncrBy).Export("cache_incr_by").
 			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
-			NewFunctionBuilder().WithFunc(e.hAnyoneFetch).Export("anyone_fetch").
+			NewFunctionBuilder().WithFunc(e.hAnonFetch).Export(AnonFetchExport).
+			NewFunctionBuilder().WithFunc(e.hAnonFetch).Export(AnyoneFetchDeprecatedExport).
 			NewFunctionBuilder().WithFunc(e.hSetHTTPResponse).Export("set_http_response").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublish).Export("pubsub_publish").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublishBatch).Export("pubsub_publish_batch").
@@ -1215,13 +1216,25 @@ func (e *Engine) hSetHTTPResponse(ctx context.Context, mod api.Module,
 	return 1
 }
 
-// hAnyoneFetch is the WASM-callable wrapper for AnyoneFetch — feat-11.
+// AnonFetchExport is the host export for outbound HTTP through the node's Tor
+// client.
+const AnonFetchExport = "anon_fetch"
+
+// AnyoneFetchDeprecatedExport is the name anon_fetch had while the anonymity
+// backend was the Anyone network. It is exported as an alias of the same
+// implementation — now routed through Tor — because deployed functions import
+// it (AnChat's rpc-solana and rpc-evm import orama.anyone_fetch), and a module
+// whose import is missing fails to instantiate. New code imports anon_fetch.
+const AnyoneFetchDeprecatedExport = "anyone_fetch"
+
+// hAnonFetch is the WASM-callable wrapper for AnonFetch — feat-11, exported
+// as both anon_fetch and the deprecated anyone_fetch.
 // Identical ABI to hHTTPFetch (method, url, headers JSON, body), routes
-// through the Anyone SOCKS5 proxy. Returns packed (ptr<<32 | len) to the
+// through the Tor SOCKS5 proxy. Returns packed (ptr<<32 | len) to the
 // JSON response envelope, or 0 on a setup error (the typed
 // proxy-unavailable / transport-error cases come back inside the
 // envelope with status 0, NOT as a 0 return).
-func (e *Engine) hAnyoneFetch(ctx context.Context, mod api.Module, methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint64 {
+func (e *Engine) hAnonFetch(ctx context.Context, mod api.Module, methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint64 {
 	method, ok := e.executor.ReadFromGuest(mod, methodPtr, methodLen)
 	if !ok {
 		return 0
@@ -1234,7 +1247,7 @@ func (e *Engine) hAnyoneFetch(ctx context.Context, mod api.Module, methodPtr, me
 	var headers map[string]string
 	if headersLen > 0 {
 		if err := e.executor.UnmarshalJSONFromGuest(mod, headersPtr, headersLen, &headers); err != nil {
-			e.logger.Error("failed to unmarshal anyone_fetch headers", zap.Error(err))
+			e.logger.Error("failed to unmarshal anon_fetch headers", zap.Error(err))
 			return 0
 		}
 	}
@@ -1244,9 +1257,9 @@ func (e *Engine) hAnyoneFetch(ctx context.Context, mod api.Module, methodPtr, me
 		return 0
 	}
 
-	resp, err := e.hostServices.AnyoneFetch(ctx, string(method), string(u), headers, body)
+	resp, err := e.hostServices.AnonFetch(ctx, string(method), string(u), headers, body)
 	if err != nil {
-		e.logger.Error("host function anyone_fetch failed", zap.Error(err), zap.String("url", string(u)))
+		e.logger.Error("host function anon_fetch failed", zap.Error(err), zap.String("url", string(u)))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, resp)

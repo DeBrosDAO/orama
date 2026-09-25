@@ -70,8 +70,6 @@ func describe(service string) string {
 	switch service {
 	case "orama-node":
 		return "the supervisor: it runs the index stack and the gateway"
-	case "orama-anyone-relay":
-		return "Anyone relay"
 	default:
 		return ""
 	}

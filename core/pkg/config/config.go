@@ -117,7 +117,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Node: NodeConfig{
 			ListenAddresses: []string{
-				"/ip4/0.0.0.0/tcp/4001", // TCP only - compatible with Anyone proxy/SOCKS5
+				"/ip4/0.0.0.0/tcp/4001", // TCP only
 			},
 			DataDir:        "./data",
 			MaxConnections: 50,

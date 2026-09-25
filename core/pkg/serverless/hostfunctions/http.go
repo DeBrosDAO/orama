@@ -32,38 +32,25 @@ func (h *HostFunctions) SetHTTPResponse(ctx context.Context, status int, headers
 	return nil
 }
 
-// AnyoneFetch makes an outbound HTTP request routed through the Anyone
-// (ANyONe protocol) SOCKS5 proxy, so the third-party endpoint sees an
-// Anyone exit IP instead of the gateway IP and the gateway can't
-// correlate (function → external request) traffic by source IP.
-// Feat-11 — server-side analog of anchat's client-side proxyClient.
+// AnonFetch makes an outbound HTTP request routed through the node's Tor
+// client (SOCKS5), so the third-party endpoint sees a Tor exit IP instead
+// of the gateway IP and the gateway can't correlate (function → external
+// request) traffic by source IP. Feat-11 — server-side analog of anchat's
+// client-side proxyClient. WASM imports it as anon_fetch or as the
+// deprecated alias anyone_fetch.
 //
-// Privacy guarantee: there is NO silent fallback to direct. If Anyone
-// routing isn't available on this gateway (operator disabled it via
-// --disable-anonrc / ANYONE_DISABLE=1, so h.anyoneHTTPClient is nil),
-// this returns a typed error rather than leaking the request over the
-// direct path. If the Anyone daemon is configured-but-down, the SOCKS
-// dial to localhost:9050 fails and surfaces as a transport error — also
-// never a direct send. This is the explicit ask in feat-11: a privacy
-// regression must fail loudly, not degrade silently.
-func (h *HostFunctions) AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
-	if h.anyoneHTTPClient == nil {
-		// Anyone routing not enabled on this gateway. Return the typed
-		// error envelope (status 0) rather than dialing direct — the
-		// caller explicitly asked for anonymized egress and we must not
-		// silently downgrade it.
-		errorResp := map[string]interface{}{
-			"error":  "anyone routing not available on this gateway (disabled by operator)",
-			"status": 0,
-			"proxy":  "anyone",
-		}
-		return json.Marshal(errorResp)
-	}
-	return h.doFetch(ctx, "anyone_fetch", h.anyoneHTTPClient, method, url, headers, body)
+// Privacy guarantee: there is NO direct path. Every connection of
+// h.anonHTTPClient goes to the Tor SOCKS port, whatever the destination; if
+// Tor is down the dial fails and comes back as a transport-error envelope
+// (status 0, the error naming the Tor SOCKS address) — never a direct send.
+// This is the explicit ask in feat-11: a privacy regression must fail
+// loudly, not degrade silently.
+func (h *HostFunctions) AnonFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+	return h.doFetch(ctx, "anon_fetch", h.anonHTTPClient, method, url, headers, body)
 }
 
 // doFetch is the shared request/response machinery for HTTPFetch and
-// AnyoneFetch — identical except for which *http.Client (direct vs
+// AnonFetch — identical except for which *http.Client (direct vs
 // SOCKS-routed) does the dialing and the function name used in logs +
 // HostFunctionError.
 func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http.Client, method, rawURL string, headers map[string]string, body []byte) ([]byte, error) {

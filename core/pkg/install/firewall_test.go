@@ -33,13 +33,13 @@ func TestFirewallProvisioner_GenerateRules_StandardNode(t *testing.T) {
 	assertContainsRule(t, rules, "ufw --force enable")
 	assertContainsRule(t, rules, "iptables -I INPUT 1 -i wg0 -s 10.0.0.0/24 -j ACCEPT")
 
-	// Should NOT contain DNS or Anyone relay
+	// Should NOT contain DNS or a Tor relay ORPort (the Tor client needs no inbound port)
 	for _, rule := range rules {
 		if strings.Contains(rule, "53/") {
 			t.Errorf("standard node should not have DNS rule: %s", rule)
 		}
 		if strings.Contains(rule, "9001") {
-			t.Errorf("standard node should not have Anyone relay rule: %s", rule)
+			t.Errorf("standard node should not open a relay ORPort: %s", rule)
 		}
 	}
 }

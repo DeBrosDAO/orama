@@ -14,7 +14,7 @@ var coreServices = []string{
 	"orama-namespace-ipfs@index",
 	"orama-namespace-ipfs-cluster@index",
 	"orama-namespace-vault@index",
-	"orama-namespace-anyone-client@index",
+	"orama-namespace-tor@index",
 	"orama-namespace-caddy@index",
 	"orama-namespace-wireguard@index",
 	"orama-namespace-coredns@nameserver",

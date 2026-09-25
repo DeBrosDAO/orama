@@ -26,7 +26,7 @@ type NodeData struct {
 	WireGuard  *WireGuardData
 	System     *SystemData
 	Network    *NetworkData
-	Anyone     *AnyoneData
+	Tor        *TorData
 	Namespaces []NamespaceData // namespace instances on this node
 	Errors     []string        // collection errors for this node
 }
@@ -227,22 +227,6 @@ type NetworkData struct {
 	PingResults       map[string]bool // WG peer IP → ping success
 }
 
-// AnyoneData holds parsed Anyone relay/client status from a node.
-type AnyoneData struct {
-	RelayActive      bool            // orama-anyone-relay systemd service active
-	ClientActive     bool            // orama-anyone-client systemd service active
-	Mode             string          // "relay" or "client" (from anonrc ORPort presence)
-	ORPortListening  bool            // port 9001 bound locally
-	SocksListening   bool            // port 9050 bound locally (client SOCKS5)
-	ControlListening bool            // port 9051 bound locally (control port)
-	Bootstrapped     bool            // relay has bootstrapped to 100%
-	BootstrapPct     int             // bootstrap percentage (0-100)
-	Fingerprint      string          // relay fingerprint
-	Nickname         string          // relay nickname
-	UptimeStr        string          // uptime from control port
-	ORPortReachable  map[string]bool // host IP → whether we can TCP connect to their 9001 from this node
-}
-
 // Collect gathers data from all nodes in parallel.
 func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose bool) *ClusterData {
 	start := time.Now()
@@ -306,8 +290,8 @@ func collectNode(ctx context.Context, node Node, subsystems []string, verbose bo
 	if shouldCollect("network") {
 		nd.Network = collectNetwork(ctx, node, nd.WireGuard)
 	}
-	if shouldCollect("anyone") && !node.IsNameserver() {
-		nd.Anyone = collectAnyone(ctx, node)
+	if shouldCollect("tor") {
+		nd.Tor = collectTor(ctx, node)
 	}
 	// Namespace collection — always collect if any subsystem is collected
 	nd.Namespaces = collectNamespaces(ctx, node)
@@ -890,7 +874,7 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 		"orama-namespace-ipfs@index", "orama-ipfs",
 		"orama-namespace-ipfs-cluster@index", "orama-ipfs-cluster",
 		"orama-namespace-olric@index", "orama-olric",
-		"orama-namespace-anyone-client@index", "orama-anyone-relay", "orama-anyone-client",
+		"orama-namespace-tor@index",
 		"orama-namespace-caddy@index", "orama-namespace-coredns@nameserver", "coredns", "caddy",
 		"orama-namespace-wireguard@index", "wg-quick@wg0",
 	}
@@ -1142,87 +1126,6 @@ echo "$SEP"
 				}
 			}
 		}
-	}
-
-	return data
-}
-
-func collectAnyone(ctx context.Context, node Node) *AnyoneData {
-	data := &AnyoneData{
-		ORPortReachable: make(map[string]bool),
-	}
-
-	cmd := `
-SEP="===INSPECTOR_SEP==="
-echo "$SEP"
-systemctl is-active orama-anyone-relay 2>/dev/null || echo inactive
-echo "$SEP"
-(systemctl is-active --quiet orama-namespace-anyone-client@index && echo active) || (systemctl is-active --quiet orama-anyone-client && echo active) || echo inactive
-echo "$SEP"
-ss -tlnp 2>/dev/null | grep -q ':9001 ' && echo yes || echo no
-echo "$SEP"
-ss -tlnp 2>/dev/null | grep -q ':9050 ' && echo yes || echo no
-echo "$SEP"
-ss -tlnp 2>/dev/null | grep -q ':9051 ' && echo yes || echo no
-echo "$SEP"
-# Check bootstrap status from log. Fall back to notices.log.1 if current log
-# is empty (logrotate may have rotated the file without signaling the relay).
-BPCT=$(grep -oP 'Bootstrapped \K[0-9]+' /var/log/anon/notices.log 2>/dev/null | tail -1)
-if [ -z "$BPCT" ]; then
-  BPCT=$(grep -oP 'Bootstrapped \K[0-9]+' /var/log/anon/notices.log.1 2>/dev/null | tail -1)
-fi
-echo "${BPCT:-0}"
-echo "$SEP"
-# Read fingerprint (sudo needed: file is owned by debian-anon with 0600 perms)
-sudo cat /var/lib/anon/fingerprint 2>/dev/null || echo ""
-echo "$SEP"
-# Read nickname from config
-grep -oP '^Nickname \K\S+' /etc/anon/anonrc 2>/dev/null || echo ""
-echo "$SEP"
-# Detect relay vs client mode: check if ORPort is configured in anonrc
-grep -qP '^\s*ORPort\s' /etc/anon/anonrc 2>/dev/null && echo relay || echo client
-`
-
-	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-
-	if len(parts) > 1 {
-		data.RelayActive = strings.TrimSpace(parts[1]) == "active"
-	}
-	if len(parts) > 2 {
-		data.ClientActive = strings.TrimSpace(parts[2]) == "active"
-	}
-	if len(parts) > 3 {
-		data.ORPortListening = strings.TrimSpace(parts[3]) == "yes"
-	}
-	if len(parts) > 4 {
-		data.SocksListening = strings.TrimSpace(parts[4]) == "yes"
-	}
-	if len(parts) > 5 {
-		data.ControlListening = strings.TrimSpace(parts[5]) == "yes"
-	}
-	if len(parts) > 6 {
-		pct := parseIntDefault(strings.TrimSpace(parts[6]), 0)
-		data.BootstrapPct = pct
-		data.Bootstrapped = pct >= 100
-	}
-	if len(parts) > 7 {
-		data.Fingerprint = strings.TrimSpace(parts[7])
-	}
-	if len(parts) > 8 {
-		data.Nickname = strings.TrimSpace(parts[8])
-	}
-	if len(parts) > 9 {
-		data.Mode = strings.TrimSpace(parts[9])
-	}
-
-	// If neither relay nor client is active, skip further checks
-	if !data.RelayActive && !data.ClientActive {
-		return data
 	}
 
 	return data

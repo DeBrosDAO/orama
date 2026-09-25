@@ -382,7 +382,7 @@ Disconnect from a peer by ID.
 
 ### `network.proxyAnon(request): Promise<ProxyResponse>`
 
-Proxy an HTTP request through the Anyone privacy relay network. Requires authentication.
+Proxy an HTTP request through the Tor network (the Tor client every node runs). Requires authentication.
 
 ```typescript
 const response = await client.network.proxyAnon({
@@ -796,7 +796,7 @@ All SDK methods map to REST API endpoints on the gateway. For direct HTTP integr
 | GET | `/v1/network/peers` | Connected peers |
 | POST | `/v1/network/connect` | Connect to a peer |
 | POST | `/v1/network/disconnect` | Disconnect from a peer |
-| POST | `/v1/proxy/anon` | Anonymous proxy request (via Anyone relay) |
+| POST | `/v1/proxy/anon` | Anonymous proxy request (via Tor) |
 
 ### Vault
 

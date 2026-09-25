@@ -61,10 +61,6 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 	setup := oramainstall.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(isNameserver)
 
-	// Anyone is client-only. Always enable the SOCKS client so a bare
-	// `orama node upgrade --restart` does not disable /v1/proxy/anon.
-	setup.SetAnyoneClient(true)
-
 	return &Orchestrator{
 		oramaHome: oramaHome,
 		oramaDir:  oramaDir,
@@ -104,6 +100,15 @@ func (o *Orchestrator) Execute() error {
 		fmt.Printf("\n🛠️  Phase 2: Provisioning environment...\n")
 		if err := o.setup.Phase2ProvisionEnvironment(); err != nil {
 			return fmt.Errorf("environment provisioning failed: %w", err)
+		}
+
+		// Tor, while the node still serves: it needs the network (it upgrades
+		// Tor from deb.torproject.org), so a failure here aborts the upgrade
+		// before anything is stopped. On the upgrade that replaces Anyone this
+		// code is the OLD binary's and is absent; Phase 2d below covers it.
+		fmt.Printf("\nPhase 2d: Installing/upgrading the Tor client...\n")
+		if err := o.setup.PhaseTorSetup(); err != nil {
+			return fmt.Errorf("tor setup failed (no services were stopped): %w", err)
 		}
 
 		// Stop services before upgrading binaries
@@ -176,6 +181,17 @@ func (o *Orchestrator) Execute() error {
 		return fmt.Errorf("service initialization failed: %w", err)
 	}
 
+	// Phase 2d again, under the NEW binary: on the upgrade that introduces
+	// Tor, everything before the re-exec ran the OLD binary, which knew nothing
+	// of Tor and whose Phase 2b still installed Anyone. This removes Anyone and
+	// installs Tor before Phase 5 restarts the supervisor that starts
+	// orama-namespace-tor@index. When the pre-stop Phase 2d already ran it,
+	// this touches no network.
+	fmt.Printf("\nPhase 2d: Ensuring the Tor client...\n")
+	if err := o.setup.PhaseTorEnsure(); err != nil {
+		return fmt.Errorf("tor setup failed: %w", err)
+	}
+
 	// Templates before the services that use them: Phase 5 restarts orama-node,
 	// whose first act is to start orama-namespace-wireguard@index. An upgrade
 	// that adds a template unit would otherwise land it after the restart that
@@ -238,11 +254,6 @@ func (o *Orchestrator) handleBranchPreferences() error {
 	}
 	if o.setup.IsNameserver() {
 		fmt.Printf("  Nameserver mode: enabled (CoreDNS + Caddy)\n")
-	}
-
-	if !prefs.AnyoneClient {
-		prefs.AnyoneClient = true
-		prefsChanged = true
 	}
 
 	// Save preferences if anything changed
@@ -387,15 +398,14 @@ func (o *Orchestrator) stopServices() error {
 
 	// Stop services in reverse dependency order
 	services := []string{
-		"caddy.service",               // Depends on node
-		"coredns.service",             // Depends on node
-		"orama-gateway.service",       // Legacy
-		"orama-node.service",          // Depends on cluster, olric
-		"orama-ipfs-cluster.service",  // Depends on IPFS
-		"orama-ipfs.service",          // Base IPFS
-		"orama-olric.service",         // Independent
-		"orama-vault.service",         // Vault guardian
-		"orama-anyone-client.service", // Client mode
+		"caddy.service",              // Depends on node
+		"coredns.service",            // Depends on node
+		"orama-gateway.service",      // Legacy
+		"orama-node.service",         // Depends on cluster, olric
+		"orama-ipfs-cluster.service", // Depends on IPFS
+		"orama-ipfs.service",         // Base IPFS
+		"orama-olric.service",        // Independent
+		"orama-vault.service",        // Vault guardian
 	}
 	for _, svc := range services {
 		unitPath := filepath.Join("/etc/systemd/system", svc)
@@ -697,8 +707,7 @@ func (o *Orchestrator) restartServices() error {
 	// 10102, 10107, :53 and :443 until IndexSupervisor stopped them on its next
 	// start. orama-gateway is the same story under an older name.
 	priorityOrder := []string{
-		"orama-node",         // The supervisor: it brings up the @index stack
-		"orama-anyone-relay", // Independent of @index
+		"orama-node", // The supervisor: it brings up the @index stack
 	}
 
 	// Restart services in priority order with health checks

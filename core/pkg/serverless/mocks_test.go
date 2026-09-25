@@ -283,7 +283,7 @@ func (m *MockHostServices) HTTPFetch(ctx context.Context, method, url string, he
 	return nil, nil
 }
 
-func (m *MockHostServices) AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+func (m *MockHostServices) AnonFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
 	return nil, nil
 }
 

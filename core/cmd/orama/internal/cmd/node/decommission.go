@@ -47,7 +47,7 @@ var wipeCmd = &cobra.Command{
 	Use:   "wipe",
 	Short: "Erase Orama from remote nodes (target-side only)",
 	Long: `Remove all Orama data, services and configuration from remote nodes.
-Anyone relay keys at /var/lib/anon/ are preserved.
+Tor is left installed (its config and state are removed); --nuclear purges it.
 
 Target-side only: this says nothing to the cluster. If the node is still a
 member, use 'orama node decommission' instead — otherwise the survivors keep
@@ -69,13 +69,13 @@ func init() {
 	d.StringVar(&decommissionFlags.Env, "env", "", "Target environment (devnet, testnet) [required]")
 	d.StringVar(&decommissionFlags.Node, "node", "", "Public IP of the node to remove [required]")
 	d.BoolVar(&decommissionFlags.Offline, "offline", false, "The node is already gone: retire it cluster-side only, do not try to wipe it")
-	d.BoolVar(&decommissionFlags.Nuclear, "nuclear", false, "When wiping, also remove shared binaries")
+	d.BoolVar(&decommissionFlags.Nuclear, "nuclear", false, "When wiping, also remove shared binaries and the Tor package")
 	d.BoolVar(&decommissionFlags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
 	d.BoolVar(&decommissionFlags.DryRun, "dry-run", false, "Print the quorum impact and the statements, change nothing")
 
 	w := wipeCmd.Flags()
 	w.StringVar(&wipeFlags.Env, "env", "", "Target environment (devnet, testnet) [required]")
 	w.StringVar(&wipeFlags.Node, "node", "", "Public IP of the node to wipe; omit to wipe every node in the environment")
-	w.BoolVar(&wipeFlags.Nuclear, "nuclear", false, "Also remove shared binaries (rqlited, ipfs, caddy, ...)")
+	w.BoolVar(&wipeFlags.Nuclear, "nuclear", false, "Also remove shared binaries (rqlited, ipfs, caddy, ...) and the Tor package")
 	w.BoolVar(&wipeFlags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
 }

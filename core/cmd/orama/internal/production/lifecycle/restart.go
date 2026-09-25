@@ -61,7 +61,6 @@ func HandleRestartWithFlags(force bool) error {
 		{"orama-olric"},
 		{"orama-ipfs-cluster", "orama-ipfs"},
 		{"orama-vault"},
-		{"orama-anyone-relay", "orama-anyone-client"},
 		{"coredns", "caddy"},
 	}
 

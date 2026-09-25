@@ -1,0 +1,67 @@
+[Unit]
+Description=Orama Namespace Tor client SOCKS5 (%i)
+Documentation=https://support.torproject.org/
+After=network-online.target
+Wants=network-online.target
+PartOf=orama-node.service
+# No start limit. orama-node reconciles these units and retries with backoff,
+# and `systemctl start` on a rate-limited unit fails with "Start request
+# repeated too quickly" until someone runs `reset-failed` — so the default
+# limit would turn a transient failure into one that needs a human.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Client only: /etc/orama/tor/torrc is written by the installer (SocksPort
+# 127.0.0.1:9050, no ORPort/DirPort/exit). The distro tor.service and
+# tor@default.service are masked, so nothing else binds the port.
+User=debian-tor
+Group=debian-tor
+EnvironmentFile=-/opt/orama/.orama/data/namespaces/%i/tor.env
+ExecStart=/usr/bin/tor -f /etc/orama/tor/torrc
+Restart=always
+RestartSec=5s
+# DataDirectory /var/lib/orama-tor, created owned by debian-tor with the 0700
+# mode Tor insists on.
+StateDirectory=orama-tor
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Tor reaches only public relays. It must never open a connection into the
+# WireGuard overlay or any other internal network, whatever a caller asks for;
+# loopback stays open for the SOCKS listener.
+IPAddressAllow=localhost
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10
+LimitNOFILE=65536
+MemoryMax=1G
+MemorySwapMax=0
+TimeoutStopSec=30
+KillMode=mixed
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-tor-%i
+
+[Install]
+WantedBy=multi-user.target

@@ -56,7 +56,7 @@ The system follows a clean, layered architecture with clear separation of concer
         └─────────────────┘         └──────────────┘
 
         ┌─────────────────┐
-        │     Anyone      │
+        │   Tor client    │
         │  (Anonymity)    │
         │                 │
         │  Port 9050      │
@@ -69,7 +69,7 @@ Install enables **only** `orama-node.service`. That process is a supervisor: it 
 
 | Plane | Membership | Units | Ports |
 |---|---|---|---|
-| **index** | every node | `orama-namespace-{wireguard,ipfs,ipfs-cluster,ipfs-gc,rqlite,olric,pubsub,gateway,vault,caddy,ntfy,anyone-client}@index`; optional `sni-router@index` | internals `10100–10109`; edge `80`/`443`/`51820`/`9050` |
+| **index** | every node | `orama-namespace-{wireguard,ipfs,ipfs-cluster,ipfs-gc,rqlite,olric,pubsub,gateway,vault,caddy,ntfy,tor}@index`; optional `sni-router@index` | internals `10100–10109`; edge `80`/`443`/`51820`/`9050` |
 | **nameserver** | this node, if `--nameserver` | `orama-namespace-coredns@nameserver` | `:53` |
 | **tenant** | N members chosen at provision | `orama-namespace-{rqlite,olric,gateway}@<name>` (+ `sfu`/`turn` if WebRTC) | `10000–10099` |
 
@@ -189,7 +189,7 @@ Components come in two tiers:
 | **cluster** | `rqlite-cluster`, `dns-registration` | a raft quorum |
 
 `edge-serving` is vault, the optional SNI router and Caddy; `edge-aux` is ntfy
-and the anyone-client. They are separate because `dns-registration` depends on
+and the Tor client. They are separate because `dns-registration` depends on
 the first and not the second: a `dns_nodes` row saying `active` is a promise
 that this node terminates TLS and proxies tenants, so a node whose Caddy never
 started must not advertise itself — while a broken ntfy, which serves no
@@ -700,27 +700,74 @@ pkg/config/
     └── security.go
 ```
 
-### 6. Anyone Integration (`pkg/anyoneproxy/`)
+### 6. Anonymity Proxy — Tor (`pkg/anonproxy/`)
 
-Integration with the Anyone Protocol for anonymous routing.
+Tor is the node's only anonymity backend. Every node runs a Tor **client** only
+— no relay, no exit, no ORPort/DirPort, no control port — as
+`orama-namespace-tor@index` (`User=debian-tor`, hardened like the other index
+units, with `IPAddressDeny` for the WireGuard overlay and every other internal
+range). Its SOCKS5 port is `127.0.0.1:9050` (`constants.TorSOCKSAddr()`, shared
+by the installer's torrc and the gateway's dialer).
 
-Every node runs Anyone as a **client** only: a local SOCKS5 proxy on `127.0.0.1:9050` used by `/v1/proxy/anon` and the anonymity tunnel. Relay/ORPort operator mode is not installed.
+Phase 2d (`PhaseTorSetup` on install and, on upgrade, before the node's
+services stop; `PhaseTorEnsure` again after the post-swap re-exec):
+
+1. Remove the Anyone network, which Tor replaced: stop and disable
+   `orama-namespace-anyone-client@index`, `orama-anyone-client`,
+   `orama-anyone-relay` and `anon.service`; purge the `anon` and `nyx` packages; delete its
+   apt source and key, `/etc/anon`, `/var/lib/anon` (relay keys included),
+   `/var/log/anon` and the unit/env/log files Orama wrote. Each step checks
+   first, so it is a no-op on a node that never had Anyone.
+2. Mask the package's own `tor.service` / `tor@default.service` (stopping a
+   running one), so they never bind 9050 — before installing, because the
+   package would start them.
+3. Add the Tor Project's apt repository (`deb.torproject.org`, the source the
+   Tor Project recommends over Ubuntu's universe package) unless this
+   installer's source for the OS release, its keyring file and the keyring package are already
+   in place. The archive key is imported into a throwaway gpg home, refused
+   unless its only primary key is `A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89`,
+   and only that key is exported to the keyring apt trusts. Then `apt-get
+   install` `tor` and `deb.torproject.org-keyring`, which also upgrades Tor —
+   so every Orama upgrade upgrades Tor, while the node still serves.
+   `PhaseTorEnsure` skips this step (no network) when both packages are
+   installed and the repository is current; it matters on the upgrade that
+   replaces Anyone, whose pre-swap half is the old binary.
+4. Write `/etc/orama/tor/torrc`: `SocksPort 127.0.0.1:9050 IsolateSOCKSAuth`,
+   `ClientOnly 1`, `ORPort 0`, `DirPort 0`, `ExitRelay 0`,
+   `ClientRejectInternalAddresses 1`, `DataDirectory /var/lib/orama-tor`
+   (created by the unit's `StateDirectory=`), `Log notice stdout` (journald).
+
+A failure in any step fails the install/upgrade. Before the stop it leaves the
+node serving; in the post-swap run it leaves the node's services stopped, and
+the rolling upgrade halts at that node. The supervisor then starts
+`orama-namespace-tor@index` in `edge-aux`; a missing torrc is an error there,
+not a skip.
 
 **Key Files:**
-- `pkg/anyoneproxy/socks.go` - SOCKS5 proxy client interface
+- `pkg/anonproxy/socks.go` - SOCKS5 dialer and HTTP client; every connection goes through Tor
 - `pkg/gateway/anon_proxy_handler.go` - Anonymous request proxy endpoint
 - `pkg/gateway/anon_tunnel_handler.go` - Authenticated tunnelling proxy (bugboard #168)
-- `pkg/install/installers/anyone_installer.go` - Client binary + anonrc
+- `pkg/install/installers/tor.go`, `tor_installer.go`, `tor_keyring.go` - Tor repository, key pin, package, torrc
+- `pkg/install/installers/anyone_legacy.go` - Removal of the Anyone network
+- `systemd/orama-namespace-tor@.service` - The Tor client unit
 
-**Features:**
-- Smart routing (bypasses proxy for local/private addresses)
+**Routing:** there is no bypass. Every destination, private or not, goes to
+the SOCKS port; host names are passed unresolved so the exit does DNS, and Tor
+refuses internal addresses (including a redirect to one).
+
+**Health:** `/v1/health` reports the SOCKS port as `checks.anon_proxy`
+(`ok`, or `unavailable` when it does not accept connections — deliberately not
+`error`, so a stopped Tor client never degrades the node or removes it from
+DNS; `orama monitor` and `orama inspect --subsystem tor` alert on it). The key
+was `anyone` before Tor replaced the Anyone network.
 
 **API Endpoints:**
-- `POST /v1/proxy/anon` - Route a single HTTP request through the Anyone network.
+- `POST /v1/proxy/anon` - Route a single HTTP request through Tor.
   The gateway performs the request, so it necessarily sees the URL, headers and
   body in cleartext.
 - `GET /v1/proxy/tunnel` (WebSocket) - Carry an opaque TCP stream to
-  `?host=&port=` through the Anyone network. TLS is negotiated end-to-end
+  `?host=&port=` through Tor. Each end user gets their own circuit (the
+  isolation key is passed as SOCKS credentials). TLS is negotiated end-to-end
   between the client and the destination *through* the tunnel, so the gateway
   relays ciphertext and sees only the destination host and port. See
   "Anonymity Tunnel" in `docs/GO_CLIENT_SDK.md`.
@@ -965,7 +1012,7 @@ internal-auth check both accept.
 - **Vault:** V1 push/pull endpoints require session token authentication when guardian is configured
 - **WebSockets:** Origin header validated against the node's configured domain
 - **Tenant SQLite:** opened with `SQLITE_LIMIT_ATTACHED=0`; `ATTACH`/`DETACH` and multi-statement queries are rejected
-- **WASM egress:** `http_fetch` / `anyone_fetch` deny loopback, private, link-local, unspecified, and multicast URLs
+- **WASM egress:** `http_fetch` / `anon_fetch` (and its deprecated alias `anyone_fetch`) deny loopback, private, link-local, unspecified, and multicast URLs; `anon_fetch` sends every connection to Tor, which refuses internal addresses itself
 - **WASM memory:** wazero `WithMemoryLimitPages` from `MaxMemoryLimitMB` (default 256 MB). Modules without a memory max still cannot grow past that
 - **WASM concurrency:** process-wide semaphore plus a per-namespace cap (`maxConcurrent/2`, min 1)
 - **Process uid:** namespace gateway/rqlite/olric/sfu/turn/pubsub run as `User=orama` (not root). `/opt/orama/bin` is `root:orama` 0750. CoreDNS/Caddy `ReadWritePaths` do not include `secrets/`
@@ -981,7 +1028,7 @@ internal-auth check both accept.
 
 ### Process Isolation
 
-- **Dedicated user:** Most units run as `orama`. WireGuard (`wg-quick`) runs as root. Anyone client runs as `debian-anon`. ntfy runs as `ntfy`.
+- **Dedicated user:** Most units run as `orama`. WireGuard (`wg-quick`) runs as root. The Tor client runs as `debian-tor`. ntfy runs as `ntfy`.
 - **systemd hardening:** `ProtectSystem=strict`, `NoNewPrivileges=yes`, `PrivateDevices=yes`, etc. `orama-node` omits `NoNewPrivileges` so it can `sudo systemctl` the `@` units.
 - **Capabilities:** Caddy, CoreDNS, and the SNI router get `CAP_NET_BIND_SERVICE` for privileged ports.
 

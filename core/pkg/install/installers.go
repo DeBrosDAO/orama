@@ -117,11 +117,6 @@ func (bi *BinaryInstaller) InitializeRQLiteDataDir(dataDir string) error {
 	return bi.rqlite.InitializeDataDir(dataDir)
 }
 
-// InstallAnyoneClient installs the anyone-client npm package globally
-func (bi *BinaryInstaller) InstallAnyoneClient() error {
-	return bi.gateway.InstallAnyoneClient()
-}
-
 // InstallCoreDNS builds and installs CoreDNS with the custom RQLite plugin.
 // Also disables systemd-resolved's stub listener so CoreDNS can bind to port 53.
 func (bi *BinaryInstaller) InstallCoreDNS() error {

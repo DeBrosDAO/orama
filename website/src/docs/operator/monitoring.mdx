@@ -138,7 +138,7 @@ The `orama node report` command runs locally on a VPS node and collects all syst
 | **gateway** | HTTP health check, subsystem status |
 | **wireguard** | Interface state, WireGuard IP, peers, handshake ages, MTU, config permissions |
 | **dns** | CoreDNS and Caddy state, port bindings, resolution tests, TLS cert expiry |
-| **anyone** | Client state, bootstrap progress, fingerprint |
+| **tor** | Tor client state, SOCKS port bound, bootstrap progress, Anyone-network leftovers |
 | **network** | Internet reachability, TCP stats, retransmission rate, listening ports, UFW rules |
 | **processes** | Zombie count, orphan orama processes, panic/fatal count in logs |
 | **namespaces** | Per-namespace service probes (RQLite, Olric, Gateway) |
@@ -152,7 +152,7 @@ Alerts are derived from cross-node analysis of all collected reports. Each alert
 | Severity | Examples |
 |----------|----------|
 | **CRITICAL** | SSH collection failed (node unreachable), no RQLite leader, split brain, WireGuard interface down, WireGuard peer never handshaked, OOM kills, service failed, UFW inactive |
-| **WARNING** | Strong read failed, memory above 90%, disk above 85%, stale WireGuard handshake (over 3 minutes), Raft term inconsistency, applied index lag over 100, restart loop detected, TLS cert under 14 days, DNS down, namespace gateway down, Anyone not bootstrapped, clock skew over 5 seconds, binary version mismatch, internet unreachable, high TCP retransmission |
+| **WARNING** | Strong read failed, memory above 90%, disk above 85%, stale WireGuard handshake (over 3 minutes), Raft term inconsistency, applied index lag over 100, restart loop detected, TLS cert under 14 days, DNS down, namespace gateway down, Tor SOCKS port not bound or not bootstrapped, Anyone-network leftovers, clock skew over 5 seconds, binary version mismatch, internet unreachable, high TCP retransmission |
 | **INFO** | Zombie processes, orphan orama processes, swap usage above 30% |
 
 ### Cross-Node Checks
@@ -174,7 +174,7 @@ The monitor compares data across all nodes to detect cluster-wide issues:
 - **System** — Memory, disk, load average, OOM kills, swap
 - **Services** — Systemd state for all services, restart loop detection
 - **DNS** — CoreDNS and Caddy running, TLS cert expiry, SOA resolution
-- **Anyone** — Bootstrap progress for the Anyone client
+- **Tor** — SOCKS port bound and bootstrap progress for the Tor client; Anyone-network leftovers
 - **Processes** — Zombies, orphans, panics in logs
 - **Namespaces** — Gateway and RQLite health per namespace
 - **Network** — UFW active, internet reachability, TCP retransmission rate
@@ -203,7 +203,7 @@ orama inspect --env <environment> [flags]
 
 ### Subsystems
 
-`rqlite`, `olric`, `ipfs`, `dns`, `wg`, `system`, `network`, `anyone`
+`rqlite`, `olric`, `ipfs`, `dns`, `wg`, `system`, `network`, `tor`
 
 Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 
@@ -218,7 +218,7 @@ Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 | **wg** | Interface up, correct 10.0.0.x IP, listen port 51820, peer count, MTU 1420, config permissions 600, handshake freshness, peer traffic, cross-node consistency |
 | **system** | Core service states, failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user, panic count, expected ports |
 | **network** | Internet reachability, default route, WireGuard route, TCP connection count, TIME_WAIT count, retransmission rate, WireGuard mesh ping to all peers |
-| **anyone** | Anyone client state, bootstrap progress, fingerprint, configuration validation |
+| **tor** | `orama-namespace-tor@index` active, SOCKS5 `:9050` bound, bootstrap progress of the running process, Anyone-network leftovers |
 
 ### Severity Levels
 
