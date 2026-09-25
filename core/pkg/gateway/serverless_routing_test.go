@@ -322,3 +322,43 @@ func TestWithMiddleware_routesTenantServerlessToTheNamespaceGateway(t *testing.T
 			rec.Code, len(f.hits), f.local)
 	}
 }
+
+// capabilityUpgrade is a WebSocket upgrade that carries a capability and no
+// credential (FEAT-264).
+func capabilityUpgrade(target string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, target, nil)
+	r.Header.Set("Connection", "upgrade")
+	r.Header.Set("Upgrade", "websocket")
+	return r
+}
+
+// A capability names the function it opens but carries no credential, so on
+// the cluster gateway it is routed like any anonymous call: by the namespace
+// the request names, with the capability left in the query for the tenant's
+// gateway to check.
+func TestClusterServerlessRouting_capabilityUpgradeGoesToTheNamedNamespace(t *testing.T) {
+	f := newClusterGatewayFixture(t, "default")
+	r := capabilityUpgrade("/v1/functions/rpc/ws?namespace=" + tenantNamespace + "&cap=opaque-capability")
+
+	f.serve(r)
+
+	if f.local != 0 {
+		t.Fatal("a capability upgrade for a tenant function was served by the cluster gateway")
+	}
+	if got := r.URL.Query().Get("cap"); got != "opaque-capability" {
+		t.Errorf("cap at the hop = %q; the tenant's gateway could not check it", got)
+	}
+}
+
+func TestClusterServerlessRouting_capabilityUpgradeNamingNoNamespaceIsRefused(t *testing.T) {
+	f := newClusterGatewayFixture(t, "default")
+
+	rec := f.serve(capabilityUpgrade("/v1/functions/rpc/ws?cap=opaque-capability"))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", rec.Code)
+	}
+	if f.local != 0 || len(f.hits) != 0 {
+		t.Error("a capability upgrade naming no namespace was served")
+	}
+}
