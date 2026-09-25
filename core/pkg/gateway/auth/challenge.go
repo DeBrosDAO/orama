@@ -69,6 +69,12 @@ const (
 	// and it is inside the message rather than beside it in the request body so
 	// that the namespace a caller acts on is the namespace the user approved.
 	namespaceResourcePrefix = "urn:orama:namespace:"
+
+	// deviceResourcePrefix carries the device a sign-in binds, inside the
+	// signed bytes for the same reason: the wallet approves which device it is
+	// letting in, and the device's own signature over the same message proves
+	// the device holds the key the id names.
+	deviceResourcePrefix = "urn:orama:device:"
 )
 
 // ErrChallengeMessage means the message a caller presented is not one this
@@ -87,6 +93,9 @@ type ChallengeParams struct {
 	Chain     siw.Chain
 	Domain    string
 	URI       string
+	// DeviceID is the device the sign-in will bind, or "" for a session bound
+	// to the account alone: the RFC 7638 thumbprint of the device's key.
+	DeviceID string
 }
 
 // Challenge is what the caller hands to the wallet.
@@ -113,6 +122,13 @@ func (s *Service) CreateChallenge(ctx context.Context, p ChallengeParams) (*Chal
 	if err != nil {
 		return nil, err
 	}
+	resources := []string{namespaceResourcePrefix + namespace}
+	if p.DeviceID != "" {
+		if !ValidDeviceID(p.DeviceID) {
+			return nil, fmt.Errorf("%w: device_id must be the base64url RFC 7638 thumbprint of the device key", ErrDeviceKeyInvalid)
+		}
+		resources = append(resources, deviceResourcePrefix+p.DeviceID)
+	}
 
 	nonce, err := generateNonce()
 	if err != nil {
@@ -132,7 +148,7 @@ func (s *Service) CreateChallenge(ctx context.Context, p ChallengeParams) (*Chal
 		Nonce:          nonce,
 		IssuedAt:       issuedAt,
 		ExpirationTime: issuedAt.Add(ChallengeTTL),
-		Resources:      []string{namespaceResourcePrefix + namespace},
+		Resources:      resources,
 	}
 
 	text, err := message.Render()
@@ -210,6 +226,26 @@ func NamespaceOf(m *siw.Message) (string, error) {
 	}
 	if found == "" {
 		return "", fmt.Errorf("%w: names no namespace", ErrChallengeMessage)
+	}
+	return found, nil
+}
+
+// DeviceOf returns the device a signed message binds, or "" when it binds none.
+// More than one is refused: a sign-in binds one device.
+func DeviceOf(m *siw.Message) (string, error) {
+	var found string
+	for _, r := range m.Resources {
+		id, ok := strings.CutPrefix(r, deviceResourcePrefix)
+		if !ok {
+			continue
+		}
+		if found != "" {
+			return "", fmt.Errorf("%w: names more than one device", ErrChallengeMessage)
+		}
+		if !ValidDeviceID(id) {
+			return "", fmt.Errorf("%w: names a device id that is not a key thumbprint", ErrChallengeMessage)
+		}
+		found = id
 	}
 	return found, nil
 }

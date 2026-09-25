@@ -43,9 +43,14 @@ var protectedTables = map[string]string{
 	// A pending device login. Reading one hands out the code that collects
 	// somebody else's session; writing one approves it.
 	"device_authorizations": "pending logins",
-	"invite_tokens":         "cluster membership",
-	"operators":             "operator identity",
-	"principals":            "who the platform will authenticate",
+	// Which devices hold sessions. Writing one activates a device or
+	// un-revokes a tombstoned one.
+	"session_devices": "which devices may hold a session",
+	// Lowering it lets a wallet signature alone enrol a device.
+	"namespace_session_policy": "what a sign-in must prove",
+	"invite_tokens":            "cluster membership",
+	"operators":                "operator identity",
+	"principals":               "who the platform will authenticate",
 	// Public keys, but writing one publishes a key the cluster will accept
 	// tokens from — which is minting authority by another route.
 	"signing_keys": "which keys may sign a token",

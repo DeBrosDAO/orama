@@ -220,7 +220,15 @@ func AuthSessionsRevoke(id int64, all bool) error {
 	}
 
 	fmt.Printf("Session %d ended.\n", id)
-	fmt.Println("  An access token already minted from it keeps working until it expires, at most 15 minutes.")
+	var ended struct {
+		Warning string `json:"warning"`
+	}
+	if err := json.Unmarshal(body, &ended); err != nil {
+		return clierr.Failure("the gateway ended session %d and answered with something unreadable: %w", id, err)
+	}
+	if ended.Warning != "" {
+		fmt.Println("  " + ended.Warning)
+	}
 	return nil
 }
 

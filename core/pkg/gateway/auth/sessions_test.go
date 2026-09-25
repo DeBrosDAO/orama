@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -98,7 +99,9 @@ func TestEndSession_endsOneAndOnlyTheCallersOwn(t *testing.T) {
 		t.Errorf("the other wallet's session went anyway: %+v", left)
 	}
 
-	if err := s.EndSession(ctx, "anchat", "0xowner", mine[0].ID); err != nil {
+	// issueSession writes a row as sessions were before they carried an id,
+	// so ending it says its access tokens outlive it.
+	if err := s.EndSession(ctx, "anchat", "0xowner", mine[0].ID); !errors.Is(err, ErrSessionTokensOutlive) {
 		t.Fatalf("end my own session: %v", err)
 	}
 	if left, _ := s.ListSessions(ctx, "anchat", "0xowner"); len(left) != 0 {
@@ -114,11 +117,12 @@ func TestEndSession_saysSoWhenThereWasNothingToEnd(t *testing.T) {
 	issueSession(t, s, "0xowner", time.Now().Add(time.Hour).UTC().Format(sqliteTime))
 
 	mine, _ := s.ListSessions(ctx, "anchat", "0xowner")
-	if err := s.EndSession(ctx, "anchat", "0xowner", mine[0].ID); err != nil {
+	if err := s.EndSession(ctx, "anchat", "0xowner", mine[0].ID); !errors.Is(err, ErrSessionTokensOutlive) {
 		t.Fatalf("end: %v", err)
 	}
-	if err := s.EndSession(ctx, "anchat", "0xowner", mine[0].ID); err == nil {
-		t.Error("ending an already-ended session reported success")
+	err := s.EndSession(ctx, "anchat", "0xowner", mine[0].ID)
+	if err == nil || errors.Is(err, ErrSessionTokensOutlive) {
+		t.Errorf("ending an already-ended session reported success: %v", err)
 	}
 }
 

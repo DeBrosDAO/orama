@@ -352,7 +352,7 @@ grants given and taken away, deployments, functions, secrets and namespace chang
 Events are shown oldest first. --follow keeps the command running and prints new
 ones as they are recorded.
 
-Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer, auth.device.start, auth.device.approve, auth.device.deny, auth.device.claim, node.register, node.key.enrol
+Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer, auth.device.start, auth.device.approve, auth.device.deny, auth.device.claim, auth.device.revoke, namespace.session_policy, node.register, node.key.enrol
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -454,8 +454,11 @@ orama auth sessions revoke [id] [flags]
 
 End a session listed by 'orama auth sessions'.
 
-Ending a session stops it minting new access tokens. One already minted keeps
-working until it expires, at most 15 minutes.
+Ending a session stops it minting new access tokens, and refuses the access
+tokens it already minted — and closes the sockets they hold open — within ten
+seconds. A session issued before sessions carried an id cannot be named that
+way: its access tokens work until they expire, at most 15 minutes, and the
+command says so.
 
 | Flag | Default | Description |
 |------|---------|-------------|

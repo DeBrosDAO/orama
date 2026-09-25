@@ -68,6 +68,11 @@ var reservedClaimKeys = map[string]struct{}{
 	// tenant could mint admin for every end-user's JWT. Only the API-key→JWT
 	// exchange path sets it, and callerScopes only trusts it on an ak_ subject.
 	"scopes": {},
+	// The token's own id, and the device and session a session is bound to.
+	// A function reads the device through get_caller_device_id; a provider
+	// able to put "did" in the custom claims could make get_caller_claim
+	// name a device the caller never proved it holds.
+	"jti": {}, "did": {}, "sid": {},
 }
 
 // claimsInvoker is the narrow invoke seam the claims provider depends on —

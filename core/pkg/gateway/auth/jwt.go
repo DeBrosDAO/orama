@@ -89,6 +89,14 @@ type JWTClaims struct {
 	// are covered only by a revocation of their subject.
 	Jti       string `json:"jti,omitempty"`
 	Namespace string `json:"namespace"`
+	// Did is the device the session is bound to: the RFC 7638 thumbprint of a
+	// key the device proved it holds when the session was issued. Empty for a
+	// session bound to the account alone. Set by the gateway only — a claims
+	// provider cannot, and a function reads it through get_caller_device_id.
+	Did string `json:"did,omitempty"`
+	// Sid names the session, and stays the same across refresh-token
+	// rotations, so ending the session refuses every access token it minted.
+	Sid string `json:"sid,omitempty"`
 	// Custom holds app-defined claims (e.g. tier, subscription state).
 	// Read by serverless functions via the get_caller_claim host call.
 	// May be nil if the token has no custom claims.
@@ -253,97 +261,112 @@ const AccessTokenLifetime = 15 * time.Minute
 // have been issued.
 const MaxTokenLifetime = maxExchangedTokenLifetime
 
+// SessionBinding is what an access token is bound to beyond its account: the
+// device that holds the session, and the session itself. Either may be empty.
+type SessionBinding struct {
+	DeviceID  string
+	SessionID string
+}
+
 // GenerateJWT mints a signed access token. `custom` carries additive
 // app-defined claims (e.g. the namespace's account_id from the claims-provider
 // hook, bugboard #548) under the top-level "custom" object — read back via
 // JWTClaims.Custom / oh.GetCallerClaim. Pass nil for none. Reserved claims
-// (sub/iss/aud/iat/nbf/exp/namespace) are always gateway-controlled and cannot
-// be overridden by `custom` (the caller is responsible for not putting
-// reserved keys here; the claims-provider path sanitizes them out upstream).
+// (sub/iss/aud/iat/nbf/exp/jti/namespace/did/sid) are always gateway-controlled
+// and cannot be overridden by `custom` (the claims-provider path sanitizes
+// them out upstream).
 func (s *Service) GenerateJWT(ns, subject string, ttl time.Duration, custom map[string]string) (string, int64, error) {
+	return s.GenerateBoundJWT(ns, subject, ttl, custom, SessionBinding{})
+}
+
+// GenerateBoundJWT mints an access token carrying its session binding.
+func (s *Service) GenerateBoundJWT(ns, subject string, ttl time.Duration, custom map[string]string, binding SessionBinding) (string, int64, error) {
+	now := time.Now().UTC()
+	exp := now.Add(ttl)
+	jti, err := newTokenID()
+	if err != nil {
+		return "", 0, err
+	}
+	payload := map[string]any{
+		"iss":       "orama-gateway",
+		"sub":       subject,
+		"aud":       "gateway",
+		"iat":       now.Unix(),
+		"nbf":       now.Unix(),
+		"exp":       exp.Unix(),
+		"jti":       jti,
+		"namespace": ns,
+	}
+	if custom = withoutReservedCustomClaims(custom); len(custom) > 0 {
+		payload["custom"] = custom
+	}
+	if binding.DeviceID != "" {
+		payload["did"] = binding.DeviceID
+	}
+	if binding.SessionID != "" {
+		payload["sid"] = binding.SessionID
+	}
+	pb, err := json.Marshal(payload)
+	if err != nil {
+		return "", 0, fmt.Errorf("encode token claims: %w", err)
+	}
 	// Prefer EdDSA when available
+	var token string
 	if s.preferEdDSA && s.edSigningKey != nil {
-		return s.generateEdDSAJWT(ns, subject, ttl, custom)
+		token, err = s.signEdDSA(pb)
+	} else {
+		token, err = s.signRSA(pb)
 	}
-	return s.generateRSAJWT(ns, subject, ttl, custom)
+	if err != nil {
+		return "", 0, err
+	}
+	return token, exp.Unix(), nil
 }
 
-func (s *Service) generateEdDSAJWT(ns, subject string, ttl time.Duration, custom map[string]string) (string, int64, error) {
+// reservedCustomClaims are the binding's names. They are dropped from the
+// custom claims however those arrived — the claims provider refuses them, and
+// custom claims stored with a session before it did are replayed on every
+// rotation — so get_caller_claim("did") can never name a device the caller
+// did not prove it holds.
+var reservedCustomClaims = []string{"did", "sid", "jti"}
+
+func withoutReservedCustomClaims(custom map[string]string) map[string]string {
+	clean := custom
+	for _, key := range reservedCustomClaims {
+		if _, present := custom[key]; !present {
+			continue
+		}
+		if len(clean) == len(custom) {
+			clean = make(map[string]string, len(custom))
+			for k, v := range custom {
+				clean[k] = v
+			}
+		}
+		delete(clean, key)
+	}
+	return clean
+}
+
+func (s *Service) signEdDSA(payload []byte) (string, error) {
 	if s.edSigningKey == nil {
-		return "", 0, errors.New("EdDSA signing key unavailable")
+		return "", errors.New("EdDSA signing key unavailable")
 	}
-	header := map[string]string{
-		"alg": "EdDSA",
-		"typ": "JWT",
-		"kid": s.edKeyID,
-	}
-	hb, _ := json.Marshal(header)
-	now := time.Now().UTC()
-	exp := now.Add(ttl)
-	jti, err := newTokenID()
-	if err != nil {
-		return "", 0, err
-	}
-	payload := map[string]any{
-		"iss":       "orama-gateway",
-		"sub":       subject,
-		"aud":       "gateway",
-		"iat":       now.Unix(),
-		"nbf":       now.Unix(),
-		"exp":       exp.Unix(),
-		"jti":       jti,
-		"namespace": ns,
-	}
-	if len(custom) > 0 {
-		payload["custom"] = custom
-	}
-	pb, _ := json.Marshal(payload)
-	hb64 := base64.RawURLEncoding.EncodeToString(hb)
-	pb64 := base64.RawURLEncoding.EncodeToString(pb)
-	signingInput := hb64 + "." + pb64
+	hb, _ := json.Marshal(map[string]string{"alg": "EdDSA", "typ": "JWT", "kid": s.edKeyID})
+	signingInput := base64.RawURLEncoding.EncodeToString(hb) + "." + base64.RawURLEncoding.EncodeToString(payload)
 	sig := ed25519.Sign(s.edSigningKey, []byte(signingInput))
-	sb64 := base64.RawURLEncoding.EncodeToString(sig)
-	return signingInput + "." + sb64, exp.Unix(), nil
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
-func (s *Service) generateRSAJWT(ns, subject string, ttl time.Duration, custom map[string]string) (string, int64, error) {
+func (s *Service) signRSA(payload []byte) (string, error) {
 	if s.signingKey == nil {
-		return "", 0, errors.New("signing key unavailable")
+		return "", errors.New("signing key unavailable")
 	}
-	header := map[string]string{
-		"alg": "RS256",
-		"typ": "JWT",
-		"kid": s.keyID,
-	}
-	hb, _ := json.Marshal(header)
-	now := time.Now().UTC()
-	exp := now.Add(ttl)
-	jti, err := newTokenID()
-	if err != nil {
-		return "", 0, err
-	}
-	payload := map[string]any{
-		"iss":       "orama-gateway",
-		"sub":       subject,
-		"aud":       "gateway",
-		"iat":       now.Unix(),
-		"nbf":       now.Unix(),
-		"exp":       exp.Unix(),
-		"jti":       jti,
-		"namespace": ns,
-	}
-	if len(custom) > 0 {
-		payload["custom"] = custom
-	}
-	pb, _ := json.Marshal(payload)
-	hb64 := base64.RawURLEncoding.EncodeToString(hb)
-	pb64 := base64.RawURLEncoding.EncodeToString(pb)
-	signingInput := hb64 + "." + pb64
+	hb, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT", "kid": s.keyID})
+	signingInput := base64.RawURLEncoding.EncodeToString(hb) + "." + base64.RawURLEncoding.EncodeToString(payload)
 	sum := sha256.Sum256([]byte(signingInput))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, s.signingKey, crypto.SHA256, sum[:])
 	if err != nil {
-		return "", 0, err
+		return "", err
 	}
-	sb64 := base64.RawURLEncoding.EncodeToString(sig)
-	return signingInput + "." + sb64, exp.Unix(), nil
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }

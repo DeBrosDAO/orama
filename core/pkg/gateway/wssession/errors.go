@@ -13,4 +13,9 @@ var (
 
 	// ErrSubjectChanged is a refresh to a token for somebody else.
 	ErrSubjectChanged = errors.New("the token belongs to a different subject than the one this socket was opened for; reconnect instead")
+
+	// ErrDeviceChanged is a refresh to a token bound to another device, or to
+	// none where the socket had one. The device is who the function was told
+	// is calling, and revoking it must reach this socket.
+	ErrDeviceChanged = errors.New("the token is bound to a different device than the one this socket was opened with; reconnect instead")
 )

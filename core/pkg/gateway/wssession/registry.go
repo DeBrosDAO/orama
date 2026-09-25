@@ -256,8 +256,12 @@ func (s *Socket) CheckRefresh(claims *auth.JWTClaims) error {
 	if claims == nil {
 		return ErrNoClaims
 	}
-	if claims.Sub != s.Claims().Sub {
+	current := s.Claims()
+	if claims.Sub != current.Sub {
 		return ErrSubjectChanged
+	}
+	if claims.Did != current.Did {
+		return ErrDeviceChanged
 	}
 	return nil
 }

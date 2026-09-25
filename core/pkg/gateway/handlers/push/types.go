@@ -205,6 +205,18 @@ func resolveCallerUserID(r *http.Request) string {
 	return ""
 }
 
+// resolveCallerDeviceID is the session device the caller's token is bound to —
+// its verified `did` — or "" when the session is bound to the account alone.
+// It is never read from the request body: a device a client merely names is
+// not one it proved it holds.
+func resolveCallerDeviceID(r *http.Request) string {
+	claims, _ := r.Context().Value(ctxkeys.JWT).(*auth.JWTClaims)
+	if claims == nil {
+		return ""
+	}
+	return claims.Did
+}
+
 // resolveAdminCaller resolves the identity for a namespace-owner push admin
 // operation (config / credentials writes — bugboard #147). It prefers a real
 // user (JWT) identity, but falls back to the API-key identity recorded as

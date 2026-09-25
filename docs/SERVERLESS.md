@@ -176,6 +176,7 @@ If you see the runtime error `failed to instantiate module: module[X] not instan
 |----------|-------------|
 | `get_caller_wallet()` → string | Resolved caller wallet (JWT subject if Bearer auth, else namespace pseudo-id when API-key auth). |
 | `get_caller_jwt_subject()` → string | JWT `sub` claim explicitly. Empty when the request was not JWT-authenticated. Use this when binding on the JWT-signed identity matters (e.g. signup flows verifying the caller signed for the wallet they're registering). |
+| `get_caller_device_id()` → string | The device the caller's session is bound to: the RFC 7638 thumbprint of a key the device proved it holds when the session was issued (the token's `did`). Empty for a session bound to the account alone, an API key, or no credential. Set only by the gateway — a claims provider cannot, and a client cannot state it. Carried into nested `function_invoke` calls. Requires gateway 0.200.0 or later on every node of the namespace. See [AUTH.md](AUTH.md#devices). |
 | `get_caller_claim(name)` → string | Custom JWT claim by name (tier, subscription, etc.). Empty if missing or non-JWT request. |
 | `get_request_id()` → string | Unique invocation ID |
 | `get_env(key)` → string | Environment variable from function.yaml |
@@ -225,7 +226,8 @@ as a table name in many positions. Pass such a value as a bound argument (`?`)
 instead. The refusal is returned as the host call's error.
 
 The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
-`nonces`, `device_authorizations`, `invite_tokens`, `operators`, `principals`,
+`nonces`, `device_authorizations`, `session_devices`,
+`namespace_session_policy`, `invite_tokens`, `operators`, `principals`,
 `signing_keys`, `node_credentials`, `encryption_roots`, `grants`,
 `wireguard_peers`, `namespace_push_credentials`, `push_topics`, `function_secrets`,
 `function_env_vars`, `revoked_tokens`, `audit_events`, `namespace_quotas`,
@@ -723,8 +725,8 @@ opened it for as long as it stays open:
   {"__orama_ack":"auth.refresh","ok":true,"subject":"<wallet>"}
   ```
 
-  The new token must be for the **same subject** and namespace the socket was
-  opened with; any other is refused with `ok:false` and the socket keeps its
+  The new token must be for the **same subject**, namespace and device the
+  socket was opened with; any other is refused with `ok:false` and the socket keeps its
   current token. A socket opened with an API key, or with no credential on a
   public function, has no token and cannot take one on — reconnect instead.
 - A socket opened with an API key is not re-checked; revoking the key refuses

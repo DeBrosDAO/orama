@@ -44,6 +44,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	nodehealth "github.com/DeBrosOfficial/network/pkg/peerhealth"
+	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/DeBrosOfficial/network/pkg/ratelimit"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/secrets"
@@ -499,6 +500,12 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// even when push is partially configured.
 	if gw.pushHandlers != nil && deps.PushCredentialsManager != nil {
 		gw.pushHandlers.SetCredentialsManager(deps.PushCredentialsManager)
+	}
+	// A push registration made from a device-bound session ends with the
+	// device: the store asks the registry which devices are revoked before it
+	// lists or sends. Same optional-capability shape as SetHolder above.
+	if gated, ok := deps.PushDeviceStore.(interface{ SetSessionDeviceGate(push.SessionDeviceGate) }); ok && deps.AuthService != nil {
+		gated.SetSessionDeviceGate(deps.AuthService.RevokedDevices)
 	}
 
 	// WebRTC route registration. Construct the handler when EITHER a

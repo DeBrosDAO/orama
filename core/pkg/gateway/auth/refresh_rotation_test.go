@@ -140,13 +140,16 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 				m.subjectByToken = map[string]string{}
 			}
 			m.subjectByToken[hashedTok] = subj
-			// custom_claims is the LAST arg (bugboard #548) — capture it so
-			// rotation-propagation tests can assert it carries forward.
+			// custom_claims is the fifth arg (bugboard #548), before the
+			// device and session ids — capture it so rotation-propagation
+			// tests can assert it carries forward.
 			if m.claimsByToken == nil {
 				m.claimsByToken = map[string]string{}
 			}
-			if cc, ok := args[len(args)-1].(string); ok {
-				m.claimsByToken[hashedTok] = cc
+			if len(args) > 4 {
+				if cc, ok := args[4].(string); ok {
+					m.claimsByToken[hashedTok] = cc
+				}
 			}
 		}
 		return &client.QueryResult{Count: 1}, nil
@@ -302,7 +305,7 @@ func TestRefreshToken_HappyPath_rotatesAndReturnsNewToken(t *testing.T) {
 	const oldRefresh = "old-refresh-token"
 	ormDB.subjectByToken[sha256Hex(oldRefresh)] = "0xWALLET"
 
-	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
+	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -345,7 +348,7 @@ func TestRefreshToken_CASLost_returnsReplayError(t *testing.T) {
 	// Force the next UPDATE to claim "0 rows affected" — race lost.
 	rq.rowsAffectedNext = []int64{0}
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), stolen, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), stolen, "anchat-test", nil)
 	if !errors.Is(err, ErrRefreshTokenReplay) {
 		t.Fatalf("err = %v, want ErrRefreshTokenReplay", err)
 	}
@@ -360,7 +363,7 @@ func TestRefreshToken_InvalidToken_returnsAuthError(t *testing.T) {
 	// No row exists for this token — SELECT returns 0 rows.
 	s, _, _ := newRotationTestService(t)
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test", nil)
 	if err == nil {
 		t.Fatal("expected error for invalid token, got nil")
 	}
@@ -377,7 +380,7 @@ func TestRefreshToken_NoRqliteClient_refusesToRotate(t *testing.T) {
 	// atomicity. It MUST refuse rather than rotate non-atomically.
 	s := createDualKeyService(t) // mockDatabaseClient via shared helper; no rqlite injected
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), "anything", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "anything", "anchat-test", nil)
 	if !errors.Is(err, ErrRotationNotConfigured) {
 		t.Fatalf("err = %v, want ErrRotationNotConfigured", err)
 	}
@@ -403,7 +406,7 @@ func TestRefreshToken_ConcurrentRotation_exactlyOneWins(t *testing.T) {
 		go func() {
 			defer endWg.Done()
 			startWg.Wait() // launch all goroutines simultaneously
-			_, _, _, _, err := s.RefreshToken(context.Background(), sharedToken, "anchat-test")
+			_, _, _, _, err := s.RefreshToken(context.Background(), sharedToken, "anchat-test", nil)
 			wins <- err
 		}()
 	}
@@ -456,7 +459,7 @@ func TestRefreshToken_RotatedTokenReplayFails(t *testing.T) {
 	ormDB.subjectByToken[sha256Hex(oldRefresh)] = "0xWALLET"
 
 	// First call rotates successfully.
-	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
+	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("first RefreshToken: %v", err)
 	}
@@ -470,7 +473,7 @@ func TestRefreshToken_RotatedTokenReplayFails(t *testing.T) {
 	delete(ormDB.subjectByToken, sha256Hex(oldRefresh))
 
 	// Try to reuse the rotated-away token.
-	_, _, _, _, err = s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
+	_, _, _, _, err = s.RefreshToken(context.Background(), oldRefresh, "anchat-test", nil)
 	if err == nil {
 		t.Fatal("expected error reusing rotated token, got nil")
 	}
@@ -488,7 +491,7 @@ func TestRefreshToken_transientSelectError_returnsTransient(t *testing.T) {
 	ormDB.selectErr = errors.New("rqlite: leadership lost")
 	ormDB.selectErrRemaining = 99
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if !errors.Is(err, ErrRefreshTransient) {
 		t.Fatalf("err = %v, want ErrRefreshTransient (a valid token must not 401 during a leader outage)", err)
 	}
@@ -503,7 +506,7 @@ func TestRefreshToken_selectRecoversAfterRetry(t *testing.T) {
 	ormDB.selectErr = errors.New("rqlite: leadership lost")
 	ormDB.selectErrRemaining = refreshSelectRetries - 1 // fail all but the last attempt
 
-	access, newRefresh, subj, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, newRefresh, subj, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken should recover after transient blips: %v", err)
 	}
@@ -519,7 +522,7 @@ func TestRefreshToken_transientUpdateError_returnsTransient(t *testing.T) {
 	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
 	rq.execErrNext = []error{errors.New("rqlite: write failed, no leader")}
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if !errors.Is(err, ErrRefreshTransient) {
 		t.Fatalf("err = %v, want ErrRefreshTransient on a transient CAS write error", err)
 	}
@@ -529,7 +532,7 @@ func TestRefreshToken_transientUpdateError_returnsTransient(t *testing.T) {
 // transient — the distinction is the whole point of the #125 fix.
 func TestRefreshToken_unknownToken_isNotTransient(t *testing.T) {
 	s, _, _ := newRotationTestService(t)
-	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown token")
 	}
@@ -663,7 +666,7 @@ func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
 
 	// Refresh — the rotated access token must carry account_id, and the NEW
 	// refresh row must propagate the stored claims.
-	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -680,7 +683,7 @@ func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
 
 	// Second rotation hop (N+1 → N+2): the claim must survive repeated
 	// rotations, not just the first — the propagation is the whole point.
-	access2, _, _, _, err := s.RefreshToken(context.Background(), newRefresh, "anchat-test")
+	access2, _, _, _, err := s.RefreshToken(context.Background(), newRefresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("second RefreshToken: %v", err)
 	}
@@ -726,7 +729,7 @@ func TestRefreshToken_reResolvesEmptyClaims_onRefresh(t *testing.T) {
 	resolver := &countingClaimsResolver{claims: map[string]string{"account_id": "uuid-healed"}}
 	s.SetClaimsResolver(resolver)
 
-	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -755,7 +758,7 @@ func TestRefreshToken_healthySession_doesNotReResolve(t *testing.T) {
 	resolver := &countingClaimsResolver{claims: map[string]string{"account_id": "SHOULD-NOT-APPEAR"}}
 	s.SetClaimsResolver(resolver)
 
-	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -777,7 +780,7 @@ func TestRefreshToken_emptyClaims_providerStillEmpty_succeeds(t *testing.T) {
 	resolver := &countingClaimsResolver{claims: nil}
 	s.SetClaimsResolver(resolver)
 
-	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken must succeed even when re-resolve yields empty: %v", err)
 	}
@@ -798,7 +801,7 @@ func TestRefreshToken_emptyClaims_noResolver_untouched(t *testing.T) {
 	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
 	// No SetClaimsResolver → claimsResolver nil; the guard skips re-resolution.
 
-	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -825,7 +828,7 @@ func TestRefreshToken_reuseGrace_recoversLostResponse(t *testing.T) {
 	// ... but eligible for grace (revoked recently, grace unused).
 	ormDB.graceableTokens = map[string]string{sha256Hex(lostTok): "0xWALLET"}
 
-	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), lostTok, "anchat-test")
+	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), lostTok, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("grace recovery should succeed, got error: %v", err)
 	}
@@ -862,7 +865,7 @@ func TestRefreshToken_reuseGrace_singleUse_secondAttemptIs401(t *testing.T) {
 	// Force the grace CAS to report "already consumed".
 	rq.graceCASNext = []int64{0}
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test", nil)
 	if err == nil {
 		t.Fatal("a consumed grace must NOT recover — expected an invalid-token error")
 	}
@@ -880,7 +883,7 @@ func TestRefreshToken_noGrace_genuineBadToken_stays401(t *testing.T) {
 	s, ormDB, _ := newRotationTestService(t)
 	// graceableTokens left empty: nothing is grace-eligible.
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), "never-seen-this-token", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-seen-this-token", "anchat-test", nil)
 	if err == nil {
 		t.Fatal("a never-seen token must be rejected")
 	}
@@ -909,7 +912,7 @@ func TestRevokeToken_burnsGrace_blocksLogoutBypass(t *testing.T) {
 	}
 
 	// A refresh with the just-logged-out token must be rejected, not resurrected.
-	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test", nil)
 	if err == nil {
 		t.Fatal("LOGOUT-BYPASS: a logged-out token was resurrected via reuse grace")
 	}

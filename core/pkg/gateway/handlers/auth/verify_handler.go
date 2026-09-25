@@ -63,7 +63,24 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	// A namespace whose cluster is still coming up is reported by
 	// /v1/namespace/status, which the create path hands back a poll URL for.
 
-	token, refresh, expUnix, err := h.authService.IssueTokens(ctx, wallet, namespace)
+	binding, ok := h.bindSignIn(w, r, in, req)
+	if !ok {
+		return
+	}
+	if binding.pending != nil {
+		named, _ := authsvc.DeviceOf(in.Message)
+		h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+			Namespace: namespace,
+			Actor:     wallet,
+			Action:    authsvc.AuditDeviceLoginStarted,
+			Result:    authsvc.AuditSuccess,
+			Metadata:  map[string]string{"device": named, "reason": "device awaits approval"},
+		})
+		writePendingDevice(w, in, named, binding.pending)
+		return
+	}
+
+	token, refresh, expUnix, err := h.authService.IssueDeviceTokens(ctx, wallet, namespace, binding.deviceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -72,8 +89,12 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	// The lobby has no keys. A wallet signing in there gets a session and
 	// nothing else; the one thing that session reaches is POST /v1/namespaces,
 	// which creates a namespace and makes the caller its owner.
+	//
+	// Neither does a device-bound sign-in get one. The device is the
+	// credential; a key for the whole account handed out beside it would
+	// outlive revoking the device, which is the point of binding one.
 	apiKey := ""
-	if !authsvc.IsLobbyNamespace(namespace) {
+	if !authsvc.IsLobbyNamespace(namespace) && binding.deviceID == "" {
 		apiKey, err = h.authService.GetOrCreateAPIKey(ctx, wallet, namespace)
 		if err != nil {
 			writeCredentialError(w, namespace, err)
@@ -100,6 +121,9 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if apiKey != "" {
 		body["api_key"] = apiKey
+	}
+	if binding.deviceID != "" {
+		body["device_id"] = binding.deviceID
 	}
 	writeJSON(w, http.StatusOK, body)
 }

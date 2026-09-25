@@ -106,6 +106,15 @@ export { SCOPES, DATA_PLANE_SCOPES, KEY_PROFILES, PROFILE_SCOPES, ROLES, GRANTAB
 export type { Scope, KeyProfile, Role } from "./scopes";
 export type { RequestOptions, TokenRefresher, KeyExchanger } from "./core/http";
 export type { LogoutOptions } from "./auth/client";
+export { deviceIdOf, deviceProofMessage, makeDeviceProof, normalizeUserCode } from "./auth/device";
+export type {
+  DeviceSigner,
+  DeviceProof,
+  DeviceProofAction,
+  DeviceInfo,
+  DeviceLink,
+  PendingDeviceApproval,
+} from "./auth/device";
 export type {
   WSClientConfig,
   ReconnectConfig,

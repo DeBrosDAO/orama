@@ -45,3 +45,18 @@ func TestGetJWTClaimsFromRequest(t *testing.T) {
 		}
 	})
 }
+
+// feat-422: the device a function sees is the verified token's, never a value
+// the request states.
+func TestGetDeviceIDFromRequest(t *testing.T) {
+	h := newTestHandlers(nil)
+	req := httptest.NewRequest(http.MethodGet, "/?device_id=forged", nil)
+	req.Header.Set("X-Device-ID", "forged")
+	if got := h.getDeviceIDFromRequest(req); got != "" {
+		t.Errorf("a request with no token reported device %q", got)
+	}
+	bound := req.WithContext(context.WithValue(req.Context(), ctxkeys.JWT, &auth.JWTClaims{Sub: "0xw", Did: "device-1"}))
+	if got := h.getDeviceIDFromRequest(bound); got != "device-1" {
+		t.Errorf("getDeviceIDFromRequest = %q, want the token's did", got)
+	}
+}

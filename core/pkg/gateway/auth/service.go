@@ -3,13 +3,11 @@ package auth
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -52,6 +50,10 @@ type Service struct {
 	// audit records the auth events worth keeping. Built alongside the
 	// revocations, for the same reason: a Service with a database has one.
 	audit *AuditLog
+
+	// devicePolicies remembers each namespace's session policy for
+	// devicePolicyStaleness, because every account-level refresh asks.
+	devicePolicies devicePolicyCache
 }
 
 // minRSAKeyBits is the smallest RSA signing key this gateway will use. 2048 is
@@ -399,8 +401,21 @@ func (s *Service) verifySolSignature(wallet, message, signature string) (bool, e
 	return ed25519.Verify(ed25519.PublicKey(pubKeyBytes), []byte(message), sig), nil
 }
 
-// IssueTokens generates access and refresh tokens for a verified wallet
+// IssueTokens generates access and refresh tokens for a verified wallet, bound
+// to the account alone.
 func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (string, string, int64, error) {
+	return s.IssueDeviceTokens(ctx, wallet, namespace, "")
+}
+
+// IssueDeviceTokens issues a session bound to a device, or to the account alone
+// when deviceID is empty. The caller has established that the device is the
+// account's and active; a session bound to it is refreshed only with the
+// device's proof (see RefreshToken).
+//
+// Every session gets an id of its own, carried in its access tokens as `sid`
+// and kept across refresh-token rotations, so ending the session refuses every
+// access token it minted.
+func (s *Service) IssueDeviceTokens(ctx context.Context, wallet, namespace, deviceID string) (string, string, int64, error) {
 	if s.signingKey == nil {
 		return "", "", 0, fmt.Errorf("signing key unavailable")
 	}
@@ -417,28 +432,30 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 
 	custom = s.reuseLastKnownClaims(ctx, nsID, wallet, namespace, custom)
 
-	// Issue access token (15m)
-	token, expUnix, err := s.GenerateJWT(namespace, wallet, AccessTokenLifetime, custom)
+	sessionID, err := newTokenID()
+	if err != nil {
+		return "", "", 0, err
+	}
+	binding := SessionBinding{DeviceID: deviceID, SessionID: sessionID}
+	token, expUnix, err := s.GenerateBoundJWT(namespace, wallet, AccessTokenLifetime, custom, binding)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to generate JWT: %w", err)
 	}
 
 	// Create refresh token (30d)
-	rbuf := make([]byte, 32)
-	if _, err := rand.Read(rbuf); err != nil {
-		return "", "", 0, fmt.Errorf("failed to generate refresh token: %w", err)
+	refresh, err := mintRefreshToken(deviceID != "")
+	if err != nil {
+		return "", "", 0, err
 	}
-	refresh := base64.RawURLEncoding.EncodeToString(rbuf)
 
 	internalCtx := client.WithInternalAuth(ctx)
 	db := s.registryDatabase()
 	if db == nil {
 		return "", "", 0, fmt.Errorf("client not initialized")
 	}
-	hashedRefresh := sha256Hex(refresh)
-	if _, err := db.Query(internalCtx,
-		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?)",
-		nsID, wallet, hashedRefresh, "gateway", marshalClaims(custom),
+	hashedRefresh := refreshTokenHash(refresh)
+	if _, err := db.Query(internalCtx, insertRefreshTokenSQL,
+		nsID, wallet, hashedRefresh, "gateway", marshalClaims(custom), nullable(deviceID), sessionID,
 	); err != nil {
 		return "", "", 0, fmt.Errorf("failed to store refresh token: %w", err)
 	}
@@ -515,7 +532,7 @@ const (
 //	subject         — wallet/subject claim of the refreshed session
 //	expUnix         — access token expiry (unix seconds)
 //	err             — non-nil on any failure; ErrRefreshTokenReplay for CAS loss
-func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace string) (accessToken, newRefreshToken, subject string, expUnix int64, err error) {
+func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace string, proof *DeviceProof) (accessToken, newRefreshToken, subject string, expUnix int64, err error) {
 	// Atomic rotation requires the lower-level rqlite client (RowsAffected
 	// feedback isn't exposed by the higher-level client.NetworkClient).
 	// Refuse to rotate non-atomically — see ErrRotationNotConfigured.
@@ -544,7 +561,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 		return "", "", "", 0, ErrRefreshTransient
 	}
 
-	hashedRefresh := sha256Hex(refreshToken)
+	hashedRefresh := refreshTokenHash(refreshToken)
 
 	// Step 1: read the subject. Tells us who the token belongs to AND
 	// validates that it's currently usable (not revoked, not expired).
@@ -556,7 +573,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// retries). An actual empty result (Count == 0) is a real bad/expired
 	// token → "invalid or expired" (→ 401). Collapsing the two used to 401 a
 	// valid session during every restart, defeating the VoIP-wake refresh.
-	selectQ := `SELECT subject, custom_claims FROM refresh_tokens
+	selectQ := `SELECT subject, custom_claims, COALESCE(device_id, ''), COALESCE(session_id, '') FROM refresh_tokens
 	            WHERE namespace_id = ? AND token = ?
 	              AND revoked_at IS NULL
 	              AND (expires_at IS NULL OR expires_at > datetime('now'))
@@ -588,9 +605,9 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// inside tryRefreshReuseGrace is our single-use lock — and go straight to
 	// minting a fresh session.
 	graceRecovery := false
-	var custom map[string]string
+	var session refreshRow
 	if res.Count == 0 {
-		gSubject, gCustom, gOK, gErr := s.tryRefreshReuseGrace(internalCtx, ormDB, nsID, hashedRefresh)
+		gSession, gOK, gErr := s.lookupReuseGrace(internalCtx, ormDB, nsID, hashedRefresh)
 		if gErr != nil {
 			// Transient rqlite error during the grace lookup/claim — retryable,
 			// not a verdict on the token (bugboard #125).
@@ -604,30 +621,45 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			// consumed / expired — a real bad token.
 			return "", "", "", 0, fmt.Errorf("invalid or expired refresh token")
 		}
-		subject = gSubject
-		custom = gCustom
+		session = gSession
 		graceRecovery = true
 		s.logger.ComponentInfo(logging.ComponentGeneral,
 			"refresh token reuse-grace recovery (lost-response retry, single-use)",
-			zap.String("namespace", namespace), zap.String("subject", LoggableSubject(subject)))
-	} else {
-		var customClaimsJSON string
-		if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
-			if val, ok := res.Rows[0][0].(string); ok {
-				subject = val
-			} else {
-				b, _ := json.Marshal(res.Rows[0][0])
-				_ = json.Unmarshal(b, &subject)
-			}
-			// custom_claims (bugboard #548) — resolved once at login, replayed on
-			// every rotation so the refresh path never re-invokes the provider.
-			if len(res.Rows[0]) > 1 {
-				if cc, ok := res.Rows[0][1].(string); ok {
-					customClaimsJSON = cc
-				}
-			}
+			zap.String("namespace", namespace), zap.String("subject", RedactSubject(session.subject)))
+	} else if len(res.Rows) > 0 {
+		// custom_claims (bugboard #548) — resolved once at login, replayed on
+		// every rotation so the refresh path never re-invokes the provider.
+		session = readRefreshRow(res.Rows[0])
+	}
+	subject = session.subject
+	custom := session.custom
+
+	// A session bound to a device is refreshed by the device, not by whoever
+	// holds its refresh token. Checked before the rotation below, so a thief
+	// holding only the token cannot burn the device's session by trying.
+	if err := s.checkSessionRefresh(ctx, namespace, session, refreshToken, proof); err != nil {
+		return "", "", "", 0, err
+	}
+	// Only now is the reuse grace spent: a caller who could not show the device
+	// must not use up the lost-response recovery of the client that can.
+	if graceRecovery {
+		claimed, err := s.claimReuseGrace(internalCtx, nsID, hashedRefresh)
+		if err != nil {
+			s.logger.ComponentWarn(logging.ComponentGeneral,
+				"refresh reuse-grace claim failed (transient rqlite error, surfacing retryable)",
+				zap.String("namespace", namespace), zap.Error(err))
+			return "", "", "", 0, ErrRefreshTransient
 		}
-		custom = unmarshalClaims(customClaimsJSON)
+		if !claimed {
+			return "", "", "", 0, fmt.Errorf("invalid or expired refresh token")
+		}
+	}
+	// A session issued before sessions carried an id gets one now, and keeps
+	// it from here on.
+	if session.sessionID == "" {
+		if session.sessionID, err = newTokenID(); err != nil {
+			return "", "", "", 0, err
+		}
 	}
 
 	// bugboard #154: an empty-claims session must be able to self-heal on
@@ -659,7 +691,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// Skipped on a grace recovery (bugboard #125): the token is ALREADY
 	// revoked, so this CAS would always see RowsAffected == 0 and mis-fire the
 	// replay tripwire. The single-use grace CAS (grace_used_at) inside
-	// tryRefreshReuseGrace already served as the lock for this path.
+	// claimReuseGrace already served as the lock for this path.
 	if !graceRecovery {
 		updRes, err := s.db.Exec(internalCtx,
 			`UPDATE refresh_tokens SET revoked_at = datetime('now')
@@ -684,14 +716,15 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			s.logger.ComponentWarn(logging.ComponentGeneral,
 				"refresh token rotation: concurrent use detected (possible replay)",
 				zap.String("namespace", namespace),
-				zap.String("subject", LoggableSubject(subject)))
+				zap.String("subject", RedactSubject(subject)))
 			return "", "", "", 0, ErrRefreshTokenReplay
 		}
 	}
 
 	// Step 3: mint the new access JWT, carrying forward the stored custom
 	// claims so a rotated token keeps the same account_id etc. (bugboard #548).
-	accessToken, expUnix, err = s.GenerateJWT(namespace, subject, AccessTokenLifetime, custom)
+	accessToken, expUnix, err = s.GenerateBoundJWT(namespace, subject, AccessTokenLifetime, custom,
+		SessionBinding{DeviceID: session.deviceID, SessionID: session.sessionID})
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
 	}
@@ -701,20 +734,18 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// INSERT fails after the UPDATE succeeded (step 2), the user is left
 	// with revoked old + no new and must re-authenticate. Acceptable —
 	// degrades to re-auth, never to double-use of a single refresh token.
-	rbuf := make([]byte, 32)
-	if _, err := rand.Read(rbuf); err != nil {
-		return "", "", "", 0, fmt.Errorf("generate refresh token: %w", err)
+	newRefreshToken, err = mintRefreshToken(session.deviceID != "")
+	if err != nil {
+		return "", "", "", 0, err
 	}
-	newRefreshToken = base64.RawURLEncoding.EncodeToString(rbuf)
-	hashedNew := sha256Hex(newRefreshToken)
+	hashedNew := refreshTokenHash(newRefreshToken)
 	// Re-marshal from the parsed map (not the raw stored string) so the new
 	// row and the freshly-minted access token are provably consistent and
 	// self-healing — a malformed stored blob converges to "" on both sides
 	// rather than being propagated forward verbatim. custom_claims is written
 	// ONLY here and in IssueTokens, both from a sanitized map (bugboard #548).
-	if _, err := ormDB.Query(internalCtx,
-		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?)",
-		nsID, subject, hashedNew, "gateway", marshalClaims(custom)); err != nil {
+	if _, err := ormDB.Query(internalCtx, insertRefreshTokenSQL,
+		nsID, subject, hashedNew, "gateway", marshalClaims(custom), nullable(session.deviceID), session.sessionID); err != nil {
 		// The old token is already revoked (step 2). A retryable error here
 		// leaves the client to re-attempt — which will re-auth since the old
 		// token is gone — but that's strictly better than masking a transient
@@ -729,24 +760,22 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	return accessToken, newRefreshToken, subject, expUnix, nil
 }
 
-// tryRefreshReuseGrace implements the bounded, single-use reuse grace for a
-// rotated refresh token (bugboard #125, RFC 9700 §4.13.2). A token revoked
-// within refreshReuseGrace whose grace_used_at is still NULL is accepted ONCE
-// more — recovering a client that lost its rotation response in transit (a
+// lookupReuseGrace finds a rotated refresh token still inside the bounded,
+// single-use reuse grace (bugboard #125, RFC 9700 §4.13.2). A token revoked
+// within refreshReuseGrace whose grace_used_at is still NULL may be accepted
+// ONCE more — recovering a client that lost its rotation response in transit (a
 // reconnect storm during a gateway roll) before it dead-ends in a 401 → SIWE.
 //
-// Returns (subject, custom, true, nil) on a successful single-use grace claim;
-// (—, —, false, nil) when there is no eligible row, the token was revoked
-// outside the grace window, it has expired, or the grace was already consumed
-// (caller → 401). A non-nil error is a transient rqlite failure (caller → 503).
+// It only reads. claimReuseGrace spends the grace, after the caller has shown
+// what the session requires — a device-bound one, the device's proof.
 //
-// Security: the grace is both short-windowed AND single-use (a CAS on
-// grace_used_at), so a stolen token cannot be replayed repeatedly; and it never
-// touches the concurrent-rotation replay tripwire, which fires on the active
-// path only.
-func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.DatabaseClient, nsID interface{}, hashedRefresh string) (subject string, custom map[string]string, ok bool, err error) {
+// Returns (session, true, nil) for an eligible row; (—, false, nil) when there
+// is none: the token was revoked outside the grace window, it has expired, or
+// the grace was already consumed (caller → 401). A non-nil error is a
+// transient rqlite failure (caller → 503).
+func (s *Service) lookupReuseGrace(ctx context.Context, ormDB client.DatabaseClient, nsID interface{}, hashedRefresh string) (session refreshRow, ok bool, err error) {
 	graceArg := fmt.Sprintf("-%d seconds", int(refreshReuseGrace.Seconds()))
-	sel := `SELECT subject, custom_claims FROM refresh_tokens
+	sel := `SELECT subject, custom_claims, COALESCE(device_id, ''), COALESCE(session_id, '') FROM refresh_tokens
 	        WHERE namespace_id = ? AND token = ?
 	          AND revoked_at IS NOT NULL
 	          AND revoked_at > datetime('now', ?)
@@ -755,46 +784,37 @@ func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.Databas
 	        LIMIT 1`
 	res, qerr := ormDB.Query(ctx, sel, nsID, hashedRefresh, graceArg)
 	if qerr != nil {
-		return "", nil, false, qerr // transient rqlite error → caller 503
+		return refreshRow{}, false, qerr // transient rqlite error → caller 503
 	}
-	if res == nil || res.Count == 0 {
-		return "", nil, false, nil // no eligible grace row → caller 401
+	if res == nil || res.Count == 0 || len(res.Rows) == 0 {
+		return refreshRow{}, false, nil // no eligible grace row → caller 401
 	}
+	session = readRefreshRow(res.Rows[0])
+	if session.subject == "" {
+		return refreshRow{}, false, nil // defensive: never grace-mint an anonymous session
+	}
+	return session, true, nil
+}
 
-	var customClaimsJSON string
-	if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
-		if v, vok := res.Rows[0][0].(string); vok {
-			subject = v
-		} else {
-			b, _ := json.Marshal(res.Rows[0][0])
-			_ = json.Unmarshal(b, &subject)
-		}
-		if len(res.Rows[0]) > 1 {
-			if cc, cok := res.Rows[0][1].(string); cok {
-				customClaimsJSON = cc
-			}
-		}
-	}
-	if subject == "" {
-		return "", nil, false, nil // defensive: never grace-mint an anonymous session
-	}
-
-	// Single-use CAS: claim the grace. Exactly one caller wins; a concurrent
-	// replay of the same just-revoked token sees RowsAffected == 0 → no grace.
-	// The same time-window predicate is repeated so the claim can't succeed on a
-	// row that aged out of the window between the SELECT and here.
-	updRes, uerr := s.db.Exec(ctx,
+// claimReuseGrace spends a rotated token's reuse grace: a single-use CAS.
+// Exactly one caller wins; a concurrent replay of the same just-revoked token
+// sees RowsAffected == 0 → no grace. The time-window predicate is repeated so
+// the claim cannot succeed on a row that aged out of the window since it was
+// read. Security: the grace is both short-windowed AND single-use, so a stolen
+// token cannot be replayed repeatedly; and it never touches the
+// concurrent-rotation replay tripwire, which fires on the active path only.
+func (s *Service) claimReuseGrace(ctx context.Context, nsID interface{}, hashedRefresh string) (bool, error) {
+	graceArg := fmt.Sprintf("-%d seconds", int(refreshReuseGrace.Seconds()))
+	updRes, err := s.db.Exec(ctx,
 		`UPDATE refresh_tokens SET grace_used_at = datetime('now')
 		 WHERE namespace_id = ? AND token = ? AND grace_used_at IS NULL
 		   AND revoked_at IS NOT NULL AND revoked_at > datetime('now', ?)`,
 		nsID, hashedRefresh, graceArg)
-	if uerr != nil {
-		return "", nil, false, uerr // transient
+	if err != nil {
+		return false, err
 	}
-	if affected, _ := updRes.RowsAffected(); affected == 0 {
-		return "", nil, false, nil // grace already consumed (concurrent) → caller 401
-	}
-	return subject, unmarshalClaims(customClaimsJSON), true, nil
+	affected, _ := updRes.RowsAffected()
+	return affected > 0, nil
 }
 
 // RevokeToken revokes a specific refresh token or all tokens for a subject
@@ -817,7 +837,7 @@ func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all 
 	// the logout-bypass where a just-logged-out token would otherwise be
 	// grace-eligible for the 60s window.
 	if token != "" {
-		hashedToken := sha256Hex(token)
+		hashedToken := refreshTokenHash(token)
 		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL", nsID, hashedToken)
 		return err
 	}

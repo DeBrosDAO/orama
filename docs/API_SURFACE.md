@@ -5,7 +5,7 @@ are is [CLIENT_SURFACE.md](CLIENT_SURFACE.md): humans use the CLI, programs use
 the SDK and this HTTP API, and there is no Orama dashboard.
 
 The TypeScript SDK's coverage is a decision rather than an accident: it reaches
-36 of 147 routes, and the other 111 are here with a reason.
+38 of 152 routes, and the other 114 are here with a reason.
 
 `core/pkg/gateway/api_surface_test.go` keeps this document honest in both
 directions. A route registered in the gateway and missing here fails the Go
@@ -14,9 +14,9 @@ route therefore means deciding who calls it.
 
 | Owner | Meaning | Count |
 |-------|---------|-------|
-| `SDK` | `@debros/orama` calls it | 36 |
+| `SDK` | `@debros/orama` calls it | 38 |
 | `CLI` | The `orama` CLI calls it. An application has no reason to: deploying, minting keys and managing nodes are operator actions. | 71 |
-| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 19 |
+| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 22 |
 | `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 21 |
 
 The request and response shapes of the `SDK` routes are pinned by the fixtures
@@ -51,7 +51,9 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/auth/refresh` | SDK | Session renewal, called by the client on a 401. |
 | `/v1/auth/renew` | SDK | A deployment renewing its own workload token with the token it is holding. Refuses anything that is not a workload token. |
 | `/v1/auth/sessions` | CLI | The live sessions signed in as the calling wallet. Never returns a refresh token. `orama auth sessions`. |
-| `/v1/auth/sessions/` | CLI | `DELETE /v1/auth/sessions/{id}` ends one session. An access token already minted from it keeps working until it expires. `orama auth sessions revoke <id>`. |
+| `/v1/auth/sessions/` | CLI | `DELETE /v1/auth/sessions/{id}` ends one session, its access tokens and the sockets they hold open with it (a session issued before sessions carried an id keeps its access tokens until they expire, and the response says so). `orama auth sessions revoke <id>`. |
+| `/v1/auth/devices` | SDK | The calling account's devices, revoked ones included. `auth.listDevices()`. |
+| `/v1/auth/devices/` | SDK | `DELETE /v1/auth/devices/{id}` revokes one device — its sessions, access tokens and sockets — and nothing else; `POST /v1/auth/devices/approve` approves a device link from the calling device. `auth.revokeDevice()`, `auth.approveDeviceLink()`. |
 | `/v1/auth/token` | direct | Exchange an API key for a JWT. A server-side concern; the SDK sends the key itself. |
 | `/v1/auth/verify` | SDK | `auth.verify()` |
 | `/v1/auth/whoami` | SDK | `auth.whoami()` |
@@ -167,6 +169,9 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/namespace/members/` | CLI | Remove a member, or transfer the namespace. `orama members remove|transfer`. |
 | `/v1/namespaces` | CLI | Create a namespace: writes the owner grant and starts provisioning. |
 | `/v1/namespace/rate-limit` | CLI | Per-namespace rate limit. |
+| `/v1/namespace/devices` | direct | An operator's list of one account's devices (`?subject=<wallet>`), for recovering an account under the `approval` policy. The members-write permission. No CLI command. See AUTH.md. |
+| `/v1/namespace/devices/` | direct | `DELETE /v1/namespace/devices/{id}` — an operator revokes a device of any account in the namespace. The members-write permission. No CLI command. |
+| `/v1/namespace/session-policy` | direct | Whether end-user sessions must be bound to a device, and whether a new device needs an existing one's approval (`optional`, `required`, `approval`). An owner's setting, made once per namespace over HTTP; the CLI has no command for it. See AUTH.md. |
 | `/v1/namespace/status` | CLI | Provisioning progress, polled by `orama namespace create`. |
 | `/v1/namespace/webrtc/disable` | CLI | `orama namespace webrtc disable`. |
 | `/v1/namespace/webrtc/enable` | CLI | `orama namespace webrtc enable`. |

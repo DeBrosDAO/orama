@@ -49,6 +49,12 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 		writeCredentialError(w, namespace, err)
 		return
 	}
+	// A key is an account-level credential. Where the namespace requires
+	// sessions bound to a device, handing one to a wallet signature would be
+	// the way around the requirement.
+	if !h.requireNoDevicePolicy(w, r, namespace, wallet) {
+		return
+	}
 
 	// Issuing a key does not provision anything. See VerifyHandler: creating a
 	// namespace is POST /v1/namespaces, and that is what provisions it.

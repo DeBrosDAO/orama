@@ -187,6 +187,48 @@ reported as a signed-out user.
 `client.auth.getToken()` returns the credential that would be sent as a Bearer
 token: the JWT when one is set, otherwise the API key.
 
+### Sessions bound to a device
+
+A session can be bound to a key the installation holds (P-256 or Ed25519; see
+[AUTH.md](AUTH.md#devices)). The SDK does not generate or hold that key — the
+platform does (WebCrypto, the Secure Enclave, StrongBox). The application hands
+the SDK a signer, and the SDK puts the right bytes in front of it:
+
+```typescript
+client.auth.setDeviceSigner({
+  publicJwk,                          // {kty:"EC",crv:"P-256",x,y} or {kty:"OKP",crv:"Ed25519",x}
+  sign: async (message) => base64url(await platformSign(message)),
+});
+
+const challenge = await client.auth.challenge({ wallet, namespace: "acme", device_id: thumbprint });
+const result = await client.auth.verify({
+  message: challenge.message,
+  signature: await wallet.signMessage(challenge.message),
+  device_key: publicJwk,
+  device_signature: base64url(await platformSign(challenge.message)),
+  device_label: "Alice's phone",
+});
+```
+
+`device_id` is the RFC 7638 thumbprint of the public key: `deviceIdOf(publicJwk)`
+computes it with the platform's SHA-256. A device-bound `verify` returns no API
+key, and later refreshes sign a proof with the device key automatically; without
+a signer set, `refresh()` throws `DEVICE_PROOF_REQUIRED` rather than send a
+refresh the gateway will refuse. `logout()` from a device-bound session ends that
+device's session only; from a session bound to no device it ends all of the
+wallet's, as before.
+
+When the namespace requires an existing device's approval, `verify` returns
+`{status: "pending_approval", user_code, device_code}` and stores nothing. Show
+the user code; on a device already signed in, `client.auth.approveDeviceLink(code)`;
+back on the new one, `client.auth.claimDeviceLink(device_code, namespace)`
+collects the session. `startDeviceLink({namespace})` starts the same link with no
+wallet at all.
+
+`listDevices()` and `revokeDevice(id)` manage the account's devices; from a
+device-bound session `revokeDevice` signs the revocation with the device key.
+`deviceProofMessage` is exported for a client that signs proofs itself.
+
 ### Persisting tokens in a browser
 
 ```typescript

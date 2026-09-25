@@ -102,6 +102,15 @@ func (r *RevocationList) Denies(claims *JWTClaims, subjectKeys []string) bool {
 			return true
 		}
 	}
+	// A revoked device or an ended session is refused whenever its token was
+	// minted: neither can mint another after the revocation, so there is no
+	// newer grant for an issue-time boundary to protect.
+	for _, key := range []string{bindingRevocationKey(deviceRevocationPrefix, claims.Did),
+		bindingRevocationKey(sessionRevocationPrefix, claims.Sid)} {
+		if _, denied := r.bySubject[key]; key != "" && denied {
+			return true
+		}
+	}
 	for _, key := range subjectKeys {
 		key = strings.ToLower(strings.TrimSpace(key))
 		if key == "" {
@@ -144,6 +153,42 @@ func (r *RevocationList) RevokeSubject(ctx context.Context, subject, reason stri
 		issuedBefore: now.Unix(),
 		expiresAt:    now.Add(ttl).Unix(),
 	}, reason)
+}
+
+// A device or a session is revoked under a subject no wallet or key can have:
+// a prefix neither ever carries.
+const (
+	deviceRevocationPrefix  = "device:"
+	sessionRevocationPrefix = "session:"
+)
+
+// bindingRevocationKey is the subject a device or session is revoked under, or
+// "" when the token is not bound to one.
+func bindingRevocationKey(prefix, id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	return strings.ToLower(prefix + id)
+}
+
+// RevokeDevice refuses every token bound to a device. The entry outlives any
+// token the device can hold; past that, the device's tombstone is what refuses
+// it, since nothing new can be minted for it.
+func (r *RevocationList) RevokeDevice(ctx context.Context, deviceID string) error {
+	if strings.TrimSpace(deviceID) == "" {
+		return fmt.Errorf("cannot revoke a device with no id")
+	}
+	return r.RevokeSubject(ctx, deviceRevocationPrefix+deviceID, "device revoked", MaxTokenLifetime)
+}
+
+// RevokeSessionID refuses every access token of one session, whichever
+// rotation of its refresh token minted it.
+func (r *RevocationList) RevokeSessionID(ctx context.Context, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("cannot revoke a session with no id; it was issued before sessions carried one")
+	}
+	return r.RevokeSubject(ctx, sessionRevocationPrefix+sessionID, "session ended", MaxTokenLifetime)
 }
 
 // RevokeToken refuses one token.

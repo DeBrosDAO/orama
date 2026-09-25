@@ -28,7 +28,7 @@ func TestDeviceFlow_endToEnd(t *testing.T) {
 	}
 
 	// Nobody has approved it, so the first poll says so.
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceAuthorizationPending) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
 		t.Fatalf("first poll = %v, want authorization_pending", err)
 	}
 
@@ -36,7 +36,7 @@ func TestDeviceFlow_endToEnd(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 
-	claimed, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode)
+	claimed, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestDeviceFlow_endToEnd(t *testing.T) {
 
 	// A device code collects a session once. A code left in a shell history or
 	// a log collects nothing.
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceCodeUnknown) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceCodeUnknown) {
 		t.Errorf("second claim = %v, want invalid_grant", err)
 	}
 }
@@ -70,7 +70,7 @@ func TestApproveDeviceAuthorization_refusesADifferentNamespace(t *testing.T) {
 		t.Errorf("the refusal does not name the namespace that was asked for: %v", err)
 	}
 
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceAuthorizationPending) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
 		t.Errorf("the refused approval changed the login's state: %v", err)
 	}
 }
@@ -89,7 +89,7 @@ func TestApproveDeviceAuthorization_takesTheApproversNamespaceWhenNoneWasAsked(t
 		t.Fatalf("approve: %v", err)
 	}
 
-	claimed, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode)
+	claimed, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -106,11 +106,11 @@ func TestDeviceFlow_aDeniedLoginStopsRatherThanPolling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	if err := s.DenyDeviceAuthorization(ctx, pending.UserCode); err != nil {
+	if err := s.DenyDeviceAuthorization(ctx, pending.UserCode, "0xowner"); err != nil {
 		t.Fatalf("deny: %v", err)
 	}
 
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceAccessDenied) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAccessDenied) {
 		t.Errorf("poll after a refusal = %v, want access_denied", err)
 	}
 	// And it cannot be approved afterwards: a refusal is final, or refusing is
@@ -133,7 +133,7 @@ func TestDeviceFlow_anExpiredLoginIsNotApprovableOrClaimable(t *testing.T) {
 		t.Fatalf("expire: %v", err)
 	}
 
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceCodeExpired) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceCodeExpired) {
 		t.Errorf("poll = %v, want expired_token", err)
 	}
 	if err := s.ApproveDeviceAuthorization(ctx, pending.UserCode, "0xowner", "anchat"); !errors.Is(err, ErrDeviceCodeExpired) {
@@ -155,7 +155,7 @@ func TestDeviceFlow_aDeadlineTheDriverCannotParseIsPast(t *testing.T) {
 		t.Fatalf("corrupt: %v", err)
 	}
 
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceCodeExpired) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceCodeExpired) {
 		t.Errorf("poll = %v, want expired_token", err)
 	}
 }
@@ -170,10 +170,10 @@ func TestClaimDeviceAuthorization_refusesAPollInsideTheInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceAuthorizationPending) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
 		t.Fatalf("first poll: %v", err)
 	}
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceSlowDown) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceSlowDown) {
 		t.Errorf("immediate second poll = %v, want slow_down", err)
 	}
 }
@@ -190,14 +190,14 @@ func TestClaimDeviceAuthorization_terminalStatesBeatTheInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceAuthorizationPending) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
 		t.Fatalf("first poll: %v", err)
 	}
-	if err := s.DenyDeviceAuthorization(ctx, pending.UserCode); err != nil {
+	if err := s.DenyDeviceAuthorization(ctx, pending.UserCode, "0xowner"); err != nil {
 		t.Fatalf("deny: %v", err)
 	}
 
-	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceAccessDenied) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAccessDenied) {
 		t.Errorf("poll = %v, want access_denied even inside the interval", err)
 	}
 
@@ -206,13 +206,13 @@ func TestClaimDeviceAuthorization_terminalStatesBeatTheInterval(t *testing.T) {
 		if err != nil {
 			t.Fatalf("start: %v", err)
 		}
-		if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); !errors.Is(err, ErrDeviceAuthorizationPending) {
+		if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
 			t.Fatalf("first poll: %v", err)
 		}
 		if err := s.ApproveDeviceAuthorization(ctx, pending.UserCode, "0xowner", "anchat"); err != nil {
 			t.Fatalf("approve: %v", err)
 		}
-		if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode); err != nil {
+		if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); err != nil {
 			t.Errorf("poll right after approval = %v, want the session", err)
 		}
 	})
@@ -266,7 +266,7 @@ func TestStartDeviceAuthorization_sweepsWhatNobodyCameBackFor(t *testing.T) {
 	if rows != 1 {
 		t.Errorf("%d rows remain, want only the live one", rows)
 	}
-	if _, err := s.ClaimDeviceAuthorization(ctx, stale.DeviceCode); !errors.Is(err, ErrDeviceCodeUnknown) {
+	if _, err := s.ClaimDeviceAuthorization(ctx, stale.DeviceCode, nil); !errors.Is(err, ErrDeviceCodeUnknown) {
 		t.Errorf("the swept login still answers: %v", err)
 	}
 }
@@ -412,7 +412,7 @@ func TestDeviceFlow_theWritesAreCompareAndSwap(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := s.DenyDeviceAuthorization(ctx, code); err != nil {
+		if err := s.DenyDeviceAuthorization(ctx, code, "0xowner"); err != nil {
 			t.Fatalf("deny: %v", err)
 		}
 

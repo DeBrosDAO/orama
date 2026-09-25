@@ -912,6 +912,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 		_, err := e.runtime.NewHostModuleBuilder(moduleName).
 			NewFunctionBuilder().WithFunc(e.hGetCallerWallet).Export("get_caller_wallet").
 			NewFunctionBuilder().WithFunc(e.hGetCallerJWTSubject).Export("get_caller_jwt_subject").
+			NewFunctionBuilder().WithFunc(e.hGetCallerDeviceID).Export("get_caller_device_id").
 			NewFunctionBuilder().WithFunc(e.hGetWSClientID).Export("get_ws_client_id").
 			NewFunctionBuilder().WithFunc(e.hGetCallerClaim).Export("get_caller_claim").
 			NewFunctionBuilder().WithFunc(e.hGetRequestID).Export("get_request_id").
@@ -984,6 +985,13 @@ func (e *Engine) hGetWSClientID(ctx context.Context, mod api.Module) uint64 {
 func (e *Engine) hGetCallerJWTSubject(ctx context.Context, mod api.Module) uint64 {
 	sub := e.hostServices.GetCallerJWTSubject(ctx)
 	return e.executor.WriteToGuest(ctx, mod, []byte(sub))
+}
+
+// hGetCallerDeviceID returns the device the caller's session is bound to.
+// Empty string when it is bound to none.
+func (e *Engine) hGetCallerDeviceID(ctx context.Context, mod api.Module) uint64 {
+	did := e.hostServices.GetCallerDeviceID(ctx)
+	return e.executor.WriteToGuest(ctx, mod, []byte(did))
 }
 
 // hGetCallerClaim reads a claim name from guest memory, looks it up on the

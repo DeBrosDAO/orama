@@ -68,6 +68,9 @@ func (h *Handlers) RegisterDeviceHandler(w http.ResponseWriter, r *http.Request)
 		Platform:  body.Platform,
 		AppVer:    body.AppVersion,
 		LastSeen:  now,
+		// The session device the caller proved it is, when its session is
+		// bound to one. The registration ends when that device is revoked.
+		SessionDeviceID: resolveCallerDeviceID(r),
 	}
 	id, err := h.store.Upsert(boundCtx(r), dev)
 	if err != nil {

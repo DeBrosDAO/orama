@@ -283,6 +283,7 @@ func (h *ServerlessHandlers) buildPersistentInvocationContext(
 		CallerIP:         extractRemoteIP(r),
 		CallerClaims:     h.getCallerClaimsFromRequest(r),
 		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
+		CallerDeviceID:   h.getDeviceIDFromRequest(r),
 		WSClientID:       clientID,
 		TriggerType:      serverless.TriggerTypeWebSocket,
 	}
@@ -461,6 +462,7 @@ func refreshedInvocationContext(
 		CallerWallet:     claims.Sub,
 		CallerClaims:     customClaims,
 		CallerJWTSubject: claims.Sub,
+		CallerDeviceID:   claims.Did,
 		CallerIP:         prevIP,
 		CallerIsAdmin:    prevIsAdmin,
 		WSClientID:       clientID,

@@ -106,8 +106,11 @@ var sessionsRevokeCmd = &cobra.Command{
 	Short: "End one session, or every one",
 	Long: `End a session listed by 'orama auth sessions'.
 
-Ending a session stops it minting new access tokens. One already minted keeps
-working until it expires, at most 15 minutes.`,
+Ending a session stops it minting new access tokens, and refuses the access
+tokens it already minted — and closes the sockets they hold open — within ten
+seconds. A session issued before sessions carried an id cannot be named that
+way: its access tokens work until they expire, at most 15 minutes, and the
+command says so.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var id int64

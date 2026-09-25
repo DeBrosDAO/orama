@@ -125,12 +125,225 @@ changes.
 
 `GET /v1/auth/sessions` lists the live refresh tokens of the calling wallet —
 never the tokens themselves, which would turn a fifteen-minute access token into
-a thirty-day one. `DELETE /v1/auth/sessions/{id}` ends one.
+a thirty-day one — each with the device it is bound to, if any.
+`DELETE /v1/auth/sessions/{id}` ends one.
 
-Ending a session stops it minting new access tokens. An access token already
-minted from it keeps working until it expires, at most fifteen minutes; the
-response says so. `POST /v1/auth/logout` with `all` is the immediate one, and it
-is all-or-nothing by nature.
+Every session has an id of its own, carried in its access tokens as `sid` and
+kept across refresh-token rotations. Ending a session revokes its refresh token
+and puts its id on the revocation list, so the access tokens it already minted,
+and the sockets they hold open, stop within the list's staleness. A session
+issued before sessions carried an id has nothing to name its access tokens by:
+ending one stops it minting new ones, the access tokens it already minted work
+until they expire, at most fifteen minutes, and the response says so.
+`POST /v1/auth/logout` with `all` ends every session of the wallet at once.
+
+---
+
+## Devices
+
+A session belonged to an account and nothing else. Every installation of an
+application signed in as the same wallet held interchangeable sessions, so losing
+one phone meant ending every session the account had, and nothing a function ran
+could tell which installation was calling.
+
+A session may now be bound to a **device**: a key pair one installation holds.
+The gateway accepts ECDSA P-256 (ES256 — what iOS's Secure Enclave, Android's
+StrongBox and WebCrypto keep non-extractable) and Ed25519. The device's id is the
+RFC 7638 thumbprint of its public key: it is computed, never stated, so a client
+can name only a device whose key it presents. A signature is base64url, and a
+P-256 one may be the 64-byte `r‖s` JOSE uses or ASN.1 DER.
+
+A session bound to a device:
+
+- is issued only against the device's signature over the same sign-in message
+  the wallet signed;
+- is refreshed only with a fresh proof from the device;
+- carries the device in its access tokens as `did`, which a function reads with
+  `get_caller_device_id` ([SERVERLESS.md](SERVERLESS.md#context)) the way it
+  reads the account with `get_caller_jwt_subject`;
+- ends — refresh tokens, access tokens and every socket they hold open — when the
+  device is revoked, while the account's other devices stay signed in.
+
+Binding a device is the client's choice in every namespace. A namespace's
+**session policy** decides what a sign-in that binds none may still get
+(below). Sessions without a device keep working exactly as before.
+
+### Signing in with a device
+
+```
+client                                          gateway
+  |  POST /v1/auth/challenge                       |
+  |  { wallet, namespace, device_id }  ----------->|  the message's Resources carry
+  |  <-- message naming urn:orama:device:<id> -----|  urn:orama:device:<device_id>
+  |                                                |
+  |  the wallet signs the message                  |
+  |  the device key signs the same message         |
+  |                                                |
+  |  POST /v1/auth/verify                          |
+  |  { message, signature,                         |
+  |    device_key, device_signature,               |
+  |    device_label } ---------------------------->|  both signatures, one spent nonce
+  |  <-- access + refresh token, device_id --------|
+```
+
+`device_key` is the public JWK; `device_id` is its RFC 7638 thumbprint, which
+the client computes before asking for the challenge (the SDK's `deviceIdOf`),
+and which the response repeats. The wallet's signature says
+which device it lets in; the device's says the key is really there; neither alone
+binds anything. A device-bound sign-in is not handed an API key: the device is
+the credential, and a key for the whole account beside it would outlive revoking
+the device.
+
+A key belongs to one account in one namespace, and the lobby binds none. A
+revoked device is a tombstone: its key can never sign in again, by anyone. An
+Ed25519 key of small order, which "verifies" signatures nobody made, is refused.
+
+The access token of a device-bound session is still a bearer token for its
+fifteen minutes; the device's proof guards what outlives it — the refresh, and
+the acts listed below. A device-bound session's refresh token is marked (`dv1_`)
+and stored under a hash of its own, so a gateway that predates devices cannot
+find it, and so cannot refresh it without the device.
+
+### Proving the device on later requests
+
+Refreshing a device-bound session, approving a link from a device, collecting a
+linked session, and — from a device-bound session — revoking a device or ending
+a session each carry a **device proof**:
+
+```json
+"device_proof": {"iat": 1790000000, "id": "<16-128 chars of [A-Za-z0-9_-], random>", "sig": "<base64url>"}
+```
+
+`sig` is the device's signature over this text, lines joined by `\n`:
+
+```
+orama-device-proof-v1
+<action>          refresh | approve | claim | revoke | end-session
+<namespace>
+<binding>         the refresh token | the user code | the device code
+                  | the device id | the session id
+<iat>
+<id>
+```
+
+`iat` must be within 60 seconds of the gateway's clock, and `id` is spent in the
+nonce table, so a proof is good once, for one action on one credential. A refresh
+without the proof is refused before anything is spent — the rotation, or the
+reuse grace a just-rotated token still has — so a thief holding only the refresh
+token cannot use either up.
+
+### Revoking a device
+
+```
+GET    /v1/auth/devices          the account's devices, revoked ones included
+DELETE /v1/auth/devices/{id}     revoke one
+```
+
+Revoking tombstones the device, revokes its refresh tokens (including the
+reuse-grace slot a just-rotated one would still have), and puts `device:<id>` on
+the revocation list — so its access tokens and the sockets they hold open stop
+within ten seconds on every gateway. It cannot mint a new session afterwards: its
+key is refused at sign-in, refresh and approval. The account's other devices are
+untouched. Push registrations made from the device end with it
+([PUSH_NOTIFICATIONS.md](PUSH_NOTIFICATIONS.md)).
+
+Any of the account's sessions may revoke any of its devices: one bound to an
+active device, with that device's proof (`revoke`, over the id being revoked),
+or one bound to no device, which only the wallet can have made. The proof is
+what stops an access token lifted off one phone signing the account out of all
+the others. A session bound to a pending or revoked device can do nothing here.
+Ending a session from a device-bound session takes a proof the same way
+(`end-session`, over the session id).
+
+**When the user cannot help themselves.** Under the `approval` policy an account
+that lost its only device — or whose stolen device revoked the others — has
+nothing left that can approve a new one, and a wallet signature alone cannot, by
+design. A namespace operator (the members-write permission) can:
+
+```
+GET    /v1/namespace/devices?subject=<wallet>   an account's devices
+DELETE /v1/namespace/devices/{id}               revoke one of them
+```
+
+With no active device left, the user's next sign-in enrols its device as the
+account's first again.
+
+### Adding a device: approval and linking
+
+`PUT /v1/namespace/session-policy {"device_policy": ...}` (the namespace-write
+permission) sets what a sign-in must prove:
+
+| Policy | A sign-in that binds no device | A new device's first sign-in |
+|--------|-------------------------------|------------------------------|
+| `optional` (default) | a session bound to the account | active |
+| `required` | refused, `DEVICE_REQUIRED` | active |
+| `approval` | refused, `DEVICE_REQUIRED` | active if it is the account's first; otherwise **pending** |
+
+Under `required` and `approval` nothing else hands an end user a credential bound
+to no device either: `POST /v1/auth/api-key` and approving a plain
+`orama auth login` device code with a wallet answer `DEVICE_REQUIRED`, and so
+does refreshing an end user's session that is bound to no device — so turning the
+policy on ends those sessions at their next refresh, within fifteen minutes.
+Setting `required` or `approval` also revokes every key an end user's sign-in
+minted in the namespace — the current one and the ones it rotated from — and the
+response says how many (`revoked_sign_in_keys`). A wallet counts as an operator
+here exactly as it does at sign-in: its owner, admin or developer grant must be
+live — not revoked, not expired, its principal not disabled — and only such
+wallets' keys are untouched. A key that expired more than an hour ago (the
+longest a token exchanged from a key lives) authenticates nothing and is left as
+it is. If revoking them stops partway, the policy is still set (and audited) and
+the answer is a `503` with `POLICY_SWEEP_INCOMPLETE` and how many were revoked;
+repeating the `PUT` revokes the keys that are left. A sign-in that read the
+policy just before it was set can mint its key just after the sweep read the
+keys; repeating the `PUT` a moment later revokes that one too. A plain device
+login a wallet approved before the policy changed cannot be collected after it.
+
+A wallet holding a control-plane role in the namespace — owner, admin, developer —
+is held to `optional` whatever the policy says. The policy protects the
+application's users; the people operating the namespace sign in from the CLI,
+which holds no device key, and whoever holds such a wallet can change the policy
+anyway.
+
+A **pending** device holds no session. The sign-in that enrolled it answers `202`
+with `status: pending_approval`, a `user_code` and a `device_code`: the new
+device shows the user code, one of the account's active devices approves it, and
+the new device collects its session.
+
+```
+new device                         gateway                   an active device
+  |  (sign-in → 202, or:)             |                              |
+  |  POST /v1/auth/device             |                              |
+  |  { namespace, device_key }        |                              |
+  |---------------------------------->|  a pending login holding     |
+  |  <-- device_code + user_code -----|  the new device's key        |
+  |                                   |   POST /v1/auth/devices/approve
+  |                                   |   { user_code, device_proof }|
+  |                                   |<-----------------------------|
+  |  POST /v1/auth/device/token       |                              |
+  |  { device_code, device_proof }    |                              |
+  |---------------------------------->|                              |
+  |  <-- access + refresh, device_id -|                              |
+```
+
+Starting the link from the new device (`POST /v1/auth/device` with `device_key`)
+is **seedless linking**: no wallet is involved at all, and the new device takes
+its account from the device that approves it. Starting it from an
+approval-policy sign-in is **new-device approval**: the wallet already named the
+account, and only one of that account's devices may approve. Either way the
+approver proves it holds its own key over the user code, and collecting the
+session takes the new device's proof over the device code — the codes alone
+collect nothing, and the approving device must still be active when the new one
+collects — revoking a stolen approver reaches the device it let in. A device
+link cannot be approved with a wallet signature (`orama auth approve`); a plain
+login cannot be approved by a device. A wallet can refuse a link only if the
+link is its account's.
+
+**Rolling it out.** A gateway that predates devices knows nothing of the policy,
+of device-bound sign-in or of `device:` revocations: it signs in without a
+device, mints keys, and approves device links with a wallet signature. Set a
+session policy, and ship clients that bind devices, only once every gateway in
+the cluster runs this version. (What it cannot do is refresh a device-bound
+session: it cannot find one.)
 
 ---
 
@@ -313,7 +526,10 @@ every request that run makes.
 | Narrowing a **wallet's** grant | on the next request; the grant is resolved per request |
 | Narrowing a **key** — editing its scopes, or revoking a grant it holds | within one minute, on every gateway that had seen it |
 | Revoking the token an open WebSocket was opened with | the socket is closed within 10 seconds (`4403`) |
+| Ending a session (`DELETE /v1/auth/sessions/{id}`) | its access tokens are refused, and its sockets closed, within 10 seconds |
+| Revoking a device | its sessions, access tokens and sockets end within 10 seconds; the account's other devices are untouched |
 | The token an open WebSocket was opened with expiring | the socket is closed within 10 seconds of two minutes past its `exp` (`4401`), unless it was refreshed on the socket |
+| Setting a session policy | at once for everything that issues a credential (sign-in, API keys, approvals, device-link claims), which reads the policy itself; a refresh may be judged by a policy its gateway read up to 10 seconds earlier |
 
 That minute is `CredentialStaleness`, and it is a promise rather than a tuning
 knob: it is the middleware cache's TTL, and it is named so an operator who
@@ -402,6 +618,22 @@ the wrong message" are different problems:
 | `NAMESPACE_UNOWNED` | the namespace has no owner, so nobody may sign in to it |
 | `NAMESPACE_HAS_NO_KEYS` | the lobby namespace has no keys; create a namespace first |
 | `TOO_MANY_CHALLENGES` | too many challenges asked for; slow down |
+
+A device-bound session has its own, because the next move differs — sign a
+proof, ask another device, or accept that this key is done:
+
+| Code | Means |
+|------|-------|
+| `DEVICE_REQUIRED` | the namespace requires sessions bound to a device (403) |
+| `DEVICE_KEY_INVALID` | the key is not a P-256 or Ed25519 public JWK, or is not the device the message names (400) |
+| `DEVICE_SIGNATURE_INVALID` | the device's signature over the sign-in message does not verify (401) |
+| `DEVICE_PROOF_REQUIRED` | a device-bound credential was presented without the device's proof (401) |
+| `DEVICE_PROOF_INVALID` | the proof is stale, reused, or not the device's (401) |
+| `DEVICE_REVOKED` | the device was revoked; its key can never hold a session again (403) |
+| `DEVICE_PENDING` | the device waits for another of the account's devices to approve it (403, or 202 on sign-in) |
+| `DEVICE_NOT_FOUND` | the account has no such device (404) |
+| `DEVICE_KEY_TAKEN` | the key is enrolled for another account (403) |
+| `POLICY_SWEEP_INCOMPLETE` | the session policy is set, but revoking the end users' existing sign-in keys stopped partway; repeat the `PUT` (503) |
 
 The TypeScript SDK mirrors these as a typed error hierarchy; see
 [TS_SDK.md](TS_SDK.md).
@@ -528,7 +760,8 @@ and import a replacement. Anything of the platform's kept there is state its
 subject can rewrite, and state the rest of the cluster never sees.
 
 Keys and grants moved to the registry first. Sessions, challenges, revocations,
-the audit trail, pending device logins and signing keys followed. A namespace
+the audit trail, pending device logins and signing keys followed; session
+devices and namespaces' session policies were placed there from the start. A namespace
 gateway learns where its registry is after it starts, so each of these resolves
 the database per call rather than capturing the handle it was built with — which
 is exactly how they ended up in the wrong one.
@@ -546,7 +779,8 @@ a migration creates a table nobody has placed.
 
 The main gateway validates a request and forwards the result to a namespace
 gateway in headers: the namespace it resolved, the JWT subject, custom claims,
-`exp`, `iat` and `jti` it verified, and the grants of the key it looked up.
+`exp`, `iat`, `jti` and the bound device and session (`did`, `sid`) it verified,
+and the grants of the key it looked up.
 Whether to believe them is answered by an HMAC over the request's method, path,
 every asserted field and a timestamp, keyed from the cluster secret. The first
 middleware in the chain deletes every `X-Internal-Auth-*` header that did not
@@ -556,22 +790,24 @@ The token's times and id are what let a namespace gateway hold a socket to the
 token that opened it. Before they crossed the hop, a socket proxied from the main
 gateway had no expiry and no revocation could name it.
 
-They are covered by a second MAC, `X-Internal-Auth-MAC-V2`, over every field; the
-first still covers the original four, so a namespace gateway that predates the
-second keeps accepting an upgraded main gateway during a rolling upgrade (it
-ignores the new headers, and passes them on as it passes on everything else it
-does not know). A request carrying the second MAC is judged by it alone. One
-carrying only the first — from a main gateway not yet upgraded — has the fields
-it does not cover deleted. Its token is given the most time any token can have
+The MAC comes in versions, each adding fields to the one before:
+`X-Internal-Auth-MAC` covers the original four, `-MAC-V2` adds `exp`, `iat` and
+`jti`, and `-MAC-V3` adds `did` and `sid`. A main gateway stamps every version,
+so a namespace gateway that predates the newest keeps accepting it during a
+rolling upgrade (it ignores the headers it does not know, and passes them on as
+it passes on everything else it does not know). A request is judged by the
+newest MAC it carries, alone, and the fields that version does not cover are
+deleted — a hop from an older main gateway is believed exactly as far as it was
+signed. One carrying only the first has no token times; its token is given the most time any token can have
 left (`MaxTokenLifetime`, an hour), so a socket it opens still ends within the
 hour, and an issue time one revocation-list staleness back, so a revocation the
 main gateway's list might not yet have held still reaches it. Refusing it instead
 would have treated every signed-in request an older main gateway proxied to an
 upgraded namespace gateway as anonymous, for as long as the rollout took.
 
-Accepting the first MAC alone gives nobody anything they did not have: removing
-the second from a genuine hop takes a position inside the WireGuard mesh, which
-is a node, and every node holds the cluster secret both are keyed from.
+Accepting an older MAC gives nobody anything they did not have: removing the
+newer one from a genuine hop takes a position inside the WireGuard mesh, which
+is a node, and every node holds the cluster secret every version is keyed from.
 
 The source IP is not consulted, and must not be: every public request arrives
 from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.

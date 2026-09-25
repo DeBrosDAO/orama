@@ -82,7 +82,8 @@ func isAuthRateLimitPath(path string) bool {
 	switch path {
 	case "/v1/auth/challenge", "/v1/auth/verify", "/v1/auth/api-key",
 		"/v1/auth/token", "/v1/auth/refresh",
-		"/v1/auth/device", "/v1/auth/device/approve", "/v1/auth/device/token":
+		"/v1/auth/device", "/v1/auth/device/approve", "/v1/auth/device/token",
+		"/v1/auth/devices/approve":
 		return true
 	}
 	return false

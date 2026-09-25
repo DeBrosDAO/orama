@@ -31,6 +31,9 @@ type Session struct {
 	CreatedAt time.Time
 	// ExpiresAt is when it stops working on its own.
 	ExpiresAt time.Time
+	// DeviceID is the device the session is bound to, or "" for a session
+	// bound to the account alone.
+	DeviceID string
 }
 
 // ListSessions returns the live sessions of one subject in one namespace.
@@ -52,7 +55,7 @@ func (s *Service) ListSessions(ctx context.Context, namespace, subject string) (
 	}
 
 	res, err := db.Query(client.WithInternalAuth(ctx),
-		`SELECT id, subject, audience, created_at, expires_at
+		`SELECT id, subject, audience, created_at, expires_at, COALESCE(device_id, '')
 		   FROM refresh_tokens
 		  WHERE namespace_id = ? AND subject = ?
 		    AND revoked_at IS NULL
@@ -68,7 +71,7 @@ func (s *Service) ListSessions(ctx context.Context, namespace, subject string) (
 
 	out := make([]Session, 0, len(res.Rows))
 	for _, row := range res.Rows {
-		if len(row) < 5 {
+		if len(row) < 6 {
 			continue
 		}
 		created, _, _ := parseTimestamp(row[3])
@@ -79,6 +82,7 @@ func (s *Service) ListSessions(ctx context.Context, namespace, subject string) (
 			Audience:  getStringVal(row[2]),
 			CreatedAt: created,
 			ExpiresAt: expires,
+			DeviceID:  getStringVal(row[5]),
 		})
 	}
 	return out, nil
@@ -90,12 +94,13 @@ func (s *Service) ListSessions(ctx context.Context, namespace, subject string) (
 // an id is a small integer, and a check that happens in Go after a query that
 // did not filter is one refactor away from not happening.
 //
-// It ends the ability to mint new access tokens, not an access token already
-// minted. Refusing those needs their jti, which a refresh-token row does not
-// carry — so a session ended here goes on working for at most one access-token
-// lifetime, and everything that reports this says so rather than implying the
-// machine was cut off in the same instant. RevokeAllSessions is the immediate
-// one, and it is all-or-nothing by nature.
+// It ends the ability to mint new access tokens, and — for a session issued
+// with an id, which is every session issued since sessions carried one — the
+// access tokens it already minted and the sockets they hold open, through the
+// revocation list. A session issued before that has no id to name; its access
+// tokens go on working for at most one access-token lifetime, and EndSession
+// reports that with ErrSessionTokensOutlive rather than implying the machine
+// was cut off in the same instant.
 func (s *Service) EndSession(ctx context.Context, namespace, subject string, id int64) error {
 	if s.db == nil {
 		return ErrRotationNotConfigured
@@ -108,8 +113,42 @@ func (s *Service) EndSession(ctx context.Context, namespace, subject string, id 
 		return fmt.Errorf("resolve the namespace %q: %w", namespace, err)
 	}
 
+	sessionID, err := s.sessionIDOf(ctx, nsID, subject, id)
+	if err != nil {
+		return err
+	}
+	if sessionID == "" {
+		if err := s.endSessionRow(ctx, nsID, subject, id); err != nil {
+			return err
+		}
+		return ErrSessionTokensOutlive
+	}
+	// Every row of the session, not just the live one: a token rotated in the
+	// last minute still has its reuse grace, and spending it would mint a new
+	// row carrying the same session id.
+	if _, err := s.db.Exec(client.WithInternalAuth(ctx),
+		`UPDATE refresh_tokens
+		    SET revoked_at = COALESCE(revoked_at, datetime('now')), grace_used_at = datetime('now')
+		  WHERE namespace_id = ? AND subject = ? AND session_id = ?`,
+		nsID, subject, sessionID); err != nil {
+		return fmt.Errorf("end the session: %w", err)
+	}
+	if err := s.revocations.RevokeSessionID(ctx, sessionID); err != nil {
+		return fmt.Errorf("refuse the access tokens of session %d: %w", id, err)
+	}
+	return nil
+}
+
+// ErrSessionTokensOutlive reports a session that was ended but issued before
+// sessions carried an id: its refresh token is revoked, and the access tokens
+// it already minted work until they expire.
+var ErrSessionTokensOutlive = fmt.Errorf("the session is ended, but it predates session ids: "+
+	"an access token it already minted keeps working until it expires, at most %s", AccessTokenLifetime)
+
+// endSessionRow ends a session that predates session ids, by its row.
+func (s *Service) endSessionRow(ctx context.Context, nsID interface{}, subject string, id int64) error {
 	res, err := s.db.Exec(client.WithInternalAuth(ctx),
-		`UPDATE refresh_tokens SET revoked_at = datetime('now')
+		`UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now')
 		  WHERE id = ? AND namespace_id = ? AND subject = ? AND revoked_at IS NULL`,
 		id, nsID, subject)
 	if err != nil {
@@ -119,6 +158,25 @@ func (s *Service) EndSession(ctx context.Context, namespace, subject string, id 
 		return fmt.Errorf("session %d is not one of yours, or has already ended", id)
 	}
 	return nil
+}
+
+// sessionIDOf reads the session id of one of a subject's live refresh tokens.
+func (s *Service) sessionIDOf(ctx context.Context, nsID interface{}, subject string, id int64) (string, error) {
+	db, err := s.deviceDB()
+	if err != nil {
+		return "", err
+	}
+	res, err := db.Query(client.WithInternalAuth(ctx),
+		`SELECT COALESCE(session_id, '') FROM refresh_tokens
+		  WHERE id = ? AND namespace_id = ? AND subject = ? AND revoked_at IS NULL LIMIT 1`,
+		id, nsID, subject)
+	if err != nil {
+		return "", fmt.Errorf("read the session: %w", err)
+	}
+	if res == nil || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return "", fmt.Errorf("session %d is not one of yours, or has already ended", id)
+	}
+	return getStringVal(res.Rows[0][0]), nil
 }
 
 // cellInt64 reads a column that holds a row id.

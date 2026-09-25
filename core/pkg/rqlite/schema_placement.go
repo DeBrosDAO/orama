@@ -57,19 +57,21 @@ var tablePlacement = map[string]tableNote{
 	// These are read through the auth service's registry handle. A copy in a
 	// tenant's database is a copy its subject can rewrite, and one the rest of
 	// the cluster never sees.
-	"api_keys":              {PlacementCluster, "a key is validated against the registry (bug-162)"},
-	"wallet_api_keys":       {PlacementCluster, "which key belongs to which wallet, beside api_keys"},
-	"principals":            {PlacementCluster, "who the platform will authenticate"},
-	"grants":                {PlacementCluster, "who may do what in a namespace"},
-	"nonces":                {PlacementCluster, "a challenge issued on one gateway is consumed on another"},
-	"refresh_tokens":        {PlacementCluster, "a session must be refreshable and revocable from anywhere"},
-	"revoked_tokens":        {PlacementCluster, "a revocation that reaches one gateway refuses nothing"},
-	"signing_keys":          {PlacementCluster, "publishing a key is minting authority; the cluster verifies against it"},
-	"node_credentials":      {PlacementCluster, "a node's own key; every gateway in the cluster verifies its stamps against this"},
-	"device_authorizations": {PlacementCluster, "started on one gateway, approved on another"},
-	"operators":             {PlacementCluster, "who may operate the cluster"},
-	"audit_events":          {PlacementCluster, "a record its own subject could delete is not a record"},
-	"encryption_roots":      {PlacementCluster, "the IKM stored secrets are derived from; a tenant copy would be a KEK they can rewrite"},
+	"api_keys":                 {PlacementCluster, "a key is validated against the registry (bug-162)"},
+	"wallet_api_keys":          {PlacementCluster, "which key belongs to which wallet, beside api_keys"},
+	"principals":               {PlacementCluster, "who the platform will authenticate"},
+	"grants":                   {PlacementCluster, "who may do what in a namespace"},
+	"nonces":                   {PlacementCluster, "a challenge issued on one gateway is consumed on another"},
+	"refresh_tokens":           {PlacementCluster, "a session must be refreshable and revocable from anywhere"},
+	"revoked_tokens":           {PlacementCluster, "a revocation that reaches one gateway refuses nothing"},
+	"signing_keys":             {PlacementCluster, "publishing a key is minting authority; the cluster verifies against it"},
+	"node_credentials":         {PlacementCluster, "a node's own key; every gateway in the cluster verifies its stamps against this"},
+	"device_authorizations":    {PlacementCluster, "started on one gateway, approved on another"},
+	"session_devices":          {PlacementCluster, "which devices hold sessions; revoked on one gateway, refused on every other"},
+	"namespace_session_policy": {PlacementCluster, "what a sign-in must prove; read where sessions are issued"},
+	"operators":                {PlacementCluster, "who may operate the cluster"},
+	"audit_events":             {PlacementCluster, "a record its own subject could delete is not a record"},
+	"encryption_roots":         {PlacementCluster, "the IKM stored secrets are derived from; a tenant copy would be a KEK they can rewrite"},
 
 	// --- the tenant's data plane: the namespace's own RQLite --------------
 	//

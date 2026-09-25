@@ -121,6 +121,7 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		CallerIP:         extractRemoteIP(r),
 		CallerClaims:     h.getCallerClaimsFromRequest(r),
 		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
+		CallerDeviceID:   h.getDeviceIDFromRequest(r),
 	}
 
 	resp, err := h.invoker.Invoke(ctx, req)

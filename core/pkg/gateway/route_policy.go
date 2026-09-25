@@ -142,6 +142,9 @@ func buildRoutePolicies() *routepolicy.Table {
 		// A wallet's own sessions. The handler refuses anything but a token
 		// from a signed-in wallet, and reads whose sessions from that token.
 		"/v1/auth/sessions", "/v1/auth/sessions/",
+		// A wallet's own devices. Same rule: the handler refuses anything but
+		// a signed-in token, and reads whose devices from it.
+		"/v1/auth/devices", "/v1/auth/devices/",
 		// A workload renewing its own token. It needs the token it is renewing
 		// and nothing else, which is what the handler checks.
 		"/v1/auth/renew",
@@ -191,7 +194,7 @@ func buildRoutePolicies() *routepolicy.Table {
 	// A namespace's own settings, and its deletion.
 	t.Add(control(auth.DomainNamespace, auth.ActionRead), "/v1/namespace/list")
 	t.Add(control(auth.DomainNamespace, auth.ActionWrite),
-		"/v1/namespace/delete", "/v1/namespace/rate-limit",
+		"/v1/namespace/delete", "/v1/namespace/rate-limit", "/v1/namespace/session-policy",
 		"/v1/namespace/webrtc/enable", "/v1/namespace/webrtc/disable",
 		"/v1/namespace/webrtc/stealth/enable", "/v1/namespace/webrtc/stealth/disable")
 
@@ -220,7 +223,10 @@ func buildRoutePolicies() *routepolicy.Table {
 	// checks: a permission set cannot express "owner", only what an owner may
 	// do.
 	t.Add(owned(auth.DomainMembers, auth.ActionWrite),
-		"/v1/namespace/members", "/v1/namespace/members/")
+		"/v1/namespace/members", "/v1/namespace/members/",
+		// Revoking a user's device on their behalf is deciding who may hold a
+		// session in the namespace.
+		"/v1/namespace/devices", "/v1/namespace/devices/")
 
 	t.Add(owned(auth.DomainSecrets, auth.ActionWrite),
 		"/v1/namespace/push-credentials", "/v1/namespace/push-credentials/",

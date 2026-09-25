@@ -91,8 +91,11 @@ orama auth sessions revoke <id>      # end one
 orama auth sessions revoke --all     # end all of them
 ```
 
-Ending a session stops it minting new access tokens. One already minted keeps
-working until it expires, at most 15 minutes.
+Ending a session stops it minting new access tokens, and refuses the access
+tokens it already minted — and closes the sockets they hold open — within ten
+seconds. A session issued before sessions carried an id cannot be named that
+way: its access tokens work until they expire, at most 15 minutes, and the
+command says so.
 
 Creating a namespace is its own step, and the wallet that makes it owns it:
 

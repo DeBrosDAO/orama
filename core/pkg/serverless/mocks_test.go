@@ -319,6 +319,10 @@ func (m *MockHostServices) GetCallerJWTSubject(ctx context.Context) string {
 	return ""
 }
 
+func (m *MockHostServices) GetCallerDeviceID(ctx context.Context) string {
+	return ""
+}
+
 func (m *MockHostServices) EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error) {
 	return "job-123", nil
 }

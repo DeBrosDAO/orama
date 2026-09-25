@@ -227,6 +227,18 @@ your client computes locally from `(namespace, userId, topic_secret)`.
 For `ntfy` with `topic_mode=path`, the token is `ns-<namespace>-<userId>` — a
 single path segment, per the topic rule in Step 2.
 
+### Registrations from a device-bound session
+
+When the registering session is bound to a device ([AUTH.md](AUTH.md#devices)),
+the registration is recorded against that device — the `did` the gateway
+verified, not the `device_id` in the body, which stays the app's own label. From
+then on revoking the device and ending its push registrations are one fact:
+before listing or sending, the gateway asks the cluster registry which of the
+user's registrations belong to revoked devices, skips them, and deletes them.
+No push sent through a registration made at `/v1/push/devices` reaches a revoked
+device, whichever gateway revoked it, and nothing has to clean up after it. A
+registration from a session bound to no device behaves as it always has.
+
 ### UnifiedPush (Android / GrapheneOS, no Google Play Services)
 
 ntfy is a [UnifiedPush](https://unifiedpush.org) distributor, so Android

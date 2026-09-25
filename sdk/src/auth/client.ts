@@ -2,6 +2,29 @@ import { HttpClient } from "../core/http";
 import { Logger } from "../core/logger";
 import { AuthError, SDKError } from "../errors";
 import { WhoAmI, StorageAdapter, MemoryStorage } from "./types";
+import {
+  DeviceInfo,
+  DeviceLink,
+  DeviceSigner,
+  PendingDeviceApproval,
+  makeDeviceProof,
+  normalizeUserCode,
+} from "./device";
+
+/** Where the id of the device the stored session is bound to is kept. */
+const DEVICE_ID_KEY = "deviceId";
+
+/** The tokens a sign-in, a refresh or a collected device link answer with. */
+interface SessionResponse {
+  access_token: string;
+  refresh_token?: string;
+  subject: string;
+  namespace: string;
+  api_key?: string;
+  device_id?: string;
+  expires_in?: number;
+  token_type?: string;
+}
 
 /** What to clear, and whether to tell the gateway. */
 export interface LogoutOptions {
@@ -23,6 +46,7 @@ export class AuthClient {
   private storage: StorageAdapter;
   private currentApiKey?: string;
   private currentJwt?: string;
+  private deviceSigner?: DeviceSigner;
   private readonly log: Logger;
 
   constructor(config: {
@@ -66,6 +90,15 @@ export class AuthClient {
       }
       return null;
     });
+  }
+
+  /**
+   * Use a device key. A session bound to the device is refreshed with its
+   * proof, and approving a device link or collecting one signs with it. The
+   * key stays with the platform; the SDK only asks it to sign.
+   */
+  setDeviceSigner(signer: DeviceSigner | undefined): void {
+    this.deviceSigner = signer;
   }
 
   /**
@@ -164,6 +197,15 @@ export class AuthClient {
     }
     const namespace = (await this.storage.get("namespace")) ?? "default";
 
+    // A session bound to a device is refreshed by the device: the gateway
+    // refuses the refresh token alone.
+    const body: Record<string, unknown> = { refresh_token: refreshToken, namespace };
+    if (await this.storage.get(DEVICE_ID_KEY)) {
+      body.device_proof = await makeDeviceProof(
+        this.requireDeviceSigner("refresh"), "refresh", namespace, refreshToken
+      );
+    }
+
     const response = await this.httpClient.post<{
       access_token: string;
       refresh_token?: string;
@@ -171,7 +213,7 @@ export class AuthClient {
       subject?: string;
       namespace?: string;
       token_type?: string;
-    }>("/v1/auth/refresh", { refresh_token: refreshToken, namespace });
+    }>("/v1/auth/refresh", body);
 
     if (!response?.access_token) {
       throw new Error("refresh failed: server returned no access_token");
@@ -208,7 +250,7 @@ export class AuthClient {
     // Only a JWT has a server-side session; an API key has nothing to end.
     if (server && this.currentJwt) {
       try {
-        await this.httpClient.post("/v1/auth/logout", { all: true });
+        await this.httpClient.post("/v1/auth/logout", await this.logoutBody());
       } catch (error) {
         // Local cleanup matters more than the gateway's acknowledgement, so
         // this is reported and not raised. Tracked separately: an application
@@ -283,6 +325,8 @@ export class AuthClient {
     purpose?: string;
     namespace?: string;
     chain_type?: "ETH" | "SOL";
+    /** The device the sign-in will bind: the RFC 7638 thumbprint of its key. */
+    device_id?: string;
   }): Promise<{
     message: string;
     nonce: string;
@@ -297,6 +341,7 @@ export class AuthClient {
       purpose: params.purpose || "authentication",
       namespace: params.namespace || "default",
       chain_type: params.chain_type || "ETH",
+      ...(params.device_id ? { device_id: params.device_id } : {}),
     });
     return response;
   }
@@ -309,44 +354,161 @@ export class AuthClient {
    * of the message rather than passed beside it — those are the fields the user
    * approved, and the ones the signature covers.
    */
+  async verify(params: { message: string; signature: string }): Promise<SessionResponse>;
   async verify(params: {
     message: string;
     signature: string;
-  }): Promise<{
-    access_token: string;
-    refresh_token?: string;
-    subject: string;
-    namespace: string;
-    api_key?: string;
-    expires_in?: number;
-    token_type?: string;
-  }> {
+    device_key: Record<string, string>;
+    device_signature: string;
+    device_label?: string;
+  }): Promise<SessionResponse | PendingDeviceApproval>;
+  async verify(params: {
+    message: string;
+    signature: string;
+    /**
+     * To bind the session to a device: the device's public JWK, and its
+     * signature over the same message (base64url). The challenge must have
+     * named the device (`device_id`).
+     */
+    device_key?: Record<string, string>;
+    device_signature?: string;
+    device_label?: string;
+  }): Promise<SessionResponse | PendingDeviceApproval> {
     const response = await this.httpClient.post("/v1/auth/verify", {
       message: params.message,
       signature: params.signature,
+      ...(params.device_key
+        ? {
+            device_key: params.device_key,
+            device_signature: params.device_signature,
+            device_label: params.device_label,
+          }
+        : {}),
     });
+    if ((response as PendingDeviceApproval).status === "pending_approval") {
+      // No session: the device waits for another of the account's devices.
+      return response as PendingDeviceApproval;
+    }
+    await this.storeSession(response as SessionResponse);
+    return response as SessionResponse;
+  }
 
+  /** Keep a session the gateway just issued. */
+  private async storeSession(response: SessionResponse): Promise<void> {
     // Persist JWT
     this.setJwt(response.access_token);
 
     // Persist API key if server provided it (created in verifyHandler)
-    if ((response as any).api_key) {
-      this.setApiKey((response as any).api_key);
+    if (response.api_key) {
+      this.setApiKey(response.api_key);
     }
 
     // Persist refresh token if present (optional, for silent renewal)
-    if ((response as any).refresh_token) {
-      await this.storage.set("refreshToken", (response as any).refresh_token);
+    if (response.refresh_token) {
+      await this.storage.set("refreshToken", response.refresh_token);
     }
 
     // Persist the namespace this JWT was issued for so refresh() can
     // include it in the refresh request body (the gateway scopes refresh
     // tokens to the issuing namespace). Bug #239 — without this, refresh
     // would default to "default" and fail for namespace-scoped sessions.
-    const issuedNamespace = (response as any).namespace || "default";
+    const issuedNamespace = response.namespace || "default";
     await this.storage.set("namespace", issuedNamespace);
 
-    return response as any;
+    // A device-bound session is refreshed with the device's proof, so which
+    // device it is bound to is kept beside it — and a session bound to none
+    // clears what an earlier one left.
+    await this.storage.set(DEVICE_ID_KEY, response.device_id ?? "");
+  }
+
+  /**
+   * What logging out ends. A session bound to a device ends that device's
+   * session and nothing else — logging out on one phone must not sign the
+   * account out of the others. A session bound to none ends all of them, as
+   * it always has.
+   */
+  private async logoutBody(): Promise<Record<string, unknown>> {
+    const refreshToken = await this.storage.get("refreshToken");
+    if ((await this.storage.get(DEVICE_ID_KEY)) && refreshToken) {
+      const namespace = (await this.storage.get("namespace")) ?? "default";
+      return { refresh_token: refreshToken, namespace };
+    }
+    return { all: true };
+  }
+
+  /** The calling account's devices, revoked ones included. */
+  async listDevices(): Promise<DeviceInfo[]> {
+    const response = await this.httpClient.get<{ devices: DeviceInfo[] }>("/v1/auth/devices");
+    return response.devices ?? [];
+  }
+
+  /**
+   * Revoke one of the account's devices: its sessions, access tokens and open
+   * sockets end, and its key can never sign in again. The account's other
+   * devices stay signed in.
+   */
+  async revokeDevice(deviceId: string): Promise<void> {
+    // From a device-bound session the device signs the revocation: a lifted
+    // access token alone must not sign the account out of its other devices.
+    const body: Record<string, unknown> = {};
+    if (await this.storage.get(DEVICE_ID_KEY)) {
+      const namespace = (await this.storage.get("namespace")) ?? "default";
+      body.device_proof = await makeDeviceProof(
+        this.requireDeviceSigner("revoke"), "revoke", namespace, deviceId
+      );
+    }
+    await this.httpClient.request("DELETE", `/v1/auth/devices/${encodeURIComponent(deviceId)}`, { body });
+  }
+
+  /**
+   * Approve a pending device link from this device. The session must be bound
+   * to an active device, and the device signer signs the approval.
+   */
+  async approveDeviceLink(userCode: string): Promise<void> {
+    const namespace = (await this.storage.get("namespace")) ?? "default";
+    const code = normalizeUserCode(userCode);
+    const proof = await makeDeviceProof(this.requireDeviceSigner("approve"), "approve", namespace, code);
+    await this.httpClient.post("/v1/auth/devices/approve", { user_code: code, device_proof: proof });
+  }
+
+  /**
+   * Start linking this device to an account without a wallet: the gateway
+   * holds a pending login for this device's key, and one of the account's
+   * devices approves `user_code` with `approveDeviceLink`.
+   */
+  async startDeviceLink(params: { namespace: string; label?: string }): Promise<DeviceLink> {
+    return this.httpClient.post<DeviceLink>("/v1/auth/device", {
+      namespace: params.namespace,
+      device_key: this.requireDeviceSigner("link").publicJwk,
+      ...(params.label ? { device_label: params.label } : {}),
+    });
+  }
+
+  /**
+   * Collect the session of an approved device link — started with
+   * `startDeviceLink`, or by a sign-in that answered `pending_approval`. The
+   * device signer proves this is the device the link was started for. While
+   * nobody has approved it yet the gateway answers `authorization_pending`.
+   */
+  async claimDeviceLink(deviceCode: string, namespace: string): Promise<SessionResponse> {
+    const proof = await makeDeviceProof(this.requireDeviceSigner("claim"), "claim", namespace, deviceCode);
+    const response = await this.httpClient.post<SessionResponse>("/v1/auth/device/token", {
+      device_code: deviceCode,
+      device_proof: proof,
+    });
+    await this.storeSession(response);
+    return response;
+  }
+
+  private requireDeviceSigner(what: string): DeviceSigner {
+    if (!this.deviceSigner) {
+      throw new SDKError(
+        `${what} needs the device key: call auth.setDeviceSigner() with the platform's key first`,
+        0,
+        "DEVICE_PROOF_REQUIRED"
+      );
+    }
+    return this.deviceSigner;
   }
 
   /**

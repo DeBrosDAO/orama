@@ -114,6 +114,7 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 		WSClientID:       cur.WSClientID,
 		CallerClaims:     cur.CallerClaims,
 		CallerJWTSubject: cur.CallerJWTSubject,
+		CallerDeviceID:   cur.CallerDeviceID,
 		// Propagate trigger depth so a wildcard-triggered handler that
 		// calls function_invoke(B) — and B then publishes a topic that
 		// matches A's own wildcard — still hits the maxTriggerDepth
@@ -215,6 +216,7 @@ func (h *HostFunctions) FunctionInvokeAsync(ctx context.Context, name string, pa
 			WSClientID:       snapshot.WSClientID,
 			CallerClaims:     snapshot.CallerClaims,
 			CallerJWTSubject: snapshot.CallerJWTSubject,
+			CallerDeviceID:   snapshot.CallerDeviceID,
 			TriggerDepth:     snapshot.TriggerDepth,
 		}
 		if _, err := inv.Invoke(bgCtx, req); err != nil && logger != nil {
@@ -323,4 +325,16 @@ func (h *HostFunctions) GetCallerJWTSubject(ctx context.Context) string {
 		return ""
 	}
 	return cur.CallerJWTSubject
+}
+
+// GetCallerDeviceID returns the device the caller's session is bound to, the
+// way GetCallerJWTSubject returns the account: the id of a key the device
+// proved it holds, never a value the client stated. Empty when the session is
+// bound to no device.
+func (h *HostFunctions) GetCallerDeviceID(ctx context.Context) string {
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
+		return ""
+	}
+	return cur.CallerDeviceID
 }

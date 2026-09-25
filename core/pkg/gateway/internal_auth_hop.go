@@ -38,30 +38,35 @@ import (
 // captured from a harmless request cannot be replayed onto a different method,
 // path, namespace, subject or grant set.
 //
-// The MAC comes in two versions. v1 covers the fields above. v2 covers them and
-// the verified token's exp, iat and jti, which a namespace gateway needs to hold
-// an open WebSocket to the token that opened it: without them a socket proxied
-// from the main gateway had no expiry, and no revocation could reach it.
+// The MAC comes in versions, each covering what the one before did and more. v1
+// covers the fields above. v2 adds the verified token's exp, iat and jti, which
+// a namespace gateway needs to hold an open WebSocket to the token that opened
+// it: without them a socket proxied from the main gateway had no expiry, and no
+// revocation could reach it. v3 adds the device and session the token is bound
+// to.
 //
-// A signer stamps both, so a namespace gateway that predates v2 still accepts
-// what an upgraded main gateway sends it. A verifier checks v2 whenever it is
-// present, and v1 only when it is not — a hop from a main gateway that predates
-// v2, which exists only during a rolling upgrade. Such a hop has the fields v1
-// does not cover deleted, and hopTokenTimes gives its claims the most time a
-// token could have left, so a socket opened through it still ends.
+// A signer stamps every version, so a namespace gateway that predates the
+// newest still accepts what an upgraded main gateway sends it. A verifier
+// judges a request by the newest MAC it carries, with no second chance under an
+// older one, and deletes whatever that version does not cover before anything
+// reads it — so a hop from a main gateway that predates v2 or v3, which exists
+// only during a rolling upgrade, is believed exactly as far as it was signed.
+// hopTokenTimes gives a hop with no token times the most time a token could
+// have left, so a socket opened through it still ends.
 //
-// Accepting v1 gives nobody anything they did not have. Stripping the v2 MAC
-// off a genuine hop takes a position inside the WireGuard mesh, which is a
-// node, and every node holds the cluster secret the MAC is keyed from — so
-// whoever could downgrade a hop could sign one outright.
+// Accepting an older MAC gives nobody anything they did not have. Stripping the
+// newer MAC off a genuine hop takes a position inside the WireGuard mesh, which
+// is a node, and every node holds the cluster secret every version is keyed
+// from — so whoever could downgrade a hop could sign one outright.
 const (
 	// HeaderInternalAuthMAC authenticates the v1 fields. Its value is
 	// "<unix seconds>.<hex hmac>".
 	HeaderInternalAuthMAC = "X-Internal-Auth-MAC"
 
-	// HeaderInternalAuthMACv2 authenticates every X-Internal-Auth-* field, in
-	// the same format.
+	// HeaderInternalAuthMACv2 and HeaderInternalAuthMACv3 authenticate the v2
+	// and v3 fields, in the same format.
 	HeaderInternalAuthMACv2 = "X-Internal-Auth-MAC-V2"
+	HeaderInternalAuthMACv3 = "X-Internal-Auth-MAC-V3"
 
 	// HeaderInternalAuthJWTExp and HeaderInternalAuthJWTIat carry the verified
 	// token's exp and iat (unix seconds), HeaderInternalAuthJWTJti its jti.
@@ -69,6 +74,11 @@ const (
 	HeaderInternalAuthJWTExp = "X-Internal-Auth-JWT-Exp"
 	HeaderInternalAuthJWTIat = "X-Internal-Auth-JWT-Iat"
 	HeaderInternalAuthJWTJti = "X-Internal-Auth-JWT-Jti"
+
+	// HeaderInternalAuthJWTDid and HeaderInternalAuthJWTSid carry the device
+	// and session a verified token is bound to. Covered by the v3 MAC only.
+	HeaderInternalAuthJWTDid = "X-Internal-Auth-JWT-Did"
+	HeaderInternalAuthJWTSid = "X-Internal-Auth-JWT-Sid"
 
 	// internalAuthKeyPurpose is the HKDF domain separator for the hop key, so
 	// it is unrelated to the TURN, push and secrets keys derived from the same
@@ -80,19 +90,42 @@ const (
 	// drift between nodes, not network delay.
 	internalAuthMaxSkew = 60 * time.Second
 
-	// The version prefixes of the two payloads, so one cannot be confused with
-	// the other.
+	// The version prefixes of the payloads, so one cannot be confused with
+	// another.
 	internalAuthPayloadV1 = "orama-internal-auth-v1"
 	internalAuthPayloadV2 = "orama-internal-auth-v2"
+	internalAuthPayloadV3 = "orama-internal-auth-v3"
 )
 
-// internalAuthV2OnlyHeaders are the fields only the v2 MAC covers, in the
-// order the v2 payload lists them. A hop carrying only a v1 MAC has them
-// deleted before anything reads them.
-var internalAuthV2OnlyHeaders = []string{
-	HeaderInternalAuthJWTExp,
-	HeaderInternalAuthJWTIat,
-	HeaderInternalAuthJWTJti,
+// hopVersion is one version of the hop MAC: its payload prefix, the header it
+// travels in, and the fields it adds to the version before it.
+type hopVersion struct {
+	payload string
+	header  string
+	adds    []string
+}
+
+// hopVersions are every version, oldest first. A version covers its own
+// fields and every older version's; a payload lists them in this order.
+var hopVersions = []hopVersion{
+	{internalAuthPayloadV1, HeaderInternalAuthMAC, nil},
+	{internalAuthPayloadV2, HeaderInternalAuthMACv2,
+		[]string{HeaderInternalAuthJWTExp, HeaderInternalAuthJWTIat, HeaderInternalAuthJWTJti}},
+	{internalAuthPayloadV3, HeaderInternalAuthMACv3,
+		[]string{HeaderInternalAuthJWTDid, HeaderInternalAuthJWTSid}},
+}
+
+// internalAuthVersionedHeaders are the fields only a MAC newer than v1 covers.
+var internalAuthVersionedHeaders = headersAddedAfter(0)
+
+// headersAddedAfter lists the fields versions newer than hopVersions[v] add:
+// what a hop verified at version v did not authenticate.
+func headersAddedAfter(v int) []string {
+	var out []string
+	for _, version := range hopVersions[v+1:] {
+		out = append(out, version.adds...)
+	}
+	return out
 }
 
 // internalAuthKey derives the key both ends of a proxy hop use.
@@ -108,9 +141,9 @@ func internalAuthKey(clusterSecret string) ([]byte, error) {
 // Method and path are in it so a MAC observed on a GET cannot be replayed onto
 // a DELETE, and every field the receiving gateway trusts is in it so none can
 // be edited in flight.
-func internalAuthPayload(version, method, path string, h http.Header, ts int64) string {
+func internalAuthPayload(v int, method, path string, h http.Header, ts int64) string {
 	fields := []string{
-		version,
+		hopVersions[v].payload,
 		strings.ToUpper(method),
 		path,
 		h.Get(HeaderInternalAuthNamespace),
@@ -118,22 +151,23 @@ func internalAuthPayload(version, method, path string, h http.Header, ts int64) 
 		h.Get(HeaderInternalAuthJWTCustom),
 		h.Get(HeaderInternalAuthScopes),
 	}
-	if version == internalAuthPayloadV2 {
-		for _, name := range internalAuthV2OnlyHeaders {
+	for _, version := range hopVersions[1 : v+1] {
+		for _, name := range version.adds {
 			fields = append(fields, h.Get(name))
 		}
 	}
 	return strings.Join(append(fields, strconv.FormatInt(ts, 10)), "\n")
 }
 
-func internalAuthMAC(key []byte, version, method, path string, h http.Header, ts int64) []byte {
+func internalAuthMAC(key []byte, v int, method, path string, h http.Header, ts int64) []byte {
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(internalAuthPayload(version, method, path, h, ts)))
+	mac.Write([]byte(internalAuthPayload(v, method, path, h, ts)))
 	return mac.Sum(nil)
 }
 
-// signInternalAuthHeaders stamps both MACs over the internal-auth headers
-// already set on h. Call it last, after every X-Internal-Auth-* value is final.
+// signInternalAuthHeaders stamps every version's MAC over the internal-auth
+// headers already set on h. Call it last, after every X-Internal-Auth-* value
+// is final.
 func signInternalAuthHeaders(key []byte, h http.Header, method, path string, now time.Time) error {
 	if len(key) == 0 {
 		return fmt.Errorf("no internal-auth key: this gateway has no cluster secret, " +
@@ -142,30 +176,26 @@ func signInternalAuthHeaders(key []byte, h http.Header, method, path string, now
 
 	ts := now.Unix()
 	stamp := strconv.FormatInt(ts, 10) + "."
-	h.Set(HeaderInternalAuthMAC,
-		stamp+hex.EncodeToString(internalAuthMAC(key, internalAuthPayloadV1, method, path, h, ts)))
-	h.Set(HeaderInternalAuthMACv2,
-		stamp+hex.EncodeToString(internalAuthMAC(key, internalAuthPayloadV2, method, path, h, ts)))
+	for v, version := range hopVersions {
+		h.Set(version.header, stamp+hex.EncodeToString(internalAuthMAC(key, v, method, path, h, ts)))
+	}
 	return nil
 }
 
 // verifyInternalAuthHeaders reports whether the internal-auth headers on this
 // request were stamped by a gateway holding the cluster secret.
 //
-// A request carrying a v2 MAC is judged by it alone, with no second chance
-// under v1. It answers false for every reason: no key configured on this side,
-// no MAC, a malformed MAC, a stale or future timestamp, or a MAC over different
-// values than the headers now carry.
+// A request is judged by the newest MAC it carries alone, with no second chance
+// under an older one. It answers false for every reason: no key configured on
+// this side, no MAC, a malformed MAC, a stale or future timestamp, or a MAC
+// over different values than the headers now carry.
 func verifyInternalAuthHeaders(key []byte, r *http.Request, now time.Time) bool {
 	if len(key) == 0 {
 		return false
 	}
-	version, header := internalAuthPayloadV2, HeaderInternalAuthMACv2
-	if !hasInternalAuthMACv2(r.Header) {
-		version, header = internalAuthPayloadV1, HeaderInternalAuthMAC
-	}
+	v := newestHopVersion(r.Header)
 
-	raw := strings.TrimSpace(r.Header.Get(header))
+	raw := strings.TrimSpace(r.Header.Get(hopVersions[v].header))
 	stamp, sig, ok := strings.Cut(raw, ".")
 	if !ok {
 		return false
@@ -183,7 +213,18 @@ func verifyInternalAuthHeaders(key []byte, r *http.Request, now time.Time) bool 
 	if err != nil {
 		return false
 	}
-	return hmac.Equal(presented, internalAuthMAC(key, version, r.Method, r.URL.Path, r.Header, ts))
+	return hmac.Equal(presented, internalAuthMAC(key, v, r.Method, r.URL.Path, r.Header, ts))
+}
+
+// newestHopVersion is the newest version whose MAC a request carries; v1 when
+// it carries none, which then fails to verify.
+func newestHopVersion(h http.Header) int {
+	for v := len(hopVersions) - 1; v > 0; v-- {
+		if strings.TrimSpace(h.Get(hopVersions[v].header)) != "" {
+			return v
+		}
+	}
+	return 0
 }
 
 // hopTokenTimes reads the forwarded token's exp and iat.
@@ -218,10 +259,6 @@ func hopTokenTimes(h http.Header, now time.Time) (exp, iat int64, err error) {
 	return exp, iat, nil
 }
 
-func hasInternalAuthMACv2(h http.Header) bool {
-	return strings.TrimSpace(h.Get(HeaderInternalAuthMACv2)) != ""
-}
-
 // internalAuthMiddleware is the first thing every request meets.
 //
 // Headers that arrived without a valid MAC are deleted before any other
@@ -231,25 +268,25 @@ func hasInternalAuthMACv2(h http.Header) bool {
 // and goes on to authenticate normally or be refused for having no credential.
 func (g *Gateway) internalAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case !verifyInternalAuthHeaders(g.internalAuthKey, r, time.Now()):
+		if verifyInternalAuthHeaders(g.internalAuthKey, r, time.Now()) {
+			// A hop from an older gateway authenticated only its version's
+			// fields; anything newer it carries is not read.
+			for _, name := range headersAddedAfter(newestHopVersion(r.Header)) {
+				r.Header.Del(name)
+			}
+		} else {
 			if r.Header.Get(HeaderInternalAuthValidated) != "" {
 				g.logger.ComponentWarn("gateway", "dropped unauthenticated internal-auth headers",
 					zap.String("path", r.URL.Path),
 					zap.String("remote", remoteAddrIP(r)))
 			}
 			stripInboundInternalAuthHeaders(r.Header)
-		case !hasInternalAuthMACv2(r.Header):
-			// A v1 hop authenticated only the v1 fields; anything else it
-			// carries is not read.
-			for _, name := range internalAuthV2OnlyHeaders {
-				r.Header.Del(name)
-			}
 		}
 		// The MACs have served their purpose and must not travel further: a
 		// deployed app or an outbound proxy target has no business seeing them.
-		r.Header.Del(HeaderInternalAuthMAC)
-		r.Header.Del(HeaderInternalAuthMACv2)
+		for _, version := range hopVersions {
+			r.Header.Del(version.header)
+		}
 		next.ServeHTTP(w, r)
 	})
 }

@@ -89,6 +89,19 @@ type DeviceAuthorization struct {
 // codes: the secret one for the machine that waits, the short one for the
 // human who approves.
 func (s *Service) StartDeviceAuthorization(ctx context.Context, namespace string) (*DeviceAuthorization, error) {
+	return s.startDeviceAuthorization(ctx, namespace, deviceLink{})
+}
+
+// deviceLink is what a keyed pending login carries: the key the session will
+// be bound to, what the user calls the device, and — when a wallet signature
+// already named the account — the account.
+type deviceLink struct {
+	key     *DeviceKey
+	label   string
+	subject string
+}
+
+func (s *Service) startDeviceAuthorization(ctx context.Context, namespace string, link deviceLink) (*DeviceAuthorization, error) {
 	db, err := s.deviceDB()
 	if err != nil {
 		return nil, err
@@ -116,11 +129,16 @@ func (s *Service) StartDeviceAuthorization(ctx context.Context, namespace string
 		ns = strings.ToLower(trimmed)
 	}
 
+	var deviceKey any
+	if link.key != nil {
+		deviceKey = link.key.JWK()
+	}
 	expires := time.Now().Add(DeviceCodeLifetime).UTC()
 	if _, err := db.Query(client.WithInternalAuth(ctx),
-		`INSERT INTO device_authorizations(device_code, user_code, namespace, expires_at)
-		 VALUES (?, ?, ?, ?)`,
-		sha256Hex(deviceCode), userCode, ns, expires.Format(sqliteTime)); err != nil {
+		`INSERT INTO device_authorizations(device_code, user_code, namespace, expires_at, device_key, device_label, subject)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		sha256Hex(deviceCode), userCode, ns, expires.Format(sqliteTime),
+		deviceKey, nullable(cleanDeviceLabel(link.label)), nullable(link.subject)); err != nil {
 		return nil, fmt.Errorf("record the pending login: %w", err)
 	}
 
@@ -139,6 +157,12 @@ type PendingDeviceAuthorization struct {
 	Namespace string
 	CreatedAt string
 	ExpiresAt time.Time
+	// DeviceKey is the JWK of the device the session will be bound to, or ""
+	// for a login bound to the account alone.
+	DeviceKey string
+	// Subject is the account the login is for, when a wallet signature
+	// already named it; "" until approved otherwise.
+	Subject string
 }
 
 // LookupDeviceAuthorization returns the pending login a user code names, so
@@ -154,12 +178,13 @@ func (s *Service) LookupDeviceAuthorization(ctx context.Context, userCode string
 	}
 
 	res, err := db.Query(client.WithInternalAuth(ctx),
-		`SELECT namespace, created_at, expires_at, approved_at, denied_at, claimed_at
+		`SELECT namespace, created_at, expires_at, approved_at, denied_at, claimed_at,
+		        COALESCE(device_key, ''), COALESCE(subject, '')
 		   FROM device_authorizations WHERE user_code = ? LIMIT 1`, code)
 	if err != nil {
 		return nil, fmt.Errorf("read the pending login: %w", err)
 	}
-	if res == nil || len(res.Rows) == 0 || len(res.Rows[0]) < 6 {
+	if res == nil || len(res.Rows) == 0 || len(res.Rows[0]) < 8 {
 		return nil, ErrDeviceCodeUnknown
 	}
 	row := res.Rows[0]
@@ -181,6 +206,8 @@ func (s *Service) LookupDeviceAuthorization(ctx context.Context, userCode string
 		Namespace: getStringVal(row[0]),
 		CreatedAt: getStringVal(row[1]),
 		ExpiresAt: expires,
+		DeviceKey: getStringVal(row[6]),
+		Subject:   getStringVal(row[7]),
 	}, nil
 }
 
@@ -198,6 +225,9 @@ func (s *Service) ApproveDeviceAuthorization(ctx context.Context, userCode, wall
 	pending, err := s.LookupDeviceAuthorization(ctx, code)
 	if err != nil {
 		return err
+	}
+	if pending.DeviceKey != "" {
+		return ErrDeviceLinkNeedsDevice
 	}
 	// A machine that asked for one namespace must not be handed a session in
 	// another: it will use the session for whatever it was going to do there.
@@ -229,7 +259,8 @@ func (s *Service) recordApproval(ctx context.Context, userCode, wallet, namespac
 	res, err := s.db.Exec(client.WithInternalAuth(ctx),
 		`UPDATE device_authorizations
 		    SET approved_at = datetime('now'), subject = ?, namespace = ?
-		  WHERE user_code = ? AND approved_at IS NULL AND denied_at IS NULL AND claimed_at IS NULL`,
+		  WHERE user_code = ? AND device_key IS NULL
+		    AND approved_at IS NULL AND denied_at IS NULL AND claimed_at IS NULL`,
 		wallet, strings.ToLower(namespace), userCode)
 	if err != nil {
 		return false, fmt.Errorf("approve the pending login: %w", err)
@@ -239,8 +270,9 @@ func (s *Service) recordApproval(ctx context.Context, userCode, wallet, namespac
 }
 
 // DenyDeviceAuthorization refuses a pending login, so the machine waiting on it
-// stops rather than polling out its ten minutes.
-func (s *Service) DenyDeviceAuthorization(ctx context.Context, userCode string) error {
+// stops rather than polling out its ten minutes. A device link a wallet
+// signature already tied to an account is that account's to refuse.
+func (s *Service) DenyDeviceAuthorization(ctx context.Context, userCode, wallet string) error {
 	code, err := NormalizeUserCode(userCode)
 	if err != nil {
 		return err
@@ -250,8 +282,9 @@ func (s *Service) DenyDeviceAuthorization(ctx context.Context, userCode string) 
 	}
 	res, err := s.db.Exec(client.WithInternalAuth(ctx),
 		`UPDATE device_authorizations SET denied_at = datetime('now')
-		  WHERE user_code = ? AND approved_at IS NULL AND denied_at IS NULL AND claimed_at IS NULL`,
-		code)
+		  WHERE user_code = ? AND approved_at IS NULL AND denied_at IS NULL AND claimed_at IS NULL
+		    AND (subject IS NULL OR subject = ?)`,
+		code, NormalizeWallet(wallet))
 	if err != nil {
 		return fmt.Errorf("refuse the pending login: %w", err)
 	}
@@ -284,6 +317,11 @@ func (s *Service) claimApproval(ctx context.Context, hashedDeviceCode string) (b
 type ClaimedDeviceAuthorization struct {
 	Subject   string
 	Namespace string
+	// DeviceKey, DeviceLabel and ApprovedByDevice describe the device a keyed
+	// login binds; all "" for a login bound to the account alone.
+	DeviceKey        string
+	DeviceLabel      string
+	ApprovedByDevice string
 }
 
 // ClaimDeviceAuthorization is the waiting machine's poll.
@@ -291,7 +329,12 @@ type ClaimedDeviceAuthorization struct {
 // It returns one of the RFC's outcomes and, exactly once, the approval. The
 // claim is a CAS on claimed_at: a device code collects a session once, so a
 // code read from a log or a shell history collects nothing.
-func (s *Service) ClaimDeviceAuthorization(ctx context.Context, deviceCode string) (*ClaimedDeviceAuthorization, error) {
+//
+// check runs on an approved login before it is collected, and a failure
+// leaves it uncollected. A keyed login is checked for the device's proof
+// there, so a device code alone — without the key it was issued to — neither
+// collects the session nor uses it up.
+func (s *Service) ClaimDeviceAuthorization(ctx context.Context, deviceCode string, check func(*ClaimedDeviceAuthorization) error) (*ClaimedDeviceAuthorization, error) {
 	db, err := s.deviceDB()
 	if err != nil {
 		return nil, err
@@ -302,12 +345,13 @@ func (s *Service) ClaimDeviceAuthorization(ctx context.Context, deviceCode strin
 	hashed := sha256Hex(strings.TrimSpace(deviceCode))
 
 	res, err := db.Query(client.WithInternalAuth(ctx),
-		`SELECT subject, namespace, approved_at, denied_at, claimed_at, expires_at, last_polled_at
+		`SELECT subject, namespace, approved_at, denied_at, claimed_at, expires_at, last_polled_at,
+		        COALESCE(device_key, ''), COALESCE(device_label, ''), COALESCE(approved_by_device, '')
 		   FROM device_authorizations WHERE device_code = ? LIMIT 1`, hashed)
 	if err != nil {
 		return nil, fmt.Errorf("read the pending login: %w", err)
 	}
-	if res == nil || len(res.Rows) == 0 || len(res.Rows[0]) < 7 {
+	if res == nil || len(res.Rows) == 0 || len(res.Rows[0]) < 10 {
 		return nil, ErrDeviceCodeUnknown
 	}
 	row := res.Rows[0]
@@ -337,6 +381,19 @@ func (s *Service) ClaimDeviceAuthorization(ctx context.Context, deviceCode strin
 		return nil, ErrDeviceAuthorizationPending
 	}
 
+	claimed := &ClaimedDeviceAuthorization{
+		Subject:          getStringVal(row[0]),
+		Namespace:        getStringVal(row[1]),
+		DeviceKey:        getStringVal(row[7]),
+		DeviceLabel:      getStringVal(row[8]),
+		ApprovedByDevice: getStringVal(row[9]),
+	}
+	if check != nil {
+		if err := check(claimed); err != nil {
+			return nil, err
+		}
+	}
+
 	won, err := s.claimApproval(ctx, hashed)
 	if err != nil {
 		return nil, err
@@ -344,11 +401,7 @@ func (s *Service) ClaimDeviceAuthorization(ctx context.Context, deviceCode strin
 	if !won {
 		return nil, ErrDeviceCodeUnknown
 	}
-
-	return &ClaimedDeviceAuthorization{
-		Subject:   getStringVal(row[0]),
-		Namespace: getStringVal(row[1]),
-	}, nil
+	return claimed, nil
 }
 
 // pruneDeviceAuthorizations removes the rows nobody came back for.

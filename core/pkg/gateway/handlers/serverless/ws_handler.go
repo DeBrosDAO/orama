@@ -181,6 +181,7 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	// the JWT context is request-scoped and won't survive past upgrade.
 	callerClaims := h.getCallerClaimsFromRequest(r)
 	callerJWTSubject := h.getJWTSubjectFromRequest(r)
+	callerDeviceID := h.getDeviceIDFromRequest(r)
 
 	// Message loop
 	for {
@@ -208,6 +209,7 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 			CallerIP:         callerIP,
 			CallerClaims:     callerClaims,
 			CallerJWTSubject: callerJWTSubject,
+			CallerDeviceID:   callerDeviceID,
 			WSClientID:       clientID,
 		}
 

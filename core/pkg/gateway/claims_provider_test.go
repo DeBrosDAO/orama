@@ -225,3 +225,18 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// feat-422: the device and session a token is bound to are the gateway's to
+// set. A provider that could put "did" in the custom claims could make
+// get_caller_claim("did") name a device the caller never proved it holds.
+func TestSanitizeProviderClaims_dropsTheSessionBinding(t *testing.T) {
+	out := sanitizeProviderClaims([]byte(`{"did":"forged","sid":"forged","jti":"forged","account_id":"u-1"}`))
+	for _, k := range []string{"did", "sid", "jti"} {
+		if _, present := out[k]; present {
+			t.Errorf("reserved key %q survived: %v", k, out)
+		}
+	}
+	if out["account_id"] != "u-1" {
+		t.Errorf("legitimate claim dropped: %v", out)
+	}
+}

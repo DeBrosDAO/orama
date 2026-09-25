@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -47,6 +48,7 @@ func (h *Handlers) SessionsHandler(w http.ResponseWriter, r *http.Request) {
 			"audience":   session.Audience,
 			"created_at": formatSessionTime(session.CreatedAt),
 			"expires_at": formatSessionTime(session.ExpiresAt),
+			"device_id":  session.DeviceID,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -78,9 +80,16 @@ func (h *Handlers) SessionByIDHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	claims, _ := r.Context().Value(CtxKeyJWT).(*authsvc.JWTClaims)
+	if !h.requireCallerDeviceProof(w, r, namespace, claims, authsvc.DeviceProofEndSession, strconv.FormatInt(id, 10)) {
+		return
+	}
 
-	if err := h.authService.EndSession(r.Context(), namespace, subject, id); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+	// A session that predates session ids is ended too; it just cannot be
+	// ended all at once, and the response says so.
+	endErr := h.authService.EndSession(r.Context(), namespace, subject, id)
+	if endErr != nil && !errors.Is(endErr, authsvc.ErrSessionTokensOutlive) {
+		writeError(w, http.StatusNotFound, endErr.Error())
 		return
 	}
 
@@ -92,11 +101,11 @@ func (h *Handlers) SessionByIDHandler(w http.ResponseWriter, r *http.Request) {
 		Metadata:  map[string]string{"session": strconv.FormatInt(id, 10)},
 	})
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "ended",
-		"id":      id,
-		"warning": "an access token already minted from this session keeps working until it expires, at most " + authsvc.AccessTokenLifetime.String(),
-	})
+	body := map[string]any{"status": "ended", "id": id}
+	if endErr != nil {
+		body["warning"] = endErr.Error()
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // sessionOwner is whose sessions these are.

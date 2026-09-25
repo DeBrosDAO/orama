@@ -152,6 +152,18 @@ func (h *ServerlessHandlers) getJWTSubjectFromRequest(r *http.Request) string {
 	return strings.TrimSpace(claims.Sub)
 }
 
+// getDeviceIDFromRequest returns the device the caller's session is bound to —
+// the verified token's `did` — or "" when there is none. This is the source of
+// truth for `get_caller_device_id` inside WASM, as getJWTSubjectFromRequest is
+// for the account.
+func (h *ServerlessHandlers) getDeviceIDFromRequest(r *http.Request) string {
+	claims, _ := r.Context().Value(ctxkeys.JWT).(*auth.JWTClaims)
+	if claims == nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.Did)
+}
+
 // getJWTClaimsFromRequest returns the verified token claims the request was
 // authorized with, or nil for an API key or no credential. A WebSocket is
 // registered with these, so it is held to the token's expiry and revocation

@@ -173,8 +173,14 @@ func (h *Handlers) RefreshHandler(w http.ResponseWriter, r *http.Request) {
 	// Every successful refresh mints a NEW refresh token and revokes the
 	// supplied one atomically. The response carries the rotated value;
 	// the SDK persists it (bug #239 fix) and uses it on the next refresh.
-	token, newRefreshToken, subject, expUnix, err := h.authService.RefreshToken(r.Context(), req.RefreshToken, req.Namespace)
+	token, newRefreshToken, subject, expUnix, err := h.authService.RefreshToken(r.Context(), req.RefreshToken, req.Namespace, req.DeviceProof)
 	if err != nil {
+		// A device-bound session refused for the device's sake says so: the
+		// client's next move — sign a proof, or accept that this device is
+		// done — depends on which it was.
+		if writeDeviceRefusal(w, err) {
+			return
+		}
 		// Bugboard #125: a TRANSIENT rotation failure (rqlite leader briefly
 		// unavailable during a rolling restart) must surface as a retryable
 		// 503 — NOT a 401 — so the client retries within the call-ring window

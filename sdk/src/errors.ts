@@ -141,6 +141,28 @@ export const AuthCode = {
    * three: ask for a new one.
    */
   ChallengeInvalid: "AUTH_CHALLENGE_INVALID",
+
+  // --- Sessions bound to a device ------------------------------------------
+  /** The namespace requires sessions bound to a device; sign in with a device key. */
+  DeviceRequired: "DEVICE_REQUIRED",
+  /** The device key is not a P-256 or Ed25519 public JWK, or not the device the message names. */
+  DeviceKeyInvalid: "DEVICE_KEY_INVALID",
+  /** The device's signature over the sign-in message does not verify. */
+  DeviceSignatureInvalid: "DEVICE_SIGNATURE_INVALID",
+  /** A device-bound credential was sent without the device's proof. */
+  DeviceProofRequired: "DEVICE_PROOF_REQUIRED",
+  /** The device proof is stale, reused, or not the device's. Make a fresh one. */
+  DeviceProofInvalid: "DEVICE_PROOF_INVALID",
+  /** The device was revoked; its key can never hold a session again. */
+  DeviceRevoked: "DEVICE_REVOKED",
+  /** The device waits for another of the account's devices to approve it. */
+  DevicePending: "DEVICE_PENDING",
+  /** The account has no such device. */
+  DeviceNotFound: "DEVICE_NOT_FOUND",
+  /** The device key is enrolled for another account. */
+  DeviceKeyTaken: "DEVICE_KEY_TAKEN",
+  /** The session policy is set, but revoking existing sign-in keys stopped partway. Repeat the request. */
+  PolicySweepIncomplete: "POLICY_SWEEP_INCOMPLETE",
 } as const;
 
 export type AuthCode = (typeof AuthCode)[keyof typeof AuthCode];

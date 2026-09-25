@@ -348,6 +348,13 @@ type InvocationContext struct {
 	// not JWT-authenticated. Bug #215.
 	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
 
+	// CallerDeviceID is the device the caller's session is bound to: the
+	// RFC 7638 thumbprint of a key the device proved it holds when the session
+	// was issued, carried as the token's `did`. Empty for a session bound to
+	// the account alone, an API key, or no credential. Read via host fn
+	// `get_caller_device_id`; like the subject, it is set only by the gateway.
+	CallerDeviceID string `json:"caller_device_id,omitempty"`
+
 	// TriggerDepth is the recursion-depth bucket for trigger-driven
 	// invocations. 0 means a top-level (HTTP/WS/cron) invocation; each
 	// PubSub-trigger-driven invocation increments it. The host-fn
@@ -712,6 +719,9 @@ type HostServices interface {
 	// the JWT-signed identity (e.g. signup-time wallet ownership checks)
 	// and the caller may ALSO present an API key. Bug #215.
 	GetCallerJWTSubject(ctx context.Context) string
+	// GetCallerDeviceID returns the device the caller's session is bound to,
+	// or empty when it is bound to none.
+	GetCallerDeviceID(ctx context.Context) string
 
 	// Job operations
 	EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error)

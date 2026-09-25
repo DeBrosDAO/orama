@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -65,6 +66,11 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.DeviceID != "" && !authsvc.ValidDeviceID(req.DeviceID) {
+		writeDeviceRefusal(w, fmt.Errorf("%w: device_id must be the base64url RFC 7638 thumbprint of the device key",
+			authsvc.ErrDeviceKeyInvalid))
+		return
+	}
 	challenge, err := h.authService.CreateChallenge(r.Context(), authsvc.ChallengeParams{
 		Wallet:    req.Wallet,
 		Purpose:   req.Purpose,
@@ -72,6 +78,7 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		Chain:     chain,
 		Domain:    domain,
 		URI:       uri,
+		DeviceID:  req.DeviceID,
 	})
 	if err != nil {
 		h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{

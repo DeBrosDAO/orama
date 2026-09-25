@@ -102,6 +102,15 @@ func (g *Gateway) Routes() http.Handler {
 		// Which machines are signed in as you, and ending one of them.
 		mux.HandleFunc("/v1/auth/sessions", g.authHandlers.SessionsHandler)
 		mux.HandleFunc("/v1/auth/sessions/", g.authHandlers.SessionByIDHandler)
+		// The devices an account's sessions are bound to: list, revoke, and
+		// approve a device link from one of them.
+		mux.HandleFunc("/v1/auth/devices", g.authHandlers.DevicesHandler)
+		mux.HandleFunc("/v1/auth/devices/", g.authHandlers.DeviceByIDHandler)
+		// What a sign-in in this namespace must prove.
+		mux.HandleFunc("/v1/namespace/session-policy", g.authHandlers.SessionPolicyHandler)
+		// An operator revoking a user's device the user can no longer reach.
+		mux.HandleFunc("/v1/namespace/devices", g.authHandlers.NamespaceDevicesHandler)
+		mux.HandleFunc("/v1/namespace/devices/", g.authHandlers.NamespaceDeviceByIDHandler)
 		mux.HandleFunc("/v1/audit", g.authHandlers.AuditHandler)
 	}
 

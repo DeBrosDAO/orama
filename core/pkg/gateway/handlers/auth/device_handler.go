@@ -37,11 +37,18 @@ type DeviceAuthorizationRequest struct {
 	// Namespace the waiting machine wants a session in. Optional: omitted
 	// means whichever namespace the approver signs in to.
 	Namespace string `json:"namespace"`
+	// DeviceKey is the waiting device's public JWK. With one, the login is a
+	// device link: approved from one of the account's signed-in devices, and
+	// collected as a session bound to this key.
+	DeviceKey   json.RawMessage `json:"device_key,omitempty"`
+	DeviceLabel string          `json:"device_label,omitempty"`
 }
 
-// DeviceTokenRequest collects an approved login.
+// DeviceTokenRequest collects an approved login. A device link is collected
+// with the device's proof over the device code.
 type DeviceTokenRequest struct {
-	DeviceCode string `json:"device_code"`
+	DeviceCode  string               `json:"device_code"`
+	DeviceProof *authsvc.DeviceProof `json:"device_proof,omitempty"`
 }
 
 // DeviceApprovalRequest approves or refuses a pending login. See VerifyRequest
@@ -74,9 +81,11 @@ func (h *Handlers) DeviceAuthorizationHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	pending, err := h.authService.StartDeviceAuthorization(r.Context(), req.Namespace)
+	pending, deviceID, err := h.startPendingLogin(r.Context(), req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		if !writeDeviceRefusal(w, err) {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 
@@ -86,12 +95,16 @@ func (h *Handlers) DeviceAuthorizationHandler(w http.ResponseWriter, r *http.Req
 		Result:    authsvc.AuditSuccess,
 	})
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"device_code": pending.DeviceCode,
 		"user_code":   pending.UserCode,
 		"expires_in":  int(time.Until(pending.ExpiresAt).Seconds()),
 		"interval":    pending.Interval,
-	})
+	}
+	if deviceID != "" {
+		body["device_id"] = deviceID
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // DeviceApprovalHandler approves or refuses a pending login.
@@ -126,12 +139,23 @@ func (h *Handlers) DeviceApprovalHandler(w http.ResponseWriter, r *http.Request)
 		writeCredentialError(w, in.Namespace, err)
 		return
 	}
+	// Approving a plain login hands the waiting machine a session bound to no
+	// device, which a namespace requiring device-bound sessions refuses. (A
+	// device link is refused here regardless: a device approves those.)
+	if !req.Deny && !h.requireNoDevicePolicy(w, r, in.Namespace, in.Wallet) {
+		return
+	}
 
+	// Approving and refusing are one or the other. A refusal used to run the
+	// approval first, so "deny" left the login approved — and, once approving
+	// had a policy check, skipped the check it was exempt from.
 	action := authsvc.AuditDeviceLoginApproved
-	err := h.authService.ApproveDeviceAuthorization(ctx, req.UserCode, in.Wallet, in.Namespace)
+	var err error
 	if req.Deny {
 		action = authsvc.AuditDeviceLoginDenied
-		err = h.authService.DenyDeviceAuthorization(ctx, req.UserCode)
+		err = h.authService.DenyDeviceAuthorization(ctx, req.UserCode, in.Wallet)
+	} else {
+		err = h.authService.ApproveDeviceAuthorization(ctx, req.UserCode, in.Wallet, in.Namespace)
 	}
 	if err != nil {
 		h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
@@ -179,16 +203,22 @@ func (h *Handlers) DeviceTokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	claimed, err := h.authService.ClaimDeviceAuthorization(ctx, req.DeviceCode)
+	// A device link binds the session to the waiting device, which becomes one
+	// of the account's active devices as the login is collected.
+	var deviceID string
+	claimed, err := h.authService.ClaimDeviceAuthorization(ctx, req.DeviceCode,
+		h.claimCheck(ctx, req.DeviceCode, req.DeviceProof, &deviceID))
 	if err != nil {
-		writeDeviceError(w, err)
+		if !writeDeviceRefusal(w, err) {
+			writeDeviceError(w, err)
+		}
 		return
 	}
 
 	// A session, not a key. The whole reason this flow exists is that the
 	// documented way onto a server was a permanent key in an environment
 	// variable; handing one back here would rebuild that by another route.
-	token, refresh, expUnix, err := h.authService.IssueTokens(ctx, claimed.Subject, claimed.Namespace)
+	token, refresh, expUnix, err := h.authService.IssueDeviceTokens(ctx, claimed.Subject, claimed.Namespace, deviceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -201,14 +231,18 @@ func (h *Handlers) DeviceTokenHandler(w http.ResponseWriter, r *http.Request) {
 		Result:    authsvc.AuditSuccess,
 	})
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"access_token":  token,
 		"token_type":    "Bearer",
 		"expires_in":    int(expUnix - time.Now().Unix()),
 		"refresh_token": refresh,
 		"subject":       claimed.Subject,
 		"namespace":     claimed.Namespace,
-	})
+	}
+	if deviceID != "" {
+		body["device_id"] = deviceID
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // deviceReady refuses anything this endpoint cannot honour, before it reads a

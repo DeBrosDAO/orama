@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -146,6 +147,10 @@ func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes st
 // revocation would stop applying while a token it covers is still valid.
 const maxExchangedTokenLifetime = 1 * time.Hour
 
+// ErrNoActiveKey is a key id that names no unrevoked key in the namespace:
+// never issued there, or already revoked.
+var ErrNoActiveKey = errors.New("no active key")
+
 // RevokeKey soft-revokes a single key by id within a namespace (bugboard #148).
 // Revocation sets revoked_at (so the audit trail survives) and drops the
 // ownership row; the key lookup filters revoked_at IS NULL, so the key stops
@@ -169,7 +174,7 @@ func (s *Service) RevokeKey(ctx context.Context, namespace string, id int64) err
 		return fmt.Errorf("failed to look up key %d: %w", id, err)
 	}
 	if sel == nil || sel.Count == 0 || len(sel.Rows) == 0 || len(sel.Rows[0]) == 0 {
-		return fmt.Errorf("no active key with id %d in namespace %q", id, namespace)
+		return fmt.Errorf("%w with id %d in namespace %q", ErrNoActiveKey, id, namespace)
 	}
 	hashedKey := getStringVal(sel.Rows[0][0])
 

@@ -294,3 +294,25 @@ func TestSweepInterval_isTheRevocationListsStaleness(t *testing.T) {
 		t.Errorf("SweepInterval = %s, want the revocation list's %s", SweepInterval, auth.RevocationRefreshInterval)
 	}
 }
+
+// feat-422: a refresh keeps the device too. The function was told which
+// device is calling, and revoking that device must reach this socket.
+func TestRefresh_refusesAnotherDevice(t *testing.T) {
+	r := NewRegistry(nil)
+	opened := token("a", now.Add(time.Minute))
+	opened.Did = "device-1"
+	s := r.Register(opened, (&closeLog{}).closer())
+
+	for name, did := range map[string]string{"another device": "device-2", "no device": ""} {
+		next := token("b", now.Add(time.Hour))
+		next.Did = did
+		if err := s.Refresh(next); !errors.Is(err, ErrDeviceChanged) {
+			t.Errorf("%s: refresh returned %v, want ErrDeviceChanged", name, err)
+		}
+	}
+	same := token("c", now.Add(time.Hour))
+	same.Did = "device-1"
+	if err := s.Refresh(same); err != nil {
+		t.Errorf("a refresh from the same device was refused: %v", err)
+	}
+}

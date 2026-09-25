@@ -31,6 +31,9 @@ type RqliteDeviceStore struct {
 	fpKey  []byte // derived once at construction (token fingerprint, bugboard #981)
 	holder *secrets.Holder
 	logger *zap.Logger
+	// revokedDevices says which session devices are revoked. Registrations
+	// made from one are neither listed nor sent to, and are removed.
+	revokedDevices SessionDeviceGate
 }
 
 // SetHolder lets a rotate take effect without restarting this process.
@@ -76,6 +79,8 @@ type deviceRow struct {
 	CreatedAt      int64
 	UpdatedAt      int64
 	LastSeen       int64
+	// SessionDeviceID is the session device a registration was made from.
+	SessionDeviceID string
 }
 
 // idRow is the scan target for resolving a row's id after an upsert.
@@ -132,8 +137,8 @@ func (s *RqliteDeviceStore) Upsert(ctx context.Context, dev PushDevice) (string,
 	query := `
 		INSERT INTO push_devices
 			(id, namespace, user_id, device_id, provider, token_encrypted, token_fp,
-			 platform, app_version, created_at, updated_at, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 platform, app_version, created_at, updated_at, last_seen, session_device_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(namespace, user_id, device_id) DO UPDATE SET
 			provider = excluded.provider,
 			token_encrypted = excluded.token_encrypted,
@@ -141,11 +146,12 @@ func (s *RqliteDeviceStore) Upsert(ctx context.Context, dev PushDevice) (string,
 			platform = excluded.platform,
 			app_version = excluded.app_version,
 			updated_at = excluded.updated_at,
-			last_seen = excluded.last_seen
+			last_seen = excluded.last_seen,
+			session_device_id = excluded.session_device_id
 	`
 	_, err = s.db.Exec(ctx, query,
 		id, dev.Namespace, dev.UserID, dev.DeviceID, dev.Provider, encToken, tokenFP,
-		dev.Platform, dev.AppVer, dev.CreatedAt, dev.UpdatedAt, dev.LastSeen,
+		dev.Platform, dev.AppVer, dev.CreatedAt, dev.UpdatedAt, dev.LastSeen, nullableString(dev.SessionDeviceID),
 	)
 	if err != nil {
 		return "", fmt.Errorf("upsert push device: %w", err)
@@ -290,13 +296,18 @@ func (s *RqliteDeviceStore) ListForUser(ctx context.Context, namespace, userID s
 	query := `
 		SELECT id, namespace, user_id, device_id, provider, token_encrypted,
 			COALESCE(platform, ''), COALESCE(app_version, ''),
-			created_at, updated_at, COALESCE(last_seen, 0)
+			created_at, updated_at, COALESCE(last_seen, 0),
+			COALESCE(session_device_id, '') AS session_device_id
 		FROM push_devices
 		WHERE namespace = ? AND user_id = ?
 	`
 	var rows []deviceRow
 	if err := s.db.Query(ctx, &rows, query, namespace, userID); err != nil {
 		return nil, fmt.Errorf("query push devices: %w", err)
+	}
+	rows, err := s.dropRevokedDeviceRows(ctx, namespace, rows)
+	if err != nil {
+		return nil, err
 	}
 
 	out := make([]PushDevice, 0, len(rows))
@@ -320,6 +331,8 @@ func (s *RqliteDeviceStore) ListForUser(ctx context.Context, namespace, userID s
 			CreatedAt: r.CreatedAt,
 			UpdatedAt: r.UpdatedAt,
 			LastSeen:  r.LastSeen,
+
+			SessionDeviceID: r.SessionDeviceID,
 		})
 	}
 	return out, nil

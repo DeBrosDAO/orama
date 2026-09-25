@@ -140,6 +140,15 @@ func setInternalAuthJWTHeaders(h http.Header, claims *auth.JWTClaims) {
 	if jti := strings.TrimSpace(claims.Jti); jti != "" {
 		h.Set(HeaderInternalAuthJWTJti, jti)
 	}
+	// The device and session the token is bound to, so the namespace gateway
+	// can hand the device to the function and refuse the socket when either
+	// is revoked.
+	if did := strings.TrimSpace(claims.Did); did != "" {
+		h.Set(HeaderInternalAuthJWTDid, did)
+	}
+	if sid := strings.TrimSpace(claims.Sid); sid != "" {
+		h.Set(HeaderInternalAuthJWTSid, sid)
+	}
 }
 
 // stripInboundInternalAuthHeaders deletes the X-Internal-Auth-* headers from
@@ -163,7 +172,7 @@ func stripInboundInternalAuthHeaders(h http.Header) {
 	h.Del(HeaderInternalAuthJWTSub)
 	h.Del(HeaderInternalAuthJWTCustom)
 	h.Del(HeaderInternalAuthScopes)
-	for _, name := range internalAuthV2OnlyHeaders {
+	for _, name := range internalAuthVersionedHeaders {
 		h.Del(name)
 	}
 }
@@ -219,6 +228,8 @@ func claimsFromInternalAuthHeaders(h http.Header, namespace string, now time.Tim
 		Sub:       sub,
 		Namespace: namespace,
 		Jti:       strings.TrimSpace(h.Get(HeaderInternalAuthJWTJti)),
+		Did:       strings.TrimSpace(h.Get(HeaderInternalAuthJWTDid)),
+		Sid:       strings.TrimSpace(h.Get(HeaderInternalAuthJWTSid)),
 		Exp:       exp,
 		Iat:       iat,
 	}

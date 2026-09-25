@@ -1,0 +1,189 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth/siw"
+)
+
+// Seedless linking: a device with no wallet on it is signed in to the account by
+// one of the account's devices, and the session it collects is bound to its
+// own key.
+func TestDeviceLink_anActiveDeviceSignsANewOneIn(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
+	phone, laptop := p256Device(t), ed25519Device(t)
+	approver := mustEnrol(t, s, deviceOwner, phone, DeviceStateActive)
+
+	laptopKey, _ := ParseDeviceKey([]byte(laptop.jwk))
+	pending, err := s.StartDeviceLink(ctx, "anchat", "", laptopKey, "laptop")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// A wallet signature does not approve a device link.
+	if err := s.ApproveDeviceAuthorization(ctx, pending.UserCode, deviceOwner, "anchat"); !errors.Is(err, ErrDeviceLinkNeedsDevice) {
+		t.Fatalf("a wallet approved a device link: %v", err)
+	}
+	if err := s.ApproveDeviceLink(ctx, pending.UserCode, "anchat", approver); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	// The device code alone does not collect it, and does not use it up.
+	withoutKey := func(c *ClaimedDeviceAuthorization) error {
+		key, _ := ParseDeviceKey([]byte(c.DeviceKey))
+		return s.VerifyDeviceProof(ctx, key, DeviceProofClaim, c.Namespace, pending.DeviceCode, nil)
+	}
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, withoutKey); !errors.Is(err, ErrDeviceProofRequired) {
+		t.Fatalf("a device link was collected without the device: %v", err)
+	}
+	withKey := func(c *ClaimedDeviceAuthorization) error {
+		key, _ := ParseDeviceKey([]byte(c.DeviceKey))
+		return s.VerifyDeviceProof(ctx, key, DeviceProofClaim, c.Namespace, pending.DeviceCode,
+			proofFor(laptop, DeviceProofClaim, c.Namespace, pending.DeviceCode))
+	}
+	claimed, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, withKey)
+	if err != nil {
+		t.Fatalf("the linked device could not collect its session: %v", err)
+	}
+	if claimed.Subject != deviceOwner || claimed.ApprovedByDevice != phone.id || claimed.DeviceLabel != "laptop" {
+		t.Errorf("claimed %+v", claimed)
+	}
+}
+
+// New-device approval: the wallet signature named the account, and only one of
+// that account's devices may approve.
+func TestApproveDeviceLink_onlyForTheAccountTheWalletNamed(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
+	stranger := mustEnrol(t, s, "0xb0b", p256Device(t), DeviceStateActive)
+	newKey, _ := ParseDeviceKey([]byte(p256Device(t).jwk))
+
+	pending, err := s.StartDeviceLink(ctx, "anchat", deviceOwner, newKey, "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	err = s.ApproveDeviceLink(ctx, pending.UserCode, "anchat", stranger)
+	if err == nil || !strings.Contains(err.Error(), "another account") {
+		t.Errorf("another account's device approved this one's new device: %v", err)
+	}
+	if err := s.ApproveDeviceLink(ctx, pending.UserCode, "elsewhere", stranger); err == nil {
+		t.Error("a device in another namespace approved the link")
+	}
+}
+
+// An unkeyed login keeps working exactly as before, and a device cannot approve
+// one: that is the wallet's.
+func TestApproveDeviceLink_refusesAPlainLogin(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
+	approver := mustEnrol(t, s, deviceOwner, p256Device(t), DeviceStateActive)
+	pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := s.ApproveDeviceLink(ctx, pending.UserCode, "anchat", approver); err == nil {
+		t.Error("a device approved a login that binds no device")
+	}
+}
+
+func TestVerifyDeviceProof_refusals(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
+	d := p256Device(t)
+	key, _ := ParseDeviceKey([]byte(d.jwk))
+	stale := time.Now().Add(-2 * DeviceProofWindow).Unix()
+
+	for name, proof := range map[string]*DeviceProof{
+		"none":            nil,
+		"a short id":      {IssuedAt: time.Now().Unix(), ID: "short", Signature: "x"},
+		"a stale proof":   {IssuedAt: stale, ID: "abcdefghijklmnopq", Signature: d.sign(DeviceProofMessage(DeviceProofRefresh, "anchat", "t", stale, "abcdefghijklmnopq"))},
+		"another action":  proofFor(d, DeviceProofApprove, "anchat", "t"),
+		"another binding": proofFor(d, DeviceProofRefresh, "anchat", "u"),
+		"another place":   proofFor(d, DeviceProofRefresh, "elsewhere", "t"),
+	} {
+		if err := s.VerifyDeviceProof(ctx, key, DeviceProofRefresh, "anchat", "t", proof); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestDeviceOf_readsTheDeviceTheWalletSignedFor(t *testing.T) {
+	id := "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
+	m := &siw.Message{Resources: []string{namespaceResourcePrefix + "anchat", deviceResourcePrefix + id}}
+	if got, err := DeviceOf(m); err != nil || got != id {
+		t.Errorf("DeviceOf = %q, %v", got, err)
+	}
+	if got, err := DeviceOf(&siw.Message{Resources: []string{namespaceResourcePrefix + "anchat"}}); err != nil || got != "" {
+		t.Errorf("a message naming no device = %q, %v", got, err)
+	}
+	two := &siw.Message{Resources: []string{deviceResourcePrefix + id, deviceResourcePrefix + id}}
+	if _, err := DeviceOf(two); !errors.Is(err, ErrChallengeMessage) {
+		t.Errorf("a message naming two devices: %v", err)
+	}
+	bad := &siw.Message{Resources: []string{deviceResourcePrefix + "not-a-thumbprint"}}
+	if _, err := DeviceOf(bad); !errors.Is(err, ErrChallengeMessage) {
+		t.Errorf("a message naming a malformed device: %v", err)
+	}
+}
+
+func TestCreateChallenge_namesTheDeviceInTheSignedBytes(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	address, _ := ethWallet(t)
+	id := p256Device(t).id
+	c, err := s.CreateChallenge(context.Background(), ChallengeParams{
+		Wallet: address, Namespace: "anchat", Chain: siw.Ethereum,
+		Domain: "gw.example", URI: "https://gw.example", DeviceID: id,
+	})
+	if err != nil {
+		t.Fatalf("challenge: %v", err)
+	}
+	if !strings.Contains(c.Message, deviceResourcePrefix+id) {
+		t.Errorf("the device is not in the message the wallet signs:\n%s", c.Message)
+	}
+	if _, err := s.CreateChallenge(context.Background(), ChallengeParams{
+		Wallet: address, Namespace: "anchat", Chain: siw.Ethereum,
+		Domain: "gw.example", URI: "https://gw.example", DeviceID: "nope",
+	}); !errors.Is(err, ErrDeviceKeyInvalid) {
+		t.Errorf("a malformed device id was put in a challenge: %v", err)
+	}
+}
+
+// The TypeScript SDK signs the same bytes (sdk/tests/unit/auth/device.test.ts
+// pins the same string). A drift of one character is a refresh that never
+// verifies.
+func TestDeviceProofMessage_isTheStatementClientsSign(t *testing.T) {
+	got := string(DeviceProofMessage(DeviceProofRefresh, "anchat", "refresh-1", 1800000000, "abcdefghijklmnop"))
+	if want := "orama-device-proof-v1\nrefresh\nanchat\nrefresh-1\n1800000000\nabcdefghijklmnop"; got != want {
+		t.Errorf("proof statement = %q, want %q", got, want)
+	}
+}
+
+func TestRevocationList_refusesARevokedDeviceOrSessionWhenever(t *testing.T) {
+	s, _ := serviceWithRevocations(t)
+	ctx := context.Background()
+	later := time.Now().Add(time.Hour).Unix() // minted after the revocation
+	if err := s.revocations.RevokeDevice(ctx, "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"); err != nil {
+		t.Fatalf("revoke device: %v", err)
+	}
+	if err := s.revocations.RevokeSessionID(ctx, "session-1"); err != nil {
+		t.Fatalf("revoke session: %v", err)
+	}
+	for name, c := range map[string]*JWTClaims{
+		"the device":  {Sub: "0xa", Did: "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k", Iat: later},
+		"the session": {Sub: "0xa", Sid: "session-1", Iat: later},
+	} {
+		if !s.Revoked(c) {
+			t.Errorf("a token of %s was accepted after it was revoked", name)
+		}
+	}
+	if s.Revoked(&JWTClaims{Sub: "0xa", Did: "another", Sid: "session-2", Iat: later}) {
+		t.Error("a token of another device and session was refused")
+	}
+	if err := s.revocations.RevokeSessionID(ctx, ""); err == nil {
+		t.Error("an empty session id was revoked")
+	}
+}

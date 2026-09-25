@@ -60,6 +60,10 @@ const (
 	AuditDeviceLoginApproved = "auth.device.approve"
 	AuditDeviceLoginDenied   = "auth.device.deny"
 	AuditDeviceLoginClaimed  = "auth.device.claim"
+	// A session device revoked, and a namespace's session policy changed:
+	// the two acts that decide which devices may hold a session.
+	AuditDeviceRevoked    = "auth.device.revoke"
+	AuditSessionPolicySet = "namespace.session_policy"
 
 	// A node recording itself, and a node's own key being recorded. The
 	// heartbeat is deliberately not here: it fires every 30 seconds from every
@@ -79,6 +83,7 @@ var AuditActions = []string{
 	AuditOperatorAction, AuditLegacyCredential,
 	AuditGrantAdded, AuditGrantRevoked, AuditOwnerTransferred,
 	AuditDeviceLoginStarted, AuditDeviceLoginApproved, AuditDeviceLoginDenied, AuditDeviceLoginClaimed,
+	AuditDeviceRevoked, AuditSessionPolicySet,
 	AuditNodeRegistered, AuditNodeKeyEnrolled,
 }
 

@@ -90,6 +90,10 @@ type InvokeRequest struct {
 	// engine can populate InvocationContext.CallerJWTSubject — fixes the
 	// bug-#215 case where API-key precedence buries the JWT identity.
 	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
+	// CallerDeviceID is the device the caller's session is bound to — the
+	// `did` of a token the gateway verified — or "" for a session bound to the
+	// account alone, an API key, or no credential.
+	CallerDeviceID string `json:"caller_device_id,omitempty"`
 	// TriggerDepth is the recursion-depth bucket at which this invocation
 	// runs. 0 means top-level (HTTP/WS/cron source); each trigger-driven
 	// invocation increments it. The dispatcher's host-fn wildcard path
@@ -241,6 +245,7 @@ func newInvocationContext(req *InvokeRequest, fn *Function, requestID string, en
 		EnvVars:          envVars,
 		CallerClaims:     req.CallerClaims,
 		CallerJWTSubject: req.CallerJWTSubject,
+		CallerDeviceID:   req.CallerDeviceID,
 		TriggerDepth:     req.TriggerDepth,
 	}
 }

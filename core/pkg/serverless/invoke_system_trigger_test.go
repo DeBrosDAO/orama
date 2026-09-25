@@ -255,6 +255,7 @@ func TestNewInvocationContext_carriesTheCallersIdentityAndGrants(t *testing.T) {
 		WSClientID:       "client-9",
 		CallerClaims:     map[string]string{"tier": "pro"},
 		CallerJWTSubject: "0xUser",
+		CallerDeviceID:   "device-1",
 		TriggerDepth:     2,
 	}
 	got := newInvocationContext(req, fn, "req-1", map[string]string{"K": "v"})
@@ -275,7 +276,7 @@ func TestNewInvocationContext_carriesTheCallersIdentityAndGrants(t *testing.T) {
 		t.Errorf("trigger type = %q", got.TriggerType)
 	}
 	if got.CallerIP != "203.0.113.4" || got.WSClientID != "client-9" ||
-		got.CallerJWTSubject != "0xUser" || got.TriggerDepth != 2 {
+		got.CallerJWTSubject != "0xUser" || got.CallerDeviceID != "device-1" || got.TriggerDepth != 2 {
 		t.Errorf("context = %+v", got)
 	}
 	if got.CallerClaims["tier"] != "pro" {
