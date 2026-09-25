@@ -323,6 +323,18 @@ func (m *MockHostServices) GetCallerDeviceID(ctx context.Context) string {
 	return ""
 }
 
+func (m *MockHostServices) GetCallerCapability(ctx context.Context) string {
+	return ""
+}
+
+func (m *MockHostServices) MintCapability(ctx context.Context, resource string, ttl time.Duration) (string, error) {
+	return "", nil
+}
+
+func (m *MockHostServices) RevokeCapability(ctx context.Context, token string) error {
+	return nil
+}
+
 func (m *MockHostServices) EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error) {
 	return "job-123", nil
 }

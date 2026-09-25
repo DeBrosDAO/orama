@@ -3,9 +3,9 @@ package gateway
 import (
 	"context"
 	"net/http"
-	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
@@ -347,14 +347,21 @@ func ormGatewayRoutes() []string {
 //
 // Invoking is public: the invoker decides whether the caller may run the
 // function, and a public function is open by design. The WebSocket is an invoke
-// transport and takes the invoke grant. Everything else — deploying, deleting,
-// logs, triggers, secrets — is the control plane.
+// transport and takes the invoke grant — unless it is opened with a capability,
+// which the handler checks itself before the upgrade (feat-264). Everything
+// else — deploying, deleting, logs, triggers, secrets — is the control plane.
+//
+// The operation is read with the handler's own parser. It used to be read off
+// the path's suffix, so `/v1/functions/{fn}/triggers/invoke` and
+// `/v1/functions/secrets/invoke` were "invoke", public, and dispatched to the
+// trigger and secret handlers.
 func functionRoutePolicy(r *http.Request) routepolicy.Policy {
-	path := strings.TrimPrefix(r.URL.Path, "/v1/functions/")
 	switch {
-	case strings.HasSuffix(path, "/invoke"):
+	case serverlesshandlers.IsFunctionAction(r.URL.Path, "invoke"):
 		return policyOpen
-	case strings.HasSuffix(path, "/ws"):
+	case isCapabilityUpgrade(r):
+		return policyHandlerAuth
+	case serverlesshandlers.IsFunctionAction(r.URL.Path, "ws"):
 		return owned(auth.DomainFn, auth.ActionInvoke)
 	default:
 		return owned(auth.DomainFn, auth.ActionManage)

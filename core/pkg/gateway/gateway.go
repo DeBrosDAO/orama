@@ -182,8 +182,11 @@ type Gateway struct {
 	rateLimiter *RateLimiter
 	// authRateLimiter caps the endpoints that mint or exchange credentials,
 	// far below the general limit. See isAuthRateLimitPath.
-	authRateLimiter      *RateLimiter
-	namespaceRateLimiter *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
+	authRateLimiter *RateLimiter
+	// capabilityRateLimiter caps the function WebSocket upgrades opened with
+	// a capability rather than a credential, per client address.
+	capabilityRateLimiter *RateLimiter
+	namespaceRateLimiter  *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
 	// rateLimitManager (feature #69) handles per-namespace rate limits with
 	// tenant self-service config via /v1/namespace/rate-limit. When set,
 	// namespaceRateLimitMiddleware uses it instead of the legacy
@@ -1561,6 +1564,9 @@ func configureRateLimiters(gw *Gateway) {
 
 	gw.authRateLimiter = NewRateLimiter(30, 10)
 	gw.authRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+
+	gw.capabilityRateLimiter = NewRateLimiter(capabilityUpgradesPerMinute, capabilityUpgradeBurst)
+	gw.capabilityRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
 }
 
 // apiKeyRegistryProbeTimeout bounds the one query that proves the registry is

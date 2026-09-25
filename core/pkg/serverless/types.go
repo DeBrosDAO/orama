@@ -262,6 +262,11 @@ type FunctionDefinition struct {
 	// function may call set_http_response to emit a verbatim status/headers/
 	// body instead of the JSON/Ack-wrapped output. See pkg/serverless/raw_http.go.
 	RawHTTPResponse bool `json:"raw_http_response,omitempty"`
+
+	// WSAuth is how the function's WebSocket may be opened: "" for a caller's
+	// credential, as every function has been, or WSAuthCapability to also
+	// accept a capability minted through the function (feat-264).
+	WSAuth string `json:"ws_auth,omitempty"`
 }
 
 // DBTriggerConfig defines a database trigger configuration.
@@ -304,6 +309,11 @@ type Function struct {
 	// verbatim HTTP response via set_http_response instead of the
 	// JSON/Ack-wrapped output. See pkg/serverless/raw_http.go.
 	RawHTTPResponse bool `json:"raw_http_response,omitempty"`
+
+	// WSAuth is how the function's WebSocket may be opened: "" for a caller's
+	// credential, as every function has been, or WSAuthCapability to also
+	// accept a capability minted through the function (feat-264).
+	WSAuth string `json:"ws_auth,omitempty"`
 }
 
 // InvocationContext provides context for a function invocation.
@@ -354,6 +364,12 @@ type InvocationContext struct {
 	// the account alone, an API key, or no credential. Read via host fn
 	// `get_caller_device_id`; like the subject, it is set only by the gateway.
 	CallerDeviceID string `json:"caller_device_id,omitempty"`
+
+	// CallerCapability is what the capability the caller's socket was opened
+	// with grants, or nil for a caller who came in on a credential. Read via
+	// host fn `get_caller_capability`. A nested function_invoke does not
+	// carry it: a capability opens the function that minted it, no other.
+	CallerCapability *CapabilityGrant `json:"caller_capability,omitempty"`
 
 	// TriggerDepth is the recursion-depth bucket for trigger-driven
 	// invocations. 0 means a top-level (HTTP/WS/cron) invocation; each
@@ -722,6 +738,15 @@ type HostServices interface {
 	// GetCallerDeviceID returns the device the caller's session is bound to,
 	// or empty when it is bound to none.
 	GetCallerDeviceID(ctx context.Context) string
+	// GetCallerCapability returns what the caller's capability grants, as
+	// JSON, or empty when the caller came in on a credential.
+	GetCallerCapability(ctx context.Context) string
+	// MintCapability issues a capability for the calling function's
+	// WebSocket and returns it as JSON.
+	MintCapability(ctx context.Context, resource string, ttl time.Duration) (string, error)
+	// RevokeCapability refuses one capability of the calling namespace,
+	// named by its token.
+	RevokeCapability(ctx context.Context, token string) error
 
 	// Job operations
 	EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error)

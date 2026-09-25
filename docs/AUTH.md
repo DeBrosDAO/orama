@@ -529,6 +529,7 @@ every request that run makes.
 | Ending a session (`DELETE /v1/auth/sessions/{id}`) | its access tokens are refused, and its sockets closed, within 10 seconds |
 | Revoking a device | its sessions, access tokens and sockets end within 10 seconds; the account's other devices are untouched |
 | The token an open WebSocket was opened with expiring | the socket is closed within 10 seconds of two minutes past its `exp` (`4401`), unless it was refreshed on the socket |
+| Revoking a capability, or the device that issued it | the upgrades it would open are refused, and the sockets it opened closed, within 10 seconds (`4403`); a device's revocation is kept seven days, as long as a capability can live |
 | Setting a session policy | at once for everything that issues a credential (sign-in, API keys, approvals, device-link claims), which reads the policy itself; a refresh may be judged by a policy its gateway read up to 10 seconds earlier |
 
 That minute is `CredentialStaleness`, and it is a promise rather than a tuning
@@ -582,6 +583,95 @@ it to somebody else.
 
 A socket opened with an API key has no token, and is not re-checked: revoking the
 key stops it opening new sockets, not the ones it has open.
+
+### Capability WebSockets
+
+A messaging application wants a sender to reach a recipient's mailbox without
+the node that terminates the socket being told which account is sending. A
+function that declares `ws_auth: capability` in function.yaml accepts a
+**capability** in place of a credential:
+
+```
+GET /v1/functions/rpc-router/ws?namespace=anchat&cap=<token>
+```
+
+The recipient's device mints the capability from inside the function
+(`capability_mint`, [SERVERLESS.md](SERVERLESS.md#capabilities)) and hands it to
+its correspondents however the application likes. A sender presents it and
+nothing else: a request carrying both a capability and a credential of its own
+is refused (`400`), because the point is that no credential names the sender.
+
+A capability names one namespace, one function — the one that minted it — a
+resource the application chose (a mailbox id), the device that issued it, a
+random id and an expiry of at most seven days. It is a payload and an HMAC-SHA256
+over it, keyed per namespace by HKDF from the cluster secret, so any gateway of
+the cluster can check one and nothing outside it can mint or alter one. Minting
+takes a device-bound session: a capability is revoked with the device that
+issued it, so it needs one. Everything is checked **before** the upgrade and
+before a persistent instance is taken from the pool. The token comes first, from
+the URL alone — the MAC, the expiry, that the namespace and function are the ones
+asked for, and that neither the capability nor its issuing device has been
+revoked — so a stranger with a made-up token costs one HMAC, never a registry
+read or a WASM instance. Only then is the function looked up: it must exist, be
+enabled, accept capabilities, and not be internal. A capability names a function,
+not a version; it opens the live one, and a request that pins a version
+(`name@3`) is refused. A forged, expired or misdirected token, a pinned version,
+and a function that is gone, disabled or does not accept capabilities all get the
+same `403`, so a probe learns nothing about which check failed or which
+functions exist; a revoked capability is told it was revoked. Only a `GET`
+upgrade of exactly `/v1/functions/{fn}/ws` is looked at this way; nothing else
+under `/v1/functions/` becomes reachable by carrying a capability.
+
+Revoking works through the revocation list: `capability_revoke` refuses one
+capability, and revoking the device that issued it refuses every capability it
+issued. Either way the sweeper closes the sockets they opened within 10 seconds
+(`4403`); one whose capability expired is closed two minutes later (`4401`).
+`capability_revoke` takes the capability's token rather than its id, so only a
+capability the namespace was really issued can be put on the list, and its entry
+lives as long as the capability and the two minutes a socket may outlast it; revoking one twice, or one that has
+expired, writes nothing. A device's revocation is kept for seven days — as long
+as any capability can live — where a revocation that covers only tokens is kept
+an hour. Signing an account out everywhere, or ending a session, does not reach
+its devices' capabilities: revoke the device, or the capability. A redeploy that
+drops `ws_auth: capability` refuses new capability sockets and every frame on an
+open stateless one; an open persistent socket keeps its instance until it closes
+or its capability is revoked or expires. A capability-opened socket cannot take
+`auth.refresh` — it is refused before the offered token is even read: the socket
+has no token, and a token would name the account the capability exists not to
+name.
+
+The upgrade is rate limited per client address in a bucket of its own — 60 a
+minute, bursting to 20 — on the gateway that faces the internet; namespace
+gateways see only the overlay, which is exempt. Behind a shared NAT that is one
+bucket for everybody behind it, and a sender with many addresses gets many
+buckets: it bounds a flood from one place, not a distributed one. One capability
+holds at most 16 sockets open on a gateway at once (`429` beyond that), so a
+leaked capability spread over many addresses cannot take a gateway's whole
+persistent-socket pool.
+
+Every gateway and namespace gateway must run this version before a function
+relies on it. Until then it fails closed: a gateway that predates it asks the
+upgrade for a credential and answers `401`.
+
+**What this is, and what it is not.** No credential on the socket names the
+sender. That is all. The gateway still learns:
+
+- the client's IP address, which the request log records, as it does for every
+  request;
+- the timing and size of every connection and frame;
+- which recipient's mailbox is being written to — it is in the capability, which
+  sits in the upgrade URL the way `?jwt=` does;
+- that the caller holds a capability that recipient issued, and which one: its
+  id, and the device that minted it — and so the recipient's account, which the
+  device belongs to;
+- that two connections made with the same capability, from whatever addresses,
+  are the same holder's;
+- that a sender with a signed-in socket open from the same address at the same
+  time is probably the same person.
+
+A recipient who issues one capability per correspondent has, by that choice,
+told the gateway which correspondent is sending. Unlinkable capabilities (blind
+signatures) are not implemented.
 
 ---
 

@@ -149,6 +149,21 @@ func TestRefresh_holdsTheSocketToTheNewToken(t *testing.T) {
 }
 
 // The bug: auth.refresh on an open socket could switch it to another subject.
+// A socket opened on a capability is held to no account, and a refresh cannot
+// give it one: the capability exists so that no account is named.
+func TestRefresh_aSocketWithNoAccountTakesNoToken(t *testing.T) {
+	r := NewRegistry(nil)
+	capability := &auth.JWTClaims{Jti: "cap:anchat:1", Did: "device-1", Exp: now.Add(time.Hour).Unix()}
+	s := r.Register(capability, (&closeLog{}).closer())
+
+	if err := s.CheckRefresh(token("b", now.Add(time.Hour))); !errors.Is(err, ErrNotRefreshable) {
+		t.Fatalf("a capability socket took a token: %v", err)
+	}
+	if got := s.Claims(); got.Sub != "" || got.Jti != "cap:anchat:1" {
+		t.Errorf("the refused refresh changed the socket to %+v", got)
+	}
+}
+
 func TestRefresh_refusesAnotherSubject(t *testing.T) {
 	r := NewRegistry(nil)
 	s := r.Register(token("a", now.Add(time.Minute)), (&closeLog{}).closer())

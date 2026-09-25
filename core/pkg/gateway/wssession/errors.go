@@ -4,8 +4,8 @@ import "errors"
 
 var (
 	// ErrNotRefreshable is a refresh on a socket that was not opened with a
-	// token — an API key, or no credential at all. Such a socket has no token
-	// to extend, and taking one on would change who it belongs to.
+	// token — an API key, a capability, or no credential at all. Such a socket
+	// has no token to extend, and taking one on would change who it belongs to.
 	ErrNotRefreshable = errors.New("this socket was not opened with a token, so there is none to refresh; reconnect with one")
 
 	// ErrNoClaims is a refresh with nothing to refresh to.

@@ -56,6 +56,10 @@ retry:
   delay: 5              # Seconds between retries (default: 5)
 env:                    # Environment variables (accessible via get_env)
   MY_VAR: "value"
+ws_auth: capability     # Optional. Also let the function's WebSocket be opened
+                        # with a capability it minted, instead of a credential
+                        # (see "Capabilities" below). Empty (default): a
+                        # credential only. Refused on an internal function.
 ```
 
 ### function.go (minimal)
@@ -177,6 +181,7 @@ If you see the runtime error `failed to instantiate module: module[X] not instan
 | `get_caller_wallet()` → string | Resolved caller wallet (JWT subject if Bearer auth, else namespace pseudo-id when API-key auth). |
 | `get_caller_jwt_subject()` → string | JWT `sub` claim explicitly. Empty when the request was not JWT-authenticated. Use this when binding on the JWT-signed identity matters (e.g. signup flows verifying the caller signed for the wallet they're registering). |
 | `get_caller_device_id()` → string | The device the caller's session is bound to: the RFC 7638 thumbprint of a key the device proved it holds when the session was issued (the token's `did`). Empty for a session bound to the account alone, an API key, or no credential. Set only by the gateway — a claims provider cannot, and a client cannot state it. Carried into nested `function_invoke` calls. Requires gateway 0.200.0 or later on every node of the namespace. See [AUTH.md](AUTH.md#devices). |
+| `get_caller_capability()` → string | What the capability the caller's socket was opened with grants, as JSON `{"cap_id","resource","issuer_device","expires_at"}`. Empty when the caller came in on a credential. Not carried into nested `function_invoke` calls. See [Capabilities](#capabilities). |
 | `get_caller_claim(name)` → string | Custom JWT claim by name (tier, subscription, etc.). Empty if missing or non-JWT request. |
 | `get_request_id()` → string | Unique invocation ID |
 | `get_env(key)` → string | Environment variable from function.yaml |
@@ -736,6 +741,34 @@ A stateless function socket and a `/v1/pubsub/ws` subscription are re-checked
 the same way. Neither takes `auth.refresh`, so either one is closed with `4401`
 two minutes after its token expires and has to reconnect with a fresh one. See
 [AUTH.md](AUTH.md#open-websockets).
+
+### Capabilities
+
+A function that declares `ws_auth: capability` may also have its socket opened
+with a **capability** instead of a credential:
+
+```
+GET /v1/functions/rpc-router/ws?namespace=anchat&cap=<token>
+```
+
+The function mints capabilities for its own socket, from a call made by a
+device-bound session (see [AUTH.md](AUTH.md#devices)):
+
+| Function | Description |
+|----------|-------------|
+| `capability_mint(resource, ttl_seconds)` → string | Mints a capability that opens **this** function's socket, naming `resource` (up to 256 bytes, chosen by the application — a mailbox id), issued by the calling session's device, for 60 seconds to 7 days. Returns JSON `{"token","cap_id","resource","issuer_device","expires_at"}`, or empty on failure (the gateway log says why): no device-bound caller, a ttl out of range, or a gateway without a cluster secret. Signature: `(res_ptr, res_len i32, ttl_seconds i64) → i64`, the packed `ptr<<32 \| len`. |
+| `capability_revoke(token)` → i32 | Refuses one capability of this namespace from now on, named by the `token` `capability_mint` returned (an id alone is not accepted: only a capability the namespace was issued can be revoked); the sockets it opened are closed with `4403` within 10 seconds. `1` on success, including for one already revoked or expired; `0` for a token that is not this namespace's. Revoking the device that issued a capability refuses it too. Signature: `(token_ptr, token_len i32) → i32`. |
+| `get_caller_capability()` → string | See [Context](#context). |
+
+A socket opened with a capability reports no caller: `get_caller_wallet`,
+`get_caller_jwt_subject`, `get_caller_device_id` and every claim are empty, and
+`get_caller_capability` says what the capability grants. It cannot take
+`auth.refresh`, and it is closed with `4401` two minutes after the capability
+expires. A nested `function_invoke` from it runs with no caller, so it reaches
+only public functions. A capability opens the live version of the function
+(`name@N` is refused), and not while the function is disabled; one capability
+holds at most 16 sockets on a gateway at once. What the gateway checks, what it still learns, and the
+rate limit on these upgrades are in [AUTH.md](AUTH.md#capability-websockets).
 
 ## Invoking from application code
 

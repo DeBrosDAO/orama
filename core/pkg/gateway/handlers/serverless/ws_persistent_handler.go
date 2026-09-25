@@ -102,7 +102,7 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 	// gateway's sweeper closes it once the token expires or is revoked, and
 	// the read loop below refuses frames past expiry in between sweeps. A
 	// successful auth.refresh control frame moves it to the new token.
-	sock := h.sessions.Register(h.getJWTClaimsFromRequest(r), h.closeClient(clientID))
+	sock := h.sessions.Register(h.socketClaims(r), h.closeClient(clientID))
 	defer sock.Unregister()
 
 	// Instantiate the persistent module. This compiles once (cached) and
@@ -274,16 +274,18 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 func (h *ServerlessHandlers) buildPersistentInvocationContext(
 	r *http.Request, fn *serverless.Function, clientID string,
 ) *serverless.InvocationContext {
+	callerWallet, callerIsAdmin, _ := h.socketCaller(r)
 	return &serverless.InvocationContext{
 		FunctionID:       fn.ID,
 		FunctionName:     fn.Name,
 		Namespace:        fn.Namespace,
-		CallerWallet:     h.getWalletFromRequest(r),
-		CallerIsAdmin:    h.getCallerIsAdminFromRequest(r),
+		CallerWallet:     callerWallet,
+		CallerIsAdmin:    callerIsAdmin,
 		CallerIP:         extractRemoteIP(r),
 		CallerClaims:     h.getCallerClaimsFromRequest(r),
 		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
 		CallerDeviceID:   h.getDeviceIDFromRequest(r),
+		CallerCapability: socketCapability(r),
 		WSClientID:       clientID,
 		TriggerType:      serverless.TriggerTypeWebSocket,
 	}
@@ -349,6 +351,16 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 			Type:  "auth.refresh",
 			OK:    false,
 			Error: "mid-session auth refresh not supported on this gateway",
+		})
+	}
+	// A socket held to no account — an API key's, or one opened with a
+	// capability — cannot take one on. It is refused before the token is
+	// even read, so an anonymous socket is never logged beside an account.
+	if !sock.HoldsAccount() {
+		return h.writeControlAck(conn, oramaControlAck{
+			Type:  "auth.refresh",
+			OK:    false,
+			Error: wssession.ErrNotRefreshable.Error(),
 		})
 	}
 	if ctrl.JWT == "" {

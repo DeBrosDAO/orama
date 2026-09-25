@@ -51,3 +51,15 @@ func TestLoadConfig_RawHTTPResponse_explicitFalse(t *testing.T) {
 		t.Error("RawHTTPResponse = true, want false")
 	}
 }
+
+func TestLoadConfig_WSAuth_capability(t *testing.T) {
+	dir := writeFunctionYAML(t, "name: rpc-router\nws_persistent: true\nws_auth: capability\n")
+
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.WSAuth != "capability" {
+		t.Errorf("WSAuth = %q, want capability", cfg.WSAuth)
+	}
+}

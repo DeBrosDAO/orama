@@ -240,6 +240,12 @@ func (s *Socket) Expired(now time.Time) bool {
 	return expired(s.Claims().Exp, now)
 }
 
+// HoldsAccount reports whether the socket was opened for an account — with a
+// token — rather than with an API key, a capability, or no credential.
+func (s *Socket) HoldsAccount() bool {
+	return s != nil && s.Claims().Sub != ""
+}
+
 // CheckRefresh reports whether the socket may be held to claims from here on,
 // without holding it to them. A caller that has more to change before the
 // refresh takes effect asks this first and calls Refresh once the rest has
@@ -248,13 +254,17 @@ func (s *Socket) Expired(now time.Time) bool {
 // A token for a different subject is refused: a refresh keeps a socket open, it
 // does not hand it to somebody else, and everything the socket was opened with
 // — the function's ws_open, the identity the instance was bound to — was for
-// the original one.
+// the original one. A socket held to no account — one opened with a capability —
+// cannot take one on.
 func (s *Socket) CheckRefresh(claims *auth.JWTClaims) error {
 	if s == nil {
 		return ErrNotRefreshable
 	}
 	if claims == nil {
 		return ErrNoClaims
+	}
+	if !s.HoldsAccount() {
+		return ErrNotRefreshable
 	}
 	current := s.Claims()
 	if claims.Sub != current.Sub {

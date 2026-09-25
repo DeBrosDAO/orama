@@ -50,6 +50,11 @@ type FunctionConfig struct {
 	// function may call set_http_response to emit a verbatim HTTP response
 	// (status/headers/body) instead of the JSON/Ack-wrapped output.
 	RawHTTPResponse bool `yaml:"raw_http_response"`
+
+	// WSAuth is how the function's WebSocket may be opened: empty for a
+	// caller's credential, or "capability" to also accept a capability the
+	// function minted (feat-264). The gateway validates it at deploy.
+	WSAuth string `yaml:"ws_auth"`
 }
 
 // RetryConfig holds retry settings.
@@ -250,6 +255,9 @@ func uploadWASMFunction(wasmPath string, cfg *FunctionConfig) (map[string]interf
 	}
 	if cfg.RawHTTPResponse {
 		metaObj["raw_http_response"] = true
+	}
+	if cfg.WSAuth != "" {
+		metaObj["ws_auth"] = cfg.WSAuth
 	}
 	if len(metaObj) > 0 {
 		metadata, _ := json.Marshal(metaObj)

@@ -83,6 +83,13 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// A capability is the whole authorization of its socket, checked here —
+	// before the upgrade and before a persistent instance is taken.
+	if token := capabilityToken(r); token != "" {
+		h.serveCapabilityWebSocket(w, r, namespace, name, version, token)
+		return
+	}
+
 	// Look up the function once to decide which execution model to use.
 	fn, lookupErr := h.registry.Get(r.Context(), namespace, name, version)
 	if lookupErr == nil && fn != nil && fn.WSPersistent {
@@ -110,7 +117,13 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	}
 	// (lookup error not fatal — fall through; per-frame path's invoker will
 	// re-resolve and surface a proper error.)
+	h.handleStatelessWebSocket(w, r, namespace, name, version)
+}
 
+// handleStatelessWebSocket runs the per-frame model: every frame is one
+// invocation, authorized by the invoker as the caller the socket was opened
+// for.
+func (h *ServerlessHandlers) handleStatelessWebSocket(w http.ResponseWriter, r *http.Request, namespace, name string, version int) {
 	// Upgrade to WebSocket
 	upgrader := websocket.Upgrader{
 		CheckOrigin: checkWSOrigin,
@@ -130,9 +143,9 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	defer h.wsManager.Unregister(clientID)
 
 	// Every frame is invoked with the identity captured below, so the socket
-	// is only as good as the token that opened it: the gateway's sweeper
-	// closes it once that token expires or is revoked.
-	sock := h.sessions.Register(h.getJWTClaimsFromRequest(r), h.closeClient(clientID))
+	// is only as good as the token — or the capability — that opened it: the
+	// gateway's sweeper closes it once that expires or is revoked.
+	sock := h.sessions.Register(h.socketClaims(r), h.closeClient(clientID))
 	defer sock.Unregister()
 
 	// Track client → namespace for ws_pubsub_bridge auth checks, and
@@ -173,15 +186,14 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 		zap.String("function", name),
 	)
 
-	callerWallet := h.getWalletFromRequest(r)
-	callerIsAdmin := h.getCallerIsAdminFromRequest(r)
-	callerHasInvoke := h.getCallerHasInvokeFromRequest(r)
+	callerWallet, callerIsAdmin, callerHasInvoke := h.socketCaller(r)
 	callerIP := extractRemoteIP(r)
 	// Capture custom claims at upgrade time and reuse for every frame —
 	// the JWT context is request-scoped and won't survive past upgrade.
 	callerClaims := h.getCallerClaimsFromRequest(r)
 	callerJWTSubject := h.getJWTSubjectFromRequest(r)
 	callerDeviceID := h.getDeviceIDFromRequest(r)
+	callerCapability := socketCapability(r)
 
 	// Message loop
 	for {
@@ -210,6 +222,7 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 			CallerClaims:     callerClaims,
 			CallerJWTSubject: callerJWTSubject,
 			CallerDeviceID:   callerDeviceID,
+			CallerCapability: callerCapability,
 			WSClientID:       clientID,
 		}
 

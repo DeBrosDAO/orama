@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/capability"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
@@ -40,8 +41,14 @@ type ServerlessHandlers struct {
 	// expiry and revocation. It is the gateway's one registry, the one its
 	// sweeper runs over.
 	sessions *wssession.Registry
-	audit    *auth.AuditLog
-	logger   *zap.Logger
+	// capabilities and capabilityRevocations check the capabilities a
+	// function's WebSocket may be opened with (feat-264). Set once at gateway
+	// start via SetCapabilities; nil refuses every capability.
+	capabilities          *capability.Authority
+	capabilityRevocations CapabilityRevocations
+	capabilitySockets     *socketCounter
+	audit                 *auth.AuditLog
+	logger                *zap.Logger
 }
 
 // NewServerlessHandlers creates a new ServerlessHandlers instance.

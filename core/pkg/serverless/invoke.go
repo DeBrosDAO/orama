@@ -94,6 +94,10 @@ type InvokeRequest struct {
 	// `did` of a token the gateway verified — or "" for a session bound to the
 	// account alone, an API key, or no credential.
 	CallerDeviceID string `json:"caller_device_id,omitempty"`
+	// CallerCapability is what the capability the caller's socket was opened
+	// with grants (feat-264), or nil. Only the gateway's WebSocket handler
+	// sets it, after checking the token before the upgrade.
+	CallerCapability *CapabilityGrant `json:"caller_capability,omitempty"`
 	// TriggerDepth is the recursion-depth bucket at which this invocation
 	// runs. 0 means top-level (HTTP/WS/cron source); each trigger-driven
 	// invocation increments it. The dispatcher's host-fn wildcard path
@@ -173,7 +177,8 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 	// from a system-triggered parent was given a trigger type that counted as
 	// system — so the authority to skip the check travelled with the work as
 	// an ordinary field.
-	if !req.SystemOriginated && !canInvokeFn(fn, req.CallerWallet, req.CallerIsAdmin, req.CallerHasInvoke) {
+	if !req.SystemOriginated && !capabilityOpens(fn, req) &&
+		!canInvokeFn(fn, req.CallerWallet, req.CallerIsAdmin, req.CallerHasInvoke) {
 		// Authorization uses the function we already fetched above —
 		// CanInvoke would re-`registry.Get` it, a redundant leader-routed
 		// read on every op (bugboard #708).
@@ -246,6 +251,7 @@ func newInvocationContext(req *InvokeRequest, fn *Function, requestID string, en
 		CallerClaims:     req.CallerClaims,
 		CallerJWTSubject: req.CallerJWTSubject,
 		CallerDeviceID:   req.CallerDeviceID,
+		CallerCapability: req.CallerCapability,
 		TriggerDepth:     req.TriggerDepth,
 	}
 }

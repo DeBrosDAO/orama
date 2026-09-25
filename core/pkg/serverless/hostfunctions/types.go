@@ -124,6 +124,11 @@ type HostFunctions struct {
 	// registers a disconnect hook on the WS manager so a client's owned state
 	// auto-clears the instant its WebSocket disconnects.
 	ephemeralStore *serverless.EphemeralStore
+
+	// capabilityIssuer mints and revokes capabilities (feat-264). Set once at
+	// gateway start, before any function runs, via SetCapabilityIssuer; nil
+	// means capability_mint and capability_revoke fail and say why.
+	capabilityIssuer serverless.CapabilityIssuer
 }
 
 // Ensure HostFunctions implements HostServices interface.

@@ -3,6 +3,7 @@ package gateway
 import (
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -158,6 +159,20 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 				"too many authentication attempts — wait a minute and try again",
 				httputil.WithRetryable(),
 				httputil.WithRetryAfter(60))
+			return
+		}
+
+		// A capability-opened WebSocket carries no credential, so the address
+		// is all that can be limited. It gets a bucket of its own, on the
+		// gateway that sees the client; a namespace gateway sees only the
+		// overlay, which is exempt.
+		if g.capabilityRateLimiter != nil && isCapabilityUpgrade(r) && !g.capabilityRateLimiter.Allow(ip) {
+			w.Header().Set("Retry-After", strconv.Itoa(capabilityRetryAfterSeconds))
+			httputil.WriteRPCError(w, http.StatusTooManyRequests,
+				httputil.ErrCodeRateLimited,
+				"too many capability connections from this address — wait a minute and try again",
+				httputil.WithRetryable(),
+				httputil.WithRetryAfter(capabilityRetryAfterSeconds))
 			return
 		}
 

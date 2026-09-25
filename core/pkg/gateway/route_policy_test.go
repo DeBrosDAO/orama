@@ -68,6 +68,10 @@ func TestRoutePolicy_everyRegisteredRouteIsDeclared(t *testing.T) {
 // A route is here for one of two reasons: it is deliberately open to anyone, or
 // its handler authenticates the caller itself and the middleware must not
 // refuse that caller's credential first.
+//
+// One operation is anonymous without its pattern being so: a WebSocket
+// upgrade of /v1/functions/{fn}/ws that carries a capability, which the handler
+// checks before upgrading (feat-264). It is pinned in ws_capability_test.go.
 var publicRoutes = []string{
 	"/.well-known/jwks.json",
 	"/health",

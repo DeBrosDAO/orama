@@ -172,14 +172,21 @@ func bindingRevocationKey(prefix, id string) string {
 	return strings.ToLower(prefix + id)
 }
 
-// RevokeDevice refuses every token bound to a device. The entry outlives any
-// token the device can hold; past that, the device's tombstone is what refuses
-// it, since nothing new can be minted for it.
+// MaxDeviceIssuedLifetime is the longest anything a device issued can live
+// without going back to the device: a capability it minted (feat-264). An
+// access token lives far less.
+const MaxDeviceIssuedLifetime = 7 * 24 * time.Hour
+
+// RevokeDevice refuses every token bound to a device, and every capability it
+// issued. The entry outlives all of them; past that, the device's tombstone is
+// what refuses it, since nothing new can be minted for it. It used to last one
+// access-token lifetime, which let a capability the device had handed out work
+// again an hour after the device was revoked.
 func (r *RevocationList) RevokeDevice(ctx context.Context, deviceID string) error {
 	if strings.TrimSpace(deviceID) == "" {
 		return fmt.Errorf("cannot revoke a device with no id")
 	}
-	return r.RevokeSubject(ctx, deviceRevocationPrefix+deviceID, "device revoked", MaxTokenLifetime)
+	return r.RevokeSubject(ctx, deviceRevocationPrefix+deviceID, "device revoked", MaxDeviceIssuedLifetime)
 }
 
 // RevokeSessionID refuses every access token of one session, whichever

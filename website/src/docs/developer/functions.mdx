@@ -232,6 +232,8 @@ You can also invoke a specific version by appending `@version` to the name (e.g.
 
 A socket is authorized at the upgrade and then held to the token that opened it: the gateway closes it with `4403` within 10 seconds of that token being revoked, and with `4401` two minutes after it expires. A persistent (`ws_persistent: true`) socket stays open across token rotation by sending `{"__orama":"auth.refresh","jwt":"<new token>"}` — for the same account the socket was opened with; a token for anyone else is refused.
 
+A function that declares `ws_auth: capability` in function.yaml can also have its socket opened with a **capability** instead of a credential: `WS /v1/functions/{name}/ws?namespace=<ns>&cap=<token>`. The function mints one for its own socket with `capability_mint(resource, ttl_seconds)`, from a call made by a device-bound session, and hands it to whoever should be able to write to that resource. The gateway checks it before the upgrade, refuses it with a credential beside it, and closes the socket within 10 seconds of `capability_revoke(token)` or of the issuing device being revoked. The function reads what it grants with `get_caller_capability()` and sees no caller. No credential names the sender, but the gateway still sees the client's address, the timing, the resource and which capability was used.
+
 ## Host Functions API
 
 Host functions let your WASM code interact with Orama platform services. They are available to every function without additional configuration.

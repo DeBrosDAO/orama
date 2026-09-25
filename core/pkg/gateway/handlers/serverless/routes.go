@@ -50,22 +50,14 @@ func (h *ServerlessHandlers) handleFunctions(w http.ResponseWriter, r *http.Requ
 //   - DELETE /v1/functions/secrets/{name}            - Delete a secret
 func (h *ServerlessHandlers) handleFunctionByName(w http.ResponseWriter, r *http.Request) {
 	// Parse path: /v1/functions/{name}[/{action}[/{subID}]]
-	path := strings.TrimPrefix(r.URL.Path, "/v1/functions/")
-	parts := strings.SplitN(path, "/", 2)
-
-	if len(parts) == 0 || parts[0] == "" {
+	name, action := SplitFunctionPath(r.URL.Path)
+	if name == "" {
 		http.Error(w, "Function name required", http.StatusBadRequest)
 		return
 	}
 
-	name := parts[0]
-	action := ""
-	if len(parts) > 1 {
-		action = parts[1]
-	}
-
 	// Handle secrets management: /v1/functions/secrets[/{secretName}]
-	if name == "secrets" {
+	if name == SecretsPathName {
 		secretName := action // empty for list/set, secret name for delete
 		switch {
 		case secretName != "" && r.Method == http.MethodDelete:

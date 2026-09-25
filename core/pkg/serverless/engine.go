@@ -913,6 +913,9 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hGetCallerWallet).Export("get_caller_wallet").
 			NewFunctionBuilder().WithFunc(e.hGetCallerJWTSubject).Export("get_caller_jwt_subject").
 			NewFunctionBuilder().WithFunc(e.hGetCallerDeviceID).Export("get_caller_device_id").
+			NewFunctionBuilder().WithFunc(e.hGetCallerCapability).Export("get_caller_capability").
+			NewFunctionBuilder().WithFunc(e.hCapabilityMint).Export("capability_mint").
+			NewFunctionBuilder().WithFunc(e.hCapabilityRevoke).Export("capability_revoke").
 			NewFunctionBuilder().WithFunc(e.hGetWSClientID).Export("get_ws_client_id").
 			NewFunctionBuilder().WithFunc(e.hGetCallerClaim).Export("get_caller_claim").
 			NewFunctionBuilder().WithFunc(e.hGetRequestID).Export("get_request_id").

@@ -914,6 +914,9 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		authService.Audit(),
 		logger.Logger,
 	)
+	if err := wireCapabilities(cfg.ClusterSecret, authService, deps.ServerlessHandlers, hostFuncs, logger.Logger); err != nil {
+		return err
+	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Serverless function engine ready",
 		zap.Int("default_memory_mb", engineCfg.DefaultMemoryLimitMB),
