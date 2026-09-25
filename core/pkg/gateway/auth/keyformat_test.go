@@ -175,3 +175,24 @@ func TestIsWalletSubject(t *testing.T) {
 		t.Error("an empty subject was classified as something")
 	}
 }
+
+func TestLoggableSubject_apiKeyIsFingerprinted(t *testing.T) {
+	key := "ak_LiveCredential123456:anchat"
+	got := LoggableSubject(key)
+	if strings.Contains(got, "LiveCredential") || got != KeyFingerprint(key) {
+		t.Errorf("LoggableSubject(api key) = %q, want its fingerprint %q", got, KeyFingerprint(key))
+	}
+}
+
+func TestLoggableSubject_walletIsLoggedAsIs(t *testing.T) {
+	wallet := "0xb5d8a496c8b2412990d7d467e17727fdf5954afc"
+	if got := LoggableSubject(wallet); got != wallet {
+		t.Errorf("LoggableSubject(wallet) = %q, want %q", got, wallet)
+	}
+}
+
+func TestLoggableSubject_empty(t *testing.T) {
+	if got := LoggableSubject(""); got != "" {
+		t.Errorf("LoggableSubject(\"\") = %q, want empty", got)
+	}
+}

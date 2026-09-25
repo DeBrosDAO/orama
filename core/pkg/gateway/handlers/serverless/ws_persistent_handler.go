@@ -421,7 +421,7 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 			zap.String("reason", reason),
 			zap.String("ws_namespace", fn.Namespace),
 			zap.String("jwt_namespace", claims.Namespace),
-			zap.String("jwt_subject", claims.Sub),
+			zap.String("jwt_subject", auth.LoggableSubject(claims.Sub)),
 		)
 		return h.writeControlAck(conn, oramaControlAck{
 			Type:  "auth.refresh",
@@ -450,8 +450,8 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 	if prevSubject != "" && prevSubject != claims.Sub {
 		h.logger.Info("persistent WS: auth.refresh swapping subject identity on socket",
 			zap.String("client_id", clientID),
-			zap.String("previous_subject", prevSubject),
-			zap.String("new_subject", claims.Sub),
+			zap.String("previous_subject", auth.LoggableSubject(prevSubject)),
+			zap.String("new_subject", auth.LoggableSubject(claims.Sub)),
 		)
 	}
 
@@ -501,7 +501,7 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 	h.logger.Info("persistent WS: auth.refresh applied",
 		zap.String("client_id", clientID),
 		zap.String("namespace", namespace),
-		zap.String("new_subject", claims.Sub))
+		zap.String("new_subject", auth.LoggableSubject(claims.Sub)))
 
 	return h.writeControlAck(conn, oramaControlAck{
 		Type:    "auth.refresh",

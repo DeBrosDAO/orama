@@ -887,7 +887,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		g.logger.ComponentInfo("gateway", "namespace auth check",
 			zap.String("namespace", ns),
 			zap.String("owner_type", ownerType),
-			zap.String("owner_id", ownerID),
+			zap.String("owner_id", loggableOwnerID(ownerType, ownerID)),
 		)
 
 		// Check ownership in the registry, where grants live.
@@ -952,6 +952,18 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// loggableOwnerID is how an owner appears in a log line. For an API key the
+// owner id is the raw key — a live credential — so its fingerprint is logged
+// instead (auth.KeyFingerprint; not HashAPIKey, which returns the key itself
+// when no HMAC secret is configured). A wallet address is public and logged
+// as is (bugboard #2508).
+func loggableOwnerID(ownerType, ownerID string) string {
+	if ownerType != "api_key" {
+		return ownerID
+	}
+	return auth.KeyFingerprint(ownerID)
 }
 
 // principalIdentifierCandidates returns the identifiers to look a principal up

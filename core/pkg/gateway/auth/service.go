@@ -609,7 +609,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 		graceRecovery = true
 		s.logger.ComponentInfo(logging.ComponentGeneral,
 			"refresh token reuse-grace recovery (lost-response retry, single-use)",
-			zap.String("namespace", namespace), zap.String("subject", subject))
+			zap.String("namespace", namespace), zap.String("subject", LoggableSubject(subject)))
 	} else {
 		var customClaimsJSON string
 		if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
@@ -684,7 +684,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			s.logger.ComponentWarn(logging.ComponentGeneral,
 				"refresh token rotation: concurrent use detected (possible replay)",
 				zap.String("namespace", namespace),
-				zap.String("subject", subject))
+				zap.String("subject", LoggableSubject(subject)))
 			return "", "", "", 0, ErrRefreshTokenReplay
 		}
 	}
