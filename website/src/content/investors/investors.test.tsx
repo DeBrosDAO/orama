@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToString } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
@@ -7,6 +8,9 @@ import { CLOUD_COMPETITION, WALLET_COMPETITION } from "./competition";
 import { WALLET_SCENARIOS, walletRevenuePerUser } from "./model";
 import { ORAMA_INPUTS, formatApproxEur, oramaArrEur, payingTeams, walletArrEur } from "./projections";
 import { FAQ } from "./case";
+import { INVESTOR_PDF } from "../site";
+import { ROUTES } from "../routes";
+import { SHADE_COUNT } from "../../components/visuals/funding-donut";
 import { ALLOCATIONS, FUNDING_MONTHS, FUNDING_TOTAL_EUR, PAID_BETA_MONTH, PROOF_POINTS, TIMELINE } from "../funding";
 
 const html = renderToString(
@@ -129,5 +133,36 @@ describe("content", () => {
 
   it("TestPage_has_disclaimer_twice", () => {
     expect(html.match(/not an offer or solicitation/g)?.length).toBe(2);
+  });
+});
+
+describe("pdf", () => {
+  const css = readFileSync(new URL("../../index.css", import.meta.url), "utf8");
+
+  it("TestInvestorPdf_printed_from_the_investor_page_to_a_root_pdf", () => {
+    expect(INVESTOR_PDF.page).toBe(ROUTES.investors.path);
+    expect(INVESTOR_PDF.path).toMatch(/^\/[a-z0-9-]+\.pdf$/);
+  });
+
+  it("TestPage_offers_the_pdf_as_a_download_twice", () => {
+    const links = [...html.matchAll(/<a [^>]*href="([^"]*\.pdf)"[^>]*>/g)];
+    expect(links.map((m) => m[1])).toEqual([INVESTOR_PDF.path, INVESTOR_PDF.path]);
+    for (const m of links) {
+      expect(m[0]).toContain("download");
+      expect(m[0], "the printout hides its own download button").toContain("no-print");
+    }
+  });
+
+  it("TestFundingShades_one_per_allocation_for_screen_and_print", () => {
+    expect(ALLOCATIONS.length).toBeLessThanOrEqual(SHADE_COUNT);
+    for (let i = 0; i < SHADE_COUNT; i++) {
+      const defs = css.match(new RegExp(`--funding-shade-${i}:`, "g")) ?? [];
+      expect(defs.length, `--funding-shade-${i}`).toBe(2);
+    }
+  });
+
+  it("TestPrintStylesheet_reveals_scroll_in_content", () => {
+    const print = css.slice(css.indexOf("@media print"));
+    expect(print).toMatch(/\.animate-in\[data-animate="out"\]\s*\{\s*opacity: 1;/);
   });
 });

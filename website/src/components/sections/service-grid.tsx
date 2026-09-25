@@ -36,7 +36,7 @@ export function ServiceGrid({ compact = false }: ServiceGridProps) {
           id={id}
           className={cn(
             "flex flex-col gap-4 p-5 sm:p-6 border border-dashed border-border bg-surface/60",
-            "transition-colors hover:border-fg/25 hover:bg-white/[0.02]",
+            "transition-colors hover:border-fg/25 hover:bg-fg/[0.02]",
           )}
         >
           <div className="flex items-center gap-3">
@@ -52,7 +52,7 @@ export function ServiceGrid({ compact = false }: ServiceGridProps) {
           </span>
         </li>
       ))}
-      <li className="flex flex-col justify-center gap-3 p-6 border border-fg/20 bg-white/[0.02]">
+      <li className="flex flex-col justify-center gap-3 p-6 border border-fg/20 bg-fg/[0.02]">
         <span className="font-display font-bold text-5xl text-fg">{SERVICES.length}</span>
         <p className="font-display font-semibold text-lg text-fg">services. One address. One login.</p>
         <p className="text-sm text-muted">Your app reaches all of them through a single gateway.</p>

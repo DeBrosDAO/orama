@@ -11,23 +11,17 @@ export const X_URL = "https://x.com/orama_network";
 /** Orama's public group on AnChat. */
 export const ANCHAT_GROUP_URL = "https://g.anchat.io/orama";
 
-export const EMAILS = {
-  support: "support@orama.network",
-  team: "team@orama.network",
+/** The one public contact address: for users, developers and investors alike. */
+export const CONTACT_EMAIL = "info@orama.network";
+
+/**
+ * The investor page as a PDF, printed from the built page at build time by
+ * scripts/build-pdf.mjs and served next to it.
+ */
+export const INVESTOR_PDF = {
+  page: "/investors",
+  path: "/orama-network-investors.pdf",
 } as const;
-
-/** Where investors are pointed. */
-export const INVESTOR_EMAIL = EMAILS.team;
-
-export interface ContactEmail {
-  label: string;
-  address: string;
-}
-
-export const CONTACT_EMAILS: ContactEmail[] = [
-  { label: "Support", address: EMAILS.support },
-  { label: "Team & investors", address: EMAILS.team },
-];
 
 export const APP_LINKS = {
   anchat: "https://anchat.io",

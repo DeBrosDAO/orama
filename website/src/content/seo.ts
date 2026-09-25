@@ -1,5 +1,5 @@
 import type { RouteMeta } from "./routes";
-import { ANCHAT_GROUP_URL, EMAILS, GITHUB_URL, SITE_NAME, SITE_URL, X_URL } from "./site";
+import { ANCHAT_GROUP_URL, CONTACT_EMAIL, GITHUB_URL, SITE_NAME, SITE_URL, X_URL } from "./site";
 
 /**
  * schema.org structured data for search engines, emitted as JSON-LD into
@@ -12,7 +12,7 @@ const ORGANIZATION = {
   name: SITE_NAME,
   url: `${SITE_URL}/`,
   logo: `${SITE_URL}/logo.png`,
-  email: EMAILS.support,
+  email: CONTACT_EMAIL,
   sameAs: [GITHUB_URL, X_URL, ANCHAT_GROUP_URL],
 };
 

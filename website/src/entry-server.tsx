@@ -4,10 +4,10 @@ import { StaticRouter } from "react-router";
 import { App } from "./app";
 import { ROUTE_LIST, documentTitle, normalizePath } from "./content/routes";
 import type { RouteMeta } from "./content/routes";
-import { SITE_URL } from "./content/site";
+import { INVESTOR_PDF, SITE_URL } from "./content/site";
 import { structuredData } from "./content/seo";
 
-export { ROUTE_LIST, SITE_URL, documentTitle, normalizePath, structuredData };
+export { INVESTOR_PDF, ROUTE_LIST, SITE_URL, documentTitle, normalizePath, structuredData };
 export type { RouteMeta };
 
 /**

@@ -7,14 +7,7 @@ import { ScrollToTop } from "../ui/scroll-to-top";
 
 export function Shell() {
   return (
-    <div
-      className="min-h-screen bg-surface text-fg"
-      style={{
-        backgroundImage:
-          "radial-gradient(circle, rgba(161,161,170,0.08) 1px, transparent 1px)",
-        backgroundSize: "24px 24px",
-      }}
-    >
+    <div className="min-h-screen bg-surface text-fg blueprint-dots">
       <Navbar />
       <Suspense
         fallback={

@@ -48,7 +48,7 @@ export function CompetitionGrid({ grid, caption }: { grid: Grid; caption: string
                 scope="col"
                 className={cn(
                   "p-3 text-center font-display font-semibold",
-                  i === grid.ours ? "text-fg bg-white/[0.04]" : "text-accent",
+                  i === grid.ours ? "text-fg bg-fg/[0.04]" : "text-accent",
                 )}
               >
                 {c}
@@ -61,7 +61,7 @@ export function CompetitionGrid({ grid, caption }: { grid: Grid; caption: string
             <tr key={row.label} className="border-b border-dashed border-border last:border-0">
               <th scope="row" className="sticky left-0 z-10 bg-surface p-3 text-left font-normal text-accent">{row.label}</th>
               {row.cells.map((cell, i) => (
-                <td key={grid.columns[i]} className={cn("p-3 text-center", i === grid.ours && "bg-white/[0.04]")}>
+                <td key={grid.columns[i]} className={cn("p-3 text-center", i === grid.ours && "bg-fg/[0.04]")}>
                   <GridCell value={cell} ours={i === grid.ours} />
                 </td>
               ))}

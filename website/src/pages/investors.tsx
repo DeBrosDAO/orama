@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { ArrowRight, Mail, Plus } from "lucide-react";
+import { ArrowRight, Download, Mail, Plus } from "lucide-react";
 import { Page } from "../components/layout/page";
 import { Section } from "../components/layout/section";
 import { PageHero } from "../components/ui/page-hero";
@@ -19,9 +19,21 @@ import { CLOUD_COMPETITION, COMPARABLES, WALLET_COMPETITION } from "../content/i
 import { GRANTS, HARDWARE } from "../content/investors/model";
 import { DISCLAIMER, FAQ, MOAT, RISKS } from "../content/investors/case";
 import { ROUTES } from "../content/routes";
-import { INVESTOR_EMAIL } from "../content/site";
+import { CONTACT_EMAIL, INVESTOR_PDF } from "../content/site";
 
-const INVESTOR_MAILTO = `mailto:${INVESTOR_EMAIL}?subject=${encodeURIComponent("Investing in Orama Network")}`;
+const INVESTOR_MAILTO = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent("Investing in Orama Network")}`;
+
+/** The same page as a PDF, to save or forward. Not shown on the printout itself. */
+function DownloadPdf() {
+  return (
+    <Button asChild variant="ghost" size="lg" className="rounded-full no-print">
+      <a href={INVESTOR_PDF.path} download>
+        <Download className="w-3.5 h-3.5 mr-2" />
+        Download as PDF
+      </a>
+    </Button>
+  );
+}
 
 const TERMS = [`${formatEurShort(FUNDING_TOTAL_EUR)} equity`, "No token", "Swiss AG, Zug", `${FUNDING_MONTHS} months runway`];
 
@@ -39,13 +51,14 @@ function Hero() {
           </li>
         ))}
       </ul>
-      <div className="pt-4">
+      <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
         <Button asChild size="lg" className="rounded-full">
           <a href={INVESTOR_MAILTO}>
             <Mail className="w-3.5 h-3.5 mr-2" />
-            {INVESTOR_EMAIL}
+            {CONTACT_EMAIL}
           </a>
         </Button>
+        <DownloadPdf />
       </div>
     </PageHero>
   );
@@ -103,7 +116,7 @@ function Round() {
     <>
       <Section>
         <SectionTitle eyebrow="The round" title={`${formatEur(FUNDING_TOTAL_EUR)}, and where it goes.`} />
-        <RoundTerms mailto={INVESTOR_MAILTO} email={INVESTOR_EMAIL} />
+        <RoundTerms mailto={INVESTOR_MAILTO} email={CONTACT_EMAIL} />
         <div className="mt-10">
           <FundingDonut />
         </div>
@@ -157,7 +170,7 @@ function CaseAndRisks() {
         <SectionTitle eyebrow="Comparables" title="What this category is worth." />
         <ul className="grid grid-cols-1 sm:grid-cols-2 gap-px bg-border border border-border">
           {COMPARABLES.map((c) => (
-            <li key={c.what} className="flex flex-col gap-1 p-5 bg-surface">
+            <li key={c.what} className="flex flex-col gap-1 p-5 bg-surface sm:odd:last:col-span-2">
               <span className="font-display font-semibold text-fg">
                 {c.what}
                 <SourceRef ids={[c.source]} />
@@ -194,7 +207,7 @@ function Faq() {
           <details key={f.q} className="group py-4">
             <summary className="flex items-center justify-between gap-4 cursor-pointer list-none font-display font-semibold text-fg">
               {f.q}
-              <Plus size={16} className="shrink-0 text-muted transition-transform group-open:rotate-45" />
+              <Plus size={16} className="no-print shrink-0 text-muted transition-transform group-open:rotate-45" />
             </summary>
             <p className="pt-3 text-sm text-muted max-w-3xl">{f.a}</p>
           </details>
@@ -210,10 +223,11 @@ function Closing() {
       <CtaBand title="Let's talk." line="Tell us who you are and what you'd like to know.">
         <Button asChild size="lg" className="rounded-full">
           <a href={INVESTOR_MAILTO}>
-            {INVESTOR_EMAIL}
+            {CONTACT_EMAIL}
             <ArrowRight className="w-3.5 h-3.5 ml-2" />
           </a>
         </Button>
+        <DownloadPdf />
         <Button asChild variant="ghost" size="lg" className="rounded-full">
           <Link to={ROUTES.whitepaper.path}>Read the whitepaper</Link>
         </Button>

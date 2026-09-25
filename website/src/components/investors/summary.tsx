@@ -15,7 +15,7 @@ export function ThirtySeconds() {
   ];
   return (
     <section aria-labelledby="thirty-seconds" className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div className="border border-fg/20 bg-white/[0.02]">
+      <div className="border border-fg/20 bg-fg/[0.02]">
         <h2 id="thirty-seconds" className="px-5 pt-5 font-mono text-[11px] tracking-[0.25em] uppercase text-muted">
           The 30-second version
         </h2>

@@ -127,7 +127,7 @@ export function MarketLayers() {
           <div
             className={cn(
               "w-full sm:w-[var(--w)] flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-6 p-4 border",
-              i === 0 ? "border-fg/25 bg-white/[0.03]" : "border-dashed border-border",
+              i === 0 ? "border-fg/25 bg-fg/[0.03]" : "border-dashed border-border",
             )}
             style={{ "--w": widths[i] } as CSSProperties}
           >

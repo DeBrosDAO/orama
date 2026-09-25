@@ -14,7 +14,7 @@ export function SectionTitle({ eyebrow, title, line, align = "center", className
   return (
     <div
       className={cn(
-        "flex flex-col gap-3 mb-10 sm:mb-14",
+        "flex flex-col gap-3 mb-10 sm:mb-14 print:mb-6 print:break-inside-avoid print:break-after-avoid",
         align === "center" ? "items-center text-center" : "items-start text-left",
         className,
       )}

@@ -1,6 +1,6 @@
 import { Lightbulb } from "lucide-react";
 import { SERVICES } from "../../content/services";
-import { EMAILS } from "../../content/site";
+import { CONTACT_EMAIL } from "../../content/site";
 import { USE_CASES, USE_CASE_TAG_LABEL } from "../../content/use-cases";
 import type { UseCase, UseCaseTag } from "../../content/use-cases";
 import { cn } from "../../lib/utils";
@@ -35,12 +35,12 @@ function pick(ids?: string[]): UseCase[] {
 
 function InviteTile() {
   return (
-    <li className="flex flex-col gap-4 p-6 border border-fg/20 bg-white/[0.02]">
+    <li className="flex flex-col gap-4 p-6 border border-fg/20 bg-fg/[0.02]">
       <Lightbulb size={28} strokeWidth={1.25} className="text-fg" />
       <h3 className="font-display font-semibold text-lg text-fg leading-tight">What would you build?</h3>
       <p className="text-sm text-muted flex-1">Tell us the idea. We read everything.</p>
-      <a href={`mailto:${EMAILS.team}`} className="font-mono text-xs text-accent hover:text-fg transition-colors">
-        {EMAILS.team}
+      <a href={`mailto:${CONTACT_EMAIL}`} className="font-mono text-xs text-accent hover:text-fg transition-colors">
+        {CONTACT_EMAIL}
       </a>
     </li>
   );

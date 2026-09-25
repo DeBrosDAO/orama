@@ -12,14 +12,18 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 /** Hairline gap between segments, in px of arc. */
 const GAP = 3;
 
-/** Monochrome ramp, brightest for the largest slice. */
-const SHADES = ["#e4e4e7", "#b4b4bb", "#8e8e96", "#6b6b73", "#52525b", "#3f3f46", "#2e2e33"];
+/**
+ * Monochrome ramp, strongest for the largest slice. The colours are CSS
+ * variables (index.css) so the printed page can flip the ramp for paper.
+ */
+export const SHADE_COUNT = 7;
+const shade = (i: number) => `var(--funding-shade-${i % SHADE_COUNT})`;
 
 export function FundingDonut() {
   let offset = 0;
   const segments = ALLOCATIONS.map((a, i) => {
     const len = (a.amountEur / FUNDING_TOTAL_EUR) * CIRCUMFERENCE;
-    const seg = { ...a, len, offset, shade: SHADES[i % SHADES.length] };
+    const seg = { ...a, len, offset, shade: shade(i) };
     offset += len;
     return seg;
   });
@@ -36,7 +40,7 @@ export function FundingDonut() {
               cy={100}
               r={RADIUS}
               fill="none"
-              stroke={s.shade}
+              style={{ stroke: s.shade }}
               strokeWidth={STROKE}
               strokeDasharray={`${Math.max(s.len - GAP, 0)} ${CIRCUMFERENCE}`}
               strokeDashoffset={-s.offset}

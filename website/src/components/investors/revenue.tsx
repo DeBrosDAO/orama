@@ -41,7 +41,7 @@ export function OramaRevenue() {
   return (
     <div className="flex flex-col gap-6">
       <CardList columns={2} items={ORAMA_REVENUE.map((r) => ({ title: r.title, line: r.line, tag: r.when }))} />
-      <div className="p-6 border border-fg/20 bg-white/[0.02] flex flex-col gap-2">
+      <div className="p-6 border border-fg/20 bg-fg/[0.02] flex flex-col gap-2">
         <p className="font-display font-semibold text-xl text-fg">
           {ORAMA_PRICING.headline}
           <SourceRef ids={ORAMA_PRICING.sources} />
@@ -123,7 +123,7 @@ export function Projections() {
           </thead>
           <tbody>
             {projectionRows().map((row) => (
-              <tr key={row.label} className={cn("border-b border-dashed border-border last:border-0", row.strong && "bg-white/[0.03]")}>
+              <tr key={row.label} className={cn("border-b border-dashed border-border last:border-0", row.strong && "bg-fg/[0.03]")}>
                 <th scope="row" className={cn("sticky left-0 z-10 bg-surface p-3 text-left font-normal", row.strong ? "text-fg font-semibold" : "text-accent")}>
                   {row.label}
                 </th>

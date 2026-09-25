@@ -162,9 +162,9 @@ async function main() {
   // content="noindex">, which crawlers can only honour if they may fetch them.
   writeFileSync(join(DIST, "robots.txt"), `User-agent: *\nAllow: /\n\nSitemap: ${site}/sitemap.xml\n`);
 
-  // Build-only artefacts: the manifest and the server bundle are not the site.
+  // The manifest is a build-only artefact, not the site. dist-server/ stays
+  // for build-pdf.mjs; it sits outside dist/, so it is never published.
   rmSync(join(DIST, ".vite"), { recursive: true, force: true });
-  rmSync(SERVER_DIR, { recursive: true, force: true });
   console.log(`prerender: ${server.ROUTE_LIST.length} pages, sitemap.xml, robots.txt`);
 }
 

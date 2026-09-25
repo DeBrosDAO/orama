@@ -18,6 +18,17 @@
   --color-signal: #fbbf24;
 }
 
+/* Use-of-funds ramp (components/visuals/funding-donut.tsx), largest slice first. */
+:root {
+  --funding-shade-0: #e4e4e7;
+  --funding-shade-1: #b4b4bb;
+  --funding-shade-2: #8e8e96;
+  --funding-shade-3: #6b6b73;
+  --funding-shade-4: #52525b;
+  --funding-shade-5: #3f3f46;
+  --funding-shade-6: #2e2e33;
+}
+
 @layer base {
   html {
     scroll-behavior: smooth;
@@ -109,6 +120,12 @@
     animation: pulse-dot 2s ease-in-out infinite;
   }
 
+  /* The blueprint dot grid behind every page (components/layout/shell.tsx). */
+  .blueprint-dots {
+    background-image: radial-gradient(circle, rgba(161, 161, 170, 0.08) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
   .animate-orbit {
     animation: orbit 60s linear infinite;
     transform-origin: center;
@@ -140,8 +157,30 @@
   }
 }
 
-/* The whitepaper is meant to be printed or saved as a PDF from the browser. */
+/* Printing, and the investor PDF (scripts/build-pdf.mjs): the same page on
+   white paper. The colour tokens flip to a light palette, motion stops, and
+   cards and table rows stay whole across page breaks. */
 @media print {
+  :root {
+    --color-bg: #ffffff;
+    --color-fg: #18181b;
+    --color-muted: #52525b;
+    --color-border: #d4d4d8;
+    --color-surface: #ffffff;
+    --color-surface-2: #f4f4f5;
+    --color-accent: #3f3f46;
+    --color-accent-2: #27272a;
+    --color-signal: #b45309;
+
+    --funding-shade-0: #18181b;
+    --funding-shade-1: #3f3f46;
+    --funding-shade-2: #52525b;
+    --funding-shade-3: #71717a;
+    --funding-shade-4: #a1a1aa;
+    --funding-shade-5: #b4b4bb;
+    --funding-shade-6: #d4d4d8;
+  }
+
   header,
   footer,
   .no-print {
@@ -155,6 +194,51 @@
     padding: 0 !important;
   }
 
+  .blueprint-dots {
+    background-image: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  /* Paper never scrolls: everything the scroll-in reveal would show, shown. */
+  .js .animate-in[data-animate="out"] {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* Paper needs less air than a scrolling page. */
+  main section {
+    padding-block: 1.75rem;
+  }
+
+  /* Hairline grids draw their lines with the container's background showing
+     through a 1px gap: split across pages, that background fills the rest of
+     the page. They move to the next page whole; one taller than a page still
+     breaks, as it would anyway. */
+  .gap-px {
+    break-inside: avoid;
+  }
+
+  li,
+  tr,
+  dl > div,
+  details,
+  figure {
+    break-inside: avoid;
+  }
+
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+
+  /* The whitepaper forces plain black on white. */
   .print-light,
   .print-light * {
     color: #000 !important;

@@ -1,13 +1,14 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { APP_LINKS, GITHUB_URL } from "./site";
+import { APP_LINKS, CONTACT_EMAIL, GITHUB_URL } from "./site";
 
 /**
  * The site's two content rules, enforced over every source file of the public
  * pages (the unlisted docs are exempt: they must show real package names):
  *  1. Orama is its own project: no mention of any former parent brand.
  *  2. Only what the code supports: no token, sale or reward language.
+ *  3. One public contact address.
  */
 
 const SRC = resolve(__dirname, "..");
@@ -54,5 +55,10 @@ describe("brand and claims", () => {
 
   it("TestSite_no_old_partners", () => {
     expect(offending(/icxcnika|nonos|dgrs/i)).toEqual([]);
+  });
+
+  it("TestSite_only_the_contact_email", () => {
+    expect(CONTACT_EMAIL).toBe("info@orama.network");
+    expect(offending(/[\w.+-]+@orama\.network/i, [CONTACT_EMAIL])).toEqual([]);
   });
 });

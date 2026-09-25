@@ -2,7 +2,7 @@ import { Link } from "react-router";
 import { Github } from "lucide-react";
 import { CrosshairDivider } from "../ui/crosshair-divider";
 import { DOCS_PATH, ROUTES } from "../../content/routes";
-import { ANCHAT_GROUP_URL, CONTACT_EMAILS, GITHUB_URL, X_URL } from "../../content/site";
+import { ANCHAT_GROUP_URL, CONTACT_EMAIL, GITHUB_URL, X_URL } from "../../content/site";
 import { LICENSE } from "../../content/facts";
 import oramaIcon from "../../assets/orama-icon.png";
 
@@ -66,16 +66,9 @@ export function Footer() {
               <span className="font-display text-base font-bold tracking-widest text-fg">ORAMA</span>
             </Link>
             <p className="text-muted text-sm max-w-xs">The cloud, with nobody in the middle. Open source, built in the open.</p>
-            <ul className="flex flex-col gap-1">
-              {CONTACT_EMAILS.map((e) => (
-                <li key={e.address} className="flex items-baseline gap-2 text-xs">
-                  <a href={`mailto:${e.address}`} className="font-mono text-accent hover:text-fg transition-colors">
-                    {e.address}
-                  </a>
-                  <span className="text-muted">{e.label}</span>
-                </li>
-              ))}
-            </ul>
+            <a href={`mailto:${CONTACT_EMAIL}`} className="font-mono text-xs text-accent hover:text-fg transition-colors w-fit">
+              {CONTACT_EMAIL}
+            </a>
           </div>
 
           {COLUMNS.map((column) => (
