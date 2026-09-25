@@ -244,18 +244,19 @@ Read and write to the distributed RQLite database.
 
 ### Cache (Olric)
 
-Read and write to the distributed Olric cache. Cache operations use a fixed dmap (`serverless_cache`).
+Read and write to the distributed Olric cache. Each namespace has its own cache: a function reads and writes only its namespace's keys.
 
 | Function | Description |
 |----------|-------------|
 | `cache_get(key)` | Get cached value by key. Returns empty on miss. |
-| `cache_set(key, value, ttlSeconds)` | Store value with TTL in seconds. |
+| `cache_set(key, value, ttlSeconds)` | Store value. `ttlSeconds > 0` expires the entry after that long (at most 10 years); `0` means no expiry; a negative or longer ttl is refused. No return value; a failure is logged by the gateway. |
+| `cache_delete(key)` | Remove a key. Returns 1 when the key is gone afterwards (including when it was never set), 0 on failure. Requires gateway 0.200.0 or later: a function that imports it fails to instantiate on an older gateway. |
 | `cache_incr(key)` | Atomically increment by 1 (initializes to 0 if missing). |
 | `cache_incr_by(key, delta)` | Atomically increment by delta. |
 
 ### Storage (IPFS)
 
-**Not yet available.** IPFS storage host functions (`storage_put`, `storage_get`) and `cache_delete` are not currently exported by the runtime -- a function that imports them will fail to instantiate. Use the [Storage API](/docs/developer/storage) from outside your function instead.
+**Not yet available.** IPFS storage host functions (`storage_put`, `storage_get`) are not currently exported by the runtime -- a function that imports them will fail to instantiate. Use the [Storage API](/docs/developer/storage) from outside your function instead.
 
 ### HTTP
 

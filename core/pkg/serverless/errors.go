@@ -89,6 +89,14 @@ var (
 
 	// ErrCacheUnavailable is returned when the cache is unavailable.
 	ErrCacheUnavailable = errors.New("cache unavailable")
+
+	// ErrCacheMiss is returned by CacheGet when the key is not in the cache.
+	ErrCacheMiss = errors.New("cache miss")
+
+	// ErrInvalidCacheTTL is returned when cache_set is given a ttl it refuses:
+	// negative, or longer than olric.MaxEntryTTL. A guest mistake, not a
+	// gateway fault.
+	ErrInvalidCacheTTL = errors.New("invalid cache ttl")
 )
 
 // ConfigError represents a configuration validation error.

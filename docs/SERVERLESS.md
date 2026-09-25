@@ -301,9 +301,26 @@ if !res.Committed {
 | Function | Description |
 |----------|-------------|
 | `cache_get(key)` → bytes | Get cached value by key. Returns empty on miss. |
-| `cache_set(key, value, ttl)` | Store value with TTL in seconds. |
+| `cache_set(key, value, ttl)` | Store value. `ttl` is in seconds: `> 0` expires the entry after that long (at most `olric.MaxEntryTTL`, 10 years), `0` means no expiry (lives until `cache_delete`), negative or longer is refused. No return value; a failure is logged by the gateway. |
+| `cache_delete(key)` → u32 | Remove a key. Returns 1 when the key is gone afterwards (including when it was never set), 0 on failure. The only way to clear a no-expiry entry. Requires gateway 0.200.0 or later on every node of the namespace: wazero resolves imports at instantiation, so a function importing it fails every invocation on an older gateway. |
 | `cache_incr(key)` → int64 | Atomically increment by 1 (init to 0 if missing). |
 | `cache_incr_by(key, delta)` → int64 | Atomically increment by delta. |
+
+Each namespace has its own cache map (`:serverless_cache:<namespace>`), so a
+function reaches only its own namespace's keys, including on the cluster
+gateway, which runs functions for every namespace against one Olric. The cache
+host functions need an invocation, so they are unavailable while a warm-pool
+(stateless) reactor module runs `_initialize`; call them from `handle()`.
+
+**Upgrading to 0.200.0.** Before 0.200.0 every function shared one
+`serverless_cache` map and every entry was written without an expiry. After the
+upgrade those entries are invisible to functions, which is also what clears
+values that were stuck forever. While a namespace's gateways are on mixed
+versions, old and new nodes read different maps, so a value or counter written
+through one is not seen through the other; do not rely on cache state across
+the rollout. The old map keeps its entries in memory until the Olric members that hold it
+restart: the namespace's Olric, or the core Olric for functions run by the
+cluster gateway.
 
 ### HTTP
 

@@ -10,6 +10,8 @@ import (
 
 	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/olric"
+	olriclib "github.com/olric-data/olric"
 )
 
 // getNamespaceFromContext extracts the namespace from the request context
@@ -31,7 +33,7 @@ func getNamespaceFromContext(ctx context.Context) string {
 //	  "dmap": "my-cache",
 //	  "key": "user:123",
 //	  "value": {"name": "John", "age": 30},
-//	  "ttl": "1h"  // Optional: "1h", "30m", etc.
+//	  "ttl": "1h"  // Optional: "1h", "30m", etc. Omitted or "0s" = no expiry.
 //	}
 //
 // Response:
@@ -77,6 +79,12 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	putOpts, err := putOptionsForTTL(req.TTL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -95,18 +103,6 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: TTL support - need to check Olric v0.7 API for TTL/expiry options
-	// For now, ignore TTL if provided
-	if req.TTL != "" {
-		_, err := time.ParseDuration(req.TTL)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ttl format: %v", err))
-			return
-		}
-		// TTL parsing succeeded but not yet implemented in API
-		// Will be added once we confirm the correct Olric API method
-	}
-
 	// Serialize complex types (maps, slices) to JSON bytes for Olric storage
 	// Olric can handle basic types (string, number, bool) directly, but complex
 	// types need to be serialized to bytes
@@ -116,7 +112,7 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = dm.Put(ctx, req.Key, valueToStore)
+	err = dm.Put(ctx, req.Key, valueToStore, putOpts...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to put key: %v", err))
 		return
@@ -127,6 +123,30 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		"key":    req.Key,
 		"dmap":   req.DMap,
 	})
+}
+
+// putOptionsForTTL turns the request's optional ttl into Olric put options.
+// An empty or zero ttl ("", "0", "0s") stores the entry with no expiry,
+// matching cache_set's ttl=0. A ttl that does not parse, is negative, or is
+// longer than olric.MaxEntryTTL is refused rather than stored as something it
+// is not.
+func putOptionsForTTL(ttl string) ([]olriclib.PutOption, error) {
+	if ttl == "" {
+		return nil, nil
+	}
+	d, err := time.ParseDuration(ttl)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ttl format: %w", err)
+	}
+	switch {
+	case d < 0:
+		return nil, fmt.Errorf("ttl must not be negative, got %q; omit ttl or send \"0s\" for no expiry", ttl)
+	case d > olric.MaxEntryTTL:
+		return nil, fmt.Errorf("ttl %q exceeds the maximum of %s", ttl, olric.MaxEntryTTL)
+	case d == 0:
+		return nil, nil
+	}
+	return []olriclib.PutOption{olriclib.EX(d)}, nil
 }
 
 // prepareValueForStorage prepares a value for storage in Olric.

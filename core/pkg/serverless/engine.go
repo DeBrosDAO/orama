@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -925,6 +926,7 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hExecAndPublish).Export("exec_and_publish").
 			NewFunctionBuilder().WithFunc(e.hCacheGet).Export("cache_get").
 			NewFunctionBuilder().WithFunc(e.hCacheSet).Export("cache_set").
+			NewFunctionBuilder().WithFunc(e.hCacheDelete).Export("cache_delete").
 			NewFunctionBuilder().WithFunc(e.hCacheIncr).Export("cache_incr").
 			NewFunctionBuilder().WithFunc(e.hCacheIncrBy).Export("cache_incr_by").
 			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
@@ -1065,6 +1067,11 @@ func (e *Engine) hCacheGet(ctx context.Context, mod api.Module, keyPtr, keyLen u
 	}
 	val, err := e.hostServices.CacheGet(ctx, string(key))
 	if err != nil {
+		// A miss is the normal answer and returns empty. Anything else is a
+		// failure the guest cannot tell from a miss, so it is logged.
+		if !errors.Is(err, ErrCacheMiss) {
+			e.logger.Error("host function cache_get failed", zap.Error(err), zap.String("key", logSafeKey(key)))
+		}
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, val)
@@ -1079,7 +1086,42 @@ func (e *Engine) hCacheSet(ctx context.Context, mod api.Module, keyPtr, keyLen, 
 	if !ok {
 		return
 	}
-	_ = e.hostServices.CacheSet(ctx, string(key), val, ttl)
+	// cache_set has no return value in the guest ABI, so a failure can only
+	// be surfaced in the gateway log.
+	if err := e.hostServices.CacheSet(ctx, string(key), val, ttl); err != nil {
+		fields := []zap.Field{zap.Error(err), zap.String("key", logSafeKey(key)), zap.Int64("ttl_seconds", ttl)}
+		if errors.Is(err, ErrInvalidCacheTTL) {
+			e.logger.Warn("host function cache_set refused its ttl", fields...)
+			return
+		}
+		e.logger.Error("host function cache_set failed", fields...)
+	}
+}
+
+// maxLoggedKeyBytes bounds a guest-chosen cache key in a log line. A key can
+// be as large as guest memory, and one failing call per log line would let a
+// guest flood the gateway log.
+const maxLoggedKeyBytes = 64
+
+func logSafeKey(key []byte) string {
+	if len(key) <= maxLoggedKeyBytes {
+		return string(key)
+	}
+	return fmt.Sprintf("%s…(%d bytes)", strings.ToValidUTF8(string(key[:maxLoggedKeyBytes]), ""), len(key))
+}
+
+// hCacheDelete returns 1 when the key is gone afterwards (deleted, or was
+// never there) and 0 when the delete could not be performed.
+func (e *Engine) hCacheDelete(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint32 {
+	key, ok := e.executor.ReadFromGuest(mod, keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.CacheDelete(ctx, string(key)); err != nil {
+		e.logger.Error("host function cache_delete failed", zap.Error(err), zap.String("key", logSafeKey(key)))
+		return 0
+	}
+	return 1
 }
 
 func (e *Engine) hCacheIncr(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) int64 {
@@ -1089,7 +1131,7 @@ func (e *Engine) hCacheIncr(ctx context.Context, mod api.Module, keyPtr, keyLen 
 	}
 	val, err := e.hostServices.CacheIncr(ctx, string(key))
 	if err != nil {
-		e.logger.Error("host function cache_incr failed", zap.Error(err), zap.String("key", string(key)))
+		e.logger.Error("host function cache_incr failed", zap.Error(err), zap.String("key", logSafeKey(key)))
 		return 0
 	}
 	return val
@@ -1102,7 +1144,7 @@ func (e *Engine) hCacheIncrBy(ctx context.Context, mod api.Module, keyPtr, keyLe
 	}
 	val, err := e.hostServices.CacheIncrBy(ctx, string(key), delta)
 	if err != nil {
-		e.logger.Error("host function cache_incr_by failed", zap.Error(err), zap.String("key", string(key)), zap.Int64("delta", delta))
+		e.logger.Error("host function cache_incr_by failed", zap.Error(err), zap.String("key", logSafeKey(key)), zap.Int64("delta", delta))
 		return 0
 	}
 	return val

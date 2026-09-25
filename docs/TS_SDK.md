@@ -289,7 +289,10 @@ await client.cache.delete("sessions", userId);
 ```
 
 The distributed map name is the first argument; keys are scoped to it. The TTL
-is a duration string such as `"30m"` or `"1h"`, and is optional.
+is a duration string such as `"30m"` or `"1h"`, and is optional: the entry
+expires after that long, and without a TTL (or with `"0s"`) it lives until
+deleted. A TTL that does not parse, is negative, or exceeds 10 years is refused
+with a 400.
 
 ---
 

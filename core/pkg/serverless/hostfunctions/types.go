@@ -121,5 +121,8 @@ type HostFunctions struct {
 // Ensure HostFunctions implements HostServices interface.
 var _ serverless.HostServices = (*HostFunctions)(nil)
 
-// Cache constants
-const cacheDMapName = "serverless_cache"
+// cacheDMapName prefixes each namespace's function cache map
+// (":serverless_cache:<namespace>"). The HTTP cache API names its maps
+// "<namespace>:<dmap>" on the same Olric and refuses an empty namespace, so a
+// name that starts with ':' is one it can never produce.
+const cacheDMapName = ":serverless_cache"
