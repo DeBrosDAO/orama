@@ -179,13 +179,8 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 		}
 	}
 
-	for i, op := range req.Ops {
-		if err := checkGuestSQL(op.SQL); err != nil {
-			return nil, &serverless.HostFunctionError{
-				Function: "db_transaction",
-				Cause:    fmt.Errorf("op %d: %w", i, err),
-			}
-		}
+	if err := checkGuestOps("db_transaction", req.Ops); err != nil {
+		return nil, err
 	}
 
 	res, err := h.db.Batch(ctx, req.Ops)
@@ -214,6 +209,18 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 	// Rollback errors are encoded in the JSON; do NOT propagate as Go error.
 	// The caller inspects committed / failed_index / error instead.
 	return out, nil
+}
+
+// checkGuestOps applies the guest SQL guard to every op of a batched host
+// call, before anything runs. One helper for every batched call: the guard
+// was once missing from one of them (bugboard #425).
+func checkGuestOps(fn string, ops []rqlite.BatchOp) error {
+	for i, op := range ops {
+		if err := checkGuestSQL(op.SQL); err != nil {
+			return &serverless.HostFunctionError{Function: fn, Cause: fmt.Errorf("op %d: %w", i, err)}
+		}
+	}
+	return nil
 }
 
 // opResultsCarryError reports whether any op already explains the failure, so
@@ -407,13 +414,8 @@ func (h *HostFunctions) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byt
 		req.Ops[i].Kind = rqlite.BatchOpQuery
 	}
 
-	for i, op := range req.Ops {
-		if err := checkGuestSQL(op.SQL); err != nil {
-			return nil, &serverless.HostFunctionError{
-				Function: "db_query_batch",
-				Cause:    fmt.Errorf("op %d: %w", i, err),
-			}
-		}
+	if err := checkGuestOps("db_query_batch", req.Ops); err != nil {
+		return nil, err
 	}
 
 	// Explicit batch-level deadline. The caller's ctx already carries the
@@ -530,6 +532,12 @@ func (h *HostFunctions) ExecAndPublish(
 			Function: "exec_and_publish",
 			Cause:    fmt.Errorf("too many ops: max %d", rqlite.MaxBatchOps),
 		}
+	}
+	// The same guard every other database host function applies, before any
+	// side effect: without it this was a way around sqlguard to the platform's
+	// auth tables (bugboard #425).
+	if err := checkGuestOps("exec_and_publish", req.Ops); err != nil {
+		return nil, err
 	}
 
 	// exec_and_publish reaches the same shared gossipsub publish path as

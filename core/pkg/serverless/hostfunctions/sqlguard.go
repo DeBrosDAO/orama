@@ -92,6 +92,16 @@ var deniedStatements = map[string]string{
 	"vacuum": "can write a copy of the whole database elsewhere",
 }
 
+// rawStorageTables are SQLite virtual tables that read the database file below
+// the table level. `sqlite_dbpage` returns raw pages, protected tables'
+// contents included, without the statement ever naming one; `dbstat` exposes
+// page-level layout. Whether they exist depends on how SQLite was compiled, so
+// they are refused by name rather than trusted to be absent.
+var rawStorageTables = map[string]bool{
+	"sqlite_dbpage": true,
+	"dbstat":        true,
+}
+
 // ErrSQLNotAllowed is what a refused statement returns.
 type ErrSQLNotAllowed struct {
 	Reason string
@@ -102,6 +112,9 @@ func (e *ErrSQLNotAllowed) Error() string { return e.Reason }
 // checkGuestSQL refuses a statement a function may not run.
 func checkGuestSQL(query string) error {
 	tokens := tokenizeSQL(query)
+	if isCreateTrigger(tokens) {
+		return &ErrSQLNotAllowed{Reason: "CREATE TRIGGER is not available to a function: a trigger runs statements the guard never sees"}
+	}
 
 	seenStatement := false
 	for i, tok := range tokens {
@@ -130,58 +143,73 @@ func checkGuestSQL(query string) error {
 				return err
 			}
 		case tokenString:
-			// SQLite accepts a string literal where a table name is
-			// expected, so `FROM 'api_keys'` reads the table. Only a
-			// string in that position is treated as a name; everywhere
-			// else a string is the tenant's own data and is left alone.
-			if i > 0 && precedesATableName(tokens[:i]) {
-				if err := refuseProtected(tok.text); err != nil {
-					return err
-				}
+			if err := refuseProtectedLiteral(tok.text); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
+// refuseProtected refuses an identifier that is a platform table's name, in
+// any role — table, column, alias or named parameter. A role is not tracked:
+// the name is reserved.
 func refuseProtected(name string) error {
-	if why, protected := protectedTables[strings.ToLower(strings.TrimSpace(name))]; protected {
-		return &ErrSQLNotAllowed{
-			Reason: fmt.Sprintf("%s belongs to the platform (%s) and is not readable or writable from a function", strings.ToLower(name), why),
-		}
+	n := normalizeName(name)
+	if why, protected := protectedTables[n]; protected {
+		return &ErrSQLNotAllowed{Reason: fmt.Sprintf(
+			"the name %s is reserved for a platform table (%s) and may not appear in a function's SQL, as a table, column, alias or parameter name", n, why)}
+	}
+	if rawStorageTables[n] {
+		return &ErrSQLNotAllowed{Reason: fmt.Sprintf("%s reads the database file below the table level and is not available to a function", n)}
 	}
 	return nil
 }
 
-// tableNameKeywords are the words a table name may directly follow. They are
-// what makes a string literal in that spot a name rather than data.
-var tableNameKeywords = map[string]bool{
-	"from": true, "join": true, "into": true, "update": true,
-	"table": true, "on": true, "exists": true,
+// refuseProtectedLiteral refuses a string literal whose whole text is a
+// platform table's name. SQLite's grammar accepts a string literal wherever
+// it takes a name, so `FROM 'api_keys'`, `FROM messages, 'api_keys'`,
+// `FROM ('api_keys')` and `UPDATE OR REPLACE 'api_keys'` all reach the table.
+// Tracking which positions those are meant re-implementing SQLite's grammar,
+// and every list of them missed one (bugboard #425). So the literal is refused
+// wherever it appears. A function that needs that text as data binds it as an
+// argument, which never reaches the SQL text at all.
+func refuseProtectedLiteral(text string) error {
+	n := normalizeName(text)
+	if _, protected := protectedTables[n]; protected || rawStorageTables[n] {
+		return &ErrSQLNotAllowed{Reason: fmt.Sprintf(
+			"the string literal '%s' is the name of a platform table, and SQLite reads a string literal as a table name in many positions; pass the value as a bound argument (?) instead", n)}
+	}
+	return nil
 }
 
-// precedesATableName reports whether the tokens before a string literal put it
-// where a table name goes, stepping back over a schema qualifier so
-// `FROM main.'api_keys'` and `FROM "main"."api_keys"` are read the same way as
-// `FROM api_keys`.
-func precedesATableName(before []token) bool {
-	i := len(before) - 1
-	for i >= 0 && before[i].kind == tokenDot {
-		i-- // the qualifier itself
-		if i < 0 {
-			return false
+// normalizeName folds a name for comparison. SQLite folds ASCII case only;
+// strings.ToLower and TrimSpace also fold and trim Unicode, a deliberate
+// superset that can only make the guard refuse more.
+func normalizeName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// isCreateTrigger reports whether the statement so far is CREATE [TEMP|
+// TEMPORARY] TRIGGER. A trigger body is statements run later by SQLite on its
+// own, so nothing a function sends may create one. (Every trigger body today
+// also contains a ';', which the one-statement rule refuses; this does not
+// rely on that.)
+func isCreateTrigger(tokens []token) bool {
+	var words []string
+	for _, tok := range tokens {
+		if tok.kind != tokenWord || len(words) == 3 {
+			break
 		}
-		switch before[i].kind {
-		case tokenWord, tokenQuotedIdent, tokenString:
-			i-- // whatever precedes the qualifier
-		default:
-			return false
-		}
+		words = append(words, strings.ToLower(tok.text))
 	}
-	if i < 0 {
+	if len(words) < 2 || words[0] != "create" {
 		return false
 	}
-	return before[i].kind == tokenWord && tableNameKeywords[strings.ToLower(before[i].text)]
+	if words[1] == "trigger" {
+		return true
+	}
+	return len(words) == 3 && (words[1] == "temp" || words[1] == "temporary") && words[2] == "trigger"
 }
 
 func hasMoreContent(tokens []token) bool {
@@ -253,7 +281,7 @@ func tokenizeSQL(q string) []token {
 		case c == '.':
 			out = append(out, token{kind: tokenDot, text: "."})
 			i++
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+		case isSQLiteSpace(c):
 			// Whitespace separates tokens and is not one. Keeping it would
 			// put a space between `FROM` and the name that follows it.
 			i++
@@ -297,4 +325,14 @@ func readDelimited(q string, i int, open, close byte) (string, int) {
 func isWordByte(c byte) bool {
 	return c == '_' || c == '$' ||
 		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+// isSQLiteSpace is SQLite's whitespace as the guard must see it: the bytes
+// its tokenizer accepts between tokens (space, \t, \n, \f, \r), plus \v,
+// which SQLite skips once a run of whitespace has begun. Missing one let
+// `FROM\f'api_keys'` read to the guard as something other than FROM followed
+// by a name (bugboard #425). The set is a deliberate superset: \v where SQLite
+// would start a token is a syntax error there anyway.
+func isSQLiteSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == '\v'
 }

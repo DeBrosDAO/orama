@@ -2,12 +2,16 @@ package hostfunctions
 
 import (
 	"context"
+	"errors"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/migrations"
+	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
 
@@ -108,15 +112,93 @@ func TestCheckGuestSQL_allowsATenantsOwnSQL(t *testing.T) {
 // reference. Refusing it would make the guard unusable for a chat app.
 func TestCheckGuestSQL_aProtectedNameAsDataIsAllowed(t *testing.T) {
 	for _, query := range []string{
-		"INSERT INTO messages(body) VALUES ('api_keys')",
 		"SELECT * FROM messages WHERE body = 'talk about api_keys'",
 		"UPDATE users SET bio = 'I broke the nonces table once' WHERE id = ?",
+		"INSERT INTO messages(body) VALUES ('api_keys2')", // contains a protected name, is not one
+		"INSERT INTO messages(body) VALUES ('the grants table')",
 	} {
 		t.Run(query, func(t *testing.T) {
 			if err := checkGuestSQL(query); err != nil {
 				t.Errorf("refused a protected name used as data: %q: %v", query, err)
 			}
 		})
+	}
+}
+
+// bugboard #425: SQLite reads a string literal as a table name wherever its
+// grammar takes a name, and every list of those positions missed one. A
+// literal that is exactly a protected name is refused wherever it is; the
+// refusal says to bind the value instead.
+func TestCheckGuestSQL_aStringThatIsAProtectedNameIsRefusedAnywhere(t *testing.T) {
+	for _, query := range []string{
+		"SELECT * FROM messages, 'api_keys'",
+		"SELECT * FROM messages,'api_keys'",
+		"SELECT * FROM messages, main.'api_keys'",
+		"SELECT * FROM ('api_keys')",
+		"SELECT * FROM (SELECT 1) AS s, 'api_keys'",
+		"WITH x AS (SELECT * FROM messages, 'api_keys') SELECT * FROM x",
+		"SELECT * FROM messages WHERE id IN (SELECT 1 FROM messages, 'grants')",
+		"INSERT INTO messages(id, body) SELECT 2, k FROM messages, 'api_keys'",
+		"CREATE VIEW v AS SELECT * FROM messages, 'function_secrets'",
+		"UPDATE OR REPLACE 'api_keys' SET scopes = 'admin'",
+		"UPDATE OR IGNORE 'api_keys' SET scopes = 'admin'",
+		"UPDATE OR ROLLBACK 'grants' SET role = 'owner'",
+		"UPDATE OR ABORT 'grants' SET role = 'owner'",
+		"UPDATE OR FAIL main.'api_keys' SET scopes = 'admin'",
+		"SELECT * FROM pragma_table_info('api_keys')",
+		"SELECT * FROM \v'api_keys'",
+		"INSERT INTO messages(body) VALUES ('api_keys')",
+	} {
+		t.Run(query, func(t *testing.T) {
+			var refused *ErrSQLNotAllowed
+			if err := checkGuestSQL(query); !errors.As(err, &refused) {
+				t.Fatalf("checkGuestSQL(%q) = %v, want an ErrSQLNotAllowed", query, err)
+			}
+		})
+	}
+	err := checkGuestSQL("INSERT INTO tags(name) VALUES ('grants')")
+	if err == nil || !strings.Contains(err.Error(), "bound argument") {
+		t.Errorf("refusal %v does not tell the caller to bind the value", err)
+	}
+}
+
+// sqlite_dbpage returns raw database pages — protected tables' rows included —
+// without the statement naming any table.
+func TestCheckGuestSQL_refusesRawStorageTables(t *testing.T) {
+	for _, query := range []string{
+		"SELECT * FROM sqlite_dbpage",
+		"SELECT data FROM main.sqlite_dbpage WHERE pgno = 2",
+		"SELECT * FROM dbstat",
+		"SELECT * FROM 'sqlite_dbpage'",
+	} {
+		if err := checkGuestSQL(query); err == nil {
+			t.Errorf("ran %q", query)
+		}
+	}
+}
+
+func TestCheckGuestSQL_refusesCreateTrigger(t *testing.T) {
+	for _, query := range []string{
+		"CREATE TRIGGER t AFTER INSERT ON messages BEGIN SELECT 1 END",
+		"create temp trigger t after insert on messages begin select 1 end",
+		"CREATE TEMPORARY TRIGGER t AFTER INSERT ON messages BEGIN SELECT 1 END",
+		"/* c */ CREATE TRIGGER t AFTER INSERT ON messages BEGIN SELECT 1 END",
+		"-- c\nCREATE TRIGGER IF NOT EXISTS t AFTER INSERT ON messages BEGIN SELECT 1 END",
+		"CREATE TRIGGER main.t AFTER INSERT ON messages BEGIN SELECT 1 END",
+	} {
+		err := checkGuestSQL(query)
+		if err == nil || !strings.Contains(err.Error(), "CREATE TRIGGER") {
+			t.Errorf("checkGuestSQL(%q) = %v, want a CREATE TRIGGER refusal", query, err)
+		}
+	}
+	for _, query := range []string{
+		"CREATE TABLE triggers (id INTEGER)",
+		"CREATE INDEX trigger_idx ON messages(body)",
+		"SELECT trigger FROM messages",
+	} {
+		if err := checkGuestSQL(query); err != nil {
+			t.Errorf("refused %q: %v", query, err)
+		}
 	}
 }
 
@@ -215,6 +297,11 @@ func TestCheckGuestSQL_saysWhatIsWrong(t *testing.T) {
 		t.Errorf("the refusal does not say why: %v", err)
 	}
 
+	err = checkGuestSQL("SELECT grants FROM roles")
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("a protected name used as a column: %v, want it refused as a reserved name", err)
+	}
+
 	err = checkGuestSQL("PRAGMA foreign_keys = ON")
 	if err == nil {
 		t.Fatal("allowed")
@@ -256,6 +343,53 @@ func TestDBHostFunctions_allRefuseAProtectedTable(t *testing.T) {
 	}
 	if _, err := h.DBQueryBatch(ctx, []byte(`{"ops":[{"sql":"SELECT * FROM api_keys"}]}`)); err == nil {
 		t.Error("db_query_batch ran it")
+	}
+	pubCtx := invocationCtx(&serverless.InvocationContext{Namespace: "anchat"})
+	withBus := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, pubsub: &publishingBus{}}
+	if _, err := withBus.ExecAndPublish(pubCtx, []byte(`{"ops":[{"kind":"exec","sql":"SELECT * FROM api_keys"}]}`), "wake", []byte("{}")); err == nil {
+		t.Error("exec_and_publish ran it")
+	}
+}
+
+// publishingBus is a pubsub bus that only counts publishes; exec_and_publish
+// refuses to run without one, so the guard test needs it to get that far.
+type publishingBus struct {
+	pubsub.Bus
+	published int
+}
+
+func (b *publishingBus) Publish(context.Context, string, []byte) error {
+	b.published++
+	return nil
+}
+
+// bugboard #425: exec_and_publish ran the guest's ops with no guard at all, so
+// it reached the auth tables every other database host function refuses. The
+// refusal comes before the batch: refusingDB has no BatchWithSeq, so reaching
+// it would panic.
+func TestExecAndPublish_refusesAProtectedTable(t *testing.T) {
+	bus := &publishingBus{}
+	h := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, pubsub: bus}
+	ctx := serverless.WithPublishCounter(invocationCtx(&serverless.InvocationContext{Namespace: "anchat"}))
+
+	for _, ops := range []string{
+		`{"ops":[{"kind":"exec","sql":"UPDATE api_keys SET scopes='admin'"}]}`,
+		`{"ops":[{"kind":"exec","sql":"INSERT INTO messages(body) VALUES ('x')"},{"kind":"query","sql":"SELECT * FROM function_secrets"}]}`,
+		`{"ops":[{"kind":"exec","sql":"INSERT INTO messages(body) VALUES ('x'); DELETE FROM grants"}]}`,
+	} {
+		_, err := h.ExecAndPublish(ctx, []byte(ops), "wake", []byte("{}"))
+		var refused *ErrSQLNotAllowed
+		if !errors.As(err, &refused) {
+			t.Errorf("exec_and_publish(%s): err = %v, want the SQL guard's refusal", ops, err)
+		}
+	}
+	if bus.published != 0 {
+		t.Errorf("a refused call published %d wake-ups", bus.published)
+	}
+	// Adding one to the counter reads back 1 only if no refused call charged
+	// the invocation's publish budget.
+	if n := serverless.AddPublishCount(ctx, 1); n != 1 {
+		t.Errorf("refused calls charged the publish budget: counter at %d after one more publish", n)
 	}
 }
 
@@ -415,6 +549,38 @@ func TestProtectedTables_coverEveryClusterOnlyTable(t *testing.T) {
 			t.Errorf("%q lives only in the cluster registry and guest SQL may still name it. "+
 				"Stripping it from a namespace database makes the query fail anyway, but the "+
 				"refusal should say what it is rather than 'no such table'.", table)
+		}
+	}
+}
+
+// docs/SERVERLESS.md lists the reserved names so a tenant can avoid them. The
+// list is copied by hand, so this fails when it and protectedTables differ.
+func TestProtectedTables_matchTheDocumentedList(t *testing.T) {
+	doc, err := os.ReadFile("../../../../docs/SERVERLESS.md")
+	if err != nil {
+		t.Fatalf("read docs/SERVERLESS.md: %v", err)
+	}
+	text := string(doc)
+	start := strings.Index(text, "The reserved names are ")
+	if start < 0 {
+		t.Fatal("docs/SERVERLESS.md no longer lists the reserved names")
+	}
+	end := strings.Index(text[start:], "(the list in")
+	if end < 0 {
+		t.Fatal("reserved-name list in docs/SERVERLESS.md has no end marker")
+	}
+	documented := map[string]bool{}
+	for _, m := range regexp.MustCompile("`([a-z_]+)`").FindAllStringSubmatch(text[start:start+end], -1) {
+		documented[m[1]] = true
+	}
+	for name := range protectedTables {
+		if !documented[name] {
+			t.Errorf("%s is protected but not in docs/SERVERLESS.md's reserved list", name)
+		}
+	}
+	for name := range documented {
+		if _, ok := protectedTables[name]; !ok {
+			t.Errorf("docs/SERVERLESS.md lists %s as reserved, but it is not protected", name)
 		}
 	}
 }

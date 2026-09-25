@@ -193,6 +193,25 @@ if res.Error != "" {
 
 The legacy `db_execute` is kept indefinitely so existing functions don't break. New code should use `db_execute_v2` for any path where distinguishing "no rows" from "SQL error" matters — most paths.
 
+**What a function's SQL may not do.** Every database host function refuses,
+before anything runs: a second statement in one call; `ATTACH`, `DETACH`,
+`PRAGMA`, `VACUUM` and `CREATE TRIGGER`; `sqlite_dbpage` and `dbstat`; any
+identifier that is a platform table's name, however it is quoted and in any
+role — table, column, alias or named parameter; and a string literal whose whole
+text is one, such as `VALUES ('grants')`, because SQLite reads a string literal
+as a table name in many positions. Pass such a value as a bound argument (`?`)
+instead. The refusal is returned as the host call's error.
+
+The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
+`nonces`, `device_authorizations`, `invite_tokens`, `operators`, `principals`,
+`signing_keys`, `node_credentials`, `encryption_roots`, `grants`,
+`wireguard_peers`, `namespace_push_credentials`, `function_secrets`,
+`function_env_vars`, `revoked_tokens`, `audit_events`, `namespace_quotas`,
+`namespace_rate_limit_config`, `namespace_clusters`, `namespace_cluster_nodes`,
+`namespace_port_allocations`, `global_deployment_subdomains`, `dns_records`,
+`dns_nodes`, `dns_nameservers`, `raft_evicted_nodes`, `cluster_locks` and
+`orama_schema_migrations` (the list in `core/pkg/serverless/hostfunctions/sqlguard.go`).
+
 #### Database Transactions
 
 `db_transaction(opsJSON)` runs a set of statements as one atomic batch.
