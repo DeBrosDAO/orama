@@ -83,16 +83,15 @@ func runSSHOnce(ctx context.Context, node Node, command string) SSHResult {
 		}
 	}
 
-	args := []string{
-		"ssh", "-n",
-		"-o", "StrictHostKeyChecking=accept-new",
+	args := append([]string{"ssh", "-n"}, node.HostKeyOptions()...)
+	args = append(args,
 		"-o", "ConnectTimeout=10",
 		"-o", "BatchMode=yes",
 		"-o", "IdentitiesOnly=yes",
 		"-i", node.SSHKey,
 		fmt.Sprintf("%s@%s", node.User, node.Host),
 		command,
-	}
+	)
 
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 

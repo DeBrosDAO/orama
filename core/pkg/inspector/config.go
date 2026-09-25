@@ -15,6 +15,25 @@ type Node struct {
 	Role        string // node, nameserver-ns1, nameserver-ns2, nameserver-ns3
 	SSHKey      string // populated at runtime by PrepareNodeKeys()
 	VaultTarget string // optional: override wallet key lookup (e.g. "sandbox/root")
+	// KnownHostsFile, when set, is the only known_hosts consulted, with strict
+	// checking: the host key was pinned (orama node setup) and nothing else
+	// may answer. Empty keeps the operator's known_hosts with accept-new.
+	KnownHostsFile string
+}
+
+// HostKeyOptions returns the ssh -o arguments for the node's host-key policy.
+func (n Node) HostKeyOptions() []string {
+	if n.KnownHostsFile != "" {
+		return []string{
+			"-o", "StrictHostKeyChecking=yes",
+			"-o", "UserKnownHostsFile=" + n.KnownHostsFile,
+			// Only that file: not the system-wide one, and not a
+			// KnownHostsCommand from the operator's ssh config.
+			"-o", "GlobalKnownHostsFile=/dev/null",
+			"-o", "KnownHostsCommand=none",
+		}
+	}
+	return []string{"-o", "StrictHostKeyChecking=accept-new"}
 }
 
 // Name returns a short display name for the node (user@host).

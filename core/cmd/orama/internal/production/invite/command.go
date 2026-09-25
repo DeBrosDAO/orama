@@ -21,6 +21,8 @@ import (
 // Options holds the flags for the invite command.
 type Options struct {
 	Expiry time.Duration
+	// Raw prints only the encoded invite and a newline.
+	Raw bool
 }
 
 // Run creates a new invite token.
@@ -76,6 +78,11 @@ func Run(opts Options) error {
 	})
 	if err != nil {
 		return clierr.Failure("could not encode the invite: %w", err)
+	}
+
+	if opts.Raw {
+		fmt.Println(encoded)
+		return nil
 	}
 
 	fmt.Printf("\nInvite created (expires in %s)\n\n", expiry)

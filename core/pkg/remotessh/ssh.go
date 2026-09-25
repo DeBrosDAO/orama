@@ -40,7 +40,7 @@ func UploadFile(node inspector.Node, localPath, remotePath string, opts ...SSHOp
 	if cfg.noHostKeyCheck {
 		args = append([]string{"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"}, args...)
 	} else {
-		args = append([]string{"-o", "StrictHostKeyChecking=accept-new"}, args...)
+		args = append(node.HostKeyOptions(), args...)
 	}
 	args = append(args, localPath, dest)
 
@@ -71,7 +71,7 @@ func RunSSHStreaming(node inspector.Node, command string, opts ...SSHOption) err
 	if cfg.noHostKeyCheck {
 		args = append([]string{"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"}, args...)
 	} else {
-		args = append([]string{"-o", "StrictHostKeyChecking=accept-new"}, args...)
+		args = append(node.HostKeyOptions(), args...)
 	}
 	args = append(args, fmt.Sprintf("%s@%s", node.User, node.Host), command)
 

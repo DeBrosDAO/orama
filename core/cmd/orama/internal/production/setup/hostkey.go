@@ -96,34 +96,44 @@ func fingerprintLines(lines []string) ([]string, error) {
 			}
 		}
 	}
-	if len(fps) == 0 {
-		return nil, fmt.Errorf("could not read any fingerprint from ssh-keygen output: %s", strings.TrimSpace(out))
+	// fingerprints[i] must describe lines[i]: trusting a key is done by line.
+	if len(fps) != len(lines) {
+		return nil, fmt.Errorf("ssh-keygen fingerprinted %d of %d host keys: %s", len(fps), len(lines), strings.TrimSpace(out))
 	}
 	return fps, nil
 }
 
-// matches reports whether want names one of the scanned keys. The comparison
-// accepts the fingerprint with or without its "SHA256:" prefix, since operators
-// copy it from consoles that print it either way.
-func (h *hostKey) matches(want string) bool {
-	want = strings.TrimSpace(want)
-	want = strings.TrimPrefix(want, "SHA256:")
+// matching returns the scanned entries whose fingerprint is want. The
+// comparison accepts the fingerprint with or without its "SHA256:" prefix,
+// since operators copy it from consoles that print it either way.
+//
+// Only these entries may be trusted. A scan returns every key the answering
+// host offers, so trusting all of them once one matched let an on-path
+// attacker pass the pin by offering the real key alongside its own.
+func (h *hostKey) matching(want string) []string {
+	want = strings.TrimPrefix(strings.TrimSpace(want), "SHA256:")
 	if want == "" {
-		return false
+		return nil
 	}
-	for _, fp := range h.fingerprints {
+	var lines []string
+	for i, fp := range h.fingerprints {
 		if strings.TrimPrefix(fp, "SHA256:") == want {
-			return true
+			lines = append(lines, h.lines[i])
 		}
 	}
-	return false
+	return lines
 }
 
-// writeKnownHosts writes the scanned entries to a file for ssh to verify
+// matches reports whether want names one of the scanned keys.
+func (h *hostKey) matches(want string) bool {
+	return len(h.matching(want)) > 0
+}
+
+// writeKnownHosts writes the trusted entries to a file for ssh to verify
 // against, and returns its path. The caller removes the containing directory.
-func (h *hostKey) writeKnownHosts(dir string) (string, error) {
+func writeKnownHosts(dir string, lines []string) (string, error) {
 	path := filepath.Join(dir, "known_hosts")
-	content := strings.Join(h.lines, "\n") + "\n"
+	content := strings.Join(lines, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		return "", fmt.Errorf("write known_hosts: %w", err)
 	}
@@ -131,16 +141,19 @@ func (h *hostKey) writeKnownHosts(dir string) (string, error) {
 }
 
 // confirmHostKey settles whether the scanned key is the one the operator
-// expects, either by matching a fingerprint they supplied or by asking.
-func confirmHostKey(hk *hostKey, ip, expected string, in io.Reader, out io.Writer) error {
+// expects, either by matching a fingerprint they supplied or by asking, and
+// returns the known_hosts entries to trust: only the matched key for a pin,
+// the keys the operator was shown for an interactive confirmation.
+func confirmHostKey(hk *hostKey, ip, expected string, in io.Reader, out io.Writer) ([]string, error) {
 	if strings.TrimSpace(expected) != "" {
-		if !hk.matches(expected) {
-			return fmt.Errorf(
-				"host key fingerprint mismatch for %s:\n  expected: %s\n  offered:  %s\nrefusing to send the password",
+		trusted := hk.matching(expected)
+		if len(trusted) == 0 {
+			return nil, fmt.Errorf(
+				"host key fingerprint mismatch for %s:\n  expected: %s\n  offered:  %s\nrefusing to use your credential on it",
 				ip, expected, strings.Join(hk.fingerprints, ", "))
 		}
 		fmt.Fprintf(out, "  Host key matches --host-key\n")
-		return nil
+		return trusted, nil
 	}
 
 	fmt.Fprintf(out, "\n  The VPS at %s presents this SSH host key:\n", ip)
@@ -148,19 +161,19 @@ func confirmHostKey(hk *hostKey, ip, expected string, in io.Reader, out io.Write
 		fmt.Fprintf(out, "    %s\n", fp)
 	}
 	fmt.Fprintf(out, "  Check it against your provider's console before continuing —\n")
-	fmt.Fprintf(out, "  the VPS password is sent over this connection.\n")
+	fmt.Fprintf(out, "  your existing credential for it is used over this connection.\n")
 	fmt.Fprintf(out, "  Continue? [y/N]: ")
 
 	reader := bufio.NewReader(in)
 	answer, err := reader.ReadString('\n')
 	if err != nil && answer == "" {
-		return fmt.Errorf("could not read confirmation: %w", err)
+		return nil, fmt.Errorf("could not read confirmation: %w", err)
 	}
 	switch strings.ToLower(strings.TrimSpace(answer)) {
 	case "y", "yes":
-		return nil
+		return hk.lines, nil
 	default:
-		return fmt.Errorf("host key not confirmed for %s; re-run with --host-key <fingerprint> to pin it non-interactively", ip)
+		return nil, fmt.Errorf("host key not confirmed for %s; re-run with --host-key <fingerprint> to pin it non-interactively", ip)
 	}
 }
 

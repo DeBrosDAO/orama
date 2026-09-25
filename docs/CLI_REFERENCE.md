@@ -1679,6 +1679,7 @@ Running without a subcommand creates a new token (same as 'invite create').
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--expiry` | `1h0m0s` | How long the token stays valid |
+| `--raw` | `false` | Print only the invite, for scripts (orama node setup --join-via reads it this way) |
 
 ### orama node list
 
@@ -2047,18 +2048,26 @@ Examples:
   orama node setup --ip 5.6.7.8 --password 'vps-pass' --env devnet \
     --base-domain orama-devnet.network
 
+  # Key-only VPS (no password login): install the RootWallet key once
+  # with the key that opens it today
+  orama node setup --ip 5.6.7.8 --user ubuntu --bootstrap-key ~/.ssh/id_ed25519 \
+    --env devnet --base-domain orama-devnet.network
+
   # Join as nameserver
   orama node setup --ip 9.10.11.12 --password 'vps-pass' --env devnet \
     --base-domain orama-devnet.network --role nameserver
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--archive` | — | Build archive to install (default: the newest in /tmp); a node already running this exact build is not re-uploaded |
 | `--base-domain` | — | Base domain for the network |
+| `--bootstrap-key` | — | SSH private key that opens the VPS today (key-only images, e.g. --user ubuntu); used once to install the RootWallet key, never stored |
 | `--env` | — | Target environment (default: active) |
 | `--gateway` | — | Gateway URL for invite tokens (e.g., http://1.2.3.4) |
 | `--genesis` | `false` | Create a new cluster (first node) |
 | `--host-key` | — | Expected SSH host-key fingerprint (SHA256:...) of the VPS; omit to confirm it interactively |
 | `--ip` | — | Public IP address of the VPS (required) |
+| `--join-via` | — | user@ip of a node already in the cluster; the invite is minted there over SSH (no 'orama auth login' needed) |
 | `--password` | — | One-time password for initial SSH access |
 | `--role` | `node` | Node role: node or nameserver |
 | `--user` | `root` | SSH user on the VPS |
