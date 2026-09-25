@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
 	"go.uber.org/zap"
@@ -219,7 +220,7 @@ func TestManagementRoutes_refuseAnotherNamespace(t *testing.T) {
 	reg.functions["victim/hello"] = &serverless.Function{ID: "fn-1", Name: "hello", Namespace: "victim"}
 	secrets := newMockSecretsManager()
 	secrets.secrets["victim"] = map[string]string{"VICTIM_SECRET": "value"}
-	h := NewServerlessHandlers(nil, nil, reg, serverless.NewWSManager(logger),
+	h := NewServerlessHandlers(nil, nil, reg, serverless.NewWSManager(logger), wssession.NewRegistry(nil),
 		triggers.NewPubSubTriggerStore(nil, logger), triggers.NewCronTriggerStore(nil, logger),
 		nil, nil, nil, secrets, nil, logger)
 

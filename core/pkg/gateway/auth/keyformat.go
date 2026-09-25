@@ -225,12 +225,3 @@ func KeyFingerprint(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return "key_" + hex.EncodeToString(sum[:6])
 }
-
-// LoggableSubject is how a JWT subject appears in a log line: a wallet
-// address as is, an API key only by its fingerprint (bugboard #2508).
-func LoggableSubject(sub string) string {
-	if IsAPIKeySubject(sub) {
-		return KeyFingerprint(sub)
-	}
-	return sub
-}
