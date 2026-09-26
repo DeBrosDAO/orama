@@ -63,6 +63,14 @@ func TestGenerateRules_noTurnPortsWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestWebRTCRuleArgs_areTaggedSoReconcileCanRemoveThem(t *testing.T) {
+	for _, args := range webRTCRuleArgs(defaultTURNRelayPortStart, defaultTURNRelayPortEnd) {
+		if len(args) != 4 || args[0] != "allow" || args[2] != "comment" || args[3] != ownedRuleComment {
+			t.Errorf("TURN rule %v is not tagged %q", args, ownedRuleComment)
+		}
+	}
+}
+
 func contains(ss []string, want string) bool {
 	for _, s := range ss {
 		if s == want {

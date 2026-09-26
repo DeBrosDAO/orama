@@ -59,6 +59,9 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - They now require a MAC made with `HKDF(cluster secret, "acme-challenge")` (`auth.ACMEChallengeKey`). The payload is `orama-coordination-v2`: method, path, query and the SHA-256 of the body (`auth.SignACME`), so a stamp captured for one TXT record cannot be replayed with another. Install writes that key to `/etc/caddy/orama-acme.key` (root:orama `0640`) and names it as `key_file` in the Caddyfile's DNS provider, which signs every call the same way. It is deliberately not the coordination key: Caddy faces the internet, and the coordination key would let it spawn namespaces on other nodes. Caddy and the gateway on a node come from the same archive, so an older body-less stamp is not accepted
 - Even a signed call writes only an `_acme-challenge.` record for the base domain or a name under it, whose value is a DNS-01 answer (43 base64url characters)
 
+**RootWallet agent socket**
+- The CLI dials the agent at `~/.rootwallet/agent.sock` (or `RW_AGENT_SOCK`). Before the dial it refuses a symlink, anything that is not a socket, a socket owned by another uid, and a socket whose mode is group- or world-accessible. A missing socket is the agent not running
+
 **Rate limiting**
 - The client is the peer address. It used to be the first `X-Forwarded-For` entry, and any address in the WireGuard subnet was exempt from every limit — so one header removed all rate limiting, including from the endpoints that mint credentials
 - `X-Forwarded-For` is honoured only when the peer is the local reverse proxy, and only its last entry: Caddy appends the address it is talking to, so the last entry is real and the ones before it are the caller's. Loopback with a forwarding header is **not** exempt, because every public request arrives from `127.0.0.1`

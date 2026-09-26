@@ -59,6 +59,9 @@ func shortSocket(t *testing.T, handler http.Handler) string {
 	if err != nil {
 		t.Fatalf("listen on %s: %v", socket, err)
 	}
+	if err := os.Chmod(socket, 0o600); err != nil {
+		t.Fatalf("chmod socket: %v", err)
+	}
 	server := &http.Server{Handler: handler}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {

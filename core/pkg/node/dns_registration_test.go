@@ -67,6 +67,50 @@ func testNodeForDNS(t *testing.T) *Node {
 	return &Node{config: &config.Config{}, logger: lg}
 }
 
+// A two-minute heartbeat miss takes the node out of the round-robin. It must
+// not free the nameserver slot: that is what a rolling restart looks like, and
+// the zone's glue goes with the slot. `orama node remove` is what frees it.
+func TestReapInactiveNodeDNS_keepsTheNameserverSlot(t *testing.T) {
+	db := newDNSTestDB(t)
+	if _, err := db.Exec(`ALTER TABLE dns_nodes ADD COLUMN updated_at TIMESTAMP`); err != nil {
+		t.Fatal(err)
+	}
+	if got := claimAs(t, db, "peer-a", "203.0.113.1"); got != "ns1" {
+		t.Fatalf("slot = %s, want ns1", got)
+	}
+	if _, err := db.Exec(`INSERT INTO dns_nodes (id, ip_address, status, last_seen) VALUES ('peer-a', '203.0.113.1', 'active', datetime('now', '-10 minutes'))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO dns_records (fqdn, record_type, value, namespace) VALUES (?, 'A', '203.0.113.1', 'system')`, testNSDomain+"."); err != nil {
+		t.Fatal(err)
+	}
+
+	n := testNodeForDNS(t)
+	n.config.HTTPGateway.BaseDomain = testNSDomain
+	n.reapInactiveNodeDNS(context.Background(), db, testNSDomain)
+
+	var slots int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM dns_nameservers WHERE node_id = 'peer-a'`).Scan(&slots); err != nil {
+		t.Fatal(err)
+	}
+	if slots != 1 {
+		t.Fatalf("nameserver slots = %d; a two-minute miss released one", slots)
+	}
+	if got := recordValues(t, db, "ns1."+testNSDomain+".", "A"); len(got) != 1 || got[0] != "203.0.113.1" {
+		t.Fatalf("glue = %v", got)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM dns_nodes WHERE id = 'peer-a'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "inactive" {
+		t.Fatalf("status = %s, want inactive", status)
+	}
+	if got := recordValues(t, db, testNSDomain+".", "A"); len(got) != 0 {
+		t.Fatalf("apex A records = %v; the inactive node's address should leave the round-robin", got)
+	}
+}
+
 // ensureRecordsWithoutPanic runs the record loop and turns a panic into a test
 // failure, because a panic here is the failure this is about.
 func ensureRecordsWithoutPanic(t *testing.T, n *Node) (err error) {

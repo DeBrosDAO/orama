@@ -56,8 +56,12 @@ func serviceUserCommand(env []string, name string, args ...string) (*exec.Cmd, e
 		return nil, err
 	}
 	cmd := exec.Command(name, args...)
+	// Setsid puts the service user's process in its own session. Without it
+	// the child stays in the installing root's session: it keeps that
+	// controlling terminal and receives the installer's signals.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{Uid: acct.uid, Gid: acct.gid, Groups: []uint32{}},
+		Setsid:     true,
 	}
 	cmd.Env = append([]string{serviceUserPath, "HOME=" + acct.home}, env...)
 	cmd.Dir = acct.home

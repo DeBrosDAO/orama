@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
@@ -93,6 +96,18 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 	keyPaths := make(map[string]string) // "host/user" → temp file path
 	var allKeyPaths []string
 
+	// Ctrl-C and SIGTERM exit without running defers, which used to leave the
+	// private keys in the temp dir. The watch removes them and then re-raises
+	// so the process still dies.
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			stopKeepalive()
+			cleanupKeys(tmpDir, allKeyPaths)
+		})
+	}
+	stop := watchInterrupts(release, defaultReraise)
+
 	for i := range nodes {
 		var key string
 		if nodes[i].VaultTarget != "" {
@@ -108,22 +123,19 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 		host, user := parseVaultTarget(key)
 		data, err := client.GetSSHKey(ctx, host, user, "priv")
 		if err != nil {
-			stopKeepalive()
-			cleanupKeys(tmpDir, allKeyPaths)
+			stop()
 			return nil, wrapAgentError(err, fmt.Sprintf("resolve key for %s", nodes[i].Name()))
 		}
 
 		if !strings.Contains(data.PrivateKey, "BEGIN OPENSSH PRIVATE KEY") {
-			stopKeepalive()
-			cleanupKeys(tmpDir, allKeyPaths)
+			stop()
 			return nil, fmt.Errorf("agent returned invalid key for %s", nodes[i].Name())
 		}
 
 		// Write PEM to temp file with restrictive perms
 		keyFile := filepath.Join(tmpDir, fmt.Sprintf("id_%d", i))
 		if err := os.WriteFile(keyFile, []byte(data.PrivateKey), 0600); err != nil {
-			stopKeepalive()
-			cleanupKeys(tmpDir, allKeyPaths)
+			stop()
 			return nil, fmt.Errorf("write key for %s: %w", nodes[i].Name(), err)
 		}
 
@@ -132,11 +144,52 @@ func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
 		nodes[i].SSHKey = keyFile
 	}
 
-	cleanup = func() {
-		stopKeepalive()
-		cleanupKeys(tmpDir, allKeyPaths)
+	return stop, nil
+}
+
+// interruptSignals exit without running defers. The key files have to be gone
+// before that happens.
+var interruptSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+
+// watchInterrupts runs cleanup once when a signal arrives, then re-raises it
+// so the process still exits. stop ends the watch and runs cleanup; a second
+// stop does neither again.
+func watchInterrupts(cleanup func(), reraise func(os.Signal)) (stop func()) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, interruptSignals...)
+	stopped := make(chan struct{})
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			signal.Stop(sigs)
+			close(stopped)
+			cleanup()
+		})
 	}
-	return cleanup, nil
+	go runInterruptWatch(sigs, stopped, stop, reraise)
+	return stop
+}
+
+// runInterruptWatch is the select watchInterrupts runs. Tests drive it with
+// their own channel so a signal does not kill the test process.
+func runInterruptWatch(sigs <-chan os.Signal, stopped <-chan struct{}, cleanup func(), reraise func(os.Signal)) {
+	select {
+	case sig := <-sigs:
+		cleanup()
+		reraise(sig)
+	case <-stopped:
+	}
+}
+
+// defaultReraise restores the signal's default action and sends it to this
+// process, so a Ctrl-C still ends the command after the keys are gone.
+func defaultReraise(sig os.Signal) {
+	s, ok := sig.(syscall.Signal)
+	if !ok {
+		os.Exit(1)
+	}
+	signal.Reset(s)
+	_ = syscall.Kill(os.Getpid(), s)
 }
 
 // EnsureVaultEntry creates a wallet SSH entry if it doesn't already exist.

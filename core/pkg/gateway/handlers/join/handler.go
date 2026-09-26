@@ -85,6 +85,10 @@ type JoinResponse struct {
 
 	// Domain
 	BaseDomain string `json:"base_domain"`
+	// ACMECA is the ACME directory this cluster's Caddy uses (node.yaml
+	// tls.acme_ca). Empty means Let's Encrypt production. A joiner that was
+	// not given --acme-ca uses this, so every node issues from the same CA.
+	ACMECA string `json:"acme_ca,omitempty"`
 
 	// ArchiveSigners is the minting node's archive trust anchor: the addresses
 	// whose signature on a build archive nodes of this cluster accept. The
@@ -388,8 +392,9 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	// 6. Get this node's libp2p peer ID for bootstrap peers
 	bootstrapPeers := h.buildBootstrapPeers(myWGIP, ipfsPeer.ID)
 
-	// 7. Read base domain from config
+	// 7. Read base domain and the cluster's ACME directory from config
 	baseDomain := h.readBaseDomain()
+	acmeCA := h.readACMECA()
 
 	// 8. Read IPFS Cluster trusted peer IDs
 	ipfsClusterPeerIDs := h.readIPFSClusterTrustedPeers()
@@ -414,6 +419,7 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		BootstrapPeers:          bootstrapPeers,
 		OlricPeers:              olricPeers,
 		BaseDomain:              baseDomain,
+		ACMECA:                  acmeCA,
 		ArchiveSigners:          archiveSigners,
 		ArchiveSignersRotatedAt: rotatedAt,
 	}
@@ -997,21 +1003,29 @@ func (h *Handler) readIPFSClusterTrustedPeers() []string {
 
 // readBaseDomain reads the base domain from node config
 func (h *Handler) readBaseDomain() string {
+	return h.readConfigScalar("base_domain")
+}
+
+// readACMECA reads tls.acme_ca from node config. Empty means production.
+func (h *Handler) readACMECA() string {
+	return h.readConfigScalar("acme_ca")
+}
+
+// readConfigScalar returns the value of a `key:` line in node.yaml, or ""
+// when the file or the key is absent. node.yaml is this node's own config.
+func (h *Handler) readConfigScalar(key string) string {
 	data, err := os.ReadFile(h.oramaDir + "/configs/node.yaml")
 	if err != nil {
 		return ""
 	}
 
-	// Simple parse — look for base_domain field
+	prefix := key + ":"
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "base_domain:") {
-			val := strings.TrimPrefix(line, "base_domain:")
-			val = strings.TrimSpace(val)
-			val = strings.Trim(val, `"'`)
-			return val
+		if strings.HasPrefix(line, prefix) {
+			val := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			return strings.Trim(val, `"'`)
 		}
 	}
-
 	return ""
 }

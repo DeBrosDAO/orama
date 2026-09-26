@@ -176,11 +176,12 @@ func (fp *FirewallProvisioner) DesiredAllowRules() []string {
 // and re-adding an untagged one tags it — so a correct rule set costs nothing
 // and changes nothing, which is the property an upgrade needs.
 //
-// "Extra" means a rule Orama tagged and no longer wants. Rules without the tag
-// belong to someone else: the operator, or the TURN rules orama-node opens at
-// runtime through orama-privhelper — with one exception, the exact untagged
-// rules older Orama releases added before rules were tagged (legacyAllowRules),
-// which nothing else would ever remove.
+// "Extra" means a rule Orama tagged and no longer wants. Runtime TURN rules
+// carry the same tag, so a node that has stopped relaying loses them on the
+// next reconcile; Phase 6b puts them back in the desired set while
+// hostRunsTURN is true. Rules without the tag belong to someone else, with
+// one exception: the exact untagged rules older Orama releases added before
+// rules were tagged (legacyAllowRules), which nothing else would ever remove.
 func (fp *FirewallProvisioner) Reconcile() error {
 	if err := fp.Install(); err != nil {
 		return err
@@ -312,13 +313,13 @@ func (fp *FirewallProvisioner) AddWebRTCRules(relayStart, relayEnd int) error {
 // webRTCRuleArgs is the ufw argv (after "ufw") of each TURN rule. Built as arg
 // slices rather than strings so the privileged helper receives them intact.
 func webRTCRuleArgs(relayStart, relayEnd int) [][]string {
-	rules := [][]string{
-		{"allow", "3478/udp"},
-		{"allow", "3478/tcp"},
-		{"allow", "5349/tcp"},
-	}
+	specs := []string{"3478/udp", "3478/tcp", "5349/tcp"}
 	if relayStart > 0 && relayEnd > 0 {
-		rules = append(rules, []string{"allow", fmt.Sprintf("%d:%d/udp", relayStart, relayEnd)})
+		specs = append(specs, fmt.Sprintf("%d:%d/udp", relayStart, relayEnd))
+	}
+	rules := make([][]string, 0, len(specs))
+	for _, spec := range specs {
+		rules = append(rules, []string{"allow", spec, "comment", ownedRuleComment})
 	}
 	return rules
 }

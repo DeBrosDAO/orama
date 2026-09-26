@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -62,6 +63,9 @@ func New(socketPath string) *Client {
 		httpClient: &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					if err := checkAgentSocket(socketPath); err != nil {
+						return nil, err
+					}
 					var d net.Dialer
 					return d.DialContext(ctx, "unix", socketPath)
 				},
@@ -336,6 +340,39 @@ func (c *Client) apiError(message, code string, statusCode int) *AgentError {
 		Message:    message,
 		StatusCode: statusCode,
 	}
+}
+
+// checkAgentSocket refuses to dial a socket another user could have planted
+// or could read. A missing path is returned as-is so the caller still treats
+// it as the agent not running.
+func checkAgentSocket(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("rootwallet agent socket %s has no owner", path)
+	}
+	return agentSocketAllowed(fi.Mode(), int(st.Uid), os.Getuid())
+}
+
+// agentSocketAllowed is the rule checkAgentSocket applies: a real socket,
+// owned by the caller, and not group- or world-accessible.
+func agentSocketAllowed(mode os.FileMode, owner, caller int) error {
+	if mode&os.ModeSymlink != 0 {
+		return fmt.Errorf("rootwallet agent socket is a symlink")
+	}
+	if mode&os.ModeSocket == 0 {
+		return fmt.Errorf("rootwallet agent socket is not a socket")
+	}
+	if owner != caller {
+		return fmt.Errorf("rootwallet agent socket is owned by uid %d", owner)
+	}
+	if mode.Perm()&0o077 != 0 {
+		return fmt.Errorf("rootwallet agent socket is group- or world-accessible (mode %o)", mode.Perm())
+	}
+	return nil
 }
 
 // isConnectionError checks if the error is a connection-level failure.

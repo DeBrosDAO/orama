@@ -324,8 +324,17 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 		return
 	}
 
-	db := n.getRQLiteAdapter().GetSQLDB()
+	n.reapInactiveNodeDNS(ctx, n.getRQLiteAdapter().GetSQLDB(), baseDomain)
+}
 
+// reapInactiveNodeDNS marks nodes that have not heartbeated in two minutes
+// inactive and drops their system A records from the round-robin.
+//
+// It does not release a nameserver slot. A missed heartbeat is what a rolling
+// restart and a leaderless minute look like, and freeing the slot drops the
+// zone's glue. The slot goes when the operator runs `orama node remove`
+// (clusterops.RetirementPlan deletes the dns_nameservers row).
+func (n *Node) reapInactiveNodeDNS(ctx context.Context, db *sql.DB, baseDomain string) {
 	// Find nodes that haven't sent a heartbeat in over 2 minutes
 	staleQuery := `SELECT id, ip_address FROM dns_nodes WHERE status = 'active' AND last_seen < datetime('now', '-120 seconds')`
 	rows, err := db.QueryContext(ctx, staleQuery)
@@ -333,7 +342,6 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to query stale nodes", zap.Error(err))
 		return
 	}
-	defer rows.Close()
 
 	// Build all FQDNs to clean: base domain + node domain
 	var fqdnsToClean []string
@@ -342,11 +350,27 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 		fqdnsToClean = append(fqdnsToClean, n.config.Node.Domain+".", "*."+n.config.Node.Domain+".")
 	}
 
+	// Read the whole set before writing. A write while this cursor is open
+	// locks the table on SQLite, and the writes below are what mark the node
+	// inactive.
+	type staleNode struct{ id, ip string }
+	var stale []staleNode
 	for rows.Next() {
 		var nodeID, ip string
 		if err := rows.Scan(&nodeID, &ip); err != nil {
 			continue
 		}
+		stale = append(stale, staleNode{id: nodeID, ip: ip})
+	}
+	scanErr := rows.Err()
+	rows.Close()
+	if scanErr != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to query stale nodes", zap.Error(scanErr))
+		return
+	}
+
+	for _, node := range stale {
+		nodeID, ip := node.id, node.ip
 
 		// Mark node as inactive
 		if _, err := rqlite.SafeExecContext(db, ctx, `UPDATE dns_nodes SET status = 'inactive', updated_at = datetime('now') WHERE id = ?`, nodeID); err != nil {
@@ -359,13 +383,6 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 				n.logger.ComponentWarn(logging.ComponentNode, "Failed to remove stale DNS record",
 					zap.String("fqdn", f), zap.String("ip", ip), zap.Error(err))
 			}
-		}
-
-		// Release any NS slot held by this dead node, glue first: the glue is
-		// found through the slot row, and the zone's NS set drops a slot as
-		// soon as its glue is gone (reconcileNameserverRecords).
-		if err := releaseNameserverSlot(ctx, db, nodeID); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to release NS slot", zap.String("node_id", nodeID), zap.Error(err))
 		}
 
 		n.logger.ComponentInfo(logging.ComponentNode, "Removed stale node from DNS",

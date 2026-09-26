@@ -97,6 +97,11 @@ func (ps *ProductionSetup) PublicIP() (string, error) { return ps.configGenerato
 // SetACMECA sets the ACME directory Caddy issues certificates from.
 func (ps *ProductionSetup) SetACMECA(url string) { ps.configGenerator.SetACMECA(url) }
 
+// ACMECA is the directory this install will write into node.yaml: the one
+// SetACMECA stored, else the one already in node.yaml, else "" (Let's Encrypt
+// production).
+func (ps *ProductionSetup) ACMECA() (string, error) { return ps.configGenerator.ACMECA() }
+
 // SetNameserver sets whether this node is a nameserver (runs CoreDNS + Caddy).
 func (ps *ProductionSetup) SetNameserver(isNameserver bool) {
 	ps.isNameserver = isNameserver

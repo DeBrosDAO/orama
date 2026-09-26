@@ -37,6 +37,9 @@ func TestServiceUserCommand_dropsToTheServiceUser(t *testing.T) {
 	if cred.NoSetGroups || len(cred.Groups) != 0 {
 		t.Errorf("supplementary groups are not cleared: %+v", cred)
 	}
+	if !cmd.SysProcAttr.Setsid {
+		t.Error("the service user's process stays in the installing root's session")
+	}
 	env := strings.Join(cmd.Env, "\n")
 	for _, want := range []string{"HOME=/opt/orama", "IPFS_PATH=/opt/orama/.orama/data/ipfs/repo", serviceUserPath} {
 		if !strings.Contains(env, want) {

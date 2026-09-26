@@ -162,6 +162,12 @@ func validateSetProperty(args []string) error {
 	return nil
 }
 
+// ufwOwnedComment is the tag install.Reconcile recognises (ownedRuleComment).
+// The helper allows that word and no other, so a TURN rule can be told apart
+// from an operator's rule without letting the caller append arbitrary ufw
+// arguments.
+const ufwOwnedComment = "orama"
+
 func validateUFW(args []string) error {
 	switch {
 	case len(args) == 1 && (args[0] == "status" || args[0] == "reload"):
@@ -170,7 +176,11 @@ func validateUFW(args []string) error {
 		return nil
 	case len(args) == 2 && args[0] == "allow":
 		return validatePortSpec(args[1])
+	case len(args) == 4 && args[0] == "allow" && args[2] == "comment" && args[3] == ufwOwnedComment:
+		return validatePortSpec(args[1])
 	case len(args) == 3 && args[0] == "delete" && args[1] == "allow":
+		return validatePortSpec(args[2])
+	case len(args) == 5 && args[0] == "delete" && args[1] == "allow" && args[3] == "comment" && args[4] == ufwOwnedComment:
 		return validatePortSpec(args[2])
 	default:
 		return fmt.Errorf("ufw %q is not allowed", args)

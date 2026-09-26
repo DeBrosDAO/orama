@@ -32,7 +32,10 @@ func TestValidate_AllowsWhatTheNodeRuns(t *testing.T) {
 		{"ufw", "allow", "3478/tcp"},
 		{"ufw", "allow", "5349/tcp"},
 		{"ufw", "allow", "49152:65535/udp"},
+		{"ufw", "allow", "3478/udp", "comment", "orama"},
+		{"ufw", "allow", "49152:65535/udp", "comment", "orama"},
 		{"ufw", "delete", "allow", "50000:50999/udp"},
+		{"ufw", "delete", "allow", "3478/udp", "comment", "orama"},
 	} {
 		inv, err := Validate(argv)
 		if err != nil {
@@ -86,6 +89,10 @@ func TestValidate_RefusesEverythingElse(t *testing.T) {
 		{"ufw", "allow", "60000:50000/udp"},
 		{"ufw", "allow", "49152:70000/udp"},
 		{"ufw", "allow", "3478/udp", "extra"},
+		{"ufw", "allow", "3478/udp", "comment", "other"},
+		{"ufw", "allow", "3478/udp", "comment", "orama", "extra"},
+		{"ufw", "allow", "22/tcp", "comment", "orama"},
+		{"ufw", "delete", "allow", "22/tcp", "comment", "orama"},
 		{"ufw", "delete", "allow", "22/tcp"},
 		{"ufw", "default", "allow", "incoming"},
 	} {

@@ -82,13 +82,15 @@ to the cluster ([NAMESERVER_SETUP.md](NAMESERVER_SETUP.md)) before joining more
 nodes.
 
 **Test clusters that you redeploy from scratch:** pass
-`--acme-ca letsencrypt-staging` (or any https ACME directory URL) to every node.
-Let's Encrypt issues at most five certificates per week for the same set of
-names, and every node of a cluster requests the same `*.<base-domain>`
-wildcard, so a second full redeploy in a week would otherwise be refused.
-Staging certificates are not browser-trusted. The CA is stored in `node.yaml`
-(`tls.acme_ca`) and kept across upgrades; Caddy uses it for every certificate
-on the node.
+`--acme-ca letsencrypt-staging` (or any https ACME directory URL) on the
+genesis node. Let's Encrypt issues at most five certificates per week for the
+same set of names, and every node of a cluster requests the same
+`*.<base-domain>` wildcard, so a second full redeploy in a week would
+otherwise be refused. Staging certificates are not browser-trusted. The CA is
+stored in `node.yaml` (`tls.acme_ca`) and kept across upgrades; Caddy uses it
+for every certificate on the node. A joiner that omits `--acme-ca` takes the
+directory from the join response, which is the minting node's `tls.acme_ca`.
+Pass the flag on a joiner only to override that.
 
 The CLI does not trust staging certificates either. Give the environment
 Let's Encrypt's staging roots, trusted for that environment's domain only:

@@ -345,6 +345,22 @@ func (o *Orchestrator) executeGenesisFlow() error {
 	return nil
 }
 
+// useClusterACMECA points this install at the CA the cluster already uses
+// when the operator did not pass --acme-ca. An explicit flag wins. Anything
+// that is not an https ACME directory URL fails the join: that value is
+// written into the Caddyfile.
+func (o *Orchestrator) useClusterACMECA(ca string) error {
+	if o.flags.ACMECA != "" || ca == "" {
+		return nil
+	}
+	if err := oramainstall.ValidateACMECA(ca); err != nil {
+		return fmt.Errorf("cluster ACME directory: %w", err)
+	}
+	o.flags.ACMECA = ca
+	o.setup.SetACMECA(ca)
+	return nil
+}
+
 // executeJoinFlow runs the rest of the install for a node the cluster has
 // admitted (requestJoin, before Phase 2b).
 func (o *Orchestrator) executeJoinFlow(join *joinedCluster) error {
@@ -393,6 +409,13 @@ func (o *Orchestrator) executeJoinFlow(join *joinedCluster) error {
 	if o.flags.Domain == "" && !o.flags.Nameserver && joinResp.BaseDomain != "" {
 		o.flags.Domain = generateNodeDomain(joinResp.BaseDomain)
 		fmt.Printf("\n🌐 Auto-generated domain: %s\n", o.flags.Domain)
+	}
+
+	// A joiner that was not given --acme-ca uses the directory the cluster
+	// already issues from. An explicit flag wins. An empty value from both
+	// sides is Let's Encrypt production.
+	if err := o.useClusterACMECA(joinResp.ACMECA); err != nil {
+		return err
 	}
 
 	// Step 7: Generate configs using WG IP as advertise address

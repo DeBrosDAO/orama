@@ -21,6 +21,9 @@ func startMockAgent(t *testing.T, handler http.Handler) (socketPath string, clea
 	if err != nil {
 		t.Fatalf("listen on unix socket: %v", err)
 	}
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		t.Fatalf("chmod socket: %v", err)
+	}
 
 	server := &http.Server{Handler: handler}
 	go func() { _ = server.Serve(listener) }()
@@ -286,5 +289,62 @@ func TestDeleteSSHEntry(t *testing.T) {
 				t.Errorf("%s: method = %s, want DELETE", name, method)
 			}
 		}()
+	}
+}
+
+func TestAgentSocketAllowed(t *testing.T) {
+	if err := agentSocketAllowed(os.ModeSocket|0o600, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentSocketAllowed(os.ModeSocket|0o600, 2, 1); err == nil {
+		t.Fatal("a socket owned by another uid was accepted")
+	}
+	if err := agentSocketAllowed(0o600, 1, 1); err == nil {
+		t.Fatal("a regular file was accepted as the agent socket")
+	}
+	if err := agentSocketAllowed(os.ModeSymlink|0o777, 1, 1); err == nil {
+		t.Fatal("a symlink was accepted as the agent socket")
+	}
+	if err := agentSocketAllowed(os.ModeSocket|0o660, 1, 1); err == nil {
+		t.Fatal("a group-accessible socket was accepted")
+	}
+}
+
+func TestCheckAgentSocket_refusesWhatAnotherUserCouldPlant(t *testing.T) {
+	dir, err := os.MkdirTemp("", "rwa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	sock := filepath.Join(dir, "a.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	if err := os.Chmod(sock, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAgentSocket(sock); err == nil {
+		t.Fatal("dialled a world-accessible agent socket")
+	}
+	if err := os.Chmod(sock, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAgentSocket(sock); err != nil {
+		t.Fatalf("the caller's socket: %v", err)
+	}
+
+	link := filepath.Join(dir, "b.sock")
+	if err := os.Symlink(sock, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAgentSocket(link); err == nil {
+		t.Fatal("followed a symlink to the agent socket")
+	}
+	if err := checkAgentSocket(filepath.Join(dir, "missing")); !os.IsNotExist(err) {
+		t.Fatalf("missing socket = %v, want not exist", err)
 	}
 }

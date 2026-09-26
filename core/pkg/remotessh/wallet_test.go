@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -333,6 +334,75 @@ func TestPrepareNodeKeys_emptyNodes(t *testing.T) {
 		t.Fatalf("expected no error for empty nodes, got: %v", err)
 	}
 	cleanup() // should not panic
+	cleanup() // a second call is what a deferred cleanup and a signal both do
+}
+
+func TestPrepareNodeKeys_cleanupRemovesTheKey(t *testing.T) {
+	mock := &mockClient{
+		getSSHKey: func(_ context.Context, _, _, _ string) (*rwagent.VaultSSHData, error) {
+			return &rwagent.VaultSSHData{PrivateKey: testPrivateKey}, nil
+		},
+	}
+	withMockClient(t, mock)
+
+	nodes := []inspector.Node{{Host: "10.0.0.1", User: "root"}}
+	cleanup, err := PrepareNodeKeys(nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(nodes[0].SSHKey); err != nil {
+		t.Fatalf("key file: %v", err)
+	}
+	cleanup()
+	if _, err := os.Stat(nodes[0].SSHKey); !os.IsNotExist(err) {
+		t.Fatalf("private key left on disk after cleanup: %v", err)
+	}
+}
+
+func TestRunInterruptWatch_signalCleansThenReraises(t *testing.T) {
+	sigs := make(chan os.Signal, 1)
+	stopped := make(chan struct{})
+	cleaned := make(chan struct{})
+	raised := make(chan os.Signal, 1)
+	go runInterruptWatch(sigs, stopped, func() { close(cleaned) }, func(sig os.Signal) {
+		raised <- sig
+	})
+	sigs <- syscall.SIGINT
+	select {
+	case <-cleaned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the signal did not remove the keys")
+	}
+	select {
+	case got := <-raised:
+		if got != syscall.SIGINT {
+			t.Fatalf("reraised %v, want SIGINT", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the signal was swallowed")
+	}
+}
+
+func TestRunInterruptWatch_stopDoesNotReraise(t *testing.T) {
+	sigs := make(chan os.Signal, 1)
+	stopped := make(chan struct{})
+	raised := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	go func() {
+		runInterruptWatch(sigs, stopped, func() {}, func(sig os.Signal) { raised <- sig })
+		close(done)
+	}()
+	close(stopped)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the watch did not return when the caller cleaned up")
+	}
+	select {
+	case sig := <-raised:
+		t.Fatalf("cleanup reraised %v", sig)
+	default:
+	}
 }
 
 func TestEnsureVaultEntry_exists(t *testing.T) {
