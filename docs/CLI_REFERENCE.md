@@ -1731,6 +1731,7 @@ joining node takes it from the cluster in the join response. With --remote,
 | `--environment` | — | Environment name (devnet, testnet, etc.) |
 | `--expect-archive-signers` | — | When joining: the archive signers the cluster must send (comma-separated); the archive is verified against them before the join |
 | `--force` | `false` | Force reconfiguration even if already installed |
+| `--host-key` | — | Expected SSH host-key fingerprint (SHA256:...) for --remote; omit to confirm it interactively |
 | `--ipfs-addrs` | — | Comma-separated multiaddrs of existing IPFS node |
 | `--ipfs-cluster-addrs` | — | Comma-separated multiaddrs of existing IPFS Cluster node |
 | `--ipfs-cluster-peer` | — | Peer ID of existing IPFS Cluster node |
