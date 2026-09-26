@@ -626,6 +626,11 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 			return fmt.Errorf("derive the IPFS Cluster REST API password: %w", err)
 		}
 		ipfsCfg.ClusterAPIPassword = password
+		token, err := ipfs.KuboAPIToken(cfg.ClusterSecret)
+		if err != nil {
+			return fmt.Errorf("derive the Kubo API token: %w", err)
+		}
+		ipfsCfg.KuboAPIToken = token
 	}
 
 	ipfsClient, err := ipfs.NewClient(ipfsCfg, logger.Logger)

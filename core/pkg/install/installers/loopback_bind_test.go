@@ -47,7 +47,7 @@ func TestConfigureAddresses_rebindsAnExposedRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	ii := NewIPFSInstaller("amd64", io.Discard)
-	if err := ii.configureAddresses(rootfs.At(filepath.Dir(dir)), dir, 10107, 8080, 4101, "10.0.0.5"); err != nil {
+	if err := ii.configureAddresses(rootfs.At(filepath.Dir(dir)), dir, 10107, 8080, 4101, "10.0.0.5", "abc123"); err != nil {
 		t.Fatal(err)
 	}
 	got := readJSON(t, filepath.Join(dir, "config"))
@@ -63,6 +63,10 @@ func TestConfigureAddresses_rebindsAnExposedRepo(t *testing.T) {
 	}
 	if a, _ := field(got, "Addresses", "Announce").([]interface{}); len(a) != 1 {
 		t.Errorf("Addresses.Announce not preserved: %v", a)
+	}
+	auth, _ := field(got, "API", "Authorizations", "orama", "AuthSecret").(string)
+	if auth != "bearer:abc123" {
+		t.Errorf("API.Authorizations.orama.AuthSecret = %q, want the bearer", auth)
 	}
 }
 

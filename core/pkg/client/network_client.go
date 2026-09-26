@@ -139,8 +139,9 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 // Returns nil if IPFS is not running or unavailable
 func queryIPFSPeerInfo() *IPFSPeerInfo {
 	// IPFS API runs on constants.IPFSAPIPort in our setup
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post(fmt.Sprintf("http://localhost:%d/api/v0/id", constants.IPFSAPIPort), "", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := ipfs.LocalPostAPI(ctx, fmt.Sprintf("http://localhost:%d/api/v0/id", constants.IPFSAPIPort))
 	if err != nil {
 		return nil // IPFS not available
 	}

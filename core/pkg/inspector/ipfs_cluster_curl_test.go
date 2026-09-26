@@ -71,6 +71,51 @@ func TestIPFSClusterCurl_sendsCredentialsOnStdinOnly(t *testing.T) {
 	}
 }
 
+func TestIPFSKuboCurl_sendsTheBearerOnStdinOnly(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "cluster-secret")
+	if err := os.WriteFile(secretPath, []byte("cluster-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, script := range map[string]string{
+		"sudo": "#!/bin/sh\nexec \"$@\"\n",
+		"curl": "#!/bin/sh\necho \"$@\" > \"$FAKE_DIR/argv\"\ncat > \"$FAKE_DIR/stdin\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := ipfs.KuboAPIToken("cluster-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := strings.Replace(ipfsKuboCurl("/api/v0/id"), ipfsClusterSecretPath, secretPath, 1)
+	run := exec.Command(bash, "-c", cmd)
+	run.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "FAKE_DIR="+dir)
+	if out, err := run.CombinedOutput(); err != nil {
+		t.Fatalf("pipeline failed: %v\n%s", err, out)
+	}
+	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
+	stdin, _ := os.ReadFile(filepath.Join(dir, "stdin"))
+	if strings.Contains(string(argv), want) {
+		t.Errorf("the bearer is on curl's command line: %s", argv)
+	}
+	if !strings.Contains(string(stdin), "Authorization: Bearer "+want) {
+		t.Errorf("curl config on stdin = %q", stdin)
+	}
+}
+
 // A symlink where the secret should be is the orama user's file pointing
 // wherever they like. The derivation refuses it instead of hashing the target
 // into a curl config.

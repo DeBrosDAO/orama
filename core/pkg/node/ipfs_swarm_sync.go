@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -99,8 +100,9 @@ func (n *Node) syncIPFSSwarmPeers(ctx context.Context) {
 func getConnectedIPFSPeers() map[string]bool {
 	peers := make(map[string]bool)
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(constants.LocalIPFSAPIURL()+"/api/v0/swarm/peers", "", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := ipfs.LocalPostAPI(ctx, constants.LocalIPFSAPIURL()+"/api/v0/swarm/peers")
 	if err != nil {
 		return peers
 	}
@@ -126,9 +128,10 @@ func getConnectedIPFSPeers() map[string]bool {
 
 // ipfsSwarmConnect connects to an IPFS peer via the HTTP API
 func ipfsSwarmConnect(multiaddr string) error {
-	client := &http.Client{Timeout: 10 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	apiURL := fmt.Sprintf("%s/api/v0/swarm/connect?arg=%s", constants.LocalIPFSAPIURL(), url.QueryEscape(multiaddr))
-	resp, err := client.Post(apiURL, "", nil)
+	resp, err := ipfs.LocalPostAPI(ctx, apiURL)
 	if err != nil {
 		return err
 	}

@@ -44,29 +44,50 @@ func ClusterRESTPassword(clusterSecret string) (string, error) {
 // clusterAuthTransport adds the REST API credentials to requests for the
 // cluster API's host, and to nothing else: the same client talks to Kubo,
 // which must not be handed the cluster's password.
-type clusterAuthTransport struct {
-	next     http.RoundTripper
-	host     string
-	password string
+type apiAuthTransport struct {
+	next            http.RoundTripper
+	clusterHost     string
+	clusterPassword string
+	kuboHost        string
+	kuboToken       string
 }
 
-func (t *clusterAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Host != t.host {
-		return t.next.RoundTrip(req)
-	}
+func (t *apiAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	authed := req.Clone(req.Context())
-	authed.SetBasicAuth(ClusterRESTUser, t.password)
+	switch req.URL.Host {
+	case t.clusterHost:
+		if t.clusterPassword != "" {
+			authed.SetBasicAuth(ClusterRESTUser, t.clusterPassword)
+		}
+	case t.kuboHost:
+		if t.kuboToken != "" {
+			authed.Header.Set("Authorization", "Bearer "+t.kuboToken)
+		}
+	}
 	return t.next.RoundTrip(authed)
 }
 
-// newClusterAuthTransport authenticates requests to clusterAPIURL's host with
-// password.
-func newClusterAuthTransport(clusterAPIURL, password string) (http.RoundTripper, error) {
-	u, err := url.Parse(clusterAPIURL)
-	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("IPFS Cluster API URL %q has no host to send credentials to", clusterAPIURL)
+// newAPIAuthTransport authenticates requests to the cluster API's host with
+// basic auth and requests to the Kubo API's host with its bearer. Either may
+// be unset. A URL with no host is refused when its credential is set, because
+// the credential would otherwise go nowhere.
+func newAPIAuthTransport(clusterAPIURL, clusterPassword, kuboAPIURL, kuboToken string) (http.RoundTripper, error) {
+	t := &apiAuthTransport{next: http.DefaultTransport, clusterPassword: clusterPassword, kuboToken: kuboToken}
+	if clusterPassword != "" {
+		u, err := url.Parse(clusterAPIURL)
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("IPFS Cluster API URL %q has no host to send credentials to", clusterAPIURL)
+		}
+		t.clusterHost = u.Host
 	}
-	return &clusterAuthTransport{next: http.DefaultTransport, host: u.Host, password: password}, nil
+	if kuboToken != "" {
+		u, err := url.Parse(kuboAPIURL)
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("Kubo API URL %q has no host to send the bearer to", kuboAPIURL)
+		}
+		t.kuboHost = u.Host
+	}
+	return t, nil
 }
 
 // productionClusterSecretPath is the cluster secret on an installed node.

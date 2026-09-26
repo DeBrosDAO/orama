@@ -43,6 +43,35 @@ sys.stdout.write(binascii.hexlify(okm).decode())`
 // before anything reaches curl, and curl reads the config on stdin so the
 // password is not on a command line. The whole pipeline is a subshell so a
 // refusal does not exit the inspector script around it.
+// kuboAPITokenProgram prints the Kubo RPC bearer. It is the same HKDF as
+// ipfs.KuboAPIToken, info "ipfs-kubo-api". No single quotes: the program is
+// embedded in a single-quoted python3 -c argument.
+const kuboAPITokenProgram = `import os,sys,hmac,hashlib,binascii
+p=sys.argv[1]
+fd=os.open(p, os.O_RDONLY|os.O_NOFOLLOW)
+try:
+    data=os.read(fd, 4096)
+    extra=os.read(fd, 1)
+finally:
+    os.close(fd)
+ikm=data.strip()
+if extra or not ikm:
+    raise SystemExit(1)
+prk=hmac.new(b"\x00"*32, ikm, hashlib.sha256).digest()
+okm=hmac.new(prk, b"ipfs-kubo-api"+bytes([1]), hashlib.sha256).digest()
+sys.stdout.write(binascii.hexlify(okm).decode())`
+
+// ipfsKuboCurl POSTs path (including the query) to this node's Kubo RPC. The
+// bearer is derived on the node and handed to curl on stdin, not on the
+// command line. The pipeline is a subshell so a refusal does not exit the
+// inspector script around it.
+func ipfsKuboCurl(path string) string {
+	url := fmt.Sprintf("http://localhost:%d%s", constants.IPFSAPIPort, path)
+	return fmt.Sprintf(
+		`(tok=$(%spython3 -c '%s' %q) || exit 1; printf '%%s\n' "$tok" | grep -Eq '^[0-9a-f]{64}$' || exit 1; printf 'header = "Authorization: Bearer %%s"\n' "$tok" | curl -sf -K - -X POST %q)`,
+		inspectorSudo, kuboAPITokenProgram, ipfsClusterSecretPath, url)
+}
+
 func ipfsClusterCurl(curlOpts, path string) string {
 	url := fmt.Sprintf("http://localhost:%d%s", constants.IPFSClusterAPIPort, path)
 	return fmt.Sprintf(

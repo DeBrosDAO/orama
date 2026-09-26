@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
@@ -117,7 +118,11 @@ func (ii *IPFSInstaller) InitializeRepo(root rootfs.Root, ipfsRepoPath string, s
 	// Configure IPFS addresses (API, Gateway, Swarm) by modifying the config file directly
 	// This ensures the ports are set correctly and avoids conflicts with RQLite
 	fmt.Fprintf(ii.logWriter, "    Configuring IPFS addresses (API: %d, Gateway: %d, Swarm: %d)...\n", apiPort, gatewayPort, swarmPort)
-	if err := ii.configureAddresses(root, ipfsRepoPath, apiPort, gatewayPort, swarmPort, bindIP); err != nil {
+	kuboToken, err := kuboTokenFromSwarmKeyDir(root, swarmKeyPath)
+	if err != nil {
+		return err
+	}
+	if err := ii.configureAddresses(root, ipfsRepoPath, apiPort, gatewayPort, swarmPort, bindIP, kuboToken); err != nil {
 		return fmt.Errorf("failed to configure IPFS addresses: %w", err)
 	}
 
@@ -173,8 +178,26 @@ func (ii *IPFSInstaller) InitializeRepo(root rootfs.Root, ipfsRepoPath string, s
 	return nil
 }
 
+// kuboTokenFromSwarmKeyDir reads the cluster secret beside the swarm key and
+// derives the Kubo RPC bearer install writes into the repo config.
+func kuboTokenFromSwarmKeyDir(root rootfs.Root, swarmKeyPath string) (string, error) {
+	secretPath := filepath.Join(filepath.Dir(swarmKeyPath), "cluster-secret")
+	raw, err := root.ReadFile(secretPath, rootfs.SmallFileLimit)
+	if err != nil {
+		return "", fmt.Errorf("read the cluster secret the Kubo API token is derived from: %w", err)
+	}
+	token, err := ipfs.KuboAPIToken(string(raw))
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
 // configureAddresses configures the IPFS API, Gateway, and Swarm addresses in the config file
-func (ii *IPFSInstaller) configureAddresses(root rootfs.Root, ipfsRepoPath string, apiPort, gatewayPort, swarmPort int, bindIP string) error {
+func (ii *IPFSInstaller) configureAddresses(root rootfs.Root, ipfsRepoPath string, apiPort, gatewayPort, swarmPort int, bindIP, kuboToken string) error {
+	if kuboToken == "" {
+		return fmt.Errorf("the Kubo API token is empty; the RPC would stay open to every process on the node")
+	}
 	configPath := filepath.Join(ipfsRepoPath, "config")
 
 	// Read existing config
@@ -196,9 +219,10 @@ func (ii *IPFSInstaller) configureAddresses(root rootfs.Root, ipfsRepoPath strin
 	}
 
 	// Update specific address fields while preserving others.
-	// API and Gateway bind loopback: the API is unauthenticated full control
-	// of the node. This runs on every install and upgrade, so a repo whose
-	// addresses were rebound to 0.0.0.0 is bound back.
+	// API and Gateway bind loopback. Loopback is not the lock: a tenant
+	// deployment can connect to it. The RPC requires the bearer written below.
+	// This runs on every install and upgrade, so a repo whose addresses were
+	// rebound to 0.0.0.0 is bound back.
 	// Swarm binds to the WireGuard IP so it's only reachable over the VPN
 	addresses["API"] = []string{
 		fmt.Sprintf("/ip4/%s/tcp/%d", loopbackIPv4, apiPort),
@@ -214,6 +238,17 @@ func (ii *IPFSInstaller) configureAddresses(root rootfs.Root, ipfsRepoPath strin
 	addresses["NoAnnounce"] = []string{}
 
 	config["Addresses"] = addresses
+
+	// The RPC refuses every request that does not carry this bearer. The
+	// secret is `bearer:<token>` as Kubo documents it; the token is hex.
+	config["API"] = map[string]interface{}{
+		"Authorizations": map[string]interface{}{
+			ipfs.KuboAPIUser: map[string]interface{}{
+				"AuthSecret":   "bearer:" + kuboToken,
+				"AllowedPaths": []string{"/api/v0"},
+			},
+		},
+	}
 
 	// Clear Swarm.AddrFilters — the server profile blocks private IPs (10.0.0.0/8, 172.16.0.0/12, etc.)
 	// which prevents IPFS from connecting over our WireGuard mesh (10.0.0.x)

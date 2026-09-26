@@ -57,6 +57,10 @@ type Config struct {
 	// (ClusterRESTPassword). Every request to ClusterAPIURL carries it.
 	ClusterAPIPassword string
 
+	// KuboAPIToken is the bearer Kubo's RPC requires (KuboAPIToken). Every
+	// request to IPFSAPIURL carries it. It is not the cluster password.
+	KuboAPIToken string
+
 	// Timeout is the timeout for client operations
 	// If zero, defaults to 60 seconds
 	Timeout time.Duration
@@ -145,8 +149,8 @@ func NewClient(cfg Config, logger *zap.Logger) (*Client, error) {
 	httpClient := &http.Client{
 		Timeout: timeout,
 	}
-	if cfg.ClusterAPIPassword != "" {
-		transport, err := newClusterAuthTransport(apiURL, cfg.ClusterAPIPassword)
+	if cfg.ClusterAPIPassword != "" || cfg.KuboAPIToken != "" {
+		transport, err := newAPIAuthTransport(apiURL, cfg.ClusterAPIPassword, ipfsAPIURL, cfg.KuboAPIToken)
 		if err != nil {
 			return nil, err
 		}

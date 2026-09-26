@@ -20,6 +20,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/overlay"
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -909,8 +910,9 @@ func olricSeedPeers(peers []WGPeerInfo, myWGIP string) []string {
 
 // queryIPFSPeerInfo gets the local IPFS node's peer ID and builds addrs with WG IP
 func (h *Handler) queryIPFSPeerInfo(myWGIP string) PeerInfo {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(constants.LocalIPFSAPIURL()+"/api/v0/id", "", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := ipfs.LocalPostAPI(ctx, constants.LocalIPFSAPIURL()+"/api/v0/id")
 	if err != nil {
 		h.logger.Warn("failed to query IPFS peer info", zap.Error(err))
 		return PeerInfo{}
@@ -935,8 +937,20 @@ func ipfsPeer(myWGIP, id string) PeerInfo {
 
 // queryIPFSClusterPeerInfo gets the local IPFS Cluster peer ID and builds addrs with WG IP
 func (h *Handler) queryIPFSClusterPeerInfo(myWGIP string) PeerInfo {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(constants.LocalIPFSClusterURL() + "/id")
+	password, err := ipfs.LocalClusterRESTPassword()
+	if err != nil {
+		h.logger.Warn("failed to derive the IPFS Cluster REST API password", zap.Error(err))
+		return PeerInfo{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, constants.LocalIPFSClusterURL()+"/id", nil)
+	if err != nil {
+		h.logger.Warn("failed to build the IPFS Cluster request", zap.Error(err))
+		return PeerInfo{}
+	}
+	req.SetBasicAuth(ipfs.ClusterRESTUser, password)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		h.logger.Warn("failed to query IPFS Cluster peer info", zap.Error(err))
 		return PeerInfo{}

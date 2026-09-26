@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/wireguard"
@@ -483,8 +483,9 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 
 // queryLocalIPFSPeerID queries the local IPFS daemon for its peer ID
 func queryLocalIPFSPeerID() string {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(constants.LocalIPFSAPIURL()+"/api/v0/id", "", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := ipfs.LocalPostAPI(ctx, constants.LocalIPFSAPIURL()+"/api/v0/id")
 	if err != nil {
 		return ""
 	}

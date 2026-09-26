@@ -609,19 +609,19 @@ echo "$SEP"
 echo "$SEP"
 (systemctl is-active --quiet orama-namespace-ipfs-cluster@index && echo active) || (systemctl is-active --quiet orama-ipfs-cluster && echo active) || echo inactive
 echo "$SEP"
-curl -sf -X POST 'http://localhost:10107/api/v0/swarm/peers' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
+` + ipfsKuboCurl("/api/v0/swarm/peers") + ` 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
 echo "$SEP"
 ` + ipfsClusterCurl("--max-time 10", "/peers") + ` 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin); print(len(peers)); errs=sum(1 for p in peers if p.get('error','')); print(errs)" 2>/dev/null || (` + ipfsClusterCurl("", "/id") + ` 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); peers=d.get('cluster_peers',[]); print(len(peers)); print(0)" 2>/dev/null || echo -1)
 echo "$SEP"
-curl -sf -X POST 'http://localhost:10107/api/v0/repo/stat' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('RepoSize',0)); print(d.get('StorageMax',0))" 2>/dev/null || echo -1
+` + ipfsKuboCurl("/api/v0/repo/stat") + ` 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('RepoSize',0)); print(d.get('StorageMax',0))" 2>/dev/null || echo -1
 echo "$SEP"
-curl -sf -X POST 'http://localhost:10107/api/v0/version' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('Version',''))" 2>/dev/null || echo unknown
+` + ipfsKuboCurl("/api/v0/version") + ` 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('Version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
 ` + ipfsClusterCurl("", "/id") + ` 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
 test -f /opt/orama/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
 echo "$SEP"
-curl -sf -X POST 'http://localhost:10107/api/v0/bootstrap/list' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
+` + ipfsKuboCurl("/api/v0/bootstrap/list") + ` 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
 `
 	res := RunSSH(ctx, node, cmd)
 	if !res.OK() && res.Stdout == "" {
