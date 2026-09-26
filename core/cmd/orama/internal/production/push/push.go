@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
@@ -22,7 +21,7 @@ type Flags struct {
 	Node   string // Restrict to a single node IP from the inventory
 	Host   string // Push to a node that is not in the inventory
 	User   string // SSH user for Host (default root)
-	Direct bool   // Upload from here to each node in turn, instead of fanning out
+	Direct bool   // Kept so existing invocations still parse. Every push uploads from this machine; node SSH keys are never copied to another node.
 	// Archive is the build to push. Required: the newest archive in /tmp may
 	// be another checkout's build.
 	Archive string
@@ -126,9 +125,9 @@ func execute(flags *Flags) error {
 	return ToNodes(archivePath, nodes, flags.Direct, flags.TrustSigners)
 }
 
-// ToNodes pushes the archive at archivePath to nodes, whose SSH keys are
-// prepared: uploaded to each node in turn when direct (or there is one node),
-// otherwise to a hub that fans it out.
+// ToNodes pushes the archive at archivePath to nodes from this machine.
+// direct is accepted and ignored: there is no hub fan-out, because that
+// copied each node's SSH key onto the hub.
 //
 // Without trust every node stages it with its installed orama, which verifies
 // it against the node's trust anchor. With trust the archive is verified here
@@ -145,10 +144,10 @@ func ToNodes(archivePath string, nodes []inspector.Node, direct bool, trust []st
 		return err
 	}
 	defer func() { err = errors.Join(err, cleanup()) }()
-	if direct || len(nodes) == 1 {
-		return pushDirect(nodes, stager)
-	}
-	return pushFanout(nodes, stager)
+	// Every node is reached from this machine, with the key that already opens
+	// it. An earlier fan-out copied those keys onto the hub so the hub could
+	// ssh onward; a key on the hub is a key the hub's user can read.
+	return pushDirect(nodes, stager)
 }
 
 // pushDirect uploads the archive to each node sequentially.
@@ -172,123 +171,6 @@ func pushDirect(nodes []inspector.Node, stager *nodeStager) error {
 	}
 
 	fmt.Printf("✓ Push complete (%d nodes)\n", len(nodes))
-	return nil
-}
-
-// pushFanout uploads to a hub node, then fans out to all others via agent forwarding.
-func pushFanout(nodes []inspector.Node, stager *nodeStager) (err error) {
-	hub := remotessh.PickHubNode(nodes)
-
-	// Step 1: Upload to the hub and stage there. The upload stays on the hub
-	// until the fanout below has copied it to every other node.
-	fmt.Printf("[hub] Uploading to %s...\n", hub.Host)
-	hubDir, err := makeUploadDir(func(cmd string) (string, error) { return remotessh.RunSSHOutput(hub, cmd) })
-	if err != nil {
-		return fmt.Errorf("upload to hub %s failed: %w", hub.Host, err)
-	}
-	defer func() {
-		if rmErr := remotessh.RunSSHStreaming(hub, remotessh.SudoPrefix(hub)+"rm -rf "+hubDir); rmErr != nil {
-			err = errors.Join(err, fmt.Errorf("remove the upload %s from hub %s: %w", hubDir, hub.Host, rmErr))
-		}
-	}()
-	if err := remotessh.UploadFile(hub, stager.archive, uploadPath(hubDir)); err != nil {
-		return fmt.Errorf("upload to hub %s failed: %w", hub.Host, err)
-	}
-	if err := remotessh.RunSSHStreaming(hub, stager.stage(remotessh.SudoPrefix(hub), uploadPath(hubDir))); err != nil {
-		return fmt.Errorf("stage on hub %s failed: %w\n  %s", hub.Host, err, stageHint)
-	}
-	fmt.Printf("  ✓ hub %s done\n\n", hub.Host)
-
-	remaining := make([]inspector.Node, 0, len(nodes)-1)
-	for _, n := range nodes {
-		if n.Host != hub.Host {
-			remaining = append(remaining, n)
-		}
-	}
-	if len(remaining) == 0 {
-		fmt.Printf("✓ Push complete (1 node)\n")
-		return nil
-	}
-	return fanOut(hub, uploadPath(hubDir), remaining, stager)
-}
-
-// fanOut copies the archive at hubPath from the hub to every target in
-// parallel and stages it on each.
-func fanOut(hub inspector.Node, hubPath string, remaining []inspector.Node, stager *nodeStager) (err error) {
-	// Stage each target's SSH key on the hub so the hub authenticates to the
-	// target with a SINGLE key (-i + IdentitiesOnly), instead of agent-forwarding
-	// ALL node keys — which the target's sshd rejects with "too many
-	// authentication failures" once the offered-key count exceeds MaxAuthTries
-	// (default 6). Keys are chmod 600 and wiped when the fanout ends.
-	if err := remotessh.RunSSHStreaming(hub, "rm -rf "+fanoutKeyDir+" && mkdir -p "+fanoutKeyDir+" && chmod 700 "+fanoutKeyDir); err != nil {
-		return fmt.Errorf("prepare fanout key dir on hub: %w", err)
-	}
-	defer func() {
-		wipe := "for f in " + fanoutKeyDir + "/*; do [ -f \"$f\" ] && dd if=/dev/zero of=\"$f\" bs=8192 count=1 conv=notrunc status=none 2>/dev/null; done; rm -rf " + fanoutKeyDir
-		if wipeErr := remotessh.RunSSHStreaming(hub, wipe); wipeErr != nil {
-			err = errors.Join(err, fmt.Errorf("wipe the fanout keys on hub %s: %w", hub.Host, wipeErr))
-		}
-	}()
-	for _, t := range remaining {
-		dst := fanoutKeyDir + "/" + t.Host
-		if err := remotessh.UploadFile(hub, t.SSHKey, dst); err != nil {
-			return fmt.Errorf("stage key for %s on hub: %w", t.Host, err)
-		}
-		if err := remotessh.RunSSHStreaming(hub, "chmod 600 "+dst); err != nil {
-			return fmt.Errorf("chmod staged key for %s: %w", t.Host, err)
-		}
-	}
-
-	fmt.Printf("[fanout] Distributing from %s to %d nodes...\n", hub.Host, len(remaining))
-	var wg sync.WaitGroup
-	errs := make([]error, len(remaining))
-	for i, target := range remaining {
-		wg.Add(1)
-		go func(idx int, target inspector.Node) {
-			defer wg.Done()
-			if err := fanOutTo(hub, hubPath, target, stager); err != nil {
-				errs[idx] = err
-				return
-			}
-			fmt.Printf("  ✓ %s done\n", target.Host)
-		}(i, target)
-	}
-	wg.Wait()
-
-	var failed []string
-	for i, err := range errs {
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", remaining[i].Host, err)
-			failed = append(failed, remaining[i].Host)
-		}
-	}
-	if len(failed) > 0 {
-		return fmt.Errorf("push failed on %d node(s): %s\n  %s", len(failed), strings.Join(failed, ", "), stageHint)
-	}
-	fmt.Printf("\n✓ Push complete (%d nodes)\n", len(remaining)+1)
-	return nil
-}
-
-// fanOutTo copies the archive from the hub into a private directory on
-// target, using target's staged key only, and stages it there.
-func fanOutTo(hub inspector.Node, hubPath string, target inspector.Node, stager *nodeStager) error {
-	keyPath := fanoutKeyDir + "/" + target.Host
-	dir, err := makeUploadDir(func(cmd string) (string, error) {
-		return remotessh.RunSSHOutput(hub, sshVia(target, keyPath, cmd))
-	})
-	if err != nil {
-		return fmt.Errorf("fanout to %s failed: %w", target.Host, err)
-	}
-	scpCmd := fmt.Sprintf("scp %s -i %s %s %s@%s:%s", fanoutSSHOptions, keyPath, hubPath, target.User, target.Host, uploadPath(dir))
-	if err := remotessh.RunSSHStreaming(hub, scpCmd); err != nil {
-		if rmErr := remotessh.RunSSHStreaming(hub, sshVia(target, keyPath, remotessh.SudoPrefix(target)+"rm -rf "+dir)); rmErr != nil {
-			err = errors.Join(err, fmt.Errorf("remove the upload %s on %s: %w", dir, target.Host, rmErr))
-		}
-		return fmt.Errorf("fanout to %s failed: %w", target.Host, err)
-	}
-	if err := remotessh.RunSSHStreaming(hub, sshVia(target, keyPath, stager.stageAndRemove(remotessh.SudoPrefix(target), dir))); err != nil {
-		return fmt.Errorf("stage on %s failed: %w", target.Host, err)
-	}
 	return nil
 }
 

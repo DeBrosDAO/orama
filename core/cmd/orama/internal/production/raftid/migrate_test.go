@@ -65,6 +65,32 @@ func TestResetScript_carriesTheIdentityAndTheJoin(t *testing.T) {
 	}
 }
 
+// Go's %q is double quotes. A peer id of $(id) inside them runs as root.
+// The values are single-quoted, so the shell stores them and does not run them.
+func TestResetScript_singleQuotesHostileValues(t *testing.T) {
+	script := resetScript(`$(id)`, `10.0.0.1:10100; rm -rf /`)
+	for _, want := range []string{
+		`PEER_ID='$(id)'`,
+		`JOIN_ADDR='10.0.0.1:10100; rm -rf /'`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("reset script missing %q:\n%s", want, script)
+		}
+	}
+}
+
+func TestValidateResetInputs(t *testing.T) {
+	if err := validateResetInputs(`$(id)`, "10.0.0.1:10100"); err == nil {
+		t.Fatal("a peer id that is a shell snippet was accepted")
+	}
+	if err := validateResetInputs("12D3KooWAlpha", "10.0.0.1:10100;rm"); err == nil {
+		t.Fatal("a join address with a shell separator was accepted")
+	}
+	if err := validateResetInputs("12D3KooWAlpha", "10.0.0.1:10100"); err == nil {
+		t.Fatal("a string that only looks like a peer id was accepted")
+	}
+}
+
 func TestRequireStableIDSupport_namesTheNodesHoldingItBack(t *testing.T) {
 	// Migrating while one node is on the old binary makes that node re-add
 	// every migrated node as a duplicate voter every five minutes.

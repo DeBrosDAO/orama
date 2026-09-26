@@ -29,6 +29,10 @@ type Flags struct {
 	IPFSClusterPeerID string
 	IPFSClusterAddrs  string
 
+	// HostKey is the SHA256 fingerprint --remote must see before it sends
+	// anything. Empty asks.
+	HostKey string
+
 	// Security flags
 	SkipFirewall  bool   // Skip UFW firewall setup (for users who manage their own firewall)
 	CAFingerprint string // SHA-256 fingerprint of server TLS cert for TOFU verification

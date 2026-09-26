@@ -105,7 +105,7 @@ system's alone. A missing CA file is an error naming the environment.
 
 `--join-via <user>@<ip>` mints the invite on a node already in the cluster, over
 SSH with its RootWallet key, so joining needs no `orama auth login`. That node's
-host key must already be in your `known_hosts` (from its own setup). Without
+host key must already be in `~/.orama/known_hosts` (setup writes it there when it pins the node). Without
 `--join-via`, setup asks the environment's gateway for an invite and needs a
 login. `--archive <path>` picks the build to install (default: the newest in
 `/tmp`); a node already running that exact build is not re-uploaded.

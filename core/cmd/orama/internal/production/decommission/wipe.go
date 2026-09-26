@@ -48,7 +48,7 @@ func wipeScript(nuclear bool) string {
 # Stop every namespace unit FIRST. These are template instances
 # (orama-namespace-rqlite@index, ...@<tenant>) and match none of the legacy
 # host unit names below, so they used to keep running under a deleted data dir.
-for unit in $(systemctl list-units --all --plain --no-legend "orama-namespace-*" | awk "{print \$1}"); do
+for unit in $(systemctl list-units --all --plain --no-legend "orama-namespace-*" "orama-deploy-*" | awk "{print \$1}"); do
     systemctl stop "$unit" 2>/dev/null
     systemctl disable "$unit" 2>/dev/null
 done
@@ -120,8 +120,10 @@ fi
 
 # Remove data
 rm -rf /opt/orama
-# Root-owned env files of namespace units and deployments (orama-privhelper)
+# Root-owned env files of namespace units and deployments (orama-privhelper),
+# plus the per-deployment state and cache systemd keeps for DynamicUser units.
 rm -rf /var/lib/orama-unit-env /var/lib/orama-deploy
+rm -rf /var/lib/private/orama-deploy-* /var/cache/private/orama-deploy-* /var/cache/private/orama-build
 rm -rf /var/lib/ntfy /run/ntfy
 # Caddy storage: the TLS private keys of the node and its ACME account key.
 # A wiped node that kept them would serve the old certificate and hold keys for

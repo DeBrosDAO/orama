@@ -42,6 +42,7 @@ func fullFlags() *Flags {
 		SkipFirewall:         true,
 		DryRun:               true,
 		Archive:              "/tmp/orama-9.9.9-linux-amd64.tar.gz",
+		HostKey:              "SHA256:abc",
 		ExpectArchiveSigners: "0x2222222222222222222222222222222222222222",
 	}
 }
@@ -50,6 +51,8 @@ func fullFlags() *Flags {
 var localOnlyFields = map[string]bool{
 	// The node installs the archive that was uploaded; the path is local.
 	"Archive": true,
+	// The host-key pin is checked on this machine before SSH, not on the node.
+	"HostKey": true,
 }
 
 func TestRemoteInstallArgs_forwardsEveryFlag(t *testing.T) {

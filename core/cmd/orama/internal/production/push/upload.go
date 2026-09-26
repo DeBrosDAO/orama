@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
 const (
@@ -15,11 +13,6 @@ const (
 	uploadDirTemplate = "/tmp/orama-push.XXXXXXXX"
 	// uploadName is the archive's name inside that directory.
 	uploadName = "archive.tar.gz"
-	// fanoutKeyDir holds, on the hub, the one key for each fanout target.
-	fanoutKeyDir = "/dev/shm/.orama-fanout-keys"
-	// fanoutSSHOptions authenticate the hub to a target with the one staged
-	// key only.
-	fanoutSSHOptions = "-o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -o ConnectTimeout=10"
 )
 
 // uploadDirPattern is what mktemp returns for uploadDirTemplate; the directory
@@ -43,10 +36,4 @@ func makeUploadDir(run func(cmd string) (string, error)) (string, error) {
 // uploadPath is the archive inside an upload directory.
 func uploadPath(dir string) string {
 	return dir + "/" + uploadName
-}
-
-// sshVia is the command the hub runs to execute cmd on target with the
-// target's staged key.
-func sshVia(target inspector.Node, keyPath, cmd string) string {
-	return fmt.Sprintf("ssh %s -i %s %s@%s '%s'", fanoutSSHOptions, keyPath, target.User, target.Host, cmd)
 }

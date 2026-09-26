@@ -37,19 +37,27 @@ func NewRemoteOrchestrator(flags *Flags) (*RemoteOrchestrator, error) {
 
 	node := resolveTarget(flags.VpsIP)
 
+	known, unpin, err := setup.PinHost(flags.VpsIP, flags.HostKey)
+	if err != nil {
+		return nil, err
+	}
+	node.KnownHostsFile = known
+
 	// Prepare wallet-derived SSH key
 	nodes := []inspector.Node{node}
 	cleanup, err := remotessh.PrepareNodeKeys(nodes)
 	if err != nil {
+		unpin()
 		return nil, fmt.Errorf("failed to prepare SSH key: %w\nEnsure you've run: rw vault ssh add %s/%s", err, node.Host, node.User)
 	}
 	// PrepareNodeKeys modifies nodes in place
 	node = nodes[0]
+	node.KnownHostsFile = known
 
 	return &RemoteOrchestrator{
 		flags:   flags,
 		node:    node,
-		cleanup: cleanup,
+		cleanup: func() { cleanup(); unpin() },
 	}, nil
 }
 

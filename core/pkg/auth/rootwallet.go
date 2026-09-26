@@ -12,10 +12,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth/siw"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"github.com/mattn/go-isatty"
 )
+
+// archiveSigningPrefix is the first line of a build-archive signing request.
+// Login must never sign one: that grant is a different capability, and a
+// gateway that asked for it here would be asking the operator to approve an
+// archive with the login prompt.
+const archiveSigningPrefix = "Orama build archive v1"
+
+// loginFreshnessSkew is how far ahead of this machine the gateway's clock may
+// be before a challenge is refused as not yet valid.
+const loginFreshnessSkew = 2 * time.Minute
 
 // IsRootWalletInstalled checks if the rootwallet agent is reachable.
 func IsRootWalletInstalled() bool {
@@ -133,6 +144,9 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 	// fields — produces a signature over different bytes and a failed login.
 	// It is also what the RootWallet dialog shows the user, which is the point:
 	// it names the domain, the namespace and the deadline in words.
+	if err := acceptLoginChallenge(gatewayURL, wallet, message, time.Now()); err != nil {
+		return nil, err
+	}
 	fmt.Println("⏳ Signing challenge with RootWallet...")
 	signature, err := signWithRootWallet(message)
 	if err != nil {
@@ -208,6 +222,35 @@ func requestChallenge(client *http.Client, gatewayURL, wallet, namespace string)
 	}
 
 	return result.Message, nil
+}
+
+// acceptLoginChallenge reports whether message is a sign-in request this CLI
+// may put in front of the wallet. The gateway's text is signed byte for byte,
+// so the checks happen before that: it has to be a sign-in message for this
+// gateway and this wallet, still inside its own lifetime, and not an archive
+// signing request. The signature itself is wallet:sign, with no purpose.
+func acceptLoginChallenge(gatewayURL, wallet, message string, now time.Time) error {
+	if strings.HasPrefix(message, archiveSigningPrefix) {
+		return fmt.Errorf("refusing to sign %q: that is an archive, and login does not sign archives", archiveSigningPrefix)
+	}
+	parsed, err := siw.Parse(message)
+	if err != nil {
+		return fmt.Errorf("the gateway's challenge is not a sign-in message: %w", err)
+	}
+	if err := parsed.Validate(); err != nil {
+		return fmt.Errorf("the gateway's challenge is not a sign-in message: %w", err)
+	}
+	host := extractDomainFromURL(gatewayURL)
+	if err := parsed.CheckDomain(host); err != nil {
+		return fmt.Errorf("refusing the challenge: %w", err)
+	}
+	if !strings.EqualFold(parsed.Address, wallet) {
+		return fmt.Errorf("the challenge names wallet %s, not this wallet %s", parsed.Address, wallet)
+	}
+	if err := parsed.CheckFreshness(now, loginFreshnessSkew); err != nil {
+		return fmt.Errorf("refusing the challenge: %w", err)
+	}
+	return nil
 }
 
 // verifySignature sends POST /v1/auth/verify and returns credentials.

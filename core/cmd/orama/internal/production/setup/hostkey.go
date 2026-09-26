@@ -139,6 +139,60 @@ func (h *hostKey) matches(want string) bool {
 	return len(h.matching(want)) > 0
 }
 
+// durableKnownHostsPath is where a confirmed host key outlives the setup run.
+func durableKnownHostsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("find home directory for known_hosts: %w", err)
+	}
+	dir := filepath.Join(home, ".orama")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", dir, err)
+	}
+	return filepath.Join(dir, "known_hosts"), nil
+}
+
+// rememberHostKeys appends entries to ~/.orama/known_hosts, skipping lines
+// already there. The file is created 0600.
+func rememberHostKeys(entries []string) error {
+	path, err := durableKnownHostsPath()
+	if err != nil {
+		return err
+	}
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	have := map[string]bool{}
+	for _, line := range strings.Split(string(existing), "\n") {
+		if line != "" {
+			have[line] = true
+		}
+	}
+	var extra strings.Builder
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" || have[entry] {
+			continue
+		}
+		extra.WriteString(entry)
+		extra.WriteByte('\n')
+		have[entry] = true
+	}
+	if extra.Len() == 0 && len(existing) > 0 {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(extra.String()); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
 // writeKnownHosts writes the trusted entries to a file for ssh to verify
 // against, and returns its path. The caller removes the containing directory.
 func writeKnownHosts(dir string, lines []string) (string, error) {

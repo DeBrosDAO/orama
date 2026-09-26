@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // What the CLI signs is the whole of what the signature means. It used to sign
@@ -30,6 +31,26 @@ Issued At: 2026-09-04T12:00:00Z
 Expiration Time: 2026-09-04T12:05:00Z
 Resources:
 - urn:orama:namespace:acme`
+
+func TestAcceptLoginChallenge(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 1, 0, 0, time.UTC)
+	wallet := "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+	if err := acceptLoginChallenge("https://gateway.example", wallet, challengeMessage, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := acceptLoginChallenge("https://evil.example", wallet, challengeMessage, now); err == nil {
+		t.Fatal("a challenge for another domain was accepted")
+	}
+	if err := acceptLoginChallenge("https://gateway.example", "0x0000000000000000000000000000000000000001", challengeMessage, now); err == nil {
+		t.Fatal("a challenge for another wallet was accepted")
+	}
+	if err := acceptLoginChallenge("https://gateway.example", wallet, "Orama build archive v1\nversion: 1\n", now); err == nil {
+		t.Fatal("an archive signing request was accepted as a login")
+	}
+	if err := acceptLoginChallenge("https://gateway.example", wallet, challengeMessage, now.Add(time.Hour)); err == nil {
+		t.Fatal("an expired challenge was accepted")
+	}
+}
 
 func TestRequestChallenge_returnsTheMessageToSign(t *testing.T) {
 	var body map[string]string

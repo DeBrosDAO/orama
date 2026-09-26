@@ -125,6 +125,22 @@ func TestWipeScript_removesThePrivilegedHelper(t *testing.T) {
 
 // The namespace units' and deployments' env files live in root-owned trees
 // outside /opt/orama; a wipe that left them would leave tenant secrets behind.
+func TestWipeScript_stopsDeploymentUnits(t *testing.T) {
+	script := wipeScript(false)
+	if !strings.Contains(script, `"orama-deploy-*"`) {
+		t.Fatal("the wipe does not stop orama-deploy units")
+	}
+	for _, dir := range []string{
+		"/var/lib/private/orama-deploy-*",
+		"/var/cache/private/orama-deploy-*",
+		"/var/cache/private/orama-build",
+	} {
+		if !strings.Contains(script, dir) {
+			t.Errorf("the wipe leaves %s", dir)
+		}
+	}
+}
+
 func TestWipeScript_removesTheRootOwnedEnvTrees(t *testing.T) {
 	script := wipeScript(false)
 	for _, dir := range []string{"/var/lib/orama-unit-env", "/var/lib/orama-deploy"} {

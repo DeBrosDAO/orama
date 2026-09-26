@@ -114,6 +114,10 @@ func pinnedTLSConfig(fingerprint, serverName string) (*tls.Config, error) {
 func (o *Orchestrator) Execute() error {
 	fmt.Printf("🚀 Starting production installation...\n\n")
 
+	if err := o.validator.ValidateFlags(); err != nil {
+		return err
+	}
+
 	// Validate DNS if domain is provided
 	o.validator.ValidateDNS()
 

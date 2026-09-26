@@ -135,7 +135,7 @@ orama node rollout --env testnet
 orama build
 # Creates: /tmp/orama-<version>-linux-amd64.tar.gz
 
-# 2. Push archive to all nodes (fanout via hub node). --archive is required:
+# 2. Push archive to all nodes, from this machine. --archive is required:
 #    the newest archive in /tmp may be another checkout's build.
 orama node push --env testnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
@@ -282,7 +282,7 @@ verified manifest lists. That CLI then runs `node stage-archive --trust-signers
 address fails that push and leaves nothing behind. A new anchor never inherits
 a rotation mark left beside a removed one. `--trust-signers` never changes an
 existing anchor (that is what `--signers` is for). The script reaches the node
-base64-encoded on a pipe into `bash -s`, so it survives the fanout's `ssh '…'`.
+base64-encoded on a pipe into `bash -s`, so a shell that wraps the command cannot reinterpret it.
 
 #### First upgrade from 0.122.x
 
@@ -872,9 +872,9 @@ deleted — both fixed in `wipe`.
 and `orama node rollout`, and `orama nodes` and `orama node list`.
 
 ```bash
-orama push --env devnet                     # Fanout via hub (default, fastest)
+orama push --env devnet                     # Upload from this machine to each node
 orama push --env testnet --node 1.2.3.4     # A single node from the inventory
-orama push --env testnet --direct           # Sequential, no fanout
+orama push --env testnet --direct           # Same path; the flag is accepted and ignored
 orama push --host 1.2.3.4                   # An installed node not in the inventory yet
 orama push --env testnet --trust-signers 0xYourWallet  # Nodes installed before archive signing
 ```
@@ -949,11 +949,11 @@ Signing is the default; `--sign` is accepted and deprecated.
 | `--node <ip>` | Push to a single node IP from the inventory |
 | `--host <ip>` | Push to a node that is not in the inventory yet |
 | `--user <user>` | SSH user for `--host` (default: root) |
-| `--direct` | Sequential upload (no hub fanout) |
+| `--direct` | Accepted and ignored. Every push uploads from this machine; node SSH keys are not copied to a hub |
 | `--trust-signers <addr,...>` | Verify the archive here against these addresses and stage it with its own verified CLI (reaches 0.122.x nodes); creates the trust anchor on nodes that have none, and requires an existing one to be exactly this list |
 
-`--ip` and `--fanout` are deprecated. `--ip` is now `--host`; fanning out is the
-default, so `--fanout` is accepted and ignored, and `--direct` opts out.
+`--ip` and `--fanout` are deprecated. `--ip` is now `--host`. `--fanout` and
+`--direct` are accepted and ignored: the upload always comes from this machine.
 
 #### `orama rollout` / `orama node rollout`
 

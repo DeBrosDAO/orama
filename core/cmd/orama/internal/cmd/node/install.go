@@ -35,6 +35,7 @@ func init() {
 	f.StringVar(&installFlags.VpsIP, "vps-ip", "", "Public IP of this VPS (required)")
 	f.BoolVar(&installFlags.Remote, "remote", false,
 		"Install the machine at --vps-ip over SSH, instead of this machine")
+	f.StringVar(&installFlags.HostKey, "host-key", "", "Expected SSH host-key fingerprint (SHA256:...) for --remote; omit to confirm it interactively")
 	f.StringVar(&installFlags.Domain, "domain", "", "Domain for HTTPS (auto-generated for non-nameserver nodes if omitted)")
 	f.StringVar(&installFlags.BaseDomain, "base-domain", "", "Base domain for deployment routing (e.g., example.com)")
 	f.BoolVar(&installFlags.Force, "force", false, "Force reconfiguration even if already installed")

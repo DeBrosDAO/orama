@@ -19,7 +19,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -284,7 +283,21 @@ func pinHostKey(opts Options) (string, func(), error) {
 		os.RemoveAll(dir)
 		return "", nil, err
 	}
+	// The temp file is this run's pin. The same lines are kept in
+	// ~/.orama/known_hosts so a later --join-via, which refuses a first
+	// contact, still knows the key after this directory is removed.
+	if err := rememberHostKeys(trusted); err != nil {
+		os.RemoveAll(dir)
+		return "", nil, err
+	}
 	return path, func() { os.RemoveAll(dir) }, nil
+}
+
+// PinHost scans ip, confirms the key (expected is a SHA256 fingerprint, or
+// empty to ask), and returns the known_hosts file this run should use. The
+// same lines are stored in ~/.orama/known_hosts.
+func PinHost(ip, expected string) (string, func(), error) {
+	return pinHostKey(Options{IP: ip, HostKey: expected})
 }
 
 // checkNodeAccess proves the RootWallet key opens the VPS and, for a non-root
@@ -655,13 +668,11 @@ func runOnJoinVia(joinVia, cmd string) (string, error) {
 // option.
 var sshUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
-// operatorKnownHosts is the operator's own known_hosts file.
+// operatorKnownHosts is the host-key pin setup keeps. ~/.ssh/known_hosts is
+// not it: the setup run pins against a private file and never writes there,
+// so a --join-via in the next command would be a first contact.
 func operatorKnownHosts() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("find home directory for known_hosts: %w", err)
-	}
-	return filepath.Join(home, ".ssh", "known_hosts"), nil
+	return durableKnownHostsPath()
 }
 
 // inviteExpiry bounds an invite minted for one setup run; the install that

@@ -19,9 +19,13 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/libp2p/go-libp2p/core/peer"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
@@ -323,8 +327,32 @@ func waitForRejoin(survivor inspector.Node, nodeID string) error {
 // reconciles, EnsureRQLite regenerates it with -node-id read back from the
 // marker and no join, because by then the node has raft state again.
 func resetNodeIdentity(node inspector.Node, peerID, joinAddr string) error {
+	if err := validateResetInputs(peerID, joinAddr); err != nil {
+		return err
+	}
 	return remotessh.RunSSHStreaming(node, remotessh.SudoPrefix(node)+"bash -c "+
 		clusterops.ShellQuote(resetScript(peerID, joinAddr)))
+}
+
+// validateResetInputs refuses a peer id or join address that is not one this
+// command can put into a root script. The script single-quotes them too; a
+// value that is not a peer id or an IPv4 host:port is refused before that.
+func validateResetInputs(peerID, joinAddr string) error {
+	if _, err := peer.Decode(peerID); err != nil {
+		return fmt.Errorf("raft id %q is not a libp2p peer id: %w", peerID, err)
+	}
+	host, port, err := net.SplitHostPort(joinAddr)
+	if err != nil {
+		return fmt.Errorf("join address %q is not host:port: %w", joinAddr, err)
+	}
+	if ip := net.ParseIP(host); ip == nil || ip.To4() == nil {
+		return fmt.Errorf("join address %q is not an IPv4 host:port", joinAddr)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("join address %q has no TCP port", joinAddr)
+	}
+	return nil
 }
 
 // resetScript renders the remote reset. Separate from the SSH call so its shape
@@ -340,10 +368,10 @@ func resetNodeIdentity(node inspector.Node, peerID, joinAddr string) error {
 // user a file in a tree it must not be able to write.
 func resetScript(peerID, joinAddr string) string {
 	return fmt.Sprintf(`set -euo pipefail
-DATA_DIR=%[1]q
-ENV_FILE=%[2]q
-PEER_ID=%[3]q
-JOIN_ADDR=%[4]q
+DATA_DIR=%[1]s
+ENV_FILE=%[2]s
+PEER_ID=%[3]s
+JOIN_ADDR=%[4]s
 
 systemctl stop orama-namespace-rqlite@index.service
 
@@ -366,7 +394,9 @@ EXTRA=$(grep '^EXTRA_ARGS=' "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/-node-
 } | %[7]s run %[8]s set index rqlite
 
 systemctl start orama-namespace-rqlite@index.service
-`, indexRQLiteDataDir, indexRQLiteEnvFile, peerID, joinAddr, rqlite.RaftIDMarkerName, asOramaUser, privhelper.Path, privhelper.ToolUnitEnv)
+`, clusterops.ShellQuote(indexRQLiteDataDir), clusterops.ShellQuote(indexRQLiteEnvFile),
+		clusterops.ShellQuote(peerID), clusterops.ShellQuote(joinAddr),
+		rqlite.RaftIDMarkerName, asOramaUser, privhelper.Path, privhelper.ToolUnitEnv)
 }
 
 // asOramaUser runs a command as the orama user from the root reset script.
