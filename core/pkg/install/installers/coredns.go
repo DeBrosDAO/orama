@@ -54,16 +54,16 @@ func (ci *CoreDNSInstaller) DisableResolvedStubListener() error {
 	// Point resolv.conf to localhost (CoreDNS) and a fallback
 	resolvConf := "nameserver 127.0.0.1\nnameserver 8.8.8.8\n"
 	if err := os.Remove("/etc/resolv.conf"); err != nil && !os.IsNotExist(err) {
-		// It might be a symlink
-		fmt.Fprintf(ci.logWriter, "    ⚠️  Could not remove /etc/resolv.conf: %v\n", err)
+		return fmt.Errorf("remove /etc/resolv.conf so CoreDNS can own it: %w", err)
 	}
 	if err := os.WriteFile("/etc/resolv.conf", []byte(resolvConf), 0644); err != nil {
 		return fmt.Errorf("failed to write resolv.conf: %w", err)
 	}
 
-	// Restart systemd-resolved
+	// Restart systemd-resolved. Leaving the stub listener up means CoreDNS
+	// cannot bind :53, and the install used to report success anyway.
 	if output, err := exec.Command("systemctl", "restart", "systemd-resolved").CombinedOutput(); err != nil {
-		fmt.Fprintf(ci.logWriter, "    ⚠️  Failed to restart systemd-resolved: %v (%s)\n", err, string(output))
+		return fmt.Errorf("restart systemd-resolved after disabling its stub listener: %w\n%s", err, output)
 	}
 
 	fmt.Fprintf(ci.logWriter, "  ✓ systemd-resolved stub listener disabled\n")

@@ -290,13 +290,13 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 
 	// After init, save own IPFS Cluster peer ID to trusted peers file
 	if err := ps.saveOwnClusterPeerID(clusterPath); err != nil {
-		ps.logf("  ⚠️  Could not save IPFS Cluster peer ID to trusted peers: %v", err)
+		return fmt.Errorf("save this node's IPFS Cluster peer ID: %w", err)
 	}
 
 	// Initialize RQLite data directory
 	rqliteDataDir := filepath.Join(dataDir, "rqlite")
 	if err := ps.binaryInstaller.InitializeRQLiteDataDir(root, rqliteDataDir); err != nil {
-		ps.logf("  ⚠️  RQLite initialization warning: %v", err)
+		return fmt.Errorf("initialize the rqlite data directory: %w", err)
 	}
 
 	ps.logf("  ✓ Services initialized")

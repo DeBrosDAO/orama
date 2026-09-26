@@ -67,7 +67,7 @@ func (ps *ProductionSetup) installFromPreBuilt(detected *PreBuiltManifest) (err 
 
 	// Install minimal system dependencies (no build tools needed)
 	if err := ps.installMinimalSystemDeps(); err != nil {
-		ps.logf("  ⚠️  System dependencies warning: %v", err)
+		return fmt.Errorf("install system dependencies: %w", err)
 	}
 
 	// Copy binaries to runtime locations
