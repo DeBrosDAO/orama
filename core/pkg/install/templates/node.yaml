@@ -1,10 +1,13 @@
 node:
   id: "{{.NodeID}}"
   listen_addresses:
-    - "/ip4/0.0.0.0/tcp/{{.P2PPort}}"
+    - "/ip4/{{.WGIP}}/tcp/{{.P2PPort}}"
   data_dir: "{{.DataDir}}"
   max_connections: 50
   domain: "{{.Domain}}"
+{{- if .PublicIP}}
+  public_ip: "{{.PublicIP}}"
+{{- end}}
 {{- if .SSHUser}}
   ssh_user: "{{.SSHUser}}"
 {{- end}}
@@ -22,6 +25,12 @@ node:
 # sni_router.enabled: true).
 sni_router:
   enabled: {{if .SNIRouterEnabled}}true{{else}}false{{end}}
+{{- if .ACMECA}}
+
+# ACME directory Caddy issues certificates from (orama node install --acme-ca).
+tls:
+  acme_ca: "{{.ACMECA}}"
+{{- end}}
 
 database:
   data_dir: "{{.DataDir}}/rqlite"
@@ -80,7 +89,6 @@ http_gateway:
   
   # Full gateway configuration (for API, auth, pubsub, and internal service routing)
   client_namespace: "default"
-  rqlite_dsn: "http://localhost:{{.RQLiteHTTPPort}}"
   olric_servers:
 {{- if .WGIP}}
     - "{{.WGIP}}:{{.OlricHTTPPort}}"

@@ -182,14 +182,3 @@ func TestReadRQLiteAuthFile(t *testing.T) {
 		}
 	})
 }
-
-// An unreadable auth file must degrade to unauthenticated, so the caller gets
-// rqlite's own 401 rather than a start-up failure.
-func TestAdminCredentialsFromFile_unreadable_is_empty(t *testing.T) {
-	for _, path := range []string{"", filepath.Join(t.TempDir(), "absent.json")} {
-		u, p := adminCredentialsFromFile(path)
-		if u != "" || p != "" {
-			t.Fatalf("path %q yielded %q/%q", path, u, p)
-		}
-	}
-}

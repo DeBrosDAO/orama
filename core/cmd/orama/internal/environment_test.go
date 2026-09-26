@@ -3,6 +3,8 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -127,5 +129,39 @@ func TestRemoveEnvironment_active_falls_back(t *testing.T) {
 	}
 	if cfg.ActiveEnvironment != "devnet" {
 		t.Errorf("ActiveEnvironment = %q, want %q", cfg.ActiveEnvironment, "devnet")
+	}
+}
+
+// A config whose active name matches no environment used to resolve to the
+// "sandbox" entry, so a typo sent commands to a cluster nobody chose.
+func TestGetActiveEnvironment_UnknownActiveIsAnErrorNotAFallback(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.ActiveEnvironment = "stagnet" // typo
+	cleanup := writeTestConfig(t, cfg)
+	defer cleanup()
+
+	env, err := GetActiveEnvironment()
+	if err == nil {
+		t.Fatalf("expected an error, got environment %q", env.Name)
+	}
+	if !strings.Contains(err.Error(), "stagnet") || !strings.Contains(err.Error(), "orama env use") {
+		t.Errorf("error should name the missing environment and the fix: %v", err)
+	}
+}
+
+func TestDefaultEnvironments_NoDeadClusterAndDevnetActive(t *testing.T) {
+	for _, env := range DefaultEnvironments {
+		if strings.Contains(env.GatewayURL, "dbrs.space") {
+			t.Errorf("default environment %q points at dbrs.space, which no longer exists", env.Name)
+		}
+	}
+	cfg, err := func() (*EnvironmentConfig, error) {
+		old := getEnvironmentConfigPathFn
+		defer func() { getEnvironmentConfigPathFn = old }()
+		getEnvironmentConfigPathFn = func() (string, error) { return filepath.Join(t.TempDir(), "absent.json"), nil }
+		return LoadEnvironmentConfig()
+	}()
+	if err != nil || cfg.ActiveEnvironment != defaultActiveEnvironment {
+		t.Fatalf("fresh config active = %q (%v), want %q", cfg.ActiveEnvironment, err, defaultActiveEnvironment)
 	}
 }

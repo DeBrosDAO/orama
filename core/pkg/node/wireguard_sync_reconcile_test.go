@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/install"
@@ -51,13 +52,27 @@ func testNode(t *testing.T) *Node {
 	return &Node{logger: lg}
 }
 
-// peerSet builds a live-interface peer map. The endpoint and allowed IP match
-// what desired() produces, so an existing key looks converged rather than
+// testPeer is key's peer: every key its own overlay address, as the registry
+// guarantees (wireguard_peers.wg_ip is UNIQUE), and the same endpoint and
+// address on both sides, so an existing key looks converged rather than
 // drifted unless a test says otherwise.
+func testPeer(key string) install.WireGuardPeer {
+	sum := 0
+	for _, b := range []byte(key) {
+		sum += int(b)
+	}
+	return install.WireGuardPeer{
+		PublicKey: key,
+		AllowedIP: fmt.Sprintf("10.0.0.%d/32", 10+sum%200),
+		Endpoint:  "203.0.113.9:51820",
+	}
+}
+
+// peerSet builds a live-interface peer map.
 func peerSet(keys ...string) map[string]install.WireGuardPeer {
 	s := make(map[string]install.WireGuardPeer, len(keys))
 	for _, k := range keys {
-		s[k] = install.WireGuardPeer{PublicKey: k, AllowedIP: "10.0.0.9/32", Endpoint: "203.0.113.9:51820"}
+		s[k] = testPeer(k)
 	}
 	return s
 }
@@ -65,7 +80,7 @@ func peerSet(keys ...string) map[string]install.WireGuardPeer {
 func desired(auth bool, source string, keys ...string) desiredWGPeers {
 	m := make(map[string]install.WireGuardPeer, len(keys))
 	for _, k := range keys {
-		m[k] = install.WireGuardPeer{PublicKey: k, AllowedIP: "10.0.0.9/32", Endpoint: "203.0.113.9:51820"}
+		m[k] = testPeer(k)
 	}
 	return desiredWGPeers{peers: m, authoritative: auth, source: source}
 }
@@ -218,18 +233,73 @@ func TestReconcileWireGuardPeers_allowedIPDriftIsApplied(t *testing.T) {
 	}
 }
 
-// A converged mesh must not churn: no kernel calls, and no rewrite of the conf.
+// A converged mesh must not churn: no kernel calls, and once the conf is known
+// to hold it, no rewrite of the conf.
 func TestReconcileWireGuardPeers_noDriftIsQuiet(t *testing.T) {
 	n := testNode(t)
 	f := &fakeProvisioner{}
 
 	n.reconcileWireGuardPeersWith(f, peerSet("A", "B"), desired(true, "leader", "A", "B"))
+	n.reconcileWireGuardPeersWith(f, peerSet("A", "B"), desired(true, "leader", "A", "B"))
 
 	if len(f.added) != 0 || len(f.removed) != 0 {
 		t.Errorf("converged mesh churned: added=%+v removed=%+v", f.added, f.removed)
 	}
+	if len(f.persisted) != 1 {
+		t.Errorf("converged mesh wrote the conf %d times, want once (its first pass)", len(f.persisted))
+	}
+}
+
+// The bug: persistence ran only when a pass changed the interface, so a node
+// whose wg0.conf an earlier release left stale, on a mesh that had already
+// converged, never had it repaired. The node cannot read the conf, so its
+// first pass writes what the interface holds.
+func TestReconcileWireGuardPeers_convergedMeshRepairsAStaleConf(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{}
+
+	n.reconcileWireGuardPeersWith(f, peerSet("A", "B"), desired(true, "leader", "A", "B"))
+
+	if len(f.persisted) != 1 || len(f.persisted[0]) != 2 {
+		t.Fatalf("expected the live set {A, B} to be written once, got %+v", f.persisted)
+	}
+}
+
+// A failed write leaves the conf unknown, so the next pass tries again even
+// though the interface did not change.
+func TestReconcileWireGuardPeers_failedPersistIsRetried(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{persistErr: errFake}
+	n.reconcileWireGuardPeersWith(f, peerSet("A"), desired(true, "leader", "A"))
+
+	f.persistErr = nil
+	n.reconcileWireGuardPeersWith(f, peerSet("A"), desired(true, "leader", "A"))
+	if len(f.persisted) != 1 {
+		t.Fatalf("a failed write must be retried on the next pass, got %d writes", len(f.persisted))
+	}
+}
+
+// The interface can change without this pass changing it (another node's
+// repair, an operator's `wg set`): the conf follows what is live.
+func TestReconcileWireGuardPeers_liveSetThatDiffersFromTheConfIsWritten(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{}
+	n.reconcileWireGuardPeersWith(f, peerSet("A"), desired(false, "local-replica", "A"))
+	n.reconcileWireGuardPeersWith(f, peerSet("A", "B"), desired(false, "local-replica", "A"))
+
+	if len(f.persisted) != 2 || len(f.persisted[1]) != 2 {
+		t.Fatalf("the second live set {A, B} was not written: %+v", f.persisted)
+	}
+}
+
+// An empty interface is what a node that has not reached its mesh looks like;
+// writing it would erase the peers wg-quick restores at boot.
+func TestReconcileWireGuardPeers_emptyInterfaceIsNeverWritten(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{}
+	n.reconcileWireGuardPeersWith(f, peerSet(), desired(false, "local-replica"))
 	if len(f.persisted) != 0 {
-		t.Errorf("converged mesh rewrote the conf %d times", len(f.persisted))
+		t.Fatalf("an empty peer set was written to the conf: %+v", f.persisted)
 	}
 }
 
@@ -288,5 +358,87 @@ func TestReconcileWireGuardPeers_persistFailureDoesNotUndoKernelChanges(t *testi
 
 	if len(f.added) != 1 || f.added[0].PublicKey != "B" {
 		t.Errorf("kernel add did not happen: %+v", f.added)
+	}
+}
+
+// replacedNode is a node replaced on the same overlay address: the registry
+// row for 10.0.0.5 now names NEW, while the interface still holds OLD there.
+func replacedNode() (map[string]install.WireGuardPeer, install.WireGuardPeer) {
+	old := install.WireGuardPeer{PublicKey: "OLD", AllowedIP: "10.0.0.5/32", Endpoint: "203.0.113.5:51820"}
+	replacement := install.WireGuardPeer{PublicKey: "NEW", AllowedIP: "10.0.0.5/32", Endpoint: "198.51.100.5:51820"}
+	live := peerSet("A")
+	live[old.PublicKey] = old
+	return live, replacement
+}
+
+func persistedAddresses(t *testing.T, peers []install.WireGuardPeer) map[string]string {
+	t.Helper()
+	owners := make(map[string]string, len(peers))
+	for _, p := range peers {
+		if other, taken := owners[p.AllowedIP]; taken {
+			t.Fatalf("persisted %s for both %s and %s; orama-privhelper refuses such a list", p.AllowedIP, other, p.PublicKey)
+		}
+		owners[p.AllowedIP] = p.PublicKey
+	}
+	return owners
+}
+
+// A non-authoritative pass never removes OLD, but applying NEW moves the /32
+// to it on the interface; the persisted set must follow, with NEW as the
+// address's only owner.
+func TestReconcileWireGuardPeers_replacementOnTheSameAddressPersistsOneOwner(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{}
+	live, replacement := replacedNode()
+	want := desired(false, "local-replica", "A")
+	want.peers[replacement.PublicKey] = replacement
+
+	n.reconcileWireGuardPeersWith(f, live, want)
+
+	if len(f.removed) != 0 {
+		t.Errorf("non-authoritative pass removed %v", f.removed)
+	}
+	if len(f.persisted) != 1 {
+		t.Fatalf("expected one persist, got %d", len(f.persisted))
+	}
+	owners := persistedAddresses(t, f.persisted[0])
+	if owners["10.0.0.5/32"] != "NEW" {
+		t.Errorf("10.0.0.5/32 persisted for %q, want the registry's key NEW", owners["10.0.0.5/32"])
+	}
+	if owners[testPeer("A").AllowedIP] != "A" {
+		t.Errorf("an unrelated peer was dropped: %v", owners)
+	}
+}
+
+// When the replacement never reached the interface, OLD still holds the
+// address there, and that is what the file must say.
+func TestReconcileWireGuardPeers_failedReplacementKeepsTheHolder(t *testing.T) {
+	n := testNode(t)
+	f := &fakeProvisioner{addErr: errFake}
+	live, replacement := replacedNode()
+	want := desired(false, "local-replica")
+	want.peers[replacement.PublicKey] = replacement
+
+	n.reconcileWireGuardPeersWith(f, live, want)
+
+	if len(f.persisted) != 1 {
+		t.Fatalf("expected one persist, got %d", len(f.persisted))
+	}
+	if owner := persistedAddresses(t, f.persisted[0])["10.0.0.5/32"]; owner != "OLD" {
+		t.Errorf("10.0.0.5/32 persisted for %q, want OLD, which still holds it", owner)
+	}
+}
+
+func TestReleaseSupersededAddress_ignoresThePrefixSuffix(t *testing.T) {
+	live := map[string]install.WireGuardPeer{
+		"OLD": {PublicKey: "OLD", AllowedIP: "10.0.0.5"},
+		"B":   testPeer("B"),
+	}
+	releaseSupersededAddress(live, install.WireGuardPeer{PublicKey: "NEW", AllowedIP: "10.0.0.5/32"})
+	if _, ok := live["OLD"]; ok {
+		t.Error("a /32 written without its suffix was not recognised as the same address")
+	}
+	if _, ok := live["B"]; !ok {
+		t.Error("a peer on another address was dropped")
 	}
 }

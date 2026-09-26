@@ -3,6 +3,7 @@ package remotessh
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -14,12 +15,20 @@ type SSHOption func(*sshOptions)
 
 type sshOptions struct {
 	noHostKeyCheck bool
+	stdin          io.Reader
 }
 
 // WithNoHostKeyCheck disables host key verification and uses /dev/null as known_hosts.
 // Use for ephemeral servers (sandbox) where IPs are frequently recycled.
 func WithNoHostKeyCheck() SSHOption {
 	return func(o *sshOptions) { o.noHostKeyCheck = true }
+}
+
+// WithStdin feeds r to the remote command's stdin instead of the local
+// terminal's. It is how a secret reaches a remote command without appearing in
+// its argv, which every local user on the remote host can read in ps.
+func WithStdin(r io.Reader) SSHOption {
+	return func(o *sshOptions) { o.stdin = r }
 }
 
 // UploadFile copies a local file to a remote host via SCP.
@@ -79,6 +88,9 @@ func RunSSHStreaming(node inspector.Node, command string, opts ...SSHOption) err
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
+	if cfg.stdin != nil {
+		cmd.Stdin = cfg.stdin
+	}
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("SSH to %s failed: %w", node.Host, err)

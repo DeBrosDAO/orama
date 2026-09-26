@@ -16,6 +16,12 @@ const (
 	IPFSClusterAPIPort  = IndexPortBase + 8 // 10108
 	NtfyListenPort      = IndexPortBase + 9 // 10109
 
+	// IPFSClusterSwarmPort is ipfs-cluster's peer-to-peer listener, bound to
+	// the node's WireGuard address: the only IPFS Cluster port peers dial.
+	// +14 is the port nodes already listen on — orama-node used to derive it
+	// from the REST API port — so the constant moved no live listener.
+	IPFSClusterSwarmPort = IndexPortBase + 14 // 10114
+
 	// Edge — not in 10100.
 	WireGuardPort = 51820
 )

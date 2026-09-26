@@ -44,7 +44,8 @@ Examples:
 
 	f := cmd.Flags()
 	f.StringVar(&flags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	f.BoolVar(&flags.NoBuild, "no-build", false, "Skip the build step and reuse the existing archive")
+	f.BoolVar(&flags.NoBuild, "no-build", false, "Skip the build step; roll out the archive named by --archive")
+	f.StringVar(&flags.Archive, "archive", "", "With --no-build: the build archive to roll out")
 	f.BoolVar(&flags.Yes, "yes", false, "Execute the rollout plan instead of only printing it")
 	f.IntVar(&flags.Delay, "delay", int(rolloutplan.GateBudget.Seconds()),
 		"Seconds a node has to rejoin the cluster after its upgrade before the rollout stops")

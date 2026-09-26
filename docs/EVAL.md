@@ -42,8 +42,10 @@ sudo orama node install --vps-ip <ip> --domain <domain> --base-domain <domain> -
 Or from your machine, with RootWallet unlocked:
 
 ```bash
-orama node setup --ip <ip> --password '<vps-pass>' --env <env> \
+orama build   # prints the archive path
+orama node setup --ip <ip> --password --env <env> --archive <archive path> \
   --base-domain <domain> --role nameserver --genesis
+# --password reads the VPS login from your RootWallet vault (rw vault add <ip>)
 ```
 
 Then:

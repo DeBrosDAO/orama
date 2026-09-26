@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
 
@@ -177,8 +178,16 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 			Services: make(map[string]NamespaceServiceHealth),
 		}
 
-		// Probe RQLite (HTTP on localhost)
-		nsHealth.Services["rqlite"] = probeTCP("127.0.0.1", rqlitePort)
+		// Probe RQLite where it binds: this node's WireGuard IP.
+		if g.localWireGuardIP == "" {
+			nsHealth.Services["rqlite"] = NamespaceServiceHealth{
+				Status: "error",
+				Port:   rqlitePort,
+				Error:  "this node's WireGuard IP is unknown; namespace rqlite binds only that address",
+			}
+		} else {
+			nsHealth.Services["rqlite"] = probeTCP(g.localWireGuardIP, rqlitePort)
+		}
 
 		// Probe Olric HTTP API (binds to WireGuard IP)
 		olricHost := g.localWireGuardIP
@@ -290,9 +299,6 @@ func (g *Gateway) reconcileLocalNamespaceDNS(ctx context.Context, health map[str
 	}
 
 	baseDomain := g.cfg.BaseDomain
-	if baseDomain == "" {
-		return // without the zone we cannot name the record; nothing safe to do
-	}
 
 	now := time.Now()
 
@@ -420,7 +426,14 @@ func (g *Gateway) reconcileNamespaces(ctx context.Context) {
 	}
 
 	// Only the leader should run reconciliation
-	if !g.isRQLiteLeader(ctx) {
+	leader, err := g.isRQLiteLeader(ctx)
+	if err != nil {
+		g.logger.ComponentError(logging.ComponentGeneral,
+			"Namespace reconciliation skipped: cannot tell whether this node is the rqlite leader",
+			zap.Error(err))
+		return
+	}
+	if !leader {
 		return
 	}
 
@@ -470,37 +483,27 @@ func (g *Gateway) reconcileNamespaces(ctx context.Context) {
 	}
 }
 
-// isRQLiteLeader checks whether this node is the current Raft leader.
-func (g *Gateway) isRQLiteLeader(ctx context.Context) bool {
-	dsn := g.cfg.RQLiteDSN
-	if dsn == "" {
-		dsn = "http://localhost:10100"
-	}
+// raftStateLeader is rqlite's store.raft.state on the leader.
+const raftStateLeader = "Leader"
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dsn+"/status", nil)
+// isRQLiteLeader reports whether this gateway's rqlite is the current Raft
+// leader.
+//
+// It used to GET <rqlite_dsn>/status with a bare http.Client. rqlited runs with
+// -auth, and a DSN whose credentials come from rqlite_username/rqlite_password
+// carries none, so every probe was a 401 read as "not the leader" — and
+// namespace repair never ran on any node. It goes through the credentialed
+// Endpoint now, and a probe that fails is an error, not a "no".
+func (g *Gateway) isRQLiteLeader(ctx context.Context) (bool, error) {
+	ep, err := rqlite.EndpointFromDSN(g.cfg.RQLiteDSN, g.cfg.RQLiteUsername, g.cfg.RQLitePassword)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("resolve this gateway's rqlite endpoint: %w", err)
 	}
-
-	resp, err := client.Do(req)
+	state, err := rqlite.RaftState(ctx, ep)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("read raft state from rqlite at %s: %w", ep, err)
 	}
-	defer resp.Body.Close()
-
-	var status struct {
-		Store struct {
-			Raft struct {
-				State string `json:"state"`
-			} `json:"raft"`
-		} `json:"store"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return false
-	}
-
-	return status.Store.Raft.State == "Leader"
+	return state == raftStateLeader, nil
 }
 
 // probeTCP checks if a port is listening by attempting a TCP connection.

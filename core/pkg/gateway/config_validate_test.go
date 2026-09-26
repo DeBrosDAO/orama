@@ -154,6 +154,10 @@ func TestValidateConfig_ValidMinimal(t *testing.T) {
 	cfg := &Config{
 		ListenAddr:      ":8080",
 		ClientNamespace: "default",
+		RQLiteDSN:       "http://10.0.0.1:10100",
+		StateDir:        "/opt/orama/.orama/data/namespaces/default/gateway",
+		BaseDomain:      "example.com",
+		NodePeerID:      testNodePeerID,
 	}
 	errs := cfg.ValidateConfig()
 
@@ -279,7 +283,11 @@ func TestValidateConfig_DomainNameWithoutHTTPSIsFine(t *testing.T) {
 	cfg := &Config{
 		ListenAddr:      ":10104",
 		ClientNamespace: "default",
+		RQLiteDSN:       "http://10.0.0.1:10100",
 		DomainName:      "example.com",
+		BaseDomain:      "example.com",
+		StateDir:        "/opt/orama/.orama/data/namespaces/default/gateway",
+		NodePeerID:      testNodePeerID,
 	}
 	errs := cfg.ValidateConfig()
 	if len(errs) > 0 {
@@ -287,7 +295,9 @@ func TestValidateConfig_DomainNameWithoutHTTPSIsFine(t *testing.T) {
 	}
 }
 
-func TestValidateConfig_EmptyRQLiteDSNSkipped(t *testing.T) {
+// rqlited binds only its WireGuard address, so there is no default the gateway
+// could fall back to: an empty rqlite_dsn is a configuration error.
+func TestValidateConfig_EmptyRQLiteDSNRejected(t *testing.T) {
 	cfg := &Config{
 		ListenAddr:      ":8080",
 		ClientNamespace: "default",
@@ -297,7 +307,133 @@ func TestValidateConfig_EmptyRQLiteDSNSkipped(t *testing.T) {
 
 	for _, err := range errs {
 		if strings.Contains(err.Error(), "rqlite_dsn") {
-			t.Errorf("empty rqlite_dsn should not produce error, got: %v", err)
+			return
 		}
+	}
+	t.Errorf("empty rqlite_dsn must be rejected, got: %v", errs)
+}
+
+// A gateway with no state_dir has nowhere it may write its signing keys, so it
+// would start, answer /health, and serve no /v1/auth/* route at all. It is
+// refused at config load instead.
+func TestValidateConfig_MissingStateDirRejected(t *testing.T) {
+	cfg := &Config{
+		ListenAddr:      ":10104",
+		ClientNamespace: "index",
+		RQLiteDSN:       "http://10.0.0.1:10100",
+	}
+	for _, err := range cfg.ValidateConfig() {
+		if strings.Contains(err.Error(), "state_dir") && strings.Contains(err.Error(), "must not be empty") {
+			return
+		}
+	}
+	t.Error("a gateway config without state_dir was accepted")
+}
+
+// A relative state_dir resolves against the unit's WorkingDirectory, outside
+// the paths it may write.
+func TestValidateConfig_RelativeStateDirRejected(t *testing.T) {
+	cfg := &Config{
+		ListenAddr:      ":10104",
+		ClientNamespace: "index",
+		RQLiteDSN:       "http://10.0.0.1:10100",
+		StateDir:        "data/namespaces/index/gateway",
+	}
+	for _, err := range cfg.ValidateConfig() {
+		if strings.Contains(err.Error(), "state_dir") && strings.Contains(err.Error(), "absolute") {
+			return
+		}
+	}
+	t.Error("a relative state_dir was accepted")
+}
+
+// A missing base domain used to become a cluster that no longer exists: the
+// gateway routed no deployment and refused every TLS check for its real domain.
+func TestValidateConfig_MissingBaseDomainRejected(t *testing.T) {
+	for _, base := range []string{"", "   "} {
+		cfg := &Config{
+			ListenAddr:      ":10104",
+			ClientNamespace: "index",
+			RQLiteDSN:       "http://10.0.0.1:10100",
+			StateDir:        "/opt/orama/.orama/data/namespaces/index/gateway",
+			BaseDomain:      base,
+			NodePeerID:      testNodePeerID,
+		}
+		errs := cfg.ValidateConfig()
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), "domain_name") {
+			t.Errorf("base domain %q: got %v, want exactly the domain_name error", base, errs)
+		}
+	}
+}
+
+func TestValidateConfig_BaseDomainMustBeADomain(t *testing.T) {
+	cfg := func(base string) *Config {
+		return &Config{
+			ListenAddr:      ":10104",
+			ClientNamespace: "index",
+			RQLiteDSN:       "http://10.0.0.1:10100",
+			StateDir:        "/opt/orama/.orama/data/namespaces/index/gateway",
+			BaseDomain:      base,
+			NodePeerID:      testNodePeerID,
+		}
+	}
+	for _, bad := range []string{".", "com", "example..com", "-x.com", "x-.com", "a b.com", "example.com.", "*.example.com", "Example.COM", strings.Repeat("a.", 127) + "com"} {
+		if errs := cfg(bad).ValidateConfig(); len(errs) != 1 || !strings.Contains(errs[0].Error(), "domain_name") {
+			t.Errorf("base domain %q: got %v, want the domain_name error", bad, errs)
+		}
+	}
+	for _, good := range []string{"example.com", "orama-devnet.network", "a.b.c.example.com"} {
+		if errs := cfg(good).ValidateConfig(); len(errs) != 0 {
+			t.Errorf("base domain %q refused: %v", good, errs)
+		}
+	}
+}
+
+// testNodePeerID is a well-formed libp2p peer id.
+const testNodePeerID = "12D3KooWHbcFcrGPXKUrHcxvd8MXEeUzRYyvY8fQcpEBxncSUwhj"
+
+// validNodeConfig is a config that passes ValidateConfig, for tests that
+// change one field.
+func validNodeConfig() *Config {
+	return &Config{
+		ListenAddr:      ":8080",
+		ClientNamespace: "default",
+		RQLiteDSN:       "http://10.0.0.1:10100",
+		StateDir:        "/opt/orama/.orama/data/namespaces/default/gateway",
+		BaseDomain:      "example.com",
+		NodePeerID:      testNodePeerID,
+	}
+}
+
+// Without the node's peer id, SQLite home-node assignment, deployment
+// placement, host TURN and leader locality all match no node — silently.
+func TestValidateConfig_NodePeerIDRequired(t *testing.T) {
+	for name, id := range map[string]string{"empty": "", "blank": "  "} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validNodeConfig()
+			cfg.NodePeerID = id
+			errs := cfg.ValidateConfig()
+			if len(errs) != 1 || !strings.Contains(errs[0].Error(), "gateway.node_peer_id") {
+				t.Fatalf("got %v, want one node_peer_id error", errs)
+			}
+			if !strings.Contains(errs[0].Error(), "cluster_secret_path") {
+				t.Errorf("the error does not say where the id comes from: %v", errs[0])
+			}
+		})
+	}
+}
+
+func TestValidateConfig_NodePeerIDMustBeAPeerID(t *testing.T) {
+	cfg := validNodeConfig()
+	cfg.NodePeerID = "node-1"
+	errs := cfg.ValidateConfig()
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "not a libp2p peer id") {
+		t.Fatalf("got %v, want the id refused as not a peer id", errs)
+	}
+}
+
+func TestValidateConfig_NodePeerIDAccepted(t *testing.T) {
+	if errs := validNodeConfig().ValidateConfig(); len(errs) != 0 {
+		t.Fatalf("a config with a valid node peer id was refused: %v", errs)
 	}
 }

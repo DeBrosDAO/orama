@@ -5,17 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/DeBrosOfficial/network/pkg/turn"
+	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
 
 // collectNamespaces discovers deployed namespaces and checks health of their
@@ -26,16 +31,29 @@ func collectNamespaces() []NamespaceReport {
 		return nil
 	}
 
+	// Every namespace rqlited runs with -auth and the cluster-wide
+	// credentials, which node.yaml carries.
+	creds, credsErr := rqlite.LocalNodeEndpoint()
+
 	var reports []NamespaceReport
 	for _, ns := range namespaces {
-		reports = append(reports, collectNamespaceReport(ns))
+		if ns.addrErr != nil {
+			// Without an address there is no port block either, so there is
+			// nothing else to probe for this namespace.
+			reports = append(reports, NamespaceReport{Name: ns.name, RQLiteError: ns.addrErr.Error()})
+			continue
+		}
+		rqliteBase, rqliteErr := namespaceRQLiteBase(ns, creds, credsErr)
+		reports = append(reports, collectNamespaceReport(ns, rqliteBase, rqliteErr))
 	}
 	return reports
 }
 
 type nsInfo struct {
-	name     string
-	portBase int
+	name       string
+	portBase   int
+	rqliteAddr string // where the instance is reached (rqlite.InstanceAddrFromEnv)
+	addrErr    error  // why rqliteAddr could not be read
 }
 
 // discoverNamespaces finds deployed namespaces by looking for systemd service units
@@ -56,15 +74,13 @@ func discoverNamespaces() []nsInfo {
 		}
 		seen[name] = true
 
-		portBase := parsePortFromEnvFile(name)
-		if portBase > 0 {
-			result = append(result, nsInfo{name: name, portBase: portBase})
+		if ns, ok := namespaceInfo(name); ok {
+			result = append(result, ns)
 		}
 	}
 
 	// Strategy 2: Check filesystem for any namespaces not found via systemd.
-	nsDir := "/opt/orama/.orama/data/namespaces"
-	entries, err := os.ReadDir(nsDir)
+	entries, err := os.ReadDir(config.ProductionNamespacesDataDir)
 	if err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() || seen[entry.Name()] {
@@ -73,9 +89,8 @@ func discoverNamespaces() []nsInfo {
 			name := entry.Name()
 			seen[name] = true
 
-			portBase := parsePortFromEnvFile(name)
-			if portBase > 0 {
-				result = append(result, nsInfo{name: name, portBase: portBase})
+			if ns, ok := namespaceInfo(name); ok {
+				result = append(result, ns)
 			}
 		}
 	}
@@ -83,38 +98,78 @@ func discoverNamespaces() []nsInfo {
 	return result
 }
 
-// parsePortFromEnvFile reads the RQLite env file for a namespace and extracts
-// the HTTP port from HTTP_ADDR (e.g. "0.0.0.0:14001").
-func parsePortFromEnvFile(namespace string) int {
-	envPath := fmt.Sprintf("/opt/orama/.orama/data/namespaces/%s/rqlite.env", namespace)
-	data, err := os.ReadFile(envPath)
+// namespaceInfo reads a namespace's rqlite instance from its rqlite.env. ok is
+// false when the namespace has no rqlite instance on this node. The port block
+// base is the rqlite HTTP port.
+func namespaceInfo(name string) (nsInfo, bool) {
+	envFile := rqlite.InstanceEnvFile(unitenv.Dir, name)
+	addr, ok, err := rqlite.InstanceAddrFromEnv(envFile)
+	if !ok {
+		return nsInfo{}, false
+	}
 	if err != nil {
-		return 0
+		return nsInfo{name: name, addrErr: err}, true
 	}
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nsInfo{name: name, addrErr: fmt.Errorf("%s: rqlite address %q: %w", envFile, addr, err)}, true
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nsInfo{name: name, addrErr: fmt.Errorf("%s: rqlite address %q has an invalid port", envFile, addr)}, true
+	}
+	return nsInfo{name: name, portBase: port, rqliteAddr: addr}, true
+}
 
-	httpAddrRe := regexp.MustCompile(`HTTP_ADDR=\S+:(\d+)`)
-	if m := httpAddrRe.FindStringSubmatch(string(data)); len(m) >= 2 {
-		if port, err := strconv.Atoi(m[1]); err == nil {
-			return port
-		}
+// namespaceRQLiteBase is the namespace instance's base URL: its address with
+// the cluster credentials, which ride in the URL (net/http sends
+// them as basic auth and strips them from its errors).
+func namespaceRQLiteBase(ns nsInfo, creds rqlite.Endpoint, credsErr error) (string, error) {
+	if credsErr != nil {
+		return "", credsErr
 	}
-	return 0
+	ep, err := rqlite.NewEndpoint(ns.rqliteAddr, creds.Username, creds.Password)
+	if err != nil {
+		return "", err
+	}
+	return ep.CredentialedURL(), nil
+}
+
+// namespaceGatewayPortOffset is the gateway's offset in a namespace port block
+// (0 rqlite HTTP, 1 rqlite raft, 2 olric HTTP, 3 olric memberlist, 4 gateway).
+const namespaceGatewayPortOffset = 4
+
+// namespaceGatewayHealthURL is the namespace gateway's /v1/health. A tenant
+// gateway binds this node's WireGuard IP, not every interface (chg-387), so it
+// is probed on the host its rqlite instance is reached on — the same WireGuard
+// IP — never on localhost, where it does not listen. The index gateway binds
+// every interface, so the WireGuard IP reaches it too.
+func namespaceGatewayHealthURL(ns nsInfo) (string, error) {
+	host, _, err := net.SplitHostPort(ns.rqliteAddr)
+	if err != nil || host == "" {
+		return "", fmt.Errorf("namespace %s has no address to probe its gateway on", ns.name)
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(ns.portBase+namespaceGatewayPortOffset)) + "/v1/health", nil
 }
 
 // collectNamespaceReport checks the health of services for a single namespace.
-func collectNamespaceReport(ns nsInfo) NamespaceReport {
+// rqliteBase is empty when the instance cannot be addressed (rqliteErr says
+// why); the rqlite checks are then reported as down.
+func collectNamespaceReport(ns nsInfo, rqliteBase string, rqliteErr error) NamespaceReport {
 	r := NamespaceReport{
 		Name:     ns.name,
 		PortBase: ns.portBase,
 	}
+	if rqliteErr != nil {
+		r.RQLiteError = rqliteErr.Error()
+	}
 
-	// 1. RQLiteUp + RQLiteState: GET http://localhost:<port_base>/status
-	{
+	// 1. RQLiteUp + RQLiteState: GET <rqlite>/status
+	if rqliteBase != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		url := fmt.Sprintf("http://localhost:%d/status", ns.portBase)
-		if body, err := httpGet(ctx, url); err == nil {
+		if body, err := httpGet(ctx, rqliteBase+"/status"); err == nil {
 			r.RQLiteUp = true
 
 			var status map[string]interface{}
@@ -124,13 +179,12 @@ func collectNamespaceReport(ns nsInfo) NamespaceReport {
 		}
 	}
 
-	// 2. RQLiteReady: GET http://localhost:<port_base>/readyz
-	{
+	// 2. RQLiteReady: GET <rqlite>/readyz
+	if rqliteBase != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		url := fmt.Sprintf("http://localhost:%d/readyz", ns.portBase)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rqliteBase+"/readyz", nil)
 		if err == nil {
 			if resp, err := http.DefaultClient.Do(req); err == nil {
 				io.Copy(io.Discard, resp.Body)
@@ -149,12 +203,12 @@ func collectNamespaceReport(ns nsInfo) NamespaceReport {
 		}
 	}
 
-	// 4. GatewayUp + GatewayStatus: GET http://localhost:<port_base+4>/v1/health
-	{
+	// 4. GatewayUp + GatewayStatus: GET <gateway>/v1/health, where the
+	// gateway binds (namespaceGatewayHealthURL).
+	if url, err := namespaceGatewayHealthURL(ns); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		url := fmt.Sprintf("http://localhost:%d/v1/health", ns.portBase+4)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err == nil {
 			if resp, err := http.DefaultClient.Do(req); err == nil {
@@ -184,7 +238,7 @@ func collectNamespaceReport(ns nsInfo) NamespaceReport {
 // Returns false if the service is not provisioned (no env file) or not running.
 func isNamespaceServiceActive(serviceType, namespace string) bool {
 	// Only check if the service was provisioned (env file exists)
-	envFile := fmt.Sprintf("/opt/orama/.orama/data/namespaces/%s/%s.env", namespace, serviceType)
+	envFile := unitenv.Path(unitenv.Dir, namespace, serviceType)
 	if _, err := os.Stat(envFile); err != nil {
 		return false // not provisioned
 	}
@@ -215,5 +269,5 @@ func hostTURNServesNamespace(namespace string) bool {
 	return exec.Command("systemctl", "is-active", "--quiet", systemd.HostTURNServiceName).Run() == nil
 }
 
-// hostTURNConfigPath mirrors the path the shared TURN unit reads.
-const hostTURNConfigPath = "/opt/orama/.orama/configs/turn.yaml"
+// hostTURNConfigPath is the TURN_CONFIG the shared TURN unit reads.
+var hostTURNConfigPath = constants.HostTURNConfigPath(install.OramaDir)

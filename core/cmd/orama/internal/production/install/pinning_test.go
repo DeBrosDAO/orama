@@ -14,7 +14,7 @@ import (
 // the address — and a machine in the path could take it and join instead.
 func TestPinnedTLSConfig_refusesToJoinWithNothingToPin(t *testing.T) {
 	for _, fingerprint := range []string{"", "   ", "\t\n"} {
-		cfg, err := pinnedTLSConfig(fingerprint)
+		cfg, err := pinnedTLSConfig(fingerprint, "")
 		if err == nil {
 			t.Fatalf("pinnedTLSConfig(%q) built a client with nothing to verify the far end with", fingerprint)
 		}
@@ -37,7 +37,7 @@ func TestPinnedTLSConfig_refusesAFingerprintItCannotUse(t *testing.T) {
 		{"too long", hex.EncodeToString(make([]byte, 48))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := pinnedTLSConfig(tc.fingerprint); err == nil {
+			if _, err := pinnedTLSConfig(tc.fingerprint, ""); err == nil {
 				t.Errorf("pinnedTLSConfig(%q) was accepted", tc.fingerprint)
 			}
 		})
@@ -48,7 +48,7 @@ func TestPinnedTLSConfig_verifiesTheCertificateTheInviteNamed(t *testing.T) {
 	cert := []byte("a certificate, as bytes")
 	sum := sha256.Sum256(cert)
 
-	cfg, err := pinnedTLSConfig(hex.EncodeToString(sum[:]))
+	cfg, err := pinnedTLSConfig(hex.EncodeToString(sum[:]), "")
 	if err != nil {
 		t.Fatalf("pinnedTLSConfig: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestPinnedTLSConfig_verifiesTheCertificateTheInviteNamed(t *testing.T) {
 // at all — which is the state this replaced.
 func TestPinnedTLSConfig_skipsTheChainOnlyBecauseItPins(t *testing.T) {
 	sum := sha256.Sum256([]byte("x"))
-	cfg, err := pinnedTLSConfig(hex.EncodeToString(sum[:]))
+	cfg, err := pinnedTLSConfig(hex.EncodeToString(sum[:]), "")
 	if err != nil {
 		t.Fatalf("pinnedTLSConfig: %v", err)
 	}

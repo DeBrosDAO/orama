@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/pkg/encryption"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
 	"github.com/DeBrosOfficial/network/pkg/secrets"
@@ -23,19 +22,23 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	// Both come from cluster_secret_path, which the gateway requires
+	// (cmd/gateway loadNodeIdentity). The orama directory used to fall back
+	// to $HOME/.orama, which the unit's ProtectHome hides, and a missing
+	// secret spawned namespace gateways with no cluster_secret_path — which
+	// then had no node identity.
+	oramaDir := cfg.DataDir
+	if oramaDir == "" {
+		return fmt.Errorf("wire core gateway: the config has no orama directory; it is derived from cluster_secret_path")
+	}
+	if cfg.ClusterSecret == "" {
+		return fmt.Errorf("wire core gateway: the config has no cluster secret; spawned namespace gateways need its path")
+	}
 	ormClient := apiGateway.GetORMClient()
 	if ormClient == nil {
 		return fmt.Errorf("wire core gateway: no ORM client")
 	}
 
-	oramaDir := cfg.DataDir
-	if oramaDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("wire core gateway: data dir unknown: %w", err)
-		}
-		oramaDir = filepath.Join(home, ".orama")
-	}
 	baseDataDir := filepath.Join(oramaDir, "data", "namespaces")
 
 	var turnEncKey []byte
@@ -50,25 +53,12 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 			turnEncKey = key
 		}
 	}
-	clusterSecretPath := ""
-	if cfg.ClusterSecret != "" {
-		clusterSecretPath = filepath.Join(oramaDir, "secrets", "cluster-secret")
-	}
+	clusterSecretPath := filepath.Join(oramaDir, "secrets", "cluster-secret")
 
 	peerID := cfg.NodePeerID
-	if peerID == "" {
-		if info, err := encryption.LoadIdentity(filepath.Join(oramaDir, "data", "identity.key")); err == nil {
-			peerID = info.PeerID.String()
-		}
-	}
-
-	baseDomain := cfg.BaseDomain
-	if baseDomain == "" {
-		baseDomain = cfg.DomainName
-	}
 
 	clusterCfg := namespacepkg.ClusterManagerConfig{
-		BaseDomain:            baseDomain,
+		BaseDomain:            cfg.BaseDomain,
 		BaseDataDir:           baseDataDir,
 		GlobalRQLiteDSN:       cfg.RQLiteDSN,
 		IPFSClusterAPIURL:     cfg.IPFSClusterAPIURL,

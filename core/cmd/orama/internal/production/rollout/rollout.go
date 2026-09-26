@@ -13,6 +13,7 @@ import (
 type Flags struct {
 	Env     string // Target environment (devnet, testnet)
 	NoBuild bool   // Skip the build step
+	Archive string // With NoBuild: the archive to roll out
 	Yes     bool   // Skip confirmation
 	Delay   int    // Seconds a node has to rejoin before the rollout stops
 }
@@ -28,6 +29,12 @@ func Run(flags *Flags) error {
 func (f *Flags) validate() error {
 	if f.Env == "" {
 		return fmt.Errorf("--env is required\nUsage: orama node rollout --env <devnet|testnet>")
+	}
+	if f.NoBuild && f.Archive == "" {
+		return fmt.Errorf("--no-build needs --archive <path>: the build to roll out")
+	}
+	if !f.NoBuild && f.Archive != "" {
+		return fmt.Errorf("--archive is only for --no-build; a rollout that builds rolls out what it built")
 	}
 	return nil
 }
@@ -49,6 +56,7 @@ func execute(flags *Flags) error {
 		if err := builder.Build(); err != nil {
 			return fmt.Errorf("build failed: %w", err)
 		}
+		flags.Archive = builder.OutputPath()
 		fmt.Println()
 	} else {
 		fmt.Printf("Step 1/3: Build skipped (--no-build)\n\n")
@@ -56,7 +64,7 @@ func execute(flags *Flags) error {
 
 	// Step 2: Push
 	fmt.Printf("Step 2/3: Pushing to all %s nodes...\n\n", flags.Env)
-	if err := push.Run(&push.Flags{Env: flags.Env}); err != nil {
+	if err := push.Run(&push.Flags{Env: flags.Env, Archive: flags.Archive}); err != nil {
 		return fmt.Errorf("push failed: %w", err)
 	}
 

@@ -99,6 +99,9 @@ type RQLiteReport struct {
 	HeapMB      int                       `json:"heap_mb,omitempty"`
 	Nodes       map[string]RQLiteNodeInfo `json:"nodes,omitempty"`
 	DebugVars   *RQLiteDebugVarsReport    `json:"debug_vars,omitempty"`
+	// Error says why rqlite could not be queried at all (e.g. node.yaml
+	// lacks its address or credentials), as opposed to it not answering.
+	Error string `json:"error,omitempty"`
 }
 
 type RQLiteNodeInfo struct {
@@ -149,6 +152,9 @@ type IPFSReport struct {
 	ClusterVersion   string `json:"cluster_version,omitempty"`
 	HasSwarmKey      bool   `json:"has_swarm_key"`
 	BootstrapEmpty   bool   `json:"bootstrap_empty"`
+	// ClusterError says why the cluster's REST API could not be asked at
+	// all (its credentials could not be derived).
+	ClusterError string `json:"cluster_error,omitempty"`
 }
 
 // --- Vault ---
@@ -287,6 +293,7 @@ type NamespaceReport struct {
 	RQLiteUp      bool   `json:"rqlite_up"`
 	RQLiteState   string `json:"rqlite_state,omitempty"`
 	RQLiteReady   bool   `json:"rqlite_ready"`
+	RQLiteError   string `json:"rqlite_error,omitempty"`
 	OlricUp       bool   `json:"olric_up"`
 	GatewayUp     bool   `json:"gateway_up"`
 	GatewayStatus int    `json:"gateway_status,omitempty"`

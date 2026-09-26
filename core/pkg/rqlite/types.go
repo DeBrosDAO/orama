@@ -10,7 +10,9 @@ import (
 // RQLiteStatus represents the response from RQLite's /status endpoint
 type RQLiteStatus struct {
 	Store struct {
-		Raft struct {
+		// NodeID is the raft id this rqlited runs under.
+		NodeID string `json:"node_id"`
+		Raft   struct {
 			AppliedIndex      uint64 `json:"applied_index"`
 			CommitIndex       uint64 `json:"commit_index"`
 			LastLogIndex      uint64 `json:"last_log_index"`
@@ -32,6 +34,13 @@ type RQLiteStatus struct {
 			DSN    string `json:"dsn"`
 			Memory bool   `json:"memory"`
 		} `json:"db_conf"`
+		// Nodes is the raft configuration as this node holds it. Unlike
+		// /nodes it is read locally, without probing each member.
+		Nodes []struct {
+			ID       string `json:"id"`
+			Addr     string `json:"addr"`
+			Suffrage string `json:"suffrage"`
+		} `json:"nodes"`
 	} `json:"store"`
 	Runtime struct {
 		GOARCH       string `json:"GOARCH"`

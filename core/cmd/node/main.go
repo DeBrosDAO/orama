@@ -11,7 +11,6 @@ import (
 	"syscall"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
-	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/node"
 	"go.uber.org/zap"
@@ -132,46 +131,6 @@ func startNode(ctx context.Context, cfg *config.Config) error {
 	return n.Stop()
 }
 
-// apply_flag_overrides applies command line argument overrides to the config
-func apply_flag_overrides(cfg *config.Config, p2pPort, rqlHTTP, rqlRaft *int, rqlJoinAddr *string, advAddr *string, dataDir *string) {
-	logger := setup_logger(logging.ComponentNode)
-
-	// Apply RQLite HTTP port override
-	if *rqlHTTP != constants.RQLiteHTTPPort {
-		cfg.Database.RQLitePort = *rqlHTTP
-		logger.ComponentInfo(logging.ComponentNode, "Overriding RQLite HTTP port", zap.Int("port", *rqlHTTP))
-	}
-
-	// Apply RQLite Raft port override
-	if *rqlRaft != constants.RQLiteRaftPort {
-		cfg.Database.RQLiteRaftPort = *rqlRaft
-		logger.ComponentInfo(logging.ComponentNode, "Overriding RQLite Raft port", zap.Int("port", *rqlRaft))
-	}
-
-	// Apply P2P port override
-	if *p2pPort != 4001 {
-		cfg.Node.ListenAddresses = []string{
-			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", *p2pPort),
-		}
-		logger.ComponentInfo(logging.ComponentNode, "Overriding P2P port", zap.Int("port", *p2pPort))
-	}
-
-	// Apply RQLite join address
-	if *rqlJoinAddr != "" {
-		cfg.Database.RQLiteJoinAddress = *rqlJoinAddr
-		logger.ComponentInfo(logging.ComponentNode, "Setting RQLite join address", zap.String("address", *rqlJoinAddr))
-	}
-
-	if *advAddr != "" {
-		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("%s:%d", *advAddr, cfg.Database.RQLitePort)
-		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("%s:%d", *advAddr, cfg.Database.RQLiteRaftPort)
-	}
-
-	if *dataDir != "" {
-		cfg.Node.DataDir = *dataDir
-	}
-}
-
 // printValidationErrors prints aggregated validation errors and exits.
 func printValidationErrors(errs []error) {
 	fmt.Fprintf(os.Stderr, "\nConfiguration errors (%d):\n", len(errs))
@@ -248,15 +207,9 @@ func main() {
 	}
 	logger.ComponentInfo(logging.ComponentNode, "Configuration loaded from YAML file", zap.String("path", configPath))
 
-	// Set default advertised addresses if empty
-	if cfg.Discovery.HttpAdvAddress == "" {
-		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("localhost:%d", cfg.Database.RQLitePort)
-	}
-	if cfg.Discovery.RaftAdvAddress == "" {
-		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("localhost:%d", cfg.Database.RQLiteRaftPort)
-	}
-
-	// Validate configuration
+	// Validate configuration. The advertise addresses are required and have no
+	// default: rqlited binds the http_adv_address host, and every client on the
+	// node reaches it there (rqlite.IndexEndpoint).
 	if errs := cfg.Validate(); len(errs) > 0 {
 		printValidationErrors(errs)
 	}

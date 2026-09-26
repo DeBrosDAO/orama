@@ -46,6 +46,8 @@ func init() {
 	f.IntVar(&upgradeFlags.Delay, "delay", int(rollout.GateBudget.Seconds()),
 		"Seconds a node has to rejoin the cluster after its upgrade before the rollout stops")
 	f.Bool("nameserver", false, "Make this node a nameserver (uses saved preference if not specified)")
+	f.StringVar(&upgradeFlags.PublicIP, "public-ip", "",
+		"This node's public IP, recorded as node.public_ip (default: the recorded one, else the source address of the default route)")
 
 	// Set by the orchestrator when it re-execs itself after swapping the
 	// binary; not something an operator ever passes.

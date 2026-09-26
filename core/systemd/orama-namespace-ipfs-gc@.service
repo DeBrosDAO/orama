@@ -22,9 +22,12 @@ RestrictNamespaces=yes
 ProtectProc=invisible
 ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/orama/.orama/data/ipfs
 InaccessiblePaths=/opt/orama/.orama/secrets
-EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/ipfs-gc.env
+EnvironmentFile=/var/lib/orama-unit-env/%i/ipfs-gc.env
 Environment=HOME=/opt/orama
-ExecStart=/usr/local/bin/ipfs repo gc
+# --api: always the running daemon. Without it the CLI looks for the repo's api
+# file, and while the daemon is starting (lock held, api file not yet written)
+# it fell back to an offline GC and failed on "someone else has the lock".
+ExecStart=/usr/local/bin/ipfs --api=${IPFS_API} repo gc
 TimeoutStartSec=1800
 StandardOutput=journal
 StandardError=journal

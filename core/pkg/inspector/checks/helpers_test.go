@@ -32,17 +32,6 @@ func makeCluster(nodes map[string]*inspector.NodeData) *inspector.ClusterData {
 	}
 }
 
-// countByStatus counts results with the given status.
-func countByStatus(results []inspector.CheckResult, status inspector.Status) int {
-	n := 0
-	for _, r := range results {
-		if r.Status == status {
-			n++
-		}
-	}
-	return n
-}
-
 // findCheck returns a pointer to the first check matching the given ID, or nil.
 func findCheck(results []inspector.CheckResult, id string) *inspector.CheckResult {
 	for i := range results {

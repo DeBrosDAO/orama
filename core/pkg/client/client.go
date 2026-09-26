@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -105,6 +106,9 @@ func (c *Client) Config() *ClientConfig {
 	if c.config.BootstrapPeers != nil {
 		cp.BootstrapPeers = append([]string(nil), c.config.BootstrapPeers...)
 	}
+	if c.config.ListenAddrs != nil {
+		cp.ListenAddrs = append([]string(nil), c.config.ListenAddrs...)
+	}
 	if c.config.DatabaseEndpoints != nil {
 		cp.DatabaseEndpoints = append([]string(nil), c.config.DatabaseEndpoints...)
 	}
@@ -135,9 +139,13 @@ func (c *Client) Connect() error {
 	c.resolvedNamespace = ns
 
 	// Create LibP2P host (TCP transport)
+	listen, err := listenOption(c.config.ListenAddrs)
+	if err != nil {
+		return err
+	}
 	var opts []libp2p.Option
 	opts = append(opts,
-		libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"), // Random port
+		listen,
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.DefaultMuxers,
 	)
@@ -166,7 +174,6 @@ func (c *Client) Connect() error {
 		opts = append(opts, libp2p.Identity(identity.PrivateKey))
 	}
 
-	// Enable QUIC only when not proxying. When proxy is enabled, prefer TCP via SOCKS5.
 	h, err := libp2p.New(opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create libp2p host: %w", err)
@@ -192,10 +199,10 @@ func (c *Client) Connect() error {
 	} else {
 		namespace = c.config.AppName
 	}
-	adapter := pubsub.NewHTTPClient(c.config.PubSubURL, namespace, c.logger)
+	adapter := pubsub.NewHTTPClient(c.config.PubSubSocket, namespace, c.logger)
 	c.pubsub = &pubSubBridge{client: c, adapter: adapter}
 	c.logger.Info("Pubsub HTTP client attached",
-		zap.String("url", c.config.PubSubURL),
+		zap.String("socket", c.config.PubSubSocket),
 		zap.String("namespace", namespace))
 
 	c.logger.Info("Starting peer connections...")
@@ -254,6 +261,37 @@ func (c *Client) Connect() error {
 	c.logger.Info("Client connected", zap.String("namespace", namespace))
 
 	return nil
+}
+
+// listenOption is the libp2p listen configuration for addrs (ClientConfig.
+// ListenAddrs).
+//
+// The host used to listen on /ip4/0.0.0.0/tcp/0: a random port on every
+// interface, the public one included, although nothing connects to a client
+// — it dials its bootstrap peers and they answer on that connection. With no
+// address the host has no listener at all. A caller that does want inbound
+// connections names the interface, and the unspecified address, which is
+// every interface, is refused.
+func listenOption(addrs []string) (libp2p.Option, error) {
+	if len(addrs) == 0 {
+		return libp2p.NoListenAddrs, nil
+	}
+	for _, a := range addrs {
+		ma, err := multiaddr.NewMultiaddr(a)
+		if err != nil {
+			return nil, fmt.Errorf("client listen address %q is not a multiaddr: %w", a, err)
+		}
+		for _, code := range []int{multiaddr.P_IP4, multiaddr.P_IP6} {
+			ip, err := ma.ValueForProtocol(code)
+			if err != nil {
+				continue
+			}
+			if parsed := net.ParseIP(ip); parsed == nil || parsed.IsUnspecified() {
+				return nil, fmt.Errorf("client listen address %q binds every interface; name the interface to listen on (e.g. the WireGuard address)", a)
+			}
+		}
+	}
+	return libp2p.ListenAddrStrings(addrs...), nil
 }
 
 // Disconnect closes the connection to the network

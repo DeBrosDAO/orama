@@ -345,3 +345,29 @@ func TestRenderEnvFile_refusesAnInvalidValueInsteadOfWritingIt(t *testing.T) {
 		t.Fatal("RenderEnvFile wrote an unusable variable name")
 	}
 }
+
+// Values under the per-value limit can still add up to a file the privileged
+// helper refuses to stage; that is refused where the environment is set.
+func TestValidateEnvSize_capsTheRenderedFile(t *testing.T) {
+	big := strings.Repeat("x", MaxEnvValueBytes)
+	env := map[string]string{"A": big, "B": big, "C": big}
+	if err := ValidateEnvSize(env); err != nil {
+		t.Fatalf("three values of %d bytes fit: %v", MaxEnvValueBytes, err)
+	}
+	env["D"] = big
+	if err := ValidateEnvSize(env); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("got %v, want the file-size limit", err)
+	}
+	if err := ValidateEnvSize(nil); err != nil {
+		t.Fatalf("an empty environment is valid: %v", err)
+	}
+}
+
+// Escaping counts: a value of quotes doubles in the file.
+func TestValidateEnvSize_countsEscapedBytes(t *testing.T) {
+	quotes := strings.Repeat(`"`, MaxEnvValueBytes)
+	env := map[string]string{"A": quotes, "B": quotes}
+	if err := ValidateEnvSize(env); err == nil {
+		t.Fatal("two 64 KiB values of quotes render to 256 KiB and must be refused")
+	}
+}

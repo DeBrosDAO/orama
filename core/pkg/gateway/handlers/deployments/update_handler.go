@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -63,8 +64,8 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		http.Error(w, "Deployment name is required", http.StatusBadRequest)
+	if err := process.ValidateInstance(namespace, name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -100,6 +101,11 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		h.logger.Error("Update failed", zap.Error(err))
+		var taken *instanceTakenError
+		if errors.As(err, &taken) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, fmt.Sprintf("Update failed: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -217,17 +223,27 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 		zap.String("new_cid", cid),
 	)
 
+	// The directory on this host must be this deployment's before anything
+	// replaces it (instance_claim.go).
+	deployPath := process.DeployDir(h.nextjsHandler.baseDeployPath, existing.Namespace, existing.Name)
+	if err := h.service.checkInstanceOwner(ctx, deployPath, existing.Namespace, existing.Name); err != nil {
+		return nil, err
+	}
+
 	// Extract to staging directory
-	stagingPath := process.DeployDir(h.nextjsHandler.baseDeployPath, existing.Namespace, existing.Name) + ".new"
+	stagingPath := deployPath + ".new"
 	if err := os.MkdirAll(stagingPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create staging directory: %w", err)
 	}
 	if err := h.nextjsHandler.extractFromIPFS(ctx, cid, stagingPath); err != nil {
 		return nil, fmt.Errorf("failed to extract new build: %w", err)
 	}
+	// The staged directory replaces the claimed one, so it carries the marker.
+	if err := writeOwnerMarker(stagingPath, existing.Namespace, existing.Name, false); err != nil {
+		return nil, err
+	}
 
 	// Atomic swap: rename old to .old, new to current
-	deployPath := process.DeployDir(h.nextjsHandler.baseDeployPath, existing.Namespace, existing.Name)
 	oldPath := deployPath + ".old"
 
 	// Backup current

@@ -24,10 +24,7 @@ import (
 
 func TestReexecAfterBinarySwap_missingBinaryReturnsError(t *testing.T) {
 	// When the new binary isn't on disk at the expected path, the
-	// helper must surface an error so the orchestrator can fall back
-	// (with a warning) rather than silently no-op or panic. This is
-	// the "Phase 2b succeeded but the file vanished" case — defensive
-	// path, but cheap to pin.
+	// helper must surface an error, which fails the upgrade (Execute).
 	if _, err := os.Stat(newOramaBinaryPath); err == nil {
 		t.Skipf("test machine has %s present; skipping (real install env)", newOramaBinaryPath)
 	}
@@ -50,5 +47,15 @@ func TestReexecPathConstant_isAbsolute(t *testing.T) {
 	if !strings.HasPrefix(newOramaBinaryPath, "/") {
 		t.Fatalf("newOramaBinaryPath must be absolute (syscall.Exec requirement); got %q",
 			newOramaBinaryPath)
+	}
+}
+
+// The post-swap process records exactly the node.public_ip the pre-stop step
+// checked, and knows it is the resumed half.
+func TestReexecArgs(t *testing.T) {
+	got := reexecArgs([]string{"/usr/local/bin/orama", "node", "upgrade", "--restart"}, "203.0.113.7")
+	want := []string{newOramaBinaryPath, "node", "upgrade", "--restart", "--public-ip", "203.0.113.7", "--reexeced-after-binary-swap"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("reexecArgs = %v, want %v", got, want)
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,38 +14,29 @@ import (
 )
 
 // statusServer spins up an httptest server that serves a /status payload with
-// the given raft state, last_contact, commit and applied indices. Returns the
-// numeric port the gate/GetRaftStatus would use — but GetRaftStatus is pinned
-// to localhost:<port>, so we drive LocalFollowerFresh through the parsed port.
-func statusServer(t *testing.T, state, lastContact string, commit, applied uint64) (int, func()) {
+// the given raft state, last_contact, commit and applied indices, and returns
+// the Endpoint the gate would use. The server requires the endpoint's
+// credentials, as rqlited with -auth does.
+func statusServer(t *testing.T, state, lastContact string, commit, applied uint64) (Endpoint, func()) {
 	t.Helper()
 	body := fmt.Sprintf(`{"store":{"raft":{"state":%q,"last_contact":%q,"commit_index":%d,"applied_index":%d}}}`,
 		state, lastContact, commit, applied)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(requireBasicAuth(testUser, testPass, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/status") {
 			http.NotFound(w, r)
 			return
 		}
 		_, _ = w.Write([]byte(body))
-	}))
-	// GetRaftStatus hits localhost:<port>; httptest binds 127.0.0.1, so extract
-	// the port and reuse it.
-	u := srv.URL
-	idx := strings.LastIndex(u, ":")
-	port, err := strconv.Atoi(u[idx+1:])
-	if err != nil {
-		srv.Close()
-		t.Fatalf("parse httptest port from %q: %v", u, err)
-	}
-	return port, srv.Close
+	})))
+	return testEndpoint(t, srv.URL), srv.Close
 }
 
 func TestLocalFollowerFresh_leaderAlwaysFresh(t *testing.T) {
 	// A leader has the authoritative state — fresh regardless of contact/gap.
-	port, closeFn := statusServer(t, "Leader", "", 100, 0)
+	ep, closeFn := statusServer(t, "Leader", "", 100, 0)
 	defer closeFn()
 
-	fresh, reason, err := LocalFollowerFresh(port)
+	fresh, reason, err := LocalFollowerFresh(ep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -56,10 +46,10 @@ func TestLocalFollowerFresh_leaderAlwaysFresh(t *testing.T) {
 }
 
 func TestLocalFollowerFresh_leaderCaseInsensitive(t *testing.T) {
-	port, closeFn := statusServer(t, "LEADER", "", 0, 0)
+	ep, closeFn := statusServer(t, "LEADER", "", 0, 0)
 	defer closeFn()
 
-	fresh, _, err := LocalFollowerFresh(port)
+	fresh, _, err := LocalFollowerFresh(ep)
 	if err != nil || !fresh {
 		t.Errorf("leader state must match case-insensitively; fresh=%v err=%v", fresh, err)
 	}
@@ -67,10 +57,10 @@ func TestLocalFollowerFresh_leaderCaseInsensitive(t *testing.T) {
 
 func TestLocalFollowerFresh_followerFresh(t *testing.T) {
 	// Recent contact + tiny apply gap → fresh.
-	port, closeFn := statusServer(t, "Follower", "150ms", 1000, 999)
+	ep, closeFn := statusServer(t, "Follower", "150ms", 1000, 999)
 	defer closeFn()
 
-	fresh, reason, err := LocalFollowerFresh(port)
+	fresh, reason, err := LocalFollowerFresh(ep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -81,10 +71,10 @@ func TestLocalFollowerFresh_followerFresh(t *testing.T) {
 
 func TestLocalFollowerFresh_staleByLastContact(t *testing.T) {
 	// Contact older than StalenessMaxLastContact → stale even with no apply gap.
-	port, closeFn := statusServer(t, "Follower", "5s", 1000, 1000)
+	ep, closeFn := statusServer(t, "Follower", "5s", 1000, 1000)
 	defer closeFn()
 
-	fresh, reason, err := LocalFollowerFresh(port)
+	fresh, reason, err := LocalFollowerFresh(ep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,10 +89,10 @@ func TestLocalFollowerFresh_staleByLastContact(t *testing.T) {
 func TestLocalFollowerFresh_staleByApplyGap(t *testing.T) {
 	// Recent contact but apply gap beyond StalenessMaxApplyGap → stale.
 	gap := StalenessMaxApplyGap + 10
-	port, closeFn := statusServer(t, "Follower", "10ms", 1000, 1000-gap)
+	ep, closeFn := statusServer(t, "Follower", "10ms", 1000, 1000-gap)
 	defer closeFn()
 
-	fresh, reason, err := LocalFollowerFresh(port)
+	fresh, reason, err := LocalFollowerFresh(ep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -116,10 +106,10 @@ func TestLocalFollowerFresh_staleByApplyGap(t *testing.T) {
 
 func TestLocalFollowerFresh_neverContactNotFresh(t *testing.T) {
 	// rqlite reports "never" before first leader contact — fail-safe to stale.
-	port, closeFn := statusServer(t, "Follower", "never", 1000, 1000)
+	ep, closeFn := statusServer(t, "Follower", "never", 1000, 1000)
 	defer closeFn()
 
-	fresh, _, err := LocalFollowerFresh(port)
+	fresh, _, err := LocalFollowerFresh(ep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,10 +121,10 @@ func TestLocalFollowerFresh_neverContactNotFresh(t *testing.T) {
 func TestLocalFollowerFresh_applyGapUnderflowGuarded(t *testing.T) {
 	// applied > commit (transient) must not underflow into a huge "gap" and
 	// wrongly mark the node stale — last_contact recent → fresh.
-	port, closeFn := statusServer(t, "Follower", "10ms", 1000, 1005)
+	ep, closeFn := statusServer(t, "Follower", "10ms", 1000, 1005)
 	defer closeFn()
 
-	fresh, reason, err := LocalFollowerFresh(port)
+	fresh, reason, err := LocalFollowerFresh(ep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +135,7 @@ func TestLocalFollowerFresh_applyGapUnderflowGuarded(t *testing.T) {
 
 func TestLocalFollowerFresh_statusErrorNotFresh(t *testing.T) {
 	// Unreachable status port → (false, reason, err); never fresh.
-	fresh, _, err := LocalFollowerFresh(1) // port 1 is unbindable/closed
+	fresh, _, err := LocalFollowerFresh(Endpoint{Host: "127.0.0.1", Port: 1, Username: testUser, Password: testPass}) // port 1 is closed
 	if err == nil {
 		t.Fatal("expected an error reaching /status on a dead port")
 	}
@@ -184,13 +174,13 @@ func TestFollowerFreshnessGate_cachesWithinTTL(t *testing.T) {
 	// The gate must re-use a verdict within ttl and re-check only after it ages.
 	var mu sync.Mutex
 	calls := 0
-	check := func(int) (bool, string, error) {
+	check := func(Endpoint) (bool, string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
 		return true, "ok", nil
 	}
-	g := newFollowerFreshnessGate(7000, check, 50*time.Millisecond)
+	g := newFollowerFreshnessGate(Endpoint{}, check, 50*time.Millisecond)
 
 	for i := 0; i < 5; i++ {
 		if fresh, _ := g.Fresh(); !fresh {
@@ -215,10 +205,10 @@ func TestFollowerFreshnessGate_cachesWithinTTL(t *testing.T) {
 
 func TestFollowerFreshnessGate_checkErrorFailsSafe(t *testing.T) {
 	// A check error must cache fresh=false (degrade to weak), never fresh.
-	check := func(int) (bool, string, error) {
+	check := func(Endpoint) (bool, string, error) {
 		return false, "boom", fmt.Errorf("status unreachable")
 	}
-	g := newFollowerFreshnessGate(7001, check, time.Second)
+	g := newFollowerFreshnessGate(Endpoint{}, check, time.Second)
 
 	fresh, reason := g.Fresh()
 	if fresh {
@@ -230,7 +220,7 @@ func TestFollowerFreshnessGate_checkErrorFailsSafe(t *testing.T) {
 }
 
 func TestNewFollowerFreshnessGate_defaults(t *testing.T) {
-	g := newFollowerFreshnessGate(5, nil, 0)
+	g := newFollowerFreshnessGate(Endpoint{}, nil, 0)
 	if g.ttl != defaultFreshnessGateTTL {
 		t.Errorf("nil ttl must default to %v; got %v", defaultFreshnessGateTTL, g.ttl)
 	}

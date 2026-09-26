@@ -175,13 +175,3 @@ func splitCSVOrSpace(s string) []string {
 	fields := strings.Fields(s)
 	return fields
 }
-
-// truthy reports if s is a common truthy string
-func truthy(s string) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
@@ -35,9 +36,15 @@ func purgeTenantPlaintextAPIKeys(ctx context.Context, db apiKeyQuerier) (int, er
 	internalCtx := client.WithInternalAuth(ctx)
 	res, err := db.Query(internalCtx, "SELECT COUNT(*) FROM api_keys WHERE key LIKE 'ak_%' OR key LIKE 'orama_%'")
 	if err != nil {
-		// A namespace database that has not run the core migrations has no
-		// such table, and that is the state this function wants anyway.
-		return 0, nil
+		// A namespace database with no api_keys table holds no keys, which is
+		// the state this function wants. Any other failure — no leader, a
+		// timeout, a refused connection — says nothing about whether the
+		// credentials are still there, so it fails the step and readiness
+		// retries it.
+		if isNoSuchTableError(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("count plaintext api keys in this namespace's database: %w", err)
 	}
 	if countFromResult(res) == 0 {
 		return 0, nil
@@ -64,4 +71,10 @@ func countFromResult(res *client.QueryResult) int {
 		return int(v)
 	}
 	return 0
+}
+
+// isNoSuchTableError reports whether err is SQLite's "no such table", which is
+// what rqlite relays for a query against a table that does not exist.
+func isNoSuchTableError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "no such table")
 }

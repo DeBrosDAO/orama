@@ -24,10 +24,18 @@ type mockClient struct {
 	// awake for exactly the length of the operation.
 	keepaliveStarted int
 	keepaliveStopped int
+
+	deleted   []string
+	deleteErr error
 }
 
 func (m *mockClient) GetSSHKey(ctx context.Context, host, username, format string) (*rwagent.VaultSSHData, error) {
 	return m.getSSHKey(ctx, host, username, format)
+}
+
+func (m *mockClient) DeleteSSHEntry(ctx context.Context, host, username string) error {
+	m.deleted = append(m.deleted, username+"@"+host)
+	return m.deleteErr
 }
 
 func (m *mockClient) CreateSSHEntry(ctx context.Context, host, username string) (*rwagent.VaultSSHData, error) {
@@ -467,5 +475,25 @@ func TestPackageNeverLoadsKeysIntoSSHAgent(t *testing.T) {
 				t.Errorf("%s contains %s, which %s", name, needle, why)
 			}
 		}
+	}
+}
+
+func TestForgetNodeKey_deletesTheNodesEntry(t *testing.T) {
+	m := &mockClient{}
+	withMockClient(t, m)
+	if err := ForgetNodeKey(inspector.Node{Host: "203.0.113.7", User: "ubuntu"}); err != nil {
+		t.Fatalf("ForgetNodeKey: %v", err)
+	}
+	if len(m.deleted) != 1 || m.deleted[0] != "ubuntu@203.0.113.7" {
+		t.Errorf("deleted %v, want ubuntu@203.0.113.7", m.deleted)
+	}
+}
+
+func TestForgetNodeKey_agentFailureNamesTheNode(t *testing.T) {
+	m := &mockClient{deleteErr: &rwagent.AgentError{Code: "AGENT_LOCKED", Message: "locked", StatusCode: 423}}
+	withMockClient(t, m)
+	err := ForgetNodeKey(inspector.Node{Host: "203.0.113.7", User: "ubuntu"})
+	if err == nil || !strings.Contains(err.Error(), "ubuntu@203.0.113.7") {
+		t.Fatalf("err = %v, want one naming the node", err)
 	}
 }

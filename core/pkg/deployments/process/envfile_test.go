@@ -12,10 +12,38 @@ import (
 	"go.uber.org/zap"
 )
 
-func testManager(t *testing.T) (*Manager, string) {
+// recordingStager is a Stager that keeps what it was handed.
+type recordingStager struct {
+	env     map[string]string
+	token   map[string]string
+	cleared []string
+}
+
+func newRecordingStager() *recordingStager {
+	return &recordingStager{env: map[string]string{}, token: map[string]string{}}
+}
+
+func (r *recordingStager) SetEnv(instance, contents string) error {
+	r.env[instance] = contents
+	return nil
+}
+
+func (r *recordingStager) SetToken(instance, token string) error {
+	r.token[instance] = token
+	return nil
+}
+
+func (r *recordingStager) Clear(instance string) error {
+	r.cleared = append(r.cleared, instance)
+	delete(r.env, instance)
+	delete(r.token, instance)
+	return nil
+}
+
+func testManager(t *testing.T) (*Manager, *recordingStager) {
 	t.Helper()
-	envDir := filepath.Join(t.TempDir(), "deployment-env")
-	return NewManager(zap.NewNop(), Config{EnvDir: envDir, BaseDomain: "dbrs.space"}), envDir
+	st := newRecordingStager()
+	return NewManager(zap.NewNop(), Config{Stager: st, BaseDomain: "dbrs.space"}), st
 }
 
 func testDeployment() *deployments.Deployment {
@@ -30,70 +58,19 @@ func testDeployment() *deployments.Deployment {
 	}
 }
 
-// The environment holds the tenant's secrets, and the deployment's own
-// directory is world-readable so the unprivileged user it runs as can read the
-// code. The two must not be the same place, and the file must not be readable
-// by anyone but root.
-func TestWriteEnvFile_isReadableOnlyByRoot(t *testing.T) {
-	m, envDir := testManager(t)
-
-	path, err := m.writeEnvFile(testDeployment(), "orama-deploy-acme-api")
-	if err != nil {
-		t.Fatalf("writeEnvFile: %v", err)
-	}
-	if filepath.Dir(path) != envDir {
-		t.Fatalf("the environment file landed in %s, not in the environment directory", filepath.Dir(path))
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("the environment file is mode %04o, want 0600", perm)
-	}
-
-	dirInfo, err := os.Stat(envDir)
-	if err != nil {
-		t.Fatalf("stat dir: %v", err)
-	}
-	if perm := dirInfo.Mode().Perm(); perm != 0700 {
-		t.Errorf("the environment directory is mode %04o, want 0700", perm)
-	}
-}
-
-// A directory left over from an earlier version, or created with a loose umask,
-// is tightened rather than trusted.
-func TestWriteEnvFile_tightensAnExistingLooseDirectory(t *testing.T) {
-	m, envDir := testManager(t)
-	if err := os.MkdirAll(envDir, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	if _, err := m.writeEnvFile(testDeployment(), "orama-deploy-acme-api"); err != nil {
-		t.Fatalf("writeEnvFile: %v", err)
-	}
-	info, err := os.Stat(envDir)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0700 {
-		t.Errorf("an existing world-readable directory was left at %04o", perm)
-	}
-}
-
+// The environment is handed to the stager under the unit instance (%i) the
+// template names its files by: orama-deploy-acme-api -> acme-api.
 func TestWriteEnvFile_writesTheTenantsValuesAndThePlatforms(t *testing.T) {
-	m, _ := testManager(t)
+	m, st := testManager(t)
 
-	path, err := m.writeEnvFile(testDeployment(), "orama-deploy-acme-api")
-	if err != nil {
+	if err := m.writeEnvFile(testDeployment(), "orama-deploy-acme-api"); err != nil {
 		t.Fatalf("writeEnvFile: %v", err)
 	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read: %v", err)
+	contents, ok := st.env["acme-api"]
+	if !ok {
+		t.Fatalf("nothing staged for instance acme-api: %v", st.env)
 	}
-	got := systemdReadEnvFile(string(contents))
+	got := systemdReadEnvFile(contents)
 
 	for key, want := range map[string]string{
 		"DATABASE_URL":      "postgres://u:p@h/db",
@@ -112,50 +89,51 @@ func TestWriteEnvFile_writesTheTenantsValuesAndThePlatforms(t *testing.T) {
 
 func TestWriteEnvFile_refusesWithNowhereSafeToPutIt(t *testing.T) {
 	m := NewManager(zap.NewNop(), Config{BaseDomain: "dbrs.space"})
-	_, err := m.writeEnvFile(testDeployment(), "orama-deploy-acme-api")
+	err := m.writeEnvFile(testDeployment(), "orama-deploy-acme-api")
 	if err == nil {
-		t.Fatal("the environment was written with no directory configured")
+		t.Fatal("the environment was written with no stager configured")
 	}
-	// The refusal has to say what is wrong. Falling through to a bare mkdir
-	// failure reports "mkdir : no such file or directory", which reads like a
-	// bug in the deployment rather than a gateway that was never configured.
-	if !strings.Contains(err.Error(), "no environment directory is configured") {
+	if !strings.Contains(err.Error(), "no deployment stager is configured") {
 		t.Errorf("the refusal does not say what is missing: %v", err)
 	}
 }
 
 func TestWriteEnvFile_refusesAValueItCouldNotDeliver(t *testing.T) {
-	m, envDir := testManager(t)
+	m, st := testManager(t)
 	d := testDeployment()
 	d.Environment["BROKEN"] = "\xff"
 
-	if _, err := m.writeEnvFile(d, "orama-deploy-acme-api"); err == nil {
+	if err := m.writeEnvFile(d, "orama-deploy-acme-api"); err == nil {
 		t.Fatal("a value systemd would discard was written anyway")
 	}
-	if _, err := os.Stat(filepath.Join(envDir, "orama-deploy-acme-api.env")); !os.IsNotExist(err) {
-		t.Error("a rejected environment still left a file behind")
+	if _, ok := st.env["acme-api"]; ok {
+		t.Error("a rejected environment was still staged")
+	}
+}
+
+// The token goes to the stager under the same instance as the environment.
+func TestWriteWorkloadToken_stagesTheMintedToken(t *testing.T) {
+	m, st := testManager(t)
+	m.SetWorkloadTokenMinter(func(_ context.Context, ns, name string) (string, error) { return "tok-" + ns + "-" + name, nil })
+	if err := m.writeWorkloadToken(context.Background(), testDeployment(), "orama-deploy-acme-api"); err != nil {
+		t.Fatal(err)
+	}
+	if st.token["acme-api"] != "tok-acme-api" {
+		t.Errorf("staged token = %q", st.token["acme-api"])
 	}
 }
 
 // The secrets must not outlive the deployment.
-func TestRemoveEnvFile_takesTheSecretsOffTheNode(t *testing.T) {
-	m, _ := testManager(t)
-	path, err := m.writeEnvFile(testDeployment(), "orama-deploy-acme-api")
-	if err != nil {
+func TestRemoveSecrets_takesTheSecretsOffTheNode(t *testing.T) {
+	m, st := testManager(t)
+	if err := m.writeEnvFile(testDeployment(), "orama-deploy-acme-api"); err != nil {
 		t.Fatalf("writeEnvFile: %v", err)
 	}
-
-	if err := m.removeEnvFile("orama-deploy-acme-api"); err != nil {
-		t.Fatalf("removeEnvFile: %v", err)
+	if err := m.removeSecrets("orama-deploy-acme-api"); err != nil {
+		t.Fatalf("removeSecrets: %v", err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("the environment file is still on disk after the deployment was stopped")
-	}
-
-	// Stopping a deployment twice, or one that never wrote a file, is not an
-	// error to report.
-	if err := m.removeEnvFile("orama-deploy-acme-api"); err != nil {
-		t.Errorf("removing an absent environment file reported %v", err)
+	if len(st.cleared) != 1 || st.cleared[0] != "acme-api" {
+		t.Fatalf("cleared %v, want [acme-api]", st.cleared)
 	}
 }
 
@@ -168,7 +146,7 @@ func TestGatewayURL(t *testing.T) {
 		t.Errorf("gatewayURL with no namespace = %q, want empty", got)
 	}
 
-	noDomain := NewManager(zap.NewNop(), Config{EnvDir: t.TempDir()})
+	noDomain := NewManager(zap.NewNop(), Config{Stager: newRecordingStager()})
 	if got := noDomain.gatewayURL("acme"); got != "" {
 		t.Errorf("gatewayURL with no base domain = %q, want empty", got)
 	}
@@ -237,31 +215,6 @@ func unquoteEnvValue(raw string) string {
 		b.WriteByte(inner[i])
 	}
 	return b.String()
-}
-
-// os.WriteFile only sets the mode when it creates the file, so a file left at a
-// looser mode by an earlier version would keep it and go on holding the
-// tenant's secrets where anyone on the node can read them.
-func TestWriteEnvFile_tightensAnExistingLooseFile(t *testing.T) {
-	m, envDir := testManager(t)
-	if err := os.MkdirAll(envDir, 0700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	stale := filepath.Join(envDir, "orama-deploy-acme-api.env")
-	if err := os.WriteFile(stale, []byte("OLD=\"1\"\n"), 0644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	if _, err := m.writeEnvFile(testDeployment(), "orama-deploy-acme-api"); err != nil {
-		t.Fatalf("writeEnvFile: %v", err)
-	}
-	info, err := os.Stat(stale)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("an existing world-readable environment file was left at %04o", perm)
-	}
 }
 
 // The direct runner is what runs a deployment off systemd. It has to hand the

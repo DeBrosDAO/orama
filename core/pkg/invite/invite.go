@@ -21,6 +21,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,15 +41,15 @@ type Invite struct {
 	// CAFingerprint is the SHA-256 of the gateway's TLS certificate, which the
 	// joining node pins instead of trusting the first certificate it is shown.
 	CAFingerprint string `json:"f,omitempty"`
+	// SNI is the server name to present when JoinURL is an address: the node
+	// serves its certificate by name, and the fingerprint is that certificate's.
+	SNI string `json:"s,omitempty"`
 }
 
 // Encode renders an invite as one copyable string.
 func Encode(inv Invite) (string, error) {
-	if inv.Token == "" {
-		return "", fmt.Errorf("an invite needs a token")
-	}
-	if inv.JoinURL == "" {
-		return "", fmt.Errorf("an invite needs a join URL")
+	if err := inv.validate(); err != nil {
+		return "", fmt.Errorf("refusing to mint an invite that no joiner would accept: %w", err)
 	}
 
 	body, err := json.Marshal(inv)
@@ -84,13 +87,54 @@ func Decode(s string) (Invite, error) {
 	if err := json.Unmarshal(body, &inv); err != nil {
 		return Invite{}, fmt.Errorf("invite is not valid: %w", err)
 	}
-	if inv.Token == "" {
-		return Invite{}, fmt.Errorf("invite carries no token")
-	}
-	if inv.JoinURL == "" {
-		return Invite{}, fmt.Errorf("invite carries no join URL")
+	if err := inv.validate(); err != nil {
+		return Invite{}, err
 	}
 	return inv, nil
+}
+
+// dnsName is a hostname of letter-digit-hyphen labels, at least two of them.
+var dnsName = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+// validate checks every field for its exact shape. An invite is a string
+// passed around by copy and paste, and its fields end up on a root command
+// line and in a TLS handshake on the joining machine; anything that is not
+// what the minting node writes is refused here, before it goes anywhere.
+func (inv Invite) validate() error {
+	if !isBareToken(inv.Token) {
+		return fmt.Errorf("invite token is not a %d-character hex string", tokenLength)
+	}
+	if inv.CAFingerprint != "" && !isBareToken(inv.CAFingerprint) {
+		return fmt.Errorf("invite fingerprint is not a %d-character hex SHA-256", tokenLength)
+	}
+	if inv.SNI != "" && !dnsName.MatchString(inv.SNI) {
+		return fmt.Errorf("invite server name %q is not a DNS name", inv.SNI)
+	}
+	return validateJoinURL(inv.JoinURL)
+}
+
+// validateJoinURL accepts https://<ip or DNS name>[:port] and nothing else.
+func validateJoinURL(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("invite carries no join URL")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invite join URL is not a URL: %w", err)
+	}
+	if u.Scheme != "https" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("invite join URL %q must be https://<host>[:port] with nothing else", raw)
+	}
+	host := u.Hostname()
+	if net.ParseIP(host) == nil && !dnsName.MatchString(host) {
+		return fmt.Errorf("invite join URL host %q is neither an IP address nor a DNS name", host)
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("invite join URL port %q is not a port", p)
+		}
+	}
+	return nil
 }
 
 // tokenLength is the hex length of a 32-byte token.
@@ -108,44 +152,25 @@ func isBareToken(s string) bool {
 // fingerprintTimeout bounds the TLS handshake used to read a certificate.
 const fingerprintTimeout = 5 * time.Second
 
-// Fingerprint returns the SHA-256 of the leaf certificate host serves.
-//
-// host may carry a scheme and a port; both are normalised away, and 443 is
-// assumed. An empty string means the certificate could not be read, which the
-// caller reports rather than silently issuing an invite with no pinning.
-func Fingerprint(host string) (string, error) {
-	target := normalizeHostPort(host)
-
+// FingerprintServed returns the SHA-256 of the leaf certificate served at addr
+// for serverName. It does not verify the certificate: the caller reads its
+// own node's certificate (addr is this node's listener) so that another node
+// can pin it; the pin is the check, and a staging or not-yet-trusted
+// certificate must still be pinnable.
+func FingerprintServed(addr, serverName string) (string, error) {
 	conn, err := tls.DialWithDialer(
 		&net.Dialer{Timeout: fingerprintTimeout},
-		"tcp", target,
-		&tls.Config{MinVersion: tls.VersionTLS12},
+		"tcp", addr,
+		&tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverName, InsecureSkipVerify: true},
 	)
 	if err != nil {
-		return "", fmt.Errorf("could not read the TLS certificate of %s: %w", target, err)
+		return "", fmt.Errorf("could not read the TLS certificate served at %s for %s: %w", addr, serverName, err)
 	}
 	defer conn.Close()
-
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
-		return "", fmt.Errorf("%s presented no certificate", target)
+		return "", fmt.Errorf("%s presented no certificate for %s", addr, serverName)
 	}
-
 	sum := sha256.Sum256(certs[0].Raw)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-// normalizeHostPort turns a gateway URL or bare host into host:port.
-func normalizeHostPort(host string) string {
-	host = strings.TrimSpace(host)
-	host = strings.TrimPrefix(host, "https://")
-	host = strings.TrimPrefix(host, "http://")
-	host = strings.TrimSuffix(host, "/")
-	if idx := strings.IndexByte(host, '/'); idx >= 0 {
-		host = host[:idx]
-	}
-	if _, _, err := net.SplitHostPort(host); err != nil {
-		host = net.JoinHostPort(host, "443")
-	}
-	return host
 }

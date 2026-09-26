@@ -40,31 +40,73 @@ RestrictRealtime=yes
 LockPersonality=yes
 RemoveIPC=yes
 ProtectProc=invisible
+UMask=0077
+
+# Of /opt/orama the app sees one directory: its own, read-only. Secrets, keys,
+# every other tenant's deployment and SQLite database are not in its mount
+# namespace at all. ProtectSystem=strict alone made them read-only, not absent.
+TemporaryFileSystem=/opt/orama:ro
+BindReadOnlyPaths=/opt/orama/.orama/data/deployments/%i
+# The dependencies orama-deploy-build@ installed, from that unit's own cache
+# directory (never this one's: the app can write here, and a bind source is
+# resolved by PID 1). Bound one level above the app, where Node's module
+# resolution looks after the app's own node_modules, so an app that shipped
+# its own keeps using it; optional, because such an app has no build output.
+BindReadOnlyPaths=-%C/orama-build/%i/deps/node_modules:/opt/orama/.orama/data/deployments/node_modules
+
 # Every node reaches the cluster's control plane — rqlite, Olric, every other
 # namespace's services — over the WireGuard overlay, and a deployment sits on
 # the same host as that overlay. Tenant code has no business on it.
+#
+# Loopback cannot be denied the same way. systemd filters on the remote
+# address of every packet in both directions: the node's gateway proxies to
+# the app from 127.0.0.1, so denying loopback would drop every request the app
+# is sent. IPAddressAllow/Deny have no notion of a port, so what a deployment
+# can reach on 127.0.0.1 is decided by the services listening there, not here
+# (docs/SECURITY.md, "Tenant deployments").
 IPAddressAllow=localhost
 IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10
+# bind() is separate from IPAddressDeny. Every address family is denied, then
+# TCP and UDP are allowed: the app accepts its port and dials out. systemd
+# does not expand the environment file's port into SocketBindAllow.
+SocketBindDeny=any
+SocketBindAllow=tcp
+SocketBindAllow=udp
 
 StateDirectory=orama-deploy-%i
 CacheDirectory=orama-deploy-%i
+# Owner-only (the default is 0755). systemd applies the mode on every start, so
+# a directory an older release left 0755 is narrowed too. Another dynamic
+# user holding a path into it — through a bind mount, say — cannot enter it.
+StateDirectoryMode=0700
+CacheDirectoryMode=0700
 
-EnvironmentFile=/opt/orama/.orama/data/deployment-env/orama-deploy-%i.env
+# Both files live in /var/lib/orama-deploy (root:root 0700), written by
+# orama-privhelper with O_NOFOLLOW. systemd reads them as PID 1 and follows
+# symlinks, so they must not sit anywhere the gateway (the orama user) can
+# write: a symlink there to /etc/shadow would be read by root and handed to
+# this unit (pkg/deploysecrets).
+EnvironmentFile=/var/lib/orama-deploy/orama-deploy-%i.env
 
 # The deployment's own credential.
 #
 # systemd reads this as PID 1, before it drops to the deployment's user, and
 # exposes it at $CREDENTIALS_DIRECTORY owned by that user and mode 0400. That
 # is what lets an unprivileged gateway hand a token to a process running as
-# somebody else: the gateway writes a file only it can read, and systemd stages
-# it. The app reads $ORAMA_TOKEN_FILE and renews the token with itself before it
+# somebody else: the gateway passes the token to orama-privhelper, which writes
+# it where only root can read it, and systemd stages it. The app reads $ORAMA_TOKEN_FILE and renews the token with itself before it
 # expires; nothing long-lived is left on the node.
-LoadCredential=orama_token:/opt/orama/.orama/data/deployment-env/orama-deploy-%i.token
+LoadCredential=orama_token:/var/lib/orama-deploy/orama-deploy-%i.token
 Environment=ORAMA_TOKEN_FILE=%d/orama_token
 
 # The script is a variable and the interpreter is not: systemd does not expand a
 # variable in the first argument, which is why each runtime has its own
 # template rather than one template with an ExecStart the gateway fills in.
+# The helper checks this directory when the gateway asks it to start the unit.
+# A start that does not go through the helper — a reboot, a restart of the
+# unit — would skip that check, and PID 1 follows symlinks when it binds the
+# directory. This runs as root immediately before every ExecStart.
+ExecStartPre=+/usr/local/bin/orama-privhelper verify-deploy-dir %i
 ExecStart=/usr/bin/node ${ORAMA_ENTRYPOINT}
 
 # Every deployment is a long-running server and every handler creates it with

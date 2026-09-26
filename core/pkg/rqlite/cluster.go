@@ -273,15 +273,13 @@ func (r *RQLiteManager) isInSplitBrainState() bool {
 // requests must not be reported unreachable, or the recovery paths act on
 // evidence that a healthy node is gone.
 func (r *RQLiteManager) isPeerReachable(httpAddr string) bool {
-	user, pass := r.adminCredentials()
-	_, err := NewAdminClient("http://"+httpAddr, user, pass).Status(context.Background())
+	_, err := r.peerAdminClient(httpAddr).Status(context.Background())
 	return err == nil
 }
 
 // getPeerRQLiteStatus reads a peer's /status, with credentials.
 func (r *RQLiteManager) getPeerRQLiteStatus(httpAddr string) (*RQLiteStatus, error) {
-	user, pass := r.adminCredentials()
-	return NewAdminClient("http://"+httpAddr, user, pass).Status(context.Background())
+	return r.peerAdminClient(httpAddr).Status(context.Background())
 }
 
 func (r *RQLiteManager) startHealthMonitoring(ctx context.Context) {

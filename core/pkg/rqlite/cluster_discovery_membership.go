@@ -252,12 +252,6 @@ func (c *ClusterDiscoveryService) removeInactivePeers() {
 	}
 }
 
-func (c *ClusterDiscoveryService) getPeersJSON() []map[string]interface{} {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.getPeersJSONUnlocked()
-}
-
 func (c *ClusterDiscoveryService) getPeersJSONUnlocked() []map[string]interface{} {
 	// Collect all raft addresses
 	raftAddrs := make([]string, 0, len(c.knownPeers))

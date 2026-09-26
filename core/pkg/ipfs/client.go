@@ -53,6 +53,10 @@ type Config struct {
 	// Used for operations that require IPFS daemon directly (like directory uploads)
 	IPFSAPIURL string
 
+	// ClusterAPIPassword is the REST API's basic-auth password
+	// (ClusterRESTPassword). Every request to ClusterAPIURL carries it.
+	ClusterAPIPassword string
+
 	// Timeout is the timeout for client operations
 	// If zero, defaults to 60 seconds
 	Timeout time.Duration
@@ -140,6 +144,13 @@ func NewClient(cfg Config, logger *zap.Logger) (*Client, error) {
 
 	httpClient := &http.Client{
 		Timeout: timeout,
+	}
+	if cfg.ClusterAPIPassword != "" {
+		transport, err := newClusterAuthTransport(apiURL, cfg.ClusterAPIPassword)
+		if err != nil {
+			return nil, err
+		}
+		httpClient.Transport = transport
 	}
 
 	return &Client{

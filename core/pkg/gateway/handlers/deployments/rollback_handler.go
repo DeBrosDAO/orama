@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -110,6 +111,11 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 
 	if err != nil {
 		h.logger.Error("Rollback failed", zap.Error(err))
+		var taken *instanceTakenError
+		if errors.As(err, &taken) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, fmt.Sprintf("Rollback failed: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -241,6 +247,11 @@ func (h *RollbackHandler) rollbackDynamic(ctx context.Context, current *deployme
 	}
 
 	deployPath := process.DeployDir(h.updateHandler.nextjsHandler.baseDeployPath, current.Namespace, current.Name)
+	// The directory on this host must be this deployment's before anything
+	// replaces it (instance_claim.go).
+	if err := h.service.checkInstanceOwner(ctx, deployPath, current.Namespace, current.Name); err != nil {
+		return nil, err
+	}
 	stagingPath := deployPath + ".rollback"
 
 	// Extract historical version
@@ -249,6 +260,10 @@ func (h *RollbackHandler) rollbackDynamic(ctx context.Context, current *deployme
 	}
 	if err := h.updateHandler.nextjsHandler.extractFromIPFS(ctx, cid, stagingPath); err != nil {
 		return nil, fmt.Errorf("failed to extract historical version: %w", err)
+	}
+	// The staged directory replaces the claimed one, so it carries the marker.
+	if err := writeOwnerMarker(stagingPath, current.Namespace, current.Name, false); err != nil {
+		return nil, err
 	}
 
 	// Backup current

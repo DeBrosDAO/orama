@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -27,6 +30,29 @@ func (c *Config) ValidateConfig() []error {
 	// Validate client_namespace
 	if c.ClientNamespace == "" {
 		errs = append(errs, fmt.Errorf("gateway.client_namespace: must not be empty"))
+	}
+
+	// The base domain routes deployments and namespace gateways and decides
+	// which hosts get a certificate. It used to default to a domain belonging
+	// to a cluster that no longer exists, so a gateway missing it routed
+	// nothing and answered every TLS check for its real domain "not allowed".
+	if err := validateBaseDomain(c.BaseDomain); err != nil {
+		errs = append(errs, fmt.Errorf("gateway.domain_name: %w", err))
+	}
+
+	// state_dir is where this gateway's signing keys live. With none, it has
+	// nowhere it may write them (the unit is ProtectSystem=strict), so it could
+	// start serving /health while every auth route is missing.
+	if err := validateStateDir(c.StateDir); err != nil {
+		errs = append(errs, fmt.Errorf("gateway.state_dir: %w", err))
+	}
+
+	// The node's peer id is how this gateway finds itself in the node
+	// registry. Without it SQLite home-node assignment and deployment
+	// placement match no node, and the index gateway's host TURN and leader
+	// locality reconcilers act for no node — all of it silently.
+	if err := validateNodePeerID(c.NodePeerID); err != nil {
+		errs = append(errs, fmt.Errorf("gateway.node_peer_id: %w", err))
 	}
 
 	// Validate bootstrap_peers if provided
@@ -63,11 +89,12 @@ func (c *Config) ValidateConfig() []error {
 		seenPeers[peer] = true
 	}
 
-	// Validate rqlite_dsn if provided
-	if c.RQLiteDSN != "" {
-		if err := validateRQLiteDSN(c.RQLiteDSN); err != nil {
-			errs = append(errs, fmt.Errorf("gateway.rqlite_dsn: %w", err))
-		}
+	// rqlite_dsn is required: rqlited binds only its WireGuard address, so
+	// there is no default this gateway could guess.
+	if c.RQLiteDSN == "" {
+		errs = append(errs, fmt.Errorf("gateway.rqlite_dsn: must not be empty — set it to the rqlite this gateway serves (http://<wireguard-ip>:<port>)"))
+	} else if err := validateRQLiteDSN(c.RQLiteDSN); err != nil {
+		errs = append(errs, fmt.Errorf("gateway.rqlite_dsn: %w", err))
 	}
 
 	// Validate WebRTC configuration
@@ -81,6 +108,52 @@ func (c *Config) ValidateConfig() []error {
 	}
 
 	return errs
+}
+
+// baseDomainPattern is a lowercase DNS name of at least two labels. The base
+// domain is matched as a suffix — case-sensitively — to decide which hosts get
+// a certificate and which origins CORS allows, so "com" or "." would admit
+// nearly anything and "Example.com" would match nothing.
+var baseDomainPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+// maxDomainLength is the longest DNS name, in its text form.
+const maxDomainLength = 253
+
+func validateBaseDomain(domain string) error {
+	if strings.TrimSpace(domain) == "" {
+		return fmt.Errorf("must not be empty — set it to the cluster's base domain " +
+			"(the namespace spawner writes it from node.yaml http_gateway.base_domain)")
+	}
+	if len(domain) > maxDomainLength || !baseDomainPattern.MatchString(domain) {
+		return fmt.Errorf("%q is not a lowercase domain name of at least two labels", domain)
+	}
+	return nil
+}
+
+// validateNodePeerID requires the libp2p peer id of the node this gateway
+// runs on.
+func validateNodePeerID(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("must not be empty — the gateway reads it from <oramaDir>/data/identity.key, " +
+			"the orama directory being the one cluster_secret_path is in; check that cluster_secret_path is set " +
+			"and the node's identity key exists")
+	}
+	if _, err := peer.Decode(id); err != nil {
+		return fmt.Errorf("%q is not a libp2p peer id: %w", id, err)
+	}
+	return nil
+}
+
+// validateStateDir requires an absolute state directory. A relative one would
+// resolve against the unit's WorkingDirectory, outside its writable paths.
+func validateStateDir(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("must not be empty — set it to this gateway's private directory (<orama-dir>/data/namespaces/<ns>/gateway; the namespace spawner writes it)")
+	}
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("must be an absolute path, got %q", dir)
+	}
+	return nil
 }
 
 // validateListenAddr checks if a listen address is valid (host:port format)

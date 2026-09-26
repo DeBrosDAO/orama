@@ -1,0 +1,115 @@
+[Unit]
+# Installs a tenant Node.js deployment's npm dependencies. One template, one
+# instance per deployment: %i is "<namespace>-<name>", the instance of the
+# orama-deploy-node@ / orama-deploy-npm@ unit that will run it.
+#
+# `npm install` used to run inside the gateway process, as the orama user,
+# with the gateway's whole environment. Any package's postinstall — or the
+# tenant's own package.json, or a `git=` line in the tenant's .npmrc — ran with
+# read access to /opt/orama/.orama/secrets and a socket to orama-privhelper.
+# It runs here instead: as a dynamic user of its own, with no view of
+# /opt/orama beyond the deployment's own directory, off loopback and the
+# overlay, and with every lifecycle script refused (--ignore-scripts).
+#
+# The gateway starts it through orama-privhelper (`systemctl start`, which a
+# oneshot unit does not return from until npm has exited) and gets npm's exit
+# status back.
+Description=Orama Deployment dependency install - %i
+# A tenant can redeploy as often as it likes; a build that failed must not
+# leave the next one refused with "Start request repeated too quickly".
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# Of /opt/orama the build sees one directory: the deployment's own, read-only.
+# Secrets, keys, every other tenant's deployment and SQLite database are not
+# in its mount namespace at all.
+TemporaryFileSystem=/opt/orama:ro
+BindReadOnlyPaths=/opt/orama/.orama/data/deployments/%i
+WorkingDirectory=/opt/orama/.orama/data/deployments/%i
+
+# npm needs the public registry and nothing else. Unlike the app, the build
+# accepts no connections, so loopback — where Caddy's admin API, Kubo, IPFS
+# Cluster, pubsub, ntfy and the gateway listen — is denied with the private
+# ranges, nothing excepted. That includes every resolver the host's own
+# /etc/resolv.conf can name: systemd-resolved's stub (127.0.0.53) on a stock
+# node, CoreDNS (127.0.0.1) on a nameserver. The build gets its own instead:
+# /etc/orama/build-resolv.conf, public resolvers only, written root-owned by the
+# installer. Without it the unit does not start — no install with the host's
+# resolvers silently unreachable.
+BindReadOnlyPaths=/etc/orama/build-resolv.conf:/etc/resolv.conf
+IPAddressDeny=localhost 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10
+# npm dials the registry. bind() of every other address family stays denied.
+SocketBindDeny=any
+SocketBindAllow=tcp
+SocketBindAllow=udp
+
+# The build's own cache directory, under a prefix no deployment's own
+# directories can take: theirs are orama-deploy-<instance>, and an instance
+# cannot contain '/'. (orama-deploy-build-<instance> could: it is the cache
+# directory of a deployment whose namespace starts with "build-".) The
+# runtime unit binds the node_modules built here into its namespace, and
+# systemd resolves a bind source as PID 1, so it must be somewhere no app can
+# write. Under /var/cache/private (root, 0700) nothing else on the host
+# reaches it; its files are left readable to the app's own dynamic user,
+# which differs from this one.
+CacheDirectory=orama-build/%i
+CacheDirectoryMode=0700
+UMask=0022
+
+Environment=NODE_ENV=production
+Environment=npm_config_userconfig=/dev/null
+Environment=npm_config_cache=%C/orama-build/%i/npm-cache
+Environment=npm_config_update_notifier=false
+# The public registry, and only it: every tarball URL a lockfile names is
+# rewritten to it, so a lockfile cannot send npm to a host of its choosing.
+# The gateway refuses git, URL, file: and link: dependencies before this unit
+# starts (pkg/deployments/process/npmspec.go); allow-git refuses git again in
+# the npm versions that have the setting.
+Environment=npm_config_registry=https://registry.npmjs.org/
+Environment=npm_config_replace_registry_host=always
+Environment=npm_config_allow_git=none
+
+# npm runs in a directory holding only package.json and the lockfile, copied
+# from the deployment: never in the tenant's tree, so no .npmrc of the tenant's
+# is read. The output replaces the previous build's. The runtime unit binds
+# node_modules as PID 1, so the build succeeds only if what npm left there is
+# a directory, not a symlink; nothing runs after the check. A failed install
+# leaves nothing behind for a runtime to bind.
+# The helper checks this directory when the gateway asks it to start the unit.
+# A start that does not go through the helper would skip that check, and PID 1
+# follows symlinks when it binds the directory.
+ExecStartPre=+/usr/local/bin/orama-privhelper verify-deploy-dir %i
+ExecStart=/bin/sh -eu -c 'out="$$1"; rm -rf "$$out"; mkdir -p "$$out"; cp -P -- package.json "$$out/"; for lock in package-lock.json npm-shrinkwrap.json; do if [ -f "$$lock" ]; then cp -P -- "$$lock" "$$out/"; fi; done; cd "$$out"; /usr/bin/npm install --omit=dev --ignore-scripts --no-audit --no-fund || { rc=$$?; rm -rf node_modules; exit $$rc; }; if [ -L node_modules ] || { [ -e node_modules ] && [ ! -d node_modules ]; }; then echo "node_modules is not a directory; refusing the build" >&2; rm -rf node_modules; exit 1; fi' orama-deploy-build %C/orama-build/%i/deps
+
+# Inside orama-privhelper's own five-minute limit on one command, so systemd
+# ends a hung install and reports it, rather than the helper abandoning the
+# `systemctl start` it is waiting on.
+TimeoutStartSec=240
+
+MemoryMax=1G
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=512
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-build-%i

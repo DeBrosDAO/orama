@@ -125,6 +125,26 @@ func (c *Client) CreateSSHEntry(ctx context.Context, host, username string) (*Va
 	return &resp.Data, nil
 }
 
+// DeleteSSHEntry removes a host's SSH key from the vault. An entry that does
+// not exist is already in the state asked for, so NOT_FOUND is not an error.
+func (c *Client) DeleteSSHEntry(ctx context.Context, host, username string) error {
+	path := fmt.Sprintf("/v1/vault/ssh/%s/%s", url.PathEscape(host), url.PathEscape(username))
+
+	var resp apiResponse[struct{}]
+	status, err := c.doJSON(ctx, "DELETE", path, nil, &resp)
+	if err != nil {
+		return err
+	}
+	if resp.OK {
+		return nil
+	}
+	aerr := c.apiError(resp.Error, resp.Code, status)
+	if aerr.Code == CodeNotFound {
+		return nil
+	}
+	return aerr
+}
+
 // GetPassword retrieves a stored password from the vault.
 func (c *Client) GetPassword(ctx context.Context, domain, username string) (*VaultPasswordData, error) {
 	path := fmt.Sprintf("/v1/vault/password/%s/%s",
@@ -162,6 +182,28 @@ func (c *Client) GetAddress(ctx context.Context, chain string) (*WalletAddressDa
 // The desktop app may prompt the user for approval on first use.
 func (c *Client) Sign(ctx context.Context, message, chain string) (*WalletSignData, error) {
 	body := map[string]any{"message": message, "chain": chain}
+
+	var resp apiResponse[WalletSignData]
+	status, err := c.doJSON(ctx, "POST", "/v1/wallet/sign", body, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, c.apiError(resp.Error, resp.Code, status)
+	}
+	return &resp.Data, nil
+}
+
+// PurposeOramaArchive scopes a signature to the Orama build-archive format.
+// The agent signs a message in that format only for this purpose, and only
+// for a caller granted wallet:sign:orama-archive; plain wallet:sign refuses it.
+const PurposeOramaArchive = "orama-archive"
+
+// SignForPurpose signs message under a domain-separated purpose. The agent
+// checks that the message parses as that purpose's format and that the caller
+// holds the purpose's own grant.
+func (c *Client) SignForPurpose(ctx context.Context, message, chain, purpose string) (*WalletSignData, error) {
+	body := map[string]any{"message": message, "chain": chain, "purpose": purpose}
 
 	var resp apiResponse[WalletSignData]
 	status, err := c.doJSON(ctx, "POST", "/v1/wallet/sign", body, &resp)

@@ -5,8 +5,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var forceFlag bool
-
 var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start all production services (requires sudo)",

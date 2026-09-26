@@ -2,10 +2,9 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,13 +39,36 @@ const (
 	ReadinessBlocked ReadinessState = "blocked"
 )
 
-// readiness tracks ReadinessState with the reason behind it, and closes a
-// channel the first time the gateway becomes ready so background work can wait
-// on it rather than poll.
+// ReadinessReason is the stable, public code for why a gateway is not ready.
+//
+// It is what an unauthenticated caller sees. The refusal used to carry the raw
+// error of the last attempt — rqlite addresses, SQL, internal step names — to
+// anyone who could reach the port; that text now stays in the log, where the
+// convergence loop records it with every attempt.
+type ReadinessReason string
+
+const (
+	// ReasonInitializing: the schema work has not reported yet.
+	ReasonInitializing ReadinessReason = "initializing"
+	// ReasonSchema: bringing the schema to the required version failed and is
+	// being retried (almost always: the local rqlite has no leader).
+	ReasonSchema ReadinessReason = "schema"
+	// ReasonPostSchema: the schema is up, but start-up work that gates
+	// readiness on it (post_schema.go) failed and is being retried.
+	ReasonPostSchema ReadinessReason = "post-schema"
+	// ReasonSchemaVersion: the schema is below what this binary requires
+	// (ReadinessBlocked).
+	ReasonSchemaVersion ReadinessReason = "schema-version"
+)
+
+// readiness tracks ReadinessState with the reason behind it — a public code
+// and the internal detail — and closes a channel the first time the gateway
+// becomes ready so background work can wait on it rather than poll.
 type readiness struct {
 	mu       sync.RWMutex
 	state    ReadinessState
-	reason   string
+	code     ReadinessReason
+	detail   string
 	since    time.Time
 	readyCh  chan struct{}
 	readOnce sync.Once
@@ -55,20 +77,24 @@ type readiness struct {
 func newReadiness() readiness {
 	return readiness{
 		state:   ReadinessStarting,
-		reason:  "waiting for the database schema",
+		code:    ReasonInitializing,
+		detail:  "waiting for the database schema",
 		since:   time.Now(),
 		readyCh: make(chan struct{}),
 	}
 }
 
-func (r *readiness) set(state ReadinessState, reason string) {
+// set records a state. code is what callers are told; detail is for the
+// process itself (Readiness) and must never be written to a response.
+func (r *readiness) set(state ReadinessState, code ReadinessReason, detail string) {
 	r.mu.Lock()
-	if r.state == state && r.reason == reason {
+	if r.state == state && r.code == code && r.detail == detail {
 		r.mu.Unlock()
 		return
 	}
 	r.state = state
-	r.reason = reason
+	r.code = code
+	r.detail = detail
 	r.since = time.Now()
 	ch := r.readyCh
 	r.mu.Unlock()
@@ -109,7 +135,7 @@ func (r *readiness) waitReady(ctx context.Context) bool {
 	}
 }
 
-func (r *readiness) snapshot() (ReadinessState, string, time.Time) {
+func (r *readiness) snapshot() (ReadinessState, ReadinessReason, string, time.Time) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.state == "" {
@@ -117,15 +143,26 @@ func (r *readiness) snapshot() (ReadinessState, string, time.Time) {
 		// starting, not ready. It matters because readiness is a value field on
 		// Gateway: a Gateway assembled without New — only tests do that — must
 		// fail closed rather than serve as if it had converged.
-		return ReadinessStarting, "not initialized", r.since
+		return ReadinessStarting, ReasonInitializing, "not initialized", r.since
 	}
-	return r.state, r.reason, r.since
+	return r.state, r.code, r.detail, r.since
 }
 
-// Readiness reports the gateway's start-up state and the reason for it.
+// Readiness reports the gateway's start-up state and the internal detail
+// behind it. The detail is for the process and its log, not for a response.
 func (g *Gateway) Readiness() (ReadinessState, string) {
-	state, reason, _ := g.ready.snapshot()
-	return state, reason
+	state, _, detail, _ := g.ready.snapshot()
+	return state, detail
+}
+
+// publicReadiness is what a response may say about a gateway that is not
+// ready: the state, the stable reason code, and since when.
+func publicReadiness(state ReadinessState, code ReadinessReason, since time.Time) map[string]any {
+	return map[string]any{
+		"status": string(state),
+		"reason": string(code),
+		"since":  since,
+	}
 }
 
 // AwaitReady blocks until the gateway has finished starting up, or ctx is
@@ -136,7 +173,7 @@ func (g *Gateway) AwaitReady(ctx context.Context) bool {
 
 // IsReady reports whether the gateway has finished starting up.
 func (g *Gateway) IsReady() bool {
-	state, _, _ := g.ready.snapshot()
+	state, _, _, _ := g.ready.snapshot()
 	return state == ReadinessReady
 }
 
@@ -152,14 +189,14 @@ var (
 // "unknown" when it cannot be read — the log line is diagnostic, so a failure
 // to gather it must not interrupt the retry.
 func observedRaftState(ctx context.Context, cfg *Config) string {
-	hostPort := rqliteHostPortFromDSN(cfg.RQLiteDSN)
-	if hostPort == "" {
+	ep, err := rqlite.EndpointFromDSN(cfg.RQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)
+	if err != nil {
 		return "unknown"
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, raftStateProbeTimeout)
 	defer cancel()
 
-	state, err := rqlite.RaftState(probeCtx, hostPort)
+	state, err := rqlite.RaftState(probeCtx, ep)
 	if err != nil {
 		return "unknown"
 	}
@@ -168,23 +205,6 @@ func observedRaftState(ctx context.Context, cfg *Config) string {
 
 // raftStateProbeTimeout bounds the diagnostic /status read in the retry log.
 const raftStateProbeTimeout = 3 * time.Second
-
-// rqliteHostPortFromDSN extracts host:port from an rqlite DSN, dropping any
-// credentials. Returns "" when the DSN carries no usable address, which the
-// caller reads as "cannot tell".
-func rqliteHostPortFromDSN(dsn string) string {
-	if dsn == "" {
-		return ""
-	}
-	u, err := url.Parse(dsn)
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	if _, err := strconv.Atoi(u.Port()); err != nil {
-		return ""
-	}
-	return u.Host
-}
 
 // startSchemaReadiness brings the gateway's schema up in the background and
 // publishes the outcome as readiness.
@@ -198,12 +218,19 @@ func rqliteHostPortFromDSN(dsn string) string {
 // "not ready yet". Separating the two lets the honest answer be given for each:
 // keep retrying the transient one, refuse to serve on the permanent one.
 func (g *Gateway) startSchemaReadiness(ctx context.Context, cfg *Config, deps *Dependencies) {
+	// See post_schema.go for what runs after the schema, and which of it
+	// gates readiness.
+	steps := g.postSchemaSteps(cfg, deps)
 	prepare := func(attemptCtx context.Context) error {
-		return prepareSchema(attemptCtx, g.logger, cfg, deps)
+		if err := prepareSchema(attemptCtx, g.logger, cfg, deps); err != nil {
+			return err
+		}
+		return runGatingSteps(attemptCtx, steps)
 	}
 	raftState := func() string { return observedRaftState(ctx, cfg) }
 
 	go g.convergeSchema(ctx, prepare, raftState)
+	go g.runAfterReady(ctx, g.afterReadySteps(ctx, deps))
 }
 
 // convergeSchema is startSchemaReadiness's loop, with its two effects injected
@@ -216,7 +243,7 @@ func (g *Gateway) convergeSchema(ctx context.Context, prepare func(context.Conte
 		attempt++
 		err := prepare(ctx)
 		if err == nil {
-			g.ready.set(ReadinessReady, "")
+			g.ready.set(ReadinessReady, "", "")
 			g.logger.ComponentInfo(logging.ComponentGeneral, "Gateway ready: schema is at the required version",
 				zap.Int("attempts", attempt))
 			return
@@ -225,7 +252,7 @@ func (g *Gateway) convergeSchema(ctx context.Context, prepare func(context.Conte
 		if isSchemaContractViolation(err) {
 			// A leader answered and told us the schema is behind. Retrying
 			// cannot change that, and serving on it corrupts data.
-			g.ready.set(ReadinessBlocked, err.Error())
+			g.ready.set(ReadinessBlocked, ReasonSchemaVersion, err.Error())
 			g.logger.ComponentError(logging.ComponentGeneral,
 				"Gateway will not serve: the database schema is below the version this binary requires. "+
 					"Migrate the database or roll this binary back; retrying will not help.",
@@ -233,7 +260,7 @@ func (g *Gateway) convergeSchema(ctx context.Context, prepare func(context.Conte
 			return
 		}
 
-		g.ready.set(ReadinessStarting, err.Error())
+		g.ready.set(ReadinessStarting, retryReason(err), err.Error())
 		g.logger.ComponentWarn(logging.ComponentGeneral,
 			"Gateway not ready yet, retrying schema preparation",
 			zap.Int("attempt", attempt),
@@ -254,6 +281,14 @@ func (g *Gateway) convergeSchema(ctx context.Context, prepare func(context.Conte
 			backoff = schemaRetryMaxBackoff
 		}
 	}
+}
+
+// retryReason is the public code for a failed, retried attempt.
+func retryReason(err error) ReadinessReason {
+	if errors.Is(err, errPostSchemaStep) {
+		return ReasonPostSchema
+	}
+	return ReasonSchema
 }
 
 // readinessPassthrough is what stays reachable while the gateway cannot serve:
@@ -281,21 +316,19 @@ func readinessPassthrough(p string) bool {
 }
 
 // readinessGate refuses traffic the gateway cannot serve correctly yet, with a
-// reason, instead of letting it reach handlers that will fail on a database
-// with no leader or a schema below the one they were written against.
+// reason code, instead of letting it reach handlers that will fail on a
+// database with no leader or a schema below the one they were written against.
+// The refusal is unauthenticated, so it carries the code, never the error.
 func (g *Gateway) readinessGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		state, reason, since := g.ready.snapshot()
+		state, code, _, since := g.ready.snapshot()
 		if state == ReadinessReady || readinessPassthrough(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"error":  fmt.Sprintf("gateway is %s", state),
-			"status": string(state),
-			"reason": reason,
-			"since":  since,
-		})
+		body := publicReadiness(state, code, since)
+		body["error"] = fmt.Sprintf("gateway is %s", state)
+		writeJSON(w, http.StatusServiceUnavailable, body)
 	})
 }

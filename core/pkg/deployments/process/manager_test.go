@@ -418,8 +418,8 @@ func TestDirSize(t *testing.T) {
 // pasted into it — a namespace key, so an application compromise was a
 // namespace takeover.
 func TestStart_writesTheDeploymentsOwnCredential(t *testing.T) {
-	dir := t.TempDir()
-	m := &Manager{logger: zap.NewNop(), envDir: dir}
+	st := newRecordingStager()
+	m := &Manager{logger: zap.NewNop(), stager: st}
 	m.SetWorkloadTokenMinter(func(_ context.Context, namespace, name string) (string, error) {
 		return "token-for-" + namespace + "-" + name, nil
 	})
@@ -428,22 +428,8 @@ func TestStart_writesTheDeploymentsOwnCredential(t *testing.T) {
 	if err := m.writeWorkloadToken(context.Background(), deployment, "orama-deploy-acme-web"); err != nil {
 		t.Fatalf("writeWorkloadToken: %v", err)
 	}
-
-	path := filepath.Join(dir, "orama-deploy-acme-web.token")
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("the credential was not written: %v", err)
-	}
-	if string(contents) != "token-for-acme-web" {
-		t.Errorf("the file holds %q", contents)
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("the credential is mode %o, want 0600 — only the gateway may read it before systemd stages it", perm)
+	if st.token["acme-web"] != "token-for-acme-web" {
+		t.Errorf("staged %q", st.token["acme-web"])
 	}
 }
 
@@ -451,7 +437,7 @@ func TestStart_writesTheDeploymentsOwnCredential(t *testing.T) {
 // with no identity. The unit refuses to start without the file anyway, and a
 // deployment that ran with no credential is the situation this replaces.
 func TestStart_refusesToStartADeploymentWithNoIdentity(t *testing.T) {
-	m := &Manager{logger: zap.NewNop(), envDir: t.TempDir()}
+	m := &Manager{logger: zap.NewNop(), stager: newRecordingStager()}
 	deployment := &deployments.Deployment{Namespace: "acme", Name: "web", Type: deployments.DeploymentTypeGoBackend}
 
 	if err := m.writeWorkloadToken(context.Background(), deployment, "orama-deploy-acme-web"); err == nil {
@@ -469,18 +455,18 @@ func TestStart_refusesToStartADeploymentWithNoIdentity(t *testing.T) {
 // The credential goes when the deployment does. Leaving it behind leaves a
 // working token on the node after the thing it belonged to is gone.
 func TestStop_removesTheCredential(t *testing.T) {
-	dir := t.TempDir()
-	m := &Manager{logger: zap.NewNop(), envDir: dir}
+	st := newRecordingStager()
+	m := &Manager{logger: zap.NewNop(), stager: st}
 	m.SetWorkloadTokenMinter(func(context.Context, string, string) (string, error) { return "token", nil })
 
 	deployment := &deployments.Deployment{Namespace: "acme", Name: "web", Type: deployments.DeploymentTypeGoBackend}
 	if err := m.writeWorkloadToken(context.Background(), deployment, "orama-deploy-acme-web"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.removeWorkloadToken("orama-deploy-acme-web"); err != nil {
-		t.Fatalf("removeWorkloadToken: %v", err)
+	if err := m.removeSecrets("orama-deploy-acme-web"); err != nil {
+		t.Fatalf("removeSecrets: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "orama-deploy-acme-web.token")); !os.IsNotExist(err) {
-		t.Error("the credential is still on the node after the deployment was removed")
+	if _, ok := st.token["acme-web"]; ok {
+		t.Error("the credential is still staged after the deployment was removed")
 	}
 }

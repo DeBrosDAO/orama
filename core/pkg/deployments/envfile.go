@@ -93,6 +93,31 @@ func ValidateEnv(env map[string]string) error {
 	return nil
 }
 
+// MaxEnvFileBytes caps a tenant's environment, measured as the file it
+// renders to.
+//
+// orama-privhelper refuses to stage an environment file over its own limit
+// (privhelper.MaxDeploySecretBytes, 256 KiB), and the file it stages is the
+// tenant's variables plus the platform's. This cap is on the tenant's part
+// alone, where it is set and stored, and leaves room for the platform's — so
+// an environment that is accepted can always be started. A test holds the two
+// together.
+const MaxEnvFileBytes = 224 * 1024
+
+// ValidateEnvSize refuses a tenant environment over MaxEnvFileBytes. It is for
+// the tenant's own variables — where they are set and stored — not for the
+// merged environment the process manager renders.
+func ValidateEnvSize(env map[string]string) error {
+	size := 0
+	for key, value := range env {
+		size += len(key) + len("=") + len(EncodeEnvFileValue(value)) + len("\n")
+	}
+	if size > MaxEnvFileBytes {
+		return fmt.Errorf("the environment renders to %d bytes, over the %d-byte limit for a deployment's environment", size, MaxEnvFileBytes)
+	}
+	return nil
+}
+
 // EncodeEnvFileValue returns value as a systemd EnvironmentFile right-hand
 // side: the whole value double-quoted, with the four characters systemd treats
 // as escapable inside double quotes escaped.

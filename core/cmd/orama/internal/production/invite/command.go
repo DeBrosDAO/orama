@@ -6,14 +6,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
-	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
-	"github.com/DeBrosOfficial/network/pkg/invite"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
+	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/invite"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,7 +32,7 @@ type Options struct {
 // Run creates a new invite token.
 func Run(opts Options) error {
 	// Must run on a cluster node with RQLite running locally
-	domain, err := readNodeDomain()
+	domain, publicIP, err := readNodeIdentity(config.ProductionNodeConfigPath)
 	if err != nil {
 		return clierr.NotFound("could not read the node config: %w\n"+
 			"  Run this on an installed node", err)
@@ -60,21 +64,25 @@ func Run(opts Options) error {
 			"  Make sure RQLite is running on this node", err)
 	}
 
-	joinURL := "https://" + domain
-
-	// The fingerprint the joining node pins instead of trusting whatever
-	// certificate it is first shown. Failing to read it is reported rather
-	// than quietly producing an invite with no pinning.
-	fingerprint, err := invite.Fingerprint(domain)
+	// The invite names THIS node, by address, and the certificate it serves.
+	// It used to name https://<domain>, which DNS spreads across every
+	// nameserver — each serving a certificate of its own — so a joining node
+	// that reached a different node than the one fingerprinted here failed its
+	// pin. The fingerprint is read from this node's own listener, without
+	// verification: the joining node's pin is the check, and a staging or
+	// not-yet-trusted certificate must still be pinnable.
+	joinURL := "https://" + publicIP
+	fingerprint, err := invite.FingerprintServed(net.JoinHostPort(localhostIP, strconv.Itoa(httpsPort)), domain)
 	if err != nil {
 		return clierr.Unavailable("could not read this node's TLS certificate: %w\n"+
-			"  The joining node needs its fingerprint to verify the cluster", err)
+			"  The joining node needs its fingerprint to verify the cluster; check that Caddy has a certificate for %s", err, domain)
 	}
 
 	encoded, err := invite.Encode(invite.Invite{
 		JoinURL:       joinURL,
 		Token:         token,
 		CAFingerprint: fingerprint,
+		SNI:           domain,
 	})
 	if err != nil {
 		return clierr.Failure("could not encode the invite: %w", err)
@@ -94,30 +102,39 @@ func Run(opts Options) error {
 	return nil
 }
 
-// getTLSCertFingerprint connects to the domain over TLS and returns the
+// localhostIP and httpsPort are where this node serves HTTPS to itself.
+const (
+	localhostIP = "127.0.0.1"
+	httpsPort   = 443
+)
 
-// readNodeDomain reads the domain from the node config file
-func readNodeDomain() (string, error) {
-	configPath := "/opt/orama/.orama/configs/node.yaml"
+// readNodeIdentity reads the node's domain and public address from node.yaml
+// at configPath.
+func readNodeIdentity(configPath string) (domain, publicIP string, err error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return "", fmt.Errorf("read config: %w", err)
+		return "", "", fmt.Errorf("read config: %w", err)
 	}
 
 	var config struct {
 		Node struct {
-			Domain string `yaml:"domain"`
+			Domain   string `yaml:"domain"`
+			PublicIP string `yaml:"public_ip"`
 		} `yaml:"node"`
 	}
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return "", fmt.Errorf("parse config: %w", err)
+		return "", "", fmt.Errorf("parse config: %w", err)
 	}
-
 	if config.Node.Domain == "" {
-		return "", fmt.Errorf("node domain not set in config")
+		return "", "", fmt.Errorf("node domain not set in config")
 	}
-
-	return config.Node.Domain, nil
+	// node.yaml is the orama user's; the join URL a joining node trusts is
+	// built from this, so it is checked, not taken as-is.
+	if err := install.ValidatePublicIP(config.Node.PublicIP); err != nil {
+		return "", "", fmt.Errorf("node.public_ip in %s is not usable (%v); run `orama node upgrade` on this node with this release, "+
+			"which records it (add --public-ip <this node's public IP> if it cannot be detected)", configPath, err)
+	}
+	return config.Node.Domain, config.Node.PublicIP, nil
 }
 
 // insertToken inserts an invite token into RQLite via HTTP API using parameterized queries.
@@ -135,21 +152,26 @@ func insertToken(token, createdBy, expiresAt string) error {
 		return fmt.Errorf("failed to marshal query: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", constants.LocalRQLiteURL()+"/db/execute", bytes.NewReader(payload))
+	ep, err := rqlite.LocalNodeEndpoint()
 	if err != nil {
 		return err
 	}
+	req, err := http.NewRequest(http.MethodPost, ep.BaseURL()+"/db/execute", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build RQLite request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(ep.Username, ep.Password)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to connect to RQLite: %w", err)
+		return fmt.Errorf("failed to connect to RQLite at %s: %w", ep, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("RQLite returned status %d", resp.StatusCode)
+		return fmt.Errorf("RQLite at %s returned status %d", ep, resp.StatusCode)
 	}
 
 	return nil

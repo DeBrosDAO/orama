@@ -40,15 +40,11 @@ func (r *RQLiteManager) connect(ctx context.Context) error {
 	// The /nodes endpoint probes all cluster members including unreachable ones,
 	// which can block for the full HTTP timeout (~10s per attempt).
 	// This is safe because rqlited followers automatically forward writes to the leader.
-	host := "127.0.0.1"
-	if r.discoverConfig != nil {
-		host = BindHost(r.discoverConfig.HttpAdvAddress)
+	ep, err := r.LocalEndpoint()
+	if err != nil {
+		return err
 	}
-	user, pass := "", ""
-	if r.config != nil {
-		user, pass = r.config.RQLiteUsername, r.config.RQLitePassword
-	}
-	connURL := buildRQLiteDSN(host, r.config.RQLitePort, user, pass)
+	connURL := ep.SQLDSN(adapterReadConsistencyLevel)
 
 	backoff := connectBaseBackoff
 	var lastErr error
@@ -73,16 +69,16 @@ func (r *RQLiteManager) connect(ctx context.Context) error {
 		lastErr = err
 
 		if !strings.Contains(err.Error(), "store is not open") {
-			return fmt.Errorf("failed to connect to RQLite: %w", err)
+			return fmt.Errorf("failed to connect to RQLite at %s: %s", ep, RedactError(err, connURL))
 		}
 
 		r.logger.Debug("RQLite store not open yet, retrying",
 			zap.Int("attempt", attempt+1),
-			zap.Error(err))
+			zap.String("error", RedactError(err, connURL)))
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("connecting to RQLite cancelled after %d attempts (last error: %v): %w", attempt+1, lastErr, ctx.Err())
+			return fmt.Errorf("connecting to RQLite at %s cancelled after %d attempts (last error: %s): %w", ep, attempt+1, RedactError(lastErr, connURL), ctx.Err())
 		case <-time.After(backoff):
 		}
 		backoff = time.Duration(float64(backoff) * connectBackoffGrowth)
@@ -91,7 +87,7 @@ func (r *RQLiteManager) connect(ctx context.Context) error {
 		}
 	}
 
-	return fmt.Errorf("RQLite store still not open after %d attempts: %w", connectMaxAttempts, lastErr)
+	return fmt.Errorf("RQLite store at %s still not open after %d attempts: %s", ep, connectMaxAttempts, RedactError(lastErr, connURL))
 }
 
 // rqliteReadyTimeout matches the previous 180 one-second attempts.
@@ -99,7 +95,11 @@ const rqliteReadyTimeout = 3 * time.Minute
 
 // waitForReady waits until the local rqlited is participating in raft.
 func (r *RQLiteManager) waitForReady(ctx context.Context) error {
-	return WaitForRaftReady(ctx, r.config.RQLitePort, rqliteReadyTimeout)
+	ep, err := r.LocalEndpoint()
+	if err != nil {
+		return err
+	}
+	return WaitForRaftReady(ctx, ep, rqliteReadyTimeout)
 }
 
 // waitForSQLAvailable waits until a simple query succeeds

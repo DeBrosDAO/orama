@@ -10,9 +10,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// DefaultListenAddr is the localhost HTTP API for orama-namespace-pubsub@index.
-const DefaultListenAddr = "127.0.0.1:10105"
-
 type publishBody struct {
 	Namespace string `json:"namespace"`
 	Topic     string `json:"topic"`
@@ -25,7 +22,9 @@ type publishBatchBody struct {
 	BestEffort bool          `json:"best_effort"`
 }
 
-// Handler serves the localhost pubsub HTTP API on top of a Manager.
+// Handler serves the node's pubsub HTTP API on top of a Manager. It trusts the
+// namespace a request names, so it must only be served on a listener that
+// admits the gateways alone (ListenSocket).
 func Handler(mgr *Manager, logger *zap.Logger) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()

@@ -7,37 +7,46 @@ import (
 	"strings"
 )
 
-// BindAddr is the host:port rqlited should listen on. adv is the advertised
-// address (WireGuard IP:port). Binding 0.0.0.0 / :: is refused; without an
-// advertise host we fall back to loopback so a single-node without mesh still
-// starts.
+// BindAddr is the host:port rqlited listens on: the host of its advertise
+// address (the WireGuard IP) with the given port.
+//
+// rqlited never binds a wildcard or a guessed loopback. Admin calls, joins and
+// leader-forwarded writes all use the advertised address, and every client on
+// the node reaches it there (see Endpoint), so an advertise address without a
+// usable host is a configuration error rather than something to paper over.
 func BindAddr(adv string, port int) (string, error) {
-	host := BindHost(adv)
-	if host == "0.0.0.0" || host == "::" || host == "[::]" {
-		return "", fmt.Errorf("rqlite must not bind %q", host)
+	host, err := BindHost(adv)
+	if err != nil {
+		return "", err
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
-// BindHost is the IP rqlited (and local DSNs) should use. Empty or wildcard
-// advertise addresses become 127.0.0.1.
-func BindHost(adv string) string {
+// BindHost is the host rqlited listens on for advertise address adv
+// ("10.0.0.4:10100" or a bare "10.0.0.4"). An empty, wildcard or unparseable
+// address is an error: there is no host that rqlited and its clients could
+// both agree on.
+func BindHost(adv string) (string, error) {
 	adv = strings.TrimSpace(adv)
 	if adv == "" {
-		return "127.0.0.1"
+		return "", fmt.Errorf("rqlite advertise address is empty — set discovery.http_adv_address (index) or the instance's HTTPAdvAddress to this node's WireGuard IP:port")
 	}
-	if host, _, err := net.SplitHostPort(adv); err == nil {
-		host = strings.Trim(host, "[]")
-		if host == "" || host == "0.0.0.0" || host == "::" {
-			return "127.0.0.1"
-		}
-		return host
+	host := adv
+	if h, _, err := net.SplitHostPort(adv); err == nil {
+		host = h
 	}
-	if ip := net.ParseIP(strings.Trim(adv, "[]")); ip != nil {
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return "", fmt.Errorf("rqlite advertise address %q has no host", adv)
+	}
+	if ip := net.ParseIP(host); ip != nil {
 		if ip.IsUnspecified() {
-			return "127.0.0.1"
+			return "", fmt.Errorf("rqlite advertise address %q is a wildcard — rqlited must bind this node's WireGuard IP", adv)
 		}
-		return ip.String()
+		return ip.String(), nil
 	}
-	return "127.0.0.1"
+	if strings.Contains(host, ":") {
+		return "", fmt.Errorf("rqlite advertise address %q is not host:port", adv)
+	}
+	return host, nil
 }

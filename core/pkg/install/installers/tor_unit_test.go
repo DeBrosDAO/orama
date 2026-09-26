@@ -105,11 +105,16 @@ func TestTorUnit_isSupervisedLikeTheOtherIndexUnits(t *testing.T) {
 		"PartOf":                "orama-node.service",
 		"StartLimitIntervalSec": "0",
 		"Restart":               "always",
-		"EnvironmentFile":       "-/opt/orama/.orama/data/namespaces/%i/tor.env",
 		"SyslogIdentifier":      "orama-tor-%i",
 	} {
 		if got := d[key]; len(got) != 1 || got[0] != value {
 			t.Errorf("%s = %v, want %q", key, got, value)
 		}
+	}
+	// Tor runs as debian-tor. An env file would be written by the orama user
+	// for a process it does not own, so the unit reads none and
+	// orama-privhelper refuses to write one.
+	if got := d["EnvironmentFile"]; len(got) != 0 {
+		t.Errorf("EnvironmentFile = %v, want none", got)
 	}
 }

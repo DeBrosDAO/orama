@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -369,7 +371,7 @@ func TestRotate_writesTheReplacementWhereTheNextBootReadsIt(t *testing.T) {
 		t.Fatalf("Rotate: %v", err)
 	}
 
-	info, err := os.Stat(filepath.Join(dir, "secrets", EdDSAKeyFileName))
+	info, err := os.Stat(filepath.Join(dir, EdDSAKeyFileName))
 	if err != nil {
 		t.Fatalf("the replacement key was not written: %v", err)
 	}
@@ -379,6 +381,82 @@ func TestRotate_writesTheReplacementWhereTheNextBootReadsIt(t *testing.T) {
 	if next.KID != svc.SigningKID() {
 		t.Error("the key on disk is not the one being signed with")
 	}
+	if onDisk := readPersistedKey(t, dir); KeyIDFor(onDisk.Public().(ed25519.PublicKey)) != next.KID {
+		t.Error("the file the next boot reads is not the key the rotation switched to")
+	}
+}
+
+// A key published before it was written left the registry trusting a key whose
+// private half existed nowhere once the process restarted. The write comes
+// first now, and a failed write publishes nothing.
+func TestRotate_publishesNothingWhenTheKeyCannotBeWritten(t *testing.T) {
+	svc := serviceWithKey(t, "acme")
+	keys, db := signingKeyStore(t)
+	svc.signingKeys.registry = keys.registry
+	previousKID := svc.SigningKID()
+
+	missing := filepath.Join(t.TempDir(), "no-such-state-dir")
+	if _, err := svc.Rotate(context.Background(), missing); err == nil {
+		t.Fatal("rotation reported success with nowhere to write the key")
+	}
+
+	var published int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM signing_keys`).Scan(&published); err != nil {
+		t.Fatal(err)
+	}
+	if published != 0 {
+		t.Errorf("%d key(s) were published although the replacement was never written", published)
+	}
+	if svc.SigningKID() != previousKID {
+		t.Error("the gateway switched to a key it could not persist")
+	}
+}
+
+// A publish that fails after the write puts back the key still signing, so the
+// next boot does not silently switch to a key the cluster never heard of.
+func TestRotate_restoresTheKeyInUseWhenPublishFails(t *testing.T) {
+	svc := serviceWithKey(t, "acme")
+	keys, db := signingKeyStore(t)
+	svc.signingKeys.registry = keys.registry
+	previousKID := svc.SigningKID()
+	dir := t.TempDir()
+
+	if _, err := db.Exec(`DROP TABLE signing_keys`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Rotate(context.Background(), dir); err == nil {
+		t.Fatal("rotation reported success although the key was never published")
+	}
+
+	onDisk := readPersistedKey(t, dir)
+	if got := KeyIDFor(onDisk.Public().(ed25519.PublicKey)); got != previousKID {
+		t.Errorf("the key on disk is %s, want the one still signing (%s)", got, previousKID)
+	}
+	if svc.SigningKID() != previousKID {
+		t.Error("the gateway switched to a key nobody else will accept")
+	}
+}
+
+// readPersistedKey parses the signing key a state directory holds.
+func readPersistedKey(t *testing.T, stateDir string) ed25519.PrivateKey {
+	t.Helper()
+	data, err := os.ReadFile(SigningKeyPath(stateDir))
+	if err != nil {
+		t.Fatalf("read the persisted key: %v", err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		t.Fatal("the persisted key is not PEM")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse the persisted key: %v", err)
+	}
+	key, ok := parsed.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("the persisted key is a %T, not Ed25519", parsed)
+	}
+	return key
 }
 
 // A retired_at that is present and cannot be read is a key somebody meant to

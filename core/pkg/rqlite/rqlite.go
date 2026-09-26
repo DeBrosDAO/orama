@@ -4,14 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/http"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/config"
-	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"github.com/rqlite/gorqlite"
 	"go.uber.org/zap"
 )
@@ -32,7 +30,6 @@ type RQLiteManager struct {
 	// defaulting the raft id to the advertise address.
 	peerID           string
 	dataDir          string
-	nodeType         string // Node type identifier
 	logger           *zap.Logger
 	discoveryService *ClusterDiscoveryService
 
@@ -87,7 +84,7 @@ const (
 	leaderProbeTimeout = 10 * time.Second
 
 	// localStatusTimeout bounds the periodic "is my own rqlited alive" check.
-	// It only talks to localhost, so it can be short.
+	// It only talks to this node's own rqlited, so it can be short.
 	localStatusTimeout = 3 * time.Second
 )
 
@@ -172,7 +169,11 @@ func (r *RQLiteManager) JoinCluster(ctx context.Context) error {
 		return fmt.Errorf("rqlite: JoinCluster called before StartLocal opened a connection")
 	}
 
-	if err := WaitForRaftReady(ctx, r.config.RQLitePort, supervisedRaftReadyTimeout); err != nil {
+	ep, err := r.LocalEndpoint()
+	if err != nil {
+		return err
+	}
+	if err := WaitForRaftReady(ctx, ep, supervisedRaftReadyTimeout); err != nil {
 		return err
 	}
 
@@ -223,8 +224,7 @@ func (r *RQLiteManager) JoinCluster(ctx context.Context) error {
 	// Schema-drift visibility: even when apply returned nil, log if the
 	// schema isn't at the binary's required version. Helps operators spot
 	// lag in the rolling-upgrade window before the gateway flips fatal.
-	if db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort)); err == nil {
-		defer db.Close()
+	if db, err := r.localSQLHandle(); err == nil {
 		if assertErr := migrations.AssertSchema(ctx, db); assertErr != nil {
 			r.logger.Warn("Schema below required version after apply",
 				zap.Int("required", migrations.RequiredVersion()),
@@ -248,18 +248,14 @@ func (r *RQLiteManager) LocalHealthy(ctx context.Context) error {
 		return fmt.Errorf("rqlite: local connection is closed")
 	}
 
-	url := fmt.Sprintf("http://localhost:%d/status", r.config.RQLitePort)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	ep, err := r.LocalEndpoint()
 	if err != nil {
-		return fmt.Errorf("rqlite: build local status request: %w", err)
+		return fmt.Errorf("rqlite: %w", err)
 	}
-	resp, err := tlsutil.NewHTTPClient(localStatusTimeout).Do(req)
-	if err != nil {
-		return fmt.Errorf("rqlite: local rqlited on port %d is not answering — check orama-namespace-rqlite@index: %w", r.config.RQLitePort, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("rqlite: local rqlited on port %d returned HTTP %d", r.config.RQLitePort, resp.StatusCode)
+	statusCtx, cancel := context.WithTimeout(ctx, localStatusTimeout)
+	defer cancel()
+	if _, err := ep.Admin().Status(statusCtx); err != nil {
+		return fmt.Errorf("rqlite: local rqlited at %s is not answering — check orama-namespace-rqlite@index: %w", ep, err)
 	}
 	return nil
 }
@@ -349,7 +345,12 @@ func (r *RQLiteManager) shutdown() error {
 // transferLeadershipIfLeader checks if this node is the Raft leader and
 // requests a leadership transfer to minimize election disruption.
 func (r *RQLiteManager) transferLeadershipIfLeader() {
-	if err := TransferLeadership(r.config.RQLitePort, r.logger); err != nil {
+	ep, err := r.LocalEndpoint()
+	if err != nil {
+		r.logger.Warn("Leadership transfer skipped, relying on SIGTERM", zap.Error(err))
+		return
+	}
+	if err := TransferLeadership(ep, r.logger); err != nil {
 		r.logger.Warn("Leadership transfer failed, relying on SIGTERM", zap.Error(err))
 	}
 }

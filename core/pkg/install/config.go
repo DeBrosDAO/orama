@@ -3,9 +3,12 @@ package install
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
-	"os"
+	"net/netip"
+	"net/url"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/install/templates"
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
@@ -32,6 +36,12 @@ type ConfigGenerator struct {
 	SSHUser        string // Operator metadata
 	Environment    string
 	OperatorWallet string
+	// acmeCA is the ACME directory set for this install; empty carries the
+	// existing node.yaml's value forward (see ACMECA).
+	acmeCA string
+	// publicIP is this node's public address; empty carries the existing
+	// node.yaml's value forward.
+	publicIP string
 }
 
 // NewConfigGenerator creates a new config generator
@@ -104,17 +114,52 @@ func inferPeerIP(peers []string, vpsIP string) string {
 	return ""
 }
 
+// requireBaseDomain refuses an empty base domain. It is the zone CoreDNS
+// serves, the name Caddy issues for, the push.<zone> ntfy host and the
+// domain every deployment is routed under; there is no default. The installer
+// used to fall back to the node's own domain, and before that to a domain the
+// project no longer owns, which produced a node configured for the wrong zone.
+func requireBaseDomain(baseDomain string) error {
+	if strings.TrimSpace(baseDomain) == "" {
+		return fmt.Errorf("the base domain is empty: install takes it from --base-domain, a join from the " +
+			"joined cluster, and an upgrade from http_gateway.base_domain in node.yaml")
+	}
+	return nil
+}
+
+// requireOverlayWGIP refuses an address libp2p must not listen on. node.yaml
+// renders it as /ip4/<wg>/tcp/<port>. Empty renders /ip4//tcp/<port>, and a
+// public address would publish the swarm on the public interface.
+func requireOverlayWGIP(wgIP string) error {
+	ip := net.ParseIP(wgIP).To4()
+	if ip == nil || !constants.WireGuardOverlay().Contains(netip.AddrFrom4([4]byte(ip))) {
+		return fmt.Errorf("node.yaml listens on this node's WireGuard address, and %q is not one inside %s",
+			wgIP, constants.WireGuardSubnet)
+	}
+	return nil
+}
+
 // GenerateNodeConfig generates node.yaml configuration (unified architecture)
 func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP string, joinAddress string, domain string, baseDomain string, enableHTTPS bool) (string, error) {
-	// Generate node ID from domain or use default
-	nodeID := "node"
-	if domain != "" {
-		// Extract node identifier from domain (e.g., "node-123" from "node-123.orama.network")
-		parts := strings.Split(domain, ".")
-		if len(parts) > 0 {
-			nodeID = parts[0]
-		}
+	if err := requireBaseDomain(baseDomain); err != nil {
+		return "", err
 	}
+	// vpsIP is this node's WireGuard address. node.yaml listens libp2p on it;
+	// an empty value renders /ip4//tcp/<port> and orama-node does not start.
+	if err := requireOverlayWGIP(vpsIP); err != nil {
+		return "", err
+	}
+	// node.id and http_gateway.node_name are the node's libp2p peer id: the
+	// id its index services, dns_nodes, dns_nameservers and the raft
+	// membership already know it by. They used to be the first label of
+	// --domain, and a nameserver is installed with the base domain as its
+	// domain, so every nameserver of a cluster got the same id. Phase 3 has
+	// created the identity by now; this reads it back.
+	nodePeerID, err := NewSecretGenerator(cg.oramaDir).EnsureNodeIdentity()
+	if err != nil {
+		return "", fmt.Errorf("read the node identity for node.id: %w", err)
+	}
+	nodeID := nodePeerID.String()
 
 	// Determine advertise addresses - use vpsIP if provided
 	rqliteHTTP := strconv.Itoa(constants.RQLiteHTTPPort)
@@ -172,7 +217,7 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 		RQLiteUsername:         rqliteUser,
 		RQLitePassword:         rqlitePassword,
 		RQLiteAuthFile:         filepath.Join(cg.oramaDir, "secrets", "rqlite-auth.json"),
-		P2PPort:                4001,
+		P2PPort:                constants.NodeLibP2PPort,
 		DataDir:                filepath.Join(cg.oramaDir, "data"),
 		RQLiteHTTPPort:         constants.RQLiteHTTPPort,
 		RQLiteRaftPort:         constants.RQLiteRaftPort,
@@ -213,21 +258,21 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	// NOT generate here: generation/distribution is owned by SecretGenerator
 	// and the join flow so every node in a cluster shares one key.
 	secretsKeyPath := filepath.Join(cg.oramaDir, "secrets", "secrets-encryption-key")
-	if keyBytes, err := os.ReadFile(secretsKeyPath); err == nil {
+	keyBytes, err := OramaRoot(cg.oramaDir).ReadFile(secretsKeyPath, rootfs.SmallFileLimit)
+	switch {
+	case err == nil:
 		data.SecretsEncryptionKey = strings.TrimSpace(string(keyBytes))
+	case !errors.Is(err, fs.ErrNotExist):
+		return "", fmt.Errorf("read the secrets encryption key: %w", err)
 	}
 
 	// Shared self-hosted ntfy base URL (bugboard #858). Derive it the SAME way
 	// the orchestrator derives the ntfy server + Caddy reverse-proxy host
-	// (push.<dnsZone>, dnsZone = baseDomain or the node domain), so the gateway's
-	// NtfyBaseURL matches and the push provider fans each publish out to every
-	// active push node instead of single-host delivery. Without this the fan-out
-	// code is inert and ~87% of publishes never reach a pinned subscriber.
-	if dnsZone := baseDomain; dnsZone != "" {
-		data.NtfyBaseURL = "https://push." + dnsZone
-	} else if domain != "" {
-		data.NtfyBaseURL = "https://push." + domain
-	}
+	// (push.<baseDomain>), so the gateway's NtfyBaseURL matches and the push
+	// provider fans each publish out to every active push node instead of
+	// single-host delivery. Without this the fan-out code is inert and ~87% of
+	// publishes never reach a pinned subscriber.
+	data.NtfyBaseURL = "https://push." + baseDomain
 
 	// WebRTC/TURN config (feat-124 #913). The TURN secret lives in the secrets
 	// dir so it survives Phase4 config regeneration; turn_domain/sfu_port/enabled
@@ -247,7 +292,126 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	// as bugboard #259/#846).
 	cg.populateSNIRouterConfig(&data)
 
+	acmeCA, err := cg.ACMECA()
+	if err != nil {
+		return "", err
+	}
+	data.ACMECA = acmeCA
+
+	publicIP, err := cg.PublicIP()
+	if err != nil {
+		return "", err
+	}
+	data.PublicIP = publicIP
+
 	return templates.RenderNodeConfig(data)
+}
+
+// readNodeConfig reads the existing node.yaml. It belongs to the orama user,
+// so it is read without following a symlink and only up to a size limit.
+func (cg *ConfigGenerator) readNodeConfig() ([]byte, error) {
+	return OramaRoot(cg.oramaDir).ReadFile(filepath.Join(cg.oramaDir, "configs", "node.yaml"), rootfs.SmallFileLimit)
+}
+
+// SetPublicIP sets this node's public address (the install's --vps-ip).
+func (cg *ConfigGenerator) SetPublicIP(ip string) { cg.publicIP = ip }
+
+// PublicIP is the address set for this run, else the one the existing
+// node.yaml carries, else "".
+func (cg *ConfigGenerator) PublicIP() (string, error) {
+	if cg.publicIP != "" {
+		return cg.publicIP, nil
+	}
+	raw, err := cg.readNodeConfig()
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read node.yaml for node.public_ip: %w", err)
+	}
+	var parsed struct {
+		Node struct {
+			PublicIP string `yaml:"public_ip"`
+		} `yaml:"node"`
+	}
+	if err := yaml.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse node.yaml for node.public_ip: %w", err)
+	}
+	return parsed.Node.PublicIP, nil
+}
+
+// sharedAddressSpace is 100.64.0.0/10 (RFC 6598), carrier-grade NAT: global
+// unicast by Go's definition, and not reachable from the internet.
+var sharedAddressSpace = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// ValidatePublicIP accepts an address other nodes can reach this one on from
+// the internet: IPv4 (invite join URLs are https://<ip>), global unicast, not
+// private and not carrier-grade NAT.
+func ValidatePublicIP(s string) error {
+	ip := net.ParseIP(s)
+	switch {
+	case ip == nil:
+		return fmt.Errorf("%q is not an IP address", s)
+	case ip.To4() == nil:
+		return fmt.Errorf("%s is not an IPv4 address", s)
+	case !ip.IsGlobalUnicast() || ip.IsPrivate() || sharedAddressSpace.Contains(ip):
+		return fmt.Errorf("%s is not a public unicast address", s)
+	default:
+		return nil
+	}
+}
+
+// SetACMECA sets the ACME directory for this install (validated by the caller).
+func (cg *ConfigGenerator) SetACMECA(url string) { cg.acmeCA = url }
+
+// ACMECA is the ACME directory Caddy issues from: the one set for this run,
+// else the one the existing node.yaml carries, else "" (Caddy's default, Let's
+// Encrypt production). An unreadable node.yaml is an error rather than a
+// silent default: dropping a staging CA back to production on a regeneration
+// would spend the rate limits it exists to protect.
+func (cg *ConfigGenerator) ACMECA() (string, error) {
+	if cg.acmeCA != "" {
+		return cg.acmeCA, nil
+	}
+	raw, err := cg.readNodeConfig()
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read node.yaml for tls.acme_ca: %w", err)
+	}
+	var parsed struct {
+		TLS struct {
+			ACMECA string `yaml:"acme_ca"`
+		} `yaml:"tls"`
+	}
+	if err := yaml.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse node.yaml for tls.acme_ca: %w", err)
+	}
+	// node.yaml belongs to the orama user and this value lands in the
+	// Caddyfile root writes, so it is checked again rather than trusted for
+	// having been checked at install.
+	if ca := parsed.TLS.ACMECA; ca != "" {
+		if err := ValidateACMECA(ca); err != nil {
+			return "", fmt.Errorf("node.yaml tls.acme_ca: %w", err)
+		}
+	}
+	return parsed.TLS.ACMECA, nil
+}
+
+// acmeCACaddyfileChars are characters that would let an acme_ca value end its
+// line or block in the Caddyfile's global options and write directives of its
+// own.
+const acmeCACaddyfileChars = " \t\r\n{}\""
+
+// ValidateACMECA accepts an https ACME directory URL — the check install
+// applies to --acme-ca (install.Flags.resolveACMECA).
+func ValidateACMECA(ca string) error {
+	u, err := url.Parse(ca)
+	if err != nil || u.Scheme != "https" || u.Host == "" || strings.ContainsAny(ca, acmeCACaddyfileChars) {
+		return fmt.Errorf("%q is not an https ACME directory URL", ca)
+	}
+	return nil
 }
 
 // populateSNIRouterConfig carries forward the operator-set sni_router.enabled
@@ -270,8 +434,7 @@ func (cg *ConfigGenerator) SNIRouterEnabled() bool {
 // flag out of the existing node.yaml. Returns false when the file is missing,
 // malformed, or has no sni_router block (fresh install / not opted in).
 func (cg *ConfigGenerator) readExistingSNIRouterEnabled() bool {
-	configPath := filepath.Join(cg.oramaDir, "configs", "node.yaml")
-	raw, err := os.ReadFile(configPath)
+	raw, err := cg.readNodeConfig()
 	if err != nil {
 		return false // No existing config (fresh install) — default off.
 	}
@@ -315,8 +478,12 @@ func (cg *ConfigGenerator) populateWebRTCConfig(data *templates.NodeConfigData) 
 	// from the existing node.yaml and persist it so it is durable.
 	secret := ""
 	secretPath := filepath.Join(cg.oramaDir, "secrets", "turn-secret")
-	if b, err := os.ReadFile(secretPath); err == nil {
+	b, err := OramaRoot(cg.oramaDir).ReadFile(secretPath, rootfs.SmallFileLimit)
+	switch {
+	case err == nil:
 		secret = strings.TrimSpace(string(b))
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("read the TURN secret: %w", err)
 	}
 	if secret == "" && existing != nil && existing.TURNSecret != "" {
 		secret = existing.TURNSecret
@@ -347,8 +514,7 @@ func (cg *ConfigGenerator) populateWebRTCConfig(data *templates.NodeConfigData) 
 // readExistingWebRTC parses just the http_gateway.webrtc block out of the
 // existing node.yaml. Absence of the file or block is tolerated (returns nil).
 func (cg *ConfigGenerator) readExistingWebRTC() *existingWebRTC {
-	configPath := filepath.Join(cg.oramaDir, "configs", "node.yaml")
-	raw, err := os.ReadFile(configPath)
+	raw, err := cg.readNodeConfig()
 	if err != nil {
 		return nil // No existing config (fresh install) — nothing to carry forward.
 	}
@@ -382,18 +548,19 @@ func (cg *ConfigGenerator) readExistingWebRTC() *existingWebRTC {
 // persistTURNSecret writes the TURN secret to the secrets dir with 0600 perms
 // and correct ownership, making it durable across future config regenerations.
 func (cg *ConfigGenerator) persistTURNSecret(secret string) error {
+	root := OramaRoot(cg.oramaDir)
 	secretPath := filepath.Join(cg.oramaDir, "secrets", "turn-secret")
 	secretDir := filepath.Dir(secretPath)
-	if err := os.MkdirAll(secretDir, 0700); err != nil {
+	if err := root.MkdirAll(secretDir, 0700); err != nil {
 		return fmt.Errorf("failed to create secrets directory: %w", err)
 	}
-	if err := os.Chmod(secretDir, 0700); err != nil {
+	if err := root.Chmod(secretDir, 0700); err != nil {
 		return fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
-	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+	if err := root.WriteFile(secretPath, []byte(secret), 0600); err != nil {
 		return fmt.Errorf("failed to persist TURN secret: %w", err)
 	}
-	if err := ensureSecretFilePermissions(secretPath); err != nil {
+	if err := ensureSecretFilePermissions(root, secretPath); err != nil {
 		return err
 	}
 	return nil
@@ -419,22 +586,8 @@ listen_address = %s
 client_port = %d
 peer_port = 7501
 data_dir = %s
-rqlite_url = http://127.0.0.1:%d
-`, bindAddr, constants.VaultHTTPPort, dataDir, constants.RQLiteHTTPPort)
-}
-
-// GenerateGatewayConfig generates gateway.yaml configuration
-func (cg *ConfigGenerator) GenerateGatewayConfig(peerAddresses []string, enableHTTPS bool, domain string, olricServers []string) (string, error) {
-	data := templates.GatewayConfigData{
-		ListenPort:     constants.GatewayAPIPort,
-		BootstrapPeers: peerAddresses,
-		OlricServers:   olricServers,
-		ClusterAPIPort: constants.IPFSClusterAPIPort,
-		IPFSAPIPort:    constants.IPFSAPIPort,
-		DomainName:     domain,
-		RQLiteDSN:      "",
-	}
-	return templates.RenderGatewayConfig(data)
+rqlite_url = http://%s
+`, bindAddr, constants.VaultHTTPPort, dataDir, net.JoinHostPort(bindAddr, strconv.Itoa(constants.RQLiteHTTPPort)))
 }
 
 // GenerateOlricConfig generates Olric configuration.
@@ -465,40 +618,30 @@ func NewSecretGenerator(oramaDir string) *SecretGenerator {
 	}
 }
 
-// ValidateClusterSecret ensures a cluster secret is 32 bytes of hex
-func ValidateClusterSecret(secret string) error {
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		return fmt.Errorf("cluster secret cannot be empty")
-	}
-	if len(secret) != 64 {
-		return fmt.Errorf("cluster secret must be 64 hex characters (32 bytes)")
-	}
-	if _, err := hex.DecodeString(secret); err != nil {
-		return fmt.Errorf("cluster secret must be valid hex: %w", err)
-	}
-	return nil
-}
-
 // EnsureClusterSecret gets or generates the IPFS Cluster secret
 func (sg *SecretGenerator) EnsureClusterSecret() (string, error) {
 	secretPath := filepath.Join(sg.oramaDir, "secrets", "cluster-secret")
 	secretDir := filepath.Dir(secretPath)
+	root := OramaRoot(sg.oramaDir)
 
 	// Ensure secrets directory exists with restricted permissions (0700)
-	if err := os.MkdirAll(secretDir, 0700); err != nil {
+	if err := root.MkdirAll(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create secrets directory: %w", err)
 	}
 	// Ensure directory permissions are correct even if it already existed
-	if err := os.Chmod(secretDir, 0700); err != nil {
+	if err := root.Chmod(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing secret
-	if data, err := os.ReadFile(secretPath); err == nil {
+	data, err := root.ReadFile(secretPath, rootfs.SmallFileLimit)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("failed to read the existing cluster secret: %w", err)
+	}
+	if err == nil {
 		secret := strings.TrimSpace(string(data))
 		if len(secret) == 64 {
-			if err := ensureSecretFilePermissions(secretPath); err != nil {
+			if err := ensureSecretFilePermissions(root, secretPath); err != nil {
 				return "", err
 			}
 			return secret, nil
@@ -513,10 +656,10 @@ func (sg *SecretGenerator) EnsureClusterSecret() (string, error) {
 	secret := hex.EncodeToString(bytes)
 
 	// Write and protect
-	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+	if err := root.WriteFile(secretPath, []byte(secret), 0600); err != nil {
 		return "", fmt.Errorf("failed to save cluster secret: %w", err)
 	}
-	if err := ensureSecretFilePermissions(secretPath); err != nil {
+	if err := ensureSecretFilePermissions(root, secretPath); err != nil {
 		return "", err
 	}
 
@@ -530,17 +673,22 @@ func (sg *SecretGenerator) EnsureRQLiteAuth() (string, string, error) {
 	authFilePath := filepath.Join(sg.oramaDir, "secrets", "rqlite-auth.json")
 	secretDir := filepath.Dir(passwordPath)
 	username := "orama"
+	root := OramaRoot(sg.oramaDir)
 
-	if err := os.MkdirAll(secretDir, 0700); err != nil {
+	if err := root.MkdirAll(secretDir, 0700); err != nil {
 		return "", "", fmt.Errorf("failed to create secrets directory: %w", err)
 	}
-	if err := os.Chmod(secretDir, 0700); err != nil {
+	if err := root.Chmod(secretDir, 0700); err != nil {
 		return "", "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing password
 	var password string
-	if data, err := os.ReadFile(passwordPath); err == nil {
+	data, err := root.ReadFile(passwordPath, rootfs.SmallFileLimit)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", "", fmt.Errorf("failed to read the existing RQLite password: %w", err)
+	}
+	if err == nil {
 		password = strings.TrimSpace(string(data))
 	}
 
@@ -552,20 +700,20 @@ func (sg *SecretGenerator) EnsureRQLiteAuth() (string, string, error) {
 		}
 		password = hex.EncodeToString(bytes)
 
-		if err := os.WriteFile(passwordPath, []byte(password), 0600); err != nil {
+		if err := root.WriteFile(passwordPath, []byte(password), 0600); err != nil {
 			return "", "", fmt.Errorf("failed to save RQLite password: %w", err)
 		}
-		if err := ensureSecretFilePermissions(passwordPath); err != nil {
+		if err := ensureSecretFilePermissions(root, passwordPath); err != nil {
 			return "", "", err
 		}
 	}
 
 	// Always regenerate the auth JSON file to ensure consistency
 	authJSON := fmt.Sprintf(`[{"username": "%s", "password": "%s", "perms": ["all"]}]`, username, password)
-	if err := os.WriteFile(authFilePath, []byte(authJSON), 0600); err != nil {
+	if err := root.WriteFile(authFilePath, []byte(authJSON), 0600); err != nil {
 		return "", "", fmt.Errorf("failed to save RQLite auth file: %w", err)
 	}
-	if err := ensureSecretFilePermissions(authFilePath); err != nil {
+	if err := ensureSecretFilePermissions(root, authFilePath); err != nil {
 		return "", "", err
 	}
 
@@ -577,19 +725,24 @@ func (sg *SecretGenerator) EnsureRQLiteAuth() (string, string, error) {
 func (sg *SecretGenerator) EnsureAPIKeyHMACSecret() (string, error) {
 	secretPath := filepath.Join(sg.oramaDir, "secrets", "api-key-hmac-secret")
 	secretDir := filepath.Dir(secretPath)
+	root := OramaRoot(sg.oramaDir)
 
-	if err := os.MkdirAll(secretDir, 0700); err != nil {
+	if err := root.MkdirAll(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create secrets directory: %w", err)
 	}
-	if err := os.Chmod(secretDir, 0700); err != nil {
+	if err := root.Chmod(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing secret
-	if data, err := os.ReadFile(secretPath); err == nil {
+	data, err := root.ReadFile(secretPath, rootfs.SmallFileLimit)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("failed to read the existing API key HMAC secret: %w", err)
+	}
+	if err == nil {
 		secret := strings.TrimSpace(string(data))
 		if len(secret) == 64 {
-			if err := ensureSecretFilePermissions(secretPath); err != nil {
+			if err := ensureSecretFilePermissions(root, secretPath); err != nil {
 				return "", err
 			}
 			return secret, nil
@@ -603,10 +756,10 @@ func (sg *SecretGenerator) EnsureAPIKeyHMACSecret() (string, error) {
 	}
 	secret := hex.EncodeToString(bytes)
 
-	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+	if err := root.WriteFile(secretPath, []byte(secret), 0600); err != nil {
 		return "", fmt.Errorf("failed to save API key HMAC secret: %w", err)
 	}
-	if err := ensureSecretFilePermissions(secretPath); err != nil {
+	if err := ensureSecretFilePermissions(root, secretPath); err != nil {
 		return "", err
 	}
 
@@ -626,19 +779,24 @@ func (sg *SecretGenerator) EnsureAPIKeyHMACSecret() (string, error) {
 func (sg *SecretGenerator) EnsureSecretsEncryptionKey() (string, error) {
 	secretPath := filepath.Join(sg.oramaDir, "secrets", "secrets-encryption-key")
 	secretDir := filepath.Dir(secretPath)
+	root := OramaRoot(sg.oramaDir)
 
-	if err := os.MkdirAll(secretDir, 0700); err != nil {
+	if err := root.MkdirAll(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create secrets directory: %w", err)
 	}
-	if err := os.Chmod(secretDir, 0700); err != nil {
+	if err := root.Chmod(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing key
-	if data, err := os.ReadFile(secretPath); err == nil {
+	data, err := root.ReadFile(secretPath, rootfs.SmallFileLimit)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("failed to read the existing secrets encryption key: %w", err)
+	}
+	if err == nil {
 		key := strings.TrimSpace(string(data))
 		if len(key) == 64 {
-			if err := ensureSecretFilePermissions(secretPath); err != nil {
+			if err := ensureSecretFilePermissions(root, secretPath); err != nil {
 				return "", err
 			}
 			return key, nil
@@ -652,10 +810,10 @@ func (sg *SecretGenerator) EnsureSecretsEncryptionKey() (string, error) {
 	}
 	key := hex.EncodeToString(keyBytes)
 
-	if err := os.WriteFile(secretPath, []byte(key), 0600); err != nil {
+	if err := root.WriteFile(secretPath, []byte(key), 0600); err != nil {
 		return "", fmt.Errorf("failed to save secrets encryption key: %w", err)
 	}
-	if err := ensureSecretFilePermissions(secretPath); err != nil {
+	if err := ensureSecretFilePermissions(root, secretPath); err != nil {
 		return "", err
 	}
 
@@ -677,19 +835,24 @@ func (sg *SecretGenerator) EnsureSecretsEncryptionKey() (string, error) {
 func (sg *SecretGenerator) EnsureTURNSecret() (string, error) {
 	secretPath := filepath.Join(sg.oramaDir, "secrets", "turn-secret")
 	secretDir := filepath.Dir(secretPath)
+	root := OramaRoot(sg.oramaDir)
 
-	if err := os.MkdirAll(secretDir, 0700); err != nil {
+	if err := root.MkdirAll(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create secrets directory: %w", err)
 	}
-	if err := os.Chmod(secretDir, 0700); err != nil {
+	if err := root.Chmod(secretDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing secret
-	if data, err := os.ReadFile(secretPath); err == nil {
+	data, err := root.ReadFile(secretPath, rootfs.SmallFileLimit)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("failed to read the existing TURN secret: %w", err)
+	}
+	if err == nil {
 		secret := strings.TrimSpace(string(data))
 		if len(secret) == 64 {
-			if err := ensureSecretFilePermissions(secretPath); err != nil {
+			if err := ensureSecretFilePermissions(root, secretPath); err != nil {
 				return "", err
 			}
 			return secret, nil
@@ -703,18 +866,18 @@ func (sg *SecretGenerator) EnsureTURNSecret() (string, error) {
 	}
 	secret := hex.EncodeToString(secretBytes)
 
-	if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+	if err := root.WriteFile(secretPath, []byte(secret), 0600); err != nil {
 		return "", fmt.Errorf("failed to save TURN secret: %w", err)
 	}
-	if err := ensureSecretFilePermissions(secretPath); err != nil {
+	if err := ensureSecretFilePermissions(root, secretPath); err != nil {
 		return "", err
 	}
 
 	return secret, nil
 }
 
-func ensureSecretFilePermissions(secretPath string) error {
-	if err := os.Chmod(secretPath, 0600); err != nil {
+func ensureSecretFilePermissions(root rootfs.Root, secretPath string) error {
+	if err := root.Chmod(secretPath, 0600); err != nil {
 		return fmt.Errorf("failed to set permissions on %s: %w", secretPath, err)
 	}
 
@@ -727,7 +890,7 @@ func ensureSecretFilePermissions(secretPath string) error {
 		if err != nil {
 			return fmt.Errorf("failed to parse orama GID: %w", err)
 		}
-		if err := os.Chown(secretPath, uid, gid); err != nil {
+		if err := root.Chown(secretPath, uid, gid); err != nil {
 			return fmt.Errorf("failed to change ownership of %s: %w", secretPath, err)
 		}
 	}
@@ -739,18 +902,23 @@ func ensureSecretFilePermissions(secretPath string) error {
 func (sg *SecretGenerator) EnsureSwarmKey() ([]byte, error) {
 	swarmKeyPath := filepath.Join(sg.oramaDir, "secrets", "swarm.key")
 	secretDir := filepath.Dir(swarmKeyPath)
+	root := OramaRoot(sg.oramaDir)
 
 	// Ensure secrets directory exists with restricted permissions (0700)
-	if err := os.MkdirAll(secretDir, 0700); err != nil {
+	if err := root.MkdirAll(secretDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create secrets directory: %w", err)
 	}
 	// Ensure directory permissions are correct even if it already existed
-	if err := os.Chmod(secretDir, 0700); err != nil {
+	if err := root.Chmod(secretDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Try to read existing key — validate and auto-fix if corrupted (e.g. double headers)
-	if data, err := os.ReadFile(swarmKeyPath); err == nil {
+	data, err := root.ReadFile(swarmKeyPath, rootfs.SmallFileLimit)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("failed to read the existing swarm key: %w", err)
+	}
+	if err == nil {
 		content := string(data)
 		if strings.Contains(content, "/key/swarm/psk/1.0.0/") {
 			// Extract hex and rebuild clean file
@@ -765,7 +933,9 @@ func (sg *SecretGenerator) EnsureSwarmKey() ([]byte, error) {
 			}
 			clean := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", hexKey)
 			if clean != content {
-				_ = os.WriteFile(swarmKeyPath, []byte(clean), 0600)
+				if err := root.WriteFile(swarmKeyPath, []byte(clean), 0600); err != nil {
+					return nil, fmt.Errorf("failed to rewrite the swarm key without its duplicate header: %w", err)
+				}
 			}
 			return []byte(clean), nil
 		}
@@ -781,7 +951,7 @@ func (sg *SecretGenerator) EnsureSwarmKey() ([]byte, error) {
 	content := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", keyHex)
 
 	// Write and protect
-	if err := os.WriteFile(swarmKeyPath, []byte(content), 0600); err != nil {
+	if err := root.WriteFile(swarmKeyPath, []byte(content), 0600); err != nil {
 		return nil, fmt.Errorf("failed to save swarm key: %w", err)
 	}
 
@@ -794,19 +964,30 @@ func (sg *SecretGenerator) EnsureNodeIdentity() (peer.ID, error) {
 	keyDir := filepath.Join(sg.oramaDir, "data")
 	keyPath := filepath.Join(keyDir, "identity.key")
 
-	// Ensure data directory exists
-	if err := os.MkdirAll(keyDir, 0755); err != nil {
+	root := OramaRoot(sg.oramaDir)
+	if err := root.MkdirAll(keyDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create data directory: %w", err)
 	}
 
 	// Try to read existing key
-	if data, err := os.ReadFile(keyPath); err == nil {
+	data, err := root.ReadFile(keyPath, rootfs.SmallFileLimit)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("read the node identity: %w", err)
+	}
+	if err == nil {
+		// An identity that does not parse is an error, not a reason to mint
+		// another: the peer id is how every store in the cluster keys this
+		// machine, and a new one would orphan all of it.
 		priv, err := crypto.UnmarshalPrivateKey(data)
-		if err == nil {
-			pub := priv.GetPublic()
-			peerID, _ := peer.IDFromPublicKey(pub)
-			return peerID, nil
+		if err != nil {
+			return "", fmt.Errorf("the node identity %s does not parse (%w); it is this node's peer id in every "+
+				"cluster record, so it is not replaced — restore it from a backup", keyPath, err)
 		}
+		peerID, err := peer.IDFromPublicKey(priv.GetPublic())
+		if err != nil {
+			return "", fmt.Errorf("derive the peer id from the node identity %s: %w", keyPath, err)
+		}
+		return peerID, nil
 	}
 
 	// Generate new identity
@@ -815,7 +996,10 @@ func (sg *SecretGenerator) EnsureNodeIdentity() (peer.ID, error) {
 		return "", fmt.Errorf("failed to generate identity: %w", err)
 	}
 
-	peerID, _ := peer.IDFromPublicKey(pub)
+	peerID, err := peer.IDFromPublicKey(pub)
+	if err != nil {
+		return "", fmt.Errorf("derive the peer id of the new node identity: %w", err)
+	}
 
 	// Marshal and save private key
 	keyData, err := crypto.MarshalPrivateKey(priv)
@@ -823,7 +1007,7 @@ func (sg *SecretGenerator) EnsureNodeIdentity() (peer.ID, error) {
 		return "", fmt.Errorf("failed to marshal private key: %w", err)
 	}
 
-	if err := os.WriteFile(keyPath, keyData, 0600); err != nil {
+	if err := root.WriteFile(keyPath, keyData, 0600); err != nil {
 		return "", fmt.Errorf("failed to save identity key: %w", err)
 	}
 
@@ -840,12 +1024,17 @@ func (sg *SecretGenerator) SaveConfig(filename string, content string) error {
 		configDir = filepath.Join(sg.oramaDir, "configs")
 	}
 
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	root := OramaRoot(sg.oramaDir)
+	if err := root.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	// 0600: node.yaml carries the rqlite password, the secrets encryption
+	// key and the TURN secret. rootfs.WriteFile applies the mode even to a
+	// file that already exists — every node installed before this had it
+	// world-readable. Phase 5 hands .orama to the orama user.
 	configPath := filepath.Join(configDir, filename)
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+	if err := root.WriteFile(configPath, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("failed to write config %s: %w", filename, err)
 	}
 

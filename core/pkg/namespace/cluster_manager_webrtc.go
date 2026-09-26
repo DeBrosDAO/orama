@@ -161,7 +161,14 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	// rather than during it. That is safe because a TURN DNS record is published
 	// only once the shared server is actually serving, so clients are never
 	// pointed at a relay that is not yet up.
-	cm.ReconcileHostTURN(ctx)
+	//
+	// This host's part is not deferred: if it cannot apply the tenant set now,
+	// it will not on the next tick either, and enabling WebRTC is refused
+	// rather than reported done.
+	if _, err := cm.ReconcileHostTURN(ctx); err != nil {
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+		return fmt.Errorf("failed to reconcile this host's shared TURN server for namespace %s: %w", namespaceName, err)
+	}
 	if len(turnNodes) > 0 {
 		cm.logger.Info("TURN allocated; hosts converge on their next reconcile",
 			zap.String("namespace", namespaceName),
@@ -179,7 +186,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	for _, node := range clusterNodes {
 		sfuBlock := sfuBlocks[node.NodeID]
 		pb := nodePortBlocks[node.NodeID]
-		rqliteDSN := localRQLiteDSN(node.InternalIP, pb.RQLiteHTTPPort)
+		rqliteDSN := tenantRQLiteURL(node.InternalIP, pb.RQLiteHTTPPort)
 
 		sfuCfg := SFUInstanceConfig{
 			Namespace:      namespaceName,
@@ -715,7 +722,7 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 			NodeID:                node.NodeID,
 			HTTPPort:              pb.GatewayHTTPPort,
 			BaseDomain:            cm.baseDomain,
-			RQLiteDSN:             localRQLiteDSN(node.InternalIP, pb.RQLiteHTTPPort),
+			RQLiteDSN:             tenantRQLiteURL(node.InternalIP, pb.RQLiteHTTPPort),
 			GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 			OlricServers:          olricServers,
 			OlricTimeout:          30 * time.Second,
@@ -1443,7 +1450,15 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 	// after every namespace's allocations have been reconciled above, then
 	// advertise — so a namespace that just gained TURN is serving before its DNS
 	// record appears, which is the ordering #161 requires.
-	served := cm.ReconcileHostTURN(ctx)
+	served, err := cm.ReconcileHostTURN(ctx)
+	if err != nil {
+		// Nothing is advertised on a failed reconcile: the relay set this host
+		// is serving is not the one it was asked to, and DNS must never point
+		// at a relay that is not up (#161). The next sweep retries.
+		cm.logger.Error("Shared TURN reconcile failed; no TURN DNS advertised from this host this sweep",
+			zap.Error(err))
+		return
+	}
 	cm.ensureTURNRecordsForServingNamespaces(ctx, turnNamespaces, served)
 }
 
@@ -1621,7 +1636,7 @@ func (cm *ClusterManager) spawnAllocatedWebRTCServices(ctx context.Context, stat
 	// These come from cluster-state.json, which this package elsewhere treats as
 	// untrustworthy for exactly these fields. An empty LocalIP would bind the SFU
 	// signaling socket to ALL interfaces including the public one, not just the
-	// WireGuard address; a zero RQLite port yields http://localhost:0.
+	// WireGuard address; a zero RQLite port yields a DSN on port 0.
 	if state.LocalIP == "" || state.LocalPorts.RQLiteHTTPPort <= 0 {
 		return
 	}
@@ -1648,7 +1663,7 @@ func (cm *ClusterManager) spawnAllocatedWebRTCServices(ctx context.Context, stat
 				},
 				TURNSecret:  webrtcCfg.TURNSharedSecret,
 				TURNCredTTL: webrtcCfg.TURNCredentialTTL,
-				RQLiteDSN:   localRQLiteDSN(state.LocalIP, state.LocalPorts.RQLiteHTTPPort),
+				RQLiteDSN:   tenantRQLiteURL(state.LocalIP, state.LocalPorts.RQLiteHTTPPort),
 			}); serr != nil {
 				cm.recordSpawnFailure(state.NamespaceName)
 				cm.logger.Warn("Failed to start newly-allocated SFU (backing off)",

@@ -2,9 +2,12 @@ package utils
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -115,5 +118,53 @@ func TestOlricConfigYAMLParsing_MissingMemberlist(t *testing.T) {
 
 	if cfg.Memberlist.BindPort != 0 {
 		t.Errorf("expected port 0 for missing memberlist, got %d", cfg.Memberlist.BindPort)
+	}
+}
+
+// The Olric readiness wait finds the memberlist port through the unit's env
+// file in the unit env tree. It read data/namespaces/<ns>/olric.env, which the
+// layout move deletes, found nothing, and skipped the wait — so the gateway
+// could start before Olric.
+func TestGetOlricMemberlistPort_readsTheUnitEnvTree(t *testing.T) {
+	envDir := t.TempDir()
+	cfg := filepath.Join(t.TempDir(), "olric.yaml")
+	if err := os.WriteFile(cfg, []byte("memberlist:\n  bindPort: 10203\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(envDir, "anchat"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "anchat", "olric.env"), []byte("OLRIC_SERVER_CONFIG="+cfg+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := getOlricMemberlistPort(envDir, rootfs.At(filepath.Dir(cfg)), "anchat"); got != 10203 {
+		t.Errorf("port = %d, want 10203", got)
+	}
+	if got := getOlricMemberlistPort(envDir, rootfs.At(filepath.Dir(cfg)), "absent"); got != 0 {
+		t.Errorf("a namespace with no env has no port to wait for, got %d", got)
+	}
+}
+
+// The Olric config lives in the orama user's tree and this runs as root: a
+// symlink planted in its place is not followed, so there is no port to wait for.
+func TestGetOlricMemberlistPort_symlinkedConfigRefused(t *testing.T) {
+	envDir := t.TempDir()
+	anchor := t.TempDir()
+	target := filepath.Join(t.TempDir(), "olric.yaml")
+	if err := os.WriteFile(target, []byte("memberlist:\n  bindPort: 10203\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(anchor, "olric.yaml")
+	if err := os.Symlink(target, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(envDir, "anchat"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "anchat", "olric.env"), []byte("OLRIC_SERVER_CONFIG="+cfg+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := getOlricMemberlistPort(envDir, rootfs.At(anchor), "anchat"); got != 0 {
+		t.Errorf("port = %d read through a symlink, want 0", got)
 	}
 }

@@ -52,7 +52,16 @@ func serveRQLite(t *testing.T, raftState string) int {
 	mux.HandleFunc("/db/query", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"results":[{"columns":["1"],"values":[[1]]}]}`)
 	})
-	return servePort(t, mux)
+	return servePort(t, requireRQLiteAuth(mux))
+}
+
+// credentialedSpawner is a spawner whose orama dir holds the cluster rqlite
+// password, which the cluster manager's rqlite probes authenticate with.
+func credentialedSpawner(t *testing.T) *SystemdSpawner {
+	t.Helper()
+	root, namespaceBase := setupOramaDirs(t)
+	writeRQLitePassword(t, root, testRQLitePass+"\n")
+	return NewSystemdSpawner(namespaceBase, "", zap.NewNop())
 }
 
 // serveOlric answers the stats endpoint an Olric readiness probe reads.
@@ -114,7 +123,7 @@ func deadPort(t *testing.T) int {
 }
 
 func TestVerifyClusterHealthy_passesWhenAllServicesAnswer(t *testing.T) {
-	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: 2 * time.Second}
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: 2 * time.Second, systemdSpawner: credentialedSpawner(t)}
 	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: "127.0.0.1"}}
 	blocks := []*PortBlock{healthyNode(t)}
 
@@ -129,7 +138,7 @@ func TestVerifyClusterHealthy_passesWhenAllServicesAnswer(t *testing.T) {
 func TestVerifyClusterHealthy_failsOnAPortThatAnswersNothing(t *testing.T) {
 	ip, dumbPort := listener(t)
 
-	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second, systemdSpawner: credentialedSpawner(t)}
 	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: ip}}
 	blocks := []*PortBlock{{RQLiteHTTPPort: dumbPort, OlricHTTPPort: dumbPort, GatewayHTTPPort: dumbPort}}
 
@@ -141,7 +150,7 @@ func TestVerifyClusterHealthy_failsOnAPortThatAnswersNothing(t *testing.T) {
 // rqlite binds its HTTP listener long before it elects anything, so a node
 // still holding an election is not ready however healthy the port looks.
 func TestVerifyClusterHealthy_failsWhileRQLiteIsStillElecting(t *testing.T) {
-	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second, systemdSpawner: credentialedSpawner(t)}
 	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: "127.0.0.1"}}
 	blocks := []*PortBlock{{
 		RQLiteHTTPPort:  serveRQLite(t, "Candidate"),
@@ -161,7 +170,7 @@ func TestVerifyClusterHealthy_failsWhileRQLiteIsStillElecting(t *testing.T) {
 // The gateway is the only component that talks to both rqlite and Olric, so a
 // gateway that cannot reach one of them is the signal that matters most.
 func TestVerifyClusterHealthy_failsWhenTheGatewayCannotReachOlric(t *testing.T) {
-	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second, systemdSpawner: credentialedSpawner(t)}
 	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: "127.0.0.1"}}
 	blocks := []*PortBlock{{
 		RQLiteHTTPPort:  serveRQLite(t, "Leader"),
@@ -185,7 +194,7 @@ func TestVerifyClusterHealthy_failsWhenAGatewayIsDown(t *testing.T) {
 	broken := healthyNode(t)
 	broken.GatewayHTTPPort = deadPort(t)
 
-	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second, systemdSpawner: credentialedSpawner(t)}
 	nodes := []NodeCapacity{
 		{NodeID: "node-1", InternalIP: "127.0.0.1"},
 		{NodeID: "node-2", InternalIP: "127.0.0.1"},
@@ -209,7 +218,7 @@ func TestVerifyClusterHealthy_failsWhenRQLiteIsDown(t *testing.T) {
 	block := healthyNode(t)
 	block.RQLiteHTTPPort = deadPort(t)
 
-	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second}
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: time.Second, systemdSpawner: credentialedSpawner(t)}
 	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: "127.0.0.1"}}
 	blocks := []*PortBlock{block}
 
@@ -224,7 +233,7 @@ func TestVerifyClusterHealthy_failsWhenRQLiteIsDown(t *testing.T) {
 
 // It must give up rather than hang provisioning forever.
 func TestVerifyClusterHealthy_boundedByTimeout(t *testing.T) {
-	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: 2 * time.Second}
+	cm := &ClusterManager{logger: zap.NewNop(), readyTimeout: 2 * time.Second, systemdSpawner: credentialedSpawner(t)}
 	nodes := []NodeCapacity{{NodeID: "node-1", InternalIP: "127.0.0.1"}}
 	blocks := []*PortBlock{{GatewayHTTPPort: deadPort(t), RQLiteHTTPPort: deadPort(t)}}
 

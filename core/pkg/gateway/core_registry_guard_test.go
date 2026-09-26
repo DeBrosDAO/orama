@@ -173,9 +173,11 @@ func TestIsCoreRegistryPath(t *testing.T) {
 }
 
 // A gateway with no namespace configured is the cluster gateway, not a tenant's
-// — treating it as a tenant's would leave the registry open.
+// — treating it as a tenant's would leave the registry open. Since 0.200 the
+// cluster gateway runs as orama-namespace-gateway@index with client namespace
+// "index", and its database is the registry.
 func TestServesCoreRegistry(t *testing.T) {
-	for ns, want := range map[string]bool{"": true, "default": true, "anchat": false, "index": false} {
+	for ns, want := range map[string]bool{"": true, "default": true, "index": true, "anchat": false} {
 		g, _ := registryGateway(t, ns)
 		if got := g.servesCoreRegistry(); got != want {
 			t.Errorf("client_namespace %q: servesCoreRegistry = %v, want %v", ns, got, want)
@@ -199,6 +201,46 @@ func TestAuthorizationMiddleware_refusesRegistryAccessFromATenant(t *testing.T) 
 
 	if reached {
 		t.Fatal("a tenant reached the registry export handler")
+	}
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status %d, want 403: %s", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+}
+
+// The index gateway is the cluster gateway under its 0.200 name; a tenant's
+// admin key must not reach the registry through it.
+func TestCoreRegistryGuard_refusesATenantOnTheIndexGateway(t *testing.T) {
+	g, _ := registryGateway(t, "index", "0xoperator")
+	rec := httptest.NewRecorder()
+	if g.requireOperatorForCoreRegistry(rec, walletRequest("/v1/rqlite/export", "0xtenant")) {
+		t.Fatal("a tenant exported the cluster registry through the index gateway")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+// A signed hop skips the grant lookup, and it used to skip the registry guard
+// with it: the guard sat after the skip. Every node holds the key a hop is
+// signed with, so a hop naming a tenant reached the registry export on the
+// index gateway.
+func TestAuthorizationMiddleware_refusesRegistryAccessOverASignedHop(t *testing.T) {
+	g, _ := registryGateway(t, "index", "0xoperator")
+
+	var reached bool
+	chain := g.authorizationMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	r := walletRequest("/v1/rqlite/export", "")
+	// internalAuthMiddleware leaves this header only when its MAC verified.
+	r.Header.Set(HeaderInternalAuthValidated, "true")
+	w := httptest.NewRecorder()
+	chain.ServeHTTP(w, r)
+
+	if reached {
+		t.Fatal("a signed hop reached the cluster registry export without an operator")
 	}
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status %d, want 403: %s", w.Code, strings.TrimSpace(w.Body.String()))

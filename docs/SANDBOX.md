@@ -46,15 +46,9 @@ At your domain registrar:
 
 DNS propagation can take up to 48 hours.
 
-### 3. Binary Archive
+### 3. Binary Archive and RootWallet
 
-Build the binary archive before creating a cluster:
-
-```bash
-orama build
-```
-
-This creates `/tmp/orama-<version>-linux-amd64.tar.gz` with all pre-compiled binaries.
+`create` and `rollout` take `--archive <path>` (the path `orama build` printed), or build this checkout themselves. Either way the archive must be signed by the RootWallet account that is unlocked when you run them: `orama build` signs through the RootWallet agent, and that account is the only signer a sandbox trusts. An archive signed by anyone else, or unsigned (`--unsigned`), is refused before any server is created.
 
 ## Setup
 
@@ -78,20 +72,22 @@ Config is saved to `~/.orama/sandbox.yaml`.
 
 ## Commands
 
-### `orama sandbox create [--name <name>]`
+### `orama sandbox create [--name <name>] [--archive <path>]`
 
-Creates a new 5-node cluster. If `--name` is omitted, a random name is generated (e.g., "swift-falcon").
+Creates a new 5-node cluster. If `--name` is omitted, a random name is generated (e.g., "swift-falcon"). A name is lowercase letters, digits and `-`, at most 40 characters.
 
 **Cluster layout:**
 - Nodes 1-2: Nameservers (CoreDNS + Caddy + all services)
 - Nodes 3-5: Regular nodes (all services except CoreDNS)
 
+`--archive <path>` names the build to deploy; without it, this checkout is built (and signed) first. Before any server is created, the archive must verify against your RootWallet account: it is signed by `orama build` through the RootWallet agent, and that account becomes the cluster's only archive signer.
+
 **Phases:**
-1. Provision 5 servers on Hetzner using the configured server type (parallel, ~90s)
+1. Provision 5 servers on Hetzner using the configured server type (parallel, ~90s), then pin each server's SSH host key as soon as its sshd answers, before anything is sent to it
 2. Assign floating IPs to nameserver nodes (~10s)
-3. Upload binary archive to all nodes (parallel, ~60s)
-4. Install genesis node + generate invite tokens (~120s)
-5. Join remaining 4 nodes (serial with health checks, ~180s)
+3. Put the verified archive on every server the way `orama node setup` does: verified on your machine, uploaded as a canonical re-pack, and staged by `orama node stage-archive`, which creates the server's trust anchor (`/etc/orama/archive-signers`) from your wallet. The archive is uploaded from your machine to each server in turn
+4. Install the genesis node with `--operator-wallet <your wallet>` and `--acme-ca letsencrypt-staging`, and wait until it serves a TLS certificate for the sandbox domain, which each invite pins (~120s)
+5. Join remaining 4 nodes (serial with health checks, ~180s), each with an invite minted on genesis just before use and `--expect-archive-signers <your wallet>`
 6. Verify cluster health (~15s)
 
 **One sandbox at a time.** Since the floating IPs are shared, only one sandbox can own the nameservers. Destroy the active sandbox before creating a new one.
@@ -101,7 +97,7 @@ Creates a new 5-node cluster. If `--name` is omitted, a random name is generated
 Tears down a cluster:
 1. Unassigns floating IPs
 2. Deletes all 5 servers (parallel)
-3. Removes state file
+3. Removes the state file and the sandbox's pinned host keys
 
 Use `--force` to skip confirmation.
 
@@ -116,12 +112,14 @@ Shows per-node health including:
 - RQLite role (Leader/Follower)
 - Cluster summary (commit index, voter count)
 
-### `orama sandbox rollout [--name <name>]`
+### `orama sandbox rollout [--name <name>] [--archive <path>]`
 
 Deploys code changes:
-1. Uses the latest binary archive from `/tmp/` (run `orama build` first)
-2. Pushes to all nodes
-3. Rolling upgrade: followers first, leader last, 15s between nodes
+1. Uses `--archive <path>`, or builds (and signs) this checkout
+2. Pushes to all nodes the way `orama push` does: to the first node, which fans it out; each node verifies it with its installed `orama node stage-archive` against its trust anchor before anything under `/opt/orama` changes
+3. Rolling upgrade with `orama node upgrade --restart`: followers first, leader last, 15s between nodes
+
+A sandbox created before host keys were pinned has no `~/.orama/sandboxes/<name>.known_hosts` and is refused; destroy it and create a new one.
 
 ### `orama sandbox ssh <node-number>`
 
@@ -154,6 +152,16 @@ Servers: `sbx-<name>-<N>` (e.g., `sbx-swift-falcon-1` through `sbx-swift-falcon-
 
 Sandbox state is stored at `~/.orama/sandboxes/<name>.yaml`. This tracks server IDs, IPs, roles, and cluster status.
 
+Nodes register under the `sandbox` environment (`orama node install --environment sandbox`) with your wallet as their operator.
+
+### TLS: Let's Encrypt staging
+
+Sandbox nodes get their certificates from Let's Encrypt's staging CA (`--acme-ca letsencrypt-staging`): a sandbox is rebuilt often, and production allows five certificates a week for the same names. No system trusts staging, so `create` records the `sandbox` environment (and switches to it) with `--ca-file` set to `~/.orama/sandboxes/letsencrypt-staging-roots.pem`: the CLI trusts those roots for the sandbox domain and names under it only, never for any other host. The roots — "(STAGING) Pretend Pear X1" and "(STAGING) Bogus Broccoli X2", from https://letsencrypt.org/docs/staging-environment/ — are built into `orama` and checked against their pinned SHA-256 fingerprints before they are written; nothing is fetched at create time. Browsers and other tools will not trust a sandbox's certificate.
+
+### Host keys
+
+The SSH host keys each server presents on first contact (trust on first use) are pinned in `~/.orama/sandboxes/<name>.known_hosts` — not in your `~/.ssh/known_hosts`, because Hetzner reuses addresses. They are read with `ssh-keyscan` right after the server is created, as soon as its sshd answers and before any command, archive or invite is sent to it; cloud-init writes the host keys before sshd starts. `create`'s floating-IP setup, archive uploads, staging, invites, installs and health waits, and `rollout`'s push to the first node, leader detection and upgrades check against them. The copies the first node fans out to the others use its own known_hosts, as `orama push` does; each node verifies the archive against its trust anchor regardless. `status`, `ssh` and create's final health report do not check host keys. See [SECURITY.md](SECURITY.md), "Build-archive signing and the trust anchor".
+
 ## Cost
 
 | Resource | Cost | Qty |
@@ -169,9 +177,13 @@ Servers are billed per hour at the rate for the chosen type (shown during `orama
 
 Run `orama sandbox setup` first.
 
-### "no binary archive found"
+### "the archive does not verify against your wallet"
 
-Run `orama build` to create the binary archive.
+The archive is unsigned or signed by another RootWallet account than the one unlocked now. Rebuild it with `orama build` while the account you create sandboxes with is unlocked, or leave out `--archive` to build this checkout.
+
+### "has no pinned SSH host keys"
+
+The sandbox was created before sandboxes pinned host keys and verified archives. Destroy it and create a new one.
 
 ### "sandbox X is already active"
 

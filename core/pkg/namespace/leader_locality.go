@@ -163,16 +163,22 @@ func (cm *ClusterManager) reconcileLeaderLocality(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		cm.reconcileNamespaceLeader(state.NamespaceName, state.LocalPorts.RQLiteHTTPPort)
+		cm.reconcileNamespaceLeader(state.NamespaceName, state.LocalIP, state.LocalPorts.RQLiteHTTPPort)
 	}
 }
 
 // reconcileNamespaceLeader handles a single namespace's leadership locality.
-func (cm *ClusterManager) reconcileNamespaceLeader(namespace string, rqliteHTTPPort int) {
+func (cm *ClusterManager) reconcileNamespaceLeader(namespace, localIP string, rqliteHTTPPort int) {
 	if rqliteHTTPPort == 0 {
 		return
 	}
-	status, err := rqlite.GetRaftStatus(rqliteHTTPPort)
+	ep, err := cm.tenantRQLiteEndpoint(localIP, rqliteHTTPPort)
+	if err != nil {
+		cm.logger.Warn("leader-locality: cannot address this node's namespace rqlite",
+			zap.String("namespace", namespace), zap.Error(err))
+		return
+	}
+	status, err := rqlite.GetRaftStatus(ep)
 	if err != nil {
 		// rqlite not up / not reachable on this node — nothing to do.
 		return
@@ -182,7 +188,7 @@ func (cm *ClusterManager) reconcileNamespaceLeader(namespace string, rqliteHTTPP
 	}
 	selfID := status.Store.Raft.LeaderID
 
-	nodes, err := rqlite.GetRaftNodes(rqliteHTTPPort)
+	nodes, err := rqlite.GetRaftNodes(ep)
 	if err != nil {
 		return
 	}
@@ -206,7 +212,7 @@ func (cm *ClusterManager) reconcileNamespaceLeader(namespace string, rqliteHTTPP
 	// Record the cooldown BEFORE the transfer so a slow/looping transfer can't
 	// re-fire on the next tick regardless of outcome.
 	cm.recordLeaderTransfer(namespace)
-	if err := rqlite.TransferLeadershipTo(rqliteHTTPPort, target, cm.logger); err != nil {
+	if err := rqlite.TransferLeadershipTo(ep, target, cm.logger); err != nil {
 		cm.logger.Warn("leader-locality: leadership transfer failed",
 			zap.String("namespace", namespace), zap.Error(err))
 	}

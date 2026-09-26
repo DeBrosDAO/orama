@@ -2,9 +2,11 @@ package process
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/deploysecrets"
 )
 
 // Where a deployment lives, and what its unit is called.
@@ -36,9 +38,67 @@ const entryPointEnvKey = "ORAMA_ENTRYPOINT"
 // `npm start` instead of node directly.
 const npmStartEntryPoint = "npm:start"
 
+// MaxNameLength is the longest deployment name ValidateName accepts.
+//
+// A name ends up in three places with limits of their own. The subdomain is
+// <name>-<6 random characters>, one DNS label, and a label is at most 63
+// bytes: 63 - 7 = 56. The unit instance is <namespace>-<name>, which
+// orama-privhelper accepts up to 161 characters, and a namespace is at most 64
+// (httputil.ValidateNamespace): 64 + 1 + 56 fits. Tests hold both limits.
+const MaxNameLength = 56
+
+// namePattern is the character set orama-privhelper accepts in a deployment
+// instance (pkg/privhelper deployUnit), so a name that passes here cannot be
+// refused when the deployment starts.
+var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// ValidateName checks a deployment name where it enters the system.
+//
+// It used to be checked nowhere: any string was accepted, written to the
+// registry and used for a directory, and the first thing to object was
+// orama-privhelper refusing the unit at start — after the upload, the IPFS
+// pin and the registry row.
+func ValidateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("deployment name is required")
+	}
+	if len(name) > MaxNameLength {
+		return fmt.Errorf("deployment name %q is %d characters; the limit is %d", name, len(name), MaxNameLength)
+	}
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("deployment name %q is not valid: use letters, digits, '-' and '_', starting with a letter or digit", name)
+	}
+	return nil
+}
+
+// ValidateInstance checks that an existing deployment's namespace and name map
+// to an instance orama-privhelper will act on.
+//
+// It is for requests about a deployment that is already in the registry — an
+// update, a replica — whose name may predate ValidateName: a dotted legacy
+// name such as "my.app" maps to the valid instance "<ns>-my-app" and keeps
+// working. A pair whose instance could never start, or would name a path
+// outside the deployments directory, is refused.
+func ValidateInstance(namespace, name string) error {
+	if name == "" {
+		return fmt.Errorf("deployment name is required")
+	}
+	if instance := InstanceName(namespace, name); !deploysecrets.ValidInstance(instance) {
+		return fmt.Errorf("deployment %q in namespace %q maps to the unit instance %q, which is not a valid instance", name, namespace, instance)
+	}
+	return nil
+}
+
 // InstanceName is the systemd instance a deployment runs as, and the name of
 // its directory. Dots are not allowed: systemd reads them as part of the unit
 // suffix.
+//
+// The mapping is not injective — namespace "a" with name "b-c" and namespace
+// "a-b" with name "c" are both "a-b-c" — and it cannot change without renaming
+// every existing deployment's unit and directory. A new deployment is refused
+// instead when its instance is already taken: the deployment service checks
+// the registry, then claims the directory on the host before anything is
+// written (pkg/gateway/handlers/deployments instance_claim.go).
 func InstanceName(namespace, name string) string {
 	return sanitizeInstance(namespace) + "-" + sanitizeInstance(name)
 }

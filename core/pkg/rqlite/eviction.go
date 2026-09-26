@@ -511,8 +511,16 @@ func (r *RQLiteManager) evictDeadVoters(ctx context.Context, reconciler *voterRe
 // localSQLHandle returns a database/sql handle on this node's rqlite.
 func (r *RQLiteManager) localSQLHandle() (*sql.DB, error) {
 	r.sqlOnce.Do(func() {
-		r.sqlDB, r.sqlErr = sql.Open("rqlite",
-			fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
+		ep, err := r.LocalEndpoint()
+		if err != nil {
+			r.sqlErr = err
+			return
+		}
+		dsn := ep.SQLDSN(adapterReadConsistencyLevel)
+		r.sqlDB, r.sqlErr = sql.Open("rqlite", dsn)
+		if r.sqlErr != nil {
+			r.sqlErr = fmt.Errorf("open local rqlite SQL handle at %s: %s", ep, RedactError(r.sqlErr, dsn))
+		}
 	})
 	return r.sqlDB, r.sqlErr
 }

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
-	"go.uber.org/zap"
 )
 
 // The one HTTP client for rqlite's admin surface.
@@ -67,29 +66,27 @@ func NewAdminClient(baseURL, user, pass string) *AdminClient {
 	}
 }
 
-// LocalAdminClient builds a client for this node's own rqlite, reading
-// credentials from the auth file when one is configured.
-func (r *RQLiteManager) LocalAdminClient() *AdminClient {
-	user, pass := r.adminCredentials()
-	return NewAdminClient(fmt.Sprintf("http://localhost:%d", r.config.RQLitePort), user, pass)
+// LocalEndpoint is this node's own index rqlited: the address it binds and the
+// credentials in the node config. Every client the manager opens — SQL and
+// admin alike — is built from it.
+func (r *RQLiteManager) LocalEndpoint() (Endpoint, error) {
+	return IndexEndpoint(r.config, r.discoverConfig)
 }
 
-// adminCredentials reads the admin user out of the configured auth file.
-//
-// A file that exists but cannot be read is reported as no credentials rather
-// than failing the caller: the request then gets a clear 401 from rqlite, which
-// is a better diagnostic than a start-up failure with a file path in it.
-func (r *RQLiteManager) adminCredentials() (user, pass string) {
-	if r.config == nil || r.config.RQLiteAuthFile == "" {
-		return "", ""
-	}
-	u, p, err := readRQLiteAuthFile(r.config.RQLiteAuthFile)
+// LocalAdminClient builds an admin client for this node's own rqlite.
+func (r *RQLiteManager) LocalAdminClient() (*AdminClient, error) {
+	ep, err := r.LocalEndpoint()
 	if err != nil {
-		r.logger.Warn("Cannot read the rqlite auth file; admin requests will be sent unauthenticated",
-			zap.String("path", r.config.RQLiteAuthFile), zap.Error(err))
-		return "", ""
+		return nil, err
 	}
-	return u, p
+	return ep.Admin(), nil
+}
+
+// peerAdminClient builds an admin client for another member's rqlited at its
+// advertised host:port. The credentials are cluster-wide (every node's -auth
+// file carries the same user), so this node's own are the right ones.
+func (r *RQLiteManager) peerAdminClient(httpAddr string) *AdminClient {
+	return NewAdminClient("http://"+httpAddr, r.config.RQLiteUsername, r.config.RQLitePassword)
 }
 
 // readRQLiteAuthFile returns the first user in rqlite's auth JSON.
@@ -216,20 +213,4 @@ func (c *AdminClient) TransferLeadership(ctx context.Context, id string) error {
 func (c *AdminClient) Ready(ctx context.Context) error {
 	_, err := c.do(ctx, http.MethodGet, "/readyz", nil, adminQuickTimeout)
 	return err
-}
-
-// adminCredentialsFromFile reads an rqlite auth file, returning empty
-// credentials when there is no file or it cannot be read.
-//
-// An unreadable file yields an unauthenticated request and therefore a clear
-// 401 from rqlite, which tells an operator more than a start-up failure would.
-func adminCredentialsFromFile(path string) (user, pass string) {
-	if path == "" {
-		return "", ""
-	}
-	u, p, err := readRQLiteAuthFile(path)
-	if err != nil {
-		return "", ""
-	}
-	return u, p
 }

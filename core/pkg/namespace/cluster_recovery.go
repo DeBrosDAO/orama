@@ -1,11 +1,8 @@
 package namespace
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -603,7 +600,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			NodeID:                replacement.NodeID,
 			HTTPPort:              portBlock.GatewayHTTPPort,
 			BaseDomain:            cm.baseDomain,
-			RQLiteDSN:             localRQLiteDSN(replacement.InternalIP, portBlock.RQLiteHTTPPort),
+			RQLiteDSN:             tenantRQLiteURL(replacement.InternalIP, portBlock.RQLiteHTTPPort),
 			GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 			OlricServers:          olricServers,
 			OlricTimeout:          30 * time.Second,
@@ -1008,37 +1005,25 @@ func (cm *ClusterManager) removeDeadNodeFromRaft(ctx context.Context, deadRaftAd
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]string{"id": deadRaftAddr})
-
 	for _, s := range survivingNodes {
 		if s.RQLiteHTTPPort == 0 {
 			continue
 		}
-		url := fmt.Sprintf("http://%s:%d/remove", s.InternalIP, s.RQLiteHTTPPort)
-		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, bytes.NewReader(payload))
+		ep, err := cm.tenantRQLiteEndpoint(s.InternalIP, s.RQLiteHTTPPort)
 		if err != nil {
+			cm.logger.Warn("Cannot address surviving node's RQLite to remove the dead node",
+				zap.String("target", s.NodeID), zap.Error(err))
 			continue
 		}
-		req.Header.Set("Content-Type", "application/json")
-
-		httpClient := &http.Client{Timeout: 10 * time.Second}
-		resp, err := httpClient.Do(req)
-		if err != nil {
+		if err := ep.Admin().Remove(ctx, deadRaftAddr); err != nil {
 			cm.logger.Warn("Failed to remove dead node from Raft via this node",
 				zap.String("target", s.NodeID), zap.Error(err))
 			continue
 		}
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
-			cm.logger.Info("Removed dead node from Raft cluster",
-				zap.String("dead_raft_addr", deadRaftAddr),
-				zap.String("via_node", s.NodeID))
-			return
-		}
-		cm.logger.Warn("Raft removal returned unexpected status",
-			zap.String("via_node", s.NodeID),
-			zap.Int("status", resp.StatusCode))
+		cm.logger.Info("Removed dead node from Raft cluster",
+			zap.String("dead_raft_addr", deadRaftAddr),
+			zap.String("via_node", s.NodeID))
+		return
 	}
 	cm.logger.Warn("Could not remove dead node from Raft cluster (best-effort)",
 		zap.String("dead_raft_addr", deadRaftAddr))
@@ -1408,7 +1393,7 @@ func (cm *ClusterManager) addNodeToCluster(
 		NodeID:                replacement.NodeID,
 		HTTPPort:              portBlock.GatewayHTTPPort,
 		BaseDomain:            cm.baseDomain,
-		RQLiteDSN:             localRQLiteDSN(replacement.InternalIP, portBlock.RQLiteHTTPPort),
+		RQLiteDSN:             tenantRQLiteURL(replacement.InternalIP, portBlock.RQLiteHTTPPort),
 		GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 		OlricServers:          olricServers,
 		OlricTimeout:          30 * time.Second,

@@ -82,6 +82,10 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	if err := process.ValidateInstance(req.Namespace, req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	h.logger.Info("Setting up deployment replica",
 		zap.String("deployment_id", req.DeploymentID),
@@ -109,12 +113,19 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Create the deployment directory
-	deployPath := process.DeployDir(h.baseDeployPath, req.Namespace, req.Name)
-	if err := os.MkdirAll(deployPath, 0755); err != nil {
-		http.Error(w, "Failed to create deployment directory", http.StatusInternalServerError)
+	// Claim the instance on this host: another gateway here may already run
+	// a deployment whose instance this one maps to (instance_claim.go).
+	claim, err := h.service.claimInstance(ctx, h.baseDeployPath, req.Namespace, req.Name)
+	if err != nil {
+		writeDeploymentNameError(w, h.logger, err)
 		return
 	}
+	defer func() {
+		if !setupOK {
+			h.service.releaseClaim(claim)
+		}
+	}()
+	deployPath := claim.dir
 
 	// Extract content from IPFS
 	cid := req.BuildCID
@@ -155,6 +166,16 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		CPULimitPercent: req.CPULimitPercent,
 		RestartPolicy:   deployments.RestartPolicy(req.RestartPolicy),
 		MaxRestartCount: req.MaxRestartCount,
+	}
+
+	// A replica gets no server-side install; it must not run with what an
+	// earlier holder of this instance installed on this node either.
+	if process.UsesBuildOutput(deployment.Type) {
+		if err := h.processManager.ClearDependencies(deployment.Namespace, deployment.Name); err != nil {
+			h.logger.Error("Failed to clear the replica's build output", zap.Error(err))
+			http.Error(w, "Failed to prepare the replica", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Start the process
@@ -216,6 +237,10 @@ func (h *ReplicaHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	if err := process.ValidateInstance(req.Namespace, req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	h.logger.Info("Updating deployment replica",
 		zap.String("deployment_id", req.DeploymentID),
@@ -247,6 +272,13 @@ func (h *ReplicaHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	stagingPath := deployPath + ".new"
 	oldPath := deployPath + ".old"
 
+	// The directory on this host must be this deployment's before anything
+	// replaces it (instance_claim.go).
+	if err := h.service.checkInstanceOwner(ctx, deployPath, req.Namespace, req.Name); err != nil {
+		writeDeploymentNameError(w, h.logger, err)
+		return
+	}
+
 	// Extract to staging
 	if err := os.MkdirAll(stagingPath, 0755); err != nil {
 		http.Error(w, "Failed to create staging directory", http.StatusInternalServerError)
@@ -256,6 +288,13 @@ func (h *ReplicaHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.extractFromIPFS(ctx, cid, stagingPath); err != nil {
 		os.RemoveAll(stagingPath)
 		http.Error(w, "Failed to extract content", http.StatusInternalServerError)
+		return
+	}
+	// The staged directory replaces the claimed one, so it carries the marker.
+	if err := writeOwnerMarker(stagingPath, req.Namespace, req.Name, false); err != nil {
+		h.logger.Error("Failed to mark the staged replica directory", zap.Error(err))
+		os.RemoveAll(stagingPath)
+		http.Error(w, "Failed to stage the update", http.StatusInternalServerError)
 		return
 	}
 
@@ -361,6 +400,10 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	if err := process.ValidateInstance(req.Namespace, req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	h.logger.Info("Tearing down deployment replica",
 		zap.String("deployment_id", req.DeploymentID),
@@ -368,6 +411,18 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 	)
 
 	ctx := r.Context()
+
+	// The unit and the directory are this deployment's only if the directory
+	// on this host is: another gateway here may run a deployment whose
+	// instance this one maps to, and stopping it or deleting its files would
+	// take that one down.
+	deployPath := process.DeployDir(h.baseDeployPath, req.Namespace, req.Name)
+	owned, err := h.service.ownsInstanceDir(ctx, deployPath, req.Namespace, req.Name)
+	if err != nil {
+		h.logger.Error("Failed to check who owns the replica's directory", zap.Error(err))
+		http.Error(w, "Failed to check the replica's directory", http.StatusInternalServerError)
+		return
+	}
 
 	// Get port for this replica before teardown
 	var port int
@@ -388,14 +443,19 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 		HomeNodeID: h.service.nodePeerID,
 	}
 
-	if err := h.processManager.Stop(ctx, deployment); err != nil {
-		h.logger.Warn("Failed to stop replica process", zap.Error(err))
-	}
-
-	// Remove deployment files
-	deployPath := process.DeployDir(h.baseDeployPath, req.Namespace, req.Name)
-	if err := os.RemoveAll(deployPath); err != nil {
-		h.logger.Warn("Failed to remove replica files", zap.Error(err))
+	if owned {
+		if err := h.processManager.Stop(ctx, deployment); err != nil {
+			h.logger.Warn("Failed to stop replica process", zap.Error(err))
+		}
+		// Removing the directory releases the instance on this host.
+		if err := os.RemoveAll(deployPath); err != nil {
+			h.logger.Error("Failed to remove replica files", zap.String("path", deployPath), zap.Error(err))
+			http.Error(w, "Failed to remove the replica's files", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		h.logger.Warn("Left the replica's unit and directory alone: another deployment on this host holds its instance",
+			zap.String("instance", process.InstanceName(req.Namespace, req.Name)))
 	}
 
 	// Deallocate the port
@@ -433,7 +493,7 @@ func (h *ReplicaHandler) extractFromIPFS(ctx context.Context, cid, destPath stri
 	}
 	tmpFile.Close()
 
-	cmd := exec.Command("tar", "-xzf", tmpFile.Name(), "-C", destPath)
+	cmd := exec.Command("tar", tarExtractArgs(tmpFile.Name(), destPath)...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to extract tarball: %s: %w", string(output), err)
 	}

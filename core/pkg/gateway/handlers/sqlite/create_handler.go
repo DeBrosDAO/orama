@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -28,14 +31,11 @@ type SQLiteHandler struct {
 }
 
 // NewSQLiteHandler creates a new SQLite handler
-// dataDir: Base directory for node-local data (if empty, defaults to ~/.orama)
+// basePath: Directory the databases live under, one subdirectory per namespace
+// (<oramaDir>/data/sqlite in production; if empty, defaults to ~/.orama/sqlite)
 // nodeID: The node's peer ID for affinity checks (can be empty for single-node setups)
-func NewSQLiteHandler(db rqlite.Client, homeNodeManager *deployments.HomeNodeManager, logger *zap.Logger, dataDir string, nodeID string) *SQLiteHandler {
-	var basePath string
-
-	if dataDir != "" {
-		basePath = filepath.Join(dataDir, "sqlite")
-	} else {
+func NewSQLiteHandler(db rqlite.Client, homeNodeManager *deployments.HomeNodeManager, logger *zap.Logger, basePath string, nodeID string) *SQLiteHandler {
+	if basePath == "" {
 		// Use user's home directory for cross-platform compatibility
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -45,6 +45,8 @@ func NewSQLiteHandler(db rqlite.Client, homeNodeManager *deployments.HomeNodeMan
 		basePath = filepath.Join(homeDir, ".orama", "sqlite")
 	}
 
+	narrowExistingBase(basePath, logger)
+
 	return &SQLiteHandler{
 		db:              db,
 		homeNodeManager: homeNodeManager,
@@ -52,6 +54,68 @@ func NewSQLiteHandler(db rqlite.Client, homeNodeManager *deployments.HomeNodeMan
 		basePath:        basePath,
 		currentNodeID:   nodeID,
 	}
+}
+
+// databasePath is where a namespace's database lives on its home node.
+//
+// Derived from the layout, never read back from the registry's file_path: that
+// column records an absolute path at creation time, and a database created
+// before the move to <oramaDir>/data/sqlite recorded one outside the gateway's
+// writable paths — which no longer exists after the upgrade moves the tree.
+// Namespace and name are validated before they get here.
+func (h *SQLiteHandler) databasePath(namespace, databaseName string) string {
+	return filepath.Join(h.basePath, namespace, databaseName+".db")
+}
+
+// Tenant databases are read and written only by the gateway, in process. They
+// used to be created 0644 in 0755 directories, so any user on the host — a
+// tenant's deployment included — could read every namespace's data.
+const (
+	sqliteDirMode  os.FileMode = 0o700
+	sqliteFileMode os.FileMode = 0o600
+)
+
+// createPrivateDBFile creates dbPath, and the directories above it up to the
+// handler's base, readable by the gateway alone. SQLite gives the -wal and
+// -shm files it creates later the database file's own mode.
+//
+// Directories that already exist are narrowed too: an existing node created
+// them 0755, and a 0700 base alone is enough to close every database below it.
+func (h *SQLiteHandler) createPrivateDBFile(dbPath string) error {
+	nsDir := filepath.Dir(dbPath)
+	for _, dir := range []string{h.basePath, nsDir} {
+		if err := os.MkdirAll(dir, sqliteDirMode); err != nil {
+			return fmt.Errorf("create database directory %s: %w", dir, err)
+		}
+		if err := os.Chmod(dir, sqliteDirMode); err != nil {
+			return fmt.Errorf("restrict database directory %s to %v: %w", dir, sqliteDirMode, err)
+		}
+	}
+	f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, sqliteFileMode)
+	if err != nil {
+		return fmt.Errorf("create database file %s: %w", dbPath, err)
+	}
+	// A file left by an earlier, failed create keeps whatever mode it had.
+	chmodErr := f.Chmod(sqliteFileMode)
+	if err := errors.Join(chmodErr, f.Close()); err != nil {
+		return fmt.Errorf("restrict database file %s to %v: %w", dbPath, sqliteFileMode, err)
+	}
+	return nil
+}
+
+// narrowExistingBase restricts an existing base directory to the gateway: a
+// node before this release created it 0755, and a 0700 base closes every
+// database below it without touching them. A base that does not exist yet is
+// created 0700 by the first create. The constructor has no error to return,
+// so a failure is logged as the error it is, naming what to fix.
+func narrowExistingBase(base string, logger *zap.Logger) {
+	err := os.Chmod(base, sqliteDirMode)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	logger.Error("Tenant SQLite databases are readable by other users on this host: "+
+		"could not restrict their directory; chmod it to 0700 as its owner",
+		zap.String("dir", base), zap.Error(err))
 }
 
 // writeCreateError writes an error response as JSON for consistency
@@ -121,12 +185,11 @@ func (h *SQLiteHandler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 
 	// Create database file path
 	dbID := uuid.New().String()
-	dbPath := filepath.Join(h.basePath, namespace, req.DatabaseName+".db")
+	dbPath := h.databasePath(namespace, req.DatabaseName)
 
-	// Create directory if needed
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-		h.logger.Error("Failed to create directory", zap.Error(err))
-		writeCreateError(w, http.StatusInternalServerError, "Failed to create database directory")
+	if err := h.createPrivateDBFile(dbPath); err != nil {
+		h.logger.Error("Failed to create database file", zap.Error(err))
+		writeCreateError(w, http.StatusInternalServerError, "Failed to create database file")
 		return
 	}
 

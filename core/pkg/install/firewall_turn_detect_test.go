@@ -3,44 +3,113 @@ package install
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 )
 
-// TestHostRunsTURN is the bugboard #846 guard: Phase 6b must detect a TURN node
-// even when the TURN systemd unit is STOPPED (the upgrade stops it before the
-// firewall reset). Detection keys on the persisted turn.env file, which
-// survives a stop + `ufw --force reset`, so it never produces the false
-// negative that would close the relay on the upgrade path.
-func TestHostRunsTURN(t *testing.T) {
-	tmp := t.TempDir()
-	ps := &ProductionSetup{oramaDir: tmp}
+func turnSetup(t *testing.T) (*ProductionSetup, string) {
+	t.Helper()
+	oramaDir := filepath.Join(t.TempDir(), ".orama")
+	return &ProductionSetup{oramaDir: oramaDir}, oramaDir
+}
 
-	// No namespaces provisioned → not a TURN node.
-	if ps.hostRunsTURN() {
-		t.Fatal("expected hostRunsTURN=false when no turn.env exists")
+func writeTURNFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
 	}
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
 
-	// A gateway-only namespace (no turn.env) → still not a TURN node.
-	gwOnly := filepath.Join(tmp, "data", "namespaces", "gw-only")
-	if err := os.MkdirAll(gwOnly, 0o755); err != nil {
-		t.Fatal(err)
+func assertRunsTURN(t *testing.T, ps *ProductionSetup, want bool, why string) {
+	t.Helper()
+	got, err := ps.hostRunsTURN()
+	if err != nil {
+		t.Fatalf("%s: %v", why, err)
 	}
-	if err := os.WriteFile(filepath.Join(gwOnly, "gateway.env"), []byte("X=1\n"), 0o644); err != nil {
-		t.Fatal(err)
+	if got != want {
+		t.Fatalf("%s: hostRunsTURN = %v, want %v", why, got, want)
 	}
-	if ps.hostRunsTURN() {
-		t.Fatal("expected hostRunsTURN=false for a gateway-only namespace")
-	}
+}
 
-	// A namespace with a provisioned (but possibly stopped) TURN → TURN node.
-	turnNS := filepath.Join(tmp, "data", "namespaces", "anchat-test")
-	if err := os.MkdirAll(turnNS, 0o755); err != nil {
+// Bugboard #846: Phase 6b must find a TURN node from files, since the upgrade
+// has stopped the TURN units by then. It reads the layout the node is on: the
+// current shared config, or — until orama-node has moved it — the old one.
+func TestHostRunsTURN_eachLayoutLocationCounts(t *testing.T) {
+	for _, tc := range []struct{ name, rel string }{
+		{"current shared config", "data/turn/turn.yaml"},
+		{"old shared config", "configs/turn.yaml"},
+		{"old per-namespace env", "data/namespaces/anchat/turn.env"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ps, oramaDir := turnSetup(t)
+			writeTURNFile(t, filepath.Join(oramaDir, tc.rel))
+			assertRunsTURN(t, ps, true, tc.name)
+		})
+	}
+}
+
+func TestHostRunsTURN_noTURNAnywhere(t *testing.T) {
+	ps, oramaDir := turnSetup(t)
+	assertRunsTURN(t, ps, false, "an empty node")
+
+	writeTURNFile(t, filepath.Join(oramaDir, "data", "namespaces", "gw-only", "gateway.env"))
+	assertRunsTURN(t, ps, false, "a gateway-only namespace")
+}
+
+// A location that cannot be read is not evidence of no TURN: guessing "no"
+// closes the relay range on a TURN node.
+func TestHostRunsTURN_unreadableNamespacesDirIsAnError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any directory")
+	}
+	ps, oramaDir := turnSetup(t)
+	nsDir := filepath.Join(oramaDir, "data", "namespaces")
+	if err := os.MkdirAll(nsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(turnNS, "turn.env"), []byte("TURN_CONFIG=/x.yaml\n"), 0o644); err != nil {
+	if err := os.Chmod(nsDir, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	if !ps.hostRunsTURN() {
-		t.Fatal("expected hostRunsTURN=true when a namespace turn.env exists (even if the unit is stopped)")
+	t.Cleanup(func() { os.Chmod(nsDir, 0o700) })
+	if _, err := ps.hostRunsTURN(); err == nil {
+		t.Fatal("an unreadable namespaces directory must be an error")
+	}
+}
+
+// Root reads a directory the orama user owns here. A FIFO or symlink planted
+// as data/namespaces must fail the phase at once, not block it forever with
+// the node's services stopped.
+func TestHostRunsTURN_plantedFIFOOrSymlinkFailsFast(t *testing.T) {
+	for _, kind := range []string{"fifo", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			ps, oramaDir := turnSetup(t)
+			nsDir := filepath.Join(oramaDir, "data", "namespaces")
+			if err := os.MkdirAll(filepath.Dir(nsDir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			if kind == "fifo" {
+				err = syscall.Mkfifo(nsDir, 0o600)
+			} else {
+				err = os.Symlink(t.TempDir(), nsDir)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { _, err := ps.hostRunsTURN(); done <- err }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatalf("a %s in place of data/namespaces must be an error", kind)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("hostRunsTURN blocked on a %s", kind)
+			}
+		})
 	}
 }

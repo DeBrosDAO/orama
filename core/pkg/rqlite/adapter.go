@@ -31,16 +31,10 @@ type RQLiteAdapter struct {
 // the WireGuard mesh.
 const adapterReadConsistencyLevel = "weak"
 
-// buildRQLiteDSN composes the DSN URL passed to gorqlite's stdlib driver.
-// Pulled out for unit testing — the URL must encode `level=weak` (bug #235)
-// in addition to `disableClusterDiscovery=true`.
-func buildRQLiteDSN(host string, port int, username, password string) string {
-	return buildRQLiteDSNWithLevel(host, port, username, password, adapterReadConsistencyLevel)
-}
-
-// buildRQLiteDSNWithLevel is buildRQLiteDSN with an explicit read level, so the
-// bootstrap-only local handle (LocalDB) can ask for `none` while the main pool
-// keeps `weak`.
+// buildRQLiteDSNWithLevel composes the DSN URL passed to gorqlite's stdlib
+// driver at an explicit read level: the main pool asks for `weak` (bug #235),
+// the bootstrap-only local handle (LocalDB) for `none`. It always carries
+// `disableClusterDiscovery=true`. Reached through Endpoint.SQLDSN.
 //
 // The credentials are interpolated, not URL-escaped. That is safe for the only
 // credentials this system generates — EnsureRQLiteAuth produces a 64-character
@@ -58,12 +52,11 @@ func buildRQLiteDSNWithLevel(host string, port int, username, password, level st
 
 // NewRQLiteAdapter creates a new adapter that provides sql.DB interface for RQLite.
 func NewRQLiteAdapter(manager *RQLiteManager) (*RQLiteAdapter, error) {
-	host := "127.0.0.1"
-	if manager.discoverConfig != nil {
-		host = BindHost(manager.discoverConfig.HttpAdvAddress)
+	ep, err := manager.LocalEndpoint()
+	if err != nil {
+		return nil, err
 	}
-	dsn := buildRQLiteDSN(host, manager.config.RQLitePort,
-		manager.config.RQLiteUsername, manager.config.RQLitePassword)
+	dsn := ep.SQLDSN(adapterReadConsistencyLevel)
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
 		// The DSN embeds the RQLite password, and gorqlite echoes the DSN back
@@ -141,16 +134,14 @@ func (a *RQLiteAdapter) LocalDB() (*sql.DB, error) {
 	if a.localDB != nil {
 		return a.localDB, nil
 	}
-	if a.manager == nil || a.manager.config == nil {
-		return nil, fmt.Errorf("rqlite adapter: manager config unavailable, cannot open local read connection")
+	if a.manager == nil {
+		return nil, fmt.Errorf("rqlite adapter: manager unavailable, cannot open local read connection")
 	}
-	host := "127.0.0.1"
-	if a.manager.discoverConfig != nil {
-		host = BindHost(a.manager.discoverConfig.HttpAdvAddress)
+	ep, err := a.manager.LocalEndpoint()
+	if err != nil {
+		return nil, err
 	}
-	dsn := buildRQLiteDSNWithLevel(host, a.manager.config.RQLitePort,
-		a.manager.config.RQLiteUsername, a.manager.config.RQLitePassword,
-		localReadConsistencyLevel)
+	dsn := ep.SQLDSN(localReadConsistencyLevel)
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open local (level=none) RQLite connection: %s", RedactError(err, dsn))

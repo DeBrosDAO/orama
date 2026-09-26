@@ -64,18 +64,21 @@ type GatewayInstance struct {
 
 // InstanceConfig is the input to spawning a gateway instance.
 type InstanceConfig struct {
-	Namespace             string
-	NodeID                string
-	HTTPPort              int
-	BaseDomain            string
-	RQLiteDSN             string
-	GlobalRQLiteDSN       string
-	RQLiteUsername        string
-	RQLitePassword        string
-	OlricServers          []string
-	OlricTimeout          time.Duration
-	NodePeerID            string
-	DataDir               string
+	Namespace       string
+	NodeID          string
+	HTTPPort        int
+	BaseDomain      string
+	RQLiteDSN       string
+	GlobalRQLiteDSN string
+	RQLiteUsername  string
+	RQLitePassword  string
+	OlricServers    []string
+	OlricTimeout    time.Duration
+	NodePeerID      string
+	// StateDir is the gateway's private state directory
+	// (<oramaDir>/data/namespaces/<ns>/gateway). The spawner sets it from its
+	// namespace base when it renders the YAML; callers leave it empty.
+	StateDir              string
 	IPFSClusterAPIURL     string
 	IPFSAPIURL            string
 	IPFSTimeout           time.Duration
@@ -124,6 +127,7 @@ type GatewayYAMLConfig struct {
 	NtfyBaseURL           string            `yaml:"ntfy_base_url,omitempty"`
 	ClusterSecretPath     string            `yaml:"cluster_secret_path,omitempty"`
 	APIKeyHMACSecret      string            `yaml:"api_key_hmac_secret,omitempty"`
+	StateDir              string            `yaml:"state_dir"`
 }
 
 // IsHealthy checks if the Gateway instance answers /v1/health.

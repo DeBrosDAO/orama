@@ -2,14 +2,17 @@ package gateway
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/anonproxy"
-	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"go.uber.org/zap"
 )
 
 // Build info (set via -ldflags at build time; defaults for dev)
@@ -29,29 +32,67 @@ type checkResult struct {
 
 // cachedHealthResult caches the aggregate health response for 5 seconds.
 type cachedHealthResult struct {
-	response   any
+	response   map[string]any
 	httpStatus int
 	cachedAt   time.Time
 }
 
 const healthCacheTTL = 5 * time.Second
 
+// The health and status endpoints are open: DNS membership, load balancers
+// and `orama monitor` read them with no credential. What an open endpoint
+// shows is status — healthy, degraded, starting — and nothing an attacker
+// would want mapped: /v1/health used to list every namespace hosted on the
+// node with its internal ports, and /v1/status every peer's id and addresses.
+// The detail is still produced, and an operator reads it at
+// /v1/operator/health (operatorHealthHandler).
+
+// healthHandler serves the unauthenticated /health and /v1/health.
 func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
+	httpStatus, body := g.healthReport(r.Context())
+	writeJSON(w, httpStatus, publicHealth(body))
+}
+
+// operatorHealthHandler serves /v1/operator/health: the same report with every
+// check's detail and the health of each namespace hosted here.
+func (g *Gateway) operatorHealthHandler(w http.ResponseWriter, r *http.Request) {
+	if g.operatorHandler == nil {
+		writeError(w, http.StatusServiceUnavailable, "this gateway cannot check the operator list")
+		return
+	}
+	if _, ok := g.operatorHandler.Authorize(w, r); !ok {
+		return
+	}
+	httpStatus, body := g.healthReport(r.Context())
+	writeJSON(w, httpStatus, body)
+}
+
+// publicHealth is the part of a health report an anonymous caller sees: the
+// overall status and each check's status. The readiness body a starting
+// gateway returns is public already (publicReadiness).
+func publicHealth(body map[string]any) map[string]any {
+	checks, ok := body["checks"].(map[string]checkResult)
+	if !ok {
+		return body
+	}
+	statuses := make(map[string]map[string]string, len(checks))
+	for name, c := range checks {
+		statuses[name] = map[string]string{"status": c.Status}
+	}
+	return map[string]any{"status": body["status"], "server": body["server"], "checks": statuses}
+}
+
+// healthReport is the full health report and the HTTP status it answers with.
+func (g *Gateway) healthReport(ctx context.Context) (int, map[string]any) {
 	// A gateway that has not finished starting reports that, and why, instead
 	// of the subsystem fan-out below. The checks would mostly pass — the
 	// process is up, the port answers — which is exactly the misleading
 	// "healthy" that let a gateway with no usable schema stay in rotation.
-	if state, reason, since := g.ready.snapshot(); state != ReadinessReady {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"status": string(state),
-			"reason": reason,
-			"since":  since,
-			"server": map[string]any{
-				"started_at": g.startedAt,
-				"uptime":     time.Since(g.startedAt).String(),
-			},
-		})
-		return
+	// It reports the reason code, and the error behind it stays in the log.
+	if state, code, _, since := g.ready.snapshot(); state != ReadinessReady {
+		body := publicReadiness(state, code, since)
+		body["server"] = g.serverInfo()
+		return http.StatusServiceUnavailable, body
 	}
 
 	// Serve from cache if fresh
@@ -59,12 +100,42 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 	cached := g.healthCache
 	g.healthCacheMu.RUnlock()
 	if cached != nil && time.Since(cached.cachedAt) < healthCacheTTL {
-		writeJSON(w, cached.httpStatus, cached.response)
-		return
+		return cached.httpStatus, cached.response
 	}
 
-	// Run all checks in parallel with a shared 5s timeout
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	checks := g.runHealthChecks(ctx)
+	overallStatus := aggregateHealthStatus(checks)
+	httpStatus := http.StatusOK
+	if overallStatus != "healthy" {
+		httpStatus = http.StatusServiceUnavailable
+	}
+	resp := map[string]any{
+		"status": overallStatus,
+		"server": g.serverInfo(),
+		"checks": checks,
+	}
+	// Include namespace health if available (populated by namespace health loop)
+	if nsHealth := g.getNamespaceHealth(); nsHealth != nil {
+		resp["namespaces"] = nsHealth
+	}
+
+	g.healthCacheMu.Lock()
+	g.healthCache = &cachedHealthResult{response: resp, httpStatus: httpStatus, cachedAt: time.Now()}
+	g.healthCacheMu.Unlock()
+	return httpStatus, resp
+}
+
+// serverInfo is when this gateway started and how long it has been up.
+func (g *Gateway) serverInfo() map[string]any {
+	return map[string]any{
+		"started_at": g.startedAt,
+		"uptime":     time.Since(g.startedAt).String(),
+	}
+}
+
+// runHealthChecks runs every subsystem check in parallel under one 5s budget.
+func (g *Gateway) runHealthChecks(parent context.Context) map[string]checkResult {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 
 	type namedResult struct {
@@ -82,7 +153,7 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			start := time.Now()
 			if err := g.sqlDB.PingContext(ctx); err != nil {
-				nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: err.Error()}
+				nr.result = g.failedCheck("rqlite", start, err)
 			} else {
 				nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
 			}
@@ -101,7 +172,7 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			start := time.Now()
 			if err := oc.Health(ctx); err != nil {
-				nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: err.Error()}
+				nr.result = g.failedCheck("olric", start, err)
 			} else {
 				nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
 			}
@@ -117,7 +188,7 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			start := time.Now()
 			if err := g.ipfsClient.Health(ctx); err != nil {
-				nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: err.Error()}
+				nr.result = g.failedCheck("ipfs", start, err)
 			} else {
 				nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
 			}
@@ -144,17 +215,20 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		ch <- namedResult{name: anonProxyCheckName, result: anonProxyCheck(anonproxy.Running)}
 	}()
 
-	// Vault Guardian (TCP connect on WireGuard IP:7500)
+	// Vault Guardian: a TCP connect to its port on this node's WireGuard
+	// address, the only address it binds. There is no localhost to try instead.
 	go func() {
 		nr := namedResult{name: "vault"}
 		start := time.Now()
-		vaultAddr := "localhost:10106"
-		if g.localWireGuardIP != "" {
-			vaultAddr = g.localWireGuardIP + ":10106"
+		if g.localWireGuardIP == "" {
+			nr.result = g.failedCheck("vault", start, errors.New("this gateway has no WireGuard address to reach vault-guardian on"))
+			ch <- nr
+			return
 		}
-		conn, err := net.DialTimeout("tcp", vaultAddr, 2*time.Second)
+		vaultAddr := net.JoinHostPort(g.localWireGuardIP, strconv.Itoa(constants.VaultHTTPPort))
+		conn, err := net.DialTimeout("tcp", vaultAddr, vaultProbeTimeout)
 		if err != nil {
-			nr.result = checkResult{Status: "error", Latency: time.Since(start).String(), Error: fmt.Sprintf("vault-guardian unreachable on port 7500: %v", err)}
+			nr.result = g.failedCheck("vault", start, err)
 		} else {
 			conn.Close()
 			nr.result = checkResult{Status: "ok", Latency: time.Since(start).String()}
@@ -182,38 +256,19 @@ func (g *Gateway) healthHandler(w http.ResponseWriter, r *http.Request) {
 		nr := <-ch
 		checks[nr.name] = nr.result
 	}
+	return checks
+}
 
-	overallStatus := aggregateHealthStatus(checks)
+// vaultProbeTimeout bounds the vault-guardian TCP probe.
+const vaultProbeTimeout = 2 * time.Second
 
-	httpStatus := http.StatusOK
-	if overallStatus != "healthy" {
-		httpStatus = http.StatusServiceUnavailable
-	}
-
-	resp := map[string]any{
-		"status": overallStatus,
-		"server": map[string]any{
-			"started_at": g.startedAt,
-			"uptime":     time.Since(g.startedAt).String(),
-		},
-		"checks": checks,
-	}
-
-	// Include namespace health if available (populated by namespace health loop)
-	if nsHealth := g.getNamespaceHealth(); nsHealth != nil {
-		resp["namespaces"] = nsHealth
-	}
-
-	// Cache
-	g.healthCacheMu.Lock()
-	g.healthCache = &cachedHealthResult{
-		response:   resp,
-		httpStatus: httpStatus,
-		cachedAt:   time.Now(),
-	}
-	g.healthCacheMu.Unlock()
-
-	writeJSON(w, httpStatus, resp)
+// failedCheck records a failed health check. The error is kept: an operator
+// reads this report at /v1/operator/health. The unauthenticated /health is
+// publicHealth, which keeps each check's status and drops the error.
+func (g *Gateway) failedCheck(name string, start time.Time, err error) checkResult {
+	g.logger.ComponentWarn(logging.ComponentGeneral, "health check failed",
+		zap.String("check", name), zap.Error(err))
+	return checkResult{Status: "error", Latency: time.Since(start).String(), Error: err.Error()}
 }
 
 // anonProxyCheckName is the /v1/health key that reports the Tor SOCKS port
@@ -234,33 +289,24 @@ func anonProxyCheck(running func() bool) checkResult {
 
 // pingHandler is a lightweight internal endpoint used for peer-to-peer
 // health probing over the WireGuard mesh. No subsystem checks — just
-// confirms the gateway process is alive and returns its node ID.
+// confirms the gateway process is alive.
+//
+// The prober reads the status code and nothing else. It used to return the
+// node's peer id as well, to anyone: the route is open and Caddy proxies every
+// path to it from the internet.
 func (g *Gateway) pingHandler(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"node_id": g.nodePeerID,
-		"status":  "ok",
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
-// statusHandler aggregates server uptime and network status
+// statusHandler serves the unauthenticated /status and /v1/status: that the
+// gateway is up, and since when. It used to embed the network status — this
+// node's peer id, its peers, its IPFS and IPFS Cluster peer ids and swarm
+// addresses — which is a map of the cluster for anyone who asks. That is at
+// /v1/network/status now, for operators and for nodes (networkStatusHandler).
 func (g *Gateway) statusHandler(w http.ResponseWriter, r *http.Request) {
-	if g.client == nil {
-		writeError(w, http.StatusServiceUnavailable, "client not initialized")
-		return
-	}
-	// Use internal auth context to bypass client credential requirements
-	ctx := client.WithInternalAuth(r.Context())
-	status, err := g.client.Network().GetStatus(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"server": map[string]any{
-			"started_at": g.startedAt,
-			"uptime":     time.Since(g.startedAt).String(),
-		},
-		"network": status,
+		"status": "ok",
+		"server": g.serverInfo(),
 	})
 }
 
@@ -307,11 +353,7 @@ func (g *Gateway) tlsCheckHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get base domain from config
-	baseDomain := "dbrs.space"
-	if g.cfg != nil && g.cfg.BaseDomain != "" {
-		baseDomain = g.cfg.BaseDomain
-	}
+	baseDomain := g.cfg.BaseDomain
 
 	// Allow any subdomain of our base domain
 	if strings.HasSuffix(domain, "."+baseDomain) || domain == baseDomain {

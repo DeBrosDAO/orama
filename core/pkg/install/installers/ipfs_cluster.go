@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
 // IPFSClusterInstaller handles IPFS Cluster Service installation
@@ -25,49 +29,24 @@ func NewIPFSClusterInstaller(arch string, logWriter io.Writer) *IPFSClusterInsta
 	}
 }
 
-// IsInstalled checks if IPFS Cluster is already installed
-func (ici *IPFSClusterInstaller) IsInstalled() bool {
-	_, err := exec.LookPath("ipfs-cluster-service")
-	return err == nil
-}
-
-// Install downloads and installs IPFS Cluster Service
-func (ici *IPFSClusterInstaller) Install() error {
-	if ici.IsInstalled() {
-		fmt.Fprintf(ici.logWriter, "  ✓ IPFS Cluster already installed\n")
-		return nil
-	}
-
-	fmt.Fprintf(ici.logWriter, "  Installing IPFS Cluster Service...\n")
-
-	// Check if Go is available
-	if _, err := exec.LookPath("go"); err != nil {
-		return fmt.Errorf("go not found - required to install IPFS Cluster. Please install Go first")
-	}
-
-	cmd := exec.Command("go", "install", fmt.Sprintf("github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@%s", constants.IPFSClusterVersion))
-	cmd.Env = append(os.Environ(), "GOBIN=/usr/local/bin", "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to install IPFS Cluster: %w", err)
-	}
-
-	fmt.Fprintf(ici.logWriter, "  ✓ IPFS Cluster installed\n")
-	return nil
-}
-
-// Configure is a placeholder for IPFS Cluster configuration
-func (ici *IPFSClusterInstaller) Configure() error {
-	// Configuration is handled by InitializeConfig
-	return nil
-}
-
 // InitializeConfig initializes IPFS Cluster configuration (unified - no bootstrap/node distinction)
 // This runs `ipfs-cluster-service init` to create the service.json configuration file.
 // For existing installations, it ensures the cluster secret is up to date.
-// clusterPeers should be in format: ["/ip4/<ip>/tcp/9100/p2p/<cluster-peer-id>"]
-func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret string, ipfsAPIPort int, clusterPeers []string) error {
+// clusterPeers should be in format:
+// ["/ip4/<wg-ip>/tcp/<constants.IPFSClusterSwarmPort>/p2p/<cluster-peer-id>"]
+//
+// swarmIP is this node's WireGuard address, where the cluster's
+// peer-to-peer listener binds (see ClusterSwarmListenAddr).
+//
+// root is the anchor clusterPath lives under (rootfs): the cluster directory
+// is the orama user's, so root writes it without following symlinks.
+func (ici *IPFSClusterInstaller) InitializeConfig(root rootfs.Root, clusterPath, clusterSecret string, ipfsAPIPort int, swarmIP string, clusterPeers []string) error {
 	if strings.TrimSpace(clusterSecret) == "" {
 		return fmt.Errorf("CLUSTER_SECRET is empty; refusing to initialize IPFS Cluster")
+	}
+	listenAddr, err := ClusterSwarmListenAddr(swarmIP)
+	if err != nil {
+		return err
 	}
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 	configExists := false
@@ -78,7 +57,7 @@ func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret str
 		fmt.Fprintf(ici.logWriter, "    Preparing IPFS Cluster path...\n")
 	}
 
-	if err := os.MkdirAll(clusterPath, 0755); err != nil {
+	if err := root.MkdirAll(clusterPath, 0755); err != nil {
 		return fmt.Errorf("failed to create IPFS Cluster directory: %w", err)
 	}
 
@@ -90,22 +69,25 @@ func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret str
 
 	// Initialize cluster config if it doesn't exist
 	if !configExists {
-		// Initialize cluster config with ipfs-cluster-service init
-		// This creates the service.json file with all required sections
+		// ipfs-cluster-service init creates service.json with every section.
+		// It runs as the orama user (runas.go): the directory is that user's,
+		// and the tool resolves paths in it without pkg/rootfs.
 		fmt.Fprintf(ici.logWriter, "    Initializing IPFS Cluster config...\n")
-		cmd := exec.Command(clusterBinary, "init", "--force")
-		cmd.Env = append(os.Environ(), "IPFS_CLUSTER_PATH="+clusterPath, "CLUSTER_SECRET="+clusterSecret)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to initialize IPFS Cluster config: %v\n%s", err, string(output))
+		if err := giveToServiceUser(root, clusterPath); err != nil {
+			return err
+		}
+		env := []string{"IPFS_CLUSTER_PATH=" + clusterPath, "CLUSTER_SECRET=" + clusterSecret}
+		if err := runAsServiceUser(env, clusterBinary, "init", "--force"); err != nil {
+			return fmt.Errorf("failed to initialize IPFS Cluster config: %w", err)
 		}
 	}
 
-	fmt.Fprintf(ici.logWriter, "    Updating cluster secret, IPFS port, and peer addresses...\n")
-	if err := ici.updateConfig(clusterPath, clusterSecret, ipfsAPIPort, clusterPeers); err != nil {
+	fmt.Fprintf(ici.logWriter, "    Updating cluster secret, listeners, IPFS port, and peer addresses...\n")
+	if err := ici.updateConfig(root, clusterPath, clusterSecret, ipfsAPIPort, listenAddr, clusterPeers); err != nil {
 		return fmt.Errorf("failed to update cluster config: %w", err)
 	}
 
-	if err := ici.verifySecret(clusterPath, clusterSecret); err != nil {
+	if err := ici.verifySecret(root, clusterPath, clusterSecret); err != nil {
 		return fmt.Errorf("cluster secret verification failed: %w", err)
 	}
 	fmt.Fprintf(ici.logWriter, "    ✓ Cluster secret verified\n")
@@ -113,12 +95,14 @@ func (ici *IPFSClusterInstaller) InitializeConfig(clusterPath, clusterSecret str
 	return nil
 }
 
-// updateConfig updates the secret, IPFS port, and peer addresses in IPFS Cluster service.json
-func (ici *IPFSClusterInstaller) updateConfig(clusterPath, secret string, ipfsAPIPort int, bootstrapClusterPeers []string) error {
+// updateConfig updates the secret, the listeners, the IPFS port, and the peer
+// addresses in IPFS Cluster service.json. listenAddr is the peer-to-peer
+// listener (ClusterSwarmListenAddr).
+func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, secret string, ipfsAPIPort int, listenAddr string, bootstrapClusterPeers []string) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 
 	// Read existing config
-	data, err := os.ReadFile(serviceJSONPath)
+	data, err := root.ReadFile(serviceJSONPath, rootfs.SmallFileLimit)
 	if err != nil {
 		return fmt.Errorf("failed to read service.json: %w", err)
 	}
@@ -132,9 +116,7 @@ func (ici *IPFSClusterInstaller) updateConfig(clusterPath, secret string, ipfsAP
 	// Update cluster secret, listen_multiaddress, and peer addresses
 	if cluster, ok := config["cluster"].(map[string]interface{}); ok {
 		cluster["secret"] = secret
-		// Set consistent listen_multiaddress - port 9100 for cluster LibP2P communication
-		// This MUST match the port used in GetClusterPeerMultiaddr() and peer_addresses
-		cluster["listen_multiaddress"] = []interface{}{"/ip4/0.0.0.0/tcp/9100"}
+		cluster["listen_multiaddress"] = []interface{}{listenAddr}
 		// Configure peer addresses for cluster discovery
 		// This allows nodes to find and connect to each other
 		// Merge new peers with existing peers (preserves manually configured peers)
@@ -147,7 +129,7 @@ func (ici *IPFSClusterInstaller) updateConfig(clusterPath, secret string, ipfsAP
 	} else {
 		clusterConfig := map[string]interface{}{
 			"secret":              secret,
-			"listen_multiaddress": []interface{}{"/ip4/0.0.0.0/tcp/9100"},
+			"listen_multiaddress": []interface{}{listenAddr},
 		}
 		if len(bootstrapClusterPeers) > 0 {
 			clusterConfig["peer_addresses"] = bootstrapClusterPeers
@@ -155,19 +137,28 @@ func (ici *IPFSClusterInstaller) updateConfig(clusterPath, secret string, ipfsAP
 		config["cluster"] = clusterConfig
 	}
 
-	// Update IPFS port in IPFS Proxy configuration
-	ipfsNodeMultiaddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", ipfsAPIPort)
+	// The IPFS proxy is an unauthenticated copy of the Kubo API that also
+	// hijacks pin and unpin and runs them against the whole cluster. Loopback
+	// does not keep a tenant's deployment off it. ipfs-cluster disables the
+	// component when the section is absent, which is the only off switch it
+	// has — an empty listen address is rejected, not a disable.
 	if api, ok := config["api"].(map[string]interface{}); ok {
-		if ipfsproxy, ok := api["ipfsproxy"].(map[string]interface{}); ok {
-			ipfsproxy["node_multiaddress"] = ipfsNodeMultiaddr
-		}
+		delete(api, "ipfsproxy")
 	}
 
 	// Update IPFS port in IPFS Connector configuration
+	ipfsNodeMultiaddr := fmt.Sprintf("/ip4/%s/tcp/%d", loopbackIPv4, ipfsAPIPort)
 	if ipfsConnector, ok := config["ipfs_connector"].(map[string]interface{}); ok {
 		if ipfshttp, ok := ipfsConnector["ipfshttp"].(map[string]interface{}); ok {
 			ipfshttp["node_multiaddress"] = ipfsNodeMultiaddr
 		}
+	}
+
+	if err := bindClusterAPIsToLoopback(config); err != nil {
+		return err
+	}
+	if err := requireClusterAPIAuth(config, secret); err != nil {
+		return err
 	}
 
 	// Write back
@@ -176,11 +167,113 @@ func (ici *IPFSClusterInstaller) updateConfig(clusterPath, secret string, ipfsAP
 		return fmt.Errorf("failed to marshal service.json: %w", err)
 	}
 
-	if err := os.WriteFile(serviceJSONPath, updatedData, 0644); err != nil {
+	if err := root.WriteFile(serviceJSONPath, updatedData, serviceJSONMode); err != nil {
 		return fmt.Errorf("failed to write service.json: %w", err)
 	}
 
 	return nil
+}
+
+// serviceJSONMode keeps service.json to the orama user: it holds the cluster
+// secret and the REST API password. It was written 0644.
+const serviceJSONMode = 0o600
+
+// requireClusterAPIAuth makes the REST API — and the pinning-service API when
+// the file configures one — require the basic-auth credentials every consumer
+// derives from the cluster secret (ipfs.ClusterRESTPassword). Loopback was
+// their only guard, and every process on the node is on loopback.
+func requireClusterAPIAuth(config map[string]interface{}, clusterSecret string) error {
+	password, err := ipfs.ClusterRESTPassword(clusterSecret)
+	if err != nil {
+		return err
+	}
+	credentials := map[string]interface{}{ipfs.ClusterRESTUser: password}
+	api := config["api"].(map[string]interface{}) // bindClusterAPIsToLoopback created it
+	api["restapi"].(map[string]interface{})["basic_auth_credentials"] = credentials
+	if pinsvc, ok := api["pinsvcapi"].(map[string]interface{}); ok {
+		pinsvc["basic_auth_credentials"] = credentials
+	}
+	return nil
+}
+
+// ClusterSwarmListenAddr is the cluster's peer-to-peer listener: this node's
+// WireGuard address on constants.IPFSClusterSwarmPort.
+//
+// This is the one writer of that listener. orama-node used to rewrite it on
+// every start to 0.0.0.0 on a port it derived from the REST API URL (10114)
+// while install wrote 0.0.0.0:9100, so what a node listened on depended on
+// which had run last, and the addresses peers were told to dial did not match
+// it. Binding the WireGuard address keeps the swarm off the public interface
+// by construction, as the Kubo swarm is: the firewall admits only the mesh,
+// and no public rule opens this port.
+func ClusterSwarmListenAddr(wgIP string) (string, error) {
+	ip := net.ParseIP(wgIP).To4()
+	if ip == nil || !constants.WireGuardOverlay().Contains(netip.AddrFrom4([4]byte(ip))) {
+		return "", fmt.Errorf("the IPFS Cluster swarm binds this node's WireGuard address, and %q is not one inside %s",
+			wgIP, constants.WireGuardSubnet)
+	}
+	return fmt.Sprintf("/ip4/%s/tcp/%d", ip, constants.IPFSClusterSwarmPort), nil
+}
+
+// loopbackIPv4 is where every IPFS and IPFS Cluster API binds: every consumer
+// reaches them on localhost. Loopback keeps them off the network; it does not
+// keep them from other processes on the node, which is why the cluster's
+// REST API also requires credentials (requireClusterAPIAuth).
+const loopbackIPv4 = "127.0.0.1"
+
+// bindClusterAPIsToLoopback binds the cluster's HTTP APIs to loopback in a
+// service.json: the REST API on constants.IPFSClusterAPIPort, where every
+// consumer looks for it, and the pinning-service API on whatever port it
+// has. The IPFS proxy is not bound: updateConfig deletes that section,
+// because the proxy authenticates nobody. It runs on every install and
+// upgrade, so a node whose REST API was bound to 0.0.0.0 is rebound. The
+// cluster's own libp2p listener (cluster.listen_multiaddress) faces the
+// peers and is not an API.
+func bindClusterAPIsToLoopback(config map[string]interface{}) error {
+	api, ok := config["api"].(map[string]interface{})
+	if !ok {
+		api = map[string]interface{}{}
+		config["api"] = api
+	}
+	restapi, ok := api["restapi"].(map[string]interface{})
+	if !ok {
+		restapi = map[string]interface{}{}
+		api["restapi"] = restapi
+	}
+	restapi["http_listen_multiaddress"] = fmt.Sprintf("/ip4/%s/tcp/%d", loopbackIPv4, constants.IPFSClusterAPIPort)
+
+	for _, field := range []struct{ section, key string }{
+		{"pinsvcapi", "http_listen_multiaddress"},
+	} {
+		section, ok := api[field.section].(map[string]interface{})
+		if !ok {
+			continue // absent: ipfs-cluster's default is loopback
+		}
+		addr, ok := section[field.key].(string)
+		if !ok {
+			continue
+		}
+		bound, err := loopbackListenAddr(addr)
+		if err != nil {
+			return fmt.Errorf("api.%s.%s: %w", field.section, field.key, err)
+		}
+		section[field.key] = bound
+	}
+	return nil
+}
+
+// loopbackListenAddr is a /ip4|ip6/<host>/tcp/<port> listen address moved to
+// loopback, keeping its port.
+func loopbackListenAddr(addr string) (string, error) {
+	parts := strings.Split(addr, "/")
+	if len(parts) != 5 || parts[0] != "" || (parts[1] != "ip4" && parts[1] != "ip6") || parts[3] != "tcp" {
+		return "", fmt.Errorf("%q is not a /ip4/<host>/tcp/<port> listen address", addr)
+	}
+	port, err := strconv.Atoi(parts[4])
+	if err != nil || port <= 0 || port > 65535 {
+		return "", fmt.Errorf("%q has no valid TCP port", addr)
+	}
+	return fmt.Sprintf("/ip4/%s/tcp/%d", loopbackIPv4, port), nil
 }
 
 // extractExistingPeers extracts existing peer addresses from cluster config
@@ -221,10 +314,10 @@ func (ici *IPFSClusterInstaller) mergePeerAddresses(existing, new []string) []st
 }
 
 // verifySecret verifies that the secret in service.json matches the expected value
-func (ici *IPFSClusterInstaller) verifySecret(clusterPath, expectedSecret string) error {
+func (ici *IPFSClusterInstaller) verifySecret(root rootfs.Root, clusterPath, expectedSecret string) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 
-	data, err := os.ReadFile(serviceJSONPath)
+	data, err := root.ReadFile(serviceJSONPath, rootfs.SmallFileLimit)
 	if err != nil {
 		return fmt.Errorf("failed to read service.json for verification: %w", err)
 	}
@@ -245,49 +338,4 @@ func (ici *IPFSClusterInstaller) verifySecret(clusterPath, expectedSecret string
 	}
 
 	return fmt.Errorf("cluster section not found in service.json")
-}
-
-// GetClusterPeerMultiaddr reads the IPFS Cluster peer ID and returns its multiaddress
-// Returns format: /ip4/<ip>/tcp/9100/p2p/<cluster-peer-id>
-func (ici *IPFSClusterInstaller) GetClusterPeerMultiaddr(clusterPath string, nodeIP string) (string, error) {
-	identityPath := filepath.Join(clusterPath, "identity.json")
-
-	// Read identity file
-	data, err := os.ReadFile(identityPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read identity.json: %w", err)
-	}
-
-	// Parse JSON
-	var identity map[string]interface{}
-	if err := json.Unmarshal(data, &identity); err != nil {
-		return "", fmt.Errorf("failed to parse identity.json: %w", err)
-	}
-
-	// Get peer ID
-	peerID, ok := identity["id"].(string)
-	if !ok || peerID == "" {
-		return "", fmt.Errorf("peer ID not found in identity.json")
-	}
-
-	// Construct multiaddress: /ip4/<ip>/tcp/9100/p2p/<peer-id>
-	// Port 9100 is the cluster listen port for libp2p communication
-	multiaddr := fmt.Sprintf("/ip4/%s/tcp/9100/p2p/%s", nodeIP, peerID)
-	return multiaddr, nil
-}
-
-// inferPeerIP extracts the IP address from peer addresses
-func inferPeerIP(peerAddresses []string, vpsIP string) string {
-	for _, addr := range peerAddresses {
-		// Look for /ip4/ prefix
-		if strings.Contains(addr, "/ip4/") {
-			parts := strings.Split(addr, "/")
-			for i, part := range parts {
-				if part == "ip4" && i+1 < len(parts) {
-					return parts[i+1]
-				}
-			}
-		}
-	}
-	return vpsIP // Fallback to VPS IP
 }

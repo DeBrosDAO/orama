@@ -21,7 +21,19 @@ type ClientConfig struct {
 	APIKey            string        `json:"api_key"`       // API key for gateway auth
 	JWT               string        `json:"jwt"`           // Optional JWT bearer token
 	IdentityPath      string        `json:"identity_path"` // Path to persistent LibP2P identity key file
-	PubSubURL         string        `json:"pubsub_url"`    // localhost HTTP API for app GossipSub (orama-namespace-pubsub@index)
+	PubSubSocket      string        `json:"pubsub_socket"` // unix socket of the node's app GossipSub API (orama-namespace-pubsub@index)
+
+	// IPFSClusterAPIPassword authenticates the network status's read of this
+	// node's IPFS Cluster REST API (ipfs.ClusterRESTPassword). Never
+	// serialised.
+	IPFSClusterAPIPassword string `json:"-"`
+
+	// ListenAddrs are the libp2p multiaddrs the client's host accepts
+	// connections on, e.g. "/ip4/10.0.0.3/tcp/0" for a node's WireGuard
+	// address. Empty means no listener: the client only dials its bootstrap
+	// peers, which needs none. An unspecified address (0.0.0.0, ::) is
+	// refused — it is every interface, the public one included.
+	ListenAddrs []string `json:"listen_addrs"`
 }
 
 // DefaultClientConfig returns a default client configuration
@@ -42,6 +54,6 @@ func DefaultClientConfig(appName string) *ClientConfig {
 		QuietMode:         false,
 		APIKey:            "",
 		JWT:               "",
-		PubSubURL:         "http://" + pubsub.DefaultListenAddr,
+		PubSubSocket:      pubsub.DefaultSocketPath,
 	}
 }

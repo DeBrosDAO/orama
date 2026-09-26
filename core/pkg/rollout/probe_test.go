@@ -190,3 +190,21 @@ func TestWaitReady_unreachable_node_fails(t *testing.T) {
 		t.Fatalf("error loses the cause: %v", err)
 	}
 }
+
+// rqlited binds the node's WireGuard IP and requires auth, so the probe reads
+// both from the node's own node.yaml (rqlite.NodeShellCurl) instead of curling
+// localhost unauthenticated, which can only ever fail.
+func TestProbeCommand_reachesRQLiteThroughNodeConfig(t *testing.T) {
+	cmd := probeCommand(inspector.Node{User: "ubuntu", Host: "203.0.113.7"})
+	if strings.Contains(cmd, "localhost:10100") {
+		t.Fatalf("probe still curls localhost rqlite:\n%s", cmd)
+	}
+	for _, want := range []string{"http_adv_address", "rqlite_password", "curl -K -", "sudo sed"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("probe command missing %q:\n%s", want, cmd)
+		}
+	}
+	if root := probeCommand(inspector.Node{User: "root", Host: "203.0.113.7"}); strings.Contains(root, "sudo ") {
+		t.Errorf("root probe uses sudo:\n%s", root)
+	}
+}

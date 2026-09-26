@@ -258,6 +258,8 @@ type claimQuery struct {
 	sawQuery  string
 	sawArgs   []any
 	execs     []string
+	// tokenQueries counts the reads of invite_tokens.
+	tokenQueries int
 }
 
 type claimRow struct {
@@ -285,6 +287,7 @@ func (c *claimQuery) Query(_ context.Context, dest any, query string, args ...an
 	// The handler asks two questions. Route on the table so a test can drive
 	// each independently.
 	if strings.Contains(query, "invite_tokens") {
+		c.tokenQueries++
 		if c.tokenErr != nil {
 			return c.tokenErr
 		}
@@ -598,6 +601,7 @@ func joinableHandler(t *testing.T, c rqlite.Client) *Handler {
 	}
 	prevIP, prevKey, prevPub := readLocalWGIP, readLocalWGPublicKey, readLocalPublicIP
 	t.Cleanup(func() { restore(prevIP, prevKey, prevPub) })
+	useArchiveSigners(t, []string{testArchiveSigner}, nil)
 
 	readLocalWGIP = func() (string, error) { return "10.0.0.1", nil }
 	readLocalWGPublicKey = func(string) (string, error) { return "local-key", nil }

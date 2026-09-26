@@ -92,6 +92,21 @@ func TestUnitFilesToInstall_includesTheDeploymentTemplates(t *testing.T) {
 	}
 }
 
+// The gateway installs a Node.js deployment's dependencies by starting
+// orama-deploy-build@, and removes them with orama-deploy-clean@; a node
+// without the templates fails every such deploy or delete.
+func TestDeploymentTemplateUnits_includesTheBuildUnits(t *testing.T) {
+	for _, want := range []string{"orama-deploy-build@.service", "orama-deploy-clean@.service"} {
+		found := false
+		for _, unit := range DeploymentTemplateUnits {
+			found = found || unit == want
+		}
+		if !found {
+			t.Errorf("%s is not installed", want)
+		}
+	}
+}
+
 // And it has to exist in the tree that ships, or the install fails outright.
 func TestDeploymentTemplateUnits_shipWithTheRelease(t *testing.T) {
 	root := repoRootDir(t)

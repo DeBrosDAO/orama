@@ -31,12 +31,6 @@ func NewTorInstaller(arch string, logWriter io.Writer) *TorInstaller {
 
 func (ti *TorInstaller) path(p string) string { return filepath.Join(ti.root, p) }
 
-// IsInstalled reports whether the tor binary is present.
-func (ti *TorInstaller) IsInstalled() bool {
-	_, err := os.Stat(ti.path(torBinaryPath))
-	return err == nil
-}
-
 // Install installs Tor from deb.torproject.org, or upgrades it to the
 // repository's current release: it masks the distro units, adds the repository
 // if this installer's source and keyring are not in place for the OS release,

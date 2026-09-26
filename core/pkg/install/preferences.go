@@ -1,9 +1,10 @@
 package install
 
 import (
-	"os"
+	"fmt"
 	"path/filepath"
 
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,9 +18,9 @@ const preferencesFile = "preferences.yaml"
 
 // SavePreferences saves node preferences to disk
 func SavePreferences(oramaDir string, prefs *NodePreferences) error {
-	// Ensure directory exists
-	if err := os.MkdirAll(oramaDir, 0755); err != nil {
-		return err
+	root := OramaRoot(oramaDir)
+	if err := root.MkdirAll(oramaDir, 0755); err != nil {
+		return fmt.Errorf("create %s for the node preferences: %w", oramaDir, err)
 	}
 
 	// Save to YAML file
@@ -29,8 +30,8 @@ func SavePreferences(oramaDir string, prefs *NodePreferences) error {
 		return err
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return err
+	if err := root.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("save the node preferences: %w", err)
 	}
 
 	return nil
@@ -46,23 +47,11 @@ func LoadPreferences(oramaDir string) *NodePreferences {
 
 	// Try to load from preferences.yaml
 	path := filepath.Join(oramaDir, preferencesFile)
-	if data, err := os.ReadFile(path); err == nil {
+	if data, err := OramaRoot(oramaDir).ReadFile(path, rootfs.SmallFileLimit); err == nil {
 		if err := yaml.Unmarshal(data, prefs); err == nil {
 			return prefs
 		}
 	}
 
 	return prefs
-}
-
-// SaveNameserverPreference updates just the nameserver preference
-func SaveNameserverPreference(oramaDir string, isNameserver bool) error {
-	prefs := LoadPreferences(oramaDir)
-	prefs.Nameserver = isNameserver
-	return SavePreferences(oramaDir, prefs)
-}
-
-// ReadNameserverPreference reads just the nameserver preference
-func ReadNameserverPreference(oramaDir string) bool {
-	return LoadPreferences(oramaDir).Nameserver
 }

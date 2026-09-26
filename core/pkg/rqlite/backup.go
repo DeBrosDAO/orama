@@ -148,7 +148,11 @@ func (r *RQLiteManager) backupDir() string {
 // downloadBackup calls the RQLite backup API and writes the SQLite snapshot to
 // disk, through the admin client so it carries credentials.
 func (r *RQLiteManager) downloadBackup(destPath string) error {
-	data, err := r.LocalAdminClient().Backup(context.Background())
+	admin, err := r.LocalAdminClient()
+	if err != nil {
+		return err
+	}
+	data, err := admin.Backup(context.Background())
 	if err != nil {
 		return fmt.Errorf("request backup endpoint: %w", err)
 	}

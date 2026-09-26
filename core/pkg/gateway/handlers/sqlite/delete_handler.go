@@ -42,8 +42,8 @@ func (h *SQLiteHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request) {
 		writeCreateError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	if req.DatabaseName == "" {
-		writeCreateError(w, http.StatusBadRequest, "database_name is required")
+	if !isValidDatabaseName(req.DatabaseName) {
+		writeCreateError(w, http.StatusBadRequest, "database_name must be 1-64 letters, digits, underscores or hyphens")
 		return
 	}
 
@@ -68,7 +68,7 @@ func (h *SQLiteHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath, _ := dbMeta["file_path"].(string)
+	filePath := h.databasePath(namespace, req.DatabaseName)
 
 	h.logger.Info("Deleting SQLite database",
 		zap.String("namespace", namespace),

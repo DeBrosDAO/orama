@@ -772,9 +772,15 @@ permission to treat them as one.
 ## Which key signed a token
 
 Every gateway generates its own Ed25519 signing key at first boot, keeps it
-`0600` in its own secrets directory, and publishes the public half **to the
-cluster registry** — not to the tenant database it may also be holding — so the
-rest of the cluster can verify what it mints. A token's `kid` names the key.
+`0600` in its own state directory (`data/namespaces/<ns>/gateway`, `0700`; the
+index gateway's is `data/namespaces/index/gateway`), and publishes the public
+half **to the cluster registry** — not to the tenant database it may also be
+holding — so the rest of the cluster can verify what it mints. It publishes
+once its schema is up, and stays not ready (refusing everything, so minting
+nothing) until the key is published. A token's `kid`
+names the key. A key file that holds the old cluster-derived key (what a
+0.122.x node wrote, carried into the index gateway's state directory by the
+upgrade) is replaced with a key of the gateway's own on load, never signed with.
 
 **A namespace gateway's key is bound to its namespace.** A token signed with it
 is refused — everywhere, including on the gateway that signed it — unless its
@@ -918,8 +924,8 @@ from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.
   push selector has nothing in the push API to name (feat-394) — the rotating
   push topics of FEAT-265 are random ids a device picks, not something a grant
   could be written against.
-- A namespace's RQLite binds every interface; the firewall, not the bind
-  address, is what keeps it off the internet. The namespace gateway in front of
-  it now binds the overlay (chg-387).
+- A namespace's RQLite binds only the node's WireGuard address and always
+  requires basic auth (feat-269); the namespace gateway in front of it binds the
+  overlay too (chg-387).
 - There is no web page to approve a device login at, so the flow above is
   approved from a second machine's CLI rather than from a browser.

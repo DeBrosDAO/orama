@@ -6,6 +6,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/node/membership"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"go.uber.org/zap"
 )
 
 // discoveryPeers adapts the cluster discovery service to the reconciler's view
@@ -60,7 +61,12 @@ func (n *Node) startMembershipReconciler(ctx context.Context) error {
 
 // isRQLiteLeader reports whether this node's index rqlite is the raft leader.
 func (n *Node) isRQLiteLeader() bool {
-	status, err := rqlite.GetRaftStatus(n.config.Database.RQLitePort)
+	ep, err := rqlite.IndexEndpoint(&n.config.Database, &n.config.Discovery)
+	if err != nil {
+		n.logger.Warn("Cannot tell whether this node leads the index rqlite", zap.Error(err))
+		return false
+	}
+	status, err := rqlite.GetRaftStatus(ep)
 	if err != nil {
 		return false
 	}

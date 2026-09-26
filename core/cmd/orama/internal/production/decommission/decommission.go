@@ -23,7 +23,7 @@ type Flags struct {
 	DryRun  bool
 }
 
-// Run is the entry point for `orama node decommission`.
+// Run is the entry point for `orama node remove`.
 func Run(flags *Flags) error {
 	if err := flags.validate(); err != nil {
 		return err
@@ -33,7 +33,7 @@ func Run(flags *Flags) error {
 
 func (f *Flags) validate() error {
 	if f.Env == "" {
-		return fmt.Errorf("--env is required\nUsage: orama node decommission --env <devnet|testnet> --node <ip> [--offline] [--force]")
+		return fmt.Errorf("--env is required\nUsage: orama node remove --env <devnet|testnet> --node <ip> [--offline] [--force]")
 	}
 	if f.Node == "" {
 		return fmt.Errorf("--node is required: decommission removes ONE node")
@@ -156,7 +156,7 @@ func execute(flags *Flags) error {
 
 	if flags.Offline {
 		fmt.Printf("\n✓ %s retired cluster-side. It was not wiped (--offline).\n", target.Host)
-		return nil
+		return forgetRetiredKey(target)
 	}
 
 	fmt.Printf("\n  Wiping %s...\n", target.Host)
@@ -165,7 +165,23 @@ func execute(flags *Flags) error {
 			"  Re-run `orama node wipe --env %s --node %s` once it is reachable", err, flags.Env, target.Host)
 	}
 
+	if err := forgetRetiredKey(target); err != nil {
+		return err
+	}
 	fmt.Printf("\n✓ %s decommissioned and wiped\n", target.Host)
 	fmt.Printf("  rm -rf is unlink, not cryptographic erase. Provider disks remain readable.\n")
+	return nil
+}
+
+// forgetRetiredKey removes a retired node's SSH key from the vault; the node is
+// erased or gone, so the key opens nothing any more.
+func forgetRetiredKey(target inspector.Node) error {
+	if err := forgetNodeKey(target); err != nil {
+		return fmt.Errorf("%s is retired, but its SSH key is still in the vault: %w\n"+
+			"  Quit the RootWallet app (and any other RootWallet agent) first, then run "+
+			"`rw vault ssh rm %s/%s --yes` — the CLI and a running agent must not write the vault at the same time",
+			target.Host, err, target.Host, target.User)
+	}
+	fmt.Printf("  ✓ %s@%s SSH key removed from the vault\n", target.User, target.Host)
 	return nil
 }

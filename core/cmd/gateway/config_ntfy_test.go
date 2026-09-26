@@ -39,6 +39,7 @@ func TestSpawnedGatewayConfig_loadsNtfyBaseURL(t *testing.T) {
 		RQLiteDSN       string   `yaml:"rqlite_dsn"`
 		OlricServers    []string `yaml:"olric_servers"`
 		NtfyBaseURL     string   `yaml:"ntfy_base_url"`
+		StateDir        string   `yaml:"state_dir"`
 	}
 
 	var y yamlCfgMirror
@@ -85,6 +86,7 @@ func TestSpawnedGatewayConfig_ntfyBaseURLAbsentLeavesConfigEmpty(t *testing.T) {
 		RQLiteDSN       string   `yaml:"rqlite_dsn"`
 		OlricServers    []string `yaml:"olric_servers"`
 		NtfyBaseURL     string   `yaml:"ntfy_base_url"`
+		StateDir        string   `yaml:"state_dir"`
 	}
 	var y yamlCfgMirror
 	if err := config.DecodeStrict(strings.NewReader(string(data)), &y); err != nil {

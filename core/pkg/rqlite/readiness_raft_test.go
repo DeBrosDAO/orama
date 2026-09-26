@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,23 +12,21 @@ import (
 
 // raftStatusServer serves /status with a swappable body so a test can make a node
 // converge partway through the wait.
-func raftStatusServer(t *testing.T, body *atomic.Value, code *atomic.Int32) int {
+//
+// Like rqlited with -auth it answers 401 without the test credentials, so every
+// test here also proves the probe authenticates.
+func raftStatusServer(t *testing.T, body *atomic.Value, code *atomic.Int32) Endpoint {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(requireBasicAuth(testUser, testPass, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c := code.Load(); c != 0 && int(c) != http.StatusOK {
 			w.WriteHeader(int(c))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body.Load().(string)))
-	}))
+	})))
 	t.Cleanup(srv.Close)
-	i := strings.LastIndex(srv.URL, ":")
-	port, err := strconv.Atoi(srv.URL[i+1:])
-	if err != nil {
-		t.Fatalf("port from %q: %v", srv.URL, err)
-	}
-	return port
+	return testEndpoint(t, srv.URL)
 }
 
 func statusBody(state string) string {
@@ -62,9 +59,9 @@ func TestWaitForRaftReadyAcceptsOnlyParticipatingStates(t *testing.T) {
 			var body atomic.Value
 			var code atomic.Int32
 			body.Store(tc.body)
-			port := raftStatusServer(t, &body, &code)
+			ep := raftStatusServer(t, &body, &code)
 
-			err := WaitForRaftReady(context.Background(), port, 300*time.Millisecond)
+			err := WaitForRaftReady(context.Background(), ep, 300*time.Millisecond)
 			if tc.ready && err != nil {
 				t.Fatalf("expected ready, got %v", err)
 			}
@@ -80,14 +77,14 @@ func TestWaitForRaftReadyConvergesMidWait(t *testing.T) {
 	var body atomic.Value
 	var code atomic.Int32
 	body.Store(statusBody("Candidate"))
-	port := raftStatusServer(t, &body, &code)
+	ep := raftStatusServer(t, &body, &code)
 
 	go func() {
 		time.Sleep(700 * time.Millisecond)
 		body.Store(statusBody("Follower"))
 	}()
 
-	if err := WaitForRaftReady(context.Background(), port, 10*time.Second); err != nil {
+	if err := WaitForRaftReady(context.Background(), ep, 10*time.Second); err != nil {
 		t.Fatalf("expected the converged node to be ready, got %v", err)
 	}
 }
@@ -98,9 +95,9 @@ func TestWaitForRaftReadyReportsLastState(t *testing.T) {
 	var body atomic.Value
 	var code atomic.Int32
 	body.Store(statusBody("Candidate"))
-	port := raftStatusServer(t, &body, &code)
+	ep := raftStatusServer(t, &body, &code)
 
-	err := WaitForRaftReady(context.Background(), port, 300*time.Millisecond)
+	err := WaitForRaftReady(context.Background(), ep, 300*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected a timeout")
 	}
@@ -110,12 +107,26 @@ func TestWaitForRaftReadyReportsLastState(t *testing.T) {
 }
 
 func TestWaitForRaftReadyReportsUnreachable(t *testing.T) {
-	err := WaitForRaftReady(context.Background(), 1, 300*time.Millisecond)
+	dead := Endpoint{Host: "127.0.0.1", Port: 1, Username: testUser, Password: testPass}
+	err := WaitForRaftReady(context.Background(), dead, 300*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected an error against a closed port")
 	}
 	if !strings.Contains(err.Error(), "never reported a raft state") {
 		t.Errorf("error = %v, want it to say no state was ever reported", err)
+	}
+}
+
+// Without credentials rqlited answers 401, which is not a state reading either.
+func TestWaitForRaftReadyWrongCredentialsIsNotReady(t *testing.T) {
+	var body atomic.Value
+	var code atomic.Int32
+	body.Store(statusBody("Leader"))
+	ep := raftStatusServer(t, &body, &code)
+	ep.Password = "wrong"
+
+	if err := WaitForRaftReady(context.Background(), ep, 300*time.Millisecond); err == nil {
+		t.Fatal("a 401 was accepted as readiness")
 	}
 }
 
@@ -125,9 +136,9 @@ func TestWaitForRaftReadyRejectsNon200(t *testing.T) {
 	var code atomic.Int32
 	body.Store(statusBody("Leader"))
 	code.Store(http.StatusServiceUnavailable)
-	port := raftStatusServer(t, &body, &code)
+	ep := raftStatusServer(t, &body, &code)
 
-	if err := WaitForRaftReady(context.Background(), port, 300*time.Millisecond); err == nil {
+	if err := WaitForRaftReady(context.Background(), ep, 300*time.Millisecond); err == nil {
 		t.Fatal("HTTP 503 was accepted as readiness")
 	}
 }
@@ -136,13 +147,13 @@ func TestWaitForRaftReadyHonoursContext(t *testing.T) {
 	var body atomic.Value
 	var code atomic.Int32
 	body.Store(statusBody("Candidate"))
-	port := raftStatusServer(t, &body, &code)
+	ep := raftStatusServer(t, &body, &code)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
 
 	start := time.Now()
-	if err := WaitForRaftReady(ctx, port, 30*time.Second); err == nil {
+	if err := WaitForRaftReady(ctx, ep, 30*time.Second); err == nil {
 		t.Fatal("expected cancellation to return an error")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {

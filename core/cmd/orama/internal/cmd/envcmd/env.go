@@ -39,12 +39,19 @@ var useCmd = &cobra.Command{
 	},
 }
 
+var addCAFile string
+
 var addCmd = &cobra.Command{
 	Use:   "add <name> <gateway_url> [description]",
 	Short: "Add a custom environment",
-	Args:  cobra.RangeArgs(2, 3),
+	Long: `Add a custom environment, or update one already configured.
+
+--ca-file trusts a PEM bundle for this environment's domain and every name
+under it, in addition to the system roots: a cluster on Let's Encrypt's
+staging CA, or on a private CA. It is not trusted for any other host.`,
+	Args: cobra.RangeArgs(2, 3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return cli.EnvAdd(args)
+		return cli.EnvAdd(args, addCAFile)
 	},
 }
 
@@ -61,6 +68,7 @@ func init() {
 	Cmd.AddCommand(listCmd)
 	Cmd.AddCommand(currentCmd)
 	Cmd.AddCommand(useCmd)
+	addCmd.Flags().StringVar(&addCAFile, "ca-file", "", "PEM CA bundle to trust for this environment's domain only")
 	Cmd.AddCommand(addCmd)
 	Cmd.AddCommand(removeCmd)
 }

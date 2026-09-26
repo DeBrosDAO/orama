@@ -17,10 +17,22 @@ import (
 // --remote makes it explicit, and running without root and without --remote is
 // refused rather than reinterpreted.
 func Run(flags *Flags) error {
+	if err := flags.readStdinSecrets(os.Stdin); err != nil {
+		return err
+	}
 	if err := flags.applyInvite(); err != nil {
 		return err
 	}
 	if err := flags.validateOperatorWallet(); err != nil {
+		return err
+	}
+	if err := flags.requireGenesisWallet(); err != nil {
+		return err
+	}
+	if err := flags.validateExpectedSigners(); err != nil {
+		return err
+	}
+	if err := flags.resolveACMECA(); err != nil {
 		return err
 	}
 	if err := flags.resolveBaseDomain(); err != nil {
@@ -62,7 +74,11 @@ func (f *Flags) resolveBaseDomain() error {
 		return clierr.Usage("--base-domain is required when there is no terminal to ask\n" +
 			"  e.g. --base-domain orama-devnet.network")
 	}
-	f.BaseDomain = promptForBaseDomain()
+	domain, err := promptForBaseDomain(os.Stdin)
+	if err != nil {
+		return err
+	}
+	f.BaseDomain = domain
 	return nil
 }
 
@@ -91,6 +107,9 @@ func (f *Flags) applyInvite() error {
 	}
 	if f.CAFingerprint == "" {
 		f.CAFingerprint = inv.CAFingerprint
+	}
+	if f.JoinSNI == "" {
+		f.JoinSNI = inv.SNI
 	}
 	return nil
 }

@@ -225,21 +225,6 @@ func (d *DatabaseClientImpl) getRQLiteNodes() []string {
 	return DefaultDatabaseEndpoints()
 }
 
-// hasPort checks if a hostport string has a port suffix
-func hasPort(hostport string) bool {
-	// cheap check for :port suffix (IPv6 with brackets handled by url.Parse earlier)
-	if i := strings.LastIndex(hostport, ":"); i > -1 && i < len(hostport)-1 {
-		// ensure the segment after ':' is numeric-ish
-		for _, c := range hostport[i+1:] {
-			if c < '0' || c > '9' {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
 // connectToAvailableNode tries to connect to any available RQLite node
 func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, error) {
 	// Get RQLite nodes from environment or use defaults

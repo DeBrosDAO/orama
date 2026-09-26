@@ -19,8 +19,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
+	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -67,8 +71,8 @@ type Peer struct {
 // row indistinguishable from a live peer that every survivor re-applies to its
 // interface every sixty seconds for ever.
 func Register(ctx context.Context, db Querier, p Peer) (string, error) {
-	if p.PublicKey == "" || p.PublicIP == "" {
-		return "", fmt.Errorf("overlay: public key and public IP are required")
+	if err := validateRegistration(p); err != nil {
+		return "", err
 	}
 	// The node id becomes this row's primary key and is read back by every
 	// consumer that wants to know which machine the row belongs to, so an
@@ -117,6 +121,41 @@ func Register(ctx context.Context, db Querier, p Peer) (string, error) {
 
 	return "", fmt.Errorf("overlay: could not allocate an address after %d attempts: %w",
 		allocationAttempts, lastErr)
+}
+
+// validateRegistration refuses a peer the mesh must not store. The row is
+// applied later by orama-node, which holds CAP_NET_ADMIN, and by
+// orama-privhelper; both trust what was written here. A public IP that is
+// not a canonical IPv4 address, or a key or endpoint privhelper.ValidatePeer
+// would refuse, is rejected before the insert so one bad join cannot halt
+// every node's peer sync.
+//
+// The overlay address is allocated below, so the allowed-IP check is given
+// 10.0.0.1/32 — an address inside the mesh — only to exercise that half of
+// ValidatePeer. The address actually stored is the one NextFree returns.
+func validateRegistration(p Peer) error {
+	if p.PublicKey == "" || p.PublicIP == "" {
+		return fmt.Errorf("overlay: public key and public IP are required")
+	}
+	ip := net.ParseIP(p.PublicIP)
+	if ip == nil || ip.To4() == nil || ip.String() != p.PublicIP {
+		return fmt.Errorf("overlay: public IP %q is not a canonical IPv4 address", p.PublicIP)
+	}
+	port := p.WGPort
+	if port == 0 {
+		port = wgListenPort
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("overlay: WireGuard port %d is not a UDP port", port)
+	}
+	if err := privhelper.ValidatePeer(wireguard.Peer{
+		PublicKey: p.PublicKey,
+		Endpoint:  net.JoinHostPort(ip.String(), strconv.Itoa(port)),
+		AllowedIP: Address(1) + "/32",
+	}); err != nil {
+		return fmt.Errorf("overlay: %w", err)
+	}
+	return nil
 }
 
 // NextFree returns the lowest unallocated address in the overlay range.

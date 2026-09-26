@@ -5,18 +5,29 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/constants"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
-var rqliteBase = constants.LocalRQLiteURL()
-
 // collectRQLite queries the local RQLite HTTP API to build a health report.
+//
+// rqlited binds this node's WireGuard IP and requires basic auth; both come
+// from node.yaml. The credentials ride in the base URL (net/http sends them as
+// basic auth and strips them from its errors).
 func collectRQLite() *RQLiteReport {
 	r := &RQLiteReport{}
+
+	ep, err := rqlite.LocalNodeEndpoint()
+	if err != nil {
+		r.Responsive = false
+		r.Error = err.Error()
+		return r
+	}
+	rqliteBase := ep.CredentialedURL()
 
 	// 1. GET /status — core Raft and node metadata.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

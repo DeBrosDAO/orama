@@ -1,18 +1,20 @@
 package lifecycle
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"io/fs"
 	"os"
 	"os/exec"
 	"time"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
-	"github.com/DeBrosOfficial/network/pkg/constants"
-
-	"context"
-
+	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/nodehealth"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
 
 // HandlePostUpgrade brings the node back online after an upgrade:
@@ -66,34 +68,47 @@ func HandlePostUpgrade() error {
 	// Fatal. Post-upgrade's job is to bring the node back online, and the
 	// index rqlite is what "online" means; warning and carrying on to remove
 	// the maintenance flag puts a node that is not serving back into rotation.
-	fmt.Printf("  Waiting for index RQLite (port %d)...\n", constants.RQLiteHTTPPort)
-	if err := waitForRQLiteReady(constants.RQLiteHTTPPort, indexReadyBudget); err != nil {
+	indexRQLite, err := rqlite.LocalNodeEndpoint()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  Cannot address the index RQLite: %v\n", err)
+		return clierr.Failure("  Leaving the maintenance flag in place — this node is not serving.")
+	}
+	fmt.Printf("  Waiting for index RQLite (%s)...\n", indexRQLite)
+	if err := waitForRQLiteReady(indexRQLite, indexReadyBudget); err != nil {
 		fmt.Fprintf(os.Stderr, "  The index RQLite did not come back: %v\n", err)
 		return clierr.Failure("  Leaving the maintenance flag in place — this node is not serving.")
 	}
 	fmt.Printf("  Global RQLite ready\n")
 
 	// 4. Wait for each namespace RQLite with a global timeout of 5 minutes
-	nsPorts := getNamespaceRQLitePorts()
-	if len(nsPorts) > 0 {
-		fmt.Printf("  Waiting for %d namespace RQLite instances...\n", len(nsPorts))
+	nsEndpoints, nsFailures, err := tenantRQLiteEndpoints(unitenv.Dir, config.ProductionNamespacesDataDir, indexRQLite)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  Cannot list the namespace RQLite instances: %v\n", err)
+		return clierr.Failure("  Leaving the maintenance flag in place — namespace readiness is unknown.")
+	}
+	if len(nsEndpoints)+len(nsFailures) > 0 {
+		fmt.Printf("  Waiting for %d namespace RQLite instances...\n", len(nsEndpoints)+len(nsFailures))
 		globalDeadline := time.Now().Add(5 * time.Minute)
 
 		healthy := 0
 		failed := 0
-		for ns, port := range nsPorts {
+		for ns, ferr := range nsFailures {
+			fmt.Printf("    Warning: namespace '%s' RQLite cannot be addressed: %v\n", ns, ferr)
+			failed++
+		}
+		for ns, ep := range nsEndpoints {
 			remaining := time.Until(globalDeadline)
 			if remaining <= 0 {
 				fmt.Printf("    Warning: global timeout reached, skipping remaining namespaces\n")
-				failed += len(nsPorts) - healthy - failed
+				failed += len(nsEndpoints) + len(nsFailures) - healthy - failed
 				break
 			}
 			timeout := 90 * time.Second
 			if remaining < timeout {
 				timeout = remaining
 			}
-			fmt.Printf("    Waiting for namespace '%s' (port %d)...\n", ns, port)
-			if err := waitForRQLiteReady(port, timeout); err != nil {
+			fmt.Printf("    Waiting for namespace '%s' (%s)...\n", ns, ep)
+			if err := waitForRQLiteReady(ep, timeout); err != nil {
 				fmt.Printf("    Warning: namespace '%s' RQLite not ready: %v\n", ns, err)
 				failed++
 			} else {
@@ -105,7 +120,7 @@ func HandlePostUpgrade() error {
 	}
 
 	// 5. Remove maintenance flag
-	if err := os.Remove(maintenanceFlagPath); err != nil && !os.IsNotExist(err) {
+	if err := maintenanceRoot.Remove(maintenanceFlagPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		fmt.Printf("  Warning: failed to remove maintenance flag: %v\n", err)
 	} else {
 		fmt.Printf("  Maintenance flag removed\n")
@@ -121,11 +136,11 @@ func HandlePostUpgrade() error {
 // The hand-rolled poll this replaces accepted any Leader or Follower, so a node
 // that rejoined but was tens of thousands of entries behind counted as ready.
 //
-// No gateway base: this is called per rqlite port, including tenant instances
-// that have no gateway of their own. The node's own gateway is checked by the
-// upgrade orchestrator's own gate.
-func waitForRQLiteReady(port int, timeout time.Duration) error {
+// No gateway base: this is called per rqlite instance, including tenant
+// instances that have no gateway of their own. The node's own gateway is
+// checked by the upgrade orchestrator's own gate.
+func waitForRQLiteReady(ep rqlite.Endpoint, timeout time.Duration) error {
 	return nodehealth.WaitReady(context.Background(), nodehealth.Target{
-		RQLiteBase: fmt.Sprintf("http://localhost:%d", port),
+		RQLite: ep,
 	}, nodehealth.Options{Budget: timeout})
 }

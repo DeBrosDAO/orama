@@ -84,6 +84,18 @@ func TestUpgrade_NameserverStaysUnsetUnlessGiven(t *testing.T) {
 	}
 }
 
+// --public-ip reaches the orchestrator, which records it as node.public_ip.
+func TestUpgrade_PublicIPFlagIsParsed(t *testing.T) {
+	upgradeFlags = upgrade.Flags{}
+
+	if err := runParse(t, upgradeCmd, "--public-ip", "203.0.113.7"); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if upgradeFlags.PublicIP != "203.0.113.7" {
+		t.Errorf("PublicIP = %q", upgradeFlags.PublicIP)
+	}
+}
+
 func TestMigrateRaftID_ParsesItsFlags(t *testing.T) {
 	raftIDFlags.Env, raftIDFlags.Node, raftIDFlags.DryRun, raftIDFlags.Force = "", "", false, false
 

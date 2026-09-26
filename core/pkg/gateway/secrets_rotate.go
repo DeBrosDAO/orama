@@ -58,8 +58,8 @@ func (g *Gateway) handleRotateSecrets(w http.ResponseWriter, r *http.Request) {
 	if _, ok := g.operatorHandler.Authorize(w, r); !ok {
 		return
 	}
-	if g.cfg == nil || g.cfg.DataDir == "" {
-		writeError(w, http.StatusServiceUnavailable, "this gateway has no data directory")
+	if g.cfg == nil || g.cfg.StateDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "this gateway has no state directory to persist the encryption root in")
 		return
 	}
 
@@ -70,14 +70,18 @@ func (g *Gateway) handleRotateSecrets(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	registry := g.registryStore()
-	dir := secrets.SecretsDir(g.cfg.DataDir)
+	dir := g.cfg.StateDir
 
 	if g.encHolder == nil {
 		g.encHolder = secrets.NewHolder(secrets.Root{})
 	}
 	root := g.encHolder.Get()
 	if root.CurrentIKM == "" {
-		loaded, err := secrets.LoadOrMaterialize(ctx, registry, dir, g.cfg.ClusterSecret)
+		seed := ""
+		if g.cfg.DataDir != "" {
+			seed = secrets.SecretsDir(g.cfg.DataDir)
+		}
+		loaded, err := secrets.LoadOrMaterialize(ctx, registry, dir, seed, g.cfg.ClusterSecret)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "encryption root: "+err.Error())
 			return
@@ -159,13 +163,22 @@ func (g *Gateway) handleInternalReencrypt(w http.ResponseWriter, r *http.Request
 		return
 	}
 	root := req.Root
+	// Cached before it is used. A gateway that swapped to a root it could not
+	// persist would boot next time — registry unreachable — on the previous
+	// one, and fail on everything encrypted in between. The failure goes back
+	// to the index's fan-out, which reports it per namespace.
+	if g.cfg == nil || g.cfg.StateDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "this gateway has no state directory to persist the encryption root in")
+		return
+	}
+	if err := secrets.Persist(g.cfg.StateDir, root); err != nil {
+		writeError(w, http.StatusInternalServerError, "persist the rotated encryption root: "+err.Error())
+		return
+	}
 	if g.encHolder == nil {
 		g.encHolder = secrets.NewHolder(root)
 	} else {
 		g.encHolder.Swap(root)
-	}
-	if g.cfg != nil && g.cfg.DataDir != "" {
-		_ = secrets.Persist(secrets.SecretsDir(g.cfg.DataDir), root)
 	}
 
 	cols := secrets.NamespaceColumns()

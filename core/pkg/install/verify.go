@@ -144,8 +144,23 @@ func (ps *ProductionSetup) probeNodeService(context.Context) error {
 // rqlited binds its HTTP listener before it has joined anything, so a node that
 // is still Candidate, still replaying its log, or still retrying a join answers
 // on the port perfectly well.
+//
+// It reaches rqlited where node.yaml says it binds (the WireGuard IP), with
+// node.yaml's credentials: rqlited listens on nothing else and always runs with
+// -auth, so localhost or an unauthenticated probe can never succeed.
 func (ps *ProductionSetup) probeRQLite(ctx context.Context) error {
-	return rqlite.WaitForRaftReady(ctx, constants.RQLiteHTTPPort, rqliteProbeAttempt)
+	ep, err := rqlite.EndpointFromNodeConfig(OramaRoot(ps.oramaDir), ps.nodeConfigPath())
+	if err != nil {
+		return err
+	}
+	if err := rqlite.WaitForRaftReady(ctx, ep, rqliteProbeAttempt); err != nil {
+		return err
+	}
+	joinAddr, err := rqlite.JoinAddressFromNodeConfig(OramaRoot(ps.oramaDir), ps.nodeConfigPath())
+	if err != nil || joinAddr == "" {
+		return err
+	}
+	return rqlite.VerifyJoined(ctx, ep, joinAddr)
 }
 
 // probeWireGuard checks the overlay interface exists and has a peer.

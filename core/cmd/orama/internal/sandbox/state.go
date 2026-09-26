@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -53,8 +54,23 @@ func sandboxesDir() (string, error) {
 	return sbxDir, nil
 }
 
+// namePattern is a sandbox name: it becomes a file name under
+// ~/.orama/sandboxes and part of each server's hostname (sbx-<name>-<N>).
+var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
+
+// validateName refuses a sandbox name that is not a short lowercase DNS label.
+func validateName(name string) error {
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("sandbox name %q: use lowercase letters, digits and '-', at most 40 characters", name)
+	}
+	return nil
+}
+
 // statePath returns the path for a sandbox's state file.
 func statePath(name string) (string, error) {
+	if err := validateName(name); err != nil {
+		return "", err
+	}
 	dir, err := sandboxesDir()
 	if err != nil {
 		return "", err
@@ -104,7 +120,7 @@ func LoadState(name string) (*SandboxState, error) {
 	return &state, nil
 }
 
-// DeleteState removes the sandbox state file.
+// DeleteState removes the sandbox state file and its pinned host keys.
 func DeleteState(name string) error {
 	path, err := statePath(name)
 	if err != nil {
@@ -113,6 +129,14 @@ func DeleteState(name string) error {
 
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete state: %w", err)
+	}
+
+	knownHosts, err := knownHostsPath(name)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(knownHosts); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete pinned host keys: %w", err)
 	}
 
 	return nil

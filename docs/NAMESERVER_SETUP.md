@@ -1,49 +1,98 @@
 # Nameserver Setup Guide
 
-This guide explains how to configure your domain registrar to use Orama Network nodes as authoritative nameservers.
+How to make the internet reach an Orama cluster's own nameservers, so its base
+domain — and every name under it — is answered by the cluster.
 
 ## Overview
 
 When you install Orama with the `--nameserver` flag, `orama-node` starts
 `orama-namespace-coredns@nameserver` after index rqlite is up. CoreDNS still
-binds `:53` and reads zone data from index RQLite `dns_records`
-(`localhost:10100`) via the existing `/etc/coredns/Corefile`. This enables:
+binds `:53` and reads zone data from index RQLite `dns_records` via the
+existing `/etc/coredns/Corefile`. The installer writes the rqlite plugin's
+`dsn` as this node's WireGuard address (`http://<wg-ip>:10100`, from
+`discovery.http_adv_address` in `node.yaml`) with `username`/`password`:
+rqlited listens on nothing else and always requires auth. The plugin refuses a
+Corefile without `dsn`. This enables:
 
 - Dynamic DNS for deployments (e.g., `myapp.node-abc123.dbrs.space`)
 - Wildcard DNS support for all subdomains
 - ACME DNS-01 challenges for automatic SSL certificates
 
+For any of that to work, the **parent zone** of the base domain has to delegate
+to the cluster: NS records naming the cluster's nameservers, and glue A
+records giving their addresses. This guide is about creating those records.
+
 ## Prerequisites
 
-Before setting up nameservers, you need:
-
-1. **Domain ownership** - A domain you control (e.g., `dbrs.space`)
-2. **3+ VPS nodes** - Recommended for redundancy
-3. **Static IP addresses** - Each VPS must have a static public IP
-4. **Access to registrar DNS settings** - Admin access to your domain registrar
+1. **A domain you control** — either a whole registered domain (`dbrs.space`)
+   or a subdomain of one (`stagenet.dbrsteting.bid`). See
+   [Choosing the base domain](#choosing-the-base-domain).
+2. **One or more VPS nodes installed with `--nameserver`**, each with a static
+   public IPv4 address. Three or more is recommended for redundancy; the
+   cluster publishes exactly as many nameservers as it has (see below).
+3. **Access to the parent zone** — the registrar's nameserver settings for a
+   whole domain, or the DNS zone of the parent domain for a subdomain.
 
 ## Understanding DNS Records
 
-### NS Records (Nameserver Records)
-NS records tell the internet which servers are authoritative for your domain:
-```
-dbrs.space.  IN  NS  ns1.dbrs.space.
-dbrs.space.  IN  NS  ns2.dbrs.space.
-dbrs.space.  IN  NS  ns3.dbrs.space.
+### Nameserver slots
+
+Each `--nameserver` node claims a slot — `ns1`, `ns2`, … — for the base domain
+the first time its DNS sweep runs (every 30 seconds, once it has registered).
+Slots are claimed dynamically, lowest free number first, by whichever node gets
+there first, so **you cannot know in advance which address holds which name**.
+A node keeps its slot for as long as it keeps heartbeating; a nameserver that
+stops for more than two minutes releases it, and a node removed with
+`orama node remove` releases it for good.
+
+Each slot holder writes its **glue** record, `nsN.<base>` → its public IP
+(`node.public_ip` in `node.yaml`). The zone's own NS set and SOA are derived
+from the slots: the cluster publishes an NS record for every slot that has
+glue, and nothing else (while no slot is glued at all — every nameserver missed
+its heartbeat at once — the last known NS set is kept rather than leaving the
+zone with none) — a one-nameserver cluster publishes only `ns1`, a
+five-nameserver cluster `ns1`..`ns5`. The SOA names the lowest glued slot as the
+primary. Every node re-derives both on its 30-second DNS sweep, so a record set
+written any other way is brought back to the slots within one sweep. Install
+and upgrade write no zone records at all: a new nameserver's zone appears on its
+first sweep after `orama-node` starts. There are at most 13 slots.
+
+A negative answer (NXDOMAIN) carries the zone's own SOA from `dns_records` in
+its authority section — the one naming the lowest glued slot. A zone with no SOA
+yet (no slot glued) answers SERVFAIL rather than inventing one.
+
+### Seeing which address holds which slot
+
+Read it from the cluster:
+
+```bash
+orama node dns delegation --env <env>
 ```
 
-### Glue Records
-Glue records are A records that provide IP addresses for nameservers that are under the same domain. They're required because:
-- `ns1.dbrs.space` is under `dbrs.space`
-- To resolve `ns1.dbrs.space`, you need to query `dbrs.space` nameservers
-- But those nameservers ARE `ns1.dbrs.space` - circular dependency!
-- Glue records break this cycle by providing IPs at the registry level
+It prints exactly the records to create at the parent zone, e.g.:
 
 ```
-ns1.dbrs.space.  IN  A  141.227.165.168
-ns2.dbrs.space.  IN  A  141.227.165.154
-ns3.dbrs.space.  IN  A  141.227.156.51
+; stagenet.dbrsteting.bid — create these in the parent zone dbrsteting.bid: as records in that zone, wherever its DNS is hosted
+stagenet.dbrsteting.bid.        IN  NS  ns1.stagenet.dbrsteting.bid.
+stagenet.dbrsteting.bid.        IN  NS  ns2.stagenet.dbrsteting.bid.
+stagenet.dbrsteting.bid.        IN  NS  ns3.stagenet.dbrsteting.bid.
+ns1.stagenet.dbrsteting.bid.    IN  A   203.0.113.10
+ns2.stagenet.dbrsteting.bid.    IN  A   203.0.113.11
+ns3.stagenet.dbrsteting.bid.    IN  A   203.0.113.12
 ```
+
+`--json` prints the same as data. It reads the registry over SSH from the
+environment's first node, and lists only slots whose glue exists — the same
+set the cluster's zone publishes. **Run it again after adding or removing a
+nameserver, and update the parent zone to match.**
+
+### NS records and glue
+
+The NS records tell resolvers which servers are authoritative for the base
+domain. Because those servers are named *inside* the domain they serve
+(`ns1.<base>` serves `<base>`), resolving them would need the very servers they
+name — so the parent also carries **glue**: the A record for each nameserver
+name, handed out alongside the delegation.
 
 ### Record Lifecycle and Self-Healing
 
@@ -84,140 +133,131 @@ If a namespace host is down to a single record pointing at a departed node, the
 guard keeps it — deletion would take the namespace fully offline. That state is
 resolved by adding a replacement node, which re-advertises itself on the next sweep.
 
+## Choosing the base domain
+
+### A subdomain (recommended, and the only option with Cloudflare Registrar)
+
+Delegate a subdomain such as `stagenet.dbrsteting.bid` from the zone of the
+domain you registered. The NS and glue records are ordinary records inside the
+parent zone, created wherever that zone's DNS is hosted; the registrar is not
+involved, and the rest of the domain keeps working as it does.
+
+This is the only way to use a domain registered with **Cloudflare Registrar**:
+Cloudflare Registrar does not let a domain it registers use custom
+nameservers, so the whole-domain setup below is impossible there. Subdomain
+delegation inside the Cloudflare zone works — verified 2026-09-25 with
+`stagenet.dbrsteting.bid` delegated from the `dbrsteting.bid` zone.
+
+In the Cloudflare dashboard, for the parent zone (`dbrsteting.bid`) → **DNS** →
+**Records**, add for each line `orama node dns delegation` printed:
+
+| Type | Name | Content | Proxy status |
+|------|------|---------|--------------|
+| NS | `stagenet` | `ns1.stagenet.dbrsteting.bid` | — |
+| NS | `stagenet` | `ns2.stagenet.dbrsteting.bid` | — |
+| A | `ns1.stagenet` | the IP printed for ns1 | **DNS only** |
+| A | `ns2.stagenet` | the IP printed for ns2 | **DNS only** |
+
+The glue A records must be **DNS only** (grey cloud): a proxied record answers
+with Cloudflare's addresses, and a resolver would send the cluster's queries
+there. Any DNS host works the same way — the records are what matter.
+
+### A whole registered domain
+
+Use the registered domain itself (`dbrs.space`) as the base domain. The NS and
+glue records then live at the registry, and are set through the registrar:
+glue first (often called *host records*, *child nameservers* or *personal DNS
+servers*), then the domain's nameservers switched to the `nsN` names.
+
+- **Namecheap:** Domain List → Manage → **Advanced DNS** → *Personal DNS
+  Servers*: add each `nsN.<domain>` with its IP. Then **Domain** →
+  *Nameservers* → **Custom DNS**, and enter the `nsN.<domain>` names.
+- **GoDaddy:** **DNS** → *Hostnames*: add each `nsN` with its IP. Then
+  *Nameservers* → **Change** → *Enter my own nameservers*.
+- **Cloudflare Registrar:** not possible — use a subdomain (above).
+
+Registry changes can take hours to propagate (up to 48); most are visible
+within 1–4 hours.
+
 ## Installation
 
-### Step 1: Install Orama on Each VPS
+### Order: delegation before certificates
 
-Install Orama with `orama node install` and the `--nameserver` flag on each VPS that will serve as a nameserver. The first node creates the cluster; every subsequent node must join it with `--join` and `--token`, otherwise each install bootstraps its own separate cluster.
+Every node's HTTPS certificate is issued through ACME DNS-01, and the challenge
+record is served by the cluster's own CoreDNS. The certificate authority finds
+that CoreDNS through the delegation — so **the genesis node cannot get a
+certificate until the parent zone delegates to it**. Caddy keeps retrying, so
+nothing needs restarting; it just waits.
 
-```bash
-# On VPS 1 (ns1) — first node, creates the cluster
-sudo orama node install \
-  --nameserver \
-  --domain dbrs.space \
-  --base-domain dbrs.space \
-  --vps-ip 141.227.165.168
+The order is therefore:
 
-# On ns1, generate an invite token for each joining node
-orama node invite --expiry 1h
+1. Install the genesis node with `--nameserver`.
+2. Once it has registered (its first DNS sweep, ~30 s later) it holds `ns1`.
+   Run `orama node dns delegation --env <env>` and create the records.
+3. Wait for the delegation to be visible (`dig NS <base> @8.8.8.8`); the
+   genesis node's certificate is issued then.
+4. Join the other nameservers — the invite pins the genesis node's
+   certificate, so it must have one — then run `orama node dns delegation`
+   again and add their records.
 
-# On VPS 2 (ns2) — joins the existing cluster
-sudo orama node install \
-  --join http://141.227.165.168 \
-  --token <invite-token> \
-  --nameserver \
-  --domain dbrs.space \
-  --base-domain dbrs.space \
-  --vps-ip 141.227.165.154
+### Installing the nodes
 
-# On VPS 3 (ns3) — joins the existing cluster (generate a fresh token)
-sudo orama node install \
-  --join http://141.227.165.168 \
-  --token <invite-token> \
-  --nameserver \
-  --domain dbrs.space \
-  --base-domain dbrs.space \
-  --vps-ip 141.227.156.51
-```
-
-`--base-domain` sets the base domain used for DNS routing and record seeding; if omitted, the installer prompts for it interactively.
-
-Alternatively, `orama node setup` provisions a fresh VPS end-to-end (SSH key, binary upload, install) in one command:
+`orama node setup` provisions a fresh VPS end to end. It reads the VPS
+password from your RootWallet vault (`rw vault add <ip>`) — never from the
+command line — and installs the archive `orama build` printed:
 
 ```bash
-# Genesis nameserver
-orama node setup --ip 141.227.165.168 --password '<vps-pass>' --env devnet \
-  --base-domain dbrs.space --role nameserver --genesis
+# Genesis nameserver — creates the cluster
+orama node setup --ip <ip> --password --env <env> --archive <archive path> \
+  --base-domain <base-domain> --role nameserver --genesis
 
-# Join as nameserver
-orama node setup --ip 141.227.165.154 --password '<vps-pass>' --env devnet \
-  --base-domain dbrs.space --role nameserver
+# Each further nameserver — joins it
+orama node setup --ip <ip> --password --env <env> --archive <archive path> \
+  --base-domain <base-domain> --role nameserver
 ```
 
-### Step 2: Configure Your Registrar
+To install by hand on the VPS instead, the genesis node is installed without a
+token and every other node with an invite (`orama invite` from your machine, or
+`sudo orama node invite` on a node already in the cluster):
 
-#### For Namecheap
+```bash
+# Genesis — creates the cluster
+sudo orama node install --nameserver \
+  --domain <base-domain> --base-domain <base-domain> --vps-ip <genesis public IP>
 
-1. **Log into Namecheap Dashboard**
-   - Go to https://www.namecheap.com
-   - Navigate to **Domain List** → **Manage** (next to your domain)
+# Every other nameserver — joins it; the invite carries the node to join and
+# the certificate to pin
+sudo orama node install --token <invite> --nameserver \
+  --domain <base-domain> --base-domain <base-domain> --vps-ip <this node's public IP>
+```
 
-2. **Add Glue Records (Personal DNS Servers)**
-   - Go to **Advanced DNS** tab
-   - Scroll down to **Personal DNS Servers** section
-   - Click **Add Nameserver**
-   - Add each nameserver with its IP:
-     | Nameserver | IP Address |
-     |------------|------------|
-     | ns1.yourdomain.com | 141.227.165.168 |
-     | ns2.yourdomain.com | 141.227.165.154 |
-     | ns3.yourdomain.com | 141.227.156.51 |
-
-3. **Set Custom Nameservers**
-   - Go back to the **Domain** tab
-   - Under **Nameservers**, select **Custom DNS**
-   - Add your nameserver hostnames:
-     - ns1.yourdomain.com
-     - ns2.yourdomain.com
-     - ns3.yourdomain.com
-   - Click the green checkmark to save
-
-4. **Wait for Propagation**
-   - DNS changes can take 24-48 hours to propagate globally
-   - Most changes are visible within 1-4 hours
-
-#### For GoDaddy
-
-1. Log into GoDaddy account
-2. Go to **My Products** → **DNS** for your domain
-3. Under **Nameservers**, click **Change**
-4. Select **Enter my own nameservers**
-5. Add your nameserver hostnames
-6. For glue records, go to **DNS Management** → **Host Names**
-7. Add A records for ns1, ns2, ns3
-
-#### For Cloudflare (as Registrar)
-
-1. Log into Cloudflare Dashboard
-2. Go to **Domain Registration** → your domain
-3. Under **Nameservers**, change to custom
-4. Note: Cloudflare Registrar may require contacting support for glue records
-
-#### For Google Domains
-
-1. Log into Google Domains
-2. Select your domain → **DNS**
-3. Under **Name servers**, select **Use custom name servers**
-4. Add your nameserver hostnames
-5. For glue records, click **Add** under **Glue records**
+A node installed without a token creates a new cluster — only ever do that for
+the genesis node. `--base-domain` sets the base domain used for DNS routing
+and the zone CoreDNS serves; if omitted, the installer prompts for it.
 
 ## Verification
 
 ### Step 1: Verify NS Records
 
-After propagation, check that NS records are visible:
+After propagation, check that the delegation is visible and matches what the
+cluster says:
 
 ```bash
-# Check NS records from Google DNS
-dig NS yourdomain.com @8.8.8.8
-
-# Expected output should show:
-# yourdomain.com.    IN  NS  ns1.yourdomain.com.
-# yourdomain.com.    IN  NS  ns2.yourdomain.com.
-# yourdomain.com.    IN  NS  ns3.yourdomain.com.
+orama node dns delegation --env <env>   # what it should be
+dig NS <base-domain> @8.8.8.8            # what the internet sees
 ```
+
+The two must list the same `nsN` names.
 
 ### Step 2: Verify Glue Records
 
 Check that glue records resolve:
 
 ```bash
-# Check glue records
-dig A ns1.yourdomain.com @8.8.8.8
-dig A ns2.yourdomain.com @8.8.8.8
-dig A ns3.yourdomain.com @8.8.8.8
+# Check glue records, one per slot the delegation command printed
+dig A ns1.<base-domain> @8.8.8.8
 
-# Each should return the correct IP address
+# Each should return the IP the delegation command printed for it
 ```
 
 ### Step 3: Test CoreDNS
@@ -226,10 +266,10 @@ Query your nameservers directly:
 
 ```bash
 # Test a query against ns1
-dig @ns1.yourdomain.com test.yourdomain.com
+dig @ns1.<base-domain> test.<base-domain>
 
 # Test wildcard resolution
-dig @ns1.yourdomain.com myapp.node-abc123.yourdomain.com
+dig @ns1.<base-domain> myapp.node-abc123.<base-domain>
 ```
 
 ### Step 4: Verify from Multiple Locations
@@ -260,15 +300,19 @@ Use online tools to verify global propagation:
 
 4. **Test locally:**
    ```bash
-   dig @localhost yourdomain.com
+   dig @localhost <base-domain>
    ```
 
 ### Glue Records Not Propagating
 
-- Glue records are stored at the registry level, not DNS level
-- They can take longer to propagate (up to 48 hours)
-- Verify at your registrar that they were saved correctly
-- Some registrars require the domain to be using their nameservers first
+- For a whole registered domain, glue is stored at the registry, not in any
+  DNS zone, and can take up to 48 hours to propagate. Verify at your registrar
+  that it was saved.
+- For a subdomain, the glue is an ordinary A record in the parent zone; check
+  it is not proxied (Cloudflare: **DNS only**).
+- A slot moves when its holder stops heartbeating for two minutes. If a glue
+  record names an address that no longer answers, run
+  `orama node dns delegation --env <env>` and update the parent zone.
 
 ### SERVFAIL Errors
 
@@ -290,7 +334,7 @@ sudo ufw allow 53/tcp
 sudo ufw allow 53/udp
 ```
 
-The generated Corefile does not enable CoreDNS's `health` or `prometheus` plugins, so there are no CoreDNS health/metrics ports to expose. The forward block for non-authoritative queries is bound to 127.0.0.1, so the node cannot be used as an open recursive resolver.
+The generated Corefile does not enable CoreDNS's `health` or `prometheus` plugins, so there are no CoreDNS health/metrics ports to expose. The recursive block for non-authoritative queries answers only loopback clients (an `acl` allowing 127.0.0.0/8 and ::1), so the node cannot be used as an open recursive resolver. It shares one listener with the authoritative zone rather than binding 127.0.0.1 separately: a socket bound to 127.0.0.1:53 takes every local query, which sent the node's own zone out to a public resolver — and Caddy's ACME DNS-01 propagation check, which resolves through the node, never saw its challenge record.
 
 ### Rate Limiting
 
@@ -302,8 +346,10 @@ This can be configured in the CoreDNS Corefile.
 When running multiple nameservers:
 
 1. **All nodes share the same RQLite cluster** - DNS records are automatically synchronized
-2. **Install in order** - First node bootstraps, others join with `--join` and `--token`
+2. **Install in order** - First node bootstraps, others join with an invite (`--token`)
 3. **Same domain configuration** - All nodes must use the same `--domain` and `--base-domain` values
+4. **The parent zone follows the slots** - after adding or removing a nameserver, re-run
+   `orama node dns delegation --env <env>` and update the parent zone to match
 
 ## Related Documentation
 

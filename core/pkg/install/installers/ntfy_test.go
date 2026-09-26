@@ -2,6 +2,9 @@ package installers
 
 import (
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -113,16 +116,25 @@ func TestFindChecksumFor_handlesBSDStarPrefix(t *testing.T) {
 	}
 }
 
-func TestNtfySystemdUnit_includesHardening(t *testing.T) {
-	// The unit is written to disk in writeSystemdUnit; we don't actually
-	// touch the filesystem here (no chroot in unit tests) but we can
-	// regression-check the constants used so an accidental rename of
-	// the binary path / port / user fails loud here.
-	if ntfyUser != "ntfy" {
-		t.Errorf("ntfyUser should be 'ntfy'; got %q", ntfyUser)
+// ntfy runs from the orama-namespace-ntfy@ template, not from a unit the
+// installer writes, so the paths and user the installer lays out have to be
+// the ones that template names.
+func TestNtfyInstaller_matchesTheNamespaceTemplate(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	tmpl := filepath.Join(filepath.Dir(file), "..", "..", "..", "systemd", "orama-namespace-ntfy@.service")
+	data, err := os.ReadFile(tmpl)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if ntfyBinaryPath != "/usr/local/bin/ntfy" {
-		t.Errorf("ntfyBinaryPath drift; got %q", ntfyBinaryPath)
+	unit := string(data)
+	for _, want := range []string{
+		"User=" + ntfyUser,
+		"ExecStart=" + ntfyBinaryPath + " serve --config " + ntfyConfigPath,
+		"ReadWritePaths=" + ntfyDataDir,
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("%s does not contain %q: the installer and the template disagree", filepath.Base(tmpl), want)
+		}
 	}
 	if NtfyListenPort != 10109 {
 		t.Errorf("NtfyListenPort drift; got %d", NtfyListenPort)

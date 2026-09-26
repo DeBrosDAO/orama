@@ -33,9 +33,10 @@ func TestGatewayListenAddr_aTenantGatewayBindsTheOverlay(t *testing.T) {
 	}
 }
 
-// Caddy reverse-proxies to localhost and the ACME internal endpoint is reached
-// there, so the cluster's own gateway keeps binding everything.
-func TestGatewayListenAddr_theIndexGatewayKeepsBindingEverything(t *testing.T) {
+// The cluster's own gateway bound every interface too, public included. It
+// binds the overlay like every other; the gateway binary adds loopback for
+// Caddy and the CLI (cmd/gateway listenAddrs).
+func TestGatewayListenAddr_theIndexGatewayBindsTheOverlay(t *testing.T) {
 	withOverlayIP(t, "10.0.0.7", nil)
 
 	for _, ns := range []string{"", "index", "default"} {
@@ -43,8 +44,8 @@ func TestGatewayListenAddr_theIndexGatewayKeepsBindingEverything(t *testing.T) {
 		if err != nil {
 			t.Fatalf("gatewayListenAddr(%q): %v", ns, err)
 		}
-		if got != ":10104" {
-			t.Errorf("gatewayListenAddr(%q) = %q, want every interface", ns, got)
+		if got != "10.0.0.7:10104" {
+			t.Errorf("gatewayListenAddr(%q) = %q, want the overlay address", ns, got)
 		}
 	}
 }

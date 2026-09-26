@@ -3,23 +3,31 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/cmd/orama/internal"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
-	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
 // Create orchestrates the creation of a new sandbox cluster.
-func Create(name string) error {
+func Create(name, archive string) error {
+	if name == "" {
+		name = GenerateName()
+	}
+	if err := validateName(name); err != nil {
+		return err
+	}
+
 	cfg, err := LoadConfig()
 	if err != nil {
 		return err
@@ -45,7 +53,15 @@ func Create(name string) error {
 	}
 	fmt.Println("  [ok] Rootwallet agent running and unlocked")
 
-	// 3. Resolve SSH key (may trigger approval prompt in RootWallet app)
+	// 3. The operator's wallet: the genesis node's archive trust anchor, and
+	// so the only signer this sandbox installs builds from.
+	wallet, err := readOperatorWallet()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("  [ok] Operator wallet: %s\n", wallet)
+
+	// 4. Resolve SSH key (may trigger approval prompt in RootWallet app)
 	fmt.Print("  [..] Resolving SSH key from vault...")
 	sshKeyPath, cleanup, err := resolveVaultKeyOnce(cfg.SSHKey.VaultTarget)
 	if err != nil {
@@ -55,25 +71,24 @@ func Create(name string) error {
 	defer cleanup()
 	fmt.Println(" ok")
 
-	// 4. Check binary archive — auto-build if missing
-	archivePath := build.FindNewestArchive()
-	if archivePath == "" {
-		fmt.Println("  [--] No binary archive found, building...")
-		if err := autoBuildArchive(); err != nil {
-			return fmt.Errorf("auto-build archive: %w", err)
-		}
-		archivePath = build.FindNewestArchive()
-		if archivePath == "" {
-			return fmt.Errorf("build succeeded but no archive found in /tmp/")
-		}
+	// 5. The build to deploy: the one named, or one built now from this
+	// checkout — never "the newest archive in /tmp", which may be another's.
+	// It must verify against the wallet before any server is paid for; the
+	// upload verifies it again before anything reaches a server.
+	archivePath, err := resolveArchive(archive)
+	if err != nil {
+		return err
 	}
 	info, err := os.Stat(archivePath)
 	if err != nil {
 		return fmt.Errorf("stat archive %s: %w", archivePath, err)
 	}
-	fmt.Printf("  [ok] Binary archive: %s (%s)\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
+	if _, err := archivetrust.VerifyArchiveFile(archivePath, []string{wallet}); err != nil {
+		return fmt.Errorf("the archive does not verify against your wallet %s: %w", wallet, err)
+	}
+	fmt.Printf("  [ok] Binary archive: %s (%s), signed by your wallet\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
-	// 5. Verify Hetzner API token works
+	// 6. Verify Hetzner API token works
 	client := NewHetznerClient(cfg.HetznerAPIToken)
 	if err := client.ValidateToken(); err != nil {
 		return fmt.Errorf("hetzner API: %w\n     Check your token in ~/.orama/sandbox.yaml", err)
@@ -83,11 +98,6 @@ func Create(name string) error {
 	fmt.Println()
 
 	// --- All preflight checks passed, proceed ---
-
-	// Generate name if not provided
-	if name == "" {
-		name = GenerateName()
-	}
 
 	fmt.Printf("Creating sandbox %q (%s, %d nodes)\n\n", name, cfg.Domain, 5)
 
@@ -108,24 +118,38 @@ func Create(name string) error {
 		fmt.Fprintf(os.Stderr, "Warning: save state after provisioning: %v\n", err)
 	}
 
+	// Pin every server's host key before anything is sent to it.
+	fmt.Println("\nPinning SSH host keys...")
+	if err := pinHostKeys(state, sshReadyTimeout); err != nil {
+		state.Status = StatusError
+		_ = SaveState(state)
+		return fmt.Errorf("pin host keys: %w", err)
+	}
+	nodes, err := pinnedNodes(state, sshKeyPath)
+	if err != nil {
+		return err
+	}
+
 	// Phase 2: Assign floating IPs
 	fmt.Println("\nPhase 2: Assigning floating IPs...")
-	if err := phase2AssignFloatingIPs(client, cfg, state, sshKeyPath); err != nil {
+	if err := phase2AssignFloatingIPs(client, cfg, state, nodes); err != nil {
 		return fmt.Errorf("assign floating IPs: %w", err)
 	}
 	if err := SaveState(state); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: save state after floating IPs: %v\n", err)
 	}
 
-	// Phase 3: Upload binary archive
-	fmt.Println("\nPhase 3: Uploading binary archive...")
-	if err := phase3UploadArchive(state, sshKeyPath, archivePath); err != nil {
+	// Phase 3: Put the verified archive on every server
+	fmt.Println("\nPhase 3: Uploading the verified archive...")
+	if err := phase3UploadArchive(nodes, archivePath, wallet); err != nil {
+		state.Status = StatusError
+		_ = SaveState(state)
 		return fmt.Errorf("upload archive: %w", err)
 	}
 
 	// Phase 4: Install genesis node
 	fmt.Println("\nPhase 4: Installing genesis node...")
-	if err := phase4InstallGenesis(cfg, state, sshKeyPath); err != nil {
+	if err := phase4InstallGenesis(cfg, state, nodes, wallet); err != nil {
 		state.Status = StatusError
 		_ = SaveState(state)
 		return fmt.Errorf("install genesis: %w", err)
@@ -133,7 +157,7 @@ func Create(name string) error {
 
 	// Phase 5: Join remaining nodes
 	fmt.Println("\nPhase 5: Joining remaining nodes...")
-	if err := phase5JoinNodes(cfg, state, sshKeyPath); err != nil {
+	if err := phase5JoinNodes(cfg, state, nodes, wallet); err != nil {
 		state.Status = StatusError
 		_ = SaveState(state)
 		return fmt.Errorf("join nodes: %w", err)
@@ -148,17 +172,9 @@ func Create(name string) error {
 		return fmt.Errorf("save final state: %w", err)
 	}
 
-	// Register sandbox as an environment and switch to it
-	gatewayURL := "https://" + cfg.Domain
-	desc := fmt.Sprintf("Sandbox cluster: %s (%s)", state.Name, cfg.Domain)
-	if err := cli.AddEnvironment("sandbox", gatewayURL, desc); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to register sandbox environment: %v\n", err)
-	} else if err := cli.SwitchEnvironment("sandbox"); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to switch to sandbox environment: %v\n", err)
+	if err := registerEnvironment(cfg, state); err != nil {
+		return fmt.Errorf("sandbox %q is running, but: %w", state.Name, err)
 	}
-
-	// Tag all nodes with operator wallet for unified node management
-	registerNodesWithOperator(state, sshKeyPath)
 
 	printCreateSummary(cfg, state)
 	return nil
@@ -313,7 +329,8 @@ func phase1ProvisionServers(client *HetznerClient, cfg *Config, state *SandboxSt
 }
 
 // phase2AssignFloatingIPs assigns floating IPs and configures loopback.
-func phase2AssignFloatingIPs(client *HetznerClient, cfg *Config, state *SandboxState, sshKeyPath string) error {
+// nodes are the servers as pinned SSH targets, in state.Servers order.
+func phase2AssignFloatingIPs(client *HetznerClient, cfg *Config, state *SandboxState, nodes []inspector.Node) error {
 	for i := 0; i < 2 && i < len(cfg.FloatingIPs) && i < len(state.Servers); i++ {
 		fip := cfg.FloatingIPs[i]
 		srv := state.Servers[i]
@@ -331,19 +348,8 @@ func phase2AssignFloatingIPs(client *HetznerClient, cfg *Config, state *SandboxS
 
 		// Configure floating IP on the server's loopback interface
 		// Hetzner floating IPs require this: ip addr add <floating_ip>/32 dev lo
-		node := inspector.Node{
-			User:   "root",
-			Host:   srv.IP,
-			SSHKey: sshKeyPath,
-		}
-
-		// Wait for SSH to be ready on freshly booted servers
-		if err := waitForSSH(node, 5*time.Minute); err != nil {
-			return fmt.Errorf("SSH not ready on %s: %w", srv.Name, err)
-		}
-
 		cmd := fmt.Sprintf("ip addr add %s/32 dev lo 2>/dev/null || true", fip.IP)
-		if err := remotessh.RunSSHStreaming(node, cmd, remotessh.WithNoHostKeyCheck()); err != nil {
+		if err := remotessh.RunSSHStreaming(nodes[i], cmd); err != nil {
 			return fmt.Errorf("configure loopback on %s: %w", srv.Name, err)
 		}
 	}
@@ -351,78 +357,41 @@ func phase2AssignFloatingIPs(client *HetznerClient, cfg *Config, state *SandboxS
 	return nil
 }
 
-// waitForSSH polls until SSH is responsive on the node.
-func waitForSSH(node inspector.Node, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		_, err := runSSHOutput(node, "echo ok")
-		if err == nil {
-			return nil
-		}
-		time.Sleep(3 * time.Second)
+// resolveArchive returns archive when it names one, and otherwise builds this
+// checkout and returns exactly the file the build wrote.
+func resolveArchive(archive string) (string, error) {
+	if archive != "" {
+		return archive, nil
 	}
-	return fmt.Errorf("timeout after %s", timeout)
+	fmt.Println("  [--] No --archive given, building this checkout...")
+	builder := build.NewBuilder(&build.Flags{Arch: "amd64"})
+	if err := builder.Build(); err != nil {
+		return "", fmt.Errorf("build archive: %w", err)
+	}
+	return builder.OutputPath(), nil
 }
 
-// autoBuildArchive runs `make build-archive` from the project root.
-func autoBuildArchive() error {
-	// Find project root by looking for go.mod
-	dir, err := findProjectRoot()
-	if err != nil {
-		return fmt.Errorf("find project root: %w", err)
-	}
-
-	cmd := exec.Command("make", "build-archive")
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("make build-archive failed: %w", err)
-	}
-	return nil
-}
-
-// findProjectRoot walks up from the current working directory to find go.mod.
-func findProjectRoot() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("could not find go.mod in any parent directory")
-		}
-		dir = parent
-	}
-}
-
-// phase3UploadArchive uploads the binary archive to the genesis node, then fans out
-// to the remaining nodes server-to-server (much faster than uploading from local machine).
-func phase3UploadArchive(state *SandboxState, sshKeyPath, archivePath string) error {
+// phase3UploadArchive puts the archive on every pinned node through node
+// setup's verified path: verified here against the operator's wallet,
+// uploaded as the canonical re-pack, and staged on the server by
+// `node stage-archive`, which creates its trust anchor from the wallet.
+func phase3UploadArchive(nodes []inspector.Node, archivePath, wallet string) error {
 	fmt.Printf("  Archive: %s\n", filepath.Base(archivePath))
-
-	if err := fanoutArchive(state.Servers, sshKeyPath, archivePath); err != nil {
+	if err := installArchive(nodes, archivePath, wallet); err != nil {
 		return err
 	}
-
 	fmt.Println("  All nodes ready")
 	return nil
 }
 
-// phase4InstallGenesis installs the genesis node.
-func phase4InstallGenesis(cfg *Config, state *SandboxState, sshKeyPath string) error {
+// phase4InstallGenesis installs the genesis node, whose archive trust anchor
+// is the operator's wallet.
+func phase4InstallGenesis(cfg *Config, state *SandboxState, nodes []inspector.Node, wallet string) error {
 	genesis := state.GenesisServer()
-	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
+	node := nodes[0]
 
-	// Install genesis
-	installCmd := fmt.Sprintf("/opt/orama/bin/orama node install --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
-		genesis.IP, cfg.Domain, cfg.Domain)
 	fmt.Printf("  Installing on %s (%s)...\n", genesis.Name, genesis.IP)
-	if err := remotessh.RunSSHStreaming(node, installCmd, remotessh.WithNoHostKeyCheck()); err != nil {
+	if err := remotessh.RunSSHStreaming(node, genesisInstallCommand(cfg, genesis, wallet)); err != nil {
 		return fmt.Errorf("install genesis: %w", err)
 	}
 
@@ -433,36 +402,31 @@ func phase4InstallGenesis(cfg *Config, state *SandboxState, sshKeyPath string) e
 	}
 	fmt.Println(" OK")
 
+	// An invite pins the certificate genesis serves, so there must be one.
+	fmt.Print("  Waiting for the genesis TLS certificate...")
+	if err := waitForCertificate(net.JoinHostPort(genesis.IP, httpsPort), cfg.Domain, certificateTimeout); err != nil {
+		return fmt.Errorf("genesis certificate: %w", err)
+	}
+	fmt.Println(" OK")
+
 	return nil
 }
 
 // phase5JoinNodes joins the remaining 4 nodes to the cluster (serial).
 // Generates invite tokens just-in-time to avoid expiry during long installs.
-func phase5JoinNodes(cfg *Config, state *SandboxState, sshKeyPath string) error {
-	genesis := state.GenesisServer()
-	genesisNode := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
-
+func phase5JoinNodes(cfg *Config, state *SandboxState, nodes []inspector.Node, wallet string) error {
 	for i := 1; i < len(state.Servers); i++ {
 		srv := state.Servers[i]
-		node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
+		node := nodes[i]
 
-		// Generate token just before use to avoid expiry
-		token, err := generateInviteToken(genesisNode)
+		// Mint the invite just before use to avoid expiry
+		invite, err := mintInvite(nodes[0])
 		if err != nil {
-			return fmt.Errorf("generate invite token for %s: %w", srv.Name, err)
-		}
-
-		var installCmd string
-		if srv.Role == "nameserver" {
-			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --domain %s --base-domain %s --nameserver --skip-checks",
-				genesis.IP, token, srv.IP, cfg.Domain, cfg.Domain)
-		} else {
-			installCmd = fmt.Sprintf("/opt/orama/bin/orama node install --join http://%s --token %s --vps-ip %s --base-domain %s --skip-checks",
-				genesis.IP, token, srv.IP, cfg.Domain)
+			return fmt.Errorf("invite for %s: %w", srv.Name, err)
 		}
 
 		fmt.Printf("  [%d/%d] Joining %s (%s, %s)...\n", i, len(state.Servers)-1, srv.Name, srv.IP, srv.Role)
-		if err := remotessh.RunSSHStreaming(node, installCmd, remotessh.WithNoHostKeyCheck()); err != nil {
+		if err := remotessh.RunSSHStreaming(node, joinInstallCommand(cfg, srv, wallet, invite)); err != nil {
 			return fmt.Errorf("join %s: %w", srv.Name, err)
 		}
 
@@ -484,7 +448,7 @@ func phase6Verify(cfg *Config, state *SandboxState, sshKeyPath string) {
 	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
 	// Check RQLite cluster
-	out, err := runSSHOutput(node, fmt.Sprintf("curl -s %s/status | grep -o '\"state\":\"[^\"]*\"' | head -1", constants.LocalRQLiteURL()))
+	out, err := runSSHOutput(node, rqlite.NodeShellCurl(remotessh.SudoPrefix(node), "-s", "/status")+` | grep -o '"state":"[^"]*"' | head -1`)
 	if err == nil {
 		fmt.Printf("  RQLite: %s\n", strings.TrimSpace(out))
 	}
@@ -500,49 +464,20 @@ func phase6Verify(cfg *Config, state *SandboxState, sshKeyPath string) {
 }
 
 // waitForRQLiteHealth polls RQLite until it reports Leader or Follower state.
+// node is a pinned sandbox node (pinnedNodes).
 func waitForRQLiteHealth(node inspector.Node, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		out, err := runSSHOutput(node, fmt.Sprintf("curl -sf %s/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'", constants.LocalRQLiteURL()))
+		out, err := remotessh.RunSSHOutput(node, rqlite.NodeShellCurl(remotessh.SudoPrefix(node), "-sf", "/status")+` 2>/dev/null | grep -o '"state":"[^"]*"'`)
 		if err == nil {
 			result := strings.TrimSpace(out)
 			if strings.Contains(result, "Leader") || strings.Contains(result, "Follower") {
 				return nil
 			}
 		}
-		time.Sleep(5 * time.Second)
+		time.Sleep(readinessPollInterval)
 	}
 	return fmt.Errorf("timeout waiting for RQLite health after %s", timeout)
-}
-
-// generateInviteToken runs `orama node invite` on the node and parses the token.
-func generateInviteToken(node inspector.Node) (string, error) {
-	out, err := runSSHOutput(node, "/opt/orama/bin/orama node invite --expiry 1h 2>&1")
-	if err != nil {
-		return "", fmt.Errorf("invite command failed: %w", err)
-	}
-
-	// Parse token from output — the invite command outputs:
-	//   "sudo orama node install --join https://... --token <64-char-hex> --vps-ip ..."
-	// Look for the --token flag value first
-	fields := strings.Fields(out)
-	for i, field := range fields {
-		if field == "--token" && i+1 < len(fields) {
-			candidate := fields[i+1]
-			if len(candidate) == 64 && isHex(candidate) {
-				return candidate, nil
-			}
-		}
-	}
-
-	// Fallback: look for any standalone 64-char hex string
-	for _, word := range fields {
-		if len(word) == 64 && isHex(word) {
-			return word, nil
-		}
-	}
-
-	return "", fmt.Errorf("could not parse token from invite output:\n%s", out)
 }
 
 // isSafeDNSName returns true if the string is safe to use in shell commands.
@@ -553,16 +488,6 @@ func isSafeDNSName(s string) bool {
 		}
 	}
 	return len(s) > 0
-}
-
-// isHex returns true if s contains only hex characters.
-func isHex(s string) bool {
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
 }
 
 // runSSHOutput runs a command via SSH and returns stdout as a string.
@@ -613,36 +538,6 @@ func printCreateSummary(cfg *Config, state *SandboxState) {
 	fmt.Println()
 	fmt.Println("SSH:     orama sandbox ssh 1")
 	fmt.Println("Destroy: orama sandbox destroy")
-}
-
-// registerNodesWithOperator tags all sandbox nodes with the operator's wallet
-// via a direct RQLite UPDATE on the genesis node. This enables `orama nodes`
-// to discover sandbox nodes alongside production nodes.
-func registerNodesWithOperator(state *SandboxState, sshKeyPath string) {
-	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	addrData, err := client.GetAddress(ctx, "evm")
-	if err != nil || addrData == nil || addrData.Address == "" {
-		fmt.Fprintf(os.Stderr, "Warning: could not get operator wallet, nodes not tagged: %v\n", err)
-		return
-	}
-	wallet := addrData.Address
-
-	if len(state.Servers) == 0 {
-		return
-	}
-	genesis := state.Servers[0]
-
-	node := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
-	// Use RQLite's parameterized query to avoid any injection risk.
-	// The JSON payload has the wallet as a parameter, not interpolated into SQL.
-	payload := fmt.Sprintf(`[["UPDATE dns_nodes SET operator_wallet = ?, environment = 'sandbox' WHERE operator_wallet IS NULL OR operator_wallet = ''", %q]]`, wallet)
-	cmd := fmt.Sprintf(`curl -sf -X POST %s/db/execute -H 'Content-Type: application/json' -d '%s'`, constants.LocalRQLiteURL(), payload)
-	if _, err := runSSHOutput(node, cmd); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to tag nodes with operator wallet: %v\n", err)
-	}
 }
 
 // cleanupFailedCreate deletes any servers that were created during a failed provision.

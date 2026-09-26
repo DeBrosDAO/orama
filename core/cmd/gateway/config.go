@@ -10,32 +10,11 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/encryption"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
-
-func getEnvDefault(key, def string) string {
-	if v := os.Getenv(key); strings.TrimSpace(v) != "" {
-		return v
-	}
-	return def
-}
-
-func getEnvBoolDefault(key string, def bool) bool {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	switch strings.ToLower(v) {
-	case "1", "true", "t", "yes", "y", "on":
-		return true
-	case "0", "false", "f", "no", "n", "off":
-		return false
-	default:
-		return def
-	}
-}
 
 // parseGatewayConfig loads gateway.yaml from ~/.orama exclusively.
 // It accepts an optional --config flag for absolute paths (used by systemd services).
@@ -108,10 +87,10 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		// encrypted/decrypted (bugboard #837 follow-up). Empty leaves
 		// secrets management disabled (fail-loud).
 		SecretsEncryptionKey string `yaml:"secrets_encryption_key"`
-		// ClusterSecretPath: see GatewayYAMLConfig docstring. Optional;
-		// when set, the standalone gateway reads the file at this path
-		// and populates cfg.ClusterSecret so JWT signing keys can be
-		// derived deterministically (bug #215 fix).
+		// ClusterSecretPath: see GatewayYAMLConfig docstring. Required:
+		// the gateway reads the cluster secret from it (JWT signing keys
+		// are derived from it, bug #215) and, from the orama directory it
+		// is in, the node's identity (NodePeerID) — loadNodeIdentity.
 		ClusterSecretPath string `yaml:"cluster_secret_path"`
 		// APIKeyHMACSecret: see GatewayYAMLConfig docstring. Optional;
 		// when set, the standalone gateway populates cfg.APIKeyHMACSecret
@@ -127,6 +106,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		// namespace gateway can only reach ntfy if the tenant's stored
 		// credential carries its own base_url.
 		NtfyBaseURL string `yaml:"ntfy_base_url"`
+		// StateDir: see GatewayYAMLConfig. Required — the gateway's private,
+		// writable directory for its signing keys and encryption-root cache.
+		StateDir string `yaml:"state_dir"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -169,6 +151,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	if v := strings.TrimSpace(y.ClientNamespace); v != "" {
 		cfg.ClientNamespace = v
 	}
+	cfg.StateDir = strings.TrimSpace(y.StateDir)
 	if v := strings.TrimSpace(y.RQLiteDSN); v != "" {
 		cfg.RQLiteDSN = v
 	}
@@ -234,30 +217,28 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		cfg.IPFSReplicationFactor = y.IPFSReplicationFactor
 	}
 
-	// Cluster secret — bug #215 fix. The host-managed gateway in
-	// pkg/node/gateway.go reads this from a known on-disk path; the
-	// standalone binary (used by namespace gateways via systemd) needs the
-	// same access so it can derive the cluster-wide Ed25519 JWT signing
-	// key. Without this, namespace gateways had per-node random keys and
-	// JWTs minted on one node were unverifiable on another, leaving
-	// `caller_jwt_subject` empty in serverless host functions.
-	if path := strings.TrimSpace(y.ClusterSecretPath); path != "" {
-		secretBytes, err := os.ReadFile(path)
-		if err != nil {
-			logger.ComponentError(logging.ComponentGeneral,
-				"cluster_secret_path is set but the file is unreadable; "+
-					"JWTs will use a per-node random signing key and will not "+
-					"verify cross-node — bug #215 will reproduce",
-				zap.String("path", path),
-				zap.Error(err))
-		} else {
-			cfg.ClusterSecret = strings.TrimSpace(string(secretBytes))
-			cfg.DataDir = filepath.Dir(filepath.Dir(path))
-			logger.ComponentInfo(logging.ComponentGeneral,
-				"Loaded cluster secret for cluster-wide JWT signing key derivation",
-				zap.String("path", path))
-		}
+	// Cluster secret — bug #215 fix — and, through its path, the node this
+	// gateway runs on. The secret derives the cluster-wide Ed25519 JWT signing
+	// key (without it, namespace gateways had per-node random keys and JWTs
+	// minted on one node were unverifiable on another). Its path locates the
+	// orama directory, hence the node's identity key: without that the gateway
+	// has no NodePeerID, and home-node assignment, deployment placement, host
+	// TURN and leader locality silently matched no node. So it is required.
+	identity, err := loadNodeIdentity(y.ClusterSecretPath)
+	if err != nil {
+		logger.ComponentError(logging.ComponentGeneral, "Cannot identify the node this gateway runs on", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+		os.Exit(1)
 	}
+	cfg.ClusterSecret = identity.clusterSecret
+	// The orama directory, for READS only (secrets/, identity, node config)
+	// and for the shared data/ trees. Nothing this gateway owns is written
+	// under it directly: secrets/ and configs/ are read-only to the unit. Its
+	// own state goes to StateDir.
+	cfg.DataDir = identity.oramaDir
+	cfg.NodePeerID = identity.peerID
+	logger.ComponentInfo(logging.ComponentGeneral, "Loaded the cluster secret and this node's identity",
+		zap.String("path", strings.TrimSpace(y.ClusterSecretPath)), zap.String("node_peer_id", identity.peerID))
 
 	// Serverless secrets encryption key — bugboard #837 follow-up. The
 	// host-managed gateway (pkg/node/gateway.go) reads this from
@@ -322,4 +303,50 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 	)
 
 	return cfg
+}
+
+// nodeIdentity is what a gateway learns from cluster_secret_path about the
+// node it runs on.
+type nodeIdentity struct {
+	clusterSecret string
+	oramaDir      string
+	peerID        string
+}
+
+// loadNodeIdentity reads the cluster secret at clusterSecretPath
+// (<oramaDir>/secrets/cluster-secret) and the peer id of the node whose orama
+// directory that is.
+func loadNodeIdentity(clusterSecretPath string) (nodeIdentity, error) {
+	path := strings.TrimSpace(clusterSecretPath)
+	if path == "" {
+		return nodeIdentity{}, fmt.Errorf("cluster_secret_path is required: it is <oramaDir>/secrets/cluster-secret, " +
+			"and it is how this gateway finds the node's identity key (<oramaDir>/data/identity.key) and data " +
+			"directory; the namespace spawner writes it into every gateway YAML")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nodeIdentity{}, fmt.Errorf("read cluster secret %s: %w", path, err)
+	}
+	secret := strings.TrimSpace(string(raw))
+	if secret == "" {
+		return nodeIdentity{}, fmt.Errorf("cluster secret %s is empty; restore it from another node of this cluster", path)
+	}
+	oramaDir := filepath.Dir(filepath.Dir(path))
+	peerID, err := nodePeerID(oramaDir)
+	if err != nil {
+		return nodeIdentity{}, err
+	}
+	return nodeIdentity{clusterSecret: secret, oramaDir: oramaDir, peerID: peerID}, nil
+}
+
+// nodePeerID is the libp2p peer id of the node this gateway runs on, from the
+// node's identity key. SQLite home-node assignment and deployment placement
+// compare it against the node registry; a gateway without it matches no node.
+func nodePeerID(oramaDir string) (string, error) {
+	path := filepath.Join(oramaDir, "data", "identity.key")
+	info, err := encryption.LoadIdentity(path)
+	if err != nil {
+		return "", fmt.Errorf("read this node's identity %s: %w", path, err)
+	}
+	return info.PeerID.String(), nil
 }

@@ -5,15 +5,41 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
-	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // indexRQLiteUnit is the systemd unit backing the index RQLite on this node.
 const indexRQLiteUnit = "orama-namespace-rqlite@index"
+
+// legacyRQLiteSupervisor ran the index rqlited as a child process on 0.122.x.
+const legacyRQLiteSupervisor = "orama-node"
+
+// rqliteTemplateUnit is the template this release's index rqlite runs from.
+// 0.122.x never installed it, which is how its layout is recognised.
+const rqliteTemplateUnit = "/etc/systemd/system/orama-namespace-rqlite@.service"
+
+// indexRQLiteUnits are the units an index rqlited can run under here: its own
+// unit, and on a 0.122.x node — no rqlite template installed — orama-node,
+// which ran rqlited itself. The upgrade from 0.122.x runs the hand-over on such
+// a node, so "rqlited is not running" there has to mean neither is active. On
+// this release orama-node is always active and never runs rqlited, so it is
+// not counted: a node whose rqlite@index is down is stoppable without --force.
+// A template that cannot be inspected counts orama-node, which only refuses.
+func indexRQLiteUnits() []string {
+	_, err := statUnit(rqliteTemplateUnit)
+	if err == nil {
+		return []string{indexRQLiteUnit}
+	}
+	return []string{indexRQLiteUnit, legacyRQLiteSupervisor}
+}
+
+// statUnit is os.Stat; a variable so the layout check can be tested.
+var statUnit = os.Stat
 
 // quorumHTTPTimeout bounds each control-plane read. Short, because this runs
 // interactively in front of a stop and an operator waiting on a hung request is
@@ -36,16 +62,36 @@ const quorumHTTPTimeout = 5 * time.Second
 // stopping the rest of the stack cannot remove a voter the cluster still counts
 // on. That is checked explicitly rather than inferred from a failed request.
 func checkQuorumSafety() string {
+	warning, _ := quorumVerdict()
+	return warning
+}
+
+// quorumVerdict is checkQuorumSafety, also reporting whether an index rqlited
+// may be running: false only when its status could not be read and no unit
+// that runs one is active.
+func quorumVerdict() (warning string, rqliteMayRun bool) {
 	status, statusErr := localRQLiteStatus()
-	in := quorumInputs{status: status, statusErr: statusErr}
+	in := quorumInputs{status: status, statusErr: statusErr, rqliteRunning: true}
 	if statusErr != nil {
-		active, checkErr := serviceActive(indexRQLiteUnit)
-		in.rqliteRunning = checkErr != nil || active
+		in.rqliteRunning = indexRQLiteMayRun()
 	}
 	if statusErr == nil && status.Store.Raft.Voter {
 		in.nodes, in.nodesErr = localRQLiteNodes()
 	}
-	return evaluateQuorumSafety(in)
+	return evaluateQuorumSafety(in), in.rqliteRunning
+}
+
+// indexRQLiteMayRun reports whether any unit that runs an index rqlited is
+// active. A failed check counts as active, so an unreadable systemd never
+// becomes a way to approve a stop.
+func indexRQLiteMayRun() bool {
+	for _, unit := range indexRQLiteUnits() {
+		active, err := serviceActive(unit)
+		if err != nil || active {
+			return true
+		}
+	}
+	return false
 }
 
 // quorumInputs is everything the decision depends on, gathered separately so
@@ -72,10 +118,10 @@ func evaluateQuorumSafety(in quorumInputs) string {
 			return ""
 		}
 		return fmt.Sprintf(
-			"Cannot verify quorum safety: %s is running but its status could not be read (%v). "+
+			"Cannot verify quorum safety: the index rqlite may be running (%s) but its status could not be read (%v). "+
 				"Stopping a voter blind can leave the cluster without quorum. "+
 				"Check `orama node status`, or re-run with --force if you know this node is not a voter.",
-			indexRQLiteUnit, in.statusErr)
+			strings.Join(indexRQLiteUnits(), " or "), in.statusErr)
 	}
 
 	raft := in.status.Store.Raft
@@ -111,7 +157,7 @@ func evaluateQuorumSafety(in quorumInputs) string {
 	// two voters it concluded that stopping one left "1 of 1, need 1" and
 	// allowed it, when raft still requires 2 of 2 and the survivor cannot elect
 	// a leader. Membership only shrinks through an explicit remove, which is
-	// `orama node decommission`, not a stop.
+	// `orama node remove`, not a stop.
 	remainingVoters := reachableVoters - 1
 	quorumNeeded := totalVoters/2 + 1
 
@@ -152,13 +198,13 @@ func countVoters(nodes []rqliteNode) (reachable, total int) {
 // Indirection so the policy above can be tested against a fake server and a
 // fake systemd, without either being reachable.
 var (
-	rqliteBaseURL = constants.LocalRQLiteURL
+	localRQLite   = rqlite.LocalNodeEndpoint
 	serviceActive = utils.IsServiceActive
 )
 
 // localRQLiteStatus reads the index RQLite's own view of itself.
 func localRQLiteStatus() (*rqlite.RQLiteStatus, error) {
-	body, err := quorumGet(rqliteBaseURL() + "/status")
+	body, err := quorumGet("/status")
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +227,7 @@ type rqliteNode struct {
 // localRQLiteNodes reads cluster membership, including non-voters so the voter
 // total is not inflated by them.
 func localRQLiteNodes() ([]rqliteNode, error) {
-	body, err := quorumGet(rqliteBaseURL() + "/nodes?nonvoters&timeout=3s")
+	body, err := quorumGet("/nodes?nonvoters&timeout=3s")
 	if err != nil {
 		return nil, err
 	}
@@ -197,9 +243,22 @@ func localRQLiteNodes() ([]rqliteNode, error) {
 	return nodes, nil
 }
 
-func quorumGet(url string) ([]byte, error) {
+// quorumGet reads path from this node's index rqlite, where it binds and with
+// its credentials.
+func quorumGet(path string) ([]byte, error) {
+	ep, err := localRQLite()
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodGet, ep.BaseURL()+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build %s request: %w", path, err)
+	}
+	if ep.Username != "" {
+		req.SetBasicAuth(ep.Username, ep.Password)
+	}
 	client := &http.Client{Timeout: quorumHTTPTimeout}
-	resp, err := client.Get(url)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

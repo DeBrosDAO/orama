@@ -12,14 +12,18 @@ type HTTPGatewayConfig struct {
 	SNI        SNIConfig              `yaml:"sni"`         // SNI-based TCP routing configuration
 
 	// Full gateway configuration (for API, auth, pubsub)
-	ClientNamespace   string        `yaml:"client_namespace"`     // Namespace for network client
-	RQLiteDSN         string        `yaml:"rqlite_dsn"`           // RQLite database DSN
+	ClientNamespace string `yaml:"client_namespace"` // Namespace for network client
+	// RQLiteDSN is accepted so DecodeStrict still reads node.yaml files
+	// rendered before it was dropped from the template. Nothing reads it: the
+	// index gateway's DSN is derived from discovery.http_adv_address and the
+	// database credentials (rqlite.IndexEndpoint, pkg/node/gateway.go).
+	RQLiteDSN         string        `yaml:"rqlite_dsn"`
 	OlricServers      []string      `yaml:"olric_servers"`        // List of Olric server addresses
 	OlricTimeout      time.Duration `yaml:"olric_timeout"`        // Timeout for Olric operations
 	IPFSClusterAPIURL string        `yaml:"ipfs_cluster_api_url"` // IPFS Cluster API URL
 	IPFSAPIURL        string        `yaml:"ipfs_api_url"`         // IPFS API URL
 	IPFSTimeout       time.Duration `yaml:"ipfs_timeout"`         // Timeout for IPFS operations
-	BaseDomain        string        `yaml:"base_domain"`          // Base domain for deployments (e.g., "dbrs.space"). Defaults to "dbrs.space"
+	BaseDomain        string        `yaml:"base_domain"`          // Cluster base domain (e.g. "orama-devnet.network"); no default — the gateway refuses to start without one
 
 	// SecretsEncryptionKey is the AES-256 key (hex, 64 chars) used to encrypt
 	// serverless function secrets at rest. Generated per-cluster and written

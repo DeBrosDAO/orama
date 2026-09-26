@@ -142,11 +142,26 @@ func ApplyMigrationsDirs(ctx context.Context, db *sql.DB, dirs []string, logger 
 	return nil
 }
 
+// openLocalSQL opens a short-lived database/sql handle on this node's own
+// rqlited for a migration run. The caller closes it.
+func (r *RQLiteManager) openLocalSQL() (*sql.DB, error) {
+	ep, err := r.LocalEndpoint()
+	if err != nil {
+		return nil, err
+	}
+	dsn := ep.SQLDSN(adapterReadConsistencyLevel)
+	db, err := sql.Open("rqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open rqlite db at %s: %s", ep, RedactError(err, dsn))
+	}
+	return db, nil
+}
+
 // ApplyMigrationsFromManager is a convenience helper bound to RQLiteManager.
 func (r *RQLiteManager) ApplyMigrations(ctx context.Context, dir string) error {
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
+	db, err := r.openLocalSQL()
 	if err != nil {
-		return fmt.Errorf("open rqlite db: %w", err)
+		return err
 	}
 	defer db.Close()
 
@@ -155,9 +170,9 @@ func (r *RQLiteManager) ApplyMigrations(ctx context.Context, dir string) error {
 
 // ApplyMigrationsDirs is the multi-dir variant on RQLiteManager.
 func (r *RQLiteManager) ApplyMigrationsDirs(ctx context.Context, dirs []string) error {
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
+	db, err := r.openLocalSQL()
 	if err != nil {
-		return fmt.Errorf("open rqlite db: %w", err)
+		return err
 	}
 	defer db.Close()
 
@@ -334,15 +349,6 @@ func isAlreadyAppliedError(err error) bool {
 		// Covers: "table X already exists", "index X already exists",
 		// "trigger X already exists", "view X already exists".
 		return true
-	}
-	return false
-}
-
-func containsToken(stmts []string, token string) bool {
-	for _, s := range stmts {
-		if strings.EqualFold(strings.TrimSpace(s), token) {
-			return true
-		}
 	}
 	return false
 }
@@ -548,9 +554,9 @@ func ApplyEmbeddedMigrations(ctx context.Context, db *sql.DB, fsys fs.FS, logger
 
 // ApplyEmbeddedMigrations is a convenience helper bound to RQLiteManager.
 func (r *RQLiteManager) ApplyEmbeddedMigrations(ctx context.Context, fsys fs.FS) error {
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
+	db, err := r.openLocalSQL()
 	if err != nil {
-		return fmt.Errorf("open rqlite db: %w", err)
+		return err
 	}
 	defer db.Close()
 

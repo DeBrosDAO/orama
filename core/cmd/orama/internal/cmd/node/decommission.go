@@ -50,7 +50,7 @@ var wipeCmd = &cobra.Command{
 Tor is left installed (its config and state are removed); --nuclear purges it.
 
 Target-side only: this says nothing to the cluster. If the node is still a
-member, use 'orama node decommission' instead — otherwise the survivors keep
+member, use 'orama node remove' instead — otherwise the survivors keep
 counting it toward quorum and re-adding its WireGuard peer.
 
 This is a DESTRUCTIVE operation. Use --force to skip confirmation.

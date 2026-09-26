@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -416,7 +417,7 @@ func (is *InstanceSpawner) waitForPortReady(ctx context.Context, instance *Olric
 	if checkAddr == "" || checkAddr == "0.0.0.0" {
 		checkAddr = "localhost"
 	}
-	addr := fmt.Sprintf("%s:%d", checkAddr, instance.MemberlistPort)
+	addr := net.JoinHostPort(checkAddr, strconv.Itoa(instance.MemberlistPort))
 
 	maxAttempts := 30
 	for i := 0; i < maxAttempts; i++ {
@@ -507,7 +508,7 @@ func (oi *OlricInstance) IsHealthy(ctx context.Context) (bool, error) {
 	default:
 	}
 
-	addr := fmt.Sprintf("%s:%d", oi.AdvertiseAddr, oi.MemberlistPort)
+	addr := net.JoinHostPort(oi.AdvertiseAddr, strconv.Itoa(oi.MemberlistPort))
 	if oi.AdvertiseAddr == "" || oi.AdvertiseAddr == "0.0.0.0" {
 		addr = fmt.Sprintf("localhost:%d", oi.MemberlistPort)
 	}

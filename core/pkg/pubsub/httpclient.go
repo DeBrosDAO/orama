@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,10 +18,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// HTTPClient is a Bus that talks to the localhost pubsub HTTP API.
+// HTTPClient is a Bus that talks to the node's pubsub HTTP API over its unix
+// socket (DefaultSocketPath).
 type HTTPClient struct {
 	baseURL   string
 	namespace string
+	transport http.RoundTripper
 	http      *http.Client
 	logger    *zap.Logger
 
@@ -30,18 +33,30 @@ type HTTPClient struct {
 
 var _ Bus = (*HTTPClient)(nil)
 
-// NewHTTPClient returns a Bus pointed at the @index pubsub HTTP API.
-func NewHTTPClient(baseURL, namespace string, logger *zap.Logger) *HTTPClient {
-	if baseURL == "" {
-		baseURL = "http://" + DefaultListenAddr
-	}
+// socketBaseURL is the URL every request is made against. The host names
+// nothing: the transport dials the socket whatever the URL says.
+const socketBaseURL = "http://pubsub"
+
+// requestTimeout bounds a publish; a subscription is a stream and has none.
+const requestTimeout = 10 * time.Second
+
+// NewHTTPClient returns a Bus that reaches the @index pubsub API on the unix
+// socket at socketPath.
+func NewHTTPClient(socketPath, namespace string, logger *zap.Logger) *HTTPClient {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socketPath)
+		},
+	}
 	return &HTTPClient{
-		baseURL:   strings.TrimRight(baseURL, "/"),
+		baseURL:   socketBaseURL,
 		namespace: namespace,
-		http:      &http.Client{Timeout: 10 * time.Second},
+		transport: transport,
+		http:      &http.Client{Timeout: requestTimeout, Transport: transport},
 		logger:    logger.Named("pubsub-http"),
 		cancels:   make(map[string]context.CancelFunc),
 	}
@@ -138,7 +153,7 @@ func (c *HTTPClient) Subscribe(ctx context.Context, topic string, handler Messag
 		return err
 	}
 	go func() {
-		client := &http.Client{Timeout: 0}
+		client := &http.Client{Transport: c.transport}
 		resp, err := client.Do(req)
 		if err != nil {
 			c.logger.Warn("subscribe request failed", zap.Error(err))

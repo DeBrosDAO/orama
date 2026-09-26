@@ -89,15 +89,16 @@ func awaitReady(ctx context.Context, budget time.Duration, what string, probe fu
 	}
 }
 
-// rqliteReady reports whether the tenant rqlite at hostPort is participating in
-// raft AND can serve a read.
+// rqliteReady reports whether the tenant rqlite at ep is participating in raft
+// AND can serve a read.
 //
 // Both halves are needed. The raft state alone can be Leader on a node that
 // cannot yet serve — and a query alone cannot distinguish "no leader yet" from
 // "wrong port", because rqlite binds its HTTP listener long before it has
 // elected anything.
-func rqliteReady(ctx context.Context, hostPort string) error {
-	state, err := rqlite.RaftState(ctx, hostPort)
+func rqliteReady(ctx context.Context, ep rqlite.Endpoint) error {
+	hostPort := ep.HostPort()
+	state, err := rqlite.RaftState(ctx, ep)
 	if err != nil {
 		return fmt.Errorf("read raft state from %s: %w", hostPort, err)
 	}
@@ -107,7 +108,8 @@ func rqliteReady(ctx context.Context, hostPort string) error {
 		return fmt.Errorf("%s is in raft state %q, want Leader or Follower", hostPort, state)
 	}
 
-	body, err := httpGet(ctx, fmt.Sprintf("http://%s/db/query?q=SELECT%%201", hostPort))
+	// The credentials ride in the URL; net/http strips them from its errors.
+	body, err := httpGet(ctx, ep.CredentialedURL()+"/db/query?q=SELECT%201")
 	if err != nil {
 		return fmt.Errorf("query %s: %w", hostPort, err)
 	}

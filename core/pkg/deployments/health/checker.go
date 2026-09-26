@@ -551,10 +551,9 @@ func (hc *HealthChecker) reconcileDeployments(ctx context.Context) {
 
 // isRQLiteLeader checks whether this node is the current Raft leader.
 func (hc *HealthChecker) isRQLiteLeader(ctx context.Context) bool {
+	// The gateway's rqlite_dsn (required by its config validation; carries
+	// the credentials).
 	dsn := hc.rqliteDSN
-	if dsn == "" {
-		dsn = "http://localhost:10100"
-	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dsn+"/status", nil)

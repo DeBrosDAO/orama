@@ -234,7 +234,7 @@ func TestNodeAPI_aStampDoesNotCoverADifferentQuery(t *testing.T) {
 // every public request is 127.0.0.1 and only the forwarding header tells the
 // two apart. An endpoint that trusted loopback alone would be open to the
 // world; one that refused it would refuse the node itself.
-func TestIsNodeLocal_tellsAProcessOnThisHostFromTheInternet(t *testing.T) {
+func TestReachedWithoutPublicProxy_tellsAProcessOnThisHostFromTheInternet(t *testing.T) {
 	cases := map[string]struct {
 		remoteAddr string
 		forwarded  string
@@ -258,13 +258,13 @@ func TestIsNodeLocal_tellsAProcessOnThisHostFromTheInternet(t *testing.T) {
 			if c.forwarded != "" {
 				r.Header.Set("X-Forwarded-For", c.forwarded)
 			}
-			if got := IsNodeLocal(r); got != c.want {
-				t.Errorf("IsNodeLocal = %v, want %v", got, c.want)
+			if got := ReachedWithoutPublicProxy(r); got != c.want {
+				t.Errorf("ReachedWithoutPublicProxy = %v, want %v", got, c.want)
 			}
 		})
 	}
 
-	if IsNodeLocal(nil) {
+	if ReachedWithoutPublicProxy(nil) {
 		t.Error("a nil request was read as a local caller")
 	}
 }

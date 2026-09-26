@@ -38,7 +38,7 @@ func parseConfig(c *caddy.Controller) (*RQLitePlugin, error) {
 	}
 
 	var (
-		dsn            = "http://localhost:10100"
+		dsn            string
 		refreshRate    = 10 * time.Second
 		cacheTTL       = 30 * time.Second
 		cacheSize      = 10000
@@ -112,6 +112,11 @@ func parseConfig(c *caddy.Controller) (*RQLitePlugin, error) {
 
 	if len(zones) == 0 {
 		zones = []string{"."}
+	}
+	// rqlited binds only this node's WireGuard IP, so there is no default
+	// address to fall back to; the installer writes dsn into the Corefile.
+	if dsn == "" {
+		return nil, c.Err("rqlite: dsn is required (http://<wireguard-ip>:<port>)")
 	}
 
 	// Create backend

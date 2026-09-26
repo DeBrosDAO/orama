@@ -1,12 +1,9 @@
 package gateway
 
 import (
-	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"go.uber.org/zap"
 )
@@ -22,37 +19,14 @@ type ACMERequest struct {
 // POST /v1/internal/acme/present
 // Creates a TXT record in the dns_records table for ACME validation
 func (g *Gateway) acmePresentHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	req, ok := g.acmeChallengeRequest(w, r)
+	if !ok {
 		return
 	}
-	if !auth.IsNodeLocal(r) {
-		// 404 rather than 403: an endpoint the public has no business
-		// reaching should not confirm that it exists. Same as node register.
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
-	var req ACMERequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		g.logger.Error("Failed to decode ACME present request", zap.Error(err))
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if req.FQDN == "" || req.Value == "" {
-		http.Error(w, "fqdn and value are required", http.StatusBadRequest)
-		return
-	}
-
-	// Normalize FQDN (ensure trailing dot for DNS format)
-	fqdn := strings.TrimSuffix(req.FQDN, ".")
-	fqdn = strings.ToLower(fqdn) + "." // Add trailing dot for DNS format
+	fqdn := req.FQDN
 
 	g.logger.Info("ACME DNS-01 challenge: presenting TXT record",
 		zap.String("fqdn", fqdn),
-		zap.String("value_prefix", req.Value[:min(10, len(req.Value))]+"..."),
 	)
 
 	// Insert TXT record into dns_records
@@ -86,31 +60,11 @@ func (g *Gateway) acmePresentHandler(w http.ResponseWriter, r *http.Request) {
 // POST /v1/internal/acme/cleanup
 // Removes the TXT record after ACME validation completes
 func (g *Gateway) acmeCleanupHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	req, ok := g.acmeChallengeRequest(w, r)
+	if !ok {
 		return
 	}
-	if !auth.IsNodeLocal(r) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
-	var req ACMERequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		g.logger.Error("Failed to decode ACME cleanup request", zap.Error(err))
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if req.FQDN == "" {
-		http.Error(w, "fqdn is required", http.StatusBadRequest)
-		return
-	}
-
-	// Normalize FQDN (ensure trailing dot for DNS format)
-	fqdn := strings.TrimSuffix(req.FQDN, ".")
-	fqdn = strings.ToLower(fqdn) + "." // Add trailing dot for DNS format
+	fqdn := req.FQDN
 
 	g.logger.Info("ACME DNS-01 challenge: cleaning up TXT record",
 		zap.String("fqdn", fqdn),
@@ -134,12 +88,4 @@ func (g *Gateway) acmeCleanupHandler(w http.ResponseWriter, r *http.Request) {
 	)
 
 	w.WriteHeader(http.StatusOK)
-}
-
-// min returns the smaller of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	cli "github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 
@@ -173,6 +174,21 @@ func classifyUsageErrors(cmd *cobra.Command) {
 // themselves, which meant deferred cleanup never ran — a push left staged
 // private keys behind — and every failure was code 1, so a script could not
 // tell a mistyped flag from a cluster that had lost quorum.
+// needsEnvironmentCAs reports whether cmd may talk to a gateway. `orama env`
+// manages the CA files themselves, so a missing one must not lock it out of
+// the command that fixes it; `version` talks to nobody.
+func needsEnvironmentCAs(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "env", "version":
+			if c.Parent() != nil && c.Parent().Parent() == nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func runCLI() {
 	rootCmd := newRootCmd()
 
@@ -180,12 +196,20 @@ func runCLI() {
 	// cannot resolve as a plain error, which would come back as the generic
 	// failure code while a mistyped subcommand one level down reports a usage
 	// error — the same mistake, two different answers to a script.
-	if _, _, err := rootCmd.Find(os.Args[1:]); err != nil {
+	target, _, err := rootCmd.Find(os.Args[1:])
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(clierr.CodeUsage)
 	}
 
-	err := rootCmd.Execute()
+	if needsEnvironmentCAs(target) {
+		if err := cli.TrustEnvironmentCAs(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(clierr.CodeFailure)
+		}
+	}
+
+	err = rootCmd.Execute()
 	if err == nil {
 		return
 	}

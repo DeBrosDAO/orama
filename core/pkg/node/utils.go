@@ -1,13 +1,9 @@
 package node
 
 import (
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	mathrand "math/rand"
 	"net"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -73,59 +69,17 @@ func addJitter(interval time.Duration) time.Duration {
 	return result
 }
 
-func loadNodePeerIDFromIdentity(dataDir string) string {
+// readNodePeerID returns the libp2p peer id of the identity key install wrote
+// to <dataDir>/identity.key.
+func readNodePeerID(dataDir string) (string, error) {
 	expanded, err := config.ExpandPath(dataDir)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("expand data dir %q: %w", dataDir, err)
 	}
 	identityFile := filepath.Join(expanded, "identity.key")
-
-	if info, err := encryption.LoadIdentity(identityFile); err == nil {
-		return info.PeerID.String()
-	}
-	return ""
-}
-
-func extractPEMFromTLSCert(tlsCert *tls.Certificate, certPath, keyPath string) error {
-	if tlsCert == nil || len(tlsCert.Certificate) == 0 {
-		return fmt.Errorf("invalid tls certificate")
-	}
-
-	certFile, err := os.Create(certPath)
+	info, err := encryption.LoadIdentity(identityFile)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("read this node's identity %s (written by `orama node install`): %w", identityFile, err)
 	}
-	defer certFile.Close()
-
-	for _, certBytes := range tlsCert.Certificate {
-		if err := pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certBytes}); err != nil {
-			return fmt.Errorf("failed to encode certificate PEM: %w", err)
-		}
-	}
-
-	if tlsCert.PrivateKey == nil {
-		return fmt.Errorf("private key is nil")
-	}
-
-	keyFile, err := os.Create(keyPath)
-	if err != nil {
-		return err
-	}
-	defer keyFile.Close()
-
-	keyBytes, err := x509.MarshalPKCS8PrivateKey(tlsCert.PrivateKey)
-	if err != nil {
-		return fmt.Errorf("failed to marshal private key: %w", err)
-	}
-
-	if err := pem.Encode(keyFile, &pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}); err != nil {
-		return fmt.Errorf("failed to encode private key PEM: %w", err)
-	}
-	if err := os.Chmod(certPath, 0644); err != nil {
-		return fmt.Errorf("failed to set certificate permissions: %w", err)
-	}
-	if err := os.Chmod(keyPath, 0600); err != nil {
-		return fmt.Errorf("failed to set private key permissions: %w", err)
-	}
-	return nil
+	return info.PeerID.String(), nil
 }

@@ -36,7 +36,7 @@ func TestDomainRoutingMiddleware_NonDebrosNetwork(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	g := &Gateway{}
+	g := &Gateway{cfg: &Config{BaseDomain: "orama.network"}}
 	middleware := g.domainRoutingMiddleware(next)
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -62,7 +62,7 @@ func TestDomainRoutingMiddleware_APIPathBypass(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	g := &Gateway{}
+	g := &Gateway{cfg: &Config{BaseDomain: "orama.network"}}
 	middleware := g.domainRoutingMiddleware(next)
 
 	req := httptest.NewRequest("GET", "/v1/deployments/list", nil)
@@ -88,7 +88,7 @@ func TestDomainRoutingMiddleware_WellKnownBypass(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	g := &Gateway{}
+	g := &Gateway{cfg: &Config{BaseDomain: "orama.network"}}
 	middleware := g.domainRoutingMiddleware(next)
 
 	req := httptest.NewRequest("GET", "/.well-known/acme-challenge/test", nil)
@@ -115,6 +115,7 @@ func TestDomainRoutingMiddleware_NoDeploymentService(t *testing.T) {
 	})
 
 	g := &Gateway{
+		cfg: &Config{BaseDomain: "orama.network"},
 		// deploymentService is nil
 		staticHandler: nil,
 	}
@@ -161,8 +162,10 @@ func TestIsPublicPath(t *testing.T) {
 		{"auth jwks", "/v1/auth/jwks", true},
 		{"well-known jwks", "/.well-known/jwks.json", true},
 		{"version", "/v1/version", true},
-		{"network status", "/v1/network/status", true},
-		{"network peers", "/v1/network/peers", true},
+		// A map of the cluster: an operator's, or another node's with a
+		// coordination MAC (TestNetworkDetail_*).
+		{"network status", "/v1/network/status", false},
+		{"network peers", "/v1/network/peers", false},
 
 		// Prefix-matched public paths
 		// Caddy answers the HTTP-01 challenge; nothing here serves it, and a
@@ -458,12 +461,6 @@ func TestGetAllowedOrigin(t *testing.T) {
 		origin     string
 		want       string
 	}{
-		{
-			name:       "no base domain returns wildcard",
-			baseDomain: "",
-			origin:     "https://anything.com",
-			want:       "*",
-		},
 		{
 			name:       "matching subdomain returns origin",
 			baseDomain: "dbrs.space",

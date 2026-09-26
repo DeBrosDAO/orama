@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // statusJSON renders an rqlite /status body with the fields this package reads.
@@ -17,12 +19,22 @@ func statusJSON(state, leaderID string, applied, commit uint64) string {
 		state, leaderID, applied, commit)
 }
 
+const (
+	testRQLiteUser = "orama"
+	testRQLitePass = "0123456789abcdef"
+)
+
 // newNode serves an rqlite /status and a gateway /health from one test server.
+// /status requires the rqlite credentials, as rqlited with -auth does.
 func newNode(t *testing.T, body func() string, gatewayCode int) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/status":
+			if u, p, ok := r.BasicAuth(); !ok || u != testRQLiteUser || p != testRQLitePass {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			w.Write([]byte(body()))
 		case "/health":
 			w.WriteHeader(gatewayCode)
@@ -34,8 +46,18 @@ func newNode(t *testing.T, body func() string, gatewayCode int) *httptest.Server
 	return srv
 }
 
-func target(srv *httptest.Server) Target {
-	return Target{RQLiteBase: srv.URL, GatewayBase: srv.URL}
+func rqliteAt(t *testing.T, hostPort string) rqlite.Endpoint {
+	t.Helper()
+	ep, err := rqlite.NewEndpoint(hostPort, testRQLiteUser, testRQLitePass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ep
+}
+
+func target(t *testing.T, srv *httptest.Server) Target {
+	t.Helper()
+	return Target{RQLite: rqliteAt(t, strings.TrimPrefix(srv.URL, "http://")), GatewayBase: srv.URL}
 }
 
 func TestStatus_Ready_healthy(t *testing.T) {
@@ -110,7 +132,7 @@ func TestStatus_Ready_rejects_dead_gateway(t *testing.T) {
 func TestObserve_reads_all_fields(t *testing.T) {
 	srv := newNode(t, func() string { return statusJSON("Leader", "n1", 42, 44) }, 200)
 
-	got, err := Observe(context.Background(), &http.Client{Timeout: time.Second}, target(srv))
+	got, err := Observe(context.Background(), &http.Client{Timeout: time.Second}, target(t, srv))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +148,7 @@ func TestObserve_no_gateway_base_skips_the_check(t *testing.T) {
 	srv := newNode(t, func() string { return statusJSON("Follower", "n1", 1, 1) }, 500)
 
 	got, err := Observe(context.Background(), &http.Client{Timeout: time.Second},
-		Target{RQLiteBase: srv.URL})
+		Target{RQLite: rqliteAt(t, strings.TrimPrefix(srv.URL, "http://"))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +160,7 @@ func TestObserve_no_gateway_base_skips_the_check(t *testing.T) {
 func TestObserve_gateway_non_200_is_not_ok(t *testing.T) {
 	srv := newNode(t, func() string { return statusJSON("Follower", "n1", 1, 1) }, 503)
 
-	got, err := Observe(context.Background(), &http.Client{Timeout: time.Second}, target(srv))
+	got, err := Observe(context.Background(), &http.Client{Timeout: time.Second}, target(t, srv))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +178,7 @@ func TestWaitReady_succeeds_once_the_node_settles(t *testing.T) {
 		return statusJSON("Follower", "n1", 10, 10)
 	}, 200)
 
-	if err := WaitReady(context.Background(), target(srv), Options{Budget: 30 * time.Second}); err != nil {
+	if err := WaitReady(context.Background(), target(t, srv), Options{Budget: 30 * time.Second}); err != nil {
 		t.Fatal(err)
 	}
 	if polls.Load() < 3 {
@@ -169,7 +191,7 @@ func TestWaitReady_succeeds_once_the_node_settles(t *testing.T) {
 func TestWaitReady_timeout_reports_the_last_observation(t *testing.T) {
 	srv := newNode(t, func() string { return statusJSON("Candidate", "", 0, 0) }, 200)
 
-	err := WaitReady(context.Background(), target(srv), Options{Budget: 50 * time.Millisecond})
+	err := WaitReady(context.Background(), target(t, srv), Options{Budget: 50 * time.Millisecond})
 	if err == nil {
 		t.Fatal("a node stuck in Candidate reported ready")
 	}
@@ -182,7 +204,7 @@ func TestWaitReady_timeout_reports_the_last_observation(t *testing.T) {
 // nothing listened on, failed for two minutes, and let the rollout continue.
 func TestWaitReady_unreachable_node_is_not_ready(t *testing.T) {
 	err := WaitReady(context.Background(),
-		Target{RQLiteBase: "http://127.0.0.1:1"},
+		Target{RQLite: rqliteAt(t, "127.0.0.1:1")},
 		Options{Budget: 50 * time.Millisecond})
 	if err == nil {
 		t.Fatal("an unreachable node reported ready")
@@ -198,7 +220,7 @@ func TestWaitReady_cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := WaitReady(ctx, target(srv), Options{Budget: time.Minute}); err == nil {
+	if err := WaitReady(ctx, target(t, srv), Options{Budget: time.Minute}); err == nil {
 		t.Fatal("want an error on a cancelled context")
 	}
 }

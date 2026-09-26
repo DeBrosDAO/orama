@@ -1,7 +1,9 @@
 package deployments
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -223,17 +225,14 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	// 0. Fan out teardown to replica nodes (before local cleanup so replicas can stop processes)
 	h.service.FanOutToReplicas(ctx, deployment, "/v1/internal/deployments/replica/teardown", nil)
 
-	// 1. Stop systemd service
-	if err := h.processManager.Stop(ctx, deployment); err != nil {
-		h.logger.Warn("Failed to stop deployment service (may not exist)", zap.Error(err), zap.String("name", deployment.Name))
-	}
-
-	// 2. Remove deployment files from disk
-	if h.baseDeployPath != "" {
-		deployDir := process.DeployDir(h.baseDeployPath, deployment.Namespace, deployment.Name)
-		if err := os.RemoveAll(deployDir); err != nil {
-			h.logger.Warn("Failed to remove deployment files", zap.Error(err), zap.String("path", deployDir))
-		}
+	// 1-2. Stop the unit and remove the files — the directory is the
+	// deployment's claim on its instance on this host, so removing it
+	// releases the name. Both are skipped when another deployment on this
+	// host holds the instance: they are that one's.
+	if err := h.removeLocalInstance(ctx, deployment); err != nil {
+		h.logger.Error("Failed to remove the deployment from this node", zap.Error(err), zap.String("name", deployment.Name))
+		http.Error(w, "Failed to remove the deployment's files; retry the delete", http.StatusInternalServerError)
+		return
 	}
 
 	// 3. Unpin IPFS content
@@ -277,4 +276,36 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// removeLocalInstance stops a deployment's unit and removes its directory on
+// this node. Removing the directory is what releases the deployment's claim on
+// its instance here (instance_claim.go). When another deployment on this host
+// holds the instance, the unit and the files are that one's and are left
+// alone.
+func (h *ListHandler) removeLocalInstance(ctx context.Context, deployment *deployments.Deployment) error {
+	deployDir := ""
+	if h.baseDeployPath != "" {
+		deployDir = process.DeployDir(h.baseDeployPath, deployment.Namespace, deployment.Name)
+		owned, err := h.service.ownsInstanceDir(ctx, deployDir, deployment.Namespace, deployment.Name)
+		if err != nil {
+			return err
+		}
+		if !owned {
+			h.logger.Warn("Left the unit and directory alone: another deployment on this host holds the instance",
+				zap.String("instance", process.InstanceName(deployment.Namespace, deployment.Name)))
+			return nil
+		}
+	}
+
+	if err := h.processManager.Stop(ctx, deployment); err != nil {
+		h.logger.Warn("Failed to stop deployment service (may not exist)", zap.Error(err), zap.String("name", deployment.Name))
+	}
+	if deployDir == "" {
+		return nil
+	}
+	if err := os.RemoveAll(deployDir); err != nil {
+		return fmt.Errorf("remove deployment directory %s: %w", deployDir, err)
+	}
+	return nil
 }

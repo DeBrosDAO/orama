@@ -11,31 +11,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// GetRaftStatus queries a local rqlite node's /status endpoint.
+// GetRaftStatus queries an rqlite node's /status endpoint.
 //
-// Package-level because CLI callers use it without a manager. Credentials come
-// from authFile when one is given; empty means unauthenticated, which is
-// correct while rqlited runs without -auth.
-func GetRaftStatus(port int) (*RQLiteStatus, error) {
-	return GetRaftStatusAuth(port, "")
+// Package-level because CLI callers use it without a manager.
+func GetRaftStatus(ep Endpoint) (*RQLiteStatus, error) {
+	return ep.Admin().Status(context.Background())
 }
 
-// GetRaftStatusAuth is GetRaftStatus with an explicit rqlite auth file.
-func GetRaftStatusAuth(port int, authFile string) (*RQLiteStatus, error) {
-	user, pass := adminCredentialsFromFile(authFile)
-	return NewAdminClient(fmt.Sprintf("http://localhost:%d", port), user, pass).Status(context.Background())
-}
-
-// GetRaftNodes queries a local rqlite node's /nodes endpoint (voters +
-// non-voters, with reachability).
-func GetRaftNodes(port int) (RQLiteNodes, error) {
-	return GetRaftNodesAuth(port, "")
-}
-
-// GetRaftNodesAuth is GetRaftNodes with an explicit rqlite auth file.
-func GetRaftNodesAuth(port int, authFile string) (RQLiteNodes, error) {
-	user, pass := adminCredentialsFromFile(authFile)
-	return NewAdminClient(fmt.Sprintf("http://localhost:%d", port), user, pass).Nodes(context.Background())
+// GetRaftNodes queries an rqlite node's /nodes endpoint (voters + non-voters,
+// with reachability).
+func GetRaftNodes(ep Endpoint) (RQLiteNodes, error) {
+	return ep.Admin().Nodes(context.Background())
 }
 
 // ErrNoTransferTarget means this node is the leader but no other reachable
@@ -49,17 +35,17 @@ var ErrNoTransferTarget = errors.New("no eligible voter to transfer leadership t
 // Returns nil when this node is not the leader, or when leadership has
 // demonstrably moved. An error means this node is STILL the leader, which is
 // the caller's cue not to stop it.
-func TransferLeadership(port int, logger *zap.Logger) error {
-	status, err := GetRaftStatus(port)
+func TransferLeadership(ep Endpoint, logger *zap.Logger) error {
+	status, err := GetRaftStatus(ep)
 	if err != nil {
 		return err
 	}
 	if status.Store.Raft.State != "Leader" {
-		logger.Debug("Not the leader, skipping transfer", zap.Int("port", port))
+		logger.Debug("Not the leader, skipping transfer", zap.Stringer("rqlite", ep))
 		return nil
 	}
 
-	nodes, err := GetRaftNodes(port)
+	nodes, err := GetRaftNodes(ep)
 	if err != nil {
 		return err
 	}
@@ -75,7 +61,7 @@ func TransferLeadership(port int, logger *zap.Logger) error {
 	if targetID == "" {
 		return ErrNoTransferTarget
 	}
-	return TransferLeadershipTo(port, targetID, logger)
+	return TransferLeadershipTo(ep, targetID, logger)
 }
 
 // TransferLeadershipTo transfers Raft leadership to a SPECIFIC target node ID
@@ -89,34 +75,25 @@ func TransferLeadership(port int, logger *zap.Logger) error {
 // anyway. A 404 is the exception: it means the rqlite build has no
 // transfer-leadership API, which is a capability gap rather than a failure, and
 // the caller falls back to SIGTERM step-down.
-func TransferLeadershipTo(port int, targetID string, logger *zap.Logger) error {
-	return TransferLeadershipToAuth(port, targetID, "", logger)
-}
-
-// TransferLeadershipToAuth is TransferLeadershipTo with an explicit rqlite auth
-// file.
 //
 // This keeps its own request rather than going through AdminClient because it
 // needs the raw status code: a 404 means the rqlite build has no
 // transfer-leadership API, which is a capability gap the caller handles by
 // falling back to SIGTERM step-down, and AdminClient collapses every non-2xx
 // into one error.
-func TransferLeadershipToAuth(port int, targetID, authFile string, logger *zap.Logger) error {
+func TransferLeadershipTo(ep Endpoint, targetID string, logger *zap.Logger) error {
 	client := tlsutil.NewHTTPClient(5 * time.Second)
-	user, pass := adminCredentialsFromFile(authFile)
 
 	logger.Info("Attempting Raft leadership transfer",
-		zap.Int("port", port), zap.String("target", targetID))
+		zap.Stringer("rqlite", ep), zap.String("target", targetID))
 
-	transferURL := fmt.Sprintf("http://localhost:%d/nodes/%s/transfer-leadership", port, targetID)
+	transferURL := fmt.Sprintf("%s/nodes/%s/transfer-leadership", ep.BaseURL(), targetID)
 	req, err := http.NewRequest(http.MethodPost, transferURL, nil)
 	if err != nil {
 		return fmt.Errorf("build leadership transfer request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if user != "" {
-		req.SetBasicAuth(user, pass)
-	}
+	req.SetBasicAuth(ep.Username, ep.Password)
 
 	transferResp, err := client.Do(req)
 	if err != nil {
@@ -127,7 +104,7 @@ func TransferLeadershipToAuth(port int, targetID, authFile string, logger *zap.L
 	switch {
 	case transferResp.StatusCode == http.StatusNotFound:
 		logger.Info("Leadership transfer API not available (rqlite version); relying on SIGTERM step-down",
-			zap.Int("port", port))
+			zap.Stringer("rqlite", ep))
 		return nil
 	case transferResp.StatusCode != http.StatusOK:
 		return fmt.Errorf("leadership transfer to %s returned HTTP %d", targetID, transferResp.StatusCode)
@@ -136,10 +113,10 @@ func TransferLeadershipToAuth(port int, targetID, authFile string, logger *zap.L
 	// Confirm against the real signal. The POST only starts the handover; raft
 	// still has to elect the target, so returning here would report success on
 	// a node that is about to be killed while still leading.
-	if err := waitForStepDown(port, transferStepDownTimeout); err != nil {
+	if err := waitForStepDown(ep, transferStepDownTimeout); err != nil {
 		return err
 	}
-	logger.Info("Leadership transferred", zap.String("target", targetID), zap.Int("port", port))
+	logger.Info("Leadership transferred", zap.String("target", targetID), zap.Stringer("rqlite", ep))
 	return nil
 }
 
@@ -149,11 +126,11 @@ func TransferLeadershipToAuth(port int, targetID, authFile string, logger *zap.L
 var transferStepDownTimeout = 15 * time.Second
 
 // waitForStepDown blocks until this node reports a state other than Leader.
-func waitForStepDown(port int, timeout time.Duration) error {
+func waitForStepDown(ep Endpoint, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastState string
 	for {
-		status, err := GetRaftStatus(port)
+		status, err := GetRaftStatus(ep)
 		if err == nil {
 			lastState = status.Store.Raft.State
 			if lastState != "Leader" {

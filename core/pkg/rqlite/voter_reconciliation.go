@@ -364,11 +364,13 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler, status *RQL
 	}
 	desiredVoters := computeVoterSet(raftAddrs, MaxDefaultVoters)
 
-	// 6. Safety: never demote ourselves (the current leader)
-	myRaftAddr := status.Store.Raft.LeaderID
-	if _, shouldBeVoter := desiredVoters[myRaftAddr]; !shouldBeVoter {
+	// 6. Safety: never demote ourselves (the current leader). The voter set is
+	// keyed by address and leader_id is an id; they are equal only on a node
+	// that predates recorded ids, so the leader is looked up by its address.
+	leaderID := status.Store.Raft.LeaderID
+	if _, shouldBeVoter := desiredVoters[addrByID[leaderID]]; !shouldBeVoter {
 		r.logger.Warn("Leader is not in computed voter set — skipping reconciliation",
-			zap.String("leader_id", myRaftAddr))
+			zap.String("leader_id", leaderID), zap.String("leader_addr", addrByID[leaderID]))
 		return nil
 	}
 
@@ -388,14 +390,14 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler, status *RQL
 
 		if n.Voter && !shouldBeVoter {
 			// Skip if this is the leader
-			if n.ID == myRaftAddr {
+			if n.ID == leaderID {
 				continue
 			}
 
 			r.logger.Info("Demoting excess voter to non-voter",
 				zap.String("node_id", n.ID))
 
-			if err := r.setVoterInPlace(n.ID, false); err != nil {
+			if err := r.setVoterInPlace(n.ID, addrByID[n.ID], false); err != nil {
 				r.logger.Warn("Failed to demote voter",
 					zap.String("node_id", n.ID),
 					zap.Error(err))
@@ -415,7 +417,7 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler, status *RQL
 				zap.String("node_id", n.ID))
 
 			// Try direct promotion first (POST /join with voter=true)
-			if err := r.joinClusterNode(n.ID, n.ID, true); err == nil {
+			if err := r.joinClusterNode(n.ID, addrByID[n.ID], true); err == nil {
 				r.logger.Info("Successfully promoted non-voter to voter (direct join)",
 					zap.String("node_id", n.ID))
 				return nil
@@ -425,7 +427,7 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler, status *RQL
 			// falling back to remove-then-rejoin: that path left the node out
 			// of the configuration for up to 59s, and a leader change inside
 			// that window orphaned it entirely.
-			if err := r.setVoterInPlace(n.ID, true); err != nil {
+			if err := r.setVoterInPlace(n.ID, addrByID[n.ID], true); err != nil {
 				r.logger.Warn("Failed to promote non-voter",
 					zap.String("node_id", n.ID),
 					zap.Error(err))
@@ -458,7 +460,13 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler, status *RQL
 // was unreachable, which meant a cluster carrying one dead node could never
 // correct its voter set; what matters is that a quorum can commit the change
 // and that demoting this particular node does not cost the cluster its quorum.
-func (r *RQLiteManager) setVoterInPlace(nodeID string, voter bool) error {
+//
+// nodeID and raftAddr are the member's id and its address in the configuration,
+// passed to POST /join as the distinct values they are: rqlite removes and
+// re-adds a member whose id matches and whose address does not, so passing the
+// id as the address moved every member with a peer-id or recorded address id
+// to an address nothing listens on.
+func (r *RQLiteManager) setVoterInPlace(nodeID, raftAddr string, voter bool) error {
 	if !voter {
 		nodes, err := r.getAllClusterNodes()
 		if err != nil {
@@ -499,7 +507,7 @@ func (r *RQLiteManager) setVoterInPlace(nodeID string, voter bool) error {
 		}
 	}
 
-	if err := r.joinClusterNode(nodeID, nodeID, voter); err != nil {
+	if err := r.joinClusterNode(nodeID, raftAddr, voter); err != nil {
 		return fmt.Errorf("set voter=%v for %s: %w", voter, nodeID, err)
 	}
 	return nil
@@ -525,16 +533,28 @@ func decodeNodes(body []byte) (RQLiteNodes, error) {
 // getAllClusterNodes queries /nodes?nonvoters&ver=2 to get all cluster members
 // including non-voters.
 func (r *RQLiteManager) getAllClusterNodes() (RQLiteNodes, error) {
-	return r.LocalAdminClient().Nodes(context.Background())
+	admin, err := r.LocalAdminClient()
+	if err != nil {
+		return nil, err
+	}
+	return admin.Nodes(context.Background())
 }
 
 // removeClusterNode takes a member out of the raft configuration, by id.
 func (r *RQLiteManager) removeClusterNode(nodeID string) error {
-	return r.LocalAdminClient().Remove(context.Background(), nodeID)
+	admin, err := r.LocalAdminClient()
+	if err != nil {
+		return err
+	}
+	return admin.Remove(context.Background(), nodeID)
 }
 
 // joinClusterNode sends POST /join to add a node to the Raft cluster
 // with the specified voter status.
 func (r *RQLiteManager) joinClusterNode(nodeID, raftAddr string, voter bool) error {
-	return r.LocalAdminClient().Join(context.Background(), nodeID, raftAddr, voter)
+	admin, err := r.LocalAdminClient()
+	if err != nil {
+		return err
+	}
+	return admin.Join(context.Background(), nodeID, raftAddr, voter)
 }

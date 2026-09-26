@@ -61,6 +61,8 @@ var tablePlacement = map[string]tableNote{
 	"wallet_api_keys":          {PlacementCluster, "which key belongs to which wallet, beside api_keys"},
 	"principals":               {PlacementCluster, "who the platform will authenticate"},
 	"grants":                   {PlacementCluster, "who may do what in a namespace"},
+	"api_keys_expiry_cutoff":   {PlacementCluster, "the highest api_keys id migration 051 backfilled; the contract release revokes keys above it"},
+	"namespace_ownership":      {PlacementCluster, "0.122.x's authorization, kept for the rolling window (050 is expand-only); the next release drops it"},
 	"nonces":                   {PlacementCluster, "a challenge issued on one gateway is consumed on another"},
 	"refresh_tokens":           {PlacementCluster, "a session must be refreshable and revocable from anywhere"},
 	"revoked_tokens":           {PlacementCluster, "a revocation that reaches one gateway refuses nothing"},

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
 // TestIpfsStorageMaxForDisk verifies the disk-aware StorageMax sizing policy:
@@ -128,7 +130,7 @@ func TestConfigureDatastore_writesValidStorageMax(t *testing.T) {
 	}
 
 	ii := NewIPFSInstaller("amd64", io.Discard)
-	if err := ii.configureDatastore(dir); err != nil {
+	if err := ii.configureDatastore(rootfs.At(filepath.Dir(dir)), dir); err != nil {
 		t.Fatalf("configureDatastore: %v", err)
 	}
 
@@ -162,7 +164,7 @@ func TestConfigureDatastore_writesValidStorageMax(t *testing.T) {
 func TestConfigureDatastore_missingConfig(t *testing.T) {
 	dir := t.TempDir() // exists for statfs, but has no "config" file
 	ii := NewIPFSInstaller("amd64", io.Discard)
-	if err := ii.configureDatastore(dir); err == nil {
+	if err := ii.configureDatastore(rootfs.At(filepath.Dir(dir)), dir); err == nil {
 		t.Error("expected error when IPFS config file is missing, got nil")
 	}
 }

@@ -26,7 +26,7 @@ ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs
 InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 
-EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/sfu.env
+EnvironmentFile=/var/lib/orama-unit-env/%i/sfu.env
 
 ExecStart=/opt/orama/bin/sfu --config ${SFU_CONFIG}
 

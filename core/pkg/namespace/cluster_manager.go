@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,10 +40,14 @@ type ClusterManagerConfig struct {
 	// If nil, TURN secrets are stored in plaintext (backward compatibility).
 	TurnEncryptionKey []byte
 
-	// ClusterSecretPath is the host's cluster-secret file path. Forwarded
-	// to spawned namespace gateways via YAML so they can derive the
-	// cluster-wide JWT signing key (bug #215 fix). Empty string disables
-	// cross-node JWT verification within namespace clusters.
+	// ClusterSecretPath is the host's <oramaDir>/secrets/cluster-secret,
+	// forwarded to every spawned namespace gateway as cluster_secret_path.
+	// A gateway refuses to start without it: it reads the cluster secret
+	// there (the key its node-to-node authentication, coordination and
+	// storage-wrap keys are derived from) and, from the orama directory the
+	// file is in, the node's identity key and peer id. Tokens are not signed
+	// with a cluster-derived key: each gateway signs with its own key from
+	// its state directory, and replaces a cluster-derived one it finds there.
 	ClusterSecretPath string
 
 	// SecretsEncryptionKey is the host's serverless secrets encryption key
@@ -187,59 +189,6 @@ func NewClusterManager(
 	return cm
 }
 
-// NewClusterManagerWithComponents creates a cluster manager with custom components (useful for testing)
-func NewClusterManagerWithComponents(
-	db rqlite.Client,
-	portAllocator *NamespacePortAllocator,
-	nodeSelector *ClusterNodeSelector,
-	systemdSpawner *SystemdSpawner,
-	cfg ClusterManagerConfig,
-	logger *zap.Logger,
-) *ClusterManager {
-	// Set IPFS defaults (same as NewClusterManager)
-	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
-	if ipfsClusterAPIURL == "" {
-		ipfsClusterAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSClusterAPIPort)
-	}
-	ipfsAPIURL := cfg.IPFSAPIURL
-	if ipfsAPIURL == "" {
-		ipfsAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSAPIPort)
-	}
-	ipfsTimeout := cfg.IPFSTimeout
-	if ipfsTimeout == 0 {
-		ipfsTimeout = 60 * time.Second
-	}
-	ipfsReplicationFactor := cfg.IPFSReplicationFactor
-	if ipfsReplicationFactor == 0 {
-		ipfsReplicationFactor = 3
-	}
-
-	cm := &ClusterManager{
-		clusterSecretPath:     cfg.ClusterSecretPath,
-		db:                    db,
-		portAllocator:         portAllocator,
-		webrtcPortAllocator:   NewWebRTCPortAllocator(db, logger),
-		nodeSelector:          nodeSelector,
-		systemdSpawner:        systemdSpawner,
-		dnsManager:            NewDNSRecordManager(db, cfg.BaseDomain, logger),
-		baseDomain:            cfg.BaseDomain,
-		baseDataDir:           cfg.BaseDataDir,
-		globalRQLiteDSN:       cfg.GlobalRQLiteDSN,
-		ipfsClusterAPIURL:     ipfsClusterAPIURL,
-		ipfsAPIURL:            ipfsAPIURL,
-		ipfsTimeout:           ipfsTimeout,
-		ipfsReplicationFactor: ipfsReplicationFactor,
-		turnEncryptionKey:     cfg.TurnEncryptionKey,
-		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
-		ntfyBaseURL:           cfg.NtfyBaseURL,
-		logger:                logger.With(zap.String("component", "cluster-manager")),
-		provisioning:          make(map[string]bool),
-		startedAt:             time.Now(),
-	}
-	cm.initTenantDrivers()
-	return cm
-}
-
 // SetLocalNodeID sets this node's peer ID for local/remote dispatch during provisioning
 func (cm *ClusterManager) SetLocalNodeID(id string) {
 	cm.localNodeID = id
@@ -265,13 +214,9 @@ type peersJSONSource int
 const (
 	// peersFromDB: live membership was readable and is authoritative.
 	peersFromDB peersJSONSource = iota
-	// peersSkip: a peer is reachable, so rqlited can rejoin on its own raft
-	// state. Writing nothing is strictly safer than writing a guess.
+	// peersSkip: membership is unreadable, so nothing is asserted; rqlited
+	// starts on its own raft configuration and waits for its peers.
 	peersSkip
-	// peersSelfOnly: nothing else is reachable and the DB is unreadable. A
-	// single-node configuration at least yields a leader; asserting a
-	// membership we cannot verify does not.
-	peersSelfOnly
 )
 
 func (s peersJSONSource) String() string {
@@ -279,9 +224,7 @@ func (s peersJSONSource) String() string {
 	case peersFromDB:
 		return "live-membership"
 	case peersSkip:
-		return "skipped-peer-reachable"
-	case peersSelfOnly:
-		return "self-only"
+		return "skipped-membership-unreadable"
 	}
 	return "unknown"
 }
@@ -294,72 +237,54 @@ func (s peersJSONSource) String() string {
 // cluster-state.json's AllNodes, which is refreshed only by a best-effort HTTP
 // push - so the node most likely to hold a stale copy is exactly the node that
 // was down while the cluster changed. On its next boot it reinstated a removed
-// member as a voter, and the namespace went back to 2-of-3-with-a-corpse or to
-// Candidate with no leader. That is the recorded "namespace RQLite lost quorum"
+// member as a voter. That is the recorded "namespace RQLite lost quorum"
 // incident.
 //
-// Preference order: verified membership, then no assertion at all, then the
-// minimal assertion that can still produce a leader.
-func choosePeersJSONSource(dbOK bool, anyPeerReachable bool) peersJSONSource {
-	switch {
-	case dbOK:
+// Only verified membership is ever asserted. There used to be a third answer:
+// when the index database was unreadable and no peer's raft port answered, the
+// node wrote a single-node configuration "to at least get a leader". That is
+// every node's view during a full cold start — a power loss, every node
+// rebooting at once — so each would have made itself a cluster of one and
+// split every namespace. A node that keeps its configuration waits for its
+// peers, which is what raft is for; forcing a smaller cluster is an operator's
+// decision (`orama node recover-raft`).
+func choosePeersJSONSource(dbOK bool) peersJSONSource {
+	if dbOK {
 		return peersFromDB
-	case anyPeerReachable:
-		return peersSkip
-	default:
-		return peersSelfOnly
 	}
+	return peersSkip
 }
 
-// writeRestorePeersJSON applies choosePeersJSONSource for one namespace.
-func (cm *ClusterManager) writeRestorePeersJSON(ctx context.Context, state *ClusterLocalState, dataDir string) {
+// writeRestorePeersJSON applies choosePeersJSONSource for one namespace, and
+// writes peers.json only when the live membership differs from what this node
+// recorded (needsPeersRecovery).
+func (cm *ClusterManager) writeRestorePeersJSON(ctx context.Context, state *ClusterLocalState, dataDir string) error {
 	dbPeers, dbErr := cm.liveRaftPeers(ctx, state.ClusterID)
 	dbOK := dbErr == nil && len(dbPeers) > 0
 
-	anyReachable := false
-	if !dbOK {
-		for _, np := range state.AllNodes {
-			if np.NodeID == cm.localNodeID {
-				continue
-			}
-			if raftPortReachable(np.InternalIP, np.RQLiteRaftPort) {
-				anyReachable = true
-				break
-			}
-		}
-	}
-
-	switch choosePeersJSONSource(dbOK, anyReachable) {
+	switch choosePeersJSONSource(dbOK) {
 	case peersFromDB:
+		record, err := readNamespaceMembership(dataDir, true)
+		if err != nil {
+			return fmt.Errorf("namespace %s: %w", state.NamespaceName, err)
+		}
+		if !needsPeersRecovery(record, dbPeers) {
+			cm.logger.Info("Not writing peers.json: this node's recorded membership is the live one, or none is recorded",
+				zap.String("namespace", state.NamespaceName), zap.Bool("membership_recorded", record != nil))
+			return nil
+		}
 		if err := cm.writePeersJSON(dataDir, dbPeers); err != nil {
-			cm.logger.Error("Failed to write peers.json from live membership",
-				zap.String("namespace", state.NamespaceName), zap.Error(err))
-			return
+			return fmt.Errorf("write peers.json from live membership for namespace %s: %w", state.NamespaceName, err)
 		}
 		cm.logger.Info("Wrote peers.json from live membership",
 			zap.String("namespace", state.NamespaceName), zap.Int("peers", len(dbPeers)))
-
 	case peersSkip:
-		cm.logger.Warn("Not writing peers.json: membership unreadable but a peer is reachable, so rqlited can rejoin on its own raft state",
+		cm.logger.Warn("Not writing peers.json: membership is unreadable; rqlited restarts on its own raft configuration",
 			zap.String("namespace", state.NamespaceName),
 			zap.String("state_saved_at", state.SavedAt.Format(time.RFC3339)),
 			zap.Error(dbErr))
-
-	case peersSelfOnly:
-		self := rqlite.RaftPeer{
-			ID:       fmt.Sprintf("%s:%d", state.LocalIP, state.LocalPorts.RQLiteRaftPort),
-			Address:  fmt.Sprintf("%s:%d", state.LocalIP, state.LocalPorts.RQLiteRaftPort),
-			NonVoter: false,
-		}
-		if err := cm.writePeersJSON(dataDir, []rqlite.RaftPeer{self}); err != nil {
-			cm.logger.Error("Failed to write single-node peers.json",
-				zap.String("namespace", state.NamespaceName), zap.Error(err))
-			return
-		}
-		cm.logger.Warn("Wrote a SINGLE-NODE peers.json: membership is unreadable and no peer is reachable. The namespace will serve from this node alone until the others return and are re-added.",
-			zap.String("namespace", state.NamespaceName),
-			zap.String("state_saved_at", state.SavedAt.Format(time.RFC3339)))
 	}
+	return nil
 }
 
 // liveRaftPeers reads current membership for a namespace cluster from the index
@@ -388,22 +313,6 @@ func (cm *ClusterManager) liveRaftPeers(ctx context.Context, clusterID string) (
 	}
 	return peers, nil
 }
-
-// raftPortReachable reports whether a peer is accepting raft connections. Used
-// only to decide whether asserting a membership is necessary at all.
-func raftPortReachable(host string, port int) bool {
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), raftReachableTimeout)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
-}
-
-// raftReachableTimeout is short: this runs per peer during boot, and a peer
-// that cannot answer a TCP handshake promptly is not one this node should be
-// deferring to.
-const raftReachableTimeout = 2 * time.Second
 
 // writePeersJSON writes RQLite peers.json file for Raft cluster recovery
 func (cm *ClusterManager) writePeersJSON(dataDir string, peers []rqlite.RaftPeer) error {
@@ -813,7 +722,7 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 	// Start all Gateway instances
 	for i, node := range nodes {
 		// Connect to local RQLite instance on each node (WG bind, feat-269)
-		rqliteDSN := localRQLiteDSN(node.InternalIP, portBlocks[i].RQLiteHTTPPort)
+		rqliteDSN := tenantRQLiteURL(node.InternalIP, portBlocks[i].RQLiteHTTPPort)
 
 		cfg := gatewayspec.InstanceConfig{
 			Namespace:             cluster.NamespaceName,
@@ -1797,63 +1706,21 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 	if !rqliteRunning {
 		// Check if RQLite data directory exists (has existing data)
 		dataDir := filepath.Join(cm.baseDataDir, namespaceName, "rqlite", cm.localNodeID)
-		hasExistingData := false
-		if _, err := os.Stat(filepath.Join(dataDir, "raft")); err == nil {
-			hasExistingData = true
+		hasExistingData, err := namespaceHasRaftState(dataDir)
+		if err != nil {
+			return fmt.Errorf("restore rqlite for %s: %w", namespaceName, err)
 		}
 
-		if hasExistingData {
-			// Write peers.json for Raft cluster recovery (official RQLite mechanism).
-			// When all nodes restart simultaneously, Raft can't form quorum from stale state.
-			// peers.json tells rqlited the correct voter list so it can hold a fresh election.
-			var peers []rqlite.RaftPeer
-			for _, np := range allNodePorts {
-				raftAddr := fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)
-				peers = append(peers, rqlite.RaftPeer{
-					ID:       raftAddr,
-					Address:  raftAddr,
-					NonVoter: false,
-				})
-			}
-			if err := cm.writePeersJSON(dataDir, peers); err != nil {
-				cm.logger.Error("Failed to write peers.json", zap.String("namespace", namespaceName), zap.Error(err))
-			}
+		members := make([]restoreMember, 0, len(allNodePorts))
+		var peers []rqlite.RaftPeer
+		for _, np := range allNodePorts {
+			raftAddr := fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)
+			members = append(members, restoreMember{nodeID: np.NodeID, raftAddr: raftAddr})
+			peers = append(peers, rqlite.RaftPeer{ID: raftAddr, Address: raftAddr, NonVoter: false})
 		}
-
-		// Build join addresses for first-time joins (no existing data)
-		var joinAddrs []string
-		isLeader := false
-		if !hasExistingData {
-			// Deterministic leader selection: sort all node IDs and pick the first one.
-			// Every node independently computes the same result — no coordination needed.
-			// The elected leader bootstraps the cluster; followers use -join with retries
-			// to wait for the leader to become ready (up to 5 minutes).
-			sortedNodeIDs := make([]string, 0, len(allNodePorts))
-			for _, np := range allNodePorts {
-				sortedNodeIDs = append(sortedNodeIDs, np.NodeID)
-			}
-			sort.Strings(sortedNodeIDs)
-			electedLeaderID := sortedNodeIDs[0]
-
-			if cm.localNodeID == electedLeaderID {
-				isLeader = true
-				cm.logger.Info("Deterministic leader election: this node is the leader",
-					zap.String("namespace", namespaceName),
-					zap.String("node_id", cm.localNodeID))
-			} else {
-				// Follower: join the elected leader's raft address
-				for _, np := range allNodePorts {
-					if np.NodeID == electedLeaderID {
-						joinAddrs = append(joinAddrs, fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort))
-						break
-					}
-				}
-				cm.logger.Info("Deterministic leader election: this node is a follower",
-					zap.String("namespace", namespaceName),
-					zap.String("node_id", cm.localNodeID),
-					zap.String("leader_id", electedLeaderID),
-					zap.Strings("join_addrs", joinAddrs))
-			}
+		joinAddrs, isLeader, err := cm.planNamespaceRQLiteStart(namespaceName, dataDir, hasExistingData, members, peers)
+		if err != nil {
+			return fmt.Errorf("restore rqlite for %s: %w", namespaceName, err)
 		}
 
 		rqliteCfg := rqlite.InstanceConfig{
@@ -1874,6 +1741,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 		}
 	} else {
 		cm.logger.Info("RQLite already running", zap.String("namespace", namespaceName), zap.Int("port", pb.RQLiteHTTPPort))
+		cm.recordRunningNamespace(ctx, namespaceName, localIP, pb.RQLiteHTTPPort)
 	}
 
 	// 2. Restore Olric
@@ -1941,7 +1809,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 				NodeID:                cm.localNodeID,
 				HTTPPort:              pb.GatewayHTTPPort,
 				BaseDomain:            cm.baseDomain,
-				RQLiteDSN:             localRQLiteDSN(localIP, pb.RQLiteHTTPPort),
+				RQLiteDSN:             tenantRQLiteURL(localIP, pb.RQLiteHTTPPort),
 				GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 				OlricServers:          olricServers,
 				OlricTimeout:          30 * time.Second,
@@ -2095,13 +1963,17 @@ func (cm *ClusterManager) verifyClusterHealthy(ctx context.Context, nodes []Node
 			return fmt.Errorf("node %s has no port block allocated, so it cannot be verified", node.NodeID)
 		}
 		block := portBlocks[i]
+		rqliteEP, err := cm.tenantRQLiteEndpoint(node.InternalIP, block.RQLiteHTTPPort)
+		if err != nil {
+			return fmt.Errorf("node %s: %w", node.NodeID, err)
+		}
 
 		checks := []struct {
 			what  string
 			probe func(context.Context) error
 		}{
 			{"rqlite", func(ctx context.Context) error {
-				return rqliteReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.RQLiteHTTPPort))
+				return rqliteReady(ctx, rqliteEP)
 			}},
 			{"olric", func(ctx context.Context) error {
 				return olricReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.OlricHTTPPort))
@@ -2267,7 +2139,9 @@ func (cm *ClusterManager) RestoreLocalClustersFromDisk(ctx context.Context) (int
 	// This also subsumes the #158 per-namespace secret-drift repair: the shared
 	// config is rebuilt from the DB every time, so a rotated secret and a
 	// self-signed→wildcard cert switch both fall out of it.
-	cm.ReconcileHostTURN(ctx)
+	if _, err := cm.ReconcileHostTURN(ctx); err != nil {
+		return restored, fmt.Errorf("restored %d namespace(s) but not this host's shared TURN server: %w", restored, err)
+	}
 
 	return restored, nil
 }
@@ -2488,34 +2362,30 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 	if !rqliteRunning {
 		// Check if RQLite data directory exists (has existing data)
 		dataDir := filepath.Join(cm.baseDataDir, state.NamespaceName, "rqlite", cm.localNodeID)
-		hasExistingData := false
-		if _, err := os.Stat(filepath.Join(dataDir, "raft")); err == nil {
-			hasExistingData = true
-		}
-
-		if hasExistingData {
-			cm.writeRestorePeersJSON(ctx, state, dataDir)
+		hasExistingData, err := namespaceHasRaftState(dataDir)
+		if err != nil {
+			return fmt.Errorf("restore rqlite for %s: %w", state.NamespaceName, err)
 		}
 
 		var joinAddrs []string
 		isLeader := false
-		if !hasExistingData {
-			sortedNodeIDs := make([]string, 0, len(state.AllNodes))
-			for _, np := range state.AllNodes {
-				sortedNodeIDs = append(sortedNodeIDs, np.NodeID)
+		if hasExistingData {
+			if err := cm.writeRestorePeersJSON(ctx, state, dataDir); err != nil {
+				return fmt.Errorf("restore rqlite for %s: %w", state.NamespaceName, err)
 			}
-			sort.Strings(sortedNodeIDs)
-			electedLeaderID := sortedNodeIDs[0]
-
-			if cm.localNodeID == electedLeaderID {
-				isLeader = true
-			} else {
-				for _, np := range state.AllNodes {
-					if np.NodeID == electedLeaderID {
-						joinAddrs = append(joinAddrs, fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort))
-						break
-					}
-				}
+		} else {
+			members := make([]restoreMember, 0, len(state.AllNodes))
+			for _, np := range state.AllNodes {
+				members = append(members, restoreMember{nodeID: np.NodeID, raftAddr: fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)})
+			}
+			record, err := readNamespaceMembership(dataDir, false)
+			if err != nil {
+				return fmt.Errorf("restore rqlite for %s: %w", state.NamespaceName, err)
+			}
+			joinAddrs, isLeader, err = restoreJoinPlan(state.NamespaceName, cm.localNodeID, members, record,
+				rqlite.ClusterMembershipPath(dataDir))
+			if err != nil {
+				return fmt.Errorf("restore rqlite for %s: %w", state.NamespaceName, err)
 			}
 		}
 
@@ -2534,6 +2404,8 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		} else {
 			cm.logger.Info("Restored RQLite instance from state", zap.String("namespace", state.NamespaceName))
 		}
+	} else {
+		cm.recordRunningNamespace(ctx, state.NamespaceName, localIP, pb.RQLiteHTTPPort)
 	}
 
 	// 2. Restore Olric
@@ -2603,7 +2475,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			NodeID:                cm.localNodeID,
 			HTTPPort:              pb.GatewayHTTPPort,
 			BaseDomain:            state.BaseDomain,
-			RQLiteDSN:             localRQLiteDSN(localIP, pb.RQLiteHTTPPort),
+			RQLiteDSN:             tenantRQLiteURL(localIP, pb.RQLiteHTTPPort),
 			GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 			OlricServers:          olricServers,
 			OlricTimeout:          30 * time.Second,
@@ -2901,7 +2773,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 						},
 						TURNSecret:  webrtcCfg.TURNSharedSecret,
 						TURNCredTTL: webrtcCfg.TURNCredentialTTL,
-						RQLiteDSN:   localRQLiteDSN(localIP, pb.RQLiteHTTPPort),
+						RQLiteDSN:   tenantRQLiteURL(localIP, pb.RQLiteHTTPPort),
 					}
 					if err := cm.systemdSpawner.SpawnSFU(ctx, state.NamespaceName, cm.localNodeID, sfuCfg); err != nil {
 						cm.logger.Error("Failed to restore SFU", zap.String("namespace", state.NamespaceName), zap.Error(err))

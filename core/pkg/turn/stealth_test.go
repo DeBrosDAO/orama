@@ -38,10 +38,8 @@ func TestStealthHostForNamespace_distinctPerNamespace(t *testing.T) {
 }
 
 // TestStealthHostForNamespace_matchesDNSNameAllowlist guards the contract that
-// the derived host always passes the Caddyfile DNS-name allowlist
-// (pkg/namespace turn_cert.go dnsNamePattern) — a legitimate stealth domain
-// must never be rejected by that defense-in-depth check. Mirrors the same
-// conservative pattern here to avoid an import cycle.
+// the derived host is always a conservative lowercase DNS name, so it can be
+// published as a DNS record and matched by SNI.
 func TestStealthHostForNamespace_matchesDNSNameAllowlist(t *testing.T) {
 	dnsName := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 	for _, ns := range []string{"anchat-test", "a", "ns-with-many-dashes", "x1y2z3"} {

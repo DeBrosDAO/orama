@@ -2,6 +2,7 @@ package shared
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,15 +12,15 @@ import (
 	"time"
 )
 
-// requestTimeout bounds one gateway call. Every endpoint these commands reach
+// RequestTimeout bounds one gateway call. Every endpoint these commands reach
 // answers from the local cluster; a request outstanding this long is a gateway
 // that is not going to answer.
-const requestTimeout = 30 * time.Second
+const RequestTimeout = 30 * time.Second
 
 // maxResponse caps what a gateway reply may be read into memory.
 const maxResponse = 8 << 20
 
-var httpClient = &http.Client{Timeout: requestTimeout}
+var httpClient = &http.Client{Timeout: RequestTimeout}
 
 // Request performs one authenticated call against the active gateway and
 // returns the raw response body.
@@ -42,40 +43,48 @@ func Request(method, path string, body any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	raw, _, err := RequestWith(httpClient, gatewayURL, token, method, path, body)
+	return raw, err
+}
 
+// RequestWith performs one call to gatewayURL through client with token as
+// the bearer credential, and also returns the TLS state of the connection it
+// was answered on — for a caller that needs to know which certificate the
+// answering server presented.
+func RequestWith(client *http.Client, gatewayURL, token, method, path string, body any) ([]byte, *tls.ConnectionState, error) {
 	var payload io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return nil, fmt.Errorf("encode request body: %w", err)
+			return nil, nil, fmt.Errorf("encode request body: %w", err)
 		}
 		payload = bytes.NewReader(encoded)
 	}
 
 	req, err := http.NewRequest(method, gatewayURL+path, payload)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", method, gatewayURL+path, err)
+		return nil, nil, fmt.Errorf("%s %s: %w", method, gatewayURL+path, err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, &StatusError{Status: resp.StatusCode, Message: gatewayMessage(raw)}
+		return nil, nil, &StatusError{Status: resp.StatusCode, Message: gatewayMessage(raw)}
 	}
-	return raw, nil
+	return raw, resp.TLS, nil
 }
 
 // StatusError is a gateway reply that was not a success.

@@ -262,23 +262,6 @@ func (n *Node) monitorConnections(ctx context.Context) {
 					n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses discovered from LibP2P")
 				}
 			}
-
-			// Update from cluster API every 4 ticks (once per 2 minutes)
-			// Works once peers are already connected
-			if tickCount%4 == 0 {
-				if err := n.updateClusterPeers(cm); err != nil {
-					n.logger.ComponentWarn(logging.ComponentNode, "Failed to update cluster peers during monitoring", zap.Error(err))
-				} else {
-					n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses updated during monitoring")
-				}
-
-				// Try to repair peer configuration
-				if err := n.repairClusterPeers(cm); err != nil {
-					n.logger.ComponentWarn(logging.ComponentNode, "Failed to repair peer addresses during monitoring", zap.Error(err))
-				} else {
-					n.logger.ComponentInfo(logging.ComponentNode, "Peer configuration repaired during monitoring")
-				}
-			}
 		}
 	}
 }

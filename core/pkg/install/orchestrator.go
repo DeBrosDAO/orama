@@ -2,14 +2,20 @@ package install
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/install/installers"
+	"github.com/DeBrosOfficial/network/pkg/legacylayout"
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
@@ -28,7 +34,6 @@ type ProductionSetup struct {
 	osDetector         *OSDetector
 	archDetector       *ArchitectureDetector
 	resourceChecker    *ResourceChecker
-	portChecker        *PortChecker
 	fsProvisioner      *FilesystemProvisioner
 	stateDetector      *StateDetector
 	configGenerator    *ConfigGenerator
@@ -42,32 +47,6 @@ type ProductionSetup struct {
 	SSHUser        string
 	Environment    string
 	OperatorWallet string
-}
-
-// ReadBranchPreference reads the stored branch preference from disk
-func ReadBranchPreference(oramaDir string) string {
-	branchFile := filepath.Join(oramaDir, ".branch")
-	data, err := os.ReadFile(branchFile)
-	if err != nil {
-		return "main" // Default to main if file doesn't exist
-	}
-	branch := strings.TrimSpace(string(data))
-	if branch == "" {
-		return "main"
-	}
-	return branch
-}
-
-// SaveBranchPreference saves the branch preference to disk
-func SaveBranchPreference(oramaDir, branch string) error {
-	branchFile := filepath.Join(oramaDir, ".branch")
-	if err := os.MkdirAll(oramaDir, 0755); err != nil {
-		return fmt.Errorf("failed to create orama directory: %w", err)
-	}
-	if err := os.WriteFile(branchFile, []byte(branch), 0644); err != nil {
-		return fmt.Errorf("failed to save branch preference: %w", err)
-	}
-	return nil
 }
 
 // NewProductionSetup creates a new production setup orchestrator
@@ -86,7 +65,6 @@ func NewProductionSetup(oramaHome string, logWriter io.Writer, forceReconfigure 
 		osDetector:         &OSDetector{},
 		archDetector:       &ArchitectureDetector{},
 		resourceChecker:    NewResourceChecker(),
-		portChecker:        NewPortChecker(),
 		fsProvisioner:      NewFilesystemProvisioner(oramaHome),
 		stateDetector:      NewStateDetector(oramaDir),
 		configGenerator:    NewConfigGenerator(oramaDir),
@@ -109,7 +87,17 @@ func (ps *ProductionSetup) IsUpdate() bool {
 	return ps.stateDetector.IsConfigured() || ps.stateDetector.HasIPFSData()
 }
 
-// SetNameserver sets whether this node is a nameserver (runs CoreDNS + Caddy)
+// SetPublicIP records this node's public address in node.yaml.
+func (ps *ProductionSetup) SetPublicIP(ip string) { ps.configGenerator.SetPublicIP(ip) }
+
+// PublicIP is the address set for this run, else the one node.yaml records,
+// else "".
+func (ps *ProductionSetup) PublicIP() (string, error) { return ps.configGenerator.PublicIP() }
+
+// SetACMECA sets the ACME directory Caddy issues certificates from.
+func (ps *ProductionSetup) SetACMECA(url string) { ps.configGenerator.SetACMECA(url) }
+
+// SetNameserver sets whether this node is a nameserver (runs CoreDNS + Caddy).
 func (ps *ProductionSetup) SetNameserver(isNameserver bool) {
 	ps.isNameserver = isNameserver
 }
@@ -215,97 +203,26 @@ func (ps *ProductionSetup) Phase2ProvisionEnvironment() error {
 	return nil
 }
 
-// Phase2bInstallBinaries installs external binaries and Orama components.
-// Auto-detects pre-built mode if /opt/orama/manifest.json exists.
+// Phase2bInstallBinaries installs the binaries of the build archive extracted
+// at /opt/orama. There is no other way to install: no archive, or a manifest
+// that cannot be read, is a hard failure. (Compiling /opt/orama/src on the
+// node was the other way, and it installed whatever that directory held with
+// no signature check at all.)
 func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 	ps.logf("Phase 2b: Installing binaries...")
 
-	// Auto-detect pre-built binary archive
-	if HasPreBuiltArchive() {
-		manifest, err := LoadPreBuiltManifest()
-		if err != nil {
-			ps.logf("  ⚠️  Pre-built manifest found but unreadable: %v", err)
-			ps.logf("  Falling back to source mode...")
-			if err := ps.installFromSource(); err != nil {
-				return err
-			}
-		} else {
-			if err := ps.installFromPreBuilt(manifest); err != nil {
-				return err
-			}
-		}
-	} else {
-		// Source mode: compile everything on the VPS (original behavior)
-		if err := ps.installFromSource(); err != nil {
-			return err
-		}
+	if !HasPreBuiltArchive() {
+		return fmt.Errorf("no build archive at %s (%s is missing): put one there with `orama node setup` on a "+
+			"new machine or `orama push` on an installed node", OramaBase, OramaManifest)
 	}
-
-	if err := ps.EnsurePrivHelper(); err != nil {
+	manifest, err := LoadPreBuiltManifest()
+	if err != nil {
+		return fmt.Errorf("refusing to install from %s: %w", OramaBase, err)
+	}
+	if err := ps.installFromPreBuilt(manifest); err != nil {
 		return err
 	}
-
 	ps.logf("  ✓ All binaries installed")
-	return nil
-}
-
-// installFromSource installs binaries by compiling from source on the VPS.
-// This is the original Phase2bInstallBinaries logic, preserved as fallback.
-func (ps *ProductionSetup) installFromSource() error {
-	// Install system dependencies (always needed for runtime libs)
-	if err := ps.binaryInstaller.InstallSystemDependencies(); err != nil {
-		ps.logf("  ⚠️  System dependencies warning: %v", err)
-	}
-
-	// Install Go toolchain (downloads from go.dev if needed)
-	if err := ps.binaryInstaller.InstallGo(); err != nil {
-		return fmt.Errorf("failed to install Go: %w", err)
-	}
-
-	if err := ps.binaryInstaller.InstallOlric(); err != nil {
-		ps.logf("  ⚠️  Olric install warning: %v", err)
-	}
-
-	// Install Orama binaries (source must be at /opt/orama/src via SCP)
-	if err := ps.binaryInstaller.InstallDeBrosBinaries(ps.oramaHome); err != nil {
-		return fmt.Errorf("failed to install Orama binaries: %w", err)
-	}
-
-	// Install CoreDNS only for nameserver nodes
-	if ps.isNameserver {
-		if err := ps.binaryInstaller.InstallCoreDNS(); err != nil {
-			ps.logf("  ⚠️  CoreDNS install warning: %v", err)
-		}
-	}
-
-	// Install Caddy on ALL nodes (any node may host namespaces and need TLS)
-	if err := ps.binaryInstaller.InstallCaddy(); err != nil {
-		ps.logf("  ⚠️  Caddy install warning: %v", err)
-	}
-
-	// Install ntfy on every node (feature #72). ntfy listens on
-	// 127.0.0.1:NtfyListenPort and is only reachable via the local
-	// Caddy reverse-proxy block, so it's safe to run cluster-wide:
-	// nodes that don't host a public push.* DNS entry simply have
-	// an idle ntfy with no inbound traffic. Uniform install means no
-	// per-node toggling and no surprises when DNS topology changes.
-	if err := ps.binaryInstaller.InstallNtfy(); err != nil {
-		ps.logf("  ⚠️  ntfy install warning: %v", err)
-	}
-
-	// These are pre-built binary downloads (not Go compilation), always run them
-	if err := ps.binaryInstaller.InstallRQLite(); err != nil {
-		ps.logf("  ⚠️  RQLite install warning: %v", err)
-	}
-
-	if err := ps.binaryInstaller.InstallIPFS(); err != nil {
-		ps.logf("  ⚠️  IPFS install warning: %v", err)
-	}
-
-	if err := ps.binaryInstaller.InstallIPFSCluster(); err != nil {
-		ps.logf("  ⚠️  IPFS Cluster install warning: %v", err)
-	}
-
 	return nil
 }
 
@@ -322,12 +239,13 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 
 	// Build paths - unified data directory (all nodes equal)
 	dataDir := filepath.Join(ps.oramaDir, "data")
+	root := OramaRoot(ps.oramaDir)
 
 	// Initialize IPFS repo with correct path structure
 	// API on constants.IPFSAPIPort, Kubo gateway on IPFSGatewayPort, swarm on
 	// IPFSSwarmPort (kept off 4001 so it cannot collide with the node's libp2p host).
 	ipfsRepoPath := filepath.Join(dataDir, "ipfs", "repo")
-	if err := ps.binaryInstaller.InitializeIPFSRepo(ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), constants.IPFSAPIPort, constants.IPFSGatewayPort, constants.IPFSSwarmPort, vpsIP, ipfsPeer); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSRepo(root, ipfsRepoPath, filepath.Join(ps.oramaDir, "secrets", "swarm.key"), constants.IPFSAPIPort, constants.IPFSGatewayPort, constants.IPFSSwarmPort, vpsIP, ipfsPeer); err != nil {
 		return fmt.Errorf("failed to initialize IPFS repo: %w", err)
 	}
 
@@ -341,13 +259,11 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 	// Get cluster peer addresses from IPFS Cluster peer info if available
 	var clusterPeers []string
 	if ipfsClusterPeer != nil && ipfsClusterPeer.PeerID != "" {
-		// Construct cluster peer multiaddress using the discovered peer ID
-		// Format: /ip4/<ip>/tcp/9100/p2p/<cluster-peer-id>
+		// Construct cluster peer multiaddress using the discovered peer ID:
+		// /ip4/<ip>/tcp/<constants.IPFSClusterSwarmPort>/p2p/<cluster-peer-id>
 		peerIP := inferPeerIP(peerAddresses, vpsIP)
 		if peerIP != "" {
-			// Construct the bootstrap multiaddress for IPFS Cluster
-			// Note: IPFS Cluster listens on port 9100 for cluster communication
-			clusterBootstrapAddr := fmt.Sprintf("/ip4/%s/tcp/9100/p2p/%s", peerIP, ipfsClusterPeer.PeerID)
+			clusterBootstrapAddr := fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", peerIP, constants.IPFSClusterSwarmPort, ipfsClusterPeer.PeerID)
 			clusterPeers = []string{clusterBootstrapAddr}
 			ps.logf("  ℹ️  IPFS Cluster will connect to peer: %s", clusterBootstrapAddr)
 		} else if len(ipfsClusterPeer.Addrs) > 0 {
@@ -363,7 +279,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 		}
 	}
 
-	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(clusterPath, clusterSecret, constants.IPFSAPIPort, clusterPeers); err != nil {
+	if err := ps.binaryInstaller.InitializeIPFSClusterConfig(root, clusterPath, clusterSecret, constants.IPFSAPIPort, vpsIP, clusterPeers); err != nil {
 		return fmt.Errorf("failed to initialize IPFS Cluster: %w", err)
 	}
 
@@ -374,7 +290,7 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 
 	// Initialize RQLite data directory
 	rqliteDataDir := filepath.Join(dataDir, "rqlite")
-	if err := ps.binaryInstaller.InitializeRQLiteDataDir(rqliteDataDir); err != nil {
+	if err := ps.binaryInstaller.InitializeRQLiteDataDir(root, rqliteDataDir); err != nil {
 		ps.logf("  ⚠️  RQLite initialization warning: %v", err)
 	}
 
@@ -386,7 +302,8 @@ func (ps *ProductionSetup) Phase2cInitializeServices(peerAddresses []string, vps
 // and appends it to the trusted-peers file so EnsureConfig() can use it.
 func (ps *ProductionSetup) saveOwnClusterPeerID(clusterPath string) error {
 	identityPath := filepath.Join(clusterPath, "identity.json")
-	data, err := os.ReadFile(identityPath)
+	root := OramaRoot(ps.oramaDir)
+	data, err := root.ReadFile(identityPath, rootfs.SmallFileLimit)
 	if err != nil {
 		return fmt.Errorf("failed to read identity.json: %w", err)
 	}
@@ -404,7 +321,11 @@ func (ps *ProductionSetup) saveOwnClusterPeerID(clusterPath string) error {
 	// Read existing trusted peers
 	trustedPeersPath := filepath.Join(ps.oramaDir, "secrets", "ipfs-cluster-trusted-peers")
 	var existing []string
-	if fileData, err := os.ReadFile(trustedPeersPath); err == nil {
+	fileData, err := root.ReadFile(trustedPeersPath, rootfs.SmallFileLimit)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("failed to read trusted peers file: %w", err)
+	}
+	if err == nil {
 		for _, line := range strings.Split(strings.TrimSpace(string(fileData)), "\n") {
 			line = strings.TrimSpace(line)
 			if line != "" {
@@ -418,7 +339,7 @@ func (ps *ProductionSetup) saveOwnClusterPeerID(clusterPath string) error {
 
 	existing = append(existing, identity.ID)
 	content := strings.Join(existing, "\n") + "\n"
-	if err := os.WriteFile(trustedPeersPath, []byte(content), 0600); err != nil {
+	if err := root.WriteFile(trustedPeersPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to write trusted peers file: %w", err)
 	}
 
@@ -498,8 +419,17 @@ func (ps *ProductionSetup) EnsureNodeIdentity() (string, error) {
 	return ps.NodePeerID, nil
 }
 
+// nodeConfigPath is the node.yaml Phase 4 writes (SecretGenerator.SaveConfig
+// puts it under configs/).
+func (ps *ProductionSetup) nodeConfigPath() string {
+	return filepath.Join(ps.oramaDir, "configs", "node.yaml")
+}
+
 // Phase4GenerateConfigs generates node, gateway, and service configs
 func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP string, enableHTTPS bool, domain string, baseDomain string, joinAddress string, olricPeers ...[]string) error {
+	if err := requireBaseDomain(baseDomain); err != nil {
+		return fmt.Errorf("generate configs: %w", err)
+	}
 	if ps.IsUpdate() {
 		ps.logf("Phase 4: Updating configurations...")
 		ps.logf("  (Existing configs will be updated to latest format)")
@@ -550,13 +480,14 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	}
 
 	// Create olric config directory
+	root := OramaRoot(ps.oramaDir)
 	olricConfigDir := ps.oramaDir + "/configs/olric"
-	if err := os.MkdirAll(olricConfigDir, 0755); err != nil {
+	if err := root.MkdirAll(olricConfigDir, 0755); err != nil {
 		return fmt.Errorf("failed to create olric config directory: %w", err)
 	}
 
 	olricConfigPath := olricConfigDir + "/config.yaml"
-	if err := os.WriteFile(olricConfigPath, []byte(olricConfig), 0644); err != nil {
+	if err := root.WriteFile(olricConfigPath, []byte(olricConfig), 0644); err != nil {
 		return fmt.Errorf("failed to save olric config: %w", err)
 	}
 	ps.logf("  ✓ Olric config generated")
@@ -564,333 +495,220 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	// Vault Guardian config
 	vaultConfig := ps.configGenerator.GenerateVaultConfig(vpsIP)
 	vaultConfigPath := filepath.Join(ps.oramaDir, "data", "vault", "vault.yaml")
-	if err := os.WriteFile(vaultConfigPath, []byte(vaultConfig), 0644); err != nil {
+	if err := root.WriteFile(vaultConfigPath, []byte(vaultConfig), 0644); err != nil {
 		return fmt.Errorf("failed to save vault config: %w", err)
 	}
 	ps.logf("  ✓ Vault config generated")
 
-	// Configure CoreDNS (if baseDomain is provided - this is the zone name)
-	// CoreDNS uses baseDomain (e.g., "dbrs.space") as the authoritative zone
+	// CoreDNS serves the base domain as its authoritative zone.
 	dnsZone := baseDomain
-	if dnsZone == "" {
-		dnsZone = domain // Fall back to node domain if baseDomain not set
+
+	// CoreDNS reads the index rqlite where the node.yaml just written
+	// says it binds, with its credentials.
+	rq, err := rqlite.EndpointFromNodeConfig(OramaRoot(ps.oramaDir), ps.nodeConfigPath())
+	if err != nil {
+		return fmt.Errorf("configure CoreDNS: %w", err)
 	}
-	if dnsZone != "" {
-		// Get node IPs from peer addresses or use the VPS IP for all
-		ns1IP := vpsIP
-		ns2IP := vpsIP
-		ns3IP := vpsIP
-		if len(peerAddresses) >= 1 && peerAddresses[0] != "" {
-			ns1IP = peerAddresses[0]
-		}
-		if len(peerAddresses) >= 2 && peerAddresses[1] != "" {
-			ns2IP = peerAddresses[1]
-		}
-		if len(peerAddresses) >= 3 && peerAddresses[2] != "" {
-			ns3IP = peerAddresses[2]
-		}
+	// Every writer below is fatal: a nameserver whose Corefile or
+	// Caddyfile was not written cannot answer for its zone or serve
+	// HTTPS, and the install used to report success anyway.
+	if err := ps.binaryInstaller.ConfigureCoreDNS(dnsZone, rq); err != nil {
+		return fmt.Errorf("configure CoreDNS: %w", err)
+	}
+	ps.logf("  ✓ CoreDNS config generated (zone: %s)", dnsZone)
 
-		rqliteHost := "127.0.0.1"
-		if vpsIP != "" {
-			rqliteHost = vpsIP
-		}
-		rqliteDSN := fmt.Sprintf("http://%s:%d", rqliteHost, constants.RQLiteHTTPPort)
-		if err := ps.binaryInstaller.ConfigureCoreDNS(dnsZone, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
-			ps.logf("  ⚠️  CoreDNS config warning: %v", err)
-		} else {
-			ps.logf("  ✓ CoreDNS config generated (zone: %s)", dnsZone)
-		}
+	// Configure Caddy (the node's own domain when it has one, else the base domain)
+	caddyDomain := domain
+	if caddyDomain == "" {
+		caddyDomain = baseDomain
+	}
+	email := "admin@" + caddyDomain
+	acmeEndpoint := fmt.Sprintf("http://localhost:%d/v1/internal/acme", constants.GatewayAPIPort)
 
-		// Configure Caddy (uses baseDomain for admin email if node domain not set)
-		caddyDomain := domain
-		if caddyDomain == "" {
-			caddyDomain = baseDomain
-		}
-		email := "admin@" + caddyDomain
-		acmeEndpoint := fmt.Sprintf("http://localhost:%d/v1/internal/acme", constants.GatewayAPIPort)
+	// Self-hosted ntfy (feature #72): always emit the Caddy
+	// push.<dnsZone> reverse-proxy block and write
+	// /etc/ntfy/server.yml. Must happen BEFORE ConfigureCaddy is
+	// called below so the generated Caddyfile picks up the block.
+	// ntfy is installed unconditionally on every node (see Phase 2)
+	// so the local 127.0.0.1:NtfyListenPort target always exists.
+	ntfyHost := "push." + dnsZone
+	ps.binaryInstaller.EnableCaddyNtfyProxy(ntfyHost)
+	ntfyBaseURL := "https://" + ntfyHost
+	if err := ps.binaryInstaller.ConfigureNtfy(ntfyBaseURL); err != nil {
+		return fmt.Errorf("configure ntfy: %w", err)
+	}
+	ps.logf("  ✓ ntfy config generated (base_url: %s)", ntfyBaseURL)
 
-		// Self-hosted ntfy (feature #72): always emit the Caddy
-		// push.<dnsZone> reverse-proxy block and write
-		// /etc/ntfy/server.yml. Must happen BEFORE ConfigureCaddy is
-		// called below so the generated Caddyfile picks up the block.
-		// ntfy is installed unconditionally on every node (see Phase 2)
-		// so the local 127.0.0.1:NtfyListenPort target always exists.
-		ntfyHost := "push." + dnsZone
-		ps.binaryInstaller.EnableCaddyNtfyProxy(ntfyHost)
-		ntfyBaseURL := "https://" + ntfyHost
-		if err := ps.binaryInstaller.ConfigureNtfy(ntfyBaseURL); err != nil {
-			ps.logf("  ⚠️  ntfy config warning: %v", err)
-		} else {
-			ps.logf("  ✓ ntfy config generated (base_url: %s)", ntfyBaseURL)
-		}
+	// Stealth TURN-over-443 (feat-124): when the node opted in
+	// (sni_router.enabled in the node.yaml just written above), Caddy
+	// must vacate :443 so the orama-sni-router can own it. Move Caddy's
+	// HTTPS listener to :8443 BEFORE ConfigureCaddy renders the Caddyfile.
+	// When not opted in, the Caddyfile is byte-identical to before.
+	if ps.configGenerator.SNIRouterEnabled() {
+		ps.binaryInstaller.EnableCaddySNIRouterMode()
+		ps.logf("  ✓ SNI router enabled — Caddy HTTPS will bind :8443")
+	}
 
-		// Stealth TURN-over-443 (feat-124): when the node opted in
-		// (sni_router.enabled in the node.yaml just written above), Caddy
-		// must vacate :443 so the orama-sni-router can own it. Move Caddy's
-		// HTTPS listener to :8443 BEFORE ConfigureCaddy renders the Caddyfile.
-		// When not opted in, the Caddyfile is byte-identical to before.
-		if ps.configGenerator.SNIRouterEnabled() {
-			ps.binaryInstaller.EnableCaddySNIRouterMode()
-			ps.logf("  ✓ SNI router enabled — Caddy HTTPS will bind :8443")
-		}
+	acmeCA, err := ps.configGenerator.ACMECA()
+	if err != nil {
+		return fmt.Errorf("configure Caddy: %w", err)
+	}
+	// Caddy's DNS-01 calls are signed with a key derived from the cluster
+	// secret; the gateway refuses them otherwise.
+	clusterSecret, err := ps.secretGenerator.EnsureClusterSecret()
+	if err != nil {
+		return fmt.Errorf("configure Caddy: %w", err)
+	}
+	if err := ps.binaryInstaller.ConfigureCaddy(caddyDomain, email, acmeEndpoint, baseDomain, acmeCA, clusterSecret); err != nil {
+		return fmt.Errorf("configure Caddy: %w", err)
+	}
+	ps.logf("  ✓ Caddy config generated")
 
-		if err := ps.binaryInstaller.ConfigureCaddy(caddyDomain, email, acmeEndpoint, baseDomain); err != nil {
-			ps.logf("  ⚠️  Caddy config warning: %v", err)
-		} else {
-			ps.logf("  ✓ Caddy config generated")
+	// Stealth TURN-over-443 (feat-124): when opted in, write the
+	// orama-sni-router config (listen :443, fallback Caddy :8443,
+	// turn_discovery scanning this node's namespaces dir for the cluster's
+	// base domain). orama-node starts orama-namespace-sni-router@index when
+	// sni_router.enabled is set. The router uses the base domain as the zone
+	// for stealth/turn.ns-* hostnames.
+	if ps.configGenerator.SNIRouterEnabled() {
+		if err := ps.binaryInstaller.ConfigureSNIRouter(dnsZone); err != nil {
+			return fmt.Errorf("configure the SNI router: %w", err)
 		}
-
-		// Stealth TURN-over-443 (feat-124): when opted in, write the
-		// orama-sni-router config (listen :443, fallback Caddy :8443,
-		// turn_discovery scanning this node's namespaces dir for the cluster's
-		// base domain). The unit lifecycle is driven in Phase5 after Caddy has
-		// moved to :8443. The router uses the base domain as the zone for
-		// stealth/turn.ns-* hostnames.
-		if ps.configGenerator.SNIRouterEnabled() {
-			if err := ps.binaryInstaller.ConfigureSNIRouter(dnsZone); err != nil {
-				ps.logf("  ⚠️  SNI router config warning: %v", err)
-			} else {
-				ps.logf("  ✓ SNI router config generated (zone: %s)", dnsZone)
-			}
-		}
+		ps.logf("  ✓ SNI router config generated (zone: %s)", dnsZone)
 	}
 
 	return nil
 }
 
-// Phase5CreateSystemdServices creates and enables systemd units
+// Phase5CreateSystemdServices writes orama-node.service, retires the
+// pre-namespace host units, and enables and starts orama-node.
+//
+// orama-node.service is the one host unit install writes. Every daemon it
+// supervises runs as an orama-namespace-*@ instance, from the templates
+// InstallNamespaceTemplates copies, and the privileged helper's units come
+// from EnsurePrivHelper. The per-daemon host units install used to write here
+// (orama-ipfs, orama-olric, caddy, ...) were never enabled, and orama-node
+// stopped and disabled them on every boot; they are deleted instead.
+//
 // enableHTTPS selects the SNI-aware RQLite Raft advertise port.
 func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
-	// Re-chown all orama directories to the orama user.
-	// Phases 2b-4 create files as root (IPFS repo, configs, secrets, etc.)
-	// that must be readable/writable by the orama service user.
-	if err := exec.Command("id", "orama").Run(); err == nil {
-		if _, statErr := os.Stat(ps.oramaDir); statErr == nil {
-			if output, chownErr := exec.Command("chown", "-R", "orama:orama", ps.oramaDir).CombinedOutput(); chownErr != nil {
-				ps.logf("  ⚠️  Failed to chown %s: %v\n%s", ps.oramaDir, chownErr, string(output))
-			}
-		}
-		if err := lockOramaBinDir(filepath.Join(ps.oramaHome, "bin")); err != nil {
-			ps.logf("  ⚠️  Failed to lock bin dir: %v", err)
-		}
-		ps.logf("  ✓ File ownership updated for orama user; bin/ is root:orama 0750")
+	if err := ps.chownOramaTree(); err != nil {
+		return err
+	}
+	if err := ps.requireServiceBinaries(); err != nil {
+		return err
+	}
+	if err := ensureCaddyDataDir(); err != nil {
+		return err
 	}
 
-	// Validate all required binaries are available before creating services
-	ipfsBinary, err := ps.binaryInstaller.ResolveBinaryPath("ipfs", "/usr/local/bin/ipfs", "/usr/bin/ipfs")
-	if err != nil {
-		return fmt.Errorf("ipfs binary not available: %w", err)
-	}
-	clusterBinary, err := ps.binaryInstaller.ResolveBinaryPath("ipfs-cluster-service", "/usr/local/bin/ipfs-cluster-service", "/usr/bin/ipfs-cluster-service")
-	if err != nil {
-		return fmt.Errorf("ipfs-cluster-service binary not available: %w", err)
-	}
-	olricBinary, err := ps.binaryInstaller.ResolveBinaryPath("olric-server", "/usr/local/bin/olric-server", "/usr/bin/olric-server")
-	if err != nil {
-		return fmt.Errorf("olric-server binary not available: %w", err)
-	}
-
-	// IPFS service (unified - no bootstrap/node distinction)
-	ipfsUnit := ps.serviceGenerator.GenerateIPFSService(ipfsBinary)
-	if err := ps.serviceController.WriteServiceUnit("orama-ipfs.service", ipfsUnit); err != nil {
-		return fmt.Errorf("failed to write IPFS service: %w", err)
-	}
-	ps.logf("  ✓ IPFS service created: orama-ipfs.service")
-
-	// IPFS GC one-shot + timer. The daemon runs without in-process GC, so GC
-	// cadence is owned here: a scheduled `ipfs repo gc` that reclaims disk from
-	// unpinned blocks, off the request path and staggered across nodes.
-	gcUnit := ps.serviceGenerator.GenerateIPFSGCService(ipfsBinary)
-	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-gc.service", gcUnit); err != nil {
-		return fmt.Errorf("failed to write IPFS GC service: %w", err)
-	}
-	gcTimer := ps.serviceGenerator.GenerateIPFSGCTimer()
-	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-gc.timer", gcTimer); err != nil {
-		return fmt.Errorf("failed to write IPFS GC timer: %w", err)
-	}
-	ps.logf("  ✓ IPFS GC service + timer created: orama-ipfs-gc.{service,timer}")
-
-	// IPFS Cluster service
-	clusterUnit, err := ps.serviceGenerator.GenerateIPFSClusterService(clusterBinary)
-	if err != nil {
-		return fmt.Errorf("failed to generate IPFS Cluster service: %w", err)
-	}
-	if err := ps.serviceController.WriteServiceUnit("orama-ipfs-cluster.service", clusterUnit); err != nil {
-		return fmt.Errorf("failed to write IPFS Cluster service: %w", err)
-	}
-	ps.logf("  ✓ IPFS Cluster service created: orama-ipfs-cluster.service")
-
-	// Index RQLite is orama-namespace-rqlite@index, started by the supervisor.
-	// There is no leftover host-level orama-rqlite.service to write.
-
-	// Olric service
-	olricUnit := ps.serviceGenerator.GenerateOlricService(olricBinary)
-	if err := ps.serviceController.WriteServiceUnit("orama-olric.service", olricUnit); err != nil {
-		return fmt.Errorf("failed to write Olric service: %w", err)
-	}
-	ps.logf("  ✓ Olric service created")
-
-	// Node service (supervisor: starts orama-namespace-*@index)
 	nodeUnit := ps.serviceGenerator.GenerateNodeService()
-	if err := ps.serviceController.WriteServiceUnit("orama-node.service", nodeUnit); err != nil {
+	if err := ps.serviceController.WriteServiceUnit(nodeServiceName, nodeUnit); err != nil {
 		return fmt.Errorf("failed to write Node service: %w", err)
 	}
-	ps.logf("  ✓ Node service created: orama-node.service (supervisor)")
+	ps.logf("  ✓ Node service created: %s (supervisor)", nodeServiceName)
 
-	// Vault Guardian service
-	vaultUnit := ps.serviceGenerator.GenerateVaultService()
-	if err := ps.serviceController.WriteServiceUnit("orama-vault.service", vaultUnit); err != nil {
-		return fmt.Errorf("failed to write Vault service: %w", err)
-	}
-	ps.logf("  ✓ Vault service created: orama-vault.service")
-
-	// CoreDNS service (only for nameserver nodes)
-	if ps.isNameserver {
-		if _, err := os.Stat("/usr/local/bin/coredns"); err == nil {
-			corednsUnit := ps.serviceGenerator.GenerateCoreDNSService()
-			if err := ps.serviceController.WriteServiceUnit("coredns.service", corednsUnit); err != nil {
-				ps.logf("  ⚠️  Failed to write CoreDNS service: %v", err)
-			} else {
-				ps.logf("  ✓ CoreDNS service created")
-			}
-		}
+	if err := installers.NewLegacyHostUnitCleaner(ps.logWriter).Remove(); err != nil {
+		return fmt.Errorf("retire the pre-namespace host units: %w", err)
 	}
 
-	// Caddy service on ALL nodes (any node may host namespaces and need TLS)
-	if _, err := os.Stat("/usr/bin/caddy"); err == nil {
-		// Create caddy data directory and ensure orama user can write to it
-		exec.Command("mkdir", "-p", "/var/lib/caddy").Run()
-		exec.Command("chown", "-R", "orama:orama", "/var/lib/caddy").Run()
-
-		caddyUnit := ps.serviceGenerator.GenerateCaddyService()
-		if err := ps.serviceController.WriteServiceUnit("caddy.service", caddyUnit); err != nil {
-			ps.logf("  ⚠️  Failed to write Caddy service: %v", err)
-		} else {
-			ps.logf("  ✓ Caddy service created")
-		}
-	}
-
-	// SNI router unit (feat-124). Write the unit whenever the binary is present
-	// so the daemon-reload below picks it up; the enable/start vs stop/disable
-	// decision (based on sni_router.enabled) happens after Caddy has moved to
-	// :8443, in the start section.
-	if ps.binaryInstaller.WriteSNIRouterUnit() == nil {
-		ps.logf("  ✓ SNI router service unit created: %s", ps.binaryInstaller.SNIRouterServiceName())
-	}
-
-	// Log rotation for the append:-redirected service logs. Without it these
-	// files grow without bound until the disk fills.
 	if err := InstallLogrotateConfig(ps.oramaDir); err != nil {
-		ps.logf("  ⚠️  Failed to install logrotate config: %v", err)
-	} else {
-		ps.logf("  ✓ Log rotation configured (%s)", logrotateConfigPath)
+		return err
 	}
+	ps.logf("  ✓ Log rotation configured (%s)", logrotateConfigPath)
 
-	// Reload systemd daemon
 	if err := ps.serviceController.DaemonReload(); err != nil {
 		return fmt.Errorf("failed to reload systemd: %w", err)
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	// orama-node is the supervisor: it starts the orama-namespace-*@index host
-	// daemons and, on nameservers, orama-namespace-coredns@nameserver.
-	//
-	// The WireGuard unit is enabled alongside it, NOT left to the supervisor.
-	// wg0 previously existed only if Node.Start got as far as
-	// startIndexWireGuard, so a bad node.yaml, a failed config validation or a
-	// missing binary left the node with no overlay at all - unreachable on
-	// 10.0.0.x by every orama CLI path, and diagnosable only over public-IP SSH.
-	// The overlay must come up at boot on its own; the unit is idempotent
-	// (`wg show wg0 || wg-quick up wg0`), so the supervisor starting it again is
-	// a no-op.
-	enable := []string{"orama-node.service", "orama-namespace-wireguard@index.service"}
-	for _, svc := range enable {
-		if err := ps.serviceController.EnableService(svc); err != nil {
-			ps.logf("  ⚠️  Failed to enable %s: %v", svc, err)
-		} else {
-			ps.logf("  ✓ Service enabled: %s", svc)
-		}
-	}
+	return ps.enableAndStartNode()
+}
 
-	for _, leftover := range systemd.LeftoverHostUnits {
-		if err := ps.serviceController.DisableService(leftover); err != nil {
-			ps.logf("  ℹ️  leftover %s not enabled: %v", leftover, err)
-		} else {
-			ps.logf("  ✓ Leftover disabled: %s", leftover)
-		}
-	}
-	if err := ps.serviceController.DisableService(systemd.LeftoverWireGuardUnit); err != nil {
-		ps.logf("  ℹ️  leftover %s not enabled: %v", systemd.LeftoverWireGuardUnit, err)
-	} else {
-		ps.logf("  ✓ Leftover disabled: %s (interface left up)", systemd.LeftoverWireGuardUnit)
-	}
-	if err := ps.serviceController.DisableService(systemd.LeftoverNameserverUnit); err != nil {
-		ps.logf("  ℹ️  leftover %s not enabled: %v", systemd.LeftoverNameserverUnit, err)
-	} else {
-		ps.logf("  ✓ Leftover disabled: %s", systemd.LeftoverNameserverUnit)
-	}
+// nodeServiceName is the supervisor's unit, the one host unit install writes.
+const nodeServiceName = "orama-node.service"
 
-	ps.logf("  Starting orama-node (supervisor starts @index host stack and @nameserver CoreDNS)...")
-	if err := ps.serviceController.RestartService("orama-node.service"); err != nil {
-		ps.logf("  ⚠️  Failed to start orama-node.service: %v", err)
-	} else {
-		ps.logf("    - orama-node.service started")
-	}
+// caddyDataDir is Caddy's XDG_DATA_HOME in orama-namespace-caddy@: its ACME
+// account and certificates. The template lists it in ReadWritePaths, which
+// systemd refuses to start the unit without.
+const caddyDataDir = "/var/lib/caddy"
 
-	ps.logf("  ✓ All services started")
+// chownOramaTree hands the orama tree to the orama user. Phases 2b-4 create
+// files there as root (the IPFS repo, configs, secrets) that the services,
+// which run as orama, must read and write.
+func (ps *ProductionSetup) chownOramaTree() error {
+	if out, err := exec.Command("chown", "-R", "orama:orama", ps.oramaDir).CombinedOutput(); err != nil {
+		return fmt.Errorf("chown %s to the orama user the services run as: %w\n%s", ps.oramaDir, err, string(out))
+	}
+	if err := lockOramaBinDir(filepath.Join(ps.oramaHome, "bin")); err != nil {
+		return fmt.Errorf("lock %s: %w", filepath.Join(ps.oramaHome, "bin"), err)
+	}
+	ps.logf("  ✓ File ownership updated for orama user; bin/ is root:orama 0750")
 	return nil
 }
 
-// SeedDNSRecords seeds DNS records into RQLite after services are running
-func (ps *ProductionSetup) SeedDNSRecords(baseDomain, vpsIP string, peerAddresses []string) error {
-	if !ps.isNameserver {
-		return nil // Skip for non-nameserver nodes
-	}
-	if baseDomain == "" {
-		return nil // Skip if no domain configured
-	}
-
-	ps.logf("Seeding DNS records...")
-
-	// Get node IPs from peer addresses (multiaddrs) or use the VPS IP for all
-	// Peer addresses are multiaddrs like /ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...
-	// We need to extract just the IP from them
-	ns1IP := vpsIP
-	ns2IP := vpsIP
-	ns3IP := vpsIP
-
-	// Extract IPs from multiaddrs
-	var extractedIPs []string
-	for _, peer := range peerAddresses {
-		if peer != "" {
-			if ip := extractIPFromMultiaddr(peer); ip != "" {
-				extractedIPs = append(extractedIPs, ip)
-			}
+// requireServiceBinaries fails the phase when a daemon the supervisor starts
+// is missing. Phase 2b installs them, and a failed install there is otherwise
+// found only when orama-node cannot start the @index instance.
+func (ps *ProductionSetup) requireServiceBinaries() error {
+	for _, bin := range []struct{ name, local, system string }{
+		{"ipfs", "/usr/local/bin/ipfs", "/usr/bin/ipfs"},
+		{"ipfs-cluster-service", "/usr/local/bin/ipfs-cluster-service", "/usr/bin/ipfs-cluster-service"},
+		{"olric-server", "/usr/local/bin/olric-server", "/usr/bin/olric-server"},
+	} {
+		if _, err := ps.binaryInstaller.ResolveBinaryPath(bin.name, bin.local, bin.system); err != nil {
+			return fmt.Errorf("%s binary not available: %w", bin.name, err)
 		}
 	}
+	return nil
+}
 
-	// Assign extracted IPs to nameservers
-	if len(extractedIPs) >= 1 {
-		ns1IP = extractedIPs[0]
+// ensureCaddyDataDir creates Caddy's data directory for the orama user.
+func ensureCaddyDataDir() error {
+	if out, err := exec.Command("mkdir", "-p", caddyDataDir).CombinedOutput(); err != nil {
+		return fmt.Errorf("create %s for Caddy: %w\n%s", caddyDataDir, err, string(out))
 	}
-	if len(extractedIPs) >= 2 {
-		ns2IP = extractedIPs[1]
+	if out, err := exec.Command("chown", "-R", "orama:orama", caddyDataDir).CombinedOutput(); err != nil {
+		return fmt.Errorf("chown %s to the orama user Caddy runs as: %w\n%s", caddyDataDir, err, string(out))
 	}
-	if len(extractedIPs) >= 3 {
-		ns3IP = extractedIPs[2]
+	return nil
+}
+
+// enableAndStartNode enables and (re)starts the supervisor.
+//
+// orama-node starts the orama-namespace-*@index host daemons and, on
+// nameservers, orama-namespace-coredns@nameserver.
+//
+// The WireGuard unit is enabled alongside it, NOT left to the supervisor.
+// wg0 previously existed only if Node.Start got as far as
+// startIndexWireGuard, so a bad node.yaml, a failed config validation or a
+// missing binary left the node with no overlay at all - unreachable on
+// 10.0.0.x by every orama CLI path, and diagnosable only over public-IP SSH.
+// The overlay must come up at boot on its own; the unit is idempotent
+// (`wg show wg0 || wg-quick up wg0`), so the supervisor starting it again is
+// a no-op.
+func (ps *ProductionSetup) enableAndStartNode() error {
+	for _, svc := range []string{nodeServiceName, "orama-namespace-wireguard@index.service"} {
+		if err := ps.serviceController.EnableService(svc); err != nil {
+			return err
+		}
+		ps.logf("  ✓ Service enabled: %s", svc)
 	}
 
-	rqliteHost := "127.0.0.1"
-	if vpsIP != "" {
-		rqliteHost = vpsIP
+	// Disabled, never stopped: stopping wg-quick@wg0 runs wg-quick down and
+	// drops the mesh. orama-namespace-wireguard@index brings up the same conf.
+	if err := ps.serviceController.DisableService(systemd.LeftoverWireGuardUnit); err != nil {
+		return err
 	}
-	rqliteDSN := fmt.Sprintf("http://%s:%d", rqliteHost, constants.RQLiteHTTPPort)
-	if err := ps.binaryInstaller.SeedDNS(baseDomain, rqliteDSN, ns1IP, ns2IP, ns3IP); err != nil {
-		return fmt.Errorf("failed to seed DNS records: %w", err)
-	}
+	ps.logf("  ✓ Leftover disabled: %s (interface left up)", systemd.LeftoverWireGuardUnit)
 
+	ps.logf("  Starting orama-node (supervisor starts @index host stack and @nameserver CoreDNS)...")
+	if err := ps.serviceController.RestartService(nodeServiceName); err != nil {
+		return err
+	}
+	ps.logf("  ✓ %s started", nodeServiceName)
 	return nil
 }
 
@@ -918,7 +736,7 @@ func (ps *ProductionSetup) Phase6SetupWireGuard(isFirstNode bool) (privateKey, p
 	// Save public key to orama secrets so the gateway (running as orama user)
 	// can read it without needing root access to /etc/wireguard/wg0.conf
 	pubKeyPath := filepath.Join(ps.oramaDir, "secrets", "wg-public-key")
-	if err := os.WriteFile(pubKeyPath, []byte(pubKey), 0600); err != nil {
+	if err := OramaRoot(ps.oramaDir).WriteFile(pubKeyPath, []byte(pubKey), 0600); err != nil {
 		return "", "", fmt.Errorf("failed to save WG public key: %w", err)
 	}
 
@@ -963,7 +781,11 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 	// Reconcile never resets, so the range is simply part of the desired set
 	// and stays open throughout. The relay range is the full default
 	// (49152-65535), a superset of every namespace's per-tenant sub-range.
-	if ps.hostRunsTURN() {
+	runsTURN, err := ps.hostRunsTURN()
+	if err != nil {
+		return fmt.Errorf("decide whether this node relays TURN, which decides whether its relay range stays open: %w", err)
+	}
+	if runsTURN {
 		ps.logf("  TURN instance detected — opening relay ports")
 		fwCfg.TURNEnabled = true
 		fwCfg.TURNRelayStart = defaultTURNRelayPortStart
@@ -985,36 +807,34 @@ func (ps *ProductionSetup) Phase6bSetupFirewall(skipFirewall bool) error {
 	return nil
 }
 
-// hostRunsTURN reports whether this node hosts at least one namespace TURN
-// instance, so Phase 6b keeps the relay ports open across the firewall reset
-// (bugboard #846).
+// hostRunsTURN reports whether this node relays TURN, so Phase 6b keeps the
+// relay range open (bugboard #846).
 //
-// It detects via the persisted per-namespace env file
-// (<oramaDir>/data/namespaces/<ns>/turn.env), NOT systemctl: the upgrade STOPS
-// every namespace TURN unit before Phase 6b runs, and a stopped systemd
-// template instance can be garbage-collected out of `systemctl list-units`,
-// producing a false negative on the exact upgrade path this fix targets. The
-// env file survives stop + `ufw --force reset` (it's removed only on
-// deprovision), which is the same signal serviceExists() keys on to decide
-// whether to (re)start TURN — so this stays consistent with the start/stop
-// gating. A false negative would close the relay and break all calls, so the
-// detector must be reference-free.
-func (ps *ProductionSetup) hostRunsTURN() bool {
-	// Shared, host-level TURN (bugboard #283 part 2). This is the only form a
-	// freshly-installed node ever writes, so checking it is what keeps the relay
-	// ports open on new nodes — the per-namespace env files below exist only on
-	// hosts that predate the shared server.
-	if _, err := os.Stat(filepath.Join(ps.oramaDir, "configs", "turn.yaml")); err == nil {
-		return true
+// It reads the state the node is actually in. Phase 6b runs before orama-node
+// restarts, and it is orama-node that moves the pre-0.200 layout into the
+// current one (pkg/legacylayout), so on the one upgrade that crosses the two
+// the node is still on the old layout here. It looks at:
+//
+//   - the current layout: the shared config data/turn/turn.yaml, which the
+//     node writes while it holds a TURN allocation and deletes when it stops
+//     relaying. Nothing writes a turn.env into the unit env tree any more: the
+//     shared server has no per-namespace unit, and the migration deletes the
+//     old env files rather than staging them;
+//   - the old layout, on a node not yet migrated: configs/turn.yaml and a
+//     per-namespace data/namespaces/<ns>/turn.env.
+//
+// It detects from files, not systemctl: the upgrade has stopped every TURN
+// unit by now, and a stopped template instance can drop out of
+// `systemctl list-units`. A false negative closes the relay and breaks every
+// call, so a location that cannot be read is an error, never a "no".
+func (ps *ProductionSetup) hostRunsTURN() (bool, error) {
+	shared := constants.HostTURNConfigPath(ps.oramaDir)
+	if _, err := os.Lstat(shared); err == nil {
+		return true, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("inspect %s: %w", shared, err)
 	}
-	// Legacy per-namespace TURN instances, still present on nodes upgrading from
-	// before the shared server. Kept so an upgrade does not close the relay ports
-	// on a node whose migration has not run yet.
-	matches, err := filepath.Glob(filepath.Join(ps.oramaDir, "data", "namespaces", "*", "turn.env"))
-	if err != nil {
-		return false
-	}
-	return len(matches) > 0
+	return legacylayout.HasTURN(ps.oramaDir)
 }
 
 // EnableWireGuardWithPeers writes WG config with assigned IP and peers, then enables it.
@@ -1038,26 +858,17 @@ func (ps *ProductionSetup) EnableWireGuardWithPeers(privateKey, assignedIP strin
 	return nil
 }
 
-// LogSetupComplete logs completion information
+// LogSetupComplete logs completion information. It names orama CLI commands
+// only: the CLI knows the services' dependency order and quorum, which a raw
+// systemctl does not.
 func (ps *ProductionSetup) LogSetupComplete(peerID string) {
 	ps.logf("\n" + strings.Repeat("=", 70))
 	ps.logf("Setup Complete!")
 	ps.logf(strings.Repeat("=", 70))
 	ps.logf("\nNode Peer ID: %s", peerID)
-	ps.logf("\nService Management:")
-	ps.logf("  systemctl status orama-node")
-	ps.logf("  systemctl status orama-namespace-ipfs@index")
-	ps.logf("  journalctl -u orama-node -f")
-	ps.logf("  tail -f %s/logs/node.log", ps.oramaDir)
-	ps.logf("\nLog Files:")
-	ps.logf("  journalctl -u orama-namespace-ipfs@index")
-	ps.logf("  journalctl -u orama-namespace-gateway@index")
-	ps.logf("  %s/logs/node.log", ps.oramaDir)
-
-	ps.logf("\nStart supervisor (starts @index host stack):")
-	ps.logf("  systemctl start orama-node")
-
-	ps.logf("\nVerify Installation:")
-	ps.logf("  curl http://localhost:%d/health", constants.GatewayAPIPort)
-	ps.logf("  curl http://localhost:%d/status\n", constants.RQLiteHTTPPort)
+	ps.logf("\nOn this node:")
+	ps.logf("  orama node status        # every service and whether it is running")
+	ps.logf("  orama node logs node -f  # the supervisor; also gateway, rqlite, olric, ipfs, caddy, coredns")
+	ps.logf("  orama node doctor        # diagnose common issues")
+	ps.logf("  orama node report        # full health report as JSON\n")
 }

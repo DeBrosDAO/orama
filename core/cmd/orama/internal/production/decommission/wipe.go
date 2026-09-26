@@ -10,6 +10,7 @@ package decommission
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"path/filepath"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/install/installers"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"github.com/DeBrosOfficial/network/pkg/remotessh"
 )
 
@@ -52,6 +54,11 @@ for unit in $(systemctl list-units --all --plain --no-legend "orama-namespace-*"
 done
 systemctl stop "orama-namespace-*@*.service" 2>/dev/null || true
 
+# The privileged helper: stop its socket so nothing can reach root through it
+# while the rest is torn down. Its unit files and binary go below.
+systemctl stop %[9]s 2>/dev/null
+systemctl disable %[9]s 2>/dev/null
+
 # Then the supervisor and the legacy host units.
 for svc in orama-node orama-turn orama-sni-router caddy coredns ntfy \
            orama-gateway orama-ipfs-cluster orama-ipfs orama-olric orama-vault; do
@@ -84,6 +91,9 @@ rm -f /etc/systemd/system/orama-*.service
 rm -f /etc/systemd/system/orama-*.timer
 rm -f /etc/systemd/system/coredns.service
 rm -f /etc/systemd/system/caddy.service
+rm -f %[10]s
+rm -rf /etc/systemd/system/orama-namespace-gateway@index.service.d /etc/systemd/system/orama-deploy-build@.service.d
+rm -f /etc/orama/build-resolv.conf
 systemctl daemon-reload 2>/dev/null
 systemctl reset-failed 2>/dev/null || true
 
@@ -91,23 +101,45 @@ systemctl reset-failed 2>/dev/null || true
 ip link delete wg0 2>/dev/null || true
 rm -f /etc/wireguard/wg0.conf
 
-# Reset firewall
-ufw --force reset 2>/dev/null || true
-ufw default deny incoming 2>/dev/null || true
-ufw default allow outgoing 2>/dev/null || true
-ufw allow 22/tcp 2>/dev/null || true
-ufw --force enable 2>/dev/null || true
+# Remove the firewall rules Orama added — tagged "orama" — newest first so the
+# numbers stay valid. Rules the operator added (a tailscale0 allow, a monitoring
+# port) belong to them, and a reset used to delete them. The rules for the ports
+# sshd listens on stay, whoever added them: this script runs over SSH.
+ssh_ports=" $(sshd -T 2>/dev/null | while read -r key val; do [ "$key" = port ] && printf "%%s/tcp " "$val"; done)"
+if [ -z "${ssh_ports// /}" ]; then
+    echo "  cannot read the ports sshd listens on (sshd -T); leaving the firewall rules untouched" >&2
+else
+    ufw status numbered 2>/dev/null | while IFS= read -r line; do
+        case "$line" in "["*"# orama") ;; *) continue ;; esac
+        num=${line#[}; num=${num%%%%]*}; num=${num// /}
+        rest=${line#*] }; rule=${rest%%%% *}
+        case "$ssh_ports" in *" $rule "*) continue ;; esac
+        echo "$num"
+    done | sort -rn | while read -r num; do ufw --force delete "$num" >/dev/null; done
+fi
 
 # Remove data
 rm -rf /opt/orama
+# Root-owned env files of namespace units and deployments (orama-privhelper)
+rm -rf /var/lib/orama-unit-env /var/lib/orama-deploy
 rm -rf /var/lib/ntfy /run/ntfy
+# Caddy storage: the TLS private keys of the node and its ACME account key.
+# A wiped node that kept them would serve the old certificate and hold keys for
+# a domain it no longer belongs to.
+rm -rf /var/lib/caddy
 rm -rf /var/log/journal
 swapoff -a 2>/dev/null || true
+
+# The privileged helper binary: root-owned, and useless without its units.
+rm -f %[11]s
 
 # Clean configs
 rm -rf /etc/coredns
 rm -rf /etc/caddy
 rm -rf %[5]s
+# The archive trust anchor and its rotation mark: a machine wiped and set up
+# again must trust the cluster it next joins or creates, not this one.
+rm -f %[12]s
 rm -f /tmp/orama-*.sh /tmp/network-source.tar.gz /tmp/orama-*.tar.gz
 
 # Nuclear: remove binaries, and Tor with its apt source. The distro Tor units
@@ -132,8 +164,18 @@ echo "  Node wiped"
 		strings.Join(installers.TorAptPackages, " "),
 		strings.Join([]string{installers.TorAptSourcePath, installers.TorKeyringPath}, " "),
 		strings.Join(installers.TorDistroUnits, " "),
+		privhelper.SocketUnitName,
+		strings.Join([]string{
+			filepath.Join(systemdUnitDir, privhelper.SocketUnitName),
+			filepath.Join(systemdUnitDir, privhelper.ServiceUnitName),
+		}, " "),
+		privhelper.Path,
+		strings.Join([]string{archivetrust.AnchorPath, archivetrust.RotationMarkPath(archivetrust.AnchorPath)}, " "),
 	)
 }
+
+// systemdUnitDir is where the installer writes unit files.
+const systemdUnitDir = "/etc/systemd/system"
 
 // wipeNode erases the target node.
 func wipeNode(node inspector.Node, nuclear bool) error {

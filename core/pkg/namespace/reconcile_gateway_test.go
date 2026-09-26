@@ -237,40 +237,27 @@ func TestGatewayYAMLEqual_anyFieldChangeIsDrift(t *testing.T) {
 // that a matching config is a clean no-op and that an unreadable config
 // surfaces an error instead of blind-restarting.
 
-func writeGatewayConfig(t *testing.T, base, ns, nodeID string, wr gatewayspec.GatewayYAMLWebRTC) {
-	t.Helper()
-	dir := filepath.Join(base, ns, "configs")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := yaml.Marshal(gatewayspec.GatewayYAMLConfig{ClientNamespace: ns, WebRTC: wr})
-	if err := os.WriteFile(filepath.Join(dir, "gateway-"+nodeID+".yaml"), b, 0644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestReconcileGateway_inSyncIsNoOpNoError(t *testing.T) {
 	withOverlayIP(t, "10.0.0.5", nil)
 	root, nsBase := setupOramaDirs(t)
 	writeAPIKeyHMACSecret(t, root, "the-hmac-secret\n")
+	writeRQLitePassword(t, root, testRQLitePass)
 	ns, node := "anchat-test", "node-1"
 	s := NewSystemdSpawner(nsBase, "", zap.NewNop())
 	cfg := desiredEnabled()
 	cfg.Namespace = ns
+	cfg.RQLiteDSN = tenantRQLiteURL("10.0.0.5", 10200)
 
-	hmac, err := s.readAPIKeyHMACSecret()
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := filepath.Join(nsBase, ns, "configs")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	listenAddr, err := gatewayListenAddr(cfg.Namespace, cfg.HTTPPort)
+	// What SpawnGateway writes: credentials applied, host secret, listen addr.
+	onDisk, err := s.gatewayYAMLFor(ns, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := yaml.Marshal(gatewayYAMLFromInstance(cfg, hmac, "", listenAddr))
+	b, err := yaml.Marshal(onDisk)
 	if err != nil {
 		t.Fatal(err)
 	}

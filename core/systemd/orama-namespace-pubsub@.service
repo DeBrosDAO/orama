@@ -25,7 +25,14 @@ ProtectProc=invisible
 ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs
 InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
-EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/pubsub.env
+EnvironmentFile=/var/lib/orama-unit-env/%i/pubsub.env
+# The API is a unix socket in this runtime directory (pkg/pubsub
+# DefaultSocketPath), 0700 and the orama user's, and admits only callers running
+# as that user. It used to be 127.0.0.1:10105, which every process on the node
+# — a tenant's deployment included — could publish and subscribe through, for
+# any namespace.
+RuntimeDirectory=orama-pubsub
+RuntimeDirectoryMode=0700
 ExecStart=/opt/orama/bin/pubsub
 TimeoutStopSec=15s
 KillMode=mixed

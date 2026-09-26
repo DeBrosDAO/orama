@@ -57,13 +57,17 @@ func functionDatabaseNamespace(cfg *Config) string {
 }
 
 // ownNamespace is the namespace a gateway's database belongs to: its
-// client_namespace, where an empty one is read as the cluster gateway's
-// "default".
+// client_namespace, and for the cluster gateway the lobby's name, "default".
+//
+// The cluster gateway's client namespace was "default" and is now "index".
+// Everything keyed off this function — the registry guard above all — read the
+// renamed cluster gateway as a tenant's, and stopped keeping tenant keys off
+// the cluster registry's raw-database routes.
 func ownNamespace(cfg *Config) string {
-	if ns := strings.TrimSpace(cfg.ClientNamespace); ns != "" {
-		return ns
+	if cfg == nil || !servesNamedNamespace(cfg.ClientNamespace) {
+		return auth.LobbyNamespace
 	}
-	return auth.LobbyNamespace
+	return strings.TrimSpace(cfg.ClientNamespace)
 }
 
 // requireOperatorForCoreRegistry refuses a non-operator on the raw-database

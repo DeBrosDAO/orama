@@ -2,6 +2,8 @@ package namespace
 
 import (
 	"fmt"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // Membership is how a blueprint picks machines.
@@ -50,7 +52,7 @@ const (
 // tenant-provisionable.
 const (
 	BlueprintNameTenant     = "tenant"
-	BlueprintNameIndex      = "index"
+	BlueprintNameIndex      = constants.IndexNamespace
 	BlueprintNameNameserver = "nameserver"
 )
 

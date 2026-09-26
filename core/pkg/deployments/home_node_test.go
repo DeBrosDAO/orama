@@ -185,20 +185,6 @@ func (m *mockHomeNodeDB) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqli
 	return m.mockRQLiteClient.Batch(ctx, ops)
 }
 
-func (m *mockHomeNodeDB) addDeployment(nodeID, deploymentID, status string) {
-	m.deployments[nodeID] = append(m.deployments[nodeID], deploymentData{
-		id:     deploymentID,
-		status: status,
-	})
-}
-
-func (m *mockHomeNodeDB) setResourceUsage(nodeID string, memoryMB, cpuPercent int) {
-	m.resourceUsage[nodeID] = resourceData{
-		memoryMB:   memoryMB,
-		cpuPercent: cpuPercent,
-	}
-}
-
 func TestHomeNodeManager_AssignHomeNode(t *testing.T) {
 	logger := zap.NewNop()
 	mockDB := newMockHomeNodeDB()

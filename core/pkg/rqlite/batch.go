@@ -37,8 +37,8 @@ var lastStaleDegradeWarnNanos int64
 
 // warnStaleDegrade logs (at most once per staleDegradeWarnInterval) that a
 // none-read was auto-degraded to the leader-routed weak connection because the
-// local follower is stale. reason is actionable and carries the status port.
-func warnStaleDegrade(reason string, port int) {
+// local follower is stale. reason is actionable and carries the status address.
+func warnStaleDegrade(reason string, ep Endpoint) {
 	now := time.Now().UnixNano()
 	prev := atomic.LoadInt64(&lastStaleDegradeWarnNanos)
 	if now-prev < int64(staleDegradeWarnInterval) {
@@ -47,7 +47,7 @@ func warnStaleDegrade(reason string, port int) {
 	if !atomic.CompareAndSwapInt64(&lastStaleDegradeWarnNanos, prev, now) {
 		return
 	}
-	log.Printf("rqlite: none-read auto-degraded to weak (leader-routed) — local follower stale on status port %d: %s", port, reason)
+	log.Printf("rqlite: none-read auto-degraded to weak (leader-routed) — local follower stale at %s: %s", ep, reason)
 }
 
 // BatchOpKind enumerates the supported op kinds.
@@ -407,7 +407,7 @@ func (c *client) gateNoneConn(rc ReadConsistency, chosen *gorqlite.Connection) *
 		return chosen
 	}
 	if fresh, reason := c.staleGate.Fresh(); !fresh {
-		warnStaleDegrade(reason, c.localStatusPort)
+		warnStaleDegrade(reason, c.localStatus)
 		return c.conn
 	}
 	return chosen

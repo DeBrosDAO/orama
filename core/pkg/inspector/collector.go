@@ -8,6 +8,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
 
 // ClusterData holds all collected data from the cluster.
@@ -299,24 +303,31 @@ func collectNode(ctx context.Context, node Node, subsystems []string, verbose bo
 	return nd
 }
 
+// inspectorSudo is the privilege prefix for reading root-owned node files
+// (node.yaml, namespace env files) over SSH, as the other collectors do.
+const inspectorSudo = "sudo "
+
 // collectRQLite gathers RQLite data from a node via SSH.
 func collectRQLite(ctx context.Context, node Node, verbose bool) *RQLiteData {
 	data := &RQLiteData{}
 
 	// Collect all endpoints in a single SSH session for efficiency.
-	// We use a separator to split the outputs.
+	// We use a separator to split the outputs. rqlited binds the node's
+	// WireGuard IP and requires auth; rqlite.NodeShellCurl reads both from the
+	// node's own node.yaml.
+	rq := func(opts, path string) string { return rqlite.NodeShellCurl(inspectorSudo, opts, path) }
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-curl -sf http://localhost:10100/status 2>/dev/null || echo '{"error":"unreachable"}'
+` + rq("-sf", "/status") + ` 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf 'http://localhost:10100/nodes?nonvoters' 2>/dev/null || echo '{"error":"unreachable"}'
+` + rq("-sf", "/nodes?nonvoters") + ` 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf http://localhost:10100/readyz 2>/dev/null; echo "EXIT:$?"
+` + rq("-sf", "/readyz") + ` 2>/dev/null; echo "EXIT:$?"
 echo "$SEP"
-curl -sf http://localhost:10100/debug/vars 2>/dev/null || echo '{"error":"unreachable"}'
+` + rq("-sf", "/debug/vars") + ` 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf -H 'Content-Type: application/json' 'http://localhost:10100/db/query?level=strong' -d '["SELECT 1"]' 2>/dev/null && echo "STRONG_OK" || echo "STRONG_FAIL"
+` + rq(`-sf -H 'Content-Type: application/json' -d '["SELECT 1"]'`, "/db/query?level=strong") + ` 2>/dev/null && echo "STRONG_OK" || echo "STRONG_FAIL"
 `
 
 	result := RunSSH(ctx, node, cmd)
@@ -600,13 +611,13 @@ echo "$SEP"
 echo "$SEP"
 curl -sf -X POST 'http://localhost:10107/api/v0/swarm/peers' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
 echo "$SEP"
-curl -sf --max-time 10 'http://localhost:10108/peers' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin); print(len(peers)); errs=sum(1 for p in peers if p.get('error','')); print(errs)" 2>/dev/null || (curl -sf 'http://localhost:10108/id' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); peers=d.get('cluster_peers',[]); print(len(peers)); print(0)" 2>/dev/null || echo -1)
+` + ipfsClusterCurl("--max-time 10", "/peers") + ` 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin); print(len(peers)); errs=sum(1 for p in peers if p.get('error','')); print(errs)" 2>/dev/null || (` + ipfsClusterCurl("", "/id") + ` 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); peers=d.get('cluster_peers',[]); print(len(peers)); print(0)" 2>/dev/null || echo -1)
 echo "$SEP"
 curl -sf -X POST 'http://localhost:10107/api/v0/repo/stat' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('RepoSize',0)); print(d.get('StorageMax',0))" 2>/dev/null || echo -1
 echo "$SEP"
 curl -sf -X POST 'http://localhost:10107/api/v0/version' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('Version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
-curl -sf 'http://localhost:10108/id' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
+` + ipfsClusterCurl("", "/id") + ` 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
 test -f /opt/orama/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
 echo "$SEP"
@@ -1161,39 +1172,22 @@ echo "$SEP"
 		return nil
 	}
 
-	// For each namespace, check its services
-	// Namespace ports: base = 10000 + (index * 5)
-	// offset 0=RQLite HTTP, 1=RQLite Raft, 2=Olric HTTP, 3=Olric Memberlist, 4=Gateway HTTP
-	// We discover actual ports by querying each namespace's services
 	var nsCmd string
+	// A unit name that is not a namespace name is never put into a root
+	// shell; it is reported with no services.
+	var unprobed []NamespaceData
 	for _, name := range names {
-		nsCmd += fmt.Sprintf(`
-echo "NS_START:%s"
-# Get gateway port from systemd or default discovery
-GWPORT=$(ss -tlnp 2>/dev/null | grep 'orama-namespace-gateway@%s' | grep -oP ':\K[0-9]+' | head -1)
-echo "GW_PORT:${GWPORT:-0}"
-# Try common namespace port ranges (10000-10099)
-for BASE in $(seq 10000 5 10099); do
-  RQLITE_PORT=$((BASE))
-  if curl -sf --connect-timeout 1 "http://localhost:${RQLITE_PORT}/status" >/dev/null 2>&1; then
-    STATUS=$(curl -sf --connect-timeout 1 "http://localhost:${RQLITE_PORT}/status" 2>/dev/null)
-    STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('store',{}).get('raft',{}).get('state',''))" 2>/dev/null || echo "")
-    READYZ=$(curl -sf --connect-timeout 1 "http://localhost:${RQLITE_PORT}/readyz" 2>/dev/null && echo "yes" || echo "no")
-    echo "RQLITE:${BASE}:up:${STATE}:${READYZ}"
-    break
-  fi
-done
-# Check Olric memberlist
-OLRIC_PORT=$((BASE + 2))
-ss -tlnp 2>/dev/null | grep -q ":${OLRIC_PORT} " && echo "OLRIC:up" || echo "OLRIC:down"
-# Check Gateway
-GW_PORT2=$((BASE + 4))
-GW_STATUS=$(curl -sf -o /dev/null -w '%%{http_code}' --connect-timeout 1 "http://localhost:${GW_PORT2}/health" 2>/dev/null || echo "0")
-echo "GATEWAY:${GW_STATUS}"
-echo "NS_END"
-`, name, name)
+		script, err := namespaceProbeScript(inspectorSudo, unitenv.Dir, name)
+		if err != nil {
+			unprobed = append(unprobed, NamespaceData{Name: name})
+			continue
+		}
+		nsCmd += script
 	}
 
+	if nsCmd == "" {
+		return unprobed
+	}
 	nsRes := RunSSH(ctx, node, nsCmd)
 	if !nsRes.OK() && nsRes.Stdout == "" {
 		// Return namespace names at minimum
@@ -1236,7 +1230,7 @@ echo "NS_END"
 		}
 	}
 
-	return result
+	return append(result, unprobed...)
 }
 
 // Parse helper functions
@@ -1283,4 +1277,72 @@ func jsonBool(m map[string]interface{}, key string) bool {
 	default:
 		return false
 	}
+}
+
+// namespaceProbeScript is the shell run (as root, over SSH) to check one
+// namespace's services on a node.
+//
+// Port block: offset 0=RQLite HTTP, 1=RQLite Raft, 2=Olric HTTP, 3=Olric
+// Memberlist, 4=Gateway HTTP. The rqlite instance's address comes from its
+// rqlite.env by the same rule as rqlite.InstanceAddrFromEnv: HTTP_ADDR (what it
+// binds), or HTTP_ADV_ADDR when HTTP_ADDR is the wildcard an instance spawned
+// before the WireGuard bind still carries. Its port is the block base. It runs
+// with -auth, so the probe goes through rqlite.NodeShellCurlAt for the
+// credentials. The tenant gateway binds the node's WireGuard IP (the rqlite
+// host), so it is probed there, not on localhost.
+//
+// rqlite.env is writable by the orama user and this runs as root, so nothing
+// read from it reaches the shell unvalidated: the sed only extracts an
+// IPv4:port, the block base must be all digits before any arithmetic (shell
+// arithmetic evaluates array subscripts, command substitutions included), and
+// the namespace name must be a valid namespace name before it is embedded.
+func namespaceProbeScript(sudo, namespacesDir, name string) (string, error) {
+	if !validNamespaceName(name) {
+		return "", fmt.Errorf("%q is not a valid namespace name", name)
+	}
+	envFile := rqlite.InstanceEnvFile(namespacesDir, name)
+	return fmt.Sprintf(`
+echo "NS_START:%[1]s"
+# Get gateway port from systemd or default discovery
+GWPORT=$(ss -tlnp 2>/dev/null | grep 'orama-namespace-gateway@%[1]s' | grep -oP ':\K[0-9]+' | head -1)
+echo "GW_PORT:${GWPORT:-0}"
+ADDR=$(%[2]ssed -n 's/^HTTP_ADDR=\([0-9.]*:[0-9][0-9]*\)$/\1/p' '%[3]s' 2>/dev/null | head -n 1)
+case "${ADDR%%:*}" in
+  ""|0.0.0.0) ADDR=$(%[2]ssed -n 's/^HTTP_ADV_ADDR=\([0-9.]*:[0-9][0-9]*\)$/\1/p' '%[3]s' 2>/dev/null | head -n 1) ;;
+esac
+case "${ADDR%%:*}" in
+  ""|0.0.0.0) ADDR="" ;;
+esac
+BASE=${ADDR##*:}
+case "$BASE" in
+  ''|*[!0-9]*) ADDR=""; BASE="" ;;
+esac
+HOST=${ADDR%%:*}
+if [ -n "$ADDR" ] && STATUS=$(%[4]s 2>/dev/null); then
+    STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('store',{}).get('raft',{}).get('state',''))" 2>/dev/null || echo "")
+    READYZ=$(%[5]s >/dev/null 2>&1 && echo "yes" || echo "no")
+    echo "RQLITE:${BASE}:up:${STATE}:${READYZ}"
+fi
+if [ -n "$BASE" ]; then
+  # Check Olric memberlist
+  OLRIC_PORT=$((BASE + 2))
+  ss -tlnp 2>/dev/null | grep -q ":${OLRIC_PORT} " && echo "OLRIC:up" || echo "OLRIC:down"
+  # Check Gateway where it binds
+  GW_PORT2=$((BASE + 4))
+  GW_STATUS=$(curl -sf -o /dev/null -w '%%{http_code}' --connect-timeout 1 "http://${HOST}:${GW_PORT2}/health" 2>/dev/null || echo "0")
+  echo "GATEWAY:${GW_STATUS}"
+else
+  echo "OLRIC:down"
+  echo "GATEWAY:0"
+fi
+echo "NS_END"
+`, name, sudo, envFile,
+		rqlite.NodeShellCurlAt(sudo, "$ADDR", "-sf --connect-timeout 1", "/status"),
+		rqlite.NodeShellCurlAt(sudo, "$ADDR", "-sf --connect-timeout 1", "/readyz")), nil
+}
+
+// validNamespaceName reports whether name is a namespace name exactly as
+// written (httputil.ValidateNamespace, with no surrounding whitespace).
+func validNamespaceName(name string) bool {
+	return name == strings.TrimSpace(name) && httputil.ValidateNamespace(name)
 }

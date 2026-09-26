@@ -67,9 +67,8 @@ type InstanceSpawner struct {
 	rqlitePath  string // Path to rqlited binary
 	logger      *zap.Logger
 
-	// authFile is the rqlite auth JSON used when probing spawned instances.
-	// Empty means unauthenticated, which is correct while rqlited runs
-	// without -auth.
+	// authFile is the rqlite auth JSON whose user probes spawned instances.
+	// rqlited always runs with -auth, so it is required.
 	authFile string
 }
 
@@ -181,7 +180,7 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	}
 
 	// Wait for the instance to be ready
-	if err := is.waitForReady(ctx, cfg.HTTPPort); err != nil {
+	if err := is.waitForReady(ctx, cfg); err != nil {
 		// Kill the process if it didn't start properly
 		cmd.Process.Kill()
 		return nil, fmt.Errorf("instance failed to become ready: %w", err)
@@ -202,8 +201,20 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 // follower still waiting for its leader is not killed mid-join.
 const instanceReadyTimeout = 6 * time.Minute
 
-func (is *InstanceSpawner) waitForReady(ctx context.Context, httpPort int) error {
-	return WaitForRaftReady(ctx, httpPort, instanceReadyTimeout)
+func (is *InstanceSpawner) waitForReady(ctx context.Context, cfg InstanceConfig) error {
+	user, pass, err := readRQLiteAuthFile(is.authFile)
+	if err != nil {
+		return fmt.Errorf("rqlite instance credentials: %w", err)
+	}
+	addr, err := BindAddr(cfg.HTTPAdvAddress, cfg.HTTPPort)
+	if err != nil {
+		return err
+	}
+	ep, err := NewEndpoint(addr, user, pass)
+	if err != nil {
+		return err
+	}
+	return WaitForRaftReady(ctx, ep, instanceReadyTimeout)
 }
 
 // StopInstance stops a running RQLite instance
@@ -267,18 +278,6 @@ func (is *InstanceSpawner) StopInstanceByPID(pid int) error {
 	}
 
 	return nil
-}
-
-// IsInstanceRunning checks if a RQLite instance is running.
-//
-// Through the admin client, with the spawner's auth file when one is set: a
-// tenant rqlite started with -auth answers 401 rather than 200, and reading
-// that as "not running" would re-spawn a healthy instance.
-func (is *InstanceSpawner) IsInstanceRunning(httpPort int) bool {
-	user, pass := adminCredentialsFromFile(is.authFile)
-	client := NewAdminClient(fmt.Sprintf("http://localhost:%d", httpPort), user, pass)
-	_, err := client.Status(context.Background())
-	return err == nil
 }
 
 // HasExistingData checks if a RQLite instance has existing data (raft.db indicates prior startup)

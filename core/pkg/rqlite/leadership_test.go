@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -54,31 +53,15 @@ func newFakeRQLite(t *testing.T, state string, nodes []map[string]any) *fakeRQLi
 		}
 		w.WriteHeader(f.transferStatus)
 	})
-	f.srv = httptest.NewServer(mux)
+	// rqlited always runs with -auth, so the fake refuses unauthenticated calls.
+	f.srv = httptest.NewServer(requireBasicAuth(testUser, testPass, mux))
 	t.Cleanup(f.srv.Close)
 	return f
 }
 
-func (f *fakeRQLite) port(t *testing.T) int {
+func (f *fakeRQLite) endpoint(t *testing.T) Endpoint {
 	t.Helper()
-	_, portStr, err := splitHostPortForTest(f.srv.URL)
-	if err != nil {
-		t.Fatalf("parse test server URL: %v", err)
-	}
-	p, err := strconv.Atoi(portStr)
-	if err != nil {
-		t.Fatalf("port %q: %v", portStr, err)
-	}
-	return p
-}
-
-func splitHostPortForTest(url string) (string, string, error) {
-	trimmed := strings.TrimPrefix(url, "http://")
-	i := strings.LastIndex(trimmed, ":")
-	if i < 0 {
-		return "", "", errors.New("no port")
-	}
-	return trimmed[:i], trimmed[i+1:], nil
+	return testEndpoint(t, f.srv.URL)
 }
 
 func voterNode(reachable bool, id string) map[string]any {
@@ -88,7 +71,7 @@ func voterNode(reachable bool, id string) map[string]any {
 // A follower has nothing to hand over, and must not POST a transfer.
 func TestTransferLeadershipNoOpOnFollower(t *testing.T) {
 	f := newFakeRQLite(t, "Follower", []map[string]any{voterNode(true, "a"), voterNode(true, "b")})
-	if err := TransferLeadership(f.port(t), zap.NewNop()); err != nil {
+	if err := TransferLeadership(f.endpoint(t), zap.NewNop()); err != nil {
 		t.Fatalf("follower transfer returned error: %v", err)
 	}
 	if n := f.transfers.Load(); n != 0 {
@@ -100,7 +83,7 @@ func TestTransferLeadershipNoOpOnFollower(t *testing.T) {
 func TestTransferLeadershipSucceedsWhenNodeStepsDown(t *testing.T) {
 	f := newFakeRQLite(t, "Leader", []map[string]any{voterNode(true, "peer-1")})
 	f.stepDownOnTransfer = true
-	if err := TransferLeadership(f.port(t), zap.NewNop()); err != nil {
+	if err := TransferLeadership(f.endpoint(t), zap.NewNop()); err != nil {
 		t.Fatalf("transfer returned error: %v", err)
 	}
 	if n := f.transfers.Load(); n != 1 {
@@ -119,7 +102,7 @@ func TestTransferLeadershipFailsWhenStillLeader(t *testing.T) {
 	defer func() { transferStepDownTimeout = orig }()
 
 	done := make(chan error, 1)
-	go func() { done <- TransferLeadershipTo(f.port(t), "peer-1", zap.NewNop()) }()
+	go func() { done <- TransferLeadershipTo(f.endpoint(t), "peer-1", zap.NewNop()) }()
 
 	select {
 	case err := <-done:
@@ -138,7 +121,7 @@ func TestTransferLeadershipFailsWhenStillLeader(t *testing.T) {
 // not a shrug.
 func TestTransferLeadershipNoEligibleTarget(t *testing.T) {
 	f := newFakeRQLite(t, "Leader", []map[string]any{voterNode(false, "peer-1")})
-	err := TransferLeadership(f.port(t), zap.NewNop())
+	err := TransferLeadership(f.endpoint(t), zap.NewNop())
 	if !errors.Is(err, ErrNoTransferTarget) {
 		t.Fatalf("error = %v, want ErrNoTransferTarget", err)
 	}
@@ -151,7 +134,7 @@ func TestTransferLeadershipNoEligibleTarget(t *testing.T) {
 func TestTransferLeadershipToPropagatesHTTPError(t *testing.T) {
 	f := newFakeRQLite(t, "Leader", []map[string]any{voterNode(true, "peer-1")})
 	f.transferStatus = http.StatusInternalServerError
-	err := TransferLeadershipTo(f.port(t), "peer-1", zap.NewNop())
+	err := TransferLeadershipTo(f.endpoint(t), "peer-1", zap.NewNop())
 	if err == nil {
 		t.Fatal("HTTP 500 from transfer-leadership was treated as success")
 	}
@@ -165,7 +148,7 @@ func TestTransferLeadershipToPropagatesHTTPError(t *testing.T) {
 func TestTransferLeadershipToToleratesMissingAPI(t *testing.T) {
 	f := newFakeRQLite(t, "Leader", []map[string]any{voterNode(true, "peer-1")})
 	f.transferStatus = http.StatusNotFound
-	if err := TransferLeadershipTo(f.port(t), "peer-1", zap.NewNop()); err != nil {
+	if err := TransferLeadershipTo(f.endpoint(t), "peer-1", zap.NewNop()); err != nil {
 		t.Fatalf("404 should be tolerated, got %v", err)
 	}
 }

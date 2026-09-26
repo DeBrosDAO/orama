@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/discovery"
+	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/node/boot"
@@ -89,6 +90,12 @@ type Node struct {
 	// wgSyncMu serialises wg0.conf writes between a supervisor retry and the
 	// periodic sync loop.
 	wgSyncMu sync.Mutex
+
+	// wgPersisted is the peer set this process last wrote to wg0.conf, nil
+	// until a write succeeds (persistWireGuardPeers). wgPersistMu guards it:
+	// the boot-time mesh repair reconciles outside wgSyncMu.
+	wgPersistMu sync.Mutex
+	wgPersisted map[string]install.WireGuardPeer
 
 	// coreAPI records this node's own existence and liveness in the core
 	// cluster, over the index gateway on this host. It is built on first use

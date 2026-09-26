@@ -12,12 +12,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
+	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -352,17 +356,15 @@ func generateWGKeypair() (privKey, pubKey string, err error) {
 	return privKey, pubKey, nil
 }
 
-// addWGPeerLocally adds a peer to the local wg0 interface.
+// addWGPeerLocally adds a peer to the local wg0 interface and wg0.conf,
+// through orama-privhelper: the gateway runs as the orama user without
+// CAP_NET_ADMIN, so a direct `wg set` failed.
 func (h *Handler) addWGPeerLocally(pubKey, publicIP, wgIP string) error {
-	cmd := exec.Command("wg", "set", "wg0",
-		"peer", pubKey,
-		"endpoint", fmt.Sprintf("%s:51820", publicIP),
-		"allowed-ips", fmt.Sprintf("%s/32", wgIP),
-		"persistent-keepalive", "25")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("wg set failed: %w\n%s", err, string(output))
-	}
-	return nil
+	return privhelper.AddWireGuardPeer(wireguard.Peer{
+		PublicKey: pubKey,
+		Endpoint:  net.JoinHostPort(publicIP, strconv.Itoa(constants.WireGuardPort)),
+		AllowedIP: wgIP + "/32",
+	})
 }
 
 // buildWGConfig generates a wg0.conf for the OramaOS node.

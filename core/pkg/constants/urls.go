@@ -18,15 +18,15 @@ const (
 	IPFSSwarmPort = 4101
 	// IPFSGatewayPort is Kubo's read-only HTTP gateway.
 	IPFSGatewayPort = 8080
+	// NodeLibP2PPort is the orama node's own libp2p host, which bootstrap
+	// peers dial over the WireGuard overlay.
+	NodeLibP2PPort = 4001
 )
 
 // hostPortURL builds "http://host:port", bracketing IPv6 hosts correctly.
 func hostPortURL(host string, port int) string {
 	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
-
-// LocalRQLiteURL is the index RQLite HTTP API on this node.
-func LocalRQLiteURL() string { return hostPortURL("localhost", RQLiteHTTPPort) }
 
 // LocalGatewayURL is the index gateway HTTP API on this node.
 func LocalGatewayURL() string { return hostPortURL("localhost", GatewayAPIPort) }

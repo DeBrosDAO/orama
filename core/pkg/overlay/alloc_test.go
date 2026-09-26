@@ -3,6 +3,7 @@ package overlay
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"reflect"
@@ -61,7 +62,10 @@ func (f *fakeDB) Exec(_ context.Context, query string, args ...any) (sql.Result,
 }
 
 func newPeer() Peer {
-	return Peer{PublicKey: "key", PublicIP: "1.2.3.4"}
+	return Peer{
+		PublicKey: base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		PublicIP:  "1.2.3.4",
+	}
 }
 
 func TestRegister_empty_table_starts_at_first_host(t *testing.T) {
@@ -145,6 +149,25 @@ func TestRegister_exhausted_address_space(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "10.0.0.2-254") {
 		t.Fatalf("error %q should name the exhausted range", err)
+	}
+}
+
+func TestRegister_rejectsAPeerTheMeshCannotApply(t *testing.T) {
+	good := newPeer()
+	for _, tc := range []struct {
+		name string
+		p    Peer
+	}{
+		{"public IP is a name", func() Peer { p := good; p.PublicIP = "example.com"; return p }()},
+		{"public IP is not canonical", func() Peer { p := good; p.PublicIP = "1.2.3.4 "; return p }()},
+		{"public IP is IPv6", func() Peer { p := good; p.PublicIP = "2001:db8::1"; return p }()},
+		{"key is not a WireGuard key", func() Peer { p := good; p.PublicKey = "key"; return p }()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Register(context.Background(), &fakeDB{}, tc.p); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
 	}
 }
 

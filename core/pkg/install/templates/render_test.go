@@ -223,3 +223,19 @@ func TestRenderWithMultipleBootstrapPeers(t *testing.T) {
 		}
 	}
 }
+
+// orama-node's libp2p host listened on 0.0.0.0:4001, the public interface
+// included. Its peers dial it over the mesh, so it binds the node's WireGuard
+// address.
+func TestRenderNodeConfig_libp2pListensOnTheOverlay(t *testing.T) {
+	result, err := RenderNodeConfig(NodeConfigData{NodeID: "n", P2PPort: 4001, WGIP: "10.0.0.7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "listen_addresses:\n    - \"/ip4/10.0.0.7/tcp/4001\"") {
+		t.Errorf("libp2p does not listen on the WireGuard address:\n%s", result)
+	}
+	if strings.Contains(result, "0.0.0.0") {
+		t.Error("the node config binds something to every interface")
+	}
+}

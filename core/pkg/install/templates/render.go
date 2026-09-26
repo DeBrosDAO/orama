@@ -8,7 +8,7 @@ import (
 	"text/template"
 )
 
-//go:embed *.yaml *.service
+//go:embed *.yaml
 var templatesFS embed.FS
 
 // NodeConfigData holds parameters for node.yaml rendering (unified - no bootstrap/node distinction)
@@ -41,7 +41,7 @@ type NodeConfigData struct {
 	RaftAdvAddress     string // Advertised Raft address (IP:port or domain:port for SNI)
 	UnifiedGatewayPort int    // Unified gateway port for all node services
 	Domain             string // Domain for this node (e.g., node-123.orama.network)
-	BaseDomain         string // Base domain for deployment routing (e.g., dbrs.space)
+	BaseDomain         string // Base domain for deployment routing (e.g., example.com)
 	EnableHTTPS        bool   // Enable HTTPS/TLS with ACME
 	TLSCacheDir        string // Directory for ACME certificate cache
 	HTTPPort           int    // HTTP port for ACME challenges (usually 80)
@@ -84,7 +84,7 @@ type NodeConfigData struct {
 	// set — clusters without TURN render nothing.
 	WebRTCEnabled bool   // Whether to emit the webrtc block
 	SFUPort       int    // Local SFU signaling port the gateway proxies to
-	TURNDomain    string // TURN domain (e.g., "turn.ns-myapp.dbrs.space")
+	TURNDomain    string // TURN domain (e.g., "turn.ns-myapp.example.com")
 	TURNSecret    string // HMAC-SHA1 shared secret for TURN credential generation
 
 	// SNIRouterEnabled gates the stealth TURN-over-443 SNI router (feat-124).
@@ -96,6 +96,15 @@ type NodeConfigData struct {
 	// an operator's opt-in (the same preserve-from-existing discipline as the
 	// webrtc block, bugboard #259/#846).
 	SNIRouterEnabled bool
+
+	// ACMECA is the ACME directory Caddy issues certificates from; empty is
+	// Caddy's default (Let's Encrypt production). Set by `orama node install
+	// --acme-ca` and carried forward across regenerations.
+	ACMECA string
+
+	// PublicIP is the node's public address (orama node install --vps-ip),
+	// which an invite minted on this node names as the gateway to join.
+	PublicIP string
 }
 
 // GatewayConfigData holds parameters for gateway.yaml rendering
@@ -122,41 +131,6 @@ type OlricConfigData struct {
 	Peers                   []string // Seed peers for memberlist (host:port)
 }
 
-// SystemdIPFSData holds parameters for systemd IPFS service rendering
-type SystemdIPFSData struct {
-	HomeDir      string
-	IPFSRepoPath string
-	SecretsDir   string
-	OramaDir     string
-}
-
-// SystemdIPFSClusterData holds parameters for systemd IPFS Cluster service rendering
-type SystemdIPFSClusterData struct {
-	HomeDir     string
-	ClusterPath string
-	OramaDir    string
-}
-
-// SystemdOlricData holds parameters for systemd Olric service rendering
-type SystemdOlricData struct {
-	HomeDir    string
-	ConfigPath string
-	OramaDir   string
-}
-
-// SystemdNodeData holds parameters for systemd Node service rendering
-type SystemdNodeData struct {
-	HomeDir    string
-	ConfigFile string
-	OramaDir   string
-}
-
-// SystemdGatewayData holds parameters for systemd Gateway service rendering
-type SystemdGatewayData struct {
-	HomeDir  string
-	OramaDir string
-}
-
 // RenderNodeConfig renders the node config template with the given data
 func RenderNodeConfig(data NodeConfigData) (string, error) {
 	return renderTemplate("node.yaml", data)
@@ -170,31 +144,6 @@ func RenderGatewayConfig(data GatewayConfigData) (string, error) {
 // RenderOlricConfig renders the olric config template with the given data
 func RenderOlricConfig(data OlricConfigData) (string, error) {
 	return renderTemplate("olric.yaml", data)
-}
-
-// RenderIPFSService renders the IPFS systemd service template
-func RenderIPFSService(data SystemdIPFSData) (string, error) {
-	return renderTemplate("systemd_ipfs.service", data)
-}
-
-// RenderIPFSClusterService renders the IPFS Cluster systemd service template
-func RenderIPFSClusterService(data SystemdIPFSClusterData) (string, error) {
-	return renderTemplate("systemd_ipfs_cluster.service", data)
-}
-
-// RenderOlricService renders the Olric systemd service template
-func RenderOlricService(data SystemdOlricData) (string, error) {
-	return renderTemplate("systemd_olric.service", data)
-}
-
-// RenderNodeService renders the Orama Node systemd service template
-func RenderNodeService(data SystemdNodeData) (string, error) {
-	return renderTemplate("systemd_node.service", data)
-}
-
-// RenderGatewayService renders the Orama Gateway systemd service template
-func RenderGatewayService(data SystemdGatewayData) (string, error) {
-	return renderTemplate("systemd_gateway.service", data)
 }
 
 // normalizeTemplate normalizes template placeholders from spaced format { { .Var } } to {{.Var}}

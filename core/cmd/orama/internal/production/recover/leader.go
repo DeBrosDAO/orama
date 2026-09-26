@@ -8,6 +8,8 @@ import (
 	"sync"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // nodeIndex is how far one node's raft log has been applied.
@@ -82,7 +84,7 @@ func readAppliedIndexes(nodes []inspector.Node) []nodeIndex {
 
 // readAppliedIndex reads one node's applied index and raft state.
 func readAppliedIndex(node inspector.Node) nodeIndex {
-	cmd := fmt.Sprintf("curl -sS --max-time 5 http://localhost:%d/status", rqlitePort)
+	cmd := rqlite.NodeShellCurl(remotessh.SudoPrefix(node), "-sS --max-time 5", "/status")
 	res := inspector.RunSSH(context.Background(), node, cmd)
 	if !res.OK() {
 		return nodeIndex{Node: node, Err: fmt.Errorf("rqlite did not answer: %v", res.Err)}

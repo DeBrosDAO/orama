@@ -2,9 +2,11 @@ package lifecycle
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -140,6 +142,11 @@ func TestCountVotersIgnoresNonVoters(t *testing.T) {
 // an error rather than as empty data.
 func TestLocalReadersAgainstFakeRQLite(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// rqlited always runs with -auth.
+		if u, p, ok := r.BasicAuth(); !ok || u != testRQLiteUser || p != testRQLitePass {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/status"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -156,9 +163,7 @@ func TestLocalReadersAgainstFakeRQLite(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := rqliteBaseURL
-	rqliteBaseURL = func() string { return srv.URL }
-	defer func() { rqliteBaseURL = orig }()
+	useRQLite(t, strings.TrimPrefix(srv.URL, "http://"))
 
 	status, err := localRQLiteStatus()
 	if err != nil {
@@ -184,9 +189,7 @@ func TestQuorumGetTreatsNon200AsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := rqliteBaseURL
-	rqliteBaseURL = func() string { return srv.URL }
-	defer func() { rqliteBaseURL = orig }()
+	useRQLite(t, strings.TrimPrefix(srv.URL, "http://"))
 
 	if _, err := localRQLiteStatus(); err == nil {
 		t.Fatal("a 503 status response was accepted as a valid reading")
@@ -196,12 +199,11 @@ func TestQuorumGetTreatsNon200AsError(t *testing.T) {
 // End to end through checkQuorumSafety: an unreachable RQLite that systemd
 // reports as active must refuse.
 func TestCheckQuorumSafetyRefusesWhenUnreadableButRunning(t *testing.T) {
-	origURL := rqliteBaseURL
 	origActive := serviceActive
 	// A port nothing listens on.
-	rqliteBaseURL = func() string { return "http://127.0.0.1:1" }
+	useRQLite(t, "127.0.0.1:1")
 	serviceActive = func(string) (bool, error) { return true, nil }
-	defer func() { rqliteBaseURL = origURL; serviceActive = origActive }()
+	defer func() { serviceActive = origActive }()
 
 	if got := checkQuorumSafety(); got == "" {
 		t.Fatal("unreachable-but-running RQLite was reported safe to stop")
@@ -209,13 +211,91 @@ func TestCheckQuorumSafetyRefusesWhenUnreadableButRunning(t *testing.T) {
 }
 
 func TestCheckQuorumSafetyAllowsWhenRQLiteStopped(t *testing.T) {
-	origURL := rqliteBaseURL
 	origActive := serviceActive
-	rqliteBaseURL = func() string { return "http://127.0.0.1:1" }
+	useRQLite(t, "127.0.0.1:1")
 	serviceActive = func(string) (bool, error) { return false, nil }
-	defer func() { rqliteBaseURL = origURL; serviceActive = origActive }()
+	defer func() { serviceActive = origActive }()
 
 	if got := checkQuorumSafety(); got != "" {
 		t.Fatalf("stopped RQLite should be safe to stop, got refusal: %s", got)
+	}
+}
+
+const (
+	testRQLiteUser = "orama"
+	testRQLitePass = "0123456789abcdef"
+)
+
+// useRQLite points the quorum readers at hostPort with the test credentials
+// for the duration of the test.
+func useRQLite(t *testing.T, hostPort string) {
+	t.Helper()
+	ep, err := rqlite.NewEndpoint(hostPort, testRQLiteUser, testRQLitePass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := localRQLite
+	localRQLite = func() (rqlite.Endpoint, error) { return ep, nil }
+	t.Cleanup(func() { localRQLite = orig })
+}
+
+// A node whose node.yaml cannot be resolved (no address or credentials) has an
+// unknown quorum position; with rqlited running that must refuse, not approve.
+func TestCheckQuorumSafetyRefusesWhenEndpointUnresolvable(t *testing.T) {
+	origEP, origActive := localRQLite, serviceActive
+	localRQLite = func() (rqlite.Endpoint, error) {
+		return rqlite.Endpoint{}, errors.New("node config /opt/orama/.orama/configs/node.yaml: rqlite advertise address is empty")
+	}
+	serviceActive = func(string) (bool, error) { return true, nil }
+	defer func() { localRQLite, serviceActive = origEP, origActive }()
+
+	got := checkQuorumSafety()
+	if got == "" {
+		t.Fatal("an unresolvable rqlite endpoint was reported safe to stop")
+	}
+	if !strings.Contains(got, "advertise address is empty") {
+		t.Errorf("refusal %q does not carry the reason", got)
+	}
+}
+
+// On 0.122.x the index rqlited was orama-node's child, not
+// orama-namespace-rqlite@index. The upgrade from 0.122.x runs the hand-over on
+// such a node (no rqlite template installed), so an unreadable status with
+// orama-node active is "may be running" — refused — and only neither unit
+// active is "not running".
+func TestQuorumVerdict_legacySupervisorCountsOnTheLegacyLayout(t *testing.T) {
+	origEP, origActive, origStat := localRQLite, serviceActive, statUnit
+	localRQLite = func() (rqlite.Endpoint, error) { return rqlite.Endpoint{}, fmt.Errorf("no node.yaml") }
+	statUnit = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	defer func() { localRQLite, serviceActive, statUnit = origEP, origActive, origStat }()
+
+	serviceActive = func(unit string) (bool, error) { return unit == "orama-node", nil }
+	if warning, running := quorumVerdict(); warning == "" || !running {
+		t.Errorf("orama-node active: warning %q, running %v; want a refusal", warning, running)
+	}
+
+	serviceActive = func(string) (bool, error) { return false, nil }
+	if warning, running := quorumVerdict(); warning != "" || running {
+		t.Errorf("nothing active: warning %q, running %v; want safe and not running", warning, running)
+	}
+
+	serviceActive = func(string) (bool, error) { return false, fmt.Errorf("dbus down") }
+	if _, running := quorumVerdict(); !running {
+		t.Error("an unreadable systemd was taken for a stopped rqlite")
+	}
+}
+
+// On this release orama-node is always active and never runs rqlited: a node
+// whose rqlite@index is down stays stoppable (and restartable, and upgradable)
+// without --force.
+func TestQuorumVerdict_currentLayoutIgnoresTheSupervisor(t *testing.T) {
+	origEP, origActive, origStat := localRQLite, serviceActive, statUnit
+	localRQLite = func() (rqlite.Endpoint, error) { return rqlite.Endpoint{}, fmt.Errorf("connection refused") }
+	statUnit = func(string) (os.FileInfo, error) { return nil, nil }
+	serviceActive = func(unit string) (bool, error) { return unit == "orama-node", nil }
+	defer func() { localRQLite, serviceActive, statUnit = origEP, origActive, origStat }()
+
+	if warning, running := quorumVerdict(); warning != "" || running {
+		t.Errorf("rqlite@index down on this release: warning %q, running %v", warning, running)
 	}
 }

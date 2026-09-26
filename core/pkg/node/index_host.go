@@ -14,7 +14,11 @@ func (n *Node) indexSupervisor() (*namespace.IndexSupervisor, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	return namespace.NewIndexSupervisor(filepath.Dir(dataDir), n.logger.Logger), n.nodeID(), nil
+	nodeID, err := n.nodeID()
+	if err != nil {
+		return nil, "", err
+	}
+	return namespace.NewIndexSupervisor(filepath.Dir(dataDir), n.logger.Logger), nodeID, nil
 }
 
 // startIndexWireGuard brings up existing wg0 before libp2p / rqlite need the mesh.

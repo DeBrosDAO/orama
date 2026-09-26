@@ -1,9 +1,9 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"io"
 	"net"
 	"net/http"
@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -62,22 +64,19 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		checks = append(checks, check{"Services running", "PASS", fmt.Sprintf("All %d services running", running)})
 	}
 
-	// 3. Check RQLite health
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(constants.LocalRQLiteURL() + "/status")
-	if err != nil {
-		checks = append(checks, check{"RQLite reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
+	// 3. Check RQLite health, where it binds and with its credentials.
+	if ep, err := rqlite.LocalNodeEndpoint(); err != nil {
+		checks = append(checks, check{"RQLite reachable", "FAIL", err.Error()})
+	} else if _, err := ep.Admin().Status(context.Background()); err != nil {
+		checks = append(checks, check{"RQLite reachable", "FAIL", fmt.Sprintf("Cannot read %s/status: %v", ep, err)})
 	} else {
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			checks = append(checks, check{"RQLite reachable", "PASS", fmt.Sprintf("HTTP API responding on :%d", constants.RQLiteHTTPPort)})
-		} else {
-			checks = append(checks, check{"RQLite reachable", "WARN", fmt.Sprintf("HTTP %d", resp.StatusCode)})
-		}
+		checks = append(checks, check{"RQLite reachable", "PASS", fmt.Sprintf("HTTP API responding on %s", ep)})
 	}
 
+	client := &http.Client{Timeout: 5 * time.Second}
+
 	// 4. Check Olric health
-	resp, err = client.Get(constants.LocalOlricURL() + "/")
+	resp, err := client.Get(constants.LocalOlricURL() + "/")
 	if err != nil {
 		checks = append(checks, check{"Olric reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
 	} else {

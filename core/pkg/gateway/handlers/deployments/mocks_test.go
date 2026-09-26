@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"io"
 
-	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
@@ -185,88 +184,4 @@ func (m *mockRQLiteClient) BatchQuery(ctx context.Context, ops []rqlite.BatchOp)
 		out[i] = rqlite.OpResult{Kind: rqlite.BatchOpQuery}
 	}
 	return out, nil
-}
-
-// mockProcessManager implements a mock process manager for testing
-type mockProcessManager struct {
-	StartFunc   func(ctx context.Context, deployment *deployments.Deployment, workDir string) error
-	StopFunc    func(ctx context.Context, deployment *deployments.Deployment) error
-	RestartFunc func(ctx context.Context, deployment *deployments.Deployment) error
-	StatusFunc  func(ctx context.Context, deployment *deployments.Deployment) (string, error)
-	GetLogsFunc func(ctx context.Context, deployment *deployments.Deployment, lines int, follow bool) ([]byte, error)
-}
-
-func (m *mockProcessManager) Start(ctx context.Context, deployment *deployments.Deployment, workDir string) error {
-	if m.StartFunc != nil {
-		return m.StartFunc(ctx, deployment, workDir)
-	}
-	return nil
-}
-
-func (m *mockProcessManager) Stop(ctx context.Context, deployment *deployments.Deployment) error {
-	if m.StopFunc != nil {
-		return m.StopFunc(ctx, deployment)
-	}
-	return nil
-}
-
-func (m *mockProcessManager) Restart(ctx context.Context, deployment *deployments.Deployment) error {
-	if m.RestartFunc != nil {
-		return m.RestartFunc(ctx, deployment)
-	}
-	return nil
-}
-
-func (m *mockProcessManager) Status(ctx context.Context, deployment *deployments.Deployment) (string, error) {
-	if m.StatusFunc != nil {
-		return m.StatusFunc(ctx, deployment)
-	}
-	return "active", nil
-}
-
-func (m *mockProcessManager) GetLogs(ctx context.Context, deployment *deployments.Deployment, lines int, follow bool) ([]byte, error) {
-	if m.GetLogsFunc != nil {
-		return m.GetLogsFunc(ctx, deployment, lines, follow)
-	}
-	return []byte("mock logs"), nil
-}
-
-// mockHomeNodeManager implements a mock home node manager for testing
-type mockHomeNodeManager struct {
-	AssignHomeNodeFunc func(ctx context.Context, namespace string) (string, error)
-	GetHomeNodeFunc    func(ctx context.Context, namespace string) (string, error)
-}
-
-func (m *mockHomeNodeManager) AssignHomeNode(ctx context.Context, namespace string) (string, error) {
-	if m.AssignHomeNodeFunc != nil {
-		return m.AssignHomeNodeFunc(ctx, namespace)
-	}
-	return "node-test123", nil
-}
-
-func (m *mockHomeNodeManager) GetHomeNode(ctx context.Context, namespace string) (string, error) {
-	if m.GetHomeNodeFunc != nil {
-		return m.GetHomeNodeFunc(ctx, namespace)
-	}
-	return "node-test123", nil
-}
-
-// mockPortAllocator implements a mock port allocator for testing
-type mockPortAllocator struct {
-	AllocatePortFunc func(ctx context.Context, nodeID, deploymentID string) (int, error)
-	ReleasePortFunc  func(ctx context.Context, nodeID string, port int) error
-}
-
-func (m *mockPortAllocator) AllocatePort(ctx context.Context, nodeID, deploymentID string) (int, error) {
-	if m.AllocatePortFunc != nil {
-		return m.AllocatePortFunc(ctx, nodeID, deploymentID)
-	}
-	return 10100, nil
-}
-
-func (m *mockPortAllocator) ReleasePort(ctx context.Context, nodeID string, port int) error {
-	if m.ReleasePortFunc != nil {
-		return m.ReleasePortFunc(ctx, nodeID, port)
-	}
-	return nil
 }

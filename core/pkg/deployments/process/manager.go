@@ -13,17 +13,16 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"go.uber.org/zap"
 )
 
 // Config is what the process manager needs from the gateway that owns it.
 type Config struct {
-	// EnvDir holds one environment file per deployment. It is separate from
-	// the deployment's own directory, which is world-readable so that the
-	// deployment's unprivileged user can read the code it runs; the
-	// environment is where the tenant's secrets are, and it is 0600.
-	EnvDir string
+	// Stager stores each deployment's environment file and workload token
+	// where its unit reads them. On a node it is HelperStager.
+	Stager Stager
 
 	// BaseDomain is the cluster's domain, used to tell a deployment the URL of
 	// its own namespace's gateway.
@@ -34,13 +33,17 @@ type Config struct {
 type Manager struct {
 	logger     *zap.Logger
 	useSystemd bool
-	envDir     string
+	stager     Stager
 	baseDomain string
 
 	// mintWorkloadToken issues the credential a deployment runs with. It is
 	// injected rather than imported so this package does not depend on the
 	// auth service, and so a test can watch what a deployment is handed.
 	mintWorkloadToken WorkloadTokenMinter
+
+	// systemctl runs one systemctl command on a deployment unit. Nil means
+	// runSystemctl, through orama-privhelper; a test sets it to watch the calls.
+	systemctl func(args ...string) error
 
 	// For non-systemd mode: track running processes
 	processes   map[string]*exec.Cmd
@@ -68,7 +71,7 @@ func NewManager(logger *zap.Logger, cfg Config) *Manager {
 	return &Manager{
 		logger:     logger,
 		useSystemd: useSystemd,
-		envDir:     strings.TrimSpace(cfg.EnvDir),
+		stager:     cfg.Stager,
 		baseDomain: strings.TrimSpace(cfg.BaseDomain),
 		processes:  make(map[string]*exec.Cmd),
 	}
@@ -102,22 +105,47 @@ func (m *Manager) deploymentEnv(deployment *deployments.Deployment, serviceName 
 	))
 }
 
-// tokenFilePath is where one deployment's credential lives before systemd
-// stages it. Only the gateway can read it; systemd reads it as PID 1 and hands
-// the deployment a copy owned by the deployment's own user.
-func (m *Manager) tokenFilePath(serviceName string) string {
-	return filepath.Join(m.envDir, serviceName+".token")
+// Stager stores a deployment's environment file and workload token where its
+// unit's EnvironmentFile= and LoadCredential= read them.
+//
+// They used to be files the gateway wrote into a directory it owns. systemd
+// reads both as PID 1 and follows symlinks, so a compromised gateway could
+// point one at any root-readable file and read it through the deployment. The
+// files now live in a root-only directory written by orama-privhelper
+// (pkg/deploysecrets), and the gateway hands over contents, never paths.
+type Stager interface {
+	SetEnv(instance, contents string) error
+	SetToken(instance, token string) error
+	Clear(instance string) error
 }
 
-// writeWorkloadToken mints the deployment's credential and writes it where the
+// HelperStager is the Stager on a node: orama-privhelper.
+type HelperStager struct{}
+
+func (HelperStager) SetEnv(instance, contents string) error {
+	return privhelper.SetDeploymentEnv(instance, contents)
+}
+
+func (HelperStager) SetToken(instance, token string) error {
+	return privhelper.SetDeploymentToken(instance, token)
+}
+
+func (HelperStager) Clear(instance string) error { return privhelper.ClearDeployment(instance) }
+
+// unitInstance is the unit instance (%i) for a service name.
+func unitInstance(serviceName string) string {
+	return strings.TrimPrefix(serviceName, UnitPrefix)
+}
+
+// writeWorkloadToken mints the deployment's credential and stores it where the
 // unit's LoadCredential= will find it.
 //
 // A failure here fails the deploy. The unit refuses to start without the file,
 // and a deployment started with no identity is the permanent-key situation this
 // replaces: it would work, and nothing it did would be attributable.
 func (m *Manager) writeWorkloadToken(ctx context.Context, deployment *deployments.Deployment, serviceName string) error {
-	if m.envDir == "" {
-		return fmt.Errorf("no environment directory is configured, so a deployment's credential has nowhere to go")
+	if m.stager == nil {
+		return fmt.Errorf("no deployment stager is configured, so the credential of %s has nowhere to go", serviceName)
 	}
 	if m.mintWorkloadToken == nil {
 		return fmt.Errorf("this gateway cannot mint a workload token, so %s would run with no identity", serviceName)
@@ -127,77 +155,41 @@ func (m *Manager) writeWorkloadToken(ctx context.Context, deployment *deployment
 	if err != nil {
 		return fmt.Errorf("mint the credential for %s: %w", serviceName, err)
 	}
-
-	path := m.tokenFilePath(serviceName)
-	if err := os.WriteFile(path, []byte(token), 0600); err != nil {
-		return fmt.Errorf("write the credential for %s: %w", serviceName, err)
-	}
-	return os.Chmod(path, 0600)
-}
-
-// removeWorkloadToken deletes a stopped deployment's credential.
-func (m *Manager) removeWorkloadToken(serviceName string) error {
-	if m.envDir == "" {
-		return nil
-	}
-	if err := os.Remove(m.tokenFilePath(serviceName)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove the credential for %s: %w", serviceName, err)
+	if err := m.stager.SetToken(unitInstance(serviceName), token); err != nil {
+		return fmt.Errorf("store the credential for %s: %w", serviceName, err)
 	}
 	return nil
 }
 
-// envFilePath is where one deployment's environment file lives.
-func (m *Manager) envFilePath(serviceName string) string {
-	return filepath.Join(m.envDir, serviceName+".env")
-}
-
-// writeEnvFile writes the deployment's environment where only root can read it.
+// writeEnvFile stores the deployment's environment where only root can read it.
 //
 // systemd reads EnvironmentFile= as PID 1, before it drops to the deployment's
 // own user, so the file never has to be readable by the deployment itself —
 // and it must not be, because it holds the tenant's secrets and the deployment
 // is the tenant's code.
-func (m *Manager) writeEnvFile(deployment *deployments.Deployment, serviceName string) (string, error) {
-	if m.envDir == "" {
-		return "", fmt.Errorf("no environment directory is configured, so a deployment's environment " +
-			"has nowhere to go that is not world-readable")
+func (m *Manager) writeEnvFile(deployment *deployments.Deployment, serviceName string) error {
+	if m.stager == nil {
+		return fmt.Errorf("no deployment stager is configured, so the environment of %s has nowhere safe to go", serviceName)
 	}
-	if err := os.MkdirAll(m.envDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to create the deployment environment directory %s: %w", m.envDir, err)
-	}
-	// MkdirAll and WriteFile only apply their mode when they create the thing,
-	// and the umask can only narrow it further, so the mode is set explicitly
-	// afterwards as well. Both are kept: the mode on creation means the file
-	// never exists in a looser mode even for the moment between the two calls,
-	// and the chmod is what fixes a directory or file an earlier version left
-	// behind.
-	if err := os.Chmod(m.envDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to restrict the deployment environment directory %s: %w", m.envDir, err)
-	}
-
 	contents, err := deployments.RenderEnvFile(m.deploymentEnv(deployment, serviceName))
 	if err != nil {
-		return "", fmt.Errorf("failed to render the environment of %s: %w", serviceName, err)
+		return fmt.Errorf("failed to render the environment of %s: %w", serviceName, err)
 	}
-
-	path := m.envFilePath(serviceName)
-	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
-		return "", fmt.Errorf("failed to write the environment file %s: %w", path, err)
+	if err := m.stager.SetEnv(unitInstance(serviceName), contents); err != nil {
+		return fmt.Errorf("store the environment of %s: %w", serviceName, err)
 	}
-	if err := os.Chmod(path, 0600); err != nil {
-		return "", fmt.Errorf("failed to restrict the environment file %s: %w", path, err)
-	}
-	return path, nil
+	return nil
 }
 
-// removeEnvFile deletes a stopped deployment's environment file. Leaving it
-// behind leaves the tenant's secrets on the node after the deployment is gone.
-func (m *Manager) removeEnvFile(serviceName string) error {
-	if m.envDir == "" {
+// removeSecrets deletes a stopped deployment's environment and credential.
+// Leaving them behind leaves the tenant's secrets on the node after the
+// deployment is gone.
+func (m *Manager) removeSecrets(serviceName string) error {
+	if m.stager == nil {
 		return nil
 	}
-	if err := os.Remove(m.envFilePath(serviceName)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove the environment file for %s: %w", serviceName, err)
+	if err := m.stager.Clear(unitInstance(serviceName)); err != nil {
+		return fmt.Errorf("remove the environment and credential of %s: %w", serviceName, err)
 	}
 	return nil
 }
@@ -226,7 +218,7 @@ func (m *Manager) Start(ctx context.Context, deployment *deployments.Deployment,
 	// template installed at install time, because a gateway that is not root
 	// cannot write into /etc — and must not be root, which is the whole point
 	// of the hardened gateway unit.
-	if _, err := m.writeEnvFile(deployment, serviceName); err != nil {
+	if err := m.writeEnvFile(deployment, serviceName); err != nil {
 		return err
 	}
 	if err := m.writeWorkloadToken(ctx, deployment, serviceName); err != nil {
@@ -343,8 +335,9 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 		return err
 	}
 
-	if err := m.systemdStop(unit); err != nil {
-		m.logger.Warn("Failed to stop service", zap.Error(err))
+	stopErr := m.systemdStop(unit)
+	if stopErr != nil {
+		m.logger.Warn("Failed to stop service", zap.Error(stopErr))
 	}
 
 	if err := m.systemdDisable(unit); err != nil {
@@ -356,11 +349,17 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 
 	// The environment file holds the tenant's secrets. Leaving it behind
 	// leaves them on the node after the deployment is gone.
-	if err := m.removeEnvFile(serviceName); err != nil {
+	if err := m.removeSecrets(serviceName); err != nil {
 		m.logger.Error("the deployment's secrets are still on disk", zap.Error(err))
 	}
-	if err := m.removeWorkloadToken(serviceName); err != nil {
-		m.logger.Error("the deployment's credential is still on disk", zap.Error(err))
+
+	// What the build installed goes too, or it outlives the deployment — but
+	// only once the app is stopped: pulling its dependencies from under a
+	// process that is still running breaks it without stopping it.
+	if stopErr == nil && UsesBuildOutput(deployment.Type) {
+		if err := m.ClearDependencies(deployment.Namespace, deployment.Name); err != nil {
+			m.logger.Error("the deployment's installed dependencies are still on disk", zap.Error(err))
+		}
 	}
 
 	return nil
@@ -393,7 +392,7 @@ func (m *Manager) applyResourceLimits(deployment *deployments.Deployment, unit s
 		return nil
 	}
 	args := append([]string{"set-property", unit}, props...)
-	if err := runSystemctl(args...); err != nil {
+	if err := m.runSystemctl(args...); err != nil {
 		return fmt.Errorf("failed to apply the resource limits of %s: %w", unit, err)
 	}
 	return nil
@@ -463,7 +462,7 @@ func (m *Manager) Reconfigure(ctx context.Context, deployment *deployments.Deplo
 	if err != nil {
 		return err
 	}
-	if _, err := m.writeEnvFile(deployment, m.getServiceName(deployment)); err != nil {
+	if err := m.writeEnvFile(deployment, m.getServiceName(deployment)); err != nil {
 		return fmt.Errorf("failed to rewrite the environment of %s: %w", unit, err)
 	}
 	// A restart re-reads the credential, so it is minted fresh here too: a
@@ -591,37 +590,39 @@ func (m *Manager) getServiceName(deployment *deployments.Deployment) string {
 
 // systemd helper methods.
 //
-// These called systemctl directly, which only works as root. The gateway is
-// still root on the running fleet, which is why deployments work at all today
-// and why they run as root; the hardened gateway unit moves it to the
-// unprivileged orama user, and then a direct systemctl stops working.
-// systemd.Systemctl is the same call the rest of the node makes: a plain
-// systemctl as root, and otherwise sudo through orama-privhelper, which allows
-// these verbs on orama-deploy-* units (pkg/privhelper). A process whose unit
-// sets NoNewPrivileges — the hardened gateway unit does — cannot gain root
-// through sudo at all.
-func (m *Manager) systemdReload() error {
-	return runSystemctl("daemon-reload")
-}
-
+// These called systemctl directly, which only works as root, and the gateway
+// runs as the orama user under NoNewPrivileges. systemd.Systemctl is the call
+// the rest of the node makes: systemctl itself when this process is root, and
+// otherwise `orama-privhelper call`, which hands the request over the helper's
+// socket to a root service that allows exactly SystemctlVerbs on
+// orama-deploy-* units (pkg/privhelper). No privilege is gained in this
+// process, so it works under NoNewPrivileges; sudo is not involved.
 func (m *Manager) systemdEnable(serviceName string) error {
-	return runSystemctl("enable", serviceName)
+	return m.runSystemctl("enable", serviceName)
 }
 
 func (m *Manager) systemdDisable(serviceName string) error {
-	return runSystemctl("disable", serviceName)
+	return m.runSystemctl("disable", serviceName)
 }
 
 func (m *Manager) systemdStart(serviceName string) error {
-	return runSystemctl("start", serviceName)
+	return m.runSystemctl("start", serviceName)
 }
 
 func (m *Manager) systemdStop(serviceName string) error {
-	return runSystemctl("stop", serviceName)
+	return m.runSystemctl("stop", serviceName)
 }
 
 func (m *Manager) systemdRestart(serviceName string) error {
-	return runSystemctl("restart", serviceName)
+	return m.runSystemctl("restart", serviceName)
+}
+
+// runSystemctl runs systemctl through the manager's seam.
+func (m *Manager) runSystemctl(args ...string) error {
+	if m.systemctl != nil {
+		return m.systemctl(args...)
+	}
+	return runSystemctl(args...)
 }
 
 // runSystemctl reports what systemctl said, not just that it failed.

@@ -32,8 +32,12 @@ type CronScheduler struct {
 	pollInterval time.Duration
 	batchLimit   int
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	// mu guards cancel and stopped: the gateway starts the scheduler from its
+	// readiness goroutine and stops it from Close.
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	stopped bool
+	wg      sync.WaitGroup
 }
 
 // NewCronScheduler builds a scheduler. Reasonable defaults: poll every
@@ -69,9 +73,11 @@ func NewCronScheduler(
 }
 
 // Start launches the polling goroutine. Idempotent: a second Start while
-// already running is a no-op.
+// already running is a no-op, and so is a Start after Stop.
 func (s *CronScheduler) Start(ctx context.Context) {
-	if s.cancel != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel != nil || s.stopped {
 		return
 	}
 	runCtx, cancel := context.WithCancel(ctx)
@@ -84,6 +90,9 @@ func (s *CronScheduler) Start(ctx context.Context) {
 // Stop cancels the goroutine and waits for it to exit. Safe to call
 // multiple times.
 func (s *CronScheduler) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = true
 	if s.cancel == nil {
 		return
 	}

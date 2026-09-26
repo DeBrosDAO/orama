@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
 
 // oramaProcessNames lists command substrings that identify orama-related processes.
@@ -116,7 +118,7 @@ func collectManagedPIDs() map[int]bool {
 
 	// Collect PIDs from namespace service instances.
 	// Scan the namespaces data directory (same pattern as GetProductionServices).
-	namespacesDir := "/opt/orama/.orama/data/namespaces"
+	namespacesDir := config.ProductionNamespacesDataDir
 	nsEntries, err := os.ReadDir(namespacesDir)
 	if err == nil {
 		nsServiceTypes := []string{
@@ -133,7 +135,7 @@ func collectManagedPIDs() map[int]bool {
 			}
 			ns := nsEntry.Name()
 			for _, svcType := range nsServiceTypes {
-				envFile := filepath.Join(namespacesDir, ns, svcType+".env")
+				envFile := unitenv.Path(unitenv.Dir, ns, svcType)
 				if _, err := os.Stat(envFile); err == nil {
 					unit := fmt.Sprintf("orama-namespace-%s@%s", svcType, ns)
 					addMainPID(pids, unit)

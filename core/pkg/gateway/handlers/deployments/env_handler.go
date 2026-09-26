@@ -228,6 +228,11 @@ func applyEnvChanges(current, set map[string]string, unset []string) (map[string
 		}
 		delete(updated, key)
 	}
+	// Each value can be within its limit and the whole still too large for
+	// the file the unit reads; that is refused here, not at the next start.
+	if err := deployments.ValidateEnvSize(updated); err != nil {
+		return nil, err
+	}
 	return updated, nil
 }
 
@@ -301,6 +306,9 @@ func parseFormEnv(values map[string][]string) (map[string]string, error) {
 			return nil, err
 		}
 		env[name] = vals[0]
+	}
+	if err := deployments.ValidateEnvSize(env); err != nil {
+		return nil, err
 	}
 	return env, nil
 }

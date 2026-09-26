@@ -255,3 +255,36 @@ func TestUnlockAndLock(t *testing.T) {
 		t.Fatalf("Lock() error: %v", err)
 	}
 }
+
+func TestDeleteSSHEntry(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status  int
+		resp    apiResponse[struct{}]
+		wantErr bool
+	}{
+		"deleted":          {200, apiResponse[struct{}]{OK: true}, false},
+		"already gone":     {404, apiResponse[struct{}]{Code: CodeNotFound, Error: "no SSH key for h/u in the vault"}, false},
+		"wallet is locked": {423, apiResponse[struct{}]{Code: "AGENT_LOCKED", Error: "locked"}, true},
+	} {
+		// No subtests: their names lengthen the temp dir, and a Unix socket
+		// path over 104 bytes cannot be bound on macOS.
+		func() {
+			mux := http.NewServeMux()
+			var method string
+			mux.HandleFunc("/v1/vault/ssh/203.0.113.7/ubuntu", func(w http.ResponseWriter, r *http.Request) {
+				method = r.Method
+				jsonHandler(tc.status, tc.resp)(w, r)
+			})
+			sock, cleanup := startMockAgent(t, mux)
+			defer cleanup()
+
+			err := New(sock).DeleteSSHEntry(context.Background(), "203.0.113.7", "ubuntu")
+			if (err != nil) != tc.wantErr {
+				t.Errorf("%s: err = %v, wantErr %v", name, err, tc.wantErr)
+			}
+			if method != http.MethodDelete {
+				t.Errorf("%s: method = %s, want DELETE", name, method)
+			}
+		}()
+	}
+}

@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -69,8 +68,8 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	subdomain := r.FormValue("subdomain")
 	sseMode := r.FormValue("ssr") == "true"
 
-	if name == "" {
-		http.Error(w, "Deployment name is required", http.StatusBadRequest)
+	if err := h.service.CheckNewDeploymentName(ctx, namespace, name); err != nil {
+		writeDeploymentNameError(w, h.logger, err)
 		return
 	}
 
@@ -93,7 +92,20 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	var cid string
 
 	if sseMode {
-		// SSR mode - upload tarball to IPFS, then extract on server
+		// SSR mode - upload tarball to IPFS, then extract on server. The
+		// instance is claimed on this host first; static export has no
+		// directory here.
+		claim, claimErr := h.service.claimNewInstance(ctx, h.baseDeployPath, namespace, name)
+		if claimErr != nil {
+			writeDeploymentNameError(w, h.logger, claimErr)
+			return
+		}
+		registered := false
+		defer func() {
+			if !registered {
+				h.service.releaseClaim(claim)
+			}
+		}()
 		addResp, addErr := h.ipfsClient.Add(ctx, file, header.Filename)
 		if addErr != nil {
 			h.logger.Error("Failed to upload to IPFS", zap.Error(addErr))
@@ -103,6 +115,9 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		cid = addResp.Cid
 		var deployErr error
 		deployment, deployErr = h.deploySSR(ctx, namespace, name, subdomain, cid)
+		// A deployment with a registry row keeps its directory even if it
+		// failed to start: it exists, and a delete removes both.
+		registered = deployment != nil
 		if deployErr != nil {
 			h.logger.Error("Failed to deploy Next.js", zap.Error(deployErr))
 			http.Error(w, deployErr.Error(), http.StatusInternalServerError)
@@ -151,11 +166,8 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 // deploySSR deploys Next.js in SSR mode
 func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomain, cid string) (*deployments.Deployment, error) {
-	// Create deployment directory
+	// The directory exists: HandleUpload claimed it.
 	deployPath := process.DeployDir(h.baseDeployPath, namespace, name)
-	if err := os.MkdirAll(deployPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create deployment directory: %w", err)
-	}
 
 	// Download and extract from IPFS
 	if err := h.extractFromIPFS(ctx, cid, deployPath); err != nil {
@@ -182,6 +194,12 @@ func (h *NextJSHandler) deploySSR(ctx context.Context, namespace, name, subdomai
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),
 		DeployedBy:          namespace,
+	}
+
+	// The standalone output carries its own node_modules; nothing an earlier
+	// holder of this instance installed may be bound under it.
+	if err := h.processManager.ClearDependencies(namespace, name); err != nil {
+		return nil, err
 	}
 
 	// Save deployment (assigns port)
@@ -293,26 +311,20 @@ func (h *NextJSHandler) extractFromIPFS(ctx context.Context, cid, destPath strin
 	tmpFile.Close()
 
 	// Extract tarball
-	cmd := fmt.Sprintf("tar -xzf %s -C %s", tmpFile.Name(), destPath)
-	if err := h.execCommand(cmd); err != nil {
+	if err := h.untar(tmpFile.Name(), destPath); err != nil {
 		return fmt.Errorf("failed to extract tarball: %w", err)
 	}
 
 	return nil
 }
 
-// execCommand executes a shell command
-func (h *NextJSHandler) execCommand(cmd string) error {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return fmt.Errorf("empty command")
-	}
-
-	c := exec.Command(parts[0], parts[1:]...)
+// untar unpacks archive into dest.
+func (h *NextJSHandler) untar(archive, dest string) error {
+	c := exec.Command("tar", tarExtractArgs(archive, dest)...)
 	output, err := c.CombinedOutput()
 	if err != nil {
 		h.logger.Error("Command execution failed",
-			zap.String("command", cmd),
+			zap.String("command", c.String()),
 			zap.String("output", string(output)),
 			zap.Error(err),
 		)

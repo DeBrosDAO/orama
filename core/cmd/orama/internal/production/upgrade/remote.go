@@ -1,12 +1,17 @@
 package upgrade
 
 import (
+	"encoding/base64"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/rollout"
 )
 
@@ -98,33 +103,95 @@ func (r *RemoteUpgrader) gateBudget() time.Duration {
 	return rollout.GateBudget
 }
 
-// upgradeNode runs `orama node upgrade --restart` on a single remote node,
-// forwarding the per-node flags the operator passed locally (--nameserver,
-// --force, --skip-checks) so the remote orchestrator sees the same intent.
-// Without this forwarding, the remote command would always use the saved
-// preference, silently dropping operator overrides on the floor.
+// upgradeNode runs the upgrade on a single remote node.
 func (r *RemoteUpgrader) upgradeNode(node inspector.Node) error {
-	sudo := remotessh.SudoPrefix(node)
-	cmd := fmt.Sprintf("%sorama node upgrade --restart", sudo)
+	return remotessh.RunSSHStreaming(node, upgradeCommand(remotessh.SudoPrefix(node), r.flags))
+}
+
+// stagedPaths are what the node-side guard checks before it runs the staged
+// CLI as root: the archive tree, its bin directory, the CLI, and the trust
+// anchor stage-archive verified it against.
+type stagedPaths struct {
+	base, bin, cli, anchor string
+}
+
+// nodeStagedPaths are a node's.
+var nodeStagedPaths = stagedPaths{
+	base:   oramainstall.OramaBase,
+	bin:    filepath.Dir(newOramaBinaryPath),
+	cli:    newOramaBinaryPath,
+	anchor: archivetrust.AnchorPath,
+}
+
+// upgradeCommand is `node upgrade --restart`, run as root with the CLI of the
+// staged build (/opt/orama/bin/orama, which `orama push` verified and put in
+// place), forwarding the per-node flags the operator passed locally
+// (--nameserver, --force, --skip-checks) so the remote orchestrator sees the
+// same intent.
+//
+// The staged CLI, not the one on the node's PATH: that one is the release
+// being replaced, and everything it runs before handing over to the new
+// binary — the pre-stop checks, the leadership hand-over, recording the raft
+// identity, the stop itself — would be the old release's code. Upgrading from
+// 0.122.x that code writes a recovery peers.json and stops the leader without
+// a hand-over. Run from the staged build, the whole upgrade is the new
+// release's code, and its re-exec has nothing to hand over to.
+//
+// Before running it, the node checks that it is running what a push staged:
+// a trust anchor exists (a node that was never pushed a signed build has
+// none, and its /opt/orama/bin/orama is whatever its old release extracted),
+// and /opt/orama, its bin/ and the CLI are root's, not writable by anyone
+// else, and not symlinks — a CLI anyone but root could have replaced is not
+// run as root. The script travels base64-encoded into `bash -s`.
+func upgradeCommand(sudo string, flags *Flags) string {
+	script := upgradeScript(nodeStagedPaths, upgradeArgs(flags))
+	return "printf %s " + base64.StdEncoding.EncodeToString([]byte(script)) + " | " + sudo + "bash -s"
+}
+
+// upgradeArgs are the arguments after the CLI.
+func upgradeArgs(flags *Flags) string {
+	args := "node upgrade --restart"
 
 	// Tri-state pointer flag: forward only when explicitly set locally.
 	// nil = "honor saved preference on the remote" — don't pass anything.
-	if r.flags.Nameserver != nil {
-		if *r.flags.Nameserver {
-			cmd += " --nameserver"
+	if flags.Nameserver != nil {
+		if *flags.Nameserver {
+			args += " --nameserver"
 		} else {
-			cmd += " --nameserver=false"
+			args += " --nameserver=false"
 		}
 	}
 
 	// Plain booleans: forward when true. False is the default everywhere
 	// so no need to send `=false` explicitly.
-	if r.flags.Force {
-		cmd += " --force"
+	if flags.Force {
+		args += " --force"
 	}
-	if r.flags.SkipChecks {
-		cmd += " --skip-checks"
+	if flags.SkipChecks {
+		args += " --skip-checks"
 	}
+	return args
+}
 
-	return remotessh.RunSSHStreaming(node, cmd)
+// pushHint is what a node whose staged build cannot be trusted tells the
+// operator.
+const pushHint = "stage this release on it first: orama push --env <env> --archive <path> --trust-signers <0xWallet>"
+
+// upgradeScript is the node-side guard, then the staged CLI with args.
+func upgradeScript(p stagedPaths, args string) string {
+	return strings.Join([]string{
+		"set -eu",
+		`fail() { echo "refusing to upgrade: $1; ` + pushHint + `" >&2; exit 1; }`,
+		`[ -f ` + p.anchor + ` ] || fail "no trust anchor at ` + p.anchor + `, so nothing verified ` + p.cli + `"`,
+		`for p in ` + p.base + ` ` + p.bin + ` ` + p.cli + `; do`,
+		`  [ -e "$p" ] || fail "$p does not exist"`,
+		`  [ ! -L "$p" ] || fail "$p is a symlink"`,
+		// Fails closed: a find that cannot inspect the path prints nothing,
+		// which must not read as "nothing wrong".
+		`  bad=$(find "$p" -maxdepth 0 \( ! -user root -o -perm -020 -o -perm -002 \) -print) || fail "cannot inspect $p"`,
+		`  [ -z "$bad" ] || fail "$p is not root's alone"`,
+		`done`,
+		`[ -f ` + p.cli + ` ] || fail "` + p.cli + ` is not a regular file"`,
+		`exec ` + p.cli + ` ` + args,
+	}, "\n") + "\n"
 }

@@ -1,11 +1,15 @@
 package installers
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
 // The Anyone network (the `anon` package, its relay and client) was removed in
@@ -32,6 +36,11 @@ var LegacyAnyonePackages = []string{"anon", "nyx"}
 // the apt source and key, its config, state (including relay identity keys)
 // and logs, the unit files Orama wrote, and the index env and log files.
 func LegacyAnyonePaths(oramaDir string) []string {
+	return append(legacyAnyoneSystemPaths(), legacyAnyoneOramaFiles(oramaDir)...)
+}
+
+// legacyAnyoneSystemPaths are the legacy paths in root-owned trees.
+func legacyAnyoneSystemPaths() []string {
 	return []string{
 		"/etc/apt/sources.list.d/anon.list",
 		"/etc/apt/trusted.gpg.d/anon.asc",
@@ -42,6 +51,13 @@ func LegacyAnyonePaths(oramaDir string) []string {
 		"/etc/systemd/system/orama-anyone-client.service",
 		"/etc/systemd/system/orama-anyone-relay.service",
 		"/etc/systemd/system/orama-namespace-anyone-client@.service",
+	}
+}
+
+// legacyAnyoneOramaFiles are the legacy files in the orama user's tree, which
+// root removes without following symlinks (rootfs).
+func legacyAnyoneOramaFiles(oramaDir string) []string {
+	return []string{
 		filepath.Join(oramaDir, "data", "namespaces", "index", "anyone-client.env"),
 		filepath.Join(oramaDir, "logs", "anyone-client.log"),
 	}
@@ -75,13 +91,25 @@ func (c *LegacyAnyoneCleaner) Remove() error {
 			return err
 		}
 	}
-	for _, p := range LegacyAnyonePaths(c.oramaDir) {
+	for _, p := range legacyAnyoneSystemPaths() {
 		path := filepath.Join(c.root, p)
 		if _, err := os.Lstat(path); os.IsNotExist(err) {
 			continue
 		}
 		if err := os.RemoveAll(path); err != nil {
 			return fmt.Errorf("remove legacy Anyone path %s: %w", path, err)
+		}
+		fmt.Fprintf(c.logWriter, "    ✓ Removed %s\n", path)
+	}
+	oramaDir := filepath.Join(c.root, c.oramaDir)
+	tree := rootfs.At(filepath.Dir(oramaDir))
+	for _, path := range legacyAnyoneOramaFiles(oramaDir) {
+		err := tree.Remove(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("remove legacy Anyone file %s: %w", path, err)
 		}
 		fmt.Fprintf(c.logWriter, "    ✓ Removed %s\n", path)
 	}

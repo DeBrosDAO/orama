@@ -162,6 +162,10 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "namespace and node_id are required"})
 		return
 	}
+	if err := req.validate(); err != nil {
+		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: err.Error()})
+		return
+	}
 
 	h.logger.Info("Received spawn request",
 		zap.String("action", req.Action),

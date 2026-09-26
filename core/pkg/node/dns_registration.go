@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/nodeapi"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -212,71 +214,35 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 		}
 	}
 
-	// Ensure SOA and NS records exist for the base domain (self-healing)
-	if baseDomain != "" {
-		n.ensureSOAAndNSRecords(ctx, baseDomain)
+	if baseDomain == "" {
+		return nil
+	}
+
+	// Claim an NS slot (nsN) for the base domain — only if this node was
+	// installed with --nameserver (i.e. runs Caddy + CoreDNS). Claimed before
+	// the zone's NS set is derived below, so a new nameserver is published on
+	// the same sweep that glued it.
+	var errs []error
+	if n.isNameserverPreference() {
+		if _, err := claimNameserverSlot(ctx, db, n.GetPeerID(), baseDomain, ipAddress); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	// The zone's NS and SOA records follow the claimed slots.
+	if err := reconcileNameserverRecords(ctx, db, baseDomain, n.GetPeerID()); err != nil {
+		errs = append(errs, err)
 	}
 
 	// Pin push.<baseDomain> to a single healthy nameserver (bugboard #858) so the
-	// shared ntfy tier — which keeps no cross-node state — converges every
+	// shared ntfy tier — which keeps no cross-node shared state — converges every
 	// publisher AND subscriber onto one instance. Nameserver-only: they run Caddy
 	// and already serve push.<baseDomain> on :443.
-	if baseDomain != "" && n.isNameserverNode(ctx) {
+	if n.isNameserverNode(ctx) {
 		n.ensurePushDesignatedRecord(ctx, baseDomain)
 	}
 
-	// Claim an NS slot for the base domain (ns1/ns2/ns3) — only if this node
-	// was installed with --nameserver (i.e. runs Caddy + CoreDNS).
-	if baseDomain != "" && n.isNameserverPreference() {
-		n.claimNameserverSlot(ctx, baseDomain, ipAddress)
-	}
-
-	return nil
-}
-
-// ensureSOAAndNSRecords creates SOA and NS records for the base domain if they don't exist.
-// These are normally seeded during install Phase 7, but if that fails (e.g. migrations
-// not yet run), the heartbeat self-heals them here.
-func (n *Node) ensureSOAAndNSRecords(ctx context.Context, baseDomain string) {
-	db := n.getRQLiteAdapter().GetSQLDB()
-	fqdn := baseDomain + "."
-
-	// Check if SOA exists
-	var count int
-	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM dns_records WHERE fqdn = ? AND record_type = 'SOA'`, fqdn,
-	).Scan(&count)
-	if err != nil || count > 0 {
-		return // SOA exists or query failed, skip
-	}
-
-	n.logger.ComponentInfo(logging.ComponentNode, "SOA/NS records missing, self-healing",
-		zap.String("domain", baseDomain))
-
-	// Create SOA record
-	soaValue := fmt.Sprintf("ns1.%s. admin.%s. %d 3600 1800 604800 300",
-		baseDomain, baseDomain, time.Now().Unix())
-	if _, err := rqlite.SafeExecContext(db, ctx,
-		`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
-		VALUES (?, 'SOA', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
-		ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
-		fqdn, soaValue,
-	); err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "Failed to create SOA record", zap.Error(err))
-	}
-
-	// Create NS records (ns1, ns2, ns3)
-	for i := 1; i <= 3; i++ {
-		nsValue := fmt.Sprintf("ns%d.%s.", i, baseDomain)
-		if _, err := rqlite.SafeExecContext(db, ctx,
-			`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
-			VALUES (?, 'NS', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
-			ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
-			fqdn, nsValue,
-		); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to create NS record", zap.Error(err))
-		}
-	}
+	return errors.Join(errs...)
 }
 
 // ensurePushDesignatedRecord pins push.<baseDomain> to a single healthy
@@ -343,71 +309,6 @@ func pinPushDesignated(ctx context.Context, db *sql.DB, baseDomain string) (stri
 	return designated, nil
 }
 
-// claimNameserverSlot attempts to claim an available NS hostname (ns1/ns2/ns3) for this node.
-// If the node already has a slot, it updates the IP. If no slot is available, it does nothing.
-func (n *Node) claimNameserverSlot(ctx context.Context, domain, ipAddress string) {
-	nodeID := n.GetPeerID()
-	db := n.getRQLiteAdapter().GetSQLDB()
-
-	// Check if this node already has a slot
-	var existingHostname string
-	err := db.QueryRowContext(ctx,
-		`SELECT hostname FROM dns_nameservers WHERE node_id = ? AND domain = ?`,
-		nodeID, domain,
-	).Scan(&existingHostname)
-
-	if err == nil {
-		// Already claimed — update IP if changed
-		if _, err := rqlite.SafeExecContext(db, ctx,
-			`UPDATE dns_nameservers SET ip_address = ?, updated_at = datetime('now') WHERE hostname = ? AND domain = ?`,
-			ipAddress, existingHostname, domain,
-		); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to update NS slot IP", zap.Error(err))
-		}
-		// Ensure the glue A record matches
-		nsFQDN := existingHostname + "." + domain + "."
-		if _, err := rqlite.SafeExecContext(db, ctx,
-			`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
-			VALUES (?, 'A', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
-			ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
-			nsFQDN, ipAddress,
-		); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure NS glue record", zap.Error(err))
-		}
-		return
-	}
-
-	// Try to claim an available slot
-	for _, hostname := range []string{"ns1", "ns2", "ns3"} {
-		result, err := rqlite.SafeExecContext(db, ctx,
-			`INSERT INTO dns_nameservers (hostname, node_id, ip_address, domain) VALUES (?, ?, ?, ?)
-			ON CONFLICT(hostname) DO NOTHING`,
-			hostname, nodeID, ipAddress, domain,
-		)
-		if err != nil {
-			continue
-		}
-		rows, _ := result.RowsAffected()
-		if rows > 0 {
-			// Successfully claimed this slot — create glue record
-			nsFQDN := hostname + "." + domain + "."
-			if _, err := rqlite.SafeExecContext(db, ctx,
-				`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
-				VALUES (?, 'A', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
-				ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
-				nsFQDN, ipAddress,
-			); err != nil {
-				n.logger.ComponentWarn(logging.ComponentNode, "Failed to create NS glue record", zap.Error(err))
-			}
-			n.logger.ComponentInfo(logging.ComponentNode, "Claimed NS slot",
-				zap.String("hostname", hostname),
-				zap.String("ip", ipAddress),
-			)
-			return
-		}
-	}
-}
-
 // cleanupStaleNodeRecords removes A records for nodes that have stopped heartbeating.
 // This ensures DNS only returns IPs for healthy, active nodes.
 func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
@@ -460,20 +361,11 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 			}
 		}
 
-		// Release any NS slot held by this dead node
-		if _, err := rqlite.SafeExecContext(db, ctx, `DELETE FROM dns_nameservers WHERE node_id = ?`, nodeID); err != nil {
+		// Release any NS slot held by this dead node, glue first: the glue is
+		// found through the slot row, and the zone's NS set drops a slot as
+		// soon as its glue is gone (reconcileNameserverRecords).
+		if err := releaseNameserverSlot(ctx, db, nodeID); err != nil {
 			n.logger.ComponentWarn(logging.ComponentNode, "Failed to release NS slot", zap.String("node_id", nodeID), zap.Error(err))
-		}
-
-		// Remove glue records for this node's IP (ns1.domain., ns2.domain., ns3.domain.)
-		for _, ns := range []string{"ns1", "ns2", "ns3"} {
-			nsFQDN := ns + "." + baseDomain + "."
-			if _, err := rqlite.SafeExecContext(db, ctx,
-				`DELETE FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = 'system'`,
-				nsFQDN, ip,
-			); err != nil {
-				n.logger.ComponentWarn(logging.ComponentNode, "Failed to remove NS glue record", zap.Error(err))
-			}
 		}
 
 		n.logger.ComponentInfo(logging.ComponentNode, "Removed stale node from DNS",
@@ -864,47 +756,33 @@ func (n *Node) getWireGuardIP() (string, error) {
 	return wireguard.GetIP()
 }
 
-// getNodeIPAddress attempts to determine the node's external IP address
+// getNodeIPAddress returns this node's public IPv4 address: node.public_ip
+// from node.yaml, which install records from --vps-ip and every upgrade
+// re-records.
+//
+// It used to be guessed — the source address of a UDP "connection" to
+// 8.8.8.8, else the first public-looking interface address — and a guess is
+// what every DNS record, NS glue row and dns_nodes registration published.
+// On a host with several addresses, or behind a floating IP, it named the
+// wrong one.
 func (n *Node) getNodeIPAddress() (string, error) {
-	// Try to detect external IP by connecting to a public server
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		// If that fails, try to get first non-loopback interface IP
-		addrs, err := net.InterfaceAddrs()
-		if err != nil {
-			return "", err
-		}
+	return configuredPublicIP(n.config.Node.PublicIP)
+}
 
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsPrivate() {
-				if ipnet.IP.To4() != nil {
-					return ipnet.IP.String(), nil
-				}
-			}
-		}
-
-		return "", fmt.Errorf("no suitable IP address found")
+// configuredPublicIP validates node.public_ip. node.yaml is a file this node
+// does not write, so the address it publishes to the world is checked, not
+// taken as-is.
+func configuredPublicIP(publicIP string) (string, error) {
+	if publicIP == "" {
+		return "", fmt.Errorf("node.public_ip is not set in node.yaml; run `orama node upgrade` on this node, " +
+			"which records it (add --public-ip <this node's public IPv4> if it cannot be detected)")
 	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	if localAddr.IP.IsPrivate() || localAddr.IP.IsLoopback() {
-		// UDP dial returned a private/loopback IP (e.g. WireGuard 10.0.0.x).
-		// Fall back to scanning interfaces for a public IPv4.
-		addrs, err := net.InterfaceAddrs()
-		if err != nil {
-			return "", fmt.Errorf("private IP detected (%s) and failed to list interfaces: %w", localAddr.IP, err)
-		}
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsPrivate() {
-				if ipnet.IP.To4() != nil {
-					return ipnet.IP.String(), nil
-				}
-			}
-		}
-		return "", fmt.Errorf("private IP detected (%s) and no public IPv4 found on interfaces", localAddr.IP)
+	if err := install.ValidatePublicIP(publicIP); err != nil {
+		return "", fmt.Errorf("node.public_ip in node.yaml is not usable (%w); fix it with `orama node upgrade --public-ip <this node's public IPv4>`", err)
 	}
-	return localAddr.IP.String(), nil
+	// Canonical dotted-quad: an IPv4-mapped IPv6 spelling (::ffff:a.b.c.d)
+	// validates, but published as-is it is not a valid A record value.
+	return net.ParseIP(publicIP).To4().String(), nil
 }
 
 // cleanupPrivateIPRecords deletes any A records with private/loopback IPs from dns_records.

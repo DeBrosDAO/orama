@@ -41,7 +41,11 @@ func TestPrivHelper_allowsEveryNamespaceUnitTheManagerDrives(t *testing.T) {
 // The index migration stops and disables the pre-namespace units; the helper
 // must allow exactly that and never let the orama user start one again.
 func TestPrivHelper_retiresLeftoverUnitsButNeverStartsThem(t *testing.T) {
-	leftovers := append(append([]string{}, LeftoverHostUnits...), LeftoverWireGuardUnit, LeftoverNameserverUnit)
+	leftovers := append(append([]string{}, LeftoverHostUnits...), LeftoverNameserverUnit)
+	// wg-quick@wg0 is only ever disabled: stopping it would bounce wg0.
+	if _, err := privhelper.Validate([]string{privhelper.ToolSystemctl, "disable", LeftoverWireGuardUnit}); err != nil {
+		t.Errorf("helper refuses disabling %s: %v", LeftoverWireGuardUnit, err)
+	}
 	for _, unit := range leftovers {
 		for _, verb := range []string{"stop", "disable"} {
 			if _, err := privhelper.Validate([]string{privhelper.ToolSystemctl, verb, unit}); err != nil {

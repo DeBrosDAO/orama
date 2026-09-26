@@ -299,13 +299,14 @@ func TestMiddlewareChain_aGenuineHopStillAuthenticates(t *testing.T) {
 
 // The ownership gate skips its checks for a pre-authenticated request, which is
 // the shortest path to any namespace's data. It used to skip them on the
-// strength of the source IP.
+// strength of the source IP. A tenant's gateway, because on the cluster
+// gateway the registry guard refuses the request before this gate runs.
 func TestAuthorizationMiddleware_forgedInternalAuthDoesNotSkipOwnership(t *testing.T) {
 	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
 	g := &Gateway{
 		logger:          logger,
 		internalAuthKey: testHopKey(t),
-		cfg:             &Config{ClientNamespace: "index"},
+		cfg:             &Config{ClientNamespace: "acme"},
 	}
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -325,13 +326,16 @@ func TestAuthorizationMiddleware_forgedInternalAuthDoesNotSkipOwnership(t *testi
 }
 
 // The same gate must still let a genuine hop past, or every proxied request
-// pays for an ownership lookup the main gateway already did.
+// pays for an ownership lookup the main gateway already did. Hops are proxied
+// to a namespace gateway, whose raw database is the tenant's own; on the index
+// gateway the same path is the cluster registry, which a hop does not reach
+// without an operator (TestAuthorizationMiddleware_refusesRegistryAccessOverASignedHop).
 func TestAuthorizationMiddleware_aGenuineHopSkipsOwnership(t *testing.T) {
 	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
 	g := &Gateway{
 		logger:          logger,
 		internalAuthKey: testHopKey(t),
-		cfg:             &Config{ClientNamespace: "index"},
+		cfg:             &Config{ClientNamespace: "alice"},
 	}
 
 	var reached bool
@@ -360,7 +364,7 @@ func TestWithMiddleware_stripsForgedInternalAuthHeaders(t *testing.T) {
 		ready:           newReadiness(),
 		startedAt:       time.Now(),
 	}
-	g.ready.set(ReadinessReady, "ready")
+	g.ready.set(ReadinessReady, "", "")
 
 	var seen http.Header
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

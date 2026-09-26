@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -110,7 +111,7 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 
 	instance.Logger.Info("Starting Gateway instance",
 		zap.Int("http_port", cfg.HTTPPort),
-		zap.String("rqlite_dsn", cfg.RQLiteDSN),
+		zap.String("rqlite_dsn", rqlite.RedactDSN(cfg.RQLiteDSN)),
 		zap.Strings("olric_servers", cfg.OlricServers),
 	)
 

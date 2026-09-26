@@ -17,7 +17,6 @@ Type=simple
 # tor@default.service are masked, so nothing else binds the port.
 User=debian-tor
 Group=debian-tor
-EnvironmentFile=-/opt/orama/.orama/data/namespaces/%i/tor.env
 ExecStart=/usr/bin/tor -f /etc/orama/tor/torrc
 Restart=always
 RestartSec=5s

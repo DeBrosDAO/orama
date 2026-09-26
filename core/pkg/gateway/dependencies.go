@@ -144,6 +144,13 @@ type Dependencies struct {
 func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies, error) {
 	deps := &Dependencies{WSSessions: wssession.NewRegistry(logger.Logger)}
 
+	// Before anything connects: a gateway that cannot write its own state
+	// cannot hold a signing key, and there is no point dialling the cluster to
+	// find that out.
+	if err := ensureStateDir(cfg.StateDir); err != nil {
+		return nil, err
+	}
+
 	// Create and connect network client
 	logger.ComponentInfo(logging.ComponentGeneral, "Building client config...")
 	cliCfg := client.DefaultClientConfig(cfg.ClientNamespace)
@@ -153,7 +160,27 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 	// Explicit rqlite_dsn always wins (bugboard #162). DefaultClientConfig
 	// pre-fills DatabaseEndpoints from RQLITE_NODES / bootstrap peers on
 	// the index RQLite port, which used to swallow the tenant DSN.
-	cliCfg.DatabaseEndpoints = resolveDatabaseEndpoints(cfg, cliCfg.DatabaseEndpoints)
+	endpoints, err := resolveDatabaseEndpoints(cfg, cliCfg.DatabaseEndpoints)
+	if err != nil {
+		return nil, err
+	}
+	cliCfg.DatabaseEndpoints = endpoints
+	// A namespace gateway's peers dial it (peer discovery); it listens on
+	// this node's WireGuard IP only. Every other gateway has no listener.
+	listenAddrs, err := libp2pListenAddrs(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cliCfg.ListenAddrs = listenAddrs
+	// The network status reads this node's IPFS Cluster REST API, which
+	// requires the password derived from the cluster secret.
+	if cfg.ClusterSecret != "" {
+		password, err := ipfs.ClusterRESTPassword(cfg.ClusterSecret)
+		if err != nil {
+			return nil, err
+		}
+		cliCfg.IPFSClusterAPIPassword = password
+	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating network client...")
 	c, err := client.NewClient(cliCfg)
@@ -175,6 +202,28 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 
 	deps.Client = c
 
+	if err := initializeBackends(logger, cfg, deps, c); err != nil {
+		return nil, err
+	}
+	return deps, nil
+}
+
+// The backend initialisers that dial live services. Variables only so a test
+// can stand them in and exercise initializeBackends without an Olric or IPFS
+// cluster; nothing else assigns them.
+var (
+	initOlricBackend = initializeOlric
+	initIPFSBackend  = initializeIPFS
+)
+
+// initializeBackends opens the database handles, the cache and storage
+// clients, and the serverless engine together with the auth service.
+//
+// The serverless step is fatal. It builds the auth service, and a gateway
+// without one serves /health 200 while every /v1/auth/* route is a 404, no
+// function runs and no WebSocket token is checked — which is how a gateway
+// that could not write its signing key used to look healthy for days.
+func initializeBackends(logger *logging.ColoredLogger, cfg *Config, deps *Dependencies, c client.NetworkClient) error {
 	// Open the RQLite handles. This does not touch the database — sql.Open is
 	// lazy — so it fails only on a malformed DSN. The work that needs a live
 	// database (the leader wait, the migrations, the schema contract) runs in
@@ -186,34 +235,41 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 	}
 
 	// Initialize Olric cache client (with retry and background reconnection)
-	initializeOlric(logger, cfg, deps, c)
+	initOlricBackend(logger, cfg, deps, c)
 
-	// Initialize IPFS Cluster client
-	initializeIPFS(logger, cfg, deps)
+	// Initialize IPFS Cluster client. A gateway that cannot derive the cluster
+	// credentials would otherwise serve storage routes that fail closed only
+	// after a request, and the log line was the only record of why.
+	if err := initIPFSBackend(logger, cfg, deps); err != nil {
+		return fmt.Errorf("gateway %s cannot start: %w", cfg.ClientNamespace, err)
+	}
 
 	// Initialize serverless function engine (requires RQLite and IPFS)
 	if err := initializeServerless(logger, cfg, deps, c); err != nil {
-		logger.ComponentWarn(logging.ComponentGeneral, "Serverless initialization failed", zap.Error(err))
+		return fmt.Errorf("gateway %s cannot start: the serverless engine and auth service failed to initialize: %w",
+			cfg.ClientNamespace, err)
 	}
-
-	return deps, nil
+	// Every route the gateway wires after this dereferences the auth service
+	// (the deployment workload-token minter, the audit trail); a nil one here
+	// is a bug in initializeServerless, not a degraded mode.
+	if deps.AuthService == nil {
+		return fmt.Errorf("gateway %s cannot start: serverless initialized without an auth service", cfg.ClientNamespace)
+	}
+	return nil
 }
 
 // initializeRQLite sets up the RQLite database connection and ORM HTTP gateway
 func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependencies) error {
 	logger.ComponentInfo(logging.ComponentGeneral, "Initializing RQLite ORM HTTP gateway...")
-	dsn := cfg.RQLiteDSN
-	if dsn == "" {
-		dsn = "http://localhost:10100"
-	}
-
 	// Inject basic auth credentials into DSN if available
-	dsn = injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)
-
+	dsn, err := credentialedRQLiteDSN(cfg.RQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)
+	if err != nil {
+		return fmt.Errorf("rqlite_dsn: %w", err)
+	}
 	dsn = appendRQLiteQueryParams(dsn)
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
-		return fmt.Errorf("failed to open rqlite sql db: %w", err)
+		return fmt.Errorf("failed to open rqlite sql db at %s: %s", rqlite.RedactDSN(dsn), rqlite.RedactError(err, dsn))
 	}
 
 	// Configure connection pool with proper timeouts and limits
@@ -240,7 +296,7 @@ func initializeRQLite(logger *logging.ColoredLogger, cfg *Config, deps *Dependen
 	deps.ORMHTTP.Timeout = 30 * time.Second
 
 	logger.ComponentInfo(logging.ComponentGeneral, "RQLite ORM HTTP gateway ready",
-		zap.String("dsn", dsn),
+		zap.String("dsn", rqlite.RedactDSN(dsn)),
 		zap.String("base_path", "/v1/db"),
 		zap.Duration("timeout", deps.ORMHTTP.Timeout),
 	)
@@ -405,10 +461,14 @@ func initializeGlobalRQLite(logger *logging.ColoredLogger, cfg *Config, deps *De
 		return nil
 	}
 
-	dsn := appendRQLiteQueryParams(injectRQLiteAuth(globalDSN, cfg.RQLiteUsername, cfg.RQLitePassword))
+	credDSN, err := credentialedRQLiteDSN(globalDSN, cfg.RQLiteUsername, cfg.RQLitePassword)
+	if err != nil {
+		return fmt.Errorf("global_rqlite_dsn: %w", err)
+	}
+	dsn := appendRQLiteQueryParams(credDSN)
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
-		return fmt.Errorf("open global rqlite (%s): %w", globalDSN, err)
+		return fmt.Errorf("open global rqlite (%s): %s", rqlite.RedactDSN(globalDSN), rqlite.RedactError(err, dsn))
 	}
 	// Cluster-topology reads are small and infrequent; a wide pool here would
 	// only add idle connections against the main cluster from every namespace
@@ -422,7 +482,7 @@ func initializeGlobalRQLite(logger *logging.ColoredLogger, cfg *Config, deps *De
 	deps.GlobalORMClient = rqlite.NewClient(db)
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Global RQLite handle ready (cluster-topology reads)",
-		zap.String("global_dsn", globalDSN))
+		zap.String("global_dsn", rqlite.RedactDSN(globalDSN)))
 	return nil
 }
 
@@ -506,7 +566,7 @@ func initializeOlricClientWithRetry(cfg olric.Config, logger *logging.ColoredLog
 }
 
 // initializeIPFS sets up the IPFS Cluster client with automatic endpoint discovery
-func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependencies) {
+func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependencies) error {
 	logger.ComponentInfo(logging.ComponentGeneral, "Initializing IPFS Cluster client...")
 
 	// Discover IPFS endpoints from node configs if not explicitly configured
@@ -554,17 +614,23 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 		Timeout:       ipfsTimeout,
 	}
 	if cfg.ClusterSecret != "" {
-		if key, err := secrets.DeriveKey(cfg.ClusterSecret, ipfs.WrapPurpose); err != nil {
-			logger.ComponentWarn(logging.ComponentGeneral, "failed to derive IPFS wrap key", zap.Error(err))
-		} else {
-			ipfsCfg.WrapKey = key
+		key, err := secrets.DeriveKey(cfg.ClusterSecret, ipfs.WrapPurpose)
+		if err != nil {
+			return fmt.Errorf("derive the IPFS wrap key: %w", err)
 		}
+		ipfsCfg.WrapKey = key
+		// The cluster REST API requires the credentials install derived
+		// from the same secret (ipfs.ClusterRESTPassword).
+		password, err := ipfs.ClusterRESTPassword(cfg.ClusterSecret)
+		if err != nil {
+			return fmt.Errorf("derive the IPFS Cluster REST API password: %w", err)
+		}
+		ipfsCfg.ClusterAPIPassword = password
 	}
 
 	ipfsClient, err := ipfs.NewClient(ipfsCfg, logger.Logger)
 	if err != nil {
-		logger.ComponentWarn(logging.ComponentGeneral, "failed to initialize IPFS Cluster client; storage endpoints disabled", zap.Error(err))
-		return
+		return fmt.Errorf("initialize the IPFS Cluster client: %w", err)
 	}
 
 	deps.IPFSClient = ipfsClient
@@ -597,6 +663,7 @@ func initializeIPFS(logger *logging.ColoredLogger, cfg *Config, deps *Dependenci
 	// Store IPFS settings back in config for use by handlers
 	cfg.IPFSAPIURL = ipfsAPIURL
 	cfg.IPFSReplicationFactor = ipfsReplicationFactor
+	return nil
 }
 
 // initializeServerless sets up the serverless function engine and related components
@@ -677,11 +744,17 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	// gateway computes the identical key. The root starts as a copy of the
 	// cluster secret so existing rows stay readable; an operator rotate
 	// replaces the IKM without touching IPFS-Cluster or the mesh bearer.
-	deps.EncHolder = bootstrapEncryptionRoot(cfg, deps)
-	ikm := deps.EncHolder.Get().CurrentIKM
-	if ikm == "" {
-		ikm = cfg.ClusterSecret
+	if err := waitForRegistryLeader(cfg, deps); err != nil {
+		return err
 	}
+	encHolder, err := bootstrapEncryptionRoot(cfg, deps)
+	if err != nil {
+		return err
+	}
+	deps.EncHolder = encHolder
+	// Never empty: LoadOrMaterialize fails rather than return a root without
+	// a current IKM, and a rotate refuses one.
+	ikm := deps.EncHolder.Get().CurrentIKM
 
 	var secretsMgr serverless.SecretsManager
 	if secretsKeyHex, keyErr := resolveSecretsEncryptionKeyHex(ikm, cfg.SecretsEncryptionKey); keyErr != nil {
@@ -698,10 +771,9 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 
 	// Initialize push notification subsystem.
 	//
-	// Bug #220 follow-up: the subsystem now ALWAYS initializes when the
-	// cluster secret is available (so tenants can register devices and
-	// PUT their per-namespace push config), regardless of whether the
-	// gateway YAML has a default provider configured. The Manager wraps
+	// Bug #220 follow-up: the subsystem ALWAYS initializes (so tenants can
+	// register devices and PUT their per-namespace push config), regardless
+	// of whether the gateway YAML has a default provider configured. The Manager wraps
 	// the device store + per-namespace ConfigStore; Send paths route
 	// through Manager so per-namespace config takes effect.
 	//
@@ -824,11 +896,11 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	deps.PersistentWSManager = persistent.NewManager(5000, logger.Logger)
 
 	// Initialize auth service with persistent signing keys (RSA + EdDSA)
-	keyPEM, err := loadOrCreateSigningKey(cfg.DataDir, logger)
+	keyPEM, err := loadOrCreateSigningKey(cfg.StateDir, logger)
 	if err != nil {
 		return fmt.Errorf("failed to load or create JWT signing key: %w", err)
 	}
-	authService, err := auth.NewService(logger, networkClient, string(keyPEM), cfg.ClientNamespace)
+	authService, err := auth.NewService(logger, networkClient, string(keyPEM), ownNamespace(cfg))
 	if err != nil {
 		return fmt.Errorf("failed to initialize auth service: %w", err)
 	}
@@ -857,37 +929,24 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	// public halves are published so the others verify, and a namespace
 	// gateway's key is bound to its namespace so it can sign only for its own
 	// tenant.
-	edKey, err := loadOrCreateEdSigningKey(cfg.DataDir, logger)
+	edKey, migrated, err := loadOrCreateEdSigningKey(cfg.StateDir, cfg.ClusterSecret, logger)
 	if err != nil {
 		return fmt.Errorf("this gateway has no signing key and cannot mint a token: %w", err)
 	}
 	authService.SetEdDSAKey(edKey, signingKeyNamespace(cfg.ClientNamespace))
 
 	// Tokens minted before this change carry the old cluster-derived kid, and
-	// have to keep verifying across the upgrade. Only for one access-token
-	// lifetime: after that a key every node can derive verifies nothing, which
-	// is the whole point.
-	if cfg.ClusterSecret != "" {
-		if legacy, lerr := LegacyClusterSigningKey(cfg.ClusterSecret); lerr == nil {
-			authService.SigningKeys().Add(auth.SigningKey{
-				KID:       auth.KeyIDFor(legacy),
-				Public:    legacy,
-				RetiredAt: time.Now().Add(auth.AccessTokenLifetime),
-			})
-		} else {
-			logger.ComponentWarn(logging.ComponentGeneral,
-				"could not derive the previous cluster signing key; tokens issued before this upgrade will be refused",
-				zap.Error(lerr))
-		}
+	// have to keep verifying across the upgrade. Only when this boot actually
+	// replaced that key, and only for one access-token lifetime after that —
+	// recorded in the state directory, so a restart does not re-arm it. A
+	// gateway that never held the cluster-derived key records it retired.
+	if err := armLegacyClusterKey(authService.SigningKeys(), cfg.StateDir, cfg.ClusterSecret, time.Now(), migrated); err != nil {
+		return err
 	}
 
-	// Publish before anything is minted, or the first token this gateway
-	// issues is refused everywhere else until the next reload.
-	if perr := authService.PublishSigningKey(context.Background()); perr != nil {
-		logger.ComponentWarn(logging.ComponentGeneral,
-			"could not publish this gateway's signing key; other gateways will refuse the tokens it mints",
-			zap.Error(perr))
-	}
+	// The key is published once the schema is up (post_schema.go): the
+	// signing_keys table may not exist yet, and a namespace gateway learns
+	// where its registry is only after this (SetAPIKeyRegistry in New).
 
 	// Configure API key HMAC secret if available
 	if cfg.APIKeyHMACSecret != "" {
@@ -1088,33 +1147,32 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 
 // resolveDatabaseEndpoints picks the gorqlite endpoint list (bugboard #162).
 // A non-empty cfg.RQLiteDSN always wins over DefaultClientConfig's
-// peer-derived list. With no DSN and no defaults, fall back to the index
-// RQLite HTTP port.
-func resolveDatabaseEndpoints(cfg *Config, defaultEndpoints []string) []string {
+// peer-derived list. ValidateConfig requires rqlite_dsn, so the defaults are
+// only reached by callers that build a Config without validating it.
+func resolveDatabaseEndpoints(cfg *Config, defaultEndpoints []string) ([]string, error) {
 	if dsn := strings.TrimSpace(cfg.RQLiteDSN); dsn != "" {
-		return []string{injectRQLiteAuth(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)}
+		cred, err := credentialedRQLiteDSN(dsn, cfg.RQLiteUsername, cfg.RQLitePassword)
+		if err != nil {
+			return nil, fmt.Errorf("rqlite_dsn: %w", err)
+		}
+		return []string{cred}, nil
 	}
-	if len(defaultEndpoints) > 0 {
-		return defaultEndpoints
-	}
-	fallback := fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort)
-	return []string{injectRQLiteAuth(fallback, cfg.RQLiteUsername, cfg.RQLitePassword)}
+	return defaultEndpoints, nil
 }
 
-// injectRQLiteAuth injects HTTP basic auth credentials into a RQLite DSN URL.
-// If username or password is empty, the DSN is returned unchanged.
-// Input: "http://localhost:10100" → Output: "http://orama:secret@localhost:10100"
-func injectRQLiteAuth(dsn, username, password string) string {
-	if username == "" || password == "" {
-		return dsn
+// credentialedRQLiteDSN returns dsn carrying exactly one set of credentials:
+// its own when it has them, otherwise username/password.
+//
+// This replaced injectRQLiteAuth, which prefixed user:pass@ to whatever it was
+// given. The spawner already writes gateway DSNs with credentials in them, so
+// the gateway sent http://orama:<pw>@orama:<pw>@host — a URL whose userinfo is
+// everything up to the last '@' — and rqlited answered 401 to every query.
+func credentialedRQLiteDSN(dsn, username, password string) (string, error) {
+	ep, err := rqlite.EndpointFromDSN(dsn, username, password)
+	if err != nil {
+		return "", err
 	}
-	// Insert user:pass@ after the scheme (http:// or https://)
-	for _, scheme := range []string{"https://", "http://"} {
-		if strings.HasPrefix(dsn, scheme) {
-			return scheme + username + ":" + password + "@" + dsn[len(scheme):]
-		}
-	}
-	return dsn
+	return ep.CredentialedURL(), nil
 }
 
 // appendRQLiteQueryParams adds the standard query parameters to a RQLite DSN:
@@ -1139,10 +1197,11 @@ func appendRQLiteQueryParams(dsn string) string {
 	return dsn + "?" + params
 }
 
-// buildPushDispatcher constructs the push subsystem.
+// buildPushDispatcher constructs the push subsystem, keyed from ikm (the
+// encryption root's current IKM, never empty).
 //
-// As of bug #220 follow-up, push always initializes when ClusterSecret is
-// available, regardless of whether any YAML provider config is set:
+// As of bug #220 follow-up, push always initializes, regardless of whether
+// any YAML provider config is set:
 //
 //   - Device store + ConfigStore always build (tenants need to register
 //     devices and set per-namespace push config even on gateways with no
@@ -1153,9 +1212,9 @@ func appendRQLiteQueryParams(dsn string) string {
 //     are non-empty — kept for back-compat with code paths that haven't
 //     migrated to Manager.
 //
-// Returns (nil, nil, nil, nil, nil) when ClusterSecret is missing
-// (push subsystem disabled — credentials can't be encrypted safely).
-// Returns hard error only on store-init failure.
+// Returns an error only on store-init failure. The token_fp backfill needs
+// migration 033's column, so it runs after the schema is up (post_schema.go),
+// not here.
 func buildPushDispatcher(
 	cfg *Config,
 	db rqlite.Client,
@@ -1164,15 +1223,6 @@ func buildPushDispatcher(
 	ikm string,
 	holder *secrets.Holder,
 ) (*push.PushDispatcher, push.PushDeviceStore, *push.Manager, push.ConfigStore, *pushcreds.Manager, error) {
-	if strings.TrimSpace(ikm) == "" {
-		ikm = cfg.ClusterSecret
-	}
-	if ikm == "" {
-		// Without an IKM we can't encrypt credentials at rest.
-		// Disable the whole push subsystem; HTTP routes return 503.
-		return nil, nil, nil, nil, nil, nil
-	}
-
 	store, err := push.NewRqliteDeviceStore(db, ikm, logger.Logger)
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("init push device store: %w", err)
@@ -1180,37 +1230,6 @@ func buildPushDispatcher(
 	if h, ok := any(store).(interface{ SetHolder(*secrets.Holder) }); ok {
 		h.SetHolder(holder)
 	}
-
-	// Backfill token_fp for rows registered before the bugboard #981 migration
-	// so token-exclusive eviction also covers pre-existing orphans. Best-effort
-	// + idempotent; runs in the background so it never delays gateway startup.
-	//
-	// It can lose a startup race with migration 033 (the column doesn't exist
-	// yet → "no such column"); retry until the migration applies. This was a real
-	// bug observed live: the backfill failed permanently on the first attempt.
-	go func() {
-		bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		for {
-			n, berr := store.BackfillTokenFP(bctx)
-			if berr == nil {
-				if n > 0 {
-					logger.Logger.Info("push: token_fp backfill complete", zap.Int("updated", n))
-				}
-				return
-			}
-			if strings.Contains(berr.Error(), "no such column") {
-				select {
-				case <-time.After(15 * time.Second):
-					continue // migration 033 not applied yet; retry
-				case <-bctx.Done():
-					return
-				}
-			}
-			logger.Logger.Warn("push: token_fp backfill failed", zap.Error(berr))
-			return
-		}
-	}()
 
 	cfgStore, err := push.NewRqliteConfigStore(db, ikm, logger.Logger)
 	if err != nil {
@@ -1403,43 +1422,21 @@ func buildPushDispatcher(
 	return legacy, store, manager, cfgStore, credManager, nil
 }
 
-// signingKeyNamespace is what a gateway's signing key is bound to.
-//
-// A namespace gateway's key signs only for its own tenant. The index gateway's
-// is bound to nothing: it is the control plane, it mints the tokens the CLI
-// signs in with for every namespace, and a compromise of it is not a tenant
-// boundary problem.
-func signingKeyNamespace(clientNamespace string) string {
-	ns := strings.TrimSpace(clientNamespace)
-	if ns == "" || ns == "default" {
-		return ""
+// waitForRegistryLeader waits until the rqlite the encryption root is read
+// from can answer a leader-routed query. On a node whose rqlite had just
+// started, the read failed with "leader not found", the gateway exited, and
+// systemd's restart five seconds later happened to find a leader: a crash
+// standing in for a readiness wait.
+func waitForRegistryLeader(cfg *Config, deps *Dependencies) error {
+	db := deps.globalSQLDB
+	if db == nil {
+		db = deps.SQLDB
 	}
-	return ns
-}
-
-func bootstrapEncryptionRoot(cfg *Config, deps *Dependencies) *secrets.Holder {
-	dir := ""
-	cs := ""
-	if cfg != nil {
-		cs = cfg.ClusterSecret
-		if cfg.DataDir != "" {
-			dir = secrets.SecretsDir(cfg.DataDir)
-		}
+	timeout := cfg.rqliteReadyTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := rqlite.WaitForLeader(ctx, db, timeout); err != nil {
+		return fmt.Errorf("the registry rqlite has no leader after %s, so the encryption root cannot be read: %w", timeout, err)
 	}
-	var store secrets.Store
-	if deps != nil {
-		if deps.GlobalORMClient != nil {
-			store = deps.GlobalORMClient
-		} else {
-			store = deps.ORMClient
-		}
-	}
-	r, err := secrets.LoadOrMaterialize(context.Background(), store, dir, cs)
-	if err != nil {
-		if strings.TrimSpace(cs) != "" {
-			return secrets.NewHolder(secrets.Root{CurrentID: secrets.FirstID, CurrentIKM: strings.TrimSpace(cs)})
-		}
-		return secrets.NewHolder(secrets.Root{})
-	}
-	return secrets.NewHolder(r)
+	return nil
 }

@@ -3,25 +3,23 @@ package installers
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
+
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
 // SNI router installer (feat-124, stealth TURN-over-443).
 //
 // Unlike the binary installers (Caddy, ntfy), the orama-sni-router binary is
 // built and shipped to the node by `orama build` / the install tarball — this
-// installer only writes the router's YAML config and the systemd unit, and
-// drives the unit's lifecycle (install+enable+start when enabled,
-// stop+disable when not).
+// installer only writes the router's YAML config. The router runs as
+// orama-namespace-sni-router@index, which orama-node starts when
+// sni_router.enabled is set and stops when it is not.
 
 const (
 	// SNIRouterListenAddr is the public port the router binds. It owns :443 so
 	// Caddy is moved to CaddyHTTPSPortBehindSNI (see caddy.go).
 	SNIRouterListenAddr = ":443"
-
-	// SNIRouterServiceName is the systemd unit name.
-	SNIRouterServiceName = "orama-sni-router.service"
 
 	// SNIRouterConfigName is the router config filename (resolved under
 	// <oramaDir>/configs by the binary's config.DefaultPath lookup).
@@ -42,18 +40,11 @@ const (
 	// sniRouterMaxConcurrentConns caps in-flight connections on the public
 	// :443 listener (DoS guard); mirrors the sniproxy server default.
 	sniRouterMaxConcurrentConns = 10000
-
-	// sniRouterSystemdUnitPath is where the unit file is written.
-	sniRouterSystemdUnitPath = "/etc/systemd/system/" + SNIRouterServiceName
-
-	// sniRouterBinaryPath is the installed binary path on the node.
-	sniRouterBinaryPath = "/opt/orama/bin/orama-sni-router"
 )
 
-// SNIRouterInstaller writes the orama-sni-router config + systemd unit and
-// manages the unit lifecycle. The caddy fallback port matches
-// CaddyHTTPSPortBehindSNI so unmatched SNIs (regular HTTPS) reach the moved
-// Caddy listener.
+// SNIRouterInstaller writes the orama-sni-router config. The caddy fallback
+// port matches CaddyHTTPSPortBehindSNI so unmatched SNIs (regular HTTPS) reach
+// the moved Caddy listener.
 type SNIRouterInstaller struct {
 	*BaseInstaller
 	oramaDir string // e.g. "/opt/orama/.orama"
@@ -87,13 +78,16 @@ func (si *SNIRouterInstaller) Configure(baseDomain string) error {
 		return fmt.Errorf("sni-router: base domain must not be empty")
 	}
 
+	// configs/ is the orama user's; the anchor is the directory holding
+	// .orama (/opt/orama), which only root may write (rootfs).
+	root := rootfs.At(filepath.Dir(si.oramaDir))
 	configDir := filepath.Dir(si.configPath())
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := root.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("sni-router: create config dir %s: %w", configDir, err)
 	}
 
 	content := si.generateConfig(baseDomain)
-	if err := os.WriteFile(si.configPath(), []byte(content), 0644); err != nil {
+	if err := root.WriteFile(si.configPath(), []byte(content), 0644); err != nil {
 		return fmt.Errorf("sni-router: write config %s: %w", si.configPath(), err)
 	}
 	return nil
@@ -140,69 +134,4 @@ routes: []
 		baseDomain,
 		sniRouterRescanInterval,
 	)
-}
-
-// generateSystemdUnit renders /etc/systemd/system/orama-sni-router.service.
-// Runs as the orama user with CAP_NET_BIND_SERVICE so it can bind :443 without
-// root. Ordered Before=caddy.service so the router is ready before Caddy
-// switches to :8443. Restarts always, with no start limit — see "Unit restart
-// policy" in docs/ARCHITECTURE.md.
-func (si *SNIRouterInstaller) generateSystemdUnit() string {
-	return fmt.Sprintf(`[Unit]
-Description=Orama SNI Router (TLS-level :443 → backend forwarder)
-Documentation=https://github.com/DeBrosOfficial/network
-After=network.target
-Before=caddy.service
-PartOf=orama-node.service
-# No start limit - same reasoning as the orama-namespace-*@ templates: this
-# unit is reconciled rather than hand-started, and a rate-limited unit refuses
-# systemctl start until someone runs reset-failed.
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/orama
-EnvironmentFile=-/opt/orama/.orama/data/sni-router.env
-ExecStart=%s --config %s
-
-# Bind privileged ports (:80, :443) without running as root.
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-
-User=orama
-Group=orama
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-LimitNOFILE=65536
-
-TimeoutStopSec=15s
-KillMode=mixed
-KillSignal=SIGTERM
-
-Restart=always
-RestartSec=5s
-
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=orama-sni-router
-
-[Install]
-WantedBy=multi-user.target
-`, sniRouterBinaryPath, si.configPath())
-}
-
-// WriteSystemdUnit writes the unit file. Idempotent.
-func (si *SNIRouterInstaller) WriteSystemdUnit() error {
-	if err := os.WriteFile(sniRouterSystemdUnitPath, []byte(si.generateSystemdUnit()), 0644); err != nil {
-		return fmt.Errorf("sni-router: write systemd unit %s: %w", sniRouterSystemdUnitPath, err)
-	}
-	return nil
-}
-
-// IsInstalled reports whether the router binary is present on the node.
-func (si *SNIRouterInstaller) IsInstalled() bool {
-	_, err := os.Stat(sniRouterBinaryPath)
-	return err == nil
 }

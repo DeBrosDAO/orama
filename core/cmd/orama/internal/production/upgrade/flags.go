@@ -7,6 +7,10 @@ type Flags struct {
 	SkipChecks      bool
 	Nameserver      *bool // Pointer so we can detect if explicitly set vs default
 
+	// PublicIP is this node's public address, recorded as node.public_ip.
+	// Empty keeps the recorded one, or detects it (resolvePublicIP).
+	PublicIP string
+
 	// Remote upgrade flags
 	Env        string // Target environment for remote rolling upgrade
 	NodeFilter string // Single node IP to upgrade (optional)

@@ -1,34 +1,9 @@
 package namespace
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 )
-
-func TestRefuseEmptyAdopt(t *testing.T) {
-	dir := t.TempDir()
-	if err := RefuseEmptyAdopt(dir); err == nil {
-		t.Fatal("empty dir must be refused")
-	}
-	if HasExistingRaft(dir) {
-		t.Fatal("empty dir must not look like raft")
-	}
-}
-
-func TestHasExistingRaft(t *testing.T) {
-	dir := t.TempDir()
-	raft := filepath.Join(dir, "raft.db")
-	if err := os.WriteFile(raft, make([]byte, 2048), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if !HasExistingRaft(dir) {
-		t.Fatal("raft.db > 1KiB must count as existing")
-	}
-	if err := RefuseEmptyAdopt(dir); err != nil {
-		t.Fatalf("existing raft must be adoptable: %v", err)
-	}
-}
 
 func TestRQLiteUnitDataDir_indexUsesCoreDir(t *testing.T) {
 	core := "/opt/orama/.orama/data/rqlite"

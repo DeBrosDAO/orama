@@ -62,6 +62,16 @@ func scanHostKey(ip string) (*hostKey, error) {
 	return hk, nil
 }
 
+// ScanHostKeys returns the known_hosts entries ip presents now. Nothing
+// vouches for them: the caller decides what trusting them means.
+func ScanHostKeys(ip string) ([]string, error) {
+	hk, err := scanHostKey(ip)
+	if err != nil {
+		return nil, err
+	}
+	return hk.lines, nil
+}
+
 // fingerprintLines runs the known_hosts entries through ssh-keygen -l.
 func fingerprintLines(lines []string) ([]string, error) {
 	keygen, err := findBinary("ssh-keygen")

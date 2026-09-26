@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -128,28 +130,19 @@ func (pd *PeerDiscovery) initTable(ctx context.Context) error {
 func (pd *PeerDiscovery) registerSelf(ctx context.Context) error {
 	peerID := pd.host.ID().String()
 
-	// Get WireGuard IP from host addresses
-	wireguardIP, err := pd.getWireGuardIP()
-	if err != nil {
-		return fmt.Errorf("failed to get WireGuard IP: %w", err)
-	}
-
-	// CRITICAL: we used to publish `pd.listenPort` here, which is the gateway's
-	// HTTP API port (e.g. 10004). Other gateways would read this multiaddr from
-	// rqlite, dial /ip4/<wg>/tcp/10004, hit the HTTP server, receive
-	// `HTTP/1.1 400 Bad Request`, and fail the libp2p multistream handshake
-	// with "message did not have trailing newline". The result: cross-node
-	// libp2p mesh had 0 connected peers cluster-wide and cross-node pubsub
-	// silently dropped 100% of messages.
+	// What is registered is where the host listens: the gateway binds its
+	// libp2p host to this node's WireGuard IP (libp2pListenAddrs) on an
+	// OS-assigned port. It used to combine a port read from host.Addrs() with
+	// an IP found separately (wg0, the WireGuard config, a /ip4/10.0 prefix
+	// match) while the host listened on 0.0.0.0 — every interface, the public
+	// one included.
 	//
-	// The actual libp2p port is OS-assigned at startup (client.go listens on
-	// `/ip4/0.0.0.0/tcp/0`), so we must derive it from the live host instead
-	// of the gateway's HTTP config. The listener binds 0.0.0.0 so it accepts
-	// traffic on the WG interface even though libp2p only reports loopback +
-	// public-routable addresses in host.Addrs().
-	libp2pPort, err := extractLibp2pTCPPort(pd.host.Addrs())
+	// It must never be the gateway's HTTP API port: peers dialled
+	// /ip4/<wg>/tcp/10004, hit the HTTP server, and failed the multistream
+	// handshake, leaving the namespace mesh with 0 connected peers.
+	wireguardIP, libp2pPort, err := advertisedLibp2pAddr(pd.host.Network().ListenAddresses())
 	if err != nil {
-		return fmt.Errorf("failed to extract libp2p TCP port from host addresses: %w", err)
+		return fmt.Errorf("find the address to register for peer discovery: %w", err)
 	}
 
 	// Build multiaddr: /ip4/<wireguard_ip>/tcp/<libp2p_port>/p2p/<peer_id>
@@ -185,39 +178,33 @@ func (pd *PeerDiscovery) registerSelf(ctx context.Context) error {
 	return nil
 }
 
-// extractLibp2pTCPPort returns the TCP port the libp2p host is actually
-// listening on, by parsing the host's reported listen addresses.
-//
-// `host.Addrs()` returns multiaddrs like:
-//
-//	/ip4/127.0.0.1/tcp/43043
-//	/ip4/217.76.56.2/tcp/43043
-//
-// All entries share the same port (libp2p binds 0.0.0.0:RANDOM_PORT and
-// reports one entry per detected interface IP). We take the first `/tcp/`
-// component we find.
-//
-// Note: the WireGuard IP (10.0.0.x) does NOT appear in host.Addrs() because
-// libp2p filters its own address enumeration. The listener IS bound to all
-// interfaces including wg0, so the port is still reachable on the WG IP —
-// we just have to combine the port we extract here with the WG IP we get
-// separately (via getWireGuardIP).
-func extractLibp2pTCPPort(addrs []multiaddr.Multiaddr) (int, error) {
+// advertisedLibp2pAddr is the WireGuard IP and TCP port the libp2p host
+// listens on, from its listen addresses. The first TCP address on the
+// WireGuard overlay wins; a host with none — no listener, or one bound to
+// 0.0.0.0 or a public address — is an error rather than a row other gateways
+// would dial and fail.
+func advertisedLibp2pAddr(addrs []multiaddr.Multiaddr) (netip.Addr, int, error) {
 	for _, a := range addrs {
-		port, err := a.ValueForProtocol(multiaddr.P_TCP)
+		ipStr, err := a.ValueForProtocol(multiaddr.P_IP4)
 		if err != nil {
-			continue // not a TCP multiaddr (could be QUIC, etc.) — skip
-		}
-		n, parseErr := strconv.Atoi(port)
-		if parseErr != nil {
 			continue
 		}
-		if n <= 0 || n > 65535 {
+		portStr, err := a.ValueForProtocol(multiaddr.P_TCP)
+		if err != nil {
+			continue // not TCP (QUIC, …)
+		}
+		ip, err := netip.ParseAddr(ipStr)
+		if err != nil || !constants.WireGuardOverlay().Contains(ip) {
 			continue
 		}
-		return n, nil
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port <= 0 || port > 65535 {
+			continue
+		}
+		return ip, port, nil
 	}
-	return 0, fmt.Errorf("no TCP port found in libp2p host addresses (got %d addrs)", len(addrs))
+	return netip.Addr{}, 0, fmt.Errorf("the libp2p host has no TCP listener on the WireGuard overlay %s (listening on %v)",
+		constants.WireGuardSubnet, addrs)
 }
 
 // unregisterSelf removes this gateway from the discovery table
@@ -429,44 +416,6 @@ func GetWireGuardIP() (string, error) {
 					addrWithCIDR := strings.TrimSpace(parts[1])
 					ip := strings.Split(addrWithCIDR, "/")[0]
 					ip = strings.TrimSpace(ip)
-					return ip, nil
-				}
-			}
-		}
-	}
-
-	return "", fmt.Errorf("could not determine WireGuard IP")
-}
-
-// getWireGuardIP extracts the WireGuard IP from the WireGuard interface
-func (pd *PeerDiscovery) getWireGuardIP() (string, error) {
-	// Try the standalone methods first (interface + config file)
-	ip, err := GetWireGuardIP()
-	if err == nil {
-		pd.logger.Info("Found WireGuard IP", zap.String("ip", ip))
-		return ip, nil
-	}
-	pd.logger.Debug("Failed to get WireGuard IP from interface/config", zap.Error(err))
-
-	// Method 3: Fallback - Try to get from libp2p host addresses
-	for _, addr := range pd.host.Addrs() {
-		addrStr := addr.String()
-		// Look for /ip4/10.0.0.x pattern
-		if len(addrStr) > 10 && addrStr[:9] == "/ip4/10.0" {
-			// Extract IP address
-			parts := addr.String()
-			// Parse /ip4/<ip>/... format
-			if len(parts) > 5 {
-				// Find the IP between /ip4/ and next /
-				start := 5 // after "/ip4/"
-				end := start
-				for end < len(parts) && parts[end] != '/' {
-					end++
-				}
-				if end > start {
-					ip := parts[start:end]
-					pd.logger.Info("Found WireGuard IP from libp2p addresses",
-						zap.String("ip", ip))
 					return ip, nil
 				}
 			}

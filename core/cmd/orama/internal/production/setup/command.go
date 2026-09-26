@@ -12,13 +12,11 @@ package setup
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
 	"github.com/DeBrosOfficial/network/pkg/invite"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,7 +25,10 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
-	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/invitemint"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/push"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
@@ -35,14 +36,18 @@ import (
 
 // Options holds the flags for the setup command.
 type Options struct {
-	IP         string
-	Env        string
-	Role       string // "node" or "nameserver"
-	User       string // SSH user (default: "root")
-	Password   string // One-time password for initial SSH access
-	BaseDomain string
-	Gateway    string // Gateway URL to use for invite tokens (overrides env config)
-	Genesis    bool   // If true, create a new cluster instead of joining
+	IP   string
+	Env  string
+	Role string // "node" or "nameserver"
+	User string // SSH user (default: "root")
+	// UsePassword bootstraps over password login. The password comes from the
+	// operator's RootWallet vault login entry for the IP, never the command
+	// line, where ps and shell history would keep the credential that owns
+	// the machine.
+	UsePassword bool
+	BaseDomain  string
+	Gateway     string // Gateway URL (the cluster domain) to mint the invite through (overrides env config)
+	Genesis     bool   // If true, create a new cluster instead of joining
 	// HostKey pins the VPS's expected SSH host-key fingerprint (SHA256:...) so
 	// enrollment can run unattended. Empty means confirm it interactively.
 	HostKey string
@@ -54,6 +59,8 @@ type Options struct {
 	// Archive is the build archive to install. Empty means the newest one in
 	// build.ArchiveDir.
 	Archive string
+	// ACMECA is passed to `orama node install --acme-ca`.
+	ACMECA string
 	// JoinVia is "user@ip" of a node already in the cluster. The invite is
 	// minted on it over SSH with its RootWallet key, instead of through the
 	// gateway's operator API — no `orama auth login` and no bearer token.
@@ -87,11 +94,12 @@ func Run(opts Options) error {
 	}
 
 	// 2. Get operator wallet address
-	addrData, err := agentClient.GetAddress(ctx, "evm")
+	operator, err := OperatorWallet(ctx, agentClient)
 	if err != nil {
-		return fmt.Errorf("failed to get wallet address: %w", err)
+		return err
 	}
-	fmt.Printf("  Wallet: %s\n", addrData.Address)
+	wallet := []string{operator}
+	fmt.Printf("  Wallet: %s\n", operator)
 
 	// 3. Create SSH key in rootwallet vault for this node
 	vaultTarget := fmt.Sprintf("%s/%s", opts.IP, opts.User)
@@ -144,12 +152,16 @@ func Run(opts Options) error {
 	fmt.Println("  SSH connection OK")
 
 	// 6. Put exactly this build on the node.
-	if err := ensureArchive(node, opts.Archive); err != nil {
+	if err := EnsureArchive(node, opts.Archive, wallet); err != nil {
 		return err
 	}
 
 	// 7. Build the install command
-	installCmd, err := buildInstallCommand(opts, node, agentClient)
+	expected, err := expectedArchiveSigners(opts, wallet)
+	if err != nil {
+		return err
+	}
+	installCmd, err := buildInstallCommand(opts, wallet[0], expected)
 	if err != nil {
 		return fmt.Errorf("failed to build install command: %w", err)
 	}
@@ -175,6 +187,47 @@ func Run(opts Options) error {
 	return nil
 }
 
+// OperatorWallet is the operator's RootWallet address, normalized: the account
+// `orama build` signs archives with, which a genesis node makes its archive
+// trust anchor and every node registers under.
+func OperatorWallet(ctx context.Context, agent *rwagent.Client) (string, error) {
+	addrData, err := agent.GetAddress(ctx, archiveSigningChain)
+	if err != nil {
+		return "", fmt.Errorf("failed to get wallet address: %w", err)
+	}
+	wallet, err := archivetrust.NormalizeSigners([]string{addrData.Address})
+	if err != nil {
+		return "", fmt.Errorf("the RootWallet agent's address: %w", err)
+	}
+	return wallet[0], nil
+}
+
+// archiveSigningChain is the RootWallet chain whose account signs archives.
+const archiveSigningChain = "evm"
+
+// vaultPasswordTimeout bounds the vault lookup; the agent may prompt to unlock.
+const vaultPasswordTimeout = 2 * time.Minute
+
+// vaultPassword reads the VPS login password from the operator's RootWallet
+// vault: the login entry whose site is the IP, for user. A variable so tests
+// need no agent.
+var vaultPassword = func(ip, user string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), vaultPasswordTimeout)
+	defer cancel()
+	data, err := rwagent.New(os.Getenv("RW_AGENT_SOCK")).GetPassword(ctx, ip, user)
+	if rwagent.IsNotFound(err) {
+		return "", fmt.Errorf("--password: your RootWallet vault has no login for %s with user %s; "+
+			"store it with `rw vault add %s` (username %s) and run setup again", ip, user, ip, user)
+	}
+	if err != nil {
+		return "", fmt.Errorf("--password: read the login for %s@%s from RootWallet: %w", user, ip, err)
+	}
+	if data.Password == "" {
+		return "", fmt.Errorf("--password: the RootWallet login for %s@%s has an empty password", user, ip)
+	}
+	return data.Password, nil
+}
+
 // enrollKey installs pubKey on the VPS over the operator's existing
 // credential: the VPS password (--password) or a private key that already
 // opens it (--bootstrap-key). With neither, the key must already be there.
@@ -183,18 +236,22 @@ func Run(opts Options) error {
 // bootstraps every later trust relationship with the node, so accepting an
 // unknown key here would hand the credential to whoever answered.
 func enrollKey(opts Options, pubKey, knownHosts string) error {
-	if opts.Password != "" && opts.BootstrapKey != "" {
+	if opts.UsePassword && opts.BootstrapKey != "" {
 		return fmt.Errorf("--password and --bootstrap-key are alternatives; pass one")
 	}
-	if opts.Password == "" && opts.BootstrapKey == "" {
+	if !opts.UsePassword && opts.BootstrapKey == "" {
 		fmt.Println("  No --password or --bootstrap-key, assuming the RootWallet key is already installed")
 		return nil
 	}
 
 	fmt.Printf("  Installing SSH key on %s...\n", opts.IP)
 	var err error
-	if opts.Password != "" {
-		err = installPublicKey(opts.IP, opts.User, opts.Password, pubKey, knownHosts)
+	if opts.UsePassword {
+		var password string
+		if password, err = vaultPassword(opts.IP, opts.User); err != nil {
+			return err
+		}
+		err = installPublicKey(opts.IP, opts.User, password, pubKey, knownHosts)
 	} else {
 		err = installPublicKeyWithKey(opts.IP, opts.User, opts.BootstrapKey, pubKey, knownHosts)
 	}
@@ -236,9 +293,9 @@ func pinHostKey(opts Options) (string, func(), error) {
 func checkNodeAccess(opts Options, node inspector.Node) error {
 	res := inspector.RunSSH(context.Background(), node, "echo ok")
 	if !res.OK() {
-		if opts.Password == "" && opts.BootstrapKey == "" {
+		if !opts.UsePassword && opts.BootstrapKey == "" {
 			return fmt.Errorf("the RootWallet key for %s@%s does not open the VPS (%s); "+
-				"install it once with --password (password login) or --bootstrap-key <private key that opens the VPS today>",
+				"install it once with --password (password login, read from your RootWallet vault) or --bootstrap-key <private key that opens the VPS today>",
 				opts.User, opts.IP, strings.TrimSpace(res.Stderr))
 		}
 		return fmt.Errorf("SSH with the RootWallet key failed right after installing it: %s", strings.TrimSpace(res.Stderr))
@@ -395,8 +452,25 @@ func installPublicKey(ip, user, password, pubKey, knownHostsPath string) error {
 	return nil
 }
 
-// buildInstallCommand constructs the `sudo orama node install` command.
-func buildInstallCommand(opts Options, node inspector.Node, agentClient *rwagent.Client) (string, error) {
+// buildInstallCommand constructs the `sudo orama node install` command,
+// minting the invite a joining node needs.
+func buildInstallCommand(opts Options, wallet string, expected []string) (string, error) {
+	var token string
+	if !opts.Genesis {
+		var err error
+		if token, err = joinInvite(opts); err != nil {
+			return "", err
+		}
+	}
+	return InstallCommand(opts, wallet, expected, token), nil
+}
+
+// InstallCommand is the `sudo orama node install` command line for opts.
+// wallet is the operator's RootWallet address: the node registers under it,
+// and a genesis node makes it the archive trust anchor.
+// expected is the archive signer list a joining node must receive and token
+// the invite it joins with; both are unused for a genesis node.
+func InstallCommand(opts Options, wallet string, expected []string, token string) string {
 	parts := []string{"sudo /opt/orama/bin/orama node install"}
 	// Every value is single-quoted: this line runs as root on the VPS, and the
 	// invite in it comes from another machine.
@@ -421,24 +495,35 @@ func buildInstallCommand(opts Options, node inspector.Node, agentClient *rwagent
 	if opts.Env != "" {
 		flag("--environment", opts.Env)
 	}
-
-	// Get wallet address for operator tagging
-	ctx := context.Background()
-	if addrData, err := agentClient.GetAddress(ctx, "evm"); err == nil && addrData.Address != "" {
-		flag("--operator-wallet", addrData.Address)
+	if opts.ACMECA != "" {
+		flag("--acme-ca", opts.ACMECA)
 	}
+
+	flag("--operator-wallet", wallet)
 
 	if !opts.Genesis {
-		joinArgs, err := joinArguments(opts)
-		if err != nil {
-			return "", err
-		}
-		for i := 0; i+1 < len(joinArgs); i += 2 {
-			flag(joinArgs[i], joinArgs[i+1])
-		}
+		flag("--expect-archive-signers", strings.Join(expected, ","))
+		// The invite carries the gateway to join and the certificate to pin.
+		flag("--token", token)
 	}
 
-	return strings.Join(parts, " "), nil
+	return strings.Join(parts, " ")
+}
+
+// expectedArchiveSigners is the archive signer list a joining node must
+// receive in the join response: the anchor of the --join-via node, read over
+// SSH, or else the operator's own wallet — the one setup verified the archive
+// against. A cluster that trusts more signers than that is joined with
+// --join-via.
+func expectedArchiveSigners(opts Options, wallet []string) ([]string, error) {
+	switch {
+	case opts.Genesis:
+		return nil, nil
+	case opts.JoinVia != "":
+		return clusterArchiveSigners(opts.JoinVia)
+	default:
+		return wallet, nil
+	}
 }
 
 // shellQuote single-quotes s for a POSIX shell.
@@ -451,7 +536,8 @@ func shellQuote(s string) string {
 // travels into a root command on the new VPS, so nothing else is accepted.
 var inviteFormat = regexp.MustCompile(`^(orama1_[A-Za-z0-9_-]+|[0-9a-f]{64})$`)
 
-// validateInvite checks an invite received from another machine.
+// validateInvite checks an invite received from another machine: it goes into
+// a root command on the new node.
 func validateInvite(token string) error {
 	if !inviteFormat.MatchString(token) {
 		return fmt.Errorf("invite has an unexpected form")
@@ -462,20 +548,15 @@ func validateInvite(token string) error {
 	return nil
 }
 
-// joinArguments returns the install flags that join the cluster: an invite
-// minted on an existing node over SSH (--join-via), or one requested from the
-// gateway's operator API.
-func joinArguments(opts Options) ([]string, error) {
+// joinInvite returns the invite that joins the cluster: one minted on an
+// existing node over SSH (--join-via), or one requested from the gateway's
+// operator API.
+func joinInvite(opts Options) (string, error) {
 	if opts.JoinVia != "" {
 		if opts.Gateway != "" {
-			return nil, fmt.Errorf("--join-via and --gateway are alternatives; pass one")
+			return "", fmt.Errorf("--join-via and --gateway are alternatives; pass one")
 		}
-		token, err := mintInviteOverSSH(opts.JoinVia)
-		if err != nil {
-			return nil, err
-		}
-		// The invite carries the gateway to join and the certificate to pin.
-		return []string{"--token", token}, nil
+		return mintInviteOverSSH(opts.JoinVia)
 	}
 
 	gatewayURL := opts.Gateway
@@ -484,27 +565,69 @@ func joinArguments(opts Options) ([]string, error) {
 		if env == "" {
 			active, err := cli.GetActiveEnvironment()
 			if err != nil {
-				return nil, fmt.Errorf("failed to get active environment: %w", err)
+				return "", fmt.Errorf("failed to get active environment: %w", err)
 			}
 			env = active.Name
 		}
 		envConfig, err := cli.GetEnvironmentByName(env)
 		if err != nil {
-			return nil, fmt.Errorf("environment %q not found (use --join-via or --gateway): %w", env, err)
+			return "", fmt.Errorf("environment %q not found (use --join-via or --gateway): %w", env, err)
 		}
 		gatewayURL = envConfig.GatewayURL
 	}
 
-	token, err := requestInviteToken(gatewayURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get invite token: %w", err)
-	}
-	return []string{"--join", gatewayURL, "--token", token}, nil
+	return mintInviteThroughGateway(gatewayURL)
 }
 
-// mintInviteOverSSH runs `orama node invite --raw` on an existing node,
-// reached with its RootWallet key, and returns the invite it prints.
+// MintInviteCommand is the command that, run on a node already in the
+// cluster, mints a single-use invite naming that node and the certificate it
+// serves, and prints only the invite.
+func MintInviteCommand() string {
+	return "sudo -n /opt/orama/bin/orama node invite --raw --expiry " + inviteExpiry.String()
+}
+
+// ParseMintedInvite is the invite in the output of MintInviteCommand, checked:
+// it goes into a root command on the new node.
+func ParseMintedInvite(out string) (string, error) {
+	token := strings.TrimSpace(out)
+	if err := validateInvite(token); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// mintInviteOverSSH runs MintInviteCommand on an existing node, reached with
+// its RootWallet key, and returns the invite it prints.
 func mintInviteOverSSH(joinVia string) (string, error) {
+	res, err := runOnJoinVia(joinVia, MintInviteCommand())
+	if err != nil {
+		return "", fmt.Errorf("mint an invite on %s: %w", joinVia, err)
+	}
+	token, err := ParseMintedInvite(res)
+	if err != nil {
+		return "", fmt.Errorf("mint an invite on %s: %w", joinVia, err)
+	}
+	return token, nil
+}
+
+// clusterArchiveSigners reads the archive trust anchor of the node the invite
+// is minted on, over the operator's own SSH to it: the list a joining node
+// expects the join response to carry. It is root-owned on that node, unlike
+// the gateway that serves the response.
+func clusterArchiveSigners(joinVia string) ([]string, error) {
+	out, err := runOnJoinVia(joinVia, "cat "+archivetrust.AnchorPath)
+	if err != nil {
+		return nil, fmt.Errorf("read the archive trust anchor on %s: %w", joinVia, err)
+	}
+	signers, err := archivetrust.ParseAnchor([]byte(out))
+	if err != nil {
+		return nil, fmt.Errorf("the archive trust anchor on %s: %w", joinVia, err)
+	}
+	return signers, nil
+}
+
+// runOnJoinVia runs cmd on the --join-via node and returns its output.
+func runOnJoinVia(joinVia, cmd string) (string, error) {
 	user, host, ok := strings.Cut(joinVia, "@")
 	if !ok || !sshUserPattern.MatchString(user) || net.ParseIP(host) == nil {
 		return "", fmt.Errorf("--join-via %q: want user@ip of a node already in the cluster", joinVia)
@@ -521,16 +644,11 @@ func mintInviteOverSSH(joinVia string) (string, error) {
 		return "", fmt.Errorf("--join-via %s: %w", joinVia, err)
 	}
 	defer cleanup()
-
-	res := inspector.RunSSH(context.Background(), via[0], "sudo -n /opt/orama/bin/orama node invite --raw --expiry "+inviteExpiry.String())
+	res := inspector.RunSSH(context.Background(), via[0], cmd)
 	if !res.OK() {
-		return "", fmt.Errorf("mint an invite on %s: %s", joinVia, strings.TrimSpace(res.Stderr+" "+res.Stdout))
+		return "", fmt.Errorf("%s", strings.TrimSpace(res.Stderr+" "+res.Stdout))
 	}
-	token := strings.TrimSpace(res.Stdout)
-	if err := validateInvite(token); err != nil {
-		return "", fmt.Errorf("mint an invite on %s: %w", joinVia, err)
-	}
-	return token, nil
+	return res.Stdout, nil
 }
 
 // sshUserPattern is a POSIX login name; nothing that ssh could read as an
@@ -550,77 +668,140 @@ func operatorKnownHosts() (string, error) {
 // consumes it starts seconds later.
 const inviteExpiry = 15 * time.Minute
 
-// requestInviteToken calls POST /v1/operator/invite to get an invite token.
-func requestInviteToken(gatewayURL string) (string, error) {
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		return "", fmt.Errorf("failed to load credentials: %w", err)
-	}
-	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil {
-		return "", fmt.Errorf("no credentials for %s — run 'orama auth login' first", gatewayURL)
-	}
-	token, err := auth.Bearer(gatewayURL, store, creds)
+// mintInviteThroughGateway mints an invite through the gateway's operator API
+// that names one node of the cluster and pins the certificate it served.
+//
+// It used to hand install `--join <gateway> --token <token>`: the cluster's
+// domain, which reaches whichever nameserver DNS picks, and no fingerprint, so
+// the joining node trusted the first certificate it was shown. The invite is
+// now minted the way `orama invite` mints it (pkg invitemint).
+func mintInviteThroughGateway(gatewayURL string) (string, error) {
+	host, err := invitemint.GatewayHost(gatewayURL)
 	if err != nil {
 		return "", err
 	}
-
-	body, _ := json.Marshal(map[string]int{"expiry_minutes": 60})
-	req, err := http.NewRequest(http.MethodPost, gatewayURL+"/v1/operator/invite", bytes.NewReader(body))
+	nodeIP, err := invitemint.ChooseNode(context.Background(), "", host)
+	if err != nil {
+		return "", fmt.Errorf("%w (or mint the invite on a node you choose with --join-via user@ip)", err)
+	}
+	bearer, err := shared.AuthToken(gatewayURL)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	m, err := invitemint.MintThrough(gatewayURL, host, nodeIP, bearer, inviteExpiry)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return "", fmt.Errorf("%w (or mint the invite on another node with --join-via user@ip)", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-	if err := validateInvite(result.Token); err != nil {
-		return "", fmt.Errorf("invite from %s: %w", gatewayURL, err)
-	}
-	return result.Token, nil
+	return m.Invite, nil
 }
 
-// ensureArchive makes the node run the build in archivePath (or the newest
-// archive when it is empty). It compares the archive's manifest with the one
-// installed on the node rather than asking whether any orama binary exists:
-// that check let a re-run of setup install whatever older build the node
-// already had.
-func ensureArchive(node inspector.Node, archivePath string) error {
+// EnsureArchive makes the node run the build in archivePath, verified against
+// trusted before anything reaches the node.
+//
+// A new machine has no verified orama of its own: the binary that runs the
+// install comes out of this archive, so the archive is verified here, on the
+// operator's machine, and what is uploaded is a canonical archive written from
+// the verified tree (archivetrust.PrepareUpload) — never the file the operator
+// named. On the node the CLI is extracted alone, checked against the verified
+// manifest's checksum, and put the archive in place with `node stage-archive`:
+// the same verification, lock and crash-safe swap a push uses.
+//
+// It is skipped only when the node already has exactly this manifest and a CLI
+// matching its checksum; comparing manifests alone let a replaced binary run.
+func EnsureArchive(node inspector.Node, archivePath string, trusted []string) error {
+	return EnsureArchives([]inspector.Node{node}, archivePath, trusted)
+}
+
+// EnsureArchives is EnsureArchive for several nodes: the archive is verified
+// and re-packed once, then put on each node in turn, stopping at the first
+// node that fails.
+func EnsureArchives(nodes []inspector.Node, archivePath string, trusted []string) (err error) {
 	if archivePath == "" {
-		archivePath = build.FindNewestArchive()
-		if archivePath == "" {
-			return fmt.Errorf("no binary archive in %s (run `orama build`, or pass --archive)", build.ArchiveDir)
+		// /tmp is shared: its newest archive can be another checkout's build.
+		return fmt.Errorf("--archive is required: the path `orama build` printed")
+	}
+	upload, err := archivetrust.PrepareUpload(archivePath, trusted)
+	if err != nil {
+		return fmt.Errorf("refusing to upload %s: %w", archivePath, err)
+	}
+	defer func() { err = errors.Join(err, upload.Remove()) }()
+	m := upload.Verified.Manifest
+	fmt.Printf("  Archive verified: v%s linux/%s signed by %s\n", m.Version, m.Arch, upload.Verified.Signer)
+
+	// Verification compared it with a computed digest, case-insensitively;
+	// sha256sum prints lowercase.
+	cliSum := strings.ToLower(m.Checksums[archiveCLIName])
+	if cliSum == "" {
+		return fmt.Errorf("the verified archive has no %s binary to install with", archiveCLIName)
+	}
+	for _, node := range nodes {
+		if err := ensureVerifiedArchive(node, upload.Path, m.Arch, cliSum, trusted); err != nil {
+			return fmt.Errorf("node %s: %w", node.Host, err)
 		}
 	}
-	want, err := build.ReadArchiveManifest(archivePath)
+	return nil
+}
+
+// ensureVerifiedArchive puts the verified, re-packed archive on node unless it
+// already runs exactly that build.
+func ensureVerifiedArchive(node inspector.Node, archive, arch, cliSum string, trusted []string) error {
+	if err := checkNodeArch(node, arch); err != nil {
+		return err
+	}
+	current, err := nodeRunsBuild(node, archive, cliSum)
 	if err != nil {
 		return err
 	}
-	have := inspector.RunSSH(context.Background(), node, "cat /opt/orama/"+build.ManifestName)
-	if have.OK() && bytes.Equal(bytes.TrimSpace([]byte(have.Stdout)), bytes.TrimSpace(want)) {
-		fmt.Printf("  Node already runs this build (%s)\n", filepath.Base(archivePath))
+	if current {
+		fmt.Printf("  %s already runs this build\n", node.Host)
 		return nil
 	}
+	return uploadAndStage(node, archive, cliSum, trusted)
+}
 
-	// A fresh private directory, not a fixed /tmp path that root then extracts:
-	// another local user could have planted or swapped a file there.
+// archiveCLIName is the orama CLI in an archive's bin/.
+const archiveCLIName = "orama"
+
+// nodeRunsBuild reports whether the node's /opt/orama holds exactly the
+// manifest in archive and a CLI with the checksum it lists.
+func nodeRunsBuild(node inspector.Node, archive, cliSum string) (bool, error) {
+	want, err := build.ReadArchiveManifest(archive)
+	if err != nil {
+		return false, err
+	}
+	have := inspector.RunSSH(context.Background(), node, "cat /opt/orama/"+build.ManifestName)
+	if !have.OK() || !bytes.Equal(bytes.TrimSpace([]byte(have.Stdout)), bytes.TrimSpace(want)) {
+		return false, nil
+	}
+	sum := inspector.RunSSH(context.Background(), node, "sha256sum /opt/orama/bin/"+archiveCLIName)
+	got, _, _ := strings.Cut(strings.TrimSpace(sum.Stdout), " ")
+	return sum.OK() && got == cliSum, nil
+}
+
+// goArch names the architectures `uname -m` reports as Go does.
+var goArch = map[string]string{"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+
+// checkNodeArch refuses an archive built for another architecture than the
+// node's, before anything is uploaded — for a join, before the invite is spent.
+func checkNodeArch(node inspector.Node, arch string) error {
+	out, err := remotessh.RunSSHOutput(node, "uname -m")
+	if err != nil {
+		return fmt.Errorf("read the node's architecture: %w", err)
+	}
+	machine := strings.TrimSpace(out)
+	nodeArch, ok := goArch[machine]
+	if !ok {
+		return fmt.Errorf("the node reports architecture %q, which no build targets", machine)
+	}
+	if nodeArch != arch {
+		return fmt.Errorf("the archive is built for linux/%s and the node is linux/%s: build with --arch %s", arch, nodeArch, nodeArch)
+	}
+	return nil
+}
+
+// uploadAndStage uploads the verified archive into a private directory on the
+// node and stages it there. The directory is removed however that ends.
+func uploadAndStage(node inspector.Node, archive, cliSum string, trusted []string) error {
 	dir, err := remotessh.RunSSHOutput(node, "mktemp -d /tmp/orama-archive.XXXXXXXX")
 	if err != nil {
 		return fmt.Errorf("create an upload directory on the node: %w", err)
@@ -629,15 +810,15 @@ func ensureArchive(node inspector.Node, archivePath string) error {
 	if !uploadDirPattern.MatchString(dir) {
 		return fmt.Errorf("unexpected upload directory %q from mktemp", dir)
 	}
-
-	fmt.Printf("  Uploading archive (%s)...\n", archivePath)
-	if err := remotessh.UploadFile(node, archivePath, dir+"/archive.tar.gz"); err != nil {
-		return fmt.Errorf("failed to upload archive: %w", err)
+	fmt.Printf("  Uploading the verified archive...\n")
+	if err := remotessh.UploadFile(node, archive, dir+"/archive.tar.gz"); err != nil {
+		rmErr := remotessh.RunSSHStreaming(node, "rm -rf "+dir)
+		return errors.Join(fmt.Errorf("failed to upload archive: %w", err), rmErr)
 	}
-	if err := remotessh.RunSSHStreaming(node, extractArchiveCommand(dir)); err != nil {
-		return fmt.Errorf("failed to extract archive: %w", err)
+	if err := remotessh.RunSSHStreaming(node, stageArchiveCommand(dir, cliSum, trusted)); err != nil {
+		return fmt.Errorf("failed to stage the archive on the node: %w", err)
 	}
-	fmt.Println("  Archive extracted")
+	fmt.Println("  Archive verified and in place on the node")
 	return nil
 }
 
@@ -645,19 +826,39 @@ func ensureArchive(node inspector.Node, archivePath string) error {
 // directory is interpolated into a root shell command, so nothing else passes.
 var uploadDirPattern = regexp.MustCompile(`^/tmp/orama-archive\.[A-Za-z0-9]{8}$`)
 
-// extractArchiveCommand replaces the archive-owned entries under /opt/orama
-// with the archive uploaded to dir, leaving the node's data (.orama/)
-// untouched, and removes dir. It unpacks into a staging directory first, so a
-// corrupt archive fails before anything installed is removed, and the window
-// in which a restarting service could find its binary gone is one copy long.
-func extractArchiveCommand(dir string) string {
-	var rm []string
-	for _, p := range build.ArchiveOwnedPaths {
-		rm = append(rm, "/opt/orama/"+p)
-	}
-	stage := dir + "/extract"
-	return "sudo bash -c 'set -e; trap \"rm -rf " + dir + "\" EXIT; mkdir -p /opt/orama " + stage + "; tar xzf " + dir + "/archive.tar.gz -C " + stage +
-		"; rm -rf " + strings.Join(rm, " ") + "; cp -a " + stage + "/. /opt/orama/; rm -rf " + dir + "'"
+// stageArchiveCommand, as root on the node: extracts only the CLI from the
+// archive uploaded to dir into a new root-only directory under /opt/orama (not
+// /tmp, which may be noexec), refuses it unless it has the checksum the
+// verified manifest lists, and runs its `node stage-archive` on the archive —
+// which verifies it again against the node's anchor, takes the archive lock
+// and swaps it in with rollback. A node without an anchor gets one from
+// trusted, written only after the archive verified against it. Both
+// directories are always removed.
+//
+// Every value interpolated is safe in a shell: dir matches uploadDirPattern,
+// cliSum is a checksum from a verified manifest (hex — verification compared
+// it with a computed digest — lowercased by EnsureArchive), and trusted are
+// normalized addresses.
+func stageArchiveCommand(dir, cliSum string, trusted []string) string {
+	archive := dir + "/archive.tar.gz"
+	cli := "/opt/orama/" + push.SetupCLIPrefix + strings.TrimPrefix(dir, "/tmp/orama-archive.")
+	stage := cli + "/bin/orama node stage-archive --archive " + archive
+	// /opt/orama must be root's alone before a binary is run from under it:
+	// anyone else who could write it could swap the checked CLI.
+	// A find that cannot inspect it prints nothing, which must not pass.
+	rootOnly := "bad=$(find /opt/orama -maxdepth 0 \\( ! -user root -o -perm -020 -o -perm -002 \\) -print) || " +
+		"{ echo \"cannot inspect /opt/orama\" >&2; exit 1; }; " +
+		"[ -z \"$bad\" ] || { echo \"/opt/orama is not owned by root and writable only by root\" >&2; exit 1; }; "
+	// The archive decides what bin/orama is: a symlink would make the checksum,
+	// and the run after it, follow it anywhere.
+	regularCLI := "[ -f " + cli + "/bin/orama ] && [ ! -L " + cli + "/bin/orama ] || " +
+		"{ echo \"bin/orama in the archive is not a regular file\" >&2; exit 1; }; "
+	return "sudo bash -c 'set -e; trap \"rm -rf " + dir + " " + cli + "\" EXIT; " +
+		"mkdir -p /opt/orama; " + rootOnly + "mkdir -m 700 " + cli + "; " +
+		"tar --no-same-owner -xzf " + archive + " -C " + cli + " bin/orama; " + regularCLI +
+		"echo \"" + cliSum + "  " + cli + "/bin/orama\" | sha256sum -c --quiet -; " +
+		"if [ -e " + archivetrust.AnchorPath + " ]; then " + stage + "; " +
+		"else " + stage + " --trust-signers " + strings.Join(trusted, ",") + "; fi'"
 }
 
 func findBinary(name string) (string, error) {

@@ -14,8 +14,7 @@ var (
 	// Global cache of trusted domains loaded from environment
 	trustedDomains []string
 	// CA certificate pool for trusting self-signed certs
-	caCertPool  *x509.CertPool
-	initialized bool
+	caCertPool *x509.CertPool
 )
 
 // Default trusted domains - always trust orama.network for staging/development
@@ -51,8 +50,6 @@ func init() {
 			// Successfully loaded CA certificate
 		}
 	}
-
-	initialized = true
 }
 
 // GetTrustedDomains returns the list of domains to skip TLS verification for
@@ -87,7 +84,7 @@ func GetTLSConfig() *tls.Config {
 		config.RootCAs = caCertPool
 	}
 
-	return config
+	return withScopedRoots(config)
 }
 
 // NewHTTPClient creates an HTTP client with TLS verification for trusted domains

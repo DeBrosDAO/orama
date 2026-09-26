@@ -5,28 +5,28 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 )
 
-// Manifest describes the contents of a binary archive.
-type Manifest struct {
-	Version   string            `json:"version"`
-	Commit    string            `json:"commit"`
-	Date      string            `json:"date"`
-	Arch      string            `json:"arch"`
-	Checksums map[string]string `json:"checksums"` // filename -> sha256
-}
+// Manifest describes the contents of a binary archive. It is the type nodes
+// verify, so what the build signs and what a node checks cannot drift apart.
+type Manifest = archivetrust.Manifest
 
-// generateManifest creates the manifest with SHA256 checksums of all binaries.
+// generateManifest creates the manifest with SHA256 checksums of every file
+// the archive installs: binaries keyed by name, systemd templates by
+// "systemd/<name>". Nodes refuse a file the manifest does not list, so nothing
+// in the archive escapes the signature.
 func (b *Builder) generateManifest() (*Manifest, error) {
 	m := &Manifest{
 		Version:   b.version,
@@ -34,39 +34,63 @@ func (b *Builder) generateManifest() (*Manifest, error) {
 		Date:      b.date,
 		Arch:      b.flags.Arch,
 		Checksums: make(map[string]string),
+		Signers:   b.flags.Signers,
 	}
-
-	entries, err := os.ReadDir(b.binDir)
-	if err != nil {
+	if err := addChecksums(m.Checksums, b.binDir, ""); err != nil {
 		return nil, err
 	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
+	for _, sub := range []string{systemdArchiveDir, packagesArchiveDir} {
+		dir := filepath.Join(b.tmpDir, sub)
+		if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 			continue
+		} else if err != nil {
+			return nil, err
 		}
-		path := filepath.Join(b.binDir, entry.Name())
-		hash, err := sha256File(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to hash %s: %w", entry.Name(), err)
+		if err := addChecksums(m.Checksums, dir, sub+"/"); err != nil {
+			return nil, err
 		}
-		m.Checksums[entry.Name()] = hash
 	}
-
 	return m, nil
 }
 
-// createArchive creates the tar.gz archive from the build directory.
-func (b *Builder) createArchive(outputPath string, manifest *Manifest) error {
-	fmt.Printf("\nCreating archive: %s\n", outputPath)
+// systemdArchiveDir and packagesArchiveDir hold the namespace templates and
+// optional packages inside an archive.
+const (
+	systemdArchiveDir  = "systemd"
+	packagesArchiveDir = "packages"
+)
 
-	// Write manifest.json to tmpDir
-	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+// addChecksums records the SHA256 of each file in dir under keyPrefix+name.
+func addChecksums(checksums map[string]string, dir, keyPrefix string) error {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(b.tmpDir, "manifest.json"), manifestData, 0644); err != nil {
+	for _, entry := range entries {
+		if entry.IsDir() {
+			return fmt.Errorf("%s holds a directory, %s; an archive's content directories are flat", dir, entry.Name())
+		}
+		hash, err := sha256File(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return fmt.Errorf("failed to hash %s: %w", entry.Name(), err)
+		}
+		checksums[keyPrefix+entry.Name()] = hash
+	}
+	return nil
+}
+
+// createArchive creates the tar.gz archive from the build directory, with
+// manifestJSON as manifest.json and, when set, signature as manifest.sig.
+func (b *Builder) createArchive(outputPath string, manifest *Manifest, manifestJSON []byte, signature string) error {
+	fmt.Printf("\nCreating archive: %s\n", outputPath)
+
+	if err := os.WriteFile(filepath.Join(b.tmpDir, archivetrust.ManifestName), manifestJSON, 0644); err != nil {
 		return err
+	}
+	if signature != "" {
+		if err := os.WriteFile(filepath.Join(b.tmpDir, archivetrust.SignatureName), []byte(signature), 0644); err != nil {
+			return fmt.Errorf("failed to write %s: %w", archivetrust.SignatureName, err)
+		}
 	}
 
 	// Create output file
@@ -95,8 +119,8 @@ func (b *Builder) createArchive(outputPath string, manifest *Manifest) error {
 		}
 	}
 
-	// Add packages/ directory if it exists
-	packagesDir := filepath.Join(b.tmpDir, "packages")
+	// Add packages/ directory if it exists (checksummed like the rest)
+	packagesDir := filepath.Join(b.tmpDir, packagesArchiveDir)
 	if _, err := os.Stat(packagesDir); err == nil {
 		if err := addDirToTar(tw, packagesDir, "packages"); err != nil {
 			return err
@@ -104,20 +128,18 @@ func (b *Builder) createArchive(outputPath string, manifest *Manifest) error {
 	}
 
 	// Add manifest.json
-	if err := addFileToTar(tw, filepath.Join(b.tmpDir, "manifest.json"), "manifest.json"); err != nil {
+	if err := addFileToTar(tw, filepath.Join(b.tmpDir, archivetrust.ManifestName), archivetrust.ManifestName); err != nil {
 		return err
 	}
 
-	// Add manifest.sig if it exists (created by --sign)
-	sigPath := filepath.Join(b.tmpDir, "manifest.sig")
-	if _, err := os.Stat(sigPath); err == nil {
-		if err := addFileToTar(tw, sigPath, "manifest.sig"); err != nil {
+	if signature != "" {
+		if err := addFileToTar(tw, filepath.Join(b.tmpDir, archivetrust.SignatureName), archivetrust.SignatureName); err != nil {
 			return err
 		}
 	}
 
 	// Print summary
-	fmt.Printf("  bin/:      %d binaries\n", len(manifest.Checksums))
+	fmt.Printf("  files:     %d, all in the manifest\n", len(manifest.Checksums))
 	fmt.Printf("  systemd/:  namespace templates\n")
 	fmt.Printf("  manifest:  v%s (%s) linux/%s\n", manifest.Version, manifest.Commit, manifest.Arch)
 
@@ -126,46 +148,6 @@ func (b *Builder) createArchive(outputPath string, manifest *Manifest) error {
 		fmt.Printf("  size:      %s\n", printer.FormatBytes(info.Size()))
 	}
 
-	return nil
-}
-
-// signManifest signs the manifest hash using rootwallet CLI.
-// Produces manifest.sig containing the hex-encoded EVM signature.
-func (b *Builder) signManifest(manifest *Manifest) error {
-	fmt.Printf("\nSigning manifest with rootwallet...\n")
-
-	// Serialize manifest deterministically (compact JSON, sorted keys via json.Marshal)
-	manifestData, err := json.Marshal(manifest)
-	if err != nil {
-		return fmt.Errorf("failed to marshal manifest: %w", err)
-	}
-
-	// Hash the manifest JSON
-	hash := sha256.Sum256(manifestData)
-	hashHex := hex.EncodeToString(hash[:])
-
-	// Call rw sign <hash> --chain evm
-	cmd := exec.Command("rw", "sign", hashHex, "--chain", "evm")
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("rw sign failed: %w\n%s", err, stderr.String())
-	}
-
-	signature := strings.TrimSpace(stdout.String())
-	if signature == "" {
-		return fmt.Errorf("rw sign produced empty signature")
-	}
-
-	// Write signature file
-	sigPath := filepath.Join(b.tmpDir, "manifest.sig")
-	if err := os.WriteFile(sigPath, []byte(signature), 0644); err != nil {
-		return fmt.Errorf("failed to write manifest.sig: %w", err)
-	}
-
-	fmt.Printf("  Manifest signed (SHA256: %s...)\n", hashHex[:16])
 	return nil
 }
 

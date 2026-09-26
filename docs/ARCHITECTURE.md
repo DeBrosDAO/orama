@@ -69,7 +69,7 @@ Install enables **only** `orama-node.service`. That process is a supervisor: it 
 
 | Plane | Membership | Units | Ports |
 |---|---|---|---|
-| **index** | every node | `orama-namespace-{wireguard,ipfs,ipfs-cluster,ipfs-gc,rqlite,olric,pubsub,gateway,vault,caddy,ntfy,tor}@index`; optional `sni-router@index` | internals `10100–10109`; edge `80`/`443`/`51820`/`9050` |
+| **index** | every node | `orama-namespace-{wireguard,ipfs,ipfs-cluster,ipfs-gc,rqlite,olric,pubsub,gateway,vault,caddy,ntfy,tor}@index`; optional `sni-router@index` | internals `10100–10109`, IPFS Cluster swarm `10114` on the WireGuard address; edge `80`/`443`/`51820`/`9050` |
 | **nameserver** | this node, if `--nameserver` | `orama-namespace-coredns@nameserver` | `:53` |
 | **tenant** | N members chosen at provision | `orama-namespace-{rqlite,olric,gateway}@<name>` (+ `sfu`/`turn` if WebRTC) | `10000–10099` |
 
@@ -77,7 +77,7 @@ Default tenant provision is N=3. A fleet with one eligible node provisions N=1 (
 
 Reserved namespace names: **`index`** and **`nameserver`**. They are not tenant-provisionable.
 
-Drive nodes through the `orama` CLI (`orama node …`). Do not `systemctl start` leftover host units (`orama-ipfs`, `orama-olric`, `caddy.service`, `coredns.service`, `wg-quick@wg0`). Those files may still exist on disk for rollback; they are disabled. Inter-node traffic uses the WireGuard overlay (`10.0.0.x`). Rolling upgrades never restart multiple index RQLite voters at once.
+Drive nodes through the `orama` CLI (`orama node …`). Install writes one host unit, `orama-node.service`; every daemon it supervises runs from an `orama-namespace-*@` template. The per-daemon host units older installs wrote (`orama-ipfs`, `orama-ipfs-gc`, `orama-ipfs-cluster`, `orama-olric`, `orama-vault`, `caddy.service`, `coredns.service`, `ntfy.service`, `orama-sni-router`) are stopped, disabled and deleted by install and upgrade (`core/pkg/install/installers/host_units_legacy.go`). `wg-quick@wg0` is the distribution's unit: it stays on disk, disabled, and must not be started. Inter-node traffic uses the WireGuard overlay (`10.0.0.x`). Rolling upgrades never restart multiple index RQLite voters at once.
 
 **The overlay is not a child of the supervisor.** Install enables two units:
 `orama-node.service` and `orama-namespace-wireguard@index.service`. The mesh
@@ -121,18 +121,36 @@ and `/v1/health`, separately from the health of the things it talks to:
 
 | State | Meaning | HTTP |
 |---|---|---|
-| `starting` | Listening, but the database schema is not yet at the version this binary requires — almost always because the local rqlite has no leader. Retried with backoff for as long as the process lives. | 503 |
-| `ready` | Schema is at the required version; the gateway serves. | 200 |
+| `starting` | Listening, but the database schema is not yet at the version this binary requires — almost always because the local rqlite has no leader — or the start-up work that gates on the schema (publishing the signing key, the API-key migrations) has not finished. Retried with backoff for as long as the process lives. | 503 |
+| `ready` | Schema is at the required version and the gating start-up work is done; the gateway serves. | 200 |
 | `blocked` | A leader answered and the schema is genuinely *below* what the binary requires. Retrying cannot fix it: migrate the database or roll the binary back. | 503 |
 
 While not `ready` the gateway refuses every request except a short passthrough
 list — `/health`, `/v1/health`, `/status`, `/v1/status`, `/v1/version`,
 `/v1/internal/ping`, `/v1/internal/tls/check` and the ACME challenge path — so a
-caller gets "gateway is starting, waiting for rqlite leader" instead of a
-cryptic SQL error from a handler talking to a leaderless database. That list is
+caller gets `503 {"status":"starting","reason":"schema",…}` instead of a
+cryptic SQL error from a handler talking to a leaderless database.
+
+The refusal and the health endpoints are unauthenticated, so they carry a
+stable reason code, never the error behind it (which named rqlite addresses and
+SQL): `initializing` (no attempt has reported yet), `schema` (bringing the
+schema up failed and is retried), `post-schema` (a readiness-gating start-up
+step failed and is retried), `schema-version` (`blocked`). The full error is in
+the gateway's log, on every attempt. That list is
 deliberately not the same as the "no API key needed" list: most of *those*
 endpoints (`/v1/auth/verify`, `/v1/invoke`, `/v1/vault/*`) write to the
 database, and letting them through would defeat the point of `blocked`.
+
+Work that needs the schema's tables runs once the schema is up, never while
+the gateway is being built (on a fresh cluster the tables do not exist yet).
+Publishing this gateway's signing key and the API-key migrations gate
+readiness: a failure keeps the gateway `starting` and is retried with the
+schema, so no token is minted that other gateways would refuse. Revoking keys
+of deleted namespaces, the push `token_fp` backfill, and starting the pubsub
+trigger dispatcher and the cron scheduler run once the gateway is `ready`, each
+independently, and are retried with backoff until they succeed, each failure
+logged as an error — their failure does not take every route down, and one
+stuck step does not hold up the others.
 
 The refusal is issued inside the CORS middleware, so a browser client can read
 the reason rather than seeing an opaque network error. Background work that
@@ -186,7 +204,7 @@ Components come in two tiers:
 | Tier | Components | Needs |
 |---|---|---|
 | **local** | `data-dir`, `wireguard`, `libp2p`, `peer-info`, `monitoring`, `pubsub`, `ipfs-cluster-config`, `storage`, `cluster-discovery`, `rqlite-local`, `nameserver`, `gateway`, `edge-serving`, `edge-aux`, `wireguard-sync`, `ipfs-swarm-sync` | this machine only |
-| **cluster** | `rqlite-cluster`, `dns-registration` | a raft quorum |
+| **cluster** | `rqlite-cluster`, `membership`, `membership-record`, `dns-registration` | a raft quorum |
 
 `edge-serving` is vault, the optional SNI router and Caddy; `edge-aux` is ntfy
 and the Tor client. They are separate because `dns-registration` depends on
@@ -308,9 +326,11 @@ runbook, which is why seven manual steps existed.
 `pkg/namespace.StartTenantReconciler` runs every 60s with two legs. The
 **per-node** leg is what a node owes the namespaces it hosts: start what is
 missing, and rewrite a config that has drifted from live membership
-(`ReconcileOlric` / `ReconcileGateway`, which restart only on a real
+(`ReconcileOlric` / `ReconcileGateway`, which act only on a real
 difference — peer lists are compared ignoring order, since that order comes
-from a query and means nothing to Olric). The **coordinator** leg is
+from a query and means nothing to Olric). The gateway is restarted onto its new
+config; Olric is not — it is clustered and stateful, so its rewritten config
+applies at its next rolling restart, and the node logs that once per change. The **coordinator** leg is
 cluster-wide state and runs on exactly one member per namespace, elected as the
 lowest-sorted live node id: prune members that are permanently gone, release
 their ports, and remove them from that namespace's raft.
@@ -432,21 +452,58 @@ five-voter cluster leave quorum at 3-of-7 with five live voters.
 The id a node starts under is recorded in `raft-node-id`, beside `raft.db` in
 its rqlite data directory, and that file is authoritative — it is what rqlite's
 persisted configuration has this node under, and starting on anything else
-creates a second member. Three cases, distinguished by what is on disk:
+creates a second member. It is passed as `-node-id` on every start, so the id
+never follows the address. Three cases, distinguished by what is on disk:
 
 | marker | raft state | id used |
 |---|---|---|
 | present | either | whatever it records |
 | absent | none | the libp2p peer id (a fresh node) |
-| absent | present | none passed; rqlite keeps defaulting to the address |
+| absent | present | none: the index rqlite refuses to start |
+
+A node predating recorded ids is registered under the raft address it last ran
+under, and nothing on the node states it once `node.yaml` has been regenerated —
+the release that moved the index raft port from 7001 to 10101 changes it on every
+node. So the upgrade records it first: before it stops anything, it reads the
+running rqlited's `/status` (`store.node_id`, and the address its configuration
+holds under that id) and writes `raft-node-id`, `raft-adv-addr` and the
+membership record's members. A node whose rqlited is not in its own
+configuration, or whose recorded id is not the one rqlited runs under, is not
+upgraded. A node with raft state and no marker — one upgraded some other way —
+refuses to start and names the file to write.
+
+**An address change is a rejoin under the same id.** rqlite keeps each member's
+address in the raft configuration; a node that restarts listening elsewhere is
+unreachable at the address the others dial until the leader re-registers it,
+which rqlite does when the node joins again with the same id and its new
+address (the leader removes the member and adds it back at the new address).
+`raft-adv-addr` records the address this node was last confirmed a member at:
+the upgrade writes it from `/status`, and the `membership-record` component
+rewrites it once the configuration holds this node at its current address. The
+node's suffrage is recorded beside it (`raft-suffrage`), and a non-voter rejoins
+with `-raft-non-voter`: rqlite re-adds a joining node with the suffrage the join
+asks for. The voter reconciliation, which changes suffrage with the same
+`POST /join`, sends each member's address from the configuration and finds the
+leader in the (address-keyed) voter set by its address — sending the id as the
+address would move the member to an address nothing listens on. When
+it differs from the current advertise address, the index supervisor starts
+rqlited with `-join` to the other recorded members (and the configured join
+address); otherwise a member restarts without `-join`, as before. With nobody to
+join — a cluster of one — it refuses, and the single node is reformed at its new
+address with `orama node recover-raft --leader-raft-addr`. The leader's removal
+and re-addition shrink the configuration by one voter for a moment, so only one
+node's address may change at a time, and every other voter must be up while it
+does: a majority of members changing address at once leaves no leader to
+re-register any of them (the rolling upgrade restarts one node at a time and
+waits for each to rejoin).
 
 So a fresh node is on a stable id from its first boot, and an existing node
 keeps the id it is registered under until it is migrated deliberately. rqlite
 cannot rename a member in place — the only supported paths are remove-then-rejoin
 and the `peers.json` disaster procedure — so an upgrade that simply started
-passing `-node-id` would make every node join as a NEW member and abandon its
-old id as an unreachable voter: the exact failure this prevents, applied
-fleet-wide at once.
+passing the peer id as `-node-id` would make every node join as a NEW member and
+abandon its old id as an unreachable voter: the exact failure this prevents,
+applied fleet-wide at once.
 
 `orama node migrate-raft-id` performs the transition, one node at a time. It
 first refuses to start unless **every** node in the environment has booted on a
@@ -466,6 +523,43 @@ empty database and elect itself leader.
 It is safe to re-run. Nodes already on a stable id are skipped, and a node a
 previous run removed but did not finish is recognised from its own marker and
 resumed rather than treated as un-migratable.
+
+**Only a node that has never been a member bootstraps a cluster.** rqlited
+bootstraps a new cluster when it has no raft state and no `-join`, and that is
+exactly the state of a genesis node — the only node installed without
+`rqlite_join_address` — after it loses its rqlite data: it used to come back as
+the leader of a second, empty cluster beside the live one. The index supervisor
+now reads a membership record, `~/.orama/data/cluster-membership.json`, beside
+the rqlite directory rather than in it so it outlives the raft state. It is
+written the first time a node is seen holding raft state (on an existing
+cluster, its first boot on this binary) and kept current by the
+`membership-record` boot component, which rewrites it with the raft addresses in
+the configuration the local rqlited holds (`/status`, read locally rather than
+through `/nodes`, which probes every member) whenever the set has changed.
+Nothing depends on that component, so a node that cannot write the record is
+degraded without its cluster tier going down. `orama node recover-raft` writes
+the record on every node it wipes, naming the node it kept. At start, with no
+raft state:
+
+| membership record | join address | rqlited is started |
+|---|---|---|
+| absent | none | with no `-join`: a fresh genesis install bootstraps |
+| absent | set | with `-join <address>`: a fresh joiner |
+| present | either | with `-join` the address and the recorded members other than itself |
+| present, no other member recorded | none | not at all: the node refuses to start |
+
+A node that still holds raft state is a member by that state: a record that does
+not parse (a torn write) is replaced rather than keeping it down, and the record
+is written through a unique temporary file that is synced before the rename.
+The refusal names the record and `orama node recover-raft`; a node that was the
+cluster's only member and whose data is gone for good is bootstrapped again only
+by deleting the record, deliberately. A pending recovery `raft/peers.json`
+(written by `orama node recover-raft`) is neither joined nor refused: rqlited
+reforms the cluster from it. The other signals were rejected: the join address
+and `bootstrap_peers` are empty on exactly the genesis node, the enrolment and
+`dns_nodes` rows live in rqlite and are lost with it, the WireGuard peers are in
+root's `/etc/wireguard`, and libp2p peers carry public addresses rather than the
+overlay raft addresses a join must name.
 
 Identity and routing are separate at every point they meet, and each of these
 was a way to mint a duplicate voter or lose a safety check once ids stopped
@@ -509,7 +603,7 @@ overlay candidate it now refuses to rewrite rather than substituting a public
 IP. And a node that finds itself in the raft configuration under a different id
 logs it at Error on every start instead of discarding the result.
 
-RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index` (`127.0.0.1:10105`); gateways call that HTTP API. Caddy reverse_proxies to `localhost:10104`. CoreDNS reads index RQLite `dns_records` at `localhost:10100`. Olric v0.7.0 is in-memory only (`olric-server` is not given a data directory); a cold disk snapshot of the cache dir yields nothing.
+RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index`: its HTTP API is the unix socket `/run/orama-pubsub/pubsub.sock`, which admits only callers running as the service's own user (the gateways), and its libp2p host listens on the node's WireGuard address. Caddy reverse_proxies to `localhost:10104`; the index gateway listens there and on the node's WireGuard address, never on the public interface. Caddy's admin API is the unix socket `/run/orama-caddy/admin.sock`, and its DNS-01 calls to the gateway are signed with the key install writes to `/etc/caddy/orama-acme.key`. CoreDNS reads index RQLite `dns_records` at the node's WireGuard address (`<wg-ip>:10100`, with credentials). Olric v0.7.0 is in-memory only (`olric-server` is not given a data directory); a cold disk snapshot of the cache dir yields nothing.
 
 ## Core Components
 
@@ -960,8 +1054,9 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **A tenant's namespace gateway binds the overlay address**, not every interface, so it cannot be reached from a public one however the firewall is written. The index gateway keeps binding everything: Caddy reverse-proxies to localhost and the ACME internal endpoint is reached there. A node whose WireGuard is not up refuses to configure a tenant gateway rather than putting it on the public interface
 - **Namespace and index RQLite bind the WireGuard advertise address**, not `0.0.0.0`. The namespace gateway DSN uses that same host. `-auth` is always passed; missing auth file refuses to start. See `docs/SECURITY.md`
 - **UFW is still the outer boundary** for everything on the node, but it is no longer the only one for the gateway
+- **Orama owns only the UFW rules it tagged.** Install and upgrade add every rule with the comment `orama` and remove only tagged rules the node no longer needs. Rules without the tag — an operator's `allow in on tailscale0`, a monitoring port, and the TURN rules `orama-node` opens at runtime through the privileged helper — are left alone. A node upgraded from a release before the tag keeps any rule that release opened and this one no longer wants; remove it by hand. A firewall that cannot be reconciled fails the install, as it fails an upgrade
 - **Invite tokens:** Single-use and time-limited, and there is no standing cluster password. The token is still a secret passed as a command-line argument, so it is visible to `ps` and lands in shell history on the machine that runs `orama node install`
-- **Join flow:** New nodes authenticate via HTTPS (443) with TOFU certificate pinning, establish WireGuard tunnel, then join all services over the encrypted mesh. The joining node establishes its libp2p identity before it asks to join, so the request carries the peer id the cluster will key it by
+- **Join flow:** New nodes authenticate via HTTPS (443), pinned to the certificate fingerprint the invite carries. The invite names the minting node by its public IP and names its site separately; the joiner presents the site as both the TLS server name and the HTTP `Host`, because Caddy routes by `Host` and answers a bare IP with an empty 200. New nodes then establish WireGuard tunnel, then join all services over the encrypted mesh. The joining node establishes its libp2p identity before it asks to join, so the request carries the peer id the cluster will key it by
 
 **Join ordering.** `/v1/internal/join` does everything that can fail without
 touching cluster state first — validate every field, check the invite token is
@@ -1023,16 +1118,19 @@ internal-auth check both accept.
 
 - **RQLite:** credentials are generated at genesis. `orama-namespace-rqlite@*` copies `rqlite-auth.json` into the instance data dir and starts rqlited with `-auth`. HTTP/Raft bind the WireGuard advertise address, not `0.0.0.0`. Gateway YAML carries `rqlite_username` / `rqlite_password`. Missing auth file refuses to start. See `docs/SECURITY.md`
 - **Olric:** memberlist binds the WireGuard address. Olric v0.7.0 YAML has no `encryptionKey`; overlay is the control
-- **IPFS Cluster:** `TrustedPeers` is `["*"]`; membership is CLUSTER_SECRET + overlay + invite. The systemd unit is not written if `CLUSTER_SECRET` is missing or empty. Private blobs are encrypted before Add (`HKDF(cluster-secret, "ipfs-wrap-v1")`)
+- **IPFS Cluster:** `TrustedPeers` is `["*"]`; membership is CLUSTER_SECRET + overlay + invite. Install refuses to initialize IPFS Cluster with an empty `CLUSTER_SECRET`. Private blobs are encrypted before Add (`HKDF(cluster-secret, "ipfs-wrap-v1")`)
 - **TLS:** Caddy terminates public TLS (DNS-01). The gateway process does not bind `:80`/`:443` and refuses `enable_https: true`
 - **Internal endpoints:** every `/v1/internal/wg/*` endpoint requires the caller to be on the WireGuard overlay **and** to present the cluster secret. A gateway with no cluster secret configured refuses them outright rather than serving them unauthenticated
 - **Vault:** V1 push/pull endpoints require session token authentication when guardian is configured
 - **WebSockets:** Origin header validated against the node's configured domain
-- **Tenant SQLite:** opened with `SQLITE_LIMIT_ATTACHED=0`; `ATTACH`/`DETACH` and multi-statement queries are rejected
+- **Tenant SQLite:** opened with `SQLITE_LIMIT_ATTACHED=0`; `ATTACH`/`DETACH` and multi-statement queries are rejected. Database files are `0600` in `0700` directories, read only by the gateway
+- **Tenant deployments:** `orama-deploy-{node,npm,go}@` see an empty read-only tmpfs over `/opt/orama` with only their own `data/deployments/<instance>` bound back read-only (`data/deployments` itself is `0700`). A Node.js app's `npm install` runs in the oneshot `orama-deploy-build@<instance>` (`--ignore-scripts`, registry dependencies only, same sandbox, loopback denied), never in the gateway; its `node_modules` is bound into the runtime unit from the build unit's own cache directory, `/var/cache/orama-build/<instance>`, which `orama-deploy-clean@<instance>` empties when the deployment is removed or created without an install. See SECURITY.md, "Tenant deployments"
 - **WASM egress:** `http_fetch` / `anon_fetch` (and its deprecated alias `anyone_fetch`) deny loopback, private, link-local, unspecified, and multicast URLs; `anon_fetch` sends every connection to Tor, which refuses internal addresses itself
 - **WASM memory:** wazero `WithMemoryLimitPages` from `MaxMemoryLimitMB` (default 256 MB). Modules without a memory max still cannot grow past that
 - **WASM concurrency:** process-wide semaphore plus a per-namespace cap (`maxConcurrent/2`, min 1)
 - **Process uid:** namespace gateway/rqlite/olric/sfu/turn/pubsub run as `User=orama` (not root). `/opt/orama/bin` is `root:orama` 0750. CoreDNS/Caddy `ReadWritePaths` do not include `secrets/`
+- **What a gateway writes:** every gateway, `@index` included, writes only under `data/` — `secrets/` and `configs/` are read-only to `orama-namespace-gateway@`. Its signing keys (`jwt-signing-key.pem`, `jwt-eddsa-key.pem`) and its encryption-root cache sit in its own state directory, `data/namespaces/<ns>/gateway/` (`0700`, the YAML's required `state_dir`). The shared trees are `data/sqlite/<ns>/<db>.db` (tenant SQLite; the path is derived from this layout, not read from the registry), `data/deployments/<ns>-<name>/` (the `orama-deploy-*@` working directories) and `data/turn/turn.yaml` (the host TURN config `orama-turn.service` reads). `<oramaDir>` itself is only read: cluster secrets, `identity.key`, `node.yaml`
+- **Which node a gateway is on:** every gateway YAML must carry `cluster_secret_path` (`<oramaDir>/secrets/cluster-secret`, written by the spawner). The gateway reads the cluster secret from it and, from the orama directory it is in, the node's `data/identity.key` — its node peer id. A gateway without either refuses to start (`gateway.node_peer_id` in config validation): without the peer id, SQLite home-node assignment, deployment placement, host TURN and leader locality matched no node, silently
 - **TLS:** internet-facing TLS is 1.2+ (`TCPSNIGateway`, CLI, tlsutil)
 - **wg0.conf:** written 0600 (chmod after WriteFile/tee; umask is not trusted)
 
@@ -1040,7 +1138,7 @@ internal-auth check both accept.
 
 - **Refresh tokens:** Stored as SHA-256 hashes (never plaintext)
 - **API keys:** Stored as HMAC-SHA256 hashes with a server-side secret
-- **TURN secrets, function secrets, push tokens, deployment env, agent tokens:** Encrypted at rest with AES-256-GCM. The key is HKDF of `secrets/encryption-root` (a cluster-wide IKM that starts as a copy of the cluster secret). `orama operator rotate-secrets --rotate` replaces the IKM and re-encrypts; the cluster secret (IPFS-Cluster PSK / mesh bearer) is not touched
+- **TURN secrets, function secrets, push tokens, deployment env, agent tokens:** Encrypted at rest with AES-256-GCM. The key is HKDF of the encryption root (a cluster-wide IKM that starts as a copy of the cluster secret): the registry's `encryption_roots` is the source of truth, each gateway caches it in its state directory, and `secrets/encryption-root` (written at join) seeds an empty cache. `orama operator rotate-secrets --rotate` replaces the IKM and re-encrypts; the cluster secret (IPFS-Cluster PSK / mesh bearer) is not touched
 - **Binary signing:** Build archives signed with rootwallet EVM signature, verified on install
 
 ### Process Isolation

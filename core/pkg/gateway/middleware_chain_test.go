@@ -255,3 +255,18 @@ func TestChain_aWalletJWTFromAnotherNamespaceIsRefused(t *testing.T) {
 		t.Errorf("status = %d, want 403 (%s)", status, strings.TrimSpace(body))
 	}
 }
+
+// The cluster gateway serves no single namespace. Its client namespace was
+// "default" and the cross-namespace check skipped it by that name; renamed to
+// "index", it refused every tenant's credential as another namespace's — a
+// wallet that signed in to the lobby could not even create its namespace.
+func TestChain_theClusterGatewayServesEveryNamespace(t *testing.T) {
+	for _, served := range []string{"index", "default", ""} {
+		g := chainGateway(t, served, &stubKeyDatabase{namespace: "alice", scopes: "admin", found: true})
+		status, body, reached := serve(g, chainRequest(http.MethodGet, "/v1/deployments/list",
+			map[string]string{"X-API-Key": "ak_admin:alice"}))
+		if !reached {
+			t.Errorf("gateway %q refused alice's key: status=%d body=%s", served, status, strings.TrimSpace(body))
+		}
+	}
+}

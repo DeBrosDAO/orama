@@ -1,54 +1,11 @@
 package sandbox
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
-
-func TestFindProjectRoot_FromSubDir(t *testing.T) {
-	// Create a temp dir with go.mod (resolve symlinks for macOS /private/var)
-	root, _ := filepath.EvalSymlinks(t.TempDir())
-	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a nested subdir
-	sub := filepath.Join(root, "pkg", "foo")
-	if err := os.MkdirAll(sub, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Change to subdir and find root
-	orig, _ := os.Getwd()
-	defer os.Chdir(orig)
-	os.Chdir(sub)
-
-	got, err := findProjectRoot()
-	if err != nil {
-		t.Fatalf("findProjectRoot() error: %v", err)
-	}
-	if got != root {
-		t.Errorf("findProjectRoot() = %q, want %q", got, root)
-	}
-}
-
-func TestFindProjectRoot_NoGoMod(t *testing.T) {
-	// Create a temp dir without go.mod
-	dir := t.TempDir()
-
-	orig, _ := os.Getwd()
-	defer os.Chdir(orig)
-	os.Chdir(dir)
-
-	_, err := findProjectRoot()
-	if err == nil {
-		t.Error("findProjectRoot() should error when no go.mod exists")
-	}
-}
 
 func TestIsSafeDNSName(t *testing.T) {
 	tests := []struct {
@@ -70,27 +27,6 @@ func TestIsSafeDNSName(t *testing.T) {
 		got := isSafeDNSName(tt.input)
 		if got != tt.want {
 			t.Errorf("isSafeDNSName(%q) = %v, want %v", tt.input, got, tt.want)
-		}
-	}
-}
-
-func TestIsHex(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
-	}{
-		{"abcdef0123456789", true},
-		{"ABCDEF", true},
-		{"0", true},
-		{"", true}, // vacuous truth, but guarded by len check in caller
-		{"xyz", false},
-		{"abcg", false},
-		{"abc def", false},
-	}
-	for _, tt := range tests {
-		got := isHex(tt.input)
-		if got != tt.want {
-			t.Errorf("isHex(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

@@ -32,22 +32,33 @@ each node in turn.
 
 'orama push' and 'orama node push' are the same command.
 
+--archive names the build: the path 'orama build' printed. There is no
+default — the newest archive in /tmp may be another checkout's build.
+
 Examples:
-  orama push --env devnet             # Fan out across the devnet nodes
-  orama push --env devnet --direct    # Upload to each node in turn
-  orama push --env devnet --node 1.2.3.4
-  orama push --host 1.2.3.4           # A node that is not in the inventory yet`,
+  orama push --env devnet --archive /tmp/orama-0.200.0-linux-amd64.tar.gz
+  orama push --env devnet --archive <path> --direct    # Upload to each node in turn
+  orama push --env devnet --archive <path> --node 1.2.3.4
+  orama push --host 1.2.3.4 --archive <path>           # A node not in the inventory yet
+  orama push --env devnet --archive <path> --trust-signers 0xYourWallet  # Nodes from before archive signing
+
+Each node verifies the archive with its installed orama before anything under
+/opt/orama changes: the manifest signature must recover to an address in the
+node's /etc/orama/archive-signers and every file must match the manifest.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return push.Run(&flags)
 		},
 	}
 
 	f := cmd.Flags()
+	f.StringVar(&flags.Archive, "archive", "", "The build archive to push (the path `orama build` printed) [required]")
 	f.StringVar(&flags.Env, "env", "", "Target environment (default: active)")
 	f.StringVar(&flags.Node, "node", "", "Push to a single node IP from the inventory")
 	f.StringVar(&flags.Host, "host", "", "Push to a node that is not in the inventory yet")
 	f.StringVar(&flags.User, "user", "", "SSH user for --host (default: root)")
 	f.BoolVar(&flags.Direct, "direct", false, "Upload from here to each node in turn, instead of fanning out")
+	f.StringSliceVar(&flags.TrustSigners, "trust-signers", nil,
+		"Create the archive trust anchor on nodes that have none (installed before archive signing); never changes an existing one")
 
 	// --ip and --fanout are what the top-level command used to take. Fanning
 	// out is now the default, so --fanout is accepted and ignored rather than

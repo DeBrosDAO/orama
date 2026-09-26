@@ -11,13 +11,6 @@ func (r *RQLiteManager) SetDiscoveryService(service *ClusterDiscoveryService) {
 	r.discoveryService = service
 }
 
-// SetNodeType sets the node type
-func (r *RQLiteManager) SetNodeType(nodeType string) {
-	if nodeType != "" {
-		r.nodeType = nodeType
-	}
-}
-
 // UpdateAdvertisedAddresses overrides advertised addresses
 func (r *RQLiteManager) UpdateAdvertisedAddresses(raftAddr, httpAddr string) {
 	if r == nil || r.discoverConfig == nil {

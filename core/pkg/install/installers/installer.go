@@ -4,18 +4,6 @@ import (
 	"io"
 )
 
-// Installer defines the interface for service installers
-type Installer interface {
-	// Install downloads and installs the service binary
-	Install() error
-
-	// Configure initializes configuration for the service
-	Configure() error
-
-	// IsInstalled checks if the service is already installed
-	IsInstalled() bool
-}
-
 // BaseInstaller provides common functionality for all installers
 type BaseInstaller struct {
 	arch      string
@@ -39,5 +27,5 @@ type IPFSPeerInfo struct {
 // IPFSClusterPeerInfo contains IPFS Cluster peer information for cluster peer discovery
 type IPFSClusterPeerInfo struct {
 	PeerID string   // Cluster peer ID (different from IPFS peer ID)
-	Addrs  []string // Cluster multiaddresses (e.g., /ip4/x.x.x.x/tcp/9098)
+	Addrs  []string // Cluster multiaddresses (/ip4/<wg-ip>/tcp/<constants.IPFSClusterSwarmPort>/p2p/<id>)
 }

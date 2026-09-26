@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -191,7 +192,7 @@ func TestReadinessGate(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newReadinessGateway(t)
-			g.ready.set(tc.state, "because")
+			g.ready.set(tc.state, ReasonSchema, "because")
 
 			served := false
 			handler := g.readinessGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -219,8 +220,8 @@ func TestReadinessGate(t *testing.T) {
 			if body["status"] != string(tc.state) {
 				t.Errorf("body status = %v, want %q", body["status"], tc.state)
 			}
-			if body["reason"] != "because" {
-				t.Errorf("refusal must carry the reason, got %v", body["reason"])
+			if body["reason"] != string(ReasonSchema) {
+				t.Errorf("refusal must carry the reason code, got %v", body["reason"])
 			}
 		})
 	}
@@ -232,7 +233,7 @@ func TestHealthHandler_reportsReadinessBeforeSubsystemChecks(t *testing.T) {
 	for _, state := range []ReadinessState{ReadinessStarting, ReadinessBlocked} {
 		t.Run(string(state), func(t *testing.T) {
 			g := newReadinessGateway(t)
-			g.ready.set(state, "waiting for rqlite leader")
+			g.ready.set(state, ReasonSchema, "waiting for rqlite leader")
 
 			rec := httptest.NewRecorder()
 			g.healthHandler(rec, httptest.NewRequest(http.MethodGet, "/v1/health", nil))
@@ -247,8 +248,8 @@ func TestHealthHandler_reportsReadinessBeforeSubsystemChecks(t *testing.T) {
 			if body["status"] != string(state) {
 				t.Errorf("status = %v, want %q", body["status"], state)
 			}
-			if body["reason"] != "waiting for rqlite leader" {
-				t.Errorf("reason = %v", body["reason"])
+			if body["reason"] != string(ReasonSchema) {
+				t.Errorf("reason = %v, want the code %q", body["reason"], ReasonSchema)
 			}
 			if _, hasChecks := body["checks"]; hasChecks {
 				t.Error("a gateway that is not ready must not report subsystem checks as if it were")
@@ -257,27 +258,35 @@ func TestHealthHandler_reportsReadinessBeforeSubsystemChecks(t *testing.T) {
 	}
 }
 
-func TestRQLiteHostPortFromDSN(t *testing.T) {
+// The retry log's raft state comes from the rqlite this gateway is configured
+// against — address and credentials from the DSN — not from a guessed local
+// port. rqlited runs with -auth, so an unauthenticated probe reads nothing.
+func TestObservedRaftState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != "orama" || p != "pw" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"store":{"raft":{"state":"Candidate"}}}`))
+	}))
+	defer srv.Close()
+	hostPort := strings.TrimPrefix(srv.URL, "http://")
+
 	tests := []struct {
 		name string
-		dsn  string
+		cfg  Config
 		want string
 	}{
-		{"empty", "", ""},
-		{"local", "http://localhost:10100?disableClusterDiscovery=true", "localhost:10100"},
-		// A namespace gateway can be configured against a remote rqlite, and
-		// reporting the LOCAL node's raft state under that address would be
-		// confidently wrong rather than merely unknown.
-		{"remote with credentials", "http://user:pass@10.0.0.4:10000?level=weak", "10.0.0.4:10000"},
-		{"no port", "http://localhost", ""},
-		{"not a url", "://not a url", ""},
-		{"non-numeric port", "http://localhost:notaport", ""},
+		{"credentials in the DSN", Config{RQLiteDSN: "http://orama:pw@" + hostPort + "?level=weak"}, "Candidate"},
+		{"credentials in the config", Config{RQLiteDSN: srv.URL, RQLiteUsername: "orama", RQLitePassword: "pw"}, "Candidate"},
+		{"wrong credentials", Config{RQLiteDSN: srv.URL, RQLiteUsername: "orama", RQLitePassword: "nope"}, "unknown"},
+		{"no credentials", Config{RQLiteDSN: srv.URL}, "unknown"},
+		{"empty DSN", Config{}, "unknown"},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := rqliteHostPortFromDSN(tc.dsn); got != tc.want {
-				t.Fatalf("rqliteHostPortFromDSN(%q) = %q, want %q", tc.dsn, got, tc.want)
+			if got := observedRaftState(context.Background(), &tc.cfg); got != tc.want {
+				t.Fatalf("observedRaftState = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -298,7 +307,7 @@ func TestAwaitReady(t *testing.T) {
 	g2 := newReadinessGateway(t)
 	go func() {
 		time.Sleep(10 * time.Millisecond)
-		g2.ready.set(ReadinessReady, "")
+		g2.ready.set(ReadinessReady, "", "")
 	}()
 	if !g2.AwaitReady(context.Background()) {
 		t.Fatal("AwaitReady did not unblock when the gateway became ready")
@@ -495,7 +504,7 @@ func TestWithMiddleware_gatesWhenNotReady(t *testing.T) {
 
 	g := newReadinessGateway(t)
 	g.cfg = &Config{}
-	g.ready.set(ReadinessStarting, "waiting for rqlite leader")
+	g.ready.set(ReadinessStarting, ReasonSchema, "waiting for rqlite leader")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/pin", nil)
@@ -512,8 +521,8 @@ func TestWithMiddleware_gatesWhenNotReady(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("refusal body is not JSON: %v", err)
 	}
-	if body["reason"] != "waiting for rqlite leader" {
-		t.Errorf("the refusal must carry the reason, got %v", body["reason"])
+	if body["reason"] != string(ReasonSchema) {
+		t.Errorf("the refusal must carry the reason code, got %v", body["reason"])
 	}
 }
 
@@ -521,8 +530,8 @@ func TestWithMiddleware_gatesWhenNotReady(t *testing.T) {
 // the gate sits inside corsMiddleware rather than above it.
 func TestWithMiddleware_refusalIsReadableByABrowser(t *testing.T) {
 	g := newReadinessGateway(t)
-	g.cfg = &Config{}
-	g.ready.set(ReadinessStarting, "waiting for rqlite leader")
+	g.cfg = &Config{BaseDomain: "example.test"}
+	g.ready.set(ReadinessStarting, ReasonSchema, "waiting for rqlite leader")
 
 	handler := g.withMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 
@@ -553,5 +562,13 @@ func TestPrepareSchema_readFailureIsRetryableNotFatal(t *testing.T) {
 		errors.New("schema below required version"))
 	if !isSchemaContractViolation(mismatch) {
 		t.Fatal("a genuine version mismatch must stop the loop")
+	}
+}
+
+// Without a registry handle there is nothing to wait for, and the encryption
+// root could not be read either: that is an error, not a pass.
+func TestWaitForRegistryLeader_noHandleIsAnError(t *testing.T) {
+	if err := waitForRegistryLeader(&Config{}, &Dependencies{}); err == nil {
+		t.Fatal("a gateway with no registry database handle passed the leader wait")
 	}
 }

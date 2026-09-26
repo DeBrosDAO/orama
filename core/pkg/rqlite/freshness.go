@@ -41,15 +41,15 @@ const (
 	defaultFreshnessGateTTL = 250 * time.Millisecond
 )
 
-// LocalFollowerFresh reports whether the local rqlite node at the given status
-// port is fresh enough to serve a none-read. A Leader is always fresh (it holds
+// LocalFollowerFresh reports whether the local rqlite node at ep is fresh
+// enough to serve a none-read. A Leader is always fresh (it holds
 // the authoritative state). A Follower is fresh only when its last contact with
 // the leader is recent AND its raft apply gap is small. Any error reaching
 // /status returns (false, reason, err) — callers must treat that as NOT fresh.
-func LocalFollowerFresh(port int) (fresh bool, reason string, err error) {
-	status, err := GetRaftStatus(port)
+func LocalFollowerFresh(ep Endpoint) (fresh bool, reason string, err error) {
+	status, err := GetRaftStatus(ep)
 	if err != nil {
-		return false, fmt.Sprintf("status query failed on port %d: %v", port, err), fmt.Errorf("LocalFollowerFresh: %w", err)
+		return false, fmt.Sprintf("status query failed on %s: %v", ep, err), fmt.Errorf("LocalFollowerFresh: %w", err)
 	}
 	raft := status.Store.Raft
 	if strings.EqualFold(raft.State, "Leader") {
@@ -57,12 +57,12 @@ func LocalFollowerFresh(port int) (fresh bool, reason string, err error) {
 	}
 	lastContact := parseLastContact(raft.LastContact.String())
 	if lastContact > StalenessMaxLastContact {
-		return false, fmt.Sprintf("follower last_contact=%q exceeds max %s (port %d) — degrading none-read to leader-routed weak", raft.LastContact, StalenessMaxLastContact, port), nil
+		return false, fmt.Sprintf("follower last_contact=%q exceeds max %s (%s) — degrading none-read to leader-routed weak", raft.LastContact, StalenessMaxLastContact, ep), nil
 	}
 	// Guard underflow: only meaningful when commit has advanced past applied.
 	if raft.CommitIndex >= raft.AppliedIndex {
 		if gap := raft.CommitIndex - raft.AppliedIndex; gap > StalenessMaxApplyGap {
-			return false, fmt.Sprintf("follower apply gap=%d exceeds max %d (commit=%d applied=%d, port %d) — degrading none-read to leader-routed weak", gap, StalenessMaxApplyGap, raft.CommitIndex, raft.AppliedIndex, port), nil
+			return false, fmt.Sprintf("follower apply gap=%d exceeds max %d (commit=%d applied=%d, %s) — degrading none-read to leader-routed weak", gap, StalenessMaxApplyGap, raft.CommitIndex, raft.AppliedIndex, ep), nil
 		}
 	}
 	return true, "follower fresh", nil
@@ -87,8 +87,8 @@ func parseLastContact(s string) time.Duration {
 // a burst of none-reads shares one /status check per ttl window. FAIL-SAFE: a
 // check error caches fresh=false (degrade to weak) — an error is never fresh.
 type followerFreshnessGate struct {
-	port  int
-	check func(int) (bool, string, error)
+	ep    Endpoint
+	check func(Endpoint) (bool, string, error)
 	ttl   time.Duration
 
 	mu     sync.Mutex
@@ -97,16 +97,16 @@ type followerFreshnessGate struct {
 	reason string
 }
 
-// newFollowerFreshnessGate builds a gate for the local status port. A nil check
+// newFollowerFreshnessGate builds a gate for the local node at ep. A nil check
 // defaults to LocalFollowerFresh; a non-positive ttl defaults to 250ms.
-func newFollowerFreshnessGate(port int, check func(int) (bool, string, error), ttl time.Duration) *followerFreshnessGate {
+func newFollowerFreshnessGate(ep Endpoint, check func(Endpoint) (bool, string, error), ttl time.Duration) *followerFreshnessGate {
 	if check == nil {
 		check = LocalFollowerFresh
 	}
 	if ttl <= 0 {
 		ttl = defaultFreshnessGateTTL
 	}
-	return &followerFreshnessGate{port: port, check: check, ttl: ttl}
+	return &followerFreshnessGate{ep: ep, check: check, ttl: ttl}
 }
 
 // Fresh returns the cached verdict, re-checking only when the cache has aged
@@ -118,7 +118,7 @@ func (g *followerFreshnessGate) Fresh() (bool, string) {
 	if !g.at.IsZero() && time.Since(g.at) < g.ttl {
 		return g.fresh, g.reason
 	}
-	fresh, reason, err := g.check(g.port)
+	fresh, reason, err := g.check(g.ep)
 	if err != nil {
 		fresh = false
 		reason = fmt.Sprintf("freshness check error (fail-safe to weak): %v", err)

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,8 @@ import (
 )
 
 const (
-	// FileName is the IKM file next to cluster-secret.
+	// FileName is the IKM file: in a gateway's state directory (its cache), and
+	// next to cluster-secret (the node's seed, written by install).
 	FileName = "encryption-root"
 	// FileIDName holds the current generation id.
 	FileIDName = "encryption-root.id"
@@ -37,42 +39,68 @@ type Store interface {
 
 // LoadOrMaterialize returns the cluster's encryption root.
 //
-// Order: registry (source of truth) → files on disk → copy of clusterSecret.
+// Order: registry (source of truth) → this gateway's cache → the node's seed →
+// copy of clusterSecret.
+//
+// cacheDir is the calling gateway's own state directory. Whatever root this
+// returns is written there, and a failed write is an error: a cache that
+// silently is not one leaves a gateway that cannot reach the registry at its
+// next boot with nothing to decrypt with.
+//
+// seedDir is <oramaDir>/secrets, which a gateway may read and never write.
+// `orama node install` puts the cluster's current root there when a node joins
+// (so a rotated cluster is not mistaken for a fresh one), and 0.122.x gateways
+// kept their copy there. It is only consulted when the cache has nothing.
+//
 // A missing file on an existing cluster is materialised by copying the cluster
 // secret, so HKDF(encryption-root, purpose) equals today's keys. The file is
 // never regenerated because it is unreadable or the wrong length: that is how
 // IPFS-Cluster was silently partitioned, and it would orphan every stored
 // secret here.
-func LoadOrMaterialize(ctx context.Context, store Store, secretsDir, clusterSecret string) (Root, error) {
+func LoadOrMaterialize(ctx context.Context, store Store, cacheDir, seedDir, clusterSecret string) (Root, error) {
 	clusterSecret = strings.TrimSpace(clusterSecret)
 
 	if store != nil {
-		if r, err := loadFromRegistry(ctx, store); err == nil && r.CurrentIKM != "" {
-			_ = writeFiles(secretsDir, r)
+		r, err := loadFromRegistry(ctx, store)
+		switch {
+		case err == nil:
+			if werr := writeFiles(cacheDir, r); werr != nil {
+				return Root{}, fmt.Errorf("cache the registry's encryption root: %w", werr)
+			}
 			return r, nil
+		case errors.Is(err, errNoCurrentRoot) || isNoSuchTable(err):
+			// A cluster that has not recorded a root yet; the files decide.
+		default:
+			// The registry is the source of truth. A root read from the cache
+			// or the seed while it cannot be asked may predate a rotation.
+			return Root{}, fmt.Errorf("read the encryption root from the registry: %w", err)
 		}
 	}
 
-	r, ferr := loadFromFiles(secretsDir)
-	if ferr == nil && r.CurrentIKM != "" {
+	r, from, ferr := loadFromFirstDir(cacheDir, seedDir)
+	if ferr == nil {
+		if from != cacheDir {
+			if werr := writeFiles(cacheDir, r); werr != nil {
+				return Root{}, fmt.Errorf("cache the encryption root read from %s: %w", from, werr)
+			}
+		}
 		if store != nil {
+			// Not fatal: the table may not exist yet (schema apply runs in the
+			// readiness loop, after this). The next persist writes the row.
 			_ = saveToRegistry(ctx, store, r)
 		}
 		return r, nil
 	}
-	if ferr != nil && !os.IsNotExist(ferr) {
+	if !os.IsNotExist(ferr) {
 		return Root{}, ferr
 	}
 
 	if clusterSecret == "" {
-		if ferr != nil {
-			return Root{}, ferr
-		}
-		return Root{}, fmt.Errorf("no encryption root: no registry row, no %s file, and no cluster secret to copy", FileName)
+		return Root{}, fmt.Errorf("no encryption root: no registry row, no %s file in %s or %s, and no cluster secret to copy", FileName, cacheDir, seedDir)
 	}
 
 	r = Root{CurrentID: FirstID, CurrentIKM: clusterSecret}
-	if err := writeFiles(secretsDir, r); err != nil {
+	if err := writeFiles(cacheDir, r); err != nil {
 		return Root{}, err
 	}
 	if store != nil {
@@ -84,12 +112,36 @@ func LoadOrMaterialize(ctx context.Context, store Store, secretsDir, clusterSecr
 	return r, nil
 }
 
+// loadFromFirstDir reads the root from the first directory that has one, and
+// says which. A directory without the file is skipped; any other failure —
+// an empty file, an unreadable one — is returned, never skipped past.
+func loadFromFirstDir(dirs ...string) (Root, string, error) {
+	err := os.ErrNotExist
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		var r Root
+		r, err = loadFromFiles(dir)
+		if err == nil {
+			return r, dir, nil
+		}
+		if !os.IsNotExist(err) {
+			return Root{}, "", err
+		}
+	}
+	return Root{}, "", err
+}
+
 type rootRow struct {
 	Slot           string `db:"slot"`
 	KeyID          string `db:"key_id"`
 	IKM            string `db:"ikm"`
 	WriteVersioned int    `db:"write_versioned"`
 }
+
+// errNoCurrentRoot means the registry has not recorded a root yet.
+var errNoCurrentRoot = errors.New("registry encryption_roots has no current row")
 
 func loadFromRegistry(ctx context.Context, store Store) (Root, error) {
 	var rows []rootRow
@@ -109,7 +161,7 @@ func loadFromRegistry(ctx context.Context, store Store) (Root, error) {
 		}
 	}
 	if r.CurrentIKM == "" {
-		return Root{}, fmt.Errorf("registry encryption_roots has no current row")
+		return Root{}, errNoCurrentRoot
 	}
 	return r, nil
 }
@@ -170,7 +222,7 @@ func loadFromFiles(dir string) (Root, error) {
 
 func writeFiles(dir string, r Root) error {
 	if dir == "" {
-		return nil
+		return fmt.Errorf("no directory to persist the encryption root in")
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("encryption-root dir: %w", err)
@@ -185,8 +237,12 @@ func writeFiles(dir string, r Root) error {
 		return err
 	}
 	if r.PreviousIKM == "" {
-		_ = os.Remove(filepath.Join(dir, FilePrevName))
-		_ = os.Remove(filepath.Join(dir, FilePrevIDName))
+		for _, name := range []string{FilePrevName, FilePrevIDName} {
+			path := filepath.Join(dir, name)
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove the retired %s: %w", path, err)
+			}
+		}
 		return nil
 	}
 	if err := writeSecretFile(filepath.Join(dir, FilePrevName), r.PreviousIKM); err != nil {
@@ -294,13 +350,14 @@ func randomIKM() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// SecretsDir is <dataDir>/secrets, the same directory as cluster-secret.
+// SecretsDir is <dataDir>/secrets, the same directory as cluster-secret. It is
+// the node's seed (read-only to gateways), not a gateway's cache.
 func SecretsDir(dataDir string) string {
 	return filepath.Join(dataDir, "secrets")
 }
 
-// Persist writes the root to the secrets directory. Used by a namespace
+// Persist writes the root to a gateway's cache directory. Used by a namespace
 // gateway that received a rotated root from the index.
-func Persist(secretsDir string, r Root) error {
-	return writeFiles(secretsDir, r)
+func Persist(cacheDir string, r Root) error {
+	return writeFiles(cacheDir, r)
 }

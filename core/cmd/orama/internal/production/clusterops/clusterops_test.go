@@ -166,7 +166,7 @@ func TestFirstRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("firstRow: %v", err)
 	}
-	if asString(row[0]) != "12D3KooWNine" || asString(row[1]) != "10.0.0.9" {
+	if AsString(row[0]) != "12D3KooWNine" || AsString(row[1]) != "10.0.0.9" {
 		t.Fatalf("row = %v", row)
 	}
 
@@ -179,15 +179,15 @@ func TestFirstRow(t *testing.T) {
 }
 
 func TestAsString(t *testing.T) {
-	if got := asString(nil); got != "" {
-		t.Errorf("asString(nil) = %q", got)
+	if got := AsString(nil); got != "" {
+		t.Errorf("AsString(nil) = %q", got)
 	}
-	if got := asString("x"); got != "x" {
-		t.Errorf("asString(string) = %q", got)
+	if got := AsString("x"); got != "x" {
+		t.Errorf("AsString(string) = %q", got)
 	}
 	// JSON numbers decode to float64.
-	if got := asString(float64(51820)); got != "51820" {
-		t.Errorf("asString(number) = %q", got)
+	if got := AsString(float64(51820)); got != "51820" {
+		t.Errorf("AsString(number) = %q", got)
 	}
 }
 

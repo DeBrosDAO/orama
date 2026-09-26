@@ -50,8 +50,8 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.DatabaseName == "" {
-		writeJSONError(w, http.StatusBadRequest, "database_name is required")
+	if !isValidDatabaseName(req.DatabaseName) {
+		writeJSONError(w, http.StatusBadRequest, "database_name must be 1-64 letters, digits, underscores or hyphens")
 		return
 	}
 
@@ -81,7 +81,7 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := dbMeta["file_path"].(string)
+	filePath := h.databasePath(namespace, req.DatabaseName)
 
 	// Check if database file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {

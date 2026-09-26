@@ -22,8 +22,9 @@ import (
 // ntfy.go — feature #72. Self-hosted ntfy server installer.
 //
 // Generic infrastructure: installs the upstream `ntfy` binary, creates
-// an `ntfy` system user, writes a hardened `/etc/ntfy/server.yml`, and
-// generates a systemd unit. The Caddy installer (caddy.go) is taught
+// an `ntfy` system user and writes a hardened `/etc/ntfy/server.yml`. It
+// runs as orama-namespace-ntfy@index, from the template shipped in
+// core/systemd; install writes no unit of its own. The Caddy installer (caddy.go) is taught
 // to emit a reverse-proxy block for the public `push.<dnsZone>` host
 // when the operator enables ntfy on a node.
 //
@@ -56,12 +57,11 @@ const (
 	// proxies to it; exposed nowhere else.
 	NtfyListenPort = constants.NtfyListenPort
 
-	ntfyBinaryPath  = "/usr/local/bin/ntfy"
-	ntfyConfigDir   = "/etc/ntfy"
-	ntfyConfigPath  = "/etc/ntfy/server.yml"
-	ntfyDataDir     = "/var/lib/ntfy"
-	ntfySystemdUnit = "/etc/systemd/system/ntfy.service"
-	ntfyUser        = "ntfy"
+	ntfyBinaryPath = "/usr/local/bin/ntfy"
+	ntfyConfigDir  = "/etc/ntfy"
+	ntfyConfigPath = "/etc/ntfy/server.yml"
+	ntfyDataDir    = "/var/lib/ntfy"
+	ntfyUser       = "ntfy"
 )
 
 // NtfyInstaller installs and configures a self-hosted ntfy server.
@@ -85,16 +85,23 @@ func (ni *NtfyInstaller) IsInstalled() bool {
 	if _, err := os.Stat(ntfyBinaryPath); os.IsNotExist(err) {
 		return false
 	}
-	out, err := exec.Command(ntfyBinaryPath, "--version").Output()
+	// ntfy has no version flag: `--version` is "flag provided but not
+	// defined", so asking for it made every install re-download ntfy over
+	// the running binary. `--help` ends with "ntfy 2.11.0 (d11b100), ...".
+	out, err := exec.Command(ntfyBinaryPath, "--help").Output()
 	if err != nil {
 		return false
 	}
-	// `ntfy --version` prints e.g. "ntfy 2.11.0 (1234abc, 2024-01-01)"
-	return strings.Contains(string(out), ntfyVersion)
+	return ntfyReportsVersion(string(out), ntfyVersion)
 }
 
-// Install downloads the ntfy binary, creates the `ntfy` user, lays out
-// data + config directories, and writes the systemd unit. Idempotent:
+// ntfyReportsVersion reports whether ntfy's --help output names version.
+func ntfyReportsVersion(help, version string) bool {
+	return strings.Contains(help, "ntfy "+version+" ")
+}
+
+// Install downloads the ntfy binary, creates the `ntfy` user and lays out
+// data + config directories. Idempotent:
 // re-running on a correctly-installed system is a no-op.
 func (ni *NtfyInstaller) Install() error {
 	if ni.IsInstalled() {
@@ -113,12 +120,6 @@ func (ni *NtfyInstaller) Install() error {
 	if err := ni.ensureDirs(); err != nil {
 		return fmt.Errorf("ntfy: prepare directories: %w", err)
 	}
-	if err := ni.writeSystemdUnit(); err != nil {
-		return fmt.Errorf("ntfy: write systemd unit: %w", err)
-	}
-	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
-		return fmt.Errorf("ntfy: systemctl daemon-reload: %w", err)
-	}
 	fmt.Fprintf(ni.logWriter, "  ✓ ntfy %s installed\n", ntfyVersion)
 	return nil
 }
@@ -128,7 +129,7 @@ func (ni *NtfyInstaller) Install() error {
 // The base_url is exposed publicly via Caddy as https://push.<dnsZone>.
 func (ni *NtfyInstaller) Configure(publicBaseURL string) error {
 	if publicBaseURL == "" {
-		return fmt.Errorf("ntfy Configure: publicBaseURL required (e.g. https://push.dbrs.space)")
+		return fmt.Errorf("ntfy Configure: publicBaseURL required (e.g. https://push.example.com)")
 	}
 	if err := ni.ensureDirs(); err != nil {
 		return err
@@ -138,11 +139,10 @@ func (ni *NtfyInstaller) Configure(publicBaseURL string) error {
 		return fmt.Errorf("ntfy Configure: write server.yml: %w", err)
 	}
 	// Make config readable by ntfy user (group ntfy is set via ensureDirs).
-	// A chown failure here means the systemd unit will fail to read the
-	// config — surface it so the operator notices now rather than after
-	// a confusing service-start error.
+	// A chown failure here means the unit cannot read the config, so it
+	// fails the install now rather than as a confusing service-start error.
 	if out, err := exec.Command("chown", "root:"+ntfyUser, ntfyConfigPath).CombinedOutput(); err != nil {
-		fmt.Fprintf(ni.logWriter, "  ⚠️  chown %s failed: %v (%s)\n", ntfyConfigPath, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("ntfy Configure: chown %s to root:%s so the ntfy unit can read it: %w (%s)", ntfyConfigPath, ntfyUser, err, strings.TrimSpace(string(out)))
 	}
 	fmt.Fprintf(ni.logWriter, "  ✓ ntfy server.yml written (base_url=%s)\n", publicBaseURL)
 	return nil
@@ -178,13 +178,10 @@ func (ni *NtfyInstaller) ensureDirs() error {
 		return fmt.Errorf("mkdir %s: %w", ntfyDataDir, err)
 	}
 	// Data dir must be writable by the ntfy user. Config dir stays
-	// root-owned so the systemd unit can read it; group=ntfy so the
-	// service can also stat it. A chown failure here would cause ntfy
-	// to fail to write its cache database — log it loud so the operator
-	// can investigate rather than chasing a confusing systemd error
-	// later.
+	// root-owned so the unit can read it; group=ntfy so the service can
+	// also stat it. Without the chown ntfy cannot write its cache database.
 	if out, err := exec.Command("chown", "-R", ntfyUser+":"+ntfyUser, ntfyDataDir).CombinedOutput(); err != nil {
-		fmt.Fprintf(ni.logWriter, "    ⚠️  chown %s failed: %v (%s)\n", ntfyDataDir, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("chown %s to %s so ntfy can write its cache database: %w (%s)", ntfyDataDir, ntfyUser, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -275,20 +272,46 @@ func (ni *NtfyInstaller) downloadBinary() error {
 		if filepath.Base(hdr.Name) != "ntfy" || hdr.Typeflag != tar.TypeReg {
 			continue
 		}
-		dst, err := os.OpenFile(ntfyBinaryPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
-		if err != nil {
-			return fmt.Errorf("open binary path: %w", err)
-		}
-		// Limit copy size to 200 MB so a malicious archive can't fill
-		// the disk. ntfy binaries are ~20 MB; 200 MB is plenty.
-		if _, err := io.CopyN(dst, tr, 200*1024*1024); err != nil && err != io.EOF {
-			dst.Close()
-			return fmt.Errorf("write binary: %w", err)
-		}
-		dst.Close()
-		return nil
+		return replaceBinary(ntfyBinaryPath, tr)
 	}
 	return fmt.Errorf("ntfy binary not found in release archive %s", tarballURL)
+}
+
+// maxNtfyBinaryBytes caps the extracted binary so a malicious archive cannot
+// fill the disk. ntfy binaries are ~20 MB.
+const maxNtfyBinaryBytes = 200 * 1024 * 1024
+
+// replaceBinary writes src beside path and renames it over path. Writing into
+// the path itself fails with "text file busy" while the binary runs, which is
+// every upgrade of a live node; a rename swaps the directory entry and leaves
+// the running process its old inode.
+func replaceBinary(path string, src io.Reader) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".new-*")
+	if err != nil {
+		return fmt.Errorf("create a temporary file beside %s: %w", path, err)
+	}
+	defer os.Remove(tmp.Name())
+
+	n, err := io.Copy(tmp, io.LimitReader(src, maxNtfyBinaryBytes+1))
+	if err != nil {
+		tmp.Close()
+		return fmt.Errorf("write %s: %w", tmp.Name(), err)
+	}
+	if n > maxNtfyBinaryBytes {
+		tmp.Close()
+		return fmt.Errorf("binary in the archive is larger than %d bytes", maxNtfyBinaryBytes)
+	}
+	if err := tmp.Chmod(0o755); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod %s: %w", tmp.Name(), err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", tmp.Name(), err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("replace %s: %w", path, err)
+	}
+	return nil
 }
 
 // httpGetLimited fetches url and returns up to maxBytes of body. Used
@@ -343,48 +366,6 @@ func findChecksumFor(body []byte, filename string) (string, error) {
 		return "", fmt.Errorf("scan checksums: %w", err)
 	}
 	return "", fmt.Errorf("filename %q not in checksums file", filename)
-}
-
-// writeSystemdUnit writes /etc/systemd/system/ntfy.service. Runs ntfy
-// as the `ntfy` user with restricted privileges (NoNewPrivileges,
-// ProtectSystem=strict, PrivateTmp). Auto-restart on failure.
-func (ni *NtfyInstaller) writeSystemdUnit() error {
-	unit := fmt.Sprintf(`[Unit]
-Description=ntfy notification server (Orama #72)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=%s
-Group=%s
-ExecStart=%s serve --config %s
-Restart=on-failure
-RestartSec=5s
-# Hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-PrivateDevices=true
-ReadWritePaths=%s
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-RestrictNamespaces=true
-LockPersonality=true
-MemoryDenyWriteExecute=true
-SystemCallArchitectures=native
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-`, ntfyUser, ntfyUser, ntfyBinaryPath, ntfyConfigPath, ntfyDataDir)
-	if err := os.WriteFile(ntfySystemdUnit, []byte(unit), 0644); err != nil {
-		return fmt.Errorf("write unit: %w", err)
-	}
-	return nil
 }
 
 // generateServerYAML produces the contents of /etc/ntfy/server.yml.

@@ -195,6 +195,8 @@ var oneshotUnits = []string{
 	"orama-namespace-wireguard@.service", // adopts wg0 in place, RemainAfterExit
 	"orama-namespace-ipfs-gc@.service",   // `ipfs repo gc`, fired by its timer
 	"orama-namespace-ipfs-gc@.timer",
+	"orama-deploy-build@.service", // one npm install, started and waited for by the gateway
+	"orama-deploy-clean@.service", // removes that install's output
 }
 
 // supervisedUnits are the long-running units orama-node starts and reconciles:

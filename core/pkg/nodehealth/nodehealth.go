@@ -23,25 +23,15 @@ import (
 )
 
 // Target is where to reach one node's own endpoints.
-//
-// Base URLs rather than a host, because the two callers reach a node
-// differently: on the node itself these are localhost, and over the WireGuard
-// overlay they are 10.0.0.x.
 type Target struct {
-	// RQLiteBase is the rqlite HTTP base, e.g. "http://localhost:10100".
-	RQLiteBase string
+	// RQLite is the node's rqlited: its WireGuard address and the credentials
+	// its -auth requires (rqlite.EndpointFromNodeConfig on the node itself).
+	RQLite rqlite.Endpoint
 
 	// GatewayBase is the gateway HTTP base, e.g. "http://localhost:10104".
 	// Empty skips the gateway check — correct for a node whose gateway is
 	// deliberately not running, and never used to skip it silently otherwise.
 	GatewayBase string
-
-	// RQLite basic-auth credentials. Empty is correct while rqlited runs
-	// without -auth; supplying them means this gate keeps working when
-	// enforcement is switched on, rather than reading a 401 as "the node is
-	// down" and stopping a rollout that was fine.
-	RQLiteUser string
-	RQLitePass string
 }
 
 // Options tunes what "ready" means for a particular caller.
@@ -157,7 +147,7 @@ func Observe(ctx context.Context, client *http.Client, t Target) (Status, error)
 	// Through the admin client, so this gate carries credentials. A 401 read
 	// as "the node is down" would stop a rollout that was fine — and the
 	// rollout gate is the last place that should misdiagnose a healthy node.
-	status, err := rqlite.NewAdminClient(t.RQLiteBase, t.RQLiteUser, t.RQLitePass).Status(ctx)
+	status, err := t.RQLite.Admin().Status(ctx)
 	if err != nil {
 		return Status{}, fmt.Errorf("read rqlite status: %w", err)
 	}

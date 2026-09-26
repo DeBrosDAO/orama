@@ -252,8 +252,10 @@ func (h *Handler) authenticateAgainst(w http.ResponseWriter, r *http.Request, ve
 	// a peer across the mesh.
 	//
 	// 404 rather than 403: an endpoint the public has no business reaching
-	// should not confirm that it exists.
-	if !auth.IsNodeLocal(r) {
+	// should not confirm that it exists. This filters where the request came
+	// from; it authenticates nothing — every process on this host passes it —
+	// and the stamp below is the credential.
+	if !auth.ReachedWithoutPublicProxy(r) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return "", nil, false
 	}

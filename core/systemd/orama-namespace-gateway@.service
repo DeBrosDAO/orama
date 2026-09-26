@@ -30,11 +30,27 @@ ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
 ProtectProc=invisible
-ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/orama/.orama/data /opt/orama/.orama/tls-cache
-ReadOnlyPaths=/opt/orama/.orama/secrets
+# What a gateway writes: its own namespace's directory (its state directory
+# and signing keys are in it), and the deployment and SQLite trees it serves
+# from. It used to be all of data/, so a gateway could overwrite another
+# namespace's files — the cluster gateway's signing key among them. The
+# deployment and SQLite trees are still shared by every namespace; they move
+# into each namespace's own directory with the per-namespace ownership work,
+# and these two entries go with them. The cluster gateway writes more
+# (orama-namespace-gateway@index.service.d, pkg/install/gateway_unit.go).
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/data/deployments /opt/orama/.orama/data/sqlite
+# Of secrets/ a gateway reads the cluster secret and the encryption root
+# (the current seed, its id, and the previous seed while a rotation is in
+# progress), and sees nothing else there: the directory is an empty tmpfs
+# with those files bound over it. It used to see the whole directory — the swarm key,
+# the rqlite and API-key HMAC secrets, WireGuard material. The binds are
+# mounts, not reads by PID 1: a symlink planted in secrets/ is mounted with its
+# target's own permissions, which the orama user cannot read past.
+TemporaryFileSystem=/opt/orama/.orama/secrets:ro
+BindReadOnlyPaths=/opt/orama/.orama/secrets/cluster-secret -/opt/orama/.orama/secrets/encryption-root -/opt/orama/.orama/secrets/encryption-root.id -/opt/orama/.orama/secrets/encryption-root.prev -/opt/orama/.orama/secrets/encryption-root.prev.id
 WorkingDirectory=/opt/orama
 
-EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/gateway.env
+EnvironmentFile=/var/lib/orama-unit-env/%i/gateway.env
 
 ExecStart=/opt/orama/bin/gateway --config ${GATEWAY_CONFIG}
 

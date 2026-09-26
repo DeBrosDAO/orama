@@ -3,14 +3,9 @@ package rqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
-
-	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 const (
@@ -84,7 +79,7 @@ func WaitForLeader(ctx context.Context, db *sql.DB, timeout time.Duration) error
 // enough that an already-converged node proceeds almost immediately.
 const raftReadyPollInterval = 500 * time.Millisecond
 
-// WaitForRaftReady blocks until the rqlite on port reports a raft state in
+// WaitForRaftReady blocks until the rqlite at ep reports a raft state in
 // which it is actually participating in the cluster - Leader or Follower - or
 // until timeout elapses.
 //
@@ -99,16 +94,13 @@ const raftReadyPollInterval = 500 * time.Millisecond
 //
 // An unreadable or unparseable status is NOT readiness: it keeps polling and,
 // on timeout, reports the last state it managed to observe.
-func WaitForRaftReady(ctx context.Context, port int, timeout time.Duration) error {
-	client := tlsutil.NewHTTPClient(2 * time.Second)
-	url := fmt.Sprintf("http://localhost:%d/status", port)
-
+func WaitForRaftReady(ctx context.Context, ep Endpoint, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	lastState := "unknown"
 	var lastErr error
 
 	for {
-		state, err := readRaftState(ctx, client, url)
+		state, err := readRaftState(ctx, ep)
 		if err == nil {
 			lastState = state
 			switch strings.ToLower(state) {
@@ -120,62 +112,46 @@ func WaitForRaftReady(ctx context.Context, port int, timeout time.Duration) erro
 		}
 
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return fmt.Errorf("rqlite.WaitForRaftReady: cancelled on port %d (last state %q): %w", port, lastState, ctxErr)
+			return fmt.Errorf("rqlite.WaitForRaftReady: cancelled on %s (last state %q): %w", ep, lastState, ctxErr)
 		}
 		if time.Now().After(deadline) {
 			if lastErr != nil && lastState == "unknown" {
-				return fmt.Errorf("rqlite.WaitForRaftReady: port %d never reported a raft state within %s (last error: %w)", port, timeout, lastErr)
+				return fmt.Errorf("rqlite.WaitForRaftReady: %s never reported a raft state within %s (last error: %w)", ep, timeout, lastErr)
 			}
-			return fmt.Errorf("rqlite.WaitForRaftReady: port %d still in raft state %q after %s (want Leader or Follower)", port, lastState, timeout)
+			return fmt.Errorf("rqlite.WaitForRaftReady: %s still in raft state %q after %s (want Leader or Follower)", ep, lastState, timeout)
 		}
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("rqlite.WaitForRaftReady: cancelled on port %d (last state %q): %w", port, lastState, ctx.Err())
+			return fmt.Errorf("rqlite.WaitForRaftReady: cancelled on %s (last state %q): %w", ep, lastState, ctx.Err())
 		case <-time.After(raftReadyPollInterval):
 		}
 	}
 }
 
-// RaftState reports the raft state of the rqlite at hostPort — Leader,
-// Follower, Candidate or Shutdown. Exposed for diagnostics: a caller that is
-// waiting for readiness wants to log WHY it is waiting, and "Candidate" is a
-// very different answer from "the port is not answering".
+// RaftState reports the raft state of the rqlite at ep — Leader, Follower,
+// Candidate or Shutdown. Exposed for diagnostics: a caller that is waiting for
+// readiness wants to log WHY it is waiting, and "Candidate" is a very different
+// answer from "the port is not answering".
 //
-// It takes a host:port rather than a port because the caller's rqlite is not
-// always local — a namespace gateway can be configured against a remote DSN,
-// and reporting the LOCAL node's raft state under a remote address would be
-// confidently wrong rather than merely unknown.
-func RaftState(ctx context.Context, hostPort string) (string, error) {
-	return readRaftState(ctx, tlsutil.NewHTTPClient(raftStateTimeout),
-		fmt.Sprintf("http://%s/status", hostPort))
+// It takes an Endpoint rather than a port because the caller's rqlite is not
+// always this node's index — a namespace gateway can be configured against a
+// remote DSN, and reporting the LOCAL node's raft state under a remote address
+// would be confidently wrong rather than merely unknown.
+func RaftState(ctx context.Context, ep Endpoint) (string, error) {
+	return readRaftState(ctx, ep)
 }
 
-// raftStateTimeout bounds a single RaftState probe. It only ever talks to
-// localhost.
+// raftStateTimeout bounds a single /status probe.
 const raftStateTimeout = 2 * time.Second
 
 // readRaftState fetches /status and returns store.raft.state.
-func readRaftState(ctx context.Context, client *http.Client, url string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func readRaftState(ctx context.Context, ep Endpoint) (string, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, raftStateTimeout)
+	defer cancel()
+	status, err := ep.Admin().Status(probeCtx)
 	if err != nil {
 		return "", err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("status endpoint returned HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	var status RQLiteStatus
-	if err := json.Unmarshal(body, &status); err != nil {
-		return "", fmt.Errorf("decode status: %w", err)
 	}
 	if status.Store.Raft.State == "" {
 		return "", fmt.Errorf("status carried no store.raft.state")

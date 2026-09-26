@@ -66,8 +66,8 @@ func (h *StaticDeploymentHandler) HandleUpload(w http.ResponseWriter, r *http.Re
 	// Get deployment metadata
 	name := r.FormValue("name")
 	subdomain := r.FormValue("subdomain")
-	if name == "" {
-		http.Error(w, "Deployment name is required", http.StatusBadRequest)
+	if err := h.service.CheckNewDeploymentName(ctx, namespace, name); err != nil {
+		writeDeploymentNameError(w, h.logger, err)
 		return
 	}
 

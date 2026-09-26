@@ -153,19 +153,26 @@ someone restarted the gateway by hand.
 
 This was fixed in code — `ProvisionCluster` now saves state to all nodes (including remote ones via the `save-cluster-state` spawn action).
 
-**The state file is no longer trusted for raft membership.** `cluster-state.json`
+**The state file is not trusted for raft membership.** `cluster-state.json`
 is refreshed by a best-effort push, so the node most likely to hold a stale copy
-is exactly the one that was down while the cluster changed. On restore, the peer
-list written into `peers.json` (rqlite's force-recovery mechanism) now comes from:
+is exactly the one that was down while the cluster changed. A stopped namespace
+rqlite is restored on this evidence instead:
 
-1. **live membership in the index DB** when it is readable — authoritative, and
-   it outranks anything on local disk;
-2. **nothing at all** when the DB is unreadable but another member answers on
-   its raft port — rqlited rejoins using its own raft state, and writing a guess
-   would overwrite the real configuration;
-3. **a single-node entry for this node** only when the DB is unreadable *and*
-   no peer answers. That produces a working leader instead of a Candidate; the
-   other members must be re-added once they return.
+- **Holding raft state**, it restarts on its own raft configuration. It writes
+  `peers.json` (rqlite's force-recovery mechanism) only when the live
+  membership in the index DB differs from the membership this node recorded
+  while its rqlited ran — `data/namespaces/<ns>/rqlite/cluster-membership.json`,
+  beside the node's rqlite directory, refreshed on every restore pass that
+  finds it running. It used to write `peers.json` on every such restart,
+  forcing a configuration onto a namespace that was live elsewhere. With no
+  record, or the DB unreadable, nothing is written: raft waits for its peers.
+- **Without raft state**, a node that has a record was a member and lost its
+  data: it joins the other members and never bootstraps, even with the lowest
+  node id. A lowest-id node used to bootstrap an empty cluster beside the
+  members holding the data. With no other member it refuses and names the
+  record; delete the record only to bootstrap an empty namespace on purpose.
+  A node without a record takes part in the usual election (lowest id
+  bootstraps, the rest join it).
 
 The state file is still used for everything else about the restore (ports, local
 IP, WebRTC roles) — just not for asserting who the voters are.
@@ -230,11 +237,38 @@ grep -E 'rqlite_(auth_file|username|password)' /opt/orama/.orama/configs/node.ya
 sudo cat /opt/orama/.orama/secrets/rqlite-password
 ```
 
-Every client must send `orama` + that password. Gateway YAML has `rqlite_username` / `rqlite_password`. AdminClient reads the auth file. CoreDNS Corefile has `username` / `password` when the secret exists.
+Every client must send `orama` + that password. Gateway and SFU YAML embed it in `rqlite_dsn` (and carry `rqlite_username` / `rqlite_password`). The node process, the `orama` CLI and the installer take it from `node.yaml` (`database.rqlite_username` / `rqlite_password`). The CoreDNS Corefile always has `username` / `password`.
 
 A 401 during a mixed-fleet upgrade means an old binary (no DSN creds) is talking to a new rqlited. Finish the rolling upgrade, followers first, leader last.
 
 Errors from `AdminClient` name a 401 explicitly ("rqlite rejected the credentials (401)"). A 401 that reads instead as reconciliation or backups silently stopping means some caller is still bypassing `AdminClient`.
+
+### Pre-upgrade: "served by this node … has no rqlite.env"
+
+**Symptom:** `orama node pre-upgrade` (or the upgrade's restart step, or post-upgrade) stops with `namespace(s) <ns> are served by this node … but … has no rqlite.env for them`.
+
+**Cause:** the node has `data/namespaces/<ns>/cluster-state.json` and `data/namespaces/<ns>/rqlite/`, so it restores that namespace's rqlite at boot, but the env file that says where the instance listens is missing from the tree the step reads — `/var/lib/orama-unit-env/<ns>/rqlite.env`, or `data/namespaces/<ns>/rqlite.env` on a node that has not yet started on the new layout. Without it the step cannot hand the namespace's leadership over, and restarting the node would take its leader down blind.
+
+**Fix:**
+- If `orama-node` is still moving the old layout, its log names the path it stopped on (`Legacy layout: …`, or a `legacy-layout` component error naming two paths). Resolve that; it retries on its own and writes the env file.
+- If the namespace no longer runs on this node, its directory is a leftover from an unfinished teardown. Remove the namespace from the node through the normal deprovision path; do not delete `cluster-state.json` by hand while the namespace is still assigned here.
+
+### Connection refused on `localhost:10100`
+
+**Symptom:** A manual `curl http://localhost:10100/...` (or an old script) gets connection refused while `orama-namespace-rqlite@index` is running.
+
+**Cause:** rqlited binds only this node's WireGuard advertise address (`discovery.http_adv_address` in `node.yaml`, e.g. `10.0.0.1:10100`); nothing listens on loopback. Namespace instances bind the `HTTP_ADDR` in their `/var/lib/orama-unit-env/<ns>/rqlite.env` (root-owned, group `orama`; read it with `sudo`).
+
+**Fix:** Address rqlite where it binds, with credentials:
+
+```bash
+RQ="http://$(sudo sed -n 's/^ *http_adv_address: *"\(.*\)"/\1/p' /opt/orama/.orama/configs/node.yaml)"
+# Credentials go to curl on stdin (-K -), never on its command line where ps shows them.
+rqcurl() { printf 'user = "orama:%s"\n' "$(sudo cat /opt/orama/.orama/secrets/rqlite-password)" | curl -K - "$@"; }
+rqcurl -sS "$RQ/status"
+```
+
+Every Go client resolves the same address: the node from its config (`rqlite.IndexEndpoint`), the `orama` CLI and the installer from `node.yaml` (`rqlite.EndpointFromNodeConfig`), and operator commands that run over SSH read `node.yaml` on the node (`rqlite.NodeShellCurl`). A missing or wildcard advertise address, or missing credentials, is an error — there is no localhost default.
 
 ---
 
@@ -274,11 +308,22 @@ orama node unlock --genesis --node-ip <wg-ip>
 
 ## 10. Binary signature verification fails
 
-**Symptom:** `orama node install` rejects the binary archive with a signature error.
+**Symptom:** `orama push`, `orama node install` or `orama node upgrade` refuses the build archive; the error names the cause.
 
-**Cause:** The archive was tampered with, or the manifest.sig file is missing/corrupted.
+**Causes and fixes:**
 
-**Fix:** Rebuild the archive with `orama build` and re-sign with `make sign` (in the orama-os repo). Ensure you're using the rootwallet that matches the embedded signer address.
+- *"is unsigned"* — built with `--unsigned`, or `manifest.sig` is missing. Rebuild with `orama build` (signs by default).
+- *"signed by 0x…, which this node does not trust"* — the RootWallet account that signed is not in `/etc/orama/archive-signers`. Build with a trusted account active, or rotate signers with a build signed by a trusted one (`orama build --signers`, [DEV_DEPLOY.md](DEV_DEPLOY.md#signed-archives)).
+- *"does not match the signed manifest"* / *"not in its signed manifest"* — the archive was changed after signing. Rebuild it; if it happens only on fanned-out nodes, suspect the hub.
+- *"no archive trust anchor"* — the node was installed before archives were signed. Push once with `--trust-signers <your address>`.
+- *`unknown command "stage-archive"`* — the node's installed CLI predates archive signing; roll out that one upgrade with the previous release's CLI ([DEV_DEPLOY.md](DEV_DEPLOY.md#signed-archives)).
+- *"a genesis install needs --operator-wallet"* — pass the wallet that signed the archive.
+- *"leaves out its own signer"* — a `--signers` rotation must include the account signing it; retire a key in two builds ([DEV_DEPLOY.md](DEV_DEPLOY.md#signed-archives)).
+- *"an old build is being replayed — rotate with a new build"* — the node already took a rotation from a newer build; make the rotation with a new build.
+- *"… ahead of this node's clock"* (a build with `--signers`, or a joined node's rotation time) — the builder's clock or this node's clock is wrong; fix it and rebuild or rejoin.
+- *"… linux/… and this node is linux/…"* (or *"… and the node is linux/…"* from setup) — build with `--arch` matching the node.
+- *"no build archive at /opt/orama"* — nothing was pushed or set up there; install and upgrade never compile on the node.
+- *join refused with 409 "this cluster trusts archive signers …"* — the cluster trusts more (or other) signers than you expected; join with `orama node setup --join-via user@ip` so the expectation is read from that node. The invite was not used.
 
 ---
 
@@ -363,6 +408,46 @@ waiting.
 
 **"rootwallet agent is not reachable"** means the socket is not there: the
 desktop app is closed. Open it.
+
+---
+
+## 14. Index rqlite refuses to start: "holds raft state but no raft-node-id"
+
+**Symptom:** `orama-node` stays down; its log says `refusing to start the index rqlite: … holds raft state but no raft-node-id`.
+
+**Cause:** the node predates recorded raft ids and was upgraded without the orama CLI of this release. Its raft id is the address it last ran under (on 0.122.x, `<wg-ip>:7001`), and the regenerated `node.yaml` no longer says what that was. Starting under the current address would leave the node outside its own raft configuration.
+
+**Fix:** find the node's id in the configuration on a live member (`orama node report` or `/nodes` on a voter: the entry whose `addr` is this node's WireGuard IP), write it as the orama user to `/opt/orama/.orama/data/rqlite/raft-node-id`, and write the address it lists to `raft-adv-addr` beside it. `orama-node` retries on its own. Upgrade the remaining nodes with `orama node upgrade --env <env> --yes` from this release's CLI, which records both before stopping anything.
+
+---
+
+## 15. Index rqlite refuses to start: "no other member to join so that the leader re-registers it"
+
+**Symptom:** after an upgrade that moved the index raft port, the log says the configuration holds this node at one address, it listens on another, and there is no member to join.
+
+**Cause:** the node's address changed and rqlite only moves a member to a new address when the node joins the leader again. This node has nobody recorded to join: it is a cluster of one, or its membership record was lost.
+
+**Fix:** on a cluster of one, reform it at the new address: `orama node recover-raft --env <env> --leader-raft-addr <wg-ip>:10101`. On a larger cluster, set `database.rqlite_join_address` in `node.yaml` to a live member's raft address and let `orama-node` retry.
+
+---
+
+## 16. Namespace rqlite refuses to bootstrap: "this node has been a member … but holds no raft state"
+
+**Symptom:** a tenant namespace's rqlite is not started on a node; the log names `data/namespaces/<ns>/rqlite/cluster-membership.json`.
+
+**Cause:** the node was a member of that namespace and has lost its rqlite data, and the namespace has no other member to join. Bootstrapping would create an empty namespace database.
+
+**Fix:** restore the node's rqlite data for that namespace, or — if the namespace's data is gone everywhere and an empty one is what you want — delete the record; the next restore pass bootstraps it.
+
+---
+
+## 17. A 0.122.x tenant deployment is down after the upgrade
+
+**Symptom:** a deployment made on 0.122.x does not answer after its node was upgraded; `systemctl status orama-deploy-<ns>-<name>` says the unit does not exist.
+
+**Cause:** 0.122.x ran each deployment from a unit of its own with its environment inline. `orama-node` moves the deployment's files to `data/deployments/<ns>-<name>/` (with the owner marker the gateways check) and stages the environment the unit ran with; the upgrade then stops, disables and deletes the old unit. The template unit that replaces it (`orama-deploy-<runtime>@<ns>-<name>`) also needs a workload token, which only the gateway can mint, so nothing starts it on its own.
+
+**Fix:** deploy it again from scratch — delete the deployment, then create it — which starts it under the template with its environment and a fresh token. `--update` is not enough: an update restarts the existing unit, and the template unit has no token to start with.
 
 ---
 

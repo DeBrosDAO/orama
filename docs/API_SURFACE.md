@@ -30,8 +30,8 @@ unit test read, so a shape change on either side fails without a cluster.
 | Route | Owner | Notes |
 |-------|-------|-------|
 | `/.well-known/jwks.json` | direct | JWKS for verifying gateway-issued JWTs. Read by other services, not by an application. |
-| `/health` | SDK | `network.health()` |
-| `/status` | direct | Gateway process status. `network.status()` uses `/v1/network/status`. |
+| `/health` | SDK | `network.health()`. Open: the overall status and each check's status, nothing else. The detail — latencies, errors, the namespaces hosted here and their ports — is `/v1/operator/health`. |
+| `/status` | direct | Open: that the gateway is up and since when. It no longer embeds the network status (peer ids and addresses); that is `/v1/network/status`, for operators. |
 | `/v1/health` | direct | Same as `/health`, kept for older callers. |
 | `/v1/schema-status` | CLI | Migration state, polled during provisioning. |
 | `/v1/status` | direct | Same as `/status`, kept for older callers. |
@@ -122,8 +122,8 @@ unit test read, so a shape change on either side fails without a cluster.
 |-------|-------|-------|
 | `/v1/network/connect` | CLI | Topology mutation, admin-scoped. |
 | `/v1/network/disconnect` | CLI | Topology mutation, admin-scoped. |
-| `/v1/network/peers` | SDK | `network.peers()` |
-| `/v1/network/status` | SDK | `network.status()` |
+| `/v1/network/peers` | SDK | `network.peers()`. An operator's (operator grant **and** the operator list), or another node's with a coordination MAC over the mesh. It was open to anyone. |
+| `/v1/network/status` | SDK | `network.status()`. Same as `/v1/network/peers`: an operator, or a node's IPFS Cluster peer discovery (`pkg/ipfs`) with a coordination MAC. |
 | `/v1/proxy/anon` | SDK | `network.proxyAnon()` |
 | `/v1/proxy/tunnel` | direct | Raw CONNECT-style tunnelling through the anonymity proxy. Not a JSON call; the SDK has nothing to wrap. |
 
@@ -232,13 +232,14 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/operator/rotate-signing-key` | CLI | Generate a new signing key for this gateway, publish it, and leave the outgoing one verifying what it already signed for one access-token lifetime. Admin grant **and** a wallet on the operator list. `orama operator rotate-signing-key`. |
 | `/v1/operator/rotate-secrets` | CLI | Rewrite stored ciphertext onto `enc:v1:<id>:`. `--rotate` generates a new encryption root first. Admin grant **and** operator list. `orama operator rotate-secrets`. |
 | `/v1/operator/nodes` | CLI | Fleet inventory. |
+| `/v1/operator/health` | direct | The full health report `/v1/health` summarises: each check's latency and error, and the health of every namespace hosted on this node with its ports. Operator grant **and** the operator list. |
 
 ### Internal (node to node)
 
 | Route | Owner | Notes |
 |-------|-------|-------|
-| `/v1/internal/acme/cleanup` | internal | Caddy on this host, over loopback, with no forwarding header. Refused from the internet (Caddy reverse-proxies every path). |
-| `/v1/internal/acme/present` | internal | Caddy on this host, over loopback, with no forwarding header. Refused from the internet (Caddy reverse-proxies every path). |
+| `/v1/internal/acme/cleanup` | internal | Caddy on this host, with a MAC under the ACME challenge key install gives it (`/etc/caddy/orama-acme.key`); only `_acme-challenge` records under the base domain. Anything else is 404 (unsigned) or 400 (a record it has no business writing). |
+| `/v1/internal/acme/present` | internal | Same as cleanup. |
 | `/v1/internal/deployments/replica/rollback` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/deployments/replica/setup` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/deployments/replica/teardown` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
@@ -250,7 +251,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/internal/node/enrol-key` | internal | From the node's own process over loopback, stamped with the node's libp2p identity key. Refused from off the host. |
 | `/v1/internal/node/heartbeat` | internal | From the node's own process over loopback, stamped with the key that node enrolled. Refused from off the host. |
 | `/v1/internal/node/register` | internal | From the node's own process over loopback, stamped with the key that node enrolled. Refused from off the host. |
-| `/v1/internal/ping` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
+| `/v1/internal/ping` | internal | Node-to-node over the WireGuard overlay. Answers `{"status":"ok"}` and nothing else. |
 | `/v1/internal/storage/evict` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/tls/check` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/wg/peer` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |

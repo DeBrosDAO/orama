@@ -25,10 +25,12 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
 
 // indexRQLiteDataDir is where the index rqlite keeps its raft state on a node.
@@ -38,7 +40,7 @@ const indexRQLiteDataDir = "/opt/orama/.orama/data/rqlite"
 
 // indexRQLiteEnvFile is the systemd env file the index rqlite unit reads its
 // arguments from. -node-id and -join reach rqlited only through it.
-const indexRQLiteEnvFile = "/opt/orama/.orama/data/namespaces/index/rqlite.env"
+var indexRQLiteEnvFile = unitenv.Path(unitenv.Dir, "index", "rqlite")
 
 // rejoinTimeout bounds the wait for a migrated node to reappear in the raft
 // configuration under its new id. A node has to restart rqlited, replay its
@@ -327,6 +329,15 @@ func resetNodeIdentity(node inspector.Node, peerID, joinAddr string) error {
 
 // resetScript renders the remote reset. Separate from the SSH call so its shape
 // can be tested: it is the one step of the migration that cannot be undone.
+//
+// It runs as root, and touches two trees with different owners. The rqlite
+// data directory is the orama user's, where a root rm, mkdir or > follows any
+// symlink that user has planted, so those steps run as the orama user
+// (asOramaUser). The env file is in the root-owned unit env tree, which only
+// orama-privhelper writes (pkg/unitenv): the rewrite goes through
+// `orama-privhelper run unitenv set`, which leaves it root:orama 0640. It used
+// to be written in place and chowned to orama:orama, which handed the orama
+// user a file in a tree it must not be able to write.
 func resetScript(peerID, joinAddr string) string {
 	return fmt.Sprintf(`set -euo pipefail
 DATA_DIR=%[1]q
@@ -336,9 +347,10 @@ JOIN_ADDR=%[4]q
 
 systemctl stop orama-namespace-rqlite@index.service
 
-rm -rf "$DATA_DIR"/raft.db "$DATA_DIR"/rsnapshots "$DATA_DIR"/raft "$DATA_DIR"/peers.json "$DATA_DIR"/db.sqlite*
-mkdir -p "$DATA_DIR"
-printf '%%s\n' "$PEER_ID" > "$DATA_DIR"/%[5]s
+%[6]s sh -c 'set -eu
+rm -rf "$1"/raft.db "$1"/rsnapshots "$1"/raft "$1"/peers.json "$1"/db.sqlite*
+mkdir -p "$1"
+printf "%%s\n" "$2" > "$1"/%[5]s' sh "$DATA_DIR" "$PEER_ID"
 
 # Rewrite EXTRA_ARGS with the new id and point JOIN_ARGS at a survivor, keeping
 # every other line of the env file as it was.
@@ -351,13 +363,16 @@ EXTRA=$(grep '^EXTRA_ARGS=' "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/-node-
   grep -v '^EXTRA_ARGS=' "$ENV_FILE" | grep -v '^JOIN_ARGS='
   echo "EXTRA_ARGS=$EXTRA -node-id $PEER_ID"
   echo "JOIN_ARGS=-join $JOIN_ADDR"
-} > "$ENV_FILE".tmp
-mv "$ENV_FILE".tmp "$ENV_FILE"
+} | %[7]s run %[8]s set index rqlite
 
-chown -R orama:orama "$DATA_DIR" "$ENV_FILE"
 systemctl start orama-namespace-rqlite@index.service
-`, indexRQLiteDataDir, indexRQLiteEnvFile, peerID, joinAddr, rqlite.RaftIDMarkerName)
+`, indexRQLiteDataDir, indexRQLiteEnvFile, peerID, joinAddr, rqlite.RaftIDMarkerName, asOramaUser, privhelper.Path, privhelper.ToolUnitEnv)
 }
+
+// asOramaUser runs a command as the orama user from the root reset script.
+// runuser is util-linux's root-only su, with no PAM or sudoers policy to
+// consult.
+const asOramaUser = "runuser -u orama --"
 
 // survivorOverlayIP resolves the overlay address a migrated node joins through.
 func survivorOverlayIP(survivor inspector.Node, p plan) string {

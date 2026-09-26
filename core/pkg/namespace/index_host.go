@@ -21,19 +21,17 @@ func (s *IndexSupervisor) adoptReplace(nodeID string, st systemd.ServiceType, le
 	return disableLeftoverUnits(leftover...)
 }
 
-// EnsureWireGuard brings up existing /etc/wireguard/wg0.conf via
+// EnsureWireGuard brings up the existing /etc/wireguard/wg0.conf via
 // orama-namespace-wireguard@index. It never writes a new conf. Leftover
 // wg-quick@wg0 is disabled without --now so the interface is not bounced.
+//
+// It does not stat the conf first: /etc/wireguard is root's (wg-quick runs the
+// conf's PostUp lines as root) and this process is the orama user, so the stat
+// failed with permission denied on every node and WireGuard never came up. A
+// missing conf fails the unit start, whose error names the unit to inspect.
 func (s *IndexSupervisor) EnsureWireGuard(nodeID string) error {
-	if _, err := os.Stat("/etc/wireguard/wg0.conf"); err != nil {
-		return fmt.Errorf("adopt wireguard: missing /etc/wireguard/wg0.conf: %w", err)
-	}
 	if err := disableLeftoverUnits(systemd.LeftoverWireGuardUnit); err != nil {
 		s.logger.Warn("disable leftover wg-quick@wg0", zap.Error(err))
-	}
-	envVars := map[string]string{"NODE_ID": nodeID}
-	if err := s.systemdMgr.GenerateEnvFile(BlueprintNameIndex, nodeID, systemd.ServiceTypeWireGuard, envVars); err != nil {
-		return err
 	}
 	if unitActive("orama-namespace-wireguard@index.service") {
 		return nil
@@ -55,11 +53,14 @@ func (s *IndexSupervisor) EnsureIPFS(nodeID string) error {
 
 // EnsureIPFSCluster starts orama-namespace-ipfs-cluster@index against the
 // existing cluster data dir and secrets/cluster-secret.
+//
+// A secret that cannot be read, or is empty, is an error. It used to start
+// the daemon with CLUSTER_SECRET="" instead: ipfs-cluster then runs a private
+// network keyed by nothing, handshakes with no peer, and reports healthy.
 func (s *IndexSupervisor) EnsureIPFSCluster(nodeID string) error {
-	secretPath := filepath.Join(s.oramaDir, "secrets", "cluster-secret")
-	secret := ""
-	if data, err := os.ReadFile(secretPath); err == nil {
-		secret = strings.TrimSpace(string(data))
+	secret, err := readClusterSecret(filepath.Join(s.oramaDir, "secrets", "cluster-secret"))
+	if err != nil {
+		return err
 	}
 	clusterPath := filepath.Join(s.dataDir, "ipfs-cluster")
 	return s.adoptReplace(nodeID, systemd.ServiceTypeIPFSCluster, []string{"orama-ipfs-cluster.service"}, map[string]string{
@@ -69,13 +70,35 @@ func (s *IndexSupervisor) EnsureIPFSCluster(nodeID string) error {
 	})
 }
 
+// readClusterSecret is the IPFS Cluster shared secret at path. Install writes
+// it and the join handshake distributes it, so its absence is not something
+// the supervisor can repair.
+func readClusterSecret(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read the IPFS Cluster secret %s: %w (install writes it; restore it from another node — it is the same value fleet-wide)", path, err)
+	}
+	secret := strings.TrimSpace(string(data))
+	if secret == "" {
+		return "", fmt.Errorf("the IPFS Cluster secret %s is empty; restore it from another node — it is the same value fleet-wide", path)
+	}
+	return secret, nil
+}
+
+// ipfsGCEnv is the GC oneshot's environment: the repo, and the API of the
+// running daemon it collects through.
+func ipfsGCEnv(repo, nodeID string) map[string]string {
+	return map[string]string{
+		"IPFS_PATH": repo,
+		"IPFS_API":  fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", IndexIPFSAPIPort),
+		"NODE_ID":   nodeID,
+	}
+}
+
 // EnsureIPFSGC starts the instantiated GC timer (not the oneshot).
 func (s *IndexSupervisor) EnsureIPFSGC(nodeID string) error {
-	repo := filepath.Join(s.dataDir, "ipfs", "repo")
-	if err := s.systemdMgr.GenerateEnvFile(BlueprintNameIndex, nodeID, systemd.ServiceTypeIPFSGC, map[string]string{
-		"IPFS_PATH": repo,
-		"NODE_ID":   nodeID,
-	}); err != nil {
+	if err := s.systemdMgr.GenerateEnvFile(BlueprintNameIndex, nodeID, systemd.ServiceTypeIPFSGC,
+		ipfsGCEnv(filepath.Join(s.dataDir, "ipfs", "repo"), nodeID)); err != nil {
 		return err
 	}
 	if err := stopLeftoverUnits("orama-ipfs-gc.timer"); err != nil {
@@ -114,9 +137,13 @@ func (s *IndexSupervisor) EnsureNtfy(nodeID string) error {
 		s.logger.Info("ntfy binary not installed; skipping")
 		return disableLeftoverUnits("ntfy.service")
 	}
-	return s.adoptReplace(nodeID, systemd.ServiceTypeNtfy, []string{"ntfy.service"}, map[string]string{
-		"NODE_ID": nodeID,
-	})
+	if err := stopLeftoverUnits("ntfy.service"); err != nil {
+		s.logger.Warn("stop leftover host unit", zap.String("unit", "ntfy.service"), zap.Error(err))
+	}
+	if err := s.startWithoutEnv(systemd.ServiceTypeNtfy); err != nil {
+		return err
+	}
+	return disableLeftoverUnits("ntfy.service")
 }
 
 // EnsureTor starts orama-namespace-tor@index, the node's client-only Tor
@@ -126,9 +153,18 @@ func (s *IndexSupervisor) EnsureTor(nodeID string) error {
 	if _, err := os.Stat(constants.TorConfigPath); err != nil {
 		return fmt.Errorf("tor: missing %s (written by `orama node install`/`upgrade`; re-run the upgrade on this node): %w", constants.TorConfigPath, err)
 	}
-	return s.writeEnvAndStart(nodeID, systemd.ServiceTypeTor, map[string]string{
-		"NODE_ID": nodeID,
-	})
+	return s.startWithoutEnv(systemd.ServiceTypeTor)
+}
+
+// startWithoutEnv starts a unit that runs as another user (tor, ntfy) or as
+// root (wireguard). Those units read no env file: anything in one would be
+// set by the orama user for a process it does not own. orama-privhelper
+// refuses to write one for them.
+func (s *IndexSupervisor) startWithoutEnv(st systemd.ServiceType) error {
+	if err := s.systemdMgr.StartService(BlueprintNameIndex, st); err != nil {
+		return fmt.Errorf("start orama-namespace-%s@index: %w", st, err)
+	}
+	return nil
 }
 
 // EnsureSNIRouter starts orama-namespace-sni-router@index when enabled.

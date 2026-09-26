@@ -13,7 +13,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=/opt/orama
-EnvironmentFile=-/opt/orama/.orama/data/namespaces/%i/sni-router.env
+EnvironmentFile=-/var/lib/orama-unit-env/%i/sni-router.env
 ExecStart=/opt/orama/bin/orama-sni-router --config /opt/orama/.orama/configs/sni-router.yaml
 
 # Bind privileged ports (:80, :443) without running as root.

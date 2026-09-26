@@ -1,7 +1,6 @@
 package clusterops
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -138,30 +137,21 @@ func namespaceVoters(survivor inspector.Node) (map[string][]rqlite.RaftMember, e
 
 // parseNamespaceVoters decodes the query response into per-namespace members.
 func parseNamespaceVoters(body []byte) (map[string][]rqlite.RaftMember, error) {
-	var resp rqliteResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parse rqlite response %q: %w", strings.TrimSpace(string(body)), err)
+	rows, err := Rows(body)
+	if err != nil {
+		return nil, err
 	}
-	if resp.Error != "" {
-		return nil, fmt.Errorf("rqlite: %s", resp.Error)
-	}
-
 	out := map[string][]rqlite.RaftMember{}
-	for _, r := range resp.Results {
-		if r.Error != "" {
-			return nil, fmt.Errorf("rqlite: %s", r.Error)
+	for _, row := range rows {
+		if len(row) < 3 {
+			return nil, fmt.Errorf("unexpected namespace_cluster_nodes row shape: %v", row)
 		}
-		for _, row := range r.Values {
-			if len(row) < 3 {
-				return nil, fmt.Errorf("unexpected namespace_cluster_nodes row shape: %v", row)
-			}
-			ns := asString(row[0])
-			out[ns] = append(out[ns], rqlite.RaftMember{
-				ID:        asString(row[1]),
-				Voter:     true,
-				Reachable: asString(row[2]) == "active",
-			})
-		}
+		ns := AsString(row[0])
+		out[ns] = append(out[ns], rqlite.RaftMember{
+			ID:        AsString(row[1]),
+			Voter:     true,
+			Reachable: AsString(row[2]) == "active",
+		})
 	}
 	return out, nil
 }

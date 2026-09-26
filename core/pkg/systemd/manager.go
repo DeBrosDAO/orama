@@ -3,10 +3,16 @@ package systemd
 import (
 	"fmt"
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
+	"github.com/DeBrosOfficial/network/pkg/unitenv"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -33,9 +39,11 @@ const (
 	ServiceTypeCoreDNS     ServiceType = "coredns"
 )
 
-// LeftoverHostUnits are pre-factory host daemons. The installer still writes
-// them for rollback but never enables them. IndexSupervisor starts
-// orama-namespace-*@index instead, then disables these.
+// LeftoverHostUnits are pre-factory host daemons. Install no longer writes
+// them, and install and upgrade delete the ones an older install left
+// (pkg/install/installers.LegacyHostUnits). IndexSupervisor starts
+// orama-namespace-*@index instead and stops and disables these in case one is
+// still loaded.
 var LeftoverHostUnits = []string{
 	"orama-ipfs.service",
 	"orama-ipfs-cluster.service",
@@ -83,10 +91,16 @@ var TemplateUnits = []string{
 // ProtectSystem=strict, NoNewPrivileges=yes — so the units are installed once,
 // here, and the gateway only ever writes the environment file it owns and
 // starts an instance of the template.
+//
+// orama-deploy-build@ and orama-deploy-clean@ are not runtimes: they are the
+// oneshot units that install a Node.js deployment's npm dependencies (which
+// used to run inside the gateway) and remove them again.
 var DeploymentTemplateUnits = []string{
 	"orama-deploy-node@.service",
 	"orama-deploy-npm@.service",
 	"orama-deploy-go@.service",
+	"orama-deploy-build@.service",
+	"orama-deploy-clean@.service",
 }
 
 // UnitFilesToInstall is every unit file copied into /etc/systemd/system by
@@ -114,6 +128,28 @@ type Manager struct {
 	logger        *zap.Logger
 	systemdDir    string
 	namespaceBase string // Base directory for namespace data
+
+	// stale holds units whose inputs (env file, config) changed since they
+	// started; StartService restarts them instead of leaving them running on
+	// the old inputs.
+	staleMu sync.Mutex
+	stale   map[string]bool
+	// deferred holds running stateful units whose changed inputs StartService
+	// has already reported as waiting for a rolling restart. The reconcile
+	// calls StartService every pass and the change stays pending until an
+	// operator restarts the unit, so without this the same warning was
+	// logged every pass. A new change (MarkConfigChanged) reports again.
+	deferred map[string]bool
+
+	// unitEnvDir is the root-owned tree the units' env files live in
+	// (pkg/unitenv); writeUnitEnv stores one there.
+	unitEnvDir   string
+	writeUnitEnv func(namespace, service, contents string) error
+
+	// Seams for tests; NewManager sets the real ones.
+	unitActive  func(unit string) bool
+	activeSince func(unit string) (time.Time, error)
+	runUnitCmd  func(args ...string) ([]byte, error)
 }
 
 // NewManager creates a new systemd manager
@@ -122,6 +158,13 @@ func NewManager(namespaceBase string, logger *zap.Logger) *Manager {
 		logger:        logger.With(zap.String("component", "systemd-manager")),
 		systemdDir:    "/etc/systemd/system",
 		namespaceBase: namespaceBase,
+		stale:         map[string]bool{},
+		deferred:      map[string]bool{},
+		unitEnvDir:    unitenv.Dir,
+		writeUnitEnv:  storeUnitEnv,
+		unitActive:    queryUnitActive,
+		activeSince:   queryActiveSince,
+		runUnitCmd:    func(args ...string) ([]byte, error) { return Systemctl(args...).CombinedOutput() },
 	}
 }
 
@@ -153,8 +196,10 @@ func (m *Manager) serviceName(namespace string, serviceType ServiceType) string 
 }
 
 // Systemctl builds an exec.Command for a systemctl call that changes state,
-// run as root: directly when this process is root, otherwise through sudo and
-// orama-privhelper, which allows only Orama's own units (pkg/privhelper).
+// run as root: directly when this process is root, otherwise through
+// `orama-privhelper call`, which passes the request over the helper's socket
+// and allows only Orama's own units (pkg/privhelper). No sudo: it cannot gain
+// root under NoNewPrivileges, which the orama units set.
 //
 // Everything on a node that drives systemd goes through this. Read-only
 // queries (is-active, show) need no privilege and call systemctl directly.
@@ -184,29 +229,183 @@ func (m *Manager) StartTimer(namespace string, serviceType ServiceType) error {
 // StartService starts a namespace service
 func (m *Manager) StartService(namespace string, serviceType ServiceType) error {
 	svcName := m.serviceName(namespace, serviceType)
+
+	// "start" on a running unit is a no-op, so a unit whose env file or config
+	// was rewritten kept running on the old inputs: a re-run install left the
+	// gateway on the previous run's rqlite credentials, answering 503 for good.
+	// Starting means running with the current inputs, so such a unit is
+	// restarted. The env file's mtime against the unit's start time also covers
+	// a node that went down between writing a file and starting the unit.
+	verb := "start"
+	if m.isUnitActive(svcName) {
+		if !m.inputsChangedSinceStart(namespace, serviceType, svcName) {
+			return nil
+		}
+		if !restartsOnInputChange(serviceType) {
+			// A clustered, stateful service is never restarted as a side effect:
+			// the same reconcile runs on every node, and restarting rqlite voters
+			// (or Olric members) on several nodes at once is the one thing a
+			// rolling procedure exists to prevent. Its new inputs take effect at
+			// its next deliberate restart.
+			if m.firstDeferral(svcName) {
+				m.logger.Warn("Service inputs changed; they apply at its next rolling restart",
+					zap.String("service", svcName))
+			}
+			return nil
+		}
+		verb = "restart"
+	}
+
 	m.logger.Info("Starting systemd service",
 		zap.String("service", svcName),
-		zap.String("namespace", namespace))
+		zap.String("namespace", namespace),
+		zap.String("verb", verb))
 
-	cmd := Systemctl("start", svcName)
-	m.logger.Debug("Executing systemctl command",
-		zap.String("cmd", cmd.String()),
-		zap.Strings("args", cmd.Args))
-
-	output, err := cmd.CombinedOutput()
+	output, err := m.runUnit(verb, svcName)
 	if err != nil {
 		m.logger.Error("Failed to start service",
 			zap.String("service", svcName),
+			zap.String("verb", verb),
 			zap.Error(err),
-			zap.String("output", string(output)),
-			zap.String("cmd", cmd.String()))
-		return fmt.Errorf("failed to start %s: %w; output: %s", svcName, err, string(output))
+			zap.String("output", string(output)))
+		return fmt.Errorf("failed to %s %s: %w; output: %s", verb, svcName, err, string(output))
 	}
+	m.clearStale(svcName)
 
 	m.logger.Info("Service started successfully",
 		zap.String("service", svcName),
+		zap.String("verb", verb),
 		zap.String("output", string(output)))
 	return nil
+}
+
+// statefulClusterServices hold replicated state or cluster membership and are
+// never restarted implicitly (see StartService).
+var statefulClusterServices = map[ServiceType]bool{
+	ServiceTypeRQLite:      true,
+	ServiceTypeOlric:       true,
+	ServiceTypeIPFS:        true,
+	ServiceTypeIPFSCluster: true,
+	ServiceTypeVault:       true,
+	ServiceTypeWireGuard:   true,
+}
+
+// restartsOnInputChange reports whether StartService may restart a running
+// unit of this type because its inputs changed.
+func restartsOnInputChange(st ServiceType) bool {
+	return !statefulClusterServices[st]
+}
+
+// MarkConfigChanged records that a namespace service's configuration (other
+// than its env file, which GenerateEnvFile tracks itself) changed, so the
+// next StartService restarts a running unit.
+func (m *Manager) MarkConfigChanged(namespace string, serviceType ServiceType) {
+	m.staleMu.Lock()
+	defer m.staleMu.Unlock()
+	if m.stale == nil {
+		m.stale = map[string]bool{}
+	}
+	svcName := m.serviceName(namespace, serviceType)
+	m.stale[svcName] = true
+	delete(m.deferred, svcName)
+}
+
+func (m *Manager) clearStale(svcName string) {
+	m.staleMu.Lock()
+	defer m.staleMu.Unlock()
+	delete(m.stale, svcName)
+	delete(m.deferred, svcName)
+}
+
+// firstDeferral records that a stateful unit's input change is waiting for a
+// rolling restart, and reports whether this is the first time since the change.
+func (m *Manager) firstDeferral(svcName string) bool {
+	m.staleMu.Lock()
+	defer m.staleMu.Unlock()
+	if m.deferred[svcName] {
+		return false
+	}
+	if m.deferred == nil {
+		m.deferred = map[string]bool{}
+	}
+	m.deferred[svcName] = true
+	return true
+}
+
+// inputsChangedSinceStart reports whether a running unit's inputs are newer
+// than the process: marked stale this run, or an env file written after the
+// unit last became active.
+func (m *Manager) inputsChangedSinceStart(namespace string, serviceType ServiceType, svcName string) bool {
+	m.staleMu.Lock()
+	stale := m.stale[svcName]
+	m.staleMu.Unlock()
+	if stale {
+		return true
+	}
+	st, err := os.Stat(m.envFilePath(namespace, serviceType))
+	if err != nil {
+		return false // no env file: nothing on disk that the unit could be missing
+	}
+	since, err := m.unitActiveSince(svcName)
+	if err != nil {
+		// Not a restart: if this kept failing, restarting would bounce the
+		// service on every reconcile. Changes made by this process are
+		// covered by the stale mark above.
+		m.logger.Warn("Cannot read a unit's start time to tell whether its env file is newer; leaving it running",
+			zap.String("service", svcName), zap.Error(err))
+		return false
+	}
+	return st.ModTime().After(since)
+}
+
+// The seams default to the real systemctl when a Manager is built without
+// NewManager (a zero value in tests).
+func (m *Manager) isUnitActive(unit string) bool {
+	if m.unitActive != nil {
+		return m.unitActive(unit)
+	}
+	return queryUnitActive(unit)
+}
+
+func (m *Manager) unitActiveSince(unit string) (time.Time, error) {
+	if m.activeSince != nil {
+		return m.activeSince(unit)
+	}
+	return queryActiveSince(unit)
+}
+
+func (m *Manager) runUnit(args ...string) ([]byte, error) {
+	if m.runUnitCmd != nil {
+		return m.runUnitCmd(args...)
+	}
+	return Systemctl(args...).CombinedOutput()
+}
+
+// queryUnitActive asks systemd whether unit is active (a query; no privilege).
+func queryUnitActive(unit string) bool {
+	return exec.Command("systemctl", "is-active", "--quiet", unit).Run() == nil
+}
+
+// activeEnterLayout is ActiveEnterTimestamp as `systemctl show
+// --timestamp=us+utc` prints it. UTC, because time.Parse reads an unknown zone
+// abbreviation as offset zero, which would skew a local-time value.
+const activeEnterLayout = "Mon 2006-01-02 15:04:05.000000 UTC"
+
+// queryActiveSince is when unit last became active, to the microsecond.
+func queryActiveSince(unit string) (time.Time, error) {
+	out, err := exec.Command("systemctl", "show", "--timestamp=us+utc", "-p", "ActiveEnterTimestamp", "--value", unit).Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("systemctl show %s: %w", unit, err)
+	}
+	return parseActiveEnter(strings.TrimSpace(string(out)))
+}
+
+func parseActiveEnter(s string) (time.Time, error) {
+	t, err := time.Parse(activeEnterLayout, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse ActiveEnterTimestamp %q: %w", s, err)
+	}
+	return t, nil
 }
 
 // StopService stops a namespace service
@@ -336,8 +535,7 @@ func (m *Manager) ReloadDaemon() error {
 // serviceExists checks if a namespace service has an env file on disk,
 // indicating the service was provisioned for this namespace.
 func (m *Manager) serviceExists(namespace string, serviceType ServiceType) bool {
-	envFile := filepath.Join(m.namespaceBase, namespace, fmt.Sprintf("%s.env", serviceType))
-	_, err := os.Stat(envFile)
+	_, err := os.Stat(m.envFilePath(namespace, serviceType))
 	return err == nil
 }
 
@@ -535,8 +733,50 @@ func (m *Manager) CleanupOrphanedProcesses() error {
 	return nil
 }
 
-// GenerateEnvFile creates the environment file for a namespace service
+// envFilePath is where a namespace service's env file lives: the root-owned
+// tree its unit's EnvironmentFile= names (pkg/unitenv).
+func (m *Manager) envFilePath(namespace string, serviceType ServiceType) string {
+	dir := m.unitEnvDir
+	if dir == "" {
+		dir = unitenv.Dir
+	}
+	return unitenv.Path(dir, namespace, string(serviceType))
+}
+
+// storeUnitEnv writes an env file into the root-owned tree: directly when
+// this process is root (the installer), otherwise through orama-privhelper.
+func storeUnitEnv(namespace, service, contents string) error {
+	if os.Geteuid() != 0 {
+		return privhelper.SetUnitEnv(namespace, service, contents)
+	}
+	g, err := user.LookupGroup("orama")
+	if err != nil {
+		return fmt.Errorf("look up the orama group: %w", err)
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return fmt.Errorf("orama group id %q: %w", g.Gid, err)
+	}
+	return unitenv.Write(unitenv.Dir, namespace, service, []byte(contents), unitenv.Owner{UID: 0, GID: gid})
+}
+
+// RemoveNamespaceEnv removes every env file of namespace, as its data
+// directory is removed.
+func (m *Manager) RemoveNamespaceEnv(namespace string) error {
+	if os.Geteuid() != 0 {
+		return privhelper.ClearUnitEnv(namespace)
+	}
+	return unitenv.ClearNamespace(unitenv.Dir, namespace)
+}
+
+// GenerateEnvFile creates the environment file for a namespace service. It
+// rewrites the file only when the content differs, and marks the service for
+// a restart when it does.
 func (m *Manager) GenerateEnvFile(namespace, nodeID string, serviceType ServiceType, envVars map[string]string) error {
+	// Before anything touches the disk: the namespace names a directory here.
+	if err := validateEnvFile(namespace, nodeID, serviceType, envVars); err != nil {
+		return fmt.Errorf("refusing to write the env file: %w", err)
+	}
 	envDir := filepath.Join(m.namespaceBase, namespace)
 	m.logger.Debug("Creating env directory",
 		zap.String("dir", envDir))
@@ -548,7 +788,7 @@ func (m *Manager) GenerateEnvFile(namespace, nodeID string, serviceType ServiceT
 		return fmt.Errorf("failed to create env directory: %w", err)
 	}
 
-	envFile := filepath.Join(envDir, fmt.Sprintf("%s.env", serviceType))
+	envFile := m.envFilePath(namespace, serviceType)
 
 	var content strings.Builder
 	content.WriteString("# Auto-generated environment file for namespace service\n")
@@ -559,21 +799,37 @@ func (m *Manager) GenerateEnvFile(namespace, nodeID string, serviceType ServiceT
 	// Always include NODE_ID
 	content.WriteString(fmt.Sprintf("NODE_ID=%s\n", nodeID))
 
-	// Add all other environment variables
-	for key, value := range envVars {
-		content.WriteString(fmt.Sprintf("%s=%s\n", key, value))
+	// Add all other environment variables, in a fixed order: identical inputs
+	// must render identical bytes, or every reconcile would look like a change
+	// and restart the service.
+	keys := make([]string, 0, len(envVars))
+	for key := range envVars {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		content.WriteString(fmt.Sprintf("%s=%s\n", key, envVars[key]))
+	}
+
+	if existing, err := os.ReadFile(envFile); err == nil && string(existing) == content.String() {
+		return nil
 	}
 
 	m.logger.Debug("Writing env file",
 		zap.String("file", envFile),
 		zap.Int("size", content.Len()))
 
-	if err := os.WriteFile(envFile, []byte(content.String()), 0644); err != nil {
+	write := m.writeUnitEnv
+	if write == nil {
+		write = storeUnitEnv
+	}
+	if err := write(namespace, string(serviceType), content.String()); err != nil {
 		m.logger.Error("Failed to write env file",
 			zap.String("file", envFile),
 			zap.Error(err))
 		return fmt.Errorf("failed to write env file: %w", err)
 	}
+	m.MarkConfigChanged(namespace, serviceType)
 
 	m.logger.Info("Generated environment file",
 		zap.String("file", envFile),
@@ -677,10 +933,10 @@ func (m *Manager) IsHostTURNActive() (bool, error) {
 // IsLeftoverHostUnit reports whether name is one of the pre-factory host
 // daemons the installer disables.
 //
-// A guard rather than a comment, because the unit files stay on disk for
-// rollback: any code that decides what to start by looking for a unit file will
-// find these and start them, and they then race orama-namespace-*@index for the
-// same ports.
+// A guard rather than a comment, because a node not yet upgraded still has the
+// unit files on disk: any code that decides what to start by looking for a
+// unit file will find these and start them, and they then race
+// orama-namespace-*@index for the same ports.
 func IsLeftoverHostUnit(name string) bool {
 	for _, u := range LeftoverHostUnits {
 		if u == name {

@@ -15,25 +15,25 @@ const (
 	logrotateFileMode = 0o644
 )
 
-// GenerateLogrotateConfig renders the rotation policy for the service logs
-// written under <oramaDir>/logs.
+// GenerateLogrotateConfig renders the rotation policy for the log files under
+// <oramaDir>/logs.
 //
-// Every long-running unit is configured with `StandardOutput=append:<file>`,
-// which never rotates on its own — the file grows for the lifetime of the
-// install. On a busy node that reaches multiple gigabytes (node.log has been
-// observed at 2.7 GB, gateway.log at 861 MB), and the only bound is the disk
-// filling up and taking the node down with it.
+// The host units install wrote before the namespace templates redirected their
+// output there with `StandardOutput=append:<file>`, which never rotates on its
+// own; node.log was observed at 2.7 GB, gateway.log at 861 MB. Every unit now
+// logs to the journal, which bounds itself, but upgraded nodes still carry
+// those files and anything written there since, so the rule stays.
 //
-// `copytruncate` is required rather than the default create-and-signal
-// behaviour: systemd holds the append fd open and there is no reopen signal to
-// send it, so renaming the file would leave the service writing to an unlinked
-// inode and the "rotated" log would stay invisible and keep growing.
+// `copytruncate` rather than create-and-signal: a writer holding the file open
+// has no reopen signal to send, so renaming the file would leave it writing to
+// an unlinked inode. `su orama orama` runs the rotation as the user that owns
+// the directory, so a symlink planted there is never followed by root.
 func GenerateLogrotateConfig(oramaDir string) string {
 	logGlob := filepath.Join(oramaDir, "logs", "*.log")
 	return fmt.Sprintf(`# Managed by Orama — do not edit by hand.
 #
-# Service units write with systemd's append: redirection, which holds the file
-# descriptor open and never rotates. copytruncate keeps that fd valid.
+# Files left by the pre-journal host units and anything that still writes here.
+# copytruncate keeps an open writer's fd valid.
 %s {
     daily
     rotate 7
@@ -50,8 +50,7 @@ func GenerateLogrotateConfig(oramaDir string) string {
 }
 
 // InstallLogrotateConfig writes the rotation policy to logrotateConfigPath.
-// Requires root. Returns an error the caller may downgrade to a warning —
-// missing rotation degrades disk usage, it does not break the node.
+// Requires root.
 func InstallLogrotateConfig(oramaDir string) error {
 	cfg := GenerateLogrotateConfig(oramaDir)
 	if err := os.WriteFile(logrotateConfigPath, []byte(cfg), logrotateFileMode); err != nil {

@@ -7,6 +7,21 @@ import (
 	"strings"
 )
 
+// ProductionBaseDir is the root-owned directory holding a production node's
+// .orama tree, which belongs to the orama user. Root reads and writes that tree
+// through a rootfs anchor at this directory, never following a symlink.
+const ProductionBaseDir = "/opt/orama"
+
+// ProductionNodeConfigPath is where the installer writes node.yaml on a
+// production node. Commands that run on a node (the orama CLI, the installer)
+// read the node's rqlite endpoint and credentials from it.
+const ProductionNodeConfigPath = ProductionBaseDir + "/.orama/configs/node.yaml"
+
+// ProductionNamespacesDataDir holds one directory per namespace instance on a
+// production node ("index" included), each with the env files the systemd
+// spawner writes (rqlite.env, olric.env, ...).
+const ProductionNamespacesDataDir = "/opt/orama/.orama/data/namespaces"
+
 // ExpandPath expands environment variables and ~ in a path.
 func ExpandPath(path string) (string, error) {
 	path = os.ExpandEnv(path)

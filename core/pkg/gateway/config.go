@@ -35,10 +35,24 @@ type Config struct {
 	DomainName string
 
 	// Domain routing configuration
-	BaseDomain string // Base domain for deployment routing. Set via node config http_gateway.base_domain. Defaults to "dbrs.space"
+	// BaseDomain is the cluster's domain: deployment routing, namespace
+	// gateways (ns-<name>.<base>) and the TLS on-demand check all hang off it.
+	// Required (ValidateConfig); it has no default. Loaded from YAML
+	// domain_name, which the spawner writes from node.yaml
+	// http_gateway.base_domain.
+	BaseDomain string
 
-	// Data directory configuration
-	DataDir string // Base directory for node-local data (SQLite databases, deployments). Defaults to ~/.orama
+	// DataDir is the node's orama directory (/opt/orama/.orama). The gateway
+	// only READS under it (secrets/, identity, node config) and writes the
+	// shared trees under data/ (SQLite databases, deployments): secrets/ and
+	// configs/ are read-only to orama-namespace-gateway@.
+	DataDir string
+
+	// StateDir is this gateway's private, writable state directory
+	// (<DataDir>/data/namespaces/<ns>/gateway): its own signing keys and its
+	// encryption-root cache. Required, and never shared between gateways — two
+	// gateways on one host resolving the same key file is what this replaces.
+	StateDir string
 
 	// Olric cache configuration
 	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:10102"]). If empty, defaults to the index Olric on localhost

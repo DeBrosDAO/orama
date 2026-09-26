@@ -43,3 +43,42 @@ func TestInstallAuthFile_copies(t *testing.T) {
 		t.Fatalf("copied %q", got)
 	}
 }
+
+func writeAuth(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), AuthFileName)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestJoinUser_picksAUserAllowedToJoin(t *testing.T) {
+	for body, want := range map[string]string{
+		`[{"username":"orama","password":"x","perms":["all"]}]`:                                                          "orama",
+		`[{"username":"reader","password":"x","perms":["query"]},{"username":"joiner","password":"y","perms":["join"]}]`: "joiner",
+	} {
+		got, err := JoinUser(writeAuth(t, body))
+		if err != nil || got != want {
+			t.Errorf("JoinUser(%s) = %q, %v; want %q", body, got, err, want)
+		}
+	}
+}
+
+// Without a user that may join, rqlited would be refused as "unauthorized" on
+// every attempt; that is a start error, not something to discover in the log.
+func TestJoinUser_refusesWhenNoUserMayJoin(t *testing.T) {
+	for _, body := range []string{
+		`[{"username":"reader","password":"x","perms":["query","status"]}]`,
+		`[{"username":"","password":"x","perms":["all"]}]`,
+		`[]`,
+		`not json`,
+	} {
+		if got, err := JoinUser(writeAuth(t, body)); err == nil {
+			t.Errorf("JoinUser(%s) = %q, want an error", body, got)
+		}
+	}
+	if _, err := JoinUser(filepath.Join(t.TempDir(), "absent.json")); err == nil {
+		t.Error("a missing auth file produced a join user")
+	}
+}

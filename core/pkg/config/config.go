@@ -25,6 +25,16 @@ type Config struct {
 	// orama-node at boot (same failure mode as the v0.122.42
 	// secrets_encryption_key incident).
 	SNIRouter SNIRouterConfig `yaml:"sni_router"`
+	// TLS is written only when the node was installed with --acme-ca, and must
+	// exist here for the same KnownFields reason.
+	TLS TLSConfig `yaml:"tls"`
+}
+
+// TLSConfig is the top-level tls block in node.yaml.
+type TLSConfig struct {
+	// ACMECA is the ACME directory Caddy issues certificates from; empty is
+	// Let's Encrypt production.
+	ACMECA string `yaml:"acme_ca"`
 }
 
 // SNIRouterConfig is the top-level stealth SNI router block in node.yaml
@@ -117,7 +127,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Node: NodeConfig{
 			ListenAddresses: []string{
-				"/ip4/0.0.0.0/tcp/4001", // TCP only
+				fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", constants.NodeLibP2PPort), // TCP only
 			},
 			DataDir:        "./data",
 			MaxConnections: 50,
@@ -154,7 +164,7 @@ func DefaultConfig() *Config {
 		},
 		Discovery: DiscoveryConfig{
 			BootstrapPeers:    []string{},
-			BootstrapPort:     4001,             // Default LibP2P port
+			BootstrapPort:     constants.NodeLibP2PPort,
 			DiscoveryInterval: time.Second * 15, // Back to 15 seconds for testing
 			HttpAdvAddress:    "",
 			RaftAdvAddress:    "",
@@ -173,7 +183,6 @@ func DefaultConfig() *Config {
 			NodeName:          "default",
 			Routes:            make(map[string]RouteConfig),
 			ClientNamespace:   "default",
-			RQLiteDSN:         fmt.Sprintf("http://localhost:%d", constants.RQLiteHTTPPort),
 			OlricServers:      []string{fmt.Sprintf("localhost:%d", constants.OlricHTTPPort)},
 			OlricTimeout:      10 * time.Second,
 			IPFSClusterAPIURL: fmt.Sprintf("http://localhost:%d", constants.IPFSClusterAPIPort),

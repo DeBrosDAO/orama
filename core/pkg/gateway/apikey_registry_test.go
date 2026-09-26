@@ -72,6 +72,8 @@ func TestConnectAPIKeyRegistry_anUnreachableRegistryIsFatal(t *testing.T) {
 	cfg := &Config{
 		RQLiteDSN:       "http://127.0.0.1:1",
 		GlobalRQLiteDSN: "http://" + addr,
+		RQLiteUsername:  "orama",
+		RQLitePassword:  "pw",
 	}
 	client, err := connectAPIKeyRegistry(cfg, testLoggerForRegistry(t))
 	if err == nil {

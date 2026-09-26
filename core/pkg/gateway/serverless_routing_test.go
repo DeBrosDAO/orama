@@ -307,7 +307,7 @@ func TestNamespaceNamedByServerlessRequest(t *testing.T) {
 func TestWithMiddleware_routesTenantServerlessToTheNamespaceGateway(t *testing.T) {
 	f := newClusterGatewayFixture(t, "default")
 	f.g.ready = newReadiness()
-	f.g.ready.set(ReadinessReady, "ready")
+	f.g.ready.set(ReadinessReady, "", "")
 	f.g.startedAt = time.Now()
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

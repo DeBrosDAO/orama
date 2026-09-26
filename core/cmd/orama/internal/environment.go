@@ -3,10 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 // Environment represents a Orama network environment
@@ -15,6 +18,10 @@ type Environment struct {
 	GatewayURL  string `json:"gateway_url"`
 	Description string `json:"description"`
 	IsActive    bool   `json:"is_active"`
+	// CAFile is a PEM bundle trusted, in addition to the system roots, for
+	// the gateway's domain and every name under it: a cluster on Let's
+	// Encrypt staging or on a private CA. Only for this environment's domain.
+	CAFile string `json:"ca_file,omitempty"`
 }
 
 // EnvironmentConfig stores all configured environments
@@ -23,19 +30,21 @@ type EnvironmentConfig struct {
 	ActiveEnvironment string        `json:"active_environment"`
 }
 
-// Default environments
+// defaultActiveEnvironment is active in a fresh config and after the active
+// environment is removed.
+const defaultActiveEnvironment = "devnet"
+
+// DefaultEnvironments are the public clusters a fresh config knows. A sandbox
+// is added by `orama sandbox create`, and a cluster of your own by
+// `orama node setup --genesis` or `orama env add`. The old default was a
+// "sandbox" entry for dbrs.space, a cluster that no longer exists, and it was
+// the active one.
 var DefaultEnvironments = []Environment{
-	{
-		Name:        "sandbox",
-		GatewayURL:  "https://dbrs.space",
-		Description: "Sandbox cluster (dbrs.space)",
-		IsActive:    true,
-	},
 	{
 		Name:        "devnet",
 		GatewayURL:  "https://orama-devnet.network",
 		Description: "Development network",
-		IsActive:    false,
+		IsActive:    true,
 	},
 	{
 		Name:        "testnet",
@@ -73,7 +82,7 @@ func LoadEnvironmentConfig() (*EnvironmentConfig, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return &EnvironmentConfig{
 			Environments:      DefaultEnvironments,
-			ActiveEnvironment: "sandbox",
+			ActiveEnvironment: defaultActiveEnvironment,
 		}, nil
 	}
 
@@ -132,14 +141,14 @@ func GetActiveEnvironment() (*Environment, error) {
 		}
 	}
 
-	// Fallback to sandbox if active environment not found
+	// No fallback: silently using some other environment would send a
+	// command to a cluster the operator did not choose.
+	names := make([]string, 0, len(envConfig.Environments))
 	for _, env := range envConfig.Environments {
-		if env.Name == "sandbox" {
-			return &env, nil
-		}
+		names = append(names, env.Name)
 	}
-
-	return nil, fmt.Errorf("no active environment found")
+	return nil, fmt.Errorf("active environment %q is not configured (configured: %s); choose one with `orama env use <name>` or pass --env",
+		envConfig.ActiveEnvironment, strings.Join(names, ", "))
 }
 
 // SwitchEnvironment switches to a different environment
@@ -193,6 +202,12 @@ func AddEnvironment(name, gatewayURL, description string) error {
 
 	for i, env := range envConfig.Environments {
 		if env.Name == name {
+			// A CA is trusted for one domain. Pointing the environment at
+			// another host drops it rather than carrying it to a domain
+			// nobody chose to trust it for; pass --ca-file again to keep one.
+			if !sameGatewayHost(env.GatewayURL, gatewayURL) {
+				envConfig.Environments[i].CAFile = ""
+			}
 			envConfig.Environments[i].GatewayURL = gatewayURL
 			envConfig.Environments[i].Description = description
 			return SaveEnvironmentConfig(envConfig)
@@ -209,7 +224,7 @@ func AddEnvironment(name, gatewayURL, description string) error {
 }
 
 // RemoveEnvironment removes an environment by name. If the removed environment
-// was active, the active environment falls back to "devnet".
+// was active, defaultActiveEnvironment becomes active.
 func RemoveEnvironment(name string) error {
 	envConfig, err := LoadEnvironmentConfig()
 	if err != nil {
@@ -233,7 +248,7 @@ func RemoveEnvironment(name string) error {
 	envConfig.Environments = newEnvs
 
 	if envConfig.ActiveEnvironment == name {
-		envConfig.ActiveEnvironment = "devnet"
+		envConfig.ActiveEnvironment = defaultActiveEnvironment
 	}
 
 	return SaveEnvironmentConfig(envConfig)
@@ -253,8 +268,77 @@ func InitializeEnvironments() error {
 
 	envConfig := &EnvironmentConfig{
 		Environments:      DefaultEnvironments,
-		ActiveEnvironment: "sandbox",
+		ActiveEnvironment: defaultActiveEnvironment,
 	}
 
 	return SaveEnvironmentConfig(envConfig)
+}
+
+// SetEnvironmentCA records caFile as the CA trusted for the named
+// environment's domain. The file is checked now, so a typo fails here rather
+// than on the next command.
+func SetEnvironmentCA(name, caFile string) error {
+	abs, err := filepath.Abs(caFile)
+	if err != nil {
+		return fmt.Errorf("resolve CA file %s: %w", caFile, err)
+	}
+	envConfig, err := LoadEnvironmentConfig()
+	if err != nil {
+		return err
+	}
+	for i, env := range envConfig.Environments {
+		if env.Name != name {
+			continue
+		}
+		domain, err := gatewayDomain(env.GatewayURL)
+		if err != nil {
+			return err
+		}
+		if err := tlsutil.TrustCAForDomain(domain, abs); err != nil {
+			return err
+		}
+		envConfig.Environments[i].CAFile = abs
+		return SaveEnvironmentConfig(envConfig)
+	}
+	return fmt.Errorf("environment %q is not configured", name)
+}
+
+// TrustEnvironmentCAs trusts every configured environment's CA for that
+// environment's domain, for all HTTPS this process makes. A CA file that has
+// gone missing is an error naming the environment, not a silent downgrade to
+// a connection that cannot verify.
+func TrustEnvironmentCAs() error {
+	envConfig, err := LoadEnvironmentConfig()
+	if err != nil {
+		return err
+	}
+	for _, env := range envConfig.Environments {
+		if env.CAFile == "" {
+			continue
+		}
+		domain, err := gatewayDomain(env.GatewayURL)
+		if err != nil {
+			return fmt.Errorf("environment %q: %w", env.Name, err)
+		}
+		if err := tlsutil.TrustCAForDomain(domain, env.CAFile); err != nil {
+			return fmt.Errorf("environment %q: %w (fix it with `orama env add %s %s --ca-file <file>`)",
+				env.Name, err, env.Name, env.GatewayURL)
+		}
+	}
+	return tlsutil.InstallScopedRoots()
+}
+
+func gatewayDomain(gatewayURL string) (string, error) {
+	u, err := url.Parse(gatewayURL)
+	if err != nil || u.Hostname() == "" {
+		return "", fmt.Errorf("gateway URL %q has no host to scope a CA to", gatewayURL)
+	}
+	return u.Hostname(), nil
+}
+
+// sameGatewayHost reports whether two gateway URLs name the same host.
+func sameGatewayHost(a, b string) bool {
+	ha, errA := gatewayDomain(a)
+	hb, errB := gatewayDomain(b)
+	return errA == nil && errB == nil && strings.EqualFold(ha, hb)
 }

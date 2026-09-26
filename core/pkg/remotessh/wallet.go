@@ -17,6 +17,7 @@ import (
 type vaultClient interface {
 	GetSSHKey(ctx context.Context, host, username, format string) (*rwagent.VaultSSHData, error)
 	CreateSSHEntry(ctx context.Context, host, username string) (*rwagent.VaultSSHData, error)
+	DeleteSSHEntry(ctx context.Context, host, username string) error
 	KeepUnlocked(interval time.Duration) (stop func())
 }
 
@@ -42,6 +43,22 @@ func wrapAgentError(err error, action string) error {
 		return fmt.Errorf("%s: %w (running this again may succeed)", action, err)
 	}
 	return fmt.Errorf("%s: %w", action, err)
+}
+
+// forgetKeyTimeout bounds one vault delete; the agent answers locally.
+const forgetKeyTimeout = 30 * time.Second
+
+// ForgetNodeKey deletes the node's SSH key from the RootWallet vault. Every
+// `orama node setup` stores one; a node that has been erased or retired no
+// longer needs it, and redeploys and fleet churn otherwise pile orphan keys
+// into the operator's wallet.
+func ForgetNodeKey(node inspector.Node) error {
+	ctx, cancel := context.WithTimeout(context.Background(), forgetKeyTimeout)
+	defer cancel()
+	if err := newClient().DeleteSSHEntry(ctx, node.Host, node.User); err != nil {
+		return wrapAgentError(err, fmt.Sprintf("delete the SSH key for %s@%s from the vault", node.User, node.Host))
+	}
+	return nil
 }
 
 // PrepareNodeKeys resolves wallet-derived SSH keys for all nodes.

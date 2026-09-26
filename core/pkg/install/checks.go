@@ -2,7 +2,6 @@ package install
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -217,39 +216,6 @@ func (dc *DependencyChecker) CheckAll() ([]Dependency, error) {
 	return nil, nil
 }
 
-// ExternalToolChecker validates external tool versions and availability
-type ExternalToolChecker struct{}
-
-// CheckIPFSAvailable checks if IPFS is available in PATH
-func (etc *ExternalToolChecker) CheckIPFSAvailable() bool {
-	_, err := exec.LookPath("ipfs")
-	return err == nil
-}
-
-// CheckIPFSClusterAvailable checks if IPFS Cluster Service is available
-func (etc *ExternalToolChecker) CheckIPFSClusterAvailable() bool {
-	_, err := exec.LookPath("ipfs-cluster-service")
-	return err == nil
-}
-
-// CheckRQLiteAvailable checks if RQLite is available
-func (etc *ExternalToolChecker) CheckRQLiteAvailable() bool {
-	_, err := exec.LookPath("rqlited")
-	return err == nil
-}
-
-// CheckOlricAvailable checks if Olric Server is available
-func (etc *ExternalToolChecker) CheckOlricAvailable() bool {
-	_, err := exec.LookPath("olric-server")
-	return err == nil
-}
-
-// CheckGoAvailable checks if Go is installed
-func (etc *ExternalToolChecker) CheckGoAvailable() bool {
-	_, err := exec.LookPath("go")
-	return err == nil
-}
-
 // ResourceChecker validates system resources for production deployment
 type ResourceChecker struct{}
 
@@ -329,36 +295,4 @@ func (rc *ResourceChecker) CheckCPU() error {
 		return fmt.Errorf("insufficient CPU cores: %d available, minimum 2 required", cores)
 	}
 	return nil
-}
-
-// PortChecker checks if ports are available or in use
-type PortChecker struct{}
-
-// NewPortChecker creates a new port checker
-func NewPortChecker() *PortChecker {
-	return &PortChecker{}
-}
-
-// IsPortInUse checks if a specific port is already in use
-func (pc *PortChecker) IsPortInUse(port int) bool {
-	addr := fmt.Sprintf("localhost:%d", port)
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		// Port is not in use
-		return false
-	}
-	defer conn.Close()
-	// Port is in use
-	return true
-}
-
-// IsPortInUseOnHost checks if a port is in use on a specific host
-func (pc *PortChecker) IsPortInUseOnHost(host string, port int) bool {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-	return true
 }

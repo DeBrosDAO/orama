@@ -1,11 +1,14 @@
 package install
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // FilesystemProvisioner manages directory creation and permissions
@@ -23,6 +26,9 @@ func NewFilesystemProvisioner(oramaHome string) *FilesystemProvisioner {
 	}
 }
 
+// gatewayTreeMode is the mode of the trees only the gateway reads and writes.
+const gatewayTreeMode = 0o700
+
 // EnsureDirectoryStructure creates all required directories (unified structure)
 func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 	// All directories needed for unified node structure
@@ -35,51 +41,41 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 		filepath.Join(fp.oramaDir, "data", "ipfs-cluster"),
 		filepath.Join(fp.oramaDir, "data", "rqlite"),
 		filepath.Join(fp.oramaDir, "data", "vault"),
+		// The gateways' writable trees. Their unit lists each in
+		// ReadWritePaths and leaves the rest of data/ read-only, so they must
+		// exist before a gateway starts: it can no longer create them.
+		constants.NamespacesDir(fp.oramaDir),
+		filepath.Dir(constants.HostTURNConfigPath(fp.oramaDir)),
 		filepath.Join(fp.oramaDir, "logs"),
 		filepath.Join(fp.oramaDir, "tls-cache"),
 		filepath.Join(fp.oramaDir, "backups"),
 		filepath.Join(fp.oramaHome, "bin"),
-		filepath.Join(fp.oramaHome, "src"),
 		filepath.Join(fp.oramaHome, ".npm"),
 	}
 
+	root := OramaRoot(fp.oramaDir)
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := root.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
-	if err := os.Chmod(filepath.Join(fp.oramaDir, "secrets"), 0700); err != nil {
+	// The deployment and SQLite trees are the gateway's alone (it narrows
+	// data/deployments to 0700 itself on every claim); created here because
+	// the gateway's unit may write inside them but not create them.
+	for _, dir := range []string{constants.DeploymentsBaseDir(fp.oramaDir), constants.SQLiteBaseDir(fp.oramaDir)} {
+		if err := root.MkdirAll(dir, gatewayTreeMode); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
+	}
+	if err := root.Chmod(filepath.Join(fp.oramaDir, "secrets"), 0700); err != nil {
 		return fmt.Errorf("failed to set secrets directory permissions: %w", err)
 	}
 
 	// Remove any stray cluster-secret file from root .orama directory
 	// The correct location is .orama/secrets/cluster-secret
 	strayClusterSecret := filepath.Join(fp.oramaDir, "cluster-secret")
-	if _, err := os.Stat(strayClusterSecret); err == nil {
-		if err := os.Remove(strayClusterSecret); err != nil {
-			return fmt.Errorf("failed to remove stray cluster-secret file: %w", err)
-		}
-	}
-
-	// Create log files with correct permissions so systemd can write to them
-	logsDir := filepath.Join(fp.oramaDir, "logs")
-	logFiles := []string{
-		"olric.log",
-		"gateway.log",
-		"ipfs.log",
-		"ipfs-cluster.log",
-		"node.log",
-		"vault.log",
-	}
-
-	for _, logFile := range logFiles {
-		logPath := filepath.Join(logsDir, logFile)
-		// Create empty file if it doesn't exist
-		if _, err := os.Stat(logPath); os.IsNotExist(err) {
-			if err := os.WriteFile(logPath, []byte{}, 0644); err != nil {
-				return fmt.Errorf("failed to create log file %s: %w", logPath, err)
-			}
-		}
+	if err := root.Remove(strayClusterSecret); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("failed to remove stray cluster-secret file: %w", err)
 	}
 
 	return nil
@@ -106,9 +102,6 @@ func (fp *FilesystemProvisioner) EnsureOramaUser() error {
 			return err
 		}
 	}
-
-	// The sudoers grant is written by EnsurePrivHelper once the helper it
-	// names is in place.
 
 	return nil
 }
@@ -144,44 +137,6 @@ func lockOramaBinDir(binDir string) error {
 	return nil
 }
 
-// writeSudoersFile validates the rule with `visudo -c` before atomically
-// installing it (mode 0440). A syntactically broken drop-in is never written,
-// so a future edit to privhelper.SudoersRule can't silently corrupt sudo. The temp
-// file is created in the target dir (same filesystem, atomic rename) with a
-// leading dot so sudo's includedir ignores it even if cleanup is skipped.
-func writeSudoersFile(path, content string) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".orama-sudoers-*")
-	if err != nil {
-		return fmt.Errorf("create temp sudoers file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmp.WriteString(content); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write temp sudoers file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp sudoers file: %w", err)
-	}
-	if err := os.Chmod(tmpPath, 0440); err != nil {
-		return fmt.Errorf("chmod temp sudoers file: %w", err)
-	}
-
-	// Validate syntax before installing. visudo ships with sudo; only skip the
-	// check if it is genuinely absent (e.g. a minimal build environment).
-	if visudo, lookErr := exec.LookPath("visudo"); lookErr == nil {
-		if out, err := exec.Command(visudo, "-c", "-f", tmpPath).CombinedOutput(); err != nil {
-			return fmt.Errorf("sudoers rule failed visudo validation: %w\n%s", err, string(out))
-		}
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("install sudoers file %s: %w", path, err)
-	}
-	return nil
-}
-
 // StateDetector checks for existing production state
 type StateDetector struct {
 	oramaDir string
@@ -203,15 +158,6 @@ func (sd *StateDetector) IsConfigured() bool {
 	return err1 == nil || err2 == nil
 }
 
-// HasSecrets checks if cluster secret and swarm key exist
-func (sd *StateDetector) HasSecrets() bool {
-	clusterSecret := filepath.Join(sd.oramaDir, "secrets", "cluster-secret")
-	swarmKey := filepath.Join(sd.oramaDir, "secrets", "swarm.key")
-	_, err1 := os.Stat(clusterSecret)
-	_, err2 := os.Stat(swarmKey)
-	return err1 == nil && err2 == nil
-}
-
 // HasIPFSData checks if IPFS repo is initialized (unified path)
 func (sd *StateDetector) HasIPFSData() bool {
 	// Check unified path first
@@ -223,35 +169,4 @@ func (sd *StateDetector) HasIPFSData() bool {
 	legacyPath := filepath.Join(sd.oramaDir, "data", "bootstrap", "ipfs", "repo", "config")
 	_, err := os.Stat(legacyPath)
 	return err == nil
-}
-
-// HasRQLiteData checks if RQLite data exists (unified path)
-func (sd *StateDetector) HasRQLiteData() bool {
-	// Check unified path first
-	rqliteDataPath := filepath.Join(sd.oramaDir, "data", "rqlite")
-	if info, err := os.Stat(rqliteDataPath); err == nil && info.IsDir() {
-		return true
-	}
-	// Fallback: check legacy bootstrap path for migration
-	legacyPath := filepath.Join(sd.oramaDir, "data", "bootstrap", "rqlite")
-	info, err := os.Stat(legacyPath)
-	return err == nil && info.IsDir()
-}
-
-// CheckBinaryInstallation checks if required binaries are in PATH
-func (sd *StateDetector) CheckBinaryInstallation() error {
-	binaries := []string{"ipfs", "ipfs-cluster-service", "rqlited", "olric-server"}
-	var missing []string
-
-	for _, bin := range binaries {
-		if _, err := exec.LookPath(bin); err != nil {
-			missing = append(missing, bin)
-		}
-	}
-
-	if len(missing) > 0 {
-		return fmt.Errorf("missing binaries: %s", strings.Join(missing, ", "))
-	}
-
-	return nil
 }

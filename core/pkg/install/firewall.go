@@ -2,15 +2,17 @@ package install
 
 import (
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"os/exec"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 )
 
 // ufwCommand builds an exec.Command for ufw run as root. At install time the
 // provisioner is root and runs ufw directly; at runtime orama-node runs as the
-// unprivileged "orama" user and goes through sudo and orama-privhelper, which
-// allows only the TURN rules (pkg/privhelper). Without a root path, runtime
+// unprivileged "orama" user and goes through orama-privhelper, which allows
+// only the TURN rules (pkg/privhelper). Without a root path, runtime
 // firewall changes (AddWebRTCRules on `webrtc enable`) silently failed and
 // TURN relay ports stayed firewalled.
 func ufwCommand(args ...string) *exec.Cmd {
@@ -22,8 +24,20 @@ func ufwCommand(args ...string) *exec.Cmd {
 // 6b opens this whole range on any node that hosts a TURN instance (bugboard
 // #846) so the firewall reset never closes the relay.
 const (
+	// ownedRuleComment tags every allow rule Reconcile adds. Reconcile removes
+	// only tagged rules, so an operator's own rules — a tailscale0 interface
+	// allow, a monitoring port — are never Orama's to delete.
+	ownedRuleComment = "orama"
+
 	defaultTURNRelayPortStart = 49152
 	defaultTURNRelayPortEnd   = 65535
+
+	// overlayAllowRule admits the WireGuard mesh, on the WireGuard interface
+	// only (the argument form `ufw allow` takes).
+	overlayAllowRule = "in on " + wireGuardInterface + " from " + constants.WireGuardSubnet
+
+	// wireGuardInterface is the mesh interface wg-quick brings up.
+	wireGuardInterface = "wg0"
 )
 
 // FirewallConfig holds the configuration for UFW firewall rules
@@ -116,8 +130,13 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 		}
 	}
 
-	// Allow all traffic from WireGuard subnet (inter-node encrypted traffic)
-	rules = append(rules, "ufw allow from 10.0.0.0/24")
+	// Everything from the mesh, and only when it arrives on the mesh. A source
+	// address is not a credential: without `in on wg0`, a packet sourced from
+	// 10.0.0.0/24 on the public interface — which another tenant of the same
+	// provider network, or a spoofed UDP datagram, can produce — was admitted
+	// to every internal port. Arriving through wg0 means WireGuard
+	// authenticated the peer's key.
+	rules = append(rules, fmt.Sprintf("ufw allow %s", overlayAllowRule))
 
 	// Disable IPv6 — no ip6tables rules exist, so services bound to 0.0.0.0
 	// may be reachable via IPv6. Disable it entirely at the kernel level.
@@ -153,29 +172,50 @@ func (fp *FirewallProvisioner) DesiredAllowRules() []string {
 // Reconcile brings the live firewall to the desired rule set without ever
 // taking it down: it adds what is missing and removes what is extra.
 //
-// `ufw allow` is idempotent on its own — re-adding an existing rule is a no-op —
-// so a correct rule set costs nothing and changes nothing, which is the
-// property an upgrade needs.
+// `ufw allow` is idempotent on its own — re-adding an existing rule is a no-op,
+// and re-adding an untagged one tags it — so a correct rule set costs nothing
+// and changes nothing, which is the property an upgrade needs.
+//
+// "Extra" means a rule Orama tagged and no longer wants. Rules without the tag
+// belong to someone else: the operator, or the TURN rules orama-node opens at
+// runtime through orama-privhelper — with one exception, the exact untagged
+// rules older Orama releases added before rules were tagged (legacyAllowRules),
+// which nothing else would ever remove.
 func (fp *FirewallProvisioner) Reconcile() error {
 	if err := fp.Install(); err != nil {
 		return err
 	}
 
-	live, err := fp.liveAllowRules()
+	status, err := readUFWStatus()
 	if err != nil {
 		return err
 	}
+	rows := parseAllowRows(status)
 
 	desired := fp.DesiredAllowRules()
 	wanted := make(map[string]bool, len(desired))
 	for _, rule := range desired {
 		wanted[rule] = true
-		if err := runFirewall("ufw", append([]string{"allow"}, strings.Fields(rule)...)...); err != nil {
+		if err := runFirewall("ufw", ownedAllowArgs(rule)...); err != nil {
 			return fmt.Errorf("add firewall rule %q: %w", rule, err)
 		}
 	}
 
-	for _, rule := range live {
+	// Everything that is not an allow rule: default policies, IPv6, enable,
+	// and the conntrack bypass. All idempotent, none of them a reset. They run
+	// before any removal so a rule that cannot be removed never leaves the
+	// firewall disabled or its policies unset.
+	for _, cmd := range fp.GenerateRules() {
+		if strings.HasPrefix(cmd, "ufw allow ") {
+			continue
+		}
+		parts := strings.Fields(cmd)
+		if err := runFirewall(parts[0], parts[1:]...); err != nil {
+			return fmt.Errorf("apply %q: %w", cmd, err)
+		}
+	}
+
+	for _, rule := range ownedAllowRules(rows) {
 		if wanted[rule] {
 			continue
 		}
@@ -184,15 +224,9 @@ func (fp *FirewallProvisioner) Reconcile() error {
 		}
 	}
 
-	// Everything that is not an allow rule: default policies, IPv6, enable,
-	// and the conntrack bypass. All idempotent, none of them a reset.
-	for _, cmd := range fp.GenerateRules() {
-		if strings.HasPrefix(cmd, "ufw allow ") {
-			continue
-		}
-		parts := strings.Fields(cmd)
-		if err := runFirewall(parts[0], parts[1:]...); err != nil {
-			return fmt.Errorf("apply %q: %w", cmd, err)
+	for _, rule := range legacyRulesToRemove(rows, fp.config.SSHPort, wanted) {
+		if err := runFirewall("ufw", append([]string{"delete", "allow"}, strings.Fields(rule)...)...); err != nil {
+			return fmt.Errorf("remove the untagged rule %q an older Orama added: %w", rule, err)
 		}
 	}
 
@@ -205,13 +239,19 @@ func (fp *FirewallProvisioner) Reconcile() error {
 	return nil
 }
 
-// liveAllowRules reads the allow rules ufw currently has.
-func (fp *FirewallProvisioner) liveAllowRules() ([]string, error) {
+// readUFWStatus is `ufw status`, which parseAllowRows reads.
+func readUFWStatus() (string, error) {
 	out, err := exec.Command("ufw", "status").CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("read ufw status: %w\n%s", err, string(out))
+		return "", fmt.Errorf("read ufw status: %w\n%s", err, string(out))
 	}
-	return parseUFWAllowRules(string(out)), nil
+	return string(out), nil
+}
+
+// ownedAllowArgs is the `ufw` argument list that adds rule with Orama's tag.
+func ownedAllowArgs(rule string) []string {
+	args := append([]string{"allow"}, strings.Fields(rule)...)
+	return append(args, "comment", ownedRuleComment)
 }
 
 func runFirewall(name string, args ...string) error {
@@ -258,16 +298,6 @@ func (fp *FirewallProvisioner) persistRAMHygiene() error {
 	return nil
 }
 
-// IsActive checks if UFW is active
-func (fp *FirewallProvisioner) IsActive() bool {
-	cmd := ufwCommand("status")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(output), "Status: active")
-}
-
 // AddWebRTCRules dynamically adds TURN port rules without a full firewall reset.
 // Used when enabling WebRTC on a namespace.
 func (fp *FirewallProvisioner) AddWebRTCRules(relayStart, relayEnd int) error {
@@ -289,69 +319,6 @@ func webRTCRuleArgs(relayStart, relayEnd int) [][]string {
 	}
 	if relayStart > 0 && relayEnd > 0 {
 		rules = append(rules, []string{"allow", fmt.Sprintf("%d:%d/udp", relayStart, relayEnd)})
-	}
-	return rules
-}
-
-// GetStatus returns the current UFW status
-func (fp *FirewallProvisioner) GetStatus() (string, error) {
-	cmd := ufwCommand("status", "verbose")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("failed to get ufw status: %w\n%s", err, string(output))
-	}
-	return string(output), nil
-}
-
-// parseUFWAllowRules extracts the allow rules from `ufw status` output.
-//
-// The output looks like:
-//
-//	To                         Action      From
-//	--                         ------      ----
-//	22/tcp                     ALLOW       Anywhere
-//	Anywhere                   ALLOW       10.0.0.0/24
-//	22/tcp (v6)                ALLOW       Anywhere (v6)
-//
-// and is normalised back into the argument form `ufw allow` takes, so a live
-// rule can be compared against a desired one by string equality.
-//
-// v6 rows are skipped: IPv6 is disabled at the kernel level on these nodes, ufw
-// mirrors every v4 rule into one, and treating them as extra rules would make
-// Reconcile delete rules it had just added, forever.
-func parseUFWAllowRules(status string) []string {
-	var rules []string
-
-	for _, line := range strings.Split(status, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.Contains(line, "(v6)") {
-			continue
-		}
-
-		// "To  ACTION  From", with the action as the anchor.
-		idx := strings.Index(line, "ALLOW")
-		if idx < 0 {
-			continue
-		}
-		to := strings.TrimSpace(line[:idx])
-		from := strings.TrimSpace(line[idx+len("ALLOW"):])
-		from = strings.TrimPrefix(from, "IN")
-		from = strings.TrimSpace(from)
-		if to == "" || from == "" {
-			continue
-		}
-
-		switch {
-		case from == "Anywhere":
-			// `ufw allow 22/tcp`
-			rules = append(rules, to)
-		case to == "Anywhere":
-			// `ufw allow from 10.0.0.0/24`
-			rules = append(rules, "from "+from)
-		default:
-			// `ufw allow from <src> to any port <port>`
-			rules = append(rules, "from "+from+" to any port "+to)
-		}
 	}
 	return rules
 }

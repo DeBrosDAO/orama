@@ -1,6 +1,7 @@
 package node
 
 import (
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/push"
 	"github.com/spf13/cobra"
 )
 
@@ -12,10 +13,12 @@ var Cmd = &cobra.Command{
 
 Local, run on the node itself and needing root (sudo):
   install, uninstall, upgrade, start, stop, restart, status, logs, doctor,
-  report, invite, unlock, schema, migrate, migrate-raft-id, migrate-conf
+  report, invite, unlock, schema, migrate, migrate-raft-id, migrate-conf,
+  stage-archive (run by push)
 
 Remote, run from your machine and reaching nodes over SSH:
-  list, setup, enroll, push, rollout, clean, remove, wipe, recover-raft
+  list, setup, enroll, push, rollout, clean, remove, wipe, recover-raft,
+  dns delegation
 
 The remote commands are the same implementations as the top-level 'orama push',
 'orama rollout' and 'orama nodes'.`,
@@ -33,7 +36,6 @@ func init() {
 	Cmd.AddCommand(logsCmd)
 	Cmd.AddCommand(inviteCmd)
 	Cmd.AddCommand(migrateRaftIDCmd)
-	Cmd.AddCommand(migrateCmd)
 	Cmd.AddCommand(doctorCmd)
 	Cmd.AddCommand(reportCmd)
 	Cmd.AddCommand(pushCmd)
@@ -42,9 +44,11 @@ func init() {
 	Cmd.AddCommand(decommissionCmd)
 	Cmd.AddCommand(wipeCmd)
 	Cmd.AddCommand(recoverRaftCmd)
+	Cmd.AddCommand(dnsCmd)
 	Cmd.AddCommand(enrollCmd)
 	Cmd.AddCommand(unlockCmd)
 	Cmd.AddCommand(migrateConfCmd)
 	Cmd.AddCommand(setupCmd)
 	Cmd.AddCommand(schemaCmd)
+	Cmd.AddCommand(push.NewStageArchiveCmd())
 }

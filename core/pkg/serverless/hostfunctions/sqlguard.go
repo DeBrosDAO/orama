@@ -56,9 +56,14 @@ var protectedTables = map[string]string{
 	"signing_keys": "which keys may sign a token",
 	// Public keys too, but writing one is deciding which machine the cluster
 	// will accept as a node, and deleting a row un-revokes a retired one.
-	"node_credentials":           "which key the cluster accepts as a node",
-	"encryption_roots":           "the IKM stored secrets are derived from",
-	"grants":                     "who may do what in a namespace",
+	"node_credentials": "which key the cluster accepts as a node",
+	"encryption_roots": "the IKM stored secrets are derived from",
+	"grants":           "who may do what in a namespace",
+	// 0.122.x's ownership table, kept while 0.122.x gateways still read it
+	// during the rolling upgrade (migration 050 is expand-only).
+	"namespace_ownership": "who owns a namespace (0.122.x)",
+	// Rewriting it would move which window keys the contract release revokes.
+	"api_keys_expiry_cutoff":     "which API keys the expiry backfill covers",
 	"wireguard_peers":            "mesh membership and node agent tokens",
 	"namespace_push_credentials": "push credentials",
 	// A topic row is only ever written by whoever holds the topic's secret, and

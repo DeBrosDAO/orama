@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 )
 
 // ManifestName is the manifest's path inside an archive and under /opt/orama.
@@ -52,9 +54,8 @@ func ReadArchiveManifest(path string) ([]byte, error) {
 	}
 }
 
-// ArchiveOwnedPaths are the entries an archive installs under /opt/orama.
-// They are removed before a new archive is extracted, so nothing from an older
-// build survives next to a newer one — above all not a manifest.sig that no
-// longer matches the manifest beside it. /opt/orama also holds the node's
+// ArchiveOwnedPaths are the entries an archive installs under /opt/orama
+// (archivetrust.OwnedPaths). They are replaced as a whole, so nothing from an
+// older build survives next to a newer one; /opt/orama also holds the node's
 // data (.orama/), which is why the directory itself is never cleared.
-var ArchiveOwnedPaths = []string{"bin", "systemd", "packages", "manifest.json", "manifest.sig"}
+var ArchiveOwnedPaths = archivetrust.OwnedPaths

@@ -2,8 +2,8 @@ package rqlite
 
 import (
 	"context"
+	"fmt"
 	"strings"
-	"time"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/request"
@@ -189,28 +189,25 @@ func (p *RQLitePlugin) buildRR(qname string, record *DNSRecord) dns.RR {
 	}
 }
 
-// handleNXDomain handles the case where no records are found
+// handleNXDomain answers a name with no records: NXDOMAIN, with the zone's
+// own SOA in the authority section for negative caching (RFC 2308).
+//
+// The SOA is the one the zone carries in dns_records — the nameserver
+// component (pkg/node/dns_nameservers.go) writes it with the lowest glued
+// slot as the primary. This used to invent one naming ns1.<first zone>
+// whatever the zone, so a cluster whose ns1 slot was released, or a query in
+// a second configured zone, got a negative answer signed by a nameserver that
+// is not the zone's.
 func (p *RQLitePlugin) handleNXDomain(ctx context.Context, w dns.ResponseWriter, r *dns.Msg, state *request.Request) (int, error) {
+	zone := p.zoneOf(state.Name())
+	soa, err := p.zoneSOA(ctx, zone)
+	if err != nil {
+		return p.serveStaleOrFail(w, r, state, err)
+	}
+
 	msg := new(dns.Msg)
 	msg.SetRcode(r, dns.RcodeNameError)
 	msg.Authoritative = true
-
-	// Add SOA record for negative caching
-	soa := &dns.SOA{
-		Hdr: dns.RR_Header{
-			Name:   p.zones[0],
-			Rrtype: dns.TypeSOA,
-			Class:  dns.ClassINET,
-			Ttl:    60,
-		},
-		Ns:      "ns1." + p.zones[0],
-		Mbox:    "admin." + p.zones[0],
-		Serial:  uint32(time.Now().Unix()),
-		Refresh: 3600,
-		Retry:   600,
-		Expire:  86400,
-		Minttl:  60,
-	}
 	msg.Ns = append(msg.Ns, soa)
 
 	// Cache the NXDOMAIN, briefly.
@@ -225,6 +222,37 @@ func (p *RQLitePlugin) handleNXDomain(ctx context.Context, w dns.ResponseWriter,
 
 	w.WriteMsg(msg)
 	return dns.RcodeNameError, nil
+}
+
+// zoneOf is the most specific configured zone qname is in.
+func (p *RQLitePlugin) zoneOf(qname string) string {
+	return plugin.Zones(p.zones).Matches(qname)
+}
+
+// zoneSOA is zone's SOA record as the negative-answer authority: owned by the
+// apex, with the TTL RFC 2308 gives it — the lesser of the record's TTL and
+// its minimum field. A zone without one is an error rather than something to
+// make up: its nameserver component has not published it yet (no slot is
+// claimed and glued), and an invented SOA would name a primary that may not
+// exist.
+func (p *RQLitePlugin) zoneSOA(ctx context.Context, zone string) (*dns.SOA, error) {
+	records, err := p.backend.Query(ctx, zone, dns.TypeSOA)
+	if err != nil {
+		return nil, fmt.Errorf("read the SOA of zone %s: %w", zone, err)
+	}
+	if len(records) == 0 {
+		return nil, fmt.Errorf("zone %s has no SOA record in dns_records; a nameserver writes it once it holds a glued "+
+			"slot in dns_nameservers — check that orama-node is running on the nameservers", zone)
+	}
+	stored := records[0].ParsedValue.(*dns.SOA)
+	soa := *stored
+	soa.Hdr = dns.RR_Header{
+		Name:   zone,
+		Rrtype: dns.TypeSOA,
+		Class:  dns.ClassINET,
+		Ttl:    min(uint32(records[0].TTL), stored.Minttl),
+	}
+	return &soa, nil
 }
 
 // Ready implements the ready.Readiness interface

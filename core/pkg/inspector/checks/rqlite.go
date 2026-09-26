@@ -77,7 +77,7 @@ func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData, lea
 	// 1.2 HTTP endpoint responsive
 	if !rq.Responsive {
 		r = append(r, inspector.Fail("rqlite.responsive", "RQLite HTTP endpoint responsive", rqliteSub, node,
-			"curl localhost:10100/status failed or returned error", inspector.Critical))
+			"GET /status on the node's WireGuard address (with node.yaml credentials) failed or returned error", inspector.Critical))
 		return r
 	}
 	r = append(r, inspector.Pass("rqlite.responsive", "RQLite HTTP endpoint responsive", rqliteSub, node,
@@ -594,15 +594,4 @@ func checkRQLiteCrossNode(data *inspector.ClusterData, leaderNodes map[string]*i
 	}
 
 	return r
-}
-
-// countRQLiteNodes counts nodes that have RQLite data.
-func countRQLiteNodes(data *inspector.ClusterData) int {
-	count := 0
-	for _, nd := range data.Nodes {
-		if nd.RQLite != nil {
-			count++
-		}
-	}
-	return count
 }

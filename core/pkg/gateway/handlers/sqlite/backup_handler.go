@@ -47,8 +47,8 @@ func (h *BackupHandler) BackupDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.DatabaseName == "" {
-		http.Error(w, "database_name is required", http.StatusBadRequest)
+	if !isValidDatabaseName(req.DatabaseName) {
+		http.Error(w, "database_name must be 1-64 letters, digits, underscores or hyphens", http.StatusBadRequest)
 		return
 	}
 
@@ -64,7 +64,7 @@ func (h *BackupHandler) BackupDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := dbMeta["file_path"].(string)
+	filePath := h.sqliteHandler.databasePath(namespace, req.DatabaseName)
 
 	// Check if file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {

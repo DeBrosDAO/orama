@@ -59,12 +59,19 @@ func (d *rqliteClusterDriver) Stop(context.Context, string, string) error {
 // able to serve a read. ports carries the node's block; the first entry is the
 // HTTP port, per the driver's PortNeeds.
 func (d *rqliteClusterDriver) Ready(ctx context.Context, ns, node string, ports []int) error {
-	hostPort, err := probeTarget(d.cm, node, ports)
+	if len(ports) == 0 || ports[0] == 0 {
+		return fmt.Errorf("rqlite readiness for %s on %s: no port allocated", ns, node)
+	}
+	internalIP, err := d.cm.nodeInternalIP(node)
+	if err != nil {
+		return fmt.Errorf("rqlite readiness for %s on %s: %w", ns, node, err)
+	}
+	ep, err := d.cm.tenantRQLiteEndpoint(internalIP, ports[0])
 	if err != nil {
 		return fmt.Errorf("rqlite readiness for %s on %s: %w", ns, node, err)
 	}
 	return awaitReady(ctx, readyTimeout, fmt.Sprintf("rqlite for %s on %s", ns, node), func(ctx context.Context) error {
-		return rqliteReady(ctx, hostPort)
+		return rqliteReady(ctx, ep)
 	})
 }
 func (d *rqliteClusterDriver) Spawn(ctx context.Context, req SpawnRequest) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
@@ -98,14 +99,14 @@ func buildRoutePolicies() *routepolicy.Table {
 		// — that is what it is asking for — and approving one costs a wallet
 		// signature, which the handler verifies exactly as /v1/auth/verify does.
 		"/v1/auth/device", "/v1/auth/device/approve", "/v1/auth/device/token",
-		"/v1/network/status", "/v1/network/peers",
 		// Polled while a namespace's cluster is still provisioning, by a client
 		// that has not been given anything to poll it with yet.
 		"/v1/namespace/status",
-		// Called by Caddy on this host. Present and cleanup refuse anything
-		// that arrived through the public reverse-proxy (`IsNodeLocal`); they
-		// stay Open so Caddy does not have to mint a credential. tls/check is
-		// still on the list of things Phase 2 has to give a credential to.
+		// Called by Caddy on this host. Present and cleanup authenticate
+		// Caddy in the handler, by a MAC under the ACME challenge key install
+		// gives it (acme_auth.go); they are Open because that key is not an
+		// API key. tls/check is still on the list of things Phase 2 has to
+		// give a credential to.
 		"/v1/internal/acme/present", "/v1/internal/acme/cleanup", "/v1/internal/tls/check",
 		// Peer health probing. Returns the node id and nothing else.
 		"/v1/internal/ping",
@@ -204,7 +205,14 @@ func buildRoutePolicies() *routepolicy.Table {
 	// Minting a cluster invite hands out the cluster secret, the swarm key and
 	// every other secret the cluster holds — so this is the one place that
 	// still asks for everything, because that is what it gives.
-	t.Add(control(auth.DomainOperator, auth.ActionRead), "/v1/node/status", "/v1/node/logs")
+	t.Add(control(auth.DomainOperator, auth.ActionRead), "/v1/node/status", "/v1/node/logs", "/v1/operator/health")
+
+	// This node's peers, its peer ids and its storage peers' addresses: a map
+	// of the cluster. They were open to anyone. Another node's discovery asks
+	// with a coordination MAC over the mesh, which the handler checks; anyone
+	// else needs to be an operator.
+	t.AddDynamic("/v1/network/status", networkDetailPolicy)
+	t.AddDynamic("/v1/network/peers", networkDetailPolicy)
 	t.Add(control(auth.DomainOperator, auth.ActionWrite),
 		"/v1/network/connect", "/v1/network/disconnect",
 		"/v1/node/command", "/v1/node/leave",
@@ -380,4 +388,14 @@ var ctxKeyRoutePolicy = routePolicyKey{}
 
 func withRoutePolicy(r *http.Request, p routepolicy.Policy) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), ctxKeyRoutePolicy, p))
+}
+
+// networkDetailPolicy is the policy of the network status routes: a request
+// stamped as coming from another node is authenticated by the handler
+// (verifyCoordination); any other request is an operator's.
+func networkDetailPolicy(r *http.Request) routepolicy.Policy {
+	if r.Header.Get(nodeauth.CoordinationMACHeader) != "" {
+		return policyHandlerAuth
+	}
+	return control(auth.DomainOperator, auth.ActionRead)
 }

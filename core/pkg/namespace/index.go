@@ -15,30 +15,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// raftNonVoterFlag makes rqlited join as a non-voter.
+const raftNonVoterFlag = "-raft-non-voter"
+
 // IsIndexGateway reports whether this process is the core/index gateway.
 func IsIndexGateway(clientNamespace string) bool {
 	return clientNamespace == BlueprintNameIndex
-}
-
-// ErrEmptyAdopt is returned when @index rqlite would start with no raft.db.
-// That would create a new cluster and wipe the registry.
-var ErrEmptyAdopt = &ClusterError{Message: "adopt refused: no raft.db in index data dir (refusing to create a new cluster)"}
-
-// HasExistingRaft reports whether rqliteDataDir already holds a real raft.db.
-func HasExistingRaft(rqliteDataDir string) bool {
-	info, err := os.Stat(filepath.Join(rqliteDataDir, "raft.db"))
-	if err != nil {
-		return false
-	}
-	return info.Size() > 1024
-}
-
-// RefuseEmptyAdopt fails if pointing @index rqlite at dataDir would start a new raft.
-func RefuseEmptyAdopt(rqliteDataDir string) error {
-	if !HasExistingRaft(rqliteDataDir) {
-		return ErrEmptyAdopt
-	}
-	return nil
 }
 
 // rqliteUnitDataDir is the rqlited data path written into DATA_DIR.
@@ -59,6 +41,13 @@ type IndexSupervisor struct {
 	spawner       *SystemdSpawner
 	systemdMgr    *systemd.Manager
 	logger        *zap.Logger
+
+	// What EnsureRQLite reads and does. NewIndexSupervisor sets the real ones;
+	// they are fields so its decision can be tested without a data directory,
+	// a running rqlited or systemd.
+	raftState    func(ctx context.Context, dataDir, httpAddr, authFile string) (bool, error)
+	raftIdentity func(dataDir, peerID, raftAdvAddress string, hasState bool) (rqlite.RaftIdentity, error)
+	spawnRQLite  func(ctx context.Context, namespace, nodeID string, cfg rqlite.InstanceConfig) error
 }
 
 // NewIndexSupervisor builds a supervisor. oramaDir is ~/.orama (parent of data/).
@@ -68,13 +57,17 @@ func NewIndexSupervisor(oramaDir string, logger *zap.Logger) *IndexSupervisor {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	spawner := NewSystemdSpawner(namespaceBase, filepath.Join(oramaDir, "secrets", "cluster-secret"), logger)
 	return &IndexSupervisor{
 		oramaDir:      oramaDir,
 		dataDir:       dataDir,
 		namespaceBase: namespaceBase,
-		spawner:       NewSystemdSpawner(namespaceBase, filepath.Join(oramaDir, "secrets", "cluster-secret"), logger),
+		spawner:       spawner,
 		systemdMgr:    systemd.NewManager(namespaceBase, logger),
 		logger:        logger.With(zap.String("component", "index-supervisor")),
+		raftState:     rqlite.NodeHasRaftState,
+		raftIdentity:  rqlite.ResolveRaftIdentity,
+		spawnRQLite:   spawner.SpawnRQLite,
 	}
 }
 
@@ -84,34 +77,51 @@ func (s *IndexSupervisor) CoreRQLiteDir() string {
 }
 
 // EnsureRQLite writes @index env (DATA_DIR = existing core raft) and starts the unit.
-// If requireExisting is true, an empty dir is refused.
-func (s *IndexSupervisor) EnsureRQLite(ctx context.Context, nodeID, peerID, httpAdv, raftAdv, joinAddress, extraArgs string, requireExisting bool) error {
+//
+// A node with raft state restarts into the cluster it has; one without joins
+// joinAddress. Passing -join to a member would make its every restart depend on
+// that one address answering — except when the configuration holds this node
+// at an address it no longer listens on, where joining again is how the leader
+// learns the new one. Without state, without a join address and without a
+// cluster membership record — a fresh genesis install — rqlited bootstraps a
+// new cluster. A node with a record but no state lost its data: it joins the
+// members it recorded, or refuses to start (indexJoinTargets).
+func (s *IndexSupervisor) EnsureRQLite(ctx context.Context, nodeID, peerID, httpAdv, raftAdv, joinAddress, extraArgs string) error {
 	dataDir := s.CoreRQLiteDir()
-	if requireExisting {
-		if err := RefuseEmptyAdopt(dataDir); err != nil {
-			return err
-		}
-	}
-
-	joinArgs := ""
-	if !HasExistingRaft(dataDir) && joinAddress != "" {
-		joinArgs = "-join " + joinAddress
+	st, err := s.readIndexStart(ctx, dataDir, httpAdv, raftAdv, joinAddress)
+	if err != nil {
+		return err
 	}
 
 	// Which raft id this node starts under. Resolved here because it is a
 	// property of the data directory, not of the caller, and getting it wrong
 	// in either direction creates a duplicate voter.
-	identity, err := rqlite.ResolveRaftIdentity(dataDir, peerID, raftAdv, HasExistingRaft(dataDir))
+	identity, err := s.raftIdentity(dataDir, peerID, raftAdv, st.hasState)
 	if err != nil {
 		return fmt.Errorf("resolve index raft identity: %w", err)
 	}
 	if identity.NodeID != "" {
 		extraArgs = strings.TrimSpace(extraArgs + " -node-id " + identity.NodeID)
 	}
+	if identity.AddressChanged(raftAdv) && identity.NonVoter {
+		// The rejoin below re-adds this node with the suffrage it asks for.
+		extraArgs = strings.TrimSpace(extraArgs + " " + raftNonVoterFlag)
+	}
+	st.previousAddr = identity.PreviousAddr
 	s.logger.Info("Index RQLite raft identity",
 		zap.String("node_id", identity.NodeID),
 		zap.Bool("stable", identity.Migrated),
-		zap.String("raft_adv_addr", raftAdv))
+		zap.String("raft_adv_addr", raftAdv),
+		zap.String("recorded_raft_addr", identity.PreviousAddr))
+
+	joinAddresses, err := indexJoinTargets(st)
+	if err != nil {
+		return err
+	}
+	if !st.hasState && !st.recovering && len(joinAddresses) == 0 {
+		s.logger.Info("No raft state, no join address and no cluster membership record: bootstrapping a NEW index rqlite cluster (fresh genesis install)",
+			zap.String("membership_record", st.recordPath))
+	}
 
 	cfg := rqlite.InstanceConfig{
 		Namespace:      BlueprintNameIndex,
@@ -122,12 +132,10 @@ func (s *IndexSupervisor) EnsureRQLite(ctx context.Context, nodeID, peerID, http
 		RaftAdvAddress: raftAdv,
 		DataDir:        dataDir,
 		ExtraArgs:      extraArgs,
-	}
-	if joinArgs != "" {
-		cfg.JoinAddresses = []string{joinAddress}
+		JoinAddresses:  joinAddresses,
 	}
 
-	if err := s.spawner.SpawnRQLite(ctx, BlueprintNameIndex, nodeID, cfg); err != nil {
+	if err := s.spawnRQLite(ctx, BlueprintNameIndex, nodeID, cfg); err != nil {
 		return fmt.Errorf("start orama-namespace-rqlite@index: %w", err)
 	}
 	return nil
@@ -165,12 +173,24 @@ func (s *IndexSupervisor) EnsureOlric(ctx context.Context, nodeID, bindAddr stri
 			return err
 		}
 	}
+	if err := removeStaleIndexConfigs(s.indexConfigDir(), "olric", nodeID); err != nil {
+		return err
+	}
 	return disableLeftoverUnits("orama-olric.service")
 }
 
+// pubsubIdentityDir is where the index pubsub keeps its identity key.
+func pubsubIdentityDir(namespaceBase string) string {
+	return filepath.Join(namespaceBase, BlueprintNameIndex, "pubsub")
+}
+
 // EnsurePubsub starts orama-namespace-pubsub@index on 127.0.0.1:10105.
+//
+// The identity lives in the namespace's own directory, the only place its
+// sandboxed unit may write (ReadWritePaths=.../namespaces/%i). Under data/pubsub
+// the unit could not save it and crash-looped on "read-only file system".
 func (s *IndexSupervisor) EnsurePubsub(_ context.Context, nodeID string, bootstrap []string) error {
-	idDir := filepath.Join(s.dataDir, "pubsub")
+	idDir := pubsubIdentityDir(s.namespaceBase)
 	if err := os.MkdirAll(idDir, 0755); err != nil {
 		return err
 	}
@@ -190,16 +210,43 @@ func (s *IndexSupervisor) EnsurePubsub(_ context.Context, nodeID string, bootstr
 }
 
 // EnsureGateway starts orama-namespace-gateway@index on the index gateway port.
-// RQLiteDSN is the core DB; GlobalRQLiteDSN is left empty (this process is the core).
+// RQLiteDSN is the core DB (the caller's index rqlite endpoint; the spawner
+// rejects an empty one); GlobalRQLiteDSN is left empty (this process is the core).
 func (s *IndexSupervisor) EnsureGateway(ctx context.Context, cfg gatewayspec.InstanceConfig) error {
 	cfg.Namespace = BlueprintNameIndex
 	cfg.HTTPPort = IndexGatewayHTTPPort
-	if cfg.RQLiteDSN == "" {
-		cfg.RQLiteDSN = fmt.Sprintf("http://127.0.0.1:%d", IndexRQLiteHTTPPort)
-	}
 	cfg.GlobalRQLiteDSN = ""
 	if err := s.spawner.SpawnGateway(ctx, BlueprintNameIndex, cfg.NodeID, cfg); err != nil {
 		return fmt.Errorf("start orama-namespace-gateway@index: %w", err)
+	}
+	return removeStaleIndexConfigs(s.indexConfigDir(), "gateway", cfg.NodeID)
+}
+
+// indexConfigDir holds the per-node configs of the index services.
+func (s *IndexSupervisor) indexConfigDir() string {
+	return filepath.Join(s.namespaceBase, BlueprintNameIndex, "configs")
+}
+
+// removeStaleIndexConfigs deletes every <service>-*.yaml in configDir except
+// the one for nodeID.
+//
+// Those files are named after the node's id, and that id changed from
+// node.id (the same on every nameserver) to the peer id. A file left under the
+// old name is read by nothing — the index runs one instance of each service
+// per host — and the gateway's embeds the secrets encryption key.
+func removeStaleIndexConfigs(configDir, service, nodeID string) error {
+	keep := fmt.Sprintf("%s-%s.yaml", service, nodeID)
+	stale, err := filepath.Glob(filepath.Join(configDir, service+"-*.yaml"))
+	if err != nil {
+		return fmt.Errorf("list index %s configs in %s: %w", service, configDir, err)
+	}
+	for _, path := range stale {
+		if filepath.Base(path) == keep {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove stale index %s config %s: %w", service, path, err)
+		}
 	}
 	return nil
 }

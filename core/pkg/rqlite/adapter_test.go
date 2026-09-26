@@ -14,7 +14,7 @@ import (
 // serverless `INSERT → UPDATE → SELECT` patterns to return stale snapshots
 // when the local node was a follower lagging on Raft replay.
 func TestBuildRQLiteDSN_consistencyLevelWeak(t *testing.T) {
-	got := buildRQLiteDSN("localhost", 5001, "", "")
+	got := buildRQLiteDSNWithLevel("localhost", 5001, "", "", adapterReadConsistencyLevel)
 	if !strings.Contains(got, "level=weak") {
 		t.Errorf("DSN missing level=weak (bug #235 regression):\n%s", got)
 	}
@@ -27,7 +27,7 @@ func TestBuildRQLiteDSN_consistencyLevelWeak(t *testing.T) {
 }
 
 func TestBuildRQLiteDSN_withAuthCredentials(t *testing.T) {
-	got := buildRQLiteDSN("rqlite-host", 5001, "orama", "secret123")
+	got := buildRQLiteDSNWithLevel("rqlite-host", 5001, "orama", "secret123", adapterReadConsistencyLevel)
 	if !strings.Contains(got, "orama:secret123@rqlite-host:5001") {
 		t.Errorf("DSN missing inline credentials:\n%s", got)
 	}
@@ -37,7 +37,7 @@ func TestBuildRQLiteDSN_withAuthCredentials(t *testing.T) {
 }
 
 func TestBuildRQLiteDSN_noAuthOmitsCredentials(t *testing.T) {
-	got := buildRQLiteDSN("localhost", 5001, "", "")
+	got := buildRQLiteDSNWithLevel("localhost", 5001, "", "", adapterReadConsistencyLevel)
 	if strings.Contains(got, "@localhost") {
 		t.Errorf("DSN should not include credentials when both empty:\n%s", got)
 	}

@@ -22,8 +22,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -33,7 +31,6 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
-	"github.com/DeBrosOfficial/network/pkg/constants"
 	_ "github.com/rqlite/gorqlite/stdlib"
 )
 
@@ -164,101 +161,37 @@ migration is independently versioned.`,
 }
 
 // openSchemaDB returns a *sql.DB connected to the local RQLite instance,
-// using the --dsn flag if provided, else discovering from the node config
-// or falling back to the index RQLite port on localhost.
+// using the --dsn flag if provided, else this node's index rqlite from
+// node.yaml (where rqlited binds, with its credentials). The returned string
+// is the DSN with its password redacted, for display.
 func openSchemaDB() (*sql.DB, string, error) {
 	dsn := schemaDSN
 	if dsn == "" {
-		dsn = discoverLocalRQLiteDSN()
+		ep, err := rqlite.LocalNodeEndpoint()
+		if err != nil {
+			return nil, "", fmt.Errorf("%w (or pass --dsn)", err)
+		}
+		dsn = ep.SQLDSN(rqlite.ReadConsistencyWeak)
 	}
+	shown := rqlite.RedactDSN(dsn)
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
-		return nil, "", fmt.Errorf("open rqlite: %w", err)
+		return nil, "", fmt.Errorf("open rqlite at %s: %s", shown, rqlite.RedactError(err, dsn))
 	}
 	// Quick liveness check so we fail fast with a clear error.
 	pingCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
 		_ = db.Close()
-		return nil, "", fmt.Errorf("rqlite at %s unreachable: %w "+
-			"(hint: is RQLite running? try 'orama node status')", dsn, err)
+		return nil, "", fmt.Errorf("rqlite at %s unreachable: %s "+
+			"(hint: is RQLite running? try 'orama node status')", shown, rqlite.RedactError(err, dsn))
 	}
-	return db, dsn, nil
-}
-
-// discoverLocalRQLiteDSN reads the node config to find the local RQLite
-// port + credentials, falling back to the index RQLite port with no auth.
-func discoverLocalRQLiteDSN() string {
-	fallback := constants.LocalRQLiteURL()
-
-	cfgPath, err := config.DefaultPath("node.yaml")
-	if err != nil {
-		return fallback
-	}
-	if _, err := os.Stat(cfgPath); err != nil {
-		return fallback
-	}
-	cfgDir := filepath.Dir(cfgPath)
-
-	// Try to read RQLite credentials from the standard secrets path.
-	user, pass := readRQLiteCreds(cfgDir)
-
-	port := readRQLitePortFromConfig(cfgPath)
-	if port == 0 {
-		port = constants.RQLiteHTTPPort
-	}
-	if user == "" {
-		return fmt.Sprintf("http://localhost:%d", port)
-	}
-	return fmt.Sprintf("http://%s:%s@localhost:%d", user, pass, port)
-}
-
-// readRQLiteCreds best-effort reads the user:pass from secrets files
-// adjacent to the node config. Returns ("","") on any miss; the caller
-// then connects without auth (which works on a local-only instance).
-func readRQLiteCreds(cfgDir string) (string, string) {
-	type pair struct{ userFile, passFile string }
-	candidates := []pair{
-		{filepath.Join(cfgDir, "secrets", "rqlite-user"), filepath.Join(cfgDir, "secrets", "rqlite-password")},
-	}
-	for _, c := range candidates {
-		u, err := os.ReadFile(c.userFile)
-		if err != nil {
-			continue
-		}
-		p, err := os.ReadFile(c.passFile)
-		if err != nil {
-			continue
-		}
-		return strings.TrimSpace(string(u)), strings.TrimSpace(string(p))
-	}
-	return "", ""
-}
-
-// readRQLitePortFromConfig is a tiny YAML peek for `database.rqlite_port`.
-// Avoids pulling the whole config loader; failure returns 0 → fallback used.
-func readRQLitePortFromConfig(path string) int {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "rqlite_port:") {
-			continue
-		}
-		var port int
-		_, err := fmt.Sscanf(line, "rqlite_port: %d", &port)
-		if err == nil {
-			return port
-		}
-	}
-	return 0
+	return db, shown, nil
 }
 
 func init() {
 	schemaCmd.PersistentFlags().StringVar(&schemaDSN, "dsn", "",
-		fmt.Sprintf("RQLite DSN (default: discover from node config or %s)", constants.LocalRQLiteURL()))
+		"RQLite DSN (default: this node's index rqlite from "+config.ProductionNodeConfigPath+")")
 	schemaApplyCmd.Flags().BoolVar(&schemaYes, "yes", false,
 		"Skip the confirmation prompt")
 

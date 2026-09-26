@@ -1,6 +1,7 @@
 package decommission
 
 import (
+	"github.com/DeBrosOfficial/network/pkg/install"
 	"os/exec"
 	"strings"
 	"testing"
@@ -96,5 +97,68 @@ func TestWipeScript_nuclearPurgesTor(t *testing.T) {
 	}
 	if !strings.Contains(script, "/etc/apt/sources.list.d/tor.sources") {
 		t.Error("a nuclear wipe must remove the Tor apt source")
+	}
+}
+
+// The privileged helper is how the orama group reaches root. A wipe must take
+// it down — socket stopped before anything else, its unit files and binary
+// removed — not leave a root entry point behind.
+func TestWipeScript_removesThePrivilegedHelper(t *testing.T) {
+	script := wipeScript(false)
+	for _, want := range []string{
+		"systemctl stop orama-privhelper.socket",
+		"systemctl disable orama-privhelper.socket",
+		"/etc/systemd/system/orama-privhelper.socket",
+		"/etc/systemd/system/orama-privhelper@.service",
+		"rm -f /usr/local/bin/orama-privhelper",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("wipe script missing %q", want)
+		}
+	}
+	stopAt := strings.Index(script, "systemctl stop orama-privhelper.socket")
+	nodeAt := strings.Index(script, "for svc in orama-node")
+	if stopAt < 0 || nodeAt < 0 || stopAt > nodeAt {
+		t.Error("the helper socket must be stopped before the rest of the node is torn down")
+	}
+}
+
+// The namespace units' and deployments' env files live in root-owned trees
+// outside /opt/orama; a wipe that left them would leave tenant secrets behind.
+func TestWipeScript_removesTheRootOwnedEnvTrees(t *testing.T) {
+	script := wipeScript(false)
+	for _, dir := range []string{"/var/lib/orama-unit-env", "/var/lib/orama-deploy"} {
+		if !strings.Contains(script, dir) {
+			t.Errorf("the wipe script does not remove %s", dir)
+		}
+	}
+}
+
+func TestWipeScript_removesTheArchiveTrustAnchor(t *testing.T) {
+	script := wipeScript(false)
+	if !strings.Contains(script, "rm -f /etc/orama/archive-signers /etc/orama/archive-signers.rotated") {
+		t.Fatalf("a wiped node keeps trusting its old cluster's signers:\n%s", script)
+	}
+}
+
+// A wiped node kept /var/lib/caddy: the old certificate was served on the next
+// install, and the TLS and ACME account private keys stayed on the machine.
+func TestWipeScript_removesCaddyStorage(t *testing.T) {
+	if !strings.Contains(wipeScript(false), "rm -rf /var/lib/caddy\n") {
+		t.Error("the wipe script leaves Caddy's certificates and private keys behind")
+	}
+}
+
+// Install writes drop-ins for the cluster gateway's instance and the build
+// template, and the build's resolver file; a wiped node keeps none of them.
+func TestWipeScript_removesInstallsDropIns(t *testing.T) {
+	script := wipeScript(false)
+	for _, want := range []string{
+		"rm -rf /etc/systemd/system/orama-namespace-gateway@index.service.d /etc/systemd/system/orama-deploy-build@.service.d\n",
+		"rm -f " + install.BuildResolvConfPath + "\n",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the wipe script lacks %q", strings.TrimSpace(want))
+		}
 	}
 }

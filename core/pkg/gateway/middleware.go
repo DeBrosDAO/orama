@@ -805,6 +805,19 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// The raw-database routes on the gateway that serves the cluster
+		// registry are an operator's, whoever vouched for the caller. The
+		// cross-namespace check below runs only when this gateway serves a
+		// named namespace, which the cluster gateway does not — so nothing
+		// stopped a tenant's admin key from exporting the registry, or
+		// importing over it. It runs before the signed-hop skip: a hop's MAC
+		// says a gateway of this cluster authenticated the caller, not that
+		// the caller is an operator, and every node holds the key it is made
+		// with.
+		if !g.requireOperatorForCoreRegistry(w, r) {
+			return
+		}
+
 		// A request pre-authenticated by the main gateway skips the grant
 		// lookup when what it was forwarded with already reaches the route —
 		// an API key's scopes, a wallet's data plane. The main gateway
@@ -826,19 +839,10 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// The raw-database routes on the gateway that serves the cluster
-		// registry are an operator's. The cross-namespace check below runs
-		// only when this gateway serves a named namespace, which the cluster
-		// gateway does not — so nothing stopped a tenant's admin key from
-		// exporting the registry, or importing over it.
-		if !g.requireOperatorForCoreRegistry(w, r) {
-			return
-		}
-
 		// Cross-namespace access control for namespace gateways
 		// The gateway's ClientNamespace determines which namespace this gateway serves
-		gatewayNamespace := "default"
-		if g.cfg != nil && g.cfg.ClientNamespace != "" {
+		gatewayNamespace := ""
+		if g.cfg != nil {
 			gatewayNamespace = strings.TrimSpace(g.cfg.ClientNamespace)
 		}
 
@@ -852,7 +856,7 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 
 		// For non-default namespace gateways, the API key must belong to this namespace
 		// This enforces physical isolation: alice's gateway only accepts alice's API keys
-		if gatewayNamespace != "default" && userNamespace != "" && userNamespace != gatewayNamespace {
+		if servesNamedNamespace(gatewayNamespace) && userNamespace != "" && userNamespace != gatewayNamespace {
 			g.logger.ComponentWarn(logging.ComponentGeneral, "cross-namespace access denied",
 				zap.String("user_namespace", userNamespace),
 				zap.String("gateway_namespace", gatewayNamespace),
@@ -1056,13 +1060,10 @@ func (g *Gateway) corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// getAllowedOrigin returns the allowed origin for CORS based on the request origin.
-// If no base domain is configured, allows all origins (*).
-// Otherwise, allows the base domain and any subdomain of it.
+// getAllowedOrigin returns the allowed origin for CORS based on the request
+// origin: the base domain and any subdomain of it. A base domain is required
+// (ValidateConfig); a gateway without one used to answer "*" here.
 func (g *Gateway) getAllowedOrigin(origin string) string {
-	if g.cfg.BaseDomain == "" {
-		return "*"
-	}
 	if origin == "" {
 		return "https://" + g.cfg.BaseDomain
 	}
@@ -1084,61 +1085,6 @@ func (g *Gateway) getAllowedOrigin(origin string) string {
 		return origin
 	}
 	return "https://" + g.cfg.BaseDomain
-}
-
-// persistRequestLog writes request metadata to the database (best-effort)
-func (g *Gateway) persistRequestLog(r *http.Request, srw *statusResponseWriter, dur time.Duration) {
-	if g.client == nil {
-		return
-	}
-	// Use a short timeout to avoid blocking shutdowns
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	db := g.client.Database()
-
-	// Resolve API key ID if available
-	var apiKeyID interface{} = nil
-	if v := r.Context().Value(ctxKeyAPIKey); v != nil {
-		if key, ok := v.(string); ok && key != "" {
-			if res, err := db.Query(ctx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", key); err == nil {
-				if res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
-					switch idv := res.Rows[0][0].(type) {
-					case int64:
-						apiKeyID = idv
-					case float64:
-						apiKeyID = int64(idv)
-					case int:
-						apiKeyID = int64(idv)
-					case string:
-						// best effort parse
-						if n, err := strconv.Atoi(idv); err == nil {
-							apiKeyID = int64(n)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	ip := getClientIP(r)
-
-	// Insert the log row
-	_, _ = db.Query(ctx,
-		"INSERT INTO request_logs (method, path, status_code, bytes_out, duration_ms, ip, api_key_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		r.Method,
-		r.URL.Path,
-		srw.status,
-		srw.bytes,
-		dur.Milliseconds(),
-		ip,
-		apiKeyID,
-	)
-
-	// Update last_used_at for the API key if present
-	if apiKeyID != nil {
-		_, _ = db.Query(ctx, "UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?", apiKeyID)
-	}
 }
 
 // remoteAddrIP extracts the actual TCP peer IP from r.RemoteAddr, ignoring
@@ -1184,11 +1130,7 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := strings.Split(r.Host, ":")[0] // Strip port
 
-		// Get base domain from config (default to dbrs.space)
-		baseDomain := "dbrs.space"
-		if g.cfg != nil && g.cfg.BaseDomain != "" {
-			baseDomain = g.cfg.BaseDomain
-		}
+		baseDomain := g.cfg.BaseDomain
 
 		// Only process base domain and its subdomains
 		if !strings.HasSuffix(host, "."+baseDomain) && host != baseDomain {
@@ -1741,11 +1683,7 @@ func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*de
 	// Strip trailing dot if present
 	domain = strings.TrimSuffix(domain, ".")
 
-	// Get base domain from config (default to dbrs.space)
-	baseDomain := "dbrs.space"
-	if g.cfg != nil && g.cfg.BaseDomain != "" {
-		baseDomain = g.cfg.BaseDomain
-	}
+	baseDomain := g.cfg.BaseDomain
 
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(ctx)

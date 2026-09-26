@@ -1,48 +1,79 @@
 // Command orama-privhelper runs one allow-listed root command on behalf of the
 // unprivileged orama user. See pkg/privhelper for what it allows and why.
+//
+//	orama-privhelper serve            socket-activated: one request on stdin (as root)
+//	orama-privhelper call <tool> ...  client: send a request to the socket
+//	orama-privhelper run <tool> ...   run a request directly (as root)
 package main
 
 import (
 	"fmt"
+	"io"
 	"os"
-	"syscall"
 
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
-// toolPaths are where each tool lives on the supported releases. The helper
-// never consults PATH: it runs as root on behalf of another user.
-var toolPaths = map[string][]string{
-	privhelper.ToolSystemctl: {"/usr/bin/systemctl", "/bin/systemctl"},
-	privhelper.ToolUFW:       {"/usr/sbin/ufw", "/sbin/ufw"},
+func main() {
+	if len(os.Args) < 2 {
+		fail("usage: orama-privhelper serve | call <tool> <args...> | run <tool> <args...> | verify-deploy-dir <instance>")
+	}
+	switch mode, argv := os.Args[1], os.Args[2:]; mode {
+	case "serve":
+		os.Exit(serve())
+	case "call":
+		os.Exit(call(argv))
+	case "verify-deploy-dir":
+		if os.Geteuid() != 0 {
+			fail("verify-deploy-dir must be root; it is ExecStartPre of orama-deploy-*@")
+		}
+		if len(argv) != 1 {
+			fail("usage: orama-privhelper verify-deploy-dir <instance>")
+		}
+		dir, err := privhelper.DeploymentDirForInstance(argv[0])
+		if err != nil {
+			fail("%v", err)
+		}
+		if err := verifyDeploymentDir(rootfs.At(privhelper.DeploymentsAnchor), dir, allowedUser); err != nil {
+			fail("%v", err)
+		}
+	case "run":
+		if os.Geteuid() != 0 {
+			fail("run must be root; use call")
+		}
+		inv, err := privhelper.Validate(argv)
+		if err != nil {
+			fail("refused: %v", err)
+		}
+		input, err := readInput(inv, os.Stdin)
+		if err != nil {
+			fail("%v", err)
+		}
+		resp := execute(inv, input)
+		fmt.Print(resp.Output)
+		os.Exit(resp.ExitCode)
+	default:
+		fail("unknown mode %q", mode)
+	}
 }
 
-// exitRefused distinguishes a refusal from the tool's own failures.
-const exitRefused = 126
-
-func main() {
-	inv, err := privhelper.Validate(os.Args[1:])
+// readInput reads the payload an invocation takes, and nothing otherwise.
+func readInput(inv privhelper.Invocation, r io.Reader) ([]byte, error) {
+	if !inv.NeedsInput() {
+		return nil, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(r, privhelper.MaxRequestBytes+1))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "orama-privhelper: refused: %v\n", err)
-		os.Exit(exitRefused)
+		return nil, fmt.Errorf("read input: %w", err)
 	}
-	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "orama-privhelper: must run as root (through sudo)")
-		os.Exit(exitRefused)
+	if len(data) > privhelper.MaxRequestBytes {
+		return nil, fmt.Errorf("input is over %d bytes", privhelper.MaxRequestBytes)
 	}
-	bin := ""
-	for _, p := range toolPaths[inv.Tool] {
-		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
-			bin = p
-			break
-		}
-	}
-	if bin == "" {
-		fmt.Fprintf(os.Stderr, "orama-privhelper: %s not found in %v\n", inv.Tool, toolPaths[inv.Tool])
-		os.Exit(exitRefused)
-	}
-	env := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
-	err = syscall.Exec(bin, append([]string{inv.Tool}, inv.Args...), env)
-	fmt.Fprintf(os.Stderr, "orama-privhelper: exec %s: %v\n", bin, err)
-	os.Exit(exitRefused)
+	return data, nil
+}
+
+func fail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "orama-privhelper: "+format+"\n", args...)
+	os.Exit(privhelper.ExitRefused)
 }

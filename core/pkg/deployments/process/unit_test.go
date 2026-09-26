@@ -106,6 +106,39 @@ func TestDeployTemplate_keepsTheTenantOffTheOverlay(t *testing.T) {
 	})
 }
 
+// ProtectSystem=strict made /opt/orama read-only, not absent: every tenant
+// could read the node's world-readable files and every other deployment.
+func TestDeployTemplate_seesOnlyItsOwnDeployment(t *testing.T) {
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		assertSeesOnlyItsOwnDeployment(t, unit)
+		if directiveValue(t, unit, "UMask=") != "0077" {
+			t.Error("what the app writes is readable by other users on the host")
+		}
+	})
+}
+
+// assertSeesOnlyItsOwnDeployment checks that unit replaces /opt/orama with an
+// empty read-only tmpfs and binds back only its own deployment directory.
+func assertSeesOnlyItsOwnDeployment(t *testing.T, unit string) {
+	t.Helper()
+	if !strings.Contains(unit, "TemporaryFileSystem=/opt/orama:ro") {
+		t.Error("/opt/orama — secrets and every tenant's files — is visible to the unit")
+	}
+	if !strings.Contains(unit, "BindReadOnlyPaths=/opt/orama/.orama/data/deployments/%i\n") {
+		t.Error("the unit does not bind its own deployment directory, read-only, back in")
+	}
+	for _, line := range strings.Split(unit, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "BindReadOnlyPaths=") && !strings.HasPrefix(line, "BindPaths=") {
+			continue
+		}
+		source := strings.TrimPrefix(strings.SplitN(strings.SplitN(line, "=", 2)[1], ":", 2)[0], "-")
+		if strings.HasPrefix(source, "/opt/orama") && source != "/opt/orama/.orama/data/deployments/%i" {
+			t.Errorf("%s puts more of /opt/orama back than the deployment's own directory", line)
+		}
+	}
+}
+
 // The tenant's secrets are in the environment file, which is root-owned and
 // read by systemd as PID 1 before it drops to the deployment's own user. A
 // tenant value in the unit would be readable by anyone who can run

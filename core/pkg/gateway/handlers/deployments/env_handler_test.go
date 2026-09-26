@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/deployments"
 )
 
 // PORT is written into the systemd unit by the process manager and is how the
@@ -213,5 +215,26 @@ func TestEnvHandlers_reject_the_wrong_method(t *testing.T) {
 	h.HandleSetEnv(w, httptest.NewRequest(http.MethodGet, "/v1/deployments/env/set", nil))
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST endpoint with GET: status = %d", w.Code)
+	}
+}
+
+// Values within their own limit can add up to an environment file the node
+// would refuse to stage at every start; the change is refused where it is set.
+func TestApplyEnvChanges_refusesAnEnvironmentTooLargeToStage(t *testing.T) {
+	big := strings.Repeat("x", deployments.MaxEnvValueBytes)
+	current := map[string]string{"A": big, "B": big, "C": big}
+	if _, err := applyEnvChanges(current, map[string]string{"D": big}, nil); err == nil {
+		t.Fatal("an environment over the file limit was accepted")
+	}
+	if _, err := applyEnvChanges(current, map[string]string{"D": "small"}, []string{"A"}); err != nil {
+		t.Fatalf("a change that shrinks the environment was refused: %v", err)
+	}
+}
+
+func TestParseFormEnv_refusesAnEnvironmentTooLargeToStage(t *testing.T) {
+	big := strings.Repeat("x", deployments.MaxEnvValueBytes)
+	form := map[string][]string{"env_A": {big}, "env_B": {big}, "env_C": {big}, "env_D": {big}}
+	if _, err := parseFormEnv(form); err == nil {
+		t.Fatal("an environment over the file limit was accepted")
 	}
 }

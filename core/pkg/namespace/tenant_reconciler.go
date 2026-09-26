@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
-	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"go.uber.org/zap"
@@ -119,6 +118,11 @@ func (cm *ClusterManager) localAssignments(ctx context.Context) ([]tenantAssignm
 // overlay address in its Olric peers and its gateway's olric_servers — for
 // ever, since nothing else rewrote them. ReconcileGateway existed but was only
 // ever called from the boot restore, and there was no ReconcileOlric at all.
+//
+// Only the gateway is restarted onto its rewritten config. Olric is a
+// clustered, stateful service that systemd.Manager.StartService never restarts
+// as a side effect, so its rewritten peers apply at its next deliberate
+// restart; the running process keeps the membership it has until then.
 func (cm *ClusterManager) reconcileLocalDrift(ctx context.Context) error {
 	assignments, err := cm.localAssignments(ctx)
 	if err != nil {
@@ -162,7 +166,7 @@ func (cm *ClusterManager) reconcileNamespaceOnThisNode(ctx context.Context, a te
 	}
 
 	if active, err := cm.systemdSpawner.systemdMgr.IsServiceActive(a.NamespaceName, systemd.ServiceTypeGateway); err == nil && active {
-		if err := cm.systemdSpawner.ReconcileGateway(ctx, a.NamespaceName, cm.localNodeID, desired.Gateway); err != nil {
+		if err := cm.systemdSpawner.ReconcileGatewayMembership(ctx, a.NamespaceName, cm.localNodeID, desired.Gateway); err != nil {
 			return fmt.Errorf("reconcile gateway: %w", err)
 		}
 	}
@@ -170,10 +174,12 @@ func (cm *ClusterManager) reconcileNamespaceOnThisNode(ctx context.Context, a te
 }
 
 // localServiceConfig is the desired config for this node's services in one
-// namespace, derived from live membership.
+// namespace, derived from live membership. For the gateway that is only the
+// membership-derived part; the rest of its config (DSNs, secrets, WebRTC) is
+// kept from what it runs with (SystemdSpawner.ReconcileGatewayMembership).
 type localServiceConfig struct {
 	Olric   olric.InstanceConfig
-	Gateway gatewayspec.InstanceConfig
+	Gateway gatewayMembership
 }
 
 // reconcileClusterMembership is the coordinator leg: forget members that are
@@ -300,8 +306,7 @@ func (cm *ClusterManager) desiredLocalConfig(ctx context.Context, clusterID stri
 			AdvertiseAddr:  localIP,
 			PeerAddresses:  olricPeers,
 		},
-		Gateway: gatewayspec.InstanceConfig{
-			NodeID:       cm.localNodeID,
+		Gateway: gatewayMembership{
 			HTTPPort:     block.GatewayHTTPPort,
 			OlricServers: olricServers,
 		},

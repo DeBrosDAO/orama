@@ -13,17 +13,22 @@
 -- live in a partial index on namespace_ownership moves with it: exactly one
 -- live `owner` grant per namespace.
 --
--- namespace_ownership is dropped rather than left behind as a view over the
--- owner-shaped grants.
+-- Expand only: namespace_ownership is left in place for this release.
 --
--- A view would have to carry the table's name for a rolled-back binary to find
--- it, and 002_core.sql creates that name as a table and then indexes it. A
--- database that replays the chain from the beginning — which is what a runner
--- that dies before recording a version does, and what the idempotence contract
--- in this directory is tested against — would reach `CREATE INDEX ... ON
--- namespace_ownership` and fail with "views may not be indexed". Replay safety
--- is a property the whole suite is built on; a rollback that can read ownership
--- but cannot write one, because a view is not writable, is not a rollback.
+-- A rolling upgrade runs this migration while most gateways are still 0.122.x,
+-- and those read and write namespace_ownership on every ownership check,
+-- namespace claim and key mint. Dropping it here failed all of them for the
+-- whole window. The table stays, unread by this release, and is contracted in
+-- the next one: that migration re-runs the backfill below — idempotent, it
+-- picks up only rows a 0.122.x gateway wrote during the window — and then
+-- drops the table. It is dropped rather than left behind as a view, because a
+-- database that replays the chain from the beginning creates that name as a
+-- table in 002_core.sql and then indexes it, and a view cannot be indexed.
+--
+-- Until then the two do not converge by themselves: an owner a 0.122.x gateway
+-- records exists only in namespace_ownership (this release sees the namespace
+-- as unclaimed until the contract migration backfills it), and one this
+-- release records exists only in grants. Keep the window to the rollout.
 --
 -- Idempotent: the tables are guarded, and the backfill inserts only rows that
 -- have no match already.
@@ -85,13 +90,11 @@ CREATE INDEX IF NOT EXISTS idx_grants_principal ON grants(principal_id) WHERE re
 
 -- Backfill: every existing ownership row becomes a principal and a grant.
 --
--- The table is recreated first, empty, if it is not there. This migration ends
--- by dropping it, so a runner that dies after the DROP and before recording the
--- version re-runs a migration whose first read is `FROM namespace_ownership` —
--- and a gateway that cannot finish its migrations does not start. Recreating it
--- makes the replay read nothing instead of failing. The shape matches
--- 002_core.sql; the index is not needed for a table that is about to be read
--- once and dropped.
+-- namespace_ownership is created by 002_core.sql and not dropped by this
+-- release (see above). A database that ran a pre-release build of this
+-- migration, which did drop it, may replay this one without it; the guarded
+-- create (002_core.sql's shape) makes that replay read nothing instead of
+-- failing, and puts the table back for the 0.122.x gateways still reading it.
 CREATE TABLE IF NOT EXISTS namespace_ownership (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     namespace_id  INTEGER NOT NULL,
@@ -146,7 +149,5 @@ SELECT p.id, o.namespace_id,
  WHERE o.owner_type = 'api_key'
    AND NOT EXISTS (SELECT 1 FROM grants AS g
                     WHERE g.principal_id = p.id AND g.namespace_id = o.namespace_id AND g.revoked_at IS NULL);
-
-DROP TABLE IF EXISTS namespace_ownership;
 
 COMMIT;

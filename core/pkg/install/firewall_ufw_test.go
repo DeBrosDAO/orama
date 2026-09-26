@@ -7,8 +7,8 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
 )
 
-// ufwCommand must run ufw directly as root but through sudo and the privileged
-// helper otherwise. At runtime the gateway runs as the unprivileged orama user,
+// ufwCommand must run ufw directly as root but through the privileged helper's
+// socket otherwise. At runtime the gateway runs as the unprivileged orama user,
 // so without a root path AddWebRTCRules silently failed and TURN relay ports
 // stayed firewalled after `webrtc enable`.
 func TestUfwCommand_goesThroughTheHelperUnlessRoot(t *testing.T) {
@@ -18,7 +18,7 @@ func TestUfwCommand_goesThroughTheHelperUnlessRoot(t *testing.T) {
 	if os.Getuid() == 0 {
 		want = []string{"ufw", "allow", "3478/udp"}
 	} else {
-		want = []string{"sudo", "-n", privhelper.Path, "ufw", "allow", "3478/udp"}
+		want = []string{privhelper.Path, "call", "ufw", "allow", "3478/udp"}
 	}
 
 	if len(cmd.Args) != len(want) {

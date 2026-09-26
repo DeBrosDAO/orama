@@ -22,17 +22,15 @@ type DatabaseConfig struct {
 	NodeCACert   string `yaml:"node_ca_cert"`   // Path to CA certificate (optional, uses system CA if not set)
 	NodeNoVerify bool   `yaml:"node_no_verify"` // Skip certificate verification (for testing/self-signed certs)
 
-	// RQLite HTTP Basic Auth credentials, used by every client this node opens:
-	// the SQL DSN and the admin API (AdminClient).
-	//
-	// Setting these is always safe: rqlite ignores credentials it does not
-	// require, so a node can send them long before any node enforces them.
+	// RQLite HTTP Basic Auth credentials, used by every client this node opens
+	// — the SQL DSN and the admin API (AdminClient) — and by the orama CLI and
+	// installer, which read them from node.yaml (rqlite.IndexEndpoint). rqlited
+	// always runs with -auth, so they are required.
 	RQLiteUsername string `yaml:"rqlite_username"`
 	RQLitePassword string `yaml:"rqlite_password"`
 
-	// RQLiteAuthFile is the rqlite auth JSON. It supplies the credentials the
-	// admin client sends, and is the file rqlited is pointed at when
-	// RQLiteEnforceAuth is set.
+	// RQLiteAuthFile is the rqlite auth JSON that carries the same user. It is
+	// the file rqlited is pointed at when RQLiteEnforceAuth is set.
 	RQLiteAuthFile string `yaml:"rqlite_auth_file"`
 
 	// RQLiteEnforceAuth starts rqlited with `-auth`, making it reject
@@ -62,7 +60,7 @@ type DatabaseConfig struct {
 
 	// Olric cache configuration
 	OlricHTTPPort       int `yaml:"olric_http_port"`       // Olric HTTP API port (default: 10102)
-	OlricMemberlistPort int `yaml:"olric_memberlist_port"` // Olric memberlist port (default: 3322)
+	OlricMemberlistPort int `yaml:"olric_memberlist_port"` // Olric memberlist port (default: constants.OlricMemberlistPort)
 
 	// IPFS storage configuration
 	IPFS IPFSConfig `yaml:"ipfs"`

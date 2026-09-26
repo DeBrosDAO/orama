@@ -15,6 +15,7 @@ import (
 // so they are declared once rather than spelled out at each use.
 const (
 	compDataDir           = "data-dir"
+	compLegacyLayout      = "legacy-layout"
 	compWireGuard         = "wireguard"
 	compLibP2P            = "libp2p"
 	compPeerInfo          = "peer-info"
@@ -33,6 +34,7 @@ const (
 	compIPFSSwarmSync     = "ipfs-swarm-sync"
 	compDNSRegistration   = "dns-registration"
 	compMembership        = "membership"
+	compMembershipRecord  = "membership-record"
 )
 
 // Per-attempt budgets. Each one bounds a single Reconcile; the supervisor
@@ -80,14 +82,23 @@ func (n *Node) bootComponents() []boot.Component {
 			Name:      compDataDir,
 			Reconcile: n.ensureDataDir,
 		},
+		// Every other component waits for this one: it moves what the
+		// pre-0.200 layout holds into the current one, and nothing may start or
+		// regenerate a namespace service — or read a gateway key, a tenant
+		// database or a unit's env — before it has.
+		{
+			Name:      compLegacyLayout,
+			DependsOn: []string{compDataDir},
+			Reconcile: n.migrateLegacyLayout,
+		},
 		{
 			Name:      compWireGuard,
-			DependsOn: []string{compDataDir},
+			DependsOn: []string{compLegacyLayout},
 			Reconcile: n.startIndexWireGuard,
 		},
 		{
 			Name:      compLibP2P,
-			DependsOn: []string{compDataDir},
+			DependsOn: []string{compLegacyLayout, compWireGuard},
 			Reconcile: func(context.Context) error { return n.startLibP2P() },
 		},
 		{
@@ -107,7 +118,7 @@ func (n *Node) bootComponents() []boot.Component {
 		},
 		{
 			Name:      compIPFSClusterConfig,
-			DependsOn: []string{compDataDir},
+			DependsOn: []string{compLegacyLayout},
 			Reconcile: func(context.Context) error { return n.startIPFSClusterConfig() },
 		},
 		// Storage does NOT depend on ipfs-cluster-config: a node whose cluster
@@ -117,7 +128,7 @@ func (n *Node) bootComponents() []boot.Component {
 		// instead of being logged once and forgotten.
 		{
 			Name:      compStorage,
-			DependsOn: []string{compDataDir},
+			DependsOn: []string{compLegacyLayout},
 			Reconcile: n.startIndexStorage,
 		},
 		// Cluster discovery is separate from rqlite-local because the
@@ -184,6 +195,14 @@ func (n *Node) bootComponents() []boot.Component {
 			DependsOn: []string{compRQLiteLocal},
 			Reconcile: n.joinRQLiteCluster,
 			Health:    n.rqliteLeaderReachable,
+		},
+		// The local record that this node is a cluster member. Nothing
+		// depends on it: a node that cannot write it is degraded, not down.
+		{
+			Name:      compMembershipRecord,
+			DependsOn: []string{compRQLiteCluster},
+			Reconcile: n.recordClusterMembership,
+			Health:    n.recordClusterMembership,
 		},
 		// One writer for the stores a node's existence is recorded in. Only the
 		// raft leader acts, but every node runs the loop so leadership can move

@@ -22,7 +22,8 @@ What happens:
   2. Reset the kept node to a single-member cluster, preserving its data
   3. Start it and confirm it comes back as Leader with its data intact
   4. Delete raft.db, raft/, db.sqlite (+shm/wal) and rsnapshots on every other
-     node
+     node, and record the kept node as the member each one re-joins
+     (data/cluster-membership.json)
   5. Start them one at a time; each pulls a full snapshot from the kept node
   6. Verify cluster health
 

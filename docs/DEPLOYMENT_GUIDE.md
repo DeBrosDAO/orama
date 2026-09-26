@@ -54,6 +54,10 @@ orama auth whoami
 orama auth status
 ```
 
+`orama auth login` asks which namespace to sign in to; blank signs in without
+one. With no terminal to ask — a script, a pipe, CI — it does not prompt and
+signs in without one; pass `--namespace <name>` to choose.
+
 What is stored is a **session**, not a key: an access token lasting 15 minutes,
 renewed transparently from a 30-day refresh token. The CLI used to store an API
 key and send it as the credential of every request it made.
@@ -231,6 +235,39 @@ orama deploy static ./dist --name my-react-app --update
 
 # Version increments automatically (1 → 2)
 ```
+
+### Deployment names
+
+A name is 1–56 characters of letters, digits, `-` and `_`, starting with a
+letter or digit. Anything else is refused with `400` before the upload is
+stored: the name becomes part of the app's subdomain (one DNS label) and of the
+systemd unit that runs it (`orama-deploy-<runtime>@<namespace>-<name>`).
+
+A new deployment is refused with `409` when:
+
+- one with the same name already exists in the namespace — deploy again with
+  `--update`;
+- its `<namespace>-<name>` is already another deployment's unit instance.
+  Namespace `a` with name `b-c` and namespace `a-b` with name `c` would share
+  one unit, one directory and one environment file, so the second is refused
+  and has to choose a different name.
+
+The second check is made on the node itself, not only in the namespace's
+registry: every gateway on a node shares the deployments directory, but each
+reads only its own deployments table. A deployment claims its instance by
+creating its directory (`<oramaDir>/data/deployments/<namespace>-<name>`),
+which only one request can do, and records its namespace and name in a
+`.orama-owner` file inside it. A deploy, update, rollback or replica that finds
+the directory owned by another deployment is refused with `409`; delete and
+replica teardown leave another deployment's unit and files alone. A create that
+fails before the deployment is recorded removes the directory again, and a
+delete removes it (a delete whose files cannot be removed fails, so it can be
+retried). An archive's own `.orama-owner` is never extracted.
+
+A directory from before this check has no `.orama-owner`. It is adopted by the
+deployment it is named after if the gateway handling the request has that
+deployment, and refused otherwise — the files may be another gateway's, and
+until an operator removes them the name cannot be used.
 
 ---
 
@@ -460,7 +497,14 @@ app.listen(port, () => {
 
 - **Environment Variables**: The `PORT` environment variable is automatically set to your allocated port
 - **Health Endpoint**: **REQUIRED** - Must implement `/health` that returns HTTP 200 when ready
-- **Dependencies**: The CLI runs `npm install --production` locally if `node_modules` is missing; `node_modules` and hidden files are excluded from the uploaded tarball, and dependencies are installed on the server
+- **Dependencies**: The CLI runs `npm install --production` locally if `node_modules` is missing; `node_modules` and hidden files are excluded from the uploaded tarball, and dependencies are installed on the server — unless the tarball carries its own `node_modules` or the upload sets the `skip_install=true` form field (API only)
+- **How the server installs them**: in a sandboxed one-shot unit, `orama-deploy-build@<namespace>-<name>`, as `npm install --omit=dev --ignore-scripts --no-audit --no-fund` run against copies of your `package.json` and `package-lock.json`/`npm-shrinkwrap.json` only. That means:
+  - **No install scripts run** — not yours, not any dependency's (`preinstall`, `install`, `postinstall`, `prepare`). Packages that compile or download a native binary in a script (`bcrypt`, `sharp`, `sqlite3`, …) will not work from a server install: ship `node_modules` built for Linux x86-64 in the tarball instead. `orama deploy nodejs` leaves `node_modules` out of the tarball, so shipping it means uploading the tarball through the API (`POST /v1/deployments/nodejs/upload`)
+  - **Only npm registry dependencies are installed.** A git dependency (`github:user/repo`, `user/repo`, `git+ssh://…`), a URL, `file:`, `link:` or a path (`../lib`) — in any dependency field, `overrides` or the lockfile — and `workspaces` are refused before the install starts, with `500` and a message naming the dependency. Ship `node_modules` for those
+  - **Your `.npmrc` is not read**, so a private registry or auth token configured there is not used; the build reaches the public npm registry only (no loopback, no private networks), and a lockfile's tarball URLs are fetched from `registry.npmjs.org` whatever host they name. Ship `node_modules` for private packages
+  - The install must finish within 4 minutes; a failed install fails the deploy, and npm's output is in `journalctl -u orama-deploy-build@<namespace>-<name>` on the node
+  - The installed `node_modules` is mounted one directory above your app, so Node finds it after any `node_modules` your app ships itself. It is removed when the deployment is deleted, and a deployment created without a server-side install starts with none
+  - `npm run build` is not run on the server; build before uploading
 - **Start Command Detection**:
   1. If `package.json` has `scripts.start` → runs `npm start`
   2. Else if `package.json` has `main` field → runs `node {main}`
@@ -682,6 +726,10 @@ A value may contain anything that is valid UTF-8, including quotes,
 backslashes, spaces and newlines, so a PEM key or a JSON blob goes in as it is.
 It may not contain a NUL byte, and one value may be at most 64 KiB: every value
 is replicated to every node in the cluster.
+The environment as a whole, rendered as the file your app's unit reads, may be
+at most 224 KiB; a deploy or `env set` that would exceed it is refused with
+`400`. (The node stages at most 256 KiB, and the platform adds its own
+variables.)
 
 ### What runs your app
 
@@ -706,6 +754,11 @@ Each deployment runs as its own unprivileged user, allocated for it and
 reclaimed when it stops, so no two deployments share an identity and none of
 them is root. It cannot reach the cluster's internal network, and it has the
 memory, CPU and process limits recorded on the deployment.
+
+Of the platform's own directory tree it sees only its own deployment
+directory, read-only: not the node's configuration or secrets, and not any
+other deployment or database. Files it creates in `ORAMA_STATE_DIR` and
+`ORAMA_CACHE_DIR` are private to it (`UMask=0077`).
 
 ### Health check path
 
@@ -786,7 +839,7 @@ DNS uses round-robin, so requests may hit any node in the cluster. If a deployme
 │                              (Home node for deployment)          │
 │                                       │                          │
 │                                       ▼                          │
-│                              localhost:10100                     │
+│                              localhost:<deployment port>         │
 │                              (Deployment process)                │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -1223,7 +1276,7 @@ allocates port blocks, creates DNS records, and opens firewall ports.
 > (`{expiry}:{namespace}`) — so tenants never share a relay identity, and a namespace
 > the server does not serve is rejected outright.
 >
-> Adding or removing a namespace rewrites that host's `configs/turn.yaml`, which the
+> Adding or removing a namespace rewrites that host's `data/turn/turn.yaml`, which the
 > running server re-reads within ~15s. It is **not** restarted: a restart would drop
 > every other namespace's live relays on that host.
 >

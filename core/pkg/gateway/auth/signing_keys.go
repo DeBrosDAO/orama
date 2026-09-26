@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -324,30 +325,42 @@ func retirementFrom(cell any) time.Time {
 	}
 }
 
-// Rotate generates a new signing key, publishes it, starts signing with it, and
-// leaves the outgoing one verifiable until the tokens it signed have expired.
+// Rotate generates a new signing key, persists it, publishes it, starts
+// signing with it, and leaves the outgoing one verifiable until the tokens it
+// signed have expired.
 //
 // Two kids are in flight for exactly that window. Retiring the old key
 // immediately would refuse every token already issued; never retiring it would
 // leave a key that can sign this namespace's tokens on disk for ever.
-func (s *Service) Rotate(ctx context.Context, dataDir string) (SigningKey, error) {
+//
+// The key is written before it is published. Published first, a failed write
+// left a key in the registry that every gateway trusts and nothing holds the
+// private half of — and the next boot would read the old key back, having
+// silently undone the rotation. A failed publish restores the key that is still
+// signing, so what is on disk is always what this gateway signs with.
+func (s *Service) Rotate(ctx context.Context, stateDir string) (SigningKey, error) {
 	if s.edSigningKey == nil {
 		return SigningKey{}, fmt.Errorf("this gateway does not sign tokens, so it has no key to rotate")
 	}
 	previous := s.edKeyID
+	current := s.edSigningKey
 
 	pub, priv, err := ed25519.GenerateKey(cryptorand.Reader)
 	if err != nil {
 		return SigningKey{}, fmt.Errorf("generate the replacement signing key: %w", err)
 	}
 
+	if err := PersistSigningKey(stateDir, priv); err != nil {
+		return SigningKey{}, err
+	}
 	next := SigningKey{KID: KeyIDFor(pub), Namespace: s.edKeyNamespace, Public: pub}
 	// Published before it signs anything: a token signed with a key the rest
 	// of the cluster has not seen is refused everywhere until the next reload.
 	if err := s.signingKeys.Publish(ctx, next); err != nil {
-		return SigningKey{}, err
-	}
-	if err := persistSigningKey(dataDir, priv); err != nil {
+		if rerr := PersistSigningKey(stateDir, current); rerr != nil {
+			return SigningKey{}, fmt.Errorf("%w; restoring the key still in use at %s also failed, so the next boot switches keys without retiring this one: %v",
+				err, SigningKeyPath(stateDir), rerr)
+		}
 		return SigningKey{}, err
 	}
 
@@ -361,25 +374,64 @@ func (s *Service) Rotate(ctx context.Context, dataDir string) (SigningKey, error
 	return next, nil
 }
 
-// eddsaKeyFileName is where a gateway's own signing key lives, relative to its
-// data directory. It is named here as well as at the loader because a rotation
-// has to overwrite exactly the file the next boot will read.
-const EdDSAKeyFileName = "jwt-eddsa-key.pem"
+// EdDSAKeyFileName is a gateway's own signing key, inside its state directory.
+// A rotation has to overwrite exactly the file the next boot will read, so the
+// loader and the rotation both go through SigningKeyPath.
+const EdDSAKeyFileName = constants.GatewayEdDSAKeyFileName
 
-// persistSigningKey writes a key where only this gateway can read it.
-func persistSigningKey(dataDir string, priv ed25519.PrivateKey) error {
+// signingKeyFileMode keeps the private key readable by this gateway alone.
+const signingKeyFileMode = 0o600
+
+// SigningKeyPath is where the gateway with this state directory keeps its key.
+func SigningKeyPath(stateDir string) string {
+	return filepath.Join(stateDir, EdDSAKeyFileName)
+}
+
+// PersistSigningKey writes a key where only this gateway can read it.
+//
+// Written to a temporary file and renamed into place, so a failure part-way
+// leaves the previous key intact rather than a truncated one the next boot
+// refuses to read.
+func PersistSigningKey(stateDir string, priv ed25519.PrivateKey) error {
+	if stateDir == "" {
+		return fmt.Errorf("this gateway has no state directory to write its signing key to")
+	}
 	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
 		return fmt.Errorf("marshal the signing key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8Bytes})
 
-	path := filepath.Join(dataDir, "secrets", EdDSAKeyFileName)
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("create the secrets directory: %w", err)
+	path := SigningKeyPath(stateDir)
+	tmp, err := os.CreateTemp(stateDir, EdDSAKeyFileName+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("write the signing key into %s: %w", stateDir, err)
 	}
-	if err := os.WriteFile(path, keyPEM, 0600); err != nil {
-		return fmt.Errorf("write the signing key: %w", err)
+	tmpPath := tmp.Name()
+	if err := writeKeyFile(tmp, keyPEM); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("write the signing key %s: %w", tmpPath, err)
 	}
-	return os.Chmod(path, 0600)
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("install the signing key at %s: %w", path, err)
+	}
+	return nil
+}
+
+// writeKeyFile restricts, fills, syncs and closes a freshly created key file.
+func writeKeyFile(f *os.File, keyPEM []byte) error {
+	if err := f.Chmod(signingKeyFileMode); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(keyPEM); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

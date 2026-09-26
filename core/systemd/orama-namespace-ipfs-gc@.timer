@@ -3,7 +3,10 @@ Description=Schedule periodic IPFS repo garbage collection (%i)
 PartOf=orama-node.service
 
 [Timer]
-OnBootSec=20min
+# OnActiveSec, not OnBootSec: on a host that booted long ago an OnBootSec
+# deadline has already passed, so every (re)start of this timer — each
+# orama-node restart — fired GC at once, while the daemon was still starting.
+OnActiveSec=20min
 OnUnitActiveSec=6h
 RandomizedDelaySec=30min
 Unit=orama-namespace-ipfs-gc@%i.service

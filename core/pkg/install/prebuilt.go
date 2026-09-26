@@ -1,27 +1,20 @@
 package install
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
-	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 )
 
-// PreBuiltManifest describes the contents of a pre-built binary archive.
-type PreBuiltManifest struct {
-	Version   string            `json:"version"`
-	Commit    string            `json:"commit"`
-	Date      string            `json:"date"`
-	Arch      string            `json:"arch"`
-	Checksums map[string]string `json:"checksums"` // filename -> sha256
-}
+// PreBuiltManifest describes the contents of a pre-built binary archive. It is
+// the manifest `orama build` signs and archivetrust verifies.
+type PreBuiltManifest = archivetrust.Manifest
 
 // HasPreBuiltArchive checks if a pre-built binary archive has been extracted
 // at /opt/orama/ by looking for the manifest.json file.
@@ -45,92 +38,32 @@ func LoadPreBuiltManifest() (*PreBuiltManifest, error) {
 	return &manifest, nil
 }
 
-// OramaSignerAddress is the Ethereum address authorized to sign build archives.
-// Archives signed by any other address are rejected during install.
-// This is the DeBros deploy wallet — update if the signing key rotates.
-const OramaSignerAddress = "0xb5d8a496c8b2412990d7D467E17727fdF5954afC"
-
-// VerifyArchiveSignature verifies that the pre-built archive was signed by the
-// authorized Orama signer. Returns nil if the signature is valid, or if no
-// signature file exists (unsigned archives are allowed but logged as a warning).
-func VerifyArchiveSignature(manifest *PreBuiltManifest) error {
-	sigData, err := os.ReadFile(OramaManifestSig)
-	if os.IsNotExist(err) {
-		return nil // unsigned archive — caller decides whether to proceed
-	}
-	if err != nil {
-		return fmt.Errorf("failed to read manifest.sig: %w", err)
-	}
-
-	// Reproduce the same hash used during signing: SHA256 of compact JSON
-	manifestJSON, err := json.Marshal(manifest)
-	if err != nil {
-		return fmt.Errorf("failed to marshal manifest: %w", err)
-	}
-	manifestHash := sha256.Sum256(manifestJSON)
-	hashHex := hex.EncodeToString(manifestHash[:])
-
-	// EVM personal_sign: keccak256("\x19Ethereum Signed Message:\n" + len + message)
-	msg := []byte(hashHex)
-	prefix := []byte("\x19Ethereum Signed Message:\n" + fmt.Sprintf("%d", len(msg)))
-	ethHash := ethcrypto.Keccak256(prefix, msg)
-
-	// Decode signature
-	sigHex := strings.TrimSpace(string(sigData))
-	if strings.HasPrefix(sigHex, "0x") || strings.HasPrefix(sigHex, "0X") {
-		sigHex = sigHex[2:]
-	}
-	sig, err := hex.DecodeString(sigHex)
-	if err != nil || len(sig) != 65 {
-		return fmt.Errorf("invalid signature format in manifest.sig")
-	}
-
-	// Normalize recovery ID
-	if sig[64] >= 27 {
-		sig[64] -= 27
-	}
-
-	// Recover public key from signature
-	pub, err := ethcrypto.SigToPub(ethHash, sig)
-	if err != nil {
-		return fmt.Errorf("signature recovery failed: %w", err)
-	}
-
-	recovered := ethcrypto.PubkeyToAddress(*pub).Hex()
-	expected := strings.ToLower(OramaSignerAddress)
-	got := strings.ToLower(recovered)
-
-	if got != expected {
-		return fmt.Errorf("archive signed by %s, expected %s — refusing to install", recovered, OramaSignerAddress)
-	}
-
-	return nil
-}
-
-// IsArchiveSigned returns true if a manifest.sig file exists alongside the manifest.
-func IsArchiveSigned() bool {
-	_, err := os.Stat(OramaManifestSig)
-	return err == nil
-}
-
 // installFromPreBuilt installs all binaries from a pre-built archive.
 // The archive must already be extracted at /opt/orama/ with:
 //   - /opt/orama/bin/ — all pre-compiled binaries
 //   - /opt/orama/systemd/ — namespace service templates
 //   - /opt/orama/packages/ — optional .deb packages
 //   - /opt/orama/manifest.json — archive metadata
-func (ps *ProductionSetup) installFromPreBuilt(manifest *PreBuiltManifest) error {
-	ps.logf("  Using pre-built binary archive v%s (%s) linux/%s", manifest.Version, manifest.Commit, manifest.Arch)
-
-	// Verify archive signature if present
-	if IsArchiveSigned() {
-		if err := VerifyArchiveSignature(manifest); err != nil {
-			return fmt.Errorf("archive signature verification failed: %w", err)
-		}
-		ps.logf("  ✓ Archive signature verified")
-	} else {
-		ps.logf("  ⚠️  Archive is unsigned — consider using 'orama build --sign'")
+//
+// Nothing is installed from an archive that does not verify: manifest.sig must
+// recover to a signer in the trust anchor (archivetrust.AnchorPath) and every file
+// must match the signed manifest. A missing signature, an untrusted signer or
+// a missing anchor is a hard failure; there is no unsigned mode.
+//
+// It holds the archive lock throughout, so `orama node stage-archive` cannot
+// replace the archive between its verification and the copies made from it.
+func (ps *ProductionSetup) installFromPreBuilt(detected *PreBuiltManifest) (err error) {
+	unlock, err := lockArchive(OramaBase)
+	if err != nil {
+		return err
 	}
+	defer func() { err = errors.Join(err, unlock()) }()
+
+	manifest, err := ps.verifyPreBuiltArchive(detected)
+	if err != nil {
+		return err
+	}
+	ps.logf("  Using pre-built binary archive v%s (%s) linux/%s", manifest.Version, manifest.Commit, manifest.Arch)
 
 	// Install minimal system dependencies (no build tools needed)
 	if err := ps.installMinimalSystemDeps(); err != nil {
@@ -147,6 +80,12 @@ func (ps *ProductionSetup) installFromPreBuilt(manifest *PreBuiltManifest) error
 		return fmt.Errorf("failed to set capabilities: %w", err)
 	}
 
+	// The privileged helper is copied from the same verified bin/, so it is
+	// installed under the same lock.
+	if err := ps.ensurePrivHelper(); err != nil {
+		return err
+	}
+
 	// Install ntfy on every node (feature #72). ntfy is not bundled in
 	// the pre-built archive — its installer downloads from upstream and
 	// verifies the SHA-256 checksum. ntfy listens on
@@ -160,15 +99,11 @@ func (ps *ProductionSetup) installFromPreBuilt(manifest *PreBuiltManifest) error
 	// chown of /etc/ntfy/server.yml fails because the `ntfy` user
 	// doesn't exist yet.
 	if err := ps.binaryInstaller.InstallNtfy(); err != nil {
-		ps.logf("  ⚠️  ntfy install warning: %v", err)
+		return fmt.Errorf("install ntfy: %w", err)
 	}
 
-	// Disable systemd-resolved stub listener for nameserver nodes
-	// (needed even in pre-built mode so CoreDNS can bind port 53)
-	if ps.isNameserver {
-		if err := ps.disableResolvedStub(); err != nil {
-			ps.logf("  ⚠️  Failed to disable systemd-resolved stub: %v", err)
-		}
+	if err := freeResolverPort(ps.isNameserver, ps.disableResolvedStub); err != nil {
+		return err
 	}
 
 	ps.logf("  ✓ All pre-built binaries installed")
@@ -232,11 +167,6 @@ func (ps *ProductionSetup) deployPreBuiltBinaries(manifest *PreBuiltManifest) er
 			continue
 		}
 
-		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-			ps.logf("    ⚠️  Binary %s not found in archive, skipping", bin.name)
-			continue
-		}
-
 		if err := copyBinary(srcPath, bin.dest); err != nil {
 			return fmt.Errorf("failed to copy %s: %w", bin.name, err)
 		}
@@ -263,6 +193,20 @@ func (ps *ProductionSetup) setCapabilities() error {
 			return fmt.Errorf("setcap failed on %s: %w (node won't be able to bind port 443)", binary, err)
 		}
 		ps.logf("    ✓ setcap on %s", binary)
+	}
+	return nil
+}
+
+// freeResolverPort disables the systemd-resolved stub listener on a nameserver
+// (needed even in pre-built mode so CoreDNS can bind port 53). Fatal: a
+// nameserver whose :53 stays with the stub installs "successfully" and then
+// cannot answer for its zone.
+func freeResolverPort(isNameserver bool, disable func() error) error {
+	if !isNameserver {
+		return nil
+	}
+	if err := disable(); err != nil {
+		return fmt.Errorf("disable the systemd-resolved stub listener so CoreDNS can bind :53: %w", err)
 	}
 	return nil
 }

@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"path/filepath"
 
-	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -15,12 +13,11 @@ import (
 )
 
 func (n *Node) startIndexPubsub(ctx context.Context) error {
-	dataDir, err := config.ExpandPath(n.config.Node.DataDir)
+	sup, nodeID, err := n.indexSupervisor()
 	if err != nil {
 		return err
 	}
-	sup := namespace.NewIndexSupervisor(filepath.Dir(dataDir), n.logger.Logger)
-	return sup.EnsurePubsub(ctx, n.nodeID(), n.config.Discovery.BootstrapPeers)
+	return sup.EnsurePubsub(ctx, nodeID, n.config.Discovery.BootstrapPeers)
 }
 
 // startIndexGateway starts orama-namespace-gateway@index.
@@ -31,26 +28,28 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 		return nil
 	}
 
-	dataDir, err := config.ExpandPath(n.config.Node.DataDir)
+	sup, nodeID, err := n.indexSupervisor()
 	if err != nil {
 		return err
 	}
-	oramaDir := filepath.Dir(dataDir)
-	sup := namespace.NewIndexSupervisor(oramaDir, n.logger.Logger)
 
-	bindAddr, _, _ := net.SplitHostPort(n.config.Discovery.HttpAdvAddress)
-	if bindAddr == "" {
-		bindAddr = "127.0.0.1"
+	// The index gateway reaches rqlited where it binds; the spawner adds the
+	// credentials when it writes the gateway YAML.
+	rqliteEP, err := database.IndexEndpoint(&n.config.Database, &n.config.Discovery)
+	if err != nil {
+		return fmt.Errorf("index gateway: %w", err)
 	}
 
+	// The index Olric binds the same advertise host as rqlited
+	// (startRQLiteLocal).
 	olricServers := n.config.HTTPGateway.OlricServers
 	if len(olricServers) == 0 {
-		olricServers = []string{net.JoinHostPort(bindAddr, fmt.Sprintf("%d", namespace.IndexOlricHTTPPort))}
+		olricServers = []string{net.JoinHostPort(rqliteEP.Host, fmt.Sprintf("%d", namespace.IndexOlricHTTPPort))}
 	}
 
 	return sup.EnsureGateway(ctx, gatewayspec.InstanceConfig{
-		NodeID:                n.nodeID(),
-		RQLiteDSN:             fmt.Sprintf("http://%s:%d", bindAddr, namespace.IndexRQLiteHTTPPort),
+		NodeID:                nodeID,
+		RQLiteDSN:             rqliteEP.BaseURL(),
 		BaseDomain:            n.config.HTTPGateway.BaseDomain,
 		OlricServers:          olricServers,
 		OlricTimeout:          n.config.HTTPGateway.OlricTimeout,
@@ -64,8 +63,7 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 		// to spawned namespace gateways, which otherwise register no ntfy push
 		// provider at all.
 		NtfyBaseURL: n.config.HTTPGateway.NtfyBaseURL,
-		DataDir:     oramaDir,
-		NodePeerID:  loadNodePeerIDFromIdentity(n.config.Node.DataDir),
+		NodePeerID:  nodeID,
 	})
 }
 
@@ -94,16 +92,12 @@ func (n *Node) startIPFSClusterConfig() error {
 		cm = built
 	}
 
+	// The Kubo repo's API and gateway bindings, and every listener in the
+	// cluster's service.json, are install's and upgrade's to write
+	// (pkg/install/installers); this sets only what the node owns.
 	n.clusterCfgMu.Lock()
 	defer n.clusterCfgMu.Unlock()
-
-	_ = cm.FixIPFSConfigAddresses()
-	if err := cm.EnsureConfig(); err != nil {
-		return err
-	}
-
-	_ = cm.RepairPeerConfiguration()
-	return nil
+	return cm.EnsureConfig()
 }
 
 // getClusterConfigManager returns the IPFS cluster config manager, or nil if
@@ -122,22 +116,10 @@ func (n *Node) getClusterDiscovery() *database.ClusterDiscoveryService {
 	return n.clusterDiscovery
 }
 
-// The three cluster-peer repairs below all rewrite service.json, so they take
-// the same lock the config component holds.
+// discoverClusterPeers rewrites service.json's peer addresses, so it takes
+// the lock the config component holds.
 func (n *Node) discoverClusterPeers(cm *ipfs.ClusterConfigManager) error {
 	n.clusterCfgMu.Lock()
 	defer n.clusterCfgMu.Unlock()
 	return cm.DiscoverClusterPeersFromLibP2P(n.host)
-}
-
-func (n *Node) updateClusterPeers(cm *ipfs.ClusterConfigManager) error {
-	n.clusterCfgMu.Lock()
-	defer n.clusterCfgMu.Unlock()
-	return cm.UpdateAllClusterPeers()
-}
-
-func (n *Node) repairClusterPeers(cm *ipfs.ClusterConfigManager) error {
-	n.clusterCfgMu.Lock()
-	defer n.clusterCfgMu.Unlock()
-	return cm.RepairPeerConfiguration()
 }

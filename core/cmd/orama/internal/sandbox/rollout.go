@@ -2,19 +2,18 @@ package sandbox
 
 import (
 	"fmt"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // Rollout builds, pushes, and performs a rolling upgrade on a sandbox cluster.
-func Rollout(name string) error {
+func Rollout(name, archive string) error {
 	cfg, err := LoadConfig()
 	if err != nil {
 		return err
@@ -31,20 +30,31 @@ func Rollout(name string) error {
 	}
 	defer cleanup()
 
-	fmt.Printf("Rolling out to sandbox %q (%d nodes)\n\n", state.Name, len(state.Servers))
-
-	// Step 1: Find or require binary archive
-	archivePath := build.FindNewestArchive()
-	if archivePath == "" {
-		return fmt.Errorf("no binary archive found in /tmp/ (run `orama build` first)")
+	// Every connection below checks the host keys pinned at create; a sandbox
+	// without them is refused before anything is built.
+	nodes, err := pinnedNodes(state, sshKeyPath)
+	if err != nil {
+		return err
 	}
 
-	info, _ := os.Stat(archivePath)
+	fmt.Printf("Rolling out to sandbox %q (%d nodes)\n\n", state.Name, len(state.Servers))
+
+	// Step 1: The build to roll out: the one named, or one built now.
+	archivePath, err := resolveArchive(archive)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		return fmt.Errorf("archive %s: %w", archivePath, err)
+	}
 	fmt.Printf("Archive: %s (%s)\n\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
-	// Step 2: Push archive to all nodes (upload to first, fan out server-to-server)
+	// Step 2: Push the archive the way `orama push` does: to a hub that fans
+	// it out, and staged on each node by its installed orama, which verifies
+	// it against the node's trust anchor before anything changes.
 	fmt.Println("Pushing archive to all nodes...")
-	if err := fanoutArchive(state.Servers, sshKeyPath, archivePath); err != nil {
+	if err := pushToSandbox(nodes, archivePath); err != nil {
 		return err
 	}
 
@@ -52,7 +62,7 @@ func Rollout(name string) error {
 	fmt.Println("\nRolling upgrade (followers first, leader last)...")
 
 	// Find the leader
-	leaderIdx := findLeaderIndex(state, sshKeyPath)
+	leaderIdx := findLeaderIndex(nodes)
 	if leaderIdx < 0 {
 		fmt.Fprintf(os.Stderr, "  Warning: could not detect RQLite leader, upgrading in order\n")
 	}
@@ -62,7 +72,7 @@ func Rollout(name string) error {
 		if i == leaderIdx {
 			continue // skip leader, do it last
 		}
-		if err := upgradeNode(srv, sshKeyPath, i+1, len(state.Servers)); err != nil {
+		if err := upgradeNode(nodes[i], srv.Name, i+1, len(state.Servers)); err != nil {
 			return err
 		}
 		// Wait between nodes
@@ -75,7 +85,7 @@ func Rollout(name string) error {
 	// Upgrade leader last
 	if leaderIdx >= 0 {
 		srv := state.Servers[leaderIdx]
-		if err := upgradeNode(srv, sshKeyPath, len(state.Servers), len(state.Servers)); err != nil {
+		if err := upgradeNode(nodes[leaderIdx], srv.Name, len(state.Servers), len(state.Servers)); err != nil {
 			return err
 		}
 	}
@@ -85,10 +95,9 @@ func Rollout(name string) error {
 }
 
 // findLeaderIndex returns the index of the RQLite leader node, or -1 if unknown.
-func findLeaderIndex(state *SandboxState, sshKeyPath string) int {
-	for i, srv := range state.Servers {
-		node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
-		out, err := runSSHOutput(node, fmt.Sprintf("curl -sf %s/status 2>/dev/null | grep -o '\"state\":\"[^\"]*\"'", constants.LocalRQLiteURL()))
+func findLeaderIndex(nodes []inspector.Node) int {
+	for i, node := range nodes {
+		out, err := remotessh.RunSSHOutput(node, rqlite.NodeShellCurl(remotessh.SudoPrefix(node), "-sf", "/status")+` 2>/dev/null | grep -o '"state":"[^"]*"'`)
 		if err == nil && contains(out, "Leader") {
 			return i
 		}
@@ -96,26 +105,16 @@ func findLeaderIndex(state *SandboxState, sshKeyPath string) int {
 	return -1
 }
 
-// upgradeNode performs `orama node upgrade --restart` on a single node.
-// It pre-replaces the orama CLI binary before running the upgrade command
-// to avoid ETXTBSY ("text file busy") errors when the old binary doesn't
-// have the os.Remove fix in copyBinary().
-func upgradeNode(srv ServerState, sshKeyPath string, current, total int) error {
-	node := inspector.Node{User: "root", Host: srv.IP, SSHKey: sshKeyPath}
-
-	fmt.Printf("  [%d/%d] Upgrading %s (%s)...\n", current, total, srv.Name, srv.IP)
-
-	// Pre-replace the orama CLI so the upgrade runs the NEW binary (with ETXTBSY fix).
-	// rm unlinks the old inode (kernel keeps it alive for the running process),
-	// cp creates a fresh inode at the same path.
-	preReplace := "rm -f /usr/local/bin/orama && cp /opt/orama/bin/orama /usr/local/bin/orama"
-	if err := remotessh.RunSSHStreaming(node, preReplace, remotessh.WithNoHostKeyCheck()); err != nil {
-		return fmt.Errorf("pre-replace orama binary on %s: %w", srv.Name, err)
-	}
+// upgradeNode performs `orama node upgrade --restart` on a single node, as a
+// production rolling upgrade does. The upgrade verifies the staged archive
+// against the node's trust anchor and installs the CLI on the PATH from it;
+// nothing else copies binaries out of /opt/orama.
+func upgradeNode(node inspector.Node, name string, current, total int) error {
+	fmt.Printf("  [%d/%d] Upgrading %s (%s)...\n", current, total, name, node.Host)
 
 	const upgradeCmd = "orama node upgrade --restart"
-	if err := remotessh.RunSSHStreaming(node, upgradeCmd, remotessh.WithNoHostKeyCheck()); err != nil {
-		return fmt.Errorf("upgrade %s: %w", srv.Name, err)
+	if err := remotessh.RunSSHStreaming(node, upgradeCmd); err != nil {
+		return fmt.Errorf("upgrade %s: %w", name, err)
 	}
 
 	// Wait for health

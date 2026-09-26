@@ -2,6 +2,7 @@ package node
 
 import (
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"net"
 	"os"
 	"path/filepath"
@@ -43,7 +44,7 @@ func (n *Node) writePeerInfo() error {
 
 // defaultP2PPort is the libp2p listen port assumed when the configured listen
 // address carries none.
-const defaultP2PPort = 4001
+const defaultP2PPort = constants.NodeLibP2PPort
 
 // p2pPort extracts the TCP port from the first configured listen multiaddr.
 func (n *Node) p2pPort() int {

@@ -3,11 +3,9 @@ package node
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
-	"github.com/DeBrosOfficial/network/pkg/namespace"
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
@@ -17,7 +15,6 @@ import (
 // creating it.
 func (n *Node) newRQLiteManager() *database.RQLiteManager {
 	mgr := database.NewRQLiteManager(&n.config.Database, &n.config.Discovery, n.config.Node.DataDir, n.logger.Logger)
-	mgr.SetNodeType(n.nodeID())
 
 	// Repair the WireGuard mesh in the window after rqlited is listening but
 	// before anything waits for a leader.
@@ -32,12 +29,18 @@ func (n *Node) newRQLiteManager() *database.RQLiteManager {
 	return mgr
 }
 
-// nodeID is the identifier used for unit names and raft node IDs.
-func (n *Node) nodeID() string {
-	if n.config.Node.ID == "" {
-		return "node"
-	}
-	return n.config.Node.ID
+// nodeID is the id this node's index services carry: NODE_ID in their unit
+// env files, the per-node config file names under namespaces/index/configs,
+// and the node_id in their logs. It is the libp2p peer id — the id every
+// cluster record (dns_nodes, dns_nameservers, namespace membership, the raft
+// id) already knows this node by.
+//
+// It used to be node.id from node.yaml, which install derives from the first
+// label of --domain. Nameservers are installed with the base domain as their
+// domain, so every nameserver of a cluster had the same one (the environment's
+// name), and nothing told them apart in their env files or logs.
+func (n *Node) nodeID() (string, error) {
+	return readNodePeerID(n.config.Node.DataDir)
 }
 
 // startClusterDiscovery brings up the libp2p-backed peer exchange that RQLite
@@ -63,7 +66,7 @@ func (n *Node) startClusterDiscovery(ctx context.Context) error {
 		n.host,
 		n.discoveryManager,
 		n.rqliteManager,
-		n.config.Node.ID,
+		n.GetPeerID(),
 		"node", // Unified node type
 		n.config.Discovery.RaftAdvAddress,
 		n.config.Discovery.HttpAdvAddress,
@@ -111,18 +114,16 @@ func (n *Node) startRQLiteLocal(ctx context.Context) error {
 	}
 	n.logger.Info("Starting RQLite database")
 
-	sup, _, err := n.indexSupervisor()
+	sup, nodeID, err := n.indexSupervisor()
 	if err != nil {
 		return err
 	}
-	nodeID := n.nodeID()
 	extra := indexRQLiteExtraArgs(n.config.Database)
-	requireExisting := namespace.HasExistingRaft(sup.CoreRQLiteDir())
 	// The libp2p peer id is this node's stable raft identity. The boot graph
 	// orders rqlite-local after libp2p, so it is available here; an empty one
 	// means libp2p is not up and rqlite keeps defaulting the id to the raft
 	// advertise address, which is what it did before this existed.
-	if err := sup.EnsureRQLite(ctx, nodeID, n.GetPeerID(), n.config.Discovery.HttpAdvAddress, n.config.Discovery.RaftAdvAddress, n.config.Database.RQLiteJoinAddress, extra, requireExisting); err != nil {
+	if err := sup.EnsureRQLite(ctx, nodeID, n.GetPeerID(), n.config.Discovery.HttpAdvAddress, n.config.Discovery.RaftAdvAddress, n.config.Database.RQLiteJoinAddress, extra); err != nil {
 		return err
 	}
 
@@ -130,9 +131,11 @@ func (n *Node) startRQLiteLocal(ctx context.Context) error {
 		return err
 	}
 
-	bindAddr, _, _ := net.SplitHostPort(n.config.Discovery.HttpAdvAddress)
-	if bindAddr == "" {
-		bindAddr = "127.0.0.1"
+	// Olric binds the same advertise host rqlited just bound; EnsureRQLite
+	// has already refused an empty or wildcard one.
+	bindAddr, err := database.BindHost(n.config.Discovery.HttpAdvAddress)
+	if err != nil {
+		return fmt.Errorf("index olric: %w", err)
 	}
 	if err := sup.EnsureOlric(ctx, nodeID, bindAddr, nil); err != nil {
 		return fmt.Errorf("index olric: %w", err)
@@ -193,6 +196,20 @@ func (n *Node) rqliteLeaderReachable(ctx context.Context) error {
 		return fmt.Errorf("rqlite manager not initialized")
 	}
 	return n.rqliteManager.LeaderReachable(ctx)
+}
+
+// recordClusterMembership keeps the membership record current: the evidence
+// that stops this node bootstrapping a second cluster if it ever loses its
+// raft state, and the list of members it would join instead
+// (IndexSupervisor.EnsureRQLite). It is both the reconcile and the health
+// check of its own component, so members that join or leave later are
+// recorded, and a failure to record degrades this component visibly without
+// taking the cluster tier down with it.
+func (n *Node) recordClusterMembership(ctx context.Context) error {
+	if n.rqliteManager == nil {
+		return fmt.Errorf("rqlite manager not initialized")
+	}
+	return n.rqliteManager.RecordClusterMembership(ctx)
 }
 
 func indexRQLiteExtraArgs(db config.DatabaseConfig) string {

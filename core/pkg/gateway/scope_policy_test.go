@@ -83,8 +83,9 @@ func TestRoutePermission(t *testing.T) {
 		// the one route that still asks for everything, because that is what
 		// it hands out
 		{"/v1/operator/invite", auth.PermissionWildcard, auth.PermissionWildcard},
-		{"/v1/network/status", "", ""},
-		{"/v1/network/peers", "", ""},
+		{"/v1/network/status", auth.DomainOperator, auth.ActionRead},
+		{"/v1/network/peers", auth.DomainOperator, auth.ActionRead},
+		{"/v1/operator/health", auth.DomainOperator, auth.ActionRead},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {

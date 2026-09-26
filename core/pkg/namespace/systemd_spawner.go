@@ -1,23 +1,27 @@
 package namespace
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/sfu"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
-	"github.com/DeBrosOfficial/network/pkg/turn"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -36,8 +40,8 @@ type SystemdSpawner struct {
 
 	// caddyStorageDirOverride overrides the Caddy cert-storage dir used to
 	// locate the `*.<base>` wildcard cert. Empty means the production default
-	// (caddyServiceStorageDir). Only set in tests so the wildcard-preference
-	// branch of resolveTURNSCert can be exercised without touching /var/lib.
+	// (caddyServiceStorageDir). Only set in tests so resolveTURNSCert can be
+	// exercised without touching /var/lib.
 	caddyStorageDirOverride string
 }
 
@@ -45,9 +49,7 @@ type SystemdSpawner struct {
 // in Caddy's storage, honoring caddyStorageDirOverride when set (tests).
 func (s *SystemdSpawner) wildcardCertPaths(baseDomain string) (certPath, keyPath string) {
 	if s.caddyStorageDirOverride != "" {
-		name := "wildcard_." + baseDomain
-		dir := filepath.Join(s.caddyStorageDirOverride, caddyACMECertDir, name)
-		return filepath.Join(dir, name+".crt"), filepath.Join(dir, name+".key")
+		return locateCaddyCert(s.caddyStorageDirOverride, "wildcard_."+baseDomain)
 	}
 	return caddyWildcardCertPaths(baseDomain)
 }
@@ -71,6 +73,11 @@ func NewSystemdSpawner(namespaceBase, clusterSecretPath string, logger *zap.Logg
 // joinVerifyTimeout bounds the pre-join identity check.
 const joinVerifyTimeout = 10 * time.Second
 
+// joinTargetAllowed decides which hosts may receive the rqlite credentials
+// during join verification: WireGuard addresses only. A variable so tests can
+// admit their loopback servers.
+var joinTargetAllowed = auth.IsWireGuardPeer
+
 // verifyJoinTarget refuses to start an RQLite node whose join target belongs to a
 // DIFFERENT namespace (bugboard #275).
 //
@@ -88,6 +95,13 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 		return nil
 	}
 
+	// The URL can come from a spawn request, and the cluster-wide rqlite
+	// credentials go with it: only a WireGuard address may receive them.
+	u, err := url.Parse(verifyURL)
+	if err != nil || u.Scheme != "http" || !joinTargetAllowed(u.Host) {
+		return fmt.Errorf("verify join target for namespace %s: %q is not an http://<wireguard-ip>:<port> address", namespace, verifyURL)
+	}
+
 	reqCtx, cancel := context.WithTimeout(ctx, joinVerifyTimeout)
 	defer cancel()
 
@@ -95,11 +109,21 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 	if err != nil {
 		return fmt.Errorf("verify join target for namespace %s: %w", namespace, err)
 	}
+	// The target runs with -auth like every rqlited; unauthenticated, /status
+	// is a 401 whose body does not decode, and the join would be refused.
+	user, pass, err := s.readRQLitePassword()
+	if err != nil {
+		return fmt.Errorf("verify join target for namespace %s: %w", namespace, err)
+	}
+	req.SetBasicAuth(user, pass)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("verify join target %s for namespace %s: %w", verifyURL, namespace, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("verify join target %s for namespace %s: /status returned HTTP %d", verifyURL, namespace, resp.StatusCode)
+	}
 
 	var status struct {
 		Store struct {
@@ -217,20 +241,25 @@ func portInUse(port int) bool {
 	return false
 }
 
+// rqliteJoinArgs is the -join flag set for rqlited, empty when there is
+// nothing to join. Every instance runs with -auth, which refuses an anonymous
+// join, so the join names the auth file's user that may join.
+func rqliteJoinArgs(joinAddresses []string, authFile string) (string, error) {
+	if len(joinAddresses) == 0 {
+		return "", nil
+	}
+	joinAs, err := rqlite.JoinUser(authFile)
+	if err != nil {
+		return "", err
+	}
+	return "-join " + strings.Join(joinAddresses, ",") + " -join-as " + joinAs, nil
+}
+
 // SpawnRQLite starts a RQLite instance using systemd
 func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID string, cfg rqlite.InstanceConfig) error {
 	s.logger.Info("Spawning RQLite via systemd",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID))
-
-	// Build join arguments
-	joinArgs := ""
-	if len(cfg.JoinAddresses) > 0 {
-		joinArgs = fmt.Sprintf("-join %s", cfg.JoinAddresses[0])
-		for _, addr := range cfg.JoinAddresses[1:] {
-			joinArgs += fmt.Sprintf(",%s", addr)
-		}
-	}
 
 	// Bugboard #281: a brand-new cluster must not inherit raft state left behind
 	// by a previous namespace of the same name. Clearing here (rather than
@@ -287,6 +316,10 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 	authDest, err := rqlite.InstallAuthFile(authSrc, dataDir)
 	if err != nil {
 		return fmt.Errorf("rqlite auth file missing — refusing to start: %w", err)
+	}
+	joinArgs, err := rqliteJoinArgs(cfg.JoinAddresses, authDest)
+	if err != nil {
+		return fmt.Errorf("cannot join RQLite for namespace %s: %w", namespace, err)
 	}
 	httpAddr, err := rqlite.BindAddr(cfg.HTTPAdvAddress, cfg.HTTPPort)
 	if err != nil {
@@ -413,14 +446,20 @@ func sameStringSet(a, b []string) bool {
 	return true
 }
 
-// ReconcileOlric rewrites this node's Olric config and restarts it ONLY when it
-// has drifted from the desired one.
+// ReconcileOlric rewrites this node's Olric config when it has drifted from the
+// desired one. It does not restart Olric.
+//
+// Olric is a clustered, stateful service, and the same reconcile runs on every
+// node: systemd.Manager.StartService never restarts a running one as a side
+// effect, so the rewritten config takes effect at Olric's next deliberate
+// (rolling) restart. A running member does not need it sooner — memberlist
+// finds and drops a departed peer on its own; `memberlist.peers` is only read
+// when Olric starts and joins.
 //
 // The counterpart to ReconcileGateway, which existed while this did not — so
 // when a namespace member was replaced, the survivors' `memberlist.peers` kept
 // the dead node's overlay address indefinitely and nothing but a hand-edit
-// removed it. That is one of the manual runbook steps this reconciler exists to
-// delete.
+// removed it, and the next restart tried to join the dead address.
 func (s *SystemdSpawner) ReconcileOlric(ctx context.Context, namespace, nodeID string, cfg olric.InstanceConfig) error {
 	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("olric-%s.yaml", nodeID))
 
@@ -442,7 +481,7 @@ func (s *SystemdSpawner) ReconcileOlric(ctx context.Context, namespace, nodeID s
 		return nil
 	}
 
-	s.logger.Info("Olric config drifted from desired; reconciling (rewrite + restart)",
+	s.logger.Info("Olric config drifted from desired; rewriting it (applies at Olric's next rolling restart)",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID),
 		zap.Strings("ondisk_peers", onDisk.Memberlist.Peers),
@@ -495,7 +534,7 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 		return fmt.Errorf("failed to marshal Olric config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+	if err := s.writeServiceConfig(namespace, systemd.ServiceTypeOlric, configPath, configBytes, 0644); err != nil {
 		return fmt.Errorf("failed to write Olric config: %w", err)
 	}
 
@@ -572,24 +611,10 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 	// issues itself in plaintext. A namespace gateway with no secret can
 	// never authenticate anything, so booting one without it is never the
 	// right outcome — fail loud instead of silently degrading.
-	apiKeyHMACSecret, err := s.readAPIKeyHMACSecret()
+	gatewayConfig, err := s.gatewayYAMLFor(namespace, cfg)
 	if err != nil {
 		return err
 	}
-
-	listenAddr, err := gatewayListenAddr(cfg.Namespace, cfg.HTTPPort)
-	if err != nil {
-		return err
-	}
-	user, pass, err := s.readRQLitePassword()
-	if err != nil {
-		return err
-	}
-	cfg.RQLiteUsername = user
-	cfg.RQLitePassword = pass
-	cfg.RQLiteDSN = injectRQLiteUserinfo(cfg.RQLiteDSN, user, pass)
-	cfg.GlobalRQLiteDSN = injectRQLiteUserinfo(cfg.GlobalRQLiteDSN, user, pass)
-	gatewayConfig := gatewayYAMLFromInstance(cfg, apiKeyHMACSecret, s.clusterSecretPath, listenAddr)
 
 	configBytes, err := yaml.Marshal(gatewayConfig)
 	if err != nil {
@@ -598,14 +623,8 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 
 	// 0600: the gateway YAML embeds the secrets encryption key (bugboard
 	// #837), so it must not be world/group readable.
-	if err := os.WriteFile(configPath, configBytes, 0600); err != nil {
+	if err := s.writeServiceConfig(namespace, systemd.ServiceTypeGateway, configPath, configBytes, 0600); err != nil {
 		return fmt.Errorf("failed to write Gateway config: %w", err)
-	}
-	// WriteFile's mode only applies on CREATE — converge perms explicitly so
-	// a file written 0644 by an older release doesn't stay world-readable
-	// after an in-place rewrite.
-	if err := os.Chmod(configPath, 0600); err != nil {
-		return fmt.Errorf("failed to set Gateway config permissions: %w", err)
 	}
 
 	s.logger.Info("Created Gateway config file",
@@ -684,6 +703,46 @@ func (s *SystemdSpawner) RestartGateway(ctx context.Context, namespace, nodeID s
 	return s.SpawnGateway(ctx, namespace, nodeID, cfg)
 }
 
+// gatewayYAMLFor is the gateway YAML SpawnGateway writes for cfg: cfg with the
+// cluster rqlite credentials applied to its DSNs, the host's API-key HMAC
+// secret, the address the gateway listens on and the cluster secret path.
+//
+// SpawnGateway writes it and ReconcileGateway compares against it, so the two
+// cannot disagree about what "in sync" means. They used to: reconcile compared
+// the on-disk (credentialed) YAML against the bare desired config and saw
+// drift on every sweep.
+func (s *SystemdSpawner) gatewayYAMLFor(namespace string, cfg gatewayspec.InstanceConfig) (gatewayspec.GatewayYAMLConfig, error) {
+	// Bugboard #160: a namespace gateway with no HMAC secret can never
+	// authenticate anything — fail loud (see SpawnGateway).
+	hmacSecret, err := s.readAPIKeyHMACSecret()
+	if err != nil {
+		return gatewayspec.GatewayYAMLConfig{}, err
+	}
+	listenAddr, err := gatewayListenAddr(cfg.Namespace, cfg.HTTPPort)
+	if err != nil {
+		return gatewayspec.GatewayYAMLConfig{}, err
+	}
+	user, pass, err := s.readRQLitePassword()
+	if err != nil {
+		return gatewayspec.GatewayYAMLConfig{}, err
+	}
+	cfg.RQLiteUsername = user
+	cfg.RQLitePassword = pass
+	// Host layout, not caller input: every gateway on this host gets its own
+	// private directory, so their signing keys can never collide.
+	cfg.StateDir = constants.GatewayStateDir(s.namespaceBase, namespace)
+	if cfg.RQLiteDSN, err = withRQLiteCredentials(cfg.RQLiteDSN, user, pass); err != nil {
+		return gatewayspec.GatewayYAMLConfig{}, fmt.Errorf("gateway %s rqlite_dsn: %w", namespace, err)
+	}
+	// Empty for the index gateway, which is itself the global registry.
+	if cfg.GlobalRQLiteDSN != "" {
+		if cfg.GlobalRQLiteDSN, err = withRQLiteCredentials(cfg.GlobalRQLiteDSN, user, pass); err != nil {
+			return gatewayspec.GatewayYAMLConfig{}, fmt.Errorf("gateway %s global_rqlite_dsn: %w", namespace, err)
+		}
+	}
+	return gatewayYAMLFromInstance(cfg, hmacSecret, s.clusterSecretPath, listenAddr), nil
+}
+
 // gatewayWebRTCInSync reports whether the WebRTC block already on disk
 // matches the desired gateway config — i.e. no restart is needed.
 // Compares only the WebRTC-relevant fields (bugboard #25 drift surface).
@@ -708,22 +767,6 @@ func (s *SystemdSpawner) readRQLitePassword() (user, pass string, err error) {
 		return "", "", fmt.Errorf("rqlite password file %s is empty", path)
 	}
 	return "orama", pass, nil
-}
-
-func injectRQLiteUserinfo(dsn, user, pass string) string {
-	if user == "" || pass == "" || dsn == "" {
-		return dsn
-	}
-	for _, scheme := range []string{"https://", "http://"} {
-		if strings.HasPrefix(dsn, scheme) {
-			rest := dsn[len(scheme):]
-			if strings.Contains(rest, "@") {
-				return dsn
-			}
-			return scheme + user + ":" + pass + "@" + rest
-		}
-	}
-	return dsn
 }
 
 func (s *SystemdSpawner) readAPIKeyHMACSecret() (string, error) {
@@ -760,7 +803,9 @@ func gatewayYAMLFromInstance(cfg gatewayspec.InstanceConfig, hmacSecret, cluster
 		IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 		ClusterSecretPath:     clusterSecretPath,
 		SecretsEncryptionKey:  cfg.SecretsEncryptionKey,
+		NtfyBaseURL:           cfg.NtfyBaseURL,
 		APIKeyHMACSecret:      hmacSecret,
+		StateDir:              cfg.StateDir,
 		WebRTC: gatewayspec.GatewayYAMLWebRTC{
 			Enabled:           cfg.WebRTCEnabled,
 			SFUPort:           cfg.SFUPort,
@@ -830,7 +875,8 @@ func gatewayYAMLEqual(a, b gatewayspec.GatewayYAMLConfig) bool {
 		a.SecretsEncryptionKey == b.SecretsEncryptionKey &&
 		a.ClusterSecretPath == b.ClusterSecretPath &&
 		a.APIKeyHMACSecret == b.APIKeyHMACSecret &&
-		a.NtfyBaseURL == b.NtfyBaseURL
+		a.NtfyBaseURL == b.NtfyBaseURL &&
+		a.StateDir == b.StateDir
 }
 
 // gatewayConfigInSync reports whether on-disk YAML matches what spawn would
@@ -842,8 +888,8 @@ func gatewayConfigInSync(onDisk gatewayspec.GatewayYAMLConfig, cfg gatewayspec.I
 
 // ReconcileGateway is the WARM counterpart to SpawnGateway: when a
 // namespace gateway is already running, this compares its on-disk config
-// against the desired `cfg` and restarts it ONLY if the WebRTC block has
-// drifted (enabled / sfu_port / turn_secret / turn_domain differ).
+// against what SpawnGateway would write for `cfg` and restarts it ONLY when
+// they differ (WebRTC block, membership, DSNs, secrets, ...).
 //
 // Bugboard #25: the from-disk restore skips healthy gateways, so a
 // gateway that lost its webrtc block on a prior restart (while staying
@@ -853,48 +899,35 @@ func gatewayConfigInSync(onDisk gatewayspec.GatewayYAMLConfig, cfg gatewayspec.I
 // self-heal only fires when the gateway happens to be down during
 // restore. This closes that gap for the healthy case.
 //
-// Idempotent: returns nil WITHOUT restarting when the on-disk WebRTC
-// block already matches the desired config — so it does not cause a
-// restart loop on every node boot. WebRTC is the only known config-drift
-// surface (bugboard #25); other fields are intentionally not compared to
-// avoid spurious restarts from harmless differences (e.g. olric server
-// ordering).
+// Idempotent: returns nil WITHOUT restarting when the on-disk YAML already
+// equals what SpawnGateway would write for cfg (gatewayYAMLFor) — so it does
+// not cause a restart loop on every sweep or boot. The comparison covers every
+// YAML field (bugboard #165); Olric server order and empty/zero timeouts are
+// not drift.
 func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID string, cfg gatewayspec.InstanceConfig) error {
-	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("gateway-%s.yaml", nodeID))
-	existing, err := os.ReadFile(configPath)
+	onDisk, err := s.readGatewayYAML(namespace, nodeID)
 	if err != nil {
 		// No readable config to compare against — don't blindly restart a
 		// healthy gateway; absence of the config file is a different
 		// problem the caller's cold-spawn path handles.
-		return fmt.Errorf("read gateway config for reconcile: %w", err)
-	}
-	var onDisk gatewayspec.GatewayYAMLConfig
-	if err := yaml.Unmarshal(existing, &onDisk); err != nil {
-		return fmt.Errorf("parse gateway config for reconcile: %w", err)
-	}
-
-	hmacSecret, err := s.readAPIKeyHMACSecret()
-	if err != nil {
-		// Host has no usable secret file. Compare as empty so we do not
-		// restart-loop; SpawnGateway on the restart path still fails loud
-		// if the file is required and missing.
-		hmacSecret = ""
-	}
-
-	// Resolved by the caller rather than inside the comparison: where a gateway
-	// should listen depends on the node, and a comparison that can fail is one
-	// that reports drift when WireGuard blinks.
-	listenAddr, err := gatewayListenAddr(cfg.Namespace, cfg.HTTPPort)
-	if err != nil {
 		return err
 	}
-	if gatewayConfigInSync(onDisk, cfg, hmacSecret, s.clusterSecretPath, listenAddr) {
+
+	// The desired YAML is exactly what SpawnGateway would write for cfg —
+	// credentials, HMAC secret and listen address included — so a gateway
+	// SpawnGateway just wrote compares in sync. An error here (no HMAC secret,
+	// no rqlite password, no WireGuard IP) is returned without restarting:
+	// SpawnGateway would fail on the same thing, and stopping a running
+	// gateway to find that out would take it down for nothing.
+	desired, err := s.gatewayYAMLFor(namespace, cfg)
+	if err != nil {
+		return fmt.Errorf("resolve desired gateway config for %s: %w", namespace, err)
+	}
+	if gatewayYAMLEqual(onDisk, desired) {
 		return nil
 	}
 
 	// Drift flags are bools — never log secret material (bugboard #165 / #837).
-	secretsKeyDrifted := onDisk.SecretsEncryptionKey != cfg.SecretsEncryptionKey
-	hmacSecretDrifted := onDisk.APIKeyHMACSecret != hmacSecret
 	s.logger.Info("Gateway config drifted from desired; reconciling (rewrite + restart)",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID),
@@ -902,16 +935,109 @@ func (s *SystemdSpawner) ReconcileGateway(ctx context.Context, namespace, nodeID
 		zap.Int("ondisk_sfu_port", onDisk.WebRTC.SFUPort),
 		zap.Bool("desired_enabled", cfg.WebRTCEnabled),
 		zap.Int("desired_sfu_port", cfg.SFUPort),
-		zap.Bool("secrets_key_drifted", secretsKeyDrifted),
-		zap.Bool("hmac_secret_drifted", hmacSecretDrifted))
+		zap.Bool("olric_servers_drifted", !stringSetEqual(onDisk.OlricServers, desired.OlricServers)),
+		zap.Bool("listen_addr_drifted", onDisk.ListenAddr != desired.ListenAddr),
+		zap.Bool("secrets_key_drifted", onDisk.SecretsEncryptionKey != desired.SecretsEncryptionKey),
+		zap.Bool("hmac_secret_drifted", onDisk.APIKeyHMACSecret != desired.APIKeyHMACSecret),
+		zap.Bool("state_dir_drifted", onDisk.StateDir != desired.StateDir),
+		zap.Bool("rqlite_drifted", onDisk.RQLiteDSN != desired.RQLiteDSN || onDisk.GlobalRQLiteDSN != desired.GlobalRQLiteDSN))
 	return s.RestartGateway(ctx, namespace, nodeID, cfg)
 }
 
-// turnSecretDrift reports whether the on-disk TURN auth_secret differs from the
-// desired (current DB) secret — i.e. a rewrite+restart is needed. Pure function
-// so the reconcile decision is unit-testable.
-func turnSecretDrift(onDiskSecret, dbSecret string) bool {
-	return onDiskSecret != dbSecret
+// gatewayMembership is the part of a tenant gateway's config that follows
+// cluster membership: its port block and the Olric servers it talks to.
+type gatewayMembership struct {
+	HTTPPort     int
+	OlricServers []string
+}
+
+// ReconcileGatewayMembership brings a running tenant gateway in line with the
+// live membership. Everything else — DSNs, secrets, WebRTC, domains — is taken
+// from the config the gateway is running with: the membership sweep knows
+// only membership, and rebuilding the rest from it produced a skeleton config
+// that never matched, so every sweep restarted the gateway into a config it
+// could not start with.
+func (s *SystemdSpawner) ReconcileGatewayMembership(ctx context.Context, namespace, nodeID string, m gatewayMembership) error {
+	onDisk, err := s.readGatewayYAML(namespace, nodeID)
+	if err != nil {
+		return err
+	}
+	cfg, err := instanceFromGatewayYAML(onDisk, nodeID)
+	if err != nil {
+		return fmt.Errorf("gateway %s: %w", namespace, err)
+	}
+	cfg.HTTPPort = m.HTTPPort
+	cfg.OlricServers = m.OlricServers
+	return s.ReconcileGateway(ctx, namespace, nodeID, cfg)
+}
+
+// readGatewayYAML reads the gateway config SpawnGateway wrote for nodeID.
+func (s *SystemdSpawner) readGatewayYAML(namespace, nodeID string) (gatewayspec.GatewayYAMLConfig, error) {
+	configPath := filepath.Join(s.namespaceBase, namespace, "configs", fmt.Sprintf("gateway-%s.yaml", nodeID))
+	existing, err := os.ReadFile(configPath)
+	if err != nil {
+		return gatewayspec.GatewayYAMLConfig{}, fmt.Errorf("read gateway config for reconcile: %w", err)
+	}
+	var onDisk gatewayspec.GatewayYAMLConfig
+	if err := yaml.Unmarshal(existing, &onDisk); err != nil {
+		return gatewayspec.GatewayYAMLConfig{}, fmt.Errorf("parse gateway config %s for reconcile: %w", configPath, err)
+	}
+	return onDisk, nil
+}
+
+// instanceFromGatewayYAML is the inverse of gatewayYAMLFromInstance for every
+// field the YAML carries, so a config read back from disk re-renders to the
+// same YAML. The host-level fields (HMAC secret, cluster secret path) are not
+// part of InstanceConfig; gatewayYAMLFor re-reads them from the host.
+func instanceFromGatewayYAML(y gatewayspec.GatewayYAMLConfig, nodeID string) (gatewayspec.InstanceConfig, error) {
+	_, portStr, err := net.SplitHostPort(y.ListenAddr)
+	if err != nil {
+		return gatewayspec.InstanceConfig{}, fmt.Errorf("listen_addr %q: %w", y.ListenAddr, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return gatewayspec.InstanceConfig{}, fmt.Errorf("listen_addr %q has an invalid port", y.ListenAddr)
+	}
+	olricTimeout, err := parseYAMLDuration(y.OlricTimeout)
+	if err != nil {
+		return gatewayspec.InstanceConfig{}, fmt.Errorf("olric_timeout: %w", err)
+	}
+	ipfsTimeout, err := parseYAMLDuration(y.IPFSTimeout)
+	if err != nil {
+		return gatewayspec.InstanceConfig{}, fmt.Errorf("ipfs_timeout: %w", err)
+	}
+	return gatewayspec.InstanceConfig{
+		Namespace:             y.ClientNamespace,
+		NodeID:                nodeID,
+		HTTPPort:              port,
+		BaseDomain:            y.DomainName,
+		RQLiteDSN:             y.RQLiteDSN,
+		GlobalRQLiteDSN:       y.GlobalRQLiteDSN,
+		RQLiteUsername:        y.RQLiteUsername,
+		RQLitePassword:        y.RQLitePassword,
+		OlricServers:          y.OlricServers,
+		OlricTimeout:          olricTimeout,
+		IPFSClusterAPIURL:     y.IPFSClusterAPIURL,
+		IPFSAPIURL:            y.IPFSAPIURL,
+		IPFSTimeout:           ipfsTimeout,
+		IPFSReplicationFactor: y.IPFSReplicationFactor,
+		WebRTCEnabled:         y.WebRTC.Enabled,
+		SFUPort:               y.WebRTC.SFUPort,
+		TURNDomain:            y.WebRTC.TURNDomain,
+		TURNSecret:            y.WebRTC.TURNSecret,
+		TURNStealthDomain:     y.WebRTC.TURNStealthDomain,
+		SecretsEncryptionKey:  y.SecretsEncryptionKey,
+		NtfyBaseURL:           y.NtfyBaseURL,
+		StateDir:              y.StateDir,
+	}, nil
+}
+
+// parseYAMLDuration reads a duration gatewayYAMLFromInstance wrote; empty is 0.
+func parseYAMLDuration(v string) (time.Duration, error) {
+	if normalizeTimeout(v) == "" {
+		return 0, nil
+	}
+	return time.ParseDuration(v)
 }
 
 // SFUInstanceConfig holds configuration for spawning an SFU instance
@@ -975,10 +1101,12 @@ func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string,
 	}
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("sfu-%s.yaml", nodeID))
-	if user, pass, err := s.readRQLitePassword(); err != nil {
+	user, pass, err := s.readRQLitePassword()
+	if err != nil {
 		return err
-	} else {
-		cfg.RQLiteDSN = injectRQLiteUserinfo(cfg.RQLiteDSN, user, pass)
+	}
+	if cfg.RQLiteDSN, err = withRQLiteCredentials(cfg.RQLiteDSN, user, pass); err != nil {
+		return fmt.Errorf("sfu %s rqlite_dsn: %w", namespace, err)
 	}
 	if err := writeSFUConfig(configPath, cfg); err != nil {
 		return err
@@ -1024,85 +1152,31 @@ func (s *SystemdSpawner) StopSFU(ctx context.Context, namespace, nodeID string) 
 	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeSFU)
 }
 
-// acmeInternalEndpoint is the gateway's internal ACME endpoint that the
-// Caddyfile TURN-cert blocks point the orama DNS provider at.
-var acmeInternalEndpoint = fmt.Sprintf("http://localhost:%d/v1/internal/acme", IndexGatewayHTTPPort)
-
-// turnCertProvisionTimeout bounds how long a TURN spawn waits for Caddy to
-// provision a Let's Encrypt cert before falling back (primary domain) or
-// failing (stealth domain).
-const turnCertProvisionTimeout = 2 * time.Minute
-
-// resolveTURNSCert resolves the TURNS cert/key pair for a domain.
+// resolveTURNSCert returns the Caddy `*.<baseDomain>` wildcard certificate for
+// the shared TURN server's TURNS listener.
 //
-// The Caddy `*.<baseDomain>` wildcard cert is preferred whenever baseDomain is
-// set and the wildcard is on disk: the client-facing TURNS host is now a
-// single-label subdomain (turn.TLSHostForNamespace), which the wildcard covers,
-// so no per-namespace ACME provisioning is needed and the browser gets a
-// CA-valid cert. This is the fix for TURNS being stuck on a self-signed cert —
-// the legacy two-label host could never get a real cert (provisionTURNCertViaCaddy
-// can't write /etc/caddy under ProtectSystem=strict, and the wildcard doesn't
-// cover a two-label host).
-//
-// When no wildcard is available, per-domain Let's Encrypt via Caddy is tried
-// next (idempotent, self-heals a node stuck on self-signed once Caddy can
-// provision), then the self-signed fallback.
-//
-// allowSelfSigned controls the fallback: the primary TURN domain may fall
-// back to (or reuse) a self-signed pair at <configDir>/turn-{cert,key}.pem so
-// baseline TURN stays up, while the stealth domain must hard-fail instead.
-func (s *SystemdSpawner) resolveTURNSCert(namespace, domain, baseDomain, publicIP, configDir string, allowSelfSigned bool) (string, string, error) {
-	// Prefer the Caddy `*.<baseDomain>` wildcard cert. The client-facing TURNS
-	// host is now a single-label subdomain (turn.TLSHostForNamespace), which the
-	// wildcard covers — so the TURN server can present a CA-valid cert with no
-	// per-namespace ACME provisioning, the same cert reuse that makes stealth
-	// work. This is the fix for TURNS being stuck on a browser-rejected
-	// self-signed cert: the legacy two-label host could never get a real cert
-	// because provisionTURNCertViaCaddy can't write /etc/caddy under
-	// ProtectSystem=strict, and the wildcard doesn't cover a two-label host.
-	if baseDomain != "" {
-		wcCert, wcKey := s.wildcardCertPaths(baseDomain)
-		_, certErr := os.Stat(wcCert)
-		_, keyErr := os.Stat(wcKey)
-		if certErr == nil && keyErr == nil {
-			s.logger.Info("Using Caddy wildcard cert for TURNS",
-				zap.String("namespace", namespace),
-				zap.String("base_domain", baseDomain),
-				zap.String("cert_path", wcCert))
-			return wcCert, wcKey, nil
-		}
+// The wildcard covers every host that listener answers for: each tenant's
+// single-label turn-<ns>.<base> (turn.TLSHostForNamespace) and cdn-<hash>.<base>
+// stealth host. It is the only source. Per-domain Let's Encrypt provisioning by
+// appending to the Caddyfile could never work from orama-node
+// (ProtectSystem=strict makes /etc/caddy read-only), and a self-signed pair is
+// what clients reject — for a stealth host, indistinguishable from being
+// blocked. With no wildcard on disk this is an error, and the caller leaves
+// TURNS off.
+func (s *SystemdSpawner) resolveTURNSCert(baseDomain string) (string, string, error) {
+	if baseDomain == "" {
+		return "", "", fmt.Errorf("TURNS cert: no base domain configured, so there is no *.<base> wildcard cert to use")
 	}
-	if domain != "" {
-		caddyCert, caddyKey, err := provisionTURNCertViaCaddy(domain, acmeInternalEndpoint, turnCertProvisionTimeout)
-		if err == nil {
-			s.logger.Info("Using Let's Encrypt cert from Caddy for TURNS",
-				zap.String("namespace", namespace),
-				zap.String("domain", domain),
-				zap.String("cert_path", caddyCert))
-			return caddyCert, caddyKey, nil
-		}
-		if !allowSelfSigned {
-			return "", "", fmt.Errorf("failed to provision Let's Encrypt cert for stealth TURNS domain %s (no self-signed fallback — clients must be able to validate it): %w", domain, err)
-		}
-		s.logger.Warn("Let's Encrypt cert provisioning failed, falling back to self-signed",
-			zap.String("namespace", namespace),
-			zap.String("domain", domain),
-			zap.Error(err))
+	certPath, keyPath := s.wildcardCertPaths(baseDomain)
+	if _, err := os.Stat(certPath); err != nil {
+		return "", "", fmt.Errorf("TURNS cert: Caddy wildcard cert for *.%s not found at %s (is the gateway HTTPS wildcard provisioned on this node?): %w", baseDomain, certPath, err)
 	}
-	if !allowSelfSigned {
-		return "", "", fmt.Errorf("no domain configured for TURNS cert in namespace %s", namespace)
+	if _, err := os.Stat(keyPath); err != nil {
+		return "", "", fmt.Errorf("TURNS cert: Caddy wildcard key for *.%s not found at %s: %w", baseDomain, keyPath, err)
 	}
-
-	certPath := filepath.Join(configDir, "turn-cert.pem")
-	keyPath := filepath.Join(configDir, "turn-key.pem")
-	if _, err := os.Stat(certPath); os.IsNotExist(err) {
-		if err := turn.GenerateSelfSignedCert(certPath, keyPath, publicIP); err != nil {
-			return "", "", fmt.Errorf("failed to generate TURNS self-signed cert for namespace %s: %w", namespace, err)
-		}
-		s.logger.Info("Generated TURNS self-signed certificate",
-			zap.String("namespace", namespace),
-			zap.String("cert_path", certPath))
-	}
+	s.logger.Info("Using Caddy wildcard cert for TURNS",
+		zap.String("base_domain", baseDomain),
+		zap.String("cert_path", certPath))
 	return certPath, keyPath, nil
 }
 
@@ -1111,12 +1185,8 @@ func (s *SystemdSpawner) resolveTURNSCert(namespace, domain, baseDomain, publicI
 //
 // The stealth host is a single-label subdomain of the base domain
 // (cdn-<hash>.<baseDomain>), so the wildcard the gateway already provisions
-// for HTTPS covers it. This deliberately avoids the runtime
-// append-to-Caddyfile provisioning path: the orama-node service runs
-// ProtectSystem=strict as the orama user and cannot write /etc/caddy, so that
-// path fails with EROFS (and would silently fall back to a self-signed cert
-// that clients reject — indistinguishable from being blocked). Caddy renews
-// the wildcard; the TURN cert reloader hot-reloads it from storage.
+// for HTTPS covers it. Caddy renews the wildcard; the TURN cert reloader
+// hot-reloads it from storage.
 //
 // Hard error (never self-signed) when the wildcard is missing or the host is
 // not a single-label subdomain — a stealth endpoint with an unvalidatable
@@ -1128,7 +1198,7 @@ func (s *SystemdSpawner) resolveStealthCert(stealthDomain, baseDomain string) (s
 	if !isSingleLabelSubdomain(stealthDomain, baseDomain) {
 		return "", "", fmt.Errorf("stealth cert: %q is not a single-label subdomain of %q (the *.%s wildcard cert would not cover it)", stealthDomain, baseDomain, baseDomain)
 	}
-	certPath, keyPath := caddyWildcardCertPaths(baseDomain)
+	certPath, keyPath := s.wildcardCertPaths(baseDomain)
 	if _, err := os.Stat(certPath); err != nil {
 		return "", "", fmt.Errorf("stealth cert: Caddy wildcard cert for *.%s not found at %s (is the gateway HTTPS wildcard provisioned on this node?): %w", baseDomain, certPath, err)
 	}
@@ -1213,6 +1283,11 @@ func (s *SystemdSpawner) DeleteClusterState(namespace string) error {
 	dir := filepath.Join(s.namespaceBase, namespace)
 	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete namespace data directory: %w", err)
+	}
+	// The units' env files live in the root-owned unit-env tree, not in the
+	// data directory (pkg/unitenv); they go with the namespace.
+	if err := s.systemdMgr.RemoveNamespaceEnv(namespace); err != nil {
+		return fmt.Errorf("delete namespace %s env files: %w", namespace, err)
 	}
 	s.logger.Info("Deleted namespace data directory",
 		zap.String("namespace", namespace),
@@ -1307,18 +1382,17 @@ func writeConfigAtomic(configPath string, data []byte, perm os.FileMode) error {
 
 // gatewayListenAddr is where a namespace gateway binds.
 //
-// A tenant's gateway binds the overlay address, not every interface. It used to
-// bind `:port`, so the only thing between a tenant's gateway and the internet
-// was a firewall rule — and a firewall rule is a thing that can be wrong,
-// whereas a listener that is not on a public interface cannot be reached from
-// one however the rules are written.
+// Every gateway binds the overlay address, not every interface. They used to
+// bind `:port`, so the only thing between a gateway and the internet was a
+// firewall rule — and a firewall rule is a thing that can be wrong, whereas a
+// listener that is not on a public interface cannot be reached from one
+// however the rules are written.
 //
-// The index gateway keeps binding everything: Caddy reverse-proxies to
-// localhost, and the ACME internal endpoint is reached there too.
+// The index gateway is also reached on this host — by Caddy, which
+// reverse-proxies to localhost, by Caddy's DNS-01 calls and by the CLI — so
+// the gateway binary adds a loopback listener on the same port for it
+// (cmd/gateway listenAddrs). Other nodes reach it on the overlay.
 func gatewayListenAddr(namespace string, port int) (string, error) {
-	if isIndexNamespace(namespace) {
-		return fmt.Sprintf(":%d", port), nil
-	}
 	ip, err := overlayIP()
 	if err != nil {
 		// Refusing is right. A gateway that cannot find the overlay is a node
@@ -1341,4 +1415,25 @@ func isIndexNamespace(namespace string) bool {
 		return true
 	}
 	return false
+}
+
+// writeServiceConfig writes a service's config file at mode and, when the
+// content changed, marks the service so the next StartService restarts a
+// running unit onto it. The mode is converged explicitly: WriteFile's mode
+// only applies on create, and an older release wrote some of these 0644.
+func (s *SystemdSpawner) writeServiceConfig(namespace string, st systemd.ServiceType, path string, data []byte, mode os.FileMode) error {
+	existing, err := os.ReadFile(path)
+	unchanged := err == nil && bytes.Equal(existing, data)
+	if !unchanged {
+		if err := os.WriteFile(path, data, mode); err != nil {
+			return err
+		}
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		return fmt.Errorf("set permissions on %s: %w", path, err)
+	}
+	if !unchanged {
+		s.systemdMgr.MarkConfigChanged(namespace, st)
+	}
+	return nil
 }

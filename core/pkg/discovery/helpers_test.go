@@ -1,8 +1,10 @@
 package discovery
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -155,5 +157,21 @@ func TestHasLibp2pAddr_NilSlice(t *testing.T) {
 	got := hasLibp2pAddr(nil)
 	if got != false {
 		t.Fatalf("hasLibp2pAddr(nil) = %v, want false", got)
+	}
+}
+
+// Discovery keeps exactly the port the node's libp2p host listens on
+// (constants.NodeLibP2PPort) and drops the IPFS swarm next to it, so the two
+// cannot drift apart.
+func TestFilterLibp2pAddrs_followsTheNodeLibP2PPortConstant(t *testing.T) {
+	node := mustMultiaddr(t, fmt.Sprintf("/ip4/10.0.0.1/tcp/%d", constants.NodeLibP2PPort))
+	ipfs := mustMultiaddr(t, fmt.Sprintf("/ip4/10.0.0.1/tcp/%d", constants.IPFSSwarmPort))
+
+	got := filterLibp2pAddrs([]multiaddr.Multiaddr{ipfs, node})
+	if len(got) != 1 || !got[0].Equal(node) {
+		t.Fatalf("filterLibp2pAddrs() = %v, want only %s", got, node)
+	}
+	if hasLibp2pAddr([]multiaddr.Multiaddr{ipfs}) {
+		t.Fatalf("hasLibp2pAddr() accepted the IPFS swarm port %d", constants.IPFSSwarmPort)
 	}
 }

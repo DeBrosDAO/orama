@@ -37,17 +37,20 @@ func (g *Gateway) handleRotateSigningKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if g.cfg == nil || g.cfg.DataDir == "" {
+	if g.cfg == nil || g.cfg.StateDir == "" {
 		writeError(w, http.StatusServiceUnavailable,
-			"this gateway has no data directory, so a replacement key has nowhere to be written")
+			"this gateway has no state directory, so a replacement key has nowhere to be written")
 		return
 	}
 
 	previous := g.authService.SigningKID()
-	next, err := g.authService.Rotate(r.Context(), g.cfg.DataDir)
+	next, err := g.authService.Rotate(r.Context(), g.cfg.StateDir)
 	if err != nil {
-		g.logger.ComponentWarn("gateway", "signing key rotation failed", zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "failed to rotate the signing key: "+err.Error())
+		// The cause names files on this node; it goes to the node's log, and
+		// the caller is told where to look.
+		g.logger.ComponentError("gateway", "signing key rotation failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError,
+			"failed to rotate the signing key; the gateway log on this node has the cause (`orama node logs gateway`)")
 		return
 	}
 

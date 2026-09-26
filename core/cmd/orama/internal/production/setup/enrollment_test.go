@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -217,7 +218,7 @@ func indexOf(args []string, want string) int {
 }
 
 func TestEnrollKey_PasswordAndBootstrapKeyAreExclusive(t *testing.T) {
-	err := enrollKey(Options{IP: "1.2.3.4", User: "root", Password: "p", BootstrapKey: "/k"}, "ssh-ed25519 AAAA", "/kh")
+	err := enrollKey(Options{IP: "1.2.3.4", User: "root", UsePassword: true, BootstrapKey: "/k"}, "ssh-ed25519 AAAA", "/kh")
 	if err == nil || !strings.Contains(err.Error(), "alternatives") {
 		t.Fatalf("expected an error naming both flags as alternatives, got %v", err)
 	}
@@ -239,26 +240,8 @@ func TestInstallPublicKeyWithKey_MissingKeyFileIsNamed(t *testing.T) {
 	}
 }
 
-// Re-running setup replaced binaries by extracting over /opt/orama, so an
-// older build's files — a manifest.sig that no longer matches, a binary a newer
-// build dropped — survived next to the new ones. The node's data lives in the
-// same directory and must survive instead.
-func TestExtractArchiveCommand_ClearsArchiveFilesButNotNodeData(t *testing.T) {
-	cmd := extractArchiveCommand("/tmp/orama-archive.AbC12345")
-	for _, want := range []string{"rm -rf /opt/orama/bin", "/opt/orama/manifest.sig", "tar xzf /tmp/orama-archive.AbC12345/archive.tar.gz -C /tmp/orama-archive.AbC12345/extract", "cp -a /tmp/orama-archive.AbC12345/extract/. /opt/orama/", "rm -rf /tmp/orama-archive.AbC12345'", "set -e"} {
-		if !strings.Contains(cmd, want) {
-			t.Errorf("extract command missing %q: %s", want, cmd)
-		}
-	}
-	for _, forbidden := range []string{"rm -rf /opt/orama;", "rm -rf /opt/orama ", "/opt/orama/.orama", "/opt/orama/*"} {
-		if strings.Contains(cmd, forbidden) {
-			t.Errorf("extract command must not touch %q: %s", forbidden, cmd)
-		}
-	}
-}
-
-func TestJoinArguments_JoinViaAndGatewayAreExclusive(t *testing.T) {
-	_, err := joinArguments(Options{JoinVia: "debian@1.2.3.4", Gateway: "https://x"})
+func TestJoinInvite_JoinViaAndGatewayAreExclusive(t *testing.T) {
+	_, err := joinInvite(Options{JoinVia: "debian@1.2.3.4", Gateway: "https://x"})
 	if err == nil || !strings.Contains(err.Error(), "alternatives") {
 		t.Fatalf("expected an alternatives error, got %v", err)
 	}
@@ -330,18 +313,10 @@ func TestRedactToken_HidesTheInvite(t *testing.T) {
 	}
 }
 
-// A corrupt archive must fail before anything installed is removed.
-func TestExtractArchiveCommand_UnpacksBeforeRemoving(t *testing.T) {
-	cmd := extractArchiveCommand("/tmp/orama-archive.AbC12345")
-	if strings.Index(cmd, "tar xzf") > strings.Index(cmd, "rm -rf /opt/orama/bin") {
-		t.Errorf("tar must run before the installed files are removed: %s", cmd)
-	}
-}
-
 // The invite comes from another machine and lands in a root command on the new
 // VPS: anything but the invite format is refused, whatever it contains.
 func TestValidateInvite_OnlyTheInviteFormatPasses(t *testing.T) {
-	good, err := invite.Encode(invite.Invite{JoinURL: "https://stagenet.example", Token: strings.Repeat("ab", 32), CAFingerprint: "x"})
+	good, err := invite.Encode(invite.Invite{JoinURL: "https://stagenet.example", Token: strings.Repeat("ab", 32), CAFingerprint: strings.Repeat("cd", 32)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,5 +342,60 @@ func TestShellQuote_SurvivesQuotesAndMetacharacters(t *testing.T) {
 		if err != nil || string(out) != v {
 			t.Errorf("shellQuote(%q) round-tripped to %q (%v)", v, out, err)
 		}
+	}
+}
+
+// The password that owns the VPS used to be a --password value, visible in ps
+// and kept in shell history. It is read from the RootWallet vault now, and a
+// missing entry says how to store one.
+func TestEnrollKey_PasswordComesFromTheVault(t *testing.T) {
+	orig := vaultPassword
+	t.Cleanup(func() { vaultPassword = orig })
+	var asked string
+	vaultPassword = func(ip, user string) (string, error) {
+		asked = user + "@" + ip
+		return "", errors.New("--password: your RootWallet vault has no login for 1.2.3.4 with user ubuntu; store it with `rw vault add 1.2.3.4`")
+	}
+
+	err := enrollKey(Options{IP: "1.2.3.4", User: "ubuntu", UsePassword: true}, "ssh-ed25519 AAAA", "/kh")
+	if err == nil {
+		t.Fatal("enrollment went ahead without a password")
+	}
+	if asked != "ubuntu@1.2.3.4" {
+		t.Errorf("vault asked for %q, want ubuntu@1.2.3.4", asked)
+	}
+	if !strings.Contains(err.Error(), "rw vault add") {
+		t.Errorf("the error does not say how to store the password: %v", err)
+	}
+}
+
+// The gateway path mints the invite the way `orama invite` does: it names one
+// node of the cluster by the domain its certificate is served under. It used
+// to hand the gateway URL to install unpinned, so a gateway given as an
+// address produced an invite with nothing to present and nothing to pin.
+func TestJoinInvite_GatewayInviteNeedsTheClusterDomain(t *testing.T) {
+	_, err := joinInvite(Options{Gateway: "https://203.0.113.7"})
+	if err == nil || !strings.Contains(err.Error(), "cluster's domain") {
+		t.Fatalf("an address gateway was accepted for a pinned invite: %v", err)
+	}
+}
+
+// What `node invite --raw` prints ends in a newline; anything else in the
+// output is refused, since the invite goes into a root command.
+func TestParseMintedInvite(t *testing.T) {
+	good, err := invite.Encode(invite.Invite{JoinURL: "https://203.0.113.1", Token: strings.Repeat("ab", 32), CAFingerprint: strings.Repeat("cd", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ParseMintedInvite(good + "\n"); err != nil || got != good {
+		t.Fatalf("ParseMintedInvite(invite + newline) = %q, %v", got, err)
+	}
+	for _, bad := range []string{"", "Error: rqlite is down\n", good + "\nsudo: something\n"} {
+		if _, err := ParseMintedInvite(bad); err == nil {
+			t.Errorf("ParseMintedInvite(%q) accepted", bad)
+		}
+	}
+	if !strings.Contains(MintInviteCommand(), "node invite --raw --expiry ") {
+		t.Fatalf("MintInviteCommand() = %q", MintInviteCommand())
 	}
 }

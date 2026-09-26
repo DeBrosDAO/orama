@@ -120,14 +120,15 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama namespace rqlite import`](#orama-namespace-rqlite-import) — Import a SQLite dump into the namespace's RQLite (DESTRUCTIVE)
   - [`orama namespace webrtc-status`](#orama-namespace-webrtc-status) — Show WebRTC service status for a namespace
 - [`orama node`](#orama-node) — Node operator commands
-  - [`orama node clean`](#orama-node-clean) — Deprecated: use 'orama node wipe' or 'orama node decommission'
+  - [`orama node clean`](#orama-node-clean) — Deprecated: use 'orama node wipe' or 'orama node remove'
+  - [`orama node dns`](#orama-node-dns) — Cluster DNS: what the outside world needs to reach its nameservers
+    - [`orama node dns delegation`](#orama-node-dns-delegation) — Print the NS and glue records to create at the parent zone
   - [`orama node doctor`](#orama-node-doctor) — Diagnose common node issues
   - [`orama node enroll`](#orama-node-enroll) — Enroll an OramaOS node into the cluster
   - [`orama node install`](#orama-node-install) — Install production node (requires sudo)
   - [`orama node invite`](#orama-node-invite) — Manage invite tokens for joining the cluster
   - [`orama node list`](#orama-node-list) — List your nodes across environments
   - [`orama node logs`](#orama-node-logs) — View production service logs
-  - [`orama node migrate`](#orama-node-migrate) — Migrate from old unified setup (requires sudo)
   - [`orama node migrate-conf`](#orama-node-migrate-conf) — Register nodes.conf nodes with your wallet
   - [`orama node migrate-raft-id`](#orama-node-migrate-raft-id) — Move nodes to stable, peer-id-based raft identities (one-time)
   - [`orama node push`](#orama-node-push) — Push the binary archive to your nodes
@@ -140,6 +141,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama node schema apply`](#orama-node-schema-apply) — Apply pending migrations to the local RQLite
     - [`orama node schema status`](#orama-node-schema-status) — Show required vs applied schema version + pending migrations
   - [`orama node setup`](#orama-node-setup) — Set up a fresh VPS as an Orama node
+  - [`orama node stage-archive`](#orama-node-stage-archive) — Verify a pushed build archive and put it in place (run by 'orama push')
   - [`orama node start`](#orama-node-start) — Start all production services (requires sudo)
   - [`orama node status`](#orama-node-status) — Show the service status of the node on this machine
   - [`orama node stop`](#orama-node-stop) — Stop all production services (requires sudo)
@@ -501,15 +503,31 @@ then package them into a deployment archive. The archive includes:
   - Orama binaries (CLI, node, gateway, identity, SFU, TURN)
   - Olric, IPFS Kubo, IPFS Cluster, RQLite, CoreDNS, Caddy
   - Systemd namespace templates
-  - manifest.json with checksums
+  - manifest.json with checksums of every file, and manifest.sig
+
+The manifest is signed with your RootWallet (the agent's active account, through
+its wallet:sign capability). Nodes install only archives signed by an address in
+their trust anchor, /etc/orama/archive-signers, so signing is the default;
+--unsigned makes an archive for local inspection that no node will install.
+
+--signers rotates the trusted signers: nodes that install this build replace
+their list with the given addresses. The build must be signed by a signer the
+nodes trust now, and the list must include that signer; retiring a key takes
+two builds (the old key adds the new one, the new key then drops the old).
 
 The resulting archive can be pushed to nodes with 'orama node push'.
+
+Examples:
+  orama build
+  orama build --signers 0xYourWallet,0xNewOperator
+  orama build --unsigned --output /tmp/inspect.tar.gz
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--arch` | `amd64` | Target architecture (amd64, arm64) |
 | `--output` | — | Output archive path (default: /tmp/orama-<version>-linux-<arch>.tar.gz) |
-| `--sign` | `false` | Sign the manifest with rootwallet (requires rw in PATH) |
+| `--signers` | — | Rotate the trusted archive signers: nodes that install this build trust only these addresses (comma-separated) |
+| `--unsigned` | `false` | Do not sign the manifest (a local-only archive: nodes refuse it) |
 | `--verbose` | `false` | Verbose output |
 
 ### orama db
@@ -757,8 +775,18 @@ Subcommands: `add`, `current`, `list`, `remove`, `use`
 Add a custom environment
 
 ```
-orama env add <name> <gateway_url> [description]
+orama env add <name> <gateway_url> [description] [flags]
 ```
+
+Add a custom environment, or update one already configured.
+
+--ca-file trusts a PEM bundle for this environment's domain and every name
+under it, in addition to the system roots: a cluster on Let's Encrypt's
+staging CA, or on a private CA. It is not trusted for any other host.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ca-file` | — | PEM CA bundle to trust for this environment's domain only |
 
 ### orama env current
 
@@ -1107,10 +1135,16 @@ orama invite [flags]
 
 Create a single-use invite that lets a new node join the cluster.
 
-The invite carries the gateway to join and the fingerprint of its TLS
-certificate, so the joining node pins the cluster it was actually invited to
-rather than trusting whatever certificate it is first shown. There is nothing
-else to copy across.
+The invite names one node of the cluster: its public address, the domain to
+present to it, and the fingerprint of the TLS certificate it serves. The
+joining node connects to exactly that node and pins exactly that certificate,
+rather than resolving the cluster's domain — which reaches any nameserver,
+each with a certificate of its own — or trusting whatever certificate it is
+first shown. There is nothing else to copy across.
+
+The node is the lowest address the environment's domain resolves to, or the
+one named with --node. The token is minted through that node, on the same
+connection whose certificate is pinned.
 
 This is the same token as 'orama node invite', which does the same thing from
 an existing node instead of from here.
@@ -1118,7 +1152,8 @@ an existing node instead of from here.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--env` | — | Environment to invite into (default: active) |
-| `--expiry` | `1h0m0s` | How long the invite stays usable |
+| `--expiry` | `1h0m0s` | How long the invite stays usable (the gateway caps it at 1h) |
+| `--node` | — | Public IP of the node the invite names (default: the lowest address the environment's domain resolves to) |
 
 ### orama members
 
@@ -1543,25 +1578,27 @@ Operate Orama nodes, both the one on this machine and the fleet you own.
 
 Local, run on the node itself and needing root (sudo):
   install, uninstall, upgrade, start, stop, restart, status, logs, doctor,
-  report, invite, unlock, schema, migrate, migrate-raft-id, migrate-conf
+  report, invite, unlock, schema, migrate, migrate-raft-id, migrate-conf,
+  stage-archive (run by push)
 
 Remote, run from your machine and reaching nodes over SSH:
-  list, setup, enroll, push, rollout, clean, remove, wipe, recover-raft
+  list, setup, enroll, push, rollout, clean, remove, wipe, recover-raft,
+  dns delegation
 
 The remote commands are the same implementations as the top-level 'orama push',
 'orama rollout' and 'orama nodes'.
 
-Subcommands: `clean`, `doctor`, `enroll`, `install`, `invite`, `list`, `logs`, `migrate-conf`, `migrate-raft-id`, `migrate`, `push`, `recover-raft`, `remove`, `report`, `restart`, `rollout`, `schema`, `setup`, `start`, `status`, `stop`, `uninstall`, `unlock`, `upgrade`, `wipe`
+Subcommands: `clean`, `dns`, `doctor`, `enroll`, `install`, `invite`, `list`, `logs`, `migrate-conf`, `migrate-raft-id`, `push`, `recover-raft`, `remove`, `report`, `restart`, `rollout`, `schema`, `setup`, `stage-archive`, `start`, `status`, `stop`, `uninstall`, `unlock`, `upgrade`, `wipe`
 
 ### orama node clean
 
-Deprecated: use 'orama node wipe' or 'orama node decommission'
+Deprecated: use 'orama node wipe' or 'orama node remove'
 
 ```
 orama node clean [flags]
 ```
 
-DEPRECATED. Use 'orama node wipe' or 'orama node decommission'.
+DEPRECATED. Use 'orama node wipe' or 'orama node remove'.
 
 'clean' only ever erased the target. It said nothing to the rest of the cluster,
 so a cleaned node stayed a configured raft voter counted toward quorum, kept its
@@ -1570,13 +1607,13 @@ dns_nodes row. It also stopped only the legacy host unit names, leaving tenant
 'orama-namespace-*@*' units running under a deleted data directory.
 
   orama node wipe           erases a node (what clean did, fixed)
-  orama node decommission   removes one node from the cluster, then erases it
+  orama node remove   removes one node from the cluster, then erases it
 
 This command now runs 'wipe'.
 
 Examples:
   orama node wipe --env testnet --node 1.2.3.4
-  orama node decommission --env testnet --node 1.2.3.4
+  orama node remove --env testnet --node 1.2.3.4
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -1584,6 +1621,40 @@ Examples:
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
 | `--node` | — | Public IP of the node to wipe; omit to wipe every node in the environment |
 | `--nuclear` | `false` | Also remove shared binaries (rqlited, ipfs, caddy, ...) |
+
+### orama node dns
+
+Cluster DNS: what the outside world needs to reach its nameservers
+
+```
+orama node dns
+```
+
+Subcommands: `delegation`
+
+### orama node dns delegation
+
+Print the NS and glue records to create at the parent zone
+
+```
+orama node dns delegation [flags]
+```
+
+Print exactly the records the operator must create at the parent zone (or
+registrar) so the internet reaches this cluster's nameservers: one NS record
+per nameserver, and the glue A record that gives each nameserver its address.
+
+Nameserver slots (ns1, ns2, …) are claimed by the --nameserver nodes as they
+come up, so which address holds which name is only known to the cluster. This
+reads it from the cluster over SSH. Only slots whose glue the cluster has
+written are listed — the same set the cluster's own zone publishes.
+
+Run it again after adding or removing a nameserver, and update the parent
+zone to match. See docs/NAMESERVER_SETUP.md.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | — | Environment to read (devnet, testnet, …) [required] |
 
 ### orama node doctor
 
@@ -1642,18 +1713,29 @@ Run it on the node itself with sudo, or from your own machine with --remote to
 drive the install over SSH against --vps-ip. Which of the two happened used to
 be decided by whether you had used sudo.
 
+The build archive must be extracted at /opt/orama and signed by a wallet in the
+node's trust anchor, /etc/orama/archive-signers. A genesis install creates the
+anchor from --operator-wallet (required) before it verifies the archive; a
+joining node takes it from the cluster in the join response. With --remote,
+--archive names the build: it is verified on this machine against
+--operator-wallet before it is uploaded.
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--base-domain` | — | Base domain for deployment routing (e.g., dbrs.space) |
+| `--acme-ca` | — | ACME directory for TLS certificates: an https URL or letsencrypt-staging (test clusters that redeploy often); default Let's Encrypt production |
+| `--archive` | — | With --remote: the build archive to upload, verified here against --operator-wallet first |
+| `--base-domain` | — | Base domain for deployment routing (e.g., example.com) |
 | `--ca-fingerprint` | — | SHA-256 fingerprint of the gateway's TLS cert; the invite carries this, so it is only needed to override it |
 | `--domain` | — | Domain for HTTPS (auto-generated for non-nameserver nodes if omitted) |
 | `--dry-run` | `false` | Show what would be done without making changes |
 | `--environment` | — | Environment name (devnet, testnet, etc.) |
+| `--expect-archive-signers` | — | When joining: the archive signers the cluster must send (comma-separated); the archive is verified against them before the join |
 | `--force` | `false` | Force reconfiguration even if already installed |
 | `--ipfs-addrs` | — | Comma-separated multiaddrs of existing IPFS node |
 | `--ipfs-cluster-addrs` | — | Comma-separated multiaddrs of existing IPFS Cluster node |
 | `--ipfs-cluster-peer` | — | Peer ID of existing IPFS Cluster node |
 | `--ipfs-peer` | — | Peer ID of existing IPFS node to peer with |
+| `--join-sni` | — | Server name to present to --join; the invite carries it, so it is only needed to override it |
 | `--join` | — | Gateway to join; the invite carries this, so it is only needed to override it |
 | `--nameserver` | `false` | Make this node a nameserver (runs CoreDNS + Caddy) |
 | `--operator-wallet` | — | Operator wallet address |
@@ -1725,18 +1807,6 @@ Aliases: caddy, cluster, coredns, gateway, ipfs, ipfs-cluster, node, olric, rqli
 | `--since` | — | Show entries newer than this, e.g. -30min or "2 hours ago" (overrides --lines) |
 | `-f`, `--follow` | `false` | Stream new log lines as they arrive |
 | `-n`, `--lines` | `50` | How many lines of history to show |
-
-### orama node migrate
-
-Migrate from old unified setup (requires sudo)
-
-```
-orama node migrate [flags]
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--dry-run` | `false` | Show what would be migrated without making changes |
 
 ### orama node migrate-conf
 
@@ -1812,18 +1882,28 @@ each node in turn.
 
 'orama push' and 'orama node push' are the same command.
 
+--archive names the build: the path 'orama build' printed. There is no
+default — the newest archive in /tmp may be another checkout's build.
+
 Examples:
-  orama push --env devnet             # Fan out across the devnet nodes
-  orama push --env devnet --direct    # Upload to each node in turn
-  orama push --env devnet --node 1.2.3.4
-  orama push --host 1.2.3.4           # A node that is not in the inventory yet
+  orama push --env devnet --archive /tmp/orama-0.200.0-linux-amd64.tar.gz
+  orama push --env devnet --archive <path> --direct    # Upload to each node in turn
+  orama push --env devnet --archive <path> --node 1.2.3.4
+  orama push --host 1.2.3.4 --archive <path>           # A node not in the inventory yet
+  orama push --env devnet --archive <path> --trust-signers 0xYourWallet  # Nodes from before archive signing
+
+Each node verifies the archive with its installed orama before anything under
+/opt/orama changes: the manifest signature must recover to an address in the
+node's /etc/orama/archive-signers and every file must match the manifest.
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--archive` | — | The build archive to push (the path `orama build` printed) [required] |
 | `--direct` | `false` | Upload from here to each node in turn, instead of fanning out |
 | `--env` | — | Target environment (default: active) |
 | `--host` | — | Push to a node that is not in the inventory yet |
 | `--node` | — | Push to a single node IP from the inventory |
+| `--trust-signers` | — | Create the archive trust anchor on nodes that have none (installed before archive signing); never changes an existing one |
 | `--user` | — | SSH user for --host (default: root) |
 
 ### orama node recover-raft
@@ -1846,7 +1926,8 @@ What happens:
   2. Reset the kept node to a single-member cluster, preserving its data
   3. Start it and confirm it comes back as Leader with its data intact
   4. Delete raft.db, raft/, db.sqlite (+shm/wal) and rsnapshots on every other
-     node
+     node, and record the kept node as the member each one re-joins
+     (data/cluster-membership.json)
   5. Start them one at a time; each pulls a full snapshot from the kept node
   6. Verify cluster health
 
@@ -1971,9 +2052,10 @@ Examples:
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--archive` | — | With --no-build: the build archive to roll out |
 | `--delay` | `300` | Seconds a node has to rejoin the cluster after its upgrade before the rollout stops |
 | `--env` | — | Target environment (devnet, testnet) [required] |
-| `--no-build` | `false` | Skip the build step and reuse the existing archive |
+| `--no-build` | `false` | Skip the build step; roll out the archive named by --archive |
 | `--yes` | `false` | Execute the rollout plan instead of only printing it |
 
 ### orama node schema
@@ -1994,7 +2076,7 @@ with cryptic missing-column errors.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--dsn` | — | RQLite DSN (default: discover from node config or http://localhost:10100) |
+| `--dsn` | — | RQLite DSN (default: this node's index rqlite from /opt/orama/.orama/configs/node.yaml) |
 
 Subcommands: `apply`, `status`
 
@@ -2059,18 +2141,45 @@ Examples:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--archive` | — | Build archive to install (default: the newest in /tmp); a node already running this exact build is not re-uploaded |
+| `--acme-ca` | — | ACME directory for the node's TLS certificates (passed to node install): an https URL or letsencrypt-staging |
+| `--archive` | — | Build archive to install — the path `orama build` printed [required]; a node already running this exact build is not re-uploaded |
 | `--base-domain` | — | Base domain for the network |
 | `--bootstrap-key` | — | SSH private key that opens the VPS today (key-only images, e.g. --user ubuntu); used once to install the RootWallet key, never stored |
 | `--env` | — | Target environment (default: active) |
-| `--gateway` | — | Gateway URL for invite tokens (e.g., http://1.2.3.4) |
+| `--gateway` | — | Gateway URL of the cluster to join (default: the environment's): its domain, e.g. https://orama-devnet.network; the invite is minted through one of its nodes and pins that node's certificate |
 | `--genesis` | `false` | Create a new cluster (first node) |
 | `--host-key` | — | Expected SSH host-key fingerprint (SHA256:...) of the VPS; omit to confirm it interactively |
 | `--ip` | — | Public IP address of the VPS (required) |
 | `--join-via` | — | user@ip of a node already in the cluster; the invite is minted there over SSH (no 'orama auth login' needed) |
-| `--password` | — | One-time password for initial SSH access |
+| `--password` | `false` | Bootstrap over password login; the password is read from your RootWallet vault login for the IP (rw vault add <ip>), never from the command line |
 | `--role` | `node` | Node role: node or nameserver |
 | `--user` | `root` | SSH user on the VPS |
+
+### orama node stage-archive
+
+Verify a pushed build archive and put it in place (run by 'orama push')
+
+```
+orama node stage-archive [flags]
+```
+
+Verify a build archive against this node's trust anchor, /etc/orama/archive-signers,
+and only then replace the archive files under /opt/orama with it.
+
+'orama push' runs this on every node with the node's installed orama. The
+archive is extracted into a private directory, its manifest signature must
+recover to a trusted signer and every file must match the signed manifest;
+anything else leaves /opt/orama untouched. The replacement is undone if any
+step of it fails, and holds the lock install and upgrade take on /opt/orama.
+
+--trust-signers creates the anchor on a node installed before archives were
+signed, and only after the archive has verified against those addresses. It
+never changes an existing anchor.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--archive` | — | The pushed archive on this node [required] |
+| `--trust-signers` | — | Create a missing trust anchor with these addresses (nodes installed before archive signing only) |
 
 ### orama node start
 
@@ -2165,6 +2274,7 @@ Uses rolling restart with quorum safety to ensure zero downtime.
 | `--force` | `false` | Reconfigure all settings |
 | `--nameserver` | `false` | Make this node a nameserver (uses saved preference if not specified) |
 | `--node` | — | Upgrade a single node IP only |
+| `--public-ip` | — | This node's public IP, recorded as node.public_ip (default: the recorded one, else the source address of the default route) |
 | `--restart` | `false` | Automatically restart services after upgrade |
 | `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
 | `--yes` | `false` | Execute the rolling upgrade plan (without it the plan is printed and nothing is restarted) |
@@ -2181,7 +2291,7 @@ Remove all Orama data, services and configuration from remote nodes.
 Tor is left installed (its config and state are removed); --nuclear purges it.
 
 Target-side only: this says nothing to the cluster. If the node is still a
-member, use 'orama node decommission' instead — otherwise the survivors keep
+member, use 'orama node remove' instead — otherwise the survivors keep
 counting it toward quorum and re-adding its WireGuard peer.
 
 This is a DESTRUCTIVE operation. Use --force to skip confirmation.
@@ -2291,18 +2401,28 @@ each node in turn.
 
 'orama push' and 'orama node push' are the same command.
 
+--archive names the build: the path 'orama build' printed. There is no
+default — the newest archive in /tmp may be another checkout's build.
+
 Examples:
-  orama push --env devnet             # Fan out across the devnet nodes
-  orama push --env devnet --direct    # Upload to each node in turn
-  orama push --env devnet --node 1.2.3.4
-  orama push --host 1.2.3.4           # A node that is not in the inventory yet
+  orama push --env devnet --archive /tmp/orama-0.200.0-linux-amd64.tar.gz
+  orama push --env devnet --archive <path> --direct    # Upload to each node in turn
+  orama push --env devnet --archive <path> --node 1.2.3.4
+  orama push --host 1.2.3.4 --archive <path>           # A node not in the inventory yet
+  orama push --env devnet --archive <path> --trust-signers 0xYourWallet  # Nodes from before archive signing
+
+Each node verifies the archive with its installed orama before anything under
+/opt/orama changes: the manifest signature must recover to an address in the
+node's /etc/orama/archive-signers and every file must match the manifest.
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--archive` | — | The build archive to push (the path `orama build` printed) [required] |
 | `--direct` | `false` | Upload from here to each node in turn, instead of fanning out |
 | `--env` | — | Target environment (default: active) |
 | `--host` | — | Push to a node that is not in the inventory yet |
 | `--node` | — | Push to a single node IP from the inventory |
+| `--trust-signers` | — | Create the archive trust anchor on nodes that have none (installed before archive signing); never changes an existing one |
 | `--user` | — | SSH user for --host (default: root) |
 
 ### orama rollout
@@ -2328,9 +2448,10 @@ Examples:
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--archive` | — | With --no-build: the build archive to roll out |
 | `--delay` | `300` | Seconds a node has to rejoin the cluster after its upgrade before the rollout stops |
 | `--env` | — | Target environment (devnet, testnet) [required] |
-| `--no-build` | `false` | Skip the build step and reuse the existing archive |
+| `--no-build` | `false` | Skip the build step; roll out the archive named by --archive |
 | `--yes` | `false` | Execute the rollout plan instead of only printing it |
 
 ### orama sandbox
@@ -2347,13 +2468,19 @@ Setup (one-time):
   orama sandbox setup
 
 Usage:
-  orama sandbox create [--name <name>]     Create a new 5-node cluster
+  orama sandbox create [--name <name>] [--archive <path>]
+                                           Create a new 5-node cluster
   orama sandbox destroy [--name <name>]    Tear down a cluster
   orama sandbox list                       List active sandboxes
   orama sandbox status [--name <name>]     Show cluster health
-  orama sandbox rollout [--name <name>]    Build + push + rolling upgrade
+  orama sandbox rollout [--name <name>] [--archive <path>]
+                                           Build + push + rolling upgrade
   orama sandbox ssh <node-number>          SSH into a sandbox node (1-5)
   orama sandbox reset                      Delete all infra and config to start fresh
+
+The archive (--archive, or this checkout built now) must be signed by the
+RootWallet account that is unlocked: it is the only signer a sandbox trusts.
+Create and rollout install it the way 'orama node setup' and 'orama push' do.
 
 Subcommands: `create`, `destroy`, `list`, `reset`, `rollout`, `setup`, `ssh`, `status`
 
@@ -2367,6 +2494,7 @@ orama sandbox create [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--archive` | — | Build archive to deploy (default: build this checkout now) |
 | `--name` | — | Sandbox name (random if not specified) |
 
 ### orama sandbox destroy
@@ -2414,6 +2542,7 @@ orama sandbox rollout [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--archive` | — | Build archive to roll out (default: build this checkout now) |
 | `--name` | — | Sandbox name (uses active if not specified) |
 
 ### orama sandbox setup

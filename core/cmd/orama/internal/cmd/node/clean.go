@@ -9,9 +9,9 @@ var cleanFlags decommission.WipeFlags
 
 var cleanCmd = &cobra.Command{
 	Use:        "clean",
-	Short:      "Deprecated: use 'orama node wipe' or 'orama node decommission'",
-	Deprecated: "use 'orama node wipe' to erase a node, or 'orama node decommission' to remove one from the cluster and erase it.",
-	Long: `DEPRECATED. Use 'orama node wipe' or 'orama node decommission'.
+	Short:      "Deprecated: use 'orama node wipe' or 'orama node remove'",
+	Deprecated: "use 'orama node wipe' to erase a node, or 'orama node remove' to remove one from the cluster and erase it.",
+	Long: `DEPRECATED. Use 'orama node wipe' or 'orama node remove'.
 
 'clean' only ever erased the target. It said nothing to the rest of the cluster,
 so a cleaned node stayed a configured raft voter counted toward quorum, kept its
@@ -20,13 +20,13 @@ dns_nodes row. It also stopped only the legacy host unit names, leaving tenant
 'orama-namespace-*@*' units running under a deleted data directory.
 
   orama node wipe           erases a node (what clean did, fixed)
-  orama node decommission   removes one node from the cluster, then erases it
+  orama node remove   removes one node from the cluster, then erases it
 
 This command now runs 'wipe'.
 
 Examples:
   orama node wipe --env testnet --node 1.2.3.4
-  orama node decommission --env testnet --node 1.2.3.4`,
+  orama node remove --env testnet --node 1.2.3.4`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return decommission.RunWipe(&cleanFlags)
 	},

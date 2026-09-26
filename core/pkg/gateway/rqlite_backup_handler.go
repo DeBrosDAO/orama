@@ -121,11 +121,9 @@ func (g *Gateway) rqliteImportHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // rqliteBaseURL returns the raw RQLite HTTP URL for proxying native API calls.
+// rqlite_dsn is required by ValidateConfig and carries the credentials.
 func (g *Gateway) rqliteBaseURL() string {
 	dsn := g.cfg.RQLiteDSN
-	if dsn == "" {
-		dsn = "http://localhost:10100"
-	}
 	if idx := strings.Index(dsn, "?"); idx != -1 {
 		dsn = dsn[:idx]
 	}

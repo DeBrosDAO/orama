@@ -28,6 +28,11 @@ secrets/
 core/phantom-auth/
 bin/
 core/bin/
+# `go build ./cmd/<name>` run inside core/ drops the binary here
+/core/orama
+/core/gateway
+/core/privhelper
+/core/pubsub
 core/bin-linux/
 core/dist/
 core/orama-cli-linux

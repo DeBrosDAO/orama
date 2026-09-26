@@ -11,9 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
@@ -358,6 +356,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		logger.ComponentError(logging.ComponentGeneral, "failed to create dependencies", zap.Error(err))
 		return nil, err
 	}
+	// Everything below uses deps.AuthService unconditionally — the audit
+	// trail, the workload-token minter, the auth routes. It is never nil:
+	// initializeBackends refuses to return Dependencies without one.
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating gateway instance...")
 	shutdownCtx, shutdown := context.WithCancel(context.Background())
@@ -413,7 +414,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// mid-session auth refresh on the open WS (bugboard #321 control
 	// frame). Skipped when either dep is nil — the handler then acks
 	// "not supported" and the client falls back to legacy reconnect.
-	if gw.serverlessHandlers != nil && gw.authService != nil {
+	if gw.serverlessHandlers != nil {
 		gw.serverlessHandlers.SetJWTVerifier(gw.authService)
 	}
 
@@ -442,9 +443,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	}
 	if registryClient != nil {
 		gw.authClient = registryClient
-		if deps.AuthService != nil {
-			deps.AuthService.SetAPIKeyRegistry(registryClient)
-		}
+		deps.AuthService.SetAPIKeyRegistry(registryClient)
 		logger.ComponentInfo(logging.ComponentGeneral, "Global auth client connected")
 	}
 
@@ -458,25 +457,15 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.pubsubHandlers.SetOnPublish(func(ctx context.Context, namespace, topic string, data []byte) {
 			deps.PubSubDispatcher.Dispatch(ctx, namespace, topic, data, 0)
 		})
-		// Subscribe the dispatcher to libp2p pubsub for every literal
-		// trigger pattern so WASM `oh.PubSubPublish` calls reach trigger
-		// handlers (bugboard #282 — pre-fix, the dispatcher only fired
-		// from the HTTP publish hook above, so internal WASM publishes
-		// silently dropped every subscriber). Stop is called from
-		// lifecycle.Close.
-		if err := deps.PubSubDispatcher.Start(context.Background()); err != nil {
-			logger.ComponentWarn(logging.ComponentGeneral,
-				"PubSubDispatcher Start failed (libp2p subscribe path disabled — HTTP-publish triggers still work)",
-				zap.Error(err))
-		}
+		// The dispatcher's libp2p subscriptions and the cron scheduler read
+		// their trigger tables, so they start once the schema is up
+		// (post_schema.go). Stop is called from lifecycle.Close.
 	}
 	if deps.PersistentWSManager != nil {
 		gw.persistentWSManager = deps.PersistentWSManager
 	}
 	if deps.CronScheduler != nil {
 		gw.cronScheduler = deps.CronScheduler
-		// Background goroutine — Stop is called from gateway.Close.
-		gw.cronScheduler.Start(context.Background())
 	}
 
 	// Push notification handlers — disabled when no provider is configured.
@@ -507,7 +496,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// A push registration made from a device-bound session ends with the
 	// device: the store asks the registry which devices are revoked before it
 	// lists or sends. Same optional-capability shape as SetHolder above.
-	if gated, ok := deps.PushDeviceStore.(interface{ SetSessionDeviceGate(push.SessionDeviceGate) }); ok && deps.AuthService != nil {
+	if gated, ok := deps.PushDeviceStore.(interface{ SetSessionDeviceGate(push.SessionDeviceGate) }); ok {
 		gated.SetSessionDeviceGate(deps.AuthService.RevokedDevices)
 	}
 
@@ -552,66 +541,33 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		}, deps.ORMClient, deps.GlobalORMClient)
 	}
 
-	if deps.AuthService != nil {
-		// Create adapter for auth handlers to use the client
-		authClientAdapter := &authClientAdapter{client: deps.Client}
-		gw.authHandlers = authhandlers.NewHandlers(
-			logger,
-			deps.AuthService,
-			authClientAdapter,
-			cfg.ClientNamespace,
-			gw.withInternalAuth,
-		)
+	// Create adapter for auth handlers to use the client
+	authClientAdapter := &authClientAdapter{client: deps.Client}
+	gw.authHandlers = authhandlers.NewHandlers(
+		logger,
+		deps.AuthService,
+		authClientAdapter,
+		ownNamespace(cfg),
+		gw.withInternalAuth,
+	)
 
-		// Wire the global-registry API-key querier (gw.apiKeyDB(), preferring
-		// gw.authClient when GlobalRQLiteDSN is configured, else gw.client —
-		// see apikey_querier.go) into the JWT-exchange handler's self-query
-		// fallback, so it resolves against the SAME global registry the auth
-		// middleware uses. API keys are only ever created in the global/core
-		// registry, never in a namespace's own RQLite, so every gateway must
-		// validate against it.
-		gw.authHandlers.SetAPIKeyDB(&authDatabaseAdapter{db: gw.apiKeyDB()})
+	// Wire the global-registry API-key querier (gw.apiKeyDB(), preferring
+	// gw.authClient when GlobalRQLiteDSN is configured, else gw.client —
+	// see apikey_querier.go) into the JWT-exchange handler's self-query
+	// fallback, so it resolves against the SAME global registry the auth
+	// middleware uses. API keys are only ever created in the global/core
+	// registry, never in a namespace's own RQLite, so every gateway must
+	// validate against it.
+	gw.authHandlers.SetAPIKeyDB(&authDatabaseAdapter{db: gw.apiKeyDB()})
 
-		// A namespace gateway's own database is not the key registry, and the
-		// api_keys rows in it are leftovers — the pre-#163 ones being raw
-		// credentials the tenant can read. They are removed here, on the only
-		// gateways where the local database is provably not the registry.
-		if usesSeparateAPIKeyRegistry(cfg) && gw.client != nil {
-			if n, perr := purgeTenantPlaintextAPIKeys(context.Background(), gw.client.Database()); perr != nil {
-				logger.ComponentWarn(logging.ComponentGeneral,
-					"plaintext API keys are still on disk in this namespace's own database", zap.Error(perr))
-			} else if n > 0 {
-				logger.ComponentInfo(logging.ComponentGeneral,
-					"Removed leftover plaintext API keys from this namespace's database", zap.Int("count", n))
-			}
-		}
+	// Expired revocations deny nothing. Pruning keeps the table the size
+	// of the revocations still in flight rather than growing forever.
+	deps.AuthService.Revocations().StartPruning(context.Background())
 
-		if strings.TrimSpace(cfg.APIKeyHMACSecret) != "" {
-			n, merr := deps.AuthService.MigratePlaintextAPIKeys(context.Background())
-			if merr != nil {
-				return nil, fmt.Errorf("migrate plaintext API keys: %w", merr)
-			}
-			if n > 0 {
-				logger.ComponentInfo(logging.ComponentGeneral, "Hashed leftover plaintext API keys",
-					zap.Int("count", n))
-			}
-		}
-		// Expired revocations deny nothing. Pruning keeps the table the size
-		// of the revocations still in flight rather than growing forever.
-		deps.AuthService.Revocations().StartPruning(context.Background())
-
-		// Same reason, different table: every authenticated request can add to
-		// the audit trail, and it is replicated to every node, so without this
-		// it grows for ever (the shape of bug-237).
-		deps.AuthService.Audit().StartPruning(context.Background())
-
-		if on, oerr := deps.AuthService.RevokeOrphanedAPIKeys(context.Background()); oerr != nil {
-			logger.ComponentWarn(logging.ComponentGeneral, "revoke orphaned API keys failed", zap.Error(oerr))
-		} else if on > 0 {
-			logger.ComponentInfo(logging.ComponentGeneral, "Revoked orphaned API keys",
-				zap.Int("count", on))
-		}
-	}
+	// Same reason, different table: every authenticated request can add to
+	// the audit trail, and it is replicated to every node, so without this
+	// it grows for ever (the shape of bug-237).
+	deps.AuthService.Audit().StartPruning(context.Background())
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)
 	gw.mwCache = newMiddlewareCache(CredentialStaleness)
@@ -627,9 +583,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	// Challenges are Raft-replicated rows that stop being claimable the moment
 	// they expire, and nothing removed them: the table only ever grew.
-	if deps.AuthService != nil {
-		deps.AuthService.StartNonceReaper(gw.shutdownCtx)
-	}
+	deps.AuthService.StartNonceReaper(gw.shutdownCtx)
 
 	// Per-namespace: feature #69 — backed by an LRU manager with
 	// per-namespace overrides via /v1/namespace/rate-limit (config in
@@ -665,20 +619,14 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// Nothing derived from the cluster secret is involved: a node is
 		// verified against the key it enrolled, and an enrolment against the
 		// key carried inside its own peer id.
-		var nodeAudit *auth.AuditLog
-		if deps.AuthService != nil {
-			nodeAudit = deps.AuthService.Audit()
-		}
 		gw.nodeAPIHandler = nodeapihandlers.NewHandler(logger.Logger, deps.ORMClient,
-			nodeapihandlers.NewCredentials(deps.ORMClient), nodeAudit)
+			nodeapihandlers.NewCredentials(deps.ORMClient), deps.AuthService.Audit())
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.joinHandler.SetAuditLog(deps.AuthService.Audit())
 		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.vaultHandlers = vaulthandlers.NewHandlers(logger, deps.Client)
 		gw.operatorHandler = operatorhandlers.NewHandler(logger.Logger, deps.ORMClient)
-		if deps.AuthService != nil {
-			gw.operatorHandler.SetAuditLog(deps.AuthService.Audit())
-		}
+		gw.operatorHandler.SetAuditLog(deps.AuthService.Audit())
 	}
 
 	// Initialize deployment system.
@@ -688,14 +636,10 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// secret. Without that secret there is no key, so the deployment system
 	// does not start rather than storing every tenant's credentials in the
 	// clear in a Raft-replicated table.
-	if gw.encHolder == nil {
-		gw.encHolder = bootstrapEncryptionRoot(cfg, deps)
-	}
-	envIKM := gw.encHolder.Get().CurrentIKM
-	if envIKM == "" {
-		envIKM = cfg.ClusterSecret
-	}
-	envCodec, envCodecErr := deployments.NewEnvCodec(envIKM)
+	// gw.encHolder is deps.EncHolder, which NewDependencies guarantees: the
+	// serverless init that loads it is fatal, and a root it loads always has
+	// a current IKM (secrets.LoadOrMaterialize).
+	envCodec, envCodecErr := deployments.NewEnvCodec(gw.encHolder.Get().CurrentIKM)
 	if envCodecErr != nil {
 		logger.Logger.Error("deployments are unavailable on this gateway: without an encryption root "+
 			"there is no key to encrypt deployment environments with",
@@ -711,16 +655,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 		// Create deployment service
 		baseDomain := gw.cfg.BaseDomain
-		if baseDomain == "" {
-			baseDomain = "dbrs.space"
-		}
 
 		// Create deployment service components
 		gw.portAllocator = deployments.NewPortAllocator(deps.ORMClient, logger.Logger)
 		gw.homeNodeManager = deployments.NewHomeNodeManager(deps.ORMClient, gw.portAllocator, logger.Logger)
 		gw.replicaManager = deployments.NewReplicaManager(deps.ORMClient, gw.homeNodeManager, gw.portAllocator, logger.Logger)
 		gw.processManager = process.NewManager(logger.Logger, process.Config{
-			EnvDir:     deploymentEnvDir(cfg.DataDir),
+			Stager:     process.HelperStager{},
 			BaseDomain: baseDomain,
 		})
 		// What a deployment runs as. It used to run as whatever key somebody
@@ -756,10 +697,13 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			logger.Logger,
 		)
 
-		// Determine base deploy path from config
-		baseDeployPath := filepath.Join(cfg.DataDir, "deployments")
-		if cfg.DataDir == "" {
-			baseDeployPath = "" // Let handlers use default
+		// Where deployments are extracted: exactly the directory the
+		// orama-deploy-{go,node,npm}@ templates run them from
+		// (<oramaDir>/data/deployments/%i). It used to be <oramaDir>/deployments,
+		// which no unit reads and the hardened gateway cannot write.
+		baseDeployPath := ""
+		if cfg.DataDir != "" {
+			baseDeployPath = constants.DeploymentsBaseDir(cfg.DataDir)
 		}
 
 		gw.nextjsHandler = deploymentshandlers.NewNextJSHandler(
@@ -842,11 +786,17 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		)
 
 		// SQLite handlers
+		// Tenant SQLite databases live under <oramaDir>/data/sqlite, inside the
+		// gateway unit's writable paths.
+		sqliteBase := ""
+		if cfg.DataDir != "" {
+			sqliteBase = constants.SQLiteBaseDir(cfg.DataDir)
+		}
 		gw.sqliteHandler = sqlitehandlers.NewSQLiteHandler(
 			deps.ORMClient,
 			gw.homeNodeManager,
 			logger.Logger,
-			cfg.DataDir,
+			sqliteBase,
 			cfg.NodePeerID,
 		)
 
@@ -908,7 +858,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	// Initialize peer discovery for namespace gateways
 	// This allows the 3 namespace gateway instances to discover each other
-	if cfg.ClientNamespace != "" && cfg.ClientNamespace != "default" && deps.Client != nil {
+	if servesNamedNamespace(cfg.ClientNamespace) && deps.Client != nil {
 		logger.ComponentInfo(logging.ComponentGeneral, "Initializing peer discovery for namespace gateway...",
 			zap.String("namespace", cfg.ClientNamespace))
 
@@ -1066,15 +1016,6 @@ func shouldRegisterWebRTCRoutes(cfg *Config) bool {
 // proxy to a local SFU.
 func shouldServeTURNCredentials(cfg *Config) bool {
 	return cfg.TURNSecret != ""
-}
-
-// getLocalSubscribers returns all local subscribers for a given topic and namespace
-func (g *Gateway) getLocalSubscribers(topic, namespace string) []*localSubscriber {
-	topicKey := namespace + "." + topic
-	if subs, ok := g.localSubscribers[topicKey]; ok {
-		return subs
-	}
-	return nil
 }
 
 // SetClusterProvisioner sets the cluster provisioner for namespace cluster management.
@@ -1604,11 +1545,15 @@ func connectAPIKeyRegistry(cfg *Config, logger *logging.ColoredLogger) (client.N
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating global auth client...",
-		zap.String("global_dsn", cfg.GlobalRQLiteDSN),
+		zap.String("global_dsn", rqlite.RedactDSN(cfg.GlobalRQLiteDSN)),
 	)
 
 	authCfg := client.DefaultClientConfig("default") // the registry is not a tenant namespace
-	authCfg.DatabaseEndpoints = []string{injectRQLiteAuth(cfg.GlobalRQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)}
+	registryDSN, err := credentialedRQLiteDSN(cfg.GlobalRQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)
+	if err != nil {
+		return nil, fmt.Errorf("global_rqlite_dsn: %w", err)
+	}
+	authCfg.DatabaseEndpoints = []string{registryDSN}
 	if len(cfg.BootstrapPeers) > 0 {
 		authCfg.BootstrapPeers = cfg.BootstrapPeers
 	}
@@ -1637,15 +1582,4 @@ func connectAPIKeyRegistry(cfg *Config, logger *logging.ColoredLogger) (client.N
 	}
 
 	return registryClient, nil
-}
-
-// deploymentEnvDir is where the deployments' environment files live: beside
-// their code, not inside it. A deployment's own directory has to be readable by
-// the unprivileged user the deployment runs as, and its environment must not
-// be.
-func deploymentEnvDir(dataDir string) string {
-	if strings.TrimSpace(dataDir) == "" {
-		return ""
-	}
-	return filepath.Join(dataDir, "deployment-env")
 }

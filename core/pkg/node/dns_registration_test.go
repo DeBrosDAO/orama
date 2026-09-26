@@ -156,3 +156,61 @@ func registrationSource(t *testing.T) string {
 	}
 	return string(raw)
 }
+
+// The address a node publishes is the one install recorded, not a guess.
+func TestGetNodeIPAddress_usesConfiguredPublicIP(t *testing.T) {
+	n := testNodeForDNS(t)
+	n.config.Node.PublicIP = "203.0.113.7"
+
+	ip, err := n.getNodeIPAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ip != "203.0.113.7" {
+		t.Errorf("ip = %q, want the configured node.public_ip", ip)
+	}
+}
+
+// With no node.public_ip there is nothing to publish, and the error says how
+// to record one instead of guessing.
+func TestGetNodeIPAddress_emptyIsAnActionableError(t *testing.T) {
+	n := testNodeForDNS(t)
+
+	_, err := n.getNodeIPAddress()
+	if err == nil {
+		t.Fatal("a node with no node.public_ip reported an address")
+	}
+	for _, want := range []string{"node.public_ip", "orama node upgrade", "--public-ip"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// An IPv4-mapped spelling is published as the dotted quad an A record holds.
+func TestGetNodeIPAddress_canonicalisesMappedIPv4(t *testing.T) {
+	n := testNodeForDNS(t)
+	n.config.Node.PublicIP = "::ffff:203.0.113.7"
+	ip, err := n.getNodeIPAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ip != "203.0.113.7" {
+		t.Errorf("ip = %q, want 203.0.113.7", ip)
+	}
+}
+
+// node.yaml is not written by this process, so what it says is validated
+// before it is published in DNS: private, overlay, IPv6 and garbage values
+// are refused.
+func TestGetNodeIPAddress_rejectsUnusableValues(t *testing.T) {
+	for _, bad := range []string{"10.0.0.3", "192.168.1.5", "127.0.0.1", "100.64.0.1", "2001:db8::1", "not-an-ip", " 203.0.113.7"} {
+		t.Run(bad, func(t *testing.T) {
+			n := testNodeForDNS(t)
+			n.config.Node.PublicIP = bad
+			if ip, err := n.getNodeIPAddress(); err == nil {
+				t.Errorf("node.public_ip %q was accepted as %q", bad, ip)
+			}
+		})
+	}
+}

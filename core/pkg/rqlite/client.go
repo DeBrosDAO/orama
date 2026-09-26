@@ -65,8 +65,8 @@ func NewClientWithDSN(db *sql.DB, dsn string) (Client, error) {
 	// parse leaves both disabled (gate nil, freshHTTP nil) rather than failing
 	// construction — none-reads then behave exactly as before this change.
 	if parts, ok := parseDSNParts(dsn); ok {
-		c.localStatusPort = parts.port
-		c.staleGate = newFollowerFreshnessGate(parts.port, LocalFollowerFresh, 0)
+		c.localStatus = Endpoint{Host: parts.hostname, Port: parts.port, Username: parts.user, Password: parts.pass}
+		c.staleGate = newFollowerFreshnessGate(c.localStatus, LocalFollowerFresh, 0)
 		c.freshScheme = parts.scheme
 		c.freshHost = parts.host
 		c.freshUser = parts.user
@@ -79,11 +79,12 @@ func NewClientWithDSN(db *sql.DB, dsn string) (Client, error) {
 // dsnParts holds the components of a parsed rqlite DSN needed by the freshness
 // gate and the native none+freshness read path.
 type dsnParts struct {
-	scheme string
-	host   string // host:port (the serving node we POST reads to)
-	port   int    // numeric port for the local /status query
-	user   string
-	pass   string
+	scheme   string
+	host     string // host:port (the serving node we POST reads to)
+	hostname string // host without the port, for the /status query
+	port     int    // numeric port for the local /status query
+	user     string
+	pass     string
 }
 
 // parseDSNParts parses a standard rqlite DSN ("http://user:pass@host:port")
@@ -103,7 +104,7 @@ func parseDSNParts(dsn string) (dsnParts, bool) {
 	if err != nil {
 		return dsnParts{}, false
 	}
-	parts := dsnParts{scheme: u.Scheme, host: u.Host, port: port}
+	parts := dsnParts{scheme: u.Scheme, host: u.Host, hostname: u.Hostname(), port: port}
 	if u.User != nil {
 		parts.user = u.User.Username()
 		parts.pass, _ = u.User.Password()
@@ -184,10 +185,10 @@ type client struct {
 	// to the weak conn (always correct, just slower).
 	connNone *gorqlite.Connection
 
-	// localStatusPort is the rqlite HTTP port of the LOCAL serving node, parsed
-	// from the DSN. Used by the freshness gate to query /status. Zero when the
-	// DSN had no usable port (gate disabled).
-	localStatusPort int
+	// localStatus is the serving rqlite node named by the DSN (address and
+	// credentials). The freshness gate queries its /status. Zero when the DSN
+	// had no usable address (gate disabled).
+	localStatus Endpoint
 	// staleGate gates none-reads on local-follower freshness (#1022). nil
 	// disables gating (NewClient / NewClientWithConn, or an unparseable DSN) —
 	// none-reads then behave exactly as before this change.

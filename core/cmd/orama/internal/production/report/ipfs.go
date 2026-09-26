@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"io"
 	"net/http"
 	"os"
@@ -55,10 +57,16 @@ func collectIPFS() *IPFSReport {
 	//    The /peers endpoint does a synchronous round-trip to ALL cluster peers,
 	//    so it can be slow if some peers are unreachable (ghost WG entries, etc.).
 	//    Use a generous timeout and fall back to /id if /peers times out.
-	{
+	//    The REST API requires the password derived from the cluster secret; it
+	//    used to be asked on 9094, where nothing listens, so these were empty.
+	clusterPassword, clusterErr := ipfs.LocalClusterRESTPassword()
+	if clusterErr != nil {
+		r.ClusterError = clusterErr.Error()
+	}
+	if clusterErr == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if body, err := httpGet(ctx, "http://localhost:9094/peers"); err == nil {
+		if body, err := clusterGet(ctx, "/peers", clusterPassword); err == nil {
 			var peers []interface{}
 			if err := json.Unmarshal(body, &peers); err == nil {
 				r.ClusterPeerCount = len(peers)
@@ -67,10 +75,10 @@ func collectIPFS() *IPFSReport {
 	}
 	// Fallback: if /peers returned 0 (timeout or error), try /id which returns
 	// cached cluster_peers instantly without contacting other nodes.
-	if r.ClusterPeerCount == 0 {
+	if clusterErr == nil && r.ClusterPeerCount == 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		if body, err := httpGet(ctx, "http://localhost:9094/id"); err == nil {
+		if body, err := clusterGet(ctx, "/id", clusterPassword); err == nil {
 			var resp struct {
 				ClusterPeers []string `json:"cluster_peers"`
 			}
@@ -113,10 +121,10 @@ func collectIPFS() *IPFSReport {
 	}
 
 	// 7. ClusterVersion: GET /id
-	{
+	if clusterErr == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		if body, err := httpGet(ctx, "http://localhost:9094/id"); err == nil {
+		if body, err := clusterGet(ctx, "/id", clusterPassword); err == nil {
 			var resp struct {
 				Version string `json:"version"`
 			}
@@ -167,5 +175,24 @@ func ipfsPost(url string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
+	return io.ReadAll(resp.Body)
+}
+
+// clusterGet GETs path from this node's IPFS Cluster REST API with its
+// basic-auth password.
+func clusterGet(ctx context.Context, path, password string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, constants.LocalIPFSClusterURL()+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(ipfs.ClusterRESTUser, password)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("IPFS Cluster %s: HTTP %d", path, resp.StatusCode)
+	}
 	return io.ReadAll(resp.Body)
 }

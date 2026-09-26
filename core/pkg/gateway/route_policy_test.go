@@ -107,8 +107,6 @@ var publicRoutes = []string{
 	"/v1/internal/wg/peers",
 	"/v1/invoke/",
 	"/v1/namespace/status",
-	"/v1/network/peers",
-	"/v1/network/status",
 	"/v1/node/enroll",
 	"/v1/status",
 	"/v1/vault/health",

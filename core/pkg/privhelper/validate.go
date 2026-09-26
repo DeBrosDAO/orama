@@ -10,9 +10,13 @@
 // documentation warns that `*` in an argument matches spaces and further
 // arguments, so `ufw allow *` granted any ufw rule at all.
 //
-// sudoers now grants one binary, orama-privhelper, with no argument pattern.
-// Everything it will do is decided here, by exact parsing of each argument,
-// and anything else is refused before a process is started.
+// Neither sudo nor sudoers is involved any more: sudo cannot gain root inside
+// a unit that has no_new_privs, which systemd implies for orama-node's
+// sandboxing. orama-privhelper is a socket-activated root service
+// (orama-privhelper.socket, root:orama 0660); callers hand it a request
+// through `orama-privhelper call`. Everything it will do is decided here, by
+// exact parsing of each argument, and anything else is refused before a
+// process is started.
 package privhelper
 
 import (
@@ -21,7 +25,7 @@ import (
 	"strconv"
 )
 
-// Path is where the installer puts the helper; sudoers names exactly this file.
+// Path is where the installer puts the helper binary.
 const Path = "/usr/local/bin/orama-privhelper"
 
 // Tools the helper runs.
@@ -48,6 +52,9 @@ var (
 
 // hostTURNUnit is the shared, host-level TURN server (not a namespace instance).
 const hostTURNUnit = "orama-turn.service"
+
+// wgQuickUnit is the pre-namespace WireGuard unit.
+const wgQuickUnit = "wg-quick@wg0.service"
 
 // legacyUnits are the pre-namespace host units that the index migration stops
 // and disables once their @index replacement runs. They may only be stopped or
@@ -79,8 +86,14 @@ func Validate(argv []string) (Invocation, error) {
 		err = validateSystemctl(args)
 	case ToolUFW:
 		err = validateUFW(args)
+	case ToolWireGuard:
+		err = validateWireGuard(args)
+	case ToolDeploy:
+		err = validateDeploy(args)
+	case ToolUnitEnv:
+		err = validateUnitEnv(args)
 	default:
-		err = fmt.Errorf("tool %q is not allowed (allowed: %s, %s)", tool, ToolSystemctl, ToolUFW)
+		err = fmt.Errorf("tool %q is not allowed (allowed: %s, %s, %s, %s, %s)", tool, ToolSystemctl, ToolUFW, ToolWireGuard, ToolDeploy, ToolUnitEnv)
 	}
 	if err != nil {
 		return Invocation{}, err
@@ -109,6 +122,10 @@ func validateSystemctl(args []string) error {
 	switch {
 	case namespaceUnit.MatchString(unit), deployUnit.MatchString(unit), unit == hostTURNUnit:
 		return nil
+	case unit == wgQuickUnit && verb != "disable":
+		// Stopping it runs wg-quick down and cuts the node off the mesh; the
+		// index migration only ever disables it.
+		return fmt.Errorf("%s may only be disabled", unit)
 	case legacyUnits[unit] && (verb == "stop" || verb == "disable"):
 		return nil
 	case legacyUnits[unit]:

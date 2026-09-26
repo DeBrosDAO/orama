@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // List prints all sandbox clusters.
@@ -109,7 +110,7 @@ func Status(name string) error {
 	genesis := state.GenesisServer()
 	genesisNode := inspector.Node{User: "root", Host: genesis.IP, SSHKey: sshKeyPath}
 
-	out, err := runSSHOutput(genesisNode, fmt.Sprintf("curl -sf %s/status 2>/dev/null", constants.LocalRQLiteURL()))
+	out, err := runSSHOutput(genesisNode, rqlite.NodeShellCurl(remotessh.SudoPrefix(genesisNode), "-sf", "/status")+" 2>/dev/null")
 	if err != nil {
 		fmt.Println("  RQLite: UNREACHABLE")
 	} else {

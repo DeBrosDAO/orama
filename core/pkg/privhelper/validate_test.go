@@ -95,25 +95,54 @@ func TestValidate_RefusesEverythingElse(t *testing.T) {
 	}
 }
 
-// The grant names the helper and nothing else: no argument pattern for sudo-rs
-// to reject, no wildcard for classic sudo to over-match.
-func TestSudoersRule_GrantsOnlyTheHelperWithoutWildcards(t *testing.T) {
-	rule := SudoersRule("orama")
-	if rule != "orama ALL=(root) NOPASSWD: /usr/local/bin/orama-privhelper\n" {
-		t.Fatalf("unexpected rule %q", rule)
+// An unprivileged caller never runs sudo — no_new_privs makes it useless in
+// orama-node's unit — it hands the request to the root helper's socket.
+func TestCommand_UnprivilegedCallerGoesThroughTheSocketClient(t *testing.T) {
+	cmd := Command("systemctl", "daemon-reload")
+	if cmd.Args[0] == "systemctl" {
+		t.Skip("running as root: tools run directly by design")
 	}
-	if strings.ContainsAny(rule, "*?[") {
-		t.Errorf("rule %q carries a wildcard", rule)
+	if want := Path + " call systemctl daemon-reload"; strings.Join(cmd.Args, " ") != want {
+		t.Errorf("Command args = %q, want %q", strings.Join(cmd.Args, " "), want)
 	}
 }
 
-func TestCommand_GoesThroughSudoNonInteractivelyWhenNotRoot(t *testing.T) {
-	cmd := Command("systemctl", "daemon-reload")
-	args := strings.Join(cmd.Args, " ")
-	if cmd.Args[0] == "systemctl" {
-		t.Skip("running as root: the helper is bypassed by design")
+func TestSocketUnit_OnlyRootAndTheOramaGroupCanConnect(t *testing.T) {
+	for _, want := range []string{"ListenStream=" + SocketPath, "SocketUser=root", "SocketGroup=orama", "SocketMode=0660", "Accept=yes"} {
+		if !strings.Contains(SocketUnit, want) {
+			t.Errorf("socket unit missing %q", want)
+		}
 	}
-	if want := "sudo -n " + Path + " systemctl daemon-reload"; args != want {
-		t.Errorf("Command args = %q, want %q", args, want)
+	if !strings.Contains(ServiceUnit, "ExecStart="+Path+" serve") || !strings.Contains(ServiceUnit, "StandardInput=socket") {
+		t.Errorf("service unit does not serve the connection: %s", ServiceUnit)
+	}
+}
+
+// Stopping wg-quick@wg0 runs wg-quick down and cuts the node off the mesh; the
+// index migration only ever disables it.
+func TestValidate_WGQuickMayOnlyBeDisabled(t *testing.T) {
+	if _, err := Validate([]string{"systemctl", "disable", "wg-quick@wg0.service"}); err != nil {
+		t.Fatalf("disable must be allowed: %v", err)
+	}
+	if _, err := Validate([]string{"systemctl", "stop", "wg-quick@wg0.service"}); err == nil {
+		t.Fatal("stop must be refused")
+	}
+}
+
+// tor runs as debian-tor and ntfy as ntfy; an env file the orama user could
+// write for them would carry LD_PRELOAD into a process it does not own.
+func TestValidate_unitEnvRefusesUnitsNotRunAsOrama(t *testing.T) {
+	for _, svc := range []string{"tor", "ntfy", "wireguard"} {
+		if _, err := Validate([]string{ToolUnitEnv, "set", "index", svc}); err == nil {
+			t.Errorf("unitenv set index %s was allowed", svc)
+		}
+	}
+	for _, svc := range []string{"gateway", "rqlite", "olric"} {
+		if _, err := Validate([]string{ToolUnitEnv, "set", "index", svc}); err != nil {
+			t.Errorf("unitenv set index %s refused: %v", svc, err)
+		}
+	}
+	if _, err := Validate([]string{ToolUnitEnv, "clear", "index"}); err != nil {
+		t.Errorf("unitenv clear refused: %v", err)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
 // Flags represents build command flags.
@@ -12,10 +11,16 @@ type Flags struct {
 	Arch    string
 	Output  string
 	Verbose bool
-	Sign    bool // Sign the archive manifest with rootwallet
+	// Unsigned skips signing. Nodes refuse an unsigned archive, so this is for
+	// an archive that is only inspected locally; every archive meant for a node
+	// is signed, which is why signing is the default.
+	Unsigned bool
+	// Signers, when set, goes into the signed manifest: a node that verifies
+	// the archive against its current trust anchor then trusts exactly these
+	// addresses (signer rotation, docs/SECURITY.md).
+	Signers []string
 }
 
-// Handle is the entry point for the build command.
 // Run executes the build command.
 func Run(flags *Flags) error {
 	return NewBuilder(flags).Build()
@@ -43,9 +48,4 @@ func findProjectRoot() (string, error) {
 	}
 
 	return "", fmt.Errorf("could not find project root (no go.mod with cmd/orama found)")
-}
-
-// detectHostArch returns the host architecture in Go naming convention.
-func detectHostArch() string {
-	return runtime.GOARCH
 }

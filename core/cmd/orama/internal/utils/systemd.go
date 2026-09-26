@@ -14,7 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
+	"github.com/DeBrosOfficial/network/pkg/unitenv"
 	"gopkg.in/yaml.v3"
 
 	"github.com/DeBrosOfficial/network/pkg/systemd"
@@ -289,7 +292,7 @@ func GetProductionServices() []string {
 			ns := nsEntry.Name()
 			for _, svcType := range serviceTypes {
 				// Only add if the env file exists (service was provisioned)
-				envFile := filepath.Join(namespacesDir, ns, svcType+".env")
+				envFile := unitenv.Path(unitenv.Dir, ns, svcType)
 				if _, err := os.Stat(envFile); err == nil {
 					svcName := fmt.Sprintf("orama-namespace-%s@%s", svcType, ns)
 					existing = append(existing, svcName)
@@ -439,7 +442,7 @@ func StartServicesOrdered(services []string, action string) {
 			fmt.Printf("  Waiting for namespace Olric instances to become ready...\n")
 			for _, svc := range svcs {
 				ns := strings.TrimPrefix(svc, "orama-namespace-olric@")
-				port := getOlricMemberlistPort(ns)
+				port := getOlricMemberlistPort(unitenv.Dir, rootfs.At(config.ProductionBaseDir), ns)
 				if port <= 0 {
 					fmt.Printf("  ⚠️  Could not determine Olric memberlist port for namespace %s\n", ns)
 					continue
@@ -464,10 +467,13 @@ func StartServicesOrdered(services []string, action string) {
 	}
 }
 
-// getOlricMemberlistPort reads a namespace's Olric config and returns the
-// memberlist bind port. Returns 0 if the config cannot be read or parsed.
-func getOlricMemberlistPort(namespace string) int {
-	envFile := filepath.Join("/opt/orama/.orama/data/namespaces", namespace, "olric.env")
+// getOlricMemberlistPort reads a namespace's Olric config, named by its unit's
+// env file in envDir (unitenv.Dir), and returns the memberlist bind port.
+// Returns 0 if the config cannot be read or parsed. The config lives in the
+// orama user's tree below root (the rootfs anchor), so it is read without
+// following a symlink and only up to a size limit.
+func getOlricMemberlistPort(envDir string, root rootfs.Root, namespace string) int {
+	envFile := unitenv.Path(envDir, namespace, "olric")
 	f, err := os.Open(envFile)
 	if err != nil {
 		return 0
@@ -489,7 +495,7 @@ func getOlricMemberlistPort(namespace string) int {
 	}
 
 	// Parse the YAML config to extract memberlist.bindPort
-	configData, err := os.ReadFile(configPath)
+	configData, err := root.ReadFile(configPath, rootfs.SmallFileLimit)
 	if err != nil {
 		return 0
 	}

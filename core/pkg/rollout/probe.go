@@ -6,10 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/nodehealth"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // SSHRunner runs a command on a node and returns its stdout. A function type so
@@ -98,23 +99,24 @@ func WaitReady(node inspector.Node, run SSHRunner, budget time.Duration) error {
 }
 
 // probeCommand reads the node's own rqlite status and gateway health, on the
-// node, so the operator's machine does not have to be on the overlay.
+// node, so the operator's machine does not have to be on the overlay. rqlite
+// is reached where node.yaml says it binds, with its credentials
+// (rqlite.NodeShellCurl).
 //
 // The gateway probe prints its HTTP code rather than failing the command: a
 // dead gateway is a health finding, not an unreachable node, and the two need
 // different messages.
-func probeCommand() string {
-	return fmt.Sprintf(
-		`printf '{"status":'; curl -fsS --max-time 5 http://localhost:%d/status; `+
-			`printf ',"gateway_code":"'; `+
-			`curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://localhost:%d/health; `+
-			`printf '"}'`,
-		constants.RQLiteHTTPPort, constants.GatewayAPIPort)
+func probeCommand(n inspector.Node) string {
+	return `printf '{"status":'; ` +
+		rqlite.NodeShellCurl(remotessh.SudoPrefix(n), "-fsS --max-time 5", "/status") + `; ` +
+		`printf ',"gateway_code":"'; ` +
+		fmt.Sprintf(`curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://localhost:%d/health; `, constants.GatewayAPIPort) +
+		`printf '"}'`
 }
 
 // observe runs one probe and turns it into a nodehealth.Status.
 func observe(n inspector.Node, run SSHRunner) (nodehealth.Status, error) {
-	out, err := run(n, probeCommand())
+	out, err := run(n, probeCommand(n))
 	if err != nil {
 		return nodehealth.Status{}, fmt.Errorf("probe %s: %w", n.Host, err)
 	}

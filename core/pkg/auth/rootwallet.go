@@ -14,6 +14,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
+	"github.com/mattn/go-isatty"
 )
 
 // IsRootWalletInstalled checks if the rootwallet agent is reachable.
@@ -61,6 +62,21 @@ func signWithRootWallet(message string) (string, error) {
 	return data.Signature, nil
 }
 
+// promptNamespace asks for the namespace to sign in to. With no terminal to
+// ask — a script, CI, a pipe — there is no answer to wait for, and blank is
+// the documented one: sign in without a namespace. Pass --namespace to choose.
+func promptNamespace(in *bufio.Reader, out io.Writer, interactive bool) (string, error) {
+	if !interactive {
+		return "", nil
+	}
+	fmt.Fprint(out, "Enter namespace (blank to sign in without one, then 'orama namespace create <name>'): ")
+	line, err := in.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("failed to read namespace: %w", err)
+	}
+	return strings.TrimSpace(line), nil
+}
+
 // PerformRootWalletAuthentication performs a challenge-response authentication flow
 // using the RootWallet CLI to sign a gateway-issued nonce
 func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials, error) {
@@ -89,12 +105,10 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 	// namespace from there. It used to loop until you typed one, and typing a
 	// name you did not own made you its owner.
 	if namespace == "" {
-		fmt.Printf("Enter namespace (blank to sign in without one, then 'orama namespace create <name>'): ")
-		nsInput, err := reader.ReadString('\n')
+		namespace, err = promptNamespace(reader, os.Stdout, isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd()))
 		if err != nil {
-			return nil, fmt.Errorf("failed to read namespace: %w", err)
+			return nil, err
 		}
-		namespace = strings.TrimSpace(nsInput)
 	}
 	if namespace == "" {
 		fmt.Println("✅ Signing in without a namespace")

@@ -10,14 +10,12 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/curve25519"
+
+	"github.com/DeBrosOfficial/network/pkg/wireguard"
 )
 
 // WireGuardPeer represents a WireGuard mesh peer
-type WireGuardPeer struct {
-	PublicKey string // Base64-encoded public key
-	Endpoint  string // e.g., "141.227.165.154:51820"
-	AllowedIP string // e.g., "10.0.0.2/32"
-}
+type WireGuardPeer = wireguard.Peer
 
 // WireGuardConfig holds the configuration for a WireGuard interface
 type WireGuardConfig struct {
@@ -181,64 +179,4 @@ func (wp *WireGuardProvisioner) Enable() error {
 		return fmt.Errorf("failed to start wg0: %w\n%s", err, string(output))
 	}
 	return nil
-}
-
-// Restart restarts the WireGuard interface via the index unit.
-func (wp *WireGuardProvisioner) Restart() error {
-	cmd := exec.Command("systemctl", "restart", "orama-namespace-wireguard@index")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to restart orama-namespace-wireguard@index: %w\n%s", err, string(output))
-	}
-	return nil
-}
-
-// IsActive checks if the WireGuard interface is up
-func (wp *WireGuardProvisioner) IsActive() bool {
-	return exec.Command("wg", "show", WireGuardInterface).Run() == nil
-}
-
-// AddPeer adds a peer to the running WireGuard interface without restart
-func (wp *WireGuardProvisioner) AddPeer(peer WireGuardPeer) error {
-	// Add peer to running interface
-	args := []string{"wg", "set", WireGuardInterface, "peer", peer.PublicKey, "allowed-ips", peer.AllowedIP, "persistent-keepalive", "25"}
-	if peer.Endpoint != "" {
-		args = append(args, "endpoint", peer.Endpoint)
-	}
-
-	cmd := exec.Command(args[0], args[1:]...)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to add peer %s: %w\n%s", peer.AllowedIP, err, string(output))
-	}
-
-	// Also update config file so it persists across restarts
-	wp.config.Peers = append(wp.config.Peers, peer)
-	return wp.WriteConfig()
-}
-
-// RemovePeer removes a peer from the running WireGuard interface
-func (wp *WireGuardProvisioner) RemovePeer(publicKey string) error {
-	cmd := exec.Command("wg", "set", WireGuardInterface, "peer", publicKey, "remove")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to remove peer: %w\n%s", err, string(output))
-	}
-
-	// Remove from config
-	filtered := make([]WireGuardPeer, 0, len(wp.config.Peers))
-	for _, p := range wp.config.Peers {
-		if p.PublicKey != publicKey {
-			filtered = append(filtered, p)
-		}
-	}
-	wp.config.Peers = filtered
-	return wp.WriteConfig()
-}
-
-// GetStatus returns the current WireGuard interface status
-func (wp *WireGuardProvisioner) GetStatus() (string, error) {
-	cmd := exec.Command("wg", "show", WireGuardInterface)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("failed to get wg status: %w\n%s", err, string(output))
-	}
-	return string(output), nil
 }

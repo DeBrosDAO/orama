@@ -11,15 +11,19 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"path/filepath"
 
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/overlay"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/zap"
@@ -35,6 +39,13 @@ type JoinRequest struct {
 	// installer does not send one; when absent the row falls back to a
 	// synthetic id, which is what every row used to carry.
 	PeerID string `json:"peer_id,omitempty"`
+
+	// ExpectedArchiveSigners, when set, is the archive signer list the
+	// joining node's operator expects this cluster to trust. A join whose
+	// expectation does not match this node's anchor is refused before the
+	// invite is spent or any peer row is written: the joiner would refuse the
+	// response anyway, and leave both behind.
+	ExpectedArchiveSigners []string `json:"expected_archive_signers,omitempty"`
 }
 
 // JoinResponse contains everything a joining node needs
@@ -74,6 +85,17 @@ type JoinResponse struct {
 
 	// Domain
 	BaseDomain string `json:"base_domain"`
+
+	// ArchiveSigners is the minting node's archive trust anchor: the addresses
+	// whose signature on a build archive nodes of this cluster accept. The
+	// joiner writes it to its own anchor before it installs anything from its
+	// archive; it arrives over the invite-authenticated, pinned-TLS join, which
+	// is what makes it trustworthy (docs/SECURITY.md).
+	ArchiveSigners []string `json:"archive_signers"`
+	// ArchiveSignersRotatedAt is the build date (RFC 3339) of the last signer
+	// rotation the minting node took, empty when it took none. The joiner
+	// records it so an older signed rotation cannot be replayed on it.
+	ArchiveSignersRotatedAt string `json:"archive_signers_rotated_at,omitempty"`
 }
 
 // WGPeerInfo represents a WireGuard peer
@@ -145,7 +167,7 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "wg_public_key contains invalid characters", http.StatusBadRequest)
 		return
 	}
-	wgKeyBytes, err := base64.StdEncoding.DecodeString(req.WGPublicKey)
+	wgKeyBytes, err := base64.StdEncoding.Strict().DecodeString(req.WGPublicKey)
 	if err != nil || len(wgKeyBytes) != 32 {
 		http.Error(w, "wg_public_key must be a valid base64-encoded 32-byte key", http.StatusBadRequest)
 		return
@@ -160,6 +182,12 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "peer_id must be a valid libp2p peer id", http.StatusBadRequest)
 			return
 		}
+	}
+	// Checked only for its size here; it is normalized once the invite is
+	// known to be live.
+	if len(req.ExpectedArchiveSigners) > archivetrust.MaxSigners {
+		http.Error(w, "expected_archive_signers names too many addresses", http.StatusBadRequest)
+		return
 	}
 
 	ctx := r.Context()
@@ -230,6 +258,22 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A joiner can verify nothing it installs without this node's trust
+	// anchor, so a node without one cannot admit anybody.
+	archiveSigners, rotatedAt, err := readArchiveSigners()
+	if err != nil {
+		h.logger.Error("cannot admit a node: this node's archive trust anchor is unusable", zap.Error(err))
+		http.Error(w, "this node has no usable archive trust anchor ("+archivetrust.AnchorPath+
+			"); give it one before minting invites on it", http.StatusInternalServerError)
+		return
+	}
+	if refused, status := checkExpectedSigners(req.ExpectedArchiveSigners, archiveSigners); refused != "" {
+		h.logger.Warn("join refused: the expected archive signers differ from this node's anchor",
+			zap.String("public_ip", req.PublicIP), zap.Int("status", status))
+		http.Error(w, refused, status)
+		return
+	}
+
 	myWGIP, err := readLocalWGIP()
 	if err != nil {
 		h.logger.Error("failed to get local WG IP", zap.Error(err))
@@ -262,7 +306,7 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 		}
 		wgPeers = append([]WGPeerInfo{{
 			PublicKey: myPubKey,
-			Endpoint:  fmt.Sprintf("%s:%d", myPublicIP, 51820),
+			Endpoint:  net.JoinHostPort(myPublicIP, strconv.Itoa(constants.WireGuardPort)),
 			AllowedIP: fmt.Sprintf("%s/32", myWGIP),
 		}}, wgPeers...)
 		h.logger.Info("self-injected into WG peer list (sync loop hasn't registered yet)",
@@ -350,37 +394,38 @@ func (h *Handler) HandleJoin(w http.ResponseWriter, r *http.Request) {
 	// 8. Read IPFS Cluster trusted peer IDs
 	ipfsClusterPeerIDs := h.readIPFSClusterTrustedPeers()
 
-	// Build Olric seed peers from all existing WG peer IPs (memberlist port 3322)
-	var olricPeers []string
-	for _, p := range wgPeers {
-		peerIP := strings.TrimSuffix(p.AllowedIP, "/32")
-		olricPeers = append(olricPeers, fmt.Sprintf("%s:3322", peerIP))
-	}
-	// Include this node too
-	olricPeers = append(olricPeers, fmt.Sprintf("%s:3322", myWGIP))
+	olricPeers := olricSeedPeers(wgPeers, myWGIP)
 
 	resp := JoinResponse{
-		WGIP:                 wgIP,
-		WGPeers:              wgPeers,
-		ClusterSecret:        secrets.ClusterSecret,
-		SwarmKey:             secrets.SwarmKey,
-		APIKeyHMACSecret:     secrets.APIKeyHMACSecret,
-		RQLitePassword:       secrets.RQLitePassword,
-		SecretsEncryptionKey: secrets.SecretsEncryptionKey,
-		TURNSecret:           secrets.TURNSecret,
-		EncryptionRoot:       secrets.EncryptionRoot,
-		EncryptionRootID:     secrets.EncryptionRootID,
-		RQLiteJoinAddress:    constants.RQLiteRaftAddrFor(myWGIP),
-		IPFSPeer:             ipfsPeer,
-		IPFSClusterPeer:      ipfsClusterPeer,
-		IPFSClusterPeerIDs:   ipfsClusterPeerIDs,
-		BootstrapPeers:       bootstrapPeers,
-		OlricPeers:           olricPeers,
-		BaseDomain:           baseDomain,
+		WGIP:                    wgIP,
+		WGPeers:                 wgPeers,
+		ClusterSecret:           secrets.ClusterSecret,
+		SwarmKey:                secrets.SwarmKey,
+		APIKeyHMACSecret:        secrets.APIKeyHMACSecret,
+		RQLitePassword:          secrets.RQLitePassword,
+		SecretsEncryptionKey:    secrets.SecretsEncryptionKey,
+		TURNSecret:              secrets.TURNSecret,
+		EncryptionRoot:          secrets.EncryptionRoot,
+		EncryptionRootID:        secrets.EncryptionRootID,
+		RQLiteJoinAddress:       constants.RQLiteRaftAddrFor(myWGIP),
+		IPFSPeer:                ipfsPeer,
+		IPFSClusterPeer:         ipfsClusterPeer,
+		IPFSClusterPeerIDs:      ipfsClusterPeerIDs,
+		BootstrapPeers:          bootstrapPeers,
+		OlricPeers:              olricPeers,
+		BaseDomain:              baseDomain,
+		ArchiveSigners:          archiveSigners,
+		ArchiveSignersRotatedAt: rotatedAt,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		// The peer row is written; the joiner lost its secrets mid-response and
+		// must be removed before it can retry with a fresh invite.
+		h.logger.Error("failed to send the join response; the joiner has no secrets",
+			zap.String("wg_ip", wgIP), zap.String("public_ip", req.PublicIP), zap.Error(err))
+		return
+	}
 
 	h.logger.Info("node joined cluster",
 		zap.String("wg_ip", wgIP),
@@ -690,55 +735,16 @@ func (h *Handler) tokenOperatorWallet(ctx context.Context, token string) string 
 	return ""
 }
 
-// addWGPeerLocally adds a peer to the local wg0 interface and persists to config
+// addWGPeerLocally adds a peer to the local wg0 interface and persists it to
+// wg0.conf, through orama-privhelper. The gateway runs as the orama user with
+// no CAP_NET_ADMIN, and /etc/wireguard is root's; the old `wg set` and `tee`
+// here failed on every join, and the tee's failure was only logged.
 func (h *Handler) addWGPeerLocally(pubKey, publicIP, wgIP string) error {
-	// Add to running interface with persistent-keepalive
-	cmd := exec.Command("wg", "set", "wg0",
-		"peer", pubKey,
-		"endpoint", fmt.Sprintf("%s:51820", publicIP),
-		"allowed-ips", fmt.Sprintf("%s/32", wgIP),
-		"persistent-keepalive", "25")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("wg set failed: %w\n%s", err, string(output))
-	}
-
-	// Persist to wg0.conf so peer survives wg-quick restart.
-	// Read current config, append peer section, write back.
-	confPath := "/etc/wireguard/wg0.conf"
-	data, err := os.ReadFile(confPath)
-	if err != nil {
-		h.logger.Warn("could not read wg0.conf for persistence", zap.Error(err))
-		return nil // non-fatal: runtime peer is added
-	}
-
-	// Check if peer already in config
-	if strings.Contains(string(data), pubKey) {
-		return nil // already persisted
-	}
-
-	peerSection := fmt.Sprintf("\n[Peer]\nPublicKey = %s\nEndpoint = %s:51820\nAllowedIPs = %s/32\nPersistentKeepalive = 25\n",
-		pubKey, publicIP, wgIP)
-
-	newConf := string(data) + peerSection
-	writeCmd := exec.Command("tee", confPath)
-	writeCmd.Stdin = strings.NewReader(newConf)
-	if output, err := writeCmd.CombinedOutput(); err != nil {
-		h.logger.Warn("could not persist peer to wg0.conf", zap.Error(err), zap.String("output", string(output)))
-		return nil
-	}
-	if err := os.Chmod(confPath, 0o600); err != nil {
-		h.logger.Warn("could not chmod wg0.conf 0600 after tee", zap.Error(err))
-		return nil
-	}
-	fi, err := os.Stat(confPath)
-	if err != nil {
-		return nil
-	}
-	if fi.Mode().Perm() != 0o600 {
-		h.logger.Warn("wg0.conf mode not 0600 after chmod", zap.String("mode", fi.Mode().Perm().String()))
-	}
-
-	return nil
+	return privhelper.AddWireGuardPeer(wireguard.Peer{
+		PublicKey: pubKey,
+		Endpoint:  net.JoinHostPort(publicIP, strconv.Itoa(constants.WireGuardPort)),
+		AllowedIP: wgIP + "/32",
+	})
 }
 
 // wgPeersContainsIP checks if any peer in the list has the given WG IP
@@ -845,10 +851,60 @@ func defaultLocalPublicIP() (string, error) {
 	return addr.IP.String(), nil
 }
 
+// checkExpectedSigners compares a joiner's expectation with this node's anchor
+// and returns the refusal and its status, or "" when the join may go on. Only
+// the holder of a live invite gets here, and the anchor is public (it is in
+// every join response), so naming it costs nothing and tells the operator
+// what to expect.
+func checkExpectedSigners(expected, anchor []string) (string, int) {
+	if len(expected) == 0 {
+		return "", 0
+	}
+	normalized, err := archivetrust.NormalizeSigners(expected)
+	if err != nil {
+		return "expected_archive_signers is not a list of addresses", http.StatusBadRequest
+	}
+	if !archivetrust.SameSigners(anchor, normalized) {
+		return "this cluster trusts archive signers " + strings.Join(anchor, ", ") + ", not " +
+			strings.Join(normalized, ", ") + "; the invite was not used", http.StatusConflict
+	}
+	return "", 0
+}
+
+// readArchiveSigners reads this node's archive trust anchor and the build date
+// of its last rotation (RFC 3339, empty for none); a test replaces it, since
+// the real anchor must be owned by root.
+var readArchiveSigners = func() ([]string, string, error) {
+	signers, err := archivetrust.ReadAnchor(archivetrust.AnchorPath)
+	if err != nil {
+		return nil, "", err
+	}
+	at, err := archivetrust.ReadRotationMark(archivetrust.AnchorPath)
+	if err != nil || at.IsZero() {
+		return signers, "", err
+	}
+	return signers, at.UTC().Format(time.RFC3339), nil
+}
+
+// peerMultiaddr is a peer's TCP multiaddr on the WireGuard overlay.
+func peerMultiaddr(wgIP string, port int, peerID string) string {
+	return fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", wgIP, port, peerID)
+}
+
+// olricSeedPeers are the index Olric memberlist addresses of every WireGuard
+// peer and of this node.
+func olricSeedPeers(peers []WGPeerInfo, myWGIP string) []string {
+	out := make([]string, 0, len(peers)+1)
+	for _, p := range peers {
+		out = append(out, net.JoinHostPort(strings.TrimSuffix(p.AllowedIP, "/32"), strconv.Itoa(constants.OlricMemberlistPort)))
+	}
+	return append(out, net.JoinHostPort(myWGIP, strconv.Itoa(constants.OlricMemberlistPort)))
+}
+
 // queryIPFSPeerInfo gets the local IPFS node's peer ID and builds addrs with WG IP
 func (h *Handler) queryIPFSPeerInfo(myWGIP string) PeerInfo {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post("http://localhost:10107/api/v0/id", "", nil)
+	resp, err := client.Post(constants.LocalIPFSAPIURL()+"/api/v0/id", "", nil)
 	if err != nil {
 		h.logger.Warn("failed to query IPFS peer info", zap.Error(err))
 		return PeerInfo{}
@@ -863,18 +919,18 @@ func (h *Handler) queryIPFSPeerInfo(myWGIP string) PeerInfo {
 		return PeerInfo{}
 	}
 
-	return PeerInfo{
-		ID: result.ID,
-		Addrs: []string{
-			fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", myWGIP, constants.IPFSSwarmPort, result.ID),
-		},
-	}
+	return ipfsPeer(myWGIP, result.ID)
+}
+
+// ipfsPeer is the Kubo peer a joiner bootstraps from: its swarm port on this node's WireGuard address.
+func ipfsPeer(myWGIP, id string) PeerInfo {
+	return PeerInfo{ID: id, Addrs: []string{peerMultiaddr(myWGIP, constants.IPFSSwarmPort, id)}}
 }
 
 // queryIPFSClusterPeerInfo gets the local IPFS Cluster peer ID and builds addrs with WG IP
 func (h *Handler) queryIPFSClusterPeerInfo(myWGIP string) PeerInfo {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:10108/id")
+	resp, err := client.Get(constants.LocalIPFSClusterURL() + "/id")
 	if err != nil {
 		h.logger.Warn("failed to query IPFS Cluster peer info", zap.Error(err))
 		return PeerInfo{}
@@ -889,16 +945,16 @@ func (h *Handler) queryIPFSClusterPeerInfo(myWGIP string) PeerInfo {
 		return PeerInfo{}
 	}
 
-	return PeerInfo{
-		ID: result.ID,
-		Addrs: []string{
-			fmt.Sprintf("/ip4/%s/tcp/9100/p2p/%s", myWGIP, result.ID),
-		},
-	}
+	return ipfsClusterPeer(myWGIP, result.ID)
+}
+
+// ipfsClusterPeer is the IPFS Cluster peer a joiner bootstraps from: its swarm listener on this node's WireGuard address.
+func ipfsClusterPeer(myWGIP, id string) PeerInfo {
+	return PeerInfo{ID: id, Addrs: []string{peerMultiaddr(myWGIP, constants.IPFSClusterSwarmPort, id)}}
 }
 
 // buildBootstrapPeers constructs bootstrap peer multiaddrs using WG IPs
-// Uses the node's LibP2P peer ID (port 4001), NOT the IPFS peer ID (IPFS swarm port)
+// Uses the node's LibP2P peer ID (constants.NodeLibP2PPort), NOT the IPFS peer ID (IPFS swarm port)
 func (h *Handler) buildBootstrapPeers(myWGIP, ipfsPeerID string) []string {
 	// Read the node's LibP2P identity from disk
 	keyPath := filepath.Join(h.oramaDir, "data", "identity.key")
@@ -920,9 +976,7 @@ func (h *Handler) buildBootstrapPeers(myWGIP, ipfsPeerID string) []string {
 		return nil
 	}
 
-	return []string{
-		fmt.Sprintf("/ip4/%s/tcp/4001/p2p/%s", myWGIP, peerID.String()),
-	}
+	return []string{peerMultiaddr(myWGIP, constants.NodeLibP2PPort, peerID.String())}
 }
 
 // readIPFSClusterTrustedPeers reads IPFS Cluster trusted peer IDs from the secrets file

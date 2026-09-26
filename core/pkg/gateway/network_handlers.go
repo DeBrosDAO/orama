@@ -10,6 +10,9 @@ import (
 // networkStatusHandler handles GET /v1/network/status.
 // It returns the network status including peer ID and connection information.
 func (g *Gateway) networkStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if !g.authorizeNetworkDetail(w, r) {
+		return
+	}
 	if g.client == nil {
 		writeError(w, http.StatusServiceUnavailable, "client not initialized")
 		return
@@ -32,6 +35,9 @@ func (g *Gateway) networkStatusHandler(w http.ResponseWriter, r *http.Request) {
 // networkPeersHandler handles GET /v1/network/peers.
 // It returns a list of connected peers in multiaddr format.
 func (g *Gateway) networkPeersHandler(w http.ResponseWriter, r *http.Request) {
+	if !g.authorizeNetworkDetail(w, r) {
+		return
+	}
 	if g.client == nil {
 		writeError(w, http.StatusServiceUnavailable, "client not initialized")
 		return

@@ -1,8 +1,8 @@
 package push
 
 import (
+	"errors"
 	"fmt"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"os"
 	"path/filepath"
@@ -11,8 +11,9 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 )
 
 // Flags holds push command flags.
@@ -22,7 +23,23 @@ type Flags struct {
 	Host   string // Push to a node that is not in the inventory
 	User   string // SSH user for Host (default root)
 	Direct bool   // Upload from here to each node in turn, instead of fanning out
+	// Archive is the build to push. Required: the newest archive in /tmp may
+	// be another checkout's build.
+	Archive string
+	// TrustSigners creates the trust anchor on nodes that have none — nodes
+	// installed before archives were signed. It never changes an existing one.
+	TrustSigners []string
 }
+
+// stageHint says what a failed node-side stage most often means.
+const stageHint = "without --trust-signers each node verifies the archive with its installed orama (" + NodeOramaBinary +
+	" node stage-archive) against /etc/orama/archive-signers. A node on a release from before " +
+	"archive signing has no such command and no such file: push to it once with --trust-signers, which " +
+	"stages with the archive's own verified CLI (see docs/DEV_DEPLOY.md, \"Signed archives\")"
+
+// errArchiveRequired names the archive to push explicitly: /tmp is shared, and
+// "the newest archive there" was a build from another checkout often enough.
+var errArchiveRequired = fmt.Errorf("--archive is required: the path `orama build` printed")
 
 // Run is the entry point for the push command.
 func Run(flags *Flags) error {
@@ -35,6 +52,16 @@ func Run(flags *Flags) error {
 func (f *Flags) validate() error {
 	if f.Env == "" && f.Host == "" {
 		return fmt.Errorf("specify --env <devnet|testnet> or --host <ip>")
+	}
+	if f.Archive == "" {
+		return errArchiveRequired
+	}
+	if len(f.TrustSigners) > 0 {
+		signers, err := archivetrust.NormalizeSigners(f.TrustSigners)
+		if err != nil {
+			return fmt.Errorf("--trust-signers: %w", err)
+		}
+		f.TrustSigners = signers
 	}
 	return nil
 }
@@ -76,13 +103,11 @@ func resolveTargets(flags *Flags) ([]inspector.Node, error) {
 }
 
 func execute(flags *Flags) error {
-	// Find archive
-	archivePath := build.FindNewestArchive()
-	if archivePath == "" {
-		return fmt.Errorf("no binary archive found in /tmp/ (run `orama build` first)")
+	archivePath := flags.Archive
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		return fmt.Errorf("archive %s: %w", archivePath, err)
 	}
-
-	info, _ := os.Stat(archivePath)
 	fmt.Printf("Archive: %s (%s)\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
 	nodes, err := resolveTargets(flags)
@@ -98,29 +123,51 @@ func execute(flags *Flags) error {
 	defer cleanup()
 
 	fmt.Printf("Targets: %d node(s)\n\n", len(nodes))
+	return ToNodes(archivePath, nodes, flags.Direct, flags.TrustSigners)
+}
 
-	if flags.Direct || len(nodes) == 1 {
-		return pushDirect(archivePath, nodes)
+// ToNodes pushes the archive at archivePath to nodes, whose SSH keys are
+// prepared: uploaded to each node in turn when direct (or there is one node),
+// otherwise to a hub that fans it out.
+//
+// Without trust every node stages it with its installed orama, which verifies
+// it against the node's trust anchor. With trust the archive is verified here
+// against trust and staged with its own verified CLI, which creates a missing
+// anchor from trust and requires an existing one to be exactly trust — the
+// push for nodes installed before archive signing, whose CLI cannot stage
+// anything (see archive_cli.go).
+func ToNodes(archivePath string, nodes []inspector.Node, direct bool, trust []string) (err error) {
+	if len(nodes) == 0 {
+		return fmt.Errorf("no nodes to push to")
 	}
-
-	return pushFanout(archivePath, nodes)
+	stager, cleanup, err := newNodeStager(archivePath, trust)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, cleanup()) }()
+	if direct || len(nodes) == 1 {
+		return pushDirect(nodes, stager)
+	}
+	return pushFanout(nodes, stager)
 }
 
 // pushDirect uploads the archive to each node sequentially.
-func pushDirect(archivePath string, nodes []inspector.Node) error {
-	remotePath := "/tmp/" + filepath.Base(archivePath)
-
+func pushDirect(nodes []inspector.Node, stager *nodeStager) error {
 	for i, node := range nodes {
 		fmt.Printf("[%d/%d] Pushing to %s...\n", i+1, len(nodes), node.Host)
-
-		if err := remotessh.UploadFile(node, archivePath, remotePath); err != nil {
+		dir, err := makeUploadDir(func(cmd string) (string, error) { return remotessh.RunSSHOutput(node, cmd) })
+		if err != nil {
 			return fmt.Errorf("upload to %s failed: %w", node.Host, err)
 		}
-
-		if err := extractOnNode(node, remotePath, false); err != nil {
-			return fmt.Errorf("extract on %s failed: %w", node.Host, err)
+		if err := remotessh.UploadFile(node, stager.archive, uploadPath(dir)); err != nil {
+			if rmErr := remotessh.RunSSHStreaming(node, remotessh.SudoPrefix(node)+"rm -rf "+dir); rmErr != nil {
+				err = errors.Join(err, fmt.Errorf("remove the upload %s on %s: %w", dir, node.Host, rmErr))
+			}
+			return fmt.Errorf("upload to %s failed: %w", node.Host, err)
 		}
-
+		if err := remotessh.RunSSHStreaming(node, stager.stageAndRemove(remotessh.SudoPrefix(node), dir)); err != nil {
+			return fmt.Errorf("stage on %s failed: %w\n  %s", node.Host, err, stageHint)
+		}
 		fmt.Printf("  ✓ %s done\n\n", node.Host)
 	}
 
@@ -129,50 +176,57 @@ func pushDirect(archivePath string, nodes []inspector.Node) error {
 }
 
 // pushFanout uploads to a hub node, then fans out to all others via agent forwarding.
-func pushFanout(archivePath string, nodes []inspector.Node) error {
+func pushFanout(nodes []inspector.Node, stager *nodeStager) (err error) {
 	hub := remotessh.PickHubNode(nodes)
-	remotePath := "/tmp/" + filepath.Base(archivePath)
 
-	// Step 1: Upload to hub
+	// Step 1: Upload to the hub and stage there. The upload stays on the hub
+	// until the fanout below has copied it to every other node.
 	fmt.Printf("[hub] Uploading to %s...\n", hub.Host)
-	if err := remotessh.UploadFile(hub, archivePath, remotePath); err != nil {
+	hubDir, err := makeUploadDir(func(cmd string) (string, error) { return remotessh.RunSSHOutput(hub, cmd) })
+	if err != nil {
 		return fmt.Errorf("upload to hub %s failed: %w", hub.Host, err)
 	}
-
-	// Keep the archive on the hub — the fanout below scp's it to every other
-	// node. (Removing it here was the bug that broke fanout: the subsequent scp
-	// from the hub found no local file.)
-	if err := extractOnNode(hub, remotePath, true); err != nil {
-		return fmt.Errorf("extract on hub %s failed: %w", hub.Host, err)
+	defer func() {
+		if rmErr := remotessh.RunSSHStreaming(hub, remotessh.SudoPrefix(hub)+"rm -rf "+hubDir); rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove the upload %s from hub %s: %w", hubDir, hub.Host, rmErr))
+		}
+	}()
+	if err := remotessh.UploadFile(hub, stager.archive, uploadPath(hubDir)); err != nil {
+		return fmt.Errorf("upload to hub %s failed: %w", hub.Host, err)
+	}
+	if err := remotessh.RunSSHStreaming(hub, stager.stage(remotessh.SudoPrefix(hub), uploadPath(hubDir))); err != nil {
+		return fmt.Errorf("stage on hub %s failed: %w\n  %s", hub.Host, err, stageHint)
 	}
 	fmt.Printf("  ✓ hub %s done\n\n", hub.Host)
 
-	// Step 2: Fan out from hub to remaining nodes in parallel (via agent forwarding)
 	remaining := make([]inspector.Node, 0, len(nodes)-1)
 	for _, n := range nodes {
 		if n.Host != hub.Host {
 			remaining = append(remaining, n)
 		}
 	}
-
 	if len(remaining) == 0 {
 		fmt.Printf("✓ Push complete (1 node)\n")
 		return nil
 	}
+	return fanOut(hub, uploadPath(hubDir), remaining, stager)
+}
 
+// fanOut copies the archive at hubPath from the hub to every target in
+// parallel and stages it on each.
+func fanOut(hub inspector.Node, hubPath string, remaining []inspector.Node, stager *nodeStager) (err error) {
 	// Stage each target's SSH key on the hub so the hub authenticates to the
 	// target with a SINGLE key (-i + IdentitiesOnly), instead of agent-forwarding
 	// ALL node keys — which the target's sshd rejects with "too many
 	// authentication failures" once the offered-key count exceeds MaxAuthTries
-	// (default 6). Keys are chmod 600 and removed (defer) when the fanout ends.
-	const fanoutKeyDir = "/dev/shm/.orama-fanout-keys"
+	// (default 6). Keys are chmod 600 and wiped when the fanout ends.
 	if err := remotessh.RunSSHStreaming(hub, "rm -rf "+fanoutKeyDir+" && mkdir -p "+fanoutKeyDir+" && chmod 700 "+fanoutKeyDir); err != nil {
 		return fmt.Errorf("prepare fanout key dir on hub: %w", err)
 	}
 	defer func() {
 		wipe := "for f in " + fanoutKeyDir + "/*; do [ -f \"$f\" ] && dd if=/dev/zero of=\"$f\" bs=8192 count=1 conv=notrunc status=none 2>/dev/null; done; rm -rf " + fanoutKeyDir
-		if err := remotessh.RunSSHStreaming(hub, wipe); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to wipe fanout keys on hub: %v\n", err)
+		if wipeErr := remotessh.RunSSHStreaming(hub, wipe); wipeErr != nil {
+			err = errors.Join(err, fmt.Errorf("wipe the fanout keys on hub %s: %w", hub.Host, wipeErr))
 		}
 	}()
 	for _, t := range remaining {
@@ -186,79 +240,72 @@ func pushFanout(archivePath string, nodes []inspector.Node) error {
 	}
 
 	fmt.Printf("[fanout] Distributing from %s to %d nodes...\n", hub.Host, len(remaining))
-
 	var wg sync.WaitGroup
-	errors := make([]error, len(remaining))
-
+	errs := make([]error, len(remaining))
 	for i, target := range remaining {
 		wg.Add(1)
 		go func(idx int, target inspector.Node) {
 			defer wg.Done()
-
-			// SCP from hub to target using the target's staged key only.
-			keyPath := fanoutKeyDir + "/" + target.Host
-			scpCmd := fmt.Sprintf("scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i %s -o ConnectTimeout=10 %s %s@%s:%s",
-				keyPath, remotePath, target.User, target.Host, remotePath)
-
-			if err := remotessh.RunSSHStreaming(hub, scpCmd); err != nil {
-				errors[idx] = fmt.Errorf("fanout to %s failed: %w", target.Host, err)
+			if err := fanOutTo(hub, hubPath, target, stager); err != nil {
+				errs[idx] = err
 				return
 			}
-
-			if err := extractOnNodeVia(hub, target, remotePath, keyPath); err != nil {
-				errors[idx] = fmt.Errorf("extract on %s failed: %w", target.Host, err)
-				return
-			}
-
 			fmt.Printf("  ✓ %s done\n", target.Host)
 		}(i, target)
 	}
-
 	wg.Wait()
 
-	// Fanout done — remove the hub's retained archive (best-effort).
-	_ = remotessh.RunSSHStreaming(hub, remotessh.SudoPrefix(hub)+"rm -f "+remotePath)
-
-	// Check for errors
 	var failed []string
-	for i, err := range errors {
+	for i, err := range errs {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", remaining[i].Host, err)
 			failed = append(failed, remaining[i].Host)
 		}
 	}
-
 	if len(failed) > 0 {
-		return fmt.Errorf("push failed on %d node(s): %s", len(failed), strings.Join(failed, ", "))
+		return fmt.Errorf("push failed on %d node(s): %s\n  %s", len(failed), strings.Join(failed, ", "), stageHint)
 	}
-
-	fmt.Printf("\n✓ Push complete (%d nodes)\n", len(nodes))
+	fmt.Printf("\n✓ Push complete (%d nodes)\n", len(remaining)+1)
 	return nil
 }
 
-// extractOnNode extracts the archive on a remote node. When keepArchive is true
-// the uploaded tarball is left in place — the hub needs it to fan out to the
-// other nodes; otherwise it is removed after extraction to reclaim /tmp.
-func extractOnNode(node inspector.Node, remotePath string, keepArchive bool) error {
-	sudo := remotessh.SudoPrefix(node)
-	cmd := fmt.Sprintf("%smkdir -p /opt/orama && %star xzf %s -C /opt/orama",
-		sudo, sudo, remotePath)
-	if !keepArchive {
-		cmd += fmt.Sprintf(" && %srm -f %s", sudo, remotePath)
+// fanOutTo copies the archive from the hub into a private directory on
+// target, using target's staged key only, and stages it there.
+func fanOutTo(hub inspector.Node, hubPath string, target inspector.Node, stager *nodeStager) error {
+	keyPath := fanoutKeyDir + "/" + target.Host
+	dir, err := makeUploadDir(func(cmd string) (string, error) {
+		return remotessh.RunSSHOutput(hub, sshVia(target, keyPath, cmd))
+	})
+	if err != nil {
+		return fmt.Errorf("fanout to %s failed: %w", target.Host, err)
 	}
-	return remotessh.RunSSHStreaming(node, cmd)
+	scpCmd := fmt.Sprintf("scp %s -i %s %s %s@%s:%s", fanoutSSHOptions, keyPath, hubPath, target.User, target.Host, uploadPath(dir))
+	if err := remotessh.RunSSHStreaming(hub, scpCmd); err != nil {
+		if rmErr := remotessh.RunSSHStreaming(hub, sshVia(target, keyPath, remotessh.SudoPrefix(target)+"rm -rf "+dir)); rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove the upload %s on %s: %w", dir, target.Host, rmErr))
+		}
+		return fmt.Errorf("fanout to %s failed: %w", target.Host, err)
+	}
+	if err := remotessh.RunSSHStreaming(hub, sshVia(target, keyPath, stager.stageAndRemove(remotessh.SudoPrefix(target), dir))); err != nil {
+		return fmt.Errorf("stage on %s failed: %w", target.Host, err)
+	}
+	return nil
 }
 
-// extractOnNodeVia extracts the archive on a target node by SSHing through the
-// hub, authenticating with the target's staged key (keyPath) only — avoiding the
-// forwarded-agent "too many authentication failures".
-func extractOnNodeVia(hub, target inspector.Node, remotePath, keyPath string) error {
-	sudo := remotessh.SudoPrefix(target)
-	extractCmd := fmt.Sprintf("%smkdir -p /opt/orama && %star xzf %s -C /opt/orama && %srm -f %s",
-		sudo, sudo, remotePath, sudo, remotePath)
+// stageCommand is the node-side step: the node's installed orama verifies the
+// uploaded archive against its trust anchor and only then puts it in place.
+// It used to be a bare `tar xzf -C /opt/orama`, which replaced the binaries
+// systemd runs from /opt/orama/bin before anything had checked them.
+func stageCommand(sudo, remotePath string, trust []string) string {
+	cmd := fmt.Sprintf("%s%s node stage-archive --archive %s", sudo, NodeOramaBinary, remotePath)
+	if len(trust) > 0 {
+		cmd += " --trust-signers " + strings.Join(trust, ",")
+	}
+	return cmd
+}
 
-	sshCmd := fmt.Sprintf("ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i %s -o ConnectTimeout=10 %s@%s '%s'",
-		keyPath, target.User, target.Host, extractCmd)
-
-	return remotessh.RunSSHStreaming(hub, sshCmd)
+// stageAndRemove stages the archive uploaded to dir and removes dir whether or
+// not the stage succeeded, exiting with the stage's status.
+func stageAndRemove(sudo, dir string, trust []string) string {
+	return fmt.Sprintf("%s; rc=$?; %srm -rf %s; exit $rc", stageCommand(sudo, uploadPath(dir), trust), sudo, dir)
 }

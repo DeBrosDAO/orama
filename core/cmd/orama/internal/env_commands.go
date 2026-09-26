@@ -78,7 +78,8 @@ func EnvSwitch(args []string) error {
 
 // EnvAdd registers a custom environment pointing at a gateway URL. args are
 // name, gateway URL and an optional description; cobra guarantees the count.
-func EnvAdd(args []string) error {
+// caFile, when set, is trusted for that environment's domain.
+func EnvAdd(args []string, caFile string) error {
 	name := args[0]
 	gatewayURL := args[1]
 	description := ""
@@ -94,10 +95,19 @@ func EnvAdd(args []string) error {
 		return clierr.Failure("failed to add environment %q: %w", name, err)
 	}
 
+	if caFile != "" {
+		if err := SetEnvironmentCA(name, caFile); err != nil {
+			return clierr.Failure("added %q, but its CA file was refused: %w", name, err)
+		}
+	}
+
 	fmt.Printf("Added environment: %s\n", name)
 	fmt.Printf("   Gateway URL: %s\n", gatewayURL)
 	if description != "" {
 		fmt.Printf("   Description: %s\n", description)
+	}
+	if caFile != "" {
+		fmt.Printf("   Trusted CA:  %s (for this environment's domain only)\n", caFile)
 	}
 	return nil
 }

@@ -18,13 +18,19 @@ Setup (one-time):
   orama sandbox setup
 
 Usage:
-  orama sandbox create [--name <name>]     Create a new 5-node cluster
+  orama sandbox create [--name <name>] [--archive <path>]
+                                           Create a new 5-node cluster
   orama sandbox destroy [--name <name>]    Tear down a cluster
   orama sandbox list                       List active sandboxes
   orama sandbox status [--name <name>]     Show cluster health
-  orama sandbox rollout [--name <name>]    Build + push + rolling upgrade
+  orama sandbox rollout [--name <name>] [--archive <path>]
+                                           Build + push + rolling upgrade
   orama sandbox ssh <node-number>          SSH into a sandbox node (1-5)
-  orama sandbox reset                      Delete all infra and config to start fresh`,
+  orama sandbox reset                      Delete all infra and config to start fresh
+
+The archive (--archive, or this checkout built now) must be signed by the
+RootWallet account that is unlocked: it is the only signer a sandbox trusts.
+Create and rollout install it the way 'orama node setup' and 'orama push' do.`,
 }
 
 var setupCmd = &cobra.Command{
@@ -40,7 +46,8 @@ var createCmd = &cobra.Command{
 	Short: "Create a new 5-node sandbox cluster (~5 min)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
-		return sandbox.Create(name)
+		archive, _ := cmd.Flags().GetString("archive")
+		return sandbox.Create(name, archive)
 	},
 }
 
@@ -76,7 +83,8 @@ var rolloutCmd = &cobra.Command{
 	Short: "Build + push + rolling upgrade to sandbox cluster",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
-		return sandbox.Rollout(name)
+		archive, _ := cmd.Flags().GetString("archive")
+		return sandbox.Rollout(name, archive)
 	},
 }
 
@@ -110,6 +118,7 @@ var sshCmd = &cobra.Command{
 func init() {
 	// create flags
 	createCmd.Flags().String("name", "", "Sandbox name (random if not specified)")
+	createCmd.Flags().String("archive", "", "Build archive to deploy (default: build this checkout now)")
 
 	// destroy flags
 	destroyCmd.Flags().String("name", "", "Sandbox name (uses active if not specified)")
@@ -120,6 +129,7 @@ func init() {
 
 	// rollout flags
 	rolloutCmd.Flags().String("name", "", "Sandbox name (uses active if not specified)")
+	rolloutCmd.Flags().String("archive", "", "Build archive to roll out (default: build this checkout now)")
 
 	// ssh flags
 	sshCmd.Flags().String("name", "", "Sandbox name (uses active if not specified)")

@@ -2,12 +2,12 @@ package install
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
 	"github.com/DeBrosOfficial/network/pkg/config/validate"
+	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
 )
 
 // Validator validates install command inputs
@@ -31,33 +31,34 @@ func (v *Validator) ValidateFlags() error {
 	if v.flags.VpsIP == "" && !v.flags.DryRun {
 		return fmt.Errorf("--vps-ip is required for installation\nExample: orama node install --vps-ip 1.2.3.4")
 	}
-	return nil
-}
-
-// ValidateRootPrivileges checks if running as root
-func (v *Validator) ValidateRootPrivileges() error {
-	if os.Geteuid() != 0 && !v.flags.DryRun {
-		return fmt.Errorf("production installation must be run as root (use sudo)")
+	// It becomes node.public_ip, which invites and upgrades require to be a
+	// public IPv4 address; recording anything else here only defers the error.
+	if v.flags.VpsIP != "" {
+		if err := oramainstall.ValidatePublicIP(v.flags.VpsIP); err != nil {
+			return fmt.Errorf("--vps-ip: %w", err)
+		}
 	}
 	return nil
 }
 
-// ValidatePorts validates port availability
-func (v *Validator) ValidatePorts() error {
-	ports := utils.DefaultPorts()
-
-	if err := utils.EnsurePortsAvailable("install", ports); err != nil {
-		return err
-	}
-	return nil
-}
-
-// ValidateDNS validates DNS record if domain is provided
+// ValidateDNS validates DNS record if domain is provided.
+//
+// A nameserver node gets its certificates over DNS-01 from the cluster's own
+// CoreDNS, so where the domain's A record points says nothing about whether
+// they will issue: on a join it points at the nodes already serving, and on
+// genesis there is no record until this node creates it. What they need is the
+// parent zone's delegation.
 func (v *Validator) ValidateDNS() {
-	if v.flags.Domain != "" {
-		fmt.Printf("\n🌐 Pre-flight DNS validation...\n")
-		utils.ValidateDNSRecord(v.flags.Domain, v.flags.VpsIP)
+	if v.flags.Domain == "" {
+		return
 	}
+	fmt.Printf("\n🌐 Pre-flight DNS validation...\n")
+	if v.flags.Nameserver {
+		fmt.Printf("  ℹ️  Certificates for %s are issued over DNS-01 by this cluster's nameservers;\n", v.flags.Domain)
+		fmt.Printf("     the parent zone must delegate %s to them (docs/NAMESERVER_SETUP.md)\n", v.flags.Domain)
+		return
+	}
+	utils.ValidateDNSRecord(v.flags.Domain, v.flags.VpsIP)
 }
 
 // ValidateGeneratedConfig validates generated configuration files
@@ -72,14 +73,17 @@ func (v *Validator) ValidateGeneratedConfig() error {
 
 // SaveSecrets saves cluster secret and swarm key to secrets directory
 func (v *Validator) SaveSecrets() error {
+	// secrets/ may already be the orama user's (a re-install): write it
+	// without following symlinks.
+	root := oramainstall.OramaRoot(v.oramaDir)
 	// If cluster secret was provided, save it to secrets directory before setup
 	if v.flags.ClusterSecret != "" {
 		secretsDir := filepath.Join(v.oramaDir, "secrets")
-		if err := os.MkdirAll(secretsDir, 0700); err != nil {
+		if err := root.MkdirAll(secretsDir, 0700); err != nil {
 			return fmt.Errorf("failed to create secrets directory: %w", err)
 		}
 		secretPath := filepath.Join(secretsDir, "cluster-secret")
-		if err := os.WriteFile(secretPath, []byte(v.flags.ClusterSecret), 0600); err != nil {
+		if err := root.WriteFile(secretPath, []byte(v.flags.ClusterSecret), 0600); err != nil {
 			return fmt.Errorf("failed to save cluster secret: %w", err)
 		}
 		fmt.Printf("  ✓ Cluster secret saved\n")
@@ -88,14 +92,14 @@ func (v *Validator) SaveSecrets() error {
 	// If swarm key was provided, save it to secrets directory in full format
 	if v.flags.SwarmKey != "" {
 		secretsDir := filepath.Join(v.oramaDir, "secrets")
-		if err := os.MkdirAll(secretsDir, 0700); err != nil {
+		if err := root.MkdirAll(secretsDir, 0700); err != nil {
 			return fmt.Errorf("failed to create secrets directory: %w", err)
 		}
 		// Extract hex only (strips headers if user passed full file content)
 		hexKey := strings.ToUpper(validate.ExtractSwarmKeyHex(v.flags.SwarmKey))
 		swarmKeyContent := fmt.Sprintf("/key/swarm/psk/1.0.0/\n/base16/\n%s\n", hexKey)
 		swarmKeyPath := filepath.Join(secretsDir, "swarm.key")
-		if err := os.WriteFile(swarmKeyPath, []byte(swarmKeyContent), 0600); err != nil {
+		if err := root.WriteFile(swarmKeyPath, []byte(swarmKeyContent), 0600); err != nil {
 			return fmt.Errorf("failed to save swarm key: %w", err)
 		}
 		fmt.Printf("  ✓ Swarm key saved\n")

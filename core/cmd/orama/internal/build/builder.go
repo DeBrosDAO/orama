@@ -1,13 +1,16 @@
 package build
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
@@ -29,16 +32,24 @@ type Builder struct {
 	binDir     string
 	version    string
 	commit     string
+	outputPath string // the archive Build wrote
 	date       string
 	// zig is the zig binary for the vault and the cgo cross-compiles,
 	// resolved and version-checked before anything is built.
 	zig string
+	// agent signs the manifest: the RootWallet agent.
+	agent archiveSigner
 }
 
 // NewBuilder creates a new Builder.
 func NewBuilder(flags *Flags) *Builder {
-	return &Builder{flags: flags}
+	return &Builder{flags: flags, agent: newAgentSigner()}
 }
+
+// OutputPath is the archive the last successful Build wrote. A caller that
+// builds and then deploys uses exactly this file, never the newest one it can
+// find: a shared /tmp holds archives from other checkouts too.
+func (b *Builder) OutputPath() string { return b.outputPath }
 
 // Build runs the full build pipeline.
 func (b *Builder) Build() error {
@@ -51,14 +62,22 @@ func (b *Builder) Build() error {
 	}
 	b.projectDir = projectDir
 
+	signer, err := b.signingPlan()
+	if err != nil {
+		return err
+	}
+
 	b.zig, err = resolveZig(filepath.Join(projectDir, "..", "vault"))
 	if err != nil {
 		return err
 	}
 
-	// Read version from Makefile or use "dev"
-	b.version = b.readVersion()
-	b.commit = b.readCommit()
+	if b.version, err = b.readVersion(); err != nil {
+		return err
+	}
+	if b.commit, err = b.readCommit(); err != nil {
+		return err
+	}
 	b.date = time.Now().UTC().Format("2006-01-02T15:04:05Z")
 
 	// Create temp build directory
@@ -127,11 +146,21 @@ func (b *Builder) Build() error {
 		return fmt.Errorf("failed to generate manifest: %w", err)
 	}
 
-	// Step 11: Sign manifest (optional)
-	if b.flags.Sign {
-		if err := b.signManifest(manifest); err != nil {
-			return fmt.Errorf("failed to sign manifest: %w", err)
-		}
+	// Step 11: Sign the manifest (unless --unsigned)
+	if signer != "" {
+		fmt.Printf("\nSigning the manifest as %s (approve in RootWallet if asked)...\n", signer)
+	}
+	manifestJSON, signature, err := sealManifest(manifest, b.agent, signer)
+	if err != nil {
+		return err
+	}
+	switch {
+	case signer == "":
+		fmt.Printf("\n⚠️  Unsigned archive: no node will install it\n")
+	case len(manifest.Signers) > 0:
+		fmt.Printf("  Signed. Nodes that install this build will trust only: %s\n", strings.Join(manifest.Signers, ", "))
+	default:
+		fmt.Printf("  Signed.\n")
 	}
 
 	// Step 12: Create archive
@@ -140,9 +169,10 @@ func (b *Builder) Build() error {
 		outputPath = filepath.Join(ArchiveDir, ArchiveName(b.version, b.flags.Arch))
 	}
 
-	if err := b.createArchive(outputPath, manifest); err != nil {
+	if err := b.createArchive(outputPath, manifest, manifestJSON, signature); err != nil {
 		return fmt.Errorf("failed to create archive: %w", err)
 	}
+	b.outputPath = outputPath
 
 	elapsed := time.Since(start).Round(time.Second)
 	fmt.Printf("\nBuild complete in %s\n", elapsed)
@@ -671,56 +701,59 @@ func (b *Builder) crossEnv() []string {
 		"CGO_ENABLED=0")
 }
 
-func (b *Builder) readVersion() string {
-	// Primary: read the repo-root VERSION file (single source of truth).
-	// The Makefile resolves $(shell cat ../VERSION) at make time, but this
-	// CLI builder is a separate Go binary that doesn't go through make, so
-	// we must read VERSION directly. Try ../VERSION first (when projectDir
-	// is core/), then VERSION in projectDir.
+// readVersion reads the repository VERSION file, the single source of truth
+// (pkg/version embeds the same value, and a test holds the two together). A
+// build that cannot read it fails: the version is part of what the archive
+// signature covers, so a guessed "dev" would be signed as if it were real.
+func (b *Builder) readVersion() (string, error) {
+	var tried []string
 	for _, p := range []string{
 		filepath.Join(b.projectDir, "..", "VERSION"),
 		filepath.Join(b.projectDir, "VERSION"),
 	} {
-		if data, err := os.ReadFile(p); err == nil {
-			if v := strings.TrimSpace(string(data)); v != "" {
-				return v
-			}
+		data, err := os.ReadFile(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			tried = append(tried, p)
+			continue
 		}
-	}
-	// Fallback: parse Makefile in case someone runs an older layout where
-	// VERSION is still hard-coded inline.
-	data, err := os.ReadFile(filepath.Join(b.projectDir, "Makefile"))
-	if err != nil {
-		return "dev"
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "VERSION") {
-			parts := strings.SplitN(line, ":=", 2)
-			if len(parts) == 2 {
-				v := strings.TrimSpace(parts[1])
-				// Ignore unevaluated make expressions like $(shell ...)
-				if !strings.Contains(v, "$(") {
-					return v
-				}
-			}
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", p, err)
 		}
+		v := strings.TrimSpace(string(data))
+		if v == "" {
+			return "", fmt.Errorf("%s is empty", p)
+		}
+		return v, nil
 	}
-	return "dev"
+	return "", fmt.Errorf("no VERSION file (looked for %s)", strings.Join(tried, ", "))
 }
 
-func (b *Builder) readCommit() string {
+// readCommit is the checkout's commit. A build outside a git checkout fails
+// rather than being signed as commit "unknown".
+func (b *Builder) readCommit() (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--short", "HEAD")
 	cmd.Dir = b.projectDir
 	out, err := cmd.Output()
 	if err != nil {
-		return "unknown"
+		return "", fmt.Errorf("read the commit of %s with git: %w", b.projectDir, err)
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
 }
 
+// caddyProviderMACHeader is the header the Caddy DNS provider stamps its calls
+// in, and the gateway reads.
+const caddyProviderMACHeader = auth.CoordinationMACHeader
+
 // generateCaddyProviderCode returns the Caddy DNS provider Go source.
-// This is the same code used by the VPS-side caddy installer.
+//
+// Every call it makes to the gateway's /v1/internal/acme endpoints carries a
+// MAC in the header auth.CoordinationMACHeader names, computed exactly as
+// auth.SignACME computes it (method, path, query and the SHA-256 of the body),
+// under the key install writes to key_file (installers.CaddyACMEKeyPath). The
+// gateway refuses anything else. This file is compiled into Caddy by xcaddy
+// and cannot import the repository's packages, which is why the construction
+// is spelled out here; a test in this package signs with it and verifies with
+// auth.VerifyACME.
 func generateCaddyProviderCode() string {
 	return `// Package orama implements a DNS provider for Caddy that uses the Orama Network
 // gateway's internal ACME API for DNS-01 challenge validation.
@@ -729,9 +762,16 @@ package orama
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -748,6 +788,12 @@ type Provider struct {
 	// Endpoint is the URL of the Orama gateway's ACME API
 	// Default: the index gateway /v1/internal/acme
 	Endpoint string ` + "`json:\"endpoint,omitempty\"`" + `
+
+	// KeyFile holds the hex key every call is signed with. Required: the
+	// gateway refuses an unsigned call.
+	KeyFile string ` + "`json:\"key_file,omitempty\"`" + `
+
+	key []byte
 }
 
 // CaddyModule returns the Caddy module information.
@@ -763,6 +809,18 @@ func (p *Provider) Provision(ctx caddy.Context) error {
 	if p.Endpoint == "" {
 		p.Endpoint = "` + fmt.Sprintf("http://localhost:%d/v1/internal/acme", constants.GatewayAPIPort) + `"
 	}
+	if p.KeyFile == "" {
+		return fmt.Errorf("orama DNS provider: key_file is required; the gateway refuses unsigned DNS-01 calls")
+	}
+	raw, err := os.ReadFile(p.KeyFile)
+	if err != nil {
+		return fmt.Errorf("orama DNS provider: read key_file: %w", err)
+	}
+	key, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil || len(key) == 0 {
+		return fmt.Errorf("orama DNS provider: key_file %s does not hold a hex key", p.KeyFile)
+	}
+	p.key = key
 	return nil
 }
 
@@ -776,10 +834,54 @@ func (p *Provider) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.ArgErr()
 				}
 				p.Endpoint = d.Val()
+			case "key_file":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				p.KeyFile = d.Val()
 			default:
 				return d.Errf("unrecognized option: %s", d.Val())
 			}
 		}
+	}
+	return nil
+}
+
+// sign stamps req the way the gateway's auth.VerifyACME checks it: the MAC
+// covers the body, so a captured stamp cannot be replayed with another record.
+func sign(key []byte, req *http.Request, body []byte, now time.Time) {
+	ts := strconv.FormatInt(now.Unix(), 10)
+	sum := sha256.Sum256(body)
+	payload := strings.Join([]string{"orama-coordination-v2", strings.ToUpper(req.Method), req.URL.Path, req.URL.RawQuery, hex.EncodeToString(sum[:]), ts}, "\n")
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(payload))
+	req.Header.Set("` + caddyProviderMACHeader + `", ts+"."+hex.EncodeToString(mac.Sum(nil)))
+}
+
+// call posts one record to the gateway's present or cleanup endpoint.
+func (p *Provider) call(ctx context.Context, op string, zone string, rr libdns.RR) error {
+	body, err := json.Marshal(map[string]string{"fqdn": rr.Name + "." + zone, "value": rr.Data})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+	u, err := url.Parse(p.Endpoint + "/" + op)
+	if err != nil {
+		return fmt.Errorf("orama DNS provider: endpoint %q: %w", p.Endpoint, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	sign(p.key, req, body, time.Now())
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to %s challenge: %w", op, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s failed with status %d", op, resp.StatusCode)
 	}
 	return nil
 }
@@ -792,25 +894,8 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 		if rr.Type != "TXT" {
 			continue
 		}
-		fqdn := rr.Name + "." + zone
-		payload := map[string]string{"fqdn": fqdn, "value": rr.Data}
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return added, fmt.Errorf("failed to marshal request: %w", err)
-		}
-		req, err := http.NewRequestWithContext(ctx, "POST", p.Endpoint+"/present", bytes.NewReader(body))
-		if err != nil {
-			return added, fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		client := &http.Client{Timeout: 30 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			return added, fmt.Errorf("failed to present challenge: %w", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return added, fmt.Errorf("present failed with status %d", resp.StatusCode)
+		if err := p.call(ctx, "present", zone, rr); err != nil {
+			return added, err
 		}
 		added = append(added, rec)
 	}
@@ -825,25 +910,8 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, records []lib
 		if rr.Type != "TXT" {
 			continue
 		}
-		fqdn := rr.Name + "." + zone
-		payload := map[string]string{"fqdn": fqdn, "value": rr.Data}
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return deleted, fmt.Errorf("failed to marshal request: %w", err)
-		}
-		req, err := http.NewRequestWithContext(ctx, "POST", p.Endpoint+"/cleanup", bytes.NewReader(body))
-		if err != nil {
-			return deleted, fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		client := &http.Client{Timeout: 30 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			return deleted, fmt.Errorf("failed to cleanup challenge: %w", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return deleted, fmt.Errorf("cleanup failed with status %d", resp.StatusCode)
+		if err := p.call(ctx, "cleanup", zone, rr); err != nil {
+			return deleted, err
 		}
 		deleted = append(deleted, rec)
 	}

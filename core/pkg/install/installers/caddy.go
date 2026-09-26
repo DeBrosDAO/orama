@@ -1,18 +1,15 @@
 package installers
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/constants"
-)
-
-const (
-	xcaddyRepo = "github.com/caddyserver/xcaddy/cmd/xcaddy@latest"
 )
 
 // internalAuthHeaders are the request headers a gateway uses to tell another
@@ -51,13 +48,12 @@ type CaddyInstaller struct {
 	*BaseInstaller
 	version   string
 	oramaHome string
-	dnsModule string // Path to the orama DNS module source
 
 	// withNtfy, when set, causes generateCaddyfile to emit a reverse-
 	// proxy block for `push.<dnsZone>` → localhost:<NtfyListenPort>.
 	// Enabled per-node via EnableNtfyProxy. Feature #72.
 	withNtfy     bool
-	ntfyHostname string // e.g. "push.dbrs.space" — fully-qualified public host
+	ntfyHostname string // e.g. "push.example.com" — fully-qualified public host
 
 	// behindSNIRouter, when set, moves Caddy's HTTPS listener off :443 to
 	// CaddyHTTPSPortBehindSNI so the orama-sni-router can own :443 and forward
@@ -78,13 +74,12 @@ func NewCaddyInstaller(arch string, logWriter io.Writer, oramaHome string) *Cadd
 		BaseInstaller: NewBaseInstaller(arch, logWriter),
 		version:       constants.CaddyVersion,
 		oramaHome:     oramaHome,
-		dnsModule:     filepath.Join(oramaHome, "src", "pkg", "caddy", "dns", "orama"),
 	}
 }
 
 // EnableNtfyProxy tells the Caddy installer to emit a reverse-proxy
 // block for the self-hosted ntfy server (feature #72). hostname is the
-// public fully-qualified domain — e.g. "push.dbrs.space" — that Caddy
+// public fully-qualified domain — e.g. "push.example.com" — that Caddy
 // will obtain a Let's Encrypt cert for and route to the local ntfy
 // server on NtfyListenPort.
 //
@@ -105,139 +100,25 @@ func (ci *CaddyInstaller) EnableSNIRouterMode() {
 	ci.behindSNIRouter = true
 }
 
-// IsInstalled checks if Caddy with orama DNS module is already installed
-func (ci *CaddyInstaller) IsInstalled() bool {
-	caddyPath := "/usr/bin/caddy"
-	if _, err := os.Stat(caddyPath); os.IsNotExist(err) {
-		return false
-	}
-
-	// Verify it has the orama DNS module
-	cmd := exec.Command(caddyPath, "list-modules")
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-
-	return containsLine(string(output), "dns.providers.orama")
-}
-
-// Install builds and installs Caddy with the custom orama DNS module
-func (ci *CaddyInstaller) Install() error {
-	if ci.IsInstalled() {
-		fmt.Fprintf(ci.logWriter, "  ✓ Caddy with orama DNS module already installed\n")
-		return nil
-	}
-
-	fmt.Fprintf(ci.logWriter, "  Building Caddy with orama DNS module...\n")
-
-	// Check if Go is available
-	if _, err := exec.LookPath("go"); err != nil {
-		return fmt.Errorf("go not found - required to build Caddy. Please install Go first")
-	}
-
-	goPath := os.Getenv("PATH") + ":/usr/local/go/bin"
-	buildDir := "/tmp/caddy-build"
-
-	// Clean up any previous build
-	os.RemoveAll(buildDir)
-	if err := os.MkdirAll(buildDir, 0755); err != nil {
-		return fmt.Errorf("failed to create build directory: %w", err)
-	}
-	defer os.RemoveAll(buildDir)
-
-	// Install xcaddy if not available
-	if _, err := exec.LookPath("xcaddy"); err != nil {
-		fmt.Fprintf(ci.logWriter, "    Installing xcaddy...\n")
-		cmd := exec.Command("go", "install", xcaddyRepo)
-		cmd.Env = append(os.Environ(), "PATH="+goPath, "GOBIN=/usr/local/bin", "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to install xcaddy: %w\n%s", err, string(output))
-		}
-	}
-
-	// Create the orama DNS module in build directory
-	fmt.Fprintf(ci.logWriter, "    Creating orama DNS module...\n")
-	moduleDir := filepath.Join(buildDir, "caddy-dns-orama")
-	if err := os.MkdirAll(moduleDir, 0755); err != nil {
-		return fmt.Errorf("failed to create module directory: %w", err)
-	}
-
-	// Write the provider.go file
-	providerCode := ci.generateProviderCode()
-	if err := os.WriteFile(filepath.Join(moduleDir, "provider.go"), []byte(providerCode), 0644); err != nil {
-		return fmt.Errorf("failed to write provider.go: %w", err)
-	}
-
-	// Write go.mod
-	goMod := ci.generateGoMod()
-	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(goMod), 0644); err != nil {
-		return fmt.Errorf("failed to write go.mod: %w", err)
-	}
-
-	// Run go mod tidy
-	tidyCmd := exec.Command("go", "mod", "tidy")
-	tidyCmd.Dir = moduleDir
-	tidyCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
-	if output, err := tidyCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to run go mod tidy: %w\n%s", err, string(output))
-	}
-
-	// Build Caddy with xcaddy
-	fmt.Fprintf(ci.logWriter, "    Building Caddy binary...\n")
-	xcaddyPath := "/usr/local/bin/xcaddy"
-	if _, err := os.Stat(xcaddyPath); os.IsNotExist(err) {
-		xcaddyPath = "xcaddy" // Try PATH
-	}
-
-	buildCmd := exec.Command(xcaddyPath, "build",
-		"v"+ci.version,
-		"--with", "github.com/DeBrosOfficial/caddy-dns-orama="+moduleDir,
-		"--output", filepath.Join(buildDir, "caddy"))
-	buildCmd.Dir = buildDir
-	buildCmd.Env = append(os.Environ(), "PATH="+goPath, "GOPROXY=https://proxy.golang.org|direct", "GONOSUMDB=*")
-	if output, err := buildCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to build Caddy: %w\n%s", err, string(output))
-	}
-
-	// Verify the binary has orama DNS module
-	verifyCmd := exec.Command(filepath.Join(buildDir, "caddy"), "list-modules")
-	output, err := verifyCmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to verify Caddy binary: %w", err)
-	}
-	if !containsLine(string(output), "dns.providers.orama") {
-		return fmt.Errorf("Caddy binary does not contain orama DNS module")
-	}
-
-	// Install the binary
-	fmt.Fprintf(ci.logWriter, "    Installing Caddy binary...\n")
-	srcBinary := filepath.Join(buildDir, "caddy")
-	dstBinary := "/usr/bin/caddy"
-
-	data, err := os.ReadFile(srcBinary)
-	if err != nil {
-		return fmt.Errorf("failed to read built binary: %w", err)
-	}
-	if err := os.WriteFile(dstBinary, data, 0755); err != nil {
-		return fmt.Errorf("failed to install binary: %w", err)
-	}
-
-	fmt.Fprintf(ci.logWriter, "  ✓ Caddy with orama DNS module installed\n")
-	return nil
-}
-
 // Configure creates Caddy configuration files.
 // baseDomain is optional — if provided (and different from domain), Caddy will also
-// serve traffic for the base domain and its wildcard (e.g., *.dbrs.space).
-func (ci *CaddyInstaller) Configure(domain string, email string, acmeEndpoint string, baseDomain string) error {
+// serve traffic for the base domain and its wildcard (e.g., *.example.com).
+// clusterSecret is what the key Caddy signs its DNS-01 calls with is derived
+// from (CaddyACMEKeyPath).
+func (ci *CaddyInstaller) Configure(domain string, email string, acmeEndpoint string, baseDomain string, acmeCA string, clusterSecret string) error {
 	configDir := "/etc/caddy"
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	// The key first: a Caddyfile naming a key file that is not there stops
+	// Caddy from loading its config at all.
+	if err := writeCaddyACMEKey(clusterSecret); err != nil {
+		return err
+	}
+
 	// Create Caddyfile
-	caddyfile := ci.generateCaddyfile(domain, email, acmeEndpoint, baseDomain)
+	caddyfile := ci.generateCaddyfile(domain, email, acmeEndpoint, baseDomain, acmeCA)
 	if err := os.WriteFile(filepath.Join(configDir, "Caddyfile"), []byte(caddyfile), 0644); err != nil {
 		return fmt.Errorf("failed to write Caddyfile: %w", err)
 	}
@@ -245,208 +126,58 @@ func (ci *CaddyInstaller) Configure(domain string, email string, acmeEndpoint st
 	return nil
 }
 
-// generateProviderCode creates the orama DNS provider code
-func (ci *CaddyInstaller) generateProviderCode() string {
-	return `// Package orama implements a DNS provider for Caddy that uses the Orama Network
-// gateway's internal ACME API for DNS-01 challenge validation.
-package orama
+// CaddyACMEKeyPath holds the key Caddy's orama DNS provider signs its
+// /v1/internal/acme calls with, hex-encoded. root:orama 0640 in root-owned
+// /etc/caddy: Caddy runs as orama and reads it; a tenant's deployment, which
+// runs under a user of its own, cannot. The gateway derives the same key from
+// the cluster secret (auth.ACMEChallengeKey).
+const CaddyACMEKeyPath = "/etc/caddy/orama-acme.key"
 
-import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"time"
+// CaddyAdminSocket is Caddy's admin API. It used to be the default,
+// localhost:2019: unauthenticated control of the process that terminates TLS
+// for the node — load a config that proxies anything anywhere, or read the
+// private keys — for every process on the host. A unix socket in Caddy's own
+// runtime directory (RuntimeDirectory=orama-caddy, 0700), itself 0600, is
+// reachable by the orama user only. `caddy reload` (the unit's ExecReload)
+// reads the address from the Caddyfile.
+const CaddyAdminSocket = "/run/orama-caddy/admin.sock"
 
-	"github.com/caddyserver/caddy/v2"
-	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
-	"github.com/libdns/libdns"
-)
+// caddyAdminSocketMode is the admin socket's file mode, in the form Caddy's
+// `unix/<path>|<mode>` listener address takes.
+const caddyAdminSocketMode = "0600"
 
-func init() {
-	caddy.RegisterModule(Provider{})
-}
-
-// Provider wraps the Orama DNS provider for Caddy.
-type Provider struct {
-	// Endpoint is the URL of the Orama gateway's ACME API
-	// Default: http://localhost:<index-gateway>/v1/internal/acme
-	Endpoint string ` + "`json:\"endpoint,omitempty\"`" + `
-}
-
-// CaddyModule returns the Caddy module information.
-func (Provider) CaddyModule() caddy.ModuleInfo {
-	return caddy.ModuleInfo{
-		ID:  "dns.providers.orama",
-		New: func() caddy.Module { return new(Provider) },
+// writeCaddyACMEKey writes the key derived from clusterSecret to
+// CaddyACMEKeyPath, root:orama 0640. It is created 0600 and only then handed
+// to the group, so it is never readable by anyone else.
+func writeCaddyACMEKey(clusterSecret string) error {
+	key, err := nodeauth.ACMEChallengeKey(clusterSecret)
+	if err != nil {
+		return fmt.Errorf("derive the key Caddy signs DNS-01 requests with: %w", err)
 	}
-}
-
-// Provision sets up the module.
-func (p *Provider) Provision(ctx caddy.Context) error {
-	if p.Endpoint == "" {
-		p.Endpoint = "` + fmt.Sprintf("http://localhost:%d/v1/internal/acme", constants.GatewayAPIPort) + `"
+	if err := os.WriteFile(CaddyACMEKeyPath, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", CaddyACMEKeyPath, err)
 	}
-	return nil
-}
-
-// UnmarshalCaddyfile parses the Caddyfile configuration.
-func (p *Provider) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
-	for d.Next() {
-		for d.NextBlock(0) {
-			switch d.Val() {
-			case "endpoint":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				p.Endpoint = d.Val()
-			default:
-				return d.Errf("unrecognized option: %s", d.Val())
-			}
-		}
-	}
-	return nil
-}
-
-// AppendRecords adds records to the zone. For ACME, this presents the challenge.
-func (p *Provider) AppendRecords(ctx context.Context, zone string, records []libdns.Record) ([]libdns.Record, error) {
-	var added []libdns.Record
-
-	for _, rec := range records {
-		rr := rec.RR()
-		if rr.Type != "TXT" {
-			continue
-		}
-
-		fqdn := rr.Name + "." + zone
-
-		payload := map[string]string{
-			"fqdn":  fqdn,
-			"value": rr.Data,
-		}
-
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return added, fmt.Errorf("failed to marshal request: %w", err)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, "POST", p.Endpoint+"/present", bytes.NewReader(body))
-		if err != nil {
-			return added, fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		client := &http.Client{Timeout: 30 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			return added, fmt.Errorf("failed to present challenge: %w", err)
-		}
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return added, fmt.Errorf("present failed with status %d", resp.StatusCode)
-		}
-
-		added = append(added, rec)
-	}
-
-	return added, nil
-}
-
-// DeleteRecords removes records from the zone. For ACME, this cleans up the challenge.
-func (p *Provider) DeleteRecords(ctx context.Context, zone string, records []libdns.Record) ([]libdns.Record, error) {
-	var deleted []libdns.Record
-
-	for _, rec := range records {
-		rr := rec.RR()
-		if rr.Type != "TXT" {
-			continue
-		}
-
-		fqdn := rr.Name + "." + zone
-
-		payload := map[string]string{
-			"fqdn":  fqdn,
-			"value": rr.Data,
-		}
-
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return deleted, fmt.Errorf("failed to marshal request: %w", err)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, "POST", p.Endpoint+"/cleanup", bytes.NewReader(body))
-		if err != nil {
-			return deleted, fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		client := &http.Client{Timeout: 30 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			return deleted, fmt.Errorf("failed to cleanup challenge: %w", err)
-		}
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return deleted, fmt.Errorf("cleanup failed with status %d", resp.StatusCode)
-		}
-
-		deleted = append(deleted, rec)
-	}
-
-	return deleted, nil
-}
-
-// GetRecords returns the records in the zone. Not used for ACME.
-func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record, error) {
-	return nil, nil
-}
-
-// SetRecords sets the records in the zone. Not used for ACME.
-func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns.Record) ([]libdns.Record, error) {
-	return nil, nil
-}
-
-// Interface guards
-var (
-	_ caddy.Module          = (*Provider)(nil)
-	_ caddy.Provisioner     = (*Provider)(nil)
-	_ caddyfile.Unmarshaler = (*Provider)(nil)
-	_ libdns.RecordAppender = (*Provider)(nil)
-	_ libdns.RecordDeleter  = (*Provider)(nil)
-	_ libdns.RecordGetter   = (*Provider)(nil)
-	_ libdns.RecordSetter   = (*Provider)(nil)
-)
-`
-}
-
-// generateGoMod creates the go.mod file for the module
-func (ci *CaddyInstaller) generateGoMod() string {
-	return `module github.com/DeBrosOfficial/caddy-dns-orama
-
-go 1.22
-
-require (
-	github.com/caddyserver/caddy/v2 v2.` + constants.CaddyVersion[2:] + `
-	github.com/libdns/libdns v1.1.0
-)
-`
+	return restrictToOramaGroup(CaddyACMEKeyPath)
 }
 
 // generateCaddyfile creates the Caddyfile configuration.
 // If baseDomain is provided and different from domain, Caddy also serves
-// the base domain and its wildcard (e.g., *.dbrs.space alongside *.node1.dbrs.space).
-func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDomain string) string {
+// the base domain and its wildcard (e.g., *.example.com alongside *.node1.example.com).
+// acmeCA, when set, is the ACME directory every issuer uses: it is emitted as
+// the global acme_ca option, which Caddy applies to each `issuer acme` block
+// that names no directory of its own — including the TURN blocks appended at
+// runtime. Empty keeps the default (Let's Encrypt production) and a
+// byte-identical Caddyfile.
+func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDomain, acmeCA string) string {
 	// Let's Encrypt via ACME DNS-01 challenge (no fallback to self-signed)
 	tlsBlock := fmt.Sprintf(`    tls {
         issuer acme {
             dns orama {
                 endpoint %s
+                key_file %s
             }
         }
-    }`, acmeEndpoint)
+    }`, acmeEndpoint, CaddyACMEKeyPath)
 
 	var sb strings.Builder
 	// Caddy protocol restrictions:
@@ -480,15 +211,20 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
 	if ci.behindSNIRouter {
 		httpsPortOption = fmt.Sprintf("    https_port %d\n", CaddyHTTPSPortBehindSNI)
 	}
-	sb.WriteString(fmt.Sprintf("{\n    email %s\n%s    servers {\n        protocols h1\n    }\n}\n", email, httpsPortOption))
+	acmeCAOption := ""
+	if acmeCA != "" {
+		acmeCAOption = fmt.Sprintf("    acme_ca %s\n", acmeCA)
+	}
+	adminOption := fmt.Sprintf("    admin unix/%s|%s\n", CaddyAdminSocket, caddyAdminSocketMode)
+	sb.WriteString(fmt.Sprintf("{\n    email %s\n%s%s%s    servers {\n        protocols h1\n    }\n}\n", email, adminOption, acmeCAOption, httpsPortOption))
 
 	gw := fmt.Sprintf("localhost:%d", constants.GatewayAPIPort)
 
-	// Node domain blocks (e.g., node1.dbrs.space, *.node1.dbrs.space)
+	// Node domain blocks (e.g., node1.example.com, *.node1.example.com)
 	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n%s\n}\n", domain, tlsBlock, proxyBlock(gw)))
 	sb.WriteString(fmt.Sprintf("\n%s {\n%s\n%s\n}\n", domain, tlsBlock, proxyBlock(gw)))
 
-	// Base domain blocks (e.g., dbrs.space, *.dbrs.space) — for app routing
+	// Base domain blocks (e.g., example.com, *.example.com) — for app routing
 	if baseDomain != "" && baseDomain != domain {
 		sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n%s\n}\n", baseDomain, tlsBlock, proxyBlock(gw)))
 		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n%s\n}\n", baseDomain, tlsBlock, proxyBlock(gw)))

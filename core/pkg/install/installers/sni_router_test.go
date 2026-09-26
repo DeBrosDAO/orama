@@ -73,33 +73,3 @@ func TestConfigure_rejectsEmptyBaseDomain(t *testing.T) {
 		t.Errorf("expected error for empty base domain")
 	}
 }
-
-// TestGenerateSystemdUnit_shape verifies the unit grants CAP_NET_BIND_SERVICE,
-// runs as orama, restarts on failure, and points ExecStart at the installed
-// binary + config.
-func TestGenerateSystemdUnit_shape(t *testing.T) {
-	dir := t.TempDir()
-	si := newTestSNIRouterInstaller(dir)
-	unit := si.generateSystemdUnit()
-
-	for _, want := range []string{
-		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
-		"User=orama",
-		// Always, not on-failure: the router is reconciled by orama-node, and
-		// on-failure leaves it down after a clean exit.
-		"Restart=always",
-		"StartLimitIntervalSec=0",
-		"EnvironmentFile=-/opt/orama/.orama/data/sni-router.env",
-		// ExecStart must point at the ABSOLUTE config path so it doesn't
-		// depend on WorkingDirectory/$HOME resolution at runtime.
-		"ExecStart=/opt/orama/bin/orama-sni-router --config " + si.configPath(),
-		"Before=caddy.service",
-	} {
-		if !strings.Contains(unit, want) {
-			t.Errorf("systemd unit missing %q\n---\n%s", want, unit)
-		}
-	}
-	if !strings.Contains(si.configPath(), dir) {
-		t.Errorf("configPath %q not rooted at the oramaDir %q", si.configPath(), dir)
-	}
-}

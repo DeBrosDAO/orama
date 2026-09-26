@@ -76,8 +76,16 @@ type ClientConfig struct {
     APIKey            string        // API key for gateway auth
     JWT               string        // Optional JWT bearer token
     IdentityPath      string        // Path to persistent LibP2P identity key file
+    PubSubSocket      string        // Unix socket of the node's pubsub API (orama-namespace-pubsub@index); admits only the gateways' user
+    ListenAddrs       []string      // LibP2P listen multiaddrs; empty = no listener
 }
 ```
+
+The client only dials its bootstrap peers, so by default its LibP2P host has
+no listener at all. Set `ListenAddrs` to accept inbound connections on a named
+interface (for example a node's WireGuard address, `/ip4/10.0.0.3/tcp/0`);
+`Connect` refuses an unspecified address such as `/ip4/0.0.0.0/...`, which is
+every interface, the public one included.
 
 ### Creating a Client
 

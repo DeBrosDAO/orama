@@ -1,10 +1,12 @@
 package raftid
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 )
 
 func TestPlan_needsMigration(t *testing.T) {
@@ -99,5 +101,41 @@ func TestRequireStableIDSupport_anUnreachableNodeBlocks(t *testing.T) {
 
 	if err := requireStableIDSupport([]inspector.Node{{Host: "1.2.3.4"}}); err == nil {
 		t.Fatal("an unreachable node did not block the migration")
+	}
+}
+
+// The data directory is the orama user's: every write there runs as that
+// user, and the env file, in the root-owned unit env tree, is written only by
+// orama-privhelper — never chowned to orama.
+func TestResetScript_writesEachTreeAsItsOwner(t *testing.T) {
+	script := resetScript("12D3KooWAlpha", "10.0.0.1:10100")
+
+	if strings.Contains(script, "chown") {
+		t.Fatalf("the reset hands a file to the orama user:\n%s", script)
+	}
+	if !strings.Contains(script, `| `+privhelper.Path+` run unitenv set index rqlite`) {
+		t.Fatalf("the env file is not written through orama-privhelper:\n%s", script)
+	}
+	if strings.Contains(script, `> "$ENV_FILE"`) || strings.Contains(script, `mv "$ENV_FILE"`) {
+		t.Fatalf("the env file is written in place as root:\n%s", script)
+	}
+
+	oramaAt := strings.Index(script, asOramaUser+" sh -c '")
+	if oramaAt < 0 {
+		t.Fatalf("the data directory is not written as the orama user:\n%s", script)
+	}
+	for _, step := range []string{"rm -rf", "mkdir -p", `> "$1"/`} {
+		at := strings.Index(script, step)
+		if at < oramaAt {
+			t.Errorf("%q runs as root, before the switch to the orama user", step)
+		}
+	}
+
+	sh, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if out, err := exec.Command(sh, "-n", "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("not valid shell: %v\n%s", err, out)
 	}
 }

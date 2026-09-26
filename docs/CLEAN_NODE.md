@@ -19,7 +19,12 @@ How to completely remove all Orama Network state from a VPS so it can be reinsta
 Run this as root or with sudo on the target VPS:
 
 ```bash
-# 1. Stop supervisor (PartOf stops @index / @nameserver), then leftover host units
+# 1. Stop the privileged helper's socket (the orama group's only path to root),
+#    then the supervisor (PartOf stops @index / @nameserver), then the host units
+#    installs before the namespace templates wrote (current install and upgrade
+#    delete them; a node that was never upgraded still has them)
+sudo systemctl stop orama-privhelper.socket 2>/dev/null
+sudo systemctl disable orama-privhelper.socket 2>/dev/null
 sudo systemctl stop orama-node 2>/dev/null
 sudo systemctl stop 'orama-namespace-*@*' 2>/dev/null
 sudo systemctl disable orama-node 2>/dev/null
@@ -36,6 +41,7 @@ sleep 1
 # 2. Remove systemd service files
 sudo rm -f /etc/systemd/system/orama-*.service
 sudo rm -f /etc/systemd/system/orama-*.timer
+sudo rm -f /etc/systemd/system/orama-privhelper.socket /etc/systemd/system/orama-privhelper@.service
 sudo rm -f /etc/systemd/system/coredns.service
 sudo rm -f /etc/systemd/system/caddy.service
 sudo systemctl daemon-reload
@@ -49,13 +55,21 @@ sudo wg-quick down wg0 2>/dev/null
 sudo systemctl disable wg-quick@wg0 2>/dev/null
 sudo rm -f /etc/wireguard/wg0.conf
 
-# 4. Reset UFW firewall
-sudo ufw --force reset
-sudo ufw allow 22/tcp
-sudo ufw --force enable
+# 4. Remove the firewall rules Orama added (tagged "orama"), highest number
+# first. Rules you added yourself stay, and so does the SSH rule (22/tcp here;
+# use your sshd port if it differs). A node installed before rules were tagged
+# and never upgraded since may also hold the untagged rules listed in
+# core/pkg/install/firewall_legacy.go; delete those by hand.
+for n in $(sudo ufw status numbered \
+    | sed -n '/^\[ *[0-9]*\] 22\/tcp /d; s/^\[ *\([0-9]*\)\].*# orama$/\1/p' \
+    | sort -rn); do
+  sudo ufw --force delete "$n"
+done
 
 # 5. Remove orama data directory
 sudo rm -rf /opt/orama
+# Root-owned env files of namespace units and deployments (written by orama-privhelper)
+sudo rm -rf /var/lib/orama-unit-env /var/lib/orama-deploy
 sudo rm -rf /var/lib/ntfy /run/ntfy
 # Tor client config and state (the tor package itself: see Nuclear Clean)
 sudo rm -rf /etc/orama/tor /var/lib/orama-tor
@@ -73,7 +87,9 @@ sudo swapoff -a 2>/dev/null || true
 #    so services must be stopped first or userdel fails with "user in use")
 sudo userdel -r orama 2>/dev/null
 sudo rm -rf /home/orama
-sudo rm -f /etc/sudoers.d/orama-namespaces /usr/local/bin/orama-privhelper
+sudo rm -f /usr/local/bin/orama-privhelper
+# Sudoers files from releases before the socket-activated helper
+sudo rm -f /etc/sudoers.d/orama-namespaces
 sudo rm -f /etc/sudoers.d/orama-access
 sudo rm -f /etc/sudoers.d/orama-deployments
 sudo rm -f /etc/sudoers.d/orama-wireguard
@@ -91,7 +107,7 @@ sudo systemctl daemon-reload
 
 # 10. Clean temp files
 sudo rm -f /tmp/orama /tmp/network-source.tar.gz /tmp/network-source.zip
-sudo rm -rf /tmp/network-extract /tmp/coredns-build /tmp/caddy-build
+sudo rm -rf /tmp/network-extract /tmp/coredns-build-* /tmp/caddy-build-*
 
 echo "Node cleaned. Ready for fresh install."
 ```
@@ -103,10 +119,11 @@ echo "Node cleaned. Ready for fresh install."
 | **App data** | `/opt/orama/.orama/` (configs, secrets, logs, IPFS, RQLite, Olric) |
 | **Source code** | `/opt/orama/src/` |
 | **Binaries** | `/opt/orama/bin/orama-node`, `/opt/orama/bin/gateway`, `/opt/orama/bin/vault-guardian` |
-| **Systemd** | `orama-node.service`, `orama-namespace-*@index`, leftover `orama-*.service`, `coredns.service`, `caddy.service`, `orama-deploy-*.service` |
+| **Systemd** | `orama-node.service`, `orama-namespace-*@index`, leftover `orama-*.service`, `coredns.service`, `caddy.service`, `orama-deploy-*.service`, `orama-privhelper.socket`, `orama-privhelper@.service` |
+| **Privileged helper** | `/usr/local/bin/orama-privhelper` and its socket `/run/orama-privhelper.sock` |
 | **WireGuard** | `/etc/wireguard/wg0.conf`, `wg-quick@wg0` systemd unit |
-| **Firewall** | All UFW rules (reset to default + SSH only) |
-| **User** | `orama` system user, `/etc/sudoers.d/orama-*` (incl. `orama-namespaces`) |
+| **Firewall** | The UFW rules Orama added (comment `orama`); your own rules and the rules for the ports sshd listens on stay |
+| **User** | `orama` system user; `/etc/sudoers.d/orama-*` left by older releases (incl. `orama-namespaces`) |
 | **CoreDNS** | `/etc/coredns/Corefile` |
 | **Caddy** | `/etc/caddy/Caddyfile`, `/var/lib/caddy/` (TLS certs) |
 | **Tor** | `orama-namespace-tor@index`, `/etc/orama/tor/torrc`, `/var/lib/orama-tor/` (the `tor` package and its apt source stay; see Nuclear Clean) |
@@ -167,6 +184,14 @@ orama node wipe --env testnet                  # every node in the environment
 orama node wipe --env testnet --node 1.2.3.4   # one node
 orama node wipe --env testnet --nuclear        # also remove shared binaries and the tor package
 ```
+
+After a node is erased — by `wipe`, or by `remove` including `remove --offline`
+for a VPS that is already gone — its SSH key is deleted from your RootWallet
+vault: every `orama node setup` stores one, and a retired node's key opens
+nothing. If the vault cannot be reached the command says so and fails. For
+`wipe`, run it again once RootWallet is unlocked. Otherwise quit the RootWallet
+app (and any other RootWallet agent) and run `rw vault ssh rm <ip>/<user> --yes`:
+the CLI and a running agent must not write the vault at the same time.
 
 `wipe` erases the target only. If the node is still part of a running cluster,
 use `remove` instead — it takes the node out of the cluster first (raft

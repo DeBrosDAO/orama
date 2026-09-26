@@ -56,6 +56,9 @@ func (c *EnvCodec) Encode(env map[string]string) (string, error) {
 	if err := ValidateEnv(env); err != nil {
 		return "", err
 	}
+	if err := ValidateEnvSize(env); err != nil {
+		return "", err
+	}
 	if env == nil {
 		env = map[string]string{}
 	}

@@ -31,7 +31,7 @@ ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs
 InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 
-EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/olric.env
+EnvironmentFile=/var/lib/orama-unit-env/%i/olric.env
 
 ExecStart=/usr/local/bin/olric-server
 

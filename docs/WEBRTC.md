@@ -103,7 +103,7 @@ const { uris, username, password, ttl } = await response.json();
 // NOTE: plain UDP/TCP TURN uses the two-label host turn.ns-<ns>.<base>; TURNS
 // (TLS) uses the SINGLE-label host turn-<ns>.<base>. Only a single-label host
 // is covered by the *.<base> wildcard cert, so only it validates in browsers —
-// the two-label host can present a self-signed cert only, which browsers reject.
+// the two-label host is not covered by it, so TLS to it fails in browsers.
 // Both round-robin to the same TURN nodes.
 // username: "{expiry_unix}:{namespace}"
 // password: HMAC-SHA1 derived (base64)
@@ -226,7 +226,7 @@ Isolation is the per-tenant secret. The credential already carries the namespace
 the shared server resolves each one to its own HMAC secret; a namespace it does not
 serve is rejected rather than falling back to any default.
 
-The tenant list lives in `/opt/orama/.orama/configs/turn.yaml` (mode 0600 — it holds
+The tenant list lives in `/opt/orama/.orama/data/turn/turn.yaml` (mode 0600 — it holds
 every tenant's HMAC secret) and is re-read by the running process (~15s). Namespaces
 are added and removed without a restart, because restarting drops every tenant's
 active relays on that host.
@@ -257,22 +257,18 @@ config and Caddy's wildcard certificate and writes nothing.
 ## TURNS TLS Certificate
 
 TURNS (port 5349) uses TLS and the client connects to the single-label host
-`turn-{name}.{baseDomain}`. Certificate provisioning, in order:
+`turn-{name}.{baseDomain}`. The shared TURN server presents Caddy's existing
+`*.{baseDomain}` wildcard cert (already provisioned for HTTPS), which covers
+every tenant's single-label TURNS host and stealth host, so browsers validate
+it. `orama-node` reads the wildcard from Caddy's storage
+(`/var/lib/caddy/caddy/certificates/<issuer>/wildcard_.{baseDomain}/`).
 
-1. **Wildcard reuse (primary)**: TURN presents Caddy's existing `*.{baseDomain}`
-   wildcard cert (already provisioned for HTTPS). The single-label TLS host is
-   covered by it, so no per-namespace ACME provisioning is needed and browsers
-   validate the cert. The `orama-node` service reads the wildcard from Caddy's
-   storage; the cert reloader hot-reloads renewals.
-2. **Per-domain Let's Encrypt (fallback)**: If the wildcard is unavailable, TURN
-   tries to provision a per-domain cert by appending to the Caddyfile. This path
-   fails on nodes where `orama-node` runs `ProtectSystem=strict` (can't write
-   `/etc/caddy`), so it is best-effort only.
-3. **Self-signed (last resort)**: If neither works, a self-signed cert is
-   generated with the node's public IP as SAN. Browsers reject it — TURNS is
-   effectively unavailable until a valid cert is in place. The two-label host
-   `turn.ns-{name}.{baseDomain}` can only reach this state (the wildcard doesn't
-   cover it), which is why TURNS moved to the single-label host.
+There is no other source. If the wildcard is not on disk, TURNS stays off and
+the node logs why; clients keep plain TURN on 3478. A self-signed cert is never
+served — browsers reject it, and for a stealth host a rejected cert is
+indistinguishable from being blocked. The two-label host
+`turn.ns-{name}.{baseDomain}` is not covered by the wildcard, which is why
+TURNS uses the single-label host.
 
 Caddy auto-renews Let's Encrypt certs at ~60 days. TURN serves the cert through a hot-reloading `GetCertificate` callback that polls the cert file every 60 seconds, so renewed certs are picked up in-process without a restart (a restart would drop every active relay).
 

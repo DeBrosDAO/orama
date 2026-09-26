@@ -2,14 +2,16 @@ package installers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"syscall"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
 // ipfsStorageMaxDiskFraction is the share of the node's TOTAL disk used as the
@@ -55,109 +57,12 @@ func NewIPFSInstaller(arch string, logWriter io.Writer) *IPFSInstaller {
 	}
 }
 
-// IsInstalled checks if IPFS is already installed
-func (ii *IPFSInstaller) IsInstalled() bool {
-	_, err := exec.LookPath("ipfs")
-	return err == nil
-}
-
-// Install downloads and installs IPFS (Kubo)
-// Follows official steps from https://docs.ipfs.tech/install/command-line/
-func (ii *IPFSInstaller) Install() error {
-	if ii.IsInstalled() {
-		fmt.Fprintf(ii.logWriter, "  ✓ IPFS already installed\n")
-		return nil
-	}
-
-	fmt.Fprintf(ii.logWriter, "  Installing IPFS (Kubo)...\n")
-
-	// Follow official installation steps in order
-	tarball := fmt.Sprintf("kubo_%s_linux-%s.tar.gz", ii.version, ii.arch)
-	url := fmt.Sprintf("https://dist.ipfs.tech/kubo/%s/%s", ii.version, tarball)
-	tmpDir := "/tmp"
-	tarPath := filepath.Join(tmpDir, tarball)
-	kuboDir := filepath.Join(tmpDir, "kubo")
-
-	// Step 1: Download the Linux binary from dist.ipfs.tech
-	fmt.Fprintf(ii.logWriter, "    Step 1: Downloading Kubo %s...\n", ii.version)
-	if err := DownloadFile(url, tarPath); err != nil {
-		return fmt.Errorf("failed to download kubo from %s: %w", url, err)
-	}
-
-	// Verify tarball exists
-	if _, err := os.Stat(tarPath); err != nil {
-		return fmt.Errorf("kubo tarball not found after download at %s: %w", tarPath, err)
-	}
-
-	// Step 2: Unzip the file
-	fmt.Fprintf(ii.logWriter, "    Step 2: Extracting Kubo archive...\n")
-	if err := ExtractTarball(tarPath, tmpDir); err != nil {
-		return fmt.Errorf("failed to extract kubo tarball: %w", err)
-	}
-
-	// Verify extraction
-	if _, err := os.Stat(kuboDir); err != nil {
-		return fmt.Errorf("kubo directory not found after extraction at %s: %w", kuboDir, err)
-	}
-
-	// Step 3: Move into the kubo folder (cd kubo)
-	fmt.Fprintf(ii.logWriter, "    Step 3: Running installation script...\n")
-
-	// Step 4: Run the installation script (sudo bash install.sh)
-	installScript := filepath.Join(kuboDir, "install.sh")
-	if _, err := os.Stat(installScript); err != nil {
-		return fmt.Errorf("install.sh not found in extracted kubo directory at %s: %w", installScript, err)
-	}
-
-	cmd := exec.Command("bash", installScript)
-	cmd.Dir = kuboDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to run install.sh: %v\n%s", err, string(output))
-	}
-
-	// Step 5: Test that Kubo has installed correctly
-	fmt.Fprintf(ii.logWriter, "    Step 5: Verifying installation...\n")
-	cmd = exec.Command("ipfs", "--version")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// ipfs might not be in PATH yet in this process, check file directly
-		ipfsLocations := []string{"/usr/local/bin/ipfs", "/usr/bin/ipfs"}
-		found := false
-		for _, loc := range ipfsLocations {
-			if info, err := os.Stat(loc); err == nil && !info.IsDir() {
-				found = true
-				// Ensure it's executable
-				if info.Mode()&0111 == 0 {
-					if err := os.Chmod(loc, 0755); err != nil {
-						return fmt.Errorf("failed to make ipfs executable at %s: %w", loc, err)
-					}
-				}
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("ipfs binary not found after installation in %v", ipfsLocations)
-		}
-	} else {
-		fmt.Fprintf(ii.logWriter, "      %s", string(output))
-	}
-
-	// Ensure PATH is updated for current process
-	os.Setenv("PATH", os.Getenv("PATH")+":/usr/local/bin")
-
-	fmt.Fprintf(ii.logWriter, "  ✓ IPFS installed successfully\n")
-	return nil
-}
-
-// Configure is a placeholder for IPFS configuration
-func (ii *IPFSInstaller) Configure() error {
-	// Configuration is handled by InitializeRepo
-	return nil
-}
-
 // InitializeRepo initializes an IPFS repository for a node (unified - no bootstrap/node distinction)
 // If ipfsPeer is provided, configures Peering.Peers for peer discovery in private networks
-func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int, bindIP string, ipfsPeer *IPFSPeerInfo) error {
+//
+// root is the anchor the repo and swarm key live under (rootfs): the repo is
+// the orama user's, so root writes it without following symlinks.
+func (ii *IPFSInstaller) InitializeRepo(root rootfs.Root, ipfsRepoPath string, swarmKeyPath string, apiPort, gatewayPort, swarmPort int, bindIP string, ipfsPeer *IPFSPeerInfo) error {
 	configPath := filepath.Join(ipfsRepoPath, "config")
 	repoExists := false
 	if _, err := os.Stat(configPath); err == nil {
@@ -167,7 +72,7 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 		fmt.Fprintf(ii.logWriter, "    Initializing IPFS repo...\n")
 	}
 
-	if err := os.MkdirAll(ipfsRepoPath, 0755); err != nil {
+	if err := root.MkdirAll(ipfsRepoPath, 0755); err != nil {
 		return fmt.Errorf("failed to create IPFS repo directory: %w", err)
 	}
 
@@ -177,20 +82,34 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 		return err
 	}
 
+	// The ipfs commands below run as the orama user (runas.go): the repo is
+	// that user's, and ipfs resolves paths in it without pkg/rootfs.
+	if err := giveToServiceUser(root, ipfsRepoPath); err != nil {
+		return err
+	}
+	ipfsEnv := []string{"IPFS_PATH=" + ipfsRepoPath}
+
 	// Initialize IPFS if repo doesn't exist
 	if !repoExists {
-		cmd := exec.Command(ipfsBinary, "init", "--profile=server", "--repo-dir="+ipfsRepoPath)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to initialize IPFS: %v\n%s", err, string(output))
+		if err := runAsServiceUser(ipfsEnv, ipfsBinary, "init", "--profile=server", "--repo-dir="+ipfsRepoPath); err != nil {
+			return fmt.Errorf("failed to initialize IPFS: %w", err)
 		}
 	}
 
 	// Copy swarm key if present
 	swarmKeyExists := false
-	if data, err := os.ReadFile(swarmKeyPath); err == nil {
+	data, err := root.ReadFile(swarmKeyPath, rootfs.SmallFileLimit)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("failed to read the swarm key: %w", err)
+	}
+	if err == nil {
 		swarmKeyDest := filepath.Join(ipfsRepoPath, "swarm.key")
-		if err := os.WriteFile(swarmKeyDest, data, 0600); err != nil {
+		if err := root.WriteFile(swarmKeyDest, data, 0600); err != nil {
 			return fmt.Errorf("failed to copy swarm key: %w", err)
+		}
+		// 0600 and the daemon runs as orama: the key must be orama's.
+		if err := giveToServiceUser(root, swarmKeyDest); err != nil {
+			return err
 		}
 		swarmKeyExists = true
 	}
@@ -198,14 +117,14 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 	// Configure IPFS addresses (API, Gateway, Swarm) by modifying the config file directly
 	// This ensures the ports are set correctly and avoids conflicts with RQLite
 	fmt.Fprintf(ii.logWriter, "    Configuring IPFS addresses (API: %d, Gateway: %d, Swarm: %d)...\n", apiPort, gatewayPort, swarmPort)
-	if err := ii.configureAddresses(ipfsRepoPath, apiPort, gatewayPort, swarmPort, bindIP); err != nil {
+	if err := ii.configureAddresses(root, ipfsRepoPath, apiPort, gatewayPort, swarmPort, bindIP); err != nil {
 		return fmt.Errorf("failed to configure IPFS addresses: %w", err)
 	}
 
 	// Set a disk-aware Datastore.StorageMax so GC has a real budget to reclaim
 	// against (kubo's default is an unenforced 10GB). Reclaim itself is driven by
 	// the orama-ipfs-gc.timer; the daemon runs without in-process GC.
-	if err := ii.configureDatastore(ipfsRepoPath); err != nil {
+	if err := ii.configureDatastore(root, ipfsRepoPath); err != nil {
 		return fmt.Errorf("failed to configure IPFS datastore: %w", err)
 	}
 
@@ -214,10 +133,8 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 	// We do this even for existing repos to fix repos initialized before this fix was applied
 	if swarmKeyExists {
 		fmt.Fprintf(ii.logWriter, "    Disabling AutoConf for private swarm...\n")
-		cmd := exec.Command(ipfsBinary, "config", "--json", "AutoConf.Enabled", "false")
-		cmd.Env = append(os.Environ(), "IPFS_PATH="+ipfsRepoPath)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to disable AutoConf: %v\n%s", err, string(output))
+		if err := runAsServiceUser(ipfsEnv, ipfsBinary, "config", "--json", "AutoConf.Enabled", "false"); err != nil {
+			return fmt.Errorf("failed to disable AutoConf: %w", err)
 		}
 
 		// Clear AutoConf placeholders from config to prevent Kubo startup errors
@@ -239,17 +156,15 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 
 		for _, step := range cleanup {
 			fmt.Fprintf(ii.logWriter, "      %s...\n", step.desc)
-			cmd := exec.Command(ipfsBinary, step.args...)
-			cmd.Env = append(os.Environ(), "IPFS_PATH="+ipfsRepoPath)
-			if output, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed while %s: %v\n%s", step.desc, err, string(output))
+			if err := runAsServiceUser(ipfsEnv, ipfsBinary, step.args...); err != nil {
+				return fmt.Errorf("failed while %s: %w", step.desc, err)
 			}
 		}
 
 		// Configure Peering.Peers if we have peer info (for private network discovery)
 		if ipfsPeer != nil && ipfsPeer.PeerID != "" && len(ipfsPeer.Addrs) > 0 {
 			fmt.Fprintf(ii.logWriter, "    Configuring Peering.Peers for private network discovery...\n")
-			if err := ii.configurePeering(ipfsRepoPath, ipfsPeer); err != nil {
+			if err := ii.configurePeering(root, ipfsRepoPath, ipfsPeer); err != nil {
 				return fmt.Errorf("failed to configure IPFS peering: %w", err)
 			}
 		}
@@ -259,11 +174,11 @@ func (ii *IPFSInstaller) InitializeRepo(ipfsRepoPath string, swarmKeyPath string
 }
 
 // configureAddresses configures the IPFS API, Gateway, and Swarm addresses in the config file
-func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewayPort, swarmPort int, bindIP string) error {
+func (ii *IPFSInstaller) configureAddresses(root rootfs.Root, ipfsRepoPath string, apiPort, gatewayPort, swarmPort int, bindIP string) error {
 	configPath := filepath.Join(ipfsRepoPath, "config")
 
 	// Read existing config
-	data, err := os.ReadFile(configPath)
+	data, err := root.ReadFile(configPath, rootfs.SmallFileLimit)
 	if err != nil {
 		return fmt.Errorf("failed to read IPFS config: %w", err)
 	}
@@ -280,14 +195,16 @@ func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewa
 		addresses = make(map[string]interface{})
 	}
 
-	// Update specific address fields while preserving others
-	// Bind API and Gateway to localhost only for security
+	// Update specific address fields while preserving others.
+	// API and Gateway bind loopback: the API is unauthenticated full control
+	// of the node. This runs on every install and upgrade, so a repo whose
+	// addresses were rebound to 0.0.0.0 is bound back.
 	// Swarm binds to the WireGuard IP so it's only reachable over the VPN
 	addresses["API"] = []string{
-		fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", apiPort),
+		fmt.Sprintf("/ip4/%s/tcp/%d", loopbackIPv4, apiPort),
 	}
 	addresses["Gateway"] = []string{
-		fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", gatewayPort),
+		fmt.Sprintf("/ip4/%s/tcp/%d", loopbackIPv4, gatewayPort),
 	}
 	addresses["Swarm"] = []string{
 		fmt.Sprintf("/ip4/%s/tcp/%d", bindIP, swarmPort),
@@ -332,7 +249,7 @@ func (ii *IPFSInstaller) configureAddresses(ipfsRepoPath string, apiPort, gatewa
 		return fmt.Errorf("failed to marshal IPFS config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, updatedData, 0600); err != nil {
+	if err := root.WriteFile(configPath, updatedData, 0600); err != nil {
 		return fmt.Errorf("failed to write IPFS config: %w", err)
 	}
 
@@ -366,7 +283,7 @@ func setDatastoreStorageMax(configData []byte, storageMax string) ([]byte, error
 // has a real target to reclaim against (kubo's default is an unenforced 10GB
 // regardless of disk size). Idempotent: runs on every install/upgrade via
 // InitializeRepo. Preserves all other config fields.
-func (ii *IPFSInstaller) configureDatastore(ipfsRepoPath string) error {
+func (ii *IPFSInstaller) configureDatastore(root rootfs.Root, ipfsRepoPath string) error {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(ipfsRepoPath, &stat); err != nil {
 		return fmt.Errorf("failed to stat filesystem for IPFS repo %s: %w", ipfsRepoPath, err)
@@ -375,7 +292,7 @@ func (ii *IPFSInstaller) configureDatastore(ipfsRepoPath string) error {
 	storageMax := ipfsStorageMaxForDisk(totalBytes)
 
 	configPath := filepath.Join(ipfsRepoPath, "config")
-	data, err := os.ReadFile(configPath)
+	data, err := root.ReadFile(configPath, rootfs.SmallFileLimit)
 	if err != nil {
 		return fmt.Errorf("failed to read IPFS config: %w", err)
 	}
@@ -383,7 +300,7 @@ func (ii *IPFSInstaller) configureDatastore(ipfsRepoPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(configPath, updated, 0600); err != nil {
+	if err := root.WriteFile(configPath, updated, 0600); err != nil {
 		return fmt.Errorf("failed to write IPFS config: %w", err)
 	}
 
@@ -394,11 +311,11 @@ func (ii *IPFSInstaller) configureDatastore(ipfsRepoPath string) error {
 
 // configurePeering configures Peering.Peers in the IPFS config for private network discovery
 // This allows nodes in a private swarm to find each other even without bootstrap peers
-func (ii *IPFSInstaller) configurePeering(ipfsRepoPath string, peer *IPFSPeerInfo) error {
+func (ii *IPFSInstaller) configurePeering(root rootfs.Root, ipfsRepoPath string, peer *IPFSPeerInfo) error {
 	configPath := filepath.Join(ipfsRepoPath, "config")
 
 	// Read existing config
-	data, err := os.ReadFile(configPath)
+	data, err := root.ReadFile(configPath, rootfs.SmallFileLimit)
 	if err != nil {
 		return fmt.Errorf("failed to read IPFS config: %w", err)
 	}
@@ -432,7 +349,7 @@ func (ii *IPFSInstaller) configurePeering(ipfsRepoPath string, peer *IPFSPeerInf
 		return fmt.Errorf("failed to marshal IPFS config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, updatedData, 0600); err != nil {
+	if err := root.WriteFile(configPath, updatedData, 0600); err != nil {
 		return fmt.Errorf("failed to write IPFS config: %w", err)
 	}
 

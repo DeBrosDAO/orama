@@ -31,7 +31,10 @@ func newDNSTestDB(t *testing.T) *sql.DB {
 			UNIQUE(fqdn, record_type, value))`,
 		`CREATE TABLE dns_nameservers (
 			hostname TEXT PRIMARY KEY, node_id TEXT NOT NULL, ip_address TEXT NOT NULL,
-			domain TEXT NOT NULL, UNIQUE(node_id, domain))`,
+			domain TEXT NOT NULL,
+			assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(node_id, domain))`,
 		`CREATE TABLE dns_nodes (
 			id TEXT PRIMARY KEY, ip_address TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'active',

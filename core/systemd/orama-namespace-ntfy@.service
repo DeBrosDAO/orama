@@ -14,7 +14,6 @@ StartLimitIntervalSec=0
 Type=simple
 User=ntfy
 Group=ntfy
-EnvironmentFile=-/opt/orama/.orama/data/namespaces/%i/ntfy.env
 ExecStart=/usr/local/bin/ntfy serve --config /etc/ntfy/server.yml
 Restart=always
 RestartSec=5s

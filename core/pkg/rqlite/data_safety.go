@@ -3,7 +3,6 @@ package rqlite
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -130,38 +129,19 @@ func (r *RQLiteManager) getPersistedRaftLogIndex() (uint64, bool) {
 // getRQLiteStatus queries this node's /status through the admin client, so it
 // carries credentials when rqlite is started with -auth.
 func (r *RQLiteManager) getRQLiteStatus() (*RQLiteStatus, error) {
-	return r.LocalAdminClient().Status(context.Background())
+	admin, err := r.LocalAdminClient()
+	if err != nil {
+		return nil, err
+	}
+	return admin.Status(context.Background())
 }
 
 // getRQLiteNodes queries the /nodes endpoint for cluster membership, with
 // credentials.
 func (r *RQLiteManager) getRQLiteNodes() (RQLiteNodes, error) {
-	return r.LocalAdminClient().Nodes(context.Background())
-}
-
-// getRQLiteLeader returns the current leader address
-func (r *RQLiteManager) getRQLiteLeader() (string, error) {
-	status, err := r.getRQLiteStatus()
+	admin, err := r.LocalAdminClient()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-
-	leaderAddr := status.Store.Raft.LeaderAddr
-	if leaderAddr == "" {
-		return "", fmt.Errorf("no leader found")
-	}
-
-	return leaderAddr, nil
-}
-
-// isNodeReachable tests whether a specific node is responding.
-//
-// Through the admin client, so a node that is up but rejects unauthenticated
-// requests is not reported as unreachable — which would feed the eviction path
-// evidence that a healthy node is dead.
-func (r *RQLiteManager) isNodeReachable(httpAddress string) bool {
-	user, pass := r.adminCredentials()
-	client := NewAdminClient("http://"+httpAddress, user, pass)
-	_, err := client.Status(context.Background())
-	return err == nil
+	return admin.Nodes(context.Background())
 }

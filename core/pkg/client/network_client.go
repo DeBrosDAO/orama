@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -120,7 +121,7 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 	ipfsInfo := queryIPFSPeerInfo()
 
 	// Try to get IPFS Cluster peer info (optional - don't fail if unavailable)
-	ipfsClusterInfo := queryIPFSClusterPeerInfo()
+	ipfsClusterInfo := queryIPFSClusterPeerInfo(constants.LocalIPFSClusterURL(), n.client.config.IPFSClusterAPIPassword)
 
 	return &NetworkStatus{
 		NodeID:       host.ID().String(),
@@ -172,12 +173,18 @@ func queryIPFSPeerInfo() *IPFSPeerInfo {
 	}
 }
 
-// queryIPFSClusterPeerInfo queries the local IPFS Cluster API for peer information
-// Returns nil if IPFS Cluster is not running or unavailable
-func queryIPFSClusterPeerInfo() *IPFSClusterPeerInfo {
-	// IPFS Cluster API typically runs on port 9094 in our setup
+// queryIPFSClusterPeerInfo queries this node's IPFS Cluster REST API at apiURL
+// for its peer information, with the API's basic-auth password
+// (ipfs.ClusterRESTPassword). Returns nil if IPFS Cluster is not running or
+// unavailable.
+func queryIPFSClusterPeerInfo(apiURL, password string) *IPFSClusterPeerInfo {
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/id", constants.IPFSClusterAPIPort))
+	req, err := http.NewRequest(http.MethodGet, apiURL+"/id", nil)
+	if err != nil {
+		return nil
+	}
+	req.SetBasicAuth(ipfs.ClusterRESTUser, password)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil // IPFS Cluster not available
 	}

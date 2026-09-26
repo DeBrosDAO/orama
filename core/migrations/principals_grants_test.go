@@ -150,19 +150,49 @@ func TestMigration050_oneLiveGrantPerShape(t *testing.T) {
 	}
 }
 
-// The old table is gone rather than left as a view: 002_core.sql creates that
-// name as a table and then indexes it, and a database replaying the chain from
-// the beginning cannot index a view.
-func TestMigration050_theOldTableIsGone(t *testing.T) {
+// Expand only: 0.122.x gateways read and write namespace_ownership on every
+// ownership check during the rolling upgrade, so 050 leaves it in place (the
+// next release drops it after re-running the backfill).
+func TestMigration050_keepsTheOldTableForTheRollingWindow(t *testing.T) {
 	db := registryAtV43(t)
 
 	var count int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE name = 'namespace_ownership'`).Scan(&count); err != nil {
-		t.Fatalf("look for the old table: %v", err)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM namespace_ownership`).Scan(&count); err != nil {
+		t.Fatalf("0.122.x's ownership read failed after 050: %v", err)
 	}
-	if count != 0 {
-		t.Error("namespace_ownership is still there; two places to read authorization from is how they disagree")
+	if count == 0 {
+		t.Error("050 emptied namespace_ownership")
+	}
+	// 0.122.x's claim, verbatim.
+	if _, err := db.Exec(`INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (10, 'wallet', '0xabc')`); err != nil {
+		t.Errorf("0.122.x's ownership write failed after 050: %v", err)
+	}
+}
+
+// What a 0.122.x gateway records during the window is picked up by running the
+// backfill again, which is what the contract migration does before it drops
+// the table.
+func TestMigration050_backfillPicksUpRowsWrittenDuringTheWindow(t *testing.T) {
+	db := registryAtV43(t)
+	if _, err := db.Exec(`INSERT OR IGNORE INTO namespaces(id, name) VALUES (77, 'window')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (77, 'wallet', '0xWINDOW')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version = 50`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("re-apply 050: %v", err)
+	}
+	var owner string
+	if err := db.QueryRow(`SELECT p.identifier FROM grants g JOIN principals p ON p.id = g.principal_id
+		WHERE g.namespace_id = 77 AND g.role = 'owner' AND g.revoked_at IS NULL`).Scan(&owner); err != nil {
+		t.Fatalf("the window's owner was not backfilled: %v", err)
+	}
+	if owner != "0xwindow" {
+		t.Errorf("owner = %q", owner)
 	}
 }
 

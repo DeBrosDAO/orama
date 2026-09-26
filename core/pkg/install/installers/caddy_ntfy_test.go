@@ -15,7 +15,7 @@ import (
 func TestGenerateCaddyfile_NoNtfyByDefault(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:10104/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space", "")
 
 	if strings.Contains(cf, "push.dbrs.space") {
 		t.Errorf("Caddyfile should NOT include push.<dnsZone> by default; got:\n%s", cf)
@@ -30,7 +30,7 @@ func TestGenerateCaddyfile_NtfyEnabledEmitsBlock(t *testing.T) {
 	ci.EnableNtfyProxy("push.dbrs.space")
 
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:10104/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space", "")
 
 	// Block exists with the right hostname.
 	if !strings.Contains(cf, "push.dbrs.space {") {
@@ -51,7 +51,7 @@ func TestGenerateCaddyfile_NtfyBlockHasOwnTLS(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	ci.EnableNtfyProxy("push.dbrs.space")
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:10104/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space", "")
 
 	// The ntfy block should be its OWN block — i.e. there are now MORE
 	// `tls {` occurrences than there would be without ntfy. This is a
@@ -59,7 +59,7 @@ func TestGenerateCaddyfile_NtfyBlockHasOwnTLS(t *testing.T) {
 	// would mix the cert lifecycle with the gateway cert.
 	ci2 := newTestCaddyInstaller()
 	cf2 := ci2.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:10104/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space", "")
 
 	withCount := strings.Count(cf, "issuer acme")
 	withoutCount := strings.Count(cf2, "issuer acme")
@@ -77,8 +77,21 @@ func TestGenerateCaddyfile_NtfyEmptyHostnameSkipped(t *testing.T) {
 	ci.ntfyHostname = ""
 
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
-		"http://localhost:10104/v1/internal/acme", "dbrs.space")
+		"http://localhost:10104/v1/internal/acme", "dbrs.space", "")
 	if strings.Contains(cf, fmt.Sprintf("localhost:%d", NtfyListenPort)) {
 		t.Errorf("empty ntfy hostname should suppress block; got:\n%s", cf)
+	}
+}
+
+func TestGenerateCaddyfile_ACMECAIsAGlobalOptionOnlyWhenSet(t *testing.T) {
+	ci := &CaddyInstaller{}
+	def := ci.generateCaddyfile("stagenet.example", "admin@stagenet.example", "http://localhost:6001/v1/internal/acme", "stagenet.example", "")
+	if strings.Contains(def, "acme_ca") {
+		t.Errorf("default Caddyfile must not name a CA:\n%s", def)
+	}
+	staging := ci.generateCaddyfile("stagenet.example", "admin@stagenet.example", "http://localhost:6001/v1/internal/acme", "stagenet.example", "https://acme-staging-v02.api.letsencrypt.org/directory")
+	global := staging[:strings.Index(staging, "\n}\n")]
+	if !strings.Contains(global, "    acme_ca https://acme-staging-v02.api.letsencrypt.org/directory\n") {
+		t.Errorf("acme_ca must be in the global block:\n%s", staging)
 	}
 }

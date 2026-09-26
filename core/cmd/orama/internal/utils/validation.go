@@ -1,13 +1,17 @@
 package utils
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -15,20 +19,17 @@ import (
 func ValidateGeneratedConfig(oramaDir string) error {
 	configPath := filepath.Join(oramaDir, "configs", "node.yaml")
 
-	// Check if config file exists
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	// node.yaml belongs to the orama user and this runs as root.
+	data, err := oramainstall.OramaRoot(oramaDir).ReadFile(configPath, rootfs.SmallFileLimit)
+	if errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("configuration file not found at %s", configPath)
 	}
-
-	// Load the config file
-	file, err := os.Open(configPath)
 	if err != nil {
-		return fmt.Errorf("failed to open config file: %w", err)
+		return fmt.Errorf("failed to read config file: %w", err)
 	}
-	defer file.Close()
 
 	var cfg config.Config
-	if err := config.DecodeStrict(file, &cfg); err != nil {
+	if err := config.DecodeStrict(bytes.NewReader(data), &cfg); err != nil {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
 

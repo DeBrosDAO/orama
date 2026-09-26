@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
@@ -57,7 +57,7 @@ func ResolveNodeRecord(survivor inspector.Node, publicIP string) (NodeRecord, er
 		return NodeRecord{}, fmt.Errorf("unexpected dns_nodes row shape for %s", publicIP)
 	}
 
-	rec := NodeRecord{PeerID: asString(values[0]), InternalIP: asString(values[1])}
+	rec := NodeRecord{PeerID: AsString(values[0]), InternalIP: AsString(values[1])}
 	if rec.InternalIP == "" {
 		return rec, fmt.Errorf("node %s has no overlay address recorded; cannot identify its raft member", publicIP)
 	}
@@ -95,9 +95,12 @@ func RemoveRaftMember(survivor inspector.Node, nodeID string) error {
 		return fmt.Errorf("refusing to remove %s from raft: %s", nodeID, refusal)
 	}
 
-	cmd := fmt.Sprintf(
-		`curl -sS --max-time 15 -XDELETE 'http://localhost:%d/remove' -H 'Content-Type: application/json' -d '{"id":"%s"}'`,
-		constants.RQLiteHTTPPort, nodeID)
+	body, err := json.Marshal(map[string]string{"id": nodeID})
+	if err != nil {
+		return fmt.Errorf("encode remove: %w", err)
+	}
+	cmd := rqlite.NodeShellCurl(remotessh.SudoPrefix(survivor),
+		`-sS --max-time 15 -XDELETE -H 'Content-Type: application/json' -d `+ShellQuote(string(body)), "/remove")
 	res := inspector.RunSSH(context.Background(), survivor, cmd)
 	if !res.OK() {
 		return fmt.Errorf("remove %s from raft: %v (stderr: %s)", nodeID, res.Err, res.Stderr)
@@ -124,8 +127,7 @@ func IDForAddr(members []rqlite.RaftMember, raftAddr string) string {
 
 // RaftMembers reads the raft configuration from the survivor.
 func RaftMembers(survivor inspector.Node) ([]rqlite.RaftMember, error) {
-	cmd := fmt.Sprintf("curl -sS --max-time 10 'http://localhost:%d/nodes?nonvoters&ver=2&timeout=5s'",
-		constants.RQLiteHTTPPort)
+	cmd := rqlite.NodeShellCurl(remotessh.SudoPrefix(survivor), "-sS --max-time 10", "/nodes?nonvoters&ver=2&timeout=5s")
 	res := inspector.RunSSH(context.Background(), survivor, cmd)
 	if !res.OK() {
 		return nil, fmt.Errorf("read /nodes on %s: %v (stderr: %s)", survivor.Host, res.Err, res.Stderr)
@@ -193,8 +195,8 @@ func ExecSQL(survivor inspector.Node, stmt string) error {
 	if err != nil {
 		return fmt.Errorf("encode statement: %w", err)
 	}
-	cmd := fmt.Sprintf(`curl -sS --max-time 15 -XPOST 'http://localhost:%d/db/execute' `+
-		`-H 'Content-Type: application/json' -d %s`, constants.RQLiteHTTPPort, ShellQuote(string(body)))
+	cmd := rqlite.NodeShellCurl(remotessh.SudoPrefix(survivor),
+		`-sS --max-time 15 -XPOST -H 'Content-Type: application/json' -d `+ShellQuote(string(body)), "/db/execute")
 
 	res := inspector.RunSSH(context.Background(), survivor, cmd)
 	if !res.OK() {
@@ -205,8 +207,8 @@ func ExecSQL(survivor inspector.Node, stmt string) error {
 
 // QuerySQL runs one read statement and returns the decoded response.
 func QuerySQL(survivor inspector.Node, stmt string) ([]byte, error) {
-	cmd := fmt.Sprintf(`curl -sS --max-time 15 -G 'http://localhost:%d/db/query?level=strong' `+
-		`--data-urlencode %s`, constants.RQLiteHTTPPort, ShellQuote("q="+stmt))
+	cmd := rqlite.NodeShellCurl(remotessh.SudoPrefix(survivor),
+		`-sS --max-time 15 -G --data-urlencode `+ShellQuote("q="+stmt), "/db/query?level=strong")
 
 	res := inspector.RunSSH(context.Background(), survivor, cmd)
 	if !res.OK() {
@@ -242,6 +244,19 @@ func checkExecuteResponse(body []byte) error {
 
 // firstRow returns the first row of a query response.
 func firstRow(body []byte) ([]any, error) {
+	rows, err := Rows(body)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("no rows")
+	}
+	return rows[0], nil
+}
+
+// Rows returns every row of a /db/query response, turning an rqlite error
+// payload into a Go error.
+func Rows(body []byte) ([][]any, error) {
 	var resp rqliteResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("parse rqlite response %q: %w", strings.TrimSpace(string(body)), err)
@@ -249,19 +264,18 @@ func firstRow(body []byte) ([]any, error) {
 	if resp.Error != "" {
 		return nil, fmt.Errorf("rqlite: %s", resp.Error)
 	}
+	var rows [][]any
 	for _, r := range resp.Results {
 		if r.Error != "" {
 			return nil, fmt.Errorf("rqlite: %s", r.Error)
 		}
-		if len(r.Values) > 0 {
-			return r.Values[0], nil
-		}
+		rows = append(rows, r.Values...)
 	}
-	return nil, fmt.Errorf("no rows")
+	return rows, nil
 }
 
-// asString renders a JSON-decoded column value as a string.
-func asString(v any) string {
+// AsString renders a JSON-decoded column value as a string.
+func AsString(v any) string {
 	if v == nil {
 		return ""
 	}

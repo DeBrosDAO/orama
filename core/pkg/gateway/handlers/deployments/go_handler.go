@@ -69,8 +69,8 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	subdomain := r.FormValue("subdomain")
 	healthCheckPath := r.FormValue("health_check_path")
 
-	if name == "" {
-		http.Error(w, "Deployment name is required", http.StatusBadRequest)
+	if err := h.service.CheckNewDeploymentName(ctx, namespace, name); err != nil {
+		writeDeploymentNameError(w, h.logger, err)
 		return
 	}
 
@@ -93,6 +93,19 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	// Claim the instance on this host before anything is uploaded or written.
+	claim, err := h.service.claimNewInstance(ctx, h.baseDeployPath, namespace, name)
+	if err != nil {
+		writeDeploymentNameError(w, h.logger, err)
+		return
+	}
+	registered := false
+	defer func() {
+		if !registered {
+			h.service.releaseClaim(claim)
+		}
+	}()
+
 	h.logger.Info("Deploying Go backend",
 		zap.String("namespace", namespace),
 		zap.String("name", name),
@@ -112,6 +125,9 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Deploy the Go backend
 	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath, envVars)
+	// A deployment with a registry row keeps its directory even if it failed
+	// to start: it exists, and a delete removes both.
+	registered = deployment != nil
 	if err != nil {
 		h.logger.Error("Failed to deploy Go backend", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -143,11 +159,8 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 // deploy deploys a Go backend
 func (h *GoHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string, envVars map[string]string) (*deployments.Deployment, error) {
-	// Create deployment directory
+	// The directory exists: HandleUpload claimed it.
 	deployPath := process.DeployDir(h.baseDeployPath, namespace, name)
-	if err := os.MkdirAll(deployPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create deployment directory: %w", err)
-	}
 
 	// Download and extract from IPFS
 	if err := h.extractFromIPFS(ctx, cid, deployPath); err != nil {
@@ -241,7 +254,7 @@ func (h *GoHandler) extractFromIPFS(ctx context.Context, cid, destPath string) e
 	tmpFile.Close()
 
 	// Extract tarball
-	cmd := exec.Command("tar", "-xzf", tmpFile.Name(), "-C", destPath)
+	cmd := exec.Command("tar", tarExtractArgs(tmpFile.Name(), destPath)...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		h.logger.Error("Failed to extract tarball",

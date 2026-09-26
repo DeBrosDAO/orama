@@ -8,10 +8,40 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // hostPortOf strips the scheme so a probe can be pointed at a test server.
 func hostPortOf(url string) string { return strings.TrimPrefix(url, "http://") }
+
+// Credentials the fake rqlite servers require, as rqlited with -auth does. The
+// password matches what the spawner tests write to secrets/rqlite-password.
+const (
+	testRQLiteUser = "orama"
+	testRQLitePass = "s3cret"
+)
+
+// rqliteAt is the endpoint of a fake rqlite at url, with the test credentials.
+func rqliteAt(t *testing.T, url string) rqlite.Endpoint {
+	t.Helper()
+	ep, err := rqlite.NewEndpoint(hostPortOf(url), testRQLiteUser, testRQLitePass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ep
+}
+
+// requireRQLiteAuth answers 401 without the test credentials.
+func requireRQLiteAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != testRQLiteUser || p != testRQLitePass {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func TestRQLiteReady_acceptsLeaderAndFollower(t *testing.T) {
 	for _, state := range []string{"Leader", "Follower", "leader", "follower"} {
@@ -19,7 +49,7 @@ func TestRQLiteReady_acceptsLeaderAndFollower(t *testing.T) {
 			srv := httptest.NewServer(rqliteHandler(state, ""))
 			defer srv.Close()
 
-			if err := rqliteReady(context.Background(), hostPortOf(srv.URL)); err != nil {
+			if err := rqliteReady(context.Background(), rqliteAt(t, srv.URL)); err != nil {
 				t.Fatalf("state %q should be ready: %v", state, err)
 			}
 		})
@@ -34,7 +64,7 @@ func TestRQLiteReady_rejectsAStateThatIsNotServing(t *testing.T) {
 			srv := httptest.NewServer(rqliteHandler(state, ""))
 			defer srv.Close()
 
-			err := rqliteReady(context.Background(), hostPortOf(srv.URL))
+			err := rqliteReady(context.Background(), rqliteAt(t, srv.URL))
 			if err == nil {
 				t.Fatalf("state %q was accepted as ready", state)
 			}
@@ -48,7 +78,7 @@ func TestRQLiteReady_rejectsAQueryErrorInsideA200(t *testing.T) {
 	srv := httptest.NewServer(rqliteHandler("Leader", "no leader"))
 	defer srv.Close()
 
-	err := rqliteReady(context.Background(), hostPortOf(srv.URL))
+	err := rqliteReady(context.Background(), rqliteAt(t, srv.URL))
 	if err == nil {
 		t.Fatal("a 200 carrying a query error was accepted as ready")
 	}
@@ -58,8 +88,21 @@ func TestRQLiteReady_rejectsAQueryErrorInsideA200(t *testing.T) {
 }
 
 func TestRQLiteReady_refusedConnection(t *testing.T) {
-	if err := rqliteReady(context.Background(), "127.0.0.1:1"); err == nil {
+	if err := rqliteReady(context.Background(), rqliteAt(t, "http://127.0.0.1:1")); err == nil {
 		t.Fatal("a closed port was accepted as ready")
+	}
+}
+
+// rqlited runs with -auth: a probe with the wrong credentials sees a 401, and
+// that is not readiness.
+func TestRQLiteReady_wrongCredentialsIsNotReady(t *testing.T) {
+	srv := httptest.NewServer(rqliteHandler("Leader", ""))
+	defer srv.Close()
+
+	ep := rqliteAt(t, srv.URL)
+	ep.Password = "wrong"
+	if err := rqliteReady(context.Background(), ep); err == nil {
+		t.Fatal("a 401 was accepted as ready")
 	}
 }
 
@@ -75,7 +118,7 @@ func rqliteHandler(state, queryErr string) http.Handler {
 		}
 		fmt.Fprint(w, `{"results":[{"columns":["1"],"values":[[1]]}]}`)
 	})
-	return mux
+	return requireRQLiteAuth(mux)
 }
 
 func TestGatewayReady_rejectsAnUnhealthyDependency(t *testing.T) {

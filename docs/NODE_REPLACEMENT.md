@@ -74,8 +74,14 @@ Replacing a **nameserver VPS** touches:
 cat core/scripts/nodes.conf | grep '^devnet\|^testnet'
 
 # Live Raft (run on any healthy node)
-curl -sS http://127.0.0.1:10100/nodes | python3 -m json.tool
-curl -sS http://127.0.0.1:10100/status | python3 -c \
+# rqlited listens only on this node's WireGuard IP and always requires basic
+# auth; both come from the node's own config. Define these on every node you
+# run the rqlite commands below on.
+RQ="http://$(sudo sed -n 's/^ *http_adv_address: *"\(.*\)"/\1/p' /opt/orama/.orama/configs/node.yaml)"
+# Credentials go to curl on stdin (-K -), never on its command line where ps shows them.
+rqcurl() { printf 'user = "orama:%s"\n' "$(sudo cat /opt/orama/.orama/secrets/rqlite-password)" | curl -K - "$@"; }
+rqcurl -sS "$RQ/nodes" | python3 -m json.tool
+rqcurl -sS "$RQ/status" | python3 -c \
   "import sys,json; r=json.load(sys.stdin)['store']['raft']; print(r.get('state'), r.get('num_peers'))"
 ```
 
@@ -148,7 +154,7 @@ installed with `go install` reports its real number instead of `dev`.
 From your own machine:
 
 ```bash
-orama invite --expiry 2h
+orama invite                 # usable for 1h, the gateway's cap
 ```
 
 Or on an existing installed node:
@@ -157,8 +163,9 @@ Or on an existing installed node:
 sudo /opt/orama/bin/orama node invite --expiry 2h
 ```
 
-Either prints **one** string to save. It carries the gateway to join and the
-fingerprint of that gateway's TLS certificate, so there is no separate
+Either prints **one** string to save. It names one node of the cluster — its
+public address, the domain to present, and the fingerprint of the TLS
+certificate that node serves — so there is no separate
 `--join`, no separate `--ca-fingerprint`, and nothing to get the wrong way
 round. It used to be three values, two of them indistinguishable strings of
 hex, and the fingerprint was the one people left out — which silently dropped
@@ -223,14 +230,14 @@ Notes:
 On **leader**:
 
 ```bash
-curl -sS http://127.0.0.1:10100/nodes | python3 -m json.tool
+rqcurl -sS "$RQ/nodes" | python3 -m json.tool
 # NEW wg address must show: voter true, reachable true
 ```
 
 On **new node**:
 
 ```bash
-curl -sS http://127.0.0.1:10100/status | python3 -c "
+rqcurl -sS "$RQ/status" | python3 -c "
 import sys,json
 r=json.load(sys.stdin)['store']['raft']
 print('state', r.get('state'), 'voter', r.get('voter'),
@@ -256,17 +263,21 @@ Temporary topology: **4 platform voters**. Quorum = 3. Still safe.
 
 ## Phase B — DNS (platform zone)
 
-Auth for RQLite:
+Address and auth for RQLite (see Preflight):
 
 ```bash
-PASS=$(sudo cat /opt/orama/.orama/secrets/rqlite-password)
-AUTH="orama:$PASS"
+# rqlited listens only on this node's WireGuard IP and always requires basic
+# auth; both come from the node's own config. Define these on every node you
+# run the rqlite commands below on.
+RQ="http://$(sudo sed -n 's/^ *http_adv_address: *"\(.*\)"/\1/p' /opt/orama/.orama/configs/node.yaml)"
+# Credentials go to curl on stdin (-K -), never on its command line where ps shows them.
+rqcurl() { printf 'user = "orama:%s"\n' "$(sudo cat /opt/orama/.orama/secrets/rqlite-password)" | curl -K - "$@"; }
 ```
 
 ### B1. Inspect current NS / apex records
 
 ```bash
-curl -sS -u "$AUTH" -G 'http://127.0.0.1:10100/db/query' \
+rqcurl -sS -G "$RQ/db/query" \
   --data-urlencode "q=SELECT id,fqdn,value,is_active FROM dns_records WHERE fqdn IN (
     'ns1.orama-devnet.network.','ns2.orama-devnet.network.','ns3.orama-devnet.network.',
     'orama-devnet.network.','*.orama-devnet.network.'
@@ -278,7 +289,7 @@ curl -sS -u "$AUTH" -G 'http://127.0.0.1:10100/db/query' \
 Also:
 
 ```bash
-curl -sS -u "$AUTH" -G 'http://127.0.0.1:10100/db/query' \
+rqcurl -sS -G "$RQ/db/query" \
   --data-urlencode "q=SELECT * FROM dns_nameservers"
 ```
 
@@ -311,7 +322,7 @@ UPDATE dns_nameservers
 Execute via:
 
 ```bash
-curl -sS -u "$AUTH" -X POST 'http://127.0.0.1:10100/db/execute?pretty' \
+rqcurl -sS -X POST "$RQ/db/execute?pretty" \
   -H 'Content-Type: application/json' \
   -d '["<SQL>"]'
 ```
@@ -407,10 +418,10 @@ On the **only live** namespace host (example ports `10000` HTTP / `10001` raft �
 
 ```bash
 NS=anchat-test
-NODE_ID=$(grep ^NODE_ID= /opt/orama/.orama/data/namespaces/$NS/rqlite.env | tail -1 | cut -d= -f2)
+NODE_ID=$(sudo grep ^NODE_ID= /var/lib/orama-unit-env/$NS/rqlite.env | tail -1 | cut -d= -f2)
 DATA=/opt/orama/.orama/data/namespaces/$NS/rqlite/$NODE_ID
 RAFT=$DATA/raft
-ADV=$(grep RAFT_ADV_ADDR /opt/orama/.orama/data/namespaces/$NS/rqlite.env | cut -d= -f2)
+ADV=$(sudo grep RAFT_ADV_ADDR /var/lib/orama-unit-env/$NS/rqlite.env | cut -d= -f2)
 # e.g. ADV=10.0.0.2:10001
 
 sudo systemctl stop orama-namespace-gateway@$NS
@@ -484,7 +495,10 @@ done < /tmp/cids.txt
 
 # Optional: also ask cluster to pin everywhere (RF=-1). Useful but not sufficient alone
 # if a peer stays "unpinned" in peer_map — still do local pin/add above.
-# curl -sS -X POST "http://127.0.0.1:10108/pins/${cid}?replication-factor-min=-1&replication-factor-max=-1"
+# The cluster REST API requires basic auth (docs/SECURITY.md); read the credentials from service.json
+# as root and hand them to curl on stdin so they never appear in ps:
+# python3 -c 'import json;c=json.load(open("/opt/orama/.orama/data/ipfs-cluster/service.json"))["api"]["restapi"]["basic_auth_credentials"];u=next(iter(c));print("user = \"" + u + ":" + c[u] + "\"")' \
+#   | curl -sS -K - -X POST "http://127.0.0.1:10108/pins/${cid}?replication-factor-min=-1&replication-factor-max=-1"
 
 # 3) Verify on EACH node (including the new one)
 curl -sS -X POST http://127.0.0.1:10107/api/v0/repo/stat   # new node repo size should jump (MB→100s MB)
@@ -572,8 +586,13 @@ orama node migrate-raft-id --env <env> --dry-run
 Verify afterwards on the platform leader:
 
 ```bash
-PASS=$(sudo cat /opt/orama/.orama/secrets/rqlite-password)
-curl -sS -u "orama:$PASS" http://127.0.0.1:10100/nodes | python3 -m json.tool
+# rqlited listens only on this node's WireGuard IP and always requires basic
+# auth; both come from the node's own config. Define these on every node you
+# run the rqlite commands below on.
+RQ="http://$(sudo sed -n 's/^ *http_adv_address: *"\(.*\)"/\1/p' /opt/orama/.orama/configs/node.yaml)"
+# Credentials go to curl on stdin (-K -), never on its command line where ps shows them.
+rqcurl() { printf 'user = "orama:%s"\n' "$(sudo cat /opt/orama/.orama/secrets/rqlite-password)" | curl -K - "$@"; }
+rqcurl -sS "$RQ/nodes" | python3 -m json.tool
 # expect exactly the surviving voters, all reachable; leader still elected
 ```
 
@@ -583,14 +602,18 @@ curl -sS -u "orama:$PASS" http://127.0.0.1:10100/nodes | python3 -m json.tool
 On the **platform leader**:
 
 ```bash
-PASS=$(sudo cat /opt/orama/.orama/secrets/rqlite-password)
-AUTH="orama:$PASS"
+# rqlited listens only on this node's WireGuard IP and always requires basic
+# auth; both come from the node's own config. Define these on every node you
+# run the rqlite commands below on.
+RQ="http://$(sudo sed -n 's/^ *http_adv_address: *"\(.*\)"/\1/p' /opt/orama/.orama/configs/node.yaml)"
+# Credentials go to curl on stdin (-K -), never on its command line where ps shows them.
+rqcurl() { printf 'user = "orama:%s"\n' "$(sudo cat /opt/orama/.orama/secrets/rqlite-password)" | curl -K - "$@"; }
 
 # Confirm the voter set first
-curl -sS -u "$AUTH" http://127.0.0.1:10100/nodes | python3 -m json.tool
+rqcurl -sS "$RQ/nodes" | python3 -m json.tool
 
 # Remove old WG raft id, e.g. 10.0.0.6:10101
-curl -sS -u "$AUTH" -X DELETE http://127.0.0.1:10100/remove \
+rqcurl -sS -X DELETE "$RQ/remove" \
   -H 'Content-Type: application/json' \
   -d '{"id":"10.0.0.6:10101"}'
 ```
@@ -642,7 +665,7 @@ Optional: repurpose the erased box (e.g. new `jarvis` operator host).
 
 ```bash
 # Platform Raft = 3
-curl -sS http://127.0.0.1:10100/nodes   # 3 voters, all reachable
+rqcurl -sS "$RQ/nodes"   # 3 voters, all reachable (RQ/rqcurl as in Preflight)
 
 # Platform public
 curl -sS https://orama-<env>.network/v1/health

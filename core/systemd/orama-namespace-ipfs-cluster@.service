@@ -29,7 +29,7 @@ ProtectProc=invisible
 ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/orama/.orama/data/ipfs-cluster
 InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
-EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/ipfs-cluster.env
+EnvironmentFile=/var/lib/orama-unit-env/%i/ipfs-cluster.env
 Environment=HOME=/opt/orama
 ExecStartPre=/bin/bash -c 'mkdir -p ${IPFS_CLUSTER_PATH} && chmod 700 ${IPFS_CLUSTER_PATH}'
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do curl -sf -X POST http://127.0.0.1:10107/api/v0/id > /dev/null 2>&1 && exit 0; sleep 1; done; echo "IPFS API not ready after 30s"; exit 1'

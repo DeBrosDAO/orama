@@ -2,7 +2,7 @@ package pubsub
 
 import (
 	"context"
-	"net/http/httptest"
+	"net/http"
 	"testing"
 	"time"
 
@@ -27,10 +27,16 @@ func TestHTTPAPI_publishSubscribe(t *testing.T) {
 	mgr := NewManager(gs, "", zap.NewNop())
 	defer mgr.Close()
 
-	srv := httptest.NewServer(Handler(mgr, zap.NewNop()))
+	sock := shortSocketPath(t)
+	ln, err := ListenSocket(sock, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: Handler(mgr, zap.NewNop())}
+	go srv.Serve(ln)
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, "ns-a", zap.NewNop())
+	client := NewHTTPClient(sock, "ns-a", zap.NewNop())
 	defer client.Close()
 
 	got := make(chan []byte, 1)

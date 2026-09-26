@@ -2,9 +2,13 @@ package node
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/encryption"
+	"github.com/DeBrosOfficial/network/pkg/namespace"
 	"github.com/DeBrosOfficial/network/pkg/node/boot"
 	"github.com/DeBrosOfficial/network/pkg/node/lifecycle"
 )
@@ -383,15 +387,45 @@ func TestStartConnectionMonitoring_startsOneLoop(t *testing.T) {
 	}
 }
 
-func TestNodeID_defaultsWhenUnset(t *testing.T) {
+// node.id is derived by install from the first label of --domain, and every
+// nameserver is installed with the base domain as its domain — so every
+// nameserver had the same node.id. The id the index services carry is the
+// node's peer id instead, which is unique and is what the cluster knows it by.
+func TestNodeID_isThePeerIDNotTheConfiguredID(t *testing.T) {
 	n := newGraphNode(t)
-	if got := n.nodeID(); got != "node" {
-		t.Fatalf("nodeID() = %q, want %q", got, "node")
+	dataDir := t.TempDir()
+	info, err := encryption.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
 	}
+	if err := encryption.SaveIdentity(info, filepath.Join(dataDir, "identity.key")); err != nil {
+		t.Fatal(err)
+	}
+	n.config.Node.DataDir = dataDir
+	n.config.Node.ID = "stagenet"
 
-	n.config.Node.ID = "node-4"
-	if got := n.nodeID(); got != "node-4" {
-		t.Fatalf("nodeID() = %q, want %q", got, "node-4")
+	got, err := n.nodeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != info.PeerID.String() {
+		t.Errorf("nodeID() = %q, want the peer id %q", got, info.PeerID.String())
+	}
+}
+
+// Without the identity install writes there is no id to give the services,
+// and the error says which file is missing rather than inventing one.
+func TestNodeID_missingIdentityIsAnError(t *testing.T) {
+	n := newGraphNode(t)
+	n.config.Node.DataDir = t.TempDir()
+	n.config.Node.ID = "stagenet"
+
+	id, err := n.nodeID()
+	if err == nil {
+		t.Fatalf("nodeID() = %q without an identity key", id)
+	}
+	if !strings.Contains(err.Error(), "identity.key") {
+		t.Errorf("error does not name the missing file: %v", err)
 	}
 }
 
@@ -427,5 +461,53 @@ func TestBootComponents_dnsRegistrationDependsOnEverythingItPromises(t *testing.
 	// registration on them would take a healthy node out of DNS for nothing.
 	if declared[compEdgeAux] {
 		t.Error("dns-registration must not depend on edge-aux — a broken ntfy would remove a serving node from DNS")
+	}
+}
+
+// The membership record is refreshed by its own component: it needs a leader,
+// it re-runs as a health check so later joins are recorded, and nothing
+// depends on it — a node that cannot write it is degraded, not taken down.
+func TestBootComponents_membershipRecordIsItsOwnLeafComponent(t *testing.T) {
+	n := newGraphNode(t)
+	var found bool
+	for _, c := range n.bootComponents() {
+		for _, dep := range c.DependsOn {
+			if dep == compMembershipRecord {
+				t.Errorf("%s depends on %s; a record-write failure would take it down", c.Name, compMembershipRecord)
+			}
+		}
+		if c.Name != compMembershipRecord {
+			continue
+		}
+		found = true
+		if len(c.DependsOn) != 1 || c.DependsOn[0] != compRQLiteCluster {
+			t.Errorf("%s depends on %v, want only %s", c.Name, c.DependsOn, compRQLiteCluster)
+		}
+		if c.Health == nil {
+			t.Errorf("%s has no health check, so members joining later are never recorded", c.Name)
+		}
+	}
+	if !found {
+		t.Fatalf("no %s component: the record that stops a lost-data node bootstrapping is never written", compMembershipRecord)
+	}
+}
+
+// The index supervisor reads the record from the same file the rqlite manager
+// writes it to; if they ever disagreed the protection would silently vanish.
+func TestClusterMembershipPath_writerAndReaderAgree(t *testing.T) {
+	n := newGraphNode(t)
+	n.config.Node.DataDir = filepath.Join(t.TempDir(), "data")
+	mgr := n.newRQLiteManager()
+	written, err := mgr.ClusterMembershipPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir, err := config.ExpandPath(n.config.Node.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := namespace.NewIndexSupervisor(filepath.Dir(dataDir), nil).ClusterMembershipPath()
+	if written != read {
+		t.Errorf("record written to %s but read from %s", written, read)
 	}
 }
