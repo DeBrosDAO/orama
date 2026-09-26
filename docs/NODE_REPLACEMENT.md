@@ -487,9 +487,13 @@ curl -sS -G 'http://127.0.0.1:10000/db/query?level=none' \
 
 # 2) Copy /tmp/cids.txt to EVERY nameserver, then on EACH node:
 #    Local pin (bitswap from peers that already hold the blocks) — this is the critical step.
+# Kubo refuses these without Authorization: Bearer <token>. The token is
+# ipfs.KuboAPIToken (purpose ipfs-kubo-api), the same value the inspector
+# derives on the node. Export it as KUBO_BEARER. It is not the cluster secret
+# and not the cluster REST password.
 while IFS= read -r cid; do
   [ -z "$cid" ] && continue
-  curl -sS -m 180 -X POST "http://127.0.0.1:10107/api/v0/pin/add?arg=${cid}&recursive=true" >/dev/null \
+  curl -sS -m 180 -H "Authorization: Bearer ${KUBO_BEARER}" -X POST "http://127.0.0.1:10107/api/v0/pin/add?arg=${cid}&recursive=true" >/dev/null \
     || echo "FAIL $cid"
 done < /tmp/cids.txt
 
@@ -501,15 +505,16 @@ done < /tmp/cids.txt
 #   | curl -sS -K - -X POST "http://127.0.0.1:10108/pins/${cid}?replication-factor-min=-1&replication-factor-max=-1"
 
 # 3) Verify on EACH node (including the new one)
-curl -sS -X POST http://127.0.0.1:10107/api/v0/repo/stat   # new node repo size should jump (MB→100s MB)
+curl -sS -H "Authorization: Bearer ${KUBO_BEARER}" -X POST http://127.0.0.1:10107/api/v0/repo/stat   # new node repo size should jump (MB→100s MB)
 # Hot CID from a real function (example from #167):
 curl -sS -m 20 -o /dev/null -w "%{http_code} %{size_download} %{time_total}\n" \
+  -H "Authorization: Bearer ${KUBO_BEARER}" \
   -X POST "http://127.0.0.1:10107/api/v0/cat?arg=<HOT_WASM_CID>"
 # Expect http=200, size ~1MB+, time well under 1s after backfill.
 
 # 4) Upload path smoke test (same size class as AnChat deploys)
 dd if=/dev/urandom of=/tmp/big.bin bs=1024 count=1200 status=none
-curl -sS -m 60 -X POST -F file=@/tmp/big.bin http://127.0.0.1:10107/api/v0/add
+curl -sS -m 60 -H "Authorization: Bearer ${KUBO_BEARER}" -X POST -F file=@/tmp/big.bin http://127.0.0.1:10107/api/v0/add
 ```
 
 **Done for IPFS only when:**

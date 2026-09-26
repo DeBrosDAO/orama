@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"go.uber.org/zap"
 )
@@ -87,18 +88,27 @@ func readClusterSecret(path string) (string, error) {
 
 // ipfsGCEnv is the GC oneshot's environment: the repo, and the API of the
 // running daemon it collects through.
-func ipfsGCEnv(repo, nodeID string) map[string]string {
+func ipfsGCEnv(repo, nodeID, apiAuth string) map[string]string {
 	return map[string]string{
-		"IPFS_PATH": repo,
-		"IPFS_API":  fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", IndexIPFSAPIPort),
-		"NODE_ID":   nodeID,
+		"IPFS_PATH":     repo,
+		"IPFS_API":      fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", IndexIPFSAPIPort),
+		"IPFS_API_AUTH": apiAuth,
+		"NODE_ID":       nodeID,
 	}
 }
 
 // EnsureIPFSGC starts the instantiated GC timer (not the oneshot).
 func (s *IndexSupervisor) EnsureIPFSGC(nodeID string) error {
+	secret, err := readClusterSecret(filepath.Join(s.oramaDir, "secrets", "cluster-secret"))
+	if err != nil {
+		return err
+	}
+	token, err := ipfs.KuboAPIToken(secret)
+	if err != nil {
+		return err
+	}
 	if err := s.systemdMgr.GenerateEnvFile(BlueprintNameIndex, nodeID, systemd.ServiceTypeIPFSGC,
-		ipfsGCEnv(filepath.Join(s.dataDir, "ipfs", "repo"), nodeID)); err != nil {
+		ipfsGCEnv(filepath.Join(s.dataDir, "ipfs", "repo"), nodeID, "bearer:"+token)); err != nil {
 		return err
 	}
 	if err := stopLeftoverUnits("orama-ipfs-gc.timer"); err != nil {

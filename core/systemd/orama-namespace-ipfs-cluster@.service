@@ -31,9 +31,14 @@ InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 EnvironmentFile=/var/lib/orama-unit-env/%i/ipfs-cluster.env
 Environment=HOME=/opt/orama
+# Kubo's RPC is 127.0.0.1:10107 and requires a bearer. ipfs-cluster-service
+# daemon cannot send one, so serve-ipfs-cluster listens on this socket and
+# forwards with the bearer. 0700 and the socket's 0600 keep a DynamicUser
+# deployment out; the unit runs as orama.
+RuntimeDirectory=orama-ipfs
+RuntimeDirectoryMode=0700
 ExecStartPre=/bin/bash -c 'mkdir -p ${IPFS_CLUSTER_PATH} && chmod 700 ${IPFS_CLUSTER_PATH}'
-ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do curl -sf -X POST http://127.0.0.1:10107/api/v0/id > /dev/null 2>&1 && exit 0; sleep 1; done; echo "IPFS API not ready after 30s"; exit 1'
-ExecStart=/usr/local/bin/ipfs-cluster-service daemon
+ExecStart=/opt/orama/bin/orama serve-ipfs-cluster
 Restart=always
 RestartSec=5s
 StandardOutput=journal

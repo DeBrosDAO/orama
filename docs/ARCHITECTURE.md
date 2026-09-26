@@ -98,7 +98,11 @@ Olric or the SFU against an address that does not exist yet.
 stop *and* restart, so it is reserved for the cases where one unit is genuinely
 useless without another. Two qualify: `ipfs-cluster@` and `ipfs-gc@` on
 `ipfs@` — a controller with no daemon has nothing to control, and `ipfs repo gc`
-works through the running daemon's API.
+works through the running daemon's API. `ipfs-cluster@`'s process is
+`orama serve-ipfs-cluster`: ipfs-cluster v1.1.2 cannot send Kubo's bearer, so
+that process proxies `/run/orama-ipfs/api.sock` to the RPC and adds it
+(`pkg/ipfs.ServeCluster`). The GC oneshot passes the same bearer as
+`--api-auth`.
 
 Every other unit `orama-node` manages uses `Wants=` + `After=`. In particular
 `gateway@` no longer

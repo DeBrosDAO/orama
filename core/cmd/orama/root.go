@@ -60,6 +60,9 @@ and no Orama MCP.`,
 
 	printer.Register(rootCmd)
 
+	// The cluster unit's process. Hidden: operators start the unit, not this.
+	rootCmd.AddCommand(serveIPFSClusterCmd())
+
 	// Version command
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",
@@ -180,7 +183,7 @@ func classifyUsageErrors(cmd *cobra.Command) {
 func needsEnvironmentCAs(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
-		case "env", "version":
+		case "env", "version", "serve-ipfs-cluster":
 			if c.Parent() != nil && c.Parent().Parent() == nil {
 				return false
 			}

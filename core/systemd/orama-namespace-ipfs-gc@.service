@@ -27,7 +27,7 @@ Environment=HOME=/opt/orama
 # --api: always the running daemon. Without it the CLI looks for the repo's api
 # file, and while the daemon is starting (lock held, api file not yet written)
 # it fell back to an offline GC and failed on "someone else has the lock".
-ExecStart=/usr/local/bin/ipfs --api=${IPFS_API} repo gc
+ExecStart=/usr/local/bin/ipfs --api=${IPFS_API} --api-auth=${IPFS_API_AUTH} repo gc
 TimeoutStartSec=1800
 StandardOutput=journal
 StandardError=journal

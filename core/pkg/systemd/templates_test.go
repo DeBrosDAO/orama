@@ -48,14 +48,19 @@ func TestTemplateUnits_hostStackAdoptsExistingPaths(t *testing.T) {
 	}
 	dir := filepath.Join(filepath.Dir(file), "..", "..", "systemd")
 	checks := map[string][]string{
-		"orama-namespace-wireguard@.service":    {"wg-quick up wg0", "wg show wg0"},
-		"orama-namespace-ipfs@.service":         {"ipfs daemon", "IPFS_PATH"},
-		"orama-namespace-ipfs-cluster@.service": {"ipfs-cluster-service daemon", "127.0.0.1:10107"},
-		"orama-namespace-vault@.service":        {"data/vault/vault.yaml"},
-		"orama-namespace-caddy@.service":        {"/etc/caddy/Caddyfile", "XDG_CONFIG_HOME=/var/lib/caddy/config", "orama-namespace-coredns@nameserver.service"},
-		"orama-namespace-tor@.service":          {"/etc/orama/tor/torrc", "StateDirectory=orama-tor"},
-		"orama-namespace-sni-router@.service":   {"Before=orama-namespace-caddy@%i.service"},
-		"orama-namespace-coredns@.service":      {"/etc/coredns/Corefile", "orama-namespace-rqlite@index.service"},
+		"orama-namespace-wireguard@.service": {"wg-quick up wg0", "wg show wg0"},
+		"orama-namespace-ipfs@.service":      {"ipfs daemon", "IPFS_PATH"},
+		"orama-namespace-ipfs-cluster@.service": {
+			"ExecStart=/opt/orama/bin/orama serve-ipfs-cluster",
+			"RuntimeDirectory=orama-ipfs",
+			"RuntimeDirectoryMode=0700",
+			"127.0.0.1:10107",
+		},
+		"orama-namespace-vault@.service":      {"data/vault/vault.yaml"},
+		"orama-namespace-caddy@.service":      {"/etc/caddy/Caddyfile", "XDG_CONFIG_HOME=/var/lib/caddy/config", "orama-namespace-coredns@nameserver.service"},
+		"orama-namespace-tor@.service":        {"/etc/orama/tor/torrc", "StateDirectory=orama-tor"},
+		"orama-namespace-sni-router@.service": {"Before=orama-namespace-caddy@%i.service"},
+		"orama-namespace-coredns@.service":    {"/etc/coredns/Corefile", "orama-namespace-rqlite@index.service"},
 	}
 	for name, needles := range checks {
 		data, err := os.ReadFile(filepath.Join(dir, name))

@@ -146,13 +146,14 @@ func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, sec
 		delete(api, "ipfsproxy")
 	}
 
-	// Update IPFS port in IPFS Connector configuration
-	ipfsNodeMultiaddr := fmt.Sprintf("/ip4/%s/tcp/%d", loopbackIPv4, ipfsAPIPort)
-	if ipfsConnector, ok := config["ipfs_connector"].(map[string]interface{}); ok {
-		if ipfshttp, ok := ipfsConnector["ipfshttp"].(map[string]interface{}); ok {
-			ipfshttp["node_multiaddress"] = ipfsNodeMultiaddr
-		}
+	// ipfs-cluster v1.1.2 dials this address with no Authorization header, and
+	// its config has no field for one (an unknown key is ignored). Kubo's RPC
+	// refuses that. The cluster unit listens on the socket and forwards to
+	// the RPC port below with the bearer; the connector dials the socket.
+	if ipfsAPIPort != constants.IPFSAPIPort {
+		return fmt.Errorf("ipfs API port %d is not %d; the cluster proxy forwards to that port", ipfsAPIPort, constants.IPFSAPIPort)
 	}
+	setKuboConnector(config, ipfs.KuboProxyMultiaddr)
 
 	if err := bindClusterAPIsToLoopback(config); err != nil {
 		return err
@@ -177,6 +178,23 @@ func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, sec
 // serviceJSONMode keeps service.json to the orama user: it holds the cluster
 // secret and the REST API password. It was written 0644.
 const serviceJSONMode = 0o600
+
+// setKuboConnector points ipfs-cluster's ipfshttp connector at multiaddr,
+// creating the section when init did not. The address is the unit's proxy
+// socket, not Kubo's TCP port.
+func setKuboConnector(config map[string]interface{}, multiaddr string) {
+	conn, _ := config["ipfs_connector"].(map[string]interface{})
+	if conn == nil {
+		conn = map[string]interface{}{}
+		config["ipfs_connector"] = conn
+	}
+	httpc, _ := conn["ipfshttp"].(map[string]interface{})
+	if httpc == nil {
+		httpc = map[string]interface{}{}
+		conn["ipfshttp"] = httpc
+	}
+	httpc["node_multiaddress"] = multiaddr
+}
 
 // requireClusterAPIAuth makes the REST API — and the pinning-service API when
 // the file configures one — require the basic-auth credentials every consumer
