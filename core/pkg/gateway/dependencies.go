@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/push"
 	pushcreds "github.com/DeBrosOfficial/network/pkg/push/credentials"
@@ -901,7 +903,12 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	deps.PersistentWSManager = persistent.NewManager(5000, logger.Logger)
 
 	// Initialize auth service with persistent signing keys (RSA + EdDSA)
-	keyPEM, err := loadOrCreateSigningKey(cfg.StateDir, logger)
+	var keyPEM []byte
+	if servesNamedNamespace(cfg.ClientNamespace) {
+		keyPEM, err = loadOrCreateSigningKey(cfg.StateDir, logger)
+	} else {
+		keyPEM, err = loadOrCreateIndexSigningKey(os.Getenv("CREDENTIALS_DIRECTORY"), cfg.StateDir, privhelper.PutGatewayKey, logger)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to load or create JWT signing key: %w", err)
 	}
@@ -934,7 +941,13 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	// public halves are published so the others verify, and a namespace
 	// gateway's key is bound to its namespace so it can sign only for its own
 	// tenant.
-	edKey, migrated, err := loadOrCreateEdSigningKey(cfg.StateDir, cfg.ClusterSecret, logger)
+	var edKey ed25519.PrivateKey
+	var migrated bool
+	if servesNamedNamespace(cfg.ClientNamespace) {
+		edKey, migrated, err = loadOrCreateEdSigningKey(cfg.StateDir, cfg.ClusterSecret, logger)
+	} else {
+		edKey, migrated, err = loadOrCreateIndexEdSigningKey(os.Getenv("CREDENTIALS_DIRECTORY"), cfg.StateDir, cfg.ClusterSecret, privhelper.PutGatewayKey, logger)
+	}
 	if err != nil {
 		return fmt.Errorf("this gateway has no signing key and cannot mint a token: %w", err)
 	}

@@ -81,6 +81,8 @@ func authorizeIndexGateway(inv Invocation) error {
 		return fmt.Errorf("rewriting the WireGuard mesh is orama-node's; %s may add or remove one peer only", IndexGatewayUnit)
 	case ToolSystemctl:
 		return authorizeGatewaySystemctl(inv.Args)
+	case ToolGatewayKey:
+		return nil // put of the index gateway's own signing key; Validate allows no other
 	default:
 		return nil
 	}

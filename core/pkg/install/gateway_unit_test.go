@@ -103,6 +103,17 @@ func TestIndexGatewayDropIn(t *testing.T) {
 	if got := directiveValues(IndexGatewayDropIn, "ReadOnlyPaths"); strings.Join(got, " ") != productionOramaDir+"/secrets" {
 		t.Errorf("ReadOnlyPaths = %v", got)
 	}
+	for _, cred := range []string{
+		"jwt-signing-key:-/var/lib/orama-gateway-keys/index/jwt-signing-key.pem",
+		"jwt-eddsa-key:-/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem",
+	} {
+		if !strings.Contains(IndexGatewayDropIn, "LoadCredential="+cred) {
+			t.Errorf("the index gateway does not receive %s", cred)
+		}
+	}
+	if strings.Contains(gatewayTemplate(t), "LoadCredential=jwt-signing-key") {
+		t.Error("a tenant gateway receives the index signing key")
+	}
 	if !strings.HasSuffix(indexGatewayDropInDir, "/orama-namespace-gateway@index.service.d") {
 		t.Errorf("the drop-in is not the index instance's: %s", indexGatewayDropInDir)
 	}

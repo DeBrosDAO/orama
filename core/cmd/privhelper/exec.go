@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deploysecrets"
+	"github.com/DeBrosOfficial/network/pkg/gatewaykeys"
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"github.com/DeBrosOfficial/network/pkg/unitenv"
@@ -80,6 +82,8 @@ func execute(inv privhelper.Invocation, input []byte) privhelper.Response {
 		return deploy(inv.Args, input)
 	case privhelper.ToolUnitEnv:
 		return unitEnv(inv.Args, input)
+	case privhelper.ToolGatewayKey:
+		return gatewayKey(inv.Args, input)
 	default:
 		return failure(fmt.Errorf("no executor for %s", inv.Tool))
 	}
@@ -164,6 +168,15 @@ func unitEnv(args []string, input []byte) privhelper.Response {
 		return failure(err)
 	}
 	return privhelper.Response{Output: "stored " + args[1] + "/" + args[2] + "\n"}
+}
+
+// gatewayKey stores the index gateway's signing key (arguments already
+// validated) as root:root 0400.
+func gatewayKey(args []string, input []byte) privhelper.Response {
+	if err := gatewaykeys.Write(gatewaykeys.Dir, constants.IndexNamespace, args[1], input); err != nil {
+		return failure(err)
+	}
+	return privhelper.Response{Output: "stored " + args[1] + "\n"}
 }
 
 // oramaGID is the orama group, which reads the unit env files.

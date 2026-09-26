@@ -194,6 +194,121 @@ func LegacyClusterSigningKey(clusterSecret string) (ed25519.PublicKey, error) {
 // deriveEd25519Seed derives a deterministic 32-byte seed for Ed25519 from the
 // cluster secret using HKDF-SHA256 with a stable purpose label. Same secret +
 // same label = same seed = same keypair on every gateway in the cluster.
+// loadOrCreateIndexSigningKey loads the index gateway's RSA key from the
+// credential systemd handed this unit, or generates one and stores it through
+// sink. It does not leave the key in stateDir: every tenant gateway runs as
+// the same user and could read it there.
+func loadOrCreateIndexSigningKey(credDir, stateDir string, sink func(string, []byte) error, logger *logging.ColoredLogger) ([]byte, error) {
+	if pem, err := sealedKey(credDir, stateDir, jwtKeyFileName, sink); err != nil || pem != nil {
+		return pem, err
+	}
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("generate RSA key: %w", err)
+	}
+	pem := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	if err := sink(jwtKeyFileName, pem); err != nil {
+		return nil, err
+	}
+	logger.ComponentInfo(logging.ComponentGeneral, "Generated an RSA signing key for the index gateway")
+	return pem, nil
+}
+
+// loadOrCreateIndexEdSigningKey is the Ed25519 half of loadOrCreateIndexSigningKey.
+// A key that is the cluster-derived one is replaced, as for a tenant gateway.
+func loadOrCreateIndexEdSigningKey(credDir, stateDir, clusterSecret string, sink func(string, []byte) error, logger *logging.ColoredLogger) (ed25519.PrivateKey, bool, error) {
+	pem, err := sealedKey(credDir, stateDir, eddsaKeyFileName, sink)
+	if err != nil {
+		return nil, false, err
+	}
+	if pem != nil {
+		edKey, perr := parseEdSigningKey(pem)
+		if perr != nil {
+			return nil, false, fmt.Errorf("the index EdDSA signing key cannot be read (%v); move it aside to have a new one generated, "+
+				"which invalidates every token this gateway has issued", perr)
+		}
+		shared, derr := isClusterDerivedKey(edKey, clusterSecret)
+		if derr != nil {
+			return nil, false, derr
+		}
+		if !shared {
+			return edKey, false, nil
+		}
+		logger.ComponentWarn(logging.ComponentGeneral, "The index EdDSA signing key is the cluster-derived key every node can compute; replacing it")
+	}
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, false, fmt.Errorf("generate Ed25519 key: %w", err)
+	}
+	encoded, err := marshalEdPrivateKey(priv)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := sink(eddsaKeyFileName, encoded); err != nil {
+		return nil, false, err
+	}
+	return priv, pem != nil, nil
+}
+
+// sealedKey returns the key PEM systemd passed in, or the one previously
+// stored in stateDir after moving it through sink. A missing key is (nil, nil).
+// A copy in stateDir is removed once the sealed copy exists.
+func sealedKey(credDir, stateDir, name string, sink func(string, []byte) error) ([]byte, error) {
+	if credDir != "" {
+		pem, err := readKeyIfPresent(filepath.Join(credDir, name))
+		if err != nil {
+			return nil, err
+		}
+		if pem != nil {
+			if err := removeStateKey(stateDir, name); err != nil {
+				return nil, err
+			}
+			return pem, nil
+		}
+	}
+	pem, err := readKeyIfPresent(filepath.Join(stateDir, name))
+	if err != nil || pem == nil {
+		return nil, err
+	}
+	if err := sink(name, pem); err != nil {
+		return nil, err
+	}
+	if err := removeStateKey(stateDir, name); err != nil {
+		return nil, err
+	}
+	return pem, nil
+}
+
+func readKeyIfPresent(path string) ([]byte, error) {
+	pem, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	if len(pem) == 0 {
+		return nil, nil
+	}
+	return pem, nil
+}
+
+func removeStateKey(stateDir, name string) error {
+	err := os.Remove(filepath.Join(stateDir, name))
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s from the state directory a tenant gateway can read: %w", name, err)
+	}
+	return nil
+}
+
+func marshalEdPrivateKey(priv ed25519.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Ed25519 key: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
+}
+
 func deriveEd25519Seed(clusterSecret string) ([]byte, error) {
 	if clusterSecret == "" {
 		return nil, fmt.Errorf("cluster secret is empty")

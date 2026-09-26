@@ -33,6 +33,7 @@ func TestAuthorize_refusesEveryOtherOramaProcess(t *testing.T) {
 			{"systemctl", "start", "orama-namespace-gateway@alice.service"},
 			{"deploy", "set-env", "alice-web"},
 			{"ufw", "allow", "3478/udp"},
+			{"gateway-key", "put", "jwt-signing-key.pem"},
 		} {
 			if err := Authorize(Caller{UID: oramaUID, Unit: unit}, mustValidate(t, argv...)); err == nil {
 				t.Errorf("%q was allowed %q", unit, argv)

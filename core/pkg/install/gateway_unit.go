@@ -29,6 +29,11 @@ ReadWritePaths=/opt/orama/.orama/data/namespaces /opt/orama/.orama/data/turn
 TemporaryFileSystem=
 BindReadOnlyPaths=
 ReadOnlyPaths=/opt/orama/.orama/secrets
+# The index gateway's signing keys. The files are root:root 0400; this unit
+# is the only one that receives them. A missing file is a first boot: the
+# gateway generates the key and stores it through orama-privhelper.
+LoadCredential=jwt-signing-key:-/var/lib/orama-gateway-keys/index/jwt-signing-key.pem
+LoadCredential=jwt-eddsa-key:-/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem
 `
 
 // installIndexGatewayDropIn writes IndexGatewayDropIn. The caller reloads
