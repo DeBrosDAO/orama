@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -331,5 +332,19 @@ func TestReadVersionAndCommit_failClosed(t *testing.T) {
 	}
 	if _, err := b.readCommit(); err == nil {
 		t.Error("a directory outside any git checkout produced a commit")
+	}
+}
+
+// A push hook sets GIT_DIR. readCommit must still mean the project directory,
+// not that other repository.
+func TestReadCommit_ignoresAnInheritedGitDir(t *testing.T) {
+	out, err := exec.Command("git", "rev-parse", "--absolute-git-dir").Output()
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+	t.Setenv("GIT_DIR", strings.TrimSpace(string(out)))
+	b := &Builder{projectDir: t.TempDir()}
+	if commit, err := b.readCommit(); err == nil {
+		t.Fatalf("readCommit used GIT_DIR and returned %q", commit)
 	}
 }

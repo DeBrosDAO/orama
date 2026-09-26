@@ -413,7 +413,7 @@ func (b *Builder) buildCoreDNS() error {
 
 	// Clone CoreDNS
 	fmt.Println("  Cloning CoreDNS...")
-	cmd := exec.Command("git", "clone", "--depth", "1",
+	cmd := gitCommand("clone", "--depth", "1",
 		"--branch", "v"+constants.CoreDNSVersion,
 		"https://github.com/coredns/coredns.git", buildDir)
 	cmd.Stdout = os.Stdout
@@ -730,14 +730,38 @@ func (b *Builder) readVersion() (string, error) {
 
 // readCommit is the checkout's commit. A build outside a git checkout fails
 // rather than being signed as commit "unknown".
+//
+// The command does not inherit GIT_DIR. A push hook and plenty of scripts set
+// it, and git then ignores cmd.Dir and reports that other repository's commit.
 func (b *Builder) readCommit() (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--short", "HEAD")
+	cmd := gitCommand("rev-parse", "--short", "HEAD")
 	cmd.Dir = b.projectDir
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("read the commit of %s with git: %w", b.projectDir, err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitCommand runs git in the directory the caller sets, not in whatever
+// repository GIT_DIR names. See readCommit.
+func gitCommand(args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Env = withoutGitDir(os.Environ())
+	return cmd
+}
+
+// withoutGitDir drops the variables that point git at a repository other than
+// the working directory it is started in.
+func withoutGitDir(environ []string) []string {
+	out := make([]string, 0, len(environ))
+	for _, entry := range environ {
+		if strings.HasPrefix(entry, "GIT_DIR=") || strings.HasPrefix(entry, "GIT_WORK_TREE=") || strings.HasPrefix(entry, "GIT_COMMON_DIR=") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // caddyProviderMACHeader is the header the Caddy DNS provider stamps its calls
