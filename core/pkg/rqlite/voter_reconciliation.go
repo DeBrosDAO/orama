@@ -367,7 +367,7 @@ func (r *RQLiteManager) reconcileVoters(reconciler *voterReconciler, status *RQL
 	// 6. Safety: never demote ourselves (the current leader). The voter set is
 	// keyed by address and leader_id is an id; they are equal only on a node
 	// that predates recorded ids, so the leader is looked up by its address.
-	leaderID := status.Store.Raft.LeaderID
+	leaderID := status.RaftLeaderID()
 	if _, shouldBeVoter := desiredVoters[addrByID[leaderID]]; !shouldBeVoter {
 		r.logger.Warn("Leader is not in computed voter set — skipping reconciliation",
 			zap.String("leader_id", leaderID), zap.String("leader_addr", addrByID[leaderID]))

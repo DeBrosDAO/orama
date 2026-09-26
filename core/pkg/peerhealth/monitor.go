@@ -496,9 +496,13 @@ func (m *Monitor) getRingNeighbors(ctx context.Context) ([]nodeInfo, error) {
 	var nodes []nodeInfo
 	for rows.Next() {
 		var n nodeInfo
-		if err := rows.Scan(&n.ID, &n.InternalIP, &n.HeartbeatFresh); err != nil {
+		// The rqlite driver returns the CASE expression as float64. Scanning
+		// that straight into a bool fails on every row.
+		var fresh int64
+		if err := rows.Scan(&n.ID, &n.InternalIP, &fresh); err != nil {
 			return nil, fmt.Errorf("scan dns_nodes: %w", err)
 		}
+		n.HeartbeatFresh = fresh != 0
 		nodes = append(nodes, n)
 	}
 	if err := rows.Err(); err != nil {

@@ -53,7 +53,7 @@ func TransferLeadership(ep Endpoint, logger *zap.Logger) error {
 	// Find any reachable voter that is NOT us.
 	var targetID string
 	for _, n := range nodes {
-		if n.Voter && n.Reachable && n.ID != status.Store.Raft.LeaderID {
+		if n.Voter && n.Reachable && n.ID != status.RaftLeaderID() {
 			targetID = n.ID
 			break
 		}

@@ -272,7 +272,7 @@ its gate between nodes. A node passes when **all** of these hold:
 | Signal | Why |
 |--------|-----|
 | Raft state is `Leader` or `Follower` | `Candidate` means an election is running; restarting the next voter during one is how a rollout loses quorum |
-| A leader is known (`leader_id` non-empty) | A follower that reports no leader is in a cluster that cannot commit a write |
+| A leader is known (`store.leader.node_id`, or `raft.leader_id` on an older payload) | A follower that reports no leader is in a cluster that cannot commit a write |
 | Applied index within 200 of the commit index | A follower tens of thousands of entries behind is not carrying reads |
 | Gateway `/health` returns 200 | The node serves no traffic until it does |
 

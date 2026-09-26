@@ -154,7 +154,7 @@ func Observe(ctx context.Context, client *http.Client, t Target) (Status, error)
 
 	s := Status{
 		RaftState:    status.Store.Raft.State,
-		LeaderID:     status.Store.Raft.LeaderID,
+		LeaderID:     status.RaftLeaderID(),
 		AppliedIndex: status.Store.Raft.AppliedIndex,
 		CommitIndex:  status.Store.Raft.CommitIndex,
 	}

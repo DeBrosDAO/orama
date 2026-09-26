@@ -186,7 +186,7 @@ func (cm *ClusterManager) reconcileNamespaceLeader(namespace, localIP string, rq
 	if status.Store.Raft.State != "Leader" {
 		return // only the leader can transfer leadership away
 	}
-	selfID := status.Store.Raft.LeaderID
+	selfID := status.RaftLeaderID()
 
 	nodes, err := rqlite.GetRaftNodes(ep)
 	if err != nil {

@@ -34,6 +34,13 @@ type RQLiteStatus struct {
 			DSN    string `json:"dsn"`
 			Memory bool   `json:"memory"`
 		} `json:"db_conf"`
+		// Leader is who rqlite 8 names in /status. The id used to be
+		// raft.leader_id; this release leaves that field unset and reports
+		// {"node_id","addr"} here instead.
+		Leader struct {
+			NodeID string `json:"node_id"`
+			Addr   string `json:"addr"`
+		} `json:"leader"`
 		// Nodes is the raft configuration as this node holds it. Unlike
 		// /nodes it is read locally, without probing each member.
 		Nodes []struct {
@@ -58,6 +65,15 @@ type RQLiteStatus struct {
 		Uptime    string `json:"uptime"`
 		StartTime string `json:"start_time"`
 	} `json:"node"`
+}
+
+// RaftLeaderID is the raft id of the current leader. rqlite 8 puts it on
+// store.leader; older payloads put it on store.raft.leader_id.
+func (s RQLiteStatus) RaftLeaderID() string {
+	if id := s.Store.Raft.LeaderID; id != "" {
+		return id
+	}
+	return s.Store.Leader.NodeID
 }
 
 // RQLiteNode represents a node in the RQLite cluster
