@@ -167,8 +167,13 @@ func genesisInstallCommand(cfg *Config, srv ServerState, wallet string) string {
 
 // joinInstallCommand joins srv to the cluster with invite, expecting the
 // cluster to send the operator's wallet as its only archive signer.
-func joinInstallCommand(cfg *Config, srv ServerState, wallet, invite string) string {
-	return setup.InstallCommand(installOptions(cfg, srv, false), wallet, []string{wallet}, invite) + " --skip-checks"
+func joinInstallCommand(cfg *Config, srv ServerState, wallet, invite string) (string, []byte, error) {
+	cmd := setup.InstallCommand(installOptions(cfg, srv, false), wallet, []string{wallet}, invite) + " --skip-checks"
+	secrets, err := setup.InstallSecrets(invite)
+	if err != nil {
+		return "", nil, err
+	}
+	return cmd, secrets, nil
 }
 
 // mintInvite mints a single-use invite on the genesis node the way node setup

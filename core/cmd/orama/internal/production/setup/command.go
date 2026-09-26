@@ -12,6 +12,7 @@ package setup
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
@@ -160,15 +161,20 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
-	installCmd, err := buildInstallCommand(opts, wallet[0], expected)
+	installCmd, secrets, err := buildInstallCommand(opts, wallet[0], expected)
 	if err != nil {
 		return fmt.Errorf("failed to build install command: %w", err)
 	}
 
 	fmt.Printf("\n  Running: %s\n\n", redactToken(installCmd))
 
-	// 8. Run the install
-	if err := remotessh.RunSSHStreaming(node, installCmd); err != nil {
+	// 8. Run the install. The invite, when there is one, is on stdin: the
+	// command line is visible in ps on the new node for the whole install.
+	var sshOpts []remotessh.SSHOption
+	if len(secrets) > 0 {
+		sshOpts = append(sshOpts, remotessh.WithStdin(bytes.NewReader(secrets)))
+	}
+	if err := remotessh.RunSSHStreaming(node, installCmd, sshOpts...); err != nil {
 		return fmt.Errorf("install failed: %w", err)
 	}
 
@@ -467,15 +473,20 @@ func installPublicKey(ip, user, password, pubKey, knownHostsPath string) error {
 
 // buildInstallCommand constructs the `sudo orama node install` command,
 // minting the invite a joining node needs.
-func buildInstallCommand(opts Options, wallet string, expected []string) (string, error) {
+func buildInstallCommand(opts Options, wallet string, expected []string) (string, []byte, error) {
 	var token string
 	if !opts.Genesis {
 		var err error
 		if token, err = joinInvite(opts); err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
-	return InstallCommand(opts, wallet, expected, token), nil
+	cmd := InstallCommand(opts, wallet, expected, token)
+	secrets, err := InstallSecrets(token)
+	if err != nil {
+		return "", nil, err
+	}
+	return cmd, secrets, nil
 }
 
 // InstallCommand is the `sudo orama node install` command line for opts.
@@ -485,8 +496,8 @@ func buildInstallCommand(opts Options, wallet string, expected []string) (string
 // the invite it joins with; both are unused for a genesis node.
 func InstallCommand(opts Options, wallet string, expected []string, token string) string {
 	parts := []string{"sudo /opt/orama/bin/orama node install"}
-	// Every value is single-quoted: this line runs as root on the VPS, and the
-	// invite in it comes from another machine.
+	// Every value is single-quoted: this line runs as root on the VPS. The
+	// invite is not one of those values; InstallSecrets carries it.
 	flag := func(name, value string) { parts = append(parts, name, shellQuote(value)) }
 	flag("--vps-ip", opts.IP)
 
@@ -517,10 +528,30 @@ func InstallCommand(opts Options, wallet string, expected []string, token string
 	if !opts.Genesis {
 		flag("--expect-archive-signers", strings.Join(expected, ","))
 		// The invite carries the gateway to join and the certificate to pin.
-		flag("--token", token)
+		// It goes on stdin (--secrets-stdin), not on this command line.
+		if token != "" {
+			parts = append(parts, "--secrets-stdin")
+		}
 	}
 
 	return strings.Join(parts, " ")
+}
+
+// InstallSecrets is the stdin body for an install command that carries an
+// invite. The node reads it as the --secrets-stdin object (install.stdinSecrets):
+// one JSON object, field "token". An empty token is a genesis install and
+// sends nothing.
+func InstallSecrets(token string) ([]byte, error) {
+	if token == "" {
+		return nil, nil
+	}
+	body, err := json.Marshal(struct {
+		Token string `json:"token"`
+	}{Token: token})
+	if err != nil {
+		return nil, fmt.Errorf("encode the install invite for stdin: %w", err)
+	}
+	return body, nil
 }
 
 // expectedArchiveSigners is the archive signer list a joining node must

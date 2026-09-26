@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -426,7 +427,11 @@ func phase5JoinNodes(cfg *Config, state *SandboxState, nodes []inspector.Node, w
 		}
 
 		fmt.Printf("  [%d/%d] Joining %s (%s, %s)...\n", i, len(state.Servers)-1, srv.Name, srv.IP, srv.Role)
-		if err := remotessh.RunSSHStreaming(node, joinInstallCommand(cfg, srv, wallet, invite)); err != nil {
+		joinCmd, secrets, err := joinInstallCommand(cfg, srv, wallet, invite)
+		if err != nil {
+			return fmt.Errorf("join %s: %w", srv.Name, err)
+		}
+		if err := remotessh.RunSSHStreaming(node, joinCmd, remotessh.WithStdin(bytes.NewReader(secrets))); err != nil {
 			return fmt.Errorf("join %s: %w", srv.Name, err)
 		}
 

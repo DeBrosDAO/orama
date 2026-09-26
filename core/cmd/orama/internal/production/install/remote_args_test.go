@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/setup"
 )
 
 // The list of flags to forward was written out by hand and had drifted:
@@ -166,6 +168,22 @@ func TestStdinSecrets_roundTrip(t *testing.T) {
 	}
 	if node.Token != sent.Token || node.ClusterSecret != sent.ClusterSecret || node.SwarmKey != sent.SwarmKey {
 		t.Errorf("node read %+v, laptop sent token=%q cluster=%q swarm=%q", node, sent.Token, sent.ClusterSecret, sent.SwarmKey)
+	}
+}
+
+// node setup and sandbox write the invite with InstallSecrets. The node has
+// to read that object, or a join started by setup hangs or rejects the invite.
+func TestSetupInstallSecrets_isTheStdinObject(t *testing.T) {
+	raw, err := setup.InstallSecrets("orama1_abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := &Flags{SecretsFromStdin: true}
+	if err := node.readStdinSecrets(bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if node.Token != "orama1_abc" || node.ClusterSecret != "" || node.SwarmKey != "" {
+		t.Fatalf("read %+v", node)
 	}
 }
 

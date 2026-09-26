@@ -44,7 +44,7 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - The overlay rule was `ufw allow from 10.0.0.0/24`: a packet whose source address claimed the overlay was admitted to every internal port on whatever interface it arrived. It is `ufw allow in on wg0 from 10.0.0.0/24` — arriving through wg0 means WireGuard authenticated the sender's key. Reconcile adds it and then removes the tagged `/24` rule as extra, so the mesh is never cut off; an untagged `/24` rule from before tagging is on the legacy list
 
 **Secrets never on a command line**
-- `orama node install --remote` used to run `sudo orama node install --token … --cluster-secret … --swarm-key …` over SSH, where every local user of the new machine could read them in `ps` for the whole install. The remote command now carries `--secrets-stdin`, and the secrets travel on its stdin as one JSON object (`cmd/orama/internal/production/install/secrets_stdin.go`). stdin rather than an environment variable (needs sshd `AcceptEnv`, and sudo drops it) or a file copied ahead (lands on the new machine's disk)
+- `orama node install --remote`, `orama node setup`, and `orama sandbox` used to run `sudo orama node install --token …` over SSH, where every local user of the new machine could read the invite in `ps` for the whole install. The remote command now carries `--secrets-stdin`, and the invite (and, on the manual join path, the cluster secret and swarm key) travels on its stdin as one JSON object (`cmd/orama/internal/production/install/secrets_stdin.go`, `setup.InstallSecrets`). stdin rather than an environment variable (needs sshd `AcceptEnv`, and sudo drops it) or a file copied ahead (lands on the new machine's disk)
 
 ### Authentication
 

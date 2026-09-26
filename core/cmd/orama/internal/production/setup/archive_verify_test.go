@@ -26,7 +26,7 @@ func TestEnsureArchive_refusesAnArchiveThatDoesNotVerifyBeforeUploading(t *testi
 }
 
 func TestBuildInstallCommand_alwaysPassesTheOperatorWallet(t *testing.T) {
-	cmd, err := buildInstallCommand(Options{IP: "203.0.113.5", Genesis: true, BaseDomain: "example.com"}, operatorWallet, nil)
+	cmd, _, err := buildInstallCommand(Options{IP: "203.0.113.5", Genesis: true, BaseDomain: "example.com"}, operatorWallet, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,19 +35,31 @@ func TestBuildInstallCommand_alwaysPassesTheOperatorWallet(t *testing.T) {
 	}
 }
 
-// A joining node gets the signers it must be sent and the invite it joins
-// with, each quoted for the root shell it runs in.
+// A joining node gets the signers it must be sent on the command line. The
+// invite is not one of them: it goes on stdin, where ps on the new node
+// cannot read it.
 func TestInstallCommand_joinCarriesTheExpectedSignersAndTheInvite(t *testing.T) {
+	const invite = "orama1_abc"
 	cmd := InstallCommand(Options{IP: "203.0.113.6", BaseDomain: "example.com", User: "root"},
-		operatorWallet, []string{operatorWallet}, "orama1_abc")
+		operatorWallet, []string{operatorWallet}, invite)
 	for _, want := range []string{
 		"--operator-wallet '" + operatorWallet + "'",
 		"--expect-archive-signers '" + operatorWallet + "'",
-		"--token 'orama1_abc'",
+		"--secrets-stdin",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("join install command lacks %s: %s", want, cmd)
 		}
+	}
+	if strings.Contains(cmd, invite) || strings.Contains(cmd, "--token") {
+		t.Fatalf("the invite is on the command line: %s", cmd)
+	}
+	secrets, err := InstallSecrets(invite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(secrets), invite) {
+		t.Fatalf("stdin does not carry the invite: %s", secrets)
 	}
 	if strings.Contains(cmd, "--join ") {
 		t.Fatalf("the invite names the node to join; an explicit --join would override its pin: %s", cmd)

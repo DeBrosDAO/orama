@@ -182,17 +182,26 @@ func TestGenesisInstallCommand_passesTheOperatorWallet(t *testing.T) {
 // --join http://<genesis>, which would override that pin with plain HTTP.
 func TestJoinInstallCommand_expectsTheWalletAndPinsThroughTheInvite(t *testing.T) {
 	cfg := &Config{Domain: "sbx.example.com"}
-	cmd := joinInstallCommand(cfg, ServerState{IP: "203.0.113.3", Role: "node"}, testWallet, "orama1_abc")
+	cmd, secrets, err := joinInstallCommand(cfg, ServerState{IP: "203.0.113.3", Role: "node"}, testWallet, "orama1_abc")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"--operator-wallet '" + testWallet + "'",
 		"--expect-archive-signers '" + testWallet + "'",
-		"--token 'orama1_abc'",
+		"--secrets-stdin",
 		"--base-domain 'sbx.example.com'",
 		"--skip-checks",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("join install lacks %s: %s", want, cmd)
 		}
+	}
+	if strings.Contains(cmd, "orama1_abc") || strings.Contains(cmd, "--token") {
+		t.Fatalf("the invite is on the command line: %s", cmd)
+	}
+	if !strings.Contains(string(secrets), "orama1_abc") {
+		t.Fatalf("stdin does not carry the invite: %s", secrets)
 	}
 	if strings.Contains(cmd, "--join") || strings.Contains(cmd, "--nameserver") {
 		t.Fatalf("join install of a plain node: %s", cmd)
@@ -220,9 +229,13 @@ func TestDeleteState_removesThePinnedHostKeys(t *testing.T) {
 func TestInstallCommands_registerTheSandboxEnvironmentOnStaging(t *testing.T) {
 	cfg := &Config{Domain: "sbx.example.com"}
 	srv := ServerState{IP: "203.0.113.3", Role: "node"}
+	joinCmd, _, err := joinInstallCommand(cfg, srv, testWallet, "orama1_abc")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, cmd := range []string{
 		genesisInstallCommand(cfg, srv, testWallet),
-		joinInstallCommand(cfg, srv, testWallet, "orama1_abc"),
+		joinCmd,
 	} {
 		if !strings.Contains(cmd, "--environment 'sandbox'") {
 			t.Fatalf("install does not register the sandbox environment: %s", cmd)
