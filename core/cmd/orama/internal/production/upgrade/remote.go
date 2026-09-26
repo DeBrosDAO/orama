@@ -32,19 +32,20 @@ func (r *RemoteUpgrader) Execute() error {
 		return err
 	}
 
-	cleanup, err := remotessh.PrepareNodeKeys(nodes)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	// Filter to single node if specified
+	// A named node is the whole operation. Resolving every inventory key
+	// first aborts it when some other node was never enrolled.
 	if r.flags.NodeFilter != "" {
 		nodes = remotessh.FilterByIP(nodes, r.flags.NodeFilter)
 		if len(nodes) == 0 {
 			return fmt.Errorf("node %s not found in %s environment", r.flags.NodeFilter, r.flags.Env)
 		}
 	}
+
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	// Build the plan from what the cluster is actually doing, not from the
 	// order nodes happen to appear in nodes.conf. Restarting the leader first
