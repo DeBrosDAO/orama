@@ -60,7 +60,7 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - Even a signed call writes only an `_acme-challenge.` record for the base domain or a name under it, whose value is a DNS-01 answer (43 base64url characters)
 
 **RootWallet agent socket**
-- The CLI dials the agent at `~/.rootwallet/agent.sock` (or `RW_AGENT_SOCK`). Before the dial it refuses a symlink, anything that is not a socket, a socket owned by another uid, and a socket whose mode is group- or world-accessible. A missing socket is the agent not running
+- The CLI dials the agent at `~/.rootwallet/agent.sock` (or `RW_AGENT_SOCK`). Before the dial it refuses a symlink, anything that is not a socket, a socket owned by another uid, and a socket that is group- or world-writable. Connecting takes the write bit, so the `0755` socket the agent creates is accepted. A missing socket is the agent not running
 
 **Rate limiting**
 - The client is the peer address. It used to be the first `X-Forwarded-For` entry, and any address in the WireGuard subnet was exempt from every limit — so one header removed all rate limiting, including from the endpoints that mint credentials

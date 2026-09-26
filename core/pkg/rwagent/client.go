@@ -358,7 +358,9 @@ func checkAgentSocket(path string) error {
 }
 
 // agentSocketAllowed is the rule checkAgentSocket applies: a real socket,
-// owned by the caller, and not group- or world-accessible.
+// owned by the caller, and not group- or world-writable. Connecting to a
+// Unix socket takes the write bit, so 0755 — what the agent creates — does
+// not let another user connect. 0666 and 0660 do.
 func agentSocketAllowed(mode os.FileMode, owner, caller int) error {
 	if mode&os.ModeSymlink != 0 {
 		return fmt.Errorf("rootwallet agent socket is a symlink")
@@ -369,8 +371,8 @@ func agentSocketAllowed(mode os.FileMode, owner, caller int) error {
 	if owner != caller {
 		return fmt.Errorf("rootwallet agent socket is owned by uid %d", owner)
 	}
-	if mode.Perm()&0o077 != 0 {
-		return fmt.Errorf("rootwallet agent socket is group- or world-accessible (mode %o)", mode.Perm())
+	if mode.Perm()&0o022 != 0 {
+		return fmt.Errorf("rootwallet agent socket is group- or world-writable (mode %o)", mode.Perm())
 	}
 	return nil
 }

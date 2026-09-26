@@ -306,7 +306,10 @@ func TestAgentSocketAllowed(t *testing.T) {
 		t.Fatal("a symlink was accepted as the agent socket")
 	}
 	if err := agentSocketAllowed(os.ModeSocket|0o660, 1, 1); err == nil {
-		t.Fatal("a group-accessible socket was accepted")
+		t.Fatal("a group-writable socket was accepted")
+	}
+	if err := agentSocketAllowed(os.ModeSocket|0o755, 1, 1); err != nil {
+		t.Fatalf("0755 is what the agent creates, and other users cannot connect to it: %v", err)
 	}
 }
 
