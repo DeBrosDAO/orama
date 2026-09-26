@@ -67,6 +67,10 @@ func (inv Invocation) NeedsInput() bool {
 		return inv.Args[0] == deploySetEnv || inv.Args[0] == deploySetToken
 	case ToolUnitEnv:
 		return inv.Args[0] == unitEnvSet
+	case ToolGatewayKey:
+		// put carries the PEM. Forgetting this stores a zero-byte key: call
+		// and run only read stdin when NeedsInput is set.
+		return len(inv.Args) > 0 && inv.Args[0] == gatewayKeyPut
 	default:
 		return false
 	}

@@ -26,6 +26,13 @@ func TestReadInput_OnlyForPersistAndBounded(t *testing.T) {
 	if data, err := readInput(noInput, strings.NewReader("ignored")); err != nil || data != nil {
 		t.Errorf("a command without input must not read stdin: %q, %v", data, err)
 	}
+	put, err := privhelper.Validate([]string{"gateway-key", "put", "jwt-signing-key.pem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := readInput(put, strings.NewReader("-----BEGIN-----")); err != nil || string(data) != "-----BEGIN-----" {
+		t.Fatalf("gateway-key put dropped its PEM: %q, %v", data, err)
+	}
 	persist, _ := privhelper.Validate([]string{"wireguard", "persist-peers"})
 	if _, err := readInput(persist, strings.NewReader(strings.Repeat("x", privhelper.MaxRequestBytes+1))); err == nil {
 		t.Error("input over MaxRequestBytes must be refused")

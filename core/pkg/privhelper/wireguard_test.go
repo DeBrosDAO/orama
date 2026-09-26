@@ -66,6 +66,13 @@ func TestInvocation_OnlyPersistPeersTakesInput(t *testing.T) {
 	if inv.NeedsInput() {
 		t.Error("systemctl takes no input")
 	}
+	inv, err := Validate([]string{"gateway-key", "put", "jwt-signing-key.pem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inv.NeedsInput() {
+		t.Fatal("gateway-key put must read the PEM; otherwise the stored key is empty")
+	}
 }
 
 // Go's decoder skips '\r' and '\n': a key with a newline decoded to 32 bytes
