@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,11 +24,11 @@ import (
 // tells the operator may take about two minutes, so the bound has to clear it.
 const nsRequestTimeout = 3 * time.Minute
 
-// nsClient is the shared client for namespace API calls. Seven copies of this
-// construction existed in this file, all identical.
-var nsClient = &http.Client{
-	Timeout:   nsRequestTimeout,
-	Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
+// namespaceClient uses http.DefaultTransport. TrustEnvironmentCAs installs the
+// active environment's CA on that transport at startup. A client with its own
+// TLS config never sees it, so a staging certificate is rejected.
+func namespaceClient() *http.Client {
+	return &http.Client{Timeout: nsRequestTimeout}
 }
 
 // nsRequest performs one authenticated namespace API call and decodes the reply.
@@ -48,7 +47,7 @@ func nsRequest(what, method, url, token string, body io.Reader) (map[string]any,
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := nsClient.Do(req)
+	resp, err := namespaceClient().Do(req)
 	if err != nil {
 		return nil, clierr.Unavailable("failed to reach the gateway to %s: %w", what, err)
 	}
@@ -300,7 +299,7 @@ func NamespaceRepair(namespaceName string) error {
 		return clierr.Failure("%w", err)
 	}
 
-	resp, err := nsClient.Do(req)
+	resp, err := namespaceClient().Do(req)
 	if err != nil {
 		return clierr.Unavailable("failed to reach the local gateway (is the node running?): %w", err)
 	}
