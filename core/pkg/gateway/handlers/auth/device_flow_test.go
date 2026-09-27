@@ -37,10 +37,13 @@ type sqlDB struct {
 func (s *sqlDB) Query(ctx context.Context, query string, args ...interface{}) (*client.QueryResult, error) {
 	trimmed := bytes.TrimSpace([]byte(query))
 	if len(trimmed) == 0 || (trimmed[0] != 'S' && trimmed[0] != 's') {
-		if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		res, err := s.db.ExecContext(ctx, query, args...)
+		if err != nil {
 			return nil, err
 		}
-		return &client.QueryResult{Count: 1}, nil
+		id, _ := res.LastInsertId()
+		n, _ := res.RowsAffected()
+		return &client.QueryResult{Count: 1, LastInsertID: id, RowsAffected: n}, nil
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
