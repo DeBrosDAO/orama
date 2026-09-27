@@ -2,12 +2,14 @@ package namespace
 
 import (
 	"context"
-	"github.com/DeBrosOfficial/network/pkg/auth"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/auth"
 
 	"go.uber.org/zap"
 )
@@ -90,9 +92,45 @@ func TestVerifyJoinTarget_emptyURLSkipsCheck(t *testing.T) {
 func TestVerifyJoinTarget_unreachableTargetFails(t *testing.T) {
 	s := credentialedSpawner(t)
 
-	// Port 1 on loopback: nothing listens there.
-	if err := s.verifyJoinTarget(context.Background(), "anchat-v2", "http://127.0.0.1:1"); err == nil {
+	// Port 1 on loopback: nothing listens there. The check waits for a bind,
+	// so the caller's deadline is what bounds it.
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	if err := s.verifyJoinTarget(ctx, "anchat-v2", "http://127.0.0.1:1"); err == nil {
 		t.Error("verifyJoinTarget succeeded against an unreachable target — an unverifiable join must not proceed")
+	}
+}
+
+// systemd reports the leader started before rqlited accepts connections.
+// The follower used to see one connection refused and abandon the join.
+func TestVerifyJoinTarget_waitsUntilTheLeaderListens(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	dir := "/opt/orama/.orama/data/namespaces/anchat-v2/rqlite/12D3KooWGpb1p"
+	handler := requireRQLiteAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"store":{"dir":"` + dir + `"}}`))
+	}))
+	go func() {
+		time.Sleep(350 * time.Millisecond)
+		_ = http.Serve(ln, handler)
+	}()
+	t.Cleanup(func() { _ = ln.Close() })
+
+	s := credentialedSpawner(t)
+	start := time.Now()
+	if err := s.verifyJoinTarget(context.Background(), "anchat-v2", "http://"+addr); err != nil {
+		t.Fatalf("the leader that bound late was refused: %v", err)
+	}
+	if time.Since(start) < 200*time.Millisecond {
+		t.Fatal("the check did not wait for the leader to listen")
 	}
 }
 

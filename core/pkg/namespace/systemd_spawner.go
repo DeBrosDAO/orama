@@ -102,46 +102,72 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 		return fmt.Errorf("verify join target for namespace %s: %q is not an http://<wireguard-ip>:<port> address", namespace, verifyURL)
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, joinVerifyTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(verifyURL, "/")+"/status", nil)
-	if err != nil {
-		return fmt.Errorf("verify join target for namespace %s: %w", namespace, err)
-	}
-	// The target runs with -auth like every rqlited; unauthenticated, /status
-	// is a 401 whose body does not decode, and the join would be refused.
+	// The leader's unit is reported started before rqlited binds. A single GET
+	// then sees connection refused and the join is abandoned, which rolls the
+	// namespace back. Wait out the bind. An answer is judged at once: a
+	// different namespace's directory is a refusal, not a reason to keep asking.
 	user, pass, err := s.readRQLitePassword()
 	if err != nil {
 		return fmt.Errorf("verify join target for namespace %s: %w", namespace, err)
 	}
-	req.SetBasicAuth(user, pass)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("verify join target %s for namespace %s: %w", verifyURL, namespace, err)
+	deadline := time.Now().Add(joinVerifyTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("verify join target %s for namespace %s: /status returned HTTP %d", verifyURL, namespace, resp.StatusCode)
+	statusURL := strings.TrimRight(verifyURL, "/") + "/status"
+	var last error
+	for {
+		if err := ctx.Err(); err != nil {
+			if last == nil {
+				last = err
+			}
+			return fmt.Errorf("verify join target %s for namespace %s: %w", verifyURL, namespace, last)
+		}
+		reqCtx, cancel := context.WithDeadline(ctx, deadline)
+		req, reqErr := http.NewRequestWithContext(reqCtx, http.MethodGet, statusURL, nil)
+		if reqErr != nil {
+			cancel()
+			return fmt.Errorf("verify join target for namespace %s: %w", namespace, reqErr)
+		}
+		req.SetBasicAuth(user, pass)
+		resp, doErr := http.DefaultClient.Do(req)
+		cancel()
+		if doErr != nil {
+			last = doErr
+			if !time.Now().Before(deadline) {
+				return fmt.Errorf("verify join target %s for namespace %s: %w", verifyURL, namespace, last)
+			}
+			timer := time.NewTimer(200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+			case <-timer.C:
+			}
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return fmt.Errorf("verify join target %s for namespace %s: /status returned HTTP %d", verifyURL, namespace, resp.StatusCode)
+		}
+		var status struct {
+			Store struct {
+				Dir string `json:"dir"`
+			} `json:"store"`
+		}
+		decErr := json.NewDecoder(resp.Body).Decode(&status)
+		resp.Body.Close()
+		if decErr != nil {
+			return fmt.Errorf("verify join target %s for namespace %s: decode status: %w", verifyURL, namespace, decErr)
+		}
+		want := string(os.PathSeparator) + "namespaces" + string(os.PathSeparator) + namespace + string(os.PathSeparator)
+		if !strings.Contains(status.Store.Dir, want) {
+			return fmt.Errorf(
+				"refusing to join RQLite at %s for namespace %s: it is serving %q, which belongs to a different namespace — "+
+					"joining it would put this node in another tenant's raft group and expose their database",
+				verifyURL, namespace, status.Store.Dir)
+		}
+		return nil
 	}
-
-	var status struct {
-		Store struct {
-			Dir string `json:"dir"`
-		} `json:"store"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return fmt.Errorf("verify join target %s for namespace %s: decode status: %w", verifyURL, namespace, err)
-	}
-
-	want := string(os.PathSeparator) + "namespaces" + string(os.PathSeparator) + namespace + string(os.PathSeparator)
-	if !strings.Contains(status.Store.Dir, want) {
-		return fmt.Errorf(
-			"refusing to join RQLite at %s for namespace %s: it is serving %q, which belongs to a different namespace — "+
-				"joining it would put this node in another tenant's raft group and expose their database",
-			verifyURL, namespace, status.Store.Dir)
-	}
-	return nil
 }
 
 // portFreeWaitTimeout bounds how long ensurePortsFree waits for a port we are
