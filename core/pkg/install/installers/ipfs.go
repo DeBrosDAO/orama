@@ -28,6 +28,11 @@ import (
 // the rest for the OS, RQLite, Olric, and logs on a shared single-disk layout.
 const ipfsStorageMaxDiskFraction = 0.5
 
+// privateSwarmRoutingType is Kubo's "none": no DHT and no delegated routers.
+// Block exchange stays on peers the cluster has already connected. "dht" makes
+// pin and repo gc wait for DHT servers a private swarm does not have.
+const privateSwarmRoutingType = "none"
+
 // ipfsStorageMaxFloorGB is the lower bound for the computed StorageMax, matching
 // kubo's own default so we never configure a budget smaller than out-of-the-box.
 const ipfsStorageMaxFloorGB = 10
@@ -275,8 +280,11 @@ func (ii *IPFSInstaller) configureAddresses(root rootfs.Root, ipfsRepoPath strin
 	autoTLS := map[string]interface{}{"Enabled": false}
 	config["AutoTLS"] = autoTLS
 
-	// Use DHT routing (Routing.Type=auto is incompatible with private networks)
-	config["Routing"] = map[string]interface{}{"Type": "dht"}
+	// A private swarm has no public DHT. Routing.Type=auto is rejected when
+	// AutoConf is off, and Type=dht makes pin and repo gc call StartProviding,
+	// which waits for DHT servers this network does not have. The pin never
+	// returns, and the GC lock it holds stalls every later pin.
+	config["Routing"] = map[string]interface{}{"Type": privateSwarmRoutingType}
 
 	// Write config back
 	updatedData, err := json.MarshalIndent(config, "", "  ")

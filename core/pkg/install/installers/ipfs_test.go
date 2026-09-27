@@ -88,6 +88,12 @@ func TestSetDatastoreStorageMax_preservesOtherFields(t *testing.T) {
 	}
 }
 
+func TestPrivateSwarmDoesNotAnnounceToADHT(t *testing.T) {
+	if privateSwarmRoutingType != "none" {
+		t.Fatalf("private swarm routing = %q, want none", privateSwarmRoutingType)
+	}
+}
+
 // TestSetDatastoreStorageMax_createsDatastoreWhenMissing covers a config with no
 // Datastore section (defensive — kubo always writes one, but the helper must not
 // panic on a nil map).
