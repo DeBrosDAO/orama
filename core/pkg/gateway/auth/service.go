@@ -928,24 +928,28 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 	if previousID != 0 {
 		rotatedFrom = previousID
 	}
-	if _, err := db.Query(internalCtx,
+	inserted, err := db.Query(internalCtx,
 		"INSERT INTO api_keys(key, name, namespace_id, scopes, expires_at, rotated_from) VALUES (?, ?, ?, ?, ?, ?)",
 		hashedKey, "", nsID, ownerScopes, expiresAt, rotatedFrom,
-	); err != nil {
+	)
+	if err != nil {
 		return "", fmt.Errorf("failed to store api key: %w", err)
+	}
+	// The id is in the write. Selecting it back reads this node's local
+	// SQLite, and a follower has not applied the log yet, so the row is
+	// missing and the login that stored the key fails.
+	keyID, ok := insertedID(inserted)
+	if !ok {
+		return "", fmt.Errorf("api key stored for namespace %q but the write returned no id", namespace)
 	}
 
 	// Point the wallet at its newest key. REPLACE rather than IGNORE: the row
 	// says which key is the wallet's current one, and leaving it pointing at
 	// the previous one would make `rotated_from` describe a succession the
 	// linkage disagrees with.
-	rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", hashedKey)
-	if err != nil || rid == nil || rid.Count == 0 || len(rid.Rows) == 0 || len(rid.Rows[0]) == 0 {
-		return "", fmt.Errorf("api key stored for namespace %q but its id could not be read back: %w", namespace, err)
-	}
 	if _, err := db.Query(internalCtx,
 		"INSERT OR REPLACE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)",
-		nsID, NormalizeWallet(wallet), rid.Rows[0][0],
+		nsID, NormalizeWallet(wallet), keyID,
 	); err != nil {
 		return "", fmt.Errorf("failed to link the api key to wallet in namespace %q: %w", namespace, err)
 	}

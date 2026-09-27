@@ -106,7 +106,7 @@ func (d *DatabaseClientImpl) Query(ctx context.Context, sql string, args ...inte
 
 		if isWriteOperation {
 			// Execute write operation with parameters
-			_, err := safeWriteOne(conn, gorqlite.ParameterizedStatement{
+			wr, err := safeWriteOne(conn, gorqlite.ParameterizedStatement{
 				Query:     sql,
 				Arguments: args,
 			})
@@ -115,12 +115,25 @@ func (d *DatabaseClientImpl) Query(ctx context.Context, sql string, args ...inte
 				d.clearConnection()
 				continue
 			}
+			// A statement error comes back on the result, with a nil function
+			// error. Treating that as a stored row would hand the caller an
+			// id for a write that did not happen.
+			if wr.Err != nil {
+				lastErr = wr.Err
+				d.clearConnection()
+				continue
+			}
 
-			// For write operations, return empty result set
+			// The id is part of the commit the leader already acknowledged.
+			// Reading the new row back is a local (level=none) read, and a
+			// follower applies the log after this response, so the row is
+			// not there yet.
 			return &QueryResult{
-				Columns: []string{"affected"},
-				Rows:    [][]interface{}{{"success"}},
-				Count:   1,
+				Columns:      []string{"affected"},
+				Rows:         [][]interface{}{{"success"}},
+				Count:        1,
+				LastInsertID: wr.LastInsertID,
+				RowsAffected: wr.RowsAffected,
 			}, nil
 		} else {
 			// Execute read operation with parameters

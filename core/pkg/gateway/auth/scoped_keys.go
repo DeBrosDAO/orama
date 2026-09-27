@@ -97,11 +97,18 @@ func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes st
 	if opts.RotatedFrom != 0 {
 		rotatedFrom = opts.RotatedFrom
 	}
-	if _, err := db.Query(internalCtx,
+	inserted, err := db.Query(internalCtx,
 		"INSERT INTO api_keys(key, name, namespace_id, scopes, expires_at, rotated_from) VALUES (?, ?, ?, ?, ?, ?)",
 		hashedKey, opts.Label, nsID, storedScopes, expiresAt.Format(sqliteTime), rotatedFrom,
-	); err != nil {
+	)
+	if err != nil {
 		return "", 0, fmt.Errorf("failed to store api key: %w", err)
+	}
+	// Same as a login mint: the id is in the write. Selecting the new row
+	// reads local SQLite, which a follower has not applied yet.
+	id, ok := insertedID(inserted)
+	if !ok {
+		return "", 0, fmt.Errorf("key stored but the write returned no id")
 	}
 
 	// Record the key's membership of the namespace (hashed, mirroring
@@ -110,15 +117,6 @@ func (s *Service) IssueScopedKey(ctx context.Context, namespace, storedScopes st
 	// problem and not something to swallow.
 	if err := s.grantServiceAccount(ctx, db, nsID, namespace, hashedKey, RoleForScopes(storedScopes)); err != nil {
 		return "", 0, err
-	}
-
-	var id int64
-	if rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", hashedKey); err == nil &&
-		rid != nil && rid.Count > 0 && len(rid.Rows) > 0 && len(rid.Rows[0]) > 0 {
-		id = toInt64(rid.Rows[0][0])
-	}
-	if id == 0 {
-		return "", 0, fmt.Errorf("key stored but id could not be resolved")
 	}
 
 	// Recorded here rather than in the handler: a key minted by any path is a

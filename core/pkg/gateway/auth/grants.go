@@ -231,21 +231,41 @@ func (s *Service) GrantIn(ctx context.Context, db client.DatabaseClient, nsID in
 // first time the platform has seen it.
 func (s *Service) ensurePrincipal(ctx context.Context, db client.DatabaseClient, ptype PrincipalType, identifier, displayName, createdBy string) (interface{}, error) {
 	internalCtx := client.WithInternalAuth(ctx)
-	if _, err := db.Query(internalCtx,
+	inserted, err := db.Query(internalCtx,
 		"INSERT OR IGNORE INTO principals(type, identifier, display_name, created_by) VALUES (?, ?, ?, ?)",
 		string(ptype), identifier, displayName, createdBy,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, fmt.Errorf("failed to record the principal %s %q: %w", ptype, identifier, err)
+	}
+	// A row this statement just created is not visible to a local read yet:
+	// the write is committed on the leader, and a follower applies it after
+	// the response. The id is in the write. A row that was already there
+	// changed nothing, so the local read finds it.
+	if inserted != nil && inserted.RowsAffected > 0 {
+		id, ok := insertedID(inserted)
+		if !ok {
+			return nil, fmt.Errorf("the principal %s %q was written but the write returned no id", ptype, identifier)
+		}
+		return id, nil
 	}
 	res, err := db.Query(internalCtx,
 		"SELECT id FROM principals WHERE type = ? AND identifier = ? LIMIT 1", string(ptype), identifier)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read back the principal %s %q: %w", ptype, identifier, err)
+		return nil, fmt.Errorf("failed to read the principal %s %q: %w", ptype, identifier, err)
 	}
 	if res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
 		return nil, fmt.Errorf("the principal %s %q was written but could not be read back", ptype, identifier)
 	}
 	return res.Rows[0][0], nil
+}
+
+// insertedID is the primary key a write just reported.
+func insertedID(res *client.QueryResult) (int64, bool) {
+	if res == nil || res.LastInsertID == 0 {
+		return 0, false
+	}
+	return res.LastInsertID, true
 }
 
 // GrantRequest is one grant to write.

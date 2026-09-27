@@ -42,6 +42,10 @@ type ownershipDB struct {
 	// owner and both try to write one.
 	raceWinner      string
 	insertAttempted bool
+	// missUnappliedReads is a follower that has not applied the write this
+	// request just committed. Selecting the new row returns nothing.
+	missUnappliedReads bool
+	linkedKeyID        int64
 }
 
 func newOwnershipDB() *ownershipDB {
@@ -103,10 +107,13 @@ func (d *ownershipDB) Query(_ context.Context, sql string, args ...interface{}) 
 		return &client.QueryResult{}, nil
 
 	case strings.Contains(sql, "INSERT OR IGNORE INTO principals"):
-		d.principalID(getStringVal(args[1]))
-		return &client.QueryResult{Count: 1}, nil
+		id := d.principalID(getStringVal(args[1]))
+		return &client.QueryResult{Count: 1, RowsAffected: 1, LastInsertID: id}, nil
 
 	case strings.Contains(sql, "SELECT id FROM principals"):
+		if d.missUnappliedReads {
+			return &client.QueryResult{}, nil
+		}
 		return rows(d.principalID(getStringVal(args[1]))), nil
 
 	case strings.Contains(sql, "INSERT INTO grants") && strings.Contains(sql, "'owner'"):
@@ -144,9 +151,12 @@ func (d *ownershipDB) Query(_ context.Context, sql string, args ...interface{}) 
 	case strings.Contains(sql, "INSERT INTO api_keys"):
 		hashed := getStringVal(args[0])
 		d.keys[hashed] = getStringVal(args[3])
-		return &client.QueryResult{Count: 1}, nil
+		return &client.QueryResult{Count: 1, RowsAffected: 1, LastInsertID: 7}, nil
 
 	case strings.Contains(sql, "SELECT id FROM api_keys"):
+		if d.missUnappliedReads {
+			return &client.QueryResult{}, nil
+		}
 		return rows(int64(7)), nil
 
 	case strings.Contains(sql, "SELECT api_key_id FROM wallet_api_keys"):
@@ -158,6 +168,9 @@ func (d *ownershipDB) Query(_ context.Context, sql string, args ...interface{}) 
 
 	case strings.Contains(sql, "INTO wallet_api_keys"):
 		d.walletLinks[key(args[0])] = "linked"
+		if len(args) > 2 {
+			d.linkedKeyID = toInt64(args[2])
+		}
 		if d.failKeyLink {
 			return nil, errString("wallet link write failed")
 		}
@@ -369,6 +382,28 @@ func TestGetOrCreateAPIKey_mintsAFreshKeyRatherThanReturningTheStoredHash(t *tes
 	if _, stored := db.keys[s.HashAPIKey(apiKey)]; !stored {
 		t.Error("the key handed to the caller is not the one whose hash was stored, " +
 			"so it would be refused on its first use")
+	}
+}
+
+// A follower reads its local SQLite. The insert is committed on the leader
+// before the response, and this node applies that log afterwards, so selecting
+// the new key or the new principal returns nothing. The id the write reported
+// is the one the wallet is linked to.
+func TestGetOrCreateAPIKey_usesTheIDTheWriteReturned(t *testing.T) {
+	db := newOwnershipDB()
+	db.walletOwners["1"] = "0xcreator"
+	db.missUnappliedReads = true
+	s := serviceWith(t, db)
+
+	apiKey, err := s.GetOrCreateAPIKey(context.Background(), "0xcreator", "anchat")
+	if err != nil {
+		t.Fatalf("mint failed by reading the new row back before this node applied it: %v", err)
+	}
+	if _, err := ParseKey(apiKey); err != nil {
+		t.Fatalf("the key returned is not a key: %v", err)
+	}
+	if db.linkedKeyID != 7 {
+		t.Fatalf("wallet linked to key id %d, want the id the insert returned", db.linkedKeyID)
 	}
 }
 

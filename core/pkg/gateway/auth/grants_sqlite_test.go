@@ -33,10 +33,13 @@ func (s *sqliteDatabase) Query(ctx context.Context, query string, args ...interf
 	// The write paths go through Query too, and a statement with no rows to
 	// return is not a select.
 	if !isSelect(query) {
-		if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		res, err := s.db.ExecContext(ctx, query, args...)
+		if err != nil {
 			return nil, err
 		}
-		return &client.QueryResult{Count: 1}, nil
+		id, _ := res.LastInsertId()
+		n, _ := res.RowsAffected()
+		return &client.QueryResult{Count: 1, LastInsertID: id, RowsAffected: n}, nil
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)

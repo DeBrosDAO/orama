@@ -101,11 +101,18 @@ type MessageHandler func(topic string, data []byte) error
 
 // Data structures
 
-// QueryResult represents the result of a database query
+// QueryResult represents the result of a database query.
+//
+// LastInsertID and RowsAffected come from a write. A row this request just
+// inserted is addressed by LastInsertID: the registry is read from the local
+// node, and a follower has not applied the write yet, so selecting the new
+// row back misses it.
 type QueryResult struct {
-	Columns []string        `json:"columns"`
-	Rows    [][]interface{} `json:"rows"`
-	Count   int64           `json:"count"`
+	Columns      []string        `json:"columns"`
+	Rows         [][]interface{} `json:"rows"`
+	Count        int64           `json:"count"`
+	LastInsertID int64           `json:"last_insert_id,omitempty"`
+	RowsAffected int64           `json:"rows_affected,omitempty"`
 }
 
 // SchemaInfo contains database schema information
