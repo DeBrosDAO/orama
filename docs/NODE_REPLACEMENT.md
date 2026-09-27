@@ -371,7 +371,9 @@ follows is what to check, and what to do if the reconciler has not converged.
 
 **Nodes now do this themselves.** Each node probes the namespaces it hosts every
 30s and, after 3 consecutive unhealthy probes (~90s), withdraws its own
-`ns-<ns>` and `*.ns-<ns>` records. It restores them after 3 consecutive healthy
+`ns-<ns>` and `*.ns-<ns>` records. The gateway probe is `GET /v1/health` on
+this node's WireGuard address; a tenant gateway does not listen on loopback.
+It restores them after 3 consecutive healthy
 probes. A withdrawal never removes the **last** active record for a name —
 advertising a node that might still answer beats having no answer at all — and
 the guard is evaluated inside the UPDATE, so two nodes withdrawing at the same

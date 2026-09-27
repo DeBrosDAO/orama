@@ -348,10 +348,12 @@ recovery action rather than one per observer.
 
 Separately from the ring monitor, each node probes the namespaces it hosts every
 30s and keeps its own DNS records in step. rqlite and Olric are probed by
-dialling their ports; the gateway is asked `GET /v1/health`, because it binds
-and answers long before it has a usable schema and a TCP dial cannot tell the
-difference — a gateway that could not serve a single request used to stay in the
-round-robin.
+dialling their ports on this node's WireGuard address; the gateway is asked
+`GET /v1/health` on that same address, because it binds and answers long before
+it has a usable schema and a TCP dial cannot tell the difference — a gateway
+that could not serve a single request used to stay in the round-robin. A tenant
+gateway does not listen on loopback, so a probe of `127.0.0.1` reports every
+namespace down and withdraws a node that is serving.
 
 The gateway probe reads **readiness only**. `starting` (waiting for its schema)
 and `blocked` (schema below what the binary requires) count against the

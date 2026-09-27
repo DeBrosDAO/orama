@@ -176,9 +176,10 @@ Only a genuine version mismatch is `blocked`. A failure to *read* the migration
 tracker — a leader lost mid-check, a context deadline — stays retryable, or a
 200ms blip would latch a namespace out of service until someone restarted it.
 
-The node's namespace-health probe asks each local gateway's `/v1/health` rather
-than dialling its port, so a gateway that is up but `starting` is withdrawn from
-the `ns-<name>` DNS round-robin instead of being sent traffic it cannot serve.
+The node's namespace-health probe asks each local gateway's `/v1/health` on the
+node's WireGuard address rather than dialling its port, so a gateway that is up
+but `starting` is withdrawn from the `ns-<name>` DNS round-robin instead of
+being sent traffic it cannot serve. A tenant gateway does not listen on loopback.
 
 **Unit restart policy.** Every long-running unit orama-node manages uses
 `Restart=always`, `RestartSec=5s` and `StartLimitIntervalSec=0`. Always, because

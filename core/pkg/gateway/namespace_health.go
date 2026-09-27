@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -200,7 +201,20 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 		// binds and answers long before it has a usable schema; a TCP dial
 		// cannot tell the difference, so a gateway that could not serve a
 		// single request stayed in the DNS round-robin.
-		nsHealth.Services["gateway"] = probeGatewayReadiness(ctx, "127.0.0.1", gatewayPort)
+		//
+		// The process binds this node's WireGuard address. Loopback is the
+		// index gateway, and a tenant port there is closed, so a probe of
+		// 127.0.0.1 always fails and this reconcile withdraws a node that is
+		// serving.
+		if host, ok := tenantGatewayProbeHost(g.localWireGuardIP); !ok {
+			nsHealth.Services["gateway"] = NamespaceServiceHealth{
+				Status: "error",
+				Port:   gatewayPort,
+				Error:  "this node's WireGuard IP is unknown; the namespace gateway binds only that address",
+			}
+		} else {
+			nsHealth.Services["gateway"] = probeGatewayReadiness(ctx, host, gatewayPort)
+		}
 
 		nsHealth.Status = aggregateNamespaceStatus(nsHealth.Services)
 
@@ -556,9 +570,20 @@ func aggregateNamespaceStatus(services map[string]NamespaceServiceHealth) string
 // gatewayProbeTimeout bounds one readiness probe of a local namespace gateway.
 const gatewayProbeTimeout = 2 * time.Second
 
-// gatewayProbeClient is the HTTP client the readiness probe uses. It only ever
-// talks to localhost.
+// gatewayProbeClient is the HTTP client the readiness probe uses. It dials
+// this node's WireGuard address, which is where the tenant gateway listens.
 var gatewayProbeClient = &http.Client{Timeout: gatewayProbeTimeout}
+
+// tenantGatewayProbeHost is the address a tenant gateway answers /v1/health on.
+// An empty WireGuard address is not loopback: dialling 127.0.0.1 looks like a
+// down gateway and the DNS reconcile withdraws this node's records.
+func tenantGatewayProbeHost(wireGuardIP string) (string, bool) {
+	host := strings.TrimSpace(wireGuardIP)
+	if host == "" {
+		return "", false
+	}
+	return host, true
+}
 
 // probeGatewayReadiness asks a local namespace gateway whether it can serve,
 // rather than only whether its port is open.

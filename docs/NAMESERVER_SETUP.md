@@ -102,13 +102,14 @@ deployment wildcard, `turn.ns-<namespace>.<base>` (plain UDP/TCP TURN),
 `turn-<namespace>.<base>` (TURNS), and the stealth TURNS host. Each carries one A
 record per node serving that role.
 
-These are created at provision / WebRTC-enable time, so two reconcilers keep them
-true as the topology changes. Both run from **every** node — they are per-node and
+These are created at provision / WebRTC-enable time, so these reconcilers keep them
+true as the topology changes. They run from **every** node — they are per-node and
 idempotent, so no leader election is needed:
 
 | Reconciler | When | What it does |
 |---|---|---|
 | Ensure (re-advertise) | WebRTC reconcile loop, per hosted namespace | Additively inserts **this node's own** A record if absent, and re-enables that same row when this node's tenant gateway answers `GET /v1/health` on its WireGuard address. It does not touch another node's record. A tenant gateway does not listen on loopback, so the probe is `local_ip` from `cluster-state.json`. |
+| Withdraw / restore | Index gateway, every 30s | Probes this node's tenant gateway with `GET /v1/health` on its WireGuard address. After 3 consecutive failures it soft-disables this node's own `ns-<ns>` and `*.ns-<ns>` rows, never the last active record for that name. After 3 consecutive healthy probes it restores a row this process withdrew. A loopback probe cannot see the tenant gateway, so it must not be what decides the withdrawal. |
 | Purge | Every 30s DNS sweep | Deletes A records whose value is a node that is non-active **and** silent longer than the staleness window (15 min). |
 
 Two safety properties matter:
