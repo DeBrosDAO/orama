@@ -817,7 +817,7 @@ For example: `12D3KooWLL1QvumH...` → `LL1Qvu`
 
 ### Cross-Node Routing
 
-DNS uses round-robin, so requests may hit any node in the cluster. If a deployment is hosted on a different node than the one receiving the request, the gateway automatically proxies the request to the correct home node.
+DNS uses round-robin, so requests may hit any node in the cluster. If a deployment is hosted on a different node than the one receiving the request, the gateway proxies the request to that node's index gateway on its WireGuard address (`10.0.0.x:10104`). The public address is not a listener for that port. A node that does not run the app does not answer from a local process that happens to use the same port number.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

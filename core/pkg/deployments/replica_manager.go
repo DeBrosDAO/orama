@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -250,7 +251,10 @@ func (rm *ReplicaManager) RemoveReplicas(ctx context.Context, deploymentID strin
 	return nil
 }
 
-// GetNodeIP retrieves the IP address for a node from dns_nodes.
+// GetNodeIP retrieves the public address published in DNS.
+//
+// Node-to-node calls use GetNodeOverlayIP. The index gateway port is not
+// bound on the public address, so a proxy that dials this IP times out.
 func (rm *ReplicaManager) GetNodeIP(ctx context.Context, nodeID string) (string, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
@@ -259,7 +263,6 @@ func (rm *ReplicaManager) GetNodeIP(ctx context.Context, nodeID string) (string,
 	}
 
 	var rows []nodeRow
-	// Use public IP for DNS A records (internal/WG IPs are not reachable from the internet)
 	query := `SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
 	err := rm.db.Query(internalCtx, &rows, query, nodeID)
 	if err != nil {
@@ -271,4 +274,38 @@ func (rm *ReplicaManager) GetNodeIP(ctx context.Context, nodeID string) (string,
 	}
 
 	return rows[0].IPAddress, nil
+}
+
+// GetNodeOverlayIP is the address another node dials: the WireGuard
+// internal_ip, or ip_address when a node was registered before internal_ip.
+func (rm *ReplicaManager) GetNodeOverlayIP(ctx context.Context, nodeID string) (string, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	type nodeRow struct {
+		InternalIP string `db:"internal_ip"`
+		IPAddress  string `db:"ip_address"`
+	}
+
+	var rows []nodeRow
+	query := `SELECT COALESCE(internal_ip, '') AS internal_ip, COALESCE(ip_address, '') AS ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
+	if err := rm.db.Query(internalCtx, &rows, query, nodeID); err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "", fmt.Errorf("node not found: %s", nodeID)
+	}
+	ip := nodeOverlayIP(rows[0].InternalIP, rows[0].IPAddress)
+	if ip == "" {
+		return "", fmt.Errorf("node %s has no overlay address", nodeID)
+	}
+	return ip, nil
+}
+
+// nodeOverlayIP prefers the WireGuard address. The public address is what
+// DNS publishes; the gateway port is not listening there.
+func nodeOverlayIP(internal, public string) string {
+	if ip := strings.TrimSpace(internal); ip != "" {
+		return ip
+	}
+	return strings.TrimSpace(public)
 }

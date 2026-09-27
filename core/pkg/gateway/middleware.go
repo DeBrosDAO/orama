@@ -1988,15 +1988,18 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 			}
 		}
 
-		// Not a replica on this node — proxy to a healthy replica node
+		// Not a replica on this node — proxy to the home node. localhost:port
+		// is whatever else this machine allocated that number to, so a failed
+		// forward must not be served from here.
 		if g.proxyCrossNodeWithReplicas(w, r, deployment) {
 			return
 		}
-		// Fall through if cross-node proxy failed - try local anyway
-		g.logger.Warn("Cross-node proxy failed, attempting local fallback",
+		g.logger.Error("Cross-node proxy failed",
 			zap.String("deployment", deployment.Name),
 			zap.String("home_node", deployment.HomeNodeID),
 		)
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
 	}
 
 serveLocal:
@@ -2223,7 +2226,7 @@ func (g *Gateway) proxyCrossNodeWithReplicas(w http.ResponseWriter, r *http.Requ
 			continue // Skip self
 		}
 
-		nodeIP, err := g.replicaManager.GetNodeIP(r.Context(), nodeID)
+		nodeIP, err := g.replicaManager.GetNodeOverlayIP(r.Context(), nodeID)
 		if err != nil {
 			g.logger.Warn("Failed to get replica node IP",
 				zap.String("node_id", nodeID),

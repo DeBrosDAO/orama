@@ -390,7 +390,7 @@ func (s *DeploymentService) createDeploymentReplicas(ctx context.Context, deploy
 
 // SetupDynamicReplica calls the secondary node's internal API to set up a deployment replica.
 func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment *deployments.Deployment, nodeID string) {
-	nodeIP, err := s.replicaManager.GetNodeIP(ctx, nodeID)
+	nodeIP, err := s.replicaManager.GetNodeOverlayIP(ctx, nodeID)
 	if err != nil {
 		s.logger.Error("Failed to get node IP for replica setup",
 			zap.String("node_id", nodeID),
@@ -842,7 +842,7 @@ func (s *DeploymentService) FanOutToReplicas(ctx context.Context, deployment *de
 			continue // Skip self
 		}
 
-		nodeIP, err := s.replicaManager.GetNodeIP(ctx, nodeID)
+		nodeIP, err := s.replicaManager.GetNodeOverlayIP(ctx, nodeID)
 		if err != nil {
 			s.logger.Warn("Failed to get IP for replica node",
 				zap.String("node_id", nodeID),
