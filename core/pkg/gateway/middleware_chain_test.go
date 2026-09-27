@@ -175,6 +175,59 @@ func TestChain_anAdminKeyReachesTheControlPlane(t *testing.T) {
 	}
 }
 
+// Exchanging a key for a JWT must not drop what the key could do. The scopes
+// claim in the token is a copy from mint time; the row is what is enforced,
+// so a token that claims admin while the row says invoke is still invoke.
+func TestChain_anExchangedAdminKeyReachesTheControlPlane(t *testing.T) {
+	g := chainGateway(t, "alice", &stubKeyDatabase{namespace: "alice", scopes: "admin", found: true})
+	token, _, err := g.authService.GenerateJWT("alice", "ak_admin:alice", time.Hour, map[string]string{"scopes": "invoke"})
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+
+	status, body, reached := serve(g, chainRequest(http.MethodGet, "/v1/deployments/list",
+		map[string]string{"Authorization": "Bearer " + token}))
+	if !reached {
+		t.Fatalf("an admin key exchanged for a JWT was refused: status=%d body=%s", status, strings.TrimSpace(body))
+	}
+
+	narrow := chainGateway(t, "alice", &stubKeyDatabase{namespace: "alice", scopes: "invoke", found: true})
+	lie, _, err := narrow.authService.GenerateJWT("alice", "ak_runtime:alice", time.Hour, map[string]string{"scopes": "admin"})
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	status, body, reached = serve(narrow, chainRequest(http.MethodGet, "/v1/deployments/list",
+		map[string]string{"Authorization": "Bearer " + lie}))
+	if reached {
+		t.Fatal("a token claiming admin reached the control plane while its key's row is invoke")
+	}
+	if status != http.StatusForbidden || !strings.Contains(body, "INSUFFICIENT_SCOPE") {
+		t.Fatalf("status=%d body=%s", status, strings.TrimSpace(body))
+	}
+
+	ns, _, scopes, errMsg := narrow.validateAuthForNamespaceProxy(chainRequest(http.MethodGet, "/v1/deployments/list",
+		map[string]string{"Authorization": "Bearer " + lie}))
+	if errMsg != "" || ns != "alice" || scopes != "invoke" {
+		t.Fatalf("the hop was told ns=%q scopes=%q err=%q; the row is invoke", ns, scopes, errMsg)
+	}
+}
+
+func TestChain_anExchangedKeyTheRegistryDoesNotKnowIsRefused(t *testing.T) {
+	g := chainGateway(t, "alice", &stubKeyDatabase{found: false})
+	token, _, err := g.authService.GenerateJWT("alice", "ak_missing:alice", time.Hour, map[string]string{"scopes": "admin"})
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	status, _, reached := serve(g, chainRequest(http.MethodGet, "/v1/deployments/list",
+		map[string]string{"Authorization": "Bearer " + token}))
+	if reached {
+		t.Fatal("a token whose key the registry does not know reached the handler")
+	}
+	if status != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", status)
+	}
+}
+
 // The isolation property, which until now was tested only in an e2e suite
 // `make test` does not run: alice's gateway does not serve bob's key.
 func TestChain_aKeyFromAnotherNamespaceIsRefused(t *testing.T) {

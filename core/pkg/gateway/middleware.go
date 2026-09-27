@@ -296,9 +296,11 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 			if strings.Count(tok, ".") == 2 {
 				if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
 					if ns := strings.TrimSpace(c.Namespace); ns != "" {
-						// JWT drives scopes on the namespace side via the rebuilt
-						// sub/custom claims; no separate scopes header needed.
-						return ns, c, "", ""
+						scopes, _, scopeErr := g.exchangedKeyScopes(r.Context(), c)
+						if scopeErr != "" {
+							return "", nil, "", scopeErr
+						}
+						return ns, c, scopes, ""
 					}
 				}
 				// JWT verification failed - fall through to API key check
@@ -318,7 +320,11 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 		if tok != "" && len(tok) <= maxQueryJWTLength && strings.Count(tok, ".") == 2 {
 			if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
 				if ns := strings.TrimSpace(c.Namespace); ns != "" {
-					return ns, c, "", ""
+					scopes, _, scopeErr := g.exchangedKeyScopes(r.Context(), c)
+					if scopeErr != "" {
+						return "", nil, "", scopeErr
+					}
+					return ns, c, scopes, ""
 				}
 			}
 		}
@@ -388,10 +394,8 @@ func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQue
 	// is what bounds the cache; this is what makes the row itself the answer.
 	// expires_at is NOT NULL from migration 051: a key with no expiry is what
 	// that migration exists to end, so the comparison is unconditional.
-	sqlQuery := "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL AND api_keys.expires_at > datetime('now') LIMIT 1"
-
 	hashedKey := g.authService.HashAPIKey(key)
-	res, err := q.Query(internalCtx, sqlQuery, hashedKey)
+	res, err := q.Query(internalCtx, apiKeyByStoredSQL, hashedKey)
 	if err != nil {
 		return "", "", fmt.Errorf("lookupAPIKeyEntry: hashed-key query failed: %w", err)
 	}
@@ -415,6 +419,96 @@ func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQue
 	}
 
 	return "", "", fmt.Errorf("invalid API key")
+}
+
+// apiKeyByStoredSQL resolves a key by the value stored in api_keys.key. That
+// value is the HMAC when one is configured and the raw key when it is not.
+// An exchanged token's subject is already that value, so it must not be
+// hashed a second time.
+const apiKeyByStoredSQL = "SELECT namespaces.name, api_keys.scopes FROM api_keys JOIN namespaces ON api_keys.namespace_id = namespaces.id WHERE api_keys.key = ? AND api_keys.revoked_at IS NULL AND api_keys.expires_at > datetime('now') LIMIT 1"
+
+// lookupStoredAPIKey resolves the key an exchanged token names. The subject is
+// the stored form. Hashing it again finds nothing, which is how a token the
+// gateway itself minted was refused on every route that reads scopes.
+func (g *Gateway) lookupStoredAPIKey(ctx context.Context, stored string) (string, string, error) {
+	stored = strings.TrimSpace(stored)
+	if stored == "" {
+		return "", "", fmt.Errorf("invalid API key")
+	}
+	if g.authService != nil && g.authService.Revocations().DeniesSubject(stored) {
+		return "", "", fmt.Errorf("invalid API key")
+	}
+	if g.mwCache != nil {
+		if cachedNS, cachedScopes, ok := g.mwCache.GetAPIKeyEntry(stored); ok {
+			return cachedNS, cachedScopes, nil
+		}
+	}
+	q := g.apiKeyDB()
+	if q == nil {
+		return "", "", fmt.Errorf("lookupStoredAPIKey: no database querier configured for this gateway")
+	}
+	internalCtx := client.WithInternalAuth(ctx)
+	res, err := q.Query(internalCtx, apiKeyByStoredSQL, stored)
+	if err != nil {
+		return "", "", fmt.Errorf("lookupStoredAPIKey: query failed: %w", err)
+	}
+	if res != nil && res.Count > 0 && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+		if ns := getString(res.Rows[0][0]); ns != "" {
+			scopes := ""
+			if len(res.Rows[0]) > 1 {
+				scopes = getString(res.Rows[0][1])
+			}
+			if g.mwCache != nil {
+				g.mwCache.SetAPIKeyEntry(stored, ns, scopes)
+			}
+			return ns, scopes, nil
+		}
+	}
+	return "", "", fmt.Errorf("invalid API key")
+}
+
+// exchangedKeyScopes is the scope set a verified token may use when its subject
+// is a stored API key. The scopes claim inside the token is not read: it was
+// copied when the token was minted, and the row is what a later change to the
+// key has to meet. A wallet or a workload returns empty with no error; a
+// workload's authority is its own grant.
+//
+// errMsg is set when the key cannot be used. keyNS is the row's namespace,
+// which is what a mismatch report names.
+func (g *Gateway) exchangedKeyScopes(ctx context.Context, claims *auth.JWTClaims) (scopes, keyNS, errMsg string) {
+	if claims == nil || !auth.IsStoredAPIKeySubject(claims.Sub) {
+		return "", "", ""
+	}
+	ns, raw, err := g.lookupStoredAPIKey(ctx, claims.Sub)
+	if err != nil {
+		return "", "", "this API key is not one this cluster knows"
+	}
+	if tokenNS := strings.TrimSpace(claims.Namespace); tokenNS != "" && ns != tokenNS {
+		return "", ns, "this credential belongs to another namespace"
+	}
+	return auth.ScopesFromStored(raw).Canonical(), ns, ""
+}
+
+// withExchangedKeyScopes attaches exchangedKeyScopes to the request. ok is
+// false when the response has already been written.
+func (g *Gateway) withExchangedKeyScopes(w http.ResponseWriter, ctx context.Context, claims *auth.JWTClaims, isPublic bool) (context.Context, bool) {
+	if claims == nil || !auth.IsStoredAPIKeySubject(claims.Sub) {
+		return ctx, true
+	}
+	scopes, keyNS, errMsg := g.exchangedKeyScopes(ctx, claims)
+	if errMsg != "" {
+		if isPublic {
+			return ctx, true
+		}
+		if keyNS != "" {
+			forbidden(w, CodeNamespaceMismatch, errMsg,
+				map[string]any{"namespace": strings.TrimSpace(claims.Namespace), "credential_namespace": keyNS})
+			return ctx, false
+		}
+		unauthorized(w, CodeAuthInvalidKey, errMsg, nil)
+		return ctx, false
+	}
+	return context.WithValue(ctx, ctxKeyScopes, auth.ParseScopes(scopes)), true
 }
 
 // isWebSocketUpgrade checks if the request is a WebSocket upgrade request
@@ -678,6 +772,12 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 						if ns := strings.TrimSpace(claims.Namespace); ns != "" {
 							ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, ns)
 						}
+						// An exchanged key's authority is its row, not the
+						// scopes claim copied into the token at mint.
+						ctx, ok := g.withExchangedKeyScopes(w, ctx, claims, isPublic)
+						if !ok {
+							return
+						}
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
 					}
@@ -726,6 +826,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 					ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
 					if ns := strings.TrimSpace(claims.Namespace); ns != "" {
 						ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, ns)
+					}
+					ctx, ok := g.withExchangedKeyScopes(w, ctx, claims, isPublic)
+					if !ok {
+						return
 					}
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return

@@ -211,6 +211,30 @@ func IsAPIKeySubject(sub string) bool {
 	return sub != "" && !IsWalletSubject(sub)
 }
 
+// IsStoredAPIKeySubject reports whether a token subject is the stored form of
+// an API key. That is the raw key when no HMAC is configured, and the hex HMAC
+// otherwise — the subject an exchanged token carries. A workload is not a key,
+// even though it is not a wallet either, and neither is an arbitrary string.
+func IsStoredAPIKeySubject(sub string) bool {
+	sub = strings.TrimSpace(sub)
+	if sub == "" || IsWalletSubject(sub) || IsWorkloadSubject(sub) {
+		return false
+	}
+	lower := strings.ToLower(sub)
+	if strings.HasPrefix(lower, "orama_") || strings.HasPrefix(lower, "ak_") {
+		return true
+	}
+	if len(sub) != 64 {
+		return false
+	}
+	for _, c := range lower {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // KeyFingerprint names a credential without being one.
 //
 // HashAPIKey returns the key unchanged when no HMAC secret is configured — it

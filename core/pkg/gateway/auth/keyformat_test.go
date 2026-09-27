@@ -174,4 +174,14 @@ func TestIsWalletSubject(t *testing.T) {
 	if IsWalletSubject("") || IsAPIKeySubject("") {
 		t.Error("an empty subject was classified as something")
 	}
+
+	// The subject of a token exchanged from a key is the stored form: the raw
+	// key, or its hex HMAC. A workload and a stray string are not that.
+	hash := strings.Repeat("ab", 32)
+	if !IsStoredAPIKeySubject(key) || !IsStoredAPIKeySubject("ak_abc123:myns") || !IsStoredAPIKeySubject(hash) {
+		t.Error("a stored API key was not recognised as one")
+	}
+	if IsStoredAPIKeySubject("app:acme/web") || IsStoredAPIKeySubject("anything else at all") || IsStoredAPIKeySubject("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
+		t.Error("something that is not a stored API key was read as one")
+	}
 }
