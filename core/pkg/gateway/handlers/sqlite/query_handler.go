@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -44,8 +45,13 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
 	var req QueryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -70,14 +76,13 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 	// Check node affinity - ensure we're on the correct node for this database
 	homeNodeID, _ := dbMeta["home_node_id"].(string)
 	if h.currentNodeID != "" && homeNodeID != "" && homeNodeID != h.currentNodeID {
-		// This request hit the wrong node - the database lives on a different node
+		// The file is on one disk. Another node forwards there over the overlay
+		// instead of telling the caller to find that node itself.
 		w.Header().Set("X-Orama-Home-Node", homeNodeID)
-		h.logger.Warn("Database query hit wrong node",
-			zap.String("database", req.DatabaseName),
-			zap.String("home_node", homeNodeID),
-			zap.String("current_node", h.currentNodeID),
-		)
-		writeJSONError(w, http.StatusMisdirectedRequest, "Database is on a different node. Use node-specific URL or wait for routing implementation.")
+		if h.forwardToHome(w, r, rawBody, homeNodeID) {
+			return
+		}
+		writeJSONError(w, http.StatusMisdirectedRequest, "Database is on a different node and this gateway could not reach it")
 		return
 	}
 

@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -38,7 +39,12 @@ func (h *SQLiteHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request) {
 		DatabaseName string `json:"database_name"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeCreateError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		writeCreateError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -59,12 +65,10 @@ func (h *SQLiteHandler) DeleteDatabase(w http.ResponseWriter, r *http.Request) {
 	homeNodeID, _ := dbMeta["home_node_id"].(string)
 	if h.currentNodeID != "" && homeNodeID != "" && homeNodeID != h.currentNodeID {
 		w.Header().Set("X-Orama-Home-Node", homeNodeID)
-		h.logger.Warn("Database delete hit wrong node",
-			zap.String("database", req.DatabaseName),
-			zap.String("home_node", homeNodeID),
-			zap.String("current_node", h.currentNodeID),
-		)
-		writeCreateError(w, http.StatusMisdirectedRequest, "Database is on a different node")
+		if h.forwardToHome(w, r, rawBody, homeNodeID) {
+			return
+		}
+		writeCreateError(w, http.StatusMisdirectedRequest, "Database is on a different node and this gateway could not reach it")
 		return
 	}
 

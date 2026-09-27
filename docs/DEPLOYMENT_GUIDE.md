@@ -531,7 +531,7 @@ orama db create my-database
 # Created:   2024-01-22T10:30:00Z
 ```
 
-The database file is stored on the home node at `/opt/orama/.orama/data/sqlite/{your-namespace}/my-database.db`.
+The database file is stored on the home node at `/opt/orama/.orama/data/sqlite/{your-namespace}/my-database.db`. A query or delete that arrives on another node is forwarded to that home node over the WireGuard overlay; the caller does not choose the node.
 
 ### Executing Queries
 

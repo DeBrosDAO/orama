@@ -181,41 +181,54 @@ func queryDatabase(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("query failed: %s", string(body))
 	}
 
-	var result map[string]interface{}
-	err = json.Unmarshal(body, &result)
-	if err != nil {
+	return printQueryResult(os.Stdout, body)
+}
+
+// queryResult is the shape /v1/db/sqlite/query writes. Rows are arrays in
+// column order, not objects. A write carries rows_affected and may carry
+// last_insert_id, and no rows.
+type queryResult struct {
+	Columns      []string        `json:"columns"`
+	Rows         [][]interface{} `json:"rows"`
+	RowsAffected *int64          `json:"rows_affected"`
+	LastInsertID *int64          `json:"last_insert_id"`
+}
+
+func printQueryResult(w io.Writer, body []byte) error {
+	var result queryResult
+	if err := json.Unmarshal(body, &result); err != nil {
 		return err
 	}
 
-	// Print results
-	if rows, ok := result["rows"].([]interface{}); ok && len(rows) > 0 {
-		// Print as table
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-
-		// Print headers
-		firstRow := rows[0].(map[string]interface{})
-		for col := range firstRow {
-			fmt.Fprintf(w, "%s\t", col)
+	if result.Columns != nil || result.Rows != nil {
+		tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+		for _, col := range result.Columns {
+			fmt.Fprintf(tw, "%s\t", col)
 		}
-		fmt.Fprintln(w)
-
-		// Print rows
-		for _, row := range rows {
-			r := row.(map[string]interface{})
-			for _, val := range r {
-				fmt.Fprintf(w, "%v\t", val)
+		fmt.Fprintln(tw)
+		for _, row := range result.Rows {
+			for _, val := range row {
+				fmt.Fprintf(tw, "%v\t", val)
 			}
-			fmt.Fprintln(w)
+			fmt.Fprintln(tw)
 		}
-
-		w.Flush()
-
-		fmt.Printf("\nRows returned: %d\n", len(rows))
-	} else if rowsAffected, ok := result["rows_affected"].(float64); ok {
-		fmt.Printf("✅ Query executed successfully\n")
-		fmt.Printf("Rows affected: %d\n", int(rowsAffected))
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "\nRows returned: %d\n", len(result.Rows))
+		return nil
 	}
 
+	if result.RowsAffected != nil {
+		fmt.Fprintf(w, "Query executed successfully\n")
+		fmt.Fprintf(w, "Rows affected: %d\n", *result.RowsAffected)
+		if result.LastInsertID != nil {
+			fmt.Fprintf(w, "Last insert id: %d\n", *result.LastInsertID)
+		}
+		return nil
+	}
+
+	fmt.Fprintln(w, "Query executed successfully")
 	return nil
 }
 
@@ -304,7 +317,11 @@ func listDatabases(cmd *cobra.Command, args []string) error {
 	if err := out.Table([]string{"NAME", "SIZE", "BACKUP CID", "CREATED"}, rows); err != nil {
 		return err
 	}
-	out.Printf("\nTotal: %v\n", result["total"])
+	total := result["count"]
+	if total == nil {
+		total = len(databases)
+	}
+	out.Printf("\nTotal: %v\n", total)
 	return nil
 }
 
