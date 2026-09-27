@@ -7,9 +7,29 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
+
+// A deployment that binds the first user port must not land on rqlite, the
+// gateway, or the IPFS cluster swarm. Those listeners already own 10100–10199.
+func TestUserMinPort_startsAfterTheIndexBlock(t *testing.T) {
+	if UserMinPort != constants.IndexPortEnd+1 {
+		t.Fatalf("UserMinPort = %d, want %d (the port after the index block)", UserMinPort, constants.IndexPortEnd+1)
+	}
+	for _, used := range []int{
+		constants.RQLiteHTTPPort,
+		constants.RQLiteRaftPort,
+		constants.GatewayAPIPort,
+		constants.IPFSAPIPort,
+		constants.IPFSClusterSwarmPort,
+	} {
+		if used >= UserMinPort {
+			t.Errorf("index port %d is inside the deployment range that starts at %d", used, UserMinPort)
+		}
+	}
+}
 
 // mockRQLiteClient implements a simple in-memory mock for testing
 type mockRQLiteClient struct {

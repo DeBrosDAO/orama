@@ -313,7 +313,7 @@ orama deploy nextjs . --name my-nextjs --ssr
 # Type:         nextjs
 # Status:       active
 # Version:      1
-# Port:         10100
+# Port:         10200
 #
 # URLs:
 #   • https://my-nextjs.orama.network
@@ -326,7 +326,7 @@ orama deploy nextjs . --name my-nextjs --ssr
 1. **Build**: The CLI runs `npm install` (if `node_modules` is missing) and `npm run build` in your project directory
 2. **Tarball Upload**: The `.next/standalone/` output (with `.next/static` and `public` copied in) is tarballed and uploaded
 3. **Home Node Assignment**: A node is chosen to host your app based on capacity
-4. **Port Allocation**: A unique port (10100-19999) is assigned
+4. **Port Allocation**: A unique port (10200-19999) is assigned
 5. **Systemd Service**: A systemd service is created to run `node server.js`
 6. **Health Checks**: Gateway monitors your app every 30 seconds
 7. **Reverse Proxy**: Gateway proxies requests from your domain to the local port
@@ -428,7 +428,7 @@ func main() {
 - **Automatic Cross-Compilation**: The CLI runs `go build -o app .` with `GOOS=linux GOARCH=amd64 CGO_ENABLED=0` — no manual build needed
 - **No cgo**: Because builds use `CGO_ENABLED=0`, dependencies requiring cgo (e.g. `mattn/go-sqlite3`) will not work — use pure-Go alternatives (e.g. `modernc.org/sqlite`)
 - **Systemd Managed**: Runs as a systemd service with auto-restart on failure
-- **Port Range**: Allocated ports are in the range 10100-19999
+- **Port Range**: Allocated ports are in the range 10200-19999. 10000-10199 is the tenant and index blocks (rqlite, Olric, the gateway, IPFS) and is not given to an app.
 
 ---
 
@@ -910,7 +910,7 @@ Deploy a complete full-stack application with React frontend, Go backend, and SQ
 ┌─────────────────────────────────────────────┐
 │   Go Backend (Dynamic)                      │
 │   Domain: myapp-api.orama.network           │
-│   Port: 10100                               │
+│   Port: 10200                               │
 │   Systemd Service                           │
 └─────────────────┬───────────────────────────┘
                   │

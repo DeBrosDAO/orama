@@ -230,9 +230,9 @@ type NodeCapacity struct {
 const (
 	MinPort         = 10000 // Minimum allocatable port
 	MaxPort         = 19999 // Maximum allocatable port
-	ReservedMinPort = 10000 // Start of reserved range
-	ReservedMaxPort = 10099 // End of reserved range
-	UserMinPort     = 10100 // Start of user-allocatable range
+	ReservedMinPort = 10000 // Tenant namespace block
+	ReservedMaxPort = 10199 // Through the index block (constants.IndexPortEnd)
+	UserMinPort     = 10200 // First port a deployment may bind
 )
 
 // Default resource limits

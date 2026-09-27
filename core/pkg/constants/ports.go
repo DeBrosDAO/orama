@@ -22,6 +22,11 @@ const (
 	// from the REST API port — so the constant moved no live listener.
 	IPFSClusterSwarmPort = IndexPortBase + 14 // 10114
 
+	// IndexPortEnd is the last port of the index block. Deployment allocators
+	// start at the next port, so a user process cannot bind rqlite, Olric,
+	// the gateway, or the cluster swarm.
+	IndexPortEnd = IndexPortBase + 99 // 10199
+
 	// Edge — not in 10100.
 	WireGuardPort = 51820
 )
