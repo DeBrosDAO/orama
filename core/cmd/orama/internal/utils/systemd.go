@@ -226,16 +226,33 @@ func IsServiceEnabled(service string) (bool, error) {
 	return true, nil
 }
 
-// IsServiceMasked checks if a systemd service is masked
+// IsServiceMasked checks if a systemd service is masked.
 func IsServiceMasked(service string) (bool, error) {
 	cmd := exec.Command("systemctl", "is-enabled", service)
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		outputStr := string(output)
-		if strings.Contains(outputStr, "masked") {
-			return true, nil
-		}
-		return false, err
+	return maskedFromIsEnabled(string(output), err)
+}
+
+// maskedFromIsEnabled reads `systemctl is-enabled`. A disabled unit exits 1
+// with the word "disabled". That is not a masked unit, and it is not a
+// failure to ask: template instances the supervisor starts are disabled, and
+// treating that exit as an error aborts the upgrade after the node is already
+// back, with the maintenance flag still set.
+func maskedFromIsEnabled(output string, runErr error) (bool, error) {
+	line := strings.TrimSpace(output)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	if strings.HasPrefix(line, "masked") {
+		return true, nil
+	}
+	switch line {
+	case "disabled", "enabled", "enabled-runtime", "static", "indirect",
+		"generated", "transient", "linked", "linked-runtime", "alias", "aliased":
+		return false, nil
+	}
+	if runErr != nil {
+		return false, runErr
 	}
 	return false, nil
 }

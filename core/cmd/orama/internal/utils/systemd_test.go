@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -10,6 +11,41 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"gopkg.in/yaml.v3"
 )
+
+func TestMaskedFromIsEnabled_disabledIsNotAFailure(t *testing.T) {
+	exit := errors.New("exit status 1")
+	cases := []struct {
+		name   string
+		output string
+		err    error
+		masked bool
+		fail   bool
+	}{
+		{"disabled", "disabled\n", exit, false, false},
+		{"masked", "masked\n", exit, true, false},
+		{"masked-runtime", "masked-runtime\n", exit, true, false},
+		{"enabled", "enabled\n", nil, false, false},
+		{"static", "static\n", nil, false, false},
+		{"empty", "", exit, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := maskedFromIsEnabled(tc.output, tc.err)
+			if tc.fail {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			if got != tc.masked {
+				t.Fatalf("masked = %v, want %v", got, tc.masked)
+			}
+		})
+	}
+}
 
 func TestWaitForTCPPort_Success(t *testing.T) {
 	// Start a TCP listener on a random port
