@@ -122,6 +122,15 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to record this node", http.StatusInternalServerError)
 		return
 	}
+	// The operators table is seeded once, from whatever dns_nodes held when
+	// migration 044 ran. A node that joins afterwards writes its wallet onto
+	// dns_nodes here and would otherwise stay off the list forever, so every
+	// operator endpoint keeps refusing the wallet that actually runs the node.
+	if _, err := h.db.Exec(r.Context(), recordOperatorSQL, nodeID); err != nil {
+		h.logger.Error("node registration failed to record the operator", zap.String("node_id", nodeID), zap.Error(err))
+		http.Error(w, "failed to record this node", http.StatusInternalServerError)
+		return
+	}
 
 	h.logger.Info("node registered",
 		zap.String("node_id", nodeID),
@@ -140,6 +149,17 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// recordOperatorSQL admits the wallet this node actually stored. INSERT OR
+// IGNORE leaves a wallet that is already on the list untouched, and a node
+// with no operator wallet selects nothing, so the write is a no-op.
+const recordOperatorSQL = `
+	INSERT OR IGNORE INTO operators (wallet, added_by)
+	SELECT LOWER(TRIM(operator_wallet)), 'node:' || id
+	FROM dns_nodes
+	WHERE id = ?
+	  AND operator_wallet IS NOT NULL
+	  AND TRIM(operator_wallet) <> ''`
 
 // HandleEnrolKey serves POST /v1/internal/node/enrol-key.
 //

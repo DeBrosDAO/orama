@@ -765,7 +765,9 @@ signing key is derived from.
 
 A cluster with an empty operator list refuses every operator endpoint. An
 unreadable list refuses too: not knowing whether someone is an operator is not
-permission to treat them as one.
+permission to treat them as one. The list is seeded from `dns_nodes` when the
+operators migration runs, and a later node registration adds the wallet that
+registration stored, when that wallet is non-empty.
 
 ---
 

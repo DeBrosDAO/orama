@@ -655,10 +655,13 @@ re-mint with `orama node invite`. The maximum lifetime is also now one hour,
 down from seven days.
 
 It also creates the `operators` table and seeds it from
-`dns_nodes.operator_wallet` — what `orama node install --operator-wallet` wrote.
-`/v1/operator/*` refuses a wallet that is not on that list, so **a cluster
-installed without `--operator-wallet` seeds nothing and no one can mint an
-invite or list nodes** until a row is inserted:
+`dns_nodes.operator_wallet` — what `orama node install --operator-wallet` wrote
+at the moment the migration runs. A node that registers later carries the same
+wallet, and that registration inserts it into `operators` when the stored
+wallet is non-empty (`INSERT OR IGNORE`, so a wallet already on the list is
+left as it is). `/v1/operator/*` refuses a wallet that is not on that list, so
+**a cluster whose nodes never recorded `--operator-wallet` has an empty list
+and no one can mint an invite or list nodes** until a row is inserted:
 
 ```sql
 INSERT INTO operators (wallet, added_by) VALUES (LOWER('0x…'), 'manual');

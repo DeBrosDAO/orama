@@ -180,8 +180,8 @@ func TestRegister_recordsTheNodeThatStampedTheRequest(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, body %q", w.Code, w.Body.String())
 	}
-	if len(db.calls) != 1 {
-		t.Fatalf("wrote %d times, want 1", len(db.calls))
+	if len(db.calls) != 2 {
+		t.Fatalf("wrote %d times, want the node row and the operator admission", len(db.calls))
 	}
 	call := db.calls[0]
 	if !strings.Contains(call.query, "INSERT INTO dns_nodes") {
@@ -192,6 +192,31 @@ func TestRegister_recordsTheNodeThatStampedTheRequest(t *testing.T) {
 	}
 	if got := call.args[1]; got != "203.0.113.7" {
 		t.Errorf("ip_address = %v, want the one in the body", got)
+	}
+	admit := db.calls[1]
+	if !strings.Contains(admit.query, "INSERT OR IGNORE INTO operators") {
+		t.Errorf("second write = %q, want the operator admission", admit.query)
+	}
+	if got := admit.args[0]; got != testNodeID {
+		t.Errorf("operator admission keyed on %v, want %q", got, testNodeID)
+	}
+}
+
+func TestRegister_aNodeWithoutAnOperatorWalletDoesNotTouchTheList(t *testing.T) {
+	db := &recordingDB{affected: 1}
+	req := validRegistration()
+	req.OperatorWallet = ""
+	w := httptest.NewRecorder()
+	newHandler(db).HandleRegister(w, post(t, "/v1/internal/node/register", testNodeID, req))
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body %q", w.Code, w.Body.String())
+	}
+	if len(db.calls) != 2 {
+		t.Fatalf("wrote %d times, want 2", len(db.calls))
+	}
+	if !strings.Contains(db.calls[1].query, "TRIM(operator_wallet) <> ''") {
+		t.Fatalf("admission query does not skip an empty wallet: %s", db.calls[1].query)
 	}
 }
 
