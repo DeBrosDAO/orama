@@ -108,7 +108,7 @@ idempotent, so no leader election is needed:
 
 | Reconciler | When | What it does |
 |---|---|---|
-| Ensure (re-advertise) | Every 30s sweep, per hosted namespace | Additively inserts **this node's own** A record if absent, for every namespace where it is a `running` `gateway`. Never touches another node's record, and never re-enables a record that recovery deliberately disabled. Runs immediately after the heartbeat re-asserts `active`, so a just-recovered node is no longer purge-eligible when it re-advertises. |
+| Ensure (re-advertise) | WebRTC reconcile loop, per hosted namespace | Additively inserts **this node's own** A record if absent, and re-enables that same row when this node's tenant gateway answers `GET /v1/health` on its WireGuard address. It does not touch another node's record. A tenant gateway does not listen on loopback, so the probe is `local_ip` from `cluster-state.json`. |
 | Purge | Every 30s DNS sweep | Deletes A records whose value is a node that is non-active **and** silent longer than the staleness window (15 min). |
 
 Two safety properties matter:

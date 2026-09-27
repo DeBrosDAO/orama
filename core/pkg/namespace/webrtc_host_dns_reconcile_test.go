@@ -74,6 +74,25 @@ func servingGatewayPort(t *testing.T, status int, body string) int {
 	return port
 }
 
+func TestNamespaceGatewayProbe_usesTheWireGuardAddress(t *testing.T) {
+	got, ok := namespaceGatewayProbe(&ClusterLocalState{
+		LocalIP:    "10.0.0.1",
+		LocalPorts: ClusterLocalStatePorts{GatewayHTTPPort: 10004},
+	})
+	if !ok || got != "10.0.0.1:10004" {
+		t.Fatalf("probe = %q ok=%v, want 10.0.0.1:10004", got, ok)
+	}
+}
+
+func TestNamespaceGatewayProbe_loopbackWhenTheStateHasNoAddress(t *testing.T) {
+	got, ok := namespaceGatewayProbe(&ClusterLocalState{
+		LocalPorts: ClusterLocalStatePorts{GatewayHTTPPort: 10004},
+	})
+	if !ok || got != "127.0.0.1:10004" {
+		t.Fatalf("probe = %q ok=%v, want 127.0.0.1:10004", got, ok)
+	}
+}
+
 // The reproduction's fix: gateway serving, so the record is asserted.
 func TestEnsureNamespaceHostRecordIfServing_advertisesWhenGatewayAnswers(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"status": "ok", "services": map[string]string{}})

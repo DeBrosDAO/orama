@@ -455,7 +455,7 @@ olric_servers:
 ```bash
 sudo systemctl restart orama-namespace-olric@$NS
 sudo systemctl restart orama-namespace-gateway@$NS
-curl -sS http://127.0.0.1:10004/v1/health   # expect healthy, rqlite ok, olric ok
+curl -sS http://10.0.0.<this>:10004/v1/health   # tenant gateway binds the WireGuard address, not loopback
 ```
 
 Mark old assignment rows stopped in platform DB:

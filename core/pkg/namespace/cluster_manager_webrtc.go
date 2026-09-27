@@ -6,8 +6,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -1292,15 +1295,34 @@ const webrtcReconcileInterval = 60 * time.Second
 // uses. A record pointing at a gateway that is down — or that accepts TCP
 // but cannot serve — is the #161 symptom in a different place: clients
 // round-robin onto a dead endpoint.
-func (cm *ClusterManager) ensureNamespaceHostRecordIfServing(ctx context.Context, state *ClusterLocalState) {
+// namespaceGatewayProbe is the address of this node's tenant gateway health.
+//
+// The process binds its WireGuard address (LocalIP). Loopback is the index
+// gateway, and a tenant port there is closed, so a probe of 127.0.0.1 never
+// sees a healthy tenant and never puts the node back in DNS.
+func namespaceGatewayProbe(state *ClusterLocalState) (string, bool) {
 	port := state.LocalPorts.GatewayHTTPPort
 	if port <= 0 {
+		return "", false
+	}
+	host := strings.TrimSpace(state.LocalIP)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), true
+}
+
+func (cm *ClusterManager) ensureNamespaceHostRecordIfServing(ctx context.Context, state *ClusterLocalState) {
+	probe, ok := namespaceGatewayProbe(state)
+	if !ok {
 		return
 	}
 	// HTTP /v1/health, not TCP-open. The withdraw loop in namespace_health.go
 	// keys on the same probe: a gateway that accepts TCP but is still starting
 	// (or 404s) must not be re-advertised here, or the two fight.
-	if err := gatewayReady(ctx, fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
+	// Tenant gateways bind the WireGuard address only, so 127.0.0.1 never
+	// answers and a soft-disabled A record would stay disabled.
+	if err := gatewayReady(ctx, probe); err != nil {
 		// Not serving yet — say nothing and retry on the next tick. This is the
 		// normal state for the first minute after a restart.
 		return
