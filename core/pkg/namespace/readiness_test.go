@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/olric/olrictest"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
@@ -159,16 +160,26 @@ func TestGatewayReady_rejectsNon2xx(t *testing.T) {
 }
 
 func TestOlricReady(t *testing.T) {
+	member := olrictest.Start(t)
+	if err := olricReady(context.Background(), member.Addr); err != nil {
+		t.Fatalf("a running Olric was rejected: %v", err)
+	}
+	if err := olricReady(context.Background(), "127.0.0.1:1"); err == nil {
+		t.Fatal("a closed port was accepted as ready")
+	}
+}
+
+// The probe used to GET /api/v1/stats. Olric 0.7 does not speak HTTP on its
+// bind port, and that GET is what rolled a namespace back after Olric had
+// already started.
+func TestOlricReady_anHTTPServerIsNotOlric(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"member":{"name":"test"}}`)
 	}))
 	defer srv.Close()
 
-	if err := olricReady(context.Background(), hostPortOf(srv.URL)); err != nil {
-		t.Fatalf("an answering Olric was rejected: %v", err)
-	}
-	if err := olricReady(context.Background(), "127.0.0.1:1"); err == nil {
-		t.Fatal("a closed port was accepted as ready")
+	if err := olricReady(context.Background(), hostPortOf(srv.URL)); err == nil {
+		t.Fatal("an HTTP server was accepted as a ready Olric")
 	}
 }
 

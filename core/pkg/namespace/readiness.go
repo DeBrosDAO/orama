@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
+	olriclib "github.com/olric-data/olric"
+	"github.com/olric-data/olric/config"
 )
 
 // Readiness probes for tenant services.
@@ -138,14 +141,27 @@ func rqliteReady(ctx context.Context, ep rqlite.Endpoint) error {
 
 // olricReady reports whether the tenant Olric at hostPort is answering.
 //
-// Olric's HTTP port comes up with the process, so this is a liveness check, not
-// a convergence one. Membership is deliberately NOT asserted here: a namespace
-// with one node has a member count of one, and a multi-node namespace converges
-// asynchronously — gating provisioning on full convergence would fail a
-// namespace that is about to be fine. What this replaces is a fixed 5-second
-// sleep that checked nothing at all.
+// hostPort is the client bind port (server.bindPort). Olric 0.7 speaks its own
+// protocol there. It has no HTTP server, so GET /api/v1/stats is answered with
+// a protocol error whose text is not an HTTP status line — provisioning then
+// waits out the minute and rolls the namespace back. Membership is deliberately
+// not asserted: a one-node namespace has one member, and a multi-node namespace
+// converges after the processes are up.
 func olricReady(ctx context.Context, hostPort string) error {
-	if _, err := httpGet(ctx, fmt.Sprintf("http://%s/api/v1/stats", hostPort)); err != nil {
+	cfg := config.NewClient()
+	cfg.DialTimeout = probeTimeout
+	cfg.ReadTimeout = probeTimeout
+	cfg.WriteTimeout = probeTimeout
+	cfg.MaxRetries = -1
+	client, err := olriclib.NewClusterClient([]string{hostPort},
+		olriclib.WithLogger(log.New(io.Discard, "", 0)),
+		olriclib.WithConfig(cfg),
+	)
+	if err != nil {
+		return fmt.Errorf("olric at %s: %w", hostPort, err)
+	}
+	defer client.Close(ctx)
+	if _, err := client.Stats(ctx, hostPort); err != nil {
 		return fmt.Errorf("olric at %s: %w", hostPort, err)
 	}
 	return nil

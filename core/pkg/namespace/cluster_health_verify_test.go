@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/olric/olrictest"
 	"go.uber.org/zap"
 )
 
@@ -64,14 +65,20 @@ func credentialedSpawner(t *testing.T) *SystemdSpawner {
 	return NewSystemdSpawner(namespaceBase, "", zap.NewNop())
 }
 
-// serveOlric answers the stats endpoint an Olric readiness probe reads.
+// serveOlric starts a real single-member Olric. The readiness probe speaks
+// Olric's client protocol, so an HTTP stand-in is not a ready member.
 func serveOlric(t *testing.T) int {
 	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/stats", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"member":{"name":"test"}}`)
-	})
-	return servePort(t, mux)
+	member := olrictest.Start(t)
+	_, portStr, err := net.SplitHostPort(member.Addr)
+	if err != nil {
+		t.Fatalf("split %s: %v", member.Addr, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("port %q: %v", portStr, err)
+	}
+	return port
 }
 
 // serveGateway answers /v1/health with the given per-service states.
