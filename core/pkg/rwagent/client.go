@@ -3,6 +3,7 @@ package rwagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -48,6 +49,9 @@ const (
 type Client struct {
 	httpClient *http.Client
 	socketPath string
+	// warn receives the one-line warnings a background operation cannot
+	// return as an error (KeepUnlocked). Stderr outside tests.
+	warn io.Writer
 }
 
 // New creates a client that connects to the agent's Unix socket.
@@ -60,6 +64,7 @@ func New(socketPath string) *Client {
 
 	return &Client{
 		socketPath: socketPath,
+		warn:       os.Stderr,
 		httpClient: &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -79,6 +84,35 @@ func New(socketPath string) *Client {
 func (c *Client) Status(ctx context.Context) (*StatusResponse, error) {
 	var resp apiResponse[StatusResponse]
 	status, err := c.doJSON(ctx, "GET", "/v1/status", nil, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, c.apiError(resp.Error, resp.Code, status)
+	}
+	return &resp.Data, nil
+}
+
+// ErrTouchUnsupported means the agent predates POST /v1/touch, so nothing can
+// hold its auto-lock window open.
+var ErrTouchUnsupported = errors.New("the RootWallet agent has no /v1/touch")
+
+// Touch resets the agent's auto-lock window. Only an approved app may call it
+// (CodeNotApproved otherwise); it never unlocks a locked wallet.
+func (c *Client) Touch(ctx context.Context) (*TouchResponse, error) {
+	var resp apiResponse[TouchResponse]
+	status, err := c.doJSON(ctx, "POST", "/v1/touch", nil, &resp)
+	// Any 404 means the agent has no such route, whether it answered with its
+	// JSON envelope or a plain-text not-found body. doJSON reports 0 for a
+	// connection failure, so an agent that isn't running is never misread here.
+	if status == http.StatusNotFound {
+		return nil, fmt.Errorf("touch: %w", ErrTouchUnsupported)
+	}
+	// Only an approved app may touch, so a 403 means not approved even when its
+	// body isn't the JSON envelope the agent normally sends.
+	if status == http.StatusForbidden && (err != nil || resp.Code == "") {
+		return nil, c.apiError("this app is not approved to keep the wallet unlocked", CodeNotApproved, status)
+	}
 	if err != nil {
 		return nil, err
 	}

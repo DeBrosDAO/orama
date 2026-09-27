@@ -204,10 +204,14 @@ func checkAgentReady() error {
 func validateAgentStatus(status *rwagent.StatusResponse) error {
 	if status.Locked {
 		// A prompt already on screen is the difference between "unlock it" and
-		// "you have one waiting" — the agent reports the count and this client
-		// used to drop it.
+		// "you have one waiting". The agent counts approval prompts and
+		// requests parked on the unlock separately; this used to read the
+		// unlock count as if it were the prompt count.
+		if status.PendingApprovals > 0 {
+			return fmt.Errorf("rootwallet agent is locked\n\n  %d approval prompt(s) are already waiting in the RootWallet desktop app — answer them, then unlock it.", status.PendingApprovals)
+		}
 		if status.PendingUnlocks > 0 {
-			return fmt.Errorf("rootwallet agent is locked\n\n  %d approval prompt(s) are already waiting in the RootWallet desktop app — answer them.", status.PendingUnlocks)
+			return fmt.Errorf("rootwallet agent is locked\n\n  %d request(s) are already waiting for it — unlock it in the RootWallet desktop app.", status.PendingUnlocks)
 		}
 		return fmt.Errorf("rootwallet agent is locked\n\n  Unlock it in the RootWallet desktop app.")
 	}

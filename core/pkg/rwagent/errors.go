@@ -29,6 +29,9 @@ const (
 	// CodePeerVanished — the calling process changed identity mid-request, so
 	// the agent stopped trusting it.
 	CodePeerVanished = "PEER_VANISHED"
+	// CodeNotApproved — the calling binary is not an approved app, so the agent
+	// will not let it hold the wallet unlocked (POST /v1/touch).
+	CodeNotApproved = "NOT_APPROVED"
 	// CodeInternalError — the agent failed for its own reasons.
 	CodeInternalError = "INTERNAL_ERROR"
 	// CodeAgentNotRunning is this client's own code for an unreachable socket.
@@ -77,6 +80,8 @@ func (e *AgentError) hint() string {
 		return "no such entry in the vault"
 	case CodePayloadTooLarge:
 		return "the request exceeded the agent's 1MiB limit"
+	case CodeNotApproved:
+		return "approve this application in the RootWallet desktop app (any request it makes will ask) so it may keep the wallet unlocked"
 	case CodePeerVanished:
 		return "the calling process changed while the request was in flight, so the agent stopped trusting it; run this again"
 	case CodeInvalidRequest:
@@ -111,6 +116,9 @@ func IsApprovalDenied(err error) bool {
 // This is a different outcome from a denial: the user did not say no, they were
 // not there. Retrying is reasonable; retrying a denial is not.
 func IsApprovalTimeout(err error) bool { return hasCode(err, CodeApprovalTimeout) }
+
+// IsNotApproved returns true if the calling binary is not an approved app.
+func IsNotApproved(err error) bool { return hasCode(err, CodeNotApproved) }
 
 // IsPeerVanished returns true if the agent stopped trusting the calling process
 // mid-request, which happens when the binary is replaced under a running

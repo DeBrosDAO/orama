@@ -12,11 +12,24 @@ type StatusResponse struct {
 	Uptime        int    `json:"uptime"`
 	PID           int    `json:"pid"`
 	ConnectedApps int    `json:"connectedApps"`
-	// PendingUnlocks is how many approval prompts are waiting for someone to
-	// answer them. The agent has always sent it; this client dropped it, so a
-	// command could sit through a 120-second approval timeout with no way to
-	// say that a prompt was open on the user's screen.
+	// PendingUnlocks is how many requests are parked waiting for the wallet to
+	// be unlocked.
 	PendingUnlocks int `json:"pendingUnlocks"`
+	// PendingApprovals is how many requests are waiting on an approval prompt
+	// someone has to answer in the desktop app. The agent reports it
+	// separately from PendingUnlocks; an older agent omits it (zero).
+	PendingApprovals int `json:"pendingApprovals"`
+}
+
+// TouchResponse from POST /v1/touch.
+type TouchResponse struct {
+	// Locked is true when the wallet was already locked; a touch never unlocks.
+	Locked bool `json:"locked"`
+	// AutoLockInSeconds is how long the session now has before it auto-locks;
+	// nil when locked or when the agent never auto-locks.
+	AutoLockInSeconds *int `json:"autoLockInSeconds"`
+	// PendingApprovals is how many requests are waiting on an approval prompt.
+	PendingApprovals int `json:"pendingApprovals"`
 }
 
 // VaultSSHData from GET /v1/vault/ssh/:host/:user.

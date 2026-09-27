@@ -13,19 +13,25 @@ import (
 // so it locked partway through and the next thing that needed it — the health
 // gate between two nodes — stopped and waited for an unlock prompt.
 
-// countingAgent answers /v1/status and counts the calls.
+// countingAgent answers POST /v1/touch and counts the calls. Anything else is
+// a 404, so a keepalive that pinged the read-only /v1/status would count none.
 func countingAgent(t *testing.T) (*Client, func() int) {
 	t.Helper()
 
 	var mu sync.Mutex
 	calls := 0
 
-	client := agentStub(t, func(w http.ResponseWriter, _ *http.Request) {
+	client := agentStub(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/touch" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"ok":false,"error":"unknown route","code":"NOT_FOUND"}`))
+			return
+		}
 		mu.Lock()
 		calls++
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"data":{"version":"1","locked":false,"uptime":1,"pid":1,"connectedApps":1,"pendingUnlocks":0}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"locked":false,"autoLockInSeconds":1800,"pendingApprovals":0}}`))
 	})
 
 	return client, func() int {
