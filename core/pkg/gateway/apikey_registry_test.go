@@ -1,12 +1,16 @@
 package gateway
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -87,6 +91,48 @@ func TestConnectAPIKeyRegistry_anUnreachableRegistryIsFatal(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no safe store") {
 		t.Errorf("the error does not say why this is fatal rather than degraded: %v", err)
+	}
+}
+
+// The registry probe is the gateway itself. It has no user session. A query
+// that is not marked internal is refused before it is sent, the process
+// exits, and the tenant port never opens.
+func TestConnectAPIKeyRegistry_probesWithoutAUserSession(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"columns":["1"],"types":["integer"],"values":[[1]]}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := &Config{
+		RQLiteDSN:       "http://127.0.0.1:1",
+		GlobalRQLiteDSN: "http://orama:s3cret-password@" + srv.Listener.Addr().String(),
+		RQLiteUsername:  "orama",
+		RQLitePassword:  "s3cret-password",
+	}
+	client, err := connectAPIKeyRegistry(cfg, testLoggerForRegistry(t))
+	if err != nil {
+		t.Fatalf("the registry answered and the gateway still refused to start: %v", err)
+	}
+	if client == nil {
+		t.Fatal("no registry client")
+	}
+	t.Cleanup(func() { client.Disconnect() })
+	if hits.Load() == 0 {
+		t.Fatal("the probe never reached the registry")
+	}
+}
+
+func TestRegistryUnreachable_redactsThePassword(t *testing.T) {
+	cfg := &Config{GlobalRQLiteDSN: "http://orama:s3cret-password@10.0.0.3:10100"}
+	err := registryUnreachable(cfg, "it did not answer", fmt.Errorf("Get %q: connection refused", cfg.GlobalRQLiteDSN))
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("the boot error keeps the registry password: %v", err)
+	}
+	if !strings.Contains(err.Error(), "10.0.0.3:10100") {
+		t.Fatalf("the boot error no longer names the registry: %v", err)
 	}
 }
 

@@ -1560,26 +1560,34 @@ func connectAPIKeyRegistry(cfg *Config, logger *logging.ColoredLogger) (client.N
 
 	registryClient, err := client.NewClient(authCfg)
 	if err != nil {
-		return nil, fmt.Errorf("this gateway validates API keys against the registry at %s, but the client "+
-			"could not be created and there is no safe store to use instead: %w", cfg.GlobalRQLiteDSN, err)
+		return nil, registryUnreachable(cfg, "the client could not be created", err)
 	}
 	// Connect brings up the client's own P2P side. It reports success without
 	// having spoken to the database, so it is not evidence that the registry
 	// is there — the probe below is. It is still checked, because a client
 	// that could not start is a different failure and says so.
 	if err := registryClient.Connect(); err != nil {
-		return nil, fmt.Errorf("this gateway validates API keys against the registry at %s, but its client "+
-			"could not start and there is no safe store to use instead: %w", cfg.GlobalRQLiteDSN, err)
+		return nil, registryUnreachable(cfg, "its client could not start", err)
 	}
 
-	// Ask the registry a question only the registry can answer.
+	// Ask the registry a question only the registry can answer. This is the
+	// gateway itself, not a caller: the client has no user session, and a
+	// query without internal auth is refused before it leaves the process.
 	probeCtx, cancel := context.WithTimeout(context.Background(), apiKeyRegistryProbeTimeout)
 	defer cancel()
-	if _, err := registryClient.Database().Query(probeCtx, "SELECT 1 FROM api_keys LIMIT 1"); err != nil {
+	if _, err := registryClient.Database().Query(client.WithInternalAuth(probeCtx), "SELECT 1 FROM api_keys LIMIT 1"); err != nil {
 		registryClient.Disconnect()
-		return nil, fmt.Errorf("this gateway validates API keys against the registry at %s, but it did not "+
-			"answer and there is no safe store to use instead: %w", cfg.GlobalRQLiteDSN, err)
+		return nil, registryUnreachable(cfg, "it did not answer", err)
 	}
 
 	return registryClient, nil
+}
+
+// registryUnreachable is the fatal boot error for a namespace gateway that
+// cannot read the cluster registry. The DSN carries the rqlite password, and
+// this string is what the journal keeps, so the password does not go in it.
+func registryUnreachable(cfg *Config, why string, err error) error {
+	return fmt.Errorf("this gateway validates API keys against the registry at %s, but %s "+
+		"and there is no safe store to use instead: %s",
+		rqlite.RedactDSN(cfg.GlobalRQLiteDSN), why, rqlite.RedactError(err, cfg.GlobalRQLiteDSN))
 }
