@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -494,6 +495,7 @@ func TestBackupDatabase(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/db/sqlite/backup", bytes.NewReader(bodyBytes))
 	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
+	ctx = context.WithValue(ctx, ctxkeys.JWT, &auth.JWTClaims{Sub: "0xowner"})
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
