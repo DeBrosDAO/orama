@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/client"
 )
 
 // These run against the real schema, as the device-login tests do: what makes
@@ -31,6 +34,50 @@ func proofFor(d testDevice, action, namespace, binding string) *DeviceProof {
 	id := "proof-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	iat := time.Now().Unix()
 	return &DeviceProof{IssuedAt: iat, ID: id, Signature: d.sign(DeviceProofMessage(action, namespace, binding, iat, id))}
+}
+
+// hidingNewDevices is the registry a follower is for a moment after the
+// leader has stored a device: the insert is committed, and a local read of
+// that id still returns no row.
+type hidingNewDevices struct {
+	*sqliteDatabase
+}
+
+func (h *hidingNewDevices) Query(ctx context.Context, query string, args ...interface{}) (*client.QueryResult, error) {
+	if strings.Contains(query, "FROM session_devices") && strings.Contains(query, "WHERE id") {
+		return &client.QueryResult{}, nil
+	}
+	return h.sqliteDatabase.Query(ctx, query, args...)
+}
+
+type hidingNet struct {
+	client.NetworkClient
+	db client.DatabaseClient
+}
+
+func (n hidingNet) Database() client.DatabaseClient { return n.db }
+
+func TestEnrolDevice_aLocalReadThatMissesTheInsertStillEnrolls(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	s.orm = hidingNet{db: &hidingNewDevices{sqliteDatabase: db}}
+	d := ed25519Device(t)
+	key, err := ParseDeviceKey([]byte(d.jwk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, err := s.EnrolDevice(context.Background(), "anchat", deviceOwner, key, "phone", DeviceStateActive, "")
+	if err != nil {
+		t.Fatalf("a committed insert was reported as someone else's key: %v", err)
+	}
+	if dev.ID != d.id || dev.State != DeviceStateActive || dev.Subject != deviceOwner {
+		t.Fatalf("enrolled %+v", dev)
+	}
+	// The row is in the registry. A read that can see it finds this account's device.
+	s.orm = &sqliteNet{db: db}
+	got, err := s.Device(context.Background(), "anchat", d.id)
+	if err != nil || got.Subject != deviceOwner || got.State != DeviceStateActive {
+		t.Fatalf("stored device = %+v, err %v", got, err)
+	}
 }
 
 func TestEnrolDevice_aKeyBelongsToOneAccount(t *testing.T) {

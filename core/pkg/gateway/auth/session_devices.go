@@ -153,13 +153,38 @@ func (s *Service) EnrolDevice(ctx context.Context, namespace, subject string, ke
 	if state == DeviceStateActive {
 		activated = time.Now().UTC().Format(sqliteTime)
 	}
-	if _, err := s.db.Exec(client.WithInternalAuth(ctx),
+	res, err := s.db.Exec(client.WithInternalAuth(ctx),
 		`INSERT INTO session_devices(id, namespace_id, subject, public_key, label, state, approved_by_device, activated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO NOTHING`,
 		key.ID(), nsID, subject, key.JWK(), cleanDeviceLabel(label), string(state), nullable(approvedBy), activated,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, fmt.Errorf("enrol device %s: %w", key.ID(), err)
+	}
+	// The write is acknowledged by the leader. Reading the new row back goes
+	// through the local node (level=none), and a follower applies the log
+	// after that acknowledgement. A miss there is not "this key is someone
+	// else's": the row this statement just stored is this account's device.
+	stored, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("enrol device %s: rows affected: %w", key.ID(), err)
+	}
+	if stored == 1 {
+		now := time.Now().UTC()
+		enrolled := &SessionDevice{
+			ID:         key.ID(),
+			Subject:    subject,
+			Label:      cleanDeviceLabel(label),
+			State:      state,
+			ApprovedBy: approvedBy,
+			PublicKey:  key.JWK(),
+			CreatedAt:  now,
+		}
+		if state == DeviceStateActive {
+			enrolled.ActivatedAt = now
+		}
+		return enrolled, nil
 	}
 
 	d, err := s.Device(ctx, namespace, key.ID())
