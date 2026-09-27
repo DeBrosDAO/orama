@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/pkg/auth"
 )
 
 // AuthLogin authenticates with a wallet and stores the credential.
-func AuthLogin(namespace string) error {
+func AuthLogin(namespace, deviceKeyPath string) error {
 	gatewayURL, err := getGatewayURL()
 	if err != nil {
 		return err
@@ -68,9 +68,20 @@ func AuthLogin(namespace string) error {
 	// SSH, a container, CI — the login moves to a machine that does have a
 	// wallet, rather than being refused. That refusal is why the documented way
 	// onto a server was a permanent key in an environment variable.
+	var device *auth.LoginDevice
+	if deviceKeyPath != "" {
+		if !auth.IsRootWalletInstalled() {
+			return clierr.Usage("enrolling a device needs the wallet that signs the challenge, and the RootWallet agent is not reachable")
+		}
+		device, err = loadLoginDevice(deviceKeyPath)
+		if err != nil {
+			return err
+		}
+	}
+
 	var creds *auth.Credentials
 	if auth.IsRootWalletInstalled() {
-		creds, err = auth.PerformRootWalletAuthentication(gatewayURL, namespace)
+		creds, err = auth.PerformRootWalletAuthentication(gatewayURL, namespace, device)
 	} else {
 		creds, err = deviceLogin(gatewayURL, namespace)
 	}

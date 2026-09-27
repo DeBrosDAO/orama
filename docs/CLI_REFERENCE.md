@@ -420,8 +420,15 @@ Sign in, here or from another machine
 orama auth login [flags]
 ```
 
+Sign in, here or from another machine.
+
+--device-key enrolls that Ed25519 key with this sign-in. The file is a private
+JWK and stays on this machine; the gateway receives the public half and the
+device's signature over the same message the wallet signs.
+
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--device-key` | — | Ed25519 private JWK file to enroll with this sign-in |
 | `--namespace` | — | Namespace name |
 
 ### orama auth logout

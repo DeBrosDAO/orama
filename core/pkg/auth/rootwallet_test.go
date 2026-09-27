@@ -71,7 +71,7 @@ func TestRequestChallenge_returnsTheMessageToSign(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := requestChallenge(srv.Client(), srv.URL, "0xWallet", "acme")
+	got, err := requestChallenge(srv.Client(), srv.URL, "0xWallet", "acme", "")
 	if err != nil {
 		t.Fatalf("requestChallenge: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestRequestChallenge_refusesAGatewayThatSendsOnlyANonce(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := requestChallenge(srv.Client(), srv.URL, "0xWallet", "acme")
+	_, err := requestChallenge(srv.Client(), srv.URL, "0xWallet", "acme", "")
 	if err == nil {
 		t.Fatal("a challenge with no message was accepted; the CLI would have signed the nonce")
 	}
@@ -116,12 +116,60 @@ func TestRequestChallenge_surfacesAGatewayRefusal(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := requestChallenge(srv.Client(), srv.URL, "0xWallet", "acme")
+	_, err := requestChallenge(srv.Client(), srv.URL, "0xWallet", "acme", "")
 	if err == nil {
 		t.Fatal("a 404 was read as a challenge")
 	}
 	if !strings.Contains(err.Error(), "NAMESPACE_UNKNOWN") {
 		t.Errorf("the gateway's own answer was dropped: %v", err)
+	}
+}
+
+func TestRequestChallenge_namesTheDevice(t *testing.T) {
+	var body map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": challengeMessage})
+	}))
+	defer srv.Close()
+
+	if _, err := requestChallenge(srv.Client(), srv.URL, "0xWallet", "acme", "device-thumb"); err != nil {
+		t.Fatal(err)
+	}
+	if body["device_id"] != "device-thumb" {
+		t.Fatalf("device_id = %q", body["device_id"])
+	}
+}
+
+func TestVerifySignature_sendsTheDeviceProofAndNotItsPrivateKey(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "jwt", "refresh_token": "rt",
+			"subject": "0xwallet", "namespace": "acme",
+		})
+	}))
+	defer srv.Close()
+
+	device := &LoginDevice{
+		ID:        "device-thumb",
+		PublicJWK: json.RawMessage(`{"kty":"OKP","crv":"Ed25519","x":"abc"}`),
+		Sign:      func(string) (string, error) { return "device-sig", nil },
+	}
+	if _, err := verifySignature(srv.Client(), srv.URL, challengeMessage, "0xsig", "acme", device); err != nil {
+		t.Fatal(err)
+	}
+	if body["device_signature"] != "device-sig" {
+		t.Fatalf("device_signature = %v", body["device_signature"])
+	}
+	raw, _ := json.Marshal(body["device_key"])
+	if strings.Contains(string(raw), `"d"`) {
+		t.Fatalf("the private half was sent: %s", raw)
 	}
 }
 
@@ -141,7 +189,7 @@ func TestVerifySignature_sendsTheMessageAndNothingElse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	creds, err := verifySignature(srv.Client(), srv.URL, challengeMessage, "0xsig", "acme")
+	creds, err := verifySignature(srv.Client(), srv.URL, challengeMessage, "0xsig", "acme", nil)
 	if err != nil {
 		t.Fatalf("verifySignature: %v", err)
 	}

@@ -20,13 +20,21 @@ What is stored is a session, not a key: an access token lasting 15 minutes,
 renewed transparently from a refresh token.`,
 }
 
-var loginNamespace string
+var (
+	loginNamespace string
+	loginDeviceKey string
+)
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Sign in, here or from another machine",
+	Long: `Sign in, here or from another machine.
+
+--device-key enrolls that Ed25519 key with this sign-in. The file is a private
+JWK and stays on this machine; the gateway receives the public half and the
+device's signature over the same message the wallet signs.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return cli.AuthLogin(loginNamespace)
+		return cli.AuthLogin(loginNamespace, loginDeviceKey)
 	},
 }
 
@@ -127,6 +135,7 @@ command says so.`,
 
 func init() {
 	loginCmd.Flags().StringVar(&loginNamespace, "namespace", "", "Namespace name")
+	loginCmd.Flags().StringVar(&loginDeviceKey, "device-key", "", "Ed25519 private JWK file to enroll with this sign-in")
 
 	approveCmd.Flags().StringVar(&approveNamespace, "namespace", "",
 		"Namespace to sign in to (defaults to the one this machine is signed in to)")

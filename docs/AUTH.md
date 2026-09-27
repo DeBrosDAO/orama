@@ -186,6 +186,10 @@ client                                          gateway
   |  <-- access + refresh token, device_id --------|
 ```
 
+`orama auth login --device-key <file>` does this. The file is an Ed25519
+private JWK and stays on the machine that signs in; the request carries the
+public half.
+
 `device_key` is the public JWK; `device_id` is its RFC 7638 thumbprint, which
 the client computes before asking for the challenge (the SDK's `deviceIdOf`),
 and which the response repeats. The wallet's signature says

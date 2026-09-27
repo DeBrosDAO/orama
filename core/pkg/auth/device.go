@@ -149,7 +149,7 @@ func ApproveDeviceLogin(gatewayURL, userCode, namespace string, deny bool) (wall
 	}
 
 	client := tlsutil.NewHTTPClientForDomain(sessionHTTPTimeout, extractDomainFromURL(gatewayURL))
-	message, err := requestChallenge(client, gatewayURL, wallet, namespace)
+	message, err := requestChallenge(client, gatewayURL, wallet, namespace, "")
 	if err != nil {
 		return "", fmt.Errorf("failed to get challenge: %w", err)
 	}

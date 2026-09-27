@@ -90,7 +90,7 @@ func promptNamespace(in *bufio.Reader, out io.Writer, interactive bool) (string,
 
 // PerformRootWalletAuthentication performs a challenge-response authentication flow
 // using the RootWallet CLI to sign a gateway-issued nonce
-func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials, error) {
+func PerformRootWalletAuthentication(gatewayURL, namespace string, device *LoginDevice) (*Credentials, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("\n🔐 RootWallet Authentication")
@@ -132,7 +132,11 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 	domain := extractDomainFromURL(gatewayURL)
 	client := tlsutil.NewHTTPClientForDomain(30*time.Second, domain)
 
-	message, err := requestChallenge(client, gatewayURL, wallet, namespace)
+	deviceID := ""
+	if device != nil {
+		deviceID = device.ID
+	}
+	message, err := requestChallenge(client, gatewayURL, wallet, namespace, deviceID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get challenge: %w", err)
 	}
@@ -156,7 +160,7 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 
 	// 5. Verify signature with gateway
 	fmt.Println("⏳ Verifying signature with gateway...")
-	creds, err := verifySignature(client, gatewayURL, message, signature, namespace)
+	creds, err := verifySignature(client, gatewayURL, message, signature, namespace, device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify signature: %w", err)
 	}
@@ -182,11 +186,14 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 // requestChallenge sends POST /v1/auth/challenge and returns the nonce
 // requestChallenge asks the gateway for the sign-in message to put in front of
 // the user, and returns it verbatim.
-func requestChallenge(client *http.Client, gatewayURL, wallet, namespace string) (string, error) {
+func requestChallenge(client *http.Client, gatewayURL, wallet, namespace, deviceID string) (string, error) {
 	reqBody := map[string]string{
 		"wallet":     wallet,
 		"namespace":  namespace,
 		"chain_type": "ETH",
+	}
+	if deviceID != "" {
+		reqBody["device_id"] = deviceID
 	}
 
 	payload, err := json.Marshal(reqBody)
@@ -258,10 +265,18 @@ func acceptLoginChallenge(gatewayURL, wallet, message string, now time.Time) err
 // The message is the whole credential: the wallet, the nonce and the namespace
 // are read out of it by the gateway, because those are the fields the user saw
 // and the signature covers.
-func verifySignature(client *http.Client, gatewayURL, message, signature, namespace string) (*Credentials, error) {
-	reqBody := map[string]string{
+func verifySignature(client *http.Client, gatewayURL, message, signature, namespace string, device *LoginDevice) (*Credentials, error) {
+	reqBody := map[string]any{
 		"message":   message,
 		"signature": signature,
+	}
+	if device != nil {
+		sig, err := device.Sign(message)
+		if err != nil {
+			return nil, fmt.Errorf("sign the challenge with the device key: %w", err)
+		}
+		reqBody["device_key"] = json.RawMessage(device.PublicJWK)
+		reqBody["device_signature"] = sig
 	}
 
 	payload, err := json.Marshal(reqBody)
