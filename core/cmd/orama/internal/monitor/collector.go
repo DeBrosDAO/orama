@@ -85,7 +85,15 @@ func collectNodeReport(ctx context.Context, node inspector.Node, timeout time.Du
 		return cs
 	}
 
-	return withReport(cs, node.Host, result.Stdout)
+	cs = withReport(cs, node.Host, result.Stdout)
+	if cs.Report != nil {
+		// The node stamped its report as it began collecting, which ended
+		// just before its output came back: that moment on this clock is the
+		// return time less the collection time.
+		began := time.Now().Add(-time.Duration(cs.Report.CollectMS) * time.Millisecond)
+		cs.ClockOffsetMS, cs.ClockMeasured = cs.Report.Timestamp.Sub(began).Milliseconds(), true
+	}
+	return cs
 }
 
 // withReport parses a node's `orama node report --json` output into cs. The

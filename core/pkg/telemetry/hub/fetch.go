@@ -26,6 +26,11 @@ const InternalReportPath = "/v1/internal/telemetry"
 // clock-skew alert reports the skew itself.
 const ReportAgeHeader = "X-Orama-Report-Age-Ms"
 
+// ClockHeader carries the serving peer's clock, in Unix milliseconds, when it
+// answered. With the request's send and receive times it gives the peer's
+// clock offset, which the clock-skew alert compares.
+const ClockHeader = "X-Orama-Clock-Ms"
+
 // maxReportAge bounds the age a peer may claim for its report. Anything
 // larger is not a stale report but a broken peer, and would overflow a
 // time.Duration.
@@ -42,10 +47,13 @@ const maxReportBytes = 4 << 20
 // the two cannot be confused.
 var ErrPeerWithoutTelemetry = errors.New("runs a release that serves no telemetry")
 
-// PeerReport is a peer's report and how old it was when served.
+// PeerReport is a peer's report, how old it was when served, and the peer's
+// clock offset from this node's when the peer sent one.
 type PeerReport struct {
-	Report *report.NodeReport
-	Age    time.Duration
+	Report        *report.NodeReport
+	Age           time.Duration
+	ClockOffset   time.Duration
+	ClockMeasured bool
 }
 
 // PeerFetcher gets one peer's latest report.
@@ -78,12 +86,34 @@ func (f HTTPFetcher) Fetch(ctx context.Context, p Peer) (PeerReport, error) {
 	if err := f.Sign(req); err != nil {
 		return PeerReport{}, fmt.Errorf("sign telemetry request: %w", err)
 	}
+	sent := time.Now()
 	resp, err := f.Client.Do(req)
 	if err != nil {
 		return PeerReport{}, fmt.Errorf("gateway at %s did not answer (is its WireGuard tunnel up and orama-namespace-gateway@index running?): %w", p.WGIP, err)
 	}
+	received := time.Now()
 	defer resp.Body.Close()
-	return readPeerReport(resp, p.WGIP)
+	pr, err := readPeerReport(resp, p.WGIP)
+	if err != nil {
+		return pr, err
+	}
+	pr.ClockOffset, pr.ClockMeasured = clockOffset(resp.Header.Get(ClockHeader), sent, received)
+	return pr, nil
+}
+
+// clockOffset is the peer's clock minus this node's, from the clock the peer
+// sent in its answer. The peer read its clock somewhere between sending and
+// receiving; the midpoint bounds the error by half the round trip. The clock
+// is a side measurement, not a condition of the report: a peer that sends
+// none (0.122.109 did not) or an unreadable one leaves it unmeasured, and the
+// report still counts.
+func clockOffset(header string, sent, received time.Time) (time.Duration, bool) {
+	peerClock, err := strconv.ParseInt(header, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	mid := sent.Add(received.Sub(sent) / 2)
+	return time.UnixMilli(peerClock).Sub(mid), true
 }
 
 func readPeerReport(resp *http.Response, wgIP string) (PeerReport, error) {

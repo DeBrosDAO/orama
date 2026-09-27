@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,8 @@ func TestHTTPFetcherFetch_signedRequestAndReport(t *testing.T) {
 			return
 		}
 		w.Header().Set(ReportAgeHeader, "2500")
+		// A peer whose clock runs 30s ahead.
+		w.Header().Set(ClockHeader, strconv.FormatInt(time.Now().Add(30*time.Second).UnixMilli(), 10))
 		w.Write([]byte(`{"hostname":"n2","version":"0.200.0"}`))
 	}))
 	defer srv.Close()
@@ -37,6 +40,9 @@ func TestHTTPFetcherFetch_signedRequestAndReport(t *testing.T) {
 	}
 	if pr.Report.Hostname != "n2" || pr.Report.Version != "0.200.0" || pr.Age != 2500*time.Millisecond {
 		t.Fatalf("report = %+v age %v", pr.Report, pr.Age)
+	}
+	if off := pr.ClockOffset; !pr.ClockMeasured || off < 29*time.Second || off > 31*time.Second {
+		t.Fatalf("clock offset = %v measured=%v, want about 30s", off, pr.ClockMeasured)
 	}
 }
 
@@ -108,5 +114,33 @@ func TestFirstLine(t *testing.T) {
 	}
 	if got := firstLine(nil); got != "" {
 		t.Errorf("firstLine(nil) = %q", got)
+	}
+}
+
+// A peer on the release before the clock header answers without it: its
+// report still counts, and its clock is simply not measured.
+func TestHTTPFetcherFetch_noClockHeaderKeepsReportUnmeasured(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(ReportAgeHeader, "10")
+		w.Write([]byte(`{"hostname":"n3"}`))
+	}))
+	defer srv.Close()
+	pr, err := testFetcher(srv).Fetch(context.Background(), Peer{ID: "p", WGIP: "10.0.0.3"})
+	if err != nil || pr.Report == nil || pr.Report.Hostname != "n3" {
+		t.Fatalf("pr=%+v err=%v, want the report kept", pr, err)
+	}
+	if pr.ClockMeasured {
+		t.Fatal("a missing clock header read as a measured clock")
+	}
+}
+
+func TestClockOffset_hugeValueStaysFinite(t *testing.T) {
+	now := time.Now()
+	off, ok := clockOffset("9223372036854775807", now, now)
+	if !ok || off <= 0 {
+		t.Fatalf("offset = %v ok=%v, want a large positive offset (the skew alert reports it)", off, ok)
+	}
+	if _, ok := clockOffset("not-a-number", now, now); ok {
+		t.Fatal("garbage parsed as a clock")
 	}
 }

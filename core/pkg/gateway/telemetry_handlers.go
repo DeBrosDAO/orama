@@ -37,6 +37,7 @@ func (g *Gateway) internalTelemetryHandler(w http.ResponseWriter, r *http.Reques
 	}
 	age := hub.ReportAge(rpt, time.Now())
 	w.Header().Set(hub.ReportAgeHeader, strconv.FormatInt(age.Milliseconds(), 10))
+	w.Header().Set(hub.ClockHeader, strconv.FormatInt(time.Now().UnixMilli(), 10))
 	writeJSON(w, http.StatusOK, rpt)
 }
 

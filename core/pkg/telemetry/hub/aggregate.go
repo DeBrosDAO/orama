@@ -153,6 +153,7 @@ func (a *Aggregator) collectPeer(ctx context.Context, p Peer) cluster.Collection
 		rc := *pr.Report
 		rc.PublicIP = p.PublicIP
 		cs.Report = &rc
+		cs.ClockOffsetMS, cs.ClockMeasured = pr.ClockOffset.Milliseconds(), pr.ClockMeasured
 	}
 	return cs
 }
@@ -168,7 +169,7 @@ func (a *Aggregator) report(ctx context.Context, p Peer) (PeerReport, error) {
 	if r == nil {
 		return PeerReport{}, err
 	}
-	return PeerReport{Report: r, Age: ReportAge(r, a.now())}, err
+	return PeerReport{Report: r, Age: ReportAge(r, a.now()), ClockMeasured: true}, err
 }
 
 // ReportAge is how old r is by this node's clock, never negative.

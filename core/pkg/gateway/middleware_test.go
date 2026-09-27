@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 )
 
 func TestExtractAPIKey(t *testing.T) {
@@ -799,4 +801,36 @@ func TestExtractAPIKey_Extended(t *testing.T) {
 			t.Errorf("expected empty for JWT-like raw token, got %q", got)
 		}
 	})
+}
+
+// On the apex the platform's own pages are served by the gateway and never
+// looked up as a deployment. The deployment handlers are present but have no
+// database behind them: reaching the lookup at all would fail the test.
+func TestDomainRoutingMiddleware_apexServesPlatformPages(t *testing.T) {
+	for _, path := range []string{"/status", "/status/assets/app.js", "/health"} {
+		nextCalled := false
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
+		g := &Gateway{
+			cfg:               &Config{BaseDomain: "orama.network"},
+			deploymentService: &deploymentshandlers.DeploymentService{},
+			staticHandler:     &deploymentshandlers.StaticDeploymentHandler{},
+		}
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Host = "orama.network"
+		g.domainRoutingMiddleware(next).ServeHTTP(httptest.NewRecorder(), req)
+		if !nextCalled {
+			t.Errorf("%s on the apex did not reach the gateway's own handler", path)
+		}
+	}
+}
+
+func TestIsPlatformPage_onlyTheGatewaysOwnPages(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/status": true, "/health": true, "/status/assets/app.css": true,
+		"/": false, "/index.html": false, "/statusx": false, "/status/other": false,
+	} {
+		if got := isPlatformPage(path); got != want {
+			t.Errorf("isPlatformPage(%q) = %v, want %v", path, got, want)
+		}
+	}
 }

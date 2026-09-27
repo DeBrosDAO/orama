@@ -139,7 +139,10 @@ rule, a certificate expiring) do not change it.
 ## Public status page
 
 `https://<base-domain>/status` in a browser is the status page; `/v1/status`
-is its JSON. The page is static and embedded in the gateway
+is its JSON. On the bare base domain the gateway serves its own pages —
+`/status`, `/status/assets/`, `/health` — instead of looking for a deployment
+there (none may use the apex: a custom domain equal to the base domain is
+refused); a subdomain's `/status` is its deployment's. The page is static and embedded in the gateway
 (`pkg/gateway/statuspage`), loads only its own script and stylesheet under a
 CSP that allows nothing else, and refreshes every 10 seconds. It shows:
 
@@ -378,7 +381,7 @@ sudo orama node report --json
 | **vault** | Service state, guardian health (healthy/total, read threshold, write quorum), restarts |
 | **gateway** | Index gateway `/v1/health` status and each check's status (`checks`), build version from `/v1/version` (port 10104) |
 | **wireguard** | Interface state, WG IP, peers, handshake ages, MTU, config permissions |
-| **dns** | CoreDNS/Caddy state, port bindings, resolution tests, TLS cert expiry |
+| **dns** | `orama-namespace-coredns@nameserver` / `orama-namespace-caddy@index` state, port bindings, and — in-process, with no `dig`, `openssl` or shell — SOA, NS, apex A and wildcard A answered by the local nameserver (`127.0.0.1:53`), and the expiry of the certificates Caddy serves for the apex and for a wildcard-covered name (`127.0.0.1:443`); an expired certificate is flagged separately from one that could not be read (days `-1`) |
 | **tor** | Tor client unit state, SOCKS port bound, bootstrap % of the running process (`-1` when its journal no longer has it), Anyone-network leftovers |
 | **network** | Internet reachability, TCP stats, retransmission rate, listening ports, UFW rules |
 | **processes** | Zombie count, orphan orama processes, panic/fatal count in logs |
@@ -434,7 +437,7 @@ Alerts are derived from cross-node analysis of all collected reports (`cluster.D
 
 | Severity | Examples |
 |----------|----------|
-| **critical** | Collection failed (node unreachable), no RQLite leader, split brain, RQLite unresponsive, WireGuard interface down, WG peer never handshaked, OOM kills, service failed, UFW inactive |
+| **critical** | Expired TLS certificate, clock skew > 60s, Collection failed (node unreachable), no RQLite leader, split brain, RQLite unresponsive, WireGuard interface down, WG peer never handshaked, OOM kills, service failed, UFW inactive |
 | **warning** | Strong read failed, memory > 90%, disk > 85%, stale WG handshake (> 3min), Raft term inconsistency, applied index lag > 100, restart loop detected, TLS cert < 14 days, DNS down, namespace gateway down, Tor SOCKS port not bound or not bootstrapped, Anyone-network leftovers, clock skew > 5s, internet unreachable, high TCP retransmission |
 | **info** | Zombie processes, orphan orama processes, swap usage > 30% |
 
@@ -447,7 +450,7 @@ These checks compare data across all nodes:
 - **Raft Term Consistency**: Term values within 1 of each other
 - **Applied Index Lag**: Followers within 100 entries of the leader
 - **WireGuard Peer Symmetry**: Each node has N-1 peers
-- **Clock Skew**: Node clocks within 5 seconds of each other
+- **Clock Skew**: Node clocks within 5 seconds of each other (critical beyond 60s). The offset is measured when each report is served — the peer sends its clock (`X-Orama-Clock-Ms`) and the collector compares it with the request's midpoint — not read from report timestamps, which differ by up to the collection interval on synchronised clocks. A peer that sends no clock (0.122.109) is left unmeasured and its report still counts
 - **Binary Version**: All nodes running the same version. `orama node report` used to emit an empty `version`, so every node read as "unknown" and the alert could never fire; the version is compiled into the binary now, so it carries a real value.
 
 ### The lifecycle harness

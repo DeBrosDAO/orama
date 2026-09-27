@@ -148,3 +148,9 @@ func (g *Gateway) uptimeHistory(ctx context.Context, now time.Time) cluster.Upti
 	c.mu.Unlock()
 	return h
 }
+
+// isPlatformPage reports whether path is one of the gateway's own pages
+// outside /v1: the status page, its assets, and the liveness probe.
+func isPlatformPage(path string) bool {
+	return path == "/status" || path == "/health" || strings.HasPrefix(path, statuspage.AssetsPrefix)
+}

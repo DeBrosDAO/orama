@@ -116,7 +116,7 @@ func DeriveAlerts(snap *ClusterSnapshot) []Alert {
 	alerts = append(alerts, checkRaftTermConsistency(reports)...)
 	alerts = append(alerts, checkAppliedIndexLag(reports)...)
 	alerts = append(alerts, checkWGPeerSymmetry(reports)...)
-	alerts = append(alerts, checkClockSkew(reports)...)
+	alerts = append(alerts, checkClockSkew(snap)...)
 	alerts = append(alerts, checkBinaryVersion(reports)...)
 	alerts = append(alerts, checkOlricMemberConsistency(reports)...)
 	alerts = append(alerts, checkIPFSSwarmConsistency(reports)...)

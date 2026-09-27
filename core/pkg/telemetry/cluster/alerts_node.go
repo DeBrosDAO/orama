@@ -231,11 +231,17 @@ func checkNodeDNS(r *report.NodeReport, host string, nc *nodeContext) []Alert {
 
 	// TLS cert expiry: only meaningful on nameserver nodes that have public domains
 	if isNameserver {
-		if r.DNS.BaseTLSDaysLeft >= 0 && r.DNS.BaseTLSDaysLeft < 14 {
+		if r.DNS.BaseTLSExpired {
+			alerts = append(alerts, Alert{AlertCritical, "dns", host, "Base TLS cert has expired"})
+		}
+		if r.DNS.WildTLSExpired {
+			alerts = append(alerts, Alert{AlertCritical, "dns", host, "Wildcard TLS cert has expired"})
+		}
+		if !r.DNS.BaseTLSExpired && r.DNS.BaseTLSDaysLeft >= 0 && r.DNS.BaseTLSDaysLeft < 14 {
 			alerts = append(alerts, Alert{AlertWarning, "dns", host,
 				fmt.Sprintf("Base TLS cert expires in %d days", r.DNS.BaseTLSDaysLeft)})
 		}
-		if r.DNS.WildTLSDaysLeft >= 0 && r.DNS.WildTLSDaysLeft < 14 {
+		if !r.DNS.WildTLSExpired && r.DNS.WildTLSDaysLeft >= 0 && r.DNS.WildTLSDaysLeft < 14 {
 			alerts = append(alerts, Alert{AlertWarning, "dns", host,
 				fmt.Sprintf("Wildcard TLS cert expires in %d days", r.DNS.WildTLSDaysLeft)})
 		}

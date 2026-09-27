@@ -1352,6 +1352,15 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// The apex serves the platform's own pages — the public status page
+		// and its assets, and the liveness probe — rather than looking for a
+		// deployment on the bare domain, where none is allowed. Subdomains
+		// belong to deployments, so /status on an app's domain is the app's.
+		if host == baseDomain && isPlatformPage(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Check if deployment handlers are available
 		if g.deploymentService == nil || g.staticHandler == nil {
 			next.ServeHTTP(w, r)

@@ -33,6 +33,13 @@ type CollectionStatus struct {
 	// ReportAgeSec is how old the report was when it was collected: a node's
 	// telemetry is gathered on a timer, so this is the staleness a viewer sees.
 	ReportAgeSec int `json:"report_age_sec,omitempty"`
+	// ClockOffsetMS is the node's clock minus the collector's, measured when
+	// the report was served (to within the request's round trip). It is what
+	// the clock-skew alert compares: nodes collect on their own timers, so
+	// report timestamps differ by up to an interval on synchronised clocks.
+	ClockOffsetMS int64 `json:"clock_offset_ms,omitempty"`
+	// ClockMeasured says ClockOffsetMS was measured.
+	ClockMeasured bool `json:"clock_measured,omitempty"`
 	// Unknown means the node answered but serves no telemetry — it runs an
 	// older release, as mid-way through a rolling upgrade — so its state is
 	// not known. It counts neither for nor against any service.

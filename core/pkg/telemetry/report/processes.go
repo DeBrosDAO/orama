@@ -95,12 +95,12 @@ var managedServiceUnits = []string{
 	"orama-namespace-ipfs-cluster@index",
 	"orama-namespace-vault@index",
 	"orama-namespace-tor@index",
-	"orama-namespace-caddy@index",
+	caddyUnit,
 	"orama-namespace-wireguard@index",
 	"orama-namespace-rqlite@index",
 	"orama-namespace-gateway@index",
 	"orama-namespace-pubsub@index",
-	"orama-namespace-coredns@nameserver",
+	coreDNSUnit,
 	"rqlited",
 }
 

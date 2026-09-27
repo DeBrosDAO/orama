@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
@@ -208,5 +209,56 @@ func TestComponents_noLeaderAndANodeSilentIsNotCalledOutage(t *testing.T) {
 	snap := snapshotOf(reported("b", "node", healthyReport(report.RaftFollower)), CollectionStatus{Node: NodeRef{Host: "a"}, Err: "timeout"})
 	if got := componentByID(t, Components(snap), "database").State; got == StateOutage {
 		t.Fatal("a missing report with no leader named was called an outage; it may be a leader that did not report")
+	}
+}
+
+func TestCheckClockSkew_usesMeasuredOffsetsNotTimestamps(t *testing.T) {
+	a, b := healthyReport(report.RaftLeader), healthyReport(report.RaftFollower)
+	// Collected 9s apart on synchronised clocks: no skew.
+	a.System = &report.SystemReport{TimeUnix: 1000}
+	b.System = &report.SystemReport{TimeUnix: 1009}
+	snap := snapshotOf(
+		CollectionStatus{Node: NodeRef{Host: "a"}, Report: a, ClockMeasured: true, ClockOffsetMS: 0},
+		CollectionStatus{Node: NodeRef{Host: "b"}, Report: b, ClockMeasured: true, ClockOffsetMS: 120},
+	)
+	if alerts := checkClockSkew(snap); len(alerts) != 0 {
+		t.Fatalf("alerts = %+v: timestamps from different collection times are not clock skew", alerts)
+	}
+	snap.Nodes[1].ClockOffsetMS = 7000
+	if alerts := checkClockSkew(snap); len(alerts) != 1 {
+		t.Fatalf("a 7s measured offset raised %d alerts, want 1", len(alerts))
+	}
+}
+
+func TestCheckClockSkew_unmeasuredNodesIgnored(t *testing.T) {
+	snap := snapshotOf(reported("a", "node", healthyReport(report.RaftLeader)),
+		CollectionStatus{Node: NodeRef{Host: "b"}, Report: healthyReport(report.RaftFollower), ClockMeasured: true, ClockOffsetMS: 60000})
+	if alerts := checkClockSkew(snap); len(alerts) != 0 {
+		t.Fatalf("one measured node raised %+v; skew needs two", alerts)
+	}
+}
+
+func TestCheckClockSkew_largeSkewIsCritical(t *testing.T) {
+	snap := snapshotOf(
+		CollectionStatus{Node: NodeRef{Host: "a"}, Report: healthyReport(report.RaftLeader), ClockMeasured: true},
+		CollectionStatus{Node: NodeRef{Host: "b"}, Report: healthyReport(report.RaftFollower), ClockMeasured: true, ClockOffsetMS: 3600000},
+	)
+	if alerts := checkClockSkew(snap); len(alerts) != 1 || alerts[0].Severity != AlertCritical {
+		t.Fatalf("an hour of skew = %+v, want one critical alert", alerts)
+	}
+}
+
+func TestCheckNodeDNS_expiredCertificateIsCritical(t *testing.T) {
+	r := healthyReport(report.RaftLeader)
+	r.DNS = &report.DNSReport{CoreDNSActive: true, CaddyActive: true, BaseTLSExpired: true, WildTLSDaysLeft: 40}
+	alerts := checkNodeDNS(r, "a", &nodeContext{isNameserver: true})
+	found := false
+	for _, a := range alerts {
+		if a.Severity == AlertCritical && strings.Contains(a.Message, "expired") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("alerts = %+v, want a critical expired-certificate alert", alerts)
 	}
 }

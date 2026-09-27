@@ -71,7 +71,9 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 
 	// Check if domain is reserved (using configured base domain)
 	baseDomain := h.service.BaseDomain()
-	if strings.HasSuffix(domain, "."+baseDomain) {
+	// The apex serves the platform's own pages (the status page), and its
+	// subdomains are the platform's to hand out.
+	if domain == baseDomain || strings.HasSuffix(domain, "."+baseDomain) {
 		http.Error(w, fmt.Sprintf("Cannot use .%s domains as custom domains", baseDomain), http.StatusBadRequest)
 		return
 	}

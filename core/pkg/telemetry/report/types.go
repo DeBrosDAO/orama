@@ -236,6 +236,11 @@ type DNSReport struct {
 	BaseAResolves    bool `json:"base_a_resolves"`
 	BaseTLSDaysLeft  int  `json:"base_tls_days_left"`
 	WildTLSDaysLeft  int  `json:"wild_tls_days_left"`
+	// BaseTLSExpired and WildTLSExpired mean the certificate was read and
+	// has expired; the days-left field is then 0. -1 in it means the
+	// certificate could not be read at all.
+	BaseTLSExpired bool `json:"base_tls_expired,omitempty"`
+	WildTLSExpired bool `json:"wild_tls_expired,omitempty"`
 }
 
 // --- Tor ---

@@ -156,42 +156,43 @@ func checkWGPeerSymmetry(reports []*report.NodeReport) []Alert {
 	return alerts
 }
 
-func checkClockSkew(reports []*report.NodeReport) []Alert {
-	var times []struct {
-		host string
-		t    int64
-	}
-	for _, r := range reports {
-		if r.System != nil && r.System.TimeUnix > 0 {
-			times = append(times, struct {
-				host string
-				t    int64
-			}{nodeHost(r), r.System.TimeUnix})
+// clockSkewWarnMS is how far apart two nodes' clocks may be before it is
+// worth a warning, and clockSkewCriticalMS before tokens, TLS and raft
+// timeouts start to disagree.
+const (
+	clockSkewWarnMS     = 5000
+	clockSkewCriticalMS = 60000
+)
+
+// checkClockSkew compares the clock offsets measured when each report was
+// served — not the reports' timestamps, which differ by as much as the
+// collection interval on perfectly synchronised clocks.
+func checkClockSkew(snap *ClusterSnapshot) []Alert {
+	var minOff, maxOff int64
+	var minHost, maxHost string
+	seen := 0
+	for _, cs := range snap.Nodes {
+		if cs.Report == nil || !cs.ClockMeasured {
+			continue
 		}
+		if seen == 0 || cs.ClockOffsetMS < minOff {
+			minOff, minHost = cs.ClockOffsetMS, cs.Node.Host
+		}
+		if seen == 0 || cs.ClockOffsetMS > maxOff {
+			maxOff, maxHost = cs.ClockOffsetMS, cs.Node.Host
+		}
+		seen++
 	}
-	if len(times) < 2 {
+	delta := maxOff - minOff
+	if seen < 2 || delta <= clockSkewWarnMS {
 		return nil
 	}
-
-	var minT, maxT int64 = times[0].t, times[0].t
-	var minHost, maxHost string = times[0].host, times[0].host
-	for _, t := range times[1:] {
-		if t.t < minT {
-			minT = t.t
-			minHost = t.host
-		}
-		if t.t > maxT {
-			maxT = t.t
-			maxHost = t.host
-		}
+	severity := AlertWarning
+	if delta > clockSkewCriticalMS {
+		severity = AlertCritical
 	}
-
-	delta := maxT - minT
-	if delta > 5 {
-		return []Alert{{AlertWarning, "system", "cluster",
-			fmt.Sprintf("Clock skew: %ds between %s and %s", delta, minHost, maxHost)}}
-	}
-	return nil
+	return []Alert{{severity, "system", "cluster",
+		fmt.Sprintf("Clock skew: %.1fs between %s and %s", float64(delta)/1000, minHost, maxHost)}}
 }
 
 func checkBinaryVersion(reports []*report.NodeReport) []Alert {
