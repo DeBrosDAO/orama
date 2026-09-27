@@ -132,6 +132,7 @@ var rootFileAccessAllowed = map[string]string{
 	"pkg/install/wireguard.go (*WireGuardProvisioner) WriteConfig os.MkdirAll(wp.configDir)":                                                allowWg,
 	"pkg/install/wireguard.go (*WireGuardProvisioner) WriteConfig os.WriteFile(confPath)":                                                   allowWg,
 	"pkg/install/wireguard.go forcePrivateMode os.Chmod(path)":                                                                              allowWg,
+	"cmd/orama/internal/production/upgrade/nodeconfig.go (*Orchestrator) regenerateConfigs os.ReadFile(wireguardConfigPath)":                allowWg,
 }
 
 func TestRootRunCode_touchesOramaTreeOnlyThroughRootfs(t *testing.T) {

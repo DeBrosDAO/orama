@@ -3,6 +3,7 @@ package upgrade
 import (
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,6 +12,11 @@ import (
 	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
+
+// wireguardConfigPath is the interface config wg-quick reads. Its AllowedIPs
+// lines are the other nodes. The file also holds the private key, so nothing
+// that reads it may log the body.
+const wireguardConfigPath = "/etc/wireguard/wg0.conf"
 
 // nodeConfigPath is this node's node.yaml.
 func (o *Orchestrator) nodeConfigPath() string {
@@ -169,26 +175,50 @@ func (o *Orchestrator) regenerateConfigs() error {
 	// Olric seeds are the other nodes' memberlist addresses. Leaving them out
 	// rewrites the config with no peers, and each node then bootstraps a
 	// cluster of one. A cache write on one node is then invisible to the others.
+	// Bootstrap multiaddrs name only the join target, and genesis has none, so
+	// the WireGuard allowed IPs are the full set.
+	wg, err := os.ReadFile(wireguardConfigPath)
+	if err != nil {
+		return fmt.Errorf("read wireguard peers for the olric seed list: %w", err)
+	}
 	return o.setup.Phase4GenerateConfigs(peers, vpsIP, enableHTTPS, domain, baseDomain, joinAddress,
-		olricSeedsFromMultiaddrs(peers, vpsIP))
+		olricSeeds(peers, vpsIP, wg))
 }
 
-// olricSeedsFromMultiaddrs is the index Olric memberlist address of every
-// bootstrap peer that is not this node. The peers in node.yaml are libp2p
-// multiaddrs; Olric wants host:port.
-func olricSeedsFromMultiaddrs(peers []string, selfIP string) []string {
+// olricSeeds is the index Olric memberlist address of every other node.
+// peers are libp2p multiaddrs from node.yaml. wgConfig is wg0.conf; only its
+// AllowedIPs lines are read.
+func olricSeeds(peers []string, selfIP string, wgConfig []byte) []string {
 	seen := map[string]struct{}{}
 	var out []string
-	for _, peer := range peers {
-		ip := multiaddrIPv4(peer)
-		if ip == "" || ip == selfIP {
-			continue
+	add := func(ip string) {
+		ip = strings.TrimSpace(ip)
+		parsed := net.ParseIP(ip)
+		if parsed == nil || parsed.To4() == nil || ip == selfIP {
+			return
 		}
 		if _, ok := seen[ip]; ok {
-			continue
+			return
 		}
 		seen[ip] = struct{}{}
 		out = append(out, net.JoinHostPort(ip, strconv.Itoa(constants.OlricMemberlistPort)))
+	}
+	for _, peer := range peers {
+		add(multiaddrIPv4(peer))
+	}
+	for _, line := range strings.Split(string(wgConfig), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "AllowedIPs") {
+			continue
+		}
+		_, val, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			continue
+		}
+		for _, part := range strings.Split(val, ",") {
+			ip, _, _ := strings.Cut(strings.TrimSpace(part), "/")
+			add(ip)
+		}
 	}
 	return out
 }
