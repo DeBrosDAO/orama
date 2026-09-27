@@ -143,16 +143,21 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 		}
 		req.SetBasicAuth(user, pass)
 		resp, doErr := http.DefaultClient.Do(req)
-		cancel()
 		if doErr != nil {
+			cancel()
 			last = doErr
 			if !wait() {
 				return fmt.Errorf("verify join target %s for namespace %s: %w", verifyURL, namespace, last)
 			}
 			continue
 		}
+		// The body is read on the request's context. Canceling it here, before
+		// the body arrives, makes Decode fail with "context canceled" on a
+		// real /status, which is larger than a test fixture and still on the
+		// wire when the headers come back.
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
+			cancel()
 			return fmt.Errorf("verify join target %s for namespace %s: /status returned HTTP %d", verifyURL, namespace, resp.StatusCode)
 		}
 		var status struct {
@@ -162,6 +167,7 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 		}
 		decErr := json.NewDecoder(resp.Body).Decode(&status)
 		resp.Body.Close()
+		cancel()
 		if decErr != nil {
 			return fmt.Errorf("verify join target %s for namespace %s: decode status: %w", verifyURL, namespace, decErr)
 		}

@@ -163,6 +163,31 @@ func TestVerifyJoinTarget_waitsUntilTheStoreDirIsReported(t *testing.T) {
 	}
 }
 
+// /status is still on the wire when the headers arrive. Canceling the request
+// before the body is read fails the decode, and the join is abandoned.
+func TestVerifyJoinTarget_readsTheBodyBeforeCancelingTheRequest(t *testing.T) {
+	dir := "/opt/orama/.orama/data/namespaces/anchat-v2/rqlite/12D3KooWGpb1p"
+	srv := httptest.NewServer(requireRQLiteAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		time.Sleep(80 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"store":{"dir":"` + dir + `"}}`))
+	})))
+	t.Cleanup(srv.Close)
+	s := credentialedSpawner(t)
+
+	if err := s.verifyJoinTarget(context.Background(), "anchat-v2", srv.URL); err != nil {
+		t.Fatalf("the status body was not read: %v", err)
+	}
+}
+
 // An empty directory through the whole deadline is "not ready", not a claim
 // that this raft group belongs to somebody else.
 func TestVerifyJoinTarget_emptyDirIsNotAForeignNamespace(t *testing.T) {
