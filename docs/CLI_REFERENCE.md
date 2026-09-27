@@ -1511,6 +1511,8 @@ Repair an under-provisioned namespace cluster
 orama namespace repair <namespace>
 ```
 
+Repair an under-provisioned namespace cluster. Run it on a node. It talks to that node's gateway on the node's WireGuard address; localhost is where public traffic arrives, so a repair sent there is refused.
+
 ### orama namespace rqlite
 
 Manage the namespace's internal RQLite database

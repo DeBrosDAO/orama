@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
 )
 
 // nsRequestTimeout bounds one namespace API call.
@@ -281,13 +283,20 @@ func NamespaceKeysRevokeLegacy(ns string, force bool) error {
 
 // NamespaceRepair repairs an under-provisioned namespace cluster.
 //
-// This one talks to the node's own gateway over loopback with the internal
-// auth header, not to the operator's gateway, so it must be run on a node.
+// This one talks to the node's own gateway on its WireGuard address, not to
+// the operator's gateway and not to localhost, so it must be run on a node.
 func NamespaceRepair(namespaceName string) error {
 	fmt.Printf("Repairing namespace cluster '%s'...\n", namespaceName)
 
-	url := fmt.Sprintf("http://localhost:%d/v1/internal/namespace/repair?namespace=%s",
-		constants.GatewayAPIPort, namespaceName)
+	// Localhost is where Caddy delivers every public request, so the gateway
+	// does not treat it as inside the cluster. The node's own WireGuard
+	// address is the listener that coordination is checked on.
+	host, err := nodeWireGuardIP()
+	if err != nil {
+		return clierr.Failure("%w", err)
+	}
+	url := fmt.Sprintf("http://%s:%d/v1/internal/namespace/repair?namespace=%s",
+		host, constants.GatewayAPIPort, namespaceName)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		return clierr.Failure("failed to build the repair request: %w", err)
@@ -661,14 +670,44 @@ func NamespaceCreate(name string) error {
 	return nil
 }
 
-// clusterSecretPath is where a node keeps the cluster secret. The commands that
-// talk to a node's own gateway over loopback run on that node, so it is here.
+// clusterSecretPath is where a node keeps the cluster secret. Repair runs on
+// that node, including under sudo, so the path is the install tree and not
+// the home directory of whoever invoked it.
 func clusterSecretPath() string {
-	home, err := os.UserHomeDir()
+	return filepath.Join(oramainstall.OramaSecrets, "cluster-secret")
+}
+
+// nodeWireGuardIP is this node's overlay address, from the advertise address
+// recorded in node.yaml. Coordination is refused when it arrives on localhost.
+func nodeWireGuardIP() (string, error) {
+	data, err := os.ReadFile(filepath.Join(oramainstall.OramaConfigs, "node.yaml"))
 	if err != nil {
-		home = "/root"
+		return "", fmt.Errorf("this command runs on a node: %w", err)
 	}
-	return filepath.Join(home, ".orama", "secrets", "cluster-secret")
+	return wireGuardIPFromNodeConfig(data)
+}
+
+// wireGuardIPFromNodeConfig reads the overlay address a node advertises to
+// the rest of the cluster.
+func wireGuardIPFromNodeConfig(data []byte) (string, error) {
+	for _, key := range []string{"http_adv_address:", "raft_adv_address:"} {
+		for _, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, key) {
+				continue
+			}
+			val := strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, key)), `"'`)
+			host, _, err := net.SplitHostPort(val)
+			if err != nil || net.ParseIP(host) == nil {
+				continue
+			}
+			if host == "localhost" || host == "127.0.0.1" {
+				continue
+			}
+			return host, nil
+		}
+	}
+	return "", fmt.Errorf("node.yaml has no WireGuard advertise address")
 }
 
 // signCoordinationRequest stamps a node-to-node coordination request.

@@ -38,7 +38,10 @@ var listCmd = &cobra.Command{
 var repairCmd = &cobra.Command{
 	Use:   "repair <namespace>",
 	Short: "Repair an under-provisioned namespace cluster",
-	Args:  cobra.ExactArgs(1),
+	Long: "Repair an under-provisioned namespace cluster. Run it on a node. " +
+		"It talks to that node's gateway on the node's WireGuard address; " +
+		"localhost is where public traffic arrives, so a repair sent there is refused.",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cli.NamespaceRepair(args[0])
 	},
