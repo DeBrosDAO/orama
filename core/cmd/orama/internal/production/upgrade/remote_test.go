@@ -23,6 +23,26 @@ func decodeUpgrade(t *testing.T, cmd string) string {
 	return string(script)
 }
 
+// The command is a shell pipeline. Decoding the script in the test and never
+// running the pipeline is how the decode step went missing: the node received
+// the base64 as a program and reported command not found.
+func TestUpgradeCommand_bashReceivesTheScript(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("base64"); err != nil {
+		t.Skip("base64 not available")
+	}
+	out, err := exec.Command("bash", "-c", upgradeCommand("", &Flags{})).CombinedOutput()
+	text := string(out)
+	if strings.Contains(text, "command not found") {
+		t.Fatalf("bash executed the encoded script: %s", text)
+	}
+	if err == nil || !strings.Contains(text, "refusing to upgrade") {
+		t.Fatalf("the guard did not run: err=%v out=%s", err, text)
+	}
+}
+
 // The rolling upgrade runs the staged build's CLI, so the whole upgrade —
 // the hand-over and the stop included — is the new release's code.
 func TestUpgradeCommand_runsTheStagedCLI(t *testing.T) {

@@ -146,7 +146,9 @@ var nodeStagedPaths = stagedPaths{
 // run as root. The script travels base64-encoded into `bash -s`.
 func upgradeCommand(sudo string, flags *Flags) string {
 	script := upgradeScript(nodeStagedPaths, upgradeArgs(flags))
-	return "printf %s " + base64.StdEncoding.EncodeToString([]byte(script)) + " | " + sudo + "bash -s"
+	// The shell has to decode it. Piping the encoded text to bash runs the
+	// base64 itself as a command, and the node never starts the upgrade.
+	return "printf %s " + base64.StdEncoding.EncodeToString([]byte(script)) + " | base64 -d | " + sudo + "bash -s"
 }
 
 // upgradeArgs are the arguments after the CLI.
