@@ -1,0 +1,124 @@
+syntax = "proto3";
+package orama.emission.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/emission/types";
+
+import "gogoproto/gogo.proto";
+
+// Params are the genesis-only parameters of x/emission. They are set once at
+// genesis and are immutable afterward: there is no Msg service on this
+// module, so no transaction can ever change them (see D18 in
+// plans/open-network.md: the emission schedule is ossified and can change
+// only by hard fork).
+message Params {
+  // epoch_duration_seconds is the minimum amount of BFT time, in seconds,
+  // that must have elapsed since the current epoch started before the epoch
+  // can close. Must be in (0, 31,536,000] (365 days). Unless
+  // allow_bootstrap_stake is set, must additionally be >= 86,400 (24h): see
+  // allow_bootstrap_stake below.
+  int64 epoch_duration_seconds = 1;
+  // min_blocks_per_epoch is the minimum number of blocks that must have been
+  // produced since the current epoch started before the epoch can close.
+  // Must be in (0, 1e9]. Unless allow_bootstrap_stake is set, must
+  // additionally be >= 14,400: see allow_bootstrap_stake below.
+  uint64 min_blocks_per_epoch = 2;
+  // allow_bootstrap_stake permits a non-production genesis (devnet, stagenet
+  // or localnet chain IDs only - enforced in Keeper.InitGenesis, not here,
+  // since chain ID is not part of Params) to start with a nonzero norama
+  // supply, standing in for the not-yet-built C4 bootstrap-committee module.
+  // It defaults to false: a normal (including mainnet) genesis must start at
+  // exactly zero supply, and InitGenesis rejects any other genesis state.
+  //
+  // When false, min_blocks_per_epoch and epoch_duration_seconds have the
+  // higher production floors above. The 14,400-block / 24h floor is what
+  // makes the block count, not the timestamp, the binding brake on how fast
+  // an epoch can close: a coalition with less than 2/3 of voting power
+  // cannot force 14,400 blocks in under 24h by lying about block timestamps
+  // alone (CometBFT requires >1/3 of voting power to sign each block, and a
+  // block's timestamp cannot precede its predecessor's), so shortening the
+  // epoch requires either genuinely fast, honest block production or a
+  // supermajority equivocation - see docs/CHAIN.md.
+  bool allow_bootstrap_stake = 3;
+}
+
+// EpochState is the mutable bookkeeping state x/emission updates every block.
+message EpochState {
+  // current_epoch is the number of the epoch currently in progress. It is
+  // 1-based: current_epoch == 1 immediately after genesis, and increases by
+  // exactly one every time an epoch closes, regardless of how much wall-clock
+  // time that closure took (missed epochs are never caught up).
+  uint64 current_epoch = 1;
+  // epoch_start_unix_nano is the BFT time, in Unix nanoseconds, at which the
+  // current epoch started.
+  int64 epoch_start_unix_nano = 2;
+  // blocks_in_epoch is the number of blocks produced since the current epoch
+  // started, incremented once per BeginBlock and reset to zero when the
+  // epoch closes. It is a relative counter, not an absolute block height, so
+  // it stays meaningful across a chain export/re-import at a fresh height
+  // (plans/open-network/track-c-chain.md C3's closing rule needs "blocks
+  // since the epoch started", not "which absolute height that was").
+  uint64 blocks_in_epoch = 3;
+  // cumulative_minted is the all-time total of norama minted by x/emission.
+  // Only the validator/delegator share is ever minted by this module; the
+  // storage, relay and development shares are ceilings recorded in
+  // CeilingRecord but never minted here.
+  string cumulative_minted = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // cumulative_burned is the all-time total of norama known to have been
+  // burned (e.g. by x/slashing's double-sign/downtime burns from the bonded
+  // and not-bonded pools). x/emission has no burn path of its own; it learns
+  // about burns elsewhere in the chain by reconciling bank supply against
+  // genesis_supply + cumulative_minted at the end of every block (see
+  // Keeper.ReconcileBurns) and attributing any shortfall to this field.
+  string cumulative_burned = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // genesis_supply is the norama bank supply observed the moment this chain incarnation's
+  // genesis ran, before x/emission minted anything. It is always zero on a normal genesis; it is
+  // non-zero only under the devnet-only bootstrap-stake exception (plans/open-network.md D16 and
+  // point 4 of this module's task spec), where genesis accounts self-delegate stake before the
+  // C4 bootstrap-committee module exists. The supply invariant is
+  // supply == genesis_supply + cumulative_minted - cumulative_burned.
+  string genesis_supply = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// CeilingRecord is the non-minted record of one closed epoch's storage,
+// relay and development ceilings, kept so a future module (x/storage,
+// x/relay, x/houses development spends) can claim them within their
+// settlement window. x/emission itself never mints against these fields; it
+// only keeps a bounded trailing window of records (see Params) and prunes
+// older ones.
+message CeilingRecord {
+  uint64 epoch = 1;
+  // storage_ceiling is the unminted maximum available to storage-subsidy and
+  // protocol-deal claims for this epoch.
+  string storage_ceiling = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // relay_ceiling is the unminted maximum available to relay-reward claims
+  // for this epoch.
+  string relay_ceiling = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // development_ceiling is the unminted maximum available to an approved
+  // development spend for this epoch.
+  string development_ceiling = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // validator_minted is the amount actually minted to the fee collector for
+  // this epoch (the validator/delegator share, including any remainder from
+  // integer division of the other shares).
+  string validator_minted = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}

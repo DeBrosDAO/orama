@@ -1,0 +1,5 @@
+# Build artifacts
+/build/
+
+# Localnet chain data and generated keys/genesis (scripts/localnet/localnet.sh)
+/scripts/localnet/.localnet/
