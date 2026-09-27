@@ -204,8 +204,15 @@ func (c *AdminClient) Backup(ctx context.Context) ([]byte, error) {
 }
 
 // TransferLeadership asks this node to hand leadership to id.
+//
+// rqlite 8 reads the target from a JSON body. A query parameter is ignored,
+// so a POST with an empty body steps down to whichever voter raft picks.
 func (c *AdminClient) TransferLeadership(ctx context.Context, id string) error {
-	_, err := c.do(ctx, http.MethodPost, "/leader?id="+id, nil, adminChangeTimeout)
+	payload, err := json.Marshal(map[string]string{"id": id})
+	if err != nil {
+		return fmt.Errorf("encode leadership transfer: %w", err)
+	}
+	_, err = c.do(ctx, http.MethodPost, "/leader", payload, adminChangeTimeout)
 	return err
 }
 

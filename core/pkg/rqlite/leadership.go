@@ -1,13 +1,15 @@
 package rqlite
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"go.uber.org/zap"
 )
 
@@ -72,23 +74,26 @@ func TransferLeadership(ep Endpoint, logger *zap.Logger) error {
 // Every failure used to be logged and swallowed, so a caller could not tell a
 // completed handover from a leader that never moved — and the one caller that
 // mattered, the pre-upgrade step, printed a warning and restarted the leader
-// anyway. A 404 is the exception: it means the rqlite build has no
-// transfer-leadership API, which is a capability gap rather than a failure, and
-// the caller falls back to SIGTERM step-down.
+// anyway. A 404 is the exception: it means this rqlite build has no /leader
+// step-down, which is a capability gap rather than a failure, and the
+// caller falls back to SIGTERM step-down.
 //
 // This keeps its own request rather than going through AdminClient because it
-// needs the raw status code: a 404 means the rqlite build has no
-// transfer-leadership API, which is a capability gap the caller handles by
-// falling back to SIGTERM step-down, and AdminClient collapses every non-2xx
-// into one error.
+// needs the raw status code. AdminClient collapses every non-2xx into one
+// error. rqlite 8 steps down on POST /leader, and the target id is a JSON
+// body. The query string is ignored, and POST /nodes/<id>/transfer-leadership
+// is not that route: /nodes is GET-only and answers 405.
 func TransferLeadershipTo(ep Endpoint, targetID string, logger *zap.Logger) error {
 	client := tlsutil.NewHTTPClient(5 * time.Second)
 
 	logger.Info("Attempting Raft leadership transfer",
 		zap.Stringer("rqlite", ep), zap.String("target", targetID))
 
-	transferURL := fmt.Sprintf("%s/nodes/%s/transfer-leadership", ep.BaseURL(), targetID)
-	req, err := http.NewRequest(http.MethodPost, transferURL, nil)
+	body, err := json.Marshal(map[string]string{"id": targetID})
+	if err != nil {
+		return fmt.Errorf("encode leadership transfer: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, ep.BaseURL()+"/leader", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build leadership transfer request: %w", err)
 	}

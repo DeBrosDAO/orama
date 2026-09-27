@@ -1060,9 +1060,9 @@ in-flight writes, so a failed handover stops the upgrade rather than warning
 about it.
 
 The handover is confirmed against `/status` — the POST only *starts* it, and
-raft still has to elect the target. A build whose rqlite has no
-`transfer-leadership` API is tolerated: the node falls back to SIGTERM
-step-down.
+raft still has to elect the target. rqlite 8 takes `POST /leader` with a JSON
+body `{"id":"<raft id>"}`. A build that answers 404 for that route has no
+step-down API and is tolerated: the node falls back to SIGTERM step-down.
 
 Tenant namespace handovers stay advisory. Losing a namespace leader degrades
 that namespace, not the node's ability to restart safely. Finding them is not:

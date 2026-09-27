@@ -42,9 +42,21 @@ func newFakeRQLite(t *testing.T, state string, nodes []map[string]any) *fakeRQLi
 	mux.HandleFunc("/nodes", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"nodes": f.nodes})
 	})
+	// /nodes is GET-only on rqlite 8. The old transfer path lands here and
+	// is refused; a client that still uses it must not count as a handover.
 	mux.HandleFunc("/nodes/", func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/transfer-leadership") {
-			w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+	mux.HandleFunc("/leader", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" {
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		f.transfers.Add(1)
