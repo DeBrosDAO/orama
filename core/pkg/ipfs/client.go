@@ -292,8 +292,7 @@ func (c *Client) addViaKubo(ctx context.Context, data []byte, name string) (*Add
 	}
 
 	dec := json.NewDecoder(resp.Body)
-	var last ipfsDaemonAddResponse
-	var hasResult bool
+	var entries []ipfsDaemonAddResponse
 	for {
 		var chunk ipfsDaemonAddResponse
 		if err := dec.Decode(&chunk); err != nil {
@@ -302,13 +301,35 @@ func (c *Client) addViaKubo(ctx context.Context, data []byte, name string) (*Add
 			}
 			return nil, fmt.Errorf("failed to decode add response: %w", err)
 		}
-		last = chunk
-		hasResult = true
+		entries = append(entries, chunk)
 	}
-	if !hasResult || last.Hash == "" {
-		return nil, fmt.Errorf("add response missing CID")
+	cid, err := fileCIDFromAdd(entries, name)
+	if err != nil {
+		return nil, err
 	}
-	return &AddResponse{Name: last.Name, Cid: last.Hash}, nil
+	return &AddResponse{Name: name, Cid: cid}, nil
+}
+
+// fileCIDFromAdd is the CID of the file that was imported.
+//
+// A name with a slash (proof/build.txt) makes Kubo return one object per
+// directory and then the file. The last object is the directory, and cat of
+// a directory fails. The file is the object whose name is the path we sent.
+func fileCIDFromAdd(entries []ipfsDaemonAddResponse, name string) (string, error) {
+	var last string
+	for _, entry := range entries {
+		if entry.Hash == "" {
+			continue
+		}
+		last = entry.Hash
+		if name != "" && entry.Name == name {
+			return entry.Hash, nil
+		}
+	}
+	if last == "" {
+		return "", fmt.Errorf("add response missing CID")
+	}
+	return last, nil
 }
 
 // AddDirectory adds all files in a directory to IPFS and returns the root directory CID

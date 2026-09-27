@@ -174,6 +174,37 @@ func TestClient_Add(t *testing.T) {
 		}
 	})
 
+	t.Run("a_path_returns_the_file_not_the_directory", func(t *testing.T) {
+		const fileCID = "QmFile"
+		const dirCID = "QmDir"
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v0/add" {
+				enc := json.NewEncoder(w)
+				_ = enc.Encode(ipfsDaemonAddResponse{Name: "proof/build.txt", Hash: fileCID})
+				_ = enc.Encode(ipfsDaemonAddResponse{Name: "proof", Hash: dirCID})
+				return
+			}
+			if r.URL.Path == "/pins/"+fileCID {
+				fmtJSON(w, PinResponse{Cid: fileCID})
+				return
+			}
+			if r.URL.Path == "/pins/"+dirCID {
+				t.Error("pinned the directory instead of the file")
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		client := newTestClient(t, logger, server.URL)
+		resp, err := client.Add(context.Background(), strings.NewReader("hello"), "proof/build.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Cid != fileCID {
+			t.Fatalf("cid = %s, want the file %s", resp.Cid, fileCID)
+		}
+	})
+
 	t.Run("pin_error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/v0/add" {
