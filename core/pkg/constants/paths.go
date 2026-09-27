@@ -13,6 +13,11 @@ import "path/filepath"
 // namespace spawner, the systemd templates, orama-node's legacy-layout migration
 // and the node report all have to agree on them exactly.
 const (
+	// ProductionOramaDir is a node's orama directory. install.OramaDir is
+	// this value; it lives here too so a package the gateway imports (the
+	// node report) can name it without importing the installer.
+	ProductionOramaDir = "/opt/orama/.orama"
+
 	// IndexNamespace is the host/cluster gateway's instance name
 	// (orama-namespace-gateway@index) and its client_namespace.
 	IndexNamespace = "index"

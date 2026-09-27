@@ -90,6 +90,9 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(policyOpen,
 		"/health", "/status",
 		"/v1/health", "/v1/status", "/v1/version",
+		// The status page's script and stylesheet: static files, the same
+		// for everyone. Its data is /v1/status.
+		"/status/assets/",
 		// The key material a client needs to verify a token it was given.
 		"/v1/auth/jwks", "/.well-known/jwks.json",
 		// The login handshake. Nobody has a credential yet, which is the point.
@@ -121,6 +124,10 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/internal/join", "/v1/node/enroll",
 		// Cluster secret in the handler.
 		"/v1/internal/wg/peer", "/v1/internal/wg/peers", "/v1/internal/wg/peer/remove",
+		// A node's health report, for a peer's cluster gateway: a
+		// coordination MAC over the request plus a WireGuard-peer source
+		// check, in the handler (internalTelemetryHandler).
+		"/v1/internal/telemetry",
 		// A MAC over the request, keyed by a value derived from the cluster
 		// secret, naming the node the claim is about. The handler acts on that
 		// name and never on the body's. Declared MainGateway below: `dns_nodes`
@@ -206,6 +213,14 @@ func buildRoutePolicies() *routepolicy.Table {
 	// every other secret the cluster holds — so this is the one place that
 	// still asks for everything, because that is what it gives.
 	t.Add(control(auth.DomainOperator, auth.ActionRead), "/v1/node/status", "/v1/node/logs", "/v1/operator/health")
+
+	// The whole cluster's health, one-shot and streamed: every node's report,
+	// addresses and versions included, so it is an operator's. The handlers
+	// also check the operator list. MainGateway: the snapshot is assembled by
+	// the cluster gateway, which holds the node registry.
+	clusterTelemetry := control(auth.DomainOperator, auth.ActionRead)
+	clusterTelemetry.MainGateway = true
+	t.Add(clusterTelemetry, "/v1/operator/telemetry", "/v1/operator/telemetry/stream")
 
 	// This node's peers, its peer ids and its storage peers' addresses: a map
 	// of the cluster. They were open to anyone. Another node's discovery asks

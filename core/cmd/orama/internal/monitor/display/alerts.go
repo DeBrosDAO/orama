@@ -3,62 +3,66 @@ package display
 import (
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/view"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 )
 
-// AlertsTable prints alerts sorted by severity to w.
-func AlertsTable(snap *monitor.ClusterSnapshot, w io.Writer) error {
-	critCount, warnCount := countAlerts(snap.Alerts)
-
-	fmt.Fprintf(w, "%s\n", styleBold.Render(
-		fmt.Sprintf("Alerts \u2014 %s (%d critical, %d warning)",
-			snap.Environment, critCount, warnCount)))
-	fmt.Fprintln(w, strings.Repeat("\u2550", 44))
-	fmt.Fprintln(w)
-
-	if len(snap.Alerts) == 0 {
-		fmt.Fprintln(w, styleGreen.Render("  No alerts"))
-		return nil
+// AlertsTable prints every distinct alert, most severe first, each critical
+// and warning one with what to do next.
+func AlertsTable(snap *cluster.ClusterSnapshot, w io.Writer) error {
+	t := view.ThemeFor(w)
+	var b strings.Builder
+	writeHeader(&b, t, snap, "Alerts")
+	rows := view.PrepareAlerts(snap.Alerts, view.FilterAll)
+	if len(rows) == 0 {
+		fmt.Fprintf(&b, "%s%s\n", tableIndent, t.OK.Render("No alerts"))
+		return flush(w, &b)
 	}
-
-	// Sort by severity: critical first, then warning, then info
-	sorted := make([]monitor.Alert, len(snap.Alerts))
-	copy(sorted, snap.Alerts)
-	sort.Slice(sorted, func(i, j int) bool {
-		return severityRank(sorted[i].Severity) < severityRank(sorted[j].Severity)
-	})
-
-	for _, a := range sorted {
-		tag := severityTag(a.Severity)
-		node := a.Node
-		if node == "" {
-			node = "cluster"
-		}
-		fmt.Fprintf(w, "%s %-18s %-12s %s\n",
-			tag, node, a.Subsystem, a.Message)
-	}
-
-	return nil
+	b.WriteString(AlertLines(t, rows, snap.Environment, len(rows)))
+	return flush(w, &b)
 }
 
-// AlertsJSON writes alerts as JSON.
-func AlertsJSON(snap *monitor.ClusterSnapshot, w io.Writer) error {
+// AlertsJSON writes the alerts as JSON, as derived: not deduped or filtered.
+func AlertsJSON(snap *cluster.ClusterSnapshot, w io.Writer) error {
 	return writeJSON(w, snap.Alerts)
 }
 
-// severityRank returns a sort rank for severity (lower = higher priority).
-func severityRank(s monitor.AlertSeverity) int {
-	switch s {
-	case monitor.AlertCritical:
-		return 0
-	case monitor.AlertWarning:
-		return 1
-	case monitor.AlertInfo:
-		return 2
-	default:
-		return 3
+// AlertLines renders up to limit alerts, each critical and warning one with
+// its hint, and how many more there are.
+func AlertLines(t view.Theme, rows []view.AlertRow, env string, limit int) string {
+	var b strings.Builder
+	for i, r := range rows {
+		if i == limit {
+			fmt.Fprintf(&b, "%s%s\n", tableIndent, t.Muted.Render(
+				fmt.Sprintf("… %d more: orama monitor alerts --env %s", len(rows)-limit, env)))
+			break
+		}
+		fmt.Fprintf(&b, "%s%s %s %s %s\n", tableIndent,
+			t.Severity(r.Severity).Render(view.SeverityTag(r.Severity)),
+			view.PadRight(r.Subsystem, subsystemWidth),
+			view.PadRight(view.NodeLabel(r.Alert), hostWidth),
+			alertMessage(r))
+		if r.Severity == cluster.AlertInfo {
+			continue
+		}
+		if hint := view.Hint(r.Alert, env); hint != "" {
+			fmt.Fprintf(&b, "%s     %s\n", tableIndent, t.Muted.Render("→ "+hint))
+		}
 	}
+	return b.String()
+}
+
+// Column widths for alert lines.
+const (
+	subsystemWidth = 10
+	hostWidth      = 16
+)
+
+func alertMessage(r view.AlertRow) string {
+	if r.Count > 1 {
+		return fmt.Sprintf("%s (×%d)", r.Message, r.Count)
+	}
+	return r.Message
 }

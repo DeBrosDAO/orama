@@ -3,6 +3,7 @@ package checks
 import (
 	"fmt"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -44,12 +45,13 @@ func checkOlricPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	}
 
 	// 2.7 Memberlist port accepting connections
+	memberlistName := fmt.Sprintf("Memberlist port %d listening", constants.OlricMemberlistPort)
 	if ol.MemberlistUp {
-		r = append(r, inspector.Pass("olric.memberlist_port", "Memberlist port 3322 listening", olricSub, node,
-			"TCP 3322 is bound", inspector.Critical))
+		r = append(r, inspector.Pass("olric.memberlist_port", memberlistName, olricSub, node,
+			fmt.Sprintf("TCP %d is bound", constants.OlricMemberlistPort), inspector.Critical))
 	} else {
-		r = append(r, inspector.Fail("olric.memberlist_port", "Memberlist port 3322 listening", olricSub, node,
-			"TCP 3322 is not listening", inspector.Critical))
+		r = append(r, inspector.Fail("olric.memberlist_port", memberlistName, olricSub, node,
+			fmt.Sprintf("TCP %d is not listening", constants.OlricMemberlistPort), inspector.Critical))
 	}
 
 	// 2.3 Restart count

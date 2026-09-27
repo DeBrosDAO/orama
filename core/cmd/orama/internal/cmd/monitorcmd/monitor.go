@@ -1,199 +1,138 @@
+// Package monitorcmd provides `orama monitor`: the cluster's health from
+// the operator's machine, live or one view at a time.
 package monitorcmd
 
 import (
-	"context"
+	"fmt"
+	"io"
 	"os"
-	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/display"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/tui"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
-	"github.com/spf13/cobra"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 )
 
 // Cmd is the root monitor command.
 var Cmd = &cobra.Command{
 	Use:   "monitor",
 	Short: "Monitor cluster health from your local machine",
-	Long: `SSH into cluster nodes and display real-time health data.
-Runs 'orama node report --json' on each node and aggregates results.
+	Long: `Show the cluster's health: a live view, or one aspect at a time.
 
-Without a subcommand, launches the interactive TUI.`,
+The data comes from the gateway's operator telemetry API
+(GET /v1/operator/telemetry, and its server-sent event stream for the live
+view), authenticated with the credentials 'orama auth login' stored for the
+environment's gateway. Only the cluster's operators may read it.
+
+--ssh is the break-glass path for when no gateway answers: it SSHes into every
+node and runs 'sudo orama node report --json' there instead. It is never chosen
+automatically; when the API fails the error says so and suggests it. Traffic is
+counted by the gateways, so it is empty over --ssh.
+
+Without a subcommand, opens the live view. Every view starts with the verdict:
+"✓ All systems operational" or what is degraded, with the alert counts and the
+age of the data. Live view keys: tab/shift+tab or 1-9 switch tabs, ↑/↓ (j/k)
+select or scroll, enter opens a node's full report on the Nodes tab, esc goes
+back, c/w/i/a filter the Alerts tab by severity, r refreshes, ? shows help,
+q quits.`,
 	RunE: runLive,
 }
 
-// Shared persistent flags.
-// --json is a persistent flag on the root, so it is not defined here.
+// Flags. --json is a persistent flag on the root, so it is not defined here.
 var (
-	flagEnv    string
-	flagNode   string
-	flagConfig string
+	flagEnv      string
+	flagNode     string
+	flagConfig   string
+	flagSSH      bool
+	flagInterval = monitor.DefaultInterval
 )
+
+var intervalUsage = fmt.Sprintf("How often the live view refreshes, %.0fs to %.0fs (with --ssh: at least %.0fs, which is also its default)",
+	monitor.MinAPIInterval.Seconds(), monitor.MaxAPIInterval.Seconds(), monitor.MinSSHInterval.Seconds())
 
 func init() {
 	Cmd.PersistentFlags().StringVar(&flagEnv, "env", "", "Environment: devnet, testnet, mainnet (required)")
-	Cmd.PersistentFlags().StringVar(&flagNode, "node", "", "Filter to specific node host/IP")
-	Cmd.PersistentFlags().StringVar(&flagConfig, "config", "", "Read nodes from this file instead of resolving them")
+	Cmd.PersistentFlags().StringVar(&flagNode, "node", "", "Show only this node (public IP or WireGuard IP)")
+	Cmd.PersistentFlags().BoolVar(&flagSSH, "ssh", false, "Collect over SSH from every node instead of the gateway API (break-glass)")
+	Cmd.PersistentFlags().StringVar(&flagConfig, "config", "", "With --ssh: read nodes from this file instead of resolving them")
 	Cmd.MarkPersistentFlagRequired("env")
+	Cmd.Flags().DurationVar(&flagInterval, "interval", monitor.DefaultInterval, intervalUsage)
+	liveCmd.Flags().DurationVar(&flagInterval, "interval", monitor.DefaultInterval, intervalUsage)
 
 	Cmd.AddCommand(liveCmd)
-	Cmd.AddCommand(clusterCmd)
-	Cmd.AddCommand(nodeCmd)
-	Cmd.AddCommand(serviceCmd)
-	Cmd.AddCommand(meshCmd)
-	Cmd.AddCommand(dnsCmd)
-	Cmd.AddCommand(namespacesCmd)
-	Cmd.AddCommand(alertsCmd)
-	Cmd.AddCommand(reportCmd)
-}
-
-// ---------------------------------------------------------------------------
-// Subcommands
-// ---------------------------------------------------------------------------
-
-var liveCmd = &cobra.Command{
-	Use:   "live",
-	Short: "Interactive TUI monitor",
-	RunE:  runLive,
-}
-
-var clusterCmd = &cobra.Command{
-	Use:   "cluster",
-	Short: "Cluster overview (one-shot)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		snap, err := collectSnapshot()
-		if err != nil {
-			return err
-		}
-		if printer.For(cmd).JSONMode() {
-			return display.ClusterJSON(snap, os.Stdout)
-		}
-		return display.ClusterTable(snap, os.Stdout)
-	},
-}
-
-var nodeCmd = &cobra.Command{
-	Use:   "node",
-	Short: "Per-node health details (one-shot)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		snap, err := collectSnapshot()
-		if err != nil {
-			return err
-		}
-		if printer.For(cmd).JSONMode() {
-			return display.NodeJSON(snap, os.Stdout)
-		}
-		return display.NodeTable(snap, os.Stdout)
-	},
-}
-
-var serviceCmd = &cobra.Command{
-	Use:   "service",
-	Short: "Service status across the cluster (one-shot)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		snap, err := collectSnapshot()
-		if err != nil {
-			return err
-		}
-		if printer.For(cmd).JSONMode() {
-			return display.ServiceJSON(snap, os.Stdout)
-		}
-		return display.ServiceTable(snap, os.Stdout)
-	},
-}
-
-var meshCmd = &cobra.Command{
-	Use:   "mesh",
-	Short: "Mesh connectivity status (one-shot)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		snap, err := collectSnapshot()
-		if err != nil {
-			return err
-		}
-		if printer.For(cmd).JSONMode() {
-			return display.MeshJSON(snap, os.Stdout)
-		}
-		return display.MeshTable(snap, os.Stdout)
-	},
-}
-
-var dnsCmd = &cobra.Command{
-	Use:   "dns",
-	Short: "DNS health overview (one-shot)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		snap, err := collectSnapshot()
-		if err != nil {
-			return err
-		}
-		if printer.For(cmd).JSONMode() {
-			return display.DNSJSON(snap, os.Stdout)
-		}
-		return display.DNSTable(snap, os.Stdout)
-	},
-}
-
-var namespacesCmd = &cobra.Command{
-	Use:   "namespaces",
-	Short: "Namespace usage summary (one-shot)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		snap, err := collectSnapshot()
-		if err != nil {
-			return err
-		}
-		if printer.For(cmd).JSONMode() {
-			return display.NamespacesJSON(snap, os.Stdout)
-		}
-		return display.NamespacesTable(snap, os.Stdout)
-	},
-}
-
-var alertsCmd = &cobra.Command{
-	Use:   "alerts",
-	Short: "Active alerts and warnings (one-shot)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		snap, err := collectSnapshot()
-		if err != nil {
-			return err
-		}
-		if printer.For(cmd).JSONMode() {
-			return display.AlertsJSON(snap, os.Stdout)
-		}
-		return display.AlertsTable(snap, os.Stdout)
-	},
-}
-
-var reportCmd = &cobra.Command{
-	Use:   "report",
-	Short: "Full cluster report (JSON)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		snap, err := collectSnapshot()
-		if err != nil {
-			return err
-		}
-		return display.FullReport(snap, os.Stdout)
-	},
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-func collectSnapshot() (*monitor.ClusterSnapshot, error) {
-	cfg := newConfig()
-	return monitor.CollectOnce(context.Background(), cfg)
-}
-
-func newConfig() monitor.CollectorConfig {
-	return monitor.CollectorConfig{
-		ConfigPath: flagConfig,
-		Env:        flagEnv,
-		NodeFilter: flagNode,
-		Timeout:    30 * time.Second,
+	for _, v := range oneShots {
+		Cmd.AddCommand(newOneShotCmd(v))
 	}
 }
 
+var liveCmd = &cobra.Command{
+	Use:   "live",
+	Short: "Interactive live view (the default)",
+	RunE:  runLive,
+}
+
+// oneShot is a subcommand that reads one snapshot and prints one view of it.
+type oneShot struct {
+	use, short string
+	table      func(*cluster.ClusterSnapshot, io.Writer) error
+	json       func(*cluster.ClusterSnapshot, io.Writer) error
+}
+
+var oneShots = []oneShot{
+	{"cluster", "Verdict, components and a row per node (one-shot)", display.ClusterTable, display.ClusterJSON},
+	{"node", "Per-node health details (one-shot)", display.NodeTable, display.NodeJSON},
+	{"service", "Service status across the cluster (one-shot)", display.ServiceTable, display.ServiceJSON},
+	{"mesh", "WireGuard mesh connectivity (one-shot)", display.MeshTable, display.MeshJSON},
+	{"dns", "DNS and TLS health of the nameservers (one-shot)", display.DNSTable, display.DNSJSON},
+	{"namespaces", "Namespace health across nodes (one-shot)", display.NamespacesTable, display.NamespacesJSON},
+	{"alerts", "Alerts, most severe first, with what to do (one-shot)", display.AlertsTable, display.AlertsJSON},
+	{"traffic", "Gateway requests, errors and latency (one-shot)", display.TrafficTable, display.TrafficJSON},
+	{"chain", "Orama L1 height, sync and validators (one-shot)", display.ChainTable, display.ChainJSON},
+	{"report", "Full cluster report as JSON (one-shot)", display.FullReport, display.FullReport},
+}
+
+func newOneShotCmd(v oneShot) *cobra.Command {
+	return &cobra.Command{
+		Use:   v.use,
+		Short: v.short,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			src, err := newSource()
+			if err != nil {
+				return err
+			}
+			snap, err := src.Snapshot(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if printer.For(cmd).JSONMode() {
+				return v.json(snap, os.Stdout)
+			}
+			return v.table(snap, os.Stdout)
+		},
+	}
+}
+
+func newSource() (monitor.Source, error) {
+	return monitor.NewSource(monitor.Options{
+		Env:        flagEnv,
+		Node:       flagNode,
+		ConfigPath: flagConfig,
+		SSH:        flagSSH,
+		SSHTimeout: monitor.DefaultSSHTimeout,
+	})
+}
+
 func runLive(cmd *cobra.Command, args []string) error {
-	cfg := newConfig()
-	return tui.Run(cfg)
+	interval, err := monitor.ResolveInterval(flagInterval, cmd.Flags().Changed("interval"), flagSSH)
+	if err != nil {
+		return err
+	}
+	src, err := newSource()
+	if err != nil {
+		return err
+	}
+	return tui.Run(tui.Config{Source: src, Env: flagEnv, Interval: interval})
 }

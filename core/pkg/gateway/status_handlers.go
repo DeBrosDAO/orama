@@ -298,18 +298,6 @@ func (g *Gateway) pingHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
-// statusHandler serves the unauthenticated /status and /v1/status: that the
-// gateway is up, and since when. It used to embed the network status — this
-// node's peer id, its peers, its IPFS and IPFS Cluster peer ids and swarm
-// addresses — which is a map of the cluster for anyone who asks. That is at
-// /v1/network/status now, for operators and for nodes (networkStatusHandler).
-func (g *Gateway) statusHandler(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"server": g.serverInfo(),
-	})
-}
-
 // versionHandler returns gateway build/runtime information
 func (g *Gateway) versionHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{

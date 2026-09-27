@@ -13,14 +13,22 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 )
 
-// httpClient is the shared HTTP client for API calls.
-var httpClient = &http.Client{Timeout: 10 * time.Second}
+// resolverTimeout bounds one node-list request.
+const resolverTimeout = 10 * time.Second
+
+// httpClient is the shared HTTP client for API calls. It follows no redirect:
+// the request carries an operator bearer, which Go would forward on a redirect
+// to a subdomain (a tenant's app) or to plain http.
+var httpClient = &http.Client{
+	Timeout:       resolverTimeout,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
 
 // ResolveNodes returns the operator's nodes for a given environment.
 // It first tries the network API (GET /v1/operator/nodes), then falls
@@ -50,13 +58,13 @@ func ResolveNodesNetworkOnly(env string) ([]inspector.Node, error) {
 // resolveFromNetwork queries the gateway API for operator-owned nodes.
 func resolveFromNetwork(env string) ([]inspector.Node, error) {
 	// 1. Get gateway URL for the environment
-	gatewayURL, err := gatewayURLForEnv(env)
+	gatewayURL, err := GatewayURLForEnv(env)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve gateway URL: %w", err)
 	}
 
 	// 2. Load stored credentials for this gateway
-	token, err := loadBearer(gatewayURL)
+	token, err := LoadBearer(gatewayURL)
 	if err != nil {
 		return nil, fmt.Errorf("no credentials for %s: %w (run 'orama auth login' first)", gatewayURL, err)
 	}
@@ -142,9 +150,9 @@ func NewNode(host, user, env string) inspector.Node {
 	}
 }
 
-// gatewayURLForEnv returns the gateway URL for a given environment name.
+// GatewayURLForEnv returns the gateway URL for a given environment name.
 // If env is empty, uses the active environment.
-func gatewayURLForEnv(env string) (string, error) {
+func GatewayURLForEnv(env string) (string, error) {
 	if env == "" {
 		e, err := cli.GetActiveEnvironment()
 		if err != nil {
@@ -160,9 +168,10 @@ func gatewayURLForEnv(env string) (string, error) {
 	return e.GatewayURL, nil
 }
 
-// loadBearer returns a short-lived credential for a gateway, renewing the
-// stored session if it has to.
-func loadBearer(gatewayURL string) (string, error) {
+// LoadBearer returns a short-lived credential for a gateway, renewing the
+// stored session if it has to. Every operator API call the CLI makes — node
+// resolution here, `orama monitor`'s telemetry — authenticates this way.
+func LoadBearer(gatewayURL string) (string, error) {
 	store, err := auth.LoadEnhancedCredentials()
 	if err != nil {
 		return "", fmt.Errorf("failed to load credentials: %w", err)

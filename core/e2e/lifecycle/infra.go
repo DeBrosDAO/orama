@@ -155,10 +155,10 @@ func WireGuardIPOf(t *testing.T, c *Cluster, host string) string {
 	}
 	for _, n := range r.Nodes {
 		if n.Host == host {
-			if n.Report.WireGuardIP == "" {
+			if n.Report == nil || n.Report.WGIP == "" {
 				t.Fatalf("%s reports no WireGuard IP", host)
 			}
-			return n.Report.WireGuardIP
+			return n.Report.WGIP
 		}
 	}
 	t.Fatalf("%s is not in the monitor report", host)

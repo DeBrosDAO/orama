@@ -31,10 +31,11 @@ unit test read, so a shape change on either side fails without a cluster.
 |-------|-------|-------|
 | `/.well-known/jwks.json` | direct | JWKS for verifying gateway-issued JWTs. Read by other services, not by an application. |
 | `/health` | SDK | `network.health()`. Open: the overall status and each check's status, nothing else. The detail — latencies, errors, the namespaces hosted here and their ports — is `/v1/operator/health`. |
-| `/status` | direct | Open: that the gateway is up and since when. It no longer embeds the network status (peer ids and addresses); that is `/v1/network/status`, for operators. |
+| `/status` | direct | Open. A browser (`Accept: text/html`) gets the public status page; anything else gets the same JSON as `/v1/status`. |
+| `/status/assets/` | direct | Open. The status page's script and stylesheet, served under a CSP that allows nothing else. |
 | `/v1/health` | direct | Same as `/health`, kept for older callers. |
 | `/v1/schema-status` | CLI | Migration state, polled during provisioning. |
-| `/v1/status` | direct | Same as `/status`, kept for older callers. |
+| `/v1/status` | direct | Open: `status` and `server` (up since when), and on a cluster gateway the public view of the network — overall state and headline, node counts, each service's state and 90-day daily uptime, the chain's height, block time and validator shares, and network request rate, error rate and p95. No node address, peer id, hostname or error text (`cluster.PublicStatus`). Cached 5s. Per-node detail is `/v1/operator/telemetry`; peer ids and addresses are `/v1/network/status`, for operators. |
 | `/v1/version` | CLI | Build version. `orama version` and the upgrade checks read it. |
 
 ### Authentication
@@ -233,6 +234,8 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/operator/rotate-secrets` | CLI | Rewrite stored ciphertext onto `enc:v1:<id>:`. `--rotate` generates a new encryption root first. Admin grant **and** operator list. `orama operator rotate-secrets`. |
 | `/v1/operator/nodes` | CLI | Fleet inventory. |
 | `/v1/operator/health` | direct | The full health report `/v1/health` summarises: each check's latency and error, and the health of every namespace hosted on this node with its ports. Operator grant **and** the operator list. |
+| `/v1/operator/telemetry` | CLI | `orama monitor`. The whole cluster: every node's health report and the alerts derived from them (`cluster.ClusterSnapshot`), assembled by this cluster gateway from its peers over the mesh and cached 5s. Operator grant **and** the operator list. |
+| `/v1/operator/telemetry/stream` | CLI | `orama monitor` live view. Server-sent events: `event: snapshot` with the snapshot as one JSON line every `?interval=` seconds (2–60, default 5), `event: error` when none could be assembled, `: keepalive` comments. Ends after 100s; the client reconnects. Same authorization as `/v1/operator/telemetry`. |
 
 ### Internal (node to node)
 
@@ -253,6 +256,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/internal/node/register` | internal | From the node's own process over loopback, stamped with the key that node enrolled. Refused from off the host. |
 | `/v1/internal/ping` | internal | Node-to-node over the WireGuard overlay. Answers `{"status":"ok"}` and nothing else. |
 | `/v1/internal/storage/evict` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
+| `/v1/internal/telemetry` | internal | A peer's cluster gateway asking for this node's latest health report. Coordination MAC + overlay source; anything else is 404. |
 | `/v1/internal/tls/check` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/wg/peer` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/wg/peer/remove` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |

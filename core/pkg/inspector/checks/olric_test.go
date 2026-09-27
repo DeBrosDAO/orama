@@ -1,8 +1,11 @@
 package checks
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -145,5 +148,23 @@ func TestCheckOlric_NilData(t *testing.T) {
 	results := CheckOlric(data)
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for nil Olric data, got %d", len(results))
+	}
+}
+
+// The collector probes the memberlist on constants.OlricMemberlistPort; the
+// check used to tell the operator to look at 3322, a port nothing listens on.
+func TestCheckOlric_memberlistNamesTheRealPort(t *testing.T) {
+	for _, up := range []bool{true, false} {
+		nd := makeNodeData("1.1.1.1", "node")
+		nd.Olric = &inspector.OlricData{ServiceActive: true, MemberlistUp: up}
+		results := CheckOlric(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+		c := findCheck(results, "olric.memberlist_port")
+		if c == nil {
+			t.Fatal("no memberlist check")
+		}
+		port := strconv.Itoa(constants.OlricMemberlistPort)
+		if !strings.Contains(c.Name, port) || !strings.Contains(c.Message, port) || strings.Contains(c.Message, "3322") {
+			t.Errorf("up=%v: name %q, message %q; want port %s", up, c.Name, c.Message, port)
+		}
 	}
 }

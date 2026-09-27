@@ -619,6 +619,10 @@ func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 	//
 	// The scope gate (bugboard #148) runs after ownership so it only ever
 	// tightens an already-authorized request; it never authorizes on its own.
+	//
+	// The traffic attribution step sits directly inside auth, the first point
+	// that knows the request's namespace, and notes it for loggingMiddleware's
+	// request metrics (see traffic.go).
 	return g.internalAuthMiddleware(
 		g.routePolicyMiddleware(
 			g.loggingMiddleware(
@@ -629,9 +633,10 @@ func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 								g.domainRoutingMiddleware(
 									g.clusterServerlessRoutingMiddleware(
 										g.authMiddleware(
-											g.authorizationMiddleware(
-												g.scopeMiddleware(
-													g.namespaceRateLimitMiddleware(next)))))))))))))
+											g.trafficAttributionMiddleware(
+												g.authorizationMiddleware(
+													g.scopeMiddleware(
+														g.namespaceRateLimitMiddleware(next))))))))))))))
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses
@@ -655,8 +660,10 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		srw := &statusResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		r, attribution := withTrafficAttribution(r)
 		next.ServeHTTP(srw, r)
 		dur := time.Since(start)
+		g.recordTraffic(r, attribution, srw.status, srw.bytes, dur)
 		g.logger.ComponentInfo(logging.ComponentGeneral, "request",
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
@@ -1364,6 +1371,7 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Inject deployment context
+		markTrafficNamespace(r, deployment.Namespace)
 		ctx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, deployment.Namespace)
 		ctx = context.WithValue(ctx, "deployment", deployment)
 
@@ -1410,6 +1418,7 @@ func (g *Gateway) namespaceProxyAuthFor(r *http.Request) namespaceProxyAuth {
 // to namespaceName and forwards the rest to that namespace's gateway, carrying
 // the validated identity in signed internal-auth headers.
 func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request, namespaceName string, a namespaceProxyAuth) {
+	markTrafficNamespace(r, namespaceName)
 	validatedNamespace, validatedClaims, validatedScopes, authErr := a.namespace, a.claims, a.scopes, a.errMsg
 	isWS := isWebSocketUpgrade(r)
 	isPublic := g.policyFor(r).Access.Anonymous()

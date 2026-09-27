@@ -78,6 +78,9 @@ var protectedTables = map[string]string{
 	// The record of who was given what and when. A record its own subject can
 	// delete is not a record.
 	"audit_events": "the audit trail",
+	// What the public status page says the network's uptime was. A row a
+	// tenant could write is a published record anyone could falsify.
+	"status_uptime_hourly": "the public uptime record",
 
 	// Platform limits. Writing these lifts the caller's own ceilings.
 	"namespace_quotas":            "storage and resource quotas",

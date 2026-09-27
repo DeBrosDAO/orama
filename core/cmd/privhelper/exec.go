@@ -84,6 +84,8 @@ func execute(inv privhelper.Invocation, input []byte) privhelper.Response {
 		return unitEnv(inv.Args, input)
 	case privhelper.ToolGatewayKey:
 		return gatewayKey(inv.Args, input)
+	case privhelper.ToolNodeReport:
+		return nodeReport(collectNodeReport)
 	default:
 		return failure(fmt.Errorf("no executor for %s", inv.Tool))
 	}

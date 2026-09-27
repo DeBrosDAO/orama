@@ -86,7 +86,7 @@ func Bearer(gatewayURL string, store *EnhancedCredentialStore, creds *Credential
 		return creds.AccessToken, nil
 	}
 
-	client := tlsutil.NewHTTPClientForDomain(sessionHTTPTimeout, extractDomainFromURL(gatewayURL))
+	client := sessionClient(gatewayURL)
 
 	if strings.TrimSpace(creds.RefreshToken) != "" {
 		session, err := refreshSession(client, gatewayURL, creds.RefreshToken, creds.Namespace)
@@ -116,6 +116,16 @@ func Bearer(gatewayURL string, store *EnhancedCredentialStore, creds *Credential
 	creds.SetSession(session.AccessToken, session.RefreshToken, session.ExpiresIn)
 	persistSession(store)
 	return creds.AccessToken, nil
+}
+
+// sessionClient is the client for a refresh or a key exchange. It follows no
+// redirect: each request carries a refresh token or an API key, and Go
+// forwards the Authorization header on a redirect to a subdomain (a tenant's
+// app) or to plain http. A 3xx is returned as the unexpected answer it is.
+func sessionClient(gatewayURL string) *http.Client {
+	client := tlsutil.NewHTTPClientForDomain(sessionHTTPTimeout, extractDomainFromURL(gatewayURL))
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return client
 }
 
 // persistSession writes the rotated session back.
@@ -220,7 +230,7 @@ func BearerFromEnv(gatewayURL, credential string) (string, error) {
 		return credential, nil
 	}
 
-	client := tlsutil.NewHTTPClientForDomain(sessionHTTPTimeout, extractDomainFromURL(gatewayURL))
+	client := sessionClient(gatewayURL)
 	session, err := exchangeKey(client, gatewayURL, credential)
 	if err != nil {
 		return "", fmt.Errorf("%s could not be exchanged for a session: %w", TokenEnvVar, err)

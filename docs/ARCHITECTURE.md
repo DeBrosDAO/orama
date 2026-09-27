@@ -1228,14 +1228,26 @@ so a distributed grind against one victim is not capped by a per-address limit.
 
 ### Health Checks
 
-- `/health` - Liveness probe
-- `/v1/status` - Detailed status with service checks
+- `/health` - Liveness probe: this gateway's subsystem checks, status only
+- `/v1/status` - The public view of the whole network: each service's state and
+  90-day uptime, node counts, chain progress, network traffic; no node named.
+  `/status` in a browser is the status page built on it
+- `/v1/operator/telemetry` (and `/stream`) - Every node's full health report and
+  the derived alerts, for operators; what `orama monitor` reads
+
+Each cluster gateway collects its own node's report every 10s through the
+privileged helper and assembles the cluster view from its peers' reports over
+the mesh; see "Cluster telemetry on the gateway" in [MONITORING.md](MONITORING.md).
 
 ### Metrics
 
 There is no Prometheus-compatible metrics endpoint yet. Observability today comes
 from the health/status endpoints above, structured logs, and the `orama monitor`
-and `orama inspect` CLI commands.
+and `orama inspect` CLI commands. Each gateway also keeps live request metrics
+in memory — requests, rps, 4xx/5xx and error rate, p50/p95/p99 latency, and the
+busiest namespaces over a rolling 60-second window (`pkg/telemetry/traffic`,
+read with `Gateway.TrafficSnapshot()`); see "Request metrics" in
+[MONITORING.md](MONITORING.md).
 
 ### Logging
 

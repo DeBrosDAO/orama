@@ -8,9 +8,9 @@ import (
 )
 
 func TestGatewayURLForEnv_knownEnv(t *testing.T) {
-	url, err := gatewayURLForEnv("devnet")
+	url, err := GatewayURLForEnv("devnet")
 	if err != nil {
-		t.Fatalf("gatewayURLForEnv(devnet): %v", err)
+		t.Fatalf("GatewayURLForEnv(devnet): %v", err)
 	}
 	if url == "" {
 		t.Error("expected non-empty gateway URL for devnet")
@@ -18,7 +18,7 @@ func TestGatewayURLForEnv_knownEnv(t *testing.T) {
 }
 
 func TestGatewayURLForEnv_unknownEnv(t *testing.T) {
-	_, err := gatewayURLForEnv("nonexistent")
+	_, err := GatewayURLForEnv("nonexistent")
 	if err == nil {
 		t.Error("expected error for unknown environment")
 	}
@@ -154,5 +154,23 @@ func TestResolveFromMockServer_serverDown(t *testing.T) {
 	_, err := resolveFromNetworkWithURL("http://127.0.0.1:1", "key", "devnet")
 	if err == nil {
 		t.Error("expected error for unreachable server")
+	}
+}
+
+// The operator bearer must not follow a redirect off the gateway.
+func TestResolveFromNetworkWithURL_doesNotFollowRedirects(t *testing.T) {
+	followed := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		followed = true
+	}))
+	defer target.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/steal", http.StatusFound)
+	}))
+	defer server.Close()
+
+	_, err := resolveFromNetworkWithURL(server.URL, "test-token", "devnet")
+	if err == nil || followed {
+		t.Fatalf("the redirect was followed (%v) or not reported: %v", followed, err)
 	}
 }

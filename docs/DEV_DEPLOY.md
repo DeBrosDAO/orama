@@ -81,6 +81,12 @@ operator runs, and could pass while the CLI reported something different.
 ORAMA_LIFECYCLE_ENV=<disposable-env> make test-lifecycle
 ```
 
+`orama monitor report` reads the gateway's operator telemetry API, so the
+machine running the harness needs an operator session for that environment
+(`orama env use <env>`, then `orama auth login`). The reports it returns are a
+few seconds old (the gateway gathers each node's telemetry every 10s and caches
+a snapshot for 5s); `Converged` refuses a node whose report is older than 30s.
+
 **Never point it at testnet or mainnet.** These scenarios reboot nodes and
 destroy VMs; the harness refuses those two names outright.
 
@@ -1075,7 +1081,9 @@ layout) fails the step instead of being skipped.
 
 #### `orama node report`
 
-Outputs comprehensive health data as JSON. Used by `orama monitor` over SSH:
+Outputs comprehensive health data as JSON. The gateways gather it from every
+node for `orama monitor`'s telemetry API; `orama monitor --ssh` runs it on each
+node directly:
 
 ```bash
 sudo orama node report --json

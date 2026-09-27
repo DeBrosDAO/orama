@@ -9,6 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/statuspage"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/hub"
+
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
@@ -303,11 +306,19 @@ func retryReason(err error) ReadinessReason {
 // requires keep writing to that schema, which is the exact corruption
 // ReadinessBlocked exists to prevent.
 //
-// Everything listed here answers from config or process state alone.
+// Everything listed here only reads: from config, process state, or — for
+// /status and /v1/status — the cluster registry, where a registry that cannot
+// answer yields "status unknown" rather than a write to a schema it does not
+// match. The status page's static assets go with the page, and a peer's
+// request for this node's health report is answered from memory; a node that
+// is starting is exactly the one whose report says why.
 func readinessPassthrough(p string) bool {
 	switch p {
 	case "/health", "/v1/health", "/status", "/v1/status", "/v1/version",
-		"/v1/internal/ping", "/v1/internal/tls/check":
+		"/v1/internal/ping", "/v1/internal/tls/check", hub.InternalReportPath:
+		return true
+	}
+	if strings.HasPrefix(p, statuspage.AssetsPrefix) {
 		return true
 	}
 	// Caddy's HTTP-01 challenge: a gateway that cannot serve must still be

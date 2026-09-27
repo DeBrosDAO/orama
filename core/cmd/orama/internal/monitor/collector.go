@@ -7,24 +7,31 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/report"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/sandbox"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
+
+// nodeReportCommand is what --ssh runs on every node.
+const nodeReportCommand = "sudo orama node report --json"
+
+// maxSSHOutputChars bounds how much of a node's output an error quotes.
+const maxSSHOutputChars = 200
 
 // CollectorConfig holds configuration for the collection pipeline.
 type CollectorConfig struct {
 	ConfigPath string
 	Env        string
-	NodeFilter string
 	Timeout    time.Duration
 }
 
 // CollectOnce runs `sudo orama node report --json` on all matching nodes
 // in parallel and returns a ClusterSnapshot.
-func CollectOnce(ctx context.Context, cfg CollectorConfig) (*ClusterSnapshot, error) {
+func CollectOnce(ctx context.Context, cfg CollectorConfig) (*cluster.ClusterSnapshot, error) {
 	nodes, cleanup, err := loadNodes(cfg)
 	if err != nil {
 		return nil, err
@@ -33,14 +40,14 @@ func CollectOnce(ctx context.Context, cfg CollectorConfig) (*ClusterSnapshot, er
 
 	timeout := cfg.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = DefaultSSHTimeout
 	}
 
 	start := time.Now()
-	snap := &ClusterSnapshot{
+	snap := &cluster.ClusterSnapshot{
 		Environment: cfg.Env,
 		CollectedAt: start,
-		Nodes:       make([]CollectionStatus, len(nodes)),
+		Nodes:       make([]cluster.CollectionStatus, len(nodes)),
 	}
 
 	var wg sync.WaitGroup
@@ -53,55 +60,50 @@ func CollectOnce(ctx context.Context, cfg CollectorConfig) (*ClusterSnapshot, er
 	}
 	wg.Wait()
 
-	snap.Duration = time.Since(start)
-	snap.Alerts = DeriveAlerts(snap)
+	snap.DurationMS = time.Since(start).Milliseconds()
+	snap.Alerts = cluster.DeriveAlerts(snap)
 
 	return snap, nil
 }
 
 // collectNodeReport SSHes into a single node and parses the JSON report.
-func collectNodeReport(ctx context.Context, node inspector.Node, timeout time.Duration) CollectionStatus {
+func collectNodeReport(ctx context.Context, node inspector.Node, timeout time.Duration) cluster.CollectionStatus {
 	nodeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	start := time.Now()
-	result := inspector.RunSSH(nodeCtx, node, "sudo orama node report --json")
+	result := inspector.RunSSH(nodeCtx, node, nodeReportCommand)
 
-	cs := CollectionStatus{
-		Node:     node,
-		Duration: time.Since(start),
-		Retries:  result.Retries,
+	cs := cluster.CollectionStatus{
+		Node:       cluster.NodeRef{Host: node.Host, Role: node.Role},
+		DurationMS: time.Since(start).Milliseconds(),
+		Retries:    result.Retries,
 	}
 
 	if !result.OK() {
-		cs.Error = fmt.Errorf("SSH failed (exit %d): %s", result.ExitCode, truncate(result.Stderr, 200))
+		cs.Err = fmt.Sprintf("SSH failed (exit %d): %s", result.ExitCode, truncate(result.Stderr, maxSSHOutputChars))
 		return cs
 	}
 
-	var rpt report.NodeReport
-	if err := json.Unmarshal([]byte(result.Stdout), &rpt); err != nil {
-		cs.Error = fmt.Errorf("parse report JSON: %w (first 200 bytes: %s)", err, truncate(result.Stdout, 200))
-		return cs
-	}
-
-	// Enrich with node metadata from nodes.conf
-	if rpt.Hostname == "" {
-		rpt.Hostname = node.Host
-	}
-	rpt.PublicIP = node.Host
-
-	cs.Report = &rpt
-	return cs
+	return withReport(cs, node.Host, result.Stdout)
 }
 
-func filterByHost(nodes []inspector.Node, host string) []inspector.Node {
-	var filtered []inspector.Node
-	for _, n := range nodes {
-		if n.Host == host {
-			filtered = append(filtered, n)
-		}
+// withReport parses a node's `orama node report --json` output into cs. The
+// node's public address is the one it was reached at; its overlay address is
+// the one it reports, so --node can name it either way.
+func withReport(cs cluster.CollectionStatus, host, stdout string) cluster.CollectionStatus {
+	var rpt report.NodeReport
+	if err := json.Unmarshal([]byte(stdout), &rpt); err != nil {
+		cs.Err = fmt.Sprintf("parse report JSON: %v (first %d bytes: %s)", err, maxSSHOutputChars, truncate(stdout, maxSSHOutputChars))
+		return cs
 	}
-	return filtered
+	if rpt.Hostname == "" {
+		rpt.Hostname = host
+	}
+	rpt.PublicIP = host
+	cs.Node.WGIP = rpt.WGIP
+	cs.Report = &rpt
+	return cs
 }
 
 func truncate(s string, maxLen int) string {
@@ -135,15 +137,12 @@ func loadNodes(cfg CollectorConfig) ([]inspector.Node, func(), error) {
 	} else {
 		nodes, err = inspector.LoadNodes(cfg.ConfigPath)
 		if err != nil {
-			return nil, noop, fmt.Errorf("load nodes: %w", err)
+			return nil, noop, clierr.Wrap(clierr.CodeUsage, fmt.Errorf("load nodes from --config %s: %w", cfg.ConfigPath, err))
 		}
 		nodes = inspector.FilterByEnv(nodes, cfg.Env)
 	}
-	if cfg.NodeFilter != "" {
-		nodes = filterByHost(nodes, cfg.NodeFilter)
-	}
 	if len(nodes) == 0 {
-		return nil, noop, fmt.Errorf("no nodes found for env %q", cfg.Env)
+		return nil, noop, clierr.NotFound("no nodes found for env %q", cfg.Env)
 	}
 
 	cleanup, err := remotessh.PrepareNodeKeys(nodes)
@@ -159,23 +158,20 @@ func loadSandboxNodes(cfg CollectorConfig) ([]inspector.Node, func(), error) {
 
 	sbxCfg, err := sandbox.LoadConfig()
 	if err != nil {
-		return nil, noop, fmt.Errorf("load sandbox config: %w", err)
+		return nil, noop, clierr.Wrap(clierr.CodeUsage, fmt.Errorf("load sandbox config: %w", err))
 	}
 
 	state, err := sandbox.FindActiveSandbox()
 	if err != nil {
-		return nil, noop, fmt.Errorf("find active sandbox: %w", err)
+		return nil, noop, clierr.Wrap(clierr.CodeUsage, fmt.Errorf("find active sandbox: %w", err))
 	}
 	if state == nil {
-		return nil, noop, fmt.Errorf("no active sandbox found")
+		return nil, noop, clierr.NotFound("no active sandbox found (start one with `orama sandbox create`)")
 	}
 
 	nodes := state.ToNodes(sbxCfg.SSHKey.VaultTarget)
-	if cfg.NodeFilter != "" {
-		nodes = filterByHost(nodes, cfg.NodeFilter)
-	}
 	if len(nodes) == 0 {
-		return nil, noop, fmt.Errorf("no nodes found for sandbox %q", state.Name)
+		return nil, noop, clierr.NotFound("no nodes found for sandbox %q", state.Name)
 	}
 
 	cleanup, err := remotessh.PrepareNodeKeys(nodes)

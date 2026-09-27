@@ -1,7 +1,7 @@
 package node
 
 import (
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/report"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 	"github.com/DeBrosOfficial/network/pkg/version"
 	"github.com/spf13/cobra"
 )

@@ -5,20 +5,20 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 )
 
 // StatusTable prints the one-line-per-node health summary behind `orama status`.
 // It is the shortest view of a snapshot: which nodes are serving, and why the
 // rest are not. ClusterTable is the same collection rendered with the numbers.
-func StatusTable(snap *monitor.ClusterSnapshot, w io.Writer) error {
+func StatusTable(snap *cluster.ClusterSnapshot, w io.Writer) error {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(tw, "IP\tROLE\tSTATUS\tDETAILS\n")
 
 	healthy := 0
 	for _, cs := range snap.Nodes {
 		health := cs.Health()
-		if health == monitor.HealthHealthy {
+		if health == cluster.HealthHealthy {
 			healthy++
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", cs.Node.Host, cs.Node.Role, health, cs.Detail())
@@ -32,7 +32,7 @@ func StatusTable(snap *monitor.ClusterSnapshot, w io.Writer) error {
 }
 
 // StatusJSON writes the same summary as machine-readable JSON.
-func StatusJSON(snap *monitor.ClusterSnapshot, w io.Writer) error {
+func StatusJSON(snap *cluster.ClusterSnapshot, w io.Writer) error {
 	type entry struct {
 		Host   string `json:"host"`
 		Role   string `json:"role"`

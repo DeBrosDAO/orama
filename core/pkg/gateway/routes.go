@@ -3,6 +3,8 @@ package gateway
 import (
 	"net/http"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/statuspage"
+
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
@@ -20,6 +22,15 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/health", g.healthHandler)
 	mux.HandleFunc("/v1/version", g.versionHandler)
 	mux.HandleFunc("/v1/status", g.statusHandler)
+	// The status page's script and stylesheet (statuspage).
+	mux.Handle("/status/assets/", statuspage.Assets()) // statuspage.AssetsPrefix
+
+	// Cluster monitoring (telemetry.go): a peer's cluster gateway asking for
+	// this node's report over the mesh, and the operator's view of the whole
+	// cluster, one-shot and streamed.
+	mux.HandleFunc("/v1/internal/telemetry", g.internalTelemetryHandler) // hub.InternalReportPath
+	mux.HandleFunc("/v1/operator/telemetry", g.operatorTelemetryHandler)
+	mux.HandleFunc("/v1/operator/telemetry/stream", g.operatorTelemetryStreamHandler)
 	// Schema-version contract (bug #214 audit follow-up): tenants can
 	// self-check whether their gateway's required schema is applied.
 	mux.HandleFunc("/v1/schema-status", g.handleSchemaStatus)

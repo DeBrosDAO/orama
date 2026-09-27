@@ -49,6 +49,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/traffic"
 	"github.com/DeBrosOfficial/network/pkg/turn"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
@@ -175,6 +176,17 @@ type Gateway struct {
 
 	// Request log batcher (aggregates writes instead of per-request inserts)
 	logBatcher *requestLogBatcher
+
+	// traffic is the live, in-memory request metrics loggingMiddleware
+	// records into and TrafficSnapshot reports (see traffic.go).
+	traffic *traffic.Recorder
+
+	// telemetry is the cluster monitoring state (telemetry.go): this node's
+	// own report, the snapshot assembled from its peers', and uptime history.
+	// Nil on a namespace gateway, which does not monitor the cluster.
+	telemetry *telemetryService
+	// publicCache holds the public status view (public_status.go).
+	publicCache publicStatusCache
 
 	// Rate limiters
 	rateLimiter *RateLimiter
@@ -574,6 +586,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 
 	// Initialize request log batcher (flush every 5 seconds)
 	gw.logBatcher = newRequestLogBatcher(gw, 5*time.Second, 100)
+	gw.traffic = traffic.New(time.Now)
 
 	// Initialize rate limiters.
 	//
@@ -955,6 +968,16 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			}
 		}()
 		logger.ComponentInfo(logging.ComponentGeneral, "Node health monitor started",
+			zap.String("node_id", cfg.NodePeerID))
+	}
+
+	// Cluster monitoring: this node's own health report on a timer, the
+	// snapshot assembled from its peers', and uptime history. Cluster gateway
+	// only, for the same reason as the ring monitor above: the node list is in
+	// the cluster registry.
+	if cfg.NodePeerID != "" && deps.SQLDB != nil && !isNamespaceGateway(cfg) {
+		gw.startTelemetry()
+		logger.ComponentInfo(logging.ComponentGeneral, "Cluster telemetry started",
 			zap.String("node_id", cfg.NodePeerID))
 	}
 

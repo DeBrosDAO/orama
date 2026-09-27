@@ -1,6 +1,7 @@
 package privhelper
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,13 +20,19 @@ import (
 // `orama-privhelper call`, which hands the request to the root helper over
 // its socket; no privilege is gained in the calling process.
 func Command(tool string, args ...string) *exec.Cmd {
+	return CommandContext(context.Background(), tool, args...)
+}
+
+// CommandContext is Command bound to ctx: cancelling ctx kills the process
+// (exec.CommandContext).
+func CommandContext(ctx context.Context, tool string, args ...string) *exec.Cmd {
 	if os.Geteuid() == 0 {
 		if tool == ToolSystemctl || tool == ToolUFW {
-			return exec.Command(tool, args...)
+			return exec.CommandContext(ctx, tool, args...)
 		}
-		return exec.Command(Path, append([]string{"run", tool}, args...)...)
+		return exec.CommandContext(ctx, Path, append([]string{"run", tool}, args...)...)
 	}
-	return exec.Command(Path, append([]string{"call", tool}, args...)...)
+	return exec.CommandContext(ctx, Path, append([]string{"call", tool}, args...)...)
 }
 
 // PersistWireGuardPeers rewrites wg0.conf's [Peer] sections to peers through

@@ -2,126 +2,121 @@ package display
 
 import (
 	"fmt"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"io"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/view"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
-// MeshTable prints WireGuard mesh status to w.
-func MeshTable(snap *monitor.ClusterSnapshot, w io.Writer) error {
-	fmt.Fprintf(w, "%s\n", styleBold.Render(
-		fmt.Sprintf("WireGuard Mesh \u2014 %s", snap.Environment)))
-	fmt.Fprintln(w, strings.Repeat("\u2550", 28))
-	fmt.Fprintln(w)
+// handshakeStaleSec is how old a WireGuard handshake may be before the peer
+// is shown stale. WireGuard re-handshakes every two minutes on a live tunnel;
+// the cluster's mesh alert uses the same bound.
+const handshakeStaleSec = 180
 
-	// Header
-	fmt.Fprintf(w, "%-18s %-12s %-7s %-7s %s\n",
-		styleHeader.Render("NODE"),
-		styleHeader.Render("WG IP"),
-		styleHeader.Render("PORT"),
-		styleHeader.Render("PEERS"),
-		styleHeader.Render("STATUS"))
-	fmt.Fprintln(w, separator(54))
+// MeshTable prints each node's WireGuard interface, then every peer link.
+func MeshTable(snap *cluster.ClusterSnapshot, w io.Writer) error {
+	t := view.ThemeFor(w)
+	var b strings.Builder
+	writeHeader(&b, t, snap, "WireGuard mesh")
+	b.WriteString("\n")
+	b.WriteString(MeshNodes(t, snap))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "%s\n", t.Bold.Render("Peers"))
+	b.WriteString(MeshPeers(t, snap))
+	return flush(w, &b)
+}
 
-	// Collect mesh info for peer details
-	type meshNode struct {
-		host    string
-		wgIP    string
-		port    int
-		peers   int
-		total   int
-		healthy bool
-	}
-	var meshNodes []meshNode
-
-	expectedPeers := snap.HealthyCount() - 1
-
-	for _, cs := range snap.Nodes {
-		if cs.Error != nil || cs.Report == nil {
-			continue
-		}
-		r := cs.Report
-		if r.WireGuard == nil {
-			fmt.Fprintf(w, "%-18s %s\n", cs.Node.Host, styleMuted.Render("no WireGuard"))
-			continue
-		}
-
-		wg := r.WireGuard
-		peerCount := wg.PeerCount
-		allOK := wg.InterfaceUp
-		if allOK {
-			for _, p := range wg.Peers {
-				if p.LatestHandshake == 0 || p.HandshakeAgeSec > 180 {
-					allOK = false
-					break
-				}
-			}
-		}
-
-		mn := meshNode{
-			host:    cs.Node.Host,
-			wgIP:    wg.WgIP,
-			port:    wg.ListenPort,
-			peers:   peerCount,
-			total:   expectedPeers,
-			healthy: allOK,
-		}
-		meshNodes = append(meshNodes, mn)
-
-		peerStr := fmt.Sprintf("%d/%d", peerCount, expectedPeers)
-		statusStr := statusIcon(allOK)
-		if !wg.InterfaceUp {
-			statusStr = styleRed.Render("DOWN")
-		}
-
-		fmt.Fprintf(w, "%-18s %-12s %-7d %-7s %s\n",
-			cs.Node.Host, wg.WgIP, wg.ListenPort, peerStr, statusStr)
-	}
-
-	// Peer details
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, styleBold.Render("Peer Details:"))
-
-	for _, cs := range snap.Nodes {
-		if cs.Error != nil || cs.Report == nil || cs.Report.WireGuard == nil {
-			continue
-		}
+// MeshNodes is a row per node: its overlay address, port, peer count against
+// the N-1 a full mesh needs (every member, including ones that did not
+// report, since a node keeps its peers while one of them is down), and
+// whether every handshake is fresh.
+func MeshNodes(t view.Theme, snap *cluster.ClusterSnapshot) string {
+	expected := snap.TotalCount() - 1
+	var rows [][]string
+	for _, cs := range reported(snap) {
 		wg := cs.Report.WireGuard
-		if !wg.InterfaceUp {
+		if wg == nil {
+			rows = append(rows, []string{cs.Node.Host, t.Muted.Render("no WireGuard"), "", "", ""})
 			continue
 		}
-		localIP := wg.WgIP
+		status := t.Bool(handshakesFresh(wg), "STALE")
+		if !wg.InterfaceUp {
+			status = t.Crit.Render("DOWN")
+		}
+		peers := fmt.Sprintf("%d/%d", wg.PeerCount, expected)
+		if wg.PeerCount != expected {
+			peers = t.Warn.Render(peers)
+		}
+		rows = append(rows, []string{cs.Node.Host, wg.WgIP, fmt.Sprint(wg.ListenPort), peers, status})
+	}
+	return view.Table(t, tableIndent, []string{"NODE", "WG IP", "PORT", "PEERS", "STATUS"}, rows)
+}
+
+// MeshPeers is a row per peer link, with its handshake age and traffic.
+func MeshPeers(t view.Theme, snap *cluster.ClusterSnapshot) string {
+	var rows [][]string
+	for _, cs := range reported(snap) {
+		wg := cs.Report.WireGuard
+		if wg == nil || !wg.InterfaceUp {
+			continue
+		}
 		for _, p := range wg.Peers {
-			hsAge := formatDuration(p.HandshakeAgeSec)
-			rx := printer.FormatBytes(p.TransferRx)
-			tx := printer.FormatBytes(p.TransferTx)
-
-			peerIP := p.AllowedIPs
-			// Strip CIDR if present
-			if idx := strings.Index(peerIP, "/"); idx > 0 {
-				peerIP = peerIP[:idx]
-			}
-
-			hsColor := styleGreen
-			if p.LatestHandshake == 0 {
-				hsAge = "never"
-				hsColor = styleRed
-			} else if p.HandshakeAgeSec > 180 {
-				hsColor = styleYellow
-			}
-
-			fmt.Fprintf(w, "  %s \u2194 %s: handshake %s, rx: %s, tx: %s\n",
-				localIP, peerIP, hsColor.Render(hsAge), rx, tx)
+			rows = append(rows, []string{wg.WgIP, stripCIDR(p.AllowedIPs), handshakeCell(t, p),
+				printer.FormatBytes(p.TransferRx), printer.FormatBytes(p.TransferTx)})
 		}
 	}
+	if len(rows) == 0 {
+		return tableIndent + t.Muted.Render("no peer links reported") + "\n"
+	}
+	return view.Table(t, tableIndent, []string{"FROM", "TO", "HANDSHAKE", "RX", "TX"}, rows)
+}
 
-	return nil
+func handshakeCell(t view.Theme, p report.WGPeerInfo) string {
+	switch {
+	case p.LatestHandshake == 0:
+		return t.Crit.Render("never")
+	case p.HandshakeAgeSec > handshakeStaleSec:
+		return t.Warn.Render(formatAgo(p.HandshakeAgeSec))
+	default:
+		return t.OK.Render(formatAgo(p.HandshakeAgeSec))
+	}
+}
+
+// handshakesFresh reports whether every peer has handshaked recently.
+func handshakesFresh(wg *report.WireGuardReport) bool {
+	for _, p := range wg.Peers {
+		if p.LatestHandshake == 0 || p.HandshakeAgeSec > handshakeStaleSec {
+			return false
+		}
+	}
+	return true
+}
+
+func stripCIDR(ip string) string {
+	if i := strings.Index(ip, "/"); i > 0 {
+		return ip[:i]
+	}
+	return ip
+}
+
+// formatAgo formats seconds as an age: "45s ago", "3m ago", "2h ago".
+func formatAgo(sec int64) string {
+	const minute, hour = 60, 3600
+	switch {
+	case sec < minute:
+		return fmt.Sprintf("%ds ago", sec)
+	case sec < hour:
+		return fmt.Sprintf("%dm ago", sec/minute)
+	default:
+		return fmt.Sprintf("%dh ago", sec/hour)
+	}
 }
 
 // MeshJSON writes the WireGuard mesh as JSON.
-func MeshJSON(snap *monitor.ClusterSnapshot, w io.Writer) error {
+func MeshJSON(snap *cluster.ClusterSnapshot, w io.Writer) error {
 	type peerEntry struct {
 		AllowedIPs      string `json:"allowed_ips"`
 		HandshakeAgeSec int64  `json:"handshake_age_sec"`
@@ -137,40 +132,18 @@ func MeshJSON(snap *monitor.ClusterSnapshot, w io.Writer) error {
 		Peers      []peerEntry `json:"peers,omitempty"`
 	}
 
-	var entries []meshEntry
-	for _, cs := range snap.Nodes {
-		if cs.Error != nil || cs.Report == nil || cs.Report.WireGuard == nil {
+	entries := []meshEntry{}
+	for _, cs := range reported(snap) {
+		wg := cs.Report.WireGuard
+		if wg == nil {
 			continue
 		}
-		wg := cs.Report.WireGuard
-		e := meshEntry{
-			Host:       cs.Node.Host,
-			WgIP:       wg.WgIP,
-			ListenPort: wg.ListenPort,
-			PeerCount:  wg.PeerCount,
-			Up:         wg.InterfaceUp,
-		}
+		e := meshEntry{Host: cs.Node.Host, WgIP: wg.WgIP, ListenPort: wg.ListenPort, PeerCount: wg.PeerCount, Up: wg.InterfaceUp}
 		for _, p := range wg.Peers {
-			e.Peers = append(e.Peers, peerEntry{
-				AllowedIPs:      p.AllowedIPs,
-				HandshakeAgeSec: p.HandshakeAgeSec,
-				TransferRxBytes: p.TransferRx,
-				TransferTxBytes: p.TransferTx,
-			})
+			e.Peers = append(e.Peers, peerEntry{AllowedIPs: p.AllowedIPs, HandshakeAgeSec: p.HandshakeAgeSec,
+				TransferRxBytes: p.TransferRx, TransferTxBytes: p.TransferTx})
 		}
 		entries = append(entries, e)
 	}
-
 	return writeJSON(w, entries)
-}
-
-// formatDuration formats seconds into a human-readable string.
-func formatDuration(sec int64) string {
-	if sec < 60 {
-		return fmt.Sprintf("%ds ago", sec)
-	}
-	if sec < 3600 {
-		return fmt.Sprintf("%dm ago", sec/60)
-	}
-	return fmt.Sprintf("%dh ago", sec/3600)
 }

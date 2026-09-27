@@ -3,6 +3,7 @@ package install
 import (
 	"path/filepath"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
@@ -11,7 +12,7 @@ import (
 const (
 	OramaBase    = "/opt/orama"
 	OramaBinDir  = "/opt/orama/bin"
-	OramaDir     = "/opt/orama/.orama"
+	OramaDir     = constants.ProductionOramaDir
 	OramaConfigs = "/opt/orama/.orama/configs"
 	OramaSecrets = "/opt/orama/.orama/secrets"
 	OramaData    = "/opt/orama/.orama/data"

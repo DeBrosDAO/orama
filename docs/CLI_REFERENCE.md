@@ -93,15 +93,17 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama members remove`](#orama-members-remove) — Take a wallet's grant away
   - [`orama members transfer`](#orama-members-transfer) — Hand this namespace to another wallet
 - [`orama monitor`](#orama-monitor) — Monitor cluster health from your local machine
-  - [`orama monitor alerts`](#orama-monitor-alerts) — Active alerts and warnings (one-shot)
-  - [`orama monitor cluster`](#orama-monitor-cluster) — Cluster overview (one-shot)
-  - [`orama monitor dns`](#orama-monitor-dns) — DNS health overview (one-shot)
-  - [`orama monitor live`](#orama-monitor-live) — Interactive TUI monitor
-  - [`orama monitor mesh`](#orama-monitor-mesh) — Mesh connectivity status (one-shot)
-  - [`orama monitor namespaces`](#orama-monitor-namespaces) — Namespace usage summary (one-shot)
+  - [`orama monitor alerts`](#orama-monitor-alerts) — Alerts, most severe first, with what to do (one-shot)
+  - [`orama monitor chain`](#orama-monitor-chain) — Orama L1 height, sync and validators (one-shot)
+  - [`orama monitor cluster`](#orama-monitor-cluster) — Verdict, components and a row per node (one-shot)
+  - [`orama monitor dns`](#orama-monitor-dns) — DNS and TLS health of the nameservers (one-shot)
+  - [`orama monitor live`](#orama-monitor-live) — Interactive live view (the default)
+  - [`orama monitor mesh`](#orama-monitor-mesh) — WireGuard mesh connectivity (one-shot)
+  - [`orama monitor namespaces`](#orama-monitor-namespaces) — Namespace health across nodes (one-shot)
   - [`orama monitor node`](#orama-monitor-node) — Per-node health details (one-shot)
-  - [`orama monitor report`](#orama-monitor-report) — Full cluster report (JSON)
+  - [`orama monitor report`](#orama-monitor-report) — Full cluster report as JSON (one-shot)
   - [`orama monitor service`](#orama-monitor-service) — Service status across the cluster (one-shot)
+  - [`orama monitor traffic`](#orama-monitor-traffic) — Gateway requests, errors and latency (one-shot)
 - [`orama namespace`](#orama-namespace) — Manage namespaces
   - [`orama namespace create`](#orama-namespace-create) — Create a namespace and start its cluster
   - [`orama namespace delete`](#orama-namespace-delete) — Delete the current namespace and all its resources
@@ -1254,30 +1256,54 @@ Monitor cluster health from your local machine
 orama monitor [flags]
 ```
 
-SSH into cluster nodes and display real-time health data.
-Runs 'orama node report --json' on each node and aggregates results.
+Show the cluster's health: a live view, or one aspect at a time.
 
-Without a subcommand, launches the interactive TUI.
+The data comes from the gateway's operator telemetry API
+(GET /v1/operator/telemetry, and its server-sent event stream for the live
+view), authenticated with the credentials 'orama auth login' stored for the
+environment's gateway. Only the cluster's operators may read it.
+
+--ssh is the break-glass path for when no gateway answers: it SSHes into every
+node and runs 'sudo orama node report --json' there instead. It is never chosen
+automatically; when the API fails the error says so and suggests it. Traffic is
+counted by the gateways, so it is empty over --ssh.
+
+Without a subcommand, opens the live view. Every view starts with the verdict:
+"✓ All systems operational" or what is degraded, with the alert counts and the
+age of the data. Live view keys: tab/shift+tab or 1-9 switch tabs, ↑/↓ (j/k)
+select or scroll, enter opens a node's full report on the Nodes tab, esc goes
+back, c/w/i/a filter the Alerts tab by severity, r refreshes, ? shows help,
+q quits.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--config` | — | Read nodes from this file instead of resolving them |
+| `--config` | — | With --ssh: read nodes from this file instead of resolving them |
 | `--env` | — | Environment: devnet, testnet, mainnet (required) |
-| `--node` | — | Filter to specific node host/IP |
+| `--interval` | `5s` | How often the live view refreshes, 2s to 60s (with --ssh: at least 15s, which is also its default) |
+| `--node` | — | Show only this node (public IP or WireGuard IP) |
+| `--ssh` | `false` | Collect over SSH from every node instead of the gateway API (break-glass) |
 
-Subcommands: `alerts`, `cluster`, `dns`, `live`, `mesh`, `namespaces`, `node`, `report`, `service`
+Subcommands: `alerts`, `chain`, `cluster`, `dns`, `live`, `mesh`, `namespaces`, `node`, `report`, `service`, `traffic`
 
 ### orama monitor alerts
 
-Active alerts and warnings (one-shot)
+Alerts, most severe first, with what to do (one-shot)
 
 ```
 orama monitor alerts
 ```
 
+### orama monitor chain
+
+Orama L1 height, sync and validators (one-shot)
+
+```
+orama monitor chain
+```
+
 ### orama monitor cluster
 
-Cluster overview (one-shot)
+Verdict, components and a row per node (one-shot)
 
 ```
 orama monitor cluster
@@ -1285,7 +1311,7 @@ orama monitor cluster
 
 ### orama monitor dns
 
-DNS health overview (one-shot)
+DNS and TLS health of the nameservers (one-shot)
 
 ```
 orama monitor dns
@@ -1293,15 +1319,19 @@ orama monitor dns
 
 ### orama monitor live
 
-Interactive TUI monitor
+Interactive live view (the default)
 
 ```
-orama monitor live
+orama monitor live [flags]
 ```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--interval` | `5s` | How often the live view refreshes, 2s to 60s (with --ssh: at least 15s, which is also its default) |
 
 ### orama monitor mesh
 
-Mesh connectivity status (one-shot)
+WireGuard mesh connectivity (one-shot)
 
 ```
 orama monitor mesh
@@ -1309,7 +1339,7 @@ orama monitor mesh
 
 ### orama monitor namespaces
 
-Namespace usage summary (one-shot)
+Namespace health across nodes (one-shot)
 
 ```
 orama monitor namespaces
@@ -1325,7 +1355,7 @@ orama monitor node
 
 ### orama monitor report
 
-Full cluster report (JSON)
+Full cluster report as JSON (one-shot)
 
 ```
 orama monitor report
@@ -1337,6 +1367,14 @@ Service status across the cluster (one-shot)
 
 ```
 orama monitor service
+```
+
+### orama monitor traffic
+
+Gateway requests, errors and latency (one-shot)
+
+```
+orama monitor traffic
 ```
 
 ### orama namespace
@@ -2616,13 +2654,15 @@ orama status [flags]
 Check the health of all your nodes in an environment.
 
 A node is healthy when its gateway answers and its RQLite has settled into
-Leader or Follower. For the numbers behind the verdict use 'orama monitor
-cluster'; for the state of a single machine you are logged into, 'orama node
-status'.
+Leader or Follower. The data comes from the gateway's operator telemetry API;
+--ssh reads every node over SSH instead, for when no gateway answers. For the
+numbers behind the verdict use 'orama monitor cluster'; for the state of a
+single machine you are logged into, 'orama node status'.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--env` | — | Environment (default: active) |
+| `--ssh` | `false` | Collect over SSH from every node instead of the gateway API (break-glass) |
 
 ### orama version
 

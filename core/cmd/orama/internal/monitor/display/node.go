@@ -3,150 +3,155 @@ package display
 import (
 	"fmt"
 	"io"
+	"strings"
 
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/view"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
-// NodeTable prints detailed per-node information to w.
-func NodeTable(snap *monitor.ClusterSnapshot, w io.Writer) error {
-	for i, cs := range snap.Nodes {
-		if i > 0 {
-			fmt.Fprintln(w)
-		}
+// labelWidth aligns the subsystem labels of the node summary.
+const labelWidth = 11
 
-		host := cs.Node.Host
-		role := cs.Node.Role
-
-		if cs.Error != nil {
-			fmt.Fprintf(w, "%s (%s)\n", styleRed.Render("Node: "+host), role)
-			fmt.Fprintf(w, "  %s\n", styleRed.Render(fmt.Sprintf("UNREACHABLE: %v", cs.Error)))
-			continue
-		}
-
-		r := cs.Report
-		if r == nil {
-			fmt.Fprintf(w, "%s (%s)\n", styleRed.Render("Node: "+host), role)
-			fmt.Fprintf(w, "  %s\n", styleRed.Render("No report available"))
-			continue
-		}
-
-		fmt.Fprintf(w, "%s\n", styleBold.Render(fmt.Sprintf("Node: %s (%s)", host, role)))
-
-		// System
-		if r.System != nil {
-			sys := r.System
-			fmt.Fprintf(w, "  System:    CPU %d | Load %.2f | Mem %d%% (%d/%d MB) | Disk %d%%\n",
-				sys.CPUCount, sys.LoadAvg1, sys.MemUsePct, sys.MemUsedMB, sys.MemTotalMB, sys.DiskUsePct)
-		} else {
-			fmt.Fprintln(w, "  System:    "+styleMuted.Render("no data"))
-		}
-
-		// RQLite
-		if r.RQLite != nil {
-			rq := r.RQLite
-			readyStr := styleRed.Render("Not Ready")
-			if rq.Ready {
-				readyStr = styleGreen.Render("Ready")
-			}
-			if rq.Responsive {
-				fmt.Fprintf(w, "  RQLite:    %s | Term %d | Applied %d | Peers %d | %s\n",
-					rq.RaftState, rq.Term, rq.Applied, rq.NumPeers, readyStr)
-			} else {
-				fmt.Fprintf(w, "  RQLite:    %s\n", styleRed.Render("NOT RESPONDING"))
-			}
-		} else {
-			fmt.Fprintln(w, "  RQLite:    "+styleMuted.Render("not configured"))
-		}
-
-		// WireGuard
-		if r.WireGuard != nil {
-			wg := r.WireGuard
-			if wg.InterfaceUp {
-				// Check handshakes
-				hsOK := true
-				for _, p := range wg.Peers {
-					if p.LatestHandshake == 0 || p.HandshakeAgeSec > 180 {
-						hsOK = false
-						break
-					}
-				}
-				hsStr := statusIcon(hsOK)
-				fmt.Fprintf(w, "  WireGuard: UP | %s | %d peers | handshakes %s\n",
-					wg.WgIP, wg.PeerCount, hsStr)
-			} else {
-				fmt.Fprintf(w, "  WireGuard: %s\n", styleRed.Render("DOWN"))
-			}
-		} else {
-			fmt.Fprintln(w, "  WireGuard: "+styleMuted.Render("not configured"))
-		}
-
-		// Olric
-		if r.Olric != nil {
-			ol := r.Olric
-			stateStr := styleRed.Render("inactive")
-			if ol.ServiceActive {
-				stateStr = styleGreen.Render("active")
-			}
-			fmt.Fprintf(w, "  Olric:     %s | %d members\n", stateStr, ol.MemberCount)
-		} else {
-			fmt.Fprintln(w, "  Olric:     "+styleMuted.Render("not configured"))
-		}
-
-		// IPFS
-		if r.IPFS != nil {
-			ipfs := r.IPFS
-			daemonStr := styleRed.Render("inactive")
-			if ipfs.DaemonActive {
-				daemonStr = styleGreen.Render("active")
-			}
-			clusterStr := styleRed.Render("DOWN")
-			if ipfs.ClusterActive {
-				clusterStr = styleGreen.Render("OK")
-			}
-			fmt.Fprintf(w, "  IPFS:      %s | %d swarm peers | cluster %s\n",
-				daemonStr, ipfs.SwarmPeerCount, clusterStr)
-		} else {
-			fmt.Fprintln(w, "  IPFS:      "+styleMuted.Render("not configured"))
-		}
-
-		// Tor client
-		if r.Tor != nil {
-			fmt.Fprintf(w, "  Tor:       %s\n", torSummary(r.Tor))
-		} else {
-			fmt.Fprintln(w, "  Tor:       "+styleMuted.Render("not reported"))
-		}
+// NodeTable prints a summary of every subsystem on each node. The live view's
+// node detail (Enter on the Nodes tab) shows every field; --json gives all of
+// it too.
+func NodeTable(snap *cluster.ClusterSnapshot, w io.Writer) error {
+	t := view.ThemeFor(w)
+	var b strings.Builder
+	writeHeader(&b, t, snap, "Nodes")
+	for _, cs := range snap.Nodes {
+		b.WriteString("\n")
+		writeNode(&b, t, cs)
 	}
-
-	return nil
+	return flush(w, &b)
 }
 
-// NodeJSON writes the node details as JSON.
-func NodeJSON(snap *monitor.ClusterSnapshot, w io.Writer) error {
+func writeNode(b *strings.Builder, t view.Theme, cs cluster.CollectionStatus) {
+	title := fmt.Sprintf("%s (%s)", cs.Node.Host, cs.Node.Role)
+	if cs.Report == nil {
+		fmt.Fprintf(b, "%s\n", t.Crit.Render(title))
+		reason := cs.Err
+		if reason == "" {
+			reason = "no report returned"
+		}
+		line(b, t, "Status", t.Crit.Render("UNREACHABLE: "+reason))
+		return
+	}
+	r := cs.Report
+	fmt.Fprintf(b, "%s  %s\n", t.Bold.Render(title), t.Muted.Render("v"+r.Version))
+	line(b, t, "System", systemLine(r.System))
+	line(b, t, "RQLite", rqliteLine(t, r.RQLite))
+	line(b, t, "WireGuard", wireguardLine(t, r.WireGuard))
+	line(b, t, "Olric", olricLine(t, r.Olric))
+	line(b, t, "IPFS", ipfsLine(t, r.IPFS))
+	line(b, t, "Tor", torLine(t, r.Tor))
+	line(b, t, "Chain", chainLine(t, r.Chain))
+	line(b, t, "Traffic", trafficLine(r.Traffic))
+}
+
+func line(b *strings.Builder, t view.Theme, label, value string) {
+	if value == "" {
+		value = t.Muted.Render("not reported")
+	}
+	fmt.Fprintf(b, "%s%s %s\n", tableIndent, view.PadRight(label+":", labelWidth), value)
+}
+
+func systemLine(s *report.SystemReport) string {
+	if s == nil {
+		return ""
+	}
+	return fmt.Sprintf("CPU %d | Load %.2f | Mem %d%% (%d/%d MB) | Disk %d%%",
+		s.CPUCount, s.LoadAvg1, s.MemUsePct, s.MemUsedMB, s.MemTotalMB, s.DiskUsePct)
+}
+
+func rqliteLine(t view.Theme, q *report.RQLiteReport) string {
+	switch {
+	case q == nil:
+		return ""
+	case !q.Responsive:
+		return t.Crit.Render("NOT RESPONDING")
+	}
+	ready := t.Crit.Render("not ready")
+	if q.Ready {
+		ready = t.OK.Render("ready")
+	}
+	return fmt.Sprintf("%s | Term %d | Applied %d | Peers %d | %s", q.RaftState, q.Term, q.Applied, q.NumPeers, ready)
+}
+
+func wireguardLine(t view.Theme, wg *report.WireGuardReport) string {
+	switch {
+	case wg == nil:
+		return ""
+	case !wg.InterfaceUp:
+		return t.Crit.Render("DOWN")
+	}
+	return fmt.Sprintf("UP | %s | %d peers | handshakes %s", wg.WgIP, wg.PeerCount, t.Bool(handshakesFresh(wg), "STALE"))
+}
+
+func olricLine(t view.Theme, o *report.OlricReport) string {
+	if o == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s | %d members", activeLabel(t, o.ServiceActive), o.MemberCount)
+}
+
+func ipfsLine(t view.Theme, i *report.IPFSReport) string {
+	if i == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s | %d swarm peers | cluster %s", activeLabel(t, i.DaemonActive), i.SwarmPeerCount, t.Bool(i.ClusterActive, "DOWN"))
+}
+
+func chainLine(t view.Theme, c *report.ChainReport) string {
+	switch {
+	case c == nil:
+		return ""
+	case !c.Responsive:
+		return t.Crit.Render("RPC not answering " + c.Error)
+	}
+	sync := t.OK.Render("in sync")
+	if c.CatchingUp {
+		sync = t.Warn.Render("catching up")
+	}
+	return fmt.Sprintf("%s | height %d | last block %.0fs ago | %s | %d peers", c.ChainID, c.LatestHeight, c.BlockAgeSec, sync, c.Peers)
+}
+
+func trafficLine(tr *report.TrafficReport) string {
+	if tr == nil {
+		return ""
+	}
+	return fmt.Sprintf("%.1f rps | %.2f%% 5xx | p50 %.0fms p95 %.0fms p99 %.0fms (last %ds)",
+		tr.RPS, tr.ErrorRate*100, tr.P50Ms, tr.P95Ms, tr.P99Ms, tr.WindowSec)
+}
+
+func activeLabel(t view.Theme, active bool) string {
+	if active {
+		return t.OK.Render("active")
+	}
+	return t.Crit.Render("inactive")
+}
+
+// NodeJSON writes each node's full report.
+func NodeJSON(snap *cluster.ClusterSnapshot, w io.Writer) error {
 	type nodeDetail struct {
-		Host   string      `json:"host"`
-		Role   string      `json:"role"`
-		Status string      `json:"status"`
-		Error  string      `json:"error,omitempty"`
-		Report interface{} `json:"report,omitempty"`
+		Host   string             `json:"host"`
+		Role   string             `json:"role"`
+		Status string             `json:"status"`
+		Error  string             `json:"error,omitempty"`
+		Report *report.NodeReport `json:"report,omitempty"`
 	}
 
-	var entries []nodeDetail
+	entries := make([]nodeDetail, 0, len(snap.Nodes))
 	for _, cs := range snap.Nodes {
-		e := nodeDetail{
-			Host: cs.Node.Host,
-			Role: cs.Node.Role,
-		}
-		if cs.Error != nil {
-			e.Status = "unreachable"
-			e.Error = cs.Error.Error()
-		} else if cs.Report != nil {
-			e.Status = "ok"
-			e.Report = cs.Report
-		} else {
-			e.Status = "unknown"
+		e := nodeDetail{Host: cs.Node.Host, Role: cs.Node.Role, Status: nodeStatusUnknown}
+		switch {
+		case cs.Err != "":
+			e.Status, e.Error = NodeStatusUnreachable, cs.Err
+		case cs.Report != nil:
+			e.Status, e.Report = NodeStatusOK, cs.Report
 		}
 		entries = append(entries, e)
 	}
-
 	return writeJSON(w, entries)
 }

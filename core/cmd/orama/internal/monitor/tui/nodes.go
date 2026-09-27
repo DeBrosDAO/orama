@@ -5,143 +5,113 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/view"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 )
 
-// renderNodes renders the Nodes tab with detailed per-node information.
-func renderNodes(snap *monitor.ClusterSnapshot, width int) string {
-	if snap == nil {
-		return styleMuted.Render("Collecting cluster data...")
-	}
+// nodeTableFirstRow is the content line of the first node row: the title,
+// then the table header, then the rows.
+const nodeTableFirstRow = 2
 
+// cursorMark marks the selected node.
+const cursorMark = "▶"
+
+// detailKeyWidth aligns the node detail's field names.
+const detailKeyWidth = 28
+
+// nodeTable is the Nodes tab: one row per node, the selected one marked.
+func (m model) nodeTable() string {
+	t := m.theme
+	headers := append([]string{" "}, view.NodeHeaders...)
+	rows := make([][]string, 0, len(m.snap.Nodes))
+	for i, cs := range m.snap.Nodes {
+		mark := " "
+		if i == m.nodeCursor {
+			mark = t.Bold.Render(cursorMark)
+		}
+		rows = append(rows, append([]string{mark}, view.NodeCells(t, cs)...))
+	}
+	title := t.Bold.Render(fmt.Sprintf("Nodes (%d)", len(m.snap.Nodes))) + t.Muted.Render(" · ↑↓ select · enter for everything the node reported")
+	return title + "\n" + view.Table(t, "", headers, rows)
+}
+
+// nodeDetailContent is every section of the selected node's report, or a
+// note that the node has left the snapshot.
+func (m model) nodeDetailContent(width int) string {
+	t := m.theme
+	i := nodeIndex(m.snap, m.selectedHost)
+	if i < 0 {
+		return t.Warn.Render(fmt.Sprintf("%s is not in the latest snapshot.", m.selectedHost)) + "\n" +
+			t.Muted.Render("esc to go back")
+	}
+	cs := m.snap.Nodes[i]
 	var b strings.Builder
-
-	for i, cs := range snap.Nodes {
-		if i > 0 {
-			b.WriteString("\n")
+	fmt.Fprintf(&b, "%s  %s\n", t.Bold.Render(fmt.Sprintf("%s (%s)", cs.Node.Host, roleLabel(cs.Node))), t.Muted.Render("esc to go back"))
+	b.WriteString(view.Rule(t, width) + "\n")
+	b.WriteString(collectionLines(t, cs))
+	for _, s := range view.ReportSections(cs.Report) {
+		b.WriteString("\n" + t.Header.Render(strings.ToUpper(s.Title)) + "\n")
+		for _, f := range s.Fields {
+			fmt.Fprintf(&b, "  %s %s\n", view.PadRight(t.Muted.Render(f[0]), detailKeyWidth), f[1])
 		}
-
-		host := cs.Node.Host
-		role := cs.Node.Role
-		if role == "" {
-			role = "node"
-		}
-
-		if cs.Error != nil {
-			b.WriteString(styleBold.Render(fmt.Sprintf("Node: %s", host)))
-			b.WriteString(fmt.Sprintf(" (%s)", role))
-			b.WriteString("\n")
-			b.WriteString(separator(width))
-			b.WriteString("\n")
-			b.WriteString(fmt.Sprintf("  Status:  %s\n", styleCritical.Render("UNREACHABLE")))
-			b.WriteString(fmt.Sprintf("  Error:   %s\n", styleCritical.Render(cs.Error.Error())))
-			b.WriteString(fmt.Sprintf("  Took:    %s\n", styleMuted.Render(cs.Duration.Truncate(time.Millisecond).String())))
-			if cs.Retries > 0 {
-				b.WriteString(fmt.Sprintf("  Retries: %d\n", cs.Retries))
+		for _, tbl := range s.Tables {
+			if tbl.Title != "" {
+				fmt.Fprintf(&b, "  %s\n", t.Muted.Render(tbl.Title))
 			}
-			continue
-		}
-
-		r := cs.Report
-		if r == nil {
-			continue
-		}
-
-		b.WriteString(styleBold.Render(fmt.Sprintf("Node: %s", host)))
-		b.WriteString(fmt.Sprintf(" (%s)  ", role))
-		b.WriteString(styleHealthy.Render("ONLINE"))
-		if r.Version != "" {
-			b.WriteString(fmt.Sprintf("  v%s", r.Version))
-		}
-		b.WriteString("\n")
-		b.WriteString(separator(width))
-		b.WriteString("\n")
-
-		// System Resources
-		if r.System != nil {
-			sys := r.System
-			b.WriteString(styleBold.Render("  System"))
-			b.WriteString("\n")
-			b.WriteString(fmt.Sprintf("    CPU:      %d cores, load %.1f / %.1f / %.1f\n",
-				sys.CPUCount, sys.LoadAvg1, sys.LoadAvg5, sys.LoadAvg15))
-			b.WriteString(fmt.Sprintf("    Memory:   %s  (%d / %d MB, %d MB avail)\n",
-				colorPct(sys.MemUsePct), sys.MemUsedMB, sys.MemTotalMB, sys.MemAvailMB))
-			b.WriteString(fmt.Sprintf("    Disk:     %s  (%s / %s, %s avail)\n",
-				colorPct(sys.DiskUsePct), sys.DiskUsedGB, sys.DiskTotalGB, sys.DiskAvailGB))
-			if sys.SwapTotalMB > 0 {
-				b.WriteString(fmt.Sprintf("    Swap:     %d / %d MB\n", sys.SwapUsedMB, sys.SwapTotalMB))
-			}
-			b.WriteString(fmt.Sprintf("    Uptime:   %s\n", sys.UptimeSince))
-			if sys.OOMKills > 0 {
-				b.WriteString(fmt.Sprintf("    OOM:      %s\n", styleCritical.Render(fmt.Sprintf("%d kills", sys.OOMKills))))
-			}
-		}
-
-		// Services
-		if r.Services != nil && len(r.Services.Services) > 0 {
-			b.WriteString(styleBold.Render("  Services"))
-			b.WriteString("\n")
-			for _, svc := range r.Services.Services {
-				stateStr := styleHealthy.Render(svc.ActiveState)
-				if svc.ActiveState == "failed" {
-					stateStr = styleCritical.Render("FAILED")
-				} else if svc.ActiveState != "active" {
-					stateStr = styleWarning.Render(svc.ActiveState)
-				}
-				extra := ""
-				if svc.MemoryCurrentMB > 0 {
-					extra += fmt.Sprintf(" mem=%dMB", svc.MemoryCurrentMB)
-				}
-				if svc.NRestarts > 0 {
-					extra += fmt.Sprintf(" restarts=%d", svc.NRestarts)
-				}
-				if svc.RestartLoopRisk {
-					extra += styleCritical.Render(" RESTART-LOOP")
-				}
-				b.WriteString(fmt.Sprintf("    %-28s %s%s\n", svc.Name, stateStr, extra))
-			}
-			if len(r.Services.FailedUnits) > 0 {
-				b.WriteString(fmt.Sprintf("    Failed units: %s\n",
-					styleCritical.Render(strings.Join(r.Services.FailedUnits, ", "))))
-			}
-		}
-
-		// RQLite
-		if r.RQLite != nil {
-			rq := r.RQLite
-			b.WriteString(styleBold.Render("  RQLite"))
-			b.WriteString("\n")
-			b.WriteString(fmt.Sprintf("    Responsive: %s   Ready: %s   Strong Read: %s\n",
-				statusStr(rq.Responsive), statusStr(rq.Ready), statusStr(rq.StrongRead)))
-			if rq.Responsive {
-				b.WriteString(fmt.Sprintf("    Raft: %s   Leader: %s   Term: %d   Applied: %d\n",
-					styleBold.Render(rq.RaftState), rq.LeaderAddr, rq.Term, rq.Applied))
-				if rq.DBSize != "" {
-					b.WriteString(fmt.Sprintf("    DB size: %s   Peers: %d   Goroutines: %d   Heap: %dMB\n",
-						rq.DBSize, rq.NumPeers, rq.Goroutines, rq.HeapMB))
-				}
-			}
-		}
-
-		// WireGuard
-		if r.WireGuard != nil {
-			wg := r.WireGuard
-			b.WriteString(styleBold.Render("  WireGuard"))
-			b.WriteString("\n")
-			b.WriteString(fmt.Sprintf("    Interface: %s   IP: %s   Peers: %d\n",
-				statusStr(wg.InterfaceUp), wg.WgIP, wg.PeerCount))
-		}
-
-		// Network
-		if r.Network != nil {
-			net := r.Network
-			b.WriteString(styleBold.Render("  Network"))
-			b.WriteString("\n")
-			b.WriteString(fmt.Sprintf("    Internet: %s   UFW: %s   TCP est: %d  retrans: %.1f%%\n",
-				statusStr(net.InternetReachable), statusStr(net.UFWActive),
-				net.TCPEstablished, net.TCPRetransRate))
+			b.WriteString(view.Table(t, "  ", tbl.Headers, tbl.Rows))
 		}
 	}
-
 	return b.String()
+}
+
+// collectionLines says how the node's report was collected, and why not.
+func collectionLines(t view.Theme, cs cluster.CollectionStatus) string {
+	health := cs.Health()
+	style := t.OK
+	switch health {
+	case cluster.HealthHealthy:
+	case cluster.HealthUnknown:
+		style = t.Muted
+	default:
+		style = t.Crit
+	}
+	line := fmt.Sprintf("  health %s", style.Render(string(health)))
+	if d := cs.Detail(); d != "" {
+		line += " — " + d
+	}
+	out := line + "\n" + fmt.Sprintf("  collected in %s · report age %s",
+		(time.Duration(cs.DurationMS)*time.Millisecond).String(),
+		view.FormatAge(time.Duration(cs.ReportAgeSec)*time.Second))
+	if cs.Retries > 0 {
+		out += fmt.Sprintf(" · %d retries", cs.Retries)
+	}
+	return out + "\n"
+}
+
+func roleLabel(n cluster.NodeRef) string {
+	if n.Role == "" {
+		return "node"
+	}
+	return n.Role
+}
+
+// nodeIndex is the position of host in the snapshot, or -1.
+func nodeIndex(snap *cluster.ClusterSnapshot, host string) int {
+	if snap == nil || host == "" {
+		return -1
+	}
+	for i, n := range snap.Nodes {
+		if n.Node.Host == host {
+			return i
+		}
+	}
+	return -1
+}
+
+// selectedHostAt is the host at position i, or "" when there is none.
+func selectedHostAt(snap *cluster.ClusterSnapshot, i int) string {
+	if snap == nil || i < 0 || i >= len(snap.Nodes) {
+		return ""
+	}
+	return snap.Nodes[i].Node.Host
 }

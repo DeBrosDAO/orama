@@ -31,7 +31,9 @@ import (
 //     and not the legacy host units or wg-quick, which only the node's
 //     migrations touch. The peer grant gives the cluster gateway nothing it
 //     does not have already: it writes wireguard_peers in the registry, and
-//     every node's sync applies those rows.
+//     every node's sync applies those rows. It also collects the node health
+//     report (ToolNodeReport), which it serves to the monitor. Every tool it
+//     may use is named; a tool added later is refused until it is granted.
 //   - anything else, a tenant's gateway included: nothing. A tenant gateway
 //     manages no units — namespace services are started by the cluster gateway
 //     and deployments run from the cluster registry, which a tenant gateway
@@ -83,8 +85,12 @@ func authorizeIndexGateway(inv Invocation) error {
 		return authorizeGatewaySystemctl(inv.Args)
 	case ToolGatewayKey:
 		return nil // put of the index gateway's own signing key; Validate allows no other
+	case ToolUFW, ToolDeploy, ToolUnitEnv:
+		return nil // TURN ports, deployment secrets and namespace unit env files
+	case ToolNodeReport:
+		return nil // the node's health report, which the gateway serves to the monitor
 	default:
-		return nil
+		return fmt.Errorf("%s may not use %q", IndexGatewayUnit, inv.Tool)
 	}
 }
 

@@ -3,16 +3,46 @@ package lifecycle
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
-// The subset of `orama monitor report --json` this harness asserts on.
+// Values `orama monitor report` writes, pinned against the monitor's own
+// constants by cmd/orama/internal/monitor/display/report_contract_test.go.
+const (
+	// NoLeader is summary.rqlite_leader when no node is the leader.
+	NoLeader = "none"
+	// StatusOK is a node's status, and a summary field's value, when all is well.
+	StatusOK = "ok"
+	// RaftLeader and RaftFollower are the settled raft states.
+	RaftLeader   = report.RaftLeader
+	RaftFollower = report.RaftFollower
+	// nameserverRolePrefix starts the role of a node that runs a nameserver.
+	nameserverRolePrefix = "nameserver"
+)
+
+// MaxReportAgeSec is the oldest a node's report may be for the cluster to
+// count as converged. The gateway gathers each node's telemetry every 10s and
+// caches a snapshot for 5s, so a live node's report is well inside this; an
+// older one describes the cluster as it was, not as it is.
+const MaxReportAgeSec = 30
+
+// Report is `orama monitor report --json` as this harness reads it.
 //
-// Deliberately partial. A full mirror of the report schema would break every
-// time a collector gains a field, and the scenarios only care about what
-// "converged" means: quorum, one agreed leader, a complete WireGuard mesh,
-// services that are up and not restarting, and DNS answering.
+// Each node's report and the alerts decode into the real types from
+// pkg/telemetry, the ones the report is written from. This used to be a hand
+// copy of the report schema, and its field names drifted from the real ones
+// (rqlite.leader, wireguard peers' allowed_ip and handshake_age_seconds,
+// services' active / restarts / restart_loop): those fields silently decoded
+// as zero, so LeaderAgreement could never pass, and a crash-looping service
+// could never fail Converged. Only the envelope — meta and summary, which the
+// monitor's display package builds — is declared here, and a test in that
+// package decodes its real output through ParseReport so the two cannot drift
+// apart again.
 type Report struct {
 	Meta struct {
 		Environment  string `json:"environment"`
@@ -30,65 +60,19 @@ type Report struct {
 		WarningAlerts  int    `json:"warning_alerts"`
 	} `json:"summary"`
 
-	Alerts []Alert `json:"alerts"`
-	Nodes  []Node  `json:"nodes"`
+	Alerts []cluster.Alert `json:"alerts"`
+	Nodes  []Node          `json:"nodes"`
 }
 
-// Alert is one finding from the cross-node analysis.
-type Alert struct {
-	Severity  string `json:"severity"`
-	Subsystem string `json:"subsystem"`
-	Node      string `json:"node"`
-	Message   string `json:"message"`
-}
-
-// Node is one node's slice of the report.
+// Node is one node's entry in the report. Report is nil when the node's
+// report could not be collected; Error says why.
 type Node struct {
-	Host   string `json:"host"`
-	Role   string `json:"role"`
-	Status string `json:"status"`
-	Report struct {
-		WireGuardIP string `json:"wireguard_ip"`
-
-		RQLite struct {
-			Responsive   bool   `json:"responsive"`
-			RaftState    string `json:"raft_state"`
-			Leader       string `json:"leader"`
-			Term         uint64 `json:"term"`
-			AppliedIndex uint64 `json:"applied_index"`
-			CommitIndex  uint64 `json:"commit_index"`
-			StrongRead   bool   `json:"strong_read"`
-		} `json:"rqlite"`
-
-		Gateway struct {
-			Responsive bool `json:"responsive"`
-			HTTPStatus int  `json:"http_status"`
-		} `json:"gateway"`
-
-		WireGuard struct {
-			InterfaceUp bool `json:"interface_up"`
-			Peers       []struct {
-				PublicKey    string  `json:"public_key"`
-				AllowedIP    string  `json:"allowed_ip"`
-				HandshakeAge float64 `json:"handshake_age_seconds"`
-			} `json:"peers"`
-		} `json:"wireguard"`
-
-		DNS struct {
-			CoreDNSActive bool `json:"coredns_active"`
-			CaddyActive   bool `json:"caddy_active"`
-		} `json:"dns"`
-
-		Services struct {
-			Services []struct {
-				Name        string `json:"name"`
-				Active      bool   `json:"active"`
-				Restarts    int    `json:"restarts"`
-				RestartLoop bool   `json:"restart_loop"`
-			} `json:"services"`
-			FailedUnits []string `json:"failed_units"`
-		} `json:"services"`
-	} `json:"report"`
+	Host         string             `json:"host"`
+	Role         string             `json:"role"`
+	Status       string             `json:"status"`
+	Error        string             `json:"error,omitempty"`
+	ReportAgeSec int                `json:"report_age_sec"`
+	Report       *report.NodeReport `json:"report,omitempty"`
 }
 
 // ParseReport decodes `orama monitor report --json` output.
@@ -98,6 +82,11 @@ func ParseReport(raw []byte) (*Report, error) {
 		return nil, fmt.Errorf("parse monitor report: %w", err)
 	}
 	return &r, nil
+}
+
+// HasLeader reports whether the summary names an rqlite leader.
+func (r *Report) HasLeader() bool {
+	return r.Summary.RQLiteLeader != "" && r.Summary.RQLiteLeader != NoLeader
 }
 
 // Converged reports whether the cluster has settled, and says why not.
@@ -115,13 +104,13 @@ func (r *Report) Converged(expectNodes int) error {
 	if got := len(r.Nodes); got != expectNodes {
 		problems = append(problems, fmt.Sprintf("%d nodes in the report, want %d", got, expectNodes))
 	}
-	if r.Summary.RQLiteQuorum != "ok" {
+	if r.Summary.RQLiteQuorum != StatusOK {
 		problems = append(problems, fmt.Sprintf("rqlite quorum is %q", r.Summary.RQLiteQuorum))
 	}
-	if r.Summary.RQLiteLeader == "" {
+	if !r.HasLeader() {
 		problems = append(problems, "no rqlite leader")
 	}
-	if r.Summary.WGMeshStatus != "ok" {
+	if r.Summary.WGMeshStatus != StatusOK {
 		problems = append(problems, fmt.Sprintf("wireguard mesh is %q", r.Summary.WGMeshStatus))
 	}
 	if r.Summary.CriticalAlerts > 0 {
@@ -129,7 +118,10 @@ func (r *Report) Converged(expectNodes int) error {
 			r.Summary.CriticalAlerts, strings.Join(r.criticalMessages(), "; ")))
 	}
 
-	problems = append(problems, r.nodeProblems()...)
+	peers := len(r.Nodes) - 1
+	for _, n := range r.Nodes {
+		problems = append(problems, n.problems(peers)...)
+	}
 
 	if len(problems) == 0 {
 		return nil
@@ -138,68 +130,105 @@ func (r *Report) Converged(expectNodes int) error {
 	return fmt.Errorf("cluster has not converged: %s", strings.Join(problems, "; "))
 }
 
-// nodeProblems collects the per-node reasons a cluster is not converged.
-func (r *Report) nodeProblems() []string {
-	var problems []string
-	peers := len(r.Nodes) - 1
+// problems collects the reasons one node is not converged. peers is the N-1
+// WireGuard peers a complete mesh gives every node.
+func (n Node) problems(peers int) []string {
+	var p []string
+	if n.Status != StatusOK {
+		p = append(p, fmt.Sprintf("%s: status %q", n.Host, n.Status))
+	}
+	if n.ReportAgeSec > MaxReportAgeSec {
+		p = append(p, fmt.Sprintf("%s: report is %ds old", n.Host, n.ReportAgeSec))
+	}
+	if n.Report == nil {
+		return append(p, fmt.Sprintf("%s: no report (%s)", n.Host, n.Error))
+	}
+	p = append(p, rqliteProblems(n.Host, n.Report.RQLite)...)
+	if g := n.Report.Gateway; g == nil || !g.Responsive || g.HTTPStatus != http.StatusOK {
+		p = append(p, fmt.Sprintf("%s: gateway http %d", n.Host, gatewayStatus(g)))
+	}
+	wg := n.Report.WireGuard
+	switch {
+	case wg == nil || !wg.InterfaceUp:
+		p = append(p, fmt.Sprintf("%s: wg0 down", n.Host))
+	case len(wg.Peers) != peers:
+		// N-1 peers, or the mesh is not complete and some pair of nodes
+		// cannot reach each other over the overlay.
+		p = append(p, fmt.Sprintf("%s: %d wg peers, want %d", n.Host, len(wg.Peers), peers))
+	}
+	return append(p, serviceProblems(n.Host, n.Report.Services)...)
+}
 
-	for _, n := range r.Nodes {
-		if n.Status != "ok" {
-			problems = append(problems, fmt.Sprintf("%s: status %q", n.Host, n.Status))
-		}
-		if !n.Report.RQLite.Responsive {
-			problems = append(problems, fmt.Sprintf("%s: rqlite not responsive", n.Host))
-		}
-		switch n.Report.RQLite.RaftState {
-		case "Leader", "Follower":
-		default:
-			problems = append(problems, fmt.Sprintf("%s: raft state %q", n.Host, n.Report.RQLite.RaftState))
-		}
-		if !n.Report.Gateway.Responsive || n.Report.Gateway.HTTPStatus != 200 {
-			problems = append(problems, fmt.Sprintf("%s: gateway http %d", n.Host, n.Report.Gateway.HTTPStatus))
-		}
-		if !n.Report.WireGuard.InterfaceUp {
-			problems = append(problems, fmt.Sprintf("%s: wg0 down", n.Host))
-		}
-		// N-1 peers, or the mesh is not complete and some pair of nodes cannot
-		// reach each other over the overlay.
-		if got := len(n.Report.WireGuard.Peers); got != peers {
-			problems = append(problems, fmt.Sprintf("%s: %d wg peers, want %d", n.Host, got, peers))
-		}
-		for _, svc := range n.Report.Services.Services {
-			if svc.RestartLoop {
-				problems = append(problems, fmt.Sprintf("%s: %s is crash-looping (%d restarts)",
-					n.Host, svc.Name, svc.Restarts))
-			}
-		}
-		if len(n.Report.Services.FailedUnits) > 0 {
-			problems = append(problems, fmt.Sprintf("%s: failed units %v", n.Host, n.Report.Services.FailedUnits))
+func rqliteProblems(host string, q *report.RQLiteReport) []string {
+	if q == nil {
+		return []string{fmt.Sprintf("%s: no rqlite report", host)}
+	}
+	var p []string
+	if !q.Responsive {
+		p = append(p, fmt.Sprintf("%s: rqlite not responsive", host))
+	}
+	switch q.RaftState {
+	case RaftLeader, RaftFollower:
+	default:
+		p = append(p, fmt.Sprintf("%s: raft state %q", host, q.RaftState))
+	}
+	return p
+}
+
+func serviceProblems(host string, s *report.ServicesReport) []string {
+	if s == nil {
+		return nil
+	}
+	var p []string
+	for _, svc := range s.Services {
+		if svc.RestartLoopRisk {
+			p = append(p, fmt.Sprintf("%s: %s is crash-looping (%d restarts)", host, svc.Name, svc.NRestarts))
 		}
 	}
-	return problems
+	if len(s.FailedUnits) > 0 {
+		p = append(p, fmt.Sprintf("%s: failed units %v", host, s.FailedUnits))
+	}
+	return p
+}
+
+func gatewayStatus(g *report.GatewayReport) int {
+	if g == nil {
+		return 0
+	}
+	return g.HTTPStatus
 }
 
 func (r *Report) criticalMessages() []string {
 	var msgs []string
 	for _, a := range r.Alerts {
-		if a.Severity == "critical" {
+		if a.Severity == cluster.AlertCritical {
 			msgs = append(msgs, fmt.Sprintf("%s/%s: %s", a.Node, a.Subsystem, a.Message))
 		}
 	}
 	return msgs
 }
 
-// LeaderAgreement reports whether every responsive node names the same leader.
+// rqlite is a node's rqlite report, nil when there is none.
+func (n Node) rqlite() *report.RQLiteReport {
+	if n.Report == nil {
+		return nil
+	}
+	return n.Report.RQLite
+}
+
+// LeaderAgreement reports whether every responsive node names the same leader,
+// by the leader's raft address.
 //
 // Separate from Converged because split brain is worth failing on by name: two
 // nodes each leading their own half both look healthy from inside.
 func (r *Report) LeaderAgreement() error {
 	seen := map[string][]string{}
 	for _, n := range r.Nodes {
-		if !n.Report.RQLite.Responsive || n.Report.RQLite.Leader == "" {
+		q := n.rqlite()
+		if q == nil || !q.Responsive || q.LeaderAddr == "" {
 			continue
 		}
-		seen[n.Report.RQLite.Leader] = append(seen[n.Report.RQLite.Leader], n.Host)
+		seen[q.LeaderAddr] = append(seen[q.LeaderAddr], n.Host)
 	}
 	if len(seen) == 0 {
 		return fmt.Errorf("no node names a leader")
@@ -213,53 +242,4 @@ func (r *Report) LeaderAgreement() error {
 		return fmt.Errorf("split brain: %s", strings.Join(parts, "; "))
 	}
 	return nil
-}
-
-// Forgotten reports whether every membership view has dropped wgIP.
-//
-// The assertion for the kill-a-voter scenario: a dead node is not gone because
-// it stopped answering, it is gone when no surviving node still lists it as a
-// peer or a voter. A node that is evicted from raft but left in the WireGuard
-// mesh is the shape of failure that survives a restart.
-func (r *Report) Forgotten(wgIP string) error {
-	var stillThere []string
-	for _, n := range r.Nodes {
-		if n.Report.WireGuardIP == wgIP {
-			stillThere = append(stillThere, n.Host+": still in the node list")
-			continue
-		}
-		for _, p := range n.Report.WireGuard.Peers {
-			if strings.HasPrefix(p.AllowedIP, wgIP+"/") || p.AllowedIP == wgIP {
-				stillThere = append(stillThere, n.Host+": still a wireguard peer")
-			}
-		}
-	}
-	if len(stillThere) == 0 {
-		return nil
-	}
-	sort.Strings(stillThere)
-	return fmt.Errorf("%s has not been forgotten: %s", wgIP, strings.Join(stillThere, "; "))
-}
-
-// Serving reports whether every node answers on the public surfaces, ignoring
-// raft entirely.
-//
-// The reboot-everything scenario asserts this first: a cluster with no leader
-// yet should still be serving DNS and TLS, and the two failures are worth
-// telling apart.
-func (r *Report) Serving() error {
-	var down []string
-	for _, n := range r.Nodes {
-		if !n.Report.Gateway.Responsive {
-			down = append(down, n.Host+": gateway")
-		}
-		if strings.HasPrefix(n.Role, "nameserver") && !n.Report.DNS.CoreDNSActive {
-			down = append(down, n.Host+": coredns")
-		}
-	}
-	if len(down) == 0 {
-		return nil
-	}
-	sort.Strings(down)
-	return fmt.Errorf("not serving: %s", strings.Join(down, "; "))
 }

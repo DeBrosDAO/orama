@@ -3,12 +3,42 @@ package lifecycle
 import (
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
 // The predicates in this package decide whether a scenario passed. They have to
 // be right on their own terms, because the scenarios that use them cannot run
 // without infrastructure — a Converged that returns nil too easily would turn
 // the whole harness green while proving nothing.
+
+var testHosts = []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
+
+// healthyNodeReport is one converged node's report, built from the real type.
+func healthyNodeReport(host string, leader bool) *report.NodeReport {
+	state := "Follower"
+	if leader {
+		state = "Leader"
+	}
+	r := &report.NodeReport{
+		PublicIP:  host,
+		WGIP:      host,
+		RQLite:    &report.RQLiteReport{Responsive: true, RaftState: state, LeaderAddr: "10.0.0.1:7001", LeaderID: "node-1"},
+		Gateway:   &report.GatewayReport{Responsive: true, HTTPStatus: 200},
+		WireGuard: &report.WireGuardReport{InterfaceUp: true},
+		DNS:       &report.DNSReport{CoreDNSActive: true, CaddyActive: true},
+		Services:  &report.ServicesReport{Services: []report.ServiceInfo{{Name: "orama-node", ActiveState: "active"}}},
+	}
+	// N-1 peers.
+	for _, peer := range testHosts {
+		if peer != host {
+			r.WireGuard.Peers = append(r.WireGuard.Peers, report.WGPeerInfo{
+				PublicKey: "k-" + peer, AllowedIPs: peer + "/32", LatestHandshake: 1, HandshakeAgeSec: 12})
+		}
+	}
+	return r
+}
 
 // healthy builds a converged three-node report.
 func healthy() *Report {
@@ -17,37 +47,8 @@ func healthy() *Report {
 	r.Summary.RQLiteQuorum = "ok"
 	r.Summary.WGMeshStatus = "ok"
 	r.Summary.ServiceHealth = "ok"
-
-	for i, host := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"} {
-		var n Node
-		n.Host = host
-		n.Role = "nameserver"
-		n.Status = "ok"
-		n.Report.WireGuardIP = host
-		n.Report.RQLite.Responsive = true
-		n.Report.RQLite.RaftState = "Follower"
-		if i == 0 {
-			n.Report.RQLite.RaftState = "Leader"
-		}
-		n.Report.RQLite.Leader = "10.0.0.1"
-		n.Report.Gateway.Responsive = true
-		n.Report.Gateway.HTTPStatus = 200
-		n.Report.WireGuard.InterfaceUp = true
-		n.Report.DNS.CoreDNSActive = true
-		n.Report.DNS.CaddyActive = true
-
-		// N-1 peers.
-		for _, peer := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"} {
-			if peer == host {
-				continue
-			}
-			n.Report.WireGuard.Peers = append(n.Report.WireGuard.Peers, struct {
-				PublicKey    string  `json:"public_key"`
-				AllowedIP    string  `json:"allowed_ip"`
-				HandshakeAge float64 `json:"handshake_age_seconds"`
-			}{PublicKey: "k-" + peer, AllowedIP: peer + "/32", HandshakeAge: 12})
-		}
-		r.Nodes = append(r.Nodes, n)
+	for i, host := range testHosts {
+		r.Nodes = append(r.Nodes, Node{Host: host, Role: "nameserver", Status: "ok", Report: healthyNodeReport(host, i == 0)})
 	}
 	return r
 }
@@ -58,63 +59,47 @@ func TestConverged_healthyCluster(t *testing.T) {
 	}
 }
 
-// Each of these is a real failure mode that must not slip past.
-func TestConverged_rejects(t *testing.T) {
-	cases := map[string]struct {
-		mutate func(*Report)
-		want   string
-	}{
-		"no quorum": {
-			func(r *Report) { r.Summary.RQLiteQuorum = "lost" }, "quorum",
-		},
-		"no leader": {
-			func(r *Report) { r.Summary.RQLiteLeader = "" }, "no rqlite leader",
-		},
-		"broken wg mesh": {
-			func(r *Report) { r.Summary.WGMeshStatus = "degraded" }, "wireguard mesh",
-		},
-		"a critical alert": {
-			func(r *Report) {
-				r.Summary.CriticalAlerts = 1
-				r.Alerts = []Alert{{Severity: "critical", Subsystem: "rqlite", Node: "10.0.0.2", Message: "split brain"}}
-			}, "split brain",
-		},
-		"a node still Candidate": {
-			func(r *Report) { r.Nodes[1].Report.RQLite.RaftState = "Candidate" }, "Candidate",
-		},
-		"a dead gateway": {
-			func(r *Report) {
-				r.Nodes[1].Report.Gateway.Responsive = false
-				r.Nodes[1].Report.Gateway.HTTPStatus = 502
-			}, "gateway http 502",
-		},
-		"wg0 down": {
-			func(r *Report) { r.Nodes[2].Report.WireGuard.InterfaceUp = false }, "wg0 down",
-		},
-		"an incomplete mesh": {
-			func(r *Report) { r.Nodes[0].Report.WireGuard.Peers = r.Nodes[0].Report.WireGuard.Peers[:1] },
-			"1 wg peers, want 2",
-		},
-		"a crash-looping service": {
-			func(r *Report) {
-				r.Nodes[0].Report.Services.Services = append(r.Nodes[0].Report.Services.Services, struct {
-					Name        string `json:"name"`
-					Active      bool   `json:"active"`
-					Restarts    int    `json:"restarts"`
-					RestartLoop bool   `json:"restart_loop"`
-				}{Name: "orama-namespace-olric@index", Active: true, Restarts: 9, RestartLoop: true})
-			}, "crash-looping",
-		},
-		"a failed unit": {
-			func(r *Report) { r.Nodes[1].Report.Services.FailedUnits = []string{"orama-namespace-turn@anchat"} },
-			"failed units",
-		},
-		"a node reporting not-ok": {
-			func(r *Report) { r.Nodes[2].Status = "unreachable" }, `status "unreachable"`,
-		},
-	}
+// convergedRejections are real failure modes that must not slip past.
+var convergedRejections = map[string]struct {
+	mutate func(*Report)
+	want   string
+}{
+	"no quorum":      {func(r *Report) { r.Summary.RQLiteQuorum = "lost" }, "quorum"},
+	"no leader":      {func(r *Report) { r.Summary.RQLiteLeader = "" }, "no rqlite leader"},
+	"leader none":    {func(r *Report) { r.Summary.RQLiteLeader = NoLeader }, "no rqlite leader"},
+	"broken wg mesh": {func(r *Report) { r.Summary.WGMeshStatus = "degraded" }, "wireguard mesh"},
+	"a critical alert": {func(r *Report) {
+		r.Summary.CriticalAlerts = 1
+		r.Alerts = []cluster.Alert{{Severity: cluster.AlertCritical, Subsystem: "rqlite", Node: "10.0.0.2", Message: "split brain"}}
+	}, "split brain"},
+	"a node still Candidate": {func(r *Report) { r.Nodes[1].Report.RQLite.RaftState = "Candidate" }, "Candidate"},
+	"rqlite unresponsive":    {func(r *Report) { r.Nodes[1].Report.RQLite.Responsive = false }, "rqlite not responsive"},
+	"no rqlite section":      {func(r *Report) { r.Nodes[1].Report.RQLite = nil }, "no rqlite report"},
+	"a dead gateway": {func(r *Report) {
+		r.Nodes[1].Report.Gateway = &report.GatewayReport{Responsive: false, HTTPStatus: 502}
+	}, "gateway http 502"},
+	"no gateway section": {func(r *Report) { r.Nodes[1].Report.Gateway = nil }, "gateway http 0"},
+	"wg0 down":           {func(r *Report) { r.Nodes[2].Report.WireGuard.InterfaceUp = false }, "wg0 down"},
+	"no wg section":      {func(r *Report) { r.Nodes[2].Report.WireGuard = nil }, "wg0 down"},
+	"an incomplete mesh": {func(r *Report) {
+		r.Nodes[0].Report.WireGuard.Peers = r.Nodes[0].Report.WireGuard.Peers[:1]
+	}, "1 wg peers, want 2"},
+	"a crash-looping service": {func(r *Report) {
+		r.Nodes[0].Report.Services.Services = append(r.Nodes[0].Report.Services.Services, report.ServiceInfo{
+			Name: "orama-namespace-olric@index", ActiveState: "active", NRestarts: 9, RestartLoopRisk: true})
+	}, "crash-looping (9 restarts)"},
+	"a failed unit": {func(r *Report) {
+		r.Nodes[1].Report.Services.FailedUnits = []string{"orama-namespace-turn@anchat"}
+	}, "failed units"},
+	"a node reporting not-ok": {func(r *Report) { r.Nodes[2].Status = "degraded" }, `status "degraded"`},
+	"a stale report":          {func(r *Report) { r.Nodes[1].ReportAgeSec = MaxReportAgeSec + 1 }, "report is 31s old"},
+	"an unreachable node": {func(r *Report) {
+		r.Nodes[2].Status, r.Nodes[2].Error, r.Nodes[2].Report = "unreachable", "SSH failed", nil
+	}, "no report (SSH failed)"},
+}
 
-	for name, tc := range cases {
+func TestConverged_rejects(t *testing.T) {
+	for name, tc := range convergedRejections {
 		t.Run(name, func(t *testing.T) {
 			r := healthy()
 			tc.mutate(r)
@@ -141,15 +126,21 @@ func TestConverged_nodeCountIsAsserted(t *testing.T) {
 	}
 }
 
+func TestConverged_emptyReport(t *testing.T) {
+	if err := (&Report{}).Converged(0); err == nil {
+		t.Fatal("an empty report with no quorum and no leader passed")
+	}
+}
+
 // Split brain is the failure both halves look healthy from inside, so it needs
 // naming rather than inferring.
-func TestLeaderAgreement(t *testing.T) {
+func TestLeaderAgreement_splitAndNone(t *testing.T) {
 	if err := healthy().LeaderAgreement(); err != nil {
 		t.Fatalf("agreeing nodes were reported as split: %v", err)
 	}
 
 	split := healthy()
-	split.Nodes[2].Report.RQLite.Leader = "10.0.0.3"
+	split.Nodes[2].Report.RQLite.LeaderAddr = "10.0.0.3:7001"
 	err := split.LeaderAgreement()
 	if err == nil {
 		t.Fatal("split brain was not detected")
@@ -157,137 +148,36 @@ func TestLeaderAgreement(t *testing.T) {
 	if !strings.Contains(err.Error(), "split brain") {
 		t.Fatalf("error does not name it: %v", err)
 	}
-	if !strings.Contains(err.Error(), "10.0.0.3") || !strings.Contains(err.Error(), "10.0.0.1") {
+	if !strings.Contains(err.Error(), "10.0.0.3:7001") || !strings.Contains(err.Error(), "10.0.0.1:7001") {
 		t.Fatalf("error does not show who believes what: %v", err)
 	}
 
 	none := healthy()
 	for i := range none.Nodes {
-		none.Nodes[i].Report.RQLite.Leader = ""
+		none.Nodes[i].Report.RQLite.LeaderAddr = ""
 	}
 	if err := none.LeaderAgreement(); err == nil {
 		t.Fatal("a cluster where nobody names a leader passed")
 	}
 }
 
-// A node that stops answering is not the same as a node that has been
-// forgotten. This is the assertion for the kill-a-voter scenario.
-func TestForgotten(t *testing.T) {
-	t.Run("still in the node list", func(t *testing.T) {
-		if err := healthy().Forgotten("10.0.0.2"); err == nil {
-			t.Fatal("a node still in the report was reported as forgotten")
-		}
-	})
-
-	t.Run("evicted from raft but still a wireguard peer", func(t *testing.T) {
-		r := healthy()
-		r.Nodes = r.Nodes[:2] // 10.0.0.3 is gone from the node list...
-		// ...but the survivors still carry it as a peer.
-		err := r.Forgotten("10.0.0.3")
-		if err == nil {
-			t.Fatal("a node left in the WireGuard mesh was reported as forgotten")
-		}
-		if !strings.Contains(err.Error(), "wireguard peer") {
-			t.Fatalf("error does not say where it survives: %v", err)
-		}
-	})
-
-	t.Run("fully gone", func(t *testing.T) {
-		r := healthy()
-		r.Nodes = r.Nodes[:2]
-		for i := range r.Nodes {
-			var kept []struct {
-				PublicKey    string  `json:"public_key"`
-				AllowedIP    string  `json:"allowed_ip"`
-				HandshakeAge float64 `json:"handshake_age_seconds"`
-			}
-			for _, p := range r.Nodes[i].Report.WireGuard.Peers {
-				if !strings.HasPrefix(p.AllowedIP, "10.0.0.3") {
-					kept = append(kept, p)
-				}
-			}
-			r.Nodes[i].Report.WireGuard.Peers = kept
-		}
-		if err := r.Forgotten("10.0.0.3"); err != nil {
-			t.Fatalf("a fully evicted node was not reported as forgotten: %v", err)
-		}
-	})
-}
-
-// Serving must be independent of raft. A cluster mid-election should still be
-// answering DNS and TLS; losing the zone because no leader has been chosen yet
-// is a much worse failure than a slow election.
-func TestServing_isIndependentOfRaft(t *testing.T) {
+// Nodes without a report or an rqlite section have no opinion on the leader;
+// they must neither panic nor count as a second leader.
+func TestLeaderAgreement_ignoresSilentNodes(t *testing.T) {
 	r := healthy()
-	r.Summary.RQLiteLeader = ""
-	r.Summary.RQLiteQuorum = "lost"
-	for i := range r.Nodes {
-		r.Nodes[i].Report.RQLite.RaftState = "Candidate"
-	}
-
-	if err := r.Serving(); err != nil {
-		t.Fatalf("a cluster mid-election was reported as not serving: %v", err)
-	}
-	if err := r.Converged(3); err == nil {
-		t.Fatal("the same cluster was also reported as converged; the two must differ")
+	r.Nodes[1].Report = nil
+	r.Nodes[2].Report.RQLite = nil
+	if err := r.LeaderAgreement(); err != nil {
+		t.Fatalf("silent nodes broke agreement: %v", err)
 	}
 }
 
-func TestServing_rejectsDeadSurfaces(t *testing.T) {
-	dead := healthy()
-	dead.Nodes[1].Report.Gateway.Responsive = false
-	if err := dead.Serving(); err == nil || !strings.Contains(err.Error(), "gateway") {
-		t.Fatalf("a dead gateway passed Serving: %v", err)
-	}
-
-	noDNS := healthy()
-	noDNS.Nodes[0].Report.DNS.CoreDNSActive = false
-	if err := noDNS.Serving(); err == nil || !strings.Contains(err.Error(), "coredns") {
-		t.Fatalf("a nameserver with CoreDNS down passed Serving: %v", err)
-	}
-
-	// CoreDNS is only expected on nameservers; a worker without it is fine.
-	worker := healthy()
-	worker.Nodes[0].Role = "node"
-	worker.Nodes[0].Report.DNS.CoreDNSActive = false
-	if err := worker.Serving(); err != nil {
-		t.Fatalf("a worker without CoreDNS was reported as not serving: %v", err)
-	}
-}
-
-func TestParseReport(t *testing.T) {
-	raw := []byte(`{
-	  "meta": {"environment":"devnet","node_count":3,"healthy_count":3,"failed_count":0},
-	  "summary": {"rqlite_leader":"10.0.0.1","rqlite_quorum":"ok","wg_mesh_status":"ok","critical_alerts":0},
-	  "alerts": [{"severity":"warning","subsystem":"dns","node":"10.0.0.2","message":"cert expires soon"}],
-	  "nodes": [{"host":"1.2.3.4","role":"nameserver","status":"ok","report":{
-	    "wireguard_ip":"10.0.0.1",
-	    "rqlite":{"responsive":true,"raft_state":"Leader","applied_index":40,"commit_index":40},
-	    "gateway":{"responsive":true,"http_status":200},
-	    "wireguard":{"interface_up":true,"peers":[{"allowed_ip":"10.0.0.2/32"}]}
-	  }}]
-	}`)
-
-	r, err := ParseReport(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Summary.RQLiteLeader != "10.0.0.1" || len(r.Nodes) != 1 {
-		t.Fatalf("got %+v", r.Summary)
-	}
-	if r.Nodes[0].Report.RQLite.AppliedIndex != 40 || r.Nodes[0].Report.WireGuardIP != "10.0.0.1" {
-		t.Fatalf("nested fields lost: %+v", r.Nodes[0].Report)
-	}
-	if len(r.Alerts) != 1 || r.Alerts[0].Severity != "warning" {
-		t.Fatalf("alerts lost: %+v", r.Alerts)
-	}
-}
-
-// An unparseable report must be an error, not an empty one — an empty Report
-// would sail through Converged's node-count check on a 0-node expectation and
-// report a dead cluster as fine.
-func TestParseReport_garbage(t *testing.T) {
-	if _, err := ParseReport([]byte("orama: command not found")); err == nil {
-		t.Fatal("garbage parsed as a report")
+func TestHasLeader_noneAndEmpty(t *testing.T) {
+	r := &Report{}
+	for leader, want := range map[string]bool{"": false, NoLeader: false, "10.0.0.1": true} {
+		r.Summary.RQLiteLeader = leader
+		if got := r.HasLeader(); got != want {
+			t.Errorf("HasLeader(%q) = %v, want %v", leader, got, want)
+		}
 	}
 }

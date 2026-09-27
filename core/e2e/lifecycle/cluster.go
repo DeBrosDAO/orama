@@ -18,9 +18,12 @@ import (
 // set up its own state tests something no operator ever runs.
 //
 // Observation is the same: `orama monitor report --json`, `dig`, and the
-// gateway's own /health. Reading a node's state over SSH would let a scenario
-// pass while the CLI an operator uses reports something different, which is
-// precisely the class of bug the stability train is about.
+// gateway's own /health. The report comes from the gateway's operator
+// telemetry API, as it does for an operator, so the machine running the
+// harness needs an operator session for the environment (`orama env use`,
+// then `orama auth login`). Reading a node's state over SSH would let a
+// scenario pass while the CLI an operator uses reports something different,
+// which is precisely the class of bug the stability train is about.
 type Cluster struct {
 	t   *testing.T
 	Env string
@@ -49,8 +52,9 @@ const (
 	// must not wait for raft.
 	ServingBudget = 90 * time.Second
 
-	// PollInterval is how often a wait re-reads the cluster. A monitor report
-	// is an SSH fan-out, so this is not free.
+	// PollInterval is how often a wait re-reads the cluster. It matches the
+	// 10s on which the gateway gathers each node's telemetry: polling faster
+	// reads the same reports again.
 	PollInterval = 10 * time.Second
 
 	// CommandBudget bounds one CLI invocation.
@@ -200,7 +204,7 @@ func (c *Cluster) Leader() string {
 	if err != nil {
 		c.t.Fatalf("cannot read the cluster: %v", err)
 	}
-	if r.Summary.RQLiteLeader == "" {
+	if !r.HasLeader() {
 		c.t.Fatal("the cluster has no leader")
 	}
 	return r.Summary.RQLiteLeader
@@ -214,7 +218,7 @@ func (c *Cluster) AnyFollower() string {
 		c.t.Fatalf("cannot read the cluster: %v", err)
 	}
 	for _, n := range r.Nodes {
-		if n.Report.RQLite.RaftState == "Follower" {
+		if q := n.rqlite(); q != nil && q.RaftState == RaftFollower {
 			return n.Host
 		}
 	}

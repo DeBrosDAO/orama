@@ -5,72 +5,55 @@ import (
 	"io"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/view"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 )
 
-// DNSTable prints DNS status for nameserver nodes to w.
-func DNSTable(snap *monitor.ClusterSnapshot, w io.Writer) error {
-	fmt.Fprintf(w, "%s\n", styleBold.Render(
-		fmt.Sprintf("DNS Status \u2014 %s", snap.Environment)))
-	fmt.Fprintln(w, strings.Repeat("\u2550", 22))
-	fmt.Fprintln(w)
+// TLS expiry thresholds, in days.
+const (
+	tlsDaysCrit = 7
+	tlsDaysWarn = 30
+)
 
-	// Header
-	fmt.Fprintf(w, "%-18s %-9s %-7s %-5s %-5s %-10s %-10s %s\n",
-		styleHeader.Render("NODE"),
-		styleHeader.Render("COREDNS"),
-		styleHeader.Render("CADDY"),
-		styleHeader.Render("SOA"),
-		styleHeader.Render("NS"),
-		styleHeader.Render("WILDCARD"),
-		styleHeader.Render("BASE TLS"),
-		styleHeader.Render("WILD TLS"))
-	fmt.Fprintln(w, separator(78))
+// DNSTable prints DNS and TLS status for the nameserver nodes.
+func DNSTable(snap *cluster.ClusterSnapshot, w io.Writer) error {
+	t := view.ThemeFor(w)
+	var b strings.Builder
+	writeHeader(&b, t, snap, "DNS")
+	b.WriteString("\n")
+	b.WriteString(DNSRows(t, snap))
+	return flush(w, &b)
+}
 
-	found := false
+// DNSRows is the nameserver table, or a note that there are none.
+func DNSRows(t view.Theme, snap *cluster.ClusterSnapshot) string {
+	var rows [][]string
 	for _, cs := range snap.Nodes {
-		// Only show nameserver nodes
 		if !cs.Node.IsNameserver() {
 			continue
 		}
-		found = true
-
-		if cs.Error != nil || cs.Report == nil {
-			fmt.Fprintf(w, "%-18s %s\n",
-				styleRed.Render(cs.Node.Host),
-				styleRed.Render("UNREACHABLE"))
-			continue
+		switch {
+		case cs.Report == nil:
+			rows = append(rows, []string{cs.Node.Host, t.Crit.Render("UNREACHABLE"), "", "", "", "", "", ""})
+		case cs.Report.DNS == nil:
+			rows = append(rows, []string{cs.Node.Host, t.Muted.Render("no DNS data"), "", "", "", "", "", ""})
+		default:
+			d := cs.Report.DNS
+			rows = append(rows, []string{cs.Node.Host,
+				t.Bool(d.CoreDNSActive, "DOWN"), t.Bool(d.CaddyActive, "DOWN"),
+				t.Bool(d.SOAResolves, "FAIL"), t.Bool(d.NSResolves, "FAIL"), t.Bool(d.WildcardResolves, "FAIL"),
+				tlsDays(t, d.BaseTLSDaysLeft), tlsDays(t, d.WildTLSDaysLeft)})
 		}
-
-		r := cs.Report
-		if r.DNS == nil {
-			fmt.Fprintf(w, "%-18s %s\n",
-				cs.Node.Host,
-				styleMuted.Render("no DNS data"))
-			continue
-		}
-
-		dns := r.DNS
-		fmt.Fprintf(w, "%-18s %-9s %-7s %-5s %-5s %-10s %-10s %s\n",
-			cs.Node.Host,
-			statusIcon(dns.CoreDNSActive),
-			statusIcon(dns.CaddyActive),
-			statusIcon(dns.SOAResolves),
-			statusIcon(dns.NSResolves),
-			statusIcon(dns.WildcardResolves),
-			tlsDaysStr(dns.BaseTLSDaysLeft),
-			tlsDaysStr(dns.WildTLSDaysLeft))
 	}
-
-	if !found {
-		fmt.Fprintln(w, styleMuted.Render("  No nameserver nodes found"))
+	if len(rows) == 0 {
+		return tableIndent + t.Muted.Render("No nameserver nodes found") + "\n"
 	}
-
-	return nil
+	return view.Table(t, tableIndent,
+		[]string{"NODE", "COREDNS", "CADDY", "SOA", "NS", "WILDCARD", "BASE TLS", "WILD TLS"}, rows)
 }
 
 // DNSJSON writes DNS status as JSON.
-func DNSJSON(snap *monitor.ClusterSnapshot, w io.Writer) error {
+func DNSJSON(snap *cluster.ClusterSnapshot, w io.Writer) error {
 	type dnsEntry struct {
 		Host             string `json:"host"`
 		CoreDNSActive    bool   `json:"coredns_active"`
@@ -83,47 +66,35 @@ func DNSJSON(snap *monitor.ClusterSnapshot, w io.Writer) error {
 		Error            string `json:"error,omitempty"`
 	}
 
-	var entries []dnsEntry
+	entries := []dnsEntry{}
 	for _, cs := range snap.Nodes {
 		if !cs.Node.IsNameserver() {
 			continue
 		}
-		e := dnsEntry{Host: cs.Node.Host}
-		if cs.Error != nil {
-			e.Error = cs.Error.Error()
-			entries = append(entries, e)
-			continue
+		e := dnsEntry{Host: cs.Node.Host, Error: cs.Err}
+		if cs.Report != nil && cs.Report.DNS != nil {
+			d := cs.Report.DNS
+			e.CoreDNSActive, e.CaddyActive = d.CoreDNSActive, d.CaddyActive
+			e.SOAResolves, e.NSResolves, e.WildcardResolves = d.SOAResolves, d.NSResolves, d.WildcardResolves
+			e.BaseTLSDaysLeft, e.WildTLSDaysLeft = d.BaseTLSDaysLeft, d.WildTLSDaysLeft
 		}
-		if cs.Report == nil || cs.Report.DNS == nil {
-			entries = append(entries, e)
-			continue
-		}
-		dns := cs.Report.DNS
-		e.CoreDNSActive = dns.CoreDNSActive
-		e.CaddyActive = dns.CaddyActive
-		e.SOAResolves = dns.SOAResolves
-		e.NSResolves = dns.NSResolves
-		e.WildcardResolves = dns.WildcardResolves
-		e.BaseTLSDaysLeft = dns.BaseTLSDaysLeft
-		e.WildTLSDaysLeft = dns.WildTLSDaysLeft
 		entries = append(entries, e)
 	}
-
 	return writeJSON(w, entries)
 }
 
-// tlsDaysStr formats TLS days left with appropriate coloring.
-func tlsDaysStr(days int) string {
+// tlsDays renders days until a certificate expires, colored by urgency.
+func tlsDays(t view.Theme, days int) string {
 	if days < 0 {
-		return styleMuted.Render("--")
+		return t.Muted.Render("--")
 	}
 	s := fmt.Sprintf("%d days", days)
 	switch {
-	case days < 7:
-		return styleRed.Render(s)
-	case days < 30:
-		return styleYellow.Render(s)
+	case days < tlsDaysCrit:
+		return t.Crit.Render(s)
+	case days < tlsDaysWarn:
+		return t.Warn.Render(s)
 	default:
-		return styleGreen.Render(s)
+		return t.OK.Render(s)
 	}
 }
