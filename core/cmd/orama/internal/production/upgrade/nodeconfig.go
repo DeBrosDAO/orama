@@ -165,5 +165,44 @@ func (o *Orchestrator) regenerateConfigs() error {
 	// that did not upgrade anything: the node restarts onto the new binary with
 	// the old config, which is the combination that has to work and the one
 	// least likely to have been tested.
-	return o.setup.Phase4GenerateConfigs(peers, vpsIP, enableHTTPS, domain, baseDomain, joinAddress)
+	//
+	// Olric seeds are the other nodes' memberlist addresses. Leaving them out
+	// rewrites the config with no peers, and each node then bootstraps a
+	// cluster of one. A cache write on one node is then invisible to the others.
+	return o.setup.Phase4GenerateConfigs(peers, vpsIP, enableHTTPS, domain, baseDomain, joinAddress,
+		olricSeedsFromMultiaddrs(peers, vpsIP))
+}
+
+// olricSeedsFromMultiaddrs is the index Olric memberlist address of every
+// bootstrap peer that is not this node. The peers in node.yaml are libp2p
+// multiaddrs; Olric wants host:port.
+func olricSeedsFromMultiaddrs(peers []string, selfIP string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, peer := range peers {
+		ip := multiaddrIPv4(peer)
+		if ip == "" || ip == selfIP {
+			continue
+		}
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		out = append(out, net.JoinHostPort(ip, strconv.Itoa(constants.OlricMemberlistPort)))
+	}
+	return out
+}
+
+// multiaddrIPv4 reads the first /ip4/ address out of a multiaddr.
+func multiaddrIPv4(peer string) string {
+	const marker = "/ip4/"
+	i := strings.Index(peer, marker)
+	if i < 0 {
+		return ""
+	}
+	ip, _, _ := strings.Cut(peer[i+len(marker):], "/")
+	if net.ParseIP(ip) == nil || net.ParseIP(ip).To4() == nil {
+		return ""
+	}
+	return ip
 }

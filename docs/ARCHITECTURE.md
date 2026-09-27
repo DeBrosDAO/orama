@@ -1121,7 +1121,7 @@ internal-auth check both accept.
 ### Service Authentication
 
 - **RQLite:** credentials are generated at genesis. `orama-namespace-rqlite@*` copies `rqlite-auth.json` into the instance data dir and starts rqlited with `-auth`. HTTP/Raft bind the WireGuard advertise address, not `0.0.0.0`. Gateway YAML carries `rqlite_username` / `rqlite_password`. Missing auth file refuses to start. See `docs/SECURITY.md`
-- **Olric:** memberlist binds the WireGuard address. Olric v0.7.0 YAML has no `encryptionKey`; overlay is the control
+- **Olric:** memberlist binds the WireGuard address. An upgrade rewrites that config and seeds it from the node's bootstrap peers, so the index cache stays one cluster. Olric v0.7.0 YAML has no `encryptionKey`; overlay is the control
 - **IPFS Cluster:** `TrustedPeers` is `["*"]`; membership is CLUSTER_SECRET + overlay + invite. Install refuses to initialize IPFS Cluster with an empty `CLUSTER_SECRET`. Private blobs are encrypted before Add (`HKDF(cluster-secret, "ipfs-wrap-v1")`)
 - **TLS:** Caddy terminates public TLS (DNS-01). The gateway process does not bind `:80`/`:443` and refuses `enable_https: true`
 - **Internal endpoints:** every `/v1/internal/wg/*` endpoint requires the caller to be on the WireGuard overlay **and** to present the cluster secret. A gateway with no cluster secret configured refuses them outright rather than serving them unauthenticated
