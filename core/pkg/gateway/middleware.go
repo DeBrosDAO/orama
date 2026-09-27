@@ -867,8 +867,18 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Only enforce ownership where the route asks for it
+		// A route that does not require a grant still has to carry one when the
+		// scope gate will ask for more than the data plane. Without that, an
+		// owner holds only the data plane and namespace list, deployments and
+		// the database answer 403. Cache and storage already pass on the data
+		// plane, and resolving a grant there would apply a selector the route
+		// has not asked to apply.
 		if !policy.Ownership {
+			if g.forwardedCallerNeedsGrant(r, policy) {
+				if grant := g.lookupRequestGrant(r); grant != nil {
+					r = markGrant(r, grant)
+				}
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -998,6 +1008,69 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// lookupRequestGrant is the live grant the caller holds in the namespace the
+// credential names, or nil when there is none or it cannot be read. It does
+// not write a response: the ownership gate is what turns "none" into a 403.
+func (g *Gateway) lookupRequestGrant(r *http.Request) *auth.Grant {
+	if g.authService == nil {
+		return nil
+	}
+	ctx := r.Context()
+	ns := ""
+	if v := ctx.Value(CtxKeyNamespaceOverride); v != nil {
+		if s, ok := v.(string); ok {
+			ns = strings.TrimSpace(s)
+		}
+	}
+	if ns == "" && g.cfg != nil {
+		ns = strings.TrimSpace(g.cfg.ClientNamespace)
+	}
+	if ns == "" {
+		return nil
+	}
+
+	ownerType, ownerID := "", ""
+	if v := ctx.Value(ctxKeyJWT); v != nil {
+		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
+			subj := strings.TrimSpace(claims.Sub)
+			if subj != "" {
+				if auth.IsAPIKeySubject(subj) {
+					ownerType, ownerID = "api_key", subj
+				} else {
+					ownerType, ownerID = "wallet", subj
+				}
+			}
+		}
+	}
+	if ownerType == "" || ownerID == "" {
+		return nil
+	}
+
+	db := g.grantDB()
+	internalCtx := client.WithInternalAuth(ctx)
+	// Read only. The ownership gate is what creates a missing namespace row;
+	// a list or a deploy must not insert one as a side effect of the check.
+	nres, err := db.Query(internalCtx, "SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns)
+	if err != nil || nres == nil || nres.Count == 0 || len(nres.Rows) == 0 || len(nres.Rows[0]) == 0 {
+		return nil
+	}
+	nsID := nres.Rows[0][0]
+
+	ptype := auth.PrincipalWallet
+	hashed := ""
+	if ownerType == "api_key" {
+		ptype = auth.PrincipalServiceAccount
+		hashed = g.authService.HashAPIKey(ownerID)
+	}
+	for _, c := range principalIdentifierCandidates(ownerType, ownerID, hashed) {
+		grant, gerr := g.authService.GrantIn(internalCtx, db, nsID, ptype, c)
+		if gerr == nil {
+			return grant
+		}
+	}
+	return nil
 }
 
 // loggableOwnerID is how an owner appears in a log line. For an API key the

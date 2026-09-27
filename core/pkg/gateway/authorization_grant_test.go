@@ -126,3 +126,107 @@ func TestAuthorizationMiddleware_putsTheRoleInTheContext(t *testing.T) {
 		})
 	}
 }
+
+// controlChain is the authorization gate and the scope gate, which is the
+// chain that refused an owner on namespace list: the route does not require
+// ownership, so the grant was never put on the request, and the scope gate
+// then saw only the data plane.
+func controlChain(g *Gateway) (http.Handler, *bool) {
+	reached := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+	return g.authorizationMiddleware(g.scopeMiddleware(next)), &reached
+}
+
+func grantWalletRequest(method, path, wallet, namespace string) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	ctx := context.WithValue(r.Context(), ctxkeys.JWT, &auth.JWTClaims{Sub: wallet})
+	ctx = context.WithValue(ctx, ctxkeys.NamespaceOverride, namespace)
+	return r.WithContext(ctx)
+}
+
+func TestAuthorizationMiddleware_ownerReachesAControlRouteThatDoesNotRequireOwnership(t *testing.T) {
+	g, registry := controlPlaneGateway(t, string(auth.RoleOwner))
+	chain, reached := controlChain(g)
+
+	w := httptest.NewRecorder()
+	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/list", "0xowner", "anchat"))
+
+	if !*reached {
+		t.Fatalf("an owner was refused namespace list: %d %s", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+	if registry.queries == 0 {
+		t.Fatal("the owner's grant was not read")
+	}
+}
+
+func TestAuthorizationMiddleware_aWalletWithNoGrantIsRefusedTheControlPlane(t *testing.T) {
+	g, _ := controlPlaneGateway(t, "")
+	chain, reached := controlChain(g)
+
+	w := httptest.NewRecorder()
+	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/list", "0xstranger", "anchat"))
+
+	if *reached || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), CodeScopeMissing) {
+		t.Fatalf("reached %v, status %d, body %s; want 403 %s", *reached, w.Code, strings.TrimSpace(w.Body.String()), CodeScopeMissing)
+	}
+}
+
+func TestAuthorizationMiddleware_developerReachesDeployAndNotTheNamespace(t *testing.T) {
+	g, _ := controlPlaneGateway(t, string(auth.RoleDeveloper))
+	chain, reached := controlChain(g)
+
+	w := httptest.NewRecorder()
+	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/deployments/list", "0xdev", "anchat"))
+	if !*reached {
+		t.Fatalf("a developer was refused deployments: %d %s", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+
+	chain, reached = controlChain(g)
+	w = httptest.NewRecorder()
+	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/list", "0xdev", "anchat"))
+	if *reached || w.Code != http.StatusForbidden {
+		t.Fatalf("a developer listed namespaces: reached %v status %d %s", *reached, w.Code, strings.TrimSpace(w.Body.String()))
+	}
+}
+
+// A reader grant is empty. Resolving it on cache would take the data plane
+// away from a member the route never asked to own. The lookup stays off this
+// path, including for an owner: a selector on a storage grant is not applied
+// by a route that does not resolve one.
+func TestAuthorizationMiddleware_dataPlaneDoesNotResolveAGrant(t *testing.T) {
+	for _, role := range []string{string(auth.RoleOwner), string(auth.RoleReader)} {
+		t.Run(role, func(t *testing.T) {
+			g, registry := controlPlaneGateway(t, role)
+			chain, reached := controlChain(g)
+
+			w := httptest.NewRecorder()
+			chain.ServeHTTP(w, grantWalletRequest(http.MethodPost, "/v1/cache/get", "0xmember", "anchat"))
+
+			if !*reached {
+				t.Fatalf("cache refused a %s: %d %s", role, w.Code, strings.TrimSpace(w.Body.String()))
+			}
+			if registry.queries != 0 {
+				t.Errorf("cache made %d registry queries", registry.queries)
+			}
+		})
+	}
+}
+
+func controlPlaneGateway(t *testing.T, role string) (*Gateway, *countingGrantRegistry) {
+	t.Helper()
+	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	registry := &countingGrantRegistry{grantRegistry: &grantRegistry{role: role}}
+	svc, err := auth.NewService(logger, registry, "", "anchat")
+	if err != nil {
+		t.Fatalf("auth service: %v", err)
+	}
+	return &Gateway{
+		logger:      logger,
+		client:      registry,
+		authService: svc,
+		cfg:         &Config{ClientNamespace: "anchat", BaseDomain: "dbrs.space"},
+	}, registry
+}

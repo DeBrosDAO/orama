@@ -114,6 +114,22 @@ func TestAuthorizationMiddleware_forwardedCallerWithoutAGrantIsRefused(t *testin
 	}
 }
 
+// Deployments do not require ownership. The hop still has to read the grant,
+// or an owner managing the namespace through the cluster gateway is refused
+// with the data plane's permissions.
+func TestAuthorizationMiddleware_forwardedOwnerReachesAControlRoute(t *testing.T) {
+	g, registry := namespaceGatewayForHops(t, "owner")
+
+	rec, reached := serveHop(g, hop(t, g, http.MethodGet, "/v1/deployments/list", hopNamespace, hopWallet))
+
+	if !reached {
+		t.Fatalf("a forwarded owner was refused deployments: %d %s", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+	if registry.queries == 0 {
+		t.Fatal("the grant was not read from the registry")
+	}
+}
+
 // The data plane a wallet reaches without a grant stays free of registry
 // round trips: that is the path every publish takes.
 func TestAuthorizationMiddleware_forwardedDataPlaneSkipsTheGrantLookup(t *testing.T) {

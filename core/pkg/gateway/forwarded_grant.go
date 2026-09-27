@@ -20,21 +20,30 @@ func (g *Gateway) grantDB() client.DatabaseClient {
 	return g.client.Database()
 }
 
-// forwardedCallerNeedsGrant reports whether a request the main gateway
-// forwarded has to have its grant resolved here.
+// forwardedCallerNeedsGrant reports whether this caller's grant has to be
+// resolved before the scope gate runs.
 //
 // The proxy hop carries who the caller is — the namespace, a JWT subject, an
 // API key's scopes — and not the grant the caller holds. An API key's scopes
-// are its authority, so that caller's answer has already arrived. A JWT
-// caller's is its grant, so it is looked up here, and only when the route
-// needs more than the identity alone reaches: a wallet reaches the data plane
-// without one, and the lookup is registry round trips on every publish.
+// are its authority on a route that does not itself resolve a grant. A wallet's
+// authority is its grant, and a wallet with none holds only the data plane, so
+// the grant is read when the route asks for something the data plane does not
+// have. Cache and publish do not: the lookup is registry round trips on every
+// one of those calls. The same question applies to a wallet that called this
+// gateway directly. A control route that does not set Ownership — namespace
+// list, deployments, the database — used to skip the read, and the scope gate
+// then refused the owner with the data plane's permissions.
 func (g *Gateway) forwardedCallerNeedsGrant(r *http.Request, policy routepolicy.Policy) bool {
-	if !policy.Ownership || policy.Domain == "" {
+	if policy.Domain == "" {
 		return false
 	}
 	claims, _ := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims)
 	if claims == nil || strings.TrimSpace(claims.Sub) == "" {
+		return false
+	}
+	// A key's scopes already answer a route that does not resolve a grant.
+	// An owned route still looks the grant up: the selector lives on it.
+	if auth.IsAPIKeySubject(claims.Sub) && !policy.Ownership {
 		return false
 	}
 	return !g.callerPermissions(r).PermitsDomain(auth.Domain(policy.Domain), auth.Action(policy.Action))

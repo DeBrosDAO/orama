@@ -951,9 +951,9 @@ to the credential's (`clusterServerlessRoutingMiddleware`,
 `pkg/gateway/serverless_routing.go`). Independently of that routing, the
 database host functions serve a function only when its namespace owns the
 gateway's database (`hostfunctions.checkDatabaseAccess`). Management requests
-act on the credential's namespace; one naming another namespace is refused. The
-namespace gateway reads a forwarded JWT caller's grant from the cluster registry
-when a control-plane route needs it (`forwardedCallerNeedsGrant`).
+act on the credential's namespace; one naming another namespace is refused. A wallet's grant is read from the cluster registry when a control-plane route
+needs it (`forwardedCallerNeedsGrant`), on a direct call and on a forwarded
+one. A data-plane route does not read it.
 
 ## Security Architecture
 
