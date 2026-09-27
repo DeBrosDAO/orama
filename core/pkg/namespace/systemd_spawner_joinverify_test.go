@@ -134,6 +134,52 @@ func TestVerifyJoinTarget_waitsUntilTheLeaderListens(t *testing.T) {
 	}
 }
 
+// rqlited serves /status before the store is open, and that document has an
+// empty directory. An empty directory is not another tenant. The check waits
+// until the directory is there, then judges it.
+func TestVerifyJoinTarget_waitsUntilTheStoreDirIsReported(t *testing.T) {
+	dir := "/opt/orama/.orama/data/namespaces/anchat-v2/rqlite/12D3KooWGpb1p"
+	start := time.Now()
+	srv := httptest.NewServer(requireRQLiteAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if time.Since(start) < 350*time.Millisecond {
+			_, _ = w.Write([]byte(`{"store":{"dir":""}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"store":{"dir":"` + dir + `"}}`))
+	})))
+	t.Cleanup(srv.Close)
+	s := credentialedSpawner(t)
+
+	if err := s.verifyJoinTarget(context.Background(), "anchat-v2", srv.URL); err != nil {
+		t.Fatalf("a leader that had not opened its store yet was refused: %v", err)
+	}
+	if time.Since(start) < 200*time.Millisecond {
+		t.Fatal("the check treated an empty directory as a finished answer")
+	}
+}
+
+// An empty directory through the whole deadline is "not ready", not a claim
+// that this raft group belongs to somebody else.
+func TestVerifyJoinTarget_emptyDirIsNotAForeignNamespace(t *testing.T) {
+	url := statusServer(t, "")
+	s := credentialedSpawner(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	err := s.verifyJoinTarget(ctx, "anchat-v2", url)
+	if err == nil {
+		t.Fatal("verifyJoinTarget accepted a target that never reported a directory")
+	}
+	if strings.Contains(err.Error(), "different namespace") {
+		t.Fatalf("an empty directory was treated as another tenant: %v", err)
+	}
+}
+
 // A target that answers with something other than a status document must fail
 // closed too.
 func TestVerifyJoinTarget_malformedStatusFails(t *testing.T) {

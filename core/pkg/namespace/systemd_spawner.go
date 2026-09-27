@@ -102,10 +102,10 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 		return fmt.Errorf("verify join target for namespace %s: %q is not an http://<wireguard-ip>:<port> address", namespace, verifyURL)
 	}
 
-	// The leader's unit is reported started before rqlited binds. A single GET
-	// then sees connection refused and the join is abandoned, which rolls the
-	// namespace back. Wait out the bind. An answer is judged at once: a
-	// different namespace's directory is a refusal, not a reason to keep asking.
+	// The leader's unit is reported started before rqlited binds, and /status
+	// answers before the store is open. A connection refused, or a status
+	// whose directory is still empty, is the process not ready. A directory
+	// that names a different namespace is a refusal, and that is judged at once.
 	user, pass, err := s.readRQLitePassword()
 	if err != nil {
 		return fmt.Errorf("verify join target for namespace %s: %w", namespace, err)
@@ -116,6 +116,18 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 	}
 	statusURL := strings.TrimRight(verifyURL, "/") + "/status"
 	var last error
+	wait := func() bool {
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		return true
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			if last == nil {
@@ -134,14 +146,8 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 		cancel()
 		if doErr != nil {
 			last = doErr
-			if !time.Now().Before(deadline) {
+			if !wait() {
 				return fmt.Errorf("verify join target %s for namespace %s: %w", verifyURL, namespace, last)
-			}
-			timer := time.NewTimer(200 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-			case <-timer.C:
 			}
 			continue
 		}
@@ -159,12 +165,20 @@ func (s *SystemdSpawner) verifyJoinTarget(ctx context.Context, namespace, verify
 		if decErr != nil {
 			return fmt.Errorf("verify join target %s for namespace %s: decode status: %w", verifyURL, namespace, decErr)
 		}
+		dir := strings.TrimSpace(status.Store.Dir)
+		if dir == "" {
+			last = fmt.Errorf("store directory not reported yet")
+			if !wait() {
+				return fmt.Errorf("verify join target %s for namespace %s: %w", verifyURL, namespace, last)
+			}
+			continue
+		}
 		want := string(os.PathSeparator) + "namespaces" + string(os.PathSeparator) + namespace + string(os.PathSeparator)
-		if !strings.Contains(status.Store.Dir, want) {
+		if !strings.Contains(dir, want) {
 			return fmt.Errorf(
 				"refusing to join RQLite at %s for namespace %s: it is serving %q, which belongs to a different namespace — "+
 					"joining it would put this node in another tenant's raft group and expose their database",
-				verifyURL, namespace, status.Store.Dir)
+				verifyURL, namespace, dir)
 		}
 		return nil
 	}
