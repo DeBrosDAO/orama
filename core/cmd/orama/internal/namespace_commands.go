@@ -336,6 +336,10 @@ func NamespaceDelete(force bool) error {
 	if creds == nil || !creds.IsValid() {
 		return clierr.Auth("not authenticated: run 'orama auth login'")
 	}
+	token, err := auth.Bearer(gatewayURL, store, creds)
+	if err != nil {
+		return clierr.Auth("%w", err)
+	}
 
 	namespace := creds.Namespace
 	if namespace == "" || namespace == "default" {
@@ -358,7 +362,7 @@ func NamespaceDelete(force bool) error {
 	fmt.Printf("Deleting namespace '%s'...\n", namespace)
 
 	if _, err := nsRequest("delete the namespace", http.MethodDelete,
-		gatewayURL+"/v1/namespace/delete", creds.APIKey, nil); err != nil {
+		gatewayURL+"/v1/namespace/delete", token, nil); err != nil {
 		return err
 	}
 
@@ -394,9 +398,13 @@ func NamespaceList(out *printer.Printer) error {
 	if creds == nil || !creds.IsValid() {
 		return clierr.Auth("not authenticated: run 'orama auth login'")
 	}
+	token, err := auth.Bearer(gatewayURL, store, creds)
+	if err != nil {
+		return clierr.Auth("%w", err)
+	}
 
 	result, err := nsRequest("list namespaces", http.MethodGet,
-		gatewayURL+"/v1/namespace/list", creds.APIKey, nil)
+		gatewayURL+"/v1/namespace/list", token, nil)
 	if err != nil {
 		return err
 	}
@@ -622,6 +630,10 @@ func NamespaceCreate(name string) error {
 	if creds == nil || !creds.IsValid() {
 		return clierr.Auth("not authenticated: run 'orama auth login'")
 	}
+	token, err := auth.Bearer(gatewayURL, store, creds)
+	if err != nil {
+		return clierr.Auth("%w", err)
+	}
 
 	body, err := json.Marshal(map[string]string{"name": name})
 	if err != nil {
@@ -629,7 +641,7 @@ func NamespaceCreate(name string) error {
 	}
 
 	result, err := nsRequest("create namespace", http.MethodPost,
-		gatewayURL+"/v1/namespaces", creds.APIKey, bytes.NewReader(body))
+		gatewayURL+"/v1/namespaces", token, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

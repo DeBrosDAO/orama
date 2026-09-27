@@ -161,17 +161,18 @@ func (creds *Credentials) IsExpired() bool {
 	return time.Now().After(creds.ExpiresAt)
 }
 
-// IsValid checks if credentials are valid (not empty and not expired)
+// IsValid reports whether this credential can still authenticate. A session
+// from `orama auth login` has an access token and a refresh token and no API
+// key; requiring the key made every command that checked IsValid tell a
+// signed-in wallet to log in again.
 func (creds *Credentials) IsValid() bool {
-	if creds == nil {
+	if creds == nil || creds.IsExpired() {
 		return false
 	}
-
-	if creds.APIKey == "" {
-		return false
+	if strings.TrimSpace(creds.APIKey) != "" {
+		return true
 	}
-
-	return !creds.IsExpired()
+	return strings.TrimSpace(creds.AccessToken) != "" || strings.TrimSpace(creds.RefreshToken) != ""
 }
 
 // UpdateLastUsed updates the last used timestamp

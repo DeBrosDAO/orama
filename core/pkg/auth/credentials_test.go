@@ -62,4 +62,11 @@ func TestIsExpiredAndValid(t *testing.T) {
 	if !c.IsValid() {
 		t.Fatalf("no expiry should be valid")
 	}
+	session := &Credentials{AccessToken: "a", RefreshToken: "r"}
+	if !session.IsValid() {
+		t.Fatal("a session with no API key was treated as logged out")
+	}
+	if (&Credentials{}).IsValid() {
+		t.Fatal("an empty credential was accepted")
+	}
 }
