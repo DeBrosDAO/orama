@@ -8,12 +8,29 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/nodehealth"
 )
 
 func probeOutput(state, leader string, applied, commit uint64, gatewayCode string) string {
 	return fmt.Sprintf(
 		`{"status":{"store":{"raft":{"state":%q,"leader_id":%q,"applied_index":%d,"commit_index":%d}}},"gateway_code":%q}`,
 		state, leader, applied, commit, gatewayCode)
+}
+
+// rqlite 8 leaves store.raft.leader_id empty and names the leader on
+// store.leader. A probe that only reads the old field waits out the gate
+// saying the cluster has no quorum while every node is a healthy follower.
+func TestParseProbe_rqlite8Leader(t *testing.T) {
+	got, err := parseProbe(`{"status":{"store":{"raft":{"state":"Follower","applied_index":5,"commit_index":5},"leader":{"node_id":"n1","addr":"10.0.0.1:10101"}}},"gateway_code":"200"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LeaderID != "n1" || got.RaftState != "Follower" || !got.GatewayOK {
+		t.Fatalf("got %+v", got)
+	}
+	if err := got.Ready(nodehealth.Options{RequireLeaderKnown: true, MaxIndexLag: 200}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestParseProbe_reads_every_field(t *testing.T) {

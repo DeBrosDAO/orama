@@ -134,6 +134,10 @@ func parseProbe(out string) (nodehealth.Status, error) {
 					AppliedIndex uint64 `json:"applied_index"`
 					CommitIndex  uint64 `json:"commit_index"`
 				} `json:"raft"`
+				// rqlite 8 reports the leader here. raft.leader_id is empty.
+				Leader struct {
+					NodeID string `json:"node_id"`
+				} `json:"leader"`
 			} `json:"store"`
 		} `json:"status"`
 		GatewayCode string `json:"gateway_code"`
@@ -143,9 +147,13 @@ func parseProbe(out string) (nodehealth.Status, error) {
 	}
 
 	raft := probe.Status.Store.Raft
+	leader := raft.LeaderID
+	if leader == "" {
+		leader = probe.Status.Store.Leader.NodeID
+	}
 	return nodehealth.Status{
 		RaftState:    raft.State,
-		LeaderID:     raft.LeaderID,
+		LeaderID:     leader,
 		AppliedIndex: raft.AppliedIndex,
 		CommitIndex:  raft.CommitIndex,
 		GatewayOK:    probe.GatewayCode == "200",
