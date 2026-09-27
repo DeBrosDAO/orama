@@ -67,7 +67,7 @@ type Config struct {
 
 	// WrapKey is a 32-byte AES-256 key used to encrypt private blobs before
 	// Add (feat-270). Empty skips wrapping (tests). UnixFS directories and
-	// extract=true tarballs are never wrapped.
+	// tarball deploys are never wrapped.
 	WrapKey []byte
 }
 
@@ -239,35 +239,45 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 		data = sealed
 	}
 
-	// Create multipart form request for IPFS Cluster API
+	// Kubo builds the DAG. Cluster /add streams bytes through block/put, and
+	// Kubo 0.38 can store a chunk under a different CID than the DAG links
+	// while still returning 200. cat then ends with "failed to fetch all nodes".
+	added, err := c.addViaKubo(ctx, data, name)
+	if err != nil {
+		return nil, err
+	}
+
+	// -1 is every cluster peer, which is what Cluster /add pinned.
+	if _, err := c.Pin(ctx, added.Cid, name, -1); err != nil {
+		return nil, fmt.Errorf("pin %s after import: %w", added.Cid, err)
+	}
+
+	added.Name = name
+	added.Size = originalSize
+	return added, nil
+}
+
+// addViaKubo imports data with Kubo's /api/v0/add and returns the file CID.
+// pin=true keeps the blocks on this node; the caller also pins them on the cluster.
+func (c *Client) addViaKubo(ctx context.Context, data []byte, name string) (*AddResponse, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
-
-	// Create form file field
 	part, err := writer.CreateFormFile("file", name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create form file: %w", err)
 	}
-
-	if _, err := io.Copy(part, bytes.NewReader(data)); err != nil {
+	if _, err := part.Write(data); err != nil {
 		return nil, fmt.Errorf("failed to copy data: %w", err)
 	}
-
 	if err := writer.Close(); err != nil {
 		return nil, fmt.Errorf("failed to close writer: %w", err)
 	}
 
-	// Add query parameters for tarball extraction
-	apiURL := c.apiURL + "/add"
-	if strings.HasSuffix(strings.ToLower(name), ".tar.gz") || strings.HasSuffix(strings.ToLower(name), ".tgz") {
-		apiURL += "?extract=true"
-	}
-
+	apiURL := c.ipfsAPIURL + "/api/v0/add?pin=true&cid-version=0&hash=sha2-256"
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &buf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create add request: %w", err)
 	}
-
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	resp, err := c.httpClient.Do(req)
@@ -281,15 +291,11 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 		return nil, fmt.Errorf("add failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// IPFS Cluster streams NDJSON responses. We need to drain the entire stream
-	// to prevent the connection from closing prematurely, which would cancel
-	// the cluster's pinning operation. Read all JSON objects and keep the last one.
 	dec := json.NewDecoder(resp.Body)
-	var last AddResponse
+	var last ipfsDaemonAddResponse
 	var hasResult bool
-
 	for {
-		var chunk AddResponse
+		var chunk ipfsDaemonAddResponse
 		if err := dec.Decode(&chunk); err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -299,20 +305,10 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 		last = chunk
 		hasResult = true
 	}
-
-	if !hasResult {
+	if !hasResult || last.Hash == "" {
 		return nil, fmt.Errorf("add response missing CID")
 	}
-
-	// Ensure name is set if provided
-	if last.Name == "" && name != "" {
-		last.Name = name
-	}
-
-	// Override size with original byte count (not DAG size)
-	last.Size = originalSize
-
-	return &last, nil
+	return &AddResponse{Name: last.Name, Cid: last.Hash}, nil
 }
 
 // AddDirectory adds all files in a directory to IPFS and returns the root directory CID

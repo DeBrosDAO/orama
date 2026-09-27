@@ -210,7 +210,7 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 **IPFS Cluster TrustedPeers (Step 1.9)**
 - `TrustedPeers` is `["*"]`. A join-time allowlist silently dropped pins from any node the bootstrap set did not yet trust. Membership is cluster secret + WireGuard + invite
 - CLUSTER_SECRET empty-refuse still holds
-- **IPFS wrap (feat-270):** private blobs (storage upload, WASM, SQLite backups) are AES-256-GCM sealed with `HKDF(cluster-secret, "ipfs-wrap-v1")` before Add. Envelope magic `ORMAW1` so Get passes through historical plaintext CIDs. UnixFS directories and `extract=true` tarball deploys are not wrapped. `enable_encryption` in node.yaml is ignored (DecodeStrict compatibility)
+- **IPFS wrap (feat-270):** private blobs (storage upload, WASM, SQLite backups) are AES-256-GCM sealed with `HKDF(cluster-secret, "ipfs-wrap-v1")` before Add. Envelope magic `ORMAW1` so Get passes through historical plaintext CIDs. UnixFS directories and tarball deploys are not wrapped. Add imports through Kubo's `/api/v0/add` and then pins the CID on IPFS Cluster; Cluster `/add` is not used, because its `block/put` import can store a chunk under a different CID and still return success. `enable_encryption` in node.yaml is ignored (DecodeStrict compatibility)
 
 **Vault V1 Auth Enforcement (Step 1.14)**
 - V1 push/pull endpoints require a valid session token when vault-guardian is configured

@@ -62,58 +62,60 @@ func TestClient_Add(t *testing.T) {
 		expectedName := "test.txt"
 		testContent := "test content"
 		expectedSize := int64(len(testContent)) // Client overrides server size with actual content length
+		var pinned atomic.Bool
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/add" {
-				t.Errorf("Expected path '/add', got %s", r.URL.Path)
-			}
 			if r.Method != "POST" {
 				t.Errorf("Expected method POST, got %s", r.Method)
 			}
-
-			// Verify multipart form
-			if err := r.ParseMultipartForm(32 << 20); err != nil {
-				t.Errorf("Failed to parse multipart form: %v", err)
-				return
+			switch r.URL.Path {
+			case "/api/v0/add":
+				if r.URL.Query().Get("pin") != "true" || r.URL.Query().Get("cid-version") != "0" {
+					t.Errorf("kubo add query = %s", r.URL.RawQuery)
+				}
+				if strings.Contains(r.URL.RawQuery, "extract") {
+					t.Error("kubo add must not ask cluster to extract")
+				}
+				if err := r.ParseMultipartForm(32 << 20); err != nil {
+					t.Errorf("Failed to parse multipart form: %v", err)
+					return
+				}
+				file, header, err := r.FormFile("file")
+				if err != nil {
+					t.Errorf("Failed to get file: %v", err)
+					return
+				}
+				defer file.Close()
+				if header.Filename != expectedName {
+					t.Errorf("Expected filename %s, got %s", expectedName, header.Filename)
+				}
+				body, _ := io.ReadAll(file)
+				if string(body) != testContent {
+					t.Errorf("kubo received %q", body)
+				}
+				// Size here is the DAG size. The client must report the original byte count.
+				fmtJSON(w, ipfsDaemonAddResponse{Name: expectedName, Hash: expectedCID, Size: "999"})
+			case "/pins/" + expectedCID:
+				if !pinned.CompareAndSwap(false, true) {
+					t.Error("pinned twice")
+				}
+				q := r.URL.Query()
+				if q.Get("replication-min") != "-1" || q.Get("replication-max") != "-1" {
+					t.Errorf("pin query = %s", r.URL.RawQuery)
+				}
+				fmtJSON(w, PinResponse{Cid: expectedCID, Name: expectedName})
+			default:
+				t.Errorf("unexpected path %s", r.URL.Path)
+				http.NotFound(w, r)
 			}
-
-			file, header, err := r.FormFile("file")
-			if err != nil {
-				t.Errorf("Failed to get file: %v", err)
-				return
-			}
-			defer file.Close()
-
-			if header.Filename != expectedName {
-				t.Errorf("Expected filename %s, got %s", expectedName, header.Filename)
-			}
-
-			// Read file content
-			_, _ = io.ReadAll(file)
-
-			// Return a different size to verify the client correctly overrides it
-			response := AddResponse{
-				Cid:  expectedCID,
-				Name: expectedName,
-				Size: 999, // Client will override this with actual content size
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
 		}))
 		defer server.Close()
 
-		cfg := Config{ClusterAPIURL: server.URL}
-		client, err := NewClient(cfg, logger)
-		if err != nil {
-			t.Fatalf("Failed to create client: %v", err)
-		}
-
-		reader := strings.NewReader(testContent)
-		resp, err := client.Add(context.Background(), reader, expectedName)
+		client := newTestClient(t, logger, server.URL)
+		resp, err := client.Add(context.Background(), strings.NewReader(testContent), expectedName)
 		if err != nil {
 			t.Fatalf("Failed to add content: %v", err)
 		}
-
 		if resp.Cid != expectedCID {
 			t.Errorf("Expected CID %s, got %s", expectedCID, resp.Cid)
 		}
@@ -123,27 +125,85 @@ func TestClient_Add(t *testing.T) {
 		if resp.Size != expectedSize {
 			t.Errorf("Expected size %d, got %d", expectedSize, resp.Size)
 		}
+		if !pinned.Load() {
+			t.Error("import was not pinned on the cluster")
+		}
+	})
+
+	t.Run("tarball_uses_kubo", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/add" || strings.Contains(r.URL.RawQuery, "extract") {
+				t.Errorf("tarball went to cluster add: %s?%s", r.URL.Path, r.URL.RawQuery)
+			}
+			if r.URL.Path == "/api/v0/add" {
+				fmtJSON(w, ipfsDaemonAddResponse{Hash: "QmTar"})
+				return
+			}
+			if r.URL.Path == "/pins/QmTar" {
+				fmtJSON(w, PinResponse{Cid: "QmTar"})
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		client := newTestClient(t, logger, server.URL)
+		resp, err := client.Add(context.Background(), strings.NewReader("tar-bytes"), "orama-deploy.tar.gz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Cid != "QmTar" || resp.Size != int64(len("tar-bytes")) {
+			t.Fatalf("resp = %+v", resp)
+		}
 	})
 
 	t.Run("server_error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v0/add" {
+				t.Errorf("pin was called after a failed import: %s", r.URL.Path)
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte("internal error"))
 		}))
 		defer server.Close()
 
-		cfg := Config{ClusterAPIURL: server.URL}
-		client, err := NewClient(cfg, logger)
-		if err != nil {
-			t.Fatalf("Failed to create client: %v", err)
-		}
-
-		reader := strings.NewReader("test")
-		_, err = client.Add(context.Background(), reader, "test.txt")
+		client := newTestClient(t, logger, server.URL)
+		_, err := client.Add(context.Background(), strings.NewReader("test"), "test.txt")
 		if err == nil {
 			t.Error("Expected error for server error")
 		}
 	})
+
+	t.Run("pin_error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v0/add" {
+				fmtJSON(w, ipfsDaemonAddResponse{Hash: "QmPinFail"})
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("pin failed"))
+		}))
+		defer server.Close()
+
+		client := newTestClient(t, logger, server.URL)
+		if _, err := client.Add(context.Background(), strings.NewReader("test"), "test.txt"); err == nil {
+			t.Error("expected pin failure")
+		}
+	})
+}
+
+func newTestClient(t *testing.T, logger *zap.Logger, url string) *Client {
+	t.Helper()
+	client, err := NewClient(Config{ClusterAPIURL: url, IPFSAPIURL: url}, logger)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	return client
+}
+
+func fmtJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
 }
 
 func TestClient_Pin(t *testing.T) {
