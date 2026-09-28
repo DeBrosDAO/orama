@@ -168,7 +168,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/namespace/list` | CLI | Namespaces owned by the calling wallet. |
 | `/v1/namespace/members` | CLI | Who else may work in this namespace, and at what role. `orama members list|add`. |
 | `/v1/namespace/members/` | CLI | Remove a member, or transfer the namespace. `orama members remove|transfer`. |
-| `/v1/namespaces` | CLI | Create a namespace: writes the owner grant and starts provisioning. |
+| `/v1/namespaces` | CLI | Create a namespace: writes the owner grant and starts provisioning. Who may call it is `namespace_creation` (`operators`, `allowlist`, or `open`). A new cluster is `operators`; one that already had data stays `open` until an operator changes it. Per-wallet cap defaults to 10. `orama namespace create`. |
 | `/v1/namespace/rate-limit` | CLI | Per-namespace rate limit. |
 | `/v1/namespace/devices` | direct | An operator's list of one account's devices (`?subject=<wallet>`), for recovering an account under the `approval` policy. The members-write permission. No CLI command. See AUTH.md. |
 | `/v1/namespace/devices/` | direct | `DELETE /v1/namespace/devices/{id}` — an operator revokes a device of any account in the namespace. The members-write permission. No CLI command. |
@@ -235,6 +235,10 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/operator/nodes` | CLI | Fleet inventory. |
 | `/v1/operator/operators` | CLI | List the operator wallets (`GET`) or add one (`POST` `{"wallet":"0x…"}`). Admin grant and a wallet already on the list. `orama operator list`, `orama operator add`. |
 | `/v1/operator/operators/` | CLI | `DELETE /v1/operator/operators/{wallet}` takes one wallet off the list and refuses to remove the last. `orama operator remove`. |
+| `/v1/operator/settings` | CLI | Effective namespace-creation mode and per-wallet cap. Operator grant and the operator list. `orama cluster settings show`. |
+| `/v1/operator/settings/` | CLI | `PUT /v1/operator/settings/namespace-creation` with `{"value":"operators"}`, `"allowlist"` or `"open"`, or `PUT /v1/operator/settings/max-namespaces-per-wallet` with `{"value":n}` from 1 to 10000. `orama cluster settings set`. |
+| `/v1/operator/creators` | CLI | List (`GET`) or add (`POST` `{"wallet":"0x…"}`) wallets allowed to create namespaces when creation is `allowlist`. `orama cluster creators list`, `orama cluster creators add`. |
+| `/v1/operator/creators/` | CLI | `DELETE /v1/operator/creators/{wallet}` takes one wallet off that list. An empty list denies everyone. `orama cluster creators remove`. |
 | `/v1/operator/health` | direct | The full health report `/v1/health` summarises: each check's latency and error, and the health of every namespace hosted on this node with its ports. Operator grant **and** the operator list. |
 | `/v1/operator/telemetry` | CLI | `orama monitor`. The whole cluster: every node's health report and the alerts derived from them (`cluster.ClusterSnapshot`), assembled by this cluster gateway from its peers over the mesh and cached 5s. Operator grant **and** the operator list. |
 | `/v1/operator/telemetry/stream` | CLI | `orama monitor` live view. Server-sent events: `event: snapshot` with the snapshot as one JSON line every `?interval=` seconds (2–60, default 5), `event: error` when none could be assembled, `: keepalive` comments. Ends after 100s; the client reconnects. Same authorization as `/v1/operator/telemetry`. |

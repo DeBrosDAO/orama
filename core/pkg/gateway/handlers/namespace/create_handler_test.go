@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -30,10 +32,26 @@ type registry struct {
 	// does-this-name-exist read, so a test can tell which check refused.
 	failQuery          bool
 	failNamespaceQuery bool
+	failOperators      bool
+	failCreators       bool
+
+	// mode is the stored namespace_creation value. Empty means no row, which
+	// the handler reads as operators. newRegistry sets open: these tests
+	// describe an upgraded cluster, which keeps today's behaviour.
+	mode string
+	// walletCap is the stored cap. Empty means no row, so the default applies.
+	walletCap string
+	operators map[string]bool
+	creators  map[string]bool
 }
 
 func newRegistry() *registry {
-	return &registry{existing: map[string]int64{}, owned: map[string]int{}, nextID: 100}
+	return &registry{
+		existing: map[string]int64{},
+		owned:    map[string]int{},
+		nextID:   100,
+		mode:     operator.CreationOpen,
+	}
 }
 
 func (r *registry) Query(_ context.Context, dest any, query string, args ...any) error {
@@ -43,6 +61,32 @@ func (r *registry) Query(_ context.Context, dest any, query string, args ...any)
 	rows := reflect.ValueOf(dest).Elem()
 
 	switch {
+	case strings.Contains(query, "cluster_settings"):
+		rows := reflect.ValueOf(dest).Elem()
+		elem := rows.Type().Elem()
+		add := func(key, value string) {
+			row := reflect.New(elem).Elem()
+			row.Field(0).SetString(key)
+			row.Field(1).SetString(value)
+			rows.Set(reflect.Append(rows, row))
+		}
+		if r.mode != "" {
+			add(operator.SettingNamespaceCreation, r.mode)
+		}
+		if r.walletCap != "" {
+			add(operator.SettingMaxNamespacesPerWallet, r.walletCap)
+		}
+		return nil
+	case strings.Contains(query, "FROM operators"):
+		if r.failOperators {
+			return errString("registry unreachable")
+		}
+		return allowListed(dest, r.operators, args)
+	case strings.Contains(query, "FROM namespace_creators"):
+		if r.failCreators {
+			return errString("registry unreachable")
+		}
+		return allowListed(dest, r.creators, args)
 	case strings.Contains(query, "FROM namespaces"):
 		if r.failNamespaceQuery {
 			return errString("registry unreachable")
@@ -62,6 +106,20 @@ func (r *registry) Query(_ context.Context, dest any, query string, args ...any)
 		return nil
 	}
 	return errString("unexpected query: " + query)
+}
+
+func allowListed(dest any, members map[string]bool, args []any) error {
+	rows := reflect.ValueOf(dest).Elem()
+	if len(args) == 0 {
+		return nil
+	}
+	wallet, _ := args[0].(string)
+	if members[strings.ToLower(wallet)] {
+		row := reflect.New(rows.Type().Elem()).Elem()
+		row.Field(0).SetString(strings.ToLower(wallet))
+		rows.Set(reflect.Append(rows, row))
+	}
+	return nil
 }
 
 func (r *registry) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
@@ -221,7 +279,7 @@ func TestCreate_refusesATakenName(t *testing.T) {
 // There was no limit at all and no cost.
 func TestCreate_appliesTheQuota(t *testing.T) {
 	db := newRegistry()
-	db.owned["0xowner"] = maxNamespacesPerWallet
+	db.owned["0xowner"] = operator.DefaultMaxNamespacesPerWallet
 	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
@@ -343,5 +401,174 @@ func TestCreate_normalisesTheName(t *testing.T) {
 	}
 	if db.owned["0xowner"] != 1 {
 		t.Errorf("the owner was stored unnormalised: %v", db.owned)
+	}
+}
+
+// Not knowing whether the caller is an operator is not permission to create.
+func TestCreate_deniesWhenOperatorMembershipCannotBeRead(t *testing.T) {
+	db := newRegistry()
+	db.mode = operator.CreationOperators
+	db.failOperators = true
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503: %s", w.Code, w.Body.String())
+	}
+	if len(db.writes) != 0 {
+		t.Error("a namespace was created without knowing whether the wallet is an operator")
+	}
+}
+
+func TestCreate_refusesAnUnrecognisedCreationMode(t *testing.T) {
+	db := newRegistry()
+	db.mode = "public"
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503: %s", w.Code, w.Body.String())
+	}
+	if len(db.writes) != 0 {
+		t.Error("an unrecognised creation mode was treated as permission")
+	}
+}
+
+// The real schema, not the fake. A missing row is operators; each stored mode
+// allows one caller and denies the other; the cap is 10 until an operator
+// raises it.
+func TestCreate_modesAllowAndDenyTheRightCaller(t *testing.T) {
+	const (
+		op  = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		who = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	cases := []struct {
+		mode    string
+		caller  string
+		asOp    bool
+		asMaker bool
+		want    int
+	}{
+		{operator.CreationOperators, op, true, false, http.StatusCreated},
+		{operator.CreationOperators, who, false, true, http.StatusForbidden},
+		{operator.CreationAllowlist, who, false, true, http.StatusCreated},
+		{operator.CreationAllowlist, op, true, false, http.StatusForbidden},
+		{operator.CreationOpen, who, false, false, http.StatusCreated},
+		// The same address in the other case still matches the stored row.
+		{operator.CreationAllowlist, "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", false, true, http.StatusCreated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mode+"/"+tc.caller[:6], func(t *testing.T) {
+			db := migratedDB(t)
+			if _, err := db.Exec(
+				`INSERT INTO cluster_settings (key, value, updated_by) VALUES (?, ?, 'test')`,
+				operator.SettingNamespaceCreation, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			if tc.asOp {
+				if _, err := db.Exec(
+					`INSERT INTO operators (wallet, added_by) VALUES (?, 'test')`, strings.ToLower(op)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.asMaker {
+				if _, err := db.Exec(
+					`INSERT INTO namespace_creators (wallet, added_by) VALUES (?, 'test')`, strings.ToLower(who)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h := NewCreateHandler(rqlite.NewClient(db), nil, nil, zap.NewNop())
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, createRequest(tc.caller, "myapp"))
+			if w.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+			if tc.want == http.StatusForbidden && decodeCreate(t, w)["code"] != ErrCodeNamespaceCreation {
+				t.Fatalf("code %v, want %s", decodeCreate(t, w)["code"], ErrCodeNamespaceCreation)
+			}
+			got := countRows(t, db, `SELECT COUNT(*) FROM namespaces WHERE name = 'myapp'`)
+			if tc.want == http.StatusCreated && got != 1 {
+				t.Fatalf("namespace rows = %d, want 1", got)
+			}
+			if tc.want != http.StatusCreated && got != 0 {
+				t.Fatalf("a denied caller created the namespace")
+			}
+		})
+	}
+}
+
+// No stored setting. Migration 063 leaves a new registry that way, and the
+// handler resolves it to operators rather than to open.
+func TestCreate_newClusterDefaultsToOperators(t *testing.T) {
+	db := migratedDB(t)
+	if n := countRows(t, db, `SELECT COUNT(*) FROM cluster_settings WHERE key = ?`, operator.SettingNamespaceCreation); n != 0 {
+		t.Fatalf("a fresh registry stored namespace_creation (%d rows)", n)
+	}
+	h := NewCreateHandler(rqlite.NewClient(db), nil, nil, zap.NewNop())
+
+	denied := httptest.NewRecorder()
+	h.ServeHTTP(denied, createRequest("0xcccccccccccccccccccccccccccccccccccccccc", "myapp"))
+	if denied.Code != http.StatusForbidden || decodeCreate(t, denied)["code"] != ErrCodeNamespaceCreation {
+		t.Fatalf("stranger: %d %s", denied.Code, denied.Body.String())
+	}
+
+	const op = "0xdddddddddddddddddddddddddddddddddddddddd"
+	if _, err := db.Exec(`INSERT INTO operators (wallet, added_by) VALUES (?, 'test')`, op); err != nil {
+		t.Fatal(err)
+	}
+	allowed := httptest.NewRecorder()
+	h.ServeHTTP(allowed, createRequest(op, "myapp"))
+	if allowed.Code != http.StatusCreated {
+		t.Fatalf("operator: %d %s", allowed.Code, allowed.Body.String())
+	}
+}
+
+// The default cap still stops the 11th namespace. A stored cap of 11 lets
+// that one through and stops the 12th.
+func TestCreate_walletCapDeniesTheEleventhUntilRaised(t *testing.T) {
+	db := migratedDB(t)
+	if _, err := db.Exec(
+		`INSERT INTO cluster_settings (key, value, updated_by) VALUES (?, ?, 'test')`,
+		operator.SettingNamespaceCreation, operator.CreationOpen); err != nil {
+		t.Fatal(err)
+	}
+	h := NewCreateHandler(rqlite.NewClient(db), nil, nil, zap.NewNop())
+	const wallet = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+	for i := 1; i <= operator.DefaultMaxNamespacesPerWallet; i++ {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, createRequest(wallet, fmt.Sprintf("app%02d", i)))
+		if w.Code != http.StatusCreated {
+			t.Fatalf("namespace %d: %d %s", i, w.Code, w.Body.String())
+		}
+	}
+
+	eleventh := httptest.NewRecorder()
+	h.ServeHTTP(eleventh, createRequest(wallet, "app11"))
+	if eleventh.Code != http.StatusForbidden || decodeCreate(t, eleventh)["code"] != ErrCodeNamespaceQuota {
+		t.Fatalf("11th: %d %s", eleventh.Code, eleventh.Body.String())
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM namespaces WHERE name = 'app11'`); n != 0 {
+		t.Fatal("the 11th namespace was created at the default cap")
+	}
+
+	if _, err := db.Exec(
+		`INSERT INTO cluster_settings (key, value, updated_by) VALUES (?, '11', 'test')`,
+		operator.SettingMaxNamespacesPerWallet); err != nil {
+		t.Fatal(err)
+	}
+	raised := httptest.NewRecorder()
+	h.ServeHTTP(raised, createRequest(wallet, "app11"))
+	if raised.Code != http.StatusCreated {
+		t.Fatalf("11th at cap 11: %d %s", raised.Code, raised.Body.String())
+	}
+	twelfth := httptest.NewRecorder()
+	h.ServeHTTP(twelfth, createRequest(wallet, "app12"))
+	if twelfth.Code != http.StatusForbidden || decodeCreate(t, twelfth)["code"] != ErrCodeNamespaceQuota {
+		t.Fatalf("12th: %d %s", twelfth.Code, twelfth.Body.String())
 	}
 }

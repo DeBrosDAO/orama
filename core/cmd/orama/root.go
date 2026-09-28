@@ -15,6 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/auditcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/authcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/buildcmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/clustercmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/dbcmd"
 	deploycmd "github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/deploy"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/envcmd"
@@ -105,6 +106,7 @@ and no Orama MCP.`,
 
 	// Cluster operations
 	rootCmd.AddCommand(operatorcmd.Cmd)
+	rootCmd.AddCommand(clustercmd.Cmd)
 
 	// Inspect command
 	rootCmd.AddCommand(inspectcmd.Cmd)

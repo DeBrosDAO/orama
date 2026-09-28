@@ -232,7 +232,8 @@ instead. The refusal is returned as the host call's error.
 
 The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `nonces`, `device_authorizations`, `session_devices`,
-`namespace_session_policy`, `invite_tokens`, `operators`, `principals`,
+`namespace_session_policy`, `invite_tokens`, `operators`, `cluster_settings`,
+`namespace_creators`, `principals`,
 `signing_keys`, `node_credentials`, `encryption_roots`, `grants`,
 `namespace_ownership` (0.122.x's ownership table, kept for the rolling upgrade),
 `api_keys_expiry_cutoff`,

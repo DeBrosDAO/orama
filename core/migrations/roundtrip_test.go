@@ -259,6 +259,39 @@ func TestSchemaRoundtrip_PlatformExemplars(t *testing.T) {
 			args: []any{"ns", 2, 0},
 			exec: true,
 		},
+
+		{
+			name: "cluster_settings UPSERT",
+			sql: `INSERT INTO cluster_settings (key, value, updated_by) VALUES (?, ?, ?)
+				ON CONFLICT(key) DO UPDATE SET
+					value = excluded.value,
+					updated_by = excluded.updated_by,
+					updated_at = CURRENT_TIMESTAMP`,
+			args: []any{"namespace_creation", "open", "operator:0xabc"},
+			exec: true,
+		},
+		{
+			name: "cluster_settings SELECT",
+			sql:  `SELECT key, value FROM cluster_settings WHERE key IN (?, ?)`,
+			args: []any{"namespace_creation", "max_namespaces_per_wallet"},
+		},
+		{
+			name: "namespace_creators INSERT",
+			sql:  `INSERT OR IGNORE INTO namespace_creators (wallet, added_by) VALUES (?, ?)`,
+			args: []any{"0xabc", "operator:0xop"},
+			exec: true,
+		},
+		{
+			name: "namespace_creators SELECT",
+			sql:  `SELECT wallet FROM namespace_creators WHERE LOWER(wallet) = ? LIMIT 1`,
+			args: []any{"0xabc"},
+		},
+		{
+			name: "namespace_creators DELETE",
+			sql:  `DELETE FROM namespace_creators WHERE LOWER(wallet) = ?`,
+			args: []any{"0xabc"},
+			exec: true,
+		},
 	}
 
 	for _, ex := range exemplars {

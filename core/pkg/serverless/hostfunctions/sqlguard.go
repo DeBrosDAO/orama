@@ -50,6 +50,8 @@ var protectedTables = map[string]string{
 	"namespace_session_policy": "what a sign-in must prove",
 	"invite_tokens":            "cluster membership",
 	"operators":                "operator identity",
+	"cluster_settings":         "who may create namespaces, and how many",
+	"namespace_creators":       "wallets allowed to create a namespace",
 	"principals":               "who the platform will authenticate",
 	// Public keys, but writing one publishes a key the cluster will accept
 	// tokens from — which is minting authority by another route.

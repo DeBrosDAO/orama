@@ -73,6 +73,8 @@ var tablePlacement = map[string]tableNote{
 	"session_devices":          {PlacementCluster, "which devices hold sessions; revoked on one gateway, refused on every other"},
 	"namespace_session_policy": {PlacementCluster, "what a sign-in must prove; read where sessions are issued"},
 	"operators":                {PlacementCluster, "who may operate the cluster"},
+	"cluster_settings":         {PlacementCluster, "who may create namespaces, and how many one wallet may own; read on the index, so a copy in a tenant database is a policy the cluster never enforces"},
+	"namespace_creators":       {PlacementCluster, "the allowlist for namespace creation; a tenant copy would let the tenant add themselves"},
 	"audit_events":             {PlacementCluster, "a record its own subject could delete is not a record"},
 	"encryption_roots":         {PlacementCluster, "the IKM stored secrets are derived from; a tenant copy would be a KEK they can rewrite"},
 

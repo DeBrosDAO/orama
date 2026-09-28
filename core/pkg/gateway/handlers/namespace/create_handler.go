@@ -3,6 +3,7 @@ package namespace
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -23,6 +25,13 @@ import (
 // It is a deliberate, authenticated act now: this endpoint. It writes the
 // namespace and its single owner grant together, applies a per-wallet quota,
 // and is the only thing that starts provisioning.
+//
+// Who may call it is a cluster setting, not a property of the route. The route
+// stays a wallet token with no grant, because a wallet with no namespace holds
+// none and open mode is exactly "any signed-in wallet". operators checks the
+// operators table; allowlist checks namespace_creators. A missing setting means
+// operators, which is a new cluster. Migration 063 writes open when the
+// registry already had data, so an upgrade does not take creation away.
 
 const (
 	// ErrCodeNamespaceTaken is returned when the name already exists.
@@ -30,15 +39,11 @@ const (
 	// ErrCodeNamespaceQuota is returned when the wallet has as many namespaces
 	// as it is allowed.
 	ErrCodeNamespaceQuota = "NAMESPACE_QUOTA"
+	// ErrCodeNamespaceCreation is returned when this cluster does not let the
+	// caller's wallet create a namespace.
+	ErrCodeNamespaceCreation = "NAMESPACE_CREATION_DENIED"
 	// ErrCodeNamespaceName is returned when the name is not a legal one.
 	ErrCodeNamespaceName = "NAMESPACE_NAME_INVALID"
-
-	// maxNamespacesPerWallet caps how many namespaces one wallet may create.
-	//
-	// Each one is a cluster: rqlite, Olric, a gateway, a share of the mesh.
-	// There was no limit at all, and no cost, so a single wallet could ask for
-	// as many as it liked and each one was real.
-	maxNamespacesPerWallet = 10
 )
 
 // namespaceName is what a namespace may be called.
@@ -132,6 +137,26 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// Policy before the existence check, so a wallet the cluster does not
+	// allow cannot learn whether a name is taken.
+	policy, err := operator.LoadCreationPolicy(ctx, h.ormClient)
+	if err != nil {
+		h.refuseCreationPolicy(w, err)
+		return
+	}
+	allowed, err := policy.Permits(ctx, h.ormClient, wallet)
+	if err != nil {
+		h.refuseCreationPolicy(w, err)
+		return
+	}
+	if !allowed {
+		writeCreateJSON(w, http.StatusForbidden, map[string]any{
+			"error": creationDenied(policy.Mode),
+			"code":  ErrCodeNamespaceCreation,
+		})
+		return
+	}
+
 	taken, err := h.exists(ctx, name)
 	if err != nil {
 		h.logger.Error("could not check whether the namespace exists", zap.Error(err))
@@ -156,7 +181,10 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if owned >= maxNamespacesPerWallet {
+	// Ten unless an operator stored a different cap. A stored value this
+	// binary does not understand was already refused above, not treated as
+	// unlimited.
+	if owned >= policy.WalletCap {
 		writeCreateJSON(w, http.StatusForbidden, map[string]any{
 			"error": fmt.Sprintf("this wallet already owns %d namespaces, which is the limit; "+
 				"delete one to create another", owned),
@@ -288,6 +316,36 @@ func (h *CreateHandler) create(ctx context.Context, name, wallet string) (int64,
 			"so it would be unowned and claimable: %w", err)
 	}
 	return rows[0].ID, nil
+}
+
+func creationDenied(mode string) string {
+	switch mode {
+	case operator.CreationOperators:
+		return "only an operator of this cluster may create a namespace"
+	case operator.CreationAllowlist:
+		return "only a wallet on this cluster's namespace-creator list may create a namespace"
+	default:
+		return "this wallet may not create namespaces on this cluster"
+	}
+}
+
+// refuseCreationPolicy answers 503 and writes nothing.
+//
+// A stored value this binary cannot enforce is not the same failure as a
+// registry that did not answer, and neither one is permission to create.
+func (h *CreateHandler) refuseCreationPolicy(w http.ResponseWriter, err error) {
+	var bad *operator.PolicyConfigError
+	if errors.As(err, &bad) {
+		h.logger.Error("namespace creation setting is not one this gateway can enforce", zap.Error(err))
+		writeCreateJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "namespace creation is not configured; an operator has to correct the cluster setting",
+		})
+		return
+	}
+	h.logger.Error("could not read the namespace creation policy", zap.Error(err))
+	writeCreateJSON(w, http.StatusServiceUnavailable, map[string]any{
+		"error": "the registry did not answer; try again",
+	})
 }
 
 func writeCreateJSON(w http.ResponseWriter, status int, v any) {

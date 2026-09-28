@@ -42,6 +42,14 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama auth switch`](#orama-auth-switch) — Switch between stored credentials
   - [`orama auth whoami`](#orama-auth-whoami) — Ask the gateway who this credential is and what it may do
 - [`orama build`](#orama-build) — Build pre-compiled binary archive for deployment
+- [`orama cluster`](#orama-cluster) — Choose who may create namespaces on this cluster
+  - [`orama cluster creators`](#orama-cluster-creators) — Wallets that may create namespaces when creation is allowlist
+    - [`orama cluster creators add`](#orama-cluster-creators-add) — Let a wallet create namespaces when creation is allowlist
+    - [`orama cluster creators list`](#orama-cluster-creators-list) — List wallets allowed to create namespaces
+    - [`orama cluster creators remove`](#orama-cluster-creators-remove) — Take a wallet off the namespace-creator list
+  - [`orama cluster settings`](#orama-cluster-settings) — Show or change namespace-creation settings
+    - [`orama cluster settings set`](#orama-cluster-settings-set) — Change namespace creation or the per-wallet cap
+    - [`orama cluster settings show`](#orama-cluster-settings-show) — Show who may create namespaces, and the per-wallet cap
 - [`orama db`](#orama-db) — Manage SQLite databases
   - [`orama db backup`](#orama-db-backup) — Backup database to IPFS
   - [`orama db backups`](#orama-db-backups) — List backups for a database
@@ -541,6 +549,99 @@ Examples:
 | `--signers` | — | Rotate the trusted archive signers: nodes that install this build trust only these addresses (comma-separated) |
 | `--unsigned` | `false` | Do not sign the manifest (a local-only archive: nodes refuse it) |
 | `--verbose` | `false` | Verbose output |
+
+### orama cluster
+
+Choose who may create namespaces on this cluster
+
+```
+orama cluster
+```
+
+Who may create a namespace on this cluster, and how many one wallet may own.
+
+A new cluster allows only its operators. A cluster that already had a
+namespace besides the seeded default, a node, or an operator when this was
+upgraded stays open — any signed-in wallet — until an operator changes it.
+The per-wallet cap stays 10 until an operator raises or lowers it.
+
+Changing a setting or the creator list needs the operator grant and a wallet
+on the operator list, and is written to the audit trail.
+
+Subcommands: `creators`, `settings`
+
+### orama cluster creators
+
+Wallets that may create namespaces when creation is allowlist
+
+```
+orama cluster creators
+```
+
+The allowlist consulted when namespace creation is allowlist.
+
+An operator is not on it unless added. An empty list lets nobody create a
+namespace, and removing the last wallet does not lock operators out.
+
+Subcommands: `add`, `list`, `remove`
+
+### orama cluster creators add
+
+Let a wallet create namespaces when creation is allowlist
+
+```
+orama cluster creators add <wallet>
+```
+
+### orama cluster creators list
+
+List wallets allowed to create namespaces
+
+```
+orama cluster creators list
+```
+
+### orama cluster creators remove
+
+Take a wallet off the namespace-creator list
+
+```
+orama cluster creators remove <wallet>
+```
+
+### orama cluster settings
+
+Show or change namespace-creation settings
+
+```
+orama cluster settings
+```
+
+Subcommands: `set`, `show`
+
+### orama cluster settings set
+
+Change namespace creation or the per-wallet cap
+
+```
+orama cluster settings set <setting> <value>
+```
+
+namespace-creation is operators, allowlist or open.
+
+  operators   only wallets on the operator list
+  allowlist   only wallets added with orama cluster creators add
+  open        any signed-in wallet
+
+max-namespaces-per-wallet is an integer from 1 to 10000. The default is 10.
+
+### orama cluster settings show
+
+Show who may create namespaces, and the per-wallet cap
+
+```
+orama cluster settings show
+```
 
 ### orama db
 

@@ -234,6 +234,15 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/operator/nodes", "/v1/operator/node/register",
 		"/v1/operator/operators", "/v1/operator/operators/",
 		"/v1/operator/rotate-signing-key", "/v1/operator/rotate-secrets")
+	// Who may create a namespace, and the allowlist. cluster_settings and
+	// namespace_creators live only in the cluster registry; a namespace
+	// gateway's RQLite has them stripped. MainGateway keeps the call on the
+	// index when the host is ns-<name>.
+	namespaceCreation := control(auth.DomainOperator, auth.ActionWrite)
+	namespaceCreation.MainGateway = true
+	t.Add(namespaceCreation,
+		"/v1/operator/settings", "/v1/operator/settings/",
+		"/v1/operator/creators", "/v1/operator/creators/")
 	t.Add(policyUnrestricted, "/v1/operator/invite")
 
 	// --- Control plane on a namespace's own resources ------------------
@@ -267,8 +276,10 @@ func buildRoutePolicies() *routepolicy.Table {
 	// requiring one would mean nobody could ever start. What it does require is
 	// a signed-in wallet — the handler reads the owner from the token and
 	// writes the owner grant — so a key cannot create a namespace and a leaked
-	// one cannot fill the registry with them. The per-wallet cap is in the
-	// handler.
+	// one cannot fill the registry with them. Who may call it, and the
+	// per-wallet cap, are cluster settings the handler reads. A grant cannot
+	// express "this wallet is an operator", and open mode includes wallets
+	// that hold no grant at all.
 	t.Add(routepolicy.Policy{Token: routepolicy.WalletToken}, "/v1/namespaces")
 
 	// Scoped API-key management operates on the MAIN cluster registry, where

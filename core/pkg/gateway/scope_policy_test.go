@@ -383,6 +383,10 @@ func TestRoutePermission_operatorEndpointsNeedOperator(t *testing.T) {
 		"/v1/operator/node/register",
 		"/v1/operator/operators",
 		"/v1/operator/operators/0xabc",
+		"/v1/operator/settings",
+		"/v1/operator/settings/namespace-creation",
+		"/v1/operator/creators",
+		"/v1/operator/creators/0xabc",
 	} {
 		policy := policyOf(http.MethodPost, path)
 		required := auth.Resource{Domain: auth.Domain(policy.Domain), Action: auth.Action(policy.Action)}

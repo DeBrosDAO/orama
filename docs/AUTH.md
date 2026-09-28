@@ -78,7 +78,11 @@ refresh token, and the second would be refused as a replay.
 A challenge with no namespace signs you in to `default`. That is the **lobby**:
 it belongs to nobody, needs no grant, and writes none. What you get there is a
 session and no key, and the one thing that session reaches is
-`POST /v1/namespaces` — which creates a namespace and makes you its owner.
+`POST /v1/namespaces`. That creates a namespace and makes you its owner when
+this cluster's namespace-creation setting allows the wallet. A new cluster
+allows its operators only. A cluster that already had data allows any
+signed-in wallet until an operator changes it
+(`orama cluster settings set namespace-creation`). See SECURITY.md.
 
 Signing in used to claim: the first wallet to reach a namespace with no owner
 became its owner. `default` is created by migration 001 with no owner, so on
