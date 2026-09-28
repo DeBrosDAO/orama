@@ -139,7 +139,10 @@ install_node() {
 	gzip -c "$work/oramad" | on "$alias" "gunzip -c | sudo sh -c 'umask 022; tmp=\$(mktemp $BIN_DIR/.oramad.XXXXXX) && cat > \"\$tmp\" && chmod 0755 \"\$tmp\" && mv -f \"\$tmp\" $BIN_DIR/oramad'"
 	on "$alias" "id $SVC_USER >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin $SVC_USER"
 	on "$alias" "sudo install -d -m 0700 -o $SVC_USER -g $SVC_USER $HOME_DIR"
-	if ! on "$alias" "test -f $HOME_DIR/config/genesis.json"; then
+	# The state directory is mode 0700 and owned by the chain user, so the SSH
+	# login cannot see genesis.json. The check has to run as that user or a
+	# second deploy tries to init again and dies on the file that is already there.
+	if ! on "$alias" "sudo -u $SVC_USER test -f $HOME_DIR/config/genesis.json"; then
 		remote_run "$alias" sudo -u "$SVC_USER" "$BIN_DIR/oramad" init "$name" --chain-id "$CHAIN_ID" --default-denom "$DENOM" --home "$HOME_DIR"
 	fi
 	if ! on "$alias" "sudo -u $SVC_USER $BIN_DIR/oramad keys show validator --keyring-backend test --home $HOME_DIR >/dev/null 2>&1"; then
@@ -183,16 +186,23 @@ build_genesis() {
 
 	local first=true
 	for n in "${NODES[@]}"; do
-		local alias; alias="$(field "$n" 2)" name; name="$(field "$n" 1)"
-		local addr; addr="$(address_of "$alias")"
-		local pubkey; pubkey="$(consensus_pubkey_of "$alias")"
-		local extra_flags=()
+		local alias name
+		alias="$(field "$n" 2)"
+		name="$(field "$n" 1)"
+		local addr pubkey
+		addr="$(address_of "$alias")"
+		pubkey="$(consensus_pubkey_of "$alias")"
+		# An empty array expansion is an unbound variable under bash 3.2 with set -u,
+		# so the first node (the only one that sets the committee size) is a separate call.
 		if [ "$first" = true ]; then
-			extra_flags+=(--min-committee-size "${#NODES[@]}")
 			first=false
+			as_chain "$first_alias" genesis add-bootstrap-validator "$addr" \
+				--moniker "$name" --consensus-pubkey-base64 "$pubkey" \
+				--min-committee-size "${#NODES[@]}"
+		else
+			as_chain "$first_alias" genesis add-bootstrap-validator "$addr" \
+				--moniker "$name" --consensus-pubkey-base64 "$pubkey"
 		fi
-		as_chain "$first_alias" genesis add-bootstrap-validator "$addr" \
-			--moniker "$name" --consensus-pubkey-base64 "$pubkey" "${extra_flags[@]}"
 	done
 
 	as_chain "$first_alias" genesis validate
