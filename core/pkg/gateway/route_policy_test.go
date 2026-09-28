@@ -86,6 +86,7 @@ var publicRoutes = []string{
 	"/v1/auth/logout",
 	"/v1/auth/refresh",
 	"/v1/auth/verify",
+	"/v1/chain/",
 	"/v1/health",
 	"/v1/internal/acme/cleanup",
 	"/v1/internal/acme/present",

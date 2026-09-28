@@ -6,6 +6,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/statuspage"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/chainread"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 )
@@ -24,6 +25,15 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/status", g.statusHandler)
 	// The status page's script and stylesheet (statuspage).
 	mux.Handle("/status/assets/", statuspage.Assets()) // statuspage.AssetsPrefix
+
+	// Explorer reads. The proxy refuses anything outside its allowlist.
+	if proxy, err := chainread.New(chainread.ConfigFromEnv()); err != nil {
+		mux.Handle("/v1/chain/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "chain proxy is misconfigured", http.StatusServiceUnavailable)
+		}))
+	} else {
+		mux.Handle("/v1/chain/", proxy)
+	}
 
 	// Cluster monitoring (telemetry.go): a peer's cluster gateway asking for
 	// this node's report over the mesh, and the operator's view of the whole
