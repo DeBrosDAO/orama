@@ -20,11 +20,18 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/emission/keeper"
 	"github.com/DeBrosOfficial/network/chain/x/emission/types"
+	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
 )
 
 // testBondedPoolAddr stands in for x/staking's real bonded-pool module account address in every
 // test in this package.
 var testBondedPoolAddr = sdk.AccAddress("test_bonded_pool_addr")
+
+// testFeeCollectorName is an arbitrary module account name used only by
+// TestInitGenesis_reconcileBurnsAfterASlashKeepsInvariantHolding to simulate an x/slashing-style
+// burn from some other module's account; ReconcileBurns only looks at total supply, so which
+// module name is used does not matter.
+const testFeeCollectorName = "fee_collector"
 
 // fakeBankKeeper is a minimal, hand-written stand-in for x/bank: a single-denom ledger of
 // balances (keyed by module name or, for testBondedPoolAddr, its bech32 string) plus a running
@@ -101,7 +108,23 @@ func (b *fakeBankKeeper) balanceOf(key string) math.Int {
 	return math.ZeroInt()
 }
 
-const testFeeCollectorName = "fee_collector"
+// fakePowerKeeper stands in for x/power in x/emission's own tests: x/emission only needs to know
+// that its minted validator share was handed off successfully, never how x/power's capped-power
+// distribution itself works (that is covered by x/power's own tests).
+type fakePowerKeeper struct {
+	distributed math.Int
+	calls       int
+}
+
+func newFakePowerKeeper() *fakePowerKeeper {
+	return &fakePowerKeeper{distributed: math.ZeroInt()}
+}
+
+func (p *fakePowerKeeper) DistributeEpochRewards(_ sdk.Context, _ powertypes.EmissionKeeper, _ string, totalMint math.Int) (math.Int, error) {
+	p.calls++
+	p.distributed = p.distributed.Add(totalMint)
+	return totalMint, nil
+}
 
 // testFixture bundles everything a keeper test needs: a live keeper over an in-memory store, and
 // the fake bank keeper backing it so tests can inspect minted amounts and supply directly.
@@ -109,6 +132,7 @@ type testFixture struct {
 	Ctx    sdk.Context
 	Keeper keeper.Keeper
 	Bank   *fakeBankKeeper
+	Power  *fakePowerKeeper
 }
 
 func newTestFixture(t *testing.T) *testFixture {
@@ -125,9 +149,10 @@ func newTestFixture(t *testing.T) *testFixture {
 	cdc := codec.NewProtoCodec(interfaceRegistry)
 
 	bank := newFakeBankKeeper()
-	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, testFeeCollectorName, testBondedPoolAddr)
+	power := newFakePowerKeeper()
+	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, power, testBondedPoolAddr)
 
-	return &testFixture{Ctx: ctx, Keeper: k, Bank: bank}
+	return &testFixture{Ctx: ctx, Keeper: k, Bank: bank, Power: power}
 }
 
 // initGenesis is a small helper most tests use to get the keeper into a ready state without

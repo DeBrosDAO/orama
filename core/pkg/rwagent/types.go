@@ -54,6 +54,24 @@ type WalletSignData struct {
 	Signature string `json:"signature"`
 }
 
+// OramaTxSignature is POST /v1/orama/tx/sign's answer, decoded from base64.
+type OramaTxSignature struct {
+	// Signature is the 64-byte r||s, s low, over SHA-256 of the SignDoc: what
+	// goes into TxRaw.signatures.
+	Signature []byte
+	// PubKey is the 33-byte compressed secp256k1 key that made it.
+	PubKey []byte
+	// Address is PubKey's ORAMA account address (orama1…).
+	Address string
+}
+
+// oramaTxSignData is OramaTxSignature on the wire.
+type oramaTxSignData struct {
+	Signature string `json:"signature"`
+	PubKey    string `json:"pubKey"`
+	Address   string `json:"address"`
+}
+
 // AppPermission represents an approved app in the permission database.
 type AppPermission struct {
 	BinaryHash   string                `json:"binaryHash"`

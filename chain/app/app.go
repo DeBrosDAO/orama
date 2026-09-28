@@ -91,6 +91,14 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/emission"
 	emissionkeeper "github.com/DeBrosOfficial/network/chain/x/emission/keeper"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
+	"github.com/DeBrosOfficial/network/chain/x/fees"
+	feesante "github.com/DeBrosOfficial/network/chain/x/fees/ante"
+	feeskeeper "github.com/DeBrosOfficial/network/chain/x/fees/keeper"
+	feestypes "github.com/DeBrosOfficial/network/chain/x/fees/types"
+	"github.com/DeBrosOfficial/network/chain/x/power"
+	powerante "github.com/DeBrosOfficial/network/chain/x/power/ante"
+	powerkeeper "github.com/DeBrosOfficial/network/chain/x/power/keeper"
+	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
 )
 
 const appName = "oramad"
@@ -126,14 +134,20 @@ var (
 
 	// maccPerms lists every module account and the mint/burn permissions it holds. Only
 	// x/emission may mint (and only the validator/delegator share, per
-	// plans/open-network/track-c-chain.md C3); only the staking pools may burn, and only as part
-	// of the standard bond/unbond accounting.
+	// plans/open-network/track-c-chain.md C3); the staking pools burn as part of the standard
+	// bond/unbond accounting, and x/fees' two module accounts burn the base fee and the 1%
+	// deposit-burn share (C2). x/power holds no permissions at all: it only moves already-minted
+	// coins between other modules' accounts and delegates on a committee member's behalf, through
+	// x/staking's own keeper.
 	maccPerms = map[string][]string{
 		authtypes.FeeCollectorName:     nil,
 		distrtypes.ModuleName:          nil,
 		stakingtypes.BondedPoolName:    {authtypes.Burner, authtypes.Staking},
 		stakingtypes.NotBondedPoolName: {authtypes.Burner, authtypes.Staking},
 		emissiontypes.ModuleName:       {authtypes.Minter},
+		powertypes.ModuleName:          nil,
+		feestypes.ModuleName:           {authtypes.Burner},
+		feestypes.DepositsModuleName:   {authtypes.Burner},
 	}
 )
 
@@ -163,6 +177,8 @@ type OramaApp struct {
 	ConsensusParamsKeeper consensusparamkeeper.Keeper
 	FeeGrantKeeper        feegrantkeeper.Keeper
 	EmissionKeeper        emissionkeeper.Keeper
+	PowerKeeper           powerkeeper.Keeper
+	FeesKeeper            feeskeeper.Keeper
 
 	ModuleManager      *module.Manager
 	BasicModuleManager module.BasicManager
@@ -212,6 +228,10 @@ func NewOramaApp(
 	bApp.SetVersion(version.Version)
 	bApp.SetInterfaceRegistry(interfaceRegistry)
 	bApp.SetTxEncoder(txConfig.TxEncoder())
+	// Security review B4 ("the base fee never rises"): v0.54's NewBaseApp disables the block gas
+	// meter by default, so ctx.BlockGasMeter().GasConsumed() (what x/fees' AdvanceBaseFee reacts to)
+	// would always read 0 regardless of how full a block actually was.
+	bApp.SetDisableBlockGasMeter(false)
 
 	keys := storetypes.NewKVStoreKeys(
 		authtypes.StoreKey,
@@ -224,6 +244,8 @@ func NewOramaApp(
 		feegrant.StoreKey,
 		evidencetypes.StoreKey,
 		emissiontypes.StoreKey,
+		powertypes.StoreKey,
+		feestypes.StoreKey,
 	)
 
 	app := &OramaApp{
@@ -293,11 +315,19 @@ func NewOramaApp(
 		UnreachableAuthority(),
 	)
 
+	// slashBaseFix wraps app.StakingKeeper so a Slash/SlashWithInfractionReason call - reached both
+	// directly from x/slashing's downtime handling and indirectly from x/evidence's double-sign
+	// handling (which routes through x/slashing's own keeper - see x/evidence/types.SlashingKeeper) -
+	// computes its burn amount from the validator's REAL bonded tokens rather than
+	// TokensFromConsensusPower(power) on the power CometBFT actually reports (security review B3):
+	// x/power's own CometBFT power is on a completely different, non-token-proportional scale (it is
+	// capped, redistributed, ramped and bootstrap-blended - see docs/CHAIN.md), so feeding it through
+	// the stock conversion would slash the wrong amount entirely.
 	app.SlashingKeeper = slashingkeeper.NewKeeper(
 		appCodec,
 		legacyAmino,
 		runtime.NewKVStoreService(keys[slashingtypes.StoreKey]),
-		app.StakingKeeper,
+		newSlashBaseFix(app.StakingKeeper),
 		UnreachableAuthority(),
 	)
 
@@ -338,11 +368,26 @@ func NewOramaApp(
 	)
 	app.EvidenceKeeper = *evidenceKeeper
 
+	app.FeesKeeper = feeskeeper.NewKeeper(
+		appCodec,
+		runtime.NewKVStoreService(keys[feestypes.StoreKey]),
+		app.BankKeeper,
+	)
+
+	app.PowerKeeper = powerkeeper.NewKeeper(
+		appCodec,
+		runtime.NewKVStoreService(keys[powertypes.StoreKey]),
+		app.StakingKeeper,
+		app.SlashingKeeper,
+		app.BankKeeper,
+		app.FeesKeeper,
+	)
+
 	app.EmissionKeeper = emissionkeeper.NewKeeper(
 		appCodec,
 		runtime.NewKVStoreService(keys[emissiontypes.StoreKey]),
 		app.BankKeeper,
-		authtypes.FeeCollectorName,
+		app.PowerKeeper,
 		authtypes.NewModuleAddress(stakingtypes.BondedPoolName),
 	)
 
@@ -355,19 +400,25 @@ func NewOramaApp(
 		feegrantmodule.NewAppModule(appCodec, app.AccountKeeper, app.BankKeeper, app.FeeGrantKeeper, app.interfaceRegistry),
 		slashing.NewAppModule(appCodec, app.SlashingKeeper, app.AccountKeeper, app.BankKeeper, app.StakingKeeper, nil, app.interfaceRegistry),
 		distr.NewAppModule(appCodec, app.DistrKeeper, app.AccountKeeper, app.BankKeeper, app.StakingKeeper, nil),
-		staking.NewAppModule(appCodec, app.StakingKeeper, app.AccountKeeper, app.BankKeeper, nil),
+		newStakingEndBlockOverride(
+			staking.NewAppModule(appCodec, app.StakingKeeper, app.AccountKeeper, app.BankKeeper, nil),
+			app.StakingKeeper,
+		),
 		upgrade.NewAppModule(app.UpgradeKeeper, app.AccountKeeper.AddressCodec()),
 		evidence.NewAppModule(app.EvidenceKeeper),
 		consensus.NewAppModule(appCodec, app.ConsensusParamsKeeper),
 		emission.NewAppModule(app.EmissionKeeper),
+		fees.NewAppModule(app.FeesKeeper),
+		power.NewAppModule(app.PowerKeeper, app.EmissionKeeper),
 	)
 
 	app.BasicModuleManager = module.NewBasicManagerFromManager(
 		app.ModuleManager,
 		map[string]module.AppModuleBasic{
-			genutiltypes.ModuleName: genutil.NewAppModuleBasic(genutiltypes.DefaultMessageValidator),
-			banktypes.ModuleName:    bankGenesisOverride{bank.AppModuleBasic{}},
-			distrtypes.ModuleName:   distrGenesisOverride{distr.AppModuleBasic{}},
+			genutiltypes.ModuleName:  genutil.NewAppModuleBasic(genutiltypes.DefaultMessageValidator),
+			banktypes.ModuleName:     bankGenesisOverride{bank.AppModuleBasic{}},
+			distrtypes.ModuleName:    distrGenesisOverride{distr.AppModuleBasic{}},
+			slashingtypes.ModuleName: slashingGenesisOverride{slashing.AppModuleBasic{}},
 		})
 	app.BasicModuleManager.RegisterLegacyAminoCodec(legacyAmino)
 	app.BasicModuleManager.RegisterInterfaces(interfaceRegistry)
@@ -376,8 +427,12 @@ func NewOramaApp(
 		upgradetypes.ModuleName,
 		authtypes.ModuleName,
 	)
-	// x/emission runs before x/distribution so a validator-share mint lands in the fee collector
-	// in time for the same block's distribution BeginBlocker to allocate it.
+	// x/emission runs first: closing an epoch mints the validator/delegator share into its own
+	// account and immediately hands it to x/power.Keeper.DistributeEpochRewards, which pays it out
+	// on capped power P_i into earnings accounts (plans/open-network/track-c-chain.md C3, C4) -
+	// x/distribution's own BeginBlocker still runs after it (for ordinary tx-fee sweeping from the
+	// fee collector, which the custom fee ante decorator no longer feeds - see setAnteHandler), but
+	// no longer receives the emission mint.
 	app.ModuleManager.SetOrderBeginBlockers(
 		emissiontypes.ModuleName,
 		distrtypes.ModuleName,
@@ -386,20 +441,29 @@ func NewOramaApp(
 		stakingtypes.ModuleName,
 		genutiltypes.ModuleName,
 	)
-	// x/emission's EndBlock runs last so it reconciles cumulative_burned against every burn any
-	// other module made during the block (see keeper.Keeper.ReconcileBurns).
+	// x/staking's (overridden) end-blocker runs before x/power's, so x/power's validator-power
+	// computation for this block sees the freshest bonded set (any bonding/unbonding this block's
+	// txs caused). x/fees advances the base fee once this block's gas usage is final. x/emission's
+	// EndBlock runs last so it reconciles cumulative_burned against every burn any other module
+	// made during the block (see keeper.Keeper.ReconcileBurns).
 	app.ModuleManager.SetOrderEndBlockers(
 		banktypes.ModuleName,
 		stakingtypes.ModuleName,
 		genutiltypes.ModuleName,
 		feegrant.ModuleName,
+		powertypes.ModuleName,
+		feestypes.ModuleName,
 		emissiontypes.ModuleName,
 	)
 
 	// NOTE: genutil must run after staking (so gentx self-delegations can bond) and after bank
-	// (so genutil can read account balances), and x/emission must run after bank (so a fresh
-	// genesis can observe whatever the devnet-only bootstrap-stake exception minted into genesis
-	// accounts - see emissionkeeper.Keeper.InitGenesis).
+	// (so genutil can read account balances); x/emission must run after bank (so a fresh genesis
+	// can observe whatever supply already exists - see emissionkeeper.Keeper.InitGenesis); and
+	// x/power must run last of all, after x/emission, since its InitGenesis records x/emission's
+	// current epoch number as its own genesis_epoch (see power/keeper.Keeper.InitGenesis) and
+	// returns the genesis CometBFT validator set (the bootstrap committee) - the only non-empty
+	// InitGenesis validator-update list in this app (genutil's gentx-derived list is always empty:
+	// a bootstrap-committee genesis has no gentxs - see docs/CHAIN.md).
 	genesisModuleOrder := []string{
 		authtypes.ModuleName,
 		banktypes.ModuleName,
@@ -411,7 +475,9 @@ func NewOramaApp(
 		feegrant.ModuleName,
 		upgradetypes.ModuleName,
 		consensusparamtypes.ModuleName,
+		feestypes.ModuleName,
 		emissiontypes.ModuleName,
+		powertypes.ModuleName,
 	}
 	exportModuleOrder := []string{
 		consensusparamtypes.ModuleName,
@@ -424,7 +490,9 @@ func NewOramaApp(
 		evidencetypes.ModuleName,
 		feegrant.ModuleName,
 		upgradetypes.ModuleName,
+		feestypes.ModuleName,
 		emissiontypes.ModuleName,
+		powertypes.ModuleName,
 	}
 
 	app.ModuleManager.SetOrderInitGenesis(genesisModuleOrder...)
@@ -461,20 +529,38 @@ func NewOramaApp(
 	return app
 }
 
+// setAnteHandler builds this app's ante chain by hand, matching x/auth/ante.NewAnteHandler's own
+// decorator list (github.com/cosmos/cosmos-sdk/x/auth/ante@v0.54.4's NewAnteHandler) except for
+// one substitution: x/fees' own FeeDecorator stands in for the stock NewDeductFeeDecorator
+// (plans/open-network/track-c-chain.md C2). The stock decorator always sends the full fee to the
+// fee collector for x/distribution to sweep; this chain instead burns the base-fee portion outright
+// and credits the tip straight to the block proposer's earnings account, falling back to the
+// payer's own earnings when their bank balance is short (see x/fees/ante.FeeDecorator).
 func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
-	anteHandler, err := ante.NewAnteHandler(
-		ante.HandlerOptions{
-			AccountKeeper:   app.AccountKeeper,
-			BankKeeper:      app.BankKeeper,
-			SignModeHandler: txConfig.SignModeHandler(),
-			FeegrantKeeper:  app.FeeGrantKeeper,
-			SigGasConsumer:  ante.DefaultSigVerificationGasConsumer,
-		},
-	)
-	if err != nil {
-		panic(err)
+	anteDecorators := []sdk.AnteDecorator{
+		ante.NewSetUpContextDecorator(),
+		ante.NewExtensionOptionsDecorator(nil),
+		ante.NewValidateBasicDecorator(),
+		ante.NewTxTimeoutHeightDecorator(),
+		ante.NewValidateMemoDecorator(app.AccountKeeper),
+		ante.NewConsumeGasForTxSizeDecorator(app.AccountKeeper),
+		feesante.NewFeeDecorator(app.AccountKeeper, app.FeeGrantKeeper, app.StakingKeeper, app.FeesKeeper),
+		// Security review B8 ("outsiders can never bond"): tops up a signer's own
+		// MsgCreateValidator/MsgDelegate shortfall from their own earnings, before that message
+		// runs - this chain starts every account at zero norama, so without it nobody outside the
+		// genesis bootstrap committee could ever accumulate a public bank balance to bond with.
+		feesante.NewBondTopUpDecorator(app.BankKeeper, app.FeesKeeper),
+		// Security review B1/M4 ("lock the force-bonded stake"): rejects a bootstrap committee
+		// member's own MsgUndelegate/MsgBeginRedelegate if it would take their self-bond below
+		// what x/power has force-bonded into it, while lambda < 1.
+		powerante.NewUndelegateGuard(app.StakingKeeper, app.PowerKeeper),
+		ante.NewSetPubKeyDecorator(app.AccountKeeper), // must run before every signature-verification decorator
+		ante.NewValidateSigCountDecorator(app.AccountKeeper),
+		ante.NewSigGasConsumeDecorator(app.AccountKeeper, ante.DefaultSigVerificationGasConsumer),
+		ante.NewSigVerificationDecorator(app.AccountKeeper, txConfig.SignModeHandler()),
+		ante.NewIncrementSequenceDecorator(app.AccountKeeper),
 	}
-	app.SetAnteHandler(anteHandler)
+	app.SetAnteHandler(sdk.ChainAnteDecorators(anteDecorators...))
 }
 
 func (app *OramaApp) setPostHandler() {

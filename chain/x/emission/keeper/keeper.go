@@ -22,10 +22,8 @@ import (
 type Keeper struct {
 	storeService storetypes.KVStoreService
 	bankKeeper   types.BankKeeper
+	powerKeeper  types.PowerKeeper
 
-	// feeCollectorName is the module account name the validator/delegator share is minted into,
-	// so x/distribution's own BeginBlocker pays it out on capped power.
-	feeCollectorName string
 	// bondedPoolAddr is x/staking's bonded-pool module account address. It is used only by the
 	// devnet-only bootstrap-stake premine gate in InitGenesis, to check that genesis supply sits
 	// entirely in the bonded pool rather than idle in a plain account.
@@ -44,18 +42,18 @@ func NewKeeper(
 	cdc codec.BinaryCodec,
 	storeService storetypes.KVStoreService,
 	bankKeeper types.BankKeeper,
-	feeCollectorName string,
+	powerKeeper types.PowerKeeper,
 	bondedPoolAddr sdk.AccAddress,
 ) Keeper {
 	sb := collections.NewSchemaBuilder(storeService)
 	k := Keeper{
-		storeService:     storeService,
-		bankKeeper:       bankKeeper,
-		feeCollectorName: feeCollectorName,
-		bondedPoolAddr:   bondedPoolAddr,
-		Params:           collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
-		EpochState:       collections.NewItem(sb, types.EpochStateKey, "epoch_state", codec.CollValue[types.EpochState](cdc)),
-		Ceilings:         collections.NewMap(sb, types.CeilingsPrefix, "ceilings", collections.Uint64Key, codec.CollValue[types.CeilingRecord](cdc)),
+		storeService:   storeService,
+		bankKeeper:     bankKeeper,
+		powerKeeper:    powerKeeper,
+		bondedPoolAddr: bondedPoolAddr,
+		Params:         collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
+		EpochState:     collections.NewItem(sb, types.EpochStateKey, "epoch_state", codec.CollValue[types.EpochState](cdc)),
+		Ceilings:       collections.NewMap(sb, types.CeilingsPrefix, "ceilings", collections.Uint64Key, codec.CollValue[types.CeilingRecord](cdc)),
 	}
 
 	schema, err := sb.Build()
@@ -71,4 +69,16 @@ func NewKeeper(
 func (k Keeper) Logger(ctx context.Context) log.Logger {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	return sdkCtx.Logger().With("module", "x/"+types.ModuleName)
+}
+
+// CurrentEpoch returns the epoch number currently in progress. It implements
+// power/types.EmissionKeeper, so x/power can measure its own time-based rules (the bootstrap
+// deadline, the cap hysteresis window, the new-validator ramp) in the same epoch units
+// x/emission's schedule uses (see docs/CHAIN.md).
+func (k Keeper) CurrentEpoch(ctx context.Context) (uint64, error) {
+	state, err := k.EpochState.Get(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return state.CurrentEpoch, nil
 }

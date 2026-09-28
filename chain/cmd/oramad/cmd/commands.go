@@ -27,6 +27,7 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app"
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	emissioncli "github.com/DeBrosOfficial/network/chain/x/emission/client/cli"
+	powercli "github.com/DeBrosOfficial/network/chain/x/power/client/cli"
 )
 
 // initCometBFTConfig returns oramad's default CometBFT config overrides. None are needed today.
@@ -87,10 +88,12 @@ func initRootCmd(
 }
 
 // genesisCommand builds the `oramad genesis` command, including x/emission's
-// set-emission-params helper alongside the standard genutil subcommands.
+// set-emission-params and x/power's add-bootstrap-validator helpers alongside the standard
+// genutil subcommands.
 func genesisCommand(txConfig client.TxConfig, basicManager module.BasicManager) *cobra.Command {
 	cmd := genutilcli.Commands(txConfig, basicManager, app.DefaultNodeHome)
 	cmd.AddCommand(emissioncli.SetEmissionParamsCmd(app.DefaultNodeHome))
+	cmd.AddCommand(powercli.AddBootstrapValidatorCmd(app.DefaultNodeHome))
 	return cmd
 }
 

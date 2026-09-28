@@ -10,6 +10,8 @@ import (
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/cosmos/cosmos-sdk/x/distribution"
 	distrtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
+	"github.com/cosmos/cosmos-sdk/x/slashing"
+	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
 )
@@ -51,5 +53,26 @@ type distrGenesisOverride struct {
 func (distrGenesisOverride) DefaultGenesis(cdc codec.JSONCodec) json.RawMessage {
 	genState := distrtypes.DefaultGenesisState()
 	genState.Params.CommunityTax = math.LegacyZeroDec()
+	return cdc.MustMarshalJSON(genState)
+}
+
+// slashingGenesisOverride wraps x/slashing's own AppModuleBasic to default its slash fractions and
+// signed-blocks window to plans/open-network/track-c-chain.md C4's spec (security review B3: "set
+// the slashing genesis params per spec: downtime 0.01%, double-sign 5%, and a sensible
+// signed-blocks window"). Stock x/slashing's own default SlashFractionDowntime (1%) is 100x the
+// spec's 0.01%; SlashFractionDoubleSign (5%) already matches the spec and is left as the stock
+// default. SignedBlocksWindow is widened from the stock default (100 blocks - too tight a window to
+// tell a brief network blip from real downtime on anything but a toy chain) to 10,000, with
+// MinSignedPerWindow and DowntimeJailDuration left at their stock defaults.
+type slashingGenesisOverride struct {
+	slashing.AppModuleBasic
+}
+
+// DefaultGenesis returns x/slashing's default genesis with the spec's slash fractions and a wider
+// signed-blocks window.
+func (slashingGenesisOverride) DefaultGenesis(cdc codec.JSONCodec) json.RawMessage {
+	genState := slashingtypes.DefaultGenesisState()
+	genState.Params.SlashFractionDowntime = math.LegacyNewDecWithPrec(1, 4) // 0.01%
+	genState.Params.SignedBlocksWindow = 10_000
 	return cdc.MustMarshalJSON(genState)
 }

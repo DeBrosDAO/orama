@@ -40,11 +40,6 @@ BIN_DIR="/usr/lib/orama-global/bin"
 HOME_DIR="/var/lib/orama-global/chain"
 SVC_USER="orama-chain"
 UNIT="orama-global-chain.service"
-# Devnet-only bootstrap stake (see docs/CHAIN.md): replaced by the C4 bootstrap committee, which
-# gives genesis validators power without any tokens. Funded and self-bonded for EXACTLY the same
-# amount, so nothing is left idle outside the staking bonded pool - x/emission's premine gate
-# requires genesis supply to equal the bonded pool balance exactly.
-SELF_BOND="500000000000${DENOM}"
 EPOCH_DURATION="${EPOCH_DURATION:-300s}"
 EPOCH_MIN_BLOCKS="${EPOCH_MIN_BLOCKS:-10}"
 
@@ -59,10 +54,13 @@ if ! [[ "$EPOCH_MIN_BLOCKS" =~ ^[0-9]+$ ]]; then
 	exit 1
 fi
 
-# Validator addresses and node IDs come back from commands run on the remote nodes; they are
-# validated against these before ever being substituted into another remote command.
+# Validator addresses, node IDs and consensus pubkeys come back from commands run on the remote
+# nodes; they are validated against these before ever being substituted into another remote
+# command. CONSENSUS_PUBKEY_RE matches the base64 encoding of exactly 32 bytes (a raw ed25519 key):
+# ceil(32/3)*4 = 44 characters, with one '=' padding character since 32 mod 3 == 2.
 ADDR_RE='^orama1[02-9ac-hj-np-z]{38}$'
 NODE_ID_RE='^[0-9a-f]{40}$'
+CONSENSUS_PUBKEY_RE='^[A-Za-z0-9+/]{43}=$'
 
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -163,33 +161,40 @@ node_id() {
 	echo "$id"
 }
 
+# consensus_pubkey_of extracts a node's raw base64 ed25519 consensus pubkey via `oramad comet
+# show-validator` (which reads only priv_validator_key.json's PUBLIC half) - its private key
+# material never leaves the node, and never touches this script's local disk.
+consensus_pubkey_of() {
+	local key
+	key="$(as_chain "$1" comet show-validator | python3 -c 'import json,sys; print(json.load(sys.stdin)["key"])')"
+	validate "$key" "$CONSENSUS_PUBKEY_RE" "consensus pubkey from $1"
+	echo "$key"
+}
+
 build_genesis() {
 	local first_alias; first_alias="$(field "${NODES[0]}" 2)"
 	log "building genesis on $first_alias"
-	for n in "${NODES[@]}"; do
-		local addr; addr="$(address_of "$(field "$n" 2)")"
-		as_chain "$first_alias" genesis add-genesis-account "$addr" "$SELF_BOND"
-	done
+
+	# Genesis starts at exactly zero norama supply: every node is a member of x/power's bootstrap
+	# committee (plans/open-network.md D16), which needs no self-bond and no gentx - replacing the
+	# old devnet-only self-bonded-validator exception (see docs/CHAIN.md).
 	as_chain "$first_alias" genesis set-emission-params \
 		--epoch-duration "$EPOCH_DURATION" --min-blocks-per-epoch "$EPOCH_MIN_BLOCKS" --allow-bootstrap-stake
-	on "$first_alias" "sudo -u $SVC_USER cat $HOME_DIR/config/genesis.json" > "$work/genesis.json"
 
+	local first=true
 	for n in "${NODES[@]}"; do
-		local alias; alias="$(field "$n" 2)"
-		put_file "$alias" 0600 "$HOME_DIR/config/genesis.json" < "$work/genesis.json"
-		# Written into the already-private (0700, SVC_USER-owned) home directory, never into a
-		# shared /tmp, and removed again once collected onto the local machine.
-		as_chain "$alias" genesis gentx validator "$SELF_BOND" \
-			--chain-id "$CHAIN_ID" --keyring-backend test --output-document "$HOME_DIR/local-gentx.json"
-		on "$alias" "sudo -u $SVC_USER cat $HOME_DIR/local-gentx.json" > "$work/gentx-$(field "$n" 1).json"
-		on "$alias" "sudo -u $SVC_USER rm -f $HOME_DIR/local-gentx.json"
+		local alias; alias="$(field "$n" 2)" name; name="$(field "$n" 1)"
+		local addr; addr="$(address_of "$alias")"
+		local pubkey; pubkey="$(consensus_pubkey_of "$alias")"
+		local extra_flags=()
+		if [ "$first" = true ]; then
+			extra_flags+=(--min-committee-size "${#NODES[@]}")
+			first=false
+		fi
+		as_chain "$first_alias" genesis add-bootstrap-validator "$addr" \
+			--moniker "$name" --consensus-pubkey-base64 "$pubkey" "${extra_flags[@]}"
 	done
 
-	on "$first_alias" "sudo -u $SVC_USER mkdir -p -m 0700 $HOME_DIR/config/gentx"
-	for f in "$work"/gentx-*.json; do
-		put_file "$first_alias" 0600 "$HOME_DIR/config/gentx/$(basename "$f")" < "$f"
-	done
-	as_chain "$first_alias" genesis collect-gentxs
 	as_chain "$first_alias" genesis validate
 	on "$first_alias" "sudo -u $SVC_USER cat $HOME_DIR/config/genesis.json" > "$work/genesis.json"
 

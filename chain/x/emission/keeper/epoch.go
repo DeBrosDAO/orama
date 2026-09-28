@@ -55,8 +55,10 @@ func (k Keeper) AdvanceBlock(ctx sdk.Context) error {
 }
 
 // closeEpoch closes the epoch currently in progress. It:
-//  1. mints the epoch's validator/delegator share and forwards it to the fee collector, so
-//     x/distribution's existing BeginBlocker pays it out on capped power;
+//  1. mints the epoch's validator/delegator share into x/emission's own account and hands it to
+//     x/power to pay out on capped power P_i, split between each validator's commission and its
+//     delegators pro rata, credited to earnings accounts (plans/open-network/track-c-chain.md C3:
+//     "It does not use the stock distribution module"; C4; C2's earnings accounts);
 //  2. records the epoch's non-minted storage/relay/development ceilings for a later module to
 //     claim, and prunes any ceiling record that has fallen outside the trailing window;
 //  3. advances EpochState to the next epoch, starting now, with BlocksInEpoch reset to zero.
@@ -70,8 +72,8 @@ func (k Keeper) closeEpoch(ctx sdk.Context, state types.EpochState) error {
 		if err := k.bankKeeper.MintCoins(ctx, types.ModuleName, coins); err != nil {
 			return fmt.Errorf("failed to mint epoch %d validator share of %s: %w", closingEpoch, coins, err)
 		}
-		if err := k.bankKeeper.SendCoinsFromModuleToModule(ctx, types.ModuleName, k.feeCollectorName, coins); err != nil {
-			return fmt.Errorf("failed to forward epoch %d validator share to the %s module: %w", closingEpoch, k.feeCollectorName, err)
+		if _, err := k.powerKeeper.DistributeEpochRewards(ctx, k, types.ModuleName, split.Validator); err != nil {
+			return fmt.Errorf("failed to distribute epoch %d validator share on capped power: %w", closingEpoch, err)
 		}
 	}
 

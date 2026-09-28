@@ -1,0 +1,20 @@
+syntax = "proto3";
+package orama.fees.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/fees/types";
+
+import "gogoproto/gogo.proto";
+import "orama/fees/v1/fees.proto";
+
+// GenesisState is x/fees's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  // base_fee is the current per-gas-unit base fee (norama). A fresh genesis
+  // sets it to params.initial_base_fee.
+  string base_fee = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  repeated EarningsAccount earnings_accounts = 3 [(gogoproto.nullable) = false];
+  repeated Deposit deposits = 4 [(gogoproto.nullable) = false];
+}

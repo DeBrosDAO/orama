@@ -32,6 +32,12 @@ const (
 	// CodeNotApproved — the calling binary is not an approved app, so the agent
 	// will not let it hold the wallet unlocked (POST /v1/touch).
 	CodeNotApproved = "NOT_APPROVED"
+	// CodeOramaTxRefused — the agent will not sign this ORAMA transaction: an
+	// unknown chain id, a signer that is not the wallet's active account, a
+	// message it cannot decode and show, extension options, a fee not in
+	// norama, an imported account, or a headless agent (nobody to approve).
+	// Nothing was shown to the user and nothing was signed.
+	CodeOramaTxRefused = "ORAMA_TX_REFUSED"
 	// CodeInternalError — the agent failed for its own reasons.
 	CodeInternalError = "INTERNAL_ERROR"
 	// CodeAgentNotRunning is this client's own code for an unreachable socket.
@@ -84,6 +90,8 @@ func (e *AgentError) hint() string {
 		return "approve this application in the RootWallet desktop app (any request it makes will ask) so it may keep the wallet unlocked"
 	case CodePeerVanished:
 		return "the calling process changed while the request was in flight, so the agent stopped trusting it; run this again"
+	case CodeOramaTxRefused:
+		return "the RootWallet agent will not sign this ORAMA transaction as built, and did not ask; the message says what to change"
 	case CodeInvalidRequest:
 		return "this client sent something the agent could not parse — report it"
 	case CodeInternalError:
@@ -124,6 +132,10 @@ func IsNotApproved(err error) bool { return hasCode(err, CodeNotApproved) }
 // mid-request, which happens when the binary is replaced under a running
 // command. The operation is safe to retry.
 func IsPeerVanished(err error) bool { return hasCode(err, CodePeerVanished) }
+
+// IsOramaTxRefused returns true if the agent refused to sign an ORAMA
+// transaction outright. Retrying the same transaction is refused again.
+func IsOramaTxRefused(err error) bool { return hasCode(err, CodeOramaTxRefused) }
 
 // IsPayloadTooLarge returns true if the request exceeded the agent's body limit.
 func IsPayloadTooLarge(err error) bool { return hasCode(err, CodePayloadTooLarge) }

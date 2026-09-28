@@ -20,15 +20,17 @@ require it, and nothing in `chain/` imports `core/`.
 |---|---|
 | `auth` | accounts |
 | `bank` | balances and the `norama` denom |
-| `staking` | validators, delegation, bonding (standard SDK module - see the devnet exception below) |
-| `slashing` | downtime/double-sign penalties |
-| `distribution` | pays block rewards (including x/emission's mint) out to bonded validators and delegators, proportional to voting power |
+| `staking` | bonds, delegation, unbonding, slashing/jailing bookkeeping (standard SDK module, but its own EndBlocker's CometBFT validator updates are discarded - see "x/power" below) |
+| `slashing` | downtime/double-sign penalties, applied to every CometBFT validator including x/power's bootstrap committee (see "x/power") |
+| `distribution` | wired for its authority-gated `MsgUpdateParams` plumbing and the SDK's standard proposer-reward accounting, but no longer the path either the emission mint or transaction fees actually take - see "x/power" and "x/fees" below and the Deviations section |
 | `consensus` | on-chain consensus parameters |
 | `upgrade` | coordinated binary upgrades |
-| `genutil` | genesis/gentx tooling |
+| `genutil` | genesis tooling (its gentx machinery is unused - see "x/power": a bootstrap-committee genesis has no gentxs) |
 | `evidence` | equivocation evidence handling |
-| `feegrant` | fee sponsorship |
+| `feegrant` | fee sponsorship (still honored by x/fees' own fee ante decorator - see "x/fees") |
 | `emission` (custom, `chain/x/emission`) | the halving-with-tail emission schedule |
+| `power` (custom, `chain/x/power`) | voting power, the bootstrap committee, and the hand-over factor lambda (C4) |
+| `fees` (custom, `chain/x/fees`) | the EIP-1559-style base fee, earnings accounts, and the state-deposit ledger (C2) |
 
 **Not wired**, on purpose: `x/gov`, `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs`
 (x/emission tracks its own epochs directly in its `BeginBlock`), `x/group`, `x/nft`, `x/circuit`,
@@ -89,9 +91,13 @@ runs with its default send-enabled behavior. This is a known gap, not a design d
   `oramad`'s own module wiring can't default - so `chain/scripts/localnet/localnet.sh` and
   `chain/scripts/stagenet/deploy.sh` both patch it into the generated genesis file directly.
 - **`app.toml`'s default `minimum-gas-prices` is `0.000001norama`**, not zero. This is a
-  placeholder floor, not the real fee mechanism: `plans/open-network/track-c-chain.md` C2's
-  EIP-1559-style base fee (with its 100%-burned floor) hasn't been built yet, so this just stops a
-  validator from accepting free transactions by default in the meantime.
+  separate, per-validator local mempool admission policy (`x/fees/ante.checkValidatorMinGasPrice`,
+  standing in for stock `x/auth/ante`'s own unexported `checkTxFeeWithValidatorMinGasPrices`),
+  independent of - and on top of, not instead of - `x/fees`' own EIP-1559-style base fee, which is
+  the chain-wide, consensus-enforced floor every tx actually pays against (see "`x/fees`" below). It
+  only ever runs on `CheckTx`, and **never during simulation** (a `--gas auto` estimate submits a
+  placeholder fee/gas before either is known, and must never be rejected by either this policy or
+  `x/fees`' own base-fee check - mirroring stock `x/auth/ante`'s own `!simulate` guard).
 
 ## `x/emission`: the halving-with-tail schedule
 
@@ -147,11 +153,13 @@ invariants section below).
 
 Every closed epoch's maximum splits 60% validators/delegators, 25% storage, 10% relay, 5%
 development (`chain/x/emission/types/split.go`). **Today, only the 60% validator/delegator share
-is ever minted.** It is minted into `x/emission`'s own module account and immediately forwarded to
-the fee collector account, so `x/distribution`'s existing `BeginBlock` pays it out to bonded
-validators (and their delegators) on voting power, exactly like it already does for transaction
-fees. `x/emission` runs its `BeginBlock` before `x/distribution`'s, so a mint lands in the fee
-collector in time to be swept up the same block.
+is ever minted.** It is minted into `x/emission`'s own module account and immediately handed to
+`x/power.Keeper.DistributeEpochRewards` (`x/emission`'s `PowerKeeper` dependency), which pays it
+out on **capped power `P_i`** - not on raw stake, and not through `x/distribution` - split between
+each validator's own share (commission, plus any of its own self-delegation's cut) and its
+delegators' pro-rata shares, credited straight into every recipient's **earnings account**
+(`x/fees`). See "`x/power`: voting power..." below for the full mechanism, including bootstrap
+committee force-bonding.
 
 The storage, relay and development shares are **never minted**: they are recorded as a
 `CeilingRecord` (per epoch: storage/relay/development ceiling amounts plus the validator amount
@@ -163,16 +171,13 @@ nothing currently reads an expired one, so nothing is lost by pruning it.
 Remainders from each share's integer division always fold into the validator share, so the four
 shares of any epoch's maximum sum back to that maximum exactly, to the norama.
 
-### The devnet-only bootstrap-stake exception, and its premine gate
+### Genesis starts at exactly zero supply, and its premine gate
 
-Standard `x/staking` needs at least one validator with a self-delegation at genesis, but the
-bootstrap-committee module that is supposed to give genesis validators power *without* tokens
-(`plans/open-network.md` D16, tracked as C4, "x/power") does not exist yet. Until it does, a
-devnet or localnet genesis funds each validator's account with a small amount of `norama` (see
-`chain/scripts/localnet/localnet.sh`'s `SELF_BOND`) purely so `x/staking`'s genesis validation
-passes. **This is a devnet-only stand-in, not part of the design**: a real network genesis starts
-at exactly zero balance, and `x/emission`'s `InitGenesis` actively enforces that with a premine
-gate:
+A real network genesis starts at exactly zero balance: `x/emission`'s bootstrap committee
+(`x/power`, C4) gives every genesis validator equal voting power without any token needing to
+exist first (see "`x/power`" below), so there is no more "at least one self-delegated validator"
+requirement to work around. `x/emission`'s `InitGenesis` still actively enforces this with a
+premine gate:
 
 - If `Params.AllowBootstrapStake` is `false` (the default), **any nonzero genesis supply is
   rejected outright** - a normal (including mainnet) genesis simply cannot start with a balance.
@@ -180,10 +185,16 @@ gate:
   - the chain-id to contain `-devnet-`, `-stagenet-` or `-localnet-` (checked against `ctx.ChainID()`
     - never trust a `chain-id` alone to mean "safe", but this at least stops the flag from being
     used silently on anything that looks like `orama-1`);
-  - the entire genesis supply to sit in the staking bonded pool, to the last norama - i.e. every
-    genesis account was funded with **exactly** its self-bond amount, nothing left idle. Both
-    `chain/scripts/localnet/localnet.sh` and `chain/scripts/stagenet/deploy.sh` fund each validator
-    with exactly `SELF_BOND` for this reason.
+  - the entire genesis supply to sit in the staking bonded pool, to the last norama.
+
+**`AllowBootstrapStake` is kept only for its other effect: relaxing the
+`epoch_duration`/`min_blocks_per_epoch` production floors** (see "Genesis parameters" above) so a
+devnet/localnet/stagenet chain can use a short epoch. Neither `chain/scripts/localnet/localnet.sh`
+nor `chain/scripts/stagenet/deploy.sh` fund any genesis account any more (there is no more
+`SELF_BOND`): every genesis validator is a member of `x/power`'s bootstrap committee instead, so
+genesis supply is exactly zero either way, and the premine gate's nonzero-supply branch above is
+simply never exercised by either script today. It remains available for a case this design does
+not otherwise need: a devnet that wants to test pre-funded genesis accounts for some other reason.
 
 `x/emission` accounts for the resulting supply explicitly rather than treating it as unexplained:
 on a *fresh* genesis (detected as `current_epoch <= 1` and `cumulative_minted == 0`), its
@@ -198,13 +209,14 @@ and refuses to start the chain if it doesn't hold.
 ### Tracking burns from elsewhere in the chain
 
 `x/emission` has no burn path of its own, but other modules do - `x/slashing` burns a validator's
-bonded or not-bonded stake on a double-sign or downtime slash. Since `x/emission`'s own
-`BeginBlock` has already minted the block's validator share (and updated `cumulative_minted` to
-match) by the time `EndBlock` runs, `x/emission`'s `EndBlock` (`Keeper.ReconcileBurns`, run last in
-`app.go`'s end-blocker order) compares live bank supply against
+bonded or not-bonded stake on a double-sign or downtime slash, and `x/fees`' ante decorator burns
+100% of every transaction's base fee (see "`x/fees`" below). Since `x/emission`'s own `BeginBlock`
+has already minted the block's validator share (and updated `cumulative_minted` to match) by the
+time `EndBlock` runs, `x/emission`'s `EndBlock` (`Keeper.ReconcileBurns`, run last in `app.go`'s
+end-blocker order) compares live bank supply against
 `genesis_supply + cumulative_minted - cumulative_burned`: any shortfall it finds must be a burn
 that happened elsewhere this block, and gets added to `cumulative_burned`. This keeps the supply
-invariant holding without `x/emission` needing a direct dependency on `x/slashing`.
+invariant holding without `x/emission` needing a direct dependency on `x/slashing` or `x/fees`.
 
 ### Queries
 
@@ -236,6 +248,262 @@ including a 4,000-epoch simulated run (`TestCheckSupplyInvariant_simulated4000Ep
 every halving boundary and well into the permanent tail, and a slashing-burn simulation
 (`TestInitGenesis_reconcileBurnsAfterASlashKeepsInvariantHolding`).
 
+## `x/power`: voting power, the bootstrap committee, and the hand-over factor lambda
+
+`chain/x/power` implements plans/open-network/track-c-chain.md's C4: **the CometBFT validator set
+comes from x/power, not from stock `x/staking`'s own `EndBlocker`.** `x/staking` still owns bonds,
+delegations, unbonding and slashing/jailing exactly as it always has - only the question "what
+voting power does CometBFT actually see" is answered elsewhere.
+
+### The bootstrap committee needs no stake
+
+Genesis names a fixed **bootstrap committee** (`Params.MinCommitteeSize` members, `plans/open-network.md`
+D16): each member is declared directly in `x/power`'s own genesis state
+(`BootstrapMember{operator_address, moniker, consensus_pubkey}` - a raw 32-byte ed25519 key, not an
+`Any`, since every consensus key on this chain is ed25519). `InitGenesis`:
+
+1. gives every member an **equal share of genesis voting power** (`types.EqualBootstrapShares`) and
+   returns the corresponding `[]abci.ValidatorUpdate` directly - this is the only non-empty
+   validator-update list any module's `InitGenesis` produces (`x/staking`'s own genesis validator
+   list is empty: **there are no gentxs in this design** - see "Running a localnet" below);
+2. creates a real (`Bonded`, zero-token, zero-`DelegatorShares`) `stakingtypes.Validator` record for
+   each member directly via the staking keeper's own primitives (`SetValidator`,
+   `SetValidatorByConsAddr`, and the `AfterValidatorCreated`/`AfterValidatorBonded` hooks) - **not**
+   by declaring it in `x/staking`'s own genesis JSON (which `ValidateGenesis` would reject: a
+   `Bonded` validator there must have nonzero `DelegatorShares`). This record is required for
+   `x/slashing`'s existing downtime/double-sign machinery to work for a committee member at all:
+   its `BeginBlocker` calls `IsValidatorJailed` (hence `GetValidatorByConsAddr`) for every block
+   signer, and would otherwise **crash the whole chain** with `"validator does not exist"` the very
+   next block, and then again with `"no validator signing info found"` once that gap is closed but
+   `AfterValidatorBonded` (which creates the `ValidatorSigningInfo` record) still hasn't run. Both
+   failure modes were hit and fixed during this build - see the "Deviations" section.
+3. deliberately does **not** call `SetValidatorByPowerIndex` for these records, so they never show
+   up in `GetBondedValidatorsByPower` (x/staking's own stake-ranked index) on the strength of their
+   bootstrap seat alone - only a real delegation (e.g. from force-bonded rewards, below) ever gives
+   one a `C_i` of its own.
+
+An **outsider** (anyone not on the committee) needs no special treatment at all: they create a
+validator the normal way (`MsgCreateValidator`), and `x/power` picks them up automatically the next
+time it recomputes power.
+
+**Outsiders can bond from earnings (security review B8).** Genesis starts at exactly zero supply
+and every protocol payout (emission, fees) lands in a restricted earnings account, never a public
+bank balance (see "`x/fees`" below) - so without a way to move earnings into a bondable bank
+balance, nobody outside the genesis bootstrap committee could ever accumulate enough of a *public*
+balance to self-bond a validator or delegate at all. `x/fees/ante.BondTopUpDecorator`, earlier in
+the ante chain than `FeeDecorator`, tops up a signer's own shortfall (the declared bond amount minus
+their current spendable bank balance) from that same signer's own earnings, transparently, before
+the real `MsgCreateValidator`/`MsgDelegate` handler runs - atomic with the rest of the tx, so it
+rolls back together on any later failure. It only ever moves an address's own earnings into its own
+bank balance; a tx naming someone else's address would fail normal signature verification anyway.
+
+### The power formula
+
+Every block, `x/power`'s `EndBlock` (`Keeper.RunEndBlock` -> `Keeper.computePowers`) computes, for
+every validator (every bootstrap committee member, plus every bonded outsider):
+
+```
+P_i = (1 - lambda) * B_i + lambda * C_i
+```
+
+- **`B_i`** (`types.EqualBootstrapShares`): `1/n` for each of the `n` committee members, `0` for
+  everyone else. This is what makes a committee seat "worth" voting power without any stake.
+- **`C_i`** (`types.ComputeCappedShares`): each validator's share of total bonded stake, **capped**
+  at `Params.CapFractionNormal` (5%) or `Params.CapFractionReduced` (3%, once more than
+  `Params.CapStepDownValidatorCount` validators are active), with the excess above the cap
+  redistributed proportionally among not-yet-capped validators (an iterative "water-filling" pass,
+  ICS power-shaping's algorithm) until it converges - or, if the cap can't be respected by *any*
+  distribution (`cap * n < 1`), an **equal fallback** (every validator gets `1/n`). `C_i` is then
+  scaled by a **30-epoch ramp** (`Params.RampEpochs`, `types.RampFactor`) from the epoch a
+  validator's stake first became positive, so a brand-new validator's power rises linearly from
+  zero rather than appearing at full strength immediately.
+- **`lambda`** (`types.ComputeLambda`), the hand-over factor: recomputed once per **closed
+  x/emission epoch** (not every block - see "epochs, not calendar time" below),
+
+  ```
+  lambda = min(1, max(lambda_prev, bonded / bootstrap_exit_stake, epochs_since_genesis / bootstrap_deadline_epochs))
+  ```
+
+  **Monotonic by construction** (`lambda_prev` is one of the three terms maxed together), it
+  reaches exactly `1` by `bootstrap_deadline_epochs` (`plans/open-network.md` D16: "~12 months")
+  **regardless of stake**, or earlier once total bonded stake reaches `bootstrap_exit_stake`. At
+  `lambda = 1`, `(1 - lambda) = 0`, so **a committee-only member's power falls to exactly zero** -
+  "committee seats lapse at lambda = 1" falls directly out of the formula, with no separate code
+  path needed.
+
+`P_i` is mapped to a CometBFT integer power deterministically
+(`types.PowerToCometBFT`): `floor(P_i * Params.CometPowerScale)` (scale `1e9` by default),
+floored **up** to `1` for any strictly positive share so a validator with real (if tiny) power is
+never silently dropped by rounding to zero (CometBFT reads power `0` as "remove this validator").
+`RunEndBlock` diffs this block's powers against the last block's (`Keeper.LastPower`,
+`Keeper.LastPubKey`) and returns only the `[]abci.ValidatorUpdate` entries that actually changed -
+including a zero-power removal update, using the last pubkey on file, for anyone who dropped out of
+this block's universe entirely (e.g. an outsider that fully unbonded, or a lapsed committee seat).
+
+**Epochs, not calendar time.** Every one of `x/power`'s own time-based rules - the bootstrap
+deadline, the cap's hysteresis window (`Params.CapHysteresisEpochs`: the cap only steps back up
+from 3% to 5% after staying below `Params.CapStepUpValidatorCount` for this many *consecutive
+closed epochs*), and the 30-epoch ramp - is measured in `x/emission` epoch numbers
+(`power/types.EmissionKeeper.CurrentEpoch`), never block height or wall-clock time. This keeps them
+scaled consistently with whatever epoch length a given chain is configured with (a 30-epoch ramp is
+30 real days on a 24h-epoch mainnet, and 30 x the localnet's much shorter epoch on a localnet) - it
+also means `x/power`'s `InitGenesis` must run **after** `x/emission`'s, so it can record
+`x/emission`'s current epoch number as its own `genesis_epoch`.
+
+### CometBFT/staking wiring
+
+`app.stakingEndBlockOverride` (`chain/app/staking_override.go`) wraps `staking.NewAppModule(...)`:
+its `EndBlock` still calls the real `stakingKeeper.EndBlocker` (maturing unbonding/redelegation
+queues and the internal bonded/unbonded status transitions and pool accounting that come with it)
+but always returns **no** validator updates, so `x/power`'s `EndBlock` is the only
+`module.HasABCIEndBlock` in this app that ever returns a non-empty list - the SDK's module manager
+errors if two do. `x/power` runs after `staking` in `app.go`'s end-blocker order, so its power
+computation for a block always sees that block's freshest bonded set.
+
+### Rewards, paid on capped power, not stock `x/distribution`
+
+`x/emission`'s epoch-close mint is hand-delivered: after minting the validator/delegator share into
+its own account, `x/emission` calls `PowerKeeper.DistributeEpochRewards` (implemented by
+`power/keeper.Keeper`), passing itself back as an `EmissionKeeper` (so `x/power` can read the
+current epoch without an import cycle). `DistributeEpochRewards` reuses the **exact same**
+`computePowers` call `RunEndBlock` used this block, so a validator's reward share always matches
+the CometBFT power it was actually just given, and:
+
+1. pulls the minted coins into `x/power`'s own module account;
+2. for each validator with a positive share, floors `share * totalMint` into its amount (the tiny
+   flooring remainder across all validators is folded into the first entry, mirroring
+   `x/emission`'s own "remainders fold into the validator share" rule);
+3. splits that amount into the validator's own share (commission, plus its own self-delegation's
+   pro-rata cut) and its delegators' pro-rata shares (`Keeper.distributeValidatorReward`, reading
+   `stakingKeeper.GetValidatorDelegations` directly - **not** `x/distribution`'s F1
+   historical-rewards machinery);
+4. credits every recipient's **earnings account** (`x/fees.Keeper.CreditEarnings`) - never a public
+   bank balance.
+
+If a validator has no real record yet, or (the common case for a fresh bootstrap committee member)
+has zero `DelegatorShares`, its entire amount is treated as "its own".
+
+### Force-bonding
+
+50% of a bootstrap committee member's own share (`Params.ForceBondFraction`) is **force-bonded**
+into its own self-delegation instead of being credited to earnings, until that self-bond reaches
+`Params.SelfBondCapMultiplier * Params.MinSelfBond` (default: 2x 1,000 ORAMA)
+(`Keeper.forceBondCommitteeReward`): the amount is sent from `x/power`'s module account into the
+member's own account, then self-delegated via `stakingKeeper.Delegate` - the same keeper method
+`MsgDelegate` uses. Because `InitGenesis` already gave every committee member a real (if
+zero-token) validator record, this works from that member's **very first reward**, with no separate
+`MsgCreateValidator` step required. A double-sign now has real stake to slash from day one.
+
+### Queries
+
+`oramad query power ...`: `params`, `bootstrap-committee`, `lambda` (current lambda, cap state and
+hysteresis streak), `validator-power [valoper-address]` (last CometBFT power assigned).
+
+### Genesis tooling: `oramad genesis add-bootstrap-validator`
+
+Appends one `BootstrapMember` to `genesis.json`, reading the member's consensus pubkey from one of
+three sources (in priority order): `--consensus-pubkey-base64` (a raw base64 key, e.g. extracted
+remotely without ever moving a private-key file - see the stagenet script below),
+`--consensus-pubkey-file` (a `priv_validator_key.json` to read the *public* half from), or
+`--home`'s own `priv_validator_key.json`. `--min-committee-size` overwrites `Params.MinCommitteeSize`
+(needed on any devnet/localnet/stagenet chain-id running fewer than the 30-member production floor -
+`Keeper.InitGenesis`'s chain-id gate only relaxes that floor, never the check that the *declared*
+committee actually has at least `Params.MinCommitteeSize` members). Like
+`set-emission-params`, this only makes sense before the chain's first `oramad start`.
+
+## `x/fees`: base fee, earnings accounts, and state deposits
+
+`chain/x/fees` implements plans/open-network/track-c-chain.md's C2.
+
+### The base fee (EIP-1559-style)
+
+`Keeper.AdvanceBaseFee`, run in `x/fees`' own `EndBlock`, adjusts the per-gas-unit base fee toward
+`Params.TargetBlockGasFraction` (50%) fullness, by at most `Params.MaxBaseFeeChangeFraction` (12.5%)
+per block, floored at `Params.MinBaseFee` (`types.NextBaseFee` - a pure function, unit-tested with
+hardcoded expected values). Fullness is `ctx.BlockGasMeter().GasConsumed()` against
+`ctx.ConsensusParams().Block.MaxGas`; if no block gas limit is configured (CometBFT's convention:
+`<= 0` means unlimited, and a test genesis with no consensus params at all reads as `nil`), there is
+no meaningful fullness to react to and the base fee is left unchanged.
+
+### The fee ante decorator: burn the base fee, tip the proposer, fall back to earnings
+
+`x/fees/ante.FeeDecorator` (`chain/app/app.go`'s `setAnteHandler`) replaces stock
+`x/auth/ante`'s `NewDeductFeeDecorator` in this app's hand-assembled ante chain (every other
+decorator is exactly `x/auth/ante`'s own). It requires a tx's declared fee to be at least
+`base_fee * gas_limit`; anything above that is a **tip**. `Keeper.SettleFee`:
+
+1. pays the **tip from the payer's bank balance only** - a tip may never draw on earnings (security
+   review M4: earnings must never leave the ledger except to pay the base fee), so a tip larger than
+   the payer's spendable bank balance fails the tx outright;
+2. pays as much of the **base fee** as possible from whatever bank balance is left after the tip,
+   then falls back to the payer's **earnings account** for any remaining shortfall
+   (`Keeper.DebitEarningsUpTo`) - but **only when the payer is paying with their own funds**; a fee
+   granter sponsoring the tx may never draw on the signer's (or its own) earnings for the base fee
+   either (security review, non-blocking "fee granter") - and fails the tx only if neither bank nor
+   earnings (where allowed) cover it;
+3. **burns the base-fee portion in full** (`BankKeeper.BurnCoins`);
+4. **credits the tip to the current block proposer's earnings account** - the proposer is resolved
+   from `ctx.BlockHeader().ProposerAddress` via a narrow local `StakingKeeper` interface
+   (`GetValidatorByConsAddr`). If that ever fails to resolve (a malformed or missing header field -
+   not expected in normal operation), the decorator folds the tip into the base fee and **burns the
+   whole fee** instead of crediting any account (security review, non-blocking "unresolvable
+   proposer": crediting `x/fees`' own module address would create an unattributed balance nobody can
+   ever spend from) - so a broken header field can never block every transaction on the chain.
+
+A `MsgCreateValidator`/`MsgDelegate` whose declared bond amount exceeds the signer's own spendable
+bank balance is topped up from that same signer's earnings first, by a separate decorator
+(`x/fees/ante.BondTopUpDecorator` - security review B8; see "Outsiders can bond from earnings"
+under "`x/power`" above), earlier in the ante chain, before this decorator runs.
+
+Feegrant sponsorship still works exactly as it does with the stock decorator (a fee granter, if one
+is set and authorizes it, pays instead of the signer) - except that, as above, a granter-sponsored
+tx's base fee may only be paid from bank, never from anyone's earnings.
+
+**Simulation** (`--gas auto` and similar): before either the local minimum-gas-price policy or the
+base-fee check above (both of which require a real, already-known fee/gas that a simulation is
+trying to discover), `FeeDecorator` runs the same settlement logic on a branched, discarded context
+(`ctx.CacheContext()`) purely so its gas consumption is reflected in the estimate, swallowing any
+error (insufficient funds, an unresolvable payer/proposer) since the guessed fee/gas is not final
+yet - mirroring stock `x/auth/ante`'s own `!simulate` guard around its equivalent fee check.
+
+### Earnings accounts
+
+`x/fees.Keeper.Earnings` is a `collections.Map[address, math.Int]`, backed by `x/fees`' own module
+account: `CreditEarnings(ctx, senderModule, addr, coin)` moves `coin` from `senderModule`'s account
+into `x/fees`' and increments the ledger; internal callers that already hold the coins in `x/fees`'
+own account (the ante decorator's tip, a released deposit's refund) skip the transfer and just
+touch the ledger. This keeps **"sum of earnings balances == the earnings module account balance"**
+(one of C2's invariants) true after every operation - worked through by hand for both the
+bank-funded and earnings-funded fee-payment paths in the code comments on `SettleFee`.
+
+Earnings today are usable only for **paying tx fees** (the ante decorator) and, once force-bonded,
+**bonding**. `MsgShieldEarnings` (shielding earnings into a private note) is explicitly **not**
+implemented yet - it depends on `x/shielded` (C12) - and there is no withdraw-to-a-public-bank-balance
+message at all, matching D7's "no public user-to-user path".
+
+### State deposits (implemented, not yet consumed)
+
+`Keeper.LockDeposit`/`Keeper.ReleaseDeposit` implement the generic lock/refund/burn API C2 asks
+for, backed by a **second, separate module account** (`fees_deposits`, distinct from `fees` itself
+- so "the deposit module balance == open deposits" stays an independently checkable invariant from
+"sum of earnings balances == the earnings module balance"). `ReleaseDeposit` refunds
+`Params.DepositRefundFraction` (99%) to the owner's earnings and burns the rest
+(`types.SplitDeposit`, exact split, remainder to the burn side). **No module calls this API yet**:
+`x/token`, `x/cnft`, `x/market`, `x/nodes` and CosmWasm storage metering (none of which exist yet)
+are its intended callers.
+
+### Queries
+
+`oramad query fees ...`: `params`, `base-fee`, `earnings [address]`, `deposit [id]`.
+
+`base-fee`'s `QueryBaseFeeResponse.base_fee` is a `cosmossdk.io/math.Int` (a **whole-number** count
+of norama per gas unit, e.g. `"1000"` - never a decimal string like `"1000.0"` or `"0.001"`),
+serialized as a JSON/proto string the way every `math.Int` field is. A client (including RootWallet)
+must parse it as an integer, not a decimal: `x/fees.Keeper.BaseFee` is stored and adjusted as an
+integer end to end (`types.NextBaseFee`'s EIP-1559 update rounds to the nearest whole norama every
+block, floored at `Params.MinBaseFee` - see "The base fee (EIP-1559-style)" above), never as a
+`math.LegacyDec`.
+
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
 `oramad`'s default `app-db-backend` is **`pebbledb`**, not the SDK's own default (`goleveldb`).
@@ -265,23 +533,31 @@ make localnet-clean        # stop every node and delete chain data
 ```
 
 `scripts/localnet/localnet.sh` builds `oramad` once, `init`s N node homes under
-`scripts/localnet/.localnet/nodeN` (gitignored), funds and self-delegates each validator with
-exactly its devnet-only bootstrap self-bond (see the premine gate above - nothing is left idle
-outside the bonded pool), shortens the emission epoch and sets `allow_bootstrap_stake`
+`scripts/localnet/.localnet/nodeN` (gitignored), then builds genesis **at exactly zero norama
+supply**: every node becomes an `x/power` bootstrap committee member
+(`oramad genesis add-bootstrap-validator`, once per node, each reading that node's own
+`priv_validator_key.json` - see "`x/power`" above), with `--min-committee-size` set to `N` so a
+small localnet doesn't need the 30-member production floor. No genesis account is ever funded and
+there are no gentxs at all. It also shortens the emission epoch and sets `allow_bootstrap_stake`
 (`EPOCH_DURATION=30s EPOCH_MIN_BLOCKS=5` by default, both overridable env vars; `CHAIN_ID` must
-contain `-localnet-`, `-devnet-` or `-stagenet-` or the script refuses to run), patches a finite
-consensus block `max_gas` into the generated genesis, collects every node's gentx into one genesis,
-distributes it, and starts every node in the background on distinct localhost ports in the
-31000-31099 range (P2P/RPC/gRPC/API/Prometheus/pprof, ten ports per node so up to ten validators
-fit). Every setup command's output goes to `scripts/localnet/.localnet/setup.log` rather than being
-discarded, so a failure can actually be diagnosed.
+contain `-localnet-`, `-devnet-` or `-stagenet-` or the script refuses to run - `allow_bootstrap_stake`
+here relaxes only the epoch-duration/min-blocks floors, not any premine gate, since supply stays at
+zero), patches a finite consensus block `max_gas` into the generated genesis, distributes it, and
+starts every node in the background on distinct localhost ports in the 31000-31099 range
+(P2P/RPC/gRPC/API/Prometheus/pprof, ten ports per node so up to ten validators fit). Every setup
+command's output goes to `scripts/localnet/.localnet/setup.log` rather than being discarded, so a
+failure can actually be diagnosed.
 
 Useful commands against a running localnet (or any `oramad` node):
 
 ```sh
-oramad query emission current-epoch    --node tcp://127.0.0.1:31001 --home <node-home>
+oramad query emission current-epoch     --node tcp://127.0.0.1:31001 --home <node-home>
 oramad query emission cumulative-minted --node tcp://127.0.0.1:31001 --home <node-home>
-oramad query emission invariants       --node tcp://127.0.0.1:31001 --home <node-home>
+oramad query emission invariants        --node tcp://127.0.0.1:31001 --home <node-home>
+oramad query power lambda               --node tcp://127.0.0.1:31001 --home <node-home>
+oramad query power bootstrap-committee  --node tcp://127.0.0.1:31001 --home <node-home>
+oramad query fees base-fee              --node tcp://127.0.0.1:31001 --home <node-home>
+oramad query fees earnings <address>    --node tcp://127.0.0.1:31001 --home <node-home>
 ```
 
 ### `oramad genesis set-emission-params`
@@ -296,10 +572,10 @@ oramad genesis set-emission-params \
 
 This only makes sense **before** the chain's first `oramad start`: `x/emission` has no `Msg`
 service, so once a chain has produced its first block these parameters can never change again
-short of a coordinated hard fork. `--allow-bootstrap-stake` is required on any devnet/localnet
-genesis that funds genesis accounts (see the premine gate above) and is also what relaxes the
-24h/14,400-block production floors. It is how `chain/scripts/localnet/localnet.sh` and the stagenet
-deploy script (`chain/scripts/stagenet/deploy.sh`) shorten the epoch for non-mainnet environments.
+short of a coordinated hard fork. `--allow-bootstrap-stake` relaxes the 24h/14,400-block production
+floors (its only remaining effect - see "Genesis starts at exactly zero supply" above); it is how
+`chain/scripts/localnet/localnet.sh` and the stagenet deploy script
+(`chain/scripts/stagenet/deploy.sh`) shorten the epoch for non-mainnet environments.
 
 Standard `oramad` commands work as on any Cosmos SDK chain, e.g. `oramad init <moniker> --chain-id
 <id> --default-denom norama` (the default denom is already `norama` even without the flag - see
@@ -327,8 +603,13 @@ its own systemd unit directly. It refuses to run unless `CHAIN_ID` contains `-st
 `-devnet-`, builds `oramad` with the same `-trimpath`/version `ldflags` as `make build`, transfers
 it gzip-compressed straight into `sudo install` via `/dev/stdin` (no intermediate file of any name,
 predictable or not, ever touches the remote disk), and validates every value it reads back from a
-remote command (a validator address, a node ID) against a strict format before ever using it to
-build another remote command. `reset` fully tears a node down - including one left over from an
+remote command (a validator address, a node ID, a consensus pubkey) against a strict format before
+ever using it to build another remote command. Genesis is built the same zero-supply,
+bootstrap-committee way the localnet script uses: each node's consensus pubkey is extracted
+remotely with `oramad comet show-validator | python3 -c '...["key"]'` (reading only the *public*
+half of `priv_validator_key.json` - its private key material never leaves the node, or touches this
+script's own disk) and fed to `genesis add-bootstrap-validator --consensus-pubkey-base64` on the
+first node. `reset` fully tears a node down - including one left over from an
 aborted `up` (binary and/or state present but no systemd unit yet, or vice versa) - by removing the
 unit, the state directory and the binary, each step tolerating the thing it removes already being
 absent. Like the localnet script, its genesis flow uses `keyring-backend test` (an unencrypted,
@@ -353,13 +634,58 @@ for anything that does.
 - **No `x/bank` send restriction yet.** D7's "mandatory shielded ORAMA" is out of scope for this
   first pass (it depends on `x/shielded`, which does not exist); `docs/SECURITY.md` should note
   this once it exists for the chain, so nobody assumes payments are private today.
-- **The validator share still flows through stock `x/distribution`, not a custom reward path.**
-  `plans/open-network/track-c-chain.md` C3 eventually wants `x/emission` to pay validators
-  directly (bypassing `x/distribution`'s reliance on a live validator set / voting-power history,
-  which the stock module also has to skip on the very first block after genesis - see
-  `x/distribution/keeper/abci.go`'s `height > 1` check). Building that custom path is out of scope
-  for this first pass; today the validator/delegator share is minted into the fee collector and
-  paid out however stock `x/distribution` already pays out transaction fees.
+- **The validator share now flows through `x/power`, not stock `x/distribution` - resolving a
+  deviation from the first pass.** `x/emission` hands its epoch mint to
+  `PowerKeeper.DistributeEpochRewards`, which pays it out on capped power `P_i`, split between each
+  validator's own share and its delegators pro rata, credited to earnings accounts - see
+  "`x/power`" and "`x/fees`" above.
+- **Two `x/slashing`/`x/staking` chain-halting bugs were found and fixed while building the
+  bootstrap committee, both from giving a committee member CometBFT voting power without going
+  through the normal `MsgCreateValidator` path.** (1) `x/slashing`'s `BeginBlocker` calls
+  `IsValidatorJailed` (hence `GetValidatorByConsAddr`) for every block signer; a committee member
+  with no `stakingtypes.Validator` record at all crashed the chain with `"validator does not
+  exist"` on the very next block after genesis. (2) Once fixed by creating that record directly
+  (`SetValidator`/`SetValidatorByConsAddr`) and firing `AfterValidatorCreated`, the chain still
+  crashed one block later with `"no validator signing info found"`: that hook only registers the
+  consensus pubkey, and `x/slashing`'s `ValidatorSigningInfo` record is actually created by
+  `AfterValidatorBonded`, which a validator whose `Status` was set directly to `Bonded` (rather than
+  transitioning there through a real bonding flow) never received. `x/power`'s `InitGenesis` now
+  fires both hooks explicitly. Both were caught by actually running a localnet through several
+  epochs, not by unit tests alone - see "Verification" in the change that added `x/power`.
+- **Committee members are given a validator record with zero tokens and zero `DelegatorShares` at
+  genesis, bypassing `x/staking`'s own `ValidateGenesis` (which forbids a zero-share `Bonded`
+  validator).** This is safe specifically because the record is created via direct runtime keeper
+  calls (`SetValidator`, ...) from `x/power`'s `InitGenesis`, which runs *after* `x/staking`'s own
+  `InitGenesis` (an empty declared validator list) rather than by declaring it in `x/staking`'s own
+  genesis JSON, so `ValidateGenesis`'s check (which only inspects that JSON-declared list) never
+  sees it. `oramad genesis validate` still passes on a bootstrap-committee genesis for the same
+  reason.
+- **A committee member's consensus pubkey cannot currently be rotated while keeping the same
+  operator address.** `x/power` prefers a real staking validator's own `ConsPubKey()` once one
+  exists for an operator, falling back to the genesis `BootstrapMember.ConsensusPubkey` only when it
+  doesn't; there is no logic to detect or handle the underlying pubkey actually *changing* for the
+  same operator later (a validator update keyed by operator address just gets overwritten, without
+  ever emitting the old pubkey's removal). Not a regression from any prior design - stock Cosmos SDK
+  chains don't support consensus-key rotation either without a dedicated module - but worth noting
+  as a gap for a future pass.
+- **The fee-free registration quota (C2, "bootstrap only")** is not implemented: it applies to
+  `MsgRegisterOperator`/`MsgRegisterNode`, neither of which exists yet (`x/nodes`, C6).
+  `MsgShieldEarnings` is likewise not implemented, per C2's own instruction ("NOT to be added yet" -
+  pending `x/shielded`, C12).
+- **`x/fees`' state-deposit ledger (`LockDeposit`/`ReleaseDeposit`) has no caller yet.** It is fully
+  implemented and tested; `x/token`, `x/cnft`, `x/market`, `x/nodes` and CosmWasm storage metering
+  (its intended callers) don't exist yet.
+- **`x/power.DistributeEpochRewards` iterates every delegation of every validator once per closed
+  epoch** (`Keeper.distributeValidatorReward`), rather than using `x/distribution`'s O(1)-per-block
+  F1 historical-rewards accumulator. This is O(total delegations across all validators) per epoch
+  (not per block - epochs are daily by default), which is an accepted, documented scale limit for
+  now rather than a bug; revisiting it (an F1-style accumulator paid into earnings instead of a
+  pull-based withdraw) is future work if delegator counts grow large enough for it to matter.
+- **`oramad query power validator-power`'s `bootstrap_share`/`capped_share`/`power_share` fields are
+  always zero.** Recomputing them would need the same full block-universe computation `EndBlock`
+  does, which needs an `EmissionKeeper` the query server doesn't hold; only the last CometBFT power
+  actually assigned (`comet_power`) is populated. A future pass can wire that dependency through if
+  the fractional breakdown is needed over gRPC.
 - **Two genesis-only settings are patched into `genesis.json` by the localnet/deploy scripts,
   not defaulted by any module.** `x/consensus` has no genesis state of its own in this SDK
   version - the block gas/size limits live in the top-level `consensus` field of `genesis.json`,

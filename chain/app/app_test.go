@@ -8,7 +8,6 @@ import (
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmted25519 "github.com/cometbft/cometbft/crypto/ed25519"
 	cmtprototypes "github.com/cometbft/cometbft/proto/tendermint/types"
-	cmttypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/stretchr/testify/require"
 
@@ -33,6 +32,7 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app"
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
+	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
 )
 
 // testChainID is the chain ID used across this file's InitChain calls; baseapp.SetChainID must
@@ -52,49 +52,39 @@ func buildTestApp(t *testing.T) *app.OramaApp {
 	return app.NewOramaApp(log.NewNopLogger(), dbm.NewMemDB(), true, simtestutil.EmptyAppOptions{}, baseapp.SetChainID(testChainID))
 }
 
-// buildGenesisState returns a default genesis with one bonded validator whose self-bond
-// (sdk.DefaultPowerReduction norama) is the entire genesis supply - the devnet-only
-// bootstrap-stake exception documented on emissionkeeper.Keeper.InitGenesis and
-// plans/open-network.md D16 point 4. The genesis account itself is given zero free balance, so
-// every norama of genesis supply sits in the staking bonded pool, satisfying x/emission's
-// bootstrap-stake premine gate (genesis supply must equal the bonded pool balance exactly, with
-// nothing left idle in a plain account).
-func buildGenesisState(t *testing.T, oramaApp *app.OramaApp) app.GenesisState {
+// buildGenesisState returns a default genesis that starts at exactly zero norama supply, with a
+// single-member x/power bootstrap committee giving that one seat all of the genesis CometBFT
+// voting power (plans/open-network.md D16; plans/open-network/track-c-chain.md C4) - replacing the
+// old devnet-only self-bonded-validator exception this test used before x/power existed (see
+// docs/CHAIN.md).
+func buildGenesisState(t *testing.T, oramaApp *app.OramaApp) (app.GenesisState, sdk.AccAddress) {
 	t.Helper()
 
-	genAddr := sdk.AccAddress(ed25519.GenPrivKey().PubKey().Address())
-	genAcc := authtypes.NewBaseAccount(genAddr, nil, 0, 0)
-	zeroBalance := banktypes.Balance{
-		Address: genAddr.String(),
-		Coins:   sdk.NewCoins(),
-	}
-
-	// The validator set needs a CometBFT-native ed25519 key (distinct from the SDK-wrapped
-	// cryptotypes.PrivKey used for accounts): cmttypes.NewValidator and
-	// simtestutil.GenesisStateWithValSet both expect cometbft/crypto.PubKey.
-	consPriv := cmted25519.GenPrivKey()
-	cmtValidator := cmttypes.NewValidator(consPriv.PubKey(), 1)
-	valSet := cmttypes.NewValidatorSet([]*cmttypes.Validator{cmtValidator})
-
 	genState := app.NewDefaultGenesisState(oramaApp)
-	genState, err := simtestutil.GenesisStateWithValSet(
-		oramaApp.AppCodec(),
-		genState,
-		valSet,
-		[]authtypes.GenesisAccount{genAcc},
-		zeroBalance,
-	)
-	require.NoError(t, err)
 
-	// emission: a short epoch (2 seconds, 1 block minimum) so the smoke test can close an epoch
-	// in a handful of FinalizeBlock calls instead of simulating a real genesis-scale epoch.
-	// allow_bootstrap_stake must be set for this non-zero-supply devnet-style genesis to pass
-	// InitGenesis's premine gate.
+	memberAddr := sdk.AccAddress(ed25519.GenPrivKey().PubKey().Address())
+	consPriv := cmted25519.GenPrivKey()
+	consPubKeyBytes := consPriv.PubKey().Bytes()
+	require.Len(t, consPubKeyBytes, powertypes.Ed25519PubKeyLen)
+
+	powerGenState := powertypes.DefaultGenesisState()
+	powerGenState.Params.MinCommitteeSize = 1 // testChainID contains "-localnet-": the devnet floor applies.
+	powerGenState.BootstrapCommittee = []powertypes.BootstrapMember{{
+		OperatorAddress: memberAddr.String(),
+		Moniker:         "smoke-test-committee-member",
+		ConsensusPubkey: consPubKeyBytes,
+	}}
+	genState[powertypes.ModuleName] = oramaApp.AppCodec().MustMarshalJSON(powerGenState)
+
+	// emission: a short epoch (2 seconds, 1 block minimum) so the smoke test can close an epoch in
+	// a handful of FinalizeBlock calls instead of simulating a real genesis-scale epoch.
+	// allow_bootstrap_stake only relaxes the epoch-duration/min-blocks floors here - genesis supply
+	// is exactly zero either way, so its premine gate is satisfied trivially.
 	emissionGenState := emissiontypes.DefaultGenesisState()
 	emissionGenState.Params = emissiontypes.NewParams(2*time.Second, 1, true)
 	genState[emissiontypes.ModuleName] = oramaApp.AppCodec().MustMarshalJSON(emissionGenState)
 
-	return genState
+	return genState, memberAddr
 }
 
 // TestOramaApp_buildsAndValidatesDefaultGenesis confirms the app wires without panicking and
@@ -130,26 +120,31 @@ func TestOramaApp_buildsAndValidatesDefaultGenesis(t *testing.T) {
 	require.True(t, distrGenState.Params.CommunityTax.IsZero(), "community_tax must default to zero: there is no spend path for it")
 }
 
-// TestOramaApp_epochBoundaryMintsToFeeCollector drives InitChain plus enough FinalizeBlock+Commit
-// cycles for one emission epoch to close, and checks that the validator/delegator share actually
-// reached the bonded validator via x/distribution (plans/open-network/track-c-chain.md C3: "the
-// validator share is minted and sent to the fee collector"; see docs/CHAIN.md's Deviations for why
-// stock x/distribution, not a custom reward path, is what actually pays it out today).
-func TestOramaApp_epochBoundaryMintsToFeeCollector(t *testing.T) {
+// TestOramaApp_zeroSupplyGenesisProducesBlocksAndPaysEarnings drives InitChain, from an exactly
+// zero-supply genesis with a single-member x/power bootstrap committee, plus enough
+// FinalizeBlock+Commit cycles for one emission epoch to close, and checks that:
+//   - InitChain accepted the bootstrap committee as the genesis CometBFT validator set (no gentx,
+//     no self-bond - plans/open-network.md D16);
+//   - the epoch-1 validator/delegator share was minted and landed in the committee member's
+//     earnings account on its own capped power (plans/open-network/track-c-chain.md C3 "It does
+//     not use the stock distribution module"; C4), not the fee collector/x/distribution;
+//   - the supply invariant still holds.
+func TestOramaApp_zeroSupplyGenesisProducesBlocksAndPaysEarnings(t *testing.T) {
 	oramaApp := buildTestApp(t)
 
-	genState := buildGenesisState(t, oramaApp)
+	genState, memberAddr := buildGenesisState(t, oramaApp)
 	stateBytes, err := json.Marshal(genState)
 	require.NoError(t, err)
 
 	genesisTime := time.Unix(1_700_000_000, 0)
-	_, err = oramaApp.InitChain(&abci.RequestInitChain{
+	initResp, err := oramaApp.InitChain(&abci.RequestInitChain{
 		ChainId:       testChainID,
 		InitialHeight: 1,
 		Time:          genesisTime,
 		AppStateBytes: stateBytes,
 	})
 	require.NoError(t, err)
+	require.Len(t, initResp.Validators, 1, "the sole bootstrap committee member must be the genesis validator set")
 
 	// InitChain does not commit anything itself: per its own doc comment, "FinalizeBlock for
 	// block InitialHeight starts from this FinalizeBlockState". The first real block to run is
@@ -169,41 +164,45 @@ func TestOramaApp_epochBoundaryMintsToFeeCollector(t *testing.T) {
 	_, err = oramaApp.Commit()
 	require.NoError(t, err)
 
-	// x/distribution only allocates the fee collector's balance on height > 1 (it needs the
-	// previous block's proposer/vote info first - see x/distribution/keeper/abci.go), so a second
-	// block is needed before the epoch-1 mint actually leaves the fee collector. It closes 1s
-	// later, well under the 2s epoch_duration, so no second epoch closes here.
-	_, err = oramaApp.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: 2,
-		Time:   blockTime.Add(time.Second),
-	})
-	require.NoError(t, err)
-	_, err = oramaApp.Commit()
-	require.NoError(t, err)
-
 	ctx := oramaApp.NewContext(true)
 	epochState, err := oramaApp.EmissionKeeper.EpochState.Get(ctx)
 	require.NoError(t, err)
 
-	// The devnet-only bootstrap supply (the validator's self-bond, funded from the genesis
-	// account) is captured once, at genesis, as x/emission's genesis_supply. It equals
-	// sdk.DefaultPowerReduction norama, since that is what simtestutil.GenesisStateWithValSet
-	// bonds a validator with.
-	require.True(t, epochState.GenesisSupply.Equal(sdk.DefaultPowerReduction))
+	require.True(t, epochState.GenesisSupply.IsZero(), "a bootstrap-committee genesis needs no self-bond, so genesis supply is exactly zero")
 	require.Equal(t, uint64(2), epochState.CurrentEpoch, "one epoch must have closed by now")
 	require.True(t, epochState.CumulativeMinted.Equal(math.NewInt(epoch1ValidatorShareNorama)))
 
-	// x/emission minted into the fee collector at height 1; x/distribution's own BeginBlocker
-	// (which runs immediately after x/emission's, see app.go's SetOrderBeginBlockers) only
-	// allocates the fee collector's balance starting at height 2 (it needs the previous block's
-	// vote info first), which is why the smoke test above runs a second block. By height 2 the fee
-	// collector is swept empty and the funds sit in the distribution module account.
+	// x/emission minted the share directly into x/power, which - as the chain's only validator,
+	// at its full capped/bootstrap power - attributed the entire amount to the committee member
+	// (its sole delegator is itself, so the whole share is "its own"; see
+	// power/keeper.Keeper.distributeValidatorReward). Half of that own share is force-bonded into
+	// its self-delegation by default (Params.ForceBondFraction), capped at
+	// Params.SelfBondCapMultiplier * Params.MinSelfBond; the rest lands in its earnings account.
+	// Nothing reaches the fee collector or x/distribution for this mint.
 	feeCollectorBalance := oramaApp.BankKeeper.GetBalance(ctx, authtypes.NewModuleAddress(authtypes.FeeCollectorName), params.BaseDenom)
-	require.True(t, feeCollectorBalance.Amount.IsZero(), "distribution must have swept the fee collector by the end of the block")
+	require.True(t, feeCollectorBalance.Amount.IsZero(), "the emission mint must never reach the fee collector")
 
 	distrBalance := oramaApp.BankKeeper.GetBalance(ctx, authtypes.NewModuleAddress(distrtypes.ModuleName), params.BaseDenom)
-	require.True(t, distrBalance.Amount.Equal(math.NewInt(epoch1ValidatorShareNorama)),
-		"the validator share must have reached the distribution module account, got %s", distrBalance.Amount)
+	require.True(t, distrBalance.Amount.IsZero(), "the emission mint must never reach x/distribution")
+
+	// Default force-bond ceiling (SelfBondCapMultiplier=2 * MinSelfBond=1,000 ORAMA) binds before
+	// half of the epoch-1 share would: the ceiling amount is force-bonded, and the rest reaches
+	// earnings.
+	wantForceBonded := powertypes.DefaultParams().SelfBondCapMultiplier.MulInt(powertypes.DefaultParams().MinSelfBond).TruncateInt()
+	wantEarnings := math.NewInt(epoch1ValidatorShareNorama).Sub(wantForceBonded)
+
+	memberEarnings, err := oramaApp.FeesKeeper.GetEarnings(ctx, memberAddr)
+	require.NoError(t, err)
+	require.True(t, memberEarnings.Equal(wantEarnings),
+		"the epoch-1 validator share minus the force-bonded amount must have reached the committee member's earnings account: want %s, got %s", wantEarnings, memberEarnings)
+
+	memberValoper := sdk.ValAddress(memberAddr).String()
+	valAddr, err := sdk.ValAddressFromBech32(memberValoper)
+	require.NoError(t, err)
+	validator, err := oramaApp.StakingKeeper.GetValidator(ctx, valAddr)
+	require.NoError(t, err)
+	require.True(t, validator.Tokens.Equal(wantForceBonded),
+		"the force-bonded amount must have been self-delegated into the committee member's own validator")
 
 	supply := oramaApp.BankKeeper.GetSupply(ctx, params.BaseDenom)
 	require.True(t, supply.Amount.Equal(epochState.GenesisSupply.Add(epochState.CumulativeMinted)))

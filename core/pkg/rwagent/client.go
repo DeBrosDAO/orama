@@ -2,6 +2,8 @@ package rwagent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 const (
@@ -252,6 +256,65 @@ func (c *Client) SignForPurpose(ctx context.Context, message, chain, purpose str
 		return nil, c.apiError(resp.Error, resp.Code, status)
 	}
 	return &resp.Data, nil
+}
+
+// SignOramaTx asks the agent to sign one ORAMA transaction with
+// SIGN_MODE_DIRECT. signDoc is the protobuf-encoded cosmos.tx.v1beta1.SignDoc,
+// sent as-is: the agent decodes it itself, shows the decoded transaction in
+// the RootWallet desktop app, and signs only if the user approves this one
+// request. Every call prompts; approving never covers the next one.
+//
+// The answer is checked before it is returned: the signature must verify
+// against the returned key over SHA-256 of signDoc.
+func (c *Client) SignOramaTx(ctx context.Context, signDoc []byte) (*OramaTxSignature, error) {
+	body := map[string]string{"signDoc": base64.StdEncoding.EncodeToString(signDoc)}
+
+	var resp apiResponse[oramaTxSignData]
+	status, err := c.doJSON(ctx, "POST", "/v1/orama/tx/sign", body, &resp)
+	if err != nil {
+		return nil, fmt.Errorf("sign orama tx: %w", err)
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("sign orama tx: %w", c.apiError(resp.Error, resp.Code, status))
+	}
+	sig, err := decodeOramaTxSignature(resp.Data, signDoc)
+	if err != nil {
+		return nil, fmt.Errorf("sign orama tx: %w", err)
+	}
+	return sig, nil
+}
+
+// errMalformedOramaTxSignature is an agent answer that is not a signature of
+// the SignDoc it was sent.
+var errMalformedOramaTxSignature = errors.New("the RootWallet agent answered with a malformed ORAMA signature")
+
+const (
+	oramaSignatureBytes = 64
+	oramaPubKeyBytes    = 33
+	oramaAddressPrefix  = "orama1"
+)
+
+func decodeOramaTxSignature(data oramaTxSignData, signDoc []byte) (*OramaTxSignature, error) {
+	signature, err := base64.StdEncoding.DecodeString(data.Signature)
+	if err != nil {
+		return nil, fmt.Errorf("%w: signature: %w", errMalformedOramaTxSignature, err)
+	}
+	pubKey, err := base64.StdEncoding.DecodeString(data.PubKey)
+	if err != nil {
+		return nil, fmt.Errorf("%w: pubKey: %w", errMalformedOramaTxSignature, err)
+	}
+	if len(signature) != oramaSignatureBytes || len(pubKey) != oramaPubKeyBytes {
+		return nil, fmt.Errorf("%w: signature is %d bytes and pubKey %d, want %d and %d",
+			errMalformedOramaTxSignature, len(signature), len(pubKey), oramaSignatureBytes, oramaPubKeyBytes)
+	}
+	if !strings.HasPrefix(data.Address, oramaAddressPrefix) {
+		return nil, fmt.Errorf("%w: address %q is not an ORAMA address", errMalformedOramaTxSignature, data.Address)
+	}
+	digest := sha256.Sum256(signDoc)
+	if !crypto.VerifySignature(pubKey, digest[:], signature) {
+		return nil, fmt.Errorf("%w: it does not verify against its key over this SignDoc", errMalformedOramaTxSignature)
+	}
+	return &OramaTxSignature{Signature: signature, PubKey: pubKey, Address: data.Address}, nil
 }
 
 // Unlock sends the password to unlock the agent.

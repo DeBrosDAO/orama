@@ -1,0 +1,95 @@
+syntax = "proto3";
+package orama.power.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/power/types";
+
+import "gogoproto/gogo.proto";
+import "orama/power/v1/power.proto";
+
+// ValidatorRampRecord records the epoch a validator (bootstrap member or
+// outsider) first obtained a positive capped-stake share, which is when its
+// 30-epoch ramp (Params.ramp_epochs) starts.
+message ValidatorRampRecord {
+  string operator_address = 1;
+  uint64 activation_epoch = 2;
+}
+
+// ValidatorPowerRecord records the CometBFT integer power x/power last
+// assigned a validator, so EndBlock can compute the next block's diff
+// (added/changed/removed validators) without recomputing history.
+message ValidatorPowerRecord {
+  string operator_address = 1;
+  int64 comet_power = 2;
+  // consensus_pubkey is the raw ed25519 pubkey bytes last used in a
+  // ValidatorUpdate for this operator (Keeper.LastPubKey), carried in the
+  // export so ImportGenesis can rebuild the exact genesis ValidatorUpdate set
+  // CometBFT needs, byte-for-byte, without re-deriving it from the bootstrap
+  // committee or staking state (security review B6: "return validator
+  // updates from the imported PowerRecords").
+  bytes consensus_pubkey = 3;
+}
+
+// CommitteeSelfBondRecord records how much norama x/power has force-bonded
+// into a bootstrap committee member's own self-delegation so far
+// (Params.force_bond_fraction), so the self_bond_cap_multiplier ceiling can
+// be checked without re-deriving it from delegation history.
+message CommitteeSelfBondRecord {
+  string operator_address = 1;
+  string force_bonded = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// GenesisState is x/power's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  // bootstrap_committee is the fixed genesis committee (plans/open-network.md
+  // D16). Must have at least params.min_committee_size members.
+  repeated BootstrapMember bootstrap_committee = 2 [(gogoproto.nullable) = false];
+  // lambda is the current hand-over factor (0 at a fresh genesis).
+  string lambda = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // lambda_last_updated_epoch is the epoch lambda was last recomputed at.
+  uint64 lambda_last_updated_epoch = 4;
+  // current_cap_bps is the active per-validator cap, in basis points (500 =
+  // 5%, 300 = 3%).
+  uint64 current_cap_bps = 5;
+  // below_step_up_streak_epochs counts consecutive epochs the active
+  // validator count has stayed below params.cap_step_up_validator_count
+  // while at the reduced cap (Params.cap_hysteresis_epochs).
+  uint64 below_step_up_streak_epochs = 6;
+  // genesis_epoch is the x/emission epoch number in progress when this chain
+  // incarnation's genesis ran; epochs_since_genesis for lambda's time-based
+  // term is measured from it.
+  uint64 genesis_epoch = 7;
+  // ramp_records is the exported set of ValidatorRampRecord entries.
+  repeated ValidatorRampRecord ramp_records = 8 [(gogoproto.nullable) = false];
+  // power_records is the exported set of ValidatorPowerRecord entries (the
+  // last CometBFT power x/power assigned each validator).
+  repeated ValidatorPowerRecord power_records = 9 [(gogoproto.nullable) = false];
+  // committee_self_bonds is the exported set of CommitteeSelfBondRecord
+  // entries.
+  repeated CommitteeSelfBondRecord committee_self_bonds = 10 [(gogoproto.nullable) = false];
+  // exported is true for a genesis produced by ExportGenesis to continue an
+  // existing chain (e.g. across a coordinated hard fork), and false for a
+  // true fresh genesis - mirroring stock x/staking's own GenesisState.exported
+  // field and flag (security review B6). On an exported genesis,
+  // InitGenesis: does not recompute genesis_epoch from x/emission (it trusts
+  // the given value, since epochs_since_genesis must keep counting from the
+  // ORIGINAL genesis, not this restart); does not recreate a committee
+  // member's staking validator record if one already exists (staking's own
+  // InitGenesis, which runs first, already restored it with its real
+  // accumulated tokens - creating a fresh zero-token one over it would erase
+  // real force-bonded stake); and returns ValidatorUpdates built directly
+  // from the imported power_records rather than the genesis equal-bootstrap-share
+  // calculation, which only describes a true fresh genesis.
+  bool exported = 11;
+  // gate_satisfied records whether the handover safety gate has ever been
+  // satisfied (security review H3a) - a one-way ratchet once true. Exported
+  // and restored so an import never re-opens a gate an earlier run already
+  // closed.
+  bool gate_satisfied = 12;
+}

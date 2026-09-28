@@ -9,32 +9,29 @@
 #   localnet.sh status        print each node's height and catching-up state
 #
 # Env overrides:
-#   CHAIN_ID              default: orama-localnet-1 (must contain "-localnet-": x/emission's
-#                         bootstrap-stake premine gate only accepts a nonzero genesis supply on a
-#                         devnet/stagenet/localnet chain-id)
+#   CHAIN_ID              default: orama-localnet-1 (must contain "-localnet-": x/power's
+#                         bootstrap-committee chain-id gate only allows a committee smaller than
+#                         the 30-member production floor on a devnet/stagenet/localnet chain-id)
 #   EPOCH_DURATION        default: 30s  (x/emission genesis param, Go duration syntax)
 #   EPOCH_MIN_BLOCKS      default: 5    (x/emission genesis param)
-#   SELF_BOND             default: 50000000000norama (50 ORAMA self-bond per validator)
 #
-# Devnet-only note: giving each genesis validator a self-delegated bootstrap stake is the
-# temporary exception documented in docs/CHAIN.md and on emissionkeeper.Keeper.InitGenesis,
-# standing in for the not-yet-built C4 bootstrap-committee module (x/power). It is never done on
-# a real network genesis, which starts at zero balance. x/emission's premine gate additionally
-# requires every norama of genesis supply to end up in the staking bonded pool, with nothing left
-# idle in a plain account - so each genesis account is funded with EXACTLY its self-bond amount,
-# never more.
+# Genesis starts at exactly zero norama supply: every node is a member of x/power's bootstrap
+# committee (plans/open-network.md D16), which needs no self-bond and no gentx - each committee
+# member gets an equal share of genesis voting power straight from its own priv_validator_key.json
+# (see `oramad genesis add-bootstrap-validator --help`). This replaced the old devnet-only
+# self-bonded-validator exception (x/emission's now-vestigial allow_bootstrap_stake premine gate,
+# kept only for the epoch-duration/min-blocks-per-epoch floor relaxation below - see docs/CHAIN.md).
 set -euo pipefail
 
 CHAIN_ID="${CHAIN_ID:-orama-localnet-1}"
 DENOM="norama"
 EPOCH_DURATION="${EPOCH_DURATION:-30s}"
 EPOCH_MIN_BLOCKS="${EPOCH_MIN_BLOCKS:-5}"
-SELF_BOND="${SELF_BOND:-50000000000norama}"
 
 case "$CHAIN_ID" in
 *-stagenet-*|*-devnet-*|*-localnet-*) ;;
 *)
-	echo "CHAIN_ID must contain -stagenet-, -devnet- or -localnet- (x/emission's bootstrap-stake premine gate requires it), got: $CHAIN_ID" >&2
+	echo "CHAIN_ID must contain -stagenet-, -devnet- or -localnet- (x/power's bootstrap-committee chain-id gate requires it below the 30-member production floor), got: $CHAIN_ID" >&2
 	exit 1
 	;;
 esac
@@ -102,34 +99,29 @@ build_genesis() {
 	local n="$1"
 	local first; first="$(node_home 0)"
 
-	log "adding genesis accounts (devnet-only bootstrap stake, see docs/CHAIN.md); funding exactly the self-bond so nothing is left idle outside the bonded pool"
-	local i
-	for ((i = 0; i < n; i++)); do
-		run_logged "$bin" genesis add-genesis-account "$(addr_of "$i")" "$SELF_BOND" --home "$first"
-	done
-
 	log "setting emission params: epoch-duration=$EPOCH_DURATION min-blocks-per-epoch=$EPOCH_MIN_BLOCKS allow-bootstrap-stake=true"
+	# allow-bootstrap-stake only relaxes the epoch-duration/min-blocks-per-epoch floors here -
+	# genesis supply is exactly zero either way (no genesis account is ever funded), so its premine
+	# gate is satisfied trivially (see docs/CHAIN.md).
 	run_logged "$bin" genesis set-emission-params \
 		--epoch-duration "$EPOCH_DURATION" \
 		--min-blocks-per-epoch "$EPOCH_MIN_BLOCKS" \
 		--allow-bootstrap-stake \
 		--home "$first"
 
-	log "collecting gentxs from all $n nodes"
+	log "adding all $n nodes as x/power bootstrap committee members (zero self-bond, no gentx)"
+	local i
 	for ((i = 0; i < n; i++)); do
-		if [ "$i" -ne 0 ]; then
-			cp "$first/config/genesis.json" "$(node_home "$i")/config/genesis.json"
+		local extra_flags=()
+		if [ "$i" -eq 0 ]; then
+			extra_flags+=(--min-committee-size "$n")
 		fi
-		run_logged "$bin" genesis gentx validator "$SELF_BOND" \
-			--chain-id "$CHAIN_ID" --keyring-backend test \
-			--home "$(node_home "$i")" \
-			--ip "127.0.0.1" --node-id "$("$bin" comet show-node-id --home "$(node_home "$i")")"
-		if [ "$i" -ne 0 ]; then
-			cp "$(node_home "$i")/config/gentx/"*.json "$first/config/gentx/"
-		fi
+		run_logged "$bin" genesis add-bootstrap-validator "$(addr_of "$i")" \
+			--moniker "node$i" \
+			--home "$first" \
+			--consensus-pubkey-file "$(node_home "$i")/config/priv_validator_key.json" \
+			"${extra_flags[@]}"
 	done
-
-	run_logged "$bin" genesis collect-gentxs --home "$first"
 
 	# x/consensus has no genesis state of its own (it's driven by the top-level "consensus" field
 	# of genesis.json, which oramad's own module wiring can't default): set a finite block max_gas
