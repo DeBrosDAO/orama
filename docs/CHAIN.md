@@ -35,17 +35,17 @@ require it, and nothing in `chain/` imports `core/`.
 **Wired** in addition to the table: `x/token` (factory denoms), `x/archive` (history registry),
 and `x/nodes` (operator and global-node registry). Its end block pays matured role-bond
 unbondings.
-**Not wired**, on purpose: `x/houses`, `x/storage`, and `x/relay` are implemented and not
-registered in `app.go`. `x/cnft` and `x/market` are registered. A sale pays the seller and
-the royalty into earnings. Also unwired: `x/gov`,
+**Not wired**, on purpose: `x/storage` and `x/relay` are implemented and not registered in
+`app.go`. `x/houses` is registered. Its operator house stays closed because `x/nodes` does
+not store a public /16 or ASN, and an operator without those is not eligible. Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
 wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`
 build does not link it and refuses a genesis that contains it. `x/wasmpolicy` is always wired:
 upload is closed until `upload_sunset_height`, and a contract cannot bank-send norama to a user.
 
-**`x/houses` is implemented and not wired into `app.go`.** The running binary therefore still has
-no governance. Every module that the upstream SDK expects to be governed by `x/gov` (upgrade,
+**`x/houses` is registered, and it is not the SDK `x/gov` authority.** Stock modules still use
+`app.UnreachableAuthority()`. Every module that the upstream SDK expects to be governed by `x/gov` (upgrade,
 consensus params, bank, staking, slashing, distribution) is instead given an "authority" address
 that is the hash of a dedicated, never-registered module name, `"orama/no-authority"` -
 `app.UnreachableAuthority()` in `chain/app/app.go`. That name is deliberate: using `"gov"` instead
@@ -637,9 +637,8 @@ deposit walk.
 ## `x/houses`: two-house governance
 
 `chain/x/houses` implements plans/open-network/track-c-chain.md C5 and decisions D17 and D18.
-**It is not registered in `chain/app/app.go`**, so `oramad` does not route its messages or run its
-`EndBlock`. The module account `houses` is not created. The rules below are what the keeper does
-when tests, or a later wiring, call it.
+It is registered. `EndBlock` closes elapsed votes. The operator house stays closed: `x/nodes`
+does not store a public /16 or ASN, and an operator without those is not eligible.
 
 Nobody governs during bootstrap. The parameter tier opens only when bonded stake is at least
 `bootstrap_exit_stake` (genesis default 271000 ORAMA) **or** lambda is at least 1, **and** the
