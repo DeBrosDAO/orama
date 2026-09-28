@@ -45,8 +45,9 @@ piece size, duration, and replica count. `orama storage revoke` removes it.
 caller already has. It does not encrypt the bytes and it does not upload them.
 `orama storage extend` adds epochs. `orama storage accept` and
 `orama storage decline` answer one assigned slot. The signer of those two is
-the node's hot key. Without `--node`, each of these commands prints the sign
-document and does not submit it.
+the node's hot key. `orama storage prove` builds `MsgSubmitProofs` from a JSON
+file of proofs. It does not choose the challenged leaf. Without `--node`, each
+of these commands prints the sign document and does not submit it.
 Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
@@ -801,13 +802,14 @@ not a message of this module. Queries, once wired: `params`, `operator [address]
 operator denylist, bytes whose piece root does not match the claimed root, or a piece
 larger than the free-bytes callback. A decline writes nothing. `Prove` rebuilds a
 challenge proof from the stored bytes and rejects a padding leaf. `ReplicaProof`
-opens the leaf `x/storage` challenges for that epoch, deal, slot, and node. `Retrieval` serves
+fills one proof for a challenged slot. The leaf is the chain's leaf-challenge seed
+reduced to the real leaf count, so a padding leaf is not selected. `Retrieval` serves
 GET and HEAD of a stored piece, including a byte range, and rate-limits each client
-address. A full address table refuses a new address. `ReplicaProof` fills one
-proof for a challenged slot. The leaf is the chain's leaf-challenge seed
-reduced to the real leaf count, so a padding leaf is not selected. The package
-does not watch CometBFT, pin through Kubo, or send `MsgAcceptDeal` or
-`MsgSubmitProofs`.
+address. A full address table refuses a new address. `POST /pieces/<cid>` stores
+a body only after `AcceptUploads`, and only when that CID is assigned. A bad
+root, a denylist CID, a full disk, or a body over the limit stores nothing.
+The package does not watch CometBFT, pin through Kubo, or send `MsgAcceptDeal`
+or `MsgSubmitProofs`.
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
