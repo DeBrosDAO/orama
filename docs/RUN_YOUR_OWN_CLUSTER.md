@@ -97,3 +97,12 @@ static` publishes the directory as the deployment `www`.
 
 Further nameserver detail, including installing by hand on the VPS with
 `orama node install`, is [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md).
+
+## A sealed backup
+
+`orama namespace backup-seal` encrypts a file to an X25519 public key. The
+cluster can run that command. It cannot decrypt the file: opening it is
+`orama namespace backup-open` and needs the private key. A restore that
+rebuilds RQLite, pins, and secrets on another cluster is not implemented.
+If the source cluster dies before a backup includes the secrets, those
+secrets are gone.

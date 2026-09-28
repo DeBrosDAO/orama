@@ -37,7 +37,10 @@ and `x/nodes` (operator and global-node registry). Its end block pays matured ro
 unbondings.
 `x/storage` and `x/relay` are registered. Protocol deals and the operator house stay closed
 when a node has no public /16 or ASN. A relay payout cannot exceed that epoch's relay ceiling
-minus what was already minted. Also unwired: `x/gov`,
+minus what was already minted. `chain/x/inclusion` orders its own transaction
+bytes. Those bytes are not SDK transactions, and this CometBFT ProcessProposal
+commit does not carry vote extensions, so `oramad` does not put them in a block.
+Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
 wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`

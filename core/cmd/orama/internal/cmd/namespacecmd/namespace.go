@@ -202,4 +202,6 @@ func init() {
 	Cmd.AddCommand(disableCmd)
 	Cmd.AddCommand(webrtcStatusCmd)
 	Cmd.AddCommand(keysCmd)
+	Cmd.AddCommand(backupSealCmd)
+	Cmd.AddCommand(backupOpenCmd)
 }
