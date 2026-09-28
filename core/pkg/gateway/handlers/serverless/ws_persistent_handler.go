@@ -274,13 +274,19 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 func (h *ServerlessHandlers) buildPersistentInvocationContext(
 	r *http.Request, fn *serverless.Function, clientID string,
 ) *serverless.InvocationContext {
-	callerWallet, callerIsAdmin, _ := h.socketCaller(r)
+	// CallerHasInvoke has to travel with the socket. The upgrade checks it,
+	// then every nested function_invoke reads it back from this context.
+	// Dropping it made a private handler unauthorized for the same wallet
+	// that had just been allowed to open the socket: the async dispatch
+	// returned, the child never ran, and the client got no reply.
+	callerWallet, callerIsAdmin, callerHasInvoke := h.socketCaller(r)
 	return &serverless.InvocationContext{
 		FunctionID:       fn.ID,
 		FunctionName:     fn.Name,
 		Namespace:        fn.Namespace,
 		CallerWallet:     callerWallet,
 		CallerIsAdmin:    callerIsAdmin,
+		CallerHasInvoke:  callerHasInvoke,
 		CallerIP:         extractRemoteIP(r),
 		CallerClaims:     h.getCallerClaimsFromRequest(r),
 		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
@@ -453,15 +459,16 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 // trigger type) do not change, and neither do the authorization and client IP
 // established at the upgrade — a refresh keeps the socket alive, it does not
 // re-open it. Dropping CallerIsAdmin here would silently strip admin from an
-// admin's internal→internal child invokes after a refresh (bugboard #152). The
-// subject is the one the socket was opened with; the custom claims may have
-// moved on.
+// admin's internal→internal child invokes after a refresh (bugboard #152).
+// Dropping CallerHasInvoke would refuse every private handler the socket was
+// allowed to dispatch. The subject is the one the socket was opened with; the
+// custom claims may have moved on.
 func refreshedInvocationContext(
 	inst *persistent.Instance, fn *serverless.Function, claims *auth.JWTClaims, clientID string,
 ) *serverless.InvocationContext {
-	prevIsAdmin, prevIP := false, ""
+	prevIsAdmin, prevHasInvoke, prevIP := false, false, ""
 	if cur := inst.CurrentInvocationContext(); cur != nil {
-		prevIsAdmin, prevIP = cur.CallerIsAdmin, cur.CallerIP
+		prevIsAdmin, prevHasInvoke, prevIP = cur.CallerIsAdmin, cur.CallerHasInvoke, cur.CallerIP
 	}
 	customClaims := make(map[string]string, len(claims.Custom))
 	for k, v := range claims.Custom {
@@ -477,6 +484,7 @@ func refreshedInvocationContext(
 		CallerDeviceID:   claims.Did,
 		CallerIP:         prevIP,
 		CallerIsAdmin:    prevIsAdmin,
+		CallerHasInvoke:  prevHasInvoke,
 		WSClientID:       clientID,
 		TriggerType:      serverless.TriggerTypeWebSocket,
 	}

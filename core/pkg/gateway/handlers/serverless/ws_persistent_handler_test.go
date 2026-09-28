@@ -86,6 +86,13 @@ func TestBuildPersistentInvocationContext_PropagatesJWTSubject(t *testing.T) {
 	if got.CallerClaims["role"] != "admin" {
 		t.Errorf("CallerClaims[role] = %q; want %q", got.CallerClaims["role"], "admin")
 	}
+	// A wallet JWT is allowed to invoke private functions. The stateless
+	// frame path copies that grant onto every nested call. The persistent
+	// context is built once, so losing it here refuses every rpc-router
+	// dispatch after the socket has already been accepted.
+	if !got.CallerHasInvoke {
+		t.Error("CallerHasInvoke = false; a wallet JWT must keep the invoke grant on the persistent socket")
+	}
 }
 
 // TestBuildPersistentInvocationContext_NoJWT covers the non-authenticated
@@ -142,6 +149,14 @@ func TestBuildPersistentInvocationContext_MatchesStatelessHandler(t *testing.T) 
 	if got.CallerWallet != h.getWalletFromRequest(req) {
 		t.Errorf("CallerWallet drift: persistent=%q, helper=%q",
 			got.CallerWallet, h.getWalletFromRequest(req))
+	}
+	if got.CallerIsAdmin != h.getCallerIsAdminFromRequest(req) {
+		t.Errorf("CallerIsAdmin drift: persistent=%v, helper=%v",
+			got.CallerIsAdmin, h.getCallerIsAdminFromRequest(req))
+	}
+	if got.CallerHasInvoke != h.getCallerHasInvokeFromRequest(req) {
+		t.Errorf("CallerHasInvoke drift: persistent=%v, helper=%v",
+			got.CallerHasInvoke, h.getCallerHasInvokeFromRequest(req))
 	}
 	if got.CallerJWTSubject != h.getJWTSubjectFromRequest(req) {
 		t.Errorf("CallerJWTSubject drift: persistent=%q, helper=%q",
