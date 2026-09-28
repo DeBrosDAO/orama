@@ -48,6 +48,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama cluster creators list`](#orama-cluster-creators-list) — List wallets allowed to create namespaces
     - [`orama cluster creators remove`](#orama-cluster-creators-remove) — Take a wallet off the namespace-creator list
   - [`orama cluster register-onchain`](#orama-cluster-register-onchain) — Register this cluster's public name on the Orama chain
+  - [`orama cluster retire-onchain`](#orama-cluster-retire-onchain) — Retire this cluster's public row on the Orama chain
   - [`orama cluster settings`](#orama-cluster-settings) — Show or change namespace-creation settings
     - [`orama cluster settings set`](#orama-cluster-settings-set) — Change namespace creation or the per-wallet cap
     - [`orama cluster settings show`](#orama-cluster-settings-show) — Show who may create namespaces, and the per-wallet cap
@@ -97,7 +98,9 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
 - [`orama global`](#orama-global) — Sign a global-node service key binding
   - [`orama global bind`](#orama-global-bind) — Sign orama-global-bind-v1 for one service key
   - [`orama global bond`](#orama-global-bond) — Bond norama to one role on a global node
+  - [`orama global capacity`](#orama-global-capacity) — Declare how many bytes a storage node will hold
   - [`orama global register`](#orama-global-register) — Register a global node from signed service-key bindings
+  - [`orama global retire`](#orama-global-retire) — Retire a global node
   - [`orama global unbond`](#orama-global-unbond) — Start unbonding norama from one role
 - [`orama inspect`](#orama-inspect) — Inspect cluster health via SSH
 - [`orama invite`](#orama-invite) — Mint an invite for a new node
@@ -577,7 +580,7 @@ The per-wallet cap stays 10 until an operator raises or lowers it.
 Changing a setting or the creator list needs the operator grant and a wallet
 on the operator list, and is written to the audit trail.
 
-Subcommands: `creators`, `register-onchain`, `settings`
+Subcommands: `creators`, `register-onchain`, `retire-onchain`, `settings`
 
 ### orama cluster creators
 
@@ -652,6 +655,30 @@ The fee is an explicit amount of norama. There is no default.
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex; required when the account has not signed before |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+
+### orama cluster retire-onchain
+
+Retire this cluster's public row on the Orama chain
+
+```
+orama cluster retire-onchain [flags]
+```
+
+Retire the optional public cluster row. This does not change any node and
+does not delete the cluster's namespaces. Without --node the command prints
+the sign document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Cluster id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--operator` | — | Operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 
 ### orama cluster settings
@@ -1272,7 +1299,7 @@ Sign the binding that proves a service key belongs to an operator.
 The private key stays in its file. The command writes the public key and the
 signature, and nothing else. Sending MsgRegisterNode is a separate step.
 
-Subcommands: `bind`, `bond`, `register`, `unbond`
+Subcommands: `bind`, `bond`, `capacity`, `register`, `retire`, `unbond`
 
 ### orama global bind
 
@@ -1318,6 +1345,34 @@ document and does not submit it.
 | `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 
+### orama global capacity
+
+Declare how many bytes a storage node will hold
+
+```
+orama global capacity [flags]
+```
+
+Declare the storage capacity of a registered node that has the storage role.
+
+The chain refuses a declaration above the capacity the role bond backs, and
+below the bytes already reserved by deals. Zero is a declaration of no
+capacity. Without --node the command prints the sign document and does not
+submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--bytes` | `0` | Declared capacity in bytes |
+| `--chain-id` | — | Chain id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Node id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--operator` | — | Operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+
 ### orama global register
 
 Register a global node from signed service-key bindings
@@ -1354,6 +1409,30 @@ this --chain-id and --operator.
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--region` | — | Region hint |
 | `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+
+### orama global retire
+
+Retire a global node
+
+```
+orama global retire [flags]
+```
+
+Retire a global node. The chain records its service pubkeys so they cannot
+be bound again. Without --node the command prints the sign document and does
+not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Node id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--operator` | — | Operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 
 ### orama global unbond

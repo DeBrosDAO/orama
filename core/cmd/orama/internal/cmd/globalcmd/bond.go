@@ -45,7 +45,7 @@ func newBondCmd(use, short, long, typeURL, verb string) *cobra.Command {
 				FeeAmount: bondFlags.fee, Gas: bondFlags.gas, ChainID: bondFlags.chainID,
 				AccountNumber: bondFlags.account, Sequence: bondFlags.sequence,
 			}
-			return submitDirect(cmd, bondFlags.operator, bondFlags.node, bondFlags.pubKey, bondFlags.account, bondFlags.sequence, in, verb+" "+bondFlags.id)
+			return SubmitDirect(cmd, bondFlags.operator, bondFlags.node, bondFlags.pubKey, bondFlags.account, bondFlags.sequence, in, verb+" "+bondFlags.id)
 		},
 	}
 	f := cmd.Flags()

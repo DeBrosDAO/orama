@@ -14,7 +14,9 @@ import (
 
 // submitDirect fills the account from the chain REST API when --node is set,
 // prints the sign document when it is not, and otherwise signs and broadcasts.
-func submitDirect(cmd *cobra.Command, operator, node, pubHex string, account, sequence uint64, in clusterreg.Direct, verb string) error {
+// SubmitDirect fills the account from the chain REST API when node is set,
+// prints the sign document when it is empty, and otherwise signs and broadcasts.
+func SubmitDirect(cmd *cobra.Command, operator, node, pubHex string, account, sequence uint64, in clusterreg.Direct, verb string) error {
 	if pubHex != "" {
 		pub, err := hex.DecodeString(pubHex)
 		if err != nil {

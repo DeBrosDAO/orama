@@ -88,7 +88,7 @@ func runRegisterNode(cmd *cobra.Command, args []string) error {
 		FeeAmount: nodeFlags.fee, Gas: nodeFlags.gas, ChainID: nodeFlags.chainID,
 		AccountNumber: nodeFlags.account, Sequence: nodeFlags.sequence,
 	}
-	return submitDirect(cmd, nodeFlags.operator, nodeFlags.node, nodeFlags.pubKey, nodeFlags.account, nodeFlags.sequence, in, "registered "+nodeFlags.id)
+	return SubmitDirect(cmd, nodeFlags.operator, nodeFlags.node, nodeFlags.pubKey, nodeFlags.account, nodeFlags.sequence, in, "registered "+nodeFlags.id)
 }
 
 func parseRoles(names []string) ([]int, error) {

@@ -735,6 +735,8 @@ again.
 `MsgBondNode` moves norama from the operator's bank balance into the module account.
 `orama global bond` and `orama global unbond` build those messages. With `--node` they
 sign through the RootWallet agent and broadcast; without it they print the sign document.
+`orama global capacity` declares storage bytes, `orama global retire` retires a node,
+and `orama cluster retire-onchain` retires the public cluster row. Same signing rule.
 `MsgUnbondNode` moves it onto the queue. `EndBlock` pays an entry back to that operator when
 `completion_unix <=` the block time. The delay is `Params.UnbondingSeconds` (genesis default
 21 days, the same period D16 and C4 state for stake; C6 does not give a second duration).
