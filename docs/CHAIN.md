@@ -722,7 +722,10 @@ signer is not that operator.
 digest. ed25519 verifies a normal 64-byte signature over the 32-byte public key, which is what
 Tor's expanded ed25519 secret produces. `orama global bind` signs that statement from a local
 key file (secp256k1, an ed25519 seed, Tor's 64-byte expanded secret, or a CometBFT `priv_key`
-JSON) and prints the public key and signature. It does not send a transaction. A service pubkey is unique on the network. Retiring a
+JSON) and prints the public key and signature. `orama global register` checks those files and
+builds `MsgRegisterNode` as a SIGN_MODE_DIRECT sign document. With `--node` it asks the
+RootWallet agent to sign and broadcasts the transaction. Without `--node` it prints the
+document and does not submit it. A service pubkey is unique on the network. Retiring a
 node, rotating a binding (`MsgUpdateNode` replaces the whole set when one is provided), or
 tombstoning (keeper `Tombstone`, not a message) records the old pubkey so it cannot be bound
 again.

@@ -1,0 +1,204 @@
+package globalcmd
+
+import (
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/pkg/clusterreg"
+	"github.com/DeBrosOfficial/network/pkg/globalbind"
+	"github.com/DeBrosOfficial/network/pkg/rwagent"
+	"github.com/spf13/cobra"
+)
+
+var nodeFlags struct {
+	chainID  string
+	operator string
+	id       string
+	hotKey   string
+	roles    []string
+	bindings []string
+	ends     []string
+	region   string
+	pubKey   string
+	account  uint64
+	sequence uint64
+	fee      string
+	gas      uint64
+	node     string
+}
+
+var registerNodeCmd = &cobra.Command{
+	Use:   "register",
+	Short: "Register a global node from signed service-key bindings",
+	Long: `Build MsgRegisterNode from bindings that 'orama global bind' wrote.
+
+The message names the operator, a node id, roles, a hot key that is not the
+operator, the bindings, public endpoints, and an optional region. It does not
+include a tenant list or a cluster secret.
+
+--node is the chain REST API. The command reads the account there, asks the
+RootWallet agent to sign this one transaction, and broadcasts it. Without
+--node it prints the sign document and does not submit anything.
+
+Each --binding file is the JSON bind printed. Its signature must verify for
+this --chain-id and --operator.`,
+	Args: cobra.NoArgs,
+	RunE: runRegisterNode,
+}
+
+func init() {
+	f := registerNodeCmd.Flags()
+	f.StringVar(&nodeFlags.chainID, "chain-id", "", "Chain id [required]")
+	f.StringVar(&nodeFlags.operator, "operator", "", "Operator account (orama1...) [required]")
+	f.StringVar(&nodeFlags.id, "id", "", "Node id [required]")
+	f.StringVar(&nodeFlags.hotKey, "hot-key", "", "Hot key account, not the operator [required]")
+	f.StringArrayVar(&nodeFlags.roles, "role", nil, "Role: validator, storage, relay, exit, dirauth, archiver [required]")
+	f.StringArrayVar(&nodeFlags.bindings, "binding", nil, "Binding JSON from orama global bind [required]")
+	f.StringArrayVar(&nodeFlags.ends, "endpoint", nil, "Public endpoint (repeatable)")
+	f.StringVar(&nodeFlags.region, "region", "", "Region hint")
+	f.StringVar(&nodeFlags.pubKey, "pubkey", "", "Compressed secp256k1 pubkey hex of the signing account")
+	f.Uint64Var(&nodeFlags.account, "account-number", 0, "Account number, when not read from --node")
+	f.Uint64Var(&nodeFlags.sequence, "sequence", 0, "Account sequence, when not read from --node")
+	f.StringVar(&nodeFlags.fee, "fee", "", "Fee in norama [required]")
+	f.Uint64Var(&nodeFlags.gas, "gas", 0, "Gas limit [required]")
+	f.StringVar(&nodeFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	Cmd.AddCommand(registerNodeCmd)
+}
+
+func runRegisterNode(cmd *cobra.Command, args []string) error {
+	roles, err := parseRoles(nodeFlags.roles)
+	if err != nil {
+		return err
+	}
+	bindings, err := readBindings(nodeFlags.bindings, nodeFlags.chainID, nodeFlags.operator)
+	if err != nil {
+		return err
+	}
+	reg := clusterreg.NodeRegistration{
+		Operator: nodeFlags.operator, NodeID: nodeFlags.id, Roles: roles,
+		HotKey: nodeFlags.hotKey, Bindings: bindings, Endpoints: nodeFlags.ends,
+		RegionHint: nodeFlags.region,
+	}
+	if err := clusterreg.ValidateNode(reg); err != nil {
+		return clierr.Usage("%v", err)
+	}
+	in := clusterreg.Direct{
+		TypeURL: clusterreg.RegisterNodeTypeURL, Msg: clusterreg.EncodeRegisterNode(reg),
+		FeeAmount: nodeFlags.fee, Gas: nodeFlags.gas, ChainID: nodeFlags.chainID,
+		AccountNumber: nodeFlags.account, Sequence: nodeFlags.sequence,
+	}
+	if nodeFlags.pubKey != "" {
+		pub, err := hex.DecodeString(nodeFlags.pubKey)
+		if err != nil {
+			return clierr.Usage("pubkey is not hex")
+		}
+		in.PubKey = pub
+	}
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if nodeFlags.node != "" {
+		acct, err := clusterreg.FetchAccount(ctx, nodeFlags.node, nodeFlags.operator)
+		if err != nil {
+			return clierr.Failure("read the chain account: %w", err)
+		}
+		if !cmd.Flags().Changed("account-number") {
+			in.AccountNumber = acct.Number
+		}
+		if !cmd.Flags().Changed("sequence") {
+			in.Sequence = acct.Sequence
+		}
+		if len(in.PubKey) == 0 {
+			in.PubKey = acct.PubKey
+		}
+	}
+	doc, err := in.SignDoc()
+	if err != nil {
+		return clierr.Usage("%v", err)
+	}
+	if nodeFlags.node == "" {
+		fmt.Fprintf(os.Stdout, "sign document (not submitted):\n%x\n", doc)
+		return nil
+	}
+	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
+	sig, err := client.SignOramaTx(ctx, doc)
+	if err != nil {
+		return clierr.Failure("sign the registration: %w", err)
+	}
+	if sig.Address != nodeFlags.operator || hex.EncodeToString(sig.PubKey) != hex.EncodeToString(in.PubKey) {
+		return clierr.Failure("the agent signed as %s, not the operator", sig.Address)
+	}
+	tx, err := in.TxRaw(sig.Signature)
+	if err != nil {
+		return clierr.Failure("build the transaction: %w", err)
+	}
+	hash, err := clusterreg.Broadcast(ctx, nodeFlags.node, tx)
+	if err != nil {
+		return clierr.Failure("%v", err)
+	}
+	fmt.Fprintf(os.Stdout, "registered %s: %s\n", nodeFlags.id, hash)
+	return nil
+}
+
+func parseRoles(names []string) ([]int, error) {
+	var roles []int
+	for _, name := range names {
+		switch name {
+		case "validator":
+			roles = append(roles, clusterreg.RoleValidator)
+		case "storage":
+			roles = append(roles, clusterreg.RoleStorage)
+		case "relay":
+			roles = append(roles, clusterreg.RoleRelay)
+		case "exit":
+			roles = append(roles, clusterreg.RoleExit)
+		case "dirauth":
+			roles = append(roles, clusterreg.RoleDirauth)
+		case "archiver":
+			roles = append(roles, clusterreg.RoleArchiver)
+		default:
+			return nil, clierr.Usage("unknown role %q", name)
+		}
+	}
+	return roles, nil
+}
+
+func readBindings(paths []string, chainID, operator string) ([]clusterreg.NodeBinding, error) {
+	var out []clusterreg.NodeBinding
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, clierr.Failure("read %s: %w", path, err)
+		}
+		var doc struct {
+			Service   string `json:"service"`
+			KeyType   string `json:"key_type"`
+			Pubkey    string `json:"pubkey"`
+			Signature string `json:"signature"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return nil, clierr.Usage("%s is not binding JSON", path)
+		}
+		pub, err := hex.DecodeString(doc.Pubkey)
+		if err != nil {
+			return nil, clierr.Usage("%s pubkey is not hex", path)
+		}
+		sig, err := hex.DecodeString(doc.Signature)
+		if err != nil {
+			return nil, clierr.Usage("%s signature is not hex", path)
+		}
+		b := globalbind.Binding{Service: doc.Service, KeyType: doc.KeyType, Pubkey: pub, Signature: sig}
+		if err := globalbind.Verify(b, chainID, operator); err != nil {
+			return nil, clierr.Usage("%s: %v", path, err)
+		}
+		out = append(out, clusterreg.NodeBinding{
+			Service: doc.Service, KeyType: doc.KeyType, Pubkey: pub, Signature: sig,
+		})
+	}
+	return out, nil
+}

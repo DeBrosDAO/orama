@@ -28,49 +28,80 @@ func (in SignInput) SignDoc() ([]byte, error) {
 	if err := Validate(in.Registration); err != nil {
 		return nil, err
 	}
-	if err := validateSign(in); err != nil {
-		return nil, err
-	}
-	body := txBody(RegisterClusterTypeURL, EncodeRegisterCluster(in.Registration), "")
-	auth := authInfo(in.PubKey, in.Sequence, in.FeeAmount, in.Gas)
-	doc := appendBytesField(nil, 1, body)
-	doc = appendBytesField(doc, 2, auth)
-	doc = appendStringField(doc, 3, in.ChainID)
-	doc = appendUvarintField(doc, 4, in.AccountNumber)
-	return doc, nil
+	return Direct{
+		TypeURL: RegisterClusterTypeURL, Msg: EncodeRegisterCluster(in.Registration),
+		PubKey: in.PubKey, Sequence: in.Sequence, FeeAmount: in.FeeAmount, Gas: in.Gas,
+		ChainID: in.ChainID, AccountNumber: in.AccountNumber,
+	}.SignDoc()
 }
 
 // TxRaw is the protobuf cosmos.tx.v1beta1.Tx built from the same body and
 // auth info as SignDoc, plus the signature over that SignDoc.
 func (in SignInput) TxRaw(signature []byte) ([]byte, error) {
-	if len(signature) != 64 {
-		return nil, fmt.Errorf("signature is %d bytes, want 64", len(signature))
-	}
 	if err := Validate(in.Registration); err != nil {
 		return nil, err
 	}
-	if err := validateSign(in); err != nil {
-		return nil, err
-	}
-	body := txBody(RegisterClusterTypeURL, EncodeRegisterCluster(in.Registration), "")
-	auth := authInfo(in.PubKey, in.Sequence, in.FeeAmount, in.Gas)
-	tx := appendBytesField(nil, 1, body)
-	tx = appendBytesField(tx, 2, auth)
-	tx = appendBytesField(tx, 3, signature)
-	return tx, nil
+	return Direct{
+		TypeURL: RegisterClusterTypeURL, Msg: EncodeRegisterCluster(in.Registration),
+		PubKey: in.PubKey, Sequence: in.Sequence, FeeAmount: in.FeeAmount, Gas: in.Gas,
+		ChainID: in.ChainID, AccountNumber: in.AccountNumber,
+	}.TxRaw(signature)
 }
 
-func validateSign(in SignInput) error {
-	if len(in.PubKey) != 33 || (in.PubKey[0] != 0x02 && in.PubKey[0] != 0x03) {
+// Direct is a SIGN_MODE_DIRECT document for one protobuf message.
+type Direct struct {
+	TypeURL       string
+	Msg           []byte
+	PubKey        []byte
+	Sequence      uint64
+	FeeAmount     string
+	Gas           uint64
+	ChainID       string
+	AccountNumber uint64
+}
+
+// SignDoc is the cosmos.tx.v1beta1.SignDoc for this message.
+func (d Direct) SignDoc() ([]byte, error) {
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
+	body := txBody(d.TypeURL, d.Msg, "")
+	auth := authInfo(d.PubKey, d.Sequence, d.FeeAmount, d.Gas)
+	doc := appendBytesField(nil, 1, body)
+	doc = appendBytesField(doc, 2, auth)
+	doc = appendStringField(doc, 3, d.ChainID)
+	return appendUvarintField(doc, 4, d.AccountNumber), nil
+}
+
+// TxRaw is the cosmos.tx.v1beta1.Tx for this message and signature.
+func (d Direct) TxRaw(signature []byte) ([]byte, error) {
+	if len(signature) != 64 {
+		return nil, fmt.Errorf("signature is %d bytes, want 64", len(signature))
+	}
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
+	body := txBody(d.TypeURL, d.Msg, "")
+	auth := authInfo(d.PubKey, d.Sequence, d.FeeAmount, d.Gas)
+	tx := appendBytesField(nil, 1, body)
+	tx = appendBytesField(tx, 2, auth)
+	return appendBytesField(tx, 3, signature), nil
+}
+
+func (d Direct) validate() error {
+	if d.TypeURL == "" || len(d.Msg) == 0 {
+		return fmt.Errorf("message is empty")
+	}
+	if len(d.PubKey) != 33 || (d.PubKey[0] != 0x02 && d.PubKey[0] != 0x03) {
 		return fmt.Errorf("pubkey must be a 33-byte compressed secp256k1 key")
 	}
-	if in.ChainID == "" || len(in.ChainID) > 64 {
+	if d.ChainID == "" || len(d.ChainID) > 64 {
 		return fmt.Errorf("chain id must be 1..64 characters")
 	}
-	if in.Gas == 0 {
+	if d.Gas == 0 {
 		return fmt.Errorf("gas must be positive")
 	}
-	if !positiveInteger(in.FeeAmount) {
+	if !positiveInteger(d.FeeAmount) {
 		return fmt.Errorf("fee must be a positive integer of %s", FeeDenom)
 	}
 	return nil

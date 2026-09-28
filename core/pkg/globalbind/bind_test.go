@@ -52,6 +52,9 @@ func TestSignSecp256k1_vector(t *testing.T) {
 	if len(b.Pubkey) != 33 {
 		t.Fatalf("pub %d", len(b.Pubkey))
 	}
+	if err := Verify(b, vectorChain, vectorOperator); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSignExpandedEd25519_matchesStandardSign(t *testing.T) {

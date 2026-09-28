@@ -76,8 +76,12 @@ func validateBaseDomain(domain string) error {
 }
 
 func validateEndpoints(endpoints []string) error {
-	if len(endpoints) < 1 {
-		return fmt.Errorf("got 0 endpoints, need at least 1")
+	return validateEndpointsMin(endpoints, 1)
+}
+
+func validateEndpointsMin(endpoints []string, min int) error {
+	if len(endpoints) < min {
+		return fmt.Errorf("got %d endpoints, need at least %d", len(endpoints), min)
 	}
 	if len(endpoints) > MaxEndpoints {
 		return fmt.Errorf("got %d endpoints, max is %d", len(endpoints), MaxEndpoints)

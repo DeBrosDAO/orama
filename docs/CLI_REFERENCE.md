@@ -96,6 +96,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama function versions`](#orama-function-versions) — List all versions of a function
 - [`orama global`](#orama-global) — Sign a global-node service key binding
   - [`orama global bind`](#orama-global-bind) — Sign orama-global-bind-v1 for one service key
+  - [`orama global register`](#orama-global-register) — Register a global node from signed service-key bindings
 - [`orama inspect`](#orama-inspect) — Inspect cluster health via SSH
 - [`orama invite`](#orama-invite) — Mint an invite for a new node
 - [`orama members`](#orama-members) — Manage who may work in a namespace
@@ -1267,7 +1268,7 @@ Sign the binding that proves a service key belongs to an operator.
 The private key stays in its file. The command writes the public key and the
 signature, and nothing else. Sending MsgRegisterNode is a separate step.
 
-Subcommands: `bind`
+Subcommands: `bind`, `register`
 
 ### orama global bind
 
@@ -1284,6 +1285,44 @@ orama global bind [flags]
 | `--key-type` | — | secp256k1, ed25519, or ed25519-expanded; required for a raw 32-byte file |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--service` | — | Service name, for example provider or tor [required] |
+
+### orama global register
+
+Register a global node from signed service-key bindings
+
+```
+orama global register [flags]
+```
+
+Build MsgRegisterNode from bindings that 'orama global bind' wrote.
+
+The message names the operator, a node id, roles, a hot key that is not the
+operator, the bindings, public endpoints, and an optional region. It does not
+include a tenant list or a cluster secret.
+
+--node is the chain REST API. The command reads the account there, asks the
+RootWallet agent to sign this one transaction, and broadcasts it. Without
+--node it prints the sign document and does not submit anything.
+
+Each --binding file is the JSON bind printed. Its signature must verify for
+this --chain-id and --operator.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--binding` | — | Binding JSON from orama global bind [required] |
+| `--chain-id` | — | Chain id [required] |
+| `--endpoint` | — | Public endpoint (repeatable) |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--hot-key` | — | Hot key account, not the operator [required] |
+| `--id` | — | Node id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--operator` | — | Operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--region` | — | Region hint |
+| `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
+| `--sequence` | `0` | Account sequence, when not read from --node |
 
 ### orama inspect
 
