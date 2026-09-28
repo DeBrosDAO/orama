@@ -561,7 +561,8 @@ owner's earnings. The coins sit in a **second, separate module account** (`fees_
 API yet.** `x/token` and `x/nodes` both call `LockDeposit` / `ReleaseDeposit`, and neither is
 registered in `app.go`, so `oramad` never reaches them. `x/cnft` locks a tree deposit through
 the same interface and is also not registered. `x/market` does not lock a listing deposit.
-CosmWasm storage metering is not in this binary.
+`x/storage` is implemented and not registered. Its deal escrow is its own module account,
+not this deposit ledger. CosmWasm storage metering is not in this binary.
 
 ### Queries
 
@@ -967,6 +968,7 @@ for anything that does.
 - **`x/fees`' state-deposit ledger has no caller in the running binary.** `x/token` and
   `x/nodes` both call `LockDeposit` / `ReleaseDeposit`, and neither is registered in `app.go`.
   `x/cnft` calls the same interface for a tree deposit and is not registered either.
+  `x/storage` keeps deal escrow in its own module account and is not registered.
   CosmWasm storage metering is not in this binary.
 - **`x/power.DistributeEpochRewards` iterates every delegation of every validator once per closed
   epoch** (`Keeper.distributeValidatorReward`), rather than using `x/distribution`'s O(1)-per-block
