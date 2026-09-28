@@ -24,6 +24,7 @@ const PAGES: Record<RouteKey, LazyExoticComponent<ComponentType>> = {
 };
 
 const Docs = lazy(() => import("./pages/docs"));
+const Explorer = lazy(() => import("./pages/explorer"));
 const NotFound = lazy(() => import("./pages/not-found"));
 
 /** Nested routes are relative to the shell. */
@@ -40,6 +41,7 @@ export function App() {
       }
     >
       <Routes>
+        <Route path="explorer/*" element={<Explorer />} />
         <Route element={<Shell />}>
           {(Object.keys(ROUTES) as RouteKey[]).map((key) => {
             const PageComponent = PAGES[key];

@@ -692,6 +692,32 @@ Standard `oramad` commands work as on any Cosmos SDK chain, e.g. `oramad init <m
 <id> --default-denom norama` (the default denom is already `norama` even without the flag - see
 `chain/app/config.go` - but the flag still works to override it) and `oramad comet show-node-id`.
 
+## Explorer
+
+The website explorer (`website/src/pages/explorer.tsx`, `website/src/explorer`) reads the
+chain through the gateway. The browser calls `/v1/chain/…` on the same origin. It does not
+open CometBFT (`127.0.0.1:31001`) or the SDK REST API (`127.0.0.1:31003`).
+
+`core/pkg/gateway/handlers/chainread.Register` mounts a read-only proxy at `/v1/chain/` on the
+mux it is given. `core/pkg/gateway/routes.go` does not call it. The upstream bases are
+`ORAMA_CHAIN_RPC_URL` and `ORAMA_CHAIN_REST_URL`, defaulting to those two loopback URLs.
+The caller's path is not forwarded. Anything outside this list is refused, and the upstream
+body is copied unchanged:
+
+| Gateway path | Upstream |
+|---|---|
+| `GET /v1/chain/status` | CometBFT `GET /status` |
+| `GET /v1/chain/block?height=` | CometBFT `GET /block?height=` |
+| `GET /v1/chain/blocks?min_height=&max_height=` | CometBFT `GET /blockchain?minHeight=&maxHeight=` (at most 20 blocks) |
+| `GET /v1/chain/tx?hash=` | CometBFT `GET /tx?hash=` (32-byte hex, `0x` optional on the gateway path) |
+| `GET /v1/chain/validators` | CometBFT `GET /validators` (`page` and `per_page` optional; default 1 and 100, capped at 100) |
+| `GET /v1/chain/supply/norama` | REST `GET /cosmos/bank/v1beta1/supply/by_denom?denom=norama` |
+| `GET /v1/chain/staking/pool` | REST `GET /cosmos/staking/v1beta1/pool` |
+
+`x/emission`, `x/fees`, and `x/power` are not on this list: they speak gRPC and have no REST
+annotations. Neither are per-account bank balances. The explorer does not invent rows for a
+query this proxy does not serve.
+
 ## Building
 
 ```sh
