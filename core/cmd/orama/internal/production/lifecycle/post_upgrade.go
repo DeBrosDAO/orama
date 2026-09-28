@@ -57,6 +57,9 @@ func HandlePostUpgrade() error {
 			exec.Command("systemctl", "enable", svc).Run()
 		}
 	}
+	if err := utils.UnmaskAll(utils.TimerBackingServices(services)); err != nil {
+		return err
+	}
 	fmt.Printf("  Services reset and enabled\n")
 
 	// 2. Start services in dependency order

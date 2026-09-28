@@ -262,3 +262,45 @@ func TestCheckNodeDNS_expiredCertificateIsCritical(t *testing.T) {
 		t.Fatalf("alerts = %+v, want a critical expired-certificate alert", alerts)
 	}
 }
+
+func TestCheckCPUContention_stealAndPressure(t *testing.T) {
+	quiet := &report.SystemReport{CPUStealPct: 2, PressureCPUPct: 5}
+	if alerts := checkCPUContention(quiet, "a"); len(alerts) != 0 {
+		t.Fatalf("a quiet node raised %+v", alerts)
+	}
+	noisy := &report.SystemReport{CPUStealPct: 38, PressureCPUPct: 75}
+	if alerts := checkCPUContention(noisy, "a"); len(alerts) != 2 {
+		t.Fatalf("steal 38%% and pressure 75%% raised %d alerts, want 2", len(alerts))
+	}
+	unknown := &report.SystemReport{PressureCPUPct: -1}
+	if alerts := checkCPUContention(unknown, "a"); len(alerts) != 0 {
+		t.Fatalf("an unknown pressure raised %+v", alerts)
+	}
+}
+
+func TestCheckNodeSystem_unenforcedSocketBindWarns(t *testing.T) {
+	r := healthyReport(report.RaftLeader)
+	no, yes := false, true
+	r.System = &report.SystemReport{}
+	for _, a := range checkNodeSystem(r, "a") {
+		if a.Subsystem == "security" {
+			t.Fatalf("a report that did not check (older release) raised %+v", a)
+		}
+	}
+	r.System.SocketBindEnforced = &no
+	found := false
+	for _, a := range checkNodeSystem(r, "a") {
+		if a.Subsystem == "security" && strings.Contains(a.Message, "BPF_FRAMEWORK") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("a node that cannot confine deployments raised no alert")
+	}
+	r.System.SocketBindEnforced = &yes
+	for _, a := range checkNodeSystem(r, "a") {
+		if a.Subsystem == "security" {
+			t.Fatalf("an enforcing node raised %+v", a)
+		}
+	}
+}

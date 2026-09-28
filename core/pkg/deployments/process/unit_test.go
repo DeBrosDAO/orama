@@ -349,3 +349,35 @@ func TestSortedEnv_isStableAndComplete(t *testing.T) {
 		}
 	}
 }
+
+// bindDirectives are the SocketBindAllow=/SocketBindDeny= lines of unit,
+// comments left out.
+func bindDirectives(unit string) (allow, deny []string) {
+	for _, line := range strings.Split(unit, "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "SocketBindAllow="); ok {
+			allow = append(allow, v)
+		}
+		if v, ok := strings.CutPrefix(line, "SocketBindDeny="); ok {
+			deny = append(deny, v)
+		}
+	}
+	return allow, deny
+}
+
+// The templates are shared by every deployment, so any port they allowed
+// would be allowed to all of them: with TCP allowed, a tenant could bind the
+// index gateway's 127.0.0.1:10104 while it restarted and take the public
+// traffic Caddy proxies there (bugboard 2719). They deny every bind; the one
+// port an instance may bind is its own drop-in (pkg/privhelper deploybind.go).
+func TestDeployTemplate_allowsNoBindOfItsOwn(t *testing.T) {
+	eachDeployTemplate(t, func(t *testing.T, _ Runtime, unit string) {
+		allow, deny := bindDirectives(unit)
+		if len(allow) != 0 {
+			t.Errorf("the template allows %q to every deployment", allow)
+		}
+		if len(deny) != 1 || deny[0] != "any" {
+			t.Errorf("SocketBindDeny = %q, want exactly any", deny)
+		}
+	})
+}

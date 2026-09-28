@@ -113,9 +113,14 @@ func (m *Manager) deploymentEnv(deployment *deployments.Deployment, serviceName 
 // point one at any root-readable file and read it through the deployment. The
 // files now live in a root-only directory written by orama-privhelper
 // (pkg/deploysecrets), and the gateway hands over contents, never paths.
+//
+// AllowPort writes the one port the instance's runtime unit may bind: the
+// templates deny every bind, and the port differs per deployment
+// (pkg/privhelper deploybind.go). Clear removes it with the rest.
 type Stager interface {
 	SetEnv(instance, contents string) error
 	SetToken(instance, token string) error
+	AllowPort(instance string, runtime Runtime, port int) error
 	Clear(instance string) error
 }
 
@@ -128,6 +133,10 @@ func (HelperStager) SetEnv(instance, contents string) error {
 
 func (HelperStager) SetToken(instance, token string) error {
 	return privhelper.SetDeploymentToken(instance, token)
+}
+
+func (HelperStager) AllowPort(instance string, runtime Runtime, port int) error {
+	return privhelper.AllowDeploymentPort(instance, string(runtime), port)
 }
 
 func (HelperStager) Clear(instance string) error { return privhelper.ClearDeployment(instance) }
@@ -181,6 +190,32 @@ func (m *Manager) writeEnvFile(deployment *deployments.Deployment, serviceName s
 	return nil
 }
 
+// allowPort lets the deployment's unit bind its own port, the PORT its
+// environment file names, and no other.
+//
+// The templates allowed every TCP and UDP port, so a tenant could bind a
+// platform port on 127.0.0.1 while its service restarted — the index gateway
+// Caddy sends public traffic to, the chain RPC the node report reads — or
+// another tenant's. A port outside the deployment range is refused here, with
+// the deployment named, before the helper refuses it.
+func (m *Manager) allowPort(deployment *deployments.Deployment, serviceName string) error {
+	if m.stager == nil {
+		return fmt.Errorf("no deployment stager is configured, so %s cannot be allowed its port", serviceName)
+	}
+	runtime, _, err := RuntimeFor(deployment)
+	if err != nil {
+		return fmt.Errorf("allow %s its port: %w", serviceName, err)
+	}
+	if deployment.Port < deployments.UserMinPort || deployment.Port > deployments.MaxPort {
+		return fmt.Errorf("%s was allocated port %d, outside the deployment range %d-%d",
+			serviceName, deployment.Port, deployments.UserMinPort, deployments.MaxPort)
+	}
+	if err := m.stager.AllowPort(unitInstance(serviceName), runtime, deployment.Port); err != nil {
+		return fmt.Errorf("allow %s to bind port %d: %w", serviceName, deployment.Port, err)
+	}
+	return nil
+}
+
 // removeSecrets deletes a stopped deployment's environment and credential.
 // Leaving them behind leaves the tenant's secrets on the node after the
 // deployment is gone.
@@ -219,6 +254,9 @@ func (m *Manager) Start(ctx context.Context, deployment *deployments.Deployment,
 	// cannot write into /etc — and must not be root, which is the whole point
 	// of the hardened gateway unit.
 	if err := m.writeEnvFile(deployment, serviceName); err != nil {
+		return err
+	}
+	if err := m.allowPort(deployment, serviceName); err != nil {
 		return err
 	}
 	if err := m.writeWorkloadToken(ctx, deployment, serviceName); err != nil {
@@ -464,6 +502,9 @@ func (m *Manager) Reconfigure(ctx context.Context, deployment *deployments.Deplo
 	}
 	if err := m.writeEnvFile(deployment, m.getServiceName(deployment)); err != nil {
 		return fmt.Errorf("failed to rewrite the environment of %s: %w", unit, err)
+	}
+	if err := m.allowPort(deployment, m.getServiceName(deployment)); err != nil {
+		return err
 	}
 	// A restart re-reads the credential, so it is minted fresh here too: a
 	// deployment that has been running for a day should not restart holding a

@@ -543,7 +543,9 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	internalCtx := client.WithInternalAuth(ctx)
 	ormDB := s.registryDatabase()
 	if ormDB == nil {
-		return "", "", "", 0, fmt.Errorf("client not initialized")
+		// The gateway's own fault, not the token's: surfacing it as a
+		// rejection (401) would end a CLI session that is still valid.
+		return "", "", "", 0, fmt.Errorf("%w: registry client not initialized", ErrRefreshTransient)
 	}
 
 	nsID, err := s.ResolveNamespaceID(ctx, namespace)
@@ -658,7 +660,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// it from here on.
 	if session.sessionID == "" {
 		if session.sessionID, err = newTokenID(); err != nil {
-			return "", "", "", 0, err
+			return "", "", "", 0, fmt.Errorf("%w: generate session id: %v", ErrRefreshTransient, err)
 		}
 	}
 
@@ -726,7 +728,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	accessToken, expUnix, err = s.GenerateBoundJWT(namespace, subject, AccessTokenLifetime, custom,
 		SessionBinding{DeviceID: session.deviceID, SessionID: session.sessionID})
 	if err != nil {
-		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
+		return "", "", "", 0, fmt.Errorf("%w: generate access token: %v", ErrRefreshTransient, err)
 	}
 
 	// Step 4: mint and persist a new refresh token (32-byte random,
@@ -736,7 +738,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// degrades to re-auth, never to double-use of a single refresh token.
 	newRefreshToken, err = mintRefreshToken(session.deviceID != "")
 	if err != nil {
-		return "", "", "", 0, err
+		return "", "", "", 0, fmt.Errorf("%w: mint refresh token: %v", ErrRefreshTransient, err)
 	}
 	hashedNew := refreshTokenHash(newRefreshToken)
 	// Re-marshal from the parsed map (not the raw stored string) so the new

@@ -83,6 +83,9 @@ func TestTokenError_transportIsUnavailableCredentialIsAuth(t *testing.T) {
 		{"network failure while renewing", netErr, clierr.CodeUnavailable},
 		{"gateway 503 while renewing", &auth.GatewayError{Status: 503, Message: "starting"}, clierr.CodeUnavailable},
 		{"gateway refuses the key", &auth.GatewayError{Status: 401, Message: "invalid key"}, clierr.CodeAuth},
+		{"gateway refuses the device", &auth.GatewayError{Status: 403, Message: "device revoked"}, clierr.CodeAuth},
+		{"rate limited while renewing", &auth.GatewayError{Status: 429, Message: "slow down"}, clierr.CodeUnavailable},
+		{"malformed renewal request", &auth.GatewayError{Status: 400, Message: "bad body"}, clierr.CodeUnavailable},
 		{"no credential stored", errors.New("no credentials found for https://gw"), clierr.CodeAuth},
 		{"session ended", fmt.Errorf("this session has ended (%w); run 'orama auth login'", netErr), clierr.CodeAuth},
 	}

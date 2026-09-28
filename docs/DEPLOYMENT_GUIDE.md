@@ -662,7 +662,7 @@ These names are set by the platform and cannot be overwritten or removed:
 
 | Name | What it is |
 |------|------------|
-| `PORT` | The port your app must listen on. It is how the gateway reaches you |
+| `PORT` | The port your app must listen on, over TCP. It is how the gateway reaches you, and the only port your app may bind: listening on any other port, or binding a UDP socket, fails with `EPERM`. Outbound connections need no bind and are unaffected |
 | `ENTRY_POINT` | What a Node.js deployment runs |
 | `ORAMA_ENTRYPOINT` | The script the runtime starts, derived from `ENTRY_POINT` |
 | `ORAMA_NAMESPACE` | The namespace this deployment belongs to |
@@ -1335,6 +1335,8 @@ orama app logs my-app
 # - App not listening on the PORT environment variable
 # - Missing dependencies (not declared in package.json / go.mod)
 # - Port already in use (shouldn't happen, but check logs)
+# - bind: operation not permitted — the app listens on a port other than PORT,
+#   or binds UDP; a deployment may bind only PORT, over TCP
 # - Health check failing (ensure /health endpoint exists)
 ```
 

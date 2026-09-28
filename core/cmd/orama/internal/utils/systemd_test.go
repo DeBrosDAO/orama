@@ -2,13 +2,10 @@ package utils
 
 import (
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -44,64 +41,6 @@ func TestMaskedFromIsEnabled_disabledIsNotAFailure(t *testing.T) {
 				t.Fatalf("masked = %v, want %v", got, tc.masked)
 			}
 		})
-	}
-}
-
-func TestWaitForTCPPort_Success(t *testing.T) {
-	// Start a TCP listener on a random port
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatalf("failed to start listener: %v", err)
-	}
-	defer ln.Close()
-
-	port := ln.Addr().(*net.TCPAddr).Port
-
-	err = waitForTCPPort(port, 5*time.Second)
-	if err != nil {
-		t.Errorf("expected success, got error: %v", err)
-	}
-}
-
-func TestWaitForTCPPort_Timeout(t *testing.T) {
-	// Use a port that nothing is listening on
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatalf("failed to get free port: %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close() // Close immediately so nothing is listening
-
-	err = waitForTCPPort(port, 3*time.Second)
-	if err == nil {
-		t.Error("expected timeout error, got nil")
-	}
-}
-
-func TestWaitForTCPPort_DelayedStart(t *testing.T) {
-	// Get a free port
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatalf("failed to get free port: %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
-
-	// Start listening after a delay
-	go func() {
-		time.Sleep(2 * time.Second)
-		newLn, err := net.Listen("tcp", ln.Addr().String())
-		if err != nil {
-			return
-		}
-		defer newLn.Close()
-		// Keep it open long enough for the test
-		time.Sleep(10 * time.Second)
-	}()
-
-	err = waitForTCPPort(port, 10*time.Second)
-	if err != nil {
-		t.Errorf("expected success after delayed start, got error: %v", err)
 	}
 }
 
@@ -157,50 +96,71 @@ func TestOlricConfigYAMLParsing_MissingMemberlist(t *testing.T) {
 	}
 }
 
-// The Olric readiness wait finds the memberlist port through the unit's env
-// file in the unit env tree. It read data/namespaces/<ns>/olric.env, which the
-// layout move deletes, found nothing, and skipped the wait — so the gateway
-// could start before Olric.
-func TestGetOlricMemberlistPort_readsTheUnitEnvTree(t *testing.T) {
-	envDir := t.TempDir()
-	cfg := filepath.Join(t.TempDir(), "olric.yaml")
-	if err := os.WriteFile(cfg, []byte("memberlist:\n  bindPort: 10203\n"), 0o600); err != nil {
+// provision creates namespace ns in dataDir and an env file per service type
+// in envDir, the way the spawner leaves a provisioned namespace.
+func provision(t *testing.T, dataDir, envDir, ns string, svcTypes ...string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dataDir, ns), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(envDir, "anchat"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(envDir, ns), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(envDir, "anchat", "olric.env"), []byte("OLRIC_SERVER_CONFIG="+cfg+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := getOlricMemberlistPort(envDir, rootfs.At(filepath.Dir(cfg)), "anchat"); got != 10203 {
-		t.Errorf("port = %d, want 10203", got)
-	}
-	if got := getOlricMemberlistPort(envDir, rootfs.At(filepath.Dir(cfg)), "absent"); got != 0 {
-		t.Errorf("a namespace with no env has no port to wait for, got %d", got)
+	for _, svc := range svcTypes {
+		if err := os.WriteFile(filepath.Join(envDir, ns, svc+".env"), []byte("NODE_ID=x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
-// The Olric config lives in the orama user's tree and this runs as root: a
-// symlink planted in its place is not followed, so there is no port to wait for.
-func TestGetOlricMemberlistPort_symlinkedConfigRefused(t *testing.T) {
-	envDir := t.TempDir()
-	anchor := t.TempDir()
-	target := filepath.Join(t.TempDir(), "olric.yaml")
-	if err := os.WriteFile(target, []byte("memberlist:\n  bindPort: 10203\n"), 0o600); err != nil {
+// ipfs-gc is a oneshot fired by its timer. Listing the oneshot made every
+// upgrade `systemctl restart` it: that ran `ipfs repo gc` synchronously, right
+// after the ipfs@ restart, and failed with "cannot connect to the api" (exit
+// status 1) on every node — or, when the daemon was up, held the upgrade for
+// the whole GC. The timer is the unit to restart, enable, mask and report.
+func TestDiscoverNamespaceUnits_ipfsGCIsItsTimer(t *testing.T) {
+	dataDir, envDir := t.TempDir(), t.TempDir()
+	provision(t, dataDir, envDir, "index", "ipfs", "ipfs-gc", "olric")
+
+	units := discoverNamespaceUnits(dataDir, envDir)
+	want := []string{
+		"orama-namespace-olric@index",
+		"orama-namespace-ipfs@index",
+		"orama-namespace-ipfs-gc@index.timer",
+	}
+	if len(units) != len(want) {
+		t.Fatalf("units = %v, want %v", units, want)
+	}
+	for i := range want {
+		if units[i] != want[i] {
+			t.Fatalf("units = %v, want %v", units, want)
+		}
+	}
+	for _, u := range units {
+		if u == "orama-namespace-ipfs-gc@index" {
+			t.Fatalf("the ipfs-gc oneshot must not be listed: %v", units)
+		}
+	}
+}
+
+// Only service types with an env file are provisioned; files and namespaces
+// without env files contribute nothing.
+func TestDiscoverNamespaceUnits_onlyProvisionedTypes(t *testing.T) {
+	dataDir, envDir := t.TempDir(), t.TempDir()
+	provision(t, dataDir, envDir, "anchat", "rqlite", "gateway")
+	provision(t, dataDir, envDir, "empty")
+	if err := os.WriteFile(filepath.Join(dataDir, "stray-file"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := filepath.Join(anchor, "olric.yaml")
-	if err := os.Symlink(target, cfg); err != nil {
-		t.Fatal(err)
+
+	units := discoverNamespaceUnits(dataDir, envDir)
+	if len(units) != 2 || units[0] != "orama-namespace-rqlite@anchat" || units[1] != "orama-namespace-gateway@anchat" {
+		t.Fatalf("units = %v", units)
 	}
-	if err := os.MkdirAll(filepath.Join(envDir, "anchat"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(envDir, "anchat", "olric.env"), []byte("OLRIC_SERVER_CONFIG="+cfg+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := getOlricMemberlistPort(envDir, rootfs.At(anchor), "anchat"); got != 0 {
-		t.Errorf("port = %d read through a symlink, want 0", got)
+}
+
+func TestDiscoverNamespaceUnits_noNamespacesDir(t *testing.T) {
+	if units := discoverNamespaceUnits(filepath.Join(t.TempDir(), "absent"), t.TempDir()); len(units) != 0 {
+		t.Fatalf("units = %v, want none", units)
 	}
 }

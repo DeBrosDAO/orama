@@ -162,3 +162,64 @@ func sortedEnvKeys(env map[string]string) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// ParseEnvFile reads back what RenderEnvFile wrote, and nothing else: one
+// KEY="value" assignment per line, the value escaped as EncodeEnvFileValue
+// escapes it.
+//
+// A tenant's value may hold newlines, so a line that reads PORT=... can be
+// the inside of another variable's value; only a parser that follows the
+// quoting knows where each assignment ends. Anything RenderEnvFile cannot
+// have written — a bare backslash, an unquoted value, a key given twice, text
+// after the closing quote — is an error rather than a guess.
+func ParseEnvFile(contents string) (map[string]string, error) {
+	// Errors name a byte offset, never the file's text: the values are the
+	// tenant's secrets, and a malformed file is reported in operator output.
+	env := map[string]string{}
+	rest := contents
+	for rest != "" {
+		at := len(contents) - len(rest)
+		eq := strings.IndexByte(rest, '=')
+		if eq < 0 || ValidateEnvName(rest[:eq]) != nil {
+			return nil, fmt.Errorf("environment file: byte %d does not start a KEY=\"value\" assignment", at)
+		}
+		key := rest[:eq]
+		if _, dup := env[key]; dup {
+			return nil, fmt.Errorf("environment file: %s is assigned twice", key)
+		}
+		value, n, err := decodeEnvFileValue(rest[eq+1:])
+		if err != nil {
+			return nil, fmt.Errorf("environment file: the value of %s at byte %d: %w", key, at, err)
+		}
+		env[key] = value
+		rest = rest[eq+1+n:]
+	}
+	return env, nil
+}
+
+// decodeEnvFileValue decodes one quoted value and the newline that ends its
+// assignment, returning the value and how many bytes of s it used.
+func decodeEnvFileValue(s string) (string, int, error) {
+	if s == "" || s[0] != '"' {
+		return "", 0, fmt.Errorf("it is not double-quoted")
+	}
+	var b strings.Builder
+	for i := 1; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\\':
+			if i+1 == len(s) || strings.IndexByte(shellNeedEscape, s[i+1]) < 0 {
+				return "", 0, fmt.Errorf("it has a backslash that escapes nothing")
+			}
+			i++
+			b.WriteByte(s[i])
+		case '"':
+			if i+1 == len(s) || s[i+1] != '\n' {
+				return "", 0, fmt.Errorf("its closing quote is not followed by the end of the line")
+			}
+			return b.String(), i + 2, nil
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return "", 0, fmt.Errorf("its quote is never closed")
+}

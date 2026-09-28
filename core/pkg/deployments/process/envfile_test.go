@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,15 +17,25 @@ import (
 type recordingStager struct {
 	env     map[string]string
 	token   map[string]string
+	ports   map[string]string // instance -> "<runtime>:<port>"
 	cleared []string
+	// log is every call in order, shared with a test's systemctl seam.
+	log []string
 }
 
 func newRecordingStager() *recordingStager {
-	return &recordingStager{env: map[string]string{}, token: map[string]string{}}
+	return &recordingStager{env: map[string]string{}, token: map[string]string{}, ports: map[string]string{}}
 }
 
 func (r *recordingStager) SetEnv(instance, contents string) error {
 	r.env[instance] = contents
+	r.log = append(r.log, "set-env "+instance)
+	return nil
+}
+
+func (r *recordingStager) AllowPort(instance string, runtime Runtime, port int) error {
+	r.ports[instance] = fmt.Sprintf("%s:%d", runtime, port)
+	r.log = append(r.log, fmt.Sprintf("bind-port %s %s %d", instance, runtime, port))
 	return nil
 }
 
@@ -37,6 +48,7 @@ func (r *recordingStager) Clear(instance string) error {
 	r.cleared = append(r.cleared, instance)
 	delete(r.env, instance)
 	delete(r.token, instance)
+	delete(r.ports, instance)
 	return nil
 }
 

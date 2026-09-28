@@ -443,7 +443,7 @@ orama node rollout --env testnet --no-build --archive <path>   # an existing bui
 # Or with more control:
 orama node push --env testnet --archive <path>    # Push archive to all nodes
 orama node upgrade --env testnet                  # Print the rolling upgrade plan
-orama node upgrade --env testnet --node 1.2.3.4   # Single node only
+orama node upgrade --env testnet --node 1.2.3.4   # Upgrade one node (reads every node's state first)
 orama node upgrade --env testnet --yes            # Execute the plan
 orama node upgrade --env testnet --delay 600      # Allow 10 min per node to rejoin
 ```
@@ -458,6 +458,14 @@ What the rolling upgrade does:
    reports itself leader (no quorum), two do (mid-election), or any node's state
    could not be read. An unreachable node is never assumed to be a healthy
    follower.
+   With `--node <ip>` the same checks run against **every** node — they are
+   questions about the cluster, so SSH keys for the whole inventory are resolved
+   and every node's raft state is read — and only then is the plan cut down to
+   the named node. A named follower is one step; a named leader keeps its leader
+   step and hands leadership over before its stop (step 6). An IP that is not in
+   the inventory fails before anything is read. `--node` used to read only the
+   named node, so on a healthy cluster a follower saw no leader and the upgrade
+   refused with "the cluster has no quorum".
 4. **Requires `--yes`.** Without it the plan is printed and nothing is restarted.
 5. **Runs the staged build's CLI on each node**: `/opt/orama/bin/orama node
    upgrade --restart`, which `orama push` verified and put in place — never the
@@ -493,6 +501,19 @@ What the rolling upgrade does:
    voters untouched and the cluster serving. The maintenance flag is cleared only
    once the node serves again, so a node that did not come back stays out of
    rotation.
+
+On each node, once `orama-node` is back and the node has rejoined, the upgrade
+restarts the rest of its units: namespace rqlite, then olric, then gateway, then
+everything else. After the Olric restarts it waits (up to 30 s each; running out
+is a warning, not a failure) for each Olric memberlist to accept connections at
+the `memberlist.bindAddr:bindPort` its config names — the node's WireGuard
+address, not localhost. It used to dial localhost, which never connected and
+cost 30 s per namespace per node. `ipfs-gc` is listed as its timer,
+`orama-namespace-ipfs-gc@<ns>.timer`: restarting the timer reschedules the GC
+(`OnActiveSec=20min`), while restarting the oneshot ran `ipfs repo gc` inside
+the upgrade — failing with "cannot connect to the api" straight after the IPFS
+restart, or holding the upgrade for the whole GC. `orama node
+start|stop|restart|status` use the same unit list.
 
 **The index raft port moves (7001 → 10101) on the upgrade from 0.122.x.** Raft
 identity does not follow it: each node restarts under the id recorded in step 6
@@ -931,7 +952,7 @@ With no `--env`, push targets the active environment (`orama env current`).
 |------|-------------|
 | `--restart` | Restart all services after upgrade (local mode) |
 | `--env <env>` | Target environment for remote rolling upgrade |
-| `--node <ip>` | Upgrade a single node only |
+| `--node <ip>` | Upgrade this node only; every node's raft state is still read to check the cluster first |
 | `--public-ip <ip>` | This node's public IP, recorded as `node.public_ip` (default: the recorded one, else the default route's source address) |
 | `--delay <seconds>` | Seconds a node has to rejoin after its upgrade before the rollout stops (a readiness budget, not a sleep) |
 | `--yes` | Execute the printed rolling plan; without it nothing is restarted |

@@ -32,15 +32,14 @@ func (r *RemoteUpgrader) Execute() error {
 		return err
 	}
 
-	// A named node is the whole operation. Resolving every inventory key
-	// first aborts it when some other node was never enrolled.
-	if r.flags.NodeFilter != "" {
-		nodes = remotessh.FilterByIP(nodes, r.flags.NodeFilter)
-		if len(nodes) == 0 {
-			return fmt.Errorf("node %s not found in %s environment", r.flags.NodeFilter, r.flags.Env)
-		}
+	// A named node is checked before anything is resolved or read, so a typo
+	// fails at once instead of after every node has been probed.
+	if r.flags.NodeFilter != "" && len(remotessh.FilterByIP(nodes, r.flags.NodeFilter)) == 0 {
+		return fmt.Errorf("node %s not found in %s environment", r.flags.NodeFilter, r.flags.Env)
 	}
 
+	// Keys for every node, --node or not: the safety preconditions below read
+	// every node's raft state.
 	cleanup, err := remotessh.PrepareNodeKeys(nodes)
 	if err != nil {
 		return err
@@ -54,15 +53,13 @@ func (r *RemoteUpgrader) Execute() error {
 	fmt.Printf("Reading cluster state from %d nodes...\n", len(nodes))
 	roles := rollout.ReadRoles(nodes, rollout.DefaultRunner)
 
-	plan, err := rollout.Build(nodes, roles)
+	plan, err := planRollout(nodes, roles, r.flags.NodeFilter)
 	if err != nil {
 		return fmt.Errorf("cannot plan a rolling upgrade of %s: %w", r.flags.Env, err)
 	}
 
 	fmt.Printf("\n%s\n", plan)
 
-	// A single-node filter is a targeted repair, not a rollout, and the plan
-	// above does not describe it. Confirmation still applies.
 	if !r.flags.Yes {
 		return fmt.Errorf("re-run with --yes to execute this plan")
 	}
@@ -94,6 +91,31 @@ func (r *RemoteUpgrader) Execute() error {
 
 	fmt.Printf("\n✓ Rolling upgrade complete (%d nodes)\n", len(plan.Steps))
 	return nil
+}
+
+// planRollout builds the plan for the whole cluster and, with nodeFilter set,
+// keeps only that node's step.
+//
+// The whole cluster, even for one node: "is there exactly one leader" and "is
+// every node readable" are questions about the cluster. Reading only the named
+// node made a healthy cluster look leaderless whenever that node was a
+// follower, and refused (bugboard 2721). A named leader keeps its leader step;
+// the node-side upgrade hands leadership over before it stops anything.
+func planRollout(nodes []inspector.Node, roles map[string]rollout.RaftRole, nodeFilter string) (*rollout.Plan, error) {
+	plan, err := rollout.Build(nodes, roles)
+	if err != nil {
+		return nil, err
+	}
+	if nodeFilter == "" {
+		return plan, nil
+	}
+	for _, step := range plan.Steps {
+		if step.Node.Host == nodeFilter {
+			plan.Steps = []rollout.Step{step}
+			return plan, nil
+		}
+	}
+	return nil, fmt.Errorf("node %s is not in the inventory", nodeFilter)
 }
 
 // gateBudget is how long one node has to rejoin before the rollout stops.

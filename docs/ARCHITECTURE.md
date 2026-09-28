@@ -69,7 +69,7 @@ Install enables **only** `orama-node.service`. That process is a supervisor: it 
 
 | Plane | Membership | Units | Ports |
 |---|---|---|---|
-| **index** | every node | `orama-namespace-{wireguard,ipfs,ipfs-cluster,ipfs-gc,rqlite,olric,pubsub,gateway,vault,caddy,ntfy,tor}@index`; optional `sni-router@index` | internals `10100–10109`, IPFS Cluster swarm `10114` on the WireGuard address; edge `80`/`443`/`51820`/`9050` |
+| **index** | every node | `orama-namespace-{wireguard,ipfs,ipfs-cluster,ipfs-gc,rqlite,olric,pubsub,gateway,vault,caddy,ntfy,tor}@index`; optional `sni-router@index` | internals `10100–10109`, IPFS Cluster's Kubo proxy `10110` on loopback, IPFS Cluster swarm `10114` on the WireGuard address; edge `80`/`443`/`51820`/`9050` |
 | **nameserver** | this node, if `--nameserver` | `orama-namespace-coredns@nameserver` | `:53` |
 | **tenant** | N members chosen at provision | `orama-namespace-{rqlite,olric,gateway}@<name>` (+ `sfu`/`turn` if WebRTC) | `10000–10099` |
 
@@ -100,9 +100,13 @@ useless without another. Two qualify: `ipfs-cluster@` and `ipfs-gc@` on
 `ipfs@` — a controller with no daemon has nothing to control, and `ipfs repo gc`
 works through the running daemon's API. `ipfs-cluster@`'s process is
 `orama serve-ipfs-cluster`: ipfs-cluster v1.1.2 cannot send Kubo's bearer, so
-that process proxies `/run/orama-ipfs/api.sock` to the RPC and adds it
-(`pkg/ipfs.ServeCluster`). The GC oneshot passes the same bearer as
-`--api-auth`.
+that process proxies `127.0.0.1:10110` to the RPC and adds it
+(`pkg/ipfs.ServeCluster`), admitting only connections whose socket the
+`orama` user owns (asked of the kernel by `sock_diag`). It is TCP rather than a unix
+socket because ipfs-cluster's transport for a `/unix` address ignores request
+cancellation: `pin_timeout` never fired, a pin of content no peer had held
+Kubo's pin lock indefinitely, and every `ipfs repo gc` timed out behind it.
+The GC oneshot passes the same bearer as `--api-auth`.
 
 Every other unit `orama-node` manages uses `Wants=` + `After=`. In particular
 `gateway@` no longer

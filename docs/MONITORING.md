@@ -52,7 +52,10 @@ Both take `Authorization: Bearer <token>`. How the monitor answers failures:
 | unreachable or too slow | 5 (unavailable) | the gateway cannot be reached, did not answer in time, or cannot renew the session; use `--ssh` |
 
 A missing credential or an ended session is an auth error (3); failing to reach
-the gateway to renew a session is an outage (5). The client caches the bearer
+the gateway to renew a session, or any renewal answer that is not a refusal
+(a 5xx, a rate limit), is an outage (5) and leaves the session intact — the
+CLI ends a session only when the gateway refuses it (401/403), so a live view
+running through a rolling upgrade keeps its login. The client caches the bearer
 for 30s and renews it one caller at a time (a renewal rotates the refresh
 token, so two at once would end the session), bounds the connect (10s) and the
 wait for response headers (45s: the stream sends them with its first
@@ -210,7 +213,7 @@ Every table starts with the verdict line; every subcommand takes `--json`.
 | Subcommand | Description |
 |------------|-------------|
 | `live` | Live view (the default when no subcommand is given) |
-| `cluster` | Verdict, component states, a row per node (health, raft, gateway, load, memory, disk, version, report age), unreachable nodes and the top alerts |
+| `cluster` | Verdict, component states, a row per node (health, raft, gateway, load, CPU steal, memory, disk, version, report age), unreachable nodes and the top alerts |
 | `node` | Per-node summary of every subsystem (system, RQLite, WireGuard, Olric, IPFS, Tor, chain, traffic); `--json` gives each node's full report |
 | `service` | Service × node matrix of systemd states, restart loops and failed units |
 | `mesh` | WireGuard interfaces (peers against the N-1 a full mesh needs, N counting unreachable nodes too) and every peer link's handshake age and traffic |
@@ -296,7 +299,7 @@ lines are always the environment with the connection state (`● live`,
 | Tab | Shows |
 |-----|-------|
 | Overview | Component cards (name, state, healthy/total nodes, summary) and the top alerts with hints |
-| Nodes | Node table (host, role, health, raft, gateway, load, mem%, disk%, version, report age). ↑/↓ select, Enter opens **everything** the node reported, section by section; Esc goes back |
+| Nodes | Node table (host, role, health, raft, gateway, load, steal%, mem%, disk%, version, report age). ↑/↓ select, Enter opens **everything** the node reported, section by section; Esc goes back |
 | Services | Service × node matrix and failed units |
 | Traffic | Sparkline of cluster rps over this session (last 60 samples, in memory only), cluster totals, a row per gateway, busiest namespaces |
 | Chain | Chain ID, height, block age, average block time, mempool; each node's RPC, height, sync and validator status; validator voting-power bars |
@@ -373,11 +376,11 @@ sudo orama node report --json
 
 | Section | Data |
 |---------|------|
-| **system** | CPU count, load average, memory/disk/swap usage, OOM kills, kernel version, uptime, clock time |
+| **system** | CPU count, load average, memory/disk/swap usage, OOM kills, kernel version, uptime, clock time; CPU steal (the hypervisor giving this VPS's CPU to other guests, sampled over 0.5s from `/proc/stat`) and pressure-stall figures for CPU, I/O and memory (`/proc/pressure/*`, "some" avg60; -1 when the kernel has no PSI); whether systemd can enforce socket-bind rules (`+BPF_FRAMEWORK`) |
 | **services** | Systemd service states (active, restarts, memory, CPU, restart loop detection) for 10 core services |
 | **rqlite** | Raft state, leader, term, applied/commit index, peers, strong read test, readyz, debug vars |
 | **olric** | `orama-namespace-olric@index` state, memberlist listener on port 10103, member count, restarts, memory, log analysis |
-| **ipfs** | Daemon/cluster state, swarm/cluster peers, repo size, versions, swarm key |
+| **ipfs** | Daemon/cluster state, swarm/cluster peers, repo size, versions, swarm key; the oldest active Kubo request that holds or waits for the pin lock (`pin/add`, `pin/update`, `repo/gc`, from `/api/v0/diag/cmds`) and how long it has run (`oldest_pin_lock_cmd`, `oldest_pin_lock_age_seconds`; `pin_lock_error` when the list could not be read). A request's options are not read: a CLI request's carry its `--api-auth` bearer |
 | **vault** | Service state, guardian health (healthy/total, read threshold, write quorum), restarts |
 | **gateway** | Index gateway `/v1/health` status and each check's status (`checks`), build version from `/v1/version` (port 10104) |
 | **wireguard** | Interface state, WG IP, peers, handshake ages, MTU, config permissions |
@@ -439,6 +442,8 @@ Alerts are derived from cross-node analysis of all collected reports (`cluster.D
 |----------|----------|
 | **critical** | Expired TLS certificate, clock skew > 60s, Collection failed (node unreachable), no RQLite leader, split brain, RQLite unresponsive, WireGuard interface down, WG peer never handshaked, OOM kills, service failed, UFW inactive |
 | **warning** | Strong read failed, memory > 90%, disk > 85%, stale WG handshake (> 3min), Raft term inconsistency, applied index lag > 100, restart loop detected, TLS cert < 14 days, DNS down, namespace gateway down, Tor SOCKS port not bound or not bootstrapped, Anyone-network leftovers, clock skew > 5s, internet unreachable, high TCP retransmission |
+| **warning (contention)** | CPU steal > 20% (an oversubscribed host: load average and CPU% do not show it), CPU pressure > 50% |
+| **warning (security)** | systemd without `+BPF_FRAMEWORK`: tenant deployments' `SocketBindAllow`/`SocketBindDeny` are ignored on that node, so a deployment is not confined to its own port (Debian 12's systemd 252 is built without it) |
 | **info** | Zombie processes, orphan orama processes, swap usage > 30% |
 
 ### Cross-Node Checks
@@ -506,6 +511,7 @@ means one thing across the CLI.
 - **System**: Memory, disk, load, OOM kills, swap
 - **Services**: Systemd state, restart loops
 - **DNS**: CoreDNS/Caddy up, TLS cert expiry, SOA resolution
+- **IPFS**: Daemon/cluster down, no swarm peers, swarm key missing, bootstrap list not empty, repo above 90%/95%, and a `pin/add`, `pin/update` or `repo/gc` active for more than 30 minutes — the repo GC unit's `TimeoutStartSec`. Such a request holds or waits for Kubo's pin lock, so `orama-namespace-ipfs-gc@index` cannot run and times out having freed nothing (a timed-out GC run itself shows as a failed systemd unit)
 - **Tor**: SOCKS port bound while active, bootstrap below 100% (an unknown bootstrap is not an alert), Anyone-network leftovers
 - **Processes**: Zombies, orphans, panics in logs
 - **Namespaces**: Gateway and RQLite per namespace

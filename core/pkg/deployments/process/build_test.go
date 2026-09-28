@@ -415,3 +415,16 @@ func TestStop_keepsTheBuildOutputWhenTheUnitDidNotStop(t *testing.T) {
 		}
 	}
 }
+
+// npm dials the registry and listens on nothing, so the build may bind
+// nothing: a build could otherwise take a port a platform service or a
+// deployment is about to listen on.
+func TestBuildTemplate_bindsNothing(t *testing.T) {
+	allow, deny := bindDirectives(buildTemplate(t))
+	if len(allow) != 0 {
+		t.Errorf("the build unit allows binding %q", allow)
+	}
+	if len(deny) != 1 || deny[0] != "any" {
+		t.Errorf("SocketBindDeny = %q, want exactly any", deny)
+	}
+}

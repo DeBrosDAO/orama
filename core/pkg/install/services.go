@@ -228,6 +228,11 @@ func (ps *ProductionSetup) InstallNamespaceTemplates() (err error) {
 	if err := installBuildSandbox(publicIP); err != nil {
 		return err
 	}
+	// The new runtime templates allow no bind; a deployment already on the
+	// node gets the drop-in with its port before they are loaded.
+	if err := ps.installDeployBinds(); err != nil {
+		return err
+	}
 
 	// The manager logs each template; the operator-facing summary is ours.
 	if err := systemd.NewManager("", zap.NewNop()).InstallTemplateUnits(sourceDir); err != nil {

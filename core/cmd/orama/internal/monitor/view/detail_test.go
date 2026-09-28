@@ -95,11 +95,11 @@ func TestNodeCells_unreachableAndReported(t *testing.T) {
 		t.Fatalf("unreachable row = %v", down)
 	}
 	up := healthyStatus("1.1.1.1", true)
-	up.Report.System = &report.SystemReport{LoadAvg1: 0.5, MemUsePct: 40, DiskUsePct: 91}
+	up.Report.System = &report.SystemReport{LoadAvg1: 0.5, CPUStealPct: 31, MemUsePct: 40, DiskUsePct: 91}
 	up.Report.Version = "0.200.0"
 	up.ReportAgeSec = 4
 	cells := NodeCells(th, up)
-	want := []string{"1.1.1.1", "node", "healthy", "Leader", "OK", "0.50", "40%", "91%", "0.200.0", "4s"}
+	want := []string{"1.1.1.1", "node", "healthy", "Leader", "OK", "0.50", "31%", "40%", "91%", "0.200.0", "4s"}
 	if strings.Join(cells, "|") != strings.Join(want, "|") {
 		t.Fatalf("row = %v\nwant  %v", cells, want)
 	}

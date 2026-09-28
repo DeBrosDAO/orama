@@ -52,9 +52,8 @@ func TestTemplateUnits_hostStackAdoptsExistingPaths(t *testing.T) {
 		"orama-namespace-ipfs@.service":      {"ipfs daemon", "IPFS_PATH"},
 		"orama-namespace-ipfs-cluster@.service": {
 			"ExecStart=/opt/orama/bin/orama serve-ipfs-cluster",
-			"RuntimeDirectory=orama-ipfs",
-			"RuntimeDirectoryMode=0700",
 			"127.0.0.1:10107",
+			"127.0.0.1:10110",
 		},
 		"orama-namespace-vault@.service":      {"data/vault/vault.yaml"},
 		"orama-namespace-caddy@.service":      {"/etc/caddy/Caddyfile", "XDG_CONFIG_HOME=/var/lib/caddy/config", "orama-namespace-coredns@nameserver.service"},

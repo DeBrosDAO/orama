@@ -58,6 +58,21 @@ came alongside, which then went in front of every gateway the CLI was pointed at
 for the next ninety days. The key is now presented once, to exchange it, and
 only when there is no session to renew.
 
+The CLI renews the access token a minute before it expires. Only the gateway
+refusing the refresh token — `401` (unknown, expired, revoked or replayed) or
+`403` (a device-bound session refused for its device's sake) — ends the session
+and asks for `orama auth login` again. A gateway that cannot be reached, a `5xx`
+(`/v1/auth/refresh` answers `503` while the rqlite leader moves during a rolling
+upgrade), a `429` or a `400` leaves the stored session untouched and fails only
+that attempt, so the next one — or `orama monitor`'s next reconnect — renews it.
+
+Renewal is single-flight across every CLI process on the machine. Under an
+exclusive `flock` on `~/.orama/credentials.json.lock`, the CLI reads the stored
+session again, uses an access token another process has already renewed, and
+otherwise refreshes and writes the rotated refresh token back before releasing
+the lock. Two commands renewing at once would otherwise both present the same
+refresh token, and the second would be refused as a replay.
+
 ### The lobby
 
 A challenge with no namespace signs you in to `default`. That is the **lobby**:

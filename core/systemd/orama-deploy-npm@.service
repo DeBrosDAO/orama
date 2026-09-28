@@ -66,12 +66,18 @@ BindReadOnlyPaths=-%C/orama-build/%i/deps/node_modules:/opt/orama/.orama/data/de
 # (docs/SECURITY.md, "Tenant deployments").
 IPAddressAllow=localhost
 IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10
-# bind() is separate from IPAddressDeny. Every address family is denied, then
-# TCP and UDP are allowed: the app accepts its port and dials out. systemd
-# does not expand the environment file's port into SocketBindAllow.
+# bind() is separate from IPAddressDeny, and denied here outright: with TCP
+# allowed, a tenant could bind any unprivileged port on 127.0.0.1 while its
+# owner restarted — the index gateway Caddy proxies public traffic to, the chain
+# RPC the node report reads, another tenant's port. The one port this
+# deployment may bind, over TCP, is a drop-in of this instance's own, written
+# by orama-privhelper before the gateway starts the unit
+# (orama-deploy-<runtime>@<instance>.service.d/orama-bind.conf,
+# pkg/privhelper/deploybind.go): systemd does not expand a variable in
+# SocketBindAllow=, so the port cannot come from the environment file, and
+# `systemctl set-property` persists this setting unparseably before systemd 254.
+# Dialling out needs no bind(): connect() picks a source port without one.
 SocketBindDeny=any
-SocketBindAllow=tcp
-SocketBindAllow=udp
 
 StateDirectory=orama-deploy-%i
 CacheDirectory=orama-deploy-%i

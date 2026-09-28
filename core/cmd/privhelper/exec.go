@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -131,8 +132,35 @@ func wireGuard(args []string, input []byte) privhelper.Response {
 	}
 }
 
-// deploy stores or clears a deployment's environment and token (arguments
-// already validated).
+// Where the deployment bind drop-ins go, and how systemd is told about them;
+// a test points them at a temporary tree.
+var (
+	deployBindRoot     = rootfs.At(privhelper.DeployBindAnchor)
+	deployBindUnitDir  = privhelper.DeployBindUnitDir
+	deployBindLockPath = "/run/orama-privhelper-deploy-bind.lock"
+	daemonReload       = func() privhelper.Response {
+		return runTool(privhelper.ToolSystemctl, []string{"daemon-reload"})
+	}
+)
+
+// lockDeployBind serialises bind-port requests, which the socket serves in
+// parallel: a failed reload puts back the drop-in it replaced, and without
+// the lock that could overwrite a newer one another request had written and
+// loaded. The caller closes the file to release it.
+func lockDeployBind() (*os.File, error) {
+	f, err := os.OpenFile(deployBindLockPath, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open the deploy bind lock %s: %w", deployBindLockPath, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("lock %s: %w", deployBindLockPath, err)
+	}
+	return f, nil
+}
+
+// deploy stores or clears a deployment's environment, token and bind drop-ins
+// (arguments already validated).
 func deploy(args []string, input []byte) privhelper.Response {
 	op, instance := args[0], args[1]
 	if err := privhelper.CheckDeployInput(op, input); err != nil {
@@ -144,13 +172,59 @@ func deploy(args []string, input []byte) privhelper.Response {
 		err = deploysecrets.Write(deploysecrets.Dir, instance, deploysecrets.Env, input)
 	case "set-token":
 		err = deploysecrets.Write(deploysecrets.Dir, instance, deploysecrets.Token, input)
+	case "bind-port":
+		return deployBindPort(instance, args[2], args[3])
 	default: // clear
-		err = deploysecrets.Clear(deploysecrets.Dir, instance)
+		err = errors.Join(deploysecrets.Clear(deploysecrets.Dir, instance), clearDeployBind(instance))
 	}
 	if err != nil {
 		return failure(err)
 	}
 	return privhelper.Response{Output: op + " " + instance + "\n"}
+}
+
+// clearDeployBind removes instance's bind drop-ins under the bind lock, so a
+// clear cannot interleave with a bind-port's write, reload and restore.
+func clearDeployBind(instance string) error {
+	lock, err := lockDeployBind()
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	return privhelper.ClearDeployBind(deployBindRoot, deployBindUnitDir, instance)
+}
+
+// deployBindPort writes the drop-in that lets the unit bind port and reloads
+// systemd when it changed. systemd 249 finds a drop-in directory only through
+// the path cache it builds at a reload, so even a unit never loaded before
+// needs one. A failed reload puts the previous drop-in back, so the file on
+// disk is always what systemd has loaded and a retry writes and reloads again.
+func deployBindPort(instance, runtime, portArg string) privhelper.Response {
+	port, err := privhelper.ParseDeployPort(portArg)
+	if err != nil {
+		return refused(err)
+	}
+	lock, err := lockDeployBind()
+	if err != nil {
+		return failure(err)
+	}
+	defer lock.Close() // closing the descriptor releases the flock
+	prev, changed, err := privhelper.WriteDeployBind(deployBindRoot, deployBindUnitDir, runtime, instance, port)
+	if err != nil {
+		return failure(err)
+	}
+	if !changed {
+		return privhelper.Response{Output: fmt.Sprintf("orama-deploy-%s@%s may bind tcp:%d (unchanged)\n", runtime, instance, port)}
+	}
+	if resp := daemonReload(); resp.ExitCode != 0 {
+		if rerr := privhelper.RestoreDeployBind(deployBindRoot, deployBindUnitDir, runtime, instance, prev); rerr != nil {
+			return failure(fmt.Errorf("systemctl daemon-reload failed (%s) and the previous drop-in could not be put back: %w",
+				strings.TrimSpace(resp.Output), rerr))
+		}
+		return failure(fmt.Errorf("systemctl daemon-reload failed after writing the bind drop-in of orama-deploy-%s@%s; it was put back: %s",
+			runtime, instance, strings.TrimSpace(resp.Output)))
+	}
+	return privhelper.Response{Output: fmt.Sprintf("orama-deploy-%s@%s may bind tcp:%d\n", runtime, instance, port)}
 }
 
 // unitEnv stores or clears namespace units' env files (arguments already

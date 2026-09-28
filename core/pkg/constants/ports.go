@@ -16,6 +16,13 @@ const (
 	IPFSClusterAPIPort  = IndexPortBase + 8 // 10108
 	NtfyListenPort      = IndexPortBase + 9 // 10109
 
+	// IPFSClusterKuboProxyPort is where the cluster unit's bearer proxy
+	// listens on 127.0.0.1 for ipfs-cluster's connector (ipfs.ServeCluster).
+	// It is TCP, not a unix socket: ipfs-cluster v1.1.2 dials a /unix address
+	// with a transport that ignores request cancellation, which disables
+	// pin_timeout, unpin_timeout and ipfs_request_timeout.
+	IPFSClusterKuboProxyPort = IndexPortBase + 10 // 10110
+
 	// IPFSClusterSwarmPort is ipfs-cluster's peer-to-peer listener, bound to
 	// the node's WireGuard address: the only IPFS Cluster port peers dial.
 	// +14 is the port nodes already listen on — orama-node used to derive it

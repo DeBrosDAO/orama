@@ -58,6 +58,24 @@ type SystemReport struct {
 	OOMKills      int     `json:"oom_kills"`
 	KernelVersion string  `json:"kernel_version"`
 	TimeUnix      int64   `json:"time_unix"`
+
+	// CPUStealPct is the share of CPU time the hypervisor gave to other
+	// guests over a short sample: a VPS on an oversubscribed host. Load
+	// average cannot tell it from real work.
+	CPUStealPct float64 `json:"cpu_steal_pct"`
+	// Pressure*Pct are the kernel's pressure-stall figures (PSI, "some",
+	// averaged over 60s): the share of time at least one task waited for
+	// CPU, I/O or memory. -1 when the kernel does not expose them.
+	PressureCPUPct float64 `json:"pressure_cpu_pct"`
+	PressureIOPct  float64 `json:"pressure_io_pct"`
+	PressureMemPct float64 `json:"pressure_mem_pct"`
+
+	// SocketBindEnforced is whether systemd here can enforce SocketBindAllow
+	// and SocketBindDeny (it needs +BPF_FRAMEWORK). Without it, tenant
+	// deployments are not confined to their own port: systemd ignores the
+	// settings without a word.
+	// Nil in a report from a release that did not check.
+	SocketBindEnforced *bool `json:"socket_bind_enforced,omitempty"`
 }
 
 // --- Systemd Services ---
@@ -160,6 +178,14 @@ type IPFSReport struct {
 	// ClusterError says why the cluster's REST API could not be asked at
 	// all (its credentials could not be derived).
 	ClusterError string `json:"cluster_error,omitempty"`
+	// OldestPinLockCmd is the longest-running active Kubo request that holds
+	// or waits for the pin lock (pin/add, pin/update, repo/gc), and
+	// OldestPinLockAgeSeconds how long it has run; empty when none is active.
+	// Repo GC cannot run while a pin holds the lock (ipfs_pinlock.go).
+	OldestPinLockCmd        string `json:"oldest_pin_lock_cmd,omitempty"`
+	OldestPinLockAgeSeconds int64  `json:"oldest_pin_lock_age_seconds,omitempty"`
+	// PinLockError says why Kubo's active requests could not be read.
+	PinLockError string `json:"pin_lock_error,omitempty"`
 }
 
 // --- Vault ---

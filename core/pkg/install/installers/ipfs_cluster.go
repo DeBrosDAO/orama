@@ -148,12 +148,14 @@ func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, sec
 
 	// ipfs-cluster v1.1.2 dials this address with no Authorization header, and
 	// its config has no field for one (an unknown key is ignored). Kubo's RPC
-	// refuses that. The cluster unit listens on the socket and forwards to
-	// the RPC port below with the bearer; the connector dials the socket.
+	// refuses that. The cluster unit listens on loopback TCP and forwards to
+	// the RPC port below with the bearer; the connector dials the proxy. It
+	// must be TCP: for a /unix address the connector cannot cancel a request,
+	// so its pin and request timeouts never fire (ipfs.KuboProxyAddr).
 	if ipfsAPIPort != constants.IPFSAPIPort {
 		return fmt.Errorf("ipfs API port %d is not %d; the cluster proxy forwards to that port", ipfsAPIPort, constants.IPFSAPIPort)
 	}
-	setKuboConnector(config, ipfs.KuboProxyMultiaddr)
+	setKuboConnector(config, ipfs.KuboProxyMultiaddr())
 
 	if err := bindClusterAPIsToLoopback(config); err != nil {
 		return err
@@ -180,8 +182,8 @@ func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, sec
 const serviceJSONMode = 0o600
 
 // setKuboConnector points ipfs-cluster's ipfshttp connector at multiaddr,
-// creating the section when init did not. The address is the unit's proxy
-// socket, not Kubo's TCP port.
+// creating the section when init did not. The address is the unit's proxy,
+// not Kubo's RPC port.
 func setKuboConnector(config map[string]interface{}, multiaddr string) {
 	conn, _ := config["ipfs_connector"].(map[string]interface{})
 	if conn == nil {

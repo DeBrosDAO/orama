@@ -451,6 +451,43 @@ desktop app is closed. Open it.
 
 ---
 
+## 18. IPFS repo GC times out on every run
+
+**Symptom:** `orama-namespace-ipfs-gc@index` fails with `Result: timeout` after
+30 minutes (`TimeoutStartSec`), the node report shows it as a failed unit, and
+the monitor raises "IPFS pin/add active for …: it holds or waits for Kubo's pin
+lock". The repo never shrinks.
+
+**Cause:** Kubo runs `pin/add` and `repo gc` under one lock. A recursive pin
+holds it while it fetches the DAG, so a pin of content that no peer in the
+private swarm has never finishes on its own, and GC waits behind it. The pin
+ends when ipfs-cluster's `pin_timeout` (2m without progress) cancels it — which
+never happened while the cluster reached Kubo through a unix socket:
+ipfs-cluster's transport for `/unix` addresses ignores cancellation, so the
+request stayed open for as long as the cluster ran (bug 2722). The proxy is now
+TCP (`127.0.0.1:10110`), and a pin of unavailable content ends as `pin_error`
+in `ipfs-cluster-ctl status` after `pin_timeout`.
+
+**Check:** which request holds the lock, and whether its content exists
+anywhere. Never print the command line of `diag cmds -v` unfiltered: the GC
+oneshot's options carry the Kubo bearer.
+
+```bash
+sudo bash -c 'set -a; . /var/lib/orama-unit-env/index/ipfs-gc.env; set +a; HOME=/opt/orama \
+  ipfs --api=$IPFS_API --api-auth=$IPFS_API_AUTH diag cmds' | grep -E 'pin/|repo/gc'
+# for the CID of a stuck pin/add, on every node, with the same --api/--api-auth:
+ipfs block stat --offline <cid>; ipfs refs -r --offline <cid>
+```
+
+`service.json` must say `"node_multiaddress": "/ip4/127.0.0.1/tcp/10110"`; a
+`/unix/…` value means the node was not upgraded with this release's CLI.
+
+**Fix:** upgrade the node (`orama node upgrade`). A CID whose blocks exist on
+no node cannot be pinned by anything; whether to unpin it from the cluster is
+the content owner's decision.
+
+---
+
 ## General Debugging Tips
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands

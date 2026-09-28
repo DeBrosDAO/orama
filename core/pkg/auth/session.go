@@ -3,10 +3,10 @@ package auth
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -40,7 +40,8 @@ const (
 
 // sessionMu serialises the refresh so two commands in one process do not both
 // rotate the refresh token — one of them would lose the race and be told it is
-// replaying a stolen token.
+// replaying a stolen token. Across processes the credential file's lock does
+// the same; see renewStoredSession.
 var sessionMu sync.Mutex
 
 // HasLiveAccessToken reports whether the stored access token is still worth
@@ -74,6 +75,10 @@ func (creds *Credentials) SetSession(accessToken, refreshToken string, expiresIn
 // token buys a new one; an API key is exchanged for one. Only the last of those
 // sends a long-lived credential anywhere, and only when the session is all
 // there is.
+//
+// With a store, the renewal is single-flight across goroutines and processes:
+// see renewStoredSession. Without one (a credential held only in memory) it is
+// single-flight within this process only.
 func Bearer(gatewayURL string, store *EnhancedCredentialStore, creds *Credentials) (string, error) {
 	if creds == nil {
 		return "", fmt.Errorf("no credential for %s: run 'orama auth login'", gatewayURL)
@@ -85,22 +90,38 @@ func Bearer(gatewayURL string, store *EnhancedCredentialStore, creds *Credential
 	if creds.HasLiveAccessToken() {
 		return creds.AccessToken, nil
 	}
+	if store == nil {
+		return renewSession(gatewayURL, creds)
+	}
+	return renewStoredSession(gatewayURL, creds)
+}
 
+// renewSession buys creds a new access token, recording what the gateway
+// answered in creds. The caller holds sessionMu and persists creds.
+//
+// A refresh that fails for any reason other than the gateway refusing the
+// refresh token itself — it could not be reached, it failed (5xx), it was
+// busy (429) — leaves the session exactly as it was and returns the error, so
+// the next attempt presents the same refresh token. Only a refusal ends the
+// session: see refreshTokenRejected.
+func renewSession(gatewayURL string, creds *Credentials) (string, error) {
 	client := sessionClient(gatewayURL)
 
 	if strings.TrimSpace(creds.RefreshToken) != "" {
 		session, err := refreshSession(client, gatewayURL, creds.RefreshToken, creds.Namespace)
 		if err == nil {
 			creds.SetSession(session.AccessToken, session.RefreshToken, session.ExpiresIn)
-			persistSession(store)
 			return creds.AccessToken, nil
+		}
+		if !refreshTokenRejected(err) {
+			return "", fmt.Errorf("could not renew the session with %s, which is kept for the next attempt: %w",
+				gatewayURL, err)
 		}
 		// A refresh token that the gateway refuses is spent, replayed or
 		// revoked, and keeping it means every command from here on pays for
 		// one more failed round trip before falling through to the key.
 		creds.RefreshToken = ""
 		if strings.TrimSpace(creds.APIKey) == "" {
-			persistSession(store)
 			return "", fmt.Errorf("this session has ended (%w); run 'orama auth login'", err)
 		}
 	}
@@ -114,8 +135,27 @@ func Bearer(gatewayURL string, store *EnhancedCredentialStore, creds *Credential
 		return "", err
 	}
 	creds.SetSession(session.AccessToken, session.RefreshToken, session.ExpiresIn)
-	persistSession(store)
 	return creds.AccessToken, nil
+}
+
+// refreshTokenRejected reports whether a failed refresh means the refresh
+// token is dead, as opposed to the attempt having failed.
+//
+// /v1/auth/refresh answers 401 for a token that is unknown, expired, revoked
+// or replayed (a rotated token presented again), and 401 or 403 when a
+// device-bound session is refused for its device's sake (no proof, revoked,
+// pending, or a namespace policy that now requires a device) — none of which
+// the CLI can cure by asking again. It answers 503 for a transient failure
+// (the rqlite leader moving during a rolling restart), 400 only for a request
+// body it could not read (the token was never judged), and something in front
+// of it can answer 429 or a proxy's 5xx. Those, and a gateway that could not be
+// reached at all, say nothing about the token.
+func refreshTokenRejected(err error) bool {
+	var gwErr *GatewayError
+	if !errors.As(err, &gwErr) {
+		return false
+	}
+	return gwErr.Status == http.StatusUnauthorized || gwErr.Status == http.StatusForbidden
 }
 
 // sessionClient is the client for a refresh or a key exchange. It follows no
@@ -126,23 +166,6 @@ func sessionClient(gatewayURL string) *http.Client {
 	client := tlsutil.NewHTTPClientForDomain(sessionHTTPTimeout, extractDomainFromURL(gatewayURL))
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return client
-}
-
-// persistSession writes the rotated session back.
-//
-// A refresh token rotates on use, so a failure to save it means the next
-// command presents one the gateway has already retired — and is told it is
-// replaying a stolen credential. It is reported rather than returned because
-// the caller has a working token in hand either way, and turning a saved-file
-// problem into a failed command would be worse than the warning.
-func persistSession(store *EnhancedCredentialStore) {
-	if store == nil {
-		return
-	}
-	if err := store.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: the renewed session could not be saved (%v); "+
-			"the next command will have to sign in again\n", err)
-	}
 }
 
 // sessionResponse is what /v1/auth/refresh and /v1/auth/token both answer with.

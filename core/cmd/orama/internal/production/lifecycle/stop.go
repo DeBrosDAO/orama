@@ -62,6 +62,7 @@ func HandleStopWithFlags(force bool) error {
 	// to /dev/null so systemd cannot start it at all. Unmasked by "orama node start".
 	maskArgs := []string{"mask"}
 	maskArgs = append(maskArgs, services...)
+	maskArgs = append(maskArgs, utils.TimerBackingServices(services)...)
 	if err := exec.Command("systemctl", maskArgs...).Run(); err != nil {
 		fmt.Printf("  Warning: Failed to mask some services: %v\n", err)
 	}

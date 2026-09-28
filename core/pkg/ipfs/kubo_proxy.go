@@ -7,42 +7,62 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
-const (
-	// KuboProxySocket is the socket ipfs-cluster dials. ipfs-cluster v1.1.2
-	// cannot send Kubo's bearer — its ipfshttp connector sets only
-	// Content-Type, and service.json has no header field — so the cluster
-	// unit listens here and forwards to the RPC with the header. The runtime
-	// directory is 0700 and the socket is 0600, both owned by the orama user,
-	// so a DynamicUser deployment cannot open it.
-	KuboProxySocket = "/run/orama-ipfs/api.sock"
+const kuboReadyPath = "/api/v0/id"
 
-	// KuboProxyMultiaddr is KuboProxySocket in the form ipfs-cluster stores.
-	// /unix/run/... dials the absolute path /run/... (manet.DialArgs).
-	KuboProxyMultiaddr = "/unix/run/orama-ipfs/api.sock"
+// ipfs-cluster v1.1.2 cannot send Kubo's bearer — its ipfshttp connector sets
+// only Content-Type, and service.json has no header field — so the cluster
+// unit listens on loopback and forwards to the RPC with the header.
+//
+// The listener is TCP, not a unix socket. For a /unix node_multiaddress the
+// connector uses github.com/tv42/httpunix, whose RoundTrip ignores the
+// request context: when pin_timeout (or unpin_timeout, ipfs_request_timeout)
+// cancels a request, nothing closes the connection, the connector stays
+// blocked reading the response, and Kubo keeps the request — and a pin/add's
+// pin lock — forever, which starves repo gc. For a /ip4 address the connector
+// uses net/http's own transport, which closes the connection on cancel; the
+// proxy then cancels the upstream request and Kubo aborts it.
+//
+// Access is checked per connection instead of by file mode: see
+// ownerOnlyListener.
 
-	kuboReadyPath = "/api/v0/id"
-)
+// KuboProxyAddr is the proxy's listen address.
+// kuboProxyHeaderTimeout bounds how long a client may take to send a
+// request's headers; the body of a pin or add streams for as long as it needs.
+const kuboProxyHeaderTimeout = 10 * time.Second
+
+func KuboProxyAddr() string {
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(constants.IPFSClusterKuboProxyPort))
+}
+
+// KuboProxyMultiaddr is KuboProxyAddr in the form ipfs-cluster stores in
+// service.json (ipfs_connector.ipfshttp.node_multiaddress).
+func KuboProxyMultiaddr() string {
+	return fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.IPFSClusterKuboProxyPort)
+}
 
 // ServeClusterConfig is how the cluster unit reaches Kubo. Zero values are
-// the production ones: CLUSTER_SECRET from the environment, the proxy socket,
-// Kubo's loopback RPC, and ipfs-cluster-service daemon.
+// the production ones: CLUSTER_SECRET from the environment, the proxy
+// address, Kubo's loopback RPC, ipfs-cluster-service daemon, and connections
+// admitted when the kernel (sock_diag) says they belong to this process's uid.
 type ServeClusterConfig struct {
-	Secret     string
-	Upstream   string
-	SocketPath string
-	Binary     string
-	Args       []string
-	ReadyWait  time.Duration
+	Secret      string
+	Upstream    string
+	ListenAddr  string
+	Binary      string
+	Args        []string
+	ReadyWait   time.Duration
+	SocketOwner socketOwnerFunc
 }
 
 func (c *ServeClusterConfig) fill() error {
@@ -55,8 +75,8 @@ func (c *ServeClusterConfig) fill() error {
 	if c.Upstream == "" {
 		c.Upstream = net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", constants.IPFSAPIPort))
 	}
-	if c.SocketPath == "" {
-		c.SocketPath = KuboProxySocket
+	if c.ListenAddr == "" {
+		c.ListenAddr = KuboProxyAddr()
 	}
 	if c.Binary == "" {
 		c.Binary = "/usr/local/bin/ipfs-cluster-service"
@@ -67,11 +87,14 @@ func (c *ServeClusterConfig) fill() error {
 	if c.ReadyWait == 0 {
 		c.ReadyWait = 30 * time.Second
 	}
+	if c.SocketOwner == nil {
+		c.SocketOwner = sockDiagOwner
+	}
 	return nil
 }
 
 // ServeCluster waits until Kubo accepts the bearer, listens on the proxy
-// socket, and runs ipfs-cluster as a child. It returns when the child exits
+// address, and runs ipfs-cluster as a child. It returns when the child exits
 // or ctx is cancelled. Cancelling sends the child SIGTERM.
 func ServeCluster(ctx context.Context, cfg ServeClusterConfig) error {
 	if err := cfg.fill(); err != nil {
@@ -84,12 +107,12 @@ func ServeCluster(ctx context.Context, cfg ServeClusterConfig) error {
 	if err := waitForKubo(ctx, cfg.Upstream, token, cfg.ReadyWait); err != nil {
 		return err
 	}
-	ln, err := listenProxy(cfg.SocketPath)
+	ln, err := listenProxy(cfg.ListenAddr, uint32(os.Getuid()), cfg.SocketOwner, reportRefused)
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
-	srv := &http.Server{Handler: kuboProxy(cfg.Upstream, token)}
+	srv := &http.Server{Handler: kuboProxy(cfg.Upstream, token), ReadHeaderTimeout: kuboProxyHeaderTimeout}
 	go func() { _ = srv.Serve(ln) }()
 	defer func() {
 		shut, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -157,41 +180,32 @@ func waitForKubo(ctx context.Context, upstream, token string, wait time.Duration
 	}
 }
 
-// listenProxy binds socketPath at 0600, replacing a leftover socket. The
-// directory is 0700. Anything else already at the path is an error.
-func listenProxy(socketPath string) (net.Listener, error) {
-	dir := filepath.Dir(socketPath)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("create %s: %w", dir, err)
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("restrict %s: %w", dir, err)
-	}
-	if fi, err := os.Lstat(socketPath); err == nil {
-		if fi.Mode()&os.ModeSocket == 0 {
-			return nil, fmt.Errorf("%s exists and is not a socket", socketPath)
-		}
-		if err := os.Remove(socketPath); err != nil {
-			return nil, fmt.Errorf("remove leftover socket %s: %w", socketPath, err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("stat %s: %w", socketPath, err)
-	}
-	old := syscall.Umask(0o077)
-	ln, err := net.Listen("unix", socketPath)
-	syscall.Umask(old)
+// listenProxy listens on addr, which must be an IPv4 loopback address, and
+// admits only connections dialled by a socket owned by uid.
+func listenProxy(addr string, uid uint32, owner socketOwnerFunc, refuse func(error)) (net.Listener, error) {
+	ap, err := netip.ParseAddrPort(addr)
 	if err != nil {
-		return nil, fmt.Errorf("listen on %s: %w", socketPath, err)
+		return nil, fmt.Errorf("parse proxy address %q: %w", addr, err)
 	}
-	if err := os.Chmod(socketPath, 0o600); err != nil {
-		ln.Close()
-		return nil, fmt.Errorf("restrict %s: %w", socketPath, err)
+	if !ap.Addr().Is4() || !ap.Addr().IsLoopback() {
+		return nil, fmt.Errorf("proxy address %s is not IPv4 loopback; the proxy adds Kubo's bearer and must not be reachable off the node", addr)
 	}
-	return ln, nil
+	ln, err := net.Listen("tcp4", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", addr, err)
+	}
+	return &ownerOnlyListener{Listener: ln, uid: uid, owner: owner, refuse: refuse}, nil
+}
+
+// reportRefused writes a refused connection to the unit's journal.
+func reportRefused(err error) {
+	fmt.Fprintf(os.Stderr, "serve-ipfs-cluster: kubo proxy %v\n", err)
 }
 
 // kuboProxy forwards to upstream and sets Kubo's bearer on every request,
-// replacing whatever the caller sent. The socket's mode is the access check.
+// replacing whatever the caller sent. The listener is the access check. The
+// inbound request's context is the upstream request's: when the connector
+// cancels and closes its connection, the upstream request is cancelled too.
 func kuboProxy(upstream, token string) http.Handler {
 	target := &url.URL{Scheme: "http", Host: upstream}
 	proxy := httputil.NewSingleHostReverseProxy(target)

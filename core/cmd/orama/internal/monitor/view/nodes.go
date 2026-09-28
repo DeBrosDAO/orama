@@ -19,7 +19,7 @@ const (
 )
 
 // NodeHeaders are the columns of the node table.
-var NodeHeaders = []string{"HOST", "ROLE", "HEALTH", "RAFT", "GATEWAY", "LOAD", "MEM", "DISK", "VERSION", "AGE"}
+var NodeHeaders = []string{"HOST", "ROLE", "HEALTH", "RAFT", "GATEWAY", "LOAD", "STEAL", "MEM", "DISK", "VERSION", "AGE"}
 
 // NodeCells renders one node as a row of the node table.
 func NodeCells(t Theme, cs cluster.CollectionStatus) []string {
@@ -30,16 +30,17 @@ func NodeCells(t Theme, cs cluster.CollectionStatus) []string {
 	row := []string{cs.Node.Host, role, healthCell(t, cs.Health())}
 	r := cs.Report
 	if r == nil {
-		return append(row, unknownCell, unknownCell, unknownCell, unknownCell, unknownCell, unknownCell, unknownCell)
+		return append(row, unknownCell, unknownCell, unknownCell, unknownCell, unknownCell, unknownCell, unknownCell, unknownCell)
 	}
 	row = append(row, raftCell(t, cs), gatewayCell(t, cs))
 	if r.System != nil {
 		row = append(row,
 			fmt.Sprintf("%.2f", r.System.LoadAvg1),
+			t.Pct(int(r.System.CPUStealPct)).Render(fmt.Sprintf("%.0f%%", r.System.CPUStealPct)),
 			t.Pct(r.System.MemUsePct).Render(fmt.Sprintf("%d%%", r.System.MemUsePct)),
 			t.Pct(r.System.DiskUsePct).Render(fmt.Sprintf("%d%%", r.System.DiskUsePct)))
 	} else {
-		row = append(row, unknownCell, unknownCell, unknownCell)
+		row = append(row, unknownCell, unknownCell, unknownCell, unknownCell)
 	}
 	version := r.Version
 	if version == "" {

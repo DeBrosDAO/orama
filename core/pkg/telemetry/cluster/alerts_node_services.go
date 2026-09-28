@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
@@ -194,8 +195,21 @@ func checkNodeIPFS(r *report.NodeReport, host string) []Alert {
 			fmt.Sprintf("IPFS cluster peer errors: %d", r.IPFS.ClusterErrors)})
 	}
 
+	if age := time.Duration(r.IPFS.OldestPinLockAgeSeconds) * time.Second; age > ipfsPinLockStallAge {
+		alerts = append(alerts, Alert{AlertWarning, "ipfs", host,
+			fmt.Sprintf("IPFS %s active for %s: it holds or waits for Kubo's pin lock, so repo GC cannot finish",
+				r.IPFS.OldestPinLockCmd, age.Round(time.Minute))})
+	}
+
 	return alerts
 }
+
+// ipfsPinLockStallAge is how long a pin/add, pin/update or repo/gc may stay
+// active before it is reported. It is the repo GC unit's TimeoutStartSec
+// (orama-namespace-ipfs-gc@.service): a request that has held Kubo's pin lock
+// this long outlasts a whole GC run, which then times out having freed
+// nothing.
+const ipfsPinLockStallAge = 30 * time.Minute
 
 func checkNodeVault(r *report.NodeReport, host string) []Alert {
 	if r.Vault == nil {

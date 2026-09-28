@@ -55,6 +55,9 @@ func (o *Orchestrator) restartServices() error {
 			return fmt.Errorf("enable %s: %w", svc, err)
 		}
 	}
+	if err := utils.UnmaskAll(utils.TimerBackingServices(services)); err != nil {
+		return err
+	}
 
 	// orama-node first: it is the supervisor, and it starts the whole
 	// orama-namespace-*@index stack itself. The pre-factory host daemons

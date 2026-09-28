@@ -150,6 +150,11 @@ func checkNodeSystem(r *report.NodeReport, host string) []Alert {
 				fmt.Sprintf("High load: %.1f (%.1fx CPU count)", r.System.LoadAvg1, loadRatio)})
 		}
 	}
+	alerts = append(alerts, checkCPUContention(r.System, host)...)
+	if e := r.System.SocketBindEnforced; e != nil && !*e {
+		alerts = append(alerts, Alert{AlertWarning, "security", host,
+			"Tenant deployments are not confined to their own port: systemd here lacks +BPF_FRAMEWORK, so SocketBindAllow/Deny are ignored (a deployment could take over a platform port while its service restarts)"})
+	}
 	// Inode exhaustion
 	if r.System.InodePct > 95 {
 		alerts = append(alerts, Alert{AlertCritical, "system", host,
@@ -268,6 +273,27 @@ func checkNodeDNS(r *report.NodeReport, host string, nc *nodeContext) []Alert {
 
 	if r.DNS.CaddyActive && !r.DNS.Port443Bound {
 		alerts = append(alerts, Alert{AlertCritical, "dns", host, "Caddy active but port 443 not bound"})
+	}
+	return alerts
+}
+
+// CPU contention thresholds. Steal is the hypervisor giving this VPS's CPU to
+// other guests; pressure is tasks waiting for a CPU at all. Either makes a
+// node slow in a way load average and CPU% do not explain.
+const (
+	cpuStealWarnPct    = 20
+	cpuPressureWarnPct = 50
+)
+
+func checkCPUContention(s *report.SystemReport, host string) []Alert {
+	var alerts []Alert
+	if s.CPUStealPct > cpuStealWarnPct {
+		alerts = append(alerts, Alert{AlertWarning, "system", host,
+			fmt.Sprintf("CPU steal at %.0f%%: the hypervisor is giving this VPS's CPU to other guests (oversubscribed host)", s.CPUStealPct)})
+	}
+	if s.PressureCPUPct > cpuPressureWarnPct {
+		alerts = append(alerts, Alert{AlertWarning, "system", host,
+			fmt.Sprintf("CPU pressure at %.0f%%: tasks waited for a CPU that much of the last minute", s.PressureCPUPct)})
 	}
 	return alerts
 }

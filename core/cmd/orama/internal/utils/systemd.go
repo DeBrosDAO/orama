@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"net"
@@ -12,13 +11,11 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"github.com/DeBrosOfficial/network/pkg/unitenv"
-	"gopkg.in/yaml.v3"
 
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
@@ -289,36 +286,96 @@ func GetProductionServices() []string {
 		}
 	}
 
-	// Discover namespace service instances from the namespaces data directory.
-	// We can't rely on scanning /etc/systemd/system because that only contains
-	// template files (e.g. orama-namespace-gateway@.service) with no instance name.
-	// Restarting a template without an instance is a no-op.
-	// Instead, scan the data directory where each subdirectory is a provisioned namespace.
-	namespacesDir := "/opt/orama/.orama/data/namespaces"
-	nsEntries, err := os.ReadDir(namespacesDir)
-	if err == nil {
-		serviceTypes := []string{
-			"rqlite", "olric", "gateway", "sfu", "turn", "pubsub",
-			"wireguard", "ipfs", "ipfs-cluster", "ipfs-gc", "vault",
-			"caddy", "ntfy", "tor", "sni-router", "coredns",
-		}
-		for _, nsEntry := range nsEntries {
-			if !nsEntry.IsDir() {
-				continue
-			}
-			ns := nsEntry.Name()
-			for _, svcType := range serviceTypes {
-				// Only add if the env file exists (service was provisioned)
-				envFile := unitenv.Path(unitenv.Dir, ns, svcType)
-				if _, err := os.Stat(envFile); err == nil {
-					svcName := fmt.Sprintf("orama-namespace-%s@%s", svcType, ns)
-					existing = append(existing, svcName)
-				}
-			}
+	return append(existing, discoverNamespaceUnits(namespacesDataDir, unitenv.Dir)...)
+}
+
+// namespacesDataDir holds one subdirectory per provisioned namespace.
+const namespacesDataDir = "/opt/orama/.orama/data/namespaces"
+
+// namespaceServiceTypes are the per-namespace units GetProductionServices
+// looks for.
+var namespaceServiceTypes = []string{
+	"rqlite", "olric", "gateway", "sfu", "turn", "pubsub",
+	"wireguard", "ipfs", "ipfs-cluster", "ipfs-gc", "vault",
+	"caddy", "ntfy", "tor", "sni-router", "coredns",
+}
+
+// timerDrivenServiceTypes run as a oneshot fired by a .timer of the same
+// instance. The timer is the unit that lives: the oneshot is inactive between
+// runs, and `systemctl restart` on it does not reschedule anything — it runs
+// the job right now and blocks until it ends. For ipfs-gc that was a full
+// `ipfs repo gc` inside every upgrade (up to its 30-minute TimeoutStartSec),
+// or, straight after the ipfs@ restart, "cannot connect to the api" and
+// "Failed to restart ... exit status 1" on every node.
+var timerDrivenServiceTypes = map[string]bool{
+	"ipfs-gc": true,
+}
+
+// TimerBackingServices is the oneshot .service behind every timer in units.
+// Masking and unmasking must cover both: a CLI before 0.122.111 masked the
+// ipfs-gc service itself, so a node it stopped keeps that service masked —
+// the timer would fire into a unit that cannot start, and GC would silently
+// never run — unless the start or upgrade after it unmasks the service too.
+// Only masking is extended: the oneshot has no [Install] section, so it is
+// never enabled.
+func TimerBackingServices(units []string) []string {
+	var out []string
+	for _, u := range units {
+		if base, ok := strings.CutSuffix(u, ".timer"); ok {
+			out = append(out, base+".service")
 		}
 	}
+	return out
+}
 
-	return existing
+// UnmaskAll unmasks each unit that is masked. A unit that cannot be checked
+// or unmasked is an error: a masked unit cannot start.
+func UnmaskAll(units []string) error {
+	for _, u := range units {
+		masked, err := IsServiceMasked(u)
+		if err != nil {
+			return fmt.Errorf("check whether %s is masked: %w", u, err)
+		}
+		if !masked {
+			continue
+		}
+		if out, err := exec.Command("systemctl", "unmask", u).CombinedOutput(); err != nil {
+			return fmt.Errorf("unmask %s: %w: %s", u, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+// discoverNamespaceUnits names the namespace units provisioned on this node.
+//
+// Instances are found from the namespaces data directory, one subdirectory per
+// namespace: /etc/systemd/system only holds the templates
+// (orama-namespace-gateway@.service), and restarting a template without an
+// instance is a no-op. A service type counts as provisioned when its unit env
+// file exists in envDir.
+func discoverNamespaceUnits(namespacesDir, envDir string) []string {
+	nsEntries, err := os.ReadDir(namespacesDir)
+	if err != nil {
+		return nil
+	}
+	var units []string
+	for _, nsEntry := range nsEntries {
+		if !nsEntry.IsDir() {
+			continue
+		}
+		ns := nsEntry.Name()
+		for _, svcType := range namespaceServiceTypes {
+			if _, err := os.Stat(unitenv.Path(envDir, ns, svcType)); err != nil {
+				continue
+			}
+			unit := fmt.Sprintf("orama-namespace-%s@%s", svcType, ns)
+			if timerDrivenServiceTypes[svcType] {
+				unit += ".timer"
+			}
+			units = append(units, unit)
+		}
+	}
+	return units
 }
 
 // CollectPortsForServices returns a list of ports used by the specified services
@@ -459,15 +516,15 @@ func StartServicesOrdered(services []string, action string) {
 			fmt.Printf("  Waiting for namespace Olric instances to become ready...\n")
 			for _, svc := range svcs {
 				ns := strings.TrimPrefix(svc, "orama-namespace-olric@")
-				port := getOlricMemberlistPort(unitenv.Dir, rootfs.At(config.ProductionBaseDir), ns)
-				if port <= 0 {
-					fmt.Printf("  ⚠️  Could not determine Olric memberlist port for namespace %s\n", ns)
+				addr, err := getOlricMemberlistAddr(unitenv.Dir, rootfs.At(config.ProductionBaseDir), ns)
+				if err != nil {
+					fmt.Printf("  ⚠️  Could not determine the Olric memberlist address for namespace %s: %v\n", ns, err)
 					continue
 				}
-				if err := waitForTCPPort(port, 30*time.Second); err != nil {
-					fmt.Printf("  ⚠️  Olric memberlist port %d not ready for namespace %s: %v\n", port, ns, err)
+				if err := waitForTCPAddr(addr, olricReadyTimeout); err != nil {
+					fmt.Printf("  ⚠️  Olric memberlist %s not ready for namespace %s: %v\n", addr, ns, err)
 				} else {
-					fmt.Printf("  ✓ Olric ready for namespace %s (port %d)\n", ns, port)
+					fmt.Printf("  ✓ Olric ready for namespace %s (%s)\n", ns, addr)
 				}
 			}
 		}
@@ -482,66 +539,4 @@ func StartServicesOrdered(services []string, action string) {
 			fmt.Printf("  ✓ %s\n", svc)
 		}
 	}
-}
-
-// getOlricMemberlistPort reads a namespace's Olric config, named by its unit's
-// env file in envDir (unitenv.Dir), and returns the memberlist bind port.
-// Returns 0 if the config cannot be read or parsed. The config lives in the
-// orama user's tree below root (the rootfs anchor), so it is read without
-// following a symlink and only up to a size limit.
-func getOlricMemberlistPort(envDir string, root rootfs.Root, namespace string) int {
-	envFile := unitenv.Path(envDir, namespace, "olric")
-	f, err := os.Open(envFile)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-
-	// Read OLRIC_SERVER_CONFIG path from env file
-	var configPath string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "OLRIC_SERVER_CONFIG=") {
-			configPath = strings.TrimPrefix(line, "OLRIC_SERVER_CONFIG=")
-			break
-		}
-	}
-	if configPath == "" {
-		return 0
-	}
-
-	// Parse the YAML config to extract memberlist.bindPort
-	configData, err := root.ReadFile(configPath, rootfs.SmallFileLimit)
-	if err != nil {
-		return 0
-	}
-
-	var cfg struct {
-		Memberlist struct {
-			BindPort int `yaml:"bindPort"`
-		} `yaml:"memberlist"`
-	}
-	if err := yaml.Unmarshal(configData, &cfg); err != nil {
-		return 0
-	}
-
-	return cfg.Memberlist.BindPort
-}
-
-// waitForTCPPort polls a TCP port until it accepts connections or the timeout expires.
-func waitForTCPPort(port int, timeout time.Duration) error {
-	addr := fmt.Sprintf("localhost:%d", port)
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err == nil {
-			conn.Close()
-			return nil
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	return fmt.Errorf("port %d did not become ready within %s", port, timeout)
 }

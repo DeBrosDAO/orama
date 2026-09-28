@@ -64,9 +64,12 @@ func TestIndexPortsAreDistinctAndInBlock(t *testing.T) {
 		constants.IPFSAPIPort:         "IPFSAPIPort",
 		constants.IPFSClusterAPIPort:  "IPFSClusterAPIPort",
 		constants.NtfyListenPort:      "NtfyListenPort",
+
+		constants.IPFSClusterKuboProxyPort: "IPFSClusterKuboProxyPort",
+		constants.IPFSClusterSwarmPort:     "IPFSClusterSwarmPort",
 	}
-	if len(ports) != 10 {
-		t.Fatalf("index ports collide: only %d distinct values for 10 services", len(ports))
+	if len(ports) != 12 {
+		t.Fatalf("index ports collide: only %d distinct values for 12 services", len(ports))
 	}
 	for p, name := range ports {
 		if p < constants.IndexPortBase || p >= constants.IndexPortBase+100 {

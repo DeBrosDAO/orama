@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -63,16 +64,24 @@ func (c *tokenCache) invalidate() {
 }
 
 // tokenError classifies a failure to get a bearer. Only a missing credential
-// or an ended session needs `orama auth login`; failing to reach the gateway
-// to renew one, or the gateway failing while it does, is an outage.
+// or an ended session needs `orama auth login`. Failing to reach the gateway
+// to renew one, or any answer that did not refuse the session — a 5xx, a rate
+// limit — leaves the session intact (pkg/auth ends it only on 401/403), so
+// it is an outage to retry, not a reason to sign in again.
 func tokenError(env, gatewayURL string, err error) error {
 	if !strings.Contains(err.Error(), sessionEndedText) {
 		var urlErr *url.Error
 		var gwErr *auth.GatewayError
-		if errors.As(err, &urlErr) || (errors.As(err, &gwErr) && gwErr.Status >= 500) {
+		if errors.As(err, &urlErr) || (errors.As(err, &gwErr) && !sessionRefused(gwErr.Status)) {
 			return withSSHHint(clierr.Unavailable("cannot renew the session with the %s gateway at %s: %v", env, gatewayURL, err))
 		}
 	}
 	return clierr.Auth("no usable credentials for the %s gateway at %s: %v; sign in with `orama env use %s` then `orama auth login`",
 		env, gatewayURL, err, env)
+}
+
+// sessionRefused is whether a renewal status means the gateway refused the
+// session itself.
+func sessionRefused(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }

@@ -33,8 +33,8 @@ func TestUpdateConfig_requiresCredentialsOnTheClusterAPIs(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readJSON(t, filepath.Join(dir, "service.json"))
-	if addr := field(got, "ipfs_connector", "ipfshttp", "node_multiaddress"); addr != ipfs.KuboProxyMultiaddr {
-		t.Errorf("node_multiaddress = %v, want the proxy socket %s", addr, ipfs.KuboProxyMultiaddr)
+	if addr := field(got, "ipfs_connector", "ipfshttp", "node_multiaddress"); addr != ipfs.KuboProxyMultiaddr() {
+		t.Errorf("node_multiaddress = %v, want the proxy %s", addr, ipfs.KuboProxyMultiaddr())
 	}
 	for _, section := range []string{"restapi", "pinsvcapi"} {
 		creds, _ := field(got, "api", section, "basic_auth_credentials").(map[string]interface{})

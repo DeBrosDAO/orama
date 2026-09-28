@@ -154,6 +154,9 @@ func collectIPFS() *IPFSReport {
 		}
 	}
 
+	// 10. OldestPinLockCmd: the oldest active pin/add, pin/update or repo/gc.
+	collectIPFSPinLock(r)
+
 	return r
 }
 

@@ -9,14 +9,16 @@ import (
 
 // ToolDeploy stores a tenant deployment's environment and token where its
 // unit reads them (pkg/deploysecrets): a root-only directory the gateway can
-// no longer plant symlinks in.
+// no longer plant symlinks in; and the drop-in naming the one port the unit
+// may bind (deploybind.go).
 const ToolDeploy = "deploy"
 
-// Deploy operations; <instance> is the unit instance (%i).
+// Deploy operations; <instance> is the unit instance (%i). bind-port
+// <instance> <runtime> <port> is in deploybind.go.
 const (
 	deploySetEnv   = "set-env"   // set-env <instance>, the env file on input
 	deploySetToken = "set-token" // set-token <instance>, the token on input
-	deployClear    = "clear"     // clear <instance>
+	deployClear    = "clear"     // clear <instance>: env, token and bind drop-ins
 )
 
 // MaxDeploySecretBytes caps one staged file: a deployment's environment or its
@@ -37,6 +39,9 @@ func CheckDeployInput(op string, input []byte) error {
 }
 
 func validateDeploy(args []string) error {
+	if len(args) > 0 && args[0] == deployBindPortOp {
+		return validateDeployBindPort(args)
+	}
 	if len(args) != 2 {
 		return fmt.Errorf("deploy takes an operation and an instance")
 	}

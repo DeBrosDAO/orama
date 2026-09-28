@@ -193,7 +193,12 @@ func collectSystem() *SystemReport {
 		}
 	}
 
-	// 11. Current unix timestamp
+	// 11. CPU contention: steal and pressure (cpu.go)
+	collectCPUContention(r)
+	enforced := socketBindEnforced()
+	r.SocketBindEnforced = &enforced
+
+	// 12. Current unix timestamp
 	r.TimeUnix = time.Now().Unix()
 
 	return r

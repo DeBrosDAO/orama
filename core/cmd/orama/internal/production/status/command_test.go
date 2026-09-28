@@ -24,6 +24,8 @@ func TestSplitNamespaceUnit(t *testing.T) {
 		{"orama-namespace-rqlite@anchat", "rqlite", "anchat", true},
 		{"orama-namespace-gateway@index", "gateway", "index", true},
 		{"orama-namespace-olric@my-ns", "olric", "my-ns", true},
+		{"orama-namespace-ipfs-gc@index.timer", "ipfs-gc timer", "index", true},
+		{"orama-namespace-ipfs-gc@.timer", "", "", false}, // template timer
 		{"orama-node", "", "", false},
 		{"coredns", "", "", false},
 		{"orama-namespace-rqlite", "", "", false},  // template, no instance

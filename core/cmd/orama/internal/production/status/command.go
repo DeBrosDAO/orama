@@ -75,7 +75,7 @@ func describe(service string) string {
 	}
 }
 
-// splitNamespaceUnit takes orama-namespace-<role>@<namespace> apart.
+// splitNamespaceUnit takes orama-namespace-<role>@<namespace>[.timer] apart.
 func splitNamespaceUnit(service string) (role, namespace string, ok bool) {
 	const prefix = "orama-namespace-"
 	if !strings.HasPrefix(service, prefix) {
@@ -83,6 +83,10 @@ func splitNamespaceUnit(service string) (role, namespace string, ok bool) {
 	}
 	rest := strings.TrimPrefix(service, prefix)
 	role, namespace, found := strings.Cut(rest, "@")
+	// A timer-driven job is listed by its timer (orama-namespace-ipfs-gc@<ns>.timer).
+	if ns, isTimer := strings.CutSuffix(namespace, ".timer"); isTimer {
+		role, namespace = role+" timer", ns
+	}
 	if !found || role == "" || namespace == "" {
 		return "", "", false
 	}

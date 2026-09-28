@@ -57,10 +57,10 @@ WorkingDirectory=/opt/orama/.orama/data/deployments/%i
 # resolvers silently unreachable.
 BindReadOnlyPaths=/etc/orama/build-resolv.conf:/etc/resolv.conf
 IPAddressDeny=localhost 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10
-# npm dials the registry. bind() of every other address family stays denied.
+# npm dials the registry, which needs no bind(): connect() picks a source port
+# without one. Nothing here listens, so every bind() is denied — a build cannot
+# take a port a platform service or a deployment is about to listen on.
 SocketBindDeny=any
-SocketBindAllow=tcp
-SocketBindAllow=udp
 
 # The build's own cache directory, under a prefix no deployment's own
 # directories can take: theirs are orama-deploy-<instance>, and an instance

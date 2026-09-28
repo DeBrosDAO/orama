@@ -371,3 +371,97 @@ func TestValidateEnvSize_countsEscapedBytes(t *testing.T) {
 		t.Fatal("two 64 KiB values of quotes render to 256 KiB and must be refused")
 	}
 }
+
+// ParseEnvFile reads back exactly what systemd reads from the same file, for
+// every value the encoder has to survive.
+func TestParseEnvFile_readsWhatSystemdReads(t *testing.T) {
+	env := map[string]string{"PORT": "10200"}
+	for k, v := range hostileValues {
+		env[k] = v
+	}
+	rendered, err := RenderEnvFile(env)
+	if err != nil {
+		t.Fatalf("RenderEnvFile: %v", err)
+	}
+	got, err := ParseEnvFile(rendered)
+	if err != nil {
+		t.Fatalf("ParseEnvFile: %v\n%s", err, rendered)
+	}
+	systemd := systemdParseEnvFile(rendered)
+	if len(got) != len(env) || len(systemd) != len(env) {
+		t.Fatalf("parsed %d variables, systemd %d, wrote %d", len(got), len(systemd), len(env))
+	}
+	for key, want := range env {
+		if got[key] != want || systemd[key] != want {
+			t.Errorf("%s: parsed %q, systemd %q, wrote %q", key, got[key], systemd[key], want)
+		}
+	}
+}
+
+// A tenant value can hold a newline followed by PORT=: read line by line, the
+// file would give another tenant's port — or a platform port — to the reader.
+// The value sorts before the real PORT, so a first-match scan takes it.
+func TestParseEnvFile_aValueCannotStandInForPort(t *testing.T) {
+	rendered, err := RenderEnvFile(map[string]string{
+		"APP":  "x\nPORT=10104\nPORT=\"10104\"",
+		"PORT": "10200",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseEnvFile(rendered)
+	if err != nil {
+		t.Fatalf("ParseEnvFile: %v", err)
+	}
+	if got["PORT"] != "10200" {
+		t.Fatalf("PORT read as %q; the tenant's value stood in for it:\n%s", got["PORT"], rendered)
+	}
+}
+
+func TestParseEnvFile_empty(t *testing.T) {
+	got, err := ParseEnvFile("")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("got %v, %v", got, err)
+	}
+}
+
+// Whatever RenderEnvFile cannot have written is refused, not guessed at.
+func TestParseEnvFile_refusesWhatRenderEnvFileCannotWrite(t *testing.T) {
+	for _, contents := range []string{
+		"PORT=10200\n",                // unquoted
+		"PORT='10200'\n",              // single-quoted
+		"PORT=\"10200\"",              // no newline after the value
+		"PORT=\"10200\" \n",           // text after the closing quote
+		"PORT=\"102\\00\"\n",          // a backslash that escapes nothing
+		"PORT=\"10200\n",              // never closed
+		"PORT=\"1\"\nPORT=\"2\"\n",    // assigned twice
+		"# comment\nPORT=\"10200\"\n", // a comment line
+		"\nPORT=\"10200\"\n",          // a blank line
+		"1PORT=\"10200\"\n",           // not a variable name
+		"export PORT=\"10200\"\n",     // not a variable name
+		"no assignment here\n",
+	} {
+		if got, err := ParseEnvFile(contents); err == nil {
+			t.Errorf("%q parsed as %v", contents, got)
+		}
+	}
+}
+
+// The file holds the tenant's secrets; a parse error is shown to an operator
+// and must not carry any of them.
+func TestParseEnvFile_errorsDoNotQuoteTheFile(t *testing.T) {
+	for _, contents := range []string{
+		"DATABASE_URL=postgres://user:hunter2@db/app\n",
+		"DATABASE_URL=\"postgres://user:hunter2@db/app\n",
+		"hunter2 is not an assignment\n",
+		"PORT=\"10200\"\nhunter2\n",
+	} {
+		_, err := ParseEnvFile(contents)
+		if err == nil {
+			t.Fatalf("%q parsed", contents)
+		}
+		if strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("the error quotes the file: %v", err)
+		}
+	}
+}

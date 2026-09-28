@@ -36,6 +36,11 @@ func HandleStart() error {
 	resetArgs = append(resetArgs, services...)
 	exec.Command("systemctl", resetArgs...).Run()
 
+	// A timer's oneshot may have been masked by an older CLI's stop.
+	if err := utils.UnmaskAll(utils.TimerBackingServices(services)); err != nil {
+		return err
+	}
+
 	// Check which services are inactive and need to be started
 	inactive := make([]string, 0, len(services))
 	for _, svc := range services {

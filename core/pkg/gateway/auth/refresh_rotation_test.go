@@ -923,3 +923,15 @@ func TestRevokeToken_burnsGrace_blocksLogoutBypass(t *testing.T) {
 		t.Errorf("no session should be minted for a logged-out token; inserts=%d", ormDB.inserted)
 	}
 }
+
+// A gateway that cannot reach its own registry must say so as a retryable
+// failure (503), never as a rejected token (401): the CLI ends a session only
+// on a rejection.
+func TestRefreshToken_registryUnavailableIsTransient(t *testing.T) {
+	s, _, _ := newRotationTestService(t)
+	s.orm = nil
+	_, _, _, _, err := s.RefreshToken(context.Background(), "any", "anchat-test", nil)
+	if !errors.Is(err, ErrRefreshTransient) {
+		t.Fatalf("err = %v, want ErrRefreshTransient", err)
+	}
+}
