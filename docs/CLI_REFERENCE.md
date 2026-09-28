@@ -119,6 +119,8 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama monitor service`](#orama-monitor-service) — Service status across the cluster (one-shot)
   - [`orama monitor traffic`](#orama-monitor-traffic) — Gateway requests, errors and latency (one-shot)
 - [`orama namespace`](#orama-namespace) — Manage namespaces
+  - [`orama namespace backup-open`](#orama-namespace-backup-open) — Decrypt a backup file with an X25519 private key
+  - [`orama namespace backup-seal`](#orama-namespace-backup-seal) — Encrypt a backup file to an X25519 public key
   - [`orama namespace create`](#orama-namespace-create) — Create a namespace and start its cluster
   - [`orama namespace delete`](#orama-namespace-delete) — Delete the current namespace and all its resources
   - [`orama namespace disable`](#orama-namespace-disable) — Disable a feature for a namespace
@@ -1660,7 +1662,40 @@ Aliases: `ns`
 
 List, delete, and repair namespaces on the Orama network.
 
-Subcommands: `create`, `delete`, `disable`, `enable`, `keys`, `list`, `repair`, `rqlite`, `webrtc-status`
+Subcommands: `backup-open`, `backup-seal`, `create`, `delete`, `disable`, `enable`, `keys`, `list`, `repair`, `rqlite`, `webrtc-status`
+
+### orama namespace backup-open
+
+Decrypt a backup file with an X25519 private key
+
+```
+orama namespace backup-open [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--in` | — | input file |
+| `--key` | — | 32-byte X25519 key, hex (public for seal, private for open) |
+| `--out` | — | output file |
+
+### orama namespace backup-seal
+
+Encrypt a backup file to an X25519 public key
+
+```
+orama namespace backup-seal [flags]
+```
+
+Encrypt a file to the owner's backup public key.
+
+The cluster holds only that public key. It cannot decrypt the file.
+The full namespace restore (RQLite, pins, and secret re-wrap) is not this command.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--in` | — | input file |
+| `--key` | — | 32-byte X25519 key, hex (public for seal, private for open) |
+| `--out` | — | output file |
 
 ### orama namespace create
 
