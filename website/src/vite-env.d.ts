@@ -16,7 +16,7 @@ declare module "virtual:docs-search-index" {
     pageSlug: string;
     sectionTitle: string;
     sectionId: string;
-    persona: "developer" | "operator" | "contributor";
+    persona: "developer" | "operator" | "contributor" | "blockchain";
   }
   export const SECTION_INDEX: SectionEntry[];
 }

@@ -36,7 +36,7 @@ Three design commitments explain most of the architecture:
 
 **What Orama is not:**
 
-- **Not a blockchain, and not a token project.** Wallet signatures are used only as a login method. There is no chain, no token, and no on-chain logic in the request path.
+- **Not a chain in the request path.** Wallet signatures are still only a login method for apps. Hosting, databases, functions, and storage do not settle on the ledger. A separate ledger does exist. Section 3.6 describes it. Its token is not required to deploy or to call the gateway, and `orama node install` does not start it.
 - **Not censorship-proof.** Nodes are ordinary servers at ordinary hosting providers. Orama is designed so that losing any single node does not take an application down. That is resilience, not immunity.
 - **Not a defense against a hostile hypervisor.** Anyone who can read the memory of a running server can read what that server is processing. Section 5 states this precisely.
 - **Not finished.** Orama is alpha software running on two small networks. It is not open for public sign-up.
@@ -87,6 +87,16 @@ Orama is its own nameserver. CoreDNS on the nameserver nodes answers from a tabl
 
 Caddy terminates public TLS and obtains certificates automatically through DNS-01 challenges written into the network's own DNS. Certificates cover the network's own domains, so every deployment gets an HTTPS address under them. A custom domain can be attached and verified by a TXT record, but certificates for custom domains are not issued yet: the TLS check accepts only subdomains of the network's base domain.
 
+### 3.6 The ledger
+
+`oramad` is a Cosmos SDK application on CometBFT. It lives in `chain/`, its own Go module. The node process does not import it. Accounts use the `orama` prefix. The unit of account is `norama`. One ORAMA is one billion norama.
+
+A normal genesis mints nothing. New coins are created once per epoch, and an epoch closes only after 24 hours of block time and 14,400 blocks. The per-epoch maximum starts at 14,848 ORAMA and halves every 730 epochs across five brackets, then continues forever at 274 ORAMA per epoch. There is no terminal cap. Only 60% of each epoch's maximum is minted, and it is paid to validators and delegators according to voting power, not raw stake. The storage, relay, and development shares are recorded and are not minted. No module pays them.
+
+Voting power is capped, ramped over 30 epochs, and bounded so redistribution cannot more than double a validator's raw stake share. Fees use a base fee that is entirely burned. Tips go to the block proposer. There is no on-chain governance, no IBC, and no shielded transfer.
+
+The chain is not installed by `orama node install`. A separate script can place it on a devnet or stagenet chain id. App requests do not pass through it. The pages under the docs site's Blockchain tab are the full description.
+
 ## 4. Services
 
 Everything below is reached through the `orama` CLI, the TypeScript SDK, the Go client, or the gateway's HTTP API. There is no web dashboard, and none is planned.
@@ -108,6 +118,7 @@ Everything below is reached through the `orama` CLI, the TypeScript SDK, the Go 
 | Push notifications | Direct APNs, a self-hosted ntfy server for Android and web, and Expo for Android via Google | APNs, ntfy, Expo | Live |
 | Anonymity proxy | Outbound HTTP and TCP tunnels through the Tor network | Tor client (client only) | Live |
 | Vault | Secrets split with Shamir's scheme across guardian nodes | Zig guardian | Partial |
+| Ledger and token | Epoch-minted ORAMA, burned base fees, voting power from stake with a cap | Cosmos SDK, CometBFT | In source. Not started by node install. Not on the app request path |
 
 ### Hosting
 
@@ -256,6 +267,7 @@ OramaOS is **built but has never been booted** on a live network. Known gaps inc
 - **Tenant monitoring and alerting.** Tenants have health endpoints, namespace status, deployment logs and the audit trail. There is no metrics endpoint and no alerting.
 - **Enforced storage quotas.** Quotas exist but are opt-in, and no namespace has one by default.
 - **Scale evidence.** The design allows 20 namespaces per node and grows by adding nodes, but it has been exercised only at the scale of a few nodes and a few tenants.
+- **A public chain.** The ledger in Section 3.6 is implemented and tested in the repository. It is not what `orama node install` starts, storage and relay rewards are not paid, there is no governance, and app traffic does not use it. A devnet or stagenet chain id can be brought up with `chain/scripts/stagenet/deploy.sh`. That is not a network you can treat as carrying value.
 
 **Self-audit.** We audit our own system and publish what we find. An earlier review that treated the hosting provider as the adversary produced ninety findings. Two further audits in September 2026 covered stability (35 items) and authentication and authorization (29 items). All stability items and all but three authentication items are now implemented in code and awaiting review. Several of the changes described in this paper, including authenticated RQLite, the WebAssembly egress filter, per-gateway signing keys, secret rotation and encrypt-before-add storage, landed in the current release line in September 2026 and are being rolled out to the live networks. The remaining open findings are concentrated in OramaOS and the vault and are tracked openly.
 
@@ -286,6 +298,7 @@ Orama is developed in the open.
 | Core: node, gateway, CLI, Go client | Go | AGPL-3.0 |
 | Vault guardian | Zig | AGPL-3.0 |
 | OramaOS and its agent | Go, Buildroot | AGPL-3.0 |
+| Chain: `oramad` | Go (Cosmos SDK) | AGPL-3.0 |
 | TypeScript SDK | TypeScript | MIT |
 | Vault client SDK | TypeScript | MIT |
 

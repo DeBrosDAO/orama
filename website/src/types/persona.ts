@@ -1,1 +1,1 @@
-export type Persona = "developer" | "operator" | "contributor";
+export type Persona = "developer" | "operator" | "contributor" | "blockchain";

@@ -80,6 +80,7 @@ function docsSearchIndexPlugin(): Plugin {
             let persona = "developer";
             if (slug.startsWith("operator/")) persona = "operator";
             else if (slug.startsWith("contributor/")) persona = "contributor";
+            else if (slug.startsWith("blockchain/")) persona = "blockchain";
 
             const titleMatch = raw.match(/^#\s+(.+)$/m);
             const pageTitle = titleMatch?.[1] ?? slug;

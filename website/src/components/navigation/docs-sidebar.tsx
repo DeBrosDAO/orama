@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Search, Menu, X, ChevronDown, Code2, Server, GitBranch, Check } from "lucide-react";
+import { Search, Menu, X, ChevronDown, Code2, Server, GitBranch, Blocks, Check } from "lucide-react";
 import {
   PERSONA_DOCS,
   PERSONA_FIRST_SLUG,
@@ -24,11 +24,13 @@ const PERSONAS: {
   { key: "developer", label: "Developers", icon: Code2, desc: "SDK, CLI, and API docs" },
   { key: "operator", label: "Operators", icon: Server, desc: "Node setup and monitoring" },
   { key: "contributor", label: "Contributors", icon: GitBranch, desc: "Source code and tooling" },
+  { key: "blockchain", label: "Blockchain", icon: Blocks, desc: "The Orama ledger, token, and validators" },
 ];
 
 function getPersonaFromPath(pathname: string): Persona {
   if (pathname.startsWith("/docs/operator")) return "operator";
   if (pathname.startsWith("/docs/contributor")) return "contributor";
+  if (pathname.startsWith("/docs/blockchain")) return "blockchain";
   return "developer";
 }
 

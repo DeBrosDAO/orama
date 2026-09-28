@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DOCS = resolve(HERE, "../../docs");
+const CHAIN_DOCS = resolve(HERE, "../src/docs/blockchain");
 const DIST = resolve(HERE, "../dist");
 const BASE = "https://orama.network";
 
@@ -20,8 +21,10 @@ const PROJECT = "Orama Network";
 const SUMMARY =
   "Orama Network is a decentralized platform for deploying web apps, " +
   "SQLite databases and serverless WASM functions across a peer-to-peer node " +
-  "network, reached through a single API gateway per namespace. Custom domains " +
-  "can be verified, but certificates are issued only on the network's own domain.";
+  "network, reached through a single API gateway per namespace. A separate " +
+  "Cosmos SDK ledger, oramad, mints the ORAMA token. Application requests do " +
+  "not pass through that ledger. Custom domains can be verified, but " +
+  "certificates are issued only on the network's own domain.";
 
 // section -> [ [sourceDocPath, slug, title, description] ]
 const MANIFEST = {
@@ -61,8 +64,26 @@ function build() {
     lines.push("");
   }
 
+  const chainPages = [
+    ["what-it-is.mdx", "blockchain-what-it-is", "The Orama chain", "What oramad is, which modules are wired, and what is deliberately absent."],
+    ["supply.mdx", "blockchain-supply", "ORAMA supply", "norama, the epoch schedule, and which shares are actually minted."],
+    ["fees.mdx", "blockchain-fees", "Chain fees", "Base fee burn, tips, state deposits, and earnings accounts."],
+    ["validators.mdx", "blockchain-validators", "Validators and voting power", "x/power, the stake cap, rewards, and slashing."],
+    ["running.mdx", "blockchain-running", "Running a chain node", "Ports, chain id, and the stagenet installer. orama node install does not start the chain."],
+  ];
+  lines.push("## Blockchain", "");
+  for (const [srcName, slug, title, desc] of chainPages) {
+    const src = join(CHAIN_DOCS, srcName);
+    if (!existsSync(src)) {
+      throw new Error(`build-llms: source doc missing: ${src} (referenced by "${title}")`);
+    }
+    copyFileSync(src, join(llmsDir, `${slug}.md`));
+    lines.push(`- [${title}](${BASE}/llms/${slug}.md): ${desc}`);
+  }
+  lines.push("");
+
   writeFileSync(join(DIST, "llms.txt"), lines.join("\n"));
-  const count = Object.values(MANIFEST).reduce((n, e) => n + e.length, 0);
+  const count = Object.values(MANIFEST).reduce((n, e) => n + e.length, 0) + chainPages.length;
   console.log(`build-llms: wrote llms.txt + ${count} docs to ${llmsDir}`);
 }
 

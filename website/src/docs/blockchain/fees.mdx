@@ -1,0 +1,22 @@
+# Fees
+
+Every transaction pays a base fee. The base fee behaves like EIP-1559.
+
+- The target is a block that is half full.
+- The base fee can move by at most 12.5% from one block to the next.
+- The floor is 1 norama per unit of gas. Genesis starts the base fee at that floor.
+- 100% of the base fee is burned.
+
+A tip, if the sender adds one, is credited to the block proposer's earnings account. The tip must be paid from the sender's public bank balance. It cannot be paid from earnings. A fee granter can sponsor the base fee from their own bank balance only. A granter cannot draw on earnings.
+
+## Earnings
+
+Rewards and tips are credited to an earnings account, not to the normal bank balance. Earnings can pay a base fee, and they can be bonded. They cannot be sent as an ordinary payment. That restriction is what stops a reward from becoming a transfer to an arbitrary address.
+
+## State deposits
+
+Some state is paid for with a deposit. When that state is released, 99% of the deposit is refunded to the owner's earnings account and 1% is burned.
+
+## What fees are not
+
+App hosting, databases, functions, and storage on the Orama gateway are not metered by this chain. Nothing in the gateway charges `norama` for a request. The business-model sentence in the whitepaper still holds for the platform: there is no billing there yet. Chain fees apply only to transactions on `oramad`.

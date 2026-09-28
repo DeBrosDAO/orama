@@ -1,0 +1,50 @@
+# Supply
+
+A normal genesis creates no `norama`. A genesis with coins already in accounts is allowed only on a devnet, stagenet, or localnet chain id, and only when emission is started with `--allow-bootstrap-stake`.
+
+New coins are minted once per epoch, not once per block.
+
+## When an epoch closes
+
+Both conditions have to be true:
+
+- at least 24 hours of block time have passed since the epoch started
+- at least 14,400 blocks have been produced in the epoch
+
+If blocks arrive faster than that, the epoch still waits for the 24 hours. If blocks arrive slower, the epoch waits for the 14,400th block. Together those floors are about one block every 6 seconds.
+
+A halt does not mint the epochs that were missed. The next close moves the schedule forward by exactly one epoch.
+
+On a devnet or stagenet chain id, `--allow-bootstrap-stake` also relaxes those two floors. The stagenet installer uses a 300 second epoch and 10 blocks. That is not the production schedule.
+
+None of the three emission parameters can be changed after genesis. `x/emission` has no message service.
+
+## The schedule
+
+The maximum for one epoch is fixed in code, in whole ORAMA. Halving counts epochs, not calendar days.
+
+| Epochs | Maximum per epoch |
+|---|---|
+| 1–730 | 14,848 ORAMA |
+| 731–1460 | 7,424 ORAMA |
+| 1461–2190 | 3,712 ORAMA |
+| 2191–2920 | 1,856 ORAMA |
+| 2921–3650 | 928 ORAMA |
+| 3651 onward | 274 ORAMA, every epoch, with no end |
+
+At one epoch a day, the five brackets are 10 years. Their maximum adds up to 21,000,640 ORAMA. After epoch 3650 the chain does not stop minting. Each later epoch may add another 274 ORAMA. There is no terminal supply cap.
+
+## What is actually created
+
+Each epoch's maximum is split four ways. Only one share is minted.
+
+| Share | Percent | What happens |
+|---|---|---|
+| Validators and delegators | 60% | Minted, then paid by `x/power` |
+| Storage | 25% | Written down as a ceiling. Not minted. |
+| Relay | 10% | Written down as a ceiling. Not minted. |
+| Development | 5% | Written down as a ceiling. Not minted. |
+
+If every one of the 3,650 halving epochs hits its maximum, the chain mints 12,600,384 ORAMA. The other 8,400,256 ORAMA in that 10-year maximum is never created. Ceiling records are kept for 30 epochs and then deleted. No module pays a storage, relay, or development reward.
+
+The validator share is paid on voting power, not on raw stake. See [Validators](/docs/blockchain/validators). The coins land in an earnings balance. Earnings can pay a base fee or be bonded. They are not a normal spendable balance. A tip has to come from the public bank balance. See [Fees](/docs/blockchain/fees).
