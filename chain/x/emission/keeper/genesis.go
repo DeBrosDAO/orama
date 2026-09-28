@@ -44,6 +44,9 @@ func (k Keeper) InitGenesis(ctx sdk.Context, genState types.GenesisState) error 
 	if err := checkBootstrapChainID(ctx, genState.Params); err != nil {
 		return err
 	}
+	if state.CumulativeDevelopmentMinted.IsNil() {
+		state.CumulativeDevelopmentMinted = math.ZeroInt()
+	}
 	isFreshGenesis := state.CurrentEpoch <= 1 && state.CumulativeMinted.IsZero()
 	if isFreshGenesis {
 		state.CurrentEpoch = 1
@@ -60,6 +63,9 @@ func (k Keeper) InitGenesis(ctx sdk.Context, genState types.GenesisState) error 
 	}
 
 	for _, record := range genState.Ceilings {
+		if record.DevelopmentMinted.IsNil() {
+			record.DevelopmentMinted = math.ZeroInt()
+		}
 		if err := k.Ceilings.Set(ctx, record.Epoch, record); err != nil {
 			return fmt.Errorf("failed to set emission ceiling record for epoch %d: %w", record.Epoch, err)
 		}

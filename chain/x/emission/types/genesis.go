@@ -13,12 +13,13 @@ func DefaultGenesisState() *GenesisState {
 	return &GenesisState{
 		Params: DefaultParams(),
 		EpochState: EpochState{
-			CurrentEpoch:       1,
-			EpochStartUnixNano: 0,
-			BlocksInEpoch:      0,
-			CumulativeMinted:   math.ZeroInt(),
-			CumulativeBurned:   math.ZeroInt(),
-			GenesisSupply:      math.ZeroInt(),
+			CurrentEpoch:                1,
+			EpochStartUnixNano:          0,
+			BlocksInEpoch:               0,
+			CumulativeMinted:            math.ZeroInt(),
+			CumulativeBurned:            math.ZeroInt(),
+			GenesisSupply:               math.ZeroInt(),
+			CumulativeDevelopmentMinted: math.ZeroInt(),
 		},
 		Ceilings: []CeilingRecord{},
 	}
@@ -62,6 +63,7 @@ func (gs GenesisState) Validate() error {
 	}
 
 	seen := make(map[uint64]bool, len(gs.Ceilings))
+	developmentMintedSum := math.ZeroInt()
 	for _, c := range gs.Ceilings {
 		if seen[c.Epoch] {
 			return fmt.Errorf("duplicate ceiling record for epoch %d", c.Epoch)
@@ -77,6 +79,14 @@ func (gs GenesisState) Validate() error {
 		if c.StorageCeiling.IsNil() || c.RelayCeiling.IsNil() || c.DevelopmentCeiling.IsNil() || c.ValidatorMinted.IsNil() {
 			return fmt.Errorf("ceiling record for epoch %d has a nil amount", c.Epoch)
 		}
+		mintedDev := c.DevelopmentMinted
+		if mintedDev.IsNil() {
+			mintedDev = math.ZeroInt()
+		}
+		if mintedDev.IsNegative() || mintedDev.GT(c.DevelopmentCeiling) {
+			return fmt.Errorf("ceiling record for epoch %d development_minted must be in [0, development_ceiling], got %s", c.Epoch, mintedDev)
+		}
+		developmentMintedSum = developmentMintedSum.Add(mintedDev)
 
 		want := SplitEpochMint(MaxMintableForEpoch(c.Epoch))
 		if !c.StorageCeiling.Equal(want.Storage) || !c.RelayCeiling.Equal(want.Relay) ||
@@ -87,6 +97,19 @@ func (gs GenesisState) Validate() error {
 				want.Storage, want.Relay, want.Development, want.Validator,
 			)
 		}
+	}
+
+	cumulativeDevelopment := gs.EpochState.CumulativeDevelopmentMinted
+	if cumulativeDevelopment.IsNil() {
+		cumulativeDevelopment = math.ZeroInt()
+	}
+	if cumulativeDevelopment.IsNegative() {
+		return fmt.Errorf("cumulative_development_minted must be a non-negative integer")
+	}
+	// Records still inside the window cannot sum to more than the all-time total.
+	// The total may be larger: pruning drops the record and keeps the cumulative.
+	if cumulativeDevelopment.LT(developmentMintedSum) {
+		return fmt.Errorf("cumulative_development_minted %s is less than the %s still recorded on ceiling records", cumulativeDevelopment, developmentMintedSum)
 	}
 
 	return nil

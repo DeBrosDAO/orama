@@ -155,6 +155,20 @@ func TestGenesisState_Validate_rejectsNilCeilingAmount(t *testing.T) {
 	require.Error(t, gs.Validate())
 }
 
+func TestGenesisState_Validate_rejectsDevelopmentMintAboveCeiling(t *testing.T) {
+	gs := genesisAfterEpoch1()
+	gs.Ceilings[0].DevelopmentMinted = gs.Ceilings[0].DevelopmentCeiling.AddRaw(1)
+	gs.EpochState.CumulativeDevelopmentMinted = gs.Ceilings[0].DevelopmentMinted
+	require.Error(t, gs.Validate())
+}
+
+func TestGenesisState_Validate_rejectsCumulativeDevelopmentBelowRecords(t *testing.T) {
+	gs := genesisAfterEpoch1()
+	gs.Ceilings[0].DevelopmentMinted = math.NewInt(10)
+	gs.EpochState.CumulativeDevelopmentMinted = math.NewInt(9)
+	require.Error(t, gs.Validate())
+}
+
 func TestParamsValidate_rejectsDurationThatWouldOverflow(t *testing.T) {
 	for _, secs := range []int64{9_300_000_000, 18_446_744_074} {
 		p := types.Params{EpochDurationSeconds: secs, MinBlocksPerEpoch: 1, AllowBootstrapStake: true}

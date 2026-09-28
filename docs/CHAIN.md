@@ -2,7 +2,7 @@
 
 **Status: first code, devnet/localnet only.** Nothing here has run on a public network. This
 document describes only what `chain/` actually does today; the full design (including everything
-not yet built - staking power caps, governance, storage, relay, shielding, CosmWasm, and so on) is
+not yet built or not yet wired - storage, relay, shielding, CosmWasm, and so on) is
 in `plans/open-network.md` and `plans/open-network/track-c-chain.md`.
 
 `chain/` is its own Go module (`github.com/DeBrosOfficial/network/chain`). `core/go.mod` does not
@@ -32,27 +32,29 @@ require it, and nothing in `chain/` imports `core/`.
 | `power` (custom, `chain/x/power`) | voting power, the bootstrap committee, and the hand-over factor lambda (C4) |
 | `fees` (custom, `chain/x/fees`) | the EIP-1559-style base fee, earnings accounts, and the state-deposit ledger (C2) |
 
-**Not wired**, on purpose: `x/gov`, `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs`
+**Not wired**, on purpose: `x/houses` (implemented, see below; not registered in `app.go`), `x/gov`, `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs`
 (x/emission tracks its own epochs directly in its `BeginBlock`), `x/group`, `x/nft`, `x/circuit`,
 `x/crisis`, IBC, and anything EVM/CosmWasm. `x/auth/vesting` is not wired either: nothing in this
 module's genesis or gentx flow needs it. `x/token` is implemented in `chain/x/token` but is not
 registered in `app.go`, so it is not part of `oramad` either (see "`x/token`" below).
 
-**No governance module exists yet.** Every module that the upstream SDK expects to be governed by
-`x/gov` (upgrade, consensus params, bank, staking, slashing, distribution) is instead given an
-"authority" address that is the hash of a dedicated, never-registered module name,
-`"orama/no-authority"` - `app.UnreachableAuthority()` in `chain/app/app.go`. That name is
-deliberate: using `"gov"` instead would mean that simply registering a standard `x/gov` module in
-some future release silently hands it control of every authority-gated message on the chain today,
-with no explicit migration step. Because no module by this name is ever registered, no private key
-or module account can ever produce a valid signature for it, so every authority-gated message on
-this chain (`MsgSoftwareUpgrade`, every module's `MsgUpdateParams`, ...) is permanently unreachable
-until a future release wires real governance (`x/houses`, `plans/open-network.md` D17) and
-deliberately migrates the authority. Today, the only way to change this chain's behavior is a
-coordinated hard fork (a new binary, a halt height, and validators choosing to run it) - never an
-on-chain vote or an admin key. `TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg` in
-`chain/app/app_test.go` proves bank, staking, distribution, consensus and upgrade's
-authority-gated messages all reject a signer that isn't this address.
+**`x/houses` is implemented and not wired into `app.go`.** The running binary therefore still has
+no governance. Every module that the upstream SDK expects to be governed by `x/gov` (upgrade,
+consensus params, bank, staking, slashing, distribution) is instead given an "authority" address
+that is the hash of a dedicated, never-registered module name, `"orama/no-authority"` -
+`app.UnreachableAuthority()` in `chain/app/app.go`. That name is deliberate: using `"gov"` instead
+would mean that simply registering a standard `x/gov` module in some future release silently hands
+it control of every authority-gated message on the chain today, with no explicit migration step.
+Because no module by this name is ever registered, no private key or module account can ever
+produce a valid signature for it, so every authority-gated message on this chain
+(`MsgSoftwareUpgrade`, every module's `MsgUpdateParams`, ...) is permanently unreachable until a
+future release registers `x/houses` and deliberately migrates that authority. On a node running
+this binary, the only way to change the chain's behavior is still a coordinated hard fork (a new
+binary, a halt height, and validators choosing to run it) - never an on-chain vote or an admin key.
+`TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg` in `chain/app/app_test.go` proves bank,
+staking, distribution, consensus and upgrade's authority-gated messages all reject a signer that
+isn't this address. What `x/houses` itself will do once it is registered is described under
+"`x/houses`" below. Until then its `EndBlock` does not run.
 
 ### Denom and accounts
 
@@ -154,21 +156,28 @@ invariants section below).
 ### The split, and what actually gets minted
 
 Every closed epoch's maximum splits 60% validators/delegators, 25% storage, 10% relay, 5%
-development (`chain/x/emission/types/split.go`). **Today, only the 60% validator/delegator share
-is ever minted.** It is minted into `x/emission`'s own module account and immediately handed to
-`x/power.Keeper.DistributeEpochRewards` (`x/emission`'s `PowerKeeper` dependency), which pays it
-out on **capped power `P_i`** - not on raw stake, and not through `x/distribution` - split between
-each validator's own share (commission, plus any of its own self-delegation's cut) and its
+development (`chain/x/emission/types/split.go`). **`closeEpoch` mints only the 60%
+validator/delegator share.** It is minted into `x/emission`'s own module account and immediately
+handed to `x/power.Keeper.DistributeEpochRewards` (`x/emission`'s `PowerKeeper` dependency), which
+pays it out on **capped power `P_i`** - not on raw stake, and not through `x/distribution` - split
+between each validator's own share (commission, plus any of its own self-delegation's cut) and its
 delegators' pro-rata shares, credited straight into every recipient's **earnings account**
 (`x/fees`). See "`x/power`: voting power..." below for the full mechanism, including bootstrap
 committee force-bonding.
 
-The storage, relay and development shares are **never minted**: they are recorded as a
-`CeilingRecord` (per epoch: storage/relay/development ceiling amounts plus the validator amount
-actually minted) so that `x/storage`, `x/relay` and a future `x/houses` development spend (none of
-which exist yet) can claim them within their own settlement window once they do. `x/emission` only
-keeps the trailing 30 epochs of these records (`types.CeilingWindow`) and prunes older ones -
-nothing currently reads an expired one, so nothing is lost by pruning it.
+The storage and relay shares are **never minted**: they are recorded on a `CeilingRecord`. The
+development share is also recorded there and stays unminted at epoch close.
+`Keeper.MintDevelopmentSpend` is the only later mint, and only for an amount that is positive and
+no greater than that epoch's 5% development ceiling minus what this method has already minted for
+the same epoch. It refuses every other amount, mints into the emission module account, and does
+not pay a recipient itself. `x/houses` is the caller; it is not wired into `app.go`, so a running
+node never takes this path today. Each `CeilingRecord` also stores `development_minted`. The
+all-time total is `cumulative_development_minted`, which is **not** part of `cumulative_minted`
+(that field stays the validator share, so the schedule equality check is unchanged). Supply is
+`genesis_supply + cumulative_minted + cumulative_development_minted - cumulative_burned`.
+`x/emission` keeps the trailing 30 epochs of ceiling records (`types.CeilingWindow`) and prunes
+older ones. Pruning does not reduce `cumulative_development_minted`. Nothing reads an expired
+ceiling, so a spend against a pruned epoch is refused.
 
 Remainders from each share's integer division always fold into the validator share, so the four
 shares of any epoch's maximum sum back to that maximum exactly, to the norama.
@@ -216,7 +225,7 @@ bonded or not-bonded stake on a double-sign or downtime slash, and `x/fees`' ant
 has already minted the block's validator share (and updated `cumulative_minted` to match) by the
 time `EndBlock` runs, `x/emission`'s `EndBlock` (`Keeper.ReconcileBurns`, run last in `app.go`'s
 end-blocker order) compares live bank supply against
-`genesis_supply + cumulative_minted - cumulative_burned`: any shortfall it finds must be a burn
+`genesis_supply + cumulative_minted + cumulative_development_minted - cumulative_burned`: any shortfall it finds must be a burn
 that happened elsewhere this block, and gets added to `cumulative_burned`. This keeps the supply
 invariant holding without `x/emission` needing a direct dependency on `x/slashing` or `x/fees`.
 
@@ -240,8 +249,9 @@ invariant holding without `x/emission` needing a direct dependency on `x/slashin
    `CloseEpoch` mints that exact amount unconditionally every time an epoch closes. Every
    `CeilingRecord` is checked the same way: its four amounts must match `SplitEpochMint` for its
    epoch exactly.
-2. **Supply matches minted:** `bank_supply == genesis_supply + cumulative_minted - cumulative_burned`,
-   with `cumulative_burned` kept current by `ReconcileBurns` (above).
+2. **Supply matches minted:** `bank_supply == genesis_supply + cumulative_minted + cumulative_development_minted - cumulative_burned`,
+   with `cumulative_burned` kept current by `ReconcileBurns` (above). `cumulative_development_minted`
+   is zero until `MintDevelopmentSpend` runs.
 
 Both are exposed as `oramad query emission invariants` and as a keeper-level Go function
 (`Keeper.CheckSupplyInvariant`) any test can call directly. They are checked on every `InitGenesis`
@@ -615,6 +625,54 @@ State is one record per token plus one key per frozen account. A transfer is a s
 plus a burn when a fee is due. The invariant walks every token, the same shape as x/fees'
 deposit walk.
 
+## `x/houses`: two-house governance
+
+`chain/x/houses` implements plans/open-network/track-c-chain.md C5 and decisions D17 and D18.
+**It is not registered in `chain/app/app.go`**, so `oramad` does not route its messages or run its
+`EndBlock`. The module account `houses` is not created. The rules below are what the keeper does
+when tests, or a later wiring, call it.
+
+Nobody governs during bootstrap. The parameter tier opens only when bonded stake is at least
+`bootstrap_exit_stake` (genesis default 271000 ORAMA) **or** lambda is at least 1, **and** the
+eligible operator house has at least 21 members. The structural tier and development spends open
+only when lambda is at least 1 **and** those 21 sit across at least 7 distinct /16 networks and 5
+ASNs. Lambda comes from a `PowerKeeper` interface; this module does not import `x/power` or
+`x/nodes`. Before a tier is open, its proposals are rejected and parameters stay at genesis.
+
+The token house is stake-weighted. Quorum is a fraction of bonded stake (default 0.4, bounds
+0.334–0.667). A pass also needs yes > no and yes at least half of the weight that voted. Stake
+that inherits a validator's vote is capped at 3% of bonded stake per validator. A direct vote
+removes that delegator's stake from the validator's bucket and counts the full amount.
+
+The operator house is one vote per identity with at least 90 days of proven service and a locked
+`house_bond` (default 1000 ORAMA). At most 3 identities per /16 and 5 per ASN are eligible
+(genesis defaults; a parameter vote can move the caps inside 1–21). Earlier locks win ties.
+A second, different vote on the same proposal burns the bond and does not change the first vote.
+That vote no longer counts, even if the operator locks a new bond. The bond cannot be unlocked
+while the operator has a vote on a proposal still in voting or the veto window.
+
+Parameter proposals pass in the token house, then the operator house has 7 days to veto with NO
+votes from at least 30% of the eligible set. Structural proposals need a token-house pass and a
+yes from more than half of the eligible operator house. There is no expedited status and no
+expedited message. After passage, execution waits 14 days for parameters, 60 days for upgrades
+and the other structural actions, and 7 days for spends.
+
+A passed spend calls `x/emission.Keeper.MintDevelopmentSpend` and then
+`EarningsKeeper.CreditEarnings` (implemented by `x/fees` once wired; tests use a fake). If the
+mint refuses the amount, the proposal is marked failed and nothing is credited. Other structural
+decisions are stored on `Enacted` only: a software-upgrade name and height, an emission split
+within ±10 points of 60/25/10/5, a one-way M activation and an `m_max` in [0.75, 1.25], and
+relay-reporter / code-upload / adapter allow-lists. `x/emission`'s schedule, tail and mint math
+do not read the split. `x/power` does not read M. No allow-list is enforced outside this module.
+
+Ossified rules have no message and no field a message can set: the emission schedule and tail,
+the burn rule, privacy-by-default, and the absence of freeze, blacklist, halt, pause, circuit
+breaker, multisig or authority. `bootstrap_exit_stake` is genesis-only. `TestNoMessageReachesAnOssifiedField`
+walks every `sdk.Msg` and rejects a field that is not on the allow-list.
+
+The bond invariant is: sum of locked house bonds equals the `houses` module account balance.
+Queries, once the module is wired, are `oramad query houses params|proposal|tiers|invariants`.
+
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
 `oramad`'s default `app-db-backend` is **`pebbledb`**, not the SDK's own default (`goleveldb`).
@@ -755,6 +813,11 @@ for anything that does.
 
 ## Deviations from the task spec, and why
 
+- **`x/houses` is not registered in `app.go`.** Its keeper, messages and tests exist. A running
+  node does not execute them, and stock `x/gov` is still absent. Authority-gated SDK messages
+  stay unreachable. Structural decisions other than a development spend are stored in `x/houses`
+  and are not applied to `x/emission`, `x/power` or the upgrade module. Private delegator ballots
+  are not implemented (they wait on shielded delegation, C12).
 - **No `x/mint`, `x/gov`, `x/epochs` wiring**, as specified. `x/emission` tracks epochs directly
   in its own `BeginBlock` rather than depending on `x/epochs`, since it only ever needs one epoch
   definition.

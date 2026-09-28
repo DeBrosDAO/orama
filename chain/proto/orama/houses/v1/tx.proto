@@ -1,0 +1,104 @@
+syntax = "proto3";
+package orama.houses.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/houses/types";
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "gogoproto/gogo.proto";
+import "orama/houses/v1/houses.proto";
+
+// Msg is x/houses' transaction service. There is no authority signer, no
+// expedited method, and no method whose fields name an ossified rule.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc SubmitProposal(MsgSubmitProposal) returns (MsgSubmitProposalResponse);
+  rpc VoteToken(MsgVoteToken) returns (MsgVoteTokenResponse);
+  rpc VoteOperator(MsgVoteOperator) returns (MsgVoteOperatorResponse);
+  rpc LockHouseBond(MsgLockHouseBond) returns (MsgLockHouseBondResponse);
+  rpc UnlockHouseBond(MsgUnlockHouseBond) returns (MsgUnlockHouseBondResponse);
+  rpc ExecuteProposal(MsgExecuteProposal) returns (MsgExecuteProposalResponse);
+}
+
+// MsgSubmitProposal opens a proposal. The tier for its content must already
+// be open. During bootstrap this fails.
+message MsgSubmitProposal {
+  option (cosmos.msg.v1.signer) = "proposer";
+  option (amino.name) = "orama/houses/MsgSubmitProposal";
+
+  string proposer = 1;
+  ProposalContent content = 2 [(gogoproto.nullable) = false];
+}
+
+message MsgSubmitProposalResponse {
+  uint64 proposal_id = 1;
+}
+
+// MsgVoteToken is a direct token-house vote. It overrides the voter's
+// validator for the voter's own bonded stake. Delegated weight is capped
+// separately at tally time.
+message MsgVoteToken {
+  option (cosmos.msg.v1.signer) = "voter";
+  option (amino.name) = "orama/houses/MsgVoteToken";
+
+  string voter = 1;
+  uint64 proposal_id = 2;
+  VoteOption option = 3;
+}
+
+message MsgVoteTokenResponse {}
+
+// MsgVoteOperator is one operator identity's vote. A second message on the
+// same proposal with a different option burns the house bond and is not a
+// vote change.
+message MsgVoteOperator {
+  option (cosmos.msg.v1.signer) = "voter";
+  option (amino.name) = "orama/houses/MsgVoteOperator";
+
+  string voter = 1;
+  uint64 proposal_id = 2;
+  VoteOption option = 3;
+}
+
+message MsgVoteOperatorResponse {
+  bool slashed = 1;
+}
+
+// MsgLockHouseBond locks amount norama from the signer's bank balance into
+// the houses module account, added to any bond already locked.
+message MsgLockHouseBond {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/houses/MsgLockHouseBond";
+
+  string signer = 1;
+  string amount = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message MsgLockHouseBondResponse {}
+
+// MsgUnlockHouseBond returns the full locked bond. It fails while the signer
+// has a vote on a proposal that is still in voting or the veto window.
+message MsgUnlockHouseBond {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/houses/MsgUnlockHouseBond";
+
+  string signer = 1;
+}
+
+message MsgUnlockHouseBondResponse {}
+
+// MsgExecuteProposal executes a proposal whose timelock has elapsed. Any
+// account may submit it. There is no shorter path.
+message MsgExecuteProposal {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/houses/MsgExecuteProposal";
+
+  string signer = 1;
+  uint64 proposal_id = 2;
+}
+
+message MsgExecuteProposalResponse {}

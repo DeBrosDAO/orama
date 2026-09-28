@@ -58,10 +58,11 @@ message EpochState {
   // (plans/open-network/track-c-chain.md C3's closing rule needs "blocks
   // since the epoch started", not "which absolute height that was").
   uint64 blocks_in_epoch = 3;
-  // cumulative_minted is the all-time total of norama minted by x/emission.
-  // Only the validator/delegator share is ever minted by this module; the
-  // storage, relay and development shares are ceilings recorded in
-  // CeilingRecord but never minted here.
+  // cumulative_minted is the all-time total of norama minted as the
+  // validator/delegator share. It does not include development spends.
+  // Storage and relay ceilings are never minted by this module. The
+  // development ceiling is minted only by Keeper.MintDevelopmentSpend, and
+  // that total is cumulative_development_minted, not this field.
   string cumulative_minted = 4 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
@@ -81,19 +82,27 @@ message EpochState {
   // non-zero only under the devnet-only bootstrap-stake exception (plans/open-network.md D16 and
   // point 4 of this module's task spec), where genesis accounts self-delegate stake before the
   // C4 bootstrap-committee module exists. The supply invariant is
-  // supply == genesis_supply + cumulative_minted - cumulative_burned.
+  // supply == genesis_supply + cumulative_minted + cumulative_development_minted
+  // - cumulative_burned.
   string genesis_supply = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // cumulative_development_minted is the all-time total minted by
+  // Keeper.MintDevelopmentSpend. It is not part of the validator schedule
+  // check on cumulative_minted. Pruning a CeilingRecord does not reduce it.
+  string cumulative_development_minted = 7 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
 }
 
-// CeilingRecord is the non-minted record of one closed epoch's storage,
-// relay and development ceilings, kept so a future module (x/storage,
-// x/relay, x/houses development spends) can claim them within their
-// settlement window. x/emission itself never mints against these fields; it
-// only keeps a bounded trailing window of records (see Params) and prunes
-// older ones.
+// CeilingRecord is one closed epoch's storage, relay and development
+// ceilings, kept so a later module can claim them within the trailing
+// window. closeEpoch does not mint storage, relay or development.
+// Keeper.MintDevelopmentSpend is the only path that mints development, and
+// only up to development_ceiling minus development_minted. Storage and relay
+// stay unminted. Records older than the trailing window are pruned.
 message CeilingRecord {
   uint64 epoch = 1;
   // storage_ceiling is the unminted maximum available to storage-subsidy and
@@ -108,16 +117,23 @@ message CeilingRecord {
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
-  // development_ceiling is the unminted maximum available to an approved
-  // development spend for this epoch.
+  // development_ceiling is the maximum an approved development spend can
+  // mint for this epoch: the schedule's 5% share.
   string development_ceiling = 4 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
-  // validator_minted is the amount actually minted to the fee collector for
-  // this epoch (the validator/delegator share, including any remainder from
-  // integer division of the other shares).
+  // validator_minted is the amount actually minted for this epoch's
+  // validator/delegator share, including any remainder from integer division
+  // of the other shares.
   string validator_minted = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // development_minted is how much of development_ceiling
+  // Keeper.MintDevelopmentSpend has already minted. It starts at zero when
+  // the epoch closes and never exceeds development_ceiling.
+  string development_minted = 6 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];

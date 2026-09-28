@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"cosmossdk.io/math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
@@ -83,6 +85,7 @@ func (k Keeper) closeEpoch(ctx sdk.Context, state types.EpochState) error {
 		RelayCeiling:       split.Relay,
 		DevelopmentCeiling: split.Development,
 		ValidatorMinted:    split.Validator,
+		DevelopmentMinted:  math.ZeroInt(),
 	}
 	if err := k.Ceilings.Set(ctx, closingEpoch, record); err != nil {
 		return fmt.Errorf("failed to record epoch %d ceilings: %w", closingEpoch, err)

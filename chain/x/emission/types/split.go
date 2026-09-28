@@ -3,8 +3,10 @@ package types
 import "cosmossdk.io/math"
 
 // Emission split percentages (plans/open-network.md D13, track-c-chain.md C3): 60% validators
-// and delegators, 25% storage, 10% relay, 5% development. Every share but the validator share is
-// a ceiling: it is recorded (CeilingRecord) but never minted by this module.
+// and delegators, 25% storage, 10% relay, 5% development. closeEpoch mints only the validator
+// share. Storage and relay stay ceilings. The development share stays a ceiling until
+// Keeper.MintDevelopmentSpend mints an approved amount, and never more than that epoch's
+// development share minus what was already minted.
 const (
 	ValidatorSharePercent   = 60
 	StorageSharePercent     = 25
