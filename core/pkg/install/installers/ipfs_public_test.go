@@ -1,0 +1,142 @@
+package installers
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
+)
+
+func TestPublicKuboConfig_hasNoSwarmKeyAndFiltersPrivateRanges(t *testing.T) {
+	existing := []byte(`{"Identity":{"PeerID":"12D3KooWexample"}}`)
+	body, err := PublicKuboConfig(existing, "abc123token", 5_000_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "swarm.key") || strings.Contains(string(body), "LIBP2P_FORCE_PNET") {
+		t.Fatalf("public config mentions a private swarm:\n%s", body)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(body, &config); err != nil {
+		t.Fatal(err)
+	}
+	identity := config["Identity"].(map[string]interface{})
+	if identity["PeerID"] != "12D3KooWexample" {
+		t.Fatalf("identity was dropped: %v", identity)
+	}
+	addresses := config["Addresses"].(map[string]interface{})
+	api := addresses["API"].([]interface{})
+	if api[0] != "/ip4/127.0.0.1/tcp/31011" || constants.GlobalIPFSAPIPort != 31011 {
+		t.Fatalf("API = %v", api)
+	}
+	gateway := addresses["Gateway"].([]interface{})
+	if gateway[0] != "/ip4/127.0.0.1/tcp/31012" {
+		t.Fatalf("Gateway = %v", gateway)
+	}
+	swarm := strings.Join(asStrings(t, addresses["Swarm"]), " ")
+	if !strings.Contains(swarm, "/ip4/0.0.0.0/tcp/31010") || !strings.Contains(swarm, "/ip4/0.0.0.0/udp/31010/quic-v1") {
+		t.Fatalf("Swarm = %s", swarm)
+	}
+	noAnnounce := strings.Join(asStrings(t, addresses["NoAnnounce"]), " ")
+	if !strings.Contains(noAnnounce, "/ip4/10.0.0.0/ipcidr/8") {
+		t.Fatalf("NoAnnounce does not hide the mesh: %s", noAnnounce)
+	}
+	filters := config["Swarm"].(map[string]interface{})["AddrFilters"]
+	if !strings.Contains(strings.Join(asStrings(t, filters), " "), "/ip4/10.0.0.0/ipcidr/8") {
+		t.Fatalf("AddrFilters = %v", filters)
+	}
+	apiCfg := config["API"].(map[string]interface{})
+	auth := apiCfg["Authorizations"].(map[string]interface{})
+	user := auth["orama"].(map[string]interface{})
+	if user["AuthSecret"] != "bearer:abc123token" {
+		t.Fatalf("auth = %v", user)
+	}
+	if config["Provide"].(map[string]interface{})["Strategy"] != "pinned" {
+		t.Fatalf("Provide = %v", config["Provide"])
+	}
+	if config["Routing"].(map[string]interface{})["Type"] != "dht" {
+		t.Fatalf("Routing = %v", config["Routing"])
+	}
+	if config["Datastore"].(map[string]interface{})["StorageMax"] != "5GB" {
+		t.Fatalf("StorageMax = %v", config["Datastore"])
+	}
+}
+
+func TestPublicKuboConfig_refusesAnEmptyToken(t *testing.T) {
+	if _, err := PublicKuboConfig(nil, "  ", 0); err == nil {
+		t.Fatal("empty token was accepted")
+	}
+}
+
+func TestPublicStorageMax_addsHeadroom(t *testing.T) {
+	if got := PublicStorageMax(0); got != "1GB" {
+		t.Fatalf("empty declaration = %s", got)
+	}
+	// 10GB + 10% = 11GB
+	if got := PublicStorageMax(10_000_000_000); got != "11GB" {
+		t.Fatalf("10GB declaration = %s", got)
+	}
+}
+
+func TestWritePublicKuboFiles_tokenModeAndNoSwarmKey(t *testing.T) {
+	dir := t.TempDir()
+	root := rootfs.At(dir)
+	if err := WritePublicKuboFiles(root, dir, "abc123token", 1_000_000_000, nil); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, PublicAPITokenFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0640 {
+		t.Fatalf("token mode %o, want 0640", info.Mode().Perm())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "swarm.key")); !os.IsNotExist(err) {
+		t.Fatalf("swarm.key exists: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "swarm.key"), []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePublicKuboFiles(root, dir, "abc123token", 1_000_000_000, nil); err == nil {
+		t.Fatal("a repo that already has a swarm.key was accepted")
+	}
+}
+
+func TestParseDenylist(t *testing.T) {
+	got, err := ParseDenylist("# comment\n\nQmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG\n")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("%v %v", got, err)
+	}
+	if _, err := ParseDenylist("not a cid"); err == nil {
+		t.Fatal("a line with a space was accepted")
+	}
+}
+
+func TestGlobalIPFSUnit_matchesThePublicConfig(t *testing.T) {
+	// The unit and the config must name the same loopback RPC. Importing the
+	// install package from here would cycle, so the ports are the constants.
+	if constants.GlobalIPFSAPIPort != 31011 || constants.GlobalIPFSSwarmPort != 31010 {
+		t.Fatalf("ports drifted")
+	}
+}
+
+func asStrings(t *testing.T, v interface{}) []string {
+	t.Helper()
+	items, ok := v.([]interface{})
+	if !ok {
+		t.Fatalf("not a list: %T", v)
+	}
+	out := make([]string, len(items))
+	for i, item := range items {
+		s, ok := item.(string)
+		if !ok {
+			t.Fatalf("item %d is %T", i, item)
+		}
+		out[i] = s
+	}
+	return out
+}
