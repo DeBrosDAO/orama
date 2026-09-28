@@ -800,7 +800,8 @@ not a message of this module. Queries, once wired: `params`, `operator [address]
 `chain/provider` stores one node's pieces on disk. `Ingest` declines a CID on the
 operator denylist, bytes whose piece root does not match the claimed root, or a piece
 larger than the free-bytes callback. A decline writes nothing. `Prove` rebuilds a
-challenge proof from the stored bytes and rejects a padding leaf. `Retrieval` serves
+challenge proof from the stored bytes and rejects a padding leaf. `ReplicaProof`
+opens the leaf `x/storage` challenges for that epoch, deal, slot, and node. `Retrieval` serves
 GET and HEAD of a stored piece, including a byte range, and rate-limits each client
 address. A full address table refuses a new address. `ReplicaProof` fills one
 proof for a challenged slot. The leaf is the chain's leaf-challenge seed
