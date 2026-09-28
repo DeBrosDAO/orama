@@ -36,6 +36,14 @@ func TestRetrievalServesARangeAndRefusesTheRest(t *testing.T) {
 		t.Fatalf("full %d %q", rr.Code, rr.Body.Bytes())
 	}
 
+	head := httptest.NewRequest(http.MethodHead, "/pieces/piece-a", nil)
+	head.RemoteAddr = "192.0.2.6:9"
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, head)
+	if rr.Code != http.StatusOK || rr.Body.Len() != 0 {
+		t.Fatalf("head %d body %d", rr.Code, rr.Body.Len())
+	}
+
 	part := httptest.NewRequest(http.MethodGet, "/pieces/piece-a", nil)
 	part.RemoteAddr = "192.0.2.2:9"
 	part.Header.Set("Range", "bytes=0-3")
