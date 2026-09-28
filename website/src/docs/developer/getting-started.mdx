@@ -2,6 +2,8 @@
 
 Welcome to the **Orama Network** developer documentation. Orama is a decentralized infrastructure platform that provides distributed databases, caching, file storage, real-time messaging, serverless functions, encrypted vault storage, and application deployments -- all accessible through a unified SDK and CLI.
 
+An agent should start at [https://orama.network/llms.txt](https://orama.network/llms.txt), then fetch the page that index names. That file is the index. It is not a second copy of these pages.
+
 ## Core Services
 
 | Service | Description |
@@ -94,7 +96,7 @@ After verification, the SDK automatically stores the JWT and API key for subsequ
 
 ### CLI Authentication
 
-The Orama CLI (`orama`) supports interactive authentication with RootWallet (EVM) or Phantom (Solana):
+The Orama CLI (`orama`) signs in with RootWallet. The signature is an EVM wallet signature over a gateway challenge:
 
 ```bash
 # Set your target environment
@@ -124,8 +126,7 @@ orama auth logout
 | Flag | Description |
 |------|-------------|
 | `--namespace <name>` | Target namespace |
-| `--simple` | Use simple auth without signature (dev only) |
-| `--wallet <0x...>` | Wallet address (implies `--simple`) |
+| `--device-key <file>` | Ed25519 private JWK to enroll with this sign-in. The file stays on this machine. |
 
 ## Environment Management
 
@@ -151,13 +152,12 @@ orama env remove my-env
 
 Default environments:
 
-| Environment | Gateway URL |
-|-------------|-------------|
-| `sandbox` | `https://dbrs.space` |
-| `devnet` | `https://orama-devnet.network` |
-| `testnet` | `https://orama-testnet.network` |
+| Environment | Gateway URL | Active on a fresh install |
+|-------------|-------------|---------------------------|
+| `devnet` | `https://orama-devnet.network` | yes |
+| `testnet` | `https://orama-testnet.network` | no |
 
-The default active environment is `sandbox`. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
+`orama sandbox create` adds a sandbox. `orama node setup --genesis` or `orama env add` adds a cluster of your own. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
 
 ## Quick Example: Deploy a Static Site
 

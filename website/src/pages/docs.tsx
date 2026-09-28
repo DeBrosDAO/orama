@@ -101,6 +101,15 @@ export default function DocsPage() {
       <div className="lg:ml-56 min-h-screen">
         <div className="flex justify-center">
           <article className="w-full max-w-3xl px-6 py-8 sm:px-8 sm:py-12">
+            <p className="mb-6 font-mono text-xs text-muted">
+              <a
+                href="https://orama.network/llms.txt"
+                className="text-accent hover:underline"
+              >
+                Agent index (llms.txt)
+              </a>
+              <span> — fetch this first, then the page it names.</span>
+            </p>
             <MDXProvider components={mdxComponents}>
               {loading ? (
                 <div className="flex items-center justify-center py-20">

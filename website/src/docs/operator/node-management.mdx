@@ -50,22 +50,10 @@ No manual SSH key management required — RootWallet provides the key.
 Deploy new code to all your nodes with a single command:
 
 ```bash
-# Build the archive first
-orama build
-
-# Roll out to all nodes (followers first, leader last)
-orama rollout --env devnet
-
-# Custom delay between nodes (default: 30 seconds)
-orama rollout --env devnet --delay 60
+orama rollout --env devnet --yes
 ```
 
-The rollout command:
-1. Finds the pre-built archive in `/tmp/`
-2. Pushes it to all your nodes
-3. Detects the RQLite leader
-4. Upgrades followers first, leader last
-5. Checks health between each node
+`orama rollout` builds an archive, pushes it, and prints the restart plan. Nothing restarts unless `--yes` is passed. Followers go before the leader. `--delay` defaults to 300 seconds and is how long a node has to rejoin before the rollout stops. To roll out an archive you already built, pass `--no-build --archive <path> --yes`.
 
 ## Health Status
 
@@ -103,36 +91,33 @@ orama monitor report --env devnet
 Push a new binary archive to nodes without reinstalling:
 
 ```bash
-# Build the archive first
 orama build
 
-# Push to a single node
-orama push --ip 1.2.3.4
+# The path the build printed
+orama push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
-# Push to all nodes in an environment
-orama push --env devnet
-
-# Fan out server-to-server (faster for many nodes)
-orama push --env devnet --fanout
+# One node
+orama push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz --node 1.2.3.4
 ```
 
-Use `--fanout` to upload to the first node, then fan out server-to-server via SSH agent forwarding. Much faster when you have many nodes.
+`--archive` is required. The upload goes from this computer to each node. `--fanout` and `--direct` are accepted and ignored. `--ip` is a deprecated alias of `--host`.
 
 ## Adding New Nodes
 
 Add a new VPS to your cluster with one command:
 
 ```bash
-orama node setup --ip <IP> --password '<PASS>' --env devnet --base-domain orama-devnet.network
+orama node setup --ip <IP> --password --archive /tmp/orama-<version>-linux-amd64.tar.gz \
+  --env devnet --base-domain orama-devnet.network
 ```
 
-This creates an SSH key in RootWallet, installs it on the VPS, uploads binaries, requests an invite token, and joins the node to the cluster. The `--password` is used once for initial SSH access — after that, RootWallet handles authentication.
+This creates an SSH key in RootWallet, installs it on the VPS, uploads the archive from `orama build`, requests an invite token, and joins the node to the cluster. `--password` is a switch. The password is the RootWallet vault login for that IP (`rw vault add <IP>`), used once. After that, RootWallet's own key handles SSH. A key-only server uses `--user ubuntu --bootstrap-key ~/.ssh/id_ed25519` instead of `--password`.
 
 For the first node in a new cluster, add `--genesis`:
 
 ```bash
-orama node setup --ip <IP> --password '<PASS>' --env devnet \
-  --base-domain orama-devnet.network --role nameserver --genesis
+orama node setup --ip <IP> --password --archive /tmp/orama-<version>-linux-amd64.tar.gz \
+  --env devnet --base-domain orama-devnet.network --role nameserver --genesis
 ```
 
 ## How Node Ownership Works
@@ -166,6 +151,6 @@ The legacy `nodes.conf` continues to work as a fallback — you can migrate at y
 | `orama nodes [--env]` | List your nodes |
 | `orama ssh <ip> [--env]` | SSH into a node |
 | `orama status [--env] [--json]` | Health check all nodes |
-| `orama push [--ip <ip>] [--env]` | Push binary archive to nodes |
-| `orama rollout [--env] [--delay]` | Rolling upgrade all nodes |
+| `orama push --archive <path> [--env] [--node <ip>]` | Upload that archive from this computer |
+| `orama rollout --env <name> --yes` | Build, push, and rolling upgrade. Without `--yes`, only the plan is printed. |
 | `orama node migrate-conf [--env]` | Migrate nodes.conf to wallet-based tracking |

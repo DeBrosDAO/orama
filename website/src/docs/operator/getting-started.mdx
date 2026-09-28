@@ -28,19 +28,42 @@ All inter-node communication happens over an encrypted WireGuard mesh network on
 
 The installer enforces a hard minimum of 2 vCPUs, 2 GB RAM, and 10 GB free disk (`orama node install --skip-checks` bypasses this, but is not recommended). A stable network connection with low latency is important for Raft consensus and mesh connectivity.
 
-## Getting the CLI Binary
+## On your computer
 
-The `orama` CLI is a single Go binary. It is provided to accepted operators as a pre-compiled binary for Linux amd64. The binary is placed at `/usr/local/bin/orama` during installation.
+`orama node setup` runs on your computer, not on the VPS. Install these before you rent one.
 
-The CLI is used both for initial node setup and ongoing management. All node operations require `sudo`.
+**The `orama` CLI.** Homebrew installs the latest stable release:
+
+```bash
+brew install DeBrosDAO/tap/orama
+orama version
+```
+
+Debian and Ubuntu packages, and prebuilt tarballs for macOS and Linux, are on the [releases page](https://github.com/DeBrosDAO/orama/releases). From a checkout of this repo, `make build` writes `./core/bin/orama`. The same install notes are in the [CLI reference](/docs/developer/cli-reference).
+
+**RootWallet, unlocked.** Download the desktop app from the [RootWallet releases](https://github.com/DeBrosDAO/rootwallet/releases): a universal `.dmg` on macOS, or a `.deb` or AppImage on Linux. The `rw` command uses the same vault as the app. Orama asks that app for SSH keys and signatures. It does not ask you to paste them into the terminal.
+
+**The VPS login, if the machine has a password.** Store it once. The command asks for the username and the password:
+
+```bash
+rw vault add <VPS_IP>
+```
+
+Use the SSH username you will pass to setup. That is `root` unless you pass `--user`. `--password` on `orama node setup` is a switch. It does not take the password. It reads this vault entry for that IP and username.
+
+**The build archive.** On your computer:
+
+```bash
+orama build
+```
+
+The command prints `Archive: /tmp/orama-<version>-linux-<arch>.tar.gz`. Pass that path as `--archive`. Setup stops if the flag is missing. The archive must be signed; an unsigned build will not install.
+
+The VPS itself gets its `orama` binary from that archive. You do not copy a binary onto the server by hand.
 
 ## Joining the Network
 
-To become an operator, you need:
-
-1. A VPS meeting the hardware requirements above
-2. The `orama` CLI on your local machine
-3. RootWallet desktop app (for SSH key management and wallet authentication)
+You also need a VPS that meets the hardware requirements above.
 
 ### Setting Up Your First Node (Genesis)
 
@@ -49,25 +72,31 @@ The first node creates a new cluster. Run this from your **local machine** (not 
 ```bash
 orama node setup \
   --ip <VPS_IP> \
-  --password '<VPS_PASSWORD>' \
+  --password \
+  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
   --env devnet \
   --base-domain <BASE_DOMAIN> \
   --role nameserver \
   --genesis
 ```
 
+`--password` only works after `rw vault add <VPS_IP>` with username `root`. If you omit `--env`, setup uses the active environment and does not ask which one. `orama env list` and `orama env current` show that choice. `orama env use <name>` changes it.
+
 This single command:
 1. Creates an SSH key in your RootWallet vault
-2. Installs the SSH key on the VPS (using the password once)
+2. Installs the SSH key on the VPS, using the vault password once
 3. Uploads the binary archive
 4. Installs and starts all services
-5. Updates your local environment config to point to this node
+5. Records the environment for this cluster. It does not switch the active environment.
 
-After genesis, authenticate with the new cluster:
+After genesis, the new environment is recorded and the active one is left as it was. Point the CLI at the new cluster, then sign in:
 
 ```bash
+orama env use devnet
 orama auth login
 ```
+
+`orama auth login` follows the active environment. If `--env` named an environment that was already active, its gateway URL was updated in place and `orama env use` is unnecessary.
 
 ### Adding More Nodes
 
@@ -77,7 +106,8 @@ Once the genesis node is running and you're authenticated, add more nodes with o
 # Add a nameserver node
 orama node setup \
   --ip <VPS_IP> \
-  --password '<VPS_PASSWORD>' \
+  --password \
+  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
   --env devnet \
   --base-domain <BASE_DOMAIN> \
   --role nameserver
@@ -85,30 +115,49 @@ orama node setup \
 # Add a regular node
 orama node setup \
   --ip <VPS_IP> \
-  --password '<VPS_PASSWORD>' \
+  --password \
+  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
   --env devnet \
   --base-domain <BASE_DOMAIN>
 ```
 
+### A key-only server
+
+Some images have no password login. They open with a key you already have, often as user `ubuntu`. Do not pass `--password`. Pass that key once so setup can install the RootWallet key:
+
+```bash
+orama node setup \
+  --ip <VPS_IP> \
+  --user ubuntu \
+  --bootstrap-key ~/.ssh/id_ed25519 \
+  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
+  --env devnet \
+  --base-domain <BASE_DOMAIN>
+```
+
+`--password` and `--bootstrap-key` are alternatives. The command rejects both at once. If you pass neither, setup assumes the RootWallet key is already on the server.
+
 The setup command automatically:
 - Creates a unique SSH key for the node in RootWallet
-- Installs the key on the VPS (password is used once, then discarded)
+- Installs that key on the VPS, once, using the vault password or `--bootstrap-key`
 - Requests an invite token from the cluster (using your wallet authentication)
-- Uploads binaries and runs the full installation
+- Uploads the archive and runs the full installation
 - Joins the node to the cluster
 
-The `--password` flag is only needed for the initial SSH key installation. After that, all SSH access uses the RootWallet key.
+After that first connection, SSH uses the RootWallet key. The vault password and the bootstrap key are not used again.
 
 ### Setup Flags
 
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--ip` | Yes | Public IP address of the VPS |
-| `--password` | No | One-time VPS password for SSH key installation |
-| `--env` | No | Target environment (default: active environment) |
-| `--base-domain` | Yes | Base domain for the network (e.g., `orama-devnet.network`) |
+| `--archive` | Yes | Path printed by `orama build`. Setup stops without it. |
+| `--password` | No | Switch. Read the VPS login from the RootWallet vault (`rw vault add <ip>`). Do not put the password after this flag. |
+| `--bootstrap-key` | No | Private key that already opens a key-only VPS. Used once, not stored. Not together with `--password`. |
+| `--user` | No | SSH user (default: `root`). With `--password`, this must be the username stored by `rw vault add`. |
+| `--env` | No | Target environment. Omitted, setup uses the active environment and does not ask. |
+| `--base-domain` | For genesis | Base domain for the network (e.g., `orama-devnet.network`). A genesis node needs it. |
 | `--role` | No | `node` (default) or `nameserver` |
-| `--user` | No | SSH user (default: `root`) |
 | `--gateway` | No | Gateway URL override for invite tokens |
 | `--genesis` | No | Create a new cluster (first node only) |
 
@@ -142,8 +191,8 @@ orama status --env devnet
 # SSH into any node
 orama ssh <IP>
 
-# Rolling upgrade all your nodes
-orama rollout --env devnet
+# Rolling upgrade all your nodes. Nothing restarts without --yes.
+orama rollout --env devnet --yes
 ```
 
 See [Node Management](/docs/operator/node-management) for the full guide.
@@ -176,9 +225,10 @@ sudo orama node report --json
 Deploy new code to all your nodes with one command:
 
 ```bash
-orama build                    # Build the binary archive
-orama rollout --env devnet     # Push + rolling upgrade (followers first, leader last)
+orama rollout --env devnet --yes
 ```
+
+`orama rollout` builds an archive, pushes it, prints the restart plan, and stops unless `--yes` is passed. It does not use an archive you built earlier. To roll out a specific archive, pass `--no-build --archive <path> --yes`. After each node restarts, the command waits for that node to rejoin before it touches the next one. `--delay` is that wait, in seconds. The default is 300. It is not a pause between nodes.
 
 Or upgrade a single node directly on the VPS:
 

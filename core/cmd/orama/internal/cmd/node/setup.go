@@ -17,22 +17,29 @@ archive, and runs the node install. For the first node, use --genesis to
 create a new cluster.
 
 Examples:
-  # Genesis node (first node, creates new cluster)
-  orama node setup --ip 1.2.3.4 --password 'vps-pass' --env devnet \
-    --base-domain orama-devnet.network --role nameserver --genesis
+  # Genesis node (first node, creates new cluster).
+  # Store the VPS login first: rw vault add 1.2.3.4 (username root).
+  # --password is a switch; it reads that login. --archive is the path
+  # "orama build" printed.
+  orama node setup --ip 1.2.3.4 --password --env devnet \
+    --base-domain orama-devnet.network --role nameserver --genesis \
+    --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
   # Join existing cluster
-  orama node setup --ip 5.6.7.8 --password 'vps-pass' --env devnet \
-    --base-domain orama-devnet.network
+  orama node setup --ip 5.6.7.8 --password --env devnet \
+    --base-domain orama-devnet.network \
+    --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
   # Key-only VPS (no password login): install the RootWallet key once
-  # with the key that opens it today
+  # with the key that opens it today. Do not pass --password as well.
   orama node setup --ip 5.6.7.8 --user ubuntu --bootstrap-key ~/.ssh/id_ed25519 \
-    --env devnet --base-domain orama-devnet.network
+    --env devnet --base-domain orama-devnet.network \
+    --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
   # Join as nameserver
-  orama node setup --ip 9.10.11.12 --password 'vps-pass' --env devnet \
-    --base-domain orama-devnet.network --role nameserver`,
+  orama node setup --ip 9.10.11.12 --password --env devnet \
+    --base-domain orama-devnet.network --role nameserver \
+    --archive /tmp/orama-<version>-linux-amd64.tar.gz`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return setup.Run(setupOpts)
 	},
