@@ -197,8 +197,10 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama storage decline`](#orama-storage-decline) — Decline an assigned storage slot
   - [`orama storage extend`](#orama-storage-extend) — Add epochs to a storage deal
   - [`orama storage grant`](#orama-storage-grant) — Grant a cluster a capped deal allowance
+  - [`orama storage open`](#orama-storage-open) — Open one sealed storage slot
   - [`orama storage prove`](#orama-storage-prove) — Submit storage challenge proofs
   - [`orama storage revoke`](#orama-storage-revoke) — Revoke a deal allowance
+  - [`orama storage seal`](#orama-storage-seal) — Seal a file into one ciphertext per storage slot
 - [`orama version`](#orama-version) — Show version information
 
 ---
@@ -3129,7 +3131,7 @@ Storage deals on the Orama chain
 orama storage
 ```
 
-Subcommands: `accept`, `create`, `decline`, `extend`, `grant`, `prove`, `revoke`
+Subcommands: `accept`, `create`, `decline`, `extend`, `grant`, `open`, `prove`, `revoke`, `seal`
 
 ### orama storage accept
 
@@ -3270,6 +3272,27 @@ count. Without --node the command prints the sign document and does not submit i
 | `--signer` | — | Granter account (orama1...) [required] |
 | `--spend-limit` | — | Spend limit in norama [required] |
 
+### orama storage open
+
+Open one sealed storage slot
+
+```
+orama storage open [flags]
+```
+
+Open one slot file written by seal.
+
+A wrong seed, repair seed, or slot fails and writes nothing.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--in` | — | Sealed slot file |
+| `--nonce` | — | Deal nonce, 32 bytes hex |
+| `--out` | — | Plaintext output file |
+| `--repair-seed` | — | Repair seed, hex, at least 32 bytes |
+| `--seed` | — | Owner seed, hex, at least 32 bytes |
+| `--slot` | `0` | Slot index |
+
 ### orama storage prove
 
 Submit storage challenge proofs
@@ -3320,6 +3343,29 @@ Revoke a deal allowance. Without --node the command prints the sign document and
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 | `--signer` | — | Granter account (orama1...) [required] |
+
+### orama storage seal
+
+Seal a file into one ciphertext per storage slot
+
+```
+orama storage seal [flags]
+```
+
+Seal a private file before a storage deal.
+
+The file key is wrapped under the owner seed. Each slot gets a different
+ciphertext. The command writes slot-N files and prints each piece root.
+It does not upload the bytes and it does not submit a deal.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--in` | — | Plaintext file |
+| `--nonce` | — | Deal nonce, 32 bytes hex |
+| `--out-dir` | — | Directory for slot-N files |
+| `--repair-seed` | — | Repair seed, hex, at least 32 bytes |
+| `--replicas` | `3` | Number of slots, 1 to 32 |
+| `--seed` | — | Owner seed, hex, at least 32 bytes |
 
 ### orama version
 

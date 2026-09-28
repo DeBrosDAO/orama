@@ -818,7 +818,10 @@ root, a denylist CID, a full disk, or a body over the limit stores nothing.
 The package does not watch CometBFT, pin through Kubo, or send `MsgAcceptDeal`
 or `MsgSubmitProofs`.
 
-`core/pkg/storagefile` seals a private file before upload. The file key is
+`orama storage seal` writes one ciphertext per slot and prints each piece root.
+`orama storage open` reads one of those files. A wrong seed, repair seed, or
+slot fails and writes nothing. Neither command uploads the bytes or submits a
+deal. `core/pkg/storagefile` seals a private file before upload. The file key is
 wrapped by HKDF-SHA256 of the owner seed with info `orama-storage-v1`. Each
 slot XORs that blob with a keystream from HKDF-SHA256 of the repair seed and
 `deal_nonce` concatenated with the slot as 4 big-endian bytes. The piece root
