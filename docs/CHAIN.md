@@ -35,8 +35,9 @@ require it, and nothing in `chain/` imports `core/`.
 **Wired** in addition to the table: `x/token` (factory denoms), `x/archive` (history registry),
 and `x/nodes` (operator and global-node registry). Its end block pays matured role-bond
 unbondings.
-**Not wired**, on purpose: `x/houses`, `x/storage`, `x/cnft`, `x/market`, and `x/relay` are
-implemented and not registered in `app.go`. Also unwired: `x/gov`,
+**Not wired**, on purpose: `x/houses`, `x/storage`, and `x/relay` are implemented and not
+registered in `app.go`. `x/cnft` and `x/market` are registered. A sale pays the seller and
+the royalty into earnings. Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
 wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`
@@ -565,8 +566,8 @@ owner's earnings. The coins sit in a **second, separate module account** (`fees_
 (`types.SplitDeposit`, exact split, remainder to the burn side). `x/token` calls `LockDeposit` /
 `ReleaseDeposit` and is registered, so a token
 create locks a metadata deposit. `x/nodes` calls the same interface and is not registered.
-`x/cnft` locks a tree deposit through
-the same interface and is also not registered. `x/market` does not lock a listing deposit.
+`x/cnft` locks a tree deposit through the same interface and is registered. `x/market` is
+registered and does not lock a listing deposit. A sale credits earnings.
 `x/storage` is implemented and not registered. Its deal escrow is its own module account,
 not this deposit ledger. The per-byte contract deposit meter is not hooked into wasmd's store.
 
@@ -980,7 +981,7 @@ for anything that does.
   ante rule and nothing in the ante does it. `MsgShieldEarnings` is not implemented.
   `MsgFundHotKey` is not a message of `x/nodes`.
 - **`x/fees`' state-deposit ledger is called by `x/token` and `x/nodes`.** Both are registered.
-  `x/cnft` calls the same interface for a tree deposit and is not registered either.
+  `x/cnft` calls the same interface for a tree deposit and is registered.
   `x/storage` keeps deal escrow in its own module account and is not registered.
   The per-byte contract deposit meter is not hooked into wasmd's store.
 - **`x/power.DistributeEpochRewards` iterates every delegation of every validator once per closed
