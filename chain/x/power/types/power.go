@@ -96,7 +96,8 @@ type CapState struct {
 }
 
 // UpdateCapState recomputes CapState for the epoch that just closed, given the number of
-// currently active (bonded) validators. It never changes more than one epoch's worth of
+// distinct validators participating in consensus this epoch: stake-indexed bonded validators
+// plus eligible bootstrap committee members who are not already in that set. It never changes more than one epoch's worth of
 // hysteresis at a time, so it must be called exactly once per closed epoch, in epoch order. The
 // two basis-point values it can return are always derived from the GIVEN Params
 // (BpsFromFraction(p.CapFractionNormal/CapFractionReduced)), never a hardcoded constant, so a chain
@@ -285,13 +286,13 @@ func ComputePower(bootstrapShare, rampedCappedShare, lambda math.LegacyDec) math
 	return math.LegacyOneDec().Sub(lambda).Mul(bootstrapShare).Add(lambda.Mul(rampedCappedShare))
 }
 
-// HandoverGateThreshold returns the minimum number of real, stake-indexed bonded validators
-// (security review H3(a)) that must be active at once before lambda may rise past
-// Params.PreGateLambdaCap: 2*ceil(1/capFraction) - twice the number of validators it would take,
-// each exactly at the cap, to reach 100% of stake-based power. Below this count, a small enough set
-// of validators (or a single actor splitting stake across capFraction-sized identities) could
-// otherwise take over consensus the moment lambda reaches 1, regardless of how little total stake
-// backs them.
+// HandoverGateThreshold returns how many consensus participants must be active at once
+// before lambda may rise past Params.PreGateLambdaCap (security review H3(a)). The count
+// is every stake-indexed bonded validator plus every eligible committee member who is not
+// already in that set, including a committee member with no stake. The threshold is
+// 2*ceil(1/capFraction): twice the number of validators it would take, each exactly at the
+// cap, to reach 100% of stake-based power. Below this count, a small set of validators
+// could otherwise take over consensus the moment lambda reaches 1.
 func HandoverGateThreshold(capFraction math.LegacyDec) uint64 {
 	if !capFraction.IsPositive() {
 		return 0

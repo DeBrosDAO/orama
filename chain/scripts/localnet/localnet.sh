@@ -14,6 +14,7 @@
 #                         the 30-member production floor on a devnet/stagenet/localnet chain-id)
 #   EPOCH_DURATION        default: 30s  (x/emission genesis param, Go duration syntax)
 #   EPOCH_MIN_BLOCKS      default: 5    (x/emission genesis param)
+#   BLOCK_MAX_GAS         default: 100000000 (consensus block gas limit patched into genesis)
 #
 # Genesis starts at exactly zero norama supply: every node is a member of x/power's bootstrap
 # committee (plans/open-network.md D16), which needs no self-bond and no gentx - each committee
@@ -27,6 +28,7 @@ CHAIN_ID="${CHAIN_ID:-orama-localnet-1}"
 DENOM="norama"
 EPOCH_DURATION="${EPOCH_DURATION:-30s}"
 EPOCH_MIN_BLOCKS="${EPOCH_MIN_BLOCKS:-5}"
+BLOCK_MAX_GAS="${BLOCK_MAX_GAS:-100000000}"
 
 case "$CHAIN_ID" in
 *-stagenet-*|*-devnet-*|*-localnet-*) ;;
@@ -112,15 +114,20 @@ build_genesis() {
 	log "adding all $n nodes as x/power bootstrap committee members (zero self-bond, no gentx)"
 	local i
 	for ((i = 0; i < n; i++)); do
-		local extra_flags=()
+		# An empty array expansion under `set -u` is an unbound variable on bash 3.2
+		# (the bash macOS ships). Pass the extra flag only on the node that needs it.
 		if [ "$i" -eq 0 ]; then
-			extra_flags+=(--min-committee-size "$n")
+			run_logged "$bin" genesis add-bootstrap-validator "$(addr_of "$i")" \
+				--moniker "node$i" \
+				--home "$first" \
+				--consensus-pubkey-file "$(node_home "$i")/config/priv_validator_key.json" \
+				--min-committee-size "$n"
+		else
+			run_logged "$bin" genesis add-bootstrap-validator "$(addr_of "$i")" \
+				--moniker "node$i" \
+				--home "$first" \
+				--consensus-pubkey-file "$(node_home "$i")/config/priv_validator_key.json"
 		fi
-		run_logged "$bin" genesis add-bootstrap-validator "$(addr_of "$i")" \
-			--moniker "node$i" \
-			--home "$first" \
-			--consensus-pubkey-file "$(node_home "$i")/config/priv_validator_key.json" \
-			"${extra_flags[@]}"
 	done
 
 	# x/consensus has no genesis state of its own (it's driven by the top-level "consensus" field
@@ -131,7 +138,7 @@ import json
 path = '$first/config/genesis.json'
 with open(path) as f:
     doc = json.load(f)
-doc.setdefault('consensus', {}).setdefault('params', {}).setdefault('block', {})['max_gas'] = '100000000'
+doc.setdefault('consensus', {}).setdefault('params', {}).setdefault('block', {})['max_gas'] = '$BLOCK_MAX_GAS'
 with open(path, 'w') as f:
     json.dump(doc, f, indent=2)
 "
@@ -196,7 +203,9 @@ cmd_start() {
 	for ((i = 0; i < n; i++)); do
 		# Each node's own address must not be in its own persistent_peers list.
 		local own_id; own_id="$("$bin" comet show-node-id --home "$(node_home "$i")")"
-		local other_peers; other_peers="$(echo "$peers" | tr ',' '\n' | grep -v "^$own_id@" | paste -sd, -)"
+		# grep exits 1 when this node is the only peer. Under `set -o pipefail` that
+		# aborts a one-node localnet, so an empty peer list is a successful result.
+		local other_peers; other_peers="$(echo "$peers" | tr ',' '\n' | grep -v "^$own_id@" | paste -sd, - || true)"
 		configure_node "$i" "$n" "$other_peers"
 	done
 

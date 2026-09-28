@@ -6,12 +6,25 @@ option go_package = "github.com/DeBrosOfficial/network/chain/x/power/types";
 import "gogoproto/gogo.proto";
 import "orama/power/v1/power.proto";
 
-// ValidatorRampRecord records the epoch a validator (bootstrap member or
-// outsider) first obtained a positive capped-stake share, which is when its
-// 30-epoch ramp (Params.ramp_epochs) starts.
+// ValidatorRampRecord records one validator's stake ramp. activation_epoch is
+// the epoch its capped share first became positive. admitted_tokens have
+// finished ramping; excess_tokens are a later increase still ramping from
+// excess_epoch. An import that dropped these amounts would publish the full
+// bond on the next block.
 message ValidatorRampRecord {
   string operator_address = 1;
   uint64 activation_epoch = 2;
+  string admitted_tokens = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string excess_tokens = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint64 excess_epoch = 5;
+  bool excess_epoch_set = 6;
+  bool activation_set = 7;
 }
 
 // ValidatorPowerRecord records the CometBFT integer power x/power last

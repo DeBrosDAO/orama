@@ -16,6 +16,7 @@ import (
 	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/fees/keeper"
@@ -72,6 +73,18 @@ func (b *fakeBankKeeper) BurnCoins(_ context.Context, moduleName string, amt sdk
 
 func (b *fakeBankKeeper) SpendableCoins(_ context.Context, addr sdk.AccAddress) sdk.Coins {
 	return sdk.NewCoins(sdk.NewCoin(params.BaseDenom, b.balanceOf(addr.String())))
+}
+
+func (b *fakeBankKeeper) GetBalance(_ context.Context, addr sdk.AccAddress, denom string) sdk.Coin {
+	if v, ok := b.balances[addr.String()]; ok {
+		return sdk.NewCoin(denom, v)
+	}
+	for _, name := range []string{types.ModuleName, types.DepositsModuleName, testSourceModule} {
+		if authtypes.NewModuleAddress(name).Equals(addr) {
+			return sdk.NewCoin(denom, b.balanceOf(name))
+		}
+	}
+	return sdk.NewCoin(denom, math.ZeroInt())
 }
 
 type testFixture struct {

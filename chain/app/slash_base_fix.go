@@ -70,8 +70,17 @@ func (s slashBaseFix) slashOnRealTokens(ctx context.Context, consAddr sdk.ConsAd
 		return math.ZeroInt(), fmt.Errorf("slashBaseFix: failed to load validator by consensus address: %w", err)
 	}
 
+	// Stock Slash treats `power` as the whole slash budget, then subtracts the
+	// slashes it applies to unbonding and redelegation entries before burning
+	// the rest from current bonded tokens. The base therefore has to include
+	// the stake that left after the infraction, or the tokens still bonded are
+	// slashed by less than slashFactor.
+	departed, err := s.slashableDepartedTokens(ctx, validator, infractionHeight)
+	if err != nil {
+		return math.ZeroInt(), err
+	}
 	powerReduction := s.Keeper.PowerReduction(ctx)
-	equivalentPower := validator.Tokens.Quo(powerReduction).Int64()
+	equivalentPower := validator.Tokens.Add(departed).Quo(powerReduction).Int64()
 
 	if infraction != nil {
 		return s.Keeper.SlashWithInfractionReason(ctx, consAddr, infractionHeight, equivalentPower, slashFactor, *infraction)

@@ -128,7 +128,20 @@ func TestDistributeEpochRewards_delegatorsPaidProRata(t *testing.T) {
 	f.Emission.epoch = 1
 	_, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission) // stamp ramp activation at epoch 1
 	require.NoError(t, err)
-	f.Emission.epoch = 2 // fully ramped now
+	// Deadline is 1 epoch, so the unconstrained lambda jumps to 1 on the next close.
+	// The per-epoch voting-power limit spreads that jump across several closes.
+	var lambda math.LegacyDec
+	for epoch := uint64(2); epoch <= 8; epoch++ {
+		f.Emission.epoch = epoch
+		_, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission)
+		require.NoError(t, err)
+		lambda, err = f.Keeper.Lambda.Get(f.Ctx)
+		require.NoError(t, err)
+		if lambda.Equal(math.LegacyOneDec()) {
+			break
+		}
+	}
+	require.True(t, lambda.Equal(math.LegacyOneDec()), "lambda = %s, want 1 before paying delegators", lambda)
 
 	f.Bank.fund(testEmissionModule, math.NewInt(1_000))
 	distributed, err := f.Keeper.DistributeEpochRewards(f.Ctx, f.Emission, testEmissionModule, math.NewInt(1_000))

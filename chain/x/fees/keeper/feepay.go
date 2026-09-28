@@ -88,6 +88,8 @@ func (k Keeper) SettleFee(ctx context.Context, payer, proposer sdk.AccAddress, b
 			return fmt.Errorf("failed to credit the tip to the proposer: %w", err)
 		}
 	}
-
+	if err := k.recordFeeSettlement(ctx, total, baseFeeAmount, tipAmount); err != nil {
+		return err
+	}
 	return nil
 }

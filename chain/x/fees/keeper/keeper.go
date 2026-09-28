@@ -24,11 +24,14 @@ type Keeper struct {
 	storeService storetypes.KVStoreService
 	bankKeeper   types.BankKeeper
 
-	Schema   collections.Schema
-	Params   collections.Item[types.Params]
-	BaseFee  collections.Item[math.Int]
-	Earnings collections.Map[string, math.Int]
-	Deposits collections.Map[string, types.Deposit]
+	Schema      collections.Schema
+	Params      collections.Item[types.Params]
+	BaseFee     collections.Item[math.Int]
+	Earnings    collections.Map[string, math.Int]
+	Deposits    collections.Map[string, types.Deposit]
+	Collected   collections.Item[math.Int]
+	Burned      collections.Item[math.Int]
+	Distributed collections.Item[math.Int]
 }
 
 // NewKeeper builds a new x/fees Keeper.
@@ -45,6 +48,9 @@ func NewKeeper(
 		BaseFee:      collections.NewItem(sb, types.BaseFeeKey, "base_fee", sdk.IntValue),
 		Earnings:     collections.NewMap(sb, types.EarningsPrefix, "earnings", collections.StringKey, sdk.IntValue),
 		Deposits:     collections.NewMap(sb, types.DepositsPrefix, "deposits", collections.StringKey, codec.CollValue[types.Deposit](cdc)),
+		Collected:    collections.NewItem(sb, types.CollectedKey, "collected", sdk.IntValue),
+		Burned:       collections.NewItem(sb, types.BurnedKey, "burned", sdk.IntValue),
+		Distributed:  collections.NewItem(sb, types.DistributedKey, "distributed", sdk.IntValue),
 	}
 
 	schema, err := sb.Build()

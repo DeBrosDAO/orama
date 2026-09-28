@@ -58,6 +58,10 @@ func TestDebitEarningsUpTo_neverExceedsBalance(t *testing.T) {
 	balance, err := f.Keeper.GetEarnings(f.Ctx, addr)
 	require.NoError(t, err)
 	require.True(t, balance.IsZero())
+
+	has, err := f.Keeper.Earnings.Has(f.Ctx, addr.String())
+	require.NoError(t, err)
+	require.False(t, has, "a balance debited back to zero must remove the key, not store a zero")
 }
 
 func TestGetEarnings_zeroForUnknownAddress(t *testing.T) {

@@ -50,6 +50,10 @@ func NewUndelegateGuard(stakingKeeper StakingKeeper, powerKeeper keeper.Keeper) 
 }
 
 func (d UndelegateGuard) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (sdk.Context, error) {
+	// Sum every withdrawal from the same self-delegation. Checking each message
+	// against the pre-tx balance would let two half-withdrawals both pass and
+	// finish below the force-bonded floor.
+	withdrawn := map[string]math.Int{}
 	for _, msg := range tx.GetMsgs() {
 		var delAddrStr, valAddrStr string
 		var amount math.Int
@@ -61,9 +65,26 @@ func (d UndelegateGuard) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, n
 		default:
 			continue
 		}
-		if err := d.checkWithdrawal(ctx, delAddrStr, valAddrStr, amount); err != nil {
+		if amount.IsNil() || !amount.IsPositive() {
+			continue
+		}
+		delAddrStr, err := canonicalAccount(delAddrStr)
+		if err != nil {
 			return ctx, err
 		}
+		valAddrStr, err = canonicalValidator(valAddrStr)
+		if err != nil {
+			return ctx, err
+		}
+		key := delAddrStr + "|" + valAddrStr
+		total := amount
+		if prev, ok := withdrawn[key]; ok {
+			total = prev.Add(amount)
+		}
+		if err := d.checkWithdrawal(ctx, delAddrStr, valAddrStr, total); err != nil {
+			return ctx, err
+		}
+		withdrawn[key] = total
 	}
 	return next(ctx, tx, simulate)
 }

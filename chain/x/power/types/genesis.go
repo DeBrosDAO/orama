@@ -93,6 +93,15 @@ func (gs GenesisState) Validate() error {
 			return fmt.Errorf("duplicate ramp record for %q", r.OperatorAddress)
 		}
 		seenRamp[r.OperatorAddress] = true
+		if !r.AdmittedTokens.IsNil() && r.AdmittedTokens.IsNegative() {
+			return fmt.Errorf("ramp record for %q has a negative admitted bond", r.OperatorAddress)
+		}
+		if !r.ExcessTokens.IsNil() && r.ExcessTokens.IsNegative() {
+			return fmt.Errorf("ramp record for %q has a negative ramping bond", r.OperatorAddress)
+		}
+		if !r.ExcessTokens.IsNil() && r.ExcessTokens.IsPositive() && !r.ExcessEpochSet {
+			return fmt.Errorf("ramp record for %q has ramping tokens but no excess epoch", r.OperatorAddress)
+		}
 	}
 
 	seenPower := make(map[string]bool, len(gs.PowerRecords))

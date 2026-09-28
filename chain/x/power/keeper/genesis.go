@@ -85,8 +85,8 @@ func (k Keeper) InitGenesis(ctx sdk.Context, genState types.GenesisState, emissi
 		}
 	}
 	for _, r := range genState.RampRecords {
-		if err := k.RampActivation.Set(ctx, r.OperatorAddress, r.ActivationEpoch); err != nil {
-			return nil, fmt.Errorf("failed to set ramp record for %q: %w", r.OperatorAddress, err)
+		if err := k.importRampRecord(ctx, r); err != nil {
+			return nil, err
 		}
 	}
 	for _, r := range genState.PowerRecords {
@@ -281,12 +281,9 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) (*types.GenesisState, error) {
 		return nil, fmt.Errorf("failed to walk bootstrap committee: %w", err)
 	}
 
-	var rampRecords []types.ValidatorRampRecord
-	if err := k.RampActivation.Walk(ctx, nil, func(addr string, epoch uint64) (bool, error) {
-		rampRecords = append(rampRecords, types.ValidatorRampRecord{OperatorAddress: addr, ActivationEpoch: epoch})
-		return false, nil
-	}); err != nil {
-		return nil, fmt.Errorf("failed to walk ramp records: %w", err)
+	rampRecords, err := k.exportRampRecords(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	var powerRecords []types.ValidatorPowerRecord

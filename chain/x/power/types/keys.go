@@ -33,4 +33,10 @@ var (
 	// in a ValidatorUpdate for each operator address, so a later removal update (power 0) can reuse
 	// the exact identity CometBFT already knows, keyed by operator address.
 	LastPubKeyPrefix = collections.NewPrefix(7)
+	// RampAdmittedPrefix is the token amount whose ramp has finished.
+	RampAdmittedPrefix = collections.NewPrefix(14)
+	// RampExcessPrefix is the token amount still ramping on top of RampAdmitted.
+	RampExcessPrefix = collections.NewPrefix(15)
+	// RampExcessEpochPrefix is the epoch the current excess started ramping.
+	RampExcessEpochPrefix = collections.NewPrefix(16)
 )

@@ -3,6 +3,7 @@ package keeper_test
 import (
 	"testing"
 
+	abci "github.com/cometbft/cometbft/abci/types"
 	"github.com/stretchr/testify/require"
 
 	"cosmossdk.io/math"
@@ -76,10 +77,15 @@ func TestRunEndBlock_lambdaAdvancesAndOutsiderGainsPower(t *testing.T) {
 	require.NoError(t, err)
 
 	// Genesis epoch is 1 and BootstrapDeadlineEpochs is 10: lambda's time term reaches exactly 1 at
-	// epoch 11 (epochsSinceGenesis 10 / deadlineEpochs 10).
-	f.Emission.epoch = 11
-	updates, err := f.Keeper.RunEndBlock(f.Ctx, f.Emission)
-	require.NoError(t, err)
+	// epoch 11 (epochsSinceGenesis 10 / deadlineEpochs 10). Advance one epoch at a time. A single
+	// jump across several epochs would move more than a third of voting power, which the per-epoch
+	// lambda rate limit refuses.
+	var updates []abci.ValidatorUpdate
+	for epoch := uint64(6); epoch <= 11; epoch++ {
+		f.Emission.epoch = epoch
+		updates, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission)
+		require.NoError(t, err)
+	}
 
 	lambda, err := f.Keeper.Lambda.Get(f.Ctx)
 	require.NoError(t, err)
@@ -141,8 +147,10 @@ func TestRunEndBlock_rampsNewValidatorOverConfiguredEpochs(t *testing.T) {
 	// a 50/50 split regardless of actual stake), so each one's capped share is exactly its real
 	// stake proportion (0.5). Normal and reduced are set equal so UpdateCapState's normal/reduced
 	// hysteresis (irrelevant to what this test checks) can never change the value in use.
-	p.CapFractionNormal = math.LegacyNewDecWithPrec(60, 2)
-	p.CapFractionReduced = math.LegacyNewDecWithPrec(60, 2)
+	// 90% stays above both the equal split and the halfway token-ramp split
+	// (a fully ramped validator against one at half tokens is 2/3).
+	p.CapFractionNormal = math.LegacyNewDecWithPrec(90, 2)
+	p.CapFractionReduced = math.LegacyNewDecWithPrec(90, 2)
 	require.NoError(t, f.Keeper.Params.Set(f.Ctx, p))
 
 	// An anchor validator with the SAME stake as the one that will ramp below, given a head start to
@@ -182,9 +190,8 @@ func TestRunEndBlock_rampsNewValidatorOverConfiguredEpochs(t *testing.T) {
 		require.Zero(t, power)
 	}
 
-	// Halfway through the ramp (epoch 16 = activation(11) + 5 of its 10 ramp epochs): its raw share
-	// is 0.5(capped)*0.5(ramp)=0.25; the anchor's is a constant 0.5*1.0=0.5; normalized over the
-	// real total (0.75, never a nominal 1): 0.25/0.75 = 1/3 of CometPowerScale.
+	// Halfway through the ramp the new validator's tokens count half and the anchor's count in full,
+	// so the stake split is 1:2. With the cap above that split, normalized power is 1/3.
 	f.Emission.epoch = 16
 	_, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission)
 	require.NoError(t, err)
@@ -200,4 +207,50 @@ func TestRunEndBlock_rampsNewValidatorOverConfiguredEpochs(t *testing.T) {
 	power, err = f.Keeper.LastPower.Get(f.Ctx, outsiderValoper)
 	require.NoError(t, err)
 	require.Equal(t, int64(500_000_000), power)
+}
+
+func TestRunEndBlock_laterBondKeepsRampProgress(t *testing.T) {
+	f := newTestFixture(t)
+	setupSingleCommitteeGenesis(t, f)
+	p, err := f.Keeper.Params.Get(f.Ctx)
+	require.NoError(t, err)
+	p.RampEpochs = 10
+	p.BootstrapExitStake = math.NewInt(1_000_000_000_000)
+	p.CapFractionNormal = math.LegacyNewDecWithPrec(90, 2)
+	p.CapFractionReduced = math.LegacyNewDecWithPrec(90, 2)
+	require.NoError(t, f.Keeper.Params.Set(f.Ctx, p))
+
+	anchor := sdk.ValAddress("later_bond_anchor___").String()
+	f.Staking.addValidator(t, anchor, testPubKey(4), 1_000_000, "0.0")
+	f.Emission.epoch = 1
+	_, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission)
+	require.NoError(t, err)
+	f.Emission.epoch = 11
+	_, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission)
+	require.NoError(t, err)
+	require.NoError(t, f.Keeper.Lambda.Set(f.Ctx, math.LegacyOneDec()))
+	require.NoError(t, f.Keeper.LambdaLastUpdatedEpoch.Set(f.Ctx, 1_000_000_000))
+	for i := 0; i < 6; i++ {
+		_, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission)
+		require.NoError(t, err)
+	}
+
+	outsider := sdk.ValAddress("later_bond_outsider_").String()
+	f.Staking.addValidator(t, outsider, testPubKey(5), 1_000_000, "0.0")
+	f.Emission.epoch = 20
+	_, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission)
+	require.NoError(t, err)
+	f.Emission.epoch = 25
+	_, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission)
+	require.NoError(t, err)
+	before, err := f.Keeper.LastPower.Get(f.Ctx, outsider)
+	require.NoError(t, err)
+	require.Positive(t, before)
+
+	f.Staking.validators[outsider].val.Tokens = math.NewInt(3_000_000)
+	_, err = f.Keeper.RunEndBlock(f.Ctx, f.Emission)
+	require.NoError(t, err)
+	after, err := f.Keeper.LastPower.Get(f.Ctx, outsider)
+	require.NoError(t, err)
+	require.InDelta(t, float64(before), float64(after), 1_000_000, "a later bond must keep the stake already admitted by the ramp")
 }

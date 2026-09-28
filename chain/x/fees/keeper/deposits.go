@@ -31,12 +31,56 @@ func (k Keeper) LockDeposit(ctx context.Context, owner sdk.AccAddress, id string
 		return fmt.Errorf("deposit id %q already exists", id)
 	}
 
-	coins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, amount))
-	if err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, owner, types.DepositsModuleName, coins); err != nil {
-		return fmt.Errorf("failed to lock deposit %q from %s: %w", id, owner, err)
+	if err := k.fundDeposit(ctx, owner, id, amount); err != nil {
+		return err
 	}
 	if err := k.Deposits.Set(ctx, id, types.Deposit{Id: id, Owner: owner.String(), Amount: amount}); err != nil {
 		return fmt.Errorf("failed to record deposit %q: %w", id, err)
+	}
+	return nil
+}
+
+// fundDeposit moves amount into the deposits module account, taking the owner's bank balance
+// first and the shortfall from that same owner's earnings (C2: earnings can fund the signer's
+// own deposits). It checks both balances before moving anything.
+func (k Keeper) fundDeposit(ctx context.Context, owner sdk.AccAddress, id string, amount math.Int) error {
+	spendable := k.bankKeeper.SpendableCoins(ctx, owner).AmountOf(params.BaseDenom)
+	fromBank := amount
+	if fromBank.GT(spendable) {
+		fromBank = spendable
+	}
+	fromEarnings := amount.Sub(fromBank)
+	if fromEarnings.IsPositive() {
+		balance, err := k.GetEarnings(ctx, owner)
+		if err != nil {
+			return err
+		}
+		if balance.LT(fromEarnings) {
+			return fmt.Errorf(
+				"insufficient funds to lock deposit %q: need %s%s, have %s%s spendable and %s%s in earnings",
+				id, amount, params.BaseDenom, spendable, params.BaseDenom, balance, params.BaseDenom,
+			)
+		}
+	}
+	if fromBank.IsPositive() {
+		coins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, fromBank))
+		if err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, owner, types.DepositsModuleName, coins); err != nil {
+			return fmt.Errorf("failed to lock deposit %q from %s's bank balance: %w", id, owner, err)
+		}
+	}
+	if !fromEarnings.IsPositive() {
+		return nil
+	}
+	debited, err := k.DebitEarningsUpTo(ctx, owner, fromEarnings)
+	if err != nil {
+		return err
+	}
+	if debited.LT(fromEarnings) {
+		return fmt.Errorf("deposit %q: earnings debit %s was short of the %s shortfall", id, debited, fromEarnings)
+	}
+	coins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, fromEarnings))
+	if err := k.bankKeeper.SendCoinsFromModuleToModule(ctx, types.ModuleName, types.DepositsModuleName, coins); err != nil {
+		return fmt.Errorf("failed to move deposit %q out of earnings: %w", id, err)
 	}
 	return nil
 }

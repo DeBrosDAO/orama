@@ -37,9 +37,10 @@ type Keeper struct {
 	Lambda                 collections.Item[math.LegacyDec]
 	LambdaLastUpdatedEpoch collections.Item[uint64]
 
-	// GateSatisfied is a one-way ratchet (security review H3(a)): once the number of real,
-	// stake-indexed bonded validators has reached types.HandoverGateThreshold at least once, this
-	// is set to true forever, and lambda is no longer held at Params.PreGateLambdaCap.
+	// GateSatisfied is a one-way ratchet (security review H3(a)): once the number of consensus
+	// participants (bonded validators plus eligible committee members) has reached
+	// types.HandoverGateThreshold at least once, this is set to true forever, and lambda is no
+	// longer held at Params.PreGateLambdaCap.
 	GateSatisfied collections.Item[bool]
 
 	// CapCurrentBps and CapBelowStreak are types.CapState's two fields, stored separately since
@@ -74,6 +75,13 @@ type Keeper struct {
 	// has force-bonded into their self-delegation so far (Params.ForceBondFraction), so the
 	// SelfBondCapMultiplier ceiling can be checked without re-deriving it from delegation history.
 	CommitteeSelfBond collections.Map[string, math.Int]
+
+	// RampAdmitted is the bonded-token amount that has finished its ramp.
+	// RampExcess is the later increase still ramping, from RampExcessEpoch.
+	// A stake increase does not become voting power all at once.
+	RampAdmitted    collections.Map[string, math.Int]
+	RampExcess      collections.Map[string, math.Int]
+	RampExcessEpoch collections.Map[string, uint64]
 }
 
 // NewKeeper builds a new x/power Keeper.
@@ -104,6 +112,9 @@ func NewKeeper(
 		LastPower:              collections.NewMap(sb, types.LastPowerPrefix, "last_power", collections.StringKey, collections.Int64Value),
 		LastPubKey:             collections.NewMap(sb, types.LastPubKeyPrefix, "last_pub_key", collections.StringKey, collections.BytesValue),
 		CommitteeSelfBond:      collections.NewMap(sb, types.CommitteeSelfBondPrefix, "committee_self_bond", collections.StringKey, sdk.IntValue),
+		RampAdmitted:           collections.NewMap(sb, types.RampAdmittedPrefix, "ramp_admitted", collections.StringKey, sdk.IntValue),
+		RampExcess:             collections.NewMap(sb, types.RampExcessPrefix, "ramp_excess", collections.StringKey, sdk.IntValue),
+		RampExcessEpoch:        collections.NewMap(sb, types.RampExcessEpochPrefix, "ramp_excess_epoch", collections.StringKey, collections.Uint64Value),
 	}
 
 	schema, err := sb.Build()

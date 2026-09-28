@@ -351,6 +351,113 @@ func (m *QueryDepositResponse) GetDeposit() Deposit {
 	return Deposit{}
 }
 
+type QueryInvariantsRequest struct {
+}
+
+func (m *QueryInvariantsRequest) Reset()         { *m = QueryInvariantsRequest{} }
+func (m *QueryInvariantsRequest) String() string { return proto.CompactTextString(m) }
+func (*QueryInvariantsRequest) ProtoMessage()    {}
+func (*QueryInvariantsRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_014b2be2555c15df, []int{8}
+}
+func (m *QueryInvariantsRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *QueryInvariantsRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_QueryInvariantsRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *QueryInvariantsRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_QueryInvariantsRequest.Merge(m, src)
+}
+func (m *QueryInvariantsRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *QueryInvariantsRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_QueryInvariantsRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_QueryInvariantsRequest proto.InternalMessageInfo
+
+type QueryInvariantsResponse struct {
+	EarningsMatchModule   bool                  `protobuf:"varint,1,opt,name=earnings_match_module,json=earningsMatchModule,proto3" json:"earnings_match_module,omitempty"`
+	DepositsMatchModule   bool                  `protobuf:"varint,2,opt,name=deposits_match_module,json=depositsMatchModule,proto3" json:"deposits_match_module,omitempty"`
+	FeesBalance           bool                  `protobuf:"varint,3,opt,name=fees_balance,json=feesBalance,proto3" json:"fees_balance,omitempty"`
+	Detail                string                `protobuf:"bytes,4,opt,name=detail,proto3" json:"detail,omitempty"`
+	CumulativeCollected   cosmossdk_io_math.Int `protobuf:"bytes,5,opt,name=cumulative_collected,json=cumulativeCollected,proto3,customtype=cosmossdk.io/math.Int" json:"cumulative_collected"`
+	CumulativeBurned      cosmossdk_io_math.Int `protobuf:"bytes,6,opt,name=cumulative_burned,json=cumulativeBurned,proto3,customtype=cosmossdk.io/math.Int" json:"cumulative_burned"`
+	CumulativeDistributed cosmossdk_io_math.Int `protobuf:"bytes,7,opt,name=cumulative_distributed,json=cumulativeDistributed,proto3,customtype=cosmossdk.io/math.Int" json:"cumulative_distributed"`
+}
+
+func (m *QueryInvariantsResponse) Reset()         { *m = QueryInvariantsResponse{} }
+func (m *QueryInvariantsResponse) String() string { return proto.CompactTextString(m) }
+func (*QueryInvariantsResponse) ProtoMessage()    {}
+func (*QueryInvariantsResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_014b2be2555c15df, []int{9}
+}
+func (m *QueryInvariantsResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *QueryInvariantsResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_QueryInvariantsResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *QueryInvariantsResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_QueryInvariantsResponse.Merge(m, src)
+}
+func (m *QueryInvariantsResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *QueryInvariantsResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_QueryInvariantsResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_QueryInvariantsResponse proto.InternalMessageInfo
+
+func (m *QueryInvariantsResponse) GetEarningsMatchModule() bool {
+	if m != nil {
+		return m.EarningsMatchModule
+	}
+	return false
+}
+
+func (m *QueryInvariantsResponse) GetDepositsMatchModule() bool {
+	if m != nil {
+		return m.DepositsMatchModule
+	}
+	return false
+}
+
+func (m *QueryInvariantsResponse) GetFeesBalance() bool {
+	if m != nil {
+		return m.FeesBalance
+	}
+	return false
+}
+
+func (m *QueryInvariantsResponse) GetDetail() string {
+	if m != nil {
+		return m.Detail
+	}
+	return ""
+}
+
 func init() {
 	proto.RegisterType((*QueryParamsRequest)(nil), "orama.fees.v1.QueryParamsRequest")
 	proto.RegisterType((*QueryParamsResponse)(nil), "orama.fees.v1.QueryParamsResponse")
@@ -360,41 +467,54 @@ func init() {
 	proto.RegisterType((*QueryEarningsResponse)(nil), "orama.fees.v1.QueryEarningsResponse")
 	proto.RegisterType((*QueryDepositRequest)(nil), "orama.fees.v1.QueryDepositRequest")
 	proto.RegisterType((*QueryDepositResponse)(nil), "orama.fees.v1.QueryDepositResponse")
+	proto.RegisterType((*QueryInvariantsRequest)(nil), "orama.fees.v1.QueryInvariantsRequest")
+	proto.RegisterType((*QueryInvariantsResponse)(nil), "orama.fees.v1.QueryInvariantsResponse")
 }
 
 func init() { proto.RegisterFile("orama/fees/v1/query.proto", fileDescriptor_014b2be2555c15df) }
 
 var fileDescriptor_014b2be2555c15df = []byte{
-	// 452 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x8c, 0x53, 0xc1, 0x6e, 0xd3, 0x40,
-	0x10, 0x8d, 0x23, 0x88, 0xdb, 0x45, 0x70, 0x30, 0x09, 0x0a, 0x96, 0x70, 0xc1, 0x80, 0xc4, 0x69,
-	0x97, 0xb6, 0x08, 0x38, 0x5b, 0x05, 0x09, 0x0e, 0x6d, 0xb0, 0xc4, 0x85, 0x0b, 0x5a, 0xdb, 0x93,
-	0x64, 0xd5, 0xda, 0xeb, 0xee, 0x6e, 0x0a, 0xfd, 0x0b, 0x3e, 0xab, 0xc7, 0xde, 0x40, 0x1c, 0x22,
-	0x94, 0xfc, 0x08, 0xca, 0x7a, 0x0c, 0xb2, 0xb1, 0x22, 0x6e, 0xf6, 0xcc, 0x9b, 0xf7, 0xde, 0xce,
-	0xd3, 0x90, 0xfb, 0x52, 0xf1, 0x9c, 0xb3, 0x29, 0x80, 0x66, 0x17, 0xfb, 0xec, 0x7c, 0x01, 0xea,
-	0x92, 0x96, 0x4a, 0x1a, 0xe9, 0xdd, 0xb6, 0x2d, 0xba, 0x69, 0xd1, 0x8b, 0x7d, 0x7f, 0x38, 0x93,
-	0x33, 0x69, 0x3b, 0x6c, 0xf3, 0x55, 0x81, 0xfc, 0x71, 0x73, 0xde, 0x82, 0x6d, 0x27, 0x1c, 0x12,
-	0xef, 0xc3, 0x86, 0x6d, 0xc2, 0x15, 0xcf, 0x75, 0x0c, 0xe7, 0x0b, 0xd0, 0x26, 0x7c, 0x4f, 0xee,
-	0x36, 0xaa, 0xba, 0x94, 0x85, 0x06, 0xef, 0x90, 0x0c, 0x4a, 0x5b, 0x19, 0x3b, 0x0f, 0x9d, 0x67,
-	0xb7, 0x0e, 0x46, 0xb4, 0x21, 0x4e, 0x2b, 0x78, 0x74, 0xe3, 0x6a, 0xb9, 0xd7, 0x8b, 0x11, 0x1a,
-	0x8e, 0x90, 0x2b, 0xe2, 0x1a, 0xde, 0x02, 0xd4, 0x12, 0x13, 0x32, 0x6c, 0x96, 0x51, 0xe3, 0x35,
-	0xd9, 0x49, 0xb8, 0x86, 0xcf, 0x53, 0x00, 0xab, 0xb2, 0x1b, 0x3d, 0xd8, 0xd0, 0xfd, 0x5c, 0xee,
-	0x8d, 0x52, 0xa9, 0x73, 0xa9, 0x75, 0x76, 0x4a, 0x85, 0x64, 0x39, 0x37, 0x73, 0xfa, 0xae, 0x30,
-	0xb1, 0x9b, 0x54, 0x0c, 0xe1, 0x73, 0x64, 0x7c, 0xc3, 0x55, 0x21, 0x8a, 0x59, 0xfd, 0x18, 0x6f,
-	0x4c, 0x5c, 0x9e, 0x65, 0x0a, 0x74, 0x65, 0x7b, 0x37, 0xae, 0x7f, 0xc3, 0x09, 0x19, 0xb5, 0x26,
-	0xd0, 0xc4, 0x2b, 0xe2, 0x26, 0xfc, 0x8c, 0x17, 0xe9, 0xff, 0x7b, 0xb0, 0xe8, 0xf0, 0x29, 0x3e,
-	0xf6, 0x08, 0x4a, 0xa9, 0x85, 0xa9, 0x2d, 0xdc, 0x21, 0x7d, 0x91, 0xa1, 0x7a, 0x5f, 0x64, 0xe1,
-	0x31, 0x5a, 0xfd, 0x03, 0x43, 0xdd, 0x97, 0xc4, 0xcd, 0xaa, 0x12, 0x6e, 0xf8, 0x5e, 0x6b, 0xc3,
-	0x38, 0x80, 0x2b, 0xae, 0xc1, 0x07, 0xdf, 0xfb, 0xe4, 0xa6, 0x25, 0xf4, 0x4e, 0xc8, 0xa0, 0x4a,
-	0xc1, 0x7b, 0xd4, 0x1a, 0xfd, 0x37, 0x66, 0x3f, 0xdc, 0x06, 0x41, 0x4b, 0x31, 0x71, 0x31, 0x22,
-	0xaf, 0x13, 0xde, 0x8c, 0xd5, 0x7f, 0xbc, 0x15, 0x83, 0x9c, 0x1f, 0xc9, 0x4e, 0xbd, 0x72, 0xaf,
-	0x73, 0xa0, 0x15, 0xa1, 0xff, 0x64, 0x3b, 0xe8, 0xaf, 0x55, 0xdc, 0x4f, 0xb7, 0xd5, 0x66, 0x28,
-	0xdd, 0x56, 0x5b, 0x89, 0x44, 0xc7, 0x57, 0xab, 0xc0, 0xb9, 0x5e, 0x05, 0xce, 0xaf, 0x55, 0xe0,
-	0x7c, 0x5b, 0x07, 0xbd, 0xeb, 0x75, 0xd0, 0xfb, 0xb1, 0x0e, 0x7a, 0x9f, 0x5e, 0xcc, 0x84, 0x99,
-	0x2f, 0x12, 0x9a, 0xca, 0x9c, 0x1d, 0x41, 0xa4, 0xa4, 0x3e, 0x99, 0x4e, 0x45, 0x2a, 0xf8, 0x19,
-	0x2b, 0xc0, 0x7c, 0x91, 0xea, 0x94, 0xa5, 0x73, 0x2e, 0x0a, 0xf6, 0xb5, 0xba, 0x3b, 0x73, 0x59,
-	0x82, 0x4e, 0x06, 0xf6, 0xec, 0x0e, 0x7f, 0x07, 0x00, 0x00, 0xff, 0xff, 0x73, 0xa8, 0x0d, 0x35,
-	0xd2, 0x03, 0x00, 0x00,
+	// 634 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x8c, 0x54, 0x4d, 0x6f, 0xd3, 0x40,
+	0x10, 0x4d, 0xfa, 0x91, 0xb4, 0x53, 0x40, 0xb0, 0x4d, 0x82, 0x89, 0x84, 0x4b, 0x0d, 0x45, 0x9c,
+	0x6c, 0xda, 0x22, 0xe0, 0x6c, 0x0a, 0x52, 0x2b, 0xb5, 0x0d, 0x16, 0x5c, 0xe0, 0x10, 0xad, 0xed,
+	0x4d, 0xb2, 0xaa, 0xed, 0x4d, 0xbd, 0xeb, 0x40, 0xff, 0x05, 0x3f, 0x85, 0x03, 0x3f, 0xa2, 0xc7,
+	0x1e, 0x11, 0x87, 0x0a, 0xb5, 0x7f, 0x04, 0x79, 0xbd, 0xae, 0x6b, 0x37, 0x2a, 0xb9, 0xd9, 0x33,
+	0xef, 0xbd, 0x79, 0x3b, 0xeb, 0x67, 0x78, 0xc4, 0x62, 0x1c, 0x62, 0x6b, 0x40, 0x08, 0xb7, 0x26,
+	0x9b, 0xd6, 0x71, 0x42, 0xe2, 0x13, 0x73, 0x1c, 0x33, 0xc1, 0xd0, 0x5d, 0xd9, 0x32, 0xd3, 0x96,
+	0x39, 0xd9, 0xec, 0xb6, 0x86, 0x6c, 0xc8, 0x64, 0xc7, 0x4a, 0x9f, 0x32, 0x50, 0x57, 0x2b, 0xf3,
+	0x25, 0x58, 0x76, 0x8c, 0x16, 0xa0, 0x8f, 0xa9, 0x5a, 0x0f, 0xc7, 0x38, 0xe4, 0x0e, 0x39, 0x4e,
+	0x08, 0x17, 0xc6, 0x1e, 0xac, 0x96, 0xaa, 0x7c, 0xcc, 0x22, 0x4e, 0xd0, 0x36, 0x34, 0xc6, 0xb2,
+	0xa2, 0xd5, 0x9f, 0xd4, 0x5f, 0xac, 0x6c, 0xb5, 0xcd, 0xd2, 0x70, 0x33, 0x83, 0xdb, 0x0b, 0xa7,
+	0xe7, 0x6b, 0x35, 0x47, 0x41, 0x8d, 0xb6, 0xd2, 0xb2, 0x31, 0x27, 0x1f, 0x08, 0xc9, 0x47, 0xf4,
+	0xa0, 0x55, 0x2e, 0xab, 0x19, 0x6f, 0x61, 0xc9, 0xc5, 0x9c, 0xf4, 0x07, 0x84, 0xc8, 0x29, 0xcb,
+	0xf6, 0xe3, 0x54, 0xee, 0xcf, 0xf9, 0x5a, 0xdb, 0x63, 0x3c, 0x64, 0x9c, 0xfb, 0x47, 0x26, 0x65,
+	0x56, 0x88, 0xc5, 0xc8, 0xdc, 0x8d, 0x84, 0xd3, 0x74, 0x33, 0x05, 0xe3, 0xa5, 0x52, 0x7c, 0x8f,
+	0xe3, 0x88, 0x46, 0xc3, 0xfc, 0x30, 0x48, 0x83, 0x26, 0xf6, 0xfd, 0x98, 0xf0, 0xcc, 0xf6, 0xb2,
+	0x93, 0xbf, 0x1a, 0x3d, 0x68, 0x57, 0x18, 0xca, 0xc4, 0x1b, 0x68, 0xba, 0x38, 0xc0, 0x91, 0x37,
+	0xbb, 0x07, 0x89, 0x36, 0x36, 0xd4, 0x61, 0x77, 0xc8, 0x98, 0x71, 0x2a, 0x72, 0x0b, 0xf7, 0x60,
+	0x8e, 0xfa, 0x6a, 0xfa, 0x1c, 0xf5, 0x8d, 0x03, 0x65, 0xf5, 0x0a, 0xa6, 0xe6, 0xbe, 0x86, 0xa6,
+	0x9f, 0x95, 0xd4, 0x86, 0x3b, 0x95, 0x0d, 0x2b, 0x82, 0x5a, 0x71, 0x0e, 0x36, 0x34, 0xe8, 0x48,
+	0xbd, 0xdd, 0x68, 0x82, 0x63, 0x8a, 0x23, 0x71, 0x75, 0x93, 0x3f, 0xe7, 0xe1, 0xe1, 0x8d, 0x96,
+	0x9a, 0xb6, 0x05, 0x6d, 0xa2, 0x4e, 0xde, 0x0f, 0xb1, 0xf0, 0x46, 0xfd, 0x90, 0xf9, 0x49, 0x90,
+	0x9d, 0x79, 0xc9, 0x59, 0xcd, 0x9b, 0xfb, 0x69, 0x6f, 0x5f, 0xb6, 0x52, 0x8e, 0x1a, 0x5a, 0xe1,
+	0xcc, 0x65, 0x9c, 0xbc, 0x79, 0x9d, 0xb3, 0x0e, 0x77, 0x52, 0xff, 0xfd, 0x7c, 0xa5, 0xf3, 0x12,
+	0xba, 0x92, 0xd6, 0xec, 0xac, 0x84, 0x3a, 0xd0, 0xf0, 0x89, 0xc0, 0x34, 0xd0, 0x16, 0xe4, 0x92,
+	0xd4, 0x1b, 0xea, 0x41, 0xcb, 0x4b, 0xc2, 0x24, 0xc0, 0x82, 0x4e, 0x48, 0xdf, 0x63, 0x41, 0x40,
+	0x3c, 0x41, 0x7c, 0x6d, 0x71, 0x96, 0x5b, 0x59, 0x2d, 0xa8, 0xef, 0x72, 0x26, 0xda, 0x83, 0x07,
+	0xd7, 0x14, 0xdd, 0x24, 0x8e, 0x88, 0xaf, 0x35, 0x66, 0x91, 0xbb, 0x5f, 0xf0, 0x6c, 0x49, 0x43,
+	0x9f, 0xa0, 0x73, 0x4d, 0xcb, 0xa7, 0x5c, 0xc4, 0xd4, 0x4d, 0x52, 0x7f, 0xcd, 0x59, 0x04, 0xdb,
+	0x05, 0x79, 0xa7, 0xe0, 0x6e, 0xfd, 0x9a, 0x87, 0x45, 0x79, 0x65, 0xe8, 0x10, 0x1a, 0x59, 0xa4,
+	0xd0, 0x7a, 0xe5, 0x3b, 0xb8, 0x99, 0xd9, 0xae, 0x71, 0x1b, 0x44, 0xdd, 0xb8, 0x03, 0x4d, 0x95,
+	0x37, 0x34, 0x15, 0x5e, 0xce, 0x68, 0xf7, 0xe9, 0xad, 0x18, 0xa5, 0xf9, 0x19, 0x96, 0xf2, 0xfc,
+	0xa0, 0xa9, 0x84, 0x4a, 0x1e, 0xbb, 0xcf, 0x6e, 0x07, 0x15, 0x56, 0xd5, 0xc7, 0x3e, 0xdd, 0x6a,
+	0x39, 0x61, 0xd3, 0xad, 0x56, 0xe3, 0xf5, 0x15, 0xa0, 0x88, 0x01, 0xda, 0x98, 0x46, 0xb9, 0x91,
+	0xa0, 0xee, 0xf3, 0xff, 0xc1, 0x32, 0x71, 0xfb, 0xe0, 0xf4, 0x42, 0xaf, 0x9f, 0x5d, 0xe8, 0xf5,
+	0xbf, 0x17, 0x7a, 0xfd, 0xc7, 0xa5, 0x5e, 0x3b, 0xbb, 0xd4, 0x6b, 0xbf, 0x2f, 0xf5, 0xda, 0x97,
+	0x57, 0x43, 0x2a, 0x46, 0x89, 0x6b, 0x7a, 0x2c, 0xb4, 0x76, 0x88, 0x1d, 0x33, 0x7e, 0x38, 0x18,
+	0x50, 0x8f, 0xe2, 0xc0, 0x8a, 0x88, 0xf8, 0xc6, 0xe2, 0x23, 0xcb, 0x1b, 0x61, 0x1a, 0x59, 0xdf,
+	0xb3, 0x3f, 0xb4, 0x38, 0x19, 0x13, 0xee, 0x36, 0xe4, 0x0f, 0x7a, 0xfb, 0x5f, 0x00, 0x00, 0x00,
+	0xff, 0xff, 0x48, 0x72, 0xcb, 0xb5, 0xfc, 0x05, 0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -413,6 +533,7 @@ type QueryClient interface {
 	BaseFee(ctx context.Context, in *QueryBaseFeeRequest, opts ...grpc.CallOption) (*QueryBaseFeeResponse, error)
 	Earnings(ctx context.Context, in *QueryEarningsRequest, opts ...grpc.CallOption) (*QueryEarningsResponse, error)
 	Deposit(ctx context.Context, in *QueryDepositRequest, opts ...grpc.CallOption) (*QueryDepositResponse, error)
+	Invariants(ctx context.Context, in *QueryInvariantsRequest, opts ...grpc.CallOption) (*QueryInvariantsResponse, error)
 }
 
 type queryClient struct {
@@ -459,12 +580,22 @@ func (c *queryClient) Deposit(ctx context.Context, in *QueryDepositRequest, opts
 	return out, nil
 }
 
+func (c *queryClient) Invariants(ctx context.Context, in *QueryInvariantsRequest, opts ...grpc.CallOption) (*QueryInvariantsResponse, error) {
+	out := new(QueryInvariantsResponse)
+	err := c.cc.Invoke(ctx, "/orama.fees.v1.Query/Invariants", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // QueryServer is the server API for Query service.
 type QueryServer interface {
 	Params(context.Context, *QueryParamsRequest) (*QueryParamsResponse, error)
 	BaseFee(context.Context, *QueryBaseFeeRequest) (*QueryBaseFeeResponse, error)
 	Earnings(context.Context, *QueryEarningsRequest) (*QueryEarningsResponse, error)
 	Deposit(context.Context, *QueryDepositRequest) (*QueryDepositResponse, error)
+	Invariants(context.Context, *QueryInvariantsRequest) (*QueryInvariantsResponse, error)
 }
 
 // UnimplementedQueryServer can be embedded to have forward compatible implementations.
@@ -482,6 +613,9 @@ func (*UnimplementedQueryServer) Earnings(ctx context.Context, req *QueryEarning
 }
 func (*UnimplementedQueryServer) Deposit(ctx context.Context, req *QueryDepositRequest) (*QueryDepositResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Deposit not implemented")
+}
+func (*UnimplementedQueryServer) Invariants(ctx context.Context, req *QueryInvariantsRequest) (*QueryInvariantsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Invariants not implemented")
 }
 
 func RegisterQueryServer(s grpc1.Server, srv QueryServer) {
@@ -560,6 +694,24 @@ func _Query_Deposit_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Query_Invariants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryInvariantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueryServer).Invariants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/orama.fees.v1.Query/Invariants",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueryServer).Invariants(ctx, req.(*QueryInvariantsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 var Query_serviceDesc = _Query_serviceDesc
 var _Query_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "orama.fees.v1.Query",
@@ -580,6 +732,10 @@ var _Query_serviceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Deposit",
 			Handler:    _Query_Deposit_Handler,
+		},
+		{
+			MethodName: "Invariants",
+			Handler:    _Query_Invariants_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -824,6 +980,119 @@ func (m *QueryDepositResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *QueryInvariantsRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryInvariantsRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryInvariantsRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	return len(dAtA) - i, nil
+}
+
+func (m *QueryInvariantsResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryInvariantsResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryInvariantsResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	{
+		size := m.CumulativeDistributed.Size()
+		i -= size
+		if _, err := m.CumulativeDistributed.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintQuery(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x3a
+	{
+		size := m.CumulativeBurned.Size()
+		i -= size
+		if _, err := m.CumulativeBurned.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintQuery(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x32
+	{
+		size := m.CumulativeCollected.Size()
+		i -= size
+		if _, err := m.CumulativeCollected.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintQuery(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x2a
+	if len(m.Detail) > 0 {
+		i -= len(m.Detail)
+		copy(dAtA[i:], m.Detail)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.Detail)))
+		i--
+		dAtA[i] = 0x22
+	}
+	if m.FeesBalance {
+		i--
+		if m.FeesBalance {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.DepositsMatchModule {
+		i--
+		if m.DepositsMatchModule {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.EarningsMatchModule {
+		i--
+		if m.EarningsMatchModule {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintQuery(dAtA []byte, offset int, v uint64) int {
 	offset -= sovQuery(v)
 	base := offset
@@ -919,6 +1188,43 @@ func (m *QueryDepositResponse) Size() (n int) {
 	var l int
 	_ = l
 	l = m.Deposit.Size()
+	n += 1 + l + sovQuery(uint64(l))
+	return n
+}
+
+func (m *QueryInvariantsRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	return n
+}
+
+func (m *QueryInvariantsResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.EarningsMatchModule {
+		n += 2
+	}
+	if m.DepositsMatchModule {
+		n += 2
+	}
+	if m.FeesBalance {
+		n += 2
+	}
+	l = len(m.Detail)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	l = m.CumulativeCollected.Size()
+	n += 1 + l + sovQuery(uint64(l))
+	l = m.CumulativeBurned.Size()
+	n += 1 + l + sovQuery(uint64(l))
+	l = m.CumulativeDistributed.Size()
 	n += 1 + l + sovQuery(uint64(l))
 	return n
 }
@@ -1503,6 +1809,300 @@ func (m *QueryDepositResponse) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if err := m.Deposit.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *QueryInvariantsRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryInvariantsRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryInvariantsRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *QueryInvariantsResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryInvariantsResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryInvariantsResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EarningsMatchModule", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.EarningsMatchModule = bool(v != 0)
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DepositsMatchModule", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.DepositsMatchModule = bool(v != 0)
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field FeesBalance", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.FeesBalance = bool(v != 0)
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Detail", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Detail = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CumulativeCollected", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.CumulativeCollected.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CumulativeBurned", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.CumulativeBurned.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CumulativeDistributed", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.CumulativeDistributed.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

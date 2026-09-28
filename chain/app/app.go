@@ -554,6 +554,10 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		// member's own MsgUndelegate/MsgBeginRedelegate if it would take their self-bond below
 		// what x/power has force-bonded into it, while lambda < 1.
 		powerante.NewUndelegateGuard(app.StakingKeeper, app.PowerKeeper),
+		// Security review M2: a delegation that would sit strictly between zero
+		// and MinDelegationForRewards is rejected, so the per-epoch reward walk
+		// cannot be filled with dust delegations.
+		powerante.NewMinDelegationDecorator(app.StakingKeeper, app.PowerKeeper),
 		ante.NewSetPubKeyDecorator(app.AccountKeeper), // must run before every signature-verification decorator
 		ante.NewValidateSigCountDecorator(app.AccountKeeper),
 		ante.NewSigGasConsumeDecorator(app.AccountKeeper, ante.DefaultSigVerificationGasConsumer),

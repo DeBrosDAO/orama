@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/fees/types"
 )
 
@@ -27,6 +28,30 @@ func TestLockDeposit_movesFundsAndRecordsEntry(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, owner.String(), d.Owner)
 	require.True(t, (d.Amount).Equal(math.NewInt(1_000)))
+}
+
+func TestLockDeposit_drawsTheShortfallFromEarnings(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	owner := sdk.AccAddress("deposit_owner_earn__")
+	f.Bank.fund(owner.String(), math.NewInt(400))
+	f.Bank.fund(testSourceModule, math.NewInt(600))
+	require.NoError(t, f.Keeper.CreditEarnings(f.Ctx, testSourceModule, owner, sdk.NewCoin(params.BaseDenom, math.NewInt(600))))
+
+	require.NoError(t, f.Keeper.LockDeposit(f.Ctx, owner, "storage/deal/earn", math.NewInt(1_000)))
+
+	require.True(t, f.Bank.balanceOf(owner.String()).IsZero())
+	balance, err := f.Keeper.GetEarnings(f.Ctx, owner)
+	require.NoError(t, err)
+	require.True(t, balance.IsZero())
+	require.True(t, f.Bank.balanceOf(types.DepositsModuleName).Equal(math.NewInt(1_000)))
+	require.True(t, f.Bank.balanceOf(types.ModuleName).IsZero())
+
+	got, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, got.EarningsMatchModule, got.Detail)
+	require.True(t, got.DepositsMatchModule, got.Detail)
+	require.True(t, got.FeesBalance, got.Detail)
 }
 
 func TestLockDeposit_rejectsDuplicateID(t *testing.T) {

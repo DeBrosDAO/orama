@@ -17,4 +17,21 @@ message GenesisState {
   ];
   repeated EarningsAccount earnings_accounts = 3 [(gogoproto.nullable) = false];
   repeated Deposit deposits = 4 [(gogoproto.nullable) = false];
+  // cumulative_collected is the norama x/fees has taken in as transaction
+  // fees (base fee plus tip) since genesis. cumulative_burned is the part
+  // burned; cumulative_distributed is the part credited to a proposer.
+  // The invariant is cumulative_burned + cumulative_distributed ==
+  // cumulative_collected.
+  string cumulative_collected = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string cumulative_burned = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string cumulative_distributed = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
 }

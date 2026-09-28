@@ -32,6 +32,15 @@ func (k Keeper) InitGenesis(ctx sdk.Context, genState types.GenesisState) error 
 			return fmt.Errorf("failed to set deposit %q: %w", d.Id, err)
 		}
 	}
+	if err := k.Collected.Set(ctx, types.NormalizeFeeTotal(genState.CumulativeCollected)); err != nil {
+		return fmt.Errorf("failed to set cumulative collected fees: %w", err)
+	}
+	if err := k.Burned.Set(ctx, types.NormalizeFeeTotal(genState.CumulativeBurned)); err != nil {
+		return fmt.Errorf("failed to set cumulative burned fees: %w", err)
+	}
+	if err := k.Distributed.Set(ctx, types.NormalizeFeeTotal(genState.CumulativeDistributed)); err != nil {
+		return fmt.Errorf("failed to set cumulative distributed fees: %w", err)
+	}
 
 	return nil
 }
@@ -63,10 +72,26 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) (*types.GenesisState, error) {
 		return nil, fmt.Errorf("failed to walk deposits: %w", err)
 	}
 
+	collected, err := k.feeTotal(ctx, k.Collected)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cumulative collected fees: %w", err)
+	}
+	burned, err := k.feeTotal(ctx, k.Burned)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cumulative burned fees: %w", err)
+	}
+	distributed, err := k.feeTotal(ctx, k.Distributed)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cumulative distributed fees: %w", err)
+	}
+
 	return &types.GenesisState{
-		Params:           p,
-		BaseFee:          baseFee,
-		EarningsAccounts: earnings,
-		Deposits:         deposits,
+		Params:                p,
+		BaseFee:               baseFee,
+		EarningsAccounts:      earnings,
+		Deposits:              deposits,
+		CumulativeCollected:   collected,
+		CumulativeBurned:      burned,
+		CumulativeDistributed: distributed,
 	}, nil
 }

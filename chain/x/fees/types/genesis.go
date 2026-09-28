@@ -3,6 +3,8 @@ package types
 import (
 	"fmt"
 
+	"cosmossdk.io/math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
@@ -11,11 +13,22 @@ import (
 func DefaultGenesisState() *GenesisState {
 	p := DefaultParams()
 	return &GenesisState{
-		Params:           p,
-		BaseFee:          p.InitialBaseFee,
-		EarningsAccounts: []EarningsAccount{},
-		Deposits:         []Deposit{},
+		Params:                p,
+		BaseFee:               p.InitialBaseFee,
+		EarningsAccounts:      []EarningsAccount{},
+		Deposits:              []Deposit{},
+		CumulativeCollected:   math.ZeroInt(),
+		CumulativeBurned:      math.ZeroInt(),
+		CumulativeDistributed: math.ZeroInt(),
 	}
+}
+
+// NormalizeFeeTotal returns v, or zero when v was never set.
+func NormalizeFeeTotal(v math.Int) math.Int {
+	if v.IsNil() {
+		return math.ZeroInt()
+	}
+	return v
 }
 
 // Validate performs genesis-state sanity checks.
@@ -56,6 +69,16 @@ func (gs GenesisState) Validate() error {
 		if d.Amount.IsNil() || !d.Amount.IsPositive() {
 			return fmt.Errorf("deposit %q amount must be positive, got %s", d.Id, d.Amount)
 		}
+	}
+
+	collected := NormalizeFeeTotal(gs.CumulativeCollected)
+	burned := NormalizeFeeTotal(gs.CumulativeBurned)
+	distributed := NormalizeFeeTotal(gs.CumulativeDistributed)
+	if collected.IsNegative() || burned.IsNegative() || distributed.IsNegative() {
+		return fmt.Errorf("fee accounting counters must be non-negative")
+	}
+	if !burned.Add(distributed).Equal(collected) {
+		return fmt.Errorf("fee accounting invariant broken: burned (%s) + distributed (%s) != collected (%s)", burned, distributed, collected)
 	}
 
 	return nil

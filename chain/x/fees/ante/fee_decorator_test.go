@@ -79,6 +79,18 @@ func (b *fakeBankKeeper) SpendableCoins(_ context.Context, addr sdk.AccAddress) 
 	return sdk.NewCoins(sdk.NewCoin(params.BaseDenom, b.balanceOf(addr.String())))
 }
 
+func (b *fakeBankKeeper) GetBalance(_ context.Context, addr sdk.AccAddress, denom string) sdk.Coin {
+	if v, ok := b.balances[addr.String()]; ok {
+		return sdk.NewCoin(denom, v)
+	}
+	for _, name := range []string{types.ModuleName, types.DepositsModuleName} {
+		if authtypes.NewModuleAddress(name).Equals(addr) {
+			return sdk.NewCoin(denom, b.balanceOf(name))
+		}
+	}
+	return sdk.NewCoin(denom, math.ZeroInt())
+}
+
 // fakeAccountKeeper always reports every address as an existing, empty account: this decorator
 // only cares whether the payer exists at all.
 type fakeAccountKeeper struct{}

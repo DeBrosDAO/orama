@@ -28,6 +28,7 @@ func GetQueryCmd() *cobra.Command {
 		GetCmdQueryBaseFee(),
 		GetCmdQueryEarnings(),
 		GetCmdQueryDeposit(),
+		GetCmdQueryInvariants(),
 	)
 
 	return cmd
@@ -117,6 +118,29 @@ func GetCmdQueryDeposit() *cobra.Command {
 			res, err := queryClient.Deposit(cmd.Context(), &types.QueryDepositRequest{Id: args[0]})
 			if err != nil {
 				return fmt.Errorf("failed to query deposit %s: %w", args[0], err)
+			}
+			return clientCtx.PrintProto(res)
+		},
+	}
+	flags.AddQueryFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdQueryInvariants implements `oramad query fees invariants`.
+func GetCmdQueryInvariants() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "invariants",
+		Short: "Query x/fees's earnings, deposit and fee-accounting invariants",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			queryClient := types.NewQueryClient(clientCtx)
+			res, err := queryClient.Invariants(cmd.Context(), &types.QueryInvariantsRequest{})
+			if err != nil {
+				return fmt.Errorf("failed to query fees invariants: %w", err)
 			}
 			return clientCtx.PrintProto(res)
 		},

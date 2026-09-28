@@ -104,3 +104,43 @@ func TestExportGenesis_roundTrip(t *testing.T) {
 	require.True(t, exported.Lambda.Equal(math.LegacyZeroDec()))
 	require.NoError(t, exported.Validate())
 }
+
+func TestExportGenesis_rampBondRoundTrip(t *testing.T) {
+	f := newTestFixture(t)
+	f.Ctx = f.Ctx.WithChainID("orama-devnet-1")
+	committee := threeMemberCommittee(t)
+	gs := types.DefaultGenesisState()
+	gs.Params.MinCommitteeSize = 1
+	gs.BootstrapCommittee = committee
+	_, err := f.Keeper.InitGenesis(f.Ctx, *gs, f.Emission)
+	require.NoError(t, err)
+
+	acc, err := sdk.AccAddressFromBech32(committee[0].OperatorAddress)
+	require.NoError(t, err)
+	valoper := sdk.ValAddress(acc).String()
+	require.NoError(t, f.Keeper.RampActivation.Set(f.Ctx, valoper, 2))
+	require.NoError(t, f.Keeper.RampAdmitted.Set(f.Ctx, valoper, math.NewInt(1_000)))
+	require.NoError(t, f.Keeper.RampExcess.Set(f.Ctx, valoper, math.NewInt(250)))
+	require.NoError(t, f.Keeper.RampExcessEpoch.Set(f.Ctx, valoper, 4))
+
+	exported, err := f.Keeper.ExportGenesis(f.Ctx)
+	require.NoError(t, err)
+	require.NoError(t, exported.Validate())
+
+	restored := newTestFixture(t)
+	restored.Ctx = restored.Ctx.WithChainID("orama-devnet-1")
+	_, err = restored.Keeper.InitGenesis(restored.Ctx, *exported, restored.Emission)
+	require.NoError(t, err)
+	activation, err := restored.Keeper.RampActivation.Get(restored.Ctx, valoper)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), activation)
+	admitted, err := restored.Keeper.RampAdmitted.Get(restored.Ctx, valoper)
+	require.NoError(t, err)
+	require.True(t, admitted.Equal(math.NewInt(1_000)))
+	excess, err := restored.Keeper.RampExcess.Get(restored.Ctx, valoper)
+	require.NoError(t, err)
+	require.True(t, excess.Equal(math.NewInt(250)))
+	excessEpoch, err := restored.Keeper.RampExcessEpoch.Get(restored.Ctx, valoper)
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), excessEpoch)
+}

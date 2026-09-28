@@ -66,3 +66,20 @@ func (q queryServer) Deposit(goCtx context.Context, req *types.QueryDepositReque
 	}
 	return &types.QueryDepositResponse{Deposit: deposit}, nil
 }
+
+func (q queryServer) Invariants(goCtx context.Context, _ *types.QueryInvariantsRequest) (*types.QueryInvariantsResponse, error) {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	got, err := q.Keeper.CheckInvariants(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &types.QueryInvariantsResponse{
+		EarningsMatchModule:   got.EarningsMatchModule,
+		DepositsMatchModule:   got.DepositsMatchModule,
+		FeesBalance:           got.FeesBalance,
+		Detail:                got.Detail,
+		CumulativeCollected:   got.Collected,
+		CumulativeBurned:      got.Burned,
+		CumulativeDistributed: got.Distributed,
+	}, nil
+}

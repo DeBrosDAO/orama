@@ -16,10 +16,9 @@ import (
 // minted by x/emission into sourceModule's account - on capped power P_i instead of stock
 // x/staking/x/distribution's token-weighted share (plans/open-network/track-c-chain.md C4
 // "Rewards are paid on actual power P_i", C3 "It does not use the stock distribution module"). It
-// is called from x/emission's BeginBlock (Keeper.closeEpoch), and reuses the identical power
-// computation (Keeper.computePowers) RunEndBlock's later call in the same block's EndBlock phase
-// will also use, so a validator's reward share always matches the CometBFT power it is actually
-// given this block.
+// is called from x/emission's BeginBlock (Keeper.closeEpoch) and pays on the lambda already
+// stored. RunEndBlock later in the same block is what may raise lambda, after this block's
+// staking messages; that new lambda is what the next block's rewards use.
 //
 // Each validator's share of totalMint is P_i normalized by the sum of every entry's P_i this block
 // (Keeper.normalizedShares - security review B5: "rewards must be paid pro rata on
@@ -44,7 +43,7 @@ func (k Keeper) DistributeEpochRewards(ctx sdk.Context, emissionKeeper types.Emi
 		return math.ZeroInt(), nil
 	}
 
-	_, lambda, entries, err := k.computePowers(ctx, emissionKeeper)
+	_, lambda, entries, err := k.computePowers(ctx, emissionKeeper, false)
 	if err != nil {
 		return math.ZeroInt(), fmt.Errorf("failed to compute powers for epoch reward distribution: %w", err)
 	}

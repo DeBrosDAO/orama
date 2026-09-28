@@ -15,6 +15,7 @@ service Query {
   rpc BaseFee(QueryBaseFeeRequest) returns (QueryBaseFeeResponse);
   rpc Earnings(QueryEarningsRequest) returns (QueryEarningsResponse);
   rpc Deposit(QueryDepositRequest) returns (QueryDepositResponse);
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
 }
 
 message QueryParamsRequest {}
@@ -49,4 +50,25 @@ message QueryDepositRequest {
 
 message QueryDepositResponse {
   Deposit deposit = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  bool earnings_match_module = 1;
+  bool deposits_match_module = 2;
+  bool fees_balance = 3;
+  string detail = 4;
+  string cumulative_collected = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string cumulative_burned = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string cumulative_distributed = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
 }

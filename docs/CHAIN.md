@@ -85,11 +85,12 @@ runs with its default send-enabled behavior. This is a known gap, not a design d
   override in `chain/app/genesis_overrides.go`), not the SDK's own default: there is no `x/gov` and
   therefore no spend path for a community pool on this chain, so a nonzero tax would just
   accumulate norama nothing can ever claim.
-- **The genesis consensus block `max_gas` is set to 100,000,000`, not CometBFT's own unlimited
+- **The genesis consensus block `max_gas` is set to 100,000,000, not CometBFT's own unlimited
   default.** `x/consensus` has no genesis state of its own in this SDK version - the "consensus"
   block gas/size limits live in the top-level `consensus` field of `genesis.json`, which
   `oramad`'s own module wiring can't default - so `chain/scripts/localnet/localnet.sh` and
   `chain/scripts/stagenet/deploy.sh` both patch it into the generated genesis file directly.
+  `localnet.sh` reads `BLOCK_MAX_GAS` (default `100000000`).
 - **`app.toml`'s default `minimum-gas-prices` is `0.000001norama`**, not zero. This is a
   separate, per-validator local mempool admission policy (`x/fees/ante.checkValidatorMinGasPrice`,
   standing in for stock `x/auth/ante`'s own unexported `checkTxFeeWithValidatorMinGasPrices`),
@@ -290,12 +291,13 @@ time it recomputes power.
 and every protocol payout (emission, fees) lands in a restricted earnings account, never a public
 bank balance (see "`x/fees`" below) - so without a way to move earnings into a bondable bank
 balance, nobody outside the genesis bootstrap committee could ever accumulate enough of a *public*
-balance to self-bond a validator or delegate at all. `x/fees/ante.BondTopUpDecorator`, earlier in
-the ante chain than `FeeDecorator`, tops up a signer's own shortfall (the declared bond amount minus
-their current spendable bank balance) from that same signer's own earnings, transparently, before
-the real `MsgCreateValidator`/`MsgDelegate` handler runs - atomic with the rest of the tx, so it
-rolls back together on any later failure. It only ever moves an address's own earnings into its own
-bank balance; a tx naming someone else's address would fail normal signature verification anyway.
+balance to self-bond a validator or delegate at all. `x/fees/ante.BondTopUpDecorator` runs after `FeeDecorator` and before signature
+verification. It tops up a signer's own shortfall (the declared bond amount minus their current
+spendable bank balance) from that same signer's own earnings, before the real
+`MsgCreateValidator`/`MsgDelegate` handler runs. The fee has already been settled, so a tx pays its
+fee and then bonds from whatever earnings remain. The top-up is in the same ante cache as the rest
+of the tx and rolls back with it. It only ever moves an address's own earnings into its own bank
+balance; a tx naming someone else's address fails signature verification.
 
 ### The power formula
 
@@ -313,10 +315,15 @@ P_i = (1 - lambda) * B_i + lambda * C_i
   `Params.CapStepDownValidatorCount` validators are active), with the excess above the cap
   redistributed proportionally among not-yet-capped validators (an iterative "water-filling" pass,
   ICS power-shaping's algorithm) until it converges - or, if the cap can't be respected by *any*
-  distribution (`cap * n < 1`), an **equal fallback** (every validator gets `1/n`). `C_i` is then
-  scaled by a **30-epoch ramp** (`Params.RampEpochs`, `types.RampFactor`) from the epoch a
-  validator's stake first became positive, so a brand-new validator's power rises linearly from
-  zero rather than appearing at full strength immediately.
+  distribution (`cap * n < 1`), an **equal fallback** (every validator in that calculation gets
+  `1/n`). The calculation sees only tokens the **30-epoch ramp** (`Params.RampEpochs`) has
+  admitted. Tokens already admitted stay admitted, and any later increase starts its own ramp at
+  zero, so a bond does not move `C_i` in the block it arrives. A validator with nothing admitted
+  yet is left out of the equal fallback. A jailed or tombstoned validator is left out of `C_i`
+  entirely, so a tombstone drops the seat even when the validator still has bonded tokens. If the
+  capped share falls to zero while the validator is still bonded, or the validator leaves the
+  bonded set, the ramp state is cleared and the next positive balance starts over. The admitted
+  and still-ramping token amounts are part of exported genesis, so a restart continues the same ramp.
 - **`lambda`** (`types.ComputeLambda`), the hand-over factor: recomputed once per **closed
   x/emission epoch** (not every block - see "epochs, not calendar time" below),
 
@@ -324,12 +331,34 @@ P_i = (1 - lambda) * B_i + lambda * C_i
   lambda = min(1, max(lambda_prev, bonded / bootstrap_exit_stake, epochs_since_genesis / bootstrap_deadline_epochs))
   ```
 
-  **Monotonic by construction** (`lambda_prev` is one of the three terms maxed together), it
-  reaches exactly `1` by `bootstrap_deadline_epochs` (`plans/open-network.md` D16: "~12 months")
-  **regardless of stake**, or earlier once total bonded stake reaches `bootstrap_exit_stake`. At
-  `lambda = 1`, `(1 - lambda) = 0`, so **a committee-only member's power falls to exactly zero** -
+  **Monotonic by construction** (`lambda_prev` is one of the three terms maxed together). Two
+  further clamps apply after that formula, both only ever lowering the step, never raising it:
+
+  - Until `activeValidatorCount` reaches `HandoverGateThreshold` (twice the number of
+    validators it takes to fill 100% of power at the current cap), lambda is held at
+    `Params.PreGateLambdaCap` (0.95). That count is every stake-indexed bonded validator plus
+    every eligible committee member who is not already in that set, including a committee member
+    with no stake. Crossing the threshold once sets `GateSatisfied` permanently.
+  - Lambda advances in `EndBlock`, on the validator set this block will publish. The step is
+    shortened until both of these shifts from the previous lambda stay within one third (total
+    variation): the ramped shares this block publishes, and the unramped capped stake those
+    validators already hold. The second measurement is what stops a jump that does not move this
+    block's published weights, because a ramp is still zero, from becoming a large shift when the
+    ramp later ticks. The deadline's own slope is about `1/365` per epoch, under the bound, so a
+    chain that has passed the gate still reaches lambda 1 by `bootstrap_deadline_epochs`. A stake
+    threshold that would otherwise jump lambda to 1 in one epoch is spread over the following epochs
+    instead.
+  - Separately, an increase in the voting power sent to CometBFT from lambda, the ramp, or a new
+    bond stays within one third (total variation) in one block. A decrease is applied in that same
+    block. Jailing, tombstoning, and unbonding drop that validator's power immediately. When the
+    drop is larger than one third, the remaining validators absorb it in the same block. If the
+    previous set and the new set do not overlap, the new set is published so the block still has
+    validators.
+
+  At `lambda = 1`, `(1 - lambda) = 0`, so **a committee-only member's power falls to exactly zero** -
   "committee seats lapse at lambda = 1" falls directly out of the formula, with no separate code
-  path needed.
+  path needed. A jailed, tombstoned, or unbonded committee member's bootstrap share is zero
+  immediately, while the seat still exists.
 
 `P_i` is mapped to a CometBFT integer power deterministically
 (`types.PowerToCometBFT`): `floor(P_i * Params.CometPowerScale)` (scale `1e9` by default),
@@ -366,8 +395,11 @@ computation for a block always sees that block's freshest bonded set.
 its own account, `x/emission` calls `PowerKeeper.DistributeEpochRewards` (implemented by
 `power/keeper.Keeper`), passing itself back as an `EmissionKeeper` (so `x/power` can read the
 current epoch without an import cycle). `DistributeEpochRewards` reuses the **exact same**
-`computePowers` call `RunEndBlock` used this block, so a validator's reward share always matches
-the CometBFT power it was actually just given, and:
+`computePowers` call with advancement disabled. Rewards therefore use the lambda stored
+before this block. `RunEndBlock` may raise lambda afterwards, on the post-transaction
+validator set, and that new lambda is what the next block's rewards use. The CometBFT
+powers returned from that `EndBlock` can also be lower than these reward shares while an
+increase is still inside the one-third per-block limit. Within one block the two can differ, and:
 
 1. pulls the minted coins into `x/power`'s own module account;
 2. for each validator with a positive share, floors `share * totalMint` into its amount (the tiny
@@ -393,11 +425,29 @@ member's own account, then self-delegated via `stakingKeeper.Delegate` - the sam
 `MsgDelegate` uses. Because `InitGenesis` already gave every committee member a real (if
 zero-token) validator record, this works from that member's **very first reward**, with no separate
 `MsgCreateValidator` step required. A double-sign now has real stake to slash from day one.
+The slash fraction is applied to the tokens still bonded plus the initial balance of unbonding
+and redelegation entries created at or after the infraction height and not yet mature. Evidence
+reports CometBFT power, and that power is not the slash base.
 
 ### Queries
 
 `oramad query power ...`: `params`, `bootstrap-committee`, `lambda` (current lambda, cap state and
-hysteresis streak), `validator-power [valoper-address]` (last CometBFT power assigned).
+hysteresis streak), `validator-power [valoper-address]`. `validator-power` returns the last
+CometBFT power assigned (`comet_power`). Its `bootstrap_share`, `capped_share` and `power_share`
+fields are always zero: filling them would rerun the block's power computation, and the query
+server does not hold an `EmissionKeeper`.
+
+`x/power/ante.MinDelegationDecorator` applies every `MsgCreateValidator`, `MsgDelegate`,
+`MsgUndelegate`, `MsgBeginRedelegate` and `MsgCancelUnbondingDelegation` in the transaction,
+in order, and rejects the transaction if any delegation would sit strictly below
+`Params.MinDelegationForRewards` (1 ORAMA by default). A withdrawal that consumes the
+delegation's shares, the way `x/staking` caps `ValidateUnbondAmount`, is a full exit and is
+allowed. A withdrawal that leaves a share whose truncated token value is still below the
+minimum is rejected.
+The per-epoch reward walk is still one pass over every delegation; the minimum keeps that walk
+from being filled with dust delegations. `x/power/ante.UndelegateGuard` rejects a committee
+member's own undelegation or redelegation that would take its self-bond below the amount
+force-bonded so far, while lambda is below 1.
 
 ### Genesis tooling: `oramad genesis add-bootstrap-validator`
 
@@ -433,7 +483,8 @@ decorator is exactly `x/auth/ante`'s own). It requires a tx's declared fee to be
 `base_fee * gas_limit`; anything above that is a **tip**. `Keeper.SettleFee`:
 
 1. pays the **tip from the payer's bank balance only** - a tip may never draw on earnings (security
-   review M4: earnings must never leave the ledger except to pay the base fee), so a tip larger than
+   review M4: a tip is never drawn from earnings; earnings pay the base fee, the signer's own
+   bond, and the signer's own deposits), so a tip larger than
    the payer's spendable bank balance fails the tx outright;
 2. pays as much of the **base fee** as possible from whatever bank balance is left after the tip,
    then falls back to the payer's **earnings account** for any remaining shortfall
@@ -451,9 +502,9 @@ decorator is exactly `x/auth/ante`'s own). It requires a tx's declared fee to be
    ever spend from) - so a broken header field can never block every transaction on the chain.
 
 A `MsgCreateValidator`/`MsgDelegate` whose declared bond amount exceeds the signer's own spendable
-bank balance is topped up from that same signer's earnings first, by a separate decorator
-(`x/fees/ante.BondTopUpDecorator` - security review B8; see "Outsiders can bond from earnings"
-under "`x/power`" above), earlier in the ante chain, before this decorator runs.
+bank balance is topped up from that same signer's earnings by `x/fees/ante.BondTopUpDecorator`
+(security review B8; see "Outsiders can bond from earnings" under "`x/power`" above). That
+decorator runs after this one, so the fee is settled before the bond is funded.
 
 Feegrant sponsorship still works exactly as it does with the stock decorator (a fee granter, if one
 is set and authorizes it, pays instead of the signer) - except that, as above, a granter-sponsored
@@ -472,19 +523,26 @@ yet - mirroring stock `x/auth/ante`'s own `!simulate` guard around its equivalen
 account: `CreditEarnings(ctx, senderModule, addr, coin)` moves `coin` from `senderModule`'s account
 into `x/fees`' and increments the ledger; internal callers that already hold the coins in `x/fees`'
 own account (the ante decorator's tip, a released deposit's refund) skip the transfer and just
-touch the ledger. This keeps **"sum of earnings balances == the earnings module account balance"**
-(one of C2's invariants) true after every operation - worked through by hand for both the
-bank-funded and earnings-funded fee-payment paths in the code comments on `SettleFee`.
+touch the ledger. `SettleFee` also adds the fee to three counters: collected, burned, and distributed (the tip).
+`Keeper.CheckInvariants` checks three equalities, exposed as `oramad query fees invariants`:
 
-Earnings today are usable only for **paying tx fees** (the ante decorator) and, once force-bonded,
-**bonding**. `MsgShieldEarnings` (shielding earnings into a private note) is explicitly **not**
-implemented yet - it depends on `x/shielded` (C12) - and there is no withdraw-to-a-public-bank-balance
-message at all, matching D7's "no public user-to-user path".
+- sum of earnings balances == the `fees` module account balance;
+- sum of open deposits == the `fees_deposits` module account balance;
+- burned + distributed == collected.
+
+A balance debited back to zero is removed from the earnings map rather than stored as a zero row.
+
+Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** (the bond
+top-up decorator) and fund the signer's own **state deposits** (`LockDeposit` takes the bank
+balance first and the shortfall from that same owner's earnings). `MsgShieldEarnings` is not
+implemented yet. It depends on `x/shielded` (C12). There is no message that sends earnings to
+another address.
 
 ### State deposits (implemented, not yet consumed)
 
 `Keeper.LockDeposit`/`Keeper.ReleaseDeposit` implement the generic lock/refund/burn API C2 asks
-for, backed by a **second, separate module account** (`fees_deposits`, distinct from `fees` itself
+for. `LockDeposit` takes the owner's spendable bank balance first and any shortfall from that
+owner's earnings. The coins sit in a **second, separate module account** (`fees_deposits`, distinct from `fees` itself
 - so "the deposit module balance == open deposits" stays an independently checkable invariant from
 "sum of earnings balances == the earnings module balance"). `ReleaseDeposit` refunds
 `Params.DepositRefundFraction` (99%) to the owner's earnings and burns the rest
@@ -494,14 +552,15 @@ are its intended callers.
 
 ### Queries
 
-`oramad query fees ...`: `params`, `base-fee`, `earnings [address]`, `deposit [id]`.
+`oramad query fees ...`: `params`, `base-fee`, `earnings [address]`, `deposit [id]`, `invariants`.
 
 `base-fee`'s `QueryBaseFeeResponse.base_fee` is a `cosmossdk.io/math.Int` (a **whole-number** count
 of norama per gas unit, e.g. `"1000"` - never a decimal string like `"1000.0"` or `"0.001"`),
 serialized as a JSON/proto string the way every `math.Int` field is. A client (including RootWallet)
 must parse it as an integer, not a decimal: `x/fees.Keeper.BaseFee` is stored and adjusted as an
-integer end to end (`types.NextBaseFee`'s EIP-1559 update rounds to the nearest whole norama every
-block, floored at `Params.MinBaseFee` - see "The base fee (EIP-1559-style)" above), never as a
+integer end to end (`types.NextBaseFee` truncates the EIP-1559 update to a whole norama and, when
+that truncation would erase a real move, steps by one norama, floored at `Params.MinBaseFee` - see
+"The base fee (EIP-1559-style)" above), never as a
 `math.LegacyDec`.
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
@@ -542,7 +601,7 @@ there are no gentxs at all. It also shortens the emission epoch and sets `allow_
 (`EPOCH_DURATION=30s EPOCH_MIN_BLOCKS=5` by default, both overridable env vars; `CHAIN_ID` must
 contain `-localnet-`, `-devnet-` or `-stagenet-` or the script refuses to run - `allow_bootstrap_stake`
 here relaxes only the epoch-duration/min-blocks floors, not any premine gate, since supply stays at
-zero), patches a finite consensus block `max_gas` into the generated genesis, distributes it, and
+zero), patches a finite consensus block `max_gas` (`BLOCK_MAX_GAS`, default 100,000,000) into the generated genesis, distributes it, and
 starts every node in the background on distinct localhost ports in the 31000-31099 range
 (P2P/RPC/gRPC/API/Prometheus/pprof, ten ports per node so up to ten validators fit). Every setup
 command's output goes to `scripts/localnet/.localnet/setup.log` rather than being discarded, so a
@@ -677,10 +736,12 @@ for anything that does.
   (its intended callers) don't exist yet.
 - **`x/power.DistributeEpochRewards` iterates every delegation of every validator once per closed
   epoch** (`Keeper.distributeValidatorReward`), rather than using `x/distribution`'s O(1)-per-block
-  F1 historical-rewards accumulator. This is O(total delegations across all validators) per epoch
-  (not per block - epochs are daily by default), which is an accepted, documented scale limit for
-  now rather than a bug; revisiting it (an F1-style accumulator paid into earnings instead of a
-  pull-based withdraw) is future work if delegator counts grow large enough for it to matter.
+  F1 historical-rewards accumulator. New delegations below `Params.MinDelegationForRewards` are
+  rejected. The check runs on the whole transaction in order, so splitting the withdrawal
+  across messages, cancelling an unbonding, or leaving a truncated share remainder cannot
+  park a delegation between zero and that minimum. It is still O(delegations) per epoch
+  (daily by default). An F1-style
+  accumulator paid into earnings is future work if delegator counts make the walk matter.
 - **`oramad query power validator-power`'s `bootstrap_share`/`capped_share`/`power_share` fields are
   always zero.** Recomputing them would need the same full block-universe computation `EndBlock`
   does, which needs an `EmissionKeeper` the query server doesn't hold; only the last CometBFT power

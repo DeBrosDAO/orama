@@ -27,4 +27,9 @@ var (
 	// DepositsPrefix is the collections key prefix for open state-deposit ledger entries, keyed by
 	// the caller-assigned deposit id.
 	DepositsPrefix = collections.NewPrefix(3)
+	// CollectedKey, BurnedKey and DistributedKey store the fee-accounting counters behind
+	// the "burned + distributed == collected" invariant.
+	CollectedKey   = collections.NewPrefix(4)
+	BurnedKey      = collections.NewPrefix(5)
+	DistributedKey = collections.NewPrefix(6)
 )

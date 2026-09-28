@@ -33,23 +33,19 @@ func isValidatorNotFound(err error) bool {
 // member (whether or not it is currently eligible - see committeeEligibility) plus every currently
 // bonded outsider validator.
 type validatorEntry struct {
-	operatorAddr string
-	pubKeyBytes  []byte
-	bootstrap    math.LegacyDec
-	rampedCapped math.LegacyDec
+	operatorAddr   string
+	pubKeyBytes    []byte
+	bootstrap      math.LegacyDec
+	rampedCapped   math.LegacyDec
+	unrampedCapped math.LegacyDec
 }
 
-// computePowers recomputes lambda (advancing it, and the cap, exactly once if this block closes a
-// new x/emission epoch) and every validator's power share for the current block. It is the single
-// source both RunEndBlock (to diff against the previous block's CometBFT powers) and
-// DistributeEpochRewards (to weight the epoch's mint) use, so both always agree on "this block's"
-// power. DistributeEpochRewards is called from x/emission's BeginBlock (via Keeper.closeEpoch), so
-// in practice it is usually the FIRST call to computePowers in a block that closes an epoch -
-// advancing lambda/the cap there - and RunEndBlock's later call in the same block's EndBlock phase
-// reuses the now-already-advanced values (see app.go's begin/end-blocker order). Neither mutates
-// any state this function reads apart from that once-per-epoch advance, which is itself idempotent
-// within the same epoch, so calling it more than once in a block is redundant but not incorrect.
-func (k Keeper) computePowers(ctx sdk.Context, emissionKeeper types.EmissionKeeper) (types.Params, math.LegacyDec, []validatorEntry, error) {
+// computePowers loads lambda and the cap and builds this block's validator entries.
+// advance is true only for RunEndBlock. That call is the one that may raise lambda,
+// and it runs after the block's staking messages, so the rate limit sees the stake
+// that this block will actually publish. DistributeEpochRewards passes false and
+// pays on the lambda stored by the previous block.
+func (k Keeper) computePowers(ctx sdk.Context, emissionKeeper types.EmissionKeeper, advance bool) (types.Params, math.LegacyDec, []validatorEntry, error) {
 	p, err := k.Params.Get(ctx)
 	if err != nil {
 		return types.Params{}, math.LegacyDec{}, nil, fmt.Errorf("failed to load power params: %w", err)
@@ -102,44 +98,101 @@ func (k Keeper) computePowers(ctx sdk.Context, emissionKeeper types.EmissionKeep
 	}
 	activeValidatorCount := uint64(len(activeSet))
 
-	lambda, capFraction, err := k.advanceEpochIfNeeded(ctx, p, currentEpoch, activeValidatorCount)
+	lambda, err := k.Lambda.Get(ctx)
+	if err != nil {
+		return types.Params{}, math.LegacyDec{}, nil, fmt.Errorf("failed to load lambda: %w", err)
+	}
+	capBps, err := k.CapCurrentBps.Get(ctx)
+	if err != nil {
+		return types.Params{}, math.LegacyDec{}, nil, fmt.Errorf("failed to load current_cap_bps: %w", err)
+	}
+	var prevLambda math.LegacyDec
+	advanced := false
+	capFraction := types.CapFractionBps(capBps)
+	if advance {
+		lambda, capFraction, prevLambda, advanced, err = k.advanceEpochIfNeeded(ctx, p, currentEpoch, activeValidatorCount)
+		if err != nil {
+			return types.Params{}, math.LegacyDec{}, nil, err
+		}
+	}
+
+	stakes, pubKeyByAddr, err := k.powerStakes(ctx, bonded)
 	if err != nil {
 		return types.Params{}, math.LegacyDec{}, nil, err
 	}
-
-	stakes := make([]types.ValidatorStake, len(bonded))
-	pubKeyByAddr := make(map[string][]byte, len(bonded))
-	for i, v := range bonded {
-		stakes[i] = types.ValidatorStake{OperatorAddress: v.OperatorAddress, BondedTokens: v.Tokens}
-		pkBytes, err := consPubKeyBytes(v)
+	// Full-token shares are the latent stake the lambda clamp measures.
+	// Published shares use only the tokens whose ramp has admitted them, so a
+	// bond added after the ramp finished cannot move voting power in that block.
+	fullShares := types.ComputeCappedShares(stakes, capFraction, p.MaxRedistributionMultiplier)
+	effective := make([]types.ValidatorStake, len(stakes))
+	effectiveTotal := math.ZeroInt()
+	for i, s := range stakes {
+		tokens, err := k.effectiveBond(ctx, s.OperatorAddress, s.BondedTokens, currentEpoch, p.RampEpochs, advance)
 		if err != nil {
-			return types.Params{}, math.LegacyDec{}, nil, fmt.Errorf("failed to read consensus pubkey for %q: %w", v.OperatorAddress, err)
+			return types.Params{}, math.LegacyDec{}, nil, err
 		}
-		pubKeyByAddr[v.OperatorAddress] = pkBytes
+		effective[i] = types.ValidatorStake{OperatorAddress: s.OperatorAddress, BondedTokens: tokens}
+		effectiveTotal = effectiveTotal.Add(tokens)
 	}
-	cappedShares := types.ComputeCappedShares(stakes, capFraction, p.MaxRedistributionMultiplier)
+	// Validators with nothing admitted yet stay at C_i = 0. Passing them into
+	// ComputeCappedShares would still give them an equal share whenever the cap
+	// cannot bind (cap * n < 1), which is every set smaller than 20 validators
+	// at the 5% cap.
+	admittedByAddr := make(map[string]math.LegacyDec, len(stakes))
+	if effectiveTotal.IsPositive() {
+		positive := make([]types.ValidatorStake, 0, len(effective))
+		for _, s := range effective {
+			if s.BondedTokens.IsPositive() {
+				positive = append(positive, s)
+			}
+		}
+		computed := types.ComputeCappedShares(positive, capFraction, p.MaxRedistributionMultiplier)
+		for i, s := range positive {
+			admittedByAddr[s.OperatorAddress] = computed[i]
+		}
+	}
 
 	stakeAddrs := make(map[string]bool, len(stakes))
 	rampedByAddr := make(map[string]math.LegacyDec, len(stakes))
+	unrampedByAddr := make(map[string]math.LegacyDec, len(stakes))
 	for i, s := range stakes {
 		stakeAddrs[s.OperatorAddress] = true
-		if err := k.stampRampActivationIfNeeded(ctx, s.OperatorAddress, cappedShares[i], currentEpoch); err != nil {
+		unrampedByAddr[s.OperatorAddress] = fullShares[i]
+		if !fullShares[i].IsPositive() {
+			// A share that falls back to zero while the validator is still bonded
+			// must not keep a ramp clock or admitted tokens. The next positive
+			// balance starts over.
+			if err := k.clearRampActivation(ctx, s.OperatorAddress); err != nil {
+				return types.Params{}, math.LegacyDec{}, nil, err
+			}
+			if err := k.clearStakeRamp(ctx, s.OperatorAddress); err != nil {
+				return types.Params{}, math.LegacyDec{}, nil, err
+			}
+			rampedByAddr[s.OperatorAddress] = math.LegacyZeroDec()
+			continue
+		}
+		if err := k.stampRampActivationIfNeeded(ctx, s.OperatorAddress, fullShares[i], currentEpoch); err != nil {
 			return types.Params{}, math.LegacyDec{}, nil, err
 		}
-		activation, err := k.RampActivation.Get(ctx, s.OperatorAddress)
-		if err != nil {
-			return types.Params{}, math.LegacyDec{}, nil, fmt.Errorf("failed to load ramp activation for %q: %w", s.OperatorAddress, err)
+		share, ok := admittedByAddr[s.OperatorAddress]
+		if !ok {
+			share = math.LegacyZeroDec()
 		}
-		ramp := types.RampFactor(activation, currentEpoch, p.RampEpochs)
-		rampedByAddr[s.OperatorAddress] = cappedShares[i].Mul(ramp)
+		rampedByAddr[s.OperatorAddress] = share
 	}
 	if err := k.pruneStaleRampActivations(ctx, stakeAddrs); err != nil {
 		return types.Params{}, math.LegacyDec{}, nil, err
 	}
 
-	entries, err := k.buildValidatorEntries(ctx, committee, eligible, rampedByAddr, pubKeyByAddr)
+	entries, err := k.buildValidatorEntries(ctx, committee, eligible, rampedByAddr, unrampedByAddr, pubKeyByAddr)
 	if err != nil {
 		return types.Params{}, math.LegacyDec{}, nil, err
+	}
+	if advanced {
+		lambda, err = k.limitLambdaStep(ctx, prevLambda, lambda, entries)
+		if err != nil {
+			return types.Params{}, math.LegacyDec{}, nil, err
+		}
 	}
 
 	return p, lambda, entries, nil
@@ -184,12 +237,15 @@ func (k Keeper) committeeEligible(ctx sdk.Context, valAddrStr string) (bool, err
 // assignment to this one. It is the ONLY source of ValidatorUpdates this app returns to CometBFT
 // (see app.stakingEndBlockOverride, which discards x/staking's own).
 func (k Keeper) RunEndBlock(ctx sdk.Context, emissionKeeper types.EmissionKeeper) ([]abci.ValidatorUpdate, error) {
-	p, lambda, entries, err := k.computePowers(ctx, emissionKeeper)
+	p, lambda, entries, err := k.computePowers(ctx, emissionKeeper, true)
 	if err != nil {
 		return nil, err
 	}
 
-	shares := k.normalizedShares(entries, lambda)
+	shares, err := k.limitPublishedIncreases(ctx, entries, k.normalizedShares(entries, lambda))
+	if err != nil {
+		return nil, err
+	}
 
 	updates := make([]abci.ValidatorUpdate, 0)
 	seen := make(map[string]bool, len(entries))
@@ -272,42 +328,42 @@ func (k Keeper) normalizedShares(entries []validatorEntry, lambda math.LegacyDec
 // (plans/open-network/track-c-chain.md C4: both are "recomputed each epoch"), and returns the
 // values to use for this block either way (the just-recomputed ones, or last epoch's if this
 // block isn't a fresh epoch).
-func (k Keeper) advanceEpochIfNeeded(ctx sdk.Context, p types.Params, currentEpoch, activeValidatorCount uint64) (math.LegacyDec, math.LegacyDec, error) {
+func (k Keeper) advanceEpochIfNeeded(ctx sdk.Context, p types.Params, currentEpoch, activeValidatorCount uint64) (lambda, capFraction, prevLambda math.LegacyDec, advanced bool, err error) {
 	lastUpdated, err := k.LambdaLastUpdatedEpoch.Get(ctx)
 	if err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to load lambda_last_updated_epoch: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to load lambda_last_updated_epoch: %w", err)
 	}
-	lambda, err := k.Lambda.Get(ctx)
+	lambda, err = k.Lambda.Get(ctx)
 	if err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to load lambda: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to load lambda: %w", err)
 	}
 	capBps, err := k.CapCurrentBps.Get(ctx)
 	if err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to load current_cap_bps: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to load current_cap_bps: %w", err)
 	}
 
 	if currentEpoch <= lastUpdated {
-		return lambda, types.CapFractionBps(capBps), nil
+		return lambda, types.CapFractionBps(capBps), lambda, false, nil
 	}
 
 	// Cap state first: the handover gate's threshold (below) is measured against whichever cap
 	// fraction is in force for the epoch being closed.
 	streak, err := k.CapBelowStreak.Get(ctx)
 	if err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to load cap streak: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to load cap streak: %w", err)
 	}
 	newCap := types.UpdateCapState(types.CapState{CurrentCapBps: capBps, BelowStepUpStreakEpochs: streak}, activeValidatorCount, p)
 	if err := k.CapCurrentBps.Set(ctx, newCap.CurrentCapBps); err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to set current_cap_bps: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to set current_cap_bps: %w", err)
 	}
 	if err := k.CapBelowStreak.Set(ctx, newCap.BelowStepUpStreakEpochs); err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to set cap streak: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to set cap streak: %w", err)
 	}
-	capFraction := types.CapFractionBps(newCap.CurrentCapBps)
+	capFraction = types.CapFractionBps(newCap.CurrentCapBps)
 
 	genesisEpoch, err := k.GenesisEpoch.Get(ctx)
 	if err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to load genesis_epoch: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to load genesis_epoch: %w", err)
 	}
 	var epochsSinceGenesis uint64
 	if currentEpoch > genesisEpoch {
@@ -317,28 +373,29 @@ func (k Keeper) advanceEpochIfNeeded(ctx sdk.Context, p types.Params, currentEpo
 	bondedTotal := math.ZeroInt()
 	allBonded, err := k.stakingKeeper.GetBondedValidatorsByPower(ctx)
 	if err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to load bonded validators for lambda: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to load bonded validators for lambda: %w", err)
 	}
 	for _, v := range allBonded {
 		bondedTotal = bondedTotal.Add(v.Tokens)
 	}
 
-	newLambda := types.ComputeLambda(lambda, bondedTotal, p.BootstrapExitStake, epochsSinceGenesis, p.BootstrapDeadlineEpochs)
+	prevLambda = lambda
+	newLambda := types.ComputeLambda(prevLambda, bondedTotal, p.BootstrapExitStake, epochsSinceGenesis, p.BootstrapDeadlineEpochs)
 
-	// Security review H3(a): hold lambda at Params.PreGateLambdaCap until enough real,
-	// stake-indexed validators have ever been active at once (types.HandoverGateThreshold) - a
-	// one-way ratchet, so a chain that once clears the gate never has it re-imposed even if the
-	// active count later drops. Without this, a Sybil-cheap validator set could take over full
-	// consensus power the moment the bootstrap deadline elapses, regardless of how little real
-	// stake backs it.
+	// Security review H3(a): hold lambda at Params.PreGateLambdaCap until enough consensus
+	// participants have been active at once (types.HandoverGateThreshold). That count includes
+	// eligible committee members with no stake. The flag is a one-way ratchet, so a chain that
+	// once clears the gate never has it re-imposed even if the active count later drops. Without
+	// this, a Sybil-cheap validator set could take over full consensus power the moment the
+	// bootstrap deadline elapses, regardless of how little real stake backs it.
 	gateSatisfied, err := k.GateSatisfied.Get(ctx)
 	if err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to load gate_satisfied: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to load gate_satisfied: %w", err)
 	}
 	if !gateSatisfied && activeValidatorCount >= types.HandoverGateThreshold(capFraction) {
 		gateSatisfied = true
 		if err := k.GateSatisfied.Set(ctx, true); err != nil {
-			return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to set gate_satisfied: %w", err)
+			return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to set gate_satisfied: %w", err)
 		}
 	}
 	if !gateSatisfied && newLambda.GT(p.PreGateLambdaCap) {
@@ -346,10 +403,10 @@ func (k Keeper) advanceEpochIfNeeded(ctx sdk.Context, p types.Params, currentEpo
 	}
 
 	if err := k.Lambda.Set(ctx, newLambda); err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to set lambda: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to set lambda: %w", err)
 	}
 	if err := k.LambdaLastUpdatedEpoch.Set(ctx, currentEpoch); err != nil {
-		return math.LegacyDec{}, math.LegacyDec{}, fmt.Errorf("failed to set lambda_last_updated_epoch: %w", err)
+		return math.LegacyDec{}, math.LegacyDec{}, math.LegacyDec{}, false, fmt.Errorf("failed to set lambda_last_updated_epoch: %w", err)
 	}
 
 	k.Logger(ctx).Info(
@@ -358,14 +415,30 @@ func (k Keeper) advanceEpochIfNeeded(ctx sdk.Context, p types.Params, currentEpo
 		"active_validator_count", activeValidatorCount, "gate_satisfied", gateSatisfied,
 	)
 
-	return newLambda, capFraction, nil
+	return newLambda, capFraction, prevLambda, true, nil
+}
+
+// clearRampActivation drops a ramp clock whose capped share is no longer positive.
+func (k Keeper) clearRampActivation(ctx sdk.Context, operatorAddr string) error {
+	has, err := k.RampActivation.Has(ctx, operatorAddr)
+	if err != nil {
+		return fmt.Errorf("failed to check ramp activation for %q: %w", operatorAddr, err)
+	}
+	if !has {
+		return nil
+	}
+	if err := k.RampActivation.Remove(ctx, operatorAddr); err != nil {
+		return fmt.Errorf("failed to reset ramp activation for %q: %w", operatorAddr, err)
+	}
+	return nil
 }
 
 // stampRampActivationIfNeeded records the current epoch as a validator's ramp start the first time
-// its capped share is observed to be positive.
+// its capped share is observed to be positive. A non-positive share clears any existing clock
+// (security review H3(c)) so a later return to a positive share starts the ramp over.
 func (k Keeper) stampRampActivationIfNeeded(ctx sdk.Context, operatorAddr string, cappedShare math.LegacyDec, currentEpoch uint64) error {
 	if !cappedShare.IsPositive() {
-		return nil
+		return k.clearRampActivation(ctx, operatorAddr)
 	}
 	has, err := k.RampActivation.Has(ctx, operatorAddr)
 	if err != nil {
@@ -398,6 +471,9 @@ func (k Keeper) pruneStaleRampActivations(ctx sdk.Context, stakeAddrs map[string
 		if err := k.RampActivation.Remove(ctx, addr); err != nil {
 			return fmt.Errorf("failed to prune ramp activation for %q: %w", addr, err)
 		}
+		if err := k.clearStakeRamp(ctx, addr); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -414,6 +490,7 @@ func (k Keeper) buildValidatorEntries(
 	committee []types.BootstrapMember,
 	eligible map[string]bool,
 	rampedByAddr map[string]math.LegacyDec,
+	unrampedByAddr map[string]math.LegacyDec,
 	pubKeyByAddr map[string][]byte,
 ) ([]validatorEntry, error) {
 	bootstrapShares := types.EqualBootstrapShares(len(committee))
@@ -450,11 +527,16 @@ func (k Keeper) buildValidatorEntries(
 		if !ok {
 			ramped = math.LegacyZeroDec()
 		}
+		unramped, ok := unrampedByAddr[valAddrStr]
+		if !ok {
+			unramped = math.LegacyZeroDec()
+		}
 		entries = append(entries, validatorEntry{
-			operatorAddr: valAddrStr,
-			pubKeyBytes:  pk,
-			bootstrap:    bootstrap,
-			rampedCapped: ramped,
+			operatorAddr:   valAddrStr,
+			pubKeyBytes:    pk,
+			bootstrap:      bootstrap,
+			rampedCapped:   ramped,
+			unrampedCapped: unramped,
 		})
 	}
 
@@ -472,10 +554,11 @@ func (k Keeper) buildValidatorEntries(
 	types.SortAddresses(outsiders)
 	for _, addr := range outsiders {
 		entries = append(entries, validatorEntry{
-			operatorAddr: addr,
-			pubKeyBytes:  pubKeyByAddr[addr],
-			bootstrap:    math.LegacyZeroDec(),
-			rampedCapped: rampedByAddr[addr],
+			operatorAddr:   addr,
+			pubKeyBytes:    pubKeyByAddr[addr],
+			bootstrap:      math.LegacyZeroDec(),
+			rampedCapped:   rampedByAddr[addr],
+			unrampedCapped: unrampedByAddr[addr],
 		})
 	}
 
