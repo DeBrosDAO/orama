@@ -60,10 +60,12 @@ func resetScopedRoots(t *testing.T) {
 	t.Helper()
 	scopedMu.Lock()
 	scopedRoots = map[string]*x509.CertPool{}
+	scopedGen++
 	scopedMu.Unlock()
 	t.Cleanup(func() {
 		scopedMu.Lock()
 		scopedRoots = map[string]*x509.CertPool{}
+		scopedGen++
 		scopedMu.Unlock()
 	})
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -87,26 +88,65 @@ func GetTLSConfig() *tls.Config {
 	return withScopedRoots(config)
 }
 
-// NewHTTPClient creates an HTTP client with TLS verification for trusted domains
+// idleConnTimeout closes a pooled keep-alive connection nobody has reused for
+// this long, the same bound http.DefaultTransport applies. The shared pool
+// holds at most MaxIdleConnsPerHost idle connections per host; this also lets
+// the ones to hosts that are never contacted again go.
+const idleConnTimeout = 90 * time.Second
+
+// The one connection pool behind every client built here.
+//
+// NewHTTPClient used to build a new http.Transport on each call, and most
+// callers call it per request (the rqlite admin client, readiness probes,
+// health checks). A Transport is a connection pool: every request left its
+// keep-alive connection parked in a pool nothing would ever use again, with no
+// idle timeout to close it. On a node that leaked one connection to the local
+// rqlited per health check — about ten a minute, each a goroutine on both ends —
+// until the process was restarted (bugboard 2729).
+var (
+	transportMu  sync.Mutex
+	transport    *http.Transport
+	transportGen uint64 // scopedGeneration the transport's TLS config was built at
+)
+
+// sharedTransport returns the process-wide transport, rebuilt only when the
+// scoped roots change, since GetTLSConfig bakes them into the TLS config.
+func sharedTransport() *http.Transport {
+	transportMu.Lock()
+	defer transportMu.Unlock()
+
+	gen := scopedGeneration()
+	if transport != nil && transportGen == gen {
+		return transport
+	}
+	if transport != nil {
+		// Clients already holding the old transport keep working; only its
+		// parked connections are released.
+		transport.CloseIdleConnections()
+	}
+	transport = &http.Transport{
+		TLSClientConfig: GetTLSConfig(),
+		IdleConnTimeout: idleConnTimeout,
+	}
+	transportGen = gen
+	return transport
+}
+
+// NewHTTPClient returns a client with TLS verification for trusted domains.
+//
+// Clients share one connection pool, so building one per request is cheap and
+// reuses keep-alive connections. Callers must not modify the Transport.
 func NewHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			TLSClientConfig: GetTLSConfig(),
-		},
+		Timeout:   timeout,
+		Transport: sharedTransport(),
 	}
 }
 
 // NewHTTPClientForDomain creates an HTTP client configured for a specific domain.
 // Only skips TLS verification for explicitly trusted domains when no CA cert is available.
+// It shares NewHTTPClient's connection pool.
 func NewHTTPClientForDomain(timeout time.Duration, hostname string) *http.Client {
-	tlsConfig := GetTLSConfig()
 	_ = hostname // domain is for callers; verification uses system/Caddy CAs (bugboard #112)
-
-	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
-	}
+	return NewHTTPClient(timeout)
 }

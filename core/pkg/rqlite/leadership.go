@@ -99,6 +99,10 @@ func TransferLeadershipTo(ep Endpoint, targetID string, logger *zap.Logger) erro
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(ep.Username, ep.Password)
+	// A fresh connection: the client's pool is shared, and Go does not retry
+	// a POST on a pooled connection the server closed in the meantime — the
+	// hand-over before a node stops would fail on a stale socket.
+	req.Close = true
 
 	transferResp, err := client.Do(req)
 	if err != nil {

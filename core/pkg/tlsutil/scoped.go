@@ -19,6 +19,7 @@ import (
 var (
 	scopedMu    sync.RWMutex
 	scopedRoots = map[string]*x509.CertPool{} // domain → its extra CAs
+	scopedGen   uint64                        // bumped on every change to scopedRoots
 )
 
 // TrustCAForDomain trusts the PEM certificates in caFile as roots for domain
@@ -38,8 +39,17 @@ func TrustCAForDomain(domain, caFile string) error {
 	}
 	scopedMu.Lock()
 	scopedRoots[domain] = pool
+	scopedGen++
 	scopedMu.Unlock()
 	return nil
+}
+
+// scopedGeneration identifies the current set of scoped roots, so a TLS config
+// built from them can tell it is stale.
+func scopedGeneration() uint64 {
+	scopedMu.RLock()
+	defer scopedMu.RUnlock()
+	return scopedGen
 }
 
 // hasScopedRoots reports whether any domain has a CA of its own.
