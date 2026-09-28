@@ -8,6 +8,38 @@ import (
 // Every command an unprivileged Orama process actually runs as root today.
 // If one of these is refused, the node fails at the moment it needs it — a
 // namespace that will not start, a TURN port that stays closed.
+func TestValidate_globalUnitsAreExact(t *testing.T) {
+	for _, unit := range []string{
+		"orama-global-chain.service",
+		"orama-global-ipfs.service",
+		"orama-global-ipfs-gc.timer",
+		"orama-global-provider.service",
+		"orama-global-tor-relay.service",
+		"orama-global-tor-dirauth.service",
+		"orama-global-sbws.service",
+		"orama-global-reporter.service",
+		"orama-global-tor-onion.service",
+		"orama-global-archiver.service",
+		"orama-global-repair.service",
+		"orama-global-relay.service",
+	} {
+		for _, verb := range []string{"start", "stop", "restart", "status"} {
+			if _, err := Validate([]string{"systemctl", verb, unit}); err != nil {
+				t.Errorf("systemctl %s %s: %v", verb, unit, err)
+			}
+		}
+		if _, err := Validate([]string{"systemctl", "enable", unit}); err == nil {
+			t.Errorf("enable %s was allowed", unit)
+		}
+	}
+	if _, err := Validate([]string{"systemctl", "start", "orama-global-evil.service"}); err == nil {
+		t.Fatal("orama-global-evil was accepted")
+	}
+	if _, err := Validate([]string{"systemctl", "status", "orama-namespace-gateway@index.service"}); err == nil {
+		t.Fatal("status was allowed on a cluster unit")
+	}
+}
+
 func TestValidate_AllowsWhatTheNodeRuns(t *testing.T) {
 	for _, argv := range [][]string{
 		{"systemctl", "daemon-reload"},

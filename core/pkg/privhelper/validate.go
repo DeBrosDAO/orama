@@ -74,6 +74,27 @@ var legacyUnits = map[string]bool{
 
 var unitVerbs = map[string]bool{"start": true, "stop": true, "restart": true, "enable": true, "disable": true}
 
+// globalUnits are the host units a global node may start, stop, restart, or
+// ask the status of. The list is exact: orama-global-evil is not on it, and
+// enable/disable are not verbs these units accept through the helper.
+var globalUnits = map[string]bool{
+	"orama-global-chain.service":       true,
+	"orama-global-ipfs.service":        true,
+	"orama-global-ipfs-gc.service":     true,
+	"orama-global-ipfs-gc.timer":       true,
+	"orama-global-provider.service":    true,
+	"orama-global-relay.service":       true,
+	"orama-global-tor-relay.service":   true,
+	"orama-global-tor-dirauth.service": true,
+	"orama-global-sbws.service":        true,
+	"orama-global-reporter.service":    true,
+	"orama-global-tor-onion.service":   true,
+	"orama-global-archiver.service":    true,
+	"orama-global-repair.service":      true,
+}
+
+var globalUnitVerbs = map[string]bool{"start": true, "stop": true, "restart": true, "status": true}
+
 // Validate parses argv (tool first) and returns the invocation it allows.
 func Validate(argv []string) (Invocation, error) {
 	if len(argv) == 0 {
@@ -117,6 +138,9 @@ func validateSystemctl(args []string) error {
 	if verb == "set-property" {
 		return validateSetProperty(args[1:])
 	}
+	if globalUnits[unitName(args)] && globalUnitVerbs[verb] && len(args) == 2 {
+		return nil
+	}
 	if !unitVerbs[verb] {
 		return fmt.Errorf("systemctl %q is not allowed", verb)
 	}
@@ -136,8 +160,18 @@ func validateSystemctl(args []string) error {
 	case legacyUnits[unit]:
 		return fmt.Errorf("legacy unit %s may only be stopped or disabled", unit)
 	default:
+		if globalUnits[unit] {
+			return fmt.Errorf("global unit %s may only be started, stopped, restarted, or queried", unit)
+		}
 		return fmt.Errorf("unit %q is not an Orama unit", unit)
 	}
+}
+
+func unitName(args []string) string {
+	if len(args) != 2 {
+		return ""
+	}
+	return args[1]
 }
 
 // validateSetProperty allows resource limits on a deployment unit only.

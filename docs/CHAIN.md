@@ -805,7 +805,11 @@ contain `-localnet-`, `-devnet-` or `-stagenet-` or the script refuses to run - 
 here relaxes only the epoch-duration/min-blocks floors, not any premine gate, since supply stays at
 zero), patches a finite consensus block `max_gas` (`BLOCK_MAX_GAS`, default 100,000,000) into the generated genesis, distributes it, and
 starts every node in the background on distinct localhost ports in the 31000-31099 range
-(P2P/RPC/gRPC/API/Prometheus/pprof, ten ports per node so up to ten validators fit). Every setup
+(P2P/RPC/gRPC/API/Prometheus/pprof, ten ports per node so up to ten validators fit). That packing
+is localnet only. A production global node uses 31000–31004 for the chain (p2p public, RPC, gRPC,
+REST and Prometheus on loopback), 31010–31013 for public storage (swarm public, Kubo RPC and
+gateway on loopback, provider HTTP public), 31014 for relay metrics on loopback, and 31020–31021
+for a Tor relay and a dirauth. Every setup
 command's output goes to `scripts/localnet/.localnet/setup.log` rather than being discarded, so a
 failure can actually be diagnosed.
 

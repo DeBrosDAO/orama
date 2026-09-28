@@ -48,6 +48,28 @@ type FirewallConfig struct {
 	TURNEnabled    bool // enables TURN relay ports (3478/udp+tcp, 5349/tcp, relay range)
 	TURNRelayStart int  // start of TURN relay port range (default 49152)
 	TURNRelayEnd   int  // end of TURN relay port range (default 65535)
+
+	// Global is the public listeners of a global node. Empty means this is a
+	// cluster firewall and no global port is opened. Global rules are tagged
+	// orama-global, which cluster reconcile does not own and will not delete.
+	Global GlobalFirewall
+}
+
+// GlobalFirewall is which global services publish a port. Loopback listeners
+// (chain RPC, gRPC, REST, Prometheus, Kubo RPC and gateway) are not here.
+type GlobalFirewall struct {
+	ChainP2P      bool
+	PublicStorage bool
+	TorRelay      bool
+	Dirauth       bool
+}
+
+// GlobalRuleComment tags rules Reconcile must not treat as cluster rules.
+const GlobalRuleComment = "orama-global"
+
+// Enabled reports whether any global service publishes a port.
+func (g GlobalFirewall) Enabled() bool {
+	return g.ChainP2P || g.PublicStorage || g.TorRelay || g.Dirauth
 }
 
 // FirewallProvisioner manages UFW firewall setup
@@ -155,6 +177,42 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 	rules = append(rules, "iptables -I INPUT 1 -i wg0 -s 10.0.0.0/24 -j ACCEPT")
 
 	return rules
+}
+
+// GlobalAllowArgs is the ufw argv (after "ufw") for each public global
+// listener. The comment is orama-global, not orama, so a cluster reconcile
+// does not add these and does not delete them.
+//
+// IPv6 stays disabled for a global node, the same as for a cluster node.
+// KeepIPv6 is not a flag yet: both roles are v4-only until a later phase.
+func (fp *FirewallProvisioner) GlobalAllowArgs() [][]string {
+	if fp == nil || !fp.config.Global.Enabled() {
+		return nil
+	}
+	var specs []string
+	if fp.config.Global.ChainP2P {
+		specs = append(specs,
+			fmt.Sprintf("%d/tcp", constants.ChainP2PPort),
+			fmt.Sprintf("%d/udp", constants.ChainP2PPort))
+	}
+	if fp.config.Global.PublicStorage {
+		specs = append(specs,
+			fmt.Sprintf("%d/tcp", constants.GlobalIPFSSwarmPort),
+			fmt.Sprintf("%d/udp", constants.GlobalIPFSSwarmPort),
+			fmt.Sprintf("%d/tcp", constants.GlobalProviderPort),
+		)
+	}
+	if fp.config.Global.TorRelay {
+		specs = append(specs, fmt.Sprintf("%d/tcp", constants.GlobalTorORPort))
+	}
+	if fp.config.Global.Dirauth {
+		specs = append(specs, fmt.Sprintf("%d/tcp", constants.GlobalTorDirPort))
+	}
+	args := make([][]string, 0, len(specs))
+	for _, spec := range specs {
+		args = append(args, []string{"allow", spec, "comment", GlobalRuleComment})
+	}
+	return args
 }
 
 // DesiredAllowRules returns just the `ufw allow` rules this node should have,

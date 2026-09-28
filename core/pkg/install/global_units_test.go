@@ -70,14 +70,14 @@ func TestGlobalUnits_usersPortsAndNoClusterSecret(t *testing.T) {
 	if !strings.Contains(ipfs, ipfsAPI) || !strings.Contains(ipfs, "127.0.0.1") {
 		t.Errorf("ipfs unit missing loopback API %s\n%s", ipfsAPI, ipfs)
 	}
-	if constants.GlobalIPFSAPIPort != 31107 {
+	if constants.GlobalIPFSAPIPort != 31011 {
 		t.Fatalf("GlobalIPFSAPIPort = %d", constants.GlobalIPFSAPIPort)
 	}
 	relayAddr := "127.0.0.1:" + strconv.Itoa(constants.GlobalRelayMetricsPort)
 	if !strings.Contains(relay, relayAddr) {
 		t.Errorf("relay unit missing %s\n%s", relayAddr, relay)
 	}
-	if constants.GlobalRelayMetricsPort != 31110 {
+	if constants.GlobalRelayMetricsPort != 31014 {
 		t.Fatalf("GlobalRelayMetricsPort = %d", constants.GlobalRelayMetricsPort)
 	}
 }
@@ -102,6 +102,68 @@ func TestGlobalChainUnit_userMatchesStagenetDeploy(t *testing.T) {
 	unit := RenderGlobalChainUnit()
 	if !strings.Contains(unit, "User="+globalChainUser) {
 		t.Fatalf("chain unit user is not %s", globalChainUser)
+	}
+}
+
+func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
+	units := map[string]string{
+		"chain":    RenderGlobalChainUnit(),
+		"ipfs":     RenderGlobalIPFSUnit(),
+		"gc":       RenderGlobalIPFSGCUnit(),
+		"provider": RenderGlobalProviderUnit(),
+		"relay":    RenderGlobalRelayUnit(),
+		"tor":      RenderGlobalTorRelayUnit(),
+		"dirauth":  RenderGlobalTorDirauthUnit(),
+		"onion":    RenderGlobalTorOnionUnit(),
+		"sbws":     RenderGlobalSBWSUnit(),
+		"reporter": RenderGlobalReporterUnit(),
+		"archiver": RenderGlobalArchiverUnit(),
+		"repair":   RenderGlobalRepairUnit(),
+	}
+	deny := "IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10"
+	for name, unit := range units {
+		if strings.Contains(unit, "PartOf=") {
+			t.Errorf("%s is PartOf another unit", name)
+		}
+		if !strings.Contains(unit, "TemporaryFileSystem=/opt/orama:ro") {
+			t.Errorf("%s does not hide /opt/orama", name)
+		}
+		if !strings.Contains(unit, "InaccessiblePaths=/var/lib/orama-unit-env /etc/wireguard /etc/orama") {
+			t.Errorf("%s can still see cluster paths", name)
+		}
+		if !strings.Contains(unit, deny) {
+			t.Errorf("%s does not deny private ranges", name)
+		}
+		if !strings.Contains(unit, "PrivatePIDs=yes") {
+			t.Errorf("%s does not set PrivatePIDs", name)
+		}
+		if !strings.Contains(unit, "CapabilityBoundingSet=") {
+			t.Errorf("%s keeps capabilities", name)
+		}
+		exec := mustDirective(t, unit, "ExecStart")
+		if !strings.HasPrefix(exec, "/usr/lib/orama-global/bin/") && !strings.HasPrefix(exec, "/usr/bin/") {
+			t.Errorf("%s ExecStart %q is not a global or distro binary", name, exec)
+		}
+		if strings.Contains(exec, "/opt/orama") {
+			t.Errorf("%s runs a binary under /opt/orama, which the tmpfs hides", name)
+		}
+	}
+	if !strings.Contains(RenderGlobalTorRelayUnit(), "MemoryDenyWriteExecute=yes") {
+		t.Error("tor relay does not set MemoryDenyWriteExecute")
+	}
+	if strings.Contains(RenderGlobalChainUnit(), "MemoryDenyWriteExecute=yes") {
+		t.Error("the Go chain unit sets MemoryDenyWriteExecute; the runtime cannot start under it")
+	}
+	provider := RenderGlobalProviderUnit()
+	if !strings.Contains(provider, "SupplementaryGroups=orama-ipfs-pub-rpc") {
+		t.Error("provider cannot read the Kubo RPC token group")
+	}
+	if !strings.Contains(RenderGlobalArchiverUnit(), "SupplementaryGroups=orama-chain-ro") {
+		t.Error("archiver has no read group on the chain home")
+	}
+	timer := RenderGlobalIPFSGCTimer()
+	if strings.Contains(timer, "PartOf=") || !strings.Contains(timer, "orama-global-ipfs-gc.service") {
+		t.Fatalf("gc timer:\n%s", timer)
 	}
 }
 
