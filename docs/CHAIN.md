@@ -819,9 +819,17 @@ The package does not watch CometBFT, pin through Kubo, or send `MsgAcceptDeal`
 or `MsgSubmitProofs`.
 
 `orama storage seal` writes one ciphertext per slot and prints each piece root.
-`orama storage open` reads one of those files. A wrong seed, repair seed, or
-slot fails and writes nothing. Neither command uploads the bytes or submits a
-deal. `core/pkg/storagefile` seals a private file before upload. The file key is
+`orama storage open` reads one of those files. `orama storage rewrap` rebuilds
+one slot from another slot using the repair seed and does not recover the
+plaintext. A wrong seed, repair seed, or slot fails and writes nothing. None
+of these commands uploads the bytes or submits a deal.
+`chain/archiver` packs block hashes into the Merkle root `x/archive` checks
+and stores a resume cursor. It does not read CometBFT or submit an attestation.
+`chain/x/confidential` refuses every attestation report. It does not treat a
+blob as a TEE measurement.
+`core/pkg/tornet` accepts a parameter set only when it names at least three
+authorities, the exit policy is `reject *:*`, and signing certificates last
+12 months. `StartExit` refuses to launch an exit. `core/pkg/storagefile` seals a private file before upload. The file key is
 wrapped by HKDF-SHA256 of the owner seed with info `orama-storage-v1`. Each
 slot XORs that blob with a keystream from HKDF-SHA256 of the repair seed and
 `deal_nonce` concatenated with the slot as 4 big-endian bytes. The piece root

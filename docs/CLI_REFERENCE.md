@@ -200,6 +200,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama storage open`](#orama-storage-open) — Open one sealed storage slot
   - [`orama storage prove`](#orama-storage-prove) — Submit storage challenge proofs
   - [`orama storage revoke`](#orama-storage-revoke) — Revoke a deal allowance
+  - [`orama storage rewrap`](#orama-storage-rewrap) — Rebuild one storage slot from another slot's ciphertext
   - [`orama storage seal`](#orama-storage-seal) — Seal a file into one ciphertext per storage slot
 - [`orama version`](#orama-version) — Show version information
 
@@ -3131,7 +3132,7 @@ Storage deals on the Orama chain
 orama storage
 ```
 
-Subcommands: `accept`, `create`, `decline`, `extend`, `grant`, `open`, `prove`, `revoke`, `seal`
+Subcommands: `accept`, `create`, `decline`, `extend`, `grant`, `open`, `prove`, `revoke`, `rewrap`, `seal`
 
 ### orama storage accept
 
@@ -3343,6 +3344,28 @@ Revoke a deal allowance. Without --node the command prints the sign document and
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 | `--signer` | — | Granter account (orama1...) [required] |
+
+### orama storage rewrap
+
+Rebuild one storage slot from another slot's ciphertext
+
+```
+orama storage rewrap [flags]
+```
+
+Turn one sealed slot into another slot of the same deal.
+
+The command uses the repair seed only. It does not recover the plaintext
+and it does not upload the result.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | `0` | Slot the input file belongs to |
+| `--in` | — | Source slot file |
+| `--nonce` | — | Deal nonce, 32 bytes hex |
+| `--out` | — | Destination slot file |
+| `--repair-seed` | — | Repair seed, hex, at least 32 bytes |
+| `--to` | `0` | Slot to write |
 
 ### orama storage seal
 
