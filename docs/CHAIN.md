@@ -806,7 +806,9 @@ fills one proof for a challenged slot. The leaf is the chain's leaf-challenge se
 reduced to the real leaf count, so a padding leaf is not selected. `Bind` records
 which stored CID fills a deal slot. `AnswerChallenges` builds proofs for the
 unproved challenges that binding covers and lists the ones whose piece is absent.
-A leaf index that does not match the chain challenge is an error. `Retrieval` serves
+A leaf index that does not match the chain challenge is an error. `WriteProofs`
+writes the JSON array `orama storage prove --file` reads. An empty list is
+refused. `Retrieval` serves
 GET and HEAD of a stored piece, including a byte range, and rate-limits each client
 address. A full address table refuses a new address. `POST /pieces/<cid>` stores
 a body only after `AcceptUploads`, and only when that CID is assigned. A bad
