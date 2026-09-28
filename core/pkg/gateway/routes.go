@@ -224,6 +224,8 @@ func (g *Gateway) Routes() http.Handler {
 	// operator node management (wallet JWT auth via middleware)
 	if g.operatorHandler != nil {
 		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)
+		mux.HandleFunc("/v1/operator/operators", g.operatorHandler.HandleOperators)
+		mux.HandleFunc("/v1/operator/operators/", g.operatorHandler.HandleOperators)
 		mux.HandleFunc("/v1/operator/nodes", g.operatorHandler.HandleListNodes)
 		mux.HandleFunc("/v1/operator/node/register", g.operatorHandler.HandleRegister)
 		mux.HandleFunc("/v1/operator/rotate-signing-key", g.handleRotateSigningKey)

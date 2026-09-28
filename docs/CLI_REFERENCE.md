@@ -153,6 +153,9 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama node wipe`](#orama-node-wipe) — Erase Orama from remote nodes (target-side only)
 - [`orama nodes`](#orama-nodes) — List your nodes across environments
 - [`orama operator`](#orama-operator) — Operate the cluster
+  - [`orama operator add`](#orama-operator-add) — Let another wallet operate this cluster
+  - [`orama operator list`](#orama-operator-list) — List the wallets that operate this cluster
+  - [`orama operator remove`](#orama-operator-remove) — Take a wallet off this cluster's operator list
   - [`orama operator rotate-secrets`](#orama-operator-rotate-secrets) — Re-encrypt stored secrets, optionally under a new encryption root
   - [`orama operator rotate-signing-key`](#orama-operator-rotate-signing-key) — Replace the key this gateway signs tokens with
 - [`orama push`](#orama-push) — Push the binary archive to your nodes
@@ -2393,7 +2396,31 @@ Commands for the wallets on the cluster's operator list.
 Every one of them needs the admin grant and a wallet on that list; a namespace's
 own admin key is not enough.
 
-Subcommands: `rotate-secrets`, `rotate-signing-key`
+Subcommands: `add`, `list`, `remove`, `rotate-secrets`, `rotate-signing-key`
+
+### orama operator add
+
+Let another wallet operate this cluster
+
+```
+orama operator add <wallet>
+```
+
+### orama operator list
+
+List the wallets that operate this cluster
+
+```
+orama operator list
+```
+
+### orama operator remove
+
+Take a wallet off this cluster's operator list
+
+```
+orama operator remove <wallet>
+```
 
 ### orama operator rotate-secrets
 

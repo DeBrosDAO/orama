@@ -232,6 +232,7 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/network/connect", "/v1/network/disconnect",
 		"/v1/node/command", "/v1/node/leave",
 		"/v1/operator/nodes", "/v1/operator/node/register",
+		"/v1/operator/operators", "/v1/operator/operators/",
 		"/v1/operator/rotate-signing-key", "/v1/operator/rotate-secrets")
 	t.Add(policyUnrestricted, "/v1/operator/invite")
 

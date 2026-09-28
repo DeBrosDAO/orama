@@ -683,16 +683,21 @@ down from seven days.
 
 It also creates the `operators` table and seeds it from
 `dns_nodes.operator_wallet` — what `orama node install --operator-wallet` wrote
-at the moment the migration runs. A node that registers later carries the same
-wallet, and that registration inserts it into `operators` when the stored
-wallet is non-empty (`INSERT OR IGNORE`, so a wallet already on the list is
-left as it is). `/v1/operator/*` refuses a wallet that is not on that list, so
-**a cluster whose nodes never recorded `--operator-wallet` has an empty list
-and no one can mint an invite or list nodes** until a row is inserted:
+at the moment the migration runs. On a cluster installed after that migration,
+the table is empty when the migration runs. The first node to register is the
+genesis node, and that registration inserts its wallet, and only its wallet.
+A node that joins later does not become an operator. Add and remove wallets
+with the CLI, which refuses to remove the last one:
 
-```sql
-INSERT INTO operators (wallet, added_by) VALUES (LOWER('0x…'), 'manual');
+```bash
+orama operator list
+orama operator add 0x…
+orama operator remove 0x…
 ```
+
+`/v1/operator/*` refuses a wallet that is not on that list. A genesis install
+without `--operator-wallet` records nobody, and no operator command can run
+until that install is repeated with the wallet.
 
 Check what was seeded before upgrading the first node:
 

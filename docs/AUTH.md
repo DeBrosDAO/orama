@@ -785,8 +785,10 @@ signing key is derived from.
 A cluster with an empty operator list refuses every operator endpoint. An
 unreadable list refuses too: not knowing whether someone is an operator is not
 permission to treat them as one. The list is seeded from `dns_nodes` when the
-operators migration runs, and a later node registration adds the wallet that
-registration stored, when that wallet is non-empty.
+operators migration runs. After that, only the first node to register — the
+genesis node, while the list is still empty — adds its wallet. A node that
+joins does not. Further wallets are `orama operator add`, and `orama operator
+remove` refuses to delete the last one.
 
 ---
 

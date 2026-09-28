@@ -60,8 +60,7 @@ func (h *Handler) requireOperator(w http.ResponseWriter, r *http.Request) (strin
 		h.logger.Warn("refused a non-operator on an operator endpoint",
 			zap.String("wallet", wallet), zap.String("path", r.URL.Path))
 		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error": "wallet " + wallet + " is not an operator of this cluster: " +
-				"operating a node is what puts a wallet on that list",
+			"error": "wallet " + wallet + " is not an operator of this cluster",
 			"code": ErrCodeNotAnOperator,
 		})
 		return "", false

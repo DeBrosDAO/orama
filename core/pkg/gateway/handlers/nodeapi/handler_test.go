@@ -218,6 +218,10 @@ func TestRegister_aNodeWithoutAnOperatorWalletDoesNotTouchTheList(t *testing.T) 
 	if !strings.Contains(db.calls[1].query, "TRIM(operator_wallet) <> ''") {
 		t.Fatalf("admission query does not skip an empty wallet: %s", db.calls[1].query)
 	}
+	if !strings.Contains(db.calls[1].query, "COUNT(*) FROM operators) = 0") ||
+		!strings.Contains(db.calls[1].query, "COUNT(*) FROM dns_nodes) = 1") {
+		t.Fatalf("admission query admits more than the first node on an empty list: %s", db.calls[1].query)
+	}
 }
 
 // The body cannot name a node. Which node a registration is about comes from

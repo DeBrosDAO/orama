@@ -122,10 +122,13 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to record this node", http.StatusInternalServerError)
 		return
 	}
-	// The operators table is seeded once, from whatever dns_nodes held when
-	// migration 044 ran. A node that joins afterwards writes its wallet onto
-	// dns_nodes here and would otherwise stay off the list forever, so every
-	// operator endpoint keeps refusing the wallet that actually runs the node.
+	// The operators table is empty on a brand-new cluster: migration 044 seeds
+	// it from dns_nodes, and that table is still empty when the migration
+	// runs. The first node to register is the genesis node — it is the only
+	// row — and its wallet becomes the first operator. A later registration
+	// finds either an operator already recorded or more than one node, and
+	// inserts nothing. Joining does not grant operator. There is no flag in
+	// the request that can say "I am genesis".
 	if _, err := h.db.Exec(r.Context(), recordOperatorSQL, nodeID); err != nil {
 		h.logger.Error("node registration failed to record the operator", zap.String("node_id", nodeID), zap.Error(err))
 		http.Error(w, "failed to record this node", http.StatusInternalServerError)
@@ -150,16 +153,21 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// recordOperatorSQL admits the wallet this node actually stored. INSERT OR
-// IGNORE leaves a wallet that is already on the list untouched, and a node
-// with no operator wallet selects nothing, so the write is a no-op.
+// recordOperatorSQL admits the genesis node's wallet, and only that wallet.
+//
+// The SELECT yields a row only when three things are true together: this
+// node stored a wallet, the operator list is still empty, and this node is
+// the only one recorded. A join, a second registration, and a request that
+// merely claims to be genesis all select nothing, so the write is a no-op.
 const recordOperatorSQL = `
 	INSERT OR IGNORE INTO operators (wallet, added_by)
-	SELECT LOWER(TRIM(operator_wallet)), 'node:' || id
+	SELECT LOWER(TRIM(operator_wallet)), 'genesis:' || id
 	FROM dns_nodes
 	WHERE id = ?
 	  AND operator_wallet IS NOT NULL
-	  AND TRIM(operator_wallet) <> ''`
+	  AND TRIM(operator_wallet) <> ''
+	  AND (SELECT COUNT(*) FROM operators) = 0
+	  AND (SELECT COUNT(*) FROM dns_nodes) = 1`
 
 // HandleEnrolKey serves POST /v1/internal/node/enrol-key.
 //

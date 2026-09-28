@@ -3,6 +3,8 @@ package operatorcmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
@@ -124,9 +126,84 @@ The walker is idempotent; if it is interrupted, run it again.`,
 	},
 }
 
+var listOperatorsCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List the wallets that operate this cluster",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		raw, err := shared.Request("GET", "/v1/operator/operators", nil)
+		if err != nil {
+			return err
+		}
+		var resp struct {
+			Operators []struct {
+				Wallet  string `json:"wallet"`
+				AddedBy string `json:"added_by"`
+				AddedAt string `json:"added_at"`
+			} `json:"operators"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return clierr.Failure("could not parse the gateway's reply: %w", err)
+		}
+		if len(resp.Operators) == 0 {
+			fmt.Println("No operators.")
+			return nil
+		}
+		for _, op := range resp.Operators {
+			fmt.Printf("%s  added by %s\n", op.Wallet, op.AddedBy)
+		}
+		return nil
+	},
+}
+
+var addOperatorCmd = &cobra.Command{
+	Use:   "add <wallet>",
+	Short: "Let another wallet operate this cluster",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wallet := strings.TrimSpace(args[0])
+		raw, err := shared.Request("POST", "/v1/operator/operators", map[string]string{"wallet": wallet})
+		if err != nil {
+			return err
+		}
+		var resp struct {
+			Wallet string `json:"wallet"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return clierr.Failure("could not parse the gateway's reply: %w", err)
+		}
+		fmt.Printf("Operator added: %s\n", resp.Wallet)
+		return nil
+	},
+}
+
+var removeOperatorCmd = &cobra.Command{
+	Use:   "remove <wallet>",
+	Short: "Take a wallet off this cluster's operator list",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wallet := url.PathEscape(strings.TrimSpace(args[0]))
+		raw, err := shared.Request("DELETE", "/v1/operator/operators/"+wallet, nil)
+		if err != nil {
+			return err
+		}
+		var resp struct {
+			Wallet string `json:"wallet"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return clierr.Failure("could not parse the gateway's reply: %w", err)
+		}
+		fmt.Printf("Operator removed: %s\n", resp.Wallet)
+		return nil
+	},
+}
+
 func init() {
 	rotateSecretsCmd.Flags().BoolVar(&rotateSecretsRotate, "rotate", false,
 		"Generate a new encryption root and re-encrypt under it")
+	Cmd.AddCommand(listOperatorsCmd)
+	Cmd.AddCommand(addOperatorCmd)
+	Cmd.AddCommand(removeOperatorCmd)
 	Cmd.AddCommand(rotateSigningKeyCmd)
 	Cmd.AddCommand(rotateSecretsCmd)
 }
