@@ -2,8 +2,8 @@
 // v0.54.4 simapp reference (github.com/cosmos/cosmos-sdk/tree/v0.54.4/simapp), trimmed to the
 // module list decided in plans/open-network/track-c-chain.md (C1) and with x/emission added.
 //
-// Wired: auth, bank (default send-enabled, no Orama-specific send restriction yet - see
-// docs/CHAIN.md deviations), staking, slashing, distribution, consensus params, upgrade, genutil,
+// Wired: auth, bank (norama user-to-user sends refused; see shielded policy), staking,
+// slashing, distribution, consensus params, upgrade, genutil,
 // evidence, feegrant, and x/emission.
 //
 // Deliberately not wired (plans/open-network/track-c-chain.md C1 "Not wired", and this task's
@@ -99,6 +99,7 @@ import (
 	powerante "github.com/DeBrosOfficial/network/chain/x/power/ante"
 	powerkeeper "github.com/DeBrosOfficial/network/chain/x/power/keeper"
 	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
+	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
 )
 
 const appName = "oramad"
@@ -283,6 +284,9 @@ func NewOramaApp(
 		UnreachableAuthority(),
 		logger,
 	)
+	// A user cannot bank-send norama to another user. Module accounts still can.
+	// Shielded bundles are a separate path and are not accepted until a verifier is linked.
+	app.BankKeeper.AppendSendRestriction(shieldedpolicy.NoramaSendRestriction(BlockedAddresses()))
 
 	enabledSignModes := append(authtx.DefaultSignModes, sigtypes.SignMode_SIGN_MODE_TEXTUAL)
 	txConfigOpts := authtx.ConfigOptions{
@@ -721,10 +725,8 @@ func GetMaccPerms() map[string][]string {
 	return maps.Clone(maccPerms)
 }
 
-// BlockedAddresses returns every module account address, which may never receive a direct bank
-// send from a user (plans/open-network.md D7: "there is no public user-to-user path" is not yet
-// implemented as a send restriction - see docs/CHAIN.md deviations - but module accounts are
-// blocked from the start as in any standard Cosmos SDK app).
+// BlockedAddresses returns every module account address. A user cannot pay one of these
+// directly. User-to-user norama sends are refused separately by the shielded send restriction.
 func BlockedAddresses() map[string]bool {
 	modAccAddrs := make(map[string]bool)
 	for acc := range GetMaccPerms() {

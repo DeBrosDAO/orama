@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
 	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
+	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
 )
 
 // testChainID is the chain ID used across this file's InitChain calls; baseapp.SetChainID must
@@ -118,6 +120,22 @@ func TestOramaApp_buildsAndValidatesDefaultGenesis(t *testing.T) {
 	var distrGenState distrtypes.GenesisState
 	require.NoError(t, oramaApp.AppCodec().UnmarshalJSON(genState[distrtypes.ModuleName], &distrGenState))
 	require.True(t, distrGenState.Params.CommunityTax.IsZero(), "community_tax must default to zero: there is no spend path for it")
+}
+
+func TestUserToUserNoramaSendIsRefused(t *testing.T) {
+	oramaApp := buildTestApp(t)
+	ctx := oramaApp.NewUncachedContext(true, cmtprototypes.Header{})
+	from := sdk.AccAddress(bytes.Repeat([]byte{1}, 20))
+	to := sdk.AccAddress(bytes.Repeat([]byte{2}, 20))
+	err := oramaApp.BankKeeper.SendCoins(ctx, from, to, sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1)))
+	require.ErrorIs(t, err, shieldedpolicy.ErrPublicPayment)
+
+	err = oramaApp.BankKeeper.SendCoins(ctx, from, to, sdk.NewCoins(sdk.NewInt64Coin("ufoo", 1)))
+	require.NotErrorIs(t, err, shieldedpolicy.ErrPublicPayment)
+
+	module := authtypes.NewModuleAddress(emissiontypes.ModuleName)
+	err = oramaApp.BankKeeper.SendCoins(ctx, module, to, sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1)))
+	require.NotErrorIs(t, err, shieldedpolicy.ErrPublicPayment)
 }
 
 // TestOramaApp_zeroSupplyGenesisProducesBlocksAndPaysEarnings drives InitChain, from an exactly

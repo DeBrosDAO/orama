@@ -74,10 +74,9 @@ being duplicated as magic strings.
 (`chain/app/genesis_overrides.go`), so wallets and block explorers that read denom metadata from
 genesis see the display denom without hardcoding it.
 
-There is **no send-restriction hook yet**. `plans/open-network.md` D7's "mandatory shielded
-payments" (no public user-to-user ORAMA transfer) is not implemented in this first pass; `x/bank`
-runs with its default send-enabled behavior. This is a known gap, not a design decision - see
-"Deviations" below.
+A bank send of `norama` from one user account to another is refused. Module accounts can still
+move `norama`. There is no shielded payment path yet: proof verification fails closed until a
+verifier is linked, so a user cannot pay another user at all.
 
 ### Other genesis defaults
 
@@ -690,9 +689,9 @@ for anything that does.
   no `Msg` service to fuzz).
 - **`app-db-backend` defaults to `pebbledb`, not `goleveldb`** - see the gotcha section above.
   This is a workaround for a real bug in the pinned dependency versions, not a stylistic choice.
-- **No `x/bank` send restriction yet.** D7's "mandatory shielded ORAMA" is out of scope for this
-  first pass (it depends on `x/shielded`, which does not exist); `docs/SECURITY.md` should note
-  this once it exists for the chain, so nobody assumes payments are private today.
+- **`x/bank` refuses user-to-user `norama` sends.** The shielded pool rules live in
+  `chain/x/shielded`. No proof verifier is linked, so a shielded bundle is not accepted either.
+  Payments are not private, and they are not possible between users.
 - **The validator share now flows through `x/power`, not stock `x/distribution` - resolving a
   deviation from the first pass.** `x/emission` hands its epoch mint to
   `PowerKeeper.DistributeEpochRewards`, which pays it out on capped power `P_i`, split between each
