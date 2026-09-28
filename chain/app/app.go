@@ -286,7 +286,7 @@ func NewOramaApp(
 	)
 	// A user cannot bank-send norama to another user. Module accounts still can.
 	// Shielded bundles are a separate path and are not accepted until a verifier is linked.
-	app.BankKeeper.AppendSendRestriction(shieldedpolicy.NoramaSendRestriction(BlockedAddresses()))
+	app.BankKeeper.AppendSendRestriction(shieldedpolicy.NoramaSendRestriction(BlockedAddresses(), nil))
 
 	enabledSignModes := append(authtx.DefaultSignModes, sigtypes.SignMode_SIGN_MODE_TEXTUAL)
 	txConfigOpts := authtx.ConfigOptions{

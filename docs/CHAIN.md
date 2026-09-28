@@ -74,9 +74,10 @@ being duplicated as magic strings.
 (`chain/app/genesis_overrides.go`), so wallets and block explorers that read denom metadata from
 genesis see the display denom without hardcoding it.
 
-A bank send of `norama` from one user account to another is refused. Module accounts can still
-move `norama`. There is no shielded payment path yet: proof verification fails closed until a
-verifier is linked, so a user cannot pay another user at all.
+A bank send of `norama` from one user account to another is refused, and so is a send from a
+registered contract to a user. Module accounts can still move `norama`, and a user can pay a
+registered contract. No contract address is registered yet. There is no shielded payment path:
+proof verification fails closed until a verifier is linked, so a user cannot pay another user at all.
 
 ### Other genesis defaults
 
@@ -689,7 +690,8 @@ for anything that does.
   no `Msg` service to fuzz).
 - **`app-db-backend` defaults to `pebbledb`, not `goleveldb`** - see the gotcha section above.
   This is a workaround for a real bug in the pinned dependency versions, not a stylistic choice.
-- **`x/bank` refuses user-to-user `norama` sends.** The shielded pool rules live in
+- **`x/bank` refuses user-to-user and contract-to-user `norama` sends.** A user can pay a
+  registered contract. None are registered yet. The shielded pool rules live in
   `chain/x/shielded`. No proof verifier is linked, so a shielded bundle is not accepted either.
   Payments are not private, and they are not possible between users.
 - **The validator share now flows through `x/power`, not stock `x/distribution` - resolving a
