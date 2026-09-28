@@ -1,0 +1,17 @@
+syntax = "proto3";
+package orama.archive.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/archive/types";
+
+import "gogoproto/gogo.proto";
+import "orama/archive/v1/archive.proto";
+
+// GenesisState is x/archive's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  repeated RangeRecord ranges = 2 [(gogoproto.nullable) = false];
+  // last_archived_height is the highest height H such that every block in
+  // 1..H sits in an archived range. It must match that contiguous prefix;
+  // a gap keeps it at the last height before the gap.
+  int64 last_archived_height = 3;
+}

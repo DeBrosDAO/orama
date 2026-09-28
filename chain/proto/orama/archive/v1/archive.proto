@@ -1,0 +1,36 @@
+syntax = "proto3";
+package orama.archive.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/archive/types";
+
+// Params are x/archive's genesis-set parameters
+// (plans/open-network/track-c-chain.md C14). There is no authority and no
+// MsgUpdateParams: nothing here is an admin key.
+message Params {
+  // retention_window_blocks is how many blocks the 14-day retention window
+  // covers. RetainHeight subtracts this from the tip, then never returns a
+  // height above the last fully-archived height.
+  int64 retention_window_blocks = 1;
+}
+
+// RangeRecord is one height range in the archive registry: bundle CID,
+// block-hash Merkle root, replica deal ids, and the archivers who attested
+// that root. A range is archived only when at least 3 distinct archivers
+// have attested the pinned root and at least 3 distinct deal ids are recorded.
+// The root is pinned by the first attestation; a different root is refused
+// and does not count toward this one.
+message RangeRecord {
+  int64 start_height = 1;
+  int64 end_height = 2;
+  string bundle_cid = 3;
+  // bundle_hash is the 32-byte content hash of the bundle. VerifyBundle
+  // checks it against this field and checks the block hashes against merkle_root.
+  bytes bundle_hash = 4;
+  bytes merkle_root = 5;
+  repeated string deal_ids = 6;
+  // archivers are bech32 account addresses, one distinct signer per entry.
+  // Each entry attested merkle_root. A signer who submits a different root
+  // is not appended.
+  repeated string archivers = 7;
+  bool archived = 8;
+}

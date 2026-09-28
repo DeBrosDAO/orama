@@ -1,0 +1,55 @@
+syntax = "proto3";
+package orama.archive.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/archive/types";
+
+import "cosmos/msg/v1/msg.proto";
+
+// Msg is x/archive's transaction service. Both messages are signed by the
+// archiver field. There is no authority signer and no admin message.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // Attest pins or confirms the bundle CID, content hash and block-hash
+  // Merkle root of an inclusive height range.
+  rpc Attest(MsgAttest) returns (MsgAttestResponse);
+
+  // AttachReplicas records storage-deal ids for a range. The deals themselves
+  // live in x/storage; this message only records their ids.
+  rpc AttachReplicas(MsgAttachReplicas) returns (MsgAttachReplicasResponse);
+}
+
+// MsgAttest is an archiver attestation of one height range.
+message MsgAttest {
+  option (cosmos.msg.v1.signer) = "archiver";
+
+  string archiver = 1;
+  int64 start_height = 2;
+  int64 end_height = 3;
+  string bundle_cid = 4;
+  bytes bundle_hash = 5;
+  bytes merkle_root = 6;
+}
+
+// MsgAttestResponse is the Msg/Attest response.
+message MsgAttestResponse {
+  bool archived = 1;
+  uint32 attesters = 2;
+}
+
+// MsgAttachReplicas records replica deal ids for a height range. The signer
+// is the archiver. x/archive does not create or pay the deals.
+message MsgAttachReplicas {
+  option (cosmos.msg.v1.signer) = "archiver";
+
+  string archiver = 1;
+  int64 start_height = 2;
+  int64 end_height = 3;
+  repeated string deal_ids = 4;
+}
+
+// MsgAttachReplicasResponse is the Msg/AttachReplicas response.
+message MsgAttachReplicasResponse {
+  bool archived = 1;
+  uint32 replicas = 2;
+}

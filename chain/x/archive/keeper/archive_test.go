@@ -1,0 +1,358 @@
+package keeper_test
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/cometbft/cometbft/crypto/merkle"
+	"github.com/stretchr/testify/require"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/DeBrosOfficial/network/chain/x/archive"
+	"github.com/DeBrosOfficial/network/chain/x/archive/types"
+)
+
+func TestAttest_archivedOnlyAfterThreeArchiversAndThreeDeals(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+
+	const (
+		start = int64(1)
+		end   = int64(100)
+		cid   = "bafyarchivecid"
+	)
+	bundle := digest(0x11)
+	root := digest(0x22)
+
+	first := f.attest(t, 1, start, end, cid, bundle, root)
+	require.False(t, first.Archived)
+	require.Equal(t, uint32(1), first.Attesters)
+
+	second := f.attest(t, 2, start, end, cid, bundle, root)
+	require.False(t, second.Archived)
+	require.Equal(t, uint32(2), second.Attesters)
+
+	// The same archiver repeating the root does not count twice.
+	repeat := f.attest(t, 1, start, end, cid, bundle, root)
+	require.False(t, repeat.Archived)
+	require.Equal(t, uint32(2), repeat.Attesters)
+
+	third := f.attest(t, 3, start, end, cid, bundle, root)
+	require.False(t, third.Archived)
+	require.Equal(t, uint32(3), third.Attesters)
+
+	twoDeals := f.attach(t, 1, start, end, "deal-1", "deal-2")
+	require.False(t, twoDeals.Archived)
+	require.Equal(t, uint32(2), twoDeals.Replicas)
+
+	// Re-recording the same ids does not increase the replica count.
+	again := f.attach(t, 2, start, end, "deal-1", "deal-2")
+	require.False(t, again.Archived)
+	require.Equal(t, uint32(2), again.Replicas)
+
+	three := f.attach(t, 3, start, end, "deal-3")
+	require.True(t, three.Archived)
+	require.Equal(t, uint32(3), three.Replicas)
+
+	rec, err := f.Keeper.GetRange(f.Ctx, start, end)
+	require.NoError(t, err)
+	require.True(t, rec.Archived)
+	require.Equal(t, []string{acc(1).String(), acc(2).String(), acc(3).String()}, rec.Archivers)
+	require.Equal(t, []string{"deal-1", "deal-2", "deal-3"}, rec.DealIds)
+	require.Equal(t, root, rec.MerkleRoot)
+
+	last, err := f.Keeper.LastArchivedHeight.Get(f.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, end, last)
+
+	found := false
+	for _, ev := range f.Ctx.EventManager().Events() {
+		if ev.Type == types.EventTypeArchived {
+			found = true
+		}
+	}
+	require.True(t, found, "archiving a range emits archive_archived")
+}
+
+func TestAttest_wrongRootRefusedAndDoesNotCount(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+
+	bundle := digest(0x11)
+	rootA := digest(0x21)
+	rootB := digest(0x22)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", bundle, rootA)
+
+	_, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
+		Archiver:    acc(2).String(),
+		StartHeight: 1,
+		EndHeight:   50,
+		BundleCid:   "bafyarchivecid",
+		BundleHash:  bundle,
+		MerkleRoot:  rootB,
+	})
+	require.ErrorIs(t, err, types.ErrWrongRoot)
+
+	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
+		Archiver:    acc(3).String(),
+		StartHeight: 1,
+		EndHeight:   50,
+		BundleCid:   "bafyothercid",
+		BundleHash:  bundle,
+		MerkleRoot:  rootA,
+	})
+	require.ErrorIs(t, err, types.ErrWrongBundle)
+
+	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
+		Archiver:    acc(4).String(),
+		StartHeight: 1,
+		EndHeight:   50,
+		BundleCid:   "bafyarchivecid",
+		BundleHash:  digest(0x33),
+		MerkleRoot:  rootA,
+	})
+	require.ErrorIs(t, err, types.ErrWrongBundle)
+
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Equal(t, []string{acc(1).String()}, rec.Archivers)
+	require.Equal(t, rootA, rec.MerkleRoot)
+	require.False(t, rec.Archived)
+
+	// Two more matching attestations still reach 3, not 5: the refused roots did not count.
+	f.attest(t, 2, 1, 50, "bafyarchivecid", bundle, rootA)
+	res := f.attest(t, 3, 1, 50, "bafyarchivecid", bundle, rootA)
+	require.Equal(t, uint32(3), res.Attesters)
+	require.False(t, res.Archived)
+}
+
+func TestAttachReplicas_unknownRangeAndFutureHeightRefused(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+
+	_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
+		Archiver:    acc(1).String(),
+		StartHeight: 1,
+		EndHeight:   10,
+		DealIds:     []string{"deal-1"},
+	})
+	require.ErrorIs(t, err, types.ErrUnknownRange)
+
+	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
+		Archiver:    acc(1).String(),
+		StartHeight: 1,
+		EndHeight:   f.Ctx.BlockHeight(),
+		BundleCid:   "bafyarchivecid",
+		BundleHash:  digest(1),
+		MerkleRoot:  digest(2),
+	})
+	require.ErrorIs(t, err, types.ErrNotFinalized)
+}
+
+func TestAttest_overlapRefused(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 100, "bafyarchivecid", digest(1), digest(2))
+
+	_, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
+		Archiver:    acc(2).String(),
+		StartHeight: 100,
+		EndHeight:   150,
+		BundleCid:   "bafyarchivecid",
+		BundleHash:  digest(1),
+		MerkleRoot:  digest(2),
+	})
+	require.ErrorIs(t, err, types.ErrOverlap)
+}
+
+func TestLastArchivedHeight_gapDoesNotJump(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+
+	archiveRange(t, f, 1, 100)
+	last, err := f.Keeper.LastArchivedHeight.Get(f.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(100), last)
+
+	archiveRange(t, f, 201, 300)
+	last, err = f.Keeper.LastArchivedHeight.Get(f.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(100), last)
+
+	archiveRange(t, f, 101, 200)
+	last, err = f.Keeper.LastArchivedHeight.Get(f.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(300), last)
+}
+
+func TestRetainHeight_stallForAYearStaysAtLastArchived(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	archiveRange(t, f, 1, 100)
+
+	blocks := types.DefaultBlocksIn14Days
+	year := blocks * 365 / 14
+	tip := int64(100) + year
+	ctx := f.Ctx.WithBlockHeight(tip)
+
+	retain, err := f.Keeper.RetainHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(100), retain)
+	require.Equal(t, retain, archive.RetainHeight(tip, blocks, 100))
+	require.LessOrEqual(t, retain, int64(100))
+
+	naive := tip - blocks
+	require.Greater(t, naive, int64(100), "a year ahead, the 14-day window is far past the archive")
+
+	// Pruning the last archived block, or anything past it, is refused.
+	for _, height := range []int64{100, 101, naive - 1, tip - 1} {
+		ok, err := f.Keeper.PruneAllowed(ctx, height)
+		require.NoError(t, err)
+		require.False(t, ok, "height %d", height)
+	}
+	ok, err := f.Keeper.PruneAllowed(ctx, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// Nothing is archived above 100, so a node must not prune there even one block later.
+	ok, err = f.Keeper.PruneAllowed(ctx, 100)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestRetainHeight_fourteenDayWindowBindsWhenArchiveIsCaughtUp(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, func(gs *types.GenesisState) {
+		gs.Params.RetentionWindowBlocks = types.MinBlocksIn14Days
+	})
+	tip := int64(1_000_000)
+	archiveRange(t, f, 1, tip-1)
+	ctx := f.Ctx.WithBlockHeight(tip)
+
+	retain, err := f.Keeper.RetainHeight(ctx)
+	require.NoError(t, err)
+	want := tip - types.MinBlocksIn14Days
+	require.Equal(t, want, retain)
+	require.LessOrEqual(t, retain, tip-1)
+
+	ok, err := f.Keeper.PruneAllowed(ctx, want)
+	require.NoError(t, err)
+	require.False(t, ok, "the block at the retain height is kept")
+	ok, err = f.Keeper.PruneAllowed(ctx, want-1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = f.Keeper.PruneAllowed(ctx, tip-1)
+	require.NoError(t, err)
+	require.False(t, ok, "archived blocks inside the 14-day window are kept")
+}
+
+func TestVerifyBundle_mutatedHeaderFails(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+
+	blockHashes := [][]byte{digest(1), digest(2), digest(3)}
+	root := merkle.HashFromByteSlices(blockHashes)
+	bundle := digest(9)
+	require.NotEqual(t, bundle, root)
+
+	const (
+		start = int64(1)
+		end   = int64(3)
+		cid   = "bafyarchivecid"
+	)
+	for i := byte(1); i <= 3; i++ {
+		f.attest(t, i, start, end, cid, bundle, root)
+	}
+	f.attach(t, 1, start, end, "deal-1", "deal-2", "deal-3")
+
+	require.NoError(t, f.Keeper.VerifyBundle(f.Ctx, start, end, blockHashes, bundle))
+
+	mutated := append([][]byte(nil), blockHashes...)
+	flipped := append([]byte(nil), mutated[1]...)
+	flipped[0] ^= 0xff
+	mutated[1] = flipped
+	err := f.Keeper.VerifyBundle(f.Ctx, start, end, mutated, bundle)
+	require.ErrorIs(t, err, types.ErrWrongRoot)
+
+	err = f.Keeper.VerifyBundle(f.Ctx, start, end, blockHashes, digest(8))
+	require.ErrorIs(t, err, types.ErrWrongBundle)
+}
+
+func TestQuery_rangeAndRetainHeight(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	archiveRange(t, f, 1, 40)
+
+	params, err := f.Query.Params(f.Ctx, &types.QueryParamsRequest{})
+	require.NoError(t, err)
+	require.Equal(t, types.DefaultBlocksIn14Days, params.Params.RetentionWindowBlocks)
+
+	got, err := f.Query.Range(f.Ctx, &types.QueryRangeRequest{StartHeight: 1, EndHeight: 40})
+	require.NoError(t, err)
+	require.True(t, got.Range.Archived)
+
+	last, err := f.Query.LastArchivedHeight(f.Ctx, &types.QueryLastArchivedHeightRequest{})
+	require.NoError(t, err)
+	require.Equal(t, int64(40), last.LastArchivedHeight)
+
+	retain, err := f.Query.RetainHeight(f.Ctx, &types.QueryRetainHeightRequest{})
+	require.NoError(t, err)
+	require.Equal(t, int64(40), retain.LastArchivedHeight)
+	require.Equal(t, f.Ctx.BlockHeight(), retain.Tip)
+	require.LessOrEqual(t, retain.RetainHeight, retain.LastArchivedHeight)
+}
+
+func TestMsgSignerIsArchiver(t *testing.T) {
+	signer := acc(7)
+	attest := &types.MsgAttest{
+		Archiver:    signer.String(),
+		StartHeight: 1,
+		EndHeight:   2,
+		BundleCid:   "bafyarchivecid",
+		BundleHash:  digest(1),
+		MerkleRoot:  digest(2),
+	}
+	require.Equal(t, []sdk.AccAddress{signer}, attest.GetSigners())
+
+	attach := &types.MsgAttachReplicas{
+		Archiver:    signer.String(),
+		StartHeight: 1,
+		EndHeight:   2,
+		DealIds:     []string{"deal-1"},
+	}
+	require.Equal(t, []sdk.AccAddress{signer}, attach.GetSigners())
+	require.NoError(t, attach.ValidateBasic())
+}
+
+func archiveRange(t *testing.T, f *testFixture, start, end int64) {
+	t.Helper()
+	cid := "bafyarchivecid"
+	bundle := digest(0x41)
+	root := digest(0x42)
+	for i := byte(1); i <= 3; i++ {
+		f.attest(t, i, start, end, cid, bundle, root)
+	}
+	res := f.attach(t, 1, start, end, "deal-1", "deal-2", "deal-3")
+	require.True(t, res.Archived)
+}
+
+func TestExportGenesis_roundTrip(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	archiveRange(t, f, 1, 25)
+
+	exported, err := f.Keeper.ExportGenesis(f.Ctx)
+	require.NoError(t, err)
+	require.NoError(t, exported.Validate())
+	require.Equal(t, int64(25), exported.LastArchivedHeight)
+	require.Len(t, exported.Ranges, 1)
+
+	f2 := newTestFixture(t)
+	require.NoError(t, f2.Keeper.InitGenesis(f2.Ctx, *exported))
+	again, err := f2.Keeper.ExportGenesis(f2.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, exported.LastArchivedHeight, again.LastArchivedHeight)
+	require.Equal(t, exported.Ranges[0].Archivers, again.Ranges[0].Archivers)
+	require.True(t, bytes.Equal(exported.Ranges[0].MerkleRoot, again.Ranges[0].MerkleRoot))
+}
