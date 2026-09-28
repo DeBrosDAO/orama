@@ -1,0 +1,63 @@
+syntax = "proto3";
+package orama.storage.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/storage/types";
+
+import "gogoproto/gogo.proto";
+import "orama/storage/v1/storage.proto";
+
+// GenesisState is x/storage's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  repeated Deal deals = 2 [(gogoproto.nullable) = false];
+  repeated Slot slots = 3 [(gogoproto.nullable) = false];
+  repeated DealAuthorization authorizations = 4 [(gogoproto.nullable) = false];
+  repeated NodeState nodes = 5 [(gogoproto.nullable) = false];
+  repeated Settlement settlements = 6 [(gogoproto.nullable) = false];
+  repeated GenesisChallenge challenges = 7 [(gogoproto.nullable) = false];
+  repeated Rechallenge rechallenges = 8 [(gogoproto.nullable) = false];
+  uint64 next_deal_id = 9;
+  uint64 last_epoch = 10;
+  uint64 last_protocol_epoch = 11;
+  uint64 queue_head = 12;
+  uint64 queue_tail = 13;
+  string archive_fund = 14 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  repeated EpochMint epoch_mints = 15 [(gogoproto.nullable) = false];
+  repeated OperatorMint operator_mints = 16 [(gogoproto.nullable) = false];
+  int64 deal_count_height = 17;
+  uint64 deals_created_in_block = 18;
+  repeated ReleaseCount release_counts = 19 [(gogoproto.nullable) = false];
+  repeated Reserved reserved = 20 [(gogoproto.nullable) = false];
+}
+
+// GenesisChallenge is one stored challenge, including its epoch and slot key.
+message GenesisChallenge {
+  uint64 epoch = 1;
+  string node_id = 2;
+  uint64 deal_id = 3;
+  uint32 slot = 4;
+  ChallengeRecord record = 5 [(gogoproto.nullable) = false];
+}
+
+// Rechallenge is one slot that must be challenged again next epoch.
+message Rechallenge {
+  string node_id = 1;
+  uint64 deal_id = 2;
+  uint32 slot = 3;
+}
+
+// ReleaseCount is how many legal releases a node has used in an epoch.
+message ReleaseCount {
+  uint64 epoch = 1;
+  string node_id = 2;
+  uint64 count = 3;
+}
+
+// Reserved is the capacity a node currently has assigned, in bytes.
+message Reserved {
+  string node_id = 1;
+  uint64 bytes = 2;
+}
