@@ -719,7 +719,9 @@ signer is not that operator.
 `MsgRegisterNode` verifies each binding over the ASCII string
 `orama-global-bind-v1|chain-id|operator|service|hex(pubkey)`. secp256k1 uses the Cosmos SHA-256
 digest. ed25519 verifies a normal 64-byte signature over the 32-byte public key, which is what
-Tor's expanded ed25519 secret produces. A service pubkey is unique on the network. Retiring a
+Tor's expanded ed25519 secret produces. `orama global bind` signs that statement from a local
+key file (secp256k1, an ed25519 seed, Tor's 64-byte expanded secret, or a CometBFT `priv_key`
+JSON) and prints the public key and signature. It does not send a transaction. A service pubkey is unique on the network. Retiring a
 node, rotating a binding (`MsgUpdateNode` replaces the whole set when one is provided), or
 tombstoning (keeper `Tombstone`, not a message) records the old pubkey so it cannot be bound
 again.

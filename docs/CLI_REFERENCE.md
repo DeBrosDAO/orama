@@ -94,6 +94,8 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama function triggers delete`](#orama-function-triggers-delete) — Delete a trigger
     - [`orama function triggers list`](#orama-function-triggers-list) — List triggers for a function
   - [`orama function versions`](#orama-function-versions) — List all versions of a function
+- [`orama global`](#orama-global) — Sign a global-node service key binding
+  - [`orama global bind`](#orama-global-bind) — Sign orama-global-bind-v1 for one service key
 - [`orama inspect`](#orama-inspect) — Inspect cluster health via SSH
 - [`orama invite`](#orama-invite) — Mint an invite for a new node
 - [`orama members`](#orama-members) — Manage who may work in a namespace
@@ -1251,6 +1253,37 @@ orama function versions <name>
 ```
 
 Shows all deployed versions of a specific function.
+
+### orama global
+
+Sign a global-node service key binding
+
+```
+orama global
+```
+
+Sign the binding that proves a service key belongs to an operator.
+
+The private key stays in its file. The command writes the public key and the
+signature, and nothing else. Sending MsgRegisterNode is a separate step.
+
+Subcommands: `bind`
+
+### orama global bind
+
+Sign orama-global-bind-v1 for one service key
+
+```
+orama global bind [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--chain-id` | — | Chain id the binding is for [required] |
+| `--key-file` | — | Service secret file [required] |
+| `--key-type` | — | secp256k1, ed25519, or ed25519-expanded; required for a raw 32-byte file |
+| `--operator` | — | Operator account (orama1...) [required] |
+| `--service` | — | Service name, for example provider or tor [required] |
 
 ### orama inspect
 

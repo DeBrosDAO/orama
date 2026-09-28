@@ -20,6 +20,7 @@ import (
 	deploycmd "github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/deploy"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/envcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/functioncmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/globalcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/inspectcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/invitecmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/memberscmd"
@@ -107,6 +108,7 @@ and no Orama MCP.`,
 	// Cluster operations
 	rootCmd.AddCommand(operatorcmd.Cmd)
 	rootCmd.AddCommand(clustercmd.Cmd)
+	rootCmd.AddCommand(globalcmd.Cmd)
 
 	// Inspect command
 	rootCmd.AddCommand(inspectcmd.Cmd)
