@@ -1,0 +1,50 @@
+syntax = "proto3";
+package orama.token.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/token/types";
+
+import "gogoproto/gogo.proto";
+import "orama/token/v1/token.proto";
+
+// Query defines the gRPC querier service for x/token.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
+  rpc Token(QueryTokenRequest) returns (QueryTokenResponse);
+  rpc Frozen(QueryFrozenRequest) returns (QueryFrozenResponse);
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryTokenRequest {
+  string denom = 1;
+}
+
+message QueryTokenResponse {
+  Token token = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryFrozenRequest {
+  string denom   = 1;
+  string account = 2;
+}
+
+message QueryFrozenResponse {
+  bool frozen = 1;
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  // supply_matches is true when every token's issued supply equals the bank
+  // supply of that denom.
+  bool supply_matches = 1;
+  // deposits_match is true when every token's recorded metadata deposit
+  // equals the deposit the fees interface returns for that id.
+  bool   deposits_match = 2;
+  string detail         = 3;
+}

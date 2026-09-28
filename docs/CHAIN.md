@@ -35,7 +35,8 @@ require it, and nothing in `chain/` imports `core/`.
 **Not wired**, on purpose: `x/gov`, `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs`
 (x/emission tracks its own epochs directly in its `BeginBlock`), `x/group`, `x/nft`, `x/circuit`,
 `x/crisis`, IBC, and anything EVM/CosmWasm. `x/auth/vesting` is not wired either: nothing in this
-module's genesis or gentx flow needs it.
+module's genesis or gentx flow needs it. `x/token` is implemented in `chain/x/token` but is not
+registered in `app.go`, so it is not part of `oramad` either (see "`x/token`" below).
 
 **No governance module exists yet.** Every module that the upstream SDK expects to be governed by
 `x/gov` (upgrade, consensus params, bank, staking, slashing, distribution) is instead given an
@@ -546,9 +547,10 @@ owner's earnings. The coins sit in a **second, separate module account** (`fees_
 - so "the deposit module balance == open deposits" stays an independently checkable invariant from
 "sum of earnings balances == the earnings module balance"). `ReleaseDeposit` refunds
 `Params.DepositRefundFraction` (99%) to the owner's earnings and burns the rest
-(`types.SplitDeposit`, exact split, remainder to the burn side). **No module calls this API yet**:
-`x/token`, `x/cnft`, `x/market`, `x/nodes` and CosmWasm storage metering (none of which exist yet)
-are its intended callers.
+(`types.SplitDeposit`, exact split, remainder to the burn side). **No running module calls this
+API yet.** `x/token`'s keeper does call `LockDeposit` / `ReleaseDeposit`, but `x/token` is not
+registered in the app, so `oramad` never reaches it. `x/cnft`, `x/market`, `x/nodes`, and CosmWasm
+storage metering do not exist yet.
 
 ### Queries
 
@@ -562,6 +564,56 @@ integer end to end (`types.NextBaseFee` truncates the EIP-1559 update to a whole
 that truncation would erase a real move, steps by one norama, floored at `Params.MinBaseFee` - see
 "The base fee (EIP-1559-style)" above), never as a
 `math.LegacyDec`.
+
+## `x/token`: factory denoms
+
+`chain/x/token` is the tokenfactory-style module from
+plans/open-network/track-c-chain.md C10. It is **not registered** in `chain/app/app.go`, so
+`oramad` does not serve its messages or queries and does not create its module account. The
+keeper is covered by unit tests with a fake multi-denom bank and a fake fees keeper.
+
+Denoms are `factory/{creator bech32}/{subdenom}`. Balances live in x/bank, not in this module.
+`Token.issued` is the module's running total. `CheckInvariants` requires that total to equal
+bank supply of the denom, and requires each metadata deposit to equal what
+`FeesKeeper.GetDeposit` returns for id `token/{denom}`, owned by the creator.
+
+`MsgCreateToken` burns `Params.CreationFee` norama. The genesis default is the named constant
+`types.CreationFee`: 10 ORAMA, `10_000_000_000` norama. That figure does not track a dollar
+price. plans/open-network.md P4 only says about $10–25 equivalent and does not fix a norama
+amount. The same message locks a metadata deposit through `FeesKeeper.LockDeposit`:
+`Params.DepositPerByte` norama for each byte of subdenom, name, symbol, and description. The
+genesis default `types.DepositPerByte` is 68359, from P3's ≈0.07 ORAMA/KB by integer division
+(`0.07 * 10^9 / 1024`). It is not a price oracle. `MsgDeleteToken` (creator only, and only when
+issued supply and bank supply are both zero) calls `FeesKeeper.ReleaseDeposit`. x/token does not
+compute the split; x/fees' genesis params refund 99% to the creator's earnings and burn 1%.
+
+Capabilities are chosen in `MsgCreateToken` and can only be renounced afterwards. There is no
+message that adds or reassigns one, and no module admin key:
+
+- mint authority stays with the creator;
+- freeze lets the creator freeze or unfreeze accounts (a freeze blocks send, receive, mint-to, and burn);
+- permanent delegate may transfer the token out of any holder;
+- transfer fee is a basis-point share of the token itself, burned on `MsgTransfer`;
+- non-transferable blocks every transfer, including the permanent delegate;
+- pause blocks transfers only (mint and burn still work) until the creator unpauses;
+- transfer hook calls a Go `TransferHook`, not CosmWasm, under a gas meter capped at 100_000.
+  Asking for more gas fails the transfer and moves nothing.
+
+Renouncing freeze or pause does not clear an existing freeze or the paused flag. Only the
+permanent delegate can renounce that capability. `MsgSetShieldable` may be signed by anyone. It
+sets a one-way flag and is refused while freeze, permanent delegate, or pause is still held.
+There is no shielded transfer here, and no on-chain verified registry. A shieldable token still
+moves by the public `MsgTransfer` bank send.
+
+`MsgTransfer` does that send after the pause, non-transferable, signer, and freeze checks.
+`from` must be the signer unless the signer is the current permanent delegate. Because the
+module is not wired, `x/bank` `MsgSend` does not run these checks. The `token` module account
+would also need minter and burner permissions before a real bank would accept mint, burn, or
+the creation-fee burn. Neither is granted in `app.go`.
+
+State is one record per token plus one key per frozen account. A transfer is a single bank send,
+plus a burn when a fee is due. The invariant walks every token, the same shape as x/fees'
+deposit walk.
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
@@ -732,9 +784,9 @@ for anything that does.
   `MsgRegisterOperator`/`MsgRegisterNode`, neither of which exists yet (`x/nodes`, C6).
   `MsgShieldEarnings` is likewise not implemented, per C2's own instruction ("NOT to be added yet" -
   pending `x/shielded`, C12).
-- **`x/fees`' state-deposit ledger (`LockDeposit`/`ReleaseDeposit`) has no caller yet.** It is fully
-  implemented and tested; `x/token`, `x/cnft`, `x/market`, `x/nodes` and CosmWasm storage metering
-  (its intended callers) don't exist yet.
+- **`x/fees`' state-deposit ledger has no caller in the running binary.** `x/token` calls
+  `LockDeposit` / `ReleaseDeposit`, but it is not registered in `app.go` (see "`x/token`"
+  above). `x/cnft`, `x/market`, `x/nodes`, and CosmWasm storage metering do not exist yet.
 - **`x/power.DistributeEpochRewards` iterates every delegation of every validator once per closed
   epoch** (`Keeper.distributeValidatorReward`), rather than using `x/distribution`'s O(1)-per-block
   F1 historical-rewards accumulator. New delegations below `Params.MinDelegationForRewards` are
