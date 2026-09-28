@@ -28,6 +28,7 @@ type NodeReport struct {
 	Deployments *DeploymentsReport `json:"deployments,omitempty"`
 	Serverless  *ServerlessReport  `json:"serverless,omitempty"`
 	Chain       *ChainReport       `json:"chain,omitempty"`
+	Global      *GlobalReport      `json:"global,omitempty"`
 
 	// Traffic is filled in by the cluster gateway, which serves this node's
 	// requests, not by a collector: it is what the gateway counted in memory.

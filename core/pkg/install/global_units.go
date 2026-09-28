@@ -25,8 +25,8 @@ const (
 	globalRepairUser   = "orama-repair"
 	globalTorUser      = "debian-tor"
 
-	globalIPFSHome  = "/var/lib/orama-global/ipfs"
-	globalRelayHome = "/var/lib/orama-global/relay"
+	globalIPFSHome  = constants.GlobalIPFSHome
+	globalRelayHome = constants.GlobalRelayHome
 )
 
 // globalSandbox is the hardening every global unit shares. It hides /opt/orama
@@ -123,7 +123,7 @@ WantedBy=timers.target
 func RenderGlobalProviderUnit() string {
 	exec := fmt.Sprintf("%s/orama-global provider --listen 0.0.0.0:%d", globalBinDir, constants.GlobalProviderPort)
 	return renderGlobalUnitExtra("Orama storage provider", globalProviderUser, globalProviderUser, "orama-ipfs-pub-rpc",
-		"orama-global/provider", "/var/lib/orama-global/provider", exec, "")
+		"orama-global/provider", constants.GlobalProviderHome, exec, "")
 }
 
 // RenderGlobalRelayUnit is orama-global-relay.service. Metrics listen on

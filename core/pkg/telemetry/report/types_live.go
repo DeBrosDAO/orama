@@ -32,6 +32,68 @@ type ChainReport struct {
 
 	Validators       []ChainValidator `json:"validators,omitempty"`
 	TotalVotingPower int64            `json:"total_voting_power"`
+	// ValidatorCount is the validator set's reported size. It can be larger
+	// than len(Validators) when the collector kept a page and not the whole set.
+	ValidatorCount int `json:"validator_count,omitempty"`
+
+	// UnitState is systemd's is-active answer: active, inactive, failed.
+	UnitState string `json:"unit_state,omitempty"`
+	// ConsAddress is this node's consensus address, 40 upper-case hex characters,
+	// when /status included one of that shape.
+	ConsAddress string `json:"cons_address,omitempty"`
+
+	// MissedBlockRatio is missed_blocks_counter / signed_blocks_window for this
+	// validator. MinSignedPerWindow is the slashing param beside it. Both are
+	// nil when this node is not in the validator set or the query did not answer.
+	MissedBlockRatio   *float64 `json:"missed_block_ratio,omitempty"`
+	MinSignedPerWindow *float64 `json:"min_signed_per_window,omitempty"`
+	// Jailed is staking's flag. Tombstoned is slashing's flag. Nil when the
+	// query did not find this validator.
+	Jailed     *bool `json:"jailed,omitempty"`
+	Tombstoned *bool `json:"tombstoned,omitempty"`
+	// SigningError is set when the slashing or staking query failed. The RPC
+	// section stays responsive: these queries are extra.
+	SigningError string `json:"signing_error,omitempty"`
+}
+
+// GlobalReport is the global-node services installed on this machine.
+// Nil when none of the public Kubo, provider, or relay units are installed.
+type GlobalReport struct {
+	Units      []GlobalUnit      `json:"units,omitempty"`
+	PublicIPFS *PublicIPFSReport `json:"public_ipfs,omitempty"`
+	Provider   *ProviderReport   `json:"provider,omitempty"`
+	Relay      *RelayReport      `json:"relay,omitempty"`
+	Error      string            `json:"error,omitempty"`
+}
+
+// GlobalUnit is one installed orama-global unit.
+type GlobalUnit struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// PublicIPFSReport is the public Kubo's repo, read from its loopback RPC.
+type PublicIPFSReport struct {
+	RepoBytes       int64  `json:"repo_bytes"`
+	StorageMaxBytes int64  `json:"storage_max_bytes"`
+	Error           string `json:"error,omitempty"`
+}
+
+// ProviderReport is the storage provider's own status file, when that file exists.
+// Hot-key balance, proof misses, and disk are nil when the file omits them.
+type ProviderReport struct {
+	HotKeyBalanceNorama *int64 `json:"hot_key_balance_norama,omitempty"`
+	ProofMisses         *int   `json:"proof_misses,omitempty"`
+	DiskBytes           *int64 `json:"disk_bytes,omitempty"`
+	StorageMaxBytes     *int64 `json:"storage_max_bytes,omitempty"`
+	Error               string `json:"error,omitempty"`
+}
+
+// RelayReport is the relay's own status file. InConsensus is nil when the
+// file omits it: x/relay is not queried, because that module is not in oramad.
+type RelayReport struct {
+	InConsensus *bool  `json:"in_consensus,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // ChainValidator is one member of the active validator set.

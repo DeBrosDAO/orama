@@ -33,3 +33,6 @@ const (
 // LocalChainRPCURL is the chain's CometBFT RPC on this node. It is bound to
 // 127.0.0.1, not localhost, so the address is spelled out.
 func LocalChainRPCURL() string { return hostPortURL("127.0.0.1", ChainRPCPort) }
+
+// LocalChainAPIURL is the Cosmos SDK REST API on this node, also on 127.0.0.1.
+func LocalChainAPIURL() string { return hostPortURL("127.0.0.1", ChainAPIPort) }

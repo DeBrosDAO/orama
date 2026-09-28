@@ -237,9 +237,12 @@ func TestShortChainError_truncatesLongErrors(t *testing.T) {
 // loadState and activeState for the chain unit.
 func stubChainNode(t *testing.T, rpcBase, loadState string, loadErr error, activeState string) {
 	t.Helper()
-	oldBase, oldSystemctl, oldKey := chainRPCBase, chainSystemctl, chainNodeKeyPath
-	t.Cleanup(func() { chainRPCBase, chainSystemctl, chainNodeKeyPath = oldBase, oldSystemctl, oldKey })
+	oldBase, oldAPI, oldSystemctl, oldKey := chainRPCBase, chainAPIBase, chainSystemctl, chainNodeKeyPath
+	t.Cleanup(func() {
+		chainRPCBase, chainAPIBase, chainSystemctl, chainNodeKeyPath = oldBase, oldAPI, oldSystemctl, oldKey
+	})
 	chainRPCBase = rpcBase
+	chainAPIBase = "http://127.0.0.1:1"
 	chainNodeKeyPath = writeFixtureNodeKey(t, fixtureNodeKey)
 	chainSystemctl = func(_ context.Context, args ...string) (string, error) {
 		switch args[0] {

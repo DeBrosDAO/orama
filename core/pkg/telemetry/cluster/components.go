@@ -3,6 +3,7 @@ package cluster
 import (
 	"fmt"
 
+	"github.com/DeBrosOfficial/network/pkg/telemetry/globalhealth"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
@@ -37,8 +38,8 @@ func Worse(a, b State) State {
 const wgHandshakeStaleSec = 180
 
 // chainStallSec is how long the chain may go without a block before a node's
-// view of it counts as stalled.
-const chainStallSec = 60
+// view of it counts as stalled. The alert uses the same bound.
+const chainStallSec = globalhealth.ChainStallSec
 
 // Component is one service's health across the cluster.
 type Component struct {

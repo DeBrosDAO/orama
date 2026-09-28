@@ -32,3 +32,25 @@ const (
 	GlobalPortBase = 31000
 	GlobalPortEnd  = 31099
 )
+
+// Global unit names and state directories. The cluster installer does not
+// enable these units; a global-role install does. core and the unit templates
+// share the paths so a report does not probe a directory the unit does not use.
+const (
+	GlobalIPFSUnit     = "orama-global-ipfs.service"
+	GlobalProviderUnit = "orama-global-provider.service"
+	GlobalRelayUnit    = "orama-global-relay.service"
+
+	GlobalIPFSHome     = "/var/lib/orama-global/ipfs"
+	GlobalProviderHome = "/var/lib/orama-global/provider"
+	GlobalRelayHome    = "/var/lib/orama-global/relay"
+
+	// GlobalIPFSAPITokenFile is the public Kubo RPC bearer, mode 0640, in GlobalIPFSHome.
+	GlobalIPFSAPITokenFile = "api-token"
+	// GlobalMonitorFile is the status file a provider or relay writes in its home.
+	// The node report reads it. No process in this repo writes it yet.
+	GlobalMonitorFile = "monitor.json"
+)
+
+// LocalGlobalIPFSAPIURL is the public Kubo RPC on this node.
+func LocalGlobalIPFSAPIURL() string { return hostPortURL("127.0.0.1", GlobalIPFSAPIPort) }

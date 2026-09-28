@@ -258,7 +258,7 @@ host is only put into a command when it is an IP address:
 | `wireguard` | `orama inspect --env <env> --subsystem wg`; COMMON_PROBLEMS.md §1 (WireGuard packet loss) |
 | `olric` | `orama inspect --env <env> --subsystem olric`; COMMON_PROBLEMS.md §1, §7 |
 | `ipfs` | `orama inspect --env <env> --subsystem ipfs`; COMMON_PROBLEMS.md §12 |
-| `dns`, `system`, `network`, `tor` | `orama inspect --env <env> --subsystem <same>` |
+| `dns`, `system`, `network`, `tor`, `global` | `orama inspect --env <env> --subsystem <same>` |
 | `collection` (node unreachable) | `orama monitor node --env <env> --node <host> --ssh` |
 | `service`, `gateway`, `namespace` | `orama ssh <host> --env <env> 'sudo orama node status'` (namespace: also COMMON_PROBLEMS.md §1–§4) |
 | `vault` | `orama monitor node --env <env> --node <host>` |
@@ -391,7 +391,8 @@ sudo orama node report --json
 | **namespaces** | Per-namespace service probes (RQLite, Olric, Gateway) |
 | **deployments** | This node's `orama-deploy-*` units: total (loaded, stopped included), running, failed; `error` when systemd cannot list them. `static_count` is not collected (static deployments run no process on a node) |
 | **serverless** | Engine status — the WASM engine runs in the index gateway, so this is its `/v1/health` answer: `healthy`, `unhealthy (HTTP n)` or `unreachable`. `function_count` is not collected |
-| **chain** | Only on a node with `orama-global-chain.service` (absent otherwise). Unit state, then the CometBFT RPC on `127.0.0.1:31001`: chain ID, node version, latest height and block time, block age, average block time over the last 20 blocks, catching up, peers, mempool size, whether this node is a validator and its voting power, the validator set and its total power. `/status` must answer with this node's CometBFT id (`node_info.id`, derived from `/var/lib/orama-global/chain/config/node_key.json` as CometBFT does: lower-case hex of the first 20 bytes of SHA-256 over the ed25519 public key); an unreadable or malformed node key is the section's `error`. The chain ID must match `^[A-Za-z0-9._-]{1,64}$`, the node version `^[A-Za-z0-9.+_-]{1,64}$`, every validator address `^[0-9A-F]{40}$`, and at most 1000 validators are kept. Any failed RPC query or malformed field sets `responsive: false` and an `error` that names the query or field without echoing the value (unprintable characters in an RPC error message are replaced with `?`) |
+| **chain** | Only on a node with `orama-global-chain.service` (absent otherwise). Unit state, then the CometBFT RPC on `127.0.0.1:31001`: chain ID, node version, latest height and block time, block age, average block time over the last 20 blocks, catching up, peers, mempool size, whether this node is a validator and its voting power, the validator set and its total power. `/status` must answer with this node's CometBFT id (`node_info.id`, derived from `/var/lib/orama-global/chain/config/node_key.json` as CometBFT does: lower-case hex of the first 20 bytes of SHA-256 over the ed25519 public key); an unreadable or malformed node key is the section's `error`. The chain ID must match `^[A-Za-z0-9._-]{1,64}$`, the node version `^[A-Za-z0-9.+_-]{1,64}$`, every validator address `^[0-9A-F]{40}$`, and at most 1000 validators are kept. Any failed RPC query or malformed field sets `responsive: false` and an `error` that names the query or field without echoing the value (unprintable characters in an RPC error message are replaced with `?`). When `/status` includes this node's consensus address, the section also asks the REST API on `127.0.0.1:31003` for the slashing params, the signing info, and the staking validator: missed-block ratio (`missed_blocks_counter / signed_blocks_window`), `min_signed_per_window`, `jailed`, and `tombstoned`. A failed query sets `signing_error` and leaves `responsive` as the CometBFT RPC reported it. Prometheus on `127.0.0.1:31004` is the chain process's own listener; this report does not scrape it. |
+| **global** | Only when `orama-global-ipfs.service`, `orama-global-provider.service`, or `orama-global-relay.service` is installed (absent on a cluster node). Unit state. While the public Kubo unit is active, `RepoSize` and `StorageMax` from its RPC on `127.0.0.1:31011`, using the bearer in `/var/lib/orama-global/ipfs/api-token` (the token is not written into the report or into errors). Provider and relay add the fields present in `/var/lib/orama-global/provider/monitor.json` and `/var/lib/orama-global/relay/monitor.json`: `hot_key_balance_norama`, `proof_misses`, `disk_bytes`, `storage_max_bytes`, `in_consensus`. No process in this release writes those files, so the fields stay absent until one does. |
 
 ### Bounds
 
@@ -401,7 +402,7 @@ Inside the privileged helper, `node-report` takes a non-blocking exclusive `floc
 
 ### Performance
 
-All 16 collectors run in parallel with goroutines. Typical collection time is **< 1 second** per node. HTTP timeouts are 3 seconds, command timeouts are 4 seconds.
+All 17 collectors run in parallel with goroutines. Typical collection time is **< 1 second** per node. HTTP timeouts are 3 seconds, command timeouts are 4 seconds. The chain's slashing and staking queries have their own 8-second budget after the CometBFT RPC and do not change `responsive` when they fail.
 
 ### Output Schema
 
@@ -440,8 +441,8 @@ Alerts are derived from cross-node analysis of all collected reports (`cluster.D
 
 | Severity | Examples |
 |----------|----------|
-| **critical** | Expired TLS certificate, clock skew > 60s, Collection failed (node unreachable), no RQLite leader, split brain, RQLite unresponsive, WireGuard interface down, WG peer never handshaked, OOM kills, service failed, UFW inactive |
-| **warning** | Strong read failed, memory > 90%, disk > 85%, stale WG handshake (> 3min), Raft term inconsistency, applied index lag > 100, restart loop detected, TLS cert < 14 days, DNS down, namespace gateway down, Tor SOCKS port not bound or not bootstrapped, Anyone-network leftovers, clock skew > 5s, internet unreachable, high TCP retransmission |
+| **critical** | Expired TLS certificate, clock skew > 60s, Collection failed (node unreachable), no RQLite leader, split brain, RQLite unresponsive, WireGuard interface down, WG peer never handshaked, OOM kills, service failed, UFW inactive, chain RPC not answering while its unit is active, validator jailed or tombstoned, missed-block ratio at the chain's downtime threshold, storage-provider hot key balance 0 norama |
+| **warning** | Strong read failed, memory > 90%, disk > 85%, stale WG handshake (> 3min), Raft term inconsistency, applied index lag > 100, restart loop detected, TLS cert < 14 days, DNS down, namespace gateway down, Tor SOCKS port not bound or not bootstrapped, Anyone-network leftovers, clock skew > 5s, internet unreachable, high TCP retransmission, chain height more than 20 blocks behind the median, chain with no peers while the validator set has more than one member, block older than 60 seconds, missed-block ratio at least half the downtime threshold, public Kubo repo over StorageMax, provider proof misses, provider disk over its declared maximum, relay reporting it is not in the relay set |
 | **warning (contention)** | CPU steal > 20% (an oversubscribed host: load average and CPU% do not show it), CPU pressure > 50% |
 | **warning (security)** | systemd without `+BPF_FRAMEWORK`: tenant deployments' `SocketBindAllow`/`SocketBindDeny` are ignored on that node, so a deployment is not confined to its own port (Debian 12's systemd 252 is built without it) |
 | **info** | Zombie processes, orphan orama processes, swap usage > 30% |
@@ -457,6 +458,7 @@ These checks compare data across all nodes:
 - **WireGuard Peer Symmetry**: Each node has N-1 peers
 - **Clock Skew**: Node clocks within 5 seconds of each other (critical beyond 60s). The offset is measured when each report is served — the peer sends its clock (`X-Orama-Clock-Ms`) and the collector compares it with the request's midpoint — not read from report timestamps, which differ by up to the collection interval on synchronised clocks. A peer that sends no clock (0.122.109) is left unmeasured and its report still counts
 - **Binary Version**: All nodes running the same version. `orama node report` used to emit an empty `version`, so every node read as "unknown" and the alert could never fire; the version is compiled into the binary now, so it carries a real value.
+- **Chain height**: A responsive node that is not catching up and is more than 20 blocks behind the median responsive height. One node's height cannot set the median.
 
 ### The lifecycle harness
 
@@ -516,6 +518,8 @@ means one thing across the CLI.
 - **Processes**: Zombies, orphans, panics in logs
 - **Namespaces**: Gateway and RQLite per namespace
 - **Network**: UFW, internet reachability, TCP retransmission
+- **Chain**: Unit not active, RPC not answering, height lag, no peers against a multi-member validator set, a block older than 60 seconds, jailed, tombstoned, missed-block ratio against `min_signed_per_window` (warning at half the downtime miss fraction, critical at the fraction). A node that is catching up is not alerted for lag or for a stale block. A signing query that fails while jail and the ratio are both unknown is a warning, not a claim that the validator is fine. A full node that is absent from the validator set is not an error.
+- **Global**: Installed `orama-global-ipfs`, `orama-global-provider`, and `orama-global-relay` units that are not active. Public Kubo repo over `StorageMax`. Provider hot-key balance 0, proof misses, and disk over the declared maximum, and a relay that says it is outside the relay set, only when `monitor.json` carries those fields. Until a process writes that file, those four alerts do not fire.
 
 ## Request metrics
 

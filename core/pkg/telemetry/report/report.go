@@ -1,6 +1,7 @@
 package report
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -112,6 +113,7 @@ func collectors(rpt *NodeReport) []collector {
 		{"deployments", func() { rpt.Deployments = collectDeployments() }},
 		{"serverless", func() { rpt.Serverless = collectServerless() }},
 		{"chain", func() { rpt.Chain = collectChain() }},
+		{"global", func() { rpt.Global = collectGlobal() }},
 	}
 }
 
@@ -130,6 +132,23 @@ const (
 	// nothing a local service legitimately answers comes near this.
 	maxLocalResponseBytes = 2 << 20
 )
+
+// commandStdout runs a command and returns its trimmed stdout. A non-zero
+// exit that still printed stdout is that text, not an error: systemd
+// is-active prints "failed" and exits 3.
+func commandStdout(ctx context.Context, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, localCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err := cmd.Run()
+	text := strings.TrimSpace(stdout.String())
+	if err != nil && text == "" {
+		return "", err
+	}
+	return text, nil
+}
 
 // runCmd executes an external command with localCommandTimeout and returns
 // its stdout as a trimmed string.

@@ -36,7 +36,7 @@ var publicSwarmFilters = []string{
 
 // PublicAPITokenFile is the bearer file next to the public repo. Mode 0640,
 // group orama-ipfs-pub-rpc, so the provider can read it and other users cannot.
-const PublicAPITokenFile = "api-token"
+const PublicAPITokenFile = constants.GlobalIPFSAPITokenFile
 
 // PublicDenylistFile is the CID denylist the provider checks before it accepts
 // a deal. Kubo itself does not read it.

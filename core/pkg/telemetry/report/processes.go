@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
 
@@ -102,6 +103,10 @@ var managedServiceUnits = []string{
 	"orama-namespace-pubsub@index",
 	coreDNSUnit,
 	"rqlited",
+	constants.ChainServiceUnit,
+	constants.GlobalIPFSUnit,
+	constants.GlobalProviderUnit,
+	constants.GlobalRelayUnit,
 }
 
 // collectManagedPIDs queries systemd for the MainPID of each known service.

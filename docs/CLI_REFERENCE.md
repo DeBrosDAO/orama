@@ -1235,7 +1235,7 @@ Supports AI-powered failure analysis and result export.
 | `--format` | `table` | Output format (table, json) |
 | `--model` | `moonshotai/kimi-k2.5` | OpenRouter model for AI analysis |
 | `--output` | — | Save results to directory as markdown (e.g., ./results) |
-| `--subsystem` | `all` | Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,tor,all) |
+| `--subsystem` | `all` | Subsystem to inspect (rqlite,olric,ipfs,dns,wg,system,network,tor,global,all) |
 | `--timeout` | `30s` | SSH command timeout |
 | `--verbose` | `false` | Verbose output |
 

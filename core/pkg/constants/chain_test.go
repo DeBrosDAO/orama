@@ -14,6 +14,9 @@ func TestLocalChainRPCURL_loopbackRPCPort(t *testing.T) {
 	if got, want := constants.LocalChainRPCURL(), "http://127.0.0.1:31001"; got != want {
 		t.Errorf("LocalChainRPCURL() = %q, want %q", got, want)
 	}
+	if got, want := constants.LocalChainAPIURL(), "http://127.0.0.1:31003"; got != want {
+		t.Errorf("LocalChainAPIURL() = %q, want %q", got, want)
+	}
 }
 
 // deploy.sh writes the chain's listen addresses; the constants only describe

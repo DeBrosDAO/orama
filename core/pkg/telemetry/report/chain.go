@@ -1,6 +1,7 @@
 package report
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,9 +39,12 @@ const (
 // variables so tests can stand in for the node.
 var (
 	chainRPCBase     = constants.LocalChainRPCURL()
+	chainAPIBase     = constants.LocalChainAPIURL()
 	chainNodeKeyPath = constants.ChainNodeKeyPath
-	chainSystemctl   = func(ctx context.Context, args ...string) (string, error) {
-		return runCmd(ctx, "systemctl", args...)
+	// commandStdout keeps is-active's text when systemd exits non-zero.
+	// runCmd would drop "failed" and the report could not tell it from a miss.
+	chainSystemctl = func(ctx context.Context, args ...string) (string, error) {
+		return commandStdout(ctx, "systemctl", args...)
 	}
 )
 
@@ -58,16 +62,22 @@ func collectChain() *ChainReport {
 	if loadState == chainUnitNotFound {
 		return nil
 	}
-	// is-active exits non-zero for any state but active, so an error here is
-	// the answer "not active", not a failure to ask.
-	state, _ := chainSystemctl(ctx, "is-active", unit)
-	r := &ChainReport{ServiceActive: state == "active"}
+	// is-active exits non-zero for any state but active. commandStdout still
+	// returns the printed state; an error with no text is "not active".
+	state, err := chainSystemctl(ctx, "is-active", unit)
+	if err != nil || state == "" {
+		state = "inactive"
+	}
+	r := &ChainReport{ServiceActive: state == "active", UnitState: state}
 	nodeID, err := chainNodeID(chainNodeKeyPath)
 	if err != nil {
 		r.Error = shortChainError(err)
 		return r
 	}
 	queryChainRPC(ctx, chainRPCBase, nodeID, r, time.Now())
+	if r.Responsive {
+		readChainSigning(r)
+	}
 	return r
 }
 
@@ -99,6 +109,10 @@ func chainRPC(ctx context.Context, base, path string, result any) error {
 	if err != nil {
 		return fmt.Errorf("chain RPC %s: %w", path, err)
 	}
+	return decodeChainResult(body, path, result)
+}
+
+func decodeChainResult(body []byte, path string, result any) error {
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 		Error  *struct {
@@ -119,6 +133,65 @@ func chainRPC(ctx context.Context, base, path string, result any) error {
 		return fmt.Errorf("chain RPC %s: decode the result: %w", path, err)
 	}
 	return nil
+}
+
+// FillChainView reads CometBFT HTTP bodies (JSON-RPC envelopes). It does not
+// check the node key; the node report's collector does that before it keeps
+// a height. An empty body is an RPC that did not answer.
+func FillChainView(statusBody, netBody, validatorsBody []byte, now time.Time) *ChainReport {
+	r := &ChainReport{}
+	if len(bytes.TrimSpace(statusBody)) == 0 {
+		r.Error = "chain RPC did not answer"
+		return r
+	}
+	var st chainStatus
+	if err := decodeChainResult(statusBody, "/status", &st); err != nil {
+		r.Error = shortChainError(err)
+		return r
+	}
+	if !chainIDRe.MatchString(st.NodeInfo.Network) {
+		r.Error = "chain RPC /status: node_info.network is not a well-formed chain id"
+		return r
+	}
+	r.ChainID = st.NodeInfo.Network
+	r.NodeVersion = st.NodeInfo.Version
+	r.LatestHeight = st.SyncInfo.LatestBlockHeight
+	r.CatchingUp = st.SyncInfo.CatchingUp
+	r.VotingPower = st.ValidatorInfo.VotingPower
+	r.IsValidator = st.ValidatorInfo.VotingPower > 0
+	if chainValidatorAddressRe.MatchString(st.ValidatorInfo.Address) {
+		r.ConsAddress = st.ValidatorInfo.Address
+	}
+	if r.LatestHeight > 0 && !st.SyncInfo.LatestBlockTime.IsZero() {
+		r.LatestBlockTime = st.SyncInfo.LatestBlockTime
+		r.BlockAgeSec = now.Sub(st.SyncInfo.LatestBlockTime).Seconds()
+	}
+	if len(bytes.TrimSpace(netBody)) == 0 {
+		r.Error = "chain RPC /net_info did not answer"
+		return r
+	}
+	var peers struct {
+		NPeers int `json:"n_peers,string"`
+	}
+	if err := decodeChainResult(netBody, "/net_info", &peers); err != nil {
+		r.Error = shortChainError(err)
+		return r
+	}
+	r.Peers = peers.NPeers
+	if len(bytes.TrimSpace(validatorsBody)) == 0 {
+		r.Error = "chain RPC /validators did not answer"
+		return r
+	}
+	var vs struct {
+		Total int `json:"total,string"`
+	}
+	if err := decodeChainResult(validatorsBody, "/validators", &vs); err != nil {
+		r.Error = shortChainError(err)
+		return r
+	}
+	r.ValidatorCount = vs.Total
+	r.Responsive = true
+	return r
 }
 
 // CometBFT encodes every integer as a JSON string, hence the ",string" tags.
@@ -153,6 +226,9 @@ func readChainStatus(ctx context.Context, base, nodeID string, r *ChainReport, n
 	r.CatchingUp = st.SyncInfo.CatchingUp
 	r.VotingPower = st.ValidatorInfo.VotingPower
 	r.IsValidator = st.ValidatorInfo.VotingPower > 0
+	if chainValidatorAddressRe.MatchString(st.ValidatorInfo.Address) {
+		r.ConsAddress = st.ValidatorInfo.Address
+	}
 	// Before the first block CometBFT reports the zero time; there is no
 	// block to be old yet.
 	if r.LatestHeight > 0 {
@@ -201,6 +277,7 @@ func readChainValidators(ctx context.Context, base string, r *ChainReport) error
 		if err := chainRPC(ctx, base, path, &vs); err != nil {
 			return err
 		}
+		r.ValidatorCount = vs.Total
 		if len(r.Validators)+len(vs.Validators) > chainMaxValidators {
 			return fmt.Errorf("chain RPC /validators: the set is over %d members", chainMaxValidators)
 		}

@@ -409,6 +409,8 @@ func buildSubsystemContext(subsystem string, data *ClusterData) string {
 		return buildNamespaceContext(data)
 	case "tor":
 		return buildTorContext(data)
+	case "global":
+		return buildGlobalContext(data)
 	default:
 		return ""
 	}
@@ -621,6 +623,36 @@ func buildTorContext(data *ClusterData) string {
 			t.ClientActive, t.SocksListening, t.BootstrapPct, t.LegacyAnyone))
 	}
 	return b.String()
+}
+
+func buildGlobalContext(data *ClusterData) string {
+	var b strings.Builder
+	for host, nd := range data.Nodes {
+		if nd == nil || (nd.Chain == nil && nd.Global == nil) {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("### %s\n", host))
+		if c := nd.Chain; c != nil {
+			b.WriteString(fmt.Sprintf("  chain active=%v responsive=%v height=%d peers=%d jailed=%s error=%s signing=%s\n",
+				c.ServiceActive, c.Responsive, c.LatestHeight, c.Peers, boolWord(c.Jailed), c.Error, c.SigningError))
+		}
+		if g := nd.Global; g != nil {
+			for _, u := range g.Units {
+				b.WriteString(fmt.Sprintf("  unit %s %s\n", u.Name, u.State))
+			}
+		}
+	}
+	return b.String()
+}
+
+func boolWord(v *bool) string {
+	if v == nil {
+		return "unknown"
+	}
+	if *v {
+		return "true"
+	}
+	return "false"
 }
 
 // OpenRouter API types (OpenAI-compatible)

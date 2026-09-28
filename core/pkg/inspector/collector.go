@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
 
@@ -31,6 +32,8 @@ type NodeData struct {
 	System     *SystemData
 	Network    *NetworkData
 	Tor        *TorData
+	Chain      *report.ChainReport
+	Global     *report.GlobalReport
 	Namespaces []NamespaceData // namespace instances on this node
 	Errors     []string        // collection errors for this node
 }
@@ -296,6 +299,9 @@ func collectNode(ctx context.Context, node Node, subsystems []string, verbose bo
 	}
 	if shouldCollect("tor") {
 		nd.Tor = collectTor(ctx, node)
+	}
+	if shouldCollect("global") {
+		nd.Chain, nd.Global = collectGlobalNode(ctx, node)
 	}
 	// Namespace collection — always collect if any subsystem is collected
 	nd.Namespaces = collectNamespaces(ctx, node)
