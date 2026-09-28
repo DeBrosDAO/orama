@@ -1,0 +1,53 @@
+syntax = "proto3";
+package orama.relay.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/relay/types";
+
+import "gogoproto/gogo.proto";
+import "orama/relay/v1/relay.proto";
+
+// Query defines the gRPC querier service for x/relay.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
+  rpc Reporters(QueryReportersRequest) returns (QueryReportersResponse);
+  rpc Relay(QueryRelayRequest) returns (QueryRelayResponse);
+  rpc EpochResult(QueryEpochResultRequest) returns (QueryEpochResultResponse);
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryReportersRequest {}
+
+message QueryReportersResponse {
+  repeated string reporters = 1;
+}
+
+message QueryRelayRequest {
+  // rsa_fingerprint_hex is the 20-byte fingerprint, hex-encoded.
+  string rsa_fingerprint_hex = 1;
+}
+
+message QueryRelayResponse {
+  Relay relay = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryEpochResultRequest {
+  uint64 epoch = 1;
+}
+
+message QueryEpochResultResponse {
+  EpochResult result = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  bool ceiling_holds = 1;
+  bool payouts_match = 2;
+  string detail = 3;
+}

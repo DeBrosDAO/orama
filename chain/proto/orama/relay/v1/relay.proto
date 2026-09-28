@@ -1,0 +1,144 @@
+syntax = "proto3";
+package orama.relay.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/relay/types";
+
+import "gogoproto/gogo.proto";
+
+// Params are x/relay's genesis-set parameters
+// (plans/open-network/track-c-chain.md C8). There is no parameter Msg: the
+// numbers below are placeholders until G1 signs them
+// (plans/open-network/track-g-token-legal-security.md) and can change after
+// genesis only by hard fork.
+message Params {
+  // min_reporters_quorum is how many distinct reporters must submit a
+  // complete report before an epoch's per-relay median is taken, and before
+  // rewards can activate. 1 is valid: a single reporter's values are the
+  // median.
+  uint32 min_reporters_quorum = 1;
+  // min_uptime_fraction is the median uptime below which a relay is paid
+  // nothing. Equal to the minimum still pays.
+  string min_uptime_fraction = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // exit_multiplier is applied to a relay's capped weight only when the
+  // median Exit flag across reporters is set. Integer truncation.
+  string exit_multiplier = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // per_relay_cap is the maximum norama a relay's median consensus weight
+  // can contribute before the exit multiplier. consensus_weight is submitted
+  // in norama; this module does not rescale Tor's raw consensus weight.
+  string per_relay_cap = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // per_operator_cap bounds the sum of one operator's post-multiplier relay
+  // amounts in an epoch. Amounts above the cap are scaled pro rata.
+  string per_operator_cap = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // per_prefix16_cap bounds the sum of post-multiplier amounts in one IPv4
+  // /16, applied after the per-operator cap.
+  string per_prefix16_cap = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// Relay is one registered relay. The ed25519 identity is snapshotted from
+// x/nodes at registration. Rotation is MsgUpdateNode on x/nodes; this module
+// does not watch later binding changes.
+message Relay {
+  string node_id = 1;
+  // rsa_fingerprint is the 20-byte SHA-1 digest of the relay's RSA identity.
+  bytes rsa_fingerprint = 2;
+  // ed25519_id is the 32-byte ed25519 identity public key that cross-signed
+  // rsa_fingerprint.
+  bytes ed25519_id = 3;
+  string operator = 4;
+  // prefix16 is the canonical IPv4 /16 ("A.B.0.0/16") used for the per-/16 cap.
+  string prefix16 = 5;
+  // exit is the operator's opt-in declaration. Pay uses the reporters'
+  // median Exit flag, not this bit.
+  bool exit = 6;
+  // jailed is set only by Keeper.JailRelay. Settlement never sets it.
+  bool jailed = 7;
+}
+
+// RelayObservation is one reporter's measurement of one relay for one epoch.
+message RelayObservation {
+  bytes rsa_fingerprint = 1;
+  bytes ed25519_id = 2;
+  // consensus_weight is the claim in norama, before caps and the exit
+  // multiplier.
+  string consensus_weight = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // flags bit 0 (1) is the Exit flag. Other bits are ignored for pay but
+  // are covered by inputs_root.
+  uint32 flags = 4;
+  string uptime_fraction = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// ReportChunk is one piece of a chunked MsgReportEpoch, kept only until the
+// report is complete.
+message ReportChunk {
+  uint64 epoch = 1;
+  string reporter = 2;
+  uint32 chunk_index = 3;
+  uint32 chunk_count = 4;
+  bytes inputs_root = 5;
+  repeated RelayObservation entries = 6 [(gogoproto.nullable) = false];
+}
+
+// CompleteReport is the reassembled report for one reporter and epoch.
+// Chunks are deleted once this exists. Settlement deletes the report.
+message CompleteReport {
+  uint64 epoch = 1;
+  string reporter = 2;
+  bytes inputs_root = 3;
+  repeated RelayObservation entries = 4 [(gogoproto.nullable) = false];
+}
+
+// Activation records whether relay rewards have started. The activating
+// epoch itself does not mint; the next settled epoch with quorum does.
+message Activation {
+  bool active = 1;
+  uint64 activation_epoch = 2;
+}
+
+// EpochResult is the settlement summary for one epoch. minted is zero when
+// quorum failed or this epoch only activated rewards.
+message EpochResult {
+  uint64 epoch = 1;
+  bool quorum_met = 2;
+  bool activating = 3;
+  string ceiling = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string minted = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// RelayPayout is one relay's settled norama for one epoch, after caps and
+// pro-rata against the relay ceiling.
+message RelayPayout {
+  uint64 epoch = 1;
+  bytes rsa_fingerprint = 2;
+  string operator = 3;
+  string amount = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
