@@ -1,16 +1,13 @@
 package globalcmd
 
 import (
-	"context"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"os"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/globalbind"
-	"github.com/DeBrosOfficial/network/pkg/rwagent"
 	"github.com/spf13/cobra"
 )
 
@@ -91,58 +88,7 @@ func runRegisterNode(cmd *cobra.Command, args []string) error {
 		FeeAmount: nodeFlags.fee, Gas: nodeFlags.gas, ChainID: nodeFlags.chainID,
 		AccountNumber: nodeFlags.account, Sequence: nodeFlags.sequence,
 	}
-	if nodeFlags.pubKey != "" {
-		pub, err := hex.DecodeString(nodeFlags.pubKey)
-		if err != nil {
-			return clierr.Usage("pubkey is not hex")
-		}
-		in.PubKey = pub
-	}
-	ctx := cmd.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if nodeFlags.node != "" {
-		acct, err := clusterreg.FetchAccount(ctx, nodeFlags.node, nodeFlags.operator)
-		if err != nil {
-			return clierr.Failure("read the chain account: %w", err)
-		}
-		if !cmd.Flags().Changed("account-number") {
-			in.AccountNumber = acct.Number
-		}
-		if !cmd.Flags().Changed("sequence") {
-			in.Sequence = acct.Sequence
-		}
-		if len(in.PubKey) == 0 {
-			in.PubKey = acct.PubKey
-		}
-	}
-	doc, err := in.SignDoc()
-	if err != nil {
-		return clierr.Usage("%v", err)
-	}
-	if nodeFlags.node == "" {
-		fmt.Fprintf(os.Stdout, "sign document (not submitted):\n%x\n", doc)
-		return nil
-	}
-	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
-	sig, err := client.SignOramaTx(ctx, doc)
-	if err != nil {
-		return clierr.Failure("sign the registration: %w", err)
-	}
-	if sig.Address != nodeFlags.operator || hex.EncodeToString(sig.PubKey) != hex.EncodeToString(in.PubKey) {
-		return clierr.Failure("the agent signed as %s, not the operator", sig.Address)
-	}
-	tx, err := in.TxRaw(sig.Signature)
-	if err != nil {
-		return clierr.Failure("build the transaction: %w", err)
-	}
-	hash, err := clusterreg.Broadcast(ctx, nodeFlags.node, tx)
-	if err != nil {
-		return clierr.Failure("%v", err)
-	}
-	fmt.Fprintf(os.Stdout, "registered %s: %s\n", nodeFlags.id, hash)
-	return nil
+	return submitDirect(cmd, nodeFlags.operator, nodeFlags.node, nodeFlags.pubKey, nodeFlags.account, nodeFlags.sequence, in, "registered "+nodeFlags.id)
 }
 
 func parseRoles(names []string) ([]int, error) {

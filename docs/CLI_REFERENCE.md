@@ -96,7 +96,9 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama function versions`](#orama-function-versions) — List all versions of a function
 - [`orama global`](#orama-global) — Sign a global-node service key binding
   - [`orama global bind`](#orama-global-bind) — Sign orama-global-bind-v1 for one service key
+  - [`orama global bond`](#orama-global-bond) — Bond norama to one role on a global node
   - [`orama global register`](#orama-global-register) — Register a global node from signed service-key bindings
+  - [`orama global unbond`](#orama-global-unbond) — Start unbonding norama from one role
 - [`orama inspect`](#orama-inspect) — Inspect cluster health via SSH
 - [`orama invite`](#orama-invite) — Mint an invite for a new node
 - [`orama members`](#orama-members) — Manage who may work in a namespace
@@ -1268,7 +1270,7 @@ Sign the binding that proves a service key belongs to an operator.
 The private key stays in its file. The command writes the public key and the
 signature, and nothing else. Sending MsgRegisterNode is a separate step.
 
-Subcommands: `bind`, `register`
+Subcommands: `bind`, `bond`, `register`, `unbond`
 
 ### orama global bind
 
@@ -1285,6 +1287,34 @@ orama global bind [flags]
 | `--key-type` | — | secp256k1, ed25519, or ed25519-expanded; required for a raw 32-byte file |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--service` | — | Service name, for example provider or tor [required] |
+
+### orama global bond
+
+Bond norama to one role on a global node
+
+```
+orama global bond [flags]
+```
+
+Move norama from the operator account into the node's role bond.
+
+The amount is added to the bond that role already holds. The node must already
+be registered with that role. Without --node the command prints the sign
+document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--amount` | — | Amount of norama [required] |
+| `--chain-id` | — | Chain id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Node id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--operator` | — | Operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
+| `--sequence` | `0` | Account sequence, when not read from --node |
 
 ### orama global register
 
@@ -1321,6 +1351,33 @@ this --chain-id and --operator.
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--region` | — | Region hint |
+| `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+
+### orama global unbond
+
+Start unbonding norama from one role
+
+```
+orama global unbond [flags]
+```
+
+Start unbonding norama from one role on a registered global node.
+
+The amount has to be covered by that role's bond. Without --node the command
+prints the sign document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--amount` | — | Amount of norama [required] |
+| `--chain-id` | — | Chain id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Node id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--operator` | — | Operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 

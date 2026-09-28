@@ -731,6 +731,8 @@ tombstoning (keeper `Tombstone`, not a message) records the old pubkey so it can
 again.
 
 `MsgBondNode` moves norama from the operator's bank balance into the module account.
+`orama global bond` and `orama global unbond` build those messages. With `--node` they
+sign through the RootWallet agent and broadcast; without it they print the sign document.
 `MsgUnbondNode` moves it onto the queue. `EndBlock` pays an entry back to that operator when
 `completion_unix <=` the block time. The delay is `Params.UnbondingSeconds` (genesis default
 21 days, the same period D16 and C4 state for stake; C6 does not give a second duration).
