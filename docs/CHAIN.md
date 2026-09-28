@@ -35,9 +35,10 @@ require it, and nothing in `chain/` imports `core/`.
 **Wired** in addition to the table: `x/token` (factory denoms), `x/archive` (history registry),
 and `x/nodes` (operator and global-node registry). Its end block pays matured role-bond
 unbondings.
-**Not wired**, on purpose: `x/storage` and `x/relay` are implemented and not registered in
-`app.go`. `x/houses` is registered. Its operator house stays closed because `x/nodes` does
-not store a public /16 or ASN, and an operator without those is not eligible. Also unwired: `x/gov`,
+**Not wired**, on purpose: `x/relay` is implemented and not registered in `app.go`.
+`x/storage` is registered. Protocol deals that need distinct /16s and ASNs cannot be placed,
+because a node record does not store them. `x/houses` is registered. Its operator house stays
+closed for the same reason. Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
 wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`
@@ -565,10 +566,10 @@ owner's earnings. The coins sit in a **second, separate module account** (`fees_
 `Params.DepositRefundFraction` (99%) to the owner's earnings and burns the rest
 (`types.SplitDeposit`, exact split, remainder to the burn side). `x/token` calls `LockDeposit` /
 `ReleaseDeposit` and is registered, so a token
-create locks a metadata deposit. `x/nodes` calls the same interface and is not registered.
+create locks a metadata deposit. `x/nodes` calls the same interface and is registered.
 `x/cnft` locks a tree deposit through the same interface and is registered. `x/market` is
 registered and does not lock a listing deposit. A sale credits earnings.
-`x/storage` is implemented and not registered. Its deal escrow is its own module account,
+`x/storage` is registered. Its deal escrow is its own module account,
 not this deposit ledger. The per-byte contract deposit meter is not hooked into wasmd's store.
 
 ### Queries
@@ -925,8 +926,8 @@ for anything that does.
 
 ## Deviations from the task spec, and why
 
-- **`x/houses` is not registered in `app.go`.** Its keeper, messages and tests exist. A running
-  node does not execute them, and stock `x/gov` is still absent. Authority-gated SDK messages
+- **`x/houses` does not govern stock modules.** It is registered. Stock `x/gov` is absent.
+  Authority-gated SDK messages
   stay unreachable. Structural decisions other than a development spend are stored in `x/houses`
   and are not applied to `x/emission`, `x/power` or the upgrade module. Private delegator ballots
   are not implemented (they wait on shielded delegation, C12).
@@ -987,7 +988,7 @@ for anything that does.
   `MsgFundHotKey` is not a message of `x/nodes`.
 - **`x/fees`' state-deposit ledger is called by `x/token` and `x/nodes`.** Both are registered.
   `x/cnft` calls the same interface for a tree deposit and is registered.
-  `x/storage` keeps deal escrow in its own module account and is not registered.
+  `x/storage` is registered and keeps deal escrow in its own module account.
   The per-byte contract deposit meter is not hooked into wasmd's store.
 - **`x/power.DistributeEpochRewards` iterates every delegation of every validator once per closed
   epoch** (`Keeper.distributeValidatorReward`), rather than using `x/distribution`'s O(1)-per-block

@@ -119,6 +119,9 @@ import (
 	powerkeeper "github.com/DeBrosOfficial/network/chain/x/power/keeper"
 	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
 	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
+	"github.com/DeBrosOfficial/network/chain/x/storage"
+	storagekeeper "github.com/DeBrosOfficial/network/chain/x/storage/keeper"
+	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 	"github.com/DeBrosOfficial/network/chain/x/token"
 	tokenkeeper "github.com/DeBrosOfficial/network/chain/x/token/keeper"
 	tokentypes "github.com/DeBrosOfficial/network/chain/x/token/types"
@@ -177,6 +180,9 @@ var (
 		archivetypes.ModuleName:        nil,
 		nodestypes.ModuleName:          {authtypes.Burner},
 		housetypes.ModuleName:          {authtypes.Burner},
+		storagetypes.ModuleName:        {authtypes.Minter, authtypes.Burner},
+		storagetypes.EscrowModuleName:  {authtypes.Burner},
+		storagetypes.ArchiveModuleName: nil,
 		cnfttypes.ModuleName:           nil,
 		markettypes.ModuleName:         nil,
 	}
@@ -214,6 +220,7 @@ type OramaApp struct {
 	ArchiveKeeper         archivekeeper.Keeper
 	NodesKeeper           nodeskeeper.Keeper
 	HousesKeeper          houseskeeper.Keeper
+	StorageKeeper         storagekeeper.Keeper
 	CnftKeeper            cnftkeeper.Keeper
 	MarketKeeper          marketkeeper.Keeper
 	WasmPolicyKeeper      wasmpolicykeeper.Keeper
@@ -296,6 +303,7 @@ func NewOramaApp(
 		archivetypes.StoreKey,
 		nodestypes.StoreKey,
 		housetypes.StoreKey,
+		storagetypes.StoreKey,
 		cnfttypes.StoreKey,
 		markettypes.StoreKey,
 	)
@@ -486,6 +494,15 @@ func NewOramaApp(
 		app.EmissionKeeper,
 		app.FeesKeeper,
 	)
+	app.StorageKeeper = storagekeeper.NewKeeper(
+		appCodec,
+		runtime.NewKVStoreService(keys[storagetypes.StoreKey]),
+		app.BankKeeper,
+		app.FeesKeeper,
+		app.FeesKeeper,
+		app.EmissionKeeper,
+		storageNodes{nodes: app.NodesKeeper},
+	)
 
 	/****  Module Options ****/
 
@@ -515,6 +532,7 @@ func NewOramaApp(
 		cnft.NewAppModule(app.CnftKeeper),
 		market.NewAppModule(app.MarketKeeper),
 		houses.NewAppModule(app.HousesKeeper),
+		storage.NewAppModule(app.StorageKeeper),
 	}
 	app.ModuleManager = module.NewManager(append(baseModules, app.wasmModules...)...)
 
@@ -541,6 +559,7 @@ func NewOramaApp(
 	// no longer receives the emission mint.
 	app.ModuleManager.SetOrderBeginBlockers(
 		emissiontypes.ModuleName,
+		storagetypes.ModuleName,
 		distrtypes.ModuleName,
 		slashingtypes.ModuleName,
 		evidencetypes.ModuleName,
@@ -557,6 +576,7 @@ func NewOramaApp(
 		stakingtypes.ModuleName,
 		nodestypes.ModuleName,
 		housetypes.ModuleName,
+		storagetypes.ModuleName,
 		genutiltypes.ModuleName,
 		feegrant.ModuleName,
 		powertypes.ModuleName,
@@ -592,6 +612,7 @@ func NewOramaApp(
 		cnfttypes.ModuleName,
 		markettypes.ModuleName,
 		housetypes.ModuleName,
+		storagetypes.ModuleName,
 	}
 	genesisModuleOrder = insertBefore(genesisModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 	exportModuleOrder := []string{
@@ -614,6 +635,7 @@ func NewOramaApp(
 		cnfttypes.ModuleName,
 		markettypes.ModuleName,
 		housetypes.ModuleName,
+		storagetypes.ModuleName,
 	}
 	exportModuleOrder = insertBefore(exportModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 
