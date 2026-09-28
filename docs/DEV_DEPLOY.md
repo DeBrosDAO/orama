@@ -189,6 +189,19 @@ outside the signature. `--unsigned` builds an archive for local inspection
 only; no node installs it. `orama node rollout` builds a signed archive the
 same way.
 
+**Auto-update check.** `orama node autoupdate --current <ver> --candidate <ver>`
+reports whether a newer release should be installed. The cluster default is
+`notify`: the command prints `notify` and does not swap binaries. `auto`
+prints `upgrade` only when the cluster is not degraded, a majority of raft
+voters are up, the candidate is a newer dotted version on the cluster's
+channel, and the hour is inside `--window` when one is set. A downgrade, a
+release marked `--bad`, and a TUF failure (`--verify rollback|freeze|threshold|hash`)
+print `refuse`. Installing is still one node at a time: `pkg/autoupdate`
+holds a single lease (`autoupdate` in `cluster_locks`) and rolls a failed
+health gate back through the steps that ran. This command does not take that
+lease and does not restart a node. `max_parallel` is 1; a higher value is
+rejected.
+
 **Push.** `orama push` uploads into a fresh `mktemp -d` directory on each node
 and runs the node's **installed** CLI, `/usr/local/bin/orama node
 stage-archive`. Under a lock on `/opt/orama` that install and upgrade share, it

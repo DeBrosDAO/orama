@@ -130,6 +130,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama namespace rqlite import`](#orama-namespace-rqlite-import) — Import a SQLite dump into the namespace's RQLite (DESTRUCTIVE)
   - [`orama namespace webrtc-status`](#orama-namespace-webrtc-status) — Show WebRTC service status for a namespace
 - [`orama node`](#orama-node) — Node operator commands
+  - [`orama node autoupdate`](#orama-node-autoupdate) — Decide whether a newer release should be installed
   - [`orama node clean`](#orama-node-clean) — Deprecated: use 'orama node wipe' or 'orama node remove'
   - [`orama node dns`](#orama-node-dns) — Cluster DNS: what the outside world needs to reach its nameservers
     - [`orama node dns delegation`](#orama-node-dns-delegation) — Print the NS and glue records to create at the parent zone
@@ -1739,7 +1740,39 @@ Remote, run from your machine and reaching nodes over SSH:
 The remote commands are the same implementations as the top-level 'orama push',
 'orama rollout' and 'orama nodes'.
 
-Subcommands: `clean`, `dns`, `doctor`, `enroll`, `install`, `invite`, `list`, `logs`, `migrate-conf`, `migrate-raft-id`, `push`, `recover-raft`, `remove`, `report`, `restart`, `rollout`, `schema`, `setup`, `stage-archive`, `start`, `status`, `stop`, `uninstall`, `unlock`, `upgrade`, `wipe`
+Subcommands: `autoupdate`, `clean`, `dns`, `doctor`, `enroll`, `install`, `invite`, `list`, `logs`, `migrate-conf`, `migrate-raft-id`, `push`, `recover-raft`, `remove`, `report`, `restart`, `rollout`, `schema`, `setup`, `stage-archive`, `start`, `status`, `stop`, `uninstall`, `unlock`, `upgrade`, `wipe`
+
+### orama node autoupdate
+
+Decide whether a newer release should be installed
+
+```
+orama node autoupdate [flags]
+```
+
+Report what this cluster should do with a candidate release.
+
+The default mode is notify: a newer verified release is reported and not
+installed. auto means the node may install, and only when the cluster is
+healthy, the release is newer, and the maintenance window is open. The
+install itself is one node at a time and is not performed by this command.
+
+A release that fails TUF verification, including a rolled-back snapshot or
+an expired timestamp, is refused. So is a downgrade and a release a previous
+health-gate failure marked bad.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--bad` | `false` | candidate was marked bad by a failed health gate |
+| `--candidate` | — | version being considered |
+| `--channel` | `stable` | release channel |
+| `--current` | — | version installed now |
+| `--degraded` | `false` | cluster is already degraded |
+| `--healthy-voters` | `2` | raft voters that are up |
+| `--mode` | `notify` | off, notify, or auto |
+| `--verify` | — | simulated TUF failure: rollback, freeze, threshold, or hash |
+| `--voters` | `3` | raft voters |
+| `--window` | — | maintenance window as start-end hours, for example 1-5 |
 
 ### orama node clean
 
