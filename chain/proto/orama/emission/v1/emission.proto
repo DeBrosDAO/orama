@@ -100,9 +100,10 @@ message EpochState {
 // CeilingRecord is one closed epoch's storage, relay and development
 // ceilings, kept so a later module can claim them within the trailing
 // window. closeEpoch does not mint storage, relay or development.
-// Keeper.MintDevelopmentSpend is the only path that mints development, and
-// only up to development_ceiling minus development_minted. Storage and relay
-// stay unminted. Records older than the trailing window are pruned.
+// Keeper.MintDevelopmentSpend mints development up to development_ceiling
+// minus development_minted. Keeper.MintRelayReward mints relay rewards up to
+// relay_ceiling minus relay_minted, into the relay module account. Storage
+// stays unminted by this module. Records older than the trailing window are pruned.
 message CeilingRecord {
   uint64 epoch = 1;
   // storage_ceiling is the unminted maximum available to storage-subsidy and
@@ -134,6 +135,13 @@ message CeilingRecord {
   // Keeper.MintDevelopmentSpend has already minted. It starts at zero when
   // the epoch closes and never exceeds development_ceiling.
   string development_minted = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // relay_minted is how much of relay_ceiling Keeper.MintRelayReward has
+  // already minted. It starts at zero when the epoch closes and never
+  // exceeds relay_ceiling.
+  string relay_minted = 7 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];

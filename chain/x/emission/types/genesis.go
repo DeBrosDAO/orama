@@ -87,6 +87,13 @@ func (gs GenesisState) Validate() error {
 			return fmt.Errorf("ceiling record for epoch %d development_minted must be in [0, development_ceiling], got %s", c.Epoch, mintedDev)
 		}
 		developmentMintedSum = developmentMintedSum.Add(mintedDev)
+		mintedRelay := c.RelayMinted
+		if mintedRelay.IsNil() {
+			mintedRelay = math.ZeroInt()
+		}
+		if mintedRelay.IsNegative() || mintedRelay.GT(c.RelayCeiling) {
+			return fmt.Errorf("ceiling record for epoch %d relay_minted must be in [0, relay_ceiling], got %s", c.Epoch, mintedRelay)
+		}
 
 		want := SplitEpochMint(MaxMintableForEpoch(c.Epoch))
 		if !c.StorageCeiling.Equal(want.Storage) || !c.RelayCeiling.Equal(want.Relay) ||

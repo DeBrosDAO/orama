@@ -35,10 +35,9 @@ require it, and nothing in `chain/` imports `core/`.
 **Wired** in addition to the table: `x/token` (factory denoms), `x/archive` (history registry),
 and `x/nodes` (operator and global-node registry). Its end block pays matured role-bond
 unbondings.
-**Not wired**, on purpose: `x/relay` is implemented and not registered in `app.go`.
-`x/storage` is registered. Protocol deals that need distinct /16s and ASNs cannot be placed,
-because a node record does not store them. `x/houses` is registered. Its operator house stays
-closed for the same reason. Also unwired: `x/gov`,
+`x/storage` and `x/relay` are registered. Protocol deals and the operator house stay closed
+when a node has no public /16 or ASN. A relay payout cannot exceed that epoch's relay ceiling
+minus what was already minted. Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
 wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`

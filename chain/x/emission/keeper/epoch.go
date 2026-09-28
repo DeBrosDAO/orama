@@ -86,6 +86,7 @@ func (k Keeper) closeEpoch(ctx sdk.Context, state types.EpochState) error {
 		DevelopmentCeiling: split.Development,
 		ValidatorMinted:    split.Validator,
 		DevelopmentMinted:  math.ZeroInt(),
+		RelayMinted:        math.ZeroInt(),
 	}
 	if err := k.Ceilings.Set(ctx, closingEpoch, record); err != nil {
 		return fmt.Errorf("failed to record epoch %d ceilings: %w", closingEpoch, err)

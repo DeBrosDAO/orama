@@ -118,6 +118,9 @@ import (
 	powerante "github.com/DeBrosOfficial/network/chain/x/power/ante"
 	powerkeeper "github.com/DeBrosOfficial/network/chain/x/power/keeper"
 	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
+	"github.com/DeBrosOfficial/network/chain/x/relay"
+	relaykeeper "github.com/DeBrosOfficial/network/chain/x/relay/keeper"
+	relaytypes "github.com/DeBrosOfficial/network/chain/x/relay/types"
 	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
 	"github.com/DeBrosOfficial/network/chain/x/storage"
 	storagekeeper "github.com/DeBrosOfficial/network/chain/x/storage/keeper"
@@ -183,6 +186,7 @@ var (
 		storagetypes.ModuleName:        {authtypes.Minter, authtypes.Burner},
 		storagetypes.EscrowModuleName:  {authtypes.Burner},
 		storagetypes.ArchiveModuleName: nil,
+		relaytypes.ModuleName:          {authtypes.Minter},
 		cnfttypes.ModuleName:           nil,
 		markettypes.ModuleName:         nil,
 	}
@@ -221,6 +225,7 @@ type OramaApp struct {
 	NodesKeeper           nodeskeeper.Keeper
 	HousesKeeper          houseskeeper.Keeper
 	StorageKeeper         storagekeeper.Keeper
+	RelayKeeper           relaykeeper.Keeper
 	CnftKeeper            cnftkeeper.Keeper
 	MarketKeeper          marketkeeper.Keeper
 	WasmPolicyKeeper      wasmpolicykeeper.Keeper
@@ -304,6 +309,7 @@ func NewOramaApp(
 		nodestypes.StoreKey,
 		housetypes.StoreKey,
 		storagetypes.StoreKey,
+		relaytypes.StoreKey,
 		cnfttypes.StoreKey,
 		markettypes.StoreKey,
 	)
@@ -503,6 +509,13 @@ func NewOramaApp(
 		app.EmissionKeeper,
 		storageNodes{nodes: app.NodesKeeper},
 	)
+	app.RelayKeeper = relaykeeper.NewKeeper(
+		appCodec,
+		runtime.NewKVStoreService(keys[relaytypes.StoreKey]),
+		relayNodes{nodes: app.NodesKeeper},
+		app.EmissionKeeper,
+		app.FeesKeeper,
+	)
 
 	/****  Module Options ****/
 
@@ -533,6 +546,7 @@ func NewOramaApp(
 		market.NewAppModule(app.MarketKeeper),
 		houses.NewAppModule(app.HousesKeeper),
 		storage.NewAppModule(app.StorageKeeper),
+		relay.NewAppModule(app.RelayKeeper),
 	}
 	app.ModuleManager = module.NewManager(append(baseModules, app.wasmModules...)...)
 
@@ -613,6 +627,7 @@ func NewOramaApp(
 		markettypes.ModuleName,
 		housetypes.ModuleName,
 		storagetypes.ModuleName,
+		relaytypes.ModuleName,
 	}
 	genesisModuleOrder = insertBefore(genesisModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 	exportModuleOrder := []string{
@@ -636,6 +651,7 @@ func NewOramaApp(
 		markettypes.ModuleName,
 		housetypes.ModuleName,
 		storagetypes.ModuleName,
+		relaytypes.ModuleName,
 	}
 	exportModuleOrder = insertBefore(exportModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 
