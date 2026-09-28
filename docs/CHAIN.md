@@ -1,9 +1,8 @@
 # The Orama L1 chain
 
 **Status: first code, devnet/localnet only.** Nothing here has run on a public network. This
-document describes only what `chain/` actually does today; the full design (including everything
-not yet built or not yet wired - storage, relay, shielding, CosmWasm, and so on) is
-in `plans/open-network.md` and `plans/open-network/track-c-chain.md`.
+document describes only what `chain/` actually does today. The design that is still
+unbuilt is in `plans/open-network.md` and `plans/open-network/track-c-chain.md`.
 
 `chain/` is its own Go module (`github.com/DeBrosOfficial/network/chain`). `core/go.mod` does not
 require it, and nothing in `chain/` imports `core/`.
@@ -59,13 +58,12 @@ it control of every authority-gated message on the chain today, with no explicit
 Because no module by this name is ever registered, no private key or module account can ever
 produce a valid signature for it, so every authority-gated message on this chain
 (`MsgSoftwareUpgrade`, every module's `MsgUpdateParams`, ...) is permanently unreachable until a
-future release registers `x/houses` and deliberately migrates that authority. On a node running
+future release deliberately migrates that authority to `x/houses`. On a node running
 this binary, the only way to change the chain's behavior is still a coordinated hard fork (a new
 binary, a halt height, and validators choosing to run it) - never an on-chain vote or an admin key.
 `TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg` in `chain/app/app_test.go` proves bank,
 staking, distribution, consensus and upgrade's authority-gated messages all reject a signer that
-isn't this address. What `x/houses` itself will do once it is registered is described under
-"`x/houses`" below. Until then its `EndBlock` does not run.
+isn't this address. What `x/houses` does is described under "`x/houses`" below. Its `EndBlock` runs.
 
 ### Denom and accounts
 
@@ -789,6 +787,14 @@ counts without it.
 The C2 fee-free registration quota is an ante rule and is not implemented. `MsgFundHotKey` is
 not a message of this module. Queries, once wired: `params`, `operator [address]`, `node [id]`,
 `cluster [id]`, `unbondings [node-id]`, `invariants`.
+
+## Piece store
+
+`chain/provider` stores one node's pieces on disk. `Ingest` declines a CID on the
+operator denylist, bytes whose piece root does not match the claimed root, or a piece
+larger than the free-bytes callback. A decline writes nothing. `Prove` rebuilds a
+challenge proof from the stored bytes and rejects a padding leaf. The package does not
+watch CometBFT and does not send `MsgAcceptDeal` or `MsgSubmitProofs`.
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
