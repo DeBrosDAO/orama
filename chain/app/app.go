@@ -143,13 +143,13 @@ const unreachableAuthorityName = "orama/no-authority"
 
 // UnreachableAuthority is the address used as the "authority" for every module that the upstream
 // SDK expects to be governed by x/gov (upgrade, consensus params, bank, staking, slashing,
-// distribution, ...). x/houses (plans/open-network.md D17) does not exist yet, and per D18 ("no
-// admin keys, no multisig, no kill switch") this app deliberately wires no governance module at
-// all: the address is the hash of unreachableAuthorityName, and because no module by that name is
-// ever registered here, no private key or module account can ever produce a valid signature for
-// it. Every authority-gated message on this chain is therefore permanently unreachable until a
-// future release wires real governance and migrates this authority - consistent with D17/D20: the
-// only way to change chain behavior today is a coordinated hard fork, not an on-chain vote.
+// distribution, ...). x/houses is registered and runs its own EndBlock, but it is not this
+// authority. Per D18 ("no admin keys, no multisig, no kill switch") those stock modules stay on
+// the hash of unreachableAuthorityName. Because no module by that name is ever registered, no
+// private key or module account can ever produce a valid signature for it. Every
+// authority-gated message on those modules is therefore permanently unreachable until a future
+// release migrates this authority on purpose. The only way to change their behavior today is a
+// coordinated hard fork, not an on-chain vote.
 //
 // This is a function, not a package-level value: it must be called after SetAddressPrefixes has
 // set the process-wide bech32 config, and NewOramaApp always runs after that call (see

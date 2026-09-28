@@ -41,6 +41,12 @@ bytes. Those bytes are not SDK transactions, and this CometBFT ProcessProposal
 commit does not carry vote extensions, so `oramad` does not put them in a block.
 `orama storage grant` builds a deal allowance that is not SDK authz. It caps spend,
 piece size, duration, and replica count. `orama storage revoke` removes it.
+`orama storage create` opens a PRIVATE or PUBLIC_PIN deal from piece roots the
+caller already has. It does not encrypt the bytes and it does not upload them.
+`orama storage extend` adds epochs. `orama storage accept` and
+`orama storage decline` answer one assigned slot. The signer of those two is
+the node's hot key. Without `--node`, each of these commands prints the sign
+document and does not submit it.
 Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
@@ -179,8 +185,9 @@ development share is also recorded there and stays unminted at epoch close.
 `Keeper.MintDevelopmentSpend` is the only later mint, and only for an amount that is positive and
 no greater than that epoch's 5% development ceiling minus what this method has already minted for
 the same epoch. It refuses every other amount, mints into the emission module account, and does
-not pay a recipient itself. `x/houses` is the caller; it is not wired into `app.go`, so a running
-node never takes this path today. Each `CeilingRecord` also stores `development_minted`. The
+not pay a recipient itself. `x/houses` calls it from `EndBlock` after a passed spend.
+The structural tier stays closed until its opening rules hold, so a fresh chain does not
+take this path. Each `CeilingRecord` also stores `development_minted`. The
 all-time total is `cumulative_development_minted`, which is **not** part of `cumulative_minted`
 (that field stays the validator share, so the schedule equality check is unchanged). Supply is
 `genesis_supply + cumulative_minted + cumulative_development_minted - cumulative_burned`.
@@ -669,7 +676,7 @@ expedited message. After passage, execution waits 14 days for parameters, 60 day
 and the other structural actions, and 7 days for spends.
 
 A passed spend calls `x/emission.Keeper.MintDevelopmentSpend` and then
-`EarningsKeeper.CreditEarnings` (implemented by `x/fees` once wired; tests use a fake). If the
+`EarningsKeeper.CreditEarnings` (`x/fees`; unit tests use a fake). If the
 mint refuses the amount, the proposal is marked failed and nothing is credited. Other structural
 decisions are stored on `Enacted` only: a software-upgrade name and height, an emission split
 within ±10 points of 60/25/10/5, a one-way M activation and an `m_max` in [0.75, 1.25], and

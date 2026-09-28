@@ -192,6 +192,10 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
 - [`orama ssh`](#orama-ssh) — SSH into a node
 - [`orama status`](#orama-status) — Show health status of your nodes
 - [`orama storage`](#orama-storage) — Storage deals on the Orama chain
+  - [`orama storage accept`](#orama-storage-accept) — Accept an assigned storage slot
+  - [`orama storage create`](#orama-storage-create) — Open a private or public-pin storage deal
+  - [`orama storage decline`](#orama-storage-decline) — Decline an assigned storage slot
+  - [`orama storage extend`](#orama-storage-extend) — Add epochs to a storage deal
   - [`orama storage grant`](#orama-storage-grant) — Grant a cluster a capped deal allowance
   - [`orama storage revoke`](#orama-storage-revoke) — Revoke a deal allowance
 - [`orama version`](#orama-version) — Show version information
@@ -3124,7 +3128,115 @@ Storage deals on the Orama chain
 orama storage
 ```
 
-Subcommands: `grant`, `revoke`
+Subcommands: `accept`, `create`, `decline`, `extend`, `grant`, `revoke`
+
+### orama storage accept
+
+Accept an assigned storage slot
+
+```
+orama storage accept [flags]
+```
+
+Accept one slot of a deal. The signer is the node's hot key. Without --node the command prints the sign document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--deal-id` | `0` | Deal id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Node id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+| `--signer` | — | Signing account (orama1...) [required] |
+| `--slot` | `0` | Slot index |
+
+### orama storage create
+
+Open a private or public-pin storage deal
+
+```
+orama storage create [flags]
+```
+
+Open a PRIVATE or PUBLIC_PIN deal.
+
+The command does not encrypt the bytes and does not upload them. Each --piece
+is a 32-byte root and a byte count, written as <64 hex chars>:<bytes>. Leaf
+counts follow the 1024-byte piece rule. The root is not checked against the
+bytes. A private deal needs one piece per replica. A public-pin deal needs
+exactly one piece. Archive deals are refused. Without --node the command
+prints the sign document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--class` | — | private or public-pin [required] |
+| `--duration-epochs` | `0` | Deal length in epochs [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--granter` | — | Account whose deal allowance pays, when the signer is the grantee |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--nonce` | — | 32-byte deal nonce hex [required] |
+| `--piece` | — | Piece as <64-hex-root>:<bytes> [required] |
+| `--price` | — | Price per epoch per replica, in norama [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--repair-delegate` | — | Repair delegate id |
+| `--replicas` | `3` | Replica count |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+| `--signer` | — | Signing account (orama1...) [required] |
+
+### orama storage decline
+
+Decline an assigned storage slot
+
+```
+orama storage decline [flags]
+```
+
+Decline one slot of a deal. The signer is the node's hot key. Without --node the command prints the sign document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--deal-id` | `0` | Deal id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Node id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--reason` | — | Why the slot is declined |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+| `--signer` | — | Signing account (orama1...) [required] |
+| `--slot` | `0` | Slot index |
+
+### orama storage extend
+
+Add epochs to a storage deal
+
+```
+orama storage extend [flags]
+```
+
+Add epochs to a user deal. Without --node the command prints the sign document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--deal-id` | `0` | Deal id [required] |
+| `--extra-epochs` | `0` | Epochs to add [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+| `--signer` | — | Signing account (orama1...) [required] |
 
 ### orama storage grant
 
