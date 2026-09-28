@@ -204,7 +204,9 @@ The order is therefore:
 
 ### Installing the nodes
 
-`orama node setup` provisions a fresh VPS end to end. It reads the VPS
+A first cluster, from three VPS through a deployed site, is
+[RUN_YOUR_OWN_CLUSTER.md](RUN_YOUR_OWN_CLUSTER.md). `orama node setup`
+provisions a fresh VPS end to end. It reads the VPS
 password from your RootWallet vault (`rw vault add <ip>`) — never from the
 command line — and installs the archive `orama build` printed:
 

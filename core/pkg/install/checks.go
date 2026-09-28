@@ -216,6 +216,15 @@ func (dc *DependencyChecker) CheckAll() ([]Dependency, error) {
 	return nil, nil
 }
 
+// Installer resource floors. CheckDiskSpace, CheckRAM and CheckCPU use these
+// values, and docs/RUN_YOUR_OWN_CLUSTER.md quotes them. The disk and RAM
+// units are 1024³ bytes; the error text calls that GB.
+const (
+	MinFreeDiskBytes = 10 * 1024 * 1024 * 1024
+	MinRAMBytes      = 2 * 1024 * 1024 * 1024
+	MinCPUCores      = 2
+)
+
 // ResourceChecker validates system resources for production deployment
 type ResourceChecker struct{}
 
@@ -243,11 +252,11 @@ func (rc *ResourceChecker) CheckDiskSpace(path string) error {
 
 	// Available space in bytes
 	availableBytes := stat.Bavail * uint64(stat.Bsize)
-	minRequiredBytes := uint64(10 * 1024 * 1024 * 1024) // 10GB
+	minRequiredBytes := uint64(MinFreeDiskBytes)
 
 	if availableBytes < minRequiredBytes {
 		availableGB := float64(availableBytes) / (1024 * 1024 * 1024)
-		return fmt.Errorf("insufficient disk space: %.1fGB available, minimum 10GB required", availableGB)
+		return fmt.Errorf("insufficient disk space: %.1fGB available, minimum %dGB required", availableGB, MinFreeDiskBytes/(1024*1024*1024))
 	}
 
 	return nil
@@ -279,10 +288,10 @@ func (rc *ResourceChecker) CheckRAM() error {
 		return fmt.Errorf("could not determine total RAM")
 	}
 
-	minRequiredKB := uint64(2 * 1024 * 1024) // 2GB in KB
+	minRequiredKB := uint64(MinRAMBytes / 1024)
 	if totalKB < minRequiredKB {
 		totalGB := float64(totalKB) / (1024 * 1024)
-		return fmt.Errorf("insufficient RAM: %.1fGB total, minimum 2GB required", totalGB)
+		return fmt.Errorf("insufficient RAM: %.1fGB total, minimum %dGB required", totalGB, MinRAMBytes/(1024*1024*1024))
 	}
 
 	return nil
@@ -291,8 +300,8 @@ func (rc *ResourceChecker) CheckRAM() error {
 // CheckCPU validates sufficient CPU cores (minimum 2 cores)
 func (rc *ResourceChecker) CheckCPU() error {
 	cores := runtime.NumCPU()
-	if cores < 2 {
-		return fmt.Errorf("insufficient CPU cores: %d available, minimum 2 required", cores)
+	if cores < MinCPUCores {
+		return fmt.Errorf("insufficient CPU cores: %d available, minimum %d required", cores, MinCPUCores)
 	}
 	return nil
 }
