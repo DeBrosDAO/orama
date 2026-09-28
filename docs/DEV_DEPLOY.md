@@ -390,7 +390,7 @@ Phase 2b installs the helper under the archive lock, and the post-swap step (`En
 
 Every gateway runs as `orama-namespace-gateway@<ns>` (`User=orama`, `ProtectSystem=strict`), to which `secrets/` and `configs/` are read-only, so it writes only under `data/`: its own keys and encryption-root cache in `data/namespaces/<ns>/gateway/`, tenant SQLite in `data/sqlite/`, deployments in `data/deployments/`, and the host TURN config in `data/turn/turn.yaml`. Namespace units read their env files from the root-owned `/var/lib/orama-unit-env/<ns>/<svc>.env`, and deployments read their environment and workload token from the root-only `/var/lib/orama-deploy/` — both written only through `orama-privhelper` (see [SECURITY.md](SECURITY.md)). A 0.122.x node holds all of this where the old code wrote it.
 
-`orama-node` moves it itself, as the `orama` user, when it first starts on this release: the `legacy-layout` boot component (`pkg/legacylayout`) runs right after `data-dir`, and every other component — WireGuard, libp2p, storage, rqlite, the gateway, every namespace service — waits for it. Root takes no part: every path is in the tree the `orama` user owns, and a root process walking it would follow whatever symlinks that user planted.
+On a cluster-role node, `orama-node` moves it itself, as the `orama` user, when it first starts on this release: the `legacy-layout` boot component (`pkg/legacylayout`) runs right after `data-dir`, and every other component — WireGuard, libp2p, storage, rqlite, the gateway, every namespace service — waits for it. A global-role node does not run that migration or those components. Root takes no part: every path is in the tree the `orama` user owns, and a root process walking it would follow whatever symlinks that user planted.
 
 | Old path (under `/opt/orama/.orama`) | Now | How |
 |---|---|---|
@@ -781,7 +781,7 @@ When adding a new platform table or column:
 
 #### A node that boots without a quorum
 
-`orama-node` no longer exits when it cannot reach a raft leader. It brings up
+A cluster-role `orama-node` no longer exits when it cannot reach a raft leader. It brings up
 everything that needs only the local machine — WireGuard, IPFS, the local rqlite
 replica, CoreDNS, the index gateway, Caddy, ntfy, tenants — reports its
 lifecycle state as `degraded`, and keeps retrying the cluster half in the

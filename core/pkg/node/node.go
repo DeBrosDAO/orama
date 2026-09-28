@@ -137,7 +137,9 @@ func (n *Node) Start(ctx context.Context) error {
 	n.logger.Info("Starting network node", zap.String("data_dir", n.config.Node.DataDir))
 
 	sup := boot.New(n.logger.Logger, boot.Options{})
-	n.registerComponents(sup)
+	if err := n.registerComponents(sup); err != nil {
+		return err
+	}
 	sup.OnChange(n.applyBootState)
 	if err := sup.Err(); err != nil {
 		return err

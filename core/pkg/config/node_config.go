@@ -11,4 +11,5 @@ type NodeConfig struct {
 	SSHUser         string   `yaml:"ssh_user,omitempty"`        // SSH user for remote management
 	Environment     string   `yaml:"environment,omitempty"`     // Environment name (devnet, testnet, etc.)
 	OperatorWallet  string   `yaml:"operator_wallet,omitempty"` // Operator wallet address
+	Role            string   `yaml:"role,omitempty"`            // cluster (empty default) or global; both is refused
 }

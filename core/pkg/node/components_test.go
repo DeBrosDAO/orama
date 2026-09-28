@@ -151,10 +151,21 @@ func newGraphNode(t *testing.T) *Node {
 	return n
 }
 
+func mustBootComponents(t *testing.T, n *Node) []boot.Component {
+	t.Helper()
+	components, err := n.bootComponents()
+	if err != nil {
+		t.Fatalf("bootComponents: %v", err)
+	}
+	return components
+}
+
 func TestRegisterComponents_declaresAValidGraph(t *testing.T) {
 	n := newGraphNode(t)
 	sup := boot.New(nil, boot.Options{})
-	n.registerComponents(sup)
+	if err := n.registerComponents(sup); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := sup.Err(); err != nil {
 		t.Fatalf("component graph is invalid: %v", err)
@@ -186,7 +197,7 @@ func dependsOnQuorum(components []boot.Component) map[string]bool {
 
 func TestBootComponents_onlyTheQuorumGateAndItsDependentsNeedALeader(t *testing.T) {
 	n := newGraphNode(t)
-	cluster := dependsOnQuorum(n.bootComponents())
+	cluster := dependsOnQuorum(mustBootComponents(t, n))
 
 	// These need a raft leader and nothing else may be behind them.
 	for _, name := range []string{compRQLiteCluster, compDNSRegistration} {
@@ -210,7 +221,7 @@ func TestBootComponents_onlyTheQuorumGateAndItsDependentsNeedALeader(t *testing.
 
 func TestBootComponents_servingCoreConvergesWithoutAQuorum(t *testing.T) {
 	n := newGraphNode(t)
-	cluster := dependsOnQuorum(n.bootComponents())
+	cluster := dependsOnQuorum(mustBootComponents(t, n))
 
 	// If any part of the serving core needed a quorum, a node alone in the
 	// world could never leave the joining state.
@@ -223,7 +234,7 @@ func TestBootComponents_servingCoreConvergesWithoutAQuorum(t *testing.T) {
 
 func TestBootComponents_slowWorkDoesNotDelayIndependentComponents(t *testing.T) {
 	n := newGraphNode(t)
-	components := n.bootComponents()
+	components := mustBootComponents(t, n)
 
 	index := map[string]int{}
 	for i, c := range components {
@@ -242,7 +253,7 @@ func TestBootComponents_slowWorkDoesNotDelayIndependentComponents(t *testing.T) 
 func TestBootComponents_everyDependencyIsDeclaredBeforeItIsUsed(t *testing.T) {
 	n := newGraphNode(t)
 	seen := map[string]bool{}
-	for _, c := range n.bootComponents() {
+	for _, c := range mustBootComponents(t, n) {
 		for _, dep := range c.DependsOn {
 			if !seen[dep] {
 				t.Errorf("%q depends on %q, which is not declared before it", c.Name, dep)
@@ -437,7 +448,7 @@ func TestBootComponents_dnsRegistrationDependsOnEverythingItPromises(t *testing.
 	n := newGraphNode(t)
 
 	var dns boot.Component
-	for _, c := range n.bootComponents() {
+	for _, c := range mustBootComponents(t, n) {
 		if c.Name == compDNSRegistration {
 			dns = c
 		}
@@ -470,7 +481,7 @@ func TestBootComponents_dnsRegistrationDependsOnEverythingItPromises(t *testing.
 func TestBootComponents_membershipRecordIsItsOwnLeafComponent(t *testing.T) {
 	n := newGraphNode(t)
 	var found bool
-	for _, c := range n.bootComponents() {
+	for _, c := range mustBootComponents(t, n) {
 		for _, dep := range c.DependsOn {
 			if dep == compMembershipRecord {
 				t.Errorf("%s depends on %s; a record-write failure would take it down", c.Name, compMembershipRecord)

@@ -32,7 +32,11 @@ func useTestLegacyLayout(t *testing.T, stager legacylayout.Stager) {
 // gateway wrote, may run before the old layout has been moved.
 func TestBootComponents_everythingWaitsForTheLegacyLayout(t *testing.T) {
 	deps := map[string][]string{}
-	for _, c := range (&Node{}).bootComponents() {
+	components, err := (&Node{}).bootComponents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range components {
 		deps[c.Name] = c.DependsOn
 	}
 	var reaches func(name string) bool

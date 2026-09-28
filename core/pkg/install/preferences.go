@@ -12,6 +12,7 @@ import (
 type NodePreferences struct {
 	Branch     string `yaml:"branch"`
 	Nameserver bool   `yaml:"nameserver"`
+	Role       string `yaml:"role,omitempty"` // cluster (empty) or global; both is refused at boot
 }
 
 const preferencesFile = "preferences.yaml"

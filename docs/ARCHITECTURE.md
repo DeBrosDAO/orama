@@ -208,7 +208,9 @@ piece of start-up is a **component** with declared dependencies
 (`pkg/node/boot`), and a supervisor runs each one whose dependencies are ready,
 retrying failures with exponential backoff (1s → 60s) instead of exiting.
 
-Components come in two tiers:
+A node's role chooses the graph. An empty role and `role: cluster` — `node.role` in the node config, or `role` in `preferences.yaml` — use the cluster graph. `role: global` registers only `data-dir`. That graph does not start WireGuard, RQLite, Olric, or the gateway. Olric is not its own component; `rqlite-local` starts it, so leaving that component out leaves Olric down. `both` is refused. Chain, public IPFS and the relay are not boot components.
+
+On a cluster node, components come in two tiers:
 
 | Tier | Components | Needs |
 |---|---|---|
@@ -254,7 +256,7 @@ held by the unit a spawn is about to start is not a conflict (`ensurePortsFree`
 short-circuits on an already-active unit), so a retry after a transient failure
 does not report a port conflict against itself.
 
-That split is what the tiers buy: a node that boots with every peer down still
+That split is what the tiers buy: a cluster node that boots with every peer down still
 brings up WireGuard, IPFS, the local rqlite replica, CoreDNS, the index gateway,
 Caddy, ntfy and its tenants. It announces itself as **degraded** rather than
 active, and returns to active on its own when quorum comes back — with no
@@ -278,7 +280,7 @@ node restart.
 with `draining` and `maintenance` driven by operators and never overridden by
 the supervisor. `degraded` is a *serving* state, so a degraded node is not taken
 out of rotation; the leader's health monitor deliberately does not short-circuit
-it and verifies the claim with an HTTP probe instead. A node leaves `joining`
+it and verifies the claim with an HTTP probe instead. A cluster node leaves `joining`
 once its **serving core** — `rqlite-local` and `gateway` — is up, so one local
 component that can never converge cannot pin it out of `IsAvailable` and stop it
 announcing maintenance on shutdown.

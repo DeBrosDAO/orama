@@ -62,7 +62,40 @@ const (
 	dnsWorkTimeout = 30 * time.Second
 )
 
-// bootComponents declares the node's start-up graph.
+// bootComponents declares the start-up graph for this node's role.
+//
+// cluster is the graph this process has always converged. global registers
+// only data-dir: it does not start WireGuard, RQLite, Olric or the gateway.
+// Olric is not its own component; rqlite-local starts it, so a graph without
+// that component does not start Olric either.
+func (n *Node) bootComponents() ([]boot.Component, error) {
+	role, err := n.role()
+	if err != nil {
+		return nil, err
+	}
+	switch role {
+	case boot.RoleCluster:
+		return n.clusterBootComponents(), nil
+	case boot.RoleGlobal:
+		return n.globalBootComponents(), nil
+	default:
+		return nil, fmt.Errorf("no boot graph for role %q", role)
+	}
+}
+
+// globalBootComponents is the global role's graph. Chain, public IPFS and the
+// relay are not components of it: the supervisor neither starts them nor waits
+// on them, and they are not PartOf the node unit.
+func (n *Node) globalBootComponents() []boot.Component {
+	return []boot.Component{
+		{
+			Name:      compDataDir,
+			Reconcile: n.ensureDataDir,
+		},
+	}
+}
+
+// clusterBootComponents declares the cluster role's start-up graph.
 //
 // The split into two tiers is the whole point. Local components need nothing
 // but this machine: they come up on a node that is alone in the world, and a
@@ -76,7 +109,7 @@ const (
 // reference — which also means a single pass converges the graph. Components
 // that depend on nothing expensive come first, so a slow rqlite does not hold
 // up peer monitoring behind it.
-func (n *Node) bootComponents() []boot.Component {
+func (n *Node) clusterBootComponents() []boot.Component {
 	return []boot.Component{
 		{
 			Name:      compDataDir,
@@ -234,10 +267,15 @@ func (n *Node) bootComponents() []boot.Component {
 }
 
 // registerComponents declares the node's start-up graph on sup.
-func (n *Node) registerComponents(sup *boot.Supervisor) {
-	for _, c := range n.bootComponents() {
+func (n *Node) registerComponents(sup *boot.Supervisor) error {
+	components, err := n.bootComponents()
+	if err != nil {
+		return err
+	}
+	for _, c := range components {
 		sup.Add(c)
 	}
+	return nil
 }
 
 // ensureDataDir creates the node's data directory.
