@@ -32,9 +32,11 @@ require it, and nothing in `chain/` imports `core/`.
 | `power` (custom, `chain/x/power`) | voting power, the bootstrap committee, and the hand-over factor lambda (C4) |
 | `fees` (custom, `chain/x/fees`) | the EIP-1559-style base fee, earnings accounts, and the state-deposit ledger (C2) |
 
-**Wired** in addition to the table: `x/token` (factory denoms) and `x/archive` (history registry).
-**Not wired**, on purpose: `x/houses`, `x/nodes`, `x/storage`, `x/cnft`, `x/market`, and
-`x/relay` are implemented and not registered in `app.go`. Also unwired: `x/gov`,
+**Wired** in addition to the table: `x/token` (factory denoms), `x/archive` (history registry),
+and `x/nodes` (operator and global-node registry). Its end block pays matured role-bond
+unbondings.
+**Not wired**, on purpose: `x/houses`, `x/storage`, `x/cnft`, `x/market`, and `x/relay` are
+implemented and not registered in `app.go`. Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
 wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`
@@ -681,9 +683,10 @@ Queries, once the module is wired, are `oramad query houses params|proposal|tier
 
 ## `x/nodes`: operators, global nodes, bonds, and an optional cluster registry
 
-`chain/x/nodes` implements plans/open-network/track-c-chain.md C6. It is **not registered in
-`chain/app/app.go`**, so `oramad` does not run it. There is no authority address, no pause, and
-no message that changes parameters after genesis (plans/open-network.md D18).
+`chain/x/nodes` implements plans/open-network/track-c-chain.md C6. It is registered in
+`chain/app/app.go`. EndBlock pays matured role-bond unbondings and records service days.
+There is no authority address, no pause, and no message that changes parameters after genesis
+(plans/open-network.md D18).
 
 Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis must already hold
 `bonds + unbonding` norama there; `InitGenesis` checks that and does not mint.
@@ -973,11 +976,10 @@ for anything that does.
   chains don't support consensus-key rotation either without a dedicated module - but worth noting
   as a gap for a future pass.
 - **The fee-free registration quota (C2, "bootstrap only")** is not implemented. `x/nodes`
-  has `MsgRegisterOperator` and `MsgRegisterNode`, but the quota is an ante rule and nothing
-  in the ante does it. `x/nodes` is not registered in `app.go`. `MsgShieldEarnings` is not
-  implemented. `MsgFundHotKey` is not a message of `x/nodes`.
-- **`x/fees`' state-deposit ledger is called by `x/token`.** `x/nodes` calls the same
-  interface and is not registered in `app.go`.
+  has `MsgRegisterOperator` and `MsgRegisterNode` and is registered, but the quota is an
+  ante rule and nothing in the ante does it. `MsgShieldEarnings` is not implemented.
+  `MsgFundHotKey` is not a message of `x/nodes`.
+- **`x/fees`' state-deposit ledger is called by `x/token` and `x/nodes`.** Both are registered.
   `x/cnft` calls the same interface for a tree deposit and is not registered either.
   `x/storage` keeps deal escrow in its own module account and is not registered.
   The per-byte contract deposit meter is not hooked into wasmd's store.

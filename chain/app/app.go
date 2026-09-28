@@ -102,6 +102,9 @@ import (
 	feesante "github.com/DeBrosOfficial/network/chain/x/fees/ante"
 	feeskeeper "github.com/DeBrosOfficial/network/chain/x/fees/keeper"
 	feestypes "github.com/DeBrosOfficial/network/chain/x/fees/types"
+	"github.com/DeBrosOfficial/network/chain/x/nodes"
+	nodeskeeper "github.com/DeBrosOfficial/network/chain/x/nodes/keeper"
+	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
 	"github.com/DeBrosOfficial/network/chain/x/power"
 	powerante "github.com/DeBrosOfficial/network/chain/x/power/ante"
 	powerkeeper "github.com/DeBrosOfficial/network/chain/x/power/keeper"
@@ -163,6 +166,7 @@ var (
 		feestypes.DepositsModuleName:   {authtypes.Burner},
 		tokentypes.ModuleName:          {authtypes.Minter, authtypes.Burner},
 		archivetypes.ModuleName:        nil,
+		nodestypes.ModuleName:          {authtypes.Burner},
 	}
 )
 
@@ -196,6 +200,7 @@ type OramaApp struct {
 	FeesKeeper            feeskeeper.Keeper
 	TokenKeeper           tokenkeeper.Keeper
 	ArchiveKeeper         archivekeeper.Keeper
+	NodesKeeper           nodeskeeper.Keeper
 	WasmPolicyKeeper      wasmpolicykeeper.Keeper
 
 	wasmModules      []module.AppModule
@@ -274,6 +279,7 @@ func NewOramaApp(
 		feestypes.StoreKey,
 		tokentypes.StoreKey,
 		archivetypes.StoreKey,
+		nodestypes.StoreKey,
 	)
 
 	app := &OramaApp{
@@ -425,6 +431,12 @@ func NewOramaApp(
 		appCodec,
 		runtime.NewKVStoreService(keys[archivetypes.StoreKey]),
 	)
+	app.NodesKeeper = nodeskeeper.NewKeeper(
+		appCodec,
+		runtime.NewKVStoreService(keys[nodestypes.StoreKey]),
+		app.BankKeeper,
+		app.FeesKeeper,
+	)
 
 	app.EmissionKeeper = emissionkeeper.NewKeeper(
 		appCodec,
@@ -458,6 +470,7 @@ func NewOramaApp(
 		power.NewAppModule(app.PowerKeeper, app.EmissionKeeper),
 		token.NewAppModule(app.TokenKeeper),
 		archive.NewAppModule(app.ArchiveKeeper),
+		nodes.NewAppModule(app.NodesKeeper),
 	}
 	app.ModuleManager = module.NewManager(append(baseModules, app.wasmModules...)...)
 
@@ -498,6 +511,7 @@ func NewOramaApp(
 	app.ModuleManager.SetOrderEndBlockers(
 		banktypes.ModuleName,
 		stakingtypes.ModuleName,
+		nodestypes.ModuleName,
 		genutiltypes.ModuleName,
 		feegrant.ModuleName,
 		powertypes.ModuleName,
@@ -529,6 +543,7 @@ func NewOramaApp(
 		powertypes.ModuleName,
 		tokentypes.ModuleName,
 		archivetypes.ModuleName,
+		nodestypes.ModuleName,
 	}
 	genesisModuleOrder = insertBefore(genesisModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 	exportModuleOrder := []string{
@@ -547,6 +562,7 @@ func NewOramaApp(
 		powertypes.ModuleName,
 		tokentypes.ModuleName,
 		archivetypes.ModuleName,
+		nodestypes.ModuleName,
 	}
 	exportModuleOrder = insertBefore(exportModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 
