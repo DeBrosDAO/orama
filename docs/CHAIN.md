@@ -800,8 +800,10 @@ not a message of this module. Queries, once wired: `params`, `operator [address]
 `chain/provider` stores one node's pieces on disk. `Ingest` declines a CID on the
 operator denylist, bytes whose piece root does not match the claimed root, or a piece
 larger than the free-bytes callback. A decline writes nothing. `Prove` rebuilds a
-challenge proof from the stored bytes and rejects a padding leaf. The package does not
-watch CometBFT and does not send `MsgAcceptDeal` or `MsgSubmitProofs`.
+challenge proof from the stored bytes and rejects a padding leaf. `Retrieval` serves
+GET and HEAD of a stored piece, including a byte range, and rate-limits each client
+address. A full address table refuses a new address. The package does not watch
+CometBFT, pin through Kubo, or send `MsgAcceptDeal` or `MsgSubmitProofs`.
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
