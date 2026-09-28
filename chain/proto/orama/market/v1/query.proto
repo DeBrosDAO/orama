@@ -1,0 +1,30 @@
+syntax = "proto3";
+package orama.market.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/market/types";
+
+import "gogoproto/gogo.proto";
+import "orama/market/v1/market.proto";
+
+// Query is x/market's gRPC query service.
+service Query {
+  rpc Listing(QueryListingRequest) returns (QueryListingResponse);
+  rpc Bid(QueryBidRequest) returns (QueryBidResponse);
+}
+
+message QueryListingRequest {
+  uint64 id = 1;
+}
+
+message QueryListingResponse {
+  Listing listing = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryBidRequest {
+  uint64 listing_id = 1;
+  uint64 bid_id = 2;
+}
+
+message QueryBidResponse {
+  Bid bid = 1 [(gogoproto.nullable) = false];
+}
