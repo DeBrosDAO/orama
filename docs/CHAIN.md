@@ -804,7 +804,9 @@ larger than the free-bytes callback. A decline writes nothing. `Prove` rebuilds 
 challenge proof from the stored bytes and rejects a padding leaf. `ReplicaProof`
 fills one proof for a challenged slot. The leaf is the chain's leaf-challenge seed
 reduced to the real leaf count, so a padding leaf is not selected. `Bind` records
-which stored CID fills a deal slot. `AnswerChallenges` builds proofs for the
+which stored CID fills a deal slot. `Decide` binds the piece whose root matches
+an assignment and returns the accept message, or a decline when the root is
+not stored. `AnswerChallenges` builds proofs for the
 unproved challenges that binding covers and lists the ones whose piece is absent.
 A leaf index that does not match the chain challenge is an error. `WriteProofs`
 writes the JSON array `orama storage prove --file` reads. An empty list is
