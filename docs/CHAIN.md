@@ -35,8 +35,8 @@ require it, and nothing in `chain/` imports `core/`.
 **Not wired**, on purpose: `x/houses` (implemented, see below; not registered in `app.go`), `x/gov`, `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs`
 (x/emission tracks its own epochs directly in its `BeginBlock`), `x/group`, `x/nft`, `x/circuit`,
 `x/crisis`, IBC, and anything EVM/CosmWasm. `x/auth/vesting` is not wired either: nothing in this
-module's genesis or gentx flow needs it. `x/token` is implemented in `chain/x/token` but is not
-registered in `app.go`, so it is not part of `oramad` either (see "`x/token`" below).
+module's genesis or gentx flow needs it. `x/token`, `x/houses`, and `x/nodes` are implemented
+and are not registered in `app.go`, so the running binary does not include them.
 
 **`x/houses` is implemented and not wired into `app.go`.** The running binary therefore still has
 no governance. Every module that the upstream SDK expects to be governed by `x/gov` (upgrade,
@@ -557,9 +557,9 @@ owner's earnings. The coins sit in a **second, separate module account** (`fees_
 - so "the deposit module balance == open deposits" stays an independently checkable invariant from
 "sum of earnings balances == the earnings module balance"). `ReleaseDeposit` refunds
 `Params.DepositRefundFraction` (99%) to the owner's earnings and burns the rest
-(`types.SplitDeposit`, exact split, remainder to the burn side). **No running module calls this
-API yet.** `x/token`'s keeper does call `LockDeposit` / `ReleaseDeposit`, but `x/token` is not
-registered in the app, so `oramad` never reaches it. `x/cnft`, `x/market`, `x/nodes`, and CosmWasm
+(`types.SplitDeposit`, exact split, remainder to the burn side). **No wired module calls this
+API yet.** `x/token` and `x/nodes` both call `LockDeposit` / `ReleaseDeposit`, and neither is
+registered in `app.go`, so `oramad` never reaches them. `x/cnft`, `x/market`, and CosmWasm
 storage metering do not exist yet.
 
 ### Queries
@@ -672,6 +672,96 @@ walks every `sdk.Msg` and rejects a field that is not on the allow-list.
 
 The bond invariant is: sum of locked house bonds equals the `houses` module account balance.
 Queries, once the module is wired, are `oramad query houses params|proposal|tiers|invariants`.
+
+## `x/nodes`: operators, global nodes, bonds, and an optional cluster registry
+
+`chain/x/nodes` implements plans/open-network/track-c-chain.md C6. It is **not registered in
+`chain/app/app.go`**, so `oramad` does not run it. There is no authority address, no pause, and
+no message that changes parameters after genesis (plans/open-network.md D18).
+
+Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis must already hold
+`bonds + unbonding` norama there; `InitGenesis` checks that and does not mint.
+
+### Records
+
+- **Operator.** An account that may own nodes and cluster rows (`MsgRegisterOperator`).
+- **Node.** Roles `VALIDATOR`, `STORAGE`, `RELAY`, `EXIT`, `DIRAUTH`, `ARCHIVER` (fixed at
+  registration); a hot key that must differ from the operator; service-key bindings; public
+  endpoints; per-role bonds; declared and reserved STORAGE capacity; status `registered`,
+  `active`, `jailed`, `retired`, or `tombstoned`. A role is active only while the node is
+  `active` and that role's bond is at least `min_bond`.
+- **Cluster.** An optional public row: base domain, public endpoints, metadata URI. No member
+  list, no tenant list, no secrets. Registering one does not join any node to a cluster (D1).
+  A cluster is not required to run a node, and retiring one does not change any node.
+- **Unbonding queue, revoked pubkeys, service days, and a STORAGE free-capacity index.** The
+  index key is `(class, operator, node id)`. Class `0` is unused; any free byte count uses
+  `bits.Len64(free)`. Jailed, retired, and tombstoned nodes are not indexed.
+
+### Messages
+
+Every message is signed by the owning operator. `MsgUpdateNode`, `MsgBondNode`, `MsgUnbondNode`,
+`MsgDeclareCapacity`, `MsgRetireNode`, and the cluster update/retire messages fail when the
+signer is not that operator.
+
+`MsgRegisterNode` verifies each binding over the ASCII string
+`orama-global-bind-v1|chain-id|operator|service|hex(pubkey)`. secp256k1 uses the Cosmos SHA-256
+digest. ed25519 verifies a normal 64-byte signature over the 32-byte public key, which is what
+Tor's expanded ed25519 secret produces. A service pubkey is unique on the network. Retiring a
+node, rotating a binding (`MsgUpdateNode` replaces the whole set when one is provided), or
+tombstoning (keeper `Tombstone`, not a message) records the old pubkey so it cannot be bound
+again.
+
+`MsgBondNode` moves norama from the operator's bank balance into the module account.
+`MsgUnbondNode` moves it onto the queue. `EndBlock` pays an entry back to that operator when
+`completion_unix <=` the block time. The delay is `Params.UnbondingSeconds` (genesis default
+21 days, the same period D16 and C4 state for stake; C6 does not give a second duration).
+Unbonding that would leave declared STORAGE capacity above the remaining bond's backing is
+rejected.
+
+`MsgDeclareCapacity` sets STORAGE `declared_capacity_bytes`. Backing is
+`bond * 1 GiB / bond_per_gib` when the STORAGE bond is positive, and
+`probation_capacity_bytes` when it is zero (C2's probation cap). `Slash` burns the same
+fraction of the role's bond and of that role's unbonding entries. It clamps declared capacity
+down to the new backing, and it fails without writing if reserved bytes would then exceed that
+backing. `Jail` / `Unjail` are keeper methods: a jailed node is not active and leaves the
+capacity index. `ReserveCapacity` / `ReleaseCapacity` move free capacity for a later storage
+module. `CreditRoleBond` increases a role bond only when the module account already holds the
+coins; it does not mint.
+
+Node and cluster creates, and later writes that grow the record, call
+`DepositKeeper.LockDeposit` (x/fees' C2 deposit). Retire releases every part of that deposit.
+The 99%/1% split stays inside x/fees.
+
+### Service days
+
+`EndBlock` records at most one UTC day per operator. The day counts when the operator has an
+active STORAGE role whose declared capacity is at least `min_service_volume_bytes`, or an active
+RELAY role. Several blocks on the same day count once. Days with no block are not backfilled.
+`OperatorServiceDays` returns that count. It is the input later operator-house eligibility reads;
+this module does not vote or lock a house bond.
+
+### Genesis defaults
+
+G1 has not signed `min_bond[role]` or `bond_per_gib`. Until it does, every role's minimum is
+1 ORAMA and `bond_per_gib` is 1 ORAMA, so 1 ORAMA of STORAGE bond backs exactly 1 GiB.
+`unbonding_seconds` is 21 days. `deposit_per_byte` is 68359 norama (68359 × 1024 = 69,999,616
+norama, about 0.07 ORAMA/KiB, P3). `probation_capacity_bytes` is 1 GiB (C2 states no byte
+count). `min_service_volume_bytes` is 1 (C5/G4 state no byte count); an active relay still
+counts without it.
+
+### Invariants
+
+`Keeper.CheckInvariants`, also `oramad query nodes invariants` once the module is wired:
+
+- the `nodes` module balance equals role bonds plus unbonding entries;
+- a node marked active has some role bonded at `min_bond`, and a node marked registered does not;
+- declared capacity is within backing, and the free-capacity index matches.
+
+### Not built here
+
+The C2 fee-free registration quota is an ante rule and is not implemented. `MsgFundHotKey` is
+not a message of this module. Queries, once wired: `params`, `operator [address]`, `node [id]`,
+`cluster [id]`, `unbondings [node-id]`, `invariants`.
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
@@ -869,13 +959,13 @@ for anything that does.
   ever emitting the old pubkey's removal). Not a regression from any prior design - stock Cosmos SDK
   chains don't support consensus-key rotation either without a dedicated module - but worth noting
   as a gap for a future pass.
-- **The fee-free registration quota (C2, "bootstrap only")** is not implemented: it applies to
-  `MsgRegisterOperator`/`MsgRegisterNode`, neither of which exists yet (`x/nodes`, C6).
-  `MsgShieldEarnings` is likewise not implemented, per C2's own instruction ("NOT to be added yet" -
-  pending `x/shielded`, C12).
-- **`x/fees`' state-deposit ledger has no caller in the running binary.** `x/token` calls
-  `LockDeposit` / `ReleaseDeposit`, but it is not registered in `app.go` (see "`x/token`"
-  above). `x/cnft`, `x/market`, `x/nodes`, and CosmWasm storage metering do not exist yet.
+- **The fee-free registration quota (C2, "bootstrap only")** is not implemented. `x/nodes`
+  has `MsgRegisterOperator` and `MsgRegisterNode`, but the quota is an ante rule and nothing
+  in the ante does it. `x/nodes` is not registered in `app.go`. `MsgShieldEarnings` is not
+  implemented. `MsgFundHotKey` is not a message of `x/nodes`.
+- **`x/fees`' state-deposit ledger has no caller in the running binary.** `x/token` and
+  `x/nodes` both call `LockDeposit` / `ReleaseDeposit`, and neither is registered in `app.go`.
+  `x/cnft`, `x/market`, and CosmWasm storage metering do not exist yet.
 - **`x/power.DistributeEpochRewards` iterates every delegation of every validator once per closed
   epoch** (`Keeper.distributeValidatorReward`), rather than using `x/distribution`'s O(1)-per-block
   F1 historical-rewards accumulator. New delegations below `Params.MinDelegationForRewards` are

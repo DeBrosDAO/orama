@@ -1,0 +1,64 @@
+syntax = "proto3";
+package orama.nodes.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/nodes/types";
+
+import "gogoproto/gogo.proto";
+import "orama/nodes/v1/nodes.proto";
+
+// Query is the gRPC querier for x/nodes.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
+  rpc Operator(QueryOperatorRequest) returns (QueryOperatorResponse);
+  rpc Node(QueryNodeRequest) returns (QueryNodeResponse);
+  rpc Cluster(QueryClusterRequest) returns (QueryClusterResponse);
+  rpc NodeUnbondings(QueryNodeUnbondingsRequest) returns (QueryNodeUnbondingsResponse);
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryOperatorRequest {
+  string address = 1;
+}
+
+message QueryOperatorResponse {
+  Operator operator = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryNodeRequest {
+  string node_id = 1;
+}
+
+message QueryNodeResponse {
+  Node node = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryClusterRequest {
+  string cluster_id = 1;
+}
+
+message QueryClusterResponse {
+  Cluster cluster = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryNodeUnbondingsRequest {
+  string node_id = 1;
+}
+
+message QueryNodeUnbondingsResponse {
+  repeated UnbondingEntry unbondings = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  bool balance_matches = 1;
+  bool active_roles_bonded = 2;
+  bool capacity_backed = 3;
+  string detail = 4;
+}
