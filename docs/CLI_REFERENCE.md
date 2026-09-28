@@ -47,6 +47,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama cluster creators add`](#orama-cluster-creators-add) — Let a wallet create namespaces when creation is allowlist
     - [`orama cluster creators list`](#orama-cluster-creators-list) — List wallets allowed to create namespaces
     - [`orama cluster creators remove`](#orama-cluster-creators-remove) — Take a wallet off the namespace-creator list
+  - [`orama cluster register-onchain`](#orama-cluster-register-onchain) — Register this cluster's public name on the Orama chain
   - [`orama cluster settings`](#orama-cluster-settings) — Show or change namespace-creation settings
     - [`orama cluster settings set`](#orama-cluster-settings-set) — Change namespace creation or the per-wallet cap
     - [`orama cluster settings show`](#orama-cluster-settings-show) — Show who may create namespaces, and the per-wallet cap
@@ -569,7 +570,7 @@ The per-wallet cap stays 10 until an operator raises or lowers it.
 Changing a setting or the creator list needs the operator grant and a wallet
 on the operator list, and is written to the audit trail.
 
-Subcommands: `creators`, `settings`
+Subcommands: `creators`, `register-onchain`, `settings`
 
 ### orama cluster creators
 
@@ -609,6 +610,42 @@ Take a wallet off the namespace-creator list
 ```
 orama cluster creators remove <wallet>
 ```
+
+### orama cluster register-onchain
+
+Register this cluster's public name on the Orama chain
+
+```
+orama cluster register-onchain [flags]
+```
+
+Register an optional public row for this cluster on the Orama chain.
+
+The row is the operator, the cluster id, the base domain, the public
+endpoints, and an optional metadata URI. It does not include node addresses,
+tenants, or any cluster secret, and registering it does not join a node.
+
+--node is that chain's REST API. The command reads the account there, builds
+a SIGN_MODE_DIRECT transaction, asks the RootWallet agent to sign that one
+transaction, and broadcasts it. Without --node it prints the sign document
+and does not submit anything.
+
+The fee is an explicit amount of norama. There is no default.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--base-domain` | — | Public base domain [required] |
+| `--chain-id` | — | Chain id [required] |
+| `--endpoint` | — | Public endpoint (repeatable) [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Cluster id [required] |
+| `--metadata-uri` | — | HTTPS metadata URI |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--operator` | — | Operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex; required when the account has not signed before |
+| `--sequence` | `0` | Account sequence, when not read from --node |
 
 ### orama cluster settings
 

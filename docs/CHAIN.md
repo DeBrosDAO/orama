@@ -703,6 +703,10 @@ Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis m
 - **Cluster.** An optional public row: base domain, public endpoints, metadata URI. No member
   list, no tenant list, no secrets. Registering one does not join any node to a cluster (D1).
   A cluster is not required to run a node, and retiring one does not change any node.
+  `orama cluster register-onchain` builds that message as a SIGN_MODE_DIRECT sign
+  document. With `--node` it asks the RootWallet agent to sign the document and
+  broadcasts the transaction to that REST API. Without `--node` it prints the
+  sign document and does not submit it.
 - **Unbonding queue, revoked pubkeys, service days, and a STORAGE free-capacity index.** The
   index key is `(class, operator, node id)`. Class `0` is unused; any free byte count uses
   `bits.Len64(free)`. Jailed, retired, and tombstoned nodes are not indexed.
