@@ -803,7 +803,10 @@ operator denylist, bytes whose piece root does not match the claimed root, or a 
 larger than the free-bytes callback. A decline writes nothing. `Prove` rebuilds a
 challenge proof from the stored bytes and rejects a padding leaf. `ReplicaProof`
 fills one proof for a challenged slot. The leaf is the chain's leaf-challenge seed
-reduced to the real leaf count, so a padding leaf is not selected. `Retrieval` serves
+reduced to the real leaf count, so a padding leaf is not selected. `Bind` records
+which stored CID fills a deal slot. `AnswerChallenges` builds proofs for the
+unproved challenges that binding covers and lists the ones whose piece is absent.
+A leaf index that does not match the chain challenge is an error. `Retrieval` serves
 GET and HEAD of a stored piece, including a byte range, and rate-limits each client
 address. A full address table refuses a new address. `POST /pieces/<cid>` stores
 a body only after `AcceptUploads`, and only when that CID is assigned. A bad
