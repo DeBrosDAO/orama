@@ -2,15 +2,19 @@
 // v0.54.4 simapp reference (github.com/cosmos/cosmos-sdk/tree/v0.54.4/simapp), trimmed to the
 // module list decided in plans/open-network/track-c-chain.md (C1) and with x/emission added.
 //
-// Wired: auth, bank (norama user-to-user sends refused; see shielded policy), staking,
-// slashing, distribution, consensus params, upgrade, genutil,
-// evidence, feegrant, and x/emission.
+// Wired: auth, bank (norama user-to-user sends refused), staking, slashing, distribution,
+// consensus params, upgrade, genutil, evidence, feegrant, x/emission, x/fees, x/power,
+// wasmpolicy, and — when this binary is built with cgo and libwasmvm — wasmd's x/wasm.
+// A -tags nowasm (or CGO_ENABLED=0) binary does not link the VM and refuses to start a node
+// whose genesis or options claim the wasm module.
 //
-// Deliberately not wired (plans/open-network/track-c-chain.md C1 "Not wired", and this task's
-// spec): x/mint (replaced by x/emission), x/gov (no governance module exists yet; see the
-// "authority" discussion below), x/circuit, x/crisis, x/nft, x/group, x/authz, x/epochs (its only
-// use in upstream simapp is periodic hooks that x/emission implements directly in its own
-// BeginBlocker), IBC and anything EVM/CosmWasm.
+// Bank send restriction: a wasm contract cannot send norama to a user account. It can send
+// norama to the fees and fees_deposits module accounts. IBC is not a wired module.
+//
+// Deliberately not wired (plans/open-network/track-c-chain.md C1 "Not wired"): x/mint (replaced
+// by x/emission), x/gov (no governance module exists yet; see the "authority" discussion below),
+// x/circuit, x/crisis, x/nft, x/group, x/authz, x/epochs (its only use in upstream simapp is
+// periodic hooks that x/emission implements directly in its own BeginBlocker), IBC, and EVM.
 package app
 
 import (
@@ -100,6 +104,8 @@ import (
 	powerkeeper "github.com/DeBrosOfficial/network/chain/x/power/keeper"
 	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
 	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
+	wasmpolicyante "github.com/DeBrosOfficial/network/chain/x/wasmpolicy/ante"
+	wasmpolicykeeper "github.com/DeBrosOfficial/network/chain/x/wasmpolicy/keeper"
 )
 
 const appName = "oramad"
@@ -180,6 +186,15 @@ type OramaApp struct {
 	EmissionKeeper        emissionkeeper.Keeper
 	PowerKeeper           powerkeeper.Keeper
 	FeesKeeper            feeskeeper.Keeper
+	WasmPolicyKeeper      wasmpolicykeeper.Keeper
+
+	wasmModules      []module.AppModule
+	wasmGenesisOrder []string
+	uploadSunset     wasmpolicyante.UploadSunsetDecorator
+	contractSend     wasmpolicyante.ContractSendDecorator
+	// wasmKeeper is the wasmd keeper when libwasmvm is linked, nil otherwise.
+	// The concrete type stays in the cgo file so app.go does not import wasmd.
+	wasmKeeper any
 
 	ModuleManager      *module.Manager
 	BasicModuleManager module.BasicManager
@@ -270,7 +285,7 @@ func NewOramaApp(
 		appCodec,
 		runtime.NewKVStoreService(keys[authtypes.StoreKey]),
 		authtypes.ProtoBaseAccount,
-		maccPerms,
+		ModuleAccountPerms(),
 		authcodec.NewBech32Codec(params.Bech32Prefix),
 		params.Bech32Prefix,
 		UnreachableAuthority(),
@@ -397,7 +412,10 @@ func NewOramaApp(
 
 	/****  Module Options ****/
 
-	app.ModuleManager = module.NewManager(
+	app.installWasm(keys, appOpts)
+	app.BankKeeper.AppendSendRestriction(app.contractSend.Restrict)
+
+	baseModules := []module.AppModule{
 		genutil.NewAppModule(app.AccountKeeper, app.StakingKeeper, app, txConfig),
 		auth.NewAppModule(appCodec, app.AccountKeeper, authsims.RandomGenesisAccounts, nil),
 		bank.NewAppModule(appCodec, app.BankKeeper, app.AccountKeeper, nil),
@@ -414,7 +432,8 @@ func NewOramaApp(
 		emission.NewAppModule(app.EmissionKeeper),
 		fees.NewAppModule(app.FeesKeeper),
 		power.NewAppModule(app.PowerKeeper, app.EmissionKeeper),
-	)
+	}
+	app.ModuleManager = module.NewManager(append(baseModules, app.wasmModules...)...)
 
 	app.BasicModuleManager = module.NewBasicManagerFromManager(
 		app.ModuleManager,
@@ -483,6 +502,7 @@ func NewOramaApp(
 		emissiontypes.ModuleName,
 		powertypes.ModuleName,
 	}
+	genesisModuleOrder = insertBefore(genesisModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 	exportModuleOrder := []string{
 		consensusparamtypes.ModuleName,
 		authtypes.ModuleName,
@@ -498,6 +518,7 @@ func NewOramaApp(
 		emissiontypes.ModuleName,
 		powertypes.ModuleName,
 	}
+	exportModuleOrder = insertBefore(exportModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 
 	app.ModuleManager.SetOrderInitGenesis(genesisModuleOrder...)
 	app.ModuleManager.SetOrderExportGenesis(exportModuleOrder...)
@@ -545,6 +566,8 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		ante.NewSetUpContextDecorator(),
 		ante.NewExtensionOptionsDecorator(nil),
 		ante.NewValidateBasicDecorator(),
+		app.uploadSunset,
+		app.contractSend,
 		ante.NewTxTimeoutHeightDecorator(),
 		ante.NewValidateMemoDecorator(app.AccountKeeper),
 		ante.NewConsumeGasForTxSizeDecorator(app.AccountKeeper),
@@ -606,6 +629,9 @@ func (app *OramaApp) InitChainer(ctx sdk.Context, req *abci.RequestInitChain) (*
 	var genesisState GenesisState
 	if err := json.Unmarshal(req.AppStateBytes, &genesisState); err != nil {
 		panic(err)
+	}
+	if err := guardWasmGenesis(genesisState); err != nil {
+		return nil, err
 	}
 	if err := app.UpgradeKeeper.SetModuleVersionMap(ctx, app.ModuleManager.GetVersionMap()); err != nil {
 		return nil, err
@@ -720,16 +746,26 @@ func (app *OramaApp) RegisterNodeService(clientCtx client.Context, cfg config.Co
 	})
 }
 
-// GetMaccPerms returns a copy of the module account permissions.
+// GetMaccPerms returns a copy of the module account permissions compiled into every binary.
 func GetMaccPerms() map[string][]string {
 	return maps.Clone(maccPerms)
 }
 
+// ModuleAccountPerms is GetMaccPerms plus the wasm module account when libwasmvm is linked.
+func ModuleAccountPerms() map[string][]string {
+	perms := GetMaccPerms()
+	for name, extra := range wasmModuleAccountPerms() {
+		perms[name] = extra
+	}
+	return perms
+}
+
 // BlockedAddresses returns every module account address. A user cannot pay one of these
-// directly. User-to-user norama sends are refused separately by the shielded send restriction.
+// directly. User-to-user norama sends are refused by the shielded send restriction. A contract
+// cannot pay a user through the bank; the contract restriction allows fees and fees_deposits.
 func BlockedAddresses() map[string]bool {
 	modAccAddrs := make(map[string]bool)
-	for acc := range GetMaccPerms() {
+	for acc := range ModuleAccountPerms() {
 		modAccAddrs[authtypes.NewModuleAddress(acc).String()] = true
 	}
 	return modAccAddrs

@@ -32,11 +32,13 @@ require it, and nothing in `chain/` imports `core/`.
 | `power` (custom, `chain/x/power`) | voting power, the bootstrap committee, and the hand-over factor lambda (C4) |
 | `fees` (custom, `chain/x/fees`) | the EIP-1559-style base fee, earnings accounts, and the state-deposit ledger (C2) |
 
-**Not wired**, on purpose: `x/houses` (implemented, see below; not registered in `app.go`), `x/gov`, `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs`
-(x/emission tracks its own epochs directly in its `BeginBlock`), `x/group`, `x/nft`, `x/circuit`,
-`x/crisis`, IBC, and anything EVM/CosmWasm. `x/auth/vesting` is not wired either: nothing in this
-module's genesis or gentx flow needs it. `x/token`, `x/houses`, and `x/nodes` are implemented
-and are not registered in `app.go`, so the running binary does not include them.
+**Not wired**, on purpose: `x/houses`, `x/token`, `x/nodes`, `x/storage`, `x/cnft`, `x/market`,
+`x/relay`, and `x/archive` are implemented and not registered in `app.go`. Also unwired: `x/gov`,
+`x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
+`x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
+wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`
+build does not link it and refuses a genesis that contains it. `x/wasmpolicy` is always wired:
+upload is closed until `upload_sunset_height`, and a contract cannot bank-send norama to a user.
 
 **`x/houses` is implemented and not wired into `app.go`.** The running binary therefore still has
 no governance. Every module that the upstream SDK expects to be governed by `x/gov` (upgrade,
@@ -562,7 +564,7 @@ API yet.** `x/token` and `x/nodes` both call `LockDeposit` / `ReleaseDeposit`, a
 registered in `app.go`, so `oramad` never reaches them. `x/cnft` locks a tree deposit through
 the same interface and is also not registered. `x/market` does not lock a listing deposit.
 `x/storage` is implemented and not registered. Its deal escrow is its own module account,
-not this deposit ledger. CosmWasm storage metering is not in this binary.
+not this deposit ledger. The per-byte contract deposit meter is not hooked into wasmd's store.
 
 ### Queries
 
@@ -973,7 +975,7 @@ for anything that does.
   `x/nodes` both call `LockDeposit` / `ReleaseDeposit`, and neither is registered in `app.go`.
   `x/cnft` calls the same interface for a tree deposit and is not registered either.
   `x/storage` keeps deal escrow in its own module account and is not registered.
-  CosmWasm storage metering is not in this binary.
+  The per-byte contract deposit meter is not hooked into wasmd's store.
 - **`x/power.DistributeEpochRewards` iterates every delegation of every validator once per closed
   epoch** (`Keeper.distributeValidatorReward`), rather than using `x/distribution`'s O(1)-per-block
   F1 historical-rewards accumulator. New delegations below `Params.MinDelegationForRewards` are

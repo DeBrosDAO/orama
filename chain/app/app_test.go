@@ -233,7 +233,7 @@ func TestOramaApp_zeroSupplyGenesisProducesBlocksAndPaysEarnings(t *testing.T) {
 // from receiving a direct bank send, matching every standard Cosmos SDK app.
 func TestBlockedAddresses_coversEveryModuleAccount(t *testing.T) {
 	blocked := app.BlockedAddresses()
-	for name := range app.GetMaccPerms() {
+	for name := range app.ModuleAccountPerms() {
 		addr := authtypes.NewModuleAddress(name).String()
 		require.True(t, blocked[addr], "module account %s must be blocked", name)
 	}
