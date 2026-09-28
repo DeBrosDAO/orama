@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,6 +23,19 @@ type Environment struct {
 	// the gateway's domain and every name under it: a cluster on Let's
 	// Encrypt staging or on a private CA. Only for this environment's domain.
 	CAFile string `json:"ca_file,omitempty"`
+	// Nodes are the machines `orama node setup` installed. Commands that
+	// have to reach a node before the cluster's name resolves — delegation
+	// is the one that has to — use this list. The gateway inventory replaces
+	// it once the operator can log in.
+	Nodes []EnvNode `json:"nodes,omitempty"`
+}
+
+// EnvNode is one machine recorded by setup: where to SSH, as whom, and
+// whether it is a nameserver. Host is a public IPv4 address.
+type EnvNode struct {
+	Host string `json:"host"`
+	User string `json:"user,omitempty"`
+	Role string `json:"role,omitempty"`
 }
 
 // EnvironmentConfig stores all configured environments
@@ -104,6 +118,45 @@ func SaveEnvironmentConfig(envConfig *EnvironmentConfig) error {
 	}
 
 	return nil
+}
+
+// UpsertEnvNode records a machine setup installed, replacing any earlier
+// row for the same host. The environment must already exist.
+func UpsertEnvNode(envName string, node EnvNode) error {
+	node.Host = strings.TrimSpace(node.Host)
+	node.User = strings.TrimSpace(node.User)
+	node.Role = strings.TrimSpace(node.Role)
+	if ip := net.ParseIP(node.Host); ip == nil || ip.To4() == nil {
+		return fmt.Errorf("recorded node host %q is not a public IPv4 address", node.Host)
+	}
+	node.Host = net.ParseIP(node.Host).To4().String()
+	if node.Role != "" && node.Role != "node" && node.Role != "nameserver" {
+		return fmt.Errorf("role %q is not node or nameserver", node.Role)
+	}
+	cfg, err := LoadEnvironmentConfig()
+	if err != nil {
+		return err
+	}
+	for i := range cfg.Environments {
+		if cfg.Environments[i].Name != envName {
+			continue
+		}
+		nodes := cfg.Environments[i].Nodes
+		replaced := false
+		for j := range nodes {
+			if nodes[j].Host == node.Host {
+				nodes[j] = node
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			nodes = append(nodes, node)
+		}
+		cfg.Environments[i].Nodes = nodes
+		return SaveEnvironmentConfig(cfg)
+	}
+	return fmt.Errorf("environment %q is not configured; add it with `orama env add` before recording a node", envName)
 }
 
 // GetActiveEnvironment returns the currently active environment

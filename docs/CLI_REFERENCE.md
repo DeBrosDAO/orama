@@ -1838,6 +1838,7 @@ zone to match. See docs/NAMESERVER_SETUP.md.
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--cloudflare-token-file` | — | Create or update the NS and glue records in the parent Cloudflare zone, then check DNS |
 | `--env` | — | Environment to read (devnet, testnet, …) [required] |
 
 ### orama node doctor

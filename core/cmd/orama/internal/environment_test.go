@@ -29,6 +29,37 @@ func writeTestConfig(t *testing.T, cfg *EnvironmentConfig) func() {
 	return func() { getEnvironmentConfigPathFn = origFn }
 }
 
+func TestUpsertEnvNode_recordsAndReplaces(t *testing.T) {
+	cleanup := writeTestConfig(t, defaultTestConfig())
+	defer cleanup()
+
+	if err := UpsertEnvNode("devnet", EnvNode{Host: "203.0.113.5", User: "root", Role: "nameserver"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertEnvNode("devnet", EnvNode{Host: "203.0.113.6", User: "ubuntu", Role: "node"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertEnvNode("devnet", EnvNode{Host: "203.0.113.5", User: "root", Role: "nameserver"}); err != nil {
+		t.Fatal(err)
+	}
+	env, err := GetEnvironmentByName("devnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Nodes) != 2 {
+		t.Fatalf("nodes = %+v", env.Nodes)
+	}
+	if env.Nodes[0].Host != "203.0.113.5" || env.Nodes[1].Host != "203.0.113.6" {
+		t.Fatalf("nodes = %+v", env.Nodes)
+	}
+	if err := UpsertEnvNode("missing", EnvNode{Host: "203.0.113.1", Role: "node"}); err == nil {
+		t.Fatal("an unknown environment accepted a node")
+	}
+	if err := UpsertEnvNode("devnet", EnvNode{Host: "not-an-ip", Role: "node"}); err == nil {
+		t.Fatal("a hostname was stored as a node address")
+	}
+}
+
 func defaultTestConfig() *EnvironmentConfig {
 	return &EnvironmentConfig{
 		Environments: []Environment{

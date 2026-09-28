@@ -187,6 +187,13 @@ func Run(opts Options) error {
 			return err
 		}
 	}
+	if opts.Env != "" {
+		if err := cli.UpsertEnvNode(opts.Env, cli.EnvNode{
+			Host: opts.IP, User: opts.User, Role: opts.Role,
+		}); err != nil {
+			return fmt.Errorf("record %s in environment %q: %w", opts.IP, opts.Env, err)
+		}
+	}
 
 	fmt.Printf("\n  Node %s setup complete!\n", opts.IP)
 	return nil

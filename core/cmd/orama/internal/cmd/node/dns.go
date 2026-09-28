@@ -1,7 +1,9 @@
 package node
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
@@ -15,7 +17,10 @@ var dnsCmd = &cobra.Command{
 	Short: "Cluster DNS: what the outside world needs to reach its nameservers",
 }
 
-var dnsDelegationEnv string
+var (
+	dnsDelegationEnv       string
+	dnsCloudflareTokenFile string
+)
 
 var dnsDelegationCmd = &cobra.Command{
 	Use:   "delegation",
@@ -41,6 +46,7 @@ zone to match. See docs/NAMESERVER_SETUP.md.`,
 
 func init() {
 	dnsDelegationCmd.Flags().StringVar(&dnsDelegationEnv, "env", "", "Environment to read (devnet, testnet, …) [required]")
+	dnsDelegationCmd.Flags().StringVar(&dnsCloudflareTokenFile, "cloudflare-token-file", "", "Create or update the NS and glue records in the parent Cloudflare zone, then check DNS")
 	dnsCmd.AddCommand(dnsDelegationCmd)
 }
 
@@ -57,11 +63,28 @@ func runDNSDelegation(out *printer.Printer, env string) error {
 			"and wait for its first DNS sweep (30s after it registers)", env)
 	}
 	if out.JSONMode() {
-		return out.JSON(delegations)
+		if err := out.JSON(delegations); err != nil {
+			return err
+		}
+	} else {
+		for _, d := range delegations {
+			out.Printf("; %s — create these in the parent zone %s\n", d.Domain, parentZoneLabel(d.Domain))
+			out.Printf("%s\n\n", strings.Join(dnsdelegation.Records(d), "\n"))
+		}
 	}
+	if dnsCloudflareTokenFile == "" {
+		return nil
+	}
+	token, err := os.ReadFile(dnsCloudflareTokenFile)
+	if err != nil {
+		return clierr.Failure("read the Cloudflare token: %v", err)
+	}
+	cf := &dnsdelegation.Cloudflare{Token: strings.TrimSpace(string(token))}
 	for _, d := range delegations {
-		out.Printf("; %s — create these in the parent zone %s\n", d.Domain, parentZoneLabel(d.Domain))
-		out.Printf("%s\n\n", strings.Join(dnsdelegation.Records(d), "\n"))
+		if err := cf.Apply(context.Background(), d); err != nil {
+			return clierr.Failure("%v", err)
+		}
+		out.Printf("Cloudflare zone updated and DNS matches for %s\n", d.Domain)
 	}
 	return nil
 }

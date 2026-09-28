@@ -1,7 +1,7 @@
 // Package noderesolver provides unified node discovery for the orama CLI.
 //
-// It resolves operator-owned nodes by querying the network's gateway API
-// (primary) or falling back to the legacy nodes.conf file.
+// It resolves operator-owned nodes from the gateway API, then from the
+// machines setup recorded on the environment, then from nodes.conf.
 package noderesolver
 
 import (
@@ -16,7 +16,6 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
 )
 
 // resolverTimeout bounds one node-list request.
@@ -35,19 +34,8 @@ var httpClient = &http.Client{
 // back to nodes.conf if the API is unreachable or returns no results.
 func ResolveNodes(env string) ([]inspector.Node, error) {
 	nodes, err := resolveFromNetwork(env)
-	if err == nil && len(nodes) > 0 {
-		return nodes, nil
-	}
-
-	// Fallback to nodes.conf
-	confNodes, confErr := remotessh.LoadEnvNodes(env)
-	if confErr != nil {
-		if err != nil {
-			return nil, fmt.Errorf("network API: %w; nodes.conf: %v", err, confErr)
-		}
-		return nil, confErr
-	}
-	return confNodes, nil
+	conf, confErr := loadConfNodes(env)
+	return chooseNodes(nodes, err, recordedNodes(env), conf, confErr)
 }
 
 // ResolveNodesNetworkOnly queries only the network API without nodes.conf fallback.

@@ -41,9 +41,10 @@ Each `--nameserver` node claims a slot — `ns1`, `ns2`, … — for the base do
 the first time its DNS sweep runs (every 30 seconds, once it has registered).
 Slots are claimed dynamically, lowest free number first, by whichever node gets
 there first, so **you cannot know in advance which address holds which name**.
-A node keeps its slot for as long as it keeps heartbeating; a nameserver that
-stops for more than two minutes releases it, and a node removed with
-`orama node remove` releases it for good.
+A node keeps its slot across restarts and missed heartbeats. A two-minute
+silence takes the node out of the round-robin, not out of its nameserver
+slot: freeing the slot would drop the zone's glue. `orama node remove`
+releases the slot.
 
 Each slot holder writes its **glue** record, `nsN.<base>` → its public IP
 (`node.public_ip` in `node.yaml`). The zone's own NS set and SOA are derived
@@ -311,9 +312,13 @@ Use online tools to verify global propagation:
   that it was saved.
 - For a subdomain, the glue is an ordinary A record in the parent zone; check
   it is not proxied (Cloudflare: **DNS only**).
-- A slot moves when its holder stops heartbeating for two minutes. If a glue
-  record names an address that no longer answers, run
-  `orama node dns delegation --env <env>` and update the parent zone.
+- A slot does not move because a heartbeat was missed. It moves when the
+  holder is removed with `orama node remove`, or when that node's public
+  address changes. If a glue record names an address that no longer answers,
+  run `orama node dns delegation --env <env>` and update the parent zone.
+  `orama node setup` records each machine on the environment, so this command
+  can SSH to those addresses before the name itself resolves. `--cloudflare-token-file`
+  writes the records into the parent zone when that zone is hosted at Cloudflare.
 
 ### SERVFAIL Errors
 
