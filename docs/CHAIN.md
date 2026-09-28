@@ -40,6 +40,8 @@ when a node has no public /16 or ASN. A relay payout cannot exceed that epoch's 
 minus what was already minted. `chain/x/inclusion` orders its own transaction
 bytes. Those bytes are not SDK transactions, and this CometBFT ProcessProposal
 commit does not carry vote extensions, so `oramad` does not put them in a block.
+`orama storage grant` builds a deal allowance that is not SDK authz. It caps spend,
+piece size, duration, and replica count. `orama storage revoke` removes it.
 Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.

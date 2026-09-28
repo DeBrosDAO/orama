@@ -191,6 +191,9 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama sandbox status`](#orama-sandbox-status) — Show cluster health report
 - [`orama ssh`](#orama-ssh) — SSH into a node
 - [`orama status`](#orama-status) — Show health status of your nodes
+- [`orama storage`](#orama-storage) — Storage deals on the Orama chain
+  - [`orama storage grant`](#orama-storage-grant) — Grant a cluster a capped deal allowance
+  - [`orama storage revoke`](#orama-storage-revoke) — Revoke a deal allowance
 - [`orama version`](#orama-version) — Show version information
 
 ---
@@ -3112,6 +3115,69 @@ single machine you are logged into, 'orama node status'.
 |------|---------|-------------|
 | `--env` | — | Environment (default: active) |
 | `--ssh` | `false` | Collect over SSH from every node instead of the gateway API (break-glass) |
+
+### orama storage
+
+Storage deals on the Orama chain
+
+```
+orama storage
+```
+
+Subcommands: `grant`, `revoke`
+
+### orama storage grant
+
+Grant a cluster a capped deal allowance
+
+```
+orama storage grant [flags]
+```
+
+Grant a deal allowance to another account.
+
+The grant is not SDK authz. It caps spend, piece size, duration, and replica
+count. Without --node the command prints the sign document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--expiry-epoch` | `0` | Epoch after which the grant is dead |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--grantee` | — | Grantee account (orama1...) [required] |
+| `--max-duration-epochs` | `0` | Longest deal the grant allows [required] |
+| `--max-piece-bytes` | `0` | Largest piece the grant allows [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--period-epochs` | `0` | Epochs in one spend period |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--replicas` | `3` | Exact replica count a deal must use |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+| `--signer` | — | Granter account (orama1...) [required] |
+| `--spend-limit` | — | Spend limit in norama [required] |
+
+### orama storage revoke
+
+Revoke a deal allowance
+
+```
+orama storage revoke [flags]
+```
+
+Revoke a deal allowance. Without --node the command prints the sign document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--grantee` | — | Grantee account (orama1...) [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+| `--signer` | — | Granter account (orama1...) [required] |
 
 ### orama version
 

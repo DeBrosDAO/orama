@@ -34,6 +34,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/sandboxcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/sshcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/statuscmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/storagecmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/domain"
 )
 
@@ -109,6 +110,7 @@ and no Orama MCP.`,
 	rootCmd.AddCommand(operatorcmd.Cmd)
 	rootCmd.AddCommand(clustercmd.Cmd)
 	rootCmd.AddCommand(globalcmd.Cmd)
+	rootCmd.AddCommand(storagecmd.Cmd)
 
 	// Inspect command
 	rootCmd.AddCommand(inspectcmd.Cmd)
