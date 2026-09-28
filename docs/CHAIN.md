@@ -32,8 +32,9 @@ require it, and nothing in `chain/` imports `core/`.
 | `power` (custom, `chain/x/power`) | voting power, the bootstrap committee, and the hand-over factor lambda (C4) |
 | `fees` (custom, `chain/x/fees`) | the EIP-1559-style base fee, earnings accounts, and the state-deposit ledger (C2) |
 
-**Not wired**, on purpose: `x/houses`, `x/token`, `x/nodes`, `x/storage`, `x/cnft`, `x/market`,
-`x/relay`, and `x/archive` are implemented and not registered in `app.go`. Also unwired: `x/gov`,
+**Wired** in addition to the table: `x/token` (factory denoms) and `x/archive` (history registry).
+**Not wired**, on purpose: `x/houses`, `x/nodes`, `x/storage`, `x/cnft`, `x/market`, and
+`x/relay` are implemented and not registered in `app.go`. Also unwired: `x/gov`,
 `x/mint` (replaced by `x/emission`), `x/authz`, `x/epochs` (x/emission tracks its own epochs),
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
 wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`
@@ -559,9 +560,10 @@ owner's earnings. The coins sit in a **second, separate module account** (`fees_
 - so "the deposit module balance == open deposits" stays an independently checkable invariant from
 "sum of earnings balances == the earnings module balance"). `ReleaseDeposit` refunds
 `Params.DepositRefundFraction` (99%) to the owner's earnings and burns the rest
-(`types.SplitDeposit`, exact split, remainder to the burn side). **No wired module calls this
-API yet.** `x/token` and `x/nodes` both call `LockDeposit` / `ReleaseDeposit`, and neither is
-registered in `app.go`, so `oramad` never reaches them. `x/cnft` locks a tree deposit through
+(`types.SplitDeposit`, exact split, remainder to the burn side). `x/token` calls `LockDeposit` /
+`ReleaseDeposit` and is registered, so a token
+create locks a metadata deposit. `x/nodes` calls the same interface and is not registered.
+`x/cnft` locks a tree deposit through
 the same interface and is also not registered. `x/market` does not lock a listing deposit.
 `x/storage` is implemented and not registered. Its deal escrow is its own module account,
 not this deposit ledger. The per-byte contract deposit meter is not hooked into wasmd's store.
@@ -582,9 +584,9 @@ that truncation would erase a real move, steps by one norama, floored at `Params
 ## `x/token`: factory denoms
 
 `chain/x/token` is the tokenfactory-style module from
-plans/open-network/track-c-chain.md C10. It is **not registered** in `chain/app/app.go`, so
-`oramad` does not serve its messages or queries and does not create its module account. The
-keeper is covered by unit tests with a fake multi-denom bank and a fake fees keeper.
+plans/open-network/track-c-chain.md C10. It is registered in `chain/app/app.go`. The module
+account may mint and burn. Creation-fee burns and metadata deposits go through `x/fees`.
+The transfer hook wired today does nothing.
 
 Denoms are `factory/{creator bech32}/{subdenom}`. Balances live in x/bank, not in this module.
 `Token.issued` is the module's running total. `CheckInvariants` requires that total to equal
@@ -974,8 +976,8 @@ for anything that does.
   has `MsgRegisterOperator` and `MsgRegisterNode`, but the quota is an ante rule and nothing
   in the ante does it. `x/nodes` is not registered in `app.go`. `MsgShieldEarnings` is not
   implemented. `MsgFundHotKey` is not a message of `x/nodes`.
-- **`x/fees`' state-deposit ledger has no caller in the running binary.** `x/token` and
-  `x/nodes` both call `LockDeposit` / `ReleaseDeposit`, and neither is registered in `app.go`.
+- **`x/fees`' state-deposit ledger is called by `x/token`.** `x/nodes` calls the same
+  interface and is not registered in `app.go`.
   `x/cnft` calls the same interface for a tree deposit and is not registered either.
   `x/storage` keeps deal escrow in its own module account and is not registered.
   The per-byte contract deposit meter is not hooked into wasmd's store.

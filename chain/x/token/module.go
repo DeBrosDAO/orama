@@ -1,6 +1,5 @@
 // Package token wires x/token's AppModule: factory denoms whose balances live
-// in x/bank (plans/open-network/track-c-chain.md C10). The module is not
-// registered in chain/app/app.go, so oramad does not expose it.
+// in x/bank (plans/open-network/track-c-chain.md C10). chain/app wires it.
 package token
 
 import (
