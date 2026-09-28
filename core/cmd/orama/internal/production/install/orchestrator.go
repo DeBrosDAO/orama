@@ -728,53 +728,51 @@ func (o *Orchestrator) printFirstNodeSecrets() {
 	fmt.Printf("  Node Peer ID: %s\n\n", o.setup.NodePeerID)
 }
 
-// promptForBaseDomain interactively prompts the user to select a network environment
-// Returns the selected base domain for deployment routing. An empty custom
-// domain or an unknown option is an error: it used to install the node into
-// devnet's zone without asking.
+// promptForBaseDomain asks for this cluster's zone. There is no menu of
+// someone else's networks and no default: pressing enter installs nothing.
 func promptForBaseDomain(in io.Reader) (string, error) {
 	reader := bufio.NewReader(in)
 
-	fmt.Println("\n🌐 Network Environment Selection")
-	fmt.Println("=================================")
-	fmt.Println("Select the network environment for this node:")
-	fmt.Println()
-	fmt.Println("  1. orama-devnet.network   (Development - for testing)")
-	fmt.Println("  2. orama-testnet.network  (Testnet - pre-production)")
-	fmt.Println("  3. orama-mainnet.network  (Mainnet - production)")
-	fmt.Println("  4. Custom domain...")
-	fmt.Println()
-	fmt.Print("Select option [1-4] (default: 1): ")
+	fmt.Println("\nBase domain")
+	fmt.Println("The zone this cluster answers. Example: example.com")
+	fmt.Print("Base domain: ")
 
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
-
-	switch choice {
-	case "", "1":
-		fmt.Println("✓ Selected: orama-devnet.network")
-		return "orama-devnet.network", nil
-	case "2":
-		fmt.Println("✓ Selected: orama-testnet.network")
-		return "orama-testnet.network", nil
-	case "3":
-		fmt.Println("✓ Selected: orama-mainnet.network")
-		return "orama-mainnet.network", nil
-	case "4":
-		fmt.Print("Enter custom base domain (e.g., example.com): ")
-		customDomain, _ := reader.ReadString('\n')
-		customDomain = strings.TrimSpace(customDomain)
-		if customDomain == "" {
-			return "", clierr.Usage("no custom base domain entered; run again and enter one, or pass --base-domain")
-		}
-		// Remove any protocol prefix if user included it
-		customDomain = strings.TrimPrefix(customDomain, "https://")
-		customDomain = strings.TrimPrefix(customDomain, "http://")
-		customDomain = strings.TrimSuffix(customDomain, "/")
-		fmt.Printf("✓ Selected: %s\n", customDomain)
-		return customDomain, nil
-	default:
-		return "", clierr.Usage("%q is not one of the options 1-4; run again, or pass --base-domain", choice)
+	raw, _ := reader.ReadString('\n')
+	domain := strings.TrimSpace(raw)
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimSuffix(domain, "/")
+	if err := validateBaseDomain(domain); err != nil {
+		return "", err
 	}
+	fmt.Printf("✓ Selected: %s\n", domain)
+	return domain, nil
+}
+
+// validateBaseDomain accepts a hostname of at least two labels. A scheme,
+// a path, a port, or a single word is not a zone.
+func validateBaseDomain(domain string) error {
+	if domain == "" {
+		return clierr.Usage("a base domain is required; run again and enter one, or pass --base-domain")
+	}
+	if strings.ContainsAny(domain, " /:?#") {
+		return clierr.Usage("%q is not a domain; pass a name such as example.com", domain)
+	}
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return clierr.Usage("%q is not a domain; pass a name such as example.com", domain)
+	}
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return clierr.Usage("%q is not a domain; pass a name such as example.com", domain)
+		}
+		for _, c := range label {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
+				return clierr.Usage("%q is not a domain; pass a name such as example.com", domain)
+			}
+		}
+	}
+	return nil
 }
 
 // generateNodeDomain creates a random subdomain like "node-a3f8k2.example.com"

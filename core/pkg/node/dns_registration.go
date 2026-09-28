@@ -65,6 +65,7 @@ func (n *Node) registerDNSNode(ctx context.Context) error {
 		SSHUser:        n.config.Node.SSHUser,
 		Environment:    n.config.Node.Environment,
 		OperatorWallet: n.config.Node.OperatorWallet,
+		Role:           n.installedRole(),
 	}); err != nil {
 		return fmt.Errorf("failed to register DNS node: %w", err)
 	}
@@ -130,7 +131,10 @@ func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
 		return fmt.Errorf("cannot record this heartbeat: %w", err)
 	}
 
-	registered, err := client.Heartbeat(ctx)
+	registered, err := client.Heartbeat(ctx, nodeapi.HeartbeatRequest{
+		Role:        n.installedRole(),
+		Environment: n.config.Node.Environment,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to update DNS heartbeat: %w", err)
 	}
@@ -735,6 +739,16 @@ func (n *Node) purgeInactiveNodeRecords(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// installedRole is the role this node was installed as. A nameserver flag
+// records "nameserver"; everything else is a worker. The heartbeat repeats
+// it so the cluster's view does not depend on a nodes.conf file.
+func (n *Node) installedRole() string {
+	if n.isNameserverPreference() {
+		return "nameserver"
+	}
+	return "node"
 }
 
 // isNameserverPreference checks if this node was installed with --nameserver flag

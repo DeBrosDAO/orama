@@ -32,6 +32,16 @@ type RegisterRequest struct {
 	SSHUser        string `json:"ssh_user,omitempty"`
 	Environment    string `json:"environment,omitempty"`
 	OperatorWallet string `json:"operator_wallet,omitempty"`
+	// Role is how this node serves the cluster: "node", "nameserver", or
+	// "nameserver-nsN". Empty leaves the stored role alone.
+	Role string `json:"role,omitempty"`
+}
+
+// HeartbeatRequest refreshes liveness and, when set, the role and environment
+// this node was installed with. An empty body is a liveness refresh only.
+type HeartbeatRequest struct {
+	Role        string `json:"role,omitempty"`
+	Environment string `json:"environment,omitempty"`
 }
 
 // HeartbeatResponse tells a node whether the row it is keeping alive exists.

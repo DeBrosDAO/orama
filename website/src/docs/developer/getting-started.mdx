@@ -150,14 +150,14 @@ orama env add my-env https://my-gateway.example.com "My custom environment"
 orama env remove my-env
 ```
 
-Default environments:
+A fresh install has no environments. Add the cluster you use:
 
-| Environment | Gateway URL | Active on a fresh install |
-|-------------|-------------|---------------------------|
-| `devnet` | `https://orama-devnet.network` | yes |
-| `testnet` | `https://orama-testnet.network` | no |
+```bash
+orama env add devnet https://orama-devnet.network "Development network"
+orama env use devnet
+```
 
-`orama sandbox create` adds a sandbox. `orama node setup --genesis` or `orama env add` adds a cluster of your own. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
+`orama sandbox create` adds a sandbox. `orama node setup --genesis` adds a cluster of your own. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
 
 ## Quick Example: Deploy a Static Site
 

@@ -152,13 +152,7 @@ orama env <subcommand>
 | `add <name> <gateway_url> [description]` | Add a custom environment |
 | `remove <name>` | Remove an environment |
 
-Default environments:
-
-| Name | Gateway URL | Description |
-|------|-------------|-------------|
-| `sandbox` | `https://dbrs.space` | Sandbox cluster (default) |
-| `devnet` | `https://orama-devnet.network` | Development |
-| `testnet` | `https://orama-testnet.network` | Staging |
+A fresh install has no environments. Add one with `orama env add <name> https://<gateway>`, then `orama env use <name>`.
 
 ### Examples
 

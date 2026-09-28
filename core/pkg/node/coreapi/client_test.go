@@ -137,7 +137,7 @@ func TestHeartbeat_reportsWhetherTheRowExists(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(nodeapi.HeartbeatResponse{Registered: registered})
 		})
 
-		got, err := client(t, srv.URL).Heartbeat(context.Background())
+		got, err := client(t, srv.URL).Heartbeat(context.Background(), nodeapi.HeartbeatRequest{})
 		srv.Close()
 		if err != nil {
 			t.Fatalf("Heartbeat: %v", err)
@@ -177,7 +177,7 @@ func TestHeartbeat_anUnreadableAnswerIsReported(t *testing.T) {
 	})
 	defer srv.Close()
 
-	if _, err := client(t, srv.URL).Heartbeat(context.Background()); err == nil {
+	if _, err := client(t, srv.URL).Heartbeat(context.Background(), nodeapi.HeartbeatRequest{}); err == nil {
 		t.Error("an unreadable answer was reported as a heartbeat result")
 	}
 }
@@ -321,7 +321,7 @@ func TestEnrolKey_isSignedByTheIdentityAndEverythingElseByTheKey(t *testing.T) {
 	if err := c.EnrolKey(context.Background()); err != nil {
 		t.Fatalf("EnrolKey: %v", err)
 	}
-	if _, err := c.Heartbeat(context.Background()); err != nil {
+	if _, err := c.Heartbeat(context.Background(), nodeapi.HeartbeatRequest{}); err != nil {
 		t.Fatalf("the client did not sign with its enrolled key: %v", err)
 	}
 
@@ -335,7 +335,7 @@ func TestEnrolKey_isSignedByTheIdentityAndEverythingElseByTheKey(t *testing.T) {
 	if err := second.EnrolKey(context.Background()); err != nil {
 		t.Fatalf("a node could not re-assert its key on a second start: %v", err)
 	}
-	if _, err := second.Heartbeat(context.Background()); err != nil {
+	if _, err := second.Heartbeat(context.Background(), nodeapi.HeartbeatRequest{}); err != nil {
 		t.Fatalf("a restarted node could not heartbeat: %v", err)
 	}
 	if enrolments != 2 || heartbeats != 2 {

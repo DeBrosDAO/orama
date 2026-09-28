@@ -7,12 +7,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
+	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/spf13/cobra"
@@ -123,12 +125,13 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 7. Check DNS resolution (basic)
-	_, err = net.LookupHost("orama-devnet.network")
-	if err != nil {
-		checks = append(checks, check{"DNS resolution", "WARN", fmt.Sprintf("Cannot resolve orama-devnet.network: %v", err)})
+	// 7. Check DNS resolution of this node's own domain.
+	if host := configuredNodeDomain(); host == "" {
+		checks = append(checks, check{"DNS resolution", "WARN", "no domain in " + config.ProductionNodeConfigPath})
+	} else if _, err = net.LookupHost(host); err != nil {
+		checks = append(checks, check{"DNS resolution", "WARN", fmt.Sprintf("Cannot resolve %s: %v", host, err)})
 	} else {
-		checks = append(checks, check{"DNS resolution", "PASS", "orama-devnet.network resolves"})
+		checks = append(checks, check{"DNS resolution", "PASS", host + " resolves"})
 	}
 
 	// 8. Check if ports are conflicting (only for stopped services)
@@ -184,4 +187,21 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 // errCheckFailed names how many diagnostics failed.
 func errCheckFailed(n int) error {
 	return fmt.Errorf("%d diagnostic check(s) failed", n)
+}
+
+// configuredNodeDomain is the domain this node was installed with. Doctor
+// resolves that name, not a network this computer does not belong to.
+func configuredNodeDomain() string {
+	data, err := os.ReadFile(config.ProductionNodeConfigPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "domain:") {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "domain:")), `"'`)
+	}
+	return ""
 }

@@ -102,8 +102,8 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const query = `
-		INSERT INTO dns_nodes (id, ip_address, internal_ip, region, status, ssh_user, environment, operator_wallet, last_seen, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 'active', ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
+		INSERT INTO dns_nodes (id, ip_address, internal_ip, region, status, ssh_user, environment, operator_wallet, role, last_seen, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
 		ON CONFLICT(id) DO UPDATE SET
 			ip_address = excluded.ip_address,
 			internal_ip = excluded.internal_ip,
@@ -112,11 +112,12 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 			ssh_user = COALESCE(NULLIF(excluded.ssh_user, ''), dns_nodes.ssh_user),
 			environment = COALESCE(NULLIF(excluded.environment, ''), dns_nodes.environment),
 			operator_wallet = COALESCE(NULLIF(excluded.operator_wallet, ''), dns_nodes.operator_wallet),
+			role = COALESCE(NULLIF(excluded.role, ''), dns_nodes.role),
 			last_seen = datetime('now'),
 			updated_at = datetime('now')`
 
 	if _, err := h.db.Exec(r.Context(), query,
-		nodeID, req.IPAddress, req.InternalIP, req.Region, req.SSHUser, req.Environment, req.OperatorWallet,
+		nodeID, req.IPAddress, req.InternalIP, req.Region, req.SSHUser, req.Environment, req.OperatorWallet, req.Role,
 	); err != nil {
 		h.logger.Error("node registration failed", zap.String("node_id", nodeID), zap.Error(err))
 		http.Error(w, "failed to record this node", http.StatusInternalServerError)
@@ -224,13 +225,20 @@ func (h *Handler) HandleEnrolKey(w http.ResponseWriter, r *http.Request) {
 // node must count as active, and this is what heals a node that was reaped to
 // `inactive` during a restart window.
 func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	nodeID, _, ok := h.authenticate(w, r)
+	nodeID, raw, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
 
-	const query = `UPDATE dns_nodes SET status = 'active', last_seen = datetime('now'), updated_at = datetime('now') WHERE id = ?`
-	res, err := h.db.Exec(r.Context(), query, nodeID)
+	var beat nodeapi.HeartbeatRequest
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &beat)
+	}
+	const query = `UPDATE dns_nodes SET status = 'active', last_seen = datetime('now'), updated_at = datetime('now'),
+		role = COALESCE(NULLIF(?, ''), role),
+		environment = COALESCE(NULLIF(?, ''), environment)
+		WHERE id = ?`
+	res, err := h.db.Exec(r.Context(), query, beat.Role, beat.Environment, nodeID)
 	if err != nil {
 		h.logger.Error("node heartbeat failed", zap.String("node_id", nodeID), zap.Error(err))
 		http.Error(w, "failed to record this heartbeat", http.StatusInternalServerError)

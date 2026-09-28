@@ -432,11 +432,29 @@ func TestHeartbeat_aMatchedRowIsRegistered(t *testing.T) {
 	if !resp.Registered {
 		t.Error("a heartbeat that updated a row reported the node as unregistered")
 	}
-	if got := db.calls[0].args[0]; got != testNodeID {
+	if got := db.calls[0].args[2]; got != testNodeID {
 		t.Errorf("heartbeat updated %v, want the stamped node", got)
 	}
 	if !strings.Contains(db.calls[0].query, "status = 'active'") {
 		t.Error("a heartbeat did not re-assert 'active', so a node reaped during a restart stays inactive")
+	}
+}
+
+func TestHeartbeat_carriesTheInstalledRole(t *testing.T) {
+	db := &recordingDB{affected: 1}
+	w := httptest.NewRecorder()
+	newHandler(db).HandleHeartbeat(w, post(t, "/v1/internal/node/heartbeat", testNodeID, nodeapi.HeartbeatRequest{
+		Role:        "nameserver",
+		Environment: "stagenet",
+	}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %q", w.Code, w.Body.String())
+	}
+	if got := db.calls[0].args[0]; got != "nameserver" {
+		t.Errorf("role = %v, want nameserver", got)
+	}
+	if got := db.calls[0].args[1]; got != "stagenet" {
+		t.Errorf("environment = %v, want stagenet", got)
 	}
 }
 

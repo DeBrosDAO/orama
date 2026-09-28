@@ -226,32 +226,32 @@ func TestHandleRegister_invalidRole(t *testing.T) {
 }
 
 func TestAllowedEnvironments(t *testing.T) {
-	valid := []string{"devnet", "testnet", "sandbox", "production", "mainnet"}
-	invalid := []string{"staging", "local", "<script>", ""}
+	valid := []string{"devnet", "testnet", "stagenet", "production", "local"}
+	invalid := []string{"-x", "<script>", "", "has space", "a.b"}
 
 	for _, env := range valid {
-		if !allowedEnvironments[env] {
+		if !validEnvironment(env) {
 			t.Errorf("expected %q to be allowed", env)
 		}
 	}
 	for _, env := range invalid {
-		if allowedEnvironments[env] {
+		if validEnvironment(env) {
 			t.Errorf("expected %q to be disallowed", env)
 		}
 	}
 }
 
 func TestAllowedRoles(t *testing.T) {
-	valid := []string{"node", "nameserver", "nameserver-ns1", "nameserver-ns2", "nameserver-ns3"}
-	invalid := []string{"admin", "root", ""}
+	valid := []string{"node", "nameserver", "nameserver-ns1", "nameserver-ns4"}
+	invalid := []string{"admin", "root", "", "nameserver-ns0", "nameserver-ns01", "-x"}
 
 	for _, role := range valid {
-		if !allowedRoles[role] {
+		if !validRole(role) {
 			t.Errorf("expected %q to be allowed", role)
 		}
 	}
 	for _, role := range invalid {
-		if allowedRoles[role] {
+		if validRole(role) {
 			t.Errorf("expected %q to be disallowed", role)
 		}
 	}

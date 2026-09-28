@@ -30,29 +30,9 @@ type EnvironmentConfig struct {
 	ActiveEnvironment string        `json:"active_environment"`
 }
 
-// defaultActiveEnvironment is active in a fresh config and after the active
-// environment is removed.
-const defaultActiveEnvironment = "devnet"
-
-// DefaultEnvironments are the public clusters a fresh config knows. A sandbox
-// is added by `orama sandbox create`, and a cluster of your own by
-// `orama node setup --genesis` or `orama env add`. The old default was a
-// "sandbox" entry for dbrs.space, a cluster that no longer exists, and it was
-// the active one.
-var DefaultEnvironments = []Environment{
-	{
-		Name:        "devnet",
-		GatewayURL:  "https://orama-devnet.network",
-		Description: "Development network",
-		IsActive:    true,
-	},
-	{
-		Name:        "testnet",
-		GatewayURL:  "https://orama-testnet.network",
-		Description: "Test network (staging)",
-		IsActive:    false,
-	},
-}
+// noEnvironmentHelp is what a command says when this computer has no cluster
+// configured. A fresh install does not point at anyone else's network.
+const noEnvironmentHelp = "no environment is configured; add the cluster you use with `orama env add <name> https://<gateway>`"
 
 // getEnvironmentConfigPathFn is the function used to resolve the config path.
 // Tests override this to point at a temp file.
@@ -78,12 +58,10 @@ func LoadEnvironmentConfig() (*EnvironmentConfig, error) {
 		return nil, err
 	}
 
-	// If file doesn't exist, return default config
+	// A missing file is a computer that has not chosen a cluster. It is not
+	// filled in with somebody else's networks.
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return &EnvironmentConfig{
-			Environments:      DefaultEnvironments,
-			ActiveEnvironment: defaultActiveEnvironment,
-		}, nil
+		return &EnvironmentConfig{}, nil
 	}
 
 	data, err := os.ReadFile(path)
@@ -133,6 +111,10 @@ func GetActiveEnvironment() (*Environment, error) {
 	envConfig, err := LoadEnvironmentConfig()
 	if err != nil {
 		return nil, err
+	}
+
+	if len(envConfig.Environments) == 0 || envConfig.ActiveEnvironment == "" {
+		return nil, fmt.Errorf("%s", noEnvironmentHelp)
 	}
 
 	for _, env := range envConfig.Environments {
@@ -223,8 +205,8 @@ func AddEnvironment(name, gatewayURL, description string) error {
 	return SaveEnvironmentConfig(envConfig)
 }
 
-// RemoveEnvironment removes an environment by name. If the removed environment
-// was active, defaultActiveEnvironment becomes active.
+// RemoveEnvironment removes an environment by name. If it was the active one,
+// nothing else is selected: the next command asks for `orama env use`.
 func RemoveEnvironment(name string) error {
 	envConfig, err := LoadEnvironmentConfig()
 	if err != nil {
@@ -248,7 +230,7 @@ func RemoveEnvironment(name string) error {
 	envConfig.Environments = newEnvs
 
 	if envConfig.ActiveEnvironment == name {
-		envConfig.ActiveEnvironment = defaultActiveEnvironment
+		envConfig.ActiveEnvironment = ""
 	}
 
 	return SaveEnvironmentConfig(envConfig)
@@ -266,10 +248,7 @@ func InitializeEnvironments() error {
 		return nil
 	}
 
-	envConfig := &EnvironmentConfig{
-		Environments:      DefaultEnvironments,
-		ActiveEnvironment: defaultActiveEnvironment,
-	}
+	envConfig := &EnvironmentConfig{}
 
 	return SaveEnvironmentConfig(envConfig)
 }

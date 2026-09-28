@@ -128,8 +128,8 @@ var errRefused = errors.New("the cluster did not recognise this node")
 //
 // A false answer is not a failure: it is a node whose registration never
 // landed, or was reaped while it was restarting, and the caller registers.
-func (c *Client) Heartbeat(ctx context.Context) (bool, error) {
-	body, err := c.post(ctx, nodeapi.PathHeartbeat, struct{}{})
+func (c *Client) Heartbeat(ctx context.Context, req nodeapi.HeartbeatRequest) (bool, error) {
+	body, err := c.post(ctx, nodeapi.PathHeartbeat, req)
 	if err != nil {
 		return false, err
 	}

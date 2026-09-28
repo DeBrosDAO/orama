@@ -127,8 +127,8 @@ func TestRemoveEnvironment_active_falls_back(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEnvironmentConfig: %v", err)
 	}
-	if cfg.ActiveEnvironment != "devnet" {
-		t.Errorf("ActiveEnvironment = %q, want %q", cfg.ActiveEnvironment, "devnet")
+	if cfg.ActiveEnvironment != "" {
+		t.Errorf("ActiveEnvironment = %q, want none", cfg.ActiveEnvironment)
 	}
 }
 
@@ -149,19 +149,19 @@ func TestGetActiveEnvironment_UnknownActiveIsAnErrorNotAFallback(t *testing.T) {
 	}
 }
 
-func TestDefaultEnvironments_NoDeadClusterAndDevnetActive(t *testing.T) {
-	for _, env := range DefaultEnvironments {
-		if strings.Contains(env.GatewayURL, "dbrs.space") {
-			t.Errorf("default environment %q points at dbrs.space, which no longer exists", env.Name)
-		}
+func TestFreshConfigHasNoEnvironments(t *testing.T) {
+	old := getEnvironmentConfigPathFn
+	defer func() { getEnvironmentConfigPathFn = old }()
+	getEnvironmentConfigPathFn = func() (string, error) { return filepath.Join(t.TempDir(), "absent.json"), nil }
+
+	cfg, err := LoadEnvironmentConfig()
+	if err != nil {
+		t.Fatalf("LoadEnvironmentConfig: %v", err)
 	}
-	cfg, err := func() (*EnvironmentConfig, error) {
-		old := getEnvironmentConfigPathFn
-		defer func() { getEnvironmentConfigPathFn = old }()
-		getEnvironmentConfigPathFn = func() (string, error) { return filepath.Join(t.TempDir(), "absent.json"), nil }
-		return LoadEnvironmentConfig()
-	}()
-	if err != nil || cfg.ActiveEnvironment != defaultActiveEnvironment {
-		t.Fatalf("fresh config active = %q (%v), want %q", cfg.ActiveEnvironment, err, defaultActiveEnvironment)
+	if len(cfg.Environments) != 0 || cfg.ActiveEnvironment != "" {
+		t.Fatalf("fresh config = %+v, want no environments", cfg)
+	}
+	if _, err := GetActiveEnvironment(); err == nil || !strings.Contains(err.Error(), "orama env add") {
+		t.Fatalf("active environment error = %v, want the env add hint", err)
 	}
 }
