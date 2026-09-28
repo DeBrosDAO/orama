@@ -197,6 +197,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama storage decline`](#orama-storage-decline) — Decline an assigned storage slot
   - [`orama storage extend`](#orama-storage-extend) — Add epochs to a storage deal
   - [`orama storage grant`](#orama-storage-grant) — Grant a cluster a capped deal allowance
+  - [`orama storage prove`](#orama-storage-prove) — Submit storage challenge proofs
   - [`orama storage revoke`](#orama-storage-revoke) — Revoke a deal allowance
 - [`orama version`](#orama-version) — Show version information
 
@@ -3128,7 +3129,7 @@ Storage deals on the Orama chain
 orama storage
 ```
 
-Subcommands: `accept`, `create`, `decline`, `extend`, `grant`, `revoke`
+Subcommands: `accept`, `create`, `decline`, `extend`, `grant`, `prove`, `revoke`
 
 ### orama storage accept
 
@@ -3268,6 +3269,35 @@ count. Without --node the command prints the sign document and does not submit i
 | `--sequence` | `0` | Account sequence, when not read from --node |
 | `--signer` | — | Granter account (orama1...) [required] |
 | `--spend-limit` | — | Spend limit in norama [required] |
+
+### orama storage prove
+
+Submit storage challenge proofs
+
+```
+orama storage prove [flags]
+```
+
+Submit one or more challenge proofs for a storage node.
+
+--file is a JSON array. Each object has deal_id, slot, leaf_index, leaf,
+and siblings. leaf and siblings are hex. The leaf is 1024 bytes and each
+sibling is 32 bytes. The command does not choose the challenged leaf and
+does not read the stored piece. Without --node it prints the sign document
+and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--file` | — | JSON file of proofs [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Node id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+| `--signer` | — | Hot key account (orama1...) [required] |
 
 ### orama storage revoke
 
