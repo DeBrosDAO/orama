@@ -521,6 +521,65 @@ process.
 
 ---
 
+## The chain module
+
+`@debros/orama/chain` reads the Orama chain, builds and signs its transactions, and
+describes them for an approval screen. It is a separate entry so a caller that only uses
+the database or pub/sub clients carries none of it. It needs four packages that are
+optional peers of the SDK, installed only by a caller of this entry:
+
+```bash
+pnpm add @bufbuild/protobuf @noble/curves @noble/hashes @scure/base
+```
+
+```ts
+import { LocalSigner, MSG, OramaChainClient, describeTx } from "@debros/orama/chain";
+
+const chain = new OramaChainClient({
+  gatewayURL: "https://gateway.example",   // the read-only /v1/chain/ proxy
+  restURL: "http://127.0.0.1:31003",       // a node's REST API: accounts, balances, broadcast
+});
+
+const signer = new LocalSigner(privateKeyHex);      // or any OramaSigner, such as RootWallet
+const msg = MSG.nodesFundHotKey.create({ operator: signer.address, nodeId: "node-1", amount: "2500000000" });
+const { signed, result } = await chain.signAndBroadcast([msg], signer, {
+  chainId: "orama-1", gasLimit: 300_000, feeNorama: 300_000,
+});
+console.log(result.txHash, describeTx(signed.txBytes).messages[0].summary);
+```
+
+**Reads.** The gateway's proxy serves `status`, `block`, `blocks`, `tx`, `validators`,
+`supply`, `stakingPool` and the indexer's `indexStatus`, `indexBlock`, `indexTx`,
+`indexAccountTxs`, `cnftAsset` and `cnftOwnerAssets`: the routes in
+[CHAIN.md](CHAIN.md#explorer). A node's REST API (`restURL`) adds `account`, `balances` and
+`broadcast`. The Orama modules' own state (x/nodes, x/storage, x/fees, x/houses) speaks gRPC
+only and has no REST route, so this client does not read it; `orama chain query` reads it
+through a node's CometBFT RPC. A read that needs a base URL the config does not have fails and
+names it.
+
+**Building.** `buildSignDoc` produces the `SIGN_MODE_DIRECT` body, auth info and `SignDoc` for one
+signer; `signTx` has an `OramaSigner` sign it and checks the signature before it is used;
+`verifyTx` verifies an encoded transaction the way the chain does. The message set is `MSG`:
+every Orama message (53) plus bank send, staking, unjail, reward withdrawal and the two CosmWasm
+messages a wallet signs. The fee is always norama.
+
+**Signers.** `OramaSigner` is `{ address, publicKey, signDirect(signDoc) }`. The builder hands
+the signer the serialized `SignDoc`, never a key, so a wallet can decode it and show the user what
+they approve. `LocalSigner` holds a key in memory, for tests and servers that own their key.
+
+**Approval text.** `describeTx` and `describeMessage` turn a transaction into a summary per
+message, with notes for what a signer must see (a token's powers, a `DealAuthorization`'s limits
+and expiry, a collection's royalty, the decoded body and funds of a contract call) and a
+`sensitive` flag. A message type the SDK does not hold is described as unknown and sensitive.
+
+**Generated code and the Go side.** `src/chain/gen` is generated from `chain/proto` by
+`pnpm gen:chain` (protoc and `ts-proto`, pinned). A test regenerates it and fails on a difference.
+`chain/client/tx/testdata/tx_vectors.json` is written by the Go builder: every case is rebuilt in
+TypeScript and must match the body, auth info, `SignDoc`, signature and transaction bytes.
+`wallet_msgs.json` lists every message the chain registers; the SDK must decode all of them.
+
+---
+
 ## Testing against a gateway
 
 The SDK's own end-to-end suite runs only when it has a gateway to talk to:

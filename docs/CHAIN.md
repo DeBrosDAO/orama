@@ -1748,6 +1748,59 @@ What the indexer holds, and what it does not, is under "Chain indexer" above.
 annotations. Neither are per-account bank balances. The explorer does not invent rows for a
 query this proxy does not serve.
 
+## Wallet clients: transactions, reads and onion submission
+
+**Transaction builder.** `chain/client/tx` (Go) and `sdk/src/chain` (TypeScript, `@debros/orama/chain`,
+see [TS_SDK.md](TS_SDK.md#the-chain-module)) both build `SIGN_MODE_DIRECT` transactions. A fixture
+the Go side writes (`chain/client/tx/testdata/tx_vectors.json`) pins the bytes of 20 messages
+across every module; the TypeScript tests rebuild each one and must match the body, auth info,
+`SignDoc`, signature and transaction bytes. `wallet_msgs.json` beside it lists every Orama message the
+chain registers and the SDK messages a wallet signs; the TypeScript message registry, which also
+carries the human-readable decoders, must hold all of them. Regenerate both with
+`go test ./client/tx -run TestVectors -update-tx-vectors`.
+
+**Wallet-flow tests.** `chain/app/wallet_flow_test.go` drives the builder against a real app through
+`FinalizeBlock`, with secp256k1 accounts, so each transaction crosses the ante chain and the message
+router. What the chain lets a wallet do today: the fee comes from the bank balance and falls back to
+earnings when the bank is short; `x/bank` refuses public user-to-user norama sends; there is no
+shielded transaction message yet (a test fails when one is registered, to be replaced by shield and
+unshield flows); a wallet delegates and undelegates from earnings; votes in the token house; registers
+a node, bonds it from earnings and funds its hot key from earnings; creates a token and enforces its
+powers (mint, freeze, pause, permanent delegate, non-transferable, renounce); mints, transfers, lists
+and buys a compressed NFT with the royalty paid to earnings. The parameter tier of `x/houses` is closed
+at bootstrap, so the test seeds a voting proposal directly and a `MsgSubmitProposal` is asserted refused.
+
+**`orama chain`** reads the chain over HTTP JSON and links no chain code. Each command uses one read
+path: the gateway proxy above (`--gateway`, default the active environment), a node's REST API
+(`--node`), or a node's CometBFT RPC (`--rpc`).
+
+| Command | Path | Reads |
+|---|---|---|
+| `orama chain status` | gateway `/v1/chain/status`, or `--rpc` `/status` | height, network, sync state |
+| `orama chain validator [oramavaloper1...]` | gateway `/v1/chain/validators` or `--rpc`; with an address, `--node` staking REST | validator set, or one validator |
+| `orama chain balance <address>` | `--node` `/cosmos/bank/v1beta1/balances/{address}` | bank balances |
+| `orama chain earnings <address>` | `--rpc` `abci_query` of `orama.fees.v1.Query/Earnings` | earnings balance |
+| `orama chain node <id>` | `--rpc` `abci_query` of `orama.nodes.v1.Query/Node` | a registered node |
+| `orama chain deal <id>` | `--rpc` `abci_query` of `orama.storage.v1.Query/Deal` | a storage deal |
+| `orama chain query <Service/Method> [json]` | `--rpc` `abci_query` | any Orama module query; `--list` names them |
+
+The Orama modules answer gRPC only. `abci_query` is their one HTTP route, and the gateway does not proxy
+it, so `earnings`, `node`, `deal` and `query` go to a node's CometBFT RPC (`http://127.0.0.1:31001` on the
+node). The request and response are protobuf, encoded and decoded from the query descriptors embedded in
+`core/pkg/chainread/queries.binpb`, generated from `chain/proto` by `core/pkg/chainread/gen.sh`; a test
+fails when the file is stale.
+
+**Onion submission.** `--onion <addr.onion[:port]>` on every transaction command (`orama global register`,
+`bond`, `unbond`, `capacity`, `retire`, `unjail` and the other validator commands, `orama storage deal`,
+`grant`, `revoke` and `prove`, `orama cluster register-onchain` and `retire-onchain`), or
+`ORAMA_CHAIN_ONION`, sends the account read and the broadcast to a validator's onion service through the
+Tor SOCKS5 proxy at `--onion-socks` (default `127.0.0.1:9050`, or `ORAMA_ONION_SOCKS`). `--node` and
+`--onion` together are a usage error. The client has one route, the SOCKS proxy: no direct dialer, no
+environment proxy, no redirects. Each command run uses one new SOCKS credential, which Tor maps to its own
+circuit, so two transactions never share one. A failed onion path returns the error ("the transaction was not
+sent, and nothing was tried outside Tor") and never falls back to the clearnet. Reads (`orama chain`) do not
+go through Tor yet.
+
 ## `x/shielded`: proof verification
 
 Code: `chain/x/shielded/verify` (the `Verifier` interface and `Check`),
