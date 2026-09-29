@@ -349,6 +349,16 @@ so a partial top-up would only move earnings into the bank for nothing). It only
 address's own earnings into its own bank balance; a tx naming someone else's address fails
 signature verification.
 
+The same decorator funds a signer's **own storage deals and tokens** (C2 item 4). It is built with
+`OwnFundsQuoter`s, and a module that pulls the signer's money from the bank balance prices its
+messages: `x/storage` prices `MsgCreateDeal` (the per-deal fee plus price x replicas x duration escrow)
+and `MsgExtendDeal` (the escrow of the extra epochs, only for the deal's own client and never a
+protocol deal); `x/token` prices `MsgCreateToken` (creation fee plus the metadata deposit).
+A `MsgCreateDeal` with a `granter` is not priced: the grantor's money pays, never the signer's earnings.
+The top-up is the shortfall against the quote, all or nothing, exactly as for bonds. Tree and node
+deposits need nothing here, because `LockDeposit` already falls back to earnings. `x/market` bid escrow
+and `x/houses` bonds are not covered.
+
 ### The power formula
 
 Every block, `x/power`'s `EndBlock` (`Keeper.RunEndBlock` -> `Keeper.computePowers`) computes, for
@@ -582,8 +592,9 @@ touch the ledger. `SettleFee` also adds the fee to three counters: collected, bu
 
 A balance debited back to zero is removed from the earnings map rather than stored as a zero row.
 
-Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** (the bond
-top-up decorator, for staking messages and `x/nodes` `MsgBondNode`) and fund the signer's own **state deposits** (`LockDeposit` takes the bank
+Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** and **storage deal and token fees** (the bond
+top-up decorator, for staking messages, `x/nodes` `MsgBondNode`, `x/storage` `MsgCreateDeal`/`MsgExtendDeal`
+and `x/token` `MsgCreateToken`) and fund the signer's own **state deposits** (`LockDeposit` takes the bank
 balance first and the shortfall from that same owner's earnings). `MsgShieldEarnings` is not
 implemented yet. It depends on `x/shielded` (C12). The only message that moves earnings to another
 address is `x/nodes` `MsgFundHotKey`: it moves an operator's own earnings to the earnings balance of
@@ -851,8 +862,25 @@ its id in `StorageDirty`, and imported genesis nodes are queued the same way. At
 
 The tracked set is derived from x/nodes, so genesis export/import round-trips it: x/storage exports
 its `NodeState` rows, and x/nodes re-queues every imported STORAGE node so the first block
-reconciles them. Tracking is not marked probation: the fee-free probation registration (a node with
-no bond) cannot be assigned at all today, because assignment needs a bonded STORAGE role.
+reconciles them.
+
+**Probation nodes.** A fee-free registration has the STORAGE role and no bond, so it is never
+`StorageEligible`. `Keeper.StorageProbation` (`NodeView.IsProbation`) holds for a node that is
+Registered (not jailed, retired or tombstoned), has the role and a zero STORAGE bond. x/storage tracks
+such a node with `Probation` set and its `registered_epoch`; a node with a partial bond is not one. A
+probation node:
+- takes only protocol-deal slots, at most `probation_slots` each and under the per-operator, /16 and
+  ASN caps; it never takes a PRIVATE or PUBLIC_PIN user deal, because it has no bond to slash;
+- is not counted as an active operator, so it does not open the subsidy ramp;
+- locks the `probation_deposit` record deposit from its first credited earnings;
+- is jailed at `probation_expiry_epochs` if it proved nothing, and graduates if it proved storage
+  (the deposit is recovered), after which it holds no slots until it bonds;
+- graduates at once when it bonds, becoming an ordinary provider.
+
+The caps count slots at assignment and release them at detach for a node still on probation, so a node
+that leaves probation (graduates, bonds or is jailed) releases the counts of the slots it holds at
+that moment. A probation node that graduated without a bond stays tracked, without slots, and does not
+start a second probation.
 
 A protocol-deal slot additionally needs a node with a known /16 and a declared ASN; a node without
 either can still hold PRIVATE and PUBLIC_PIN user deals, where only distinct operators are required.
@@ -993,24 +1021,81 @@ attempt.
 `history get --height H --from <home or http base>` loads the range's
 bundle. It checks the file hash, each block's bytes against its header hash,
 and the Merkle root against the x/archive record, and only then writes the
-block. The archiver does not create ARCHIVE storage deals or move CometBFT's
-retain height.
+block.
 
-x/archive accepts `MsgAttest` and `MsgAttachReplicas` only from the hot key of
+**Archive deals.** After it attests a range, the archiver follows it (one file
+`<home>/deals/<start>-<end>.json` holds the deal ids it opened that the range does not record
+yet) until x/archive marks it archived. Each pass, for each such range:
+1. If the range holds fewer than three live deals, counting recorded ones and its own pending ones, it
+   computes the `piece/` commitment of the bundle file and submits `MsgCreateArchiveDeal` for each
+   missing one. The chain answers with the deal id in an `archive_create_deal` event. When the chain refuses one as over
+   the range's allowance (`ErrDealsFull`, which happens when another archiver of the range was faster),
+   the range has enough deals and the archiver moves on.
+2. When x/storage has assigned a provider to one of its deals (a new deal is OPEN until the next block), it submits
+   `MsgAttachReplicas` for it.
+3. A deal that ended without a provider is dropped and replaced.
+
+**`MsgCreateArchiveDeal`** (`archiver`, `node_id`, the range, and the bundle's piece commitment: root, real
+and padded leaf counts, bytes) opens one protocol ARCHIVE deal in x/storage, through
+`Keeper.CreateArchiveDeal`. Users cannot: `MsgCreateDeal` still refuses the ARCHIVE class. The chain
+sets the price (`protocol_price_per_epoch`, per replica) and the duration
+(`archive.ArchiveDealEpochs`, 3650 epochs, so ten years at one epoch a day); the archiver
+chooses neither. The signer must be the hot key of an active ARCHIVER node whose operator attested the
+range, and a range may hold at most `MaxLiveDealsPerRange` (3) live deals. The deal is recorded as
+pending for the range (a collection of (start, deal id)) and reserved for it in the `AttachedDeals`
+index, so it cannot back another range. Pending deals that x/storage no longer runs are forgotten when
+the next one is asked for, which frees their place. When the deal ends, `MsgCreateArchiveDeal`
+drops it from the range and a new one can be opened, so history is renewed by the archivers rather than
+lapsing. Pending state is not part of genesis export; an export drops the reservation of a deal
+that was not yet recorded.
+
+x/archive accepts `MsgAttest`, `MsgAttachReplicas` and `MsgCreateArchiveDeal` only from the hot key of
 the x/nodes node the message names, and only while that node is active with an
 ARCHIVER role bond. Each operator counts once toward a range: a second node of
 an operator, or the same operator under a rotated key, is accepted and
 counts nothing, and a key that already attested stays idempotent after its
 node loses the role. Every id in `MsgAttachReplicas` must be a decimal x/storage
-deal id of an active ARCHIVE deal (`ErrNotArchiveDeal`) that backs no other
+deal id of an active ARCHIVE deal (`ErrNotArchiveDeal`, so an OPEN deal with no provider yet is refused) that backs no other
 range (`ErrDealAttached`), and only an operator that attested the range may
 attach deals to it (`ErrNotAttester`). When the three-operator, three-deal
 threshold is reached, the deals are read again: ended ones are dropped from the
 range and freed, and the range is archived only if three live deals remain.
-After that `archived` is permanent. The deal's stored bytes are not checked against
-the bundle: x/storage cannot yet create an ARCHIVE deal for a given bundle, so
-the three bonded operators are what vouch for it. Nothing slashes a wrong root
+After that `archived` is permanent. `MsgAttachReplicas` does not require the deal to have been
+made by `MsgCreateArchiveDeal`: the scheduled ARCHIVE protocol deals, which carry a synthetic
+payload, can still be attached, and the deal's stored bytes are not checked against the bundle, so the
+attesting operators and the piece commitment the archiver supplied are what vouch for it. Nothing slashes a wrong root
 yet; the root is checkable by anyone against the chain's own block hashes.
+
+**Retention.** The app enforces C14's retain height in `OramaApp.Commit`. `BaseApp` returns the height
+its own rules give (`min-retain-blocks`, the evidence age and the snapshot interval; 0, prune
+nothing, when `min-retain-blocks` is 0). The app lowers it to
+`min(tip - retention_window_blocks, last_archived_height)`, where the last archived height is the
+contiguous archived prefix (`x/archive` `RetainHeight`), and returns 0 while nothing is archived.
+A block that no archived range covers is never pruned, however far the tip runs ahead of a stalled
+archive, and the block store then grows past the validator budget until archiving resumes. A node prunes only
+when its operator sets `min-retain-blocks` in `app.toml`; the stagenet deploy script sets it to
+14 days of blocks. The archiver does not hold CometBFT's retain height itself: the app's gate is what
+holds it, for every node, so an archiver that is down or behind costs storage but never history.
+
+`<home>/monitor.json` reports the archiver's progress:
+
+| Field | Meaning |
+|---|---|
+| `attested_height` | The archiver's cursor: the last height it attested. |
+| `last_archived_height` | x/archive's contiguous archived prefix, the height the chain never prunes above. |
+| `tip_height` | The chain tip the archiver saw. |
+| `retain_lag_blocks` | `tip_height - last_archived_height`. It grows while archiving stalls; alert on it. |
+| `unarchived_ranges` | Attested ranges x/archive has not marked archived. |
+| `deals_opened` | ARCHIVE deals this process has opened since it started. |
+
+core's telemetry does not read this file yet; its `MonitorFile` covers the provider and the relay.
+
+**Budget.** `TestArchiveBudget_aYearOfRangesFitsTheStorageCeiling` sizes the deals from the defaults: at
+1000 blocks a range and 6-second blocks the chain archives about 14 ranges a day, each with three deals of
+three slots, paid the protocol price per epoch for 3650 epochs. It asserts that the bill never passes 1% of
+any epoch's storage ceiling over the first year and over the first ten. The price does not depend on the bundle's
+size, and the bill keeps growing with history until the first deals end, so the price and the range width
+are the levers if that stops holding.
 
 ### Chain indexer (`orama-global indexer`)
 
