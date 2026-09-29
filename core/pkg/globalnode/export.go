@@ -84,8 +84,8 @@ func (h Host) leave(recipient *[32]byte, key, state []byte) ([]byte, Exported, e
 	if err != nil {
 		return nil, Exported{}, err
 	}
-	if err := h.writeFloor(pub, state); err != nil {
-		return nil, Exported{}, err
+	if err := h.updateFloor(pub, state, neverLower); err != nil {
+		return nil, Exported{}, fmt.Errorf("the chain home's state is behind the floor recorded for this key: %w", err)
 	}
 	out := Exported{State: parsed}
 	if out.StateCopy, err = h.keepCopy(state, "state-migrated"); err != nil {

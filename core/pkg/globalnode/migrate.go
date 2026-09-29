@@ -131,15 +131,8 @@ func (h Host) installState(source []byte, pub string, uid, gid int) (*SignState,
 	if err != nil {
 		return nil, err
 	}
-	floors, err := h.readFloors()
-	if err != nil {
-		return nil, err
-	}
-	if recorded, ok := floors[pub]; ok && floor.Behind(recorded) {
-		return nil, fmt.Errorf("this host already records a sign floor for this key at %s, above the %s this import would start from; a floor is never lowered (the bundle is older than a state signed here, or the restore height is too low)", recorded, floor)
-	}
-	if err := h.writeFloor(pub, source); err != nil {
-		return nil, err
+	if err := h.updateFloor(pub, source, neverLower); err != nil {
+		return nil, fmt.Errorf("the bundle is older than a state this key signed here, or the restore height is too low: %w", err)
 	}
 	write := existing == nil
 	if existing != nil {

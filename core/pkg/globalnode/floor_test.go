@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/crypto/nacl/box"
@@ -169,11 +171,56 @@ func TestCheckSignFloor_importingAnotherKeyKeepsTheFirstKeysFloor(t *testing.T) 
 
 func TestReadFloors_unrecognisedFileSaysWhatAndHow(t *testing.T) {
 	h := newHost(t)
-	for _, bad := range []string{`{"pub_key":"x","state":{}}`, `not json`, `{"floors":{"k":{"height":1}}}`} {
+	for bad, found := range map[string]string{
+		`{"pub_key":"x","state":{}}`:    `unknown field "pub_key"`,
+		`not json`:                      "invalid character",
+		`{"floors":{"k":{"height":1}}}`: "the entry for key k",
+		`{"floors":{}} {"floors":{}}`:   "data after the JSON object",
+		`{}`:                            `no "floors" object`,
+	} {
 		write(t, h.floorPath(), []byte(bad))
 		err := h.CheckSignFloor()
-		if err == nil || !strings.Contains(err.Error(), "is not a sign floor file") || !strings.Contains(err.Error(), "re-record") {
-			t.Errorf("%s: err = %v", bad, err)
+		if err == nil || !strings.Contains(err.Error(), found) || !strings.Contains(err.Error(), "move it aside, then write") ||
+			!strings.Contains(err.Error(), "validator-state-*.json") {
+			t.Errorf("%s: err = %v, want it to name %q and the manual repair", bad, err, found)
 		}
+	}
+}
+
+func TestUpdateFloor_concurrentWritersKeepEveryKey(t *testing.T) {
+	h := newHost(t)
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- h.updateFloor("key-"+strconv.Itoa(i), stateJSON(strconv.Itoa(i+1), 0, 3), neverLower)
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	floors, err := h.readFloors()
+	if err != nil || len(floors) != writers {
+		t.Fatalf("floors = %v (%v), want all %d keys", floors, err, writers)
+	}
+}
+
+func TestExportMigration_refusesAStateBehindItsFloor(t *testing.T) {
+	h := newHost(t)
+	write(t, h.floorPath(), floorJSON(t, read(t, h.KeyPath), stateJSON("900", 0, 3)))
+	write(t, h.StatePath, stateJSON("100", 0, 3))
+	pub, _, _ := box.GenerateKey(rand.Reader)
+	if _, _, err := h.ExportMigration(pub, stopped); err == nil || !strings.Contains(err.Error(), "never lowered") {
+		t.Fatalf("err = %v, want the state behind the floor refused", err)
+	}
+	if _, err := os.Stat(h.KeyPath); err != nil {
+		t.Fatal("a refused export moved the key")
 	}
 }

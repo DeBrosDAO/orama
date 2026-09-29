@@ -200,9 +200,23 @@ export is in progress. With any floor recorded, the chain starts only when a
 `priv_validator_key.json` is in the chain home, and, when a floor is recorded
 for that key, only when `priv_validator_state.json` is not behind it. Each key
 keeps its own floor: importing another key adds its entry and never removes
-one, and an import never lowers a key's floor. A file in any other format stops
-the chain until it is moved aside and the floors are re-recorded by importing
-the bundles again. The floor, the migration key and the key copies are
+one, and an import never lowers a key's floor; an export also refuses a chain
+home whose state is behind that key's floor. Exports and imports hold an
+exclusive lock (`validator-sign-floor.lock`) while they update the file.
+
+A floor file in any other format (anything but one JSON object of that shape)
+stops the chain. A bundle cannot be imported again (its one-time key is gone),
+so repair it by hand: move the file aside, then write it again, root-owned,
+mode 0600, with one entry per migrated key. The key is the `pub_key` value of
+its `priv_validator_key.json`, or of its `validator-key-*.json` copy in
+`/var/lib/orama-global`. The state is its last known
+`priv_validator_state.json`: the newest of the chain home's
+`data/priv_validator_state.json`, the `validator-state-*.json` copies in
+`/var/lib/orama-global`, and the state file of any other host that ran the key.
+Check that state before you write it: a floor below what the key signed does
+not protect it.
+
+The floor, the migration key and the key copies are
 trusted only while `/var/lib/orama-global` is root's and not writable by its
 group or others; otherwise every one of these commands, and the check, refuses.
 `orama global install` and `orama global start` print a warning when this
