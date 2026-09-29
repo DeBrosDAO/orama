@@ -14,6 +14,7 @@ import (
 
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/client"
+	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	"github.com/cosmos/cosmos-sdk/crypto/hd"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
@@ -41,6 +42,7 @@ const (
 var (
 	txConfigOnce sync.Once
 	sharedCfg    client.TxConfig
+	sharedReg    codectypes.InterfaceRegistry
 )
 
 // oramaTxConfig is the chain app's encoder, the same TxConfig oramad builds.
@@ -51,9 +53,18 @@ func oramaTxConfig(t *testing.T) client.TxConfig {
 		app.SetAddressPrefixes()
 		oramaApp := app.NewOramaApp(log.NewNopLogger(), dbm.NewMemDB(), false, simtestutil.EmptyAppOptions{})
 		sharedCfg = oramaApp.TxConfig()
+		sharedReg = oramaApp.InterfaceRegistry()
 	})
 	require.NotNil(t, sharedCfg)
 	return sharedCfg
+}
+
+// oramaInterfaceRegistry is the chain app's registry: every registered Msg.
+func oramaInterfaceRegistry(t *testing.T) codectypes.InterfaceRegistry {
+	t.Helper()
+	oramaTxConfig(t)
+	require.NotNil(t, sharedReg)
+	return sharedReg
 }
 
 func newBuilder(t *testing.T) *oramatx.Builder {
