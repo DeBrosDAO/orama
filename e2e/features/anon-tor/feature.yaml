@@ -1,0 +1,28 @@
+# The anonymity proxy: POST /v1/proxy/anon through Tor (a public page, the
+# DESTINATION_NOT_ALLOWED matrix, schemes and methods, a signed-in user with
+# the proxy grant and never a key alone, Tor exits for every user), the
+# WebSocket tunnel (end-to-end TLS to a public site, port/host refusals,
+# authentication), the Tor unit's facts on every node (client only, loopback
+# SOCKS with IsolateSOCKSAuth, internal addresses refused, IPAddressDeny) and
+# checks.anon_proxy. Tor stopped is anon-tor-chaos.
+id: anon-tor
+title: Anonymity proxy and Tor
+area: network
+subtasks: [2840]
+stage: 6
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/proxy/anon
+    - /v1/proxy/tunnel
+  units:
+    - orama-namespace-tor@.service
+  claims:
+    - "docs/ARCHITECTURE.md: torrc SocksPort 127.0.0.1:9050 IsolateSOCKSAuth, ClientOnly 1, ORPort 0, ClientRejectInternalAddresses 1"
+    - "docs/ARCHITECTURE.md: /v1/health reports checks.anon_proxy ok"
+    - "docs/API_SURFACE.md#network-and-proxy: the proxy and the tunnel need a logged-in user with the proxy grant; a key alone is USER_JWT_REQUIRED"
+    - "docs/SECURITY.md#tenant-isolation: literal internal destinations are DESTINATION_NOT_ALLOWED; the tunnel reaches only ports 80 and 443"

@@ -1,0 +1,48 @@
+# Stage 8, non-destructive half of E2E-28: the co-hosted validators agree on
+# every block, the x/fees fee market (base fee floor, burn, earnings
+# fallback, tips and fee grants that may not draw on earnings), the norama
+# send restriction, authority-gated messages nobody can sign, transaction
+# edge cases (replay, sequence, account number, chain id, signer, tamper,
+# gas, timeout, memo, unfunded payer) and staking funded from earnings
+# (MinDelegation, UndelegateGuard). Every state-changing step ends with every
+# module's Invariants query on every validator. Transactions are signed on
+# the node by the validator's own keyring (features/internal/chain).
+# The destructive half (stop/restart catch-up, fee load, export) is
+# chain-core-destructive.
+id: chain-core
+title: Chain consensus, fees, send restriction, authority and staking
+area: chain
+subtasks: [2847]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  queries:
+    - orama.fees.v1.Params
+    - orama.fees.v1.BaseFee
+    - orama.fees.v1.Earnings
+    - orama.fees.v1.Invariants
+    - orama.emission.v1.CurrentEpoch
+    - orama.emission.v1.Invariants
+    - orama.houses.v1.Invariants
+    - orama.nodes.v1.Invariants
+    - orama.relay.v1.Invariants
+    - orama.storage.v1.Invariants
+    - orama.token.v1.Invariants
+    - orama.power.v1.Params
+    - orama.power.v1.Lambda
+  claims:
+    - "docs/CHAIN.md#x-fees: a fee below base_fee*gas is refused; the base fee is burned in full and paid from earnings when the bank balance is empty"
+    - "docs/CHAIN.md#x-fees: a tip is paid from the bank balance only, never from earnings"
+    - "docs/CHAIN.md#x-fees: a fee granter never draws on earnings"
+    - "docs/CHAIN.md#x-fees: on an idle chain the base fee sits at min_base_fee (1 norama/gas)"
+    - "docs/CHAIN.md#denom-and-accounts: a user-to-user norama send is refused, and a user cannot pay a module account"
+    - "docs/CHAIN.md#modules-wired: every authority-gated message is unreachable (the orama/no-authority module address)"
+    - "docs/CHAIN.md#x-power: MinDelegationForRewards refuses dust delegations and partial withdrawals below it; a full exit is allowed"
+    - "docs/CHAIN.md#x-power: UndelegateGuard locks force-bonded self-bond while lambda < 1"
+    - "docs/CHAIN.md#x-power: a bond is topped up from the signer's own earnings (BondTopUpDecorator)"
+    - "docs/CHAIN.md#x-power: the BondTopUp top-up of a refused bond leaves no public balance"
+    - "docs/SECURITY_PLAYBOOKS.md: every module invariant holds on every validator after each step"

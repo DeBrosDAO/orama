@@ -1,0 +1,17 @@
+# The per-address capability upgrade limit, which needs a flood: this
+# runner's address spends a gateway's whole capability-upgrade bucket, so the
+# package runs alone, with the run's credential pacer held before and after
+# the flood. The rest of the capability walk is auth-capability-ws.
+id: auth-capability-ws-chaos
+title: Capability WebSocket upgrade limit
+area: auth
+subtasks: [2827]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  claims:
+    - "docs/AUTH.md#capability-websockets: capability upgrades are limited per client address (60 a minute, burst 20)"

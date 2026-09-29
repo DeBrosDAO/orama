@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,11 +30,18 @@ const archiveSigningPrefix = "Orama build archive v1"
 const loginFreshnessSkew = 2 * time.Minute
 
 // IsRootWalletInstalled checks if the rootwallet agent is reachable.
+//
+// An agent the e2e guard refuses (ORAMA_E2E=1 with RW_AGENT_SOCK empty or
+// pointing at the real wallet) is reported as present: the caller then takes
+// the RootWallet path, whose first agent call returns the guard's error
+// (rwagent.ErrE2EGuard), instead of reading the refusal as "no wallet here"
+// and falling into an interactive device login.
 func IsRootWalletInstalled() bool {
 	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	return client.IsRunning(ctx)
+	_, err := client.Status(ctx)
+	return err == nil || errors.Is(err, rwagent.ErrE2EGuard)
 }
 
 // getRootWalletAddress gets the EVM address from the rootwallet agent.

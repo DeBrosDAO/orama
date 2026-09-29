@@ -1,0 +1,37 @@
+# The network module's four routes, the peer map and topology mutation, as
+# the SDK and an operator meet them on the public name: no credential and a
+# garbage token (401 on every node), everyone who is not an operator refused
+# by the route policy (the owner and its admin key by the operator list,
+# NOT_AN_OPERATOR; a runtime member, a storage key and a lobby session by the
+# scope gate, INSUFFICIENT_SCOPE), an operator's session on another
+# namespace's host (NAMESPACE_MISMATCH), a forged coordination stamp (404
+# from the internet with or without a session and from a node on the
+# overlay); an operator's status (documented members only, peer id,
+# connected, storage addresses without loopback, no secret) and peers
+# (/p2p/ ids and multiaddrs, the gateway's own first) on every node;
+# malformed, mistyped, unicode and 2 MiB bodies and the wrong method (4xx,
+# never 5xx); connects to loopback, private, overlay and host-name targets
+# under a peer nobody holds (never 2xx, never 500, never listed); disconnect
+# from an unconnected peer and connect to a connected one, each twice
+# (idempotent, the peers list unchanged). Every refusal body is invalid by
+# construction, so a missing gate shows as a 400 and moves no connection.
+# Floods (429) of these routes belong in a destructive package.
+id: network-routes
+title: Network status, peers, connect and disconnect
+area: network-edge
+subtasks: [2829]
+stage: 4
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/network/status
+    - /v1/network/peers
+    - /v1/network/connect
+    - /v1/network/disconnect
+  claims:
+    - "docs/API_SURFACE.md#network-and-proxy: /v1/network/peers and /v1/network/status are an operator's (operator grant and the operator list), or another node's with a coordination MAC over the mesh; no longer open to anyone"
+    - "docs/API_SURFACE.md#network-and-proxy: /v1/network/connect and /v1/network/disconnect are topology mutation, never reachable by a namespace owner who is not an operator"

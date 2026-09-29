@@ -50,9 +50,31 @@ vault-test:
 os-build:
 	$(MAKE) -C os
 
+# === Fleet e2e (e2e/, see e2e/README.md) ===
+.PHONY: e2e-fleet e2e-coverage e2e-lint e2e-test-unit
+E2E_INFISICAL_PROJECT := cea224be-3999-4e8d-bd9b-f9a89c94e7fa
+E2E_INFISICAL_DOMAIN  := https://infisical.debros.io/api
+# The coverage gate does not block `make test` until the feature packages
+# land; set it to 1 then (e2e/README.md, "Coverage gate").
+E2E_COVERAGE_ENFORCE ?= 0
+# Extra flags for `e2e-fleet run`, e.g. E2E_FLAGS=--keep-on-fail
+E2E_FLAGS ?=
+
+e2e-fleet:
+	cd e2e && infisical run --projectId $(E2E_INFISICAL_PROJECT) --env=e2e --domain $(E2E_INFISICAL_DOMAIN) -- go run ./cmd/e2e-fleet run $(E2E_FLAGS)
+
+e2e-coverage:
+	cd e2e && E2E_COVERAGE_ENFORCE=$(E2E_COVERAGE_ENFORCE) go run ./cmd/e2e-fleet coverage
+
+e2e-lint:
+	cd e2e && go vet ./... && go vet -tags e2e_fleet ./... && go test ./lint/...
+
+e2e-test-unit:
+	cd e2e && go test ./...
+
 # === Aggregate ===
 build: core-build
-test: core-test
+test: core-test e2e-lint e2e-coverage e2e-test-unit
 clean: core-clean
 
 help:
@@ -62,5 +84,6 @@ help:
 	@echo "  Website:       make website-dev | website-build"
 	@echo "  Vault (Zig):   make vault-build | vault-test"
 	@echo "  OS:            make os-build"
+	@echo "  Fleet e2e:     make e2e-fleet | e2e-coverage | e2e-lint | e2e-test-unit"
 	@echo ""
 	@echo "  Aggregate:     make build | test | clean  (delegates to core)"

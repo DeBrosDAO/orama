@@ -1039,15 +1039,59 @@ Standard `oramad` commands work as on any Cosmos SDK chain, e.g. `oramad init <m
 
 ## Explorer
 
-The website explorer (`website/src/pages/explorer.tsx`, `website/src/explorer`) reads the
-chain through the gateway. The browser calls `/v1/chain/…` on the same origin. It does not
-open CometBFT (`127.0.0.1:31001`) or the SDK REST API (`127.0.0.1:31003`).
+The website explorer (`website/src/explorer`, mounted at `/explorer` by `website/src/pages/explorer.tsx`)
+**runs on demo data today. It does not read the chain.** The header, the footer and the tab title
+say "demo", and none of the wallets or transactions it shows exist.
 
-`core/pkg/gateway/handlers/chainread.Register` mounts a read-only proxy at `/v1/chain/` on the
-mux it is given. `core/pkg/gateway/routes.go` does not call it. The upstream bases are
-`ORAMA_CHAIN_RPC_URL` and `ORAMA_CHAIN_REST_URL`, defaulting to those two loopback URLs.
-The caller's path is not forwarded. Anything outside this list is refused, and the upstream
-body is copied unchanged:
+Layout of `website/src/explorer`:
+
+| Folder | Holds |
+|---|---|
+| `model/` | domain types (`types.ts`), ORAMA/norama formatting (`units.ts`), what a pasted string is (`search.ts`, with a bech32 checksum check), the investigation trail (`trail.ts`), and how a transaction reads as a sentence (`describe.ts`) |
+| `data/` | the `ExplorerDataSource` interface (`source.ts`), the React provider and the `useQuery` / `useLiveQuery` hooks |
+| `data/demo/` | the demo source: a seeded simulation of about 20,000 transactions over 30 days (transfers, staking, reward claims, storage deals, failed transactions) that replays every balance, so each transaction's before/after rows sum to zero and total supply is conserved. History is anchored to the start of the UTC day, so a link keeps working across reloads within a day; the head advances every 2 s |
+| `ui/` | shared building blocks (amounts, wallet links, sentences, transaction rows, help tips) |
+| `shell/` | the header, the ⌘K search palette, the investigation trail bar, and the transaction preview drawer |
+| `pages/` | Home, Transaction, Block, Wallet, and Validators (the λ hand-over is a card on that page) |
+
+Pages only ever call `ExplorerDataSource`. Its contract is written per method in `data/source.ts`:
+a lookup for something that does not exist resolves to `null` (never an invented empty record); a
+real failure rejects with a readable `Error`; ordering is stated per method; pagination is
+cursor-based and a bad cursor is rejected; limits are clamped. Connecting the explorer to the chain
+means writing one implementation of that interface and passing it to `<ExplorerApp source={…}>`.
+Nothing in `ui/`, `shell/` or `pages/` changes.
+
+That implementation needs an indexer. The pages ask for things CometBFT and the SDK REST API cannot
+serve directly: every transaction of a wallet, its counterparties, its balance over time, and the
+transactions of a block, decoded. `tx_search` is capped at 100 per page and is not a public API.
+`x/emission`, `x/fees`, `x/power`, `x/nodes`, `x/storage` and `x/houses` speak gRPC only and have no
+REST annotations.
+
+### What the chain adapter must do
+
+The UI trusts its data source; these are the adapter's duties, because chain data is written by
+anyone:
+
+- Validate every amount as a base-unit integer string of bounded length before returning it; a
+  malformed record must reject the query (an error box), not reach a page.
+- Strip control and bidirectional-override characters from labels, monikers, memos and failure
+  reasons. `verified` on a wallet must come from a curated registry shipped with the site, never
+  from a chain-writable field.
+- Percent-encode every path segment and query value when building indexer requests, and return
+  reader-safe error messages (no internal hostnames or raw upstream errors).
+- Clamp `limit` and search-query length, and keep the indexer's search rate-limited: the palette
+  sends a debounced query while the reader types.
+- Serve only finalized blocks as the head.
+
+### The gateway's chain proxy
+
+`core/pkg/gateway/routes.go` mounts `chainread` (`core/pkg/gateway/handlers/chainread`) at
+`/v1/chain/`, a read-only proxy in front of CometBFT and the SDK REST API. **The explorer does not
+use it yet.** If `chainread.New` fails at start-up the route answers `503 chain proxy is
+misconfigured`. The upstream bases are `ORAMA_CHAIN_RPC_URL` and `ORAMA_CHAIN_REST_URL`, defaulting
+to the loopback CometBFT (`127.0.0.1:31001`) and SDK REST API (`127.0.0.1:31003`) ports. The caller's
+path is not forwarded. Anything outside this list is refused, and the upstream body is copied
+unchanged:
 
 | Gateway path | Upstream |
 |---|---|
@@ -1060,8 +1104,7 @@ body is copied unchanged:
 | `GET /v1/chain/staking/pool` | REST `GET /cosmos/staking/v1beta1/pool` |
 
 `x/emission`, `x/fees`, and `x/power` are not on this list: they speak gRPC and have no REST
-annotations. Neither are per-account bank balances. The explorer does not invent rows for a
-query this proxy does not serve.
+annotations. Neither are per-account bank balances.
 
 ## Building
 

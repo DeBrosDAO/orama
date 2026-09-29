@@ -1,0 +1,33 @@
+# Invites without spending one: what `orama invite` and `orama node invite`
+# mint (the node they name, the certificate they pin, the expiry and its
+# cap), that the registry stores only the token's hash, and every refusal
+# of the join route that happens before a token is consumed: malformed
+# bodies, unknown and expired tokens, and a live node's identity (409, token
+# kept) under a burst of concurrent joins. The joins that spend a token are
+# in invite-join-destructive.
+id: invite-join
+title: Invite minting and join refusals
+area: infrastructure
+subtasks: [2821]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama invite
+    - orama node invite
+  routes:
+    - /v1/operator/invite
+    - /v1/internal/join
+  claims:
+    - "docs/SECURITY.md#authentication: a node signs with an Ed25519 key it generated itself; the cluster holds only the public half in node_credentials"
+    - "docs/SECURITY.md#supply-chain: a joiner expecting other archive signers is refused with 409 before the invite is spent or a peer row written"
+    - "docs/SECURITY.md#tls--transport: the invite carries the SHA-256 of the certificate the minting node serves"
+    - "docs/SECURITY.md#supply-chain: invite tokens are stored as sha256 hashes, never the token"
+    - "docs/CLI_REFERENCE.md#orama-invite: the gateway caps an invite at 1h"
+    - "docs/CLI_REFERENCE.md#orama-invite: --expiry is how long the invite stays usable"
+    - "docs/CLI_REFERENCE.md#orama-node-invite: the default expiry is 1h and --raw prints only the invite"
+    - "docs/AUTH.md#operating-the-cluster: the invite route refuses no credential (401) and a non-operator (403 NOT_AN_OPERATOR)"

@@ -1,0 +1,32 @@
+# The index rqlite, observed: authentication on every endpoint from every
+# node of the mesh (code and docs agree: rqlited always runs with -auth),
+# rqlited's own command line, its HTTP and raft ports bound to the
+# WireGuard address only, the raft identity markers beside raft.db, one
+# leader every node agrees on, identical reads at every consistency level,
+# the schema in sync (node schema status/apply and /v1/schema-status), and
+# the operator health route's refusals.
+id: rqlite-raft
+title: Index rqlite authentication, raft identity and schema
+area: infrastructure
+subtasks: [2823]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node schema
+    - orama node schema status
+    - orama node schema apply
+  routes:
+    - /v1/schema-status
+    - /v1/operator/health
+  units:
+    - orama-namespace-rqlite@.service
+  claims:
+    - "docs/SECURITY.md#network-isolation: rqlited always runs with -auth; an unauthenticated POST /db/execute from the mesh is 401"
+    - "docs/SECURITY.md#network-isolation: rqlite HTTP and raft bind the WireGuard address"
+    - "docs/CLI_REFERENCE.md#orama-node-migrate-raft-id: a node records the raft id it runs as, and its raft address, beside raft.db"
+    - "docs/API_SURFACE.md: /v1/schema-status reports the applied schema is the required one"

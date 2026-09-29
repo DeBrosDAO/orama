@@ -1,0 +1,26 @@
+# Olric under failure: a member stopped and brought back by the tenant
+# reconciler while the survivors serve, every member frozen so each gateway
+# drops its client (503) and reconnects in place, and every member crashed to
+# prove the cache holds nothing on disk. Runs alone: it disturbs every node.
+id: cache-chaos
+title: Namespace cache under member loss, supervision and crashes
+area: data-plane
+subtasks: [2834]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/cache/get
+    - /v1/cache/health
+    - /v1/cache/put
+  units:
+    - orama-namespace-olric@.service
+    - orama-namespace-gateway@.service
+  claims:
+    - "docs/ARCHITECTURE.md#olric-is-supervised: after three failed probes the gateway drops its client, answers 503, and reconnects without a restart"
+    - "docs/ARCHITECTURE.md#the-tenant-plane-converges: the reconciler starts a stopped tenant service within a sweep"
+    - "docs/ARCHITECTURE.md: Olric v0.7.0 is in-memory only; a crash of every member loses every entry"

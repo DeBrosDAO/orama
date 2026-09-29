@@ -1,0 +1,38 @@
+# Ordered stages of a fleet e2e run. A feature's manifest (features/<id>/feature.yaml)
+# names its stage. Inside a stage, non-destructive packages run in parallel;
+# destructive ones run alone, after them. The timeout is per package (go test -timeout).
+# Ids must run 1..11 in order: harness/manifest.MaxStage.
+stages:
+  - id: 1
+    name: bootstrap
+    timeout: 30m
+  - id: 2
+    name: namespaces
+    timeout: 30m
+  - id: 3
+    name: auth
+    timeout: 30m
+  - id: 4
+    name: data-plane
+    timeout: 30m
+  - id: 5
+    name: deployments-serverless
+    timeout: 45m
+  - id: 6
+    name: realtime
+    timeout: 45m
+  - id: 7
+    name: security-audit
+    timeout: 30m
+  - id: 8
+    name: chain
+    timeout: 45m
+  - id: 9
+    name: ops
+    timeout: 60m
+  - id: 10
+    name: upgrade
+    timeout: 60m
+  - id: 11
+    name: chaos-soak
+    timeout: 120m

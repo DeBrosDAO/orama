@@ -115,3 +115,7 @@ core/identity
 
 # Scratch plans kept outside core/plans
 plans/
+
+# e2e fleet runner build output
+/e2e/e2e-fleet
+/e2e/cmd/e2e-fleet/e2e-fleet

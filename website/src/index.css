@@ -16,6 +16,10 @@
   --color-accent-2: #d4d4d8;
   /* The one non-grey: marks "not yet" states (alpha, roadmap, With Orama One). */
   --color-signal: #fbbf24;
+  /* Explorer: money in, money out or failed, and a raised surface. */
+  --color-gain: #86efac;
+  --color-loss: #fca5a5;
+  --color-surface-3: #1c1c20;
 }
 
 /* Use-of-funds ramp (components/visuals/funding-donut.tsx), largest slice first. */
@@ -98,6 +102,12 @@
       transform: rotate(360deg);
     }
   }
+}
+
+/* Explorer: one visible keyboard focus ring for every link, button and tab. */
+.explorer :focus-visible {
+  outline: 2px solid var(--color-accent-2);
+  outline-offset: 2px;
 }
 
 @layer utilities {

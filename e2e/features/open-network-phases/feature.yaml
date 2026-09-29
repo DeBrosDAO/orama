@@ -1,0 +1,63 @@
+# One acceptance test per delivered phase of the Open Network plan
+# (plans/open-network/INDEX.md): tracks A (private clusters), B (cluster-node
+# isolation and the global role), C (the L1, by reference to the chain
+# packages), D (storage client), E (Tor network) and F (RootWallet items that
+# touch the network). The plan's own status lines were never updated, so a
+# phase counts as delivered when this checkout's docs document its
+# behaviour; a delivered phase whose behaviour is absent FAILS, and a phase
+# the docs do not document is not applicable, naming the plan section.
+# Destructive only because A3 changes the cluster's namespace-creation mode
+# (restored to open): it must not run beside packages that create namespaces.
+id: open-network-phases
+title: Open Network phases - acceptance per delivered phase
+area: platform
+subtasks: [2854]
+stage: 9
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama operator list
+    - orama env list
+    - orama env current
+    - orama env use
+    - orama cluster settings set
+    - orama cluster settings show
+    - orama node stage-archive
+    - orama node autoupdate
+    - orama node dns delegation
+    - orama auth login
+    - orama namespace create
+    - orama namespace delete
+    - orama deploy static
+    - orama cluster register-onchain
+    - orama namespace backup
+    - orama namespace restore
+    - orama namespace restore-key
+    - orama global bind
+    - orama global stage-oramad
+    - orama storage seal
+    - orama storage open
+    - orama monitor report
+  routes:
+    - /v1/namespaces
+    - /v1/operator/health
+    - /v1/rqlite/exec
+    - /v1/rqlite/query
+  claims:
+    - "plans/open-network/track-a-private-clusters.md#a1-genesis-seeds-the-operator-list-operator-admin-commands: the genesis wallet operates the cluster without SQL"
+    - "plans/open-network/track-a-private-clusters.md#a2-remove-owner-fleet-defaults: a fresh CLI points at no one's cluster"
+    - "plans/open-network/track-a-private-clusters.md#a3-namespace-creation-policy: the owner decides who creates namespaces"
+    - "plans/open-network/track-a-private-clusters.md#a4-installable-releases-under-the-tuf-release-trust: a release that does not verify under TUF is refused before anything is extracted"
+    - "plans/open-network/track-a-private-clusters.md#a5-auto-update-agent-ubuntu-clusters: notify is the default; a validator is never auto"
+    - "plans/open-network/track-a-private-clusters.md#a6-dns-delegation-ux: delegation prints the records for every nameserver"
+    - "docs/RUN_YOUR_OWN_CLUSTER.md#use-it: env use, auth login, namespace create, auth login --namespace, deploy static"
+    - "docs/CLI_REFERENCE.md#orama-cluster-register-onchain: the row carries no node address"
+    - "docs/RUN_YOUR_OWN_CLUSTER.md#a-sealed-backup: a sealed backup restores the namespace database"
+    - "docs/SECURITY.md#process-isolation: CoreDNS runs as orama-coredns and its Corefile is root:orama-coredns 0640"
+    - "docs/MONITORING.md: a node running the chain reports its chain section"
+    - "docs/CLI_REFERENCE.md#orama-global-stage-oramad: an oramad that does not verify is not staged"
+    - "docs/CHAIN.md#client-side: a sealed slot opens only with the right seeds"

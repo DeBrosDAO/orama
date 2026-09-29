@@ -2,11 +2,15 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
 // What the CLI signs is the whole of what the signature means. It used to sign
@@ -207,5 +211,24 @@ func TestVerifySignature_sendsTheMessageAndNothingElse(t *testing.T) {
 	}
 	if creds.APIKey != "ak_1" {
 		t.Errorf("api key = %q", creds.APIKey)
+	}
+}
+
+func TestIsRootWalletInstalled_e2eGuardRefusalIsNotNoWallet(t *testing.T) {
+	t.Setenv(rwagent.E2EEnvVar, "1")
+	t.Setenv("RW_AGENT_SOCK", "")
+	if !IsRootWalletInstalled() {
+		t.Fatal("the e2e guard's refusal read as 'no wallet here': login would fall into the device flow")
+	}
+	if _, err := getRootWalletAddress(); !errors.Is(err, rwagent.ErrE2EDefaultSocket) {
+		t.Fatalf("the RootWallet path did not surface the guard's refusal: %v", err)
+	}
+}
+
+func TestIsRootWalletInstalled_unreachableAgentIsNoWallet(t *testing.T) {
+	t.Setenv(rwagent.E2EEnvVar, "")
+	t.Setenv("RW_AGENT_SOCK", filepath.Join(t.TempDir(), "absent.sock"))
+	if IsRootWalletInstalled() {
+		t.Fatal("an agent that does not answer was reported as installed")
 	}
 }
