@@ -33,6 +33,20 @@ func TestBase(t *testing.T) {
 		"scheme":        {in: "http://" + testOnion, bad: true},
 		"empty":         {in: "", bad: true},
 		"empty port":    {in: testOnion + ":", bad: true},
+		// The label has the right length but is not base32: 0, 1, 8, 9 and every non-letter are outside a-z2-7.
+		"digit outside base32": {in: strings.Repeat("a", 55) + "1.onion", bad: true},
+		"zero":                 {in: strings.Repeat("a", 55) + "0.onion", bad: true},
+		"eight":                {in: strings.Repeat("b", 55) + "8.onion", bad: true},
+		"dash":                 {in: strings.Repeat("a", 55) + "-.onion", bad: true},
+		"underscore":           {in: strings.Repeat("a", 55) + "_.onion", bad: true},
+		"non-ascii":            {in: strings.Repeat("a", 55) + "é.onion", bad: true},
+		"port not a number":    {in: testOnion + ":http", bad: true},
+		"port zero":            {in: testOnion + ":0", bad: true},
+		"port too large":       {in: testOnion + ":65536", bad: true},
+		"port signed":          {in: testOnion + ":+80", bad: true},
+		"port leading zero":    {in: testOnion + ":080", bad: true},
+		"port with a path":     {in: testOnion + ":80/x", bad: true},
+		"top port":             {in: testOnion + ":65535", want: "http://" + testOnion + ":65535"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -327,5 +341,38 @@ func TestClient_refusesRedirectsOffTheOnionService(t *testing.T) {
 	}
 	if n := len(proxy.connects()); n != 1 {
 		t.Fatalf("proxy saw %d connections, want 1", n)
+	}
+}
+
+func TestValidateSOCKS(t *testing.T) {
+	good := []string{"127.0.0.1:9050", "127.0.0.1:1", "127.1.2.3:9150", "[::1]:9050", "localhost:9050", "127.0.0.1:65535"}
+	for _, addr := range good {
+		if err := chainonion.ValidateSOCKS(addr); err != nil {
+			t.Errorf("ValidateSOCKS(%q) = %v, want nil", addr, err)
+		}
+	}
+	bad := []string{
+		"", "9050", ":9050", "127.0.0.1", "127.0.0.1:", "127.0.0.1:tor", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:-1",
+		"127.0.0.1:+9050", "127.0.0.1:09050", "10.0.0.1:9050", "192.168.1.5:9050", "8.8.8.8:9050", "0.0.0.0:9050", "[::]:9050",
+		"tor.example.com:9050", "example.onion:9050", "127.0.0.1.example.com:9050", "2130706433:9050", "0x7f.1:9050",
+		"[fe80::1%eth0]:9050", "localhost.example.com:9050", "socks5://127.0.0.1:9050", "127.0.0.1:9050/x", "user@127.0.0.1:9050",
+	}
+	for _, addr := range bad {
+		if err := chainonion.ValidateSOCKS(addr); err == nil {
+			t.Errorf("ValidateSOCKS(%q) = nil, want an error", addr)
+		}
+	}
+}
+
+// A SOCKS address that is not local is refused before any client exists, so a transaction and its
+// circuit credential are never handed to another host.
+func TestNewClient_refusesANonLoopbackProxy(t *testing.T) {
+	for _, addr := range []string{"10.0.0.1:9050", "tor.example.com:9050", "127.0.0.1:tor"} {
+		if c, err := chainonion.NewClient(addr); err == nil || c != nil {
+			t.Errorf("NewClient(%q) = %v, %v; want an error", addr, c, err)
+		}
+	}
+	if c, err := chainonion.NewClient(""); err != nil || c == nil {
+		t.Errorf("the default SOCKS address must be accepted: %v", err)
 	}
 }

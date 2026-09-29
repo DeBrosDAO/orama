@@ -79,6 +79,27 @@ func TestChainTarget_clearnetHostIsRefusedAsOnion(t *testing.T) {
 	}
 }
 
+// --onion-socks names a Tor daemon on this machine: a loopback host and a numeric port. A remote
+// or named proxy would carry the transaction and its circuit credential to another host.
+func TestChainTarget_socksMustBeALoopbackHostAndNumericPort(t *testing.T) {
+	t.Setenv(OnionEnv, "")
+	t.Setenv(OnionSOCKSEnv, "")
+	for _, socks := range []string{"10.0.0.1:9050", "tor.example.com:9050", "127.0.0.1:tor", "127.0.0.1", "8.8.8.8:9050"} {
+		_, _, err := chainTarget(onionCmd(t, "--onion", testOnion, "--onion-socks", socks), context.Background(), "")
+		if err == nil || !strings.Contains(err.Error(), "--onion-socks") {
+			t.Errorf("--onion-socks %q: err = %v, want a usage error naming the flag", socks, err)
+		}
+	}
+	t.Setenv(OnionSOCKSEnv, "192.168.1.9:9050")
+	if _, _, err := chainTarget(onionCmd(t, "--onion", testOnion), context.Background(), ""); err == nil {
+		t.Error("the variable form is held to the same rule")
+	}
+	t.Setenv(OnionSOCKSEnv, "")
+	if _, _, err := chainTarget(onionCmd(t, "--onion", testOnion, "--onion-socks", "127.0.0.1:9150"), context.Background(), ""); err != nil {
+		t.Errorf("a loopback proxy is refused: %v", err)
+	}
+}
+
 // With Tor unreachable, SubmitDirect fails before signing and nothing goes out
 // on the clearnet: the default transport is trapped and no --node exists.
 func TestSubmitDirect_onionWithTorDownFailsWithoutClearnet(t *testing.T) {

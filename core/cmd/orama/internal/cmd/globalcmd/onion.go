@@ -25,7 +25,7 @@ func AddOnionFlags(f interface {
 	String(name, value, usage string) *string
 }) {
 	f.String(onionFlag, "", "Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($"+OnionEnv+")")
-	f.String(onionSOCKSFlag, "", "Tor SOCKS5 address for --onion (default "+chainonion.DefaultSOCKS+", $"+OnionSOCKSEnv+")")
+	f.String(onionSOCKSFlag, "", "Tor SOCKS5 address for --onion, a loopback host:port (default "+chainonion.DefaultSOCKS+", $"+OnionSOCKSEnv+")")
 }
 
 // flagOrEnv is the flag's value, else the variable's.
@@ -53,7 +53,13 @@ func chainTarget(cmd *cobra.Command, ctx context.Context, node string) (context.
 	if err != nil {
 		return ctx, "", clierr.Usage("--onion: %v", err)
 	}
-	client, err := chainonion.NewClient(flagOrEnv(cmd, onionSOCKSFlag, OnionSOCKSEnv))
+	socks := flagOrEnv(cmd, onionSOCKSFlag, OnionSOCKSEnv)
+	if socks != "" {
+		if err := chainonion.ValidateSOCKS(socks); err != nil {
+			return ctx, "", clierr.Usage("--onion-socks: %v", err)
+		}
+	}
+	client, err := chainonion.NewClient(socks)
 	if err != nil {
 		return ctx, "", clierr.Failure("%v", err)
 	}

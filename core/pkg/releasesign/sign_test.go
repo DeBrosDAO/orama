@@ -164,3 +164,62 @@ func TestSign_realClientRefusesTheArchivePurposeForReleases(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPurposeMismatch", err)
 	}
 }
+
+// Signing metadata again replaces the signature under the release key instead of stacking a
+// second one: a duplicate under one key id counts once toward a threshold and makes the published
+// bytes differ from what was verified. Another key's signature is left alone.
+func TestSign_signingAgainReplacesTheSignatureUnderTheSameKey(t *testing.T) {
+	pub, priv := newKey(t)
+	meta := targetsMeta(t)
+	other := metadata.Signature{KeyID: "another-key-id", Signature: []byte("another signature")}
+	meta.Signatures = []metadata.Signature{other, {KeyID: "stale", Signature: []byte("stale")}}
+	agent := &localAgent{key: priv}
+
+	if err := releasesign.Sign(context.Background(), agent, meta, pub); err != nil {
+		t.Fatal(err)
+	}
+	if err := releasesign.Sign(context.Background(), agent, meta, pub); err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Signatures) != 3 {
+		t.Fatalf("signatures = %d after signing twice, want 3 (two others and one under the release key)", len(meta.Signatures))
+	}
+	key, _ := metadata.KeyFromPublicKey(pub)
+	keyID, _ := key.ID()
+	var ours, others int
+	for _, sig := range meta.Signatures {
+		if sig.KeyID == keyID {
+			ours++
+		} else {
+			others++
+		}
+	}
+	if ours != 1 || others != 2 {
+		t.Fatalf("%d signatures under the release key and %d under others, want 1 and 2", ours, others)
+	}
+	if err := rootFor(t, pub).VerifyDelegate(metadata.TARGETS, meta); err != nil {
+		t.Fatalf("go-tuf refused re-signed metadata: %v", err)
+	}
+}
+
+// A signature already under the key id is replaced in place, and a duplicate of it is dropped.
+func TestSign_aDuplicateUnderTheKeyIDIsCollapsed(t *testing.T) {
+	pub, priv := newKey(t)
+	meta := targetsMeta(t)
+	key, _ := metadata.KeyFromPublicKey(pub)
+	keyID, _ := key.ID()
+	meta.Signatures = []metadata.Signature{
+		{KeyID: keyID, Signature: []byte("old one")},
+		{KeyID: "middle", Signature: []byte("m")},
+		{KeyID: keyID, Signature: []byte("old two")},
+	}
+	if err := releasesign.Sign(context.Background(), &localAgent{key: priv}, meta, pub); err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Signatures) != 2 || meta.Signatures[0].KeyID != keyID || meta.Signatures[1].KeyID != "middle" {
+		t.Fatalf("signatures = %+v, want the release key's (in its original place) then middle", meta.Signatures)
+	}
+	if string(meta.Signatures[0].Signature) == "old one" {
+		t.Fatal("the old signature was kept")
+	}
+}

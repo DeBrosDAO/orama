@@ -83,6 +83,29 @@ func Sign[T metadata.Roles](ctx context.Context, agent Signer, meta *metadata.Me
 	if err != nil {
 		return fmt.Errorf("release key id: %w", err)
 	}
-	meta.Signatures = append(meta.Signatures, metadata.Signature{KeyID: keyID, Signature: sig})
+	meta.Signatures = replaceSignature(meta.Signatures, metadata.Signature{KeyID: keyID, Signature: sig})
 	return nil
+}
+
+// replaceSignature puts sig in place of the signature already carried under its key id, or
+// appends it when there is none. Signing metadata a second time (a re-signed snapshot, a retry)
+// therefore leaves one signature per key: a duplicate under one key id counts once toward a
+// threshold, and would make the published metadata differ from what a client verifies.
+func replaceSignature(sigs []metadata.Signature, sig metadata.Signature) []metadata.Signature {
+	out := make([]metadata.Signature, 0, len(sigs)+1)
+	replaced := false
+	for _, existing := range sigs {
+		if existing.KeyID != sig.KeyID {
+			out = append(out, existing)
+			continue
+		}
+		if !replaced {
+			out = append(out, sig)
+			replaced = true
+		}
+	}
+	if !replaced {
+		out = append(out, sig)
+	}
+	return out
 }

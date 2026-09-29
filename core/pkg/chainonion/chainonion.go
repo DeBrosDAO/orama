@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,18 +64,60 @@ func Base(onion string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrNotOnion, onion)
 	}
 	label, ok := strings.CutSuffix(strings.ToLower(host), onionSuffix)
-	if !ok || len(label) != onionLabelLen || strings.Contains(label, ".") || port == "" {
+	if !ok || len(label) != onionLabelLen || !isBase32(label) || !validPort(port) {
 		return "", fmt.Errorf("%w: %q", ErrNotOnion, onion)
 	}
 	return "http://" + net.JoinHostPort(strings.ToLower(host), port), nil
 }
 
+// isBase32 reports whether s is written in the lowercase RFC 4648 base32 alphabet an onion
+// address uses: a-z and 2-7.
+func isBase32(s string) bool {
+	for _, c := range s {
+		if (c < 'a' || c > 'z') && (c < '2' || c > '7') {
+			return false
+		}
+	}
+	return true
+}
+
+// validPort reports whether s is a decimal port number in 1..65535, written without a sign,
+// a leading zero or any other character.
+func validPort(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && n >= 1 && n <= 65535 && strconv.Itoa(n) == s
+}
+
+// ValidateSOCKS checks a Tor SOCKS5 address: a loopback host and a numeric port. The proxy carries
+// the transaction and the isolation credential in the clear to whatever answers there, so it must
+// be a process on this machine, never a name or another host.
+func ValidateSOCKS(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("tor SOCKS address %q must be host:port: %w", addr, err)
+	}
+	if !validPort(port) {
+		return fmt.Errorf("tor SOCKS address %q: %q is not a numeric port", addr, port)
+	}
+	if host != "localhost" {
+		ip, err := netip.ParseAddr(host)
+		if err != nil || !ip.IsLoopback() {
+			return fmt.Errorf("tor SOCKS address %q: %q is not a loopback address (127.0.0.0/8, ::1 or localhost)", addr, host)
+		}
+	}
+	return nil
+}
+
 // NewClient returns an HTTP client whose every connection goes through the
 // SOCKS5 proxy at socksAddr under one new isolation credential. Use one client
-// for one transaction. An empty socksAddr is DefaultSOCKS.
+// for one transaction. An empty socksAddr is DefaultSOCKS; any other must pass
+// ValidateSOCKS.
 func NewClient(socksAddr string) (*http.Client, error) {
 	if socksAddr == "" {
 		socksAddr = DefaultSOCKS
+	}
+	if err := ValidateSOCKS(socksAddr); err != nil {
+		return nil, err
 	}
 	raw := make([]byte, isolationKeySize)
 	if _, err := rand.Read(raw); err != nil {
