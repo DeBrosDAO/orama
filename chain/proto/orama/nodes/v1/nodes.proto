@@ -144,6 +144,10 @@ message Node {
   bool capacity_indexed = 14;
   uint32 capacity_class = 15;
   int64 registered_at_height = 16;
+  // asn is the operator-declared autonomous system number; 0 is undeclared.
+  // It is not verifiable on chain (C5, C7). The /16 network is not stored: it
+  // is derived from endpoints.
+  uint32 asn = 17;
 }
 
 // Cluster is one optional public registry row (plans/open-network/track-a

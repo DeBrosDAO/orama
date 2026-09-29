@@ -24,7 +24,7 @@ func TestBondTopUpDecorator_fundsTheShortfallFromTheSignersEarnings(t *testing.T
 	f.Bank.fund(testSourceModule, math.NewInt(900))
 	require.NoError(t, f.Keeper.CreditEarnings(f.Ctx, testSourceModule, addr, sdk.NewCoin(params.BaseDenom, math.NewInt(900))))
 
-	dec := feesante.NewBondTopUpDecorator(f.Bank, f.Keeper)
+	dec := feesante.NewBondTopUpDecorator(f.Bank, f.Keeper, f.Nodes)
 	msg := &stakingtypes.MsgDelegate{
 		DelegatorAddress: addr.String(),
 		ValidatorAddress: sdk.ValAddress(addr).String(),
@@ -52,7 +52,7 @@ func TestBondTopUpDecorator_leavesACoveredBondAlone(t *testing.T) {
 	f.Bank.fund(testSourceModule, math.NewInt(500))
 	require.NoError(t, f.Keeper.CreditEarnings(f.Ctx, testSourceModule, addr, sdk.NewCoin(params.BaseDenom, math.NewInt(500))))
 
-	dec := feesante.NewBondTopUpDecorator(f.Bank, f.Keeper)
+	dec := feesante.NewBondTopUpDecorator(f.Bank, f.Keeper, f.Nodes)
 	msg := &stakingtypes.MsgCreateValidator{
 		ValidatorAddress: sdk.ValAddress(addr).String(),
 		Value:            sdk.NewCoin(params.BaseDenom, math.NewInt(500)),
@@ -78,7 +78,7 @@ func (t multiBondTx) GetMsgsV2() ([]protov2.Message, error) { return nil, nil }
 
 func runBondTopUp(t *testing.T, f *testFixture, tx sdk.Tx, simulate bool) error {
 	t.Helper()
-	dec := feesante.NewBondTopUpDecorator(f.Bank, f.Keeper)
+	dec := feesante.NewBondTopUpDecorator(f.Bank, f.Keeper, f.Nodes)
 	_, err := dec.AnteHandle(f.Ctx, tx, simulate, func(ctx sdk.Context, _ sdk.Tx, _ bool) (sdk.Context, error) {
 		return ctx, nil
 	})
@@ -112,6 +112,7 @@ func TestBondTopUpDecorator_bondNodeFromEarningsWithZeroBank(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	op := sdk.AccAddress("node_operator_zero__")
+	f.Nodes.set("n1", op)
 	fundEarnings(t, f, op, 0, 1500)
 
 	require.NoError(t, runBondTopUp(t, f, bondTx{msg: bondNodeMsg(op, "n1", 1000)}, false))
@@ -123,6 +124,7 @@ func TestBondTopUpDecorator_bondNodePartialBankPlusEarnings(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	op := sdk.AccAddress("node_operator_part__")
+	f.Nodes.set("n1", op)
 	fundEarnings(t, f, op, 300, 1500)
 
 	require.NoError(t, runBondTopUp(t, f, bondTx{msg: bondNodeMsg(op, "n1", 1000)}, false))
@@ -134,6 +136,7 @@ func TestBondTopUpDecorator_bondNodeInsufficientEarningsDebitsNothing(t *testing
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	op := sdk.AccAddress("node_operator_poor__")
+	f.Nodes.set("n1", op)
 	fundEarnings(t, f, op, 100, 200)
 
 	require.NoError(t, runBondTopUp(t, f, bondTx{msg: bondNodeMsg(op, "n1", 1000)}, false))
@@ -145,6 +148,7 @@ func TestBondTopUpDecorator_twoBondNodeMsgsInOneTxAreSummed(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	op := sdk.AccAddress("node_operator_two___")
+	f.Nodes.set("n1", op)
 	fundEarnings(t, f, op, 0, 5000)
 
 	tx := multiBondTx{msgs: []sdk.Msg{bondNodeMsg(op, "n1", 1000), bondNodeMsg(op, "n1", 1500)}}
@@ -157,6 +161,7 @@ func TestBondTopUpDecorator_bondNodeAndDelegateInOneTxAreSummed(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	op := sdk.AccAddress("node_operator_mixed_")
+	f.Nodes.set("n1", op)
 	fundEarnings(t, f, op, 400, 5000)
 
 	tx := multiBondTx{msgs: []sdk.Msg{
@@ -173,6 +178,7 @@ func TestBondTopUpDecorator_bondNodeNeverPullsAnotherOperatorsEarnings(t *testin
 	f.initGenesis(t, nil)
 	rich := sdk.AccAddress("rich_operator______")
 	poor := sdk.AccAddress("poor_operator______")
+	f.Nodes.set("n1", poor)
 	fundEarnings(t, f, rich, 0, 5000)
 
 	// The message names poor as the operator; only poor's own (empty) earnings are ever used.
@@ -199,8 +205,44 @@ func TestBondTopUpDecorator_bondNodeSimulateFundsLikeARealRun(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	op := sdk.AccAddress("node_operator_sim___")
+	f.Nodes.set("n1", op)
 	fundEarnings(t, f, op, 0, 1500)
 
 	require.NoError(t, runBondTopUp(t, f, bondTx{msg: bondNodeMsg(op, "n1", 1000)}, true))
 	require.True(t, f.Bank.balanceOf(op.String()).Equal(math.NewInt(1000)))
+}
+
+func TestBondTopUpDecorator_bondNodeForAnUnknownNodeMovesNothing(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	op := sdk.AccAddress("node_operator_ghost_")
+	fundEarnings(t, f, op, 0, 1500)
+
+	require.NoError(t, runBondTopUp(t, f, bondTx{msg: bondNodeMsg(op, "ghost", 1000)}, false))
+	require.True(t, f.Bank.balanceOf(op.String()).IsZero(), "no node, so no earnings reach the bank balance")
+	requireEarnings(t, f, op, 1500)
+}
+
+func TestBondTopUpDecorator_bondNodeForAnotherOperatorsNodeMovesNothing(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	owner := sdk.AccAddress("node_owner_________")
+	stranger := sdk.AccAddress("node_stranger______")
+	f.Nodes.set("n1", owner)
+	fundEarnings(t, f, stranger, 0, 1500)
+
+	require.NoError(t, runBondTopUp(t, f, bondTx{msg: bondNodeMsg(stranger, "n1", 1000)}, false))
+	require.True(t, f.Bank.balanceOf(stranger.String()).IsZero())
+	requireEarnings(t, f, stranger, 1500)
+}
+
+func TestBondTopUpDecorator_bondNodeLookupFailureAbortsTheTx(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	op := sdk.AccAddress("node_operator_fail__")
+	fundEarnings(t, f, op, 0, 1500)
+	f.Nodes.fail = true
+
+	require.Error(t, runBondTopUp(t, f, bondTx{msg: bondNodeMsg(op, "n1", 1000)}, false))
+	requireEarnings(t, f, op, 1500)
 }

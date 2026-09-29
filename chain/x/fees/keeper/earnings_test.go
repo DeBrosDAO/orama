@@ -71,3 +71,58 @@ func TestGetEarnings_zeroForUnknownAddress(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, balance.IsZero())
 }
+
+func fundedEarnings(t *testing.T, f *testFixture, addr sdk.AccAddress, amount int64) {
+	t.Helper()
+	f.Bank.fund(testSourceModule, math.NewInt(amount))
+	require.NoError(t, f.Keeper.CreditEarnings(f.Ctx, testSourceModule, addr, sdk.NewCoin(params.BaseDenom, math.NewInt(amount))))
+}
+
+func TestMoveEarnings_movesLedgerWithoutMovingCoins(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	from := sdk.AccAddress("move_from____________")
+	to := sdk.AccAddress("move_to______________")
+	fundedEarnings(t, f, from, 500)
+
+	require.NoError(t, f.Keeper.MoveEarnings(f.Ctx, from, to, math.NewInt(200)))
+
+	got, err := f.Keeper.GetEarnings(f.Ctx, from)
+	require.NoError(t, err)
+	require.True(t, got.Equal(math.NewInt(300)))
+	got, err = f.Keeper.GetEarnings(f.Ctx, to)
+	require.NoError(t, err)
+	require.True(t, got.Equal(math.NewInt(200)))
+	require.True(t, f.Bank.balanceOf(types.ModuleName).Equal(math.NewInt(500)), "coins stay in the fees module account")
+}
+
+func TestMoveEarnings_fullBalanceClearsSourceEntry(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	from := sdk.AccAddress("move_from____________")
+	to := sdk.AccAddress("move_to______________")
+	fundedEarnings(t, f, from, 100)
+
+	require.NoError(t, f.Keeper.MoveEarnings(f.Ctx, from, to, math.NewInt(100)))
+
+	has, err := f.Keeper.Earnings.Has(f.Ctx, from.String())
+	require.NoError(t, err)
+	require.False(t, has, "a zero balance must not be left as a row")
+}
+
+func TestMoveEarnings_refusesOverdraftZeroAndSelf(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	from := sdk.AccAddress("move_from____________")
+	to := sdk.AccAddress("move_to______________")
+	fundedEarnings(t, f, from, 100)
+
+	require.Error(t, f.Keeper.MoveEarnings(f.Ctx, from, to, math.NewInt(101)))
+	require.Error(t, f.Keeper.MoveEarnings(f.Ctx, from, to, math.ZeroInt()))
+	require.Error(t, f.Keeper.MoveEarnings(f.Ctx, from, to, math.NewInt(-1)))
+	require.Error(t, f.Keeper.MoveEarnings(f.Ctx, from, from, math.NewInt(1)))
+
+	got, err := f.Keeper.GetEarnings(f.Ctx, from)
+	require.NoError(t, err)
+	require.True(t, got.Equal(math.NewInt(100)), "a refused move leaves the source untouched")
+}

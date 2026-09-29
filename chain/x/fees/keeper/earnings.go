@@ -123,3 +123,29 @@ func (k Keeper) DebitEarningsUpTo(ctx context.Context, addr sdk.AccAddress, want
 	}
 	return debit, nil
 }
+
+// MoveEarnings moves exactly amount from from's earnings ledger entry to to's, without moving any
+// coins: both entries are backed by x/fees's one module account, so the invariant "sum of earnings
+// balances == the fees module balance" is untouched. It is the only way earnings pass from one
+// address to another, and it exists for one caller: x/nodes MsgFundHotKey (C2: an operator funds
+// its own node's hot key from its earnings). The caller is responsible for choosing the target;
+// this method fails when from holds less than amount rather than moving a partial amount.
+func (k Keeper) MoveEarnings(ctx context.Context, from, to sdk.AccAddress, amount math.Int) error {
+	if amount.IsNil() || !amount.IsPositive() {
+		return fmt.Errorf("earnings transfer amount must be positive, got %s", amount)
+	}
+	if from.Equals(to) {
+		return fmt.Errorf("cannot move earnings from %s to itself", from)
+	}
+	balance, err := k.GetEarnings(ctx, from)
+	if err != nil {
+		return err
+	}
+	if balance.LT(amount) {
+		return fmt.Errorf("insufficient earnings: %s holds %s, needs %s", from, balance, amount)
+	}
+	if err := k.setEarnings(ctx, from, balance.Sub(amount)); err != nil {
+		return fmt.Errorf("failed to debit earnings for %s: %w", from, err)
+	}
+	return k.creditLedgerOnly(ctx, to, amount)
+}

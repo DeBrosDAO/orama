@@ -2,6 +2,7 @@ package ante
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"cosmossdk.io/math"
@@ -18,6 +19,12 @@ import (
 // signer already has enough of its own bank balance before reaching into their earnings.
 type BankKeeperSpendable interface {
 	SpendableCoins(ctx context.Context, addr sdk.AccAddress) sdk.Coins
+}
+
+// NodeLookup is the subset of x/nodes' keeper BondTopUpDecorator needs to check that a MsgBondNode
+// names an existing node its signer operates, before any earnings move.
+type NodeLookup interface {
+	GetNode(ctx sdk.Context, nodeID string) (nodestypes.Node, error)
 }
 
 // BondTopUpDecorator funds a signer's own MsgCreateValidator/MsgDelegate/x/nodes MsgBondNode shortfall from their own
@@ -38,14 +45,20 @@ type BankKeeperSpendable interface {
 // needs to check that itself. Several bond messages from one signer in a tx are summed first. If the top-up still cannot cover the full
 // shortfall (insufficient earnings too), the real staking message is left to fail on its own with
 // the ordinary "insufficient funds" error.
+//
+// A MsgBondNode is topped up only when its node exists and its operator is the signer: ante writes
+// survive a failed message, so topping up for a nonexistent or foreign node would move the signer's
+// earnings into its bank balance and then fail the message. The real handler still rejects such a
+// message with its own error.
 type BondTopUpDecorator struct {
 	bankKeeper BankKeeperSpendable
 	feesKeeper keeper.Keeper
+	nodes      NodeLookup
 }
 
 // NewBondTopUpDecorator builds a BondTopUpDecorator.
-func NewBondTopUpDecorator(bankKeeper BankKeeperSpendable, feesKeeper keeper.Keeper) BondTopUpDecorator {
-	return BondTopUpDecorator{bankKeeper: bankKeeper, feesKeeper: feesKeeper}
+func NewBondTopUpDecorator(bankKeeper BankKeeperSpendable, feesKeeper keeper.Keeper, nodes NodeLookup) BondTopUpDecorator {
+	return BondTopUpDecorator{bankKeeper: bankKeeper, feesKeeper: feesKeeper, nodes: nodes}
 }
 
 func (d BondTopUpDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (sdk.Context, error) {
@@ -73,6 +86,13 @@ func (d BondTopUpDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool
 			if err != nil {
 				continue
 			}
+			owned, err := d.operatesNode(ctx, m.NodeId, m.Operator)
+			if err != nil {
+				return ctx, err
+			}
+			if !owned {
+				continue // the bond handler rejects it; earnings must not move for it
+			}
 			needs = addNeed(needs, operator, params.BaseDenom, m.Amount)
 		}
 	}
@@ -82,6 +102,23 @@ func (d BondTopUpDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool
 		}
 	}
 	return next(ctx, tx, simulate)
+}
+
+// operatesNode reports whether nodeID exists and signer is its operator. A missing node is not an
+// error here: the bond handler reports it.
+func (d BondTopUpDecorator) operatesNode(ctx sdk.Context, nodeID, signer string) (bool, error) {
+	canonical, err := nodestypes.CanonicalAddress(signer)
+	if err != nil {
+		return false, nil
+	}
+	node, err := d.nodes.GetNode(ctx, nodeID)
+	if err != nil {
+		if errors.Is(err, nodestypes.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to look up node %s for the bond top-up: %w", nodeID, err)
+	}
+	return node.Operator == canonical, nil
 }
 
 // bondNeed is the total a single signer's bond-funding messages in one tx will pull from its bank

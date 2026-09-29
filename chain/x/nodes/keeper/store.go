@@ -95,7 +95,7 @@ func (k Keeper) saveNode(ctx sdk.Context, node types.Node) error {
 	if err := k.Nodes.Set(ctx, node.NodeId, node); err != nil {
 		return fmt.Errorf("save node %s: %w", node.NodeId, err)
 	}
-	return nil
+	return k.noteStorageChange(ctx, node)
 }
 
 func bondOf(node types.Node, role types.Role) math.Int {

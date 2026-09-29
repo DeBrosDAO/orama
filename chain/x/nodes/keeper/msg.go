@@ -100,6 +100,7 @@ func (k Keeper) RegisterNode(ctx sdk.Context, msg *types.MsgRegisterNode) error 
 			Bindings:           cloneBindings(msg.Bindings),
 			Endpoints:          cloneStrings(msg.Endpoints),
 			RegionHint:         msg.RegionHint,
+			Asn:                msg.Asn,
 			Status:             types.NodeStatusRegistered,
 			RegisteredAtHeight: ctx.BlockHeight(),
 		}
@@ -145,7 +146,7 @@ func (k Keeper) UpdateNode(ctx sdk.Context, msg *types.MsgUpdateNode) error {
 		if err := msg.ValidateBasic(); err != nil {
 			return err
 		}
-		if msg.HotKey == "" && len(msg.Bindings) == 0 && !msg.SetEndpoints && !msg.SetRegionHint {
+		if msg.HotKey == "" && len(msg.Bindings) == 0 && !msg.SetEndpoints && !msg.SetRegionHint && !msg.SetAsn {
 			return fmt.Errorf("node %s update changes nothing", msg.NodeId)
 		}
 		p, err := k.params(ctx)
@@ -182,6 +183,9 @@ func (k Keeper) UpdateNode(ctx sdk.Context, msg *types.MsgUpdateNode) error {
 		}
 		if msg.SetRegionHint {
 			node.RegionHint = msg.RegionHint
+		}
+		if msg.SetAsn {
+			node.Asn = msg.Asn
 		}
 		if err := k.chargeNode(ctx, &node); err != nil {
 			return err

@@ -192,11 +192,37 @@ func (f *fakeDeposits) ReleaseDeposit(ctx context.Context, id string) (math.Int,
 	return refund, burn, nil
 }
 
+// fakeEarnings is an in-memory earnings ledger that follows x/fees MoveEarnings semantics.
+type fakeEarnings struct {
+	balances map[string]math.Int
+}
+
+func newFakeEarnings() *fakeEarnings {
+	return &fakeEarnings{balances: map[string]math.Int{}}
+}
+
+func (e *fakeEarnings) balanceOf(addr sdk.AccAddress) math.Int {
+	if v, ok := e.balances[addr.String()]; ok {
+		return v
+	}
+	return math.ZeroInt()
+}
+
+func (e *fakeEarnings) MoveEarnings(_ context.Context, from, to sdk.AccAddress, amount math.Int) error {
+	if !amount.IsPositive() || e.balanceOf(from).LT(amount) {
+		return errInsufficient(from.String(), e.balanceOf(from), amount)
+	}
+	e.balances[from.String()] = e.balanceOf(from).Sub(amount)
+	e.balances[to.String()] = e.balanceOf(to).Add(amount)
+	return nil
+}
+
 type testFixture struct {
 	Ctx      sdk.Context
 	Keeper   keeper.Keeper
 	Bank     *fakeBankKeeper
 	Deposits *fakeDeposits
+	Earnings *fakeEarnings
 	Msg      types.MsgServer
 }
 
@@ -217,8 +243,9 @@ func newRawFixture(t *testing.T) *testFixture {
 	cdc := codec.NewProtoCodec(codectypes.NewInterfaceRegistry())
 	bank := newFakeBankKeeper()
 	deps := newFakeDeposits(bank)
-	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, deps)
-	return &testFixture{Ctx: ctx, Keeper: k, Bank: bank, Deposits: deps, Msg: keeper.NewMsgServerImpl(k)}
+	earn := newFakeEarnings()
+	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, deps, earn)
+	return &testFixture{Ctx: ctx, Keeper: k, Bank: bank, Deposits: deps, Earnings: earn, Msg: keeper.NewMsgServerImpl(k)}
 }
 
 func (f *testFixture) fund(addr sdk.AccAddress, orama int64) {

@@ -24,3 +24,12 @@ type DepositKeeper interface {
 	LockDeposit(ctx context.Context, owner sdk.AccAddress, id string, amount math.Int) error
 	ReleaseDeposit(ctx context.Context, id string) (refund, burn math.Int, err error)
 }
+
+// EarningsKeeper is the subset of x/fees that moves value between two
+// earnings accounts without releasing it to a bank balance
+// (plans/open-network/track-c-chain.md C2 item 5: an operator funds its own
+// node's hot key from its earnings). MoveEarnings fails when from holds less
+// than amount.
+type EarningsKeeper interface {
+	MoveEarnings(ctx context.Context, from, to sdk.AccAddress, amount math.Int) error
+}

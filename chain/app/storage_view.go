@@ -12,9 +12,11 @@ import (
 	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
 )
 
-// storageNodes is the storage module's view of x/nodes. Network16 and ASN are
-// empty: a node record does not store them, so a protocol deal that requires
-// distinct networks cannot be placed.
+// storageNodes is the storage module's view of x/nodes. IsActive is the STORAGE
+// role's own activity, not the node's: a node bonded only on another role is not a
+// storage provider. Network16 is derived from the node's endpoints and ASN is the
+// operator's declaration; neither is verified on chain (docs/CHAIN.md, "Node
+// network identity").
 type storageNodes struct {
 	nodes nodeskeeper.Keeper
 }
@@ -24,7 +26,15 @@ func (s storageNodes) sdk(ctx context.Context) sdk.Context {
 }
 
 func (s storageNodes) IsActive(ctx context.Context, nodeID string) (bool, error) {
-	return s.nodes.IsActive(s.sdk(ctx), nodeID)
+	return s.nodes.StorageEligible(s.sdk(ctx), nodeID)
+}
+
+func (s storageNodes) TakeStorageChanges(ctx context.Context) ([]string, error) {
+	return s.nodes.TakeStorageChanges(s.sdk(ctx))
+}
+
+func (s storageNodes) MarkStorageChanged(ctx context.Context, nodeID string) error {
+	return s.nodes.MarkStorageChanged(s.sdk(ctx), nodeID)
 }
 
 func (s storageNodes) HotKey(ctx context.Context, nodeID string) (sdk.AccAddress, error) {
@@ -46,9 +56,15 @@ func (s storageNodes) Operator(ctx context.Context, nodeID string) (string, erro
 	return node.Operator, nil
 }
 
-func (s storageNodes) Network16(context.Context, string) (string, error) { return "", nil }
+func (s storageNodes) Network16(ctx context.Context, nodeID string) (string, error) {
+	network, _, err := s.nodes.NodeNetwork(s.sdk(ctx), nodeID)
+	return network, err
+}
 
-func (s storageNodes) ASN(context.Context, string) (uint32, error) { return 0, nil }
+func (s storageNodes) ASN(ctx context.Context, nodeID string) (uint32, error) {
+	_, asn, err := s.nodes.NodeNetwork(s.sdk(ctx), nodeID)
+	return asn, err
+}
 
 func (s storageNodes) DeclaredCapacity(ctx context.Context, nodeID string) (uint64, error) {
 	node, err := s.nodes.GetNode(s.sdk(ctx), nodeID)

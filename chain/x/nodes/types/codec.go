@@ -17,6 +17,7 @@ func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 	legacy.RegisterAminoMsg(cdc, &MsgBondNode{}, "orama/nodes/MsgBondNode")
 	legacy.RegisterAminoMsg(cdc, &MsgUnbondNode{}, "orama/nodes/MsgUnbondNode")
 	legacy.RegisterAminoMsg(cdc, &MsgDeclareCapacity{}, "orama/nodes/MsgDeclareCapacity")
+	legacy.RegisterAminoMsg(cdc, &MsgFundHotKey{}, "orama/nodes/MsgFundHotKey")
 	legacy.RegisterAminoMsg(cdc, &MsgRegisterCluster{}, "orama/nodes/MsgRegisterCluster")
 	legacy.RegisterAminoMsg(cdc, &MsgUpdateCluster{}, "orama/nodes/MsgUpdateCluster")
 	legacy.RegisterAminoMsg(cdc, &MsgRetireCluster{}, "orama/nodes/MsgRetireCluster")
@@ -32,6 +33,7 @@ func RegisterInterfaces(registry cdctypes.InterfaceRegistry) {
 		&MsgBondNode{},
 		&MsgUnbondNode{},
 		&MsgDeclareCapacity{},
+		&MsgFundHotKey{},
 		&MsgRegisterCluster{},
 		&MsgUpdateCluster{},
 		&MsgRetireCluster{},

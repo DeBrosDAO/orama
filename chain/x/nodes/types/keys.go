@@ -32,4 +32,5 @@ var (
 	LivePubkeyPrefix    = collections.NewPrefix(9)
 	ServiceDayPrefix    = collections.NewPrefix(10)
 	FreeCapacityPrefix  = collections.NewPrefix(11)
+	StorageDirtyPrefix  = collections.NewPrefix(12)
 )

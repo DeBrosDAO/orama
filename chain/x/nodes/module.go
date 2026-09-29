@@ -118,6 +118,11 @@ func (am AppModule) EndBlock(ctx context.Context) error {
 	return am.keeper.EndBlock(sdk.UnwrapSDKContext(ctx))
 }
 
+// GetTxCmd returns x/nodes' CLI transaction commands.
+func (AppModule) GetTxCmd() *cobra.Command {
+	return cli.GetTxCmd()
+}
+
 // GetQueryCmd returns x/nodes' CLI query commands.
 func (AppModule) GetQueryCmd() *cobra.Command {
 	return cli.GetQueryCmd()

@@ -69,17 +69,49 @@ func (h housePower) Lambda(ctx context.Context) (math.LegacyDec, error) {
 	return h.power.Lambda.Get(ctx)
 }
 
-// houseOperators lists x/nodes operators. Prefix16 and ASN are empty because
-// x/nodes does not store a public network identity. x/houses skips an operator
-// with an empty prefix or a zero ASN, so the operator house stays closed
-// until that identity exists.
+// houseOperators lists x/nodes operators. An operator's Prefix16 and ASN come from
+// its lowest-id ACTIVE node that has both (a /16 derivable from its endpoints and a
+// declared ASN); an operator with no such node keeps an empty prefix and a zero ASN,
+// and x/houses skips it. Both values are operator declarations, not verified on
+// chain (docs/CHAIN.md, "Node network identity").
 type houseOperators struct {
 	nodes nodeskeeper.Keeper
 }
 
+type operatorNetwork struct {
+	prefix16 string
+	asn      uint32
+}
+
+// networks maps each operator to the network identity of its lowest-id active node
+// that has both a derivable /16 and a declared ASN.
+func (h houseOperators) networks(ctx context.Context) (map[string]operatorNetwork, error) {
+	out := map[string]operatorNetwork{}
+	err := h.nodes.Nodes.Walk(ctx, nil, func(_ string, node nodestypes.Node) (bool, error) {
+		if node.Status != nodestypes.NodeStatusActive || node.Asn == 0 {
+			return false, nil
+		}
+		if _, taken := out[node.Operator]; taken {
+			return false, nil
+		}
+		if prefix := nodestypes.NetworkOf(node.Endpoints); prefix != "" {
+			out[node.Operator] = operatorNetwork{prefix16: prefix, asn: node.Asn}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to read operator networks: %w", err)
+	}
+	return out, nil
+}
+
 func (h houseOperators) Operators(ctx context.Context) ([]housetypes.OperatorInfo, error) {
+	networks, err := h.networks(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var out []housetypes.OperatorInfo
-	err := h.nodes.Operators.Walk(ctx, nil, func(key string, op nodestypes.Operator) (bool, error) {
+	err = h.nodes.Operators.Walk(ctx, nil, func(key string, op nodestypes.Operator) (bool, error) {
 		addr := op.Address
 		if addr == "" {
 			addr = key
@@ -92,8 +124,11 @@ func (h houseOperators) Operators(ctx context.Context) ([]housetypes.OperatorInf
 		if err != nil {
 			return false, err
 		}
+		net := networks[addr]
 		out = append(out, housetypes.OperatorInfo{
 			Address:     acc,
+			Prefix16:    net.prefix16,
+			ASN:         net.asn,
 			ServiceDays: days,
 		})
 		return false, nil

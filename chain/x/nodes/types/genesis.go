@@ -196,6 +196,11 @@ func validateGenesisNode(node Node, p Params, operators, revoked map[string]stru
 	if err := ValidateRegion(node.RegionHint); err != nil {
 		return fmt.Errorf("node %s: %w", node.NodeId, err)
 	}
+	if node.Asn != 0 {
+		if err := ValidateASN(node.Asn); err != nil {
+			return fmt.Errorf("node %s: %w", node.NodeId, err)
+		}
+	}
 	if err := validateBondList(node, p); err != nil {
 		return err
 	}

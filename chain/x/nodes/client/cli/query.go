@@ -1,4 +1,4 @@
-// Package cli implements x/nodes' read-only CLI query commands (`oramad query nodes ...`).
+// Package cli implements x/nodes CLI commands: queries (`oramad query nodes ...`) and `oramad tx nodes fund-hot-key`.
 package cli
 
 import (

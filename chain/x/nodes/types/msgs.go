@@ -59,6 +59,11 @@ func (msg MsgRegisterNode) ValidateBasic() error {
 	if err := ValidateRegion(msg.RegionHint); err != nil {
 		return fmt.Errorf("register node: %w", err)
 	}
+	if msg.Asn != 0 {
+		if err := ValidateASN(msg.Asn); err != nil {
+			return fmt.Errorf("register node: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -89,6 +94,11 @@ func (msg MsgUpdateNode) ValidateBasic() error {
 	}
 	if msg.SetRegionHint {
 		if err := ValidateRegion(msg.RegionHint); err != nil {
+			return fmt.Errorf("update node: %w", err)
+		}
+	}
+	if msg.SetAsn && msg.Asn != 0 {
+		if err := ValidateASN(msg.Asn); err != nil {
 			return fmt.Errorf("update node: %w", err)
 		}
 	}
@@ -147,6 +157,20 @@ func (msg MsgDeclareCapacity) ValidateBasic() error {
 	}
 	if err := ValidateID(msg.NodeId); err != nil {
 		return fmt.Errorf("declare capacity: %w", err)
+	}
+	return nil
+}
+
+// ValidateBasic checks MsgFundHotKey.
+func (msg MsgFundHotKey) ValidateBasic() error {
+	if _, err := CanonicalAddress(msg.Operator); err != nil {
+		return fmt.Errorf("fund hot key: %w", err)
+	}
+	if err := ValidateID(msg.NodeId); err != nil {
+		return fmt.Errorf("fund hot key: %w", err)
+	}
+	if err := PositiveAmount(msg.Amount); err != nil {
+		return fmt.Errorf("fund hot key: %w", err)
 	}
 	return nil
 }

@@ -19,10 +19,11 @@ import (
 
 // Keeper is x/nodes' keeper.
 type Keeper struct {
-	cdc           codec.BinaryCodec
-	storeService  storetypes.KVStoreService
-	bankKeeper    types.BankKeeper
-	depositKeeper types.DepositKeeper
+	cdc            codec.BinaryCodec
+	storeService   storetypes.KVStoreService
+	bankKeeper     types.BankKeeper
+	depositKeeper  types.DepositKeeper
+	earningsKeeper types.EarningsKeeper
 
 	Schema          collections.Schema
 	Params          collections.Item[types.Params]
@@ -37,15 +38,18 @@ type Keeper struct {
 	LivePubkeys     collections.Map[string, string]
 	ServiceDays     collections.Map[collections.Pair[string, uint64], types.ServiceDay]
 	FreeCapacity    collections.Map[collections.Triple[uint32, string, string], uint64]
+	StorageDirty    collections.KeySet[string]
 }
 
 // NewKeeper builds a keeper. bankKeeper escrows bonds; depositKeeper locks
-// the C2 state deposit for node and cluster records. Both are required.
+// the C2 state deposit for node and cluster records; earningsKeeper moves an
+// operator's earnings to its node's hot key. All three are required.
 func NewKeeper(
 	cdc codec.BinaryCodec,
 	storeService storetypes.KVStoreService,
 	bankKeeper types.BankKeeper,
 	depositKeeper types.DepositKeeper,
+	earningsKeeper types.EarningsKeeper,
 ) Keeper {
 	if bankKeeper == nil {
 		panic("x/nodes bank keeper is nil")
@@ -53,17 +57,21 @@ func NewKeeper(
 	if depositKeeper == nil {
 		panic("x/nodes deposit keeper is nil")
 	}
+	if earningsKeeper == nil {
+		panic("x/nodes earnings keeper is nil")
+	}
 	sb := collections.NewSchemaBuilder(storeService)
 	k := Keeper{
-		cdc:           cdc,
-		storeService:  storeService,
-		bankKeeper:    bankKeeper,
-		depositKeeper: depositKeeper,
-		Params:        collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
-		Operators:     collections.NewMap(sb, types.OperatorPrefix, "operators", collections.StringKey, codec.CollValue[types.Operator](cdc)),
-		Nodes:         collections.NewMap(sb, types.NodePrefix, "nodes", collections.StringKey, codec.CollValue[types.Node](cdc)),
-		Clusters:      collections.NewMap(sb, types.ClusterPrefix, "clusters", collections.StringKey, codec.CollValue[types.Cluster](cdc)),
-		Unbondings:    collections.NewMap(sb, types.UnbondingPrefix, "unbondings", collections.Uint64Key, codec.CollValue[types.UnbondingEntry](cdc)),
+		cdc:            cdc,
+		storeService:   storeService,
+		bankKeeper:     bankKeeper,
+		depositKeeper:  depositKeeper,
+		earningsKeeper: earningsKeeper,
+		Params:         collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
+		Operators:      collections.NewMap(sb, types.OperatorPrefix, "operators", collections.StringKey, codec.CollValue[types.Operator](cdc)),
+		Nodes:          collections.NewMap(sb, types.NodePrefix, "nodes", collections.StringKey, codec.CollValue[types.Node](cdc)),
+		Clusters:       collections.NewMap(sb, types.ClusterPrefix, "clusters", collections.StringKey, codec.CollValue[types.Cluster](cdc)),
+		Unbondings:     collections.NewMap(sb, types.UnbondingPrefix, "unbondings", collections.Uint64Key, codec.CollValue[types.UnbondingEntry](cdc)),
 		UnbondingByTime: collections.NewMap(
 			sb, types.UnbondingTimePrefix, "unbonding_by_time",
 			collections.PairKeyCodec(collections.Int64Key, collections.Uint64Key),
@@ -87,6 +95,7 @@ func NewKeeper(
 			collections.TripleKeyCodec(collections.Uint32Key, collections.StringKey, collections.StringKey),
 			collections.Uint64Value,
 		),
+		StorageDirty: collections.NewKeySet(sb, types.StorageDirtyPrefix, "storage_dirty", collections.StringKey),
 	}
 	schema, err := sb.Build()
 	if err != nil {

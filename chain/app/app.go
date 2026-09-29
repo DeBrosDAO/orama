@@ -474,6 +474,7 @@ func NewOramaApp(
 		runtime.NewKVStoreService(keys[nodestypes.StoreKey]),
 		app.BankKeeper,
 		app.FeesKeeper,
+		app.FeesKeeper,
 	)
 	app.CnftKeeper = cnftkeeper.NewKeeper(
 		appCodec,
@@ -723,7 +724,7 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		// MsgCreateValidator/MsgDelegate shortfall from their own earnings, before that message
 		// runs - this chain starts every account at zero norama, so without it nobody outside the
 		// genesis bootstrap committee could ever accumulate a public bank balance to bond with.
-		feesante.NewBondTopUpDecorator(app.BankKeeper, app.FeesKeeper),
+		feesante.NewBondTopUpDecorator(app.BankKeeper, app.FeesKeeper, app.NodesKeeper),
 		// Security review B1/M4 ("lock the force-bonded stake"): rejects a bootstrap committee
 		// member's own MsgUndelegate/MsgBeginRedelegate if it would take their self-bond below
 		// what x/power has force-bonded into it, while lambda < 1.

@@ -69,6 +69,13 @@ func (m msgServer) DeclareCapacity(goCtx context.Context, msg *types.MsgDeclareC
 	return &types.MsgDeclareCapacityResponse{}, nil
 }
 
+func (m msgServer) FundHotKey(goCtx context.Context, msg *types.MsgFundHotKey) (*types.MsgFundHotKeyResponse, error) {
+	if err := m.Keeper.FundHotKey(sdk.UnwrapSDKContext(goCtx), msg); err != nil {
+		return nil, err
+	}
+	return &types.MsgFundHotKeyResponse{}, nil
+}
+
 func (m msgServer) RegisterCluster(goCtx context.Context, msg *types.MsgRegisterCluster) (*types.MsgRegisterClusterResponse, error) {
 	if err := m.Keeper.RegisterCluster(sdk.UnwrapSDKContext(goCtx), msg); err != nil {
 		return nil, err
