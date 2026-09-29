@@ -57,9 +57,19 @@ func (gs GenesisState) Validate() error {
 
 	nodes := make(map[string]Node, len(gs.Nodes))
 	live := make(map[string]string, len(gs.Nodes))
+	hotKeys := make(map[string]string, len(gs.Nodes))
+	liveIPs := make(map[string]string, len(gs.Nodes))
 	for _, node := range gs.Nodes {
 		if err := validateGenesisNode(node, gs.Params, operators, revoked, live); err != nil {
 			return err
+		}
+		if node.Status != NodeStatusRetired && node.Status != NodeStatusTombstoned {
+			if err := validateGenesisIdentity(node, operators, hotKeys, liveIPs); err != nil {
+				return err
+			}
+		}
+		if node.IdentitySinceUnix < 0 {
+			return fmt.Errorf("node %s identity_since_unix must not be negative", node.NodeId)
 		}
 		if _, ok := nodes[node.NodeId]; ok {
 			return fmt.Errorf("duplicate node %s", node.NodeId)
@@ -166,8 +176,13 @@ func validateGenesisNode(node Node, p Params, operators, revoked map[string]stru
 		if len(node.Bindings) != 0 {
 			return fmt.Errorf("node %s is %s but still has bindings", node.NodeId, node.Status)
 		}
-	} else if len(node.Bindings) == 0 {
-		return fmt.Errorf("node %s requires a binding", node.NodeId)
+	} else {
+		if len(node.Bindings) == 0 {
+			return fmt.Errorf("node %s requires a binding", node.NodeId)
+		}
+		if err := CheckHotKeyBinding(node.HotKey, node.Bindings); err != nil {
+			return fmt.Errorf("node %s: %w", node.NodeId, err)
+		}
 	}
 	if uint32(len(node.Bindings)) > p.MaxBindings {
 		return fmt.Errorf("node %s has %d bindings, max is %d", node.NodeId, len(node.Bindings), p.MaxBindings)
@@ -231,6 +246,26 @@ func validateGenesisNode(node Node, p Params, operators, revoked map[string]stru
 	}
 	if node.Status == NodeStatusRegistered && meets {
 		return fmt.Errorf("node %s is registered but a role is bonded at min_bond", node.NodeId)
+	}
+	return nil
+}
+
+// validateGenesisIdentity checks the rules that keep a hot key and a literal endpoint address to
+// one live node: a hot key is not an operator and not another node's hot key, and a literal IP is
+// registered by one node only.
+func validateGenesisIdentity(node Node, operators map[string]struct{}, hotKeys, liveIPs map[string]string) error {
+	if _, isOperator := operators[node.HotKey]; isOperator {
+		return fmt.Errorf("node %s hot key %s is an operator: %w", node.NodeId, node.HotKey, ErrHotKey)
+	}
+	if owner, dup := hotKeys[node.HotKey]; dup {
+		return fmt.Errorf("node %s hot key %s is already the hot key of node %s: %w", node.NodeId, node.HotKey, owner, ErrHotKey)
+	}
+	hotKeys[node.HotKey] = node.NodeId
+	for _, ip := range LiteralIPs(node.Endpoints) {
+		if owner, dup := liveIPs[ip]; dup {
+			return fmt.Errorf("node %s endpoint address %s is registered by node %s: %w", node.NodeId, ip, owner, ErrEndpointTaken)
+		}
+		liveIPs[ip] = node.NodeId
 	}
 	return nil
 }

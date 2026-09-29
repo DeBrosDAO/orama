@@ -49,6 +49,14 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) error {
 				return fmt.Errorf("index pubkey for node %s: %w", node.NodeId, err)
 			}
 		}
+		if node.Status != types.NodeStatusRetired && node.Status != types.NodeStatusTombstoned {
+			if err := k.indexHotKey(ctx, "", node.HotKey, node.NodeId); err != nil {
+				return err
+			}
+			if err := k.indexIPs(ctx, nil, types.LiteralIPs(node.Endpoints), node.NodeId); err != nil {
+				return err
+			}
+		}
 		if err := k.saveNode(ctx, node); err != nil {
 			return err
 		}

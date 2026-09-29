@@ -53,6 +53,9 @@ func (msg MsgRegisterNode) ValidateBasic() error {
 	if err := validateBindingList(msg.Bindings); err != nil {
 		return fmt.Errorf("register node: %w", err)
 	}
+	if err := CheckHotKeyBinding(hot, msg.Bindings); err != nil {
+		return fmt.Errorf("register node: %w", err)
+	}
 	if err := ValidateEndpoints(msg.Endpoints, 0, absoluteEndpointCap); err != nil {
 		return fmt.Errorf("register node: %w", err)
 	}
@@ -69,7 +72,9 @@ func (msg MsgRegisterNode) ValidateBasic() error {
 
 // ValidateBasic checks MsgUpdateNode. An empty hot key and an empty binding
 // list mean "leave unchanged"; the keeper rejects an update that sets neither
-// those nor the endpoint/region flags.
+// those nor the endpoint/region flags. A new hot key must arrive with the
+// bindings that carry its own signed "hot-key" binding. A binding list sent
+// without a new hot key is checked against the stored hot key by the keeper.
 func (msg MsgUpdateNode) ValidateBasic() error {
 	if _, err := CanonicalAddress(msg.Operator); err != nil {
 		return fmt.Errorf("update node: %w", err)
@@ -78,8 +83,12 @@ func (msg MsgUpdateNode) ValidateBasic() error {
 		return fmt.Errorf("update node: %w", err)
 	}
 	if msg.HotKey != "" {
-		if _, err := CanonicalAddress(msg.HotKey); err != nil {
+		hot, err := CanonicalAddress(msg.HotKey)
+		if err != nil {
 			return fmt.Errorf("update node hot key: %w", err)
+		}
+		if err := CheckHotKeyBinding(hot, msg.Bindings); err != nil {
+			return fmt.Errorf("update node: %w", err)
 		}
 	}
 	if len(msg.Bindings) > 0 {

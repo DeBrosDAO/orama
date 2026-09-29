@@ -55,6 +55,21 @@ func (q queryServer) Earnings(goCtx context.Context, req *types.QueryEarningsReq
 	return &types.QueryEarningsResponse{Balance: balance}, nil
 }
 
+func (q queryServer) FeeBalance(goCtx context.Context, req *types.QueryFeeBalanceRequest) (*types.QueryFeeBalanceResponse, error) {
+	if req == nil || req.Address == "" {
+		return nil, status.Error(codes.InvalidArgument, "address is required")
+	}
+	addr, err := sdk.AccAddressFromBech32(req.Address)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	balance, err := q.Keeper.GetFeeBalance(sdk.UnwrapSDKContext(goCtx), addr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &types.QueryFeeBalanceResponse{Balance: balance}, nil
+}
+
 func (q queryServer) Deposit(goCtx context.Context, req *types.QueryDepositRequest) (*types.QueryDepositResponse, error) {
 	if req == nil || req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")

@@ -25,11 +25,18 @@ type DepositKeeper interface {
 	ReleaseDeposit(ctx context.Context, id string) (refund, burn math.Int, err error)
 }
 
-// EarningsKeeper is the subset of x/fees that moves value between two
-// earnings accounts without releasing it to a bank balance
-// (plans/open-network/track-c-chain.md C2 item 5: an operator funds its own
-// node's hot key from its earnings). MoveEarnings fails when from holds less
-// than amount.
+// EarningsKeeper is the subset of x/fees that spends an operator's earnings
+// on the two things x/nodes lets earnings do (plans/open-network/track-c-chain.md C2):
+//
+//   - FundFeeBalance funds an operator's own node's hot key with a fee-only
+//     balance (item 5). The balance can pay base fees and is not earnings. It
+//     fails when from holds less than amount.
+//   - FundBondFromEarnings tops the operator's bank balance up from its own
+//     earnings so a role bond can be escrowed (item 3). It moves nothing when
+//     the bank balance already covers needed, or when earnings cannot cover
+//     the shortfall. It must be called from a message handler, where BaseApp
+//     discards the top-up if the message fails.
 type EarningsKeeper interface {
-	MoveEarnings(ctx context.Context, from, to sdk.AccAddress, amount math.Int) error
+	FundFeeBalance(ctx context.Context, from, to sdk.AccAddress, amount math.Int) error
+	FundBondFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
 }

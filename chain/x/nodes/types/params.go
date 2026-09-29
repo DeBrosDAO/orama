@@ -26,6 +26,13 @@ const (
 	// counts; an active RELAY role counts without it.
 	DefaultMinServiceVolumeBytes uint64 = 1
 
+	// DefaultNetworkIdentityLockSeconds is how long a node's declared ASN and
+	// derived /16 must stand unchanged before protocol-deal slots and the
+	// operator house count them: 14 days. The spec asks for "harder to game" and
+	// gives no number; 14 days matches the parameter-change timelock (D17), so
+	// moving identity to fit a vote costs longer than the vote can be held open.
+	DefaultNetworkIdentityLockSeconds int64 = 14 * 24 * 60 * 60
+
 	// DefaultMaxEndpoints and DefaultMaxBindings bound a single record so one
 	// registration cannot write an unbounded list.
 	DefaultMaxEndpoints uint32 = 8
@@ -69,6 +76,7 @@ func NewParams(
 	probationCapacityBytes uint64,
 	minServiceVolumeBytes uint64,
 	maxEndpoints, maxBindings uint32,
+	networkIdentityLockSeconds int64,
 ) Params {
 	return Params{
 		MinBond:                minBond,
@@ -79,6 +87,8 @@ func NewParams(
 		MinServiceVolumeBytes:  minServiceVolumeBytes,
 		MaxEndpoints:           maxEndpoints,
 		MaxBindings:            maxBindings,
+
+		NetworkIdentityLockSeconds: networkIdentityLockSeconds,
 	}
 }
 
@@ -98,6 +108,7 @@ func DefaultParams() Params {
 		DefaultMinServiceVolumeBytes,
 		DefaultMaxEndpoints,
 		DefaultMaxBindings,
+		DefaultNetworkIdentityLockSeconds,
 	)
 }
 
@@ -148,6 +159,9 @@ func (p Params) Validate() error {
 	}
 	if p.MaxEndpoints == 0 || p.MaxEndpoints > absoluteEndpointCap {
 		return fmt.Errorf("max_endpoints must be in [1, %d], got %d", absoluteEndpointCap, p.MaxEndpoints)
+	}
+	if p.NetworkIdentityLockSeconds < 0 {
+		return fmt.Errorf("network_identity_lock_seconds must not be negative, got %d", p.NetworkIdentityLockSeconds)
 	}
 	if p.MaxBindings == 0 || p.MaxBindings > absoluteBindingCap {
 		return fmt.Errorf("max_bindings must be in [1, %d], got %d", absoluteBindingCap, p.MaxBindings)

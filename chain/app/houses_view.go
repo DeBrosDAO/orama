@@ -71,9 +71,13 @@ func (h housePower) Lambda(ctx context.Context) (math.LegacyDec, error) {
 
 // houseOperators lists x/nodes operators. An operator's Prefix16 and ASN come from
 // its lowest-id ACTIVE node that has both (a /16 derivable from its endpoints and a
-// declared ASN); an operator with no such node keeps an empty prefix and a zero ASN,
-// and x/houses skips it. Both values are operator declarations, not verified on
-// chain (docs/CHAIN.md, "Node network identity").
+// declared ASN) and whose identity has stood unchanged for the network identity lock
+// (x/nodes network_identity_lock_seconds); an operator with no such node keeps an
+// empty prefix and a zero ASN, and x/houses skips it. The lock makes house
+// eligibility count identity as of a rolling snapshot: a node that has just
+// registered or changed its ASN or endpoints is not counted until the lock has
+// passed, so identity cannot be moved to fit a vote. Both values are operator
+// declarations, not verified on chain (docs/CHAIN.md, "Node network identity").
 type houseOperators struct {
 	nodes nodeskeeper.Keeper
 }
@@ -84,9 +88,10 @@ type operatorNetwork struct {
 }
 
 // networks maps each operator to the network identity of its lowest-id active node
-// that has both a derivable /16 and a declared ASN.
+// that has both a derivable /16 and a declared ASN, both in effect (past the lock).
 func (h houseOperators) networks(ctx context.Context) (map[string]operatorNetwork, error) {
 	out := map[string]operatorNetwork{}
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	err := h.nodes.Nodes.Walk(ctx, nil, func(_ string, node nodestypes.Node) (bool, error) {
 		if node.Status != nodestypes.NodeStatusActive || node.Asn == 0 {
 			return false, nil
@@ -94,8 +99,12 @@ func (h houseOperators) networks(ctx context.Context) (map[string]operatorNetwor
 		if _, taken := out[node.Operator]; taken {
 			return false, nil
 		}
-		if prefix := nodestypes.NetworkOf(node.Endpoints); prefix != "" {
-			out[node.Operator] = operatorNetwork{prefix16: prefix, asn: node.Asn}
+		prefix, asn, err := h.nodes.EffectiveNetwork(sdkCtx, node)
+		if err != nil {
+			return true, err
+		}
+		if prefix != "" && asn != 0 {
+			out[node.Operator] = operatorNetwork{prefix16: prefix, asn: asn}
 		}
 		return false, nil
 	})

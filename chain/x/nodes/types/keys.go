@@ -33,4 +33,6 @@ var (
 	ServiceDayPrefix    = collections.NewPrefix(10)
 	FreeCapacityPrefix  = collections.NewPrefix(11)
 	StorageDirtyPrefix  = collections.NewPrefix(12)
+	HotKeyPrefix        = collections.NewPrefix(13)
+	LiveIPPrefix        = collections.NewPrefix(14)
 )

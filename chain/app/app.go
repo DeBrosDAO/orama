@@ -123,7 +123,6 @@ import (
 	relaytypes "github.com/DeBrosOfficial/network/chain/x/relay/types"
 	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
 	"github.com/DeBrosOfficial/network/chain/x/shielded/verify"
-	orchardverify "github.com/DeBrosOfficial/network/chain/x/shielded/verify/orchard"
 	"github.com/DeBrosOfficial/network/chain/x/storage"
 	storagekeeper "github.com/DeBrosOfficial/network/chain/x/storage/keeper"
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
@@ -364,7 +363,7 @@ func NewOramaApp(
 	// Shielded bundles are a separate path and are not accepted until a verifier is linked.
 	app.BankKeeper.AppendSendRestriction(shieldedpolicy.NoramaSendRestriction(BlockedAddresses(), nil))
 
-	app.ShieldedVerifiers = []verify.Verifier{orchardverify.New(bApp.ChainID())}
+	app.ShieldedVerifiers = newShieldedVerifiers(bApp.ChainID())
 
 	enabledSignModes := append(authtx.DefaultSignModes, sigtypes.SignMode_SIGN_MODE_TEXTUAL)
 	txConfigOpts := authtx.ConfigOptions{
@@ -557,6 +556,7 @@ func NewOramaApp(
 		newStakingEndBlockOverride(
 			staking.NewAppModule(appCodec, app.StakingKeeper, app.AccountKeeper, app.BankKeeper, nil),
 			app.StakingKeeper,
+			app.FeesKeeper,
 		),
 		upgrade.NewAppModule(app.UpgradeKeeper, app.AccountKeeper.AddressCodec()),
 		evidence.NewAppModule(app.EvidenceKeeper),
@@ -733,12 +733,6 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		ante.NewValidateMemoDecorator(app.AccountKeeper),
 		ante.NewConsumeGasForTxSizeDecorator(app.AccountKeeper),
 		feesante.NewFeeDecorator(app.AccountKeeper, app.FeeGrantKeeper, app.StakingKeeper, app.FeesKeeper),
-		// Security review B8 ("outsiders can never bond"): tops up a signer's own
-		// MsgCreateValidator/MsgDelegate/MsgBondNode shortfall, and the deal fee and escrow of their own
-		// storage deals and the fee of their own tokens (C2 item 4), from their own earnings, before that
-		// message runs - this chain starts every account at zero norama, so without it nobody outside the
-		// genesis bootstrap committee could ever accumulate a public bank balance to bond with.
-		feesante.NewBondTopUpDecorator(app.BankKeeper, app.FeesKeeper, app.NodesKeeper, app.StorageKeeper, app.TokenKeeper),
 		// Security review B1/M4 ("lock the force-bonded stake"): rejects a bootstrap committee
 		// member's own MsgUndelegate/MsgBeginRedelegate if it would take their self-bond below
 		// what x/power has force-bonded into it, while lambda < 1.

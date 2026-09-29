@@ -16,6 +16,7 @@ func DefaultGenesisState() *GenesisState {
 		Params:                p,
 		BaseFee:               p.InitialBaseFee,
 		EarningsAccounts:      []EarningsAccount{},
+		FeeBalances:           []EarningsAccount{},
 		Deposits:              []Deposit{},
 		CumulativeCollected:   math.ZeroInt(),
 		CumulativeBurned:      math.ZeroInt(),
@@ -51,6 +52,20 @@ func (gs GenesisState) Validate() error {
 		seenEarnings[e.Address] = true
 		if e.Balance.IsNil() || !e.Balance.IsPositive() {
 			return fmt.Errorf("earnings account %q balance must be positive, got %s", e.Address, e.Balance)
+		}
+	}
+
+	seenFee := make(map[string]bool, len(gs.FeeBalances))
+	for _, e := range gs.FeeBalances {
+		if _, err := sdk.AccAddressFromBech32(e.Address); err != nil {
+			return fmt.Errorf("invalid fee balance address %q: %w", e.Address, err)
+		}
+		if seenFee[e.Address] {
+			return fmt.Errorf("duplicate fee balance %q", e.Address)
+		}
+		seenFee[e.Address] = true
+		if e.Balance.IsNil() || !e.Balance.IsPositive() {
+			return fmt.Errorf("fee balance %q must be positive, got %s", e.Address, e.Balance)
 		}
 	}
 

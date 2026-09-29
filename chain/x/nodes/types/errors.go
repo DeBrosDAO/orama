@@ -15,6 +15,8 @@ var (
 	ErrPubkeyReused = errors.New("service pubkey cannot be reused")
 	// ErrHotKey is returned when a hot key equals its operator.
 	ErrHotKey = errors.New("hot key must differ from the operator")
+	// ErrEndpointTaken is returned when a literal-IP endpoint is already registered by another node.
+	ErrEndpointTaken = errors.New("endpoint address is registered by another node")
 	// ErrCapacity is returned when declared capacity is above the bond-backed cap.
 	ErrCapacity = errors.New("declared capacity exceeds backed capacity")
 	// ErrReserved is returned when a capacity change would drop below what is reserved.

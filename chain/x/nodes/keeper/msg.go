@@ -1,12 +1,15 @@
 package keeper
 
 import (
+	"errors"
 	"fmt"
 
+	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/nodes/types"
 )
 
@@ -30,6 +33,11 @@ func (k Keeper) RegisterOperator(ctx sdk.Context, msg *types.MsgRegisterOperator
 		}
 		if has {
 			return fmt.Errorf("operator %s: %w", addr, types.ErrExists)
+		}
+		if owner, err := k.HotKeys.Get(ctx, addr); err == nil {
+			return fmt.Errorf("account %s is the hot key of node %s and cannot be an operator: %w", addr, owner, types.ErrHotKey)
+		} else if !errors.Is(err, collections.ErrNotFound) {
+			return fmt.Errorf("load hot key %s: %w", addr, err)
 		}
 		op := types.Operator{
 			Address:            addr,
@@ -78,13 +86,19 @@ func (k Keeper) RegisterNode(ctx sdk.Context, msg *types.MsgRegisterNode) error 
 		if err != nil {
 			return fmt.Errorf("hot key: %w", err)
 		}
-		if hot == operator {
-			return fmt.Errorf("node %s: %w", msg.NodeId, types.ErrHotKey)
+		if err := k.assertHotKeyAvailable(ctx, hot, operator, msg.NodeId); err != nil {
+			return err
 		}
 		if err := types.ValidateEndpoints(msg.Endpoints, 0, p.MaxEndpoints); err != nil {
 			return err
 		}
+		if err := k.assertIPsAvailable(ctx, types.LiteralIPs(msg.Endpoints), msg.NodeId); err != nil {
+			return err
+		}
 		if err := k.verifyBindings(ctx, operator, msg.Bindings, p); err != nil {
+			return err
+		}
+		if err := types.CheckHotKeyBinding(hot, msg.Bindings); err != nil {
 			return err
 		}
 		for _, binding := range msg.Bindings {
@@ -103,6 +117,7 @@ func (k Keeper) RegisterNode(ctx sdk.Context, msg *types.MsgRegisterNode) error 
 			Asn:                msg.Asn,
 			Status:             types.NodeStatusRegistered,
 			RegisteredAtHeight: ctx.BlockHeight(),
+			IdentitySinceUnix:  ctx.BlockTime().Unix(),
 		}
 		owner, err := sdk.AccAddressFromBech32(operator)
 		if err != nil {
@@ -124,6 +139,12 @@ func (k Keeper) RegisterNode(ctx sdk.Context, msg *types.MsgRegisterNode) error 
 			if err := k.LivePubkeys.Set(ctx, pubkeyKey(binding.Pubkey), node.NodeId); err != nil {
 				return fmt.Errorf("index pubkey for node %s: %w", node.NodeId, err)
 			}
+		}
+		if err := k.indexHotKey(ctx, "", node.HotKey, node.NodeId); err != nil {
+			return err
+		}
+		if err := k.indexIPs(ctx, nil, types.LiteralIPs(node.Endpoints), node.NodeId); err != nil {
+			return err
 		}
 		if err := k.saveNode(ctx, node); err != nil {
 			return err
@@ -160,32 +181,15 @@ func (k Keeper) UpdateNode(ctx sdk.Context, msg *types.MsgUpdateNode) error {
 		if err := closedNode(node); err != nil {
 			return err
 		}
-		if msg.HotKey != "" {
-			hot, err := types.CanonicalAddress(msg.HotKey)
-			if err != nil {
-				return fmt.Errorf("hot key: %w", err)
-			}
-			if hot == operator {
-				return fmt.Errorf("node %s: %w", node.NodeId, types.ErrHotKey)
-			}
-			node.HotKey = hot
+		before := node
+		if err := k.applyNodeUpdate(ctx, &node, operator, msg, p); err != nil {
+			return err
 		}
-		if len(msg.Bindings) > 0 {
-			if err := k.replaceBindings(ctx, &node, operator, msg.Bindings, p); err != nil {
-				return err
-			}
+		if err := types.CheckHotKeyBinding(node.HotKey, node.Bindings); err != nil {
+			return err
 		}
-		if msg.SetEndpoints {
-			if err := types.ValidateEndpoints(msg.Endpoints, 0, p.MaxEndpoints); err != nil {
-				return err
-			}
-			node.Endpoints = cloneStrings(msg.Endpoints)
-		}
-		if msg.SetRegionHint {
-			node.RegionHint = msg.RegionHint
-		}
-		if msg.SetAsn {
-			node.Asn = msg.Asn
+		if err := k.reindexNode(ctx, before, node); err != nil {
+			return err
 		}
 		if err := k.chargeNode(ctx, &node); err != nil {
 			return err
@@ -199,6 +203,58 @@ func (k Keeper) UpdateNode(ctx sdk.Context, msg *types.MsgUpdateNode) error {
 		))
 		return nil
 	})
+}
+
+// applyNodeUpdate applies msg's changes to node in memory. It checks what needs state (hot key
+// availability, endpoint address ownership, binding signatures) but writes nothing. It restarts the
+// network identity lock when the ASN or the derived /16 changes.
+func (k Keeper) applyNodeUpdate(ctx sdk.Context, node *types.Node, operator string, msg *types.MsgUpdateNode, p types.Params) error {
+	before := *node
+	if msg.HotKey != "" {
+		hot, err := types.CanonicalAddress(msg.HotKey)
+		if err != nil {
+			return fmt.Errorf("hot key: %w", err)
+		}
+		if err := k.assertHotKeyAvailable(ctx, hot, operator, node.NodeId); err != nil {
+			return err
+		}
+		node.HotKey = hot
+	}
+	if len(msg.Bindings) > 0 {
+		if err := k.replaceBindings(ctx, node, operator, msg.Bindings, p); err != nil {
+			return err
+		}
+	}
+	if msg.SetEndpoints {
+		if err := types.ValidateEndpoints(msg.Endpoints, 0, p.MaxEndpoints); err != nil {
+			return err
+		}
+		if err := k.assertIPsAvailable(ctx, types.LiteralIPs(msg.Endpoints), node.NodeId); err != nil {
+			return err
+		}
+		node.Endpoints = cloneStrings(msg.Endpoints)
+	}
+	if msg.SetRegionHint {
+		node.RegionHint = msg.RegionHint
+	}
+	if msg.SetAsn {
+		node.Asn = msg.Asn
+	}
+	if node.Asn != before.Asn || types.NetworkOf(node.Endpoints) != types.NetworkOf(before.Endpoints) {
+		node.IdentitySinceUnix = ctx.BlockTime().Unix()
+	}
+	return nil
+}
+
+// reindexNode brings the hot key and endpoint address indexes in line with an updated node.
+func (k Keeper) reindexNode(ctx sdk.Context, before types.Node, after types.Node) error {
+	if err := k.indexHotKey(ctx, before.HotKey, after.HotKey, after.NodeId); err != nil {
+		return err
+	}
+	if err := k.indexIPs(ctx, before.Endpoints, types.LiteralIPs(after.Endpoints), after.NodeId); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (k Keeper) replaceBindings(ctx sdk.Context, node *types.Node, operator string, bindings []types.Binding, p types.Params) error {
@@ -276,6 +332,9 @@ func (k Keeper) retireNode(ctx sdk.Context, node *types.Node, status types.NodeS
 			return err
 		}
 	}
+	if err := k.releaseIdentity(ctx, *node); err != nil {
+		return err
+	}
 	node.Bindings = nil
 	for _, role := range node.Roles {
 		amount := bondOf(*node, role)
@@ -329,6 +388,12 @@ func (k Keeper) BondNode(ctx sdk.Context, msg *types.MsgBondNode) error {
 		coins, err := norama(msg.Amount)
 		if err != nil {
 			return err
+		}
+		// Funding the bond from the operator's own earnings happens here, inside the message's
+		// own branch, and only after every check above passed: BaseApp discards this branch when
+		// the message fails, so a rejected bond can never leave earnings turned into a bank balance.
+		if err := k.earningsKeeper.FundBondFromEarnings(ctx, owner, params.BaseDenom, msg.Amount); err != nil {
+			return fmt.Errorf("bond node %s role %s: %w", node.NodeId, msg.Role, err)
 		}
 		if err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, owner, types.ModuleName, coins); err != nil {
 			return fmt.Errorf("bond node %s role %s: %w", node.NodeId, msg.Role, err)

@@ -24,7 +24,8 @@ import (
 // next) using funds that were never supposed to become a public transfer.
 //
 // The base fee is paid from payer's bank balance first; if allowEarningsForBase is true and that is
-// not enough, the remainder is drawn from payer's own earnings account. allowEarningsForBase must be
+// not enough, the remainder is drawn from payer's own fee-only balance (funded by an operator for a
+// node hot key) and then from payer's own earnings account. allowEarningsForBase must be
 // false whenever a fee granter (not the original signer) is paying (security review, non-blocking
 // "fee granter": "only fall back to earnings when the fee payer is the signer, never through a fee
 // granter") - a granter sponsors from their own public bank balance only, never the original
@@ -66,10 +67,15 @@ func (k Keeper) SettleFee(ctx context.Context, payer, proposer sdk.AccAddress, b
 				payer, baseFeeAmount, params.BaseDenom, bankForBase, params.BaseDenom,
 			)
 		}
-		debited, err := k.DebitEarningsUpTo(ctx, payer, remainingBase)
+		fromFeeBalance, err := k.debitFeeBalanceUpTo(ctx, payer, remainingBase)
 		if err != nil {
 			return err
 		}
+		debited, err := k.DebitEarningsUpTo(ctx, payer, remainingBase.Sub(fromFeeBalance))
+		if err != nil {
+			return err
+		}
+		debited = debited.Add(fromFeeBalance)
 		if debited.LT(remainingBase) {
 			return fmt.Errorf(
 				"insufficient funds: %s owes a base fee of %s%s but has only %s%s spendable and %s%s more in earnings",

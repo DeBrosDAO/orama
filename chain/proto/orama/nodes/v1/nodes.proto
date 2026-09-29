@@ -92,6 +92,11 @@ message Params {
   uint64 min_service_volume_bytes = 6;
   uint32 max_endpoints = 7;
   uint32 max_bindings = 8;
+  // network_identity_lock_seconds is how long a node's declared network
+  // identity (its ASN and the /16 derived from its endpoints) must have stood
+  // unchanged before protocol-deal slots and the operator house count it. A
+  // new node and any later change start the clock again. 0 turns the lock off.
+  int64 network_identity_lock_seconds = 9;
 }
 
 // RoleBond is one role's norama amount (a minimum, or a node's current bond).
@@ -113,7 +118,9 @@ message Operator {
 // Binding is one service key's proof that it belongs to an operator.
 // The signature covers
 // orama-global-bind-v1|chain-id|operator|service|hex(pubkey)
-// (plans/open-network.md "Keys").
+// (plans/open-network.md "Keys"). The binding whose service is "hot-key" is
+// the node's hot key: a secp256k1 key whose account address is the node's
+// hot_key, so the hot key has proved possession of itself.
 message Binding {
   string service = 1;
   KeyType key_type = 2;
@@ -148,6 +155,11 @@ message Node {
   // It is not verifiable on chain (C5, C7). The /16 network is not stored: it
   // is derived from endpoints.
   uint32 asn = 17;
+  // identity_since_unix is when the node's (asn, derived /16) pair last
+  // changed, or the node registered. The identity counts for protocol deals
+  // and the operator house only once network_identity_lock_seconds have
+  // passed since. Genesis nodes carry whatever value the genesis gives them.
+  int64 identity_since_unix = 18;
 }
 
 // Cluster is one optional public registry row (plans/open-network/track-a

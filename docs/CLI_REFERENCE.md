@@ -1662,7 +1662,7 @@ this --chain-id and --operator.
 | `--endpoint` | — | Public endpoint (repeatable) |
 | `--fee` | — | Fee in norama [required] |
 | `--gas` | `0` | Gas limit [required] |
-| `--hot-key` | — | Hot key account, not the operator [required] |
+| `--hot-key` | — | Hot key account, not the operator; needs a `hot-key` binding signed by that key [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |

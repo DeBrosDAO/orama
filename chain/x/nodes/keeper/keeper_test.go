@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -192,13 +193,17 @@ func (f *fakeDeposits) ReleaseDeposit(ctx context.Context, id string) (math.Int,
 	return refund, burn, nil
 }
 
-// fakeEarnings is an in-memory earnings ledger that follows x/fees MoveEarnings semantics.
+// fakeEarnings is an in-memory earnings ledger with the x/fees semantics x/nodes relies on:
+// FundFeeBalance moves earnings into a fee-only balance that nothing else can spend, and
+// FundBondFromEarnings tops the bank balance up from earnings.
 type fakeEarnings struct {
+	bank     *fakeBankKeeper
 	balances map[string]math.Int
+	feeOnly  map[string]math.Int
 }
 
-func newFakeEarnings() *fakeEarnings {
-	return &fakeEarnings{balances: map[string]math.Int{}}
+func newFakeEarnings(bank *fakeBankKeeper) *fakeEarnings {
+	return &fakeEarnings{bank: bank, balances: map[string]math.Int{}, feeOnly: map[string]math.Int{}}
 }
 
 func (e *fakeEarnings) balanceOf(addr sdk.AccAddress) math.Int {
@@ -208,12 +213,32 @@ func (e *fakeEarnings) balanceOf(addr sdk.AccAddress) math.Int {
 	return math.ZeroInt()
 }
 
-func (e *fakeEarnings) MoveEarnings(_ context.Context, from, to sdk.AccAddress, amount math.Int) error {
+func (e *fakeEarnings) feeBalanceOf(addr sdk.AccAddress) math.Int {
+	if v, ok := e.feeOnly[addr.String()]; ok {
+		return v
+	}
+	return math.ZeroInt()
+}
+
+func (e *fakeEarnings) FundFeeBalance(_ context.Context, from, to sdk.AccAddress, amount math.Int) error {
 	if !amount.IsPositive() || e.balanceOf(from).LT(amount) {
 		return errInsufficient(from.String(), e.balanceOf(from), amount)
 	}
 	e.balances[from.String()] = e.balanceOf(from).Sub(amount)
-	e.balances[to.String()] = e.balanceOf(to).Add(amount)
+	e.feeOnly[to.String()] = e.feeBalanceOf(to).Add(amount)
+	return nil
+}
+
+func (e *fakeEarnings) FundBondFromEarnings(_ context.Context, addr sdk.AccAddress, _ string, needed math.Int) error {
+	if !needed.IsPositive() || e.bank.balanceOf(addr.String()).GTE(needed) {
+		return nil
+	}
+	shortfall := needed.Sub(e.bank.balanceOf(addr.String()))
+	if e.balanceOf(addr).LT(shortfall) {
+		return nil
+	}
+	e.balances[addr.String()] = e.balanceOf(addr).Sub(shortfall)
+	e.bank.fund(addr.String(), shortfall)
 	return nil
 }
 
@@ -229,7 +254,10 @@ type testFixture struct {
 func newTestFixture(t *testing.T) *testFixture {
 	t.Helper()
 	f := newRawFixture(t)
-	require.NoError(t, f.Keeper.InitGenesis(f.Ctx, *types.DefaultGenesisState()))
+	gs := types.DefaultGenesisState()
+	// The identity lock has its own tests; everywhere else a node's identity counts at once.
+	gs.Params.NetworkIdentityLockSeconds = 0
+	require.NoError(t, f.Keeper.InitGenesis(f.Ctx, *gs))
 	return f
 }
 
@@ -243,7 +271,7 @@ func newRawFixture(t *testing.T) *testFixture {
 	cdc := codec.NewProtoCodec(codectypes.NewInterfaceRegistry())
 	bank := newFakeBankKeeper()
 	deps := newFakeDeposits(bank)
-	earn := newFakeEarnings()
+	earn := newFakeEarnings(bank)
 	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, deps, earn)
 	return &testFixture{Ctx: ctx, Keeper: k, Bank: bank, Deposits: deps, Earnings: earn, Msg: keeper.NewMsgServerImpl(k)}
 }
@@ -261,11 +289,35 @@ func (f *testFixture) requireInvariants(t *testing.T) {
 	require.True(t, got.CapacityBacked, got.Detail)
 }
 
+// testKeys remembers the private key behind every account newAccount made, so a test that names an
+// account as a node's hot key can produce the hot key's own signed binding.
+var testKeys sync.Map
+
 func newAccount(t *testing.T) sdk.AccAddress {
 	t.Helper()
-	addr := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address())
+	priv := secp256k1.GenPrivKey()
+	addr := sdk.AccAddress(priv.PubKey().Address())
 	require.Contains(t, addr.String(), "orama1")
+	testKeys.Store(addr.String(), priv)
 	return addr
+}
+
+// hotBinding is the "hot-key" binding the hot account signs over the operator and chain.
+func hotBinding(t *testing.T, chainID string, operator, hot sdk.AccAddress) types.Binding {
+	t.Helper()
+	v, ok := testKeys.Load(hot.String())
+	require.True(t, ok, "hot key %s was not made by newAccount", hot)
+	priv := v.(*secp256k1.PrivKey)
+	pub := priv.PubKey().Bytes()
+	sig, err := priv.Sign(types.BindingSignBytes(chainID, operator.String(), types.HotKeyService, pub))
+	require.NoError(t, err)
+	return types.Binding{Service: types.HotKeyService, KeyType: types.KeyTypeSecp256k1, Pubkey: pub, Signature: sig}
+}
+
+// withHot appends the hot key's own binding to bindings.
+func withHot(t *testing.T, operator, hot sdk.AccAddress, bindings ...types.Binding) []types.Binding {
+	t.Helper()
+	return append(append([]types.Binding(nil), bindings...), hotBinding(t, testChainID, operator, hot))
 }
 
 func secpBinding(t *testing.T, chainID, operator, service string) types.Binding {
@@ -302,7 +354,7 @@ func (f *testFixture) registerNode(t *testing.T, op, hot sdk.AccAddress, id stri
 		NodeId:     id,
 		Roles:      roles,
 		HotKey:     hot.String(),
-		Bindings:   bindings,
+		Bindings:   withHot(t, op, hot, bindings...),
 		Endpoints:  []string{"https://node.example:443"},
 		RegionHint: "eu-1",
 	})

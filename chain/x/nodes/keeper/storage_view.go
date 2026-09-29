@@ -85,11 +85,14 @@ func (k Keeper) StorageProbation(ctx sdk.Context, nodeID string) (bool, error) {
 
 // NodeNetwork returns the node's network group (the /16 derived from its
 // endpoints, "" when none carries a literal IP) and its declared ASN (0 when
-// undeclared). Both are operator declarations: see docs/CHAIN.md.
+// undeclared). Both are operator declarations: see docs/CHAIN.md. While the
+// identity is inside its lock (a new node, or one that just changed either
+// value) it is reported as undeclared, so a node cannot be moved to fit a
+// protocol-deal slot draw.
 func (k Keeper) NodeNetwork(ctx sdk.Context, nodeID string) (string, uint32, error) {
 	node, err := k.GetNode(ctx, nodeID)
 	if err != nil {
 		return "", 0, err
 	}
-	return types.NetworkOf(node.Endpoints), node.Asn, nil
+	return k.effectiveIdentity(ctx, node)
 }

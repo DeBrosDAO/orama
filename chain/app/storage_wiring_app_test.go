@@ -12,6 +12,7 @@ import (
 	"cosmossdk.io/math"
 
 	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
+	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/app"
@@ -41,6 +42,11 @@ func newWiringChain(t *testing.T) *wiringChain {
 	oramaApp := buildTestApp(t)
 	genesis := time.Unix(1_700_000_000, 0)
 	genState, _ := committeeGenesis(t, oramaApp, 1, 365)
+	// The network identity lock has its own tests; here a node's identity counts at once.
+	var nodesGen nodestypes.GenesisState
+	oramaApp.AppCodec().MustUnmarshalJSON(genState[nodestypes.ModuleName], &nodesGen)
+	nodesGen.Params.NetworkIdentityLockSeconds = 0
+	genState[nodestypes.ModuleName] = oramaApp.AppCodec().MustMarshalJSON(&nodesGen)
 	initChain(t, oramaApp, genState, 0, genesis)
 	finalize(t, oramaApp, 1, genesis.Add(2*time.Second))
 	return &wiringChain{t: t, app: oramaApp, genesis: genesis, height: 1}
@@ -84,9 +90,15 @@ func (c *wiringChain) addStorageNode(id, endpoint string, asn uint32) wiringNode
 	n := wiringNode{
 		id:       id,
 		operator: sdk.AccAddress(ed25519.GenPrivKey().PubKey().Address()),
-		hot:      sdk.AccAddress(ed25519.GenPrivKey().PubKey().Address()),
 		endpoint: endpoint,
 		asn:      asn,
+	}
+	hotPriv := secp256k1.GenPrivKey()
+	n.hot = sdk.AccAddress(hotPriv.PubKey().Address())
+	hotSig, err := hotPriv.Sign(nodestypes.BindingSignBytes(testChainID, n.operator.String(), nodestypes.HotKeyService, hotPriv.PubKey().Bytes()))
+	require.NoError(c.t, err)
+	hotBinding := nodestypes.Binding{
+		Service: nodestypes.HotKeyService, KeyType: nodestypes.KeyTypeSecp256k1, Pubkey: hotPriv.PubKey().Bytes(), Signature: hotSig,
 	}
 	pub, priv, err := stded25519.GenerateKey(nil)
 	require.NoError(c.t, err)
@@ -103,7 +115,7 @@ func (c *wiringChain) addStorageNode(id, endpoint string, asn uint32) wiringNode
 		require.NoError(c.t, err)
 		_, err = srv.RegisterNode(ctx, &nodestypes.MsgRegisterNode{
 			Operator: n.operator.String(), NodeId: id, Roles: []nodestypes.Role{nodestypes.RoleStorage},
-			HotKey: n.hot.String(), Bindings: []nodestypes.Binding{binding},
+			HotKey: n.hot.String(), Bindings: []nodestypes.Binding{binding, hotBinding},
 			Endpoints: []string{endpoint}, Asn: asn,
 		})
 		require.NoError(c.t, err)
@@ -304,7 +316,10 @@ func TestApp_operatorFundsOwnNodesHotKeyFromEarnings(t *testing.T) {
 
 	torPub, torPriv, err := stded25519.GenerateKey(nil)
 	require.NoError(t, err)
-	hot := sdk.AccAddress(ed25519.GenPrivKey().PubKey().Address())
+	hotPriv := secp256k1.GenPrivKey()
+	hot := sdk.AccAddress(hotPriv.PubKey().Address())
+	hotSig, err := hotPriv.Sign(nodestypes.BindingSignBytes(testChainID, op.String(), nodestypes.HotKeyService, hotPriv.PubKey().Bytes()))
+	require.NoError(t, err)
 	gas := uint64(300_000)
 	register := signedTx(t, oramaApp, opKey, 3, gas,
 		&nodestypes.MsgRegisterOperator{Operator: op.String()},
@@ -313,6 +328,8 @@ func TestApp_operatorFundsOwnNodesHotKeyFromEarnings(t *testing.T) {
 			Bindings: []nodestypes.Binding{{
 				Service: "tor", KeyType: nodestypes.KeyTypeEd25519, Pubkey: torPub,
 				Signature: stded25519.Sign(torPriv, nodestypes.BindingSignBytes(testChainID, op.String(), "tor", torPub)),
+			}, {
+				Service: nodestypes.HotKeyService, KeyType: nodestypes.KeyTypeSecp256k1, Pubkey: hotPriv.PubKey().Bytes(), Signature: hotSig,
 			}},
 			Endpoints: []string{"https://node.example:443"},
 		})
@@ -327,9 +344,12 @@ func TestApp_operatorFundsOwnNodesHotKeyFromEarnings(t *testing.T) {
 	require.Zero(t, resp.TxResults[0].Code, "fund hot key failed: %s", resp.TxResults[0].Log)
 
 	ctx := oramaApp.NewContext(true)
+	hotFee, err := oramaApp.FeesKeeper.GetFeeBalance(ctx, hot)
+	require.NoError(t, err)
+	require.True(t, hotFee.Equal(amount), "hot key fee balance = %s, want %s", hotFee, amount)
 	hotEarnings, err := oramaApp.FeesKeeper.GetEarnings(ctx, hot)
 	require.NoError(t, err)
-	require.True(t, hotEarnings.Equal(amount), "hot key earnings = %s, want %s", hotEarnings, amount)
+	require.True(t, hotEarnings.IsZero(), "the hot key gets no earnings it could bond or shield")
 	after, err := oramaApp.FeesKeeper.GetEarnings(ctx, op)
 	require.NoError(t, err)
 	require.True(t, before.Sub(after).GTE(amount), "operator earnings fell by %s, want at least %s", before.Sub(after), amount)
@@ -342,7 +362,7 @@ func TestApp_operatorFundsOwnNodesHotKeyFromEarnings(t *testing.T) {
 	ghost := signedTx(t, oramaApp, opKey, 5, gas, &nodestypes.MsgFundHotKey{Operator: op.String(), NodeId: "ghost", Amount: amount})
 	resp = finalize(t, oramaApp, 5, genesisTime.Add(10*time.Second), ghost)
 	require.NotZero(t, resp.TxResults[0].Code, "funding a node that does not exist must fail")
-	stillHot, err := oramaApp.FeesKeeper.GetEarnings(oramaApp.NewContext(true), hot)
+	stillHot, err := oramaApp.FeesKeeper.GetFeeBalance(oramaApp.NewContext(true), hot)
 	require.NoError(t, err)
 	require.True(t, stillHot.Equal(amount))
 }

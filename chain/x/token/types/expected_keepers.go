@@ -32,6 +32,11 @@ type FeesKeeper interface {
 	LockDeposit(ctx context.Context, owner sdk.AccAddress, id string, amount math.Int) error
 	ReleaseDeposit(ctx context.Context, id string) (refund, burn math.Int, err error)
 	GetDeposit(ctx context.Context, id string) (feestypes.Deposit, error)
+
+	// FundBondFromEarnings tops addr's bank balance up from its own earnings so CreateToken can
+	// take its fee and metadata deposit (C2 item 4). Called from the message handler, after its
+	// own checks, so a failed creation reverses it.
+	FundBondFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
 }
 
 // TransferHook is the gas-capped callback a token may request at creation.

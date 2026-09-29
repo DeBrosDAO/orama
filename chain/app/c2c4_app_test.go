@@ -15,6 +15,7 @@ import (
 	"cosmossdk.io/math"
 
 	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
+	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
@@ -479,7 +480,10 @@ func TestApp_operatorBondsNodeFromEarnings(t *testing.T) {
 
 	torPub, torPriv, err := stded25519.GenerateKey(nil)
 	require.NoError(t, err)
-	hot := sdk.AccAddress(ed25519.GenPrivKey().PubKey().Address())
+	hotPriv := secp256k1.GenPrivKey()
+	hot := sdk.AccAddress(hotPriv.PubKey().Address())
+	hotSig, err := hotPriv.Sign(nodestypes.BindingSignBytes(testChainID, op.String(), nodestypes.HotKeyService, hotPriv.PubKey().Bytes()))
+	require.NoError(t, err)
 	register := signedTx(t, oramaApp, opKey, 3, gas,
 		&nodestypes.MsgRegisterOperator{Operator: op.String()},
 		&nodestypes.MsgRegisterNode{
@@ -487,6 +491,8 @@ func TestApp_operatorBondsNodeFromEarnings(t *testing.T) {
 			Bindings: []nodestypes.Binding{{
 				Service: "tor", KeyType: nodestypes.KeyTypeEd25519, Pubkey: torPub,
 				Signature: stded25519.Sign(torPriv, nodestypes.BindingSignBytes(testChainID, op.String(), "tor", torPub)),
+			}, {
+				Service: nodestypes.HotKeyService, KeyType: nodestypes.KeyTypeSecp256k1, Pubkey: hotPriv.PubKey().Bytes(), Signature: hotSig,
 			}},
 			Endpoints: []string{"https://node.example:443"}, RegionHint: "eu-1",
 		})

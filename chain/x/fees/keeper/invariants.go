@@ -3,6 +3,7 @@ package keeper
 import (
 	"fmt"
 
+	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -26,14 +27,19 @@ type FeeInvariants struct {
 // CheckInvariants checks the three x/fees invariants from
 // plans/open-network/track-c-chain.md C2:
 //
-//   - sum of earnings balances == the fees module account balance
+//   - sum of earnings balances + sum of fee-only balances == the fees module account balance
 //   - sum of open deposits == the deposits module account balance
 //   - burned + distributed == fees collected
 func (k Keeper) CheckInvariants(ctx sdk.Context) (FeeInvariants, error) {
-	earningsSum, err := k.sumEarnings(ctx)
+	earningsOnly, err := k.sumBalances(ctx, k.Earnings)
 	if err != nil {
 		return FeeInvariants{}, err
 	}
+	feeOnly, err := k.sumBalances(ctx, k.FeeBalances)
+	if err != nil {
+		return FeeInvariants{}, err
+	}
+	earningsSum := earningsOnly.Add(feeOnly)
 	depositSum, err := k.sumDeposits(ctx)
 	if err != nil {
 		return FeeInvariants{}, err
@@ -58,10 +64,10 @@ func (k Keeper) CheckInvariants(ctx sdk.Context) (FeeInvariants, error) {
 	feesBalance := burned.Add(distributed).Equal(collected)
 
 	detail := fmt.Sprintf(
-		"earnings match module: %t (ledger=%s module=%s)\n"+
+		"earnings + fee balances match module: %t (ledger=%s of which fee-only=%s module=%s)\n"+
 			"deposits match module: %t (ledger=%s module=%s)\n"+
 			"burned + distributed == collected: %t (burned=%s distributed=%s collected=%s)\n",
-		earningsMatch, earningsSum, earningsBalance,
+		earningsMatch, earningsSum, feeOnly, earningsBalance,
 		depositsMatch, depositSum, depositBalance,
 		feesBalance, burned, distributed, collected,
 	)
@@ -76,14 +82,14 @@ func (k Keeper) CheckInvariants(ctx sdk.Context) (FeeInvariants, error) {
 	}, nil
 }
 
-func (k Keeper) sumEarnings(ctx sdk.Context) (math.Int, error) {
+func (k Keeper) sumBalances(ctx sdk.Context, ledger collections.Map[string, math.Int]) (math.Int, error) {
 	sum := math.ZeroInt()
-	err := k.Earnings.Walk(ctx, nil, func(_ string, balance math.Int) (bool, error) {
+	err := ledger.Walk(ctx, nil, func(_ string, balance math.Int) (bool, error) {
 		sum = sum.Add(balance)
 		return false, nil
 	})
 	if err != nil {
-		return math.Int{}, fmt.Errorf("failed to sum earnings: %w", err)
+		return math.Int{}, fmt.Errorf("failed to sum balances: %w", err)
 	}
 	return sum, nil
 }

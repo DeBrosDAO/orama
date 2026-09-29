@@ -1,10 +1,17 @@
 package clusterreg
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"regexp"
+
+	"golang.org/x/crypto/ripemd160" //nolint:staticcheck // the account address hash is RIPEMD-160
 )
+
+// HotKeyService is the service name of the binding that proves a node's hot key. It matches
+// chain/x/nodes/types.HotKeyService.
+const HotKeyService = "hot-key"
 
 var nodeService = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
@@ -77,6 +84,9 @@ func ValidateNode(n NodeRegistration) error {
 		return fmt.Errorf("at least one binding is required")
 	}
 	if err := validateNodeBindings(n.Bindings); err != nil {
+		return err
+	}
+	if err := checkHotKeyBinding(hot, n.Bindings); err != nil {
 		return err
 	}
 	if err := validateEndpointsMin(n.Endpoints, 0); err != nil {
@@ -219,4 +229,29 @@ func appendPacked(dst []byte, field int, vals []uint64) []byte {
 		body = appendVarint(body, v)
 	}
 	return appendBytesField(dst, field, body)
+}
+
+// checkHotKeyBinding requires one secp256k1 "hot-key" binding whose account address is hot: the
+// hot key proves it holds itself, so a hot key the operator merely named is refused.
+func checkHotKeyBinding(hot string, bindings []NodeBinding) error {
+	for _, b := range bindings {
+		if b.Service != HotKeyService {
+			continue
+		}
+		if b.KeyType != "secp256k1" {
+			return fmt.Errorf("the %q binding must be a secp256k1 key", HotKeyService)
+		}
+		sum := sha256.Sum256(b.Pubkey)
+		h := ripemd160.New()
+		h.Write(sum[:])
+		addr, err := bech32Encode(accountHRP, h.Sum(nil))
+		if err != nil {
+			return err
+		}
+		if addr != hot {
+			return fmt.Errorf("the %q binding is for %s, not the hot key %s", HotKeyService, addr, hot)
+		}
+		return nil
+	}
+	return fmt.Errorf("a %q binding signed by the hot key is required (orama global bind --service %s)", HotKeyService, HotKeyService)
 }

@@ -23,7 +23,7 @@ func storageNode(t *testing.T, f *testFixture, id string, endpoints []string, as
 		NodeId:    id,
 		Roles:     []types.Role{types.RoleStorage},
 		HotKey:    hot.String(),
-		Bindings:  []types.Binding{secpBinding(t, testChainID, op.String(), "hot")},
+		Bindings:  withHot(t, op, hot, secpBinding(t, testChainID, op.String(), "hot")),
 		Endpoints: endpoints,
 		Asn:       asn,
 	})
@@ -40,7 +40,8 @@ func TestFundHotKey_movesEarningsToOwnNodesHotKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.True(t, f.Earnings.balanceOf(op).Equal(math.NewInt(600)))
-	require.True(t, f.Earnings.balanceOf(hot).Equal(math.NewInt(400)))
+	require.True(t, f.Earnings.feeBalanceOf(hot).Equal(math.NewInt(400)), "the hot key gets a fee-only balance")
+	require.True(t, f.Earnings.balanceOf(hot).IsZero(), "and no earnings it could bond or shield")
 }
 
 func TestFundHotKey_refusesAnotherOperatorsNode(t *testing.T) {
@@ -52,7 +53,7 @@ func TestFundHotKey_refusesAnotherOperatorsNode(t *testing.T) {
 
 	_, err := f.Msg.FundHotKey(f.Ctx, &types.MsgFundHotKey{Operator: thief.String(), NodeId: "node-1", Amount: math.NewInt(1)})
 	require.ErrorIs(t, err, types.ErrUnauthorized)
-	require.True(t, f.Earnings.balanceOf(hot).IsZero())
+	require.True(t, f.Earnings.feeBalanceOf(hot).IsZero())
 	require.True(t, f.Earnings.balanceOf(thief).Equal(math.NewInt(1_000)))
 }
 
@@ -81,14 +82,15 @@ func TestFundHotKey_followsRotatedHotKey(t *testing.T) {
 	f := newTestFixture(t)
 	op, oldHot := storageNode(t, f, "node-1", nil, 0)
 	newHot := newAccount(t)
-	_, err := f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{Operator: op.String(), NodeId: "node-1", HotKey: newHot.String()})
+	_, err := f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{Operator: op.String(), NodeId: "node-1", HotKey: newHot.String(),
+		Bindings: withHot(t, op, newHot, secpBinding(t, testChainID, op.String(), "hot2"))})
 	require.NoError(t, err)
 	f.Earnings.balances[op.String()] = math.NewInt(50)
 
 	_, err = f.Msg.FundHotKey(f.Ctx, &types.MsgFundHotKey{Operator: op.String(), NodeId: "node-1", Amount: math.NewInt(50)})
 	require.NoError(t, err)
-	require.True(t, f.Earnings.balanceOf(newHot).Equal(math.NewInt(50)))
-	require.True(t, f.Earnings.balanceOf(oldHot).IsZero())
+	require.True(t, f.Earnings.feeBalanceOf(newHot).Equal(math.NewInt(50)))
+	require.True(t, f.Earnings.feeBalanceOf(oldHot).IsZero())
 }
 
 func TestNodeNetwork_derivedFromEndpointsAndDeclaredAsn(t *testing.T) {
@@ -141,7 +143,7 @@ func TestRegisterNode_refusesReservedAsn(t *testing.T) {
 	f.registerOperator(t, op)
 	_, err := f.Msg.RegisterNode(f.Ctx, &types.MsgRegisterNode{
 		Operator: op.String(), NodeId: "n", Roles: []types.Role{types.RoleStorage}, HotKey: hot.String(),
-		Bindings: []types.Binding{secpBinding(t, testChainID, op.String(), "hot")}, Asn: 23456,
+		Bindings: withHot(t, op, hot, secpBinding(t, testChainID, op.String(), "hot")), Asn: 23456,
 	})
 	require.Error(t, err)
 }

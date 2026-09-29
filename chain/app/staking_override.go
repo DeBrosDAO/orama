@@ -8,6 +8,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/module"
 	"github.com/cosmos/cosmos-sdk/x/staking"
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
 )
@@ -25,15 +26,27 @@ import (
 // module.HasABCIEndBlock in this app's end-blocker order that ever returns a non-empty update
 // list (the SDK's module manager errors if two modules both do - see
 // types/module.Manager.EndBlock).
+//
+// It also registers x/staking's Msg service wrapped so that a signer's own bond shortfall is
+// funded from their earnings while MsgCreateValidator or MsgDelegate executes (see
+// earningsFundedStaking).
 type stakingEndBlockOverride struct {
 	staking.AppModule
 
 	stakingKeeper *stakingkeeper.Keeper
+	funder        earningsFunder
 }
 
-// newStakingEndBlockOverride wraps am, using keeper's own EndBlocker for the discarded updates.
-func newStakingEndBlockOverride(am staking.AppModule, keeper *stakingkeeper.Keeper) stakingEndBlockOverride {
-	return stakingEndBlockOverride{AppModule: am, stakingKeeper: keeper}
+// newStakingEndBlockOverride wraps am, using keeper's own EndBlocker for the discarded updates and
+// funder for the bond top-up.
+func newStakingEndBlockOverride(am staking.AppModule, keeper *stakingkeeper.Keeper, funder earningsFunder) stakingEndBlockOverride {
+	return stakingEndBlockOverride{AppModule: am, stakingKeeper: keeper, funder: funder}
+}
+
+// RegisterServices registers x/staking's services unchanged except that the Msg service is
+// wrapped by earningsFundedStaking.
+func (w stakingEndBlockOverride) RegisterServices(cfg module.Configurator) {
+	w.AppModule.RegisterServices(earningsFundedConfigurator{Configurator: cfg, funder: w.funder})
 }
 
 // EndBlock runs x/staking's own end-blocker for its bonding/unbonding side effects, and always

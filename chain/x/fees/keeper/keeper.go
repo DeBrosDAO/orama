@@ -28,6 +28,7 @@ type Keeper struct {
 	Params      collections.Item[types.Params]
 	BaseFee     collections.Item[math.Int]
 	Earnings    collections.Map[string, math.Int]
+	FeeBalances collections.Map[string, math.Int]
 	Deposits    collections.Map[string, types.Deposit]
 	Collected   collections.Item[math.Int]
 	Burned      collections.Item[math.Int]
@@ -47,6 +48,7 @@ func NewKeeper(
 		Params:       collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
 		BaseFee:      collections.NewItem(sb, types.BaseFeeKey, "base_fee", sdk.IntValue),
 		Earnings:     collections.NewMap(sb, types.EarningsPrefix, "earnings", collections.StringKey, sdk.IntValue),
+		FeeBalances:  collections.NewMap(sb, types.FeeBalancesPrefix, "fee_balances", collections.StringKey, sdk.IntValue),
 		Deposits:     collections.NewMap(sb, types.DepositsPrefix, "deposits", collections.StringKey, codec.CollValue[types.Deposit](cdc)),
 		Collected:    collections.NewItem(sb, types.CollectedKey, "collected", sdk.IntValue),
 		Burned:       collections.NewItem(sb, types.BurnedKey, "burned", sdk.IntValue),

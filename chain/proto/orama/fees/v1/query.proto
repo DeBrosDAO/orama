@@ -14,6 +14,7 @@ service Query {
   rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
   rpc BaseFee(QueryBaseFeeRequest) returns (QueryBaseFeeResponse);
   rpc Earnings(QueryEarningsRequest) returns (QueryEarningsResponse);
+  rpc FeeBalance(QueryFeeBalanceRequest) returns (QueryFeeBalanceResponse);
   rpc Deposit(QueryDepositRequest) returns (QueryDepositResponse);
   rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
 }
@@ -38,6 +39,17 @@ message QueryEarningsRequest {
 }
 
 message QueryEarningsResponse {
+  string balance = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message QueryFeeBalanceRequest {
+  string address = 1;
+}
+
+message QueryFeeBalanceResponse {
   string balance = 1 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false

@@ -560,16 +560,21 @@ time it recomputes power.
 and every protocol payout (emission, fees) lands in a restricted earnings account, never a public
 bank balance (see "`x/fees`" below) - so without a way to move earnings into a bondable bank
 balance, nobody outside the genesis bootstrap committee could ever accumulate enough of a *public*
-balance to self-bond a validator or delegate at all. `x/fees/ante.BondTopUpDecorator` runs after `FeeDecorator` and before signature
-verification. It tops up a signer's own shortfall (the declared bond amount minus their current
-spendable bank balance) from that same signer's own earnings, before the real
-`MsgCreateValidator`/`MsgDelegate` handler - or the x/nodes `MsgBondNode` handler, keyed on the
-message's `operator` - runs. The fee has already been settled, so a tx pays its
-fee and then bonds from whatever earnings remain. All bond messages from one signer in a tx are
-summed first, so two `MsgBondNode` (or a delegate plus a node bond) are both funded. The top-up
-happens only when the signer's earnings cover the whole shortfall; otherwise nothing is debited and
-the message fails with the ordinary insufficient-funds error (ante writes survive a failed message,
-so a partial top-up would only move earnings into the bank for nothing). It only ever moves an
+balance to self-bond a validator or delegate at all. x/staking's Msg service is therefore wrapped
+(`chain/app/staking_topup.go`): while `MsgCreateValidator` or `MsgDelegate` executes, and before
+the staking handler spends anything, the signer's own shortfall (the declared bond amount minus
+their current spendable bank balance) is moved from that same signer's earnings into their bank
+balance (`x/fees` `FundBondFromEarnings`). `x/nodes` `MsgBondNode` does the same inside its handler,
+after its own checks. The top-up runs **inside the message**, not in the ante chain, on purpose: BaseApp
+writes ante state even when the message then fails, and a PostHandler cannot undo it either (its
+writes to a failed message's branch are dropped), so an ante top-up would turn earnings into a
+spendable bank balance for a delegation to a missing validator or a bond the handler rejects. A message
+handler runs in the message's own cache branch, which BaseApp discards when the message fails, so a
+failed message (or a later failed message in the same tx) reverses its top-up with everything else,
+and no acceptance predicate has to be duplicated: the staking or nodes handler decides. Bond
+messages in one tx are topped up one after another, each against the balance the earlier ones left.
+The top-up happens only when the signer's earnings cover the whole shortfall; otherwise nothing is
+debited and the message fails with the ordinary insufficient-funds error. It only ever moves an
 address's own earnings into its own bank balance; a tx naming someone else's address fails
 signature verification.
 
@@ -788,9 +793,9 @@ decorator is exactly `x/auth/ante`'s own). It requires a tx's declared fee to be
    ever spend from) - so a broken header field can never block every transaction on the chain.
 
 A `MsgCreateValidator`/`MsgDelegate` whose declared bond amount exceeds the signer's own spendable
-bank balance is topped up from that same signer's earnings by `x/fees/ante.BondTopUpDecorator`
-(security review B8; see "Outsiders can bond from earnings" under "`x/power`" above). That
-decorator runs after this one, so the fee is settled before the bond is funded.
+bank balance is topped up from that same signer's earnings while the message executes (security
+review B8; see "Outsiders can bond from earnings" under "`x/power`" above), so the fee is settled
+first and a failed message reverses the top-up.
 
 Feegrant sponsorship still works exactly as it does with the stock decorator (a fee granter, if one
 is set and authorizes it, pays instead of the signer) - except that, as above, a granter-sponsored
@@ -818,16 +823,21 @@ touch the ledger. `SettleFee` also adds the fee to three counters: collected, bu
 
 A balance debited back to zero is removed from the earnings map rather than stored as a zero row.
 
-Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** and **storage deal and token fees** (the bond
-top-up decorator, for staking messages, `x/nodes` `MsgBondNode`, `x/storage` `MsgCreateDeal`/`MsgExtendDeal`
-and `x/token` `MsgCreateToken`) and fund the signer's own **state deposits** (`LockDeposit` takes the bank
-balance first and the shortfall from that same owner's earnings). `MsgShieldEarnings` is not
-implemented yet. It depends on `x/shielded` (C12). The only message that moves earnings to another
-address is `x/nodes` `MsgFundHotKey`: it moves an operator's own earnings to the earnings balance of
-the hot key registered on the operator's own node (see `x/nodes`). It is a ledger move between two
-earnings entries (`Keeper.MoveEarnings`); no coins leave the `fees` module account and nothing
-reaches a bank balance, so the earnings invariant is untouched. The hot key then pays base fees
-from that balance through the ante decorator; a tip still needs a bank balance.
+Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** and **storage deal and token fees** (inside the
+message handlers: staking, `x/nodes` `MsgBondNode`, `x/storage` `MsgCreateDeal`/`MsgExtendDeal` for
+the signer's own funds, never a grantor's, and `x/token` `MsgCreateToken`; each calls `FundBondFromEarnings`
+after its own checks, so a failed message reverses it) and fund the signer's own **state
+deposits** (`LockDeposit` takes the bank balance first and the shortfall from that same owner's
+earnings). `MsgShieldEarnings` is not implemented yet. It depends on `x/shielded` (C12). The only
+message that moves earnings to another address is `x/nodes` `MsgFundHotKey`, and what it moves is
+not earnings any more: `Keeper.FundFeeBalance` debits the operator's earnings and credits a separate
+**fee-only balance** (`FeeBalances`) of the hot key registered on the operator's own node. A fee-only
+balance can pay a transaction's base fee (`SettleFee` draws it after the bank balance and before
+the payer's earnings) and nothing else: it is never bonded, shielded, put into a deposit, used for
+a tip, drawn through a fee granter, or moved on. It is backed by the same `fees` module account, and
+the invariant is now "earnings + fee-only balances == the fees module balance". Genesis carries
+`fee_balances`; `oramad query`-side gRPC `FeeBalance` reads one. The hot key must also have proved
+possession of itself (see `x/nodes`), so the address is not one the operator merely named.
 
 ### State deposits (implemented, not yet consumed)
 
@@ -1018,7 +1028,8 @@ Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis m
 
 - **Operator.** An account that may own nodes and cluster rows (`MsgRegisterOperator`).
 - **Node.** Roles `VALIDATOR`, `STORAGE`, `RELAY`, `EXIT`, `DIRAUTH`, `ARCHIVER` (fixed at
-  registration); a hot key that must differ from the operator; service-key bindings; public
+  registration); a hot key that must differ from the operator, is not any operator and not another
+  live node's hot key, and proves itself with a `hot-key` binding (below); service-key bindings; public
   endpoints; an operator-declared `asn` (0 means undeclared); per-role bonds; declared and reserved STORAGE capacity; status `registered`,
   `active`, `jailed`, `retired`, or `tombstoned`. A role is active only while the node is
   `active` and that role's bond is at least `min_bond`.
@@ -1053,11 +1064,10 @@ tombstoning (keeper `Tombstone`, not a message) records the old pubkey so it can
 again.
 
 `MsgBondNode` moves norama from the operator's bank balance into the module account. The
-operator's own earnings fund any shortfall first (`x/fees/ante.BondTopUpDecorator`, see
+operator's own earnings fund any shortfall first, inside the handler and after its checks (see
 "Outsiders can bond from earnings"), so an operator whose payouts sit in earnings can bond a node
-with a zero bank balance. The top-up happens only when the message names an existing node whose
-operator is the signer; otherwise nothing moves and the bond handler rejects the message, so a
-failed `MsgBondNode` cannot leave the signer's earnings sitting in its bank balance.
+with a zero bank balance, and a bond the handler rejects (unknown or foreign node, a role the node
+lacks, a retired node) reverses the top-up with the message.
 `MsgRegisterNode` and the cluster messages move no bond.
 `orama global bond` and `orama global unbond` build those messages. With `--node` they
 sign through the RootWallet agent and broadcast; without it they print the sign document.
@@ -1079,13 +1089,26 @@ capacity index. `ReserveCapacity` / `ReleaseCapacity` move free capacity for a l
 module. `CreditRoleBond` increases a role bond only when the module account already holds the
 coins; it does not mint.
 
+**The hot key proves possession.** The node's bindings must contain exactly one `hot-key` binding: a
+secp256k1 key, signed over the ordinary binding statement
+(`orama-global-bind-v1|chain-id|operator|hot-key|hex(pubkey)`), whose account address is the node's
+`hot_key`. `MsgRegisterNode` and `MsgUpdateNode` enforce it (an update that changes the hot key must
+carry bindings with the new key's own binding, and an update that replaces bindings must keep the
+current hot key's), and genesis validation enforces it for live nodes. So an operator cannot set
+`hot_key` to an address it does not control. A hot key also cannot be an operator, another live
+node's hot key (the `HotKeys` index, and the service pubkey is already unique network-wide), and an
+account that is a live node's hot key cannot register as an operator. Retiring or tombstoning a node
+releases its hot key from the index; its pubkey stays revoked. `orama global bind --service hot-key`
+with the hot key's secret produces the binding.
+
 `MsgFundHotKey{operator, node_id, amount}` (C2 item 5) moves `amount` from the operator's own
-earnings account to the earnings balance of `node.hot_key`. The message has no destination field:
-the target is always the hot key registered on the operator's own node, so earnings cannot be aimed
-at any other account. It fails for a node the signer does not operate, an unknown, retired or
-tombstoned node, a zero amount, or an amount above the operator's earnings. It follows a rotated hot
-key (`MsgUpdateNode`). `oramad tx nodes fund-hot-key [node-id] [amount-norama]` builds it. The
-bank balance is not involved, so the hot key holds a fee balance, not a public one.
+earnings account to the **fee-only balance** of `node.hot_key` (see "`x/fees`"). The message has no
+destination field: the target is always the hot key registered on the operator's own node, and that
+key proved it holds itself, so earnings cannot be aimed at a third party. It fails for a node the
+signer does not operate, an unknown, retired or tombstoned node, a zero amount, or an amount above
+the operator's earnings. It follows a rotated hot key (`MsgUpdateNode`). `oramad tx nodes
+fund-hot-key [node-id] [amount-norama]` builds it. The bank balance is not involved, and the hot
+key can spend the balance on base fees only.
 
 Node and cluster creates, and later writes that grow the record, call
 `DepositKeeper.LockDeposit` (x/fees' C2 deposit). Retire releases every part of that deposit.
@@ -1109,12 +1132,33 @@ is the trust model:
   genesis validation. The spec gives no on-chain source for an ASN (an oracle would be a new trust
   point) and this module implements no challenge or dispute for a wrong one.
 
-An operator that lies about its endpoint or ASN can make its nodes look diverse. What bounds that
-today is economics: every node needs a bond and a deposit, and protocol-deal slots also need
-distinct operators. It is a declared limit, not a detected one. The keeper reads it through
-`NodeNetwork(node id)`; `chain/app/storage_view.go` gives x/storage the same values, and
-`chain/app/houses_view.go` gives x/houses an operator's identity. A slot records the /16 and ASN
-at assignment time, so a later endpoint change does not move an existing slot.
+**What the chain enforces, and what it does not.**
+
+- *A literal-IP endpoint belongs to one live node.* `LiveIPs` maps each literal IP (normalised, so
+  `https://203.0.113.10:443` and `/ip4/203.0.113.10/tcp/4001` are one address) to its node;
+  registering or updating onto another live node's address fails with `ErrEndpointTaken`, and
+  retiring a node releases its addresses. This stops two nodes of one or many operators from claiming
+  the same address. It does **not** prove the node controls the address, and hostnames are not
+  indexed.
+- *Identity takes effect after a lock.* Each node records `identity_since_unix`: when it registered, or
+  when its ASN or derived /16 last changed (changing region, or moving within the same /16, does not
+  restart it). `NodeNetwork` and the operator-house view report a node's identity only once
+  `network_identity_lock_seconds` have passed since (default 14 days, the parameter-change timelock;
+  0 turns it off; genesis nodes keep the value the genesis gives them). Inside the lock the node counts as
+  unidentified: it cannot fill a protocol-deal slot and does not count for a house's /16 and ASN
+  caps. House eligibility therefore counts identity as of a rolling snapshot, an identity that was
+  already in place a lock ago, so identity cannot be moved to fit a slot draw or a vote.
+- *ASN is still unverified.* It is whatever the operator declared, checked only against reserved
+  ranges. IP control is not proven on chain, so an operator can declare an address it does not run,
+  or a real ASN that is not its own.
+- What the caps guarantee: one operator's declared identities cannot be swapped in and out quickly,
+  each address is one node's, and distinct operators are still required. What they do not
+  guarantee: that the declared networks are real or distinct. Economics (a bond and a deposit per
+  node) and the lock are the bound; a wrong declaration is not detected or disputed.
+
+The keeper reads identity through `NodeNetwork(node id)`; `chain/app/storage_view.go` gives x/storage
+the same values, and `chain/app/houses_view.go` gives x/houses an operator's identity. A slot records
+the /16 and ASN at assignment time, so a later endpoint change does not move an existing slot.
 
 ### Feeding x/storage
 
@@ -1127,6 +1171,10 @@ its id in `StorageDirty`, and imported genesis nodes are queued the same way. At
 - **Tracked** while the STORAGE role is bonded at `min_bond` and the node is not jailed, retired
   or tombstoned (`Keeper.StorageEligible`, which is `IsRoleActive(STORAGE)`). A node bonded only on
   another role is not tracked and is never picked.
+- **One broken node does not halt the chain.** Each id is reconciled in its own cache branch. If its
+  record cannot be read or reconciled, that node's work is rolled back, the id is re-queued for the
+  next block, and a `storage_node_sync_failed` event carries the reason. Only a failure to read or
+  re-write the queue itself fails `BeginBlock`.
 - **Untracked** when it stops qualifying and holds no replicas. A node that still holds replicas
   stays tracked, because challenge sampling and settlement read its state, and is re-queued each
   block until its last replica is released, evicted or expired. Assignment already skips it
@@ -1754,9 +1802,34 @@ the same verdict. It never looks at a mempool or a clock.
 **Extensions that did not pass VerifyVoteExtension.** A late precommit can reach a commit without
 `VerifyVoteExtension` having run on it. Both handlers therefore re-validate every extension in
 the commit with the same stateless rules and drop, deterministically, one that fails; its power
-still counts in the total. If the deduplicated listed bytes exceed `max_embedded_list_bytes`
-(4 MiB), extensions are kept highest power first (ties by validator address) while they fit, and
-the rest are dropped. The rule needs 2/3 of total power in the remaining extensions.
+still counts in the total. Quorum (2/3 of total power) is judged on every valid extension in the commit, **before**
+trimming. If the deduplicated listed bytes then exceed `max_embedded_list_bytes` (4 MiB),
+extensions are kept highest power first (ties by validator address) while they fit, and the rest
+stop contributing required transactions; their power still counts. Trimming never removes quorum, so
+a valid commit cannot leave every proposer unable to build a block.
+
+**Extension budget.** The injected commit takes at most half of the block budget (`block.max_bytes`
+minus 2 MiB). The per-extension cap is `list_max_bytes` (32 KiB) cut so that `max_validators`
+(staking) extensions, each with 2 KiB of vote overhead, fit that half; at the defaults and 150
+validators the cap stays 32 KiB. `VerifyVoteExtension` uses the cut cap. `PrepareProposal` refuses to
+inject a commit over the budget or over the request's `MaxTxBytes`, and `ProcessProposal` rejects one
+over the budget, so an oversized commit has one deterministic outcome.
+
+**CPU limits on listed transactions.** The walk checks each candidate's signature against its
+sender's account (`inclusionTxRules.verifier`) before charging it. A transaction that only names a
+sender it cannot sign for is skipped without costing that sender's budget or an ante attempt.
+Every other candidate that reaches the ante chain is charged to its sender's 32 KiB byte budget
+whether or not it passes, and at most 1024 (`max_ante_attempts`) run the ante chain per block; the
+walk stops there. The cap bounds work; the cost is that validators holding vote slots can list signed
+transactions that sort first to use it up, so a later transaction is then not *required* (it can
+still be included). `VerifyVoteExtension` cannot check signatures, which need the account number.
+
+**State the rule is judged on.** `ProcessProposal` judges listed transactions on the last committed
+state, but they execute after this block's `BeginBlock`. The judgement can drift (the base fee moves by
+at most 12.5% a block; `BeginBlock` pays rewards), and a required transaction can then fail at
+execution. That was chosen over running a different state view because `BeginBlock` cannot run in
+`ProcessProposal`. The free space it allows is bounded: required transactions come only from the
+deduplicated embedded set, so they never exceed `max_embedded_list_bytes` (4 MiB of a 21 MiB block).
 
 **FinalizeBlock.** `OramaApp.FinalizeBlock` removes the injected transaction before BaseApp sees
 the block, so it never reaches the ante handler or a message handler, and puts a code-0 result
@@ -1943,7 +2016,13 @@ wrap `ErrTampered`. `ErrVerifierFault` is an internal fault, not a verdict on th
 **Fail-closed behaviour.**
 - A build without cgo or without the `orchardffi` build tag compiles, and every bundle gets
   `ErrVerifierNotLinked`. `CGO_ENABLED=0 make build` binaries never accept a bundle.
-- `verify.Check` needs `verify.MinVerifiers` (2) independent verifiers, and all must accept. Only
+- `verify.Check` needs `verify.MinVerifiers` (2) independent verifiers, and all must accept.
+  Independent means distinct: each verifier reports an `ID()`, and the same verifier twice, or one
+  with an empty ID, fails closed (`ErrDuplicateVerifier`, which wraps `ErrVerifierNotLinked`).
+  `orchard.New` refuses an empty chain ID (`ErrEmptyChainID`), and an app built without a chain ID
+  (the CLI's metadata instance) has no verifiers at all. When the Rust verifier is linked, the app
+  builds its verifying key at construction (`orchard.Warm`, `orama_orchard_warm`), not on the first
+  bundle inside a consensus handler. Only
   the Orchard verifier exists (`OramaApp.ShieldedVerifiers` holds it), so `Check` still returns
   `ErrVerifierNotLinked` for every bundle. This is deliberate: it stays that way until a second
   independent verifier is linked. No second verifier is faked.
@@ -1960,6 +2039,13 @@ make orchard-test         # cargo test, then go test -tags "nowasm orchardffi" .
 rustup target add x86_64-unknown-linux-musl
 ORAMA_ZIG=/opt/homebrew/opt/zig@0.15/bin/zig make build-linux-amd64-orchard
 ```
+
+**Orchard smoke test.** `cmd/orchard-smoke` embeds the two vectors, warms the key, checks that both
+verify and that a tampered copy is rejected, and exits 0 only if all pass (2 if built without the
+verifier). `make orchard-smoke` builds and runs it on this host. `make orchard-smoke-linux-amd64`
+cross-builds the static musl binary with the same zig toolchain and flags as
+`build-linux-amd64-orchard`; it cannot run on darwin. To check a linux node, copy
+`build/orchard-smoke-linux-amd64` to it and run it with no arguments.
 
 `make build-linux-amd64-orchard` writes `build/oramad-linux-amd64-orchard`. `orama build` does not
 build `oramad`; this target is the release path for the chain binary, and `make build` is

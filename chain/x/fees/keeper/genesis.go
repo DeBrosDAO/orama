@@ -27,6 +27,11 @@ func (k Keeper) InitGenesis(ctx sdk.Context, genState types.GenesisState) error 
 			return fmt.Errorf("failed to set earnings account %q: %w", e.Address, err)
 		}
 	}
+	for _, e := range genState.FeeBalances {
+		if err := k.FeeBalances.Set(ctx, e.Address, e.Balance); err != nil {
+			return fmt.Errorf("failed to set fee balance %q: %w", e.Address, err)
+		}
+	}
 	for _, d := range genState.Deposits {
 		if err := k.Deposits.Set(ctx, d.Id, d); err != nil {
 			return fmt.Errorf("failed to set deposit %q: %w", d.Id, err)
@@ -64,6 +69,14 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) (*types.GenesisState, error) {
 		return nil, fmt.Errorf("failed to walk earnings accounts: %w", err)
 	}
 
+	var feeBalances []types.EarningsAccount
+	if err := k.FeeBalances.Walk(ctx, nil, func(addr string, balance math.Int) (bool, error) {
+		feeBalances = append(feeBalances, types.EarningsAccount{Address: addr, Balance: balance})
+		return false, nil
+	}); err != nil {
+		return nil, fmt.Errorf("failed to walk fee balances: %w", err)
+	}
+
 	var deposits []types.Deposit
 	if err := k.Deposits.Walk(ctx, nil, func(_ string, d types.Deposit) (bool, error) {
 		deposits = append(deposits, d)
@@ -89,6 +102,7 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) (*types.GenesisState, error) {
 		Params:                p,
 		BaseFee:               baseFee,
 		EarningsAccounts:      earnings,
+		FeeBalances:           feeBalances,
 		Deposits:              deposits,
 		CumulativeCollected:   collected,
 		CumulativeBurned:      burned,

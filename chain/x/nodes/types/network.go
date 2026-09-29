@@ -72,3 +72,36 @@ func NetworkOf(endpoints []string) string {
 	}
 	return ""
 }
+
+// LiteralIPs returns the distinct literal IP hosts among endpoints, normalised (an IPv4-mapped
+// IPv6 address becomes its IPv4 form), in first-seen order. Hostnames are skipped: the chain
+// cannot resolve DNS deterministically.
+func LiteralIPs(endpoints []string) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	for _, ep := range endpoints {
+		hosts, err := endpointHosts(ep)
+		if err != nil {
+			continue
+		}
+		for _, host := range hosts {
+			ip := net.ParseIP(host)
+			if ip == nil {
+				continue
+			}
+			key := ip.String()
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// IdentityEffective reports whether a network identity that last changed at sinceUnix has stood
+// for at least lockSeconds at nowUnix. A lock of 0 or less is off.
+func IdentityEffective(sinceUnix, nowUnix, lockSeconds int64) bool {
+	return lockSeconds <= 0 || nowUnix-sinceUnix >= lockSeconds
+}

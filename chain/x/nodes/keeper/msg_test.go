@@ -36,7 +36,7 @@ func TestMessages_registerBondDeclareCluster(t *testing.T) {
 		NodeId:   "node-1",
 		Roles:    []types.Role{types.RoleStorage},
 		HotKey:   hot.String(),
-		Bindings: []types.Binding{edBinding(t, testChainID, op.String(), "ipfs")},
+		Bindings: withHot(t, op, hot, edBinding(t, testChainID, op.String(), "ipfs")),
 	})
 	require.ErrorIs(t, err, types.ErrExists)
 
@@ -134,14 +134,14 @@ func TestRegisterNode_rejectsBadForeignAndDuplicatePubkeys(t *testing.T) {
 	bad.Signature[len(bad.Signature)-1] ^= 0xff
 	_, err = f.Msg.RegisterNode(f.Ctx, &types.MsgRegisterNode{
 		Operator: op.String(), NodeId: "bad-sig", Roles: []types.Role{types.RoleRelay},
-		HotKey: hot.String(), Bindings: []types.Binding{bad},
+		HotKey: hot.String(), Bindings: withHot(t, op, hot, bad),
 	})
 	require.ErrorIs(t, err, types.ErrInvalidBinding)
 
 	foreign := edBinding(t, "other-chain", op.String(), "tor")
 	_, err = f.Msg.RegisterNode(f.Ctx, &types.MsgRegisterNode{
 		Operator: op.String(), NodeId: "foreign", Roles: []types.Role{types.RoleRelay},
-		HotKey: hot.String(), Bindings: []types.Binding{foreign},
+		HotKey: hot.String(), Bindings: withHot(t, op, hot, foreign),
 	})
 	require.ErrorIs(t, err, types.ErrInvalidBinding)
 
@@ -149,7 +149,7 @@ func TestRegisterNode_rejectsBadForeignAndDuplicatePubkeys(t *testing.T) {
 	hot2 := newAccount(t)
 	_, err = f.Msg.RegisterNode(f.Ctx, &types.MsgRegisterNode{
 		Operator: op.String(), NodeId: "second", Roles: []types.Role{types.RoleRelay},
-		HotKey: hot2.String(), Bindings: []types.Binding{good},
+		HotKey: hot2.String(), Bindings: withHot(t, op, hot2, good),
 	})
 	require.ErrorIs(t, err, types.ErrPubkeyReused)
 
@@ -157,7 +157,7 @@ func TestRegisterNode_rejectsBadForeignAndDuplicatePubkeys(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.Msg.RegisterNode(f.Ctx, &types.MsgRegisterNode{
 		Operator: op.String(), NodeId: "reuse-retired", Roles: []types.Role{types.RoleRelay},
-		HotKey: hot2.String(), Bindings: []types.Binding{good},
+		HotKey: hot2.String(), Bindings: withHot(t, op, hot2, good),
 	})
 	require.ErrorIs(t, err, types.ErrPubkeyReused)
 
@@ -167,9 +167,10 @@ func TestRegisterNode_rejectsBadForeignAndDuplicatePubkeys(t *testing.T) {
 	rev, err := f.Keeper.Revoked.Get(f.Ctx, hex.EncodeToString(live.Pubkey))
 	require.NoError(t, err)
 	require.Equal(t, types.RevocationTombstoned, rev.Reason)
+	hot3 := newAccount(t)
 	_, err = f.Msg.RegisterNode(f.Ctx, &types.MsgRegisterNode{
 		Operator: op.String(), NodeId: "reuse-tomb", Roles: []types.Role{types.RoleStorage},
-		HotKey: newAccount(t).String(), Bindings: []types.Binding{live},
+		HotKey: hot3.String(), Bindings: withHot(t, op, hot3, live),
 	})
 	require.ErrorIs(t, err, types.ErrPubkeyReused)
 	f.requireInvariants(t)
@@ -186,8 +187,10 @@ func TestUpdateNode_rotatesKeysAndRejectsForeignSigner(t *testing.T) {
 	original := edBinding(t, testChainID, op.String(), "tor")
 	f.registerNode(t, op, hot, "node-1", []types.Role{types.RoleRelay}, []types.Binding{original})
 
+	strangerHot := newAccount(t)
 	_, err := f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{
-		Operator: stranger.String(), NodeId: "node-1", HotKey: newAccount(t).String(),
+		Operator: stranger.String(), NodeId: "node-1", HotKey: strangerHot.String(),
+		Bindings: withHot(t, stranger, strangerHot, edBinding(t, testChainID, stranger.String(), "tor")),
 	})
 	require.ErrorIs(t, err, types.ErrUnauthorized)
 	_, err = f.Msg.BondNode(f.Ctx, &types.MsgBondNode{
@@ -198,7 +201,7 @@ func TestUpdateNode_rotatesKeysAndRejectsForeignSigner(t *testing.T) {
 	nextHot := newAccount(t)
 	rotated := edBinding(t, testChainID, op.String(), "tor")
 	_, err = f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{
-		Operator: op.String(), NodeId: "node-1", HotKey: nextHot.String(), Bindings: []types.Binding{rotated},
+		Operator: op.String(), NodeId: "node-1", HotKey: nextHot.String(), Bindings: withHot(t, op, nextHot, rotated),
 	})
 	require.NoError(t, err)
 	got, err := f.Keeper.HotKey(f.Ctx, "node-1")
@@ -210,7 +213,7 @@ func TestUpdateNode_rotatesKeysAndRejectsForeignSigner(t *testing.T) {
 
 	_, err = f.Msg.RegisterNode(f.Ctx, &types.MsgRegisterNode{
 		Operator: op.String(), NodeId: "stolen", Roles: []types.Role{types.RoleRelay},
-		HotKey: hot.String(), Bindings: []types.Binding{original},
+		HotKey: hot.String(), Bindings: withHot(t, op, hot, original),
 	})
 	require.ErrorIs(t, err, types.ErrPubkeyReused)
 	f.requireInvariants(t)

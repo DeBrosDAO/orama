@@ -2,8 +2,6 @@ package keeper_test
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -23,7 +21,6 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/fees/keeper"
 	"github.com/DeBrosOfficial/network/chain/x/fees/types"
-	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
 )
 
 // fakeBankKeeper is a minimal, hand-written stand-in for x/bank, tracking module and account
@@ -94,7 +91,6 @@ type testFixture struct {
 	Ctx    sdk.Context
 	Keeper keeper.Keeper
 	Bank   *fakeBankKeeper
-	Nodes  *fakeNodes
 }
 
 func newTestFixture(t *testing.T) *testFixture {
@@ -111,7 +107,7 @@ func newTestFixture(t *testing.T) *testFixture {
 	bank := newFakeBankKeeper()
 	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank)
 
-	return &testFixture{Ctx: ctx, Keeper: k, Bank: bank, Nodes: newFakeNodes()}
+	return &testFixture{Ctx: ctx, Keeper: k, Bank: bank}
 }
 
 func (f *testFixture) initGenesis(t *testing.T, mutate func(*types.GenesisState)) {
@@ -121,25 +117,4 @@ func (f *testFixture) initGenesis(t *testing.T, mutate func(*types.GenesisState)
 		mutate(gs)
 	}
 	require.NoError(t, f.Keeper.InitGenesis(f.Ctx, *gs))
-}
-
-// fakeNodes is a node-operator lookup for the bond top-up decorator.
-type fakeNodes struct {
-	operators map[string]sdk.AccAddress
-	fail      bool
-}
-
-func newFakeNodes() *fakeNodes { return &fakeNodes{operators: map[string]sdk.AccAddress{}} }
-
-func (n *fakeNodes) set(id string, operator sdk.AccAddress) { n.operators[id] = operator }
-
-func (n *fakeNodes) GetNode(_ sdk.Context, id string) (nodestypes.Node, error) {
-	if n.fail {
-		return nodestypes.Node{}, errors.New("store unavailable")
-	}
-	op, ok := n.operators[id]
-	if !ok {
-		return nodestypes.Node{}, fmt.Errorf("node %s: %w", id, nodestypes.ErrNotFound)
-	}
-	return nodestypes.Node{NodeId: id, Operator: op.String()}, nil
 }

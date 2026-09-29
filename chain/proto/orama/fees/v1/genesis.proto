@@ -34,4 +34,8 @@ message GenesisState {
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
+  // fee_balances are the fee-only balances of node hot keys. They are backed
+  // by the same module account as earnings, and can pay a transaction's base
+  // fee and nothing else.
+  repeated EarningsAccount fee_balances = 8 [(gogoproto.nullable) = false];
 }

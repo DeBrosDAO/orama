@@ -112,3 +112,87 @@ func TestSettleFee_zeroFeeIsANoOp(t *testing.T) {
 	proposer := sdk.AccAddress("proposer_four________")
 	require.NoError(t, f.Keeper.SettleFee(f.Ctx, payer, proposer, math.ZeroInt(), math.ZeroInt(), true))
 }
+
+func fundFeeBalance(t *testing.T, f *testFixture, hot sdk.AccAddress, amount int64) {
+	t.Helper()
+	operator := sdk.AccAddress("operator_of_hot_key_")
+	fundedEarnings(t, f, operator, amount)
+	require.NoError(t, f.Keeper.FundFeeBalance(f.Ctx, operator, hot, math.NewInt(amount)))
+}
+
+func TestSettleFee_hotKeyPaysTheBaseFeeFromItsFeeBalance(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	hot := sdk.AccAddress("hot_key_pays_base____")
+	proposer := sdk.AccAddress("proposer_hot_________")
+	fundFeeBalance(t, f, hot, 1000)
+
+	require.NoError(t, f.Keeper.SettleFee(f.Ctx, hot, proposer, math.NewInt(600), math.ZeroInt(), true))
+
+	left, err := f.Keeper.GetFeeBalance(f.Ctx, hot)
+	require.NoError(t, err)
+	require.True(t, left.Equal(math.NewInt(400)))
+	require.True(t, f.Bank.burned.Equal(math.NewInt(600)))
+	inv, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, inv.EarningsMatchModule, inv.Detail)
+	require.True(t, inv.FeesBalance, inv.Detail)
+}
+
+func TestSettleFee_feeBalanceNeverPaysATip(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	hot := sdk.AccAddress("hot_key_tip_attempt__")
+	proposer := sdk.AccAddress("proposer_tip__________")
+	fundFeeBalance(t, f, hot, 1000)
+
+	require.Error(t, f.Keeper.SettleFee(f.Ctx, hot, proposer, math.NewInt(100), math.NewInt(50), true),
+		"a tip is a public payment and must come from a bank balance")
+	tip, err := f.Keeper.GetEarnings(f.Ctx, proposer)
+	require.NoError(t, err)
+	require.True(t, tip.IsZero())
+}
+
+func TestSettleFee_feeBalanceIsNotUsedThroughAFeeGranter(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	hot := sdk.AccAddress("hot_key_via_granter_")
+	proposer := sdk.AccAddress("proposer_granter_____")
+	fundFeeBalance(t, f, hot, 1000)
+
+	require.Error(t, f.Keeper.SettleFee(f.Ctx, hot, proposer, math.NewInt(100), math.ZeroInt(), false))
+	left, err := f.Keeper.GetFeeBalance(f.Ctx, hot)
+	require.NoError(t, err)
+	require.True(t, left.Equal(math.NewInt(1000)))
+}
+
+func TestSettleFee_feeBalanceThenEarningsCoverTheBaseFee(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	hot := sdk.AccAddress("hot_key_mixed________")
+	proposer := sdk.AccAddress("proposer_mixed_______")
+	fundFeeBalance(t, f, hot, 300)
+	fundedEarnings(t, f, hot, 500)
+
+	require.NoError(t, f.Keeper.SettleFee(f.Ctx, hot, proposer, math.NewInt(600), math.ZeroInt(), true))
+
+	fee, err := f.Keeper.GetFeeBalance(f.Ctx, hot)
+	require.NoError(t, err)
+	require.True(t, fee.IsZero(), "the fee balance is spent first")
+	earned, err := f.Keeper.GetEarnings(f.Ctx, hot)
+	require.NoError(t, err)
+	require.True(t, earned.Equal(math.NewInt(200)), "earnings cover the remaining 300")
+	inv, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, inv.EarningsMatchModule, inv.Detail)
+}
+
+func TestSettleFee_insufficientFeeBalanceAndEarningsFails(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	hot := sdk.AccAddress("hot_key_too_poor_____")
+	proposer := sdk.AccAddress("proposer_poor________")
+	fundFeeBalance(t, f, hot, 100)
+
+	require.Error(t, f.Keeper.SettleFee(f.Ctx, hot, proposer, math.NewInt(600), math.ZeroInt(), true))
+}

@@ -2,9 +2,12 @@ package clusterreg
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ripemd160" //nolint:staticcheck // the account address hash is RIPEMD-160
 )
 
 func TestEncodeRegisterNode_matchesChainMarshal(t *testing.T) {
@@ -38,11 +41,25 @@ func TestValidateNode_refusesTheOperatorAsHotKey(t *testing.T) {
 	if err := ValidateNode(n); err == nil {
 		t.Fatal("the operator was accepted as the hot key")
 	}
-	hot, err := bech32Encode(accountHRP, bytes.Repeat([]byte{0x01}, 20))
+	hotPub := bytes.Repeat([]byte{0x03}, 33)
+	sum := sha256.Sum256(hotPub)
+	rmd := ripemd160.New()
+	rmd.Write(sum[:])
+	hot, err := bech32Encode(accountHRP, rmd.Sum(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 	n.HotKey = hot
+	if err := ValidateNode(n); err == nil {
+		t.Fatal("a node with no hot-key binding was accepted")
+	}
+	n.Bindings = append(n.Bindings, NodeBinding{
+		Service: HotKeyService, KeyType: "secp256k1", Pubkey: bytes.Repeat([]byte{0x02}, 33), Signature: bytes.Repeat([]byte{0x11}, 64),
+	})
+	if err := ValidateNode(n); err == nil {
+		t.Fatal("a hot-key binding for a different key was accepted")
+	}
+	n.Bindings[1].Pubkey = hotPub
 	n.Endpoints = []string{"https://10.1.1.1"}
 	if err := ValidateNode(n); err == nil {
 		t.Fatal("a private endpoint was accepted")

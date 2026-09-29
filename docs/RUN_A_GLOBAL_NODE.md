@@ -208,11 +208,13 @@ not give as `[do-not-modify]`; one commission change is allowed per 24 hours.
 ### The hot key
 
 The provider and the archiver create their own signing key (`hot-key`, 0600)
-on first start and log its address. It pays its transaction fees from its own
-bank balance or earnings account. A bank send from another user account to it
-is refused, and `MsgFundHotKey` does not exist yet, so a hot key can only pay
-from what it earns itself. `orama node report` and the inspector read the
-provider's hot-key balance from its `monitor.json`.
+on first start and log its address. Registering a node needs a binding signed by this key
+(`orama global bind --service hot-key`, with the hot key's secret) so the chain knows the address is
+yours; a hot key that is another node's, or any operator, is refused. It pays its transaction fees
+from its own bank balance or earnings, or from a fee-only balance the operator gives it with
+`oramad tx nodes fund-hot-key [node-id] [amount-norama]` (`MsgFundHotKey`); that balance can pay
+base fees and nothing else. A bank send from another user account to it is refused. `orama node
+report` and the inspector read the provider's hot-key balance from its `monitor.json`.
 
 ### Back up the consensus key
 

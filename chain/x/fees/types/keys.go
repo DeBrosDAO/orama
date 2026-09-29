@@ -32,4 +32,7 @@ var (
 	CollectedKey   = collections.NewPrefix(4)
 	BurnedKey      = collections.NewPrefix(5)
 	DistributedKey = collections.NewPrefix(6)
+	// FeeBalancesPrefix is the collections key prefix for fee-only balances, keyed by bech32
+	// account address. A fee balance can pay a transaction's base fee and nothing else.
+	FeeBalancesPrefix = collections.NewPrefix(7)
 )

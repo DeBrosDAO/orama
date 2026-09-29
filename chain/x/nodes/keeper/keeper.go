@@ -39,6 +39,11 @@ type Keeper struct {
 	ServiceDays     collections.Map[collections.Pair[string, uint64], types.ServiceDay]
 	FreeCapacity    collections.Map[collections.Triple[uint32, string, string], uint64]
 	StorageDirty    collections.KeySet[string]
+	// HotKeys maps the hot key of every live node to its node id, and LiveIPs maps every literal
+	// IP among a live node's endpoints to its node id. Both are derived from Nodes and rebuilt
+	// from genesis; neither is exported.
+	HotKeys collections.Map[string, string]
+	LiveIPs collections.Map[string, string]
 }
 
 // NewKeeper builds a keeper. bankKeeper escrows bonds; depositKeeper locks
@@ -96,6 +101,8 @@ func NewKeeper(
 			collections.Uint64Value,
 		),
 		StorageDirty: collections.NewKeySet(sb, types.StorageDirtyPrefix, "storage_dirty", collections.StringKey),
+		HotKeys:      collections.NewMap(sb, types.HotKeyPrefix, "hot_keys", collections.StringKey, collections.StringValue),
+		LiveIPs:      collections.NewMap(sb, types.LiveIPPrefix, "live_ips", collections.StringKey, collections.StringValue),
 	}
 	schema, err := sb.Build()
 	if err != nil {
