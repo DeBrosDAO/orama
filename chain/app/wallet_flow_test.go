@@ -478,11 +478,17 @@ func TestWalletFlow_nonTransferableTokenStaysWhereItWasMinted(t *testing.T) {
 	require.True(t, f.bank(bob.addr, denom).IsZero())
 }
 
-func TestWalletFlow_tokenCreationNeedsTheFeeAndDepositInBank(t *testing.T) {
+// A creator's own earnings fund its token's creation fee and metadata deposit
+// (C2): a wallet with no bank balance can create a token, and one whose
+// earnings cannot cover the fee and deposit is refused.
+func TestWalletFlow_tokenCreationIsFundedFromEarnings(t *testing.T) {
 	f := newFlow(t)
-	alice := f.newWallet()
-	f.fundEarnings(alice, flowCredit) // earnings pay fees; the creation fee and deposit are bank funds
-	res := f.deliver(alice, &tokentypes.MsgCreateToken{Creator: alice.addr.String(), Subdenom: "nofunds", Name: "N", Symbol: "N"})
+	rich, poor := f.newWallet(), f.newWallet()
+	f.fundEarnings(rich, flowCredit)
+	f.fundEarnings(poor, 1)
+
+	requireOK(t, f.deliver(rich, &tokentypes.MsgCreateToken{Creator: rich.addr.String(), Subdenom: "fromearnings", Name: "E", Symbol: "E"}))
+	res := f.deliver(poor, &tokentypes.MsgCreateToken{Creator: poor.addr.String(), Subdenom: "nofunds", Name: "N", Symbol: "N"})
 	requireRejected(t, res, "insufficient")
 }
 
