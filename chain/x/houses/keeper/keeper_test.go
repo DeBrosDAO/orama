@@ -101,6 +101,8 @@ type fakeStaking struct {
 	failTotal bool
 	// failTotalWith, when set, is the error TotalBondedTokens fails with.
 	failTotalWith error
+	// failDelegationsWith, when set, is the error Delegations fails with.
+	failDelegationsWith error
 }
 
 func (s *fakeStaking) TotalBondedTokens(context.Context) (math.Int, error) {
@@ -117,6 +119,9 @@ func (s *fakeStaking) TotalBondedTokens(context.Context) (math.Int, error) {
 }
 
 func (s *fakeStaking) Delegations(context.Context) ([]types.BondedDelegation, error) {
+	if s.failDelegationsWith != nil {
+		return nil, s.failDelegationsWith
+	}
 	return s.dels, nil
 }
 
@@ -133,9 +138,14 @@ func (p *fakePower) Lambda(context.Context) (math.LegacyDec, error) {
 
 type fakeOperators struct {
 	ops []types.OperatorInfo
+	// failWith, when set, is the error Operators fails with.
+	failWith error
 }
 
 func (o *fakeOperators) Operators(context.Context) ([]types.OperatorInfo, error) {
+	if o.failWith != nil {
+		return nil, o.failWith
+	}
 	return o.ops, nil
 }
 
