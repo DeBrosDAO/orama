@@ -183,6 +183,36 @@ func TestUpgrade_failedStartIsStoppedBeforeTheRollback(t *testing.T) {
 	}
 }
 
+func TestUpgrade_failedStopDoesNotBlameTheRelease(t *testing.T) {
+	f := newUpgradeFixture(t)
+	f.plan.Stop = func() error { f.log = append(f.log, "stop"); return errors.New("quorum check refused") }
+	bad, err := Upgrade(context.Background(), f.plan)
+	if err == nil || bad {
+		t.Fatalf("releaseBad=%v err=%v; a failed stop is not the release's fault", bad, err)
+	}
+	if got := readFile(t, f.live); got != "old release" {
+		t.Fatalf("live binary %q", got)
+	}
+	if got := strings.Join(f.log, " "); got != "verify stop" {
+		t.Fatalf("calls %q", got)
+	}
+}
+
+func TestUpgrade_failedStageDoesNotBlameTheRelease(t *testing.T) {
+	f := newUpgradeFixture(t)
+	f.plan.Files[0].Next = filepath.Join(t.TempDir(), "missing")
+	bad, err := Upgrade(context.Background(), f.plan)
+	if err == nil || bad {
+		t.Fatalf("releaseBad=%v err=%v; a failed copy is not the release's fault", bad, err)
+	}
+	if got := readFile(t, f.live); got != "old release" {
+		t.Fatalf("live binary %q", got)
+	}
+	if got := strings.Join(f.log, " "); got != "verify stop start:old release" {
+		t.Fatalf("calls %q; the stop was not undone", got)
+	}
+}
+
 func TestUpgrade_unverifiedReleaseChangesNothing(t *testing.T) {
 	f := newUpgradeFixture(t)
 	f.plan.Verify = func() error { return errors.New("target hash") }

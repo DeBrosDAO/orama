@@ -16,6 +16,10 @@ type Plan struct {
 	// swaps read. Required; a failure aborts with nothing changed.
 	Verify func() error
 	// Files are the binaries to replace, each with a file Verify covered.
+	// Verify and the stage step read each Next by path, one after the
+	// other, so every Next must sit in a directory only root can write (the
+	// 0700 staging directory stage-archive extracts into); otherwise what
+	// is copied need not be what was verified.
 	Files []FileSwap
 	// Stop and Start are the node's own service lifecycle (the orama CLI's
 	// ordered stop and start), never raw unit commands.
@@ -32,11 +36,15 @@ type Plan struct {
 // changed undoes what ran, last first — the start is stopped, each file is
 // renamed back, the stop is started — and the gate is read again so the
 // caller knows whether the node came back on the previous release.
-// rolledBack tells the caller to mark the release bad.
+//
+// releaseBad tells the caller to mark the release bad. It is set only when
+// the new binaries ran and failed: the start or the health gate. A failed
+// stop or a failed copy or rename is an error about this node, not about
+// the release, and leaves releaseBad false.
 //
 // Only auto runs, and never for a validator: Settings.validate refuses
 // auto for RoleValidator.
-func Upgrade(ctx context.Context, p Plan) (rolledBack bool, err error) {
+func Upgrade(ctx context.Context, p Plan) (releaseBad bool, err error) {
 	if err := p.check(); err != nil {
 		return false, err
 	}
@@ -44,14 +52,14 @@ func Upgrade(ctx context.Context, p Plan) (rolledBack bool, err error) {
 		return false, fmt.Errorf("the release did not verify, nothing was changed: %w", err)
 	}
 	gate := func() error { return nodehealth.WaitReady(ctx, p.Health, p.HealthOptions) }
-	rolledBack, err = Apply(p.steps(), gate)
-	if !rolledBack {
-		return false, err
+	releaseBad, err = Apply(p.steps(), gate)
+	if err == nil {
+		return false, nil
 	}
 	if healthErr := gate(); healthErr != nil {
-		return true, errors.Join(err, fmt.Errorf("the node is not healthy on the previous release either: %w", healthErr))
+		return releaseBad, errors.Join(err, fmt.Errorf("the node is not healthy on the previous release either: %w", healthErr))
 	}
-	return true, err
+	return releaseBad, err
 }
 
 // check refuses a plan that could not be run safely.
@@ -77,7 +85,7 @@ func (p Plan) steps() []Step {
 	for _, f := range p.Files {
 		steps = append(steps, f.Steps()...)
 	}
-	return append(steps, Step{Name: "start", Do: p.startOrStop, Undo: p.Stop})
+	return append(steps, Step{Name: "start", Do: p.startOrStop, Undo: p.Stop, Blames: true})
 }
 
 // startOrStop starts the node and, when the start fails, stops it again: a

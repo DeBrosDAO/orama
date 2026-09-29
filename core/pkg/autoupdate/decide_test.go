@@ -196,13 +196,16 @@ func TestApply_aFailedGateRollsBack(t *testing.T) {
 
 func TestApply_aFailedStepDoesNotUndoWhatDidNotRun(t *testing.T) {
 	var undone []string
-	_, err := Apply([]Step{
+	bad, err := Apply([]Step{
 		{Name: "stop", Do: func() error { return nil }, Undo: func() error { undone = append(undone, "stop"); return nil }},
 		{Name: "swap", Do: func() error { return errors.New("bad archive") }, Undo: func() error { undone = append(undone, "swap"); return nil }},
-		{Name: "start", Do: func() error { return nil }, Undo: func() error { undone = append(undone, "start"); return nil }},
+		{Name: "start", Do: func() error { return nil }, Undo: func() error { undone = append(undone, "start"); return nil }, Blames: true},
 	}, func() error { return nil })
 	if err == nil {
 		t.Fatal("a failed swap was success")
+	}
+	if bad {
+		t.Fatal("a failed swap blamed the release")
 	}
 	if len(undone) != 1 || undone[0] != "stop" {
 		t.Fatalf("undone %v, want only stop", undone)
