@@ -442,7 +442,8 @@ func TestAttachReplicas_onlyActiveArchiveDeals(t *testing.T) {
 	_, err = f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
 		Archiver: acc(3).String(), NodeId: nodeOf(3), StartHeight: 1, EndHeight: 50, DealIds: []string{"1"},
 	})
-	require.NoError(t, err, "any archiver node may attach a real deal")
+	require.ErrorIs(t, err, types.ErrNotAttester, "an archiver that did not attest the range cannot claim deals for it")
+	f.attach(t, 1, 1, 50, "1")
 
 	// A deal backs one range only.
 	f.attest(t, 1, 51, 100, "bafyarchivecid", digest(1), digest(3))
@@ -466,4 +467,37 @@ func TestAttach_anEndedDealDoesNotCountTowardArchiving(t *testing.T) {
 	require.False(t, res.Archived, "deal 1 ended, so only two live replicas")
 	res = f.attach(t, 1, 1, 50, "4")
 	require.True(t, res.Archived)
+}
+
+// A range whose early deal ended keeps a record that exports and imports: the
+// ended deal is dropped and freed, and the index is rebuilt on import.
+func TestExportGenesis_roundTripsAnEndedDealAndTheIndex(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	for n := byte(1); n <= 3; n++ {
+		f.attest(t, n, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	}
+	f.attach(t, 1, 1, 50, "1")
+	f.Storage.ended[1] = true
+	res := f.attach(t, 1, 1, 50, "2", "3")
+	require.False(t, res.Archived)
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Equal(t, []string{"2", "3"}, rec.DealIds, "the ended deal was dropped")
+
+	gs, err := f.Keeper.ExportGenesis(f.Ctx)
+	require.NoError(t, err)
+	require.NoError(t, gs.Validate())
+	g := newTestFixture(t)
+	require.NoError(t, g.Keeper.InitGenesis(g.Ctx, *gs))
+	imported, err := g.Keeper.GetRange(g.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Equal(t, rec.Operators, imported.Operators)
+	require.Equal(t, rec.DealIds, imported.DealIds)
+
+	g.attest(t, 1, 51, 100, "bafyarchivecid", digest(1), digest(3))
+	_, err = g.Msg.AttachReplicas(g.Ctx, &types.MsgAttachReplicas{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 51, EndHeight: 100, DealIds: []string{"2"},
+	})
+	require.ErrorIs(t, err, types.ErrDealAttached, "the imported index still holds deal 2")
 }

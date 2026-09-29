@@ -928,9 +928,11 @@ an operator, or the same operator under a rotated key, is accepted and
 counts nothing, and a key that already attested stays idempotent after its
 node loses the role. Every id in `MsgAttachReplicas` must be a decimal x/storage
 deal id of an active ARCHIVE deal (`ErrNotArchiveDeal`) that backs no other
-range (`ErrDealAttached`). When the three-operator, three-deal threshold is
-reached, the deals are read again and only the ones still active count; after
-that `archived` is permanent. The deal's stored bytes are not checked against
+range (`ErrDealAttached`), and only an operator that attested the range may
+attach deals to it (`ErrNotAttester`). When the three-operator, three-deal
+threshold is reached, the deals are read again: ended ones are dropped from the
+range and freed, and the range is archived only if three live deals remain.
+After that `archived` is permanent. The deal's stored bytes are not checked against
 the bundle: x/storage cannot yet create an ARCHIVE deal for a given bundle, so
 the three bonded operators are what vouch for it. Nothing slashes a wrong root
 yet; the root is checkable by anyone against the chain's own block hashes.

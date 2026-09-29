@@ -89,7 +89,7 @@ func matchPinned(rec types.RangeRecord, msg *types.MsgAttest) error {
 }
 
 // AttachReplicas records deal ids for an attested range. The signer must be
-// the hot key of an active ARCHIVER node. Each id must be an active x/storage
+// the hot key of an active ARCHIVER node whose operator attested the range. Each id must be an active x/storage
 // ARCHIVE deal that backs no other range; deal creation and payment stay in
 // x/storage.
 func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (bool, uint32, error) {
@@ -103,12 +103,16 @@ func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (b
 	if err := requireFinalized(ctx, msg.EndHeight); err != nil {
 		return false, 0, err
 	}
-	if _, err := k.nodes.ArchiverOperator(ctx, msg.NodeId, archiver.String()); err != nil {
+	operator, err := k.nodes.ArchiverOperator(ctx, msg.NodeId, archiver.String())
+	if err != nil {
 		return false, 0, fmt.Errorf("archiver %s: %w", archiver, err)
 	}
 	rec, err := k.GetRange(ctx, msg.StartHeight, msg.EndHeight)
 	if err != nil {
 		return false, 0, err
+	}
+	if !slices.Contains(rec.Operators, operator) {
+		return false, 0, fmt.Errorf("%w: operator %s did not attest range %d-%d", types.ErrNotAttester, operator, msg.StartHeight, msg.EndHeight)
 	}
 	if err := k.requireArchiveDeals(ctx, rec.StartHeight, msg.DealIds); err != nil {
 		return false, 0, err
@@ -174,20 +178,25 @@ func (k Keeper) indexDeals(ctx sdk.Context, start int64, ids []string) error {
 	return nil
 }
 
-// liveDeals counts the recorded deal ids that are still active ARCHIVE deals.
-func (k Keeper) liveDeals(ctx sdk.Context, ids []string) (int, error) {
-	live := 0
+// dropEndedDeals returns the ids that are still active ARCHIVE deals, in
+// order, and removes the ended ones from the index so they back no range.
+func (k Keeper) dropEndedDeals(ctx sdk.Context, ids []string) ([]string, error) {
+	live := make([]string, 0, len(ids))
 	for _, id := range ids {
 		dealID, err := strconv.ParseUint(id, 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("deal id %q: %w", id, err)
+			return nil, fmt.Errorf("deal id %q: %w", id, err)
 		}
 		ok, err := k.storage.ArchiveDealActive(ctx, dealID)
 		if err != nil {
-			return 0, fmt.Errorf("read deal %d: %w", dealID, err)
+			return nil, fmt.Errorf("read deal %d: %w", dealID, err)
 		}
 		if ok {
-			live++
+			live = append(live, id)
+			continue
+		}
+		if err := k.AttachedDeals.Remove(ctx, dealID); err != nil {
+			return nil, fmt.Errorf("release ended deal %d: %w", dealID, err)
 		}
 	}
 	return live, nil
@@ -242,13 +251,15 @@ func mergeDealIDs(existing, add []string) ([]string, bool, error) {
 func (k Keeper) storeRange(ctx sdk.Context, rec types.RangeRecord) (types.RangeRecord, bool, error) {
 	was := rec.Archived
 	if !was && types.QuorumMet(len(rec.Archivers), len(rec.DealIds)) {
-		// A deal attached earlier may have ended since; only live ones count
-		// at the moment the range becomes archived. Archived is permanent.
-		live, err := k.liveDeals(ctx, rec.DealIds)
+		// A deal attached earlier may have ended since. Ended ones are dropped
+		// (and freed in the index) so the record always satisfies
+		// archived == quorum over its own ids. Archived is permanent.
+		live, err := k.dropEndedDeals(ctx, rec.DealIds)
 		if err != nil {
 			return types.RangeRecord{}, false, err
 		}
-		rec.Archived = types.QuorumMet(len(rec.Archivers), live)
+		rec.DealIds = live
+		rec.Archived = types.QuorumMet(len(rec.Archivers), len(live))
 	}
 	key := collections.Join(rec.StartHeight, rec.EndHeight)
 	if err := k.Ranges.Set(ctx, key, rec); err != nil {
