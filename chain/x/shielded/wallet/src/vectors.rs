@@ -78,8 +78,8 @@ fn account_vector(seed: &[u8], account: u32) -> AccountVector {
     AccountVector {
         account,
         path: format!("m/{ZIP32_PURPOSE}'/{ORAMA_COIN_TYPE}'/{account}'"),
-        chain_code: hex(&a.extended.chain_code()),
-        spending_key: hex(a.sk.to_bytes()),
+        chain_code: hex(&*a.extended.chain_code()),
+        spending_key: hex(a.spending_key().to_bytes()),
         full_viewing_key: hex(&a.fvk.to_bytes()),
         external_ivk: hex(&a.fvk.to_ivk(Scope::External).to_bytes()),
         internal_ivk: hex(&a.fvk.to_ivk(Scope::Internal).to_bytes()),
@@ -98,9 +98,9 @@ pub fn key_vectors() -> KeyVectors {
             SeedVector {
                 mnemonic: (*m).into(),
                 bip39_seed: hex(&seed),
-                shielded_seed: hex(&shielded_seed(&seed).expect("hkdf")),
+                shielded_seed: hex(&*shielded_seed(&seed).expect("hkdf")),
                 master_spending_key: hex(master.spending_key().to_bytes()),
-                master_chain_code: hex(&master.chain_code()),
+                master_chain_code: hex(&*master.chain_code()),
                 accounts: (0..ACCOUNTS).map(|i| account_vector(&seed, i)).collect(),
             }
         })

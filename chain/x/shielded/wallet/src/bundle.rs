@@ -114,7 +114,7 @@ pub fn build_bundle<R: RngCore + CryptoRng>(
         builder
             .add_spend(s.account.fvk.clone(), s.note, path)
             .map_err(BundleError::Spend)?;
-        asks.push(SpendAuthorizingKey::from(&s.account.sk));
+        asks.push(SpendAuthorizingKey::from(&s.account.spending_key()));
     }
     let ovk = spends.first().map(|s| s.account.fvk.to_ovk(Scope::External));
     for o in outputs {

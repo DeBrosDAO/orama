@@ -17,6 +17,7 @@ use hkdf::Hkdf;
 use orchard::keys::{FullViewingKey, Scope, SpendingKey};
 use sha2::Sha256;
 use zcash_spec::{PrfExpand, VariableLengthSlice};
+use zeroize::Zeroizing;
 use zip32::hardened_only::{Context, HardenedOnlyKey};
 use zip32::ChildIndex;
 
@@ -67,19 +68,24 @@ impl Context for OramaOrchard {
         PrfExpand::ORCHARD_ZIP32_CHILD;
 }
 
-/// The 32-byte ZIP-32 seed derived from the RootWallet BIP-39 seed.
-pub fn shielded_seed(bip39_seed: &[u8]) -> Result<[u8; 32], KeyError> {
+/// The 32-byte ZIP-32 seed derived from the RootWallet BIP-39 seed. It is wiped when dropped.
+pub fn shielded_seed(bip39_seed: &[u8]) -> Result<Zeroizing<[u8; 32]>, KeyError> {
     if bip39_seed.len() != BIP39_SEED_LEN {
         return Err(KeyError::SeedLength(bip39_seed.len()));
     }
-    let mut out = [0u8; 32];
+    let mut out = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha256>::new(Some(HKDF_BRANCH), bip39_seed)
-        .expand(&[], &mut out)
+        .expand(&[], &mut *out)
         .map_err(|_| KeyError::Hkdf)?;
     Ok(out)
 }
 
 /// An extended key: a spending key and its chain code, at some depth of the tree.
+///
+/// zip32's `HardenedOnlyKey` does not wipe itself when dropped, and its fields are private, so the
+/// key held here lives in memory until it is overwritten. The bytes this crate copies out of it
+/// (`chain_code`, the spending key inside `Account`, the intermediate arrays below) are wiped on
+/// drop. Drop keys as soon as they are no longer needed.
 pub struct ExtendedKey {
     key: HardenedOnlyKey<OramaOrchard>,
 }
@@ -99,24 +105,28 @@ impl ExtendedKey {
     }
 
     fn checked(key: HardenedOnlyKey<OramaOrchard>) -> Result<Self, KeyError> {
-        if Option::<SpendingKey>::from(SpendingKey::from_bytes(*key.parts().0)).is_none() {
+        let bytes = Zeroizing::new(*key.parts().0);
+        if Option::<SpendingKey>::from(SpendingKey::from_bytes(*bytes)).is_none() {
             return Err(KeyError::InvalidSpendingKey);
         }
         Ok(Self { key })
     }
 
     pub fn spending_key(&self) -> SpendingKey {
-        Option::from(SpendingKey::from_bytes(*self.key.parts().0)).expect("checked at construction")
+        let bytes = Zeroizing::new(*self.key.parts().0);
+        Option::from(SpendingKey::from_bytes(*bytes)).expect("checked at construction")
     }
 
-    pub fn chain_code(&self) -> [u8; 32] {
-        *self.key.parts().1.as_bytes()
+    /// The chain code, wiped when dropped.
+    pub fn chain_code(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.key.parts().1.as_bytes())
     }
 }
 
 /// The master key of a wallet: HKDF branch, then Orama-personalized ZIP-32 master.
 pub fn master_key(bip39_seed: &[u8]) -> Result<ExtendedKey, KeyError> {
-    ExtendedKey::master(&shielded_seed(bip39_seed)?)
+    let seed = shielded_seed(bip39_seed)?;
+    ExtendedKey::master(&seed)
 }
 
 /// The account key at `m/32'/ORAMA_COIN_TYPE'/account'`.
@@ -127,10 +137,12 @@ pub fn account_key(bip39_seed: &[u8], account: u32) -> Result<ExtendedKey, KeyEr
         .derive_hardened(account)
 }
 
-/// Everything a wallet holds for one account.
+/// Everything a wallet holds for one account. The spending key is kept as bytes that are wiped
+/// when the account is dropped (`SpendingKey` itself is `Copy` and cannot be wiped), and
+/// `spending_key` builds a value from them for the moment it is needed.
 pub struct Account {
     pub extended: ExtendedKey,
-    pub sk: SpendingKey,
+    sk_bytes: Zeroizing<[u8; 32]>,
     pub fvk: FullViewingKey,
 }
 
@@ -139,7 +151,12 @@ impl Account {
         let extended = account_key(bip39_seed, account)?;
         let sk = extended.spending_key();
         let fvk = FullViewingKey::from(&sk);
-        Ok(Self { extended, sk, fvk })
+        Ok(Self { extended, sk_bytes: Zeroizing::new(*sk.to_bytes()), fvk })
+    }
+
+    /// The account's spending key. The returned value is a plain copy: drop it promptly.
+    pub fn spending_key(&self) -> SpendingKey {
+        Option::from(SpendingKey::from_bytes(*self.sk_bytes)).expect("checked at construction")
     }
 
     /// The raw 43-byte Orchard address (11-byte diversifier, 32-byte pk_d) at index `j`, external

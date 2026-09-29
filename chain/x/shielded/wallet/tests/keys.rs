@@ -52,10 +52,10 @@ fn hkdf_convention_reproduces_the_documented_rootwallet_branch() {
 fn master_key_is_blake2b_512_with_the_orama_personalization() {
     let seed = abandon_seed();
     let s32 = shielded_seed(&seed).unwrap();
-    let i = blake2b_simd::Params::new().hash_length(64).personal(&MASTER_PERSONALIZATION).hash(&s32);
+    let i = blake2b_simd::Params::new().hash_length(64).personal(&MASTER_PERSONALIZATION).hash(&s32[..]);
     let master = master_key(&seed).unwrap();
     assert_eq!(master.spending_key().to_bytes(), &i.as_bytes()[..32]);
-    assert_eq!(master.chain_code(), i.as_bytes()[32..]);
+    assert_eq!(master.chain_code()[..], i.as_bytes()[32..]);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn derivation_framework_equals_orchards_own_zip32_under_zcash_personalization() 
     // which proves the child derivation here is ZIP-32's, not a lookalike.
     let s32 = shielded_seed(&abandon_seed()).unwrap();
     for account in 0..3u32 {
-        let want = SpendingKey::from_zip32_seed(&s32, ORAMA_COIN_TYPE, AccountId::try_from(account).unwrap()).unwrap();
+        let want = SpendingKey::from_zip32_seed(&s32[..], ORAMA_COIN_TYPE, AccountId::try_from(account).unwrap()).unwrap();
         let got = orama_shielded_wallet::keys::zcash_personalization_key_for_tests(&s32, ORAMA_COIN_TYPE, account);
         assert_eq!(got.to_bytes(), want.to_bytes(), "account {account}");
     }
@@ -75,7 +75,7 @@ fn orama_keys_never_equal_zcash_keys_from_the_same_seed() {
     let seed = abandon_seed();
     let s32 = shielded_seed(&seed).unwrap();
     for coin in [133u32, 1, ORAMA_COIN_TYPE] {
-        let zcash = SpendingKey::from_zip32_seed(&s32, coin, AccountId::ZERO).unwrap();
+        let zcash = SpendingKey::from_zip32_seed(&s32[..], coin, AccountId::ZERO).unwrap();
         let orama = account_key(&seed, 0).unwrap().spending_key();
         assert_ne!(zcash.to_bytes(), orama.to_bytes(), "coin {coin}");
         // Also against the raw BIP-39 seed as Zcash wallets would use it.
@@ -107,7 +107,7 @@ fn accounts_seeds_and_scopes_are_all_distinct() {
 fn chain_of_keys_is_consistent() {
     let a = Account::derive(&abandon_seed(), 1).unwrap();
     // FVK re-derives from the spending key and round-trips its encoding.
-    assert_eq!(a.fvk.to_bytes(), FullViewingKey::from(&a.sk).to_bytes());
+    assert_eq!(a.fvk.to_bytes(), FullViewingKey::from(&a.spending_key()).to_bytes());
     assert_eq!(FullViewingKey::from_bytes(&a.fvk.to_bytes()).unwrap().to_bytes(), a.fvk.to_bytes());
     // The address belongs to the FVK, external scope.
     let addr = orchard::Address::from_raw_address_bytes(&a.address(2)).unwrap();
@@ -118,7 +118,7 @@ fn chain_of_keys_is_consistent() {
 fn derivation_is_deterministic() {
     let a = Account::derive(&abandon_seed(), 0).unwrap();
     let b = Account::derive(&abandon_seed(), 0).unwrap();
-    assert_eq!(a.sk.to_bytes(), b.sk.to_bytes());
+    assert_eq!(a.spending_key().to_bytes(), b.spending_key().to_bytes());
 }
 
 #[test]
@@ -130,4 +130,18 @@ fn seed_length_and_account_index_are_validated() {
         Err(KeyError::AccountIndex(_))
     ));
     assert!(Account::derive(&abandon_seed(), (1 << 31) - 1).is_ok());
+}
+
+// Secrets the crate hands out are wipe-on-drop types: this fails to compile if one becomes a plain
+// array again.
+#[test]
+fn seeds_and_chain_codes_are_wiped_on_drop() {
+    fn wiped<T: zeroize::ZeroizeOnDrop>(_: &T) {}
+    let seed = abandon_seed();
+    wiped(&shielded_seed(&seed).unwrap());
+    wiped(&master_key(&seed).unwrap().chain_code());
+    let a = Account::derive(&seed, 0).unwrap();
+    wiped(&a.extended.chain_code());
+    // The account keeps its spending key as bytes it wipes, and builds the key value on demand.
+    assert_eq!(a.spending_key().to_bytes(), a.extended.spending_key().to_bytes());
 }
