@@ -23,8 +23,13 @@ const (
 	// ChainServiceUnit is the systemd unit that runs the chain node.
 	ChainServiceUnit = "orama-global-chain.service"
 
-	// ChainHome is the chain node's home directory (oramad --home).
+	// ChainHome is the chain node's home directory (oramad --home). It is
+	// also cosmovisor's DAEMON_HOME: the binaries live in ChainHome/cosmovisor.
 	ChainHome = "/var/lib/orama-global/chain"
+	// ChainUser is the account the chain unit runs as.
+	ChainUser = "orama-chain"
+	// ChainDaemonName is the chain binary, cosmovisor's DAEMON_NAME.
+	ChainDaemonName = "oramad"
 	// ChainNodeKeyPath is CometBFT's node_key.json under ChainHome: the
 	// ed25519 key the node's p2p id is derived from.
 	ChainNodeKeyPath = ChainHome + "/config/node_key.json"

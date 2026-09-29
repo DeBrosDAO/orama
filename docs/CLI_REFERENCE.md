@@ -101,6 +101,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama global capacity`](#orama-global-capacity) — Declare how many bytes a storage node will hold
   - [`orama global register`](#orama-global-register) — Register a global node from signed service-key bindings
   - [`orama global retire`](#orama-global-retire) — Retire a global node
+  - [`orama global stage-oramad`](#orama-global-stage-oramad) — Place a TUF-verified oramad in the cosmovisor layout
   - [`orama global unbond`](#orama-global-unbond) — Start unbonding norama from one role
 - [`orama inspect`](#orama-inspect) — Inspect cluster health via SSH
 - [`orama invite`](#orama-invite) — Mint an invite for a new node
@@ -1315,7 +1316,7 @@ Sign the binding that proves a service key belongs to an operator.
 The private key stays in its file. The command writes the public key and the
 signature, and nothing else. Sending MsgRegisterNode is a separate step.
 
-Subcommands: `bind`, `bond`, `capacity`, `register`, `retire`, `unbond`
+Subcommands: `bind`, `bond`, `capacity`, `register`, `retire`, `stage-oramad`, `unbond`
 
 ### orama global bind
 
@@ -1450,6 +1451,36 @@ not submit it.
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
+
+### orama global stage-oramad
+
+Place a TUF-verified oramad in the cosmovisor layout
+
+```
+orama global stage-oramad [flags]
+```
+
+Place an oramad binary where cosmovisor runs it, after it verifies against
+the release root adopted at /etc/orama/release-root.json.
+
+--upgrade <name> stages <home>/cosmovisor/upgrades/<name>/bin/oramad for the
+upgrade plan <name>; cosmovisor switches to it at the plan's height. --genesis
+stages <home>/cosmovisor/genesis/bin/oramad and points current at genesis if
+current does not exist yet. A binary already there is refused.
+
+The copy placed is verified as --release-target in the TUF metadata in
+--release-metadata (threshold, timestamp expiry, snapshot rollback, length and
+hashes) before it is renamed into place. Nothing stages automatically: a
+validator's operator runs this for every chain upgrade.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--binary` | — | The oramad binary to stage [required] |
+| `--genesis` | `false` | Stage the genesis binary instead of an upgrade |
+| `--home` | `/var/lib/orama-global/chain` | cosmovisor DAEMON_HOME |
+| `--release-metadata` | — | Directory holding timestamp.json, snapshot.json and targets.json [required] |
+| `--release-target` | — | Name the binary has in the release targets metadata [required] |
+| `--upgrade` | — | Upgrade plan name to stage for |
 
 ### orama global unbond
 
@@ -2113,7 +2144,8 @@ A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
 health-gate failure marked bad.
 
-A validator (--role validator) is never auto: the mode is refused.
+A validator (--role validator) is never auto: the mode is refused, and chain
+upgrades are staged explicitly with 'orama global stage-oramad'.
 
 | Flag | Default | Description |
 |------|---------|-------------|

@@ -1049,6 +1049,39 @@ make lint    # go vet ./...
 hash), so `oramad version --long` reports something meaningful and binaries don't embed local
 filesystem paths.
 
+## Running `oramad` under cosmovisor
+
+The global-role unit that `core/pkg/install` renders (`RenderGlobalChainUnit`,
+`orama-global-chain.service`) runs `/usr/lib/orama-global/bin/cosmovisor run start --home
+/var/lib/orama-global/chain ...` with `DAEMON_NAME=oramad`, `DAEMON_HOME=/var/lib/orama-global/chain`
+(`constants.ChainHome`), `DAEMON_ALLOW_DOWNLOAD_BINARIES=false` and
+`DAEMON_RESTART_AFTER_UPGRADE=true`. Cosmovisor runs `DAEMON_HOME/cosmovisor/current/bin/oramad`
+and, when the chain halts at an upgrade plan's height, points `current` at
+`cosmovisor/upgrades/<name>` and restarts. It never downloads a binary; a plan with no staged
+binary halts the chain until one is staged. Nothing installs this unit or the cosmovisor binary
+yet: the templates are rendered and tested only, and the stagenet deploy script below still
+writes its own unit that runs `oramad` directly.
+
+Binaries enter the layout only through `orama global stage-oramad` (run as root):
+
+- `--upgrade <name>` places `cosmovisor/upgrades/<name>/bin/oramad`. `<name>` must be lowercase
+  letters, digits, `.`, `-` or `_` (cosmovisor lowercases and URI-escapes plan names, so these are
+  the names that map to the same directory on both sides).
+- `--genesis` places `cosmovisor/genesis/bin/oramad` and creates `current -> genesis` when
+  `current` does not exist; an existing `current` is never repointed.
+- The binary is copied into the target directory, the **copy** is verified with
+  `--release-metadata <dir> --release-target <name>` against the TUF release root adopted at
+  `/etc/orama/release-root.json` (the same check `orama node stage-archive` makes), and only then
+  renamed into place. A failure leaves nothing behind. A binary already staged at that path is
+  refused.
+- `cosmovisor/` and `cosmovisor/upgrades/<name>/` are chowned to `orama-chain`, which cosmovisor
+  runs as and which has to move `current` and write `upgrade-info.json` there; the binaries are
+  root-owned 0755. That account can therefore rearrange the layout: the TUF check covers what was
+  staged, not what the chain account does afterwards.
+
+Nothing stages automatically: a validator's `autoupdate` role refuses `auto`, and its operator
+runs `stage-oramad` for every upgrade.
+
 ## The stagenet deploy script
 
 `chain/scripts/stagenet/deploy.sh up|status|reset` is an **interim** deployment path for the

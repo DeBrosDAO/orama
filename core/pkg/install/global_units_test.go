@@ -182,3 +182,25 @@ func mustDirective(t *testing.T, unit, key string) string {
 	}
 	return found
 }
+
+func TestGlobalChainUnit_runsOramadUnderCosmovisorWithoutDownloads(t *testing.T) {
+	unit := RenderGlobalChainUnit()
+	exec := mustDirective(t, unit, "ExecStart")
+	if !strings.HasPrefix(exec, "/usr/lib/orama-global/bin/cosmovisor run start --home "+constants.ChainHome+" ") {
+		t.Fatalf("ExecStart %q does not run oramad through cosmovisor", exec)
+	}
+	for _, want := range []string{
+		"Environment=DAEMON_NAME=oramad\n",
+		"Environment=DAEMON_HOME=" + constants.ChainHome + "\n",
+		"Environment=DAEMON_ALLOW_DOWNLOAD_BINARIES=false\n",
+		"Environment=DAEMON_RESTART_AFTER_UPGRADE=true\n",
+		"ReadWritePaths=" + constants.ChainHome + "\n",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("chain unit is missing %q\n%s", want, unit)
+		}
+	}
+	if strings.Contains(unit, "DAEMON_ALLOW_DOWNLOAD_BINARIES=true") {
+		t.Error("cosmovisor may download binaries")
+	}
+}

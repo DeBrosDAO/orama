@@ -13,10 +13,12 @@ import (
 // the stagenet mesh; this one is the global-role unit, with no WireGuard
 // dependency and no cluster secret path.
 const (
-	globalBinDir    = "/usr/lib/orama-global/bin"
-	globalChainUser = "orama-chain"
-	globalIPFSUser  = "orama-ipfs-pub"
-	globalRelayUser = "orama-relay"
+	globalBinDir = "/usr/lib/orama-global/bin"
+	// globalCosmovisor runs oramad. Nothing installs it yet.
+	globalCosmovisor = globalBinDir + "/cosmovisor"
+	globalChainUser  = constants.ChainUser
+	globalIPFSUser   = "orama-ipfs-pub"
+	globalRelayUser  = "orama-relay"
 
 	globalProviderUser = "orama-provider"
 	globalSBWSUser     = "orama-sbws"
@@ -62,19 +64,26 @@ IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/
 IPAddressAllow=localhost
 `
 
-// RenderGlobalChainUnit is orama-global-chain.service. p2p, rpc, grpc and the
-// REST API are flags oramad's start command registers. CometBFT v0.39's
-// AddNodeFlags does not register an instrumentation flag, so the prometheus
-// listen address is recorded here and still has to be set in config.toml.
+// RenderGlobalChainUnit is orama-global-chain.service. oramad runs under
+// cosmovisor: the unit starts cosmovisor, which runs
+// ChainHome/cosmovisor/current/bin/oramad with the arguments after "run" and
+// switches current to a staged upgrades/<name> binary at the upgrade height.
+// It never downloads a binary (pkg/cosmovisor stages them, verified).
+// p2p, rpc, grpc and the REST API are flags oramad's start command
+// registers. CometBFT v0.39's AddNodeFlags does not register an
+// instrumentation flag, so the prometheus listen address is recorded here
+// and still has to be set in config.toml.
 func RenderGlobalChainUnit() string {
-	exec := fmt.Sprintf("%s/oramad start --home %s --p2p.laddr tcp://0.0.0.0:%d --rpc.laddr tcp://127.0.0.1:%d --grpc.enable=true --grpc.address 127.0.0.1:%d --api.enable=true --api.address tcp://127.0.0.1:%d",
-		globalBinDir, constants.ChainHome, constants.ChainP2PPort, constants.ChainRPCPort, constants.ChainGRPCPort, constants.ChainAPIPort)
+	exec := fmt.Sprintf("%s run start --home %s --p2p.laddr tcp://0.0.0.0:%d --rpc.laddr tcp://127.0.0.1:%d --grpc.enable=true --grpc.address 127.0.0.1:%d --api.enable=true --api.address tcp://127.0.0.1:%d",
+		globalCosmovisor, constants.ChainHome, constants.ChainP2PPort, constants.ChainRPCPort, constants.ChainGRPCPort, constants.ChainAPIPort)
+	env := fmt.Sprintf("Environment=DAEMON_NAME=%s\nEnvironment=DAEMON_HOME=%s\nEnvironment=DAEMON_ALLOW_DOWNLOAD_BINARIES=false\nEnvironment=DAEMON_RESTART_AFTER_UPGRADE=true\n",
+		constants.ChainDaemonName, constants.ChainHome)
 	return renderGlobalUnit(
-		"Orama L1 node (oramad)",
+		"Orama L1 node (oramad under cosmovisor)",
 		globalChainUser,
 		constants.ChainHome,
 		exec,
-		fmt.Sprintf("# CometBFT v0.39 registers no prometheus flag; config.toml prometheus_listen_addr is 127.0.0.1:%d.\n", constants.ChainPrometheusPort),
+		env+fmt.Sprintf("# CometBFT v0.39 registers no prometheus flag; config.toml prometheus_listen_addr is 127.0.0.1:%d.\n", constants.ChainPrometheusPort),
 	)
 }
 

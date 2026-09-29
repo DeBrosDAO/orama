@@ -197,7 +197,9 @@ voters are up, the candidate is a newer dotted version on the cluster's
 channel, and the hour is inside `--window` when one is set. A downgrade, a
 release marked `--bad`, and a TUF failure (`--verify rollback|freeze|threshold|hash`)
 print `refuse`. `--role validator` with `--mode auto` is an error: a
-validator may be `off` or `notify`, never `auto`. This command does not take
+validator may be `off` or `notify`, never `auto`; its chain binary is staged by
+hand with `orama global stage-oramad` (see
+[CHAIN.md](CHAIN.md#running-oramad-under-cosmovisor)). This command does not take
 a lease and does not restart a node. `max_parallel` is 1; a higher value is
 rejected.
 
