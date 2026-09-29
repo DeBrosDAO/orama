@@ -76,59 +76,159 @@ func TestAttest_archivedOnlyAfterThreeArchiversAndThreeDeals(t *testing.T) {
 	require.True(t, found, "archiving a range emits archive_archived")
 }
 
-func TestAttest_wrongRootRefusedAndDoesNotCount(t *testing.T) {
+// A decided range refuses an attestation of any other tuple, naming the field that differs, and
+// records nothing for it.
+func TestAttest_aDecidedRangeRefusesAnyOtherTuple(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
+	bundle, root := digest(0x11), digest(0x21)
+	f.attestQuorum(t, 1, 50, "bafyarchivecid", bundle, root)
 
-	bundle := digest(0x11)
-	rootA := digest(0x21)
-	rootB := digest(0x22)
-	f.attest(t, 1, 1, 50, "bafyarchivecid", bundle, rootA)
-
-	_, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
-		Archiver:    acc(2).String(),
-		NodeId:      nodeOf(2),
-		StartHeight: 1,
-		EndHeight:   50,
-		BundleCid:   "bafyarchivecid",
-		BundleHash:  bundle,
-		MerkleRoot:  rootB,
-	}))
-	require.ErrorIs(t, err, types.ErrWrongRoot)
-
-	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
-		Archiver:    acc(3).String(),
-		NodeId:      nodeOf(3),
-		StartHeight: 1,
-		EndHeight:   50,
-		BundleCid:   "bafyothercid",
-		BundleHash:  bundle,
-		MerkleRoot:  rootA,
-	}))
-	require.ErrorIs(t, err, types.ErrWrongBundle)
-
-	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
-		Archiver:    acc(4).String(),
-		NodeId:      nodeOf(4),
-		StartHeight: 1,
-		EndHeight:   50,
-		BundleCid:   "bafyarchivecid",
-		BundleHash:  digest(0x33),
-		MerkleRoot:  rootA,
-	}))
-	require.ErrorIs(t, err, types.ErrWrongBundle)
-
+	for name, tc := range map[string]struct {
+		mutate func(*types.MsgAttest)
+		want   error
+	}{
+		"another root":   {func(m *types.MsgAttest) { m.MerkleRoot = digest(0x22) }, types.ErrWrongRoot},
+		"another cid":    {func(m *types.MsgAttest) { m.BundleCid = "bafyothercid" }, types.ErrWrongBundle},
+		"another hash":   {func(m *types.MsgAttest) { m.BundleHash = digest(0x33) }, types.ErrWrongBundle},
+		"another piece":  {func(m *types.MsgAttest) { m.PieceRoot = digest(8) }, types.ErrWrongPiece},
+		"another length": {func(m *types.MsgAttest) { m.PieceBytes, m.RealLeafCount, m.PaddedLeafCount = 1024, 1, 1 }, types.ErrWrongPiece},
+	} {
+		msg := withPiece(&types.MsgAttest{
+			Archiver: acc(4).String(), NodeId: nodeOf(4), StartHeight: 1, EndHeight: 50,
+			BundleCid: "bafyarchivecid", BundleHash: bundle, MerkleRoot: root,
+		})
+		tc.mutate(msg)
+		_, err := f.Msg.Attest(f.Ctx, msg)
+		require.ErrorIsf(t, err, tc.want, "%s", name)
+	}
 	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
 	require.NoError(t, err)
-	require.Equal(t, []string{acc(1).String()}, rec.Archivers)
-	require.Equal(t, rootA, rec.MerkleRoot)
-	require.False(t, rec.Archived)
+	require.Len(t, rec.Archivers, 3, "the refused attestations are not recorded")
+	require.Equal(t, root, rec.MerkleRoot)
 
-	// Two more matching attestations still reach 3, not 5: the refused roots did not count.
-	f.attest(t, 2, 1, 50, "bafyarchivecid", bundle, rootA)
-	res := f.attest(t, 3, 1, 50, "bafyarchivecid", bundle, rootA)
+	// A fourth operator that attests the winning tuple is extra evidence and is accepted.
+	res := f.attest(t, 4, 1, 50, "bafyarchivecid", bundle, root)
+	require.Equal(t, uint32(4), res.Attesters)
+}
+
+// The first attestation of a range does not fix what the range is. Before, a wrong first attester
+// pinned its root and every honest archiver was refused for ever.
+func TestAttest_aWrongFirstAttestationDoesNotPinTheRange(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	bundle := digest(0x11)
+	wrong, right := digest(0x21), digest(0x22)
+
+	f.attest(t, 1, 1, 50, "bafyarchivecid", bundle, wrong)
+	res := f.attest(t, 2, 1, 50, "bafyarchivecid", bundle, right)
+	require.Equal(t, uint32(1), res.Attesters, "the second archiver disagrees, so it starts its own tally")
+	f.attest(t, 3, 1, 50, "bafyarchivecid", bundle, right)
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.False(t, rec.Decided)
+	require.Len(t, rec.Candidates, 2, "the two tuples coexist until one wins")
+
+	res = f.attest(t, 4, 1, 50, "bafyarchivecid", bundle, right)
 	require.Equal(t, uint32(3), res.Attesters)
-	require.False(t, res.Archived)
+	rec, err = f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.True(t, rec.Decided)
+	require.Equal(t, right, rec.MerkleRoot, "the tuple three operators attested won, not the first one")
+	require.Equal(t, []string{acc(2).String(), acc(3).String(), acc(4).String()}, rec.Archivers)
+	require.Empty(t, rec.Candidates, "the losing tuple is dropped")
+
+	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: bundle, MerkleRoot: wrong,
+	}))
+	require.ErrorIs(t, err, types.ErrWrongRoot, "the wrong tuple is refused once the range is decided")
+}
+
+// Attestations are tallied per full tuple: archivers that differ in any one field of it do not
+// count toward each other, so two of one tuple and one of another decide nothing.
+func TestAttest_everyFieldOfTheTupleSeparatesTheTally(t *testing.T) {
+	variants := map[string]func(*types.MsgAttest){
+		"merkle root": func(m *types.MsgAttest) { m.MerkleRoot = digest(0x99) },
+		"bundle cid":  func(m *types.MsgAttest) { m.BundleCid = "bafyothercid" },
+		"bundle hash": func(m *types.MsgAttest) { m.BundleHash = digest(0x98) },
+		"piece root":  func(m *types.MsgAttest) { m.PieceRoot = digest(0x97) },
+		"piece size": func(m *types.MsgAttest) {
+			m.PieceBytes, m.RealLeafCount, m.PaddedLeafCount = 2048, 2, 2
+		},
+	}
+	for name, mutate := range variants {
+		t.Run(name, func(t *testing.T) {
+			f := newTestFixture(t)
+			f.initGenesis(t, nil)
+			f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+			f.attest(t, 2, 1, 50, "bafyarchivecid", digest(1), digest(2))
+			odd := withPiece(&types.MsgAttest{
+				Archiver: acc(3).String(), NodeId: nodeOf(3), StartHeight: 1, EndHeight: 50,
+				BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
+			})
+			mutate(odd)
+			res, err := f.Msg.Attest(f.Ctx, odd)
+			require.NoError(t, err)
+			require.Equal(t, uint32(1), res.Attesters)
+			rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+			require.NoError(t, err)
+			require.False(t, rec.Decided, "two operators on one tuple and one on another decide nothing")
+			require.Len(t, rec.Candidates, 2)
+			_, err = f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
+			require.ErrorIs(t, err, types.ErrQuorumPending)
+
+			res = f.attest(t, 4, 1, 50, "bafyarchivecid", digest(1), digest(2))
+			require.Equal(t, uint32(3), res.Attesters)
+			rec, err = f.Keeper.GetRange(f.Ctx, 1, 50)
+			require.NoError(t, err)
+			require.True(t, rec.Decided)
+			require.Equal(t, digest(2), rec.MerkleRoot)
+			require.Equal(t, types.Piece{Root: digest(7), RealLeafCount: 3, PaddedLeafCount: 4, PieceBytes: 3000}, rec.PieceOf())
+		})
+	}
+}
+
+// An operator counts toward one tuple per range: it cannot spread itself over several to fill the
+// candidate set or to count twice.
+func TestAttest_anOperatorCannotAttestTwoTuplesOfARange(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.Nodes.operator[nodeOf(2)] = opOf(1)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+
+	for _, signer := range []byte{1, 2} {
+		_, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
+			Archiver: acc(signer).String(), NodeId: nodeOf(signer), StartHeight: 1, EndHeight: 50,
+			BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(9),
+		}))
+		require.ErrorIsf(t, err, types.ErrConflictingAttestation, "node %d", signer)
+	}
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Len(t, rec.Candidates, 1)
+}
+
+// The candidate set is bounded by max_candidates_per_range: a tuple beyond it is refused, the
+// tuples already there keep counting, and one of them can still win.
+func TestAttest_theCandidateSetIsBounded(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, func(gs *types.GenesisState) { gs.Params.MaxCandidatesPerRange = 2 })
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attest(t, 2, 1, 50, "bafyarchivecid", digest(1), digest(3))
+	_, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
+		Archiver: acc(3).String(), NodeId: nodeOf(3), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(4),
+	}))
+	require.ErrorIs(t, err, types.ErrCandidatesFull)
+
+	f.attest(t, 3, 1, 50, "bafyarchivecid", digest(1), digest(3))
+	res := f.attest(t, 4, 1, 50, "bafyarchivecid", digest(1), digest(3))
+	require.Equal(t, uint32(3), res.Attesters)
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.True(t, rec.Decided)
+	require.Equal(t, digest(3), rec.MerkleRoot)
 }
 
 func TestAttachReplicas_unknownRangeAndFutureHeightRefused(t *testing.T) {
@@ -401,15 +501,16 @@ func TestAttest_oneOperatorsNodesCountOnce(t *testing.T) {
 	require.Equal(t, uint32(1), res.Attesters)
 	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
 	require.NoError(t, err)
-	require.Equal(t, []string{opOf(1)}, rec.Operators)
-	require.Equal(t, []string{acc(1).String()}, rec.Archivers)
+	require.Len(t, rec.Candidates, 1)
+	require.Equal(t, []string{opOf(1)}, rec.Candidates[0].Operators)
+	require.Equal(t, []string{acc(1).String()}, rec.Candidates[0].Archivers)
 
-	// The same operator's node with a wrong root is still refused.
+	// The same operator's node with another tuple is refused.
 	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
 		Archiver: acc(2).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
 		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(9),
 	}))
-	require.ErrorIs(t, err, types.ErrWrongRoot)
+	require.ErrorIs(t, err, types.ErrConflictingAttestation)
 }
 
 // A key that already attested is idempotent even after its node lost the role.
@@ -420,12 +521,31 @@ func TestAttest_repeatAfterLosingTheRoleIsIdempotent(t *testing.T) {
 	f.Nodes.inactive[nodeOf(1)] = true
 	res := f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
 	require.Equal(t, uint32(1), res.Attesters)
+	f.Nodes.inactive[nodeOf(1)] = false
+	for _, signer := range []byte{2, 3} {
+		f.attest(t, signer, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	}
+	f.Nodes.inactive[nodeOf(1)] = true
+	res = f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	require.Equal(t, uint32(3), res.Attesters, "the same holds once the range is decided")
+}
+
+// Deals can only back a tuple that has won the range.
+func TestAttachReplicas_needsAWinningTuple(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attest(t, 2, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50, DealIds: []string{"1"},
+	})
+	require.ErrorIs(t, err, types.ErrQuorumPending)
 }
 
 func TestAttachReplicas_onlyActiveArchiveDeals(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attestBy(t, []byte{1, 2, 4}, 1, 50, "bafyarchivecid", digest(1), digest(2))
 	for _, id := range []string{"deal-1", "0", "-1", "01"} {
 		_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
 			Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50, DealIds: []string{"1", id},
@@ -446,7 +566,7 @@ func TestAttachReplicas_onlyActiveArchiveDeals(t *testing.T) {
 	f.attach(t, 1, 1, 50, "1")
 
 	// A deal backs one range only.
-	f.attest(t, 1, 51, 100, "bafyarchivecid", digest(1), digest(3))
+	f.attestBy(t, []byte{1, 2, 4}, 51, 100, "bafyarchivecid", digest(1), digest(3))
 	_, err = f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
 		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 51, EndHeight: 100, DealIds: []string{"1"},
 	})
@@ -495,7 +615,7 @@ func TestExportGenesis_roundTripsAnEndedDealAndTheIndex(t *testing.T) {
 	require.Equal(t, rec.Operators, imported.Operators)
 	require.Equal(t, rec.DealIds, imported.DealIds)
 
-	g.attest(t, 1, 51, 100, "bafyarchivecid", digest(1), digest(3))
+	g.attestQuorum(t, 51, 100, "bafyarchivecid", digest(1), digest(3))
 	_, err = g.Msg.AttachReplicas(g.Ctx, &types.MsgAttachReplicas{
 		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 51, EndHeight: 100, DealIds: []string{"2"},
 	})
@@ -583,7 +703,7 @@ func TestCreateArchiveDeal_recordedLiveDealsCountAndEndedOnesAreRenewed(t *testi
 func TestCreateArchiveDeal_onlyAnAttesterOfTheRangeMayAskForDeals(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attestBy(t, []byte{1, 2, 4}, 1, 50, "bafyarchivecid", digest(1), digest(2))
 
 	_, err := f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(3, 1, 50))
 	require.ErrorIs(t, err, types.ErrNotAttester)
@@ -613,7 +733,7 @@ func TestCreateArchiveDeal_aPendingDealBacksNoOtherRange(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	f.attestQuorum(t, 1, 50, "bafyarchivecid", digest(1), digest(2))
-	f.attest(t, 1, 51, 100, "bafyarchivecid", digest(1), digest(3))
+	f.attestQuorum(t, 51, 100, "bafyarchivecid", digest(1), digest(3))
 	id := f.createDeal(t, 1, 1, 50)
 	f.Storage.activate(id)
 	_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
@@ -665,28 +785,36 @@ func TestCreateArchiveDeal_mustMatchThePinnedPiece(t *testing.T) {
 	require.Equal(t, uint64(3000), f.Storage.opened[0].Bytes)
 }
 
-func TestAttest_thePieceCommitmentIsPinnedByTheFirstAttestation(t *testing.T) {
+// Deals open with the piece commitment of the winning tuple, never with the first attester's:
+// a first attester that committed to other bytes gets no deal of its own.
+func TestCreateArchiveDeal_opensFromTheWinningTuple(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	junk := withPiece(&types.MsgAttest{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyjunk", BundleHash: digest(1), MerkleRoot: digest(2),
+	})
+	junk.PieceRoot = digest(8)
+	_, err := f.Msg.Attest(f.Ctx, junk)
+	require.NoError(t, err)
+	for _, signer := range []byte{2, 3, 4} {
+		f.attest(t, signer, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	}
 	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
 	require.NoError(t, err)
+	require.True(t, rec.Decided)
 	require.Equal(t, types.Piece{Root: digest(7), RealLeafCount: 3, PaddedLeafCount: 4, PieceBytes: 3000}, rec.PieceOf())
 
-	other := withPiece(&types.MsgAttest{
-		Archiver: acc(2).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
-		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
-	})
-	other.PieceRoot = digest(8)
-	_, err = f.Msg.Attest(f.Ctx, other)
-	require.ErrorIs(t, err, types.ErrWrongPiece, "another commitment for the same bundle does not count")
-	rec, err = f.Keeper.GetRange(f.Ctx, 1, 50)
-	require.NoError(t, err)
-	require.Len(t, rec.Archivers, 1, "the refused attestation is not recorded")
+	// The first attester lost: it is not among the winners and cannot ask for deals.
+	_, err = f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
+	require.ErrorIs(t, err, types.ErrNotAttester)
+	lost := f.createMsg(2, 1, 50)
+	lost.PieceRoot = digest(8)
+	_, err = f.Msg.CreateArchiveDeal(f.Ctx, lost)
+	require.ErrorIs(t, err, types.ErrWrongPiece, "a deal cannot be opened for the losing tuple's bytes")
 
-	other.PieceRoot, other.PieceBytes, other.RealLeafCount, other.PaddedLeafCount = digest(7), 1024, 1, 1
-	_, err = f.Msg.Attest(f.Ctx, other)
-	require.ErrorIs(t, err, types.ErrWrongPiece)
+	f.createDeal(t, 2, 1, 50)
+	require.Equal(t, digest(7), f.Storage.opened[0].Root, "the deal opens with the winning commitment")
 }
 
 func TestAttest_pieceLargerThanTheCapIsRefused(t *testing.T) {

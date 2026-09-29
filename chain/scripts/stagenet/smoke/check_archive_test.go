@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	archivetypes "github.com/DeBrosOfficial/network/chain/x/archive/types"
 )
 
 var threeOps = []string{"op1", "op2", "op3"}
@@ -73,4 +75,14 @@ func TestArchiveVerdict_assignedDealsButNotArchivedIsAFailureEvenOnASharedASN(t 
 		Deals:        []archiveDeal{{ID: 7, Assigned: 3, Replicas: 3}},
 		ProviderASNs: []uint32{16276, 16276, 16276}, Replicas: 3})
 	require.Equal(t, Fail, r.Status)
+}
+
+func TestBestAttesters_isTheWinnersOrTheLeadingCandidatesOperators(t *testing.T) {
+	decided := archivetypes.RangeRecord{Decided: true, Operators: []string{"a", "b", "c"}}
+	require.Len(t, bestAttesters(decided), 3, "a decided range reports its winner's operators")
+	contested := archivetypes.RangeRecord{Candidates: []archivetypes.Candidate{
+		{Operators: []string{"a"}}, {Operators: []string{"b", "c"}},
+	}}
+	require.Equal(t, []string{"b", "c"}, bestAttesters(contested), "an undecided range reports the leading candidate's operators")
+	require.Empty(t, bestAttesters(archivetypes.RangeRecord{}))
 }

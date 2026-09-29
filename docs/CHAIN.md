@@ -282,6 +282,7 @@ contract may hold ORAMA and issue a public IOU for it, and the genesis token wra
 |---|---|---|
 | `retention_window_blocks` | `201600` | plan D22: validators keep 14 days of blocks (6-second blocks) |
 | `max_piece_bytes` | `4294967296` | track-c C14 (structure only): 4 GiB caps the bundle file an attestation commits to; G1 launch default |
+| `max_candidates_per_range` | `4` | track-c C14 (structure only): bounds the conflicting tuples one undecided range keeps, an honest one, wrong ones and a fork; G1 launch default |
 
 `houses`
 
@@ -1498,12 +1499,17 @@ in `<home>/node-id`, with:
   `archive` param `max_piece_bytes` (4 GiB at launch, locked in G1).
 
 `<home>/cursor` is the last attested height, and a restart resumes after it.
-x/archive pins the first attestation of a range, its piece commitment included. If a range is already
-pinned with a different root, bundle hash, CID or piece commitment, the archiver keeps its own
-bundle. It writes `<home>/conflicts/<start>-<end>.json` with both sets of
-values, reports `ErrRootConflict` once, and moves on to the next range. A
-range of a different width that overlaps is refused by x/archive on every
-attempt.
+
+x/archive tallies attestations per tuple (bundle CID, content hash, Merkle root and piece commitment),
+so a wrong tuple on chain does not stop the archiver. When it finds the range already attested with a
+different tuple, the archiver reads the range's blocks a second time and checks that they pack into the
+same bundle (blocks that changed between two reads are not attested, and the pass errors), then keeps its
+own tuple and attests it: the tuple that three operators agree on wins. Only a range that another tuple
+has already won cannot be attested; the archiver writes `<home>/conflicts/<start>-<end>.json` with both
+sets of values, reports `ErrRootConflict` once, and moves on to the next range. An archiver whose own
+earlier attestation differs from what it reads now is a conflict too, and so is a range another tuple wins
+after this archiver attested it (it stops following that range). A range of a different width that
+overlaps is refused by x/archive on every attempt.
 
 `history get --height H --from <home or http base>` loads the range's
 bundle. It checks the file hash, each block's bytes against its header hash,
@@ -1513,10 +1519,10 @@ block.
 **Archive deals.** After it attests a range, the archiver follows it (one file
 `<home>/deals/<start>-<end>.json` holds the deal ids it opened that the range does not record
 yet) until x/archive marks it archived. Each pass, for each such range:
-1. Once attestations from three operators are on the range (the archived quorum), and if the range holds
+1. Once a tuple has won the range (three distinct operators attested it), and if the range holds
    fewer than three live deals, counting recorded ones and its own pending ones, it computes the `piece/`
-   commitment of the bundle file, checks it against the one pinned on the range, and submits
-   `MsgCreateArchiveDeal` for each missing one. Before the quorum it opens nothing and waits. The chain answers with the deal id in an `archive_create_deal` event. When the chain refuses one as over
+   commitment of the bundle file, checks it against the winning tuple's, and submits
+   `MsgCreateArchiveDeal` for each missing one. Before a tuple has won it opens nothing and waits. The chain answers with the deal id in an `archive_create_deal` event. When the chain refuses one as over
    the range's allowance (`ErrDealsFull`, which happens when another archiver of the range was faster),
    the range has enough deals and the archiver moves on.
 2. For every slot of its deals that x/storage has assigned to a node and the node has not accepted, it
@@ -1539,11 +1545,12 @@ and padded leaf counts, bytes) opens one protocol ARCHIVE deal in x/storage, thr
 sets the price (`protocol_price_per_epoch`, per replica) and the duration
 (`archive.ArchiveDealEpochs`, 3650 epochs, so ten years at one epoch a day); the archiver
 chooses neither, and it does not choose the content either: the message's commitment must equal the
-one the range's attesters pinned (`ErrWrongPiece`), the range must have attestations from at least
+winning tuple's (`ErrWrongPiece`), the range must be decided, that is, one tuple attested by at least
 three operators (`ErrQuorumPending`, the threshold that archives it), and the deal opens with the
-pinned commitment. One archiver therefore cannot fill a range's three deal slots with content nobody
-attested. The signer must be the hot key of an active ARCHIVER node whose operator attested the
-range, and a range may hold at most `MaxLiveDealsPerRange` (3) live deals. The deal is recorded as
+winning commitment. One archiver therefore cannot fill a range's three deal slots with content nobody
+attested, and a first attester that lost the range gets no deal for its bytes. The signer must be the hot
+key of an active ARCHIVER node whose operator attested the winning tuple, and a range may hold at most
+`MaxLiveDealsPerRange` (3) live deals. The deal is recorded as
 pending for the range (a collection of (start, deal id)) and reserved for it in the `AttachedDeals`
 index, so it cannot back another range. Pending deals that x/storage no longer runs are forgotten when
 the next one is asked for, which frees their place. When the deal ends, `MsgCreateArchiveDeal`
@@ -1551,21 +1558,40 @@ drops it from the range and a new one can be opened, so history is renewed by th
 lapsing. Pending state is not part of genesis export; an export drops the reservation of a deal
 that was not yet recorded.
 
+**Attestation tally.** A range is undecided until one tuple has been attested by three distinct
+operators. Until then every tuple attested for it is a candidate, with its own archivers and operators;
+the `RangeRecord` keeps them in `candidates` (at most `max_candidates_per_range` of them, 4 at launch,
+locked in G1; a tuple beyond that is refused with `ErrCandidatesFull`) and its winning-tuple fields are
+empty. The first tuple to reach three operators wins: the range is `decided`, the winner's fields,
+archivers and operators become the range's, and the other candidates are dropped. A decided range takes
+only the winning tuple (a different one is refused with `ErrWrongRoot`, `ErrWrongBundle` or
+`ErrWrongPiece`, naming the field that differs) and more operators attesting it as extra evidence up to
+64. An operator counts toward one tuple per range: a second attestation of a different tuple by the same
+operator, or by another of its nodes, is refused (`ErrConflictingAttestation`), so an operator cannot
+fill the candidate set. Residual: a coalition of as many distinct bonded operators as the candidate cap
+can still keep an honest tuple out of an undecided range if they attest first; nothing slashes them (the
+root is checkable by anyone against the chain's own block hashes). `MsgAttachReplicas` and
+`MsgCreateArchiveDeal` need a decided range (`ErrQuorumPending`). Genesis export writes `decided` and the
+candidates, refuses state that breaks these rules (a decided range with candidates or under three
+operators, an undecided one with an operator in two candidates or over the cap), and `ExportGenesis` runs
+the same validation as `InitGenesis`. The `archive_attest` event carries `decided` and the attested
+`bundle_cid`.
+
 x/archive accepts `MsgAttest`, `MsgAttachReplicas` and `MsgCreateArchiveDeal` only from the hot key of
 the x/nodes node the message names, and only while that node is active with an
 ARCHIVER role bond. Each operator counts once toward a range: a second node of
-an operator, or the same operator under a rotated key, is accepted and
+an operator, or the same operator under a rotated key, is accepted for the same tuple and
 counts nothing, and a key that already attested stays idempotent after its
 node loses the role. Every id in `MsgAttachReplicas` must be a decimal x/storage
 deal id of an active ARCHIVE deal (`ErrNotArchiveDeal`, so an OPEN deal with no provider yet is refused) that backs no other
 range (`ErrDealAttached`), and only an operator that attested the range may
-attach deals to it (`ErrNotAttester`). When the three-operator, three-deal
+attach deals to it (`ErrNotAttester`). When a tuple has won and the three-deal
 threshold is reached, the deals are read again: ended ones are dropped from the
 range and freed, and the range is archived only if three live deals remain.
 After that `archived` is permanent. `MsgAttachReplicas` does not require the deal to have been
 made by `MsgCreateArchiveDeal`: the scheduled ARCHIVE protocol deals, which carry a synthetic
 payload, can still be attached, and the deal's stored bytes are not checked against the bundle, so the
-attesting operators and the piece commitment they pinned are what vouch for it. Nothing slashes a wrong root
+attesting operators and the winning piece commitment are what vouch for it. Nothing slashes a wrong root
 yet; the root is checkable by anyone against the chain's own block hashes.
 
 **Retention.** The app enforces C14's retain height in `OramaApp.Commit`. `BaseApp` returns the height

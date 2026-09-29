@@ -13,12 +13,11 @@ import (
 )
 
 // CreateArchiveDeal opens one protocol ARCHIVE deal for the bundle of an attested range. The
-// signer must be the hot key of an active ARCHIVER node whose operator attested the range, and
-// the range must have attestations from at least types.MinArchiverAttestations operators, the
-// same threshold that archives it. The chain sets the price (x/storage's protocol price) and the
-// duration (types.ArchiveDealEpochs). The message's piece commitment must equal the one the
-// attesters pinned on the range, and that pinned commitment, never the message's, is what the deal
-// opens with: one archiver cannot fill the range's deal slots with content nobody attested. A range may hold at most types.MaxLiveDealsPerRange live deals, counting
+// signer must be the hot key of an active ARCHIVER node whose operator attested the winning tuple
+// of the range, and the range must be decided: one tuple attested by at least
+// types.MinArchiverAttestations distinct operators, the threshold that archives it. The chain sets the price (x/storage's protocol price) and the
+// duration (types.ArchiveDealEpochs). The message's piece commitment must equal the winning tuple's, and
+// that commitment, never the message's, is what the deal opens with: one archiver cannot fill the range's deal slots with content nobody attested. A range may hold at most types.MaxLiveDealsPerRange live deals, counting
 // recorded ones and ones still waiting for a provider, so an archiver cannot open more paid
 // deals than the range needs. The new deal is OPEN until x/storage assigns it in the next block,
 // and only then can MsgAttachReplicas record it.
@@ -44,12 +43,12 @@ func (k Keeper) CreateArchiveDeal(ctx sdk.Context, msg *types.MsgCreateArchiveDe
 	if err != nil {
 		return 0, false, 0, err
 	}
+	if !rec.Decided {
+		return 0, false, 0, fmt.Errorf("%w: %d-%d has no tuple attested by %d operators yet, deals open only for the winning one", types.ErrQuorumPending,
+			msg.StartHeight, msg.EndHeight, types.MinArchiverAttestations)
+	}
 	if !slices.Contains(rec.Operators, operator) {
 		return 0, false, 0, fmt.Errorf("%w: operator %s did not attest range %d-%d", types.ErrNotAttester, operator, msg.StartHeight, msg.EndHeight)
-	}
-	if len(rec.Operators) < types.MinArchiverAttestations {
-		return 0, false, 0, fmt.Errorf("%w: %d-%d has attestations from %d operators, deals need %d", types.ErrQuorumPending,
-			msg.StartHeight, msg.EndHeight, len(rec.Operators), types.MinArchiverAttestations)
 	}
 	if !rec.PieceOf().Equal(msg.PieceOf()) {
 		return 0, false, 0, fmt.Errorf("%w: range %d-%d is pinned to a different piece", types.ErrWrongPiece, msg.StartHeight, msg.EndHeight)
@@ -84,7 +83,7 @@ func (k Keeper) CreateArchiveDeal(ctx sdk.Context, msg *types.MsgCreateArchiveDe
 			return 0, false, 0, fmt.Errorf("failed to store range %d-%d: %w", rec.StartHeight, rec.EndHeight, err)
 		}
 	}
-	ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeCreateArchiveDeal, rec, archiver.String()).
+	ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeCreateArchiveDeal, rec, rec.BundleCid, archiver.String()).
 		AppendAttributes(sdk.NewAttribute(types.AttributeKeyDealID, strconv.FormatUint(dealID, 10))))
 	return dealID, rec.Archived, uint32(len(live)), nil
 }

@@ -187,3 +187,11 @@ func (f *testFixture) attestQuorum(t *testing.T, start, end int64, cid string, b
 		f.attest(t, n, start, end, cid, bundle, root)
 	}
 }
+
+// attestBy has each of the signers attest the same range and tuple.
+func (f *testFixture) attestBy(t *testing.T, signers []byte, start, end int64, cid string, bundle, root []byte) {
+	t.Helper()
+	for _, n := range signers {
+		f.attest(t, n, start, end, cid, bundle, root)
+	}
+}

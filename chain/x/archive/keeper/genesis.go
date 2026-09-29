@@ -24,6 +24,8 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) error {
 		rec.DealIds = append([]string(nil), rec.DealIds...)
 		rec.Archivers = append([]string(nil), rec.Archivers...)
 		rec.Operators = append([]string(nil), rec.Operators...)
+		rec.PieceRoot = append([]byte(nil), rec.PieceRoot...)
+		rec.Candidates = cloneCandidates(rec.Candidates)
 		if err := k.Ranges.Set(ctx, collections.Join(rec.StartHeight, rec.EndHeight), rec); err != nil {
 			return fmt.Errorf("failed to set range %d-%d: %w", rec.StartHeight, rec.EndHeight, err)
 		}
@@ -67,9 +69,32 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) (*types.GenesisState, error) {
 	if recomputed := types.ContiguousArchivedHeight(ranges); recomputed != last {
 		return nil, fmt.Errorf("stored last archived height %d does not match ranges (%d)", last, recomputed)
 	}
-	return &types.GenesisState{
+	gs := &types.GenesisState{
 		Params:             params,
 		Ranges:             ranges,
 		LastArchivedHeight: last,
-	}, nil
+	}
+	// The registry's invariants are the genesis rules (a decided range has its operator quorum and
+	// no candidates, an undecided one has bounded candidates with no operator in two of them, archived
+	// means quorum over its own deals): state that breaks one is not exported as if it were sound.
+	if err := gs.Validate(); err != nil {
+		return nil, fmt.Errorf("archive state breaks a registry invariant: %w", err)
+	}
+	return gs, nil
+}
+
+func cloneCandidates(in []types.Candidate) []types.Candidate {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]types.Candidate, len(in))
+	for i, c := range in {
+		c.BundleHash = append([]byte(nil), c.BundleHash...)
+		c.MerkleRoot = append([]byte(nil), c.MerkleRoot...)
+		c.PieceRoot = append([]byte(nil), c.PieceRoot...)
+		c.Archivers = append([]string(nil), c.Archivers...)
+		c.Operators = append([]string(nil), c.Operators...)
+		out[i] = c
+	}
+	return out
 }

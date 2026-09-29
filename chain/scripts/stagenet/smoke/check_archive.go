@@ -73,7 +73,7 @@ func archiveVerdict(in archiveInput) Result {
 		return fail(archiveName, "range 1-%d is final (tip %d) but no archiver attested it", in.Width, in.Tip)
 	}
 	if n := distinctStrings(in.Operators); n < archiveAttesters {
-		return fail(archiveName, "range 1-%d is attested by %d operators, want %d", in.Width, n, archiveAttesters)
+		return fail(archiveName, "range 1-%d has no tuple attested by %d operators: the best is attested by %d operators", in.Width, archiveAttesters, n)
 	}
 	if in.Archived {
 		return pass(archiveName, "range 1-%d attested by %d operators and archived", in.Width, distinctStrings(in.Operators))
@@ -94,6 +94,21 @@ func archiveVerdict(in archiveInput) Result {
 	return fail(archiveName, "range 1-%d is attested but not archived: %d ARCHIVE deals, %d with unassigned slots", in.Width, len(in.Deals), unassigned)
 }
 
+// bestAttesters is the operators of the tuple that won the range, or of the candidate tuple with the
+// most operators while none has won.
+func bestAttesters(rec archivetypes.RangeRecord) []string {
+	if rec.Decided {
+		return rec.Operators
+	}
+	var best []string
+	for _, c := range rec.Candidates {
+		if len(c.Operators) > len(best) {
+			best = c.Operators
+		}
+	}
+	return best
+}
+
 // checkArchive reads the archive state from the first node and judges it.
 func checkArchive(ctx context.Context, e *env) Result {
 	c, err := e.client(ctx, e.nodes[0])
@@ -109,7 +124,7 @@ func checkArchive(ctx context.Context, e *env) Result {
 	var qerr *node.QueryError
 	switch {
 	case err == nil:
-		in.RangeFound, in.Operators, in.Archived = true, rng.Range.Operators, rng.Range.Archived
+		in.RangeFound, in.Operators, in.Archived = true, bestAttesters(rng.Range), rng.Range.Archived
 	case errors.As(err, &qerr) && qerr.NotFound():
 	default:
 		return fail(archiveName, "query range 1-%d: %v", archiveRangeBlocks, err)

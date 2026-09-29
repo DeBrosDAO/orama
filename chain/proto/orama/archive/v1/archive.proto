@@ -3,6 +3,8 @@ package orama.archive.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/archive/types";
 
+import "gogoproto/gogo.proto";
+
 // Params are x/archive's genesis-set parameters
 // (plans/open-network/track-c-chain.md C14). There is no authority and no
 // MsgUpdateParams: nothing here is an admin key.
@@ -15,40 +17,68 @@ message Params {
   // of every ARCHIVE deal opened for a range. It bounds what one range can reserve on
   // storage providers.
   uint64 max_piece_bytes = 2;
+  // max_candidates_per_range bounds how many different attested tuples (bundle cid, bundle
+  // hash, merkle root and piece commitment) one undecided range keeps side by side. Each
+  // operator may attest one tuple per range, so a range with this many candidates has this many
+  // distinct operators disagreeing with each other.
+  uint32 max_candidates_per_range = 3;
 }
 
-// RangeRecord is one height range in the archive registry: bundle CID,
-// block-hash Merkle root, replica deal ids, and the archivers who attested
-// that root. A range is archived only when archivers of at least 3 distinct
-// operators have attested the pinned root and at least 3 distinct active
-// ARCHIVE deal ids are recorded.
-// The root, the bundle and the piece commitment are pinned by the first
-// attestation; an attestation that differs in any of them is refused and does
-// not count toward this one.
+// Candidate is one tuple attested for a range that no tuple has won yet: the bundle CID, the
+// content hash, the block-hash Merkle root and the piece commitment of the bundle file, with the
+// archivers that attested exactly that tuple. Attestations are tallied per tuple: two archivers
+// that disagree on any field of the tuple are not counting toward each other.
+message Candidate {
+  string bundle_cid = 1;
+  bytes bundle_hash = 2;
+  bytes merkle_root = 3;
+  bytes piece_root = 4;
+  uint64 real_leaf_count = 5;
+  uint64 padded_leaf_count = 6;
+  uint64 piece_bytes = 7;
+  // archivers are bech32 account addresses, one per operator that attested this tuple.
+  repeated string archivers = 8;
+  // operators[i] is the x/nodes operator of archivers[i]. Each operator counts once.
+  repeated string operators = 9;
+}
+
+// RangeRecord is one height range in the archive registry. Attestations are tallied per tuple
+// (bundle CID, content hash, block-hash Merkle root and piece commitment). While no tuple has
+// reached the operator quorum the range is undecided: candidates holds every tuple attested so
+// far, each with its own archivers, and the fields below stay empty. The first tuple attested by
+// at least 3 distinct operators wins: the range is decided, the tuple's fields, archivers and
+// operators are copied into the fields below, and the other candidates are dropped. Deal ids are
+// recorded only against a decided range, from the winning tuple. A range is archived when it is
+// decided and at least 3 distinct active ARCHIVE deal ids are recorded.
 message RangeRecord {
   int64 start_height = 1;
   int64 end_height = 2;
+  // bundle_cid .. merkle_root, piece_root .. piece_bytes, archivers and operators describe the
+  // winning tuple. They are empty while the range is not decided.
   string bundle_cid = 3;
   // bundle_hash is the 32-byte content hash of the bundle. VerifyBundle
   // checks it against this field and checks the block hashes against merkle_root.
   bytes bundle_hash = 4;
   bytes merkle_root = 5;
   repeated string deal_ids = 6;
-  // archivers are bech32 account addresses, one distinct signer per entry.
-  // Each entry attested merkle_root. A signer who submits a different root
-  // is not appended.
+  // archivers are bech32 account addresses, one distinct signer per entry, each of which
+  // attested the winning tuple.
   repeated string archivers = 7;
   bool archived = 8;
   // operators[i] is the x/nodes operator of archivers[i]. Each operator
   // counts once toward the three attesters, so one operator's many nodes
   // cannot archive a range alone.
   repeated string operators = 9;
-  // piece_root .. piece_bytes are the piece/ commitment of the bundle file, pinned by
-  // the first attestation and repeated by every later one. x/storage ARCHIVE deals for
-  // the range are opened only for this commitment, and only once the attestations reach
-  // quorum, so what providers are asked to store is what the attesters agreed on.
+  // piece_root .. piece_bytes are the piece/ commitment of the winning bundle file.
+  // x/storage ARCHIVE deals for the range are opened only for this commitment, and only once a
+  // tuple has won, so what providers are asked to store is what the attesters agreed on.
   bytes piece_root = 10;
   uint64 real_leaf_count = 11;
   uint64 padded_leaf_count = 12;
   uint64 piece_bytes = 13;
+  // decided is true once one tuple has been attested by at least 3 distinct operators.
+  bool decided = 14;
+  // candidates are the tuples attested for a range that is not decided, at most
+  // Params.max_candidates_per_range of them. It is empty once the range is decided.
+  repeated Candidate candidates = 15 [(gogoproto.nullable) = false];
 }

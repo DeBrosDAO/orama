@@ -16,10 +16,12 @@ const (
 	AttributeKeyStartHeight = "start_height"
 	// AttributeKeyEndHeight is the inclusive end height.
 	AttributeKeyEndHeight = "end_height"
-	// AttributeKeyBundleCID is the pinned bundle CID.
+	// AttributeKeyBundleCID is the bundle CID the message attests or, for a decided range, the winning one.
 	AttributeKeyBundleCID = "bundle_cid"
 	// AttributeKeyDealID is the x/storage deal id, in decimal.
 	AttributeKeyDealID = "deal_id"
+	// AttributeKeyDecided is "true" once a tuple has won the range.
+	AttributeKeyDecided = "decided"
 	// AttributeKeyArchived is "true" once the range is archived.
 	AttributeKeyArchived = "archived"
 )

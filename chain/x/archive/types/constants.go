@@ -15,6 +15,13 @@ const (
 	// before a range can be archived.
 	MinReplicaDeals = 3
 
+	// DefaultMaxCandidatesPerRange is the genesis default for Params.MaxCandidatesPerRange: an
+	// honest tuple, one wrong tuple per disagreeing group of operators, and room for a fork.
+	DefaultMaxCandidatesPerRange uint32 = 4
+
+	// MaxCandidatesLimit is the largest max_candidates_per_range genesis may set.
+	MaxCandidatesLimit uint32 = 16
+
 	// MaxArchiversPerRange bounds attestation state. Quorum is 3; further
 	// signatures are extra evidence, not a requirement.
 	MaxArchiversPerRange = 64

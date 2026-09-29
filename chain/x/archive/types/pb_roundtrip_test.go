@@ -11,7 +11,7 @@ import (
 )
 
 func TestProtoRoundTrip(t *testing.T) {
-	roundTrip(t, &types.Params{RetentionWindowBlocks: types.DefaultBlocksIn14Days, MaxPieceBytes: types.DefaultMaxPieceBytes})
+	roundTrip(t, &types.Params{RetentionWindowBlocks: types.DefaultBlocksIn14Days, MaxPieceBytes: types.DefaultMaxPieceBytes, MaxCandidatesPerRange: types.DefaultMaxCandidatesPerRange})
 	roundTrip(t, &types.RangeRecord{
 		StartHeight: 1,
 		EndHeight:   8,
@@ -21,7 +21,17 @@ func TestProtoRoundTrip(t *testing.T) {
 		DealIds:     []string{"deal-1", "deal-2"},
 		Archivers:   []string{"archiver-not-parsed-here"},
 		Archived:    true,
+		Decided:     true,
 		PieceRoot:   bytes.Repeat([]byte{8}, types.HashLen), RealLeafCount: 3, PaddedLeafCount: 4, PieceBytes: 3000,
+	})
+	roundTrip(t, &types.RangeRecord{
+		StartHeight: 9,
+		EndHeight:   16,
+		Candidates: []types.Candidate{{
+			BundleCid: "bafycandidate", BundleHash: bytes.Repeat([]byte{3}, types.HashLen), MerkleRoot: bytes.Repeat([]byte{4}, types.HashLen),
+			PieceRoot: bytes.Repeat([]byte{8}, types.HashLen), RealLeafCount: 3, PaddedLeafCount: 4, PieceBytes: 3000,
+			Archivers: []string{"a"}, Operators: []string{"o"},
+		}},
 	})
 	roundTrip(t, &types.MsgAttest{
 		Archiver:    "cosmos1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",

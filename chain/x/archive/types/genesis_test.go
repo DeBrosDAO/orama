@@ -74,6 +74,111 @@ func archivedRecord(start, end int64) types.RangeRecord {
 		Archivers: archivers,
 		Operators: operators,
 		Archived:  true,
+		Decided:   true,
+	}
+}
+
+// undecidedRecord is a range with two candidate tuples, one attested by two operators, one by one.
+func undecidedRecord(start, end int64) types.RangeRecord {
+	addr := func(n byte) string { return sdk.AccAddress(bytes.Repeat([]byte{n}, 20)).String() }
+	candidate := func(root byte, archivers ...byte) types.Candidate {
+		c := types.Candidate{
+			BundleCid:  "bafyvalidarchivecid",
+			BundleHash: bytes.Repeat([]byte{1}, types.HashLen),
+			MerkleRoot: bytes.Repeat([]byte{root}, types.HashLen),
+			PieceRoot:  bytes.Repeat([]byte{7}, types.HashLen), RealLeafCount: 3, PaddedLeafCount: 4, PieceBytes: 3000,
+		}
+		for _, n := range archivers {
+			c.Archivers = append(c.Archivers, addr(n))
+			c.Operators = append(c.Operators, addr(n+100))
+		}
+		return c
+	}
+	return types.RangeRecord{
+		StartHeight: start, EndHeight: end,
+		Candidates: []types.Candidate{candidate(2, 1, 2), candidate(3, 3)},
+	}
+}
+
+func TestGenesis_anUndecidedRangeKeepsItsCandidates(t *testing.T) {
+	gs := types.DefaultGenesisState()
+	gs.Ranges = []types.RangeRecord{undecidedRecord(1, 10)}
+	require.NoError(t, gs.Validate())
+	require.Equal(t, int64(0), types.ContiguousArchivedHeight(gs.Ranges), "an undecided range archives nothing")
+}
+
+func TestGenesis_undecidedRangesAreValidatedStrictly(t *testing.T) {
+	validate := func(rec types.RangeRecord, mutate func(*types.GenesisState)) error {
+		gs := types.DefaultGenesisState()
+		gs.Ranges = []types.RangeRecord{rec}
+		if mutate != nil {
+			mutate(gs)
+		}
+		return gs.Validate()
+	}
+	cases := map[string]struct {
+		mutate func(*types.RangeRecord)
+		want   string
+	}{
+		"no candidates":         {func(r *types.RangeRecord) { r.Candidates = nil }, "candidates"},
+		"a winning tuple":       {func(r *types.RangeRecord) { r.BundleCid = "bafyvalidarchivecid" }, "not decided"},
+		"deals":                 {func(r *types.RangeRecord) { r.DealIds = []string{"1"} }, "not decided"},
+		"the archived mark":     {func(r *types.RangeRecord) { r.Archived = true }, "not decided"},
+		"a candidate at quorum": {func(r *types.RangeRecord) { r.Candidates[0] = decidedCandidate(t) }, "archivers"},
+		"a repeated tuple": {func(r *types.RangeRecord) {
+			r.Candidates[1].MerkleRoot = r.Candidates[0].MerkleRoot
+		}, "repeats candidate tuple"},
+		"an operator twice": {func(r *types.RangeRecord) {
+			r.Candidates[1].Operators = []string{r.Candidates[0].Operators[0]}
+		}, "attested two candidate tuples"},
+		"an unpaired operator": {func(r *types.RangeRecord) { r.Candidates[0].Operators = r.Candidates[0].Operators[:1] }, "operators"},
+		"a bad piece":          {func(r *types.RangeRecord) { r.Candidates[0].PieceRoot = nil }, "piece_root"},
+	}
+	for name, tc := range cases {
+		rec := undecidedRecord(1, 10)
+		tc.mutate(&rec)
+		require.ErrorContainsf(t, validate(rec, nil), tc.want, "%s", name)
+	}
+
+	rec := undecidedRecord(1, 10)
+	err := validate(rec, func(gs *types.GenesisState) { gs.Params.MaxCandidatesPerRange = 1 })
+	require.ErrorContains(t, err, "max_candidates_per_range")
+	err = validate(rec, func(gs *types.GenesisState) { gs.Params.MaxPieceBytes = 2999 })
+	require.ErrorIs(t, err, types.ErrPieceTooLarge)
+}
+
+func TestGenesis_aDecidedRangeKeepsNoCandidates(t *testing.T) {
+	rec := archivedRecord(1, 10)
+	rec.Candidates = undecidedRecord(1, 10).Candidates
+	gs := types.DefaultGenesisState()
+	gs.Ranges, gs.LastArchivedHeight = []types.RangeRecord{rec}, 10
+	require.ErrorContains(t, gs.Validate(), "keeps 2 candidates")
+
+	rec = archivedRecord(1, 10)
+	rec.Archivers, rec.Operators = rec.Archivers[:2], rec.Operators[:2]
+	rec.Archived, rec.DealIds = false, nil
+	gs.Ranges, gs.LastArchivedHeight = []types.RangeRecord{rec}, 0
+	require.ErrorContains(t, gs.Validate(), "archivers", "a decided range needs the operator quorum")
+}
+
+func TestParams_maxCandidatesIsBounded(t *testing.T) {
+	p := types.DefaultParams()
+	require.NoError(t, p.Validate())
+	p.MaxCandidatesPerRange = 0
+	require.Error(t, p.Validate())
+	p.MaxCandidatesPerRange = types.MaxCandidatesLimit + 1
+	require.Error(t, p.Validate())
+	p.MaxCandidatesPerRange = types.MaxCandidatesLimit
+	require.NoError(t, p.Validate())
+}
+
+func decidedCandidate(t *testing.T) types.Candidate {
+	t.Helper()
+	rec := archivedRecord(1, 10)
+	return types.Candidate{
+		BundleCid: rec.BundleCid, BundleHash: rec.BundleHash, MerkleRoot: rec.MerkleRoot,
+		PieceRoot: rec.PieceRoot, RealLeafCount: rec.RealLeafCount, PaddedLeafCount: rec.PaddedLeafCount, PieceBytes: rec.PieceBytes,
+		Archivers: rec.Archivers, Operators: rec.Operators,
 	}
 }
 

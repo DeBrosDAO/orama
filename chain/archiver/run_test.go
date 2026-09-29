@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -112,22 +113,64 @@ func (c *fakeChain) Submit(_ context.Context, msgs ...sdk.Msg) error {
 			c.attach(at)
 			continue
 		}
-		a := m.(*types.MsgAttest)
-		rec := c.ranges[[2]int64{a.StartHeight, a.EndHeight}]
-		rec.StartHeight, rec.EndHeight, rec.BundleCid = a.StartHeight, a.EndHeight, a.BundleCid
-		rec.BundleHash, rec.MerkleRoot = a.BundleHash, a.MerkleRoot
-		rec.PieceRoot, rec.RealLeafCount, rec.PaddedLeafCount, rec.PieceBytes = a.PieceRoot, a.RealLeafCount, a.PaddedLeafCount, a.PieceBytes
-		rec.Archivers = append(rec.Archivers, a.Archiver)
-		if len(rec.Operators) == 0 {
-			rec.Operators = append(rec.Operators, a.Archiver)
-			for i := 0; i < c.otherOperators; i++ {
-				rec.Operators = append(rec.Operators, fmt.Sprintf("other-operator-%d", i))
-			}
-		}
-		c.ranges[[2]int64{a.StartHeight, a.EndHeight}] = rec
+		c.attest(m.(*types.MsgAttest))
 		c.submits++
 	}
 	return nil
+}
+
+// attest mirrors x/archive's tally: attestations are counted per tuple, the first tuple attested by
+// MinArchiverAttestations operators wins the range, and a decided range takes only its winner. The
+// first attestation a range ever gets brings otherOperators others that attested the same tuple.
+func (c *fakeChain) attest(a *types.MsgAttest) {
+	key := [2]int64{a.StartHeight, a.EndHeight}
+	rec := c.ranges[key]
+	rec.StartHeight, rec.EndHeight = a.StartHeight, a.EndHeight
+	tuple := a.Tuple()
+	if rec.Decided {
+		if !slices.Contains(rec.Archivers, a.Archiver) && rec.Winner().Equal(tuple) {
+			rec.Archivers = append(rec.Archivers, a.Archiver)
+			rec.Operators = append(rec.Operators, a.Archiver)
+		}
+		c.ranges[key] = rec
+		return
+	}
+	first := len(rec.Candidates) == 0
+	index := -1
+	for i, cand := range rec.Candidates {
+		if cand.Tuple().Equal(tuple) {
+			index = i
+		}
+	}
+	if index == -1 {
+		rec.Candidates = append(slices.Clone(rec.Candidates), types.NewCandidate(tuple))
+		index = len(rec.Candidates) - 1
+	}
+	cand := rec.Candidates[index]
+	if !slices.Contains(cand.Archivers, a.Archiver) {
+		cand.Archivers = append(slices.Clone(cand.Archivers), a.Archiver)
+		cand.Operators = append(slices.Clone(cand.Operators), a.Archiver)
+		if first {
+			for i := 0; i < c.otherOperators; i++ {
+				cand.Operators = append(cand.Operators, fmt.Sprintf("other-operator-%d", i))
+			}
+		}
+	}
+	rec.Candidates = slices.Clone(rec.Candidates)
+	rec.Candidates[index] = cand
+	if len(cand.Operators) >= types.MinArchiverAttestations {
+		decide(&rec, cand)
+	}
+	c.ranges[key] = rec
+}
+
+// decide makes cand the winner of rec, as x/archive does.
+func decide(rec *types.RangeRecord, cand types.Candidate) {
+	rec.Decided = true
+	rec.BundleCid, rec.BundleHash, rec.MerkleRoot = cand.BundleCid, cand.BundleHash, cand.MerkleRoot
+	rec.PieceRoot, rec.RealLeafCount, rec.PaddedLeafCount, rec.PieceBytes = cand.PieceRoot, cand.RealLeafCount, cand.PaddedLeafCount, cand.PieceBytes
+	rec.Archivers, rec.Operators = cand.Archivers, cand.Operators
+	rec.Candidates = nil
 }
 
 // CreateArchiveDeal mirrors x/archive: a range holds at most MaxLiveDealsPerRange live deals,
@@ -135,7 +178,7 @@ func (c *fakeChain) Submit(_ context.Context, msgs ...sdk.Msg) error {
 func (c *fakeChain) CreateArchiveDeal(_ context.Context, msg *types.MsgCreateArchiveDeal) (uint64, error) {
 	key := [2]int64{msg.StartHeight, msg.EndHeight}
 	rec := c.ranges[key]
-	if len(rec.Operators) < types.MinArchiverAttestations {
+	if !rec.Decided {
 		return 0, fmt.Errorf("transaction failed: %w", types.ErrQuorumPending)
 	}
 	if !rec.PieceOf().Equal(msg.PieceOf()) {
@@ -237,7 +280,7 @@ func TestRunner_retriesADroppedAttestationAndStopsOnAConflictingRoot(t *testing.
 	require.Equal(t, 1, n)
 
 	other := newFakeChain(t, 22)
-	other.ranges[[2]int64{1, 10}] = types.RangeRecord{StartHeight: 1, EndHeight: 10, MerkleRoot: make([]byte, 32)}
+	other.ranges[[2]int64{1, 10}] = types.RangeRecord{StartHeight: 1, EndHeight: 10, Decided: true, MerkleRoot: make([]byte, 32)}
 	dir2 := t.TempDir()
 	r2, err := NewRunner(other, noUpload{}, "orama1archiver", "node-1", dir2, 10)
 	require.NoError(t, err)
@@ -400,7 +443,10 @@ func TestRunner_opensNoDealBeforeTheAttestationQuorum(t *testing.T) {
 	require.Empty(t, chain.deals, "one operator's attestation is short of the quorum")
 
 	rec := chain.ranges[[2]int64{1, 10}]
-	rec.Operators = append(rec.Operators, "other-1", "other-2")
+	require.False(t, rec.Decided)
+	cand := rec.Candidates[0]
+	cand.Operators = append(cand.Operators, "other-1", "other-2")
+	decide(&rec, cand)
 	chain.ranges[[2]int64{1, 10}] = rec
 	stepOnce(t, r)
 	require.Len(t, chain.deals, types.MaxLiveDealsPerRange, "deals open once the others have attested")
@@ -501,4 +547,139 @@ func TestRunner_monitorReportsProgressAndTheRetainLag(t *testing.T) {
 	require.Equal(t, int64(20), m.LastArchivedHeight)
 	require.Equal(t, int64(5), m.RetainLagBlocks)
 	require.Zero(t, m.UnarchivedRanges)
+}
+
+// A wrong tuple on chain does not stop an honest archiver: attestations are tallied per tuple, so
+// the archiver checks its own bundle again, keeps its own tuple and attests it.
+func TestRunner_aContestedRangeIsAttestedWithTheArchiversOwnTuple(t *testing.T) {
+	chain := newFakeChain(t, 12)
+	junk := types.NewCandidate(types.Tuple{
+		BundleCid: "bafyjunk", BundleHash: bytes.Repeat([]byte{1}, 32), MerkleRoot: bytes.Repeat([]byte{2}, 32),
+		Piece: types.Piece{Root: bytes.Repeat([]byte{3}, 32), RealLeafCount: 1, PaddedLeafCount: 1, PieceBytes: 1024},
+	})
+	junk.Archivers, junk.Operators = []string{"orama1liar"}, []string{"orama1liar"}
+	chain.ranges[[2]int64{1, 10}] = types.RangeRecord{StartHeight: 1, EndHeight: 10, Candidates: []types.Candidate{junk}}
+	dir := t.TempDir()
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
+	require.NoError(t, err)
+
+	stepOnce(t, r)
+
+	require.Equal(t, 1, chain.submits, "the honest archiver attests its own tuple")
+	rec := chain.ranges[[2]int64{1, 10}]
+	require.Len(t, rec.Candidates, 2, "the archiver's tuple sits beside the liar's until three operators agree on one")
+	var own types.Candidate
+	for _, c := range rec.Candidates {
+		if c.BundleCid != "bafyjunk" {
+			own = c
+		}
+	}
+	require.Equal(t, []string{"orama1archiver"}, own.Archivers)
+	_, statErr := os.Stat(dealStatePath(dir, 1, 10))
+	require.NoError(t, statErr, "the archiver follows the range while the vote is open")
+	stepOnce(t, r)
+	require.Empty(t, chain.deals, "no deal opens before a tuple has won")
+}
+
+// Before keeping its tuple against the chain's, the archiver reads its blocks a second time; blocks
+// that changed in between are not something to attest.
+func TestRunner_doesNotAttestAContestedRangeWhenItsBlocksChangeBetweenReads(t *testing.T) {
+	chain := newFakeChain(t, 12)
+	junk := types.NewCandidate(types.Tuple{
+		BundleCid: "bafyjunk", BundleHash: bytes.Repeat([]byte{1}, 32), MerkleRoot: bytes.Repeat([]byte{2}, 32),
+		Piece: types.Piece{Root: bytes.Repeat([]byte{3}, 32), RealLeafCount: 1, PaddedLeafCount: 1, PieceBytes: 1024},
+	})
+	junk.Archivers, junk.Operators = []string{"orama1liar"}, []string{"orama1liar"}
+	chain.ranges[[2]int64{1, 10}] = types.RangeRecord{StartHeight: 1, EndHeight: 10, Candidates: []types.Candidate{junk}}
+	flaky := &flakyChain{fakeChain: chain, t: t}
+	r, err := NewRunner(flaky, noUpload{}, "orama1archiver", "node-1", t.TempDir(), 10)
+	require.NoError(t, err)
+
+	_, err = r.Step(context.Background())
+
+	require.ErrorContains(t, err, "changed between two reads")
+	require.Zero(t, chain.submits, "nothing was attested")
+}
+
+// flakyChain serves every block of a range once, then a different block 5 from the second read on.
+type flakyChain struct {
+	*fakeChain
+	t     *testing.T
+	reads map[int64]int
+}
+
+func (c *flakyChain) Block(ctx context.Context, h int64) (Block, error) {
+	if c.reads == nil {
+		c.reads = map[int64]int{}
+	}
+	c.reads[h]++
+	if h == 5 && c.reads[h] > 1 {
+		b := cmttypes.MakeBlock(h, []cmttypes.Tx{cmttypes.Tx([]byte{byte(h), 0xff})}, &cmttypes.Commit{}, nil)
+		b.ChainID = "orama-test-1"
+		b.ValidatorsHash = make([]byte, 32)
+		b.ProposerAddress = make([]byte, 20)
+		b.Time = time.Unix(1_700_000_000+h, 0).UTC()
+		pb, err := b.ToProto()
+		require.NoError(c.t, err)
+		body, err := pb.Marshal()
+		require.NoError(c.t, err)
+		return Block{Height: h, Hash: b.Hash(), Proto: body}, nil
+	}
+	return c.fakeChain.Block(ctx, h)
+}
+
+// An archiver whose earlier attestation differs from what its node reads now does not attest a
+// second tuple: the chain would refuse it, and the difference is reported.
+func TestRunner_anEarlierAttestationOfAnotherTupleIsAConflict(t *testing.T) {
+	chain := newFakeChain(t, 12)
+	old := types.NewCandidate(types.Tuple{
+		BundleCid: "bafyold", BundleHash: bytes.Repeat([]byte{1}, 32), MerkleRoot: bytes.Repeat([]byte{2}, 32),
+		Piece: types.Piece{Root: bytes.Repeat([]byte{3}, 32), RealLeafCount: 1, PaddedLeafCount: 1, PieceBytes: 1024},
+	})
+	old.Archivers, old.Operators = []string{"orama1archiver"}, []string{"orama1archiver"}
+	chain.ranges[[2]int64{1, 10}] = types.RangeRecord{StartHeight: 1, EndHeight: 10, Candidates: []types.Candidate{old}}
+	dir := t.TempDir()
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
+	require.NoError(t, err)
+
+	_, err = r.Step(context.Background())
+
+	require.ErrorIs(t, err, ErrRootConflict)
+	require.Zero(t, chain.submits)
+	_, statErr := os.Stat(ConflictPath(dir, 1, 10))
+	require.NoError(t, statErr)
+}
+
+// When another tuple wins a range this archiver attested, it has no deals to open for it: it
+// records the two tuples once and stops following the range.
+func TestRunner_aRangeWonByAnotherTupleStopsBeingFollowed(t *testing.T) {
+	chain := newFakeChain(t, 12)
+	chain.otherOperators = 0
+	dir := t.TempDir()
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
+	require.NoError(t, err)
+	stepOnce(t, r)
+	_, statErr := os.Stat(dealStatePath(dir, 1, 10))
+	require.NoError(t, statErr, "the attested range is followed")
+
+	rec := chain.ranges[[2]int64{1, 10}]
+	winner := types.NewCandidate(types.Tuple{
+		BundleCid: "bafywinner", BundleHash: bytes.Repeat([]byte{1}, 32), MerkleRoot: bytes.Repeat([]byte{2}, 32),
+		Piece: types.Piece{Root: bytes.Repeat([]byte{3}, 32), RealLeafCount: 1, PaddedLeafCount: 1, PieceBytes: 1024},
+	})
+	winner.Archivers = []string{"orama1x", "orama1y", "orama1z"}
+	winner.Operators = winner.Archivers
+	decide(&rec, winner)
+	chain.ranges[[2]int64{1, 10}] = rec
+
+	_, err = r.Step(context.Background())
+	require.ErrorIs(t, err, ErrRootConflict)
+	_, statErr = os.Stat(ConflictPath(dir, 1, 10))
+	require.NoError(t, statErr)
+	_, statErr = os.Stat(dealStatePath(dir, 1, 10))
+	require.True(t, os.IsNotExist(statErr), "the lost range is no longer followed")
+	require.Empty(t, chain.deals, "no deal was opened for the winner's bytes")
+
+	_, err = r.Step(context.Background())
+	require.NoError(t, err, "the conflict is reported once")
 }

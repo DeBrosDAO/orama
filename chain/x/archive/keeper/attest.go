@@ -1,7 +1,6 @@
 package keeper
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -14,14 +13,19 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/archive/types"
 )
 
-// Attest pins a range on its first attestation and counts later archivers only
-// when they repeat that same root. A different root is refused and is not
-// stored, so it does not count toward the pinned root.
+// Attest records one archiver's attestation of a range's tuple: the bundle CID, content hash,
+// block-hash Merkle root and piece commitment. Attestations are tallied per tuple, and distinct
+// operators are counted within a tuple, so a first attestation cannot fix what the range is:
+// archivers that agree on a different tuple are counted toward that tuple, and conflicting tuples
+// coexist (at most Params.MaxCandidatesPerRange of them) until one is attested by
+// MinArchiverAttestations operators. That tuple wins: the range is decided, the winner's
+// fields become the range's, and the other candidates are dropped. A decided range accepts only
+// further attestations of the winning tuple.
 //
-// The signer must be the hot key of msg.NodeId, an x/nodes node with an
-// active ARCHIVER role bond. Each operator counts once: a repeat by the same
-// key or by another node of the same operator is accepted and changes
-// nothing, so an operator's second archiver or a rotated key does not stall.
+// The signer must be the hot key of msg.NodeId, an x/nodes node with an active ARCHIVER role bond.
+// Each operator counts once: a repeat by the same key or by another node of the same operator for
+// the same tuple is accepted and changes nothing, so an operator's second archiver or a rotated key
+// does not stall. An operator that attested one tuple of a range cannot attest another for it.
 func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, error) {
 	if msg == nil {
 		return false, 0, fmt.Errorf("nil MsgAttest")
@@ -36,6 +40,10 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 	if err := requireFinalized(ctx, msg.EndHeight); err != nil {
 		return false, 0, err
 	}
+	params, err := k.Params.Get(ctx)
+	if err != nil {
+		return false, 0, fmt.Errorf("failed to get archive params: %w", err)
+	}
 	key := collections.Join(msg.StartHeight, msg.EndHeight)
 	rec, err := k.Ranges.Get(ctx, key)
 	fresh := errors.Is(err, collections.ErrNotFound)
@@ -43,12 +51,11 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 		return false, 0, fmt.Errorf("failed to get range %d-%d: %w", msg.StartHeight, msg.EndHeight, err)
 	}
 	canonical := archiver.String()
+	tuple := msg.Tuple()
 	if !fresh {
-		if err := matchPinned(rec, msg); err != nil {
-			return false, 0, err
-		}
-		if slices.Contains(rec.Archivers, canonical) {
-			return rec.Archived, uint32(len(rec.Archivers)), nil
+		// A key that already attested is idempotent even after its node lost the role.
+		if done, archived, attesters, err := attestedBy(rec, tuple, canonical); done || err != nil {
+			return archived, attesters, err
 		}
 	}
 	operator, err := k.nodes.ArchiverOperator(ctx, msg.NodeId, canonical)
@@ -59,26 +66,123 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 		if err := k.rejectOverlap(ctx, msg.StartHeight, msg.EndHeight); err != nil {
 			return false, 0, err
 		}
-		rec = types.RangeRecord{
-			StartHeight: msg.StartHeight, EndHeight: msg.EndHeight, BundleCid: msg.BundleCid,
-			BundleHash: append([]byte(nil), msg.BundleHash...), MerkleRoot: append([]byte(nil), msg.MerkleRoot...),
-			PieceRoot: append([]byte(nil), msg.PieceRoot...), RealLeafCount: msg.RealLeafCount,
-			PaddedLeafCount: msg.PaddedLeafCount, PieceBytes: msg.PieceBytes,
-		}
-	} else if slices.Contains(rec.Operators, operator) {
-		return rec.Archived, uint32(len(rec.Archivers)), nil
+		rec = types.RangeRecord{StartHeight: msg.StartHeight, EndHeight: msg.EndHeight}
 	}
-	if len(rec.Archivers) >= types.MaxArchiversPerRange {
-		return false, 0, fmt.Errorf("range %d-%d already has %d archivers", msg.StartHeight, msg.EndHeight, len(rec.Archivers))
+	if rec.Decided {
+		return k.attestDecided(ctx, rec, tuple, canonical, operator)
 	}
-	rec.Archivers = append(append([]string(nil), rec.Archivers...), canonical)
-	rec.Operators = append(append([]string(nil), rec.Operators...), operator)
+	rec, attesters, err := attestCandidate(rec, tuple, canonical, operator, params.MaxCandidatesPerRange)
+	if err != nil {
+		return false, 0, err
+	}
+	if attesters == 0 {
+		// The operator already attested this tuple: nothing changes.
+		return false, uint32(len(candidateOf(rec, tuple).Operators)), nil
+	}
 	stored, justArchived, err := k.storeRange(ctx, rec)
 	if err != nil {
 		return false, 0, err
 	}
-	emitAttest(ctx, stored, canonical, justArchived)
+	emitAttest(ctx, stored, msg.BundleCid, canonical, justArchived)
+	return stored.Archived, attesters, nil
+}
+
+// attestedBy reports whether the archiver key already attested rec. done is true when it attested the
+// tuple (nothing changes); attesting a different tuple of the same range is an error, since an
+// operator counts toward one tuple per range.
+func attestedBy(rec types.RangeRecord, tuple types.Tuple, archiver string) (done, archived bool, attesters uint32, err error) {
+	if rec.Decided {
+		if !slices.Contains(rec.Archivers, archiver) {
+			return false, false, 0, nil
+		}
+		if err := rec.Winner().Mismatch(tuple); err != nil {
+			return false, false, 0, fmt.Errorf("%w: range %d-%d was won by a different tuple", err, rec.StartHeight, rec.EndHeight)
+		}
+		return true, rec.Archived, uint32(len(rec.Archivers)), nil
+	}
+	for _, c := range rec.Candidates {
+		if !slices.Contains(c.Archivers, archiver) {
+			continue
+		}
+		if !c.Tuple().Equal(tuple) {
+			return false, false, 0, fmt.Errorf("%w: archiver %s, range %d-%d", types.ErrConflictingAttestation, archiver, rec.StartHeight, rec.EndHeight)
+		}
+		return true, false, uint32(len(c.Operators)), nil
+	}
+	return false, false, 0, nil
+}
+
+// attestDecided adds an attestation of the winning tuple to a decided range.
+func (k Keeper) attestDecided(ctx sdk.Context, rec types.RangeRecord, tuple types.Tuple, canonical, operator string) (bool, uint32, error) {
+	if err := rec.Winner().Mismatch(tuple); err != nil {
+		return false, 0, fmt.Errorf("%w: range %d-%d was won by a different tuple", err, rec.StartHeight, rec.EndHeight)
+	}
+	if slices.Contains(rec.Operators, operator) {
+		return rec.Archived, uint32(len(rec.Archivers)), nil
+	}
+	if len(rec.Archivers) >= types.MaxArchiversPerRange {
+		return false, 0, fmt.Errorf("range %d-%d already has %d archivers", rec.StartHeight, rec.EndHeight, len(rec.Archivers))
+	}
+	rec.Archivers = append(slices.Clone(rec.Archivers), canonical)
+	rec.Operators = append(slices.Clone(rec.Operators), operator)
+	stored, justArchived, err := k.storeRange(ctx, rec)
+	if err != nil {
+		return false, 0, err
+	}
+	emitAttest(ctx, stored, tuple.BundleCid, canonical, justArchived)
 	return stored.Archived, uint32(len(stored.Archivers)), nil
+}
+
+// attestCandidate adds the attestation to the candidate for tuple, starting one if the range
+// has room, and decides the range when the candidate reaches the operator quorum. It returns the
+// number of operators the tuple now has, or 0 when the operator had already attested it and the
+// record is unchanged.
+func attestCandidate(rec types.RangeRecord, tuple types.Tuple, archiver, operator string, maxCandidates uint32) (types.RangeRecord, uint32, error) {
+	index := -1
+	for i, c := range rec.Candidates {
+		if slices.Contains(c.Operators, operator) {
+			if !c.Tuple().Equal(tuple) {
+				return rec, 0, fmt.Errorf("%w: operator %s, range %d-%d", types.ErrConflictingAttestation, operator, rec.StartHeight, rec.EndHeight)
+			}
+			return rec, 0, nil
+		}
+		if c.Tuple().Equal(tuple) {
+			index = i
+		}
+	}
+	candidates := make([]types.Candidate, len(rec.Candidates), len(rec.Candidates)+1)
+	copy(candidates, rec.Candidates)
+	if index == -1 {
+		if uint32(len(candidates)) >= maxCandidates {
+			return rec, 0, fmt.Errorf("%w: range %d-%d has %d", types.ErrCandidatesFull, rec.StartHeight, rec.EndHeight, len(candidates))
+		}
+		candidates = append(candidates, types.NewCandidate(tuple))
+		index = len(candidates) - 1
+	}
+	c := candidates[index]
+	c.Archivers = append(slices.Clone(c.Archivers), archiver)
+	c.Operators = append(slices.Clone(c.Operators), operator)
+	candidates[index] = c
+	if len(c.Operators) < types.MinArchiverAttestations {
+		rec.Candidates = candidates
+		return rec, uint32(len(c.Operators)), nil
+	}
+	rec.Decided = true
+	rec.BundleCid, rec.BundleHash, rec.MerkleRoot = c.BundleCid, c.BundleHash, c.MerkleRoot
+	rec.PieceRoot, rec.RealLeafCount, rec.PaddedLeafCount, rec.PieceBytes = c.PieceRoot, c.RealLeafCount, c.PaddedLeafCount, c.PieceBytes
+	rec.Archivers, rec.Operators = c.Archivers, c.Operators
+	rec.Candidates = nil
+	return rec, uint32(len(c.Operators)), nil
+}
+
+// candidateOf returns the candidate of rec that attests tuple, or an empty one.
+func candidateOf(rec types.RangeRecord, tuple types.Tuple) types.Candidate {
+	for _, c := range rec.Candidates {
+		if c.Tuple().Equal(tuple) {
+			return c
+		}
+	}
+	return types.Candidate{}
 }
 
 // requirePieceWithinCap refuses a bundle file larger than Params.MaxPieceBytes.
@@ -89,21 +193,6 @@ func (k Keeper) requirePieceWithinCap(ctx sdk.Context, pieceBytes uint64) error 
 	}
 	if pieceBytes > params.MaxPieceBytes {
 		return fmt.Errorf("%w: %d bytes, max is %d", types.ErrPieceTooLarge, pieceBytes, params.MaxPieceBytes)
-	}
-	return nil
-}
-
-// matchPinned refuses an attestation whose root, bundle or piece commitment differs from the
-// range's first attestation.
-func matchPinned(rec types.RangeRecord, msg *types.MsgAttest) error {
-	if !bytes.Equal(rec.MerkleRoot, msg.MerkleRoot) {
-		return fmt.Errorf("%w: range %d-%d", types.ErrWrongRoot, msg.StartHeight, msg.EndHeight)
-	}
-	if rec.BundleCid != msg.BundleCid || !bytes.Equal(rec.BundleHash, msg.BundleHash) {
-		return fmt.Errorf("%w: range %d-%d", types.ErrWrongBundle, msg.StartHeight, msg.EndHeight)
-	}
-	if !rec.PieceOf().Equal(msg.PieceOf()) {
-		return fmt.Errorf("%w: range %d-%d", types.ErrWrongPiece, msg.StartHeight, msg.EndHeight)
 	}
 	return nil
 }
@@ -130,6 +219,9 @@ func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (b
 	rec, err := k.GetRange(ctx, msg.StartHeight, msg.EndHeight)
 	if err != nil {
 		return false, 0, err
+	}
+	if !rec.Decided {
+		return false, 0, fmt.Errorf("%w: %d-%d has no winning tuple yet, deals can only back one", types.ErrQuorumPending, msg.StartHeight, msg.EndHeight)
 	}
 	if !slices.Contains(rec.Operators, operator) {
 		return false, 0, fmt.Errorf("%w: operator %s did not attest range %d-%d", types.ErrNotAttester, operator, msg.StartHeight, msg.EndHeight)
@@ -344,27 +436,30 @@ func (k Keeper) recomputeLastArchived(ctx sdk.Context) (int64, error) {
 	return types.ContiguousArchivedHeight(ranges), nil
 }
 
-func emitAttest(ctx sdk.Context, rec types.RangeRecord, archiver string, justArchived bool) {
-	ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeAttest, rec, archiver))
+// emitAttest reports an attestation. bundleCID is the attested tuple's: a range that is not
+// decided has no bundle of its own yet.
+func emitAttest(ctx sdk.Context, rec types.RangeRecord, bundleCID, archiver string, justArchived bool) {
+	ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeAttest, rec, bundleCID, archiver))
 	if justArchived {
-		ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeArchived, rec, archiver))
+		ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeArchived, rec, bundleCID, archiver))
 	}
 }
 
 func emitAttach(ctx sdk.Context, rec types.RangeRecord, archiver string, justArchived bool) {
-	ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeAttachReplicas, rec, archiver))
+	ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeAttachReplicas, rec, rec.BundleCid, archiver))
 	if justArchived {
-		ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeArchived, rec, archiver))
+		ctx.EventManager().EmitEvent(rangeEvent(types.EventTypeArchived, rec, rec.BundleCid, archiver))
 	}
 }
 
-func rangeEvent(eventType string, rec types.RangeRecord, archiver string) sdk.Event {
+func rangeEvent(eventType string, rec types.RangeRecord, bundleCID, archiver string) sdk.Event {
 	return sdk.NewEvent(
 		eventType,
 		sdk.NewAttribute(types.AttributeKeyArchiver, archiver),
 		sdk.NewAttribute(types.AttributeKeyStartHeight, strconv.FormatInt(rec.StartHeight, 10)),
 		sdk.NewAttribute(types.AttributeKeyEndHeight, strconv.FormatInt(rec.EndHeight, 10)),
-		sdk.NewAttribute(types.AttributeKeyBundleCID, rec.BundleCid),
+		sdk.NewAttribute(types.AttributeKeyBundleCID, bundleCID),
+		sdk.NewAttribute(types.AttributeKeyDecided, strconv.FormatBool(rec.Decided)),
 		sdk.NewAttribute(types.AttributeKeyArchived, strconv.FormatBool(rec.Archived)),
 	)
 }

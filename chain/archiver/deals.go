@@ -118,6 +118,13 @@ func (r *Runner) advanceRange(ctx context.Context, start, end int64) (bool, erro
 	if rec.Archived {
 		return true, os.Remove(path)
 	}
+	if !rec.Decided {
+		// No tuple has been attested by enough operators yet: deals open only for the winner.
+		return false, nil
+	}
+	if lost, err := r.lostRange(rec); lost || err != nil {
+		return lost, err
+	}
 	st, err := loadDealState(path)
 	if err != nil {
 		return false, err
@@ -148,6 +155,39 @@ func (r *Runner) advanceRange(ctx context.Context, start, end int64) (bool, erro
 	return false, saveDealState(path, st)
 }
 
+// lostRange reports whether another tuple won the range this archiver attested. It has nothing to
+// open deals for then: it stops following the range, and records the two tuples once. An archiver
+// whose bundle is the winner, or that never attested the range, is not affected.
+func (r *Runner) lostRange(rec types.RangeRecord) (bool, error) {
+	if _, attested := rec.AttestedBy(r.archiver); attested {
+		return false, nil
+	}
+	body, err := os.ReadFile(BundlePath(r.dir, rec.StartHeight, rec.EndHeight))
+	if err != nil {
+		return false, fmt.Errorf("read the bundle: %w", err)
+	}
+	blocks, err := Decode(body)
+	if err != nil {
+		return false, err
+	}
+	hashes := make([][]byte, len(blocks))
+	for i, b := range blocks {
+		hashes[i] = b.Hash
+	}
+	bundle, err := Pack(rec.StartHeight, hashes, body)
+	if err != nil {
+		return false, err
+	}
+	local, err := tupleOf(bundle, body)
+	if err != nil {
+		return false, err
+	}
+	if local.Equal(rec.Winner()) {
+		return false, nil
+	}
+	return true, errors.Join(r.recordConflict(rec.StartHeight, rec.EndHeight, local, rec.Winner()), os.Remove(dealStatePath(r.dir, rec.StartHeight, rec.EndHeight)))
+}
+
 // liveDeals keeps the deals x/archive does not record yet and x/storage still runs. An ended
 // deal is dropped so the range can be given a new one.
 func (r *Runner) liveDeals(ctx context.Context, rec types.RangeRecord, ids []uint64) ([]uint64, error) {
@@ -171,9 +211,9 @@ func (r *Runner) liveDeals(ctx context.Context, rec types.RangeRecord, ids []uin
 // same, so the chain may refuse one as over the range's allowance; that means the range has
 // enough deals and is not an error.
 func (r *Runner) openDeals(ctx context.Context, rec types.RangeRecord, st *dealState) error {
-	// The chain opens deals only once enough operators attested the range; before that this
-	// archiver waits for the others instead of sending a message that would be refused.
-	if len(rec.Operators) < types.MinArchiverAttestations {
+	// The chain opens deals only for the tuple that won the range; before that this archiver
+	// waits for the others instead of sending a message that would be refused.
+	if !rec.Decided {
 		return nil
 	}
 	need := types.MaxLiveDealsPerRange - len(rec.DealIds) - len(st.DealIDs)
@@ -189,7 +229,7 @@ func (r *Runner) openDeals(ctx context.Context, rec types.RangeRecord, st *dealS
 		return fmt.Errorf("commit the bundle: %w", err)
 	}
 	if !rec.PieceOf().Equal(types.Piece{Root: pc.Root, RealLeafCount: pc.RealLeafCount, PaddedLeafCount: pc.PaddedLeafCount, PieceBytes: uint64(len(body))}) {
-		return fmt.Errorf("the bundle on disk does not match the piece commitment pinned on range %d-%d", rec.StartHeight, rec.EndHeight)
+		return fmt.Errorf("the bundle on disk does not match the piece commitment of the winning tuple of range %d-%d", rec.StartHeight, rec.EndHeight)
 	}
 	for ; need > 0; need-- {
 		id, err := r.chain.CreateArchiveDeal(ctx, &types.MsgCreateArchiveDeal{

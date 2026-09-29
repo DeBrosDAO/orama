@@ -17,6 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/chain/archiver"
 	"github.com/DeBrosOfficial/network/chain/client/node"
 	"github.com/DeBrosOfficial/network/chain/repair"
+	archivetypes "github.com/DeBrosOfficial/network/chain/x/archive/types"
 )
 
 const (
@@ -149,6 +150,9 @@ func runHistoryGet(cmd *cobra.Command, rpc, from, out string, height, width int6
 	}
 	if !found {
 		return fmt.Errorf("range %d-%d is not attested on chain", start, end)
+	}
+	if !rec.Decided {
+		return fmt.Errorf("range %d-%d has no winning tuple yet: no bundle has been attested by %d operators", start, end, archivetypes.MinArchiverAttestations)
 	}
 	body, err := loadBundle(cmd.Context(), from, start, end)
 	if err != nil {

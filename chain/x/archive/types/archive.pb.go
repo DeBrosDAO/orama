@@ -5,6 +5,7 @@ package types
 
 import (
 	fmt "fmt"
+	_ "github.com/cosmos/gogoproto/gogoproto"
 	proto "github.com/cosmos/gogoproto/proto"
 	io "io"
 	math "math"
@@ -34,6 +35,11 @@ type Params struct {
 	// of every ARCHIVE deal opened for a range. It bounds what one range can reserve on
 	// storage providers.
 	MaxPieceBytes uint64 `protobuf:"varint,2,opt,name=max_piece_bytes,json=maxPieceBytes,proto3" json:"max_piece_bytes,omitempty"`
+	// max_candidates_per_range bounds how many different attested tuples (bundle cid, bundle
+	// hash, merkle root and piece commitment) one undecided range keeps side by side. Each
+	// operator may attest one tuple per range, so a range with this many candidates has this many
+	// distinct operators disagreeing with each other.
+	MaxCandidatesPerRange uint32 `protobuf:"varint,3,opt,name=max_candidates_per_range,json=maxCandidatesPerRange,proto3" json:"max_candidates_per_range,omitempty"`
 }
 
 func (m *Params) Reset()         { *m = Params{} }
@@ -83,47 +89,173 @@ func (m *Params) GetMaxPieceBytes() uint64 {
 	return 0
 }
 
-// RangeRecord is one height range in the archive registry: bundle CID,
-// block-hash Merkle root, replica deal ids, and the archivers who attested
-// that root. A range is archived only when archivers of at least 3 distinct
-// operators have attested the pinned root and at least 3 distinct active
-// ARCHIVE deal ids are recorded.
-// The root, the bundle and the piece commitment are pinned by the first
-// attestation; an attestation that differs in any of them is refused and does
-// not count toward this one.
+func (m *Params) GetMaxCandidatesPerRange() uint32 {
+	if m != nil {
+		return m.MaxCandidatesPerRange
+	}
+	return 0
+}
+
+// Candidate is one tuple attested for a range that no tuple has won yet: the bundle CID, the
+// content hash, the block-hash Merkle root and the piece commitment of the bundle file, with the
+// archivers that attested exactly that tuple. Attestations are tallied per tuple: two archivers
+// that disagree on any field of the tuple are not counting toward each other.
+type Candidate struct {
+	BundleCid       string `protobuf:"bytes,1,opt,name=bundle_cid,json=bundleCid,proto3" json:"bundle_cid,omitempty"`
+	BundleHash      []byte `protobuf:"bytes,2,opt,name=bundle_hash,json=bundleHash,proto3" json:"bundle_hash,omitempty"`
+	MerkleRoot      []byte `protobuf:"bytes,3,opt,name=merkle_root,json=merkleRoot,proto3" json:"merkle_root,omitempty"`
+	PieceRoot       []byte `protobuf:"bytes,4,opt,name=piece_root,json=pieceRoot,proto3" json:"piece_root,omitempty"`
+	RealLeafCount   uint64 `protobuf:"varint,5,opt,name=real_leaf_count,json=realLeafCount,proto3" json:"real_leaf_count,omitempty"`
+	PaddedLeafCount uint64 `protobuf:"varint,6,opt,name=padded_leaf_count,json=paddedLeafCount,proto3" json:"padded_leaf_count,omitempty"`
+	PieceBytes      uint64 `protobuf:"varint,7,opt,name=piece_bytes,json=pieceBytes,proto3" json:"piece_bytes,omitempty"`
+	// archivers are bech32 account addresses, one per operator that attested this tuple.
+	Archivers []string `protobuf:"bytes,8,rep,name=archivers,proto3" json:"archivers,omitempty"`
+	// operators[i] is the x/nodes operator of archivers[i]. Each operator counts once.
+	Operators []string `protobuf:"bytes,9,rep,name=operators,proto3" json:"operators,omitempty"`
+}
+
+func (m *Candidate) Reset()         { *m = Candidate{} }
+func (m *Candidate) String() string { return proto.CompactTextString(m) }
+func (*Candidate) ProtoMessage()    {}
+func (*Candidate) Descriptor() ([]byte, []int) {
+	return fileDescriptor_05e5b8a7214928c9, []int{1}
+}
+func (m *Candidate) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *Candidate) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_Candidate.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *Candidate) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Candidate.Merge(m, src)
+}
+func (m *Candidate) XXX_Size() int {
+	return m.Size()
+}
+func (m *Candidate) XXX_DiscardUnknown() {
+	xxx_messageInfo_Candidate.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Candidate proto.InternalMessageInfo
+
+func (m *Candidate) GetBundleCid() string {
+	if m != nil {
+		return m.BundleCid
+	}
+	return ""
+}
+
+func (m *Candidate) GetBundleHash() []byte {
+	if m != nil {
+		return m.BundleHash
+	}
+	return nil
+}
+
+func (m *Candidate) GetMerkleRoot() []byte {
+	if m != nil {
+		return m.MerkleRoot
+	}
+	return nil
+}
+
+func (m *Candidate) GetPieceRoot() []byte {
+	if m != nil {
+		return m.PieceRoot
+	}
+	return nil
+}
+
+func (m *Candidate) GetRealLeafCount() uint64 {
+	if m != nil {
+		return m.RealLeafCount
+	}
+	return 0
+}
+
+func (m *Candidate) GetPaddedLeafCount() uint64 {
+	if m != nil {
+		return m.PaddedLeafCount
+	}
+	return 0
+}
+
+func (m *Candidate) GetPieceBytes() uint64 {
+	if m != nil {
+		return m.PieceBytes
+	}
+	return 0
+}
+
+func (m *Candidate) GetArchivers() []string {
+	if m != nil {
+		return m.Archivers
+	}
+	return nil
+}
+
+func (m *Candidate) GetOperators() []string {
+	if m != nil {
+		return m.Operators
+	}
+	return nil
+}
+
+// RangeRecord is one height range in the archive registry. Attestations are tallied per tuple
+// (bundle CID, content hash, block-hash Merkle root and piece commitment). While no tuple has
+// reached the operator quorum the range is undecided: candidates holds every tuple attested so
+// far, each with its own archivers, and the fields below stay empty. The first tuple attested by
+// at least 3 distinct operators wins: the range is decided, the tuple's fields, archivers and
+// operators are copied into the fields below, and the other candidates are dropped. Deal ids are
+// recorded only against a decided range, from the winning tuple. A range is archived when it is
+// decided and at least 3 distinct active ARCHIVE deal ids are recorded.
 type RangeRecord struct {
-	StartHeight int64  `protobuf:"varint,1,opt,name=start_height,json=startHeight,proto3" json:"start_height,omitempty"`
-	EndHeight   int64  `protobuf:"varint,2,opt,name=end_height,json=endHeight,proto3" json:"end_height,omitempty"`
-	BundleCid   string `protobuf:"bytes,3,opt,name=bundle_cid,json=bundleCid,proto3" json:"bundle_cid,omitempty"`
+	StartHeight int64 `protobuf:"varint,1,opt,name=start_height,json=startHeight,proto3" json:"start_height,omitempty"`
+	EndHeight   int64 `protobuf:"varint,2,opt,name=end_height,json=endHeight,proto3" json:"end_height,omitempty"`
+	// bundle_cid .. merkle_root, piece_root .. piece_bytes, archivers and operators describe the
+	// winning tuple. They are empty while the range is not decided.
+	BundleCid string `protobuf:"bytes,3,opt,name=bundle_cid,json=bundleCid,proto3" json:"bundle_cid,omitempty"`
 	// bundle_hash is the 32-byte content hash of the bundle. VerifyBundle
 	// checks it against this field and checks the block hashes against merkle_root.
 	BundleHash []byte   `protobuf:"bytes,4,opt,name=bundle_hash,json=bundleHash,proto3" json:"bundle_hash,omitempty"`
 	MerkleRoot []byte   `protobuf:"bytes,5,opt,name=merkle_root,json=merkleRoot,proto3" json:"merkle_root,omitempty"`
 	DealIds    []string `protobuf:"bytes,6,rep,name=deal_ids,json=dealIds,proto3" json:"deal_ids,omitempty"`
-	// archivers are bech32 account addresses, one distinct signer per entry.
-	// Each entry attested merkle_root. A signer who submits a different root
-	// is not appended.
+	// archivers are bech32 account addresses, one distinct signer per entry, each of which
+	// attested the winning tuple.
 	Archivers []string `protobuf:"bytes,7,rep,name=archivers,proto3" json:"archivers,omitempty"`
 	Archived  bool     `protobuf:"varint,8,opt,name=archived,proto3" json:"archived,omitempty"`
 	// operators[i] is the x/nodes operator of archivers[i]. Each operator
 	// counts once toward the three attesters, so one operator's many nodes
 	// cannot archive a range alone.
 	Operators []string `protobuf:"bytes,9,rep,name=operators,proto3" json:"operators,omitempty"`
-	// piece_root .. piece_bytes are the piece/ commitment of the bundle file, pinned by
-	// the first attestation and repeated by every later one. x/storage ARCHIVE deals for
-	// the range are opened only for this commitment, and only once the attestations reach
-	// quorum, so what providers are asked to store is what the attesters agreed on.
+	// piece_root .. piece_bytes are the piece/ commitment of the winning bundle file.
+	// x/storage ARCHIVE deals for the range are opened only for this commitment, and only once a
+	// tuple has won, so what providers are asked to store is what the attesters agreed on.
 	PieceRoot       []byte `protobuf:"bytes,10,opt,name=piece_root,json=pieceRoot,proto3" json:"piece_root,omitempty"`
 	RealLeafCount   uint64 `protobuf:"varint,11,opt,name=real_leaf_count,json=realLeafCount,proto3" json:"real_leaf_count,omitempty"`
 	PaddedLeafCount uint64 `protobuf:"varint,12,opt,name=padded_leaf_count,json=paddedLeafCount,proto3" json:"padded_leaf_count,omitempty"`
 	PieceBytes      uint64 `protobuf:"varint,13,opt,name=piece_bytes,json=pieceBytes,proto3" json:"piece_bytes,omitempty"`
+	// decided is true once one tuple has been attested by at least 3 distinct operators.
+	Decided bool `protobuf:"varint,14,opt,name=decided,proto3" json:"decided,omitempty"`
+	// candidates are the tuples attested for a range that is not decided, at most
+	// Params.max_candidates_per_range of them. It is empty once the range is decided.
+	Candidates []Candidate `protobuf:"bytes,15,rep,name=candidates,proto3" json:"candidates"`
 }
 
 func (m *RangeRecord) Reset()         { *m = RangeRecord{} }
 func (m *RangeRecord) String() string { return proto.CompactTextString(m) }
 func (*RangeRecord) ProtoMessage()    {}
 func (*RangeRecord) Descriptor() ([]byte, []int) {
-	return fileDescriptor_05e5b8a7214928c9, []int{1}
+	return fileDescriptor_05e5b8a7214928c9, []int{2}
 }
 func (m *RangeRecord) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -243,44 +375,68 @@ func (m *RangeRecord) GetPieceBytes() uint64 {
 	return 0
 }
 
+func (m *RangeRecord) GetDecided() bool {
+	if m != nil {
+		return m.Decided
+	}
+	return false
+}
+
+func (m *RangeRecord) GetCandidates() []Candidate {
+	if m != nil {
+		return m.Candidates
+	}
+	return nil
+}
+
 func init() {
 	proto.RegisterType((*Params)(nil), "orama.archive.v1.Params")
+	proto.RegisterType((*Candidate)(nil), "orama.archive.v1.Candidate")
 	proto.RegisterType((*RangeRecord)(nil), "orama.archive.v1.RangeRecord")
 }
 
 func init() { proto.RegisterFile("orama/archive/v1/archive.proto", fileDescriptor_05e5b8a7214928c9) }
 
 var fileDescriptor_05e5b8a7214928c9 = []byte{
-	// 461 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x4c, 0x92, 0xcf, 0x6e, 0xd3, 0x40,
-	0x10, 0xc6, 0xe3, 0xa6, 0xa4, 0xf1, 0x3a, 0x55, 0x60, 0x25, 0xc4, 0x82, 0xc0, 0x35, 0x3d, 0x54,
-	0x16, 0x87, 0x58, 0x15, 0x12, 0xdc, 0x53, 0x0e, 0x45, 0x42, 0xa2, 0xf8, 0x82, 0xc4, 0xc5, 0x5a,
-	0x7b, 0x27, 0xf1, 0x2a, 0xf6, 0xae, 0xb5, 0xbb, 0xf9, 0xd3, 0xb7, 0xe0, 0x6d, 0x78, 0x05, 0x8e,
-	0x3d, 0x72, 0x44, 0xc9, 0x8b, 0x54, 0xbb, 0x76, 0x92, 0xde, 0x3c, 0xbf, 0xef, 0x1b, 0xf9, 0xdb,
-	0x99, 0x41, 0xa1, 0x54, 0xb4, 0xa6, 0x09, 0x55, 0x45, 0xc9, 0x57, 0x90, 0xac, 0xae, 0xf7, 0x9f,
-	0x93, 0x46, 0x49, 0x23, 0xf1, 0x73, 0xa7, 0x4f, 0xf6, 0x70, 0x75, 0x7d, 0x59, 0xa2, 0xc1, 0x1d,
-	0x55, 0xb4, 0xd6, 0xf8, 0x13, 0x7a, 0xa5, 0xc0, 0x80, 0x30, 0x5c, 0x8a, 0x6c, 0xcd, 0x05, 0x93,
-	0xeb, 0x2c, 0xaf, 0x64, 0xb1, 0xd0, 0xc4, 0x8b, 0xbc, 0xb8, 0x9f, 0xbe, 0x3c, 0xc8, 0x3f, 0x9d,
-	0x3a, 0x75, 0x22, 0xbe, 0x42, 0xe3, 0x9a, 0x6e, 0xb2, 0x86, 0x43, 0x01, 0x59, 0x7e, 0x6f, 0x40,
-	0x93, 0x93, 0xc8, 0x8b, 0x4f, 0xd3, 0xf3, 0x9a, 0x6e, 0xee, 0x2c, 0x9d, 0x5a, 0x78, 0xf9, 0xa7,
-	0x8f, 0x82, 0x94, 0x8a, 0x39, 0xa4, 0x50, 0x48, 0xc5, 0xf0, 0x7b, 0x34, 0xd2, 0x86, 0x2a, 0x93,
-	0x95, 0xc0, 0xe7, 0xa5, 0xe9, 0x7e, 0x12, 0x38, 0x76, 0xeb, 0x10, 0x7e, 0x87, 0x10, 0x08, 0xb6,
-	0x37, 0x9c, 0x38, 0x83, 0x0f, 0x82, 0x1d, 0xe5, 0x7c, 0x29, 0x58, 0x05, 0x59, 0xc1, 0x19, 0xe9,
-	0x47, 0x5e, 0xec, 0xa7, 0x7e, 0x4b, 0x6e, 0x38, 0xc3, 0x17, 0x28, 0xe8, 0xe4, 0x92, 0xea, 0x92,
-	0x9c, 0x46, 0x5e, 0x3c, 0x4a, 0xbb, 0x8e, 0x5b, 0xaa, 0x4b, 0x6b, 0xa8, 0x41, 0x2d, 0x2a, 0xc8,
-	0x94, 0x94, 0x86, 0x3c, 0x6b, 0x0d, 0x2d, 0x4a, 0xa5, 0x34, 0xf8, 0x35, 0x1a, 0x32, 0xa0, 0x55,
-	0xc6, 0x99, 0x26, 0x83, 0xa8, 0x1f, 0xfb, 0xe9, 0x99, 0xad, 0xbf, 0x32, 0x8d, 0xdf, 0x22, 0xbf,
-	0x9b, 0xa2, 0xd2, 0xe4, 0xcc, 0x69, 0x47, 0x80, 0xdf, 0xa0, 0x61, 0x57, 0x30, 0x32, 0x8c, 0xbc,
-	0x78, 0x98, 0x1e, 0x6a, 0xdb, 0x29, 0x1b, 0x50, 0xd4, 0x48, 0xa5, 0x89, 0xdf, 0x76, 0x1e, 0x80,
-	0x7d, 0x53, 0x3b, 0x49, 0x17, 0x09, 0xb9, 0x48, 0xbe, 0x23, 0x2e, 0xd1, 0x15, 0x1a, 0x2b, 0x9b,
-	0xa8, 0x02, 0x3a, 0xcb, 0x0a, 0xb9, 0x14, 0x86, 0x04, 0xed, 0xb0, 0x2d, 0xfe, 0x06, 0x74, 0x76,
-	0x63, 0x21, 0xfe, 0x80, 0x5e, 0x34, 0x94, 0x31, 0x60, 0x4f, 0x9d, 0x23, 0xe7, 0x1c, 0xb7, 0xc2,
-	0xd1, 0x7b, 0x81, 0x82, 0xa7, 0xcb, 0x3b, 0x77, 0xae, 0x36, 0x85, 0xdb, 0xdc, 0xf4, 0xc7, 0xdf,
-	0x6d, 0xe8, 0x3d, 0x6c, 0x43, 0xef, 0xff, 0x36, 0xf4, 0x7e, 0xef, 0xc2, 0xde, 0xc3, 0x2e, 0xec,
-	0xfd, 0xdb, 0x85, 0xbd, 0x5f, 0x9f, 0xe7, 0xdc, 0x94, 0xcb, 0x7c, 0x52, 0xc8, 0x3a, 0xf9, 0x02,
-	0x53, 0x25, 0xf5, 0xf7, 0xd9, 0x8c, 0x17, 0x9c, 0x56, 0x89, 0x00, 0xb3, 0x96, 0x6a, 0x91, 0x14,
-	0x25, 0xe5, 0x22, 0xd9, 0x1c, 0x6e, 0xd2, 0xdc, 0x37, 0xa0, 0xf3, 0x81, 0xbb, 0xc7, 0x8f, 0x8f,
-	0x01, 0x00, 0x00, 0xff, 0xff, 0xaf, 0xf1, 0x37, 0xb4, 0xb1, 0x02, 0x00, 0x00,
+	// 593 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x8c, 0x94, 0xc1, 0x6e, 0xd3, 0x4c,
+	0x14, 0x85, 0xe3, 0x26, 0x4d, 0xe2, 0x71, 0xfa, 0xe7, 0xc7, 0xa2, 0x62, 0x28, 0xe0, 0x9a, 0x2e,
+	0xaa, 0x88, 0x45, 0xac, 0x82, 0x44, 0xd7, 0xa4, 0x2c, 0x8a, 0x84, 0x44, 0xf1, 0x06, 0x89, 0x8d,
+	0x35, 0xf1, 0xdc, 0xc4, 0xa3, 0xda, 0x1e, 0x6b, 0x66, 0xda, 0xa4, 0x6f, 0xc1, 0x82, 0x17, 0xe0,
+	0x3d, 0x78, 0x80, 0x2e, 0xbb, 0x64, 0x85, 0x50, 0xf2, 0x22, 0x68, 0xc6, 0x89, 0x13, 0xa5, 0x12,
+	0xcd, 0xce, 0xf7, 0x7c, 0xc7, 0xf2, 0xdc, 0x73, 0x34, 0x46, 0x1e, 0x17, 0x24, 0x23, 0x01, 0x11,
+	0x71, 0xc2, 0xae, 0x21, 0xb8, 0x3e, 0x59, 0x3e, 0xf6, 0x0b, 0xc1, 0x15, 0x77, 0xff, 0x37, 0xbc,
+	0xbf, 0x14, 0xaf, 0x4f, 0x0e, 0x1e, 0x8f, 0xf9, 0x98, 0x1b, 0x18, 0xe8, 0xa7, 0xd2, 0x77, 0xf4,
+	0xc3, 0x42, 0xcd, 0x0b, 0x22, 0x48, 0x26, 0xdd, 0xb7, 0xe8, 0x89, 0x00, 0x05, 0xb9, 0x62, 0x3c,
+	0x8f, 0x26, 0x2c, 0xa7, 0x7c, 0x12, 0x0d, 0x53, 0x1e, 0x5f, 0x4a, 0x6c, 0xf9, 0x56, 0xaf, 0x1e,
+	0xee, 0x57, 0xf8, 0x8b, 0xa1, 0x03, 0x03, 0xdd, 0x63, 0xd4, 0xcd, 0xc8, 0x34, 0x2a, 0x18, 0xc4,
+	0x10, 0x0d, 0x6f, 0x14, 0x48, 0xbc, 0xe3, 0x5b, 0xbd, 0x46, 0xb8, 0x97, 0x91, 0xe9, 0x85, 0x56,
+	0x07, 0x5a, 0x74, 0x4f, 0x11, 0xd6, 0xbe, 0x98, 0xe4, 0x94, 0x51, 0xa2, 0x40, 0x46, 0x05, 0x88,
+	0x48, 0x90, 0x7c, 0x0c, 0xb8, 0xee, 0x5b, 0xbd, 0xbd, 0x70, 0x3f, 0x23, 0xd3, 0xb3, 0x0a, 0x5f,
+	0x80, 0x08, 0x35, 0x3c, 0xfa, 0xb9, 0x83, 0xec, 0x4a, 0x76, 0x5f, 0x20, 0x34, 0xbc, 0xca, 0x69,
+	0x0a, 0x51, 0xcc, 0xa8, 0x39, 0x99, 0x1d, 0xda, 0xa5, 0x72, 0xc6, 0xa8, 0x7b, 0x88, 0x9c, 0x05,
+	0x4e, 0x88, 0x4c, 0xcc, 0x49, 0x3a, 0xe1, 0xe2, 0x8d, 0x73, 0x22, 0x13, 0x6d, 0xc8, 0x40, 0x5c,
+	0xa6, 0x10, 0x09, 0xce, 0x95, 0xf9, 0x72, 0x27, 0x44, 0xa5, 0x14, 0x72, 0xae, 0xf4, 0x07, 0xca,
+	0x5d, 0x0c, 0x6f, 0x18, 0x6e, 0x1b, 0xc5, 0xe0, 0x63, 0xd4, 0x15, 0x40, 0xd2, 0x28, 0x05, 0x32,
+	0x8a, 0x62, 0x7e, 0x95, 0x2b, 0xbc, 0x5b, 0xae, 0xab, 0xe5, 0x8f, 0x40, 0x46, 0x67, 0x5a, 0x74,
+	0x5f, 0xa1, 0x47, 0x05, 0xa1, 0x14, 0xe8, 0xba, 0xb3, 0x69, 0x9c, 0xdd, 0x12, 0xac, 0xbc, 0x87,
+	0xc8, 0x59, 0x8f, 0xaf, 0x65, 0x5c, 0xe5, 0x29, 0xca, 0xec, 0x9e, 0x23, 0x7b, 0x51, 0xa5, 0x90,
+	0xb8, 0xed, 0xd7, 0xf5, 0xce, 0x95, 0xa0, 0x29, 0x2f, 0x40, 0x10, 0xc5, 0x85, 0xc4, 0x76, 0x49,
+	0x2b, 0xe1, 0xe8, 0x7b, 0x03, 0x39, 0x26, 0xc8, 0x10, 0x62, 0x2e, 0xa8, 0xfb, 0x12, 0x75, 0xa4,
+	0x22, 0x42, 0x45, 0x09, 0xb0, 0x71, 0xa2, 0x16, 0xe5, 0x3a, 0x46, 0x3b, 0x37, 0x92, 0x8e, 0x00,
+	0x72, 0xba, 0x34, 0xec, 0x18, 0x83, 0x0d, 0x39, 0x5d, 0xe1, 0xb5, 0x0a, 0xea, 0x0f, 0x54, 0xd0,
+	0x78, 0xa8, 0x82, 0xdd, 0x7b, 0x15, 0x3c, 0x45, 0x6d, 0xaa, 0x33, 0x66, 0x54, 0xe2, 0xa6, 0xd9,
+	0xa7, 0xa5, 0xe7, 0x0f, 0x74, 0x23, 0x89, 0xd6, 0x66, 0x12, 0x07, 0xa8, 0xbd, 0x18, 0x28, 0x6e,
+	0xfb, 0x56, 0xaf, 0x1d, 0x56, 0xf3, 0xbf, 0x53, 0xda, 0x68, 0x1d, 0x6d, 0xd1, 0xba, 0xb3, 0x75,
+	0xeb, 0x9d, 0xad, 0x5a, 0xdf, 0xbb, 0xd7, 0x3a, 0x46, 0x2d, 0x0a, 0x31, 0xa3, 0x40, 0xf1, 0x7f,
+	0x66, 0x99, 0xe5, 0xe8, 0xbe, 0x43, 0x68, 0x75, 0x8f, 0x70, 0xd7, 0xaf, 0xf7, 0x9c, 0xd7, 0xcf,
+	0xfa, 0x9b, 0x77, 0xbe, 0x5f, 0xdd, 0x9a, 0x41, 0xe3, 0xf6, 0xf7, 0x61, 0x2d, 0x5c, 0x7b, 0x69,
+	0xf0, 0xf9, 0x76, 0xe6, 0x59, 0x77, 0x33, 0xcf, 0xfa, 0x33, 0xf3, 0xac, 0x6f, 0x73, 0xaf, 0x76,
+	0x37, 0xf7, 0x6a, 0xbf, 0xe6, 0x5e, 0xed, 0xeb, 0xe9, 0x98, 0xa9, 0xe4, 0x6a, 0xd8, 0x8f, 0x79,
+	0x16, 0xbc, 0x87, 0x81, 0xe0, 0xf2, 0xd3, 0x68, 0xc4, 0x62, 0x46, 0xd2, 0x20, 0x07, 0x35, 0xe1,
+	0xe2, 0x32, 0x88, 0x13, 0xc2, 0xf2, 0x60, 0x5a, 0xfd, 0x7f, 0xd4, 0x4d, 0x01, 0x72, 0xd8, 0x34,
+	0xff, 0x94, 0x37, 0x7f, 0x03, 0x00, 0x00, 0xff, 0xff, 0x86, 0x9c, 0x30, 0x39, 0x9d, 0x04, 0x00,
+	0x00,
 }
 
 func (m *Params) Marshal() (dAtA []byte, err error) {
@@ -303,6 +459,11 @@ func (m *Params) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.MaxCandidatesPerRange != 0 {
+		i = encodeVarintArchive(dAtA, i, uint64(m.MaxCandidatesPerRange))
+		i--
+		dAtA[i] = 0x18
+	}
 	if m.MaxPieceBytes != 0 {
 		i = encodeVarintArchive(dAtA, i, uint64(m.MaxPieceBytes))
 		i--
@@ -312,6 +473,90 @@ func (m *Params) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i = encodeVarintArchive(dAtA, i, uint64(m.RetentionWindowBlocks))
 		i--
 		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *Candidate) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *Candidate) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Candidate) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.Operators) > 0 {
+		for iNdEx := len(m.Operators) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Operators[iNdEx])
+			copy(dAtA[i:], m.Operators[iNdEx])
+			i = encodeVarintArchive(dAtA, i, uint64(len(m.Operators[iNdEx])))
+			i--
+			dAtA[i] = 0x4a
+		}
+	}
+	if len(m.Archivers) > 0 {
+		for iNdEx := len(m.Archivers) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Archivers[iNdEx])
+			copy(dAtA[i:], m.Archivers[iNdEx])
+			i = encodeVarintArchive(dAtA, i, uint64(len(m.Archivers[iNdEx])))
+			i--
+			dAtA[i] = 0x42
+		}
+	}
+	if m.PieceBytes != 0 {
+		i = encodeVarintArchive(dAtA, i, uint64(m.PieceBytes))
+		i--
+		dAtA[i] = 0x38
+	}
+	if m.PaddedLeafCount != 0 {
+		i = encodeVarintArchive(dAtA, i, uint64(m.PaddedLeafCount))
+		i--
+		dAtA[i] = 0x30
+	}
+	if m.RealLeafCount != 0 {
+		i = encodeVarintArchive(dAtA, i, uint64(m.RealLeafCount))
+		i--
+		dAtA[i] = 0x28
+	}
+	if len(m.PieceRoot) > 0 {
+		i -= len(m.PieceRoot)
+		copy(dAtA[i:], m.PieceRoot)
+		i = encodeVarintArchive(dAtA, i, uint64(len(m.PieceRoot)))
+		i--
+		dAtA[i] = 0x22
+	}
+	if len(m.MerkleRoot) > 0 {
+		i -= len(m.MerkleRoot)
+		copy(dAtA[i:], m.MerkleRoot)
+		i = encodeVarintArchive(dAtA, i, uint64(len(m.MerkleRoot)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.BundleHash) > 0 {
+		i -= len(m.BundleHash)
+		copy(dAtA[i:], m.BundleHash)
+		i = encodeVarintArchive(dAtA, i, uint64(len(m.BundleHash)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BundleCid) > 0 {
+		i -= len(m.BundleCid)
+		copy(dAtA[i:], m.BundleCid)
+		i = encodeVarintArchive(dAtA, i, uint64(len(m.BundleCid)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -336,6 +581,30 @@ func (m *RangeRecord) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if len(m.Candidates) > 0 {
+		for iNdEx := len(m.Candidates) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Candidates[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintArchive(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x7a
+		}
+	}
+	if m.Decided {
+		i--
+		if m.Decided {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x70
+	}
 	if m.PieceBytes != 0 {
 		i = encodeVarintArchive(dAtA, i, uint64(m.PieceBytes))
 		i--
@@ -452,6 +721,55 @@ func (m *Params) Size() (n int) {
 	if m.MaxPieceBytes != 0 {
 		n += 1 + sovArchive(uint64(m.MaxPieceBytes))
 	}
+	if m.MaxCandidatesPerRange != 0 {
+		n += 1 + sovArchive(uint64(m.MaxCandidatesPerRange))
+	}
+	return n
+}
+
+func (m *Candidate) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.BundleCid)
+	if l > 0 {
+		n += 1 + l + sovArchive(uint64(l))
+	}
+	l = len(m.BundleHash)
+	if l > 0 {
+		n += 1 + l + sovArchive(uint64(l))
+	}
+	l = len(m.MerkleRoot)
+	if l > 0 {
+		n += 1 + l + sovArchive(uint64(l))
+	}
+	l = len(m.PieceRoot)
+	if l > 0 {
+		n += 1 + l + sovArchive(uint64(l))
+	}
+	if m.RealLeafCount != 0 {
+		n += 1 + sovArchive(uint64(m.RealLeafCount))
+	}
+	if m.PaddedLeafCount != 0 {
+		n += 1 + sovArchive(uint64(m.PaddedLeafCount))
+	}
+	if m.PieceBytes != 0 {
+		n += 1 + sovArchive(uint64(m.PieceBytes))
+	}
+	if len(m.Archivers) > 0 {
+		for _, s := range m.Archivers {
+			l = len(s)
+			n += 1 + l + sovArchive(uint64(l))
+		}
+	}
+	if len(m.Operators) > 0 {
+		for _, s := range m.Operators {
+			l = len(s)
+			n += 1 + l + sovArchive(uint64(l))
+		}
+	}
 	return n
 }
 
@@ -512,6 +830,15 @@ func (m *RangeRecord) Size() (n int) {
 	}
 	if m.PieceBytes != 0 {
 		n += 1 + sovArchive(uint64(m.PieceBytes))
+	}
+	if m.Decided {
+		n += 2
+	}
+	if len(m.Candidates) > 0 {
+		for _, e := range m.Candidates {
+			l = e.Size()
+			n += 1 + l + sovArchive(uint64(l))
+		}
 	}
 	return n
 }
@@ -589,6 +916,330 @@ func (m *Params) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaxCandidatesPerRange", wireType)
+			}
+			m.MaxCandidatesPerRange = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaxCandidatesPerRange |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipArchive(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthArchive
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *Candidate) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowArchive
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: Candidate: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: Candidate: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BundleCid", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthArchive
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthArchive
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BundleCid = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BundleHash", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthArchive
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthArchive
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BundleHash = append(m.BundleHash[:0], dAtA[iNdEx:postIndex]...)
+			if m.BundleHash == nil {
+				m.BundleHash = []byte{}
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MerkleRoot", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthArchive
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthArchive
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.MerkleRoot = append(m.MerkleRoot[:0], dAtA[iNdEx:postIndex]...)
+			if m.MerkleRoot == nil {
+				m.MerkleRoot = []byte{}
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PieceRoot", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthArchive
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthArchive
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.PieceRoot = append(m.PieceRoot[:0], dAtA[iNdEx:postIndex]...)
+			if m.PieceRoot == nil {
+				m.PieceRoot = []byte{}
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RealLeafCount", wireType)
+			}
+			m.RealLeafCount = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RealLeafCount |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PaddedLeafCount", wireType)
+			}
+			m.PaddedLeafCount = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.PaddedLeafCount |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PieceBytes", wireType)
+			}
+			m.PieceBytes = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.PieceBytes |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Archivers", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthArchive
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthArchive
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Archivers = append(m.Archivers, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Operators", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthArchive
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthArchive
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Operators = append(m.Operators, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipArchive(dAtA[iNdEx:])
@@ -984,6 +1635,60 @@ func (m *RangeRecord) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 14:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Decided", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Decided = bool(v != 0)
+		case 15:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Candidates", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowArchive
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthArchive
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthArchive
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Candidates = append(m.Candidates, Candidate{})
+			if err := m.Candidates[len(m.Candidates)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipArchive(dAtA[iNdEx:])

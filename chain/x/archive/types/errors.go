@@ -4,13 +4,13 @@ import "errors"
 
 var (
 	// ErrWrongRoot is returned when an attestation or a bundle's block hashes
-	// do not match the pinned block-hash Merkle root.
+	// do not match the block-hash Merkle root of the winning tuple.
 	ErrWrongRoot = errors.New("wrong merkle root")
 	// ErrWrongBundle is returned when the bundle CID or content hash does not
-	// match the range pinned by the first attestation.
+	// match the tuple that won the range.
 	ErrWrongBundle = errors.New("bundle does not match the pinned range")
-	// ErrWrongPiece is returned when a piece commitment differs from the one the range's first
-	// attestation pinned.
+	// ErrWrongPiece is returned when a piece commitment differs from the one the winning tuple of
+	// the range carries.
 	ErrWrongPiece = errors.New("piece commitment does not match the pinned range")
 	// ErrPieceTooLarge is returned when a bundle file exceeds Params.MaxPieceBytes.
 	ErrPieceTooLarge = errors.New("bundle file is larger than max_piece_bytes")
@@ -35,6 +35,12 @@ var (
 	ErrDealAttached = errors.New("deal is already attached to another range")
 	// ErrDealsFull is returned when a range already has all the live deals it may have.
 	ErrDealsFull = errors.New("range already has its live archive deals")
+	// ErrConflictingAttestation is returned when an operator that already attested a range
+	// attests a different tuple for it: an operator counts toward one tuple per range.
+	ErrConflictingAttestation = errors.New("operator already attested a different tuple for this range")
+	// ErrCandidatesFull is returned when a range already holds the most candidate tuples it may
+	// and the attestation would start another.
+	ErrCandidatesFull = errors.New("range already holds the most candidate tuples it may")
 	// ErrNotAttester is returned when an operator that did not attest a range
 	// tries to attach deals to it.
 	ErrNotAttester = errors.New("operator did not attest this range")
