@@ -74,8 +74,9 @@ func (m *Params) GetRetentionWindowBlocks() int64 {
 
 // RangeRecord is one height range in the archive registry: bundle CID,
 // block-hash Merkle root, replica deal ids, and the archivers who attested
-// that root. A range is archived only when at least 3 distinct archivers
-// have attested the pinned root and at least 3 distinct deal ids are recorded.
+// that root. A range is archived only when archivers of at least 3 distinct
+// operators have attested the pinned root and at least 3 distinct active
+// ARCHIVE deal ids are recorded.
 // The root is pinned by the first attestation; a different root is refused
 // and does not count toward this one.
 type RangeRecord struct {

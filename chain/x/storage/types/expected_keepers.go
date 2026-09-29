@@ -33,12 +33,15 @@ type EarningsKeeper interface {
 	FundBondFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
 }
 
-// DepositKeeper matches x/fees Keeper.LockDeposit and ReleaseDeposit. x/storage uses
-// it for the probation record deposit (taken from first earnings, recovered when the
-// node graduates). It does not import x/fees. Escrow does not go through this
-// interface: ReleaseDeposit burns 1%, and escrow must be conserved in full.
+// DepositKeeper matches x/fees Keeper.LockDeposit, TopUpDeposit, DepositAmount and
+// ReleaseDeposit. x/storage uses it for the probation record deposit (taken progressively from
+// first earnings, recovered when the node graduates). It does not import x/fees. Escrow does not
+// go through this interface: ReleaseDeposit burns 1%, and escrow must be conserved in full.
 type DepositKeeper interface {
 	LockDeposit(ctx context.Context, owner sdk.AccAddress, id string, amount math.Int) error
+	TopUpDeposit(ctx context.Context, id string, extra math.Int) error
+	// DepositAmount returns the amount locked under id, and false when no deposit is open.
+	DepositAmount(ctx context.Context, id string) (amount math.Int, found bool, err error)
 	ReleaseDeposit(ctx context.Context, id string) (refund, burn math.Int, err error)
 }
 

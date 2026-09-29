@@ -28,28 +28,27 @@ import (
 //
 // One node's record can be unreadable or inconsistent (a node that x/nodes cannot resolve, a
 // deposit that will not release). That is data about one node, not a reason to stop the chain: the
-// node's work is rolled back, the node stays queued so the next block retries it, and a
-// storage_node_sync_failed event carries the reason. Only the queue itself failing to be read or
-// re-written is returned, since then the tracked set can no longer be trusted.
+// node's work is rolled back, the node stays queued so the next block retries it, a
+// storage_node_sync_failed event carries the reason, and the node's consecutive-failure count
+// (the NodeFailures query) rises until a reconciliation succeeds, with a storage_item_stuck event
+// every failureEscalationEvery failures. Only the queue itself failing to be read or re-written is
+// returned, since then the tracked set can no longer be trusted.
 func (k Keeper) syncNodes(ctx sdk.Context) error {
 	ids, err := k.nodes.TakeStorageChanges(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read x/nodes storage changes: %w", err)
 	}
 	for _, id := range ids {
-		nodeCtx, write := ctx.CacheContext()
-		if err := k.syncNode(nodeCtx, id); err != nil {
-			if qerr := k.nodes.MarkStorageChanged(ctx, id); qerr != nil {
-				return fmt.Errorf("failed to re-queue %s after a failed reconciliation (%v): %w", id, err, qerr)
-			}
-			k.Logger(ctx).Error("storage node reconciliation failed; retrying next block", "node", id, "err", err)
-			ctx.EventManager().EmitEvent(sdk.NewEvent("storage_node_sync_failed",
-				sdk.NewAttribute("node_id", id),
-				sdk.NewAttribute("error", err.Error()),
-			))
+		failed, err := k.isolate(ctx, FailureKindSync, id, func(nodeCtx sdk.Context) error { return k.syncNode(nodeCtx, id) })
+		if err != nil {
+			return err
+		}
+		if !failed {
 			continue
 		}
-		write()
+		if err := k.nodes.MarkStorageChanged(ctx, id); err != nil {
+			return fmt.Errorf("failed to re-queue %s after a failed reconciliation: %w", id, err)
+		}
 	}
 	return nil
 }

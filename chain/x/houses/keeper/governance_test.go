@@ -564,3 +564,22 @@ func lastAddress(addrs ...sdk.AccAddress) sdk.AccAddress {
 	sort.Slice(addrs, func(i, j int) bool { return addrs[i].String() < addrs[j].String() })
 	return addrs[len(addrs)-1]
 }
+
+// A proposal whose tally cannot be read is closed as FAILED with the reason; it must not fail
+// EndBlock, which would halt every validator over one proposal, and it must not hold up the others.
+func TestAdvance_oneUnreadableProposalDoesNotHaltTheBlock(t *testing.T) {
+	f := openParameter(t)
+	id := f.submitParameter(t)
+	f.Staking.failTotal = true
+	f.advance(t, 24*time.Hour)
+	p := f.proposal(t, id)
+	require.Equal(t, types.ProposalStatus_FAILED, p.Status)
+	require.Contains(t, p.FailReason, "staking store unreadable")
+	var reported bool
+	for _, e := range f.Ctx.EventManager().Events() {
+		reported = reported || e.Type == "houses_proposal_failed"
+	}
+	require.True(t, reported)
+	f.Staking.failTotal = false
+	f.advance(t, time.Hour)
+}

@@ -97,9 +97,14 @@ func (b *fakeBank) GetBalance(_ context.Context, addr sdk.AccAddress, denom stri
 type fakeStaking struct {
 	total math.Int
 	dels  []types.BondedDelegation
+	// failTotal makes TotalBondedTokens fail, as an unreadable staking store would.
+	failTotal bool
 }
 
 func (s *fakeStaking) TotalBondedTokens(context.Context) (math.Int, error) {
+	if s.failTotal {
+		return math.Int{}, fmt.Errorf("staking store unreadable")
+	}
 	if s.total.IsNil() {
 		return math.ZeroInt(), nil
 	}

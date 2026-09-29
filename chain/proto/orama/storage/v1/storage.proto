@@ -207,6 +207,15 @@ message NodeState {
   bool graduated = 6;
 }
 
+// FailureCount is how many blocks in a row one node's per-node work has failed and been rolled
+// back instead of applied. kind is "sync" (x/nodes reconciliation) or "settlement" (a payout
+// row). A success clears the count, so a non-zero row is a node stuck right now.
+message FailureCount {
+  string node_id = 1;
+  string kind = 2;
+  uint64 consecutive = 3;
+}
+
 // Settlement is one queued pay or miss. The per-block limit drains this queue;
 // amounts are fixed when the epoch closes so a later block cannot change them.
 message Settlement {

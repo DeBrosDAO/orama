@@ -560,3 +560,45 @@ func bondAmount(node types.Node, role types.Role) math.Int {
 	}
 	return math.ZeroInt()
 }
+
+// One operator's matured unbonding that the bank refuses to pay must not fail EndBlock: the entry
+// stays queued and is reported, and every other operator's unbonding is still paid.
+func TestEndBlock_anUnpayableUnbondingDoesNotHaltTheBlock(t *testing.T) {
+	f := newTestFixture(t)
+	bad, good := newAccount(t), newAccount(t)
+	unbond := func(op sdk.AccAddress, nodeID string) {
+		f.fund(op, 100)
+		f.registerOperator(t, op)
+		f.registerNode(t, op, newAccount(t), nodeID, []types.Role{types.RoleStorage}, []types.Binding{
+			secpBinding(t, testChainID, op.String(), "hot"),
+		})
+		_, err := f.Msg.BondNode(f.Ctx, &types.MsgBondNode{Operator: op.String(), NodeId: nodeID, Role: types.RoleStorage, Amount: orama(2)})
+		require.NoError(t, err)
+		_, err = f.Msg.UnbondNode(f.Ctx, &types.MsgUnbondNode{Operator: op.String(), NodeId: nodeID, Role: types.RoleStorage, Amount: orama(1)})
+		require.NoError(t, err)
+	}
+	unbond(bad, "bad-node")
+	unbond(good, "good-node")
+	f.Bank.refuseTo = bad.String()
+	goodBefore := f.Bank.balanceOf(good.String())
+
+	f.Ctx = f.Ctx.WithBlockTime(f.Ctx.BlockTime().Add(time.Duration(types.DefaultUnbondingSeconds) * time.Second))
+	require.NoError(t, f.Keeper.EndBlock(f.Ctx))
+
+	require.True(t, f.Bank.balanceOf(good.String()).Equal(goodBefore.Add(orama(1))), "the healthy operator is paid")
+	entries, err := f.Keeper.NodeUnbondings(f.Ctx, "bad-node")
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "the unpayable entry stays queued")
+	var failed bool
+	for _, e := range f.Ctx.EventManager().Events() {
+		failed = failed || e.Type == "nodes_unbonding_failed"
+	}
+	require.True(t, failed)
+
+	f.Bank.refuseTo = ""
+	require.NoError(t, f.Keeper.EndBlock(f.Ctx))
+	entries, err = f.Keeper.NodeUnbondings(f.Ctx, "bad-node")
+	require.NoError(t, err)
+	require.Empty(t, entries, "the entry is paid once the bank accepts the recipient")
+	f.requireInvariants(t)
+}

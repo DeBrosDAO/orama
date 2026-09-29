@@ -11,6 +11,7 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/DeBrosOfficial/network/chain/x/storage/keeper"
 	"github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
@@ -459,8 +460,9 @@ func TestSettlement_aDepartedNodesMissIsNotChargedToTheNewHolder(t *testing.T) {
 }
 
 // A rechallenge must name the node that holds its slot. Genesis refuses one
-// that does not, and a live index that disagrees stops the epoch's challenge
-// opening instead of being skipped.
+// that does not. A live index that disagrees is corrupt data about one node:
+// that node's challenges are not opened and the failure is counted against it,
+// while the block, and every other node's challenges, carry on.
 func TestRechallenge_mustNameTheSlotsHolder(t *testing.T) {
 	f := newFixture(t)
 	f.init(t, nil)
@@ -490,7 +492,11 @@ func TestRechallenge_mustNameTheSlotsHolder(t *testing.T) {
 	f.end(t)
 	f.Emission.epoch = 2
 	f.Ctx = f.Ctx.WithBlockHeight(f.height + 1)
-	require.ErrorContains(t, f.Keeper.BeginBlock(f.Ctx), "indexed for node")
+	require.NoError(t, f.Keeper.BeginBlock(f.Ctx), "one node's corrupt index must not fail BeginBlock")
+	n, err := f.Keeper.FailureCount(f.Ctx, other, keeper.FailureKindChallenge)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), n, "the failure is counted against the node whose index is corrupt")
+	require.Contains(t, eventTypes(f.Ctx), "storage_item_failed")
 }
 
 func TestArchiveDealActive_onlyAnActiveArchiveDeal(t *testing.T) {

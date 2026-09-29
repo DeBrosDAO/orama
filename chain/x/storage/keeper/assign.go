@@ -35,7 +35,9 @@ func (k Keeper) assignDue(ctx sdk.Context) error {
 		if ctx.BlockHeight() < deal.AssignAtHeight {
 			continue
 		}
-		if err := k.assignDeal(ctx, deal); err != nil {
+		if _, err := k.isolate(ctx, FailureKindDeal, dealSubject(id), func(c sdk.Context) error {
+			return k.assignDeal(c, deal)
+		}); err != nil {
 			return err
 		}
 	}
@@ -460,26 +462,32 @@ func (k Keeper) expireAcceptWindows(ctx sdk.Context) error {
 		return err
 	}
 	for _, slot := range stale {
-		op := slot.Operator
-		if err := k.detachSlot(ctx, &slot); err != nil {
-			return err
-		}
-		slot.ExcludedOperator = op
-		slot.Status = types.SlotStatus_SLOT_STATUS_UNASSIGNED
-		if err := k.saveSlot(ctx, slot); err != nil {
-			return err
-		}
-		deal, err := k.loadDeal(ctx, slot.DealId)
-		if err != nil {
-			return err
-		}
-		deal.AssignAtHeight = ctx.BlockHeight() + 1
-		if err := k.saveDeal(ctx, deal); err != nil {
-			return err
-		}
-		if err := k.Pending.Set(ctx, deal.Id); err != nil {
+		if _, err := k.isolate(ctx, FailureKindDeal, dealSubject(slot.DealId), func(c sdk.Context) error {
+			return k.expireAcceptWindow(c, slot)
+		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (k Keeper) expireAcceptWindow(ctx sdk.Context, slot types.Slot) error {
+	op := slot.Operator
+	if err := k.detachSlot(ctx, &slot); err != nil {
+		return err
+	}
+	slot.ExcludedOperator = op
+	slot.Status = types.SlotStatus_SLOT_STATUS_UNASSIGNED
+	if err := k.saveSlot(ctx, slot); err != nil {
+		return err
+	}
+	deal, err := k.loadDeal(ctx, slot.DealId)
+	if err != nil {
+		return err
+	}
+	deal.AssignAtHeight = ctx.BlockHeight() + 1
+	if err := k.saveDeal(ctx, deal); err != nil {
+		return err
+	}
+	return k.Pending.Set(ctx, deal.Id)
 }

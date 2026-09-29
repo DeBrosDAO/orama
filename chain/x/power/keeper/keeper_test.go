@@ -2,6 +2,7 @@ package keeper_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -300,6 +301,8 @@ func (b *fakeBankKeeper) SendCoinsFromModuleToAccount(_ context.Context, senderM
 
 type fakeEarningsKeeper struct {
 	credited map[string]math.Int
+	// failFor makes CreditEarnings fail for this address.
+	failFor string
 }
 
 func newFakeEarningsKeeper() *fakeEarningsKeeper {
@@ -307,6 +310,9 @@ func newFakeEarningsKeeper() *fakeEarningsKeeper {
 }
 
 func (e *fakeEarningsKeeper) CreditEarnings(_ context.Context, _ string, addr sdk.AccAddress, amt sdk.Coin) error {
+	if e.failFor != "" && e.failFor == addr.String() {
+		return fmt.Errorf("earnings of %s unavailable", addr)
+	}
 	key := addr.String()
 	if v, ok := e.credited[key]; ok {
 		e.credited[key] = v.Add(amt.Amount)

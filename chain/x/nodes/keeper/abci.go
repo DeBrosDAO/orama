@@ -12,7 +12,8 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/nodes/types"
 )
 
-// EndBlock pays matured unbonding entries and records one service day for
+// EndBlock pays matured unbonding entries (an entry that cannot be paid is skipped, reported with
+// a nodes_unbonding_failed event, and retried next block) and records one service day for
 // operators who are active in this block. A calendar day is counted once,
 // even if several blocks land in it; days with no block are not backfilled.
 func (k Keeper) EndBlock(ctx sdk.Context) error {
@@ -40,26 +41,37 @@ func (k Keeper) completeUnbondings(ctx sdk.Context) error {
 		return fmt.Errorf("walk matured unbondings: %w", err)
 	}
 	for _, id := range due {
-		entry, err := k.Unbondings.Get(ctx, id)
-		if err != nil {
-			return fmt.Errorf("load matured unbonding %d: %w", id, err)
-		}
-		operator, err := sdk.AccAddressFromBech32(entry.Operator)
-		if err != nil {
-			return fmt.Errorf("unbonding %d operator: %w", id, err)
-		}
-		coins, err := norama(entry.Amount)
-		if err != nil {
-			return fmt.Errorf("unbonding %d: %w", id, err)
-		}
-		if err := k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, operator, coins); err != nil {
-			return fmt.Errorf("pay unbonding %d to %s: %w", id, entry.Operator, err)
-		}
-		if err := k.deleteUnbonding(ctx, entry); err != nil {
-			return err
+		if err := k.transact(ctx, func(c sdk.Context) error { return k.payUnbonding(c, id) }); err != nil {
+			// One unbonding that cannot be paid (an unreadable entry, a recipient the bank
+			// refuses) stays queued and is retried next block. Returning its error would fail
+			// EndBlock, and with it FinalizeBlock on every validator, over one operator's entry.
+			k.Logger(ctx).Error("matured unbonding could not be paid; retrying next block", "unbonding", id, "err", err)
+			ctx.EventManager().EmitEvent(sdk.NewEvent("nodes_unbonding_failed",
+				sdk.NewAttribute("unbonding_id", fmt.Sprintf("%d", id)),
+				sdk.NewAttribute("error", err.Error()),
+			))
 		}
 	}
 	return nil
+}
+
+func (k Keeper) payUnbonding(ctx sdk.Context, id uint64) error {
+	entry, err := k.Unbondings.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("load matured unbonding %d: %w", id, err)
+	}
+	operator, err := sdk.AccAddressFromBech32(entry.Operator)
+	if err != nil {
+		return fmt.Errorf("unbonding %d operator: %w", id, err)
+	}
+	coins, err := norama(entry.Amount)
+	if err != nil {
+		return fmt.Errorf("unbonding %d: %w", id, err)
+	}
+	if err := k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, operator, coins); err != nil {
+		return fmt.Errorf("pay unbonding %d to %s: %w", id, entry.Operator, err)
+	}
+	return k.deleteUnbonding(ctx, entry)
 }
 
 func (k Keeper) recordServiceDays(ctx sdk.Context) error {

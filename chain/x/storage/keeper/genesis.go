@@ -116,6 +116,11 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gen types.GenesisState) error {
 			return err
 		}
 	}
+	for _, f := range gen.FailureCounts {
+		if err := k.Failures.Set(ctx, collections.Join(f.NodeId, f.Kind), f.Consecutive); err != nil {
+			return err
+		}
+	}
 	if err := k.rebuildFromSlots(ctx); err != nil {
 		return err
 	}
@@ -306,6 +311,12 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) (*types.GenesisState, error) {
 	}
 	if err := k.Reserved.Walk(ctx, nil, func(nodeID string, bytes uint64) (bool, error) {
 		gs.Reserved = append(gs.Reserved, types.Reserved{NodeId: nodeID, Bytes: bytes})
+		return false, nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := k.Failures.Walk(ctx, nil, func(key collections.Pair[string, string], n uint64) (bool, error) {
+		gs.FailureCounts = append(gs.FailureCounts, types.FailureCount{NodeId: key.K1(), Kind: key.K2(), Consecutive: n})
 		return false, nil
 	}); err != nil {
 		return nil, err

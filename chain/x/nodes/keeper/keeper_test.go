@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -42,6 +43,8 @@ func TestMain(m *testing.M) {
 type fakeBankKeeper struct {
 	balances map[string]math.Int
 	burned   math.Int
+	// refuseTo makes SendCoinsFromModuleToAccount fail for this recipient address.
+	refuseTo string
 }
 
 func newFakeBankKeeper() *fakeBankKeeper {
@@ -106,6 +109,9 @@ func (b *fakeBankKeeper) SendCoinsFromAccountToModule(_ context.Context, senderA
 }
 
 func (b *fakeBankKeeper) SendCoinsFromModuleToAccount(_ context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error {
+	if b.refuseTo != "" && b.refuseTo == recipientAddr.String() {
+		return fmt.Errorf("%s is a blocked recipient", recipientAddr)
+	}
 	amount, err := coinAmount(amt)
 	if err != nil {
 		return err

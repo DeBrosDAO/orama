@@ -15,7 +15,18 @@ service Query {
   rpc Challenges(QueryChallengesRequest) returns (QueryChallengesResponse);
   rpc EpochMint(QueryEpochMintRequest) returns (QueryEpochMintResponse);
   rpc Queue(QueryQueueRequest) returns (QueryQueueResponse);
+  rpc NodeFailures(QueryNodeFailuresRequest) returns (QueryNodeFailuresResponse);
   rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+}
+
+message QueryNodeFailuresRequest {
+  string node_id = 1;
+}
+
+// QueryNodeFailuresResponse lists the consecutive-failure counts of one node: empty when the
+// node's work is applying cleanly.
+message QueryNodeFailuresResponse {
+  repeated FailureCount failures = 1 [(gogoproto.nullable) = false];
 }
 
 message QueryParamsRequest {}

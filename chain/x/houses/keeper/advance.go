@@ -22,31 +22,51 @@ func (k Keeper) Advance(ctx sdk.Context) error {
 	for _, id := range ids {
 		p, err := k.getProposal(ctx, id)
 		if err != nil {
-			return err
+			k.reportProposalFailure(ctx, id, err)
+			continue
 		}
-		switch p.Status {
-		case types.ProposalStatus_VOTING:
-			if !ctx.BlockTime().Before(time.Unix(0, p.VotingEndUnixNano)) {
-				if err := k.closeVoting(ctx, p); err != nil {
-					return err
-				}
+		cacheCtx, write := ctx.CacheContext()
+		if err := k.advanceProposal(cacheCtx, p); err != nil {
+			// One proposal that cannot be advanced (an unreadable tally, a staking read that
+			// fails) is closed as FAILED with the reason. Returning its error would fail EndBlock,
+			// and with it FinalizeBlock on every validator, over one proposal.
+			k.reportProposalFailure(ctx, id, err)
+			if ferr := k.finish(ctx, p, types.ProposalStatus_FAILED, err.Error()); ferr != nil {
+				return ferr
 			}
-		case types.ProposalStatus_VETO_WINDOW:
-			if !ctx.BlockTime().Before(time.Unix(0, p.VetoEndUnixNano)) {
-				if err := k.closeVeto(ctx, p); err != nil {
-					return err
-				}
-			}
-		case types.ProposalStatus_TIMELOCK:
-			if !ctx.BlockTime().Before(time.Unix(0, p.TimelockEndUnixNano)) {
-				if err := k.execute(ctx, p); err != nil {
-					return err
-				}
-			}
-		default:
-			if err := k.Active.Remove(ctx, id); err != nil {
-				return fmt.Errorf("failed to drop inactive proposal %d: %w", id, err)
-			}
+			continue
+		}
+		write()
+	}
+	return nil
+}
+
+func (k Keeper) reportProposalFailure(ctx sdk.Context, id uint64, cause error) {
+	k.Logger(ctx).Error("proposal could not be advanced", "proposal", id, "err", cause)
+	ctx.EventManager().EmitEvent(sdk.NewEvent("houses_proposal_failed",
+		sdk.NewAttribute("proposal_id", fmt.Sprintf("%d", id)),
+		sdk.NewAttribute("error", cause.Error()),
+	))
+}
+
+// advanceProposal moves one active proposal to its next state when its window has elapsed.
+func (k Keeper) advanceProposal(ctx sdk.Context, p types.Proposal) error {
+	switch p.Status {
+	case types.ProposalStatus_VOTING:
+		if !ctx.BlockTime().Before(time.Unix(0, p.VotingEndUnixNano)) {
+			return k.closeVoting(ctx, p)
+		}
+	case types.ProposalStatus_VETO_WINDOW:
+		if !ctx.BlockTime().Before(time.Unix(0, p.VetoEndUnixNano)) {
+			return k.closeVeto(ctx, p)
+		}
+	case types.ProposalStatus_TIMELOCK:
+		if !ctx.BlockTime().Before(time.Unix(0, p.TimelockEndUnixNano)) {
+			return k.execute(ctx, p)
+		}
+	default:
+		if err := k.Active.Remove(ctx, p.Id); err != nil {
+			return fmt.Errorf("failed to drop inactive proposal %d: %w", p.Id, err)
 		}
 	}
 	return nil

@@ -94,12 +94,41 @@ func (k Keeper) DistributeEpochRewards(ctx sdk.Context, emissionKeeper types.Emi
 		if !amounts[i].IsPositive() {
 			continue
 		}
-		if err := k.distributeValidatorReward(ctx, e.operatorAddr, amounts[i], denom); err != nil {
-			return math.ZeroInt(), fmt.Errorf("failed to distribute reward to %q: %w", e.operatorAddr, err)
+		paid, err := k.distributeIsolated(ctx, sourceModule, e.operatorAddr, amounts[i], denom)
+		if err != nil {
+			return math.ZeroInt(), err
+		}
+		if !paid {
+			distributed = distributed.Sub(amounts[i])
 		}
 	}
 
 	return distributed, nil
+}
+
+// distributeIsolated pays one validator's share on its own cache branch. A validator whose
+// record, delegations or recipients cannot be paid (an unreadable delegation, an earnings account
+// that refuses a credit) does not fail the epoch close: its writes are rolled back, its share is
+// returned to sourceModule so x/power's account still ends the block empty, and a
+// power_reward_failed event reports it. Returning the error instead would fail BeginBlock, and
+// with it FinalizeBlock on every validator, over one validator's delegators. It reports whether
+// the share was paid. Only the return transfer failing is an error, since then x/power's account can no longer be balanced.
+func (k Keeper) distributeIsolated(ctx sdk.Context, sourceModule, valoperAddr string, amount math.Int, denom string) (paid bool, err error) {
+	cacheCtx, write := ctx.CacheContext()
+	if err := k.distributeValidatorReward(cacheCtx, valoperAddr, amount, denom); err != nil {
+		k.Logger(ctx).Error("validator reward could not be paid; returned to the source module", "validator", valoperAddr, "amount", amount.String(), "err", err)
+		ctx.EventManager().EmitEvent(sdk.NewEvent("power_reward_failed",
+			sdk.NewAttribute("validator", valoperAddr),
+			sdk.NewAttribute("amount", amount.String()),
+			sdk.NewAttribute("error", err.Error()),
+		))
+		if rerr := k.bankKeeper.SendCoinsFromModuleToModule(ctx, types.ModuleName, sourceModule, sdk.NewCoins(sdk.NewCoin(denom, amount))); rerr != nil {
+			return false, fmt.Errorf("failed to return the unpaid reward of %q to %s: %w", valoperAddr, sourceModule, rerr)
+		}
+		return false, nil
+	}
+	write()
+	return true, nil
 }
 
 // distributeValidatorReward splits amount between validator valoperAddr's own share (commission,

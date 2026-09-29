@@ -66,26 +66,49 @@ func (q queryServer) Authorization(goCtx context.Context, req *types.QueryAuthor
 }
 
 func (q queryServer) Challenges(goCtx context.Context, req *types.QueryChallengesRequest) (*types.QueryChallengesResponse, error) {
-	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "request is required")
+	if req == nil || req.NodeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required: an epoch's challenges across every node are not served in one call")
 	}
 	ctx := sdk.UnwrapSDKContext(goCtx)
+	// A challenge key is (epoch, "node|deal|slot"). '|' is 0x7c and '}' is 0x7d, so this range is
+	// exactly the keys of req.NodeId and the walk never leaves that node.
+	rng := new(collections.Range[collections.Pair[uint64, string]]).
+		StartInclusive(collections.Join(req.Epoch, req.NodeId+"|")).
+		EndExclusive(collections.Join(req.Epoch, req.NodeId+"}"))
 	var out []types.Challenge
-	err := q.Keeper.Challenges.Walk(ctx, collections.NewPrefixedPairRange[uint64, string](req.Epoch), func(key collections.Pair[uint64, string], rec types.ChallengeRecord) (bool, error) {
-		dealID, slot, nodeID, err := parseChallengeID(key.K2())
+	err := q.Keeper.Challenges.Walk(ctx, rng, func(key collections.Pair[uint64, string], rec types.ChallengeRecord) (bool, error) {
+		dealID, slot, _, err := parseChallengeID(key.K2())
 		if err != nil {
 			return false, err
 		}
-		if req.NodeId != "" && nodeID != req.NodeId {
-			return false, nil
-		}
 		out = append(out, types.Challenge{DealId: dealID, Slot: slot, LeafIndex: rec.LeafIndex, Proved: rec.Proved})
-		return false, nil
+		return len(out) >= maxChallengesPerQuery, nil
 	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &types.QueryChallengesResponse{Challenges: out}, nil
+}
+
+// maxChallengesPerQuery bounds one Challenges response. A node is challenged on k_c sampled
+// replicas plus its re-challenge set, which stays far below this.
+const maxChallengesPerQuery = 1000
+
+// NodeFailures returns the consecutive-failure counts of one node's rolled-back work.
+func (q queryServer) NodeFailures(goCtx context.Context, req *types.QueryNodeFailuresRequest) (*types.QueryNodeFailuresResponse, error) {
+	if req == nil || req.NodeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	var out []types.FailureCount
+	err := q.Keeper.Failures.Walk(ctx, collections.NewPrefixedPairRange[string, string](req.NodeId), func(key collections.Pair[string, string], n uint64) (bool, error) {
+		out = append(out, types.FailureCount{NodeId: key.K1(), Kind: key.K2(), Consecutive: n})
+		return false, nil
+	})
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &types.QueryNodeFailuresResponse{Failures: out}, nil
 }
 
 func (q queryServer) EpochMint(goCtx context.Context, req *types.QueryEpochMintRequest) (*types.QueryEpochMintResponse, error) {

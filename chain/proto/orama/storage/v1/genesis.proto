@@ -31,6 +31,7 @@ message GenesisState {
   uint64 deals_created_in_block = 18;
   repeated ReleaseCount release_counts = 19 [(gogoproto.nullable) = false];
   repeated Reserved reserved = 20 [(gogoproto.nullable) = false];
+  repeated FailureCount failure_counts = 21 [(gogoproto.nullable) = false];
 }
 
 // GenesisChallenge is one stored challenge, including its epoch and slot key.

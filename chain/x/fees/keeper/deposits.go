@@ -207,3 +207,15 @@ func (k Keeper) payOutDeposit(ctx context.Context, owner sdk.AccAddress, refund,
 func (k Keeper) GetDeposit(ctx context.Context, id string) (types.Deposit, error) {
 	return k.Deposits.Get(ctx, id)
 }
+
+// DepositAmount returns the amount locked under id, and false when no deposit is open under it.
+func (k Keeper) DepositAmount(ctx context.Context, id string) (math.Int, bool, error) {
+	deposit, err := k.Deposits.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, collections.ErrNotFound) {
+			return math.ZeroInt(), false, nil
+		}
+		return math.Int{}, false, fmt.Errorf("failed to load deposit %q: %w", id, err)
+	}
+	return deposit.Amount, true, nil
+}

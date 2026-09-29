@@ -24,6 +24,7 @@ func DefaultGenesisState() *GenesisState {
 		OperatorMints:  []OperatorMint{},
 		ReleaseCounts:  []ReleaseCount{},
 		Reserved:       []Reserved{},
+		FailureCounts:  []FailureCount{},
 	}
 }
 
@@ -64,6 +65,14 @@ func (gs GenesisState) Validate() error {
 		if d.PricePerEpoch.IsNil() || !d.PricePerEpoch.IsPositive() {
 			return fmt.Errorf("deal %d price must be positive", d.Id)
 		}
+	}
+	seenFailures := map[[2]string]bool{}
+	for _, f := range gs.FailureCounts {
+		key := [2]string{f.NodeId, f.Kind}
+		if f.NodeId == "" || f.Kind == "" || f.Consecutive == 0 || seenFailures[key] {
+			return fmt.Errorf("failure count %q/%q must be unique, named, and non-zero", f.NodeId, f.Kind)
+		}
+		seenFailures[key] = true
 	}
 	seenSlots := map[[2]uint64]bool{}
 	for _, s := range gs.Slots {

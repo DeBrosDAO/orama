@@ -64,61 +64,22 @@ func (k Keeper) closeEpoch(ctx sdk.Context, epoch uint64) error {
 	var claims []types.MintClaim
 	var rows []scored
 	for _, item := range records {
-		dealID, slotIdx, nodeID, err := parseChallengeID(item.key.K2())
+		var row scored
+		var claim *types.MintClaim
+		failed, err := k.isolate(ctx, FailureKindScoring, challengeSubject(item.key.K2()), func(c sdk.Context) error {
+			var serr error
+			row, claim, serr = k.scoreRecord(c, item.key.K2(), item.rec, rate)
+			return serr
+		})
 		if err != nil {
 			return err
 		}
-		slot, err := k.loadSlot(ctx, dealID, slotIdx)
-		if err != nil {
-			return err
+		if failed {
+			continue
 		}
-		deal, err := k.loadDeal(ctx, dealID)
-		if err != nil {
-			return err
-		}
-		row := scored{
-			nodeID: nodeID,
-			dealID: dealID,
-			slot:   slotIdx,
-			proved: item.rec.Proved,
-			escrow: math.ZeroInt(),
-			claim:  -1,
-		}
-		// A proof is paid only while the node that proved it still holds the
-		// slot. A slot released or re-bound before the epoch closed has no
-		// operator to pay for this proof; minting for it would strand coins.
-		paid := item.rec.Proved && slot.NodeId == nodeID && slot.Operator != ""
-		if paid {
-			row.operator = slot.Operator
-		}
-		if paid && !deal.Protocol {
-			row.escrow = deal.PricePerEpoch
-		}
-		if paid {
-			switch {
-			case deal.Protocol && deal.Class == types.DealClass_DEAL_CLASS_ARCHIVE:
-				claims = append(claims, types.MintClaim{
-					Operator: slot.Operator, Kind: types.MintArchive,
-					Amount: deal.PricePerEpoch, FullPrice: deal.PricePerEpoch,
-				})
-				row.claim = len(claims) - 1
-			case deal.Protocol && deal.Class == types.DealClass_DEAL_CLASS_PUBLIC_PIN:
-				claims = append(claims, types.MintClaim{
-					Operator: slot.Operator, Kind: types.MintProtocol,
-					Amount: deal.PricePerEpoch, FullPrice: deal.PricePerEpoch,
-				})
-				row.claim = len(claims) - 1
-			case !deal.Protocol && deal.Class == types.DealClass_DEAL_CLASS_PRIVATE:
-				sub := types.EpochSubsidyDemand(deal.PricePerEpoch, rate, 0)
-				if sub.IsPositive() {
-					claims = append(claims, types.MintClaim{
-						Operator: slot.Operator, Kind: types.MintSubsidy,
-						Amount: sub, FullPrice: sub,
-					})
-					row.claim = len(claims) - 1
-					row.subsidy = true
-				}
-			}
+		if claim != nil {
+			claims = append(claims, *claim)
+			row.claim = len(claims) - 1
 		}
 		rows = append(rows, row)
 	}
@@ -154,6 +115,66 @@ func (k Keeper) closeEpoch(ctx sdk.Context, epoch uint64) error {
 		}
 	}
 	return nil
+}
+
+// challengeSubject names a challenge row in the failure counters: its node id when the key
+// parses, the raw key otherwise.
+func challengeSubject(id string) string {
+	_, _, nodeID, err := parseChallengeID(id)
+	if err != nil {
+		return "challenge/" + id
+	}
+	return nodeID
+}
+
+// scoreRecord turns one closed-epoch challenge into a settlement row and, when the proof earns a
+// protocol or subsidy mint, the claim to feed the mint plan. It reads state and writes none.
+func (k Keeper) scoreRecord(ctx sdk.Context, id string, rec types.ChallengeRecord, rate math.LegacyDec) (scored, *types.MintClaim, error) {
+	dealID, slotIdx, nodeID, err := parseChallengeID(id)
+	if err != nil {
+		return scored{}, nil, err
+	}
+	slot, err := k.loadSlot(ctx, dealID, slotIdx)
+	if err != nil {
+		return scored{}, nil, err
+	}
+	deal, err := k.loadDeal(ctx, dealID)
+	if err != nil {
+		return scored{}, nil, err
+	}
+	row := scored{
+		nodeID: nodeID,
+		dealID: dealID,
+		slot:   slotIdx,
+		proved: rec.Proved,
+		escrow: math.ZeroInt(),
+		claim:  -1,
+	}
+	// A proof is paid only while the node that proved it still holds the
+	// slot. A slot released or re-bound before the epoch closed has no
+	// operator to pay for this proof; minting for it would strand coins.
+	paid := rec.Proved && slot.NodeId == nodeID && slot.Operator != ""
+	if !paid {
+		return row, nil, nil
+	}
+	row.operator = slot.Operator
+	if !deal.Protocol {
+		row.escrow = deal.PricePerEpoch
+	}
+	var claim *types.MintClaim
+	switch {
+	case deal.Protocol && deal.Class == types.DealClass_DEAL_CLASS_ARCHIVE:
+		claim = &types.MintClaim{Operator: slot.Operator, Kind: types.MintArchive, Amount: deal.PricePerEpoch, FullPrice: deal.PricePerEpoch}
+	case deal.Protocol && deal.Class == types.DealClass_DEAL_CLASS_PUBLIC_PIN:
+		claim = &types.MintClaim{Operator: slot.Operator, Kind: types.MintProtocol, Amount: deal.PricePerEpoch, FullPrice: deal.PricePerEpoch}
+	case !deal.Protocol && deal.Class == types.DealClass_DEAL_CLASS_PRIVATE:
+		sub := types.EpochSubsidyDemand(deal.PricePerEpoch, rate, 0)
+		if sub.IsPositive() {
+			claim = &types.MintClaim{Operator: slot.Operator, Kind: types.MintSubsidy, Amount: sub, FullPrice: sub}
+			row.subsidy = true
+		}
+	}
+	return row, claim, nil
 }
 
 // reserveMints has x/emission mint the epoch's whole storage payment into the
@@ -253,7 +274,7 @@ func (k Keeper) SettleQueue(ctx sdk.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to load settlement %d: %w", head, err)
 		}
-		if err := k.applySettlement(ctx, p, item); err != nil {
+		if err := k.settleOne(ctx, p, item); err != nil {
 			return fmt.Errorf("settlement %d: %w", head, err)
 		}
 		if err := k.Queue.Remove(ctx, head); err != nil {
@@ -266,6 +287,43 @@ func (k Keeper) SettleQueue(ctx sdk.Context) error {
 		n++
 	}
 	return k.QueueHead.Set(ctx, head)
+}
+
+// settleOne applies one queue row on its own cache branch. A row that cannot be applied (the
+// operator cannot be paid, a module account is short, the deal or slot record is unreadable) is
+// dropped: its writes are rolled back, a storage_item_failed event and the node's settlement
+// failure count report it, and the queue moves on. Returning the error instead would fail
+// EndBlock, and with it FinalizeBlock on every validator, over one node's payout.
+//
+// A dropped row pays nothing: the deal keeps the escrow the row would have moved, which returns
+// to the client when the deal expires, and any subsidy or protocol mint reserved for the row is
+// burned so the storage account keeps holding exactly the mint payments still queued.
+func (k Keeper) settleOne(ctx sdk.Context, p types.Params, item types.Settlement) error {
+	subject := item.NodeId
+	if subject == "" {
+		subject = dealSubject(item.DealId)
+	}
+	failed, err := k.isolate(ctx, FailureKindSettlement, subject, func(c sdk.Context) error {
+		return k.applySettlement(c, p, item)
+	})
+	if err != nil {
+		return err
+	}
+	if failed && item.MintPay.IsPositive() {
+		k.burnDroppedMint(ctx, item)
+	}
+	return nil
+}
+
+func (k Keeper) burnDroppedMint(ctx sdk.Context, item types.Settlement) {
+	if err := k.bank.BurnCoins(ctx, types.ModuleName, coins(item.MintPay)); err != nil {
+		k.Logger(ctx).Error("failed to burn the mint reserved for a dropped settlement", "seq", item.Seq, "amount", item.MintPay.String(), "err", err)
+		ctx.EventManager().EmitEvent(sdk.NewEvent("storage_dropped_mint_unburned",
+			sdk.NewAttribute("seq", fmt.Sprintf("%d", item.Seq)),
+			sdk.NewAttribute("amount", item.MintPay.String()),
+			sdk.NewAttribute("error", err.Error()),
+		))
+	}
 }
 
 func (k Keeper) applySettlement(ctx sdk.Context, p types.Params, item types.Settlement) error {
@@ -296,14 +354,14 @@ func (k Keeper) applySettlement(ctx sdk.Context, p types.Params, item types.Sett
 			return err
 		}
 	}
-	credited, err := k.payItem(ctx, &deal, item)
+	paid, err := k.payItem(ctx, &deal, item)
 	if err != nil {
 		return err
 	}
 	if err := k.saveDeal(ctx, deal); err != nil {
 		return err
 	}
-	return k.noteService(ctx, p, item, credited)
+	return k.noteService(ctx, p, item, paid)
 }
 
 func (k Keeper) applyMiss(ctx sdk.Context, p types.Params, deal types.Deal, slot types.Slot) error {
@@ -347,51 +405,54 @@ func (k Keeper) applyMiss(ctx sdk.Context, p types.Params, deal types.Deal, slot
 	return k.saveSlot(ctx, slot)
 }
 
-func (k Keeper) payItem(ctx sdk.Context, deal *types.Deal, item types.Settlement) (credited bool, err error) {
+func (k Keeper) payItem(ctx sdk.Context, deal *types.Deal, item types.Settlement) (paid math.Int, err error) {
 	if item.Operator == "" {
-		return false, nil
+		return math.ZeroInt(), nil
 	}
+	paid = math.ZeroInt()
 	operator, err := parseAddr(item.Operator)
 	if err != nil {
-		return false, err
+		return math.ZeroInt(), err
 	}
 	if item.EscrowPay.IsPositive() {
 		if deal.Escrow.LT(item.EscrowPay) {
-			return false, fmt.Errorf("deal %d escrow %s cannot cover %s", deal.Id, deal.Escrow, item.EscrowPay)
+			return math.ZeroInt(), fmt.Errorf("deal %d escrow %s cannot cover %s", deal.Id, deal.Escrow, item.EscrowPay)
 		}
 		deal.Escrow = deal.Escrow.Sub(item.EscrowPay)
-		if err := k.payService(ctx, types.EscrowModuleName, operator, item.EscrowPay); err != nil {
-			return false, err
+		got, err := k.payService(ctx, types.EscrowModuleName, operator, item.EscrowPay)
+		if err != nil {
+			return math.ZeroInt(), err
 		}
-		credited = true
+		paid = paid.Add(got)
 	}
 	if item.MintPay.IsPositive() {
 		// Minted when the epoch closed (reserveMints); paid from that reserve.
-		if err := k.payService(ctx, types.ModuleName, operator, item.MintPay); err != nil {
-			return false, err
+		got, err := k.payService(ctx, types.ModuleName, operator, item.MintPay)
+		if err != nil {
+			return math.ZeroInt(), err
 		}
+		paid = paid.Add(got)
 		cur, err := k.epochMinted(ctx, item.Epoch)
 		if err != nil {
-			return false, err
+			return math.ZeroInt(), err
 		}
 		if err := k.EpochMinted.Set(ctx, item.Epoch, cur.Add(item.MintPay)); err != nil {
-			return false, err
+			return math.ZeroInt(), err
 		}
 		if item.Subsidy {
 			already, err := k.operatorMinted(ctx, item.Epoch, item.Operator)
 			if err != nil {
-				return false, err
+				return math.ZeroInt(), err
 			}
 			if err := k.OperatorMinted.Set(ctx, collections.Join(item.Epoch, item.Operator), already.Add(item.MintPay)); err != nil {
-				return false, err
+				return math.ZeroInt(), err
 			}
 		}
-		credited = true
 	}
 	if item.ArchiveTopUp.IsPositive() {
 		fund, err := k.ArchiveFund.Get(ctx)
 		if err != nil {
-			return false, err
+			return math.ZeroInt(), err
 		}
 		top := item.ArchiveTopUp
 		if top.GT(fund) {
@@ -399,52 +460,60 @@ func (k Keeper) payItem(ctx sdk.Context, deal *types.Deal, item types.Settlement
 		}
 		if top.IsPositive() {
 			if err := k.bank.SendCoinsFromModuleToModule(ctx, types.ArchiveModuleName, types.ModuleName, coins(top)); err != nil {
-				return false, fmt.Errorf("failed to draw archive top-up: %w", err)
+				return math.ZeroInt(), fmt.Errorf("failed to draw archive top-up: %w", err)
 			}
 			if err := k.ArchiveFund.Set(ctx, fund.Sub(top)); err != nil {
-				return false, err
+				return math.ZeroInt(), err
 			}
-			if err := k.payService(ctx, types.ModuleName, operator, top); err != nil {
-				return false, err
+			got, err := k.payService(ctx, types.ModuleName, operator, top)
+			if err != nil {
+				return math.ZeroInt(), err
 			}
-			credited = true
+			paid = paid.Add(got)
 		}
 	}
-	return credited, nil
+	return paid, nil
 }
 
-func (k Keeper) payService(ctx sdk.Context, source string, operator sdk.AccAddress, amount math.Int) error {
+// payService pays amount from source through the C2 service split and returns what reached the
+// operator's earnings.
+func (k Keeper) payService(ctx sdk.Context, source string, operator sdk.AccAddress, amount math.Int) (math.Int, error) {
 	bal := k.bank.GetBalance(ctx, authtypes.NewModuleAddress(source), params.BaseDenom).Amount
 	if bal.LT(amount) {
-		return fmt.Errorf("module %s holds %s, need %s to pay %s", source, bal, amount, operator)
+		return math.ZeroInt(), fmt.Errorf("module %s holds %s, need %s to pay %s", source, bal, amount, operator)
 	}
 	toProvider, burn, archive := types.SplitServicePayment(amount)
 	if toProvider.IsPositive() {
 		if err := k.earnings.CreditEarnings(ctx, source, operator, coin(toProvider)); err != nil {
-			return fmt.Errorf("failed to credit earnings: %w", err)
+			return math.ZeroInt(), fmt.Errorf("failed to credit earnings: %w", err)
 		}
 	}
 	if burn.IsPositive() {
 		if err := k.bank.BurnCoins(ctx, source, coins(burn)); err != nil {
-			return fmt.Errorf("failed to burn service share: %w", err)
+			return math.ZeroInt(), fmt.Errorf("failed to burn service share: %w", err)
 		}
 	}
 	if archive.IsPositive() {
 		if err := k.bank.SendCoinsFromModuleToModule(ctx, source, types.ArchiveModuleName, coins(archive)); err != nil {
-			return fmt.Errorf("failed to fund archive: %w", err)
+			return math.ZeroInt(), fmt.Errorf("failed to fund archive: %w", err)
 		}
 		fund, err := k.ArchiveFund.Get(ctx)
 		if err != nil {
-			return err
+			return math.ZeroInt(), err
 		}
 		if err := k.ArchiveFund.Set(ctx, fund.Add(archive)); err != nil {
-			return err
+			return math.ZeroInt(), err
 		}
 	}
-	return nil
+	return toProvider, nil
 }
 
-func (k Keeper) noteService(ctx sdk.Context, p types.Params, item types.Settlement, credited bool) error {
+// noteService records that the node served. paid is what the settlement credited to the operator's
+// earnings; a probation node's record deposit is taken from it (C7: "their record deposit is taken
+// from their first earnings"). The deposit fills progressively, min(remaining, paid) per credit,
+// so a node whose first payouts are smaller than probation_deposit is never asked for money it has
+// not earned yet.
+func (k Keeper) noteService(ctx sdk.Context, p types.Params, item types.Settlement, paid math.Int) error {
 	if item.NodeId == "" {
 		return nil
 	}
@@ -453,17 +522,54 @@ func (k Keeper) noteService(ctx sdk.Context, p types.Params, item types.Settleme
 		return err
 	}
 	state.EverProved = true
-	if credited && state.Probation && !state.Graduated && !state.DepositLocked {
-		op, err := parseAddr(item.Operator)
+	if paid.IsPositive() && state.Probation && !state.Graduated {
+		var opened bool
+		failed, err := k.isolate(ctx, FailureKindDeposit, item.NodeId, func(c sdk.Context) error {
+			var derr error
+			opened, derr = k.fundProbationDeposit(c, p, item.NodeId, item.Operator, paid)
+			return derr
+		})
 		if err != nil {
 			return err
 		}
-		if err := k.deposits.LockDeposit(ctx, op, probationDepositID(item.NodeId), p.ProbationDeposit); err != nil {
-			return fmt.Errorf("failed to lock probation deposit for %s: %w", item.NodeId, err)
+		if !failed && opened {
+			state.DepositLocked = true
 		}
-		state.DepositLocked = true
 	}
 	return k.Nodes.Set(ctx, item.NodeId, state)
+}
+
+// fundProbationDeposit adds min(probation_deposit - held, paid) to the node's record deposit,
+// opening the deposit on the first credit. It reports whether it opened the deposit. A failure
+// here never blocks the payout that triggered it: the caller rolls this back alone and the deposit
+// is topped up from the next credit.
+func (k Keeper) fundProbationDeposit(ctx sdk.Context, p types.Params, nodeID, operator string, paid math.Int) (opened bool, err error) {
+	id := probationDepositID(nodeID)
+	held, found, err := k.deposits.DepositAmount(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("failed to read probation deposit of %s: %w", nodeID, err)
+	}
+	if !found {
+		held = math.ZeroInt()
+	}
+	take := math.MinInt(p.ProbationDeposit.Sub(held), paid)
+	if !take.IsPositive() {
+		return false, nil
+	}
+	if found {
+		if err := k.deposits.TopUpDeposit(ctx, id, take); err != nil {
+			return false, fmt.Errorf("failed to top up probation deposit of %s: %w", nodeID, err)
+		}
+		return false, nil
+	}
+	op, err := parseAddr(operator)
+	if err != nil {
+		return false, err
+	}
+	if err := k.deposits.LockDeposit(ctx, op, id, take); err != nil {
+		return false, fmt.Errorf("failed to lock probation deposit for %s: %w", nodeID, err)
+	}
+	return true, nil
 }
 
 func (k Keeper) epochMinted(ctx sdk.Context, epoch uint64) (math.Int, error) {
@@ -494,25 +600,35 @@ func (k Keeper) operatorMinted(ctx sdk.Context, epoch uint64, operator string) (
 	return v, nil
 }
 
+// countActiveOperators counts the distinct operators of active tracked nodes. A node whose
+// x/nodes record cannot be read is left out of the count and reported through the failure
+// counters; it does not fail the epoch close that asks for the count.
 func (k Keeper) countActiveOperators(ctx sdk.Context) (uint64, error) {
-	seen := map[string]struct{}{}
-	err := k.Nodes.Walk(ctx, nil, func(id string, _ types.NodeState) (bool, error) {
-		active, err := k.nodes.IsActive(ctx, id)
-		if err != nil {
-			return false, err
-		}
-		if !active {
-			return false, nil
-		}
-		op, err := k.nodes.Operator(ctx, id)
-		if err != nil {
-			return false, err
-		}
-		seen[op] = struct{}{}
+	var ids []string
+	if err := k.Nodes.Walk(ctx, nil, func(id string, _ types.NodeState) (bool, error) {
+		ids = append(ids, id)
 		return false, nil
-	})
-	if err != nil {
+	}); err != nil {
 		return 0, fmt.Errorf("failed to count active operators: %w", err)
+	}
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		var op string
+		var active bool
+		failed, err := k.isolate(ctx, FailureKindOperators, id, func(c sdk.Context) error {
+			var rerr error
+			if active, rerr = k.nodes.IsActive(c, id); rerr != nil || !active {
+				return rerr
+			}
+			op, rerr = k.nodes.Operator(c, id)
+			return rerr
+		})
+		if err != nil {
+			return 0, err
+		}
+		if !failed && active {
+			seen[op] = struct{}{}
+		}
 	}
 	return uint64(len(seen)), nil
 }
@@ -538,35 +654,41 @@ func (k Keeper) expireDeals(ctx sdk.Context, epoch uint64) error {
 		if pending > 0 {
 			continue
 		}
-		deal, err := k.loadDeal(ctx, id)
-		if err != nil {
-			return err
-		}
-		slots, err := k.dealSlots(ctx, id)
-		if err != nil {
-			return err
-		}
-		for i := range slots {
-			if err := k.detachSlot(ctx, &slots[i]); err != nil {
-				return err
-			}
-			slots[i].Status = types.SlotStatus_SLOT_STATUS_UNASSIGNED
-			if err := k.saveSlot(ctx, slots[i]); err != nil {
-				return err
-			}
-		}
-		if err := k.returnEscrow(ctx, &deal); err != nil {
-			return err
-		}
-		deal.Status = types.DealStatus_DEAL_STATUS_EXPIRED
-		if err := k.saveDeal(ctx, deal); err != nil {
-			return err
-		}
-		if err := k.Pending.Remove(ctx, id); err != nil {
+		if _, err := k.isolate(ctx, FailureKindDeal, dealSubject(id), func(c sdk.Context) error {
+			return k.expireDeal(c, id)
+		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (k Keeper) expireDeal(ctx sdk.Context, id uint64) error {
+	deal, err := k.loadDeal(ctx, id)
+	if err != nil {
+		return err
+	}
+	slots, err := k.dealSlots(ctx, id)
+	if err != nil {
+		return err
+	}
+	for i := range slots {
+		if err := k.detachSlot(ctx, &slots[i]); err != nil {
+			return err
+		}
+		slots[i].Status = types.SlotStatus_SLOT_STATUS_UNASSIGNED
+		if err := k.saveSlot(ctx, slots[i]); err != nil {
+			return err
+		}
+	}
+	if err := k.returnEscrow(ctx, &deal); err != nil {
+		return err
+	}
+	deal.Status = types.DealStatus_DEAL_STATUS_EXPIRED
+	if err := k.saveDeal(ctx, deal); err != nil {
+		return err
+	}
+	return k.Pending.Remove(ctx, id)
 }
 
 func (k Keeper) expireProbation(ctx sdk.Context, epoch uint64) error {
@@ -584,12 +706,14 @@ func (k Keeper) expireProbation(ctx sdk.Context, epoch uint64) error {
 		return err
 	}
 	for _, state := range due {
-		if !state.EverProved {
-			if err := k.nodes.Jail(ctx, state.NodeId); err != nil {
-				return fmt.Errorf("failed to jail probation node %s: %w", state.NodeId, err)
+		if _, err := k.isolate(ctx, FailureKindProbation, state.NodeId, func(c sdk.Context) error {
+			if !state.EverProved {
+				if err := k.nodes.Jail(c, state.NodeId); err != nil {
+					return fmt.Errorf("failed to jail probation node %s: %w", state.NodeId, err)
+				}
 			}
-		}
-		if err := k.endProbation(ctx, state, state.EverProved); err != nil {
+			return k.endProbation(c, state, state.EverProved)
+		}); err != nil {
 			return err
 		}
 	}
@@ -611,9 +735,15 @@ func (k Keeper) maybeProtocolDeals(ctx sdk.Context, epoch uint64) error {
 	if last == epoch {
 		return nil
 	}
+	// The epoch counts as scheduled even when a deal could not be created: retrying it in every
+	// later block would repeat the same failure, and the failure is reported per class.
 	for _, class := range []types.DealClass{types.DealClass_DEAL_CLASS_ARCHIVE, types.DealClass_DEAL_CLASS_PUBLIC_PIN} {
-		payload := protocolPayload(epoch, class, p.ProtocolPieceBytes)
-		if _, err := k.CreateProtocolDeal(ctx, class, payload, p.ProtocolPricePerEpoch, p.ProtocolDurationEpochs); err != nil {
+		subject := fmt.Sprintf("protocol/%s", class.String())
+		if _, err := k.isolate(ctx, FailureKindDeal, subject, func(c sdk.Context) error {
+			payload := protocolPayload(epoch, class, p.ProtocolPieceBytes)
+			_, err := k.CreateProtocolDeal(c, class, payload, p.ProtocolPricePerEpoch, p.ProtocolDurationEpochs)
+			return err
+		}); err != nil {
 			return err
 		}
 	}

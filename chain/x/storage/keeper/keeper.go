@@ -59,6 +59,8 @@ type Keeper struct {
 	ProbationOp    collections.Map[string, uint64]
 	ProbationNet   collections.Map[string, uint64]
 	ProbationASN   collections.Map[uint32, uint64]
+	// Failures counts, per node and kind, the consecutive blocks a node's work was rolled back.
+	Failures collections.Map[collections.Pair[string, string], uint64]
 }
 
 // NewKeeper builds a keeper. None of the interfaces may be nil once a block runs.
@@ -107,6 +109,7 @@ func NewKeeper(
 		ProbationOp:       collections.NewMap(sb, types.ProbationOpPrefix, "probation_op", collections.StringKey, collections.Uint64Value),
 		ProbationNet:      collections.NewMap(sb, types.ProbationNetPrefix, "probation_net", collections.StringKey, collections.Uint64Value),
 		ProbationASN:      collections.NewMap(sb, types.ProbationASNPrefix, "probation_asn", collections.Uint32Key, collections.Uint64Value),
+		Failures:          collections.NewMap(sb, types.FailuresPrefix, "failures", collections.PairKeyCodec(collections.StringKey, collections.StringKey), collections.Uint64Value),
 	}
 	schema, err := sb.Build()
 	if err != nil {

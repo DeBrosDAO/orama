@@ -87,6 +87,17 @@ type wiringNode struct {
 // addStorageNode registers an operator and a STORAGE node, bonds the minimum and declares capacity.
 func (c *wiringChain) addStorageNode(id, endpoint string, asn uint32) wiringNode {
 	c.t.Helper()
+	return c.registerStorageNode(id, endpoint, asn, true)
+}
+
+// addProbationNode registers a STORAGE node with no bond: a fee-free probation registration.
+func (c *wiringChain) addProbationNode(id, endpoint string, asn uint32) wiringNode {
+	c.t.Helper()
+	return c.registerStorageNode(id, endpoint, asn, false)
+}
+
+func (c *wiringChain) registerStorageNode(id, endpoint string, asn uint32, bonded bool) wiringNode {
+	c.t.Helper()
 	n := wiringNode{
 		id:       id,
 		operator: sdk.AccAddress(ed25519.GenPrivKey().PubKey().Address()),
@@ -119,6 +130,13 @@ func (c *wiringChain) addStorageNode(id, endpoint string, asn uint32) wiringNode
 			Endpoints: []string{endpoint}, Asn: asn,
 		})
 		require.NoError(c.t, err)
+		if !bonded {
+			_, err = srv.DeclareCapacity(ctx, &nodestypes.MsgDeclareCapacity{
+				Operator: n.operator.String(), NodeId: id, CapacityBytes: wiringCapacity,
+			})
+			require.NoError(c.t, err)
+			return
+		}
 		_, err = srv.BondNode(ctx, &nodestypes.MsgBondNode{
 			Operator: n.operator.String(), NodeId: id, Role: nodestypes.RoleStorage, Amount: math.NewInt(params.NoramaPerOrama),
 		})

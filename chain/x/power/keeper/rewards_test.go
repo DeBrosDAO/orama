@@ -156,3 +156,30 @@ func TestDistributeEpochRewards_delegatorsPaidProRata(t *testing.T) {
 	require.Equal(t, math.NewInt(300), f.Earnings.credited[delegatorAddr.String()])
 	_ = params.BaseDenom
 }
+
+// A validator whose reward cannot be paid must not fail the epoch close: its share goes back to
+// the source module, x/power's account still ends empty, and the failure is reported.
+func TestDistributeEpochRewards_anUnpayableValidatorDoesNotHaltTheEpoch(t *testing.T) {
+	f := newTestFixture(t)
+	memberAddr := setupSingleCommitteeGenesis(t, f)
+	// No force-bond: the fake bank does not roll back a transfer made on a discarded branch.
+	p, err := f.Keeper.Params.Get(f.Ctx)
+	require.NoError(t, err)
+	p.ForceBondFraction = math.LegacyZeroDec()
+	require.NoError(t, f.Keeper.Params.Set(f.Ctx, p))
+	f.Emission.epoch = 1
+	f.Bank.fund(testEmissionModule, math.NewInt(1_000))
+	f.Earnings.failFor = memberAddr.String()
+
+	distributed, err := f.Keeper.DistributeEpochRewards(f.Ctx, f.Emission, testEmissionModule, math.NewInt(1_000))
+	require.NoError(t, err)
+	require.True(t, distributed.IsZero(), "nothing was paid")
+	require.Equal(t, math.NewInt(1_000), f.Bank.balanceOf(testEmissionModule), "the unpaid share is back in the source module")
+	require.True(t, f.Bank.balanceOf("power").IsZero(), "x/power's account ends empty")
+	require.Empty(t, f.Earnings.credited)
+	var reported bool
+	for _, e := range f.Ctx.EventManager().Events() {
+		reported = reported || e.Type == "power_reward_failed"
+	}
+	require.True(t, reported)
+}

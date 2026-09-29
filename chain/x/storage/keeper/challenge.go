@@ -3,6 +3,7 @@ package keeper
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	"cosmossdk.io/collections"
 
@@ -75,8 +76,15 @@ func (k Keeper) openChallenges(ctx sdk.Context, epoch uint64) error {
 	}); err != nil {
 		return err
 	}
+	ids := make([]string, 0, len(nodes))
 	for nodeID := range nodes {
-		if err := k.openNodeChallenges(ctx, epoch, nodeID, p.KC); err != nil {
+		ids = append(ids, nodeID)
+	}
+	sort.Strings(ids)
+	for _, nodeID := range ids {
+		if _, err := k.isolate(ctx, FailureKindChallenge, nodeID, func(c sdk.Context) error {
+			return k.openNodeChallenges(c, epoch, nodeID, p.KC)
+		}); err != nil {
 			return err
 		}
 	}

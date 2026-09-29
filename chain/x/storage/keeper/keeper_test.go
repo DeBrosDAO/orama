@@ -133,6 +133,8 @@ type fakeEarnings struct {
 	bal  map[string]math.Int
 	// funded records every FundBondFromEarnings call, in order.
 	funded []fundCall
+	// failCredit makes CreditEarnings fail for this operator address.
+	failCredit string
 }
 
 type fundCall struct {
@@ -149,6 +151,9 @@ func (e *fakeEarnings) FundBondFromEarnings(_ context.Context, addr sdk.AccAddre
 func (e *fakeEarnings) CreditEarnings(_ context.Context, sender string, addr sdk.AccAddress, amt sdk.Coin) error {
 	if !amt.IsPositive() {
 		return nil
+	}
+	if e.failCredit != "" && e.failCredit == addr.String() {
+		return errf("earnings account of %s is unavailable", addr)
 	}
 	if err := e.bank.SendCoinsFromModuleToModule(context.Background(), sender, "fees", sdk.NewCoins(amt)); err != nil {
 		return err
@@ -175,9 +180,14 @@ type fakeDeposits struct {
 	locked   map[string]math.Int
 	owner    map[string]string
 	released []string
+	// failLock makes LockDeposit and TopUpDeposit fail.
+	failLock bool
 }
 
 func (d *fakeDeposits) LockDeposit(_ context.Context, owner sdk.AccAddress, id string, amount math.Int) error {
+	if d.failLock {
+		return errf("deposit ledger unavailable")
+	}
 	if !amount.IsPositive() {
 		return errf("deposit amount must be positive")
 	}
@@ -195,6 +205,32 @@ func (d *fakeDeposits) LockDeposit(_ context.Context, owner sdk.AccAddress, id s
 	d.locked[id] = amount
 	d.owner[id] = owner.String()
 	return nil
+}
+
+func (d *fakeDeposits) TopUpDeposit(_ context.Context, id string, extra math.Int) error {
+	if d.failLock {
+		return errf("deposit ledger unavailable")
+	}
+	held, ok := d.locked[id]
+	if !ok {
+		return errf("deposit %s missing", id)
+	}
+	owner := d.owner[id]
+	cur := d.earnings.bal[owner]
+	if cur.IsNil() || cur.LT(extra) {
+		return errf("insufficient earnings for deposit %s top-up", id)
+	}
+	d.earnings.bal[owner] = cur.Sub(extra)
+	if err := d.bank.SendCoinsFromModuleToModule(context.Background(), "fees", "fees_deposits", sdk.NewCoins(sdk.NewCoin(params.BaseDenom, extra))); err != nil {
+		return err
+	}
+	d.locked[id] = held.Add(extra)
+	return nil
+}
+
+func (d *fakeDeposits) DepositAmount(_ context.Context, id string) (math.Int, bool, error) {
+	amt, ok := d.locked[id]
+	return amt, ok, nil
 }
 
 func (d *fakeDeposits) ReleaseDeposit(_ context.Context, id string) (math.Int, math.Int, error) {
@@ -490,4 +526,12 @@ func bytesOf(n int, b byte) []byte {
 
 func errf(format string, args ...any) error {
 	return fmt.Errorf(format, args...)
+}
+
+func eventTypes(ctx sdk.Context) []string {
+	var out []string
+	for _, e := range ctx.EventManager().Events() {
+		out = append(out, e.Type)
+	}
+	return out
 }
