@@ -2113,6 +2113,8 @@ A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
 health-gate failure marked bad.
 
+A validator (--role validator) is never auto: the mode is refused.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--bad` | `false` | candidate was marked bad by a failed health gate |
@@ -2122,6 +2124,7 @@ health-gate failure marked bad.
 | `--degraded` | `false` | cluster is already degraded |
 | `--healthy-voters` | `2` | raft voters that are up |
 | `--mode` | `notify` | off, notify, or auto |
+| `--role` | `cluster` | this node's role: cluster or validator |
 | `--verify` | — | simulated TUF failure: rollback, freeze, threshold, or hash |
 | `--voters` | `3` | raft voters |
 | `--window` | — | maintenance window as start-end hours, for example 1-5 |

@@ -196,11 +196,29 @@ prints `upgrade` only when the cluster is not degraded, a majority of raft
 voters are up, the candidate is a newer dotted version on the cluster's
 channel, and the hour is inside `--window` when one is set. A downgrade, a
 release marked `--bad`, and a TUF failure (`--verify rollback|freeze|threshold|hash`)
-print `refuse`. Installing is still one node at a time: `pkg/autoupdate`
-holds a single lease (`autoupdate` in `cluster_locks`) and rolls a failed
-health gate back through the steps that ran. This command does not take that
-lease and does not restart a node. `max_parallel` is 1; a higher value is
+print `refuse`. `--role validator` with `--mode auto` is an error: a
+validator may be `off` or `notify`, never `auto`. This command does not take
+a lease and does not restart a node. `max_parallel` is 1; a higher value is
 rejected.
+
+**Auto-update install (library).** `autoupdate.Upgrade` is what installs a
+release on one node once the decision is `upgrade`. It refuses any mode but
+`auto` and any validator. It runs the caller's verification first (the A4 TUF
+check of the archive, `releaseverify.CheckFile`); a failure there changes
+nothing. Then: the caller's stop, and for each binary a stage step (the
+verified file copied beside the live one as `<name>.next`, with the live
+binary's mode and owner, synced) and a swap step (the live binary hard-linked
+to `<name>.prev`, then `<name>.next` renamed over it, so the path is never
+missing), the caller's start (a failed start is stopped again), and the
+`pkg/nodehealth` gate — the same check `orama node start` and `orama node
+upgrade` wait on. A failure undoes what ran, last first (stop, each `.prev`
+renamed back, start), and reads the gate again; the error says whether the
+node came back on the previous release. `<name>.prev` stays after a
+successful swap. The rollout lease (`autoupdate.LockName`) is not taken by
+`Upgrade`; the caller must hold it. Nothing in the CLI calls `Upgrade` yet:
+there is no timer, no metadata fetch, and no command that installs through
+it, and it does not re-apply file capabilities (`setcap`) to a swapped
+binary.
 
 **Push.** `orama push` uploads into a fresh `mktemp -d` directory on each node
 and runs the node's **installed** CLI, `/usr/local/bin/orama node

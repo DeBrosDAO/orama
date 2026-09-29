@@ -11,8 +11,8 @@ import (
 )
 
 // The check does not install anything. Mode auto still only prints upgrade:
-// swapping binaries is the rollout lock and health gate in pkg/autoupdate,
-// which a caller runs after this decision, one node at a time.
+// installing is autoupdate.Upgrade, which a caller runs after this decision
+// while it holds the rollout lock, one node at a time.
 var autoupdateCmd = &cobra.Command{
 	Use:   "autoupdate",
 	Short: "Decide whether a newer release should be installed",
@@ -25,7 +25,9 @@ install itself is one node at a time and is not performed by this command.
 
 A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
-health-gate failure marked bad.`,
+health-gate failure marked bad.
+
+A validator (--role validator) is never auto: the mode is refused.`,
 	Args: cobra.NoArgs,
 	RunE: runAutoupdate,
 }
@@ -41,6 +43,7 @@ var (
 	auBad       bool
 	auVerify    string
 	auWindow    string
+	auRole      string
 )
 
 func init() {
@@ -53,6 +56,7 @@ func init() {
 	autoupdateCmd.Flags().IntVar(&auHealthy, "healthy-voters", 2, "raft voters that are up")
 	autoupdateCmd.Flags().BoolVar(&auBad, "bad", false, "candidate was marked bad by a failed health gate")
 	autoupdateCmd.Flags().StringVar(&auVerify, "verify", "", "simulated TUF failure: rollback, freeze, threshold, or hash")
+	autoupdateCmd.Flags().StringVar(&auRole, "role", autoupdate.RoleCluster, "this node's role: cluster or validator")
 	autoupdateCmd.Flags().StringVar(&auWindow, "window", "", "maintenance window as start-end hours, for example 1-5")
 	Cmd.AddCommand(autoupdateCmd)
 }
@@ -64,6 +68,7 @@ func runAutoupdate(cmd *cobra.Command, _ []string) error {
 	settings := autoupdate.DefaultSettings()
 	settings.Mode = auMode
 	settings.Channel = auChannel
+	settings.Role = auRole
 	if auWindow != "" {
 		var start, end int
 		if _, err := fmt.Sscanf(auWindow, "%d-%d", &start, &end); err != nil {

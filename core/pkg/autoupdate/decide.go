@@ -1,9 +1,13 @@
-// Package autoupdate decides whether a node may install a newer release.
+// Package autoupdate decides whether a node may install a newer release,
+// and installs one on this node when it may.
 //
-// It does not download, swap binaries, or restart services. The caller does
-// that, and only after Decide says upgrade and the rollout lock is held.
-// A cluster whose mode is off or notify never reaches that step. The default
-// mode is notify.
+// Decide says what to do. Upgrade does it: it verifies the release, swaps
+// the binaries with an atomic rename each, restarts through the caller's
+// stop and start, and gates on pkg/nodehealth, rolling back on failure.
+// It does not download anything and does not take the rollout lock; the
+// caller holds the lock before it calls Upgrade. A node whose mode is off
+// or notify never reaches Upgrade, and a validator never runs auto. The
+// default mode is notify.
 package autoupdate
 
 import (
@@ -20,7 +24,7 @@ const (
 	// ModeOff does not look for a release.
 	ModeOff = "off"
 	// ModeNotify reports a newer release and does not install it. This is the
-	// default, including for a validator.
+	// default. A validator may use notify or off, never auto.
 	ModeNotify = "notify"
 	// ModeAuto installs, one node at a time, inside the maintenance window.
 	ModeAuto = "auto"
@@ -29,6 +33,15 @@ const (
 	ActionNotify  = "notify"
 	ActionUpgrade = "upgrade"
 	ActionRefuse  = "refuse"
+
+	// RoleCluster is a private-cluster node. It may run auto.
+	RoleCluster = "cluster"
+	// RoleValidator is a global chain validator. It is never auto: its
+	// operator stages each chain upgrade explicitly.
+	RoleValidator = "validator"
+
+	// defaultChannel is the channel a cluster follows before it chooses.
+	defaultChannel = "stable"
 )
 
 // Settings is the cluster's auto-update policy. MaxParallel is fixed at 1:
@@ -42,11 +55,13 @@ type Settings struct {
 	// auto may run at any hour. A start after the end wraps midnight.
 	WindowStart int
 	WindowEnd   int
+	// Role is this node's role: RoleCluster or RoleValidator.
+	Role string
 }
 
 // DefaultSettings is what a cluster does before an operator chooses.
 func DefaultSettings() Settings {
-	return Settings{Mode: ModeNotify, Channel: "stable", MaxParallel: 1}
+	return Settings{Mode: ModeNotify, Channel: defaultChannel, MaxParallel: 1, Role: RoleCluster}
 }
 
 // Health is what Decide needs to know about the cluster. Voters is the raft
@@ -116,6 +131,15 @@ func (s Settings) validate() error {
 	case ModeOff, ModeNotify, ModeAuto:
 	default:
 		return fmt.Errorf("auto-update mode %q is not off, notify, or auto", s.Mode)
+	}
+	switch s.Role {
+	case RoleCluster:
+	case RoleValidator:
+		if s.Mode == ModeAuto {
+			return fmt.Errorf("auto-update mode auto is refused for a validator; use notify and stage chain upgrades explicitly")
+		}
+	default:
+		return fmt.Errorf("node role %q is not %s or %s", s.Role, RoleCluster, RoleValidator)
 	}
 	if s.MaxParallel != 1 {
 		return fmt.Errorf("max_parallel is %d; only 1 is allowed", s.MaxParallel)
