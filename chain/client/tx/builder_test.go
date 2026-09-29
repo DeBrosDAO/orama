@@ -17,6 +17,7 @@ import (
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	"github.com/cosmos/cosmos-sdk/crypto/hd"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
+	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	signing "github.com/cosmos/cosmos-sdk/types/tx/signing"
@@ -383,4 +384,55 @@ func signWithKey(t *testing.T, cfg client.TxConfig, msg sdk.Msg, priv *secp256k1
 	bz, err := cfg.TxEncoder()(bld.GetTx())
 	require.NoError(t, err)
 	return bz
+}
+
+// agentSigner signs through a function, the way a signing agent does: the builder never sees a key.
+type agentSigner struct {
+	acc  oramatx.Account
+	sign func([]byte) ([]byte, error)
+}
+
+func (a agentSigner) AccountAddress() string { return a.acc.AccountAddress() }
+
+func (a agentSigner) PublicKey() cryptotypes.PubKey { return a.acc.PublicKey() }
+
+func (a agentSigner) Sign(b []byte) ([]byte, error) { return a.sign(b) }
+
+func TestBuildWith_agentSignerProducesTheSameTxAsAnAccount(t *testing.T) {
+	b := newBuilder(t)
+	from, to := mustAccount(t), mustAccount(t)
+	unsigned := oramatx.Unsigned{
+		ChainID: "orama-localnet-txbuilder-1", AccountNumber: 1, Sequence: 2, GasLimit: 100_000,
+		Fee: sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 100)),
+		Msgs: []sdk.Msg{banktypes.NewMsgSend(mustAccAddress(t, from.Address), mustAccAddress(t, to.Address),
+			sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 5)))},
+	}
+	want, err := b.Build(from, unsigned)
+	require.NoError(t, err)
+
+	var signed [][]byte
+	got, err := b.BuildWith(agentSigner{acc: from, sign: func(msg []byte) ([]byte, error) {
+		signed = append(signed, msg)
+		return from.Sign(msg)
+	}}, unsigned)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Len(t, signed, 1, "the agent is asked once, for the sign bytes")
+}
+
+func TestBuildWith_refusesASignerThatIsNotTheMessageSigner(t *testing.T) {
+	b := newBuilder(t)
+	from, other := mustAccount(t), mustAccount(t)
+	_, err := b.BuildWith(other, oramatx.Unsigned{
+		ChainID: "orama-localnet-txbuilder-1", GasLimit: 1,
+		Fee: sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1)),
+		Msgs: []sdk.Msg{banktypes.NewMsgSend(mustAccAddress(t, from.Address), mustAccAddress(t, other.Address),
+			sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1)))},
+	})
+	require.ErrorIs(t, err, oramatx.ErrNotSigner)
+}
+
+func TestBuildWith_refusesASignerWithoutAPublicKey(t *testing.T) {
+	_, err := newBuilder(t).BuildWith(oramatx.Account{}, oramatx.Unsigned{ChainID: "c"})
+	require.Error(t, err)
 }

@@ -501,6 +501,73 @@ Two related orderings changed in the same commit:
 - **Namespace systemd templates install before the services that use them.** Phase 5 starts `orama-node`, whose first act is to start `orama-namespace-wireguard@index`; with no template installed systemd answers `Unit ... not found` and the supervisor exits. Install used to depend on systemd's restart loop to converge past that. Any missing or unwritable template is now fatal and the error names it.
 - **Install and upgrade seed no DNS records.** They used to write `ns1`..`ns3` NS records, an `ns1` SOA and apex/wildcard A records on every run, whatever slots the cluster had. `orama-node`'s DNS component owns the zone: each `--nameserver` node claims an `nsN` slot and writes its glue and its apex/wildcard A records, and the NS set and SOA follow the glued slots, on the sweep 30 seconds after it starts (see [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md)).
 
+### Stagenet: the chain and the global services
+
+`chain/scripts/stagenet/deploy.sh` deploys the L1 chain and the global services (provider, archiver, indexer,
+public Kubo) to the three stagenet nodes (`athena`, `superman`, `poseidon`, ssh aliases from `~/.ssh/config`)
+through the product's own commands, so the stagenet deploy exercises the code operators run. It is separate from
+the cluster deploy above: `orama build`, `orama node push` and `orama node upgrade --env stagenet` deploy the
+private-cluster node, and the global services are installed beside it, co-located in the `orama-global` network
+namespace ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md), "Sharing a machine with a cluster node"). The cluster must
+already be installed on each node. The script never starts, stops or reconfigures a cluster service. What it
+changes on a node: the `orama-global-*` units and state, the namespace, veth and nftables rulesets and the ufw
+rules tagged `orama-global`, `net.ipv4.ip_forward`, and the two lines (`role: both`, `global_netns`) that the
+install adds to the cluster's `/opt/orama/.orama/preferences.yaml`. It refuses to run for a `CHAIN_ID` that does
+not contain `-stagenet-` or `-devnet-`.
+
+Requirements on this machine: `make`, Go, zig and the Rust toolchain (`make build-linux-amd64-full`), `python3`,
+`curl` and `ssh` access to the nodes. On each node: `ip` (iproute2), `nft`, `python3`, an **active** ufw (the install
+refuses an inactive one, and enabling it would change the cluster's firewall, so the script does not), and systemd
+242 or newer.
+
+```bash
+cd chain/scripts/stagenet
+
+./deploy.sh reset      # remove any earlier global install (also the legacy direct-unit one) and its state
+./deploy.sh up         # build, stage, build the genesis, orama global install --colocated, orama global start
+./deploy.sh status
+./deploy.sh register   # after 2 epochs: operator, node, bonds, hot key, capacity, then provider and archiver
+./deploy.sh invariants
+./deploy.sh gen-shielded                      # optional: the shielded wallet scenario for this chain
+SHIELDED_SCENARIO=build/stagenet-shielded-scenario.json ./deploy.sh smoke
+```
+
+`up` builds `oramad` (`make build-linux-amd64-full`), `orama-global` and the `stagenet-node` helper
+(`make build-linux-amd64-global`) and the linux `orama` CLI, downloads Kubo v0.38.2 and cosmovisor v1.7.3 from their
+official releases into `chain/build/stagenet-cache` and checks the pinned digests, stages a root-owned release
+directory (`/root/orama-global-release`) on each node, and runs `orama global install --colocated --services
+chain,ipfs,provider,archiver` (plus `indexer` on athena) twice: first with `--init-chain` and a placeholder genesis
+so each node creates its own keys, then, once the script has built the real genesis from the three public keys and
+put it in place, with `--persistent-peers`. The keys are generated on the node and never copied off it. The chain
+peers over the nodes' **public** addresses, because the namespace cannot reach the WireGuard mesh. `orama global
+start chain ipfs` (plus `indexer` on athena) then starts the chain first and waits for its RPC; the provider and
+archiver need a node id, so `register` starts them once it has written it.
+
+`register` waits until the chain is at epoch 2 (polled), then, for each node, runs the commands an operator runs
+with a wallet, on the node: it registers the operator, generates the hot-key binding and registers the node with
+the STORAGE and ARCHIVER roles, the declared ASN and the provider endpoint, bonds both roles from the operator's
+earnings, funds the hot key and declares the capacity. The `orama` commands ask the RootWallet agent to sign; on the
+node `stagenet-node agent` answers instead, fed the operator's test-keyring key over a pipe on the node for the
+length of the run (stagenet only: the keyring is unencrypted). See [CHAIN.md](CHAIN.md), "The stagenet deploy
+script", for why each step is what it is.
+
+`smoke` prints PASS, FAIL or SKIP for each check and exits non-zero if any failed. A SKIP names an environmental
+cause the script detected in the chain's state and is never used to hide a failure.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHAIN_ID` | `orama-stagenet-1` | must contain `-stagenet-` or `-devnet-` |
+| `ASN_athena`, `ASN_superman`, `ASN_poseidon` | `16276` | the ASN each node declares; the true one (all three are OVH). Protocol deals need distinct ASNs per slot, so with one shared ASN the ARCHIVE deals stay unassigned |
+| `PUBLIC_STORAGE_GB` | `10` | capacity each provider declares, and the size of its public Kubo |
+| `STORAGE_BOND_NORAMA` | the least that backs the capacity | 1 ORAMA of bond backs 1 GiB |
+| `ARCHIVER_BOND_NORAMA` | `1000000000` | 1 ORAMA, the role minimum |
+| `HOT_KEY_FUND_NORAMA` | `2000000000` | fee-only balance of each hot key |
+| `TX_GAS`, `TX_FEE` | `600000`, `1500000` | gas limit and fee of each `orama global` transaction |
+| `EPOCH_DURATION`, `EPOCH_MIN_BLOCKS`, `VOTE_EXTENSIONS_ENABLE_HEIGHT` | `300s`, `10`, `2` | genesis |
+| `CA_FILE` | `/Users/pen/orama-stagenet-handoff/le-staging-roots.pem` | CA bundle that signs the gateway's certificate |
+| `GATEWAY_URL` | `https://stagenet.dbrsteting.bid` | the gateway `smoke` reads through |
+| `SHIELDED_SCENARIO` | unset | scenario JSON from `gen-shielded`; without it the shielded check is a SKIP |
+
 ### What runs on a node
 
 The installer enables **only** `orama-node`. That unit is the supervisor: it starts `orama-namespace-*@index` (WireGuard, IPFS, rqlite, olric, pubsub, gateway, vault, Caddy, …) and, on `--nameserver` nodes, `orama-namespace-coredns@nameserver`. Tenant clusters are `orama-namespace-{rqlite,olric,gateway}@<name>`.

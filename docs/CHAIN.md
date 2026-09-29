@@ -2231,8 +2231,9 @@ points, which cannot run.
 - A caller-chosen deposit cap: the per-transaction cap is a locked genesis parameter, not something a signer can set.
 - Any way for a contract to spend the earnings credited to its own address.
 - A `wasmpolicy` query service or CLI for the ledger and its invariants.
-- The native stagenet deploy has not been run with the combined binary: `deploy.sh` builds it (linked, not
-  executed here) and was checked with `bash -n`; the same genesis was run on a localnet with the host build.
+- The stagenet deploy has not been run against the nodes: `deploy.sh` builds the combined binary (linked, not
+  executed here), installs it through `orama global install --colocated`, and was checked with `bash -n` and
+  shellcheck, its Go helpers with unit tests; the same genesis was run on a localnet with the host build.
 
 ## `x/shielded`: the Ironwood shielded pool
 
@@ -2576,8 +2577,8 @@ or `oramad-linux-amd64-full`, and `orama-orchard-verifier-linux-amd64` with its
 pin), so a release's oramad runs exactly the verifier built with it and no other file. `native/`
 carries the orchard library (with the note-commitment tree function) as an rlib of the one static
 library; the verifier binary is a separate crate and is not part of it.
-`scripts/stagenet/deploy.sh` installs both: the binary goes in the root-owned `BIN_DIR` next to
-`oramad`, and the unit passes `--shielded-verifier $BIN_DIR/orama-orchard-verifier`. `orama build`
+`scripts/stagenet/deploy.sh` installs both: the verifier goes in the chain home's `bin/`, root-owned, which is where
+oramad looks by default (`--shielded-verifier` names another path); `orama global install` does not stage it. `orama build`
 does not build `oramad`; these targets are the release path, and `make build` is unchanged and
 produces nodes that accept no shielded bundle. All were built and linked for linux/amd64 on
 macOS/arm64; they were not run on linux.
@@ -2786,7 +2787,7 @@ genesis; a second run with the same `oramad` bytes is a no-op, and different
 bytes are refused: a consensus-breaking binary goes in with `stage-oramad
 --upgrade <plan>`. There is no installed path for a patch release that changes no
 consensus behaviour (the B6 updater is not built): stage it as an upgrade plan.
-The stagenet deploy script below still writes its own unit that runs `oramad` directly.
+The stagenet deploy script below installs through this command.
 
 Binaries enter the layout through `orama global install` (the genesis binary, verified only by the bytes the operator staged) and `orama global stage-oramad` (run as root, TUF-verified):
 
@@ -2821,31 +2822,80 @@ runs `stage-oramad` for every upgrade.
 
 ## The stagenet deploy script
 
-`chain/scripts/stagenet/deploy.sh up|status|invariants|reset` is the deployment path for the
-project's own stagenet nodes, which run the chain over their WireGuard mesh with a genesis the
-script builds. It drives its own systemd unit directly. A global-role node is installed with
-`orama global install` instead ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md)), which has no
-WireGuard dependency and does not build a genesis. It refuses to run unless `CHAIN_ID` contains `-stagenet-` or
-`-devnet-`, builds `oramad` with the same `-trimpath`/version `ldflags` as `make build`, transfers
-it gzip-compressed straight into `sudo install` via `/dev/stdin` (no intermediate file of any name,
-predictable or not, ever touches the remote disk), and validates every value it reads back from a
-remote command (a validator address, a node ID, a consensus pubkey) against a strict format before
-ever using it to build another remote command. Its genesis sets `vote_extensions_enable_height` to 2
-(`VOTE_EXTENSIONS_ENABLE_HEIGHT`), so stagenet runs inclusion lists. The binary is `make build-linux-amd64-full`: one static musl binary with libwasmvm and the Orchard
-verifier, built from source (see "Native library" under "`x/wasm`: contracts"), because the genesis
-stores the standard contracts (`genesis add-standard-contracts`, see "`x/wasm`: contracts"). Genesis is built the same zero-supply,
-bootstrap-committee way the localnet script uses: each node's consensus pubkey is extracted
-remotely with `oramad comet show-validator | python3 -c '...["key"]'` (reading only the *public*
-half of `priv_validator_key.json` - its private key material never leaves the node, or touches this
-script's own disk) and fed to `genesis add-bootstrap-validator --consensus-pubkey-base64` on the
-first node. `reset` fully tears a node down - including one left over from an
-aborted `up` (binary and/or state present but no systemd unit yet, or vice versa) - by removing the
-unit, the state directory and the binary, each step tolerating the thing it removes already being
-absent. `invariants` runs `oramad query <module> invariants` for emission, fees, storage,
-nodes, relay, houses and token on every node and fails if a query fails or any check is false.
-Like the localnet script, its genesis flow uses `keyring-backend test` (an unencrypted,
-on-disk keyring): appropriate for a devnet/stagenet operator key that holds no real value, never
-for anything that does.
+`chain/scripts/stagenet/deploy.sh reset|up|start|status|invariants|register|smoke|gen-shielded` deploys the
+project's stagenet nodes through the product's own install path, so a stagenet deploy exercises the code
+operators run: `orama global install --colocated`, `orama global start`, and `orama global bind`, `register`,
+`bond` and `capacity`. Each stagenet machine already runs a private-cluster node, so the global services are
+installed co-located, in the `orama-global` network namespace ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md),
+"Sharing a machine with a cluster node"); the script never starts, stops or reconfigures a cluster service.
+The procedure, the environment variables and the order of the commands are in
+[DEV_DEPLOY.md](DEV_DEPLOY.md), "Stagenet: the chain and the global services".
+
+What the script does that the docs of the individual commands do not say:
+
+- **Guards.** It refuses to run unless `CHAIN_ID` contains `-stagenet-` or `-devnet-`, and validates every value
+  it reads back from a node (a validator address, a node id, a consensus pubkey) and every environment value
+  before it reaches a remote command line, which is built with `printf %q` quoting.
+- **Binaries.** `oramad` is `make build-linux-amd64-full` (CosmWasm and the Orchard verifier in one static
+  binary, see "Native library" under "`x/wasm`: contracts") beside the pinned `orama-orchard-verifier`;
+  `orama-global` and the `stagenet-node` helper are `make build-linux-amd64-global`; the `orama` CLI is
+  `make -C core build-linux`. Kubo v0.38.2 and cosmovisor v1.7.3 are downloaded from their official releases
+  and checked against pinned digests before anything is staged: Kubo's sha512 is the release's published
+  `.sha512` file and its sha256 the digest GitHub reports for the asset; the cosmovisor sha256 is the one
+  `core/pkg/constants/cosmovisor.go` pins, and the script checks the two agree.
+- **Two install runs.** The genesis needs each node's own consensus key, which exists only once the chain home
+  does. The first run of `orama global install --init-chain` therefore uses a placeholder genesis of the right
+  chain id and creates the keys; the script then builds the real genesis from the three nodes' public keys
+  (in a scratch home on the first node, so no key leaves a node), replaces the placeholder, and runs the same
+  install again with `--persistent-peers`. Running the command twice with the same flags is a supported no-op
+  apart from the units it rewrites. The peers are the nodes' **public** addresses: the namespace cannot reach
+  the WireGuard mesh.
+- **Genesis.** Zero supply, a bootstrap committee of the three nodes, the five standard contracts, a 300 s
+  epoch and 10 blocks per epoch, a finite `max_gas`, and `vote_extensions_enable_height` 2
+  (`VOTE_EXTENSIONS_ENABLE_HEIGHT`), so stagenet runs inclusion lists.
+- **The shielded verifier.** `orama global install` stages `oramad` and `orama` but not
+  `orama-orchard-verifier`. oramad looks for it at `<home>/bin/orama-orchard-verifier` when `--shielded-verifier`
+  is not given, and the global chain unit does not give it, so the script installs the pinned file there, root's
+  and mode 0755 (the sha256 linked into oramad is what binds it). A node without it accepts no shielded bundle.
+- **`register`.** After the chain has run two epochs (polled, not slept) it registers, per node: the operator
+  (`MsgRegisterOperator`, which no `orama` command builds, so `stagenet-node register-operator` sends it), the
+  hot-key binding (`orama global bind`), the node with STORAGE and ARCHIVER roles, the declared ASN and the
+  provider endpoint (`orama global register`), both role bonds from earnings (`orama global bond`), the hot key's
+  fee-only balance (`MsgFundHotKey`) and the capacity (`orama global capacity`). A node has one hot key: the
+  provider's, which the script copies to the archiver's home before the archiver is pointed at a node id.
+  The `orama` commands sign through the RootWallet agent protocol; on a stagenet node
+  `stagenet-node agent` stands in for the agent, serving `/v1/orama/tx/sign` on a root-owned unix socket for
+  the run. It is fed the operator key straight from oramad's test keyring over one pipe on the node, so the key
+  is never printed, stored or copied off the node. The keyring is `keyring-backend test` (unencrypted, on disk):
+  appropriate for a devnet/stagenet operator key that holds no real value, never for anything that does.
+  The ASN each node declares is the true one (`ASN_<name>`, default 16276, OVH). Protocol deals, ARCHIVE
+  deals included, give a slot only to a node with a declared ASN distinct from the other slots', so while every
+  provider shares one ASN they stay unassigned; the archive check reports that from chain state as a SKIP.
+- **`reset`.** Stops and disables every `orama-global-*` unit (through `orama global stop` first), removes the
+  namespace layout and the ufw rules tagged `orama-global` as RUN_A_GLOBAL_NODE.md's removal steps say, restores
+  the two lines the install added to the cluster's `preferences.yaml` (`role: both`, `global_netns`), and deletes
+  the `orama-global` state and binary directories, the release directory and the helper. Each step tolerates the
+  thing it removes being absent, and it also removes a legacy install that ran `oramad` under its own unit.
+- **`invariants`.** Runs `oramad query <module> invariants` inside the namespace for every module in
+  `INVARIANT_MODULES` (emission, fees, storage, nodes, relay, houses, token, market, power, shielded) on every
+  node, and fails if a query fails or any check is false.
+- **`smoke`.** `chain/scripts/stagenet/smoke` (`stagenetctl`) runs on the operator's machine and prints PASS,
+  FAIL or SKIP per check: blocks advance and the injected inclusion-list commit starts block 3 and the tip;
+  every module's invariants on every node; the five standard contracts are stored and a CW20 instantiates and
+  transfers; a PRIVATE storage deal through `orama storage seal`, `create`, `put`, `get` and `open` with slots on
+  three distinct providers and proofs accepted over an epoch; the first archive range is attested by three
+  operators, its ARCHIVE deals opened, and it is archived (SKIP with the cause when the deals stay unassigned
+  because the providers share an ASN, and when the chain is below height 1000, the archiver's range width);
+  the shielded wallet scenario; and `/v1/chain/query` on the gateway returns each node's x/nodes record, over TLS
+  with the staging CA. The chain's RPC and REST API listen on loopback inside the namespace, so it reaches
+  them over ssh with a small python bridge run in the namespace, and it signs through the same agent, forwarded
+  over a unix socket, so no key reaches the operator's machine. Every transaction of a stagenet account is paid
+  from earnings: a stagenet account holds no bank balance (zero supply, and users cannot send norama to each
+  other), so a shield is `MsgShieldEarnings`.
+- **`gen-shielded`.** Builds the wallet scenario for this chain: `gen_scenario` reads
+  `ORAMA_SCENARIO_CHAIN_ID`, `ORAMA_SCENARIO_UNSHIELD_SIGNER`, `ORAMA_SCENARIO_SCALE` and `ORAMA_SCENARIO_FEE`
+  (all unset gives the committed localnet scenario byte for byte), and `stagenetctl shielded-env` sizes the
+  transfer fee to the chain's action gas, base fee and nullifier fee.
 
 ## Deviations from the task spec, and why
 

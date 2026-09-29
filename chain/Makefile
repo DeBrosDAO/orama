@@ -23,7 +23,7 @@ BUILD_FLAGS := -trimpath -ldflags "$(LDFLAGS)"
 WASMVM_DIR := $(shell go list -m -f '{{.Dir}}' github.com/CosmWasm/wasmvm/v3 2>/dev/null)
 LIBWASMVM := $(firstword $(wildcard $(WASMVM_DIR)/internal/api/libwasmvm.dylib $(WASMVM_DIR)/internal/api/libwasmvm.aarch64.so $(WASMVM_DIR)/internal/api/libwasmvm.x86_64.so))
 
-.PHONY: build build-wasm contracts-verify test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 proto-shielded orchard-verifier orchard-verifier-linux-amd64 orchard-test build-linux-amd64-orchard orchard-smoke orchard-smoke-linux-amd64 native-lib-linux-amd64 build-linux-amd64-full
+.PHONY: build build-wasm contracts-verify test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 proto-shielded orchard-verifier orchard-verifier-linux-amd64 orchard-test build-linux-amd64-orchard orchard-smoke orchard-smoke-linux-amd64 native-lib-linux-amd64 build-linux-amd64-full build-linux-amd64-global
 
 ## build: cross-compile oramad for linux/amd64, darwin/amd64 and darwin/arm64.
 ## CGO_ENABLED=0 and -tags nowasm: these binaries are static and do not include CosmWasm.
@@ -175,6 +175,15 @@ build-linux-amd64-full: native-lib-linux-amd64 orchard-verifier-linux-amd64
 		CXX="$(ORAMA_ZIG) c++ -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
 		go build -tags "muslc orchardffi netgo osusergo" -trimpath -ldflags "$(LDFLAGS) $(VERIFIER_PIN_LDFLAG) -linkmode external -extldflags -static" \
 		-o $(BUILD_DIR)/$(BINARY)-linux-amd64-full $(PKG)
+
+## build-linux-amd64-global: the static linux/amd64 orama-global (the provider, archiver, indexer and repair
+## services that run beside oramad, staged by `orama global install`) and stagenet-node (the helper
+## scripts/stagenet/deploy.sh runs on a stagenet node: signing agent, operator registration). Both are pure Go,
+## so no native library is involved.
+build-linux-amd64-global:
+	mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nowasm $(BUILD_FLAGS) -o $(BUILD_DIR)/orama-global-linux-amd64 ./cmd/orama-global
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nowasm $(BUILD_FLAGS) -o $(BUILD_DIR)/stagenet-node-linux-amd64 ./scripts/stagenet/node
 
 ## chain-test: alias for test, matching plans/open-network/track-c-chain.md's `make chain-test`.
 chain-test: test

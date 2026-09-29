@@ -66,6 +66,13 @@ type Client struct {
 // Dial connects to an oramad RPC address such as tcp://127.0.0.1:31001.
 // It does not open a websocket; every read is a request.
 func Dial(rpcAddr string) (*Client, error) {
+	return DialWith(rpcAddr)
+}
+
+// DialWith is Dial for a caller that submits messages of modules the client does not register by
+// itself (x/nodes, x/wasm, x/shielded): each function registers one module's interfaces, for
+// example nodestypes.RegisterInterfaces.
+func DialWith(rpcAddr string, extra ...func(codectypes.InterfaceRegistry)) (*Client, error) {
 	if strings.TrimSpace(rpcAddr) == "" {
 		return nil, errors.New("chain rpc address is empty")
 	}
@@ -73,7 +80,11 @@ func Dial(rpcAddr string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open chain rpc %s: %w", rpcAddr, err)
 	}
-	enc, err := newEncoding()
+	regs := make([]register, len(extra))
+	for i, fn := range extra {
+		regs[i] = fn
+	}
+	enc, err := newEncoding(regs...)
 	if err != nil {
 		return nil, err
 	}
@@ -246,14 +257,14 @@ func (c *Client) baseFee(ctx context.Context) (math.Int, error) {
 // for that gas with no tip, broadcasts, and waits until a block includes the
 // transaction. It returns the tx hash. A CheckTx or DeliverTx failure is an
 // error that carries the chain's log.
-func (c *Client) Submit(ctx context.Context, account tx.Account, msgs ...sdk.Msg) (string, error) {
+func (c *Client) Submit(ctx context.Context, account tx.Signer, msgs ...sdk.Msg) (string, error) {
 	hash, _, err := c.SubmitWithEvents(ctx, account, msgs...)
 	return hash, err
 }
 
 // SubmitWithEvents is Submit that also returns the events the transaction emitted, for a caller
 // that needs an id the chain assigned (a deal id).
-func (c *Client) SubmitWithEvents(ctx context.Context, account tx.Account, msgs ...sdk.Msg) (string, []abci.Event, error) {
+func (c *Client) SubmitWithEvents(ctx context.Context, account tx.Signer, msgs ...sdk.Msg) (string, []abci.Event, error) {
 	if len(msgs) == 0 {
 		return "", nil, errors.New("no messages to submit")
 	}
@@ -261,7 +272,7 @@ func (c *Client) SubmitWithEvents(ctx context.Context, account tx.Account, msgs 
 	if err != nil {
 		return "", nil, err
 	}
-	number, seq, err := c.account(ctx, account.Address)
+	number, seq, err := c.account(ctx, account.AccountAddress())
 	if err != nil {
 		return "", nil, err
 	}
@@ -279,9 +290,26 @@ func (c *Client) SubmitWithEvents(ctx context.Context, account tx.Account, msgs 
 	}
 	unsigned.GasLimit = gas
 	unsigned.Fee = sdk.NewCoins(sdk.NewCoin(params.BaseDenom, feeFor(gas, base)))
-	raw, err := c.builder.Build(account, unsigned)
+	raw, err := c.builder.BuildWith(account, unsigned)
 	if err != nil {
 		return "", nil, fmt.Errorf("sign transaction: %w", err)
+	}
+	return c.broadcast(ctx, raw)
+}
+
+// SubmitSignerless broadcasts msg as a transaction with no signature and no fee, declaring exactly
+// gas, and waits until a block includes it. It is the path of a message the protocol admits without
+// a signer (x/shielded's MsgShieldedTransfer, which must be alone in its transaction); the chain
+// refuses any other message sent this way.
+func (c *Client) SubmitSignerless(ctx context.Context, gas uint64, msg sdk.Msg) (string, []abci.Event, error) {
+	b := c.txConfig.NewTxBuilder()
+	if err := b.SetMsgs(msg); err != nil {
+		return "", nil, fmt.Errorf("build the transaction: %w", err)
+	}
+	b.SetGasLimit(gas)
+	raw, err := c.txConfig.TxEncoder()(b.GetTx())
+	if err != nil {
+		return "", nil, fmt.Errorf("encode the transaction: %w", err)
 	}
 	return c.broadcast(ctx, raw)
 }
@@ -296,8 +324,8 @@ func feeFor(gas uint64, base math.Int) math.Int {
 	return math.OneInt()
 }
 
-func (c *Client) simulate(ctx context.Context, account tx.Account, unsigned tx.Unsigned) (uint64, error) {
-	raw, err := c.builder.Build(account, unsigned)
+func (c *Client) simulate(ctx context.Context, account tx.Signer, unsigned tx.Unsigned) (uint64, error) {
+	raw, err := c.builder.BuildWith(account, unsigned)
 	if err != nil {
 		return 0, fmt.Errorf("sign transaction for simulation: %w", err)
 	}

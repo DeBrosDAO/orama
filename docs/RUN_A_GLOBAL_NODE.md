@@ -434,6 +434,11 @@ was written in.
   update path for a chain patch that changes no consensus behaviour.
 - An `orama global update-node` (`MsgUpdateNode`): an ASN is set at
   registration only.
+- An `orama` command for `MsgRegisterOperator`. `register` needs the operator to be registered first, and
+  no CLI command builds that message (the stagenet deploy sends it with its own helper, `stagenet-node`).
+- Staging the shielded verifier. `orama global install` places `oramad` and `orama` but not
+  `orama-orchard-verifier`; oramad looks for it at `/var/lib/orama-global/chain/bin/orama-orchard-verifier`
+  and a node without it accepts no shielded bundle.
 - Removing a service, or its firewall rule, that a later install leaves out; removing the co-located layout.
 - The relay and Tor units.
 - A remote signer (TMKMS, Horcrux) or sentry topology.

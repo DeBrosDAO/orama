@@ -9,7 +9,6 @@
 package tx
 
 import (
-	"bytes"
 	"fmt"
 
 	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -109,10 +108,33 @@ func chainParamsApplied(cfg *sdk.Config) bool {
 		cfg.GetCoinType() == params.CoinType
 }
 
-// signs reports whether signer is this account's address.
-func (a Account) signs(signer []byte) bool {
+// Signer signs SIGN_MODE_DIRECT sign bytes for one account. Account is one, holding its key in
+// memory; a caller whose key lives elsewhere (a signing agent) implements it over that channel.
+type Signer interface {
+	// AccountAddress is the orama bech32 address of the signing account.
+	AccountAddress() string
+	// PublicKey is the account's secp256k1 public key.
+	PublicKey() cryptotypes.PubKey
+	// Sign returns the 64-byte secp256k1 signature over signBytes (the digest is SHA-256, as the
+	// SDK's own PrivKey.Sign takes it).
+	Sign(signBytes []byte) ([]byte, error)
+}
+
+// AccountAddress returns the account's orama bech32 address.
+func (a Account) AccountAddress() string { return a.Address }
+
+// PublicKey returns the account's public key, or nil for an account with no key.
+func (a Account) PublicKey() cryptotypes.PubKey {
 	if a.priv == nil {
-		return false
+		return nil
 	}
-	return bytes.Equal(a.priv.PubKey().Address(), signer)
+	return a.priv.PubKey()
+}
+
+// Sign signs signBytes with the account's key.
+func (a Account) Sign(signBytes []byte) ([]byte, error) {
+	if a.priv == nil {
+		return nil, fmt.Errorf("account has no private key")
+	}
+	return a.priv.Sign(signBytes)
 }

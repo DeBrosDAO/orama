@@ -20,6 +20,9 @@ import (
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
+// register adds one module's interfaces to the client's registry.
+type register func(codectypes.InterfaceRegistry)
+
 type encoding struct {
 	registry codectypes.InterfaceRegistry
 	cdc      codec.Codec
@@ -29,7 +32,7 @@ type encoding struct {
 // newEncoding registers the SDK's standard interfaces, auth accounts, and the
 // messages the global services sign. It is the same TxConfig construction as
 // the app's, over a smaller registry, so the client does not link the node.
-func newEncoding() (encoding, error) {
+func newEncoding(extra ...register) (encoding, error) {
 	registry, err := codectypes.NewInterfaceRegistryWithOptions(codectypes.InterfaceRegistryOptions{
 		ProtoFiles: proto.HybridResolver,
 		SigningOptions: signing.Options{
@@ -44,6 +47,9 @@ func newEncoding() (encoding, error) {
 	authtypes.RegisterInterfaces(registry)
 	storagetypes.RegisterInterfaces(registry)
 	archivetypes.RegisterInterfaces(registry)
+	for _, reg := range extra {
+		reg(registry)
+	}
 	if err := registry.SigningContext().Validate(); err != nil {
 		return encoding{}, fmt.Errorf("validate the signing context: %w", err)
 	}

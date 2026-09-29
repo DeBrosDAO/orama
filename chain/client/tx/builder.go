@@ -76,11 +76,21 @@ func New(txConfig client.TxConfig) (*Builder, error) {
 // Build signs tx with account under SIGN_MODE_DIRECT and returns the encoded
 // bytes. It does not broadcast them.
 func (b *Builder) Build(account Account, tx Unsigned) ([]byte, error) {
+	if account.priv == nil {
+		return nil, errors.New("account has no private key")
+	}
+	return b.BuildWith(account, tx)
+}
+
+// BuildWith is Build for any Signer, so a key held by a signing agent can sign without ever being
+// read into this process.
+func (b *Builder) BuildWith(signer Signer, tx Unsigned) ([]byte, error) {
 	if err := useChainParams(); err != nil {
 		return nil, err
 	}
-	if account.priv == nil {
-		return nil, errors.New("account has no private key")
+	pub := signer.PublicKey()
+	if pub == nil {
+		return nil, errors.New("signer has no public key")
 	}
 	if tx.ChainID == "" {
 		return nil, ErrEmptyChainID
@@ -106,13 +116,13 @@ func (b *Builder) Build(account Account, tx Unsigned) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(signers) != 1 || !account.signs(signers[0]) {
+	if len(signers) != 1 || !bytes.Equal(pub.Address(), signers[0]) {
 		return nil, ErrNotSigner
 	}
 
 	mode := signing.SignMode_SIGN_MODE_DIRECT
 	sig := signing.SignatureV2{
-		PubKey: account.priv.PubKey(),
+		PubKey: pub,
 		Data: &signing.SingleSignatureData{
 			SignMode: mode,
 		},
@@ -126,11 +136,11 @@ func (b *Builder) Build(account Account, tx Unsigned) ([]byte, error) {
 	}
 
 	signerData := authsigning.SignerData{
-		Address:       account.Address,
+		Address:       signer.AccountAddress(),
 		ChainID:       tx.ChainID,
 		AccountNumber: tx.AccountNumber,
 		Sequence:      tx.Sequence,
-		PubKey:        account.priv.PubKey(),
+		PubKey:        pub,
 	}
 	signBytes, err := authsigning.GetSignBytesAdapter(
 		context.Background(), b.txConfig.SignModeHandler(), mode, signerData, builder.GetTx(),
@@ -138,7 +148,7 @@ func (b *Builder) Build(account Account, tx Unsigned) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	sigBytes, err := account.priv.Sign(signBytes)
+	sigBytes, err := signer.Sign(signBytes)
 	if err != nil {
 		return nil, err
 	}

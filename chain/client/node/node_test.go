@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -15,8 +16,12 @@ import (
 
 	"cosmossdk.io/math"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	authsigning "github.com/cosmos/cosmos-sdk/x/auth/signing"
+
 	gogoproto "github.com/cosmos/gogoproto/proto"
 
+	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
 	"github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
@@ -176,4 +181,70 @@ func TestBlockResults_keepsFailedTransactions(t *testing.T) {
 	require.NoError(t, err)
 	_, err = c2.BlockResults(context.Background(), 7)
 	require.ErrorContains(t, err, "block results at 7")
+}
+
+func TestDialWith_registersTheCallersInterfaces(t *testing.T) {
+	plain, err := Dial("http://127.0.0.1:1")
+	require.NoError(t, err)
+	_, err = plain.registry.Resolve("/orama.nodes.v1.MsgRegisterOperator")
+	require.Error(t, err, "the plain client registers no x/nodes message")
+
+	c, err := DialWith("http://127.0.0.1:1", nodestypes.RegisterInterfaces)
+	require.NoError(t, err)
+	_, err = c.registry.Resolve("/orama.nodes.v1.MsgRegisterOperator")
+	require.NoError(t, err)
+}
+
+func TestSubmitSignerless_broadcastsAnUnsignedTxWithExactlyTheGivenGas(t *testing.T) {
+	var sent []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req rpctypes.RPCRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		var params map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(req.Params, &params))
+		var result any
+		switch req.Method {
+		case "broadcast_tx_sync":
+			require.NoError(t, json.Unmarshal(params["tx"], &sent))
+			result = &coretypes.ResultBroadcastTx{Hash: []byte{1, 2, 3}}
+		case "tx":
+			result = &coretypes.ResultTx{Height: 9, TxResult: abci.ExecTxResult{Events: []abci.Event{{Type: "signerless"}}}}
+		default:
+			require.NoError(t, json.NewEncoder(w).Encode(rpctypes.RPCMethodNotFoundError(req.ID)))
+			return
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(rpctypes.NewRPCSuccessResponse(req.ID, result)))
+	}))
+	defer srv.Close()
+	c, err := DialWith(srv.URL, nodestypes.RegisterInterfaces)
+	require.NoError(t, err)
+	c.includeTimeout = 5 * time.Second
+
+	msg := &nodestypes.MsgRegisterOperator{Operator: "orama1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"}
+	_, events, err := c.SubmitSignerless(context.Background(), 20, msg)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.NotEmpty(t, sent, "the transaction reached broadcast_tx_sync")
+
+	decoded, err := c.txConfig.TxDecoder()(sent)
+	require.NoError(t, err)
+	feeTx, ok := decoded.(sdk.FeeTx)
+	require.True(t, ok)
+	require.Equal(t, uint64(20), feeTx.GetGas(), "exactly the declared gas")
+	require.True(t, feeTx.GetFee().IsZero(), "no fee")
+	sigTx, ok := decoded.(authsigning.SigVerifiableTx)
+	require.True(t, ok)
+	sigs, err := sigTx.GetSignaturesV2()
+	require.NoError(t, err)
+	require.Empty(t, sigs, "no signature")
+	require.Len(t, decoded.GetMsgs(), 1)
+}
+
+func TestSubmitSignerless_reportsACheckTxRefusal(t *testing.T) {
+	srv := fakeRPC(t, map[string]any{"broadcast_tx_sync": &coretypes.ResultBroadcastTx{Code: 7, Log: "not a signer-less message", Hash: []byte{9}}})
+	defer srv.Close()
+	c, err := DialWith(srv.URL, nodestypes.RegisterInterfaces)
+	require.NoError(t, err)
+	_, _, err = c.SubmitSignerless(context.Background(), 20, &nodestypes.MsgRegisterOperator{Operator: "orama1x"})
+	require.ErrorContains(t, err, "rejected by CheckTx (code 7)")
 }
