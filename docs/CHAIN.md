@@ -55,6 +55,8 @@ Also unwired: `x/gov`,
 wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`
 build does not link it and refuses a genesis that contains it. `x/wasmpolicy` is always wired:
 upload is closed until `upload_sunset_height`, and a contract cannot bank-send norama to a user.
+The genesis ships five standard contracts, the Orama bindings are linked, and contract state
+carries a deposit: see "`x/wasm`: contracts" below.
 
 **`x/houses` is registered, and it is not the SDK `x/gov` authority.** Stock modules still use
 `app.UnreachableAuthority()`. Every module that the upstream SDK expects to be governed by `x/gov` (upgrade,
@@ -96,7 +98,9 @@ genesis see the display denom without hardcoding it.
 
 A bank send of `norama` from one user account to another is refused, and so is a send from a
 registered contract to a user. Module accounts can still move `norama`, and a user can pay a
-registered contract. No contract address is registered yet. There is no shielded payment path:
+registered contract (a contract is any address wasmd holds a `ContractInfo` for, or is instantiating: it
+moves the attached funds before it registers the contract, so `x/wasmpolicy.WithFundedContract` marks
+that one recipient). There is no shielded payment path:
 proof verification fails closed until a verifier is linked, so a user cannot pay another user at all.
 
 ### Other genesis defaults
@@ -854,7 +858,8 @@ create locks a metadata deposit. `x/nodes` calls the same interface and is regis
 registered and does not lock a listing deposit. A sale credits earnings. `oramad query market
 invariants` checks that the market module account holds exactly the open bids.
 `x/storage` is registered. Its deal escrow is its own module account,
-not this deposit ledger. The per-byte contract deposit meter is not hooked into wasmd's store.
+not this deposit ledger. Contract storage is metered by `x/wasmpolicy` and locks its deposits here
+(`LockDeposit`, `ReleaseDepositPart`): see "`x/wasm`: contracts".
 
 ### Queries
 
@@ -1702,7 +1707,8 @@ announces only pinned content (`Provide.Strategy=pinned` for Kubo v0.38), and
 does not dial or announce private ranges, so it cannot join a cluster's mesh.
 Every setup
 command's output goes to `scripts/localnet/.localnet/setup.log` rather than being discarded, so a
-failure can actually be diagnosed.
+failure can actually be diagnosed. `WITH_WASM=1` builds `oramad` with cgo and libwasmvm and stores the
+standard contracts in genesis (`oramad genesis add-standard-contracts`); the default build has no CosmWasm.
 
 Useful commands against a running localnet (or any `oramad` node):
 
@@ -1956,6 +1962,152 @@ environment proxy, no redirects. Each command run uses one new SOCKS credential,
 circuit, so two transactions never share one. A failed onion path returns the error ("the transaction was not
 sent, and nothing was tried outside Tor") and never falls back to the clearnet. Reads (`orama chain`) do not
 go through Tor yet.
+
+## `x/wasm`: contracts
+
+Code: `chain/x/wasmpolicy` (policy and the deposit ledger), `chain/x/wasmbindings` (the Orama
+bindings), `chain/contracts/standard` (the genesis contracts), `chain/app/wasm_vm.go` and
+`chain/app/wasm_deposit.go` (the wiring, cgo only). This is plans/open-network/track-c-chain.md C9.
+The VM is wasmd v0.70.3 on wasmvm v3.0.7; the binary needs cgo and libwasmvm (`-tags nowasm`
+builds have no contracts and refuse a genesis that has any). There is no IBC, no admin key and no
+`x/gov`; advertised capabilities omit `stargate` and `ibc2` (`WasmCapabilities`).
+
+### Genesis standard contracts
+
+Five contracts are stored in genesis as wasm codes 1 to 5, so they exist from height 1 although
+upload is closed. Nothing is instantiated; anyone can instantiate a code at any time. The code's
+recorded creator is the `wasmpolicy` module account, which no key controls.
+
+| Code | Contract | Upstream source, pinned | cosmwasm-std |
+|---|---|---|---|
+| 1 | CW20 base (`cw20-base` 2.0.0) | CosmWasm/cw-plus tag v2.0.0, `d91c70ea53acf2ac694efa343f3697e7cd165534` | 2.2.2 |
+| 2 | CW721 base (`cw721-base` 0.22.0) | CosmWasm/cw-nfts tag v0.22.0, `b11876a65890cf9ee2201f768e81b0a00ae395e9` | 2.2.1 |
+| 3 | escrow (`cw20-escrow` 0.14.2) | CosmWasm/cw-tokens tag v0.14.2, `1db4b7387953538d7a0123d3732385981d18db57` | 1.5.4 |
+| 4 | CW3 fixed multisig (`cw3-fixed-multisig` 2.0.0) | CosmWasm/cw-plus tag v2.0.0, `d91c70ea53acf2ac694efa343f3697e7cd165534` | 2.2.2 |
+| 5 | vesting (`cw-vesting` 2.7.1) | DA0-DA0/dao-contracts tag v2.7.1, `92c44e593e6a0677a437e028514ce207efbd4d66` | 1.5.4 |
+
+`chain/contracts/standard/manifest.json` records each contract's source tag and commit, its patch,
+the toolchain and the sha256 of its wasm; the wasm files sit in `chain/contracts/standard/wasm/`.
+`Load` refuses a file whose sha256 differs from the manifest. The set is a starting point, and the
+CW20 base is a user token base only: it never wraps norama.
+
+**Reproducible build.** `chain/contracts/standard/build.sh verify` (`make contracts-verify`) fetches each source at its pinned
+commit (and checks the commit), applies its patch, builds with Rust 1.81.0 for `wasm32-unknown-unknown`
+with `--locked`, runs `wasm-opt -Os --signext-lowering` (the official cosmwasm/optimizer's post-step)
+and compares the sha256 with the manifest. `build.sh update` rewrites `wasm/` and the hashes. No prebuilt
+wasm is downloaded. Two builds in different work directories produce the same hashes; that needs the
+same wasm-opt (the manifest pins `wasm-opt version 132`; `ALLOW_TOOL_DRIFT=1` overrides and the hashes
+will then differ).
+
+Why the patches: (1) wasmvm v3.0.7 aborts (a dlmalloc assertion inside the contract) in contracts built
+with cosmwasm-std 2.0.x or 1.1 to 1.3, so the pinned upstream `Cargo.lock` files are updated to
+cosmwasm-std 2.2.2 (cw-plus) and 1.5.4 (cw-tokens); only lock files change. (2) cw-vesting's workspace
+turns on cosmwasm-std's `ibc3` feature, which makes the contract require the `stargate` capability this
+chain does not advertise; the patch removes that one feature. Rust 1.81 is used because rustc 1.87 and later
+emit bulk-memory from the precompiled standard library, which wasmvm rejects.
+
+**Adding them to a genesis.** `oramad genesis add-standard-contracts` adds the five codes to the `wasm`
+genesis, sets wasmd's code sequence to 6, and lists 1..5 in `wasmpolicy`'s `genesis_code_ids`. It refuses
+a genesis that already has wasm codes or a code set, and a binary without libwasmvm (its default genesis
+has no `wasm` module). `chain/scripts/stagenet/deploy.sh` runs it after the bootstrap committee is added
+and builds a wasm-capable static binary (it needs `WASMVM_MUSL_LIB`, the wasmvm release's
+`libwasmvm_muslc.x86_64.a`, which the repo does not vendor). `WITH_WASM=1 make localnet` does the same on a
+localnet with a host cgo build.
+
+**What the standard contracts cannot do with ORAMA.** They run as contracts, so the send restriction
+applies to them. A CW3 multisig proposal that bank-sends ORAMA to a user fails when executed. The escrow
+releases and refunds by bank send, so ORAMA escrowed for a user recipient cannot leave it (it stays in the
+escrow; token and CW20 escrows work). The vesting contract's instantiate for the native denom sends a
+distribution `SetWithdrawAddress`, which is refused, so ORAMA cannot be vested at all; it can vest a user
+token. A contract pays a user ORAMA through the `earnings` binding below.
+
+### Upload
+
+`x/wasmpolicy` holds `upload_sunset_height` (P6: 183 days of 5 s blocks, 3,162,240) in genesis and no
+message can change it. Before that height `MsgStoreCode`, `MsgStoreAndInstantiateContract` and
+`MsgStoreAndMigrateContract` are refused by the ante chain (`UploadSunsetDecorator`, matched by type
+URL: wasmd's generated types carry no `XXX_MessageName`); from that height on they are allowed. Uploaded code
+names no code id, so even the exact bytes of a genesis contract are refused before the sunset height.
+Every other message is unaffected: anyone can instantiate a stored code at any time. A contract cannot
+upload code: `CosmosMsg` has no such variant.
+
+### The send restriction and contract messages
+
+`norama` moves between accounts only when one side is a module account or the recipient is a contract
+(`x/shielded/policy.NoramaSendRestriction`, with `isContract` bound to wasmd's `HasContractInfo`, and
+`x/wasmpolicy/ante.ContractSendDecorator`, which allows every module account). So a user can pay a
+contract, a contract can pay a contract or a module (the token, market and storage bindings pull
+fees and escrow that way) and a contract cannot pay a user. `BankMsg::Send` to a module account is refused
+by bank's blocked-address rule. wasmd's instantiate moves the attached funds before it registers the
+contract, so the coin transferrer marks that recipient (`WithFundedContract`) for the one transfer.
+
+The message handler (`wasmbindings.Messenger`) also refuses `CosmosMsg::Any`, which is how the stargate
+form arrives, and distribution `SetWithdrawAddress`. IBC messages are refused as before. A contract reaches
+a module only through the bindings.
+
+### Orama bindings
+
+A contract sends `CosmosMsg::Custom` with a JSON object of exactly one variant (unknown fields are
+refused) and queries with `QueryRequest::Custom`. The contract's own address is the signer of every message,
+there is no sender field, and the message goes through the module's own Msg server: its validation, its
+fee, its deposit and its authority checks all apply.
+
+| Message | Effect |
+|---|---|
+| `{"token":{"create":{...}}}` | `x/token` `MsgCreateToken` with the contract as creator; the creation fee and metadata deposit come from the contract's balance. Refused when the denom is named `norama` |
+| `{"token":{"mint":{"denom","recipient","amount"}}}`, `{"token":{"burn":{"denom","amount"}}}` | mint of a token the contract created and still holds mint authority for; burn from the contract's balance. Refused for `norama` and norama-named tokens |
+| `{"cnft":{"create_collection"\|"create_tree"\|"mint":{...}}}` | `x/cnft`: collections, trees and mints the contract owns (only a tree's creator mints) |
+| `{"market":{"list"\|"cancel_listing"\|"bid"\|"cancel_bid"\|"settle":{...}}}` | `x/market` with the contract as seller, bidder or settler. Bid escrow comes from the contract's balance; sale proceeds are credited to the contract's earnings |
+| `{"storage":{"create_deal":{...}}}` | `x/storage` `MsgCreateDeal` paid from the contract's own funds (never a granter's allowance); protocol classes are refused |
+| `{"earnings":{"pay":{"recipient","amount"}}}` | moves norama from the contract into the recipient's earnings account (`x/fees.PayEarnings`): the only way a contract pays a user in ORAMA |
+| `{"shielded":{...}}` | `NOT_LINKED`. The shielded adapter is the audited unshield, call, reshield flow of C12, not a trivial binding |
+
+Queries: `{"token":{"info":{"denom"}}}`, `{"cnft":{"tree":{"tree_id"}}}`,
+`{"cnft":{"verify_proof":{"tree_id","leaf","proof"}}}` (answers `{"valid":bool,"reason"}`, charged
+20,000 gas plus 3,000 per proof sibling), `{"market":{"listing":{"id"}}}`. wasmd redacts a query error to its
+codespace and code before the contract sees it.
+
+Two consequences to know. Sale proceeds and earnings credited to a contract address cannot be spent by the
+contract: earnings move only for the account's own signer, and a contract has none. And the `stargate`
+and `grpc` query paths stay rejected (wasmd's default), so a contract cannot read any other module.
+
+### State deposits
+
+Contract storage is priced at `deposit_per_byte` (genesis default 68,359 norama per byte, the P3
+price `x/token` and `x/nodes` also use; `x/wasmpolicy` genesis, immutable). `depositEngine` wraps the VM
+engine: each `Instantiate`, `Execute`, `Migrate`, `Sudo` and `Reply` runs against a metered store that counts
+the bytes the call adds to and removes from the contract's storage (an entry weighs key plus value), and on
+success the net change is settled in the ledger:
+
+- **Growth** locks `bytes x deposit_per_byte` in `x/fees` as a new chunk (`wasm/{contract}/{seq}`).
+- **Shrink** releases chunks newest first, each refunded to the account that locked it (99% to its
+  earnings, 1% burned, as for every deposit; a chunk may be released in part with `ReleaseDepositPart`).
+  Only charged bytes are refunded: a contract's state that was never charged, such as any that arrives in
+  a genesis import, refunds nothing.
+- **Who pays.** The message sender when it is a plain account; otherwise the transaction's first signer,
+  which `DepositPayerDecorator` records in the context. A contract never pays. A call with no payer and
+  growth fails.
+- **A call that cannot pay** returns a contract error (`state deposit: ...`) and wasmd reverts it; a failed
+  or reverted call charges nothing.
+- **Gas.** The metered store reads the old value of a key before every write and delete, so each write costs
+  one more store read than an unmetered call. That read and the ledger writes are charged to the
+  transaction like any other state access.
+
+The ledger (`ContractBytes`, `Chunks`) lives in `x/wasmpolicy`'s store and in its genesis
+(`deposit_chunks`); the deposits themselves are `x/fees` deposits, so `x/fees`'s "deposit module balance
+equals open deposits" invariant covers them. `Keeper.CheckInvariants` (wasmpolicy) checks that each
+contract's charged bytes equal the sum of its chunks and that each chunk's `x/fees` deposit exists, has the
+same owner and holds exactly `bytes x per_byte`. It is a keeper method the tests call; the module has no
+query service. Not metered: code storage (upload is closed or priced by gas), contract metadata, and IBC entry
+points, which cannot run.
+
+### Not built here
+
+- A shielded binding (see above).
+- Any way for a contract to spend the earnings credited to its own address.
+- A `wasmpolicy` query service or CLI for the ledger and its invariants.
+- The native stagenet deploy has not been run with a wasm binary: `deploy.sh` needs the musl `libwasmvm`
+  and was checked with `bash -n`; the same genesis was run on a localnet with the host build.
 
 ## `x/shielded`: proof verification
 
@@ -2217,7 +2369,9 @@ it gzip-compressed straight into `sudo install` via `/dev/stdin` (no intermediat
 predictable or not, ever touches the remote disk), and validates every value it reads back from a
 remote command (a validator address, a node ID, a consensus pubkey) against a strict format before
 ever using it to build another remote command. Its genesis sets `vote_extensions_enable_height` to 2
-(`VOTE_EXTENSIONS_ENABLE_HEIGHT`), so stagenet runs inclusion lists. Genesis is built the same zero-supply,
+(`VOTE_EXTENSIONS_ENABLE_HEIGHT`), so stagenet runs inclusion lists. The binary is built with libwasmvm (a static musl build
+linked through zig; `WASMVM_MUSL_LIB` names the release's `libwasmvm_muslc.x86_64.a`), because the genesis
+stores the standard contracts (`genesis add-standard-contracts`, see "`x/wasm`: contracts"). Genesis is built the same zero-supply,
 bootstrap-committee way the localnet script uses: each node's consensus pubkey is extracted
 remotely with `oramad comet show-validator | python3 -c '...["key"]'` (reading only the *public*
 half of `priv_validator_key.json` - its private key material never leaves the node, or touches this
@@ -2252,7 +2406,7 @@ for anything that does.
 - **`app-db-backend` defaults to `pebbledb`, not `goleveldb`** - see the gotcha section above.
   This is a workaround for a real bug in the pinned dependency versions, not a stylistic choice.
 - **`x/bank` refuses user-to-user and contract-to-user `norama` sends.** A user can pay a
-  registered contract. None are registered yet. The shielded pool rules live in
+  contract, and a contract can pay a contract or a module account. The shielded pool rules live in
   `chain/x/shielded`. The Orchard proof verifier links only in the cgo `orchardffi` build, and two
   independent verifiers are required, so a shielded bundle is not accepted either.
   Payments are not private, and they are not possible between users.
@@ -2299,7 +2453,7 @@ for anything that does.
 - **`x/fees`' state-deposit ledger is called by `x/token` and `x/nodes`.** Both are registered.
   `x/cnft` calls the same interface for a tree deposit and is registered.
   `x/storage` is registered and keeps deal escrow in its own module account.
-  The per-byte contract deposit meter is not hooked into wasmd's store.
+  `x/wasmpolicy` meters contract storage and locks its deposits through the same interface.
 - **`x/power.DistributeEpochRewards` iterates every delegation of every validator once per closed
   epoch** (`Keeper.distributeValidatorReward`), rather than using `x/distribution`'s O(1)-per-block
   F1 historical-rewards accumulator. New delegations below `Params.MinDelegationForRewards` are

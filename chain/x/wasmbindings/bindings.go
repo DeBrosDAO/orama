@@ -1,6 +1,12 @@
-// Package wasmbindings holds the Orama contract bindings for modules that are not
-// in this binary yet. The default implementation of every method returns NOT_LINKED.
-// Nothing here imports x/token, x/cnft, x/market, x/storage, or x/shielded.
+// Package wasmbindings is how a CosmWasm contract reaches Orama's modules. A contract sends a
+// CosmosMsg::Custom (a JSON object, see msg.go) and queries with QueryRequest::Custom (query.go).
+// The contract's own address is always the signer: no message names a sender, so a contract can act
+// only for itself. Anything else a contract could reach a module through, CosmosMsg::Any and its
+// stargate form, is refused (messenger.go).
+//
+// x/token, x/cnft, x/market and x/storage are linked. x/shielded is not: its adapter is the
+// audited "unshield, call, reshield" flow that plans/open-network/track-c-chain.md C12 owns, and
+// every shielded message returns NOT_LINKED until that adapter exists.
 package wasmbindings
 
 import "cosmossdk.io/errors"
@@ -13,99 +19,29 @@ const (
 	NotLinkedCode = "NOT_LINKED"
 )
 
-// ErrNotLinked is the coded NOT_LINKED error.
-var ErrNotLinked = errors.Register(ModuleName, 1, NotLinkedCode)
+var (
+	// ErrNotLinked is the coded NOT_LINKED error.
+	ErrNotLinked = errors.Register(ModuleName, 1, NotLinkedCode)
 
-// Token is the x/token binding: create, mint, and burn for tokens the contract administers.
-type Token interface {
-	Create(contract, subdenom string) error
-	Mint(contract, subdenom, to, amount string) error
-	Burn(contract, subdenom, from, amount string) error
-}
+	// ErrBadMessage is returned for a custom message or query that is not valid JSON of exactly one
+	// known variant.
+	ErrBadMessage = errors.Register(ModuleName, 2, "invalid orama binding message")
 
-// CNFT is the x/cnft binding: mint into a tree the contract owns, and verify a proof.
-type CNFT interface {
-	Mint(contract, tree, owner string) error
-	VerifyProof(tree string, proof, leaf []byte) error
-}
-
-// Market is the x/market binding.
-type Market interface {
-	List(contract, listing string) error
-	Bid(contract, listing string) error
-	Settle(contract, listing string) error
-}
-
-// Storage is the x/storage binding: create a deal from the contract's own funds.
-type Storage interface {
-	CreateDeal(contract, cid string) error
-}
+	// ErrDisabledMessage is returned for a CosmosMsg variant this chain does not let a contract send.
+	ErrDisabledMessage = errors.Register(ModuleName, 3, "this cosmos message variant is disabled for contracts")
+)
 
 // Shielded is the x/shielded binding. Contracts never hold notes; they shield
-// from their balance and receive unshield outputs.
+// from their balance and receive unshield outputs. It is not linked.
 type Shielded interface {
 	Shield(contract, amount string) error
 	ReceiveUnshield(contract, amount string) error
 }
 
-// TokenBinding is the default x/token binding.
-type TokenBinding struct{}
-
-// CNFTBinding is the default x/cnft binding.
-type CNFTBinding struct{}
-
-// MarketBinding is the default x/market binding.
-type MarketBinding struct{}
-
-// StorageBinding is the default x/storage binding.
-type StorageBinding struct{}
-
 // ShieldedBinding is the default x/shielded binding.
 type ShieldedBinding struct{}
 
-// Default groups the unwired bindings.
-type Default struct {
-	Token    TokenBinding
-	CNFT     CNFTBinding
-	Market   MarketBinding
-	Storage  StorageBinding
-	Shielded ShieldedBinding
-}
-
-var (
-	_ Token    = TokenBinding{}
-	_ CNFT     = CNFTBinding{}
-	_ Market   = MarketBinding{}
-	_ Storage  = StorageBinding{}
-	_ Shielded = ShieldedBinding{}
-)
-
-// Create returns NOT_LINKED.
-func (TokenBinding) Create(string, string) error { return ErrNotLinked }
-
-// Mint returns NOT_LINKED.
-func (TokenBinding) Mint(string, string, string, string) error { return ErrNotLinked }
-
-// Burn returns NOT_LINKED.
-func (TokenBinding) Burn(string, string, string, string) error { return ErrNotLinked }
-
-// Mint returns NOT_LINKED.
-func (CNFTBinding) Mint(string, string, string) error { return ErrNotLinked }
-
-// VerifyProof returns NOT_LINKED.
-func (CNFTBinding) VerifyProof(string, []byte, []byte) error { return ErrNotLinked }
-
-// List returns NOT_LINKED.
-func (MarketBinding) List(string, string) error { return ErrNotLinked }
-
-// Bid returns NOT_LINKED.
-func (MarketBinding) Bid(string, string) error { return ErrNotLinked }
-
-// Settle returns NOT_LINKED.
-func (MarketBinding) Settle(string, string) error { return ErrNotLinked }
-
-// CreateDeal returns NOT_LINKED.
-func (StorageBinding) CreateDeal(string, string) error { return ErrNotLinked }
+var _ Shielded = ShieldedBinding{}
 
 // Shield returns NOT_LINKED.
 func (ShieldedBinding) Shield(string, string) error { return ErrNotLinked }

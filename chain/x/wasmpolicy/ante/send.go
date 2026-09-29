@@ -8,7 +8,6 @@ import (
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
-	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy"
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
 )
 
@@ -16,8 +15,9 @@ import (
 type IsContract func(ctx context.Context, addr sdk.AccAddress) bool
 
 // ContractSendDecorator stops a contract from bank-sending norama to a user account.
-// A contract may send norama to an allowlisted fee or earnings module account, or to
-// another contract. The same rule is bank's send restriction, so contract submessages
+// A contract may send norama to an allowlisted module account, or to another contract.
+// The chain allowlists every module account: module-to-account keeper sends are how the token,
+// market and storage bindings take a contract's fee, bid or deal escrow. The same rule is bank's send restriction, so contract submessages
 // hit it even when they never appear in the outer tx.
 type ContractSendDecorator struct {
 	isContract IsContract
@@ -34,11 +34,6 @@ func NewContractSendDecorator(isContract IsContract, allowModules []string) Cont
 		allow = append(allow, authtypes.NewModuleAddress(name))
 	}
 	return ContractSendDecorator{isContract: isContract, allow: allow}
-}
-
-// NewFeeEarningsDecorator is the chain's decorator: fees and fees_deposits.
-func NewFeeEarningsDecorator(isContract IsContract) ContractSendDecorator {
-	return NewContractSendDecorator(isContract, wasmpolicy.FeeEarningsModules())
 }
 
 // Restrict is the bank send restriction. On success the recipient is unchanged.

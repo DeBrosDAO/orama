@@ -18,6 +18,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -237,6 +238,9 @@ type OramaApp struct {
 	// bundle is still refused until a second independent verifier is added.
 	ShieldedVerifiers []verify.Verifier
 
+	// isContract reports whether an address is a wasm contract, or is being funded as one by
+	// wasmd's instantiate. It is set by installWasm and is always false without the wasm VM.
+	isContract       func(ctx context.Context, addr sdk.AccAddress) bool
 	wasmModules      []module.AppModule
 	wasmGenesisOrder []string
 	uploadSunset     wasmpolicyante.UploadSunsetDecorator
@@ -361,7 +365,11 @@ func NewOramaApp(
 	)
 	// A user cannot bank-send norama to another user. Module accounts still can.
 	// Shielded bundles are a separate path and are not accepted until a verifier is linked.
-	app.BankKeeper.AppendSendRestriction(shieldedpolicy.NoramaSendRestriction(BlockedAddresses(), nil))
+	// isContract is bound by installWasm, after the wasm keeper exists; the restriction only runs
+	// once blocks do.
+	app.BankKeeper.AppendSendRestriction(shieldedpolicy.NoramaSendRestriction(BlockedAddresses(), func(ctx context.Context, addr sdk.AccAddress) bool {
+		return app.isContract(ctx, addr)
+	}))
 
 	app.ShieldedVerifiers = newShieldedVerifiers(bApp.ChainID())
 
@@ -729,6 +737,7 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		ante.NewValidateBasicDecorator(),
 		app.uploadSunset,
 		app.contractSend,
+		wasmpolicyante.NewDepositPayerDecorator(),
 		ante.NewTxTimeoutHeightDecorator(),
 		ante.NewValidateMemoDecorator(app.AccountKeeper),
 		ante.NewConsumeGasForTxSizeDecorator(app.AccountKeeper),

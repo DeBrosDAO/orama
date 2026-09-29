@@ -12,9 +12,12 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
 )
 
+// The wasmd messages that upload code. Their generated Go types carry no XXX_MessageName, so the
+// type URL is the only name they can be recognised by. MsgStoreAndMigrateContract uploads too.
 const (
-	wasmdStoreCode           = "cosmwasm.wasm.v1.MsgStoreCode"
-	wasmdStoreAndInstantiate = "cosmwasm.wasm.v1.MsgStoreAndInstantiateContract"
+	wasmdStoreCode           = "/cosmwasm.wasm.v1.MsgStoreCode"
+	wasmdStoreAndInstantiate = "/cosmwasm.wasm.v1.MsgStoreAndInstantiateContract"
+	wasmdStoreAndMigrate     = "/cosmwasm.wasm.v1.MsgStoreAndMigrateContract"
 )
 
 // StoreCodeID is implemented by a store-code message that already names its code id.
@@ -27,10 +30,6 @@ type StoreCodeID interface {
 // No such message is registered. CheckMsg rejects every one it sees and does not write.
 type SunsetChanger interface {
 	ProposedUploadSunset() (uint64, bool)
-}
-
-type namedMessage interface {
-	XXX_MessageName() string
 }
 
 // AllowStore decides a MsgStoreCode at height.
@@ -60,11 +59,9 @@ func classifyMsg(msg sdk.Msg) (store bool, codeID uint64, changesSunset bool) {
 			return true, id, false
 		}
 	}
-	if named, ok := msg.(namedMessage); ok {
-		switch named.XXX_MessageName() {
-		case wasmdStoreCode, wasmdStoreAndInstantiate:
-			return true, 0, false
-		}
+	switch sdk.MsgTypeURL(msg) {
+	case wasmdStoreCode, wasmdStoreAndInstantiate, wasmdStoreAndMigrate:
+		return true, 0, false
 	}
 	return false, 0, false
 }

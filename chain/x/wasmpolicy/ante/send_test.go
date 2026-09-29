@@ -12,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/fees/types"
+	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy"
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/ante"
 	policytypes "github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
 )
@@ -40,9 +41,9 @@ func TestContractSendDecorator(t *testing.T) {
 	fees := authtypes.NewModuleAddress(types.ModuleName)
 	deposits := authtypes.NewModuleAddress(types.DepositsModuleName)
 
-	decorator := ante.NewFeeEarningsDecorator(func(_ context.Context, addr sdk.AccAddress) bool {
+	decorator := ante.NewContractSendDecorator(func(_ context.Context, addr sdk.AccAddress) bool {
 		return addr.Equals(contract) || addr.Equals(otherContract)
-	})
+	}, wasmpolicy.FeeEarningsModules())
 	ctx := sdk.Context{}
 
 	cases := []struct {

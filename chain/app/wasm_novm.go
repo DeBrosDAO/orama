@@ -33,7 +33,8 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 		panic(err)
 	}
 	app.mountWasmPolicy(keys)
-	app.contractSend = ante.NewFeeEarningsDecorator(func(context.Context, sdk.AccAddress) bool { return false })
+	app.isContract = func(context.Context, sdk.AccAddress) bool { return false }
+	app.contractSend = ante.NewContractSendDecorator(app.isContract, moduleAccountNames())
 	app.wasmModules = []module.AppModule{policyModule(app.WasmPolicyKeeper)}
 	app.wasmGenesisOrder = []string{types.ModuleName}
 }

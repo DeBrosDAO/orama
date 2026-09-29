@@ -2,6 +2,7 @@ package policy
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -15,8 +16,8 @@ func TestNoramaSendRestriction(t *testing.T) {
 	module := authtypes.NewModuleAddress("emission")
 	contract := sdk.AccAddress(bytes.Repeat([]byte{3}, 20))
 	modules := map[string]bool{module.String(): true}
-	contracts := map[string]bool{contract.String(): true}
-	fn := NoramaSendRestriction(modules, contracts)
+	isContract := func(_ context.Context, addr sdk.AccAddress) bool { return addr.Equals(contract) }
+	fn := NoramaSendRestriction(modules, isContract)
 	from := sdk.AccAddress(bytes.Repeat([]byte{1}, 20))
 	to := sdk.AccAddress(bytes.Repeat([]byte{2}, 20))
 	one := sdk.NewCoins(sdk.NewInt64Coin(BaseDenom, 1))
@@ -35,5 +36,18 @@ func TestNoramaSendRestriction(t *testing.T) {
 	}
 	if _, err := fn(t.Context(), from, to, sdk.NewCoins(sdk.NewInt64Coin("ufoo", 1))); err != nil {
 		t.Fatalf("other denom: %v", err)
+	}
+}
+
+func TestNoramaSendRestriction_nilPredicateMeansNoContracts(t *testing.T) {
+	cfg := sdk.GetConfig()
+	cfg.SetBech32PrefixForAccount("orama", "oramapub")
+
+	fn := NoramaSendRestriction(nil, nil)
+	from := sdk.AccAddress(bytes.Repeat([]byte{1}, 20))
+	to := sdk.AccAddress(bytes.Repeat([]byte{2}, 20))
+	one := sdk.NewCoins(sdk.NewInt64Coin(BaseDenom, 1))
+	if _, err := fn(t.Context(), from, to, one); err != ErrPublicPayment {
+		t.Fatalf("send with no contracts: %v", err)
 	}
 }

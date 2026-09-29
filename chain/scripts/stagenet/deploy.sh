@@ -123,11 +123,29 @@ put_file() {
 	on "$alias" "sudo -u $SVC_USER sh -c 'umask 077; tmp=\$(mktemp \"\$(dirname $dest)/.put.XXXXXX\") && cat > \"\$tmp\" && chmod $mode \"\$tmp\" && mv -f \"\$tmp\" $dest'"
 }
 
+# build compiles oramad for linux/amd64 WITH CosmWasm: the genesis stores the standard contracts, so a
+# node without libwasmvm could not start (a nowasm binary refuses a genesis that has a wasm module).
+# The static musl library is a CosmWasm release asset that this repo does not vendor: download
+# libwasmvm_muslc.x86_64.a for the wasmvm version in chain/go.mod (v3.0.7) and point
+# WASMVM_MUSL_LIB at it. It links through zig, the toolchain `orama build` already requires.
 build() {
-	log "building oramad for linux/amd64 ($VERSION, $COMMIT)"
-	(cd "$chain_root" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
+	local lib="${WASMVM_MUSL_LIB:-}"
+	if [ -z "$lib" ] || [ ! -f "$lib" ]; then
+		echo "WASMVM_MUSL_LIB must name libwasmvm_muslc.x86_64.a, got: '$lib'" >&2
+		echo "  curl -fsSL -o libwasmvm_muslc.x86_64.a https://github.com/CosmWasm/wasmvm/releases/download/v3.0.7/libwasmvm_muslc.x86_64.a" >&2
+		exit 1
+	fi
+	mkdir -p "$work/lib"
+	cp "$lib" "$work/lib/libwasmvm_muslc.x86_64.a"
+	log "building oramad for linux/amd64 with libwasmvm ($VERSION, $COMMIT)"
+	(cd "$chain_root" && GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
+		CGO_LDFLAGS="-L$work/lib" \
+		CC="zig cc -target x86_64-linux-musl" \
+		CXX="zig c++ -target x86_64-linux-musl" \
+		go build \
+		-tags "muslc netgo osusergo" \
 		-trimpath \
-		-ldflags "-s -w -X github.com/cosmos/cosmos-sdk/version.Name=oramad -X github.com/cosmos/cosmos-sdk/version.AppName=oramad -X github.com/cosmos/cosmos-sdk/version.Version=$VERSION -X github.com/cosmos/cosmos-sdk/version.Commit=$COMMIT" \
+		-ldflags "-s -w -linkmode external -extldflags -static -X github.com/cosmos/cosmos-sdk/version.Name=oramad -X github.com/cosmos/cosmos-sdk/version.AppName=oramad -X github.com/cosmos/cosmos-sdk/version.Version=$VERSION -X github.com/cosmos/cosmos-sdk/version.Commit=$COMMIT" \
 		-o "$work/oramad" ./cmd/oramad)
 }
 
@@ -206,6 +224,10 @@ build_genesis() {
 				--moniker "$name" --consensus-pubkey-base64 "$pubkey"
 		fi
 	done
+
+	# The standard contracts (CW20, CW721, escrow, CW3 multisig, vesting) are stored in genesis so they
+	# exist from height 1 although upload is closed until the sunset height (docs/CHAIN.md).
+	as_chain "$first_alias" genesis add-standard-contracts
 
 	as_chain "$first_alias" genesis validate
 	on "$first_alias" "sudo -u $SVC_USER cat $HOME_DIR/config/genesis.json" > "$work/genesis.json"

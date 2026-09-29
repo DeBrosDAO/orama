@@ -8,18 +8,28 @@ import (
 
 	"cosmossdk.io/collections"
 	storetypes "cosmossdk.io/core/store"
+	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
 )
 
-// Keeper stores upload_sunset_height and the genesis code set.
-// InitGenesis is the only writer. There is no setter and no Msg service.
+// Keeper stores upload_sunset_height, the genesis code set, deposit_per_byte and the contract
+// state-deposit ledger. InitGenesis is the only writer of the first three. There is no setter and
+// no Msg service. The ledger is written only by ApplyStateDelta, which the wasm engine wrapper calls.
 type Keeper struct {
-	Schema collections.Schema
-	Sunset collections.Item[uint64]
-	Codes  collections.KeySet[uint64]
+	fees FeesKeeper
+
+	Schema         collections.Schema
+	Sunset         collections.Item[uint64]
+	Codes          collections.KeySet[uint64]
+	DepositPerByte collections.Item[math.Int]
+	// Chunks is keyed by (contract address bytes, sequence). Sequences only grow, so a contract's
+	// newest chunk is its last row.
+	Chunks        collections.Map[collections.Pair[[]byte, uint64], types.DepositChunk]
+	ContractBytes collections.Map[[]byte, uint64]
+	NextChunk     collections.Sequence
 
 	uploads UploadAllowList
 }
@@ -40,12 +50,21 @@ func (k Keeper) WithUploadAllowList(list UploadAllowList) Keeper {
 	return k
 }
 
-// NewKeeper builds the wasmpolicy keeper on storeService.
-func NewKeeper(storeService storetypes.KVStoreService) Keeper {
+// NewKeeper builds the wasmpolicy keeper on storeService. fees locks and releases the deposits.
+func NewKeeper(storeService storetypes.KVStoreService, fees FeesKeeper) Keeper {
 	sb := collections.NewSchemaBuilder(storeService)
 	k := Keeper{
-		Sunset: collections.NewItem(sb, types.SunsetPrefix, "upload_sunset_height", collections.Uint64Value),
-		Codes:  collections.NewKeySet(sb, types.CodePrefix, "genesis_code_ids", collections.Uint64Key),
+		fees:           fees,
+		Sunset:         collections.NewItem(sb, types.SunsetPrefix, "upload_sunset_height", collections.Uint64Value),
+		Codes:          collections.NewKeySet(sb, types.CodePrefix, "genesis_code_ids", collections.Uint64Key),
+		DepositPerByte: collections.NewItem(sb, types.DepositPerBytePrefix, "deposit_per_byte", sdk.IntValue),
+		Chunks: collections.NewMap(
+			sb, types.ChunkPrefix, "deposit_chunks",
+			collections.PairKeyCodec(collections.BytesKey, collections.Uint64Key),
+			types.JSONValue[types.DepositChunk]{},
+		),
+		ContractBytes: collections.NewMap(sb, types.ContractBytesPrefix, "contract_bytes", collections.BytesKey, collections.Uint64Value),
+		NextChunk:     collections.NewSequence(sb, types.NextChunkPrefix, "next_deposit_chunk"),
 	}
 	schema, err := sb.Build()
 	if err != nil {
@@ -55,8 +74,8 @@ func NewKeeper(storeService storetypes.KVStoreService) Keeper {
 	return k
 }
 
-// InitGenesis writes the sunset height and genesis code set once.
-// A second call is rejected and leaves the stored height unchanged.
+// InitGenesis writes the sunset height, the genesis code set, the deposit price and the deposit
+// ledger once. A second call is rejected and leaves the stored height unchanged.
 func (k Keeper) InitGenesis(ctx context.Context, gs types.GenesisState) error {
 	if err := gs.Validate(); err != nil {
 		return err
@@ -76,10 +95,13 @@ func (k Keeper) InitGenesis(ctx context.Context, gs types.GenesisState) error {
 			return fmt.Errorf("set genesis code id %d: %w", id, err)
 		}
 	}
-	return nil
+	if err := k.DepositPerByte.Set(ctx, gs.DepositPerByte); err != nil {
+		return fmt.Errorf("set deposit_per_byte: %w", err)
+	}
+	return k.importChunks(ctx, gs.DepositChunks)
 }
 
-// ExportGenesis reads the sunset height and genesis code set.
+// ExportGenesis reads the sunset height, the genesis code set, the deposit price and the ledger.
 func (k Keeper) ExportGenesis(ctx context.Context) (types.GenesisState, error) {
 	height, err := k.SunsetHeight(ctx)
 	if err != nil {
@@ -94,7 +116,15 @@ func (k Keeper) ExportGenesis(ctx context.Context) (types.GenesisState, error) {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return types.GenesisState{UploadSunsetHeight: height, GenesisCodeIDs: ids}, nil
+	perByte, err := k.DepositPerByte.Get(ctx)
+	if err != nil {
+		return types.GenesisState{}, fmt.Errorf("deposit_per_byte: %w", err)
+	}
+	chunks, err := k.allChunks(ctx)
+	if err != nil {
+		return types.GenesisState{}, err
+	}
+	return types.GenesisState{UploadSunsetHeight: height, GenesisCodeIDs: ids, DepositPerByte: perByte, DepositChunks: chunks}, nil
 }
 
 // SunsetHeight returns the genesis upload_sunset_height.

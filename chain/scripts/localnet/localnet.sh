@@ -18,6 +18,9 @@
 #   VOTE_EXTENSIONS_ENABLE_HEIGHT
 #                         default: 0 (vote extensions off). A positive height turns on C13
 #                         inclusion lists from that height; it is a genesis-only switch.
+#   WITH_WASM             default: 0. Set to 1 to build oramad with cgo and libwasmvm (`make build-wasm`
+#                         explains how to install the library) and store the standard contracts in genesis
+#                         (`oramad genesis add-standard-contracts`). Without it the localnet has no CosmWasm.
 #
 # Genesis starts at exactly zero norama supply: every node is a member of x/power's bootstrap
 # committee (plans/open-network.md D16), which needs no self-bond and no gentx - each committee
@@ -33,6 +36,7 @@ EPOCH_DURATION="${EPOCH_DURATION:-30s}"
 EPOCH_MIN_BLOCKS="${EPOCH_MIN_BLOCKS:-5}"
 BLOCK_MAX_GAS="${BLOCK_MAX_GAS:-100000000}"
 VOTE_EXTENSIONS_ENABLE_HEIGHT="${VOTE_EXTENSIONS_ENABLE_HEIGHT:-0}"
+WITH_WASM="${WITH_WASM:-0}"
 
 case "$CHAIN_ID" in
 *-stagenet-*|*-devnet-*|*-localnet-*) ;;
@@ -79,6 +83,11 @@ pprof_port() { echo $((31005 + $1 * 10)); }
 pid_file() { echo "$(node_home "$1")/localnet.pid"; }
 
 build() {
+	if [ "$WITH_WASM" = "1" ]; then
+		log "building oramad with libwasmvm"
+		(cd "$chain_root" && CGO_ENABLED=1 go build -o "$bin" ./cmd/oramad)
+		return
+	fi
 	log "building oramad"
 	(cd "$chain_root" && CGO_ENABLED=0 go build -o "$bin" ./cmd/oramad)
 }
@@ -133,6 +142,11 @@ build_genesis() {
 				--consensus-pubkey-file "$(node_home "$i")/config/priv_validator_key.json"
 		fi
 	done
+
+	if [ "$WITH_WASM" = "1" ]; then
+		log "storing the standard contracts in genesis"
+		run_logged "$bin" genesis add-standard-contracts --home "$first"
+	fi
 
 	# x/consensus has no genesis state of its own (it's driven by the top-level "consensus" field
 	# of genesis.json, which oramad's own module wiring can't default): set a finite block max_gas

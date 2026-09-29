@@ -107,20 +107,8 @@ func (k Keeper) ReleaseDeposit(ctx context.Context, id string) (refund, burn mat
 
 	refund, burn = types.SplitDeposit(deposit.Amount, p)
 
-	if refund.IsPositive() {
-		refundCoins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, refund))
-		if err := k.bankKeeper.SendCoinsFromModuleToModule(ctx, types.DepositsModuleName, types.ModuleName, refundCoins); err != nil {
-			return math.Int{}, math.Int{}, fmt.Errorf("failed to move deposit %q refund into earnings: %w", id, err)
-		}
-		if err := k.creditLedgerOnly(ctx, owner, refund); err != nil {
-			return math.Int{}, math.Int{}, err
-		}
-	}
-	if burn.IsPositive() {
-		burnCoins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, burn))
-		if err := k.bankKeeper.BurnCoins(ctx, types.DepositsModuleName, burnCoins); err != nil {
-			return math.Int{}, math.Int{}, fmt.Errorf("failed to burn deposit %q's burn share: %w", id, err)
-		}
+	if err := k.payOutDeposit(ctx, owner, refund, burn); err != nil {
+		return math.Int{}, math.Int{}, fmt.Errorf("failed to release deposit %q: %w", id, err)
 	}
 
 	if err := k.Deposits.Remove(ctx, id); err != nil {
@@ -128,6 +116,63 @@ func (k Keeper) ReleaseDeposit(ctx context.Context, id string) (refund, burn mat
 	}
 
 	return refund, burn, nil
+}
+
+// ReleaseDepositPart releases part of an open deposit, splitting the released part the same way
+// ReleaseDeposit splits a whole deposit (99% to the owner's earnings, 1% burned). The deposit stays
+// open with the remainder. part must be positive and strictly less than the deposit: releasing all
+// of it is ReleaseDeposit's job, so a caller cannot leave a zero-amount row behind.
+func (k Keeper) ReleaseDepositPart(ctx context.Context, id string, part math.Int) (refund, burn math.Int, err error) {
+	if !part.IsPositive() {
+		return math.Int{}, math.Int{}, fmt.Errorf("deposit %q partial release must be positive, got %s", id, part)
+	}
+	deposit, err := k.Deposits.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, collections.ErrNotFound) {
+			return math.Int{}, math.Int{}, fmt.Errorf("deposit id %q does not exist", id)
+		}
+		return math.Int{}, math.Int{}, fmt.Errorf("failed to load deposit %q: %w", id, err)
+	}
+	if part.GTE(deposit.Amount) {
+		return math.Int{}, math.Int{}, fmt.Errorf("deposit %q holds %s, a partial release of %s must leave a remainder", id, deposit.Amount, part)
+	}
+	owner, err := sdk.AccAddressFromBech32(deposit.Owner)
+	if err != nil {
+		return math.Int{}, math.Int{}, fmt.Errorf("deposit %q has an invalid owner %q: %w", id, deposit.Owner, err)
+	}
+	p, err := k.Params.Get(ctx)
+	if err != nil {
+		return math.Int{}, math.Int{}, fmt.Errorf("failed to load fees params: %w", err)
+	}
+	refund, burn = types.SplitDeposit(part, p)
+	if err := k.payOutDeposit(ctx, owner, refund, burn); err != nil {
+		return math.Int{}, math.Int{}, fmt.Errorf("failed to release part of deposit %q: %w", id, err)
+	}
+	deposit.Amount = deposit.Amount.Sub(part)
+	if err := k.Deposits.Set(ctx, id, deposit); err != nil {
+		return math.Int{}, math.Int{}, fmt.Errorf("failed to update deposit %q: %w", id, err)
+	}
+	return refund, burn, nil
+}
+
+// payOutDeposit moves refund from the deposits account into the owner's earnings and burns burn.
+func (k Keeper) payOutDeposit(ctx context.Context, owner sdk.AccAddress, refund, burn math.Int) error {
+	if refund.IsPositive() {
+		refundCoins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, refund))
+		if err := k.bankKeeper.SendCoinsFromModuleToModule(ctx, types.DepositsModuleName, types.ModuleName, refundCoins); err != nil {
+			return fmt.Errorf("failed to move refund into earnings: %w", err)
+		}
+		if err := k.creditLedgerOnly(ctx, owner, refund); err != nil {
+			return err
+		}
+	}
+	if burn.IsPositive() {
+		burnCoins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, burn))
+		if err := k.bankKeeper.BurnCoins(ctx, types.DepositsModuleName, burnCoins); err != nil {
+			return fmt.Errorf("failed to burn the burn share: %w", err)
+		}
+	}
+	return nil
 }
 
 // GetDeposit returns the open deposit with the given id.

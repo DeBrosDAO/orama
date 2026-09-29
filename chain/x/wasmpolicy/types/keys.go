@@ -23,6 +23,11 @@ const (
 	// BlocksPerDay is the number of AssumedBlockSeconds blocks in a day.
 	BlocksPerDay = 24 * 60 * 60 / AssumedBlockSeconds
 
+	// DefaultDepositPerByte is the genesis price of one byte of contract storage, in norama:
+	// P3's about 0.07 ORAMA per KB, 0.07 * 10^9 / 1024 with integer division. It is the same
+	// price x/token and x/nodes ship. It is not a price oracle.
+	DefaultDepositPerByte int64 = 68_359
+
 	// DefaultUploadSunsetHeight is the genesis upload_sunset_height (P6).
 	DefaultUploadSunsetHeight uint64 = SunsetDays * BlocksPerDay
 )
@@ -32,4 +37,12 @@ var (
 	SunsetPrefix = collections.NewPrefix(0)
 	// CodePrefix stores the genesis code id set.
 	CodePrefix = collections.NewPrefix(1)
+	// DepositPerBytePrefix stores the single deposit_per_byte.
+	DepositPerBytePrefix = collections.NewPrefix(2)
+	// ChunkPrefix stores the deposit chunks, keyed by (contract, sequence).
+	ChunkPrefix = collections.NewPrefix(3)
+	// ContractBytesPrefix stores the charged byte count of each contract.
+	ContractBytesPrefix = collections.NewPrefix(4)
+	// NextChunkPrefix stores the next chunk sequence.
+	NextChunkPrefix = collections.NewPrefix(5)
 )

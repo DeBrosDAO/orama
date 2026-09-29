@@ -570,6 +570,37 @@ Guest `mlock`/`mlockall` is **not** used in the Go services. `mlock(2)` does not
 
 The control that keeps secrets off the **block device** is cgroup `MemorySwapMax=0` on secret-bearing units, plus install-time `swapoff` / `fs.suid_dumpable=0` / systemd-coredump `Storage=none`. That does **not** stop a RAM snapshot or provider VM-suspend.
 
+## Orama L1: declared limits of contracts (owner decision O-B)
+
+The Orama L1 (`chain/`, [CHAIN.md](CHAIN.md)) makes every ORAMA payment between users a shielded one:
+bank sends between two users and from a contract to a user are refused, and a user pays a contract, never
+the other way round. CosmWasm contracts are the one place that rule has a declared limit
+(plans/open-network.md D7, limit 1; decision O-B).
+
+- **A contract that holds ORAMA can issue a public IOU for it.** Users may pay ORAMA into a contract
+  (escrow, markets, DeFi all need that), and a contract may mint its own token: through the `x/token`
+  binding (`factory/{contract}/{subdenom}`), or as a CW20 (the standard CW20 base). Nothing on chain ties
+  the token's supply to the ORAMA the contract holds, and the token transfers publicly between users, so a
+  contract that issues one turns held ORAMA into a public payment rail. The chain does not stop this. The
+  only way to stop it is to forbid contracts from holding ORAMA between transactions, which breaks escrow,
+  markets and DeFi, and the owner chose to allow it and declare it here.
+- **What the chain does refuse.** A token wrapper named `norama` (the `x/token` binding refuses to create,
+  mint or burn a token whose subdenom is `norama`, or `norama` itself), a bank send from a contract to a
+  user, `CosmosMsg::Any` (the stargate form) and `SetWithdrawAddress`, so a contract cannot reach a module
+  it has no binding for or redirect staking rewards. The genesis CW20 base is a user-token base; it is
+  never given ORAMA to wrap. `x/wasmpolicy.RefuseNoramaWrapper` is the rule and
+  `TestBindings_aContractCanIssueAPublicIOUForOramaItHolds` and `TestBindings_tokenBindingRefusesToWrapNorama`
+  hold both edges of it.
+- **Who is exposed.** A holder of an IOU trusts the issuing contract's code, the same as any wrapped asset.
+  A wallet should show a factory or CW20 token's issuer, and its mint authority, before it shows a balance.
+  An IOU is not ORAMA: it is not shielded, it is not redeemable by the protocol, and the protocol makes no
+  claim about its backing.
+- **Related declared limit.** Contract and market payments show the payer, the amount and the contract
+  publicly; only the payee's funds land privately, in earnings.
+- **Contract earnings are stuck.** Earnings credited to a contract's address (sale proceeds, royalties) can
+  be spent only by that address's signer, and a contract has none. A contract that expects to be paid in
+  ORAMA needs to forward funds another way.
+
 ## What this does not defend against today
 
 Stated so the gaps above are known positions, not implied protections:

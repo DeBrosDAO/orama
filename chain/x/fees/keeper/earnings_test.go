@@ -150,4 +150,35 @@ func TestFeeBalance_cannotBeBonded(t *testing.T) {
 	fee, err := f.Keeper.GetFeeBalance(f.Ctx, hot)
 	require.NoError(t, err)
 	require.True(t, fee.Equal(math.NewInt(1000)))
+
+func TestPayEarnings_creditsTheRecipientsEarningsNotTheirBalance(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	payer := sdk.AccAddress("earnings_payer_______")
+	recipient := sdk.AccAddress("earnings_recipient___")
+	f.Bank.fund(payer.String(), math.NewInt(700))
+
+	require.NoError(t, f.Keeper.PayEarnings(f.Ctx, payer, recipient, sdk.NewCoin(params.BaseDenom, math.NewInt(500))))
+
+	require.True(t, f.Bank.balanceOf(payer.String()).Equal(math.NewInt(200)))
+	require.True(t, f.Bank.balanceOf(recipient.String()).IsZero(), "a user never receives a public balance")
+	got, err := f.Keeper.GetEarnings(f.Ctx, recipient)
+	require.NoError(t, err)
+	require.True(t, got.Equal(math.NewInt(500)))
+	inv, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, inv.EarningsMatchModule, inv.Detail)
+}
+
+func TestPayEarnings_rejectsZero(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	payer := sdk.AccAddress("earnings_payer2______")
+	recipient := sdk.AccAddress("earnings_recipient2__")
+	f.Bank.fund(payer.String(), math.NewInt(10))
+
+	require.Error(t, f.Keeper.PayEarnings(f.Ctx, payer, recipient, sdk.NewCoin(params.BaseDenom, math.ZeroInt())))
+	got, err := f.Keeper.GetEarnings(f.Ctx, recipient)
+	require.NoError(t, err)
+	require.True(t, got.IsZero())
 }

@@ -23,11 +23,11 @@ func newSunset(t *testing.T, codeIDs ...uint64) (ante.UploadSunsetDecorator, sdk
 	t.Helper()
 	key := storetypes.NewKVStoreKey(types.StoreKey)
 	ctx := testutil.DefaultContextWithDB(t, key, storetypes.NewTransientStoreKey("transient_wasmpolicy")).Ctx
-	k := keeper.NewKeeper(runtime.NewKVStoreService(key))
-	require.NoError(t, k.InitGenesis(ctx, types.GenesisState{
-		UploadSunsetHeight: sunsetHeight,
-		GenesisCodeIDs:     codeIDs,
-	}))
+	k := keeper.NewKeeper(runtime.NewKVStoreService(key), nil)
+	gs := types.DefaultGenesisState()
+	gs.UploadSunsetHeight = sunsetHeight
+	gs.GenesisCodeIDs = codeIDs
+	require.NoError(t, k.InitGenesis(ctx, gs))
 	return ante.NewUploadSunsetDecorator(k), ctx, k
 }
 
@@ -92,7 +92,9 @@ func TestUploadSunset(t *testing.T) {
 		after, err := k.ExportGenesis(ctx)
 		require.NoError(t, err)
 		require.Equal(t, before.UploadSunsetHeight, after.UploadSunsetHeight)
-		require.ErrorIs(t, k.InitGenesis(ctx, types.GenesisState{UploadSunsetHeight: 1}), types.ErrSunsetImmutable)
+		second := types.DefaultGenesisState()
+		second.UploadSunsetHeight = 1
+		require.ErrorIs(t, k.InitGenesis(ctx, second), types.ErrSunsetImmutable)
 		after, err = k.ExportGenesis(ctx)
 		require.NoError(t, err)
 		require.Equal(t, sunsetHeight, after.UploadSunsetHeight)

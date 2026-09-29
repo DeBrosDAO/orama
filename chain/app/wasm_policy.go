@@ -15,7 +15,7 @@ func (app *OramaApp) mountWasmPolicy(keys map[string]*storetypes.KVStoreKey) {
 	if _, ok := keys[types.StoreKey]; !ok {
 		keys[types.StoreKey] = storetypes.NewKVStoreKey(types.StoreKey)
 	}
-	app.WasmPolicyKeeper = keeper.NewKeeper(runtime.NewKVStoreService(keys[types.StoreKey])).WithUploadAllowList(app.HousesKeeper)
+	app.WasmPolicyKeeper = keeper.NewKeeper(runtime.NewKVStoreService(keys[types.StoreKey]), app.FeesKeeper).WithUploadAllowList(app.HousesKeeper)
 	app.uploadSunset = ante.NewUploadSunsetDecorator(app.WasmPolicyKeeper)
 }
 
@@ -41,4 +41,17 @@ func insertBefore(order []string, marker string, extra ...string) []string {
 		out = append(out, extra...)
 	}
 	return out
+}
+
+// moduleAccountNames are the module accounts a contract may send norama to. Every module account
+// is on the list: the token, market and storage bindings pull a contract's fee, bid or deal escrow
+// with module keeper sends. A contract still cannot BankMsg::Send to one, because bank refuses
+// every module account as a receiver of a message.
+func moduleAccountNames() []string {
+	perms := ModuleAccountPerms()
+	names := make([]string, 0, len(perms))
+	for name := range perms {
+		names = append(names, name)
+	}
+	return names
 }

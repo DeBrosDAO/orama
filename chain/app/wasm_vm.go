@@ -29,6 +29,9 @@ import (
 	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
 	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
 
+	marketkeeper "github.com/DeBrosOfficial/network/chain/x/market/keeper"
+	tokenkeeper "github.com/DeBrosOfficial/network/chain/x/token/keeper"
+	"github.com/DeBrosOfficial/network/chain/x/wasmbindings"
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy"
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/ante"
 	policytypes "github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
@@ -62,6 +65,17 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 		panic(err)
 	}
 
+	var wasmK *wasmkeeper.Keeper
+	isContract := func(ctx context.Context, addr sdk.AccAddress) bool {
+		return wasmK.HasContractInfo(ctx, addr) || wasmpolicy.IsFundedContract(ctx, addr)
+	}
+	app.isContract = isContract
+	querier := wasmbindings.NewQuerier(
+		tokenkeeper.NewQueryServerImpl(app.TokenKeeper),
+		app.CnftKeeper,
+		marketkeeper.NewQueryServerImpl(app.MarketKeeper),
+	)
+
 	k := wasmkeeper.NewKeeper(
 		app.appCodec,
 		runtime.NewKVStoreService(keys[wasmtypes.StoreKey]),
@@ -81,18 +95,28 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 		WasmCapabilities(),
 		UnreachableAuthority(),
 		wasmkeeper.WithCoinTransferrer(newAllowModuleTransferrer(app.BankKeeper)),
-		wasmkeeper.WithMessageHandlerDecorator(rejectContractIBC),
+		wasmkeeper.WithMessageHandlerDecorator(func(old wasmkeeper.Messenger) wasmkeeper.Messenger {
+			return wasmbindings.NewMessenger(rejectContractIBC(old), app.MsgServiceRouter(), app.FeesKeeper)
+		}),
+		wasmkeeper.WithQueryPlugins(&wasmkeeper.QueryPlugins{Custom: querier.Query}),
+		wasmkeeper.WithWasmEngineDecorator(func(old wasmtypes.WasmEngine) wasmtypes.WasmEngine {
+			return newDepositEngine(old, app.WasmPolicyKeeper, isContract)
+		}),
 	)
 	keeper := &k
+	wasmK = keeper
 	app.wasmKeeper = keeper
-	app.contractSend = ante.NewFeeEarningsDecorator(func(ctx context.Context, addr sdk.AccAddress) bool {
-		return keeper.HasContractInfo(ctx, addr)
-	})
+	app.contractSend = ante.NewContractSendDecorator(isContract, moduleAccountNames())
 	app.wasmModules = []module.AppModule{
 		policyModule(app.WasmPolicyKeeper),
 		wasm.NewAppModule(app.appCodec, keeper, app.StakingKeeper, app.AccountKeeper, app.BankKeeper, app.MsgServiceRouter(), nil),
 	}
 	app.wasmGenesisOrder = []string{policytypes.ModuleName, wasmtypes.ModuleName}
+}
+
+// WasmKeeper is the wasmd keeper, for queries and tests.
+func (app *OramaApp) WasmKeeper() *wasmkeeper.Keeper {
+	return app.wasmKeeper.(*wasmkeeper.Keeper)
 }
 
 // WasmContractKeeper is the wasmd permissioned keeper, used by the cgo instantiate test.
@@ -177,7 +201,9 @@ func (t allowModuleTransferrer) TransferCoins(ctx sdk.Context, from, to sdk.AccA
 			return t.bank.SendCoins(ctx, from, to, amt)
 		}
 	}
-	return t.inner.TransferCoins(ctx, from, to, amt)
+	// wasmd calls this only to fund a contract, instantiate or execute, and for instantiate the
+	// contract is not registered yet: tell the norama restrictions the recipient is one.
+	return t.inner.TransferCoins(wasmpolicy.WithFundedContract(ctx, to), from, to, amt)
 }
 
 type ibcRejectMessenger struct {

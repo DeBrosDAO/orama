@@ -24,4 +24,7 @@ var (
 
 	// ErrNoramaWrapper is returned when a token wrapper creates or holds norama.
 	ErrNoramaWrapper = errors.Register(ModuleName, 5, "token wrapper cannot create or hold norama")
+
+	// ErrDepositPayer is returned when contract state grew and no account can be charged.
+	ErrDepositPayer = errors.Register(ModuleName, 6, "no account can pay the state deposit for this contract call")
 )

@@ -93,3 +93,40 @@ func TestReleaseDeposit_unknownIDFails(t *testing.T) {
 	_, _, err := f.Keeper.ReleaseDeposit(f.Ctx, "does-not-exist")
 	require.Error(t, err)
 }
+
+func TestReleaseDepositPart_refundsPartAndKeepsRemainder(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	owner := sdk.AccAddress("deposit_owner_part___")
+	f.Bank.fund(owner.String(), math.NewInt(1_000))
+	require.NoError(t, f.Keeper.LockDeposit(f.Ctx, owner, "part", math.NewInt(1_000)))
+
+	refund, burn, err := f.Keeper.ReleaseDepositPart(f.Ctx, "part", math.NewInt(400))
+	require.NoError(t, err)
+	require.True(t, refund.Equal(math.NewInt(396)))
+	require.True(t, burn.Equal(math.NewInt(4)))
+
+	d, err := f.Keeper.GetDeposit(f.Ctx, "part")
+	require.NoError(t, err)
+	require.True(t, d.Amount.Equal(math.NewInt(600)))
+	require.True(t, f.Bank.balanceOf(types.DepositsModuleName).Equal(math.NewInt(600)))
+
+	got, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, got.EarningsMatchModule && got.DepositsMatchModule, got.Detail)
+}
+
+func TestReleaseDepositPart_rejectsWholeOrZeroOrUnknown(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	owner := sdk.AccAddress("deposit_owner_part2__")
+	f.Bank.fund(owner.String(), math.NewInt(1_000))
+	require.NoError(t, f.Keeper.LockDeposit(f.Ctx, owner, "part2", math.NewInt(1_000)))
+
+	_, _, err := f.Keeper.ReleaseDepositPart(f.Ctx, "part2", math.NewInt(1_000))
+	require.Error(t, err, "a whole release belongs to ReleaseDeposit")
+	_, _, err = f.Keeper.ReleaseDepositPart(f.Ctx, "part2", math.ZeroInt())
+	require.Error(t, err)
+	_, _, err = f.Keeper.ReleaseDepositPart(f.Ctx, "missing", math.NewInt(1))
+	require.Error(t, err)
+}

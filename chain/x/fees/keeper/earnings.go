@@ -28,6 +28,19 @@ func (k Keeper) CreditEarnings(ctx context.Context, senderModule string, addr sd
 	return k.creditLedgerOnly(ctx, addr, amt.Amount)
 }
 
+// PayEarnings moves amt from payer's bank balance into x/fees's module account and credits it to
+// recipient's earnings ledger entry. It is the one way a contract pays a user in norama: the
+// payment lands in the recipient's earnings, never as a public user balance (C9).
+func (k Keeper) PayEarnings(ctx context.Context, payer, recipient sdk.AccAddress, amt sdk.Coin) error {
+	if !amt.IsPositive() {
+		return fmt.Errorf("earnings payment must be positive, got %s", amt)
+	}
+	if err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, payer, types.ModuleName, sdk.NewCoins(amt)); err != nil {
+		return fmt.Errorf("failed to move %s from %s into %s: %w", amt, payer, types.ModuleName, err)
+	}
+	return k.creditLedgerOnly(ctx, recipient, amt.Amount)
+}
+
 // creditLedgerOnly increases addr's earnings ledger entry without moving any coins - used where
 // the coins already sit in x/fees's own module account (e.g. a tx's tip, deposited there by the
 // ante fee decorator in the same call).

@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	dbm "github.com/cosmos/cosmos-db"
@@ -30,7 +31,20 @@ func NewRootCmd() *cobra.Command {
 	// or formatted, which happens while building the temporary app below.
 	app.SetAddressPrefixes()
 
-	tempApp := app.NewOramaApp(log.NewNopLogger(), dbm.NewMemDB(), true, simtestutil.NewAppOptionsWithFlagHome(app.DefaultNodeHome))
+	// The temporary app only supplies codecs and CLI metadata, so it gets a home of its own. With
+	// libwasmvm linked its wasm keeper opens a VM on <home>/wasm and holds that directory's
+	// exclusive lock until the process exits; on the node's own home (app.DefaultNodeHome follows
+	// --home) it would lock out the real app that `oramad start` builds next and panic it.
+	tempHome, err := os.MkdirTemp("", "oramad-cli-*")
+	if err != nil {
+		panic(fmt.Errorf("failed to create the temporary app home: %w", err))
+	}
+	cobra.OnFinalize(func() {
+		if err := os.RemoveAll(tempHome); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to remove the temporary app home %s: %v\n", tempHome, err)
+		}
+	})
+	tempApp := app.NewOramaApp(log.NewNopLogger(), dbm.NewMemDB(), true, simtestutil.NewAppOptionsWithFlagHome(tempHome))
 	encodingConfig := EncodingConfig{
 		InterfaceRegistry: tempApp.InterfaceRegistry(),
 		Codec:             tempApp.AppCodec(),

@@ -23,7 +23,7 @@ BUILD_FLAGS := -trimpath -ldflags "$(LDFLAGS)"
 WASMVM_DIR := $(shell go list -m -f '{{.Dir}}' github.com/CosmWasm/wasmvm/v3 2>/dev/null)
 LIBWASMVM := $(firstword $(wildcard $(WASMVM_DIR)/internal/api/libwasmvm.dylib $(WASMVM_DIR)/internal/api/libwasmvm.aarch64.so $(WASMVM_DIR)/internal/api/libwasmvm.x86_64.so))
 
-.PHONY: build build-wasm test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 orchard-test build-linux-amd64-orchard orchard-smoke orchard-smoke-linux-amd64
+.PHONY: build build-wasm contracts-verify test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 orchard-test build-linux-amd64-orchard orchard-smoke orchard-smoke-linux-amd64
 
 ## build: cross-compile oramad for linux/amd64, darwin/amd64 and darwin/arm64.
 ## CGO_ENABLED=0 and -tags nowasm: these binaries are static and do not include CosmWasm.
@@ -48,6 +48,12 @@ build-wasm:
 	}
 	mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=1 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(BINARY) $(PKG)
+
+## contracts-verify: rebuild the genesis standard contracts from their pinned upstream commits and fail
+## if any sha256 differs from contracts/standard/manifest.json. Slow (it compiles five contracts) and
+## needs the Rust toolchain and wasm-opt named in the manifest; see docs/CHAIN.md, "x/wasm: contracts".
+contracts-verify:
+	./contracts/standard/build.sh verify
 
 ## test: pure-Go tests on the nowasm build, which does not need libwasmvm.
 ## When libwasmvm is present, also run the cgo build (wasm keeper, contract packet refusal).

@@ -31,6 +31,7 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	emissioncli "github.com/DeBrosOfficial/network/chain/x/emission/client/cli"
 	powercli "github.com/DeBrosOfficial/network/chain/x/power/client/cli"
+	wasmpolicycli "github.com/DeBrosOfficial/network/chain/x/wasmpolicy/client/cli"
 )
 
 // initCometBFTConfig returns oramad's default CometBFT config overrides. None are needed today.
@@ -91,12 +92,13 @@ func initRootCmd(
 }
 
 // genesisCommand builds the `oramad genesis` command, including x/emission's
-// set-emission-params and x/power's add-bootstrap-validator helpers alongside the standard
+// set-emission-params, x/power's add-bootstrap-validator and wasmpolicy's add-standard-contracts helpers alongside the standard
 // genutil subcommands.
 func genesisCommand(txConfig client.TxConfig, basicManager module.BasicManager) *cobra.Command {
 	cmd := genutilcli.Commands(txConfig, basicManager, app.DefaultNodeHome)
 	cmd.AddCommand(emissioncli.SetEmissionParamsCmd(app.DefaultNodeHome))
 	cmd.AddCommand(powercli.AddBootstrapValidatorCmd(app.DefaultNodeHome))
+	cmd.AddCommand(wasmpolicycli.AddStandardContractsCmd())
 	lockValidateCommand(cmd, basicManager)
 	return cmd
 }
