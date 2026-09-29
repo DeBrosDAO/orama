@@ -12,7 +12,11 @@ import (
 type NodePreferences struct {
 	Branch     string `yaml:"branch"`
 	Nameserver bool   `yaml:"nameserver"`
-	Role       string `yaml:"role,omitempty"` // cluster (empty) or global; both is refused at boot
+	Role       string `yaml:"role,omitempty"` // cluster (empty), global, or both (co-located; needs GlobalNetns)
+	// GlobalNetns names the network namespace the global services run in on a
+	// co-located machine. `orama global install --colocated` writes it with
+	// role both; the node refuses role both without it.
+	GlobalNetns string `yaml:"global_netns,omitempty"`
 }
 
 const preferencesFile = "preferences.yaml"

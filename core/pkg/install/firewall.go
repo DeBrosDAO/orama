@@ -65,6 +65,10 @@ type GlobalFirewall struct {
 	Provider bool
 	TorRelay bool
 	Dirauth  bool
+	// Netns says the services run in the orama-global network namespace: their
+	// ports are reached by DNAT, which ufw treats as forwarded traffic, so the
+	// rules are `ufw route` rules for the namespace address, not input rules.
+	Netns bool
 }
 
 // GlobalRuleComment tags rules Reconcile must not treat as cluster rules.
@@ -190,6 +194,22 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 // IPv6: it does not run the cluster's sysctl that disables it. ufw applies
 // the same rules to IPv6 when /etc/default/ufw sets IPV6=yes.
 func (fp *FirewallProvisioner) GlobalAllowArgs() [][]string {
+	specs := fp.globalPortSpecs()
+	if len(specs) == 0 {
+		return nil
+	}
+	if fp.config.Global.Netns {
+		return netnsRouteArgs(specs)
+	}
+	args := make([][]string, 0, len(specs))
+	for _, spec := range specs {
+		args = append(args, []string{"allow", spec, "comment", GlobalRuleComment})
+	}
+	return args
+}
+
+// globalPortSpecs is each public global listener as "<port>/<proto>".
+func (fp *FirewallProvisioner) globalPortSpecs() []string {
 	if fp == nil || !fp.config.Global.Enabled() {
 		return nil
 	}
@@ -214,11 +234,7 @@ func (fp *FirewallProvisioner) GlobalAllowArgs() [][]string {
 	if fp.config.Global.Dirauth {
 		specs = append(specs, fmt.Sprintf("%d/tcp", constants.GlobalTorDirPort))
 	}
-	args := make([][]string, 0, len(specs))
-	for _, spec := range specs {
-		args = append(args, []string{"allow", spec, "comment", GlobalRuleComment})
-	}
-	return args
+	return specs
 }
 
 // DesiredAllowRules returns just the `ufw allow` rules this node should have,

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 )
 
 // GlobalService is one service `orama global install` puts on a node.
@@ -105,6 +106,9 @@ type GlobalInstallOptions struct {
 	InitChain       *ChainInit
 	EnableFirewall  bool
 	SSHPort         int
+	// Colocated runs the services in the orama-global network namespace, so
+	// the machine can also be a cluster node (role both).
+	Colocated bool
 }
 
 var (
@@ -175,6 +179,7 @@ func (o GlobalInstallOptions) firewall() GlobalFirewall {
 	return GlobalFirewall{
 		ChainP2P: slices.Contains(o.Services, GlobalServiceChain),
 		Provider: slices.Contains(o.Services, GlobalServiceProvider),
+		Netns:    o.Colocated,
 	}
 }
 
@@ -190,4 +195,14 @@ func (o GlobalInstallOptions) unit(s GlobalService) string {
 	default:
 		return RenderGlobalRepairUnit()
 	}
+}
+
+// unitFor is the unit file of s as installed: inside the orama-global network
+// namespace when the install is co-located.
+func (o GlobalInstallOptions) unitFor(s GlobalService) (string, error) {
+	unit := o.unit(s)
+	if !o.Colocated {
+		return unit, nil
+	}
+	return globalnetns.ApplyToUnit(unit)
 }

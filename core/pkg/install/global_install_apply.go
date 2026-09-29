@@ -8,6 +8,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/cosmovisor"
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
@@ -37,6 +38,9 @@ type GlobalHost struct {
 	Lookup    func(account string) (uid, gid int, err error)
 	Chown     func(r rootfs.Root, path string, uid, gid int) error
 	Logf      func(format string, args ...any)
+	// Netns is the co-located layout's host; the zero value is a global-only
+	// machine and is never consulted without opts.Colocated.
+	Netns NetnsHost
 }
 
 // DefaultGlobalHost is this machine. The anchors are directories only root
@@ -54,6 +58,7 @@ func DefaultGlobalHost(logf func(format string, args ...any)) GlobalHost {
 		Lookup:    cosmovisor.LookupAccount,
 		Chown:     func(r rootfs.Root, path string, uid, gid int) error { return r.Chown(path, uid, gid) },
 		Logf:      logf,
+		Netns:     DefaultNetnsHost(runCommand),
 	}
 }
 
@@ -63,6 +68,10 @@ func DefaultGlobalHost(logf func(format string, args ...any)) GlobalHost {
 // options and nothing changes but the binaries' bytes.
 func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err := opts.validate(); err != nil {
+		return err
+	}
+	plan, err := planColocation(h, opts)
+	if err != nil {
 		return err
 	}
 	active, err := checkGlobalFirewall(h.Run, opts.EnableFirewall, opts.SSHPort)
@@ -83,10 +92,37 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 			return err
 		}
 	}
+	if plan != nil {
+		if err := writeNetns(h, plan); err != nil {
+			return err
+		}
+	}
 	if err := writeGlobalUnits(h, opts); err != nil {
 		return err
 	}
-	return applyGlobalFirewall(h.Run, opts.firewall(), active, opts.SSHPort)
+	if err := applyGlobalFirewall(h.Run, opts.firewall(), active, opts.SSHPort); err != nil {
+		return err
+	}
+	if plan == nil {
+		return nil
+	}
+	if err := savePreferencesBoth(h.Netns, plan.prefs); err != nil {
+		return fmt.Errorf("record the co-located role: %w", err)
+	}
+	return nil
+}
+
+// planColocation is the co-location decision, made before the host changes: a
+// plan for --colocated, nil for a global-only install, and a refusal for a
+// global-only install on a machine that is already co-located.
+func planColocation(h GlobalHost, opts GlobalInstallOptions) (*netnsPlan, error) {
+	if opts.Colocated {
+		return planNetns(h.Netns, opts)
+	}
+	if h.Netns.OramaDir == "" {
+		return nil, nil
+	}
+	return nil, refuseGlobalOnlyOnColocated(h.Netns)
 }
 
 // ensureGlobalAccounts creates each service's system account and the extra
@@ -167,10 +203,17 @@ func writeGlobalUnits(h GlobalHost, opts GlobalInstallOptions) error {
 	for _, s := range opts.Services {
 		unit := globalServiceSpecs[s].unit
 		path := filepath.Join(h.UnitDir, unit)
-		if err := h.UnitRoot.WriteFile(path, []byte(opts.unit(s)), globalUnitMode); err != nil {
+		body, err := opts.unitFor(s)
+		if err != nil {
+			return fmt.Errorf("render %s: %w", unit, err)
+		}
+		if err := h.UnitRoot.WriteFile(path, []byte(body), globalUnitMode); err != nil {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
 		units = append(units, unit)
+	}
+	if opts.Colocated {
+		units = append(units, globalnetns.UnitName)
 	}
 	if out, err := h.Run("systemctl", "daemon-reload"); err != nil {
 		return fmt.Errorf("systemctl daemon-reload: %w\n%s", err, strings.TrimSpace(string(out)))

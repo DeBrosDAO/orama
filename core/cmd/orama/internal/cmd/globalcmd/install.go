@@ -21,6 +21,7 @@ var installFlags struct {
 	genesis        string
 	enableFirewall bool
 	sshPort        int
+	colocated      bool
 }
 
 var installCmd = &cobra.Command{
@@ -51,7 +52,18 @@ refused when the home already has a genesis.
 An inactive ufw is refused unless --enable-firewall is given; then incoming is
 denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
 be a port 'sshd -T' reports, or nothing is changed. Running the
-command again with the same flags changes nothing but the binaries' bytes.`,
+command again with the same flags changes nothing but the binaries' bytes.
+
+--colocated installs the services on a machine that already runs a cluster node
+(orama node setup first). The global units run in their own network namespace,
+orama-global, joined to the root namespace by a veth pair (198.18.0.0/30): they
+have their own loopback and port space, cannot reach the cluster's loopback,
+WireGuard mesh or any private network, and only the ports they publish are
+forwarded in. It writes orama-global-netns.service, two nftables rulesets and a
+resolv.conf under /etc/orama-global, and records role both in preferences.yaml.
+The machine must have iproute2, nftables, a kernel with network namespaces and
+veth, and systemd 242 or newer; otherwise nothing is changed. A machine that is
+co-located must keep using --colocated on later installs.`,
 	Args: cobra.NoArgs,
 	RunE: runInstall,
 }
@@ -67,6 +79,7 @@ func init() {
 	f.StringVar(&installFlags.genesis, "genesis", "", "The network's genesis.json, with --init-chain")
 	f.BoolVar(&installFlags.enableFirewall, "enable-firewall", false, "Enable an inactive ufw (deny incoming, allow --ssh-port)")
 	f.IntVar(&installFlags.sshPort, "ssh-port", defaultSSHPort, "SSH port --enable-firewall allows")
+	f.BoolVar(&installFlags.colocated, "colocated", false, "Run the services in their own network namespace on a machine that also runs a cluster node")
 	Cmd.AddCommand(installCmd)
 }
 
@@ -77,7 +90,7 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	}
 	opts := install.GlobalInstallOptions{
 		Services: services, StagedDir: installFlags.stagedDir, PersistentPeers: installFlags.peers,
-		EnableFirewall: installFlags.enableFirewall, SSHPort: installFlags.sshPort,
+		EnableFirewall: installFlags.enableFirewall, SSHPort: installFlags.sshPort, Colocated: installFlags.colocated,
 	}
 	if installFlags.initChain {
 		opts.InitChain = &install.ChainInit{

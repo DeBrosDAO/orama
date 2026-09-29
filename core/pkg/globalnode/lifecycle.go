@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
 )
@@ -36,13 +37,24 @@ type Lifecycle struct {
 // DefaultLifecycle is this node: systemctl through the privileged helper's
 // path (root runs it directly), the chain's loopback RPC, and the sign floor
 // in the global state root.
+//
+// On a co-located machine (the netns unit is installed) the chain's RPC is on
+// the orama-global namespace's loopback, and the wait probes it from inside.
 func DefaultLifecycle(out io.Writer) Lifecycle {
+	return defaultLifecycle(unitDir, out)
+}
+
+func defaultLifecycle(dir string, out io.Writer) Lifecycle {
+	wait := WaitChainRPC
+	if _, err := os.Stat(filepath.Join(dir, globalnetns.UnitName)); err == nil {
+		wait = WaitChainRPCInNamespace
+	}
 	return Lifecycle{
 		Systemctl: func(args ...string) ([]byte, error) {
 			return privhelper.Command(privhelper.ToolSystemctl, args...).CombinedOutput()
 		},
-		UnitDir:        unitDir,
-		WaitChainRPC:   WaitChainRPC,
+		UnitDir:        dir,
+		WaitChainRPC:   wait,
 		CheckSignFloor: DefaultHost().CheckSignFloor,
 		Out:            out,
 	}

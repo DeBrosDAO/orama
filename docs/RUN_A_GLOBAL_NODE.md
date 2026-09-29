@@ -281,12 +281,110 @@ the host; a bundle or height below it is refused. If the old host can still star
 key, it and the new host will double sign; the flag is your statement that it
 cannot.
 
+## Sharing a machine with a cluster node
+
+A machine can be a cluster node and a global node at once (`role: both`). The
+global services run in their own Linux network namespace, `orama-global`; the
+cluster node stays in the root namespace. Inside the namespace `127.0.0.1` is the
+global services' own loopback, so the cluster's loopback (Kubo RPC 10107, the
+gateway's loopback trust, the Caddy admin socket) is not reachable from a global
+unit, and the two sides have separate port spaces: both can listen on the same
+port number. Users were already separate (`orama-chain`, `orama-provider`, ...
+against `orama`), and so are the state directories (`/var/lib/orama-global`
+against `/opt/orama/.orama`), which each unit already hides from the other.
+
+```bash
+sudo orama global install --colocated --services chain,provider \
+  --staged-dir /root/orama-global-release --enable-firewall --ssh-port 22
+```
+
+Run it on a machine where `orama node setup` has already installed the cluster
+node. It refuses, before changing anything, when:
+
+- the machine has no cluster node (`/opt/orama/.orama/preferences.yaml` is
+  missing; `orama node setup` would overwrite the co-located role if it ran
+  later) or its role is `global`;
+- it is not Linux, its kernel has no network namespaces or veth, `ip` (iproute2),
+  `nft` (nftables) or `sysctl` is missing, or systemd is older than 242
+  (`NetworkNamespacePath=`). Each message says what to install. The check
+  creates and deletes a throwaway namespace and veth pair to prove the kernel
+  allows them, so a container without `CAP_NET_ADMIN` is refused here and not
+  halfway through;
+- `198.18.0.0/24` is already routed on the machine.
+
+Without `--colocated`, an install on a machine whose role is `both` is refused:
+it would put the units back in the root namespace.
+
+**What it writes**, on top of a global-only install:
+
+| File | Purpose |
+|------|---------|
+| `/etc/systemd/system/orama-global-netns.service` | A oneshot that creates the namespace, the veth pair `ogl-host` (root side, `198.18.0.1/30`) and `ogl-ns` (inside, `198.18.0.2/30`), the default route, and loads both rulesets; it takes them down on stop. No sandboxing on this unit, because `ip netns add` binds into the host's mount namespace. |
+| `/etc/orama-global/netns-host.nft` | Root-namespace ruleset (table `ip orama_global`), see below |
+| `/etc/orama-global/netns.nft` | Ruleset loaded inside the namespace (table `ip orama_global_ns`) |
+| `/etc/orama-global/resolv.conf` | `9.9.9.9` and `1.1.1.1`. The host's stub resolver is on the host's loopback, which the namespace cannot reach. |
+| `/etc/sysctl.d/60-orama-global-netns.conf` | `net.ipv4.ip_forward = 1`, also set when the namespace unit starts |
+
+Every `orama-global-*` unit gains `BindsTo=` and `After=orama-global-netns.service`,
+`NetworkNamespacePath=/run/netns/orama-global`, and a read-only bind of the
+namespace's resolv.conf over `/etc/resolv.conf`. It also records `role: both` and
+`global_netns: orama-global` in `preferences.yaml`, after everything else. The
+node refuses `role: both` at boot unless that field and every file above exist;
+it then runs the same graph as a cluster node, because the global services are
+their own units, not components of `orama-node`. Units are enabled and not
+started, like a global-only install: `orama global start` starts them, and its
+wait for the chain's RPC dials `127.0.0.1:31001` from inside the namespace.
+
+**The rulesets.**
+
+- Root namespace: the public ports of the chosen services (31000 tcp+udp for the
+  chain, 31013 tcp for the provider) are DNAT'd to `198.18.0.2`; the namespace's
+  outbound traffic is masqueraded; nothing from the namespace may be forwarded to
+  `10.0.0.0/8` (the WireGuard mesh is in it), `172.16.0.0/12`, `192.168.0.0/16`,
+  `169.254.0.0/16` (cloud metadata) or `100.64.0.0/10`; nothing arriving on the
+  veth may reach a service on the host itself, so the namespace cannot get to the
+  cluster through the host's public or WireGuard address; and only DNAT'd
+  connections and their replies are forwarded into the namespace.
+- Inside the namespace: input is default-drop except loopback, replies and the
+  published ports; forwarding is off; output to the private ranges above is
+  dropped. The units' own `IPAddressDeny=` on the same ranges is a third layer.
+- ufw: input rules cannot see DNAT'd traffic, so the install adds
+  `ufw route allow` rules tagged `orama-global` (one for the namespace's own
+  outbound traffic on `ogl-host`, one per published port to `198.18.0.2`) instead
+  of the `allow` rules a global-only install adds. A cluster reconcile does not
+  remove them.
+
+**What this does not isolate.** It is one kernel and one root. The cluster node
+can reach the global services only through their published ports at `198.18.0.2`,
+and a global service reaches the outside only through the masqueraded veth. The
+namespace has no IPv6 (the units may open only IPv4 and Unix sockets). A
+loopback-only listener of a global service (the chain's RPC 31001, gRPC 31002,
+REST 31003) is reachable from the machine only from inside the namespace:
+`sudo ip netns exec orama-global curl http://127.0.0.1:31001/status`. Commands
+that take `--node http://127.0.0.1:31003` (`orama global register` and the other
+signed transactions) must run there, or on the operator's machine against the
+node's public address once one is published.
+
+Removing the layout is not built: stop and disable the `orama-global-*` units and
+`orama-global-netns.service`, delete the files above and the `ufw route` rules
+tagged `orama-global`, and set `role` back to `cluster` in `preferences.yaml`.
+
+**Tests.** The rendering of the unit and rulesets, the machine checks, the install
+plan and the boot-time role check are unit tests in `make test`. The layout built
+for real is `make -C core test-netns` (tag `netns_integration`, Linux and root
+only, skipped elsewhere): it creates the namespace and checks that the same
+address binds on both sides, that a cluster listener on the root loopback, on
+`0.0.0.0` and on `198.18.0.1` is unreachable from inside, that only published
+ports are reachable into the namespace, and that private ranges are unreachable
+from it. It has not been run on a real machine from the environment this change
+was written in.
+
 ## Not built yet
 
 - `orama node setup --role global` from the operator's machine; install runs on
   the node.
 - cosmovisor under the installed unit, and TUF verification of the staged
   binaries by the installer.
-- Removing a service, or its firewall rule, that a later install leaves out.
+- Removing a service, or its firewall rule, that a later install leaves out; removing the co-located layout.
 - The public Kubo, relay and Tor units.
 - A remote signer (TMKMS, Horcrux) or sentry topology.

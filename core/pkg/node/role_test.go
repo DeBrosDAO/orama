@@ -1,6 +1,7 @@
 package node
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,12 +75,46 @@ func TestBootComponents_explicitClusterRoleMatchesTheDefault(t *testing.T) {
 	}
 }
 
-func TestBootComponents_bothIsRefused(t *testing.T) {
+func TestBootComponents_bothIsRefusedWithoutTheNetnsLayout(t *testing.T) {
 	n := newGraphNode(t)
 	n.config.Node.Role = "both"
 	_, err := n.bootComponents()
-	if err == nil || !strings.Contains(err.Error(), "both") {
-		t.Fatalf("bootComponents error = %v, want one that refuses both", err)
+	if err == nil || !strings.Contains(err.Error(), "both") || !strings.Contains(err.Error(), "--colocated") {
+		t.Fatalf("bootComponents error = %v, want one that refuses both and says how to install the layout", err)
+	}
+}
+
+func TestBootComponents_bothRunsTheClusterGraphWithTheLayout(t *testing.T) {
+	var checked string
+	restore := verifyNetnsLayout
+	verifyNetnsLayout = func(recorded string) error { checked = recorded; return nil }
+	t.Cleanup(func() { verifyNetnsLayout = restore })
+
+	orama := t.TempDir()
+	if err := os.WriteFile(filepath.Join(orama, "preferences.yaml"), []byte("role: both\nglobal_netns: orama-global\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n := newGraphNode(t)
+	n.config.Node.DataDir = filepath.Join(orama, "data")
+	both := mustBootComponents(t, n)
+	if checked != "orama-global" {
+		t.Errorf("the layout check got %q, want the recorded namespace", checked)
+	}
+	cluster := newGraphNode(t)
+	cluster.config.Node.Role = "cluster"
+	if len(both) != len(mustBootComponents(t, cluster)) {
+		t.Errorf("both starts %d components, cluster %d", len(both), len(mustBootComponents(t, cluster)))
+	}
+}
+
+func TestBootComponents_bothIsRefusedWhenTheLayoutIsIncomplete(t *testing.T) {
+	restore := verifyNetnsLayout
+	verifyNetnsLayout = func(string) error { return errors.New("orama-global-netns.service is missing") }
+	t.Cleanup(func() { verifyNetnsLayout = restore })
+	n := newGraphNode(t)
+	n.config.Node.Role = "both"
+	if _, err := n.bootComponents(); err == nil || !strings.Contains(err.Error(), "netns.service is missing") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

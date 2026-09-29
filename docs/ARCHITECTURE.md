@@ -208,7 +208,7 @@ piece of start-up is a **component** with declared dependencies
 (`pkg/node/boot`), and a supervisor runs each one whose dependencies are ready,
 retrying failures with exponential backoff (1s → 60s) instead of exiting.
 
-A node's role chooses the graph. An empty role and `role: cluster` — `node.role` in the node config, or `role` in `preferences.yaml` — use the cluster graph. `role: global` registers only `data-dir`. That graph does not start WireGuard, RQLite, Olric, or the gateway. Olric is not its own component; `rqlite-local` starts it, so leaving that component out leaves Olric down. `both` is refused. Chain, public IPFS and the relay are not boot components.
+A node's role chooses the graph. An empty role and `role: cluster` — `node.role` in the node config, or `role` in `preferences.yaml` — use the cluster graph. `role: global` registers only `data-dir`. That graph does not start WireGuard, RQLite, Olric, or the gateway. Olric is not its own component; `rqlite-local` starts it, so leaving that component out leaves Olric down. `role: both` (a cluster node and global services on one machine) runs the cluster graph, and is accepted only when `preferences.yaml` records `global_netns: orama-global` and the layout's files exist, as `orama global install --colocated` leaves them; the global services then run in their own network namespace ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md), "Sharing a machine with a cluster node"). Chain, public IPFS and the relay are not boot components.
 
 On a cluster node, components come in two tiers:
 

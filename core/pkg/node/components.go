@@ -64,7 +64,9 @@ const (
 
 // bootComponents declares the start-up graph for this node's role.
 //
-// cluster is the graph this process has always converged. global registers
+// cluster is the graph this process has always converged; both runs the same
+// graph, because a co-located machine's global services are their own units in
+// their own network namespace, not components of this process. global registers
 // only data-dir: it does not start WireGuard, RQLite, Olric or the gateway.
 // Olric is not its own component; rqlite-local starts it, so a graph without
 // that component does not start Olric either.
@@ -74,7 +76,7 @@ func (n *Node) bootComponents() ([]boot.Component, error) {
 		return nil, err
 	}
 	switch role {
-	case boot.RoleCluster:
+	case boot.RoleCluster, boot.RoleBoth:
 		return n.clusterBootComponents(), nil
 	case boot.RoleGlobal:
 		return n.globalBootComponents(), nil

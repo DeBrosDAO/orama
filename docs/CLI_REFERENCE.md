@@ -1448,9 +1448,21 @@ denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
 be a port 'sshd -T' reports, or nothing is changed. Running the
 command again with the same flags changes nothing but the binaries' bytes.
 
+--colocated installs the services on a machine that already runs a cluster node
+(orama node setup first). The global units run in their own network namespace,
+orama-global, joined to the root namespace by a veth pair (198.18.0.0/30): they
+have their own loopback and port space, cannot reach the cluster's loopback,
+WireGuard mesh or any private network, and only the ports they publish are
+forwarded in. It writes orama-global-netns.service, two nftables rulesets and a
+resolv.conf under /etc/orama-global, and records role both in preferences.yaml.
+The machine must have iproute2, nftables, a kernel with network namespaces and
+veth, and systemd 242 or newer; otherwise nothing is changed. A machine that is
+co-located must keep using --colocated on later installs.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--chain-id` | — | Chain id, with --init-chain |
+| `--colocated` | `false` | Run the services in their own network namespace on a machine that also runs a cluster node |
 | `--enable-firewall` | `false` | Enable an inactive ufw (deny incoming, allow --ssh-port) |
 | `--genesis` | — | The network's genesis.json, with --init-chain |
 | `--init-chain` | `false` | Create the chain home with oramad init and install --genesis |
