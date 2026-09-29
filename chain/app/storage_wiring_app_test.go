@@ -200,9 +200,9 @@ func (c *wiringChain) slotHolders(dealID uint64) []string {
 
 func TestApp_registeredAndBondedStorageNodesGetSlots(t *testing.T) {
 	c := newWiringChain(t)
-	c.addStorageNode("s1", "https://198.51.100.10:443", 15169)
-	c.addStorageNode("s2", "https://203.0.113.10:443", 13335)
-	c.addStorageNode("s3", "https://192.0.2.10:443", 16509)
+	c.addStorageNode("s1", "https://45.33.100.10:443", 15169)
+	c.addStorageNode("s2", "https://93.184.113.10:443", 13335)
+	c.addStorageNode("s3", "https://151.101.2.10:443", 16509)
 	require.False(t, c.tracked("s1"), "x/storage has not seen the nodes before a block runs")
 
 	c.blocks(1)
@@ -218,9 +218,9 @@ func TestApp_registeredAndBondedStorageNodesGetSlots(t *testing.T) {
 
 func TestApp_storageNodeThatRetiresOrUnbondsIsUntracked(t *testing.T) {
 	c := newWiringChain(t)
-	retiring := c.addStorageNode("retire-me", "https://198.51.100.10:443", 15169)
-	shrinking := c.addStorageNode("unbond-me", "https://203.0.113.10:443", 13335)
-	c.addStorageNode("stays", "https://192.0.2.10:443", 16509)
+	retiring := c.addStorageNode("retire-me", "https://45.33.100.10:443", 15169)
+	shrinking := c.addStorageNode("unbond-me", "https://93.184.113.10:443", 13335)
+	c.addStorageNode("stays", "https://151.101.2.10:443", 16509)
 	c.blocks(1)
 	for _, id := range []string{"retire-me", "unbond-me", "stays"} {
 		require.True(t, c.tracked(id))
@@ -246,9 +246,9 @@ func TestApp_storageNodeThatRetiresOrUnbondsIsUntracked(t *testing.T) {
 
 func TestApp_jailedStorageNodeIsUntrackedAndReplacedInNewDeals(t *testing.T) {
 	c := newWiringChain(t)
-	c.addStorageNode("s1", "https://198.51.100.10:443", 15169)
-	c.addStorageNode("s2", "https://203.0.113.10:443", 13335)
-	c.addStorageNode("s3", "https://192.0.2.10:443", 16509)
+	c.addStorageNode("s1", "https://45.33.100.10:443", 15169)
+	c.addStorageNode("s2", "https://93.184.113.10:443", 13335)
+	c.addStorageNode("s3", "https://151.101.2.10:443", 16509)
 	c.blocks(1)
 
 	c.write(func(ctx sdk.Context) { require.NoError(t, c.app.NodesKeeper.Jail(ctx, "s2")) })
@@ -264,9 +264,9 @@ func TestApp_jailedStorageNodeIsUntrackedAndReplacedInNewDeals(t *testing.T) {
 
 func TestApp_protocolDealSlotsNeedDistinctNetworksFromTheirEndpoints(t *testing.T) {
 	c := newWiringChain(t)
-	c.addStorageNode("a", "https://198.51.100.10:443", 15169)
-	c.addStorageNode("b", "https://198.51.7.7:443", 13335) // same /16 as a
-	c.addStorageNode("c", "https://203.0.113.10:443", 16509)
+	c.addStorageNode("a", "https://45.33.100.10:443", 15169)
+	c.addStorageNode("b", "https://45.33.7.7:443", 13335) // same /16 as a
+	c.addStorageNode("c", "https://93.184.113.10:443", 16509)
 	c.blocks(1)
 
 	var refused uint64
@@ -281,7 +281,7 @@ func TestApp_protocolDealSlotsNeedDistinctNetworksFromTheirEndpoints(t *testing.
 	require.Equal(t, storagetypes.DealStatus_DEAL_STATUS_REFUNDED, deal.Status,
 		"a and b share a /16, so only two distinct networks exist for three slots")
 
-	c.addStorageNode("d", "https://192.0.2.10:443", 20940)
+	c.addStorageNode("d", "https://151.101.2.10:443", 20940)
 	c.blocks(1)
 	var placed uint64
 	c.write(func(ctx sdk.Context) {

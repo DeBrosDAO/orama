@@ -3,6 +3,7 @@ package repair
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/chain/client/node"
@@ -40,12 +41,20 @@ func (c NodeChain) ProviderURL(ctx context.Context, nodeID string) (string, erro
 	return FirstHTTPEndpoint(nodeID, resp.Node.Endpoints)
 }
 
-// FirstHTTPEndpoint picks the provider HTTP root from a node's endpoints.
+// FirstHTTPEndpoint picks the provider HTTP root from a node's endpoints. The root is rebuilt from
+// the endpoint's scheme, host and path alone: the endpoint was written by the node, so a query,
+// fragment or userinfo it carries is not passed on to the provider request.
 func FirstHTTPEndpoint(nodeID string, endpoints []string) (string, error) {
 	for _, ep := range endpoints {
-		if strings.HasPrefix(ep, "http://") || strings.HasPrefix(ep, "https://") {
-			return strings.TrimRight(ep, "/"), nil
+		if !strings.HasPrefix(ep, "http://") && !strings.HasPrefix(ep, "https://") {
+			continue
 		}
+		u, err := url.Parse(ep)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		root := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.EscapedPath()}
+		return strings.TrimRight(root.String(), "/"), nil
 	}
 	return "", fmt.Errorf("node %s names no http(s) provider endpoint in x/nodes", nodeID)
 }

@@ -33,7 +33,7 @@ func storageNode(t *testing.T, f *testFixture, id string, endpoints []string, as
 
 func TestFundHotKey_movesEarningsToOwnNodesHotKey(t *testing.T) {
 	f := newTestFixture(t)
-	op, hot := storageNode(t, f, "node-1", []string{"https://203.0.113.10:443"}, 64495)
+	op, hot := storageNode(t, f, "node-1", []string{"https://93.184.113.10:443"}, 64495)
 	f.Earnings.balances[op.String()] = math.NewInt(1_000)
 
 	_, err := f.Msg.FundHotKey(f.Ctx, &types.MsgFundHotKey{Operator: op.String(), NodeId: "node-1", Amount: math.NewInt(400)})
@@ -95,12 +95,12 @@ func TestFundHotKey_followsRotatedHotKey(t *testing.T) {
 
 func TestNodeNetwork_derivedFromEndpointsAndDeclaredAsn(t *testing.T) {
 	f := newTestFixture(t)
-	storageNode(t, f, "node-1", []string{"https://node.example:443", "https://203.0.113.10:443"}, 64495)
+	storageNode(t, f, "node-1", []string{"https://node.example:443", "https://93.184.113.10:443"}, 64495)
 	storageNode(t, f, "node-2", []string{"https://node.example:443"}, 0)
 
 	net, asn, err := f.Keeper.NodeNetwork(f.Ctx, "node-1")
 	require.NoError(t, err)
-	require.Equal(t, "203.0.0.0/16", net)
+	require.Equal(t, "93.184.0.0/16", net)
 	require.Equal(t, uint32(64495), asn)
 
 	net, asn, err = f.Keeper.NodeNetwork(f.Ctx, "node-2")
@@ -119,12 +119,12 @@ func TestUpdateNode_setsAndClearsAsnAndEndpoints(t *testing.T) {
 	_, err := f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{Operator: op.String(), NodeId: "node-1", SetAsn: true, Asn: 15169})
 	require.NoError(t, err)
 	_, err = f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{
-		Operator: op.String(), NodeId: "node-1", SetEndpoints: true, Endpoints: []string{"https://198.51.100.7:443"},
+		Operator: op.String(), NodeId: "node-1", SetEndpoints: true, Endpoints: []string{"https://45.33.100.7:443"},
 	})
 	require.NoError(t, err)
 	net, asn, err := f.Keeper.NodeNetwork(f.Ctx, "node-1")
 	require.NoError(t, err)
-	require.Equal(t, "198.51.0.0/16", net)
+	require.Equal(t, "45.33.0.0/16", net)
 	require.Equal(t, uint32(15169), asn)
 
 	_, err = f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{Operator: op.String(), NodeId: "node-1", SetAsn: true})
@@ -216,10 +216,10 @@ func TestNetworkOf(t *testing.T) {
 	}{
 		"nil":                {nil, ""},
 		"hostname only":      {[]string{"https://node.example:443"}, ""},
-		"v4 url":             {[]string{"https://203.0.113.10:443"}, "203.0.0.0/16"},
-		"v4 host:port":       {[]string{"198.51.100.7:4001"}, "198.51.0.0/16"},
-		"v4 multiaddr":       {[]string{"/ip4/192.0.2.9/tcp/4001"}, "192.0.0.0/16"},
-		"first literal wins": {[]string{"https://a.example", "https://198.51.100.7", "https://203.0.113.10"}, "198.51.0.0/16"},
+		"v4 url":             {[]string{"https://93.184.113.10:443"}, "93.184.0.0/16"},
+		"v4 host:port":       {[]string{"45.33.100.7:4001"}, "45.33.0.0/16"},
+		"v4 multiaddr":       {[]string{"/ip4/151.101.2.9/tcp/4001"}, "151.101.0.0/16"},
+		"first literal wins": {[]string{"https://a.example", "https://45.33.100.7", "https://93.184.113.10"}, "45.33.0.0/16"},
 		"v6 groups by /32":   {[]string{"https://[2001:db8:1:2::1]:443"}, "2001:db8::/32"},
 		"onion is not an ip": {[]string{"/onion3/abcdefghijklmnop:80"}, ""},
 	}
@@ -241,7 +241,7 @@ func TestValidateASN(t *testing.T) {
 
 func TestGenesis_roundTripKeepsAsnAndQueuesStorageNodes(t *testing.T) {
 	f := newTestFixture(t)
-	op, _ := storageNode(t, f, "node-1", []string{"https://203.0.113.10:443"}, 15169)
+	op, _ := storageNode(t, f, "node-1", []string{"https://93.184.113.10:443"}, 15169)
 	_, err := f.Msg.BondNode(f.Ctx, &types.MsgBondNode{Operator: op.String(), NodeId: "node-1", Role: types.RoleStorage, Amount: orama(1)})
 	require.NoError(t, err)
 	_, err = f.Keeper.TakeStorageChanges(f.Ctx)
@@ -256,7 +256,7 @@ func TestGenesis_roundTripKeepsAsnAndQueuesStorageNodes(t *testing.T) {
 
 	net, asn, err := g.Keeper.NodeNetwork(g.Ctx, "node-1")
 	require.NoError(t, err)
-	require.Equal(t, "203.0.0.0/16", net)
+	require.Equal(t, "93.184.0.0/16", net)
 	require.Equal(t, uint32(15169), asn)
 	ids, err := g.Keeper.TakeStorageChanges(g.Ctx)
 	require.NoError(t, err)

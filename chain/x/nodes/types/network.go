@@ -2,7 +2,8 @@ package types
 
 import (
 	"fmt"
-	"net"
+
+	"github.com/DeBrosOfficial/network/chain/netclass"
 )
 
 const (
@@ -58,16 +59,19 @@ func NetworkOf(endpoints []string) string {
 			continue
 		}
 		for _, host := range hosts {
-			ip := net.ParseIP(host)
-			if ip == nil {
+			addr, ok := netclass.Literal(host)
+			if !ok {
 				continue
 			}
-			if v4 := ip.To4(); v4 != nil {
-				mask := net.CIDRMask(ipv4NetworkBits, 32)
-				return (&net.IPNet{IP: v4.Mask(mask), Mask: mask}).String()
+			bits := ipv6NetworkBits
+			if addr.Is4() {
+				bits = ipv4NetworkBits
 			}
-			mask := net.CIDRMask(ipv6NetworkBits, 128)
-			return (&net.IPNet{IP: ip.Mask(mask), Mask: mask}).String()
+			prefix, err := addr.Prefix(bits)
+			if err != nil {
+				continue
+			}
+			return prefix.String()
 		}
 	}
 	return ""
@@ -85,11 +89,11 @@ func LiteralIPs(endpoints []string) []string {
 			continue
 		}
 		for _, host := range hosts {
-			ip := net.ParseIP(host)
-			if ip == nil {
+			addr, ok := netclass.Literal(host)
+			if !ok {
 				continue
 			}
-			key := ip.String()
+			key := addr.String()
 			if _, dup := seen[key]; dup {
 				continue
 			}

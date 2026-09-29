@@ -13,7 +13,7 @@ import (
 
 func TestRegisterNode_literalIPBelongsToOneNode(t *testing.T) {
 	f := newTestFixture(t)
-	storageNode(t, f, "a", []string{"https://203.0.113.10:443"}, 15169)
+	storageNode(t, f, "a", []string{"https://93.184.113.10:443"}, 15169)
 
 	opB, hotB := newAccount(t), newAccount(t)
 	f.fund(opB, 100)
@@ -26,36 +26,63 @@ func TestRegisterNode_literalIPBelongsToOneNode(t *testing.T) {
 		})
 		return err
 	}
-	require.ErrorIs(t, reg("b1", "https://203.0.113.10:443"), types.ErrEndpointTaken)
-	require.ErrorIs(t, reg("b2", "/ip4/203.0.113.10/tcp/4001"), types.ErrEndpointTaken, "the same address in another spelling")
-	require.ErrorIs(t, reg("b3", "https://node.example:443", "203.0.113.10:8080"), types.ErrEndpointTaken, "one taken address among others")
+	require.ErrorIs(t, reg("b1", "https://93.184.113.10:443"), types.ErrEndpointTaken)
+	require.ErrorIs(t, reg("b2", "/ip4/93.184.113.10/tcp/4001"), types.ErrEndpointTaken, "the same address in another spelling")
+	require.ErrorIs(t, reg("b3", "https://node.example:443", "93.184.113.10:8080"), types.ErrEndpointTaken, "one taken address among others")
 	require.NoError(t, reg("b4", "https://node.example:443"), "hostnames are not indexed and may repeat")
+}
+
+// An address written so that a resolver reads it but net.ParseIP did not (integer, hex, octal or
+// short IPv4, a zone id, a path) must not slip past the public check or past the LiveIPs index:
+// it is refused at registration, and the IPv4-mapped spelling of a taken address is the same
+// address.
+func TestRegisterNode_obfuscatedAddressesAreRefusedAndMappedFormsAreTheSameAddress(t *testing.T) {
+	f := newTestFixture(t)
+	storageNode(t, f, "a", []string{"https://93.184.113.10:443"}, 15169)
+	opB, hotB := newAccount(t), newAccount(t)
+	f.fund(opB, 100)
+	f.registerOperator(t, opB)
+	reg := func(id string, endpoints ...string) error {
+		_, err := f.Msg.RegisterNode(f.Ctx, &types.MsgRegisterNode{
+			Operator: opB.String(), NodeId: id, Roles: []types.Role{types.RoleRelay}, HotKey: hotB.String(),
+			Bindings:  withHot(t, opB, hotB, edBinding(t, testChainID, opB.String(), "tor")),
+			Endpoints: endpoints,
+		})
+		return err
+	}
+	require.ErrorIs(t, reg("m1", "[::ffff:93.184.113.10]:443"), types.ErrEndpointTaken, "the IPv4-mapped spelling is the taken address")
+	// 93.184.113.10 as a 32-bit integer, and in hex.
+	for i, ep := range []string{"https://1572393226/", "https://0x5db8710a/", "93.184.113.10/x", "https://[fe80::1%25eth0]/", "https://127.1/"} {
+		err := reg("o"+string(rune('a'+i)), ep)
+		require.Error(t, err, "%q must not register", ep)
+		require.NotErrorIs(t, err, types.ErrEndpointTaken)
+	}
 }
 
 func TestUpdateNode_endpointAddressesFollowTheNode(t *testing.T) {
 	f := newTestFixture(t)
-	opA, _ := storageNode(t, f, "a", []string{"https://203.0.113.10:443"}, 0)
-	opB, _ := storageNode(t, f, "b", []string{"https://198.51.100.7:443"}, 0)
+	opA, _ := storageNode(t, f, "a", []string{"https://93.184.113.10:443"}, 0)
+	opB, _ := storageNode(t, f, "b", []string{"https://45.33.100.7:443"}, 0)
 	setEndpoints := func(op sdk.AccAddress, id string, endpoints ...string) error {
 		_, err := f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{Operator: op.String(), NodeId: id, SetEndpoints: true, Endpoints: endpoints})
 		return err
 	}
 
-	require.ErrorIs(t, setEndpoints(opB, "b", "https://203.0.113.10:443"), types.ErrEndpointTaken)
-	require.NoError(t, setEndpoints(opA, "a", "https://203.0.113.10:443", "https://192.0.2.9:443"), "a node may keep and add addresses")
-	require.ErrorIs(t, setEndpoints(opB, "b", "https://192.0.2.9:443"), types.ErrEndpointTaken)
+	require.ErrorIs(t, setEndpoints(opB, "b", "https://93.184.113.10:443"), types.ErrEndpointTaken)
+	require.NoError(t, setEndpoints(opA, "a", "https://93.184.113.10:443", "https://151.101.2.9:443"), "a node may keep and add addresses")
+	require.ErrorIs(t, setEndpoints(opB, "b", "https://151.101.2.9:443"), types.ErrEndpointTaken)
 
 	require.NoError(t, setEndpoints(opA, "a", "https://node.example:443"), "moving off an address releases it")
-	require.NoError(t, setEndpoints(opB, "b", "https://203.0.113.10:443"))
+	require.NoError(t, setEndpoints(opB, "b", "https://93.184.113.10:443"))
 
 	_, err := f.Msg.RetireNode(f.Ctx, &types.MsgRetireNode{Operator: opB.String(), NodeId: "b"})
 	require.NoError(t, err)
-	require.NoError(t, setEndpoints(opA, "a", "https://203.0.113.10:443"), "retiring a node releases its addresses")
+	require.NoError(t, setEndpoints(opA, "a", "https://93.184.113.10:443"), "retiring a node releases its addresses")
 }
 
 func TestGenesis_endpointAddressIndexIsRebuilt(t *testing.T) {
 	f := newTestFixture(t)
-	storageNode(t, f, "a", []string{"https://203.0.113.10:443"}, 15169)
+	storageNode(t, f, "a", []string{"https://93.184.113.10:443"}, 15169)
 	exported, err := f.Keeper.ExportGenesis(f.Ctx)
 	require.NoError(t, err)
 
@@ -77,7 +104,7 @@ func TestGenesis_endpointAddressIndexIsRebuilt(t *testing.T) {
 	_, err = g.Msg.RegisterNode(g.Ctx, &types.MsgRegisterNode{
 		Operator: op.String(), NodeId: "x", Roles: []types.Role{types.RoleRelay}, HotKey: hot.String(),
 		Bindings:  withHot(t, op, hot, edBinding(t, testChainID, op.String(), "tor")),
-		Endpoints: []string{"https://203.0.113.10:443"},
+		Endpoints: []string{"https://93.184.113.10:443"},
 	})
 	require.ErrorIs(t, err, types.ErrEndpointTaken, "an imported node still owns its address")
 }
@@ -99,7 +126,7 @@ func (f *testFixture) advance(d time.Duration) {
 func TestNodeNetwork_identityCountsOnlyAfterTheLock(t *testing.T) {
 	const lock = 1000
 	f := lockedFixture(t, lock)
-	op, _ := storageNode(t, f, "n", []string{"https://203.0.113.10:443"}, 15169)
+	op, _ := storageNode(t, f, "n", []string{"https://93.184.113.10:443"}, 15169)
 
 	net, asn, err := f.Keeper.NodeNetwork(f.Ctx, "n")
 	require.NoError(t, err)
@@ -114,7 +141,7 @@ func TestNodeNetwork_identityCountsOnlyAfterTheLock(t *testing.T) {
 	f.advance(time.Second)
 	net, asn, err = f.Keeper.NodeNetwork(f.Ctx, "n")
 	require.NoError(t, err)
-	require.Equal(t, "203.0.0.0/16", net)
+	require.Equal(t, "93.184.0.0/16", net)
 	require.Equal(t, uint32(15169), asn)
 
 	// A change to the ASN starts the clock again, and so does one to the derived /16.
@@ -125,11 +152,11 @@ func TestNodeNetwork_identityCountsOnlyAfterTheLock(t *testing.T) {
 	require.Zero(t, asn, "a changed ASN is not in effect yet")
 	f.advance(lock * time.Second)
 	net, asn, _ = f.Keeper.NodeNetwork(f.Ctx, "n")
-	require.Equal(t, "203.0.0.0/16", net)
+	require.Equal(t, "93.184.0.0/16", net)
 	require.Equal(t, uint32(13335), asn)
 
 	_, err = f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{
-		Operator: op.String(), NodeId: "n", SetEndpoints: true, Endpoints: []string{"https://198.51.100.7:443"},
+		Operator: op.String(), NodeId: "n", SetEndpoints: true, Endpoints: []string{"https://45.33.100.7:443"},
 	})
 	require.NoError(t, err)
 	net, _, _ = f.Keeper.NodeNetwork(f.Ctx, "n")
@@ -139,7 +166,7 @@ func TestNodeNetwork_identityCountsOnlyAfterTheLock(t *testing.T) {
 func TestUpdateNode_changesThatLeaveTheIdentityAloneDoNotRestartTheLock(t *testing.T) {
 	const lock = 1000
 	f := lockedFixture(t, lock)
-	op, _ := storageNode(t, f, "n", []string{"https://203.0.113.10:443"}, 15169)
+	op, _ := storageNode(t, f, "n", []string{"https://93.184.113.10:443"}, 15169)
 	f.advance(lock * time.Second)
 
 	_, err := f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{Operator: op.String(), NodeId: "n", SetRegionHint: true, RegionHint: "eu-2"})
@@ -147,22 +174,22 @@ func TestUpdateNode_changesThatLeaveTheIdentityAloneDoNotRestartTheLock(t *testi
 	_, err = f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{Operator: op.String(), NodeId: "n", SetAsn: true, Asn: 15169})
 	require.NoError(t, err, "declaring the same ASN again changes nothing")
 	_, err = f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{
-		Operator: op.String(), NodeId: "n", SetEndpoints: true, Endpoints: []string{"https://203.0.113.99:443"},
+		Operator: op.String(), NodeId: "n", SetEndpoints: true, Endpoints: []string{"https://93.184.113.99:443"},
 	})
 	require.NoError(t, err, "another address in the same /16 is the same network")
 
 	net, asn, err := f.Keeper.NodeNetwork(f.Ctx, "n")
 	require.NoError(t, err)
-	require.Equal(t, "203.0.0.0/16", net)
+	require.Equal(t, "93.184.0.0/16", net)
 	require.Equal(t, uint32(15169), asn)
 }
 
 func TestNodeNetwork_lockZeroIsOff(t *testing.T) {
 	f := lockedFixture(t, 0)
-	storageNode(t, f, "n", []string{"https://203.0.113.10:443"}, 15169)
+	storageNode(t, f, "n", []string{"https://93.184.113.10:443"}, 15169)
 	net, asn, err := f.Keeper.NodeNetwork(f.Ctx, "n")
 	require.NoError(t, err)
-	require.Equal(t, "203.0.0.0/16", net)
+	require.Equal(t, "93.184.0.0/16", net)
 	require.Equal(t, uint32(15169), asn)
 }
 
@@ -176,7 +203,7 @@ func TestParams_networkIdentityLockMustNotBeNegative(t *testing.T) {
 
 func TestGenesis_identitySinceSurvivesRoundTrip(t *testing.T) {
 	f := lockedFixture(t, 1000)
-	storageNode(t, f, "n", []string{"https://203.0.113.10:443"}, 15169)
+	storageNode(t, f, "n", []string{"https://93.184.113.10:443"}, 15169)
 	exported, err := f.Keeper.ExportGenesis(f.Ctx)
 	require.NoError(t, err)
 	require.Equal(t, f.Ctx.BlockTime().Unix(), exported.Nodes[0].IdentitySinceUnix)
@@ -216,15 +243,15 @@ func requireIdentityIndexes(t *testing.T, f *testFixture) {
 
 func TestIdentityIndexes_stayInLineThroughTheLifecycle(t *testing.T) {
 	f := newTestFixture(t)
-	opA, hotA := storageNode(t, f, "a", []string{"https://203.0.113.10:443", "/ip4/198.51.100.7/tcp/4001"}, 0)
-	storageNode(t, f, "b", []string{"https://192.0.2.9:443"}, 0)
+	opA, hotA := storageNode(t, f, "a", []string{"https://93.184.113.10:443", "/ip4/45.33.100.7/tcp/4001"}, 0)
+	storageNode(t, f, "b", []string{"https://151.101.2.9:443"}, 0)
 	requireIdentityIndexes(t, f)
 
 	next := newAccount(t)
 	_, err := f.Msg.UpdateNode(f.Ctx, &types.MsgUpdateNode{
 		Operator: opA.String(), NodeId: "a", HotKey: next.String(),
 		Bindings:     withHot(t, opA, next, secpBinding(t, testChainID, opA.String(), "hot")),
-		SetEndpoints: true, Endpoints: []string{"https://203.0.113.10:443"},
+		SetEndpoints: true, Endpoints: []string{"https://93.184.113.10:443"},
 	})
 	require.NoError(t, err)
 	requireIdentityIndexes(t, f)

@@ -55,9 +55,9 @@ func TestApp_probationNodeEarnsItsFirstPayoutsAndTheChainKeepsProducingBlocks(t 
 	c := newWiringChain(t)
 	nodes := map[string]wiringNode{}
 	for _, n := range []wiringNode{
-		c.addProbationNode("p1", "https://198.51.100.10:443", 15169),
-		c.addProbationNode("p2", "https://203.0.113.10:443", 13335),
-		c.addProbationNode("p3", "https://192.0.2.10:443", 16509),
+		c.addProbationNode("p1", "https://45.33.100.10:443", 15169),
+		c.addProbationNode("p2", "https://93.184.113.10:443", 13335),
+		c.addProbationNode("p3", "https://151.101.2.10:443", 16509),
 	} {
 		nodes[n.id] = n
 	}

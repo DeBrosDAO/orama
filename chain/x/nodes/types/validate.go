@@ -10,6 +10,8 @@ import (
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/DeBrosOfficial/network/chain/netclass"
 )
 
 const (
@@ -186,11 +188,18 @@ func endpointHosts(ep string) ([]string, error) {
 		}
 		return []string{u.Hostname()}, nil
 	}
+	// A schemeless endpoint is a bare host or host:port. A path, query or fragment would let a
+	// value such as "10.0.0.1/x" reach a resolver as an address while reading as a name here.
+	if strings.ContainsAny(ep, "/?#") {
+		return nil, fmt.Errorf("a schemeless endpoint must be a host or host:port, without a path, query or fragment")
+	}
 	host := ep
 	if h, _, err := net.SplitHostPort(ep); err == nil {
 		host = h
 	}
-	host = strings.Trim(host, "[]")
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
 	if host == "" {
 		return nil, fmt.Errorf("missing host")
 	}
@@ -204,7 +213,13 @@ func multiaddrHosts(ep string) ([]string, error) {
 		proto := parts[i]
 		val := parts[i+1]
 		switch proto {
-		case "ip4", "ip6", "dns", "dns4", "dns6", "dnsaddr":
+		case "ip4", "ip6":
+			addr, ok := netclass.Literal(val)
+			if !ok || (proto == "ip4") != addr.Is4() {
+				return nil, fmt.Errorf("/%s/%s is not a literal %s address", proto, val, proto)
+			}
+			hosts = append(hosts, val)
+		case "dns", "dns4", "dns6", "dnsaddr":
 			hosts = append(hosts, val)
 		case "tcp", "udp", "p2p", "sni":
 		case "onion", "onion3":
@@ -227,17 +242,7 @@ func multiaddrHosts(ep string) ([]string, error) {
 }
 
 func rejectNonPublicHost(host string) error {
-	host = strings.TrimSuffix(host, ".")
-	lower := strings.ToLower(host)
-	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") || strings.HasSuffix(lower, ".local") {
-		return fmt.Errorf("host %q is not public", host)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if !ip.IsGlobalUnicast() || ip.IsPrivate() {
-			return fmt.Errorf("ip %s is not a public address", ip)
-		}
-	}
-	return nil
+	return netclass.CheckHost(host)
 }
 
 // ValidateBaseDomain checks a cluster's public base domain.
@@ -248,7 +253,7 @@ func ValidateBaseDomain(domain string) error {
 	if domain != strings.ToLower(domain) {
 		return fmt.Errorf("base domain must be lowercase")
 	}
-	if net.ParseIP(domain) != nil {
+	if _, isIP := netclass.Literal(domain); isIP {
 		return fmt.Errorf("base domain must be a name, not an ip")
 	}
 	labels := strings.Split(domain, ".")
