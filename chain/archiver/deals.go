@@ -21,6 +21,9 @@ import (
 // x/storage gives it a provider in the next block, and only then can MsgAttachReplicas record it.
 type dealState struct {
 	DealIDs []uint64 `json:"deal_ids"`
+	// Uploaded lists the "<deal>/<slot>/<node>" slots whose provider took the bundle, so a
+	// restart does not send it again.
+	Uploaded []string `json:"uploaded,omitempty"`
 }
 
 func dealStatePath(dir string, start, end int64) string {
@@ -124,6 +127,9 @@ func (r *Runner) advanceRange(ctx context.Context, start, end int64) (bool, erro
 		return false, err
 	}
 	if err := r.openDeals(ctx, rec, &st); err != nil {
+		return false, errors.Join(err, saveDealState(path, st))
+	}
+	if err := r.uploadDeals(ctx, rec, &st); err != nil {
 		return false, errors.Join(err, saveDealState(path, st))
 	}
 	recorded, err := r.recordDeals(ctx, rec, &st)

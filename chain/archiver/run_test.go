@@ -33,6 +33,25 @@ type fakeChain struct {
 	pending      map[int64]int
 	lastArchived int64
 	attaches     int
+	// slots is what DealSlots returns per deal; urls is each node's provider root.
+	slots map[uint64][]storagetypes.Slot
+	urls  map[string]string
+}
+
+type noUpload struct{}
+
+func (noUpload) Upload(context.Context, string, []byte, []byte) error { return nil }
+
+func (c *fakeChain) DealSlots(_ context.Context, id uint64) ([]storagetypes.Slot, error) {
+	return c.slots[id], nil
+}
+
+func (c *fakeChain) ProviderURL(_ context.Context, nodeID string) (string, error) {
+	u, ok := c.urls[nodeID]
+	if !ok {
+		return "", fmt.Errorf("node %s names no provider endpoint", nodeID)
+	}
+	return u, nil
 }
 
 func realBlock(t *testing.T, h int64) Block {
@@ -153,7 +172,7 @@ func (c *fakeChain) assign() {
 func TestRunner_attestsFinalisedRangesAndResumesAfterRestart(t *testing.T) {
 	chain := newFakeChain(t, 25)
 	dir := t.TempDir()
-	r, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	n, err := r.Step(context.Background())
 	require.NoError(t, err)
@@ -162,7 +181,7 @@ func TestRunner_attestsFinalisedRangesAndResumesAfterRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(20), cursor)
 
-	restarted, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
+	restarted, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	n, err = restarted.Step(context.Background())
 	require.NoError(t, err)
@@ -188,7 +207,7 @@ func TestRunner_attestsFinalisedRangesAndResumesAfterRestart(t *testing.T) {
 func TestRunner_retriesADroppedAttestationAndStopsOnAConflictingRoot(t *testing.T) {
 	chain := newFakeChain(t, 12)
 	dir := t.TempDir()
-	r, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	chain.fail = errors.New("not included")
 	_, err = r.Step(context.Background())
@@ -202,7 +221,7 @@ func TestRunner_retriesADroppedAttestationAndStopsOnAConflictingRoot(t *testing.
 	other := newFakeChain(t, 22)
 	other.ranges[[2]int64{1, 10}] = types.RangeRecord{StartHeight: 1, EndHeight: 10, MerkleRoot: make([]byte, 32)}
 	dir2 := t.TempDir()
-	r2, err := NewRunner(other, "orama1archiver", "node-1", dir2, 10)
+	r2, err := NewRunner(other, noUpload{}, "orama1archiver", "node-1", dir2, 10)
 	require.NoError(t, err)
 	n, err = r2.Step(context.Background())
 	require.ErrorIs(t, err, ErrRootConflict)
@@ -216,7 +235,7 @@ func TestRunner_retriesADroppedAttestationAndStopsOnAConflictingRoot(t *testing.
 
 func TestRunner_skipsARangeItAlreadyAttested(t *testing.T) {
 	chain := newFakeChain(t, 12)
-	r, err := NewRunner(chain, "orama1a", "node-1", t.TempDir(), 10)
+	r, err := NewRunner(chain, noUpload{}, "orama1a", "node-1", t.TempDir(), 10)
 	require.NoError(t, err)
 	_, err = r.Step(context.Background())
 	require.NoError(t, err)
@@ -232,7 +251,7 @@ func TestRunner_skipsARangeItAlreadyAttested(t *testing.T) {
 func TestVerify_refusesTamperedTruncatedAndMismatchedBundles(t *testing.T) {
 	chain := newFakeChain(t, 12)
 	dir := t.TempDir()
-	r, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	_, err = r.Step(context.Background())
 	require.NoError(t, err)
@@ -274,7 +293,7 @@ func TestEncode_refusesGapsAndEmptyRanges(t *testing.T) {
 }
 
 func TestNewRunner_needsANodeID(t *testing.T) {
-	_, err := NewRunner(newFakeChain(t, 1), "orama1a", "", t.TempDir(), 10)
+	_, err := NewRunner(newFakeChain(t, 1), noUpload{}, "orama1a", "", t.TempDir(), 10)
 	require.ErrorContains(t, err, "node id")
 }
 
@@ -287,7 +306,7 @@ func stepOnce(t *testing.T, r *Runner) {
 func TestRunner_opensThreeArchiveDealsThenRecordsThemOnceTheyHaveProviders(t *testing.T) {
 	chain := newFakeChain(t, 12)
 	dir := t.TempDir()
-	r, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 
 	stepOnce(t, r)
@@ -316,7 +335,7 @@ func TestRunner_commitsTheBundleFileNotTheBlocks(t *testing.T) {
 	dir := t.TempDir()
 	var got *types.MsgCreateArchiveDeal
 	wrapped := &recordingChain{fakeChain: chain, seen: func(m *types.MsgCreateArchiveDeal) { got = m }}
-	r, err := NewRunner(wrapped, "orama1archiver", "node-1", dir, 10)
+	r, err := NewRunner(wrapped, noUpload{}, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	stepOnce(t, r)
 
@@ -343,9 +362,9 @@ func (c *recordingChain) CreateArchiveDeal(ctx context.Context, m *types.MsgCrea
 
 func TestRunner_aRefusedExtraDealIsNotAnError(t *testing.T) {
 	chain := newFakeChain(t, 12)
-	first, err := NewRunner(chain, "orama1a", "node-1", t.TempDir(), 10)
+	first, err := NewRunner(chain, noUpload{}, "orama1a", "node-1", t.TempDir(), 10)
 	require.NoError(t, err)
-	second, err := NewRunner(chain, "orama1b", "node-2", t.TempDir(), 10)
+	second, err := NewRunner(chain, noUpload{}, "orama1b", "node-2", t.TempDir(), 10)
 	require.NoError(t, err)
 	stepOnce(t, first)
 	stepOnce(t, second)
@@ -354,7 +373,7 @@ func TestRunner_aRefusedExtraDealIsNotAnError(t *testing.T) {
 
 func TestRunner_replacesADealThatEndedWithoutAProvider(t *testing.T) {
 	chain := newFakeChain(t, 12)
-	r, err := NewRunner(chain, "orama1archiver", "node-1", t.TempDir(), 10)
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", t.TempDir(), 10)
 	require.NoError(t, err)
 	stepOnce(t, r)
 	chain.deals[1] = storagetypes.DealStatus_DEAL_STATUS_EXPIRED
@@ -366,10 +385,10 @@ func TestRunner_replacesADealThatEndedWithoutAProvider(t *testing.T) {
 func TestRunner_restartFollowsTheSameDeals(t *testing.T) {
 	chain := newFakeChain(t, 12)
 	dir := t.TempDir()
-	r, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	stepOnce(t, r)
-	restarted, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
+	restarted, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	chain.assign()
 	stepOnce(t, restarted)
@@ -380,7 +399,7 @@ func TestRunner_restartFollowsTheSameDeals(t *testing.T) {
 func TestRunner_monitorReportsProgressAndTheRetainLag(t *testing.T) {
 	chain := newFakeChain(t, 25)
 	dir := t.TempDir()
-	r, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	stepOnce(t, r)
 

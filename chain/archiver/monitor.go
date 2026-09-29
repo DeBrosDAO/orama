@@ -21,6 +21,10 @@ type Monitor struct {
 	UnarchivedRanges int `json:"unarchived_ranges"`
 	// DealsOpened counts ARCHIVE deals this process has opened since it started.
 	DealsOpened uint64 `json:"deals_opened"`
+	// PiecesUploaded counts bundle uploads to assigned providers since this process started.
+	PiecesUploaded uint64 `json:"pieces_uploaded"`
+	// UploadFailures counts uploads that failed every try; a slot nobody uploads to is evicted.
+	UploadFailures uint64 `json:"upload_failures"`
 }
 
 func (r *Runner) writeMonitor(ctx context.Context, unarchived int) error {
@@ -39,6 +43,7 @@ func (r *Runner) writeMonitor(ctx context.Context, unarchived int) error {
 	body, err := json.Marshal(Monitor{
 		AttestedHeight: cursor, LastArchivedHeight: archived, TipHeight: tip,
 		RetainLagBlocks: max(tip-archived, 0), UnarchivedRanges: unarchived, DealsOpened: r.dealsOpened,
+		PiecesUploaded: r.piecesUploaded, UploadFailures: r.uploadFailures,
 	})
 	if err != nil {
 		return err

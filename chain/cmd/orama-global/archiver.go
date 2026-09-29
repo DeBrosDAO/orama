@@ -16,6 +16,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/chain/archiver"
 	"github.com/DeBrosOfficial/network/chain/client/node"
+	"github.com/DeBrosOfficial/network/chain/repair"
 )
 
 const (
@@ -40,7 +41,9 @@ it must be the hot key of the x/nodes node named in <home>/node-id, which needs
 an active ARCHIVER role bond.
 For each attested range it then opens the ARCHIVE storage deals the range lacks
 (MsgCreateArchiveDeal, priced and timed by the chain) and, once x/storage has
-given a deal a provider, records it (MsgAttachReplicas). x/archive marks the
+given a deal a provider, uploads the bundle to each assigned provider's public
+/pieces endpoint (a provider cannot prove bytes it never received) and records the
+deal (MsgAttachReplicas). x/archive marks the
 range archived at three attesting operators and three recorded deals.
 <home>/monitor.json reports the attested height, the chain's last archived
 height, the tip and the lag between them. The archiver does not hold CometBFT's
@@ -80,7 +83,7 @@ func runArchiver(ctx context.Context, rpc, home string, width int64, interval ti
 	if err != nil {
 		return err
 	}
-	r, err := archiver.NewRunner(chain, key.Address, nodeID, home, width)
+	r, err := archiver.NewRunner(chain, repair.HTTP{Client: repair.PublicHTTPClient(repairHTTPTimeout)}, key.Address, nodeID, home, width)
 	if err != nil {
 		return err
 	}

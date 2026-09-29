@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -42,6 +43,11 @@ type Chain interface {
 	// LastArchivedHeight is x/archive's contiguous archived prefix, the height below which the
 	// chain lets a node prune.
 	LastArchivedHeight(ctx context.Context) (int64, error)
+	// DealSlots reads every slot of an x/storage deal. A slot the chain has not created yet is
+	// left out.
+	DealSlots(ctx context.Context, dealID uint64) ([]storagetypes.Slot, error)
+	// ProviderURL is the http(s) provider root a node registered in x/nodes.
+	ProviderURL(ctx context.Context, nodeID string) (string, error)
 }
 
 // Runner packs finalised ranges into bundle files, attests them, and opens and records the
@@ -55,13 +61,19 @@ type Runner struct {
 	dir         string
 	width       int64
 	dealsOpened uint64
+	uploader    Uploader
+	sleep       func(context.Context, time.Duration) error
+	// piecesUploaded and uploadFailures count this process's uploads to providers.
+	piecesUploaded uint64
+	uploadFailures uint64
 }
 
 // NewRunner writes bundles under dir and signs attestations as archiver, the
-// hot key of nodeID, an x/nodes node with an ARCHIVER role bond.
-func NewRunner(chain Chain, archiver, nodeID, dir string, width int64) (*Runner, error) {
-	if chain == nil || archiver == "" || nodeID == "" || dir == "" {
-		return nil, errors.New("archiver needs a chain, a signer, a node id, and a directory")
+// hot key of nodeID, an x/nodes node with an ARCHIVER role bond. uploader sends the bundle to
+// the providers x/storage assigns to its ARCHIVE deals.
+func NewRunner(chain Chain, uploader Uploader, archiver, nodeID, dir string, width int64) (*Runner, error) {
+	if chain == nil || uploader == nil || archiver == "" || nodeID == "" || dir == "" {
+		return nil, errors.New("archiver needs a chain, an uploader, a signer, a node id, and a directory")
 	}
 	if width < 1 {
 		return nil, errors.New("range width must be positive")
@@ -69,7 +81,7 @@ func NewRunner(chain Chain, archiver, nodeID, dir string, width int64) (*Runner,
 	if err := os.MkdirAll(filepath.Join(dir, "bundles"), 0o750); err != nil {
 		return nil, fmt.Errorf("create bundle directory: %w", err)
 	}
-	return &Runner{chain: chain, archiver: archiver, nodeID: nodeID, dir: dir, width: width}, nil
+	return &Runner{chain: chain, uploader: uploader, sleep: sleepContext, archiver: archiver, nodeID: nodeID, dir: dir, width: width}, nil
 }
 
 func (r *Runner) cursorPath() string { return filepath.Join(r.dir, "cursor") }

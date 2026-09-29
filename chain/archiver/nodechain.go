@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/chain/client/node"
 	"github.com/DeBrosOfficial/network/chain/client/tx"
+	"github.com/DeBrosOfficial/network/chain/repair"
 	"github.com/DeBrosOfficial/network/chain/x/archive/types"
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
@@ -114,4 +115,32 @@ func (c *NodeChain) LastArchivedHeight(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return resp.LastArchivedHeight, nil
+}
+
+// DealSlots reads the deal for its replica count, then each slot. A slot that does not exist yet
+// is left out.
+func (c *NodeChain) DealSlots(ctx context.Context, dealID uint64) ([]storagetypes.Slot, error) {
+	chain := repair.NodeChain{Client: c.Client}
+	deal, err := chain.Deal(ctx, dealID)
+	if err != nil {
+		return nil, fmt.Errorf("read deal: %w", err)
+	}
+	slots := make([]storagetypes.Slot, 0, deal.Replicas)
+	for i := uint32(0); i < deal.Replicas; i++ {
+		slot, err := chain.Slot(ctx, dealID, i)
+		if err != nil {
+			var qe *node.QueryError
+			if errors.As(err, &qe) && qe.NotFound() {
+				continue
+			}
+			return nil, fmt.Errorf("read slot %d: %w", i, err)
+		}
+		slots = append(slots, slot)
+	}
+	return slots, nil
+}
+
+// ProviderURL is the node's first http(s) endpoint in x/nodes.
+func (c *NodeChain) ProviderURL(ctx context.Context, nodeID string) (string, error) {
+	return repair.NodeChain{Client: c.Client}.ProviderURL(ctx, nodeID)
 }

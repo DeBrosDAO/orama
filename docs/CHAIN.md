@@ -1290,9 +1290,9 @@ configured:
 - Without `--ipfs-api` the provider does not pin, and nothing above happens.
 
 ARCHIVE deals opened by `MsgCreateArchiveDeal` commit to the bundle file's `piece/`
-root, so the slot's bytes are the bundle file. Nothing in the archiver sends those
-bytes to the assigned providers: they arrive by `POST /pieces/<root>` or, when the
-bundle is fetchable from IPFS, by `POST /pins/<root>`. An ARCHIVE bundle's x/archive `bundle_cid` is CIDv1 raw sha2-256 of the whole
+root, so the slot's bytes are the bundle file. The archiver uploads them to each
+assigned provider by `POST /pieces/<root>` (see "History archiver"); a provider
+can also fetch them by `POST /pins/<root>` when the bundle is fetchable from IPFS. An ARCHIVE bundle's x/archive `bundle_cid` is CIDv1 raw sha2-256 of the whole
 file. It is a hash of the file, not the root of a UnixFS DAG, so Kubo can serve
 it by that CID only when the bundle fits in one block. A bundle above that is
 fetchable by the CID that `ipfs add` returns for it, which is not the
@@ -1360,9 +1360,19 @@ yet) until x/archive marks it archived. Each pass, for each such range:
    missing one. The chain answers with the deal id in an `archive_create_deal` event. When the chain refuses one as over
    the range's allowance (`ErrDealsFull`, which happens when another archiver of the range was faster),
    the range has enough deals and the archiver moves on.
-2. When x/storage has assigned a provider to one of its deals (a new deal is OPEN until the next block), it submits
+2. For every slot of its deals that x/storage has assigned to a node and the node has not accepted, it
+   uploads the bundle file to that node's first http(s) endpoint in x/nodes, `POST <endpoint>/pieces/<hex root>`
+   with `X-Piece-Root`. A provider cannot prove bytes it never received, so a slot nobody uploads to is evicted and the
+   deal fails. Before any byte leaves the machine the slot's assigned piece root must equal the bundle's root, otherwise
+   nothing is sent and the pass reports the mismatch. The client dials only public addresses (loopback, private,
+   link-local and CGNAT ranges are refused after DNS) and follows no redirects. A provider answers 403 until its runner
+   has read the assignment, so each slot gets four tries a pass (1, 2 and 4 seconds apart) and is tried again on the
+   next pass for as long as the chain still assigns it to that node. A slot it uploaded is remembered in the deal
+   file as `<deal>/<slot>/<node>` and is not sent again after a restart; a slot the chain moves to another node is a
+   new key and gets the bundle too.
+3. When x/storage has assigned a provider to one of its deals (a new deal is OPEN until the next block), it submits
    `MsgAttachReplicas` for it.
-3. A deal that ended without a provider is dropped and replaced.
+4. A deal that ended without a provider is dropped and replaced.
 
 **`MsgCreateArchiveDeal`** (`archiver`, `node_id`, the range, and the bundle's piece commitment: root, real
 and padded leaf counts, bytes) opens one protocol ARCHIVE deal in x/storage, through
@@ -1416,6 +1426,8 @@ holds it, for every node, so an archiver that is down or behind costs storage bu
 | `retain_lag_blocks` | `tip_height - last_archived_height`. It grows while archiving stalls; alert on it. |
 | `unarchived_ranges` | Attested ranges x/archive has not marked archived. |
 | `deals_opened` | ARCHIVE deals this process has opened since it started. |
+| `pieces_uploaded` | Bundle uploads to assigned providers this process completed since it started. |
+| `upload_failures` | Uploads that failed all their tries in a pass (or were refused for a wrong root); a slot nobody uploads to is evicted. |
 
 core's telemetry does not read this file yet; its `MonitorFile` covers the provider and the relay.
 
