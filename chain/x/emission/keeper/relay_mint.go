@@ -8,9 +8,6 @@ import (
 	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
-
-	"github.com/DeBrosOfficial/network/chain/app/params"
 	relaytypes "github.com/DeBrosOfficial/network/chain/x/relay/types"
 )
 
@@ -54,13 +51,12 @@ func (k Keeper) MintRelayReward(ctx context.Context, epoch uint64, amt math.Int)
 	if amt.GT(remaining) {
 		return fmt.Errorf("relay reward %s exceeds epoch %d remaining ceiling %s", amt, epoch, remaining)
 	}
-	coins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, amt))
-	if err := k.bankKeeper.MintCoins(ctx, relaytypes.ModuleName, coins); err != nil {
+	if err := k.mintTo(ctx, relaytypes.ModuleName, amt); err != nil {
 		return fmt.Errorf("mint relay reward: %w", err)
 	}
 	record.RelayMinted = already.Add(amt)
 	if err := k.Ceilings.Set(ctx, epoch, record); err != nil {
 		return fmt.Errorf("record relay mint for epoch %d: %w", epoch, err)
 	}
-	return nil
+	return k.recordServiceMint(ctx, amt)
 }

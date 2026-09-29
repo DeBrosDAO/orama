@@ -16,6 +16,9 @@ import (
 // any user account directly.
 type BankKeeper interface {
 	MintCoins(ctx context.Context, moduleName string, amt sdk.Coins) error
+	// SendCoinsFromModuleToModule moves a storage or relay service mint from
+	// x/emission, the only norama minter, to the module that pays it out.
+	SendCoinsFromModuleToModule(ctx context.Context, senderModule, recipientModule string, amt sdk.Coins) error
 	GetSupply(ctx context.Context, denom string) sdk.Coin
 	// GetBalance is used only by the devnet-only bootstrap-stake premine gate (Keeper.InitGenesis):
 	// it checks that genesis supply sits entirely in the staking bonded pool, never idle elsewhere.

@@ -183,10 +183,10 @@ var (
 		archivetypes.ModuleName:        nil,
 		nodestypes.ModuleName:          {authtypes.Burner},
 		housetypes.ModuleName:          {authtypes.Burner},
-		storagetypes.ModuleName:        {authtypes.Minter, authtypes.Burner},
+		storagetypes.ModuleName:        {authtypes.Burner},
 		storagetypes.EscrowModuleName:  {authtypes.Burner},
 		storagetypes.ArchiveModuleName: nil,
-		relaytypes.ModuleName:          {authtypes.Minter},
+		relaytypes.ModuleName:          nil,
 		cnfttypes.ModuleName:           nil,
 		markettypes.ModuleName:         nil,
 	}
@@ -455,7 +455,7 @@ func NewOramaApp(
 	app.TokenKeeper = tokenkeeper.NewKeeper(
 		appCodec,
 		runtime.NewKVStoreService(keys[tokentypes.StoreKey]),
-		app.BankKeeper,
+		app.BankKeeper.WithMintCoinsRestriction(refuseNoramaMint),
 		app.FeesKeeper,
 		noopTokenHook{},
 	)

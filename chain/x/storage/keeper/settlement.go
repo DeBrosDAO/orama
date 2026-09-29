@@ -331,7 +331,7 @@ func (k Keeper) payItem(ctx sdk.Context, deal *types.Deal, item types.Settlement
 		credited = true
 	}
 	if item.MintPay.IsPositive() {
-		if err := k.bank.MintCoins(ctx, types.ModuleName, coins(item.MintPay)); err != nil {
+		if err := k.emission.MintStorageService(ctx, item.Epoch, item.MintPay); err != nil {
 			return false, fmt.Errorf("failed to mint storage payment: %w", err)
 		}
 		if err := k.payService(ctx, types.ModuleName, operator, item.MintPay); err != nil {

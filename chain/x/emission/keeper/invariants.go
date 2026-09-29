@@ -47,7 +47,7 @@ func (k Keeper) ReconcileBurns(ctx sdk.Context) error {
 //     epochs already completed - not merely "no more than", since x/emission's CloseEpoch mints
 //     that exact amount unconditionally every time an epoch closes;
 //  2. the base-denom bank supply must equal genesis_supply + cumulative_minted
-//     + cumulative_development_minted - cumulative_burned, where genesis_supply is the
+//     + cumulative_development_minted + cumulative_service_minted - cumulative_burned, where genesis_supply is the
 //     (normally zero) norama supply observed at this chain incarnation's genesis - see the
 //     devnet-only bootstrap-stake exception documented on Keeper.InitGenesis, and
 //     cumulative_burned is kept current by ReconcileBurns. cumulative_development_minted is
@@ -81,22 +81,25 @@ func (k Keeper) checkSupplyInvariantDetailed(ctx sdk.Context) (detail string, mi
 
 	detail = fmt.Sprintf(
 		"minted exactly matches schedule: %t (cumulative_minted=%s, want=%s for %d completed epochs)\n"+
-			"supply matches minted: %t (bank_supply=%s, expected=%s = genesis_supply(%s)+validator_minted(%s)+development_minted(%s)-burned(%s))\n",
+			"supply matches minted: %t (bank_supply=%s, expected=%s = genesis_supply(%s)+validator_minted(%s)+development_minted(%s)+service_minted(%s)-burned(%s))\n",
 		mintedExact, state.CumulativeMinted, wantMinted, completedEpochs,
 		supplyMatches, actualSupply, expected,
-		state.GenesisSupply, state.CumulativeMinted, nonNilInt(state.CumulativeDevelopmentMinted), state.CumulativeBurned,
+		state.GenesisSupply, state.CumulativeMinted, nonNilInt(state.CumulativeDevelopmentMinted),
+		nonNilInt(state.CumulativeServiceMinted), state.CumulativeBurned,
 	)
 
 	return detail, mintedExact, supplyMatches
 }
 
-// expectedSupply is genesis_supply + validator mints + development mints - burns.
+// expectedSupply is genesis_supply + validator mints + development mints +
+// storage and relay service mints - burns.
 // cumulative_minted stays the validator share only, so a development mint does
 // not disturb the schedule equality check.
 func expectedSupply(state types.EpochState) math.Int {
 	return nonNilInt(state.GenesisSupply).
 		Add(nonNilInt(state.CumulativeMinted)).
 		Add(nonNilInt(state.CumulativeDevelopmentMinted)).
+		Add(nonNilInt(state.CumulativeServiceMinted)).
 		Sub(nonNilInt(state.CumulativeBurned))
 }
 

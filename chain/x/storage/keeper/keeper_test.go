@@ -205,6 +205,23 @@ func (d *fakeDeposits) ReleaseDeposit(_ context.Context, id string) (math.Int, m
 type fakeEmission struct {
 	epoch   uint64
 	ceiling map[uint64]math.Int
+	bank    *fakeBank
+	minted  map[uint64]math.Int
+}
+
+// MintStorageService mirrors x/emission: it refuses a mint past the epoch's
+// ceiling and credits the storage module account.
+func (e *fakeEmission) MintStorageService(ctx context.Context, epoch uint64, amt math.Int) error {
+	ceiling, _ := e.StorageCeiling(ctx, epoch)
+	done := e.minted[epoch]
+	if done.IsNil() {
+		done = math.ZeroInt()
+	}
+	if done.Add(amt).GT(ceiling) {
+		return errf("storage mint %s passes epoch %d ceiling %s", amt, epoch, ceiling)
+	}
+	e.minted[epoch] = done.Add(amt)
+	return e.bank.MintCoins(ctx, types.ModuleName, sdk.NewCoins(sdk.NewCoin(params.BaseDenom, amt)))
 }
 
 func (e *fakeEmission) CurrentEpoch(context.Context) (uint64, error) { return e.epoch, nil }
@@ -340,7 +357,7 @@ func newFixture(t *testing.T) *fixture {
 	bank := newFakeBank()
 	earnings := &fakeEarnings{bank: bank, bal: map[string]math.Int{}}
 	deposits := &fakeDeposits{earnings: earnings, bank: bank, locked: map[string]math.Int{}, owner: map[string]string{}}
-	emission := &fakeEmission{epoch: 1, ceiling: map[uint64]math.Int{}}
+	emission := &fakeEmission{epoch: 1, ceiling: map[uint64]math.Int{}, bank: bank, minted: map[uint64]math.Int{}}
 	nodes := &fakeNodes{byID: map[string]*nodeInfo{}}
 	cdc := codec.NewProtoCodec(codectypes.NewInterfaceRegistry())
 	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, earnings, deposits, emission, nodes)

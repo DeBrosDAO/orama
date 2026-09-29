@@ -8,13 +8,13 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
-// BankKeeper is the subset of x/bank x/storage uses. Mints fund subsidies and
-// protocol deals; burns take the per-deal fee and the 5% service-payment burn.
+// BankKeeper is the subset of x/bank x/storage uses. Burns take the per-deal
+// fee and the 5% service-payment burn. Subsidy mints go through
+// EmissionKeeper.MintStorageService; x/storage cannot mint.
 type BankKeeper interface {
 	SendCoinsFromAccountToModule(ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins) error
 	SendCoinsFromModuleToModule(ctx context.Context, senderModule, recipientModule string, amt sdk.Coins) error
 	SendCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
-	MintCoins(ctx context.Context, moduleName string, amt sdk.Coins) error
 	BurnCoins(ctx context.Context, moduleName string, amt sdk.Coins) error
 	SpendableCoins(ctx context.Context, addr sdk.AccAddress) sdk.Coins
 	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
@@ -42,6 +42,10 @@ type DepositKeeper interface {
 type EmissionKeeper interface {
 	CurrentEpoch(ctx context.Context) (uint64, error)
 	StorageCeiling(ctx context.Context, epoch uint64) (math.Int, error)
+	// MintStorageService mints a subsidy payment into the storage module
+	// account against the epoch's storage ceiling. x/emission is the only
+	// module that mints norama.
+	MintStorageService(ctx context.Context, epoch uint64, amt math.Int) error
 }
 
 // NodeView is the storage-relevant view of a node. x/storage does not import x/nodes.

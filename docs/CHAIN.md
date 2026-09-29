@@ -191,10 +191,18 @@ The structural tier stays closed until its opening rules hold, so a fresh chain 
 take this path. Each `CeilingRecord` also stores `development_minted`. The
 all-time total is `cumulative_development_minted`, which is **not** part of `cumulative_minted`
 (that field stays the validator share, so the schedule equality check is unchanged). Supply is
-`genesis_supply + cumulative_minted + cumulative_development_minted - cumulative_burned`.
+`genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted - cumulative_burned`.
 `x/emission` keeps the trailing 30 epochs of ceiling records (`types.CeilingWindow`) and prunes
 older ones. Pruning does not reduce `cumulative_development_minted`. Nothing reads an expired
 ceiling, so a spend against a pruned epoch is refused.
+
+Storage and relay payments are the other mints, and `x/emission` makes them too.
+`Keeper.MintStorageService` (called by `x/storage` settlement) and `Keeper.MintRelayReward`
+(called by `x/relay`) each mint at most the epoch's storage or relay ceiling minus what was
+already minted against it (`storage_minted`, `relay_minted`). They mint into the emission module
+account, move the coins to the paying module, and add the amount to `cumulative_service_minted`.
+`x/emission` is the only module account that can mint norama. `x/token` holds Minter for the
+denoms it creates, but its bank keeper refuses a norama mint (`app/mint_policy.go`).
 
 Remainders from each share's integer division always fold into the validator share, so the four
 shares of any epoch's maximum sum back to that maximum exactly, to the norama.
@@ -242,7 +250,7 @@ bonded or not-bonded stake on a double-sign or downtime slash, and `x/fees`' ant
 has already minted the block's validator share (and updated `cumulative_minted` to match) by the
 time `EndBlock` runs, `x/emission`'s `EndBlock` (`Keeper.ReconcileBurns`, run last in `app.go`'s
 end-blocker order) compares live bank supply against
-`genesis_supply + cumulative_minted + cumulative_development_minted - cumulative_burned`: any shortfall it finds must be a burn
+`genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted - cumulative_burned`: any shortfall it finds must be a burn
 that happened elsewhere this block, and gets added to `cumulative_burned`. This keeps the supply
 invariant holding without `x/emission` needing a direct dependency on `x/slashing` or `x/fees`.
 
@@ -266,9 +274,10 @@ invariant holding without `x/emission` needing a direct dependency on `x/slashin
    `CloseEpoch` mints that exact amount unconditionally every time an epoch closes. Every
    `CeilingRecord` is checked the same way: its four amounts must match `SplitEpochMint` for its
    epoch exactly.
-2. **Supply matches minted:** `bank_supply == genesis_supply + cumulative_minted + cumulative_development_minted - cumulative_burned`,
+2. **Supply matches minted:** `bank_supply == genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted - cumulative_burned`,
    with `cumulative_burned` kept current by `ReconcileBurns` (above). `cumulative_development_minted`
-   is zero until `MintDevelopmentSpend` runs.
+   is zero until `MintDevelopmentSpend` runs; `cumulative_service_minted` is zero until a storage
+   or relay payment is minted.
 
 Both are exposed as `oramad query emission invariants` and as a keeper-level Go function
 (`Keeper.CheckSupplyInvariant`) any test can call directly. They are checked on every `InitGenesis`

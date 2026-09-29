@@ -35,6 +35,7 @@ import (
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
 	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
 	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
+	tokentypes "github.com/DeBrosOfficial/network/chain/x/token/types"
 )
 
 // testChainID is the chain ID used across this file's InitChain calls; baseapp.SetChainID must
@@ -239,21 +240,19 @@ func TestBlockedAddresses_coversEveryModuleAccount(t *testing.T) {
 	}
 }
 
-// TestGetMaccPerms_exactlyOneMinter confirms x/emission is the only module account allowed to
-// mint - the whole point of not wiring x/mint (plans/open-network.md: "Only x/emission may mint").
-func TestGetMaccPerms_exactlyOneMinter(t *testing.T) {
-	minters := 0
-	var minterName string
+// TestGetMaccPerms_onlyEmissionMintsNorama confirms x/emission is the only module that can mint
+// norama - the whole point of not wiring x/mint (plans/open-network.md: "Only x/emission may
+// mint"). x/token also holds Minter for the denoms it creates, but its bank keeper refuses norama.
+func TestGetMaccPerms_onlyEmissionMintsNorama(t *testing.T) {
+	var minters []string
 	for name, perms := range app.GetMaccPerms() {
 		for _, perm := range perms {
 			if perm == authtypes.Minter {
-				minters++
-				minterName = name
+				minters = append(minters, name)
 			}
 		}
 	}
-	require.Equal(t, 1, minters, "exactly one module account may hold the Minter permission")
-	require.Equal(t, emissiontypes.ModuleName, minterName)
+	require.ElementsMatch(t, []string{emissiontypes.ModuleName, tokentypes.ModuleName}, minters)
 }
 
 // TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg confirms that bank, staking,

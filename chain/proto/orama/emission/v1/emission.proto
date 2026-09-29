@@ -83,7 +83,7 @@ message EpochState {
   // point 4 of this module's task spec), where genesis accounts self-delegate stake before the
   // C4 bootstrap-committee module exists. The supply invariant is
   // supply == genesis_supply + cumulative_minted + cumulative_development_minted
-  // - cumulative_burned.
+  // + cumulative_service_minted - cumulative_burned.
   string genesis_supply = 6 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
@@ -95,6 +95,13 @@ message EpochState {
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
+  // cumulative_service_minted is the all-time total minted against the
+  // storage and relay ceilings (Keeper.MintStorageService and
+  // Keeper.MintRelayReward). Pruning a CeilingRecord does not reduce it.
+  string cumulative_service_minted = 8 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
 }
 
 // CeilingRecord is one closed epoch's storage, relay and development
@@ -102,8 +109,9 @@ message EpochState {
 // window. closeEpoch does not mint storage, relay or development.
 // Keeper.MintDevelopmentSpend mints development up to development_ceiling
 // minus development_minted. Keeper.MintRelayReward mints relay rewards up to
-// relay_ceiling minus relay_minted, into the relay module account. Storage
-// stays unminted by this module. Records older than the trailing window are pruned.
+// relay_ceiling minus relay_minted, into the relay module account.
+// Keeper.MintStorageService mints storage payments up to storage_ceiling
+// minus storage_minted, into the storage module account. Records older than the trailing window are pruned.
 message CeilingRecord {
   uint64 epoch = 1;
   // storage_ceiling is the unminted maximum available to storage-subsidy and
@@ -142,6 +150,12 @@ message CeilingRecord {
   // already minted. It starts at zero when the epoch closes and never
   // exceeds relay_ceiling.
   string relay_minted = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // storage_minted is how much of storage_ceiling Keeper.MintStorageService
+  // has already minted. It never exceeds storage_ceiling.
+  string storage_minted = 8 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
