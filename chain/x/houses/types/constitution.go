@@ -1,7 +1,5 @@
 package types
 
-import "time"
-
 // Coded rules (plans/open-network.md D17, track-c-chain.md C5). None of these
 // is a governance message field. Parameter-tier changes cannot move them.
 const (
@@ -18,9 +16,6 @@ const (
 	// VetoPercent is the share of the eligible operator house that vetoes a
 	// parameter proposal inside the veto window.
 	VetoPercent int64 = 30
-
-	// MinHouseSize is the eligible-operator count both tiers require.
-	MinHouseSize = 21
 
 	// MinDistinctPrefix16 and MinDistinctASN are the diversity the structural
 	// tier and development spends require, counted on the eligible set after
@@ -40,15 +35,6 @@ const (
 	CanonicalRelayPercent       uint32 = 10
 	CanonicalDevelopmentPercent uint32 = 5
 	SplitBoundPoints                   = 10
-)
-
-const (
-	// ParameterTimelock, UpgradeTimelock and SpendTimelock are the only
-	// execution delays. There is no expedited delay.
-	ParameterTimelock = 14 * 24 * time.Hour
-	UpgradeTimelock   = 60 * 24 * time.Hour
-	SpendTimelock     = 7 * 24 * time.Hour
-	VetoWindow        = 7 * 24 * time.Hour
 )
 
 // M bounds match the coded useful-work multiplier range. Activation is one-way.

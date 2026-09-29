@@ -88,7 +88,7 @@ func (k Keeper) closeVoting(ctx sdk.Context, p types.Proposal) error {
 			return k.finish(ctx, p, types.ProposalStatus_REJECTED, "")
 		}
 		p.Status = types.ProposalStatus_VETO_WINDOW
-		p.VetoEndUnixNano = ctx.BlockTime().Add(types.VetoWindow).UnixNano()
+		p.VetoEndUnixNano = ctx.BlockTime().Add(params.VetoWindow()).UnixNano()
 		if err := k.Proposals.Set(ctx, p.Id, p); err != nil {
 			return fmt.Errorf("failed to open veto window for proposal %d: %w", p.Id, err)
 		}
@@ -103,7 +103,7 @@ func (k Keeper) closeVoting(ctx sdk.Context, p types.Proposal) error {
 		return k.finish(ctx, p, types.ProposalStatus_REJECTED, "")
 	}
 	p.Status = types.ProposalStatus_TIMELOCK
-	p.TimelockEndUnixNano = ctx.BlockTime().Add(p.Content.Timelock()).UnixNano()
+	p.TimelockEndUnixNano = ctx.BlockTime().Add(params.TimelockFor(p.Content)).UnixNano()
 	if err := k.Proposals.Set(ctx, p.Id, p); err != nil {
 		return fmt.Errorf("failed to open timelock for proposal %d: %w", p.Id, err)
 	}
@@ -119,18 +119,26 @@ func (k Keeper) closeVeto(ctx sdk.Context, p types.Proposal) error {
 	if vetoed(opNo, eligible) {
 		return k.finish(ctx, p, types.ProposalStatus_REJECTED, "operator house veto")
 	}
+	params, err := k.Params.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load houses params: %w", err)
+	}
 	p.Status = types.ProposalStatus_TIMELOCK
-	p.TimelockEndUnixNano = ctx.BlockTime().Add(types.ParameterTimelock).UnixNano()
+	p.TimelockEndUnixNano = ctx.BlockTime().Add(params.TimelockFor(p.Content)).UnixNano()
 	if err := k.Proposals.Set(ctx, p.Id, p); err != nil {
 		return fmt.Errorf("failed to open timelock for proposal %d: %w", p.Id, err)
 	}
 	return nil
 }
 
+// execute applies p on a cache context: a refused action leaves no partial
+// write behind, and the proposal is recorded as FAILED.
 func (k Keeper) execute(ctx sdk.Context, p types.Proposal) error {
-	if err := k.apply(ctx, p); err != nil {
+	cacheCtx, write := ctx.CacheContext()
+	if err := k.apply(cacheCtx, p); err != nil {
 		return k.finish(ctx, p, types.ProposalStatus_FAILED, err.Error())
 	}
+	write()
 	return k.finish(ctx, p, types.ProposalStatus_EXECUTED, "")
 }
 
@@ -192,6 +200,12 @@ func (k Keeper) applyUpgrade(ctx sdk.Context, upgrade types.SoftwareUpgrade) err
 	if err := k.checkUpgradeHeight(ctx, upgrade); err != nil {
 		return err
 	}
+	if k.upgrades == nil {
+		return fmt.Errorf("no upgrade scheduler is wired, software upgrade %q cannot be enacted", upgrade.Name)
+	}
+	if err := k.upgrades.ScheduleUpgrade(ctx, upgrade.Name, upgrade.Height); err != nil {
+		return fmt.Errorf("failed to schedule software upgrade %q at height %d: %w", upgrade.Name, upgrade.Height, err)
+	}
 	enacted, err := k.Enacted.Get(ctx)
 	if err != nil {
 		return err
@@ -238,6 +252,12 @@ func (k Keeper) applyPower(ctx sdk.Context, change types.PowerBoundsChange) erro
 }
 
 func (k Keeper) applyReporters(ctx sdk.Context, change types.RelayReporterChange) error {
+	if k.reporters == nil {
+		return fmt.Errorf("no relay reporter keeper is wired, reporter change cannot be enacted")
+	}
+	if err := k.reporters.ChangeReporters(ctx, change.Add, change.Remove); err != nil {
+		return fmt.Errorf("failed to change relay reporters: %w", err)
+	}
 	enacted, err := k.Enacted.Get(ctx)
 	if err != nil {
 		return err

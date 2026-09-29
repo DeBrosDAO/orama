@@ -5,6 +5,7 @@ package keeper
 
 import (
 	"context"
+	"fmt"
 
 	"cosmossdk.io/collections"
 	storetypes "cosmossdk.io/core/store"
@@ -23,6 +24,7 @@ type Keeper struct {
 	storeService storetypes.KVStoreService
 	bankKeeper   types.BankKeeper
 	powerKeeper  types.PowerKeeper
+	splits       types.SplitSource
 
 	// bondedPoolAddr is x/staking's bonded-pool module account address. It is used only by the
 	// devnet-only bootstrap-stake premine gate in InitGenesis, to check that genesis supply sits
@@ -63,6 +65,30 @@ func NewKeeper(
 	k.Schema = schema
 
 	return k
+}
+
+// WithSplitSource returns a copy of k that closes epochs at the split src reports. x/houses
+// stores the split a structural proposal enacts; without a source every epoch closes at the
+// canonical 60/25/10/5. Every copy of the keeper that closes epochs must be built from the
+// returned value.
+func (k Keeper) WithSplitSource(src types.SplitSource) Keeper {
+	k.splits = src
+	return k
+}
+
+// currentSplit is the split in force for an epoch that closes now.
+func (k Keeper) currentSplit(ctx context.Context) (types.SplitPercents, error) {
+	if k.splits == nil {
+		return types.CanonicalSplitPercents(), nil
+	}
+	pct, err := k.splits.EmissionSplit(ctx)
+	if err != nil {
+		return types.SplitPercents{}, fmt.Errorf("failed to load the enacted emission split: %w", err)
+	}
+	if err := pct.Validate(); err != nil {
+		return types.SplitPercents{}, fmt.Errorf("enacted emission split is invalid: %w", err)
+	}
+	return pct, nil
 }
 
 // Logger returns a module-specific logger.

@@ -56,7 +56,7 @@ func (k Keeper) Tiers(ctx context.Context) (TierView, error) {
 	prefixes, asns := diversity(eligible)
 	stakeMet := !bonded.LT(p.BootstrapExitStake)
 	lambdaMet := !lambda.LT(math.LegacyOneDec())
-	houseMet := len(eligible) >= types.MinHouseSize
+	houseMet := len(eligible) >= int(p.MinHouseSize)
 	return TierView{
 		Parameter:  (stakeMet || lambdaMet) && houseMet,
 		Structural: lambdaMet && houseMet && prefixes >= types.MinDistinctPrefix16 && asns >= types.MinDistinctASN,

@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -19,6 +20,24 @@ type Keeper struct {
 	Schema collections.Schema
 	Sunset collections.Item[uint64]
 	Codes  collections.KeySet[uint64]
+
+	uploads UploadAllowList
+}
+
+// UploadAllowList is the enacted code-upload allow-list x/houses stores after a
+// structural proposal passes its timelock. wasmpolicy only reads it.
+type UploadAllowList interface {
+	// CodeUploadAllowed reports whether the lowercase hex SHA-256 of an
+	// uncompressed wasm blob is allowed to be stored before upload_sunset_height.
+	CodeUploadAllowed(ctx context.Context, sha256Hex string) (bool, error)
+}
+
+// WithUploadAllowList returns a copy of k that also lets a MsgStoreCode through
+// before the sunset when the code's SHA-256 is on list. It never lets anything
+// change upload_sunset_height, and after the sunset every store is allowed anyway.
+func (k Keeper) WithUploadAllowList(list UploadAllowList) Keeper {
+	k.uploads = list
+	return k
 }
 
 // NewKeeper builds the wasmpolicy keeper on storeService.
@@ -118,5 +137,29 @@ func (k Keeper) CheckMsg(ctx context.Context, height int64, msg sdk.Msg) error {
 	if err != nil {
 		return err
 	}
-	return AllowStore(height, sunset, codeID, genesis)
+	err = AllowStore(height, sunset, codeID, genesis)
+	if err == nil || !errors.Is(err, types.ErrUploadClosed) {
+		return err
+	}
+	return k.allowByEnactedList(ctx, msg, err)
+}
+
+// allowByEnactedList lets a store through when its code hash is on the enacted
+// allow-list, and otherwise returns closed (the error AllowStore gave).
+func (k Keeper) allowByEnactedList(ctx context.Context, msg sdk.Msg, closed error) error {
+	if k.uploads == nil {
+		return closed
+	}
+	hash, ok := codeHash(msg)
+	if !ok {
+		return closed
+	}
+	allowed, err := k.uploads.CodeUploadAllowed(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("upload allow-list: %w", err)
+	}
+	if !allowed {
+		return closed
+	}
+	return nil
 }

@@ -67,7 +67,11 @@ func (k Keeper) AdvanceBlock(ctx sdk.Context) error {
 func (k Keeper) closeEpoch(ctx sdk.Context, state types.EpochState) error {
 	closingEpoch := state.CurrentEpoch
 	maxMint := types.MaxMintableForEpoch(closingEpoch)
-	split := types.SplitEpochMint(maxMint)
+	pct, err := k.currentSplit(ctx)
+	if err != nil {
+		return err
+	}
+	split := types.SplitEpochMintAt(maxMint, pct)
 
 	if split.Validator.IsPositive() {
 		coins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, split.Validator))
@@ -88,6 +92,10 @@ func (k Keeper) closeEpoch(ctx sdk.Context, state types.EpochState) error {
 		DevelopmentMinted:  math.ZeroInt(),
 		RelayMinted:        math.ZeroInt(),
 	}
+	if !pct.IsCanonical() {
+		record.ValidatorPercent, record.StoragePercent = pct.Validator, pct.Storage
+		record.RelayPercent, record.DevelopmentPercent = pct.Relay, pct.Development
+	}
 	if err := k.Ceilings.Set(ctx, closingEpoch, record); err != nil {
 		return fmt.Errorf("failed to record epoch %d ceilings: %w", closingEpoch, err)
 	}
@@ -96,6 +104,8 @@ func (k Keeper) closeEpoch(ctx sdk.Context, state types.EpochState) error {
 	}
 
 	state.CumulativeMinted = state.CumulativeMinted.Add(split.Validator)
+	canonicalValidator := types.SplitEpochMint(maxMint).Validator
+	state.ValidatorSplitDelta = nonNilInt(state.ValidatorSplitDelta).Add(split.Validator.Sub(canonicalValidator))
 	state.CurrentEpoch = closingEpoch + 1
 	state.EpochStartUnixNano = ctx.BlockTime().UnixNano()
 	state.BlocksInEpoch = 0

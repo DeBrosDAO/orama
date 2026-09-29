@@ -27,6 +27,32 @@ const (
 	defaultMaxPerASN      uint32 = 5
 	minNetworkCap         uint32 = 1
 	maxNetworkCap         uint32 = 21
+
+	// DefaultMinHouseSize is the eligible-operator count both tiers require
+	// (D17, C5). The floor is the plan value, so a genesis cannot open
+	// governance to a smaller house.
+	DefaultMinHouseSize uint32 = 21
+	minMinHouseSize     uint32 = 21
+	maxMinHouseSize     uint32 = 101
+)
+
+// Execution delays (D17: 14 days for parameters, 60 for upgrades, 7 for
+// spends, no expedited proposals) and the veto window (D17: 7 days). Each
+// floor is the plan value; a genesis may lengthen a delay but never shorten
+// it.
+const (
+	DefaultVetoWindow        = 7 * 24 * time.Hour
+	minVetoWindow            = 7 * 24 * time.Hour
+	maxVetoWindow            = 28 * 24 * time.Hour
+	DefaultParameterTimelock = 14 * 24 * time.Hour
+	minParameterTimelock     = 14 * 24 * time.Hour
+	maxParameterTimelock     = 60 * 24 * time.Hour
+	DefaultUpgradeTimelock   = 60 * 24 * time.Hour
+	minUpgradeTimelock       = 60 * 24 * time.Hour
+	maxUpgradeTimelock       = 180 * 24 * time.Hour
+	DefaultSpendTimelock     = 7 * 24 * time.Hour
+	minSpendTimelock         = 7 * 24 * time.Hour
+	maxSpendTimelock         = 30 * 24 * time.Hour
 )
 
 var (
@@ -66,6 +92,12 @@ func DefaultParams() Params {
 		HouseBond:              DefaultHouseBond(),
 		MaxEligiblePerPrefix16: defaultMaxPerPrefix16,
 		MaxEligiblePerAsn:      defaultMaxPerASN,
+
+		MinHouseSize:             DefaultMinHouseSize,
+		VetoWindowSeconds:        int64(DefaultVetoWindow / time.Second),
+		ParameterTimelockSeconds: int64(DefaultParameterTimelock / time.Second),
+		UpgradeTimelockSeconds:   int64(DefaultUpgradeTimelock / time.Second),
+		SpendTimelockSeconds:     int64(DefaultSpendTimelock / time.Second),
 	}
 }
 
@@ -93,7 +125,49 @@ func (p Params) Validate() error {
 	if p.MaxEligiblePerAsn < minNetworkCap || p.MaxEligiblePerAsn > maxNetworkCap {
 		return fmt.Errorf("max_eligible_per_asn must be in [%d, %d], got %d", minNetworkCap, maxNetworkCap, p.MaxEligiblePerAsn)
 	}
+	return p.validateGovernanceTiming()
+}
+
+// validateGovernanceTiming checks the genesis-fixed house size and delays.
+func (p Params) validateGovernanceTiming() error {
+	if p.MinHouseSize < minMinHouseSize || p.MinHouseSize > maxMinHouseSize {
+		return fmt.Errorf("min_house_size must be in [%d, %d], got %d", minMinHouseSize, maxMinHouseSize, p.MinHouseSize)
+	}
+	seconds := []struct {
+		name     string
+		v        int64
+		min, max time.Duration
+	}{
+		{"veto_window_seconds", p.VetoWindowSeconds, minVetoWindow, maxVetoWindow},
+		{"parameter_timelock_seconds", p.ParameterTimelockSeconds, minParameterTimelock, maxParameterTimelock},
+		{"upgrade_timelock_seconds", p.UpgradeTimelockSeconds, minUpgradeTimelock, maxUpgradeTimelock},
+		{"spend_timelock_seconds", p.SpendTimelockSeconds, minSpendTimelock, maxSpendTimelock},
+	}
+	for _, s := range seconds {
+		if s.v < int64(s.min/time.Second) || s.v > int64(s.max/time.Second) {
+			return fmt.Errorf("%s must be in [%d, %d], got %d", s.name, int64(s.min/time.Second), int64(s.max/time.Second), s.v)
+		}
+	}
 	return nil
+}
+
+// VetoWindow is VetoWindowSeconds as a duration.
+func (p Params) VetoWindow() time.Duration {
+	return time.Duration(p.VetoWindowSeconds) * time.Second
+}
+
+// TimelockFor is the delay after content passes. Spends use the spend delay,
+// parameters the parameter delay, every other structural action the upgrade
+// delay. No path is shorter.
+func (p Params) TimelockFor(c ProposalContent) time.Duration {
+	switch {
+	case c.ParameterChange != nil:
+		return time.Duration(p.ParameterTimelockSeconds) * time.Second
+	case c.DevelopmentSpend != nil:
+		return time.Duration(p.SpendTimelockSeconds) * time.Second
+	default:
+		return time.Duration(p.UpgradeTimelockSeconds) * time.Second
+	}
 }
 
 func validateDecRange(name string, v, min, max math.LegacyDec) error {

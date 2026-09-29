@@ -174,6 +174,43 @@ func (e *fakeEarnings) CreditEarnings(_ context.Context, senderModule string, ad
 	return nil
 }
 
+type fakeReporters struct {
+	set     map[string]bool
+	changes int
+	fail    bool
+}
+
+func (r *fakeReporters) ChangeReporters(_ sdk.Context, add, remove []string) error {
+	r.changes++
+	if r.fail {
+		return fmt.Errorf("reporter set would be empty")
+	}
+	for _, addr := range remove {
+		delete(r.set, addr)
+	}
+	for _, addr := range add {
+		r.set[addr] = true
+	}
+	return nil
+}
+
+type plan struct {
+	name   string
+	height int64
+}
+
+type fakeUpgrades struct {
+	plans []plan
+}
+
+func (u *fakeUpgrades) ScheduleUpgrade(ctx sdk.Context, name string, height int64) error {
+	if height <= ctx.BlockHeight() {
+		return fmt.Errorf("upgrade cannot be scheduled in the past")
+	}
+	u.plans = append(u.plans, plan{name: name, height: height})
+	return nil
+}
+
 type testFixture struct {
 	Ctx       sdk.Context
 	Keeper    keeper.Keeper
@@ -183,6 +220,8 @@ type testFixture struct {
 	Operators *fakeOperators
 	Emission  *fakeEmission
 	Earnings  *fakeEarnings
+	Reporters *fakeReporters
+	Upgrades  *fakeUpgrades
 }
 
 func newTestFixture(t *testing.T) *testFixture {
@@ -202,10 +241,14 @@ func newTestFixture(t *testing.T) *testFixture {
 	operators := &fakeOperators{}
 	emission := newFakeEmission()
 	earnings := &fakeEarnings{}
-	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, staking, power, operators, emission, earnings)
+	reporters := &fakeReporters{set: map[string]bool{}}
+	upgrades := &fakeUpgrades{}
+	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, staking, power, operators, emission, earnings).
+		WithEnactors(reporters, upgrades)
 	f := &testFixture{
 		Ctx: ctx, Keeper: k, Bank: bank, Staking: staking, Power: power,
 		Operators: operators, Emission: emission, Earnings: earnings,
+		Reporters: reporters, Upgrades: upgrades,
 	}
 	gs := types.DefaultGenesisState()
 	gs.Params.VotingPeriodSeconds = int64((24 * time.Hour) / time.Second)

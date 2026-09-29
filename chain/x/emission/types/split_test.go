@@ -72,3 +72,52 @@ func TestSplitEpochMint_neverNegative(t *testing.T) {
 		require.False(t, split.Development.IsNegative())
 	}
 }
+
+func TestSplitPercentsValidate_bounds(t *testing.T) {
+	cases := []struct {
+		name string
+		pct  types.SplitPercents
+		ok   bool
+	}{
+		{"canonical", types.CanonicalSplitPercents(), true},
+		{"validator at +10", types.SplitPercents{70, 15, 10, 5}, true},
+		{"validator at -10", types.SplitPercents{50, 35, 10, 5}, true},
+		{"validator one past +10", types.SplitPercents{71, 14, 10, 5}, false},
+		{"validator one past -10", types.SplitPercents{49, 36, 10, 5}, false},
+		{"development to zero", types.SplitPercents{65, 25, 10, 0}, true},
+		{"development one past +10", types.SplitPercents{50, 25, 9, 16}, false},
+		{"relay to zero", types.SplitPercents{60, 30, 0, 10}, true},
+		{"sum 99", types.SplitPercents{60, 25, 10, 4}, false},
+		{"sum 101", types.SplitPercents{60, 25, 10, 6}, false},
+		{"all zero", types.SplitPercents{}, false},
+	}
+	for _, tc := range cases {
+		err := tc.pct.Validate()
+		if tc.ok && err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("%s: want an error", tc.name)
+		}
+	}
+}
+
+func TestSplitEpochMintAt_sumsExactlyAtEveryValidSplit(t *testing.T) {
+	total := types.MaxMintableForEpoch(1)
+	for _, pct := range []types.SplitPercents{types.CanonicalSplitPercents(), {70, 15, 10, 5}, {50, 35, 10, 5}, {65, 25, 10, 0}} {
+		s := types.SplitEpochMintAt(total, pct)
+		if !s.Validator.Add(s.Storage).Add(s.Relay).Add(s.Development).Equal(total) {
+			t.Fatalf("%+v does not sum to the total", pct)
+		}
+	}
+}
+
+func TestCeilingRecordPercents_zeroMeansCanonical(t *testing.T) {
+	if !(types.CeilingRecord{}).Percents().IsCanonical() {
+		t.Fatal("an all-zero record must read as the canonical split")
+	}
+	r := types.CeilingRecord{ValidatorPercent: 70, StoragePercent: 15, RelayPercent: 10, DevelopmentPercent: 5}
+	if r.Percents().Validator != 70 {
+		t.Fatal("a recorded split must be returned as written")
+	}
+}

@@ -66,3 +66,18 @@ type EmissionKeeper interface {
 type EarningsKeeper interface {
 	CreditEarnings(ctx context.Context, senderModule string, addr sdk.AccAddress, amt sdk.Coin) error
 }
+
+// ReporterKeeper applies a passed relay-reporter change to x/relay. It returns an
+// error, and changes nothing, when the resulting set is not valid (empty, too
+// large or containing a bad address). x/houses does not import x/relay.
+type ReporterKeeper interface {
+	ChangeReporters(ctx sdk.Context, add, remove []string) error
+}
+
+// UpgradeScheduler schedules a passed software upgrade with the SDK upgrade
+// module's plan store. x/upgrade halts the chain at height when the binary
+// has no handler for name, which is how a validator swaps binaries (cosmovisor).
+// x/houses does not import x/upgrade.
+type UpgradeScheduler interface {
+	ScheduleUpgrade(ctx sdk.Context, name string, height int64) error
+}

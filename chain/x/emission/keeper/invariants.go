@@ -44,7 +44,7 @@ func (k Keeper) ReconcileBurns(ctx sdk.Context) error {
 // plans/open-network/track-c-chain.md C3:
 //
 //  1. cumulative minted must equal exactly what the schedule's validator share would mint for the
-//     epochs already completed - not merely "no more than", since x/emission's CloseEpoch mints
+//     epochs already completed, plus the running delta of any enacted split (validator_split_delta) - not merely "no more than", since x/emission's CloseEpoch mints
 //     that exact amount unconditionally every time an epoch closes;
 //  2. the base-denom bank supply must equal genesis_supply + cumulative_minted
 //     + cumulative_development_minted + cumulative_service_minted - cumulative_burned, where genesis_supply is the
@@ -72,7 +72,7 @@ func (k Keeper) checkSupplyInvariantDetailed(ctx sdk.Context) (detail string, mi
 	if state.CurrentEpoch > 0 {
 		completedEpochs = state.CurrentEpoch - 1
 	}
-	wantMinted := types.CumulativeValidatorMinted(completedEpochs)
+	wantMinted := types.CumulativeValidatorMinted(completedEpochs).Add(nonNilInt(state.ValidatorSplitDelta))
 	mintedExact = state.CumulativeMinted.Equal(wantMinted)
 
 	actualSupply := k.bankKeeper.GetSupply(ctx, params.BaseDenom).Amount

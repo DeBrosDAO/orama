@@ -55,11 +55,15 @@ func (gs GenesisState) Validate() error {
 	}
 
 	completedEpochs := gs.EpochState.CurrentEpoch - 1
-	wantMinted := CumulativeValidatorMinted(completedEpochs)
+	splitDelta := gs.EpochState.ValidatorSplitDelta
+	if splitDelta.IsNil() {
+		splitDelta = math.ZeroInt()
+	}
+	wantMinted := CumulativeValidatorMinted(completedEpochs).Add(splitDelta)
 	if !gs.EpochState.CumulativeMinted.Equal(wantMinted) {
 		return fmt.Errorf(
-			"cumulative_minted is %s, want exactly %s for %d completed epochs",
-			gs.EpochState.CumulativeMinted, wantMinted, completedEpochs,
+			"cumulative_minted is %s, want exactly %s (schedule plus split delta %s) for %d completed epochs",
+			gs.EpochState.CumulativeMinted, wantMinted, splitDelta, completedEpochs,
 		)
 	}
 
@@ -105,11 +109,14 @@ func (gs GenesisState) Validate() error {
 		}
 		serviceMintedSum = serviceMintedSum.Add(mintedRelay).Add(mintedStorage)
 
-		want := SplitEpochMint(MaxMintableForEpoch(c.Epoch))
+		if err := c.Percents().Validate(); err != nil {
+			return fmt.Errorf("ceiling record for epoch %d: %w", c.Epoch, err)
+		}
+		want := SplitEpochMintAt(MaxMintableForEpoch(c.Epoch), c.Percents())
 		if !c.StorageCeiling.Equal(want.Storage) || !c.RelayCeiling.Equal(want.Relay) ||
 			!c.DevelopmentCeiling.Equal(want.Development) || !c.ValidatorMinted.Equal(want.Validator) {
 			return fmt.Errorf(
-				"ceiling record for epoch %d does not match the schedule split: got (storage=%s, relay=%s, development=%s, validator=%s), want (storage=%s, relay=%s, development=%s, validator=%s)",
+				"ceiling record for epoch %d does not match the split it closed under: got (storage=%s, relay=%s, development=%s, validator=%s), want (storage=%s, relay=%s, development=%s, validator=%s)",
 				c.Epoch, c.StorageCeiling, c.RelayCeiling, c.DevelopmentCeiling, c.ValidatorMinted,
 				want.Storage, want.Relay, want.Development, want.Validator,
 			)

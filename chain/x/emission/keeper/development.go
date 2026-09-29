@@ -15,8 +15,7 @@ import (
 )
 
 // MintDevelopmentSpend mints amount of norama into x/emission's module account
-// against one closed epoch's development ceiling (5% of that epoch's schedule
-// maximum), minus what this method has already minted for that epoch.
+// against one closed epoch's development ceiling (the development share of the split that epoch closed under, 5% unless a structural vote moved it), minus what this method has already minted for that epoch.
 //
 // It refuses any other amount: zero, negative, an unknown or pruned epoch, a
 // ceiling record that is not the schedule's 5% share, or an amount above the
@@ -35,9 +34,9 @@ func (k Keeper) MintDevelopmentSpend(ctx context.Context, epoch uint64, amount m
 		}
 		return "", fmt.Errorf("failed to load development ceiling for epoch %d: %w", epoch, err)
 	}
-	want := types.SplitEpochMint(types.MaxMintableForEpoch(epoch)).Development
+	want := types.SplitEpochMintAt(types.MaxMintableForEpoch(epoch), record.Percents()).Development
 	if !record.DevelopmentCeiling.Equal(want) {
-		return "", fmt.Errorf("epoch %d development ceiling %s is not the 5%% schedule share %s", epoch, record.DevelopmentCeiling, want)
+		return "", fmt.Errorf("epoch %d development ceiling %s is not the development share %s of the split it closed under", epoch, record.DevelopmentCeiling, want)
 	}
 	already := nonNilInt(record.DevelopmentMinted)
 	remaining := record.DevelopmentCeiling.Sub(already)

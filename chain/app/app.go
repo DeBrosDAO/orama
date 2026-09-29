@@ -533,6 +533,15 @@ func NewOramaApp(
 		app.FeesKeeper,
 	)
 
+	// x/houses' enacted outcomes reach the modules that act on them. Copies of a keeper taken
+	// before this point (the ones handed to x/storage, x/relay and x/power above) never close an
+	// epoch or execute a proposal, so only these rebuilt values need the wiring.
+	app.EmissionKeeper = app.EmissionKeeper.WithSplitSource(emissionSplitSource{houses: app.HousesKeeper})
+	app.HousesKeeper = app.HousesKeeper.WithEnactors(
+		relayReporterEnactor{relay: app.RelayKeeper},
+		upgradeScheduler{upgrades: app.UpgradeKeeper},
+	)
+
 	/****  Module Options ****/
 
 	app.installWasm(keys, appOpts)

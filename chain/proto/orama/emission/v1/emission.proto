@@ -102,6 +102,15 @@ message EpochState {
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
+  // validator_split_delta is the running sum, over every closed epoch, of
+  // (validator share actually minted) - (validator share the canonical 60/25/10/5
+  // split would have minted). It is zero until x/houses enacts an emission split
+  // and may be negative. cumulative_minted must equal the canonical schedule's
+  // cumulative validator mint plus this delta.
+  string validator_split_delta = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
 }
 
 // CeilingRecord is one closed epoch's storage, relay and development
@@ -159,4 +168,12 @@ message CeilingRecord {
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
+  // validator_percent, storage_percent, relay_percent and development_percent
+  // are the split this epoch closed under (x/houses' enacted split, or the
+  // canonical 60/25/10/5). All four zero means the canonical split, so
+  // records written before a split could be enacted stay valid.
+  uint32 validator_percent = 9;
+  uint32 storage_percent = 10;
+  uint32 relay_percent = 11;
+  uint32 development_percent = 12;
 }

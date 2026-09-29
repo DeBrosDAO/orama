@@ -15,7 +15,7 @@ func (app *OramaApp) mountWasmPolicy(keys map[string]*storetypes.KVStoreKey) {
 	if _, ok := keys[types.StoreKey]; !ok {
 		keys[types.StoreKey] = storetypes.NewKVStoreKey(types.StoreKey)
 	}
-	app.WasmPolicyKeeper = keeper.NewKeeper(runtime.NewKVStoreService(keys[types.StoreKey]))
+	app.WasmPolicyKeeper = keeper.NewKeeper(runtime.NewKVStoreService(keys[types.StoreKey])).WithUploadAllowList(app.HousesKeeper)
 	app.uploadSunset = ante.NewUploadSunsetDecorator(app.WasmPolicyKeeper)
 }
 

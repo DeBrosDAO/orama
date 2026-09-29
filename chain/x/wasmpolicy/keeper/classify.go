@@ -1,6 +1,12 @@
 package keeper
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
@@ -61,4 +67,45 @@ func classifyMsg(msg sdk.Msg) (store bool, codeID uint64, changesSunset bool) {
 		}
 	}
 	return false, 0, false
+}
+
+// WasmByteCode is implemented by a store-code message (wasmd's MsgStoreCode and
+// MsgStoreAndInstantiateContract) that carries the code bytes.
+type WasmByteCode interface {
+	GetWASMByteCode() []byte
+}
+
+// maxHashedWasmBytes bounds the uncompressed size codeHash will read. Anything
+// larger is not hashed, so it cannot match the allow-list. It is far above
+// wasmd's own max_wasm_code_size (800 KiB by default).
+const maxHashedWasmBytes = 4 << 20
+
+// gzipMagic starts a gzip stream. wasmd accepts an upload as raw wasm or gzip.
+var gzipMagic = []byte{0x1f, 0x8b, 0x08}
+
+// codeHash returns the lowercase hex SHA-256 of the uncompressed wasm in msg,
+// which is the code hash x/houses lists. ok is false when msg carries no code,
+// the gzip stream is invalid, or the code is over maxHashedWasmBytes.
+func codeHash(msg sdk.Msg) (string, bool) {
+	carrier, isCode := msg.(WasmByteCode)
+	if !isCode {
+		return "", false
+	}
+	code := carrier.GetWASMByteCode()
+	if bytes.HasPrefix(code, gzipMagic) {
+		zr, err := gzip.NewReader(bytes.NewReader(code))
+		if err != nil {
+			return "", false
+		}
+		defer zr.Close()
+		code, err = io.ReadAll(io.LimitReader(zr, maxHashedWasmBytes+1))
+		if err != nil {
+			return "", false
+		}
+	}
+	if len(code) == 0 || len(code) > maxHashedWasmBytes {
+		return "", false
+	}
+	sum := sha256.Sum256(code)
+	return hex.EncodeToString(sum[:]), true
 }

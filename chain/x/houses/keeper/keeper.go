@@ -26,6 +26,8 @@ type Keeper struct {
 	operators types.OperatorKeeper
 	emission  types.EmissionKeeper
 	earnings  types.EarningsKeeper
+	reporters types.ReporterKeeper
+	upgrades  types.UpgradeScheduler
 
 	Schema         collections.Schema
 	Params         collections.Item[types.Params]
@@ -76,6 +78,16 @@ func NewKeeper(
 		panic(err)
 	}
 	k.Schema = schema
+	return k
+}
+
+// WithEnactors returns a copy of k that executes passed reporter changes and
+// software upgrades through reporters and upgrades. Without them those two
+// kinds of proposal fail at execution instead of recording an outcome nothing
+// reads. Build the app module from the returned value.
+func (k Keeper) WithEnactors(reporters types.ReporterKeeper, upgrades types.UpgradeScheduler) Keeper {
+	k.reporters = reporters
+	k.upgrades = upgrades
 	return k
 }
 

@@ -50,6 +50,19 @@ message Params {
   // max_eligible_per_asn caps how many eligible operator identities may share
   // one ASN.
   uint32 max_eligible_per_asn = 7;
+  // min_house_size is the eligible-operator count both tiers require. Fixed
+  // at genesis inside coded bounds; no proposal changes it.
+  uint32 min_house_size = 8;
+  // veto_window_seconds is how long the operator house may veto a passed
+  // parameter proposal. Fixed at genesis inside coded bounds.
+  int64 veto_window_seconds = 9;
+  // parameter_timelock_seconds, upgrade_timelock_seconds and
+  // spend_timelock_seconds are the only execution delays after a proposal
+  // passes. There is no expedited delay. Fixed at genesis inside coded
+  // bounds whose floors are the plan values (14, 60 and 7 days).
+  int64 parameter_timelock_seconds = 10;
+  int64 upgrade_timelock_seconds = 11;
+  int64 spend_timelock_seconds = 12;
 }
 
 // ProposalStatus is where a proposal is in its lifecycle. There is no
@@ -223,8 +236,11 @@ message Equivocation {
   string operator = 2;
 }
 
-// Enacted is the structural state x/houses itself stores after a timelock.
-// Development spends are not recorded here; they mint and credit earnings.
+// Enacted is the structural state x/houses stores after a timelock. Other
+// modules act on it: x/emission reads emission_split, x/wasmpolicy reads
+// code_upload_allow, and x/houses' own executor drives x/relay's reporter set
+// and x/upgrade's plan. m_activated, m_max and adapter_allow have no consumer
+// yet. Development spends are not recorded here; they mint and credit earnings.
 message Enacted {
   SoftwareUpgrade scheduled_upgrade = 1;
   EmissionSplitChange emission_split = 2;

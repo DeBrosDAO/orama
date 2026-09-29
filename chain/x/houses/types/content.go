@@ -3,7 +3,6 @@ package types
 import (
 	"fmt"
 	"regexp"
-	"time"
 
 	"cosmossdk.io/math"
 
@@ -92,19 +91,6 @@ func (c ProposalContent) Kind() Kind {
 		return KindStructural
 	}
 	return KindNone
-}
-
-// Timelock is the delay after the proposal passes. Spends are 7 days,
-// parameters 14, every other structural action 60. There is no shorter value.
-func (c ProposalContent) Timelock() time.Duration {
-	switch {
-	case c.ParameterChange != nil:
-		return ParameterTimelock
-	case c.DevelopmentSpend != nil:
-		return SpendTimelock
-	default:
-		return UpgradeTimelock
-	}
 }
 
 func validateParameterChange(ch ParameterChange) error {
