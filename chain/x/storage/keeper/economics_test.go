@@ -396,3 +396,62 @@ func TestCloseEpoch_paysOnlyTheCurrentHolderOfARebondSlot(t *testing.T) {
 	require.Zero(t, f.slot(t, id, 0).ConsecutiveMisses)
 	f.requireInvariants(t)
 }
+
+// The departed node missed its challenge and its row settles after the new
+// holder's. That miss is the departed node's, not the new holder's: the new
+// holder keeps zero misses, and one real miss later counts once (no slash).
+func TestSettlement_aDepartedNodesMissIsNotChargedToTheNewHolder(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	f.threeNodes(t, 1<<20)
+	client := acc(9)
+	f.fund(client, 100_000_000)
+	data := payload(7)
+	id := f.createDeal(t, types.DealClass_DEAL_CLASS_PRIVATE, client, "", 3, 1_000, 6, []types.PieceCommitment{
+		commit(t, data), commit(t, data), commit(t, data),
+	})
+	f.end(t)
+	f.begin(t)
+	f.acceptAll(t, id, 3)
+	// "n0" sorts before every other node, so its row (node|deal|slot) settles
+	// before the departed node's row.
+	spare := f.addNode(t, "n0", "10.9.0.0/16", 9, 1<<20, false)
+	var slotIdx uint32
+	for i := uint32(0); i < 3; i++ {
+		if f.slot(t, id, i).NodeId == "n3" {
+			slotIdx = i
+		} else {
+			f.proveSlot(t, id, i, data)
+		}
+	}
+	departed := f.Nodes.byID["n3"]
+	_, err := f.Msg.ReleaseReplica(f.Ctx, &types.MsgReleaseReplica{
+		Signer: departed.hot.String(), NodeId: departed.id, DealId: id, Slot: slotIdx,
+		Reason: types.ReleaseReason_RELEASE_REASON_LEGAL,
+	})
+	require.NoError(t, err, "n3 leaves without proving")
+	f.end(t)
+	f.begin(t)
+	require.Equal(t, spare.id, f.slot(t, id, slotIdx).NodeId)
+	_, err = f.Msg.AcceptDeal(f.Ctx, &types.MsgAcceptDeal{Signer: spare.hot.String(), NodeId: spare.id, DealId: id, Slot: slotIdx})
+	require.NoError(t, err)
+	f.proveSlot(t, id, slotIdx, data)
+
+	f.end(t)
+	f.Emission.epoch = 2
+	f.begin(t)
+	for i := 0; i < 20; i++ {
+		f.end(t)
+	}
+	require.Zero(t, f.slot(t, id, slotIdx).ConsecutiveMisses, "n3's miss is not charged to n0")
+
+	// n0 misses epoch 2 once: that is its first miss, not its second.
+	f.Emission.epoch = 3
+	f.begin(t)
+	for i := 0; i < 20; i++ {
+		f.end(t)
+	}
+	require.Equal(t, uint32(1), f.slot(t, id, slotIdx).ConsecutiveMisses)
+	require.Zero(t, spare.slashN, "one real miss does not slash")
+	f.requireInvariants(t)
+}

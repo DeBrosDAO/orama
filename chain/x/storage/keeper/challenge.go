@@ -114,6 +114,14 @@ func (k Keeper) openNodeChallenges(ctx sdk.Context, epoch uint64, nodeID string,
 		if err != nil {
 			return err
 		}
+		if slot.NodeId != nodeID {
+			// A rechallenge left for a slot this node no longer holds would
+			// challenge the new holder for this node's miss. Drop it.
+			if err := k.Rechallenge.Remove(ctx, collections.Join(nodeID, rechallengeID(ref.DealId, ref.Slot))); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := k.openSlotChallenge(ctx, epoch, slot); err != nil {
 			return err
 		}
