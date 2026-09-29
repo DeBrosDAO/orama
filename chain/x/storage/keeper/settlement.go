@@ -85,10 +85,14 @@ func (k Keeper) closeEpoch(ctx sdk.Context, epoch uint64) error {
 			escrow:   math.ZeroInt(),
 			claim:    -1,
 		}
-		if item.rec.Proved && !deal.Protocol {
+		// A proof is paid only while the node that proved it still holds the
+		// slot. A slot released or re-bound before the epoch closed has no
+		// operator to pay for this proof; minting for it would strand coins.
+		paid := item.rec.Proved && slot.NodeId == nodeID && slot.Operator != ""
+		if paid && !deal.Protocol {
 			row.escrow = deal.PricePerEpoch
 		}
-		if item.rec.Proved {
+		if paid {
 			switch {
 			case deal.Protocol && deal.Class == types.DealClass_DEAL_CLASS_ARCHIVE:
 				claims = append(claims, types.MintClaim{

@@ -129,10 +129,12 @@ func (r *Runner) Step(ctx context.Context) error {
 	misses, answerErr := r.answer(ctx, epoch)
 	r.accepted = false
 	followErr := r.follow(ctx)
-	if r.accepted && answerErr == nil {
+	if r.accepted {
 		// An accept opens a challenge in the current epoch; answer it now
 		// rather than one step later, which could fall after the epoch closes.
-		misses, answerErr = r.answer(ctx, epoch)
+		var again error
+		misses, again = r.answer(ctx, epoch)
+		answerErr = errors.Join(answerErr, again)
 	}
 	return errors.Join(answerErr, followErr, r.sweepOnce(ctx, epoch), r.writeMonitor(ctx, misses))
 }

@@ -301,3 +301,47 @@ func TestSettlement_paysFromTheReserveAfterTheCeilingIsPruned(t *testing.T) {
 	require.True(t, f.epochMint(t, 1).Equal(reserved), "every reserved payment was paid")
 	f.requireInvariants(t)
 }
+
+// A node that proves and then releases its slot in the same epoch is not
+// paid for that proof: at close the slot has no operator. Before this rule
+// the payment was reserved at close and then never paid, which stranded it
+// and broke the storage account invariant for good.
+func TestCloseEpoch_doesNotPayAProofWhoseSlotWasReleased(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, func(gs *types.GenesisState) {
+		gs.Params.SMinProviders = 2
+		gs.Params.SFullProviders = 2
+	})
+	f.Emission.ceiling[1] = math.NewInt(100_000)
+	f.threeNodes(t, 1<<20)
+	client := acc(9)
+	f.fund(client, 100_000_000)
+	data := payload(7)
+	id := f.createDeal(t, types.DealClass_DEAL_CLASS_PRIVATE, client, "", 3, 1_000, 4, []types.PieceCommitment{
+		commit(t, data), commit(t, data), commit(t, data),
+	})
+	f.end(t)
+	f.begin(t)
+	f.acceptAll(t, id, 3)
+	for i := uint32(0); i < 3; i++ {
+		f.proveSlot(t, id, i, data)
+	}
+	released := f.slot(t, id, 0)
+	info := f.Nodes.byID[released.NodeId]
+	_, err := f.Msg.ReleaseReplica(f.Ctx, &types.MsgReleaseReplica{
+		Signer: info.hot.String(), NodeId: info.id, DealId: id, Slot: 0,
+		Reason: types.ReleaseReason_RELEASE_REASON_LEGAL,
+	})
+	require.NoError(t, err)
+	f.end(t)
+	f.Emission.epoch = 2
+	f.begin(t)
+	for i := 0; i < 20; i++ {
+		f.end(t)
+	}
+	q, err := f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
+	require.NoError(t, err)
+	require.Zero(t, q.Pending)
+	require.True(t, f.epochMint(t, 1).Equal(f.Emission.minted[1]), "everything reserved was paid")
+	f.requireInvariants(t)
+}

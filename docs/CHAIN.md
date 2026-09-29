@@ -197,9 +197,16 @@ older ones. Pruning does not reduce `cumulative_development_minted`. Nothing rea
 ceiling, so a spend against a pruned epoch is refused.
 
 Storage and relay payments are the other mints, and `x/emission` makes them too.
-`Keeper.MintStorageService` (called by `x/storage` settlement) and `Keeper.MintRelayReward`
-(called by `x/relay`) each mint at most the epoch's storage or relay ceiling minus what was
-already minted against it (`storage_minted`, `relay_minted`). They mint into the emission module
+`Keeper.MintStorageService` and `Keeper.MintRelayReward` each mint at most the epoch's storage
+or relay ceiling minus what was already minted against it (`storage_minted`, `relay_minted`).
+`x/storage` calls `MintStorageService` once when an epoch closes, for that epoch's whole
+payment, while its ceiling record is certain to exist. It holds the coins in the storage module
+account, and settlement pays each queued item from that reserve, so a queue that lags past the
+30-epoch ceiling window still settles. A proof is paid only if the node that proved it still
+holds the slot at close. The storage invariant `subsidy_within_ceiling` checks that the
+account holds exactly what the queue still owes. Queue items written by an older binary were
+not reserved, so this needs a new genesis or an empty settlement queue at the switch.
+`MintRelayReward` is called by `x/relay`. They mint into the emission module
 account, move the coins to the paying module, and add the amount to `cumulative_service_minted`.
 `x/emission` is the only module account that can mint norama. `x/token` holds Minter for the
 denoms it creates, but its bank keeper refuses a norama mint (`app/mint_policy.go`).

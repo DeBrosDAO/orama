@@ -32,6 +32,7 @@ type chainSim struct {
 	events     map[int64][]abci.Event
 	drop       int
 	failAccept bool
+	failSlot   map[[2]uint64]bool
 }
 
 func newChainSim(t *testing.T, f *fixture) *chainSim {
@@ -64,6 +65,9 @@ func (c nodeChain) Params(context.Context) (types.Params, error) {
 }
 
 func (c nodeChain) Slot(_ context.Context, dealID uint64, slot uint32) (types.Slot, error) {
+	if c.sim.failSlot[[2]uint64{dealID, uint64(slot)}] {
+		return types.Slot{}, fmt.Errorf("rpc timeout reading deal %d slot %d", dealID, slot)
+	}
 	res, err := c.sim.f.Query.Slot(c.sim.f.Ctx, &types.QuerySlotRequest{DealId: dealID, Slot: slot})
 	if err != nil {
 		return types.Slot{}, err
@@ -320,4 +324,45 @@ func TestProviderRunner_aFailingAcceptStillLetsProofsThrough(t *testing.T) {
 			require.Truef(t, c.Proved, "%s deal %d slot %d is proved even though its accept failed", id, c.DealId, c.Slot)
 		}
 	}
+}
+
+func TestProviderRunner_aFailedSlotReadStillProvesTheOtherChallenges(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	f.threeNodes(t, 1<<20)
+	sim := newChainSim(t, f)
+	providers := startProviders(t, sim, "n1", "n2", "n3")
+	first, data, pieces := openDeal(t, sim, 30)
+	second, data2, pieces2 := openDealFilled(t, sim, 30, 20)
+	stepAll(t, providers)
+	for _, d := range []struct {
+		id     uint64
+		data   [][]byte
+		pieces []types.PieceCommitment
+	}{{first, data, pieces}, {second, data2, pieces2}} {
+		for i := uint32(0); i < 3; i++ {
+			slot := f.slot(t, d.id, i)
+			require.Equal(t, http.StatusNoContent, upload(providers[slot.NodeId], dataForSlot(t, f, d.id, i, d.data, d.pieces), slot.PieceRoot))
+		}
+	}
+	stepAll(t, providers)
+
+	f.Emission.epoch = 2
+	require.NoError(t, sim.block(nil))
+	node := f.slot(t, first, 0).NodeId
+	sim.failSlot = map[[2]uint64]bool{{first, 0}: true}
+	err := providers[node].runner.Step(context.Background())
+	require.ErrorContains(t, err, "rpc timeout")
+	ch, err := f.Query.Challenges(f.Ctx, &types.QueryChallengesRequest{Epoch: 2, NodeId: node})
+	require.NoError(t, err)
+	proved := 0
+	for _, c := range ch.Challenges {
+		if c.DealId == first && c.Slot == 0 {
+			require.False(t, c.Proved, "the unreadable slot was skipped")
+			continue
+		}
+		require.Truef(t, c.Proved, "deal %d slot %d", c.DealId, c.Slot)
+		proved++
+	}
+	require.Positive(t, proved, "the node's other challenges were proved")
 }

@@ -96,11 +96,11 @@ func runProvider(ctx context.Context, fl providerFlags) error {
 		return err
 	}
 	statePath := filepath.Join(fl.home, "state.json")
-	start := fl.startHeight
-	if _, statErr := os.Stat(statePath); start == 0 && errors.Is(statErr, os.ErrNotExist) {
-		if start, err = chain.RegisteredHeight(ctx, nodeID); err != nil {
-			return err
-		}
+	start, err := startHeight(ctx, statePath, fl.startHeight, func(ctx context.Context) (int64, error) {
+		return chain.RegisteredHeight(ctx, nodeID)
+	})
+	if err != nil {
+		return err
 	}
 	runner, err := provider.NewRunner(store, chain, provider.Config{
 		NodeID: nodeID, Signer: hot.Address, StartHeight: start,
@@ -160,4 +160,19 @@ func freeBytes(dir string) (uint64, error) {
 		return 0, fmt.Errorf("statfs %s: %w", dir, err)
 	}
 	return st.Bavail * uint64(st.Bsize), nil
+}
+
+// startHeight is the flag when set. Otherwise it is the node's registration
+// height, read only when there is no state yet: a restart resumes from its
+// cursor and does not need x/nodes to answer.
+func startHeight(ctx context.Context, statePath string, flag int64, registered func(context.Context) (int64, error)) (int64, error) {
+	if flag != 0 {
+		return flag, nil
+	}
+	if _, err := os.Stat(statePath); err == nil {
+		return 0, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("stat provider state %s: %w", statePath, err)
+	}
+	return registered(ctx)
 }

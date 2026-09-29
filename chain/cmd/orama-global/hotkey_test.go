@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,4 +68,24 @@ func TestReadDenylist_absentIsEmpty(t *testing.T) {
 	got, err := readDenylist(filepath.Join(t.TempDir(), "denylist"))
 	require.NoError(t, err)
 	require.Empty(t, got)
+}
+
+func TestStartHeight_readsRegistrationOnlyWithoutState(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state.json")
+	calls := 0
+	registered := func(context.Context) (int64, error) { calls++; return 77, nil }
+	h, err := startHeight(context.Background(), state, 0, registered)
+	require.NoError(t, err)
+	require.Equal(t, int64(77), h)
+	require.NoError(t, os.WriteFile(state, []byte(`{"height":90}`), 0o600))
+	h, err = startHeight(context.Background(), state, 0, func(context.Context) (int64, error) {
+		return 0, errors.New("x/nodes is down")
+	})
+	require.NoError(t, err, "a restart does not ask x/nodes")
+	require.Zero(t, h)
+	h, err = startHeight(context.Background(), filepath.Join(dir, "absent"), 5, registered)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), h)
+	require.Equal(t, 1, calls)
 }
