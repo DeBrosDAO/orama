@@ -18,7 +18,7 @@ const (
 )
 
 // ErrNotForKey means the private key is wrong or the blob is corrupt.
-var ErrNotForKey = errors.New("backup cannot be opened with this key")
+var ErrNotForKey = errors.New("backup cannot be opened: the private key is wrong, or the file is corrupt or truncated")
 
 // Seal encrypts plaintext for pub. The result does not contain the private key.
 func Seal(pub *[32]byte, plaintext []byte) ([]byte, error) {

@@ -209,7 +209,8 @@ func namespaceGatewayURL(gatewayURL, namespace string) string {
 	if domain == "" || namespace == "" {
 		return ""
 	}
-	if namespace == "default" {
+	// A login made at the namespace's own gateway is already on its host.
+	if namespace == "default" || strings.HasPrefix(domain, "ns-"+namespace+".") {
 		return "https://" + domain
 	}
 	return fmt.Sprintf("https://ns-%s.%s", namespace, domain)

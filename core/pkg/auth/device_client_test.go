@@ -203,9 +203,13 @@ func TestNamespaceGatewayURL(t *testing.T) {
 		{"https://orama-devnet.network", "default", "https://orama-devnet.network"},
 		{"https://orama-devnet.network", "", ""},
 		{"", "anchat", ""},
+		// A login at the namespace's own gateway used to print ns-anchat.ns-anchat.….
+		{"https://ns-anchat.orama-devnet.network", "anchat", "https://ns-anchat.orama-devnet.network"},
+		{"https://ns-other.orama-devnet.network", "anchat", "https://ns-anchat.ns-other.orama-devnet.network"},
 	} {
 		if got := namespaceGatewayURL(tc.gateway, tc.namespace); got != tc.want {
 			t.Errorf("namespaceGatewayURL(%q, %q) = %q, want %q", tc.gateway, tc.namespace, got, tc.want)
 		}
 	}
 }
+
