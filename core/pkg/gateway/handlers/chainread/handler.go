@@ -3,7 +3,9 @@
 // Register mounts it at /v1/chain/. The browser calls that prefix and never
 // talks to CometBFT, the SDK REST API, or the chain indexer itself. Those
 // listen on loopback (default http://127.0.0.1:31001, http://127.0.0.1:31003
-// and http://127.0.0.1:31015, overridable with ORAMA_CHAIN_RPC_URL,
+// and http://127.0.0.1:31015; on a co-located machine the same ports on the
+// global namespace's address, http://198.18.0.2:..., because there they are
+// inside the orama-global network namespace; overridable with ORAMA_CHAIN_RPC_URL,
 // ORAMA_CHAIN_REST_URL and ORAMA_CHAIN_INDEX_URL). The indexer routes are
 // under /v1/chain/index/ (index.go). Orama module queries are under
 // /v1/chain/query/ (query.go).
@@ -21,7 +23,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,6 +34,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 )
 
 const (
@@ -81,18 +83,36 @@ type Config struct {
 }
 
 // ConfigFromEnv reads ORAMA_CHAIN_RPC_URL, ORAMA_CHAIN_REST_URL and
-// ORAMA_CHAIN_INDEX_URL. A missing or blank value is the loopback default,
-// not an open target.
+// ORAMA_CHAIN_INDEX_URL. A missing or blank value is the default for this
+// machine, not an open target: loopback, or on a co-located machine (the
+// orama-global network namespace layout is installed) the namespace address
+// the chain and indexer listen on there (constants.GlobalNetnsAddr).
 func ConfigFromEnv() Config {
-	return Config{
-		RPCURL:   envOr("ORAMA_CHAIN_RPC_URL", constants.LocalChainRPCURL()),
-		RESTURL:  envOr("ORAMA_CHAIN_REST_URL", defaultRESTURL()),
-		IndexURL: envOr("ORAMA_CHAIN_INDEX_URL", constants.LocalGlobalIndexerURL()),
-	}
+	return configFor(colocated())
 }
 
-func defaultRESTURL() string {
-	return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(constants.ChainAPIPort))
+// systemdUnitDir is where the co-located installer writes the namespace unit.
+const systemdUnitDir = "/etc/systemd/system"
+
+// colocated reports whether this machine shares a cluster node with global
+// services. It is a variable so tests can stand in for the machine.
+var colocated = func() bool {
+	return globalnetns.Installed(systemdUnitDir, func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	})
+}
+
+func configFor(colocated bool) Config {
+	rpc, rest, index := constants.LocalChainRPCURL(), constants.LocalChainAPIURL(), constants.LocalGlobalIndexerURL()
+	if colocated {
+		rpc, rest, index = constants.ColocatedChainRPCURL(), constants.ColocatedChainAPIURL(), constants.ColocatedGlobalIndexerURL()
+	}
+	return Config{
+		RPCURL:   envOr("ORAMA_CHAIN_RPC_URL", rpc),
+		RESTURL:  envOr("ORAMA_CHAIN_REST_URL", rest),
+		IndexURL: envOr("ORAMA_CHAIN_INDEX_URL", index),
+	}
 }
 
 func envOr(key, fallback string) string {

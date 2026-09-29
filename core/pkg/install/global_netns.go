@@ -8,9 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"gopkg.in/yaml.v3"
@@ -77,7 +79,7 @@ func planNetns(h NetnsHost, opts GlobalInstallOptions) (*netnsPlan, error) {
 	if prefs.Role == roleGlobal {
 		return nil, fmt.Errorf("this machine's role is global: it has no cluster node to share with; drop --colocated")
 	}
-	layout := globalnetns.Layout{Ports: opts.firewall().Ports(), Tools: tools}
+	layout := globalnetns.Layout{Ports: opts.firewall().Ports(), HostPorts: opts.hostPorts(), Tools: tools}
 	if err := layout.Validate(); err != nil {
 		return nil, err
 	}
@@ -195,4 +197,74 @@ func netnsRouteArgs(specs []string) [][]string {
 		args = append(args, []string{"route", "allow", "proto", proto, "to", globalnetns.NSAddr, "port", port, "comment", GlobalRuleComment})
 	}
 	return args
+}
+
+// hostPorts are the loopback listeners that move to the namespace address on
+// a co-located machine, for the services installed: the chain's RPC and REST
+// API, and the indexer's read API. The host's gateway and node report read
+// them there.
+func (o GlobalInstallOptions) hostPorts() []int {
+	var ports []int
+	if slices.Contains(o.Services, GlobalServiceChain) {
+		ports = append(ports, constants.ChainRPCPort, constants.ChainAPIPort)
+	}
+	if slices.Contains(o.Services, GlobalServiceIndexer) {
+		ports = append(ports, constants.GlobalIndexerPort)
+	}
+	return ports
+}
+
+// colocatedListeners moves a unit's loopback listeners for the chain's RPC,
+// REST API and the indexer to the namespace address, and points the services
+// that call the chain's RPC (the provider, archiver, repair delegate and
+// indexer) at it. The chain's gRPC stays on loopback: only the chain's own
+// tools use it. Every rewrite must match exactly once, so a template change
+// that no longer has the flag fails the install instead of leaving a listener
+// unreachable from the host.
+func colocatedListeners(s GlobalService, body string) (string, error) {
+	ns := constants.GlobalNetnsAddr
+	rpcFlag := fmt.Sprintf("tcp://%s:%d", ns, constants.ChainRPCPort)
+	var swaps [][2]string
+	switch s {
+	case GlobalServiceChain:
+		swaps = [][2]string{
+			{fmt.Sprintf("--rpc.laddr tcp://127.0.0.1:%d", constants.ChainRPCPort), "--rpc.laddr " + rpcFlag},
+			{fmt.Sprintf("--api.address tcp://127.0.0.1:%d", constants.ChainAPIPort), fmt.Sprintf("--api.address tcp://%s:%d", ns, constants.ChainAPIPort)},
+		}
+	case GlobalServiceIndexer:
+		swaps = [][2]string{
+			{fmt.Sprintf("--rpc tcp://127.0.0.1:%d", constants.ChainRPCPort), "--rpc " + rpcFlag},
+			{fmt.Sprintf("--listen 127.0.0.1:%d", constants.GlobalIndexerPort), fmt.Sprintf("--listen %s:%d", ns, constants.GlobalIndexerPort)},
+		}
+	case GlobalServiceProvider, GlobalServiceArchiver, GlobalServiceRepair:
+		// These take the chain's RPC from --rpc, whose default is loopback.
+		exec := mustExecStart(body)
+		if exec == "" {
+			return "", fmt.Errorf("the %s unit has no single ExecStart line", s)
+		}
+		return strings.Replace(body, "ExecStart="+exec, "ExecStart="+exec+" --rpc "+rpcFlag, 1), nil
+	default:
+		return body, nil
+	}
+	for _, sw := range swaps {
+		if strings.Count(body, sw[0]) != 1 {
+			return "", fmt.Errorf("the %s unit has no %q to move to the namespace address", s, sw[0])
+		}
+		body = strings.Replace(body, sw[0], sw[1], 1)
+	}
+	return body, nil
+}
+
+// mustExecStart is the value of the unit's only ExecStart= line, or "".
+func mustExecStart(body string) string {
+	var found string
+	for _, line := range strings.Split(body, "\n") {
+		if v, ok := strings.CutPrefix(line, "ExecStart="); ok {
+			if found != "" {
+				return ""
+			}
+			found = v
+		}
+	}
+	return found
 }

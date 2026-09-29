@@ -362,3 +362,89 @@ func TestNetnsRouteArgs_forwardOnlyFromTheNamespaceAddress(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallGlobal_colocatedMovesTheChainListenersToTheNamespaceAddress(t *testing.T) {
+	f := newColocatedFixture(t)
+	if err := InstallGlobal(f.options(GlobalServiceChain, GlobalServiceProvider, GlobalServiceArchiver, GlobalServiceIndexer), f.host); err != nil {
+		t.Fatal(err)
+	}
+	read := func(unit string) string {
+		body, err := os.ReadFile(filepath.Join(f.host.UnitDir, unit))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	chain := read(constants.ChainServiceUnit)
+	for _, want := range []string{"--rpc.laddr tcp://198.18.0.2:31001", "--api.address tcp://198.18.0.2:31003", "--grpc.address 127.0.0.1:31002"} {
+		if !strings.Contains(chain, want) {
+			t.Errorf("chain unit lacks %q:\n%s", want, chain)
+		}
+	}
+	for _, loopback := range []string{"tcp://127.0.0.1:31001", "tcp://127.0.0.1:31003"} {
+		if strings.Contains(chain, loopback) {
+			t.Errorf("chain unit still listens on %s", loopback)
+		}
+	}
+	indexer := read(constants.GlobalIndexerUnit)
+	for _, want := range []string{"--rpc tcp://198.18.0.2:31001", "--listen 198.18.0.2:31015"} {
+		if !strings.Contains(indexer, want) {
+			t.Errorf("indexer unit lacks %q:\n%s", want, indexer)
+		}
+	}
+	for _, unit := range []string{constants.GlobalProviderUnit, constants.GlobalArchiverUnit} {
+		if body := read(unit); !strings.Contains(body, " --rpc tcp://198.18.0.2:31001\n") {
+			t.Errorf("%s does not point at the chain's namespace address:\n%s", unit, body)
+		}
+	}
+	rules, err := os.ReadFile(filepath.Join(f.host.Netns.ConfigDir, "netns.nft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rules), "ip saddr 198.18.0.1 tcp dport { 31001, 31003, 31015 } accept") {
+		t.Errorf("namespace rules do not admit the host to the chain and indexer:\n%s", rules)
+	}
+	hostRules, err := os.ReadFile(filepath.Join(f.host.Netns.ConfigDir, "netns-host.nft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, port := range []string{"31001", "31003", "31015"} {
+		if strings.Contains(string(hostRules), port) {
+			t.Errorf("host rules publish the host-only port %s", port)
+		}
+	}
+}
+
+func TestInstallGlobal_colocatedWithoutTheIndexerAdmitsNoIndexerPort(t *testing.T) {
+	f := newColocatedFixture(t)
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := os.ReadFile(filepath.Join(f.host.Netns.ConfigDir, "netns.nft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rules), "tcp dport { 31001, 31003 } accept") || strings.Contains(string(rules), "31015") {
+		t.Errorf("namespace rules:\n%s", rules)
+	}
+}
+
+func TestColocatedListeners_refuseATemplateThatLostTheFlag(t *testing.T) {
+	if _, err := colocatedListeners(GlobalServiceChain, "ExecStart=/x start --home /h\n"); err == nil {
+		t.Errorf("a chain unit with no RPC listener flag was accepted")
+	}
+	if _, err := colocatedListeners(GlobalServiceProvider, "ExecStart=/x\nExecStart=/y\n"); err == nil {
+		t.Errorf("a unit with two ExecStart lines was accepted")
+	}
+	body, err := colocatedListeners(GlobalServiceIPFS, "ExecStart=/x\n")
+	if err != nil || body != "ExecStart=/x\n" {
+		t.Errorf("the public Kubo unit must be left alone, got %q, %v", body, err)
+	}
+}
+
+func TestInstallGlobal_globalOnlyKeepsTheLoopbackListeners(t *testing.T) {
+	unit := RenderGlobalChainUnit("")
+	if !strings.Contains(unit, "--rpc.laddr tcp://127.0.0.1:31001") || strings.Contains(unit, "198.18.0.2") {
+		t.Errorf("a global-only chain unit:\n%s", unit)
+	}
+}

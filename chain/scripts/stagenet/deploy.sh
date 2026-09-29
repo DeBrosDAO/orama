@@ -75,15 +75,17 @@ NODES=("athena:athena:37.59.116.212" "superman:superman:141.227.165.168" "poseid
 INDEXER_NODE="athena"
 P2P_PORT=31000
 PROVIDER_PORT=31013
-NETNS="orama-global"
 BIN_DIR="/usr/lib/orama-global/bin"
 HOME_DIR="/var/lib/orama-global/chain"
 GENESIS_WORK="/var/lib/orama-global/genesis-work"
 SVC_USER="orama-chain"
 STAGE_DIR="/root/orama-global-release"
 TOOLS_DIR="/usr/local/lib/orama-stagenet"
-RPC_ADDR="tcp://127.0.0.1:31001"
-RPC_HTTP="http://127.0.0.1:31001"
+# The chain's RPC and REST API listen on the orama-global namespace address (core/pkg/constants,
+# GlobalNetnsAddr), which the host reaches over the veth pair; the namespace firewall admits only the host.
+NS_ADDR="198.18.0.2"
+RPC_ADDR="tcp://$NS_ADDR:31001"
+RPC_HTTP="http://$NS_ADDR:31001"
 MIN_EPOCH=2
 EPOCH_POLL_SECONDS=10
 EPOCH_WAIT_SECONDS=2400
@@ -216,14 +218,6 @@ as_chain_at() {
 	local alias="$1" home="$2"
 	shift 2
 	remote_run "$alias" sudo -u "$SVC_USER" "$BIN_DIR/oramad" --home "$home" "$@"
-}
-
-# in_ns <alias> <arg>...: runs a command as root inside the orama-global network namespace, where
-# the chain's RPC (31001) and REST API (31003) listen on loopback.
-in_ns() {
-	local alias="$1"
-	shift
-	remote_run "$alias" sudo ip netns exec "$NETNS" "$@"
 }
 
 # put_file <alias> <mode> <dest>: writes stdin to <dest>, which must be under $HOME_DIR. It runs as
@@ -599,7 +593,7 @@ cmd_status() {
 	for n in "${NODES[@]}"; do
 		alias="$(field "$n" 2)"
 		printf '%-9s ' "$(field "$n" 1)"
-		in_ns "$alias" curl -s --max-time 5 "$RPC_HTTP/status" | python3 -c 'import json,sys; s=json.load(sys.stdin)["result"]; print("height", s["sync_info"]["latest_block_height"], "catching_up", s["sync_info"]["catching_up"])' 2>/dev/null || echo 'not responding'
+		remote_run "$alias" curl -s --max-time 5 "$RPC_HTTP/status" | python3 -c 'import json,sys; s=json.load(sys.stdin)["result"]; print("height", s["sync_info"]["latest_block_height"], "catching_up", s["sync_info"]["catching_up"])' 2>/dev/null || echo 'not responding'
 		remote_run "$alias" sudo "$BIN_DIR/orama" global status < /dev/null || echo "orama global status failed on $(field "$n" 1)"
 	done
 }
@@ -623,7 +617,7 @@ cmd_invariants() {
 		for m in "${INVARIANT_MODULES[@]}"; do
 			local out
 			# stdout only: a warning on stderr must not be parsed as the answer.
-			if ! out="$(in_ns "$alias" sudo -u "$SVC_USER" "$BIN_DIR/oramad" --home "$HOME_DIR" query "$m" invariants --node "$RPC_ADDR" --output json)"; then
+			if ! out="$(remote_run "$alias" sudo -u "$SVC_USER" "$BIN_DIR/oramad" --home "$HOME_DIR" query "$m" invariants --node "$RPC_ADDR" --output json)"; then
 				printf '%-9s %-9s query failed: %s\n' "$name" "$m" "$out"
 				failed=1
 				continue
@@ -653,7 +647,7 @@ wait_for_epoch() {
 	local waited=0 epoch=""
 	log "waiting for epoch $MIN_EPOCH (epochs last $EPOCH_DURATION)"
 	while [ "$waited" -lt "$EPOCH_WAIT_SECONDS" ]; do
-		epoch="$(in_ns "$alias" "$TOOLS_DIR/stagenet-node" epoch --rpc "$RPC_ADDR" 2>/dev/null || true)"
+		epoch="$(remote_run "$alias" "$TOOLS_DIR/stagenet-node" epoch --rpc "$RPC_ADDR" 2>/dev/null || true)"
 		if [[ "$epoch" =~ ^[0-9]+$ ]] && [ "$epoch" -ge "$MIN_EPOCH" ]; then
 			log "the chain is at epoch $epoch"
 			return 0

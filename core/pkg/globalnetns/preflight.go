@@ -148,3 +148,20 @@ func Verify(recorded string, p Paths, exists func(string) bool) error {
 	}
 	return nil
 }
+
+// Installed reports whether this machine's co-located layout is installed: the
+// namespace unit is in unitDir. It is how a process outside the global
+// services (the cluster gateway, the node report) learns that the chain's
+// listeners are on NSAddr and not on loopback.
+func Installed(unitDir string, exists func(string) bool) bool {
+	return exists(DefaultPaths(unitDir).Unit)
+}
+
+// ChainHost is the address the chain's RPC and REST API and the indexer
+// listen on: NSAddr when co-located, loopback otherwise.
+func ChainHost(colocated bool) string {
+	if colocated {
+		return NSAddr
+	}
+	return "127.0.0.1"
+}

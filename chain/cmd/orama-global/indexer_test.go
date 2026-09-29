@@ -2,19 +2,27 @@ package main
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestRequireLoopback_acceptsOnlyLoopbackIPs(t *testing.T) {
-	for _, ok := range []string{"127.0.0.1:31015", "[::1]:31015", "127.0.0.2:1"} {
-		require.NoError(t, requireLoopback(ok), ok)
+func TestRequireLocalOnly_acceptsOnlyLoopbackAndTheNamespaceAddress(t *testing.T) {
+	for _, ok := range []string{"127.0.0.1:31015", "[::1]:31015", "127.0.0.2:1", "198.18.0.2:31015"} {
+		require.NoError(t, requireLocalOnly(ok), ok)
 	}
-	for _, bad := range []string{"0.0.0.0:31015", ":31015", "localhost:31015", "10.0.0.1:31015", "[::]:31015", "127.0.0.1"} {
-		require.Error(t, requireLoopback(bad), bad)
+	for _, bad := range []string{"0.0.0.0:31015", ":31015", "localhost:31015", "10.0.0.1:31015", "[::]:31015", "127.0.0.1",
+		"198.18.0.1:31015", "198.18.0.3:31015", "203.0.113.5:31015"} {
+		require.Error(t, requireLocalOnly(bad), bad)
 	}
+}
+
+func TestNamespaceAddr_isTheCoreConstant(t *testing.T) {
+	data, err := os.ReadFile("../../../core/pkg/constants/global.go")
+	require.NoError(t, err)
+	require.Contains(t, string(data), `GlobalNetnsAddr = "`+namespaceAddr+`"`)
 }
 
 func TestIndexerCmd_defaultsAndRegistration(t *testing.T) {

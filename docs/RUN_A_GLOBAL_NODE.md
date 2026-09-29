@@ -373,7 +373,7 @@ node refuses `role: both` at boot unless that field and every file above exist;
 it then runs the same graph as a cluster node, because the global services are
 their own units, not components of `orama-node`. Units are enabled and not
 started, like a global-only install: `orama global start` starts them, and its
-wait for the chain's RPC dials `127.0.0.1:31001` from inside the namespace. The
+wait for the chain's RPC dials it at the namespace address (below). The
 provider reaches the public Kubo's RPC on `127.0.0.1:31011` in the same
 namespace; the cluster's own Kubo (10107) is a different daemon on the other side.
 
@@ -387,8 +387,10 @@ namespace; the cluster's own Kubo (10107) is a different daemon on the other sid
   veth may reach a service on the host itself, so the namespace cannot get to the
   cluster through the host's public or WireGuard address; and only DNAT'd
   connections and their replies are forwarded into the namespace.
-- Inside the namespace: input is default-drop except loopback, replies and the
-  published ports; forwarding is off; output to the private ranges above is
+- Inside the namespace: input is default-drop except loopback, replies, the
+  published ports, and the chain's RPC and REST API and the indexer's read API
+  (TCP 31001, 31003 and, with the indexer, 31015) from `198.18.0.1`, the host's
+  veth address, alone; forwarding is off; output to the private ranges above is
   dropped. The units' own `IPAddressDeny=` on the same ranges is a third layer
   for IPv4. Both rulesets are `table ip`, so they say nothing about IPv6: the
   namespace has none (IPv6 is disabled on `ogl-host` and inside the namespace
@@ -404,13 +406,22 @@ namespace; the cluster's own Kubo (10107) is a different daemon on the other sid
 **What this does not isolate.** It is one kernel and one root. The cluster node
 can reach the global services only through their published ports at `198.18.0.2`,
 and a global service reaches the outside only through the masqueraded veth. The
-namespace has no IPv6 (the units may open only IPv4 and Unix sockets). A
-loopback-only listener of a global service (the chain's RPC 31001, gRPC 31002,
-REST 31003) is reachable from the machine only from inside the namespace:
-`sudo ip netns exec orama-global curl http://127.0.0.1:31001/status`. Commands
-that take `--node http://127.0.0.1:31003` (`orama global register` and the other
-signed transactions) must run there, or on the operator's machine against the
-node's public address once one is published.
+namespace has no IPv6 (the units may open only IPv4 and Unix sockets). The
+chain's RPC (31001) and REST API (31003) and the indexer's read API (31015) are
+not published: on a co-located machine they listen on the namespace address
+`198.18.0.2` instead of loopback, the namespace firewall admits them from the
+host's veth address `198.18.0.1` alone, and they are not DNAT'd, so neither the
+public network nor the WireGuard mesh reaches them. The host reaches them
+directly: `curl http://198.18.0.2:31001/status`, and `orama global register`
+and the other signed transactions take `--node http://198.18.0.2:31003`. The
+global services' own clients (the provider, archiver, repair delegate and
+indexer) are given `--rpc tcp://198.18.0.2:31001` by their units. The chain's
+gRPC (31002) stays on the namespace's loopback. The cluster gateway's
+`/v1/chain/` proxy reads them at those addresses on a co-located machine (it
+detects the installed layout; `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and
+`ORAMA_CHAIN_INDEX_URL` still override), and so do the node report and the
+inspector. A gateway process started before a co-located install keeps the
+loopback defaults until it restarts.
 
 Removing the layout is not built: stop and disable the `orama-global-*` units and
 `orama-global-netns.service`, delete the files above and the `ufw route` rules

@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // The layout. The veth pair uses 198.18.0.0/30 (RFC 2544 benchmarking space):
@@ -34,8 +36,8 @@ const (
 	HostIface = "ogl-host"
 	NSIface   = "ogl-ns"
 
-	HostAddr = "198.18.0.1"
-	NSAddr   = "198.18.0.2"
+	HostAddr = constants.GlobalNetnsHostAddr
+	NSAddr   = constants.GlobalNetnsAddr
 	Subnet   = "198.18.0.0/30"
 
 	// UnitName is the oneshot that builds and tears down the namespace. Every
@@ -89,7 +91,12 @@ type Tools struct {
 // namespace and which binaries build it.
 type Layout struct {
 	Ports []Port
-	Tools Tools
+	// HostPorts are TCP ports served on NSAddr for the host alone: the
+	// chain's RPC and REST API and the indexer. They are not published (no
+	// DNAT), and the namespace's firewall accepts them only from HostAddr, so
+	// neither the public network nor the WireGuard mesh reaches them.
+	HostPorts []int
+	Tools     Tools
 }
 
 // Validate refuses a layout the renderers cannot express safely: every value
@@ -98,6 +105,11 @@ func (l Layout) Validate() error {
 	for name, path := range map[string]string{"ip": l.Tools.IP, "nft": l.Tools.Nft, "sysctl": l.Tools.Sysctl} {
 		if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, " \t\n\"'\\$%;") {
 			return fmt.Errorf("the %s binary path %q is not a plain absolute path", name, path)
+		}
+	}
+	for _, n := range l.HostPorts {
+		if n < 1 || n > 65535 {
+			return fmt.Errorf("host-only port %d is not a TCP port", n)
 		}
 	}
 	for _, p := range l.Ports {
@@ -123,6 +135,21 @@ func (l Layout) portSet(proto string) string {
 		return ""
 	}
 	slices.Sort(nums)
+	parts := make([]string, len(nums))
+	for i, n := range nums {
+		parts[i] = fmt.Sprint(n)
+	}
+	return "{ " + strings.Join(parts, ", ") + " }"
+}
+
+// hostPortSet is `{ 1, 2 }` for the host-only ports, or "" when there are none.
+func (l Layout) hostPortSet() string {
+	nums := slices.Clone(l.HostPorts)
+	slices.Sort(nums)
+	nums = slices.Compact(nums)
+	if len(nums) == 0 {
+		return ""
+	}
 	parts := make([]string, len(nums))
 	for i, n := range nums {
 		parts[i] = fmt.Sprint(n)
@@ -176,13 +203,17 @@ func (l Layout) RenderHostRules() string {
 }
 
 // RenderNSRules is the ruleset loaded inside the namespace: nothing arrives
-// but replies, loopback and the published ports, nothing is forwarded, and
-// nothing leaves for a private network.
+// but replies, loopback, the published ports, and the host-only ports from
+// the host's veth address alone, nothing is forwarded, and nothing leaves for
+// a private network.
 func (l Layout) RenderNSRules() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table ip %s {\n", nsTable)
 	b.WriteString("\tchain input {\n\t\ttype filter hook input priority 0; policy drop;\n")
 	b.WriteString("\t\tiifname \"lo\" accept\n\t\tct state established,related accept\n")
+	if set := l.hostPortSet(); set != "" {
+		fmt.Fprintf(&b, "\t\tiifname %q ip saddr %s tcp dport %s accept\n", NSIface, HostAddr, set)
+	}
 	for _, proto := range []string{"tcp", "udp"} {
 		if set := l.portSet(proto); set != "" {
 			fmt.Fprintf(&b, "\t\t%s dport %s accept\n", proto, set)

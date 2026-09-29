@@ -19,9 +19,11 @@ func TestLocalChainRPCURL_loopbackRPCPort(t *testing.T) {
 	}
 }
 
-// deploy.sh writes the chain's listen addresses; the constants only describe
-// them. A port changed on one side and not the other leaves the node report
-// probing a closed port, so the two are compared here.
+// deploy.sh names the chain's peer-to-peer port and the provider's port: the
+// first goes into the peers it builds and the second into the endpoint it
+// registers. The listeners themselves come from `orama global install`, whose
+// units use the constants. A port changed on one side and not the other
+// leaves peers or clients dialling a closed port, so the two are compared here.
 func TestChainPorts_matchStagenetDeployScript(t *testing.T) {
 	script := filepath.Join("..", "..", "..", "chain", "scripts", "stagenet", "deploy.sh")
 	data, err := os.ReadFile(script)
@@ -29,11 +31,8 @@ func TestChainPorts_matchStagenetDeployScript(t *testing.T) {
 		t.Fatalf("read %s: %v", script, err)
 	}
 	for name, want := range map[string]int{
-		"P2P_PORT":  constants.ChainP2PPort,
-		"RPC_PORT":  constants.ChainRPCPort,
-		"GRPC_PORT": constants.ChainGRPCPort,
-		"API_PORT":  constants.ChainAPIPort,
-		"PROM_PORT": constants.ChainPrometheusPort,
+		"P2P_PORT":      constants.ChainP2PPort,
+		"PROVIDER_PORT": constants.GlobalProviderPort,
 	} {
 		m := regexp.MustCompile(`(?m)^` + name + `=([0-9]+)$`).FindSubmatch(data)
 		if m == nil {
@@ -44,9 +43,27 @@ func TestChainPorts_matchStagenetDeployScript(t *testing.T) {
 			t.Errorf("%s: deploy.sh has %d, constants have %d", name, got, want)
 		}
 	}
-	unit := regexp.MustCompile(`(?m)^UNIT="([^"]+)"$`).FindSubmatch(data)
-	if unit == nil || string(unit[1]) != constants.ChainServiceUnit {
-		t.Errorf("deploy.sh unit = %q, constants have %q", unit, constants.ChainServiceUnit)
+}
+
+func TestStagenetDeployScript_usesTheNamespaceAddress(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "chain", "scripts", "stagenet", "deploy.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^NS_ADDR="` + regexp.QuoteMeta(constants.GlobalNetnsAddr) + `"$`).Match(data) {
+		t.Errorf("deploy.sh NS_ADDR is not %s", constants.GlobalNetnsAddr)
+	}
+}
+
+func TestColocatedChainURLs_areTheNamespaceAddress(t *testing.T) {
+	for got, want := range map[string]string{
+		constants.ColocatedChainRPCURL():      "http://198.18.0.2:31001",
+		constants.ColocatedChainAPIURL():      "http://198.18.0.2:31003",
+		constants.ColocatedGlobalIndexerURL(): "http://198.18.0.2:31015",
+	} {
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
 	}
 }
 

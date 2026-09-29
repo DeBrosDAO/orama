@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -20,11 +21,6 @@ func TestShellQuote_neutralisesShellSyntax(t *testing.T) {
 	}
 }
 
-func TestInNetns_quotesEveryArgument(t *testing.T) {
-	got := inNetns("python3", "-c", "print('x')", "31001")
-	require.Equal(t, `sudo ip netns exec orama-global 'python3' '-c' 'print('\''x'\'')' '31001'`, got)
-}
-
 func TestAgentCommand_pipesTheKeyOnTheNodeAndNeverPrintsIt(t *testing.T) {
 	cmd := agentCommand()
 	require.True(t, strings.HasPrefix(cmd, "sudo sh -c '"))
@@ -35,10 +31,11 @@ func TestAgentCommand_pipesTheKeyOnTheNodeAndNeverPrintsIt(t *testing.T) {
 	require.Contains(t, cmd, agentFwdSock)
 }
 
-func TestBridgeScript_isSelfContainedPython(t *testing.T) {
-	require.Contains(t, bridgeScript, "socket.create_connection")
-	require.Contains(t, bridgeScript, "127.0.0.1", "it only ever dials the namespace's own loopback")
-	require.NotContains(t, bridgeScript, "argv[2]")
+func TestNamespaceAddr_isTheCoreConstant(t *testing.T) {
+	// core/pkg/constants.GlobalNetnsAddr; chain cannot import core, so the literal is checked here.
+	data, err := os.ReadFile("../../../../core/pkg/constants/global.go")
+	require.NoError(t, err)
+	require.Contains(t, string(data), `GlobalNetnsAddr = "`+namespaceAddr+`"`)
 }
 
 func TestAbbreviate(t *testing.T) {

@@ -9,8 +9,8 @@
 # Arguments: chain-id node-id public-ip asn storage-bond archiver-bond capacity-bytes hot-key-fund
 #            tx-gas tx-fee   (amounts in norama; deploy.sh validates every one)
 #
-# The commands run inside the orama-global network namespace, where the chain's RPC (31001) and REST
-# API (31003) listen on loopback. Every step is idempotent: a re-run skips what the chain already
+# The chain's RPC (31001) and REST API (31003) listen on the orama-global namespace address 198.18.0.2,
+# which this host reaches directly. Every step is idempotent: a re-run skips what the chain already
 # holds and never repeats a transaction.
 set -euo pipefail
 
@@ -26,10 +26,12 @@ PROVIDER_HOME=/var/lib/orama-global/provider
 ARCHIVER_HOME=/var/lib/orama-global/archiver
 AGENT_DIR=/run/orama-stagenet
 AGENT_SOCK=$AGENT_DIR/agent.sock
-NETNS=orama-global
-RPC=tcp://127.0.0.1:31001
-RPC_HTTP=http://127.0.0.1:31001
-REST=http://127.0.0.1:31003
+# The chain listens on the orama-global namespace address, which this host reaches over the veth
+# pair (core/pkg/constants, GlobalNetnsAddr); its loopback is the namespace's own.
+CHAIN_HOST=198.18.0.2
+RPC=tcp://$CHAIN_HOST:31001
+RPC_HTTP=http://$CHAIN_HOST:31001
+REST=http://$CHAIN_HOST:31003
 PROVIDER_PORT=31013
 # What the node record's deposit and the transaction fees can take beyond the bonds and the hot-key
 # fund, in norama (5 ORAMA). A shortfall is reported before anything is sent.
@@ -42,14 +44,13 @@ POLL_STEP=2
 log() { printf '[%s] %s\n' "$NODE_ID" "$*"; }
 die() { printf '[%s] ERROR: %s\n' "$NODE_ID" "$*" >&2; exit 1; }
 
-ns() { ip netns exec "$NETNS" "$@"; }
 # The operator key, as one hex line, from oramad's test keyring. Anything else it prints is ignored
 # by the helper.
 operator_key() {
 	runuser -u orama-chain -- "$ORAMAD" keys export validator --unarmored-hex --unsafe -y \
 		--keyring-backend test --home "$CHAIN_HOME" 2>&1
 }
-node_field() { ns "$HELPER" node-status --rpc "$RPC" --id "$NODE_ID" | sed -n "s/^$1=//p"; }
+node_field() { "$HELPER" node-status --rpc "$RPC" --id "$NODE_ID" | sed -n "s/^$1=//p"; }
 
 # poll_field <field> <want> <what>: waits for the chain to show the transaction's effect. The next
 # transaction reads the account sequence from the chain, so it must not go out before this lands.
@@ -116,19 +117,19 @@ done
 [ -S "$AGENT_SOCK" ] || die "the signing agent did not start"
 
 # --- earnings must cover the bonds --------------------------------------------------------------
-earnings=$(ns "$HELPER" earnings --rpc "$RPC" --address "$operator")
+earnings=$("$HELPER" earnings --rpc "$RPC" --address "$operator")
 need=$((STORAGE_BOND + ARCHIVER_BOND + HOT_KEY_FUND + EARNINGS_MARGIN + 6 * TX_FEE))
 if [ "$(node_field exists)" != true ] && [ "$earnings" -lt "$need" ]; then
 	die "the operator's earnings are $earnings norama; registering needs about $need. Let the chain run longer (more epochs) and retry"
 fi
 
 # --- operator, node, bonds, capacity ----------------------------------------------------------
-operator_key | ns "$HELPER" register-operator --rpc "$RPC"
+operator_key | "$HELPER" register-operator --rpc "$RPC"
 
 if [ "$(node_field exists)" != true ]; then
 	"$ORAMA" global bind --chain-id "$CHAIN_ID" --operator "$operator" --service hot-key \
 		--key-file "$PROVIDER_HOME/hot-key" --key-type secp256k1 >"$work/hot-key.binding.json"
-	ns env RW_AGENT_SOCK="$AGENT_SOCK" "$ORAMA" global register \
+	env RW_AGENT_SOCK="$AGENT_SOCK" "$ORAMA" global register \
 		--chain-id "$CHAIN_ID" --operator "$operator" --id "$NODE_ID" --hot-key "$hot_key" \
 		--role storage --role archiver --binding "$work/hot-key.binding.json" \
 		--endpoint "http://$PUBLIC_IP:$PROVIDER_PORT" --asn "$ASN" \
@@ -141,7 +142,7 @@ fi
 bond() {
 	local role=$1 amount=$2 field=$3
 	if [ "$(node_field "$field")" = 0 ]; then
-		ns env RW_AGENT_SOCK="$AGENT_SOCK" "$ORAMA" global bond \
+		env RW_AGENT_SOCK="$AGENT_SOCK" "$ORAMA" global bond \
 			--chain-id "$CHAIN_ID" --operator "$operator" --id "$NODE_ID" --role "$role" --amount "$amount" \
 			--fee "$TX_FEE" --gas "$TX_GAS" --node "$REST"
 		poll_field "$field" "$amount" "bond $role"
@@ -154,14 +155,14 @@ bond archiver "$ARCHIVER_BOND" archiver_bond
 
 # The hot key pays the provider's and the archiver's transaction fees from a fee-only balance the
 # operator gives it, once.
-if [ "$(ns "$HELPER" fee-balance --rpc "$RPC" --address "$hot_key")" = 0 ]; then
-	ns "$HELPER" fund-hot-key --rpc "$RPC" --node-id "$NODE_ID" --amount "$HOT_KEY_FUND" < <(operator_key)
+if [ "$("$HELPER" fee-balance --rpc "$RPC" --address "$hot_key")" = 0 ]; then
+	"$HELPER" fund-hot-key --rpc "$RPC" --node-id "$NODE_ID" --amount "$HOT_KEY_FUND" < <(operator_key)
 else
 	log "hot key already funded"
 fi
 
 if [ "$(node_field capacity)" != "$CAPACITY_BYTES" ]; then
-	ns env RW_AGENT_SOCK="$AGENT_SOCK" "$ORAMA" global capacity \
+	env RW_AGENT_SOCK="$AGENT_SOCK" "$ORAMA" global capacity \
 		--chain-id "$CHAIN_ID" --operator "$operator" --id "$NODE_ID" --bytes "$CAPACITY_BYTES" \
 		--fee "$TX_FEE" --gas "$TX_GAS" --node "$REST"
 	poll_field capacity "$CAPACITY_BYTES" "declare capacity"
@@ -177,4 +178,4 @@ done
 "$ORAMA" global start provider archiver
 
 log "node record:"
-ns "$ORAMA" chain node "$NODE_ID" --rpc "$RPC_HTTP"
+"$ORAMA" chain node "$NODE_ID" --rpc "$RPC_HTTP"

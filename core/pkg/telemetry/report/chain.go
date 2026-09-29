@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 )
 
 const (
@@ -47,6 +49,13 @@ var (
 		return commandStdout(ctx, "systemctl", args...)
 	}
 )
+
+func init() {
+	// On a co-located machine the chain listens on the namespace address, not on loopback.
+	if globalnetns.Installed("/etc/systemd/system", func(p string) bool { _, err := os.Stat(p); return err == nil }) {
+		chainRPCBase, chainAPIBase = constants.ColocatedChainRPCURL(), constants.ColocatedChainAPIURL()
+	}
+}
 
 // collectChain reports this node's view of the Orama L1. It is nil when the
 // chain unit is not installed here.

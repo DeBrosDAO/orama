@@ -40,14 +40,14 @@ from x/cnft and x/market messages. The last indexed height is stored with each
 block, so a restart resumes after it. If the next block is pruned on the node,
 the indexer stops with an error instead of skipping it. An index keeps the
 start height it was created with; another --start-height needs a new --home.
-The read API (GET /index/v1/...) listens on --listen, which must be loopback.`,
+The read API (GET /index/v1/...) listens on --listen, which must be loopback, or on a co-located machine the namespace address 198.18.0.2.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runIndexer(cmd.Context(), rpc, home, listen, start, interval)
 		},
 	}
 	cmd.Flags().StringVar(&rpc, "rpc", defaultRPC, "oramad CometBFT RPC")
 	cmd.Flags().StringVar(&home, "home", ".", "Indexer state directory")
-	cmd.Flags().StringVar(&listen, "listen", defaultIndexerListen, "Loopback address for the read API")
+	cmd.Flags().StringVar(&listen, "listen", defaultIndexerListen, "Loopback address (or, co-located, the namespace address) for the read API")
 	cmd.Flags().Int64Var(&start, "start-height", 1, "First block to index")
 	cmd.Flags().DurationVar(&interval, "interval", indexerInterval, "Time between passes once caught up")
 	return cmd
@@ -57,7 +57,7 @@ func runIndexer(ctx context.Context, rpc, home, listen string, start int64, inte
 	if interval <= 0 {
 		return errors.New("--interval must be positive")
 	}
-	if err := requireLoopback(listen); err != nil {
+	if err := requireLocalOnly(listen); err != nil {
 		return err
 	}
 	client, err := node.Dial(rpc)
@@ -125,16 +125,23 @@ func follow(ctx context.Context, f *indexer.Follower, interval time.Duration, se
 	}
 }
 
-// requireLoopback refuses a listen address whose host is not a loopback IP.
-// The API is for the gateway on this host, not for the network.
-func requireLoopback(listen string) error {
+// namespaceAddr is the co-located machine's orama-global namespace address
+// (core/pkg/constants, GlobalNetnsAddr). There the read API listens on it so
+// the host's gateway can reach it; that address is on a veth pair the
+// namespace firewall opens to the host alone, and it is not published.
+const namespaceAddr = "198.18.0.2"
+
+// requireLocalOnly refuses a listen address whose host is neither a loopback
+// IP nor the co-located namespace address. The API is for the gateway on this
+// host, not for the network.
+func requireLocalOnly(listen string) error {
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil {
 		return fmt.Errorf("--listen %q: %w", listen, err)
 	}
 	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("--listen %q must be a loopback IP such as 127.0.0.1", listen)
+	if ip == nil || (!ip.IsLoopback() && host != namespaceAddr) {
+		return fmt.Errorf("--listen %q must be a loopback IP such as 127.0.0.1, or the co-located namespace address %s", listen, namespaceAddr)
 	}
 	return nil
 }

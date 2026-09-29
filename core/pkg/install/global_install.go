@@ -267,6 +267,12 @@ func (o GlobalInstallOptions) unitFilesFor(s GlobalService) ([]globalUnitFile, e
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", files[i].name, err)
 		}
+		if i == 0 {
+			// The service's own unit; the GC oneshot has no listener to move.
+			if body, err = colocatedListeners(s, body); err != nil {
+				return nil, fmt.Errorf("render %s: %w", files[i].name, err)
+			}
+		}
 		files[i].body = body
 	}
 	return files, nil

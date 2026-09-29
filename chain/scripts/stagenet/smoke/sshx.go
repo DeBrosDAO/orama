@@ -5,13 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -24,7 +22,10 @@ const (
 	chainHome    = "/var/lib/orama-global/chain"
 	agentFwdSock = "/run/orama-stagenet-fwd/agent.sock"
 	agentSock    = "/run/orama-stagenet/agent.sock"
-	// remoteRPCPort and remoteRESTPort are oramad's loopback listeners inside the namespace.
+	// namespaceAddr is where the chain's RPC and REST API listen on a co-located machine
+	// (core/pkg/constants, GlobalNetnsAddr); the node's host reaches it over the veth pair.
+	namespaceAddr = "198.18.0.2"
+	// remoteRPCPort and remoteRESTPort are oramad's RPC and REST listeners on that address.
 	remoteRPCPort  = 31001
 	remoteRESTPort = 31003
 	sshConnectWait = 15 * time.Second
@@ -32,36 +33,6 @@ const (
 	// agentTTL bounds the smoke run's agent on the node, whatever happens to the ssh session.
 	agentTTL = "3h"
 )
-
-// bridgeScript pumps its stdin and stdout to a TCP port on the loopback it runs on. Run inside the
-// orama-global namespace it is how this program reaches oramad's namespace-local listeners over
-// ssh: `ssh -L` cannot, because sshd connects from the root namespace.
-const bridgeScript = `import os, socket, sys, threading
-s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=10)
-s.settimeout(None)
-def up():
-    try:
-        while True:
-            d = os.read(0, 65536)
-            if not d:
-                break
-            s.sendall(d)
-    except OSError:
-        pass
-    try:
-        s.shutdown(socket.SHUT_WR)
-    except OSError:
-        pass
-threading.Thread(target=up, daemon=True).start()
-try:
-    while True:
-        d = s.recv(65536)
-        if not d:
-            break
-        os.write(1, d)
-except OSError:
-    pass
-`
 
 // shellQuote quotes s for a POSIX shell: single quotes, with each embedded quote closed, escaped and
 // reopened. Everything sent to a remote shell goes through it, so a value that contains shell
@@ -76,11 +47,6 @@ func shellJoin(args ...string) string {
 		quoted[i] = shellQuote(a)
 	}
 	return strings.Join(quoted, " ")
-}
-
-// inNetns is the command that runs args as root inside the orama-global namespace.
-func inNetns(args ...string) string {
-	return "sudo ip netns exec " + netnsName + " " + shellJoin(args...)
 }
 
 // sshRunner runs commands on the stagenet nodes through the operator's own ssh configuration (the
@@ -129,63 +95,37 @@ func abbreviate(s string) string {
 	return s[:limit] + "..."
 }
 
-// tunnel listens on a loopback port and bridges every connection to the node's namespace-local
-// loopback port. It returns the local address. The listener closes with ctx.
+// tunnel forwards a free local loopback port to the chain's listener on the co-located namespace
+// address (198.18.0.2), which the node's host reaches over the veth pair: `ssh -L` connects from the
+// host's own namespace. It returns the local address. The forward ends with ctx.
 func (s *sshRunner) tunnel(ctx context.Context, alias string, remotePort int) (string, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", fmt.Errorf("listen for the %s tunnel: %w", alias, err)
+		return "", fmt.Errorf("pick a local port for the %s tunnel: %w", alias, err)
 	}
-	go func() {
-		<-ctx.Done()
-		ln.Close()
-	}()
-	remote := inNetns("python3", "-c", bridgeScript, fmt.Sprint(remotePort))
-	var wg sync.WaitGroup
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				wg.Wait()
-				return
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				s.pipe(ctx, conn, alias, remote)
-			}()
+	local := ln.Addr().String()
+	ln.Close()
+	target := net.JoinHostPort(namespaceAddr, fmt.Sprint(remotePort))
+	fwd := exec.CommandContext(ctx, "ssh", append([]string{"-N", "-o", "ExitOnForwardFailure=yes", "-L", local + ":" + target}, s.baseArgs(alias)...)...)
+	var stderr bytes.Buffer
+	fwd.Stderr = &stderr
+	if err := fwd.Start(); err != nil {
+		return "", fmt.Errorf("start the %s tunnel: %w", alias, err)
+	}
+	go func() { _ = fwd.Wait() }()
+	deadline := time.Now().Add(sshConnectWait)
+	for time.Now().Before(deadline) {
+		if c, err := net.DialTimeout("tcp", local, time.Second); err == nil {
+			c.Close()
+			return local, nil
 		}
-	}()
-	return ln.Addr().String(), nil
-}
-
-// pipe connects one local connection to one remote bridge process.
-func (s *sshRunner) pipe(ctx context.Context, conn net.Conn, alias, remote string) {
-	defer conn.Close()
-	cmd := exec.CommandContext(ctx, "ssh", append(s.baseArgs(alias), remote)...)
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		return
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		return
-	}
-	done := make(chan struct{})
-	go func() {
-		_, _ = io.Copy(in, conn)
-		in.Close()
-	}()
-	go func() {
-		_, _ = io.Copy(conn, out)
-		close(done)
-	}()
-	<-done
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
+	return "", fmt.Errorf("the tunnel to %s %s did not come up: %s", alias, target, strings.TrimSpace(stderr.String()))
 }
 
 // agentCommand is the remote command that exports the operator key from oramad's test keyring

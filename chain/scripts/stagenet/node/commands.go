@@ -16,8 +16,9 @@ import (
 	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
 )
 
-// defaultRPC is oramad's CometBFT RPC inside the orama-global namespace.
-const defaultRPC = "tcp://127.0.0.1:31001"
+// defaultRPC is oramad's CometBFT RPC on a co-located machine: it listens on the orama-global
+// namespace address (core/pkg/constants, GlobalNetnsAddr), which the host reaches over the veth pair.
+const defaultRPC = "tcp://198.18.0.2:31001"
 
 func run(ctx context.Context, args []string, stdin io.Reader, out io.Writer) error {
 	if len(args) == 0 {

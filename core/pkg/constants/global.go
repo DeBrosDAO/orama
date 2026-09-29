@@ -75,3 +75,28 @@ func LocalGlobalIPFSAPIURL() string { return hostPortURL("127.0.0.1", GlobalIPFS
 
 // LocalGlobalIndexerURL is the chain indexer's read API on this node.
 func LocalGlobalIndexerURL() string { return hostPortURL("127.0.0.1", GlobalIndexerPort) }
+
+// The co-located layout's veth pair (docs/RUN_A_GLOBAL_NODE.md, "Sharing a
+// machine with a cluster node"). It lives here so the namespace layout
+// (pkg/globalnetns) and the readers of the chain's listeners (the cluster
+// gateway, the node report) agree on one address and cannot drift.
+const (
+	// GlobalNetnsHostAddr is the veth end in the root namespace. It is the
+	// only source the namespace's firewall lets reach the chain's RPC, REST
+	// and the indexer.
+	GlobalNetnsHostAddr = "198.18.0.1"
+	// GlobalNetnsAddr is the veth end inside the orama-global namespace. On a
+	// co-located machine the chain's RPC (31001) and REST API (31003) and the
+	// indexer (31015) listen on it instead of on loopback, so the host can
+	// reach them and nothing else can: they are not published.
+	GlobalNetnsAddr = "198.18.0.2"
+)
+
+// ColocatedChainRPCURL is the chain's CometBFT RPC on a co-located machine.
+func ColocatedChainRPCURL() string { return hostPortURL(GlobalNetnsAddr, ChainRPCPort) }
+
+// ColocatedChainAPIURL is the chain's REST API on a co-located machine.
+func ColocatedChainAPIURL() string { return hostPortURL(GlobalNetnsAddr, ChainAPIPort) }
+
+// ColocatedGlobalIndexerURL is the chain indexer's read API on a co-located machine.
+func ColocatedGlobalIndexerURL() string { return hostPortURL(GlobalNetnsAddr, GlobalIndexerPort) }

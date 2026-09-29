@@ -197,3 +197,67 @@ func TestRenderRules_areIPv4Only(t *testing.T) {
 		}
 	}
 }
+
+func hostOnlyLayout() Layout {
+	l := testLayout()
+	l.HostPorts = []int{31015, 31001, 31003, 31001}
+	return l
+}
+
+func TestRenderNSRules_hostOnlyPortsComeFromTheHostVethAddressAlone(t *testing.T) {
+	rules := hostOnlyLayout().RenderNSRules()
+	want := `iifname "ogl-ns" ip saddr 198.18.0.1 tcp dport { 31001, 31003, 31015 } accept`
+	if !strings.Contains(rules, want) {
+		t.Fatalf("namespace rules lack %q:\n%s", want, rules)
+	}
+	// The accept sits in the input chain, whose policy is drop: every other source is refused.
+	if !strings.Contains(rules, "type filter hook input priority 0; policy drop;") {
+		t.Errorf("the input chain does not drop by default:\n%s", rules)
+	}
+	// Not a published port: nothing else names them.
+	if strings.Count(rules, "31001") != 1 {
+		t.Errorf("a host-only port is accepted by more than one rule:\n%s", rules)
+	}
+}
+
+func TestRenderHostRules_doNotPublishHostOnlyPorts(t *testing.T) {
+	rules := hostOnlyLayout().RenderHostRules()
+	for _, port := range []string{"31001", "31003", "31015"} {
+		if strings.Contains(rules, port) {
+			t.Errorf("host rules mention host-only port %s (it must not be DNAT'd or otherwise published):\n%s", port, rules)
+		}
+	}
+}
+
+func TestRenderNSRules_noHostOnlyPortsMeansNoHostRule(t *testing.T) {
+	if strings.Contains(testLayout().RenderNSRules(), "saddr") {
+		t.Errorf("a layout with no host-only port renders a source rule:\n%s", testLayout().RenderNSRules())
+	}
+}
+
+func TestValidate_refusesAHostOnlyPortOutOfRange(t *testing.T) {
+	for _, n := range []int{0, -1, 65536} {
+		l := testLayout()
+		l.HostPorts = []int{n}
+		if err := l.Validate(); err == nil {
+			t.Errorf("host-only port %d was accepted", n)
+		}
+	}
+}
+
+func TestInstalled_isTheNamespaceUnitOnDisk(t *testing.T) {
+	seen := ""
+	got := Installed("/etc/systemd/system", func(p string) bool { seen = p; return true })
+	if !got || seen != "/etc/systemd/system/orama-global-netns.service" {
+		t.Errorf("Installed = %v, probed %q", got, seen)
+	}
+	if Installed("/etc/systemd/system", func(string) bool { return false }) {
+		t.Errorf("a machine without the unit reports co-located")
+	}
+}
+
+func TestChainHost(t *testing.T) {
+	if ChainHost(true) != "198.18.0.2" || ChainHost(false) != "127.0.0.1" {
+		t.Errorf("ChainHost = %q / %q", ChainHost(true), ChainHost(false))
+	}
+}

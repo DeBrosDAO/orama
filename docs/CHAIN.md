@@ -1309,7 +1309,7 @@ The C2 fee-free registration quota is an ante rule and is not implemented. Queri
 
 `chain/cmd/orama-global` is the binary the `orama-global-*` units run beside
 `oramad`. Each subcommand reaches the chain only through the loopback CometBFT
-RPC (`--rpc`, default `tcp://127.0.0.1:31001`) via `chain/client/node`. That
+RPC (`--rpc`, default `tcp://127.0.0.1:31001`; a co-located unit passes `tcp://198.18.0.2:31001`) via `chain/client/node`. That
 client runs module queries as ABCI queries (at the latest height or a given
 one), reads a block, its results and its events, and the node's earliest and
 latest heights, and signs with SIGN_MODE_DIRECT. It simulates for gas, adds 50%, pays gas × the x/fees
@@ -1571,7 +1571,8 @@ are the levers if that stops holding.
 Pebble (pure Go, no cgo) under `<home>/index`. The unit
 (`RenderGlobalIndexerUnit`, user `orama-indexer`, home
 `/var/lib/orama-global/indexer`) runs it with `--listen 127.0.0.1:31015`
-(`constants.GlobalIndexerPort`). `--listen` must be a loopback IP; anything
+(`constants.GlobalIndexerPort`); co-located, `--listen 198.18.0.2:31015` and `--rpc tcp://198.18.0.2:31001`.
+`--listen` must be a loopback IP or the co-located namespace address; anything
 else is refused at start.
 
 Following:
@@ -1945,7 +1946,9 @@ indexer (`127.0.0.1:31015`).
 `core/pkg/gateway/routes.go` mounts the read-only `core/pkg/gateway/handlers/chainread` proxy
 at `/v1/chain/` (an open route in `route_policy.go`). The upstream bases are
 `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and `ORAMA_CHAIN_INDEX_URL`, defaulting to those
-three loopback URLs. The caller's path is not forwarded: each route builds its own upstream URL
+three loopback URLs, or, on a co-located machine (the `orama-global` namespace layout is installed), to the
+same ports on the namespace address `198.18.0.2`, where the chain and indexer listen there and only the
+host may connect (`constants.GlobalNetnsAddr`; [RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md)). The caller's path is not forwarded: each route builds its own upstream URL
 from values it has validated. Anything outside this list is refused. A healthy upstream body is
 copied unchanged (at most 8 MiB, the largest being one block on `/block`), except on `/v1/chain/query/`
 below, which decodes the answer. An upstream failure is never copied: a 404 or a CometBFT "not found"
@@ -2876,7 +2879,7 @@ What the script does that the docs of the individual commands do not say:
   the two lines the install added to the cluster's `preferences.yaml` (`role: both`, `global_netns`), and deletes
   the `orama-global` state and binary directories, the release directory and the helper. Each step tolerates the
   thing it removes being absent, and it also removes a legacy install that ran `oramad` under its own unit.
-- **`invariants`.** Runs `oramad query <module> invariants` inside the namespace for every module in
+- **`invariants`.** Runs `oramad query <module> invariants` against the namespace address for every module in
   `INVARIANT_MODULES` (emission, fees, storage, nodes, relay, houses, token, market, power, shielded) on every
   node, and fails if a query fails or any check is false.
 - **`smoke`.** `chain/scripts/stagenet/smoke` (`stagenetctl`) runs on the operator's machine and prints PASS,
@@ -2887,8 +2890,8 @@ What the script does that the docs of the individual commands do not say:
   operators, its ARCHIVE deals opened, and it is archived (SKIP with the cause when the deals stay unassigned
   because the providers share an ASN, and when the chain is below height 1000, the archiver's range width);
   the shielded wallet scenario; and `/v1/chain/query` on the gateway returns each node's x/nodes record, over TLS
-  with the staging CA. The chain's RPC and REST API listen on loopback inside the namespace, so it reaches
-  them over ssh with a small python bridge run in the namespace, and it signs through the same agent, forwarded
+  with the staging CA. The chain's RPC and REST API listen on the namespace address 198.18.0.2, which each node's host
+  reaches directly, so it reaches them with `ssh -L`, and it signs through the agent, forwarded
   over a unix socket, so no key reaches the operator's machine. Every transaction of a stagenet account is paid
   from earnings: a stagenet account holds no bank balance (zero supply, and users cannot send norama to each
   other), so a shield is `MsgShieldEarnings`.

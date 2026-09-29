@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
-	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 )
 
 const (
@@ -29,16 +28,12 @@ func WaitChainRPC(ctx context.Context) error {
 }
 
 // WaitChainRPCInNamespace is WaitChainRPC for a co-located node, whose chain
-// runs in the orama-global network namespace: the RPC listens on that
-// namespace's loopback, so the probe joins the namespace to dial it.
+// runs in the orama-global network namespace: its RPC listens on the
+// namespace address, which the host reaches over the veth pair.
 func WaitChainRPCInNamespace(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, ChainRPCWaitBudget)
 	defer cancel()
-	client := &http.Client{
-		Timeout:   rpcProbeTimeout,
-		Transport: &http.Transport{DialContext: globalnetns.DialContext(globalnetns.Path), DisableKeepAlives: true},
-	}
-	return pollHTTPWith(ctx, client, constants.LocalChainRPCURL()+"/status", rpcPollInterval)
+	return pollHTTP(ctx, constants.ColocatedChainRPCURL()+"/status", rpcPollInterval)
 }
 
 // pollHTTP GETs url every interval until it answers 200 or ctx is done.

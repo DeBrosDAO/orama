@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
@@ -25,6 +26,8 @@ func collectGlobalNode(ctx context.Context, node Node) (*report.ChainReport, *re
 func globalCollectScript() string {
 	return fmt.Sprintf(`
 mark() { echo "===ORAMA_GLOBAL $1==="; }
+chain_host=127.0.0.1
+[ -e /etc/systemd/system/%s ] && chain_host=%s
 unit_load() { systemctl show -p LoadState --value "$1" 2>/dev/null || echo unknown; }
 unit_state() { systemctl is-active "$1" 2>/dev/null || true; }
 mark chain_load
@@ -32,17 +35,17 @@ unit_load %s
 mark chain_state
 unit_state %s
 mark status
-curl -sf --max-time 3 http://127.0.0.1:%d/status || true
+curl -sf --max-time 3 http://$chain_host:%d/status || true
 mark net
-curl -sf --max-time 3 http://127.0.0.1:%d/net_info || true
+curl -sf --max-time 3 http://$chain_host:%d/net_info || true
 mark validators
-curl -sf --max-time 3 "http://127.0.0.1:%d/validators?per_page=1" || true
+curl -sf --max-time 3 "http://$chain_host:%d/validators?per_page=1" || true
 mark params
-curl -sf --max-time 3 http://127.0.0.1:%d/cosmos/slashing/v1beta1/params || true
+curl -sf --max-time 3 http://$chain_host:%d/cosmos/slashing/v1beta1/params || true
 mark signing
-curl -sf --max-time 3 "http://127.0.0.1:%d/cosmos/slashing/v1beta1/signing_infos?pagination.limit=200" || true
+curl -sf --max-time 3 "http://$chain_host:%d/cosmos/slashing/v1beta1/signing_infos?pagination.limit=200" || true
 mark staking
-curl -sf --max-time 3 "http://127.0.0.1:%d/cosmos/staking/v1beta1/validators?pagination.limit=200" || true
+curl -sf --max-time 3 "http://$chain_host:%d/cosmos/staking/v1beta1/validators?pagination.limit=200" || true
 mark ipfs_load
 unit_load %s
 mark ipfs_state
@@ -69,6 +72,7 @@ unit_state %s
 mark relay_monitor
 sudo -n head -c 4096 %s/%s 2>/dev/null || true
 `,
+		globalnetns.UnitName, constants.GlobalNetnsAddr,
 		constants.ChainServiceUnit, constants.ChainServiceUnit,
 		constants.ChainRPCPort, constants.ChainRPCPort, constants.ChainRPCPort,
 		constants.ChainAPIPort, constants.ChainAPIPort, constants.ChainAPIPort,

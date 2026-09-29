@@ -176,3 +176,30 @@ func TestLayout_privateNetworksAreUnreachableFromInside(t *testing.T) {
 		}
 	}
 }
+
+// The chain's RPC listens on the namespace address for the host alone: the
+// host reaches it, a source that is not the host's veth address does not, and
+// it is not published (no DNAT).
+func TestLayout_hostOnlyPortsAreReachableFromTheHostAlone(t *testing.T) {
+	l := integrationLayout(t)
+	l.HostPorts = []int{34569}
+	buildLayout(t, l)
+
+	listenIn(t, true, NSAddr+":34569")
+	if err := dialFrom(false, NSAddr+":34569"); err != nil {
+		t.Errorf("the host cannot reach the namespace's host-only port: %v", err)
+	}
+	// A source that is not the host's veth address: the loopback address, which the kernel will not
+	// route to the namespace at all. A genuinely foreign source cannot be made on one machine; the
+	// rule that refuses it is asserted where the ruleset is rendered (TestRenderNSRules_hostOnlyPorts...).
+	d := &net.Dialer{Timeout: dialTimeout, LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1")}}
+	if c, err := d.Dial("tcp", NSAddr+":34569"); err == nil {
+		c.Close()
+		t.Errorf("a source other than the host's veth address reached the host-only port")
+	}
+	// A port the layout does not list stays closed to the host, as before.
+	listenIn(t, true, NSAddr+":34570")
+	if err := dialFrom(false, NSAddr+":34570"); err == nil {
+		t.Errorf("an unlisted namespace port is reachable from the host")
+	}
+}
