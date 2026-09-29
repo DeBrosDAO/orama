@@ -820,7 +820,7 @@ The fee is an explicit amount of norama. There is no default.
 | `--id` | — | Cluster id [required] |
 | `--metadata-uri` | — | HTTPS metadata URI |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex; required when the account has not signed before |
@@ -846,7 +846,7 @@ the sign document and does not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Cluster id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1518,7 +1518,7 @@ document and does not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1549,7 +1549,7 @@ submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1665,7 +1665,7 @@ this --chain-id and --operator.
 | `--hot-key` | — | Hot key account, not the operator [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1704,7 +1704,7 @@ not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1805,7 +1805,7 @@ prints the sign document and does not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1861,7 +1861,7 @@ max-change-rate. Without --node the command prints the sign document.
 | `--identity` | — | New identity (for example a keybase id) |
 | `--moniker` | — | New moniker |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Validator operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -2016,7 +2016,7 @@ not submit it; with --node the RootWallet agent signs and it is broadcast.
 | `--fee` | — | Fee in norama [required] |
 | `--gas` | `0` | Gas limit [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Validator operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -3779,7 +3779,7 @@ Accept one slot of a deal. The signer is the node's hot key. Without --node the 
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
@@ -3814,7 +3814,7 @@ prints the sign document and does not submit it.
 | `--granter` | — | Account whose deal allowance pays, when the signer is the grantee |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
 | `--nonce` | — | 32-byte deal nonce hex [required] |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--piece` | — | Piece as <64-hex-root>:<bytes> [required] |
 | `--price` | — | Price per epoch per replica, in norama [required] |
@@ -3843,7 +3843,7 @@ Decline one slot of a deal. The signer is the node's hot key. Without --node the
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--reason` | — | Why the slot is declined |
@@ -3870,7 +3870,7 @@ Add epochs to a user deal. Without --node the command prints the sign document a
 | `--fee` | — | Fee in norama [required] |
 | `--gas` | `0` | Gas limit [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
@@ -3920,7 +3920,7 @@ count. Without --node the command prints the sign document and does not submit i
 | `--max-duration-epochs` | `0` | Longest deal the grant allows [required] |
 | `--max-piece-bytes` | `0` | Largest piece the grant allows [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--period-epochs` | `0` | Epochs in one spend period |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -3975,7 +3975,7 @@ and does not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
@@ -4022,7 +4022,7 @@ Revoke a deal allowance. Without --node the command prints the sign document and
 | `--gas` | `0` | Gas limit [required] |
 | `--grantee` | — | Grantee account (orama1...) [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
