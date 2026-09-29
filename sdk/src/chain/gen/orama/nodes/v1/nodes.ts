@@ -300,6 +300,13 @@ export interface Params {
   minServiceVolumeBytes: bigint;
   maxEndpoints: number;
   maxBindings: number;
+  /**
+   * network_identity_lock_seconds is how long a node's declared network
+   * identity (its ASN and the /16 derived from its endpoints) must have stood
+   * unchanged before protocol-deal slots and the operator house count it. A
+   * new node and any later change start the clock again. 0 turns the lock off.
+   */
+  networkIdentityLockSeconds: bigint;
 }
 
 /** RoleBond is one role's norama amount (a minimum, or a node's current bond). */
@@ -319,7 +326,9 @@ export interface Operator {
  * Binding is one service key's proof that it belongs to an operator.
  * The signature covers
  * orama-global-bind-v1|chain-id|operator|service|hex(pubkey)
- * (plans/open-network.md "Keys").
+ * (plans/open-network.md "Keys"). The binding whose service is "hot-key" is
+ * the node's hot key: a secp256k1 key whose account address is the node's
+ * hot_key, so the hot key has proved possession of itself.
  */
 export interface Binding {
   service: string;
@@ -363,6 +372,13 @@ export interface Node {
    * is derived from endpoints.
    */
   asn: number;
+  /**
+   * identity_since_unix is when the node's (asn, derived /16) pair last
+   * changed, or the node registered. The identity counts for protocol deals
+   * and the operator house only once network_identity_lock_seconds have
+   * passed since. Genesis nodes carry whatever value the genesis gives them.
+   */
+  identitySinceUnix: bigint;
 }
 
 /**
@@ -427,6 +443,7 @@ function createBaseParams(): Params {
     minServiceVolumeBytes: 0n,
     maxEndpoints: 0,
     maxBindings: 0,
+    networkIdentityLockSeconds: 0n,
   };
 }
 
@@ -464,6 +481,14 @@ export const Params: MessageFns<Params> = {
     }
     if (message.maxBindings !== 0) {
       writer.uint32(64).uint32(message.maxBindings);
+    }
+    if (message.networkIdentityLockSeconds !== 0n) {
+      if (BigInt.asIntN(64, message.networkIdentityLockSeconds) !== message.networkIdentityLockSeconds) {
+        throw new globalThis.Error(
+          "value provided for field message.networkIdentityLockSeconds of type int64 too large",
+        );
+      }
+      writer.uint32(72).int64(message.networkIdentityLockSeconds);
     }
     return writer;
   },
@@ -539,6 +564,14 @@ export const Params: MessageFns<Params> = {
           message.maxBindings = reader.uint32();
           continue;
         }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.networkIdentityLockSeconds = reader.int64() as bigint;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -558,6 +591,9 @@ export const Params: MessageFns<Params> = {
       minServiceVolumeBytes: isSet(object.minServiceVolumeBytes) ? BigInt(object.minServiceVolumeBytes) : 0n,
       maxEndpoints: isSet(object.maxEndpoints) ? globalThis.Number(object.maxEndpoints) : 0,
       maxBindings: isSet(object.maxBindings) ? globalThis.Number(object.maxBindings) : 0,
+      networkIdentityLockSeconds: isSet(object.networkIdentityLockSeconds)
+        ? BigInt(object.networkIdentityLockSeconds)
+        : 0n,
     };
   },
 
@@ -587,6 +623,9 @@ export const Params: MessageFns<Params> = {
     if (message.maxBindings !== 0) {
       obj.maxBindings = Math.round(message.maxBindings);
     }
+    if (message.networkIdentityLockSeconds !== 0n) {
+      obj.networkIdentityLockSeconds = message.networkIdentityLockSeconds.toString();
+    }
     return obj;
   },
 
@@ -603,6 +642,7 @@ export const Params: MessageFns<Params> = {
     message.minServiceVolumeBytes = object.minServiceVolumeBytes ?? 0n;
     message.maxEndpoints = object.maxEndpoints ?? 0;
     message.maxBindings = object.maxBindings ?? 0;
+    message.networkIdentityLockSeconds = object.networkIdentityLockSeconds ?? 0n;
     return message;
   },
 };
@@ -908,6 +948,7 @@ function createBaseNode(): Node {
     capacityClass: 0,
     registeredAtHeight: 0n,
     asn: 0,
+    identitySinceUnix: 0n,
   };
 }
 
@@ -977,6 +1018,12 @@ export const Node: MessageFns<Node> = {
     }
     if (message.asn !== 0) {
       writer.uint32(136).uint32(message.asn);
+    }
+    if (message.identitySinceUnix !== 0n) {
+      if (BigInt.asIntN(64, message.identitySinceUnix) !== message.identitySinceUnix) {
+        throw new globalThis.Error("value provided for field message.identitySinceUnix of type int64 too large");
+      }
+      writer.uint32(144).int64(message.identitySinceUnix);
     }
     return writer;
   },
@@ -1134,6 +1181,14 @@ export const Node: MessageFns<Node> = {
           message.asn = reader.uint32();
           continue;
         }
+        case 18: {
+          if (tag !== 144) {
+            break;
+          }
+
+          message.identitySinceUnix = reader.int64() as bigint;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1164,6 +1219,7 @@ export const Node: MessageFns<Node> = {
       capacityClass: isSet(object.capacityClass) ? globalThis.Number(object.capacityClass) : 0,
       registeredAtHeight: isSet(object.registeredAtHeight) ? BigInt(object.registeredAtHeight) : 0n,
       asn: isSet(object.asn) ? globalThis.Number(object.asn) : 0,
+      identitySinceUnix: isSet(object.identitySinceUnix) ? BigInt(object.identitySinceUnix) : 0n,
     };
   },
 
@@ -1220,6 +1276,9 @@ export const Node: MessageFns<Node> = {
     if (message.asn !== 0) {
       obj.asn = Math.round(message.asn);
     }
+    if (message.identitySinceUnix !== 0n) {
+      obj.identitySinceUnix = message.identitySinceUnix.toString();
+    }
     return obj;
   },
 
@@ -1245,6 +1304,7 @@ export const Node: MessageFns<Node> = {
     message.capacityClass = object.capacityClass ?? 0;
     message.registeredAtHeight = object.registeredAtHeight ?? 0n;
     message.asn = object.asn ?? 0;
+    message.identitySinceUnix = object.identitySinceUnix ?? 0n;
     return message;
   },
 };
