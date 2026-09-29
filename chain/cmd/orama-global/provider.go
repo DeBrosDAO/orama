@@ -95,15 +95,16 @@ func runProvider(ctx context.Context, fl providerFlags) error {
 	if err != nil {
 		return err
 	}
+	statePath := filepath.Join(fl.home, "state.json")
 	start := fl.startHeight
-	if start == 0 {
+	if _, statErr := os.Stat(statePath); start == 0 && errors.Is(statErr, os.ErrNotExist) {
 		if start, err = chain.RegisteredHeight(ctx, nodeID); err != nil {
 			return err
 		}
 	}
 	runner, err := provider.NewRunner(store, chain, provider.Config{
 		NodeID: nodeID, Signer: hot.Address, StartHeight: start,
-		StatePath: filepath.Join(fl.home, "state.json"), MonitorPath: filepath.Join(fl.home, "monitor.json"),
+		StatePath: statePath, MonitorPath: filepath.Join(fl.home, "monitor.json"),
 	})
 	if err != nil {
 		return err

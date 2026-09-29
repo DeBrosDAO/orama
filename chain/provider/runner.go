@@ -79,7 +79,8 @@ type Config struct {
 	StatePath string
 	// MonitorPath is the status file the node report reads. Empty skips it.
 	MonitorPath string
-	// StartHeight is the first block read when StatePath does not exist yet:
+	// StartHeight is the first block read when StatePath does not exist yet,
+	// and must then be at least 1. It is not used once the state exists:
 	// the node's x/nodes registration height, since nothing is assigned to a
 	// node before it registers.
 	StartHeight int64
@@ -92,9 +93,6 @@ func NewRunner(store *Store, chain Chain, cfg Config) (*Runner, error) {
 	}
 	if cfg.NodeID == "" || cfg.Signer == "" || cfg.StatePath == "" {
 		return nil, errors.New("runner needs a node id, a signer, and a state path")
-	}
-	if cfg.StartHeight < 1 {
-		return nil, errors.New("start height must be at least 1")
 	}
 	st, err := loadState(cfg.StatePath, cfg.StartHeight)
 	if err != nil {

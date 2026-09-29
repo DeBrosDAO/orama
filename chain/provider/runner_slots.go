@@ -70,10 +70,7 @@ func (r *Runner) answer(ctx context.Context, epoch uint64) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	challenges, err := r.heldChallenges(ctx, listed)
-	if err != nil {
-		return 0, err
-	}
+	challenges, readErr := r.heldChallenges(ctx, listed)
 	proofs, missing, err := r.store.AnswerChallenges(epoch, r.nodeID, challenges)
 	if err != nil {
 		return 0, err
@@ -82,10 +79,10 @@ func (r *Runner) answer(ctx context.Context, epoch uint64) (int, error) {
 		end := min(start+MaxProofsPerTx, len(proofs))
 		msg := &types.MsgSubmitProofs{Signer: r.signer, NodeId: r.nodeID, Proofs: proofs[start:end]}
 		if err := r.chain.Submit(ctx, msg); err != nil {
-			return 0, fmt.Errorf("submit %d proofs for epoch %d: %w", end-start, epoch, err)
+			return 0, errors.Join(readErr, fmt.Errorf("submit %d proofs for epoch %d: %w", end-start, epoch, err))
 		}
 	}
-	return len(missing), nil
+	return len(missing), readErr
 }
 
 // heldChallenges keeps the unproved challenges on slots the chain still
@@ -94,19 +91,22 @@ func (r *Runner) answer(ctx context.Context, epoch uint64) (int, error) {
 // fail the whole batch.
 func (r *Runner) heldChallenges(ctx context.Context, listed []types.Challenge) ([]types.Challenge, error) {
 	var out []types.Challenge
+	var errs []error
 	for _, ch := range listed {
 		if ch.Proved {
 			continue
 		}
 		slot, err := r.chain.Slot(ctx, ch.DealId, ch.Slot)
 		if err != nil {
-			return nil, err
+			// One failed read skips only that challenge; the rest are still proved.
+			errs = append(errs, fmt.Errorf("deal %d slot %d: %w", ch.DealId, ch.Slot, err))
+			continue
 		}
 		if holds(slot, r.nodeID) {
 			out = append(out, ch)
 		}
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 // sweep releases a bound slot once the chain has stopped naming this node

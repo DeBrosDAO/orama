@@ -357,14 +357,16 @@ cmd_invariants() {
 		local alias name; alias="$(field "$n" 2)"; name="$(field "$n" 1)"
 		for m in "${INVARIANT_MODULES[@]}"; do
 			local out
-			if ! out="$(as_chain "$alias" query "$m" invariants --node "tcp://127.0.0.1:$RPC_PORT" --output json 2>&1)"; then
+			# stdout only: a warning on stderr must not be parsed as the answer.
+			if ! out="$(as_chain "$alias" query "$m" invariants --node "tcp://127.0.0.1:$RPC_PORT" --output json)"; then
 				printf '%-9s %-9s query failed: %s\n' "$name" "$m" "$out"
 				failed=1
 				continue
 			fi
 			if echo "$out" | python3 -c 'import json,sys
 d=json.load(sys.stdin)
-sys.exit(1 if [k for k,v in d.items() if isinstance(v,bool) and not v] else 0)'; then
+checks=[v for v in d.values() if isinstance(v,bool)]
+sys.exit(0 if checks and all(checks) else 1)'; then
 				printf '%-9s %-9s ok\n' "$name" "$m"
 			else
 				printf '%-9s %-9s BROKEN %s\n' "$name" "$m" "$out"

@@ -20,7 +20,7 @@ func TestNewRunner_refusesMissingConfig(t *testing.T) {
 		"no node":      {Signer: "s", StatePath: state, StartHeight: 1},
 		"no signer":    {NodeID: "n1", StatePath: state, StartHeight: 1},
 		"no state":     {NodeID: "n1", Signer: "s", StartHeight: 1},
-		"start height": {NodeID: "n1", Signer: "s", StatePath: state},
+		"start height": {NodeID: "n1", Signer: "s", StatePath: state, StartHeight: 0},
 	} {
 		_, err := NewRunner(store, nil, ok)
 		require.Error(t, err, "nil chain")
@@ -31,6 +31,8 @@ func TestNewRunner_refusesMissingConfig(t *testing.T) {
 
 func TestLoadState_startsBeforeStartHeightAndRefusesCorruptFiles(t *testing.T) {
 	dir := t.TempDir()
+	_, err := loadState(filepath.Join(dir, "absent.json"), 0)
+	require.Error(t, err, "a new state needs a start height")
 	st, err := loadState(filepath.Join(dir, "absent.json"), 40)
 	require.NoError(t, err)
 	require.Equal(t, int64(39), st.Height)

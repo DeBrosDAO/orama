@@ -26,6 +26,9 @@ type runnerState struct {
 func loadState(path string, start int64) (runnerState, error) {
 	body, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
+		if start < 1 {
+			return runnerState{}, fmt.Errorf("provider state %s does not exist and the start height %d is not at least 1", path, start)
+		}
 		return runnerState{Height: start - 1}, nil
 	}
 	if err != nil {
