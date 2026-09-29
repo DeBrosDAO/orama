@@ -195,6 +195,7 @@ func TestGlobalChainUnit_runsOramadUnderCosmovisorWithoutDownloads(t *testing.T)
 		"Environment=DAEMON_ALLOW_DOWNLOAD_BINARIES=false\n",
 		"Environment=DAEMON_RESTART_AFTER_UPGRADE=true\n",
 		"ReadWritePaths=" + constants.ChainHome + "\n",
+		"ReadOnlyPaths=" + constants.ChainHome + "/cosmovisor/genesis " + constants.ChainHome + "/cosmovisor/upgrades\n",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("chain unit is missing %q\n%s", want, unit)

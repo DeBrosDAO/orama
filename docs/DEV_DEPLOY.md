@@ -215,7 +215,12 @@ missing), the caller's start (a failed start is stopped again), and the
 `pkg/nodehealth` gate — the same check `orama node start` and `orama node
 upgrade` wait on. A failure undoes what ran, last first (stop, each `.prev`
 renamed back, start), and reads the gate again; the error says whether the
-node came back on the previous release. `<name>.prev` stays after a
+node came back on the previous release. `Upgrade` reports the release bad only
+when the new binaries ran and failed — the start or the health gate; a failed
+stop, copy or rename is an error about the node and does not mark the release
+bad. Verification and the stage step read each new file by path in turn, so
+the caller must keep the new files in a directory only root can write (the
+0700 staging directory stage-archive extracts into). `<name>.prev` stays after a
 successful swap. The rollout lease (`autoupdate.LockName`) is not taken by
 `Upgrade`; the caller must hold it. Nothing in the CLI calls `Upgrade` yet:
 there is no timer, no metadata fetch, and no command that installs through
@@ -244,11 +249,15 @@ from `orama node setup` (or `orama node install --remote`).
 command writes that file yet — can require it when it stages:
 `orama node stage-archive --archive <file> --release-metadata <dir>
 --release-target <name>`. `<dir>` holds `timestamp.json`, `snapshot.json` and
-`targets.json`. Before anything is extracted, `pkg/releaseverify` checks them
-against the adopted root (every role at its threshold, an unexpired timestamp,
-a snapshot no older than the one recorded in `/etc/orama/release-seen.json`)
-and checks that the archive **file** has the length and hashes `<name>` has in
-the verified targets. Any failure — no adopted root, a tampered archive, an
+`targets.json`. The archive is first copied into the node's 0700 staging
+directory under `/opt/orama`; that copy is what is checked and what is
+extracted. Before anything is extracted, `pkg/releaseverify` checks the
+metadata against the adopted root (every role at its threshold, an unexpired
+timestamp, a snapshot no older than the one recorded in
+`/etc/orama/release-seen.json`, which is read and raised under a `flock` on
+`release-seen.json.lock`) and checks, through the descriptor that wrote the
+copy, that it has the length and hashes `<name>` has in the verified targets.
+Any failure — no adopted root, a tampered archive, an
 expired timestamp, metadata signed under another root, an older snapshot —
 refuses the archive and leaves `/opt/orama` untouched; the command never falls
 back to the wallet-only path when these flags are given, and giving only one of

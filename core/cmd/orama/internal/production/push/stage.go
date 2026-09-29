@@ -71,7 +71,7 @@ type stageTarget struct {
 	arch string
 	// checkRelease verifies the archive file as a TUF target against the
 	// node's adopted release root and rollback record.
-	checkRelease func(archive, metadataDir, target string) error
+	checkRelease func(archive *os.File, metadataDir, target string) error
 }
 
 // nodeTarget is /opt/orama and the node's real anchor.
@@ -175,9 +175,6 @@ func stageArchive(t stageTarget, opts StageOptions) (err error) {
 	if err := removeLeftoverStaging(t.base); err != nil {
 		return err
 	}
-	if err := checkRelease(t, opts); err != nil {
-		return fmt.Errorf("refusing %s, nothing under %s was changed: %w", opts.Archive, t.base, err)
-	}
 	staging, err := os.MkdirTemp(t.base, stagingPrefix)
 	if err != nil {
 		return fmt.Errorf("create a staging directory in %s: %w", t.base, err)
@@ -188,11 +185,15 @@ func stageArchive(t stageTarget, opts StageOptions) (err error) {
 		}
 	}()
 
+	archive, err := releaseArchive(t, opts, staging)
+	if err != nil {
+		return fmt.Errorf("refusing %s, nothing under %s was changed: %w", opts.Archive, t.base, err)
+	}
 	newDir := filepath.Join(staging, stagedNew)
 	if err := os.Mkdir(newDir, 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", newDir, err)
 	}
-	if err := archivetrust.Extract(opts.Archive, newDir); err != nil {
+	if err := archivetrust.Extract(archive, newDir); err != nil {
 		return fmt.Errorf("extract %s: %w", opts.Archive, err)
 	}
 	verified, err := verifyStaged(t, opts, newDir)

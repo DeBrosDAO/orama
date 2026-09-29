@@ -56,8 +56,10 @@ type FileCheck struct {
 	MetadataDir string
 	// Target is the name the targets metadata lists the file under.
 	Target string
-	// File is the file on disk that must be that target.
-	File string
+	// File is an open descriptor of the file that must be that target. It
+	// is read from its start; the caller opens it where nobody else can
+	// replace it, so the bytes checked are the bytes it then uses.
+	File *os.File
 	// Now is the clock expiry is judged by.
 	Now time.Time
 }
@@ -65,12 +67,22 @@ type FileCheck struct {
 // CheckFile verifies the metadata in c.MetadataDir against the adopted root
 // and the rollback record, then checks that c.File has the length and
 // hashes c.Target has in the verified targets metadata. Only after all of
-// that passes is the rollback record raised to the accepted snapshot.
-func CheckFile(c FileCheck) (*Verified, error) {
+// that passes is the rollback record raised to the accepted snapshot. The
+// record is locked from its read to its write, so two checks cannot both
+// read the old version and the lower one land last.
+func CheckFile(c FileCheck) (v *Verified, err error) {
+	if c.File == nil {
+		return nil, fmt.Errorf("no file to check against target %q", c.Target)
+	}
 	meta, err := readMetadata(c.RootPath, c.MetadataDir)
 	if err != nil {
 		return nil, err
 	}
+	unlock, err := lockSeen(c.SeenPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, unlock()) }()
 	seen, err := readSeen(c.SeenPath)
 	if err != nil {
 		return nil, err
@@ -83,7 +95,7 @@ func CheckFile(c FileCheck) (*Verified, error) {
 	if !ok {
 		return nil, fmt.Errorf("targets metadata does not name %q", c.Target)
 	}
-	if err := target.MatchFile(c.File); err != nil {
+	if err := target.MatchOpen(c.File); err != nil {
 		return nil, err
 	}
 	if verified.SnapshotVersion > seen.SnapshotVersion {
@@ -94,17 +106,17 @@ func CheckFile(c FileCheck) (*Verified, error) {
 	return verified, nil
 }
 
-// MatchFile is Match for a file on disk, read once and never past the
-// target's length, so a huge or growing file cannot exhaust memory.
-func (t Target) MatchFile(path string) error {
+// MatchOpen is Match for an open file, read from its start once and never
+// past the target's length, so a huge or growing file cannot exhaust
+// memory.
+func (t Target) MatchOpen(f *os.File) error {
 	if t.Path == "" || len(t.Hashes) == 0 {
 		return fmt.Errorf("%w: target %q has no hashes", ErrTargetHash, t.Path)
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open %s to check it against target %s: %w", path, t.Path, err)
+	path := f.Name()
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind %s to check it against target %s: %w", path, t.Path, err)
 	}
-	defer f.Close()
 
 	hashers := make(map[string]hash.Hash, len(t.Hashes))
 	writers := make([]io.Writer, 0, len(t.Hashes))

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/cosmovisor"
 )
 
 // Global unit accounts and paths. These templates are not installed: install
@@ -69,6 +70,10 @@ IPAddressAllow=localhost
 // ChainHome/cosmovisor/current/bin/oramad with the arguments after "run" and
 // switches current to a staged upgrades/<name> binary at the upgrade height.
 // It never downloads a binary (pkg/cosmovisor stages them, verified).
+// genesis/ and upgrades/ are mounted read-only for the unit, so neither
+// cosmovisor nor oramad can change a staged binary; cosmovisor/ itself
+// stays writable for current, and upgrade-info.json is a link into the
+// home (see pkg/cosmovisor).
 // p2p, rpc, grpc and the REST API are flags oramad's start command
 // registers. CometBFT v0.39's AddNodeFlags does not register an
 // instrumentation flag, so the prometheus listen address is recorded here
@@ -76,8 +81,9 @@ IPAddressAllow=localhost
 func RenderGlobalChainUnit() string {
 	exec := fmt.Sprintf("%s run start --home %s --p2p.laddr tcp://0.0.0.0:%d --rpc.laddr tcp://127.0.0.1:%d --grpc.enable=true --grpc.address 127.0.0.1:%d --api.enable=true --api.address tcp://127.0.0.1:%d",
 		globalCosmovisor, constants.ChainHome, constants.ChainP2PPort, constants.ChainRPCPort, constants.ChainGRPCPort, constants.ChainAPIPort)
-	env := fmt.Sprintf("Environment=DAEMON_NAME=%s\nEnvironment=DAEMON_HOME=%s\nEnvironment=DAEMON_ALLOW_DOWNLOAD_BINARIES=false\nEnvironment=DAEMON_RESTART_AFTER_UPGRADE=true\n",
-		constants.ChainDaemonName, constants.ChainHome)
+	env := fmt.Sprintf("Environment=DAEMON_NAME=%s\nEnvironment=DAEMON_HOME=%s\nEnvironment=DAEMON_ALLOW_DOWNLOAD_BINARIES=false\nEnvironment=DAEMON_RESTART_AFTER_UPGRADE=true\nReadOnlyPaths=%s\n",
+		constants.ChainDaemonName, constants.ChainHome,
+		strings.Join(cosmovisor.Layout{Home: constants.ChainHome}.ReadOnlyDirs(), " "))
 	return renderGlobalUnit(
 		"Orama L1 node (oramad under cosmovisor)",
 		globalChainUser,

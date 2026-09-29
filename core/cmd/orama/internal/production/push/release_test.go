@@ -41,7 +41,7 @@ func newReleaseNode(t *testing.T) *releaseNode {
 	n.repo.WriteRoot(t, n.rootPath)
 	n.publish(t, releaseNow.Add(time.Hour))
 	n.target = trusting(n.base, addr)
-	n.target.checkRelease = func(archive, dir, target string) error {
+	n.target.checkRelease = func(archive *os.File, dir, target string) error {
 		_, err := releaseverify.CheckFile(releaseverify.FileCheck{
 			RootPath:    n.rootPath,
 			SeenPath:    filepath.Join(etc, "release-seen.json"),
@@ -79,6 +79,29 @@ func TestStageRelease_goodTargetInstalls(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(n.base, "bin", "orama")); string(b) != "new cli" {
 		t.Fatalf("bin/orama = %q", b)
+	}
+}
+
+// TestStageRelease_extractsTheCopyThatWasChecked swaps the original archive
+// for another signed build right after the check. What is extracted must be
+// the checked copy, not whatever the original path now holds.
+func TestStageRelease_extractsTheCopyThatWasChecked(t *testing.T) {
+	n := newReleaseNode(t)
+	key, addr := newSigner(t)
+	n.target.anchor = append(n.target.anchor, addr)
+	swapped := writeTarball(t, signedEntries(t, key, map[string]string{"bin/orama": "swapped cli"}))
+	check := n.target.checkRelease
+	n.target.checkRelease = func(archive *os.File, dir, target string) error {
+		if err := check(archive, dir, target); err != nil {
+			return err
+		}
+		return os.Rename(swapped, n.archive)
+	}
+	if err := n.stage(); err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(n.base, "bin", "orama")); string(b) != "new cli" {
+		t.Fatalf("bin/orama = %q; the archive was read again after its check", b)
 	}
 }
 

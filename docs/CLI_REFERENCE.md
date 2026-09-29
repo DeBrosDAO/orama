@@ -1468,10 +1468,13 @@ upgrade plan <name>; cosmovisor switches to it at the plan's height. --genesis
 stages <home>/cosmovisor/genesis/bin/oramad and points current at genesis if
 current does not exist yet. A binary already there is refused.
 
-The copy placed is verified as --release-target in the TUF metadata in
---release-metadata (threshold, timestamp expiry, snapshot rollback, length and
-hashes) before it is renamed into place. Nothing stages automatically: a
-validator's operator runs this for every chain upgrade.
+The binary is copied into a root-only staging directory and verified there,
+through the descriptor that wrote it, as --release-target in the TUF metadata
+in --release-metadata (threshold, timestamp expiry, snapshot rollback, length
+and hashes); only then is it linked into place. Every directory on the way is
+opened without following symlinks and must be root's; a symlink or a
+directory another account owns or may write is refused. Nothing stages
+automatically: a validator's operator runs this for every chain upgrade.
 
 | Flag | Default | Description |
 |------|---------|-------------|

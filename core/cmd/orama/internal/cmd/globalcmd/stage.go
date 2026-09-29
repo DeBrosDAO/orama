@@ -2,6 +2,7 @@ package globalcmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
@@ -31,10 +32,13 @@ upgrade plan <name>; cosmovisor switches to it at the plan's height. --genesis
 stages <home>/cosmovisor/genesis/bin/oramad and points current at genesis if
 current does not exist yet. A binary already there is refused.
 
-The copy placed is verified as --release-target in the TUF metadata in
---release-metadata (threshold, timestamp expiry, snapshot rollback, length and
-hashes) before it is renamed into place. Nothing stages automatically: a
-validator's operator runs this for every chain upgrade.`,
+The binary is copied into a root-only staging directory and verified there,
+through the descriptor that wrote it, as --release-target in the TUF metadata
+in --release-metadata (threshold, timestamp expiry, snapshot rollback, length
+and hashes); only then is it linked into place. Every directory on the way is
+opened without following symlinks and must be root's; a symlink or a
+directory another account owns or may write is refused. Nothing stages
+automatically: a validator's operator runs this for every chain upgrade.`,
 	Args: cobra.NoArgs,
 	RunE: runStageOramad,
 }
@@ -60,24 +64,28 @@ func runStageOramad(cmd *cobra.Command, _ []string) error {
 	if err := clierr.RequireRoot("staging oramad"); err != nil {
 		return err
 	}
-	layout := cosmovisor.Layout{
-		Home:   stageFlags.home,
-		Daemon: constants.ChainDaemonName,
-		Chown:  cosmovisor.ChownTo(constants.ChainUser),
+	uid, gid, err := cosmovisor.LookupAccount(constants.ChainUser)
+	if err != nil {
+		return clierr.Failure("%v", err)
 	}
-	verify := func(path string) error {
+	layout := cosmovisor.Layout{
+		Home:     stageFlags.home,
+		Daemon:   constants.ChainDaemonName,
+		ChainUID: uid,
+		ChainGID: gid,
+	}
+	verify := func(f *os.File) error {
 		_, err := releaseverify.CheckFile(releaseverify.FileCheck{
 			RootPath:    releaseverify.RootPath,
 			SeenPath:    releaseverify.SeenPath,
 			MetadataDir: stageFlags.metadata,
 			Target:      stageFlags.target,
-			File:        path,
+			File:        f,
 			Now:         time.Now(),
 		})
 		return err
 	}
 	var dst string
-	var err error
 	if stageFlags.genesis {
 		dst, err = layout.StageGenesis(stageFlags.binary, verify)
 	} else {

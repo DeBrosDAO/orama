@@ -1082,7 +1082,8 @@ The global-role unit that `core/pkg/install` renders (`RenderGlobalChainUnit`,
 `orama-global-chain.service`) runs `/usr/lib/orama-global/bin/cosmovisor run start --home
 /var/lib/orama-global/chain ...` with `DAEMON_NAME=oramad`, `DAEMON_HOME=/var/lib/orama-global/chain`
 (`constants.ChainHome`), `DAEMON_ALLOW_DOWNLOAD_BINARIES=false` and
-`DAEMON_RESTART_AFTER_UPGRADE=true`. Cosmovisor runs `DAEMON_HOME/cosmovisor/current/bin/oramad`
+`DAEMON_RESTART_AFTER_UPGRADE=true`, and mounts `cosmovisor/genesis` and `cosmovisor/upgrades`
+read-only (`ReadOnlyPaths=`). Cosmovisor runs `DAEMON_HOME/cosmovisor/current/bin/oramad`
 and, when the chain halts at an upgrade plan's height, points `current` at
 `cosmovisor/upgrades/<name>` and restarts. It never downloads a binary; a plan with no staged
 binary halts the chain until one is staged. Nothing installs this unit or the cosmovisor binary
@@ -1094,17 +1095,28 @@ Binaries enter the layout only through `orama global stage-oramad` (run as root)
 - `--upgrade <name>` places `cosmovisor/upgrades/<name>/bin/oramad`. `<name>` must be lowercase
   letters, digits, `.`, `-` or `_` (cosmovisor lowercases and URI-escapes plan names, so these are
   the names that map to the same directory on both sides).
-- `--genesis` places `cosmovisor/genesis/bin/oramad` and creates `current -> genesis` when
-  `current` does not exist; an existing `current` is never repointed.
-- The binary is copied into the target directory, the **copy** is verified with
+  It also places `cosmovisor/upgrades/<name>/upgrade-info.json` as a symlink to
+  `../../../cosmovisor-upgrade-info-<name>.json`, a file in the chain home: cosmovisor's
+  `SetCurrentUpgrade` creates `upgrade-info.json` in the upgrade's directory, and the link sends
+  that write into the home so the upgrade directory can stay root's and read-only.
+- `--genesis` places `cosmovisor/genesis/bin/oramad`, creates `cosmovisor/upgrades/` (the unit's
+  read-only mount needs it to exist), and creates `current -> genesis`, owned by `orama-chain`,
+  when `current` does not exist; an existing `current` is never repointed.
+- Every directory from `/` down is opened with `O_NOFOLLOW` relative to the one before it and
+  checked on its descriptor: the home's ancestors must be root's and not writable by others (a
+  sticky directory such as `/tmp` excepted), the home must be owned by root or `orama-chain`, and
+  `cosmovisor/`, `genesis/`, `upgrades/`, `upgrades/<name>/` and each `bin/` must be root's and
+  not group- or world-writable. A symlink or a foreign or writable component is refused.
+- The binary is copied into a fresh 0700 root-only staging directory under `cosmovisor/`,
+  synced, set to 0755 through its descriptor, and verified **through that descriptor** with
   `--release-metadata <dir> --release-target <name>` against the TUF release root adopted at
-  `/etc/orama/release-root.json` (the same check `orama node stage-archive` makes), and only then
-  renamed into place. A failure leaves nothing behind. A binary already staged at that path is
-  refused.
-- `cosmovisor/` and `cosmovisor/upgrades/<name>/` are chowned to `orama-chain`, which cosmovisor
-  runs as and which has to move `current` and write `upgrade-info.json` there; the binaries are
-  root-owned 0755. That account can therefore rearrange the layout: the TUF check covers what was
-  staged, not what the chain account does afterwards.
+  `/etc/orama/release-root.json` (the same check `orama node stage-archive` makes). Only then is
+  it hard-linked into `bin/`; the link fails if a binary is already there, so nothing is
+  replaced. A failure leaves nothing behind.
+- Ownership: `cosmovisor/` is root-owned, group `orama-chain`, mode 1775. The group may create
+  and replace its own entries there (`current`, which cosmovisor removes and re-creates at the
+  upgrade height); the sticky bit stops it removing or renaming root's `genesis/`, `upgrades/`
+  and staging directories. Everything below `genesis/` and `upgrades/` is root-owned 0755.
 
 Nothing stages automatically: a validator's `autoupdate` role refuses `auto`, and its operator
 runs `stage-oramad` for every upgrade.
