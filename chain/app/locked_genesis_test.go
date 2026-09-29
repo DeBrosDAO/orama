@@ -123,7 +123,7 @@ var lockedRows = []lockedRow{
 
 	// x/archive: C14, D22.
 	{"archive", "retention_window_blocks", "201600", "plans/open-network.md D22: validators keep 14 days of blocks (6-second blocks)"},
-	{"archive", "max_piece_bytes", "4294967296", "track-c C14 (structure only): 4 GiB caps the bundle file an attestation commits to; "+citeG1},
+	{"archive", "max_piece_bytes", "4294967296", "track-c C14 (structure only): 4 GiB caps the bundle file an attestation commits to; " + citeG1},
 
 	// x/shielded: C12, D19, D20, P5. The plan fixes the 2% cap (P5, a constant in x/shielded/pool) and
 	// names the other parameters without numbers; C12a's spec text does not exist yet, so each is a

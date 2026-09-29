@@ -131,7 +131,7 @@ func (b *fakeBank) GetBalance(_ context.Context, addr sdk.AccAddress, denom stri
 type fakeEarnings struct {
 	bank *fakeBank
 	bal  map[string]math.Int
-	// funded records every FundBondFromEarnings call, in order.
+	// funded records every FundSpendFromEarnings call, in order.
 	funded []fundCall
 	// failCredit makes CreditEarnings fail for this operator address.
 	failCredit string
@@ -142,8 +142,8 @@ type fundCall struct {
 	amount math.Int
 }
 
-// FundBondFromEarnings only records the request: what it moves is x/fees' own tested behaviour.
-func (e *fakeEarnings) FundBondFromEarnings(_ context.Context, addr sdk.AccAddress, _ string, needed math.Int) error {
+// FundSpendFromEarnings only records the request: what it moves is x/fees' own tested behaviour.
+func (e *fakeEarnings) FundSpendFromEarnings(_ context.Context, addr sdk.AccAddress, _ string, needed math.Int) error {
 	e.funded = append(e.funded, fundCall{addr: addr, amount: needed})
 	return nil
 }

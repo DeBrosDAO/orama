@@ -583,7 +583,7 @@ balance to self-bond a validator or delegate at all. x/staking's Msg service is 
 (`chain/app/staking_topup.go`): while `MsgCreateValidator` or `MsgDelegate` executes, and before
 the staking handler spends anything, the signer's own shortfall (the declared bond amount minus
 their current spendable bank balance) is moved from that same signer's earnings into their bank
-balance (`x/fees` `FundBondFromEarnings`). `x/nodes` `MsgBondNode` does the same inside its handler,
+balance (`x/fees` `FundSpendFromEarnings`). `x/nodes` `MsgBondNode` does the same inside its handler,
 after its own checks. The top-up runs **inside the message**, not in the ante chain, on purpose: BaseApp
 writes ante state even when the message then fails, and a PostHandler cannot undo it either (its
 writes to a failed message's branch are dropped), so an ante top-up would turn earnings into a
@@ -844,7 +844,7 @@ A balance debited back to zero is removed from the earnings map rather than stor
 
 Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** and **storage deal and token fees** (inside the
 message handlers: staking, `x/nodes` `MsgBondNode`, `x/storage` `MsgCreateDeal`/`MsgExtendDeal` for
-the signer's own funds, never a grantor's, and `x/token` `MsgCreateToken`; each calls `FundBondFromEarnings`
+the signer's own funds, never a grantor's, and `x/token` `MsgCreateToken`; each calls `FundSpendFromEarnings`
 after its own checks, so a failed message reverses it) and fund the signer's own **state
 deposits** (`LockDeposit` takes the bank balance first and the shortfall from that same owner's
 earnings). `x/shielded`'s `MsgShieldEarnings` moves the signer's own earnings into the shielded pool (never fee-only balances). The only

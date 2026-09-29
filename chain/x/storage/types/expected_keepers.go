@@ -26,11 +26,11 @@ type BankKeeper interface {
 type EarningsKeeper interface {
 	CreditEarnings(ctx context.Context, senderModule string, addr sdk.AccAddress, amt sdk.Coin) error
 
-	// FundBondFromEarnings tops addr's bank balance up from its own earnings so a message can pull
+	// FundSpendFromEarnings tops addr's bank balance up from its own earnings so a message can pull
 	// needed from it (C2 item 4: earnings fund the signer's own deals). It must be called from a
 	// message handler, after the handler's own checks and before it pulls funds: BaseApp discards
 	// the message's state when it fails, and the top-up goes with it.
-	FundBondFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
+	FundSpendFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
 }
 
 // DepositKeeper matches x/fees Keeper.LockDeposit, TopUpDeposit, DepositAmount and

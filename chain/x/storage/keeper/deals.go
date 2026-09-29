@@ -51,7 +51,7 @@ func (k Keeper) CreateDeal(ctx sdk.Context, msg *types.MsgCreateDeal) (uint64, e
 	if msg.Granter == "" {
 		// The signer pays with its own money, so its earnings may cover the shortfall. A grantor's
 		// funds are never topped up from the signer's earnings.
-		if err := k.earnings.FundBondFromEarnings(ctx, payerAddr, params.BaseDenom, p.DealFee.Add(escrow)); err != nil {
+		if err := k.earnings.FundSpendFromEarnings(ctx, payerAddr, params.BaseDenom, p.DealFee.Add(escrow)); err != nil {
 			return 0, err
 		}
 	}
@@ -320,7 +320,7 @@ func (k Keeper) ExtendDeal(ctx sdk.Context, msg *types.MsgExtendDeal) error {
 		return fmt.Errorf("only the paying client can extend deal %d", deal.Id)
 	}
 	extra := deal.PricePerEpoch.MulRaw(int64(deal.Replicas)).MulRaw(int64(msg.ExtraEpochs))
-	if err := k.earnings.FundBondFromEarnings(ctx, client, params.BaseDenom, extra); err != nil {
+	if err := k.earnings.FundSpendFromEarnings(ctx, client, params.BaseDenom, extra); err != nil {
 		return err
 	}
 	if err := k.pullDealFunds(ctx, client, math.ZeroInt(), extra); err != nil {

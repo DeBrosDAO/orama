@@ -31,73 +31,73 @@ func fundEarnings(t *testing.T, f *testFixture, addr sdk.AccAddress, bank, earni
 	require.NoError(t, f.Keeper.CreditEarnings(f.Ctx, testSourceModule, addr, sdk.NewCoin(params.BaseDenom, math.NewInt(earnings))))
 }
 
-func TestFundBondFromEarnings_fundsTheShortfall(t *testing.T) {
+func TestFundSpendFromEarnings_fundsTheShortfall(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	addr := sdk.AccAddress("outsider_bonder_____")
 	fundEarnings(t, f, addr, 100, 900)
 
-	require.NoError(t, f.Keeper.FundBondFromEarnings(f.Ctx, addr, params.BaseDenom, math.NewInt(400)))
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, addr, params.BaseDenom, math.NewInt(400)))
 	require.True(t, f.Bank.balanceOf(addr.String()).Equal(math.NewInt(400)), "bank had 100, so 300 comes from earnings")
 	requireEarnings(t, f, addr, 600)
 }
 
-func TestFundBondFromEarnings_leavesACoveredBondAlone(t *testing.T) {
+func TestFundSpendFromEarnings_leavesACoveredBondAlone(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	addr := sdk.AccAddress("already_funded_bond_")
 	fundEarnings(t, f, addr, 500, 500)
 
-	require.NoError(t, f.Keeper.FundBondFromEarnings(f.Ctx, addr, params.BaseDenom, math.NewInt(500)))
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, addr, params.BaseDenom, math.NewInt(500)))
 	requireEarnings(t, f, addr, 500)
 	require.True(t, f.Bank.balanceOf(addr.String()).Equal(math.NewInt(500)))
 }
 
-func TestFundBondFromEarnings_insufficientEarningsMovesNothing(t *testing.T) {
+func TestFundSpendFromEarnings_insufficientEarningsMovesNothing(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	addr := sdk.AccAddress("short_of_earnings___")
 	fundEarnings(t, f, addr, 100, 200)
 
-	require.NoError(t, f.Keeper.FundBondFromEarnings(f.Ctx, addr, params.BaseDenom, math.NewInt(1000)))
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, addr, params.BaseDenom, math.NewInt(1000)))
 	requireEarnings(t, f, addr, 200)
 	require.True(t, f.Bank.balanceOf(addr.String()).Equal(math.NewInt(100)), "a partial top-up cannot make the bond succeed, so none is made")
 }
 
-func TestFundBondFromEarnings_neverTouchesAnotherAddress(t *testing.T) {
+func TestFundSpendFromEarnings_neverTouchesAnotherAddress(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	rich := sdk.AccAddress("rich_in_earnings____")
 	poor := sdk.AccAddress("poor_in_earnings____")
 	fundEarnings(t, f, rich, 0, 10_000)
 
-	require.NoError(t, f.Keeper.FundBondFromEarnings(f.Ctx, poor, params.BaseDenom, math.NewInt(1000)))
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, poor, params.BaseDenom, math.NewInt(1000)))
 	requireEarnings(t, f, rich, 10_000)
 	require.True(t, f.Bank.balanceOf(poor.String()).IsZero())
 }
 
-func TestFundBondFromEarnings_emptyAmountIsANoop(t *testing.T) {
+func TestFundSpendFromEarnings_emptyAmountIsANoop(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	addr := sdk.AccAddress("noop_amount_________")
 	fundEarnings(t, f, addr, 0, 100)
 
-	require.NoError(t, f.Keeper.FundBondFromEarnings(f.Ctx, addr, params.BaseDenom, math.ZeroInt()))
-	require.NoError(t, f.Keeper.FundBondFromEarnings(f.Ctx, addr, params.BaseDenom, math.Int{}))
-	require.NoError(t, f.Keeper.FundBondFromEarnings(f.Ctx, addr, params.BaseDenom, math.NewInt(-5)))
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, addr, params.BaseDenom, math.ZeroInt()))
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, addr, params.BaseDenom, math.Int{}))
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, addr, params.BaseDenom, math.NewInt(-5)))
 	requireEarnings(t, f, addr, 100)
 }
 
-// The message handler that calls FundBondFromEarnings runs in the message's own cache branch. When
+// The message handler that calls FundSpendFromEarnings runs in the message's own cache branch. When
 // the message fails afterwards, that branch is dropped, and so is the top-up.
-func TestFundBondFromEarnings_isDiscardedWithAFailedMessageBranch(t *testing.T) {
+func TestFundSpendFromEarnings_isDiscardedWithAFailedMessageBranch(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	addr := sdk.AccAddress("failing_message_____")
 	fundEarnings(t, f, addr, 0, 500)
 
 	msgCtx, _ := f.Ctx.CacheContext() // the branch runTx gives runMsgs; it is not written when the message fails.
-	require.NoError(t, f.Keeper.FundBondFromEarnings(msgCtx, addr, params.BaseDenom, math.NewInt(400)))
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(msgCtx, addr, params.BaseDenom, math.NewInt(400)))
 	got, err := f.Keeper.GetEarnings(msgCtx, addr)
 	require.NoError(t, err)
 	require.True(t, got.Equal(math.NewInt(100)))
@@ -107,4 +107,24 @@ func TestFundBondFromEarnings_isDiscardedWithAFailedMessageBranch(t *testing.T) 
 	after, err := f.Keeper.GetEarnings(f.Ctx, addr)
 	require.NoError(t, err)
 	require.True(t, after.Equal(math.NewInt(500)))
+}
+
+// Earnings are norama only: a top-up asked for any other denom moves nothing, so an earnings
+// balance can never be paid out as a coin it is not.
+func TestFundSpendFromEarnings_onlyTheBaseDenomIsFunded(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	addr := sdk.AccAddress("other_denom_bonder__")
+	fundEarnings(t, f, addr, 0, 900)
+
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, addr, "ustake", math.NewInt(400)))
+	moved, err := f.Keeper.TopUpSpendFromEarnings(f.Ctx, addr, "ustake", math.NewInt(400))
+	require.NoError(t, err)
+	require.True(t, moved.IsZero())
+	require.True(t, f.Bank.balanceOf(addr.String()).IsZero(), "no coin reached the bank balance")
+	requireEarnings(t, f, addr, 900)
+
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, addr, params.BaseDenom, math.NewInt(400)))
+	require.True(t, f.Bank.balanceOf(addr.String()).Equal(math.NewInt(400)), "the base denom is still funded")
+	requireEarnings(t, f, addr, 500)
 }

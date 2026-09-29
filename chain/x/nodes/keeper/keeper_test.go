@@ -201,7 +201,7 @@ func (f *fakeDeposits) ReleaseDeposit(ctx context.Context, id string) (math.Int,
 
 // fakeEarnings is an in-memory earnings ledger with the x/fees semantics x/nodes relies on:
 // FundFeeBalance moves earnings into a fee-only balance that nothing else can spend, and
-// FundBondFromEarnings tops the bank balance up from earnings.
+// FundSpendFromEarnings tops the bank balance up from earnings.
 type fakeEarnings struct {
 	bank     *fakeBankKeeper
 	balances map[string]math.Int
@@ -235,7 +235,7 @@ func (e *fakeEarnings) FundFeeBalance(_ context.Context, from, to sdk.AccAddress
 	return nil
 }
 
-func (e *fakeEarnings) FundBondFromEarnings(_ context.Context, addr sdk.AccAddress, _ string, needed math.Int) error {
+func (e *fakeEarnings) FundSpendFromEarnings(_ context.Context, addr sdk.AccAddress, _ string, needed math.Int) error {
 	if !needed.IsPositive() || e.bank.balanceOf(addr.String()).GTE(needed) {
 		return nil
 	}

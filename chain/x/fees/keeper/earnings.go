@@ -10,6 +10,7 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/fees/types"
 )
 
@@ -64,36 +65,23 @@ func (k Keeper) creditLedgerOnly(ctx context.Context, addr sdk.AccAddress, amt m
 // fully debited back to zero (e.g. by DebitEarningsUpTo) must not be left behind as a literal zero
 // row.
 func (k Keeper) setEarnings(ctx context.Context, addr sdk.AccAddress, balance math.Int) error {
-	if balance.IsZero() {
-		if err := k.Earnings.Remove(ctx, addr.String()); err != nil {
-			return fmt.Errorf("failed to clear zero earnings balance for %s: %w", addr, err)
-		}
-		return nil
-	}
-	return k.Earnings.Set(ctx, addr.String(), balance)
+	return setLedger(ctx, k.Earnings, "earnings", addr, balance)
 }
 
 // GetEarnings returns addr's current earnings balance (zero if it has none).
 func (k Keeper) GetEarnings(ctx context.Context, addr sdk.AccAddress) (math.Int, error) {
-	balance, err := k.Earnings.Get(ctx, addr.String())
-	if err == nil {
-		return balance, nil
-	}
-	if errors.Is(err, collections.ErrNotFound) {
-		return math.ZeroInt(), nil
-	}
-	return math.Int{}, fmt.Errorf("failed to load earnings for %s: %w", addr, err)
+	return getLedger(ctx, k.Earnings, "earnings", addr)
 }
 
-// TopUpBondFromEarnings moves up to amount of denom from addr's own earnings account into addr's
+// TopUpSpendFromEarnings moves up to amount of denom from addr's own earnings account into addr's
 // own bank balance, and returns how much was actually moved (security review B8: "implement
 // bonding from earnings ... earnings go only to the signer's own bond"). It is the primitive under
-// FundBondFromEarnings, which the bond-funding message handlers call while they execute - the only
+// FundSpendFromEarnings, which the bond-funding message handlers call while they execute - the only
 // path by which an outsider who has never held a public bank balance (this chain starts every
 // account at zero, and payouts land only in earnings - see docs/CHAIN.md) can ever create or grow
 // a validator or bond a node.
-func (k Keeper) TopUpBondFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, amount math.Int) (math.Int, error) {
-	if !amount.IsPositive() {
+func (k Keeper) TopUpSpendFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, amount math.Int) (math.Int, error) {
+	if denom != params.BaseDenom || !amount.IsPositive() {
 		return math.ZeroInt(), nil
 	}
 	debited, err := k.DebitEarningsUpTo(ctx, addr, amount)
@@ -109,8 +97,9 @@ func (k Keeper) TopUpBondFromEarnings(ctx context.Context, addr sdk.AccAddress, 
 	return debited, nil
 }
 
-// FundBondFromEarnings makes addr's spendable balance of denom cover needed by moving the shortfall
-// from addr's own earnings into its own bank balance. It moves nothing when the bank balance
+// FundSpendFromEarnings makes addr's spendable balance of denom cover needed by moving the shortfall
+// from addr's own earnings into its own bank balance. Earnings are norama only, so any other denom
+// is left alone: the message that named it fails on its own balance. It moves nothing when the bank balance
 // already covers needed, and nothing when earnings cannot cover the whole shortfall (a partial
 // top-up cannot make the bond succeed, so the message is left to fail with its own error).
 //
@@ -119,8 +108,8 @@ func (k Keeper) TopUpBondFromEarnings(ctx context.Context, addr sdk.AccAddress, 
 // spendable bank balance for free. A handler runs in the message's own cache branch, so if the
 // message fails for any reason after this call, the top-up is discarded with everything else the
 // message did.
-func (k Keeper) FundBondFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error {
-	if needed.IsNil() || !needed.IsPositive() {
+func (k Keeper) FundSpendFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error {
+	if denom != params.BaseDenom || needed.IsNil() || !needed.IsPositive() {
 		return nil
 	}
 	spendable := k.bankKeeper.SpendableCoins(ctx, addr).AmountOf(denom)
@@ -135,7 +124,7 @@ func (k Keeper) FundBondFromEarnings(ctx context.Context, addr sdk.AccAddress, d
 	if earnings.LT(shortfall) {
 		return nil
 	}
-	if _, err := k.TopUpBondFromEarnings(ctx, addr, denom, shortfall); err != nil {
+	if _, err := k.TopUpSpendFromEarnings(ctx, addr, denom, shortfall); err != nil {
 		return fmt.Errorf("failed to top up %s's bond shortfall from earnings: %w", addr, err)
 	}
 	return nil
@@ -148,46 +137,16 @@ func (k Keeper) FundBondFromEarnings(ctx context.Context, addr sdk.AccAddress, d
 // the invariant "sum of earnings balances == the fees module balance" keeps holding across the
 // whole operation.
 func (k Keeper) DebitEarningsUpTo(ctx context.Context, addr sdk.AccAddress, want math.Int) (math.Int, error) {
-	if !want.IsPositive() {
-		return math.ZeroInt(), nil
-	}
-	balance, err := k.GetEarnings(ctx, addr)
-	if err != nil {
-		return math.Int{}, err
-	}
-	debit := want
-	if debit.GT(balance) {
-		debit = balance
-	}
-	if !debit.IsPositive() {
-		return math.ZeroInt(), nil
-	}
-	if err := k.setEarnings(ctx, addr, balance.Sub(debit)); err != nil {
-		return math.Int{}, fmt.Errorf("failed to debit earnings for %s: %w", addr, err)
-	}
-	return debit, nil
+	return debitLedgerUpTo(ctx, k.Earnings, "earnings", addr, want)
 }
 
 // GetFeeBalance returns addr's fee-only balance (zero if it has none).
 func (k Keeper) GetFeeBalance(ctx context.Context, addr sdk.AccAddress) (math.Int, error) {
-	balance, err := k.FeeBalances.Get(ctx, addr.String())
-	if err == nil {
-		return balance, nil
-	}
-	if errors.Is(err, collections.ErrNotFound) {
-		return math.ZeroInt(), nil
-	}
-	return math.Int{}, fmt.Errorf("failed to load fee balance for %s: %w", addr, err)
+	return getLedger(ctx, k.FeeBalances, "fee balance", addr)
 }
 
 func (k Keeper) setFeeBalance(ctx context.Context, addr sdk.AccAddress, balance math.Int) error {
-	if balance.IsZero() {
-		if err := k.FeeBalances.Remove(ctx, addr.String()); err != nil {
-			return fmt.Errorf("failed to clear zero fee balance for %s: %w", addr, err)
-		}
-		return nil
-	}
-	return k.FeeBalances.Set(ctx, addr.String(), balance)
+	return setLedger(ctx, k.FeeBalances, "fee balance", addr, balance)
 }
 
 // FundFeeBalance moves exactly amount from from's earnings ledger entry into to's fee-only balance,
@@ -244,10 +203,41 @@ func (k Keeper) CreditFeeBalance(ctx context.Context, senderModule string, addr 
 // debitFeeBalanceUpTo debits up to want from addr's fee balance and returns what it debited. Like
 // DebitEarningsUpTo it moves no coins; the caller burns what it debited.
 func (k Keeper) debitFeeBalanceUpTo(ctx context.Context, addr sdk.AccAddress, want math.Int) (math.Int, error) {
+	return debitLedgerUpTo(ctx, k.FeeBalances, "fee balance", addr, want)
+}
+
+// getLedger reads addr's balance in an x/fees ledger (earnings or fee balances), zero when it has
+// none.
+func getLedger(ctx context.Context, ledger collections.Map[string, math.Int], name string, addr sdk.AccAddress) (math.Int, error) {
+	balance, err := ledger.Get(ctx, addr.String())
+	if err == nil {
+		return balance, nil
+	}
+	if errors.Is(err, collections.ErrNotFound) {
+		return math.ZeroInt(), nil
+	}
+	return math.Int{}, fmt.Errorf("failed to load %s for %s: %w", name, addr, err)
+}
+
+// setLedger stores addr's balance in a ledger, and removes the entry when the balance is exactly
+// zero, so a ledger never holds a zero row (see setEarnings).
+func setLedger(ctx context.Context, ledger collections.Map[string, math.Int], name string, addr sdk.AccAddress, balance math.Int) error {
+	if balance.IsZero() {
+		if err := ledger.Remove(ctx, addr.String()); err != nil {
+			return fmt.Errorf("failed to clear zero %s for %s: %w", name, addr, err)
+		}
+		return nil
+	}
+	return ledger.Set(ctx, addr.String(), balance)
+}
+
+// debitLedgerUpTo debits up to want from addr's balance in a ledger, never more than the balance,
+// and returns what it debited. It moves no coins.
+func debitLedgerUpTo(ctx context.Context, ledger collections.Map[string, math.Int], name string, addr sdk.AccAddress, want math.Int) (math.Int, error) {
 	if !want.IsPositive() {
 		return math.ZeroInt(), nil
 	}
-	balance, err := k.GetFeeBalance(ctx, addr)
+	balance, err := getLedger(ctx, ledger, name, addr)
 	if err != nil {
 		return math.Int{}, err
 	}
@@ -258,8 +248,8 @@ func (k Keeper) debitFeeBalanceUpTo(ctx context.Context, addr sdk.AccAddress, wa
 	if !debit.IsPositive() {
 		return math.ZeroInt(), nil
 	}
-	if err := k.setFeeBalance(ctx, addr, balance.Sub(debit)); err != nil {
-		return math.Int{}, fmt.Errorf("failed to debit fee balance for %s: %w", addr, err)
+	if err := setLedger(ctx, ledger, name, addr, balance.Sub(debit)); err != nil {
+		return math.Int{}, fmt.Errorf("failed to debit %s for %s: %w", name, addr, err)
 	}
 	return debit, nil
 }

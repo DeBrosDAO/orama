@@ -234,8 +234,8 @@ type fundCall struct {
 	amount math.Int
 }
 
-// FundBondFromEarnings only records the request: what it moves is x/fees' own tested behaviour.
-func (f *fakeFees) FundBondFromEarnings(_ context.Context, addr sdk.AccAddress, _ string, needed math.Int) error {
+// FundSpendFromEarnings only records the request: what it moves is x/fees' own tested behaviour.
+func (f *fakeFees) FundSpendFromEarnings(_ context.Context, addr sdk.AccAddress, _ string, needed math.Int) error {
 	f.funded = append(f.funded, fundCall{addr: addr, amount: needed})
 	return nil
 }

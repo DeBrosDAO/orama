@@ -72,7 +72,7 @@ func (k Keeper) CreateToken(ctx sdk.Context, msg *types.MsgCreateToken) (types.T
 		return types.Token{}, fmt.Errorf("metadata deposit for %s must be positive", denom)
 	}
 	need := p.CreationFee.Add(deposit)
-	if err := k.fees.FundBondFromEarnings(ctx, creator, params.BaseDenom, need); err != nil {
+	if err := k.fees.FundSpendFromEarnings(ctx, creator, params.BaseDenom, need); err != nil {
 		return types.Token{}, err
 	}
 	spendable := k.bank.SpendableCoin(ctx, creator, params.BaseDenom).Amount

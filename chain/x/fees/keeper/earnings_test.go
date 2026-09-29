@@ -142,9 +142,9 @@ func TestFeeBalance_cannotBeBonded(t *testing.T) {
 	fundedEarnings(t, f, operator, 1000)
 	require.NoError(t, f.Keeper.FundFeeBalance(f.Ctx, operator, hot, math.NewInt(1000)))
 
-	require.NoError(t, f.Keeper.FundBondFromEarnings(f.Ctx, hot, params.BaseDenom, math.NewInt(500)))
+	require.NoError(t, f.Keeper.FundSpendFromEarnings(f.Ctx, hot, params.BaseDenom, math.NewInt(500)))
 	require.True(t, f.Bank.balanceOf(hot.String()).IsZero(), "a hot key's fee balance must never become a spendable bank balance")
-	moved, err := f.Keeper.TopUpBondFromEarnings(f.Ctx, hot, params.BaseDenom, math.NewInt(500))
+	moved, err := f.Keeper.TopUpSpendFromEarnings(f.Ctx, hot, params.BaseDenom, math.NewInt(500))
 	require.NoError(t, err)
 	require.True(t, moved.IsZero())
 	fee, err := f.Keeper.GetFeeBalance(f.Ctx, hot)

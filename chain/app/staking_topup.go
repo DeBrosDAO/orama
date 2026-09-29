@@ -11,12 +11,14 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+
+	"github.com/DeBrosOfficial/network/chain/app/params"
 )
 
 // earningsFunder is the x/fees call the bond-funding message handlers make: it tops up an
 // address's bank balance from that address's own earnings, up to a needed amount.
 type earningsFunder interface {
-	FundBondFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
+	FundSpendFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
 }
 
 // earningsFundedStaking funds a signer's own bond shortfall from their earnings while
@@ -35,10 +37,19 @@ type earningsFundedStaking struct {
 	funder earningsFunder
 }
 
+// fund tops addr up from its earnings for amount. Earnings are norama only, so a bond in any other
+// denom is passed to the staking handler untouched, which refuses it.
+func (s earningsFundedStaking) fund(ctx context.Context, addr sdk.AccAddress, amount sdk.Coin) error {
+	if amount.Denom != params.BaseDenom {
+		return nil
+	}
+	return s.funder.FundSpendFromEarnings(ctx, addr, amount.Denom, amount.Amount)
+}
+
 func (s earningsFundedStaking) CreateValidator(ctx context.Context, msg *stakingtypes.MsgCreateValidator) (*stakingtypes.MsgCreateValidatorResponse, error) {
 	// A malformed address is left for the staking handler to reject.
 	if valAddr, err := sdk.ValAddressFromBech32(msg.ValidatorAddress); err == nil {
-		if err := s.funder.FundBondFromEarnings(ctx, sdk.AccAddress(valAddr), msg.Value.Denom, msg.Value.Amount); err != nil {
+		if err := s.fund(ctx, sdk.AccAddress(valAddr), msg.Value); err != nil {
 			return nil, err
 		}
 	}
@@ -47,7 +58,7 @@ func (s earningsFundedStaking) CreateValidator(ctx context.Context, msg *staking
 
 func (s earningsFundedStaking) Delegate(ctx context.Context, msg *stakingtypes.MsgDelegate) (*stakingtypes.MsgDelegateResponse, error) {
 	if delegator, err := sdk.AccAddressFromBech32(msg.DelegatorAddress); err == nil {
-		if err := s.funder.FundBondFromEarnings(ctx, delegator, msg.Amount.Denom, msg.Amount.Amount); err != nil {
+		if err := s.fund(ctx, delegator, msg.Amount); err != nil {
 			return nil, err
 		}
 	}

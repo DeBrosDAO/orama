@@ -392,7 +392,7 @@ func (k Keeper) BondNode(ctx sdk.Context, msg *types.MsgBondNode) error {
 		// Funding the bond from the operator's own earnings happens here, inside the message's
 		// own branch, and only after every check above passed: BaseApp discards this branch when
 		// the message fails, so a rejected bond can never leave earnings turned into a bank balance.
-		if err := k.earningsKeeper.FundBondFromEarnings(ctx, owner, params.BaseDenom, msg.Amount); err != nil {
+		if err := k.earningsKeeper.FundSpendFromEarnings(ctx, owner, params.BaseDenom, msg.Amount); err != nil {
 			return fmt.Errorf("bond node %s role %s: %w", node.NodeId, msg.Role, err)
 		}
 		if err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, owner, types.ModuleName, coins); err != nil {
