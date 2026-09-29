@@ -1174,7 +1174,8 @@ is the trust model:
   dot, `..`, more than one trailing dot) is refused, and so is any host that is not printable ASCII
   (an internationalized name is given in its `xn--` form). Names of the local machine or a private
   network are refused: `localhost`, `localhost.localdomain` and anything under `.localhost`,
-  `.localdomain`, `.local`, `.internal`, `.lan` or `.home.arpa`. A host with a zone id, or
+  `.localdomain`, `.local`, `.internal`, `.lan` or `.home.arpa`, and so is any single-label name with no
+  dot (`intranet`), because a resolver may complete it with a search domain into a private host. A host with a zone id, or
   a schemeless endpoint carrying a path, query or fragment (`10.0.0.1/x`), is refused, and the address in
   an `/ip4/` or `/ip6/` multiaddr part must be a literal of that family. An IPv4-mapped IPv6 address
   is its IPv4 form. Refused ranges: `0.0.0.0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`,
@@ -1316,7 +1317,7 @@ that a collaborator refuses becomes a `penalty_only` settlement row retried once
 after `MaxSettlementAttempts` (`storage_settlement_dropped` with `penalty_only=true`), so a node whose
 penalty fails still loses the slot it does not serve. The penalty is `slash_fraction` of one epoch's price of the missed deal:
 - a bonded node is slashed through x/nodes, which clamps its declared capacity to what the smaller
-  bond backs; x/storage then evicts the node's most recently assigned replicas until its reserved
+  bond backs; x/storage then evicts the node's replicas, highest replica index first (the index is swap-removed, so this is not assignment order), until its reserved
   bytes fit the clamped declaration, so reserved never exceeds declared;
 - a probation node has no bond: its record deposit is its stake and is burned (`SlashDeposit`, at
   most what it holds; a deposit burned in full is closed and the node earns a new one from its next

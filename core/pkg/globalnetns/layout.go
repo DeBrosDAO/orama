@@ -96,7 +96,13 @@ type Layout struct {
 	// DNAT), and the namespace's firewall accepts them only from HostAddr, so
 	// neither the public network nor the WireGuard mesh reaches them.
 	HostPorts []int
-	Tools     Tools
+	// HostClientUIDs are the host accounts, besides root, that may connect to HostPorts: the
+	// account the cluster node runs as (its gateway and node report). Every other local uid is
+	// refused by the host ruleset's output chain, so a tenant process on this machine (a
+	// deployment runs as a systemd dynamic user) cannot reach the chain's RPC, REST API or the
+	// indexer through the veth.
+	HostClientUIDs []int
+	Tools          Tools
 }
 
 // Validate refuses a layout the renderers cannot express safely: every value
@@ -110,6 +116,14 @@ func (l Layout) Validate() error {
 	for _, n := range l.HostPorts {
 		if n < 1 || n > 65535 {
 			return fmt.Errorf("host-only port %d is not a TCP port", n)
+		}
+	}
+	if len(l.HostPorts) > 0 && len(l.HostClientUIDs) == 0 {
+		return fmt.Errorf("host-only ports are served but no account is named that may connect to them")
+	}
+	for _, uid := range l.HostClientUIDs {
+		if uid < 1 {
+			return fmt.Errorf("host client uid %d must be a non-root account (root is always allowed)", uid)
 		}
 	}
 	for _, p := range l.Ports {
@@ -157,6 +171,18 @@ func (l Layout) hostPortSet() string {
 	return "{ " + strings.Join(parts, ", ") + " }"
 }
 
+// hostClientSet is `{ 0, 998 }`: root and the accounts allowed to reach the host-only ports.
+func (l Layout) hostClientSet() string {
+	uids := append([]int{0}, l.HostClientUIDs...)
+	slices.Sort(uids)
+	uids = slices.Compact(uids)
+	parts := make([]string, len(uids))
+	for i, n := range uids {
+		parts[i] = fmt.Sprint(n)
+	}
+	return "{ " + strings.Join(parts, ", ") + " }"
+}
+
 func privateSet() string { return "{ " + strings.Join(PrivateRanges, ", ") + " }" }
 
 // RenderResolvConf is the namespace's /etc/resolv.conf, bind-mounted over the
@@ -179,7 +205,9 @@ func RenderSysctl() string {
 // outbound traffic, refuses it any private destination, refuses everything
 // arriving from the veth at the host itself (so the namespace cannot reach a
 // cluster service through the host's public or WireGuard address), and
-// forwards into the namespace only DNAT'd connections and their replies.
+// forwards into the namespace only DNAT'd connections and their replies. Its output chain lets
+// only root and the accounts in HostClientUIDs open a connection to the host-only ports on the
+// namespace address: any other local process would otherwise reach them through the veth.
 func (l Layout) RenderHostRules() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table ip %s {\n", hostTable)
@@ -198,7 +226,12 @@ func (l Layout) RenderHostRules() string {
 	fmt.Fprintf(&b, "\t\toifname %q drop\n\t}\n", HostIface)
 	fmt.Fprintf(&b, "\tchain input {\n\t\ttype filter hook input priority -1; policy accept;\n")
 	fmt.Fprintf(&b, "\t\tiifname %q ct state established,related accept\n", HostIface)
-	fmt.Fprintf(&b, "\t\tiifname %q drop\n\t}\n}\n", HostIface)
+	fmt.Fprintf(&b, "\t\tiifname %q drop\n\t}\n", HostIface)
+	if set := l.hostPortSet(); set != "" {
+		fmt.Fprintf(&b, "\tchain output {\n\t\ttype filter hook output priority -1; policy accept;\n")
+		fmt.Fprintf(&b, "\t\tip daddr %s tcp dport %s meta skuid != %s drop\n\t}\n", NSAddr, set, l.hostClientSet())
+	}
+	b.WriteString("}\n")
 	return b.String()
 }
 
@@ -231,8 +264,9 @@ func (l Layout) RenderNSRules() string {
 // purpose: `ip netns add` must bind-mount into the host's mount namespace.
 // The Pre lines clear what an unclean shutdown left behind.
 //
-// IPv6 is switched off on the host end of the veth and everywhere inside the
-// namespace, before any address is set. The rulesets are IPv4 only, so a
+// IPv6 is switched off inside the namespace (its default, which the veth end
+// is born with) before that end exists, and on the host end of the veth right
+// after the pair is created, before any address is set or end brought up. The rulesets are IPv4 only, so a
 // namespace with IPv6 could reach the host's link-local address, or any IPv6
 // service the host listens on, past every drop rule in them. The sysctls are
 // written with ExecStart=-: on a kernel booted with ipv6.disable=1 the keys do
@@ -252,10 +286,9 @@ func (l Layout) RenderUnit() string {
 	start := []string{
 		l.Tools.Sysctl + " -q -w net.ipv4.ip_forward=1",
 		ip + " netns add " + Name,
-		ip + " link add " + HostIface + " type veth peer name " + NSIface,
-		ip + " link set " + NSIface + " netns " + Name,
-		"-" + l.Tools.Sysctl + " -q -w net.ipv6.conf." + HostIface + ".disable_ipv6=1",
 		"-" + ip + " netns exec " + Name + " " + l.Tools.Sysctl + " -q -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1",
+		ip + " link add " + HostIface + " type veth peer name " + NSIface + " netns " + Name,
+		"-" + l.Tools.Sysctl + " -q -w net.ipv6.conf." + HostIface + ".disable_ipv6=1",
 		ip + " addr add " + HostAddr + "/30 dev " + HostIface,
 		ip + " link set " + HostIface + " up",
 		ip + " -n " + Name + " addr add " + NSAddr + "/30 dev " + NSIface,

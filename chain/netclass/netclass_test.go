@@ -39,6 +39,9 @@ func TestCheckHost_refusesEveryNonPublicOrObfuscatedForm(t *testing.T) {
 		"LOCALHOST.", "localhost..", "db.internal.", "a.b.local.",
 		// Every trailing dot is dropped before classification, so extra dots hide nothing.
 		"127.1..", "10.0.0.1..", "2130706433...", "0x7f.1..",
+		// A single label with no dot: a resolver may complete it with a search domain into a private
+		// host, and it is not a public name.
+		"intranet", "db", "nas", "INTRANET", "intranet.", "xn--bcher-kva",
 		// An empty label is not a name.
 		".", "..", "example..com", ".example.com", "example.com..",
 		// Non-ASCII hosts: a resolver may normalize them into something the checks never saw.

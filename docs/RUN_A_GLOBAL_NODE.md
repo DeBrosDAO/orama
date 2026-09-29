@@ -368,11 +368,12 @@ it would put the units back in the root namespace.
 
 | File | Purpose |
 |------|---------|
-| `/etc/systemd/system/orama-global-netns.service` | A oneshot that creates the namespace, the veth pair `ogl-host` (root side, `198.18.0.1/30`) and `ogl-ns` (inside, `198.18.0.2/30`), the default route, and loads both rulesets, after switching IPv6 off on `ogl-host` and everywhere inside the namespace (the rulesets are IPv4 only), then reading the sysctls back in `ExecStartPost=` and failing the unit (so no global unit starts) if IPv6 is still on anywhere; a kernel booted with `ipv6.disable=1`, which has no `/proc/sys/net/ipv6`, has nothing to check. It takes them down on stop. No sandboxing on this unit, because `ip netns add` binds into the host's mount namespace. |
+| `/etc/systemd/system/orama-global-netns.service` | A oneshot that creates the namespace, the veth pair `ogl-host` (root side, `198.18.0.1/30`) and `ogl-ns` (inside, `198.18.0.2/30`), the default route, and loads both rulesets. IPv6 is switched off inside the namespace first (its default, so the veth end is created into the namespace with IPv6 already off) and on `ogl-host` right after the pair is created, before either end is given an address or brought up (the rulesets are IPv4 only). It then reads the sysctls back in `ExecStartPost=` and failing the unit (so no global unit starts) if IPv6 is still on anywhere; a kernel booted with `ipv6.disable=1`, which has no `/proc/sys/net/ipv6`, has nothing to check. It takes them down on stop. No sandboxing on this unit, because `ip netns add` binds into the host's mount namespace. |
 | `/etc/orama-global/netns-host.nft` | Root-namespace ruleset (table `ip orama_global`), see below |
 | `/etc/orama-global/netns.nft` | Ruleset loaded inside the namespace (table `ip orama_global_ns`) |
 | `/etc/orama-global/resolv.conf` | `9.9.9.9` and `1.1.1.1`. The host's stub resolver is on the host's loopback, which the namespace cannot reach. |
 | `/etc/sysctl.d/60-orama-global-netns.conf` | `net.ipv4.ip_forward = 1`, also set when the namespace unit starts |
+| `/var/lib/orama-global/netns-prior-ip-forward` | The value (`0` or `1`) `net.ipv4.ip_forward` had before the first co-located install turned it on. Written once, before anything else the install changes; a second install leaves it alone. Removal puts it back |
 
 Every `orama-global-*` unit (the public Kubo, its GC oneshot, the indexer and the cosmovisor chain unit included; the GC timer only triggers the oneshot and stays in the root namespace) gains `BindsTo=` and `After=orama-global-netns.service`,
 `NetworkNamespacePath=/run/netns/orama-global`, and a read-only bind of the
@@ -395,7 +396,13 @@ namespace; the cluster's own Kubo (10107) is a different daemon on the other sid
   `169.254.0.0/16` (cloud metadata) or `100.64.0.0/10`; nothing arriving on the
   veth may reach a service on the host itself, so the namespace cannot get to the
   cluster through the host's public or WireGuard address; and only DNAT'd
-  connections and their replies are forwarded into the namespace.
+  connections and their replies are forwarded into the namespace. Its `output`
+  chain lets only root and the account the cluster node runs as (`orama`, whose
+  uid the install resolves; the install is refused when it cannot) open a
+  connection to `198.18.0.2` on the host-only ports (31001, 31003 and, with the
+  indexer, 31015): every local process shares the veth's route to the namespace,
+  and a tenant deployment (a systemd dynamic user) must not reach the chain's RPC,
+  REST API or indexer through it.
 - Inside the namespace: input is default-drop except loopback, replies, the
   published ports, and the chain's RPC and REST API and the indexer's read API
   (TCP 31001, 31003 and, with the indexer, 31015) from `198.18.0.1`, the host's
@@ -429,12 +436,30 @@ gRPC (31002) stays on the namespace's loopback. The cluster gateway's
 `/v1/chain/` proxy reads them at those addresses on a co-located machine (it
 detects the installed layout; `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and
 `ORAMA_CHAIN_INDEX_URL` still override), and so do the node report and the
-inspector. A gateway process started before a co-located install keeps the
-loopback defaults until it restarts.
+inspector. The node report resolves the endpoints on every report, so it
+follows a co-located install without a restart. The cluster gateway resolves
+them when it starts: a gateway started before a co-located install keeps the
+loopback defaults for its `/v1/chain/` route until the cluster node restarts.
+The install does not restart it (`orama node restart` takes the node's
+quorum duties with it, and a restart of one node at a time is the rule), and
+prints that the restart is needed: run `orama node restart` on the machine after
+the install, on one node at a time.
+
+**Residual.** The output rule names accounts, not programs: root and every
+process of the `orama` account (the cluster node, its gateways and the services
+it supervises) can reach the host-only ports, and so can anything on the
+machine that runs as them. A tenant deployment runs as its own dynamic user and
+cannot. CometBFT's RPC has its unsafe routes off (`rpc.unsafe = false`, which
+`oramad init` writes and the chain unit never overrides; a test asserts both).
 
 Removing the layout is not built: stop and disable the `orama-global-*` units and
 `orama-global-netns.service`, delete the files above and the `ufw route` rules
-tagged `orama-global`, and set `role` back to `cluster` in `preferences.yaml`.
+tagged `orama-global`, set `role` back to `cluster` in `preferences.yaml`, and put
+`net.ipv4.ip_forward` back to the value in
+`/var/lib/orama-global/netns-prior-ip-forward` (`sysctl -w
+net.ipv4.ip_forward=$(cat /var/lib/orama-global/netns-prior-ip-forward)`) before
+deleting `/var/lib/orama-global`. The stagenet `deploy.sh reset` does this last step
+itself.
 
 **Tests.** The rendering of the unit and rulesets, the machine checks, the install
 plan and the boot-time role check are unit tests in `make test`. The layout built

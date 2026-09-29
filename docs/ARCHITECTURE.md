@@ -1242,6 +1242,11 @@ that reached the gateway directly, with nothing forwarded. Loopback **with** a
 forwarding header is not exempt: every public request arrives from `127.0.0.1`
 because Caddy proxies to localhost, so exempting it would exempt the internet.
 
+Every per-client bucket (general, credential, capability upgrade and chain query) is keyed by
+the client's network, not its address: an IPv4 client by its address (an IPv4-mapped IPv6 address
+as the IPv4 one) and an IPv6 client by its /64, since a subscriber routinely holds a whole /64
+and can source a request from any address in it.
+
 The endpoints that mint or exchange credentials — challenge, verify, api-key,
 token and refresh — have their own bucket, 30 a minute per address bursting to
 10, against a general limit of 10,000 a minute. They are

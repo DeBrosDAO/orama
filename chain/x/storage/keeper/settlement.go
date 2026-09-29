@@ -571,10 +571,13 @@ func (k Keeper) slashProbationDeposit(ctx sdk.Context, state types.NodeState, am
 	return nil
 }
 
-// trimReserved evicts replicas from a node whose reserved bytes exceed its declared capacity, most
-// recently assigned first, until they fit. A slash lowers the capacity the bond backs and
-// x/nodes clamps the declaration down with it; the replicas the smaller declaration cannot hold
-// are released here so reserved never exceeds declared.
+// trimReserved evicts replicas from a node whose reserved bytes exceed its declared capacity,
+// highest replica index first, until they fit. The index is a node's replica list with swap-remove
+// (removeReplica moves the last entry into a freed position), so the highest index is not the most
+// recently assigned replica: which replicas go is decided by the list's current order, not by the
+// order they were assigned in. A slash lowers the capacity the bond backs and x/nodes clamps the
+// declaration down with it; the replicas the smaller declaration cannot hold are released here so
+// reserved never exceeds declared.
 func (k Keeper) trimReserved(ctx sdk.Context, nodeID string) error {
 	declared, err := k.nodes.DeclaredCapacity(ctx, nodeID)
 	if err != nil {

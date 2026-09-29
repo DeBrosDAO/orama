@@ -8,13 +8,14 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/node/boot"
 	"gopkg.in/yaml.v3"
 )
 
 // systemdUnitDir is where the global installer writes the namespace unit.
-const systemdUnitDir = "/etc/systemd/system"
+const systemdUnitDir = constants.SystemdUnitDir
 
 // verifyNetnsLayout checks the co-located layout recorded in preferences
 // (global_netns) against the files on this machine. A test replaces it.

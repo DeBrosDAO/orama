@@ -321,3 +321,61 @@ func TestRateLimitMiddleware_chainQueryBucketIsTheIPv6Slash64(t *testing.T) {
 		t.Error("a different /64 must have its own bucket")
 	}
 }
+
+// The general bucket, the credential bucket and the capability bucket are keyed by the /64 of an
+// IPv6 client like the chain query one: rotating the low 64 bits gives no fresh burst on any of
+// them, and another /64 has its own.
+func TestRateLimitMiddleware_everyBucketIsTheIPv6Slash64(t *testing.T) {
+	cases := map[string]struct {
+		g    func() *Gateway
+		path string
+		want int
+	}{
+		"general": {
+			g:    func() *Gateway { return &Gateway{rateLimiter: NewRateLimiter(60, 3)} },
+			path: "/v1/db/query", want: 3,
+		},
+		"credentials": {
+			g: func() *Gateway {
+				return &Gateway{rateLimiter: NewRateLimiter(100000, 100000), authRateLimiter: NewRateLimiter(60, 2)}
+			},
+			path: "/v1/auth/challenge", want: 2,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			g := tc.g()
+			logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+			g.logger = logger
+			served := 0
+			handler := g.rateLimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { served++ }))
+
+			for i := 0; i < 20; i++ {
+				client := fmt.Sprintf("2001:db8:1:2:%x::1", i+1)
+				handler.ServeHTTP(httptest.NewRecorder(), request("127.0.0.1:9999", client, tc.path))
+			}
+			if served != tc.want {
+				t.Errorf("served %d of 20 requests from one /64, want the burst of %d", served, tc.want)
+			}
+
+			served = 0
+			handler.ServeHTTP(httptest.NewRecorder(), request("127.0.0.1:9999", "2001:db8:1:3::1", tc.path))
+			if served != 1 {
+				t.Error("a different /64 must have its own bucket")
+			}
+		})
+	}
+}
+
+func TestRateLimitMiddleware_ipv4ClientsStayPerAddress(t *testing.T) {
+	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	g := &Gateway{logger: logger, rateLimiter: NewRateLimiter(60, 1)}
+	served := 0
+	handler := g.rateLimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { served++ }))
+	for _, client := range []string{"203.0.113.7", "203.0.113.8", "203.0.113.9"} {
+		handler.ServeHTTP(httptest.NewRecorder(), request("127.0.0.1:9999", client, "/v1/db/query"))
+	}
+	if served != 3 {
+		t.Errorf("served %d of 3 clients at distinct IPv4 addresses, each has its own bucket", served)
+	}
+}

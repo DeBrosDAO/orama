@@ -8,6 +8,7 @@ import (
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/fees/types"
@@ -162,4 +163,80 @@ func TestTopUpDeposit_rejectsZeroUnknownAndUnaffordable(t *testing.T) {
 	d, err := f.Keeper.GetDeposit(f.Ctx, "small")
 	require.NoError(t, err)
 	require.True(t, d.Amount.Equal(math.NewInt(10)))
+}
+
+func TestSlashDeposit_burnsPartOfTheDepositAndKeepsTheRest(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	owner := sdk.AccAddress("deposit_owner_slash1_")
+	f.Bank.fund(owner.String(), math.NewInt(1_000))
+	require.NoError(t, f.Keeper.LockDeposit(f.Ctx, owner, "slash-part", math.NewInt(1_000)))
+
+	burned, err := f.Keeper.SlashDeposit(f.Ctx, "slash-part", math.NewInt(300))
+	require.NoError(t, err)
+	require.True(t, burned.Equal(math.NewInt(300)))
+
+	d, err := f.Keeper.GetDeposit(f.Ctx, "slash-part")
+	require.NoError(t, err)
+	require.True(t, d.Amount.Equal(math.NewInt(700)))
+	require.True(t, f.Bank.burned.Equal(math.NewInt(300)), "everything slashed is burned")
+	require.True(t, f.Bank.balanceOf(types.DepositsModuleName).Equal(math.NewInt(700)))
+	balance, err := f.Keeper.GetEarnings(f.Ctx, owner)
+	require.NoError(t, err)
+	require.True(t, balance.IsZero(), "nothing of a slash is refunded to the owner")
+
+	got, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, got.DepositsMatchModule, got.Detail)
+}
+
+// A deposit that holds less than the slash is burned in full, and its record is removed, so no
+// zero-amount row is left behind for a genesis export to choke on.
+func TestSlashDeposit_burnsAtMostWhatTheDepositHolds(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	owner := sdk.AccAddress("deposit_owner_slash2_")
+	f.Bank.fund(owner.String(), math.NewInt(500))
+	require.NoError(t, f.Keeper.LockDeposit(f.Ctx, owner, "slash-all", math.NewInt(500)))
+
+	burned, err := f.Keeper.SlashDeposit(f.Ctx, "slash-all", math.NewInt(5_000))
+	require.NoError(t, err)
+	require.True(t, burned.Equal(math.NewInt(500)), "the slash is capped at the deposit")
+
+	_, err = f.Keeper.GetDeposit(f.Ctx, "slash-all")
+	require.Error(t, err, "a deposit burned in full is removed")
+	require.True(t, f.Bank.balanceOf(types.DepositsModuleName).IsZero())
+	exported, err := f.Keeper.ExportGenesis(f.Ctx)
+	require.NoError(t, err)
+	require.NoError(t, exported.Validate(), "no zero-amount deposit row is left for the export")
+}
+
+func TestSlashDeposit_rejectsANonPositiveAmountAndAnUnknownDeposit(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	owner := sdk.AccAddress("deposit_owner_slash3_")
+	f.Bank.fund(owner.String(), math.NewInt(100))
+	require.NoError(t, f.Keeper.LockDeposit(f.Ctx, owner, "slash-bad", math.NewInt(100)))
+
+	for _, amount := range []math.Int{math.ZeroInt(), math.NewInt(-1), {}} {
+		_, err := f.Keeper.SlashDeposit(f.Ctx, "slash-bad", amount)
+		require.Error(t, err, "amount %v", amount)
+	}
+	d, err := f.Keeper.GetDeposit(f.Ctx, "slash-bad")
+	require.NoError(t, err)
+	require.True(t, d.Amount.Equal(math.NewInt(100)), "a refused slash burns nothing")
+
+	_, err = f.Keeper.SlashDeposit(f.Ctx, "no-such-deposit", math.NewInt(1))
+	require.ErrorIs(t, err, sdkerrors.ErrNotFound, "x/storage recognizes the missing deposit as one item's refusal")
+}
+
+// The refusals x/storage recognizes as one item's failure are the SDK errors x/fees wraps them in.
+func TestDepositRefusals_areTheSDKErrorsXStorageRecognizes(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	poor := sdk.AccAddress("deposit_owner_poor____")
+	require.ErrorIs(t, f.Keeper.LockDeposit(f.Ctx, poor, "too-dear", math.NewInt(1_000)), sdkerrors.ErrInsufficientFunds)
+	_, _, err := f.Keeper.ReleaseDeposit(f.Ctx, "missing")
+	require.ErrorIs(t, err, sdkerrors.ErrNotFound)
+	require.ErrorIs(t, f.Keeper.TopUpDeposit(f.Ctx, "missing", math.NewInt(1)), sdkerrors.ErrNotFound)
 }

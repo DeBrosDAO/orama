@@ -3,9 +3,7 @@
 package globalnetns
 
 import (
-	"context"
 	"fmt"
-	"net"
 	"os"
 	"runtime"
 
@@ -37,20 +35,4 @@ func InNamespace(path string, fn func() error) error {
 		done <- fn()
 	}()
 	return <-done
-}
-
-// DialContext dials addr from inside the namespace at path. addr must be an
-// IP literal and port: a host name would be resolved by helper goroutines
-// outside the namespace.
-func DialContext(path string) func(ctx context.Context, network, addr string) (net.Conn, error) {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		var conn net.Conn
-		err := InNamespace(path, func() error {
-			var d net.Dialer
-			c, err := d.DialContext(ctx, network, addr)
-			conn = c
-			return err
-		})
-		return conn, err
-	}
 }

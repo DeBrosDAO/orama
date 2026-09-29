@@ -107,17 +107,17 @@ func listenIn(t *testing.T, inNS bool, addr string) net.Listener {
 func dialFrom(inNS bool, addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
-	var d func(context.Context, string, string) (net.Conn, error)
+	dial := func() error {
+		c, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+		if err == nil {
+			c.Close()
+		}
+		return err
+	}
 	if inNS {
-		d = DialContext(Path)
-	} else {
-		d = (&net.Dialer{}).DialContext
+		return InNamespace(Path, dial)
 	}
-	c, err := d(ctx, "tcp", addr)
-	if err == nil {
-		c.Close()
-	}
-	return err
+	return dial()
 }
 
 // The namespace has its own port space and its own loopback: the same address
@@ -183,6 +183,7 @@ func TestLayout_privateNetworksAreUnreachableFromInside(t *testing.T) {
 func TestLayout_hostOnlyPortsAreReachableFromTheHostAlone(t *testing.T) {
 	l := integrationLayout(t)
 	l.HostPorts = []int{34569}
+	l.HostClientUIDs = []int{65534}
 	buildLayout(t, l)
 
 	listenIn(t, true, NSAddr+":34569")

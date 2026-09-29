@@ -22,7 +22,7 @@ import (
 // CosmWasm storage all will, once built); it exists now so they can all share one tested
 // lock/refund/burn implementation instead of reinventing it.
 func (k Keeper) LockDeposit(ctx context.Context, owner sdk.AccAddress, id string, amount math.Int) error {
-	if !amount.IsPositive() {
+	if amount.IsNil() || !amount.IsPositive() {
 		return fmt.Errorf("deposit amount must be positive, got %s", amount)
 	}
 	has, err := k.Deposits.Has(ctx, id)
@@ -125,7 +125,7 @@ func (k Keeper) ReleaseDeposit(ctx context.Context, id string) (refund, burn mat
 // locks it (bank balance first, then earnings). A contract's state deposit grows this way when the
 // same payer adds more bytes, so one payer is one deposit row.
 func (k Keeper) TopUpDeposit(ctx context.Context, id string, extra math.Int) error {
-	if !extra.IsPositive() {
+	if extra.IsNil() || !extra.IsPositive() {
 		return fmt.Errorf("deposit top-up must be positive, got %s", extra)
 	}
 	deposit, err := k.Deposits.Get(ctx, id)
@@ -154,7 +154,7 @@ func (k Keeper) TopUpDeposit(ctx context.Context, id string, extra math.Int) err
 // open with the remainder. part must be positive and strictly less than the deposit: releasing all
 // of it is ReleaseDeposit's job, so a caller cannot leave a zero-amount row behind.
 func (k Keeper) ReleaseDepositPart(ctx context.Context, id string, part math.Int) (refund, burn math.Int, err error) {
-	if !part.IsPositive() {
+	if part.IsNil() || !part.IsPositive() {
 		return math.Int{}, math.Int{}, fmt.Errorf("deposit %q partial release must be positive, got %s", id, part)
 	}
 	deposit, err := k.Deposits.Get(ctx, id)
@@ -191,7 +191,7 @@ func (k Keeper) ReleaseDepositPart(ctx context.Context, id string, part math.Int
 // locked the deposit as a stake. A deposit burned in full is removed, so no zero-amount row is
 // left behind.
 func (k Keeper) SlashDeposit(ctx context.Context, id string, amount math.Int) (burned math.Int, err error) {
-	if !amount.IsPositive() {
+	if amount.IsNil() || !amount.IsPositive() {
 		return math.Int{}, fmt.Errorf("deposit slash must be positive, got %s", amount)
 	}
 	deposit, err := k.Deposits.Get(ctx, id)

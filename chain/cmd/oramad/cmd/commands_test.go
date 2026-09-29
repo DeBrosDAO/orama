@@ -9,6 +9,7 @@ import (
 	"testing"
 	"text/template"
 
+	cmtcfg "github.com/cometbft/cometbft/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -124,5 +125,24 @@ func TestStartChainID_fallsBackToTheGenesisFile(t *testing.T) {
 	}
 	if _, err := startChainID(viper.New()); err == nil {
 		t.Fatal("a node with no genesis file and no chain-id must not resolve one")
+	}
+}
+
+// The CometBFT RPC is reachable by every account allowed to reach the chain's host-only ports, so its
+// unsafe routes (dial_seeds, dial_peers, unsafe_flush_mempool) must stay off in the config oramad
+// init renders. Nothing in oramad's defaults or in the chain unit turns them on.
+func TestInitCometBFTConfig_rpcUnsafeIsOff(t *testing.T) {
+	cfg := initCometBFTConfig()
+	if cfg.RPC.Unsafe {
+		t.Fatal("the CometBFT RPC's unsafe routes are on in oramad's default config")
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cmtcfg.WriteConfigFile(path, cfg)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "unsafe = false") || strings.Contains(string(body), "unsafe = true") {
+		t.Fatalf("the rendered config.toml does not keep rpc unsafe off:\n%s", body)
 	}
 }

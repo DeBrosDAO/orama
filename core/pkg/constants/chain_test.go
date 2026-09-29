@@ -77,3 +77,19 @@ func TestChainPorts_outsideIndexAndTenantBlocks(t *testing.T) {
 		}
 	}
 }
+
+// reset-node.sh puts net.ipv4.ip_forward back from the record the installer writes; the two must
+// name the same file.
+func TestStagenetResetScript_restoresForwardingFromTheInstallersRecord(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "chain", "scripts", "stagenet", "remote", "reset-node.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `PRIOR_FORWARD=` + constants.GlobalStateRoot + `/` + constants.GlobalNetnsPriorForwardFile
+	if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(want) + `$`).Match(data) {
+		t.Errorf("reset-node.sh does not read %s", want)
+	}
+	if !regexp.MustCompile(`sysctl -q -w "net\.ipv4\.ip_forward=\$prior"`).Match(data) {
+		t.Errorf("reset-node.sh does not restore net.ipv4.ip_forward from the record")
+	}
+}

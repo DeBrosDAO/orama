@@ -92,7 +92,7 @@ func ConfigFromEnv() Config {
 }
 
 // systemdUnitDir is where the co-located installer writes the namespace unit.
-const systemdUnitDir = "/etc/systemd/system"
+const systemdUnitDir = constants.SystemdUnitDir
 
 // colocated reports whether this machine shares a cluster node with global
 // services. It is a variable so tests can stand in for the machine.

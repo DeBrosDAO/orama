@@ -511,9 +511,13 @@ private-cluster node, and the global services are installed beside it, co-locate
 namespace ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md), "Sharing a machine with a cluster node"). The cluster must
 already be installed on each node. The script never starts, stops or reconfigures a cluster service. What it
 changes on a node: the `orama-global-*` units and state, the namespace, veth and nftables rulesets and the ufw
-rules tagged `orama-global`, `net.ipv4.ip_forward`, and the two lines (`role: both`, `global_netns`) that the
+rules tagged `orama-global`, `net.ipv4.ip_forward` (`reset` puts it back to the value the install recorded in
+`/var/lib/orama-global/netns-prior-ip-forward`), and the two lines (`role: both`, `global_netns`) that the
 install adds to the cluster's `/opt/orama/.orama/preferences.yaml`. It refuses to run for a `CHAIN_ID` that does
-not contain `-stagenet-` or `-devnet-`.
+not contain `-stagenet-` or `-devnet-`. Because it never restarts a cluster service, a node's cluster gateway
+that started before `up` keeps reading the chain at loopback for its `/v1/chain/` route: restart the cluster
+node (`orama node restart`, one node at a time) after the first `up`, as the co-located install's output says.
+The node report needs no restart.
 
 Requirements on this machine: `make`, Go, zig and the Rust toolchain (`make build-linux-amd64-full`), `python3`,
 `curl` and `ssh` access to the nodes. On each node: `ip` (iproute2), `nft`, `python3`, an **active** ufw (the install

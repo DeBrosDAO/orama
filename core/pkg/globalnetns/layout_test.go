@@ -20,8 +20,7 @@ func TestRenderUnit_buildsAndTearsDownTheNamespace(t *testing.T) {
 	for _, want := range []string{
 		"Type=oneshot", "RemainAfterExit=yes",
 		"ExecStart=/usr/sbin/ip netns add orama-global",
-		"ExecStart=/usr/sbin/ip link add ogl-host type veth peer name ogl-ns",
-		"ExecStart=/usr/sbin/ip link set ogl-ns netns orama-global",
+		"ExecStart=/usr/sbin/ip link add ogl-host type veth peer name ogl-ns netns orama-global",
 		"ExecStart=/usr/sbin/ip addr add 198.18.0.1/30 dev ogl-host",
 		"ExecStart=/usr/sbin/ip -n orama-global addr add 198.18.0.2/30 dev ogl-ns",
 		"ExecStart=/usr/sbin/ip -n orama-global route add default via 198.18.0.1",
@@ -185,6 +184,15 @@ func TestRenderUnit_switchesIPv6OffBeforeAnEndComesUp(t *testing.T) {
 			t.Errorf("%q comes after an end is up, so a link-local address is already assigned", off)
 		}
 	}
+	// The namespace's default is set before its end of the veth exists, so that end is created with
+	// IPv6 already off instead of being switched off after the fact.
+	create := strings.Index(unit, "ExecStart=/usr/sbin/ip link add ogl-host type veth peer name ogl-ns netns orama-global")
+	if create < 0 || strings.Index(unit, nsOff) > create {
+		t.Errorf("the namespace's IPv6 default is not set before the veth pair is created:\n%s", unit)
+	}
+	if strings.Index(unit, hostOff) < create {
+		t.Errorf("the host end is switched off before it exists")
+	}
 }
 
 // The comment on PrivateRanges must not claim what the rulesets do not do: they are IPv4 only, and
@@ -204,6 +212,7 @@ func TestRenderRules_areIPv4Only(t *testing.T) {
 func hostOnlyLayout() Layout {
 	l := testLayout()
 	l.HostPorts = []int{31015, 31001, 31003, 31001}
+	l.HostClientUIDs = []int{998}
 	return l
 }
 
@@ -225,10 +234,47 @@ func TestRenderNSRules_hostOnlyPortsComeFromTheHostVethAddressAlone(t *testing.T
 
 func TestRenderHostRules_doNotPublishHostOnlyPorts(t *testing.T) {
 	rules := hostOnlyLayout().RenderHostRules()
+	prerouting := rules[strings.Index(rules, "chain prerouting"):strings.Index(rules, "chain postrouting")]
 	for _, port := range []string{"31001", "31003", "31015"} {
-		if strings.Contains(rules, port) {
-			t.Errorf("host rules mention host-only port %s (it must not be DNAT'd or otherwise published):\n%s", port, rules)
+		if strings.Contains(prerouting, port) {
+			t.Errorf("host rules DNAT host-only port %s (it must not be published):\n%s", port, rules)
 		}
+	}
+}
+
+// Every host process shares the veth's route to the namespace address, so only root and the account
+// the cluster node runs as may open a connection to the host-only ports: a tenant process (a
+// systemd dynamic user) is dropped by the host ruleset's output chain.
+func TestRenderHostRules_onlyRootAndTheClusterAccountReachTheHostOnlyPorts(t *testing.T) {
+	rules := hostOnlyLayout().RenderHostRules()
+	want := "ip daddr 198.18.0.2 tcp dport { 31001, 31003, 31015 } meta skuid != { 0, 998 } drop"
+	if !strings.Contains(rules, want) {
+		t.Fatalf("host rules lack %q:\n%s", want, rules)
+	}
+	if !strings.Contains(rules, "chain output {\n\t\ttype filter hook output priority -1; policy accept;") {
+		t.Errorf("the rule is not in an output filter chain:\n%s", rules)
+	}
+}
+
+func TestRenderHostRules_noHostOnlyPortsMeansNoOutputChain(t *testing.T) {
+	if rules := testLayout().RenderHostRules(); strings.Contains(rules, "chain output") {
+		t.Errorf("a layout with no host-only port renders an output chain:\n%s", rules)
+	}
+}
+
+func TestValidate_hostOnlyPortsNeedAClientAccount(t *testing.T) {
+	l := testLayout()
+	l.HostPorts = []int{31001}
+	if err := l.Validate(); err == nil {
+		t.Error("host-only ports with no account allowed to reach them were accepted")
+	}
+	l.HostClientUIDs = []int{0}
+	if err := l.Validate(); err == nil {
+		t.Error("root named as an extra client account was accepted")
+	}
+	l.HostClientUIDs = []int{998}
+	if err := l.Validate(); err != nil {
+		t.Errorf("a good layout was refused: %v", err)
 	}
 }
 
@@ -242,6 +288,7 @@ func TestValidate_refusesAHostOnlyPortOutOfRange(t *testing.T) {
 	for _, n := range []int{0, -1, 65536} {
 		l := testLayout()
 		l.HostPorts = []int{n}
+		l.HostClientUIDs = []int{998}
 		if err := l.Validate(); err == nil {
 			t.Errorf("host-only port %d was accepted", n)
 		}

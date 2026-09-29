@@ -33,13 +33,13 @@ type SigningView struct {
 
 // readChainSigning fills the slashing and staking fields. It does not change
 // Responsive: a REST failure is SigningError, and the CometBFT section stands.
-func readChainSigning(r *ChainReport) {
+func readChainSigning(r *ChainReport, apiBase string) {
 	if r == nil || r.ConsAddress == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), signingBudget)
 	defer cancel()
-	view := fetchSigning(ctx, chainAPIBase, r.ConsAddress, r.VotingPower)
+	view := fetchSigning(ctx, apiBase, r.ConsAddress, r.VotingPower)
 	r.MissedBlockRatio = view.MissedBlockRatio
 	r.MinSignedPerWindow = view.MinSignedPerWindow
 	r.Jailed = view.Jailed

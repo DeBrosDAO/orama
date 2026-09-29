@@ -2,6 +2,7 @@ package install
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,11 +22,13 @@ type colocatedFixture struct {
 	etc      string
 	missing  map[string]bool
 	probeErr string
+	// forwarding is what `sysctl -n net.ipv4.ip_forward` prints before the install.
+	forwarding string
 }
 
 func newColocatedFixture(t *testing.T) *colocatedFixture {
 	t.Helper()
-	f := &colocatedFixture{globalFixture: newGlobalFixture(t), missing: map[string]bool{}}
+	f := &colocatedFixture{globalFixture: newGlobalFixture(t), missing: map[string]bool{}, forwarding: "0"}
 	tmp := t.TempDir()
 	f.oramaDir = filepath.Join(tmp, "opt", "orama", ".orama")
 	f.etc = filepath.Join(tmp, "etc")
@@ -42,6 +45,9 @@ func newColocatedFixture(t *testing.T) *colocatedFixture {
 			return []byte("systemd 252 (252.22-1)\n"), nil
 		case f.probeErr != "" && strings.Contains(call, f.probeErr):
 			return []byte("not permitted"), errors.New("exit status 1")
+		case strings.HasSuffix(name, "/sysctl") && len(args) == 2 && args[0] == "-n":
+			f.node.calls = append(f.node.calls, append([]string{name}, args...))
+			return []byte(f.forwarding + "\n"), nil
 		case strings.HasSuffix(name, "/ip"):
 			f.node.calls = append(f.node.calls, append([]string{name}, args...))
 			return nil, nil
@@ -279,7 +285,8 @@ func TestInstallGlobal_colocatedPutsTheKuboIndexerAndCosmovisorUnitsInTheNamespa
 		!strings.Contains(string(hostRules), "udp dport { 31000, 31010 } dnat to 198.18.0.2") {
 		t.Errorf("host rules do not publish the Kubo swarm beside the chain and provider ports:\n%s", hostRules)
 	}
-	if strings.Contains(string(hostRules), "31011") || strings.Contains(string(hostRules), "31015") {
+	nat := string(hostRules)[:strings.Index(string(hostRules), "chain forward")]
+	if strings.Contains(nat, "31011") || strings.Contains(nat, "31015") {
 		t.Errorf("a loopback port (Kubo RPC, indexer) is published:\n%s", hostRules)
 	}
 	inNamespace := []string{constants.ChainServiceUnit, constants.GlobalIPFSUnit, globalIPFSGCUnit, constants.GlobalProviderUnit, constants.GlobalIndexerUnit}
@@ -408,10 +415,27 @@ func TestInstallGlobal_colocatedMovesTheChainListenersToTheNamespaceAddress(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	prerouting := string(hostRules)[strings.Index(string(hostRules), "chain prerouting"):strings.Index(string(hostRules), "chain postrouting")]
 	for _, port := range []string{"31001", "31003", "31015"} {
-		if strings.Contains(string(hostRules), port) {
+		if strings.Contains(prerouting, port) {
 			t.Errorf("host rules publish the host-only port %s", port)
 		}
+	}
+	// The stub Lookup resolves every account to uid 990.
+	if !strings.Contains(string(hostRules), "ip daddr 198.18.0.2 tcp dport { 31001, 31003, 31015 } meta skuid != { 0, 990 } drop") {
+		t.Errorf("host rules do not restrict the host-only ports to root and the cluster account:\n%s", hostRules)
+	}
+}
+
+func TestInstallGlobal_colocatedRefusesWhenTheClusterAccountCannotBeFound(t *testing.T) {
+	f := newColocatedFixture(t)
+	f.host.Lookup = func(string) (int, int, error) { return 0, 0, errors.New("no such user") }
+	err := InstallGlobal(f.options(GlobalServiceChain), f.host)
+	if err == nil || !strings.Contains(err.Error(), supervisorUser) {
+		t.Fatalf("err = %v, want a refusal naming the %s account", err, supervisorUser)
+	}
+	if _, statErr := os.Stat(filepath.Join(f.host.Netns.ConfigDir, "netns-host.nft")); statErr == nil {
+		t.Error("the install changed the host before refusing")
 	}
 }
 
@@ -436,6 +460,15 @@ func TestColocatedListeners_refuseATemplateThatLostTheFlag(t *testing.T) {
 	if _, err := colocatedListeners(GlobalServiceProvider, "ExecStart=/x\nExecStart=/y\n"); err == nil {
 		t.Errorf("a unit with two ExecStart lines was accepted")
 	}
+	for _, s := range []GlobalService{GlobalServiceProvider, GlobalServiceArchiver, GlobalServiceRepair} {
+		if _, err := colocatedListeners(s, "ExecStart=/x --rpc tcp://127.0.0.1:31001\n"); err == nil {
+			t.Errorf("a %s unit that already has --rpc was accepted", s)
+		}
+		body, err := colocatedListeners(s, "ExecStart=/x --home /h\n")
+		if err != nil || strings.Count(body, "--rpc") != 1 {
+			t.Errorf("a %s unit without --rpc must get it exactly once, got %q, %v", s, body, err)
+		}
+	}
 	body, err := colocatedListeners(GlobalServiceIPFS, "ExecStart=/x\n")
 	if err != nil || body != "ExecStart=/x\n" {
 		t.Errorf("the public Kubo unit must be left alone, got %q, %v", body, err)
@@ -446,5 +479,75 @@ func TestInstallGlobal_globalOnlyKeepsTheLoopbackListeners(t *testing.T) {
 	unit := RenderGlobalChainUnit("")
 	if !strings.Contains(unit, "--rpc.laddr tcp://127.0.0.1:31001") || strings.Contains(unit, "198.18.0.2") {
 		t.Errorf("a global-only chain unit:\n%s", unit)
+	}
+}
+
+// The install records what net.ipv4.ip_forward was before the layout turned it on, once, so that
+// removing the layout can put it back. A second install finds the layout's own 1 in the kernel and
+// must not overwrite the record.
+func TestInstallGlobal_colocatedRecordsThePriorForwardingOnce(t *testing.T) {
+	f := newColocatedFixture(t)
+	record := filepath.Join(f.host.StateDir, constants.GlobalNetnsPriorForwardFile)
+	read := func() string {
+		data, err := os.ReadFile(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != "0\n" {
+		t.Fatalf("recorded %q, want the machine's own 0", got)
+	}
+
+	f.forwarding = "1"
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != "0\n" {
+		t.Errorf("a second install overwrote the record with %q", got)
+	}
+}
+
+func TestInstallGlobal_colocatedRefusesAnUnreadableForwardingValue(t *testing.T) {
+	f := newColocatedFixture(t)
+	f.forwarding = "maybe"
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err == nil {
+		t.Fatal("an install that could not record net.ipv4.ip_forward went ahead")
+	}
+	if _, err := os.Stat(filepath.Join(f.host.Netns.ConfigDir, "netns-host.nft")); err == nil {
+		t.Error("the layout was written without a record of the prior forwarding")
+	}
+}
+
+// The cluster gateway reads the chain's listeners when it starts, and the install does not restart
+// the cluster node (that takes its quorum duties with it), so it says what the operator must do.
+func TestInstallGlobal_colocatedSaysTheGatewayNeedsANodeRestart(t *testing.T) {
+	f := newColocatedFixture(t)
+	var logged []string
+	f.host.Logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, "orama node restart") }) {
+		t.Errorf("the install did not tell the operator to restart the node:\n%s", strings.Join(logged, "\n"))
+	}
+	for _, c := range f.node.named("systemctl") {
+		if strings.Contains(c, "restart") {
+			t.Errorf("the install restarted something: systemctl %s", c)
+		}
+	}
+
+	globalOnly := newGlobalFixture(t)
+	logged = nil
+	globalOnly.host.Logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	if err := InstallGlobal(globalOnly.options(GlobalServiceChain), globalOnly.host); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, "orama node restart") }) {
+		t.Error("a global-only install told the operator to restart the cluster node")
 	}
 }

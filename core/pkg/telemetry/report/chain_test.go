@@ -237,12 +237,11 @@ func TestShortChainError_truncatesLongErrors(t *testing.T) {
 // loadState and activeState for the chain unit.
 func stubChainNode(t *testing.T, rpcBase, loadState string, loadErr error, activeState string) {
 	t.Helper()
-	oldBase, oldAPI, oldSystemctl, oldKey := chainRPCBase, chainAPIBase, chainSystemctl, chainNodeKeyPath
+	oldEndpoints, oldSystemctl, oldKey := chainEndpoints, chainSystemctl, chainNodeKeyPath
 	t.Cleanup(func() {
-		chainRPCBase, chainAPIBase, chainSystemctl, chainNodeKeyPath = oldBase, oldAPI, oldSystemctl, oldKey
+		chainEndpoints, chainSystemctl, chainNodeKeyPath = oldEndpoints, oldSystemctl, oldKey
 	})
-	chainRPCBase = rpcBase
-	chainAPIBase = "http://127.0.0.1:1"
+	chainEndpoints = func() (string, string) { return rpcBase, "http://127.0.0.1:1" }
 	chainNodeKeyPath = writeFixtureNodeKey(t, fixtureNodeKey)
 	chainSystemctl = func(_ context.Context, args ...string) (string, error) {
 		switch args[0] {
@@ -292,5 +291,27 @@ func TestCollectChain_stoppedUnit(t *testing.T) {
 	r := collectChain()
 	if r == nil || r.ServiceActive || r.Responsive || r.Error == "" {
 		t.Errorf("got %+v; want an inactive, unresponsive report with an error", r)
+	}
+}
+
+// The endpoints are resolved for each collection, not when the process starts: a co-located install
+// made while a long-lived process (the gateway serving reports) runs is seen by its next report.
+func TestCollectChain_endpointsAreReadForEachCollection(t *testing.T) {
+	loopback := &fakeChain{height: 100, latest: time.Now().UTC(), interval: time.Second, votingPower: 10}
+	namespace := &fakeChain{height: 200, latest: time.Now().UTC(), interval: time.Second, votingPower: 10}
+	loopbackSrv := httptest.NewServer(loopback.handler())
+	t.Cleanup(loopbackSrv.Close)
+	namespaceSrv := httptest.NewServer(namespace.handler())
+	t.Cleanup(namespaceSrv.Close)
+	stubChainNode(t, loopbackSrv.URL, "loaded", nil, "active")
+	current := loopbackSrv.URL
+	chainEndpoints = func() (string, string) { return current, "http://127.0.0.1:1" }
+
+	if r := collectChain(); r == nil || r.LatestHeight != 100 {
+		t.Fatalf("first report %+v, want the loopback node at height 100", r)
+	}
+	current = namespaceSrv.URL
+	if r := collectChain(); r == nil || r.LatestHeight != 200 {
+		t.Errorf("second report %+v, want the namespace node at height 200 without a restart", r)
 	}
 }

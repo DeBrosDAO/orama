@@ -11,13 +11,14 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
 )
 
 // unitDir is where the global installer writes units.
-const unitDir = "/etc/systemd/system"
+const unitDir = constants.SystemdUnitDir
 
 // Lifecycle starts, stops and reports the installed orama-global-* units.
 // The chain starts first and stops last: every other service reaches it only

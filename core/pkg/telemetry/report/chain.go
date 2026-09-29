@@ -35,13 +35,10 @@ const (
 	chainErrorMaxLen = 200
 )
 
-// chainRPCBase is the CometBFT RPC the chain unit serves on loopback,
-// chainNodeKeyPath the node key its answers are checked against, and
-// chainSystemctl how the collector asks systemd about the unit. All are
-// variables so tests can stand in for the node.
+// chainNodeKeyPath is the node key the chain's answers are checked against, and chainSystemctl how
+// the collector asks systemd about the unit. Both are variables so tests can stand in for the
+// node.
 var (
-	chainRPCBase     = constants.LocalChainRPCURL()
-	chainAPIBase     = constants.LocalChainAPIURL()
 	chainNodeKeyPath = constants.ChainNodeKeyPath
 	// commandStdout keeps is-active's text when systemd exits non-zero.
 	// runCmd would drop "failed" and the report could not tell it from a miss.
@@ -50,11 +47,16 @@ var (
 	}
 )
 
-func init() {
-	// On a co-located machine the chain listens on the namespace address, not on loopback.
-	if globalnetns.Installed("/etc/systemd/system", func(p string) bool { _, err := os.Stat(p); return err == nil }) {
-		chainRPCBase, chainAPIBase = constants.ColocatedChainRPCURL(), constants.ColocatedChainAPIURL()
+// chainEndpoints returns the CometBFT RPC and the REST API the chain unit serves on this machine:
+// loopback, or on a co-located machine (the orama-global network namespace layout is installed)
+// the namespace address. It is read for each collection, not once when the process starts, so a
+// co-located install made while this process runs is seen by its next report. It is a variable so
+// tests can stand in for the node.
+var chainEndpoints = func() (rpcBase, apiBase string) {
+	if globalnetns.Installed(constants.SystemdUnitDir, func(p string) bool { _, err := os.Stat(p); return err == nil }) {
+		return constants.ColocatedChainRPCURL(), constants.ColocatedChainAPIURL()
 	}
+	return constants.LocalChainRPCURL(), constants.LocalChainAPIURL()
 }
 
 // collectChain reports this node's view of the Orama L1. It is nil when the
@@ -83,9 +85,10 @@ func collectChain() *ChainReport {
 		r.Error = shortChainError(err)
 		return r
 	}
-	queryChainRPC(ctx, chainRPCBase, nodeID, r, time.Now())
+	rpcBase, apiBase := chainEndpoints()
+	queryChainRPC(ctx, rpcBase, nodeID, r, time.Now())
 	if r.Responsive {
-		readChainSigning(r)
+		readChainSigning(r, apiBase)
 	}
 	return r
 }

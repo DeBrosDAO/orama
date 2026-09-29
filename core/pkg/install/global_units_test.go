@@ -230,4 +230,7 @@ func TestGlobalChainUnit_runsOramadUnderCosmovisorWithoutDownloads(t *testing.T)
 	if strings.Contains(unit, "DAEMON_ALLOW_DOWNLOAD_BINARIES=true") {
 		t.Error("cosmovisor may download binaries")
 	}
+	if strings.Contains(unit, "rpc.unsafe") {
+		t.Errorf("the chain unit turns on the CometBFT RPC's unsafe routes:\n%s", unit)
+	}
 }

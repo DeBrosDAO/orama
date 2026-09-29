@@ -102,7 +102,8 @@ func Literal(host string) (netip.Addr, bool) {
 }
 
 // CheckHost refuses a host that is not a public name or public literal address: an empty host, a
-// host with a character that cannot be part of a bare host, a local name, a literal in a
+// host with a character that cannot be part of a bare host, a local name, a dotless single-label
+// name (a resolver may complete it with a search domain), a literal in a
 // non-public range, and any host that a resolver would read as an IPv4 address without being a
 // strict dotted quad (its last label is a number: 2130706433, 0x7f.1, 127.1, 010.0.0.1).
 func CheckHost(host string) error {
@@ -136,6 +137,9 @@ func CheckHost(host string) error {
 	}
 	if strings.Contains(host, ":") {
 		return fmt.Errorf("host %q is not a valid IPv6 address", host)
+	}
+	if !strings.Contains(name, ".") {
+		return fmt.Errorf("host %q is a single-label name: a resolver may append a search domain and resolve it to a host on a private network", host)
 	}
 	if isNumericLabel(name[strings.LastIndex(name, ".")+1:]) {
 		return fmt.Errorf("host %q ends in a number, so a resolver may read it as an obfuscated IPv4 address", host)

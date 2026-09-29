@@ -59,6 +59,11 @@ const (
 	GlobalRepairHome   = "/var/lib/orama-global/repair"
 	GlobalIndexerHome  = "/var/lib/orama-global/indexer"
 
+	// GlobalNetnsPriorForwardFile, in GlobalStateRoot, holds the value net.ipv4.ip_forward had
+	// (0 or 1) before the first `orama global install --colocated` turned it on. Removing the
+	// co-located layout puts that value back.
+	GlobalNetnsPriorForwardFile = "netns-prior-ip-forward"
+
 	// GlobalBinDir holds the binaries the global units run: root-owned, 0755,
 	// outside /opt/orama so the units' tmpfs over /opt/orama does not hide them.
 	GlobalBinDir = "/usr/lib/orama-global/bin"
@@ -81,6 +86,10 @@ func LocalGlobalIndexerURL() string { return hostPortURL("127.0.0.1", GlobalInde
 // (pkg/globalnetns) and the readers of the chain's listeners (the cluster
 // gateway, the node report) agree on one address and cannot drift.
 const (
+	// SystemdUnitDir is where the installers write units, the co-located namespace unit among them.
+	// The readers that decide whether the machine is co-located look for that unit here.
+	SystemdUnitDir = "/etc/systemd/system"
+
 	// GlobalNetnsHostAddr is the veth end in the root namespace. It is the
 	// only source the namespace's firewall lets reach the chain's RPC, REST
 	// and the indexer.

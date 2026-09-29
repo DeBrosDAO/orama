@@ -151,6 +151,7 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err := savePreferencesBoth(h.Netns, plan.prefs); err != nil {
 		return fmt.Errorf("record the co-located role: %w", err)
 	}
+	h.Logf("  ! the cluster gateway reads the chain's listeners when it starts, so its /v1/chain/ route follows the namespace address only after this node restarts (orama node restart, one node at a time: it is not done here because it takes the node's quorum duties with it); the node report already follows")
 	return nil
 }
 
@@ -159,7 +160,7 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 // global-only install on a machine that is already co-located.
 func planColocation(h GlobalHost, opts GlobalInstallOptions) (*netnsPlan, error) {
 	if opts.Colocated {
-		return planNetns(h.Netns, opts)
+		return planNetns(h, opts)
 	}
 	if h.Netns.OramaDir == "" {
 		return nil, nil

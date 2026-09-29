@@ -24,6 +24,8 @@ const (
 	netnsFileMode = 0o644
 	// netnsDirMode is /etc/orama-global.
 	netnsDirMode = 0o755
+	// priorForwardLimit bounds the recorded sysctl value read back.
+	priorForwardLimit = 16
 
 	// roleCluster, roleGlobal and roleBoth are the values preferences.yaml
 	// records; they are boot.Role's strings without importing the node package.
@@ -67,7 +69,8 @@ type netnsPlan struct {
 // planNetns runs the checks a co-located install needs before the host
 // changes: the machine can hold the layout, a cluster node is installed, and
 // the machine is not already global-only.
-func planNetns(h NetnsHost, opts GlobalInstallOptions) (*netnsPlan, error) {
+func planNetns(g GlobalHost, opts GlobalInstallOptions) (*netnsPlan, error) {
+	h := g.Netns
 	tools, err := globalnetns.Preflight(h.Probe)
 	if err != nil {
 		return nil, fmt.Errorf("this machine cannot share a cluster node with global services: %w", err)
@@ -80,6 +83,13 @@ func planNetns(h NetnsHost, opts GlobalInstallOptions) (*netnsPlan, error) {
 		return nil, fmt.Errorf("this machine's role is global: it has no cluster node to share with; drop --colocated")
 	}
 	layout := globalnetns.Layout{Ports: opts.firewall().Ports(), HostPorts: opts.hostPorts(), Tools: tools}
+	if len(layout.HostPorts) > 0 {
+		uid, _, err := g.Lookup(supervisorUser)
+		if err != nil {
+			return nil, fmt.Errorf("cannot find the %s account the cluster node runs as, the only account besides root allowed to reach the chain's host-only ports: %w", supervisorUser, err)
+		}
+		layout.HostClientUIDs = []int{uid}
+	}
 	if err := layout.Validate(); err != nil {
 		return nil, err
 	}
@@ -127,11 +137,39 @@ func refuseGlobalOnlyOnColocated(h NetnsHost) error {
 	return nil
 }
 
+// recordPriorForwarding saves the value net.ipv4.ip_forward has before the layout turns it on, in
+// the global state directory, once: a second install (or one that follows a partial one) finds the
+// layout's own 1 in the kernel and must not overwrite what the machine had. Removing the layout
+// puts the recorded value back.
+func recordPriorForwarding(h GlobalHost, plan *netnsPlan) error {
+	path := filepath.Join(h.StateDir, constants.GlobalNetnsPriorForwardFile)
+	if _, err := h.StateRoot.ReadFile(path, priorForwardLimit); err == nil {
+		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	out, err := h.Run(plan.layout.Tools.Sysctl, "-n", "net.ipv4.ip_forward")
+	if err != nil {
+		return fmt.Errorf("read net.ipv4.ip_forward before the layout turns it on: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	value := strings.TrimSpace(string(out))
+	if value != "0" && value != "1" {
+		return fmt.Errorf("net.ipv4.ip_forward reads %q, want 0 or 1", value)
+	}
+	if err := h.StateRoot.WriteFile(path, []byte(value+"\n"), globalUnitMode); err != nil {
+		return fmt.Errorf("record the prior net.ipv4.ip_forward in %s: %w", path, err)
+	}
+	return nil
+}
+
 // writeNetns writes the namespace's files and unit, then records the layout in
 // preferences. Preferences come last: the node accepts role both only when the
 // files they name exist.
 func writeNetns(h GlobalHost, plan *netnsPlan) error {
 	n := h.Netns
+	if err := recordPriorForwarding(h, plan); err != nil {
+		return err
+	}
 	for _, dir := range []string{n.ConfigDir, filepath.Dir(n.SysctlFile)} {
 		if err := n.Root.MkdirAll(dir, netnsDirMode); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
@@ -241,6 +279,12 @@ func colocatedListeners(s GlobalService, body string) (string, error) {
 		exec := mustExecStart(body)
 		if exec == "" {
 			return "", fmt.Errorf("the %s unit has no single ExecStart line", s)
+		}
+		// Appending a second --rpc would silently win or lose against the first depending on the
+		// flag parser, so a template that already names one fails the install, as a chain unit
+		// with no flag to move does.
+		if strings.Contains(exec, " --rpc") {
+			return "", fmt.Errorf("the %s unit already has an --rpc flag, so the namespace address cannot be added exactly once", s)
 		}
 		return strings.Replace(body, "ExecStart="+exec, "ExecStart="+exec+" --rpc "+rpcFlag, 1), nil
 	default:

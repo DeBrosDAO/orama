@@ -6,7 +6,8 @@
 # being absent, so a half-finished install or a second run is fine.
 #
 # It touches only orama-global-* units, the orama-global directories, the ufw rules tagged
-# orama-global and the two global lines of the cluster's preferences.yaml. It never stops,
+# orama-global, net.ipv4.ip_forward (put back to the value the install recorded) and the two global
+# lines of the cluster's preferences.yaml. It never stops,
 # restarts or reconfigures a cluster service.
 set -euo pipefail
 
@@ -63,6 +64,22 @@ fi
 if [ -f "$PREFS" ] && grep -Eq '^(role: both|global_netns:)' "$PREFS"; then
 	log "restore the cluster role in $PREFS"
 	sed -i -e '/^role: both$/d' -e '/^global_netns:/d' "$PREFS"
+fi
+
+# net.ipv4.ip_forward goes back to what it was before the first `orama global install --colocated`,
+# which recorded it in the state directory. An install that predates the record leaves it alone.
+PRIOR_FORWARD=/var/lib/orama-global/netns-prior-ip-forward
+if [ -f "$PRIOR_FORWARD" ]; then
+	prior=$(head -c 16 "$PRIOR_FORWARD" | tr -d '[:space:]')
+	case "$prior" in
+	0 | 1)
+		log "restore net.ipv4.ip_forward=$prior"
+		sysctl -q -w "net.ipv4.ip_forward=$prior"
+		;;
+	*) log "$PRIOR_FORWARD holds '$prior', not 0 or 1; net.ipv4.ip_forward is left as it is" ;;
+	esac
+else
+	log "no record of net.ipv4.ip_forward before the install; it is left as it is"
 fi
 
 rm -rf /etc/orama-global /etc/sysctl.d/60-orama-global-netns.conf

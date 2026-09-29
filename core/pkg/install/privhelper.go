@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
 )
 
@@ -21,7 +22,7 @@ const privHelperBinary = "orama-privhelper"
 // else assigns them.
 var (
 	privHelperDest = privhelper.Path
-	systemdUnitDir = "/etc/systemd/system"
+	systemdUnitDir = constants.SystemdUnitDir
 	// legacySudoersPath held the wildcard sudoers rules the helper replaced.
 	legacySudoersPath = "/etc/sudoers.d/orama-namespaces"
 	chownRoot         = func(path string) error { return os.Chown(path, 0, 0) }

@@ -143,11 +143,15 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip, exempt := rateLimitClient(r)
+		client, exempt := rateLimitClient(r)
 		if exempt {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Every bucket below is keyed by the client's network, not its address: an IPv6 client is
+		// its /64, so a subscriber that can source requests from any address of its prefix does
+		// not get a fresh bucket for each one (see bucketKey).
+		ip := bucketKey(client)
 
 		// The credential-minting endpoints have their own, much tighter
 		// bucket. They are cheap to call and expensive to serve, and they are
@@ -164,7 +168,7 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 
 		// Every /v1/chain/query/ request runs a query on the chain process, so it has a bucket
 		// of its own instead of drawing on the general one.
-		if g.chainQueryRateLimiter != nil && isChainQueryPath(r.URL.Path) && !g.chainQueryRateLimiter.Allow(bucketKey(ip)) {
+		if g.chainQueryRateLimiter != nil && isChainQueryPath(r.URL.Path) && !g.chainQueryRateLimiter.Allow(ip) {
 			w.Header().Set("Retry-After", "10")
 			httputil.WriteRPCError(w, http.StatusTooManyRequests,
 				httputil.ErrCodeRateLimited,
