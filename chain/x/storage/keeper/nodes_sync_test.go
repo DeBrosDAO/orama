@@ -175,3 +175,31 @@ func TestPrivateDeals_acceptNodesWithoutNetworkIdentity(t *testing.T) {
 		require.NotEmpty(t, f.slot(t, id, i).NodeId, "the distinct-network rule applies to protocol deals only")
 	}
 }
+
+func TestSyncNodes_oneBrokenNodeDoesNotHaltTheBlock(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	f.registerUntracked("good", "10.0.0.0/16", 1, 1<<20)
+	f.Nodes.touch("ghost") // queued by x/nodes, but x/nodes cannot resolve it.
+
+	require.NoError(t, f.Keeper.BeginBlock(f.Ctx), "a per-node inconsistency must not fail BeginBlock")
+	require.True(t, f.tracked(t, "good"), "healthy nodes are still reconciled")
+	require.False(t, f.tracked(t, "ghost"))
+	require.Contains(t, f.Nodes.dirty, "ghost", "the broken node stays queued for the next block")
+
+	var failed []string
+	for _, ev := range f.Ctx.EventManager().Events() {
+		if ev.Type == "storage_node_sync_failed" {
+			for _, a := range ev.Attributes {
+				if a.Key == "node_id" {
+					failed = append(failed, a.Value)
+				}
+			}
+		}
+	}
+	require.Equal(t, []string{"ghost"}, failed)
+
+	f.registerUntracked("ghost", "10.1.0.0/16", 2, 1<<20)
+	require.NoError(t, f.Keeper.BeginBlock(f.Ctx))
+	require.True(t, f.tracked(t, "ghost"), "once the record is consistent the retry succeeds")
+}

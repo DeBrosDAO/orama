@@ -25,19 +25,36 @@ import (
 // re-queued until its last replica is released, evicted or expired. A probation node that
 // graduated without a bond stays tracked, without slots, until it bonds; it does not start a
 // second probation.
+//
+// One node's record can be unreadable or inconsistent (a node that x/nodes cannot resolve, a
+// deposit that will not release). That is data about one node, not a reason to stop the chain: the
+// node's work is rolled back, the node stays queued so the next block retries it, and a
+// storage_node_sync_failed event carries the reason. Only the queue itself failing to be read or
+// re-written is returned, since then the tracked set can no longer be trusted.
 func (k Keeper) syncNodes(ctx sdk.Context) error {
 	ids, err := k.nodes.TakeStorageChanges(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read x/nodes storage changes: %w", err)
 	}
 	for _, id := range ids {
-		if err := k.syncNode(ctx, id); err != nil {
-			return err
+		nodeCtx, write := ctx.CacheContext()
+		if err := k.syncNode(nodeCtx, id); err != nil {
+			if qerr := k.nodes.MarkStorageChanged(ctx, id); qerr != nil {
+				return fmt.Errorf("failed to re-queue %s after a failed reconciliation (%v): %w", id, err, qerr)
+			}
+			k.Logger(ctx).Error("storage node reconciliation failed; retrying next block", "node", id, "err", err)
+			ctx.EventManager().EmitEvent(sdk.NewEvent("storage_node_sync_failed",
+				sdk.NewAttribute("node_id", id),
+				sdk.NewAttribute("error", err.Error()),
+			))
+			continue
 		}
+		write()
 	}
 	return nil
 }
 
+// syncNode reconciles one node id with x/nodes.
 func (k Keeper) syncNode(ctx sdk.Context, id string) error {
 	eligible, err := k.nodes.IsActive(ctx, id)
 	if err != nil {

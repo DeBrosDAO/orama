@@ -61,8 +61,9 @@ func (k Keeper) EndBlock(ctx sdk.Context) error {
 	return k.expireDeals(ctx, epoch)
 }
 
-// TrackNode records a node id so the assignment index can see it. x/nodes calls
-// this when a storage node is registered. probation marks a fee-free registration.
+// TrackNode records a node id so the assignment index can see it. syncNodes calls
+// it, from BeginBlock, for a node x/nodes has queued and that has become eligible.
+// probation marks a fee-free registration.
 func (k Keeper) TrackNode(ctx sdk.Context, nodeID string, probation bool) error {
 	if nodeID == "" || len(nodeID) > 128 {
 		return fmt.Errorf("invalid node id %q", nodeID)
