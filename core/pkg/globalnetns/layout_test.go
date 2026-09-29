@@ -160,3 +160,40 @@ func TestApplyToUnit_joinsTheNamespaceFromAOneshot(t *testing.T) {
 		}
 	}
 }
+
+// The rulesets are IPv4 only, so IPv6 is switched off instead of being left to route around them:
+// on the host end of the veth and everywhere in the namespace, before the ends are brought up.
+func TestRenderUnit_switchesIPv6OffBeforeAnEndComesUp(t *testing.T) {
+	unit := testLayout().RenderUnit()
+	hostOff := "ExecStart=-/usr/sbin/sysctl -q -w net.ipv6.conf.ogl-host.disable_ipv6=1"
+	nsOff := "ExecStart=-/usr/sbin/ip netns exec orama-global /usr/sbin/sysctl -q -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1"
+	for _, want := range []string{hostOff, nsOff} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("unit lacks %q:\n%s", want, unit)
+		}
+	}
+	hostUp := strings.Index(unit, "ExecStart=/usr/sbin/ip link set ogl-host up")
+	nsUp := strings.Index(unit, "ExecStart=/usr/sbin/ip -n orama-global link set ogl-ns up")
+	if hostUp < 0 || nsUp < 0 {
+		t.Fatalf("unit does not bring the veth ends up:\n%s", unit)
+	}
+	for _, off := range []string{hostOff, nsOff} {
+		if at := strings.Index(unit, off); at > hostUp || at > nsUp {
+			t.Errorf("%q comes after an end is up, so a link-local address is already assigned", off)
+		}
+	}
+}
+
+// The comment on PrivateRanges must not claim what the rulesets do not do: they are IPv4 only, and
+// no IPv6 private range appears in either.
+func TestRenderRules_areIPv4Only(t *testing.T) {
+	l := testLayout()
+	for name, rules := range map[string]string{"host": l.RenderHostRules(), "namespace": l.RenderNSRules()} {
+		if strings.Contains(rules, "ip6") || strings.Contains(rules, "table inet") {
+			t.Errorf("%s rules mention IPv6:\n%s", name, rules)
+		}
+		if !strings.HasPrefix(rules, "table ip ") {
+			t.Errorf("%s rules are not `table ip`:\n%s", name, rules)
+		}
+	}
+}

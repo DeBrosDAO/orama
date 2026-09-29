@@ -60,10 +60,14 @@ const (
 // may not reach a resolver on a private network.
 var Resolvers = []string{"9.9.9.9", "1.1.1.1"}
 
-// PrivateRanges are the networks nothing in the namespace may reach: the
+// PrivateRanges are the IPv4 networks nothing in the namespace may reach: the
 // WireGuard mesh (10.0.0.0/24 is inside 10/8), other tenants' networks, the
-// cloud metadata address, and CGNAT. It is the same list the global units'
-// IPAddressDeny= holds, enforced a second time in the kernel firewall.
+// cloud metadata address, and CGNAT. The global units' IPAddressDeny= holds
+// these too, so IPv4 is enforced twice: in systemd and in the kernel firewall
+// (the rulesets are `table ip`, IPv4 only). IPv6 is not enforced twice: the
+// only IPv6 private ranges the units deny are in IPAddressDeny= alone. The
+// namespace and the veth ends have IPv6 turned off (RenderUnit), so the
+// namespace has no IPv6 traffic for either to police.
 var PrivateRanges = []string{
 	"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10",
 }
@@ -138,7 +142,7 @@ func RenderResolvConf() string {
 	return b.String()
 }
 
-// RenderSysctl turns on IPv4 forwarding.
+// RenderSysctl turns on IPv4 forwarding. IPv6 is not forwarded: the veth pair carries none.
 func RenderSysctl() string {
 	return "# Written by orama global install --colocated; the rulesets in " + ConfigDir + " confine what is forwarded.\nnet.ipv4.ip_forward = 1\n"
 }
@@ -195,6 +199,13 @@ func (l Layout) RenderNSRules() string {
 // rulesets, and takes them down again on stop. It has no sandboxing, on
 // purpose: `ip netns add` must bind-mount into the host's mount namespace.
 // The Pre lines clear what an unclean shutdown left behind.
+//
+// IPv6 is switched off on the host end of the veth and everywhere inside the
+// namespace, before any address is set. The rulesets are IPv4 only, so a
+// namespace with IPv6 could reach the host's link-local address, or any IPv6
+// service the host listens on, past every drop rule in them. The sysctls are
+// written with ExecStart=-: on a kernel booted with ipv6.disable=1 the keys do
+// not exist and there is nothing to switch off.
 func (l Layout) RenderUnit() string {
 	ip, nft := l.Tools.IP, l.Tools.Nft
 	var b strings.Builder
@@ -212,6 +223,8 @@ func (l Layout) RenderUnit() string {
 		ip + " netns add " + Name,
 		ip + " link add " + HostIface + " type veth peer name " + NSIface,
 		ip + " link set " + NSIface + " netns " + Name,
+		"-" + l.Tools.Sysctl + " -q -w net.ipv6.conf." + HostIface + ".disable_ipv6=1",
+		"-" + ip + " netns exec " + Name + " " + l.Tools.Sysctl + " -q -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1",
 		ip + " addr add " + HostAddr + "/30 dev " + HostIface,
 		ip + " link set " + HostIface + " up",
 		ip + " -n " + Name + " addr add " + NSAddr + "/30 dev " + NSIface,

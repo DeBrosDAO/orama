@@ -178,10 +178,18 @@ func (g GlobalFirewall) Ports() []globalnetns.Port {
 }
 
 // netnsRouteArgs are the ufw argv for a namespace's published ports: one
-// rule lets the namespace's own traffic out, and one per port lets the
-// DNAT'd connection in. spec is "<port>/<proto>".
+// rule lets the namespace's own traffic out (forwarded only when it comes from
+// the namespace's address), and one per port lets the DNAT'd connection in.
+// spec is "<port>/<proto>".
+//
+// The first argv removes the rule earlier releases added, which allowed
+// forwarding in from ogl-host for any source. ufw reports success when there
+// is no such rule, so it is safe on a machine that never had it.
 func netnsRouteArgs(specs []string) [][]string {
-	args := [][]string{{"route", "allow", "in", "on", globalnetns.HostIface, "comment", GlobalRuleComment}}
+	args := [][]string{
+		{"route", "delete", "allow", "in", "on", globalnetns.HostIface},
+		{"route", "allow", "in", "on", globalnetns.HostIface, "from", globalnetns.NSAddr, "comment", GlobalRuleComment},
+	}
 	for _, spec := range specs {
 		port, proto, _ := strings.Cut(spec, "/")
 		args = append(args, []string{"route", "allow", "proto", proto, "to", globalnetns.NSAddr, "port", port, "comment", GlobalRuleComment})

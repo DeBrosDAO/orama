@@ -359,7 +359,7 @@ it would put the units back in the root namespace.
 
 | File | Purpose |
 |------|---------|
-| `/etc/systemd/system/orama-global-netns.service` | A oneshot that creates the namespace, the veth pair `ogl-host` (root side, `198.18.0.1/30`) and `ogl-ns` (inside, `198.18.0.2/30`), the default route, and loads both rulesets; it takes them down on stop. No sandboxing on this unit, because `ip netns add` binds into the host's mount namespace. |
+| `/etc/systemd/system/orama-global-netns.service` | A oneshot that creates the namespace, the veth pair `ogl-host` (root side, `198.18.0.1/30`) and `ogl-ns` (inside, `198.18.0.2/30`), the default route, and loads both rulesets, after switching IPv6 off on `ogl-host` and everywhere inside the namespace (the rulesets are IPv4 only); it takes them down on stop. No sandboxing on this unit, because `ip netns add` binds into the host's mount namespace. |
 | `/etc/orama-global/netns-host.nft` | Root-namespace ruleset (table `ip orama_global`), see below |
 | `/etc/orama-global/netns.nft` | Ruleset loaded inside the namespace (table `ip orama_global_ns`) |
 | `/etc/orama-global/resolv.conf` | `9.9.9.9` and `1.1.1.1`. The host's stub resolver is on the host's loopback, which the namespace cannot reach. |
@@ -389,12 +389,17 @@ namespace; the cluster's own Kubo (10107) is a different daemon on the other sid
   connections and their replies are forwarded into the namespace.
 - Inside the namespace: input is default-drop except loopback, replies and the
   published ports; forwarding is off; output to the private ranges above is
-  dropped. The units' own `IPAddressDeny=` on the same ranges is a third layer.
+  dropped. The units' own `IPAddressDeny=` on the same ranges is a third layer
+  for IPv4. Both rulesets are `table ip`, so they say nothing about IPv6: the
+  namespace has none (IPv6 is disabled on `ogl-host` and inside the namespace
+  before either veth end comes up), and the IPv6 private ranges are denied only by
+  `IPAddressDeny=`.
 - ufw: input rules cannot see DNAT'd traffic, so the install adds
   `ufw route allow` rules tagged `orama-global` (one for the namespace's own
-  outbound traffic on `ogl-host`, one per published port to `198.18.0.2`) instead
-  of the `allow` rules a global-only install adds. A cluster reconcile does not
-  remove them.
+  outbound traffic, from `198.18.0.2` in on `ogl-host`, one per published port to
+  `198.18.0.2`) instead of the `allow` rules a global-only install adds. A
+  cluster reconcile does not remove them. The install also deletes the broader
+  `route allow in on ogl-host` rule (any source) that earlier releases added.
 
 **What this does not isolate.** It is one kernel and one root. The cluster node
 can reach the global services only through their published ports at `198.18.0.2`,

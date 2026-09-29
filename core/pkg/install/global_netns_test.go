@@ -147,7 +147,8 @@ func TestInstallGlobal_colocatedFirewallUsesRouteRules(t *testing.T) {
 	}
 	want := []string{
 		"status",
-		"route allow in on ogl-host comment orama-global",
+		"route delete allow in on ogl-host",
+		"route allow in on ogl-host from 198.18.0.2 comment orama-global",
 		"route allow proto tcp to 198.18.0.2 port 31000 comment orama-global",
 		"route allow proto udp to 198.18.0.2 port 31000 comment orama-global",
 		"route allow proto tcp to 198.18.0.2 port 31013 comment orama-global",
@@ -307,7 +308,8 @@ func TestInstallGlobal_colocatedPutsTheKuboIndexerAndCosmovisorUnitsInTheNamespa
 		t.Errorf("provider does not use Kubo's loopback RPC:\n%s", provider)
 	}
 	wantRoutes := []string{
-		"route allow in on ogl-host comment orama-global",
+		"route delete allow in on ogl-host",
+		"route allow in on ogl-host from 198.18.0.2 comment orama-global",
 		"route allow proto tcp to 198.18.0.2 port 31000 comment orama-global",
 		"route allow proto udp to 198.18.0.2 port 31000 comment orama-global",
 		"route allow proto tcp to 198.18.0.2 port 31010 comment orama-global",
@@ -334,5 +336,29 @@ func TestGlobalFirewallPorts_publicKuboSwarm(t *testing.T) {
 	want := []globalnetns.Port{{Proto: "tcp", Number: 31010}, {Proto: "udp", Number: 31010}}
 	if !slices.Equal(got, want) {
 		t.Errorf("Ports() = %v, want %v", got, want)
+	}
+}
+
+// The forward rule for the namespace's own traffic names its source: it used to allow anything
+// arriving on ogl-host, so a source other than the namespace's address was forwarded too. The
+// broad rule an earlier release added is deleted first.
+func TestNetnsRouteArgs_forwardOnlyFromTheNamespaceAddress(t *testing.T) {
+	args := netnsRouteArgs([]string{"31000/tcp"})
+	got := make([]string, len(args))
+	for i, a := range args {
+		got[i] = strings.Join(a, " ")
+	}
+	want := []string{
+		"route delete allow in on ogl-host",
+		"route allow in on ogl-host from 198.18.0.2 comment orama-global",
+		"route allow proto tcp to 198.18.0.2 port 31000 comment orama-global",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("netnsRouteArgs = %v, want %v", got, want)
+	}
+	for _, line := range got[1:] {
+		if strings.HasPrefix(line, "route allow in on ogl-host ") && !strings.Contains(line, "from 198.18.0.2") {
+			t.Errorf("%q forwards traffic from any source", line)
+		}
 	}
 }
