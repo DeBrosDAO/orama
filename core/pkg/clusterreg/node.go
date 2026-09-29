@@ -233,6 +233,15 @@ func appendPacked(dst []byte, field int, vals []uint64) []byte {
 
 // checkHotKeyBinding requires one secp256k1 "hot-key" binding whose account address is hot: the
 // hot key proves it holds itself, so a hot key the operator merely named is refused.
+// AccountAddressOf is the orama account address of a compressed secp256k1
+// public key: bech32 of RIPEMD-160(SHA-256(pubkey)), as the chain derives it.
+func AccountAddressOf(pubkey []byte) (string, error) {
+	sum := sha256.Sum256(pubkey)
+	h := ripemd160.New()
+	h.Write(sum[:])
+	return bech32Encode(accountHRP, h.Sum(nil))
+}
+
 func checkHotKeyBinding(hot string, bindings []NodeBinding) error {
 	for _, b := range bindings {
 		if b.Service != HotKeyService {
@@ -241,10 +250,7 @@ func checkHotKeyBinding(hot string, bindings []NodeBinding) error {
 		if b.KeyType != "secp256k1" {
 			return fmt.Errorf("the %q binding must be a secp256k1 key", HotKeyService)
 		}
-		sum := sha256.Sum256(b.Pubkey)
-		h := ripemd160.New()
-		h.Write(sum[:])
-		addr, err := bech32Encode(accountHRP, h.Sum(nil))
+		addr, err := AccountAddressOf(b.Pubkey)
 		if err != nil {
 			return err
 		}

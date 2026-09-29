@@ -11,12 +11,12 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/globalbind"
 )
 
 const (
 	testOperator = "orama19rl4cm2hmr8afy4kldpxz3fka4jguq0a5tup0s"
-	testHotKey   = "orama1qyqszqgpqyqszqgpqyqszqgpqyqszqgp6cszae"
 	testChainID  = "orama-test-1"
 )
 
@@ -40,11 +40,37 @@ func writeBinding(t *testing.T) string {
 	return path
 }
 
+// writeHotKeyBinding writes the hot key's proof of possession and returns the
+// file and the hot key's address.
+func writeHotKeyBinding(t *testing.T) (path, hot string) {
+	t.Helper()
+	b, err := globalbind.SignSecp256k1(bytes.Repeat([]byte{0x22}, 32), testChainID, testOperator, clusterreg.HotKeyService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hot, err = clusterreg.AccountAddressOf(b.Pubkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := json.Marshal(map[string]string{
+		"service": b.Service, "key_type": b.KeyType, "pubkey": hex.EncodeToString(b.Pubkey), "signature": hex.EncodeToString(b.Signature),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path = filepath.Join(t.TempDir(), "hot-key.json")
+	if err := os.WriteFile(path, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, hot
+}
+
 // registerSignDoc runs `register` without --node and returns the printed sign document.
 func registerSignDoc(t *testing.T, binding string, asn uint32) (string, error) {
 	t.Helper()
-	nodeFlags.chainID, nodeFlags.operator, nodeFlags.id, nodeFlags.hotKey = testChainID, testOperator, "node-a", testHotKey
-	nodeFlags.roles, nodeFlags.bindings, nodeFlags.ends, nodeFlags.region = []string{"storage"}, []string{binding}, nil, ""
+	hotBinding, hot := writeHotKeyBinding(t)
+	nodeFlags.chainID, nodeFlags.operator, nodeFlags.id, nodeFlags.hotKey = testChainID, testOperator, "node-a", hot
+	nodeFlags.roles, nodeFlags.bindings, nodeFlags.ends, nodeFlags.region = []string{"storage"}, []string{binding, hotBinding}, nil, ""
 	nodeFlags.node, nodeFlags.fee, nodeFlags.gas, nodeFlags.pubKey = "", "1000", 200000, hex.EncodeToString(bytes.Repeat([]byte{0x02}, 33))
 	nodeFlags.asn = asn
 	r, w, err := os.Pipe()

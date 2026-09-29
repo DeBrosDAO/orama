@@ -96,13 +96,20 @@ func TestValidateASN_refusesWhatTheChainRefuses(t *testing.T) {
 }
 
 func TestValidateNode_checksTheDeclaredASN(t *testing.T) {
-	hot, err := bech32Encode(accountHRP, bytes.Repeat([]byte{0x01}, 20))
+	hotPub := bytes.Repeat([]byte{0x03}, 33)
+	sum := sha256.Sum256(hotPub)
+	rmd := ripemd160.New()
+	rmd.Write(sum[:])
+	hot, err := bech32Encode(accountHRP, rmd.Sum(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 	n := NodeRegistration{
 		Operator: "orama19rl4cm2hmr8afy4kldpxz3fka4jguq0a5tup0s", NodeID: "node-a", Roles: []int{RoleStorage}, HotKey: hot,
-		Bindings: []NodeBinding{{Service: "provider", KeyType: "secp256k1", Pubkey: bytes.Repeat([]byte{0x02}, 33), Signature: bytes.Repeat([]byte{0x11}, 64)}},
+		Bindings: []NodeBinding{
+			{Service: "provider", KeyType: "secp256k1", Pubkey: bytes.Repeat([]byte{0x02}, 33), Signature: bytes.Repeat([]byte{0x11}, 64)},
+			{Service: HotKeyService, KeyType: "secp256k1", Pubkey: hotPub, Signature: bytes.Repeat([]byte{0x11}, 64)},
+		},
 	}
 	n.ASN = 64512
 	if err := ValidateNode(n); err == nil {
