@@ -158,8 +158,8 @@ func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
 	if !strings.Contains(provider, "SupplementaryGroups=orama-ipfs-pub-rpc") {
 		t.Error("provider cannot read the Kubo RPC token group")
 	}
-	if !strings.Contains(RenderGlobalArchiverUnit(), "SupplementaryGroups=orama-chain-ro") {
-		t.Error("archiver has no read group on the chain home")
+	if strings.Contains(RenderGlobalArchiverUnit(), "SupplementaryGroups=") {
+		t.Error("archiver reads blocks over RPC and needs no group on the chain home")
 	}
 	timer := RenderGlobalIPFSGCTimer()
 	if strings.Contains(timer, "PartOf=") || !strings.Contains(timer, "orama-global-ipfs-gc.service") {

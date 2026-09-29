@@ -223,12 +223,11 @@ func RenderGlobalReporterUnit() string {
 	return renderGlobalUnit("Orama bandwidth reporter", globalReporterUser, "/var/lib/orama-global/reporter", exec, "")
 }
 
-// RenderGlobalArchiverUnit bundles chain history. It can read the chain home
-// through orama-chain-ro and cannot write it.
+// RenderGlobalArchiverUnit bundles chain history. It reads blocks from the
+// local oramad RPC on loopback and has no access to the chain home.
 func RenderGlobalArchiverUnit() string {
-	exec := fmt.Sprintf("%s/orama-global archiver --chain-home %s", globalBinDir, constants.ChainHome)
-	return renderGlobalUnitExtra("Orama history archiver", globalArchiverUser, globalArchiverUser, "orama-chain-ro",
-		"orama-global/archiver", "/var/lib/orama-global/archiver", exec, "")
+	exec := fmt.Sprintf("%s/orama-global archiver", globalBinDir)
+	return renderGlobalUnit("Orama history archiver", globalArchiverUser, "/var/lib/orama-global/archiver", exec, "")
 }
 
 // RenderGlobalRepairUnit holds repair seeds. A host that runs it does not

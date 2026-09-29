@@ -796,45 +796,135 @@ The C2 fee-free registration quota is an ante rule and is not implemented. `MsgF
 not a message of this module. Queries, once wired: `params`, `operator [address]`, `node [id]`,
 `cluster [id]`, `unbondings [node-id]`, `invariants`.
 
-## Piece store
+## Global services: `orama-global`
 
-`chain/provider` stores one node's pieces on disk. `Ingest` declines a CID on the
-operator denylist, bytes whose piece root does not match the claimed root, or a piece
-larger than the free-bytes callback. A decline writes nothing. `Prove` rebuilds a
-challenge proof from the stored bytes and rejects a padding leaf. `ReplicaProof`
-fills one proof for a challenged slot. The leaf is the chain's leaf-challenge seed
-reduced to the real leaf count, so a padding leaf is not selected. `Bind` records
-which stored CID fills a deal slot. `Decide` binds the piece whose root matches
-an assignment and returns the accept message, or a decline when the root is
-not stored. `AnswerChallenges` builds proofs for the
-unproved challenges that binding covers and lists the ones whose piece is absent.
-A leaf index that does not match the chain challenge is an error. `WriteProofs`
-writes the JSON array `orama storage prove --file` reads. An empty list is
-refused. `Retrieval` serves
-GET and HEAD of a stored piece, including a byte range, and rate-limits each client
-address. A full address table refuses a new address. `POST /pieces/<cid>` stores
-a body only after `AcceptUploads`, and only when that CID is assigned. A bad
-root, a denylist CID, a full disk, or a body over the limit stores nothing.
-The package does not watch CometBFT, pin through Kubo, or send `MsgAcceptDeal`
-or `MsgSubmitProofs`.
+`chain/cmd/orama-global` is the binary the `orama-global-*` units run beside
+`oramad`. Each subcommand reaches the chain only through the loopback CometBFT
+RPC (`--rpc`, default `tcp://127.0.0.1:31001`) via `chain/client/node`. That
+client runs module queries as ABCI queries, reads a block's events, and signs
+with SIGN_MODE_DIRECT. It simulates for gas, adds 50%, pays gas × the x/fees
+base fee with no tip, broadcasts, and waits up to a minute for a block to
+include the transaction. A transaction that is not included returns
+`ErrNotIncluded`. The next step rebuilds it from chain state.
 
-`orama storage seal` writes one ciphertext per slot and prints each piece root.
-`orama storage open` reads one of those files. `orama storage rewrap` rebuilds
-one slot from another slot using the repair seed and does not recover the
-plaintext. A wrong seed, repair seed, or slot fails and writes nothing. None
-of these commands uploads the bytes or submits a deal.
-`chain/archiver` packs block hashes into the Merkle root `x/archive` checks
-and stores a resume cursor. It does not read CometBFT or submit an attestation.
-`chain/x/confidential` refuses every attestation report. It does not treat a
-blob as a TEE measurement.
-`core/pkg/tornet` accepts a parameter set only when it names at least three
-authorities, the exit policy is `reject *:*`, and signing certificates last
-12 months. `StartExit` refuses to launch an exit. `core/pkg/storagefile` seals a private file before upload. The file key is
-wrapped by HKDF-SHA256 of the owner seed with info `orama-storage-v1`. Each
-slot XORs that blob with a keystream from HKDF-SHA256 of the repair seed and
-`deal_nonce` concatenated with the slot as 4 big-endian bytes. The piece root
-of those bytes is `core/pkg/pieceroot`, checked against `chain/piece` vectors.
-A wrong seed, repair seed, or slot fails closed.
+### Storage provider (`orama-global provider`)
+
+The files live in `--home` (the unit's state directory):
+- `hot-key`: a hex secp256k1 key, created on first start with mode 0600. A
+  key file that other users can read is refused. The address is logged on
+  creation. Fund it and name it as the node's hot key in x/nodes.
+- `node-id`: the x/nodes id, written after registration.
+- `denylist` (optional).
+- `store/`.
+- `state.json`: the block cursor and the slots waiting for a piece.
+- `monitor.json`: hot-key balance, unanswered challenges, and bytes stored,
+  in the fields `core/pkg/telemetry/report` reads.
+
+Each step, `chain/provider.Runner`:
+1. Reads every block since the cursor and records `storage_slot_assigned`
+   events for this node. The first run starts at `--start-height`.
+2. Reads each waiting slot. Once a piece with the slot's root has been
+   uploaded, it sends `MsgAcceptDeal`. If nothing has arrived
+   `DeclineMarginBlocks` (2) blocks before the accept window closes, it sends
+   `MsgDeclineDeal` "piece not stored". A slot the chain no longer assigns to
+   this node is dropped.
+3. Proves every unproved challenge of the current x/emission epoch, at most 32
+   per `MsgSubmitProofs`. A dropped proof tx is rebuilt on the next step,
+   because the chain still lists the challenge as unproved.
+4. Releases a bound slot one epoch after the chain stops naming this node for
+   it (eviction, expiry, or reassignment). The piece bytes go when no other
+   binding names them.
+
+Uploads are `POST /pieces/<hex piece root>` with `X-Piece-Root` set to the
+same hex. They are accepted only for a root the runner is waiting on.
+Retrieval is `GET`/`HEAD /pieces/<hex piece root>` on port 31013, with a
+per-address rate limit. `chain/provider` does not pin through Kubo.
+
+### Repair delegate (`orama-global repair`)
+
+`<home>/operator` holds the address that deals name as `repair_delegate`.
+x/storage never assigns a slot of such a deal to that operator, and the
+delegate refuses a deal where it finds one. `<home>/deals/<id>.json`
+(mode 0600) holds `{"deal_id": N, "repair_seed": "<hex>"}`. The delegate's
+operator installs these files; no network path hands a seed to the delegate.
+
+Each pass, for every such deal:
+- A slot that is assigned but not accepted, while another slot is active, is
+  rebuilt: fetch the surviving replica, check its root, and apply
+  `chain/storagekey.Rewrap` (strip one slot layer, apply the other).
+- The result must hash to the new slot's root. If it doesn't, the repair seed
+  is wrong and nothing is uploaded.
+- The result is uploaded to the new provider.
+- A new deal with no accepted replica is left alone.
+- The delegate never recovers plaintext.
+
+`TestRepairChaos_killedProviderIsEvictedAndTheDelegateRestoresTheReplica`
+runs the whole path against the x/storage keeper: a provider stops, misses
+evict its slot, the delegate restores it, and the new provider proves it.
+
+### History archiver (`orama-global archiver`, `orama-global history get`)
+
+The archiver reads each finalised range of `--range-blocks` (default 1000)
+blocks over RPC. Ranges start at 1, 1+w, and so on. x/archive refuses
+overlapping ranges, so every archiver of a chain must use the same width.
+
+For each range, it writes `<home>/bundles/<start>-<end>.orbh`. This is not a
+CAR file. The layout is magic `ORBH`, version 1, the start height and the
+count. Each block follows as its hash, a length, and the `tendermint.types.Block`
+protobuf.
+
+It then submits `MsgAttest` with:
+- the bundle CID: CIDv1, raw codec, sha2-256 of the file;
+- the file's SHA-256;
+- the block-hash Merkle root.
+
+`<home>/cursor` is the last attested height, and a restart resumes after it.
+If a range is already pinned on chain with a different root, the archiver
+stops (`ErrRootConflict`). It does not skip the range.
+
+`history get --height H --from <home or http base>` loads the range's
+bundle. It checks the file hash, each block's bytes against its header hash,
+and the Merkle root against the x/archive record, and only then writes the
+block. The archiver does not create ARCHIVE storage deals or move CometBFT's
+retain height. A range reaches `archived` only when three archivers attest it
+and three deal ids are attached (`MsgAttachReplicas`).
+
+### Client side
+
+`core/pkg/storagefile` seals a private file before upload:
+- The file key is wrapped by HKDF-SHA256 of the owner seed with info
+  `orama-storage-v1`.
+- Each slot XORs that blob with a ChaCha20 keystream (all-zero nonce). Its
+  32-byte key is HKDF-SHA256 of the repair seed with info `deal_nonce` ||
+  slot (4 bytes, big-endian). Every (nonce, slot) has its own key.
+  `chain/storagekey` is the same construction for the repair delegate. Both
+  are locked to `chain/storagekey/testdata/outer_vectors.json`.
+- The piece root is `core/pkg/pieceroot`, checked against `chain/piece`
+  vectors.
+- A wrong seed, repair seed, or slot fails closed.
+
+The storage commands:
+- `orama storage seal` writes one ciphertext per slot and prints each piece
+  root. `orama storage open` reads one of those files.
+- `orama storage rewrap` rebuilds one slot from another with the repair seed.
+- `orama storage put --deal-id N --dir <seal output> --rpc <oramad RPC>` checks
+  every slot file's root against the chain before sending anything. It waits
+  for each slot's assignment and uploads to the node's first http(s) endpoint
+  in x/nodes.
+- `orama storage get` fetches the first accepted slot whose bytes match the
+  on-chain root, then opens it.
+- None of these commands creates the deal. That is `orama storage create`,
+  signed through the RootWallet agent.
+
+`core/pkg/storageclient` is the Go client these commands use.
+
+### Other fail-closed pieces
+
+- `chain/x/confidential` refuses every attestation report. It does not treat
+  a blob as a TEE measurement.
+- `core/pkg/tornet` accepts a parameter set only when it names at least three
+  authorities, the exit policy is `reject *:*`, and signing certificates last
+  12 months. `StartExit` refuses to launch an exit.
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 

@@ -1,5 +1,5 @@
-// Package archiver packs a finalised height range into the hashes x/archive
-// already checks. It does not read CometBFT and it does not submit an attestation.
+// Package archiver packs finalised block ranges into bundle files, attests
+// each range to x/archive, and verifies a bundle against the chain.
 package archiver
 
 import (
@@ -49,7 +49,7 @@ func SaveCursor(path string, height int64) error {
 	}
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(height))
-	return os.WriteFile(path, buf[:], 0o600)
+	return writeAtomic(path, buf[:], 0o600)
 }
 
 // LoadCursor reads a cursor written by SaveCursor. A missing file is height 0.
