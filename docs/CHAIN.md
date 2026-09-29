@@ -817,8 +817,9 @@ not a message of this module. Queries, once wired: `params`, `operator [address]
 `chain/cmd/orama-global` is the binary the `orama-global-*` units run beside
 `oramad`. Each subcommand reaches the chain only through the loopback CometBFT
 RPC (`--rpc`, default `tcp://127.0.0.1:31001`) via `chain/client/node`. That
-client runs module queries as ABCI queries, reads a block's events, and signs
-with SIGN_MODE_DIRECT. It simulates for gas, adds 50%, pays gas × the x/fees
+client runs module queries as ABCI queries (at the latest height or a given
+one), reads a block, its results and its events, and the node's earliest and
+latest heights, and signs with SIGN_MODE_DIRECT. It simulates for gas, adds 50%, pays gas × the x/fees
 base fee with no tip, broadcasts, and waits up to a minute for a block to
 include the transaction. A transaction that is not included returns
 `ErrNotIncluded`. The next step rebuilds it from chain state.
@@ -920,6 +921,109 @@ block. The archiver does not create ARCHIVE storage deals or move CometBFT's
 retain height. A range reaches `archived` only when three archivers attest it
 and three deal ids are attached (`MsgAttachReplicas`).
 
+### Chain indexer (`orama-global indexer`)
+
+`chain/indexer` follows oramad over the loopback RPC and keeps an index in
+Pebble (pure Go, no cgo) under `<home>/index`. The unit
+(`RenderGlobalIndexerUnit`, user `orama-indexer`, home
+`/var/lib/orama-global/indexer`) runs it with `--listen 127.0.0.1:31015`
+(`constants.GlobalIndexerPort`). `--listen` must be a loopback IP; anything
+else is refused at start.
+
+Following:
+- It reads each block and its block results from `--start-height` (default
+  1). Each block is written in one synced Pebble batch together with the
+  cursor (the last indexed height), so a restart resumes after the cursor and
+  never indexes a block twice or half.
+- An index keeps the start height it was created with. Another
+  `--start-height` against the same `--home` is refused.
+- If the next block is below the node's earliest block (`earliest_block_height`
+  in `/status`), the indexer stops with `ErrPruned`, naming the block it needs
+  and the node's earliest. It does not skip ahead. Point `--rpc` at a node that
+  keeps the block, or start a new `--home` from a later height.
+- A block whose result count does not match its transaction count, or a
+  successful transaction whose bytes do not decode, stops the pass and the
+  block is not committed.
+
+What is indexed:
+- **Blocks:** height, hash, time, proposer address (hex), transaction count,
+  transaction hashes.
+- **Transactions** (failed ones too): hash (SHA-256 of the bytes, lowercase
+  hex), height, index in the block, code, codespace, log, gas wanted and used,
+  the type URL of each message, and the events of the `ExecTxResult`. A
+  transaction whose bytes are not a Cosmos transaction (the chain refused it)
+  is kept with no message type URLs.
+- **Address → transactions:** every distinct attribute value, in the
+  transaction's events, that is exactly a lowercase bech32 `orama1…` account
+  address. That includes `message.sender`, `transfer.recipient` and
+  `tx.fee_payer` as the SDK emits them.
+- **cNFT assets.** `x/cnft` and `x/market` emit no events, so the index
+  replays their messages and message responses from successful transactions:
+  `MsgCreateTree`, `MsgMint`, `MsgTransfer`, `MsgBurn`, `MsgUpdateMetadata`,
+  `MsgDecompress`, `MsgCompress`, and `x/market`'s `MsgList`, `MsgBid`,
+  `MsgCancelListing`, `MsgCancelBid` and `MsgSettle` (the sale moves the leaf
+  to the signer, or to the bidder of the accepted bid, and clears the
+  delegate). An asset record holds the chain's leaf fields (asset id, owner,
+  delegate, metadata CID, creator hash, nonce, hash id), its tree, leaf index
+  and collection, a state (`compressed`, `decompressed` or `burned`), the leaf
+  hash while it is a live compressed leaf (the same `LeafHash` x/cnft uses),
+  and the height and transaction of the last change. x/cnft does not make
+  asset ids unique across mints, so one id can have several records, keyed by
+  tree and leaf.
+- Addresses in cNFT records are stored lowercase. The chain accepts either
+  single case and any length from 1 to 255 bytes and hashes the bytes, so
+  the index canonicalises the spelling instead of refusing it.
+- A failed transaction whose bytes repeat a successful one does not replace
+  the successful record.
+- Three facts can predate `--start-height`: a tree's collection, a listing or
+  bid being settled, and a decompressed asset being compressed. The index
+  uses what it recorded. If it did not see the message that created one, it
+  reads the chain: a tree from the latest state (x/cnft never changes or
+  deletes a tree), a listing, bid or decompressed asset from the state at the
+  block's height minus one (settle and compress delete them). A node that
+  pruned that state fails the block loudly.
+
+What is not indexed:
+- Finalize-block events (rewards, emission, epoch transitions). Only
+  transaction events feed the address index.
+- An address that appears only inside a message body, or inside a longer
+  attribute value, is not in the address index. The new owner of a
+  `MsgTransfer` is in the cNFT owner index, not in the address index.
+- cNFT Merkle proofs (DAS `getAssetProof`) and tree snapshots. A proof needs
+  every leaf of the tree since its creation, and the index may start after
+  that. Collections (name, royalty) are not indexed; the asset carries the
+  collection id.
+- Metadata JSON. The chain stores a CID only.
+- Assets minted before `--start-height` that no later message touches.
+- x/cnft or x/market messages that a CosmWasm contract dispatches. The index
+  sees only the top-level `MsgExecuteContract`, and neither module emits
+  events, so an asset changed that way keeps a stale record.
+- A transient RPC error, or chain state at height minus one that the node
+  pruned, is logged and the same block is retried every `--interval`; only a
+  pruned block stops the process. Watch `cursor` against `tip` in
+  `/index/v1/status`.
+- No installer writes `orama-global-indexer.service` yet, and nothing creates
+  the `orama-indexer` user, so `/v1/chain/index/…` answers `502` until the
+  unit is installed. On a state-synced node, set `--start-height` to a height
+  the node keeps.
+- Shielded activity beyond its public transaction bytes and events.
+
+Read API on the loopback listener. Everything is `GET` and JSON; any other
+method, path, or query parameter is refused (`404`, `405`, `400`):
+
+| Path | Answer |
+|---|---|
+| `/index/v1/status` | `start_height`, `cursor`, and the node's `earliest` and `tip` (`502` if the node is unreachable) |
+| `/index/v1/blocks/{height}` | the block, or `404` `not indexed` |
+| `/index/v1/txs/{hash}` | the transaction (64 hex, either case, no `0x`) |
+| `/index/v1/accounts/{address}/txs?page=&limit=` | the address's transactions, newest first |
+| `/index/v1/cnft/assets/{id}` | `{"id", "records": [...]}`, each record a DAS-style asset (`ownership`, `compression`, `grouping` by collection, `burnt`, `content.metadata_cid`, `last_update`) |
+| `/index/v1/cnft/owners/{address}/assets?page=&limit=` | the compressed and decompressed assets the address owns, by asset id |
+
+`page` is 1–1000 (default 1) and `limit` 1–100 (default 20). An address must
+be a lowercase bech32 `orama1…` account with a valid checksum. The gateway
+serves these routes at `/v1/chain/index/…` (see Explorer).
+
 ### Client side
 
 `core/pkg/storagefile` seals a private file before upload:
@@ -1003,7 +1107,8 @@ starts every node in the background on distinct localhost ports in the 31000-310
 (P2P/RPC/gRPC/API/Prometheus/pprof, ten ports per node so up to ten validators fit). That packing
 is localnet only. A production global node uses 31000–31004 for the chain (p2p public, RPC, gRPC,
 REST and Prometheus on loopback), 31010–31013 for public storage (swarm public, Kubo RPC and
-gateway on loopback, provider HTTP public), 31014 for relay metrics on loopback, and 31020–31021
+gateway on loopback, provider HTTP public), 31014 for relay metrics on loopback, 31015 for the
+chain indexer's read API on loopback, and 31020–31021
 for a Tor relay and a dirauth. The public Kubo on a global node has no swarm.key,
 announces only pinned content (`Provide.Strategy=pinned` for Kubo v0.38), and
 does not dial or announce private ranges, so it cannot join a cluster's mesh.
@@ -1048,13 +1153,15 @@ Standard `oramad` commands work as on any Cosmos SDK chain, e.g. `oramad init <m
 
 The website explorer (`website/src/pages/explorer.tsx`, `website/src/explorer`) reads the
 chain through the gateway. The browser calls `/v1/chain/…` on the same origin. It does not
-open CometBFT (`127.0.0.1:31001`) or the SDK REST API (`127.0.0.1:31003`).
+open CometBFT (`127.0.0.1:31001`), the SDK REST API (`127.0.0.1:31003`), or the chain
+indexer (`127.0.0.1:31015`).
 
-`core/pkg/gateway/handlers/chainread.Register` mounts a read-only proxy at `/v1/chain/` on the
-mux it is given. `core/pkg/gateway/routes.go` does not call it. The upstream bases are
-`ORAMA_CHAIN_RPC_URL` and `ORAMA_CHAIN_REST_URL`, defaulting to those two loopback URLs.
-The caller's path is not forwarded. Anything outside this list is refused, and the upstream
-body is copied unchanged:
+`core/pkg/gateway/routes.go` mounts the read-only `core/pkg/gateway/handlers/chainread` proxy
+at `/v1/chain/` (an open route in `route_policy.go`). The upstream bases are
+`ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and `ORAMA_CHAIN_INDEX_URL`, defaulting to those
+three loopback URLs. The caller's path is not forwarded: each route builds its own upstream URL
+from values it has validated. Anything outside this list is refused, and the upstream body and
+status are copied unchanged:
 
 | Gateway path | Upstream |
 |---|---|
@@ -1065,6 +1172,16 @@ body is copied unchanged:
 | `GET /v1/chain/validators` | CometBFT `GET /validators` (`page` and `per_page` optional; default 1 and 100, capped at 100) |
 | `GET /v1/chain/supply/norama` | REST `GET /cosmos/bank/v1beta1/supply/by_denom?denom=norama` |
 | `GET /v1/chain/staking/pool` | REST `GET /cosmos/staking/v1beta1/pool` |
+| `GET /v1/chain/index/status` | indexer `GET /index/v1/status` |
+| `GET /v1/chain/index/blocks/{height}` | indexer `GET /index/v1/blocks/{height}` |
+| `GET /v1/chain/index/txs/{hash}` | indexer `GET /index/v1/txs/{hash}` (32-byte hex, `0x` optional on the gateway path, sent lowercase) |
+| `GET /v1/chain/index/accounts/{address}/txs` | indexer `GET /index/v1/accounts/{address}/txs` (`page` 1–1000, `limit` 1–100, both optional) |
+| `GET /v1/chain/index/cnft/assets/{id}` | indexer `GET /index/v1/cnft/assets/{id}` (32-byte hex, sent lowercase) |
+| `GET /v1/chain/index/cnft/owners/{address}/assets` | indexer `GET /index/v1/cnft/owners/{address}/assets` (`page`, `limit` as above) |
+
+On the index routes the gateway checks an address's shape (lowercase `orama1` plus bech32
+characters) and the indexer checks its checksum. A route that takes no query refuses one.
+What the indexer holds, and what it does not, is under "Chain indexer" above.
 
 `x/emission`, `x/fees`, and `x/power` are not on this list: they speak gRPC and have no REST
 annotations. Neither are per-account bank balances. The explorer does not invent rows for a

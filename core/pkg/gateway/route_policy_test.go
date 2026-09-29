@@ -262,6 +262,20 @@ func TestRoutePolicy_anUnmatchedPathIsNotPublic(t *testing.T) {
 	}
 }
 
+// The chain indexer routes sit under the reviewed /v1/chain/ prefix: public
+// reads, with the allowlist enforced by chainread.
+func TestRoutePolicy_chainIndexReadsArePublic(t *testing.T) {
+	for _, path := range []string{
+		"/v1/chain/index/status",
+		"/v1/chain/index/accounts/orama1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqmg3rhc/txs",
+		"/v1/chain/index/cnft/assets/" + strings.Repeat("ab", 32),
+	} {
+		if !policyOf(http.MethodGet, path).Access.Anonymous() {
+			t.Errorf("%q is not reachable without a credential", path)
+		}
+	}
+}
+
 // Registering the real routes is what proves the declaration and the wiring
 // agree: routepolicy.Mux panics on a pattern with no policy, so a gateway that
 // builds its routes at all has one for every route it serves.

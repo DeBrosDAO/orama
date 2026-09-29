@@ -1,9 +1,11 @@
 // Package chainread is a read-only HTTP proxy for the website explorer.
 //
 // Register mounts it at /v1/chain/. The browser calls that prefix and never
-// talks to CometBFT or the SDK REST API itself. Those listen on loopback
-// (default http://127.0.0.1:31001 and http://127.0.0.1:31003, overridable
-// with ORAMA_CHAIN_RPC_URL and ORAMA_CHAIN_REST_URL).
+// talks to CometBFT, the SDK REST API, or the chain indexer itself. Those
+// listen on loopback (default http://127.0.0.1:31001, http://127.0.0.1:31003
+// and http://127.0.0.1:31015, overridable with ORAMA_CHAIN_RPC_URL,
+// ORAMA_CHAIN_REST_URL and ORAMA_CHAIN_INDEX_URL). The indexer routes are
+// under /v1/chain/index/ (index.go).
 //
 // The caller's path is not forwarded. Each allowlisted route builds one
 // upstream URL. Any other path, method, or query is refused. The upstream
@@ -59,20 +61,23 @@ const (
 	upstreamTimeout = 10 * time.Second
 )
 
-// Config is the upstream pair. Empty URLs are not filled in here;
+// Config is the upstream set. Empty URLs are not filled in here;
 // ConfigFromEnv applies the loopback defaults.
 type Config struct {
-	RPCURL  string
-	RESTURL string
-	Client  *http.Client
+	RPCURL   string
+	RESTURL  string
+	IndexURL string
+	Client   *http.Client
 }
 
-// ConfigFromEnv reads ORAMA_CHAIN_RPC_URL and ORAMA_CHAIN_REST_URL.
-// A missing or blank value is the loopback default, not an open target.
+// ConfigFromEnv reads ORAMA_CHAIN_RPC_URL, ORAMA_CHAIN_REST_URL and
+// ORAMA_CHAIN_INDEX_URL. A missing or blank value is the loopback default,
+// not an open target.
 func ConfigFromEnv() Config {
 	return Config{
-		RPCURL:  envOr("ORAMA_CHAIN_RPC_URL", constants.LocalChainRPCURL()),
-		RESTURL: envOr("ORAMA_CHAIN_REST_URL", defaultRESTURL()),
+		RPCURL:   envOr("ORAMA_CHAIN_RPC_URL", constants.LocalChainRPCURL()),
+		RESTURL:  envOr("ORAMA_CHAIN_REST_URL", defaultRESTURL()),
+		IndexURL: envOr("ORAMA_CHAIN_INDEX_URL", constants.LocalGlobalIndexerURL()),
 	}
 }
 
@@ -92,6 +97,7 @@ func envOr(key, fallback string) string {
 type Proxy struct {
 	rpc     *url.URL
 	rest    *url.URL
+	index   *url.URL
 	client  *http.Client
 	maxBody int64
 	timeout time.Duration
@@ -110,9 +116,14 @@ func New(cfg Config) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
+	index, err := parseBase(cfg.IndexURL, "chain index url")
+	if err != nil {
+		return nil, err
+	}
 	return &Proxy{
 		rpc:     rpc,
 		rest:    rest,
+		index:   index,
 		client:  newClient(cfg.Client),
 		maxBody: defaultMaxBody,
 		timeout: upstreamTimeout,
@@ -192,6 +203,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, mountPrefix)
+	if idx, ok := strings.CutPrefix(rest, indexPrefix); ok {
+		p.serveIndex(w, r, idx)
+		return
+	}
 	if !knownRoute(rest) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return

@@ -23,6 +23,9 @@ const (
 	// It is not a public service; it stays in this block so it cannot land
 	// on a cluster port.
 	GlobalRelayMetricsPort = 31014
+	// GlobalIndexerPort is the chain indexer's read API (orama-global
+	// indexer), on 127.0.0.1 only. The gateway proxies /v1/chain/index/ to it.
+	GlobalIndexerPort = 31015
 	// GlobalTorORPort is the relay's ORPort.
 	GlobalTorORPort = 31020
 	// GlobalTorDirPort is a dirauth's DirPort.
@@ -53,6 +56,7 @@ const (
 	GlobalRelayHome    = "/var/lib/orama-global/relay"
 	GlobalArchiverHome = "/var/lib/orama-global/archiver"
 	GlobalRepairHome   = "/var/lib/orama-global/repair"
+	GlobalIndexerHome  = "/var/lib/orama-global/indexer"
 
 	// GlobalBinDir holds the binaries the global units run: root-owned, 0755,
 	// outside /opt/orama so the units' tmpfs over /opt/orama does not hide them.
@@ -67,3 +71,6 @@ const (
 
 // LocalGlobalIPFSAPIURL is the public Kubo RPC on this node.
 func LocalGlobalIPFSAPIURL() string { return hostPortURL("127.0.0.1", GlobalIPFSAPIPort) }
+
+// LocalGlobalIndexerURL is the chain indexer's read API on this node.
+func LocalGlobalIndexerURL() string { return hostPortURL("127.0.0.1", GlobalIndexerPort) }

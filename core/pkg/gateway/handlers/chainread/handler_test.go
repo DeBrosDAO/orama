@@ -13,7 +13,11 @@ import (
 func TestConfigFromEnv_loopbackDefaults(t *testing.T) {
 	t.Setenv("ORAMA_CHAIN_RPC_URL", "")
 	t.Setenv("ORAMA_CHAIN_REST_URL", "   ")
+	t.Setenv("ORAMA_CHAIN_INDEX_URL", "")
 	cfg := ConfigFromEnv()
+	if cfg.IndexURL != "http://127.0.0.1:31015" {
+		t.Errorf("index = %q, want http://127.0.0.1:31015", cfg.IndexURL)
+	}
 	if cfg.RPCURL != "http://127.0.0.1:31001" {
 		t.Errorf("RPC = %q, want http://127.0.0.1:31001", cfg.RPCURL)
 	}
@@ -25,8 +29,9 @@ func TestConfigFromEnv_loopbackDefaults(t *testing.T) {
 func TestConfigFromEnv_usesSetURLs(t *testing.T) {
 	t.Setenv("ORAMA_CHAIN_RPC_URL", "http://10.0.0.2:31001")
 	t.Setenv("ORAMA_CHAIN_REST_URL", "http://10.0.0.2:31003/")
+	t.Setenv("ORAMA_CHAIN_INDEX_URL", "http://10.0.0.2:31015")
 	cfg := ConfigFromEnv()
-	if cfg.RPCURL != "http://10.0.0.2:31001" || cfg.RESTURL != "http://10.0.0.2:31003/" {
+	if cfg.RPCURL != "http://10.0.0.2:31001" || cfg.RESTURL != "http://10.0.0.2:31003/" || cfg.IndexURL != "http://10.0.0.2:31015" {
 		t.Fatalf("config = %+v", cfg)
 	}
 }
@@ -43,14 +48,17 @@ func TestNew_rejectsNonBaseURLs(t *testing.T) {
 	}
 	ok := "http://127.0.0.1:31003"
 	for _, raw := range bad {
-		if _, err := New(Config{RPCURL: raw, RESTURL: ok}); err == nil {
+		if _, err := New(Config{RPCURL: raw, RESTURL: ok, IndexURL: ok}); err == nil {
 			t.Errorf("RPC %q was accepted", raw)
 		}
-		if _, err := New(Config{RPCURL: ok, RESTURL: raw}); err == nil {
+		if _, err := New(Config{RPCURL: ok, RESTURL: raw, IndexURL: ok}); err == nil {
 			t.Errorf("REST %q was accepted", raw)
 		}
+		if _, err := New(Config{RPCURL: ok, RESTURL: ok, IndexURL: raw}); err == nil {
+			t.Errorf("index %q was accepted", raw)
+		}
 	}
-	if _, err := New(Config{RPCURL: "http://127.0.0.1:31001/", RESTURL: ok}); err != nil {
+	if _, err := New(Config{RPCURL: "http://127.0.0.1:31001/", RESTURL: ok, IndexURL: ok}); err != nil {
 		t.Errorf("trailing slash on the base URL was refused: %v", err)
 	}
 }
@@ -351,7 +359,7 @@ func TestRegister_mountsAllowlist(t *testing.T) {
 
 func mustProxy(t *testing.T, rpc, rest string) *Proxy {
 	t.Helper()
-	p, err := New(Config{RPCURL: rpc, RESTURL: rest})
+	p, err := New(Config{RPCURL: rpc, RESTURL: rest, IndexURL: "http://127.0.0.1:9"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

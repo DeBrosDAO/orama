@@ -117,7 +117,8 @@ func buildRoutePolicies() *routepolicy.Table {
 		// public function is open by design.
 		"/v1/invoke/",
 		// Read-only chain proxy for the explorer. The handler allowlists
-		// Comet and bank/staking reads. It does not forward an arbitrary path.
+		// Comet and bank/staking reads and the chain indexer's routes under
+		// /v1/chain/index/. It does not forward an arbitrary path.
 		"/v1/chain/",
 	)
 

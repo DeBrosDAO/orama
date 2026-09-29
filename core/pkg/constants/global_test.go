@@ -39,6 +39,7 @@ func TestGlobalPorts_doNotCollideWithClusterOrChain(t *testing.T) {
 		constants.GlobalIPFSGatewayPort,
 		constants.GlobalProviderPort,
 		constants.GlobalRelayMetricsPort,
+		constants.GlobalIndexerPort,
 		constants.GlobalTorORPort,
 		constants.GlobalTorDirPort,
 	}
@@ -58,11 +59,11 @@ func TestGlobalPorts_doNotCollideWithClusterOrChain(t *testing.T) {
 	if constants.GlobalIPFSSwarmPort != 31010 || constants.GlobalIPFSAPIPort != 31011 ||
 		constants.GlobalIPFSGatewayPort != 31012 || constants.GlobalProviderPort != 31013 ||
 		constants.GlobalRelayMetricsPort != 31014 || constants.GlobalTorORPort != 31020 ||
-		constants.GlobalTorDirPort != 31021 {
-		t.Fatalf("global ports drifted: swarm %d api %d gateway %d provider %d relay %d or %d dir %d",
+		constants.GlobalIndexerPort != 31015 || constants.GlobalTorDirPort != 31021 {
+		t.Fatalf("global ports drifted: swarm %d api %d gateway %d provider %d relay %d indexer %d or %d dir %d",
 			constants.GlobalIPFSSwarmPort, constants.GlobalIPFSAPIPort, constants.GlobalIPFSGatewayPort,
-			constants.GlobalProviderPort, constants.GlobalRelayMetricsPort, constants.GlobalTorORPort,
-			constants.GlobalTorDirPort)
+			constants.GlobalProviderPort, constants.GlobalRelayMetricsPort, constants.GlobalIndexerPort,
+			constants.GlobalTorORPort, constants.GlobalTorDirPort)
 	}
 }
 
@@ -86,5 +87,11 @@ func TestGlobalPortBlock_overlapsNothingElse(t *testing.T) {
 			t.Errorf("global block %d-%d overlaps %s %d-%d",
 				constants.GlobalPortBase, constants.GlobalPortEnd, block.name, block.start, block.end)
 		}
+	}
+}
+
+func TestLocalGlobalIndexerURL_isLoopback(t *testing.T) {
+	if got := constants.LocalGlobalIndexerURL(); got != "http://127.0.0.1:31015" {
+		t.Fatalf("LocalGlobalIndexerURL() = %q", got)
 	}
 }

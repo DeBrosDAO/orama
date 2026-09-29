@@ -1,7 +1,8 @@
 // Command orama-global runs the global-node services that sit beside oramad:
-// the storage provider, the repair delegate, and the history archiver. Each
-// runs as its own systemd unit and user (core/pkg/install/global_units.go)
-// and reaches the chain only through the loopback CometBFT RPC.
+// the storage provider, the repair delegate, the history archiver, and the
+// chain indexer. Each runs as its own systemd unit and user
+// (core/pkg/install/global_units.go) and reaches the chain only through the
+// loopback CometBFT RPC.
 package main
 
 import (
@@ -33,6 +34,6 @@ func rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(providerCmd(), repairCmd(), archiverCmd(), historyCmd())
+	root.AddCommand(providerCmd(), repairCmd(), archiverCmd(), historyCmd(), indexerCmd())
 	return root
 }

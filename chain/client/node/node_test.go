@@ -114,3 +114,66 @@ func TestNewEncoding_signsStorageAndArchiveMessages(t *testing.T) {
 		require.NoErrorf(t, err, url)
 	}
 }
+
+func TestQueryAt_asksForTheHeightAndRefusesANegativeOne(t *testing.T) {
+	var gotHeight string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req rpctypes.RPCRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		var params map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(req.Params, &params))
+		gotHeight = string(params["height"])
+		ans := abciAnswer(t, 0, "", &types.QuerySlotResponse{Slot: types.Slot{NodeId: "n1"}})
+		require.NoError(t, json.NewEncoder(w).Encode(rpctypes.NewRPCSuccessResponse(req.ID, ans)))
+	}))
+	defer srv.Close()
+	c, err := Dial(srv.URL)
+	require.NoError(t, err)
+
+	var got types.QuerySlotResponse
+	require.NoError(t, c.QueryAt(context.Background(), 41, "/orama.storage.v1.Query/Slot", &types.QuerySlotRequest{DealId: 1}, &got))
+	require.Equal(t, `"41"`, gotHeight)
+	require.Equal(t, "n1", got.Slot.NodeId)
+
+	require.NoError(t, c.Query(context.Background(), "/orama.storage.v1.Query/Slot", &types.QuerySlotRequest{DealId: 1}, &got))
+	require.Equal(t, `"0"`, gotHeight, "Query reads the latest state")
+
+	require.Error(t, c.QueryAt(context.Background(), -1, "/orama.storage.v1.Query/Slot", &types.QuerySlotRequest{}, &got))
+}
+
+func TestHeightRange_returnsEarliestAndLatest(t *testing.T) {
+	st := &coretypes.ResultStatus{SyncInfo: coretypes.SyncInfo{EarliestBlockHeight: 120, LatestBlockHeight: 900}}
+	srv := fakeRPC(t, map[string]any{"status": st})
+	defer srv.Close()
+	c, err := Dial(srv.URL)
+	require.NoError(t, err)
+	earliest, latest, err := c.HeightRange(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(120), earliest)
+	require.Equal(t, int64(900), latest)
+}
+
+func TestBlockResults_keepsFailedTransactions(t *testing.T) {
+	res := &coretypes.ResultBlockResults{
+		Height: 7,
+		TxsResults: []*abci.ExecTxResult{
+			{Code: 0, GasUsed: 10},
+			{Code: 5, Codespace: "sdk", GasUsed: 3},
+		},
+	}
+	srv := fakeRPC(t, map[string]any{"block_results": res})
+	defer srv.Close()
+	c, err := Dial(srv.URL)
+	require.NoError(t, err)
+	got, err := c.BlockResults(context.Background(), 7)
+	require.NoError(t, err)
+	require.Len(t, got.TxsResults, 2)
+	require.Equal(t, uint32(5), got.TxsResults[1].Code)
+
+	missing := fakeRPC(t, map[string]any{})
+	defer missing.Close()
+	c2, err := Dial(missing.URL)
+	require.NoError(t, err)
+	_, err = c2.BlockResults(context.Background(), 7)
+	require.ErrorContains(t, err, "block results at 7")
+}

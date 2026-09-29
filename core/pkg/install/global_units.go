@@ -29,6 +29,7 @@ const (
 	globalReporterUser = "orama-reporter"
 	globalArchiverUser = "orama-archiver"
 	globalRepairUser   = "orama-repair"
+	globalIndexerUser  = "orama-indexer"
 	globalTorUser      = "debian-tor"
 
 	globalIPFSHome  = constants.GlobalIPFSHome
@@ -292,6 +293,16 @@ func RenderGlobalReporterUnit() string {
 func RenderGlobalArchiverUnit() string {
 	exec := fmt.Sprintf("%s/orama-global archiver", globalBinDir)
 	return needsChain(renderGlobalUnit("Orama history archiver", globalArchiverUser, constants.GlobalArchiverHome, exec, ""))
+}
+
+// RenderGlobalIndexerUnit is orama-global-indexer.service. It reads blocks
+// from the local oramad RPC on loopback, keeps its index in its own state
+// directory, and serves the read API on loopback only; the gateway proxies
+// /v1/chain/index/ to it. It has no key and no access to the chain home.
+func RenderGlobalIndexerUnit() string {
+	exec := fmt.Sprintf("%s/orama-global indexer --rpc tcp://127.0.0.1:%d --home %s --listen 127.0.0.1:%d",
+		globalBinDir, constants.ChainRPCPort, constants.GlobalIndexerHome, constants.GlobalIndexerPort)
+	return renderGlobalUnit("Orama chain indexer", globalIndexerUser, constants.GlobalIndexerHome, exec, "")
 }
 
 // RenderGlobalRepairUnit holds repair seeds. A host that runs it does not

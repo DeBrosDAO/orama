@@ -15,6 +15,7 @@ import (
 	gogoproto "github.com/cosmos/gogoproto/proto"
 
 	abci "github.com/cometbft/cometbft/abci/types"
+	rpcclient "github.com/cometbft/cometbft/rpc/client"
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 
@@ -89,13 +90,23 @@ func Dial(rpcAddr string) (*Client, error) {
 // Query runs one gRPC query method as an ABCI query at the latest height.
 // method is the full gRPC name, for example /orama.storage.v1.Query/Slot.
 func (c *Client) Query(ctx context.Context, method string, req, resp gogoproto.Message) error {
+	return c.QueryAt(ctx, 0, method, req, resp)
+}
+
+// QueryAt runs one gRPC query method against the state committed at height.
+// Height 0 is the latest state. A height whose state the node has pruned is
+// an error from the node, not an empty answer.
+func (c *Client) QueryAt(ctx context.Context, height int64, method string, req, resp gogoproto.Message) error {
+	if height < 0 {
+		return fmt.Errorf("query %s: height %d is negative", method, height)
+	}
 	body, err := gogoproto.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("encode %s request: %w", method, err)
 	}
-	res, err := c.rpc.ABCIQuery(ctx, method, body)
+	res, err := c.rpc.ABCIQueryWithOptions(ctx, method, body, rpcclient.ABCIQueryOptions{Height: height})
 	if err != nil {
-		return fmt.Errorf("query %s: %w", method, err)
+		return fmt.Errorf("query %s at height %d: %w", method, height, err)
 	}
 	if res.Response.Code != 0 {
 		return &QueryError{Method: method, Codespace: res.Response.Codespace, Code: res.Response.Code, Log: res.Response.Log}
@@ -133,6 +144,16 @@ func (c *Client) Status(ctx context.Context) (string, int64, error) {
 	return st.NodeInfo.Network, st.SyncInfo.LatestBlockHeight, nil
 }
 
+// HeightRange returns the earliest block height this node still serves and
+// the latest committed height. Blocks below earliest are pruned here.
+func (c *Client) HeightRange(ctx context.Context) (int64, int64, error) {
+	st, err := c.rpc.Status(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read chain status: %w", err)
+	}
+	return st.SyncInfo.EarliestBlockHeight, st.SyncInfo.LatestBlockHeight, nil
+}
+
 // LatestHeight returns the latest committed block height.
 func (c *Client) LatestHeight(ctx context.Context) (int64, error) {
 	_, h, err := c.Status(ctx)
@@ -143,11 +164,21 @@ func (c *Client) LatestHeight(ctx context.Context) (int64, error) {
 // every transaction in it that succeeded. A failed transaction's events are
 // not state and are left out.
 func (c *Client) BlockEvents(ctx context.Context, height int64) ([]abci.Event, error) {
+	res, err := c.BlockResults(ctx, height)
+	if err != nil {
+		return nil, err
+	}
+	return blockEvents(res), nil
+}
+
+// BlockResults returns the finalize-block result of height: one ExecTxResult
+// per transaction, in block order, failed ones included.
+func (c *Client) BlockResults(ctx context.Context, height int64) (*coretypes.ResultBlockResults, error) {
 	res, err := c.rpc.BlockResults(ctx, &height)
 	if err != nil {
 		return nil, fmt.Errorf("read block results at %d: %w", height, err)
 	}
-	return blockEvents(res), nil
+	return res, nil
 }
 
 func blockEvents(res *coretypes.ResultBlockResults) []abci.Event {

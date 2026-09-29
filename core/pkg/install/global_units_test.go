@@ -119,6 +119,7 @@ func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
 		"reporter": RenderGlobalReporterUnit(),
 		"archiver": RenderGlobalArchiverUnit(),
 		"repair":   RenderGlobalRepairUnit(),
+		"indexer":  RenderGlobalIndexerUnit(),
 	}
 	deny := "IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10"
 	for name, unit := range units {
@@ -181,6 +182,30 @@ func mustDirective(t *testing.T, unit, key string) string {
 		t.Fatalf("%s appears %d times in\n%s", key, n, unit)
 	}
 	return found
+}
+
+func TestGlobalIndexerUnit_ownUserLoopbackAPIAndOwnHome(t *testing.T) {
+	unit := RenderGlobalIndexerUnit()
+	if user := mustDirective(t, unit, "User"); user != "orama-indexer" || mustDirective(t, unit, "Group") != user {
+		t.Fatalf("indexer runs as %q", user)
+	}
+	for _, other := range []string{globalChainUser, globalArchiverUser, globalProviderUser, globalRepairUser, globalRelayUser, globalIPFSUser} {
+		if other == globalIndexerUser {
+			t.Fatalf("indexer shares user %s", other)
+		}
+	}
+	exec := mustDirective(t, unit, "ExecStart")
+	want := "/usr/lib/orama-global/bin/orama-global indexer --rpc tcp://127.0.0.1:31001 --home /var/lib/orama-global/indexer --listen 127.0.0.1:31015"
+	if exec != want {
+		t.Fatalf("ExecStart = %q, want %q", exec, want)
+	}
+	if mustDirective(t, unit, "StateDirectory") != "orama-global/indexer" ||
+		mustDirective(t, unit, "ReadWritePaths") != constants.GlobalIndexerHome {
+		t.Fatalf("indexer state is not its own home:\n%s", unit)
+	}
+	if strings.Contains(unit, "SupplementaryGroups=") || strings.Contains(unit, constants.ChainHome) {
+		t.Fatalf("indexer can reach the chain home or another group:\n%s", unit)
+	}
 }
 
 func TestGlobalChainUnit_runsOramadUnderCosmovisorWithoutDownloads(t *testing.T) {

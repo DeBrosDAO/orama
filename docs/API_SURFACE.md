@@ -231,7 +231,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/node/leave` | CLI | `orama node remove`. |
 | `/v1/node/logs` | CLI | `orama node logs`. |
 | `/v1/node/status` | CLI | `orama node status`. |
-| `/v1/chain/` | SDK | Read-only proxy of CometBFT status, blocks, transactions, validators, norama supply, and the staking pool. Open. The handler refuses every other path. |
+| `/v1/chain/` | SDK | Read-only proxy of CometBFT status, blocks, transactions, validators, norama supply, and the staking pool, and under `/v1/chain/index/` the chain indexer's status, blocks, transactions, per-address transactions, and cNFT assets by id and by owner (docs/CHAIN.md, "Explorer"). Open. The handler refuses every other path. |
 | `/v1/operator/invite` | CLI | Mint a node invite. `orama invite`. |
 | `/v1/operator/node/register` | CLI | Record a node in the inventory. |
 | `/v1/operator/rotate-signing-key` | CLI | Generate a new signing key for this gateway, publish it, and leave the outgoing one verifying what it already signed for one access-token lifetime. Admin grant **and** a wallet on the operator list. `orama operator rotate-signing-key`. |
