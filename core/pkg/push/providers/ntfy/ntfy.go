@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -76,6 +77,12 @@ type Config struct {
 	// cert for — the public push hostname. Empty: no override (tests /
 	// homogeneous hosts).
 	FanoutHostHeader string
+
+	// GuardTarget is set when BaseURL was supplied by a tenant. Every connection is then checked
+	// against the reserved-range list after name resolution (so a name that resolves, or is rebound,
+	// to an internal address is refused) and redirects are not followed. The operator's own default
+	// is left unguarded: it is the loopback ntfy.
+	GuardTarget bool
 }
 
 // Provider is the ntfy push.PushProvider implementation.
@@ -106,7 +113,14 @@ func New(cfg Config, logger *zap.Logger) *Provider {
 		fanoutHostHeader: cfg.FanoutHostHeader,
 		logger:           logger.Named("ntfy"),
 	}
-	if cfg.FanoutResolver != nil {
+	if cfg.GuardTarget {
+		guarded := netguard.NewHTTPClient(timeout)
+		guarded.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("ntfy: a tenant server may not redirect the gateway")
+		}
+		p.httpClient = guarded
+	}
+	if cfg.FanoutResolver != nil && !cfg.GuardTarget {
 		// Fan-out requests dial per-node addresses but must present the public
 		// push hostname for SNI so each node's Caddy serves the right cert and
 		// routes to its local ntfy. A dedicated client carries that fixed SNI.

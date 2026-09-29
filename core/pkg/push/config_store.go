@@ -40,8 +40,12 @@ type Config struct {
 	NtfyBaseURL     string
 	NtfyAuthToken   string
 	ExpoAccessToken string
-	UpdatedAt       int64
-	UpdatedBy       string
+	// NtfyBaseURLTenant is true when NtfyBaseURL came from the tenant (a namespace override or its
+	// stored credentials) rather than the operator's gateway default. It is set where the config is
+	// resolved and never stored: the send path guards its connections by this, not by the URL.
+	NtfyBaseURLTenant bool
+	UpdatedAt         int64
+	UpdatedBy         string
 }
 
 // IsEmpty returns true when this config has no provider credentials set —

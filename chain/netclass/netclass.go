@@ -46,6 +46,8 @@ var special = mustPrefixes(
 	"224.0.0.0/4",     // multicast
 	"240.0.0.0/4",     // reserved, including the limited broadcast 255.255.255.255
 	// IPv6. Anything outside 2000::/3 is refused before this list is consulted.
+	"::/96",          // IPv4-compatible (deprecated): embeds an IPv4 host
+	"::ffff:0:0/96",  // IPv4-mapped (also unmapped before checking)
 	"64:ff9b::/96",   // NAT64 (RFC 6052): reaches whatever IPv4 host is embedded
 	"64:ff9b:1::/48", // local-use NAT64 (RFC 8215)
 	"100::/64",       // discard-only

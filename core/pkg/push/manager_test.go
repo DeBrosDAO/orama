@@ -314,3 +314,25 @@ func TestConfig_IsEmpty(t *testing.T) {
 		})
 	}
 }
+
+// Provenance, not the URL, decides which ntfy server is reached through the guarded client: the
+// operator's default is not tenant-supplied, a namespace override is.
+func TestManager_marksATenantSuppliedNtfyURL(t *testing.T) {
+	store := newFakeConfigStore()
+	store.Upsert(context.Background(), Config{Namespace: "ns-tenant", NtfyBaseURL: "https://tenant-ntfy.example.com"})
+	defaults := Defaults{NtfyBaseURL: "http://default-ntfy"}
+	seen := map[string]bool{}
+	factory := func(_ context.Context, c Config) []PushProvider {
+		seen[c.Namespace] = c.NtfyBaseURLTenant
+		return []PushProvider{&managerFakeProvider{name: "ntfy"}}
+	}
+	m := NewManager(&fakeDeviceStore{}, store, defaults, factory, zap.NewNop())
+	for _, ns := range []string{"ns-tenant", "ns-default"} {
+		if _, err := m.dispatcherFor(context.Background(), ns); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !seen["ns-tenant"] || seen["ns-default"] {
+		t.Errorf("tenant flag = %v, want true for the override and false for the operator default", seen)
+	}
+}

@@ -83,15 +83,10 @@ func CheckBaseURLSyntax(baseURL string) error {
 // internal host. It performs DNS, so call it ONLY at config-set time (the PUT
 // handlers), never on the hot send path.
 //
-// Resolution failure FAILS OPEN (allowed): an unresolvable host reaches nothing
-// (delivery would fail anyway), and rejecting it would break a legitimate host
-// that's momentarily unresolvable at config time. The hard floor is
-// CheckBaseURLSyntax's literal-IP block, which applies on every code path.
-//
-// Residual: as a set-time check it does not defend against DNS rebinding (the
-// host re-pointing to an internal IP AFTER it was accepted). Closing that would
-// require a send-time IP check, which is complicated here by the operator's
-// loopback default ntfy.
+// Resolution failure FAILS CLOSED: a host that cannot be resolved (or resolves to nothing) cannot be
+// checked, so it is refused. The send path does not rely on this check: a tenant server is reached
+// through a guarded client that checks every dialed address (netguard.NewHTTPClient), which also
+// covers DNS rebinding after this check and redirects.
 func CheckBaseURLResolvable(ctx context.Context, baseURL string) error {
 	if err := CheckBaseURLSyntax(baseURL); err != nil {
 		return err
@@ -108,8 +103,11 @@ func CheckBaseURLResolvable(ctx context.Context, baseURL string) error {
 	rctx, cancel := context.WithTimeout(ctx, baseURLDNSTimeout)
 	defer cancel()
 	ips, err := lookupIP(rctx, host)
-	if err != nil || len(ips) == 0 {
-		return nil // fail open on resolution failure (see doc)
+	if err != nil {
+		return fmt.Errorf("base_url: host %q could not be resolved, so it cannot be checked: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("base_url: host %q resolved to no address, so it cannot be checked", host)
 	}
 	for _, ip := range ips {
 		if isReservedIP(ip) {

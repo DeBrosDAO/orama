@@ -133,12 +133,19 @@ func TestCheckBaseURLResolvable(t *testing.T) {
 		}
 	})
 
-	t.Run("resolution failure is allowed (fail open)", func(t *testing.T) {
+	t.Run("resolution failure is refused (fail closed)", func(t *testing.T) {
 		lookupIP = func(_ context.Context, host string) ([]net.IP, error) {
 			return nil, errors.New("nxdomain")
 		}
-		if err := CheckBaseURLResolvable(context.Background(), "https://unresolvable.example.com"); err != nil {
-			t.Fatalf("an unresolvable host should fail open (be allowed); got %v", err)
+		if err := CheckBaseURLResolvable(context.Background(), "https://unresolvable.example.com"); err == nil {
+			t.Fatal("an unresolvable host cannot be checked and must be refused")
+		}
+	})
+
+	t.Run("an empty answer is refused (fail closed)", func(t *testing.T) {
+		lookupIP = func(_ context.Context, host string) ([]net.IP, error) { return nil, nil }
+		if err := CheckBaseURLResolvable(context.Background(), "https://empty.example.com"); err == nil {
+			t.Fatal("a host that resolves to nothing cannot be checked and must be refused")
 		}
 	})
 

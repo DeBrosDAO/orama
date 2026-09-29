@@ -1314,12 +1314,16 @@ func buildPushDispatcher(
 		ntfyCfg := pushntfy.Config{
 			BaseURL:   c.NtfyBaseURL,
 			AuthToken: c.NtfyAuthToken,
+			// A tenant-supplied server is reached through a guarded client; the operator's own
+			// default (loopback ntfy) is not. Provenance decides, not the URL.
+			GuardTarget: c.NtfyBaseURLTenant,
 		}
 		if c.Namespace != "" && credManager != nil {
 			if cred, err := credManager.Get(ctx, c.Namespace, "ntfy"); err == nil && cred != nil {
 				if ov, perr := pushntfy.ParseCredentials(cred.JSON); perr == nil {
 					if ov.BaseURL != "" {
 						ntfyCfg.BaseURL = ov.BaseURL
+						ntfyCfg.GuardTarget = true
 					}
 					if ov.AuthToken != "" {
 						ntfyCfg.AuthToken = ov.AuthToken
@@ -1336,7 +1340,7 @@ func buildPushDispatcher(
 			// Fan out across all push nodes ONLY for the shared default infra.
 			// A namespace that overrode BaseURL with its own ntfy server keeps
 			// single-host delivery (its server, not our cluster).
-			if ntfyFanout != nil && ntfyCfg.BaseURL == cfg.NtfyBaseURL {
+			if ntfyFanout != nil && !ntfyCfg.GuardTarget && ntfyCfg.BaseURL == cfg.NtfyBaseURL {
 				ntfyCfg.FanoutResolver = ntfyFanout.Hosts
 				ntfyCfg.FanoutHostHeader = ntfyFanoutHost
 			}

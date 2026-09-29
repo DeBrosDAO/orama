@@ -307,6 +307,7 @@ func (m *Manager) buildDispatcher(ctx context.Context, namespace string) (*PushD
 						zap.String("namespace", namespace), zap.String("base_url", nc.NtfyBaseURL))
 				} else {
 					eff.NtfyBaseURL = nc.NtfyBaseURL
+					eff.NtfyBaseURLTenant = true
 				}
 			}
 			if nc.NtfyAuthToken != "" {

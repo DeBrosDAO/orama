@@ -103,7 +103,7 @@ func TestNetclassRangesAreCoveredByCoreNetguard(t *testing.T) {
 	require.NoError(t, err)
 	core := map[string]bool{}
 	for _, m := range regexp.MustCompile(`(?m)^\t"([0-9a-f:.]+/[0-9]+)",$`).FindAllStringSubmatch(string(src), -1) {
-		core[m[1]] = true
+		core[netip.MustParsePrefix(m[1]).String()] = true
 	}
 	require.NotEmpty(t, core, "no ranges found in core/pkg/netguard/netguard.go")
 	for _, p := range netclass.SpecialPrefixes() {

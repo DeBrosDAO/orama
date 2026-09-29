@@ -10,12 +10,19 @@
 package netguard
 
 import (
+	"context"
+	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
+	"syscall"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
 // Ranges are the CIDRs refused beyond what net.IP's own predicates cover. Keep one CIDR per line and
-// nothing else in the list: the cross-check test reads them from this source file.
+// nothing else in the list (::/96 is IPv4-compatible and ::ffff:0:0/96 IPv4-mapped, both embedding an IPv4 host): the cross-check test reads them from this source file.
 var Ranges = []string{
 	"0.0.0.0/8",
 	"10.0.0.0/8",
@@ -36,6 +43,8 @@ var Ranges = []string{
 	"240.0.0.0/4",
 	"::/128",
 	"::1/128",
+	"::/96",
+	"::ffff:0:0/96",
 	"64:ff9b::/96",
 	"64:ff9b:1::/48",
 	"100::/64",
@@ -80,4 +89,51 @@ func Reserved(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// BlockedError is what a refused dial returns. It names the address so a caller can see which
+// destination was refused.
+type BlockedError struct{ Address string }
+
+func (e *BlockedError) Error() string {
+	return fmt.Sprintf("destination %s is on an internal network and is not reachable from here", e.Address)
+}
+
+// GuardAddress is a net.Dialer.Control: it refuses a connection to a reserved address. Control runs
+// after resolution with the concrete address the socket is about to connect to, once per attempt,
+// for every address the resolver returned and for every hop of a redirect, so a name that resolves
+// (or is rebound) to an internal address is refused at the connection itself. An address it cannot
+// parse is refused too.
+func GuardAddress(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return &BlockedError{Address: address}
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || Reserved(ip) {
+		return &BlockedError{Address: address}
+	}
+	return nil
+}
+
+const dialTimeout = 10 * time.Second
+
+// NewHTTPClient returns an HTTP client whose every connection is checked by GuardAddress. It is
+// for requests a tenant controls the destination of.
+func NewHTTPClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second, Control: GuardAddress}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsutil.GetTLSConfig(),
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.DialContext(ctx, network, addr)
+			},
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
 }
