@@ -3,6 +3,7 @@ package rwagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -349,5 +350,61 @@ func TestCheckAgentSocket_refusesWhatAnotherUserCouldPlant(t *testing.T) {
 	}
 	if err := checkAgentSocket(filepath.Join(dir, "missing")); !os.IsNotExist(err) {
 		t.Fatalf("missing socket = %v, want not exist", err)
+	}
+}
+
+const archiveMessageForPurposeTests = ArchiveMessageHeader + "\nversion: 1.0.0\ncommit: abcdef0\narch: amd64\ndate: 2026-01-01T00:00:00Z\nsigners: none\nmanifest sha256: " +
+	"0000000000000000000000000000000000000000000000000000000000000000"
+
+const releasePayloadForPurposeTests = `{"_type":"targets","expires":"2027-01-01T00:00:00Z","spec_version":"1.0.31","targets":{},"version":1}`
+
+func TestSignForPurpose_refusesAMessageInTheOtherPurposesFormat(t *testing.T) {
+	// No socket exists, so a refusal that is not ErrPurposeMismatch would be a
+	// dial error: the check must run before the agent is contacted.
+	c := New(t.TempDir() + "/none.sock")
+	cases := map[string]struct{ message, purpose string }{
+		"release payload as archive": {releasePayloadForPurposeTests, PurposeOramaArchive},
+		"archive message as release": {archiveMessageForPurposeTests, PurposeOramaRelease},
+		"plain text as release":      {"hello", PurposeOramaRelease},
+		"plain text as archive":      {"hello", PurposeOramaArchive},
+		"empty message as release":   {"", PurposeOramaRelease},
+		"unknown purpose":            {releasePayloadForPurposeTests, "orama-other"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := c.SignForPurpose(context.Background(), tc.message, "evm", tc.purpose)
+			if !errors.Is(err, ErrPurposeMismatch) {
+				t.Fatalf("err = %v, want ErrPurposeMismatch", err)
+			}
+		})
+	}
+}
+
+func TestSign_refusesEveryRegisteredFormat(t *testing.T) {
+	c := New(t.TempDir() + "/none.sock")
+	for name, message := range map[string]string{
+		"archive": archiveMessageForPurposeTests,
+		"release": releasePayloadForPurposeTests,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := c.Sign(context.Background(), message, "evm")
+			if !errors.Is(err, ErrPurposeMismatch) {
+				t.Fatalf("err = %v, want ErrPurposeMismatch", err)
+			}
+		})
+	}
+}
+
+func TestReservedPurpose(t *testing.T) {
+	cases := map[string]string{
+		archiveMessageForPurposeTests: PurposeOramaArchive,
+		releasePayloadForPurposeTests: PurposeOramaRelease,
+		"Sign in to gateway":          "",
+		"":                            "",
+	}
+	for message, want := range cases {
+		if got := ReservedPurpose(message); got != want {
+			t.Errorf("ReservedPurpose(%.30q) = %q, want %q", message, got, want)
+		}
 	}
 }

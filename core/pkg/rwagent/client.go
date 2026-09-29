@@ -223,6 +223,9 @@ func (c *Client) GetAddress(ctx context.Context, chain string) (*WalletAddressDa
 // Sign signs a message with the wallet's private key.
 // The desktop app may prompt the user for approval on first use.
 func (c *Client) Sign(ctx context.Context, message, chain string) (*WalletSignData, error) {
+	if purpose := ReservedPurpose(message); purpose != "" {
+		return nil, fmt.Errorf("%w: a %s message is signed only under that purpose", ErrPurposeMismatch, purpose)
+	}
 	body := map[string]any{"message": message, "chain": chain}
 
 	var resp apiResponse[WalletSignData]
@@ -241,10 +244,67 @@ func (c *Client) Sign(ctx context.Context, message, chain string) (*WalletSignDa
 // for a caller granted wallet:sign:orama-archive; plain wallet:sign refuses it.
 const PurposeOramaArchive = "orama-archive"
 
-// SignForPurpose signs message under a domain-separated purpose. The agent
-// checks that the message parses as that purpose's format and that the caller
-// holds the purpose's own grant.
+// PurposeOramaRelease scopes a signature to a TUF release metadata payload:
+// the canonical JSON of a "signed" section, which always opens with
+// ReleasePayloadPrefix. The agent signs it only under this purpose, only for a
+// caller granted wallet:sign:orama-release, and with the dedicated ed25519
+// release key, never the account key an archive is signed with.
+const PurposeOramaRelease = "orama-release"
+
+// CapabilityOramaRelease is the agent grant PurposeOramaRelease needs. It is
+// per signature and never granted to the headless agent.
+const CapabilityOramaRelease = "wallet:sign:orama-release"
+
+// ArchiveMessageHeader is line 1 of every build-archive signing message.
+const ArchiveMessageHeader = "Orama build archive v1"
+
+// ReleasePayloadPrefix opens every TUF "signed" section in canonical JSON:
+// "_type" sorts before every other key, so the payload identifies itself.
+const ReleasePayloadPrefix = `{"_type":"`
+
+// ErrPurposeMismatch is a message that does not belong to the signing purpose
+// it was sent under. It is raised before the agent is contacted, so an archive
+// message is never offered as a release payload and a release payload is never
+// offered as an archive message.
+var ErrPurposeMismatch = errors.New("message does not match the signing purpose")
+
+// ReservedPurpose reports which registered signing purpose message belongs to,
+// or "" when it is in no registered format. The agent applies the same rule.
+func ReservedPurpose(message string) string {
+	switch {
+	case strings.HasPrefix(message, ArchiveMessageHeader):
+		return PurposeOramaArchive
+	case strings.HasPrefix(message, ReleasePayloadPrefix):
+		return PurposeOramaRelease
+	}
+	return ""
+}
+
+// checkPurpose refuses a message that is not in the format of the purpose it
+// is sent under, and any purpose this client does not know.
+func checkPurpose(message, purpose string) error {
+	switch purpose {
+	case PurposeOramaArchive, PurposeOramaRelease:
+	default:
+		return fmt.Errorf("%w: unknown purpose %q", ErrPurposeMismatch, purpose)
+	}
+	if got := ReservedPurpose(message); got != purpose {
+		if got == "" {
+			return fmt.Errorf("%w: the message is not in the %s format", ErrPurposeMismatch, purpose)
+		}
+		return fmt.Errorf("%w: the message is in the %s format, not %s", ErrPurposeMismatch, got, purpose)
+	}
+	return nil
+}
+
+// SignForPurpose signs message under a domain-separated purpose. The message
+// must be in that purpose's format and no other: the archive purpose never
+// signs a release payload and the release purpose never signs an archive.
+// The agent checks the same and that the caller holds the purpose's own grant.
 func (c *Client) SignForPurpose(ctx context.Context, message, chain, purpose string) (*WalletSignData, error) {
+	if err := checkPurpose(message, purpose); err != nil {
+		return nil, err
+	}
 	body := map[string]any{"message": message, "chain": chain, "purpose": purpose}
 
 	var resp apiResponse[WalletSignData]

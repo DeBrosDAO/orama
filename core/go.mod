@@ -151,7 +151,7 @@ require (
 	github.com/redis/go-redis/v9 v9.8.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
-	github.com/secure-systems-lab/go-securesystemslib v0.11.0 // indirect
+	github.com/secure-systems-lab/go-securesystemslib v0.11.0
 	github.com/sigstore/protobuf-specs v0.5.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tidwall/btree v1.7.0 // indirect
