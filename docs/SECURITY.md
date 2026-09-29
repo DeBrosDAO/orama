@@ -596,7 +596,7 @@ the other way round. CosmWasm contracts are the one place that rule has a declar
   An IOU is not ORAMA: it is not shielded, it is not redeemable by the protocol, and the protocol makes no
   claim about its backing.
 - **Related declared limit.** Contract and market payments show the payer, the amount and the contract
-  publicly; only the payee's funds land privately, in earnings.
+  publicly, and a permissionless relay contract (a user pays it, it calls `earnings.pay`) is a public user-to-user rail that lands in earnings; only the payee's funds land privately, in earnings.
 - **Contract earnings are stuck.** Earnings credited to a contract's address (sale proceeds, royalties) can
   be spent only by that address's signer, and a contract has none. A contract that expects to be paid in
   ORAMA needs to forward funds another way.

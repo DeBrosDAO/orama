@@ -59,11 +59,14 @@ func (m Messenger) DispatchMsg(ctx sdk.Context, contract sdk.AccAddress, portID 
 }
 
 // RejectDisabled refuses CosmosMsg variants that would let a contract sign as itself for a module
-// that is not behind a binding: CosmosMsg::Any (which is also how the stargate form arrives) and
+// that is not behind a binding: staking, CosmosMsg::Any (which is also how the stargate form arrives) and
 // SetWithdrawAddress, which would redirect staking rewards to another account.
 func RejectDisabled(msg wasmvmtypes.CosmosMsg) error {
 	if msg.Any != nil {
 		return errorsmod.Wrap(ErrDisabledMessage, "any/stargate: a contract reaches modules only through the orama bindings")
+	}
+	if msg.Staking != nil {
+		return errorsmod.Wrap(ErrDisabledMessage, "staking: contracts do not delegate; the ante-only delegation rules would not apply to them")
 	}
 	if msg.Distribution != nil && msg.Distribution.SetWithdrawAddress != nil {
 		return errorsmod.Wrap(ErrDisabledMessage, "distribution set_withdraw_address")

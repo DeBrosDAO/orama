@@ -107,6 +107,7 @@ func TestMessenger_refusesAnyStargateAndSetWithdrawAddress(t *testing.T) {
 	m := wasmbindings.NewMessenger(next, &fakeRouter{}, &fakeEarnings{})
 	for name, msg := range map[string]wasmvmtypes.CosmosMsg{
 		"any":                  {Any: &wasmvmtypes.AnyMsg{TypeURL: "/cosmos.bank.v1beta1.MsgSend"}},
+		"staking":              {Staking: &wasmvmtypes.StakingMsg{Delegate: &wasmvmtypes.DelegateMsg{Validator: "v", Amount: wasmvmtypes.NewCoin(1, "norama")}}},
 		"set withdraw address": {Distribution: &wasmvmtypes.DistributionMsg{SetWithdrawAddress: &wasmvmtypes.SetWithdrawAddressMsg{Address: user.String()}}},
 	} {
 		t.Run(name, func(t *testing.T) {

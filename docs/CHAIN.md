@@ -2041,7 +2041,7 @@ fees and escrow that way) and a contract cannot pay a user. `BankMsg::Send` to a
 by bank's blocked-address rule. wasmd's instantiate moves the attached funds before it registers the
 contract, so the coin transferrer marks that recipient (`WithFundedContract`) for the one transfer.
 
-The message handler (`wasmbindings.Messenger`) also refuses `CosmosMsg::Any`, which is how the stargate
+The message handler (`wasmbindings.Messenger`) also refuses `CosmosMsg::Staking` (the delegation rules in `x/power` are ante-only, so a contract could otherwise fill the epoch reward walk with dust delegations), `CosmosMsg::Any`, which is how the stargate
 form arrives, and distribution `SetWithdrawAddress`. IBC messages are refused as before. A contract reaches
 a module only through the bindings.
 
@@ -2104,6 +2104,8 @@ points, which cannot run.
 ### Not built here
 
 - A shielded binding (see above).
+- Coalescing of deposit chunks: each growing call adds a chunk (and an x/fees deposit row), so a shrink that must release very many one-byte chunks can run out of gas. The ledger overhead is not priced.
+- A caller-side cap on the state deposit a contract call may lock; the signer of a transaction pays for growth the contracts it calls cause.
 - Any way for a contract to spend the earnings credited to its own address.
 - A `wasmpolicy` query service or CLI for the ledger and its invariants.
 - The native stagenet deploy has not been run with a wasm binary: `deploy.sh` needs the musl `libwasmvm`

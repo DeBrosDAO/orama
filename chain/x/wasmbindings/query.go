@@ -172,6 +172,9 @@ func (q Querier) verifyProof(ctx sdk.Context, treeID uint64, leaf cnfttypes.Leaf
 	if err != nil {
 		return nil, err
 	}
+	if err := proof.ValidateBasic(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrBadMessage, err)
+	}
 	hash, err := cnfttypes.HashLeaf(leaf)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBadMessage, err)
