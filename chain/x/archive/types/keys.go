@@ -17,4 +17,7 @@ var (
 	LastArchivedHeightKey = collections.NewPrefix(1)
 	// RangesPrefix is the collections prefix for range records, keyed by (start, end).
 	RangesPrefix = collections.NewPrefix(2)
+	// AttachedDealsPrefix maps each attached deal id to its range, so one deal
+	// cannot be counted as a replica of two ranges.
+	AttachedDealsPrefix = collections.NewPrefix(3)
 )

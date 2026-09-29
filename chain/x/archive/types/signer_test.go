@@ -22,7 +22,7 @@ func TestAttachReplicasSignedByArchiver(t *testing.T) {
 		Archiver:    signer.String(),
 		StartHeight: 1,
 		EndHeight:   4,
-		DealIds:     []string{"deal-1", "deal-2", "deal-3"},
+		DealIds:     []string{"1", "2", "3"},
 	}
 	require.Equal(t, []sdk.AccAddress{signer}, msg.GetSigners())
 

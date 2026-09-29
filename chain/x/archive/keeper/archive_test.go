@@ -2,6 +2,7 @@ package keeper_test
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/cometbft/cometbft/crypto/merkle"
@@ -323,12 +324,15 @@ func TestMsgSignerIsArchiver(t *testing.T) {
 
 	attach := &types.MsgAttachReplicas{
 		Archiver:    signer.String(),
+		NodeId:      nodeOf(7),
 		StartHeight: 1,
 		EndHeight:   2,
 		DealIds:     []string{"1"},
 	}
 	require.Equal(t, []sdk.AccAddress{signer}, attach.GetSigners())
 	require.NoError(t, attach.ValidateBasic())
+	attach.NodeId = ""
+	require.Error(t, attach.ValidateBasic(), "a message must name its archiver node")
 }
 
 func archiveRange(t *testing.T, f *testFixture, start, end int64) {
@@ -339,7 +343,7 @@ func archiveRange(t *testing.T, f *testFixture, start, end int64) {
 	for i := byte(1); i <= 3; i++ {
 		f.attest(t, i, start, end, cid, bundle, root)
 	}
-	res := f.attach(t, 1, start, end, "1", "2", "3")
+	res := f.attach(t, 1, start, end, fmt.Sprint(start*10+1), fmt.Sprint(start*10+2), fmt.Sprint(start*10+3))
 	require.True(t, res.Archived)
 }
 
@@ -385,31 +389,53 @@ func TestAttest_onlyAnArchiverNodesHotKeyCounts(t *testing.T) {
 	require.ErrorIs(t, err, types.ErrUnknownRange, "a refused attestation records nothing")
 }
 
+// A second node of the same operator, or the same operator after a hot-key
+// rotation, is accepted and counts nothing: the archiver keeps moving and the
+// operator still counts once.
 func TestAttest_oneOperatorsNodesCountOnce(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	f.Nodes.operator[nodeOf(2)] = "op-1"
+	f.Nodes.operator[nodeOf(2)] = opOf(1)
 	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
-	_, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
-		Archiver: acc(2).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
-		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
-	})
-	require.ErrorIs(t, err, types.ErrSameOperator)
+	res := f.attest(t, 2, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	require.Equal(t, uint32(1), res.Attesters)
 	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
 	require.NoError(t, err)
-	require.Equal(t, []string{"op-1"}, rec.Operators)
+	require.Equal(t, []string{opOf(1)}, rec.Operators)
+	require.Equal(t, []string{acc(1).String()}, rec.Archivers)
+
+	// The same operator's node with a wrong root is still refused.
+	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
+		Archiver: acc(2).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(9),
+	})
+	require.ErrorIs(t, err, types.ErrWrongRoot)
+}
+
+// A key that already attested is idempotent even after its node lost the role.
+func TestAttest_repeatAfterLosingTheRoleIsIdempotent(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.Nodes.inactive[nodeOf(1)] = true
+	res := f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	require.Equal(t, uint32(1), res.Attesters)
 }
 
 func TestAttachReplicas_onlyActiveArchiveDeals(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
-	for _, id := range []string{"deal-1", "0", "10", "-1"} {
+	for _, id := range []string{"deal-1", "0", "-1", "01"} {
 		_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
 			Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50, DealIds: []string{"1", id},
 		})
-		require.ErrorIsf(t, err, types.ErrNotArchiveDeal, "id %q", id)
+		require.ErrorContainsf(t, err, "not a decimal", "id %q", id)
 	}
+	_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50, DealIds: []string{"1", "10"},
+	})
+	require.ErrorIs(t, err, types.ErrNotArchiveDeal)
 	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
 	require.NoError(t, err)
 	require.Empty(t, rec.DealIds, "a refused attach records none of its ids")
@@ -417,4 +443,27 @@ func TestAttachReplicas_onlyActiveArchiveDeals(t *testing.T) {
 		Archiver: acc(3).String(), NodeId: nodeOf(3), StartHeight: 1, EndHeight: 50, DealIds: []string{"1"},
 	})
 	require.NoError(t, err, "any archiver node may attach a real deal")
+
+	// A deal backs one range only.
+	f.attest(t, 1, 51, 100, "bafyarchivecid", digest(1), digest(3))
+	_, err = f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 51, EndHeight: 100, DealIds: []string{"1"},
+	})
+	require.ErrorIs(t, err, types.ErrDealAttached)
+}
+
+// A deal that ended after it was attached does not count when the range
+// would become archived.
+func TestAttach_anEndedDealDoesNotCountTowardArchiving(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	for n := byte(1); n <= 3; n++ {
+		f.attest(t, n, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	}
+	f.attach(t, 1, 1, 50, "1")
+	f.Storage.ended[1] = true
+	res := f.attach(t, 1, 1, 50, "2", "3")
+	require.False(t, res.Archived, "deal 1 ended, so only two live replicas")
+	res = f.attach(t, 1, 1, 50, "4")
+	require.True(t, res.Archived)
 }

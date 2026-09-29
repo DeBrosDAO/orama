@@ -27,6 +27,9 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) error {
 		if err := k.Ranges.Set(ctx, collections.Join(rec.StartHeight, rec.EndHeight), rec); err != nil {
 			return fmt.Errorf("failed to set range %d-%d: %w", rec.StartHeight, rec.EndHeight, err)
 		}
+		if err := k.indexDeals(ctx, rec.StartHeight, rec.DealIds); err != nil {
+			return err
+		}
 	}
 	got, err := k.recomputeLastArchived(ctx)
 	if err != nil {

@@ -2,6 +2,7 @@ package types_test
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -57,9 +58,10 @@ func TestGenesis_quorumNotMarkedArchived(t *testing.T) {
 }
 
 func archivedRecord(start, end int64) types.RangeRecord {
-	var archivers []string
+	var archivers, operators []string
 	for n := byte(1); n <= 3; n++ {
 		archivers = append(archivers, sdk.AccAddress(bytes.Repeat([]byte{n}, 20)).String())
+		operators = append(operators, sdk.AccAddress(bytes.Repeat([]byte{n + 100}, 20)).String())
 	}
 	return types.RangeRecord{
 		StartHeight: start,
@@ -67,9 +69,9 @@ func archivedRecord(start, end int64) types.RangeRecord {
 		BundleCid:   "bafyvalidarchivecid",
 		BundleHash:  bytes.Repeat([]byte{1}, types.HashLen),
 		MerkleRoot:  bytes.Repeat([]byte{2}, types.HashLen),
-		DealIds:     []string{"deal-1", "deal-2", "deal-3"},
+		DealIds:     []string{fmt.Sprint(start*10 + 1), fmt.Sprint(start*10 + 2), fmt.Sprint(start*10 + 3)},
 		Archivers:   archivers,
-		Operators:   []string{"op-1", "op-2", "op-3"},
+		Operators:   operators,
 		Archived:    true,
 	}
 }
@@ -87,7 +89,18 @@ func TestGenesis_operatorsPairWithArchiversAndAreDistinct(t *testing.T) {
 	require.ErrorContains(t, gs.Validate(), "operators")
 
 	repeat := archivedRecord(1, 100)
-	repeat.Operators = []string{"op-1", "op-1", "op-3"}
+	repeat.Operators[1] = repeat.Operators[0]
 	gs.Ranges = []types.RangeRecord{repeat}
 	require.ErrorContains(t, gs.Validate(), "repeats operator")
+
+	bad := archivedRecord(1, 100)
+	bad.Operators[2] = "op-3"
+	gs.Ranges = []types.RangeRecord{bad}
+	require.ErrorContains(t, gs.Validate(), "canonical account address")
+
+	shared := archivedRecord(101, 200)
+	shared.DealIds[0] = rec.DealIds[0]
+	gs.Ranges = []types.RangeRecord{rec, shared}
+	gs.LastArchivedHeight = 200
+	require.ErrorContains(t, gs.Validate(), "backs both")
 }

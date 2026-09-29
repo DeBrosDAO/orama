@@ -20,13 +20,17 @@ const (
 	MaxArchiversPerRange = 64
 
 	// MaxDealIDsPerRange bounds recorded deal ids. x/storage owns the deals;
-	// this module only stores their ids.
+	// this module records their ids and checks each is an active ARCHIVE deal.
 	MaxDealIDsPerRange = 64
 
 	// MaxBundleCIDLen is the longest bundle CID accepted.
 	MaxBundleCIDLen = 128
 
-	// MaxDealIDLen is the longest deal id accepted. Ids are opaque strings.
+	// MaxNodeIDLen is the longest x/nodes node id accepted.
+	MaxNodeIDLen = 128
+
+	// MaxDealIDLen is the longest deal id accepted. Ids are x/storage deal
+	// ids written in decimal.
 	MaxDealIDLen = 128
 )
 

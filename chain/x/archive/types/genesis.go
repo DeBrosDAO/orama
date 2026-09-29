@@ -89,8 +89,9 @@ func (r RangeRecord) Validate() error {
 	}
 	seenOperators := make(map[string]struct{}, len(r.Operators))
 	for _, op := range r.Operators {
-		if op == "" {
-			return fmt.Errorf("range %d-%d has an empty operator", r.StartHeight, r.EndHeight)
+		addr, err := sdk.AccAddressFromBech32(op)
+		if err != nil || addr.String() != op {
+			return fmt.Errorf("range %d-%d operator %q is not a canonical account address", r.StartHeight, r.EndHeight, op)
 		}
 		if _, ok := seenOperators[op]; ok {
 			return fmt.Errorf("range %d-%d repeats operator %s", r.StartHeight, r.EndHeight, op)
@@ -133,9 +134,16 @@ func (gs GenesisState) Validate() error {
 		}
 		return ordered[i].EndHeight < ordered[j].EndHeight
 	})
+	dealOwner := map[string]int64{}
 	for i, r := range ordered {
 		if err := r.Validate(); err != nil {
 			return err
+		}
+		for _, id := range r.DealIds {
+			if start, ok := dealOwner[id]; ok {
+				return fmt.Errorf("deal %s backs both the range starting at %d and the one at %d", id, start, r.StartHeight)
+			}
+			dealOwner[id] = r.StartHeight
 		}
 		if i == 0 {
 			continue

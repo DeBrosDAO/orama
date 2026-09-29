@@ -20,7 +20,7 @@ func (m *MsgAttest) ValidateBasic() error {
 	if m == nil {
 		return fmt.Errorf("nil MsgAttest")
 	}
-	_, err := ValidateAttestation(m.Archiver, m.StartHeight, m.EndHeight, m.BundleCid, m.BundleHash, m.MerkleRoot)
+	_, err := ValidateAttestation(m.Archiver, m.NodeId, m.StartHeight, m.EndHeight, m.BundleCid, m.BundleHash, m.MerkleRoot)
 	return err
 }
 
@@ -39,7 +39,7 @@ func (m *MsgAttachReplicas) ValidateBasic() error {
 	if m == nil {
 		return fmt.Errorf("nil MsgAttachReplicas")
 	}
-	_, err := ValidateAttach(m.Archiver, m.StartHeight, m.EndHeight, m.DealIds)
+	_, err := ValidateAttach(m.Archiver, m.NodeId, m.StartHeight, m.EndHeight, m.DealIds)
 	return err
 }
 

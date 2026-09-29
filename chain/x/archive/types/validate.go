@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"strconv"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
@@ -40,15 +41,23 @@ func ValidateHash(name string, hash []byte) error {
 	return nil
 }
 
-// ValidateDealID checks one opaque deal id. x/archive does not look the id up.
+// ValidateDealID checks that id is an x/storage deal id in canonical decimal
+// (no sign, no leading zero, not zero). The keeper checks the deal itself.
 func ValidateDealID(id string) error {
 	if id == "" || len(id) > MaxDealIDLen {
 		return fmt.Errorf("deal id length must be 1-%d, got %d", MaxDealIDLen, len(id))
 	}
-	for _, r := range id {
-		if r <= ' ' || r > '~' {
-			return fmt.Errorf("deal id must be printable ASCII without spaces")
-		}
+	n, err := strconv.ParseUint(id, 10, 64)
+	if err != nil || n == 0 || strconv.FormatUint(n, 10) != id {
+		return fmt.Errorf("deal id %q is not a decimal x/storage deal id", id)
+	}
+	return nil
+}
+
+// ValidateNodeID checks that a message names its archiver node.
+func ValidateNodeID(nodeID string) error {
+	if nodeID == "" || len(nodeID) > MaxNodeIDLen {
+		return fmt.Errorf("node id length must be 1-%d, got %d", MaxNodeIDLen, len(nodeID))
 	}
 	return nil
 }
@@ -84,9 +93,12 @@ func ValidateArchiver(archiver string) (sdk.AccAddress, error) {
 }
 
 // ValidateAttestation checks MsgAttest fields and returns the signer.
-func ValidateAttestation(archiver string, start, end int64, bundleCID string, bundleHash, merkleRoot []byte) (sdk.AccAddress, error) {
+func ValidateAttestation(archiver, nodeID string, start, end int64, bundleCID string, bundleHash, merkleRoot []byte) (sdk.AccAddress, error) {
 	addr, err := ValidateArchiver(archiver)
 	if err != nil {
+		return nil, err
+	}
+	if err := ValidateNodeID(nodeID); err != nil {
 		return nil, err
 	}
 	if err := ValidateHeights(start, end); err != nil {
@@ -105,9 +117,12 @@ func ValidateAttestation(archiver string, start, end int64, bundleCID string, bu
 }
 
 // ValidateAttach checks MsgAttachReplicas fields and returns the signer.
-func ValidateAttach(archiver string, start, end int64, dealIDs []string) (sdk.AccAddress, error) {
+func ValidateAttach(archiver, nodeID string, start, end int64, dealIDs []string) (sdk.AccAddress, error) {
 	addr, err := ValidateArchiver(archiver)
 	if err != nil {
+		return nil, err
+	}
+	if err := ValidateNodeID(nodeID); err != nil {
 		return nil, err
 	}
 	if err := ValidateHeights(start, end); err != nil {

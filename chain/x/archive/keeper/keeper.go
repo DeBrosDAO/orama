@@ -26,6 +26,8 @@ type Keeper struct {
 	Params             collections.Item[types.Params]
 	LastArchivedHeight collections.Item[int64]
 	Ranges             collections.Map[collections.Pair[int64, int64], types.RangeRecord]
+	// AttachedDeals maps a deal id to the start height of the range it backs.
+	AttachedDeals collections.Map[uint64, int64]
 
 	nodes   types.NodesKeeper
 	storage types.StorageKeeper
@@ -46,6 +48,7 @@ func NewKeeper(cdc codec.BinaryCodec, storeService storetypes.KVStoreService, no
 			collections.PairKeyCodec(collections.Int64Key, collections.Int64Key),
 			codec.CollValue[types.RangeRecord](cdc),
 		),
+		AttachedDeals: collections.NewMap(sb, types.AttachedDealsPrefix, "attached_deals", collections.Uint64Key, collections.Int64Value),
 	}
 	schema, err := sb.Build()
 	if err != nil {

@@ -30,7 +30,7 @@ type testFixture struct {
 	Storage *fakeStorage
 }
 
-// fakeNodes: node "node-N" has hot key acc(N) and operator "op-N", unless
+// fakeNodes: node "node-N" has hot key acc(N) and operator opOf(N), unless
 // operator overrides it. A node listed in inactive has no ARCHIVER role.
 type fakeNodes struct {
 	operator map[string]string
@@ -53,14 +53,18 @@ func (f *fakeNodes) ArchiverOperator(_ context.Context, nodeID, signer string) (
 	if op, ok := f.operator[nodeID]; ok {
 		return op, nil
 	}
-	return fmt.Sprintf("op-%d", n), nil
+	return opOf(n), nil
 }
 
-// fakeStorage: deals 1 through 9 are active ARCHIVE deals.
-type fakeStorage struct{}
+// opOf is node-N's default operator account.
+func opOf(n byte) string { return acc(n + 100).String() }
 
-func (fakeStorage) ArchiveDealActive(_ context.Context, id uint64) (bool, error) {
-	return id >= 1 && id <= 9, nil
+// fakeStorage: every deal id is an active ARCHIVE deal except 10 and the
+// ones marked ended.
+type fakeStorage struct{ ended map[uint64]bool }
+
+func (s *fakeStorage) ArchiveDealActive(_ context.Context, id uint64) (bool, error) {
+	return id != 10 && !s.ended[id], nil
 }
 
 func newTestFixture(t *testing.T) *testFixture {
@@ -78,14 +82,16 @@ func newTestFixture(t *testing.T) *testFixture {
 	types.RegisterInterfaces(interfaceRegistry)
 	cdc := codec.NewProtoCodec(interfaceRegistry)
 	nodes := &fakeNodes{operator: map[string]string{}, inactive: map[string]bool{}}
-	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), nodes, fakeStorage{})
+	storage := &fakeStorage{ended: map[uint64]bool{}}
+	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), nodes, storage)
 
 	return &testFixture{
-		Ctx:    ctx,
-		Keeper: k,
-		Msg:    keeper.NewMsgServerImpl(k),
-		Query:  keeper.NewQueryServerImpl(k),
-		Nodes:  nodes,
+		Ctx:     ctx,
+		Keeper:  k,
+		Msg:     keeper.NewMsgServerImpl(k),
+		Query:   keeper.NewQueryServerImpl(k),
+		Nodes:   nodes,
+		Storage: storage,
 	}
 }
 

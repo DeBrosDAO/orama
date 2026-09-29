@@ -492,3 +492,33 @@ func TestRechallenge_mustNameTheSlotsHolder(t *testing.T) {
 	f.Ctx = f.Ctx.WithBlockHeight(f.height + 1)
 	require.ErrorContains(t, f.Keeper.BeginBlock(f.Ctx), "indexed for node")
 }
+
+func TestArchiveDealActive_onlyAnActiveArchiveDeal(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	f.threeNodes(t, 1<<20)
+	client := acc(9)
+	f.fund(client, 100_000_000)
+	data := payload(7)
+	private := f.createDeal(t, types.DealClass_DEAL_CLASS_PRIVATE, client, "", 3, 1_000, 4, []types.PieceCommitment{
+		commit(t, data), commit(t, data), commit(t, data),
+	})
+	ok, err := f.Keeper.ArchiveDealActive(f.Ctx, private)
+	require.NoError(t, err)
+	require.False(t, ok, "a private deal is not an ARCHIVE deal")
+	ok, err = f.Keeper.ArchiveDealActive(f.Ctx, 999)
+	require.NoError(t, err)
+	require.False(t, ok, "an unknown deal is not an error")
+
+	archive := types.Deal{Id: 500, Class: types.DealClass_DEAL_CLASS_ARCHIVE, Status: types.DealStatus_DEAL_STATUS_ACTIVE,
+		PricePerEpoch: math.ZeroInt(), Escrow: math.ZeroInt()}
+	require.NoError(t, f.Keeper.Deals.Set(f.Ctx, archive.Id, archive))
+	ok, err = f.Keeper.ArchiveDealActive(f.Ctx, archive.Id)
+	require.NoError(t, err)
+	require.True(t, ok)
+	archive.Status = types.DealStatus_DEAL_STATUS_EXPIRED
+	require.NoError(t, f.Keeper.Deals.Set(f.Ctx, archive.Id, archive))
+	ok, err = f.Keeper.ArchiveDealActive(f.Ctx, archive.Id)
+	require.NoError(t, err)
+	require.False(t, ok, "an expired ARCHIVE deal does not count")
+}

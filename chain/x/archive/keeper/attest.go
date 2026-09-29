@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"cosmossdk.io/collections"
@@ -17,28 +18,36 @@ import (
 // when they repeat that same root. A different root is refused and is not
 // stored, so it does not count toward the pinned root.
 //
-// x/nodes is not in this binary. The message signer is the archiver; there is
-// no allowlist and no admin key.
+// The signer must be the hot key of msg.NodeId, an x/nodes node with an
+// active ARCHIVER role bond. Each operator counts once: a repeat by the same
+// key or by another node of the same operator is accepted and changes
+// nothing, so an operator's second archiver or a rotated key does not stall.
 func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, error) {
 	if msg == nil {
 		return false, 0, fmt.Errorf("nil MsgAttest")
 	}
-	archiver, err := types.ValidateAttestation(msg.Archiver, msg.StartHeight, msg.EndHeight, msg.BundleCid, msg.BundleHash, msg.MerkleRoot)
+	archiver, err := types.ValidateAttestation(msg.Archiver, msg.NodeId, msg.StartHeight, msg.EndHeight, msg.BundleCid, msg.BundleHash, msg.MerkleRoot)
 	if err != nil {
 		return false, 0, err
 	}
 	if err := requireFinalized(ctx, msg.EndHeight); err != nil {
 		return false, 0, err
 	}
-
 	key := collections.Join(msg.StartHeight, msg.EndHeight)
 	rec, err := k.Ranges.Get(ctx, key)
 	fresh := errors.Is(err, collections.ErrNotFound)
 	if err != nil && !fresh {
 		return false, 0, fmt.Errorf("failed to get range %d-%d: %w", msg.StartHeight, msg.EndHeight, err)
 	}
-
 	canonical := archiver.String()
+	if !fresh {
+		if err := matchPinned(rec, msg); err != nil {
+			return false, 0, err
+		}
+		if slices.Contains(rec.Archivers, canonical) {
+			return rec.Archived, uint32(len(rec.Archivers)), nil
+		}
+	}
 	operator, err := k.nodes.ArchiverOperator(ctx, msg.NodeId, canonical)
 	if err != nil {
 		return false, 0, fmt.Errorf("archiver %s: %w", canonical, err)
@@ -48,38 +57,17 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 			return false, 0, err
 		}
 		rec = types.RangeRecord{
-			StartHeight: msg.StartHeight,
-			EndHeight:   msg.EndHeight,
-			BundleCid:   msg.BundleCid,
-			BundleHash:  append([]byte(nil), msg.BundleHash...),
-			MerkleRoot:  append([]byte(nil), msg.MerkleRoot...),
-			Archivers:   []string{canonical},
-			Operators:   []string{operator},
+			StartHeight: msg.StartHeight, EndHeight: msg.EndHeight, BundleCid: msg.BundleCid,
+			BundleHash: append([]byte(nil), msg.BundleHash...), MerkleRoot: append([]byte(nil), msg.MerkleRoot...),
 		}
-	} else {
-		if !bytes.Equal(rec.MerkleRoot, msg.MerkleRoot) {
-			return false, 0, fmt.Errorf("%w: range %d-%d", types.ErrWrongRoot, msg.StartHeight, msg.EndHeight)
-		}
-		if rec.BundleCid != msg.BundleCid || !bytes.Equal(rec.BundleHash, msg.BundleHash) {
-			return false, 0, fmt.Errorf("%w: range %d-%d", types.ErrWrongBundle, msg.StartHeight, msg.EndHeight)
-		}
-		for _, existing := range rec.Archivers {
-			if existing == canonical {
-				return rec.Archived, uint32(len(rec.Archivers)), nil
-			}
-		}
-		for _, existing := range rec.Operators {
-			if existing == operator {
-				return false, 0, fmt.Errorf("%w: %s on range %d-%d", types.ErrSameOperator, operator, msg.StartHeight, msg.EndHeight)
-			}
-		}
-		if len(rec.Archivers) >= types.MaxArchiversPerRange {
-			return false, 0, fmt.Errorf("range %d-%d already has %d archivers", msg.StartHeight, msg.EndHeight, len(rec.Archivers))
-		}
-		rec.Archivers = append(append([]string(nil), rec.Archivers...), canonical)
-		rec.Operators = append(append([]string(nil), rec.Operators...), operator)
+	} else if slices.Contains(rec.Operators, operator) {
+		return rec.Archived, uint32(len(rec.Archivers)), nil
 	}
-
+	if len(rec.Archivers) >= types.MaxArchiversPerRange {
+		return false, 0, fmt.Errorf("range %d-%d already has %d archivers", msg.StartHeight, msg.EndHeight, len(rec.Archivers))
+	}
+	rec.Archivers = append(append([]string(nil), rec.Archivers...), canonical)
+	rec.Operators = append(append([]string(nil), rec.Operators...), operator)
 	stored, justArchived, err := k.storeRange(ctx, rec)
 	if err != nil {
 		return false, 0, err
@@ -88,13 +76,27 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 	return stored.Archived, uint32(len(stored.Archivers)), nil
 }
 
-// AttachReplicas records deal ids for an attested range. The signer is the
-// archiver. Deal creation and payment stay in x/storage; only the ids are stored.
+// matchPinned refuses an attestation whose root or bundle differs from the
+// range's first attestation.
+func matchPinned(rec types.RangeRecord, msg *types.MsgAttest) error {
+	if !bytes.Equal(rec.MerkleRoot, msg.MerkleRoot) {
+		return fmt.Errorf("%w: range %d-%d", types.ErrWrongRoot, msg.StartHeight, msg.EndHeight)
+	}
+	if rec.BundleCid != msg.BundleCid || !bytes.Equal(rec.BundleHash, msg.BundleHash) {
+		return fmt.Errorf("%w: range %d-%d", types.ErrWrongBundle, msg.StartHeight, msg.EndHeight)
+	}
+	return nil
+}
+
+// AttachReplicas records deal ids for an attested range. The signer must be
+// the hot key of an active ARCHIVER node. Each id must be an active x/storage
+// ARCHIVE deal that backs no other range; deal creation and payment stay in
+// x/storage.
 func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (bool, uint32, error) {
 	if msg == nil {
 		return false, 0, fmt.Errorf("nil MsgAttachReplicas")
 	}
-	archiver, err := types.ValidateAttach(msg.Archiver, msg.StartHeight, msg.EndHeight, msg.DealIds)
+	archiver, err := types.ValidateAttach(msg.Archiver, msg.NodeId, msg.StartHeight, msg.EndHeight, msg.DealIds)
 	if err != nil {
 		return false, 0, err
 	}
@@ -108,7 +110,7 @@ func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (b
 	if err != nil {
 		return false, 0, err
 	}
-	if err := k.requireArchiveDeals(ctx, msg.DealIds); err != nil {
+	if err := k.requireArchiveDeals(ctx, rec.StartHeight, msg.DealIds); err != nil {
 		return false, 0, err
 	}
 	merged, changed, err := mergeDealIDs(rec.DealIds, msg.DealIds)
@@ -117,6 +119,9 @@ func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (b
 	}
 	if !changed {
 		return rec.Archived, uint32(len(rec.DealIds)), nil
+	}
+	if err := k.indexDeals(ctx, rec.StartHeight, msg.DealIds); err != nil {
+		return false, 0, err
 	}
 	rec.DealIds = merged
 	stored, justArchived, err := k.storeRange(ctx, rec)
@@ -127,9 +132,11 @@ func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (b
 	return stored.Archived, uint32(len(stored.DealIds)), nil
 }
 
-// requireArchiveDeals checks that every id is a decimal x/storage deal id of
-// an active ARCHIVE deal.
-func (k Keeper) requireArchiveDeals(ctx sdk.Context, ids []string) error {
+// requireArchiveDeals checks that every id is an active x/storage ARCHIVE
+// deal that backs no other range. The deal's content is not checked against
+// the bundle: x/storage has no way yet to create an ARCHIVE deal for a given
+// bundle, so the three attesting operators are what vouch for the bundle.
+func (k Keeper) requireArchiveDeals(ctx sdk.Context, start int64, ids []string) error {
 	for _, id := range ids {
 		dealID, err := strconv.ParseUint(id, 10, 64)
 		if err != nil || dealID == 0 {
@@ -142,8 +149,48 @@ func (k Keeper) requireArchiveDeals(ctx sdk.Context, ids []string) error {
 		if !ok {
 			return fmt.Errorf("%w: deal %d", types.ErrNotArchiveDeal, dealID)
 		}
+		owner, err := k.AttachedDeals.Get(ctx, dealID)
+		if err == nil && owner != start {
+			return fmt.Errorf("%w: deal %d backs the range starting at %d", types.ErrDealAttached, dealID, owner)
+		}
+		if err != nil && !errors.Is(err, collections.ErrNotFound) {
+			return fmt.Errorf("read attached deal %d: %w", dealID, err)
+		}
 	}
 	return nil
+}
+
+// indexDeals records that ids back the range starting at start.
+func (k Keeper) indexDeals(ctx sdk.Context, start int64, ids []string) error {
+	for _, id := range ids {
+		dealID, err := strconv.ParseUint(id, 10, 64)
+		if err != nil {
+			return fmt.Errorf("deal id %q: %w", id, err)
+		}
+		if err := k.AttachedDeals.Set(ctx, dealID, start); err != nil {
+			return fmt.Errorf("index deal %d: %w", dealID, err)
+		}
+	}
+	return nil
+}
+
+// liveDeals counts the recorded deal ids that are still active ARCHIVE deals.
+func (k Keeper) liveDeals(ctx sdk.Context, ids []string) (int, error) {
+	live := 0
+	for _, id := range ids {
+		dealID, err := strconv.ParseUint(id, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("deal id %q: %w", id, err)
+		}
+		ok, err := k.storage.ArchiveDealActive(ctx, dealID)
+		if err != nil {
+			return 0, fmt.Errorf("read deal %d: %w", dealID, err)
+		}
+		if ok {
+			live++
+		}
+	}
+	return live, nil
 }
 
 func requireFinalized(ctx sdk.Context, end int64) error {
@@ -195,7 +242,13 @@ func mergeDealIDs(existing, add []string) ([]string, bool, error) {
 func (k Keeper) storeRange(ctx sdk.Context, rec types.RangeRecord) (types.RangeRecord, bool, error) {
 	was := rec.Archived
 	if !was && types.QuorumMet(len(rec.Archivers), len(rec.DealIds)) {
-		rec.Archived = true
+		// A deal attached earlier may have ended since; only live ones count
+		// at the moment the range becomes archived. Archived is permanent.
+		live, err := k.liveDeals(ctx, rec.DealIds)
+		if err != nil {
+			return types.RangeRecord{}, false, err
+		}
+		rec.Archived = types.QuorumMet(len(rec.Archivers), live)
 	}
 	key := collections.Join(rec.StartHeight, rec.EndHeight)
 	if err := k.Ranges.Set(ctx, key, rec); err != nil {
