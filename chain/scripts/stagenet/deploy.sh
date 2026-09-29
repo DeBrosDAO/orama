@@ -266,11 +266,16 @@ configure_node() {
 		-e 's#^pruning = .*#pruning = \"custom\"#' \
 		-e 's#^pruning-keep-recent = .*#pruning-keep-recent = \"100\"#' \
 		-e 's#^pruning-interval = .*#pruning-interval = \"10\"#' \
+		-e 's#^min-retain-blocks = .*#min-retain-blocks = 201600#' \
 		-e 's#^app-db-backend = .*#app-db-backend = \"pebbledb\"#' \
 		-e '/^\[api\]/,/^\[/ s#^enable = false#enable = true#' \
 		$HOME_DIR/config/app.toml"
 	assert_set "$alias" "$HOME_DIR/config/app.toml" "address = \"127.0.0.1:$GRPC_PORT\"" "the gRPC listen address"
 	assert_set "$alias" "$HOME_DIR/config/app.toml" "app-db-backend = \"pebbledb\"" "the app-db-backend"
+	# 201600 blocks is 14 days at 6 seconds (x/archive DefaultBlocksIn14Days). oramad's Commit
+	# never returns a retain height above the last archived height, so this prunes nothing while
+	# no range is archived.
+	assert_set "$alias" "$HOME_DIR/config/app.toml" "min-retain-blocks = 201600" "min-retain-blocks"
 	# The REST API (loopback 31003) is off by default; the gateway's /v1/chain/
 	# proxy and the node monitor read it.
 	if ! on "$alias" "sudo -u $SVC_USER awk '/^\[api\]/{a=1;next} /^\[/{a=0} a && /^enable = true/{f=1} END{exit !f}' $HOME_DIR/config/app.toml"; then
