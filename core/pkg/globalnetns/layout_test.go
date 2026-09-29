@@ -1,6 +1,9 @@
 package globalnetns
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -259,5 +262,81 @@ func TestInstalled_isTheNamespaceUnitOnDisk(t *testing.T) {
 func TestChainHost(t *testing.T) {
 	if ChainHost(true) != "198.18.0.2" || ChainHost(false) != "127.0.0.1" {
 		t.Errorf("ChainHost = %q / %q", ChainHost(true), ChainHost(false))
+	}
+}
+
+// The sysctls are written with ExecStart=-, so a write that failed is ignored. ExecStartPost reads them
+// back and fails the unit unless IPv6 is off on the host end and everywhere in the namespace; a kernel
+// with no IPv6 at all has nothing to check.
+func TestRenderUnit_failsWhenIPv6CouldNotBeSwitchedOff(t *testing.T) {
+	unit := testLayout().RenderUnit()
+	var hostCheck, nsCheck string
+	for _, line := range strings.Split(unit, "\n") {
+		switch {
+		case strings.HasPrefix(line, "ExecStartPost=/bin/sh -c"):
+			hostCheck = strings.TrimPrefix(line, "ExecStartPost=")
+		case strings.HasPrefix(line, "ExecStartPost=/usr/sbin/ip netns exec orama-global /bin/sh -c"):
+			nsCheck = strings.TrimPrefix(line, "ExecStartPost=/usr/sbin/ip netns exec orama-global ")
+		}
+	}
+	if hostCheck == "" || nsCheck == "" {
+		t.Fatalf("the unit has no ExecStartPost read-back of the IPv6 sysctls:\n%s", unit)
+	}
+	if strings.Contains(unit, "ExecStartPost=-") {
+		t.Errorf("an ExecStartPost that ignores failure would let a namespace with IPv6 start:\n%s", unit)
+	}
+	postAt, startAt := strings.Index(unit, "ExecStartPost="), strings.LastIndex(unit, "ExecStart=")
+	if postAt < startAt {
+		t.Error("the read-back must come after the last ExecStart")
+	}
+
+	// Run each check against a stand-in for /proc/sys/net/ipv6.
+	run := func(command, procDir string) (string, error) {
+		script := strings.TrimSuffix(strings.TrimPrefix(command, "/bin/sh -c '"), "'")
+		script = strings.ReplaceAll(script, "/proc/sys/net/ipv6", procDir)
+		out, err := exec.Command("/bin/sh", "-c", script).CombinedOutput()
+		return string(out), err
+	}
+	write := func(dir string, values map[string]string) {
+		for iface, v := range values {
+			path := filepath.Join(dir, "conf", iface, "disable_ipv6")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(v+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	off := t.TempDir()
+	write(off, map[string]string{"ogl-host": "1", "all": "1", "default": "1", "ogl-ns": "1"})
+	for name, cmd := range map[string]string{"host": hostCheck, "namespace": nsCheck} {
+		if out, err := run(cmd, off); err != nil {
+			t.Errorf("%s check failed with IPv6 off: %v %s", name, err, out)
+		}
+	}
+
+	on := t.TempDir()
+	write(on, map[string]string{"ogl-host": "0", "all": "1", "default": "1", "ogl-ns": "1"})
+	if out, err := run(hostCheck, on); err == nil || !strings.Contains(out, "IPv6 is still enabled") {
+		t.Errorf("the host check passed with IPv6 on the veth (%v): %s", err, out)
+	}
+	on = t.TempDir()
+	write(on, map[string]string{"ogl-host": "1", "all": "1", "default": "1", "ogl-ns": "0"})
+	if out, err := run(nsCheck, on); err == nil || !strings.Contains(out, "IPv6 is still enabled") {
+		t.Errorf("the namespace check passed with IPv6 on the namespace veth end (%v): %s", err, out)
+	}
+	missing := t.TempDir()
+	write(missing, map[string]string{"all": "1"})
+	if _, err := run(nsCheck, missing); err == nil {
+		t.Error("the namespace check passed with a sysctl file missing on a kernel that has IPv6")
+	}
+
+	if out, err := run(hostCheck, filepath.Join(t.TempDir(), "no-ipv6")); err != nil {
+		t.Errorf("a kernel with no IPv6 must pass: %v %s", err, out)
+	}
+	if out, err := run(nsCheck, filepath.Join(t.TempDir(), "no-ipv6")); err != nil {
+		t.Errorf("a kernel with no IPv6 must pass: %v %s", err, out)
 	}
 }

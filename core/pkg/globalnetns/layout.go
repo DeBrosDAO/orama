@@ -268,6 +268,9 @@ func (l Layout) RenderUnit() string {
 	for _, c := range start {
 		b.WriteString("ExecStart=" + c + "\n")
 	}
+	b.WriteString("ExecStartPost=" + ipv6OffCheck("the host end "+HostIface, ipv6DisableFile(HostIface)) + "\n")
+	b.WriteString("ExecStartPost=" + ip + " netns exec " + Name + " " +
+		ipv6OffCheck("the namespace "+Name, ipv6DisableFile("all"), ipv6DisableFile("default"), ipv6DisableFile(NSIface)) + "\n")
 	stop := []string{
 		nft + " delete table ip " + hostTable,
 		ip + " link del " + HostIface,
@@ -278,6 +281,25 @@ func (l Layout) RenderUnit() string {
 	}
 	b.WriteString("\n[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
+}
+
+// ipv6ProcDir exists only when the kernel has IPv6. A kernel booted with ipv6.disable=1 has none.
+const ipv6ProcDir = "/proc/sys/net/ipv6"
+
+func ipv6DisableFile(iface string) string {
+	return ipv6ProcDir + "/conf/" + iface + "/disable_ipv6"
+}
+
+// ipv6OffCheck is a unit command line that succeeds when the kernel has no IPv6 or every file holds
+// 1, and otherwise says what is still on and fails. It uses no systemd specifier or variable, so it
+// reads the same in the unit as in a shell.
+func ipv6OffCheck(what string, files ...string) string {
+	checks := make([]string, len(files))
+	for i, f := range files {
+		checks[i] = "grep -qx 1 " + f
+	}
+	return "/bin/sh -c 'test ! -d " + ipv6ProcDir + " || { " + strings.Join(checks, " && ") +
+		" || { echo IPv6 is still enabled on " + what + ", refusing to start the global network namespace >&2 && exit 1; }; }'"
 }
 
 // unitAnchors are the two lines ApplyToUnit inserts after; every global unit

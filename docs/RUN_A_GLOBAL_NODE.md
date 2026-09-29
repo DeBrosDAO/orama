@@ -359,7 +359,7 @@ it would put the units back in the root namespace.
 
 | File | Purpose |
 |------|---------|
-| `/etc/systemd/system/orama-global-netns.service` | A oneshot that creates the namespace, the veth pair `ogl-host` (root side, `198.18.0.1/30`) and `ogl-ns` (inside, `198.18.0.2/30`), the default route, and loads both rulesets, after switching IPv6 off on `ogl-host` and everywhere inside the namespace (the rulesets are IPv4 only); it takes them down on stop. No sandboxing on this unit, because `ip netns add` binds into the host's mount namespace. |
+| `/etc/systemd/system/orama-global-netns.service` | A oneshot that creates the namespace, the veth pair `ogl-host` (root side, `198.18.0.1/30`) and `ogl-ns` (inside, `198.18.0.2/30`), the default route, and loads both rulesets, after switching IPv6 off on `ogl-host` and everywhere inside the namespace (the rulesets are IPv4 only), then reading the sysctls back in `ExecStartPost=` and failing the unit (so no global unit starts) if IPv6 is still on anywhere; a kernel booted with `ipv6.disable=1`, which has no `/proc/sys/net/ipv6`, has nothing to check. It takes them down on stop. No sandboxing on this unit, because `ip netns add` binds into the host's mount namespace. |
 | `/etc/orama-global/netns-host.nft` | Root-namespace ruleset (table `ip orama_global`), see below |
 | `/etc/orama-global/netns.nft` | Ruleset loaded inside the namespace (table `ip orama_global_ns`) |
 | `/etc/orama-global/resolv.conf` | `9.9.9.9` and `1.1.1.1`. The host's stub resolver is on the host's loopback, which the namespace cannot reach. |
