@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	cmtcfg "github.com/cometbft/cometbft/config"
 	dbm "github.com/cosmos/cosmos-db"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/debug"
+	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/client/keys"
 	"github.com/cosmos/cosmos-sdk/client/pruning"
 	"github.com/cosmos/cosmos-sdk/client/rpc"
@@ -51,6 +54,67 @@ const defaultMinGasPriceNorama = "0.000001"
 // serves the public /v1/chain/query route, from running past a couple of thousand store reads.
 // chain/scripts/stagenet/deploy.sh sets the same value on nodes whose app.toml already exists.
 const defaultQueryGasLimit uint64 = 2_000_000
+
+// requireQueryGasLimit makes `oramad start` refuse a node whose app.toml has no query-gas-limit
+// (0 means unbounded in the SDK) unless it runs a localnet: the node serves the public
+// /v1/chain/query route, and a query with no gas limit can scan the whole state.
+func requireQueryGasLimit(rootCmd *cobra.Command) {
+	for _, sub := range rootCmd.Commands() {
+		if sub.Name() != "start" {
+			continue
+		}
+		run := sub.RunE
+		sub.RunE = func(cmd *cobra.Command, args []string) error {
+			svrCtx := server.GetServerContextFromCmd(cmd)
+			chainID, err := startChainID(svrCtx.Viper)
+			if err != nil {
+				return err
+			}
+			limit := svrCtx.Viper.GetUint64(server.FlagQueryGasLimit)
+			if err := checkQueryGasLimit(chainID, limit); err != nil {
+				return err
+			}
+			return run(cmd, args)
+		}
+		return
+	}
+}
+
+// checkQueryGasLimit refuses a query gas limit of 0 (unbounded) on any chain that is not a localnet.
+func checkQueryGasLimit(chainID string, limit uint64) error {
+	if limit != 0 || app.IsLocalnetChainID(chainID) {
+		return nil
+	}
+	return fmt.Errorf(
+		"app.toml sets query-gas-limit to 0 (unbounded) on chain %q: a public node must bound what one query can scan; "+
+			"set query-gas-limit = \"%d\" (the value oramad init writes) in <home>/config/app.toml and start again",
+		chainID, defaultQueryGasLimit)
+}
+
+// startChainID resolves the chain id the way the SDK's start command does: the chain-id flag or
+// setting, else the chain id of the genesis file.
+func startChainID(v *viper.Viper) (string, error) {
+	if chainID := v.GetString(flags.FlagChainID); chainID != "" {
+		return chainID, nil
+	}
+	genesisPath := v.GetString("genesis_file")
+	if genesisPath == "" {
+		genesisPath = filepath.Join("config", "genesis.json")
+	}
+	if !filepath.IsAbs(genesisPath) {
+		genesisPath = filepath.Join(v.GetString(flags.FlagHome), genesisPath)
+	}
+	f, err := os.Open(genesisPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open genesis file %s to read the chain id: %w", genesisPath, err)
+	}
+	defer f.Close()
+	chainID, err := genutiltypes.ParseChainIDFromGenesis(f)
+	if err != nil {
+		return "", fmt.Errorf("failed to read the chain id of genesis file %s: %w", genesisPath, err)
+	}
+	return chainID, nil
+}
 
 // initAppConfig returns oramad's default app.toml template and config.
 //
@@ -91,6 +155,8 @@ func initRootCmd(
 				"path of the out-of-process shielded proof verifier (default <home>/bin/"+app.ShieldedVerifierBinary+")")
 		},
 	})
+
+	requireQueryGasLimit(rootCmd)
 
 	rootCmd.AddCommand(
 		server.StatusCommand(),

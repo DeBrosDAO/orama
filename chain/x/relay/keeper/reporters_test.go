@@ -1,6 +1,7 @@
 package keeper_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -96,4 +97,26 @@ func relayRoot(t *testing.T) string {
 	_, file, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 	return filepath.Dir(filepath.Dir(file))
+}
+
+// The reporters query is public. Whatever wrote the set past types.MaxReporters, the query returns
+// no more than that, so it never walks an unbounded set.
+func TestReportersQuery_isCappedAtMaxReporters(t *testing.T) {
+	f := newTestFixture(t)
+	f.init(t, 1, []sdk.AccAddress{acc(1)}, nil)
+	for i := 0; i < types.MaxReporters+50; i++ {
+		addr := sdk.AccAddress(append(bytes.Repeat([]byte{7}, 18), byte(i>>8), byte(i)))
+		require.NoError(t, f.Keeper.Reporters.Set(f.Ctx, addr.String(), true))
+	}
+	res, err := keeper.NewQueryServerImpl(f.Keeper).Reporters(f.Ctx, &types.QueryReportersRequest{})
+	require.NoError(t, err)
+	require.Len(t, res.Reporters, types.MaxReporters)
+}
+
+func TestReportersQuery_returnsTheWholeSetUnderTheCap(t *testing.T) {
+	f := newTestFixture(t)
+	f.init(t, 1, []sdk.AccAddress{acc(1), acc(2)}, nil)
+	res, err := keeper.NewQueryServerImpl(f.Keeper).Reporters(f.Ctx, &types.QueryReportersRequest{})
+	require.NoError(t, err)
+	require.Len(t, res.Reporters, 2)
 }

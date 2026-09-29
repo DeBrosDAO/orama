@@ -53,7 +53,7 @@ func FirstHTTPEndpoint(nodeID string, endpoints []string) (string, error) {
 		if err != nil || u.Host == "" {
 			continue
 		}
-		root := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.EscapedPath()}
+		root := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}
 		return strings.TrimRight(root.String(), "/"), nil
 	}
 	return "", fmt.Errorf("node %s names no http(s) provider endpoint in x/nodes", nodeID)

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -273,5 +274,50 @@ func TestChainQueryRateLimiterIsMuchTighterThanTheGeneralOne(t *testing.T) {
 	if g.chainQueryRateLimiter.rate >= g.rateLimiter.rate/10 || g.chainQueryRateLimiter.burst >= g.rateLimiter.burst/10 {
 		t.Errorf("the chain query bucket (%.2f/s, burst %d) is not far tighter than the general one (%.2f/s, burst %d)",
 			g.chainQueryRateLimiter.rate, g.chainQueryRateLimiter.burst, g.rateLimiter.rate, g.rateLimiter.burst)
+	}
+}
+
+func TestBucketKey_ipv6ClientsShareTheirSlash64(t *testing.T) {
+	cases := map[string]string{
+		"203.0.113.7":                "203.0.113.7",
+		"::ffff:203.0.113.7":         "203.0.113.7",
+		"2001:db8:1:2:3:4:5:6":       "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff:ffff:0:1": "2001:db8:1:2::/64",
+		"2001:db8:1:3::1":            "2001:db8:1:3::/64",
+		"fe80::1%eth0":               "fe80::/64",
+		"not-an-address":             "not-an-address",
+	}
+	for in, want := range cases {
+		if got := bucketKey(in); got != want {
+			t.Errorf("bucketKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// One IPv6 client can source requests from any address in its /64, so the query bucket is the /64:
+// rotating the low 64 bits does not get a fresh burst, and another /64 has its own.
+func TestRateLimitMiddleware_chainQueryBucketIsTheIPv6Slash64(t *testing.T) {
+	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	g := &Gateway{
+		logger:                logger,
+		rateLimiter:           NewRateLimiter(100000, 100000),
+		chainQueryRateLimiter: NewRateLimiter(60, 3),
+	}
+	served := 0
+	handler := g.rateLimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { served++ }))
+	path := "/v1/chain/query/orama.nodes.v1.Query/Node"
+
+	for i := 0; i < 20; i++ {
+		client := fmt.Sprintf("2001:db8:1:2:%x::1", i+1)
+		handler.ServeHTTP(httptest.NewRecorder(), request("127.0.0.1:9999", client, path))
+	}
+	if served != 3 {
+		t.Errorf("served %d of 20 queries from one /64, want the burst of 3", served)
+	}
+
+	served = 0
+	handler.ServeHTTP(httptest.NewRecorder(), request("127.0.0.1:9999", "2001:db8:1:3::1", path))
+	if served != 1 {
+		t.Error("a different /64 must have its own bucket")
 	}
 }

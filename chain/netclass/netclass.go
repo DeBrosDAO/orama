@@ -19,6 +19,12 @@ import (
 // treat as a slash.
 const forbiddenHostChars = "%/?#@\\ "
 
+// localNameSuffixes are DNS suffixes that name a machine on a private network or the host itself,
+// never a public name: localhost and its localdomain form, mDNS (.local), and the suffixes home
+// routers and enterprise resolvers hand out (.internal, .lan, .home.arpa, RFC 8375). A host equal to
+// one of them, without the leading dot, is refused too.
+var localNameSuffixes = []string{".localhost", ".localdomain", ".local", ".internal", ".lan", ".home.arpa"}
+
 // special lists every range that is not globally routable unicast. IPv4-mapped IPv6 addresses are
 // unmapped before they are checked, so ::ffff:10.0.0.1 is classified as 10.0.0.1.
 var special = mustPrefixes(
@@ -106,8 +112,20 @@ func CheckHost(host string) error {
 	if strings.ContainsAny(host, forbiddenHostChars) {
 		return fmt.Errorf("host %q contains a character that is not part of a host (zone id, path, query, userinfo or space)", host)
 	}
-	name := strings.ToLower(strings.TrimSuffix(host, "."))
-	if name == "localhost" || strings.HasSuffix(name, ".localhost") || strings.HasSuffix(name, ".local") {
+	if !isASCIIHost(host) {
+		return fmt.Errorf("host %q contains a character outside printable ASCII: an internationalized name must be given in its xn-- form", host)
+	}
+	// Every trailing dot is dropped before the name is classified: a resolver ignores the root dot,
+	// so 127.1. and localhost. are what 127.1 and localhost are. A host with an empty label (a
+	// leading dot, a double dot, more than one trailing dot) is not a name.
+	name := strings.ToLower(strings.TrimRight(host, "."))
+	if name == "" {
+		return fmt.Errorf("host %q has an empty last label", host)
+	}
+	if strings.HasPrefix(name, ".") || strings.Contains(name, "..") || len(host)-len(strings.TrimRight(host, ".")) > 1 {
+		return fmt.Errorf("host %q has an empty label", host)
+	}
+	if isLocalName(name) {
 		return fmt.Errorf("host %q is not public", host)
 	}
 	if addr, err := netip.ParseAddr(host); err == nil {
@@ -123,6 +141,31 @@ func CheckHost(host string) error {
 		return fmt.Errorf("host %q ends in a number, so a resolver may read it as an obfuscated IPv4 address", host)
 	}
 	return nil
+}
+
+// isLocalName reports whether name (lower case, no trailing dot) is localhost, localhost.localdomain
+// or falls under a local-only suffix.
+func isLocalName(name string) bool {
+	if name == "localhost" || name == "localhost.localdomain" {
+		return true
+	}
+	for _, suffix := range localNameSuffixes {
+		if name == suffix[1:] || strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isASCIIHost reports whether host is printable ASCII only. A resolver may normalize a Unicode host
+// (full-width digits, IDNA mappings) into an address the ASCII checks never saw.
+func isASCIIHost(host string) bool {
+	for i := 0; i < len(host); i++ {
+		if host[i] < 0x21 || host[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // isNumericLabel reports whether label is decimal digits or a 0x-prefixed hex number: the forms

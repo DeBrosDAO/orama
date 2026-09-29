@@ -35,6 +35,14 @@ func TestCheckHost_refusesEveryNonPublicOrObfuscatedForm(t *testing.T) {
 		"10.0.0.1/x", "1.2.3.4/24", "1.2.3.4?x", "1.2.3.4#x", "user@1.2.3.4", "1.2.3.4 ", "",
 		// Local names.
 		"localhost", "LOCALHOST", "a.localhost", "printer.local",
+		"localhost.localdomain", "host.localdomain", "db.internal", "internal", "router.lan", "lan", "nas.home.arpa", "home.arpa",
+		"LOCALHOST.", "localhost..", "db.internal.", "a.b.local.",
+		// Every trailing dot is dropped before classification, so extra dots hide nothing.
+		"127.1..", "10.0.0.1..", "2130706433...", "0x7f.1..",
+		// An empty label is not a name.
+		".", "..", "example..com", ".example.com", "example.com..",
+		// Non-ASCII hosts: a resolver may normalize them into something the checks never saw.
+		"exämple.com", "１２７.０.０.１", "127.0.0.１", "ｅxample.com", "example.com\u200b", "tab\there.example", "ctl\x01.example",
 		// A malformed IPv6 literal is not a name either.
 		"2606:4700::zz", "1:2:3",
 	}

@@ -31,12 +31,15 @@ func (q queryServer) Params(goCtx context.Context, _ *types.QueryParamsRequest) 
 	return &types.QueryParamsResponse{Params: params}, nil
 }
 
+// Reporters lists the reporter set. Every writer of the set (genesis, governance) refuses more than
+// types.MaxReporters entries, and the query stops there as well, so a public query never walks a set
+// that something wrote past the bound.
 func (q queryServer) Reporters(goCtx context.Context, _ *types.QueryReportersRequest) (*types.QueryReportersResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	var reporters []string
 	if err := q.Keeper.Reporters.Walk(ctx, nil, func(addr string, _ bool) (bool, error) {
 		reporters = append(reporters, addr)
-		return false, nil
+		return len(reporters) >= types.MaxReporters, nil
 	}); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

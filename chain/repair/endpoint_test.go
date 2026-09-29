@@ -17,6 +17,9 @@ func TestFirstHTTPEndpoint_keepsSchemeHostAndPathOnly(t *testing.T) {
 		"fragment dropped":     {[]string{"https://node.example/x#frag"}, "https://node.example/x"},
 		"userinfo dropped":     {[]string{"https://user:pass@node.example/x"}, "https://node.example/x"},
 		"skips multiaddr":      {[]string{"/dns4/x/tcp/1", "https://node.example"}, "https://node.example"},
+		"escaped slash kept":   {[]string{"https://node.example/a%2Fb/c"}, "https://node.example/a%2Fb/c"},
+		"escaped space kept":   {[]string{"https://node.example/a%20b"}, "https://node.example/a%20b"},
+		"percent kept":         {[]string{"https://node.example/100%25"}, "https://node.example/100%25"},
 		"skips a hostless url": {[]string{"https:///path", "https://node.example"}, "https://node.example"},
 	}
 	for name, tc := range cases {

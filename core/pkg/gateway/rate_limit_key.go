@@ -3,6 +3,7 @@ package gateway
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 )
 
@@ -88,6 +89,30 @@ const (
 
 	chainQueryPathPrefix = "/v1/chain/query/"
 )
+
+// ipv6BucketBits is the prefix an IPv6 client is limited by. An IPv6 subscriber is routinely handed a
+// whole /64 and can source a request from any address inside it, so a bucket per address would give
+// one client 2^64 of them; the /64 is the smallest network a single host can be assumed to own.
+const ipv6BucketBits = 64
+
+// bucketKey is the key a client address is limited under: an IPv4 address as it is, an IPv6
+// address as its /64 prefix (an IPv4-mapped one as the IPv4 address). Anything that does not parse
+// is used as it is.
+func bucketKey(client string) string {
+	addr, err := netip.ParseAddr(client)
+	if err != nil {
+		return client
+	}
+	addr = addr.Unmap()
+	if !addr.Is6() {
+		return addr.String()
+	}
+	prefix, err := addr.WithZone("").Prefix(ipv6BucketBits)
+	if err != nil {
+		return client
+	}
+	return prefix.String()
+}
 
 // isChainQueryPath reports whether path is the public Orama module-query route.
 func isChainQueryPath(path string) bool {

@@ -61,11 +61,17 @@ var testnetRelaxedParams = map[string]bool{
 	"power.min_committee_size":        true,
 }
 
+// IsLocalnetChainID reports whether chainID names a localnet, the chain class where nothing is locked
+// and node safeguards meant for a public chain (an unbounded query gas limit is refused) do not apply.
+func IsLocalnetChainID(chainID string) bool {
+	return strings.Contains(chainID, localnetMarker)
+}
+
 // ValidateLockedGenesis returns an error naming every locked parameter in gs
 // that differs from its plan value in defaults, for chainID's class. defaults
 // is the app's DefaultGenesis. It never changes gs.
 func ValidateLockedGenesis(chainID string, defaults, gs GenesisState) error {
-	if strings.Contains(chainID, localnetMarker) {
+	if IsLocalnetChainID(chainID) {
 		return nil
 	}
 	relaxed := false

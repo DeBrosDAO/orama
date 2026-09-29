@@ -1153,7 +1153,12 @@ is the trust model:
   x/nodes validation, `LiteralIPs`, `NetworkOf` and the repair fetcher all use it, so a spelling one of
   them reads as a name cannot be read as an address by another. It parses with `netip` (no zone ids,
   no leading zeros) and refuses any host whose last label is a number (`2130706433`, `0x7f.1`, `127.1`,
-  `010.0.0.1`, `01.2.3.4`), because a resolver reads those as IPv4 addresses. A host with a zone id, or
+  `010.0.0.1`, `01.2.3.4`), because a resolver reads those as IPv4 addresses. Every trailing dot is
+  dropped before a name is classified (`127.1.` is `127.1`), a host with an empty label (a leading
+  dot, `..`, more than one trailing dot) is refused, and so is any host that is not printable ASCII
+  (an internationalized name is given in its `xn--` form). Names of the local machine or a private
+  network are refused: `localhost`, `localhost.localdomain` and anything under `.localhost`,
+  `.localdomain`, `.local`, `.internal`, `.lan` or `.home.arpa`. A host with a zone id, or
   a schemeless endpoint carrying a path, query or fragment (`10.0.0.1/x`), is refused, and the address in
   an `/ip4/` or `/ip6/` multiaddr part must be a literal of that family. An IPv4-mapped IPv6 address
   is its IPv4 form. Refused ranges: `0.0.0.0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`,
@@ -2048,7 +2053,12 @@ per-address rate-limit bucket (120 a minute, burst 30) apart from the gateway's 
 module queries run at once, and the rest get `503` with `Retry-After`; and the node's `app.toml`
 carries `query-gas-limit = "2000000"` (`oramad init` writes it, and the stagenet deploy script sets it
 on nodes that already have an `app.toml`), which stops a query that scans state after about two thousand
-store reads.
+store reads. A limit of 0 means unbounded in the SDK, so `oramad start` refuses to start with one on
+any chain id that does not contain `-localnet-`, and its error names the setting to fix.
+
+The route's rate-limit bucket is per client address, except that an IPv6 client is limited by its /64
+(a subscriber is routinely handed a whole /64 and can source a request from any address in it). The
+Reporters query is capped at the size of the reporter set (`MaxReporters`, 128) on the server.
 
 Per-account bank balances are not on this list. The explorer does not invent rows for a query this proxy
 does not serve.

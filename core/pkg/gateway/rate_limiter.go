@@ -164,7 +164,7 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 
 		// Every /v1/chain/query/ request runs a query on the chain process, so it has a bucket
 		// of its own instead of drawing on the general one.
-		if g.chainQueryRateLimiter != nil && isChainQueryPath(r.URL.Path) && !g.chainQueryRateLimiter.Allow(ip) {
+		if g.chainQueryRateLimiter != nil && isChainQueryPath(r.URL.Path) && !g.chainQueryRateLimiter.Allow(bucketKey(ip)) {
 			w.Header().Set("Retry-After", "10")
 			httputil.WriteRPCError(w, http.StatusTooManyRequests,
 				httputil.ErrCodeRateLimited,
