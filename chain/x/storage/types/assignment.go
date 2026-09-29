@@ -141,6 +141,11 @@ func eligible(c Candidate, rules PickRules) bool {
 		return false
 	}
 	if rules.Protocol {
+		// A node with no known network or ASN cannot prove it is distinct, so it cannot
+		// take a protocol-deal slot: "" and 0 would otherwise count as one shared value.
+		if c.Network16 == "" || c.ASN == 0 {
+			return false
+		}
 		if _, used := rules.UsedNetworks[c.Network16]; used {
 			return false
 		}

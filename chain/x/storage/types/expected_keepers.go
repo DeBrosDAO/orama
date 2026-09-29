@@ -50,8 +50,19 @@ type EmissionKeeper interface {
 
 // NodeView is the storage-relevant view of a node. x/storage does not import x/nodes.
 // Operator returns the operator's earnings address (bech32). DeclaredCapacity is bytes.
+//
+// IsActive means the node's STORAGE role is bonded at its minimum and the node is not jailed,
+// retired or tombstoned. Network16 is "" when the node has no literal-IP endpoint and ASN is 0
+// when the operator declared none; neither is verified on chain (docs/CHAIN.md, "Node network
+// identity").
+//
+// TakeStorageChanges drains the ids of STORAGE-role nodes written since the previous call, in id
+// order. MarkStorageChanged queues one back. x/storage reconciles its own node set from these in
+// BeginBlock (see Keeper.syncNodes).
 type NodeView interface {
 	IsActive(ctx context.Context, nodeID string) (bool, error)
+	TakeStorageChanges(ctx context.Context) ([]string, error)
+	MarkStorageChanged(ctx context.Context, nodeID string) error
 	HotKey(ctx context.Context, nodeID string) (sdk.AccAddress, error)
 	Operator(ctx context.Context, nodeID string) (string, error)
 	Network16(ctx context.Context, nodeID string) (string, error)

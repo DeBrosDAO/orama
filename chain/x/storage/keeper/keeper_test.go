@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -247,7 +248,26 @@ type nodeInfo struct {
 }
 
 type fakeNodes struct {
-	byID map[string]*nodeInfo
+	byID  map[string]*nodeInfo
+	dirty map[string]struct{}
+}
+
+// touch queues a node the way x/nodes does when it writes the node.
+func (n *fakeNodes) touch(id string) { n.dirty[id] = struct{}{} }
+
+func (n *fakeNodes) TakeStorageChanges(context.Context) ([]string, error) {
+	ids := make([]string, 0, len(n.dirty))
+	for id := range n.dirty {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	n.dirty = map[string]struct{}{}
+	return ids, nil
+}
+
+func (n *fakeNodes) MarkStorageChanged(_ context.Context, id string) error {
+	n.touch(id)
+	return nil
 }
 
 func (n *fakeNodes) IsActive(_ context.Context, id string) (bool, error) {
@@ -358,7 +378,7 @@ func newFixture(t *testing.T) *fixture {
 	earnings := &fakeEarnings{bank: bank, bal: map[string]math.Int{}}
 	deposits := &fakeDeposits{earnings: earnings, bank: bank, locked: map[string]math.Int{}, owner: map[string]string{}}
 	emission := &fakeEmission{epoch: 1, ceiling: map[uint64]math.Int{}, bank: bank, minted: map[uint64]math.Int{}}
-	nodes := &fakeNodes{byID: map[string]*nodeInfo{}}
+	nodes := &fakeNodes{byID: map[string]*nodeInfo{}, dirty: map[string]struct{}{}}
 	cdc := codec.NewProtoCodec(codectypes.NewInterfaceRegistry())
 	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, earnings, deposits, emission, nodes)
 	f := &fixture{

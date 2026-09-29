@@ -8,9 +8,12 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
-// BeginBlock assigns due deals, opens this epoch's challenges, and closes the
+// BeginBlock reconciles the tracked node set with x/nodes, assigns due deals, opens this epoch's challenges, and closes the
 // previous epoch when x/emission's epoch counter moves.
 func (k Keeper) BeginBlock(ctx sdk.Context) error {
+	if err := k.syncNodes(ctx); err != nil {
+		return err
+	}
 	epoch, err := k.currentEpoch(ctx)
 	if err != nil {
 		return err

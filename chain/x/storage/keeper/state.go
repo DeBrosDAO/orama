@@ -143,6 +143,18 @@ func (k Keeper) reservedOf(ctx sdk.Context, nodeID string) (uint64, error) {
 	return v, nil
 }
 
+// replicasHeld is how many replicas nodeID currently holds.
+func (k Keeper) replicasHeld(ctx sdk.Context, nodeID string) (uint64, error) {
+	n, err := k.ReplicaCount.Get(ctx, nodeID)
+	if err != nil {
+		if errors.Is(err, collections.ErrNotFound) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to read replica count of %s: %w", nodeID, err)
+	}
+	return n, nil
+}
+
 func (k Keeper) addReplica(ctx sdk.Context, slot *types.Slot) error {
 	count, err := k.ReplicaCount.Get(ctx, slot.NodeId)
 	if err != nil && !errors.Is(err, collections.ErrNotFound) {
