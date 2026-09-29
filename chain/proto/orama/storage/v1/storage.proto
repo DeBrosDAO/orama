@@ -242,8 +242,19 @@ message Settlement {
   // rather than a protocol-deal payment.
   bool subsidy = 11;
   // attempts counts how many times this row has already failed to apply. A failed row is queued
-  // again until it reaches MaxSettlementAttempts, then dropped.
+  // again until it reaches MaxSettlementAttempts, then dropped. Only a payout or a penalty is ever
+  // dropped: the miss counter and the eviction of a missed slot are applied when the row is first
+  // processed, in a step that reads and writes only x/storage's own state, and never retried.
   uint32 attempts = 12;
+  // not_before_epoch is the first epoch the row may be applied in. A row that failed is queued
+  // again with the next epoch here, so its retries are spaced by epochs and a failure that lasts
+  // a few blocks does not use up every attempt at once. Zero (a row that never failed) is due
+  // immediately.
+  uint64 not_before_epoch = 13;
+  // penalty_only is true for the row that carries the penalty of a miss whose miss counter and
+  // eviction were already applied: it changes no counter and pays nothing, and applying it is one
+  // attempt to slash the node.
+  bool penalty_only = 14;
 }
 
 // ChallengeRecord is one epoch's leaf challenge for a slot, and whether a

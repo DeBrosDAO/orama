@@ -1276,30 +1276,44 @@ protocol deals, scoring a closed challenge, counting active operators, the penal
 its own cache branch: a failure rolls that item back, emits `storage_item_failed` (`kind`, `subject`,
 `consecutive`, `error`) and the block goes on.
 
-Only failures that are about the one item are isolated: an error marked `ErrItemRejected` (every
-error a collaborator module returns while x/storage asks it to act for the item, an item that
-cannot be paid, a malformed record) or a record the item points to that is gone. Every other error,
-and every error that wraps a collections encoding fault even when a collaborator reports it, is a
-fault of the state machine and fails the block: reading or writing the module's own indexes and
-counters, or decoding what they hold, means the state can no longer be trusted. What happens to
-the failed item depends on it:
-- a settlement row is **queued again** behind the rows already waiting, with its `attempts` raised
-  (`storage_settlement_requeued`), so a failure that clears by itself costs the operator nothing. On
-  the `MaxSettlementAttempts`-th failure (5, a constant: it only bounds how long a broken row can
-  occupy the queue) the row is **dropped** (`storage_settlement_dropped`): it pays nothing, the deal
-  keeps the escrow the row would have moved (returned to the client when the deal expires), and the
-  mint reserved for it is burned so the storage account keeps holding exactly the mint payments
-  still queued and x/emission's supply invariant keeps holding. The burn must succeed; if it fails
-  the block fails, because a mint left behind breaks the storage invariant;
+Only failures that are about the one item are isolated: an error marked `ErrItemRejected`. x/storage
+marks its own consistency failures (an item that cannot be paid, a malformed record, a deal or slot
+the item points to that is gone) and, at its collaborator boundary, only the refusals a collaborator
+makes about the one item: funds that cannot cover the write (`ErrInsufficientFunds`), a blocked or
+unauthorized account (`ErrUnauthorized`) or a record that is not there (`ErrNotFound`, for example a
+deposit that does not exist), which bank and x/fees return, and a node that is gone or not active for
+the operation (`x/nodes` `ErrNotFound`, `ErrNotActive`), which the app's x/nodes adapter marks. Every
+other error, a collaborator's included, and every error that wraps a collections encoding fault even
+when a collaborator reports it, is a fault of the state machine and fails the block: a bare
+`collections.ErrNotFound` from x/storage's own indexes (`Reserved`, `ReplicaCount`, `ReplicaAt`,
+`Params`, `QueueTail`, `Nodes`), reading or writing the module's own counters, or decoding what they
+hold, means the state can no longer be trusted. What happens to the failed item depends on it:
+- a settlement payout row is **queued again** behind the rows already waiting, with its `attempts`
+  raised and `not_before_epoch` set to the next epoch (`storage_settlement_requeued`), so its retries
+  are spaced by epochs and a failure that clears by itself costs the operator nothing. A row that is
+  not due yet is moved to the back of the queue unchanged, at the cost of one of the block's
+  `max_settlements_per_block`. On the `MaxSettlementAttempts`-th failure (5, a constant: it only
+  bounds how long a broken row can occupy the queue) the row is **dropped**
+  (`storage_settlement_dropped`): it pays nothing, the deal keeps the escrow the row would have
+  moved (returned to the client when the deal expires), and the mint reserved for it is burned so
+  the storage account keeps holding exactly the mint payments still queued and x/emission's supply
+  invariant keeps holding. The burn must succeed; if it fails the block fails, because a mint left
+  behind breaks the storage invariant. A **miss** row is never queued again or dropped: its miss
+  counter and eviction read and write only x/storage's own state and are applied the first time the
+  row is processed (if the deal or slot it names is gone, the row is counted as one item's failure
+  and finished, since it carries no payment). Only its penalty can be retried and dropped, in a
+  row of its own (`penalty_only`) on the same schedule;
 - node reconciliation, deal assignment, accept windows, challenge opening, deal expiry and probation
   expiry are **retried** in the next block;
 - a scheduled protocol deal that cannot be created still counts as scheduled for its epoch.
 
 **A miss is always recorded and always evicts at the threshold.** A missed challenge raises the
 slot's consecutive misses, a slot at `miss_threshold` is evicted and repaired, and from the second
-consecutive miss on the node is penalized. The penalty runs in its own isolated branch after the
-miss is recorded (`slash` failures), so a node whose penalty fails still loses the slot it does not
-serve. The penalty is `slash_fraction` of one epoch's price of the missed deal:
+consecutive miss on the node is penalized. The miss is recorded and the slot evicted without any
+collaborator, and the penalty runs afterwards in its own isolated branch (`slash` failures): one
+that a collaborator refuses becomes a `penalty_only` settlement row retried once per epoch and dropped
+after `MaxSettlementAttempts` (`storage_settlement_dropped` with `penalty_only=true`), so a node whose
+penalty fails still loses the slot it does not serve. The penalty is `slash_fraction` of one epoch's price of the missed deal:
 - a bonded node is slashed through x/nodes, which clamps its declared capacity to what the smaller
   bond backs; x/storage then evicts the node's most recently assigned replicas until its reserved
   bytes fit the clamped declaration, so reserved never exceeds declared;

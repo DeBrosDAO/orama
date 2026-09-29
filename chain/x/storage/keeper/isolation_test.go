@@ -155,15 +155,29 @@ func TestSettlement_oneUnpayableRowIsRetriedThenDroppedAndTheQueueKeepsDraining(
 	f.requireInvariants(t)
 	burnedBefore := f.Bank.burned
 
-	for i := uint32(1); i < types.MaxSettlementAttempts-1; i++ {
-		f.begin(t)
-		f.end(t)
+	row := f.queuedRows(t)[0]
+	require.Equal(t, uint32(1), row.Attempts)
+	require.Equal(t, f.Emission.epoch+1, row.NotBeforeEpoch, "the retry is due the next epoch, not the next block")
+	for i := 0; i < 5; i++ {
+		require.NoError(t, f.Keeper.SettleQueue(f.Ctx))
+	}
+	rows := f.queuedRows(t)
+	require.Len(t, rows, 1)
+	require.Equal(t, row.Attempts, rows[0].Attempts, "more blocks of the same epoch neither retry the row nor use up its attempts")
+	require.Equal(t, row.NotBeforeEpoch, rows[0].NotBeforeEpoch)
+
+	for attempt := uint32(2); attempt < types.MaxSettlementAttempts; attempt++ {
+		f.Emission.epoch++
+		require.NoError(t, f.Keeper.SettleQueue(f.Ctx))
+		rows = f.queuedRows(t)
+		require.Len(t, rows, 1, "the row is still retried on attempt %d", attempt)
+		require.Equal(t, attempt, rows[0].Attempts)
 		queued, err = f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
 		require.NoError(t, err)
-		require.Equal(t, uint64(1), queued.Pending, "the row is still retried on attempt %d", i+1)
+		require.Equal(t, uint64(1), queued.Pending)
 	}
-	f.begin(t)
-	f.end(t)
+	f.Emission.epoch++
+	require.NoError(t, f.Keeper.SettleQueue(f.Ctx))
 
 	queued, err = f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
 	require.NoError(t, err)
@@ -190,8 +204,8 @@ func TestSettlement_aTransientFailureIsRetriedAndPaid(t *testing.T) {
 
 	f.Earnings.failCredit = ""
 	burnedBefore := f.Bank.burned
-	f.begin(t)
-	f.end(t)
+	f.Emission.epoch++
+	require.NoError(t, f.Keeper.SettleQueue(f.Ctx))
 
 	queued, err := f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
 	require.NoError(t, err)
@@ -410,4 +424,15 @@ func TestSettlement_collaboratorRefusalsAreIsolated(t *testing.T) {
 			require.NotZero(t, n)
 		})
 	}
+}
+
+// queuedRows returns the settlement rows still waiting, in queue order.
+func (f *fixture) queuedRows(t *testing.T) []types.Settlement {
+	t.Helper()
+	var rows []types.Settlement
+	require.NoError(t, f.Keeper.Queue.Walk(f.Ctx, nil, func(_ uint64, s types.Settlement) (bool, error) {
+		rows = append(rows, s)
+		return false, nil
+	}))
+	return rows
 }

@@ -268,13 +268,17 @@ func (k Keeper) SettleQueue(ctx sdk.Context) error {
 	if err != nil {
 		return err
 	}
+	epoch, err := k.emission.CurrentEpoch(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to read the current epoch: %w", err)
+	}
 	var n uint64
 	for head < tail && n < p.MaxSettlementsPerBlock {
 		item, err := k.Queue.Get(ctx, head)
 		if err != nil {
 			return fmt.Errorf("failed to load settlement %d: %w", head, err)
 		}
-		if err := k.settleOne(ctx, p, item); err != nil {
+		if err := k.settleOne(ctx, p, epoch, item); err != nil {
 			return fmt.Errorf("settlement %d: %w", head, err)
 		}
 		if err := k.Queue.Remove(ctx, head); err != nil {
@@ -289,47 +293,130 @@ func (k Keeper) SettleQueue(ctx sdk.Context) error {
 	return k.QueueHead.Set(ctx, head)
 }
 
-// settleOne applies one queue row on its own cache branch. A row that cannot be applied (the
-// operator cannot be paid, a module account is short, the deal or slot record is unreadable) has its
-// writes rolled back, a storage_item_failed event and the node's settlement failure count report it,
-// and the queue moves on. Returning the error instead would fail EndBlock, and with it FinalizeBlock
-// on every validator, over one node's payout.
+// settleOne applies one queue row. A row that is not due yet (see Settlement.NotBeforeEpoch) is
+// queued again unchanged. A miss row and a payout row are different work, and only the payout and
+// the penalty are ever retried or dropped:
 //
-// A failed row is not lost on the first failure: it is queued again behind the rows already waiting
-// with its attempts raised, so a failure that clears by itself does not cost the operator the
-// payout. On the MaxSettlementAttempts-th failure the row is dropped: it pays nothing, the deal keeps
-// the escrow the row would have moved (returned to the client when the deal expires), and any
-// subsidy or protocol mint reserved for the row is burned so the storage account keeps holding
-// exactly the mint payments still queued. A failure that is not about the row (see isItemFailure)
-// is returned and fails the block.
-func (k Keeper) settleOne(ctx sdk.Context, p types.Params, item types.Settlement) error {
-	subject := item.NodeId
-	if subject == "" {
-		subject = dealSubject(item.DealId)
+//   - a miss row applies the miss counter and the eviction of the slot, which read and write only
+//     x/storage's own state (settleMiss). That step is never retried and never dropped: if the
+//     deal or the slot it names is gone there is nothing left to count against, and any other
+//     failure is a fault that fails the block. The penalty that follows needs x/nodes or x/fees,
+//     so it travels in a row of its own (penalty_only) that is retried and dropped like a payout.
+//   - a payout row is applied on its own cache branch. A payout that cannot be applied (the operator
+//     cannot be paid, a module account is short, the deal or slot record is unreadable) has its
+//     writes rolled back, a storage_item_failed event and the node's settlement failure count
+//     report it, and the queue moves on. Returning the error instead would fail EndBlock, and with
+//     it FinalizeBlock on every validator, over one node's payout.
+//
+// A failed payout or penalty is not lost on the first failure: it is queued again behind the rows
+// already waiting, due the next epoch, with its attempts raised, so a failure that clears by itself
+// does not cost the operator the payout. On the MaxSettlementAttempts-th failure it is dropped: it
+// pays nothing, the deal keeps the escrow the row would have moved (returned to the client when the
+// deal expires), and any subsidy or protocol mint reserved for the row is burned so the storage
+// account keeps holding exactly the mint payments still queued. A failure that is not about the row
+// (see isItemFailure) is returned and fails the block.
+func (k Keeper) settleOne(ctx sdk.Context, p types.Params, epoch uint64, item types.Settlement) error {
+	switch {
+	case item.NotBeforeEpoch > epoch:
+		return k.enqueue(ctx, item)
+	case item.PenaltyOnly:
+		return k.settlePenalty(ctx, p, epoch, item)
+	case !item.Proved:
+		return k.settleMiss(ctx, p, epoch, item)
 	}
-	failed, err := k.isolate(ctx, FailureKindSettlement, subject, func(c sdk.Context) error {
-		return k.applySettlement(c, p, item)
+	return k.settlePayout(ctx, p, epoch, item)
+}
+
+func settlementSubject(item types.Settlement) string {
+	if item.NodeId == "" {
+		return dealSubject(item.DealId)
+	}
+	return item.NodeId
+}
+
+func (k Keeper) settlePayout(ctx sdk.Context, p types.Params, epoch uint64, item types.Settlement) error {
+	failed, err := k.isolate(ctx, FailureKindSettlement, settlementSubject(item), func(c sdk.Context) error {
+		return k.applyPayout(c, p, item)
 	})
 	if err != nil || !failed {
 		return err
 	}
-	item.Attempts++
-	if item.Attempts < types.MaxSettlementAttempts {
-		if err := k.enqueue(ctx, item); err != nil {
-			return err
-		}
-		ctx.EventManager().EmitEvent(sdk.NewEvent("storage_settlement_requeued",
-			sdk.NewAttribute("deal_id", fmt.Sprintf("%d", item.DealId)),
-			sdk.NewAttribute("node_id", item.NodeId),
-			sdk.NewAttribute("attempts", fmt.Sprintf("%d", item.Attempts)),
-		))
-		return nil
+	return k.retryOrDrop(ctx, epoch, item)
+}
+
+// settleMiss applies the miss counter and the eviction of a missed slot in a step that depends on
+// no collaborator, then hands the penalty on. The step is isolated only so that a deal or slot that
+// is gone (an item failure of the row) is counted and finishes the row: a miss row carries no
+// payment, so nothing is lost by not retrying it.
+func (k Keeper) settleMiss(ctx sdk.Context, p types.Params, epoch uint64, item types.Settlement) error {
+	var penalize bool
+	failed, err := k.isolate(ctx, FailureKindSettlement, settlementSubject(item), func(c sdk.Context) error {
+		var merr error
+		penalize, merr = k.applyMissRow(c, p, item)
+		return merr
+	})
+	if err != nil || failed || !penalize {
+		return err
 	}
-	ctx.EventManager().EmitEvent(sdk.NewEvent("storage_settlement_dropped",
+	item.PenaltyOnly = true
+	return k.settlePenalty(ctx, p, epoch, item)
+}
+
+// applyMissRow records the miss of a row's node on its slot: the counter, the eviction or the
+// rechallenge. It reports whether the node's consecutive misses call for a penalty. A row about a
+// node that no longer holds the slot changes nothing: that node's miss count is not this row's to
+// change.
+func (k Keeper) applyMissRow(ctx sdk.Context, p types.Params, item types.Settlement) (penalize bool, err error) {
+	deal, err := k.loadDeal(ctx, item.DealId)
+	if err != nil {
+		return false, err
+	}
+	slot, err := k.loadSlot(ctx, item.DealId, item.Slot)
+	if err != nil {
+		return false, err
+	}
+	if slot.NodeId == "" || slot.NodeId != item.NodeId {
+		return false, nil
+	}
+	return k.applyMiss(ctx, p, deal, slot)
+}
+
+// settlePenalty applies the penalty of one miss on its own cache branch. A penalty that x/nodes or
+// x/fees refuses is retried in a later epoch and dropped after MaxSettlementAttempts, with the
+// failure counted against the node; the miss and the eviction it belongs to already happened.
+func (k Keeper) settlePenalty(ctx sdk.Context, p types.Params, epoch uint64, item types.Settlement) error {
+	failed, err := k.isolate(ctx, FailureKindSlash, item.NodeId, func(c sdk.Context) error {
+		deal, derr := k.loadDeal(c, item.DealId)
+		if derr != nil {
+			return derr
+		}
+		return k.penalize(c, p, deal, item.NodeId)
+	})
+	if err != nil || !failed {
+		return err
+	}
+	return k.retryOrDrop(ctx, epoch, item)
+}
+
+// retryOrDrop queues a failed payout or penalty again, due the next epoch, or drops it on its last
+// attempt.
+func (k Keeper) retryOrDrop(ctx sdk.Context, epoch uint64, item types.Settlement) error {
+	item.Attempts++
+	attrs := []sdk.Attribute{
 		sdk.NewAttribute("deal_id", fmt.Sprintf("%d", item.DealId)),
 		sdk.NewAttribute("node_id", item.NodeId),
 		sdk.NewAttribute("attempts", fmt.Sprintf("%d", item.Attempts)),
-	))
+		sdk.NewAttribute("penalty_only", fmt.Sprintf("%t", item.PenaltyOnly)),
+	}
+	if item.Attempts < types.MaxSettlementAttempts {
+		item.NotBeforeEpoch = epoch + 1
+		if err := k.enqueue(ctx, item); err != nil {
+			return err
+		}
+		ctx.EventManager().EmitEvent(sdk.NewEvent("storage_settlement_requeued", attrs...))
+		return nil
+	}
+	ctx.EventManager().EmitEvent(sdk.NewEvent("storage_settlement_dropped", attrs...))
 	if !item.MintPay.IsPositive() {
 		return nil
 	}
@@ -345,7 +432,9 @@ func (k Keeper) burnDroppedMint(ctx sdk.Context, item types.Settlement) error {
 	return nil
 }
 
-func (k Keeper) applySettlement(ctx sdk.Context, p types.Params, item types.Settlement) error {
+// applyPayout pays a proved row: the node's misses reset and its escrow, mint and archive top-up
+// are paid to its operator.
+func (k Keeper) applyPayout(ctx sdk.Context, p types.Params, item types.Settlement) error {
 	deal, err := k.loadDeal(ctx, item.DealId)
 	if err != nil {
 		return err
@@ -357,14 +446,7 @@ func (k Keeper) applySettlement(ctx sdk.Context, p types.Params, item types.Sett
 	// A row is about the node that was challenged. If the slot has since gone
 	// to another node, that node's miss count and rechallenge are not this
 	// row's to change.
-	holder := slot.NodeId != "" && slot.NodeId == item.NodeId
-	if !item.Proved {
-		if !holder {
-			return nil
-		}
-		return k.applyMiss(ctx, p, deal, slot)
-	}
-	if holder {
+	if slot.NodeId != "" && slot.NodeId == item.NodeId {
 		slot.ConsecutiveMisses = 0
 		if err := k.Rechallenge.Remove(ctx, collections.Join(slot.NodeId, rechallengeID(slot.DealId, slot.Index))); err != nil {
 			return err
@@ -384,36 +466,30 @@ func (k Keeper) applySettlement(ctx sdk.Context, p types.Params, item types.Sett
 }
 
 // applyMiss records one missed challenge: the node's consecutive misses rise, a slot at the miss
-// threshold is evicted, any other missed slot is challenged again next epoch, and from the second
-// consecutive miss on the node is penalized. The miss and the eviction never depend on the penalty:
-// a node that cannot be slashed (its capacity state, no bond, a refusing collaborator) still loses
-// a slot it does not serve.
-func (k Keeper) applyMiss(ctx sdk.Context, p types.Params, deal types.Deal, slot types.Slot) error {
+// threshold is evicted and any other missed slot is challenged again next epoch. It reads and writes
+// only x/storage's own state, so it cannot fail because a collaborator refuses something, and it
+// reports whether the node's consecutive misses (from the second on) call for a penalty, which the
+// caller applies separately.
+func (k Keeper) applyMiss(ctx sdk.Context, p types.Params, deal types.Deal, slot types.Slot) (penalize bool, err error) {
 	slot.ConsecutiveMisses++
 	nodeID := slot.NodeId
-	penalized := slot.ConsecutiveMisses >= 2 && nodeID != ""
+	penalize = slot.ConsecutiveMisses >= 2 && nodeID != ""
 	switch {
 	case slot.ConsecutiveMisses >= p.MissThreshold && nodeID != "":
 		if err := k.evictSlot(ctx, deal, slot); err != nil {
-			return err
+			return false, err
 		}
 	default:
 		if nodeID != "" {
 			if err := k.Rechallenge.Set(ctx, collections.Join(nodeID, rechallengeID(slot.DealId, slot.Index))); err != nil {
-				return err
+				return false, err
 			}
 		}
 		if err := k.saveSlot(ctx, slot); err != nil {
-			return err
+			return false, err
 		}
 	}
-	if !penalized {
-		return nil
-	}
-	_, err := k.isolate(ctx, FailureKindSlash, nodeID, func(c sdk.Context) error {
-		return k.penalize(c, p, deal, nodeID)
-	})
-	return err
+	return penalize, nil
 }
 
 // evictSlot takes a slot from the node that holds it: the node's replica and reserved bytes go

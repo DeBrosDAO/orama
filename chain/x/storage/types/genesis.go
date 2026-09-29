@@ -97,6 +97,9 @@ func (gs GenesisState) Validate() error {
 		if s.EscrowPay.IsNil() || s.EscrowPay.IsNegative() || s.MintPay.IsNil() || s.MintPay.IsNegative() || s.ArchiveTopUp.IsNil() || s.ArchiveTopUp.IsNegative() {
 			return fmt.Errorf("settlement %d amounts must be non-negative", s.Seq)
 		}
+		if s.PenaltyOnly && (s.Proved || !s.EscrowPay.IsZero() || !s.MintPay.IsZero() || !s.ArchiveTopUp.IsZero()) {
+			return fmt.Errorf("settlement %d is a penalty and must be a miss that pays nothing", s.Seq)
+		}
 	}
 	for _, m := range gs.EpochMints {
 		if m.Minted.IsNil() || m.Minted.IsNegative() {

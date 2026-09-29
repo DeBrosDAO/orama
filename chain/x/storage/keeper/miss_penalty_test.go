@@ -202,3 +202,114 @@ func TestMiss_probationNodeWithoutADepositIsStillEvicted(t *testing.T) {
 	require.Contains(t, eventTypes(f.Ctx), "storage_slot_evicted")
 	f.requireInvariants(t)
 }
+
+func (f *fixture) penaltyRows(t *testing.T) []types.Settlement {
+	t.Helper()
+	var out []types.Settlement
+	for _, row := range f.queuedRows(t) {
+		if row.PenaltyOnly {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// The miss counter and the eviction do not wait for the penalty: a refused penalty travels in a row
+// of its own, due in a later epoch, and the miss row itself is finished.
+func TestMiss_aRefusedPenaltyIsQueuedAsItsOwnRowDueLater(t *testing.T) {
+	f, nodes, _ := twoFullDeals(t)
+	for _, n := range nodes {
+		n.slashErr = types.Refuse(errf("node %s does not have role STORAGE", n.id))
+	}
+
+	f.missEpochs(t, 3)
+
+	rows := f.penaltyRows(t)
+	require.NotEmpty(t, rows, "the refused penalties are queued again")
+	for _, row := range rows {
+		require.True(t, row.PenaltyOnly)
+		require.False(t, row.Proved)
+		require.Zero(t, row.EscrowPay.Int64()+row.MintPay.Int64()+row.ArchiveTopUp.Int64(), "a penalty row pays nothing")
+		require.NotZero(t, row.Attempts)
+		require.Greater(t, row.NotBeforeEpoch, f.Emission.epoch-1, "a retry is not due before a later epoch")
+	}
+	for _, row := range f.queuedRows(t) {
+		require.True(t, row.PenaltyOnly || row.NotBeforeEpoch == 0 || row.Proved, "no miss row is ever queued again")
+	}
+	f.requireInvariants(t)
+}
+
+// A penalty that keeps being refused is retried once per epoch and then dropped, and the drop never
+// reaches back into the miss: the slot's counters and the eviction stay as they were applied.
+func TestMiss_aPenaltyRefusedEveryTimeIsDroppedAfterTheLastAttempt(t *testing.T) {
+	f, nodes, _ := twoFullDeals(t)
+	for _, n := range nodes {
+		n.slashErr = types.Refuse(errf("node %s does not have role STORAGE", n.id))
+	}
+	f.missEpochs(t, 3)
+	require.NotEmpty(t, f.penaltyRows(t))
+
+	dropped := false
+	for i := 0; i < int(types.MaxSettlementAttempts)+2; i++ {
+		f.Emission.epoch++
+		f.Ctx = f.Ctx.WithEventManager(sdk.NewEventManager())
+		require.NoError(t, f.Keeper.SettleQueue(f.Ctx))
+		for _, ev := range f.Ctx.EventManager().Events() {
+			if ev.Type == "storage_settlement_dropped" {
+				for _, a := range ev.Attributes {
+					if a.Key == "penalty_only" && a.Value == "true" {
+						dropped = true
+					}
+				}
+			}
+		}
+	}
+	require.True(t, dropped, "a penalty refused on every attempt is dropped")
+	require.Empty(t, f.penaltyRows(t))
+	for _, n := range nodes {
+		require.Zero(t, n.slashN)
+	}
+	f.requireInvariants(t)
+}
+
+// A penalty that is refused once and then goes through is applied on the retry.
+func TestMiss_aRefusedPenaltyIsAppliedWhenItsRetryGoesThrough(t *testing.T) {
+	f, nodes, _ := twoFullDeals(t)
+	for _, n := range nodes {
+		n.slashErr = types.Refuse(errf("node %s does not have role STORAGE", n.id))
+	}
+	f.missEpochs(t, 3)
+	require.NotEmpty(t, f.penaltyRows(t))
+	for _, n := range nodes {
+		n.slashErr = nil
+	}
+
+	f.Emission.epoch++
+	require.NoError(t, f.Keeper.SettleQueue(f.Ctx))
+
+	total := 0
+	for _, n := range nodes {
+		total += n.slashN
+	}
+	require.NotZero(t, total, "the retry slashed the nodes")
+	require.Empty(t, f.penaltyRows(t))
+	f.requireInvariants(t)
+}
+
+// A miss row is not a payment: when the deal it names is gone there is nothing left to count the
+// miss against, so it is finished (and counted as one item's failure), never queued again and never
+// burned or dropped with a payout's bookkeeping.
+func TestMiss_aMissRowOfAMissingDealIsFinishedNotRetried(t *testing.T) {
+	f, _, _ := twoFullDeals(t)
+	require.NoError(t, f.Keeper.Queue.Set(f.Ctx, 999, types.Settlement{Seq: 999, DealId: 12345, Slot: 0, NodeId: "n", Proved: false}))
+	require.NoError(t, f.Keeper.QueueTail.Set(f.Ctx, 1000))
+	require.NoError(t, f.Keeper.QueueHead.Set(f.Ctx, 999))
+	require.NoError(t, f.Keeper.QueuePending.Set(f.Ctx, 12345, 1))
+
+	require.NoError(t, f.Keeper.SettleQueue(f.Ctx))
+
+	require.Empty(t, f.queuedRows(t))
+	n, err := f.Keeper.FailureCount(f.Ctx, "n", keeper.FailureKindSettlement)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), n)
+}
