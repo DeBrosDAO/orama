@@ -178,7 +178,8 @@ func readHexSecret(cmd *cobra.Command, flag string) (secret []byte, path string,
 	}
 	secret, err = hex.DecodeString(strings.TrimSpace(string(body)))
 	if err != nil {
-		return nil, path, fmt.Errorf("--%s %s is not hex: %w", flag, path, err)
+		// The decode error quotes the offending byte, which is key material.
+		return nil, path, fmt.Errorf("--%s %s is not valid hex", flag, path)
 	}
 	return secret, path, nil
 }
