@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/chain/piece"
 	"github.com/DeBrosOfficial/network/chain/storagekey"
@@ -155,5 +158,14 @@ func TestLoadSeeds_refusesReadableMismatchedAndShortSeeds(t *testing.T) {
 	}
 	if _, err := LoadSeeds(dir); err == nil {
 		t.Fatal("a readable seed was accepted")
+	}
+}
+
+func TestPublicHTTPClient_refusesALoopbackEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	_, err := HTTP{Client: PublicHTTPClient(time.Second)}.Fetch(context.Background(), srv.URL, make([]byte, 32))
+	if !errors.Is(err, ErrNotPublic) {
+		t.Fatalf("got %v, want ErrNotPublic", err)
 	}
 }

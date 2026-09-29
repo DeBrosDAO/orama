@@ -39,9 +39,10 @@ func (s *Store) Assignments() ([]Assignment, error) {
 }
 
 // Release drops the dealID/slot binding. The piece bytes are removed only
-// when no other binding still names the same CID. Releasing a slot that is
+// when no other binding names the same CID and keep does not claim it (the
+// runner keeps a piece a waiting slot will accept). Releasing a slot that is
 // not bound is a no-op.
-func (s *Store) Release(dealID uint64, slot uint32) error {
+func (s *Store) Release(dealID uint64, slot uint32, keep func(cid string) bool) error {
 	cid, ok, err := s.Lookup(dealID, slot)
 	if err != nil {
 		return err
@@ -60,6 +61,9 @@ func (s *Store) Release(dealID uint64, slot uint32) error {
 		if a.CID == cid {
 			return nil
 		}
+	}
+	if keep != nil && keep(cid) {
+		return nil
 	}
 	for _, path := range []string{s.piecePath(cid), s.metaPath(cid)} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

@@ -3,12 +3,14 @@ package provider
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/client/node"
 	"github.com/DeBrosOfficial/network/chain/client/tx"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
+	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
 	"github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
@@ -70,4 +72,17 @@ func (c *NodeChain) Challenges(ctx context.Context, epoch uint64, nodeID string)
 func (c *NodeChain) Submit(ctx context.Context, msgs ...sdk.Msg) error {
 	_, err := c.Client.Submit(ctx, c.hot, msgs...)
 	return err
+}
+
+// RegisteredHeight is the block at which x/nodes registered nodeID. Nothing
+// is assigned to a node before it, so it is where a new provider starts.
+func (c *NodeChain) RegisteredHeight(ctx context.Context, nodeID string) (int64, error) {
+	var resp nodestypes.QueryNodeResponse
+	if err := c.Query(ctx, "/orama.nodes.v1.Query/Node", &nodestypes.QueryNodeRequest{NodeId: nodeID}, &resp); err != nil {
+		return 0, fmt.Errorf("read node %s from x/nodes: %w", nodeID, err)
+	}
+	if resp.Node.RegisteredAtHeight < 1 {
+		return 0, fmt.Errorf("node %s has no registration height in x/nodes", nodeID)
+	}
+	return resp.Node.RegisteredAtHeight, nil
 }

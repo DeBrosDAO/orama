@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/DeBrosOfficial/network/chain/x/storage/types"
@@ -9,27 +10,29 @@ import (
 
 // settlePending accepts each waiting slot whose piece arrived, declines one
 // whose accept window is about to close, and forgets one the chain no longer
-// assigns to this node.
+// assigns to this node. A slot that fails is reported and the rest still run.
 func (r *Runner) settlePending(ctx context.Context, latest int64, params types.Params) error {
+	var errs []error
 	for _, p := range r.pendingCopy() {
-		slot, err := r.chain.Slot(ctx, p.DealID, p.Slot)
-		if err != nil {
-			return err
-		}
-		if slot.NodeId != r.nodeID || slot.Status != types.SlotStatus_SLOT_STATUS_ASSIGNED || slot.Accepted {
-			if err := r.dropPending(p.DealID, p.Slot); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := r.notePendingRoot(p.DealID, p.Slot, rootName(slot.PieceRoot)); err != nil {
-			return err
-		}
-		if err := r.decide(ctx, latest, params, slot); err != nil {
-			return err
+		if err := r.settleOne(ctx, latest, params, p); err != nil {
+			errs = append(errs, fmt.Errorf("deal %d slot %d: %w", p.DealID, p.Slot, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+func (r *Runner) settleOne(ctx context.Context, latest int64, params types.Params, p pendingSlot) error {
+	slot, err := r.chain.Slot(ctx, p.DealID, p.Slot)
+	if err != nil {
+		return err
+	}
+	if slot.NodeId != r.nodeID || slot.Status != types.SlotStatus_SLOT_STATUS_ASSIGNED || slot.Accepted {
+		return r.dropPending(p.DealID, p.Slot)
+	}
+	if err := r.notePendingRoot(p.DealID, p.Slot, rootName(slot.PieceRoot)); err != nil {
+		return err
+	}
+	return r.decide(ctx, latest, params, slot)
 }
 
 func (r *Runner) decide(ctx context.Context, latest int64, params types.Params, slot types.Slot) error {
@@ -49,6 +52,7 @@ func (r *Runner) decide(ctx context.Context, latest int64, params types.Params, 
 		if err := r.chain.Submit(ctx, accept); err != nil {
 			return fmt.Errorf("accept deal %d slot %d: %w", slot.DealId, slot.Index, err)
 		}
+		r.accepted = true
 	} else {
 		if err := r.chain.Submit(ctx, decline); err != nil {
 			return fmt.Errorf("decline deal %d slot %d: %w", slot.DealId, slot.Index, err)
@@ -62,7 +66,11 @@ func (r *Runner) decide(ctx context.Context, latest int64, params types.Params, 
 // piece. A proof tx that is dropped is rebuilt on the next step, because the
 // chain still lists the challenge as unproved.
 func (r *Runner) answer(ctx context.Context, epoch uint64) (int, error) {
-	challenges, err := r.chain.Challenges(ctx, epoch, r.nodeID)
+	listed, err := r.chain.Challenges(ctx, epoch, r.nodeID)
+	if err != nil {
+		return 0, err
+	}
+	challenges, err := r.heldChallenges(ctx, listed)
 	if err != nil {
 		return 0, err
 	}
@@ -78,6 +86,27 @@ func (r *Runner) answer(ctx context.Context, epoch uint64) (int, error) {
 		}
 	}
 	return len(missing), nil
+}
+
+// heldChallenges keeps the unproved challenges on slots the chain still
+// assigns to this node. A challenge opened before the slot was evicted or
+// reassigned stays listed, and the chain refuses a proof for it, which would
+// fail the whole batch.
+func (r *Runner) heldChallenges(ctx context.Context, listed []types.Challenge) ([]types.Challenge, error) {
+	var out []types.Challenge
+	for _, ch := range listed {
+		if ch.Proved {
+			continue
+		}
+		slot, err := r.chain.Slot(ctx, ch.DealId, ch.Slot)
+		if err != nil {
+			return nil, err
+		}
+		if holds(slot, r.nodeID) {
+			out = append(out, ch)
+		}
+	}
+	return out, nil
 }
 
 // sweep releases a bound slot once the chain has stopped naming this node
@@ -100,7 +129,7 @@ func (r *Runner) sweep(ctx context.Context, epoch uint64) error {
 		if epoch < r.markGone(a.DealID, a.Slot, epoch)+ReleaseGraceEpochs {
 			continue
 		}
-		if err := r.store.Release(a.DealID, a.Slot); err != nil {
+		if err := r.store.Release(a.DealID, a.Slot, r.Assigned); err != nil {
 			return err
 		}
 		r.clearGone(a.DealID, a.Slot)

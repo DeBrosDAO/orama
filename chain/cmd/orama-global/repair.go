@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"path/filepath"
 	"sort"
 	"time"
@@ -60,7 +59,7 @@ func runRepair(ctx context.Context, fl repairFlags) error {
 	if err != nil {
 		return err
 	}
-	d, err := repair.New(repair.NodeChain{Client: client}, repair.HTTP{Client: &http.Client{Timeout: repairHTTPTimeout}}, operator)
+	d, err := repair.New(repair.NodeChain{Client: client}, repair.HTTP{Client: repair.PublicHTTPClient(repairHTTPTimeout)}, operator)
 	if err != nil {
 		return err
 	}

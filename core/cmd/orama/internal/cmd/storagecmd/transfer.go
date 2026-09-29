@@ -4,9 +4,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/storageclient"
@@ -47,10 +48,10 @@ fails and writes nothing.`,
 	}
 	get.Flags().Uint64("deal-id", 0, "Deal id")
 	get.Flags().String("rpc", "", "oramad CometBFT RPC, for example http://127.0.0.1:31001")
-	get.Flags().String("seed", "", "Owner seed, hex, at least 32 bytes")
-	get.Flags().String("repair-seed", "", "Repair seed, hex, at least 32 bytes")
+	get.Flags().String("seed-file", "", "File holding the owner seed, hex, at least 32 bytes, mode 0600")
+	get.Flags().String("repair-seed-file", "", "File holding the repair seed, hex, at least 32 bytes, mode 0600")
 	get.Flags().String("out", "", "Plaintext output file")
-	for _, name := range []string{"deal-id", "rpc", "seed", "repair-seed", "out"} {
+	for _, name := range []string{"deal-id", "rpc", "seed-file", "repair-seed-file", "out"} {
 		_ = get.MarkFlagRequired(name)
 	}
 	Cmd.AddCommand(get)
@@ -66,7 +67,7 @@ func storageClient(cmd *cobra.Command, wait bool) (*storageclient.Client, error)
 	if wait {
 		d, _ = cmd.Flags().GetDuration("wait")
 	}
-	return storageclient.New(chain, &http.Client{}, d)
+	return storageclient.New(chain, storageclient.PublicHTTPClient(transferTimeout), d)
 }
 
 func runPut(cmd *cobra.Command, _ []string) error {
@@ -119,18 +120,42 @@ func runGet(cmd *cobra.Command, _ []string) error {
 }
 
 func repairAndSeed(cmd *cobra.Command) (seed, repair []byte, err error) {
-	seedHex, _ := cmd.Flags().GetString("seed")
-	repairHex, _ := cmd.Flags().GetString("repair-seed")
-	seed, err = hex.DecodeString(seedHex)
-	if err != nil || len(seed) < minSeedLen {
-		return nil, nil, fmt.Errorf("seed must be at least %d bytes of hex", minSeedLen)
+	seed, err = secretFile(cmd, "seed-file", "seed")
+	if err != nil {
+		return nil, nil, err
 	}
-	repair, err = hex.DecodeString(repairHex)
-	if err != nil || len(repair) < minSeedLen {
-		return nil, nil, fmt.Errorf("repair seed must be at least %d bytes of hex", minSeedLen)
+	repair, err = secretFile(cmd, "repair-seed-file", "repair seed")
+	if err != nil {
+		return nil, nil, err
 	}
 	return seed, repair, nil
 }
 
+// secretFile reads a hex secret from the file named by flag. Seeds are not
+// taken on the command line, where ps and shell history would keep them, and
+// a file other users can read is refused.
+func secretFile(cmd *cobra.Command, flag, what string) ([]byte, error) {
+	path, _ := cmd.Flags().GetString(flag)
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("--%s: %w", flag, err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("--%s %s is mode %o; chmod 600 it", flag, path, info.Mode().Perm())
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("--%s: %w", flag, err)
+	}
+	secret, err := hex.DecodeString(strings.TrimSpace(string(body)))
+	if err != nil || len(secret) < minSeedLen {
+		return nil, fmt.Errorf("%s in %s must be at least %d bytes of hex", what, path, minSeedLen)
+	}
+	return secret, nil
+}
+
 // minSeedLen is storagefile's minimum seed and repair-seed length.
 const minSeedLen = 32
+
+// transferTimeout bounds one storage put or get.
+const transferTimeout = 30 * time.Minute

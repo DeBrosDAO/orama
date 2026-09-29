@@ -23,6 +23,8 @@ const (
 	ReasonDenylist = "denylist"
 	// ReasonDisk is not enough free bytes for the piece.
 	ReasonDisk = "disk full"
+	// ReasonExists is a name that already holds a different piece.
+	ReasonExists = "piece exists"
 )
 
 // Decision is accept or a decline reason. A decline stores nothing.
@@ -78,6 +80,17 @@ func (s *Store) Ingest(cid string, data []byte, claimedRoot []byte) (Decision, e
 	}
 	if len(claimedRoot) != len(c.Root) || !bytes.Equal(claimedRoot, c.Root) {
 		return Decision{Reason: ReasonRoot}, nil
+	}
+	if s.Has(cid) {
+		// A stored piece is never replaced. The same bytes again are a no-op.
+		existing, err := s.ReadRoot(cid)
+		if err != nil {
+			return Decision{}, err
+		}
+		if bytes.Equal(existing, c.Root) {
+			return Decision{Accept: true}, nil
+		}
+		return Decision{Reason: ReasonExists}, nil
 	}
 	if s.freeBytes != nil {
 		free, err := s.freeBytes()

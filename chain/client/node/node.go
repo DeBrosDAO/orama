@@ -296,7 +296,11 @@ func (c *Client) broadcast(ctx context.Context, raw []byte) (string, error) {
 			got, err := c.rpc.Tx(ctx, res.Hash, false)
 			if err != nil {
 				// The tx indexer answers "not found" until a block includes it.
-				continue
+				// Anything else (RPC down, indexing disabled) is the real cause.
+				if strings.Contains(err.Error(), "not found") {
+					continue
+				}
+				return hash, fmt.Errorf("look up transaction %s: %w", hash, err)
 			}
 			if got.TxResult.Code != 0 {
 				return hash, fmt.Errorf("transaction %s failed in block %d (code %d): %s", hash, got.Height, got.TxResult.Code, got.TxResult.Log)

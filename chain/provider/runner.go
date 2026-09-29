@@ -27,6 +27,9 @@ const (
 	ReleaseGraceEpochs = 1
 	// MaxProofsPerTx bounds one MsgSubmitProofs.
 	MaxProofsPerTx = 32
+	// MaxBlocksPerStep bounds how far one step catches up, so a node far
+	// behind still proves every step.
+	MaxBlocksPerStep = 500
 	// ReasonNotStored is the decline reason when no uploaded piece matches the slot root.
 	ReasonNotStored = "piece not stored"
 )
@@ -60,6 +63,11 @@ type Runner struct {
 
 	mu    sync.Mutex
 	state runnerState
+	// sweptEpoch is the last epoch sweep ran for. It is not persisted, so a
+	// restart sweeps once.
+	sweptEpoch uint64
+	// accepted is set when this step accepted a slot.
+	accepted bool
 }
 
 // Config names the node, its hot key, and where the runner keeps its cursor.
@@ -71,7 +79,9 @@ type Config struct {
 	StatePath string
 	// MonitorPath is the status file the node report reads. Empty skips it.
 	MonitorPath string
-	// StartHeight is the first block read when StatePath does not exist yet.
+	// StartHeight is the first block read when StatePath does not exist yet:
+	// the node's x/nodes registration height, since nothing is assigned to a
+	// node before it registers.
 	StartHeight int64
 }
 
@@ -109,48 +119,65 @@ func (r *Runner) Assigned(name string) bool {
 	return false
 }
 
-// Step reads every block since the cursor, then settles waiting slots,
-// answers this epoch's challenges, and releases slots the chain dropped.
+// Step proves this epoch's challenges first, then reads at most
+// MaxBlocksPerStep blocks past the cursor, settles waiting slots, and, once
+// per epoch, releases slots the chain dropped. A failure in one part does not
+// stop the others: a slot that cannot be accepted never costs a proof.
 func (r *Runner) Step(ctx context.Context) error {
-	latest, err := r.chain.LatestHeight(ctx)
-	if err != nil {
-		return err
-	}
-	if err := r.readBlocks(ctx, latest); err != nil {
-		return err
-	}
-	params, err := r.chain.Params(ctx)
-	if err != nil {
-		return err
-	}
-	if err := r.settlePending(ctx, latest, params); err != nil {
-		return err
-	}
 	epoch, err := r.chain.CurrentEpoch(ctx)
 	if err != nil {
 		return err
 	}
-	misses, err := r.answer(ctx, epoch)
+	misses, answerErr := r.answer(ctx, epoch)
+	r.accepted = false
+	followErr := r.follow(ctx)
+	if r.accepted && answerErr == nil {
+		// An accept opens a challenge in the current epoch; answer it now
+		// rather than one step later, which could fall after the epoch closes.
+		misses, answerErr = r.answer(ctx, epoch)
+	}
+	return errors.Join(answerErr, followErr, r.sweepOnce(ctx, epoch), r.writeMonitor(ctx, misses))
+}
+
+// follow reads new blocks and settles the slots waiting for a piece.
+func (r *Runner) follow(ctx context.Context) error {
+	latest, err := r.chain.LatestHeight(ctx)
 	if err != nil {
 		return err
+	}
+	readErr := r.readBlocks(ctx, latest)
+	params, err := r.chain.Params(ctx)
+	if err != nil {
+		return errors.Join(readErr, err)
+	}
+	return errors.Join(readErr, r.settlePending(ctx, latest, params))
+}
+
+// sweepOnce runs sweep the first time Step sees an epoch. Slots are released
+// on epoch boundaries, so reading every binding more often buys nothing.
+func (r *Runner) sweepOnce(ctx context.Context, epoch uint64) error {
+	if r.sweptEpoch == epoch {
+		return nil
 	}
 	if err := r.sweep(ctx, epoch); err != nil {
 		return err
 	}
-	return r.writeMonitor(ctx, misses)
+	r.sweptEpoch = epoch
+	return nil
 }
 
 func (r *Runner) readBlocks(ctx context.Context, latest int64) error {
-	for h := r.cursor() + 1; h <= latest; h++ {
+	last := min(latest, r.cursor()+MaxBlocksPerStep)
+	for h := r.cursor() + 1; h <= last; h++ {
 		events, err := r.chain.BlockEvents(ctx, h)
 		if err != nil {
-			return err
+			return fmt.Errorf("provider cursor is at %d: %w", h-1, err)
 		}
 		r.mu.Lock()
 		changed := r.applyEvents(events)
 		r.state.Height = h
 		r.mu.Unlock()
-		if changed || h == latest {
+		if changed || h == last {
 			if err := r.save(); err != nil {
 				return err
 			}

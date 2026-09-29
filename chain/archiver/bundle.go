@@ -73,6 +73,9 @@ func Decode(body []byte) ([]Block, error) {
 	}
 	start := int64(binary.BigEndian.Uint64(body[5:13]))
 	count := binary.BigEndian.Uint32(body[13:17])
+	if count == 0 || start < 1 {
+		return nil, fmt.Errorf("%w: empty range or start %d", ErrBundle, start)
+	}
 	rest := body[headerLen:]
 	blocks := make([]Block, 0, min(int(count), len(rest)/(types.HashLen+4)))
 	for i := uint32(0); i < count; i++ {
@@ -119,6 +122,10 @@ func checkBlock(b Block) error {
 // Verify checks a whole bundle against the range record on chain: the
 // content hash, every block's header hash, and the block-hash Merkle root.
 func Verify(body []byte, rec types.RangeRecord) ([]Block, error) {
+	sum := sha256.Sum256(body)
+	if !bytes.Equal(sum[:], rec.BundleHash) {
+		return nil, fmt.Errorf("%w: content hash differs from the chain", ErrBundle)
+	}
 	blocks, err := Decode(body)
 	if err != nil {
 		return nil, err
@@ -130,10 +137,6 @@ func Verify(body []byte, rec types.RangeRecord) ([]Block, error) {
 	hashes := make([][]byte, len(blocks))
 	for i, b := range blocks {
 		hashes[i] = b.Hash
-	}
-	sum := sha256.Sum256(body)
-	if !bytes.Equal(sum[:], rec.BundleHash) {
-		return nil, fmt.Errorf("%w: content hash differs from the chain", ErrBundle)
 	}
 	if err := types.VerifyBundle(hashes, rec.BundleHash, rec.MerkleRoot); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBundle, err)

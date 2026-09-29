@@ -98,11 +98,14 @@ func TestRelease_keepsAPieceAnotherSlotStillBinds(t *testing.T) {
 	require.NoError(t, s.Bind("c1", 1, 0))
 	require.NoError(t, s.Bind("c1", 2, 0))
 
-	require.NoError(t, s.Release(1, 0))
+	require.NoError(t, s.Release(1, 0, nil))
 	require.True(t, s.Has("c1"), "deal 2 still binds the piece")
-	require.NoError(t, s.Release(1, 0), "releasing an unbound slot is a no-op")
+	require.NoError(t, s.Release(1, 0, nil), "releasing an unbound slot is a no-op")
 
-	require.NoError(t, s.Release(2, 0))
+	require.NoError(t, s.Release(2, 0, func(cid string) bool { return cid == "c1" }))
+	require.True(t, s.Has("c1"), "a piece a waiting slot claims is kept")
+	require.NoError(t, s.Bind("c1", 3, 0))
+	require.NoError(t, s.Release(3, 0, nil))
 	require.False(t, s.Has("c1"))
 	bound, err := s.Assignments()
 	require.NoError(t, err)

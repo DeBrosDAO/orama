@@ -57,15 +57,15 @@ state.json and monitor.json.`,
 	f.StringVar(&fl.listen, "listen", providerListen, "Upload and retrieval HTTP address")
 	f.StringVar(&fl.rpc, "rpc", defaultRPC, "oramad CometBFT RPC")
 	f.StringVar(&fl.home, "home", ".", "Provider state directory")
-	f.Int64Var(&fl.startHeight, "start-height", 1, "First block to read when state.json does not exist")
+	f.Int64Var(&fl.startHeight, "start-height", 0, "First block to read when state.json does not exist (default: the node's x/nodes registration height)")
 	f.DurationVar(&fl.interval, "interval", providerInterval, "Time between chain steps")
 	f.Int64Var(&fl.maxPiece, "max-piece-bytes", providerMaxPiece, "Largest upload accepted")
 	return cmd
 }
 
 func runProvider(ctx context.Context, fl providerFlags) error {
-	if fl.interval <= 0 || fl.maxPiece < 1 {
-		return errors.New("--interval and --max-piece-bytes must be positive")
+	if fl.interval <= 0 || fl.maxPiece < 1 || fl.startHeight < 0 {
+		return errors.New("--interval and --max-piece-bytes must be positive and --start-height not negative")
 	}
 	hot, created, err := loadOrCreateHotKey(filepath.Join(fl.home, "hot-key"))
 	if err != nil {
@@ -95,8 +95,14 @@ func runProvider(ctx context.Context, fl providerFlags) error {
 	if err != nil {
 		return err
 	}
+	start := fl.startHeight
+	if start == 0 {
+		if start, err = chain.RegisteredHeight(ctx, nodeID); err != nil {
+			return err
+		}
+	}
 	runner, err := provider.NewRunner(store, chain, provider.Config{
-		NodeID: nodeID, Signer: hot.Address, StartHeight: fl.startHeight,
+		NodeID: nodeID, Signer: hot.Address, StartHeight: start,
 		StatePath: filepath.Join(fl.home, "state.json"), MonitorPath: filepath.Join(fl.home, "monitor.json"),
 	})
 	if err != nil {

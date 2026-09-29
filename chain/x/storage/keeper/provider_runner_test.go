@@ -27,10 +27,11 @@ import (
 // fresh event manager, and a submitted message is delivered in a block of
 // its own, the way a node includes a broadcast transaction.
 type chainSim struct {
-	t      *testing.T
-	f      *fixture
-	events map[int64][]abci.Event
-	drop   int
+	t          *testing.T
+	f          *fixture
+	events     map[int64][]abci.Event
+	drop       int
+	failAccept bool
 }
 
 func newChainSim(t *testing.T, f *fixture) *chainSim {
@@ -88,6 +89,9 @@ func (c nodeChain) Submit(_ context.Context, msgs ...sdk.Msg) error {
 	if c.sim.drop > 0 {
 		c.sim.drop--
 		return node.ErrNotIncluded
+	}
+	if _, ok := msgs[0].(*types.MsgAcceptDeal); ok && c.sim.failAccept {
+		return fmt.Errorf("accept rejected in CheckTx")
 	}
 	return c.sim.block(func() error {
 		for _, msg := range msgs {
@@ -162,10 +166,15 @@ func stepAll(t *testing.T, providers map[string]*simProvider) {
 }
 
 func openDeal(t *testing.T, sim *chainSim, duration int64) (uint64, [][]byte, []types.PieceCommitment) {
+	return openDealFilled(t, sim, duration, 1)
+}
+
+// openDealFilled opens a three-replica deal whose pieces are payloads fill, fill+1, fill+2.
+func openDealFilled(t *testing.T, sim *chainSim, duration int64, fill byte) (uint64, [][]byte, []types.PieceCommitment) {
 	t.Helper()
 	client := acc(9)
 	sim.f.fund(client, 1_000_000)
-	data := [][]byte{payload(1), payload(2), payload(3)}
+	data := [][]byte{payload(fill), payload(fill + 1), payload(fill + 2)}
 	pieces := []types.PieceCommitment{commit(t, data[0]), commit(t, data[1]), commit(t, data[2])}
 	var id uint64
 	require.NoError(t, sim.block(func() error {
@@ -275,5 +284,40 @@ func TestProviderRunner_retriesADroppedProofAfterARestart(t *testing.T) {
 	require.NotEmpty(t, ch.Challenges)
 	for _, c := range ch.Challenges {
 		require.True(t, c.Proved)
+	}
+}
+
+func TestProviderRunner_aFailingAcceptStillLetsProofsThrough(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	f.threeNodes(t, 1<<20)
+	sim := newChainSim(t, f)
+	providers := startProviders(t, sim, "n1", "n2", "n3")
+	first, data, pieces := openDeal(t, sim, 30)
+	stepAll(t, providers)
+	for i := uint32(0); i < 3; i++ {
+		slot := f.slot(t, first, i)
+		require.Equal(t, http.StatusNoContent, upload(providers[slot.NodeId], dataForSlot(t, f, first, i, data, pieces), slot.PieceRoot))
+	}
+	stepAll(t, providers)
+
+	second, data2, pieces2 := openDealFilled(t, sim, 30, 20)
+	stepAll(t, providers)
+	for i := uint32(0); i < 3; i++ {
+		slot := f.slot(t, second, i)
+		require.Equal(t, http.StatusNoContent, upload(providers[slot.NodeId], dataForSlot(t, f, second, i, data2, pieces2), slot.PieceRoot))
+	}
+	sim.failAccept = true
+	f.Emission.epoch = 2
+	require.NoError(t, sim.block(nil))
+	for id, p := range providers {
+		err := p.runner.Step(context.Background())
+		require.ErrorContainsf(t, err, "accept rejected", "node %s", id)
+		ch, err := f.Query.Challenges(f.Ctx, &types.QueryChallengesRequest{Epoch: 2, NodeId: id})
+		require.NoError(t, err)
+		require.NotEmpty(t, ch.Challenges)
+		for _, c := range ch.Challenges {
+			require.Truef(t, c.Proved, "%s deal %d slot %d is proved even though its accept failed", id, c.DealId, c.Slot)
+		}
 	}
 }

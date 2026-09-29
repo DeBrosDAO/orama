@@ -830,22 +830,31 @@ The files live in `--home` (the unit's state directory):
   in the fields `core/pkg/telemetry/report` reads.
 
 Each step, `chain/provider.Runner`:
-1. Reads every block since the cursor and records `storage_slot_assigned`
-   events for this node. The first run starts at `--start-height`.
-2. Reads each waiting slot. Once a piece with the slot's root has been
+1. Proves every unproved challenge of the current x/emission epoch first.
+   It proves only slots the chain still assigns to this node, at most 32 per
+   `MsgSubmitProofs`. A dropped proof tx is rebuilt on the next step,
+   because the chain still lists the challenge as unproved. A failure
+   anywhere else in the step never holds back a proof.
+2. Reads at most 500 blocks past the cursor and records `storage_slot_assigned`
+   events for this node. The first run starts at `--start-height`; the
+   default is the node's x/nodes `registered_at_height`.
+3. Reads each waiting slot. Once a piece with the slot's root has been
    uploaded, it sends `MsgAcceptDeal`. If nothing has arrived
    `DeclineMarginBlocks` (2) blocks before the accept window closes, it sends
    `MsgDeclineDeal` "piece not stored". A slot the chain no longer assigns to
-   this node is dropped.
-3. Proves every unproved challenge of the current x/emission epoch, at most 32
-   per `MsgSubmitProofs`. A dropped proof tx is rebuilt on the next step,
-   because the chain still lists the challenge as unproved.
-4. Releases a bound slot one epoch after the chain stops naming this node for
-   it (eviction, expiry, or reassignment). The piece bytes go when no other
-   binding names them.
+   this node is dropped. One slot that fails does not stop the others. After
+   an accept, the step proves again, because an accept opens a challenge in
+   the current epoch.
+4. Once per epoch, releases a bound slot one epoch after the chain stops
+   naming this node for it (eviction, expiry, or reassignment). The piece
+   bytes go when no other binding names them and no waiting slot needs them.
 
 Uploads are `POST /pieces/<hex piece root>` with `X-Piece-Root` set to the
-same hex. They are accepted only for a root the runner is waiting on.
+same hex; any other header is refused. They are accepted only for a root the
+runner is waiting on, and at most two at a time. A stored piece is never
+replaced. The same bytes again are a no-op. Each client address (an IPv6
+/64) has its own rate limit. A full address table drops buckets idle for 10
+minutes before it refuses a new address.
 Retrieval is `GET`/`HEAD /pieces/<hex piece root>` on port 31013, with a
 per-address rate limit. `chain/provider` does not pin through Kubo.
 
@@ -853,7 +862,9 @@ per-address rate limit. `chain/provider` does not pin through Kubo.
 
 `<home>/operator` holds the address that deals name as `repair_delegate`.
 x/storage never assigns a slot of such a deal to that operator, and the
-delegate refuses a deal where it finds one. `<home>/deals/<id>.json`
+delegate refuses a deal where it finds one. It dials only public addresses
+and follows no redirects, since provider endpoints are whatever a node
+registered in x/nodes. `<home>/deals/<id>.json`
 (mode 0600) holds `{"deal_id": N, "repair_seed": "<hex>"}`. The delegate's
 operator installs these files; no network path hands a seed to the delegate.
 
@@ -888,8 +899,12 @@ It then submits `MsgAttest` with:
 - the block-hash Merkle root.
 
 `<home>/cursor` is the last attested height, and a restart resumes after it.
-If a range is already pinned on chain with a different root, the archiver
-stops (`ErrRootConflict`). It does not skip the range.
+x/archive pins the first attestation of a range. If a range is already
+pinned with a different root, bundle hash or CID, the archiver keeps its own
+bundle. It writes `<home>/conflicts/<start>-<end>.json` with both sets of
+values, reports `ErrRootConflict` once, and moves on to the next range. A
+range of a different width that overlaps is refused by x/archive on every
+attempt.
 
 `history get --height H --from <home or http base>` loads the range's
 bundle. It checks the file hash, each block's bytes against its header hash,
@@ -913,13 +928,16 @@ and three deal ids are attached (`MsgAttachReplicas`).
 - A wrong seed, repair seed, or slot fails closed.
 
 The storage commands:
+- Seeds are read from files (`--seed-file`, `--repair-seed-file`). A file
+  that other users can read is refused; the commands take no seed as an
+  argument.
 - `orama storage seal` writes one ciphertext per slot and prints each piece
   root. `orama storage open` reads one of those files.
 - `orama storage rewrap` rebuilds one slot from another with the repair seed.
 - `orama storage put --deal-id N --dir <seal output> --rpc <oramad RPC>` checks
   every slot file's root against the chain before sending anything. It waits
   for each slot's assignment and uploads to the node's first http(s) endpoint
-  in x/nodes.
+  in x/nodes. It dials only public addresses and follows no redirects.
 - `orama storage get` fetches the first accepted slot whose bytes match the
   on-chain root, then opens it.
 - None of these commands creates the deal. That is `orama storage create`,

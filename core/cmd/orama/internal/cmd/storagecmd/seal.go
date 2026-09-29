@@ -22,13 +22,13 @@ It does not upload the bytes and it does not submit a deal.`,
 		Args: cobra.NoArgs,
 		RunE: runSeal,
 	}
-	seal.Flags().String("seed", "", "Owner seed, hex, at least 32 bytes")
-	seal.Flags().String("repair-seed", "", "Repair seed, hex, at least 32 bytes")
+	seal.Flags().String("seed-file", "", "File holding the owner seed, hex, at least 32 bytes, mode 0600")
+	seal.Flags().String("repair-seed-file", "", "File holding the repair seed, hex, at least 32 bytes, mode 0600")
 	seal.Flags().String("nonce", "", "Deal nonce, 32 bytes hex")
 	seal.Flags().Int("replicas", 3, "Number of slots, 1 to 32")
 	seal.Flags().String("in", "", "Plaintext file")
 	seal.Flags().String("out-dir", "", "Directory for slot-N files")
-	for _, name := range []string{"seed", "repair-seed", "nonce", "in", "out-dir"} {
+	for _, name := range []string{"seed-file", "repair-seed-file", "nonce", "in", "out-dir"} {
 		_ = seal.MarkFlagRequired(name)
 	}
 	Cmd.AddCommand(seal)
@@ -42,13 +42,13 @@ A wrong seed, repair seed, or slot fails and writes nothing.`,
 		Args: cobra.NoArgs,
 		RunE: runOpen,
 	}
-	open.Flags().String("seed", "", "Owner seed, hex, at least 32 bytes")
-	open.Flags().String("repair-seed", "", "Repair seed, hex, at least 32 bytes")
+	open.Flags().String("seed-file", "", "File holding the owner seed, hex, at least 32 bytes, mode 0600")
+	open.Flags().String("repair-seed-file", "", "File holding the repair seed, hex, at least 32 bytes, mode 0600")
 	open.Flags().String("nonce", "", "Deal nonce, 32 bytes hex")
 	open.Flags().Uint32("slot", 0, "Slot index")
 	open.Flags().String("in", "", "Sealed slot file")
 	open.Flags().String("out", "", "Plaintext output file")
-	for _, name := range []string{"seed", "repair-seed", "nonce", "in", "out"} {
+	for _, name := range []string{"seed-file", "repair-seed-file", "nonce", "in", "out"} {
 		_ = open.MarkFlagRequired(name)
 	}
 	Cmd.AddCommand(open)
@@ -106,20 +106,13 @@ func runOpen(cmd *cobra.Command, _ []string) error {
 }
 
 func sealKeys(cmd *cobra.Command) (seed, repair, nonce []byte, err error) {
-	seedHex, _ := cmd.Flags().GetString("seed")
-	repairHex, _ := cmd.Flags().GetString("repair-seed")
-	nonceHex, _ := cmd.Flags().GetString("nonce")
-	seed, err = hex.DecodeString(seedHex)
-	if err != nil || len(seed) < 32 {
-		return nil, nil, nil, fmt.Errorf("seed must be at least 32 bytes of hex")
+	seed, repair, err = repairAndSeed(cmd)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	repair, err = hex.DecodeString(repairHex)
-	if err != nil || len(repair) < 32 {
-		return nil, nil, nil, fmt.Errorf("repair seed must be at least 32 bytes of hex")
-	}
-	nonce, err = hex.DecodeString(nonceHex)
-	if err != nil || len(nonce) != storagefile.DealNonceLen {
-		return nil, nil, nil, fmt.Errorf("nonce must be %d bytes of hex", storagefile.DealNonceLen)
+	nonce, err = nonceFlag(cmd)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	return seed, repair, nonce, nil
 }

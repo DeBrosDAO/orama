@@ -61,7 +61,13 @@ func createHotKey(path string) (tx.Account, error) {
 		}
 		if _, err := f.WriteString(hex.EncodeToString(key) + "\n"); err != nil {
 			f.Close()
+			_ = os.Remove(path)
 			return tx.Account{}, fmt.Errorf("write hot key %s: %w", path, err)
+		}
+		if err := f.Sync(); err != nil {
+			f.Close()
+			_ = os.Remove(path)
+			return tx.Account{}, fmt.Errorf("sync hot key %s: %w", path, err)
 		}
 		if err := f.Close(); err != nil {
 			return tx.Account{}, fmt.Errorf("close hot key %s: %w", path, err)

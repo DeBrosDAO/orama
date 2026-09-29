@@ -130,13 +130,19 @@ func TestRunner_retriesADroppedAttestationAndStopsOnAConflictingRoot(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 
-	other := newFakeChain(t, 12)
+	other := newFakeChain(t, 22)
 	other.ranges[[2]int64{1, 10}] = types.RangeRecord{StartHeight: 1, EndHeight: 10, MerkleRoot: make([]byte, 32)}
-	r2, err := NewRunner(other, "orama1archiver", t.TempDir(), 10)
+	dir2 := t.TempDir()
+	r2, err := NewRunner(other, "orama1archiver", dir2, 10)
 	require.NoError(t, err)
-	_, err = r2.Step(context.Background())
+	n, err = r2.Step(context.Background())
 	require.ErrorIs(t, err, ErrRootConflict)
-	require.Zero(t, other.submits)
+	require.Equal(t, 1, n, "the range after the conflict is still attested")
+	require.Equal(t, 1, other.submits, "the conflicting range is not attested")
+	_, statErr := os.Stat(ConflictPath(dir2, 1, 10))
+	require.NoError(t, statErr, "the conflict is recorded")
+	cursor, _ = LoadCursor(r2.cursorPath())
+	require.Equal(t, int64(20), cursor)
 }
 
 func TestRunner_skipsARangeItAlreadyAttested(t *testing.T) {
@@ -184,6 +190,10 @@ func TestVerify_refusesTamperedTruncatedAndMismatchedBundles(t *testing.T) {
 	require.ErrorIs(t, err, ErrBundle)
 	_, err = Decode([]byte("ORBX"))
 	require.ErrorIs(t, err, ErrBundle)
+	empty := append([]byte("ORBH\x01"), make([]byte, 12)...)
+	empty[12] = 1
+	_, err = Decode(empty)
+	require.ErrorIs(t, err, ErrBundle, "a zero-block bundle is refused")
 }
 
 func TestEncode_refusesGapsAndEmptyRanges(t *testing.T) {

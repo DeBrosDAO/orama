@@ -3,6 +3,8 @@ package archiver
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,9 +21,12 @@ import (
 // and the ranges start at 1, 1+w, 1+2w, and so on.
 const DefaultRangeBlocks = 1000
 
-// ErrRootConflict is a range another archiver pinned with a different root
-// than the blocks this node reads. The runner stops rather than skip it.
-var ErrRootConflict = errors.New("range is pinned on chain with a different root")
+// ErrRootConflict is a range another attester pinned with a different root
+// or bundle than the blocks this node reads. The runner keeps its own bundle,
+// writes conflicts/<start>-<end>.json, reports the error once, and moves on:
+// x/archive pins the first attestation, and one wrong attester must not stop
+// every honest archiver.
+var ErrRootConflict = errors.New("range is pinned on chain with a different root or bundle")
 
 // Chain is the node the archiver reads blocks from and attests to.
 type Chain interface {
@@ -72,24 +77,51 @@ func (r *Runner) Step(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("cursor %d is not on a %d-block range boundary", cursor, r.width)
 	}
 	done := 0
+	var conflicts []error
 	for {
 		latest, err := r.chain.LatestHeight(ctx)
 		if err != nil {
-			return done, err
+			return done, errors.Join(append(conflicts, err)...)
 		}
 		start, end := cursor+1, cursor+r.width
 		if end >= latest {
-			return done, nil
+			return done, errors.Join(conflicts...)
 		}
-		if err := r.archiveRange(ctx, start, end); err != nil {
-			return done, err
+		err = r.archiveRange(ctx, start, end)
+		if errors.Is(err, ErrRootConflict) {
+			conflicts = append(conflicts, err)
+		} else if err != nil {
+			return done, errors.Join(append(conflicts, err)...)
+		} else {
+			done++
 		}
 		if err := SaveCursor(r.cursorPath(), end); err != nil {
-			return done, err
+			return done, errors.Join(append(conflicts, err)...)
 		}
 		cursor = end
-		done++
 	}
+}
+
+// ConflictPath is where a conflicting range's local and on-chain values are kept.
+func ConflictPath(dir string, start, end int64) string {
+	return filepath.Join(dir, "conflicts", fmt.Sprintf("%d-%d.json", start, end))
+}
+
+func (r *Runner) recordConflict(start, end int64, local Bundle, cid string, rec types.RangeRecord) error {
+	body, err := json.Marshal(map[string]string{
+		"local_root": hex.EncodeToString(local.MerkleRoot), "local_hash": hex.EncodeToString(local.ContentHash), "local_cid": cid,
+		"chain_root": hex.EncodeToString(rec.MerkleRoot), "chain_hash": hex.EncodeToString(rec.BundleHash), "chain_cid": rec.BundleCid,
+	})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(r.dir, "conflicts"), 0o750); err != nil {
+		return fmt.Errorf("create conflict directory: %w", err)
+	}
+	if err := writeAtomic(ConflictPath(r.dir, start, end), body, 0o640); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %d-%d (details in %s)", ErrRootConflict, start, end, ConflictPath(r.dir, start, end))
 }
 
 func (r *Runner) archiveRange(ctx context.Context, start, end int64) error {
@@ -118,18 +150,20 @@ func (r *Runner) archiveRange(ctx context.Context, start, end int64) error {
 	if err != nil {
 		return err
 	}
-	if found && !bytes.Equal(rec.MerkleRoot, bundle.MerkleRoot) {
-		return fmt.Errorf("%w: %d-%d", ErrRootConflict, start, end)
-	}
+	cid := CID(body)
 	if err := writeAtomic(BundlePath(r.dir, start, end), body, 0o640); err != nil {
 		return err
+	}
+	if found && (!bytes.Equal(rec.MerkleRoot, bundle.MerkleRoot) ||
+		!bytes.Equal(rec.BundleHash, bundle.ContentHash) || rec.BundleCid != cid) {
+		return r.recordConflict(start, end, bundle, cid, rec)
 	}
 	if found && slices.Contains(rec.Archivers, r.archiver) {
 		return nil
 	}
 	return r.chain.Submit(ctx, &types.MsgAttest{
 		Archiver: r.archiver, StartHeight: start, EndHeight: end,
-		BundleCid: CID(body), BundleHash: bundle.ContentHash, MerkleRoot: bundle.MerkleRoot,
+		BundleCid: cid, BundleHash: bundle.ContentHash, MerkleRoot: bundle.MerkleRoot,
 	})
 }
 

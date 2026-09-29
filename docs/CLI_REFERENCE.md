@@ -3365,9 +3365,9 @@ fails and writes nothing.
 |------|---------|-------------|
 | `--deal-id` | `0` | Deal id |
 | `--out` | — | Plaintext output file |
-| `--repair-seed` | — | Repair seed, hex, at least 32 bytes |
+| `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
 | `--rpc` | — | oramad CometBFT RPC, for example http://127.0.0.1:31001 |
-| `--seed` | — | Owner seed, hex, at least 32 bytes |
+| `--seed-file` | — | File holding the owner seed, hex, at least 32 bytes, mode 0600 |
 
 ### orama storage grant
 
@@ -3417,8 +3417,8 @@ A wrong seed, repair seed, or slot fails and writes nothing.
 | `--in` | — | Sealed slot file |
 | `--nonce` | — | Deal nonce, 32 bytes hex |
 | `--out` | — | Plaintext output file |
-| `--repair-seed` | — | Repair seed, hex, at least 32 bytes |
-| `--seed` | — | Owner seed, hex, at least 32 bytes |
+| `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
+| `--seed-file` | — | File holding the owner seed, hex, at least 32 bytes, mode 0600 |
 | `--slot` | `0` | Slot index |
 
 ### orama storage prove
@@ -3514,7 +3514,7 @@ and it does not upload the result.
 | `--in` | — | Source slot file |
 | `--nonce` | — | Deal nonce, 32 bytes hex |
 | `--out` | — | Destination slot file |
-| `--repair-seed` | — | Repair seed, hex, at least 32 bytes |
+| `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
 | `--to` | `0` | Slot to write |
 
 ### orama storage seal
@@ -3536,9 +3536,9 @@ It does not upload the bytes and it does not submit a deal.
 | `--in` | — | Plaintext file |
 | `--nonce` | — | Deal nonce, 32 bytes hex |
 | `--out-dir` | — | Directory for slot-N files |
-| `--repair-seed` | — | Repair seed, hex, at least 32 bytes |
+| `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
 | `--replicas` | `3` | Number of slots, 1 to 32 |
-| `--seed` | — | Owner seed, hex, at least 32 bytes |
+| `--seed-file` | — | File holding the owner seed, hex, at least 32 bytes, mode 0600 |
 
 ### orama version
 

@@ -20,13 +20,13 @@ and it does not upload the result.`,
 		Args: cobra.NoArgs,
 		RunE: runRewrap,
 	}
-	cmd.Flags().String("repair-seed", "", "Repair seed, hex, at least 32 bytes")
+	cmd.Flags().String("repair-seed-file", "", "File holding the repair seed, hex, at least 32 bytes, mode 0600")
 	cmd.Flags().String("nonce", "", "Deal nonce, 32 bytes hex")
 	cmd.Flags().Uint32("from", 0, "Slot the input file belongs to")
 	cmd.Flags().Uint32("to", 0, "Slot to write")
 	cmd.Flags().String("in", "", "Source slot file")
 	cmd.Flags().String("out", "", "Destination slot file")
-	for _, name := range []string{"repair-seed", "nonce", "in", "out"} {
+	for _, name := range []string{"repair-seed-file", "nonce", "in", "out"} {
 		_ = cmd.MarkFlagRequired(name)
 	}
 	Cmd.AddCommand(cmd)
@@ -53,15 +53,22 @@ func runRewrap(cmd *cobra.Command, _ []string) error {
 }
 
 func repairKeys(cmd *cobra.Command) (repair, nonce []byte, err error) {
-	repairHex, _ := cmd.Flags().GetString("repair-seed")
-	nonceHex, _ := cmd.Flags().GetString("nonce")
-	repair, err = hex.DecodeString(repairHex)
-	if err != nil || len(repair) < 32 {
-		return nil, nil, fmt.Errorf("repair seed must be at least 32 bytes of hex")
+	repair, err = secretFile(cmd, "repair-seed-file", "repair seed")
+	if err != nil {
+		return nil, nil, err
 	}
-	nonce, err = hex.DecodeString(nonceHex)
-	if err != nil || len(nonce) != storagefile.DealNonceLen {
-		return nil, nil, fmt.Errorf("nonce must be %d bytes of hex", storagefile.DealNonceLen)
+	nonce, err = nonceFlag(cmd)
+	if err != nil {
+		return nil, nil, err
 	}
 	return repair, nonce, nil
+}
+
+func nonceFlag(cmd *cobra.Command) ([]byte, error) {
+	nonceHex, _ := cmd.Flags().GetString("nonce")
+	nonce, err := hex.DecodeString(nonceHex)
+	if err != nil || len(nonce) != storagefile.DealNonceLen {
+		return nil, fmt.Errorf("nonce must be %d bytes of hex", storagefile.DealNonceLen)
+	}
+	return nonce, nil
 }

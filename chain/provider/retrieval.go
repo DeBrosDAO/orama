@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -22,10 +23,27 @@ type Retrieval struct {
 	burst     int
 	maxIPs    int
 	mu        sync.Mutex
-	buckets   map[string]*rate.Limiter
+	buckets   map[string]*bucket
 	uploadMax int64
 	assigned  func(string) bool
+	uploads   chan struct{}
+	now       func() time.Time
 }
+
+type bucket struct {
+	lim  *rate.Limiter
+	seen time.Time
+}
+
+const (
+	// bucketIdle is how long an address's bucket is kept after its last request.
+	// A full table drops idle buckets before it refuses a new address.
+	bucketIdle = 10 * time.Minute
+	// MaxConcurrentUploads bounds the upload bodies held in memory at once.
+	MaxConcurrentUploads = 2
+	// ipv6BucketBits groups IPv6 clients by /64, the usual per-host allocation.
+	ipv6BucketBits = 64
+)
 
 // NewRetrieval builds the piece HTTP handler. perSecond and burst are the
 // per-address limit. maxIPs is how many addresses the table holds.
@@ -41,7 +59,9 @@ func NewRetrieval(store *Store, perSecond float64, burst, maxIPs int) (*Retrieva
 		limit:   rate.Limit(perSecond),
 		burst:   burst,
 		maxIPs:  maxIPs,
-		buckets: make(map[string]*rate.Limiter),
+		buckets: make(map[string]*bucket),
+		uploads: make(chan struct{}, MaxConcurrentUploads),
+		now:     time.Now,
 	}, nil
 }
 
@@ -132,9 +152,18 @@ func (rt *Retrieval) serveUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not assigned", http.StatusForbidden)
 		return
 	}
+	select {
+	case rt.uploads <- struct{}{}:
+		defer func() { <-rt.uploads }()
+	default:
+		http.Error(w, "too many uploads in progress", http.StatusServiceUnavailable)
+		return
+	}
 	root, err := hex.DecodeString(r.Header.Get("X-Piece-Root"))
-	if err != nil || len(root) != 32 {
-		http.Error(w, "bad piece root", http.StatusBadRequest)
+	if err != nil || len(root) != 32 || hex.EncodeToString(root) != cid {
+		// The name is the assigned root. A different claimed root would let
+		// anyone store unrelated bytes under a pending slot's name.
+		http.Error(w, "piece root must be the name it is uploaded under", http.StatusBadRequest)
 		return
 	}
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
@@ -173,17 +202,42 @@ func (rt *Retrieval) allowHeader() string {
 }
 
 func (rt *Retrieval) allow(ip string) bool {
+	key := bucketKey(ip)
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	lim, ok := rt.buckets[ip]
+	now := rt.now()
+	b, ok := rt.buckets[key]
 	if !ok {
+		if len(rt.buckets) >= rt.maxIPs {
+			rt.dropIdle(now)
+		}
 		if len(rt.buckets) >= rt.maxIPs {
 			return false
 		}
-		lim = rate.NewLimiter(rt.limit, rt.burst)
-		rt.buckets[ip] = lim
+		b = &bucket{lim: rate.NewLimiter(rt.limit, rt.burst)}
+		rt.buckets[key] = b
 	}
-	return lim.Allow()
+	b.seen = now
+	return b.lim.AllowN(now, 1)
+}
+
+// dropIdle removes buckets unused for bucketIdle. The caller holds rt.mu.
+func (rt *Retrieval) dropIdle(now time.Time) {
+	for key, b := range rt.buckets {
+		if now.Sub(b.seen) >= bucketIdle {
+			delete(rt.buckets, key)
+		}
+	}
+}
+
+// bucketKey is the address itself for IPv4 and its /64 for IPv6, so one
+// host cannot fill the table by rotating through its own prefix.
+func bucketKey(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() != nil {
+		return ip
+	}
+	return parsed.Mask(net.CIDRMask(ipv6BucketBits, 128)).String() + "/64"
 }
 
 func pieceCID(urlPath string) (string, error) {
