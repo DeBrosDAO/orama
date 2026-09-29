@@ -50,7 +50,11 @@ func (h Host) ImportMigration(blob []byte, restore *SignState) (ImportResult, er
 		}
 	}
 	var res ImportResult
-	if res.Floor, err = h.installState(source, uid, gid); err != nil {
+	pub, err := ValidatorKeyPubKey(b.Key)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	if res.Floor, err = h.installState(source, pub, uid, gid); err != nil {
 		return res, err
 	}
 	if res.Replaced, err = h.installKey(b.Key, uid, gid); err != nil {
@@ -116,7 +120,9 @@ func importState(b Bundle, restore *SignState) ([]byte, error) {
 }
 
 // installState records the floor, then writes the sign state.
-func (h Host) installState(source []byte, uid, gid int) (*SignState, error) {
+// A floor already recorded for the same key is never lowered; a floor of
+// another key belongs to another validator and is replaced.
+func (h Host) installState(source []byte, pub string, uid, gid int) (*SignState, error) {
 	existing, err := h.Root.ReadFile(h.StatePath, rootfs.SmallFileLimit)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("read %s: %w", h.StatePath, err)
@@ -129,10 +135,10 @@ func (h Host) installState(source []byte, uid, gid int) (*SignState, error) {
 	if err != nil {
 		return nil, err
 	}
-	if recorded != nil && floor.Behind(*recorded) {
-		return nil, fmt.Errorf("this host already records a sign floor at %s, above the %s this import would start from; a floor is never lowered (the bundle is older than a state signed here, or the restore height is too low)", *recorded, floor)
+	if recorded != nil && recorded.PubKey == pub && floor.Behind(recorded.State) {
+		return nil, fmt.Errorf("this host already records a sign floor for this key at %s, above the %s this import would start from; a floor is never lowered (the bundle is older than a state signed here, or the restore height is too low)", recorded.State, floor)
 	}
-	if err := h.writeFloor(source); err != nil {
+	if err := h.writeFloor(pub, source); err != nil {
 		return nil, err
 	}
 	write := existing == nil

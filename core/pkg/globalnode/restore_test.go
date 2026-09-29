@@ -3,6 +3,7 @@ package globalnode
 import (
 	"bytes"
 	"crypto/rand"
+	"math"
 	"strings"
 	"testing"
 
@@ -85,7 +86,7 @@ func TestImportMigration_migrationBundleRefusesARestoreFloor(t *testing.T) {
 
 func TestImportMigration_neverLowersARecordedFloor(t *testing.T) {
 	src, dst := newHost(t), newHost(t)
-	write(t, dst.floorPath(), stateJSON("2000", 0, 3))
+	write(t, dst.floorPath(), floorJSON(t, read(t, src.KeyPath), stateJSON("2000", 0, 3)))
 	write(t, dst.StatePath, stateJSON("2000", 0, 3))
 	write(t, src.StatePath, stateJSON("1200", 0, 3))
 	before := read(t, dst.KeyPath)
@@ -97,10 +98,42 @@ func TestImportMigration_neverLowersARecordedFloor(t *testing.T) {
 	if _, err := dst.ImportMigration(bundle, nil); err == nil || !strings.Contains(err.Error(), "never lowered") {
 		t.Fatalf("err = %v, want the lower floor refused", err)
 	}
-	if got, _ := ParseSignState(read(t, dst.floorPath())); got.Height != 2000 {
-		t.Fatalf("the floor was lowered to %v", got)
+	if got, err := dst.readFloor(); err != nil || got.State.Height != 2000 {
+		t.Fatalf("the floor was lowered to %v (%v)", got, err)
 	}
 	if !bytes.Equal(read(t, dst.KeyPath), before) {
 		t.Fatal("the key was installed from a bundle behind the floor")
+	}
+}
+
+func TestImportMigration_anotherKeysFloorDoesNotBlock(t *testing.T) {
+	src, dst := newHost(t), newHost(t)
+	write(t, dst.floorPath(), floorJSON(t, validatorKeyJSON(t), stateJSON("2000", 0, 3)))
+	write(t, src.StatePath, stateJSON("1200", 0, 3))
+	key := read(t, src.KeyPath)
+	recipient, _ := dst.PrepareMigration()
+	bundle, _, err := src.ExportMigration(recipient, stopped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := dst.ImportMigration(bundle, nil)
+	if err != nil {
+		t.Fatalf("another validator's floor blocked the import: %v", err)
+	}
+	if res.Floor.Height != 1200 || !bytes.Equal(read(t, dst.KeyPath), key) {
+		t.Fatalf("floor %v; the key was not installed", res.Floor)
+	}
+	pub, _ := ValidatorKeyPubKey(key)
+	if got, err := dst.readFloor(); err != nil || got.PubKey != pub {
+		t.Fatalf("the recorded floor is not the imported key's: %v (%v)", got, err)
+	}
+}
+
+func TestRestoreFloor_rejectsTheLargestHeight(t *testing.T) {
+	if _, err := RestoreFloor(math.MaxInt64); err == nil {
+		t.Fatal("a height with no next height was accepted")
+	}
+	if f, err := RestoreFloor(math.MaxInt64 - 1); err != nil || f.Height != math.MaxInt64 {
+		t.Fatalf("floor = %v (%v)", f, err)
 	}
 }

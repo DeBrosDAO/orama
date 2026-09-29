@@ -35,7 +35,7 @@ func TestExportMigration_chainStartedDuringExportAborts(t *testing.T) {
 
 func TestCheckSignFloor_refusesAStateRootOthersCanWrite(t *testing.T) {
 	h := newHost(t)
-	write(t, h.floorPath(), stateJSON("1", 0, 3))
+	write(t, h.floorPath(), floorJSON(t, read(t, h.KeyPath), stateJSON("1", 0, 3)))
 	if err := os.Chmod(h.StateDir, 0o777); err != nil {
 		t.Fatal(err)
 	}
@@ -85,11 +85,16 @@ func TestExportMigration_oldHostCannotStartAgain(t *testing.T) {
 	if err := src.CheckSignFloor(); err == nil || !strings.Contains(err.Error(), "validator key") {
 		t.Fatalf("err = %v, want a refusal: the key left this host", err)
 	}
-	// What oramad's LoadOrGenFilePV would write on a start without the key.
-	write(t, src.KeyPath, validatorKeyJSON(t))
+	// The migrated key put back with a zero state is refused.
+	write(t, src.KeyPath, key)
 	write(t, src.StatePath, emptySignState)
 	if err := src.CheckSignFloor(); err == nil {
-		t.Fatal("a fresh key with a zero state started below the floor")
+		t.Fatal("the migrated key started from a zero state below its floor")
+	}
+	// A different key is another validator; this key's floor says nothing about it.
+	write(t, src.KeyPath, validatorKeyJSON(t))
+	if err := src.CheckSignFloor(); err != nil {
+		t.Fatalf("another key was held to this key's floor: %v", err)
 	}
 	// Abandoning: put back the key and the state copy.
 	write(t, src.KeyPath, read(t, out.KeyCopy))

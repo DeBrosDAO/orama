@@ -74,8 +74,9 @@ sudo orama global install \
   the comment `orama-global`. A cluster reconcile never removes those rules. An
   inactive ufw is refused unless `--enable-firewall` is given; then incoming is
   denied by default, the SSH port is allowed, and ufw is enabled. `--ssh-port`
-  must be a port `sshd -T` reports; otherwise the install is refused before
-  anything changes. Loopback
+  must be a port sshd listens on according to `sshd -T` (its `listenaddress`
+  ports when there are any, its `port` lines otherwise); otherwise the install
+  is refused before anything changes. Loopback
   listeners (RPC 31001, gRPC 31002, REST 31003, Prometheus 31004) are not opened.
   The installer does not change IPv6.
 - Running the command again with the same flags changes nothing but the
@@ -192,9 +193,12 @@ root records in `/var/lib/orama-global/validator-sign-floor.json`. The chain uni
 runs `orama global validator check-sign-floor` as root before every start
 (`ExecStartPre`), so it applies at boot, on `Restart=always` and on any manual
 start, not only to `orama global start`. The check refuses while a migration
-export is in progress. With a floor recorded, the chain starts only when
-`priv_validator_key.json` is in the chain home and `priv_validator_state.json`
-is not behind the floor. The floor, the migration key and the key copies are
+export is in progress. The floor records which validator key it belongs to.
+With a floor recorded, the chain starts only when a `priv_validator_key.json` is
+in the chain home, and, when it is the floor's key, only when
+`priv_validator_state.json` is not behind the floor. A different key is another
+validator and is not held to it. An import never lowers a floor recorded for
+the same key. The floor, the migration key and the key copies are
 trusted only while `/var/lib/orama-global` is root's and not writable by its
 group or others; otherwise every one of these commands, and the check, refuses.
 `orama global install` and `orama global start` print a warning when this
@@ -220,8 +224,9 @@ host's key was migrated away.
    It refuses while the chain runs. It records the old host's state as the floor
    first, then writes that state (unless the new host's is already ahead), and
    installs the key last; a different key already there is moved aside, never
-   overwritten. If a step fails, the key is either not installed or the floor
-   refuses the state, so the chain cannot start signing below the old host.
+   overwritten. If a step fails, the migrated key is not installed, and the
+   floor refuses its state should it be put in place by hand, so the chain
+   cannot start signing as the validator below the old host.
 5. New host: `sudo orama global start`.
 
 What this does not cover: a copy of the key made any other way (a disk image,
@@ -253,7 +258,7 @@ Give the network's **latest committed height** H, read from a node you trust
 right before the import. The floor and the state become H+1, round 0, before
 any step: the restored key signs nothing at or below H, in any round. It can
 sign at H+1, so a vote the lost host cast at H+1 is excluded only if that host
-stopped before H+1 began. An import never lowers a floor already recorded on
+stopped before H+1 began. An import never lowers a floor recorded for the same key on
 the host; a bundle or height below it is refused. If the old host can still start with its copy of the
 key, it and the new host will double sign; the flag is your statement that it
 cannot.

@@ -1,6 +1,7 @@
 package globalnode
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -43,8 +44,26 @@ func (h Host) checkStateDir() error {
 	return nil
 }
 
-func (h Host) writeFloor(state []byte) error {
-	if err := h.Root.WriteFile(h.floorPath(), state, secretMode); err != nil {
+// floorFile is the sign floor as stored: the validator key it belongs to
+// (priv_validator_key.json's pub_key value) and CometBFT's state JSON.
+type floorFile struct {
+	PubKey string          `json:"pub_key"`
+	State  json.RawMessage `json:"state"`
+}
+
+// Floor is a recorded sign floor and the validator key it applies to.
+type Floor struct {
+	PubKey string
+	State  SignState
+}
+
+// writeFloor records state as the floor of the key whose public key is pubKey.
+func (h Host) writeFloor(pubKey string, state []byte) error {
+	data, err := json.Marshal(floorFile{PubKey: pubKey, State: state})
+	if err != nil {
+		return fmt.Errorf("encode the sign floor: %w", err)
+	}
+	if err := h.Root.WriteFile(h.floorPath(), data, secretMode); err != nil {
 		return fmt.Errorf("record the sign floor %s: %w", h.floorPath(), err)
 	}
 	return nil
@@ -52,7 +71,7 @@ func (h Host) writeFloor(state []byte) error {
 
 // readFloor is the recorded floor, or nil when there is none. A state root
 // that does not exist yet has none.
-func (h Host) readFloor() (*SignState, error) {
+func (h Host) readFloor() (*Floor, error) {
 	if _, err := os.Lstat(h.StateDir); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -66,20 +85,25 @@ func (h Host) readFloor() (*SignState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", h.floorPath(), err)
 	}
-	floor, err := ParseSignState(data)
+	var doc floorFile
+	if err := json.Unmarshal(data, &doc); err != nil || doc.PubKey == "" {
+		return nil, fmt.Errorf("%s is not a sign floor (pub_key and state)", h.floorPath())
+	}
+	state, err := ParseSignState(doc.State)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", h.floorPath(), err)
 	}
-	return &floor, nil
+	return &Floor{PubKey: doc.PubKey, State: state}, nil
 }
 
 // CheckSignFloor is the double-sign guard the chain unit runs before every
 // start (ExecStartPre) and `orama global start` runs too. It refuses while a
 // migration export is in progress. With no floor recorded there is nothing
-// else to check. With one, the chain may start only when the validator key
-// is in the chain home and its sign state is not behind the floor: a missing
-// key means the key moved to another host, and oramad would otherwise
-// generate a fresh key and a zero state.
+// else to check. With one, the chain may start only when a validator key is
+// in the chain home (a missing key means it moved to another host, and oramad
+// would otherwise generate a fresh one), and, when that key is the floor's
+// key, only when its sign state is not behind the floor. A different key is
+// another validator, which the floor says nothing about.
 func (h Host) CheckSignFloor() error {
 	floor, err := h.readFloor()
 	if err != nil {
@@ -93,8 +117,16 @@ func (h Host) CheckSignFloor() error {
 	if floor == nil {
 		return nil
 	}
-	if _, err := h.Root.ReadFile(h.KeyPath, rootfs.SmallFileLimit); err != nil {
-		return fmt.Errorf("a sign floor is recorded (%s) but the validator key is not usable: %w; the key was migrated to another host. The key and state copies in %s may be put back only to abandon a migration, and only if the new host never started the chain", *floor, err, h.StateDir)
+	key, err := h.Root.ReadFile(h.KeyPath, rootfs.SmallFileLimit)
+	if err != nil {
+		return fmt.Errorf("a sign floor is recorded (%s) but the validator key is not usable: %w; the key was migrated to another host. The key and state copies in %s may be put back only to abandon a migration, and only if the new host never started the chain", floor.State, err, h.StateDir)
+	}
+	pub, err := ValidatorKeyPubKey(key)
+	if err != nil {
+		return err
+	}
+	if pub != floor.PubKey {
+		return nil
 	}
 	stateData, err := h.read(h.StatePath)
 	if err != nil {
@@ -104,7 +136,7 @@ func (h Host) CheckSignFloor() error {
 	if err != nil {
 		return err
 	}
-	return CheckNotBehind(state, *floor)
+	return CheckNotBehind(state, floor.State)
 }
 
 // MigratedAway reports whether this host's validator key was migrated away:

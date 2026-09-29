@@ -76,11 +76,15 @@ func (h Host) leave(recipient *[32]byte, key, state []byte) ([]byte, Exported, e
 	if err != nil {
 		return nil, Exported{}, err
 	}
+	pub, err := ValidatorKeyPubKey(key)
+	if err != nil {
+		return nil, Exported{}, err
+	}
 	sealed, err := SealBundle(recipient, key, state)
 	if err != nil {
 		return nil, Exported{}, err
 	}
-	if err := h.writeFloor(state); err != nil {
+	if err := h.writeFloor(pub, state); err != nil {
 		return nil, Exported{}, err
 	}
 	out := Exported{State: parsed}
@@ -93,17 +97,15 @@ func (h Host) leave(recipient *[32]byte, key, state []byte) ([]byte, Exported, e
 	return sealed, out, nil
 }
 
-// createSentinel creates the export sentinel; one already there means another
-// export runs, or one was interrupted.
+// createSentinel creates the export sentinel with an exclusive create, so of
+// two exports only one proceeds. One already there means another export
+// runs, or one was interrupted.
 func (h Host) createSentinel() error {
-	present, err := h.sentinelPresent()
-	if err != nil {
-		return err
-	}
-	if present {
+	err := h.Root.CreateExclusive(h.sentinelPath(), nil, secretMode)
+	if errors.Is(err, fs.ErrExist) {
 		return fmt.Errorf("%s exists: another export is running, or one was interrupted; check the chain home before removing it", h.sentinelPath())
 	}
-	if err := h.Root.WriteFile(h.sentinelPath(), nil, secretMode); err != nil {
+	if err != nil {
 		return fmt.Errorf("create %s: %w", h.sentinelPath(), err)
 	}
 	return nil

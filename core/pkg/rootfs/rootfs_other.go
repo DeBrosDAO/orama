@@ -24,3 +24,7 @@ func (r Root) Chown(path string, uid, gid int) error { return errUnsupported }
 func (r Root) Remove(path string) error { return errUnsupported }
 
 func (r Root) DirOwner(path string) (uid, gid uint32, err error) { return 0, 0, errUnsupported }
+
+func (r Root) CreateExclusive(path string, data []byte, perm fs.FileMode) error {
+	return errUnsupported
+}

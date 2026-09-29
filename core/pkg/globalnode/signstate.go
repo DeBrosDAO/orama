@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -66,8 +67,8 @@ func (s SignState) String() string {
 // height, in any round. It may sign at the next height, so a vote the lost
 // host cast there is only excluded if it stopped before that height began.
 func RestoreFloor(latestCommitted int64) (SignState, error) {
-	if latestCommitted <= 0 {
-		return SignState{}, fmt.Errorf("the floor height must be the network's latest committed height, above 0")
+	if latestCommitted <= 0 || latestCommitted == math.MaxInt64 {
+		return SignState{}, fmt.Errorf("the floor height must be the network's latest committed height, above 0 and below %d", int64(math.MaxInt64))
 	}
 	return SignState{Height: latestCommitted + 1}, nil
 }

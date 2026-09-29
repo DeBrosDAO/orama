@@ -137,3 +137,27 @@ func TestCheckSignFloor_noMigrationNoFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// floorJSON is a sign floor file for key at state.
+func floorJSON(t *testing.T, key, state []byte) []byte {
+	t.Helper()
+	pub, err := ValidatorKeyPubKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(floorFile{PubKey: pub, State: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// keyCopyName is the one key copy an export left in h's state root.
+func keyCopyName(t *testing.T, h Host) string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(h.StateDir, "validator-key-migrated-*"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("key copies %v (%v)", matches, err)
+	}
+	return filepath.Base(matches[0])
+}

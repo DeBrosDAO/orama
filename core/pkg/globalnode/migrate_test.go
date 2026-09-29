@@ -197,8 +197,10 @@ func TestImportMigration_stateWriteFailureInstallsNoKey(t *testing.T) {
 	if !bytes.Equal(read(t, dst.KeyPath), before) {
 		t.Fatal("the migrated key was installed although its state was not")
 	}
+	// Were the migrated key put in place by hand now, its state is behind.
+	write(t, dst.KeyPath, read(t, filepath.Join(src.StateDir, keyCopyName(t, src))))
 	if err := dst.CheckSignFloor(); err == nil {
-		t.Fatal("the chain could start below the recorded floor")
+		t.Fatal("the migrated key could start below its recorded floor")
 	}
 }
 
