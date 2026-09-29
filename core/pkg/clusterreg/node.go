@@ -38,6 +38,9 @@ type NodeRegistration struct {
 	Bindings   []NodeBinding
 	Endpoints  []string
 	RegionHint string
+	// ASN is the operator's declared autonomous system number for this node.
+	// 0 leaves it undeclared. The chain cannot verify it.
+	ASN uint32
 }
 
 // ValidateNode checks the stateless rules x/nodes ValidateBasic checks.
@@ -79,7 +82,44 @@ func ValidateNode(n NodeRegistration) error {
 	if err := validateEndpointsMin(n.Endpoints, 0); err != nil {
 		return err
 	}
-	return validateRegion(n.RegionHint)
+	if err := validateRegion(n.RegionHint); err != nil {
+		return err
+	}
+	if n.ASN != 0 {
+		return ValidateASN(n.ASN)
+	}
+	return nil
+}
+
+// Reserved ASN ranges (IANA): AS_TRANS (RFC 6793), documentation (RFC 5398),
+// private use (RFC 6996) and the last value of each block (RFC 7300). They
+// mirror x/nodes ValidateASN, which refuses the same numbers.
+const (
+	asnTrans          = 23456
+	asnDocFirst16     = 64496
+	asnDocLast16      = 64511
+	asnPrivateFirst16 = 64512
+	asnDocFirst32     = 65536
+	asnDocLast32      = 65551
+	asnPrivateFirst32 = 4200000000
+)
+
+// ValidateASN checks a declared autonomous system number the way x/nodes
+// does. Zero is "undeclared" and is the caller's to skip.
+func ValidateASN(asn uint32) error {
+	switch {
+	case asn == 0:
+		return fmt.Errorf("asn 0 is reserved")
+	case asn == asnTrans:
+		return fmt.Errorf("asn %d (AS_TRANS) is reserved", asn)
+	case asn >= asnDocFirst16 && asn <= asnDocLast16, asn >= asnDocFirst32 && asn <= asnDocLast32:
+		return fmt.Errorf("asn %d is reserved for documentation", asn)
+	case asn >= asnPrivateFirst16 && asn < asnDocFirst32:
+		return fmt.Errorf("asn %d is reserved for private use or is the last 16-bit value", asn)
+	case asn >= asnPrivateFirst32:
+		return fmt.Errorf("asn %d is reserved for private use or is the last 32-bit value", asn)
+	}
+	return nil
 }
 
 func validateNodeBindings(bindings []NodeBinding) error {
@@ -152,6 +192,9 @@ func EncodeRegisterNode(n NodeRegistration) []byte {
 	}
 	if n.RegionHint != "" {
 		b = appendStringField(b, 7, n.RegionHint)
+	}
+	if n.ASN != 0 {
+		b = appendUvarintField(b, 8, uint64(n.ASN))
 	}
 	return b
 }

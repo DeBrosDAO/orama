@@ -40,8 +40,8 @@ opened without following symlinks and must be root's; a symlink or a
 directory another account owns or may write is refused. Nothing stages
 automatically: a validator's operator runs this for every chain upgrade.
 
-The chain unit 'orama global install' writes runs oramad directly, not through
-cosmovisor, and does not read this layout.`,
+The chain unit 'orama global install' writes runs cosmovisor, which reads this
+layout; install places the first oramad here as the genesis binary.`,
 	Args: cobra.NoArgs,
 	RunE: runStageOramad,
 }

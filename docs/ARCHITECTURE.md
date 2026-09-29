@@ -1170,8 +1170,10 @@ their units; [RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md) is the operator guide.
 
 | Service | Unit | Account | Public port |
 |---|---|---|---|
-| chain (`oramad start`, no cosmovisor) | `orama-global-chain.service` | `orama-chain` | 31000 tcp+udp |
+| chain (`oramad` under cosmovisor v1.7.3) | `orama-global-chain.service` | `orama-chain` | 31000 tcp+udp |
+| public Kubo (`ipfs daemon`, no swarm.key) + GC timer | `orama-global-ipfs.service`, `orama-global-ipfs-gc.timer` | `orama-ipfs-pub` (group `orama-ipfs-pub-rpc`) | 31010 tcp+udp |
 | provider (`orama-global provider`) | `orama-global-provider.service` | `orama-provider` | 31013 tcp |
+| indexer (`orama-global indexer`, optional) | `orama-global-indexer.service` | `orama-indexer` | none |
 | archiver (`orama-global archiver`) | `orama-global-archiver.service` | `orama-archiver` | none |
 | repair (`orama-global repair`) | `orama-global-repair.service` | `orama-repair` | none |
 

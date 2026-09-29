@@ -50,19 +50,28 @@ func (s *Store) Release(dealID uint64, slot uint32, keep func(cid string) bool) 
 	if !ok {
 		return nil
 	}
-	if err := os.Remove(s.assignPath(dealID, slot)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove deal %d slot %d binding: %w", dealID, slot, err)
-	}
-	rest, err := s.Assignments()
+	all, err := s.Assignments()
 	if err != nil {
 		return err
 	}
-	for _, a := range rest {
-		if a.CID == cid {
-			return nil
+	last := true
+	for _, a := range all {
+		if a.CID == cid && (a.DealID != dealID || a.Slot != slot) {
+			last = false
 		}
 	}
-	if keep != nil && keep(cid) {
+	remove := last && (keep == nil || !keep(cid))
+	if remove {
+		// The pin goes first: a failed unpin leaves the binding, so the next
+		// sweep tries again instead of leaking a public pin.
+		if err := s.unpinPiece(cid); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(s.assignPath(dealID, slot)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove deal %d slot %d binding: %w", dealID, slot, err)
+	}
+	if !remove {
 		return nil
 	}
 	for _, path := range []string{s.piecePath(cid), s.metaPath(cid)} {

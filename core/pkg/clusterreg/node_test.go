@@ -3,6 +3,7 @@ package clusterreg
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +50,53 @@ func TestValidateNode_refusesTheOperatorAsHotKey(t *testing.T) {
 	n.Endpoints = nil
 	if err := ValidateNode(n); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEncodeRegisterNode_asnIsField8(t *testing.T) {
+	// The chain's MsgRegisterNode{Operator: "a", Asn: 15169}.Marshal() ends
+	// with field 8 (tag 0x40) and the varint of 15169.
+	got := EncodeRegisterNode(NodeRegistration{Operator: "a", ASN: 15169})
+	if !strings.HasSuffix(hex.EncodeToString(got), "40c176") {
+		t.Fatalf("wire %x", got)
+	}
+	if strings.HasSuffix(hex.EncodeToString(EncodeRegisterNode(NodeRegistration{Operator: "a"})), "40c176") {
+		t.Fatal("an undeclared asn was encoded")
+	}
+}
+
+func TestValidateASN_refusesWhatTheChainRefuses(t *testing.T) {
+	for _, asn := range []uint32{0, 23456, 64496, 64511, 64512, 65535, 65536, 65551, 4200000000, 4294967295} {
+		if err := ValidateASN(asn); err == nil {
+			t.Errorf("asn %d was accepted", asn)
+		}
+	}
+	for _, asn := range []uint32{1, 15169, 64495, 65552, 396982, 4199999999} {
+		if err := ValidateASN(asn); err != nil {
+			t.Errorf("asn %d refused: %v", asn, err)
+		}
+	}
+}
+
+func TestValidateNode_checksTheDeclaredASN(t *testing.T) {
+	hot, err := bech32Encode(accountHRP, bytes.Repeat([]byte{0x01}, 20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := NodeRegistration{
+		Operator: "orama19rl4cm2hmr8afy4kldpxz3fka4jguq0a5tup0s", NodeID: "node-a", Roles: []int{RoleStorage}, HotKey: hot,
+		Bindings: []NodeBinding{{Service: "provider", KeyType: "secp256k1", Pubkey: bytes.Repeat([]byte{0x02}, 33), Signature: bytes.Repeat([]byte{0x11}, 64)}},
+	}
+	n.ASN = 64512
+	if err := ValidateNode(n); err == nil {
+		t.Fatal("a private-use asn was accepted")
+	}
+	n.ASN = 15169
+	if err := ValidateNode(n); err != nil {
+		t.Fatal(err)
+	}
+	n.ASN = 0
+	if err := ValidateNode(n); err != nil {
+		t.Fatalf("an undeclared asn was refused: %v", err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/chain/x/storage/types"
 	"os"
 	"path/filepath"
 )
@@ -14,6 +15,9 @@ type pendingSlot struct {
 	DealID uint64 `json:"deal_id"`
 	Slot   uint32 `json:"slot"`
 	Root   string `json:"root,omitempty"`
+	// Class is the deal's class once read (0 until then). It decides whether
+	// the piece may be fetched through the public Kubo.
+	Class int32 `json:"class,omitempty"`
 }
 
 type runnerState struct {
@@ -119,6 +123,24 @@ func (r *Runner) notePendingRoot(dealID uint64, slot uint32, root string) error 
 		p := &r.state.Pending[i]
 		if p.DealID == dealID && p.Slot == slot && p.Root != root {
 			p.Root = root
+			changed = true
+		}
+	}
+	r.mu.Unlock()
+	if !changed {
+		return nil
+	}
+	return r.save()
+}
+
+// notePendingClass records the deal class of a waiting slot.
+func (r *Runner) notePendingClass(dealID uint64, slot uint32, class types.DealClass) error {
+	r.mu.Lock()
+	changed := false
+	for i := range r.state.Pending {
+		p := &r.state.Pending[i]
+		if p.DealID == dealID && p.Slot == slot && p.Class != int32(class) {
+			p.Class = int32(class)
 			changed = true
 		}
 	}

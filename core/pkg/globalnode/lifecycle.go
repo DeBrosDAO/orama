@@ -124,6 +124,9 @@ func (l Lifecycle) Start(ctx context.Context, only []install.GlobalService) erro
 		if err := l.unit("start", s); err != nil {
 			return err
 		}
+		if err := l.timers("start", s); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -156,6 +159,9 @@ func (l Lifecycle) Stop(only []install.GlobalService) error {
 		targets = installed
 	}
 	for i := len(targets) - 1; i >= 0; i-- {
+		if err := l.timers("stop", targets[i]); err != nil {
+			return err
+		}
 		if err := l.unit("stop", targets[i]); err != nil {
 			return err
 		}
@@ -251,5 +257,17 @@ func (l Lifecycle) unit(verb string, s install.GlobalService) error {
 		return fmt.Errorf("systemctl %s %s: %w\n%s", verb, unit, err, strings.TrimSpace(string(out)))
 	}
 	fmt.Fprintf(l.Out, "  %s: %s\n", verb, unit)
+	return nil
+}
+
+// timers runs verb on the timer units that go with s (the public Kubo's GC),
+// so a stopped service is not collected and a started one is.
+func (l Lifecycle) timers(verb string, s install.GlobalService) error {
+	for _, timer := range install.GlobalServiceTimers(s) {
+		if out, err := l.Systemctl(verb, timer); err != nil {
+			return fmt.Errorf("systemctl %s %s: %w\n%s", verb, timer, err, strings.TrimSpace(string(out)))
+		}
+		fmt.Fprintf(l.Out, "  %s: %s\n", verb, timer)
+	}
 	return nil
 }

@@ -1559,23 +1559,37 @@ Install the global services on this node (run as root)
 orama global install [flags]
 ```
 
-Install global services on this machine: chain, and optionally provider,
-archiver or repair. The chain is required: the other services reach it only on
-this host's loopback RPC. provider and repair are never installed together.
+Install global services on this machine: chain, and optionally ipfs,
+provider, archiver, indexer or repair. The chain is required: the other
+services reach it only on this host's loopback RPC. provider needs ipfs beside
+it (it pins public deals through the public Kubo). provider and repair are
+never installed together. indexer is optional: it serves the chain read API on
+loopback for a node that runs an RPC or index endpoint.
 
 For each service it creates the service's system account, copies its binaries
 (oramad and this orama CLI for the chain, whose unit runs 'orama global
-validator check-sign-floor' before every start; orama-global for the others)
-from --staged-dir into /usr/lib/orama-global/bin
+validator check-sign-floor' before every start; ipfs, Kubo v0.38.2, for ipfs;
+orama-global for the others) from --staged-dir into /usr/lib/orama-global/bin
 (root-owned, 0755; a symlink in the staged directory is refused, and as root the
 directory must be root's and not writable by others), writes and enables its
 orama-global-* unit, and opens its public port in ufw (31000 tcp+udp for the
-chain, 31013 tcp for the provider) with the comment orama-global. It does not
-start anything: 'orama global start' does, chain first.
+chain, 31010 tcp+udp for the public Kubo swarm, 31013 tcp for the provider)
+with the comment orama-global. It does not start anything: 'orama global start'
+does, chain first.
 
-The chain unit runs oramad directly. cosmovisor is not installed: no cosmovisor
-release is pinned. A new chain binary is installed by running this command again
-with the new oramad staged, then 'orama global restart chain'.
+The chain unit runs oramad under cosmovisor v1.7.3. Stage the official
+cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz beside the other binaries: its
+SHA-256 must equal the pin built into this CLI, and only its cosmovisor file is
+installed. oramad itself is placed in the chain home's cosmovisor layout as the
+genesis binary, so the chain home must already have a genesis (--init-chain, or
+an existing home). A binary already staged there with different bytes is
+refused: change the chain binary with 'orama global stage-oramad --upgrade'.
+
+The ipfs service is a public Kubo of its own: no swarm.key, its own repo in
+/var/lib/orama-global/ipfs, swarm on 31010, RPC on 127.0.0.1:31011 behind a
+token only the provider's group can read, and a GC timer. --public-storage-gb
+is the capacity you will declare with 'orama global capacity'; Kubo's
+StorageMax is that plus 10%. It never touches a private cluster's Kubo.
 
 --init-chain creates the chain home with 'oramad init' as orama-chain and puts
 the network's --genesis in place. It is never done without the flag, and it is
@@ -1606,9 +1620,10 @@ co-located must keep using --colocated on later installs.
 | `--init-chain` | `false` | Create the chain home with oramad init and install --genesis |
 | `--moniker` | — | Node moniker, with --init-chain |
 | `--persistent-peers` | — | Chain peers, id@host:port,... (written into the chain unit) |
-| `--services` | — | Services: chain[,provider,archiver,repair] [required] |
+| `--public-storage-gb` | `0` | Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs) |
+| `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair] [required] |
 | `--ssh-port` | `22` | SSH port --enable-firewall allows |
-| `--staged-dir` | — | Directory holding the release's oramad and orama-global [required] |
+| `--staged-dir` | — | Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required] |
 
 ### orama global register
 
@@ -1621,8 +1636,11 @@ orama global register [flags]
 Build MsgRegisterNode from bindings that 'orama global bind' wrote.
 
 The message names the operator, a node id, roles, a hot key that is not the
-operator, the bindings, public endpoints, and an optional region. It does not
-include a tenant list or a cluster secret.
+operator, the bindings, public endpoints, an optional region and an optional
+--asn, the autonomous system number the node declares. The chain cannot verify
+the ASN; a protocol deal slot goes only to a node that declared one, and slots
+go to distinct ASNs. Reserved, documentation and private-use numbers are
+refused. It does not include a tenant list or a cluster secret.
 
 --node is the chain REST API. The command reads the account there, asks the
 RootWallet agent to sign this one transaction, and broadcasts it. Without
@@ -1634,6 +1652,7 @@ this --chain-id and --operator.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--account-number` | `0` | Account number, when not read from --node |
+| `--asn` | `0` | Autonomous system number the node declares (0 leaves it undeclared) |
 | `--binding` | — | Binding JSON from orama global bind [required] |
 | `--chain-id` | — | Chain id [required] |
 | `--endpoint` | — | Public endpoint (repeatable) |
@@ -1711,8 +1730,8 @@ opened without following symlinks and must be root's; a symlink or a
 directory another account owns or may write is refused. Nothing stages
 automatically: a validator's operator runs this for every chain upgrade.
 
-The chain unit 'orama global install' writes runs oramad directly, not through
-cosmovisor, and does not read this layout.
+The chain unit 'orama global install' writes runs cosmovisor, which reads this
+layout; install places the first oramad here as the genesis binary.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -1736,8 +1755,9 @@ Start the installed orama-global-* units, or only the named ones.
 The chain starts first. Before it starts, a validator key migrated to this host
 is checked against the sign state it last had on its old host; a state behind
 it is refused, since it could sign a step the old host already signed. The other
-services start once the chain's loopback RPC answers. Starting provider,
-archiver or repair alone needs the chain already running.
+services start once the chain's loopback RPC answers. Starting ipfs, provider,
+archiver, indexer or repair alone needs the chain already running. The public
+Kubo's GC timer starts and stops with it.
 
 ### orama global status
 

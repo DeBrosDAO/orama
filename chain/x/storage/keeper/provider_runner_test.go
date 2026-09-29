@@ -75,6 +75,14 @@ func (c nodeChain) Slot(_ context.Context, dealID uint64, slot uint32) (types.Sl
 	return res.Slot, nil
 }
 
+func (c nodeChain) Deal(_ context.Context, dealID uint64) (types.Deal, error) {
+	res, err := c.sim.f.Query.Deal(c.sim.f.Ctx, &types.QueryDealRequest{DealId: dealID})
+	if err != nil {
+		return types.Deal{}, err
+	}
+	return res.Deal, nil
+}
+
 func (c nodeChain) CurrentEpoch(context.Context) (uint64, error) { return c.sim.f.Emission.epoch, nil }
 
 func (c nodeChain) Challenges(_ context.Context, epoch uint64, nodeID string) ([]types.Challenge, error) {

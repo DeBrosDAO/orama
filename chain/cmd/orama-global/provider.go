@@ -22,6 +22,7 @@ import (
 // the provider's StateDirectory.
 const (
 	providerListen      = "0.0.0.0:31013"
+	defaultIPFSAPI      = "http://127.0.0.1:31011"
 	providerInterval    = 6 * time.Second
 	providerMaxPiece    = 256 << 20
 	providerRatePerSec  = 20
@@ -32,10 +33,11 @@ const (
 )
 
 type providerFlags struct {
-	listen, rpc, home string
-	startHeight       int64
-	interval          time.Duration
-	maxPiece          int64
+	listen, rpc, home  string
+	ipfsAPI, ipfsToken string
+	startHeight        int64
+	interval           time.Duration
+	maxPiece           int64
 }
 
 func providerCmd() *cobra.Command {
@@ -48,6 +50,12 @@ its piece has been uploaded to POST /pieces/<hex piece root>, declines it before
 the accept window closes when nothing arrived, proves every challenge each epoch,
 and releases a slot one epoch after the chain stops naming this node for it.
 
+PUBLIC_PIN and ARCHIVE slots are pinned in this host's public Kubo (--ipfs-api,
+bearer token in --ipfs-token-file) before they are accepted, so anyone can fetch
+the bytes by CID; a piece is also fetched by CID into the store through
+POST /pins/<hex piece root> with X-Piece-CID, checked against the root. PRIVATE
+slots never reach Kubo. Without --ipfs-api the provider does not pin.
+
 Files in --home: hot-key (created on first start, mode 0600), node-id (the x/nodes
 id, written after registration), denylist (optional, one CID per line), store/,
 state.json and monitor.json.`,
@@ -57,6 +65,8 @@ state.json and monitor.json.`,
 	f.StringVar(&fl.listen, "listen", providerListen, "Upload and retrieval HTTP address")
 	f.StringVar(&fl.rpc, "rpc", defaultRPC, "oramad CometBFT RPC")
 	f.StringVar(&fl.home, "home", ".", "Provider state directory")
+	f.StringVar(&fl.ipfsAPI, "ipfs-api", "", "Public Kubo RPC, for example "+defaultIPFSAPI+" (empty: no public pinning)")
+	f.StringVar(&fl.ipfsToken, "ipfs-token-file", "", "File holding the public Kubo RPC bearer token, with --ipfs-api")
 	f.Int64Var(&fl.startHeight, "start-height", 0, "First block to read when state.json does not exist (default: the node's x/nodes registration height)")
 	f.DurationVar(&fl.interval, "interval", providerInterval, "Time between chain steps")
 	f.Int64Var(&fl.maxPiece, "max-piece-bytes", providerMaxPiece, "Largest upload accepted")
@@ -87,6 +97,15 @@ func runProvider(ctx context.Context, fl providerFlags) error {
 	if err != nil {
 		return fmt.Errorf("open the piece store %s: %w", storeDir, err)
 	}
+	kubo, err := openPublicKubo(fl)
+	if err != nil {
+		return err
+	}
+	var pins provider.Pinner
+	if kubo != nil {
+		pins = kubo
+		store.SetUnpinner(kubo)
+	}
 	client, err := node.Dial(fl.rpc)
 	if err != nil {
 		return err
@@ -103,7 +122,7 @@ func runProvider(ctx context.Context, fl providerFlags) error {
 		return err
 	}
 	runner, err := provider.NewRunner(store, chain, provider.Config{
-		NodeID: nodeID, Signer: hot.Address, StartHeight: start,
+		NodeID: nodeID, Signer: hot.Address, StartHeight: start, Pins: pins,
 		StatePath: statePath, MonitorPath: filepath.Join(fl.home, "monitor.json"),
 	})
 	if err != nil {
@@ -116,7 +135,32 @@ func runProvider(ctx context.Context, fl providerFlags) error {
 	if err := handler.AcceptUploads(fl.maxPiece, runner.Assigned); err != nil {
 		return err
 	}
+	if kubo != nil {
+		if err := handler.AcceptPins(kubo, runner.AssignedPublic); err != nil {
+			return err
+		}
+	}
 	return serveAndStep(ctx, fl, handler, runner)
+}
+
+// openPublicKubo is the client for this host's public Kubo, or nil when
+// --ipfs-api is empty. The token file is required with the API and is read
+// once: it is the file the installer wrote in the Kubo home for the provider's group.
+func openPublicKubo(fl providerFlags) (*provider.Kubo, error) {
+	if fl.ipfsAPI == "" {
+		if fl.ipfsToken != "" {
+			return nil, errors.New("--ipfs-token-file needs --ipfs-api")
+		}
+		return nil, nil
+	}
+	if fl.ipfsToken == "" {
+		return nil, errors.New("--ipfs-api needs --ipfs-token-file")
+	}
+	token, err := os.ReadFile(fl.ipfsToken)
+	if err != nil {
+		return nil, fmt.Errorf("read the public Kubo token %s (the provider must be in the orama-ipfs-pub-rpc group): %w", fl.ipfsToken, err)
+	}
+	return provider.NewKubo(fl.ipfsAPI, string(token))
 }
 
 func serveAndStep(ctx context.Context, fl providerFlags, handler http.Handler, runner *provider.Runner) error {

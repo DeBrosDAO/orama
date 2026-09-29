@@ -58,8 +58,8 @@ height, or the chain splits. There is no on-chain switch that can do it for them
    `config/app.toml`, or start `oramad` with `--halt-height <H>`. At `H` the node commits
    the block and stops.
 6. **Each validator stages the new binary** with `orama global stage-oramad --upgrade
-   <name> ...` (cosmovisor layout, `docs/CHAIN.md`), or replaces the binary when it runs
-   without cosmovisor. Validators stay in notify mode; nothing installs by itself.
+   <name> ...` (cosmovisor layout, `docs/CHAIN.md`); the installed chain unit runs
+   under cosmovisor. Validators stay in notify mode; nothing installs by itself.
 7. **Restart after `H`.** Blocks resume once validators holding more than two thirds of
    voting power run the fix. Before the λ hand-over that means the bootstrap committee.
 8. **Check** every invariant query above on every validator.

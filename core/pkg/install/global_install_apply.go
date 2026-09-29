@@ -1,9 +1,15 @@
 package install
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"os/user"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -36,8 +42,18 @@ type GlobalHost struct {
 	StateDir  string
 	ChainHome string
 	Lookup    func(account string) (uid, gid int, err error)
-	Chown     func(r rootfs.Root, path string, uid, gid int) error
-	Logf      func(format string, args ...any)
+	// LookupGroup is the gid of a system group.
+	LookupGroup func(group string) (gid int, err error)
+	// Arch is the GOARCH that picks the pinned cosmovisor tarball.
+	Arch string
+	// CosmovisorPins is the pinned SHA-256 of the cosmovisor tarball, by GOARCH.
+	CosmovisorPins map[string]string
+	// StageGenesis puts the staged oramad in the cosmovisor layout as the
+	// genesis binary; sum is the SHA-256 of src. It is idempotent for the
+	// same bytes.
+	StageGenesis func(src, sum string) (string, error)
+	Chown        func(r rootfs.Root, path string, uid, gid int) error
+	Logf         func(format string, args ...any)
 	// Netns is the co-located layout's host; the zero value is a global-only
 	// machine and is never consulted without opts.Colocated.
 	Netns NetnsHost
@@ -47,18 +63,22 @@ type GlobalHost struct {
 // may write: /usr/lib, the unit directory, and /var/lib.
 func DefaultGlobalHost(logf func(format string, args ...any)) GlobalHost {
 	return GlobalHost{
-		Run:       runCommand,
-		BinRoot:   rootfs.At(filepath.Dir(filepath.Dir(constants.GlobalBinDir))),
-		BinDir:    constants.GlobalBinDir,
-		UnitRoot:  rootfs.At(systemdUnitDir),
-		UnitDir:   systemdUnitDir,
-		StateRoot: rootfs.At(filepath.Dir(constants.GlobalStateRoot)),
-		StateDir:  constants.GlobalStateRoot,
-		ChainHome: constants.ChainHome,
-		Lookup:    cosmovisor.LookupAccount,
-		Chown:     func(r rootfs.Root, path string, uid, gid int) error { return r.Chown(path, uid, gid) },
-		Logf:      logf,
-		Netns:     DefaultNetnsHost(runCommand),
+		Run:            runCommand,
+		BinRoot:        rootfs.At(filepath.Dir(filepath.Dir(constants.GlobalBinDir))),
+		BinDir:         constants.GlobalBinDir,
+		UnitRoot:       rootfs.At(systemdUnitDir),
+		UnitDir:        systemdUnitDir,
+		StateRoot:      rootfs.At(filepath.Dir(constants.GlobalStateRoot)),
+		StateDir:       constants.GlobalStateRoot,
+		ChainHome:      constants.ChainHome,
+		Lookup:         cosmovisor.LookupAccount,
+		LookupGroup:    lookupGroupID,
+		Arch:           runtime.GOARCH,
+		CosmovisorPins: constants.CosmovisorTarballSHA256,
+		StageGenesis:   stageGenesisInLayout(constants.ChainHome),
+		Chown:          func(r rootfs.Root, path string, uid, gid int) error { return r.Chown(path, uid, gid) },
+		Logf:           logf,
+		Netns:          DefaultNetnsHost(runCommand),
 	}
 }
 
@@ -78,11 +98,22 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err != nil {
 		return err
 	}
+	if slices.Contains(opts.Services, GlobalServiceChain) {
+		if err := checkStagedGenesis(h, opts.StagedDir); err != nil {
+			return err
+		}
+	}
 	if err := ensureGlobalAccounts(h.Run, opts.Services); err != nil {
 		return err
 	}
-	if err := installGlobalBinaries(h, opts.StagedDir, opts.binaries()); err != nil {
+	sums, err := installGlobalBinaries(h, opts.StagedDir, opts.binaries())
+	if err != nil {
 		return err
+	}
+	if slices.Contains(opts.Services, GlobalServiceChain) {
+		if err := installCosmovisor(h, opts.StagedDir); err != nil {
+			return err
+		}
 	}
 	if err := h.StateRoot.MkdirAll(h.StateDir, globalDirMode); err != nil {
 		return fmt.Errorf("create %s: %w", h.StateDir, err)
@@ -94,6 +125,16 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	}
 	if plan != nil {
 		if err := writeNetns(h, plan); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(opts.Services, GlobalServiceChain) {
+		if err := stageGenesisBinary(h, filepath.Join(opts.StagedDir, globalOramadBinary), sums[globalOramadBinary]); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(opts.Services, GlobalServiceIPFS) {
+		if err := installPublicKubo(h, opts.PublicStorageBytes); err != nil {
 			return err
 		}
 	}
@@ -158,31 +199,36 @@ func ensureSystemGroup(run commandRunner, name string) error {
 // the bin directory, root-owned 0755. The staged directory is an anchor: as
 // root, one that is not root's or is writable by others is refused, and a
 // symlink in it is never followed. The bin directory is made root's 0755.
-func installGlobalBinaries(h GlobalHost, stagedDir string, names []string) error {
+//
+// It returns the SHA-256 (hex) of each installed binary by name.
+func installGlobalBinaries(h GlobalHost, stagedDir string, names []string) (map[string]string, error) {
 	staged := rootfs.At(stagedDir)
 	if err := h.BinRoot.MkdirAll(h.BinDir, globalDirMode); err != nil {
-		return fmt.Errorf("create %s: %w", h.BinDir, err)
+		return nil, fmt.Errorf("create %s: %w", h.BinDir, err)
 	}
 	for _, dir := range []string{filepath.Dir(h.BinDir), h.BinDir} {
 		if err := rootOwned(h, dir, globalDirMode); err != nil {
-			return err
+			return nil, err
 		}
 	}
+	sums := map[string]string{}
 	for _, name := range names {
 		data, err := staged.ReadFile(filepath.Join(stagedDir, name), globalBinaryLimit)
 		if err != nil {
-			return fmt.Errorf("read the staged %s (put the release's %s in %s): %w", name, name, stagedDir, err)
+			return nil, fmt.Errorf("read the staged %s (put the release's %s in %s): %w", name, name, stagedDir, err)
 		}
 		dst := filepath.Join(h.BinDir, name)
 		if err := h.BinRoot.WriteFile(dst, data, globalBinaryMode); err != nil {
-			return fmt.Errorf("install %s: %w", dst, err)
+			return nil, fmt.Errorf("install %s: %w", dst, err)
 		}
 		if err := rootOwned(h, dst, globalBinaryMode); err != nil {
-			return err
+			return nil, err
 		}
+		sum := sha256.Sum256(data)
+		sums[name] = hex.EncodeToString(sum[:])
 		h.Logf("  ✓ %s installed", dst)
 	}
-	return nil
+	return sums, nil
 }
 
 // rootOwned makes path, below BinRoot, owned by root with mode.
@@ -196,33 +242,50 @@ func rootOwned(h GlobalHost, path string, mode fs.FileMode) error {
 	return nil
 }
 
-// writeGlobalUnits writes each service's unit, reloads systemd and enables
-// the units. It does not start them: `orama global start` does, in order.
+// writeGlobalUnits writes each service's unit files, reloads systemd and
+// enables the units. It does not start them: `orama global start` does, in
+// order.
 func writeGlobalUnits(h GlobalHost, opts GlobalInstallOptions) error {
-	var units []string
+	var enable []string
 	for _, s := range opts.Services {
-		unit := globalServiceSpecs[s].unit
-		path := filepath.Join(h.UnitDir, unit)
-		body, err := opts.unitFor(s)
+		files, err := opts.unitFilesFor(s)
 		if err != nil {
-			return fmt.Errorf("render %s: %w", unit, err)
+			return err
 		}
-		if err := h.UnitRoot.WriteFile(path, []byte(body), globalUnitMode); err != nil {
-			return fmt.Errorf("write %s: %w", path, err)
+		for _, u := range files {
+			path := filepath.Join(h.UnitDir, u.name)
+			if err := h.UnitRoot.WriteFile(path, []byte(u.body), globalUnitMode); err != nil {
+				return fmt.Errorf("write %s: %w", path, err)
+			}
+			if u.enable {
+				enable = append(enable, u.name)
+			}
 		}
-		units = append(units, unit)
 	}
 	if opts.Colocated {
-		units = append(units, globalnetns.UnitName)
+		enable = append(enable, globalnetns.UnitName)
 	}
 	if out, err := h.Run("systemctl", "daemon-reload"); err != nil {
 		return fmt.Errorf("systemctl daemon-reload: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
-	for _, unit := range units {
+	for _, unit := range enable {
 		if out, err := h.Run("systemctl", "enable", unit); err != nil {
 			return fmt.Errorf("enable %s: %w\n%s", unit, err, strings.TrimSpace(string(out)))
 		}
 		h.Logf("  ✓ %s written and enabled", unit)
 	}
 	return nil
+}
+
+// lookupGroupID is the gid of a system group.
+func lookupGroupID(name string) (int, error) {
+	g, err := user.LookupGroup(name)
+	if err != nil {
+		return 0, fmt.Errorf("look up the %s group: %w", name, err)
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return 0, fmt.Errorf("the %s group has a non-numeric gid %q: %w", name, g.Gid, err)
+	}
+	return gid, nil
 }

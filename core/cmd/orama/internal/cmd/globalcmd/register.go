@@ -20,6 +20,7 @@ var nodeFlags struct {
 	bindings []string
 	ends     []string
 	region   string
+	asn      uint32
 	pubKey   string
 	account  uint64
 	sequence uint64
@@ -34,8 +35,11 @@ var registerNodeCmd = &cobra.Command{
 	Long: `Build MsgRegisterNode from bindings that 'orama global bind' wrote.
 
 The message names the operator, a node id, roles, a hot key that is not the
-operator, the bindings, public endpoints, and an optional region. It does not
-include a tenant list or a cluster secret.
+operator, the bindings, public endpoints, an optional region and an optional
+--asn, the autonomous system number the node declares. The chain cannot verify
+the ASN; a protocol deal slot goes only to a node that declared one, and slots
+go to distinct ASNs. Reserved, documentation and private-use numbers are
+refused. It does not include a tenant list or a cluster secret.
 
 --node is the chain REST API. The command reads the account there, asks the
 RootWallet agent to sign this one transaction, and broadcasts it. Without
@@ -57,6 +61,7 @@ func init() {
 	f.StringArrayVar(&nodeFlags.bindings, "binding", nil, "Binding JSON from orama global bind [required]")
 	f.StringArrayVar(&nodeFlags.ends, "endpoint", nil, "Public endpoint (repeatable)")
 	f.StringVar(&nodeFlags.region, "region", "", "Region hint")
+	f.Uint32Var(&nodeFlags.asn, "asn", 0, "Autonomous system number the node declares (0 leaves it undeclared)")
 	f.StringVar(&nodeFlags.pubKey, "pubkey", "", "Compressed secp256k1 pubkey hex of the signing account")
 	f.Uint64Var(&nodeFlags.account, "account-number", 0, "Account number, when not read from --node")
 	f.Uint64Var(&nodeFlags.sequence, "sequence", 0, "Account sequence, when not read from --node")
@@ -79,7 +84,7 @@ func runRegisterNode(cmd *cobra.Command, args []string) error {
 	reg := clusterreg.NodeRegistration{
 		Operator: nodeFlags.operator, NodeID: nodeFlags.id, Roles: roles,
 		HotKey: nodeFlags.hotKey, Bindings: bindings, Endpoints: nodeFlags.ends,
-		RegionHint: nodeFlags.region,
+		RegionHint: nodeFlags.region, ASN: nodeFlags.asn,
 	}
 	if err := clusterreg.ValidateNode(reg); err != nil {
 		return clierr.Usage("%v", err)

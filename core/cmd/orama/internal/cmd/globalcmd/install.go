@@ -8,42 +8,60 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// bytesPerGB is the decimal gigabyte Kubo's StorageMax counts in.
+const bytesPerGB = 1_000_000_000
+
 // defaultSSHPort is the port --enable-firewall allows before enabling ufw.
 const defaultSSHPort = 22
 
 var installFlags struct {
-	services       []string
-	stagedDir      string
-	peers          string
-	initChain      bool
-	chainID        string
-	moniker        string
-	genesis        string
-	enableFirewall bool
-	sshPort        int
-	colocated      bool
+	services        []string
+	stagedDir       string
+	publicStorageGB uint64
+	peers           string
+	initChain       bool
+	chainID         string
+	moniker         string
+	genesis         string
+	enableFirewall  bool
+	sshPort         int
+	colocated       bool
 }
 
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install the global services on this node (run as root)",
-	Long: `Install global services on this machine: chain, and optionally provider,
-archiver or repair. The chain is required: the other services reach it only on
-this host's loopback RPC. provider and repair are never installed together.
+	Long: `Install global services on this machine: chain, and optionally ipfs,
+provider, archiver, indexer or repair. The chain is required: the other
+services reach it only on this host's loopback RPC. provider needs ipfs beside
+it (it pins public deals through the public Kubo). provider and repair are
+never installed together. indexer is optional: it serves the chain read API on
+loopback for a node that runs an RPC or index endpoint.
 
 For each service it creates the service's system account, copies its binaries
 (oramad and this orama CLI for the chain, whose unit runs 'orama global
-validator check-sign-floor' before every start; orama-global for the others)
-from --staged-dir into /usr/lib/orama-global/bin
+validator check-sign-floor' before every start; ipfs, Kubo v0.38.2, for ipfs;
+orama-global for the others) from --staged-dir into /usr/lib/orama-global/bin
 (root-owned, 0755; a symlink in the staged directory is refused, and as root the
 directory must be root's and not writable by others), writes and enables its
 orama-global-* unit, and opens its public port in ufw (31000 tcp+udp for the
-chain, 31013 tcp for the provider) with the comment orama-global. It does not
-start anything: 'orama global start' does, chain first.
+chain, 31010 tcp+udp for the public Kubo swarm, 31013 tcp for the provider)
+with the comment orama-global. It does not start anything: 'orama global start'
+does, chain first.
 
-The chain unit runs oramad directly. cosmovisor is not installed: no cosmovisor
-release is pinned. A new chain binary is installed by running this command again
-with the new oramad staged, then 'orama global restart chain'.
+The chain unit runs oramad under cosmovisor v1.7.3. Stage the official
+cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz beside the other binaries: its
+SHA-256 must equal the pin built into this CLI, and only its cosmovisor file is
+installed. oramad itself is placed in the chain home's cosmovisor layout as the
+genesis binary, so the chain home must already have a genesis (--init-chain, or
+an existing home). A binary already staged there with different bytes is
+refused: change the chain binary with 'orama global stage-oramad --upgrade'.
+
+The ipfs service is a public Kubo of its own: no swarm.key, its own repo in
+/var/lib/orama-global/ipfs, swarm on 31010, RPC on 127.0.0.1:31011 behind a
+token only the provider's group can read, and a GC timer. --public-storage-gb
+is the capacity you will declare with 'orama global capacity'; Kubo's
+StorageMax is that plus 10%. It never touches a private cluster's Kubo.
 
 --init-chain creates the chain home with 'oramad init' as orama-chain and puts
 the network's --genesis in place. It is never done without the flag, and it is
@@ -70,8 +88,9 @@ co-located must keep using --colocated on later installs.`,
 
 func init() {
 	f := installCmd.Flags()
-	f.StringSliceVar(&installFlags.services, "services", nil, "Services: chain[,provider,archiver,repair] [required]")
-	f.StringVar(&installFlags.stagedDir, "staged-dir", "", "Directory holding the release's oramad and orama-global [required]")
+	f.StringSliceVar(&installFlags.services, "services", nil, "Services: chain[,ipfs,provider,archiver,indexer,repair] [required]")
+	f.StringVar(&installFlags.stagedDir, "staged-dir", "", "Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required]")
+	f.Uint64Var(&installFlags.publicStorageGB, "public-storage-gb", 0, "Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs)")
 	f.StringVar(&installFlags.peers, "persistent-peers", "", "Chain peers, id@host:port,... (written into the chain unit)")
 	f.BoolVar(&installFlags.initChain, "init-chain", false, "Create the chain home with oramad init and install --genesis")
 	f.StringVar(&installFlags.chainID, "chain-id", "", "Chain id, with --init-chain")
@@ -91,6 +110,7 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	opts := install.GlobalInstallOptions{
 		Services: services, StagedDir: installFlags.stagedDir, PersistentPeers: installFlags.peers,
 		EnableFirewall: installFlags.enableFirewall, SSHPort: installFlags.sshPort, Colocated: installFlags.colocated,
+		PublicStorageBytes: installFlags.publicStorageGB * bytesPerGB,
 	}
 	if installFlags.initChain {
 		opts.InitChain = &install.ChainInit{

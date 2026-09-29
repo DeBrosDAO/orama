@@ -270,11 +270,11 @@ channel, and the hour is inside `--window` when one is set. A downgrade, a
 release marked `--bad`, and a TUF failure (`--verify rollback|freeze|threshold|hash`)
 print `refuse`. `--role validator` with `--mode auto` is an error: a
 validator may be `off` or `notify`, never `auto`; its chain binary is changed by
-hand: the unit `orama global install` writes runs `oramad` directly, so a new
-binary is installed by running that command again with it staged (see
-[RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md)); `orama global stage-oramad`
-places binaries in the cosmovisor layout, which no installed unit runs yet (see
-[CHAIN.md](CHAIN.md#running-oramad-under-cosmovisor)). This command does not take
+hand: the unit `orama global install` writes runs `oramad` under cosmovisor,
+so a new binary goes in through `orama global stage-oramad --upgrade <plan>`
+(see [CHAIN.md](CHAIN.md#running-oramad-under-cosmovisor) and
+[RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md)); installing again with different
+`oramad` bytes is refused. This command does not take
 a lease and does not restart a node. `max_parallel` is 1; a higher value is
 rejected.
 

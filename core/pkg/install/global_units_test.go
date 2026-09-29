@@ -13,7 +13,7 @@ import (
 )
 
 func TestGlobalUnits_usersPortsAndNoClusterSecret(t *testing.T) {
-	chain := RenderGlobalChainUnit()
+	chain := RenderGlobalChainUnit("")
 	ipfs := RenderGlobalIPFSUnit()
 	relay := RenderGlobalRelayUnit()
 
@@ -21,7 +21,8 @@ func TestGlobalUnits_usersPortsAndNoClusterSecret(t *testing.T) {
 	for _, unit := range []string{chain, ipfs, relay} {
 		user := mustDirective(t, unit, "User")
 		group := mustDirective(t, unit, "Group")
-		if user != group {
+		// The public Kubo's group is the RPC group, so the provider can read its token.
+		if user != group && !(user == globalIPFSUser && group == globalIPFSRPCGroup) {
 			t.Errorf("User=%s Group=%s", user, group)
 		}
 		if user == "orama" || user == "" {
@@ -66,9 +67,9 @@ func TestGlobalUnits_usersPortsAndNoClusterSecret(t *testing.T) {
 			t.Errorf("chain unit missing %s", want)
 		}
 	}
-	ipfsAPI := "/ip4/127.0.0.1/tcp/" + strconv.Itoa(constants.GlobalIPFSAPIPort)
-	if !strings.Contains(ipfs, ipfsAPI) || !strings.Contains(ipfs, "127.0.0.1") {
-		t.Errorf("ipfs unit missing loopback API %s\n%s", ipfsAPI, ipfs)
+	// The unit only runs the daemon on the repo; the installer's config carries the loopback API.
+	if exec := mustDirective(t, ipfs, "ExecStart"); exec != "/usr/lib/orama-global/bin/ipfs daemon --repo-dir="+constants.GlobalIPFSHome {
+		t.Errorf("ipfs ExecStart = %q", exec)
 	}
 	if constants.GlobalIPFSAPIPort != 31011 {
 		t.Fatalf("GlobalIPFSAPIPort = %d", constants.GlobalIPFSAPIPort)
@@ -99,7 +100,7 @@ func TestGlobalChainUnit_userMatchesStagenetDeploy(t *testing.T) {
 	if string(m[1]) != globalChainUser {
 		t.Fatalf("deploy.sh user %q, template user %q", m[1], globalChainUser)
 	}
-	unit := RenderGlobalChainUnit()
+	unit := RenderGlobalChainUnit("")
 	if !strings.Contains(unit, "User="+globalChainUser) {
 		t.Fatalf("chain unit user is not %s", globalChainUser)
 	}
@@ -107,7 +108,7 @@ func TestGlobalChainUnit_userMatchesStagenetDeploy(t *testing.T) {
 
 func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
 	units := map[string]string{
-		"chain":    RenderGlobalChainUnit(),
+		"chain":    RenderGlobalChainUnit(""),
 		"ipfs":     RenderGlobalIPFSUnit(),
 		"gc":       RenderGlobalIPFSGCUnit(),
 		"provider": RenderGlobalProviderUnit(),
@@ -152,7 +153,7 @@ func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
 	if !strings.Contains(RenderGlobalTorRelayUnit(), "MemoryDenyWriteExecute=yes") {
 		t.Error("tor relay does not set MemoryDenyWriteExecute")
 	}
-	if strings.Contains(RenderGlobalChainUnit(), "MemoryDenyWriteExecute=yes") {
+	if strings.Contains(RenderGlobalChainUnit(""), "MemoryDenyWriteExecute=yes") {
 		t.Error("the Go chain unit sets MemoryDenyWriteExecute; the runtime cannot start under it")
 	}
 	provider := RenderGlobalProviderUnit()
@@ -209,7 +210,7 @@ func TestGlobalIndexerUnit_ownUserLoopbackAPIAndOwnHome(t *testing.T) {
 }
 
 func TestGlobalChainUnit_runsOramadUnderCosmovisorWithoutDownloads(t *testing.T) {
-	unit := RenderGlobalChainUnit()
+	unit := RenderGlobalChainUnit("")
 	exec := mustDirective(t, unit, "ExecStart")
 	if !strings.HasPrefix(exec, "/usr/lib/orama-global/bin/cosmovisor run start --home "+constants.ChainHome+" ") {
 		t.Fatalf("ExecStart %q does not run oramad through cosmovisor", exec)

@@ -140,3 +140,31 @@ func asStrings(t *testing.T, v interface{}) []string {
 	}
 	return out
 }
+
+func TestPublicKuboConfig_tokenAllowsOnlyWhatTheProviderAndGCCall(t *testing.T) {
+	body, err := PublicKuboConfig(nil, "tok", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		API struct {
+			Authorizations map[string]struct{ AllowedPaths []string }
+		}
+	}
+	if err := json.Unmarshal(body, &config); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, auth := range config.API.Authorizations {
+		paths = auth.AllowedPaths
+	}
+	want := []string{"/api/v0/add", "/api/v0/cat", "/api/v0/pin/add", "/api/v0/pin/rm", "/api/v0/repo/gc"}
+	if strings.Join(paths, ",") != strings.Join(want, ",") {
+		t.Fatalf("allowed paths = %v, want %v", paths, want)
+	}
+	for _, p := range paths {
+		if p == "/api/v0" || strings.HasPrefix(p, "/api/v0/config") || strings.HasPrefix(p, "/api/v0/swarm") || strings.HasPrefix(p, "/api/v0/shutdown") {
+			t.Errorf("the bearer allows %s", p)
+		}
+	}
+}

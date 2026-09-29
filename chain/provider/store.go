@@ -5,6 +5,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/DeBrosOfficial/network/chain/piece"
 )
@@ -38,12 +40,38 @@ type Store struct {
 	dir       string
 	deny      map[string]struct{}
 	freeBytes func() (uint64, error)
+	unpin     Unpinner
+	// recMu serialises read-modify-write of piece records: the runner and the
+	// HTTP handlers both update them.
+	recMu sync.Mutex
 }
+
+// Unpinner drops a pin on the public Kubo.
+type Unpinner interface {
+	Unpin(ctx context.Context, cid string) error
+}
+
+// SetUnpinner makes Release unpin a piece's public CID before its bytes go.
+func (s *Store) SetUnpinner(u Unpinner) { s.unpin = u }
 
 type record struct {
 	CID  string `json:"cid"`
 	Root string `json:"root"`
 	Size int    `json:"size"`
+	// IPFS lists the public Kubo CIDs the piece is, or will be, pinned under:
+	// the CIDs it was fetched by through POST /pins, and the CID Kubo made
+	// of its bytes. Every one names exactly this piece's bytes. Empty for a
+	// piece that never reached the public Kubo.
+	IPFS []ipfsPin `json:"ipfs,omitempty"`
+	// Private marks a piece some PRIVATE deal's slot holds. It is never
+	// pinned in the public Kubo, whatever another deal with the same root says.
+	Private bool `json:"private,omitempty"`
+}
+
+// ipfsPin is one CID of a piece and whether the public Kubo pins it.
+type ipfsPin struct {
+	CID    string `json:"cid"`
+	Pinned bool   `json:"pinned,omitempty"`
 }
 
 // Open reads an existing directory. freeBytes reports space for a new piece.

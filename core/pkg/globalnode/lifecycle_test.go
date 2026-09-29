@@ -202,3 +202,39 @@ func TestLifecycleStatus_emptySystemctlOutputIsAnError(t *testing.T) {
 		t.Fatal("status with no systemctl answer succeeded")
 	}
 }
+
+const (
+	ipfsUnit  = "orama-global-ipfs.service"
+	gcTimer   = "orama-global-ipfs-gc.timer"
+	indexUnit = "orama-global-indexer.service"
+)
+
+func TestLifecycle_publicKuboGCTimerRunsWithTheDaemon(t *testing.T) {
+	l, f := newLifecycle(t, install.GlobalServiceChain, install.GlobalServiceIPFS, install.GlobalServiceProvider, install.GlobalServiceIndexer)
+	if err := l.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"check-floor", "enable " + chainUnit, "start " + chainUnit, "wait-rpc",
+		"start " + ipfsUnit, "start " + gcTimer, "start " + providerUnit, "start " + indexUnit}
+	if !slices.Equal(f.calls, want) {
+		t.Fatalf("start calls = %v, want %v", f.calls, want)
+	}
+
+	f.calls = nil
+	if err := l.Stop([]install.GlobalService{install.GlobalServiceChain}); err != nil {
+		t.Fatal(err)
+	}
+	wantStop := []string{"stop " + indexUnit, "stop " + providerUnit, "stop " + gcTimer, "stop " + ipfsUnit, "stop " + chainUnit}
+	if !slices.Equal(f.calls, wantStop) {
+		t.Fatalf("stop calls = %v, want %v: the timer stops before the daemon it collects through", f.calls, wantStop)
+	}
+}
+
+func TestLifecycleStart_aFailedTimerIsAnError(t *testing.T) {
+	l, f := newLifecycle(t, install.GlobalServiceChain, install.GlobalServiceIPFS)
+	f.failOn = "start " + gcTimer
+	err := l.Start(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), gcTimer) {
+		t.Fatalf("err = %v, want the timer named", err)
+	}
+}

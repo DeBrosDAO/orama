@@ -10,6 +10,7 @@ import (
 
 func TestInstallGlobal_initChainRunsInitAsTheChainAccount(t *testing.T) {
 	f := newGlobalFixture(t)
+	f.freshHome(t)
 	genesis := filepath.Join(t.TempDir(), "genesis.json")
 	if err := os.WriteFile(genesis, []byte(`{"chain_id":"orama-test-1","app_state":{}}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -57,6 +58,7 @@ func TestInstallGlobal_initChainRefusesAnInitialisedHome(t *testing.T) {
 
 func TestInstallGlobal_initChainRefusesAGenesisForAnotherChain(t *testing.T) {
 	f := newGlobalFixture(t)
+	f.freshHome(t)
 	genesis := filepath.Join(t.TempDir(), "genesis.json")
 	if err := os.WriteFile(genesis, []byte(`{"chain_id":"orama-other-1"}`), 0o644); err != nil {
 		t.Fatal(err)

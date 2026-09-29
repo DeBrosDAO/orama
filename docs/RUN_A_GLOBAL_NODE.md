@@ -18,18 +18,25 @@ The code does not check hardware. These are the sizes the plan gives
 | chain (validator) | 4 vCPU, 16 GB RAM, NVMe. The chain uses pebbledb and keeps its state in `/var/lib/orama-global/chain`. |
 | chain (non-validator) | Same disk class; the chain's own state is the same size. |
 | provider | Disk at least the capacity you declare with `orama global capacity`. The piece store is `/var/lib/orama-global/provider/store`. |
+| public Kubo | Disk for its `StorageMax`: the capacity you declare plus 10%, in the repo `/var/lib/orama-global/ipfs`. Every pinned public piece is stored twice on the host, once in the provider's store and once in Kubo. |
 | archiver | Disk for `bundles/` (one file per archived range). |
 | repair | Small; it holds repair seeds and rebuilds one replica at a time. |
 
 ## Install
 
 Stage the release's `oramad`, `orama-global` and `orama` (this CLI; the chain
-unit runs its sign-floor check) in a directory that root owns
+unit runs its sign-floor check), Kubo's `ipfs` (v0.38.2, when you install the
+`ipfs` service) and the official cosmovisor release tarball
+`cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz` (from the cosmos-sdk release
+`cosmovisor/v1.7.3`) in a directory that root owns
 and nobody else may write (for example `/root/orama-global-release`). The
 installer copies from there and refuses a symlink or a directory another account
 could change.
 
-**You are trusting these three binaries.** The installer does not verify them
+**You are trusting these binaries.** The installer does not verify `oramad`, `orama`,
+`orama-global` or `ipfs` (it does verify the cosmovisor tarball against a pinned
+SHA-256, and runs `ipfs --version` as an unprivileged account to require Kubo
+v0.38.2). It does not verify them
 against the release root or any signature: the release archive does not carry
 `oramad` or `orama-global` yet, so there is nothing to check them against. The
 chain unit runs the staged `orama` as root before every start (the sign-floor
@@ -39,39 +46,67 @@ yourself.
 
 ```bash
 sudo orama global install \
-  --services chain,provider \
+  --services chain,ipfs,provider \
+  --public-storage-gb 500 \
   --staged-dir /root/orama-global-release \
   --persistent-peers <node-id>@<host>:31000,<node-id>@<host>:31000 \
   --init-chain --chain-id <chain-id> --moniker <name> --genesis /root/genesis.json \
   --enable-firewall --ssh-port 22
 ```
 
-- `--services` is `chain` plus any of `provider`, `archiver`, `repair`. The chain
-  is required: the other services reach it only through its RPC on
-  `127.0.0.1:31001`. `provider` and `repair` are never on the same host: a repair
-  delegate holds repair seeds, and a provider must not.
-- Each service gets its own system account (`orama-chain`, `orama-provider`,
-  `orama-archiver`, `orama-repair`; the provider also gets the
-  `orama-ipfs-pub-rpc` group its unit names). Binaries go to
-  `/usr/lib/orama-global/bin`, root-owned, 0755.
+- `--services` is `chain` plus any of `ipfs`, `provider`, `archiver`, `indexer`,
+  `repair`. The chain is required: the other services reach it only through its
+  RPC on `127.0.0.1:31001`. `provider` needs `ipfs` beside it, since it pins
+  public deals through this host's public Kubo. `provider` and `repair` are never
+  on the same host: a repair delegate holds repair seeds, and a provider must
+  not. `indexer` is optional; add it on a node that serves the chain read API
+  (loopback 31015, proxied by a gateway).
+- Each service gets its own system account (`orama-chain`, `orama-ipfs-pub`,
+  `orama-provider`, `orama-archiver`, `orama-indexer`, `orama-repair`; the
+  `ipfs` service also creates the `orama-ipfs-pub-rpc` group, which its unit and
+  the provider's unit name). Binaries go to `/usr/lib/orama-global/bin`,
+  root-owned, 0755.
 - Units are written to `/etc/systemd/system/orama-global-*.service` and enabled,
-  not started. None of them is part of `orama-node.service`. The provider,
-  archiver and repair units are ordered after the chain unit and want it
-  (`After=`/`Wants=`). The chain unit runs the sign-floor check before every
-  start (see the double-sign guard below), with the `orama` CLI installed beside
-  `oramad`.
-- The chain unit runs `oramad start` directly. **cosmovisor is not installed**:
-  no cosmovisor release is pinned. `orama global stage-oramad` places binaries
-  in the cosmovisor layout, which this unit does not run. To change the chain
-  binary, stage the new `oramad`, run the same install command again, then
-  `orama global restart chain`. A chain upgrade plan halts `oramad` at its height
-  until the new binary runs.
+  not started. None of them is part of `orama-node.service`. The public Kubo,
+  provider, archiver, indexer and repair units are ordered after the chain unit
+  and want it (`After=`/`Wants=`); the provider is also ordered after the public
+  Kubo. The chain unit runs the sign-floor check before every start (see the
+  double-sign guard below), with the `orama` CLI installed beside `oramad`.
+- The chain unit runs **cosmovisor v1.7.3** (`DAEMON_ALLOW_DOWNLOAD_BINARIES=false`),
+  which runs `oramad` from `/var/lib/orama-global/chain/cosmovisor/current/bin`.
+  Install checks the staged tarball's SHA-256 against the pin built into the CLI
+  (an unofficial or altered tarball is refused), installs only its `cosmovisor`
+  file, and places the staged `oramad` as the genesis binary in that layout. The
+  chain home must therefore already have a genesis: use `--init-chain` on the
+  first install. A second install with the same `oramad` changes nothing; one
+  with different `oramad` bytes is refused. To change the chain binary use
+  `orama global stage-oramad --upgrade <plan>` and let cosmovisor switch at the
+  plan's height; a plan with no staged binary halts the chain until one is staged.
+  A patch that does not change consensus has no installed update path yet (the
+  updater is not built): stage it as an upgrade plan.
+- The public Kubo (`ipfs`) is a second daemon, never the private cluster's: its
+  own repo in `/var/lib/orama-global/ipfs` created with `ipfs init
+  --profile=server` as `orama-ipfs-pub`, no `swarm.key`, the swarm on 31010
+  tcp+udp (open in ufw), private address ranges filtered and not announced,
+  and only pinned content announced. Its RPC is `127.0.0.1:31011` behind a
+  bearer token in `api-token` (mode 0640, group `orama-ipfs-pub-rpc`, which only
+  the provider joins; a second install keeps the token; the token allows only
+  `add`, `cat`, `pin/add`, `pin/rm` and `repo/gc`). The GC unit passes the token
+  to `ipfs --api-auth`, so it is on that process's command line for the length of a run. `--public-storage-gb` is the capacity you will
+  declare with `orama global capacity`; Kubo's `StorageMax` is that plus 10%,
+  and `orama-global-ipfs-gc.timer` (20 minutes after start, then every 6 hours)
+  garbage-collects through the daemon's RPC, so a provider is not a free public
+  cache. The timer starts and stops with the `ipfs` service.
+- With `provider` installed, PUBLIC_PIN and ARCHIVE deals are pinned in the
+  public Kubo before the slot is accepted, so the bytes are fetchable by CID
+  (details in [CHAIN.md](CHAIN.md#storage-provider-orama-global-provider)).
+  PRIVATE deals never touch it.
 - `--init-chain` runs `oramad init` as `orama-chain` and puts `--genesis` in
   place (its `chain_id` must equal `--chain-id`). Without the flag the chain
   home is never created or changed, and the flag is refused when the home
   already has a genesis.
-- ufw: the chain's 31000 tcp+udp and the provider's 31013 tcp are allowed with
-  the comment `orama-global`. A cluster reconcile never removes those rules. An
+- ufw: the chain's 31000 tcp+udp, the public Kubo's 31010 tcp+udp and the
+  provider's 31013 tcp are allowed with the comment `orama-global`. A cluster reconcile never removes those rules. An
   inactive ufw is refused unless `--enable-firewall` is given; then incoming is
   denied by default, the SSH port is allowed, and ufw is enabled. `--ssh-port`
   must be a port sshd listens on according to `sshd -T` (its `listenaddress`
@@ -107,7 +142,10 @@ The operator's wallet never touches the node. On the operator's machine:
 
 1. `orama global bind` signs each service key's binding.
 2. `orama global register` builds `MsgRegisterNode` (roles, hot key, bindings,
-   endpoints). With `--node` the RootWallet agent signs it and it is broadcast.
+   endpoints, and `--asn`, the autonomous system number this node declares; the
+   chain refuses reserved, documentation and private-use numbers, and cannot
+   verify the number. A protocol deal slot goes only to a node with a declared
+   ASN, and slots go to distinct ASNs, so declare the real one). With `--node` the RootWallet agent signs it and it is broadcast.
 3. `orama global bond --role <role> --amount <norama>` bonds each role.
 4. `orama global capacity` declares storage bytes for a provider.
 
@@ -294,8 +332,8 @@ against `orama`), and so are the state directories (`/var/lib/orama-global`
 against `/opt/orama/.orama`), which each unit already hides from the other.
 
 ```bash
-sudo orama global install --colocated --services chain,provider \
-  --staged-dir /root/orama-global-release --enable-firewall --ssh-port 22
+sudo orama global install --colocated --services chain,ipfs,provider \
+  --public-storage-gb 500 --staged-dir /root/orama-global-release --enable-firewall --ssh-port 22
 ```
 
 Run it on a machine where `orama node setup` has already installed the cluster
@@ -325,7 +363,7 @@ it would put the units back in the root namespace.
 | `/etc/orama-global/resolv.conf` | `9.9.9.9` and `1.1.1.1`. The host's stub resolver is on the host's loopback, which the namespace cannot reach. |
 | `/etc/sysctl.d/60-orama-global-netns.conf` | `net.ipv4.ip_forward = 1`, also set when the namespace unit starts |
 
-Every `orama-global-*` unit gains `BindsTo=` and `After=orama-global-netns.service`,
+Every `orama-global-*` unit (the public Kubo, its GC oneshot, the indexer and the cosmovisor chain unit included; the GC timer only triggers the oneshot and stays in the root namespace) gains `BindsTo=` and `After=orama-global-netns.service`,
 `NetworkNamespacePath=/run/netns/orama-global`, and a read-only bind of the
 namespace's resolv.conf over `/etc/resolv.conf`. It also records `role: both` and
 `global_netns: orama-global` in `preferences.yaml`, after everything else. The
@@ -333,12 +371,14 @@ node refuses `role: both` at boot unless that field and every file above exist;
 it then runs the same graph as a cluster node, because the global services are
 their own units, not components of `orama-node`. Units are enabled and not
 started, like a global-only install: `orama global start` starts them, and its
-wait for the chain's RPC dials `127.0.0.1:31001` from inside the namespace.
+wait for the chain's RPC dials `127.0.0.1:31001` from inside the namespace. The
+provider reaches the public Kubo's RPC on `127.0.0.1:31011` in the same
+namespace; the cluster's own Kubo (10107) is a different daemon on the other side.
 
 **The rulesets.**
 
 - Root namespace: the public ports of the chosen services (31000 tcp+udp for the
-  chain, 31013 tcp for the provider) are DNAT'd to `198.18.0.2`; the namespace's
+  chain, 31010 tcp+udp for the public Kubo swarm, 31013 tcp for the provider) are DNAT'd to `198.18.0.2`; the namespace's
   outbound traffic is masqueraded; nothing from the namespace may be forwarded to
   `10.0.0.0/8` (the WireGuard mesh is in it), `172.16.0.0/12`, `192.168.0.0/16`,
   `169.254.0.0/16` (cloud metadata) or `100.64.0.0/10`; nothing arriving on the
@@ -383,8 +423,10 @@ was written in.
 
 - `orama node setup --role global` from the operator's machine; install runs on
   the node.
-- cosmovisor under the installed unit, and TUF verification of the staged
-  binaries by the installer.
+- TUF verification of the staged binaries by the installer, and an installed
+  update path for a chain patch that changes no consensus behaviour.
+- An `orama global update-node` (`MsgUpdateNode`): an ASN is set at
+  registration only.
 - Removing a service, or its firewall rule, that a later install leaves out; removing the co-located layout.
-- The public Kubo, relay and Tor units.
+- The relay and Tor units.
 - A remote signer (TMKMS, Horcrux) or sentry topology.

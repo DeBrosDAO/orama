@@ -32,6 +32,8 @@ const (
 	MaxBlocksPerStep = 500
 	// ReasonNotStored is the decline reason when no uploaded piece matches the slot root.
 	ReasonNotStored = "piece not stored"
+	// ReasonPinFailed is the decline reason when the public Kubo would not pin a public piece.
+	ReasonPinFailed = "public pin failed"
 )
 
 // eventAssigned is x/storage's event for a slot given to a node.
@@ -44,6 +46,7 @@ type Chain interface {
 	BlockEvents(ctx context.Context, height int64) ([]abci.Event, error)
 	Params(ctx context.Context) (types.Params, error)
 	Slot(ctx context.Context, dealID uint64, slot uint32) (types.Slot, error)
+	Deal(ctx context.Context, dealID uint64) (types.Deal, error)
 	CurrentEpoch(ctx context.Context) (uint64, error)
 	Challenges(ctx context.Context, epoch uint64, nodeID string) ([]types.Challenge, error)
 	Balance(ctx context.Context, addr string) (math.Int, error)
@@ -58,6 +61,7 @@ type Runner struct {
 	chain       Chain
 	nodeID      string
 	signer      string
+	pins        Pinner
 	statePath   string
 	monitorPath string
 
@@ -79,6 +83,11 @@ type Config struct {
 	StatePath string
 	// MonitorPath is the status file the node report reads. Empty skips it.
 	MonitorPath string
+	// Pins is this host's public Kubo. Public deal classes (PUBLIC_PIN and
+	// ARCHIVE) are pinned through it before they are accepted; without it a
+	// public slot is accepted from the piece store alone and its bytes are
+	// not fetchable by CID.
+	Pins Pinner
 	// StartHeight is the first block read when StatePath does not exist yet,
 	// and must then be at least 1. It is not used once the state exists:
 	// the node's x/nodes registration height, since nothing is assigned to a
@@ -99,7 +108,7 @@ func NewRunner(store *Store, chain Chain, cfg Config) (*Runner, error) {
 		return nil, err
 	}
 	return &Runner{
-		store: store, chain: chain, nodeID: cfg.NodeID, signer: cfg.Signer,
+		store: store, chain: chain, nodeID: cfg.NodeID, signer: cfg.Signer, pins: cfg.Pins,
 		statePath: cfg.StatePath, monitorPath: cfg.MonitorPath, state: st,
 	}, nil
 }
@@ -111,6 +120,20 @@ func (r *Runner) Assigned(name string) bool {
 	defer r.mu.Unlock()
 	for _, p := range r.state.Pending {
 		if p.Root != "" && p.Root == name {
+			return true
+		}
+	}
+	return false
+}
+
+// AssignedPublic is Assigned for a slot of a PUBLIC_PIN or ARCHIVE deal. It is
+// the filter of POST /pins: a piece of a PRIVATE deal is never fetched through
+// the public Kubo, and a slot whose class is not read yet does not qualify.
+func (r *Runner) AssignedPublic(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range r.state.Pending {
+		if p.Root != "" && p.Root == name && isPublicClass(types.DealClass(p.Class)) {
 			return true
 		}
 	}

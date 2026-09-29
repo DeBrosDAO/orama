@@ -9,17 +9,17 @@ import (
 )
 
 // Global unit accounts and paths. `orama global install` (InstallGlobal)
-// writes the chain (RenderGlobalChainDirectUnit), provider, archiver and
-// repair units; the cluster install writes none of them, and the other
+// writes the chain (RenderGlobalChainUnit, under cosmovisor), public Kubo and
+// its GC timer, provider, archiver, indexer and repair units; the cluster
+// install writes none of them, and the relay, Tor, sbws and reporter
 // renderers here are not installed by anything yet.
 // chain/scripts/stagenet/deploy.sh writes its own orama-global-chain unit for
 // the stagenet mesh; this one is the global-role unit, with no WireGuard
 // dependency and no cluster secret path.
 const (
 	globalBinDir = constants.GlobalBinDir
-	// globalCosmovisor is where RenderGlobalChainUnit expects cosmovisor.
-	// Nothing installs it: no cosmovisor release is pinned.
-	globalCosmovisor = globalBinDir + "/cosmovisor"
+	// globalCosmovisor is where `orama global install` puts the pinned cosmovisor.
+	globalCosmovisor = globalBinDir + "/" + constants.CosmovisorBinary
 	globalChainUser  = constants.ChainUser
 	globalIPFSUser   = "orama-ipfs-pub"
 	globalRelayUser  = "orama-relay"
@@ -82,8 +82,15 @@ IPAddressAllow=localhost
 // registers. CometBFT v0.39's AddNodeFlags does not register an
 // instrumentation flag, so the prometheus listen address is recorded here
 // and still has to be set in config.toml.
-func RenderGlobalChainUnit() string {
+// persistentPeers (id@host:port,...) is passed to oramad as
+// --p2p.persistent_peers when set; ValidatePersistentPeers checks it first.
+// Before every start, at boot, on Restart=always and on a manual start,
+// the unit runs the double-sign guard (GlobalSignFloorCheck) as root.
+func RenderGlobalChainUnit(persistentPeers string) string {
 	exec := globalCosmovisor + " run " + chainStartArgs()
+	if persistentPeers != "" {
+		exec += " --p2p.persistent_peers " + persistentPeers
+	}
 	env := fmt.Sprintf("Environment=DAEMON_NAME=%s\nEnvironment=DAEMON_HOME=%s\nEnvironment=DAEMON_ALLOW_DOWNLOAD_BINARIES=false\nEnvironment=DAEMON_RESTART_AFTER_UPGRADE=true\nReadOnlyPaths=%s\n",
 		constants.ChainDaemonName, constants.ChainHome,
 		strings.Join(cosmovisor.Layout{Home: constants.ChainHome}.ReadOnlyDirs(), " "))
@@ -92,33 +99,11 @@ func RenderGlobalChainUnit() string {
 		globalChainUser,
 		constants.ChainHome,
 		exec,
-		env+chainPrometheusNote(),
+		env+"ExecStartPre=+"+GlobalSignFloorCheck+"\n"+chainPrometheusNote(),
 	)
 }
 
-// RenderGlobalChainDirectUnit is the orama-global-chain.service that
-// `orama global install` writes: oramad started directly from GlobalBinDir,
-// with no cosmovisor. Nothing installs or pins a cosmovisor binary, so the
-// installed unit cannot run one; RenderGlobalChainUnit is the cosmovisor form
-// and is not installed. An upgrade under this unit is an operator replacing
-// the binary with the install command and restarting the chain.
-// persistentPeers (id@host:port,...) is passed to oramad as
-// --p2p.persistent_peers when set; ValidatePersistentPeers checks it first.
-func RenderGlobalChainDirectUnit(persistentPeers string) string {
-	exec := globalBinDir + "/" + constants.ChainDaemonName + " " + chainStartArgs()
-	if persistentPeers != "" {
-		exec += " --p2p.persistent_peers " + persistentPeers
-	}
-	return renderGlobalUnit(
-		"Orama L1 node (oramad)",
-		globalChainUser,
-		constants.ChainHome,
-		exec,
-		"ExecStartPre=+"+GlobalSignFloorCheck+"\n"+chainPrometheusNote(),
-	)
-}
-
-// GlobalSignFloorCheck is the double-sign guard the direct chain unit runs,
+// GlobalSignFloorCheck is the double-sign guard the chain unit runs,
 // as root ("+"), before every start: at boot, on Restart=always, and on a
 // manual start, not only through `orama global start`. It is the orama CLI
 // that `orama global install` puts in GlobalBinDir beside oramad, and it
@@ -132,6 +117,14 @@ func needsChain(unit string) string {
 	return strings.Replace(unit, "After=network-online.target\nWants=network-online.target\n", dep, 1)
 }
 
+// needsIPFS orders a service after the public Kubo, whose RPC it pins through.
+// It is Wants=, not Requires=: with Kubo down the provider still starts, a
+// public slot's pin fails and is retried every step, and the slot is declined
+// shortly before its accept window closes.
+func needsIPFS(unit string) string {
+	return strings.Replace(unit, constants.ChainServiceUnit+"\n", constants.ChainServiceUnit+" "+constants.GlobalIPFSUnit+"\n", 2)
+}
+
 // chainStartArgs is oramad's start command with the chain's listeners: p2p
 // public, everything else on loopback.
 func chainStartArgs() string {
@@ -143,26 +136,42 @@ func chainPrometheusNote() string {
 	return fmt.Sprintf("# CometBFT v0.39 registers no prometheus flag; config.toml prometheus_listen_addr is 127.0.0.1:%d.\n", constants.ChainPrometheusPort)
 }
 
+// globalIPFSGCEnvFile is the GC oneshot's environment file in the public
+// Kubo home, mode 0600, the Kubo user's. It holds IPFS_API_AUTH, the bearer
+// the daemon's RPC requires. The GC unit passes it to ipfs as --api-auth, so it
+// is on that one process's command line for the length of a GC run; the token
+// allows only the calls in installers.PublicAPIAllowedPaths.
+const globalIPFSGCEnvFile = "gc.env"
+
+// ipfsRepoAccess gives a public-Kubo unit the RPC group and lets that group
+// traverse the repo directory: the provider, a member of the group, reads the
+// RPC token file there. Every file the daemon writes stays 0600 under UMask=0077.
+func ipfsRepoAccess(unit string) string {
+	unit = strings.Replace(unit, "Group="+globalIPFSUser+"\n", "Group="+globalIPFSRPCGroup+"\n", 1)
+	return strings.Replace(unit, "StateDirectoryMode=0700", "StateDirectoryMode=0750", 1)
+}
+
 // RenderGlobalIPFSUnit is orama-global-ipfs.service. The API is the public
-// Kubo's loopback API, not the cluster daemon on IPFSAPIPort.
+// Kubo's loopback API, not the cluster daemon on IPFSAPIPort. The repo, its
+// addresses, filters and token are written by the installer
+// (installers.WritePublicKuboFiles); the unit only runs the daemon on it.
 func RenderGlobalIPFSUnit() string {
-	api := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSAPIPort)
-	gateway := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSGatewayPort)
-	swarm := fmt.Sprintf("[\"/ip4/0.0.0.0/tcp/%d\",\"/ip4/0.0.0.0/udp/%d/quic-v1\"]",
-		constants.GlobalIPFSSwarmPort, constants.GlobalIPFSSwarmPort)
 	exec := fmt.Sprintf("%s/ipfs daemon --repo-dir=%s", globalBinDir, globalIPFSHome)
-	pre := fmt.Sprintf("ExecStartPre=%s/ipfs config --repo-dir=%s Addresses.API %s\nExecStartPre=%s/ipfs config --repo-dir=%s Addresses.Gateway %s\nExecStartPre=%s/ipfs config --repo-dir=%s --json Addresses.Swarm %s\n",
-		globalBinDir, globalIPFSHome, api,
-		globalBinDir, globalIPFSHome, gateway,
-		globalBinDir, globalIPFSHome, swarm)
-	return renderGlobalUnit("Orama public IPFS", globalIPFSUser, globalIPFSHome, exec, pre)
+	unit := ipfsRepoAccess(renderGlobalUnit("Orama public IPFS", globalIPFSUser, globalIPFSHome, exec, ""))
+	// libp2p reads the interface and route tables over netlink at startup.
+	return strings.Replace(unit, "RestrictAddressFamilies=AF_INET AF_UNIX\n", "RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK\n", 1)
 }
 
 // RenderGlobalIPFSGCUnit is the oneshot that garbage-collects the public Kubo
-// repo. Its timer is RenderGlobalIPFSGCTimer. Neither is PartOf orama-node.
+// repo through the running daemon's RPC. Its timer is RenderGlobalIPFSGCTimer.
+// Neither is PartOf orama-node.
 func RenderGlobalIPFSGCUnit() string {
-	exec := fmt.Sprintf("%s/ipfs repo gc --repo-dir=%s", globalBinDir, globalIPFSHome)
-	return renderGlobalOneshot("Orama public IPFS garbage collection", globalIPFSUser, "orama-global/ipfs", globalIPFSHome, exec)
+	api := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSAPIPort)
+	exec := fmt.Sprintf("%s/ipfs --api=%s --api-auth=${IPFS_API_AUTH} repo gc", globalBinDir, api)
+	unit := renderGlobalOneshot("Orama public IPFS garbage collection", globalIPFSUser, "orama-global/ipfs", globalIPFSHome, exec)
+	unit = strings.Replace(unit, "After=network-online.target\n", "After=network-online.target "+constants.GlobalIPFSUnit+"\n", 1)
+	unit = strings.Replace(unit, "ExecStart=", "EnvironmentFile="+globalIPFSHome+"/"+globalIPFSGCEnvFile+"\nExecStart=", 1)
+	return ipfsRepoAccess(unit)
 }
 
 // RenderGlobalIPFSGCTimer fires the public Kubo GC. It is not tied to orama-node.
@@ -186,9 +195,10 @@ WantedBy=timers.target
 // public Kubo RPC token through the supplementary group, and nothing else
 // in that home.
 func RenderGlobalProviderUnit() string {
-	exec := fmt.Sprintf("%s/orama-global provider --listen 0.0.0.0:%d", globalBinDir, constants.GlobalProviderPort)
-	return needsChain(renderGlobalUnitExtra("Orama storage provider", globalProviderUser, globalProviderUser, "orama-ipfs-pub-rpc",
-		"orama-global/provider", constants.GlobalProviderHome, exec, ""))
+	exec := fmt.Sprintf("%s/orama-global provider --listen 0.0.0.0:%d --ipfs-api %s --ipfs-token-file %s/%s",
+		globalBinDir, constants.GlobalProviderPort, constants.LocalGlobalIPFSAPIURL(), constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile)
+	return needsIPFS(needsChain(renderGlobalUnitExtra("Orama storage provider", globalProviderUser, globalProviderUser, globalIPFSRPCGroup,
+		"orama-global/provider", constants.GlobalProviderHome, exec, "")))
 }
 
 // RenderGlobalRelayUnit is orama-global-relay.service. Metrics listen on
@@ -302,7 +312,7 @@ func RenderGlobalArchiverUnit() string {
 func RenderGlobalIndexerUnit() string {
 	exec := fmt.Sprintf("%s/orama-global indexer --rpc tcp://127.0.0.1:%d --home %s --listen 127.0.0.1:%d",
 		globalBinDir, constants.ChainRPCPort, constants.GlobalIndexerHome, constants.GlobalIndexerPort)
-	return renderGlobalUnit("Orama chain indexer", globalIndexerUser, constants.GlobalIndexerHome, exec, "")
+	return needsChain(renderGlobalUnit("Orama chain indexer", globalIndexerUser, constants.GlobalIndexerHome, exec, ""))
 }
 
 // RenderGlobalRepairUnit holds repair seeds. A host that runs it does not

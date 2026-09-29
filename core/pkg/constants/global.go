@@ -44,6 +44,7 @@ const (
 	GlobalProviderUnit = "orama-global-provider.service"
 	GlobalRelayUnit    = "orama-global-relay.service"
 	GlobalArchiverUnit = "orama-global-archiver.service"
+	GlobalIndexerUnit  = "orama-global-indexer.service"
 	GlobalRepairUnit   = "orama-global-repair.service"
 
 	// GlobalStateRoot is the root-owned parent of every global state

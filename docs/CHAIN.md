@@ -1240,7 +1240,48 @@ replaced. The same bytes again are a no-op. Each client address (an IPv6
 /64) has its own rate limit. A full address table drops buckets idle for 10
 minutes before it refuses a new address.
 Retrieval is `GET`/`HEAD /pieces/<hex piece root>` on port 31013, with a
-per-address rate limit. `chain/provider` does not pin through Kubo.
+per-address rate limit.
+
+Public Kubo (`--ipfs-api`, `--ipfs-token-file`; the unit passes
+`http://127.0.0.1:31011` and `/var/lib/orama-global/ipfs/api-token`). The client
+(`chain/provider/kubo.go`) sends the bearer token only to a loopback `http` URL
+and follows no redirect. The token allows only `add`, `cat`, `pin/add`,
+`pin/rm` and `repo/gc` (`installers.PublicAPIAllowedPaths`). When it is
+configured:
+- Before it accepts a slot of a **PUBLIC_PIN or ARCHIVE** deal, the runner reads
+  the deal's class from x/storage and pins the stored piece in the public Kubo.
+  The bytes were already checked against the slot's piece root when they were
+  stored. Each CID the piece was fetched by through `POST /pins` is pinned (at
+  most 4 per piece). A piece with none is added with `ipfs add --pin
+  --cid-version=1 --raw-leaves` (default chunker), so a client can compute that
+  CID from the bytes. CIDs are recorded in the piece's metadata before any later
+  step can fail.
+- A **PRIVATE** deal's ciphertext never reaches the public Kubo: the piece is
+  marked private when a private slot accepts it, and a public deal with the same
+  root is then declined with `root held for a private deal`. `POST /pins` serves
+  only roots the runner is waiting on in a public deal.
+- If the pin fails, the slot is retried every step and, `DeclineMarginBlocks`
+  before the accept window closes, declined with the reason `public pin failed`.
+  A CID on `<home>/denylist` is declined with `denylist`. In both cases the
+  piece is unpinned and discarded first (unless another waiting slot needs the
+  root); if the unpin fails nothing is declined and the next step retries.
+- `POST /pins/<hex piece root>` with `X-Piece-CID: <CID>` (no body) fetches the
+  piece through the public Kubo instead of taking an upload. The CID must be a
+  CIDv0 or a base32 CIDv1 that is not on the denylist; the bytes must hash to the
+  assigned root (otherwise `409`); a fetch failure is `502`. The fetch is bounded
+  by `--max-piece-bytes`, by 30 s, by 2 fetches at once (separate from the 2
+  upload slots) and by one fetch per root at a time (`429`). A CID already
+  recorded for the piece is not fetched again. Blocks Kubo fetched for a piece
+  that failed the root check stay unpinned until the next GC run.
+- Releasing the last slot that binds a piece unpins its CIDs before the bytes are
+  removed; if the unpin fails the binding stays and the next sweep retries.
+- Without `--ipfs-api` the provider does not pin, and nothing above happens.
+
+An ARCHIVE bundle's x/archive `bundle_cid` is CIDv1 raw sha2-256 of the whole
+file. It is a hash of the file, not the root of a UnixFS DAG, so Kubo can serve
+it by that CID only when the bundle fits in one block. A bundle above that is
+fetchable by the CID that `ipfs add` returns for it, which is not the
+`bundle_cid`.
 
 ### Repair delegate (`orama-global repair`)
 
@@ -1451,9 +1492,9 @@ What is not indexed:
   pruned, is logged and the same block is retried every `--interval`; only a
   pruned block stops the process. Watch `cursor` against `tip` in
   `/index/v1/status`.
-- No installer writes `orama-global-indexer.service` yet, and nothing creates
-  the `orama-indexer` user, so `/v1/chain/index/…` answers `502` until the
-  unit is installed. On a state-synced node, set `--start-height` to a height
+- `orama global install --services chain,indexer` creates the `orama-indexer`
+  user and writes and enables the unit; without it `/v1/chain/index/…` answers
+  `502`. The indexer opens no firewall port. On a state-synced node, set `--start-height` to a height
   the node keeps.
 - Shielded activity beyond its public transaction bytes and events.
 
@@ -1980,23 +2021,32 @@ filesystem paths.
 ## Running `oramad` under cosmovisor
 
 The global-role unit that `core/pkg/install` renders (`RenderGlobalChainUnit`,
-`orama-global-chain.service`) runs `/usr/lib/orama-global/bin/cosmovisor run start --home
+`orama-global-chain.service`, the unit `orama global install` writes) runs `/usr/lib/orama-global/bin/cosmovisor run start --home
 /var/lib/orama-global/chain ...` with `DAEMON_NAME=oramad`, `DAEMON_HOME=/var/lib/orama-global/chain`
 (`constants.ChainHome`), `DAEMON_ALLOW_DOWNLOAD_BINARIES=false` and
 `DAEMON_RESTART_AFTER_UPGRADE=true`, and mounts `cosmovisor/genesis` and `cosmovisor/upgrades`
 read-only (`ReadOnlyPaths=`). Cosmovisor runs `DAEMON_HOME/cosmovisor/current/bin/oramad`
 and, when the chain halts at an upgrade plan's height, points `current` at
 `cosmovisor/upgrades/<name>` and restarts. It never downloads a binary; a plan with no staged
-binary halts the chain until one is staged. Nothing installs this unit or the cosmovisor binary:
-no cosmovisor release is pinned. `orama global install` writes a different chain unit
-(`RenderGlobalChainDirectUnit`) that runs `/usr/lib/orama-global/bin/oramad start` with the same
-home and listeners and no cosmovisor, so binaries staged by `stage-oramad` below are not run by
-the installed unit; a chain binary is changed by staging a new `oramad` for `orama global
-install` and restarting the chain. [RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md) covers the
-install, the ordered lifecycle and the validator key operations. The stagenet deploy script
-below still writes its own unit that runs `oramad` directly.
+binary halts the chain until one is staged. Before every start it also runs the
+double-sign guard (`orama global validator check-sign-floor`) as root.
 
-Binaries enter the layout only through `orama global stage-oramad` (run as root):
+`orama global install` installs the pinned cosmovisor: **cosmovisor/v1.7.3** of
+`cosmos/cosmos-sdk` (tag object `6dee2e6f`). The operator stages the official
+`cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz` beside `oramad`; the installer
+checks its SHA-256 against the digest pinned in `constants.CosmovisorTarballSHA256`
+(amd64 `3df6ef38…332e`, arm64 `ff27992e…95cd`; both equal the release's published
+`SHA256SUMS-cosmovisor-v1.7.3.txt` and the digest the GitHub release API reports)
+and installs only the tarball's `cosmovisor` file, root-owned 0755. The installer
+then places the staged `oramad` as `cosmovisor/genesis/bin/oramad` (the layout
+below) and points `current` at it. That step needs the chain home to have a
+genesis; a second run with the same `oramad` bytes is a no-op, and different
+bytes are refused: a consensus-breaking binary goes in with `stage-oramad
+--upgrade <plan>`. There is no installed path for a patch release that changes no
+consensus behaviour (the B6 updater is not built): stage it as an upgrade plan.
+The stagenet deploy script below still writes its own unit that runs `oramad` directly.
+
+Binaries enter the layout through `orama global install` (the genesis binary, verified only by the bytes the operator staged) and `orama global stage-oramad` (run as root, TUF-verified):
 
 - `--upgrade <name>` places `cosmovisor/upgrades/<name>/bin/oramad`. `<name>` must be lowercase
   letters, digits, `.`, `-` or `_` (cosmovisor lowercases and URI-escapes plan names, so these are

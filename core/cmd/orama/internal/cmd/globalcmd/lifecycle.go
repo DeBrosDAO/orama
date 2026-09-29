@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const lifecycleServices = "chain, provider, archiver or repair"
+const lifecycleServices = "chain, ipfs, provider, archiver, indexer or repair"
 
 var startCmd = &cobra.Command{
 	Use:   "start [service...]",
@@ -20,8 +20,9 @@ var startCmd = &cobra.Command{
 The chain starts first. Before it starts, a validator key migrated to this host
 is checked against the sign state it last had on its old host; a state behind
 it is refused, since it could sign a step the old host already signed. The other
-services start once the chain's loopback RPC answers. Starting provider,
-archiver or repair alone needs the chain already running.`,
+services start once the chain's loopback RPC answers. Starting ipfs, provider,
+archiver, indexer or repair alone needs the chain already running. The public
+Kubo's GC timer starts and stops with it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runLifecycle(cmd, args, "starting the global services", func(l globalnode.Lifecycle, s []install.GlobalService) error {
 			warnIfMigratedAway(cmd)

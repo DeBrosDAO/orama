@@ -49,6 +49,15 @@ func (c *NodeChain) Slot(ctx context.Context, dealID uint64, slot uint32) (types
 	return resp.Slot, nil
 }
 
+// Deal returns one storage deal.
+func (c *NodeChain) Deal(ctx context.Context, dealID uint64) (types.Deal, error) {
+	var resp types.QueryDealResponse
+	if err := c.Query(ctx, "/orama.storage.v1.Query/Deal", &types.QueryDealRequest{DealId: dealID}, &resp); err != nil {
+		return types.Deal{}, err
+	}
+	return resp.Deal, nil
+}
+
 // CurrentEpoch is x/emission's epoch, the one x/storage challenges in.
 func (c *NodeChain) CurrentEpoch(ctx context.Context) (uint64, error) {
 	var resp emissiontypes.QueryCurrentEpochResponse

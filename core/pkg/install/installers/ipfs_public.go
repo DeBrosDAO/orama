@@ -38,6 +38,13 @@ var publicSwarmFilters = []string{
 // group orama-ipfs-pub-rpc, so the provider can read it and other users cannot.
 const PublicAPITokenFile = constants.GlobalIPFSAPITokenFile
 
+// PublicAPIAllowedPaths are the only RPC calls the bearer allows: what the
+// provider needs (add, cat, pin/add, pin/rm) and the GC timer (repo/gc). The
+// token can not read or change the config, the peer key or the swarm.
+var PublicAPIAllowedPaths = []string{
+	"/api/v0/add", "/api/v0/cat", "/api/v0/pin/add", "/api/v0/pin/rm", "/api/v0/repo/gc",
+}
+
 // PublicDenylistFile is the CID denylist the provider checks before it accepts
 // a deal. Kubo itself does not read it.
 const PublicDenylistFile = "denylist"
@@ -100,7 +107,7 @@ func PublicKuboConfig(existing []byte, token string, declaredBytes uint64) ([]by
 		"Authorizations": map[string]interface{}{
 			ipfs.KuboAPIUser: map[string]interface{}{
 				"AuthSecret":   "bearer:" + token,
-				"AllowedPaths": []string{"/api/v0"},
+				"AllowedPaths": append([]string{}, PublicAPIAllowedPaths...),
 			},
 		},
 	}

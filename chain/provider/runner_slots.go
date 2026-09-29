@@ -32,6 +32,15 @@ func (r *Runner) settleOne(ctx context.Context, latest int64, params types.Param
 	if err := r.notePendingRoot(p.DealID, p.Slot, rootName(slot.PieceRoot)); err != nil {
 		return err
 	}
+	if r.pins != nil {
+		deal, err := r.chain.Deal(ctx, p.DealID)
+		if err != nil {
+			return fmt.Errorf("read deal %d: %w", p.DealID, err)
+		}
+		if err := r.notePendingClass(p.DealID, p.Slot, deal.Class); err != nil {
+			return err
+		}
+	}
 	return r.decide(ctx, latest, params, slot)
 }
 
@@ -43,6 +52,18 @@ func (r *Runner) decide(ctx context.Context, latest int64, params types.Params, 
 	}
 	if !stored && latest < closes-DeclineMarginBlocks {
 		return nil
+	}
+	if stored {
+		reason, err := r.pinPublic(ctx, slot.DealId, slot.PieceRoot)
+		if err != nil && latest < closes-DeclineMarginBlocks {
+			return err
+		}
+		if err != nil {
+			reason = ReasonPinFailed
+		}
+		if reason != "" {
+			return r.declineStored(ctx, slot, reason)
+		}
 	}
 	accept, decline, err := r.store.Decide(r.signer, r.nodeID, slot.DealId, slot.Index, slot.PieceRoot)
 	if err != nil {
@@ -59,6 +80,39 @@ func (r *Runner) decide(ctx context.Context, latest int64, params types.Params, 
 		}
 	}
 	return r.dropPending(slot.DealId, slot.Index)
+}
+
+// declineStored declines a slot whose piece is stored but must not be kept.
+// It discards the piece first (unpinning its public CIDs) unless another
+// waiting slot needs the same root, so a failed unpin is retried on the next
+// step and never leaves a pin behind a declined slot.
+func (r *Runner) declineStored(ctx context.Context, slot types.Slot, reason string) error {
+	name, ok, err := r.store.FindByRoot(slot.PieceRoot)
+	if err != nil {
+		return err
+	}
+	if ok && !r.otherPendingRoot(slot.DealId, slot.Index, rootName(slot.PieceRoot)) {
+		if err := r.store.Discard(name); err != nil {
+			return err
+		}
+	}
+	msg := &types.MsgDeclineDeal{Signer: r.signer, NodeId: r.nodeID, DealId: slot.DealId, Slot: slot.Index, Reason: reason}
+	if err := r.chain.Submit(ctx, msg); err != nil {
+		return fmt.Errorf("decline deal %d slot %d (%s): %w", slot.DealId, slot.Index, reason, err)
+	}
+	return r.dropPending(slot.DealId, slot.Index)
+}
+
+// otherPendingRoot reports whether a slot other than dealID/slot waits for root.
+func (r *Runner) otherPendingRoot(dealID uint64, slot uint32, root string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range r.state.Pending {
+		if p.Root == root && (p.DealID != dealID || p.Slot != slot) {
+			return true
+		}
+	}
+	return false
 }
 
 // answer proves every unproved challenge this node holds for epoch, in

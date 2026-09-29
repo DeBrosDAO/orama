@@ -1,12 +1,14 @@
 package provider
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +16,9 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Retrieval serves stored pieces over HTTP. It does not pin through Kubo. A caller that passes a positive
+// Retrieval serves stored pieces over HTTP. It does not pin through Kubo
+// itself: the Runner pins public deals, and POST /pins/<root> only fetches a
+// piece by CID into the store (AcceptPins). A caller that passes a positive
 // per-second limit, burst, and IP cap gets one token bucket per client
 // address. When the address table is full, a new address is refused.
 type Retrieval struct {
@@ -26,7 +30,11 @@ type Retrieval struct {
 	buckets   map[string]*bucket
 	uploadMax int64
 	assigned  func(string) bool
+	catter    Catter
+	pinnable  func(string) bool
 	uploads   chan struct{}
+	pins      chan struct{}
+	pinning   map[string]struct{}
 	now       func() time.Time
 }
 
@@ -41,6 +49,12 @@ const (
 	bucketIdle = 10 * time.Minute
 	// MaxConcurrentUploads bounds the upload bodies held in memory at once.
 	MaxConcurrentUploads = 2
+	// MaxConcurrentPins bounds the fetches by CID in flight. They have their
+	// own slots so a request naming a CID nobody serves cannot starve uploads.
+	MaxConcurrentPins = 2
+	// PinFetchTimeout bounds one fetch by CID. A piece a client just pinned on
+	// its own node is found by Kubo well inside it.
+	PinFetchTimeout = 30 * time.Second
 	// ipv6BucketBits groups IPv6 clients by /64, the usual per-host allocation.
 	ipv6BucketBits = 64
 )
@@ -61,6 +75,8 @@ func NewRetrieval(store *Store, perSecond float64, burst, maxIPs int) (*Retrieva
 		maxIPs:  maxIPs,
 		buckets: make(map[string]*bucket),
 		uploads: make(chan struct{}, MaxConcurrentUploads),
+		pins:    make(chan struct{}, MaxConcurrentPins),
+		pinning: make(map[string]struct{}),
 		now:     time.Now,
 	}, nil
 }
@@ -79,9 +95,37 @@ func (rt *Retrieval) AcceptUploads(maxBody int64, assigned func(string) bool) er
 	return nil
 }
 
+// Catter reads a CID's content from IPFS, at most max bytes.
+type Catter interface {
+	Cat(ctx context.Context, cid string, max int64) ([]byte, error)
+}
+
+// AcceptPins lets POST /pins/<hex piece root> with X-Piece-CID fetch the
+// piece by that CID through cat (the public Kubo), check it against the
+// assigned root, and store it. pinnable reports whether this node waits for
+// that root in a slot of a public deal: a PRIVATE deal's piece is never
+// fetched through the public Kubo. It needs AcceptUploads first, whose size
+// limit it shares.
+func (rt *Retrieval) AcceptPins(cat Catter, pinnable func(string) bool) error {
+	if cat == nil || pinnable == nil {
+		return errors.New("pin fetcher and filter are required")
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.assigned == nil {
+		return errors.New("AcceptPins needs AcceptUploads first")
+	}
+	rt.catter, rt.pinnable = cat, pinnable
+	return nil
+}
+
 // ServeHTTP handles GET and HEAD /pieces/<cid>, including Range.
 // POST stores a piece only after AcceptUploads, and only for an assigned CID.
 func (rt *Retrieval) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, pinsPrefix) {
+		rt.servePin(w, r)
+		return
+	}
 	if r.Method == http.MethodPost {
 		rt.serveUpload(w, r)
 		return
@@ -186,6 +230,107 @@ func (rt *Retrieval) serveUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// pinsPrefix is the path POST /pins/<hex piece root> is served under.
+const pinsPrefix = "/pins/"
+
+// servePin fetches an assigned piece by the CID the client names. The bytes
+// are read through the public Kubo (bounded by the upload limit), must hash to
+// the assigned root, and are then stored like an upload. The CID is recorded
+// so a public deal pins the piece under it.
+func (rt *Retrieval) servePin(w http.ResponseWriter, r *http.Request) {
+	maxBody, _ := rt.uploadConfig()
+	rt.mu.Lock()
+	cat, pinnable := rt.catter, rt.pinnable
+	rt.mu.Unlock()
+	if cat == nil {
+		w.Header().Set("Allow", rt.allowHeader())
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, pinsPrefix)
+	root, err := hex.DecodeString(name)
+	if err != nil || len(root) != 32 || hex.EncodeToString(root) != name {
+		http.Error(w, "bad pin path", http.StatusBadRequest)
+		return
+	}
+	ip, err := clientIP(r.RemoteAddr)
+	if err != nil {
+		http.Error(w, "missing client address", http.StatusBadRequest)
+		return
+	}
+	if !rt.allow(ip) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	if !pinnable(name) {
+		http.Error(w, "not assigned to a public deal", http.StatusForbidden)
+		return
+	}
+	cid := r.Header.Get("X-Piece-CID")
+	if !ValidIPFSCID(cid) {
+		http.Error(w, "X-Piece-CID must be a CIDv0 or a base32 CIDv1", http.StatusBadRequest)
+		return
+	}
+	if rt.store.Denied(cid) {
+		http.Error(w, ReasonDenylist, http.StatusConflict)
+		return
+	}
+	if pins, err := rt.store.IPFSPins(name); err == nil && slices.ContainsFunc(pins, func(p ipfsPin) bool { return p.CID == cid }) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	select {
+	case rt.pins <- struct{}{}:
+		defer func() { <-rt.pins }()
+	default:
+		http.Error(w, "too many fetches in progress", http.StatusServiceUnavailable)
+		return
+	}
+	if !rt.startPin(name) {
+		http.Error(w, "a fetch of this piece is already in progress", http.StatusTooManyRequests)
+		return
+	}
+	defer rt.endPin(name)
+	ctx, cancel := context.WithTimeout(r.Context(), PinFetchTimeout)
+	defer cancel()
+	data, err := cat.Cat(ctx, cid, maxBody)
+	if err != nil {
+		http.Error(w, "fetch by CID failed", http.StatusBadGateway)
+		return
+	}
+	decision, err := rt.store.Ingest(name, data, root)
+	if err != nil {
+		http.Error(w, "ingest failed", http.StatusInternalServerError)
+		return
+	}
+	if !decision.Accept {
+		http.Error(w, decision.Reason, http.StatusConflict)
+		return
+	}
+	if err := rt.store.AddIPFS(name, cid); err != nil {
+		http.Error(w, "record CID failed", http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// startPin marks a fetch of name in flight. It reports false when one already is.
+func (rt *Retrieval) startPin(name string) bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if _, busy := rt.pinning[name]; busy {
+		return false
+	}
+	rt.pinning[name] = struct{}{}
+	return true
+}
+
+func (rt *Retrieval) endPin(name string) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	delete(rt.pinning, name)
 }
 
 func (rt *Retrieval) uploadConfig() (int64, func(string) bool) {
