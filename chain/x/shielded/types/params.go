@@ -50,6 +50,9 @@ func (p Params) Validate() error {
 	if p.MaxActionsPerBundle == 0 {
 		return fmt.Errorf("max_actions_per_bundle must be positive")
 	}
+	if p.ActionGas > ^uint64(0)/uint64(p.MaxActionsPerBundle) {
+		return fmt.Errorf("action_gas x max_actions_per_bundle overflows uint64")
+	}
 	for name, v := range map[string]math.Int{
 		"nullifier_fee": p.NullifierFee, "unshield_floor": p.UnshieldFloor,
 		"max_fee_topup": p.MaxFeeTopup, "queue_per_address_cap": p.QueuePerAddressCap,

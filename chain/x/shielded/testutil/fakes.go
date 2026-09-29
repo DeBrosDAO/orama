@@ -194,10 +194,22 @@ type Bonder struct {
 	Bank      *Bank
 	Delegated map[string]math.Int
 	Fail      error
+	// Minimum is the smallest delegation CheckMinimum accepts.
+	Minimum math.Int
 }
 
 // NewBonder returns an empty bonder.
-func NewBonder(bank *Bank) *Bonder { return &Bonder{Bank: bank, Delegated: map[string]math.Int{}} }
+func NewBonder(bank *Bank) *Bonder {
+	return &Bonder{Bank: bank, Delegated: map[string]math.Int{}, Minimum: math.ZeroInt()}
+}
+
+// CheckMinimum implements the shielded Bonder.
+func (b *Bonder) CheckMinimum(_ sdk.Context, _ sdk.AccAddress, _ string, amount math.Int) error {
+	if amount.LT(b.Minimum) {
+		return errors.New("delegation below the minimum")
+	}
+	return nil
+}
 
 // Delegate implements the shielded Bonder.
 func (b *Bonder) Delegate(ctx sdk.Context, delegator sdk.AccAddress, validator string, amount math.Int) error {

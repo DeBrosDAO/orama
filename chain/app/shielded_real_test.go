@@ -293,8 +293,9 @@ func TestShieldedReal_anUnshieldCannotBeRedirected(t *testing.T) {
 }
 
 func TestShieldedReal_overTheCapAFeeTopupFailsAtomicallyAndABondQueuesAndIsPaidNextWindow(t *testing.T) {
-	// The floor is 100, and 2% of the 4900 pool is 98, so the cap is 100 against a 4899 unshield.
-	c := realChain(t, func(gs *shieldedtypes.GenesisState) { gs.Params.UnshieldFloor = math.NewInt(100) })
+	// The floor is 1000 and 2% of the 4900 pool is 98, so the cap is 1000 against a 4899 unshield.
+	// The transfer's 89 tip already counted against it, so a window has 911 left.
+	c := realChain(t, func(gs *shieldedtypes.GenesisState) { gs.Params.UnshieldFloor = math.NewInt(1000) })
 	requireTxOK(t, c.block(t, c.shieldMsg(t)), 0, "shield")
 	requireTxOK(t, c.block(t, c.transferTx(t, loadVector(t, "ironwood-transfer"))), 0, "transfer")
 
@@ -312,24 +313,24 @@ func TestShieldedReal_overTheCapAFeeTopupFailsAtomicallyAndABondQueuesAndIsPaidN
 	gs, err := c.app.ShieldedKeeper.ExportGenesis(ctx)
 	require.NoError(t, err)
 	require.Len(t, gs.Queue, 1)
-	// The block that queued it ends by serving its window: the cap's 100 is paid at once, the
-	// remaining 4799 waits.
-	require.Equal(t, "4799", gs.Queue[0].Amount.String())
+	// The block that queued it ends by serving its window: what the cap has left (911) is paid at
+	// once, the remaining 3988 waits.
+	require.Equal(t, "3988", gs.Queue[0].Amount.String())
 	held := c.app.BankKeeper.GetBalance(ctx, authtypes.NewModuleAddress(shieldedtypes.ModuleName), params.BaseDenom).Amount
-	require.Equal(t, "4799", held.String(), "the queued coins stay in the module account")
-	require.Equal(t, "100", c.delegated(t), "paid through the real staking module, up to the cap")
+	require.Equal(t, "3988", held.String(), "the queued coins stay in the module account")
+	require.Equal(t, "911", c.delegated(t), "paid through the real staking module, up to the cap")
 	c.requireInvariants(t)
 
 	c.block(t)
-	require.Equal(t, "100", c.delegated(t), "the window is served once, however many blocks it has")
+	require.Equal(t, "911", c.delegated(t), "the window is served once, however many blocks it has")
 
-	// A day later the next window pays the next 100.
+	// A day later the next window pays the whole cap.
 	c.skew = pool.Window + time.Hour
 	c.block(t)
-	require.Equal(t, "200", c.delegated(t))
+	require.Equal(t, "1911", c.delegated(t))
 	gs, err = c.app.ShieldedKeeper.ExportGenesis(c.app.NewContext(true))
 	require.NoError(t, err)
-	require.Equal(t, "4699", gs.Queue[0].Amount.String())
+	require.Equal(t, "2988", gs.Queue[0].Amount.String())
 	c.requireInvariants(t)
 }
 

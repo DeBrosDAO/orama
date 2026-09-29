@@ -149,3 +149,23 @@ func TestSnapshot_storeShorterThanCommittedFails(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// A restore that fails leaves nothing behind, so the next attempt can run.
+func TestRestore_aFailedRestoreClearsTheStoreForTheNextAttempt(t *testing.T) {
+	src := nullifier.NewStore(dbm.NewMemDB())
+	acc, count := fill(t, src, 2, 3)
+	good := func(uint64) ([bundle.NodeLen]byte, uint64, error) { return acc, count, nil }
+	ps := payloads(t, New(src, good), 2)
+
+	dst := nullifier.NewStore(dbm.NewMemDB())
+	bad := func(uint64) ([bundle.NodeLen]byte, uint64, error) { return acc, count + 1, nil }
+	if err := New(dst, bad).RestoreExtension(2, Format, reader(ps)); !errors.Is(err, types.ErrNullifierStore) {
+		t.Fatalf("got %v", err)
+	}
+	if empty, _ := dst.Empty(); !empty {
+		t.Fatal("a failed restore left records behind")
+	}
+	if err := New(dst, good).RestoreExtension(2, Format, reader(ps)); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+}

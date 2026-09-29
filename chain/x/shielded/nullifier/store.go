@@ -1,15 +1,13 @@
 package nullifier
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 
 	dbm "github.com/cosmos/cosmos-db"
 )
-
-// StoreDBName is the database name under the node's data directory.
-const StoreDBName = "shielded_nullifiers"
 
 // nodeLen is the size of a nullifier.
 const nodeLen = 32
@@ -192,4 +190,42 @@ func (s *Store) Import(nfs [][nodeLen]byte) error {
 		return fmt.Errorf("write imported nullifiers: %w", err)
 	}
 	return nil
+}
+
+// Fold is SHA-256(prev || nullifier): one step of the running accumulator the app hash commits to.
+func Fold(prev, nullifier [nodeLen]byte) [nodeLen]byte {
+	h := sha256.New()
+	_, _ = h.Write(prev[:])
+	_, _ = h.Write(nullifier[:])
+	var out [nodeLen]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// Reset removes every record. A failed state-sync restore uses it so the next attempt starts empty.
+func (s *Store) Reset() error {
+	it, err := s.db.Iterator(nil, nil)
+	if err != nil {
+		return fmt.Errorf("scan nullifier store: %w", err)
+	}
+	var keys [][]byte
+	for ; it.Valid(); it.Next() {
+		keys = append(keys, append([]byte(nil), it.Key()...))
+	}
+	if err := it.Error(); err != nil {
+		_ = it.Close()
+		return err
+	}
+	if err := it.Close(); err != nil {
+		return err
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for _, k := range keys {
+		if err := batch.Delete(k); err != nil {
+			return fmt.Errorf("stage nullifier delete: %w", err)
+		}
+	}
+	s.imported = 0
+	return batch.WriteSync()
 }

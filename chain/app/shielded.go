@@ -78,7 +78,7 @@ type shieldedBonder struct {
 }
 
 func (b shieldedBonder) Delegate(ctx sdk.Context, delegator sdk.AccAddress, validator string, amount math.Int) error {
-	if err := b.checkMinimum(ctx, delegator, validator, amount); err != nil {
+	if err := b.CheckMinimum(ctx, delegator, validator, amount); err != nil {
 		return err
 	}
 	bondDenom, err := b.staking.BondDenom(ctx)
@@ -93,19 +93,22 @@ func (b shieldedBonder) Delegate(ctx sdk.Context, delegator sdk.AccAddress, vali
 	return err
 }
 
-// checkMinimum refuses a delegation that would leave the delegator's stake with the validator
+// CheckMinimum refuses a delegation that would leave the delegator's stake with the validator
 // below x/power's minimum for rewards.
-func (b shieldedBonder) checkMinimum(ctx sdk.Context, delegator sdk.AccAddress, validator string, amount math.Int) error {
+func (b shieldedBonder) CheckMinimum(ctx sdk.Context, delegator sdk.AccAddress, validator string, amount math.Int) error {
 	p, err := b.power.Params.Get(ctx)
 	if err != nil {
 		return fmt.Errorf("load power params: %w", err)
 	}
-	if p.MinDelegationForRewards.IsNil() || !p.MinDelegationForRewards.IsPositive() {
-		return nil
-	}
 	valAddr, err := sdk.ValAddressFromBech32(validator)
 	if err != nil {
 		return fmt.Errorf("validator %q: %w", validator, err)
+	}
+	if _, err := b.staking.GetValidator(ctx, valAddr); err != nil {
+		return fmt.Errorf("validator %s does not exist: %w", validator, err)
+	}
+	if p.MinDelegationForRewards.IsNil() || !p.MinDelegationForRewards.IsPositive() {
+		return nil
 	}
 	total := amount
 	delegation, err := b.staking.GetDelegation(ctx, delegator, valAddr)

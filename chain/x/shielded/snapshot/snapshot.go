@@ -102,6 +102,17 @@ func (e *Extension) RestoreExtension(height uint64, format uint32, next snapshot
 	if empty, err := e.store.Empty(); err != nil || !empty {
 		return fmt.Errorf("%w: restore needs an empty nullifier store (%v)", types.ErrNullifierStore, err)
 	}
+	if err := e.restore(height, next); err != nil {
+		if resetErr := e.store.Reset(); resetErr != nil {
+			return fmt.Errorf("%w (and the store could not be cleared: %v)", err, resetErr)
+		}
+		return err
+	}
+	return nil
+}
+
+// restore reads the payloads into the store and checks them against the committed state.
+func (e *Extension) restore(height uint64, next snapshots.ExtensionPayloadReader) error {
 	imp := importer{store: e.store, height: int64(height), blockHeight: -1}
 	for {
 		payload, err := next()

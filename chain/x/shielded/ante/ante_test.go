@@ -276,3 +276,15 @@ func TestProof_aBadProofIsRefusedInTheMempool(t *testing.T) {
 	require.ErrorIs(t, err, testutil.ErrBoom)
 	require.False(t, reached)
 }
+
+func TestSignerless_paddingAroundTheBundleIsRefused(t *testing.T) {
+	e := testutil.NewEnv(t, nil)
+	msg := transferMsg(1, 20)
+	tx := buildTx(t, gas(oneActionGas), msg)
+	ctx := e.CheckCtx().WithGasMeter(storetypes.NewGasMeter(oneActionGas))
+	_, err := run(signerless(e), ctx.WithTxBytes(make([]byte, len(msg.Bundle)+ante.MaxSignerlessOverhead+1)), tx, false)
+	require.ErrorIs(t, err, types.ErrTxShape)
+	ctx = e.CheckCtx().WithGasMeter(storetypes.NewGasMeter(oneActionGas))
+	_, err = run(signerless(e), ctx.WithTxBytes(make([]byte, len(msg.Bundle)+ante.MaxSignerlessOverhead)), tx, false)
+	require.NoError(t, err)
+}

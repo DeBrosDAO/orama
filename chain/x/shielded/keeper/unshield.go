@@ -32,6 +32,11 @@ func (k Keeper) ExecuteUnshield(ctx sdk.Context, msg *types.MsgUnshield, signer 
 	if msg.Target == types.UnshieldTargetFeeTopup && net.GT(p.MaxFeeTopup) {
 		return false, fmt.Errorf("%w: %s%s over %s%s", types.ErrFeeTopupCap, net, params.BaseDenom, p.MaxFeeTopup, params.BaseDenom)
 	}
+	if msg.Target == types.UnshieldTargetBond {
+		if err := k.deps.Bonder.CheckMinimum(ctx, signer, msg.Validator, net); err != nil {
+			return false, fmt.Errorf("%w: %w", types.ErrTarget, err)
+		}
+	}
 	if err := k.register(ctx, adm.Bundle); err != nil {
 		return false, err
 	}
@@ -50,15 +55,19 @@ func (k Keeper) ExecuteUnshield(ctx sdk.Context, msg *types.MsgUnshield, signer 
 	if msg.Target == types.UnshieldTargetFeeTopup {
 		kind = pool.KindFeeTopup
 	}
-	outcome, err := k.applyCap(ctx, ctx.BlockTime(), key, before, net, kind)
-	if err != nil {
-		return false, fmt.Errorf("unshield of %s%s: %w", net, params.BaseDenom, err)
-	}
 	waiting, err := k.queueHasEntries(ctx)
 	if err != nil {
 		return false, err
 	}
-	if outcome == pool.OutcomeQueue || (waiting && kind == pool.KindBond) {
+	if waiting && kind == pool.KindBond {
+		// Behind a non-empty queue a bond waits its turn. It has paid nothing, so it takes no cap.
+		return true, k.enqueue(ctx, msg, signer, net)
+	}
+	outcome, err := k.applyCap(ctx, ctx.BlockTime(), key, before, net, kind)
+	if err != nil {
+		return false, fmt.Errorf("unshield of %s%s: %w", net, params.BaseDenom, err)
+	}
+	if outcome == pool.OutcomeQueue {
 		return true, k.enqueue(ctx, msg, signer, net)
 	}
 	return false, k.pay(ctx, signer, msg.Target, msg.Validator, msg.NodeId, msg.Role, net)

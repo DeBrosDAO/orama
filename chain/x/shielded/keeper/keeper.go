@@ -67,9 +67,9 @@ type Keeper struct {
 
 // emptyRootCache computes the empty tree's root once. The Sinsemilla hashing is not free.
 type emptyRootCache struct {
-	once sync.Once
+	mu   sync.Mutex
+	done bool
 	root [bundle.NodeLen]byte
-	err  error
 }
 
 // NewKeeper builds a keeper. store is the module's IAVL store, transient its transient store.
@@ -158,8 +158,16 @@ func getUint64(ctx context.Context, item collections.Item[uint64]) (uint64, erro
 // EmptyRoot is the root of a tree with no notes.
 func (k Keeper) EmptyRoot() ([bundle.NodeLen]byte, error) {
 	c := k.emptyRoot
-	c.once.Do(func() { c.root, c.err = k.deps.Tree.EmptyRoot() })
-	return c.root, c.err
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.done {
+		root, err := k.deps.Tree.EmptyRoot()
+		if err != nil {
+			return root, err // a failure is not remembered
+		}
+		c.root, c.done = root, true
+	}
+	return c.root, nil
 }
 
 // TransientKVService lets the collections of the pending-nullifier store sit on a transient store.

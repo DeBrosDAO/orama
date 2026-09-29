@@ -95,13 +95,16 @@ func TestMsgUnshield_validateBasicPerTarget(t *testing.T) {
 			m.Target, m.NodeId, m.Role = types.UnshieldTargetNodeBond, "node-1", nodestypes.RoleStorage
 		},
 		"fee topup": func(m *types.MsgUnshield) { m.Target = types.UnshieldTargetFeeTopup },
-		"deposit":   func(m *types.MsgUnshield) { m.Target = types.UnshieldTargetDeposit },
-		"contract":  func(m *types.MsgUnshield) { m.Target = types.UnshieldTargetContract },
 	}
 	for name, set := range ok {
 		m := base
 		set(&m)
 		require.NoError(t, m.ValidateBasic(), name)
+	}
+	for _, target := range []types.UnshieldTarget{types.UnshieldTargetDeposit, types.UnshieldTargetContract} {
+		m := base
+		m.Target = target
+		require.ErrorIs(t, m.ValidateBasic(), types.ErrTargetNotLinked, "an unlinked target is refused before any proof work")
 	}
 	bad := map[string]func(*types.MsgUnshield){
 		"no target":                  func(m *types.MsgUnshield) {},

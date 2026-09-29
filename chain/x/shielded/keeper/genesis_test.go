@@ -20,7 +20,7 @@ func busyEnv(t *testing.T) *testutil.Env {
 	e := capEnv(t, nil)
 	e.Fees.Proposer = bob
 	require.NoError(t, transfer(e, transferBundle(20, 15, emptyRoot())))
-	_, err := unshield(t, e, topup(2, 51, alice))
+	_, err := unshield(t, e, topup(2, 47, alice))
 	require.NoError(t, err)
 	resp, err := unshield(t, e, bond(3, 41, alice))
 	require.NoError(t, err)

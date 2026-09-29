@@ -15,6 +15,10 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/shielded/types"
 )
 
+// MaxSignerlessOverhead is the most bytes a signer-less tx may carry around its bundle. The tx pays no
+// size gas (its gas is fixed), so padding is refused rather than priced.
+const MaxSignerlessOverhead = 512
+
 // IsSignerless reports whether tx is a signer-less shielded transfer: exactly one message, a
 // MsgShieldedTransfer. A tx that carries one among other messages is not, and is refused by
 // ShapeDecorator.
@@ -136,6 +140,10 @@ func (d SignerlessDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate boo
 	if err := d.checkShape(tx); err != nil {
 		return ctx, err
 	}
+	if len(ctx.TxBytes()) > len(msg.Bundle)+MaxSignerlessOverhead {
+		return ctx, fmt.Errorf("%w: the tx is %d bytes around a %d-byte bundle, the most overhead is %d",
+			types.ErrTxShape, len(ctx.TxBytes())-len(msg.Bundle), len(msg.Bundle), MaxSignerlessOverhead)
+	}
 	// The tx declares exactly its bundle's gas and is charged that fixed schedule, so the reads
 	// the checks make run on an unmetered context.
 	work := ctx.WithGasMeter(storetypes.NewInfiniteGasMeter())
@@ -146,7 +154,7 @@ func (d SignerlessDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate boo
 	if gas := ctx.GasMeter().Limit(); gas != adm.Gas && !simulate {
 		return ctx, fmt.Errorf("%w: gas limit %d, a %d-action bundle must declare %d", types.ErrTxShape, gas, adm.Bundle.Actions, adm.Gas)
 	}
-	if ctx.IsCheckTx() && !ctx.IsReCheckTx() {
+	if ctx.IsCheckTx() && !ctx.IsReCheckTx() && !simulate {
 		if err := d.keeper.Verify(ctx, msg.Bundle, nil, adm); err != nil {
 			return ctx, err
 		}

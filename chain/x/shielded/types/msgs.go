@@ -79,7 +79,9 @@ func (msg MsgUnshield) ValidateBasic() error {
 		if msg.Role == nodestypes.RoleUnspecified {
 			return fmt.Errorf("%w: node bond target needs a role", ErrTarget)
 		}
-	case UnshieldTargetFeeTopup, UnshieldTargetDeposit, UnshieldTargetContract:
+	case UnshieldTargetFeeTopup:
+	case UnshieldTargetDeposit, UnshieldTargetContract:
+		return fmt.Errorf("%w: %s", ErrTargetNotLinked, msg.Target)
 	default:
 		return fmt.Errorf("%w: %s", ErrTarget, msg.Target)
 	}

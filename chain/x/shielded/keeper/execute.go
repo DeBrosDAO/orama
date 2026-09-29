@@ -8,6 +8,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
+	"github.com/DeBrosOfficial/network/chain/x/shielded/pool"
 	"github.com/DeBrosOfficial/network/chain/x/shielded/types"
 )
 
@@ -34,6 +35,10 @@ func (k Keeper) ExecuteTransfer(ctx sdk.Context, adm *Admitted) error {
 	if err := k.register(ctx, adm.Bundle); err != nil {
 		return err
 	}
+	before, err := k.poolBalance(ctx, nativePool())
+	if err != nil {
+		return err
+	}
 	if err := k.debitPool(ctx, nativePool(), adm.Amount); err != nil {
 		return err
 	}
@@ -42,6 +47,9 @@ func (k Keeper) ExecuteTransfer(ctx sdk.Context, adm *Admitted) error {
 	proposer, found := k.deps.Fees.ProposerAccount(ctx)
 	if !found {
 		burn, tip = adm.Amount, math.ZeroInt()
+	}
+	if err := k.capTip(ctx, before, tip); err != nil {
+		return err
 	}
 	if err := k.burn(ctx, burn); err != nil {
 		return err
@@ -94,4 +102,18 @@ func (k Keeper) creditPool(ctx sdk.Context, adm *Admitted) error {
 		return err
 	}
 	return k.credit(ctx, nativePool(), adm.Amount)
+}
+
+// capTip counts a transfer's tip against the pool's 24h cap. The burned part of a fee is exempt, but
+// the tip becomes a proposer's spendable earnings, so a proposer holding counterfeit notes could
+// otherwise drain the pool through fees without meeting the cap. A tip over what the cap has left
+// fails the transfer, like a fee top-up.
+func (k Keeper) capTip(ctx sdk.Context, poolBefore, tip math.Int) error {
+	if !tip.IsPositive() {
+		return nil
+	}
+	if _, err := k.applyCap(ctx, ctx.BlockTime(), nativePool(), poolBefore, tip, pool.KindFeeTopup); err != nil {
+		return fmt.Errorf("the tip of %s%s: %w", tip, params.BaseDenom, err)
+	}
+	return nil
 }

@@ -108,15 +108,6 @@ func New(cfg Config) (*Verifier, error) {
 	return &Verifier{cfg: cfg}, nil
 }
 
-// Warm starts the process and waits for its ready frame, so the first bundle does not pay for
-// the verifying key. A missing binary is reported as verify.ErrVerifierNotLinked.
-func (v *Verifier) Warm() error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	_, err := v.running()
-	return err
-}
-
 // Close stops the process. The Verifier can still be used; it starts a new one.
 func (v *Verifier) Close() error {
 	v.mu.Lock()

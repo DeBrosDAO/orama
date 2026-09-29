@@ -2173,6 +2173,10 @@ chain (`ante.Route`: extension options, timeout height, then its own decorator) 
 fee is the bundle's value balance. A tx with a `MsgShieldedTransfer` among other messages, or a
 shielded message beside another, is refused by `ante.ShapeDecorator` before any fee is taken.
 
+A signer-less tx may carry at most `ante.MaxSignerlessOverhead` (512) bytes around its bundle: it
+pays no size gas, so padding is refused. Gas simulation does not verify in the ante handler, so a
+wallet computes a transfer's gas as `action_gas x actions`.
+
 **Order of checks** (`keeper.Admit`), cheap first, in the ante handler and again in the message:
 size and action count, the value balance's sign and the fee, each nullifier (duplicate within the
 bundle, spent, pending), the anchor, and only then, in the mempool's `CheckTx`, the proofs. In a
@@ -2204,7 +2208,10 @@ the G1 sign-off, like P2.
 * **Transfer.** The fee (the value balance) must be at least `base_fee x action_gas x actions +
   nullifier_fee x actions`. The base part and the nullifier fees are **burned**; the rest is the
   tip, credited to the proposer's earnings (`x/fees` `CreditEarnings`). If the proposer does not
-  resolve, the whole fee is burned, as in the ante fee decorator. The fee leaves the pool.
+  resolve, the whole fee is burned, as in the ante fee decorator. The fee leaves the pool. The
+  **tip counts against the pool's 24 h cap** and a tip over what the cap has left fails the
+  transfer: it becomes a proposer's spendable earnings, so an uncapped tip would let a proposer
+  drain the pool through fees. The burned part is exempt.
 * **Shield.** The source pays `amount + nullifier_fee x nullifiers`; the pool is credited `amount`
   and the nullifier fees are burned, so the pool holds exactly what the notes are worth.
 * **Unshield.** The pool is debited `amount`, the nullifier fees are burned out of it, and the
@@ -2239,8 +2246,8 @@ the structural vote. There is no vintage-migration message yet because there is 
 | `BOND` | the signer's own delegation to `validator`, through x/staking's `MsgDelegate`, held to x/power's `min_delegation_for_rewards` (the rule its ante decorator applies to a signed `MsgDelegate`, which a delegation made from this module would skip): a payment that would leave the delegation strictly between zero and the minimum is refused. Over the cap, or behind a non-empty queue, it **queues**. |
 | `NODE_BOND` | the signer's own x/nodes role bond on `node_id` (`MsgBondNode` with the signer as operator, so x/nodes refuses a node the signer does not own). Queues like `BOND`. |
 | `FEE_TOPUP` | credits the signer's own earnings account, at most `max_fee_topup` per tx. Counts against the cap and **fails the whole tx** when it does not fit; it is not queued. |
-| `DEPOSIT` | **not linked**: no module has a path that tops up an existing deposit. |
-| `CONTRACT` | **not linked**: the audited unshield-call-reshield adapter is not built. It would fail atomically over the cap, as specified. |
+| `DEPOSIT` | **not linked** (refused in `ValidateBasic`, before any proof work): no module has a path that tops up an existing deposit. |
+| `CONTRACT` | **not linked** (refused in `ValidateBasic`): the audited unshield-call-reshield adapter is not built. It would fail atomically over the cap, as specified. |
 
 * **Queue.** A queued unshield has already spent its notes and left the pool (the turnstile); its
   coins stay in the module account and the module balance equals the pools plus the queue. The
@@ -2249,6 +2256,11 @@ the structural vote. There is no vintage-migration message yet because there is 
   `queue_per_address_cap`, so no request at the head holds the queue. A grant is paid FIFO across
   that address's requests. Capacity left after the per-address cap is not redistributed. The
   block that queues a request also ends by serving its window, so part of it can be paid at once.
+  A window makes at most `keeper.MaxServedPerWindow` (1000) payments, oldest first, so the end
+  blocker's work does not grow with the queue; the queue is not otherwise bounded, and a
+  request that is queued while the queue is non-empty takes no cap until it is paid. A bond is
+  refused up front when its validator does not exist or the amount alone is below the minimum;
+  a queued grant that would leave a delegation below the minimum is not paid.
   A target that refuses a payment (a validator that no longer exists, a retired node, a delegation
   that would be dust) keeps its request queued and the block emits `shielded_queue_payment_failed`; the other requests are paid.
   There is no cancel message, so a request whose target never accepts stays queued.
@@ -2521,7 +2533,18 @@ linked, not run.
 * Mempool DoS limits per peer and per onion service (E3), and the gas price: `action_gas` and
   `nullifier_fee` are placeholders.
 * A real two-node state-sync of the nullifier database, and a verifier run on linux.
-* Wallet builders (F7). `oramad query shielded ...` and `oramad tx shielded ...` are the
+* Admission control for `CheckTx`: a signer-less tx pays nothing before its proof is verified, so
+  crafted bundles that fail only the Halo 2 proof cost every node a verification each (the
+  second verifier is serialized behind one mutex). A per-peer rate limit is E3's.
+* Startup checks: a node does not compare the nullifier database with the committed count at
+  start, does not pin the verifier binary by hash or version, and does not warm the verifiers, so
+  the first bundle after a start pays the key builds. A node without either verifier, or with a
+  database missing from a restore, diverges and halts on the first bundle it should have
+  accepted or refused (fail-stop).
+* The `Invariants` and `Pools` queries read the whole nullifier database and queue, unpaginated;
+  keep them off public RPC nodes.
+* Wallet builders (F7). A wallet must sign an unshield with the binding, put the fee in a
+  transfer's value balance, and pay the nullifier fees on top of a shield. `oramad query shielded ...` and `oramad tx shielded ...` are the
   autocli commands generated from the services (`params`, `pools`, `tree-state`,
   `nullifier-spent`, `invariants`); there is no hand-written CLI.
 * A store upgrade: the module has its own store, so a chain that already produced blocks needs an

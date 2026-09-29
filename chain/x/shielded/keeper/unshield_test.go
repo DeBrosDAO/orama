@@ -124,12 +124,48 @@ func TestUnshield_theCapWindowRollsAfter24Hours(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestUnshield_feeBurnsDoNotCountAgainstTheCap(t *testing.T) {
+func TestUnshield_burnedFeesAreExemptButATipCountsAgainstTheCap(t *testing.T) {
 	e := capEnv(t, nil)
 	e.Fees.Proposer = bob
-	require.NoError(t, transfer(e, transferBundle(20, 400, emptyRoot())), "a 400 fee leaves the pool")
-	_, err := unshield(t, e, topup(2, 51, alice))
-	require.NoError(t, err, "the whole cap is still there")
+	// Fee 41: 11 is burned (exempt), 30 is tip and counts. Cap 50 leaves 20.
+	require.NoError(t, transfer(e, transferBundle(20, 41, emptyRoot())))
+	_, err := unshield(t, e, topup(2, 21, alice))
+	require.NoError(t, err, "the burned 11 took nothing from the cap: 20 is still there")
+	_, err = unshield(t, e, topup(3, 2, alice))
+	require.ErrorIs(t, err, pool.ErrCapExhausted, "the tip and the top-up used the whole 50")
+}
+
+func TestTransfer_aTipOverTheCapFailsSoAProposerCannotDrainThePoolThroughFees(t *testing.T) {
+	e := capEnv(t, nil)
+	e.Fees.Proposer = bob
+	err := transfer(e, transferBundle(20, 400, emptyRoot()))
+	require.ErrorIs(t, err, pool.ErrCapExhausted)
+	require.Equal(t, "1000", poolBalance(t, e).String())
+	e.Fees.Proposer = nil
+	require.NoError(t, transfer(e, transferBundle(20, 400, emptyRoot())), "with no proposer the whole fee is burned, which is exempt")
+}
+
+func TestQueue_aBondBehindAQueueTakesNoCap(t *testing.T) {
+	e := capEnv(t, nil)
+	queueTwo(t, e)
+	nextWindow(e)
+	lim, err := e.Keeper.Limiters.Get(e.Ctx, collectionsPool())
+	require.NoError(t, err)
+	before := lim.Counted
+	resp, err := unshield(t, e, bond(20, 6, bob))
+	require.NoError(t, err)
+	require.True(t, resp.Queued)
+	lim, err = e.Keeper.Limiters.Get(e.Ctx, collectionsPool())
+	require.NoError(t, err)
+	require.Equal(t, before.String(), lim.Counted.String(), "a queued bond has paid nothing and counts nothing")
+}
+
+func TestUnshield_aBondBelowTheDelegationMinimumIsRefusedUpFront(t *testing.T) {
+	e := capEnv(t, nil)
+	e.Bonder.Minimum = math.NewInt(100)
+	_, err := unshield(t, e, bond(2, 21, alice))
+	require.ErrorIs(t, err, types.ErrTarget)
+	require.Equal(t, "1000", poolBalance(t, e).String(), "nothing left the pool")
 }
 
 func TestUnshield_bondWithinTheCapIsPaidAtOnce(t *testing.T) {

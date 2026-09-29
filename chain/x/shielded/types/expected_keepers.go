@@ -37,6 +37,9 @@ type FeesKeeper interface {
 
 // Bonder delegates to a validator from the delegator's own bank balance.
 type Bonder interface {
+	// CheckMinimum refuses a delegation that would leave the delegator's stake with the validator
+	// below the minimum that earns rewards.
+	CheckMinimum(ctx sdk.Context, delegator sdk.AccAddress, validator string, amount math.Int) error
 	Delegate(ctx sdk.Context, delegator sdk.AccAddress, validator string, amount math.Int) error
 }
 

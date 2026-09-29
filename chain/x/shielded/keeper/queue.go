@@ -37,12 +37,22 @@ func (k Keeper) enqueue(ctx sdk.Context, msg *types.MsgUnshield, owner sdk.AccAd
 	})
 }
 
-// queued returns every queued request in id order, which is arrival order.
+// MaxServedPerWindow bounds the payments one window makes, so the end blocker's work does not grow
+// with the queue. The rest wait for the next window, oldest first.
+const MaxServedPerWindow = 1000
+
+// queued returns every queued request in id order, which is arrival order (genesis export and
+// queries).
 func (k Keeper) queued(ctx context.Context) ([]types.QueuedUnshield, error) {
+	return k.queuedUpTo(ctx, 0)
+}
+
+// queuedUpTo returns the first limit queued requests in id order; limit 0 means all.
+func (k Keeper) queuedUpTo(ctx context.Context, limit int) ([]types.QueuedUnshield, error) {
 	var out []types.QueuedUnshield
 	err := k.Queue.Walk(ctx, nil, func(_ uint64, q types.QueuedUnshield) (bool, error) {
 		out = append(out, q)
-		return false, nil
+		return limit > 0 && len(out) >= limit, nil
 	})
 	return out, err
 }
@@ -52,12 +62,8 @@ func (k Keeper) queued(ctx context.Context) ([]types.QueuedUnshield, error) {
 // take the whole window. A request whose target refuses the payment stays queued and an event says
 // so; the other requests are still paid.
 func (k Keeper) serveQueue(ctx sdk.Context) error {
-	reqs, err := k.queued(ctx)
-	if err != nil || len(reqs) == 0 {
-		return err
-	}
-	p, err := k.params(ctx)
-	if err != nil {
+	waiting, err := k.queueHasEntries(ctx)
+	if err != nil || !waiting {
 		return err
 	}
 	key := nativePool()
@@ -68,6 +74,14 @@ func (k Keeper) serveQueue(ctx sdk.Context) error {
 	lim.Roll(ctx.BlockTime())
 	if stored.ServedWindowStart == lim.Start.Unix() {
 		return k.saveLimiter(ctx, key, lim, stored)
+	}
+	p, err := k.params(ctx)
+	if err != nil {
+		return err
+	}
+	reqs, err := k.queuedUpTo(ctx, MaxServedPerWindow)
+	if err != nil {
+		return err
 	}
 	balance, err := k.poolBalance(ctx, key)
 	if err != nil {
