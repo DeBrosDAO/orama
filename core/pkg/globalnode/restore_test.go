@@ -86,6 +86,7 @@ func TestImportMigration_migrationBundleRefusesARestoreFloor(t *testing.T) {
 
 func TestImportMigration_neverLowersARecordedFloor(t *testing.T) {
 	src, dst := newHost(t), newHost(t)
+	pubA, _ := ValidatorKeyPubKey(read(t, src.KeyPath))
 	write(t, dst.floorPath(), floorJSON(t, read(t, src.KeyPath), stateJSON("2000", 0, 3)))
 	write(t, dst.StatePath, stateJSON("2000", 0, 3))
 	write(t, src.StatePath, stateJSON("1200", 0, 3))
@@ -98,7 +99,8 @@ func TestImportMigration_neverLowersARecordedFloor(t *testing.T) {
 	if _, err := dst.ImportMigration(bundle, nil); err == nil || !strings.Contains(err.Error(), "never lowered") {
 		t.Fatalf("err = %v, want the lower floor refused", err)
 	}
-	if got, err := dst.readFloor(); err != nil || got.State.Height != 2000 {
+
+	if got, err := dst.readFloors(); err != nil || got[pubA].Height != 2000 {
 		t.Fatalf("the floor was lowered to %v (%v)", got, err)
 	}
 	if !bytes.Equal(read(t, dst.KeyPath), before) {
@@ -124,8 +126,9 @@ func TestImportMigration_anotherKeysFloorDoesNotBlock(t *testing.T) {
 		t.Fatalf("floor %v; the key was not installed", res.Floor)
 	}
 	pub, _ := ValidatorKeyPubKey(key)
-	if got, err := dst.readFloor(); err != nil || got.PubKey != pub {
-		t.Fatalf("the recorded floor is not the imported key's: %v (%v)", got, err)
+	floors, err := dst.readFloors()
+	if err != nil || floors[pub].Height != 1200 || len(floors) != 2 {
+		t.Fatalf("floors %v (%v): want the imported key's added and the other kept", floors, err)
 	}
 }
 

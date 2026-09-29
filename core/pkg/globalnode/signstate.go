@@ -6,6 +6,7 @@
 package globalnode
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -102,7 +103,12 @@ const (
 )
 
 // ValidatorKeyPubKey checks priv_validator_key.json is an ed25519 CometBFT key
-// and returns its public key, base64, as the file writes it.
+// and returns the public key CometBFT signs as, in canonical base64.
+// CometBFT ignores the stored pub_key and derives the public key from
+// priv_key (the last 32 of its 64 bytes), so that is what is returned, and a
+// file whose pub_key names another key is refused. Returning the derived
+// bytes re-encoded means a differently spelled base64 cannot make one key look
+// like two.
 func ValidatorKeyPubKey(data []byte) (string, error) {
 	var doc struct {
 		PubKey  typedValue `json:"pub_key"`
@@ -111,13 +117,19 @@ func ValidatorKeyPubKey(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return "", fmt.Errorf("priv_validator_key.json is not JSON: %w", err)
 	}
-	if err := doc.PubKey.check("tendermint/PubKeyEd25519", ed25519PublicSize); err != nil {
+	stated, err := doc.PubKey.decode("tendermint/PubKeyEd25519", ed25519PublicSize)
+	if err != nil {
 		return "", fmt.Errorf("priv_validator_key.json pub_key: %w", err)
 	}
-	if err := doc.PrivKey.check("tendermint/PrivKeyEd25519", ed25519PrivateSize); err != nil {
+	priv, err := doc.PrivKey.decode("tendermint/PrivKeyEd25519", ed25519PrivateSize)
+	if err != nil {
 		return "", fmt.Errorf("priv_validator_key.json priv_key: %w", err)
 	}
-	return doc.PubKey.Value, nil
+	derived := priv[ed25519PrivateSize-ed25519PublicSize:]
+	if !bytes.Equal(stated, derived) {
+		return "", fmt.Errorf("priv_validator_key.json pub_key is not the public key of its priv_key")
+	}
+	return base64.StdEncoding.EncodeToString(derived), nil
 }
 
 type typedValue struct {
@@ -125,13 +137,13 @@ type typedValue struct {
 	Value string `json:"value"`
 }
 
-func (v typedValue) check(wantType string, size int) error {
+func (v typedValue) decode(wantType string, size int) ([]byte, error) {
 	if v.Type != wantType {
-		return fmt.Errorf("type %q, want %q", v.Type, wantType)
+		return nil, fmt.Errorf("type %q, want %q", v.Type, wantType)
 	}
 	raw, err := base64.StdEncoding.DecodeString(v.Value)
 	if err != nil || len(raw) != size {
-		return fmt.Errorf("value is not %d bytes of base64", size)
+		return nil, fmt.Errorf("value is not %d bytes of base64", size)
 	}
-	return nil
+	return raw, nil
 }

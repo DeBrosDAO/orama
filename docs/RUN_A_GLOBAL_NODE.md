@@ -189,16 +189,20 @@ the node.
 ### Move a validator: the double-sign guard
 
 Never run two copies of one key. The guard is the **sign floor**: a sign state
-root records in `/var/lib/orama-global/validator-sign-floor.json`. The chain unit
+root records per validator key in `/var/lib/orama-global/validator-sign-floor.json`
+(`{"floors":{"<public key>":<priv_validator_state.json>}}`). The public key is
+the one CometBFT signs as, derived from `priv_key`; a key file whose `pub_key`
+does not match its `priv_key` is refused. The chain unit
 runs `orama global validator check-sign-floor` as root before every start
 (`ExecStartPre`), so it applies at boot, on `Restart=always` and on any manual
 start, not only to `orama global start`. The check refuses while a migration
-export is in progress. The floor records which validator key it belongs to.
-With a floor recorded, the chain starts only when a `priv_validator_key.json` is
-in the chain home, and, when it is the floor's key, only when
-`priv_validator_state.json` is not behind the floor. A different key is another
-validator and is not held to it. An import never lowers a floor recorded for
-the same key. The floor, the migration key and the key copies are
+export is in progress. With any floor recorded, the chain starts only when a
+`priv_validator_key.json` is in the chain home, and, when a floor is recorded
+for that key, only when `priv_validator_state.json` is not behind it. Each key
+keeps its own floor: importing another key adds its entry and never removes
+one, and an import never lowers a key's floor. A file in any other format stops
+the chain until it is moved aside and the floors are re-recorded by importing
+the bundles again. The floor, the migration key and the key copies are
 trusted only while `/var/lib/orama-global` is root's and not writable by its
 group or others; otherwise every one of these commands, and the check, refuses.
 `orama global install` and `orama global start` print a warning when this

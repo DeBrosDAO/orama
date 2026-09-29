@@ -137,3 +137,43 @@ func TestExportSentinel_leftoverBlocksExportAndStart(t *testing.T) {
 		t.Fatal("a refused export removed another export's marker")
 	}
 }
+
+func TestCheckSignFloor_importingAnotherKeyKeepsTheFirstKeysFloor(t *testing.T) {
+	host, other := newHost(t), newHost(t)
+	keyA := read(t, host.KeyPath)
+	write(t, host.StatePath, stateJSON("1200", 0, 3))
+	pub, _, _ := box.GenerateKey(rand.Reader)
+	_, out, err := host.ExportMigration(pub, stopped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, other.StatePath, stateJSON("50", 0, 3))
+	recipient, _ := host.PrepareMigration()
+	bundleB, _, err := other.ExportMigration(recipient, stopped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.ImportMigration(bundleB, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Key A put back by hand with a state below its own floor.
+	write(t, host.KeyPath, read(t, out.KeyCopy))
+	write(t, host.StatePath, emptySignState)
+	if !bytes.Equal(read(t, host.KeyPath), keyA) {
+		t.Fatal("the key copy is not key A")
+	}
+	if err := host.CheckSignFloor(); err == nil {
+		t.Fatal("key A started below its floor after key B was imported")
+	}
+}
+
+func TestReadFloors_unrecognisedFileSaysWhatAndHow(t *testing.T) {
+	h := newHost(t)
+	for _, bad := range []string{`{"pub_key":"x","state":{}}`, `not json`, `{"floors":{"k":{"height":1}}}`} {
+		write(t, h.floorPath(), []byte(bad))
+		err := h.CheckSignFloor()
+		if err == nil || !strings.Contains(err.Error(), "is not a sign floor file") || !strings.Contains(err.Error(), "re-record") {
+			t.Errorf("%s: err = %v", bad, err)
+		}
+	}
+}

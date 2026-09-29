@@ -1,7 +1,6 @@
 package globalnode
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -44,68 +43,16 @@ func (h Host) checkStateDir() error {
 	return nil
 }
 
-// floorFile is the sign floor as stored: the validator key it belongs to
-// (priv_validator_key.json's pub_key value) and CometBFT's state JSON.
-type floorFile struct {
-	PubKey string          `json:"pub_key"`
-	State  json.RawMessage `json:"state"`
-}
-
-// Floor is a recorded sign floor and the validator key it applies to.
-type Floor struct {
-	PubKey string
-	State  SignState
-}
-
-// writeFloor records state as the floor of the key whose public key is pubKey.
-func (h Host) writeFloor(pubKey string, state []byte) error {
-	data, err := json.Marshal(floorFile{PubKey: pubKey, State: state})
-	if err != nil {
-		return fmt.Errorf("encode the sign floor: %w", err)
-	}
-	if err := h.Root.WriteFile(h.floorPath(), data, secretMode); err != nil {
-		return fmt.Errorf("record the sign floor %s: %w", h.floorPath(), err)
-	}
-	return nil
-}
-
-// readFloor is the recorded floor, or nil when there is none. A state root
-// that does not exist yet has none.
-func (h Host) readFloor() (*Floor, error) {
-	if _, err := os.Lstat(h.StateDir); errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err := h.checkStateDir(); err != nil {
-		return nil, err
-	}
-	data, err := h.Root.ReadFile(h.floorPath(), rootfs.SmallFileLimit)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", h.floorPath(), err)
-	}
-	var doc floorFile
-	if err := json.Unmarshal(data, &doc); err != nil || doc.PubKey == "" {
-		return nil, fmt.Errorf("%s is not a sign floor (pub_key and state)", h.floorPath())
-	}
-	state, err := ParseSignState(doc.State)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", h.floorPath(), err)
-	}
-	return &Floor{PubKey: doc.PubKey, State: state}, nil
-}
-
 // CheckSignFloor is the double-sign guard the chain unit runs before every
 // start (ExecStartPre) and `orama global start` runs too. It refuses while a
 // migration export is in progress. With no floor recorded there is nothing
-// else to check. With one, the chain may start only when a validator key is
-// in the chain home (a missing key means it moved to another host, and oramad
-// would otherwise generate a fresh one), and, when that key is the floor's
-// key, only when its sign state is not behind the floor. A different key is
-// another validator, which the floor says nothing about.
+// else to check. With any, the chain may start only when a validator key is in
+// the chain home (a missing key means it moved to another host, and oramad
+// would otherwise generate a fresh one), and, when a floor is recorded for
+// that key, only when its sign state is not behind that floor. A key with no
+// floor recorded here has never been migrated to or from this host.
 func (h Host) CheckSignFloor() error {
-	floor, err := h.readFloor()
+	floors, err := h.readFloors()
 	if err != nil {
 		return err
 	}
@@ -114,37 +61,38 @@ func (h Host) CheckSignFloor() error {
 	} else if present {
 		return fmt.Errorf("a validator migration export is in progress (%s); the chain must not start", h.sentinelPath())
 	}
-	if floor == nil {
+	if len(floors) == 0 {
 		return nil
 	}
 	key, err := h.Root.ReadFile(h.KeyPath, rootfs.SmallFileLimit)
 	if err != nil {
-		return fmt.Errorf("a sign floor is recorded (%s) but the validator key is not usable: %w; the key was migrated to another host. The key and state copies in %s may be put back only to abandon a migration, and only if the new host never started the chain", floor.State, err, h.StateDir)
+		return fmt.Errorf("a sign floor is recorded but the validator key is not usable: %w; the key was migrated to another host. The key and state copies in %s may be put back only to abandon a migration, and only if the new host never started the chain", err, h.StateDir)
 	}
 	pub, err := ValidatorKeyPubKey(key)
 	if err != nil {
 		return err
 	}
-	if pub != floor.PubKey {
+	floor, ok := floors[pub]
+	if !ok {
 		return nil
 	}
 	stateData, err := h.read(h.StatePath)
 	if err != nil {
-		return fmt.Errorf("a sign floor is recorded but the sign state is unreadable: %w", err)
+		return fmt.Errorf("a sign floor is recorded for this key but the sign state is unreadable: %w", err)
 	}
 	state, err := ParseSignState(stateData)
 	if err != nil {
 		return err
 	}
-	return CheckNotBehind(state, floor.State)
+	return CheckNotBehind(state, floor)
 }
 
 // MigratedAway reports whether this host's validator key was migrated away:
-// a floor is recorded and the key is not in the chain home. It is for a
-// warning; CheckSignFloor is what refuses the start.
+// a floor is recorded and no key is in the chain home. It is for a warning;
+// CheckSignFloor is what refuses the start.
 func (h Host) MigratedAway() (bool, error) {
-	floor, err := h.readFloor()
-	if err != nil || floor == nil {
+	floors, err := h.readFloors()
+	if err != nil || len(floors) == 0 {
 		return false, err
 	}
 	_, err = h.Root.ReadFile(h.KeyPath, rootfs.SmallFileLimit)

@@ -2,8 +2,12 @@ package globalnode
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,4 +106,48 @@ func TestPollHTTP_budgetExpiresWithTheLastError(t *testing.T) {
 	if err := pollHTTP(ctx, srv.URL, 10*time.Millisecond); err == nil {
 		t.Fatal("poll succeeded against a failing RPC")
 	}
+}
+
+func TestValidatorKeyPubKey_derivesFromPrivKey(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyFile := func(pubValue string) []byte {
+		return []byte(`{"pub_key":{"type":"tendermint/PubKeyEd25519","value":"` + pubValue +
+			`"},"priv_key":{"type":"tendermint/PrivKeyEd25519","value":"` + base64.StdEncoding.EncodeToString(priv) + `"}}`)
+	}
+	canonical := base64.StdEncoding.EncodeToString(pub)
+	got, err := ValidatorKeyPubKey(keyFile(canonical))
+	if err != nil || got != canonical {
+		t.Fatalf("pub = %q (%v)", got, err)
+	}
+	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	if _, err := ValidatorKeyPubKey(keyFile(base64.StdEncoding.EncodeToString(otherPub))); err == nil {
+		t.Fatal("a pub_key that is not the priv_key's was accepted")
+	}
+	// The same 32 bytes spelled differently: the last character carries
+	// padding bits, which a lenient decoder ignores.
+	reencoded := nonCanonical(t, canonical)
+	if reencoded == canonical {
+		t.Fatal("the respelling is the canonical text")
+	}
+	got, err = ValidatorKeyPubKey(keyFile(reencoded))
+	if err != nil || got != canonical {
+		t.Fatalf("a re-encoded pub_key gave identity %q (%v), want the canonical %q", got, err, canonical)
+	}
+}
+
+// nonCanonical respells b64 by setting unused low bits of its last data
+// character, when the decoder accepts that.
+func nonCanonical(t *testing.T, b64 string) string {
+	t.Helper()
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	i := strings.IndexByte(b64, '=') - 1
+	c := strings.IndexByte(alphabet, b64[i])
+	out := b64[:i] + string(alphabet[c|1]) + b64[i+1:]
+	if out == b64 {
+		out = b64[:i] + string(alphabet[c|2]) + b64[i+1:]
+	}
+	return out
 }

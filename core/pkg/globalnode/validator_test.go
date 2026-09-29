@@ -145,7 +145,7 @@ func floorJSON(t *testing.T, key, state []byte) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(floorFile{PubKey: pub, State: state})
+	data, err := json.Marshal(floorFile{Floors: map[string]json.RawMessage{pub: state}})
 	if err != nil {
 		t.Fatal(err)
 	}
