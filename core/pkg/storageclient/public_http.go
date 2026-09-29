@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"net"
 	"net/http"
 	"syscall"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 )
 
 // ErrNotPublic is a provider address that resolves to loopback, a private

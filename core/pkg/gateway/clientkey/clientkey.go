@@ -1,7 +1,12 @@
-// Package clientkey decides which address a request is attributed to (rate limits, the request log,
-// namespace affinity, the audit trail, the X-Forwarded-For handed to proxied services) and the
-// bucket key that address is limited under. The cluster gateway, its auth audit and the vault proxy
-// share it, so no handler keeps its own reading of X-Forwarded-For.
+// Package clientkey decides which address a request belongs to, in two separate questions:
+//
+//   - Resolve: whom to rate-limit, and whether the caller is internal traffic exempt from limits.
+//   - Attribute: whom to name in the request log, the audit trail, namespace affinity and the
+//     X-Forwarded-For handed to proxied services.
+//
+// and the bucket key an address is limited under (BucketKey). The cluster gateway, its auth audit,
+// the serverless handlers and the vault proxy share them, so no handler keeps its own reading of
+// X-Forwarded-For.
 package clientkey
 
 import (
@@ -63,6 +68,26 @@ func Resolve(r *http.Request) (client string, exempt bool) {
 	// A direct connection from off the node. X-Forwarded-For here is entirely
 	// the caller's invention and is ignored.
 	return peer, false
+}
+
+// Attribute returns the address a request is attributed to. The peer address is the client unless
+// the peer is one that writes a trustworthy X-Forwarded-For: the local reverse proxy (loopback),
+// which appends the address it is talking to, or another node's gateway on the WireGuard mesh, which
+// forwards a single value it resolved itself. From such a peer the last entry is the client, when it
+// parses as an IP. Any other peer, a private address that is not on the mesh included, is the client
+// itself and its headers (X-Forwarded-For, X-Real-IP) are ignored. Unlike Resolve it never exempts.
+func Attribute(r *http.Request) string {
+	peer := peerIP(r)
+	ip := net.ParseIP(peer)
+	if ip == nil {
+		return peer
+	}
+	if ip.IsLoopback() || (wireGuardNet != nil && wireGuardNet.Contains(ip)) {
+		if forwarded := lastForwardedFor(r); forwarded != "" {
+			return forwarded
+		}
+	}
+	return peer
 }
 
 // lastForwardedFor returns the final entry of X-Forwarded-For, which is the

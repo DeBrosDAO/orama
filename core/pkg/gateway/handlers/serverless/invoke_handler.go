@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
@@ -35,30 +35,10 @@ func classifyInvokeError(err error) (int, httputil.RPCErrorCode, bool) {
 	}
 }
 
-// extractRemoteIP returns a best-effort source IP for the request.
-// Trusts X-Real-IP / X-Forwarded-For only when the immediate peer is loopback
-// or a private address (i.e. behind our own reverse proxy / SNI router).
-func extractRemoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	peer := net.ParseIP(host)
-	trustHeaders := peer != nil && (peer.IsLoopback() || peer.IsPrivate())
-	if trustHeaders {
-		if v := r.Header.Get("X-Real-IP"); v != "" {
-			return strings.TrimSpace(v)
-		}
-		if v := r.Header.Get("X-Forwarded-For"); v != "" {
-			// First entry is the original client.
-			if comma := strings.IndexByte(v, ','); comma >= 0 {
-				v = v[:comma]
-			}
-			return strings.TrimSpace(v)
-		}
-	}
-	return host
-}
+// extractRemoteIP returns the source IP of the request: the peer, or the last X-Forwarded-For entry
+// when the peer is the local reverse proxy or a gateway on the mesh (clientkey.Attribute). X-Real-IP
+// and the first, caller-written, entry are never used, and a private peer off the mesh is the client.
+func extractRemoteIP(r *http.Request) string { return clientkey.Attribute(r) }
 
 // InvokeFunction handles POST /v1/functions/{name}/invoke
 // Invokes a function with the provided input.

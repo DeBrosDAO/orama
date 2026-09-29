@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 	"hash/fnv"
 	"io"
 	"net"
@@ -21,6 +20,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -1285,12 +1285,12 @@ func remoteAddrIP(r *http.Request) string {
 }
 
 // getClientIP is the address a request is attributed to (request log, namespace affinity, the
-// X-Forwarded-For handed to a proxied service): the peer address, or, only when the peer is the
-// local reverse proxy, the last X-Forwarded-For entry it appended. The first entry is whatever the
-// caller wrote and is never used, and neither is X-Real-IP. See clientkey.Resolve.
+// X-Forwarded-For handed to a proxied service): the peer address, or, when the peer is the local
+// reverse proxy or another node's gateway on the mesh, the last X-Forwarded-For entry. The first
+// entry is whatever the caller wrote and is never used, and neither is X-Real-IP. See
+// clientkey.Attribute; rate limits use clientkey.Resolve instead.
 func getClientIP(r *http.Request) string {
-	client, _ := clientkey.Resolve(r)
-	return client
+	return clientkey.Attribute(r)
 }
 
 // domainRoutingMiddleware handles requests to deployment domains and namespace gateways

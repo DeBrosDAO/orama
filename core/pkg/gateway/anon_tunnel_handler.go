@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"io"
 	"net"
 	"net/http"
@@ -22,6 +21,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"go.uber.org/zap"
 )
 

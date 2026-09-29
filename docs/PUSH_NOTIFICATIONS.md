@@ -159,6 +159,17 @@ gateway it spawns. Set it explicitly when you run your own ntfy server. If
 neither is set the ntfy provider is never registered and every ntfy push fails
 *before* any HTTP request — `http=0`, with `reason` naming the missing base URL.
 
+**A `base_url` you set is a tenant-supplied server and is reached through a guarded client.**
+Every connection the gateway makes to it is checked at dial time, after the name is resolved,
+against the shared reserved-range list (loopback, private, link-local, carrier-grade NAT, the
+benchmarking block that holds the co-located chain namespace, multicast, and the IPv6 forms that
+embed an IPv4 host: `::/96`, `::ffff:0:0/96`, NAT64, 6to4), so a name that resolves or is later
+re-pointed at an internal address is refused at the connection. Redirects are not followed.
+`PUT /v1/push/config` also resolves the host and rejects an unresolvable one (or one that resolves
+to a reserved address); a lookup failure does not let it through. The gateway's own default
+`ntfy_base_url` (the platform ntfy on loopback) is the operator's, not yours, and is not guarded:
+which client is used depends on where the URL came from, not on its value.
+
 ### Expo (legacy, optional)
 
 Same shape via the older endpoint:

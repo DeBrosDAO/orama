@@ -28,7 +28,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"io"
 	"net/http"
 	"net/url"
@@ -36,6 +35,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"go.uber.org/zap"
 )

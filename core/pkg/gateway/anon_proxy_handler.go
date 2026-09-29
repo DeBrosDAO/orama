@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/anonproxy"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"go.uber.org/zap"
 )
 

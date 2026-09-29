@@ -22,7 +22,9 @@ import (
 )
 
 // Ranges are the CIDRs refused beyond what net.IP's own predicates cover. Keep one CIDR per line and
-// nothing else in the list (::/96 is IPv4-compatible and ::ffff:0:0/96 IPv4-mapped, both embedding an IPv4 host): the cross-check test reads them from this source file.
+// nothing else in the list: the cross-check test reads them from this source file.
+//
+// ::/96 is IPv4-compatible and ::ffff:0:0/96 IPv4-mapped; both embed an IPv4 host.
 var Ranges = []string{
 	"0.0.0.0/8",
 	"10.0.0.0/8",

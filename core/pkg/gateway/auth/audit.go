@@ -6,12 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -202,12 +202,11 @@ func (a *AuditLog) RecordFromRequest(ctx context.Context, r *http.Request, event
 	a.Record(ctx, event)
 }
 
-// clientIP is the address to record: the peer address, or, only when the peer is the local reverse
-// proxy, the last X-Forwarded-For entry it appended (the first is what the caller wrote). See
-// clientkey.Resolve.
+// clientIP is the address to record: the peer address, or, when the peer is the local reverse proxy
+// or a gateway on the mesh, the last X-Forwarded-For entry (the first is what the caller wrote).
+// See clientkey.Attribute.
 func clientIP(r *http.Request) string {
-	client, _ := clientkey.Resolve(r)
-	return client
+	return clientkey.Attribute(r)
 }
 
 func truncate(s string, max int) string {

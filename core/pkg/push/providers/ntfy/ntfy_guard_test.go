@@ -15,7 +15,8 @@ func sendTo(p *Provider) error {
 	return p.Send(context.Background(), push.PushMessage{DeviceToken: "ns/app/user-1", Title: "t", Body: "b"})
 }
 
-// A tenant-supplied server is dialed through the guard: a literal internal address and a name that
+// These tests rely on "localhost" resolving to a loopback address, as it does on every supported
+// host. A tenant-supplied server is dialed through the guard: a literal internal address and a name that
 // resolves to one (here localhost, standing for a name rebound to 10.0.0.x after the config-time
 // check) are both refused at the connection, and the server sees nothing.
 func TestSend_aTenantServerAtAnInternalAddressIsRefusedAtSendTime(t *testing.T) {

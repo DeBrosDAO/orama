@@ -242,3 +242,25 @@ func TestDeleteFunction_doesNotRecordTheCredential(t *testing.T) {
 		t.Error("a key-authenticated delete recorded no actor at all")
 	}
 }
+
+func TestExtractRemoteIP(t *testing.T) {
+	for name, tc := range map[string]struct{ peer, xff, real, want string }{
+		"proxy last entry":          {"127.0.0.1:1", "6.6.6.6, 203.0.113.9", "", "203.0.113.9"},
+		"mesh gateway":              {"10.0.0.3:1", "203.0.113.9", "", "203.0.113.9"},
+		"private peer off the mesh": {"192.168.1.5:1", "203.0.113.9", "203.0.113.10", "192.168.1.5"},
+		"X-Real-IP ignored":         {"127.0.0.1:1", "", "203.0.113.10", "127.0.0.1"},
+		"direct":                    {"198.51.100.7:1", "203.0.113.9", "", "198.51.100.7"},
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		r.RemoteAddr = tc.peer
+		if tc.xff != "" {
+			r.Header.Set("X-Forwarded-For", tc.xff)
+		}
+		if tc.real != "" {
+			r.Header.Set("X-Real-IP", tc.real)
+		}
+		if got := extractRemoteIP(r); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
+	}
+}

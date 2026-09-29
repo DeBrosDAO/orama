@@ -317,6 +317,8 @@ func TestGetClientIP(t *testing.T) {
 		{name: "RemoteAddr", remoteAddr: "9.8.7.6:1234", want: "9.8.7.6"},
 		{name: "through the local proxy the last entry counts", xff: "6.6.6.6, 1.2.3.4", remoteAddr: "127.0.0.1:1234", want: "1.2.3.4"},
 		{name: "a spoofed first entry is never the client", xff: "1.2.3.4, 5.6.7.8", remoteAddr: "127.0.0.1:1234", want: "5.6.7.8"},
+		{name: "a namespace gateway sees the client a mesh gateway forwarded", xff: "203.0.113.50", remoteAddr: "10.0.0.2:1234", want: "203.0.113.50"},
+		{name: "a private peer off the mesh is the client", xff: "203.0.113.50", remoteAddr: "192.168.4.4:1234", want: "192.168.4.4"},
 		{name: "X-Real-IP is not used through the proxy either", xff: "5.6.7.8", xRealIP: "1.2.3.4", remoteAddr: "127.0.0.1:1234", want: "5.6.7.8"},
 	}
 
