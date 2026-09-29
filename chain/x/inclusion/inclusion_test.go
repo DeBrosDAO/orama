@@ -27,6 +27,7 @@ func wide() inclusion.View {
 			MaxSenderBytes:       1 << 20,
 			MaxBlockBytes:        4 << 20,
 			MaxAnteAttempts:      1 << 20,
+			MaxVerifyAttempts:    1 << 20,
 		},
 	}
 }
@@ -134,6 +135,7 @@ func TestParamsValidate(t *testing.T) {
 		{name: "zero embedded", params: func() inclusion.Params { p := ok; p.MaxEmbeddedListBytes = 0; return p }()},
 		{name: "zero sender", params: func() inclusion.Params { p := ok; p.MaxSenderBytes = 0; return p }()},
 		{name: "zero block", params: func() inclusion.Params { p := ok; p.MaxBlockBytes = 0; return p }()},
+		{name: "zero verify attempts", params: func() inclusion.Params { p := ok; p.MaxVerifyAttempts = 0; return p }()},
 		{name: "zero ante attempts", params: func() inclusion.Params { p := ok; p.MaxAnteAttempts = 0; return p }()},
 		{name: "negative list", params: func() inclusion.Params { p := ok; p.ListMaxBytes = -1; return p }()},
 	}

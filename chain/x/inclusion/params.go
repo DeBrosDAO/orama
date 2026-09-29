@@ -25,6 +25,23 @@ const (
 	// sender's byte budget as well, but the ante chain is the expensive
 	// step, so the count is bounded on its own.
 	DefaultMaxAnteAttempts = 1024
+
+	// DefaultMaxVerifyAttempts caps how many listed transactions one block's
+	// walk runs through signature verification. Verify comes before the
+	// sender's byte charge, so a transaction that only names a real sender at
+	// its next sequence costs the node a verification and costs that sender
+	// nothing. The embedded cap holds ~20,000 of the smallest such
+	// transactions, so without this bound every ProcessProposal would run that
+	// many signature checks. It is four times the ante cap: a transaction that
+	// passes Verify is charged and counted against MaxAnteAttempts, so an
+	// honest list needs about one verification per attempt.
+	//
+	// The cost of the bound is starvation: transactions are judged in
+	// lexicographic byte order, so junk that sorts first and passes the cheap
+	// checks can use up the verifications, and valid listed transactions after
+	// it are then not required in the block. They are not refused: a proposer
+	// may still include them, and they stay in every node's mempool.
+	DefaultMaxVerifyAttempts = 4096
 )
 
 // Params are the inclusion-list limits. Zero is rejected; callers that want
@@ -35,6 +52,7 @@ type Params struct {
 	MaxSenderBytes       int
 	MaxBlockBytes        int
 	MaxAnteAttempts      int
+	MaxVerifyAttempts    int
 }
 
 // DefaultParams returns the C13 limits.
@@ -45,6 +63,7 @@ func DefaultParams() Params {
 		MaxSenderBytes:       DefaultMaxSenderBytes,
 		MaxBlockBytes:        DefaultMaxBlockBytes,
 		MaxAnteAttempts:      DefaultMaxAnteAttempts,
+		MaxVerifyAttempts:    DefaultMaxVerifyAttempts,
 	}
 }
 
@@ -64,6 +83,9 @@ func (p Params) Validate() error {
 	}
 	if p.MaxAnteAttempts <= 0 {
 		return fmt.Errorf("%w: max ante attempts must be positive", ErrParams)
+	}
+	if p.MaxVerifyAttempts <= 0 {
+		return fmt.Errorf("%w: max verify attempts must be positive", ErrParams)
 	}
 	return nil
 }

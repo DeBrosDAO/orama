@@ -19,9 +19,12 @@ type State struct {
 // invalid and is skipped. A transaction that would push its sender over
 // MaxSenderBytes, or the block over MaxBlockBytes, does not fit and is
 // skipped. A transaction that fails View.Verify is skipped without cost to its
-// claimed sender. Every other transaction that reaches View.Admit is charged
-// to its sender's byte budget whether or not it is placed, and at most
-// MaxAnteAttempts of them run Admit per block; the walk stops there.
+// claimed sender, and at most MaxVerifyAttempts transactions run Verify per
+// block; the walk stops there, so junk that sorts first can starve the valid
+// transactions behind it of a place in the required prefix. Every other
+// transaction that reaches View.Admit is charged to its sender's byte budget
+// whether or not it is placed, and at most MaxAnteAttempts of them run Admit
+// per block; the walk stops there too.
 //
 // The rule is judged on the state the caller supplies. ProcessProposal has
 // only the last committed state, while the transactions run after this
@@ -113,6 +116,7 @@ func requiredTxs(exts []Extension, v View) [][]byte {
 	tried := make(map[string]int)
 	used := 0
 	attempts := 0
+	verifies := 0
 	var need [][]byte
 	for _, raw := range uniqueTxs(exts) {
 		meta, err := v.decode(raw)
@@ -130,9 +134,19 @@ func requiredTxs(exts []Extension, v View) [][]byte {
 			continue
 		}
 		// Verify runs before the charge, so a transaction that only claims a
-		// sender cannot spend that sender's budget.
-		if v.Verify != nil && !v.Verify(raw, meta) {
-			continue
+		// sender cannot spend that sender's budget. That also makes it free
+		// for the sender of the junk, so the walk stops after
+		// MaxVerifyAttempts of them: signature checks per proposal are
+		// bounded, at the price of valid transactions behind that much junk
+		// not being required (see DefaultMaxVerifyAttempts).
+		if v.Verify != nil {
+			if verifies >= v.Params.MaxVerifyAttempts {
+				break
+			}
+			verifies++
+			if !v.Verify(raw, meta) {
+				continue
+			}
 		}
 		if v.Admit != nil {
 			if attempts >= v.Params.MaxAnteAttempts {

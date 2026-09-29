@@ -304,3 +304,80 @@ func sortedTxs(txs ...[]byte) [][]byte {
 	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i], out[j]) < 0 })
 	return out
 }
+
+// Verify runs before a sender is charged, so junk that only names a real sender at its next
+// sequence is free for whoever sends it. The walk stops after MaxVerifyAttempts of them: the node
+// runs a bounded number of signature checks per proposal, and a valid transaction behind that much
+// junk in byte order is not required (a proposer may still include it).
+func TestRequired_verifyAttemptsAreCapped(t *testing.T) {
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 1
+	v.Params.MaxVerifyAttempts = 5
+	// Twenty transactions naming one sender at its next sequence: distinct, so none is a duplicate.
+	var txs [][]byte
+	for i := 0; i < 20; i++ {
+		txs = append(txs, mustTx(t, "victim", 0, 5, 10+i))
+	}
+	txs = sortedTxs(txs...)
+	// The genuine one sorts last, behind all the junk.
+	good := txs[len(txs)-1]
+	verified := 0
+	v.Verify = func(raw []byte, _ Meta) bool {
+		verified++
+		return bytes.Equal(raw, good)
+	}
+	v.Admit = func([]byte, Meta) bool { return true }
+	c := Commit{Extensions: []Extension{{PubKey: []byte("k"), Power: 1, Height: 4, Txs: txs}}}
+	need, err := Required(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified != 5 {
+		t.Fatalf("Verify ran %d times, want the cap of 5", verified)
+	}
+	for _, tx := range need {
+		if bytes.Equal(tx, good) {
+			t.Fatal("the walk went past the cap to a transaction behind the junk")
+		}
+	}
+
+	v.Params.MaxVerifyAttempts = 20
+	verified = 0
+	need, err = Required(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(need) != 1 || !bytes.Equal(need[0], good) {
+		t.Fatalf("with room for every verification the genuine transaction is required, got %d", len(need))
+	}
+}
+
+func TestRequired_anHonestListStaysUnderTheVerifyCap(t *testing.T) {
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 1
+	v.Params.MaxVerifyAttempts = 10
+	var txs [][]byte
+	for i := 0; i < 10; i++ {
+		txs = append(txs, mustTx(t, string(rune('a'+i)), 0, 5, 10+i))
+	}
+	v.Verify = func([]byte, Meta) bool { return true }
+	v.Admit = func([]byte, Meta) bool { return true }
+	c := Commit{Extensions: []Extension{{PubKey: []byte("k"), Power: 1, Height: 4, Txs: sortedTxs(txs...)}}}
+	need, err := Required(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(need) != 10 {
+		t.Fatalf("required %d of 10 honest transactions", len(need))
+	}
+}
+
+func TestDefaultParams_verifyCapIsAtLeastTheAnteCap(t *testing.T) {
+	p := DefaultParams()
+	if p.MaxVerifyAttempts < p.MaxAnteAttempts {
+		t.Fatalf("MaxVerifyAttempts %d is below MaxAnteAttempts %d: honest lists would be cut by the verify cap", p.MaxVerifyAttempts, p.MaxAnteAttempts)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
