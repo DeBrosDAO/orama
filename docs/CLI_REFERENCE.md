@@ -2721,9 +2721,20 @@ step of it fails, and holds the lock install and upgrade take on /opt/orama.
 signed, and only after the archive has verified against those addresses. It
 never changes an existing anchor.
 
+--release-metadata and --release-target opt in to the release root adopted at
+/etc/orama/release-root.json. Before anything is extracted, the archive file
+must be that target in the TUF metadata: the root signs timestamp, snapshot and
+targets, the timestamp is unexpired, the snapshot is not older than the one
+recorded in /etc/orama/release-seen.json, and the file has the target's length
+and hashes. Any failure refuses the archive; the wallet check is not tried
+instead. An archive that passes is then verified against the trust anchor as
+above: the release root is required in addition to it, not in place of it.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--archive` | — | The pushed archive on this node [required] |
+| `--release-metadata` | — | Directory holding timestamp.json, snapshot.json and targets.json; requires --release-target |
+| `--release-target` | — | Name the archive has in the release targets metadata; requires --release-metadata |
 | `--trust-signers` | — | Create a missing trust anchor with these addresses (nodes installed before archive signing only) |
 
 ### orama node start

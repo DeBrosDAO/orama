@@ -1,11 +1,13 @@
 // Package releaseverify checks a release archive against TUF metadata the
 // caller already holds.
 //
-// The caller supplies the root. This package ships no root and does not
+// The caller supplies the root: as bytes to Verify, or as the file a node
+// adopted (RootPath) to CheckFile. This package ships no root and does not
 // fetch metadata, so it cannot point a cluster at a public repository.
-// It does not read or write /etc/orama/archive-signers. A cluster that has
-// not opted in to a release root has nothing to pass, and the default
-// remains the operator wallet in pkg/archivetrust.
+// It does not read or write /etc/orama/archive-signers. A node that has
+// not adopted a release root has nothing to check against, CheckFile
+// refuses with ErrNoRoot, and the default remains the operator wallet in
+// pkg/archivetrust.
 //
 // Checks are the go-tuf client workflow for the four top-level roles:
 // the root the caller passed, then timestamp, snapshot, and targets.

@@ -46,6 +46,12 @@ type StageOptions struct {
 	// archives were signed — once the archive has verified against it. It
 	// never changes an existing anchor.
 	TrustSigners []string
+	// ReleaseMetadata and ReleaseTarget opt in to the release root: the
+	// archive must be ReleaseTarget in the TUF metadata in ReleaseMetadata,
+	// verified against the root this node adopted, before it is extracted.
+	// Both or neither.
+	ReleaseMetadata string
+	ReleaseTarget   string
 }
 
 // stageTarget is where an archive is staged and how the node's trust anchor is
@@ -63,6 +69,9 @@ type stageTarget struct {
 	chownBin func(path string) error
 	// arch is the architecture this node runs; verify checks it itself.
 	arch string
+	// checkRelease verifies the archive file as a TUF target against the
+	// node's adopted release root and rollback record.
+	checkRelease func(archive, metadataDir, target string) error
 }
 
 // nodeTarget is /opt/orama and the node's real anchor.
@@ -76,6 +85,7 @@ func nodeTarget() stageTarget {
 		createSigners: func(s []string) error { return archivetrust.CreateAnchorIfMissing(archivetrust.AnchorPath, s) },
 		chownBin:      chownToOramaGroup,
 		arch:          runtime.GOARCH,
+		checkRelease:  checkReleaseFile,
 	}
 }
 
@@ -97,7 +107,16 @@ step of it fails, and holds the lock install and upgrade take on /opt/orama.
 
 --trust-signers creates the anchor on a node installed before archives were
 signed, and only after the archive has verified against those addresses. It
-never changes an existing anchor.`,
+never changes an existing anchor.
+
+--release-metadata and --release-target opt in to the release root adopted at
+/etc/orama/release-root.json. Before anything is extracted, the archive file
+must be that target in the TUF metadata: the root signs timestamp, snapshot and
+targets, the timestamp is unexpired, the snapshot is not older than the one
+recorded in /etc/orama/release-seen.json, and the file has the target's length
+and hashes. Any failure refuses the archive; the wallet check is not tried
+instead. An archive that passes is then verified against the trust anchor as
+above: the release root is required in addition to it, not in place of it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return Stage(opts)
@@ -107,6 +126,10 @@ never changes an existing anchor.`,
 	f.StringVar(&opts.Archive, "archive", "", "The pushed archive on this node [required]")
 	f.StringSliceVar(&opts.TrustSigners, "trust-signers", nil,
 		"Create a missing trust anchor with these addresses (nodes installed before archive signing only)")
+	f.StringVar(&opts.ReleaseMetadata, "release-metadata", "",
+		"Directory holding timestamp.json, snapshot.json and targets.json; requires --release-target")
+	f.StringVar(&opts.ReleaseTarget, "release-target", "",
+		"Name the archive has in the release targets metadata; requires --release-metadata")
 	return cmd
 }
 
@@ -151,6 +174,9 @@ func stageArchive(t stageTarget, opts StageOptions) (err error) {
 
 	if err := removeLeftoverStaging(t.base); err != nil {
 		return err
+	}
+	if err := checkRelease(t, opts); err != nil {
+		return fmt.Errorf("refusing %s, nothing under %s was changed: %w", opts.Archive, t.base, err)
 	}
 	staging, err := os.MkdirTemp(t.base, stagingPrefix)
 	if err != nil {

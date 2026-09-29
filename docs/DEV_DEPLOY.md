@@ -219,6 +219,26 @@ straight from `/opt/orama/bin`. Because the verifier is the node's installed
 CLI, push reaches only installed nodes; a fresh machine gets its first archive
 from `orama node setup` (or `orama node install --remote`).
 
+**Release root (opt-in).** A node that has adopted a TUF release root — a
+`root.json` placed at `/etc/orama/release-root.json` by its operator; no
+command writes that file yet — can require it when it stages:
+`orama node stage-archive --archive <file> --release-metadata <dir>
+--release-target <name>`. `<dir>` holds `timestamp.json`, `snapshot.json` and
+`targets.json`. Before anything is extracted, `pkg/releaseverify` checks them
+against the adopted root (every role at its threshold, an unexpired timestamp,
+a snapshot no older than the one recorded in `/etc/orama/release-seen.json`)
+and checks that the archive **file** has the length and hashes `<name>` has in
+the verified targets. Any failure — no adopted root, a tampered archive, an
+expired timestamp, metadata signed under another root, an older snapshot —
+refuses the archive and leaves `/opt/orama` untouched; the command never falls
+back to the wallet-only path when these flags are given, and giving only one of
+the two is an error. An archive that passes is then verified against the
+wallet anchor exactly as above: the release root is required **in addition to**
+the operator's wallet signature, not in place of it. Without these flags
+nothing changes. `orama push`, `orama node setup` and `orama node upgrade` do
+not pass them, and no command fetches release metadata; the operator supplies
+the directory.
+
 **First install.** A new machine has no verified binary of its own: the one
 that runs the install comes out of the archive. So `orama node setup` and
 `orama node install --remote --archive <path>` verify the archive **on your
