@@ -103,3 +103,9 @@ func (q queryServer) ValidatorPower(goCtx context.Context, req *types.QueryValid
 		CometPower:      power,
 	}, nil
 }
+
+func (q queryServer) Invariants(goCtx context.Context, _ *types.QueryInvariantsRequest) (*types.QueryInvariantsResponse, error) {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	detail, empty := q.Keeper.CheckInvariants(ctx)
+	return &types.QueryInvariantsResponse{ModuleAccountEmpty: empty, Detail: detail}, nil
+}

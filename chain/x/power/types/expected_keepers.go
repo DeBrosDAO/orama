@@ -67,6 +67,8 @@ type SlashingKeeper interface {
 type BankKeeper interface {
 	SendCoinsFromModuleToModule(ctx context.Context, senderModule, recipientModule string, amt sdk.Coins) error
 	SendCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
+	// GetBalance is read only by the module-account invariant (Keeper.CheckInvariants).
+	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
 }
 
 // EarningsKeeper is the subset of x/fees's keeper x/power needs to credit a validator's or

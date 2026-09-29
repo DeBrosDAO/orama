@@ -367,7 +367,12 @@ cmd_status() {
 # INVARIANT_MODULES are the modules whose `oramad query <module> invariants` must hold on every
 # node after a deploy (docs/SECURITY_PLAYBOOKS.md). A literal list: nothing from remote output is
 # spliced into the remote command.
-INVARIANT_MODULES=(emission fees storage nodes relay houses token)
+#
+# Every module that holds or moves norama has an invariants query and is listed here:
+# emission, fees, storage, nodes, relay, houses, token, market (bid escrow) and power (its
+# pass-through account is empty). x/cnft and x/archive hold no norama of their own: cNFT deposits
+# sit in x/fees' deposits account and archive payments go through x/storage.
+INVARIANT_MODULES=(emission fees storage nodes relay houses token market power)
 
 # cmd_invariants runs every module's invariant query on every node and fails if any query fails
 # or reports a broken invariant (each response carries booleans that must all be true).

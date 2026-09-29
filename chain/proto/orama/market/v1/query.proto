@@ -10,6 +10,7 @@ import "orama/market/v1/market.proto";
 service Query {
   rpc Listing(QueryListingRequest) returns (QueryListingResponse);
   rpc Bid(QueryBidRequest) returns (QueryBidResponse);
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
 }
 
 message QueryListingRequest {
@@ -27,4 +28,13 @@ message QueryBidRequest {
 
 message QueryBidResponse {
   Bid bid = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  // bids_match_module is true when the market module account holds exactly the
+  // sum of the open bids.
+  bool bids_match_module = 1;
+  string detail = 2;
 }

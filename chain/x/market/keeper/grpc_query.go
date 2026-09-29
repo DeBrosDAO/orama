@@ -46,3 +46,11 @@ func (q queryServer) Bid(goCtx context.Context, req *types.QueryBidRequest) (*ty
 	}
 	return &types.QueryBidResponse{Bid: bid}, nil
 }
+
+func (q queryServer) Invariants(goCtx context.Context, _ *types.QueryInvariantsRequest) (*types.QueryInvariantsResponse, error) {
+	detail, broken, err := q.Keeper.CheckInvariants(sdk.UnwrapSDKContext(goCtx))
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &types.QueryInvariantsResponse{BidsMatchModule: !broken, Detail: detail}, nil
+}

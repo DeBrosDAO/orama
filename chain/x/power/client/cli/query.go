@@ -29,6 +29,7 @@ func GetQueryCmd() *cobra.Command {
 		GetCmdQueryBootstrapCommittee(),
 		GetCmdQueryLambda(),
 		GetCmdQueryValidatorPower(),
+		GetCmdQueryInvariants(),
 	)
 
 	return cmd
@@ -118,6 +119,28 @@ func GetCmdQueryValidatorPower() *cobra.Command {
 			res, err := queryClient.ValidatorPower(cmd.Context(), &types.QueryValidatorPowerRequest{OperatorAddress: args[0]})
 			if err != nil {
 				return fmt.Errorf("failed to query validator power for %s: %w", args[0], err)
+			}
+			return clientCtx.PrintProto(res)
+		},
+	}
+	flags.AddQueryFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdQueryInvariants implements `oramad query power invariants`.
+func GetCmdQueryInvariants() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "invariants",
+		Short: "Query the module-account invariant",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			res, err := types.NewQueryClient(clientCtx).Invariants(cmd.Context(), &types.QueryInvariantsRequest{})
+			if err != nil {
+				return fmt.Errorf("failed to query power invariants: %w", err)
 			}
 			return clientCtx.PrintProto(res)
 		},

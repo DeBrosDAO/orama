@@ -14,6 +14,7 @@ service Query {
   rpc BootstrapCommittee(QueryBootstrapCommitteeRequest) returns (QueryBootstrapCommitteeResponse);
   rpc Lambda(QueryLambdaRequest) returns (QueryLambdaResponse);
   rpc ValidatorPower(QueryValidatorPowerRequest) returns (QueryValidatorPowerResponse);
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
 }
 
 message QueryParamsRequest {}
@@ -59,4 +60,14 @@ message QueryValidatorPowerResponse {
     (gogoproto.nullable) = false
   ];
   int64 comet_power = 5;
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  // module_account_empty is true when x/power's module account holds no norama.
+  // It only passes reward mints through in one call, so any balance between
+  // blocks is a stranded amount.
+  bool module_account_empty = 1;
+  string detail = 2;
 }

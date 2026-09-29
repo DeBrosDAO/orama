@@ -17,6 +17,7 @@ import (
 	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
@@ -277,6 +278,15 @@ func (b *fakeBankKeeper) SendCoinsFromModuleToModule(_ context.Context, senderMo
 	b.balances[senderModule] = b.balanceOf(senderModule).Sub(amount)
 	b.balances[recipientModule] = b.balanceOf(recipientModule).Add(amount)
 	return nil
+}
+
+// GetBalance answers for x/power's own module address from the module-name ledger and for any
+// other address from the bech32 ledger.
+func (b *fakeBankKeeper) GetBalance(_ context.Context, addr sdk.AccAddress, denom string) sdk.Coin {
+	if addr.Equals(authtypes.NewModuleAddress(types.ModuleName)) {
+		return sdk.NewCoin(denom, b.balanceOf(types.ModuleName))
+	}
+	return sdk.NewCoin(denom, b.balanceOf(addr.String()))
 }
 
 func (b *fakeBankKeeper) SendCoinsFromModuleToAccount(_ context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error {

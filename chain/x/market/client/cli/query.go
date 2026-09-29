@@ -22,7 +22,7 @@ func GetQueryCmd() *cobra.Command {
 		SuggestionsMinimumDistance: 2,
 		RunE:                       client.ValidateCmd,
 	}
-	cmd.AddCommand(GetCmdQueryListing(), GetCmdQueryBid())
+	cmd.AddCommand(GetCmdQueryListing(), GetCmdQueryBid(), GetCmdQueryInvariants())
 	return cmd
 }
 
@@ -74,6 +74,28 @@ func GetCmdQueryBid() *cobra.Command {
 			res, err := types.NewQueryClient(clientCtx).Bid(cmd.Context(), &types.QueryBidRequest{ListingId: listingID, BidId: bidID})
 			if err != nil {
 				return fmt.Errorf("failed to query bid: %w", err)
+			}
+			return clientCtx.PrintProto(res)
+		},
+	}
+	flags.AddQueryFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdQueryInvariants implements `oramad query market invariants`.
+func GetCmdQueryInvariants() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "invariants",
+		Short: "Query the bid-escrow invariant",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			res, err := types.NewQueryClient(clientCtx).Invariants(cmd.Context(), &types.QueryInvariantsRequest{})
+			if err != nil {
+				return fmt.Errorf("failed to query market invariants: %w", err)
 			}
 			return clientCtx.PrintProto(res)
 		},
