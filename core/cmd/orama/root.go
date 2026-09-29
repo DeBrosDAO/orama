@@ -15,6 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/auditcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/authcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/buildcmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/chaincmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/clustercmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/dbcmd"
 	deploycmd "github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/deploy"
@@ -111,6 +112,9 @@ and no Orama MCP.`,
 	rootCmd.AddCommand(clustercmd.Cmd)
 	rootCmd.AddCommand(globalcmd.Cmd)
 	rootCmd.AddCommand(storagecmd.Cmd)
+
+	// Read the chain
+	rootCmd.AddCommand(chaincmd.Cmd)
 
 	// Inspect command
 	rootCmd.AddCommand(inspectcmd.Cmd)
