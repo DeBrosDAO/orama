@@ -19,6 +19,12 @@ const (
 	// DefaultMaxBlockBytes is the block budget used to decide whether the
 	// next listed transaction fits. It matches CometBFT's usual 21 MiB cap.
 	DefaultMaxBlockBytes = 21 * 1024 * 1024
+
+	// DefaultMaxAnteAttempts caps how many listed transactions one block's
+	// walk runs through the full ante chain. Each attempt is charged to its
+	// sender's byte budget as well, but the ante chain is the expensive
+	// step, so the count is bounded on its own.
+	DefaultMaxAnteAttempts = 1024
 )
 
 // Params are the inclusion-list limits. Zero is rejected; callers that want
@@ -28,6 +34,7 @@ type Params struct {
 	MaxEmbeddedListBytes int
 	MaxSenderBytes       int
 	MaxBlockBytes        int
+	MaxAnteAttempts      int
 }
 
 // DefaultParams returns the C13 limits.
@@ -37,6 +44,7 @@ func DefaultParams() Params {
 		MaxEmbeddedListBytes: DefaultMaxEmbeddedListBytes,
 		MaxSenderBytes:       DefaultMaxSenderBytes,
 		MaxBlockBytes:        DefaultMaxBlockBytes,
+		MaxAnteAttempts:      DefaultMaxAnteAttempts,
 	}
 }
 
@@ -53,6 +61,9 @@ func (p Params) Validate() error {
 	}
 	if p.MaxBlockBytes <= 0 {
 		return fmt.Errorf("%w: max block bytes must be positive", ErrParams)
+	}
+	if p.MaxAnteAttempts <= 0 {
+		return fmt.Errorf("%w: max ante attempts must be positive", ErrParams)
 	}
 	return nil
 }

@@ -335,3 +335,61 @@ func TestInclusion_severalBlocksThroughFinalizeBlock(t *testing.T) {
 		require.Zero(t, c.app.InclusionPoolLen(), "included txs leave the seen-set")
 	}
 }
+
+// A transaction that names a sender but carries a signature that does not
+// verify is not required, and the walk never runs it through the ante chain.
+func TestInclusion_forgedSignatureIsNotRequired(t *testing.T) {
+	c := newInclusionChain(t, inclusionEnableHeight)
+	real := c.editTx(1, 1)
+	forged := append([]byte(nil), real...)
+	forged[len(forged)-1] ^= 0xff // the signature is the last field of the tx.
+	require.NotEqual(t, real, forged)
+
+	c.finalize()
+	list, err := inclusion.EncodeList([][]byte{forged})
+	require.NoError(t, err)
+	c.verify(2, 0, list, abci.ResponseVerifyVoteExtension_ACCEPT) // framing and fee are all VerifyVoteExtension can see.
+	ec := c.extendedCommit([][]byte{list, list, list})
+
+	block := c.prepare(ec)
+	require.Len(t, block, 1, "only the injected commit: a forged signature is skipped, not required")
+	require.Equal(t, abci.ResponseProcessProposal_ACCEPT, c.process(ec, block))
+}
+
+// An injected commit over the extension budget is refused by ProcessProposal
+// and cannot be built by PrepareProposal, both deterministically.
+func TestInclusion_oversizedInjectedCommit(t *testing.T) {
+	c := newInclusionChain(t, inclusionEnableHeight)
+	c.finalize()
+	big := bytes.Repeat([]byte{1}, 10<<20) // past half the 20 MiB block budget.
+	ec := c.extendedCommit([][]byte{big, nil, nil})
+	injected, err := app.EncodeInjectedCommitForTest(ec)
+	require.NoError(t, err)
+	require.Equal(t, abci.ResponseProcessProposal_REJECT, c.process(ec, [][]byte{injected}))
+
+	resp, err := c.app.PrepareProposal(&abci.RequestPrepareProposal{
+		Height: c.height + 1, Time: c.blockTime(), ProposerAddress: c.consAddr(0),
+		MaxTxBytes: 22_020_096, LocalLastCommit: ec,
+	})
+	require.NoError(t, err)
+	for _, tx := range resp.Txs {
+		require.False(t, bytes.HasPrefix(tx, []byte(app.InjectedCommitMagic)), "an over-budget commit is not injected")
+	}
+}
+
+// A commit that fits the budget but not the request's MaxTxBytes is not
+// injected either; the fallback block is then refused by ProcessProposal.
+func TestInclusion_injectedCommitOverMaxTxBytes(t *testing.T) {
+	c := newInclusionChain(t, inclusionEnableHeight)
+	c.finalize()
+	ec := c.extendedCommit([][]byte{bytes.Repeat([]byte{1}, 64<<10), nil, nil})
+	resp, err := c.app.PrepareProposal(&abci.RequestPrepareProposal{
+		Height: c.height + 1, Time: c.blockTime(), ProposerAddress: c.consAddr(0),
+		MaxTxBytes: 32 << 10, LocalLastCommit: ec,
+	})
+	require.NoError(t, err)
+	for _, tx := range resp.Txs {
+		require.False(t, bytes.HasPrefix(tx, []byte(app.InjectedCommitMagic)))
+	}
+	require.Equal(t, abci.ResponseProcessProposal_REJECT, c.process(ec, resp.Txs))
+}

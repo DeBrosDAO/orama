@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
 	"github.com/DeBrosOfficial/network/chain/x/inclusion"
 )
@@ -116,19 +118,65 @@ func TestCommitOf_dropsBadExtensionsButCountsTheirPower(t *testing.T) {
 	require.Empty(t, c.Extensions[1].Txs, "an empty extension is an empty list")
 }
 
+type fixedStaking struct{ max uint32 }
+
+func (f fixedStaking) GetParams(context.Context) (stakingtypes.Params, error) {
+	return stakingtypes.Params{MaxValidators: f.max}, nil
+}
+
 func TestInclusionHandlers_paramsBudget(t *testing.T) {
-	h := &inclusionHandlers{}
+	h := &inclusionHandlers{staking: fixedStaking{max: 150}}
 	ctx := bareContext(t, 22_020_096)
-	p := h.params(ctx, 1000)
+	p, err := h.params(ctx, 1000)
+	require.NoError(t, err)
 	require.Equal(t, 22_020_096-blockOverheadReserve-1000, p.MaxBlockBytes)
 	require.NoError(t, p.Validate())
 
-	small := h.params(bareContext(t, 100), 50)
+	small, err := h.params(bareContext(t, 100), 50)
+	require.NoError(t, err)
 	require.Equal(t, 1, small.MaxBlockBytes, "a block smaller than the reserve fits nothing but stays valid")
 	require.NoError(t, small.Validate())
 
-	unlimited := h.params(bareContext(t, -1), 0)
+	unlimited, err := h.params(bareContext(t, -1), 0)
+	require.NoError(t, err)
 	require.Equal(t, inclusion.DefaultMaxBlockBytes-blockOverheadReserve, unlimited.MaxBlockBytes)
+}
+
+// The per-extension cap shrinks with the validator count so that a full set of
+// extensions cannot overrun the injected commit's budget.
+func TestInclusionHandlers_extensionCapFitsTheValidatorSet(t *testing.T) {
+	ctx := bareContext(t, 22_020_096)
+	cases := []struct {
+		name       string
+		blockMax   int64
+		validators uint32
+	}{
+		{"default block, 150 validators", 22_020_096, 150},
+		{"default block, 1000 validators", 22_020_096, 1000},
+		{"small block, 150 validators", 4 << 20, 150},
+		{"tiny block, 300 validators", 1 << 20, 300},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &inclusionHandlers{staking: fixedStaking{max: tc.validators}}
+			c := bareContext(t, tc.blockMax)
+			p, err := h.listParams(c)
+			require.NoError(t, err)
+			require.NoError(t, p.Validate())
+			if p.ListMaxBytes > 1 {
+				worst := int(tc.validators) * (p.ListMaxBytes + voteOverheadBytes)
+				require.LessOrEqual(t, worst, injectedBudget(c), "a full validator set of extensions must fit the injected budget")
+			}
+			require.LessOrEqual(t, p.ListMaxBytes, inclusion.DefaultListMaxBytes)
+		})
+	}
+	h := &inclusionHandlers{staking: fixedStaking{max: 150}}
+	p, err := h.listParams(ctx)
+	require.NoError(t, err)
+	require.Equal(t, inclusion.DefaultListMaxBytes, p.ListMaxBytes, "the default block leaves the default cap alone at 150 validators")
+
+	_, err = (&inclusionHandlers{staking: fixedStaking{max: 0}}).listParams(ctx)
+	require.Error(t, err)
 }
 
 func newBareApp(t *testing.T) *OramaApp {

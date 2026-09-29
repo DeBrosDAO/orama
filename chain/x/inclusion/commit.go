@@ -28,6 +28,14 @@ type View struct {
 	// deterministic. Nil admits everything.
 	Admit func(raw []byte, meta Meta) bool
 
+	// Verify is a cheap authenticity check on a listed transaction, run in the
+	// sequential walk before the transaction is charged against its sender's
+	// attempt budget and before Admit. It is how a transaction that claims a
+	// sender it cannot sign for is refused without spending that sender's
+	// budget or an Admit attempt. A false return skips the transaction. It
+	// must be deterministic. Nil accepts everything.
+	Verify func(raw []byte, meta Meta) bool
+
 	// Authenticated says the caller already proved where each Extension came
 	// from (CometBFT verified the vote extension signature), so the
 	// Extension's own Signature is not checked. The app sets it; PubKey is
@@ -64,8 +72,11 @@ func (c Commit) EmbeddedSize() int {
 // is including. A bad signature, the wrong height or round, non-positive
 // power, or a list over ListMaxBytes drops that extension. The same public
 // key counts once, at its lesser power, and every valid list it signed stays
-// in the union. The surviving power must be at least 2/3 of v.TotalPower.
-// Deduplicated transaction bytes must fit in MaxEmbeddedListBytes.
+// in the union. The valid power must be at least 2/3 of v.TotalPower.
+// Deduplicated transaction bytes must fit in MaxEmbeddedListBytes: a
+// proposer (View.Authenticated false) that is over gets ErrEmbeddedTooLarge,
+// while an authenticated commit is trimmed to the cap by a fixed rule after
+// the quorum test, so trimming never removes quorum.
 func PrepareCommit(v View, exts []Extension) (Commit, error) {
 	kept, err := accept(v, exts)
 	if err != nil {
@@ -92,6 +103,13 @@ func accept(v View, exts []Extension) ([]Extension, error) {
 		}
 		kept = append(kept, copyExtension(e))
 	}
+	// Quorum is judged on every valid extension in the commit, before any
+	// trimming. Trimming only decides which transactions become required;
+	// evaluating quorum on the survivors would let a valid commit fall under
+	// 2/3 and leave every proposer unable to build a block.
+	if !powerOK(kept, v.TotalPower) {
+		return nil, ErrInsufficientPower
+	}
 	if v.Authenticated {
 		kept = trimToEmbeddedCap(kept, v.Params.MaxEmbeddedListBytes)
 	}
@@ -102,9 +120,6 @@ func accept(v View, exts []Extension) ([]Extension, error) {
 		}
 		return bytes.Compare(kept[i].Signature, kept[j].Signature) < 0
 	})
-	if !powerOK(kept, v.TotalPower) {
-		return nil, ErrInsufficientPower
-	}
 	size, ok := embeddedSize(kept)
 	if !ok || size > v.Params.MaxEmbeddedListBytes {
 		return nil, ErrEmbeddedTooLarge
@@ -115,7 +130,9 @@ func accept(v View, exts []Extension) ([]Extension, error) {
 // trimToEmbeddedCap keeps extensions, highest power first (ties by public
 // key), while the deduplicated transaction bytes stay within limit, and drops
 // the rest. An app cannot choose which votes an extended commit contains, so
-// an over-full set is cut by a fixed rule instead of failing the block.
+// an over-full set is cut by a fixed rule instead of failing the block. A
+// dropped extension still counts toward quorum (see accept); only its
+// transactions stop being required.
 func trimToEmbeddedCap(exts []Extension, limit int) []Extension {
 	order := append([]Extension(nil), exts...)
 	sort.Slice(order, func(i, j int) bool {

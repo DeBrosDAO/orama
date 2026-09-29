@@ -18,7 +18,18 @@ type State struct {
 // less than the base fee, or does not match the sender's next sequence is
 // invalid and is skipped. A transaction that would push its sender over
 // MaxSenderBytes, or the block over MaxBlockBytes, does not fit and is
-// skipped. Skipped transactions are not applied, so a later transaction is
+// skipped. A transaction that fails View.Verify is skipped without cost to its
+// claimed sender. Every other transaction that reaches View.Admit is charged
+// to its sender's byte budget whether or not it is placed, and at most
+// MaxAnteAttempts of them run Admit per block; the walk stops there.
+//
+// The rule is judged on the state the caller supplies. ProcessProposal has
+// only the last committed state, while the transactions run after this
+// block's BeginBlock. The judgement can therefore drift (the base fee moves
+// by at most 12.5% a block, and BeginBlock pays rewards), and a required
+// transaction may then fail at execution. The free space that allows is
+// bounded, not eliminated: required transactions are drawn only from the
+// deduplicated embedded set, so they never exceed MaxEmbeddedListBytes. Skipped transactions are not applied, so a later transaction is
 // judged against the state left by the ones that were placed. The first
 // same-sequence transaction in lexicographic order therefore wins, and a
 // later one may be absent.
@@ -95,8 +106,13 @@ func requiredTxs(exts []Extension, v View) [][]byte {
 	// closed marks a sender whose last sequence was MaxUint64, so the
 	// increment cannot wrap and make sequence 0 acceptable again.
 	closed := make(map[string]bool)
-	senderUsed := make(map[string]int)
+	// tried is the bytes each sender has spent on attempts that passed the
+	// cheap checks, placed or not. Charging attempts, not only placements,
+	// stops a sender from making every node run its junk through the ante
+	// chain again and again.
+	tried := make(map[string]int)
 	used := 0
+	attempts := 0
 	var need [][]byte
 	for _, raw := range uniqueTxs(exts) {
 		meta, err := v.decode(raw)
@@ -107,12 +123,24 @@ func requiredTxs(exts []Extension, v View) [][]byte {
 		if closed[key] || meta.Sequence != next[key] {
 			continue
 		}
-		if len(raw) > v.Params.MaxSenderBytes || senderUsed[key] > v.Params.MaxSenderBytes-len(raw) {
+		if len(raw) > v.Params.MaxSenderBytes || tried[key] > v.Params.MaxSenderBytes-len(raw) {
 			continue
 		}
 		if len(raw) > v.Params.MaxBlockBytes || used > v.Params.MaxBlockBytes-len(raw) {
 			continue
 		}
+		// Verify runs before the charge, so a transaction that only claims a
+		// sender cannot spend that sender's budget.
+		if v.Verify != nil && !v.Verify(raw, meta) {
+			continue
+		}
+		if v.Admit != nil {
+			if attempts >= v.Params.MaxAnteAttempts {
+				break
+			}
+			attempts++
+		}
+		tried[key] += len(raw)
 		if v.Admit != nil && !v.Admit(raw, meta) {
 			continue
 		}
@@ -122,7 +150,6 @@ func requiredTxs(exts []Extension, v View) [][]byte {
 		} else {
 			next[key] = meta.Sequence + 1
 		}
-		senderUsed[key] += len(raw)
 		used += len(raw)
 	}
 	return need

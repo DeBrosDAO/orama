@@ -3,6 +3,7 @@ package inclusion
 import (
 	"bytes"
 	"errors"
+	"sort"
 	"testing"
 )
 
@@ -171,8 +172,15 @@ func TestAccept_authenticatedTrimsToTheEmbeddedCap(t *testing.T) {
 		{PubKey: []byte("y"), Power: 20, Height: 4, Txs: [][]byte{big2}},
 	}
 	c, err := PrepareCommit(v, exts)
-	if !errors.Is(err, ErrInsufficientPower) {
-		t.Fatalf("the lower-power extension is dropped to fit, leaving 20/31, under 2/3: got err %v, ext %d", err, len(c.Extensions))
+	if err != nil {
+		t.Fatalf("30/31 of power is valid; trimming for the embedded cap must not remove quorum: %v", err)
+	}
+	if len(c.Extensions) != 1 || !bytes.Equal(c.Extensions[0].PubKey, []byte("y")) {
+		t.Fatalf("only the highest power extension fits and stays: %+v", c.Extensions)
+	}
+	v.TotalPower = 46
+	if _, err := PrepareCommit(v, exts); !errors.Is(err, ErrInsufficientPower) {
+		t.Fatalf("30/46 is under 2/3 before any trimming: got %v", err)
 	}
 	v.TotalPower = 30
 	c, err = PrepareCommit(v, exts)
@@ -187,4 +195,112 @@ func TestAccept_authenticatedTrimsToTheEmbeddedCap(t *testing.T) {
 	if _, err := PrepareCommit(strict, exts); err == nil {
 		t.Fatal("without Authenticated nothing verifies")
 	}
+}
+
+func TestRequired_quorumSurvivesTrimmingButOnlyKeptListsAreRequired(t *testing.T) {
+	// Three equal validators each list a disjoint 100-byte transaction, and
+	// the embedded cap fits one. All three are valid, so quorum holds; only
+	// the tie-break winner's transaction is required.
+	txs := [][]byte{mustTx(t, "a", 0, 5, 100), mustTx(t, "b", 0, 5, 100), mustTx(t, "c", 0, 5, 100)}
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 3
+	v.Params.MaxEmbeddedListBytes = len(txs[0]) + 1
+	var exts []Extension
+	for i, tx := range txs {
+		exts = append(exts, Extension{PubKey: []byte{byte('a' + i)}, Power: 1, Height: 4, Txs: [][]byte{tx}})
+	}
+	need, err := Required(v, Commit{Extensions: exts})
+	if err != nil {
+		t.Fatalf("a full valid commit must not stall the chain: %v", err)
+	}
+	if len(need) != 1 || !bytes.Equal(need[0], txs[0]) {
+		t.Fatalf("required = %x, want just the first validator's transaction", need)
+	}
+}
+
+func TestRequired_verifyFailureDoesNotSpendTheClaimedSendersBudget(t *testing.T) {
+	// A forged transaction claiming sender "s" sorts before the real one. It
+	// fails Verify, so it must not use up the sender's attempt budget.
+	forged := mustTx(t, "s", 0, 5, 60)
+	real := mustTx(t, "s", 0, 5, 70)
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 1
+	v.Params.MaxSenderBytes = len(real) + 5
+	v.Verify = func(raw []byte, _ Meta) bool { return bytes.Equal(raw, real) }
+	v.Admit = func([]byte, Meta) bool { return true }
+	c := Commit{Extensions: []Extension{{PubKey: []byte("k"), Power: 1, Height: 4, Txs: sortedTxs(forged, real)}}}
+	need, err := Required(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(need) != 1 || !bytes.Equal(need[0], real) {
+		t.Fatalf("required = %x, want the real transaction", need)
+	}
+}
+
+func TestRequired_attemptsAreChargedToTheSender(t *testing.T) {
+	// Two same-sequence txs of one sender: the first fails Admit, the second
+	// would pass, but the first's bytes already used the sender's budget.
+	a := mustTx(t, "s", 0, 5, 60)
+	b := mustTx(t, "s", 0, 5, 61)
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 1
+	v.Params.MaxSenderBytes = len(a) + 1
+	admitted := 0
+	v.Admit = func(raw []byte, _ Meta) bool { admitted++; return false }
+	c := Commit{Extensions: []Extension{{PubKey: []byte("k"), Power: 1, Height: 4, Txs: sortedTxs(a, b)}}}
+	if _, err := Required(v, c); err != nil {
+		t.Fatal(err)
+	}
+	if admitted != 1 {
+		t.Fatalf("Admit ran %d times, want 1: a failed attempt still costs its bytes", admitted)
+	}
+}
+
+func TestRequired_anteAttemptsAreCapped(t *testing.T) {
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 1
+	v.Params.MaxAnteAttempts = 3
+	var txs [][]byte
+	for i := 0; i < 10; i++ {
+		txs = append(txs, mustTx(t, string(rune('a'+i)), 0, 5, 10))
+	}
+	ran := 0
+	v.Admit = func([]byte, Meta) bool { ran++; return false }
+	c := Commit{Extensions: []Extension{{PubKey: []byte("k"), Power: 1, Height: 4, Txs: sortedTxs(txs...)}}}
+	if _, err := Required(v, c); err != nil {
+		t.Fatal(err)
+	}
+	if ran != 3 {
+		t.Fatalf("Admit ran %d times, want the cap of 3", ran)
+	}
+}
+
+func TestRequired_neverExceedsTheEmbeddedCap(t *testing.T) {
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 4
+	v.Params.MaxEmbeddedListBytes = 350
+	v.Admit = func([]byte, Meta) bool { return true }
+	var exts []Extension
+	for i := 0; i < 4; i++ {
+		exts = append(exts, Extension{PubKey: []byte{byte(i)}, Power: 1, Height: 4,
+			Txs: [][]byte{mustTx(t, string(rune('a'+i)), 0, 5, 120)}})
+	}
+	need, err := Required(v, Commit{Extensions: exts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, tx := range need {
+		total += len(tx)
+	}
+	if total > v.Params.MaxEmbeddedListBytes {
+		t.Fatalf("required bytes %d exceed the embedded cap %d", total, v.Params.MaxEmbeddedListBytes)
+	}
+}
+
+func sortedTxs(txs ...[]byte) [][]byte {
+	out := append([][]byte(nil), txs...)
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i], out[j]) < 0 })
+	return out
 }

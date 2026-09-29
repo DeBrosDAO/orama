@@ -22,8 +22,12 @@ func (app *OramaApp) setInclusionHandlers() {
 			logger: app.Logger(),
 			decode: app.txConfig.TxDecoder(),
 			ante:   app.anteHandler,
+
+			accounts:  app.AccountKeeper,
+			signModes: app.txConfig.SignModeHandler(),
 		},
 		accounts:  app.AccountKeeper,
+		staking:   app.StakingKeeper,
 		valStore:  app.StakingKeeper,
 		proposals: baseapp.NewDefaultProposalHandler(app.Mempool(), app.BaseApp),
 		pool:      pool,

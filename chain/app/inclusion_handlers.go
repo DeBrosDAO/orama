@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authkeeper "github.com/cosmos/cosmos-sdk/x/auth/keeper"
+	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
 	"github.com/DeBrosOfficial/network/chain/x/inclusion"
 )
@@ -23,11 +25,24 @@ type inclusionHandlers struct {
 	logger    log.Logger
 	rules     inclusionTxRules
 	accounts  authkeeper.AccountKeeper
+	staking   stakingParams
 	valStore  baseapp.ValidatorStore
 	proposals *baseapp.DefaultProposalHandler
 	pool      *inclusionPool
 	now       func() time.Time
 }
+
+// stakingParams is the one staking read the extension budget needs: the size of
+// the largest validator set.
+type stakingParams interface {
+	GetParams(ctx context.Context) (stakingtypes.Params, error)
+}
+
+// voteOverheadBytes is what one validator's entry in the extended commit costs
+// beyond the listed transaction bytes: address, power, block id flag, the vote
+// signature and the extension signature, protobuf framing, and the list's own
+// 4-byte length prefix per transaction.
+const voteOverheadBytes = 2048
 
 // voteExtensionActive reports whether validators extend votes at height:
 // from the enable height on, like ExtendVote and VerifyVoteExtension.
@@ -44,19 +59,64 @@ func commitInjected(ctx sdk.Context, height int64) bool {
 	return cp.Abci != nil && cp.Abci.VoteExtensionsEnableHeight != 0 && height > cp.Abci.VoteExtensionsEnableHeight
 }
 
-// params returns the limits for a block whose injected commit is injectedLen
-// bytes. Only the consensus block max bytes, which every node shares, moves
-// the block budget.
-func (h *inclusionHandlers) params(ctx sdk.Context, injectedLen int) inclusion.Params {
-	p := inclusion.DefaultParams()
+// blockBudget is the consensus block max bytes less the reserve for the header,
+// last commit, evidence and framing. Only the consensus block max bytes, which
+// every node shares, moves it.
+func blockBudget(ctx sdk.Context) int {
+	max := int64(inclusion.DefaultMaxBlockBytes)
 	if b := ctx.ConsensusParams().Block; b != nil && b.MaxBytes > 0 {
-		p.MaxBlockBytes = int(b.MaxBytes)
+		max = b.MaxBytes
 	}
-	p.MaxBlockBytes -= blockOverheadReserve + injectedLen
+	budget := max - blockOverheadReserve
+	if budget < 1 {
+		return 1
+	}
+	return int(budget)
+}
+
+// injectedBudget is the most bytes the injected extended commit may take: half
+// of the block budget. The listed transactions that follow it take at most the
+// rest.
+func injectedBudget(ctx sdk.Context) int {
+	return blockBudget(ctx) / 2
+}
+
+// listParams returns the per-extension limits. The extension cap is the
+// default, cut so that a full validator set of extensions, each with its vote
+// overhead, still fits injectedBudget. That bounds the injected commit by
+// construction: no validator count and block size can make honest extensions
+// alone overrun the block.
+func (h *inclusionHandlers) listParams(ctx sdk.Context) (inclusion.Params, error) {
+	p := inclusion.DefaultParams()
+	sp, err := h.staking.GetParams(ctx)
+	if err != nil {
+		return p, fmt.Errorf("failed to read the staking params for the extension budget: %w", err)
+	}
+	if sp.MaxValidators == 0 {
+		return p, fmt.Errorf("staking max_validators is zero")
+	}
+	perVote := injectedBudget(ctx) / int(sp.MaxValidators)
+	if room := perVote - voteOverheadBytes; room < p.ListMaxBytes {
+		p.ListMaxBytes = max(room, 1)
+	}
+	if p.MaxSenderBytes > p.ListMaxBytes {
+		p.MaxSenderBytes = p.ListMaxBytes
+	}
+	return p, nil
+}
+
+// params returns the limits for a block whose injected commit is injectedLen
+// bytes.
+func (h *inclusionHandlers) params(ctx sdk.Context, injectedLen int) (inclusion.Params, error) {
+	p, err := h.listParams(ctx)
+	if err != nil {
+		return p, err
+	}
+	p.MaxBlockBytes = blockBudget(ctx) - injectedLen
 	if p.MaxBlockBytes < 1 {
 		p.MaxBlockBytes = 1
 	}
-	return p
+	return p, nil
 }
 
 // listView is the stateless view: enough to validate and select lists.
@@ -79,6 +139,7 @@ func (h *inclusionHandlers) walkView(ctx sdk.Context, p inclusion.Params, height
 	v.Round = ec.Round
 	v.TotalPower = total
 	v.State = h.sequences(ctx, c)
+	v.Verify = h.rules.verifier(ctx)
 	scratch, _ := ctx.CacheContext()
 	v.Admit = h.rules.admitter(scratch)
 	return v
@@ -122,7 +183,12 @@ func (h *inclusionHandlers) ExtendVote(ctx sdk.Context, req *abci.RequestExtendV
 			candidates = append(candidates, raw)
 		}
 	}
-	v := h.listView(inclusion.DefaultParams())
+	p, err := h.listParams(ctx)
+	if err != nil {
+		h.logger.Error("failed to size the inclusion list", "height", req.Height, "err", err)
+		return empty, nil
+	}
+	v := h.listView(p)
 	scratch, _ := ctx.CacheContext()
 	v.Admit = h.rules.admitter(scratch)
 	list := inclusion.SelectList(v, candidates)
@@ -138,8 +204,10 @@ func (h *inclusionHandlers) ExtendVote(ctx sdk.Context, req *abci.RequestExtendV
 }
 
 // VerifyVoteExtension accepts an extension that decodes and passes the
-// stateless list rules, and rejects anything else. It reads no state, so
-// every validator gives the same answer.
+// list rules, and rejects anything else. The only state it reads is the
+// staking validator cap, which sizes the per-extension limit, so every
+// validator at a height gives the same answer. It cannot check signatures:
+// those need the sender's account number.
 func (h *inclusionHandlers) VerifyVoteExtension(ctx sdk.Context, req *abci.RequestVerifyVoteExtension) (*abci.ResponseVerifyVoteExtension, error) {
 	reject := &abci.ResponseVerifyVoteExtension{Status: abci.ResponseVerifyVoteExtension_REJECT}
 	accept := &abci.ResponseVerifyVoteExtension{Status: abci.ResponseVerifyVoteExtension_ACCEPT}
@@ -149,11 +217,15 @@ func (h *inclusionHandlers) VerifyVoteExtension(ctx sdk.Context, req *abci.Reque
 		}
 		return accept, nil
 	}
+	p, err := h.listParams(ctx)
+	if err != nil {
+		return nil, err
+	}
 	txs, err := inclusion.DecodeList(req.VoteExtension)
 	if err != nil {
 		return reject, nil
 	}
-	if err := inclusion.ValidateList(h.listView(inclusion.DefaultParams()), txs); err != nil {
+	if err := inclusion.ValidateList(h.listView(p), txs); err != nil {
 		return reject, nil
 	}
 	return accept, nil
@@ -177,7 +249,13 @@ func (h *inclusionHandlers) PrepareProposal(ctx sdk.Context, req *abci.RequestPr
 	if err != nil {
 		return nil, err
 	}
-	p := h.params(ctx, len(injected))
+	if size := protoSize(injected); size > req.MaxTxBytes || len(injected) > injectedBudget(ctx) {
+		return nil, fmt.Errorf("the extended commit takes %d bytes, over the %d the request allows and the %d the extension budget allows", size, req.MaxTxBytes, injectedBudget(ctx))
+	}
+	p, err := h.params(ctx, len(injected))
+	if err != nil {
+		return nil, err
+	}
 	commit, total := commitOf(h.listView(p), req.Height, req.LocalLastCommit)
 	prefix, err := inclusion.Assemble(h.walkView(ctx, p, req.Height, req.LocalLastCommit, commit, total), commit, nil)
 	if err != nil {
@@ -239,7 +317,13 @@ func (h *inclusionHandlers) ProcessProposal(ctx sdk.Context, req *abci.RequestPr
 			return reject, nil
 		}
 	}
-	p := h.params(ctx, len(req.Txs[0]))
+	if len(req.Txs[0]) > injectedBudget(ctx) {
+		return reject, nil
+	}
+	p, err := h.params(ctx, len(req.Txs[0]))
+	if err != nil {
+		return nil, err
+	}
 	commit, total := commitOf(h.listView(p), req.Height, ec)
 	if err := inclusion.Process(h.walkView(ctx, p, req.Height, ec, commit, total), commit, block); err != nil {
 		return reject, nil
