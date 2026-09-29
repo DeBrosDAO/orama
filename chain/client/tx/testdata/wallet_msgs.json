@@ -3,6 +3,7 @@
   "orama_msgs": [
     "/orama.archive.v1.MsgAttachReplicas",
     "/orama.archive.v1.MsgAttest",
+    "/orama.archive.v1.MsgCreateArchiveDeal",
     "/orama.cnft.v1.MsgBurn",
     "/orama.cnft.v1.MsgCompress",
     "/orama.cnft.v1.MsgCreateCollection",

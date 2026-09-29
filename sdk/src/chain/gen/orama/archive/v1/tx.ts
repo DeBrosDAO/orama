@@ -53,6 +53,32 @@ export interface MsgAttachReplicasResponse {
   replicas: number;
 }
 
+/**
+ * MsgCreateArchiveDeal opens one protocol ARCHIVE deal for the bundle of a range
+ * the signer's operator attested, and attaches it to that range. The chain
+ * chooses the price and the duration; the archiver supplies only the piece
+ * commitment of the bundle file (the piece/ commitment, not the SHA-256 that
+ * MsgAttest pins). A range holds at most a fixed number of live deals.
+ */
+export interface MsgCreateArchiveDeal {
+  archiver: string;
+  startHeight: bigint;
+  endHeight: bigint;
+  /** node_id is the x/nodes node the archiver field is the hot key of. */
+  nodeId: string;
+  pieceRoot: Uint8Array;
+  realLeafCount: bigint;
+  paddedLeafCount: bigint;
+  pieceBytes: bigint;
+}
+
+/** MsgCreateArchiveDealResponse is the Msg/CreateArchiveDeal response. */
+export interface MsgCreateArchiveDealResponse {
+  dealId: bigint;
+  archived: boolean;
+  replicas: number;
+}
+
 function createBaseMsgAttest(): MsgAttest {
   return {
     archiver: "",
@@ -499,6 +525,297 @@ export const MsgAttachReplicasResponse: MessageFns<MsgAttachReplicasResponse> = 
   },
   fromPartial<I extends Exact<DeepPartial<MsgAttachReplicasResponse>, I>>(object: I): MsgAttachReplicasResponse {
     const message = createBaseMsgAttachReplicasResponse();
+    message.archived = object.archived ?? false;
+    message.replicas = object.replicas ?? 0;
+    return message;
+  },
+};
+
+function createBaseMsgCreateArchiveDeal(): MsgCreateArchiveDeal {
+  return {
+    archiver: "",
+    startHeight: 0n,
+    endHeight: 0n,
+    nodeId: "",
+    pieceRoot: new Uint8Array(0),
+    realLeafCount: 0n,
+    paddedLeafCount: 0n,
+    pieceBytes: 0n,
+  };
+}
+
+export const MsgCreateArchiveDeal: MessageFns<MsgCreateArchiveDeal> = {
+  encode(message: MsgCreateArchiveDeal, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.archiver !== "") {
+      writer.uint32(10).string(message.archiver);
+    }
+    if (message.startHeight !== 0n) {
+      if (BigInt.asIntN(64, message.startHeight) !== message.startHeight) {
+        throw new globalThis.Error("value provided for field message.startHeight of type int64 too large");
+      }
+      writer.uint32(16).int64(message.startHeight);
+    }
+    if (message.endHeight !== 0n) {
+      if (BigInt.asIntN(64, message.endHeight) !== message.endHeight) {
+        throw new globalThis.Error("value provided for field message.endHeight of type int64 too large");
+      }
+      writer.uint32(24).int64(message.endHeight);
+    }
+    if (message.nodeId !== "") {
+      writer.uint32(34).string(message.nodeId);
+    }
+    if (message.pieceRoot.length !== 0) {
+      writer.uint32(42).bytes(message.pieceRoot);
+    }
+    if (message.realLeafCount !== 0n) {
+      if (BigInt.asUintN(64, message.realLeafCount) !== message.realLeafCount) {
+        throw new globalThis.Error("value provided for field message.realLeafCount of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.realLeafCount);
+    }
+    if (message.paddedLeafCount !== 0n) {
+      if (BigInt.asUintN(64, message.paddedLeafCount) !== message.paddedLeafCount) {
+        throw new globalThis.Error("value provided for field message.paddedLeafCount of type uint64 too large");
+      }
+      writer.uint32(56).uint64(message.paddedLeafCount);
+    }
+    if (message.pieceBytes !== 0n) {
+      if (BigInt.asUintN(64, message.pieceBytes) !== message.pieceBytes) {
+        throw new globalThis.Error("value provided for field message.pieceBytes of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.pieceBytes);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgCreateArchiveDeal {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgCreateArchiveDeal();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.archiver = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.startHeight = reader.int64() as bigint;
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.endHeight = reader.int64() as bigint;
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.nodeId = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.pieceRoot = reader.bytes();
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.realLeafCount = reader.uint64() as bigint;
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.paddedLeafCount = reader.uint64() as bigint;
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.pieceBytes = reader.uint64() as bigint;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgCreateArchiveDeal {
+    return {
+      archiver: isSet(object.archiver) ? globalThis.String(object.archiver) : "",
+      startHeight: isSet(object.startHeight) ? BigInt(object.startHeight) : 0n,
+      endHeight: isSet(object.endHeight) ? BigInt(object.endHeight) : 0n,
+      nodeId: isSet(object.nodeId) ? globalThis.String(object.nodeId) : "",
+      pieceRoot: isSet(object.pieceRoot) ? bytesFromBase64(object.pieceRoot) : new Uint8Array(0),
+      realLeafCount: isSet(object.realLeafCount) ? BigInt(object.realLeafCount) : 0n,
+      paddedLeafCount: isSet(object.paddedLeafCount) ? BigInt(object.paddedLeafCount) : 0n,
+      pieceBytes: isSet(object.pieceBytes) ? BigInt(object.pieceBytes) : 0n,
+    };
+  },
+
+  toJSON(message: MsgCreateArchiveDeal): unknown {
+    const obj: any = {};
+    if (message.archiver !== "") {
+      obj.archiver = message.archiver;
+    }
+    if (message.startHeight !== 0n) {
+      obj.startHeight = message.startHeight.toString();
+    }
+    if (message.endHeight !== 0n) {
+      obj.endHeight = message.endHeight.toString();
+    }
+    if (message.nodeId !== "") {
+      obj.nodeId = message.nodeId;
+    }
+    if (message.pieceRoot.length !== 0) {
+      obj.pieceRoot = base64FromBytes(message.pieceRoot);
+    }
+    if (message.realLeafCount !== 0n) {
+      obj.realLeafCount = message.realLeafCount.toString();
+    }
+    if (message.paddedLeafCount !== 0n) {
+      obj.paddedLeafCount = message.paddedLeafCount.toString();
+    }
+    if (message.pieceBytes !== 0n) {
+      obj.pieceBytes = message.pieceBytes.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgCreateArchiveDeal>, I>>(base?: I): MsgCreateArchiveDeal {
+    return MsgCreateArchiveDeal.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgCreateArchiveDeal>, I>>(object: I): MsgCreateArchiveDeal {
+    const message = createBaseMsgCreateArchiveDeal();
+    message.archiver = object.archiver ?? "";
+    message.startHeight = object.startHeight ?? 0n;
+    message.endHeight = object.endHeight ?? 0n;
+    message.nodeId = object.nodeId ?? "";
+    message.pieceRoot = object.pieceRoot ?? new Uint8Array(0);
+    message.realLeafCount = object.realLeafCount ?? 0n;
+    message.paddedLeafCount = object.paddedLeafCount ?? 0n;
+    message.pieceBytes = object.pieceBytes ?? 0n;
+    return message;
+  },
+};
+
+function createBaseMsgCreateArchiveDealResponse(): MsgCreateArchiveDealResponse {
+  return { dealId: 0n, archived: false, replicas: 0 };
+}
+
+export const MsgCreateArchiveDealResponse: MessageFns<MsgCreateArchiveDealResponse> = {
+  encode(message: MsgCreateArchiveDealResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.dealId !== 0n) {
+      if (BigInt.asUintN(64, message.dealId) !== message.dealId) {
+        throw new globalThis.Error("value provided for field message.dealId of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.dealId);
+    }
+    if (message.archived !== false) {
+      writer.uint32(16).bool(message.archived);
+    }
+    if (message.replicas !== 0) {
+      writer.uint32(24).uint32(message.replicas);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgCreateArchiveDealResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgCreateArchiveDealResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.dealId = reader.uint64() as bigint;
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.archived = reader.bool();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.replicas = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgCreateArchiveDealResponse {
+    return {
+      dealId: isSet(object.dealId) ? BigInt(object.dealId) : 0n,
+      archived: isSet(object.archived) ? globalThis.Boolean(object.archived) : false,
+      replicas: isSet(object.replicas) ? globalThis.Number(object.replicas) : 0,
+    };
+  },
+
+  toJSON(message: MsgCreateArchiveDealResponse): unknown {
+    const obj: any = {};
+    if (message.dealId !== 0n) {
+      obj.dealId = message.dealId.toString();
+    }
+    if (message.archived !== false) {
+      obj.archived = message.archived;
+    }
+    if (message.replicas !== 0) {
+      obj.replicas = Math.round(message.replicas);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgCreateArchiveDealResponse>, I>>(base?: I): MsgCreateArchiveDealResponse {
+    return MsgCreateArchiveDealResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgCreateArchiveDealResponse>, I>>(object: I): MsgCreateArchiveDealResponse {
+    const message = createBaseMsgCreateArchiveDealResponse();
+    message.dealId = object.dealId ?? 0n;
     message.archived = object.archived ?? false;
     message.replicas = object.replicas ?? 0;
     return message;

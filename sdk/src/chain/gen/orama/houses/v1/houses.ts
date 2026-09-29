@@ -174,6 +174,25 @@ export interface Params {
    * one ASN.
    */
   maxEligiblePerAsn: number;
+  /**
+   * min_house_size is the eligible-operator count both tiers require. Fixed
+   * at genesis inside coded bounds; no proposal changes it.
+   */
+  minHouseSize: number;
+  /**
+   * veto_window_seconds is how long the operator house may veto a passed
+   * parameter proposal. Fixed at genesis inside coded bounds.
+   */
+  vetoWindowSeconds: bigint;
+  /**
+   * parameter_timelock_seconds, upgrade_timelock_seconds and
+   * spend_timelock_seconds are the only execution delays after a proposal
+   * passes. There is no expedited delay. Fixed at genesis inside coded
+   * bounds whose floors are the plan values (14, 60 and 7 days).
+   */
+  parameterTimelockSeconds: bigint;
+  upgradeTimelockSeconds: bigint;
+  spendTimelockSeconds: bigint;
 }
 
 /**
@@ -322,8 +341,11 @@ export interface Equivocation {
 }
 
 /**
- * Enacted is the structural state x/houses itself stores after a timelock.
- * Development spends are not recorded here; they mint and credit earnings.
+ * Enacted is the structural state x/houses stores after a timelock. Other
+ * modules act on it: x/emission reads emission_split, x/wasmpolicy reads
+ * code_upload_allow, and x/houses' own executor drives x/relay's reporter set
+ * and x/upgrade's plan. m_activated, m_max and adapter_allow have no consumer
+ * yet. Development spends are not recorded here; they mint and credit earnings.
  */
 export interface Enacted {
   scheduledUpgrade: SoftwareUpgrade | undefined;
@@ -344,6 +366,11 @@ function createBaseParams(): Params {
     houseBond: "",
     maxEligiblePerPrefix16: 0,
     maxEligiblePerAsn: 0,
+    minHouseSize: 0,
+    vetoWindowSeconds: 0n,
+    parameterTimelockSeconds: 0n,
+    upgradeTimelockSeconds: 0n,
+    spendTimelockSeconds: 0n,
   };
 }
 
@@ -372,6 +399,33 @@ export const Params: MessageFns<Params> = {
     }
     if (message.maxEligiblePerAsn !== 0) {
       writer.uint32(56).uint32(message.maxEligiblePerAsn);
+    }
+    if (message.minHouseSize !== 0) {
+      writer.uint32(64).uint32(message.minHouseSize);
+    }
+    if (message.vetoWindowSeconds !== 0n) {
+      if (BigInt.asIntN(64, message.vetoWindowSeconds) !== message.vetoWindowSeconds) {
+        throw new globalThis.Error("value provided for field message.vetoWindowSeconds of type int64 too large");
+      }
+      writer.uint32(72).int64(message.vetoWindowSeconds);
+    }
+    if (message.parameterTimelockSeconds !== 0n) {
+      if (BigInt.asIntN(64, message.parameterTimelockSeconds) !== message.parameterTimelockSeconds) {
+        throw new globalThis.Error("value provided for field message.parameterTimelockSeconds of type int64 too large");
+      }
+      writer.uint32(80).int64(message.parameterTimelockSeconds);
+    }
+    if (message.upgradeTimelockSeconds !== 0n) {
+      if (BigInt.asIntN(64, message.upgradeTimelockSeconds) !== message.upgradeTimelockSeconds) {
+        throw new globalThis.Error("value provided for field message.upgradeTimelockSeconds of type int64 too large");
+      }
+      writer.uint32(88).int64(message.upgradeTimelockSeconds);
+    }
+    if (message.spendTimelockSeconds !== 0n) {
+      if (BigInt.asIntN(64, message.spendTimelockSeconds) !== message.spendTimelockSeconds) {
+        throw new globalThis.Error("value provided for field message.spendTimelockSeconds of type int64 too large");
+      }
+      writer.uint32(96).int64(message.spendTimelockSeconds);
     }
     return writer;
   },
@@ -439,6 +493,46 @@ export const Params: MessageFns<Params> = {
           message.maxEligiblePerAsn = reader.uint32();
           continue;
         }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.minHouseSize = reader.uint32();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.vetoWindowSeconds = reader.int64() as bigint;
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.parameterTimelockSeconds = reader.int64() as bigint;
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.upgradeTimelockSeconds = reader.int64() as bigint;
+          continue;
+        }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.spendTimelockSeconds = reader.int64() as bigint;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -459,6 +553,11 @@ export const Params: MessageFns<Params> = {
         ? globalThis.Number(object.maxEligiblePerPrefix16)
         : 0,
       maxEligiblePerAsn: isSet(object.maxEligiblePerAsn) ? globalThis.Number(object.maxEligiblePerAsn) : 0,
+      minHouseSize: isSet(object.minHouseSize) ? globalThis.Number(object.minHouseSize) : 0,
+      vetoWindowSeconds: isSet(object.vetoWindowSeconds) ? BigInt(object.vetoWindowSeconds) : 0n,
+      parameterTimelockSeconds: isSet(object.parameterTimelockSeconds) ? BigInt(object.parameterTimelockSeconds) : 0n,
+      upgradeTimelockSeconds: isSet(object.upgradeTimelockSeconds) ? BigInt(object.upgradeTimelockSeconds) : 0n,
+      spendTimelockSeconds: isSet(object.spendTimelockSeconds) ? BigInt(object.spendTimelockSeconds) : 0n,
     };
   },
 
@@ -485,6 +584,21 @@ export const Params: MessageFns<Params> = {
     if (message.maxEligiblePerAsn !== 0) {
       obj.maxEligiblePerAsn = Math.round(message.maxEligiblePerAsn);
     }
+    if (message.minHouseSize !== 0) {
+      obj.minHouseSize = Math.round(message.minHouseSize);
+    }
+    if (message.vetoWindowSeconds !== 0n) {
+      obj.vetoWindowSeconds = message.vetoWindowSeconds.toString();
+    }
+    if (message.parameterTimelockSeconds !== 0n) {
+      obj.parameterTimelockSeconds = message.parameterTimelockSeconds.toString();
+    }
+    if (message.upgradeTimelockSeconds !== 0n) {
+      obj.upgradeTimelockSeconds = message.upgradeTimelockSeconds.toString();
+    }
+    if (message.spendTimelockSeconds !== 0n) {
+      obj.spendTimelockSeconds = message.spendTimelockSeconds.toString();
+    }
     return obj;
   },
 
@@ -500,6 +614,11 @@ export const Params: MessageFns<Params> = {
     message.houseBond = object.houseBond ?? "";
     message.maxEligiblePerPrefix16 = object.maxEligiblePerPrefix16 ?? 0;
     message.maxEligiblePerAsn = object.maxEligiblePerAsn ?? 0;
+    message.minHouseSize = object.minHouseSize ?? 0;
+    message.vetoWindowSeconds = object.vetoWindowSeconds ?? 0n;
+    message.parameterTimelockSeconds = object.parameterTimelockSeconds ?? 0n;
+    message.upgradeTimelockSeconds = object.upgradeTimelockSeconds ?? 0n;
+    message.spendTimelockSeconds = object.spendTimelockSeconds ?? 0n;
     return message;
   },
 };

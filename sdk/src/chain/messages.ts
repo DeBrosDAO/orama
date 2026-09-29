@@ -343,6 +343,9 @@ export const MSG = {
   archiveAttachReplicas: defineMsg("/orama.archive.v1.MsgAttachReplicas", archive.MsgAttachReplicas, (m) =>
     desc("Attach archive replicas", `Attach ${m.dealIds.length} deals to blocks ${m.startHeight}-${m.endHeight}`),
   ),
+  archiveCreateArchiveDeal: defineMsg("/orama.archive.v1.MsgCreateArchiveDeal", archive.MsgCreateArchiveDeal, (m) =>
+    desc("Open archive deal", `Open a protocol-priced ARCHIVE deal for blocks ${m.startHeight}-${m.endHeight} as node ${m.nodeId}`),
+  ),
   relayRegisterRelay: defineMsg("/orama.relay.v1.MsgRegisterRelay", relay.MsgRegisterRelay, (m) =>
     desc("Register relay", `Register ${m.exit ? "exit relay" : "relay"} for node ${m.nodeId}`),
   ),
