@@ -82,6 +82,13 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gen types.GenesisState) error {
 		}
 	}
 	for _, r := range gen.Rechallenges {
+		slot, err := k.loadSlot(ctx, r.DealId, r.Slot)
+		if err != nil {
+			return fmt.Errorf("rechallenge for %s: %w", r.NodeId, err)
+		}
+		if slot.NodeId != r.NodeId {
+			return fmt.Errorf("rechallenge for node %s on deal %d slot %d, which node %q holds", r.NodeId, r.DealId, r.Slot, slot.NodeId)
+		}
 		if err := k.Rechallenge.Set(ctx, collections.Join(r.NodeId, rechallengeID(r.DealId, r.Slot))); err != nil {
 			return err
 		}

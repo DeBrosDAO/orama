@@ -115,12 +115,10 @@ func (k Keeper) openNodeChallenges(ctx sdk.Context, epoch uint64, nodeID string,
 			return err
 		}
 		if slot.NodeId != nodeID {
-			// A rechallenge left for a slot this node no longer holds would
-			// challenge the new holder for this node's miss. Drop it.
-			if err := k.Rechallenge.Remove(ctx, collections.Join(nodeID, rechallengeID(ref.DealId, ref.Slot))); err != nil {
-				return err
-			}
-			continue
+			// Every write keeps replicas and rechallenges on the slot's holder
+			// (detachSlot removes both, genesis refuses a mismatch). A mismatch
+			// here is a corrupt index, not something to skip.
+			return fmt.Errorf("deal %d slot %d is indexed for node %s but held by %q", ref.DealId, ref.Slot, nodeID, slot.NodeId)
 		}
 		if err := k.openSlotChallenge(ctx, epoch, slot); err != nil {
 			return err

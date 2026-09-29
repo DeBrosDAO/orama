@@ -1,10 +1,12 @@
 package keeper_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -454,4 +456,39 @@ func TestSettlement_aDepartedNodesMissIsNotChargedToTheNewHolder(t *testing.T) {
 	require.Equal(t, uint32(1), f.slot(t, id, slotIdx).ConsecutiveMisses)
 	require.Zero(t, spare.slashN, "one real miss does not slash")
 	f.requireInvariants(t)
+}
+
+// A rechallenge must name the node that holds its slot. Genesis refuses one
+// that does not, and a live index that disagrees stops the epoch's challenge
+// opening instead of being skipped.
+func TestRechallenge_mustNameTheSlotsHolder(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	f.threeNodes(t, 1<<20)
+	client := acc(9)
+	f.fund(client, 100_000_000)
+	data := payload(7)
+	id := f.createDeal(t, types.DealClass_DEAL_CLASS_PRIVATE, client, "", 3, 1_000, 6, []types.PieceCommitment{
+		commit(t, data), commit(t, data), commit(t, data),
+	})
+	f.end(t)
+	f.begin(t)
+	f.acceptAll(t, id, 3)
+	holder := f.slot(t, id, 0).NodeId
+	other := "n1"
+	if holder == other {
+		other = "n2"
+	}
+
+	gs, err := f.Keeper.ExportGenesis(f.Ctx)
+	require.NoError(t, err)
+	gs.Rechallenges = append(gs.Rechallenges, types.Rechallenge{NodeId: other, DealId: id, Slot: 0})
+	g := newFixture(t)
+	require.ErrorContains(t, g.Keeper.InitGenesis(g.Ctx, *gs), "which node")
+
+	require.NoError(t, f.Keeper.Rechallenge.Set(f.Ctx, collections.Join(other, fmt.Sprintf("%d/%d", id, 0))))
+	f.end(t)
+	f.Emission.epoch = 2
+	f.Ctx = f.Ctx.WithBlockHeight(f.height + 1)
+	require.ErrorContains(t, f.Keeper.BeginBlock(f.Ctx), "indexed for node")
 }
