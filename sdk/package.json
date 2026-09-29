@@ -45,6 +45,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./chain": {
+      "import": {
+        "types": "./dist/chain.d.ts",
+        "default": "./dist/chain.js"
+      },
+      "require": {
+        "types": "./dist/chain.d.cts",
+        "default": "./dist/chain.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
@@ -56,6 +66,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "gen:chain": "bash scripts/gen-chain-proto.sh",
     "lint": "eslint src tests",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -69,26 +80,47 @@
     "isomorphic-ws": "^5.0.0"
   },
   "peerDependencies": {
-    "ws": "^8.0.0"
+    "ws": "^8.0.0",
+    "@bufbuild/protobuf": "^2.6.0",
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
+    "@scure/base": "^1.2.6"
   },
   "peerDependenciesMeta": {
     "ws": {
       "optional": true
+    },
+    "@bufbuild/protobuf": {
+      "optional": true
+    },
+    "@noble/curves": {
+      "optional": true
+    },
+    "@noble/hashes": {
+      "optional": true
+    },
+    "@scure/base": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@bufbuild/protobuf": "^2.6.0",
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
+    "@scure/base": "^1.2.6",
     "@types/node": "^20.0.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "@vitest/coverage-v8": "^1.0.0",
     "dotenv": "^17.2.3",
     "eslint": "^8.0.0",
+    "ts-proto": "2.7.5",
     "tsup": "^8.0.0",
     "tsx": "^4.19.2",
-    "ws": "^8.18.3",
     "typedoc": "^0.25.0",
     "typescript": "^5.3.0",
-    "vitest": "^1.0.0"
+    "vitest": "^1.0.0",
+    "ws": "^8.18.3"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

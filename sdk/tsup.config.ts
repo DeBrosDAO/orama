@@ -1,7 +1,10 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  // The chain module is its own entry (@debros/orama/chain): its generated
+  // protobuf codecs are large, and a caller that only uses the database or
+  // pubsub clients should not carry them.
+  entry: { index: "src/index.ts", chain: "src/chain/index.ts" },
 
   // Both module formats.
   //

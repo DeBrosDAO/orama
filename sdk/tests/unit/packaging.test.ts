@@ -48,6 +48,13 @@ describe('package.json', () => {
     expect(pkg.bugs.url).toContain('DeBrosDAO/orama');
   });
 
+  it('exposes the chain module as its own entry, so other clients do not carry its codecs', () => {
+    expect(pkg.exports['./chain'].import.default).toBe('./dist/chain.js');
+    expect(pkg.exports['./chain'].require.default).toBe('./dist/chain.cjs');
+    expect(pkg.exports['./chain'].import.types).toBe('./dist/chain.d.ts');
+    expect(pkg.exports['./chain'].require.types).toBe('./dist/chain.d.cts');
+  });
+
   it('exposes package.json, which tooling reads', () => {
     expect(pkg.exports['./package.json']).toBe('./package.json');
   });
@@ -165,6 +172,9 @@ describe('the end-to-end suite', () => {
  */
 describe('the app SDK carries no vault', () => {
   it('declares no cryptography dependency', () => {
+    // The chain entry (@debros/orama/chain) needs secp256k1 and protobuf. They
+    // are optional peers a chain caller installs, never dependencies, so this
+    // list, and every other client's install, stays free of them.
     const deps = Object.keys(pkg.dependencies ?? {});
     expect(deps.filter((d) => d.startsWith('@noble/'))).toEqual([]);
   });
