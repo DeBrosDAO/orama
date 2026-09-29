@@ -33,7 +33,7 @@ go version
 cd /tmp
 git clone https://github.com/coredns/coredns.git
 cd coredns
-git checkout v1.14.4  # Match constants.CoreDNSVersion
+git checkout v1.14.7  # Match constants.CoreDNSVersion
 ```
 
 ### 3. Add RQLite Plugin

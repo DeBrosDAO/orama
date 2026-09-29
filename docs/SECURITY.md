@@ -531,7 +531,7 @@ Run against the `chain` module at the commit that adds this section. Four adviso
 
 `go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc` (GO-2026-6508: the exporter ignored environment TLS certificates) was an indirect dependency at `v0.19.0`; it is `v0.21.0` now, with the OpenTelemetry log packages that must move with it. The chain does not configure an OTLP exporter.
 
-`govulncheck ./...` in `core/` reports two advisories in `github.com/coredns/coredns v1.14.4` (GO-2026-6506, GO-2026-6507), fixed in `v1.14.7`; that bump is not part of the chain change.
+`govulncheck ./...` in `core/` reported two advisories in `github.com/coredns/coredns v1.14.4` (GO-2026-6506, GO-2026-6507), fixed in `v1.14.7`. `core/go.mod` and `constants.CoreDNSVersion` (the CoreDNS the installer and `orama build` build the nodes' binary from) are both `1.14.7` now.
 
 ## Phase 2: OramaOS
 

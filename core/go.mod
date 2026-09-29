@@ -8,7 +8,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.2.4
 	github.com/charmbracelet/lipgloss v1.0.0
 	github.com/coredns/caddy v1.1.4
-	github.com/coredns/coredns v1.14.4
+	github.com/coredns/coredns v1.14.7
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1
 	github.com/ethereum/go-ethereum v1.17.6
 	github.com/go-chi/chi/v5 v5.2.3
@@ -139,7 +139,7 @@ require (
 	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/pion/transport/v5 v5.1.1 // indirect
 	github.com/pion/turn/v5 v5.1.2 // indirect
-	github.com/pires/go-proxyproto v0.12.0 // indirect
+	github.com/pires/go-proxyproto v0.15.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.24.1 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
