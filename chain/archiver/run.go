@@ -14,6 +14,7 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/DeBrosOfficial/network/chain/piece"
 	"github.com/DeBrosOfficial/network/chain/x/archive/types"
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
@@ -186,14 +187,20 @@ func (r *Runner) archiveRange(ctx context.Context, start, end int64) error {
 	if err := writeAtomic(BundlePath(r.dir, start, end), body, 0o640); err != nil {
 		return err
 	}
+	pc, err := piece.Commit(body)
+	if err != nil {
+		return fmt.Errorf("range %d-%d: commit the bundle: %w", start, end, err)
+	}
+	local := types.Piece{Root: pc.Root, RealLeafCount: pc.RealLeafCount, PaddedLeafCount: pc.PaddedLeafCount, PieceBytes: uint64(len(body))}
 	if found && (!bytes.Equal(rec.MerkleRoot, bundle.MerkleRoot) ||
-		!bytes.Equal(rec.BundleHash, bundle.ContentHash) || rec.BundleCid != cid) {
+		!bytes.Equal(rec.BundleHash, bundle.ContentHash) || rec.BundleCid != cid || !rec.PieceOf().Equal(local)) {
 		return r.recordConflict(start, end, bundle, cid, rec)
 	}
 	if !found || !slices.Contains(rec.Archivers, r.archiver) {
 		err = r.chain.Submit(ctx, &types.MsgAttest{
 			Archiver: r.archiver, NodeId: r.nodeID, StartHeight: start, EndHeight: end,
 			BundleCid: cid, BundleHash: bundle.ContentHash, MerkleRoot: bundle.MerkleRoot,
+			PieceRoot: local.Root, RealLeafCount: local.RealLeafCount, PaddedLeafCount: local.PaddedLeafCount, PieceBytes: local.PieceBytes,
 		})
 		if err != nil {
 			return err

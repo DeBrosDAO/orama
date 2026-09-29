@@ -1,6 +1,7 @@
 package archiver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,9 @@ type fakeChain struct {
 	// slots is what DealSlots returns per deal; urls is each node's provider root.
 	slots map[uint64][]storagetypes.Slot
 	urls  map[string]string
+	// otherOperators is how many other operators have already attested a range by the time this
+	// archiver does. x/archive opens deals only from three operators' attestations.
+	otherOperators int
 }
 
 type noUpload struct{}
@@ -72,6 +76,7 @@ func newFakeChain(t *testing.T, tip int64) *fakeChain {
 	c := &fakeChain{
 		blocks: map[int64]Block{}, ranges: map[[2]int64]types.RangeRecord{},
 		deals: map[uint64]storagetypes.DealStatus{}, pending: map[int64]int{},
+		otherOperators: types.MinArchiverAttestations - 1,
 	}
 	c.grow(t, tip)
 	return c
@@ -111,7 +116,14 @@ func (c *fakeChain) Submit(_ context.Context, msgs ...sdk.Msg) error {
 		rec := c.ranges[[2]int64{a.StartHeight, a.EndHeight}]
 		rec.StartHeight, rec.EndHeight, rec.BundleCid = a.StartHeight, a.EndHeight, a.BundleCid
 		rec.BundleHash, rec.MerkleRoot = a.BundleHash, a.MerkleRoot
+		rec.PieceRoot, rec.RealLeafCount, rec.PaddedLeafCount, rec.PieceBytes = a.PieceRoot, a.RealLeafCount, a.PaddedLeafCount, a.PieceBytes
 		rec.Archivers = append(rec.Archivers, a.Archiver)
+		if len(rec.Operators) == 0 {
+			rec.Operators = append(rec.Operators, a.Archiver)
+			for i := 0; i < c.otherOperators; i++ {
+				rec.Operators = append(rec.Operators, fmt.Sprintf("other-operator-%d", i))
+			}
+		}
 		c.ranges[[2]int64{a.StartHeight, a.EndHeight}] = rec
 		c.submits++
 	}
@@ -123,6 +135,12 @@ func (c *fakeChain) Submit(_ context.Context, msgs ...sdk.Msg) error {
 func (c *fakeChain) CreateArchiveDeal(_ context.Context, msg *types.MsgCreateArchiveDeal) (uint64, error) {
 	key := [2]int64{msg.StartHeight, msg.EndHeight}
 	rec := c.ranges[key]
+	if len(rec.Operators) < types.MinArchiverAttestations {
+		return 0, fmt.Errorf("transaction failed: %w", types.ErrQuorumPending)
+	}
+	if !rec.PieceOf().Equal(msg.PieceOf()) {
+		return 0, fmt.Errorf("transaction failed: %w", types.ErrWrongPiece)
+	}
 	live := c.pending[msg.StartHeight]
 	for _, id := range rec.DealIds {
 		var n uint64
@@ -348,6 +366,65 @@ func TestRunner_commitsTheBundleFileNotTheBlocks(t *testing.T) {
 	require.Equal(t, uint64(len(body)), got.PieceBytes)
 	require.Equal(t, int64(1), got.StartHeight)
 	require.Equal(t, int64(10), got.EndHeight)
+}
+
+// The attestation carries the piece commitment of the bundle file on disk, so what the deal's
+// providers prove is what the attesters agreed on.
+func TestRunner_attestsThePieceCommitmentOfTheBundleFile(t *testing.T) {
+	chain := newFakeChain(t, 12)
+	dir := t.TempDir()
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
+	require.NoError(t, err)
+	stepOnce(t, r)
+
+	body, err := os.ReadFile(BundlePath(dir, 1, 10))
+	require.NoError(t, err)
+	commitment, err := piece.Commit(body)
+	require.NoError(t, err)
+	rec := chain.ranges[[2]int64{1, 10}]
+	require.Equal(t, types.Piece{
+		Root: commitment.Root, RealLeafCount: commitment.RealLeafCount, PaddedLeafCount: commitment.PaddedLeafCount, PieceBytes: uint64(len(body)),
+	}, rec.PieceOf())
+	require.NoError(t, rec.PieceOf().Validate(), "the commitment passes the chain's own shape check")
+}
+
+// Deals wait for the other attesters: sending the message earlier would be refused, and an
+// archiver that has not seen quorum must neither error nor open anything.
+func TestRunner_opensNoDealBeforeTheAttestationQuorum(t *testing.T) {
+	chain := newFakeChain(t, 12)
+	chain.otherOperators = 0
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", t.TempDir(), 10)
+	require.NoError(t, err)
+	stepOnce(t, r)
+	stepOnce(t, r)
+	require.Empty(t, chain.deals, "one operator's attestation is short of the quorum")
+
+	rec := chain.ranges[[2]int64{1, 10}]
+	rec.Operators = append(rec.Operators, "other-1", "other-2")
+	chain.ranges[[2]int64{1, 10}] = rec
+	stepOnce(t, r)
+	require.Len(t, chain.deals, types.MaxLiveDealsPerRange, "deals open once the others have attested")
+}
+
+// A range pinned to a different commitment than this archiver's file is a conflict, like a
+// different root: the archiver does not attest it, and records both values.
+func TestRunner_aDifferentPinnedPieceIsAConflict(t *testing.T) {
+	first := newFakeChain(t, 12)
+	dir := t.TempDir()
+	r, err := NewRunner(first, noUpload{}, "orama1archiver", "node-1", dir, 10)
+	require.NoError(t, err)
+	stepOnce(t, r)
+
+	other := newFakeChain(t, 12)
+	rec := first.ranges[[2]int64{1, 10}]
+	rec.Archivers, rec.Operators = nil, nil
+	rec.PieceRoot = bytes.Repeat([]byte{9}, 32)
+	other.ranges[[2]int64{1, 10}] = rec
+	r2, err := NewRunner(other, noUpload{}, "orama1second", "node-2", t.TempDir(), 10)
+	require.NoError(t, err)
+	_, err = r2.Step(context.Background())
+	require.ErrorIs(t, err, ErrRootConflict)
+	require.Zero(t, other.submits, "the conflicting range is not attested")
 }
 
 type recordingChain struct {

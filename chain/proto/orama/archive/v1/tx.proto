@@ -36,6 +36,13 @@ message MsgAttest {
   // node_id is the x/nodes node the archiver field is the hot key of. The
   // node must be active with an ARCHIVER role bond.
   string node_id = 7;
+  // piece_root .. piece_bytes are the piece/ commitment of the bundle file (not the
+  // SHA-256 in bundle_hash). The first attestation pins it with the rest of the range;
+  // later ones must repeat it. piece_bytes is at most Params.max_piece_bytes.
+  bytes piece_root = 8;
+  uint64 real_leaf_count = 9;
+  uint64 padded_leaf_count = 10;
+  uint64 piece_bytes = 11;
 }
 
 // MsgAttestResponse is the Msg/Attest response.
@@ -67,9 +74,10 @@ message MsgAttachReplicasResponse {
 
 // MsgCreateArchiveDeal opens one protocol ARCHIVE deal for the bundle of a range
 // the signer's operator attested, and attaches it to that range. The chain
-// chooses the price and the duration; the archiver supplies only the piece
-// commitment of the bundle file (the piece/ commitment, not the SHA-256 that
-// MsgAttest pins). A range holds at most a fixed number of live deals.
+// chooses the price and the duration. The piece commitment fields must equal the
+// commitment the range's attestations pinned, and the range must have attestations
+// from at least the archived quorum of operators: an archiver cannot open deals for
+// any other content. A range holds at most a fixed number of live deals.
 message MsgCreateArchiveDeal {
   option (cosmos.msg.v1.signer) = "archiver";
 

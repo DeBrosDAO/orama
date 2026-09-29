@@ -13,10 +13,12 @@ import (
 )
 
 // CreateArchiveDeal opens one protocol ARCHIVE deal for the bundle of an attested range. The
-// signer must be the hot key of an active ARCHIVER node whose operator attested the range. The
-// chain sets the price (x/storage's protocol price) and the duration (types.ArchiveDealEpochs);
-// the archiver supplies only the piece commitment of the bundle file, which is what the deal's
-// providers prove. A range may hold at most types.MaxLiveDealsPerRange live deals, counting
+// signer must be the hot key of an active ARCHIVER node whose operator attested the range, and
+// the range must have attestations from at least types.MinArchiverAttestations operators, the
+// same threshold that archives it. The chain sets the price (x/storage's protocol price) and the
+// duration (types.ArchiveDealEpochs). The message's piece commitment must equal the one the
+// attesters pinned on the range, and that pinned commitment, never the message's, is what the deal
+// opens with: one archiver cannot fill the range's deal slots with content nobody attested. A range may hold at most types.MaxLiveDealsPerRange live deals, counting
 // recorded ones and ones still waiting for a provider, so an archiver cannot open more paid
 // deals than the range needs. The new deal is OPEN until x/storage assigns it in the next block,
 // and only then can MsgAttachReplicas record it.
@@ -45,6 +47,16 @@ func (k Keeper) CreateArchiveDeal(ctx sdk.Context, msg *types.MsgCreateArchiveDe
 	if !slices.Contains(rec.Operators, operator) {
 		return 0, false, 0, fmt.Errorf("%w: operator %s did not attest range %d-%d", types.ErrNotAttester, operator, msg.StartHeight, msg.EndHeight)
 	}
+	if len(rec.Operators) < types.MinArchiverAttestations {
+		return 0, false, 0, fmt.Errorf("%w: %d-%d has attestations from %d operators, deals need %d", types.ErrQuorumPending,
+			msg.StartHeight, msg.EndHeight, len(rec.Operators), types.MinArchiverAttestations)
+	}
+	if !rec.PieceOf().Equal(msg.PieceOf()) {
+		return 0, false, 0, fmt.Errorf("%w: range %d-%d is pinned to a different piece", types.ErrWrongPiece, msg.StartHeight, msg.EndHeight)
+	}
+	if err := k.requirePieceWithinCap(ctx, rec.PieceBytes); err != nil {
+		return 0, false, 0, err
+	}
 	live, err := k.dropEndedDeals(ctx, rec.DealIds)
 	if err != nil {
 		return 0, false, 0, err
@@ -56,7 +68,7 @@ func (k Keeper) CreateArchiveDeal(ctx sdk.Context, msg *types.MsgCreateArchiveDe
 	if len(live)+pending >= types.MaxLiveDealsPerRange {
 		return 0, false, 0, fmt.Errorf("%w: %d-%d has %d recorded and %d pending", types.ErrDealsFull, msg.StartHeight, msg.EndHeight, len(live), pending)
 	}
-	dealID, err := k.storage.CreateArchiveDeal(ctx, msg.PieceRoot, msg.RealLeafCount, msg.PaddedLeafCount, msg.PieceBytes, types.ArchiveDealEpochs)
+	dealID, err := k.storage.CreateArchiveDeal(ctx, rec.PieceRoot, rec.RealLeafCount, rec.PaddedLeafCount, rec.PieceBytes, types.ArchiveDealEpochs)
 	if err != nil {
 		return 0, false, 0, fmt.Errorf("failed to open the archive deal of range %d-%d: %w", msg.StartHeight, msg.EndHeight, err)
 	}

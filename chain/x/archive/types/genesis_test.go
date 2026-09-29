@@ -69,10 +69,11 @@ func archivedRecord(start, end int64) types.RangeRecord {
 		BundleCid:   "bafyvalidarchivecid",
 		BundleHash:  bytes.Repeat([]byte{1}, types.HashLen),
 		MerkleRoot:  bytes.Repeat([]byte{2}, types.HashLen),
-		DealIds:     []string{fmt.Sprint(start*10 + 1), fmt.Sprint(start*10 + 2), fmt.Sprint(start*10 + 3)},
-		Archivers:   archivers,
-		Operators:   operators,
-		Archived:    true,
+		PieceRoot:   bytes.Repeat([]byte{7}, types.HashLen), RealLeafCount: 3, PaddedLeafCount: 4, PieceBytes: 3000,
+		DealIds:   []string{fmt.Sprint(start*10 + 1), fmt.Sprint(start*10 + 2), fmt.Sprint(start*10 + 3)},
+		Archivers: archivers,
+		Operators: operators,
+		Archived:  true,
 	}
 }
 

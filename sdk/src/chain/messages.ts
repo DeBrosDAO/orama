@@ -340,7 +340,7 @@ export const MSG = {
 
   // ---- x/archive, x/relay ----
   archiveAttest: defineMsg("/orama.archive.v1.MsgAttest", archive.MsgAttest, (m) =>
-    desc("Attest archive", `Attest blocks ${m.startHeight}-${m.endHeight} as bundle ${m.bundleCid} for node ${m.nodeId}`),
+    desc("Attest archive", `Attest blocks ${m.startHeight}-${m.endHeight} as bundle ${m.bundleCid} (${m.pieceBytes} bytes) for node ${m.nodeId}`),
   ),
   archiveAttachReplicas: defineMsg("/orama.archive.v1.MsgAttachReplicas", archive.MsgAttachReplicas, (m) =>
     desc("Attach archive replicas", `Attach ${m.dealIds.length} deals to blocks ${m.startHeight}-${m.endHeight}`),

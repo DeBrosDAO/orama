@@ -22,6 +22,15 @@ export interface MsgAttest {
    * node must be active with an ARCHIVER role bond.
    */
   nodeId: string;
+  /**
+   * piece_root .. piece_bytes are the piece/ commitment of the bundle file (not the
+   * SHA-256 in bundle_hash). The first attestation pins it with the rest of the range;
+   * later ones must repeat it. piece_bytes is at most Params.max_piece_bytes.
+   */
+  pieceRoot: Uint8Array;
+  realLeafCount: bigint;
+  paddedLeafCount: bigint;
+  pieceBytes: bigint;
 }
 
 /** MsgAttestResponse is the Msg/Attest response. */
@@ -56,9 +65,10 @@ export interface MsgAttachReplicasResponse {
 /**
  * MsgCreateArchiveDeal opens one protocol ARCHIVE deal for the bundle of a range
  * the signer's operator attested, and attaches it to that range. The chain
- * chooses the price and the duration; the archiver supplies only the piece
- * commitment of the bundle file (the piece/ commitment, not the SHA-256 that
- * MsgAttest pins). A range holds at most a fixed number of live deals.
+ * chooses the price and the duration. The piece commitment fields must equal the
+ * commitment the range's attestations pinned, and the range must have attestations
+ * from at least the archived quorum of operators: an archiver cannot open deals for
+ * any other content. A range holds at most a fixed number of live deals.
  */
 export interface MsgCreateArchiveDeal {
   archiver: string;
@@ -88,6 +98,10 @@ function createBaseMsgAttest(): MsgAttest {
     bundleHash: new Uint8Array(0),
     merkleRoot: new Uint8Array(0),
     nodeId: "",
+    pieceRoot: new Uint8Array(0),
+    realLeafCount: 0n,
+    paddedLeafCount: 0n,
+    pieceBytes: 0n,
   };
 }
 
@@ -119,6 +133,27 @@ export const MsgAttest: MessageFns<MsgAttest> = {
     }
     if (message.nodeId !== "") {
       writer.uint32(58).string(message.nodeId);
+    }
+    if (message.pieceRoot.length !== 0) {
+      writer.uint32(66).bytes(message.pieceRoot);
+    }
+    if (message.realLeafCount !== 0n) {
+      if (BigInt.asUintN(64, message.realLeafCount) !== message.realLeafCount) {
+        throw new globalThis.Error("value provided for field message.realLeafCount of type uint64 too large");
+      }
+      writer.uint32(72).uint64(message.realLeafCount);
+    }
+    if (message.paddedLeafCount !== 0n) {
+      if (BigInt.asUintN(64, message.paddedLeafCount) !== message.paddedLeafCount) {
+        throw new globalThis.Error("value provided for field message.paddedLeafCount of type uint64 too large");
+      }
+      writer.uint32(80).uint64(message.paddedLeafCount);
+    }
+    if (message.pieceBytes !== 0n) {
+      if (BigInt.asUintN(64, message.pieceBytes) !== message.pieceBytes) {
+        throw new globalThis.Error("value provided for field message.pieceBytes of type uint64 too large");
+      }
+      writer.uint32(88).uint64(message.pieceBytes);
     }
     return writer;
   },
@@ -186,6 +221,38 @@ export const MsgAttest: MessageFns<MsgAttest> = {
           message.nodeId = reader.string();
           continue;
         }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.pieceRoot = reader.bytes();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.realLeafCount = reader.uint64() as bigint;
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.paddedLeafCount = reader.uint64() as bigint;
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.pieceBytes = reader.uint64() as bigint;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -204,6 +271,10 @@ export const MsgAttest: MessageFns<MsgAttest> = {
       bundleHash: isSet(object.bundleHash) ? bytesFromBase64(object.bundleHash) : new Uint8Array(0),
       merkleRoot: isSet(object.merkleRoot) ? bytesFromBase64(object.merkleRoot) : new Uint8Array(0),
       nodeId: isSet(object.nodeId) ? globalThis.String(object.nodeId) : "",
+      pieceRoot: isSet(object.pieceRoot) ? bytesFromBase64(object.pieceRoot) : new Uint8Array(0),
+      realLeafCount: isSet(object.realLeafCount) ? BigInt(object.realLeafCount) : 0n,
+      paddedLeafCount: isSet(object.paddedLeafCount) ? BigInt(object.paddedLeafCount) : 0n,
+      pieceBytes: isSet(object.pieceBytes) ? BigInt(object.pieceBytes) : 0n,
     };
   },
 
@@ -230,6 +301,18 @@ export const MsgAttest: MessageFns<MsgAttest> = {
     if (message.nodeId !== "") {
       obj.nodeId = message.nodeId;
     }
+    if (message.pieceRoot.length !== 0) {
+      obj.pieceRoot = base64FromBytes(message.pieceRoot);
+    }
+    if (message.realLeafCount !== 0n) {
+      obj.realLeafCount = message.realLeafCount.toString();
+    }
+    if (message.paddedLeafCount !== 0n) {
+      obj.paddedLeafCount = message.paddedLeafCount.toString();
+    }
+    if (message.pieceBytes !== 0n) {
+      obj.pieceBytes = message.pieceBytes.toString();
+    }
     return obj;
   },
 
@@ -245,6 +328,10 @@ export const MsgAttest: MessageFns<MsgAttest> = {
     message.bundleHash = object.bundleHash ?? new Uint8Array(0);
     message.merkleRoot = object.merkleRoot ?? new Uint8Array(0);
     message.nodeId = object.nodeId ?? "";
+    message.pieceRoot = object.pieceRoot ?? new Uint8Array(0);
+    message.realLeafCount = object.realLeafCount ?? 0n;
+    message.paddedLeafCount = object.paddedLeafCount ?? 0n;
+    message.pieceBytes = object.pieceBytes ?? 0n;
     return message;
   },
 };

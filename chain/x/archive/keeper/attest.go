@@ -26,8 +26,11 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 	if msg == nil {
 		return false, 0, fmt.Errorf("nil MsgAttest")
 	}
-	archiver, err := types.ValidateAttestation(msg.Archiver, msg.NodeId, msg.StartHeight, msg.EndHeight, msg.BundleCid, msg.BundleHash, msg.MerkleRoot)
+	archiver, err := types.ValidateAttestation(msg.Archiver, msg.NodeId, msg.StartHeight, msg.EndHeight, msg.BundleCid, msg.BundleHash, msg.MerkleRoot, msg.PieceOf())
 	if err != nil {
+		return false, 0, err
+	}
+	if err := k.requirePieceWithinCap(ctx, msg.PieceBytes); err != nil {
 		return false, 0, err
 	}
 	if err := requireFinalized(ctx, msg.EndHeight); err != nil {
@@ -59,6 +62,8 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 		rec = types.RangeRecord{
 			StartHeight: msg.StartHeight, EndHeight: msg.EndHeight, BundleCid: msg.BundleCid,
 			BundleHash: append([]byte(nil), msg.BundleHash...), MerkleRoot: append([]byte(nil), msg.MerkleRoot...),
+			PieceRoot: append([]byte(nil), msg.PieceRoot...), RealLeafCount: msg.RealLeafCount,
+			PaddedLeafCount: msg.PaddedLeafCount, PieceBytes: msg.PieceBytes,
 		}
 	} else if slices.Contains(rec.Operators, operator) {
 		return rec.Archived, uint32(len(rec.Archivers)), nil
@@ -76,7 +81,19 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 	return stored.Archived, uint32(len(stored.Archivers)), nil
 }
 
-// matchPinned refuses an attestation whose root or bundle differs from the
+// requirePieceWithinCap refuses a bundle file larger than Params.MaxPieceBytes.
+func (k Keeper) requirePieceWithinCap(ctx sdk.Context, pieceBytes uint64) error {
+	params, err := k.Params.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get archive params: %w", err)
+	}
+	if pieceBytes > params.MaxPieceBytes {
+		return fmt.Errorf("%w: %d bytes, max is %d", types.ErrPieceTooLarge, pieceBytes, params.MaxPieceBytes)
+	}
+	return nil
+}
+
+// matchPinned refuses an attestation whose root, bundle or piece commitment differs from the
 // range's first attestation.
 func matchPinned(rec types.RangeRecord, msg *types.MsgAttest) error {
 	if !bytes.Equal(rec.MerkleRoot, msg.MerkleRoot) {
@@ -84,6 +101,9 @@ func matchPinned(rec types.RangeRecord, msg *types.MsgAttest) error {
 	}
 	if rec.BundleCid != msg.BundleCid || !bytes.Equal(rec.BundleHash, msg.BundleHash) {
 		return fmt.Errorf("%w: range %d-%d", types.ErrWrongBundle, msg.StartHeight, msg.EndHeight)
+	}
+	if !rec.PieceOf().Equal(msg.PieceOf()) {
+		return fmt.Errorf("%w: range %d-%d", types.ErrWrongPiece, msg.StartHeight, msg.EndHeight)
 	}
 	return nil
 }

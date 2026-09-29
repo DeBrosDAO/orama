@@ -85,7 +85,7 @@ func TestAttest_wrongRootRefusedAndDoesNotCount(t *testing.T) {
 	rootB := digest(0x22)
 	f.attest(t, 1, 1, 50, "bafyarchivecid", bundle, rootA)
 
-	_, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
+	_, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
 		Archiver:    acc(2).String(),
 		NodeId:      nodeOf(2),
 		StartHeight: 1,
@@ -93,10 +93,10 @@ func TestAttest_wrongRootRefusedAndDoesNotCount(t *testing.T) {
 		BundleCid:   "bafyarchivecid",
 		BundleHash:  bundle,
 		MerkleRoot:  rootB,
-	})
+	}))
 	require.ErrorIs(t, err, types.ErrWrongRoot)
 
-	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
+	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
 		Archiver:    acc(3).String(),
 		NodeId:      nodeOf(3),
 		StartHeight: 1,
@@ -104,10 +104,10 @@ func TestAttest_wrongRootRefusedAndDoesNotCount(t *testing.T) {
 		BundleCid:   "bafyothercid",
 		BundleHash:  bundle,
 		MerkleRoot:  rootA,
-	})
+	}))
 	require.ErrorIs(t, err, types.ErrWrongBundle)
 
-	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
+	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
 		Archiver:    acc(4).String(),
 		NodeId:      nodeOf(4),
 		StartHeight: 1,
@@ -115,7 +115,7 @@ func TestAttest_wrongRootRefusedAndDoesNotCount(t *testing.T) {
 		BundleCid:   "bafyarchivecid",
 		BundleHash:  digest(0x33),
 		MerkleRoot:  rootA,
-	})
+	}))
 	require.ErrorIs(t, err, types.ErrWrongBundle)
 
 	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
@@ -144,7 +144,7 @@ func TestAttachReplicas_unknownRangeAndFutureHeightRefused(t *testing.T) {
 	})
 	require.ErrorIs(t, err, types.ErrUnknownRange)
 
-	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
+	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
 		Archiver:    acc(1).String(),
 		NodeId:      nodeOf(1),
 		StartHeight: 1,
@@ -152,7 +152,7 @@ func TestAttachReplicas_unknownRangeAndFutureHeightRefused(t *testing.T) {
 		BundleCid:   "bafyarchivecid",
 		BundleHash:  digest(1),
 		MerkleRoot:  digest(2),
-	})
+	}))
 	require.ErrorIs(t, err, types.ErrNotFinalized)
 }
 
@@ -161,7 +161,7 @@ func TestAttest_overlapRefused(t *testing.T) {
 	f.initGenesis(t, nil)
 	f.attest(t, 1, 1, 100, "bafyarchivecid", digest(1), digest(2))
 
-	_, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
+	_, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
 		Archiver:    acc(2).String(),
 		NodeId:      nodeOf(2),
 		StartHeight: 100,
@@ -169,7 +169,7 @@ func TestAttest_overlapRefused(t *testing.T) {
 		BundleCid:   "bafyarchivecid",
 		BundleHash:  digest(1),
 		MerkleRoot:  digest(2),
-	})
+	}))
 	require.ErrorIs(t, err, types.ErrOverlap)
 }
 
@@ -312,14 +312,14 @@ func TestQuery_rangeAndRetainHeight(t *testing.T) {
 
 func TestMsgSignerIsArchiver(t *testing.T) {
 	signer := acc(7)
-	attest := &types.MsgAttest{
+	attest := withPiece(&types.MsgAttest{
 		Archiver:    signer.String(),
 		StartHeight: 1,
 		EndHeight:   2,
 		BundleCid:   "bafyarchivecid",
 		BundleHash:  digest(1),
 		MerkleRoot:  digest(2),
-	}
+	})
 	require.Equal(t, []sdk.AccAddress{signer}, attest.GetSigners())
 
 	attach := &types.MsgAttachReplicas{
@@ -370,10 +370,10 @@ func TestExportGenesis_roundTrip(t *testing.T) {
 func TestAttest_onlyAnArchiverNodesHotKeyCounts(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	msg := &types.MsgAttest{
+	msg := withPiece(&types.MsgAttest{
 		Archiver: acc(1).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
 		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
-	}
+	})
 	_, err := f.Msg.Attest(f.Ctx, msg)
 	require.ErrorContains(t, err, "not the hot key", "another node's id does not make acc(1) an archiver")
 
@@ -405,10 +405,10 @@ func TestAttest_oneOperatorsNodesCountOnce(t *testing.T) {
 	require.Equal(t, []string{acc(1).String()}, rec.Archivers)
 
 	// The same operator's node with a wrong root is still refused.
-	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
+	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
 		Archiver: acc(2).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
 		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(9),
-	})
+	}))
 	require.ErrorIs(t, err, types.ErrWrongRoot)
 }
 
@@ -549,7 +549,7 @@ func TestCreateArchiveDeal_opensAChainPricedDealThatCountsOnlyOnceItHasAProvider
 func TestCreateArchiveDeal_aRangeHoldsAtMostItsQuorumOfLiveDeals(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attestQuorum(t, 1, 50, "bafyarchivecid", digest(1), digest(2))
 	for i := 0; i < types.MaxLiveDealsPerRange; i++ {
 		f.createDeal(t, 1, 1, 50)
 	}
@@ -567,7 +567,7 @@ func TestCreateArchiveDeal_aRangeHoldsAtMostItsQuorumOfLiveDeals(t *testing.T) {
 func TestCreateArchiveDeal_recordedLiveDealsCountAndEndedOnesAreRenewed(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attestQuorum(t, 1, 50, "bafyarchivecid", digest(1), digest(2))
 	f.attach(t, 1, 1, 50, "1", "2", "3")
 	_, err := f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
 	require.ErrorIs(t, err, types.ErrDealsFull, "three recorded live deals are all a range may have")
@@ -612,7 +612,7 @@ func TestCreateArchiveDeal_unknownAndUnfinalizedRangesAreRefused(t *testing.T) {
 func TestCreateArchiveDeal_aPendingDealBacksNoOtherRange(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attestQuorum(t, 1, 50, "bafyarchivecid", digest(1), digest(2))
 	f.attest(t, 1, 51, 100, "bafyarchivecid", digest(1), digest(3))
 	id := f.createDeal(t, 1, 1, 50)
 	f.Storage.activate(id)
@@ -620,4 +620,100 @@ func TestCreateArchiveDeal_aPendingDealBacksNoOtherRange(t *testing.T) {
 		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 51, EndHeight: 100, DealIds: []string{fmt.Sprint(id)},
 	})
 	require.ErrorIs(t, err, types.ErrDealAttached)
+}
+
+// One archiver must not be able to open deals for content the attesters did not agree on, or
+// before they agreed on anything: deals wait for the archived quorum of operators, and every
+// deal opens with the commitment the range pinned.
+func TestCreateArchiveDeal_waitsForTheAttestationQuorum(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	_, err := f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
+	require.ErrorIs(t, err, types.ErrQuorumPending)
+	f.attest(t, 2, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	_, err = f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
+	require.ErrorIs(t, err, types.ErrQuorumPending, "two operators are short of the three that archive a range")
+	require.Empty(t, f.Storage.opened, "a refused message opened no deal")
+
+	f.attest(t, 3, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.createDeal(t, 1, 1, 50)
+	require.Len(t, f.Storage.opened, 1)
+}
+
+func TestCreateArchiveDeal_mustMatchThePinnedPiece(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attestQuorum(t, 1, 50, "bafyarchivecid", digest(1), digest(2))
+
+	for name, mutate := range map[string]func(*types.MsgCreateArchiveDeal){
+		"another root":   func(m *types.MsgCreateArchiveDeal) { m.PieceRoot = digest(9) },
+		"a smaller file": func(m *types.MsgCreateArchiveDeal) { m.PieceBytes, m.RealLeafCount, m.PaddedLeafCount = 1024, 1, 1 },
+		"a larger valid file": func(m *types.MsgCreateArchiveDeal) {
+			m.PieceBytes, m.RealLeafCount, m.PaddedLeafCount = 1<<30, 1<<20, 1<<20
+		},
+	} {
+		msg := f.createMsg(1, 1, 50)
+		mutate(msg)
+		_, err := f.Msg.CreateArchiveDeal(f.Ctx, msg)
+		require.ErrorIsf(t, err, types.ErrWrongPiece, "%s", name)
+	}
+	require.Empty(t, f.Storage.opened, "no mismatching message opened a deal")
+
+	f.createDeal(t, 1, 1, 50)
+	require.Equal(t, digest(7), f.Storage.opened[0].Root, "the deal opens with the pinned commitment")
+	require.Equal(t, uint64(3000), f.Storage.opened[0].Bytes)
+}
+
+func TestAttest_thePieceCommitmentIsPinnedByTheFirstAttestation(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Equal(t, types.Piece{Root: digest(7), RealLeafCount: 3, PaddedLeafCount: 4, PieceBytes: 3000}, rec.PieceOf())
+
+	other := withPiece(&types.MsgAttest{
+		Archiver: acc(2).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
+	})
+	other.PieceRoot = digest(8)
+	_, err = f.Msg.Attest(f.Ctx, other)
+	require.ErrorIs(t, err, types.ErrWrongPiece, "another commitment for the same bundle does not count")
+	rec, err = f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Len(t, rec.Archivers, 1, "the refused attestation is not recorded")
+
+	other.PieceRoot, other.PieceBytes, other.RealLeafCount, other.PaddedLeafCount = digest(7), 1024, 1, 1
+	_, err = f.Msg.Attest(f.Ctx, other)
+	require.ErrorIs(t, err, types.ErrWrongPiece)
+}
+
+func TestAttest_pieceLargerThanTheCapIsRefused(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, func(gs *types.GenesisState) { gs.Params.MaxPieceBytes = 2999 })
+	msg := withPiece(&types.MsgAttest{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
+	})
+	_, err := f.Msg.Attest(f.Ctx, msg)
+	require.ErrorIs(t, err, types.ErrPieceTooLarge)
+	_, err = f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.ErrorIs(t, err, types.ErrUnknownRange, "a refused attestation records nothing")
+
+	msg.PieceBytes, msg.RealLeafCount, msg.PaddedLeafCount = 2048, 2, 2
+	_, err = f.Msg.Attest(f.Ctx, msg)
+	require.NoError(t, err)
+}
+
+func TestAttest_anUnshapedPieceIsRefused(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	msg := withPiece(&types.MsgAttest{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
+	})
+	msg.PieceRoot = nil
+	_, err := f.Msg.Attest(f.Ctx, msg)
+	require.ErrorContains(t, err, "piece_root")
 }

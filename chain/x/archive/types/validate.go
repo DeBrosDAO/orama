@@ -1,10 +1,13 @@
 package types
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/DeBrosOfficial/network/chain/piece"
 )
 
 // ValidateHeights checks an inclusive finalized-candidate range. The caller
@@ -92,8 +95,57 @@ func ValidateArchiver(archiver string) (sdk.AccAddress, error) {
 	return addr, nil
 }
 
+// Piece is the piece/ commitment of a bundle file: what an ARCHIVE deal's providers prove.
+type Piece struct {
+	Root            []byte
+	RealLeafCount   uint64
+	PaddedLeafCount uint64
+	PieceBytes      uint64
+}
+
+// PieceOf reads the piece commitment fields of a MsgAttest.
+func (m *MsgAttest) PieceOf() Piece {
+	return Piece{Root: m.PieceRoot, RealLeafCount: m.RealLeafCount, PaddedLeafCount: m.PaddedLeafCount, PieceBytes: m.PieceBytes}
+}
+
+// PieceOf reads the piece commitment fields of a MsgCreateArchiveDeal.
+func (m *MsgCreateArchiveDeal) PieceOf() Piece {
+	return Piece{Root: m.PieceRoot, RealLeafCount: m.RealLeafCount, PaddedLeafCount: m.PaddedLeafCount, PieceBytes: m.PieceBytes}
+}
+
+// PieceOf reads the piece commitment a range pinned.
+func (r RangeRecord) PieceOf() Piece {
+	return Piece{Root: r.PieceRoot, RealLeafCount: r.RealLeafCount, PaddedLeafCount: r.PaddedLeafCount, PieceBytes: r.PieceBytes}
+}
+
+// Equal reports whether two commitments are the same.
+func (p Piece) Equal(o Piece) bool {
+	return bytes.Equal(p.Root, o.Root) && p.RealLeafCount == o.RealLeafCount &&
+		p.PaddedLeafCount == o.PaddedLeafCount && p.PieceBytes == o.PieceBytes
+}
+
+// Validate checks the commitment's own shape: a 32-byte root and leaf counts that are the ones
+// piece_bytes implies. It does not know the bytes, so it cannot recompute the root, and it does
+// not know the cap, which is a parameter (Params.MaxPieceBytes).
+func (p Piece) Validate() error {
+	if err := ValidateHash("piece_root", p.Root); err != nil {
+		return err
+	}
+	if p.PieceBytes == 0 || p.PieceBytes > MaxPieceBytesLimit {
+		return fmt.Errorf("piece_bytes must be in [1, %d], got %d", MaxPieceBytesLimit, p.PieceBytes)
+	}
+	real := piece.RealLeafCount(int(p.PieceBytes))
+	if p.RealLeafCount != real {
+		return fmt.Errorf("piece_bytes %d implies %d leaves, got real_leaf_count %d", p.PieceBytes, real, p.RealLeafCount)
+	}
+	if want := piece.PaddedLeafCount(real); p.PaddedLeafCount != want {
+		return fmt.Errorf("padded_leaf_count must be %d for %d real leaves, got %d", want, real, p.PaddedLeafCount)
+	}
+	return nil
+}
+
 // ValidateAttestation checks MsgAttest fields and returns the signer.
-func ValidateAttestation(archiver, nodeID string, start, end int64, bundleCID string, bundleHash, merkleRoot []byte) (sdk.AccAddress, error) {
+func ValidateAttestation(archiver, nodeID string, start, end int64, bundleCID string, bundleHash, merkleRoot []byte, pc Piece) (sdk.AccAddress, error) {
 	addr, err := ValidateArchiver(archiver)
 	if err != nil {
 		return nil, err
@@ -111,6 +163,9 @@ func ValidateAttestation(archiver, nodeID string, start, end int64, bundleCID st
 		return nil, err
 	}
 	if err := ValidateHash("merkle_root", merkleRoot); err != nil {
+		return nil, err
+	}
+	if err := pc.Validate(); err != nil {
 		return nil, err
 	}
 	return addr, nil

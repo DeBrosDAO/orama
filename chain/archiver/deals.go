@@ -171,6 +171,11 @@ func (r *Runner) liveDeals(ctx context.Context, rec types.RangeRecord, ids []uin
 // same, so the chain may refuse one as over the range's allowance; that means the range has
 // enough deals and is not an error.
 func (r *Runner) openDeals(ctx context.Context, rec types.RangeRecord, st *dealState) error {
+	// The chain opens deals only once enough operators attested the range; before that this
+	// archiver waits for the others instead of sending a message that would be refused.
+	if len(rec.Operators) < types.MinArchiverAttestations {
+		return nil
+	}
 	need := types.MaxLiveDealsPerRange - len(rec.DealIds) - len(st.DealIDs)
 	if need <= 0 {
 		return nil
@@ -182,6 +187,9 @@ func (r *Runner) openDeals(ctx context.Context, rec types.RangeRecord, st *dealS
 	pc, err := piece.Commit(body)
 	if err != nil {
 		return fmt.Errorf("commit the bundle: %w", err)
+	}
+	if !rec.PieceOf().Equal(types.Piece{Root: pc.Root, RealLeafCount: pc.RealLeafCount, PaddedLeafCount: pc.PaddedLeafCount, PieceBytes: uint64(len(body))}) {
+		return fmt.Errorf("the bundle on disk does not match the piece commitment pinned on range %d-%d", rec.StartHeight, rec.EndHeight)
 	}
 	for ; need > 0; need-- {
 		id, err := r.chain.CreateArchiveDeal(ctx, &types.MsgCreateArchiveDeal{

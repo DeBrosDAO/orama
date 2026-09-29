@@ -64,6 +64,9 @@ func (r RangeRecord) Validate() error {
 	if err := ValidateHash("merkle_root", r.MerkleRoot); err != nil {
 		return err
 	}
+	if err := r.PieceOf().Validate(); err != nil {
+		return fmt.Errorf("range %d-%d: %w", r.StartHeight, r.EndHeight, err)
+	}
 	if len(r.Archivers) == 0 {
 		return fmt.Errorf("range %d-%d has no archivers", r.StartHeight, r.EndHeight)
 	}
@@ -138,6 +141,9 @@ func (gs GenesisState) Validate() error {
 	for i, r := range ordered {
 		if err := r.Validate(); err != nil {
 			return err
+		}
+		if r.PieceBytes > gs.Params.MaxPieceBytes {
+			return fmt.Errorf("%w: range %d-%d commits %d bytes, max_piece_bytes is %d", ErrPieceTooLarge, r.StartHeight, r.EndHeight, r.PieceBytes, gs.Params.MaxPieceBytes)
 		}
 		for _, id := range r.DealIds {
 			if start, ok := dealOwner[id]; ok {

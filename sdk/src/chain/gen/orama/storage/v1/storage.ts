@@ -385,6 +385,17 @@ export interface NodeState {
 }
 
 /**
+ * FailureCount is how many blocks in a row one node's per-node work has failed and been rolled
+ * back instead of applied. kind is "sync" (x/nodes reconciliation) or "settlement" (a payout
+ * row). A success clears the count, so a non-zero row is a node stuck right now.
+ */
+export interface FailureCount {
+  nodeId: string;
+  kind: string;
+  consecutive: bigint;
+}
+
+/**
  * Settlement is one queued pay or miss. The per-block limit drains this queue;
  * amounts are fixed when the epoch closes so a later block cannot change them.
  */
@@ -2131,6 +2142,101 @@ export const NodeState: MessageFns<NodeState> = {
     message.depositLocked = object.depositLocked ?? false;
     message.everProved = object.everProved ?? false;
     message.graduated = object.graduated ?? false;
+    return message;
+  },
+};
+
+function createBaseFailureCount(): FailureCount {
+  return { nodeId: "", kind: "", consecutive: 0n };
+}
+
+export const FailureCount: MessageFns<FailureCount> = {
+  encode(message: FailureCount, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.nodeId !== "") {
+      writer.uint32(10).string(message.nodeId);
+    }
+    if (message.kind !== "") {
+      writer.uint32(18).string(message.kind);
+    }
+    if (message.consecutive !== 0n) {
+      if (BigInt.asUintN(64, message.consecutive) !== message.consecutive) {
+        throw new globalThis.Error("value provided for field message.consecutive of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.consecutive);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): FailureCount {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseFailureCount();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.nodeId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.kind = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.consecutive = reader.uint64() as bigint;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): FailureCount {
+    return {
+      nodeId: isSet(object.nodeId) ? globalThis.String(object.nodeId) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      consecutive: isSet(object.consecutive) ? BigInt(object.consecutive) : 0n,
+    };
+  },
+
+  toJSON(message: FailureCount): unknown {
+    const obj: any = {};
+    if (message.nodeId !== "") {
+      obj.nodeId = message.nodeId;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.consecutive !== 0n) {
+      obj.consecutive = message.consecutive.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<FailureCount>, I>>(base?: I): FailureCount {
+    return FailureCount.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<FailureCount>, I>>(object: I): FailureCount {
+    const message = createBaseFailureCount();
+    message.nodeId = object.nodeId ?? "";
+    message.kind = object.kind ?? "";
+    message.consecutive = object.consecutive ?? 0n;
     return message;
   },
 };

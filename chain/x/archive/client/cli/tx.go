@@ -33,8 +33,11 @@ func GetTxCmd() *cobra.Command {
 func GetCmdAttest() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "attest [start-height] [end-height] [bundle-cid] [bundle-hash-hex] [merkle-root-hex]",
-		Short: "Attest a height range's bundle CID, content hash and block-hash Merkle root",
-		Args:  cobra.ExactArgs(5),
+		Short: "Attest a height range's bundle CID, content hash, block-hash Merkle root and piece commitment",
+		Long: `Attest a height range. --bundle-file is the bundle file itself: its piece/ commitment (root, leaf counts,
+byte size) is computed from it and sent with the attestation, and the first attestation of a range pins it. The
+chain refuses a bundle larger than the archive module's max_piece_bytes.`,
+		Args: cobra.ExactArgs(5),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start, err := parseHeight(args[0])
 			if err != nil {
@@ -60,14 +63,26 @@ func GetCmdAttest() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read --%s: %w", flagNodeID, err)
 			}
+			bundlePath, err := cmd.Flags().GetString(flagBundleFile)
+			if err != nil {
+				return fmt.Errorf("read --%s: %w", flagBundleFile, err)
+			}
+			pc, err := commitBundleFile(bundlePath)
+			if err != nil {
+				return err
+			}
 			msg := &types.MsgAttest{
-				Archiver:    clientCtx.GetFromAddress().String(),
-				NodeId:      nodeID,
-				StartHeight: start,
-				EndHeight:   end,
-				BundleCid:   args[2],
-				BundleHash:  bundleHash,
-				MerkleRoot:  root,
+				Archiver:        clientCtx.GetFromAddress().String(),
+				NodeId:          nodeID,
+				StartHeight:     start,
+				EndHeight:       end,
+				BundleCid:       args[2],
+				BundleHash:      bundleHash,
+				MerkleRoot:      root,
+				PieceRoot:       pc.Root,
+				RealLeafCount:   pc.RealLeafCount,
+				PaddedLeafCount: pc.PaddedLeafCount,
+				PieceBytes:      pc.PieceBytes,
 			}
 			if err := msg.ValidateBasic(); err != nil {
 				return err
@@ -76,6 +91,8 @@ func GetCmdAttest() *cobra.Command {
 		},
 	}
 	addNodeIDFlag(cmd)
+	cmd.Flags().String(flagBundleFile, "", "path of the bundle file whose piece commitment is attested (required)")
+	_ = cmd.MarkFlagRequired(flagBundleFile)
 	flags.AddTxFlagsToCmd(cmd)
 	return cmd
 }
@@ -124,6 +141,9 @@ func GetCmdAttachReplicas() *cobra.Command {
 // flagNodeID names the archiver node the signer's hot key belongs to. x/archive
 // counts one attestation per operator, keyed through that node.
 const flagNodeID = "node-id"
+
+// flagBundleFile names the bundle file an attestation commits to.
+const flagBundleFile = "bundle-file"
 
 func addNodeIDFlag(cmd *cobra.Command) {
 	cmd.Flags().String(flagNodeID, "", "x/nodes id of the ARCHIVER node whose hot key signs (required)")

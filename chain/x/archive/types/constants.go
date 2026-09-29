@@ -36,6 +36,14 @@ const (
 	// MinReplicaDeals deals at a time.
 	MaxLiveDealsPerRange = MinReplicaDeals
 
+	// DefaultMaxPieceBytes is the genesis default for Params.MaxPieceBytes: 4 GiB, far above a
+	// 1000-block bundle at any block size the chain has produced, and far below what would let
+	// one range reserve most of a provider's disk.
+	DefaultMaxPieceBytes uint64 = 4 << 30
+
+	// MaxPieceBytesLimit is the largest max_piece_bytes genesis may set: 1 TiB.
+	MaxPieceBytesLimit uint64 = 1 << 40
+
 	// MaxNodeIDLen is the longest x/nodes node id accepted.
 	MaxNodeIDLen = 128
 

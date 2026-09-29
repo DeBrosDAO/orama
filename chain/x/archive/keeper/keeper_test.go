@@ -148,7 +148,7 @@ func digest(b byte) []byte {
 
 func (f *testFixture) attest(t *testing.T, signer byte, start, end int64, cid string, bundle, root []byte) *types.MsgAttestResponse {
 	t.Helper()
-	res, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
+	res, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
 		Archiver:    acc(signer).String(),
 		NodeId:      nodeOf(signer),
 		StartHeight: start,
@@ -156,7 +156,7 @@ func (f *testFixture) attest(t *testing.T, signer byte, start, end int64, cid st
 		BundleCid:   cid,
 		BundleHash:  bundle,
 		MerkleRoot:  root,
-	})
+	}))
 	require.NoError(t, err)
 	return res
 }
@@ -172,4 +172,18 @@ func (f *testFixture) attach(t *testing.T, signer byte, start, end int64, dealID
 	})
 	require.NoError(t, err)
 	return res
+}
+
+// withPiece gives an attestation the piece commitment every test range shares.
+func withPiece(m *types.MsgAttest) *types.MsgAttest {
+	m.PieceRoot, m.RealLeafCount, m.PaddedLeafCount, m.PieceBytes = digest(7), 3, 4, 3000
+	return m
+}
+
+// attestQuorum has three operators attest the same range, the quorum that lets deals be opened.
+func (f *testFixture) attestQuorum(t *testing.T, start, end int64, cid string, bundle, root []byte) {
+	t.Helper()
+	for n := byte(1); n <= 3; n++ {
+		f.attest(t, n, start, end, cid, bundle, root)
+	}
 }
