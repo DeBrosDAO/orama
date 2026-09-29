@@ -340,7 +340,10 @@ func TestWalletFlow_registerNodeBondFromEarningsAndFundHotKey(t *testing.T) {
 	f := newFlow(t)
 	op := f.newWallet()
 	f.fundEarnings(op, flowCredit)
-	hot := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address())
+	hotPriv := secp256k1.GenPrivKey()
+	hot := sdk.AccAddress(hotPriv.PubKey().Address())
+	hotSig, err := hotPriv.Sign(nodestypes.BindingSignBytes(testChainID, op.addr.String(), nodestypes.HotKeyService, hotPriv.PubKey().Bytes()))
+	require.NoError(t, err)
 	torPub, torPriv, err := stded25519.GenerateKey(nil)
 	require.NoError(t, err)
 
@@ -349,6 +352,8 @@ func TestWalletFlow_registerNodeBondFromEarningsAndFundHotKey(t *testing.T) {
 		&nodestypes.MsgRegisterNode{
 			Operator: op.addr.String(), NodeId: "wallet-node", Roles: []nodestypes.Role{nodestypes.RoleRelay}, HotKey: hot.String(),
 			Bindings: []nodestypes.Binding{{
+				Service: nodestypes.HotKeyService, KeyType: nodestypes.KeyTypeSecp256k1, Pubkey: hotPriv.PubKey().Bytes(), Signature: hotSig,
+			}, {
 				Service: "tor", KeyType: nodestypes.KeyTypeEd25519, Pubkey: torPub,
 				Signature: stded25519.Sign(torPriv, nodestypes.BindingSignBytes(testChainID, op.addr.String(), "tor", torPub)),
 			}},
@@ -365,9 +370,12 @@ func TestWalletFlow_registerNodeBondFromEarningsAndFundHotKey(t *testing.T) {
 	require.True(t, earningsBefore.Sub(f.earnings(op.addr)).GTE(bond), "earnings paid the bond")
 
 	fund := norama(3)
-	hotBefore := f.earnings(hot)
+	hotEarnings := f.earnings(hot)
 	requireOK(t, f.deliver(op, &nodestypes.MsgFundHotKey{Operator: op.addr.String(), NodeId: "wallet-node", Amount: fund}))
-	require.True(t, f.earnings(hot).Sub(hotBefore).Equal(fund), "the hot key's earnings received the funds")
+	feeBalance, err := f.app.FeesKeeper.GetFeeBalance(f.app.NewContext(true), hot)
+	require.NoError(t, err)
+	require.True(t, feeBalance.Equal(fund), "the hot key's fee-only balance received the funds")
+	require.True(t, f.earnings(hot).Equal(hotEarnings), "nothing reached the hot key's spendable earnings")
 
 	other := f.newWallet()
 	f.fundEarnings(other, 10)
