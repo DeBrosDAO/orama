@@ -37,9 +37,9 @@ unbondings.
 `x/storage` and `x/relay` are registered. A node with no literal-IP endpoint or no declared ASN
 cannot take a protocol-deal slot, and an operator without both cannot be eligible for the operator
 house (see "Node network identity" under `x/nodes`). A relay payout cannot exceed that epoch's relay ceiling
-minus what was already minted. `chain/x/inclusion` orders its own transaction
-bytes. Those bytes are not SDK transactions, and this CometBFT ProcessProposal
-commit does not carry vote extensions, so `oramad` does not put them in a block.
+minus what was already minted. `chain/x/inclusion` is wired into BaseApp as the C13
+inclusion lists: see "Inclusion lists (C13)" below. They are off until a genesis sets
+`vote_extensions_enable_height`.
 `orama storage grant` builds a deal allowance that is not SDK authz. It caps spend,
 piece size, duration, and replica count. `orama storage revoke` removes it.
 `orama storage create` opens a PRIVATE or PUBLIC_PIN deal from piece roots the
@@ -1197,7 +1197,7 @@ there are no gentxs at all. It also shortens the emission epoch and sets `allow_
 (`EPOCH_DURATION=30s EPOCH_MIN_BLOCKS=5` by default, both overridable env vars; `CHAIN_ID` must
 contain `-localnet-`, `-devnet-` or `-stagenet-` or the script refuses to run - `allow_bootstrap_stake`
 here relaxes only the epoch-duration/min-blocks floors, not any premine gate, since supply stays at
-zero), patches a finite consensus block `max_gas` (`BLOCK_MAX_GAS`, default 100,000,000) into the generated genesis, distributes it, and
+zero), patches a finite consensus block `max_gas` (`BLOCK_MAX_GAS`, default 100,000,000) into the generated genesis, and `VOTE_EXTENSIONS_ENABLE_HEIGHT` (default 0, off; a positive value turns on inclusion lists, see "Inclusion lists (C13)"), distributes it, and
 starts every node in the background on distinct localhost ports in the 31000-31099 range
 (P2P/RPC/gRPC/API/Prometheus/pprof, ten ports per node so up to ten validators fit). That packing
 is localnet only. A production global node uses 31000–31004 for the chain (p2p public, RPC, gRPC,
@@ -1243,6 +1243,95 @@ floors (its only remaining effect - see "Genesis starts at exactly zero supply" 
 Standard `oramad` commands work as on any Cosmos SDK chain, e.g. `oramad init <moniker> --chain-id
 <id> --default-denom norama` (the default denom is already `norama` even without the flag - see
 `chain/app/config.go` - but the flag still works to override it) and `oramad comet show-node-id`.
+
+## Inclusion lists (C13)
+
+Inclusion lists make a proposer unable to censor a transaction that at least 2/3 of voting power
+has seen. Code: `chain/x/inclusion` (the rule), `chain/app/inclusion_*.go` (the CometBFT wiring).
+
+**Switch.** Vote extensions are a consensus parameter, `abci.vote_extensions_enable_height`, set in
+the genesis `consensus.params`. `0` means off, and every binary and genesis before C13 has `0`.
+The chain cannot change it later: every consensus-param authority is `UnreachableAuthority`. With
+height `E` set, validators extend their precommit from height `E`, and the block at height `E+1`
+and every later one carries the extended commit. At heights `<= E` (and everywhere when `E` is
+`0`) the four handlers do nothing and `PrepareProposal` / `ProcessProposal` are the SDK default
+handlers, unchanged; `ProcessProposal` only refuses a block that contains an injected-commit
+transaction. `scripts/stagenet/deploy.sh` sets `E = 2` (`VOTE_EXTENSIONS_ENABLE_HEIGHT`);
+`scripts/localnet/localnet.sh` leaves it `0` unless `VOTE_EXTENSIONS_ENABLE_HEIGHT` is set.
+
+**Upgrade implication for a live chain.** A running chain without extensions cannot turn them on
+through governance or a parameter message. It takes a coordinated hard fork that installs the new
+binary and rewrites `consensus.params.abci.vote_extensions_enable_height` in a fresh genesis
+(export, edit, restart with a new chain id or an agreed halt height). Nodes that run the new
+binary against an old genesis keep `0` and behave as before. Never mix binaries with different
+handlers on one chain: extended-commit blocks fail `ProcessProposal` on a node without them.
+
+**ExtendVote.** Each validator keeps a local set of transactions that passed `CheckTx`
+(`inclusion_pool.go`, bounded to 16 MiB and expired after an hour; it is not consensus state,
+and the wrapper `OramaApp.CheckTx` fills it). The extension lists those first seen at least 10 s
+ago (`inclusionIncludeAfter`) and not already in the block being voted on. Each candidate must
+decode, pay at least 1 norama, and pass the full ante chain against the last committed state,
+judged one after another in byte order. The list holds at most `list_max_bytes` (32 KiB) and a
+sender at most 32 KiB. A validator with nothing to list sends an empty extension, and that counts
+as an empty list. Only ordered transactions with exactly one signer can be listed.
+
+**VerifyVoteExtension.** Rejects, with no state read, an extension that does not decode as a list,
+is over 32 KiB, is not strictly sorted and unique, has a transaction that does not decode, pays
+under 1 norama, or breaks the per-sender cap. An empty extension is accepted. The size cap is the
+app's, not CometBFT's 1 MiB.
+
+**PrepareProposal.** From height `E+1` the proposer:
+1. checks its `LocalLastCommit` with `baseapp.ValidateVoteExtensions`;
+2. puts the `ExtendedCommitInfo` first in the block as one injected transaction:
+   `ORAMA-INCLUSION-EXTENDED-COMMIT-V1:` followed by the protobuf bytes. The prefix starts with a
+   byte that is an illegal protobuf wire type, so it can never decode as a chain transaction;
+3. computes the required transactions with `x/inclusion` and puts them next, in byte order:
+   every listed transaction from the commit's valid extensions, walked in byte order against
+   account sequences read from state and the ante chain run on a scratch branch. A transaction
+   that fails the ante chain, repeats a sender's sequence already taken by an earlier one, or does
+   not fit the block budget is skipped, and skipped ones change no state for the next;
+4. hands the remaining space, and the request's transactions that are not already in the block,
+   to the SDK default handler.
+
+The block budget for step 3 is the consensus `block.max_bytes` minus 2 MiB
+(`blockOverheadReserve`, for the header, last commit, evidence and framing) minus the injected
+transaction. If the commit cannot be turned into a valid block (`ValidateVoteExtensions` fails, or
+under 2/3 of power holds valid extensions) the handler errors, BaseApp falls back to the raw
+request transactions, and every honest `ProcessProposal` rejects that proposal.
+
+**ProcessProposal.** From height `E+1` it rejects a block with no injected commit first; a commit
+that is not the canonical encoding or fails `ValidateVoteExtensions` (signatures, order, 2/3
+power); a second injected commit; or a block that does not start, after the commit, with exactly
+the required transactions in order (`inclusion.Process`). Anything else goes to the SDK default
+handler with the commit removed. Every input is in the block or in state, so all validators reach
+the same verdict. It never looks at a mempool or a clock.
+
+**Extensions that did not pass VerifyVoteExtension.** A late precommit can reach a commit without
+`VerifyVoteExtension` having run on it. Both handlers therefore re-validate every extension in
+the commit with the same stateless rules and drop, deterministically, one that fails; its power
+still counts in the total. If the deduplicated listed bytes exceed `max_embedded_list_bytes`
+(4 MiB), extensions are kept highest power first (ties by validator address) while they fit, and
+the rest are dropped. The rule needs 2/3 of total power in the remaining extensions.
+
+**FinalizeBlock.** `OramaApp.FinalizeBlock` removes the injected transaction before BaseApp sees
+the block, so it never reaches the ante handler or a message handler, and puts a code-0 result
+with log `inclusion-list extended commit` in its place (CometBFT wants one result per block
+transaction). It also drops every included transaction from the seen-set. BaseApp's optimistic
+execution calls its finalize path directly and would skip this, so it must stay off.
+
+**Limits, stated plainly.**
+- The block carries the SDK's `ExtendedCommitInfo`, which holds each validator's raw extension,
+  and then the required transactions again, so listed bytes are on the block twice. The
+  deduplicated set is bounded at 4 MiB, the raw commit at validators x 32 KiB.
+- "Fits" is judged on bytes only. Block gas is not part of it, so a required transaction can run
+  out of block gas at execution and fail; it is still in the block, so the rule is met.
+- Listed transactions are walked in byte order, not nonce order. Two transactions of one sender
+  in one list keep only the one that sorts first if it has the sender's current sequence.
+- Liveness needs fewer than 1/3 of power to publish extensions that fail the rules above; a
+  timely bad extension is refused by `VerifyVoteExtension` and never enters a commit.
+- The walk runs the ante chain, signature checks included, over up to 4 MiB of listed bytes in
+  every proposal and every `ProcessProposal`.
+- No CometBFT crash e2e has been run; the fleet suite owns that.
 
 ## Explorer
 
@@ -1461,7 +1550,8 @@ WireGuard dependency and does not build a genesis. It refuses to run unless `CHA
 it gzip-compressed straight into `sudo install` via `/dev/stdin` (no intermediate file of any name,
 predictable or not, ever touches the remote disk), and validates every value it reads back from a
 remote command (a validator address, a node ID, a consensus pubkey) against a strict format before
-ever using it to build another remote command. Genesis is built the same zero-supply,
+ever using it to build another remote command. Its genesis sets `vote_extensions_enable_height` to 2
+(`VOTE_EXTENSIONS_ENABLE_HEIGHT`), so stagenet runs inclusion lists. Genesis is built the same zero-supply,
 bootstrap-committee way the localnet script uses: each node's consensus pubkey is extracted
 remotely with `oramad comet show-validator | python3 -c '...["key"]'` (reading only the *public*
 half of `priv_validator_key.json` - its private key material never leaves the node, or touches this

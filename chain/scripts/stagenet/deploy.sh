@@ -42,6 +42,8 @@ SVC_USER="orama-chain"
 UNIT="orama-global-chain.service"
 EPOCH_DURATION="${EPOCH_DURATION:-300s}"
 EPOCH_MIN_BLOCKS="${EPOCH_MIN_BLOCKS:-10}"
+# C13 inclusion lists: the height vote extensions turn on at, patched into genesis (see build_genesis).
+VOTE_EXTENSIONS_ENABLE_HEIGHT="${VOTE_EXTENSIONS_ENABLE_HEIGHT:-2}"
 
 # EPOCH_DURATION/EPOCH_MIN_BLOCKS reach a remote CLI flag value: keep them to a safe, boring
 # syntax (Go duration / plain integer) before they do.
@@ -217,7 +219,13 @@ import json
 path = '$work/genesis.json'
 with open(path) as f:
     doc = json.load(f)
-doc.setdefault('consensus', {}).setdefault('params', {}).setdefault('block', {})['max_gas'] = '100000000'
+params = doc.setdefault('consensus', {}).setdefault('params', {})
+params.setdefault('block', {})['max_gas'] = '100000000'
+# C13 inclusion lists: vote extensions are a genesis-only switch here (every consensus-param
+# authority is UnreachableAuthority), so this is where stagenet turns them on. Height 2 leaves
+# block 1 as an ordinary block and exercises the enable transition (extensions from 2, the
+# injected extended commit from 3). See docs/CHAIN.md, C13.
+params.setdefault('abci', {})['vote_extensions_enable_height'] = '$VOTE_EXTENSIONS_ENABLE_HEIGHT'
 with open(path, 'w') as f:
     json.dump(doc, f, indent=2)
 "

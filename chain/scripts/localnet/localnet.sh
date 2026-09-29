@@ -15,6 +15,9 @@
 #   EPOCH_DURATION        default: 30s  (x/emission genesis param, Go duration syntax)
 #   EPOCH_MIN_BLOCKS      default: 5    (x/emission genesis param)
 #   BLOCK_MAX_GAS         default: 100000000 (consensus block gas limit patched into genesis)
+#   VOTE_EXTENSIONS_ENABLE_HEIGHT
+#                         default: 0 (vote extensions off). A positive height turns on C13
+#                         inclusion lists from that height; it is a genesis-only switch.
 #
 # Genesis starts at exactly zero norama supply: every node is a member of x/power's bootstrap
 # committee (plans/open-network.md D16), which needs no self-bond and no gentx - each committee
@@ -29,6 +32,7 @@ DENOM="norama"
 EPOCH_DURATION="${EPOCH_DURATION:-30s}"
 EPOCH_MIN_BLOCKS="${EPOCH_MIN_BLOCKS:-5}"
 BLOCK_MAX_GAS="${BLOCK_MAX_GAS:-100000000}"
+VOTE_EXTENSIONS_ENABLE_HEIGHT="${VOTE_EXTENSIONS_ENABLE_HEIGHT:-0}"
 
 case "$CHAIN_ID" in
 *-stagenet-*|*-devnet-*|*-localnet-*) ;;
@@ -138,7 +142,9 @@ import json
 path = '$first/config/genesis.json'
 with open(path) as f:
     doc = json.load(f)
-doc.setdefault('consensus', {}).setdefault('params', {}).setdefault('block', {})['max_gas'] = '$BLOCK_MAX_GAS'
+params = doc.setdefault('consensus', {}).setdefault('params', {})
+params.setdefault('block', {})['max_gas'] = '$BLOCK_MAX_GAS'
+params.setdefault('abci', {})['vote_extensions_enable_height'] = '$VOTE_EXTENSIONS_ENABLE_HEIGHT'
 with open(path, 'w') as f:
     json.dump(doc, f, indent=2)
 "
