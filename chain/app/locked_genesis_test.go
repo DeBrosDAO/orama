@@ -161,13 +161,17 @@ var lockedRows = []lockedRow{
 
 	// x/wasmpolicy: D11, P6.
 	{"wasmpolicy", "upload_sunset_height", "3162240", "P6: 183 days of 5-second blocks; D11"},
+	{"wasmpolicy", "deposit_per_byte", "68359", "P3: about 0.07 ORAMA/KiB; C9 state deposits use the same price as x/token and x/nodes"},
+	{"wasmpolicy", "max_deposit_per_tx", "10000000000", "G1 launch default (C9 security review): 10 ORAMA of contract state deposit per transaction"},
+	{"wasmpolicy", "max_deposit_chunks", "32", "G1 launch default (C9 security review): one deposit row per payer, at most 32 per contract, bounds a shrink"},
+	{"wasmpolicy", "chunk_overhead_bytes", "512", "G1 launch default (C9 security review): prices the ledger rows a new payer adds to a contract"},
 }
 
 // planParameters maps P1-P10 to where each one is locked.
 var planParameters = []struct{ id, locked string }{
 	{"P1", "power.bootstrap_exit_stake, power.bootstrap_deadline_epochs, houses.bootstrap_exit_stake"},
 	{"P2", "fees.min_base_fee, fees.initial_base_fee"},
-	{"P3", "nodes.deposit_per_byte, token.deposit_per_byte"},
+	{"P3", "nodes.deposit_per_byte, token.deposit_per_byte, wasmpolicy.deposit_per_byte"},
 	{"P4", "token.creation_fee"},
 	{"P5", "x/shielded/pool UnshieldNumerator/UnshieldDenominator (ossified constants, not a genesis field)"},
 	{"P6", "wasmpolicy.upload_sunset_height"},
@@ -294,7 +298,12 @@ func TestLockedGenesis_everyGenesisParameterHasARow(t *testing.T) {
 	}
 	sort.Strings(missing)
 	require.Empty(t, missing, "new genesis parameters must be added to lockedRows with a plan citation")
-	require.Contains(t, moduleObject(t, defaults, "wasmpolicy"), "upload_sunset_height")
+	for key := range moduleObject(t, defaults, "wasmpolicy") {
+		if key == "genesis_code_ids" || key == "deposit_chunks" {
+			continue // contents of the genesis, not parameters
+		}
+		require.True(t, covered["wasmpolicy."+key], "wasmpolicy.%s needs a lockedRows entry", key)
+	}
 }
 
 func TestLockedGenesis_planParametersP1ToP10(t *testing.T) {

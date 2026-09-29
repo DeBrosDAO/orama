@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Build the static native library for linux/amd64 (musl, C parts through zig): libwasmvm and the
+# Orchard verifier in one archive, from source. Nothing prebuilt is downloaded.
+#
+# Usage: build.sh [build|verify]
+#   build   writes $OUT/libwasmvm_muslc.x86_64.a (both Rust halves) and $OUT/liborama_orchard.a (empty:
+#           the Go cgo directives of both libraries name their own archive, and the symbols of both are
+#           in the first), and records the sha256 in native/libwasmvm_muslc.x86_64.a.sha256
+#   verify  builds, then fails unless the sha256 equals the recorded one
+#
+# The wasmvm sources are libwasmvm from the Go module cache at the version chain/go.mod pins. The
+# hash is only stable for the same Rust toolchain and zig; the recorded file names both.
+set -euo pipefail
+
+mode="${1:-build}"
+here="$(cd "$(dirname "$0")" && pwd)"
+chain="$(cd "$here/.." && pwd)"
+target="x86_64-unknown-linux-musl"
+# 1.92 is the newest rustc the pinned wasmvm builds with here; src/probestack.rs supplies what it lost.
+toolchain="${RUST_TOOLCHAIN:-1.92.0}"
+zig="${ORAMA_ZIG:-zig}"
+out="${OUT:-$chain/build/native}"
+
+wasmvm_dir="$(cd "$chain" && go list -m -f '{{.Dir}}' github.com/CosmWasm/wasmvm/v3)"
+wasmvm_ver="$(cd "$chain" && go list -m -f '{{.Version}}' github.com/CosmWasm/wasmvm/v3)"
+[ -d "$wasmvm_dir/libwasmvm" ] || { echo "no libwasmvm in $wasmvm_dir" >&2; exit 1; }
+
+rm -rf "$here/vendor"
+mkdir -p "$here/vendor"
+cp -R "$wasmvm_dir/libwasmvm" "$here/vendor/wasmvm"
+chmod -R u+w "$here/vendor"
+rm -rf "$here/vendor/wasmvm/artifacts"
+
+if [ ! -f "$here/Cargo.lock" ]; then
+	cp "$here/vendor/wasmvm/Cargo.lock" "$here/Cargo.lock"
+	echo "seeded Cargo.lock from wasmvm $wasmvm_ver" >&2
+fi
+
+(
+	cd "$here"
+	ORAMA_ZIG="$zig" ZIG_TARGET=x86_64-linux-musl \
+		CC_x86_64_unknown_linux_musl="$chain/scripts/zigcc.sh" \
+		AR_x86_64_unknown_linux_musl="$zig ar" \
+		rustup run "$toolchain" cargo build --release --locked --target "$target"
+)
+
+mkdir -p "$out"
+cp "$here/target/$target/release/liborama_native.a" "$out/libwasmvm_muslc.x86_64.a"
+rm -f "$out/liborama_orchard.a"
+"$zig" ar rc "$out/liborama_orchard.a"
+
+sum="$(shasum -a 256 "$out/libwasmvm_muslc.x86_64.a" | cut -d' ' -f1)"
+line="$sum  libwasmvm_muslc.x86_64.a  wasmvm=$wasmvm_ver rustc=$(rustup run "$toolchain" rustc --version | cut -d' ' -f2) zig=$("$zig" version)"
+record="$here/libwasmvm_muslc.x86_64.a.sha256"
+if [ "$mode" = "verify" ]; then
+	want="$(cut -d' ' -f1 "$record")"
+	if [ "$sum" != "$want" ]; then
+		echo "MISMATCH: built $sum, recorded $want" >&2
+		exit 1
+	fi
+	echo "verified $sum"
+else
+	echo "$line" >"$record"
+	echo "$line"
+fi

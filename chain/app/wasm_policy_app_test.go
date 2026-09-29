@@ -64,6 +64,7 @@ func (r *relayChain) requireInvariants() {
 func TestDeposit_growthIsChargedToTheCallerAndDeletionRefunds(t *testing.T) {
 	r := newRelayChain(t, wasmChainOptions{})
 	perByte := math.NewInt(policytypes.DefaultDepositPerByte)
+	overhead := int64(policytypes.DefaultChunkOverheadBytes)
 	require.Zero(t, r.charged(r.relay), "instantiating a contract that stores nothing charges nothing")
 
 	res := r.store(r.bob, r.relay, "k1", 100)
@@ -73,7 +74,7 @@ func TestDeposit_growthIsChargedToTheCallerAndDeletionRefunds(t *testing.T) {
 	dep, err := r.app.FeesKeeper.GetDeposit(r.ctx(), policytypes.DepositID(r.relay.String(), 0))
 	require.NoError(t, err)
 	require.Equal(t, r.bob.addr.String(), dep.Owner, "the caller, not the contract or its creator, locked the deposit")
-	require.True(t, dep.Amount.Equal(perByte.MulRaw(stored)))
+	require.True(t, dep.Amount.Equal(perByte.MulRaw(stored+overhead)), "the bytes plus the payer's chunk overhead")
 	r.requireInvariants()
 
 	// Overwriting with a shorter value frees the difference, released newest chunk first.
@@ -81,7 +82,7 @@ func TestDeposit_growthIsChargedToTheCallerAndDeletionRefunds(t *testing.T) {
 	require.Equal(t, uint64(2+60), r.charged(r.relay))
 	dep, err = r.app.FeesKeeper.GetDeposit(r.ctx(), policytypes.DepositID(r.relay.String(), 0))
 	require.NoError(t, err)
-	require.True(t, dep.Amount.Equal(perByte.MulRaw(62)))
+	require.True(t, dep.Amount.Equal(perByte.MulRaw(62+overhead)))
 	r.requireInvariants()
 
 	// Deleting the key releases everything: 99% goes to the payer's earnings, 1% is burned.
@@ -93,7 +94,7 @@ func TestDeposit_growthIsChargedToTheCallerAndDeletionRefunds(t *testing.T) {
 	require.Error(t, err, "the deposit is gone")
 	after, err := r.app.FeesKeeper.GetEarnings(r.ctx(), r.bob.addr)
 	require.NoError(t, err)
-	want := perByte.MulRaw(62).MulRaw(99).QuoRaw(100)
+	want := perByte.MulRaw(62 + overhead).MulRaw(99).QuoRaw(100)
 	require.True(t, after.Sub(before).Equal(want), "refund %s, want %s to the original payer, not the caller who deleted", after.Sub(before), want)
 	r.requireInvariants()
 }
@@ -264,14 +265,43 @@ func TestContracts_gasExhaustionAndUnboundedRecursionFailTheTransaction(t *testi
 // address, or to a contract address before it exists.
 func TestContracts_aUserCanInstantiateWithNoramaAttached(t *testing.T) {
 	r := newRelayChain(t, wasmChainOptions{})
-	funded := r.instantiate(r.bob, r.codeID, map[string]any{}, norama(7*params.NoramaPerOrama))
+	funded := r.instantiate(r.bob, r.codeID, map[string]any{}, noramaCoins(7*params.NoramaPerOrama))
 	require.True(t, r.balance(funded, params.BaseDenom).Equal(math.NewInt(7*params.NoramaPerOrama)))
 
 	// Attaching funds to an execute of an existing contract works too.
-	r.mustExec(r.bob, funded, map[string]any{"store": map[string]string{"key": "x", "value": "y"}}, norama(1))
+	r.mustExec(r.bob, funded, map[string]any{"store": map[string]string{"key": "x", "value": "y"}}, noramaCoins(1))
 
 	// A plain user address is still not payable.
-	res := r.deliver(r.bob, &banktypes.MsgSend{FromAddress: r.bob.addr.String(), ToAddress: r.alice.addr.String(), Amount: norama(1)})
+	res := r.deliver(r.bob, &banktypes.MsgSend{FromAddress: r.bob.addr.String(), ToAddress: r.alice.addr.String(), Amount: noramaCoins(1)})
 	require.NotZero(t, res.Code)
 	require.Contains(t, res.Log, "user-to-user norama transfer is refused")
+}
+
+func TestDeposit_aTransactionCannotLockMoreThanTheCap(t *testing.T) {
+	r := newRelayChain(t, wasmChainOptions{})
+	// The default cap is 10 ORAMA: at 68,359 norama a byte that is about 146 KB. One call of 100 KB is
+	// under it, two in one transaction are not.
+	call := func(key string) map[string]any {
+		msg, err := json.Marshal(map[string]any{"store_bytes": map[string]any{"key": key, "len": 100_000}})
+		require.NoError(t, err)
+		return map[string]any{"wasm": map[string]any{"execute": map[string]any{"contract_addr": r.relay.String(), "msg": msg, "funds": []any{}}}}
+	}
+	res := r.exec(r.bob, r.relay, map[string]any{"dispatch": map[string]any{"msgs": []any{call("one"), call("two")}}}, nil)
+	require.NotZero(t, res.Code)
+	require.Contains(t, res.Log, "max_deposit_per_tx")
+	require.Zero(t, r.charged(r.relay))
+	require.Zero(t, r.store(r.bob, r.relay, "ok", 100_000).Code, "under the cap it works")
+	r.requireInvariants()
+}
+
+func TestDeposit_manyGrowthsByOnePayerStayOneChunk(t *testing.T) {
+	r := newRelayChain(t, wasmChainOptions{})
+	for i := 0; i < 5; i++ {
+		require.Zero(t, r.store(r.bob, r.relay, string(rune('a'+i)), 10).Code)
+	}
+	chunks, err := r.app.WasmPolicyKeeper.ExportGenesis(r.ctx())
+	require.NoError(t, err)
+	require.Len(t, chunks.DepositChunks, 1)
+	require.Equal(t, uint64(5*11), chunks.DepositChunks[0].Bytes)
+	r.requireInvariants()
 }

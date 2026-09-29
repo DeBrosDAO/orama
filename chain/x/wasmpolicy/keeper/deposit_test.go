@@ -44,6 +44,19 @@ func (f *fakeFees) LockDeposit(_ context.Context, owner sdk.AccAddress, id strin
 	return nil
 }
 
+func (f *fakeFees) TopUpDeposit(_ context.Context, id string, extra math.Int) error {
+	d, ok := f.deposits[id]
+	if !ok {
+		return fmt.Errorf("deposit id %q does not exist", id)
+	}
+	if f.failLocks {
+		return fmt.Errorf("insufficient funds")
+	}
+	d.Amount = d.Amount.Add(extra)
+	f.deposits[id] = d
+	return nil
+}
+
 func (f *fakeFees) release(id string, part math.Int) {
 	d := f.deposits[id]
 	refund := part.MulRaw(99).QuoRaw(100)
@@ -93,7 +106,11 @@ type fixture struct {
 	fees *fakeFees
 }
 
-func newFixture(t *testing.T) fixture {
+func newFixture(t *testing.T) fixture { return newFixtureWith(t, 0, 32) }
+
+// newFixtureWith builds a keeper whose chunks carry overhead extra bytes and whose contracts hold at
+// most maxChunks payers.
+func newFixtureWith(t *testing.T, overhead, maxChunks uint64) fixture {
 	t.Helper()
 	key := storetypes.NewKVStoreKey(types.StoreKey)
 	ctx := testutil.DefaultContextWithDB(t, key, storetypes.NewTransientStoreKey("t_wasmpolicy")).Ctx
@@ -101,6 +118,8 @@ func newFixture(t *testing.T) fixture {
 	k := keeper.NewKeeper(runtime.NewKVStoreService(key), fees)
 	gs := types.DefaultGenesisState()
 	gs.DepositPerByte = math.NewInt(perByte)
+	gs.ChunkOverheadBytes = overhead
+	gs.MaxDepositChunks = maxChunks
 	require.NoError(t, k.InitGenesis(ctx, gs))
 	return fixture{ctx: ctx, k: k, fees: fees}
 }
@@ -110,6 +129,7 @@ var (
 	contractB = sdk.AccAddress("contract_b___________")
 	alice     = sdk.AccAddress("alice________________")
 	bob       = sdk.AccAddress("bob__________________")
+	carol     = sdk.AccAddress("carol________________")
 )
 
 func TestApplyStateDelta_growthLocksBytesTimesPrice(t *testing.T) {
@@ -242,7 +262,7 @@ func TestGenesis_ledgerRoundTripsAndNextSequenceContinues(t *testing.T) {
 	held, err := fresh.k.ChargedBytes(fresh.ctx, contractA)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), held)
-	require.NoError(t, fresh.k.ApplyStateDelta(fresh.ctx, contractA, alice, 5, 0))
+	require.NoError(t, fresh.k.ApplyStateDelta(fresh.ctx, contractA, carol, 5, 0))
 	_, err = f.fees.GetDeposit(f.ctx, types.DepositID(contractA.String(), 2))
 	require.NoError(t, err, "the imported ledger continues the chunk sequence after 1")
 }
@@ -279,4 +299,79 @@ func TestGenesisValidate_rejectsBadDepositState(t *testing.T) {
 	c.DepositID = types.DepositID(contractA.String(), 1)
 	gs.DepositChunks = []types.DepositChunk{c, c}
 	require.Error(t, gs.Validate(), "a duplicated chunk")
+}
+
+func TestApplyStateDelta_samePayerGrowthTopsUpOneChunk(t *testing.T) {
+	f := newFixture(t)
+	for i := 0; i < 50; i++ {
+		require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractA, alice, 1, 0))
+	}
+	require.Len(t, f.fees.deposits, 1, "fifty one-byte growths by one payer are one deposit row")
+	dep, err := f.fees.GetDeposit(f.ctx, types.DepositID(contractA.String(), 0))
+	require.NoError(t, err)
+	require.True(t, dep.Amount.Equal(math.NewInt(50*perByte)))
+	inv, err := f.k.CheckInvariants(f.ctx)
+	require.NoError(t, err)
+	require.True(t, inv.BytesMatch && inv.DepositsMatch, inv.Detail)
+}
+
+func TestApplyStateDelta_aNewPayerLocksTheChunkOverhead(t *testing.T) {
+	const overhead = 100
+	f := newFixtureWith(t, overhead, 32)
+	require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractA, alice, 10, 0))
+	dep, err := f.fees.GetDeposit(f.ctx, types.DepositID(contractA.String(), 0))
+	require.NoError(t, err)
+	require.True(t, dep.Amount.Equal(math.NewInt((10+overhead)*perByte)), "bytes plus the ledger overhead")
+
+	require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractA, alice, 5, 0))
+	dep, _ = f.fees.GetDeposit(f.ctx, types.DepositID(contractA.String(), 0))
+	require.True(t, dep.Amount.Equal(math.NewInt((15+overhead)*perByte)), "a top-up adds no second overhead")
+
+	// A partial shrink keeps the overhead; releasing every byte releases it too.
+	require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractA, alice, 0, 5))
+	dep, _ = f.fees.GetDeposit(f.ctx, types.DepositID(contractA.String(), 0))
+	require.True(t, dep.Amount.Equal(math.NewInt((10+overhead)*perByte)))
+	inv, err := f.k.CheckInvariants(f.ctx)
+	require.NoError(t, err)
+	require.True(t, inv.BytesMatch && inv.DepositsMatch, inv.Detail)
+	require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractA, alice, 0, 10))
+	require.Empty(t, f.fees.deposits)
+}
+
+func TestApplyStateDelta_aContractHoldsAtMostMaxChunksPayers(t *testing.T) {
+	f := newFixtureWith(t, 0, 2)
+	require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractA, alice, 1, 0))
+	require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractA, bob, 1, 0))
+
+	err := f.k.ApplyStateDelta(f.ctx, contractA, carol, 1, 0)
+	require.ErrorIs(t, err, types.ErrDepositLedgerFull)
+	require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractA, alice, 9, 0), "an existing payer can still grow")
+	require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractB, carol, 1, 0), "another contract has its own limit")
+}
+
+func TestApplyStateDelta_theTransactionBudgetCapsWhatIsLocked(t *testing.T) {
+	f := newFixture(t)
+	limits, err := f.k.Limits.Get(f.ctx)
+	require.NoError(t, err)
+	limits.MaxDepositPerTx = math.NewInt(100 * perByte)
+	require.NoError(t, f.k.Limits.Set(f.ctx, limits))
+
+	ctx := types.WithDepositBudget(f.ctx, types.NewDepositBudget())
+	require.NoError(t, f.k.ApplyStateDelta(ctx, contractA, alice, 60, 0))
+	err = f.k.ApplyStateDelta(ctx, contractB, alice, 60, 0)
+	require.ErrorIs(t, err, types.ErrDepositCap, "the second call in the same transaction passes the cap")
+	require.NoError(t, f.k.ApplyStateDelta(ctx, contractB, alice, 40, 0), "up to the cap is allowed")
+
+	fresh := types.WithDepositBudget(f.ctx, types.NewDepositBudget())
+	require.NoError(t, f.k.ApplyStateDelta(fresh, contractA, alice, 40, 0), "a new transaction has a new budget")
+	require.NoError(t, f.k.ApplyStateDelta(f.ctx, contractA, alice, 1000, 0), "no budget, no cap: genesis and direct calls")
+}
+
+func TestGenesisValidate_rejectsBadDepositLimits(t *testing.T) {
+	gs := types.DefaultGenesisState()
+	gs.MaxDepositPerTx = math.ZeroInt()
+	require.Error(t, gs.Validate())
+	gs = types.DefaultGenesisState()
+	gs.MaxDepositChunks = 0
+	require.Error(t, gs.Validate())
 }

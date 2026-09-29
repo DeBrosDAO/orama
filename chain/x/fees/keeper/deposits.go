@@ -118,6 +118,34 @@ func (k Keeper) ReleaseDeposit(ctx context.Context, id string) (refund, burn mat
 	return refund, burn, nil
 }
 
+// TopUpDeposit adds extra to an open deposit, locked from the deposit owner the way LockDeposit
+// locks it (bank balance first, then earnings). A contract's state deposit grows this way when the
+// same payer adds more bytes, so one payer is one deposit row.
+func (k Keeper) TopUpDeposit(ctx context.Context, id string, extra math.Int) error {
+	if !extra.IsPositive() {
+		return fmt.Errorf("deposit top-up must be positive, got %s", extra)
+	}
+	deposit, err := k.Deposits.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, collections.ErrNotFound) {
+			return fmt.Errorf("deposit id %q does not exist", id)
+		}
+		return fmt.Errorf("failed to load deposit %q: %w", id, err)
+	}
+	owner, err := sdk.AccAddressFromBech32(deposit.Owner)
+	if err != nil {
+		return fmt.Errorf("deposit %q has an invalid owner %q: %w", id, deposit.Owner, err)
+	}
+	if err := k.fundDeposit(ctx, owner, id, extra); err != nil {
+		return err
+	}
+	deposit.Amount = deposit.Amount.Add(extra)
+	if err := k.Deposits.Set(ctx, id, deposit); err != nil {
+		return fmt.Errorf("failed to update deposit %q: %w", id, err)
+	}
+	return nil
+}
+
 // ReleaseDepositPart releases part of an open deposit, splitting the released part the same way
 // ReleaseDeposit splits a whole deposit (99% to the owner's earnings, 1% burned). The deposit stays
 // open with the remainder. part must be positive and strictly less than the deposit: releasing all

@@ -7,10 +7,11 @@ import (
 	authsigning "github.com/cosmos/cosmos-sdk/x/auth/signing"
 
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy"
+	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
 )
 
 // DepositPayerDecorator records the transaction's first signer as the account that pays contract
-// state deposits. A contract that calls another contract cannot pay: its call chain is rooted in
+// state deposits, and a budget that caps what the whole transaction may lock (max_deposit_per_tx). A contract that calls another contract cannot pay: its call chain is rooted in
 // a signer, and that signer is who locked the deposit and who gets it back.
 type DepositPayerDecorator struct{}
 
@@ -27,6 +28,7 @@ func (DepositPayerDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate boo
 	if err != nil {
 		return ctx, fmt.Errorf("failed to read the tx signers: %w", err)
 	}
+	ctx = types.WithDepositBudget(ctx, types.NewDepositBudget())
 	if len(signers) == 0 {
 		return next(ctx, tx, simulate)
 	}

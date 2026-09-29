@@ -14,7 +14,22 @@ type GenesisState struct {
 	UploadSunsetHeight uint64         `json:"upload_sunset_height"`
 	GenesisCodeIDs     []uint64       `json:"genesis_code_ids"`
 	DepositPerByte     math.Int       `json:"deposit_per_byte"`
+	MaxDepositPerTx    math.Int       `json:"max_deposit_per_tx"`
+	MaxDepositChunks   uint64         `json:"max_deposit_chunks"`
+	ChunkOverheadBytes uint64         `json:"chunk_overhead_bytes"`
 	DepositChunks      []DepositChunk `json:"deposit_chunks"`
+}
+
+// Limits are the state-deposit bounds written once at genesis.
+type Limits struct {
+	MaxDepositPerTx    math.Int `json:"max_deposit_per_tx"`
+	MaxDepositChunks   uint64   `json:"max_deposit_chunks"`
+	ChunkOverheadBytes uint64   `json:"chunk_overhead_bytes"`
+}
+
+// Limits returns the genesis deposit bounds.
+func (gs GenesisState) Limits() Limits {
+	return Limits{MaxDepositPerTx: gs.MaxDepositPerTx, MaxDepositChunks: gs.MaxDepositChunks, ChunkOverheadBytes: gs.ChunkOverheadBytes}
 }
 
 // DefaultGenesisState returns P6's sunset, an empty genesis code set, P3's per-byte price and an
@@ -24,6 +39,9 @@ func DefaultGenesisState() GenesisState {
 		UploadSunsetHeight: DefaultUploadSunsetHeight,
 		GenesisCodeIDs:     []uint64{},
 		DepositPerByte:     math.NewInt(DefaultDepositPerByte),
+		MaxDepositPerTx:    math.NewInt(DefaultMaxDepositPerTx),
+		MaxDepositChunks:   DefaultMaxDepositChunks,
+		ChunkOverheadBytes: DefaultChunkOverheadBytes,
 		DepositChunks:      []DepositChunk{},
 	}
 }
@@ -43,6 +61,12 @@ func (gs GenesisState) Validate() error {
 	}
 	if gs.DepositPerByte.IsNil() || !gs.DepositPerByte.IsPositive() {
 		return fmt.Errorf("deposit_per_byte must be a positive integer")
+	}
+	if gs.MaxDepositPerTx.IsNil() || !gs.MaxDepositPerTx.IsPositive() {
+		return fmt.Errorf("max_deposit_per_tx must be a positive integer")
+	}
+	if gs.MaxDepositChunks == 0 {
+		return fmt.Errorf("max_deposit_chunks must be at least 1")
 	}
 	chunks := make(map[string]struct{}, len(gs.DepositChunks))
 	for _, c := range gs.DepositChunks {
@@ -66,13 +90,15 @@ type DepositChunk struct {
 	Seq       uint64   `json:"seq"`
 	Payer     string   `json:"payer"`
 	Bytes     uint64   `json:"bytes"`
+	Overhead  uint64   `json:"overhead"`
 	PerByte   math.Int `json:"per_byte"`
 	DepositID string   `json:"deposit_id"`
 }
 
-// Amount is the deposit this chunk holds: Bytes * PerByte.
+// Amount is the deposit this chunk holds: (Bytes + Overhead) * PerByte. Overhead prices the chunk's
+// own ledger rows and is released only with the whole chunk.
 func (c DepositChunk) Amount() math.Int {
-	return math.NewIntFromUint64(c.Bytes).Mul(c.PerByte)
+	return math.NewIntFromUint64(c.Bytes + c.Overhead).Mul(c.PerByte)
 }
 
 // Validate checks the chunk's addresses, its size and its price.

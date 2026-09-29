@@ -167,7 +167,7 @@ func TestStandardEscrow_noramaCannotLeaveToAUser(t *testing.T) {
 	c.mustExec(alice, escrow, map[string]any{"create": map[string]any{
 		"id": "orama-deal", "arbiter": bob.addr.String(), "recipient": carol.addr.String(),
 		"title": "t", "description": "d", "end_height": nil, "end_time": nil, "cw20_whitelist": nil,
-	}}, norama(5*params.NoramaPerOrama))
+	}}, noramaCoins(5*params.NoramaPerOrama))
 
 	approve := c.exec(bob, escrow, map[string]any{"approve": map[string]string{"id": "orama-deal"}}, nil)
 	require.NotZero(t, approve.Code)
@@ -212,7 +212,7 @@ func TestStandardVesting_noramaCannotBeVestedToAUser(t *testing.T) {
 	})
 	require.NoError(t, err)
 	res := c.deliver(alice, &wasmtypes.MsgInstantiateContract{
-		Sender: alice.addr.String(), CodeID: codeVesting, Label: "vest", Msg: raw, Funds: norama(3 * params.NoramaPerOrama),
+		Sender: alice.addr.String(), CodeID: codeVesting, Label: "vest", Msg: raw, Funds: noramaCoins(3 * params.NoramaPerOrama),
 	})
 	require.NotZero(t, res.Code)
 	require.Contains(t, res.Log, "set_withdraw_address")

@@ -217,7 +217,9 @@ func (c *wasmChain) smart(contract sdk.AccAddress, query any) []byte {
 	return out
 }
 
-func norama(n int64) sdk.Coins { return sdk.NewCoins(sdk.NewCoin(params.BaseDenom, math.NewInt(n))) }
+func noramaCoins(n int64) sdk.Coins {
+	return sdk.NewCoins(sdk.NewCoin(params.BaseDenom, math.NewInt(n)))
+}
 
 // relay stores the test relay contract through the keeper (its code id is returned) so a test can
 // instantiate it. Storing bypasses the upload sunset the way a genesis import does, and is only

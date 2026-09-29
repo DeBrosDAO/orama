@@ -150,6 +150,7 @@ func TestFeeBalance_cannotBeBonded(t *testing.T) {
 	fee, err := f.Keeper.GetFeeBalance(f.Ctx, hot)
 	require.NoError(t, err)
 	require.True(t, fee.Equal(math.NewInt(1000)))
+}
 
 func TestPayEarnings_creditsTheRecipientsEarningsNotTheirBalance(t *testing.T) {
 	f := newTestFixture(t)

@@ -2010,8 +2010,7 @@ emit bulk-memory from the precompiled standard library, which wasmvm rejects.
 genesis, sets wasmd's code sequence to 6, and lists 1..5 in `wasmpolicy`'s `genesis_code_ids`. It refuses
 a genesis that already has wasm codes or a code set, and a binary without libwasmvm (its default genesis
 has no `wasm` module). `chain/scripts/stagenet/deploy.sh` runs it after the bootstrap committee is added
-and builds a wasm-capable static binary (it needs `WASMVM_MUSL_LIB`, the wasmvm release's
-`libwasmvm_muslc.x86_64.a`, which the repo does not vendor). `WITH_WASM=1 make localnet` does the same on a
+and builds the static binary with `make build-linux-amd64-full`. `WITH_WASM=1 make localnet` does the same on a
 localnet with a host cgo build.
 
 **What the standard contracts cannot do with ORAMA.** They run as contracts, so the send restriction
@@ -2020,6 +2019,20 @@ releases and refunds by bank send, so ORAMA escrowed for a user recipient cannot
 escrow; token and CW20 escrows work). The vesting contract's instantiate for the native denom sends a
 distribution `SetWithdrawAddress`, which is refused, so ORAMA cannot be vested at all; it can vest a user
 token. A contract pays a user ORAMA through the `earnings` binding below.
+
+### Native library
+
+The static linux/amd64 binary links one Rust archive, `chain/native` (`make native-lib-linux-amd64`,
+`native/build.sh build|verify`): libwasmvm at the version `go.mod` pins (copied from the module cache, so its
+source is the one `go.sum` covers, not downloaded prebuilt) and the Orchard verifier as rlibs of one
+staticlib crate, so there is one copy of the Rust std. It is built with Rust 1.92.0 for
+`x86_64-unknown-linux-musl`, C parts through zig (`scripts/zigcc.sh`), with `native/Cargo.lock`. wasmer_vm calls
+`__rust_probestack`, which rustc no longer provides after about 1.85 and the Orchard crate needs rustc 1.88, so
+`native/src/probestack.rs` carries compiler_builtins' x86_64 routine. The sha256 of the archive is recorded in
+`native/libwasmvm_muslc.x86_64.a.sha256` with the wasmvm, rustc and zig versions it holds for. The result was
+linked, not run: `file` reports `ELF 64-bit LSB executable, x86-64, statically linked` for
+`build/oramad-linux-amd64-full` (about 166 MB). `make build-linux-amd64-full` passes
+`-tags "muslc orchardffi netgo osusergo"`.
 
 ### Upload
 
@@ -2074,16 +2087,27 @@ and `grpc` query paths stay rejected (wasmd's default), so a contract cannot rea
 ### State deposits
 
 Contract storage is priced at `deposit_per_byte` (genesis default 68,359 norama per byte, the P3
-price `x/token` and `x/nodes` also use; `x/wasmpolicy` genesis, immutable). `depositEngine` wraps the VM
+price `x/token` and `x/nodes` also use). `x/wasmpolicy` genesis holds four locked parameters (G1,
+`app/locked_genesis.go`): `deposit_per_byte`, `max_deposit_per_tx` (10 ORAMA), `max_deposit_chunks`
+(32) and `chunk_overhead_bytes` (512). `depositEngine` wraps the VM
 engine: each `Instantiate`, `Execute`, `Migrate`, `Sudo` and `Reply` runs against a metered store that counts
 the bytes the call adds to and removes from the contract's storage (an entry weighs key plus value), and on
 success the net change is settled in the ledger:
 
-- **Growth** locks `bytes x deposit_per_byte` in `x/fees` as a new chunk (`wasm/{contract}/{seq}`).
-- **Shrink** releases chunks newest first, each refunded to the account that locked it (99% to its
-  earnings, 1% burned, as for every deposit; a chunk may be released in part with `ReleaseDepositPart`).
-  Only charged bytes are refunded: a contract's state that was never charged, such as any that arrives in
-  a genesis import, refunds nothing.
+- **One chunk per payer.** Growth locks `bytes x deposit_per_byte` in `x/fees` in the payer's chunk of that
+  contract (`wasm/{contract}/{seq}`): the first growth by a payer opens a chunk and also locks
+  `chunk_overhead_bytes x deposit_per_byte`, which prices the ledger row and the `x/fees` deposit row; later
+  growth by the same payer tops the same deposit up (`x/fees.TopUpDeposit`). A contract holds at most
+  `max_deposit_chunks` chunks, so a shrink walks a bounded list and always fits in a block. A new payer
+  growing a contract that is full is refused (`ErrDepositLedgerFull`); existing payers still grow.
+- **Shrink** releases chunks newest created first, each refunded to the account that locked it (99% to its
+  earnings, 1% burned, as for every deposit; a chunk may be released in part with `ReleaseDepositPart`, and
+  its overhead is released only with its last byte). Only charged bytes are refunded: a contract's state that
+  was never charged, such as any that arrives in a genesis import, refunds nothing.
+- **Cap per transaction.** The ante chain gives each transaction a budget; every chunk opened or topped up
+  adds to it, and a call that would take the total past `max_deposit_per_tx` fails
+  (`ErrDepositCap`). A caller cannot raise it. It bounds what a contract can lock on the signer of a
+  transaction that calls it, nested calls included; a submessage that later reverts still counts.
 - **Who pays.** The message sender when it is a plain account; otherwise the transaction's first signer,
   which `DepositPayerDecorator` records in the context. A contract never pays. A call with no payer and
   growth fails.
@@ -2093,23 +2117,23 @@ success the net change is settled in the ledger:
   one more store read than an unmetered call. That read and the ledger writes are charged to the
   transaction like any other state access.
 
-The ledger (`ContractBytes`, `Chunks`) lives in `x/wasmpolicy`'s store and in its genesis
+The ledger (`ContractBytes`, `Chunks`, `Limits`) lives in `x/wasmpolicy`'s store and in its genesis
 (`deposit_chunks`); the deposits themselves are `x/fees` deposits, so `x/fees`'s "deposit module balance
-equals open deposits" invariant covers them. `Keeper.CheckInvariants` (wasmpolicy) checks that each
+equals open deposits" invariant covers them (deposits are separate from earnings and fee balances, so the
+earnings and fee-balance invariants are unaffected). `Keeper.CheckInvariants` (wasmpolicy) checks that each
 contract's charged bytes equal the sum of its chunks and that each chunk's `x/fees` deposit exists, has the
-same owner and holds exactly `bytes x per_byte`. It is a keeper method the tests call; the module has no
+same owner and holds exactly `(bytes + overhead) x per_byte`. It is a keeper method the tests call; the module has no
 query service. Not metered: code storage (upload is closed or priced by gas), contract metadata, and IBC entry
 points, which cannot run.
 
 ### Not built here
 
 - A shielded binding (see above).
-- Coalescing of deposit chunks: each growing call adds a chunk (and an x/fees deposit row), so a shrink that must release very many one-byte chunks can run out of gas. The ledger overhead is not priced.
-- A caller-side cap on the state deposit a contract call may lock; the signer of a transaction pays for growth the contracts it calls cause.
+- A caller-chosen deposit cap: the per-transaction cap is a locked genesis parameter, not something a signer can set.
 - Any way for a contract to spend the earnings credited to its own address.
 - A `wasmpolicy` query service or CLI for the ledger and its invariants.
-- The native stagenet deploy has not been run with a wasm binary: `deploy.sh` needs the musl `libwasmvm`
-  and was checked with `bash -n`; the same genesis was run on a localnet with the host build.
+- The native stagenet deploy has not been run with the combined binary: `deploy.sh` builds it (linked, not
+  executed here) and was checked with `bash -n`; the same genesis was run on a localnet with the host build.
 
 ## `x/shielded`: proof verification
 
@@ -2371,8 +2395,8 @@ it gzip-compressed straight into `sudo install` via `/dev/stdin` (no intermediat
 predictable or not, ever touches the remote disk), and validates every value it reads back from a
 remote command (a validator address, a node ID, a consensus pubkey) against a strict format before
 ever using it to build another remote command. Its genesis sets `vote_extensions_enable_height` to 2
-(`VOTE_EXTENSIONS_ENABLE_HEIGHT`), so stagenet runs inclusion lists. The binary is built with libwasmvm (a static musl build
-linked through zig; `WASMVM_MUSL_LIB` names the release's `libwasmvm_muslc.x86_64.a`), because the genesis
+(`VOTE_EXTENSIONS_ENABLE_HEIGHT`), so stagenet runs inclusion lists. The binary is `make build-linux-amd64-full`: one static musl binary with libwasmvm and the Orchard
+verifier, built from source (see "Native library" under "`x/wasm`: contracts"), because the genesis
 stores the standard contracts (`genesis add-standard-contracts`, see "`x/wasm`: contracts"). Genesis is built the same zero-supply,
 bootstrap-committee way the localnet script uses: each node's consensus pubkey is extracted
 remotely with `oramad comet show-validator | python3 -c '...["key"]'` (reading only the *public*

@@ -20,15 +20,18 @@ import (
 type FeesKeeper interface {
 	LockDeposit(ctx context.Context, owner sdk.AccAddress, id string, amount math.Int) error
 	ReleaseDeposit(ctx context.Context, id string) (refund, burn math.Int, err error)
+	TopUpDeposit(ctx context.Context, id string, extra math.Int) error
 	ReleaseDepositPart(ctx context.Context, id string, part math.Int) (refund, burn math.Int, err error)
 	GetDeposit(ctx context.Context, id string) (feestypes.Deposit, error)
 }
 
 // ApplyStateDelta settles one contract call's net change of stored bytes.
 //
-// Growth locks growth * deposit_per_byte from payer as a new chunk. A shrink releases chunks
-// newest first, so the bytes that were added last are refunded first, each to the payer who locked
-// it. Only bytes that were charged can be refunded: a contract's first bytes (for example state
+// Growth locks growth * deposit_per_byte from payer, in that payer's chunk of the contract: an
+// existing chunk is topped up, a new payer gets a new chunk that also locks chunk_overhead_bytes,
+// and a contract holds at most max_deposit_chunks chunks, so a shrink walks a bounded list. Growth
+// past max_deposit_per_tx for the transaction is refused. A shrink releases chunks newest created
+// first, each refunded to the payer who locked it. Only bytes that were charged can be refunded: a contract's first bytes (for example state
 // present at genesis) were never charged, so a shrink past the charged total releases the
 // charged total and no more.
 func (k Keeper) ApplyStateDelta(ctx context.Context, contract, payer sdk.AccAddress, grew, shrank uint64) error {
@@ -46,6 +49,42 @@ func (k Keeper) charge(ctx context.Context, contract, payer sdk.AccAddress, n ui
 	if payer.Empty() {
 		return fmt.Errorf("%w: contract %s grew by %d bytes", types.ErrDepositPayer, contract, n)
 	}
+	limits, err := k.Limits.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load deposit limits: %w", err)
+	}
+	chunks, err := k.contractChunks(ctx, contract)
+	if err != nil {
+		return err
+	}
+	for _, c := range chunks {
+		if c.Payer == payer.String() {
+			return k.topUpChunk(ctx, contract, c, n, limits)
+		}
+	}
+	if uint64(len(chunks)) >= limits.MaxDepositChunks {
+		return fmt.Errorf("%w: contract %s has %d", types.ErrDepositLedgerFull, contract, len(chunks))
+	}
+	return k.newChunk(ctx, contract, payer, n, limits)
+}
+
+// topUpChunk adds n bytes to payer's existing chunk of contract: one payer is one deposit row.
+func (k Keeper) topUpChunk(ctx context.Context, contract sdk.AccAddress, c types.DepositChunk, n uint64, limits types.Limits) error {
+	extra := math.NewIntFromUint64(n).Mul(c.PerByte)
+	if err := spendBudget(ctx, extra, limits); err != nil {
+		return err
+	}
+	if err := k.fees.TopUpDeposit(ctx, c.DepositID, extra); err != nil {
+		return fmt.Errorf("state deposit for %d new bytes of contract %s: %w", n, contract, err)
+	}
+	c.Bytes += n
+	if err := k.Chunks.Set(ctx, collections.Join(contract.Bytes(), c.Seq), c); err != nil {
+		return fmt.Errorf("failed to update deposit chunk %s: %w", c.DepositID, err)
+	}
+	return k.addBytes(ctx, contract, n)
+}
+
+func (k Keeper) newChunk(ctx context.Context, contract, payer sdk.AccAddress, n uint64, limits types.Limits) error {
 	perByte, err := k.DepositPerByte.Get(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load deposit_per_byte: %w", err)
@@ -55,8 +94,11 @@ func (k Keeper) charge(ctx context.Context, contract, payer sdk.AccAddress, n ui
 		return fmt.Errorf("failed to take a deposit chunk sequence: %w", err)
 	}
 	chunk := types.DepositChunk{
-		Contract: contract.String(), Seq: seq, Payer: payer.String(), Bytes: n, PerByte: perByte,
+		Contract: contract.String(), Seq: seq, Payer: payer.String(), Bytes: n, Overhead: limits.ChunkOverheadBytes, PerByte: perByte,
 		DepositID: types.DepositID(contract.String(), seq),
+	}
+	if err := spendBudget(ctx, chunk.Amount(), limits); err != nil {
+		return err
 	}
 	if err := k.fees.LockDeposit(ctx, payer, chunk.DepositID, chunk.Amount()); err != nil {
 		return fmt.Errorf("state deposit for %d new bytes of contract %s: %w", n, contract, err)
@@ -65,6 +107,35 @@ func (k Keeper) charge(ctx context.Context, contract, payer sdk.AccAddress, n ui
 		return fmt.Errorf("failed to record deposit chunk %s: %w", chunk.DepositID, err)
 	}
 	return k.addBytes(ctx, contract, n)
+}
+
+// spendBudget adds amount to the transaction's deposit budget and refuses to pass max_deposit_per_tx.
+// Outside a transaction there is no budget and nothing to refuse.
+func spendBudget(ctx context.Context, amount math.Int, limits types.Limits) error {
+	b := types.DepositBudgetFrom(ctx)
+	if b == nil {
+		return nil
+	}
+	total := b.Locked.Add(amount)
+	if total.GT(limits.MaxDepositPerTx) {
+		return fmt.Errorf("%w: %s of %s", types.ErrDepositCap, total, limits.MaxDepositPerTx)
+	}
+	b.Locked = total
+	return nil
+}
+
+// contractChunks returns a contract's chunks, oldest first. There are at most max_deposit_chunks.
+func (k Keeper) contractChunks(ctx context.Context, contract sdk.AccAddress) ([]types.DepositChunk, error) {
+	var out []types.DepositChunk
+	rng := collections.NewPrefixedPairRange[[]byte, uint64](contract.Bytes())
+	err := k.Chunks.Walk(ctx, rng, func(_ collections.Pair[[]byte, uint64], c types.DepositChunk) (bool, error) {
+		out = append(out, c)
+		return false, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk deposit chunks of %s: %w", contract, err)
+	}
+	return out, nil
 }
 
 func (k Keeper) refund(ctx context.Context, contract sdk.AccAddress, n uint64) error {

@@ -27,4 +27,10 @@ var (
 
 	// ErrDepositPayer is returned when contract state grew and no account can be charged.
 	ErrDepositPayer = errors.Register(ModuleName, 6, "no account can pay the state deposit for this contract call")
+
+	// ErrDepositCap is returned when one transaction would lock more state deposit than max_deposit_per_tx.
+	ErrDepositCap = errors.Register(ModuleName, 7, "state deposit for this transaction exceeds max_deposit_per_tx")
+
+	// ErrDepositLedgerFull is returned when a contract already has max_deposit_chunks payers and a new one grows it.
+	ErrDepositLedgerFull = errors.Register(ModuleName, 8, "contract has the maximum number of state-deposit payers")
 )

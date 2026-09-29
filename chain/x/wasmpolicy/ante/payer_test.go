@@ -14,6 +14,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy"
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/ante"
+	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
 )
 
 type signedTx struct {
@@ -36,14 +37,18 @@ func payerCtx(t *testing.T) sdk.Context {
 func TestDepositPayerDecorator_setsTheFirstSigner(t *testing.T) {
 	first := sdk.AccAddress("first_signer_________")
 	var seen sdk.AccAddress
+	var budget *types.DepositBudget
 	next := func(ctx sdk.Context, _ sdk.Tx, _ bool) (sdk.Context, error) {
 		seen = wasmpolicy.DepositPayer(ctx)
+		budget = types.DepositBudgetFrom(ctx)
 		return ctx, nil
 	}
 	tx := signedTx{signers: [][]byte{first, []byte("second_signer________")}}
 	_, err := ante.NewDepositPayerDecorator().AnteHandle(payerCtx(t), tx, false, next)
 	require.NoError(t, err)
 	require.Equal(t, first, seen)
+	require.NotNil(t, budget, "every transaction gets its own deposit budget")
+	require.True(t, budget.Locked.IsZero())
 }
 
 func TestDepositPayerDecorator_noSignersLeavesNoPayer(t *testing.T) {

@@ -38,11 +38,18 @@ var lockedModules = []string{
 	"staking", "slashing", "distribution",
 }
 
-// wasmPolicyModule is locked on its one field, upload_sunset_height (P6).
-const (
-	wasmPolicyModule      = "wasmpolicy"
-	wasmPolicySunsetField = "upload_sunset_height"
-)
+// wasmPolicyModule is locked on its sunset height (P6) and its state-deposit parameters (P3 and the
+// C9 bounds). The genesis code set and the deposit ledger are contents of the genesis, not parameters:
+// `genesis add-standard-contracts` writes the first and an export carries the second.
+const wasmPolicyModule = "wasmpolicy"
+
+var wasmPolicyLocked = map[string]bool{
+	"upload_sunset_height": true,
+	"deposit_per_byte":     true,
+	"max_deposit_per_tx":   true,
+	"max_deposit_chunks":   true,
+	"chunk_overhead_bytes": true,
+}
 
 // testnetRelaxedParams are the "module.key" parameters a devnet or stagenet
 // chain-id may change. x/emission and x/power enforce their own production
@@ -112,7 +119,7 @@ func wasmPolicyDiffs(defaults, gs GenesisState) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("genesis: %w", err)
 	}
-	only := func(key string) bool { return key != wasmPolicySunsetField }
+	only := func(key string) bool { return !wasmPolicyLocked[key] }
 	return objectDiffs(wasmPolicyModule, want, got, only), nil
 }
 

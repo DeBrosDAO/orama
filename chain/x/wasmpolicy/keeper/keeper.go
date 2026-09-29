@@ -25,6 +25,7 @@ type Keeper struct {
 	Sunset         collections.Item[uint64]
 	Codes          collections.KeySet[uint64]
 	DepositPerByte collections.Item[math.Int]
+	Limits         collections.Item[types.Limits]
 	// Chunks is keyed by (contract address bytes, sequence). Sequences only grow, so a contract's
 	// newest chunk is its last row.
 	Chunks        collections.Map[collections.Pair[[]byte, uint64], types.DepositChunk]
@@ -58,6 +59,7 @@ func NewKeeper(storeService storetypes.KVStoreService, fees FeesKeeper) Keeper {
 		Sunset:         collections.NewItem(sb, types.SunsetPrefix, "upload_sunset_height", collections.Uint64Value),
 		Codes:          collections.NewKeySet(sb, types.CodePrefix, "genesis_code_ids", collections.Uint64Key),
 		DepositPerByte: collections.NewItem(sb, types.DepositPerBytePrefix, "deposit_per_byte", sdk.IntValue),
+		Limits:         collections.NewItem(sb, types.LimitsPrefix, "deposit_limits", types.JSONValue[types.Limits]{}),
 		Chunks: collections.NewMap(
 			sb, types.ChunkPrefix, "deposit_chunks",
 			collections.PairKeyCodec(collections.BytesKey, collections.Uint64Key),
@@ -98,6 +100,9 @@ func (k Keeper) InitGenesis(ctx context.Context, gs types.GenesisState) error {
 	if err := k.DepositPerByte.Set(ctx, gs.DepositPerByte); err != nil {
 		return fmt.Errorf("set deposit_per_byte: %w", err)
 	}
+	if err := k.Limits.Set(ctx, gs.Limits()); err != nil {
+		return fmt.Errorf("set deposit limits: %w", err)
+	}
 	return k.importChunks(ctx, gs.DepositChunks)
 }
 
@@ -120,11 +125,19 @@ func (k Keeper) ExportGenesis(ctx context.Context) (types.GenesisState, error) {
 	if err != nil {
 		return types.GenesisState{}, fmt.Errorf("deposit_per_byte: %w", err)
 	}
+	limits, err := k.Limits.Get(ctx)
+	if err != nil {
+		return types.GenesisState{}, fmt.Errorf("deposit limits: %w", err)
+	}
 	chunks, err := k.allChunks(ctx)
 	if err != nil {
 		return types.GenesisState{}, err
 	}
-	return types.GenesisState{UploadSunsetHeight: height, GenesisCodeIDs: ids, DepositPerByte: perByte, DepositChunks: chunks}, nil
+	return types.GenesisState{
+		UploadSunsetHeight: height, GenesisCodeIDs: ids, DepositPerByte: perByte,
+		MaxDepositPerTx: limits.MaxDepositPerTx, MaxDepositChunks: limits.MaxDepositChunks, ChunkOverheadBytes: limits.ChunkOverheadBytes,
+		DepositChunks: chunks,
+	}, nil
 }
 
 // SunsetHeight returns the genesis upload_sunset_height.

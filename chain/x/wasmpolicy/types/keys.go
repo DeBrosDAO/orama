@@ -28,6 +28,18 @@ const (
 	// price x/token and x/nodes ship. It is not a price oracle.
 	DefaultDepositPerByte int64 = 68_359
 
+	// DefaultMaxDepositPerTx caps the state deposit one transaction may lock on its signer through
+	// contract storage growth: 10 ORAMA, about 146 KB of new state at the default price.
+	DefaultMaxDepositPerTx int64 = 10_000_000_000
+
+	// DefaultMaxDepositChunks bounds the deposit rows of one contract: one per payer. A shrink walks
+	// at most this many, so it always fits in a block.
+	DefaultMaxDepositChunks uint64 = 32
+
+	// DefaultChunkOverheadBytes prices the ledger row and the x/fees deposit row a new payer adds to a
+	// contract, in bytes of storage: it is locked with the chunk and released with it.
+	DefaultChunkOverheadBytes uint64 = 512
+
 	// DefaultUploadSunsetHeight is the genesis upload_sunset_height (P6).
 	DefaultUploadSunsetHeight uint64 = SunsetDays * BlocksPerDay
 )
@@ -43,6 +55,8 @@ var (
 	ChunkPrefix = collections.NewPrefix(3)
 	// ContractBytesPrefix stores the charged byte count of each contract.
 	ContractBytesPrefix = collections.NewPrefix(4)
+	// LimitsPrefix stores the single deposit Limits.
+	LimitsPrefix = collections.NewPrefix(6)
 	// NextChunkPrefix stores the next chunk sequence.
 	NextChunkPrefix = collections.NewPrefix(5)
 )

@@ -130,3 +130,36 @@ func TestReleaseDepositPart_rejectsWholeOrZeroOrUnknown(t *testing.T) {
 	_, _, err = f.Keeper.ReleaseDepositPart(f.Ctx, "missing", math.NewInt(1))
 	require.Error(t, err)
 }
+
+func TestTopUpDeposit_addsToTheOwnersDeposit(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	owner := sdk.AccAddress("deposit_owner_topup__")
+	f.Bank.fund(owner.String(), math.NewInt(1_500))
+	require.NoError(t, f.Keeper.LockDeposit(f.Ctx, owner, "grow", math.NewInt(1_000)))
+
+	require.NoError(t, f.Keeper.TopUpDeposit(f.Ctx, "grow", math.NewInt(500)))
+
+	d, err := f.Keeper.GetDeposit(f.Ctx, "grow")
+	require.NoError(t, err)
+	require.True(t, d.Amount.Equal(math.NewInt(1_500)))
+	require.True(t, f.Bank.balanceOf(types.DepositsModuleName).Equal(math.NewInt(1_500)))
+	got, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, got.DepositsMatchModule, got.Detail)
+}
+
+func TestTopUpDeposit_rejectsZeroUnknownAndUnaffordable(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	owner := sdk.AccAddress("deposit_owner_topup2_")
+	f.Bank.fund(owner.String(), math.NewInt(10))
+	require.NoError(t, f.Keeper.LockDeposit(f.Ctx, owner, "small", math.NewInt(10)))
+
+	require.Error(t, f.Keeper.TopUpDeposit(f.Ctx, "small", math.ZeroInt()))
+	require.Error(t, f.Keeper.TopUpDeposit(f.Ctx, "missing", math.NewInt(1)))
+	require.Error(t, f.Keeper.TopUpDeposit(f.Ctx, "small", math.NewInt(5)), "the owner has no funds left")
+	d, err := f.Keeper.GetDeposit(f.Ctx, "small")
+	require.NoError(t, err)
+	require.True(t, d.Amount.Equal(math.NewInt(10)))
+}
