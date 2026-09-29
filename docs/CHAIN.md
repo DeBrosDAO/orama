@@ -338,10 +338,15 @@ balance, nobody outside the genesis bootstrap committee could ever accumulate en
 balance to self-bond a validator or delegate at all. `x/fees/ante.BondTopUpDecorator` runs after `FeeDecorator` and before signature
 verification. It tops up a signer's own shortfall (the declared bond amount minus their current
 spendable bank balance) from that same signer's own earnings, before the real
-`MsgCreateValidator`/`MsgDelegate` handler runs. The fee has already been settled, so a tx pays its
-fee and then bonds from whatever earnings remain. The top-up is in the same ante cache as the rest
-of the tx and rolls back with it. It only ever moves an address's own earnings into its own bank
-balance; a tx naming someone else's address fails signature verification.
+`MsgCreateValidator`/`MsgDelegate` handler - or the x/nodes `MsgBondNode` handler, keyed on the
+message's `operator` - runs. The fee has already been settled, so a tx pays its
+fee and then bonds from whatever earnings remain. All bond messages from one signer in a tx are
+summed first, so two `MsgBondNode` (or a delegate plus a node bond) are both funded. The top-up
+happens only when the signer's earnings cover the whole shortfall; otherwise nothing is debited and
+the message fails with the ordinary insufficient-funds error (ante writes survive a failed message,
+so a partial top-up would only move earnings into the bank for nothing). It only ever moves an
+address's own earnings into its own bank balance; a tx naming someone else's address fails
+signature verification.
 
 ### The power formula
 
@@ -577,7 +582,7 @@ touch the ledger. `SettleFee` also adds the fee to three counters: collected, bu
 A balance debited back to zero is removed from the earnings map rather than stored as a zero row.
 
 Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** (the bond
-top-up decorator) and fund the signer's own **state deposits** (`LockDeposit` takes the bank
+top-up decorator, for staking messages and `x/nodes` `MsgBondNode`) and fund the signer's own **state deposits** (`LockDeposit` takes the bank
 balance first and the shortfall from that same owner's earnings). `MsgShieldEarnings` is not
 implemented yet. It depends on `x/shielded` (C12). There is no message that sends earnings to
 another address.
@@ -756,7 +761,10 @@ node, rotating a binding (`MsgUpdateNode` replaces the whole set when one is pro
 tombstoning (keeper `Tombstone`, not a message) records the old pubkey so it cannot be bound
 again.
 
-`MsgBondNode` moves norama from the operator's bank balance into the module account.
+`MsgBondNode` moves norama from the operator's bank balance into the module account. The
+operator's own earnings fund any shortfall first (`x/fees/ante.BondTopUpDecorator`, see
+"Outsiders can bond from earnings"), so an operator whose payouts sit in earnings can bond a node
+with a zero bank balance. `MsgRegisterNode` and the cluster messages move no bond.
 `orama global bond` and `orama global unbond` build those messages. With `--node` they
 sign through the RootWallet agent and broadcast; without it they print the sign document.
 `orama global capacity` declares storage bytes, `orama global retire` retires a node,

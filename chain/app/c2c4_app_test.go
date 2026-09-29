@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	stded25519 "crypto/ed25519"
 	"encoding/json"
 	"math/rand"
 	"testing"
@@ -24,6 +25,7 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app"
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
+	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
 	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
 )
 
@@ -436,4 +438,81 @@ func addAuthAccount(t *testing.T, oramaApp *app.OramaApp, genState app.GenesisSt
 	require.NoError(t, err)
 	authGen.Accounts = packed
 	genState[authtypes.ModuleName] = oramaApp.AppCodec().MustMarshalJSON(&authGen)
+}
+
+func signedTx(t *testing.T, oramaApp *app.OramaApp, key cryptotypes.PrivKey, seed int64, gas uint64, msgs ...sdk.Msg) []byte {
+	t.Helper()
+	signer := sdk.AccAddress(key.PubKey().Address())
+	acc := oramaApp.AccountKeeper.GetAccount(oramaApp.NewContext(true), signer)
+	require.NotNil(t, acc)
+	tx, err := simtestutil.GenSignedMockTx(
+		rand.New(rand.NewSource(seed)), oramaApp.TxConfig(),
+		msgs, sdk.NewCoins(sdk.NewCoin(params.BaseDenom, math.NewInt(int64(gas)))), gas, testChainID,
+		[]uint64{acc.GetAccountNumber()}, []uint64{acc.GetSequence()}, key,
+	)
+	require.NoError(t, err)
+	txBytes, err := oramaApp.TxConfig().TxEncoder()(tx)
+	require.NoError(t, err)
+	return txBytes
+}
+
+func TestApp_operatorBondsNodeFromEarnings(t *testing.T) {
+	oramaApp := buildTestApp(t)
+	genesisTime := time.Unix(1_700_000_000, 0)
+	genState, _ := committeeGenesis(t, oramaApp, 1, 365)
+	opKey := ed25519.GenPrivKey()
+	op := sdk.AccAddress(opKey.PubKey().Address())
+	addAuthAccount(t, oramaApp, genState, opKey)
+	initChain(t, oramaApp, genState, 2_000_000, genesisTime)
+	finalize(t, oramaApp, 1, genesisTime.Add(2*time.Second))
+
+	bond := math.NewInt(1_000_000_000)
+	gas := uint64(300_000)
+	// the two bonds, plus headroom for the fees and the node-registration charge taken from the same earnings
+	credit := bond.MulRaw(2).Add(math.NewInt(200_000_000))
+	fundCtx := oramaApp.NewNextBlockContext(cmtproto.Header{Height: 2, Time: genesisTime.Add(4 * time.Second)})
+	require.NoError(t, oramaApp.BankKeeper.MintCoins(fundCtx, emissiontypes.ModuleName, sdk.NewCoins(sdk.NewCoin(params.BaseDenom, credit))))
+	require.NoError(t, oramaApp.FeesKeeper.CreditEarnings(fundCtx, emissiontypes.ModuleName, op, sdk.NewCoin(params.BaseDenom, credit)))
+	writeCache(t, fundCtx)
+	_, err := oramaApp.Commit()
+	require.NoError(t, err)
+
+	torPub, torPriv, err := stded25519.GenerateKey(nil)
+	require.NoError(t, err)
+	hot := sdk.AccAddress(ed25519.GenPrivKey().PubKey().Address())
+	register := signedTx(t, oramaApp, opKey, 3, gas,
+		&nodestypes.MsgRegisterOperator{Operator: op.String()},
+		&nodestypes.MsgRegisterNode{
+			Operator: op.String(), NodeId: "node-1", Roles: []nodestypes.Role{nodestypes.RoleRelay}, HotKey: hot.String(),
+			Bindings: []nodestypes.Binding{{
+				Service: "tor", KeyType: nodestypes.KeyTypeEd25519, Pubkey: torPub,
+				Signature: stded25519.Sign(torPriv, nodestypes.BindingSignBytes(testChainID, op.String(), "tor", torPub)),
+			}},
+			Endpoints: []string{"https://node.example:443"}, RegionHint: "eu-1",
+		})
+	resp := finalize(t, oramaApp, 3, genesisTime.Add(6*time.Second), register)
+	require.Zero(t, resp.TxResults[0].Code, "register failed: %s", resp.TxResults[0].Log)
+	require.True(t, oramaApp.BankKeeper.GetBalance(oramaApp.NewContext(true), op, params.BaseDenom).Amount.IsZero(), "operator holds no bank balance")
+
+	bondMsg := func() sdk.Msg {
+		return &nodestypes.MsgBondNode{Operator: op.String(), NodeId: "node-1", Role: nodestypes.RoleRelay, Amount: bond}
+	}
+	bondTx := signedTx(t, oramaApp, opKey, 4, gas, bondMsg(), bondMsg())
+	resp = finalize(t, oramaApp, 4, genesisTime.Add(8*time.Second), bondTx)
+	require.Zero(t, resp.TxResults[0].Code, "bond failed: %s", resp.TxResults[0].Log)
+
+	checkCtx := oramaApp.NewContext(true)
+	node, err := oramaApp.NodesKeeper.GetNode(checkCtx, "node-1")
+	require.NoError(t, err)
+	require.Equal(t, bond.MulRaw(2).String(), node.Bonds[0].Amount.String())
+	left, err := oramaApp.FeesKeeper.GetEarnings(checkCtx, op)
+	require.NoError(t, err)
+	require.True(t, left.LT(math.NewInt(200_000_000)), "earnings left = %s, want the two bonds taken out of them", left)
+
+	nodesInv, err := oramaApp.NodesKeeper.CheckInvariants(checkCtx)
+	require.NoError(t, err)
+	require.True(t, nodesInv.BalanceMatches, nodesInv.Detail)
+	feesInv, err := oramaApp.FeesKeeper.CheckInvariants(checkCtx)
+	require.NoError(t, err)
+	require.True(t, feesInv.EarningsMatchModule && feesInv.DepositsMatchModule && feesInv.FeesBalance, feesInv.Detail)
 }
