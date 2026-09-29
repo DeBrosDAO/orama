@@ -34,8 +34,9 @@ require it, and nothing in `chain/` imports `core/`.
 **Wired** in addition to the table: `x/token` (factory denoms), `x/archive` (history registry),
 and `x/nodes` (operator and global-node registry). Its end block pays matured role-bond
 unbondings.
-`x/storage` and `x/relay` are registered. Protocol deals and the operator house stay closed
-when a node has no public /16 or ASN. A relay payout cannot exceed that epoch's relay ceiling
+`x/storage` and `x/relay` are registered. A node with no literal-IP endpoint or no declared ASN
+cannot take a protocol-deal slot, and an operator without both cannot be eligible for the operator
+house (see "Node network identity" under `x/nodes`). A relay payout cannot exceed that epoch's relay ceiling
 minus what was already minted. `chain/x/inclusion` orders its own transaction
 bytes. Those bytes are not SDK transactions, and this CometBFT ProcessProposal
 commit does not carry vote extensions, so `oramad` does not put them in a block.
@@ -584,8 +585,12 @@ A balance debited back to zero is removed from the earnings map rather than stor
 Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** (the bond
 top-up decorator, for staking messages and `x/nodes` `MsgBondNode`) and fund the signer's own **state deposits** (`LockDeposit` takes the bank
 balance first and the shortfall from that same owner's earnings). `MsgShieldEarnings` is not
-implemented yet. It depends on `x/shielded` (C12). There is no message that sends earnings to
-another address.
+implemented yet. It depends on `x/shielded` (C12). The only message that moves earnings to another
+address is `x/nodes` `MsgFundHotKey`: it moves an operator's own earnings to the earnings balance of
+the hot key registered on the operator's own node (see `x/nodes`). It is a ledger move between two
+earnings entries (`Keeper.MoveEarnings`); no coins leave the `fees` module account and nothing
+reaches a bank balance, so the earnings invariant is untouched. The hot key then pays base fees
+from that balance through the ante decorator; a tip still needs a bank balance.
 
 ### State deposits (implemented, not yet consumed)
 
@@ -669,8 +674,10 @@ deposit walk.
 ## `x/houses`: two-house governance
 
 `chain/x/houses` implements plans/open-network/track-c-chain.md C5 and decisions D17 and D18.
-It is registered. `EndBlock` closes elapsed votes. The operator house stays closed: `x/nodes`
-does not store a public /16 or ASN, and an operator without those is not eligible.
+It is registered. `EndBlock` closes elapsed votes. An operator is eligible only with a /16 network
+and an ASN, which `chain/app/houses_view.go` reads from `x/nodes` (see "Node network identity"):
+the identity of the operator's lowest-id ACTIVE node that has both. An operator with no such node
+is skipped.
 
 Nobody governs during bootstrap. The parameter tier opens only when bonded stake is at least
 `bootstrap_exit_stake` (genesis default 271000 ORAMA) **or** lambda is at least 1, **and** the
@@ -728,7 +735,7 @@ Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis m
 - **Operator.** An account that may own nodes and cluster rows (`MsgRegisterOperator`).
 - **Node.** Roles `VALIDATOR`, `STORAGE`, `RELAY`, `EXIT`, `DIRAUTH`, `ARCHIVER` (fixed at
   registration); a hot key that must differ from the operator; service-key bindings; public
-  endpoints; per-role bonds; declared and reserved STORAGE capacity; status `registered`,
+  endpoints; an operator-declared `asn` (0 means undeclared); per-role bonds; declared and reserved STORAGE capacity; status `registered`,
   `active`, `jailed`, `retired`, or `tombstoned`. A role is active only while the node is
   `active` and that role's bond is at least `min_bond`.
 - **Cluster.** An optional public row: base domain, public endpoints, metadata URI. No member
@@ -745,8 +752,8 @@ Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis m
 ### Messages
 
 Every message is signed by the owning operator. `MsgUpdateNode`, `MsgBondNode`, `MsgUnbondNode`,
-`MsgDeclareCapacity`, `MsgRetireNode`, and the cluster update/retire messages fail when the
-signer is not that operator.
+`MsgDeclareCapacity`, `MsgFundHotKey`, `MsgRetireNode`, and the cluster update/retire messages
+fail when the signer is not that operator.
 
 `MsgRegisterNode` verifies each binding over the ASCII string
 `orama-global-bind-v1|chain-id|operator|service|hex(pubkey)`. secp256k1 uses the Cosmos SHA-256
@@ -764,7 +771,10 @@ again.
 `MsgBondNode` moves norama from the operator's bank balance into the module account. The
 operator's own earnings fund any shortfall first (`x/fees/ante.BondTopUpDecorator`, see
 "Outsiders can bond from earnings"), so an operator whose payouts sit in earnings can bond a node
-with a zero bank balance. `MsgRegisterNode` and the cluster messages move no bond.
+with a zero bank balance. The top-up happens only when the message names an existing node whose
+operator is the signer; otherwise nothing moves and the bond handler rejects the message, so a
+failed `MsgBondNode` cannot leave the signer's earnings sitting in its bank balance.
+`MsgRegisterNode` and the cluster messages move no bond.
 `orama global bond` and `orama global unbond` build those messages. With `--node` they
 sign through the RootWallet agent and broadcast; without it they print the sign document.
 `orama global capacity` declares storage bytes, `orama global retire` retires a node,
@@ -785,9 +795,67 @@ capacity index. `ReserveCapacity` / `ReleaseCapacity` move free capacity for a l
 module. `CreditRoleBond` increases a role bond only when the module account already holds the
 coins; it does not mint.
 
+`MsgFundHotKey{operator, node_id, amount}` (C2 item 5) moves `amount` from the operator's own
+earnings account to the earnings balance of `node.hot_key`. The message has no destination field:
+the target is always the hot key registered on the operator's own node, so earnings cannot be aimed
+at any other account. It fails for a node the signer does not operate, an unknown, retired or
+tombstoned node, a zero amount, or an amount above the operator's earnings. It follows a rotated hot
+key (`MsgUpdateNode`). `oramad tx nodes fund-hot-key [node-id] [amount-norama]` builds it. The
+bank balance is not involved, so the hot key holds a fee balance, not a public one.
+
 Node and cluster creates, and later writes that grow the record, call
 `DepositKeeper.LockDeposit` (x/fees' C2 deposit). Retire releases every part of that deposit.
 The 99%/1% split stays inside x/fees.
+
+### Node network identity
+
+The storage distinct-network rule (C7) and the operator-house caps (C5) need a /16 network and an
+ASN per node. Neither can be proven on chain, so both are **declarations by the operator**, and this
+is the trust model:
+
+- **/16 network.** Derived, not stored: the first endpoint (in registered order) whose host is a
+  literal public IPv4 address gives `a.b.0.0/16`; a literal IPv6 address gives its `/32`
+  (`types.NetworkOf`). Hostnames are skipped, because the chain cannot resolve DNS
+  deterministically. A node with no literal-IP endpoint has no network. Endpoints are validated as
+  public at `MsgRegisterNode` and `MsgUpdateNode`. The chain does not check that the node is
+  actually reachable at that address.
+- **ASN.** `MsgRegisterNode.asn`, and `MsgUpdateNode` with `set_asn` (0 clears it). The value is
+  stored on the node. Zero, `AS_TRANS` (23456), documentation ranges (64496-64511, 65536-65551),
+  private-use ranges (64512-65535, 4200000000-4294967295) are refused at the boundary and in
+  genesis validation. The spec gives no on-chain source for an ASN (an oracle would be a new trust
+  point) and this module implements no challenge or dispute for a wrong one.
+
+An operator that lies about its endpoint or ASN can make its nodes look diverse. What bounds that
+today is economics: every node needs a bond and a deposit, and protocol-deal slots also need
+distinct operators. It is a declared limit, not a detected one. The keeper reads it through
+`NodeNetwork(node id)`; `chain/app/storage_view.go` gives x/storage the same values, and
+`chain/app/houses_view.go` gives x/houses an operator's identity. A slot records the /16 and ASN
+at assignment time, so a later endpoint change does not move an existing slot.
+
+### Feeding x/storage
+
+x/storage assigns slots only to nodes in its own tracked set (`x/storage` `Nodes`). `x/nodes`
+keeps that set current without a hook or a per-block scan: every write to a node with the STORAGE
+role (`saveNode`: bond, unbond, jail, unjail, retire, slash, capacity, endpoints, hot key) queues
+its id in `StorageDirty`, and imported genesis nodes are queued the same way. At the start of its
+`BeginBlock`, x/storage drains the queue (`NodeView.TakeStorageChanges`) and reconciles each id:
+
+- **Tracked** while the STORAGE role is bonded at `min_bond` and the node is not jailed, retired
+  or tombstoned (`Keeper.StorageEligible`, which is `IsRoleActive(STORAGE)`). A node bonded only on
+  another role is not tracked and is never picked.
+- **Untracked** when it stops qualifying and holds no replicas. A node that still holds replicas
+  stays tracked, because challenge sampling and settlement read its state, and is re-queued each
+  block until its last replica is released, evicted or expired. Assignment already skips it
+  because it no longer qualifies. A probation record deposit is released on untracking.
+- Tracking never resets the storage state of an already tracked node.
+
+The tracked set is derived from x/nodes, so genesis export/import round-trips it: x/storage exports
+its `NodeState` rows, and x/nodes re-queues every imported STORAGE node so the first block
+reconciles them. Tracking is not marked probation: the fee-free probation registration (a node with
+no bond) cannot be assigned at all today, because assignment needs a bonded STORAGE role.
+
+A protocol-deal slot additionally needs a node with a known /16 and a declared ASN; a node without
+either can still hold PRIVATE and PUBLIC_PIN user deals, where only distinct operators are required.
 
 ### Service days
 
@@ -816,8 +884,7 @@ counts without it.
 
 ### Not built here
 
-The C2 fee-free registration quota is an ante rule and is not implemented. `MsgFundHotKey` is
-not a message of this module. Queries, once wired: `params`, `operator [address]`, `node [id]`,
+The C2 fee-free registration quota is an ante rule and is not implemented. Queries, once wired: `params`, `operator [address]`, `node [id]`,
 `cluster [id]`, `unbondings [node-id]`, `invariants`.
 
 ## Global services: `orama-global`
@@ -1470,7 +1537,9 @@ for anything that does.
 - **The fee-free registration quota (C2, "bootstrap only")** is not implemented. `x/nodes`
   has `MsgRegisterOperator` and `MsgRegisterNode` and is registered, but the quota is an
   ante rule and nothing in the ante does it. `MsgShieldEarnings` is not implemented.
-  `MsgFundHotKey` is not a message of `x/nodes`.
+  `x/storage` `MsgCreateDeal` still pulls its deal fee and escrow from the payer's bank balance
+  only; C2 also lets a signer's earnings fund the signer's own deal escrow, and that path is not
+  built.
 - **`x/fees`' state-deposit ledger is called by `x/token` and `x/nodes`.** Both are registered.
   `x/cnft` calls the same interface for a tree deposit and is registered.
   `x/storage` is registered and keeps deal escrow in its own module account.
