@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -25,7 +26,7 @@ import (
 // namespace separately would be acting on a namespace the user never saw in the
 // text they approved.
 func (h *Handlers) signIn(w http.ResponseWriter, r *http.Request, message, signature string) (*signedIn, bool) {
-	host, _, err := requestOrigin(r)
+	host, _, err := h.origin(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return nil, false
@@ -43,6 +44,12 @@ func (h *Handlers) signIn(w http.ResponseWriter, r *http.Request, message, signa
 	if err != nil {
 		h.recordSignInFailure(r, "", m.Address, err)
 		writeSignInError(w, err)
+		return nil, false
+	}
+	if !h.signsInTo(namespace) {
+		msg := h.wrongNamespace(namespace)
+		h.recordSignInFailure(r, namespace, m.Address, errors.New(msg))
+		writeSignInRefusal(w, ErrCodeDomainMismatch, msg)
 		return nil, false
 	}
 

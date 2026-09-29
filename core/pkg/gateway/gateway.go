@@ -575,6 +575,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// registry, never in a namespace's own RQLite, so every gateway must
 	// validate against it.
 	gw.authHandlers.SetAPIKeyDB(&authDatabaseAdapter{db: gw.apiKeyDB()})
+	bindNamespaceSignIn(gw.authHandlers, cfg)
 
 	// Expired revocations deny nothing. Pruning keeps the table the size
 	// of the revocations still in flight rather than growing forever.

@@ -43,6 +43,14 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "wallet is required")
 		return
 	}
+	req.Namespace = strings.TrimSpace(req.Namespace)
+	if h.publicHost != "" && req.Namespace == "" {
+		req.Namespace = h.defaultNS
+	}
+	if !h.signsInTo(req.Namespace) {
+		writeError(w, http.StatusForbidden, h.wrongNamespace(req.Namespace))
+		return
+	}
 
 	chain, err := authsvc.ParseChain(req.ChainType)
 	if err != nil {
@@ -50,7 +58,7 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	domain, uri, err := requestOrigin(r)
+	domain, uri, err := h.origin(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

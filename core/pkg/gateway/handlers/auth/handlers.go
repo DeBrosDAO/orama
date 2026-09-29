@@ -100,6 +100,10 @@ type Handlers struct {
 	// namespace-gateway validation in agreement. nil in most unit tests,
 	// which then exercise the netClient fallback path directly.
 	apiKeyDB DatabaseClient
+
+	// publicHost is the host a namespace gateway is reached at,
+	// ns-<namespace>.<base domain>, or "" on the cluster gateway. See origin.
+	publicHost string
 }
 
 // NewHandlers creates a new authentication handlers instance
@@ -128,6 +132,11 @@ func NewHandlers(
 // handler set. See the apiKeyDB field doc for why this exists.
 func (h *Handlers) SetAPIKeyDB(db DatabaseClient) {
 	h.apiKeyDB = db
+}
+
+// SetPublicHost names the host a namespace gateway's sign-in messages carry.
+func (h *Handlers) SetPublicHost(host string) {
+	h.publicHost = host
 }
 
 // consumeNonce claims the challenge that authorised this request, writing the

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	authhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	"go.uber.org/zap"
 )
@@ -123,4 +124,26 @@ func (g *Gateway) namespaceGatewayHint(r *http.Request) string {
 		return "ns-" + namespace + ".<base domain>"
 	}
 	return "https://ns-" + namespace + "." + base
+}
+
+// namespaceGatewayHost is the public host of a namespace gateway,
+// ns-<namespace>.<base domain>, or "" for the cluster gateway and for a gateway
+// with no base domain.
+func namespaceGatewayHost(cfg *Config) string {
+	if cfg == nil || !servesNamedNamespace(cfg.ClientNamespace) {
+		return ""
+	}
+	base := strings.TrimSpace(cfg.BaseDomain)
+	if base == "" {
+		return ""
+	}
+	return "ns-" + ownNamespace(cfg) + "." + base
+}
+
+// bindNamespaceSignIn makes a namespace gateway's sign-in messages name its
+// public host. See authhandlers.Handlers.origin.
+func bindNamespaceSignIn(h *authhandlers.Handlers, cfg *Config) {
+	if host := namespaceGatewayHost(cfg); host != "" {
+		h.SetPublicHost(host)
+	}
 }

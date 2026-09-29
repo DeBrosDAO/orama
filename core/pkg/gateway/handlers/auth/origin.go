@@ -39,6 +39,35 @@ func requestOrigin(r *http.Request) (domain, uri string, err error) {
 	return hostWithoutPort(host), u.String(), nil
 }
 
+// origin is the domain and URI a sign-in message on this gateway names.
+//
+// A namespace gateway is never reached directly. The cluster gateway proxies
+// ns-<namespace>.<base domain> to it over WireGuard with Host rewritten to the
+// upstream's address, so r.Host there is 10.0.0.x:port, a name no client
+// connected to, and every client refused the message (stagenet, 2026-09-29).
+// Its public host is fixed by its namespace and base domain, so it names that,
+// from its own configuration rather than from a header anyone could set.
+func (h *Handlers) origin(r *http.Request) (domain, uri string, err error) {
+	if h.publicHost != "" {
+		return h.publicHost, "https://" + h.publicHost, nil
+	}
+	return requestOrigin(r)
+}
+
+// signsInTo reports whether a sign-in to namespace belongs on this gateway. A
+// namespace gateway's messages name its own host, so one for another namespace
+// would read "ns-a wants you to sign in to b".
+func (h *Handlers) signsInTo(namespace string) bool {
+	return h.publicHost == "" || namespace == h.defaultNS
+}
+
+// wrongNamespace is the refusal for a sign-in to another namespace on a
+// namespace gateway.
+func (h *Handlers) wrongNamespace(namespace string) string {
+	return "this gateway, " + h.publicHost + ", signs in to namespace " + h.defaultNS +
+		" only; sign in to " + namespace + " at its own gateway"
+}
+
 // hostWithoutPort strips a port from an authority. An IPv6 literal is
 // bracketed, so only a colon after the closing bracket is a port separator.
 func hostWithoutPort(host string) string {
