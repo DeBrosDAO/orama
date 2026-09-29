@@ -1615,8 +1615,15 @@ The machine must have iproute2, nftables, a kernel with network namespaces and
 veth, and systemd 242 or newer; otherwise nothing is changed. A machine that is
 co-located must keep using --colocated on later installs.
 
+On a co-located machine the chain's RPC and REST API (and the indexer) are
+reachable on the namespace address only by root and the cluster node's account.
+--chain-client-user <name> (repeatable) also allows a local account, for example
+the ssh login that tunnels to the chain or runs 'orama chain'; an unknown account
+refuses the install, and the set is kept by later installs.
+
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--chain-client-user` | — | With --colocated: a local account, besides root and the cluster node's, allowed to connect to the chain's RPC and REST ports on the namespace address (repeatable; kept by later installs) |
 | `--chain-id` | — | Chain id, with --init-chain |
 | `--colocated` | `false` | Run the services in their own network namespace on a machine that also runs a cluster node |
 | `--enable-firewall` | `false` | Enable an inactive ufw (deny incoming, allow --ssh-port) |

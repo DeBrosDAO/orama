@@ -445,11 +445,23 @@ quorum duties with it, and a restart of one node at a time is the rule), and
 prints that the restart is needed: run `orama node restart` on the machine after
 the install, on one node at a time.
 
-**Residual.** The output rule names accounts, not programs: root and every
-process of the `orama` account (the cluster node, its gateways and the services
-it supervises) can reach the host-only ports, and so can anything on the
-machine that runs as them. A tenant deployment runs as its own dynamic user and
-cannot. CometBFT's RPC has its unsafe routes off (`rpc.unsafe = false`, which
+`orama global install --colocated --chain-client-user <name>` (repeatable) adds
+local accounts to that set: names are resolved to uids at install, an unknown
+one (or root, which is always allowed) refuses the install, and the set is kept
+in `/var/lib/orama-global/netns-chain-clients` so a later install without the
+flag keeps it. The stagenet `deploy.sh` passes each node's ssh login user, which
+the smoke tunnel (`ssh -L ...:198.18.0.2:port`) and `orama chain` run as.
+
+**Residual.** The output rule names accounts, not programs: root, the
+allowed accounts and every process of the `orama` account (the cluster node, its
+gateways and the services it supervises) can reach the host-only ports, and so
+can anything on the machine that runs as them. A tenant deployment runs as its
+own dynamic user and cannot. Ad-hoc operator access (`orama chain`,
+`stagenet-node`, `curl` to `198.18.0.2`) therefore needs root (`sudo`) or an
+allowed account. The inspector asks through `sudo -n` on a co-located machine
+and reports an error, not an empty section, when that fails. The cluster
+gateway's chain proxy works because the gateway runs as `orama`; a test fails if
+it is moved to an isolated account. CometBFT's RPC has its unsafe routes off (`rpc.unsafe = false`, which
 `oramad init` writes and the chain unit never overrides; a test asserts both).
 
 Removing the layout is not built: stop and disable the `orama-global-*` units and

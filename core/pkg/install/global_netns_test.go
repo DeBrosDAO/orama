@@ -12,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // colocatedFixture is a global fixture on a machine that already runs a
@@ -469,6 +470,14 @@ func TestColocatedListeners_refuseATemplateThatLostTheFlag(t *testing.T) {
 			t.Errorf("a %s unit without --rpc must get it exactly once, got %q, %v", s, body, err)
 		}
 	}
+	for _, exec := range []string{"/x --rpc.laddr tcp://0.0.0.0:1", "/x --rpcfoo bar"} {
+		if _, err := colocatedListeners(GlobalServiceProvider, "ExecStart="+exec+"\n"); err != nil {
+			t.Errorf("another flag that starts with --rpc was taken for --rpc: %q: %v", exec, err)
+		}
+	}
+	if _, err := colocatedListeners(GlobalServiceProvider, "ExecStart=/x --rpc=tcp://127.0.0.1:1\n"); err == nil {
+		t.Errorf("a unit with --rpc=<addr> was accepted")
+	}
 	body, err := colocatedListeners(GlobalServiceIPFS, "ExecStart=/x\n")
 	if err != nil || body != "ExecStart=/x\n" {
 		t.Errorf("the public Kubo unit must be left alone, got %q, %v", body, err)
@@ -549,5 +558,79 @@ func TestInstallGlobal_colocatedSaysTheGatewayNeedsANodeRestart(t *testing.T) {
 	}
 	if slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, "orama node restart") }) {
 		t.Error("a global-only install told the operator to restart the cluster node")
+	}
+}
+
+func uidLookup(uids map[string]int) func(string) (int, int, error) {
+	return func(name string) (int, int, error) {
+		uid, ok := uids[name]
+		if !ok {
+			return 0, 0, errors.New("no such user")
+		}
+		return uid, uid, nil
+	}
+}
+
+func renderedClientUIDs(t *testing.T, f *colocatedFixture) string {
+	t.Helper()
+	rules, err := os.ReadFile(filepath.Join(f.host.Netns.ConfigDir, "netns-host.nft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(rules), "\n") {
+		if strings.Contains(line, "meta skuid") {
+			return line[strings.Index(line, "meta skuid"):]
+		}
+	}
+	t.Fatalf("no skuid rule in:\n%s", rules)
+	return ""
+}
+
+// The uids the host ruleset allows are the cluster account's plus those of the configured chain
+// client users, and a re-install without the flag keeps them.
+func TestInstallGlobal_chainClientUsersAreResolvedToTheRenderedUIDsAndKept(t *testing.T) {
+	f := newColocatedFixture(t)
+	f.host.Lookup = uidLookup(map[string]int{supervisorUser: 998, "debian": 1000, "ubuntu": 1001})
+	opts := f.options(GlobalServiceChain)
+	opts.ChainClientUsers = []string{"ubuntu", "debian"}
+	if err := InstallGlobal(opts, f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := renderedClientUIDs(t, f); got != "meta skuid != { 0, 998, 1000, 1001 } drop" {
+		t.Errorf("rendered %q", got)
+	}
+
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := renderedClientUIDs(t, f); got != "meta skuid != { 0, 998, 1000, 1001 } drop" {
+		t.Errorf("a re-install without the flag dropped the users: %q", got)
+	}
+}
+
+func TestInstallGlobal_anUnknownOrRootChainClientUserRefusesTheInstall(t *testing.T) {
+	for name, user := range map[string]string{"unknown": "nobodyhome", "root": "root", "not a name": "a b;rm"} {
+		f := newColocatedFixture(t)
+		f.host.Lookup = uidLookup(map[string]int{supervisorUser: 998, "root": 0})
+		opts := f.options(GlobalServiceChain)
+		opts.ChainClientUsers = []string{user}
+		if err := InstallGlobal(opts, f.host); err == nil {
+			t.Errorf("%s: the install went ahead", name)
+		}
+		if _, err := os.Stat(filepath.Join(f.host.Netns.ConfigDir, "netns-host.nft")); err == nil {
+			t.Errorf("%s: the host was changed before the refusal", name)
+		}
+	}
+}
+
+// The chain proxy runs in the cluster gateway, which is allowed by being the supervisor account.
+// Moving the gateway to its own account must break this test, not the chain route.
+func TestClusterGatewayRunsAsTheAccountTheHostRuleAllows(t *testing.T) {
+	got, err := systemd.ServiceUser(string(systemd.ServiceTypeGateway), systemd.Isolated(string(systemd.ServiceTypeGateway)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != supervisorUser {
+		t.Errorf("the gateway runs as %q, but the host ruleset allows only root and %q to reach the chain", got, supervisorUser)
 	}
 }

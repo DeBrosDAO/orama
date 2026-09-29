@@ -137,6 +137,12 @@ type GlobalInstallOptions struct {
 	// provider; the public Kubo's StorageMax is that plus headroom
 	// (installers.PublicStorageMax). Required with the ipfs service.
 	PublicStorageBytes uint64
+	// ChainClientUsers are extra local accounts (besides root and the cluster node's account) that
+	// may connect to the chain's host-only ports on a co-located machine: an operator's ssh login
+	// that tunnels to the chain, or runs `orama chain`. Names are resolved to uids at install, an
+	// unknown one refuses the install, and the set is kept in the state directory so a re-install
+	// without the flag keeps it.
+	ChainClientUsers []string
 }
 
 var (

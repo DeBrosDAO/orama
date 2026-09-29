@@ -46,10 +46,10 @@ die() { printf '[%s] ERROR: %s\n' "$NODE_ID" "$*" >&2; exit 1; }
 
 # Every number below goes into shell arithmetic and onto a command line. deploy.sh validates them
 # before it stages this script, but this script runs as root on the node and does not rely on that:
-# a value that is not a plain decimal of at most 15 digits (so no sum of them overflows) is refused
+# a value that is not a plain decimal of at most 15 digits with no leading zero (bash would read 010 as octal, and no sum of them may overflow) is refused
 # before anything is changed.
 for v in ASN STORAGE_BOND ARCHIVER_BOND CAPACITY_BYTES HOT_KEY_FUND TX_GAS TX_FEE; do
-	[[ ${!v} =~ ^[0-9]{1,15}$ ]] || die "$v is not a plain number of at most 15 digits: ${!v}"
+	[[ ${!v} =~ ^(0|[1-9][0-9]{0,14})$ ]] || die "$v is not a plain number of at most 15 digits without leading zeros: ${!v}"
 done
 
 # The operator key, as one hex line, from oramad's test keyring. Anything else it prints is ignored
@@ -126,7 +126,7 @@ done
 
 # --- earnings must cover the bonds --------------------------------------------------------------
 earnings=$("$HELPER" earnings --rpc "$RPC" --address "$operator")
-[[ $earnings =~ ^[0-9]{1,15}$ ]] || die "the operator's earnings read as '$earnings', not a number the chain could hold"
+[[ $earnings =~ ^(0|[1-9][0-9]{0,14})$ ]] || die "the operator's earnings read as '$earnings', not a number the chain could hold"
 need=$((STORAGE_BOND + ARCHIVER_BOND + HOT_KEY_FUND + EARNINGS_MARGIN + 6 * TX_FEE))
 if [ "$(node_field exists)" != true ] && [ "$earnings" -lt "$need" ]; then
 	die "the operator's earnings are $earnings norama; registering needs about $need. Let the chain run longer (more epochs) and retry"

@@ -192,6 +192,16 @@ on() {
 	ssh -o BatchMode=yes -o ServerAliveInterval=15 "$alias" "$@"
 }
 
+# login_user <alias>: the account ssh logs into the node as, from the ssh config this script already
+# uses. It is allowed to reach the chain on the namespace address (smoke tunnels to it and operators
+# run `orama chain` from it), so `global install` is told about it with --chain-client-user.
+login_user() {
+	local user
+	user="$(ssh -G "$1" | awk '$1 == "user" { print $2; exit }')"
+	validate "$user" '^[a-z_][a-z0-9_-]{0,31}$' "ssh login user of $1"
+	echo "$user"
+}
+
 # remote_run <alias> <arg>...: shell-quotes every argument with printf %q before joining them into
 # the command line ssh sends, so a value that happens to contain shell metacharacters (spaces,
 # quotes, `;`, backticks, ...) is passed through literally instead of being interpreted - this is
@@ -383,7 +393,8 @@ global_install() {
 	local alias="$1" name="$2" phase="$3" peers="${4:-}" services="chain,ipfs,provider,archiver"
 	[ "$name" = "$INDEXER_NODE" ] && services="$services,indexer"
 	local args=(sudo "$STAGE_DIR/orama" global install --colocated --services "$services"
-		--public-storage-gb "$PUBLIC_STORAGE_GB" --staged-dir "$STAGE_DIR")
+		--public-storage-gb "$PUBLIC_STORAGE_GB" --staged-dir "$STAGE_DIR"
+		--chain-client-user "$(login_user "$alias")")
 	if [ "$phase" = 1 ]; then
 		args+=(--init-chain --chain-id "$CHAIN_ID" --moniker "$name" --genesis "$STAGE_DIR/genesis.json")
 	else

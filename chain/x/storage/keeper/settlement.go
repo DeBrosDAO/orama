@@ -268,6 +268,9 @@ func (k Keeper) SettleQueue(ctx sdk.Context) error {
 	if err != nil {
 		return err
 	}
+	if head >= tail {
+		return nil
+	}
 	epoch, err := k.emission.CurrentEpoch(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read the current epoch: %w", err)

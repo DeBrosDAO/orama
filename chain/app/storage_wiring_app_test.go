@@ -425,3 +425,23 @@ func TestApp_bondNodeForAnUnknownNodeDoesNotMoveEarningsToTheBankBalance(t *test
 	require.NoError(t, err)
 	require.True(t, credit.Sub(left).LT(math.NewInt(200_000_000)), "only the fee left the earnings, not the bond amount")
 }
+
+// x/storage jails a probation node that proved nothing when its probation expires. A node that is
+// already jailed (or retired) is out of service, so jailing it again must succeed: a refusal would
+// fail the expiry of that node every block and its probation would never end.
+func TestApp_jailingAnAlreadyOutOfServiceNodeSucceeds(t *testing.T) {
+	c := newWiringChain(t)
+	c.addProbationNode("p1", "https://45.33.100.10:443", 15169)
+	c.addStorageNode("s1", "https://93.184.113.10:443", 13335)
+	c.blocks(1)
+	jail := app.StorageNodesJailForTest(c.app.NodesKeeper)
+
+	c.write(func(ctx sdk.Context) {
+		require.NoError(t, jail(ctx, "p1"))
+		require.NoError(t, jail(ctx, "p1"), "a second jail of a jailed node")
+		require.NoError(t, c.app.NodesKeeper.Tombstone(ctx, "s1"))
+		require.NoError(t, jail(ctx, "s1"), "jailing a tombstoned node")
+		err := jail(ctx, "no-such-node")
+		require.ErrorIs(t, err, storagetypes.ErrItemRejected, "a node that does not exist is still a refusal")
+	})
+}

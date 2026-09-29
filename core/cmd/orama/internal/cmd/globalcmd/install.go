@@ -15,17 +15,18 @@ const bytesPerGB = 1_000_000_000
 const defaultSSHPort = 22
 
 var installFlags struct {
-	services        []string
-	stagedDir       string
-	publicStorageGB uint64
-	peers           string
-	initChain       bool
-	chainID         string
-	moniker         string
-	genesis         string
-	enableFirewall  bool
-	sshPort         int
-	colocated       bool
+	services         []string
+	stagedDir        string
+	publicStorageGB  uint64
+	peers            string
+	initChain        bool
+	chainID          string
+	moniker          string
+	genesis          string
+	enableFirewall   bool
+	sshPort          int
+	colocated        bool
+	chainClientUsers []string
 }
 
 var installCmd = &cobra.Command{
@@ -81,7 +82,13 @@ forwarded in. It writes orama-global-netns.service, two nftables rulesets and a
 resolv.conf under /etc/orama-global, and records role both in preferences.yaml.
 The machine must have iproute2, nftables, a kernel with network namespaces and
 veth, and systemd 242 or newer; otherwise nothing is changed. A machine that is
-co-located must keep using --colocated on later installs.`,
+co-located must keep using --colocated on later installs.
+
+On a co-located machine the chain's RPC and REST API (and the indexer) are
+reachable on the namespace address only by root and the cluster node's account.
+--chain-client-user <name> (repeatable) also allows a local account, for example
+the ssh login that tunnels to the chain or runs 'orama chain'; an unknown account
+refuses the install, and the set is kept by later installs.`,
 	Args: cobra.NoArgs,
 	RunE: runInstall,
 }
@@ -98,6 +105,7 @@ func init() {
 	f.StringVar(&installFlags.genesis, "genesis", "", "The network's genesis.json, with --init-chain")
 	f.BoolVar(&installFlags.enableFirewall, "enable-firewall", false, "Enable an inactive ufw (deny incoming, allow --ssh-port)")
 	f.IntVar(&installFlags.sshPort, "ssh-port", defaultSSHPort, "SSH port --enable-firewall allows")
+	f.StringSliceVar(&installFlags.chainClientUsers, "chain-client-user", nil, "With --colocated: a local account, besides root and the cluster node's, allowed to connect to the chain's RPC and REST ports on the namespace address (repeatable; kept by later installs)")
 	f.BoolVar(&installFlags.colocated, "colocated", false, "Run the services in their own network namespace on a machine that also runs a cluster node")
 	Cmd.AddCommand(installCmd)
 }
@@ -111,6 +119,10 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		Services: services, StagedDir: installFlags.stagedDir, PersistentPeers: installFlags.peers,
 		EnableFirewall: installFlags.enableFirewall, SSHPort: installFlags.sshPort, Colocated: installFlags.colocated,
 		PublicStorageBytes: installFlags.publicStorageGB * bytesPerGB,
+		ChainClientUsers:   installFlags.chainClientUsers,
+	}
+	if len(opts.ChainClientUsers) > 0 && !opts.Colocated {
+		return clierr.Usage("--chain-client-user only applies with --colocated")
 	}
 	if installFlags.initChain {
 		opts.InitChain = &install.ChainInit{

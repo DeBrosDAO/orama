@@ -289,6 +289,8 @@ type fakeEmission struct {
 	ceiling map[uint64]math.Int
 	bank    *fakeBank
 	minted  map[uint64]math.Int
+	// epochCalls counts CurrentEpoch reads.
+	epochCalls int
 }
 
 // MintStorageService mirrors x/emission: it refuses a mint past the epoch's
@@ -306,7 +308,10 @@ func (e *fakeEmission) MintStorageService(ctx context.Context, epoch uint64, amt
 	return e.bank.MintCoins(ctx, types.ModuleName, sdk.NewCoins(sdk.NewCoin(params.BaseDenom, amt)))
 }
 
-func (e *fakeEmission) CurrentEpoch(context.Context) (uint64, error) { return e.epoch, nil }
+func (e *fakeEmission) CurrentEpoch(context.Context) (uint64, error) {
+	e.epochCalls++
+	return e.epoch, nil
+}
 
 func (e *fakeEmission) StorageCeiling(_ context.Context, epoch uint64) (math.Int, error) {
 	if v, ok := e.ceiling[epoch]; ok {

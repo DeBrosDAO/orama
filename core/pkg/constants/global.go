@@ -64,6 +64,10 @@ const (
 	// co-located layout puts that value back.
 	GlobalNetnsPriorForwardFile = "netns-prior-ip-forward"
 
+	// GlobalNetnsChainClientsFile, in GlobalStateRoot, lists the extra local accounts (one per line)
+	// allowed to connect to the chain's host-only ports on a co-located machine.
+	GlobalNetnsChainClientsFile = "netns-chain-clients"
+
 	// GlobalBinDir holds the binaries the global units run: root-owned, 0755,
 	// outside /opt/orama so the units' tmpfs over /opt/orama does not hide them.
 	GlobalBinDir = "/usr/lib/orama-global/bin"

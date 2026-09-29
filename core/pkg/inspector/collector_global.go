@@ -23,11 +23,20 @@ func collectGlobalNode(ctx context.Context, node Node) (*report.ChainReport, *re
 	return parseGlobalCollect(res.Stdout, time.Now())
 }
 
+// chainCurlFailed is what the collection script prints in a chain section when the request failed.
+const chainCurlFailed = "ORAMA_CHAIN_CURL_FAILED"
+
 func globalCollectScript() string {
 	return fmt.Sprintf(`
 mark() { echo "===ORAMA_GLOBAL $1==="; }
 chain_host=127.0.0.1
 [ -e /etc/systemd/system/%s ] && chain_host=%s
+# On a co-located machine the chain listens on the namespace address, which only root and the
+# accounts the install allowed reach: ask through sudo, and say so when the answer does not come
+# instead of printing nothing (a chain that is down and one that cannot be asked look the same).
+chain_curl() {
+  if [ "$chain_host" = %s ]; then sudo -n curl -sf --max-time 3 "$1"; else curl -sf --max-time 3 "$1"; fi || echo %s
+}
 unit_load() { systemctl show -p LoadState --value "$1" 2>/dev/null || echo unknown; }
 unit_state() { systemctl is-active "$1" 2>/dev/null || true; }
 mark chain_load
@@ -35,17 +44,17 @@ unit_load %s
 mark chain_state
 unit_state %s
 mark status
-curl -sf --max-time 3 http://$chain_host:%d/status || true
+chain_curl http://$chain_host:%d/status
 mark net
-curl -sf --max-time 3 http://$chain_host:%d/net_info || true
+chain_curl http://$chain_host:%d/net_info
 mark validators
-curl -sf --max-time 3 "http://$chain_host:%d/validators?per_page=1" || true
+chain_curl "http://$chain_host:%d/validators?per_page=1"
 mark params
-curl -sf --max-time 3 http://$chain_host:%d/cosmos/slashing/v1beta1/params || true
+chain_curl http://$chain_host:%d/cosmos/slashing/v1beta1/params
 mark signing
-curl -sf --max-time 3 "http://$chain_host:%d/cosmos/slashing/v1beta1/signing_infos?pagination.limit=200" || true
+chain_curl "http://$chain_host:%d/cosmos/slashing/v1beta1/signing_infos?pagination.limit=200"
 mark staking
-curl -sf --max-time 3 "http://$chain_host:%d/cosmos/staking/v1beta1/validators?pagination.limit=200" || true
+chain_curl "http://$chain_host:%d/cosmos/staking/v1beta1/validators?pagination.limit=200"
 mark ipfs_load
 unit_load %s
 mark ipfs_state
@@ -72,7 +81,7 @@ unit_state %s
 mark relay_monitor
 sudo -n head -c 4096 %s/%s 2>/dev/null || true
 `,
-		globalnetns.UnitName, constants.GlobalNetnsAddr,
+		globalnetns.UnitName, constants.GlobalNetnsAddr, constants.GlobalNetnsAddr, chainCurlFailed,
 		constants.ChainServiceUnit, constants.ChainServiceUnit,
 		constants.ChainRPCPort, constants.ChainRPCPort, constants.ChainRPCPort,
 		constants.ChainAPIPort, constants.ChainAPIPort, constants.ChainAPIPort,
@@ -114,6 +123,17 @@ func chainFromSections(sections map[string]string, now time.Time) *report.ChainR
 	state := strings.TrimSpace(sections["chain_state"])
 	if state == "" {
 		state = "inactive"
+	}
+	if state == "active" && strings.Contains(sections["status"], chainCurlFailed) {
+		return &report.ChainReport{
+			ServiceActive: true, UnitState: state,
+			Error: "the chain unit is active but its RPC could not be read from this machine (co-located: sudo -n curl to the namespace address failed; check the node account's passwordless sudo)",
+		}
+	}
+	for _, key := range []string{"status", "net", "validators", "params", "signing", "staking"} {
+		if strings.Contains(sections[key], chainCurlFailed) {
+			sections[key] = ""
+		}
 	}
 	r := report.FillChainView([]byte(sections["status"]), []byte(sections["net"]), []byte(sections["validators"]), now)
 	r.ServiceActive = state == "active"

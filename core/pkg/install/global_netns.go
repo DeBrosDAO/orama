@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -26,6 +27,8 @@ const (
 	netnsDirMode = 0o755
 	// priorForwardLimit bounds the recorded sysctl value read back.
 	priorForwardLimit = 16
+	// chainClientsLimit bounds the recorded account list read back.
+	chainClientsLimit = 4096
 
 	// roleCluster, roleGlobal and roleBoth are the values preferences.yaml
 	// records; they are boot.Role's strings without importing the node package.
@@ -64,6 +67,9 @@ func DefaultNetnsHost(run commandRunner) NetnsHost {
 type netnsPlan struct {
 	layout globalnetns.Layout
 	prefs  *NodePreferences
+	// clientUsers are the extra accounts allowed to reach the host-only ports, by name: the
+	// persisted set plus this install's, sorted. They are saved once the layout is written.
+	clientUsers []string
 }
 
 // planNetns runs the checks a co-located install needs before the host
@@ -83,17 +89,31 @@ func planNetns(g GlobalHost, opts GlobalInstallOptions) (*netnsPlan, error) {
 		return nil, fmt.Errorf("this machine's role is global: it has no cluster node to share with; drop --colocated")
 	}
 	layout := globalnetns.Layout{Ports: opts.firewall().Ports(), HostPorts: opts.hostPorts(), Tools: tools}
+	var users []string
 	if len(layout.HostPorts) > 0 {
 		uid, _, err := g.Lookup(supervisorUser)
 		if err != nil {
-			return nil, fmt.Errorf("cannot find the %s account the cluster node runs as, the only account besides root allowed to reach the chain's host-only ports: %w", supervisorUser, err)
+			return nil, fmt.Errorf("cannot find the %s account the cluster node runs as, which is allowed to reach the chain's host-only ports: %w", supervisorUser, err)
 		}
 		layout.HostClientUIDs = []int{uid}
+		if users, err = chainClientUsers(g, opts); err != nil {
+			return nil, err
+		}
+		for _, name := range users {
+			cuid, _, err := g.Lookup(name)
+			if err != nil {
+				return nil, fmt.Errorf("--chain-client-user %q: no such account: %w", name, err)
+			}
+			if cuid == 0 {
+				return nil, fmt.Errorf("--chain-client-user %q is root, which is always allowed", name)
+			}
+			layout.HostClientUIDs = append(layout.HostClientUIDs, cuid)
+		}
 	}
 	if err := layout.Validate(); err != nil {
 		return nil, err
 	}
-	return &netnsPlan{layout: layout, prefs: prefs}, nil
+	return &netnsPlan{layout: layout, prefs: prefs, clientUsers: users}, nil
 }
 
 // readClusterPreferences reads the cluster node's preferences.yaml. Its
@@ -137,6 +157,42 @@ func refuseGlobalOnlyOnColocated(h NetnsHost) error {
 	return nil
 }
 
+var chainClientUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
+// chainClientUsers is the persisted set of extra chain client accounts joined with this install's,
+// sorted and without repeats. A re-install without the flag keeps what an earlier one allowed.
+func chainClientUsers(g GlobalHost, opts GlobalInstallOptions) ([]string, error) {
+	path := filepath.Join(g.StateDir, constants.GlobalNetnsChainClientsFile)
+	names := slices.Clone(opts.ChainClientUsers)
+	data, err := g.StateRoot.ReadFile(path, chainClientsLimit)
+	switch {
+	case err == nil:
+		names = append(names, strings.Fields(string(data))...)
+	case !errors.Is(err, fs.ErrNotExist):
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	slices.Sort(names)
+	names = slices.Compact(names)
+	for _, n := range names {
+		if !chainClientUserPattern.MatchString(n) {
+			return nil, fmt.Errorf("chain client account %q is not a plain account name", n)
+		}
+	}
+	return names, nil
+}
+
+func saveChainClientUsers(h GlobalHost, users []string) error {
+	path := filepath.Join(h.StateDir, constants.GlobalNetnsChainClientsFile)
+	body := strings.Join(users, "\n")
+	if body != "" {
+		body += "\n"
+	}
+	if err := h.StateRoot.WriteFile(path, []byte(body), globalUnitMode); err != nil {
+		return fmt.Errorf("record the chain client accounts in %s: %w", path, err)
+	}
+	return nil
+}
+
 // recordPriorForwarding saves the value net.ipv4.ip_forward has before the layout turns it on, in
 // the global state directory, once: a second install (or one that follows a partial one) finds the
 // layout's own 1 in the kernel and must not overwrite what the machine had. Removing the layout
@@ -169,6 +225,11 @@ func writeNetns(h GlobalHost, plan *netnsPlan) error {
 	n := h.Netns
 	if err := recordPriorForwarding(h, plan); err != nil {
 		return err
+	}
+	if len(plan.layout.HostPorts) > 0 {
+		if err := saveChainClientUsers(h, plan.clientUsers); err != nil {
+			return err
+		}
 	}
 	for _, dir := range []string{n.ConfigDir, filepath.Dir(n.SysctlFile)} {
 		if err := n.Root.MkdirAll(dir, netnsDirMode); err != nil {
@@ -283,7 +344,7 @@ func colocatedListeners(s GlobalService, body string) (string, error) {
 		// Appending a second --rpc would silently win or lose against the first depending on the
 		// flag parser, so a template that already names one fails the install, as a chain unit
 		// with no flag to move does.
-		if strings.Contains(exec, " --rpc") {
+		if hasRPCFlag(exec) {
 			return "", fmt.Errorf("the %s unit already has an --rpc flag, so the namespace address cannot be added exactly once", s)
 		}
 		return strings.Replace(body, "ExecStart="+exec, "ExecStart="+exec+" --rpc "+rpcFlag, 1), nil
@@ -297,6 +358,17 @@ func colocatedListeners(s GlobalService, body string) (string, error) {
 		body = strings.Replace(body, sw[0], sw[1], 1)
 	}
 	return body, nil
+}
+
+// hasRPCFlag reports whether an ExecStart line already has the flag --rpc, as its own token
+// (--rpc <addr> or --rpc=<addr>), not as the start of another flag such as --rpc.laddr.
+func hasRPCFlag(exec string) bool {
+	for _, tok := range strings.Fields(exec) {
+		if tok == "--rpc" || strings.HasPrefix(tok, "--rpc=") {
+			return true
+		}
+	}
+	return false
 }
 
 // mustExecStart is the value of the unit's only ExecStart= line, or "".

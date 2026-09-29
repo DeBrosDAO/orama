@@ -313,3 +313,20 @@ func TestMiss_aMissRowOfAMissingDealIsFinishedNotRetried(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), n)
 }
+
+// An empty queue costs no collaborator read: the epoch is asked for only when there is a row to settle.
+func TestSettleQueue_anEmptyQueueDoesNotReadTheEpoch(t *testing.T) {
+	f, _, _ := twoFullDeals(t)
+	require.Empty(t, f.queuedRows(t))
+	before := f.Emission.epochCalls
+
+	require.NoError(t, f.Keeper.SettleQueue(f.Ctx))
+	require.Equal(t, before, f.Emission.epochCalls)
+
+	require.NoError(t, f.Keeper.Queue.Set(f.Ctx, 999, types.Settlement{Seq: 999, DealId: 12345, Slot: 0, NodeId: "n"}))
+	require.NoError(t, f.Keeper.QueueTail.Set(f.Ctx, 1000))
+	require.NoError(t, f.Keeper.QueueHead.Set(f.Ctx, 999))
+	require.NoError(t, f.Keeper.QueuePending.Set(f.Ctx, 12345, 1))
+	require.NoError(t, f.Keeper.SettleQueue(f.Ctx))
+	require.Equal(t, before+1, f.Emission.epochCalls, "a queued row reads the epoch once")
+}
