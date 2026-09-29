@@ -56,8 +56,13 @@ func GetCmdAttest() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to get client context: %w", err)
 			}
+			nodeID, err := cmd.Flags().GetString(flagNodeID)
+			if err != nil {
+				return fmt.Errorf("read --%s: %w", flagNodeID, err)
+			}
 			msg := &types.MsgAttest{
 				Archiver:    clientCtx.GetFromAddress().String(),
+				NodeId:      nodeID,
 				StartHeight: start,
 				EndHeight:   end,
 				BundleCid:   args[2],
@@ -70,6 +75,7 @@ func GetCmdAttest() *cobra.Command {
 			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
 		},
 	}
+	addNodeIDFlag(cmd)
 	flags.AddTxFlagsToCmd(cmd)
 	return cmd
 }
@@ -93,8 +99,13 @@ func GetCmdAttachReplicas() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to get client context: %w", err)
 			}
+			nodeID, err := cmd.Flags().GetString(flagNodeID)
+			if err != nil {
+				return fmt.Errorf("read --%s: %w", flagNodeID, err)
+			}
 			msg := &types.MsgAttachReplicas{
 				Archiver:    clientCtx.GetFromAddress().String(),
+				NodeId:      nodeID,
 				StartHeight: start,
 				EndHeight:   end,
 				DealIds:     append([]string(nil), args[2:]...),
@@ -105,8 +116,18 @@ func GetCmdAttachReplicas() *cobra.Command {
 			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
 		},
 	}
+	addNodeIDFlag(cmd)
 	flags.AddTxFlagsToCmd(cmd)
 	return cmd
+}
+
+// flagNodeID names the archiver node the signer's hot key belongs to. x/archive
+// counts one attestation per operator, keyed through that node.
+const flagNodeID = "node-id"
+
+func addNodeIDFlag(cmd *cobra.Command) {
+	cmd.Flags().String(flagNodeID, "", "x/nodes id of the ARCHIVER node whose hot key signs (required)")
+	_ = cmd.MarkFlagRequired(flagNodeID)
 }
 
 func parseHeight(s string) (int64, error) {
