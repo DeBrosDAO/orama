@@ -264,3 +264,75 @@ func TestGlobalFirewallPorts(t *testing.T) {
 		t.Errorf("no service published ports %v", got)
 	}
 }
+
+func TestInstallGlobal_colocatedPutsTheKuboIndexerAndCosmovisorUnitsInTheNamespace(t *testing.T) {
+	f := newColocatedFixture(t)
+	if err := InstallGlobal(f.options(GlobalServiceChain, GlobalServiceIPFS, GlobalServiceProvider, GlobalServiceIndexer), f.host); err != nil {
+		t.Fatal(err)
+	}
+	hostRules, err := os.ReadFile(filepath.Join(f.host.Netns.ConfigDir, "netns-host.nft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hostRules), "tcp dport { 31000, 31010, 31013 } dnat to 198.18.0.2") ||
+		!strings.Contains(string(hostRules), "udp dport { 31000, 31010 } dnat to 198.18.0.2") {
+		t.Errorf("host rules do not publish the Kubo swarm beside the chain and provider ports:\n%s", hostRules)
+	}
+	if strings.Contains(string(hostRules), "31011") || strings.Contains(string(hostRules), "31015") {
+		t.Errorf("a loopback port (Kubo RPC, indexer) is published:\n%s", hostRules)
+	}
+	inNamespace := []string{constants.ChainServiceUnit, constants.GlobalIPFSUnit, globalIPFSGCUnit, constants.GlobalProviderUnit, constants.GlobalIndexerUnit}
+	for _, unit := range inNamespace {
+		body, err := os.ReadFile(filepath.Join(f.host.UnitDir, unit))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"NetworkNamespacePath=/run/netns/orama-global", "BindsTo=orama-global-netns.service"} {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("%s lacks %s", unit, want)
+			}
+		}
+	}
+	chain, _ := os.ReadFile(filepath.Join(f.host.UnitDir, constants.ChainServiceUnit))
+	if !strings.Contains(string(chain), "/cosmovisor run start") || !strings.Contains(string(chain), "check-sign-floor") {
+		t.Errorf("the co-located chain unit is not the cosmovisor unit:\n%s", chain)
+	}
+	timer, err := os.ReadFile(filepath.Join(f.host.UnitDir, globalIPFSGCTimer))
+	if err != nil || strings.Contains(string(timer), "NetworkNamespacePath=") || string(timer) != RenderGlobalIPFSGCTimer() {
+		t.Errorf("the GC timer must be written unchanged, outside the namespace (%v)", err)
+	}
+	// The provider and Kubo share the namespace, so the provider's dial of 127.0.0.1:31011 stays local.
+	provider, _ := os.ReadFile(filepath.Join(f.host.UnitDir, constants.GlobalProviderUnit))
+	if !strings.Contains(string(provider), "--ipfs-api http://127.0.0.1:31011") {
+		t.Errorf("provider does not use Kubo's loopback RPC:\n%s", provider)
+	}
+	wantRoutes := []string{
+		"route allow in on ogl-host comment orama-global",
+		"route allow proto tcp to 198.18.0.2 port 31000 comment orama-global",
+		"route allow proto udp to 198.18.0.2 port 31000 comment orama-global",
+		"route allow proto tcp to 198.18.0.2 port 31010 comment orama-global",
+		"route allow proto udp to 198.18.0.2 port 31010 comment orama-global",
+		"route allow proto tcp to 198.18.0.2 port 31013 comment orama-global",
+	}
+	want := append([]string{"status"}, wantRoutes...)
+	if got := f.node.named("ufw"); !slices.Equal(got, want) {
+		t.Errorf("ufw calls = %v, want %v", got, want)
+	}
+	systemctl := f.node.named("systemctl")
+	for _, unit := range []string{globalIPFSGCTimer, constants.GlobalIndexerUnit, globalnetns.UnitName} {
+		if !slices.Contains(systemctl, "enable "+unit) {
+			t.Errorf("%s was not enabled: %v", unit, systemctl)
+		}
+	}
+	if slices.Contains(systemctl, "enable "+globalIPFSGCUnit) {
+		t.Error("the GC oneshot was enabled")
+	}
+}
+
+func TestGlobalFirewallPorts_publicKuboSwarm(t *testing.T) {
+	got := GlobalFirewall{PublicStorage: true}.Ports()
+	want := []globalnetns.Port{{Proto: "tcp", Number: 31010}, {Proto: "udp", Number: 31010}}
+	if !slices.Equal(got, want) {
+		t.Errorf("Ports() = %v, want %v", got, want)
+	}
+}

@@ -241,6 +241,9 @@ func (l Layout) RenderUnit() string {
 const (
 	unitSectionAnchor    = "StartLimitIntervalSec=0\n"
 	serviceSectionAnchor = "Type=simple\n"
+	// oneshotSectionAnchor stands in for serviceSectionAnchor in a oneshot
+	// (the public Kubo's GC), which is no long-running service.
+	oneshotSectionAnchor = "Type=oneshot\n"
 )
 
 // ApplyToUnit puts a global unit inside the namespace: it is bound to the
@@ -250,6 +253,10 @@ const (
 func ApplyToUnit(unit string) (string, error) {
 	if strings.Contains(unit, "NetworkNamespacePath=") {
 		return "", fmt.Errorf("the unit already joins a network namespace")
+	}
+	serviceSectionAnchor := serviceSectionAnchor
+	if strings.Count(unit, oneshotSectionAnchor) == 1 {
+		serviceSectionAnchor = oneshotSectionAnchor
 	}
 	if strings.Count(unit, unitSectionAnchor) != 1 || strings.Count(unit, serviceSectionAnchor) != 1 {
 		return "", fmt.Errorf("the unit has no %q and %q line to anchor the namespace settings on", strings.TrimSpace(unitSectionAnchor), strings.TrimSpace(serviceSectionAnchor))

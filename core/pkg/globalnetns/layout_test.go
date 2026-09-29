@@ -148,3 +148,15 @@ func TestRenderResolvConfAndSysctl(t *testing.T) {
 		t.Error("sysctl does not enable forwarding")
 	}
 }
+
+func TestApplyToUnit_joinsTheNamespaceFromAOneshot(t *testing.T) {
+	got, err := ApplyToUnit("[Unit]\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=/bin/true\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"BindsTo=" + UnitName + "\n", "NetworkNamespacePath=" + Path + "\n", "Type=oneshot\nNetworkNamespacePath="} {
+		if !strings.Contains(got, want) {
+			t.Errorf("unit lacks %q:\n%s", want, got)
+		}
+	}
+}

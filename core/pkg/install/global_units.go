@@ -246,6 +246,7 @@ func renderGlobalOneshot(description, user, state, home, exec string) string {
 	return fmt.Sprintf(`[Unit]
 Description=%s
 After=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot

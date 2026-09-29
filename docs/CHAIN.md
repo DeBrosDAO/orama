@@ -1289,7 +1289,10 @@ configured:
   removed; if the unpin fails the binding stays and the next sweep retries.
 - Without `--ipfs-api` the provider does not pin, and nothing above happens.
 
-An ARCHIVE bundle's x/archive `bundle_cid` is CIDv1 raw sha2-256 of the whole
+ARCHIVE deals opened by `MsgCreateArchiveDeal` commit to the bundle file's `piece/`
+root, so the slot's bytes are the bundle file. Nothing in the archiver sends those
+bytes to the assigned providers: they arrive by `POST /pieces/<root>` or, when the
+bundle is fetchable from IPFS, by `POST /pins/<root>`. An ARCHIVE bundle's x/archive `bundle_cid` is CIDv1 raw sha2-256 of the whole
 file. It is a hash of the file, not the root of a UnixFS DAG, so Kubo can serve
 it by that CID only when the bundle fits in one block. A bundle above that is
 fetchable by the CID that `ipfs add` returns for it, which is not the
