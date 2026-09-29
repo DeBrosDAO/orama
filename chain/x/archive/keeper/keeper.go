@@ -26,12 +26,17 @@ type Keeper struct {
 	Params             collections.Item[types.Params]
 	LastArchivedHeight collections.Item[int64]
 	Ranges             collections.Map[collections.Pair[int64, int64], types.RangeRecord]
+
+	nodes   types.NodesKeeper
+	storage types.StorageKeeper
 }
 
 // NewKeeper builds an x/archive Keeper.
-func NewKeeper(cdc codec.BinaryCodec, storeService storetypes.KVStoreService) Keeper {
+func NewKeeper(cdc codec.BinaryCodec, storeService storetypes.KVStoreService, nodes types.NodesKeeper, storage types.StorageKeeper) Keeper {
 	sb := collections.NewSchemaBuilder(storeService)
 	k := Keeper{
+		nodes:              nodes,
+		storage:            storage,
 		Params:             collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
 		LastArchivedHeight: collections.NewItem(sb, types.LastArchivedHeightKey, "last_archived_height", collections.Int64Value),
 		Ranges: collections.NewMap(

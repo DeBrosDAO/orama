@@ -41,14 +41,16 @@ type Chain interface {
 type Runner struct {
 	chain    Chain
 	archiver string
+	nodeID   string
 	dir      string
 	width    int64
 }
 
-// NewRunner writes bundles under dir and signs attestations as archiver.
-func NewRunner(chain Chain, archiver, dir string, width int64) (*Runner, error) {
-	if chain == nil || archiver == "" || dir == "" {
-		return nil, errors.New("archiver needs a chain, a signer, and a directory")
+// NewRunner writes bundles under dir and signs attestations as archiver, the
+// hot key of nodeID, an x/nodes node with an ARCHIVER role bond.
+func NewRunner(chain Chain, archiver, nodeID, dir string, width int64) (*Runner, error) {
+	if chain == nil || archiver == "" || nodeID == "" || dir == "" {
+		return nil, errors.New("archiver needs a chain, a signer, a node id, and a directory")
 	}
 	if width < 1 {
 		return nil, errors.New("range width must be positive")
@@ -56,7 +58,7 @@ func NewRunner(chain Chain, archiver, dir string, width int64) (*Runner, error) 
 	if err := os.MkdirAll(filepath.Join(dir, "bundles"), 0o750); err != nil {
 		return nil, fmt.Errorf("create bundle directory: %w", err)
 	}
-	return &Runner{chain: chain, archiver: archiver, dir: dir, width: width}, nil
+	return &Runner{chain: chain, archiver: archiver, nodeID: nodeID, dir: dir, width: width}, nil
 }
 
 func (r *Runner) cursorPath() string { return filepath.Join(r.dir, "cursor") }
@@ -162,7 +164,7 @@ func (r *Runner) archiveRange(ctx context.Context, start, end int64) error {
 		return nil
 	}
 	return r.chain.Submit(ctx, &types.MsgAttest{
-		Archiver: r.archiver, StartHeight: start, EndHeight: end,
+		Archiver: r.archiver, NodeId: r.nodeID, StartHeight: start, EndHeight: end,
 		BundleCid: cid, BundleHash: bundle.ContentHash, MerkleRoot: bundle.MerkleRoot,
 	})
 }

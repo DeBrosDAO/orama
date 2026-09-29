@@ -296,3 +296,16 @@ func (k Keeper) addQueuePending(ctx sdk.Context, dealID uint64, delta int64) err
 	}
 	return k.QueuePending.Set(ctx, dealID, next)
 }
+
+// ArchiveDealActive reports whether dealID is an ARCHIVE deal that is active.
+// An unknown deal is not an error; it is simply not an active ARCHIVE deal.
+func (k Keeper) ArchiveDealActive(ctx sdk.Context, dealID uint64) (bool, error) {
+	deal, err := k.Deals.Get(ctx, dealID)
+	if err != nil {
+		if errors.Is(err, collections.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to load deal %d: %w", dealID, err)
+	}
+	return deal.Class == types.DealClass_DEAL_CLASS_ARCHIVE && deal.Status == types.DealStatus_DEAL_STATUS_ACTIVE, nil
+}

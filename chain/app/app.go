@@ -460,10 +460,6 @@ func NewOramaApp(
 		app.FeesKeeper,
 		noopTokenHook{},
 	)
-	app.ArchiveKeeper = archivekeeper.NewKeeper(
-		appCodec,
-		runtime.NewKVStoreService(keys[archivetypes.StoreKey]),
-	)
 	app.NodesKeeper = nodeskeeper.NewKeeper(
 		appCodec,
 		runtime.NewKVStoreService(keys[nodestypes.StoreKey]),
@@ -509,6 +505,12 @@ func NewOramaApp(
 		app.FeesKeeper,
 		app.EmissionKeeper,
 		storageNodes{nodes: app.NodesKeeper},
+	)
+	app.ArchiveKeeper = archivekeeper.NewKeeper(
+		appCodec,
+		runtime.NewKVStoreService(keys[archivetypes.StoreKey]),
+		archiveNodes{nodes: app.NodesKeeper},
+		archiveStorage{storage: app.StorageKeeper},
 	)
 	app.RelayKeeper = relaykeeper.NewKeeper(
 		appCodec,

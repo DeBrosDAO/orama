@@ -84,6 +84,19 @@ func (r RangeRecord) Validate() error {
 		}
 		seenArchivers[string(addr)] = struct{}{}
 	}
+	if len(r.Operators) != len(r.Archivers) {
+		return fmt.Errorf("range %d-%d has %d archivers but %d operators", r.StartHeight, r.EndHeight, len(r.Archivers), len(r.Operators))
+	}
+	seenOperators := make(map[string]struct{}, len(r.Operators))
+	for _, op := range r.Operators {
+		if op == "" {
+			return fmt.Errorf("range %d-%d has an empty operator", r.StartHeight, r.EndHeight)
+		}
+		if _, ok := seenOperators[op]; ok {
+			return fmt.Errorf("range %d-%d repeats operator %s", r.StartHeight, r.EndHeight, op)
+		}
+		seenOperators[op] = struct{}{}
+	}
 	if len(r.DealIds) > MaxDealIDsPerRange {
 		return fmt.Errorf("range %d-%d has %d deal ids, max is %d", r.StartHeight, r.EndHeight, len(r.DealIds), MaxDealIDsPerRange)
 	}

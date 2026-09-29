@@ -39,6 +39,10 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 	}
 
 	canonical := archiver.String()
+	operator, err := k.nodes.ArchiverOperator(ctx, msg.NodeId, canonical)
+	if err != nil {
+		return false, 0, fmt.Errorf("archiver %s: %w", canonical, err)
+	}
 	if fresh {
 		if err := k.rejectOverlap(ctx, msg.StartHeight, msg.EndHeight); err != nil {
 			return false, 0, err
@@ -50,6 +54,7 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 			BundleHash:  append([]byte(nil), msg.BundleHash...),
 			MerkleRoot:  append([]byte(nil), msg.MerkleRoot...),
 			Archivers:   []string{canonical},
+			Operators:   []string{operator},
 		}
 	} else {
 		if !bytes.Equal(rec.MerkleRoot, msg.MerkleRoot) {
@@ -63,10 +68,16 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 				return rec.Archived, uint32(len(rec.Archivers)), nil
 			}
 		}
+		for _, existing := range rec.Operators {
+			if existing == operator {
+				return false, 0, fmt.Errorf("%w: %s on range %d-%d", types.ErrSameOperator, operator, msg.StartHeight, msg.EndHeight)
+			}
+		}
 		if len(rec.Archivers) >= types.MaxArchiversPerRange {
 			return false, 0, fmt.Errorf("range %d-%d already has %d archivers", msg.StartHeight, msg.EndHeight, len(rec.Archivers))
 		}
 		rec.Archivers = append(append([]string(nil), rec.Archivers...), canonical)
+		rec.Operators = append(append([]string(nil), rec.Operators...), operator)
 	}
 
 	stored, justArchived, err := k.storeRange(ctx, rec)
@@ -90,8 +101,14 @@ func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (b
 	if err := requireFinalized(ctx, msg.EndHeight); err != nil {
 		return false, 0, err
 	}
+	if _, err := k.nodes.ArchiverOperator(ctx, msg.NodeId, archiver.String()); err != nil {
+		return false, 0, fmt.Errorf("archiver %s: %w", archiver, err)
+	}
 	rec, err := k.GetRange(ctx, msg.StartHeight, msg.EndHeight)
 	if err != nil {
+		return false, 0, err
+	}
+	if err := k.requireArchiveDeals(ctx, msg.DealIds); err != nil {
 		return false, 0, err
 	}
 	merged, changed, err := mergeDealIDs(rec.DealIds, msg.DealIds)
@@ -108,6 +125,25 @@ func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (b
 	}
 	emitAttach(ctx, stored, archiver.String(), justArchived)
 	return stored.Archived, uint32(len(stored.DealIds)), nil
+}
+
+// requireArchiveDeals checks that every id is a decimal x/storage deal id of
+// an active ARCHIVE deal.
+func (k Keeper) requireArchiveDeals(ctx sdk.Context, ids []string) error {
+	for _, id := range ids {
+		dealID, err := strconv.ParseUint(id, 10, 64)
+		if err != nil || dealID == 0 {
+			return fmt.Errorf("%w: %q is not a deal id", types.ErrNotArchiveDeal, id)
+		}
+		ok, err := k.storage.ArchiveDealActive(ctx, dealID)
+		if err != nil {
+			return fmt.Errorf("read deal %d: %w", dealID, err)
+		}
+		if !ok {
+			return fmt.Errorf("%w: deal %d", types.ErrNotArchiveDeal, dealID)
+		}
+	}
+	return nil
 }
 
 func requireFinalized(ctx sdk.Context, end int64) error {

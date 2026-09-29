@@ -42,16 +42,16 @@ func TestAttest_archivedOnlyAfterThreeArchiversAndThreeDeals(t *testing.T) {
 	require.False(t, third.Archived)
 	require.Equal(t, uint32(3), third.Attesters)
 
-	twoDeals := f.attach(t, 1, start, end, "deal-1", "deal-2")
+	twoDeals := f.attach(t, 1, start, end, "1", "2")
 	require.False(t, twoDeals.Archived)
 	require.Equal(t, uint32(2), twoDeals.Replicas)
 
 	// Re-recording the same ids does not increase the replica count.
-	again := f.attach(t, 2, start, end, "deal-1", "deal-2")
+	again := f.attach(t, 2, start, end, "1", "2")
 	require.False(t, again.Archived)
 	require.Equal(t, uint32(2), again.Replicas)
 
-	three := f.attach(t, 3, start, end, "deal-3")
+	three := f.attach(t, 3, start, end, "3")
 	require.True(t, three.Archived)
 	require.Equal(t, uint32(3), three.Replicas)
 
@@ -59,7 +59,7 @@ func TestAttest_archivedOnlyAfterThreeArchiversAndThreeDeals(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, rec.Archived)
 	require.Equal(t, []string{acc(1).String(), acc(2).String(), acc(3).String()}, rec.Archivers)
-	require.Equal(t, []string{"deal-1", "deal-2", "deal-3"}, rec.DealIds)
+	require.Equal(t, []string{"1", "2", "3"}, rec.DealIds)
 	require.Equal(t, root, rec.MerkleRoot)
 
 	last, err := f.Keeper.LastArchivedHeight.Get(f.Ctx)
@@ -86,6 +86,7 @@ func TestAttest_wrongRootRefusedAndDoesNotCount(t *testing.T) {
 
 	_, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
 		Archiver:    acc(2).String(),
+		NodeId:      nodeOf(2),
 		StartHeight: 1,
 		EndHeight:   50,
 		BundleCid:   "bafyarchivecid",
@@ -96,6 +97,7 @@ func TestAttest_wrongRootRefusedAndDoesNotCount(t *testing.T) {
 
 	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
 		Archiver:    acc(3).String(),
+		NodeId:      nodeOf(3),
 		StartHeight: 1,
 		EndHeight:   50,
 		BundleCid:   "bafyothercid",
@@ -106,6 +108,7 @@ func TestAttest_wrongRootRefusedAndDoesNotCount(t *testing.T) {
 
 	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
 		Archiver:    acc(4).String(),
+		NodeId:      nodeOf(4),
 		StartHeight: 1,
 		EndHeight:   50,
 		BundleCid:   "bafyarchivecid",
@@ -133,14 +136,16 @@ func TestAttachReplicas_unknownRangeAndFutureHeightRefused(t *testing.T) {
 
 	_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
 		Archiver:    acc(1).String(),
+		NodeId:      nodeOf(1),
 		StartHeight: 1,
 		EndHeight:   10,
-		DealIds:     []string{"deal-1"},
+		DealIds:     []string{"1"},
 	})
 	require.ErrorIs(t, err, types.ErrUnknownRange)
 
 	_, err = f.Msg.Attest(f.Ctx, &types.MsgAttest{
 		Archiver:    acc(1).String(),
+		NodeId:      nodeOf(1),
 		StartHeight: 1,
 		EndHeight:   f.Ctx.BlockHeight(),
 		BundleCid:   "bafyarchivecid",
@@ -157,6 +162,7 @@ func TestAttest_overlapRefused(t *testing.T) {
 
 	_, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
 		Archiver:    acc(2).String(),
+		NodeId:      nodeOf(2),
 		StartHeight: 100,
 		EndHeight:   150,
 		BundleCid:   "bafyarchivecid",
@@ -264,7 +270,7 @@ func TestVerifyBundle_mutatedHeaderFails(t *testing.T) {
 	for i := byte(1); i <= 3; i++ {
 		f.attest(t, i, start, end, cid, bundle, root)
 	}
-	f.attach(t, 1, start, end, "deal-1", "deal-2", "deal-3")
+	f.attach(t, 1, start, end, "1", "2", "3")
 
 	require.NoError(t, f.Keeper.VerifyBundle(f.Ctx, start, end, blockHashes, bundle))
 
@@ -319,7 +325,7 @@ func TestMsgSignerIsArchiver(t *testing.T) {
 		Archiver:    signer.String(),
 		StartHeight: 1,
 		EndHeight:   2,
-		DealIds:     []string{"deal-1"},
+		DealIds:     []string{"1"},
 	}
 	require.Equal(t, []sdk.AccAddress{signer}, attach.GetSigners())
 	require.NoError(t, attach.ValidateBasic())
@@ -333,7 +339,7 @@ func archiveRange(t *testing.T, f *testFixture, start, end int64) {
 	for i := byte(1); i <= 3; i++ {
 		f.attest(t, i, start, end, cid, bundle, root)
 	}
-	res := f.attach(t, 1, start, end, "deal-1", "deal-2", "deal-3")
+	res := f.attach(t, 1, start, end, "1", "2", "3")
 	require.True(t, res.Archived)
 }
 
@@ -355,4 +361,60 @@ func TestExportGenesis_roundTrip(t *testing.T) {
 	require.Equal(t, exported.LastArchivedHeight, again.LastArchivedHeight)
 	require.Equal(t, exported.Ranges[0].Archivers, again.Ranges[0].Archivers)
 	require.True(t, bytes.Equal(exported.Ranges[0].MerkleRoot, again.Ranges[0].MerkleRoot))
+}
+
+func TestAttest_onlyAnArchiverNodesHotKeyCounts(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	msg := &types.MsgAttest{
+		Archiver: acc(1).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
+	}
+	_, err := f.Msg.Attest(f.Ctx, msg)
+	require.ErrorContains(t, err, "not the hot key", "another node's id does not make acc(1) an archiver")
+
+	msg.NodeId = ""
+	_, err = f.Msg.Attest(f.Ctx, msg)
+	require.Error(t, err, "an attestation must name its node")
+
+	f.Nodes.inactive[nodeOf(1)] = true
+	msg.NodeId = nodeOf(1)
+	_, err = f.Msg.Attest(f.Ctx, msg)
+	require.ErrorContains(t, err, "ARCHIVER", "a node without an active ARCHIVER bond cannot attest")
+	_, err = f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.ErrorIs(t, err, types.ErrUnknownRange, "a refused attestation records nothing")
+}
+
+func TestAttest_oneOperatorsNodesCountOnce(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.Nodes.operator[nodeOf(2)] = "op-1"
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	_, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
+		Archiver: acc(2).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
+	})
+	require.ErrorIs(t, err, types.ErrSameOperator)
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Equal(t, []string{"op-1"}, rec.Operators)
+}
+
+func TestAttachReplicas_onlyActiveArchiveDeals(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	for _, id := range []string{"deal-1", "0", "10", "-1"} {
+		_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
+			Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50, DealIds: []string{"1", id},
+		})
+		require.ErrorIsf(t, err, types.ErrNotArchiveDeal, "id %q", id)
+	}
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Empty(t, rec.DealIds, "a refused attach records none of its ids")
+	_, err = f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
+		Archiver: acc(3).String(), NodeId: nodeOf(3), StartHeight: 1, EndHeight: 50, DealIds: []string{"1"},
+	})
+	require.NoError(t, err, "any archiver node may attach a real deal")
 }

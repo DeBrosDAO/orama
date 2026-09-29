@@ -69,6 +69,25 @@ func archivedRecord(start, end int64) types.RangeRecord {
 		MerkleRoot:  bytes.Repeat([]byte{2}, types.HashLen),
 		DealIds:     []string{"deal-1", "deal-2", "deal-3"},
 		Archivers:   archivers,
+		Operators:   []string{"op-1", "op-2", "op-3"},
 		Archived:    true,
 	}
+}
+
+func TestGenesis_operatorsPairWithArchiversAndAreDistinct(t *testing.T) {
+	gs := types.DefaultGenesisState()
+	rec := archivedRecord(1, 100)
+	gs.LastArchivedHeight = 100
+	gs.Ranges = []types.RangeRecord{rec}
+	require.NoError(t, gs.Validate())
+
+	short := archivedRecord(1, 100)
+	short.Operators = short.Operators[:2]
+	gs.Ranges = []types.RangeRecord{short}
+	require.ErrorContains(t, gs.Validate(), "operators")
+
+	repeat := archivedRecord(1, 100)
+	repeat.Operators = []string{"op-1", "op-1", "op-3"}
+	gs.Ranges = []types.RangeRecord{repeat}
+	require.ErrorContains(t, gs.Validate(), "repeats operator")
 }

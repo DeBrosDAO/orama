@@ -84,7 +84,7 @@ func (c *fakeChain) Submit(_ context.Context, msgs ...sdk.Msg) error {
 func TestRunner_attestsFinalisedRangesAndResumesAfterRestart(t *testing.T) {
 	chain := newFakeChain(t, 25)
 	dir := t.TempDir()
-	r, err := NewRunner(chain, "orama1archiver", dir, 10)
+	r, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	n, err := r.Step(context.Background())
 	require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestRunner_attestsFinalisedRangesAndResumesAfterRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(20), cursor)
 
-	restarted, err := NewRunner(chain, "orama1archiver", dir, 10)
+	restarted, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	n, err = restarted.Step(context.Background())
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestRunner_attestsFinalisedRangesAndResumesAfterRestart(t *testing.T) {
 func TestRunner_retriesADroppedAttestationAndStopsOnAConflictingRoot(t *testing.T) {
 	chain := newFakeChain(t, 12)
 	dir := t.TempDir()
-	r, err := NewRunner(chain, "orama1archiver", dir, 10)
+	r, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	chain.fail = errors.New("not included")
 	_, err = r.Step(context.Background())
@@ -133,7 +133,7 @@ func TestRunner_retriesADroppedAttestationAndStopsOnAConflictingRoot(t *testing.
 	other := newFakeChain(t, 22)
 	other.ranges[[2]int64{1, 10}] = types.RangeRecord{StartHeight: 1, EndHeight: 10, MerkleRoot: make([]byte, 32)}
 	dir2 := t.TempDir()
-	r2, err := NewRunner(other, "orama1archiver", dir2, 10)
+	r2, err := NewRunner(other, "orama1archiver", "node-1", dir2, 10)
 	require.NoError(t, err)
 	n, err = r2.Step(context.Background())
 	require.ErrorIs(t, err, ErrRootConflict)
@@ -147,7 +147,7 @@ func TestRunner_retriesADroppedAttestationAndStopsOnAConflictingRoot(t *testing.
 
 func TestRunner_skipsARangeItAlreadyAttested(t *testing.T) {
 	chain := newFakeChain(t, 12)
-	r, err := NewRunner(chain, "orama1a", t.TempDir(), 10)
+	r, err := NewRunner(chain, "orama1a", "node-1", t.TempDir(), 10)
 	require.NoError(t, err)
 	_, err = r.Step(context.Background())
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestRunner_skipsARangeItAlreadyAttested(t *testing.T) {
 func TestVerify_refusesTamperedTruncatedAndMismatchedBundles(t *testing.T) {
 	chain := newFakeChain(t, 12)
 	dir := t.TempDir()
-	r, err := NewRunner(chain, "orama1archiver", dir, 10)
+	r, err := NewRunner(chain, "orama1archiver", "node-1", dir, 10)
 	require.NoError(t, err)
 	_, err = r.Step(context.Background())
 	require.NoError(t, err)
@@ -202,4 +202,9 @@ func TestEncode_refusesGapsAndEmptyRanges(t *testing.T) {
 	a, b := realBlock(t, 1), realBlock(t, 3)
 	_, err = Encode([]Block{a, b})
 	require.ErrorContains(t, err, "consecutive")
+}
+
+func TestNewRunner_needsANodeID(t *testing.T) {
+	_, err := NewRunner(newFakeChain(t, 1), "orama1a", "", t.TempDir(), 10)
+	require.ErrorContains(t, err, "node id")
 }

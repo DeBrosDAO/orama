@@ -901,7 +901,8 @@ CAR file. The layout is magic `ORBH`, version 1, the start height and the
 count. Each block follows as its hash, a length, and the `tendermint.types.Block`
 protobuf.
 
-It then submits `MsgAttest` with:
+It then submits `MsgAttest`, signed by `<home>/hot-key` for the node named
+in `<home>/node-id`, with:
 - the bundle CID: CIDv1, raw codec, sha2-256 of the file;
 - the file's SHA-256;
 - the block-hash Merkle root.
@@ -918,8 +919,16 @@ attempt.
 bundle. It checks the file hash, each block's bytes against its header hash,
 and the Merkle root against the x/archive record, and only then writes the
 block. The archiver does not create ARCHIVE storage deals or move CometBFT's
-retain height. A range reaches `archived` only when three archivers attest it
-and three deal ids are attached (`MsgAttachReplicas`).
+retain height.
+
+x/archive accepts `MsgAttest` and `MsgAttachReplicas` only from the hot key of
+the x/nodes node the message names, and only while that node is active with an
+ARCHIVER role bond. Each operator counts once toward a range: a second node of
+an operator that already attested is refused (`ErrSameOperator`). Every id in
+`MsgAttachReplicas` must be a decimal x/storage deal id of an active ARCHIVE
+deal (`ErrNotArchiveDeal`). A range reaches `archived` only when archivers of
+three distinct operators attest the same root and three such deals are
+attached.
 
 ### Chain indexer (`orama-global indexer`)
 

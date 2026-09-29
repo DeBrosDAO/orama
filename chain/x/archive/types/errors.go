@@ -19,4 +19,10 @@ var (
 	// ErrNotArchived is returned when a caller treats a range as archived before
 	// it has 3 matching attestations and 3 replica deal ids.
 	ErrNotArchived = errors.New("range is not archived")
+	// ErrSameOperator is returned when a second node of an operator that
+	// already attested a range attests it again. Each operator counts once.
+	ErrSameOperator = errors.New("operator already attested this range")
+	// ErrNotArchiveDeal is returned when a replica id is not an active
+	// x/storage ARCHIVE deal.
+	ErrNotArchiveDeal = errors.New("not an active ARCHIVE deal")
 )

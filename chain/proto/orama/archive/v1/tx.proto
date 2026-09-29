@@ -29,6 +29,9 @@ message MsgAttest {
   string bundle_cid = 4;
   bytes bundle_hash = 5;
   bytes merkle_root = 6;
+  // node_id is the x/nodes node the archiver field is the hot key of. The
+  // node must be active with an ARCHIVER role bond.
+  string node_id = 7;
 }
 
 // MsgAttestResponse is the Msg/Attest response.
@@ -45,7 +48,11 @@ message MsgAttachReplicas {
   string archiver = 1;
   int64 start_height = 2;
   int64 end_height = 3;
+  // deal_ids are x/storage ARCHIVE deal ids, as decimal strings. Each must be
+  // an active ARCHIVE deal.
   repeated string deal_ids = 4;
+  // node_id is the x/nodes node the archiver field is the hot key of.
+  string node_id = 5;
 }
 
 // MsgAttachReplicasResponse is the Msg/AttachReplicas response.

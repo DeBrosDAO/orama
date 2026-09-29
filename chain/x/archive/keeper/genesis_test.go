@@ -36,6 +36,7 @@ func TestInitGenesis_rejectsArchivedRangeWithoutQuorum(t *testing.T) {
 		MerkleRoot:  digest(2),
 		DealIds:     []string{"deal-1", "deal-2", "deal-3"},
 		Archivers:   []string{acc(1).String()},
+		Operators:   []string{"op-1"},
 		Archived:    true,
 	}}
 	gs.LastArchivedHeight = 10

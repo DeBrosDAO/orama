@@ -2,6 +2,8 @@ package keeper_test
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -20,10 +22,45 @@ import (
 )
 
 type testFixture struct {
-	Ctx    sdk.Context
-	Keeper keeper.Keeper
-	Msg    types.MsgServer
-	Query  types.QueryServer
+	Ctx     sdk.Context
+	Keeper  keeper.Keeper
+	Msg     types.MsgServer
+	Query   types.QueryServer
+	Nodes   *fakeNodes
+	Storage *fakeStorage
+}
+
+// fakeNodes: node "node-N" has hot key acc(N) and operator "op-N", unless
+// operator overrides it. A node listed in inactive has no ARCHIVER role.
+type fakeNodes struct {
+	operator map[string]string
+	inactive map[string]bool
+}
+
+func nodeOf(n byte) string { return fmt.Sprintf("node-%d", n) }
+
+func (f *fakeNodes) ArchiverOperator(_ context.Context, nodeID, signer string) (string, error) {
+	var n byte
+	if _, err := fmt.Sscanf(nodeID, "node-%d", &n); err != nil {
+		return "", fmt.Errorf("node %q is not registered", nodeID)
+	}
+	if f.inactive[nodeID] {
+		return "", fmt.Errorf("node %s has no active ARCHIVER role", nodeID)
+	}
+	if acc(n).String() != signer {
+		return "", fmt.Errorf("%s is not the hot key of node %s", signer, nodeID)
+	}
+	if op, ok := f.operator[nodeID]; ok {
+		return op, nil
+	}
+	return fmt.Sprintf("op-%d", n), nil
+}
+
+// fakeStorage: deals 1 through 9 are active ARCHIVE deals.
+type fakeStorage struct{}
+
+func (fakeStorage) ArchiveDealActive(_ context.Context, id uint64) (bool, error) {
+	return id >= 1 && id <= 9, nil
 }
 
 func newTestFixture(t *testing.T) *testFixture {
@@ -40,13 +77,15 @@ func newTestFixture(t *testing.T) *testFixture {
 	interfaceRegistry := codectypes.NewInterfaceRegistry()
 	types.RegisterInterfaces(interfaceRegistry)
 	cdc := codec.NewProtoCodec(interfaceRegistry)
-	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key))
+	nodes := &fakeNodes{operator: map[string]string{}, inactive: map[string]bool{}}
+	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), nodes, fakeStorage{})
 
 	return &testFixture{
 		Ctx:    ctx,
 		Keeper: k,
 		Msg:    keeper.NewMsgServerImpl(k),
 		Query:  keeper.NewQueryServerImpl(k),
+		Nodes:  nodes,
 	}
 }
 
@@ -71,6 +110,7 @@ func (f *testFixture) attest(t *testing.T, signer byte, start, end int64, cid st
 	t.Helper()
 	res, err := f.Msg.Attest(f.Ctx, &types.MsgAttest{
 		Archiver:    acc(signer).String(),
+		NodeId:      nodeOf(signer),
 		StartHeight: start,
 		EndHeight:   end,
 		BundleCid:   cid,
@@ -85,6 +125,7 @@ func (f *testFixture) attach(t *testing.T, signer byte, start, end int64, dealID
 	t.Helper()
 	res, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
 		Archiver:    acc(signer).String(),
+		NodeId:      nodeOf(signer),
 		StartHeight: start,
 		EndHeight:   end,
 		DealIds:     dealIDs,

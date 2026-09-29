@@ -35,7 +35,9 @@ func archiverCmd() *cobra.Command {
 <home>/bundles/<start>-<end>.orbh, and submits MsgAttest with the bundle CID, its
 SHA-256 and the block-hash Merkle root. Every archiver of a chain must use the
 same range width. <home>/cursor is the last attested height; a restart resumes
-after it. <home>/hot-key is the signing key, created on first start (mode 0600).
+after it. <home>/hot-key is the signing key, created on first start (mode 0600);
+it must be the hot key of the x/nodes node named in <home>/node-id, which needs
+an active ARCHIVER role bond.
 It does not create ARCHIVE storage deals and does not move CometBFT's retain
 height, so a range is attested but not marked archived by this process alone.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -60,6 +62,10 @@ func runArchiver(ctx context.Context, rpc, home string, width int64, interval ti
 	if created {
 		slog.Info("created the archiver key; fund it before it can attest", "address", key.Address)
 	}
+	nodeID, err := readNodeID(filepath.Join(home, "node-id"))
+	if err != nil {
+		return err
+	}
 	client, err := node.Dial(rpc)
 	if err != nil {
 		return err
@@ -68,7 +74,7 @@ func runArchiver(ctx context.Context, rpc, home string, width int64, interval ti
 	if err != nil {
 		return err
 	}
-	r, err := archiver.NewRunner(chain, key.Address, home, width)
+	r, err := archiver.NewRunner(chain, key.Address, nodeID, home, width)
 	if err != nil {
 		return err
 	}

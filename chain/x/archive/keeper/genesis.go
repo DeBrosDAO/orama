@@ -23,6 +23,7 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) error {
 		rec.MerkleRoot = append([]byte(nil), rec.MerkleRoot...)
 		rec.DealIds = append([]string(nil), rec.DealIds...)
 		rec.Archivers = append([]string(nil), rec.Archivers...)
+		rec.Operators = append([]string(nil), rec.Operators...)
 		if err := k.Ranges.Set(ctx, collections.Join(rec.StartHeight, rec.EndHeight), rec); err != nil {
 			return fmt.Errorf("failed to set range %d-%d: %w", rec.StartHeight, rec.EndHeight, err)
 		}
