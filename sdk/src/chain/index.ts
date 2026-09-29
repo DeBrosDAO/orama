@@ -12,8 +12,11 @@ export type {
   BroadcastResult,
   ChainAccount,
   ChainClientConfig,
+  ChainQueryResult,
   PageOptions,
+  QueryOptions,
   SignAndBroadcastOptions,
+  Uint64Like,
 } from "./client";
 
 export { LocalSigner, verifyDirectSignature } from "./signer";

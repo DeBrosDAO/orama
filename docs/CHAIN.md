@@ -1789,8 +1789,8 @@ indexer (`127.0.0.1:31015`).
 at `/v1/chain/` (an open route in `route_policy.go`). The upstream bases are
 `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and `ORAMA_CHAIN_INDEX_URL`, defaulting to those
 three loopback URLs. The caller's path is not forwarded: each route builds its own upstream URL
-from values it has validated. Anything outside this list is refused, and the upstream body and
-status are copied unchanged:
+from values it has validated. Anything outside this list is refused. The upstream body and status are
+copied unchanged, except on `/v1/chain/query/` below, which decodes the answer:
 
 | Gateway path | Upstream |
 |---|---|
@@ -1807,14 +1807,28 @@ status are copied unchanged:
 | `GET /v1/chain/index/accounts/{address}/txs` | indexer `GET /index/v1/accounts/{address}/txs` (`page` 1–1000, `limit` 1–100, both optional) |
 | `GET /v1/chain/index/cnft/assets/{id}` | indexer `GET /index/v1/cnft/assets/{id}` (32-byte hex, sent lowercase) |
 | `GET /v1/chain/index/cnft/owners/{address}/assets` | indexer `GET /index/v1/cnft/owners/{address}/assets` (`page`, `limit` as above) |
+| `GET /v1/chain/query/{package.Service}/{Method}` | CometBFT `GET /abci_query?path="/{package.Service}/{Method}"&prove=false` (see "Module queries") |
 
 On the index routes the gateway checks an address's shape (lowercase `orama1` plus bech32
 characters) and the indexer checks its checksum. A route that takes no query refuses one.
 What the indexer holds, and what it does not, is under "Chain indexer" above.
 
-`x/emission`, `x/fees`, and `x/power` are not on this list: they speak gRPC and have no REST
-annotations. Neither are per-account bank balances. The explorer does not invent rows for a
-query this proxy does not serve.
+**Module queries.** The Orama modules speak gRPC and have no REST annotations, so `abci_query` is their one
+HTTP route. `GET /v1/chain/query/<package.Service>/<Method>`, for example
+`/v1/chain/query/orama.nodes.v1.Query/Node`, runs one of them on the local node's RPC and answers the
+decoded response as JSON with the proto field names (uint64 fields are decimal strings). The route serves
+only the `Query` services embedded in `core/pkg/chainread/queries.binpb`: a Msg service, a transaction
+path or any name outside that set is a 404, and the gateway never asks for a proof or writes.
+The request is `data=<base64 protobuf>` (standard or URL-safe alphabet, padding optional) or
+`json=<JSON request>` (proto field names), not both, or neither for the empty request; each is at most 4 KiB
+and is checked against the method's request type before the node sees it. `height=<n>` reads at that
+height (a positive integer; 0 or absent is the latest). Any other query key, a repeated key, a non-GET
+method and a response over 4 MiB are refused. A key the chain does not have is a 404; any other chain
+error is a 502 without the node's message. The gateway decodes with the same `dynamicpb`/`protojson` code
+`orama chain` uses (`core/pkg/chainread`), which links no chain code.
+
+Per-account bank balances are not on this list. The explorer does not invent rows for a query this proxy
+does not serve.
 
 ## Wallet clients: transactions, reads and onion submission
 
@@ -1840,21 +1854,22 @@ at bootstrap, so the test seeds a voting proposal directly and a `MsgSubmitPropo
 
 **`orama chain`** reads the chain over HTTP JSON and links no chain code. Each command uses one read
 path: the gateway proxy above (`--gateway`, default the active environment), a node's REST API
-(`--node`), or a node's CometBFT RPC (`--rpc`).
+(`--node`), or a node's CometBFT RPC (`--rpc`). The module reads (`earnings`, `node`, `deal`, `query`) go
+through the gateway's `/v1/chain/query/` route unless `--rpc` is set.
 
 | Command | Path | Reads |
 |---|---|---|
 | `orama chain status` | gateway `/v1/chain/status`, or `--rpc` `/status` | height, network, sync state |
 | `orama chain validator [oramavaloper1...]` | gateway `/v1/chain/validators` or `--rpc`; with an address, `--node` staking REST | validator set, or one validator |
 | `orama chain balance <address>` | `--node` `/cosmos/bank/v1beta1/balances/{address}` | bank balances |
-| `orama chain earnings <address>` | `--rpc` `abci_query` of `orama.fees.v1.Query/Earnings` | earnings balance |
-| `orama chain node <id>` | `--rpc` `abci_query` of `orama.nodes.v1.Query/Node` | a registered node |
-| `orama chain deal <id>` | `--rpc` `abci_query` of `orama.storage.v1.Query/Deal` | a storage deal |
-| `orama chain query <Service/Method> [json]` | `--rpc` `abci_query` | any Orama module query; `--list` names them |
+| `orama chain earnings <address>` | gateway `/v1/chain/query/orama.fees.v1.Query/Earnings`, or `--rpc` `abci_query` | earnings balance |
+| `orama chain node <id>` | gateway `/v1/chain/query/orama.nodes.v1.Query/Node`, or `--rpc` | a registered node |
+| `orama chain deal <id>` | gateway `/v1/chain/query/orama.storage.v1.Query/Deal`, or `--rpc` | a storage deal |
+| `orama chain query <Service/Method> [json]` | gateway `/v1/chain/query/…`, or `--rpc` `abci_query` | any Orama module query; `--list` names them |
 
-The Orama modules answer gRPC only. `abci_query` is their one HTTP route, and the gateway does not proxy
-it, so `earnings`, `node`, `deal` and `query` go to a node's CometBFT RPC (`http://127.0.0.1:31001` on the
-node). The request and response are protobuf, encoded and decoded from the query descriptors embedded in
+With `--rpc` (a node's CometBFT RPC, `http://127.0.0.1:31001` on the node) the CLI runs `abci_query` itself;
+without it the gateway does, and the CLI sends the request as `data=` after checking it. The request and
+response are protobuf, encoded and decoded from the query descriptors embedded in
 `core/pkg/chainread/queries.binpb`, generated from `chain/proto` by `core/pkg/chainread/gen.sh`; a test
 fails when the file is stale.
 

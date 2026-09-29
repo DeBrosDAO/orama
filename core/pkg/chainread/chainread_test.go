@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -238,5 +239,47 @@ func TestQueriesDescriptor_isCurrent(t *testing.T) {
 	}
 	if string(fresh) != string(queriesDescriptor) {
 		t.Fatal("queries.binpb is stale: run core/pkg/chainread/gen.sh")
+	}
+}
+
+func TestGatewayQuery_readsTheQueryRouteAndChecksTheRequestFirst(t *testing.T) {
+	var gotPath, gotData string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotData = r.URL.Path, r.URL.Query().Get("data")
+		w.Write([]byte(`{"node":{"node_id":"n-1"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	r := &Reader{Gateway: srv.URL}
+	got, err := r.Query(context.Background(), "orama.nodes.v1.Query/Node", `{"node_id":"n-1"}`)
+	if err != nil || !strings.Contains(string(got), `"node_id":"n-1"`) {
+		t.Fatalf("got %s err %v", got, err)
+	}
+	if gotPath != "/v1/chain/query/orama.nodes.v1.Query/Node" || gotData != base64.RawURLEncoding.EncodeToString([]byte{0x0a, 0x03, 'n', '-', '1'}) {
+		t.Fatalf("gateway saw %q data %q", gotPath, gotData)
+	}
+	gotPath = ""
+	if _, err := r.GatewayQuery(context.Background(), "orama.nodes.v1.Query/Nope", ""); err == nil {
+		t.Fatal("an unknown query was sent")
+	}
+	if _, err := r.GatewayQuery(context.Background(), "orama.nodes.v1.Query/Node", `{"nope":1}`); err == nil {
+		t.Fatal("a malformed request was sent")
+	}
+	if gotPath != "" {
+		t.Fatalf("a refused query reached the gateway: %s", gotPath)
+	}
+	if _, err := (&Reader{}).Query(context.Background(), "orama.nodes.v1.Query/Node", ""); err == nil || !strings.Contains(err.Error(), "--gateway") {
+		t.Fatalf("err = %v, want the gateway flag", err)
+	}
+}
+
+func TestDecodeRPC_missingKeyIsErrNotFound(t *testing.T) {
+	m, _ := Lookup("orama.nodes.v1.Query/Node")
+	body := []byte(`{"result":{"response":{"code":22,"codespace":"sdk","log":"key not found"}}}`)
+	if _, err := m.DecodeRPC(body); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+	other := []byte(`{"result":{"response":{"code":5,"codespace":"sdk","log":"x"}}}`)
+	if _, err := m.DecodeRPC(other); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
 	}
 }

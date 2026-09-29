@@ -5,7 +5,8 @@
 // listen on loopback (default http://127.0.0.1:31001, http://127.0.0.1:31003
 // and http://127.0.0.1:31015, overridable with ORAMA_CHAIN_RPC_URL,
 // ORAMA_CHAIN_REST_URL and ORAMA_CHAIN_INDEX_URL). The indexer routes are
-// under /v1/chain/index/ (index.go).
+// under /v1/chain/index/ (index.go). Orama module queries are under
+// /v1/chain/query/ (query.go).
 //
 // The caller's path is not forwarded. Each allowlisted route builds one
 // upstream URL. Any other path, method, or query is refused. The upstream
@@ -35,6 +36,7 @@ const (
 	mountPrefix = "/v1/chain/"
 
 	upstreamStatus     = "/status"
+	upstreamABCIQuery  = "/abci_query"
 	upstreamBlock      = "/block"
 	upstreamBlockchain = "/blockchain"
 	upstreamTx         = "/tx"
@@ -205,6 +207,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, mountPrefix)
 	if idx, ok := strings.CutPrefix(rest, indexPrefix); ok {
 		p.serveIndex(w, r, idx)
+		return
+	}
+	if name, ok := strings.CutPrefix(rest, queryPrefix); ok {
+		p.serveQuery(w, r, name)
 		return
 	}
 	if !knownRoute(rest) {
@@ -421,6 +427,21 @@ func parseTxHash(s string) (string, bool) {
 }
 
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, base *url.URL, path string, q url.Values) {
+	resp, body, ok := p.fetch(w, r, base, path, q, p.maxBody)
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", passContentType(resp.Header.Get("Content-Type")))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
+}
+
+// fetch reads one upstream body of at most maxBody bytes. It writes the error
+// response itself and reports false when the upstream is unreachable, answers
+// a redirect or a status outside 200-599, or answers more than maxBody.
+func (p *Proxy) fetch(w http.ResponseWriter, r *http.Request, base *url.URL, path string, q url.Values, maxBody int64) (*http.Response, []byte, bool) {
 	u := *base
 	u.Path = path
 	u.RawQuery = q.Encode()
@@ -429,39 +450,35 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, base *url.URL, p
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "chain unreachable")
-		return
+		return nil, nil, false
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := p.client.Do(req)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "chain unreachable")
-		return
+		return nil, nil, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		writeErr(w, http.StatusBadGateway, "upstream redirect refused")
-		return
+		return nil, nil, false
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 599 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		writeErr(w, http.StatusBadGateway, "upstream status refused")
-		return
+		return nil, nil, false
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, p.maxBody+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "chain unreachable")
-		return
+		return nil, nil, false
 	}
-	if int64(len(body)) > p.maxBody {
+	if int64(len(body)) > maxBody {
 		writeErr(w, http.StatusBadGateway, "upstream response too large")
-		return
+		return nil, nil, false
 	}
-	w.Header().Set("Content-Type", passContentType(resp.Header.Get("Content-Type")))
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
+	return resp, body, true
 }
 
 func passContentType(ct string) string {

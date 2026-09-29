@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -44,6 +45,15 @@ func queryFiles() (*protoregistry.Files, error) {
 	})
 	return files, filesErr
 }
+
+// ErrNotFound is a query for a key the chain does not have: the SDK's ErrKeyNotFound, which
+// baseapp returns for a gRPC NotFound status.
+var ErrNotFound = errors.New("not found on chain")
+
+const (
+	sdkCodespace   = "sdk"
+	sdkKeyNotFound = 22
+)
 
 // Method is one gRPC query method, resolved from the embedded descriptors.
 type Method struct {
@@ -127,6 +137,34 @@ func (m *Method) DecodeResponse(data []byte) (json.RawMessage, error) {
 	return out, nil
 }
 
+// Query runs one Orama module query through the node's CometBFT RPC when the Reader has one, and
+// through the gateway's /v1/chain/query/ route otherwise.
+func (r *Reader) Query(ctx context.Context, name, requestJSON string) (json.RawMessage, error) {
+	if r.RPC != "" {
+		return r.GRPC(ctx, name, requestJSON)
+	}
+	return r.GatewayQuery(ctx, name, requestJSON)
+}
+
+// GatewayQuery runs one Orama module query through the gateway's read-only
+// GET /v1/chain/query/<package.Service>/<Method> route, which answers the decoded response as JSON.
+// The request is checked here first, so an unknown query or a malformed request sends nothing.
+func (r *Reader) GatewayQuery(ctx context.Context, name, requestJSON string) (json.RawMessage, error) {
+	m, err := Lookup(name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := m.EncodeRequest(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	path := "query" + m.Path
+	if len(data) > 0 {
+		path += "?data=" + base64.RawURLEncoding.EncodeToString(data)
+	}
+	return r.GatewayGet(ctx, path)
+}
+
 // GRPC runs one query through the node's CometBFT RPC abci_query and returns
 // the decoded response as JSON. The query runs at the latest height and asks
 // for no proof.
@@ -166,6 +204,24 @@ func (r *Reader) GRPC(ctx context.Context, name, requestJSON string) (json.RawMe
 	return m.abciResponse(result)
 }
 
+// CheckRequest reports whether data is a well-formed protobuf request for the method.
+func (m *Method) CheckRequest(data []byte) error {
+	if err := proto.Unmarshal(data, dynamicpb.NewMessage(m.input)); err != nil {
+		return fmt.Errorf("request for %s: %w", m.Path, err)
+	}
+	return nil
+}
+
+// DecodeRPC decodes the body of a CometBFT abci_query answer, in its JSON-RPC envelope, into the
+// method's response as JSON.
+func (m *Method) DecodeRPC(body []byte) (json.RawMessage, error) {
+	result, err := rpcResult(body)
+	if err != nil {
+		return nil, err
+	}
+	return m.abciResponse(result)
+}
+
 // abciResponse unwraps an abci_query result and decodes its value.
 func (m *Method) abciResponse(result json.RawMessage) (json.RawMessage, error) {
 	var res struct {
@@ -178,6 +234,9 @@ func (m *Method) abciResponse(result json.RawMessage) (json.RawMessage, error) {
 	}
 	if err := json.Unmarshal(result, &res); err != nil {
 		return nil, fmt.Errorf("abci_query result: %w", err)
+	}
+	if res.Response.Code == sdkKeyNotFound && res.Response.Codespace == sdkCodespace {
+		return nil, fmt.Errorf("%w: %s: %s", ErrNotFound, m.Path, truncate(res.Response.Log))
 	}
 	if res.Response.Code != 0 {
 		return nil, fmt.Errorf("%s failed (code %d %s): %s", m.Path, res.Response.Code, res.Response.Codespace, truncate(res.Response.Log))

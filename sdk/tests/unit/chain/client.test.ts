@@ -144,3 +144,85 @@ describe("REST reads and broadcast", () => {
     expect(err.message).toContain("insufficient fee");
   });
 });
+
+describe("module queries through /v1/chain/query/", () => {
+  const run = async (call: (chain: OramaChainClient) => Promise<unknown>, body: unknown = { ok: true }) => {
+    const { fn, calls } = fakeFetch(() => ({ body }));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    const result = await call(chain);
+    return { result, url: new URL(calls[0]!.url), calls };
+  };
+
+  it("sends the request as JSON with the proto field names", async () => {
+    const { result, url } = await run((c) => c.node("n-1"), { node: { node_id: "n-1" } });
+    expect(result).toEqual({ node: { node_id: "n-1" } });
+    expect(url.pathname).toBe("/v1/chain/query/orama.nodes.v1.Query/Node");
+    expect(JSON.parse(url.searchParams.get("json")!)).toEqual({ node_id: "n-1" });
+    expect(url.searchParams.has("height")).toBe(false);
+  });
+
+  it("maps every typed read to its service, method and request", async () => {
+    const cases: Array<[(c: OramaChainClient) => Promise<unknown>, string, unknown]> = [
+      [(c) => c.nodesParams(), "orama.nodes.v1.Query/Params", undefined],
+      [(c) => c.operator(ADDRESS), "orama.nodes.v1.Query/Operator", { address: ADDRESS }],
+      [(c) => c.nodeCluster("c-1"), "orama.nodes.v1.Query/Cluster", { cluster_id: "c-1" }],
+      [(c) => c.nodeUnbondings("n-1"), "orama.nodes.v1.Query/NodeUnbondings", { node_id: "n-1" }],
+      [(c) => c.storageParams(), "orama.storage.v1.Query/Params", undefined],
+      [(c) => c.deal(7), "orama.storage.v1.Query/Deal", { deal_id: "7" }],
+      [(c) => c.deal(2n ** 63n), "orama.storage.v1.Query/Deal", { deal_id: "9223372036854775808" }],
+      [(c) => c.slot("7", 2), "orama.storage.v1.Query/Slot", { deal_id: "7", slot: 2 }],
+      [(c) => c.storageAuthorization(ADDRESS, ADDRESS), "orama.storage.v1.Query/Authorization", { granter: ADDRESS, grantee: ADDRESS }],
+      [(c) => c.storageChallenges(3, "n-1"), "orama.storage.v1.Query/Challenges", { epoch: "3", node_id: "n-1" }],
+      [(c) => c.storageEpochMint(3), "orama.storage.v1.Query/EpochMint", { epoch: "3" }],
+      [(c) => c.storageQueue(), "orama.storage.v1.Query/Queue", undefined],
+      [(c) => c.feesParams(), "orama.fees.v1.Query/Params", undefined],
+      [(c) => c.baseFee(), "orama.fees.v1.Query/BaseFee", undefined],
+      [(c) => c.earnings(ADDRESS), "orama.fees.v1.Query/Earnings", { address: ADDRESS }],
+      [(c) => c.feesDeposit("d-1"), "orama.fees.v1.Query/Deposit", { id: "d-1" }],
+      [(c) => c.archiveParams(), "orama.archive.v1.Query/Params", undefined],
+      [(c) => c.archiveRange(1, 1000), "orama.archive.v1.Query/Range", { start_height: "1", end_height: "1000" }],
+      [(c) => c.lastArchivedHeight(), "orama.archive.v1.Query/LastArchivedHeight", undefined],
+      [(c) => c.retainHeight(), "orama.archive.v1.Query/RetainHeight", undefined],
+      [(c) => c.relayParams(), "orama.relay.v1.Query/Params", undefined],
+      [(c) => c.relayReporters(), "orama.relay.v1.Query/Reporters", undefined],
+      [(c) => c.relay("ab".repeat(20)), "orama.relay.v1.Query/Relay", { rsa_fingerprint_hex: "ab".repeat(20) }],
+      [(c) => c.relayEpochResult(9), "orama.relay.v1.Query/EpochResult", { epoch: "9" }],
+    ];
+    for (const [call, name, request] of cases) {
+      const { url } = await run(call);
+      expect(url.pathname).toBe(`/v1/chain/query/${name}`);
+      const json = url.searchParams.get("json");
+      expect(json === null ? undefined : JSON.parse(json)).toEqual(request);
+    }
+  });
+
+  it("passes a height and refuses a bad one before any request", async () => {
+    const { url } = await run((c) => c.earnings(ADDRESS, { height: 42 }));
+    expect(url.searchParams.get("height")).toBe("42");
+    const { fn, calls } = fakeFetch(() => ({}));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    await expect(chain.earnings(ADDRESS, { height: -1 })).rejects.toThrow(/non-negative/);
+    await expect(chain.deal("abc")).rejects.toThrow(/unsigned 64-bit/);
+    await expect(chain.deal(2n ** 64n)).rejects.toThrow(/unsigned 64-bit/);
+    await expect(chain.deal(-1)).rejects.toThrow(/unsigned 64-bit/);
+    await expect(chain.node("")).rejects.toThrow(/printable/);
+    await expect(chain.operator("cosmos1abc")).rejects.toThrow(/orama address/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses anything that is not an Orama Query service", async () => {
+    const { fn, calls } = fakeFetch(() => ({}));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    await expect(chain.moduleQuery("orama.nodes.v1.Msg", "RegisterNode")).rejects.toThrow(/Query service/);
+    await expect(chain.moduleQuery("cosmos.bank.v1beta1.Query", "Balance")).rejects.toThrow(/Query service/);
+    await expect(chain.moduleQuery("orama.nodes.v1.Query", "Node/../x")).rejects.toThrow(/query method/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("needs a gateway, and surfaces a missing key as a 404 SDKError", async () => {
+    await expect(new OramaChainClient({}).baseFee()).rejects.toThrow(/gatewayURL/);
+    const { fn } = fakeFetch(() => ({ status: 404, body: { error: "not found on chain" } }));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    await expect(chain.node("nope")).rejects.toMatchObject({ httpStatus: 404 });
+  });
+});

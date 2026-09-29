@@ -2,8 +2,8 @@
 //
 // It links no chain or Cosmos code. Each command names the read path it uses:
 // the gateway's /v1/chain/ proxy, a node's Cosmos REST API (--node), or a
-// node's CometBFT RPC (--rpc), which is the only HTTP route to the Orama
-// modules' own state. It only reads; transactions are the `orama global`,
+// node's CometBFT RPC (--rpc). The Orama modules' own state is read through
+// the gateway's /v1/chain/query/ route, or through --rpc's abci_query. It only reads; transactions are the `orama global`,
 // `orama storage` and `orama cluster` commands.
 package chaincmd
 
@@ -32,13 +32,14 @@ Three read paths exist, and each command uses one:
 
   --gateway  the gateway's read-only /v1/chain/ proxy (default: the active
              environment's gateway). Status, blocks, transactions, the
-             validator set, supply and the indexer.
+             validator set, supply, the indexer and the Orama module queries
+             (x/nodes, x/storage, x/fees, ...) under /v1/chain/query/.
   --node     a node's Cosmos REST API, for example http://127.0.0.1:31003.
              Accounts, bank balances, staking validators.
   --rpc      a node's CometBFT RPC, for example http://127.0.0.1:31001. The
-             Orama modules (x/nodes, x/storage, x/fees, ...) answer gRPC only,
-             and abci_query is their one HTTP route. The gateway does not
-             proxy it, so these reads go to a node you can reach.
+             Orama modules answer gRPC only and abci_query is their one node
+             HTTP route; with --rpc set, earnings, node, deal and query read
+             it directly instead of through the gateway.
 
 Transactions are built and signed by 'orama global', 'orama storage' and
 'orama cluster'; --onion on those submits through Tor.`,

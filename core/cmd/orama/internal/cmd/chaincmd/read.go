@@ -85,7 +85,7 @@ func printBalances(cmd *cobra.Command, raw json.RawMessage) error {
 var earningsCmd = &cobra.Command{
 	Use:   "earnings <address>",
 	Short: "Show an account's earnings balance (x/fees)",
-	Long: `Show the earnings balance x/fees holds for an account, through --rpc. Earnings
+	Long: `Show the earnings balance x/fees holds for an account, through the gateway (or --rpc). Earnings
 are what the account is paid for running nodes and services; they are not in
 the bank balance.`,
 	Args: cobra.ExactArgs(1),
@@ -93,31 +93,31 @@ the bank balance.`,
 		if err := requireAddress(args[0]); err != nil {
 			return err
 		}
-		return grpcRead(cmd, queryEarnings, map[string]string{"address": args[0]})
+		return fieldsRead(cmd, queryEarnings, map[string]string{"address": args[0]})
 	},
 }
 
 var nodeCmd = &cobra.Command{
 	Use:   "node <node-id>",
 	Short: "Show a registered node (x/nodes)",
-	Long:  `Show a node's record from x/nodes through --rpc: operator, roles, bonds, endpoints, capacity and status.`,
+	Long:  `Show a node's record from x/nodes through the gateway (or --rpc): operator, roles, bonds, endpoints, capacity and status.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return grpcRead(cmd, queryNode, map[string]string{"node_id": args[0]})
+		return fieldsRead(cmd, queryNode, map[string]string{"node_id": args[0]})
 	},
 }
 
 var dealCmd = &cobra.Command{
 	Use:   "deal <deal-id>",
 	Short: "Show a storage deal (x/storage)",
-	Long:  `Show a storage deal from x/storage through --rpc.`,
+	Long:  `Show a storage deal from x/storage through the gateway (or --rpc).`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id, err := strconv.ParseUint(args[0], 10, 64)
 		if err != nil {
 			return clierr.Usage("deal id %q is not a number", args[0])
 		}
-		return grpcRead(cmd, queryDeal, map[string]string{"deal_id": strconv.FormatUint(id, 10)})
+		return fieldsRead(cmd, queryDeal, map[string]string{"deal_id": strconv.FormatUint(id, 10)})
 	},
 }
 
@@ -162,10 +162,13 @@ func requireValoper(arg string) error {
 
 var queryCmd = &cobra.Command{
 	Use:   "query <Service/Method> [request-json]",
-	Short: "Run any Orama module query through --rpc",
-	Long: `Run a gRPC query of an Orama module through --rpc's abci_query and print the
-response as JSON. The request is JSON with the proto field names. For example:
+	Short: "Run any Orama module query through the gateway or --rpc",
+	Long: `Run a gRPC query of an Orama module and print the response as JSON. By default it
+goes through the gateway's GET /v1/chain/query/<Service>/<Method>; with --rpc it
+goes to that node's CometBFT abci_query. The request is JSON with the proto
+field names. For example:
 
+  orama chain query orama.nodes.v1.Query/Node '{"node_id":"node-1"}'
   orama chain query orama.nodes.v1.Query/Node '{"node_id":"node-1"}' --rpc http://127.0.0.1:31001
 
 'orama chain query --list' prints every query the CLI knows.`,
@@ -188,26 +191,27 @@ response as JSON. The request is JSON with the proto field names. For example:
 		if len(args) == 2 {
 			request = args[1]
 		}
-		r, err := reader(false)
-		if err != nil {
-			return err
-		}
-		raw, err := r.GRPC(cmd.Context(), args[0], request)
-		return printJSON(cmd, raw, err)
+		return grpcRead(cmd, args[0], request)
 	},
 }
 
-// grpcRead runs one Orama module query with a request built from fields.
-func grpcRead(cmd *cobra.Command, query string, fields map[string]string) error {
+// fieldsRead runs one Orama module query with a request built from fields.
+func fieldsRead(cmd *cobra.Command, query string, fields map[string]string) error {
 	request, err := json.Marshal(fields)
 	if err != nil {
 		return clierr.Failure("%v", err)
 	}
-	r, err := reader(false)
+	return grpcRead(cmd, query, string(request))
+}
+
+// grpcRead runs one Orama module query: through --rpc when it is set, through the gateway's
+// /v1/chain/query/ route otherwise.
+func grpcRead(cmd *cobra.Command, query, request string) error {
+	r, err := reader(readFlags.rpc == "")
 	if err != nil {
 		return err
 	}
-	raw, err := r.GRPC(cmd.Context(), query, string(request))
+	raw, err := r.Query(cmd.Context(), query, request)
 	return printJSON(cmd, raw, err)
 }
 

@@ -47,7 +47,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama chain deal`](#orama-chain-deal) — Show a storage deal (x/storage)
   - [`orama chain earnings`](#orama-chain-earnings) — Show an account's earnings balance (x/fees)
   - [`orama chain node`](#orama-chain-node) — Show a registered node (x/nodes)
-  - [`orama chain query`](#orama-chain-query) — Run any Orama module query through --rpc
+  - [`orama chain query`](#orama-chain-query) — Run any Orama module query through the gateway or --rpc
   - [`orama chain status`](#orama-chain-status) — Show the chain's height, network and sync state
   - [`orama chain validator`](#orama-chain-validator) — List the validator set, or show one validator
 - [`orama cluster`](#orama-cluster) — Choose who may create namespaces on this cluster
@@ -617,13 +617,14 @@ Three read paths exist, and each command uses one:
 
   --gateway  the gateway's read-only /v1/chain/ proxy (default: the active
              environment's gateway). Status, blocks, transactions, the
-             validator set, supply and the indexer.
+             validator set, supply, the indexer and the Orama module queries
+             (x/nodes, x/storage, x/fees, ...) under /v1/chain/query/.
   --node     a node's Cosmos REST API, for example http://127.0.0.1:31003.
              Accounts, bank balances, staking validators.
   --rpc      a node's CometBFT RPC, for example http://127.0.0.1:31001. The
-             Orama modules (x/nodes, x/storage, x/fees, ...) answer gRPC only,
-             and abci_query is their one HTTP route. The gateway does not
-             proxy it, so these reads go to a node you can reach.
+             Orama modules answer gRPC only and abci_query is their one node
+             HTTP route; with --rpc set, earnings, node, deal and query read
+             it directly instead of through the gateway.
 
 Transactions are built and signed by 'orama global', 'orama storage' and
 'orama cluster'; --onion on those submits through Tor.
@@ -656,7 +657,7 @@ Show a storage deal (x/storage)
 orama chain deal <deal-id>
 ```
 
-Show a storage deal from x/storage through --rpc.
+Show a storage deal from x/storage through the gateway (or --rpc).
 
 ### orama chain earnings
 
@@ -666,7 +667,7 @@ Show an account's earnings balance (x/fees)
 orama chain earnings <address>
 ```
 
-Show the earnings balance x/fees holds for an account, through --rpc. Earnings
+Show the earnings balance x/fees holds for an account, through the gateway (or --rpc). Earnings
 are what the account is paid for running nodes and services; they are not in
 the bank balance.
 
@@ -678,19 +679,22 @@ Show a registered node (x/nodes)
 orama chain node <node-id>
 ```
 
-Show a node's record from x/nodes through --rpc: operator, roles, bonds, endpoints, capacity and status.
+Show a node's record from x/nodes through the gateway (or --rpc): operator, roles, bonds, endpoints, capacity and status.
 
 ### orama chain query
 
-Run any Orama module query through --rpc
+Run any Orama module query through the gateway or --rpc
 
 ```
 orama chain query <Service/Method> [request-json] [flags]
 ```
 
-Run a gRPC query of an Orama module through --rpc's abci_query and print the
-response as JSON. The request is JSON with the proto field names. For example:
+Run a gRPC query of an Orama module and print the response as JSON. By default it
+goes through the gateway's GET /v1/chain/query/<Service>/<Method>; with --rpc it
+goes to that node's CometBFT abci_query. The request is JSON with the proto
+field names. For example:
 
+  orama chain query orama.nodes.v1.Query/Node '{"node_id":"node-1"}'
   orama chain query orama.nodes.v1.Query/Node '{"node_id":"node-1"}' --rpc http://127.0.0.1:31001
 
 'orama chain query --list' prints every query the CLI knows.

@@ -147,8 +147,29 @@ func TestDeal_requiresANumber(t *testing.T) {
 	if _, err := run(t, "deal", "seven", "--rpc", url); clierr.CodeOf(err) != clierr.CodeUsage {
 		t.Fatalf("err = %v, want a usage error", err)
 	}
-	if _, err := run(t, "deal", "7"); err == nil || !strings.Contains(err.Error(), "--rpc") {
-		t.Fatalf("err = %v, want the flag to pass", err)
+}
+
+func TestModuleQueries_readThroughTheGatewayWithoutRPC(t *testing.T) {
+	var gotPath, gotData string
+	url := server(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotData = r.URL.Path, r.URL.Query().Get("data")
+		w.Write([]byte(`{"node":{"node_id":"n-1"}}`))
+	})
+	out, err := run(t, "node", "n-1", "--gateway", url)
+	if err != nil || !strings.Contains(out, `"node_id": "n-1"`) {
+		t.Fatalf("out %q err %v", out, err)
+	}
+	if gotPath != "/v1/chain/query/orama.nodes.v1.Query/Node" || gotData != base64.RawURLEncoding.EncodeToString([]byte{0x0a, 0x03, 'n', '-', '1'}) {
+		t.Fatalf("gateway saw %q data %q", gotPath, gotData)
+	}
+	if _, err := run(t, "query", "orama.fees.v1.Query/Earnings", `{"address":"`+testAddr+`"}`, "--gateway", url); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/chain/query/orama.fees.v1.Query/Earnings" {
+		t.Fatalf("query path %q", gotPath)
+	}
+	if _, err := run(t, "query", "orama.nodes.v1.Query/Nope", "--gateway", url); err == nil {
+		t.Fatal("an unknown query was sent to the gateway")
 	}
 }
 

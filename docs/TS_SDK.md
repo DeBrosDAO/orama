@@ -552,9 +552,16 @@ console.log(result.txHash, describeTx(signed.txBytes).messages[0].summary);
 `supply`, `stakingPool` and the indexer's `indexStatus`, `indexBlock`, `indexTx`,
 `indexAccountTxs`, `cnftAsset` and `cnftOwnerAssets`: the routes in
 [CHAIN.md](CHAIN.md#explorer). A node's REST API (`restURL`) adds `account`, `balances` and
-`broadcast`. The Orama modules' own state (x/nodes, x/storage, x/fees, x/houses) speaks gRPC
-only and has no REST route, so this client does not read it; `orama chain query` reads it
-through a node's CometBFT RPC. A read that needs a base URL the config does not have fails and
+`broadcast`. The Orama modules' own state speaks gRPC only and has no REST route; the gateway serves
+each module's Query service at `/v1/chain/query/<package.Service>/<Method>`, and the client reads it
+through `gatewayURL`: `moduleQuery(service, method, request, { height })` for any embedded query, and typed
+reads for x/nodes (`nodesParams`, `operator`, `node`, `nodeCluster`, `nodeUnbondings`), x/storage
+(`storageParams`, `deal`, `slot`, `storageAuthorization`, `storageChallenges`, `storageEpochMint`,
+`storageQueue`), x/fees (`feesParams`, `baseFee`, `earnings`, `feesDeposit`), x/archive (`archiveParams`,
+`archiveRange`, `lastArchivedHeight`, `retainHeight`) and x/relay (`relayParams`, `relayReporters`, `relay`,
+`relayEpochResult`). They answer the decoded response with the proto field names (uint64 fields are decimal
+strings); a key that is not on chain is an `SDKError` with `httpStatus` 404. x/houses and the other
+modules are reachable through `moduleQuery`. A read that needs a base URL the config does not have fails and
 names it.
 
 **Building.** `buildSignDoc` produces the `SIGN_MODE_DIRECT` body, auth info and `SignDoc` for one
