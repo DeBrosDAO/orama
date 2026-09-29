@@ -1,0 +1,156 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
+
+	"github.com/DeBrosOfficial/network/chain/client/node"
+	"github.com/DeBrosOfficial/network/chain/provider"
+)
+
+// Provider defaults. The files live in the unit's WorkingDirectory, which is
+// the provider's StateDirectory.
+const (
+	providerListen      = "0.0.0.0:31013"
+	providerInterval    = 6 * time.Second
+	providerMaxPiece    = 256 << 20
+	providerRatePerSec  = 20
+	providerBurst       = 40
+	providerMaxIPs      = 4096
+	providerReadTimeout = 2 * time.Minute
+	shutdownTimeout     = 10 * time.Second
+)
+
+type providerFlags struct {
+	listen, rpc, home string
+	startHeight       int64
+	interval          time.Duration
+	maxPiece          int64
+}
+
+func providerCmd() *cobra.Command {
+	var fl providerFlags
+	cmd := &cobra.Command{
+		Use:   "provider",
+		Short: "Store assigned pieces, accept or decline them, and answer challenges",
+		Long: `provider watches the chain for slots assigned to this node, accepts a slot once
+its piece has been uploaded to POST /pieces/<hex piece root>, declines it before
+the accept window closes when nothing arrived, proves every challenge each epoch,
+and releases a slot one epoch after the chain stops naming this node for it.
+
+Files in --home: hot-key (created on first start, mode 0600), node-id (the x/nodes
+id, written after registration), denylist (optional, one CID per line), store/,
+state.json and monitor.json.`,
+		RunE: func(cmd *cobra.Command, _ []string) error { return runProvider(cmd.Context(), fl) },
+	}
+	f := cmd.Flags()
+	f.StringVar(&fl.listen, "listen", providerListen, "Upload and retrieval HTTP address")
+	f.StringVar(&fl.rpc, "rpc", defaultRPC, "oramad CometBFT RPC")
+	f.StringVar(&fl.home, "home", ".", "Provider state directory")
+	f.Int64Var(&fl.startHeight, "start-height", 1, "First block to read when state.json does not exist")
+	f.DurationVar(&fl.interval, "interval", providerInterval, "Time between chain steps")
+	f.Int64Var(&fl.maxPiece, "max-piece-bytes", providerMaxPiece, "Largest upload accepted")
+	return cmd
+}
+
+func runProvider(ctx context.Context, fl providerFlags) error {
+	if fl.interval <= 0 || fl.maxPiece < 1 {
+		return errors.New("--interval and --max-piece-bytes must be positive")
+	}
+	hot, created, err := loadOrCreateHotKey(filepath.Join(fl.home, "hot-key"))
+	if err != nil {
+		return err
+	}
+	if created {
+		slog.Info("created the provider hot key; fund it and name it in x/nodes", "address", hot.Address)
+	}
+	nodeID, err := readNodeID(filepath.Join(fl.home, "node-id"))
+	if err != nil {
+		return err
+	}
+	deny, err := readDenylist(filepath.Join(fl.home, "denylist"))
+	if err != nil {
+		return err
+	}
+	storeDir := filepath.Join(fl.home, "store")
+	store, err := provider.Open(storeDir, deny, func() (uint64, error) { return freeBytes(storeDir) })
+	if err != nil {
+		return fmt.Errorf("open the piece store %s: %w", storeDir, err)
+	}
+	client, err := node.Dial(fl.rpc)
+	if err != nil {
+		return err
+	}
+	chain, err := provider.NewNodeChain(client, hot)
+	if err != nil {
+		return err
+	}
+	runner, err := provider.NewRunner(store, chain, provider.Config{
+		NodeID: nodeID, Signer: hot.Address, StartHeight: fl.startHeight,
+		StatePath: filepath.Join(fl.home, "state.json"), MonitorPath: filepath.Join(fl.home, "monitor.json"),
+	})
+	if err != nil {
+		return err
+	}
+	handler, err := provider.NewRetrieval(store, providerRatePerSec, providerBurst, providerMaxIPs)
+	if err != nil {
+		return err
+	}
+	if err := handler.AcceptUploads(fl.maxPiece, runner.Assigned); err != nil {
+		return err
+	}
+	return serveAndStep(ctx, fl, handler, runner)
+}
+
+func serveAndStep(ctx context.Context, fl providerFlags, handler http.Handler, runner *provider.Runner) error {
+	srv := &http.Server{Addr: fl.listen, Handler: handler, ReadHeaderTimeout: providerReadTimeout / 4, ReadTimeout: providerReadTimeout}
+	errc := make(chan error, 1)
+	go func() { errc <- srv.ListenAndServe() }()
+	slog.Info("provider listening", "addr", fl.listen, "rpc", fl.rpc)
+	tick := time.NewTicker(fl.interval)
+	defer tick.Stop()
+	for {
+		if err := runner.Step(ctx); err != nil && ctx.Err() == nil {
+			// The next step reads the chain again; a missed accept or proof is rebuilt then.
+			slog.Error("provider step failed", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			shut, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			defer cancel()
+			return srv.Shutdown(shut)
+		case err := <-errc:
+			return fmt.Errorf("provider HTTP on %s stopped: %w", fl.listen, err)
+		case <-tick.C:
+		}
+	}
+}
+
+func readDenylist(path string) ([]string, error) {
+	body, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read denylist %s: %w", path, err)
+	}
+	return strings.Split(string(body), "\n"), nil
+}
+
+func freeBytes(dir string) (uint64, error) {
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
+		return 0, fmt.Errorf("statfs %s: %w", dir, err)
+	}
+	return st.Bavail * uint64(st.Bsize), nil
+}

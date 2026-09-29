@@ -13,8 +13,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Retrieval serves stored pieces over HTTP. It does not pin through Kubo
-// and it does not send chain transactions. A caller that passes a positive
+// Retrieval serves stored pieces over HTTP. It does not pin through Kubo. A caller that passes a positive
 // per-second limit, burst, and IP cap gets one token bucket per client
 // address. When the address table is full, a new address is refused.
 type Retrieval struct {

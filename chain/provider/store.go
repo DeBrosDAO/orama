@@ -1,5 +1,6 @@
 // Package provider stores assigned pieces on disk and builds the proofs
-// x/storage checks. It does not watch CometBFT and it does not send transactions.
+// x/storage checks. Runner follows the chain for one node and submits its
+// accepts, declines and proofs through a Chain.
 package provider
 
 import (
