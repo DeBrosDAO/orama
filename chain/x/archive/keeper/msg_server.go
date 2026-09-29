@@ -40,3 +40,12 @@ func (m msgServer) AttachReplicas(goCtx context.Context, msg *types.MsgAttachRep
 	}
 	return &types.MsgAttachReplicasResponse{Archived: archived, Replicas: replicas}, nil
 }
+
+func (m msgServer) CreateArchiveDeal(goCtx context.Context, msg *types.MsgCreateArchiveDeal) (*types.MsgCreateArchiveDealResponse, error) {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	dealID, archived, replicas, err := m.Keeper.CreateArchiveDeal(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+	return &types.MsgCreateArchiveDealResponse{DealId: dealID, Archived: archived, Replicas: replicas}, nil
+}

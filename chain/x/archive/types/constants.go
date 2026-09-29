@@ -26,6 +26,16 @@ const (
 	// MaxBundleCIDLen is the longest bundle CID accepted.
 	MaxBundleCIDLen = 128
 
+	// ArchiveDealEpochs is how long the protocol ARCHIVE deal made for a range runs: ten years
+	// of 24-hour epochs. The chain fixes it; an archiver cannot choose a longer or shorter
+	// deal. A range whose deals end is renewed with a new MsgCreateArchiveDeal.
+	ArchiveDealEpochs uint64 = 3650
+
+	// MaxLiveDealsPerRange is how many live deals (recorded or still waiting for a provider) a
+	// range may have. It is the replica quorum, so archiving a range never costs more than
+	// MinReplicaDeals deals at a time.
+	MaxLiveDealsPerRange = MinReplicaDeals
+
 	// MaxNodeIDLen is the longest x/nodes node id accepted.
 	MaxNodeIDLen = 128
 

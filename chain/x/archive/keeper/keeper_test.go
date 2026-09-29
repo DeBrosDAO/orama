@@ -59,12 +59,46 @@ func (f *fakeNodes) ArchiverOperator(_ context.Context, nodeID, signer string) (
 // opOf is node-N's default operator account.
 func opOf(n byte) string { return acc(n + 100).String() }
 
-// fakeStorage: every deal id is an active ARCHIVE deal except 10 and the
-// ones marked ended.
-type fakeStorage struct{ ended map[uint64]bool }
+// fakeStorage: every deal id is an active ARCHIVE deal except 10 and the ones marked ended. A
+// deal opened through CreateArchiveDeal is numbered from firstOpened, is OPEN (live, not active)
+// until activate is called, and its request is kept in opened.
+type fakeStorage struct {
+	ended  map[uint64]bool
+	open   map[uint64]bool
+	next   uint64
+	opened []openedDeal
+}
+
+type openedDeal struct {
+	ID       uint64
+	Root     []byte
+	Bytes    uint64
+	Duration uint64
+}
+
+const firstOpened uint64 = 500
 
 func (s *fakeStorage) ArchiveDealActive(_ context.Context, id uint64) (bool, error) {
+	return id != 10 && !s.ended[id] && !s.open[id], nil
+}
+
+func (s *fakeStorage) ArchiveDealLive(_ context.Context, id uint64) (bool, error) {
 	return id != 10 && !s.ended[id], nil
+}
+
+func (s *fakeStorage) CreateArchiveDeal(_ context.Context, root []byte, _, _, pieceBytes, duration uint64) (uint64, error) {
+	id := firstOpened + s.next
+	s.next++
+	s.open[id] = true
+	s.opened = append(s.opened, openedDeal{ID: id, Root: root, Bytes: pieceBytes, Duration: duration})
+	return id, nil
+}
+
+// activate gives an OPEN deal its first provider.
+func (s *fakeStorage) activate(ids ...uint64) {
+	for _, id := range ids {
+		delete(s.open, id)
+	}
 }
 
 func newTestFixture(t *testing.T) *testFixture {
@@ -82,7 +116,7 @@ func newTestFixture(t *testing.T) *testFixture {
 	types.RegisterInterfaces(interfaceRegistry)
 	cdc := codec.NewProtoCodec(interfaceRegistry)
 	nodes := &fakeNodes{operator: map[string]string{}, inactive: map[string]bool{}}
-	storage := &fakeStorage{ended: map[uint64]bool{}}
+	storage := &fakeStorage{ended: map[uint64]bool{}, open: map[uint64]bool{}}
 	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), nodes, storage)
 
 	return &testFixture{

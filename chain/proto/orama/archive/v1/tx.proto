@@ -17,6 +17,10 @@ service Msg {
   // AttachReplicas records storage-deal ids for a range. The deals themselves
   // live in x/storage; this message only records their ids.
   rpc AttachReplicas(MsgAttachReplicas) returns (MsgAttachReplicasResponse);
+
+  // CreateArchiveDeal opens a protocol ARCHIVE deal in x/storage for the bundle
+  // of an attested range and records it on that range in the same message.
+  rpc CreateArchiveDeal(MsgCreateArchiveDeal) returns (MsgCreateArchiveDealResponse);
 }
 
 // MsgAttest is an archiver attestation of one height range.
@@ -59,4 +63,30 @@ message MsgAttachReplicas {
 message MsgAttachReplicasResponse {
   bool archived = 1;
   uint32 replicas = 2;
+}
+
+// MsgCreateArchiveDeal opens one protocol ARCHIVE deal for the bundle of a range
+// the signer's operator attested, and attaches it to that range. The chain
+// chooses the price and the duration; the archiver supplies only the piece
+// commitment of the bundle file (the piece/ commitment, not the SHA-256 that
+// MsgAttest pins). A range holds at most a fixed number of live deals.
+message MsgCreateArchiveDeal {
+  option (cosmos.msg.v1.signer) = "archiver";
+
+  string archiver = 1;
+  int64 start_height = 2;
+  int64 end_height = 3;
+  // node_id is the x/nodes node the archiver field is the hot key of.
+  string node_id = 4;
+  bytes piece_root = 5;
+  uint64 real_leaf_count = 6;
+  uint64 padded_leaf_count = 7;
+  uint64 piece_bytes = 8;
+}
+
+// MsgCreateArchiveDealResponse is the Msg/CreateArchiveDeal response.
+message MsgCreateArchiveDealResponse {
+  uint64 deal_id = 1;
+  bool archived = 2;
+  uint32 replicas = 3;
 }

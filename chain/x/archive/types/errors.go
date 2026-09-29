@@ -25,6 +25,8 @@ var (
 	// ErrDealAttached is returned when a deal id is already a replica of
 	// another range.
 	ErrDealAttached = errors.New("deal is already attached to another range")
+	// ErrDealsFull is returned when a range already has all the live deals it may have.
+	ErrDealsFull = errors.New("range already has its live archive deals")
 	// ErrNotAttester is returned when an operator that did not attest a range
 	// tries to attach deals to it.
 	ErrNotAttester = errors.New("operator did not attest this range")

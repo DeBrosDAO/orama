@@ -96,21 +96,46 @@ func (k Keeper) CreateDeal(ctx sdk.Context, msg *types.MsgCreateDeal) (uint64, e
 // CreateProtocolDeal is the only way to open an ARCHIVE or protocol PUBLIC_PIN
 // deal. User messages cannot reach it.
 func (k Keeper) CreateProtocolDeal(ctx sdk.Context, class types.DealClass, payload []byte, price math.Int, duration uint64) (uint64, error) {
-	if class != types.DealClass_DEAL_CLASS_ARCHIVE && class != types.DealClass_DEAL_CLASS_PUBLIC_PIN {
-		return 0, fmt.Errorf("protocol deals must be ARCHIVE or PUBLIC_PIN, got %s", class)
-	}
 	if len(payload) == 0 {
 		return 0, fmt.Errorf("protocol deal payload is empty")
+	}
+	commitment, err := piece.Commit(payload)
+	if err != nil {
+		return 0, fmt.Errorf("failed to commit protocol payload: %w", err)
+	}
+	pc := types.PieceCommitment{
+		Root:            commitment.Root,
+		RealLeafCount:   commitment.RealLeafCount,
+		PaddedLeafCount: commitment.PaddedLeafCount,
+		PieceBytes:      uint64(len(payload)),
+	}
+	return k.createProtocolDeal(ctx, class, pc, price, duration)
+}
+
+// CreateArchiveDeal opens a protocol ARCHIVE deal over a bundle the chain does not hold: pc is the
+// piece commitment of the bundle file, the price is the protocol per-replica price, and the deal
+// runs for duration epochs. Only x/archive calls it, for a range it has already pinned; the
+// deal's slots go to distinct operators, /16 networks and ASNs like every protocol deal.
+func (k Keeper) CreateArchiveDeal(ctx sdk.Context, pc types.PieceCommitment, duration uint64) (uint64, error) {
+	if err := pc.CheckShape(); err != nil {
+		return 0, fmt.Errorf("archive piece: %w", err)
+	}
+	p, err := k.params(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return k.createProtocolDeal(ctx, types.DealClass_DEAL_CLASS_ARCHIVE, pc, p.ProtocolPricePerEpoch, duration)
+}
+
+func (k Keeper) createProtocolDeal(ctx sdk.Context, class types.DealClass, pc types.PieceCommitment, price math.Int, duration uint64) (uint64, error) {
+	if class != types.DealClass_DEAL_CLASS_ARCHIVE && class != types.DealClass_DEAL_CLASS_PUBLIC_PIN {
+		return 0, fmt.Errorf("protocol deals must be ARCHIVE or PUBLIC_PIN, got %s", class)
 	}
 	if price.IsNil() || !price.IsPositive() {
 		return 0, fmt.Errorf("protocol price must be positive")
 	}
 	if duration == 0 || duration > types.MaxDurationEpochs {
 		return 0, fmt.Errorf("protocol duration must be in [1, %d]", types.MaxDurationEpochs)
-	}
-	commitment, err := piece.Commit(payload)
-	if err != nil {
-		return 0, fmt.Errorf("failed to commit protocol payload: %w", err)
 	}
 	epoch, err := k.currentEpoch(ctx)
 	if err != nil {
@@ -119,12 +144,6 @@ func (k Keeper) CreateProtocolDeal(ctx sdk.Context, class types.DealClass, paylo
 	id, err := k.NextDealID.Get(ctx)
 	if err != nil {
 		return 0, err
-	}
-	pc := types.PieceCommitment{
-		Root:            commitment.Root,
-		RealLeafCount:   commitment.RealLeafCount,
-		PaddedLeafCount: commitment.PaddedLeafCount,
-		PieceBytes:      uint64(len(payload)),
 	}
 	deal := types.Deal{
 		Id:             id,
@@ -143,8 +162,7 @@ func (k Keeper) CreateProtocolDeal(ctx sdk.Context, class types.DealClass, paylo
 	if err := k.saveDeal(ctx, deal); err != nil {
 		return 0, err
 	}
-	pieces := []types.PieceCommitment{pc}
-	if err := k.writeSlots(ctx, deal, pieces); err != nil {
+	if err := k.writeSlots(ctx, deal, []types.PieceCommitment{pc}); err != nil {
 		return 0, err
 	}
 	if err := k.Pending.Set(ctx, id); err != nil {

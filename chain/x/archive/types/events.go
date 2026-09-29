@@ -5,6 +5,8 @@ const (
 	EventTypeAttest = "archive_attest"
 	// EventTypeAttachReplicas is emitted when deal ids are recorded.
 	EventTypeAttachReplicas = "archive_attach_replicas"
+	// EventTypeCreateArchiveDeal is emitted when an ARCHIVE deal is made for a range.
+	EventTypeCreateArchiveDeal = "archive_create_deal"
 	// EventTypeArchived is emitted once, when a range first meets quorum.
 	EventTypeArchived = "archive_archived"
 
@@ -16,6 +18,8 @@ const (
 	AttributeKeyEndHeight = "end_height"
 	// AttributeKeyBundleCID is the pinned bundle CID.
 	AttributeKeyBundleCID = "bundle_cid"
+	// AttributeKeyDealID is the x/storage deal id, in decimal.
+	AttributeKeyDealID = "deal_id"
 	// AttributeKeyArchived is "true" once the range is archived.
 	AttributeKeyArchived = "archived"
 )

@@ -9,6 +9,7 @@ import (
 	nodeskeeper "github.com/DeBrosOfficial/network/chain/x/nodes/keeper"
 	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
 	storagekeeper "github.com/DeBrosOfficial/network/chain/x/storage/keeper"
+	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
 // archiveNodes is x/archive's view of x/nodes: an archiver is the hot key of
@@ -46,4 +47,17 @@ type archiveStorage struct {
 
 func (a archiveStorage) ArchiveDealActive(ctx context.Context, dealID uint64) (bool, error) {
 	return a.storage.ArchiveDealActive(sdk.UnwrapSDKContext(ctx), dealID)
+}
+
+func (a archiveStorage) ArchiveDealLive(ctx context.Context, dealID uint64) (bool, error) {
+	return a.storage.ArchiveDealLive(sdk.UnwrapSDKContext(ctx), dealID)
+}
+
+func (a archiveStorage) CreateArchiveDeal(ctx context.Context, pieceRoot []byte, realLeafCount, paddedLeafCount, pieceBytes, durationEpochs uint64) (uint64, error) {
+	return a.storage.CreateArchiveDeal(sdk.UnwrapSDKContext(ctx), storagetypes.PieceCommitment{
+		Root:            pieceRoot,
+		RealLeafCount:   realLeafCount,
+		PaddedLeafCount: paddedLeafCount,
+		PieceBytes:      pieceBytes,
+	}, durationEpochs)
 }

@@ -30,7 +30,7 @@ func archiverCmd() *cobra.Command {
 	var interval time.Duration
 	cmd := &cobra.Command{
 		Use:   "archiver",
-		Short: "Bundle finalised block ranges and attest them to x/archive",
+		Short: "Bundle finalised block ranges, attest them to x/archive and open their archive deals",
 		Long: `archiver reads each finalised --range-blocks range from oramad over RPC, writes
 <home>/bundles/<start>-<end>.orbh, and submits MsgAttest with the bundle CID, its
 SHA-256 and the block-hash Merkle root. Every archiver of a chain must use the
@@ -38,8 +38,14 @@ same range width. <home>/cursor is the last attested height; a restart resumes
 after it. <home>/hot-key is the signing key, created on first start (mode 0600);
 it must be the hot key of the x/nodes node named in <home>/node-id, which needs
 an active ARCHIVER role bond.
-It does not create ARCHIVE storage deals and does not move CometBFT's retain
-height, so a range is attested but not marked archived by this process alone.`,
+For each attested range it then opens the ARCHIVE storage deals the range lacks
+(MsgCreateArchiveDeal, priced and timed by the chain) and, once x/storage has
+given a deal a provider, records it (MsgAttachReplicas). x/archive marks the
+range archived at three attesting operators and three recorded deals.
+<home>/monitor.json reports the attested height, the chain's last archived
+height, the tip and the lag between them. The archiver does not hold CometBFT's
+retain height: the chain's Commit never returns one above the last archived
+height.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runArchiver(cmd.Context(), rpc, home, width, interval)
 		},

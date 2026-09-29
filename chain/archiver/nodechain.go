@@ -3,12 +3,15 @@ package archiver
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/client/node"
 	"github.com/DeBrosOfficial/network/chain/client/tx"
 	"github.com/DeBrosOfficial/network/chain/x/archive/types"
+	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
 // NodeChain is Chain over one oramad RPC, signing with the archiver key.
@@ -65,4 +68,50 @@ func QueryRange(ctx context.Context, client *node.Client, start, end int64) (typ
 func (c *NodeChain) Submit(ctx context.Context, msgs ...sdk.Msg) error {
 	_, err := c.Client.Submit(ctx, c.signer, msgs...)
 	return err
+}
+
+// CreateArchiveDeal submits msg and returns the deal id x/archive reports in its event.
+func (c *NodeChain) CreateArchiveDeal(ctx context.Context, msg *types.MsgCreateArchiveDeal) (uint64, error) {
+	hash, events, err := c.Client.SubmitWithEvents(ctx, c.signer, msg)
+	if err != nil {
+		return 0, err
+	}
+	for _, ev := range events {
+		if ev.Type != types.EventTypeCreateArchiveDeal {
+			continue
+		}
+		for _, attr := range ev.Attributes {
+			if attr.Key == types.AttributeKeyDealID {
+				id, err := strconv.ParseUint(attr.Value, 10, 64)
+				if err != nil {
+					return 0, fmt.Errorf("transaction %s reports deal id %q: %w", hash, attr.Value, err)
+				}
+				return id, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("transaction %s opened no archive deal event", hash)
+}
+
+// DealStatus reads one x/storage deal.
+func (c *NodeChain) DealStatus(ctx context.Context, dealID uint64) (storagetypes.DealStatus, bool, error) {
+	var resp storagetypes.QueryDealResponse
+	err := c.Client.Query(ctx, "/orama.storage.v1.Query/Deal", &storagetypes.QueryDealRequest{DealId: dealID}, &resp)
+	if err != nil {
+		var qe *node.QueryError
+		if errors.As(err, &qe) && qe.NotFound() {
+			return storagetypes.DealStatus_DEAL_STATUS_UNSPECIFIED, false, nil
+		}
+		return storagetypes.DealStatus_DEAL_STATUS_UNSPECIFIED, false, err
+	}
+	return resp.Deal.Status, true, nil
+}
+
+// LastArchivedHeight reads x/archive's contiguous archived prefix.
+func (c *NodeChain) LastArchivedHeight(ctx context.Context) (int64, error) {
+	var resp types.QueryLastArchivedHeightResponse
+	if err := c.Client.Query(ctx, "/orama.archive.v1.Query/LastArchivedHeight", &types.QueryLastArchivedHeightRequest{}, &resp); err != nil {
+		return 0, err
+	}
+	return resp.LastArchivedHeight, nil
 }

@@ -501,3 +501,123 @@ func TestExportGenesis_roundTripsAnEndedDealAndTheIndex(t *testing.T) {
 	})
 	require.ErrorIs(t, err, types.ErrDealAttached, "the imported index still holds deal 2")
 }
+
+func (f *testFixture) createDeal(t *testing.T, signer byte, start, end int64) uint64 {
+	t.Helper()
+	res, err := f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(signer, start, end))
+	require.NoError(t, err)
+	return res.DealId
+}
+
+func (f *testFixture) createMsg(signer byte, start, end int64) *types.MsgCreateArchiveDeal {
+	return &types.MsgCreateArchiveDeal{
+		Archiver: acc(signer).String(), NodeId: nodeOf(signer), StartHeight: start, EndHeight: end,
+		PieceRoot: digest(7), RealLeafCount: 3, PaddedLeafCount: 4, PieceBytes: 3000,
+	}
+}
+
+func TestCreateArchiveDeal_opensAChainPricedDealThatCountsOnlyOnceItHasAProvider(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	for n := byte(1); n <= 3; n++ {
+		f.attest(t, n, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	}
+	var ids []string
+	for i := 0; i < types.MinReplicaDeals; i++ {
+		ids = append(ids, fmt.Sprint(f.createDeal(t, 1, 1, 50)))
+	}
+	require.Len(t, f.Storage.opened, types.MinReplicaDeals)
+	require.Equal(t, types.ArchiveDealEpochs, f.Storage.opened[0].Duration, "the chain, not the archiver, sets the duration")
+	require.Equal(t, digest(7), f.Storage.opened[0].Root)
+
+	_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50, DealIds: ids,
+	})
+	require.ErrorIs(t, err, types.ErrNotArchiveDeal, "an OPEN deal has no provider and cannot make a range archived")
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.False(t, rec.Archived)
+
+	f.Storage.activate(firstOpened, firstOpened+1, firstOpened+2)
+	res := f.attach(t, 1, 1, 50, ids...)
+	require.True(t, res.Archived)
+	last, err := f.Keeper.LastArchivedHeight.Get(f.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(50), last)
+}
+
+func TestCreateArchiveDeal_aRangeHoldsAtMostItsQuorumOfLiveDeals(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	for i := 0; i < types.MaxLiveDealsPerRange; i++ {
+		f.createDeal(t, 1, 1, 50)
+	}
+	_, err := f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
+	require.ErrorIs(t, err, types.ErrDealsFull)
+	require.Len(t, f.Storage.opened, types.MaxLiveDealsPerRange, "the refused message opened no deal")
+
+	f.Storage.ended[firstOpened] = true
+	f.createDeal(t, 1, 1, 50)
+	require.Len(t, f.Storage.opened, types.MaxLiveDealsPerRange+1, "a pending deal that ended frees its place")
+	_, err = f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
+	require.ErrorIs(t, err, types.ErrDealsFull)
+}
+
+func TestCreateArchiveDeal_recordedLiveDealsCountAndEndedOnesAreRenewed(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attach(t, 1, 1, 50, "1", "2", "3")
+	_, err := f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
+	require.ErrorIs(t, err, types.ErrDealsFull, "three recorded live deals are all a range may have")
+
+	f.Storage.ended[2] = true
+	id := f.createDeal(t, 1, 1, 50)
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Equal(t, []string{"1", "3"}, rec.DealIds, "the ended deal is dropped")
+	require.Equal(t, firstOpened, id)
+}
+
+func TestCreateArchiveDeal_onlyAnAttesterOfTheRangeMayAskForDeals(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+
+	_, err := f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(3, 1, 50))
+	require.ErrorIs(t, err, types.ErrNotAttester)
+
+	wrongKey := f.createMsg(1, 1, 50)
+	wrongKey.Archiver = acc(9).String()
+	_, err = f.Msg.CreateArchiveDeal(f.Ctx, wrongKey)
+	require.ErrorContains(t, err, "not the hot key")
+
+	f.Nodes.inactive[nodeOf(1)] = true
+	_, err = f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
+	require.ErrorContains(t, err, "no active ARCHIVER role")
+	require.Empty(t, f.Storage.opened, "no refused message opened a deal")
+}
+
+func TestCreateArchiveDeal_unknownAndUnfinalizedRangesAreRefused(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	_, err := f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 50))
+	require.ErrorIs(t, err, types.ErrUnknownRange)
+	_, err = f.Msg.CreateArchiveDeal(f.Ctx, f.createMsg(1, 1, 1_000_000))
+	require.ErrorIs(t, err, types.ErrNotFinalized)
+	require.Empty(t, f.Storage.opened)
+}
+
+func TestCreateArchiveDeal_aPendingDealBacksNoOtherRange(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attest(t, 1, 51, 100, "bafyarchivecid", digest(1), digest(3))
+	id := f.createDeal(t, 1, 1, 50)
+	f.Storage.activate(id)
+	_, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 51, EndHeight: 100, DealIds: []string{fmt.Sprint(id)},
+	})
+	require.ErrorIs(t, err, types.ErrDealAttached)
+}

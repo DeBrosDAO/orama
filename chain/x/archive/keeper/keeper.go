@@ -2,8 +2,9 @@
 // CID, a block-hash Merkle root and replica deal ids
 // (plans/open-network/track-c-chain.md C14).
 //
-// The deals themselves stay in x/storage. This keeper only records deal ids and
-// does not import x/storage. There is no admin key and no authority address.
+// The deals themselves stay in x/storage. This keeper records deal ids and asks x/storage,
+// through types.StorageKeeper, to open the protocol ARCHIVE deal of a range; it does not
+// import x/storage. There is no admin key and no authority address.
 package keeper
 
 import (
@@ -28,6 +29,9 @@ type Keeper struct {
 	Ranges             collections.Map[collections.Pair[int64, int64], types.RangeRecord]
 	// AttachedDeals maps a deal id to the start height of the range it backs.
 	AttachedDeals collections.Map[uint64, int64]
+	// PendingDeals holds (range start, deal id) for ARCHIVE deals made by MsgCreateArchiveDeal that
+	// no range records yet.
+	PendingDeals collections.KeySet[collections.Pair[int64, uint64]]
 
 	nodes   types.NodesKeeper
 	storage types.StorageKeeper
@@ -49,6 +53,7 @@ func NewKeeper(cdc codec.BinaryCodec, storeService storetypes.KVStoreService, no
 			codec.CollValue[types.RangeRecord](cdc),
 		),
 		AttachedDeals: collections.NewMap(sb, types.AttachedDealsPrefix, "attached_deals", collections.Uint64Key, collections.Int64Value),
+		PendingDeals:  collections.NewKeySet(sb, types.PendingDealsPrefix, "pending_deals", collections.PairKeyCodec(collections.Int64Key, collections.Uint64Key)),
 	}
 	schema, err := sb.Build()
 	if err != nil {

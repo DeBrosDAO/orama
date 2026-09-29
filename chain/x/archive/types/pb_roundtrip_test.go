@@ -36,6 +36,17 @@ func TestProtoRoundTrip(t *testing.T) {
 		EndHeight:   2,
 		DealIds:     []string{"deal-9"},
 	})
+	roundTrip(t, &types.MsgCreateArchiveDeal{
+		Archiver:        "cosmos1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+		StartHeight:     1,
+		EndHeight:       2,
+		NodeId:          "node-1",
+		PieceRoot:       bytes.Repeat([]byte{7}, types.HashLen),
+		RealLeafCount:   3,
+		PaddedLeafCount: 4,
+		PieceBytes:      3000,
+	})
+	roundTrip(t, &types.MsgCreateArchiveDealResponse{DealId: 9, Archived: true, Replicas: 3})
 	roundTrip(t, &types.GenesisState{
 		Params:             types.DefaultParams(),
 		Ranges:             []types.RangeRecord{{StartHeight: 4, EndHeight: 9, BundleCid: "bafygenesis"}},

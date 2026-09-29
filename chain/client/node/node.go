@@ -247,16 +247,23 @@ func (c *Client) baseFee(ctx context.Context) (math.Int, error) {
 // transaction. It returns the tx hash. A CheckTx or DeliverTx failure is an
 // error that carries the chain's log.
 func (c *Client) Submit(ctx context.Context, account tx.Account, msgs ...sdk.Msg) (string, error) {
+	hash, _, err := c.SubmitWithEvents(ctx, account, msgs...)
+	return hash, err
+}
+
+// SubmitWithEvents is Submit that also returns the events the transaction emitted, for a caller
+// that needs an id the chain assigned (a deal id).
+func (c *Client) SubmitWithEvents(ctx context.Context, account tx.Account, msgs ...sdk.Msg) (string, []abci.Event, error) {
 	if len(msgs) == 0 {
-		return "", errors.New("no messages to submit")
+		return "", nil, errors.New("no messages to submit")
 	}
 	chainID, _, err := c.Status(ctx)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	number, seq, err := c.account(ctx, account.Address)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	unsigned := tx.Unsigned{
 		ChainID: chainID, AccountNumber: number, Sequence: seq,
@@ -264,17 +271,17 @@ func (c *Client) Submit(ctx context.Context, account tx.Account, msgs ...sdk.Msg
 	}
 	gas, err := c.simulate(ctx, account, unsigned)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	base, err := c.baseFee(ctx)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	unsigned.GasLimit = gas
 	unsigned.Fee = sdk.NewCoins(sdk.NewCoin(params.BaseDenom, feeFor(gas, base)))
 	raw, err := c.builder.Build(account, unsigned)
 	if err != nil {
-		return "", fmt.Errorf("sign transaction: %w", err)
+		return "", nil, fmt.Errorf("sign transaction: %w", err)
 	}
 	return c.broadcast(ctx, raw)
 }
@@ -304,14 +311,14 @@ func (c *Client) simulate(ctx context.Context, account tx.Account, unsigned tx.U
 	return resp.GasInfo.GasUsed * gasAdjustmentPercent / 100, nil
 }
 
-func (c *Client) broadcast(ctx context.Context, raw []byte) (string, error) {
+func (c *Client) broadcast(ctx context.Context, raw []byte) (string, []abci.Event, error) {
 	res, err := c.rpc.BroadcastTxSync(ctx, raw)
 	if err != nil {
-		return "", fmt.Errorf("broadcast transaction: %w", err)
+		return "", nil, fmt.Errorf("broadcast transaction: %w", err)
 	}
 	hash := res.Hash.String()
 	if res.Code != 0 {
-		return hash, fmt.Errorf("transaction %s rejected by CheckTx (code %d): %s", hash, res.Code, res.Log)
+		return hash, nil, fmt.Errorf("transaction %s rejected by CheckTx (code %d): %s", hash, res.Code, res.Log)
 	}
 	deadline := time.NewTimer(c.includeTimeout)
 	defer deadline.Stop()
@@ -320,9 +327,9 @@ func (c *Client) broadcast(ctx context.Context, raw []byte) (string, error) {
 	for {
 		select {
 		case <-ctx.Done():
-			return hash, ctx.Err()
+			return hash, nil, ctx.Err()
 		case <-deadline.C:
-			return hash, fmt.Errorf("%w: %s after %s", ErrNotIncluded, hash, c.includeTimeout)
+			return hash, nil, fmt.Errorf("%w: %s after %s", ErrNotIncluded, hash, c.includeTimeout)
 		case <-tick.C:
 			got, err := c.rpc.Tx(ctx, res.Hash, false)
 			if err != nil {
@@ -331,12 +338,12 @@ func (c *Client) broadcast(ctx context.Context, raw []byte) (string, error) {
 				if strings.Contains(err.Error(), "not found") {
 					continue
 				}
-				return hash, fmt.Errorf("look up transaction %s: %w", hash, err)
+				return hash, nil, fmt.Errorf("look up transaction %s: %w", hash, err)
 			}
 			if got.TxResult.Code != 0 {
-				return hash, fmt.Errorf("transaction %s failed in block %d (code %d): %s", hash, got.Height, got.TxResult.Code, got.TxResult.Log)
+				return hash, nil, fmt.Errorf("transaction %s failed in block %d (code %d): %s", hash, got.Height, got.TxResult.Code, got.TxResult.Log)
 			}
-			return hash, nil
+			return hash, got.TxResult.Events, nil
 		}
 	}
 }

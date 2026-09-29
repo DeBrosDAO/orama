@@ -127,6 +127,9 @@ func (k Keeper) AttachReplicas(ctx sdk.Context, msg *types.MsgAttachReplicas) (b
 	if err := k.indexDeals(ctx, rec.StartHeight, msg.DealIds); err != nil {
 		return false, 0, err
 	}
+	if err := k.clearPending(ctx, rec.StartHeight, msg.DealIds); err != nil {
+		return false, 0, err
+	}
 	rec.DealIds = merged
 	stored, justArchived, err := k.storeRange(ctx, rec)
 	if err != nil {
@@ -173,6 +176,20 @@ func (k Keeper) indexDeals(ctx sdk.Context, start int64, ids []string) error {
 		}
 		if err := k.AttachedDeals.Set(ctx, dealID, start); err != nil {
 			return fmt.Errorf("index deal %d: %w", dealID, err)
+		}
+	}
+	return nil
+}
+
+// clearPending forgets the pending marks of deals a range now records.
+func (k Keeper) clearPending(ctx sdk.Context, start int64, ids []string) error {
+	for _, id := range ids {
+		dealID, err := strconv.ParseUint(id, 10, 64)
+		if err != nil {
+			return fmt.Errorf("deal id %q: %w", id, err)
+		}
+		if err := k.forgetPending(ctx, start, dealID); err != nil {
+			return err
 		}
 	}
 	return nil

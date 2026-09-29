@@ -321,3 +321,17 @@ func (k Keeper) ArchiveDealActive(ctx sdk.Context, dealID uint64) (bool, error) 
 	}
 	return deal.Class == types.DealClass_DEAL_CLASS_ARCHIVE && deal.Status == types.DealStatus_DEAL_STATUS_ACTIVE, nil
 }
+
+// ArchiveDealLive reports whether dealID is an ARCHIVE deal that is still running: OPEN, waiting
+// for its first provider, or ACTIVE. An unknown deal is not an error; it is not live.
+func (k Keeper) ArchiveDealLive(ctx sdk.Context, dealID uint64) (bool, error) {
+	deal, err := k.Deals.Get(ctx, dealID)
+	if err != nil {
+		if errors.Is(err, collections.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to load deal %d: %w", dealID, err)
+	}
+	running := deal.Status == types.DealStatus_DEAL_STATUS_OPEN || deal.Status == types.DealStatus_DEAL_STATUS_ACTIVE
+	return deal.Class == types.DealClass_DEAL_CLASS_ARCHIVE && running, nil
+}

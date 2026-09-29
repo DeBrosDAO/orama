@@ -14,6 +14,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/x/archive/types"
+	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
 // DefaultRangeBlocks is the width of one archived range. x/archive refuses
@@ -34,16 +35,26 @@ type Chain interface {
 	Block(ctx context.Context, height int64) (Block, error)
 	Range(ctx context.Context, start, end int64) (types.RangeRecord, bool, error)
 	Submit(ctx context.Context, msgs ...sdk.Msg) error
+	// CreateArchiveDeal submits MsgCreateArchiveDeal and returns the id of the deal it opened.
+	CreateArchiveDeal(ctx context.Context, msg *types.MsgCreateArchiveDeal) (uint64, error)
+	// DealStatus reads an x/storage deal. found is false for a deal that does not exist.
+	DealStatus(ctx context.Context, dealID uint64) (status storagetypes.DealStatus, found bool, err error)
+	// LastArchivedHeight is x/archive's contiguous archived prefix, the height below which the
+	// chain lets a node prune.
+	LastArchivedHeight(ctx context.Context) (int64, error)
 }
 
-// Runner packs finalised ranges into bundle files and attests them. Its
-// cursor is the last height it attested; a restart resumes after it.
+// Runner packs finalised ranges into bundle files, attests them, and opens and records the
+// ARCHIVE deals that make a range archived. Its cursor is the last height it attested; a restart
+// resumes after it. It does not hold the node's block retain height: the chain's own Commit
+// keeps that below the last archived height (docs/CHAIN.md, "History archiver").
 type Runner struct {
-	chain    Chain
-	archiver string
-	nodeID   string
-	dir      string
-	width    int64
+	chain       Chain
+	archiver    string
+	nodeID      string
+	dir         string
+	width       int64
+	dealsOpened uint64
 }
 
 // NewRunner writes bundles under dir and signs attestations as archiver, the
@@ -68,9 +79,16 @@ func BundlePath(dir string, start, end int64) string {
 	return filepath.Join(dir, "bundles", fmt.Sprintf("%d-%d.orbh", start, end))
 }
 
-// Step attests every whole range that is finalised. x/archive accepts a
-// range only once the chain is past its last height.
+// Step attests every whole range that is finalised, moves every attested range toward archived
+// by opening and recording its ARCHIVE deals, and writes monitor.json. It returns how many ranges
+// it attested. x/archive accepts a range only once the chain is past its last height.
 func (r *Runner) Step(ctx context.Context) (int, error) {
+	done, attestErr := r.attestRanges(ctx)
+	open, dealErr := r.advanceDeals(ctx)
+	return done, errors.Join(attestErr, dealErr, r.writeMonitor(ctx, open))
+}
+
+func (r *Runner) attestRanges(ctx context.Context) (int, error) {
 	cursor, err := LoadCursor(r.cursorPath())
 	if err != nil {
 		return 0, err
@@ -160,13 +178,16 @@ func (r *Runner) archiveRange(ctx context.Context, start, end int64) error {
 		!bytes.Equal(rec.BundleHash, bundle.ContentHash) || rec.BundleCid != cid) {
 		return r.recordConflict(start, end, bundle, cid, rec)
 	}
-	if found && slices.Contains(rec.Archivers, r.archiver) {
-		return nil
+	if !found || !slices.Contains(rec.Archivers, r.archiver) {
+		err = r.chain.Submit(ctx, &types.MsgAttest{
+			Archiver: r.archiver, NodeId: r.nodeID, StartHeight: start, EndHeight: end,
+			BundleCid: cid, BundleHash: bundle.ContentHash, MerkleRoot: bundle.MerkleRoot,
+		})
+		if err != nil {
+			return err
+		}
 	}
-	return r.chain.Submit(ctx, &types.MsgAttest{
-		Archiver: r.archiver, NodeId: r.nodeID, StartHeight: start, EndHeight: end,
-		BundleCid: cid, BundleHash: bundle.ContentHash, MerkleRoot: bundle.MerkleRoot,
-	})
+	return r.track(start, end)
 }
 
 func writeAtomic(path string, body []byte, mode os.FileMode) error {

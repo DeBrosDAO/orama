@@ -20,4 +20,9 @@ var (
 	// AttachedDealsPrefix maps each attached deal id to its range, so one deal
 	// cannot be counted as a replica of two ranges.
 	AttachedDealsPrefix = collections.NewPrefix(3)
+	// PendingDealsPrefix is a key set of (range start, deal id) for a deal made by
+	// MsgCreateArchiveDeal that MsgAttachReplicas has not recorded yet. A new deal is
+	// OPEN until x/storage assigns it a provider in the next block, and an OPEN deal
+	// cannot back a range, so this bounds the deals a range may be given in that time.
+	PendingDealsPrefix = collections.NewPrefix(4)
 )
