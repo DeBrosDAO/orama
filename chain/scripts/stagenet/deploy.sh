@@ -9,7 +9,7 @@
 # script refuses to run otherwise. keyring-backend test (an unencrypted, on-disk keyring) is used
 # throughout: it is a devnet-only convenience, never appropriate once real value is at stake.
 #
-# Usage: deploy.sh up | status | reset
+# Usage: deploy.sh up | status | invariants | reset
 set -euo pipefail
 
 CHAIN_ID="${CHAIN_ID:-orama-stagenet-1}"
@@ -344,6 +344,37 @@ cmd_status() {
 	done
 }
 
+# INVARIANT_MODULES are the modules whose `oramad query <module> invariants` must hold on every
+# node after a deploy (docs/SECURITY_PLAYBOOKS.md). A literal list: nothing from remote output is
+# spliced into the remote command.
+INVARIANT_MODULES=(emission fees storage nodes relay houses token)
+
+# cmd_invariants runs every module's invariant query on every node and fails if any query fails
+# or reports a broken invariant (each response carries booleans that must all be true).
+cmd_invariants() {
+	local failed=0
+	for n in "${NODES[@]}"; do
+		local alias name; alias="$(field "$n" 2)"; name="$(field "$n" 1)"
+		for m in "${INVARIANT_MODULES[@]}"; do
+			local out
+			if ! out="$(as_chain "$alias" query "$m" invariants --node "tcp://127.0.0.1:$RPC_PORT" --output json 2>&1)"; then
+				printf '%-9s %-9s query failed: %s\n' "$name" "$m" "$out"
+				failed=1
+				continue
+			fi
+			if echo "$out" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+sys.exit(1 if [k for k,v in d.items() if isinstance(v,bool) and not v] else 0)'; then
+				printf '%-9s %-9s ok\n' "$name" "$m"
+			else
+				printf '%-9s %-9s BROKEN %s\n' "$name" "$m" "$out"
+				failed=1
+			fi
+		done
+	done
+	return "$failed"
+}
+
 # cmd_reset fully tears a node back down, including a node left in a partial state by an earlier
 # aborted run (binary and/or state directory present but no unit installed yet, or vice versa):
 # every step here tolerates the thing it's removing already being absent.
@@ -362,6 +393,7 @@ cmd_reset() {
 case "${1:-}" in
 	up) cmd_up ;;
 	status) cmd_status ;;
+	invariants) cmd_invariants ;;
 	reset) cmd_reset ;;
-	*) echo "usage: $0 up|status|reset" >&2; exit 2 ;;
+	*) echo "usage: $0 up|status|invariants|reset" >&2; exit 2 ;;
 esac

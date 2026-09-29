@@ -1123,7 +1123,7 @@ runs `stage-oramad` for every upgrade.
 
 ## The stagenet deploy script
 
-`chain/scripts/stagenet/deploy.sh up|status|reset` is an **interim** deployment path for the
+`chain/scripts/stagenet/deploy.sh up|status|invariants|reset` is an **interim** deployment path for the
 project's own stagenet nodes, standing in until plan B2/B3 (the `orama` CLI's global-node role)
 exists to manage `oramad` the same way it manages cluster services. Until then, this script drives
 its own systemd unit directly. It refuses to run unless `CHAIN_ID` contains `-stagenet-` or
@@ -1139,7 +1139,9 @@ script's own disk) and fed to `genesis add-bootstrap-validator --consensus-pubke
 first node. `reset` fully tears a node down - including one left over from an
 aborted `up` (binary and/or state present but no systemd unit yet, or vice versa) - by removing the
 unit, the state directory and the binary, each step tolerating the thing it removes already being
-absent. Like the localnet script, its genesis flow uses `keyring-backend test` (an unencrypted,
+absent. `invariants` runs `oramad query <module> invariants` for emission, fees, storage,
+nodes, relay, houses and token on every node and fails if a query fails or any check is false.
+Like the localnet script, its genesis flow uses `keyring-backend test` (an unencrypted,
 on-disk keyring): appropriate for a devnet/stagenet operator key that holds no real value, never
 for anything that does.
 
