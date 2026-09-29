@@ -1,0 +1,44 @@
+[package]
+name = "orama-shielded-wallet"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+description = "Wallet-side shielded core for Orama (F7): key tree, note tree and Ironwood bundle builder. Proves off-node; never linked into oramad."
+
+[lib]
+name = "orama_shielded_wallet"
+
+[[bin]]
+name = "orama-shielded-builder"
+path = "src/bin/orama-shielded-builder.rs"
+
+[dependencies]
+# Same exact pins as ../orchardffi/Cargo.toml: the wallet must build what the node verifies.
+orchard = { version = "=0.15.5", features = ["circuit"] }
+zcash_primitives = { version = "=0.30.1", default-features = false, features = ["std"] }
+zcash_protocol = "=0.10.6"
+# ZIP-32 hardened-only derivation framework, the version orchard 0.15.5 resolves to.
+zip32 = "=0.2.1"
+zcash_spec = "=0.2.1"
+incrementalmerkletree = "0.8"
+rand = "0.8"
+rand_chacha = "0.3"
+sha2 = "0.10"
+hkdf = "0.12"
+pbkdf2 = { version = "0.12", default-features = false }
+hmac = "0.12"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+blake2b_simd = "1"
+# The chain's own verifier (verify-only C ABI crate), used as an rlib to check every bundle.
+orama-orchard-ffi = { path = "../orchardffi" }
+
+# Halo 2 proving is unusably slow unoptimised.
+[profile.dev]
+opt-level = 3
+[profile.test]
+opt-level = 3

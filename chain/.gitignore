@@ -6,4 +6,5 @@
 
 # Rust verifier build output (x/shielded/orchardffi) and the static libraries the cgo build links
 /x/shielded/orchardffi/target/
+/x/shielded/wallet/target/
 /x/shielded/verify/orchard/lib/

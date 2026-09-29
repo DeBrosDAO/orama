@@ -58,6 +58,8 @@ test:
 # Orchard/Ironwood verifier (x/shielded/orchardffi, Rust). The Go side links it only under
 # -tags orchardffi with cgo; without it a build fails closed with ErrVerifierNotLinked.
 ORCHARD_CRATE := x/shielded/orchardffi
+# Wallet-side shielded core (F7): key tree and bundle builder. Never linked into oramad.
+SHIELDED_WALLET_CRATE := x/shielded/wallet
 ORCHARD_LIBDIR := x/shielded/verify/orchard/lib
 # The static release build links musl through zig, the toolchain `orama build` already requires.
 ORAMA_ZIG ?= zig
@@ -81,9 +83,10 @@ orchard-lib-linux-amd64:
 	mkdir -p $(ORCHARD_LIBDIR)/linux_amd64
 	cp $(ORCHARD_CRATE)/target/$(ORCHARD_LINUX_AMD64_RUST_TARGET)/release/liborama_orchard.a $(ORCHARD_LIBDIR)/linux_amd64/
 
-## orchard-test: Rust tests, then the Go tests with the real verifier linked.
+## orchard-test: Rust tests (verifier and wallet crates), then the Go tests with the real verifier linked.
 orchard-test: orchard-lib
 	cd $(ORCHARD_CRATE) && cargo test --release --locked
+	cd $(SHIELDED_WALLET_CRATE) && cargo test --release --locked
 	CGO_ENABLED=1 go test -count=1 -tags "nowasm orchardffi" ./x/shielded/... ./app/...
 
 ## build-linux-amd64-orchard: oramad for linux/amd64 with the Rust verifier linked (static, musl).

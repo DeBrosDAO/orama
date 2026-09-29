@@ -1475,6 +1475,64 @@ gas price):
 The linux/amd64 and linux/arm64 numbers, and the check that both accept the same bytes, are
 not measured (C0-4). The linux/amd64 binary was built and linked, not run.
 
+
+### Shielded keys (F7)
+
+Code: `chain/x/shielded/wallet` (Rust crate `orama-shielded-wallet`, binary
+`orama-shielded-builder`). It is wallet-side: it proves, it is not a dependency of `oramad`, and
+no node links it. It pins the same `orchard` 0.15.5 as `orchardffi` (exact `=` pins; `zip32` and
+`zcash_spec` are the versions orchard resolves to) and its `Cargo.lock` is committed.
+
+**Key tree.** ZIP-32 hardened-only Orchard derivation, with Orama's master personalization:
+
+```
+BIP-39 seed (64 bytes)
+  -> HKDF-SHA256(salt = "orama-shielded-v1", info = "", L = 32)        RootWallet branch convention
+  -> master = BLAKE2b-512(personal = "OramaIP32Orchard", seed32)       (sk, chain code)
+  -> m / 32' / 1329811789' / account'                                  ZIP-32 child derivation
+  -> SpendingKey -> FullViewingKey -> IncomingViewingKey / OutgoingViewingKey (external, internal)
+  -> address at diversifier index j (external scope)
+```
+
+| constant | value |
+|---|---|
+| HKDF branch (salt) | `orama-shielded-v1` (a new RootWallet branch; RootWallet must add it to `HKDFDerivation.ts`) |
+| master personalization | `OramaIP32Orchard` (Zcash uses `ZcashIP32Orchard`) |
+| child derivation | ZIP-32 Orchard, `PRF^expand` domain `0x81`, unchanged |
+| purpose | `32'` |
+| coin type | `0x4F52414D` = 1329811789 (ASCII "ORAM"), hardened; not a SLIP-44 registration, unrelated to Cosmos coin type 118 |
+| account | hardened index, below 2^31 |
+
+Because the master personalization differs, no Orama key equals a Zcash Orchard key from the same
+seed, and the HKDF step keeps the tree disjoint from every other RootWallet branch of that seed. An
+address is the raw 43-byte Orchard address (11-byte diversifier, 32-byte `pk_d`); no text encoding
+is defined yet.
+
+**Vectors.** `chain/x/shielded/wallet/testdata/keys/keys.json`: the all-"abandon ... about" seed
+(`5eb00bbd...ce9e38e4`) and two BIP-39 test phrases; for accounts 0 and 1 each: chain code, spending
+key, full viewing key (96 bytes), external and internal IVK (64 bytes) and OVK (32 bytes), and the
+first three external addresses. `cargo test` recomputes them and also checks the framework against
+orchard's own `SpendingKey::from_zip32_seed` under Zcash's personalization.
+
+**Builder and bundle vectors.** `orama-shielded-builder bundle-vectors <dir>` builds real Ironwood
+v6 bundles from an in-memory note tree and writes `testdata/bundles/scenario.json`: two shields, a
+transfer that spends a real note (one real spend, change back), and an unshield that spends a real
+note. Each step carries the canonical bundle bytes, the effecting data, the Orama sighash (for chain
+ID `orama-shielded-wallet-vector-1`), the anchor, the nullifiers, the commitments and the value
+balance. Generation uses a seeded ChaCha20 RNG, so a regeneration reproduces the file byte for byte
+(about 20 s of proving). `orama-shielded-builder key-vectors <dir>` writes `keys.json`.
+
+**Verify path.** Every committed bundle is checked three ways: Rust `cargo test` passes it through
+`orama-orchard-ffi` (the chain's verifier crate); the Go test `TestSighash_matchesWalletBuilder`
+recomputes the sighash with `orchard.Sighash` and requires equality; and, under the `orchardffi`
+build, `TestVerify_walletBuilderBundlesAccept` runs each bundle through `orchard.New(chainID).Verify`.
+Tampered proofs, ciphertexts, nullifiers, anchors, value balances, signatures and chain IDs are
+rejected. `make orchard-test` runs all of it.
+
+**Not done.** Scanning is trial decryption of one bundle at a time; the note tree recomputes roots
+and paths from every leaf and is for tests and vectors, not a wallet's incremental witness store.
+There is no RootWallet integration, no address text format, and no fee or delegation logic here.
+
 ## Building
 
 ```sh
