@@ -75,7 +75,7 @@ func (k Keeper) GetEarnings(ctx context.Context, addr sdk.AccAddress) (math.Int,
 // TopUpBondFromEarnings moves up to amount of denom from addr's own earnings account into addr's
 // own bank balance, and returns how much was actually moved (security review B8: "implement
 // bonding from earnings ... earnings go only to the signer's own bond"). It is used by
-// power/ante.EarningsBondTopUp, an ante decorator that funds a signer's own
+// fees/ante.BondTopUpDecorator, an ante decorator that funds a signer's own
 // MsgCreateValidator/MsgDelegate shortfall from their earnings before the real staking message
 // handler runs - the only path by which an outsider who has never held a public bank balance (this
 // chain starts every account at zero, and payouts land only in earnings - see docs/CHAIN.md) can
