@@ -51,6 +51,11 @@ func TestUsesSeparateAPIKeyRegistry(t *testing.T) {
 		{"namespace gateway", &Config{RQLiteDSN: "http://10.0.0.5:15000", GlobalRQLiteDSN: "http://10.0.0.5:10100"}, true},
 		{"index gateway", &Config{RQLiteDSN: "http://localhost:10100"}, false},
 		{"same dsn", &Config{RQLiteDSN: "http://x:1", GlobalRQLiteDSN: "http://x:1"}, false},
+		// initializeGlobalRQLite trims; if this did not, the key reads would go
+		// to a separate registry client while the auth writes stayed on the
+		// gateway's own database.
+		{"same dsn padded", &Config{RQLiteDSN: "http://x:1", GlobalRQLiteDSN: " http://x:1 "}, false},
+		{"blank global dsn", &Config{RQLiteDSN: "http://x:1", GlobalRQLiteDSN: "  "}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := usesSeparateAPIKeyRegistry(tc.cfg); got != tc.want {

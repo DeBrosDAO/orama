@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -1552,7 +1553,8 @@ const apiKeyRegistryProbeTimeout = 15 * time.Second
 // the cluster's. The index gateway does not — there, its own database is the
 // registry.
 func usesSeparateAPIKeyRegistry(cfg *Config) bool {
-	return cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN
+	global := strings.TrimSpace(cfg.GlobalRQLiteDSN)
+	return global != "" && global != strings.TrimSpace(cfg.RQLiteDSN)
 }
 
 // connectAPIKeyRegistry opens the client API-key validation reads from, or

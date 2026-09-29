@@ -64,7 +64,8 @@ type Dependencies struct {
 	// ORMClient points at that namespace's own isolated RQLite, which does not
 	// carry cluster-wide tables such as dns_nodes — those live only in the main
 	// cluster (see pkg/node/dns_registration.go). Any handler that needs
-	// cluster topology must use this handle, not ORMClient (bugboard #153).
+	// cluster topology must use this handle, not ORMClient (bugboard #153),
+	// and so must the auth service's compare-and-swap writes (bindAuthRegistry).
 	// On the main gateway (no separate GlobalRQLiteDSN) it IS ORMClient.
 	GlobalORMClient rqlite.Client
 	globalSQLDB     *sql.DB
@@ -472,9 +473,10 @@ func initializeGlobalRQLite(logger *logging.ColoredLogger, cfg *Config, deps *De
 	if err != nil {
 		return fmt.Errorf("open global rqlite (%s): %s", rqlite.RedactDSN(globalDSN), rqlite.RedactError(err, dsn))
 	}
-	// Cluster-topology reads are small and infrequent; a wide pool here would
-	// only add idle connections against the main cluster from every namespace
-	// gateway on the node.
+	// It carries cluster-topology reads and the auth service's single-row
+	// compare-and-swap writes (bindAuthRegistry), both short; a wide pool here
+	// would only add idle connections against the main cluster from every
+	// namespace gateway on the node.
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(5 * time.Minute)
@@ -483,7 +485,7 @@ func initializeGlobalRQLite(logger *logging.ColoredLogger, cfg *Config, deps *De
 	deps.globalSQLDB = db
 	deps.GlobalORMClient = rqlite.NewClient(db)
 
-	logger.ComponentInfo(logging.ComponentGeneral, "Global RQLite handle ready (cluster-topology reads)",
+	logger.ComponentInfo(logging.ComponentGeneral, "Global RQLite handle ready (cluster topology and auth writes)",
 		zap.String("global_dsn", rqlite.RedactDSN(globalDSN)))
 	return nil
 }
@@ -917,13 +919,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		return fmt.Errorf("failed to initialize auth service: %w", err)
 	}
 
-	// Inject the lower-level rqlite client for code paths that need
-	// rows-affected feedback. Feature #68 (atomic refresh-token rotation)
-	// uses this for the compare-and-swap UPDATE. Without it, RefreshToken
-	// returns ErrRotationNotConfigured rather than rotating non-atomically.
-	if deps.ORMClient != nil {
-		authService.SetRqliteClient(deps.ORMClient)
-	}
+	bindAuthRegistry(authService, deps)
 
 	// Wire the namespace claims-provider hook (bugboard #548): at JWT mint time
 	// the auth service invokes the namespace's reserved `auth-claims-provider`
@@ -1457,4 +1453,20 @@ func waitForRegistryLeader(cfg *Config, deps *Dependencies) error {
 		return fmt.Errorf("the registry rqlite has no leader after %s, so the encryption root cannot be read: %w", timeout, err)
 	}
 	return nil
+}
+
+// bindAuthRegistry gives the auth service the rqlite client its
+// compare-and-swap writes need the affected-row count from: the single-use
+// nonce claim, refresh-token rotation, grant and ownership changes, device
+// and session state. Every one of those tables is in the cluster registry,
+// which the service reads through registryDatabase.
+//
+// On a namespace gateway ORMClient is the tenant's own RQLite, which has none
+// of them, so every wallet sign-in there failed with "no such table: nonces"
+// (stagenet, 2026-09-29). GlobalORMClient is the registry on both gateway
+// kinds; on the cluster gateway it is ORMClient.
+func bindAuthRegistry(authService *auth.Service, deps *Dependencies) {
+	if deps.GlobalORMClient != nil {
+		authService.SetRqliteClient(deps.GlobalORMClient)
+	}
 }
