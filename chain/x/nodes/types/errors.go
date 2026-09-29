@@ -5,6 +5,9 @@ import "errors"
 var (
 	// ErrNotFound is returned when an operator, node, cluster, or binding is absent.
 	ErrNotFound = errors.New("not found")
+	// ErrNotActive is returned when an operation needs a node that can act (not jailed, retired or
+	// tombstoned, and holding the role) and the node cannot.
+	ErrNotActive = errors.New("node is not active for this operation")
 	// ErrExists is returned when a registration reuses an id.
 	ErrExists = errors.New("already exists")
 	// ErrUnauthorized is returned when the signer is not the record's operator.

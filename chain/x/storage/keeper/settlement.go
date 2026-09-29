@@ -658,7 +658,10 @@ func (k Keeper) noteService(ctx sdk.Context, p types.Params, item types.Settleme
 	}
 	state, err := k.Nodes.Get(ctx, item.NodeId)
 	if err != nil {
-		return err
+		if errors.Is(err, collections.ErrNotFound) {
+			return rejectf("node %s of settlement row %d is no longer tracked", item.NodeId, item.Seq)
+		}
+		return fmt.Errorf("failed to load tracked state of %s: %w", item.NodeId, err)
 	}
 	state.EverProved = true
 	if paid.IsPositive() && state.Probation && !state.Graduated {

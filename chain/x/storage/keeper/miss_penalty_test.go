@@ -78,7 +78,7 @@ func (f *fixture) requireEvicted(t *testing.T, before map[[2]uint64]string) {
 func TestMiss_aFailingSlashNeverBlocksEviction(t *testing.T) {
 	f, nodes, ids := twoFullDeals(t)
 	for _, n := range nodes {
-		n.slashErr = errf("slash would drop backed capacity below reserved")
+		n.slashErr = types.Refuse(errf("node %s does not have role STORAGE", n.id))
 	}
 	before := f.holders(t, ids)
 

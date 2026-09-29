@@ -6,9 +6,11 @@ import (
 	"fmt"
 
 	"cosmossdk.io/collections"
+	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/fees/types"
@@ -56,8 +58,9 @@ func (k Keeper) fundDeposit(ctx context.Context, owner sdk.AccAddress, id string
 			return err
 		}
 		if balance.LT(fromEarnings) {
-			return fmt.Errorf(
-				"insufficient funds to lock deposit %q: need %s%s, have %s%s spendable and %s%s in earnings",
+			return errorsmod.Wrapf(
+				sdkerrors.ErrInsufficientFunds,
+				"cannot lock deposit %q: need %s%s, have %s%s spendable and %s%s in earnings",
 				id, amount, params.BaseDenom, spendable, params.BaseDenom, balance, params.BaseDenom,
 			)
 		}
@@ -92,7 +95,7 @@ func (k Keeper) ReleaseDeposit(ctx context.Context, id string) (refund, burn mat
 	deposit, err := k.Deposits.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, collections.ErrNotFound) {
-			return math.Int{}, math.Int{}, fmt.Errorf("deposit id %q does not exist", id)
+			return math.Int{}, math.Int{}, errorsmod.Wrapf(sdkerrors.ErrNotFound, "deposit id %q does not exist", id)
 		}
 		return math.Int{}, math.Int{}, fmt.Errorf("failed to load deposit %q: %w", id, err)
 	}
@@ -128,7 +131,7 @@ func (k Keeper) TopUpDeposit(ctx context.Context, id string, extra math.Int) err
 	deposit, err := k.Deposits.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, collections.ErrNotFound) {
-			return fmt.Errorf("deposit id %q does not exist", id)
+			return errorsmod.Wrapf(sdkerrors.ErrNotFound, "deposit id %q does not exist", id)
 		}
 		return fmt.Errorf("failed to load deposit %q: %w", id, err)
 	}
@@ -157,7 +160,7 @@ func (k Keeper) ReleaseDepositPart(ctx context.Context, id string, part math.Int
 	deposit, err := k.Deposits.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, collections.ErrNotFound) {
-			return math.Int{}, math.Int{}, fmt.Errorf("deposit id %q does not exist", id)
+			return math.Int{}, math.Int{}, errorsmod.Wrapf(sdkerrors.ErrNotFound, "deposit id %q does not exist", id)
 		}
 		return math.Int{}, math.Int{}, fmt.Errorf("failed to load deposit %q: %w", id, err)
 	}
@@ -194,7 +197,7 @@ func (k Keeper) SlashDeposit(ctx context.Context, id string, amount math.Int) (b
 	deposit, err := k.Deposits.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, collections.ErrNotFound) {
-			return math.Int{}, fmt.Errorf("deposit id %q does not exist", id)
+			return math.Int{}, errorsmod.Wrapf(sdkerrors.ErrNotFound, "deposit id %q does not exist", id)
 		}
 		return math.Int{}, fmt.Errorf("failed to load deposit %q: %w", id, err)
 	}

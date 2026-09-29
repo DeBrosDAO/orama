@@ -44,15 +44,17 @@ func dealSubject(dealID uint64) string { return fmt.Sprintf("deal/%d", dealID) }
 
 // isItemFailure reports whether err is data about the one item being processed: a failure marked
 // with types.ErrItemRejected (a collaborator module refusing the item's write, an item that cannot
-// be paid, a malformed record) or a record the item points to that no longer exists. Anything else
-// (a collection that cannot be read or decoded, a broken counter, an unexpected condition) is a
-// fault of the state machine itself. Swallowing it would let every validator run on state it cannot
-// trust, so isolate returns it and the block fails.
+// be paid, a malformed record, a record the item points to that no longer exists: those call
+// sites convert the missing record into a rejection themselves). Anything else, including a bare
+// collections.ErrNotFound from one of x/storage's own indexes (Reserved, ReplicaCount, ReplicaAt,
+// Params, QueueTail, Nodes ...), a collection that cannot be read or decoded, a broken counter or
+// an unexpected condition, is a fault of the state machine itself. Swallowing it would let every
+// validator run on state it cannot trust, so isolate returns it and the block fails.
 func isItemFailure(err error) bool {
 	if errors.Is(err, collections.ErrEncoding) {
 		return false
 	}
-	return errors.Is(err, types.ErrItemRejected) || errors.Is(err, collections.ErrNotFound)
+	return errors.Is(err, types.ErrItemRejected)
 }
 
 // isolate runs one item's work on a cache branch of ctx. When fn fails, the branch is dropped,

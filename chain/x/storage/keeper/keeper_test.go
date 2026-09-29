@@ -11,6 +11,7 @@ import (
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	"github.com/stretchr/testify/require"
 
+	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
 
 	"github.com/cosmos/cosmos-sdk/codec"
@@ -19,6 +20,7 @@ import (
 	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
@@ -58,7 +60,7 @@ func (b *fakeBank) fund(key string, amt math.Int) {
 func (b *fakeBank) sub(key string, amt math.Int) error {
 	cur := b.balanceOf(key)
 	if cur.LT(amt) {
-		return errf("insufficient %s: have %s need %s", key, cur, amt)
+		return errorsmod.Wrapf(sdkerrors.ErrInsufficientFunds, "%s has %s, needs %s", key, cur, amt)
 	}
 	next := cur.Sub(amt)
 	if next.IsZero() {
@@ -133,8 +135,13 @@ type fakeEarnings struct {
 	bal  map[string]math.Int
 	// funded records every FundSpendFromEarnings call, in order.
 	funded []fundCall
-	// failCredit makes CreditEarnings fail for this operator address.
+	// failCredit makes CreditEarnings fail for this operator address, with creditErr when set and
+	// otherwise with a blocked-account refusal.
 	failCredit string
+	creditErr  error
+	// faultCredit makes CreditEarnings fail for this operator address with an error that is not a
+	// refusal about the item.
+	faultCredit string
 }
 
 type fundCall struct {
@@ -152,8 +159,14 @@ func (e *fakeEarnings) CreditEarnings(_ context.Context, sender string, addr sdk
 	if !amt.IsPositive() {
 		return nil
 	}
+	if e.faultCredit != "" && e.faultCredit == addr.String() {
+		return errf("earnings ledger of %s cannot be decoded", addr)
+	}
 	if e.failCredit != "" && e.failCredit == addr.String() {
-		return errf("earnings account of %s is unavailable", addr)
+		if e.creditErr != nil {
+			return e.creditErr
+		}
+		return errorsmod.Wrapf(sdkerrors.ErrUnauthorized, "earnings account of %s is blocked", addr)
 	}
 	if err := e.bank.SendCoinsFromModuleToModule(context.Background(), sender, "fees", sdk.NewCoins(amt)); err != nil {
 		return err
@@ -186,7 +199,7 @@ type fakeDeposits struct {
 
 func (d *fakeDeposits) LockDeposit(_ context.Context, owner sdk.AccAddress, id string, amount math.Int) error {
 	if d.failLock {
-		return errf("deposit ledger unavailable")
+		return errorsmod.Wrap(sdkerrors.ErrInsufficientFunds, "deposit cannot be funded")
 	}
 	if !amount.IsPositive() {
 		return errf("deposit amount must be positive")
@@ -209,7 +222,7 @@ func (d *fakeDeposits) LockDeposit(_ context.Context, owner sdk.AccAddress, id s
 
 func (d *fakeDeposits) TopUpDeposit(_ context.Context, id string, extra math.Int) error {
 	if d.failLock {
-		return errf("deposit ledger unavailable")
+		return errorsmod.Wrap(sdkerrors.ErrInsufficientFunds, "deposit cannot be funded")
 	}
 	held, ok := d.locked[id]
 	if !ok {
@@ -348,7 +361,7 @@ func (n *fakeNodes) MarkStorageChanged(_ context.Context, id string) error {
 func (n *fakeNodes) IsActive(_ context.Context, id string) (bool, error) {
 	info, ok := n.byID[id]
 	if !ok {
-		return false, errf("unknown node %s", id)
+		return false, refusedf("unknown node %s", id)
 	}
 	return info.active && !info.jailed, nil
 }
@@ -356,7 +369,7 @@ func (n *fakeNodes) IsActive(_ context.Context, id string) (bool, error) {
 func (n *fakeNodes) IsProbation(_ context.Context, id string) (bool, error) {
 	info, ok := n.byID[id]
 	if !ok {
-		return false, errf("unknown node %s", id)
+		return false, refusedf("unknown node %s", id)
 	}
 	return info.probation && !info.active && !info.jailed, nil
 }
@@ -433,7 +446,7 @@ func (n *fakeNodes) Jail(_ context.Context, id string) error {
 func (n *fakeNodes) get(id string) (*nodeInfo, error) {
 	info, ok := n.byID[id]
 	if !ok {
-		return nil, errf("unknown node %s", id)
+		return nil, refusedf("unknown node %s", id)
 	}
 	return info, nil
 }
@@ -552,6 +565,12 @@ func bytesOf(n int, b byte) []byte {
 		out[i] = b
 	}
 	return out
+}
+
+// refusedf is what the app's x/nodes adapter returns for a node that is gone: an error marked as
+// a failure of the one item asked about.
+func refusedf(format string, args ...any) error {
+	return types.Refuse(fmt.Errorf(format, args...))
 }
 
 func errf(format string, args ...any) error {

@@ -75,10 +75,10 @@ func (k Keeper) Jail(ctx sdk.Context, nodeID string) error {
 			return err
 		}
 		if node.Status == types.NodeStatusRetired || node.Status == types.NodeStatusTombstoned {
-			return fmt.Errorf("node %s is %s and cannot be jailed", nodeID, node.Status)
+			return fmt.Errorf("node %s is %s and cannot be jailed: %w", nodeID, node.Status, types.ErrNotActive)
 		}
 		if node.Status == types.NodeStatusJailed {
-			return fmt.Errorf("node %s is already jailed", nodeID)
+			return fmt.Errorf("node %s is already jailed: %w", nodeID, types.ErrNotActive)
 		}
 		node.Status = types.NodeStatusJailed
 		if err := k.saveNode(ctx, node); err != nil {
@@ -169,7 +169,7 @@ func (k Keeper) slash(ctx sdk.Context, nodeID string, role types.Role, fraction 
 		return math.Int{}, err
 	}
 	if !types.HasRole(node.Roles, role) {
-		return math.Int{}, fmt.Errorf("node %s does not have role %s", nodeID, role)
+		return math.Int{}, fmt.Errorf("node %s does not have role %s: %w", nodeID, role, types.ErrNotActive)
 	}
 	p, err := k.params(ctx)
 	if err != nil {

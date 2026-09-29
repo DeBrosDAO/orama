@@ -8,9 +8,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"cosmossdk.io/collections"
+	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 
 	"github.com/DeBrosOfficial/network/chain/x/storage/keeper"
 	"github.com/DeBrosOfficial/network/chain/x/storage/types"
@@ -230,9 +232,12 @@ func TestIsolate_onlyItemFailuresAreIsolated(t *testing.T) {
 	failed, err := run(keeper.Reject(errors.New("operator cannot be paid")))
 	require.NoError(t, err)
 	require.True(t, failed, "a rejection is isolated")
-	failed, err = run(fmt.Errorf("load: %w", collections.ErrNotFound))
+	failed, err = run(types.Refuse(fmt.Errorf("deal 7 does not exist")))
 	require.NoError(t, err)
-	require.True(t, failed, "a missing record is isolated")
+	require.True(t, failed, "a missing record that its call site converted to a rejection is isolated")
+	failed, err = run(fmt.Errorf("load: %w", collections.ErrNotFound))
+	require.Error(t, err, "a bare not-found from x/storage's own indexes is a fault, not an item's failure")
+	require.True(t, failed)
 
 	failed, err = run(errors.New("counter went negative"))
 	require.Error(t, err, "an unexpected error is fatal")
@@ -346,4 +351,63 @@ func TestFailureCounts_surviveGenesisExport(t *testing.T) {
 
 	gs.FailureCounts = append(gs.FailureCounts, gs.FailureCounts[0])
 	require.Error(t, gs.Validate(), "a duplicated count is refused")
+}
+
+// A settlement row whose node is no longer tracked is data about that row: the call site converts
+// the missing record into a rejection, so the row is isolated and the block goes on.
+func TestSettlement_aRowOfAnUntrackedNodeIsIsolated(t *testing.T) {
+	f, _, id, data := probationFixture(t)
+	f.nextEpoch(t)
+	f.proveAll(t, id, data)
+	gone := f.slot(t, id, 0).NodeId
+	require.NoError(t, f.Keeper.Nodes.Remove(f.Ctx, gone))
+
+	f.nextEpoch(t)
+
+	n, err := f.Keeper.FailureCount(f.Ctx, gone, keeper.FailureKindSettlement)
+	require.NoError(t, err)
+	require.NotZero(t, n, "the row of the untracked node is counted as one item's failure")
+}
+
+// A collaborator error that is not a refusal about the item (a collection it cannot decode, an
+// unexpected condition) is a fault of the state machine: the block fails instead of the row being
+// rolled back and retried on state nobody can trust.
+func TestSettlement_aCollaboratorFaultFailsTheBlock(t *testing.T) {
+	f, nodes, id, data := probationFixture(t)
+	f.nextEpoch(t)
+	f.proveAll(t, id, data)
+	bad := f.slot(t, id, 0).NodeId
+	f.Earnings.faultCredit = f.nodeOperator(nodes, bad).String()
+
+	f.Emission.epoch++
+	f.begin(t)
+	err := f.Keeper.EndBlock(f.Ctx)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not about one item")
+}
+
+// The refusals a collaborator makes about one item are isolated whichever collaborator makes them:
+// bank funds that cannot cover the write, a blocked account, or a deposit that is gone.
+func TestSettlement_collaboratorRefusalsAreIsolated(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"insufficient funds": errorsmod.Wrap(sdkerrors.ErrInsufficientFunds, "module account is short"),
+		"blocked account":    errorsmod.Wrap(sdkerrors.ErrUnauthorized, "account is blocked"),
+		"record not found":   errorsmod.Wrap(sdkerrors.ErrNotFound, "deposit does not exist"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, nodes, id, data := probationFixture(t)
+			f.nextEpoch(t)
+			f.proveAll(t, id, data)
+			bad := f.slot(t, id, 0).NodeId
+			f.Earnings.creditErr = refusal
+			f.Earnings.failCredit = f.nodeOperator(nodes, bad).String()
+
+			f.nextEpoch(t)
+
+			n, err := f.Keeper.FailureCount(f.Ctx, bad, keeper.FailureKindSettlement)
+			require.NoError(t, err)
+			require.NotZero(t, n)
+		})
+	}
 }
