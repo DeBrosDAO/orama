@@ -1,6 +1,6 @@
 {
   "name": "@debros/orama-vault",
-  "version": "0.122.113",
+  "version": "0.122.114",
   "description": "Client for the Orama Network vault guardians — Shamir-split secret storage for operators and RootWallet",
   "type": "module",
   "main": "./dist/index.cjs",
