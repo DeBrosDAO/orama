@@ -23,7 +23,7 @@ BUILD_FLAGS := -trimpath -ldflags "$(LDFLAGS)"
 WASMVM_DIR := $(shell go list -m -f '{{.Dir}}' github.com/CosmWasm/wasmvm/v3 2>/dev/null)
 LIBWASMVM := $(firstword $(wildcard $(WASMVM_DIR)/internal/api/libwasmvm.dylib $(WASMVM_DIR)/internal/api/libwasmvm.aarch64.so $(WASMVM_DIR)/internal/api/libwasmvm.x86_64.so))
 
-.PHONY: build build-wasm test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 orchard-test build-linux-amd64-orchard
+.PHONY: build build-wasm test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 orchard-test build-linux-amd64-orchard orchard-smoke orchard-smoke-linux-amd64
 
 ## build: cross-compile oramad for linux/amd64, darwin/amd64 and darwin/arm64.
 ## CGO_ENABLED=0 and -tags nowasm: these binaries are static and do not include CosmWasm.
@@ -100,6 +100,25 @@ build-linux-amd64-orchard: orchard-lib-linux-amd64
 		CXX="$(ORAMA_ZIG) c++ -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
 		go build -tags "nowasm orchardffi netgo osusergo" -trimpath -ldflags "$(LDFLAGS) -linkmode external -extldflags -static" \
 		-o $(BUILD_DIR)/$(BINARY)-linux-amd64-orchard $(PKG)
+
+## orchard-smoke: build and run the smoke binary on this machine (host static library).
+orchard-smoke: orchard-lib
+	mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=1 go build -tags "nowasm orchardffi" -trimpath -o $(BUILD_DIR)/orchard-smoke ./cmd/orchard-smoke
+	$(BUILD_DIR)/orchard-smoke
+
+## orchard-smoke-linux-amd64: the smoke binary for linux/amd64, built with the same zig/musl
+## toolchain and flags as build-linux-amd64-orchard. It is a static ELF and cannot run on darwin.
+## Copy it to a linux/amd64 host and run it: exit 0 means both committed vectors verify and a
+## tampered copy is rejected. It takes no arguments and needs no files (the vectors are embedded).
+orchard-smoke-linux-amd64: orchard-lib-linux-amd64
+	mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+		CGO_LDFLAGS="-lunwind" \
+		CC="$(ORAMA_ZIG) cc -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
+		CXX="$(ORAMA_ZIG) c++ -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
+		go build -tags "nowasm orchardffi netgo osusergo" -trimpath -ldflags "$(LDFLAGS) -linkmode external -extldflags -static" \
+		-o $(BUILD_DIR)/orchard-smoke-linux-amd64 ./cmd/orchard-smoke
 
 ## chain-test: alias for test, matching plans/open-network/track-c-chain.md's `make chain-test`.
 chain-test: test

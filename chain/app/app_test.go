@@ -323,3 +323,16 @@ func TestOramaApp_shieldedVerifiersFailClosedWithOneVerifier(t *testing.T) {
 		t.Fatalf("got %v, want ErrVerifierNotLinked", err)
 	}
 }
+
+// An app with no chain id is the CLI's throwaway metadata instance, not a node. It builds no
+// verifier bound to the empty chain id, and every bundle is refused.
+func TestOramaApp_noChainIDBuildsNoShieldedVerifier(t *testing.T) {
+	app.SetAddressPrefixes()
+	a := app.NewOramaApp(log.NewNopLogger(), dbm.NewMemDB(), true, simtestutil.EmptyAppOptions{})
+	if len(a.ShieldedVerifiers) != 0 {
+		t.Fatalf("expected no verifiers without a chain id, got %d", len(a.ShieldedVerifiers))
+	}
+	if err := verify.Check([]byte{1}, a.ShieldedVerifiers...); err != verify.ErrVerifierNotLinked {
+		t.Fatalf("got %v, want ErrVerifierNotLinked", err)
+	}
+}

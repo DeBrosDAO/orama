@@ -32,25 +32,46 @@ var (
 	ErrSignatureRejected = fmt.Errorf("%w: signature rejected", ErrTampered)
 )
 
+// ErrDuplicateVerifier means two of the supplied verifiers share an identity, or one has none, so
+// they are not independent. It wraps ErrVerifierNotLinked: the required number of distinct
+// verifiers is not linked.
+var ErrDuplicateVerifier = fmt.Errorf("%w: verifiers must be distinct and named", ErrVerifierNotLinked)
+
+// ErrEmptyChainID means a verifier was asked to bind to no chain. A bundle signed for the empty
+// chain id would verify on every chain that forgot to set one.
+var ErrEmptyChainID = errors.New("shielded verifier needs a chain id")
+
 // ErrVerifierFault means the verifier failed internally (a caught panic or a bad call). The
 // bundle is refused; this is not a statement about the bundle.
 var ErrVerifierFault = errors.New("shielded verifier fault")
 
 // Verifier checks one bundle. Nodes only verify. They do not build proofs.
 type Verifier interface {
+	// ID names the implementation (for example "orchard"). Two verifiers count as independent
+	// only when their IDs differ, so the same verifier passed twice cannot satisfy MinVerifiers.
+	ID() string
 	Verify(bundle []byte) error
 }
 
-// Check runs every linked verifier. All of them must accept. Fewer than MinVerifiers,
-// a missing verifier, or a single rejection, fails the bundle.
+// Check runs every linked verifier. All of them must accept. Fewer than MinVerifiers, a missing
+// verifier, fewer than MinVerifiers distinct verifier IDs, or a single rejection, fails the bundle.
+// No verifier runs unless the whole set is valid.
 func Check(bundle []byte, verifiers ...Verifier) error {
 	if len(verifiers) < MinVerifiers {
 		return ErrVerifierNotLinked
 	}
+	ids := make(map[string]struct{}, len(verifiers))
 	for _, v := range verifiers {
 		if v == nil {
 			return ErrVerifierNotLinked
 		}
+		id := v.ID()
+		if _, dup := ids[id]; dup || id == "" {
+			return ErrDuplicateVerifier
+		}
+		ids[id] = struct{}{}
+	}
+	for _, v := range verifiers {
 		if err := v.Verify(bundle); err != nil {
 			return err
 		}

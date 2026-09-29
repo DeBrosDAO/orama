@@ -29,10 +29,24 @@ type verifier struct {
 	chainID string
 }
 
-// New returns the Orchard/Ironwood verifier for one chain ID. It is safe for concurrent use.
-func New(chainID string) verify.Verifier {
-	return verifier{chainID: chainID}
+// New returns the Orchard/Ironwood verifier for one chain ID. It is safe for concurrent use. An
+// empty chain ID is refused: the sighash would bind to no chain, and a bundle built for the empty
+// chain would verify anywhere that forgot to set one.
+func New(chainID string) (verify.Verifier, error) {
+	if chainID == "" {
+		return nil, verify.ErrEmptyChainID
+	}
+	return verifier{chainID: chainID}, nil
 }
+
+// Warm builds the Rust verifying key now. The key is otherwise built on the first bundle, which
+// would put seconds of key generation inside a consensus handler. Call it once at start, before
+// the node serves blocks.
+func Warm() error {
+	return codeToError(int32(C.orama_orchard_warm()))
+}
+
+func (verifier) ID() string { return VerifierID }
 
 // Verify accepts a bundle only when its proof and every signature verify.
 func (v verifier) Verify(bundle []byte) error {

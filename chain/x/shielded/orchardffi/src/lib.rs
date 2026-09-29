@@ -139,3 +139,13 @@ pub unsafe extern "C" fn orama_orchard_verify(
     hash.copy_from_slice(slice::from_raw_parts(sighash, 32));
     catch_unwind(AssertUnwindSafe(|| verify(data, &hash))).unwrap_or(PANIC)
 }
+
+/// C entry point. Builds the verifying key so the first bundle does not pay for it.
+#[no_mangle]
+pub extern "C" fn orama_orchard_warm() -> i32 {
+    catch_unwind(|| {
+        verifying_key();
+        OK
+    })
+    .unwrap_or(PANIC)
+}

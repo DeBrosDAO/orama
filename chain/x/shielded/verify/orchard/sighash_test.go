@@ -106,3 +106,36 @@ func TestSighash_emptyChainIDIsHashedAsEmpty(t *testing.T) {
 		t.Fatal("chain id must affect the hash")
 	}
 }
+
+func mustNew(t testing.TB, chainID string) verify.Verifier {
+	t.Helper()
+	v, err := New(chainID)
+	if err != nil {
+		t.Fatalf("New(%q): %v", chainID, err)
+	}
+	return v
+}
+
+// A verifier bound to no chain would accept a bundle built for the empty chain id anywhere.
+func TestNew_refusesAnEmptyChainID(t *testing.T) {
+	v, err := New("")
+	if !errors.Is(err, verify.ErrEmptyChainID) || v != nil {
+		t.Fatalf("New(\"\") = %v, %v; want ErrEmptyChainID", v, err)
+	}
+	if v, err := New("orama-test-1"); err != nil || v == nil || v.ID() != VerifierID {
+		t.Fatalf("New with a chain id = %v, %v", v, err)
+	}
+}
+
+// Both verifier builds report the same identity, and the same one twice is not two verifiers.
+func TestVerifierID_sameVerifierTwiceIsRefused(t *testing.T) {
+	bundle, _, chainID := loadVector(t, "ironwood-1-action")
+	v := mustNew(t, chainID)
+	if err := verify.Check(bundle, v, v); !errors.Is(err, verify.ErrVerifierNotLinked) {
+		t.Fatalf("Check(v, v) = %v, want a fail-closed refusal", err)
+	}
+	other := mustNew(t, chainID)
+	if err := verify.Check(bundle, v, other); !errors.Is(err, verify.ErrDuplicateVerifier) {
+		t.Fatalf("two instances of one implementation = %v, want ErrDuplicateVerifier", err)
+	}
+}

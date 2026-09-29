@@ -11,7 +11,18 @@ const Linked = false
 type unlinked struct{}
 
 // New returns a verifier that refuses every bundle with verify.ErrVerifierNotLinked. A build
-// without the Rust library never accepts a shielded bundle.
-func New(string) verify.Verifier { return unlinked{} }
+// without the Rust library never accepts a shielded bundle. An empty chain id is refused, as in
+// the linked build, so the two builds have one contract.
+func New(chainID string) (verify.Verifier, error) {
+	if chainID == "" {
+		return nil, verify.ErrEmptyChainID
+	}
+	return unlinked{}, nil
+}
+
+// Warm has nothing to build without the Rust library.
+func Warm() error { return verify.ErrVerifierNotLinked }
+
+func (unlinked) ID() string { return VerifierID }
 
 func (unlinked) Verify([]byte) error { return verify.ErrVerifierNotLinked }

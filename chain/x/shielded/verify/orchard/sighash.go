@@ -13,6 +13,9 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/shielded/verify"
 )
 
+// VerifierID is this verifier's identity for verify.Check's distinctness rule.
+const VerifierID = "orchard"
+
 const (
 	// sighashDomain separates this hash from every other SHA-256 use.
 	sighashDomain = "orama-shielded-ironwood-sighash-v1"

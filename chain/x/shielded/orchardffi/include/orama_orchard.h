@@ -28,6 +28,12 @@ extern "C" {
  */
 int32_t orama_orchard_verify(const uint8_t *bundle, size_t bundle_len, const uint8_t *sighash);
 
+/*
+ * Build the verifying key now instead of on the first bundle. Returns ORAMA_ORCHARD_OK, or
+ * ORAMA_ORCHARD_PANIC if key generation panicked. Safe to call more than once and concurrently.
+ */
+int32_t orama_orchard_warm(void);
+
 #ifdef __cplusplus
 }
 #endif
