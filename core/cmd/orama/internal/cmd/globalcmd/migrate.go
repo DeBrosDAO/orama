@@ -32,7 +32,12 @@ floor before every start, so the old host's chain no longer starts: the floor is
 recorded and the key is gone. import refuses while the new host's chain runs,
 records the old host's last sign state as the new host's floor, writes the
 state, and installs the key last; the chain unit then refuses to start from a
-state behind the floor. cancel removes a prepared migration key.`,
+state behind the floor. cancel removes a prepared migration key.
+
+A bundle from 'orama global validator reseal' (a restored backup) has no sign
+state. Its import needs --old-host-destroyed and --floor-height with the
+network's current height; that height (round 0, step 3) becomes both the floor
+and the state, so the restored key signs nothing a lost host may have signed.`,
 }
 
 var migratePrepareCmd = &cobra.Command{
@@ -102,7 +107,11 @@ var migrateExportCmd = &cobra.Command{
 	RunE:  runMigrateExport,
 }
 
-var migrateImportFlags struct{ from string }
+var migrateImportFlags struct {
+	from             string
+	oldHostDestroyed bool
+	floorHeight      int64
+}
 
 var migrateImportCmd = &cobra.Command{
 	Use:   "import",
@@ -115,7 +124,10 @@ func init() {
 	e := migrateExportCmd.Flags()
 	e.StringVar(&migrateExportFlags.recipient, "recipient", "", "The new host's migration key, from prepare [required]")
 	e.StringVar(&migrateExportFlags.to, "to", "", "Bundle file to write; must not exist [required]")
-	migrateImportCmd.Flags().StringVar(&migrateImportFlags.from, "from", "", "Bundle file from export or reseal [required]")
+	i := migrateImportCmd.Flags()
+	i.StringVar(&migrateImportFlags.from, "from", "", "Bundle file from export or reseal [required]")
+	i.BoolVar(&migrateImportFlags.oldHostDestroyed, "old-host-destroyed", false, "For a reseal bundle: confirm the old host can never start again")
+	i.Int64Var(&migrateImportFlags.floorHeight, "floor-height", 0, "For a reseal bundle: the network's current height, the restored key's floor")
 	migrateCmd.AddCommand(migratePrepareCmd, migrateExportCmd, migrateImportCmd, migrateCancelCmd)
 	validatorCmd.AddCommand(checkSignFloorCmd)
 	validatorCmd.AddCommand(migrateCmd)
@@ -143,7 +155,7 @@ func runMigrateExport(cmd *cobra.Command, _ []string) error {
 	if err := life.DisableChain(); err != nil {
 		return clierr.Failure("%v", err)
 	}
-	bundle, exported, err := globalnode.DefaultHost().ExportMigration(recipient)
+	bundle, exported, err := globalnode.DefaultHost().ExportMigration(recipient, life.ChainStopped)
 	if err != nil {
 		return clierr.Failure("%v", err)
 	}
@@ -157,8 +169,9 @@ func runMigrateExport(cmd *cobra.Command, _ []string) error {
 }
 
 func runMigrateImport(cmd *cobra.Command, _ []string) error {
-	if migrateImportFlags.from == "" {
-		return clierr.Usage("--from is required")
+	restore, err := restoreFloor()
+	if err != nil {
+		return err
 	}
 	if err := clierr.RequireRoot("importing a validator key"); err != nil {
 		return err
@@ -171,18 +184,47 @@ func runMigrateImport(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return clierr.Failure("read %s: %w", migrateImportFlags.from, err)
 	}
-	res, err := globalnode.DefaultHost().ImportMigration(blob)
+	res, err := globalnode.DefaultHost().ImportMigration(blob, restore)
 	if err != nil {
 		return clierr.Failure("%v", err)
 	}
 	if res.Replaced != "" {
 		fmt.Fprintf(out, "the key that was here moved to %s\n", res.Replaced)
 	}
-	if res.Floor != nil {
-		fmt.Fprintf(out, "sign floor recorded at %s\n", *res.Floor)
-	} else {
-		fmt.Fprintf(out, "restored from a backup: no sign floor; make sure the old host can never start again\n")
-	}
+	fmt.Fprintf(out, "sign floor recorded at %s\n", *res.Floor)
 	fmt.Fprintf(out, "start the chain with: orama global start\n")
 	return nil
+}
+
+// restoreFloor reads the import flags. A reseal bundle needs both restore
+// flags; a migration bundle takes neither, which ImportMigration checks
+// against what the bundle carries.
+func restoreFloor() (*globalnode.SignState, error) {
+	if migrateImportFlags.from == "" {
+		return nil, clierr.Usage("--from is required")
+	}
+	if migrateImportFlags.oldHostDestroyed != (migrateImportFlags.floorHeight != 0) {
+		return nil, clierr.Usage("--old-host-destroyed and --floor-height go together, and only with a reseal bundle")
+	}
+	if !migrateImportFlags.oldHostDestroyed {
+		return nil, nil
+	}
+	floor, err := globalnode.RestoreFloor(migrateImportFlags.floorHeight)
+	if err != nil {
+		return nil, clierr.Usage("%v", err)
+	}
+	return &floor, nil
+}
+
+// warnIfMigratedAway prints a warning when this host's validator key was
+// migrated away. The chain unit's ExecStartPre check is what refuses a start.
+func warnIfMigratedAway(cmd *cobra.Command) {
+	away, err := globalnode.DefaultHost().MigratedAway()
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not check the sign floor: %v\n", err)
+		return
+	}
+	if away {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: this host's validator key was migrated to another host; the chain will refuse to start here\n")
+	}
 }

@@ -60,9 +60,28 @@ func (s SignState) String() string {
 	return fmt.Sprintf("height %d round %d step %d", s.Height, s.Round, s.Step)
 }
 
-// emptySignState is the state file of a key that has never signed, as
-// `oramad init` writes it.
-var emptySignState = []byte(`{"height":"0","round":0,"step":0}`)
+// precommitStep is CometBFT's last signing step within a round.
+const precommitStep = 3
+
+// RestoreFloor is the floor a restored backup starts from: the operator's
+// reading of the network's current height, at its last step. The key then
+// signs nothing at or below that height, which a lost host may have signed.
+func RestoreFloor(height int64) (SignState, error) {
+	if height <= 0 {
+		return SignState{}, fmt.Errorf("the floor height must be the network's current height, above 0")
+	}
+	return SignState{Height: height, Round: 0, Step: precommitStep}, nil
+}
+
+// encodeSignState writes s as CometBFT's priv_validator_state.json, with no
+// signature: CometBFT refuses to sign at or below it.
+func encodeSignState(s SignState) ([]byte, error) {
+	data, err := json.Marshal(map[string]any{"height": strconv.FormatInt(s.Height, 10), "round": s.Round, "step": s.Step})
+	if err != nil {
+		return nil, fmt.Errorf("encode the sign state: %w", err)
+	}
+	return data, nil
+}
 
 // CheckNotBehind is the double-sign guard: the state a key starts with on
 // this host must not be behind the last state it signed on the host it came

@@ -52,18 +52,23 @@ func newHost(t *testing.T) Host {
 		}
 	}
 	h := Host{
-		Root:      rootfs.At(anchor),
-		StateDir:  stateDir,
-		KeyPath:   filepath.Join(home, "config", "priv_validator_key.json"),
-		StatePath: filepath.Join(home, "data", "priv_validator_state.json"),
-		Lookup:    func(string) (int, int, error) { return os.Getuid(), os.Getgid(), nil },
-		Chown:     func(r rootfs.Root, path string, uid, gid int) error { return r.Chown(path, uid, gid) },
-		Now:       func() time.Time { return time.Unix(1_800_000_000, 0) },
+		Root:       rootfs.At(anchor),
+		StateDir:   stateDir,
+		KeyPath:    filepath.Join(home, "config", "priv_validator_key.json"),
+		StatePath:  filepath.Join(home, "data", "priv_validator_state.json"),
+		Lookup:     func(string) (int, int, error) { return os.Getuid(), os.Getgid(), nil },
+		Chown:      func(r rootfs.Root, path string, uid, gid int) error { return r.Chown(path, uid, gid) },
+		Now:        func() time.Time { return time.Unix(1_800_000_000, 0) },
+		StateOwner: os.Getuid(),
 	}
 	write(t, h.KeyPath, validatorKeyJSON(t))
 	write(t, h.StatePath, emptySignState)
 	return h
 }
+
+// emptySignState is the state file of a key that has never signed, as
+// `oramad init` writes it.
+var emptySignState = []byte(`{"height":"0","round":0,"step":0}`)
 
 func write(t *testing.T, path string, data []byte) {
 	t.Helper()

@@ -11,6 +11,9 @@ import (
 	"golang.org/x/crypto/nacl/box"
 )
 
+// stopped is a chain that stays stopped.
+func stopped() error { return nil }
+
 // migrate runs the source half on src and the target half on dst.
 func migrate(t *testing.T, src, dst Host) ImportResult {
 	t.Helper()
@@ -22,11 +25,11 @@ func migrate(t *testing.T, src, dst Host) ImportResult {
 	if err != nil || *again != *recipient {
 		t.Fatalf("a second prepare changed the recipient (%v)", err)
 	}
-	bundle, _, err := src.ExportMigration(recipient)
+	bundle, _, err := src.ExportMigration(recipient, stopped)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := dst.ImportMigration(bundle)
+	res, err := dst.ImportMigration(bundle, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,11 +99,11 @@ func TestImportMigration_keepsATargetStateAlreadyAhead(t *testing.T) {
 func TestImportMigration_refusesWithoutPrepare(t *testing.T) {
 	src, dst := newHost(t), newHost(t)
 	pub, _, _ := box.GenerateKey(rand.Reader)
-	bundle, _, err := src.ExportMigration(pub)
+	bundle, _, err := src.ExportMigration(pub, stopped)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dst.ImportMigration(bundle); err == nil || !strings.Contains(err.Error(), "prepare") {
+	if _, err := dst.ImportMigration(bundle, nil); err == nil || !strings.Contains(err.Error(), "prepare") {
 		t.Fatalf("err = %v, want a pointer to the prepare step", err)
 	}
 }
@@ -114,12 +117,12 @@ func TestImportMigration_refusesABundleForAnotherHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle, _, err := src.ExportMigration(otherPub)
+	bundle, _, err := src.ExportMigration(otherPub, stopped)
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := read(t, dst.KeyPath)
-	if _, err := dst.ImportMigration(bundle); err == nil {
+	if _, err := dst.ImportMigration(bundle, nil); err == nil {
 		t.Fatal("a bundle sealed to another host was imported")
 	}
 	if !bytes.Equal(read(t, dst.KeyPath), before) {
@@ -136,42 +139,12 @@ func TestImportMigration_refusesAnUninitialisedHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle, _, err := src.ExportMigration(recipient)
+	bundle, _, err := src.ExportMigration(recipient, stopped)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dst.ImportMigration(bundle); err == nil || !strings.Contains(err.Error(), "--init-chain") {
+	if _, err := dst.ImportMigration(bundle, nil); err == nil || !strings.Contains(err.Error(), "--init-chain") {
 		t.Fatalf("err = %v, want a pointer to --init-chain", err)
-	}
-}
-
-func TestReseal_restoresABackupWithNoFloor(t *testing.T) {
-	src, dst := newHost(t), newHost(t)
-	opPub, opPriv, _ := box.GenerateKey(rand.Reader)
-	backup, err := src.ExportKey(opPub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recipient, err := dst.PrepareMigration()
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle, err := Reseal(opPriv, recipient, backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := dst.ImportMigration(bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Floor != nil {
-		t.Fatalf("a restored backup recorded a floor %v", res.Floor)
-	}
-	if !bytes.Equal(read(t, dst.KeyPath), read(t, src.KeyPath)) {
-		t.Fatal("the restored key is not the backed-up key")
-	}
-	if _, err := ParseSignState(read(t, dst.StatePath)); err != nil {
-		t.Fatalf("the target has no usable state: %v", err)
 	}
 }
 
@@ -180,11 +153,11 @@ func TestImportMigration_sameKeyTwiceIsIdempotent(t *testing.T) {
 	write(t, src.StatePath, stateJSON("7", 0, 3))
 	key := read(t, src.KeyPath)
 	recipient, _ := dst.PrepareMigration()
-	bundle, _, err := src.ExportMigration(recipient)
+	bundle, _, err := src.ExportMigration(recipient, stopped)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dst.ImportMigration(bundle); err != nil {
+	if _, err := dst.ImportMigration(bundle, nil); err != nil {
 		t.Fatal(err)
 	}
 	recipient2, _ := dst.PrepareMigration()
@@ -192,45 +165,12 @@ func TestImportMigration_sameKeyTwiceIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := dst.ImportMigration(bundle2)
+	res, err := dst.ImportMigration(bundle2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Replaced != "" {
 		t.Fatalf("the same key was quarantined as a different one: %s", res.Replaced)
-	}
-}
-
-func TestExportMigration_oldHostCannotStartAgain(t *testing.T) {
-	src := newHost(t)
-	key := read(t, src.KeyPath)
-	state := stateJSON("900", 0, 3)
-	write(t, src.StatePath, state)
-	pub, _, _ := box.GenerateKey(rand.Reader)
-	_, out, err := src.ExportMigration(pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.State != (SignState{900, 0, 3}) {
-		t.Fatalf("exported state = %v", out.State)
-	}
-	if err := src.CheckSignFloor(); err == nil || !strings.Contains(err.Error(), "validator key") {
-		t.Fatalf("err = %v, want a refusal: the key left this host", err)
-	}
-	// What oramad's LoadOrGenFilePV would write on a start without the key.
-	write(t, src.KeyPath, validatorKeyJSON(t))
-	write(t, src.StatePath, emptySignState)
-	if err := src.CheckSignFloor(); err == nil {
-		t.Fatal("a fresh key with a zero state started below the floor")
-	}
-	// Abandoning: put back the key and the state copy.
-	write(t, src.KeyPath, read(t, out.KeyCopy))
-	write(t, src.StatePath, read(t, out.StateCopy))
-	if !bytes.Equal(read(t, src.KeyPath), key) {
-		t.Fatal("the key copy is not the key")
-	}
-	if err := src.CheckSignFloor(); err != nil {
-		t.Fatalf("the restored key and state are refused: %v", err)
 	}
 }
 
@@ -242,7 +182,7 @@ func TestImportMigration_stateWriteFailureInstallsNoKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle, _, err := src.ExportMigration(recipient)
+	bundle, _, err := src.ExportMigration(recipient, stopped)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +191,7 @@ func TestImportMigration_stateWriteFailureInstallsNoKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(dataDir, 0o700) })
-	if _, err := dst.ImportMigration(bundle); err == nil {
+	if _, err := dst.ImportMigration(bundle, nil); err == nil {
 		t.Fatal("the import succeeded without writing the state")
 	}
 	if !bytes.Equal(read(t, dst.KeyPath), before) {

@@ -107,3 +107,41 @@ func TestRunEdit_badOperatorIsAUsageError(t *testing.T) {
 		t.Fatalf("err = %v, want a usage error", err)
 	}
 }
+
+func TestRestoreFloor_flagsGoTogether(t *testing.T) {
+	t.Cleanup(func() {
+		migrateImportFlags.from, migrateImportFlags.oldHostDestroyed, migrateImportFlags.floorHeight = "", false, 0
+	})
+	migrateImportFlags.from = "bundle"
+	if floor, err := restoreFloor(); err != nil || floor != nil {
+		t.Fatalf("a migration import: %v %v", floor, err)
+	}
+	migrateImportFlags.floorHeight = 100
+	if _, err := restoreFloor(); err == nil || clierr.CodeOf(err) != clierr.CodeUsage {
+		t.Fatalf("--floor-height without --old-host-destroyed: %v", err)
+	}
+	migrateImportFlags.oldHostDestroyed = true
+	floor, err := restoreFloor()
+	if err != nil || floor == nil || floor.Height != 100 || floor.Step != 3 {
+		t.Fatalf("restore floor = %v (%v)", floor, err)
+	}
+	migrateImportFlags.floorHeight = 0
+	if _, err := restoreFloor(); err == nil {
+		t.Fatal("--old-host-destroyed without a height was accepted")
+	}
+	migrateImportFlags.from = ""
+	if _, err := restoreFloor(); err == nil {
+		t.Fatal("no --from was accepted")
+	}
+}
+
+func TestFillNewFile_failureIsReported(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "closed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := fillNewFile(f, []byte("x")); err == nil {
+		t.Fatal("a write to a closed file succeeded")
+	}
+}

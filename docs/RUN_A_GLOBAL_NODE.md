@@ -27,8 +27,15 @@ Stage the release's `oramad`, `orama-global` and `orama` (this CLI; the chain
 unit runs its sign-floor check) in a directory that root owns
 and nobody else may write (for example `/root/orama-global-release`). The
 installer copies from there and refuses a symlink or a directory another account
-could change. It does not verify these binaries against the release root; put
-there only binaries you have verified.
+could change.
+
+**You are trusting these three binaries.** The installer does not verify them
+against the release root or any signature: the release archive does not carry
+`oramad` or `orama-global` yet, so there is nothing to check them against. The
+chain unit runs the staged `orama` as root before every start (the sign-floor
+check), `oramad` holds the validator key, and `orama-global` holds hot keys and
+repair seeds. Put in the staged directory only binaries you built or verified
+yourself.
 
 ```bash
 sudo orama global install \
@@ -184,21 +191,28 @@ Never run two copies of one key. The guard is the **sign floor**: a sign state
 root records in `/var/lib/orama-global/validator-sign-floor.json`. The chain unit
 runs `orama global validator check-sign-floor` as root before every start
 (`ExecStartPre`), so it applies at boot, on `Restart=always` and on any manual
-start, not only to `orama global start`. With a floor recorded, the chain starts
-only when `priv_validator_key.json` is in the chain home and
-`priv_validator_state.json` is not behind the floor.
+start, not only to `orama global start`. The check refuses while a migration
+export is in progress. With a floor recorded, the chain starts only when
+`priv_validator_key.json` is in the chain home and `priv_validator_state.json`
+is not behind the floor. The floor, the migration key and the key copies are
+trusted only while `/var/lib/orama-global` is root's and not writable by its
+group or others; otherwise every one of these commands, and the check, refuses.
+`orama global install` and `orama global start` print a warning when this
+host's key was migrated away.
 
 1. New host: `sudo orama global validator migrate prepare` prints a one-time
    key. The private half stays in `/var/lib/orama-global/migrate-recipient.key`,
    root's, 0600, until an import uses it or
    `sudo orama global validator migrate cancel` removes it.
 2. Old host: `sudo orama global validator migrate export --recipient <key> --to /root/move.orbk`
-   (`--to` must not exist). It stops the chain and the services that need it,
-   disables the chain unit, and seals the key and `priv_validator_state.json` in
-   memory. Then it records that state as the old host's floor, copies the state
+   (`--to` must not exist). It stops the chain and the services that need it and
+   disables the chain unit. It writes an export-in-progress marker
+   (`/var/lib/orama-global/validator-export-in-progress`) that makes the check
+   refuse any start, reads the key and `priv_validator_state.json`, confirms the
+   chain is still stopped, and seals both in memory. Then it records that state as the old host's floor, copies the state
    to `/var/lib/orama-global/validator-state-migrated-<time>-<random>.json`,
    moves the key to `/var/lib/orama-global/validator-key-migrated-<time>-<random>.json`,
-   and finally writes the bundle. From then on the old host's chain does not
+   removes the marker, and finally writes the bundle. From then on the old host's chain does not
    start: the floor is recorded and the key is gone, so oramad cannot generate a
    fresh key and a zero state in its place.
 3. Copy the bundle to the new host.
@@ -219,7 +233,12 @@ To abandon a migration, on the old host put both files back, owned by
 the state copy as `data/priv_validator_state.json` in
 `/var/lib/orama-global/chain`. Then `sudo orama global start` enables and starts
 the chain; the floor passes because the state is the one it recorded. Do this
-only if the bundle was never imported anywhere.
+only to abandon a migration, and only if the new host never started the chain
+with the key.
+
+An export that was killed part-way can leave the marker behind; the chain then
+refuses to start until root removes it, after checking whether the key is still
+in the chain home.
 
 ### Restore from a backup
 
@@ -227,10 +246,14 @@ Only when the old host is gone for good:
 
 1. New host: `sudo orama global validator migrate prepare`.
 2. Your machine: `orama global validator reseal --from validator-key.orbk --identity-file <private key file, 0600> --recipient <key> --to restore.orbk`.
-3. New host: `sudo orama global validator migrate import --from restore.orbk`.
+3. New host: `sudo orama global validator migrate import --from restore.orbk --old-host-destroyed --floor-height <the network's current height>`.
 
-A backup carries no sign state, so no floor is recorded. If the old host can
-still start, it and the new host will double sign.
+A backup carries no sign state, so the import refuses it without both flags.
+The height you give (round 0, step 3) becomes the floor and the state: the
+restored key signs nothing at or below it. Read the height from a node you trust
+right before the import. If the old host can still start with its copy of the
+key, it and the new host will double sign; the flag is your statement that it
+cannot.
 
 ## Not built yet
 

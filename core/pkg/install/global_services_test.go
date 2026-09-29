@@ -1,6 +1,7 @@
 package install
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -108,5 +109,25 @@ func TestGlobalServiceUnits_orderAfterTheChain(t *testing.T) {
 	}
 	if strings.Contains(RenderGlobalChainDirectUnit(""), constants.ChainServiceUnit) {
 		t.Error("the chain unit orders after itself")
+	}
+}
+
+func TestSSHDPorts_readsPortAndListenAddressLines(t *testing.T) {
+	out := "port 22\nlistenaddress [::]:2222\nlistenaddress 0.0.0.0:22\nlistenaddress 10.0.0.5\npermitrootlogin no\n"
+	if got := sshdPorts(out); !slices.Equal(got, []string{"22", "2222"}) {
+		t.Fatalf("ports = %v", got)
+	}
+	run := func(string, ...string) ([]byte, error) { return []byte("listenaddress [::]:2222\n"), nil }
+	if err := checkSSHPort(run, 2222); err != nil {
+		t.Fatalf("a port only in listenaddress was refused: %v", err)
+	}
+	if err := checkSSHPort(run, 22); err == nil {
+		t.Fatal("a port sshd does not listen on was accepted")
+	}
+	failing := func(string, ...string) ([]byte, error) {
+		return []byte("sshd: no hostkeys"), errors.New("exit status 1")
+	}
+	if err := checkSSHPort(failing, 22); err == nil {
+		t.Fatal("an unreadable sshd configuration was accepted")
 	}
 }

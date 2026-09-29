@@ -12,7 +12,7 @@ import (
 
 // ImportResult is what an import did.
 type ImportResult struct {
-	// Floor is the source's last sign state, or nil for a restored backup.
+	// Floor is the source's last sign state, or a restored backup's floor.
 	Floor *SignState
 	// Replaced is where a different key already on this host was moved.
 	Replaced string
@@ -26,10 +26,17 @@ type ImportResult struct {
 // either the key is not here or CheckSignFloor refuses the state, so the
 // chain cannot start signing as the validator from a state behind the old
 // host. The state written is the source's, unless this host's is already
-// ahead (a repeated import). A restored backup has no state and records no
-// floor. The migration key is removed once the key is in place.
-func (h Host) ImportMigration(blob []byte) (ImportResult, error) {
+// ahead (a repeated import). A bundle from Reseal (a restored backup) has no
+// state: restore is then required, the floor the operator gives
+// (RestoreFloor), and it is written as both the floor and the state. A
+// migration bundle takes no restore floor. The migration key is removed once
+// the key is in place.
+func (h Host) ImportMigration(blob []byte, restore *SignState) (ImportResult, error) {
 	b, err := h.openWithMigrationKey(blob)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	source, err := importState(b, restore)
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -43,7 +50,7 @@ func (h Host) ImportMigration(blob []byte) (ImportResult, error) {
 		}
 	}
 	var res ImportResult
-	if res.Floor, err = h.installState(b.State, uid, gid); err != nil {
+	if res.Floor, err = h.installState(source, uid, gid); err != nil {
 		return res, err
 	}
 	if res.Replaced, err = h.installKey(b.Key, uid, gid); err != nil {
@@ -59,6 +66,9 @@ func (h Host) ImportMigration(blob []byte) (ImportResult, error) {
 }
 
 func (h Host) openWithMigrationKey(blob []byte) (Bundle, error) {
+	if err := h.checkStateDir(); err != nil {
+		return Bundle{}, err
+	}
 	privData, err := h.read(h.recipientPath())
 	if err != nil {
 		return Bundle{}, fmt.Errorf("no migration key on this host (run the migrate prepare step here first): %w", err)
@@ -90,17 +100,26 @@ func (h Host) installKey(key []byte, uid, gid int) (string, error) {
 	return replaced, h.writeChainFile(h.KeyPath, key, uid, gid)
 }
 
+// importState is the state an import starts from: the bundle's, or for a
+// restored backup the operator's restore floor.
+func importState(b Bundle, restore *SignState) ([]byte, error) {
+	switch {
+	case b.State != nil && restore != nil:
+		return nil, fmt.Errorf("this bundle is a migration and carries the old host's sign state; a restore floor is only for a restored backup")
+	case b.State != nil:
+		return b.State, nil
+	case restore == nil:
+		return nil, fmt.Errorf("this bundle is a restored backup with no sign state; confirm the old host is destroyed and give the network's current height as the restore floor")
+	default:
+		return encodeSignState(*restore)
+	}
+}
+
 // installState records the floor, then writes the sign state.
 func (h Host) installState(source []byte, uid, gid int) (*SignState, error) {
 	existing, err := h.Root.ReadFile(h.StatePath, rootfs.SmallFileLimit)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("read %s: %w", h.StatePath, err)
-	}
-	if source == nil {
-		if existing != nil {
-			return nil, nil
-		}
-		return nil, h.writeChainFile(h.StatePath, emptySignState, uid, gid)
 	}
 	floor, err := ParseSignState(source)
 	if err != nil {

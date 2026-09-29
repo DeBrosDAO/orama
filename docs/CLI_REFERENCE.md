@@ -1736,6 +1736,11 @@ records the old host's last sign state as the new host's floor, writes the
 state, and installs the key last; the chain unit then refuses to start from a
 state behind the floor. cancel removes a prepared migration key.
 
+A bundle from 'orama global validator reseal' (a restored backup) has no sign
+state. Its import needs --old-host-destroyed and --floor-height with the
+network's current height; that height (round 0, step 3) becomes both the floor
+and the state, so the restored key signs nothing a lost host may have signed.
+
 Subcommands: `cancel`, `export`, `import`, `prepare`
 
 ### orama global validator migrate cancel
@@ -1769,7 +1774,9 @@ orama global validator migrate import [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--floor-height` | `0` | For a reseal bundle: the network's current height, the restored key's floor |
 | `--from` | — | Bundle file from export or reseal [required] |
+| `--old-host-destroyed` | `false` | For a reseal bundle: confirm the old host can never start again |
 
 ### orama global validator migrate prepare
 
@@ -1791,7 +1798,9 @@ Open a key backup from 'orama global validator export-key' with the operator's
 X25519 private key (--identity-file, hex, mode 0600) and seal the key to the new
 host's migration key (--recipient, printed by 'orama global validator migrate
 prepare'). Run it on the machine that holds the private key, not on a node. The
-bundle carries no sign state: nobody knows what a lost host last signed.
+bundle carries no sign state: nobody knows what a lost host last signed. Its
+import therefore needs --old-host-destroyed and --floor-height <the network's
+current height>, which become the new host's floor and state.
 
 | Flag | Default | Description |
 |------|---------|-------------|

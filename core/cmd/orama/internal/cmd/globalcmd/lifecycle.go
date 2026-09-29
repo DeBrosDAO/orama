@@ -24,6 +24,7 @@ services start once the chain's loopback RPC answers. Starting provider,
 archiver or repair alone needs the chain already running.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runLifecycle(cmd, args, "starting the global services", func(l globalnode.Lifecycle, s []install.GlobalService) error {
+			warnIfMigratedAway(cmd)
 			return l.Start(cmd.Context(), s)
 		})
 	},

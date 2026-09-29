@@ -1186,7 +1186,8 @@ Trust points:
 - **The staged binaries.** Install copies `oramad`, `orama-global` and the
   `orama` CLI (which the chain unit runs as root for its sign-floor check) from a
   root-owned directory without following a symlink, but does not verify them
-  against the release root. Whoever can write that directory decides what runs.
+  against the release root; the release archive does not carry them. Whoever can
+  write that directory decides what runs, including what runs as root.
 - **The consensus key.** `priv_validator_key.json` is in the chain home, readable
   by `orama-chain`. It leaves the host only sealed (ORBK) to a key the node holds
   only the public half of: the operator's (`validator export-key`) or a new

@@ -95,5 +95,6 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		return clierr.Failure("%v", err)
 	}
 	fmt.Fprintf(out, "installed %v; start them with: orama global start\n", installFlags.services)
+	warnIfMigratedAway(cmd)
 	return nil
 }

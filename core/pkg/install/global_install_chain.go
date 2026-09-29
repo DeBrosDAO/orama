@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -106,23 +108,42 @@ func checkGlobalFirewall(run commandRunner, enable bool, sshPort int) (bool, err
 }
 
 // checkSSHPort confirms sshd listens on port before ufw is enabled with only
-// that port allowed, from sshd's effective configuration (`sshd -T`).
+// that port allowed, from sshd's effective configuration (`sshd -T`): its
+// `port N` lines and the port of its `listenaddress host:port` lines.
 func checkSSHPort(run commandRunner, port int) error {
 	out, err := run("sshd", "-T")
 	if err != nil {
 		return fmt.Errorf("read sshd's effective configuration (sshd -T) to confirm --ssh-port %d before enabling ufw: %w\n%s", port, err, strings.TrimSpace(string(out)))
 	}
-	var ports []string
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == "port" {
-			if fields[1] == strconv.Itoa(port) {
-				return nil
-			}
-			ports = append(ports, fields[1])
-		}
+	ports := sshdPorts(string(out))
+	if slices.Contains(ports, strconv.Itoa(port)) {
+		return nil
 	}
 	return fmt.Errorf("sshd listens on port %s, not --ssh-port %d; enabling ufw would cut SSH, so pass the port sshd uses", strings.Join(ports, ", "), port)
+}
+
+// sshdPorts are the ports in `sshd -T` output.
+func sshdPorts(out string) []string {
+	var ports []string
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		port := ""
+		switch fields[0] {
+		case "port":
+			port = fields[1]
+		case "listenaddress":
+			if _, p, err := net.SplitHostPort(fields[1]); err == nil {
+				port = p
+			}
+		}
+		if port != "" && !slices.Contains(ports, port) {
+			ports = append(ports, port)
+		}
+	}
+	return ports
 }
 
 // applyGlobalFirewall adds the public rules of the installed services. They

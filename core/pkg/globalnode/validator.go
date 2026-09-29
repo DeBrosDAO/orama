@@ -46,18 +46,21 @@ type Host struct {
 	Lookup    func(account string) (uid, gid int, err error)
 	Chown     func(r rootfs.Root, path string, uid, gid int) error
 	Now       func() time.Time
+	// StateOwner is the uid StateDir must belong to: root on a node.
+	StateOwner int
 }
 
 // DefaultHost is this node's chain home under /var/lib/orama-global.
 func DefaultHost() Host {
 	return Host{
-		Root:      rootfs.At(filepath.Dir(constants.GlobalStateRoot)),
-		StateDir:  constants.GlobalStateRoot,
-		KeyPath:   constants.ChainValidatorKeyPath,
-		StatePath: constants.ChainValidatorStatePath,
-		Lookup:    cosmovisor.LookupAccount,
-		Chown:     func(r rootfs.Root, path string, uid, gid int) error { return r.Chown(path, uid, gid) },
-		Now:       time.Now,
+		Root:       rootfs.At(filepath.Dir(constants.GlobalStateRoot)),
+		StateDir:   constants.GlobalStateRoot,
+		KeyPath:    constants.ChainValidatorKeyPath,
+		StatePath:  constants.ChainValidatorStatePath,
+		Lookup:     cosmovisor.LookupAccount,
+		Chown:      func(r rootfs.Root, path string, uid, gid int) error { return r.Chown(path, uid, gid) },
+		Now:        time.Now,
+		StateOwner: 0,
 	}
 }
 
@@ -89,6 +92,9 @@ func (h Host) ExportKey(recipient *[32]byte) ([]byte, error) {
 // host is sealed to, creating it on the first call. The private half stays
 // in the state root, root's, mode 0600, until ImportMigration removes it.
 func (h Host) PrepareMigration() (*[32]byte, error) {
+	if err := h.checkStateDir(); err != nil {
+		return nil, err
+	}
 	existing, err := h.Root.ReadFile(h.recipientPath(), rootfs.SmallFileLimit)
 	if err == nil {
 		priv, err := ParseX25519Hex(string(existing))
@@ -120,51 +126,6 @@ func publicKey(priv *[32]byte) (*[32]byte, error) {
 	return &pub, nil
 }
 
-// Exported is what ExportMigration left behind on the old host.
-type Exported struct {
-	State     SignState
-	KeyCopy   string
-	StateCopy string
-}
-
-// ExportMigration seals the key and its last sign state to recipient, in
-// memory, then makes this host unable to sign as the validator: it records
-// the state as this host's sign floor, keeps a copy of the state, and moves
-// the key out of the chain home into the state root. The caller has stopped
-// and disabled the chain, and writes the returned bundle afterwards. From
-// then on CheckSignFloor refuses to start the chain here, because the floor
-// is recorded and the key is gone; oramad cannot generate a fresh key and a
-// zero state in its place.
-func (h Host) ExportMigration(recipient *[32]byte) ([]byte, Exported, error) {
-	key, err := h.read(h.KeyPath)
-	if err != nil {
-		return nil, Exported{}, err
-	}
-	state, err := h.read(h.StatePath)
-	if err != nil {
-		return nil, Exported{}, err
-	}
-	parsed, err := ParseSignState(state)
-	if err != nil {
-		return nil, Exported{}, err
-	}
-	sealed, err := SealBundle(recipient, key, state)
-	if err != nil {
-		return nil, Exported{}, err
-	}
-	if err := h.writeFloor(state); err != nil {
-		return nil, Exported{}, err
-	}
-	out := Exported{State: parsed}
-	if out.StateCopy, err = h.keepCopy(state, "state-migrated"); err != nil {
-		return nil, out, err
-	}
-	if out.KeyCopy, err = h.quarantineKey("key-migrated"); err != nil {
-		return nil, out, err
-	}
-	return sealed, out, nil
-}
-
 // quarantineKey moves priv_validator_key.json out of the chain home into the
 // state root, where the chain account cannot reach it, and returns where it
 // went.
@@ -188,6 +149,9 @@ func (h Host) quarantineKey(kind string) (string, error) {
 // O_EXCL and O_NOFOLLOW, so an existing entry is never replaced. The state
 // root is root's and no service account can write it.
 func (h Host) keepCopy(data []byte, kind string) (string, error) {
+	if err := h.checkStateDir(); err != nil {
+		return "", err
+	}
 	suffix := make([]byte, copySuffixBytes)
 	if _, err := rand.Read(suffix); err != nil {
 		return "", fmt.Errorf("name a copy in %s: %w", h.StateDir, err)
@@ -212,16 +176,12 @@ func (h Host) keepCopy(data []byte, kind string) (string, error) {
 	return dst, nil
 }
 
-func (h Host) writeFloor(state []byte) error {
-	if err := h.Root.WriteFile(h.floorPath(), state, secretMode); err != nil {
-		return fmt.Errorf("record the sign floor %s: %w", h.floorPath(), err)
-	}
-	return nil
-}
-
 // CancelMigration removes this host's migration key, if there is one. It
 // reports whether a key was removed.
 func (h Host) CancelMigration() (bool, error) {
+	if err := h.checkStateDir(); err != nil {
+		return false, err
+	}
 	err := h.Root.Remove(h.recipientPath())
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -230,36 +190,4 @@ func (h Host) CancelMigration() (bool, error) {
 		return false, fmt.Errorf("remove %s: %w", h.recipientPath(), err)
 	}
 	return true, nil
-}
-
-// CheckSignFloor is the double-sign guard the chain unit runs before every
-// start (ExecStartPre) and `orama global start` runs too. With no floor
-// recorded there is nothing to check. With one, the chain may start only
-// when the validator key is in the chain home and its sign state is not
-// behind the floor: a missing key means the key moved to another host, and
-// oramad would otherwise generate a fresh key and a zero state.
-func (h Host) CheckSignFloor() error {
-	floorData, err := h.Root.ReadFile(h.floorPath(), rootfs.SmallFileLimit)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read %s: %w", h.floorPath(), err)
-	}
-	floor, err := ParseSignState(floorData)
-	if err != nil {
-		return fmt.Errorf("%s: %w", h.floorPath(), err)
-	}
-	if _, err := h.Root.ReadFile(h.KeyPath, rootfs.SmallFileLimit); err != nil {
-		return fmt.Errorf("a sign floor is recorded (%s) but the validator key is not usable: %w; it was moved to another host, or put it back with its state copy from %s", floor, err, h.StateDir)
-	}
-	stateData, err := h.read(h.StatePath)
-	if err != nil {
-		return fmt.Errorf("a sign floor is recorded but the sign state is unreadable: %w", err)
-	}
-	state, err := ParseSignState(stateData)
-	if err != nil {
-		return err
-	}
-	return CheckNotBehind(state, floor)
 }
