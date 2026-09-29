@@ -2,8 +2,9 @@
 //
 // The inner layer is XChaCha20-Poly1305 under a random file key. That key is
 // wrapped by HKDF-SHA256 of the owner seed with info "orama-storage-v1".
-// Each slot then applies a keystream from HKDF-SHA256 of the repair seed
-// with info deal_nonce || slot, slot as 4 big-endian bytes. The piece root
+// Each slot then XORs a ChaCha20 keystream (zero nonce) whose 32-byte key is
+// HKDF-SHA256 of the repair seed with info deal_nonce || slot, slot as 4
+// big-endian bytes. The piece root
 // is the commitment of that slot's ciphertext.
 package storagefile
 
@@ -15,6 +16,7 @@ import (
 	"fmt"
 	"io"
 
+	"golang.org/x/crypto/chacha20"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 
@@ -160,18 +162,25 @@ func openInner(seed, blob []byte) ([]byte, error) {
 	return plain, nil
 }
 
+// applyOuter XORs body with the slot keystream: ChaCha20 under the slot key
+// HKDF-SHA256(repair seed, info deal_nonce || slot), with an all-zero nonce.
+// Each (deal_nonce, slot) has its own key, so the zero nonce never repeats
+// under one key. The same call removes the layer.
 func applyOuter(repairSeed, dealNonce []byte, slot uint32, body []byte) ([]byte, error) {
 	var j [4]byte
 	binary.BigEndian.PutUint32(j[:], slot)
 	info := append(append([]byte{}, dealNonce...), j[:]...)
-	stream, err := derive(repairSeed, info, len(body))
+	key, err := derive(repairSeed, info, chacha20.KeySize)
+	if err != nil {
+		return nil, err
+	}
+	var zero [chacha20.NonceSize]byte
+	stream, err := chacha20.NewUnauthenticatedCipher(key, zero[:])
 	if err != nil {
 		return nil, err
 	}
 	out := make([]byte, len(body))
-	for i := range body {
-		out[i] = body[i] ^ stream[i]
-	}
+	stream.XORKeyStream(out, body)
 	return out, nil
 }
 
