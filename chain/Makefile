@@ -23,7 +23,7 @@ BUILD_FLAGS := -trimpath -ldflags "$(LDFLAGS)"
 WASMVM_DIR := $(shell go list -m -f '{{.Dir}}' github.com/CosmWasm/wasmvm/v3 2>/dev/null)
 LIBWASMVM := $(firstword $(wildcard $(WASMVM_DIR)/internal/api/libwasmvm.dylib $(WASMVM_DIR)/internal/api/libwasmvm.aarch64.so $(WASMVM_DIR)/internal/api/libwasmvm.x86_64.so))
 
-.PHONY: build build-wasm test chain-test lint chain-sim localnet localnet-stop localnet-clean
+.PHONY: build build-wasm test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 orchard-test build-linux-amd64-orchard
 
 ## build: cross-compile oramad for linux/amd64, darwin/amd64 and darwin/arm64.
 ## CGO_ENABLED=0 and -tags nowasm: these binaries are static and do not include CosmWasm.
@@ -54,6 +54,49 @@ build-wasm:
 test:
 	CGO_ENABLED=0 go test -tags nowasm ./...
 	@if [ -n "$(LIBWASMVM)" ]; then CGO_ENABLED=1 go test ./...; fi
+
+# Orchard/Ironwood verifier (x/shielded/orchardffi, Rust). The Go side links it only under
+# -tags orchardffi with cgo; without it a build fails closed with ErrVerifierNotLinked.
+ORCHARD_CRATE := x/shielded/orchardffi
+ORCHARD_LIBDIR := x/shielded/verify/orchard/lib
+# The static release build links musl through zig, the toolchain `orama build` already requires.
+ORAMA_ZIG ?= zig
+ORCHARD_LINUX_AMD64_ZIG_TARGET := x86_64-linux-musl
+ORCHARD_LINUX_AMD64_RUST_TARGET := x86_64-unknown-linux-musl
+
+## orchard-lib: build the host static library the cgo tests link.
+orchard-lib:
+	cd $(ORCHARD_CRATE) && cargo build --release --locked
+	mkdir -p $(ORCHARD_LIBDIR)/$(shell go env GOOS)_$(shell go env GOARCH)
+	cp $(ORCHARD_CRATE)/target/release/liborama_orchard.a $(ORCHARD_LIBDIR)/$(shell go env GOOS)_$(shell go env GOARCH)/
+
+## orchard-lib-linux-amd64: build the static library for linux/amd64 (musl, C parts via zig).
+## Needs: rustup target add $(ORCHARD_LINUX_AMD64_RUST_TARGET)
+orchard-lib-linux-amd64:
+	cd $(ORCHARD_CRATE) && \
+		ORAMA_ZIG="$(ORAMA_ZIG)" ZIG_TARGET=$(ORCHARD_LINUX_AMD64_ZIG_TARGET) \
+		CC_x86_64_unknown_linux_musl="$(CURDIR)/scripts/zigcc.sh" \
+		AR_x86_64_unknown_linux_musl="$(ORAMA_ZIG) ar" \
+		cargo build --release --locked --target $(ORCHARD_LINUX_AMD64_RUST_TARGET)
+	mkdir -p $(ORCHARD_LIBDIR)/linux_amd64
+	cp $(ORCHARD_CRATE)/target/$(ORCHARD_LINUX_AMD64_RUST_TARGET)/release/liborama_orchard.a $(ORCHARD_LIBDIR)/linux_amd64/
+
+## orchard-test: Rust tests, then the Go tests with the real verifier linked.
+orchard-test: orchard-lib
+	cd $(ORCHARD_CRATE) && cargo test --release --locked
+	CGO_ENABLED=1 go test -count=1 -tags "nowasm orchardffi" ./x/shielded/... ./app/...
+
+## build-linux-amd64-orchard: oramad for linux/amd64 with the Rust verifier linked (static, musl).
+## Cross-compiles through zig cc, like the cgo binaries of `orama build`. nowasm: no CosmWasm.
+## -lunwind: the Rust staticlib carries its panic personality, which needs zig's libunwind.
+build-linux-amd64-orchard: orchard-lib-linux-amd64
+	mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+		CGO_LDFLAGS="-lunwind" \
+		CC="$(ORAMA_ZIG) cc -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
+		CXX="$(ORAMA_ZIG) c++ -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
+		go build -tags "nowasm orchardffi netgo osusergo" -trimpath -ldflags "$(LDFLAGS) -linkmode external -extldflags -static" \
+		-o $(BUILD_DIR)/$(BINARY)-linux-amd64-orchard $(PKG)
 
 ## chain-test: alias for test, matching plans/open-network/track-c-chain.md's `make chain-test`.
 chain-test: test

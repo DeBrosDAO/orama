@@ -122,6 +122,8 @@ import (
 	relaykeeper "github.com/DeBrosOfficial/network/chain/x/relay/keeper"
 	relaytypes "github.com/DeBrosOfficial/network/chain/x/relay/types"
 	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
+	"github.com/DeBrosOfficial/network/chain/x/shielded/verify"
+	orchardverify "github.com/DeBrosOfficial/network/chain/x/shielded/verify/orchard"
 	"github.com/DeBrosOfficial/network/chain/x/storage"
 	storagekeeper "github.com/DeBrosOfficial/network/chain/x/storage/keeper"
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
@@ -230,6 +232,11 @@ type OramaApp struct {
 	CnftKeeper            cnftkeeper.Keeper
 	MarketKeeper          marketkeeper.Keeper
 	WasmPolicyKeeper      wasmpolicykeeper.Keeper
+
+	// ShieldedVerifiers are the proof verifiers a shielded bundle must pass, all of them
+	// (verify.Check). Only the Orchard one exists, and verify.MinVerifiers is 2, so every
+	// bundle is still refused until a second independent verifier is added.
+	ShieldedVerifiers []verify.Verifier
 
 	wasmModules      []module.AppModule
 	wasmGenesisOrder []string
@@ -353,6 +360,8 @@ func NewOramaApp(
 	// A user cannot bank-send norama to another user. Module accounts still can.
 	// Shielded bundles are a separate path and are not accepted until a verifier is linked.
 	app.BankKeeper.AppendSendRestriction(shieldedpolicy.NoramaSendRestriction(BlockedAddresses(), nil))
+
+	app.ShieldedVerifiers = []verify.Verifier{orchardverify.New(bApp.ChainID())}
 
 	enabledSignModes := append(authtx.DefaultSignModes, sigtypes.SignMode_SIGN_MODE_TEXTUAL)
 	txConfigOpts := authtx.ConfigOptions{

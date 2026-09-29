@@ -1215,11 +1215,116 @@ What the indexer holds, and what it does not, is under "Chain indexer" above.
 annotations. Neither are per-account bank balances. The explorer does not invent rows for a
 query this proxy does not serve.
 
+## `x/shielded`: proof verification
+
+Code: `chain/x/shielded/verify` (the `Verifier` interface and `Check`),
+`chain/x/shielded/verify/orchard` (the cgo verifier and the sighash),
+`chain/x/shielded/orchardffi` (the Rust crate). This is the verify hook only. There is no
+`MsgShieldedTransfer` and no keeper that calls it yet, so the chain accepts no shielded bundle.
+
+**What verifies a bundle.** Upstream `orchard` (Zcash) with feature `circuit`, called from Go
+through a tiny C ABI (`orama_orchard_verify`, header `orchardffi/include/orama_orchard.h`).
+Nodes only verify. The crate has no prover, and no circuit of ours. The Halo 2 verifying key is
+built once, lazily, for `OrchardCircuitVersion::PostNu6_3` only (`InsecurePreNu6_2` is never
+built), and shared by every call. The first verification in a process pays the key build (about
+1 s on the Apple M3 below), so warm it before the chain depends on it. Verification checks, in
+this order: the canonical encoding, the proof length, every spend-authorization signature, the
+binding signature, then the Halo 2 proof. It refuses trailing bytes. A panic in Rust is caught
+(`catch_unwind`) and returned as `ErrVerifierFault`; it never unwinds into Go.
+
+**Pinned versions** (exact `=` pins in `orchardffi/Cargo.toml`, resolved set in the committed
+`orchardffi/Cargo.lock`):
+
+| crate | version |
+|---|---|
+| `orchard` | 0.15.5 (latest 0.15.x when written; Ironwood pool, `BundleVersion::ironwood_v3`) |
+| `zcash_primitives` | 0.30.1 (wire encoding only) |
+| `zcash_protocol` | 0.10.6 |
+| `halo2_proofs` | 0.3.5 |
+| `reddsa` | 0.5.2 |
+
+Multi-asset (ZSA) is off: no QEDIT fork is used and `orchard` 0.15.5 has no asset type.
+
+**Wire format.** The canonical Zcash transaction-v6 encoding of the Ironwood bundle, read by
+`zcash_primitives::transaction::components::orchard::read_v6_bundle` with `BranchId::Nu6_3` and
+`ValuePool::Ironwood`: CompactSize action count `n`, `n` actions of 820 bytes (cv, nf, rk, cmx,
+epk, 580-byte enc ciphertext, 80-byte out ciphertext), flags (1), value balance (8, i64 LE),
+anchor (32), proof (CompactSize length, then bytes), `n` spend-authorization signatures (64
+each), binding signature (64). The proof length must equal `Proof::expected_proof_size(n)`
+= 2720 + 2272 x n bytes; a different length is `ErrProofLength` and is refused before any
+proof work. A 1-action bundle is 5985 bytes and a 2-action bundle 9141 bytes.
+
+**Sighash.** The chain has no Zcash transaction, so the sighash is ours, and it is computed in
+Go (`orchard.Sighash`), not in Rust. Every signature signs
+
+```
+SHA-256( "orama-shielded-ironwood-sighash-v1" || u16be(len(chainID)) || chainID || effectingData )
+```
+
+`effectingData` is the contiguous prefix of the bundle before the proof: the action count, all
+actions (including epk and both ciphertexts), flags, value balance and anchor. The proof and the
+signatures are excluded; the proof is bound by the circuit's public inputs. The chain ID stops
+replay across Orama networks. The verifier is built per chain ID (`orchard.New(chainID)`; the app
+passes its own). Because the ciphertexts and epk are not proof inputs, only the sighash binds
+them: a flipped ciphertext byte fails as `ErrSignatureRejected`.
+
+**Errors.** `ErrMalformed`, `ErrProofLength`, `ErrProofRejected` and `ErrSignatureRejected` all
+wrap `ErrTampered`. `ErrVerifierFault` is an internal fault, not a verdict on the bundle.
+
+**Fail-closed behaviour.**
+- A build without cgo or without the `orchardffi` build tag compiles, and every bundle gets
+  `ErrVerifierNotLinked`. `CGO_ENABLED=0 make build` binaries never accept a bundle.
+- `verify.Check` needs `verify.MinVerifiers` (2) independent verifiers, and all must accept. Only
+  the Orchard verifier exists (`OramaApp.ShieldedVerifiers` holds it), so `Check` still returns
+  `ErrVerifierNotLinked` for every bundle. This is deliberate: it stays that way until a second
+  independent verifier is linked. No second verifier is faked.
+- Input over `orchard.MaxBundleBytes` (1 MiB) is refused before parsing. The per-block and
+  per-action limits belong to C12a.
+
+**Building.** Rust (1.88 or newer, `rustup`) and cgo are needed only for the linked build.
+
+```sh
+cd chain
+make orchard-lib          # static library for this host into x/shielded/verify/orchard/lib/
+make orchard-test         # cargo test, then go test -tags "nowasm orchardffi" ./x/shielded/... ./app/...
+# release: static linux/amd64 oramad with the verifier linked (musl, C parts through zig)
+rustup target add x86_64-unknown-linux-musl
+ORAMA_ZIG=/opt/homebrew/opt/zig@0.15/bin/zig make build-linux-amd64-orchard
+```
+
+`make build-linux-amd64-orchard` writes `build/oramad-linux-amd64-orchard`. `orama build` does not
+build `oramad`; this target is the release path for the chain binary, and `make build` is
+unchanged. `scripts/zigcc.sh` exists because cc-rs passes `--target=<rust triple>`, which `zig cc`
+rejects.
+
+**Test vectors.** `orchardffi/testdata/` holds a 1-action and a 2-action Ironwood bundle with
+their sighash and chain ID. `cargo run --release --example gen_vectors -- testdata` regenerates
+them (that tool proves; the node does not). Both are shielding bundles (spends disabled). The
+2-action one is padded with a dummy spend, so its spend-authorization signatures are real but no
+note is spent from a tree. A full-spend vector waits on the wallet builder (F7). The Go tests
+recompute the sighash and require it to equal the generator's, and check each vector, a flipped
+byte in the proof, an action, the anchor, the value balance, a spend-authorization signature and
+the binding signature, a different chain ID (a different sighash), a short and a padded proof,
+empty, truncated and oversize input, and 16 goroutines verifying at once (also under `-race`).
+
+**Local measurements** (Apple M3, darwin/arm64, 8 cores, `go test -bench Verify -benchtime 20x`
+after the key is built; these are local numbers only, not linux and not amd64, and they set no
+gas price):
+
+| bundle | 8 threads (default) | `RAYON_NUM_THREADS=1` |
+|---|---|---|
+| 1 action | 5.5-5.7 ms | 22.8-23.2 ms |
+| 2 actions | 6.9-7.1 ms | 26.6 ms |
+
+The linux/amd64 and linux/arm64 numbers, and the check that both accept the same bytes, are
+not measured (C0-4). The linux/amd64 binary was built and linked, not run.
+
 ## Building
 
 ```sh
 cd chain
-make build   # linux/amd64, darwin/amd64, darwin/arm64, all CGO_ENABLED=0 (no cgo dependency)
+make build   # linux/amd64, darwin/amd64, darwin/arm64, all CGO_ENABLED=0 (no cgo dependency;
+             # the shielded verifier is not linked, see x/shielded above)
 make test    # go test ./...    (chain-test is an alias)
 make lint    # go vet ./...
 ```
@@ -1325,7 +1430,8 @@ for anything that does.
   This is a workaround for a real bug in the pinned dependency versions, not a stylistic choice.
 - **`x/bank` refuses user-to-user and contract-to-user `norama` sends.** A user can pay a
   registered contract. None are registered yet. The shielded pool rules live in
-  `chain/x/shielded`. No proof verifier is linked, so a shielded bundle is not accepted either.
+  `chain/x/shielded`. The Orchard proof verifier links only in the cgo `orchardffi` build, and two
+  independent verifiers are required, so a shielded bundle is not accepted either.
   Payments are not private, and they are not possible between users.
 - **The validator share now flows through `x/power`, not stock `x/distribution` - resolving a
   deviation from the first pass.** `x/emission` hands its epoch mint to

@@ -25,6 +25,12 @@ func TestNilVerifierFailsClosed(t *testing.T) {
 	}
 }
 
+func TestOneVerifierIsNotEnough(t *testing.T) {
+	if err := Check([]byte{1}, scripted{}); err != ErrVerifierNotLinked {
+		t.Fatalf("one verifier must fail closed: %v", err)
+	}
+}
+
 func TestBothVerifiersMustAccept(t *testing.T) {
 	ok := scripted{}
 	bad := scripted{reject: []byte{9}}

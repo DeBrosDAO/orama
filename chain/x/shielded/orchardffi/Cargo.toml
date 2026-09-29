@@ -1,0 +1,25 @@
+[package]
+name = "orama-orchard-ffi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+description = "Verify-only C ABI over upstream orchard 0.15.x for the Orama chain. Nodes never prove."
+
+[lib]
+name = "orama_orchard"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# Upstream Zcash Orchard with the Ironwood pool. No fork, no ZSA. Exact pins: a proof
+# verifier must not move under a `cargo update`.
+orchard = { version = "=0.15.5", features = ["circuit"] }
+# Canonical v6 (Ironwood) bundle wire encoding, read exactly as Zcash reads it.
+zcash_primitives = { version = "=0.30.1", default-features = false, features = ["std"] }
+zcash_protocol = "=0.10.6"
+
+[dev-dependencies]
+# Test-vector tooling only. The node never proves.
+rand = "0.8"
+sha2 = "0.10"
+incrementalmerkletree = "0.8"

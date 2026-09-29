@@ -35,6 +35,7 @@ import (
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
 	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
 	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
+	"github.com/DeBrosOfficial/network/chain/x/shielded/verify"
 	tokentypes "github.com/DeBrosOfficial/network/chain/x/token/types"
 )
 
@@ -310,4 +311,15 @@ func TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg(t *testing.T) {
 		})
 		require.Error(t, err)
 	})
+}
+
+// One Orchard verifier is linked and the spec needs two, so the app refuses every bundle.
+func TestOramaApp_shieldedVerifiersFailClosedWithOneVerifier(t *testing.T) {
+	a := buildTestApp(t)
+	if len(a.ShieldedVerifiers) != 1 {
+		t.Fatalf("expected the Orchard verifier only, got %d", len(a.ShieldedVerifiers))
+	}
+	if err := verify.Check([]byte{1}, a.ShieldedVerifiers...); err != verify.ErrVerifierNotLinked {
+		t.Fatalf("got %v, want ErrVerifierNotLinked", err)
+	}
 }

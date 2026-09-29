@@ -3,3 +3,7 @@
 
 # Localnet chain data and generated keys/genesis (scripts/localnet/localnet.sh)
 /scripts/localnet/.localnet/
+
+# Rust verifier build output (x/shielded/orchardffi) and the static libraries the cgo build links
+/x/shielded/orchardffi/target/
+/x/shielded/verify/orchard/lib/
