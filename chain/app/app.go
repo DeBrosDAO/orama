@@ -122,7 +122,12 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/relay"
 	relaykeeper "github.com/DeBrosOfficial/network/chain/x/relay/keeper"
 	relaytypes "github.com/DeBrosOfficial/network/chain/x/relay/types"
+	"github.com/DeBrosOfficial/network/chain/x/shielded"
+	shieldedante "github.com/DeBrosOfficial/network/chain/x/shielded/ante"
+	shieldedkeeper "github.com/DeBrosOfficial/network/chain/x/shielded/keeper"
+	"github.com/DeBrosOfficial/network/chain/x/shielded/nullifier"
 	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
+	shieldedtypes "github.com/DeBrosOfficial/network/chain/x/shielded/types"
 	"github.com/DeBrosOfficial/network/chain/x/shielded/verify"
 	"github.com/DeBrosOfficial/network/chain/x/storage"
 	storagekeeper "github.com/DeBrosOfficial/network/chain/x/storage/keeper"
@@ -192,6 +197,7 @@ var (
 		relaytypes.ModuleName:          nil,
 		cnfttypes.ModuleName:           nil,
 		markettypes.ModuleName:         nil,
+		shieldedtypes.ModuleName:       {authtypes.Burner},
 	}
 )
 
@@ -233,10 +239,12 @@ type OramaApp struct {
 	MarketKeeper          marketkeeper.Keeper
 	WasmPolicyKeeper      wasmpolicykeeper.Keeper
 
+	ShieldedKeeper shieldedkeeper.Keeper
 	// ShieldedVerifiers are the proof verifiers a shielded bundle must pass, all of them
-	// (verify.Check). Only the Orchard one exists, and verify.MinVerifiers is 2, so every
-	// bundle is still refused until a second independent verifier is added.
+	// (verify.Check): the Rust library linked through cgo and the separately built Rust binary
+	// run out of process. A build or a node that lacks either one accepts no bundle.
 	ShieldedVerifiers []verify.Verifier
+	nullifierStore    *nullifier.Store
 
 	// isContract reports whether an address is a wasm contract, or is being funded as one by
 	// wasmd's instantiate. It is set by installWasm and is always false without the wasm VM.
@@ -326,7 +334,9 @@ func NewOramaApp(
 		relaytypes.StoreKey,
 		cnfttypes.StoreKey,
 		markettypes.StoreKey,
+		shieldedtypes.StoreKey,
 	)
+	tkeys := storetypes.NewTransientStoreKeys(shieldedtypes.TransientKey)
 
 	app := &OramaApp{
 		BaseApp:           bApp,
@@ -364,14 +374,12 @@ func NewOramaApp(
 		logger,
 	)
 	// A user cannot bank-send norama to another user. Module accounts still can.
-	// Shielded bundles are a separate path and are not accepted until a verifier is linked.
+	// Shielded bundles are a separate path (x/shielded).
 	// isContract is bound by installWasm, after the wasm keeper exists; the restriction only runs
 	// once blocks do.
 	app.BankKeeper.AppendSendRestriction(shieldedpolicy.NoramaSendRestriction(BlockedAddresses(), func(ctx context.Context, addr sdk.AccAddress) bool {
 		return app.isContract(ctx, addr)
 	}))
-
-	app.ShieldedVerifiers = newShieldedVerifiers(bApp.ChainID())
 
 	enabledSignModes := append(authtx.DefaultSignModes, sigtypes.SignMode_SIGN_MODE_TEXTUAL)
 	txConfigOpts := authtx.ConfigOptions{
@@ -549,6 +557,8 @@ func NewOramaApp(
 		upgradeScheduler{upgrades: app.UpgradeKeeper},
 	)
 
+	app.buildShielded(keys, tkeys, appOpts)
+
 	/****  Module Options ****/
 
 	app.installWasm(keys, appOpts)
@@ -580,6 +590,7 @@ func NewOramaApp(
 		houses.NewAppModule(app.HousesKeeper),
 		storage.NewAppModule(app.StorageKeeper),
 		relay.NewAppModule(app.RelayKeeper),
+		shielded.NewAppModule(app.ShieldedKeeper),
 	}
 	app.ModuleManager = module.NewManager(append(baseModules, app.wasmModules...)...)
 
@@ -620,6 +631,7 @@ func NewOramaApp(
 	// made during the block (see keeper.Keeper.ReconcileBurns).
 	app.ModuleManager.SetOrderEndBlockers(
 		banktypes.ModuleName,
+		shieldedtypes.ModuleName,
 		stakingtypes.ModuleName,
 		nodestypes.ModuleName,
 		housetypes.ModuleName,
@@ -661,6 +673,7 @@ func NewOramaApp(
 		housetypes.ModuleName,
 		storagetypes.ModuleName,
 		relaytypes.ModuleName,
+		shieldedtypes.ModuleName,
 	}
 	genesisModuleOrder = insertBefore(genesisModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 	exportModuleOrder := []string{
@@ -685,6 +698,7 @@ func NewOramaApp(
 		housetypes.ModuleName,
 		storagetypes.ModuleName,
 		relaytypes.ModuleName,
+		shieldedtypes.ModuleName,
 	}
 	exportModuleOrder = insertBefore(exportModuleOrder, powertypes.ModuleName, app.wasmGenesisOrder...)
 
@@ -705,6 +719,7 @@ func NewOramaApp(
 	reflectionv1.RegisterReflectionServiceServer(app.GRPCQueryRouter(), reflectionSvc)
 
 	app.MountKVStores(keys)
+	app.MountTransientStores(tkeys)
 
 	app.SetInitChainer(app.InitChainer)
 	app.SetPreBlocker(app.PreBlocker)
@@ -713,6 +728,7 @@ func NewOramaApp(
 	app.setAnteHandler(txConfig)
 	app.setInclusionHandlers()
 	app.setPostHandler()
+	app.registerShieldedSnapshot()
 
 	if loadLatest {
 		if err := app.LoadLatestVersion(); err != nil {
@@ -735,6 +751,8 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		ante.NewSetUpContextDecorator(),
 		ante.NewExtensionOptionsDecorator(nil),
 		ante.NewValidateBasicDecorator(),
+		// A shielded message is the only message of its tx: refused here, before any fee is taken.
+		shieldedante.ShapeDecorator{},
 		app.uploadSunset,
 		app.contractSend,
 		wasmpolicyante.NewDepositPayerDecorator(),
@@ -754,9 +772,20 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		ante.NewValidateSigCountDecorator(app.AccountKeeper),
 		ante.NewSigGasConsumeDecorator(app.AccountKeeper, ante.DefaultSigVerificationGasConsumer),
 		ante.NewSigVerificationDecorator(app.AccountKeeper, txConfig.SignModeHandler()),
+		// The proofs of a signed shielded message are checked once its signature is: unsigned
+		// garbage never costs proof work.
+		shieldedante.NewProofDecorator(app.ShieldedKeeper),
 		ante.NewIncrementSequenceDecorator(app.AccountKeeper),
 	}
-	app.anteHandler = sdk.ChainAnteDecorators(anteDecorators...)
+	// A signer-less shielded transfer has no signature and no declared fee, so it has its own short
+	// chain: its fee is the bundle's value balance, checked and burned in the message.
+	signerless := sdk.ChainAnteDecorators(
+		ante.NewSetUpContextDecorator(),
+		ante.NewExtensionOptionsDecorator(nil),
+		ante.NewTxTimeoutHeightDecorator(),
+		shieldedante.NewSignerlessDecorator(app.ShieldedKeeper),
+	)
+	app.anteHandler = shieldedante.Route(signerless, sdk.ChainAnteDecorators(anteDecorators...))
 	app.SetAnteHandler(app.anteHandler)
 }
 

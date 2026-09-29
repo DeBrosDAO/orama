@@ -46,17 +46,21 @@ var ErrEmptyChainID = errors.New("shielded verifier needs a chain id")
 var ErrVerifierFault = errors.New("shielded verifier fault")
 
 // Verifier checks one bundle. Nodes only verify. They do not build proofs.
+//
+// binding is what the signatures must additionally commit to: nil for a bundle whose transparent
+// side needs no protection, and for an unshield the signer and target, so a copied bundle cannot be
+// redirected to another account (see orchard.Sighash).
 type Verifier interface {
 	// ID names the implementation (for example "orchard"). Two verifiers count as independent
 	// only when their IDs differ, so the same verifier passed twice cannot satisfy MinVerifiers.
 	ID() string
-	Verify(bundle []byte) error
+	Verify(bundle, binding []byte) error
 }
 
 // Check runs every linked verifier. All of them must accept. Fewer than MinVerifiers, a missing
 // verifier, fewer than MinVerifiers distinct verifier IDs, or a single rejection, fails the bundle.
 // No verifier runs unless the whole set is valid.
-func Check(bundle []byte, verifiers ...Verifier) error {
+func Check(bundle, binding []byte, verifiers ...Verifier) error {
 	if len(verifiers) < MinVerifiers {
 		return ErrVerifierNotLinked
 	}
@@ -72,7 +76,7 @@ func Check(bundle []byte, verifiers ...Verifier) error {
 		ids[id] = struct{}{}
 	}
 	for _, v := range verifiers {
-		if err := v.Verify(bundle); err != nil {
+		if err := v.Verify(bundle, binding); err != nil {
 			return err
 		}
 	}

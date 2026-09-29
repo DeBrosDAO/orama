@@ -1,0 +1,116 @@
+syntax = "proto3";
+package orama.shielded.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/shielded/types";
+
+import "gogoproto/gogo.proto";
+import "orama/nodes/v1/nodes.proto";
+
+// Params are x/shielded's genesis-set parameters
+// (plans/open-network/track-c-chain.md C12). There is no Msg that changes
+// them: no admin key, no pause, no kill switch (plans/open-network.md D20).
+message Params {
+  // anchor_window_blocks is how many blocks back a bundle's anchor may be.
+  uint64 anchor_window_blocks = 1;
+  // nullifier_fee is the norama burned for every nullifier a bundle inserts.
+  // Nullifiers are permanent state and carry no refundable deposit.
+  string nullifier_fee = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // action_gas is the gas one bundle action costs. A signer-less transfer
+  // must declare exactly action_gas x actions as its gas limit; the fee floor
+  // is that gas times the current base fee.
+  uint64 action_gas = 3;
+  // max_actions_per_bundle bounds a bundle before any proof work.
+  uint32 max_actions_per_bundle = 4;
+  // unshield_floor is the floor of the 24h net-outflow cap, in norama:
+  // the cap is max(2% of the pool, unshield_floor).
+  string unshield_floor = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // max_fee_topup is the most one unshield to the signer's own earnings
+  // (for fees only) may move, in norama.
+  string max_fee_topup = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // queue_per_address_cap is the most one address is paid from the unshield
+  // queue in one 24h window, in norama.
+  string queue_per_address_cap = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// UnshieldTarget is where an unshield may send value. Nobody can unshield
+// into someone else's bond or account.
+enum UnshieldTarget {
+  option (gogoproto.goproto_enum_prefix) = false;
+
+  UNSHIELD_TARGET_UNSPECIFIED = 0 [(gogoproto.enumvalue_customname) = "UnshieldTargetUnspecified"];
+  // The signer's own staking delegation to `validator`.
+  UNSHIELD_TARGET_BOND = 1 [(gogoproto.enumvalue_customname) = "UnshieldTargetBond"];
+  // The signer's own x/nodes role bond on `node_id`.
+  UNSHIELD_TARGET_NODE_BOND = 2 [(gogoproto.enumvalue_customname) = "UnshieldTargetNodeBond"];
+  // The signer's own earnings account, for fees, capped per tx.
+  UNSHIELD_TARGET_FEE_TOPUP = 3 [(gogoproto.enumvalue_customname) = "UnshieldTargetFeeTopup"];
+  // Deposits and escrow for the signer's own deals, tokens and trees. Not linked.
+  UNSHIELD_TARGET_DEPOSIT = 4 [(gogoproto.enumvalue_customname) = "UnshieldTargetDeposit"];
+  // A contract call (the adapter or a plain call). Not linked.
+  UNSHIELD_TARGET_CONTRACT = 5 [(gogoproto.enumvalue_customname) = "UnshieldTargetContract"];
+}
+
+// PoolBalance is the public balance of one vintage pool for one asset. It
+// never goes below zero.
+message PoolBalance {
+  uint32 vintage = 1;
+  bytes asset = 2;
+  string balance = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// Limiter is the rolling 24h net-outflow window of one pool.
+message Limiter {
+  uint32 vintage = 1;
+  bytes asset = 2;
+  // window_start is the Unix time (seconds) the current window opened.
+  int64 window_start = 3;
+  // counted is the norama that left the pool in this window and counts
+  // against the cap.
+  string counted = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // served_window_start is the window_start for which the queue was last
+  // served, so each window serves it once.
+  int64 served_window_start = 5;
+}
+
+// QueuedUnshield is a plain unshield to a bond that did not fit under the
+// cap. Its notes are already spent and its amount already left the pool;
+// the module account still holds the coins until the queue pays them.
+message QueuedUnshield {
+  uint64 id = 1;
+  uint32 vintage = 2;
+  bytes asset = 3;
+  string owner = 4;
+  UnshieldTarget target = 5;
+  string validator = 6;
+  string node_id = 7;
+  orama.nodes.v1.Role role = 8;
+  string amount = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  int64 height = 10;
+}
+
+// Anchor is a note-commitment tree root and the last block it was the root at.
+message Anchor {
+  bytes root = 1;
+  int64 height = 2;
+}

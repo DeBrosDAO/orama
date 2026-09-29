@@ -240,17 +240,24 @@ func (d FeeDecorator) resolvePayer(ctx sdk.Context, feeTx sdk.FeeTx) (sdk.AccAdd
 // and whether one could be resolved at all - a malformed or missing block header field must never
 // be able to block every transaction in the chain (see the caller's handling of found == false).
 func (d FeeDecorator) resolveProposer(ctx sdk.Context) (sdk.AccAddress, bool, error) {
+	addr, found := ResolveProposer(ctx, d.stakingKeeper)
+	return addr, found, nil
+}
+
+// ResolveProposer returns the account that owns the current block's proposer validator, and
+// whether one resolved. Other modules that pay the proposer a tip use it, so the rule is one.
+func ResolveProposer(ctx sdk.Context, sk StakingKeeper) (sdk.AccAddress, bool) {
 	consAddr := sdk.ConsAddress(ctx.BlockHeader().ProposerAddress)
 	if len(consAddr) == 0 {
-		return nil, false, nil
+		return nil, false
 	}
-	validator, err := d.stakingKeeper.GetValidatorByConsAddr(ctx, consAddr)
+	validator, err := sk.GetValidatorByConsAddr(ctx, consAddr)
 	if err != nil {
-		return nil, false, nil
+		return nil, false
 	}
 	valAddr, err := sdk.ValAddressFromBech32(validator.OperatorAddress)
 	if err != nil {
-		return nil, false, nil
+		return nil, false
 	}
-	return sdk.AccAddress(valAddr), true, nil
+	return sdk.AccAddress(valAddr), true
 }

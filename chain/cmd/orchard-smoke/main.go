@@ -57,10 +57,10 @@ func run() int {
 			failed = true
 			continue
 		}
-		failed = !check(name+" accepts", v.Verify(bundle), nil) || failed
+		failed = !check(name+" accepts", v.Verify(bundle, nil), nil) || failed
 		tampered := bytes.Clone(bundle)
 		tampered[len(tampered)-10] ^= 1 // inside the binding signature.
-		failed = !check(name+" rejects a tampered binding signature", v.Verify(tampered), verify.ErrSignatureRejected) || failed
+		failed = !check(name+" rejects a tampered binding signature", v.Verify(tampered, nil), verify.ErrSignatureRejected) || failed
 	}
 	if failed {
 		return exitFailed

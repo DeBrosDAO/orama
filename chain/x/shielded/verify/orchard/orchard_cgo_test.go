@@ -17,7 +17,7 @@ func TestVerify_vectorsAccept(t *testing.T) {
 	}
 	for _, name := range vectorNames {
 		bundle, _, chainID := loadVector(t, name)
-		if err := mustNew(t, chainID).Verify(bundle); err != nil {
+		if err := mustNew(t, chainID).Verify(bundle, nil); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -25,7 +25,7 @@ func TestVerify_vectorsAccept(t *testing.T) {
 
 func TestVerify_wrongChainIDRejects(t *testing.T) {
 	bundle, _, chainID := loadVector(t, "ironwood-1-action")
-	err := mustNew(t, chainID+"-other").Verify(bundle)
+	err := mustNew(t, chainID+"-other").Verify(bundle, nil)
 	if !errors.Is(err, verify.ErrSignatureRejected) {
 		t.Fatalf("got %v, want ErrSignatureRejected", err)
 	}
@@ -53,7 +53,7 @@ func TestVerify_flippedByteRejects(t *testing.T) {
 		for label, c := range cases {
 			mut := bytes.Clone(bundle)
 			mut[c.at] ^= 1
-			if err := mustNew(t, chainID).Verify(mut); !errors.Is(err, c.want) {
+			if err := mustNew(t, chainID).Verify(mut, nil); !errors.Is(err, c.want) {
 				t.Errorf("%s/%s: got %v, want %v", name, label, err, c.want)
 			}
 		}
@@ -63,7 +63,7 @@ func TestVerify_flippedByteRejects(t *testing.T) {
 func TestVerify_sighashByteFlipRejects(t *testing.T) {
 	// The sighash is derived inside Verify, so a flipped sighash is a different chain ID.
 	bundle, _, chainID := loadVector(t, "ironwood-2-action")
-	if err := mustNew(t, chainID[:len(chainID)-1]+"2").Verify(bundle); !errors.Is(err, verify.ErrSignatureRejected) {
+	if err := mustNew(t, chainID[:len(chainID)-1]+"2").Verify(bundle, nil); !errors.Is(err, verify.ErrSignatureRejected) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -76,12 +76,12 @@ func TestVerify_wrongProofLengthRefusedBeforeVerify(t *testing.T) {
 	}
 	short := bytes.Clone(bundle)
 	short[lenAt+1]-- // claims one byte fewer than canonical
-	if err := mustNew(t, chainID).Verify(short); !errors.Is(err, verify.ErrProofLength) {
+	if err := mustNew(t, chainID).Verify(short, nil); !errors.Is(err, verify.ErrProofLength) {
 		t.Fatalf("short: got %v", err)
 	}
 	padded := bytes.Clone(bundle)
 	padded[lenAt+1]++
-	if err := mustNew(t, chainID).Verify(padded); !errors.Is(err, verify.ErrProofLength) {
+	if err := mustNew(t, chainID).Verify(padded, nil); !errors.Is(err, verify.ErrProofLength) {
 		t.Fatalf("padded: got %v", err)
 	}
 }
@@ -97,7 +97,7 @@ func TestVerify_malformedInputRefused(t *testing.T) {
 		"trailing":  append(bytes.Clone(bundle), 0),
 		"oversize":  make([]byte, MaxBundleBytes+1),
 	} {
-		err := v.Verify(in)
+		err := v.Verify(in, nil)
 		if err == nil || !errors.Is(err, verify.ErrTampered) {
 			t.Errorf("%s: got %v, want a rejection", name, err)
 		}
@@ -107,7 +107,7 @@ func TestVerify_malformedInputRefused(t *testing.T) {
 // One linked verifier is not enough: the chain needs two independent ones.
 func TestCheck_oneRealVerifierStillFailsClosed(t *testing.T) {
 	bundle, _, chainID := loadVector(t, "ironwood-1-action")
-	if err := verify.Check(bundle, mustNew(t, chainID)); !errors.Is(err, verify.ErrVerifierNotLinked) {
+	if err := verify.Check(bundle, nil, mustNew(t, chainID)); !errors.Is(err, verify.ErrVerifierNotLinked) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -126,9 +126,9 @@ func TestVerify_concurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- v.Verify(bundle1)
-			errs <- v.Verify(bundle2)
-			if err := v.Verify(bad); !errors.Is(err, verify.ErrSignatureRejected) {
+			errs <- v.Verify(bundle1, nil)
+			errs <- v.Verify(bundle2, nil)
+			if err := v.Verify(bad, nil); !errors.Is(err, verify.ErrSignatureRejected) {
 				errs <- errors.New("tampered bundle was not rejected: " + errString(err))
 				return
 			}
@@ -154,12 +154,12 @@ func errString(err error) string {
 func benchmarkVerify(b *testing.B, name string) {
 	bundle, _, chainID := loadVector(b, name)
 	v := mustNew(b, chainID)
-	if err := v.Verify(bundle); err != nil { // builds the verifying key once, outside the timing
+	if err := v.Verify(bundle, nil); err != nil { // builds the verifying key once, outside the timing
 		b.Fatal(err)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := v.Verify(bundle); err != nil {
+		if err := v.Verify(bundle, nil); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -176,7 +176,7 @@ func TestWarm_buildsTheKeyAndIsRepeatable(t *testing.T) {
 		t.Fatalf("second Warm: %v", err)
 	}
 	bundle, _, chainID := loadVector(t, "ironwood-1-action")
-	if err := mustNew(t, chainID).Verify(bundle); err != nil {
+	if err := mustNew(t, chainID).Verify(bundle, nil); err != nil {
 		t.Fatalf("Verify after Warm: %v", err)
 	}
 }

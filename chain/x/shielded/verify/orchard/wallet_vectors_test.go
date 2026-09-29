@@ -60,7 +60,7 @@ func TestSighash_matchesWalletBuilder(t *testing.T) {
 	s := loadWalletScenario(t)
 	for _, step := range s.Steps {
 		bundle := mustHex(t, step.Bundle)
-		got, err := Sighash(s.ChainID, bundle)
+		got, err := Sighash(s.ChainID, nil, bundle)
 		if err != nil {
 			t.Fatalf("%s: %v", step.Name, err)
 		}

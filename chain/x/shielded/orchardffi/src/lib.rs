@@ -3,6 +3,8 @@
 //! The verifying key is the post-NU6.3 key and nothing else. The insecure pre-NU6.2 circuit is
 //! never built here. There is no prover in this crate: proofs are built by wallets.
 
+pub mod tree;
+
 use std::io::Cursor;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::slice;
@@ -148,4 +150,50 @@ pub extern "C" fn orama_orchard_warm() -> i32 {
         OK
     })
     .unwrap_or(PANIC)
+}
+
+/// C entry point for the frontier. See `include/orama_orchard.h`.
+///
+/// # Safety
+/// Every pointer must be valid for its length (`frontier` may be null only when
+/// `frontier_len` is 0, `commitments` only when `n_commitments` is 0), `out_frontier` for
+/// `out_cap` writable bytes, `out_len` for one `usize` and `out_root` for 32 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn orama_orchard_tree_append(
+    frontier: *const u8,
+    frontier_len: usize,
+    commitments: *const u8,
+    n_commitments: usize,
+    out_frontier: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+    out_root: *mut u8,
+) -> i32 {
+    if (frontier.is_null() && frontier_len != 0)
+        || (commitments.is_null() && n_commitments != 0)
+        || out_frontier.is_null()
+        || out_len.is_null()
+        || out_root.is_null()
+    {
+        return BAD_ARGUMENT;
+    }
+    let Some(commitment_bytes) = n_commitments.checked_mul(tree::NODE_LEN) else {
+        return BAD_ARGUMENT;
+    };
+    let frontier_in: &[u8] = if frontier_len == 0 { &[] } else { slice::from_raw_parts(frontier, frontier_len) };
+    let cmx: &[u8] = if n_commitments == 0 { &[] } else { slice::from_raw_parts(commitments, commitment_bytes) };
+    let result = catch_unwind(AssertUnwindSafe(|| tree::append(frontier_in, cmx)));
+    match result {
+        Err(_) => PANIC,
+        Ok(None) => MALFORMED,
+        Ok(Some((frontier_out, root))) => {
+            if frontier_out.len() > out_cap {
+                return BAD_ARGUMENT;
+            }
+            slice::from_raw_parts_mut(out_frontier, frontier_out.len()).copy_from_slice(&frontier_out);
+            *out_len = frontier_out.len();
+            slice::from_raw_parts_mut(out_root, tree::NODE_LEN).copy_from_slice(&root);
+            OK
+        }
+    }
 }

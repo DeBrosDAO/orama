@@ -49,11 +49,11 @@ func Warm() error {
 func (verifier) ID() string { return VerifierID }
 
 // Verify accepts a bundle only when its proof and every signature verify.
-func (v verifier) Verify(bundle []byte) error {
+func (v verifier) Verify(bundle, binding []byte) error {
 	if len(bundle) == 0 || len(bundle) > MaxBundleBytes {
 		return fmt.Errorf("%w: %d bytes", verify.ErrMalformed, len(bundle))
 	}
-	sighash, err := Sighash(v.chainID, bundle)
+	sighash, err := Sighash(v.chainID, binding, bundle)
 	if err != nil {
 		return err
 	}

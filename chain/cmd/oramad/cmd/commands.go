@@ -79,7 +79,10 @@ func initRootCmd(
 	)
 
 	server.AddCommandsWithStartCmdOptions(rootCmd, app.DefaultNodeHome, newApp, appExport, server.StartCmdOptions{
-		AddFlags: func(startCmd *cobra.Command) {},
+		AddFlags: func(startCmd *cobra.Command) {
+			startCmd.Flags().String(app.FlagShieldedVerifier, "",
+				"path of the out-of-process shielded proof verifier (default <home>/bin/"+app.ShieldedVerifierBinary+")")
+		},
 	})
 
 	rootCmd.AddCommand(

@@ -25,4 +25,4 @@ func Warm() error { return verify.ErrVerifierNotLinked }
 
 func (unlinked) ID() string { return VerifierID }
 
-func (unlinked) Verify([]byte) error { return verify.ErrVerifierNotLinked }
+func (unlinked) Verify([]byte, []byte) error { return verify.ErrVerifierNotLinked }

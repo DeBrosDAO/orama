@@ -16,7 +16,13 @@ fn load(name: &str) -> (Vec<u8>, [u8; 32]) {
     (bundle, hash.try_into().unwrap())
 }
 
-const VECTORS: [&str; 2] = ["ironwood-1-action", "ironwood-2-action"];
+const VECTORS: [&str; 5] = [
+    "ironwood-1-action",
+    "ironwood-2-action",
+    "ironwood-transfer",
+    "ironwood-unshield",
+    "ironwood-unshield-bond",
+];
 
 fn flipped(bundle: &[u8], at: usize) -> Vec<u8> {
     let mut b = bundle.to_vec();

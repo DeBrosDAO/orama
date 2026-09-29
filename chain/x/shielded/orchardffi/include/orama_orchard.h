@@ -34,6 +34,23 @@ int32_t orama_orchard_verify(const uint8_t *bundle, size_t bundle_len, const uin
  */
 int32_t orama_orchard_warm(void);
 
+/* Largest encoded note-commitment frontier: position (8) + leaf (32) + 32 ommers (32 each). */
+#define ORAMA_ORCHARD_MAX_FRONTIER_LEN 1064
+
+/*
+ * Append `n_commitments` note commitments (32 bytes each, canonical) to a note-commitment
+ * tree frontier and return the new frontier and its root. `frontier` is empty (len 0) for an
+ * empty tree. Encoding: position u64 LE, leaf (32), one ommer (32) per set bit of the position.
+ * Writes the new frontier to `out_frontier` (capacity `out_cap`, at least
+ * ORAMA_ORCHARD_MAX_FRONTIER_LEN), its length to `out_len` and the 32-byte root to `out_root`.
+ * Returns ORAMA_ORCHARD_OK, ORAMA_ORCHARD_MALFORMED (bad frontier or commitment, or a full
+ * tree), ORAMA_ORCHARD_PANIC or ORAMA_ORCHARD_BAD_ARGUMENT.
+ */
+int32_t orama_orchard_tree_append(const uint8_t *frontier, size_t frontier_len,
+                                  const uint8_t *commitments, size_t n_commitments,
+                                  uint8_t *out_frontier, size_t out_cap, size_t *out_len,
+                                  uint8_t *out_root);
+
 #ifdef __cplusplus
 }
 #endif

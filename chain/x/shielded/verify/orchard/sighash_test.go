@@ -30,7 +30,7 @@ func loadVector(t testing.TB, name string) (bundle []byte, sighash []byte, chain
 func TestSighash_matchesRustGenerator(t *testing.T) {
 	for _, name := range vectorNames {
 		bundle, want, chainID := loadVector(t, name)
-		got, err := Sighash(chainID, bundle)
+		got, err := Sighash(chainID, nil, bundle)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -42,11 +42,11 @@ func TestSighash_matchesRustGenerator(t *testing.T) {
 
 func TestSighash_bindsChainAndEffectingData(t *testing.T) {
 	bundle, _, chainID := loadVector(t, "ironwood-1-action")
-	base, err := Sighash(chainID, bundle)
+	base, err := Sighash(chainID, nil, bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, _ := Sighash(chainID+"x", bundle)
+	other, _ := Sighash(chainID+"x", nil, bundle)
 	if other == base {
 		t.Fatal("a different chain id must change the sighash")
 	}
@@ -54,7 +54,7 @@ func TestSighash_bindsChainAndEffectingData(t *testing.T) {
 	for _, at := range []int{1 + 32*4 + 3, 1 + 32*5 + 100, 1 + actionLen - 1, 1 + actionLen + 8} {
 		mut := bytes.Clone(bundle)
 		mut[at] ^= 1
-		got, err := Sighash(chainID, mut)
+		got, err := Sighash(chainID, nil, mut)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,11 +66,11 @@ func TestSighash_bindsChainAndEffectingData(t *testing.T) {
 
 func TestSighash_ignoresProofAndSignatures(t *testing.T) {
 	bundle, _, chainID := loadVector(t, "ironwood-1-action")
-	base, _ := Sighash(chainID, bundle)
+	base, _ := Sighash(chainID, nil, bundle)
 	mut := bytes.Clone(bundle)
 	mut[len(mut)-1] ^= 1
 	mut[1+actionLen+bundleHeaderLen+3+10] ^= 1
-	got, _ := Sighash(chainID, mut)
+	got, _ := Sighash(chainID, nil, mut)
 	if got != base {
 		t.Fatal("the proof and signatures are not part of the sighash input")
 	}
@@ -86,22 +86,22 @@ func TestSighash_malformedInput(t *testing.T) {
 		"non-canonical count": {0xfd, 0x01, 0x00},
 	}
 	for name, in := range cases {
-		if _, err := Sighash(chainID, in); !errors.Is(err, verify.ErrMalformed) {
+		if _, err := Sighash(chainID, nil, in); !errors.Is(err, verify.ErrMalformed) {
 			t.Errorf("%s: got %v, want ErrMalformed", name, err)
 		}
 	}
-	if _, err := Sighash(string(make([]byte, maxChainIDLen+1)), bundle); err == nil {
+	if _, err := Sighash(string(make([]byte, maxChainIDLen+1)), nil, bundle); err == nil {
 		t.Error("an oversize chain id must be refused")
 	}
 }
 
 func TestSighash_emptyChainIDIsHashedAsEmpty(t *testing.T) {
 	bundle, _, _ := loadVector(t, "ironwood-1-action")
-	a, err := Sighash("", bundle)
+	a, err := Sighash("", nil, bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := Sighash("a", bundle)
+	b, _ := Sighash("a", nil, bundle)
 	if a == b {
 		t.Fatal("chain id must affect the hash")
 	}
@@ -131,11 +131,11 @@ func TestNew_refusesAnEmptyChainID(t *testing.T) {
 func TestVerifierID_sameVerifierTwiceIsRefused(t *testing.T) {
 	bundle, _, chainID := loadVector(t, "ironwood-1-action")
 	v := mustNew(t, chainID)
-	if err := verify.Check(bundle, v, v); !errors.Is(err, verify.ErrVerifierNotLinked) {
+	if err := verify.Check(bundle, nil, v, v); !errors.Is(err, verify.ErrVerifierNotLinked) {
 		t.Fatalf("Check(v, v) = %v, want a fail-closed refusal", err)
 	}
 	other := mustNew(t, chainID)
-	if err := verify.Check(bundle, v, other); !errors.Is(err, verify.ErrDuplicateVerifier) {
+	if err := verify.Check(bundle, nil, v, other); !errors.Is(err, verify.ErrDuplicateVerifier) {
 		t.Fatalf("two instances of one implementation = %v, want ErrDuplicateVerifier", err)
 	}
 }

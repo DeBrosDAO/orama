@@ -23,7 +23,7 @@ BUILD_FLAGS := -trimpath -ldflags "$(LDFLAGS)"
 WASMVM_DIR := $(shell go list -m -f '{{.Dir}}' github.com/CosmWasm/wasmvm/v3 2>/dev/null)
 LIBWASMVM := $(firstword $(wildcard $(WASMVM_DIR)/internal/api/libwasmvm.dylib $(WASMVM_DIR)/internal/api/libwasmvm.aarch64.so $(WASMVM_DIR)/internal/api/libwasmvm.x86_64.so))
 
-.PHONY: build build-wasm contracts-verify test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 orchard-test build-linux-amd64-orchard orchard-smoke orchard-smoke-linux-amd64 native-lib-linux-amd64 build-linux-amd64-full
+.PHONY: build build-wasm contracts-verify test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 proto-shielded orchard-verifier orchard-verifier-linux-amd64 orchard-test build-linux-amd64-orchard orchard-smoke orchard-smoke-linux-amd64 native-lib-linux-amd64 build-linux-amd64-full
 
 ## build: cross-compile oramad for linux/amd64, darwin/amd64 and darwin/arm64.
 ## CGO_ENABLED=0 and -tags nowasm: these binaries are static and do not include CosmWasm.
@@ -89,16 +89,41 @@ orchard-lib-linux-amd64:
 	mkdir -p $(ORCHARD_LIBDIR)/linux_amd64
 	cp $(ORCHARD_CRATE)/target/$(ORCHARD_LINUX_AMD64_RUST_TARGET)/release/liborama_orchard.a $(ORCHARD_LIBDIR)/linux_amd64/
 
-## orchard-test: Rust tests (verifier and wallet crates), then the Go tests with the real verifier linked.
-orchard-test: orchard-lib
+## orchard-verifier: build the out-of-process verifier binary for this host, the second verifier of
+## x/shielded. It has its own crate and its own Cargo.lock, and shares no source with the library.
+VERIFIER_CRATE := x/shielded/orchardverifier-bin
+VERIFIER_NAME := orama-orchard-verifier
+orchard-verifier:
+	cd $(VERIFIER_CRATE) && cargo build --release --locked
+
+## orchard-verifier-linux-amd64: the same binary for linux/amd64, static (musl, C parts via zig).
+## It lands in build/ next to oramad-linux-amd64-orchard; oramad finds it with --shielded-verifier or
+## at <home>/bin/$(VERIFIER_NAME).
+orchard-verifier-linux-amd64:
+	cd $(VERIFIER_CRATE) && \
+		ORAMA_ZIG="$(ORAMA_ZIG)" ZIG_TARGET=$(ORCHARD_LINUX_AMD64_ZIG_TARGET) \
+		CC_x86_64_unknown_linux_musl="$(CURDIR)/scripts/zigcc.sh" \
+		AR_x86_64_unknown_linux_musl="$(ORAMA_ZIG) ar" \
+		CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$(CURDIR)/scripts/zigcc.sh" \
+		RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=no" \
+		cargo build --release --locked --target $(ORCHARD_LINUX_AMD64_RUST_TARGET)
+	mkdir -p $(BUILD_DIR)
+	cp $(VERIFIER_CRATE)/target/$(ORCHARD_LINUX_AMD64_RUST_TARGET)/release/$(VERIFIER_NAME) $(BUILD_DIR)/$(VERIFIER_NAME)-linux-amd64
+
+## orchard-test: Rust tests of all three crates (library, verifier binary, wallet), then the Go tests with both verifiers linked (the
+## library through cgo, the binary out of process).
+orchard-test: orchard-lib orchard-verifier
 	cd $(ORCHARD_CRATE) && cargo test --release --locked
+	cd $(VERIFIER_CRATE) && cargo test --release --locked
 	cd $(SHIELDED_WALLET_CRATE) && cargo test --release --locked
 	CGO_ENABLED=1 go test -count=1 -tags "nowasm orchardffi" ./x/shielded/... ./app/...
 
-## build-linux-amd64-orchard: oramad for linux/amd64 with the Rust verifier linked (static, musl).
-## Cross-compiles through zig cc, like the cgo binaries of `orama build`. nowasm: no CosmWasm.
-## -lunwind: the Rust staticlib carries its panic personality, which needs zig's libunwind.
-build-linux-amd64-orchard: orchard-lib-linux-amd64
+## build-linux-amd64-orchard: oramad for linux/amd64 with the Rust verifier library linked (static,
+## musl), and the out-of-process verifier binary it needs beside it. A chain node accepts a shielded
+## bundle only with both. Cross-compiles through zig cc, like the cgo binaries of `orama build`.
+## nowasm: no CosmWasm. -lunwind: the Rust staticlib carries its panic personality, which needs
+## zig's libunwind.
+build-linux-amd64-orchard: orchard-lib-linux-amd64 orchard-verifier-linux-amd64
 	mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
 		CGO_LDFLAGS="-lunwind" \
@@ -170,3 +195,16 @@ localnet-stop:
 ## localnet-clean: stop every running localnet node and delete all chain data.
 localnet-clean:
 	./scripts/localnet/localnet.sh clean
+
+## proto-shielded: regenerate x/shielded's gogoproto code from proto/orama/shielded/v1.
+## Needs protoc and protoc-gen-gocosmos (go install github.com/cosmos/gogoproto/protoc-gen-gocosmos).
+GOPROTO_MOD := $(shell go env GOMODCACHE)/github.com/cosmos
+proto-shielded:
+	@out=$$(mktemp -d) && \
+	protoc -I proto \
+		-I $(GOPROTO_MOD)/cosmos-sdk@$(shell go list -m -f '{{.Version}}' github.com/cosmos/cosmos-sdk)/proto \
+		-I $(GOPROTO_MOD)/gogoproto@$(shell go list -m -f '{{.Version}}' github.com/cosmos/gogoproto) \
+		-I $(GOPROTO_MOD)/cosmos-proto@$(shell go list -m -f '{{.Version}}' github.com/cosmos/cosmos-proto)/proto \
+		--gocosmos_out=plugins=grpc,Mgoogle/protobuf/any.proto=github.com/cosmos/gogoproto/types/any:$$out \
+		proto/orama/shielded/v1/*.proto && \
+	cp $$out/github.com/DeBrosOfficial/network/chain/x/shielded/types/*.pb.go x/shielded/types/ && rm -rf $$out

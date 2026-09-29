@@ -151,12 +151,8 @@ type Limiter struct {
 	Counted math.Int
 }
 
-// Apply updates the limiter. Fee burns are exempt. Adapter and fee top-ups
-// fail atomically when they do not fit. Bond and deposit outflows queue.
-func (l *Limiter) Apply(now time.Time, poolBalance, floor, amount math.Int, kind Kind) (Outcome, error) {
-	if !amount.IsPositive() {
-		return OutcomeReject, ErrAmount
-	}
+// Roll opens a new window when there is none or the current one has run its 24 hours.
+func (l *Limiter) Roll(now time.Time) {
 	if l.Counted.IsNil() {
 		l.Counted = math.ZeroInt()
 	}
@@ -164,6 +160,15 @@ func (l *Limiter) Apply(now time.Time, poolBalance, floor, amount math.Int, kind
 		l.Start = now
 		l.Counted = math.ZeroInt()
 	}
+}
+
+// Apply updates the limiter. Fee burns are exempt. Adapter and fee top-ups
+// fail atomically when they do not fit. Bond and deposit outflows queue.
+func (l *Limiter) Apply(now time.Time, poolBalance, floor, amount math.Int, kind Kind) (Outcome, error) {
+	if !amount.IsPositive() {
+		return OutcomeReject, ErrAmount
+	}
+	l.Roll(now)
 	if kind == KindFeeBurn {
 		return OutcomeAllow, nil
 	}

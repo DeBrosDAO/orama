@@ -313,15 +313,16 @@ func TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg(t *testing.T) {
 	})
 }
 
-// One Orchard verifier is linked and the spec needs two, so the app refuses every bundle.
-func TestOramaApp_shieldedVerifiersFailClosedWithOneVerifier(t *testing.T) {
-	a := buildTestApp(t)
-	if len(a.ShieldedVerifiers) != 1 {
-		t.Fatalf("expected the Orchard verifier only, got %d", len(a.ShieldedVerifiers))
-	}
-	if err := verify.Check([]byte{1}, a.ShieldedVerifiers...); err != verify.ErrVerifierNotLinked {
-		t.Fatalf("got %v, want ErrVerifierNotLinked", err)
-	}
+// The app wires both verifiers the spec requires, and a node that has neither the Rust library
+// nor the out-of-process binary configured accepts no bundle.
+func TestOramaApp_shieldedVerifiersAreTwoAndAnUnconfiguredNodeAcceptsNothing(t *testing.T) {
+	a := buildTestApp(t) // no --shielded-verifier and no home
+	require.Len(t, a.ShieldedVerifiers, verify.MinVerifiers)
+	require.Error(t, verify.Check([]byte{1}, nil, a.ShieldedVerifiers...))
+
+	// Whatever the first verifier says about these bytes, the second one, the out-of-process
+	// binary, is not configured and must refuse on its own.
+	require.ErrorIs(t, a.ShieldedVerifiers[1].Verify(shieldedTestBundle(), nil), verify.ErrVerifierNotLinked)
 }
 
 // An app with no chain id is the CLI's throwaway metadata instance, not a node. It builds no
@@ -332,7 +333,7 @@ func TestOramaApp_noChainIDBuildsNoShieldedVerifier(t *testing.T) {
 	if len(a.ShieldedVerifiers) != 0 {
 		t.Fatalf("expected no verifiers without a chain id, got %d", len(a.ShieldedVerifiers))
 	}
-	if err := verify.Check([]byte{1}, a.ShieldedVerifiers...); err != verify.ErrVerifierNotLinked {
+	if err := verify.Check([]byte{1}, nil, a.ShieldedVerifiers...); err != verify.ErrVerifierNotLinked {
 		t.Fatalf("got %v, want ErrVerifierNotLinked", err)
 	}
 }
