@@ -127,20 +127,39 @@ orama namespace restore --in myapp.orbk --key-file ./backup.key \
 ```
 
 `restore` opens the backup on your machine; the private key never leaves it.
-It seals each secret to the destination gateway's restore key, which is derived
-from that cluster's encryption root and changes when the root is rotated. The
-gateway replaces the namespace's RQLite with the snapshot, writes the secrets
-under its own encryption root, and pins the CIDs. A wrong key, a corrupt or
-truncated file, or a backup of a different namespace is refused before
-anything is written. A failure after the database was replaced says so;
-running the same restore again is safe.
+It seals each secret to the destination gateway's restore key for that
+namespace, which is derived from the cluster's encryption root and the
+namespace name, so it changes when the root is rotated. Each sealed secret
+also carries its namespace and row, and the gateway checks them, so secrets
+cannot be replayed into another namespace or row.
+
+Before writing anything the gateway refuses: a wrong key, a corrupt or
+truncated file, a backup of a different namespace, a gateway whose RQLite
+client cannot run atomic batches, and a restore that would put the namespace
+over its storage quota on this cluster (`max_storage_bytes` times the
+replication factor, as `/v1/storage/pin` counts it). Then it replaces the
+namespace's RQLite with the snapshot, puts back this cluster's own storage
+quota (a backup never brings its quota with it), writes the secrets under its
+own encryption root, checks the quota again against the restored storage
+table, and pins the CIDs, eight at a time, within ten minutes. A failure after
+the database was replaced says so; running the same restore again is safe.
+
+Each gateway runs one backup or restore at a time and answers 429 while one is
+running. A backup and its restore request are held in memory whole (one nacl
+box), so they are capped: a namespace database over 256 MiB, more than 50,000
+pinned CIDs, or more than 8 MiB of pins and secrets together is refused with
+413. While it seals a backup the gateway holds about three copies of the
+database.
+
+RQLite 8 forwards `/db/backup` and `/db/load` from a follower to the leader
+itself. The gateway never follows a redirect from RQLite (a redirected POST
+would be re-sent without its body) and reports one as an error instead.
 
 What it does not do: create the namespace, redeploy deployments or functions
 onto the new cluster's nodes, or copy the pinned content. IPFS Cluster
-accepts each pin; the content only arrives if it is still reachable on IPFS. The backup and the
-restore request are held in memory whole (one nacl box; the restore request
-is capped at 1 GiB). Backups are taken when you run the command; there is no
-schedule and no storage deal.
+accepts each pin; the content only arrives if it is still reachable on IPFS.
+Backups are taken when you run the command; there is no schedule and no
+storage deal.
 
 `orama namespace backup-seal` and `backup-open` seal and open any file with
 the same keys.

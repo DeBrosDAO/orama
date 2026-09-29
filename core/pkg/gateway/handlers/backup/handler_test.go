@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -35,16 +37,30 @@ var (
 )
 
 type fakeDB struct {
-	rows      map[string][]map[string]any // by table
-	queryErr  error
+	rows     map[string][]map[string]any // by table
+	queryErr error
+	batchErr error
+	// used is SUM(size_bytes) before and after a load: [0] then [1].
+	used      []int64
+	usedReads int
+	// batches holds the write batches (UPDATE / INSERT / DELETE) in order.
 	batches   [][]rqlite.BatchOp
-	noRowFrom int // ops at or past this global index match no row; -1 for none
-	executed  int
+	noRowFrom int // UPDATEs at or past this index match no row; -1 for none
+	updates   int
 }
 
 func (f *fakeDB) Query(_ context.Context, dest any, query string, _ ...any) error {
 	if f.queryErr != nil {
 		return f.queryErr
+	}
+	if query == storageUseQuery {
+		var used int64
+		if f.usedReads < len(f.used) {
+			used = f.used[f.usedReads]
+		}
+		f.usedReads++
+		*dest.(*[]map[string]any) = []map[string]any{{"used": float64(used)}}
+		return nil
 	}
 	for table, rows := range f.rows {
 		if strings.Contains(query, "FROM "+table+" ") || strings.HasSuffix(query, "FROM "+table) {
@@ -57,44 +73,91 @@ func (f *fakeDB) Query(_ context.Context, dest any, query string, _ ...any) erro
 }
 
 func (f *fakeDB) Batch(_ context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {
-	f.batches = append(f.batches, ops)
+	if f.batchErr != nil {
+		return nil, f.batchErr
+	}
 	res := &rqlite.BatchResult{Committed: true}
-	for range ops {
+	if len(ops) > 0 && ops[0].Kind == rqlite.BatchOpQuery {
+		return res, nil
+	}
+	f.batches = append(f.batches, ops)
+	for _, op := range ops {
 		affected := int64(1)
-		if f.noRowFrom >= 0 && f.executed >= f.noRowFrom {
-			affected = 0
+		if strings.HasPrefix(op.SQL, "UPDATE ") {
+			if f.noRowFrom >= 0 && f.updates >= f.noRowFrom {
+				affected = 0
+			}
+			f.updates++
 		}
-		f.executed++
 		res.Results = append(res.Results, rqlite.OpResult{Kind: rqlite.BatchOpExec, RowsAffected: affected})
 	}
 	return res, nil
 }
 
 type fakeSnap struct {
-	db     []byte
-	loaded [][]byte
+	db        []byte
+	backupErr error
+	loaded    [][]byte
 }
 
-func (f *fakeSnap) Backup(context.Context) ([]byte, error) { return f.db, nil }
+func (f *fakeSnap) Backup(context.Context) ([]byte, error) { return f.db, f.backupErr }
 func (f *fakeSnap) Load(_ context.Context, db []byte) error {
 	f.loaded = append(f.loaded, db)
 	return nil
 }
 
 type fakePins struct {
-	pinned []string
-	fail   error
+	mu       sync.Mutex
+	pinned   []string
+	fail     error
+	inFlight int
+	peak     int
+	// hang makes Pin wait for its context, to test the deadline.
+	hang bool
+	// entered, when set, is told each time a Pin starts; gate, when set,
+	// holds every Pin until it is closed.
+	entered chan struct{}
+	gate    chan struct{}
 }
 
-func (f *fakePins) Pin(_ context.Context, cid, _ string, rf int) (*ipfs.PinResponse, error) {
+func (f *fakePins) Pin(ctx context.Context, cid, _ string, rf int) (*ipfs.PinResponse, error) {
+	f.mu.Lock()
+	f.inFlight++
+	f.peak = max(f.peak, f.inFlight)
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.inFlight--
+		f.mu.Unlock()
+	}()
+	if f.hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if f.fail != nil {
 		return nil, f.fail
 	}
 	if rf != 3 {
 		return nil, fmt.Errorf("replication factor %d", rf)
 	}
+	if f.entered != nil {
+		f.entered <- struct{}{}
+	}
+	if f.gate != nil {
+		<-f.gate
+	}
+	f.mu.Lock()
 	f.pinned = append(f.pinned, cid)
+	f.mu.Unlock()
 	return &ipfs.PinResponse{Cid: cid}, nil
+}
+
+func (f *fakePins) sorted() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := append([]string(nil), f.pinned...)
+	sort.Strings(out)
+	return out
 }
 
 type fakeAudit struct{ actions []string }
@@ -173,6 +236,11 @@ func backupFrom(t *testing.T, src *rig, pub *[32]byte) []byte {
 // restoreBody is what the operator's machine builds: open with the owner key,
 // re-seal to the destination's restore key.
 func restoreBody(t *testing.T, blob []byte, ownerPriv *[32]byte, dest secrets.Root) []byte {
+	return restoreBodyFor(t, blob, ownerPriv, dest, testNamespace)
+}
+
+// restoreBodyFor seals the secrets to dest's restore key for keyNamespace.
+func restoreBodyFor(t *testing.T, blob []byte, ownerPriv *[32]byte, dest secrets.Root, keyNamespace string) []byte {
 	t.Helper()
 	plain, err := nsbackup.Open(ownerPriv, blob)
 	if err != nil {
@@ -182,7 +250,7 @@ func restoreBody(t *testing.T, blob []byte, ownerPriv *[32]byte, dest secrets.Ro
 	if err != nil {
 		t.Fatal(err)
 	}
-	destPub, _, err := nsbackup.RestoreKey(dest)
+	destPub, _, err := nsbackup.RestoreKey(dest, keyNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}

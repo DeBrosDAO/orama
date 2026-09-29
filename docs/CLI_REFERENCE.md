@@ -2030,6 +2030,11 @@ in the backup. The namespace must already exist on the destination, and
 --namespace must name the namespace the backup was taken of. A wrong key, a
 corrupt file or a different namespace stops before anything is sent.
 
+The gateway also refuses, before writing anything, a restore that would put
+the namespace over its storage quota on the destination, and it keeps the
+destination's quota rather than the one in the backup. It runs one backup or
+restore at a time and answers 429 while one is running.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--dest-key` | — | destination gateway's restore public key, from 'orama namespace restore-key' |
@@ -2046,8 +2051,9 @@ orama namespace restore-key
 ```
 
 Print the X25519 public key a restore's secrets are sealed to. It is
-derived from the destination cluster's encryption root, so it changes when
-that root is rotated. Pass it to 'orama namespace restore --dest-key'.
+derived from the destination cluster's encryption root and the namespace, so
+it is different for every namespace and changes when that root is rotated.
+Pass it to 'orama namespace restore --dest-key'.
 
 ### orama namespace rqlite
 

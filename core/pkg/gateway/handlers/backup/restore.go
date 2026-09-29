@@ -7,18 +7,29 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/nsbackup"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/secrets"
-	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
-// MaxRestoreBytes bounds a restore request. The request is held in memory
-// whole, because the backup it came from is one nacl box.
-const MaxRestoreBytes = 1 << 30
+const (
+	// MaxRestoreBytes bounds a restore request: the largest frame a reader
+	// accepts. The request is held in memory whole.
+	MaxRestoreBytes = nsbackup.MaxFrameBytes
+	// pinConcurrency is how many pins a restore has in flight at once.
+	pinConcurrency = 8
+	// pinPhaseTimeout bounds all of a restore's pins together.
+	pinPhaseTimeout = 10 * time.Minute
+)
+
+// errBatchUnavailable means this gateway's RQLite client has no native
+// connection, so it cannot write the restored secrets atomically.
+var errBatchUnavailable = errors.New("this gateway's RQLite client cannot run atomic batches")
 
 // RestoreResponse is the body of a successful POST /v1/namespace/restore.
 type RestoreResponse struct {
@@ -31,13 +42,20 @@ type RestoreResponse struct {
 	SecretsWithoutRow int `json:"secrets_without_row"`
 }
 
+// restorePlan is everything decided before the first write.
+type restorePlan struct {
+	ops    []rqlite.BatchOp
+	budget storageBudget
+}
+
 // RestoreHandler serves POST /v1/namespace/restore.
 //
 // Everything that can be refused is checked before anything is written: the
-// frame, the namespace, and every secret opening under this gateway's restore
-// key. Then the snapshot is loaded, the secrets are written under this
-// cluster's encryption root, and the CIDs are pinned. A failure after the load
-// leaves the loaded database; running the same restore again is safe.
+// frame, the namespace, that RQLite can batch, every secret opening under this
+// namespace's restore key, and the storage quota. Then the snapshot is loaded,
+// the destination's quota and the secrets are written, and the CIDs pinned. A
+// failure after the load leaves the loaded database; the same restore again
+// is safe.
 func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -46,42 +64,28 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.authorize(w, r, true) {
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRestoreBytes))
-	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			httputil.WriteError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("restore request is over %d bytes", MaxRestoreBytes))
-			return
-		}
-		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("read the restore request: %v", err))
+	release, ok := h.begin(w)
+	if !ok {
 		return
 	}
-	req, err := nsbackup.UnmarshalRestoreRequest(body)
-	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+	defer release()
+	req, ok := h.readRestore(w, r)
+	if !ok {
 		return
 	}
-	if req.Namespace != h.cfg.Namespace {
-		httputil.WriteError(w, http.StatusConflict,
-			fmt.Sprintf("the backup is of namespace %q; this gateway serves %q", req.Namespace, h.cfg.Namespace))
+	plan, ok := h.prepare(r.Context(), w, req)
+	if !ok {
 		return
 	}
-	ops, err := h.resealHere(req)
-	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, nsbackup.ErrNotForKey) {
-			status = http.StatusBadRequest
-			err = fmt.Errorf("%w; the secrets were not sealed to this gateway's current restore key, fetch it again with 'orama namespace restore-key'", err)
-		}
-		httputil.WriteError(w, status, err.Error())
+	resp, err := h.apply(r.Context(), req, plan)
+	if errors.Is(err, ErrOverQuota) {
+		httputil.WriteError(w, http.StatusRequestEntityTooLarge,
+			err.Error()+"; the database was replaced and no CID was pinned")
 		return
 	}
-	resp, err := h.apply(r.Context(), req, ops)
 	if err != nil {
-		h.cfg.Logger.Error("namespace restore failed after the snapshot was loaded",
-			zap.String("namespace", h.cfg.Namespace), zap.Error(err))
-		httputil.WriteError(w, http.StatusBadGateway,
-			fmt.Sprintf("%v; the database was already replaced, running the same restore again is safe", err))
+		h.internalError(w, http.StatusBadGateway,
+			"restore failed after the database was replaced; running the same restore again is safe", err)
 		return
 	}
 	h.cfg.Audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
@@ -95,12 +99,79 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
-// resealHere opens every secret with this gateway's restore key and encrypts
-// it under this cluster's encryption root, returning the UPDATEs that write
-// them. It writes nothing.
+// readRestore reads and validates the body, writing the refusal if it fails.
+func (h *Handler) readRestore(w http.ResponseWriter, r *http.Request) (nsbackup.RestoreRequest, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(MaxRestoreBytes)))
+	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			httputil.WriteError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("restore request is over %d bytes", MaxRestoreBytes))
+			return nsbackup.RestoreRequest{}, false
+		}
+		httputil.WriteError(w, http.StatusBadRequest, "the restore request could not be read")
+		return nsbackup.RestoreRequest{}, false
+	}
+	req, err := nsbackup.UnmarshalRestoreRequest(body)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return nsbackup.RestoreRequest{}, false
+	}
+	if req.Namespace != h.cfg.Namespace {
+		httputil.WriteError(w, http.StatusConflict,
+			fmt.Sprintf("the backup is of namespace %q; this gateway serves %q", req.Namespace, h.cfg.Namespace))
+		return nsbackup.RestoreRequest{}, false
+	}
+	return req, true
+}
+
+// prepare decides everything a restore will write, and writes nothing. On a
+// refusal it writes the response and returns false.
+func (h *Handler) prepare(ctx context.Context, w http.ResponseWriter, req nsbackup.RestoreRequest) (restorePlan, bool) {
+	plan, err := h.plan(ctx, req)
+	switch {
+	case err == nil:
+		return plan, true
+	case errors.Is(err, errBatchUnavailable):
+		h.internalError(w, http.StatusServiceUnavailable, errBatchUnavailable.Error()+"; nothing was written", err)
+	case errors.Is(err, nsbackup.ErrNotForKey):
+		httputil.WriteError(w, http.StatusBadRequest, err.Error()+
+			"; the secrets were not sealed to this namespace's current restore key, fetch it again with 'orama namespace restore-key'")
+	case errors.Is(err, nsbackup.ErrSecretMismatch), errors.Is(err, nsbackup.ErrCorrupt):
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrOverQuota):
+		httputil.WriteError(w, http.StatusRequestEntityTooLarge, err.Error()+"; nothing was written")
+	default:
+		h.internalError(w, http.StatusInternalServerError, "prepare the restore", err)
+	}
+	return restorePlan{}, false
+}
+
+func (h *Handler) plan(ctx context.Context, req nsbackup.RestoreRequest) (restorePlan, error) {
+	// The stdlib-only client has no Batch. Finding that out after the load
+	// would leave a database whose secrets nobody here can read.
+	if _, err := h.cfg.DB.Batch(ctx, []rqlite.BatchOp{{Kind: rqlite.BatchOpQuery, SQL: "SELECT 1"}}); err != nil {
+		return restorePlan{}, fmt.Errorf("%w: %v", errBatchUnavailable, err)
+	}
+	ops, err := h.resealHere(req)
+	if err != nil {
+		return restorePlan{}, err
+	}
+	budget, err := h.readBudget(ctx)
+	if err != nil {
+		return restorePlan{}, err
+	}
+	if err := h.checkQuota(budget, req.StoredBytes); err != nil {
+		return restorePlan{}, err
+	}
+	return restorePlan{ops: ops, budget: budget}, nil
+}
+
+// resealHere opens every secret with this namespace's restore key and
+// encrypts it under this cluster's encryption root, returning the UPDATEs
+// that write them. It writes nothing.
 func (h *Handler) resealHere(req nsbackup.RestoreRequest) ([]rqlite.BatchOp, error) {
 	root := h.cfg.Root()
-	_, priv, err := nsbackup.RestoreKey(root)
+	_, priv, err := nsbackup.RestoreKey(root, h.cfg.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +184,7 @@ func (h *Handler) resealHere(req nsbackup.RestoreRequest) ([]rqlite.BatchOp, err
 	for _, s := range plain {
 		col, ok := secretColumn(s.Table, s.Column)
 		if !ok {
-			return nil, fmt.Errorf("%s.%s is not a namespace secret column", s.Table, s.Column)
+			return nil, fmt.Errorf("%w: %s.%s is not a namespace secret column", nsbackup.ErrCorrupt, s.Table, s.Column)
 		}
 		ks, ok := keysets[col.Purpose]
 		if !ok {
@@ -146,36 +217,61 @@ func updateOp(col secrets.Column, value string, ids []string) rqlite.BatchOp {
 	}
 }
 
-func (h *Handler) apply(ctx context.Context, req nsbackup.RestoreRequest, ops []rqlite.BatchOp) (RestoreResponse, error) {
-	resp := RestoreResponse{Namespace: req.Namespace, RQLiteBytes: len(req.RQLite), Pins: len(req.Pins), Secrets: len(ops)}
+func (h *Handler) apply(ctx context.Context, req nsbackup.RestoreRequest, plan restorePlan) (RestoreResponse, error) {
+	resp := RestoreResponse{Namespace: req.Namespace, RQLiteBytes: len(req.RQLite), Pins: len(req.Pins), Secrets: len(plan.ops)}
 	if err := h.cfg.Snapshots.Load(ctx, req.RQLite); err != nil {
 		return resp, fmt.Errorf("load the RQLite snapshot: %w", err)
 	}
-	missing, err := h.writeSecrets(ctx, ops)
+	if _, err := h.writeBatches(ctx, []rqlite.BatchOp{h.restoreBudgetOp(plan.budget)}); err != nil {
+		return resp, fmt.Errorf("put back this cluster's storage quota: %w", err)
+	}
+	missing, err := h.writeBatches(ctx, plan.ops)
+	if err != nil {
+		return resp, fmt.Errorf("write restored secrets: %w", err)
+	}
+	resp.SecretsWithoutRow = missing
+	// The restored table is what the storage quota counts from now on, and
+	// may not say what the request header did.
+	used, err := h.storedBytes(ctx)
 	if err != nil {
 		return resp, err
 	}
-	resp.SecretsWithoutRow = missing
-	for _, c := range req.Pins {
-		if _, err := h.cfg.Pins.Pin(ctx, c, "", h.cfg.ReplicationFactor); err != nil {
-			return resp, fmt.Errorf("pin %s: %w", c, err)
-		}
+	if err := h.checkQuota(plan.budget, used); err != nil {
+		return resp, err
 	}
-	return resp, nil
+	return resp, h.pinAll(ctx, req.Pins)
 }
 
-// writeSecrets runs ops in atomic batches of rqlite.MaxBatchOps and returns
+// pinAll pins cids with at most pinConcurrency in flight, all within
+// pinPhaseTimeout. The first failure cancels the rest.
+func (h *Handler) pinAll(ctx context.Context, cids []string) error {
+	ctx, cancel := context.WithTimeout(ctx, pinPhaseTimeout)
+	defer cancel()
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(pinConcurrency)
+	for _, c := range cids {
+		g.Go(func() error {
+			if _, err := h.cfg.Pins.Pin(ctx, c, "", h.cfg.ReplicationFactor); err != nil {
+				return fmt.Errorf("pin %s: %w", c, err)
+			}
+			return nil
+		})
+	}
+	return g.Wait()
+}
+
+// writeBatches runs ops in atomic batches of rqlite.MaxBatchOps and returns
 // how many matched no row.
-func (h *Handler) writeSecrets(ctx context.Context, ops []rqlite.BatchOp) (int, error) {
+func (h *Handler) writeBatches(ctx context.Context, ops []rqlite.BatchOp) (int, error) {
 	missing := 0
 	for start := 0; start < len(ops); start += rqlite.MaxBatchOps {
 		chunk := ops[start:min(start+rqlite.MaxBatchOps, len(ops))]
 		res, err := h.cfg.DB.Batch(ctx, chunk)
 		if err != nil {
-			return 0, fmt.Errorf("write restored secrets: %w", err)
+			return 0, err
 		}
 		if !res.Committed {
-			return 0, fmt.Errorf("write restored secrets: batch rolled back: %s", batchFailure(res))
+			return 0, fmt.Errorf("batch rolled back: %s", batchFailure(res))
 		}
 		for _, r := range res.Results {
 			if r.RowsAffected == 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -29,7 +30,8 @@ type BackupRequest struct {
 // RestoreKeyResponse is the body of GET /v1/namespace/restore-key.
 type RestoreKeyResponse struct {
 	Namespace string `json:"namespace"`
-	// PublicKey is this gateway's X25519 restore public key, 64 hex characters.
+	// PublicKey is this gateway's X25519 restore public key for the
+	// namespace, 64 hex characters.
 	PublicKey string `json:"public_key"`
 }
 
@@ -53,20 +55,18 @@ func (h *Handler) BackupHandler(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	payload, err := h.gather(r.Context())
-	if err != nil {
-		h.cfg.Logger.Error("namespace backup failed", zap.String("namespace", h.cfg.Namespace), zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("namespace backup failed: %v", err))
+	release, ok := h.begin(w)
+	if !ok {
 		return
 	}
-	plain, err := payload.Marshal()
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("encode the backup: %v", err))
+	defer release()
+	sealed, payload, err := h.sealBackup(r.Context(), pub)
+	if errors.Is(err, nsbackup.ErrTooLarge) {
+		httputil.WriteError(w, http.StatusRequestEntityTooLarge, err.Error())
 		return
 	}
-	sealed, err := nsbackup.Seal(pub, plain)
 	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		h.internalError(w, http.StatusInternalServerError, "namespace backup failed", err)
 		return
 	}
 	h.cfg.Audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
@@ -85,6 +85,23 @@ func (h *Handler) BackupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// sealBackup gathers the namespace and seals it to pub.
+func (h *Handler) sealBackup(ctx context.Context, pub *[32]byte) ([]byte, nsbackup.Payload, error) {
+	payload, err := h.gather(ctx)
+	if err != nil {
+		return nil, payload, err
+	}
+	plain, err := payload.Marshal()
+	if err != nil {
+		return nil, payload, fmt.Errorf("encode the backup: %w", err)
+	}
+	sealed, err := nsbackup.Seal(pub, plain)
+	if err != nil {
+		return nil, payload, err
+	}
+	return sealed, payload, nil
+}
+
 // RestoreKeyHandler serves GET /v1/namespace/restore-key.
 func (h *Handler) RestoreKeyHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -94,9 +111,9 @@ func (h *Handler) RestoreKeyHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.authorize(w, r, false) {
 		return
 	}
-	pub, _, err := nsbackup.RestoreKey(h.cfg.Root())
+	pub, _, err := nsbackup.RestoreKey(h.cfg.Root(), h.cfg.Namespace)
 	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		h.internalError(w, http.StatusInternalServerError, "derive the restore key", err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, RestoreKeyResponse{Namespace: h.cfg.Namespace, PublicKey: hex.EncodeToString(pub[:])})
@@ -113,11 +130,15 @@ func (h *Handler) gather(ctx context.Context) (nsbackup.Payload, error) {
 	if err != nil {
 		return nsbackup.Payload{}, err
 	}
+	stored, err := h.storedBytes(ctx)
+	if err != nil {
+		return nsbackup.Payload{}, err
+	}
 	secs, err := h.readSecrets(ctx)
 	if err != nil {
 		return nsbackup.Payload{}, err
 	}
-	return nsbackup.Payload{Namespace: h.cfg.Namespace, Pins: pins, Secrets: secs, RQLite: db}, nil
+	return nsbackup.Payload{Namespace: h.cfg.Namespace, Pins: pins, StoredBytes: stored, Secrets: secs, RQLite: db}, nil
 }
 
 // pinnedCIDs is every CID the namespace holds pinned: stored objects and the

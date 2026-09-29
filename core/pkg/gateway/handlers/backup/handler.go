@@ -64,6 +64,32 @@ type Config struct {
 // /v1/namespace/restore.
 type Handler struct {
 	cfg Config
+	// busy admits one backup or restore at a time on this gateway: each holds
+	// a whole snapshot in memory several times over.
+	busy chan struct{}
+}
+
+// begin takes the gateway's one backup/restore slot, or writes 429 and
+// returns false when another is running.
+func (h *Handler) begin(w http.ResponseWriter) (release func(), ok bool) {
+	select {
+	case h.busy <- struct{}{}:
+		return func() { <-h.busy }, true
+	default:
+		w.Header().Set("Retry-After", retryAfterSeconds)
+		httputil.WriteError(w, http.StatusTooManyRequests,
+			"another backup or restore is running on this gateway; try again when it has finished")
+		return nil, false
+	}
+}
+
+// retryAfterSeconds is what a refused backup or restore is told to wait.
+const retryAfterSeconds = "30"
+
+// internalError logs err in full and gives the client only what failed.
+func (h *Handler) internalError(w http.ResponseWriter, status int, what string, err error) {
+	h.cfg.Logger.Error(what, zap.String("namespace", h.cfg.Namespace), zap.Error(err))
+	httputil.WriteError(w, status, what+"; the gateway log has the detail")
 }
 
 // New checks cfg and returns a Handler.
@@ -78,7 +104,7 @@ func New(cfg Config) (*Handler, error) {
 	if cfg.ReplicationFactor <= 0 {
 		return nil, fmt.Errorf("namespace backup: IPFS replication factor must be positive, got %d", cfg.ReplicationFactor)
 	}
-	return &Handler{cfg: cfg}, nil
+	return &Handler{cfg: cfg, busy: make(chan struct{}, 1)}, nil
 }
 
 // authorize writes a refusal and returns false unless the caller's credential

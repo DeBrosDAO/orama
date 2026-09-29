@@ -151,7 +151,7 @@ func TestPayloadMarshal_refuses_invalid_contents(t *testing.T) {
 
 func TestOpenSecrets_round_trip(t *testing.T) {
 	root := secrets.Root{CurrentID: "1", CurrentIKM: strings.Repeat("a", 64)}
-	pub, priv, err := RestoreKey(root)
+	pub, priv, err := RestoreKey(root, "myapp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestOpenSecrets_wrong_key_opens_nothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := secrets.Root{CurrentID: "1", CurrentIKM: strings.Repeat("b", 64)}
-	_, priv, err := RestoreKey(other)
+	_, priv, err := RestoreKey(other, "myapp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,22 +200,22 @@ func TestOpenSecrets_wrong_key_opens_nothing(t *testing.T) {
 }
 
 func TestRestoreKey_follows_the_encryption_root(t *testing.T) {
-	a1, _, err := RestoreKey(secrets.Root{CurrentIKM: "root-a"})
+	a1, _, err := RestoreKey(secrets.Root{CurrentIKM: "root-a"}, "myapp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	a2, _, err := RestoreKey(secrets.Root{CurrentIKM: "root-a"})
+	a2, _, err := RestoreKey(secrets.Root{CurrentIKM: "root-a"}, "myapp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _, err := RestoreKey(secrets.Root{CurrentIKM: "root-b"})
+	b, _, err := RestoreKey(secrets.Root{CurrentIKM: "root-b"}, "myapp")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if *a1 != *a2 || *a1 == *b {
 		t.Fatal("restore key is not a function of the encryption root")
 	}
-	if _, _, err := RestoreKey(secrets.Root{}); err == nil {
+	if _, _, err := RestoreKey(secrets.Root{}, "myapp"); err == nil {
 		t.Fatal("empty root derived a key")
 	}
 }

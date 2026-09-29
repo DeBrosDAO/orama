@@ -39,10 +39,10 @@ func TestRestoreHandler_round_trip_onto_another_cluster(t *testing.T) {
 	if len(dst.snap.loaded) != 1 || !bytes.Equal(dst.snap.loaded[0], testDB) {
 		t.Fatal("snapshot was not loaded as backed up")
 	}
-	if strings.Join(dst.pins.pinned, ",") != testCIDa+","+testCIDb {
+	if strings.Join(dst.pins.sorted(), ",") != testCIDa+","+testCIDb {
 		t.Fatalf("pinned %v", dst.pins.pinned)
 	}
-	got := decryptOps(t, dst.db.batches[0], destRoot)
+	got := decryptOps(t, dst.db.batches[1], destRoot)
 	want := map[string]string{
 		"UPDATE deployments SET environment = ? WHERE id = ? [dep1]":                  `{"API_KEY":"x"}`,
 		"UPDATE function_secrets SET encrypted_value = ? WHERE id = ? [1000000]":      "sk_live_1",
@@ -158,7 +158,8 @@ func TestRestoreHandler_empty_pins_and_secrets(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	if len(dst.snap.loaded) != 1 || len(dst.db.batches) != 0 || len(dst.pins.pinned) != 0 {
+	// The one write batch is the destination's quota being put back.
+	if len(dst.snap.loaded) != 1 || len(dst.db.batches) != 1 || len(dst.pins.pinned) != 0 {
 		t.Fatalf("loads=%d batches=%d pins=%v", len(dst.snap.loaded), len(dst.db.batches), dst.pins.pinned)
 	}
 }
@@ -194,7 +195,7 @@ func TestRestoreHandler_pin_failure_is_reported(t *testing.T) {
 func TestWriteSecrets_splits_into_atomic_batches(t *testing.T) {
 	dst := newRig(t, destRoot, testNamespace, true)
 	ops := make([]rqlite.BatchOp, rqlite.MaxBatchOps+1)
-	missing, err := dst.h.writeSecrets(t.Context(), ops)
+	missing, err := dst.h.writeBatches(t.Context(), ops)
 	if err != nil || missing != 0 {
 		t.Fatal(missing, err)
 	}
@@ -235,7 +236,7 @@ func TestBackupHandler_cannot_be_opened_by_the_cluster(t *testing.T) {
 	src := newRig(t, sourceRoot, testNamespace, true)
 	pub, _ := ownerKey(t)
 	blob := backupFrom(t, src, pub)
-	_, clusterPriv, err := nsbackup.RestoreKey(sourceRoot)
+	_, clusterPriv, err := nsbackup.RestoreKey(sourceRoot, testNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestRestoreKeyHandler_returns_the_key_restores_are_sealed_to(t *testing.T) 
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	want, _, err := nsbackup.RestoreKey(destRoot)
+	want, _, err := nsbackup.RestoreKey(destRoot, testNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
