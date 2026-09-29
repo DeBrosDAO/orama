@@ -77,18 +77,20 @@ func (k Keeper) closeEpoch(ctx sdk.Context, epoch uint64) error {
 			return err
 		}
 		row := scored{
-			nodeID:   nodeID,
-			operator: slot.Operator,
-			dealID:   dealID,
-			slot:     slotIdx,
-			proved:   item.rec.Proved,
-			escrow:   math.ZeroInt(),
-			claim:    -1,
+			nodeID: nodeID,
+			dealID: dealID,
+			slot:   slotIdx,
+			proved: item.rec.Proved,
+			escrow: math.ZeroInt(),
+			claim:  -1,
 		}
 		// A proof is paid only while the node that proved it still holds the
 		// slot. A slot released or re-bound before the epoch closed has no
 		// operator to pay for this proof; minting for it would strand coins.
 		paid := item.rec.Proved && slot.NodeId == nodeID && slot.Operator != ""
+		if paid {
+			row.operator = slot.Operator
+		}
 		if paid && !deal.Protocol {
 			row.escrow = deal.PricePerEpoch
 		}
@@ -275,17 +277,24 @@ func (k Keeper) applySettlement(ctx sdk.Context, p types.Params, item types.Sett
 	if err != nil {
 		return err
 	}
+	// A row is about the node that was challenged. If the slot has since gone
+	// to another node, that node's miss count and rechallenge are not this
+	// row's to change.
+	holder := slot.NodeId != "" && slot.NodeId == item.NodeId
 	if !item.Proved {
+		if !holder {
+			return nil
+		}
 		return k.applyMiss(ctx, p, deal, slot)
 	}
-	slot.ConsecutiveMisses = 0
-	if slot.NodeId != "" {
+	if holder {
+		slot.ConsecutiveMisses = 0
 		if err := k.Rechallenge.Remove(ctx, collections.Join(slot.NodeId, rechallengeID(slot.DealId, slot.Index))); err != nil {
 			return err
 		}
-	}
-	if err := k.saveSlot(ctx, slot); err != nil {
-		return err
+		if err := k.saveSlot(ctx, slot); err != nil {
+			return err
+		}
 	}
 	credited, err := k.payItem(ctx, &deal, item)
 	if err != nil {

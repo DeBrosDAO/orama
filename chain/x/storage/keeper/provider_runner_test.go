@@ -366,3 +366,53 @@ func TestProviderRunner_aFailedSlotReadStillProvesTheOtherChallenges(t *testing.
 	}
 	require.Positive(t, proved, "the node's other challenges were proved")
 }
+
+func TestProviderRunner_reanswersAfterAnAcceptEvenWhenAReadFailed(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	f.threeNodes(t, 1<<20)
+	sim := newChainSim(t, f)
+	providers := startProviders(t, sim, "n1", "n2", "n3")
+	first, data, pieces := openDeal(t, sim, 30)
+	stepAll(t, providers)
+	for i := uint32(0); i < 3; i++ {
+		slot := f.slot(t, first, i)
+		require.Equal(t, http.StatusNoContent, upload(providers[slot.NodeId], dataForSlot(t, f, first, i, data, pieces), slot.PieceRoot))
+	}
+	stepAll(t, providers)
+	f.Emission.epoch = 2
+	require.NoError(t, sim.block(nil)) // epoch 2 challenges for the first deal open
+
+	second, data2, pieces2 := openDealFilled(t, sim, 30, 20)
+	node := f.slot(t, second, 0).NodeId
+	p := providers[node]
+	var failing [2]uint64
+	for i := uint32(0); i < 3; i++ {
+		if f.slot(t, first, i).NodeId == node {
+			failing = [2]uint64{first, uint64(i)}
+		}
+	}
+	// The first deal's epoch-2 challenge on this node cannot be read, so every
+	// answer in these steps reports an error.
+	sim.failSlot = map[[2]uint64]bool{failing: true}
+	require.ErrorContains(t, p.runner.Step(context.Background()), "rpc timeout", "the node learns its new slot")
+	for i := uint32(0); i < 3; i++ {
+		slot := f.slot(t, second, i)
+		if slot.NodeId == node {
+			require.Equal(t, http.StatusNoContent, upload(p, dataForSlot(t, f, second, i, data2, pieces2), slot.PieceRoot))
+		}
+	}
+	err := p.runner.Step(context.Background())
+	require.ErrorContains(t, err, "rpc timeout")
+
+	ch, err := f.Query.Challenges(f.Ctx, &types.QueryChallengesRequest{Epoch: 2, NodeId: node})
+	require.NoError(t, err)
+	found := false
+	for _, c := range ch.Challenges {
+		if c.DealId == second {
+			found = true
+			require.True(t, c.Proved, "the slot accepted in this step is proved in this step")
+		}
+	}
+	require.True(t, found, "the accept opened a challenge")
+}

@@ -345,3 +345,54 @@ func TestCloseEpoch_doesNotPayAProofWhoseSlotWasReleased(t *testing.T) {
 	require.True(t, f.epochMint(t, 1).Equal(f.Emission.minted[1]), "everything reserved was paid")
 	f.requireInvariants(t)
 }
+
+// A slot released and re-bound in the same epoch has two challenge rows.
+// Only the node holding the slot at close is paid, the deal's escrow is
+// charged once for that slot, and the departed node's row does not touch
+// the new holder's misses.
+func TestCloseEpoch_paysOnlyTheCurrentHolderOfARebondSlot(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	f.threeNodes(t, 1<<20)
+	f.addNode(t, "n4", "10.4.0.0/16", 4, 1<<20, false)
+	client := acc(9)
+	f.fund(client, 100_000_000)
+	data := payload(7)
+	const price = 1_000
+	id := f.createDeal(t, types.DealClass_DEAL_CLASS_PRIVATE, client, "", 3, price, 4, []types.PieceCommitment{
+		commit(t, data), commit(t, data), commit(t, data),
+	})
+	f.end(t)
+	f.begin(t)
+	f.acceptAll(t, id, 3)
+	for i := uint32(0); i < 3; i++ {
+		f.proveSlot(t, id, i, data)
+	}
+	old := f.slot(t, id, 0)
+	oldInfo := f.Nodes.byID[old.NodeId]
+	_, err := f.Msg.ReleaseReplica(f.Ctx, &types.MsgReleaseReplica{
+		Signer: oldInfo.hot.String(), NodeId: oldInfo.id, DealId: id, Slot: 0,
+		Reason: types.ReleaseReason_RELEASE_REASON_LEGAL,
+	})
+	require.NoError(t, err)
+	f.end(t)
+	f.begin(t) // same epoch: slot 0 is re-bound to the spare node
+	rebound := f.slot(t, id, 0)
+	require.NotEqual(t, old.NodeId, rebound.NodeId)
+	newInfo := f.Nodes.byID[rebound.NodeId]
+	_, err = f.Msg.AcceptDeal(f.Ctx, &types.MsgAcceptDeal{Signer: newInfo.hot.String(), NodeId: newInfo.id, DealId: id, Slot: 0})
+	require.NoError(t, err)
+	f.proveSlot(t, id, 0, data)
+	escrowBefore := f.deal(t, id).Escrow
+
+	f.end(t)
+	f.Emission.epoch = 2
+	f.begin(t)
+	for i := 0; i < 20; i++ {
+		f.end(t)
+	}
+	charged := escrowBefore.Sub(f.deal(t, id).Escrow)
+	require.True(t, charged.Equal(math.NewInt(3*price)), "escrow charged %s for three slots, want %d", charged, 3*price)
+	require.Zero(t, f.slot(t, id, 0).ConsecutiveMisses)
+	f.requireInvariants(t)
+}

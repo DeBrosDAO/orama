@@ -213,6 +213,8 @@ func (k Keeper) candidates(ctx sdk.Context) ([]types.Candidate, error) {
 
 func (k Keeper) bindSlot(ctx sdk.Context, deal types.Deal, slot *types.Slot, c types.Candidate) error {
 	slot.NodeId = c.ID
+	// A new holder starts with no misses: the old holder's are not its own.
+	slot.ConsecutiveMisses = 0
 	slot.Operator = c.Operator
 	slot.Network16 = c.Network16
 	slot.Asn = c.ASN
