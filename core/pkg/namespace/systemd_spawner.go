@@ -1104,14 +1104,16 @@ type SFUInstanceConfig struct {
 // It carries the namespace's TURN shared secret and its rqlite DSN, which has
 // the database password in it. The file was written 0644, so any local account
 // on the node could mint TURN credentials for the namespace and read its
-// database.
-const sfuConfigMode = 0600
+// database. It is the orama user's, and readable by the orama-sfu group the
+// SFU runs as (pkg/systemd isolatedServices) and by no one else.
+const sfuConfigMode = systemd.ServiceConfigMode
 
-// writeSFUConfig renders and writes one SFU config.
+// writeSFUConfig renders and writes one SFU config, owned by gid.
 //
-// The write is atomic: a 0600 temp file is renamed over the path, so a file an
-// earlier release left at 0644 is replaced rather than left as it was.
-func writeSFUConfig(configPath string, cfg SFUInstanceConfig) error {
+// The write is atomic: a temp file already in sfuConfigMode and gid is renamed
+// over the path, so a file an earlier release left at 0644 is replaced rather
+// than left as it was.
+func writeSFUConfig(configPath string, cfg SFUInstanceConfig, gid int) error {
 	sfuConfig := sfu.Config{
 		ListenAddr:        cfg.ListenAddr,
 		Namespace:         cfg.Namespace,
@@ -1127,7 +1129,7 @@ func writeSFUConfig(configPath string, cfg SFUInstanceConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal SFU config: %w", err)
 	}
-	if err := writeConfigAtomic(configPath, configBytes, sfuConfigMode); err != nil {
+	if err := writeConfigAtomic(configPath, configBytes, sfuConfigMode, gid); err != nil {
 		return fmt.Errorf("failed to write SFU config: %w", err)
 	}
 	return nil
@@ -1154,7 +1156,11 @@ func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string,
 	if cfg.RQLiteDSN, err = withRQLiteCredentials(cfg.RQLiteDSN, user, pass); err != nil {
 		return fmt.Errorf("sfu %s rqlite_dsn: %w", namespace, err)
 	}
-	if err := writeSFUConfig(configPath, cfg); err != nil {
+	sfuGroup, err := systemd.ServiceGroupID(string(systemd.ServiceTypeSFU))
+	if err != nil {
+		return fmt.Errorf("sfu %s config: %w", namespace, err)
+	}
+	if err := writeSFUConfig(configPath, cfg, sfuGroup); err != nil {
 		return err
 	}
 
@@ -1384,6 +1390,10 @@ func (s *SystemdSpawner) waitForService(ctx context.Context, namespace string, s
 	return fmt.Errorf("service did not become active within %v", timeout)
 }
 
+// keepGroup is writeConfigAtomic's gid for a file that stays in the writer's
+// own group.
+const keepGroup = -1
+
 // serviceActivePollInterval is how often waitForService re-checks systemd.
 const serviceActivePollInterval = 1 * time.Second
 
@@ -1395,7 +1405,10 @@ const serviceActivePollInterval = 1 * time.Second
 // disk. The unit then fails to parse and crash-loops, which the reconciler
 // retries forever. rename(2) is atomic within a filesystem, so a reader sees
 // either the old file or the new one, never a half-written one.
-func writeConfigAtomic(configPath string, data []byte, perm os.FileMode) error {
+//
+// gid is the group the file is given before it is renamed into place;
+// keepGroup leaves the writer's own.
+func writeConfigAtomic(configPath string, data []byte, perm os.FileMode, gid int) error {
 	dir := filepath.Dir(configPath)
 	tmp, err := os.CreateTemp(dir, filepath.Base(configPath)+".tmp-*")
 	if err != nil {
@@ -1406,6 +1419,12 @@ func writeConfigAtomic(configPath string, data []byte, perm os.FileMode) error {
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return fmt.Errorf("write temp config: %w", err)
+	}
+	if gid != keepGroup {
+		if err := tmp.Chown(-1, gid); err != nil {
+			tmp.Close()
+			return fmt.Errorf("hand temp config to group %d: %w", gid, err)
+		}
 	}
 	if err := tmp.Chmod(perm); err != nil {
 		tmp.Close()

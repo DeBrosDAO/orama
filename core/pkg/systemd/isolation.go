@@ -3,20 +3,92 @@ package systemd
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gatewaykeys"
 )
 
-// sharedUser is the uid every cluster unit runs as until isolation is applied.
-// Install still creates only this user and still copies the static unit files
-// unchanged. ServiceUser and RenderNamespaceUnit are not called from install.
+// sharedUser is the uid every cluster unit outside isolatedServices runs as.
 const sharedUser = "orama"
 
+// ServiceConfigMode is the mode of a config file the orama user (orama-node or
+// the index gateway) writes for an isolated service: orama owns it and the
+// service's own group reads it. No other account can.
+const ServiceConfigMode os.FileMode = 0o640
+
+// IsolatedService is a namespace service that runs as its own account instead
+// of the shared orama user.
+type IsolatedService struct {
+	// Service is the namespace service name (orama-namespace-<Service>@).
+	Service string
+	// SupervisorInGroup is set when the orama user writes a file the service
+	// reads (the SFU's config). The orama user joins the service's group so
+	// it can hand that file to the group; the service gains nothing of
+	// orama's.
+	SupervisorInGroup bool
+}
+
+// isolatedServices are the services install renders with their own account.
+// A service is here only when no other process shares its files or its uid:
+//
+//   - coredns reads /etc/coredns/Corefile (root:orama-coredns 0640) and
+//     nothing under /opt/orama.
+//   - sfu reads one file, data/namespaces/<ns>/configs/sfu-<node>.yaml
+//     (orama:orama-sfu 0640), and writes nothing. It runs /usr/local/bin/sfu,
+//     not /opt/orama/bin/sfu, which is root:orama 0750.
+//
+// Every other service still runs as orama. docs/SECURITY.md ("Per-service
+// accounts") names what keeps each of them there.
+var isolatedServices = []IsolatedService{
+	{Service: string(ServiceTypeCoreDNS)},
+	{Service: string(ServiceTypeSFU), SupervisorInGroup: true},
+}
+
+// IsolatedServices returns the services that run as their own account.
+func IsolatedServices() []IsolatedService {
+	return append([]IsolatedService(nil), isolatedServices...)
+}
+
+// Isolated reports whether service runs as its own account.
+func Isolated(service string) bool {
+	for _, s := range isolatedServices {
+		if s.Service == service {
+			return true
+		}
+	}
+	return false
+}
+
+// ServiceGroupID is the gid of an isolated service's own group: the group a
+// file the orama user writes for that service is handed to. The group is
+// created by install and upgrade (pkg/install ensureServiceAccounts); a node
+// without it has not been upgraded to the release that runs the service as
+// its own account.
+func ServiceGroupID(service string) (int, error) {
+	if !Isolated(service) {
+		return 0, fmt.Errorf("%s runs as %s, not as its own account", service, sharedUser)
+	}
+	name, err := ServiceUser(service, true)
+	if err != nil {
+		return 0, err
+	}
+	g, err := user.LookupGroup(name)
+	if err != nil {
+		return 0, fmt.Errorf("look up the %s group (orama node install/upgrade creates it): %w", name, err)
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return 0, fmt.Errorf("the %s group has a non-numeric gid %q: %w", name, g.Gid, err)
+	}
+	return gid, nil
+}
+
 // serviceIdentity is the unix account a namespace service runs as.
-// isolated is used only when the isolation flag is on. ipfs-gc stays the ipfs
+// isolated is the account it runs as once it is in isolatedServices. ipfs-gc stays the ipfs
 // user because it deletes blocks in that user's repository; it does not gain
 // the gateway's key path. tor and ntfy already have their own accounts.
 type serviceIdentity struct {
@@ -88,6 +160,35 @@ func RenderNamespaceUnit(dir, service string, isolate bool) (string, error) {
 		return "", err
 	}
 	return unit, nil
+}
+
+// renderTemplateUnit is the content install writes for the unit file
+// template: RenderNamespaceUnit for an isolated service's template, the
+// shipped file for everything else.
+func renderTemplateUnit(sourceDir, template string) ([]byte, error) {
+	service, ok := namespaceTemplateService(template)
+	if ok && Isolated(service) {
+		unit, err := RenderNamespaceUnit(sourceDir, service, true)
+		if err != nil {
+			return nil, fmt.Errorf("failed to render template %s: %w", template, err)
+		}
+		return []byte(unit), nil
+	}
+	data, err := os.ReadFile(filepath.Join(sourceDir, template))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read template %s: %w", template, err)
+	}
+	return data, nil
+}
+
+// namespaceTemplateService is the service of an orama-namespace-<service>@
+// service template.
+func namespaceTemplateService(template string) (string, bool) {
+	rest, ok := strings.CutPrefix(template, "orama-namespace-")
+	if !ok {
+		return "", false
+	}
+	return strings.CutSuffix(rest, "@.service")
 }
 
 func rewriteUser(unit, user string) (string, error) {

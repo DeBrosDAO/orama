@@ -435,6 +435,13 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 	if err := requireBaseDomain(baseDomain); err != nil {
 		return fmt.Errorf("generate configs: %w", err)
 	}
+	// The CoreDNS writer below hands the Corefile to the orama-coredns group.
+	// Here rather than in Phase 2 because an upgrade runs Phase 2 under the
+	// binary it replaces; Phase 4 is the first step every install and upgrade
+	// runs under this one.
+	if err := ps.EnsureServiceAccounts(); err != nil {
+		return fmt.Errorf("generate configs: %w", err)
+	}
 	if ps.IsUpdate() {
 		ps.logf("Phase 4: Updating configurations...")
 		ps.logf("  (Existing configs will be updated to latest format)")
@@ -600,6 +607,11 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
 	if err := ps.chownOramaTree(); err != nil {
+		return err
+	}
+	// After the chown -R above, which hands everything back to orama:orama,
+	// and before orama-node starts the isolated services.
+	if err := ps.applyServiceOwnership(); err != nil {
 		return err
 	}
 	if err := ps.requireServiceBinaries(); err != nil {

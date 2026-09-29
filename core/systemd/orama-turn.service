@@ -53,6 +53,7 @@ Group=orama
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
+ProtectProc=invisible
 PrivateDevices=yes
 
 TimeoutStopSec=30s

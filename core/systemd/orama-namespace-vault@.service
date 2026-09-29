@@ -16,6 +16,7 @@ User=orama
 Group=orama
 ProtectSystem=strict
 ProtectHome=yes
+ProtectProc=invisible
 NoNewPrivileges=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

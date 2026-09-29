@@ -22,8 +22,11 @@ ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
 ProtectProc=invisible
-ReadWritePaths=/opt/orama/.orama/logs
-InaccessiblePaths=/opt/orama/.orama/secrets
+# CoreDNS reads /etc/coredns/Corefile and nothing of the orama tree. Install
+# runs it as orama-coredns (pkg/systemd isolatedServices); /opt/orama is an
+# empty read-only tmpfs to it, so a compromised resolver on :53 sees no
+# secret, config or other namespace's file there whatever their modes.
+TemporaryFileSystem=/opt/orama:ro
 EnvironmentFile=-/var/lib/orama-unit-env/%i/coredns.env
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE

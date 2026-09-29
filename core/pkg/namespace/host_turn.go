@@ -305,7 +305,7 @@ func (cm *ClusterManager) writeHostTURNConfig(ctx context.Context, tenants []hos
 	if err := os.MkdirAll(filepath.Dir(hostTURNConfigPath), hostTURNConfigDirMode); err != nil {
 		return false, fmt.Errorf("create shared TURN config dir: %w", err)
 	}
-	if err := writeConfigAtomic(hostTURNConfigPath, data, 0600); err != nil {
+	if err := writeConfigAtomic(hostTURNConfigPath, data, 0600, keepGroup); err != nil {
 		return false, fmt.Errorf("write shared TURN config: %w", err)
 	}
 	return true, nil

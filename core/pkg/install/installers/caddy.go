@@ -157,7 +157,7 @@ func writeCaddyACMEKey(clusterSecret string) error {
 	if err := os.WriteFile(CaddyACMEKeyPath, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", CaddyACMEKeyPath, err)
 	}
-	return restrictToOramaGroup(CaddyACMEKeyPath)
+	return restrictToGroup(CaddyACMEKeyPath, serviceUserName)
 }
 
 // generateCaddyfile creates the Caddyfile configuration.

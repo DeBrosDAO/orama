@@ -839,17 +839,18 @@ func (m *Manager) GenerateEnvFile(namespace, nodeID string, serviceType ServiceT
 	return nil
 }
 
-// InstallTemplateUnits installs the systemd template unit files
+// InstallTemplateUnits installs the systemd template unit files. The template
+// of each isolated service (isolatedServices) is rendered with that service's
+// own account; every other file is copied unchanged.
 func (m *Manager) InstallTemplateUnits(sourceDir string) error {
 	m.logger.Info("Installing systemd template units", zap.String("source", sourceDir))
 
 	for _, template := range UnitFilesToInstall() {
-		source := filepath.Join(sourceDir, template)
 		dest := filepath.Join(m.systemdDir, template)
 
-		data, err := os.ReadFile(source)
+		data, err := renderTemplateUnit(sourceDir, template)
 		if err != nil {
-			return fmt.Errorf("failed to read template %s: %w", template, err)
+			return err
 		}
 
 		if err := os.WriteFile(dest, data, 0644); err != nil {

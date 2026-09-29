@@ -22,13 +22,19 @@ ProtectKernelTunables=yes
 ProtectKernelModules=yes
 RestrictNamespaces=yes
 ProtectProc=invisible
-ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs
-InaccessiblePaths=/opt/orama/.orama/secrets
+# The SFU reads one file, its config in its namespace's configs/ directory,
+# and writes nothing. Install runs it as orama-sfu (pkg/systemd
+# isolatedServices); the config is orama:orama-sfu 0640. Of /opt/orama it
+# sees only that directory, bound read-only over an empty tmpfs.
+TemporaryFileSystem=/opt/orama:ro
+BindReadOnlyPaths=/opt/orama/.orama/data/namespaces/%i/configs
 WorkingDirectory=/opt/orama
 
 EnvironmentFile=/var/lib/orama-unit-env/%i/sfu.env
 
-ExecStart=/opt/orama/bin/sfu --config ${SFU_CONFIG}
+# The world-executable copy install writes (pkg/install deployPreBuiltBinaries):
+# /opt/orama/bin is root:orama 0750, which orama-sfu cannot execute from.
+ExecStart=/usr/local/bin/sfu --config ${SFU_CONFIG}
 
 TimeoutStopSec=45s
 KillMode=mixed

@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // CoreDNSInstaller handles CoreDNS installation with RQLite plugin
@@ -83,14 +84,20 @@ func (ci *CoreDNSInstaller) Configure(domain string, rq rqlite.Endpoint) error {
 
 	// Create Corefile (uses only RQLite plugin)
 	// The Corefile carries the cluster-wide rqlite password, so only root and
-	// the orama group (CoreDNS runs as orama) may read it. Chmod/chown as well,
-	// because WriteFile keeps an existing file's mode — it used to be 0644.
+	// the group CoreDNS runs as (orama-coredns, pkg/systemd isolatedServices)
+	// may read it — not the orama group, which every other Orama daemon is in.
+	// Chmod/chown as well, because WriteFile keeps an existing file's mode and
+	// owner: it used to be 0644, then root:orama.
 	corefile := ci.generateCorefile(domain, rq)
 	corefilePath := filepath.Join(configDir, "Corefile")
 	if err := os.WriteFile(corefilePath, []byte(corefile), 0o640); err != nil {
 		return fmt.Errorf("failed to write Corefile: %w", err)
 	}
-	return restrictToOramaGroup(corefilePath)
+	group, err := systemd.ServiceUser(string(systemd.ServiceTypeCoreDNS), systemd.Isolated(string(systemd.ServiceTypeCoreDNS)))
+	if err != nil {
+		return fmt.Errorf("the group CoreDNS reads its Corefile as: %w", err)
+	}
+	return restrictToGroup(corefilePath, group)
 }
 
 // generateCorefile creates the CoreDNS configuration (RQLite only). The
@@ -141,18 +148,18 @@ func (ci *CoreDNSInstaller) generateCorefile(domain string, rq rqlite.Endpoint) 
 `, domain, domain, rq.BaseURL(), authBlock)
 }
 
-// restrictToOramaGroup makes path root:orama 0640.
-func restrictToOramaGroup(path string) error {
-	g, err := user.LookupGroup("orama")
+// restrictToGroup makes path root:group 0640.
+func restrictToGroup(path, group string) error {
+	g, err := user.LookupGroup(group)
 	if err != nil {
-		return fmt.Errorf("look up the orama group for %s: %w", path, err)
+		return fmt.Errorf("look up the %s group for %s: %w", group, path, err)
 	}
 	gid, err := strconv.Atoi(g.Gid)
 	if err != nil {
-		return fmt.Errorf("orama group id %q: %w", g.Gid, err)
+		return fmt.Errorf("%s group id %q: %w", group, g.Gid, err)
 	}
 	if err := os.Chown(path, 0, gid); err != nil {
-		return fmt.Errorf("chown %s root:orama: %w", path, err)
+		return fmt.Errorf("chown %s root:%s: %w", path, group, err)
 	}
 	if err := os.Chmod(path, 0o640); err != nil {
 		return fmt.Errorf("chmod %s 0640: %w", path, err)

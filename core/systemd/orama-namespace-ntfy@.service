@@ -20,6 +20,7 @@ RestartSec=5s
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectProc=invisible
 PrivateTmp=true
 PrivateDevices=true
 ReadWritePaths=/var/lib/ntfy

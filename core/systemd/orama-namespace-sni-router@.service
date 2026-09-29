@@ -25,6 +25,7 @@ Group=orama
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
+ProtectProc=invisible
 PrivateTmp=yes
 LimitNOFILE=65536
 MemorySwapMax=0

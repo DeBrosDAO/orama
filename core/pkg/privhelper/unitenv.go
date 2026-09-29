@@ -16,10 +16,13 @@ const (
 	unitEnvClear = "clear" // clear <namespace>
 )
 
-// noUnitEnv are the services whose units run as a user other than orama (tor
-// as debian-tor, ntfy as ntfy) or as root (wireguard). They read no env file;
-// writing one would let the orama user set LD_PRELOAD and the like for a
-// process it does not own.
+// noUnitEnv are the services whose units run as an account Orama does not
+// control (tor as debian-tor, ntfy as ntfy) or as root (wireguard). They read
+// no env file; writing one would let the orama user set LD_PRELOAD and the
+// like for a process it does not own. The isolated services' own accounts
+// (orama-coredns, orama-sfu; pkg/systemd isolatedServices) do read one: they
+// exist to keep those processes out of the orama user's reach, not the orama
+// user, which starts them and writes their config, out of theirs.
 var noUnitEnv = map[string]bool{"tor": true, "ntfy": true, "wireguard": true}
 
 func validateUnitEnv(args []string) error {

@@ -9,6 +9,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// stubUnit is the smallest file an isolated service's template can be
+// rendered from: it has the one User= and Group= the render rewrites.
+const stubUnit = "[Service]\nUser=orama\nGroup=orama\n"
+
 func newTestManager(t *testing.T, systemdDir string) *Manager {
 	t.Helper()
 	return &Manager{logger: zap.NewNop(), systemdDir: systemdDir}
@@ -31,7 +35,7 @@ func TestInstallTemplateUnits_missing_template_fails_by_name(t *testing.T) {
 	// Everything present except the last one.
 	missing := units[len(units)-1]
 	for _, u := range units[:len(units)-1] {
-		if err := os.WriteFile(filepath.Join(source, u), []byte("[Unit]\n"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(source, u), []byte(stubUnit), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -58,7 +62,7 @@ func TestInstallTemplateUnits_empty_source_fails(t *testing.T) {
 func TestInstallTemplateUnits_unwritable_destination_fails(t *testing.T) {
 	source := t.TempDir()
 	for _, u := range UnitFilesToInstall() {
-		if err := os.WriteFile(filepath.Join(source, u), []byte("[Unit]\n"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(source, u), []byte(stubUnit), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
