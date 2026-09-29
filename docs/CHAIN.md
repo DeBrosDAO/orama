@@ -281,6 +281,7 @@ contract may hold ORAMA and issue a public IOU for it, and the genesis token wra
 | Parameter | Locked value | Source |
 |---|---|---|
 | `retention_window_blocks` | `201600` | plan D22: validators keep 14 days of blocks (6-second blocks) |
+| `max_piece_bytes` | `4294967296` | track-c C14 (structure only): 4 GiB caps the bundle file an attestation commits to; G1 launch default |
 
 `houses`
 
@@ -1147,6 +1148,19 @@ is the trust model:
   deterministically. A node with no literal-IP endpoint has no network. Endpoints are validated as
   public at `MsgRegisterNode` and `MsgUpdateNode`. The chain does not check that the node is
   actually reachable at that address.
+- **One host classifier** (`chain/netclass`) decides what is public and what is a literal IP, and
+  x/nodes validation, `LiteralIPs`, `NetworkOf` and the repair fetcher all use it, so a spelling one of
+  them reads as a name cannot be read as an address by another. It parses with `netip` (no zone ids,
+  no leading zeros) and refuses any host whose last label is a number (`2130706433`, `0x7f.1`, `127.1`,
+  `010.0.0.1`, `01.2.3.4`), because a resolver reads those as IPv4 addresses. A host with a zone id, or
+  a schemeless endpoint carrying a path, query or fragment (`10.0.0.1/x`), is refused, and the address in
+  an `/ip4/` or `/ip6/` multiaddr part must be a literal of that family. An IPv4-mapped IPv6 address
+  is its IPv4 form. Refused ranges: `0.0.0.0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`,
+  `192.0.0/24`, `192.0.2/24`, `192.88.99/24`, `192.168/16`, `198.18/15`, `198.51.100/24`, `203.0.113/24`,
+  `224/4` and `240/4` (with the limited broadcast); and for IPv6 everything outside `2000::/3`, plus
+  NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`), `100::/64`, `2001::/23`, `2001:db8::/32`, `2002::/16`,
+  `3fff::/20`, `5f00::/16`, `fc00::/7`, `fe80::/10`, `fec0::/10` and `ff00::/8`. Documentation
+  addresses are therefore not valid endpoints on this chain; tests use routable ones.
 - **ASN.** `MsgRegisterNode.asn`, and `MsgUpdateNode` with `set_asn` (0 clears it). The value is
   stored on the node. Zero, `AS_TRANS` (23456), documentation ranges (64496-64511, 65536-65551),
   private-use ranges (64512-65535, 4200000000-4294967295) are refused at the boundary and in
@@ -1195,7 +1209,7 @@ its id in `StorageDirty`, and imported genesis nodes are queued the same way. At
 - **One broken node does not halt the chain.** Each id is reconciled in its own cache branch. If its
   record cannot be read or reconciled, that node's work is rolled back, the id is re-queued for the
   next block, and a `storage_node_sync_failed` event carries the reason. Only a failure to read or
-  re-write the queue itself fails `BeginBlock`.
+  re-write the queue itself fails `BeginBlock`. See "One item's failure never halts a block" below.
 - **Untracked** when it stops qualifying and holds no replicas. A node that still holds replicas
   stays tracked, because challenge sampling and settlement read its state, and is re-queued each
   block until its last replica is released, evicted or expired. Assignment already skips it
@@ -1214,7 +1228,13 @@ probation node:
 - takes only protocol-deal slots, at most `probation_slots` each and under the per-operator, /16 and
   ASN caps; it never takes a PRIVATE or PUBLIC_PIN user deal, because it has no bond to slash;
 - is not counted as an active operator, so it does not open the subsidy ramp;
-- locks the `probation_deposit` record deposit from its first credited earnings;
+- locks the `probation_deposit` record deposit from its first credited earnings, progressively: each
+  credit adds `min(probation_deposit - held, credited)` to the deposit (the deposit id
+  `storage/probation/<node id>`), so a first payout smaller than the deposit is never asked for money
+  the node has not earned. At the launch defaults the first credit is 900 (a protocol price of 1000
+  less the 5% burn and 5% archive share) and the second tops the deposit up to 1000. `NodeState.deposit_locked`
+  means a deposit row is open, whether or not it is full. A deposit that cannot be locked or topped up
+  is rolled back on its own: the payout that triggered it stands, and the next credit tries again;
 - is jailed at `probation_expiry_epochs` if it proved nothing, and graduates if it proved storage
   (the deposit is recovered), after which it holds no slots until it bonds;
 - graduates at once when it bonds, becoming an ordinary provider.
@@ -1226,6 +1246,34 @@ start a second probation.
 
 A protocol-deal slot additionally needs a node with a known /16 and a declared ASN; a node without
 either can still hold PRIVATE and PUBLIC_PIN user deals, where only distinct operators are required.
+
+**One item's failure never halts a block.** Returning an error out of `BeginBlock` or `EndBlock`
+fails `FinalizeBlock` on every validator, so a per-node, per-deal or per-user record that cannot be
+processed must not do it. The per-item work of x/storage (node reconciliation, each settlement row,
+deal assignment, accept windows, challenge opening, deal expiry, probation expiry, the scheduled
+protocol deals, scoring a closed challenge, counting active operators) runs on its own cache branch:
+a failure rolls that item back, emits `storage_item_failed` (`kind`, `subject`, `consecutive`,
+`error`) and the block goes on. Reading or writing the module's own indexes and counters still fails
+the block, because then the state can no longer be trusted. What happens to the failed item depends on
+it:
+- a settlement row is **dropped**: it pays nothing, the deal keeps the escrow the row would have moved
+  (returned to the client when the deal expires), and the mint reserved for it is burned so the
+  storage account keeps holding exactly the mint payments still queued;
+- node reconciliation, deal assignment, accept windows, challenge opening, deal expiry and probation
+  expiry are **retried** in the next block;
+- a scheduled protocol deal that cannot be created still counts as scheduled for its epoch.
+
+x/storage counts the consecutive failures per subject (a node id, or `deal/<id>`) and kind (`sync`,
+`settlement`, `deposit`, `challenge`, `scoring`, `operators`, `probation`, `deal`): the
+`NodeFailures` query returns a node's counts (empty when it applies cleanly), the counts are in
+genesis (`failure_counts`), and every 100th consecutive failure of a subject also emits
+`storage_item_stuck` and an error-level log line, so a node that never recovers is visible to a
+monitor. A success clears the count.
+
+The same rule holds in the other modules' block hooks: x/nodes skips a matured unbonding it cannot
+pay (`nodes_unbonding_failed`, retried next block), x/houses closes a proposal it cannot advance as
+FAILED with the reason (`houses_proposal_failed`), and x/power returns a validator's reward it cannot
+pay to the emission module (`power_reward_failed`) so its own account still ends the block empty.
 
 ### Service days
 
@@ -1373,7 +1421,9 @@ fetchable by the CID that `ipfs add` returns for it, which is not the
 x/storage never assigns a slot of such a deal to that operator, and the
 delegate refuses a deal where it finds one. It dials only public addresses
 and follows no redirects, since provider endpoints are whatever a node
-registered in x/nodes. `<home>/deals/<id>.json`
+registered in x/nodes. "Public" is `netclass.IsPublic`, the same list x/nodes validates against, and
+the provider root is rebuilt from the endpoint's scheme, host and path only (a query, fragment or
+userinfo it carries is dropped). `<home>/deals/<id>.json`
 (mode 0600) holds `{"deal_id": N, "repair_seed": "<hex>"}`. The delegate's
 operator installs these files; no network path hands a seed to the delegate.
 
@@ -1406,11 +1456,14 @@ It then submits `MsgAttest`, signed by `<home>/hot-key` for the node named
 in `<home>/node-id`, with:
 - the bundle CID: CIDv1, raw codec, sha2-256 of the file;
 - the file's SHA-256;
-- the block-hash Merkle root.
+- the block-hash Merkle root;
+- the file's `piece/` commitment: root, real and padded leaf counts and byte size. The chain checks
+  the shape (the leaf counts must be the ones the byte size implies) and refuses a file over the
+  `archive` param `max_piece_bytes` (4 GiB at launch, locked in G1).
 
 `<home>/cursor` is the last attested height, and a restart resumes after it.
-x/archive pins the first attestation of a range. If a range is already
-pinned with a different root, bundle hash or CID, the archiver keeps its own
+x/archive pins the first attestation of a range, its piece commitment included. If a range is already
+pinned with a different root, bundle hash, CID or piece commitment, the archiver keeps its own
 bundle. It writes `<home>/conflicts/<start>-<end>.json` with both sets of
 values, reports `ErrRootConflict` once, and moves on to the next range. A
 range of a different width that overlaps is refused by x/archive on every
@@ -1424,9 +1477,10 @@ block.
 **Archive deals.** After it attests a range, the archiver follows it (one file
 `<home>/deals/<start>-<end>.json` holds the deal ids it opened that the range does not record
 yet) until x/archive marks it archived. Each pass, for each such range:
-1. If the range holds fewer than three live deals, counting recorded ones and its own pending ones, it
-   computes the `piece/` commitment of the bundle file and submits `MsgCreateArchiveDeal` for each
-   missing one. The chain answers with the deal id in an `archive_create_deal` event. When the chain refuses one as over
+1. Once attestations from three operators are on the range (the archived quorum), and if the range holds
+   fewer than three live deals, counting recorded ones and its own pending ones, it computes the `piece/`
+   commitment of the bundle file, checks it against the one pinned on the range, and submits
+   `MsgCreateArchiveDeal` for each missing one. Before the quorum it opens nothing and waits. The chain answers with the deal id in an `archive_create_deal` event. When the chain refuses one as over
    the range's allowance (`ErrDealsFull`, which happens when another archiver of the range was faster),
    the range has enough deals and the archiver moves on.
 2. For every slot of its deals that x/storage has assigned to a node and the node has not accepted, it
@@ -1448,7 +1502,11 @@ and padded leaf counts, bytes) opens one protocol ARCHIVE deal in x/storage, thr
 `Keeper.CreateArchiveDeal`. Users cannot: `MsgCreateDeal` still refuses the ARCHIVE class. The chain
 sets the price (`protocol_price_per_epoch`, per replica) and the duration
 (`archive.ArchiveDealEpochs`, 3650 epochs, so ten years at one epoch a day); the archiver
-chooses neither. The signer must be the hot key of an active ARCHIVER node whose operator attested the
+chooses neither, and it does not choose the content either: the message's commitment must equal the
+one the range's attesters pinned (`ErrWrongPiece`), the range must have attestations from at least
+three operators (`ErrQuorumPending`, the threshold that archives it), and the deal opens with the
+pinned commitment. One archiver therefore cannot fill a range's three deal slots with content nobody
+attested. The signer must be the hot key of an active ARCHIVER node whose operator attested the
 range, and a range may hold at most `MaxLiveDealsPerRange` (3) live deals. The deal is recorded as
 pending for the range (a collection of (start, deal id)) and reserved for it in the `AttachedDeals`
 index, so it cannot back another range. Pending deals that x/storage no longer runs are forgotten when
@@ -1471,7 +1529,7 @@ range and freed, and the range is archived only if three live deals remain.
 After that `archived` is permanent. `MsgAttachReplicas` does not require the deal to have been
 made by `MsgCreateArchiveDeal`: the scheduled ARCHIVE protocol deals, which carry a synthetic
 payload, can still be attached, and the deal's stored bytes are not checked against the bundle, so the
-attesting operators and the piece commitment the archiver supplied are what vouch for it. Nothing slashes a wrong root
+attesting operators and the piece commitment they pinned are what vouch for it. Nothing slashes a wrong root
 yet; the root is checkable by anyone against the chain's own block hashes.
 
 **Retention.** The app enforces C14's retain height in `OramaApp.Commit`. `BaseApp` returns the height
@@ -1888,8 +1946,11 @@ indexer (`127.0.0.1:31015`).
 at `/v1/chain/` (an open route in `route_policy.go`). The upstream bases are
 `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and `ORAMA_CHAIN_INDEX_URL`, defaulting to those
 three loopback URLs. The caller's path is not forwarded: each route builds its own upstream URL
-from values it has validated. Anything outside this list is refused. The upstream body and status are
-copied unchanged, except on `/v1/chain/query/` below, which decodes the answer:
+from values it has validated. Anything outside this list is refused. A healthy upstream body is
+copied unchanged (at most 8 MiB, the largest being one block on `/block`), except on `/v1/chain/query/`
+below, which decodes the answer. An upstream failure is never copied: a 404 or a CometBFT "not found"
+error is answered `404 not found on chain`, and any other error status, or a JSON-RPC error object under a
+200, is answered `502 chain request failed`, because the node's message can carry paths and store details:
 
 | Gateway path | Upstream |
 |---|---|
@@ -1921,10 +1982,28 @@ path or any name outside that set is a 404, and the gateway never asks for a pro
 The request is `data=<base64 protobuf>` (standard or URL-safe alphabet, padding optional) or
 `json=<JSON request>` (proto field names), not both, or neither for the empty request; each is at most 4 KiB
 and is checked against the method's request type before the node sees it. `height=<n>` reads at that
-height (a positive integer; 0 or absent is the latest). Any other query key, a repeated key, a non-GET
-method and a response over 4 MiB are refused. A key the chain does not have is a 404; any other chain
-error is a 502 without the node's message. The gateway decodes with the same `dynamicpb`/`protojson` code
-`orama chain` uses (`core/pkg/chainread`), which links no chain code.
+height (a positive integer; 0 or absent is the latest), and must be within the last 100 blocks
+(`queryMaxHeightAge`; the gateway reads the latest height from `/status`, cached for a second, and answers
+400 for an older one): an old height makes the node open an old state version. Any other query key, a
+repeated key, a non-GET method and a response over 4 MiB are refused. A key the chain does not have is a
+404; any other chain error is a 502 without the node's message. The gateway decodes with the same
+`dynamicpb`/`protojson` code `orama chain` uses (`core/pkg/chainread`), which links no chain code.
+
+The public route serves an explicit list of methods (`publicQuery` in `handlers/chainread/query.go`), not
+every embedded one. Every module's `Invariants` query walks the module's whole state and is withheld, as
+are `orama.houses.v1.Query/Tiers` (reads every operator and its service days) and
+`orama.shielded.v1.Query/Pools` (every pool). The served queries are point lookups, constant
+computations, or walks the module caps on the server: `Challenges` requires a `node_id` and reads that
+node's key range, and `Snapshots` and `NodeUnbondings` return at most 1000 entries. A test fails for an
+embedded Query method on neither list, so a new module query is not public until someone decides it
+should be. `orama chain query --rpc` and the node's own gRPC serve all of them.
+
+Three more limits keep a public caller from putting unbounded work on the node. The route has its own
+per-address rate-limit bucket (120 a minute, burst 30) apart from the gateway's general one; at most 16
+module queries run at once, and the rest get `503` with `Retry-After`; and the node's `app.toml`
+carries `query-gas-limit = "2000000"` (`oramad init` writes it, and the stagenet deploy script sets it
+on nodes that already have an `app.toml`), which stops a query that scans state after about two thousand
+store reads.
 
 Per-account bank balances are not on this list. The explorer does not invent rows for a query this proxy
 does not serve.
