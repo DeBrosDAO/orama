@@ -63,9 +63,6 @@ type record struct {
 	// of its bytes. Every one names exactly this piece's bytes. Empty for a
 	// piece that never reached the public Kubo.
 	IPFS []ipfsPin `json:"ipfs,omitempty"`
-	// Private marks a piece some PRIVATE deal's slot holds. It is never
-	// pinned in the public Kubo, whatever another deal with the same root says.
-	Private bool `json:"private,omitempty"`
 }
 
 // ipfsPin is one CID of a piece and whether the public Kubo pins it.
@@ -89,7 +86,7 @@ func Open(dir string, denylist []string, freeBytes func() (uint64, error)) (*Sto
 		if cid == "" || strings.HasPrefix(cid, "#") {
 			continue
 		}
-		deny[cid] = struct{}{}
+		deny[denyKey(cid)] = struct{}{}
 	}
 	return &Store{dir: dir, deny: deny, freeBytes: freeBytes}, nil
 }
@@ -99,7 +96,7 @@ func (s *Store) Ingest(cid string, data []byte, claimedRoot []byte) (Decision, e
 	if err := validCID(cid); err != nil {
 		return Decision{}, err
 	}
-	if _, ok := s.deny[cid]; ok {
+	if s.Denied(cid) {
 		return Decision{Reason: ReasonDenylist}, nil
 	}
 	c, err := piece.Commit(data)
@@ -109,6 +106,11 @@ func (s *Store) Ingest(cid string, data []byte, claimedRoot []byte) (Decision, e
 	if len(claimedRoot) != len(c.Root) || !bytes.Equal(claimedRoot, c.Root) {
 		return Decision{Reason: ReasonRoot}, nil
 	}
+	// Hashing needs no lock; the check-then-write below does. Concurrent
+	// uploads of one name, and record updates from the runner and the pin
+	// handler, are serialised here.
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
 	if s.Has(cid) {
 		// A stored piece is never replaced. The same bytes again are a no-op.
 		existing, err := s.ReadRoot(cid)

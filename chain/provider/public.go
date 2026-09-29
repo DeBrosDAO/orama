@@ -29,10 +29,11 @@ func isPublicClass(c types.DealClass) bool {
 // pinned in the public Kubo under every CID it was fetched by through
 // POST /pins, and, when it has none, under the CIDv1 (raw leaves) Kubo makes of
 // the bytes. It returns a decline reason instead of an error when the
-// operator's denylist names a CID, or the piece is held for a PRIVATE deal. A
-// deal of a private class, or a node with no public Kubo configured, does
-// nothing to the piece except mark a private one private.
-func (r *Runner) pinPublic(ctx context.Context, dealID uint64, root []byte) (string, error) {
+// operator's denylist names a CID, or when a PRIVATE deal's slot holds the same
+// root on this node. A slot of a private class instead unpublishes the piece:
+// its ciphertext is never left in the public Kubo. A node with no public Kubo
+// configured does nothing.
+func (r *Runner) pinPublic(ctx context.Context, dealID uint64, slot uint32, root []byte) (string, error) {
 	if r.pins == nil {
 		return "", nil
 	}
@@ -45,9 +46,9 @@ func (r *Runner) pinPublic(ctx context.Context, dealID uint64, root []byte) (str
 		return "", err
 	}
 	if !isPublicClass(deal.Class) {
-		return "", r.store.MarkPrivate(name)
+		return "", r.store.Unpublish(name)
 	}
-	if private, err := r.store.IsPrivate(name); err != nil || private {
+	if held, err := r.heldPrivately(ctx, name, dealID, slot); err != nil || held {
 		if err == nil {
 			return ReasonPrivateRoot, nil
 		}
@@ -93,4 +94,48 @@ func (r *Runner) pinPublic(ctx context.Context, dealID uint64, root []byte) (str
 		}
 	}
 	return "", nil
+}
+
+// heldPrivately reports whether another slot on this node that holds or waits
+// for the piece belongs to a deal of a non-public class. It reads the class
+// from the chain for every bound slot and takes the class recorded for each
+// waiting one, so it does not depend on the order the slots are decided in or
+// on a mark an earlier build never wrote. A waiting slot whose class is not
+// read yet is an error: the caller retries once it is.
+func (r *Runner) heldPrivately(ctx context.Context, name string, dealID uint64, slot uint32) (bool, error) {
+	bound, err := r.store.Assignments()
+	if err != nil {
+		return false, err
+	}
+	for _, a := range bound {
+		if a.CID != name || (a.DealID == dealID && a.Slot == slot) {
+			continue
+		}
+		deal, err := r.chain.Deal(ctx, a.DealID)
+		if err != nil {
+			return false, fmt.Errorf("read deal %d: %w", a.DealID, err)
+		}
+		if !isPublicClass(deal.Class) {
+			return true, nil
+		}
+	}
+	return r.pendingPrivately(name, dealID, slot)
+}
+
+// pendingPrivately is heldPrivately for the slots still waiting for the piece.
+func (r *Runner) pendingPrivately(name string, dealID uint64, slot uint32) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range r.state.Pending {
+		if p.Root != name || (p.DealID == dealID && p.Slot == slot) {
+			continue
+		}
+		switch class := types.DealClass(p.Class); {
+		case class == types.DealClass_DEAL_CLASS_UNSPECIFIED:
+			return false, fmt.Errorf("the class of deal %d, which waits for the same piece, is not read yet", p.DealID)
+		case !isPublicClass(class):
+			return true, nil
+		}
+	}
+	return false, nil
 }

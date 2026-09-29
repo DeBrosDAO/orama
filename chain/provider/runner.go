@@ -126,18 +126,24 @@ func (r *Runner) Assigned(name string) bool {
 	return false
 }
 
-// AssignedPublic is Assigned for a slot of a PUBLIC_PIN or ARCHIVE deal. It is
-// the filter of POST /pins: a piece of a PRIVATE deal is never fetched through
-// the public Kubo, and a slot whose class is not read yet does not qualify.
+// AssignedPublic is Assigned for a root every waiting slot of which belongs to
+// a PUBLIC_PIN or ARCHIVE deal. It is the filter of POST /pins: a piece a
+// PRIVATE deal waits for is never fetched through the public Kubo, and a slot
+// whose class is not read yet does not qualify.
 func (r *Runner) AssignedPublic(name string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	waiting := false
 	for _, p := range r.state.Pending {
-		if p.Root != "" && p.Root == name && isPublicClass(types.DealClass(p.Class)) {
-			return true
+		if p.Root == "" || p.Root != name {
+			continue
 		}
+		if !isPublicClass(types.DealClass(p.Class)) {
+			return false
+		}
+		waiting = true
 	}
-	return false
+	return waiting
 }
 
 // Step proves this epoch's challenges first, then reads at most

@@ -13,6 +13,7 @@ import (
 // assigns to this node. A slot that fails is reported and the rest still run.
 func (r *Runner) settlePending(ctx context.Context, latest int64, params types.Params) error {
 	var errs []error
+	errs = append(errs, r.noteClasses(ctx))
 	for _, p := range r.pendingCopy() {
 		if err := r.settleOne(ctx, latest, params, p); err != nil {
 			errs = append(errs, fmt.Errorf("deal %d slot %d: %w", p.DealID, p.Slot, err))
@@ -32,16 +33,29 @@ func (r *Runner) settleOne(ctx context.Context, latest int64, params types.Param
 	if err := r.notePendingRoot(p.DealID, p.Slot, rootName(slot.PieceRoot)); err != nil {
 		return err
 	}
-	if r.pins != nil {
+	return r.decide(ctx, latest, params, slot)
+}
+
+// noteClasses reads the deal class of every waiting slot before any is decided,
+// so a public slot never pins a piece a private slot waiting beside it holds.
+// A node with no public Kubo has no use for the class and reads nothing.
+func (r *Runner) noteClasses(ctx context.Context) error {
+	if r.pins == nil {
+		return nil
+	}
+	var errs []error
+	for _, p := range r.pendingCopy() {
+		if p.Class != 0 {
+			continue
+		}
 		deal, err := r.chain.Deal(ctx, p.DealID)
 		if err != nil {
-			return fmt.Errorf("read deal %d: %w", p.DealID, err)
+			errs = append(errs, fmt.Errorf("read deal %d: %w", p.DealID, err))
+			continue
 		}
-		if err := r.notePendingClass(p.DealID, p.Slot, deal.Class); err != nil {
-			return err
-		}
+		errs = append(errs, r.notePendingClass(p.DealID, p.Slot, deal.Class))
 	}
-	return r.decide(ctx, latest, params, slot)
+	return errors.Join(errs...)
 }
 
 func (r *Runner) decide(ctx context.Context, latest int64, params types.Params, slot types.Slot) error {
@@ -54,7 +68,7 @@ func (r *Runner) decide(ctx context.Context, latest int64, params types.Params, 
 		return nil
 	}
 	if stored {
-		reason, err := r.pinPublic(ctx, slot.DealId, slot.PieceRoot)
+		reason, err := r.pinPublic(ctx, slot.DealId, slot.Index, slot.PieceRoot)
 		if err != nil && latest < closes-DeclineMarginBlocks {
 			return err
 		}

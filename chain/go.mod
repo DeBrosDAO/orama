@@ -23,6 +23,7 @@ require (
 	github.com/cosmos/ibc-go/v11 v11.1.0
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0
+	github.com/ipfs/go-cid v0.5.0
 	github.com/spf13/cast v1.10.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
@@ -168,7 +169,6 @@ require (
 	github.com/iancoleman/strcase v0.3.0 // indirect
 	github.com/improbable-eng/grpc-web v0.15.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/ipfs/go-cid v0.5.0 // indirect
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
 	github.com/jmhodges/levigo v1.0.0 // indirect

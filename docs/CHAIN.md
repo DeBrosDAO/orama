@@ -1256,23 +1256,35 @@ configured:
   --cid-version=1 --raw-leaves` (default chunker), so a client can compute that
   CID from the bytes. CIDs are recorded in the piece's metadata before any later
   step can fail.
-- A **PRIVATE** deal's ciphertext never reaches the public Kubo: the piece is
-  marked private when a private slot accepts it, and a public deal with the same
-  root is then declined with `root held for a private deal`. `POST /pins` serves
-  only roots the runner is waiting on in a public deal.
+- A **PRIVATE** deal's ciphertext never reaches the public Kubo. Roots are
+  public on chain, so another deal could name a private piece's root as a
+  PUBLIC_PIN. Before a public slot pins, the runner reads the class of every
+  other slot on this node that holds or waits for the same root; if one is not
+  public the slot is declined with `root held for a private deal`. A private slot
+  that arrives after a public one unpins the piece and forgets its CIDs.
+  `POST /pins` serves only roots whose every waiting slot is public.
 - If the pin fails, the slot is retried every step and, `DeclineMarginBlocks`
   before the accept window closes, declined with the reason `public pin failed`.
-  A CID on `<home>/denylist` is declined with `denylist`. In both cases the
-  piece is unpinned and discarded first (unless another waiting slot needs the
-  root); if the unpin fails nothing is declined and the next step retries.
+  A CID on `<home>/denylist` is declined with `denylist`; the denylist compares
+  the multihash, so a CIDv0 and the CIDv1 of the same hash are one entry (a
+  different chunking is a different CID and is not matched). The piece is
+  unpinned and discarded first (unless another waiting slot needs the root). If
+  the unpin fails, nothing is declined and the next step retries, so with the
+  public Kubo down the slot lapses with its accept window and the chain
+  reassigns it.
 - `POST /pins/<hex piece root>` with `X-Piece-CID: <CID>` (no body) fetches the
   piece through the public Kubo instead of taking an upload. The CID must be a
   CIDv0 or a base32 CIDv1 that is not on the denylist; the bytes must hash to the
   assigned root (otherwise `409`); a fetch failure is `502`. The fetch is bounded
   by `--max-piece-bytes`, by 30 s, by 2 fetches at once (separate from the 2
   upload slots) and by one fetch per root at a time (`429`). A CID already
-  recorded for the piece is not fetched again. Blocks Kubo fetched for a piece
-  that failed the root check stay unpinned until the next GC run.
+  recorded for the piece is not fetched again. The endpoint is not
+  authenticated, so a caller who names an assigned public root can occupy the 2
+  fetch slots or that root's slot with CIDs that never resolve, and can record
+  up to 4 valid CIDs of the piece's bytes before the client's own. Blocks Kubo
+  fetched for a piece that failed the root check stay in its repo, unpinned,
+  until the next GC run (every 6 hours): the disk that can be filled in one
+  window is bounded by the per-address rate limit times `--max-piece-bytes`.
 - Releasing the last slot that binds a piece unpins its CIDs before the bytes are
   removed; if the unpin fails the binding stays and the next sweep retries.
 - Without `--ipfs-api` the provider does not pin, and nothing above happens.

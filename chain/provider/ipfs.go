@@ -2,11 +2,14 @@ package provider
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	gocid "github.com/ipfs/go-cid"
 )
 
 // MaxPieceCIDs bounds the CIDs recorded for one piece. Anyone can name a CID
@@ -118,26 +121,36 @@ func (s *Store) MarkPinned(name, cid string) error {
 	})
 }
 
-// MarkPrivate records that a PRIVATE deal's slot holds the piece.
-func (s *Store) MarkPrivate(name string) error {
+// Unpublish removes a piece from the public Kubo: it unpins every recorded CID
+// and forgets them. It is what a PRIVATE deal's slot does to a piece an
+// earlier public deal with the same root had pinned.
+func (s *Store) Unpublish(name string) error {
+	if err := s.unpinPiece(name); err != nil {
+		return err
+	}
 	return s.update(name, func(rec *record) error {
-		rec.Private = true
+		rec.IPFS = nil
 		return nil
 	})
 }
 
-// IsPrivate reports whether a PRIVATE deal's slot holds the piece.
-func (s *Store) IsPrivate(name string) (bool, error) {
-	s.recMu.Lock()
-	defer s.recMu.Unlock()
-	rec, err := s.readRecord(name)
-	return rec.Private, err
+// Denied reports whether cid is on the operator's denylist. A CIDv0 and the
+// CIDv1 of the same multihash are the same entry; a name that is not a CID
+// (a piece root) is compared as written.
+func (s *Store) Denied(cid string) bool {
+	_, ok := s.deny[denyKey(cid)]
+	return ok
 }
 
-// Denied reports whether cid is on the operator's denylist.
-func (s *Store) Denied(cid string) bool {
-	_, ok := s.deny[cid]
-	return ok
+// denyKey is the multihash of a CID in hex, so the two spellings of one hash
+// match, or the string itself when it is not a CID. Different chunking makes a
+// different CID and is not matched.
+func denyKey(cid string) string {
+	c, err := gocid.Decode(cid)
+	if err != nil {
+		return cid
+	}
+	return hex.EncodeToString(c.Hash())
 }
 
 // ReadPiece returns a stored piece's bytes.
@@ -163,6 +176,8 @@ func (s *Store) Discard(name string) error {
 	if err := s.unpinPiece(name); err != nil {
 		return err
 	}
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
 	for _, path := range []string{s.piecePath(name), s.metaPath(name)} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("discard piece %s: %w", name, err)

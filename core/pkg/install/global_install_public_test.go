@@ -67,6 +67,9 @@ func TestInstallGlobal_aTarballThatIsNotThePinnedReleaseIsRefused(t *testing.T) 
 	if _, statErr := os.Stat(filepath.Join(f.host.BinDir, "cosmovisor")); !os.IsNotExist(statErr) {
 		t.Error("an unverified cosmovisor was installed")
 	}
+	if _, statErr := os.Stat(f.host.BinDir); !os.IsNotExist(statErr) || len(f.node.changes()) != 0 {
+		t.Errorf("the host changed before the digest refusal: %v", f.node.calls)
+	}
 	if len(f.stages) != 0 || f.node.named("systemctl") != nil {
 		t.Error("the install went on after the digest refusal")
 	}
@@ -140,6 +143,9 @@ func TestInstallGlobal_noChainHomeMeansNothingToStage(t *testing.T) {
 	}
 	if f.node.named("systemctl") != nil {
 		t.Error("units were enabled for a chain that cannot start")
+	}
+	if _, statErr := os.Stat(f.host.BinDir); !os.IsNotExist(statErr) || len(f.node.changes()) != 0 {
+		t.Errorf("the host changed before the refusal: %v", f.node.calls)
 	}
 }
 

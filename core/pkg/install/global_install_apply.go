@@ -98,8 +98,9 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err != nil {
 		return err
 	}
+	var cosmovisorBinary []byte
 	if slices.Contains(opts.Services, GlobalServiceChain) {
-		if err := checkStagedGenesis(h, opts.StagedDir); err != nil {
+		if cosmovisorBinary, err = preflightChain(h, opts); err != nil {
 			return err
 		}
 	}
@@ -111,7 +112,7 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 		return err
 	}
 	if slices.Contains(opts.Services, GlobalServiceChain) {
-		if err := installCosmovisor(h, opts.StagedDir); err != nil {
+		if err := installCosmovisor(h, cosmovisorBinary); err != nil {
 			return err
 		}
 	}

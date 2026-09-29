@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	gocid "github.com/ipfs/go-cid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/DeBrosOfficial/network/chain/x/storage/types"
@@ -57,11 +59,16 @@ func (f *fakePins) Unpin(_ context.Context, cid string) error {
 // dealChain is the chain reads and writes a decision needs.
 type dealChain struct {
 	Chain
-	class     types.DealClass
+	class types.DealClass
+	// classes overrides class for a deal id.
+	classes   map[uint64]types.DealClass
 	submitted []sdk.Msg
 }
 
-func (c *dealChain) Deal(context.Context, uint64) (types.Deal, error) {
+func (c *dealChain) Deal(_ context.Context, id uint64) (types.Deal, error) {
+	if class, ok := c.classes[id]; ok {
+		return types.Deal{Class: class}, nil
+	}
 	return types.Deal{Class: c.class}, nil
 }
 
@@ -128,9 +135,6 @@ func TestDecide_aPrivateDealNeverReachesThePublicKubo(t *testing.T) {
 	require.Empty(t, f.pins.adds)
 	require.Empty(t, f.pins.pins)
 	require.Empty(t, mustPins(t, f.store, f.name))
-	private, err := f.store.IsPrivate(f.name)
-	require.NoError(t, err)
-	require.True(t, private, "the piece is marked so a public deal with the same root cannot publish it")
 	require.IsType(t, &types.MsgAcceptDeal{}, f.chain.submitted[0])
 }
 
@@ -227,18 +231,83 @@ func TestDecide_everyFetchedCIDIsPinned(t *testing.T) {
 }
 
 func TestDecide_aPublicDealCannotPublishAPrivateDealsCiphertext(t *testing.T) {
+	// A private slot holds the piece first; a public deal with the same root comes later.
 	f := newPublicFixture(t, types.DealClass_DEAL_CLASS_PRIVATE)
 	require.NoError(t, f.decide(t, 101))
-	require.Empty(t, f.chain.submitted[1:])
+	require.Len(t, f.chain.submitted, 1)
 
-	// Another deal names the same root as a PUBLIC_PIN.
-	f.chain.class = types.DealClass_DEAL_CLASS_PUBLIC_PIN
+	f.chain.classes = map[uint64]types.DealClass{5: types.DealClass_DEAL_CLASS_PRIVATE, 6: types.DealClass_DEAL_CLASS_PUBLIC_PIN}
 	f.slot.DealId = 6
 	require.NoError(t, f.decide(t, 101))
 	require.Empty(t, f.pins.adds, "the private piece reached the public Kubo")
 	decline, ok := f.chain.submitted[1].(*types.MsgDeclineDeal)
 	require.True(t, ok)
 	require.Equal(t, ReasonPrivateRoot, decline.Reason)
+	require.True(t, f.store.Has(f.name), "the private slot still needs the piece")
+}
+
+func TestDecide_aPublicSlotDecidedBeforeAPrivateOneWaitingBesideItStillDoesNotPublish(t *testing.T) {
+	f := newPublicFixture(t, types.DealClass_DEAL_CLASS_PUBLIC_PIN)
+	name := hex.EncodeToString(f.root)
+	f.runner.state.Pending = []pendingSlot{
+		{DealID: 5, Slot: 1, Root: name, Class: int32(types.DealClass_DEAL_CLASS_PUBLIC_PIN)},
+		{DealID: 9, Slot: 0, Root: name, Class: int32(types.DealClass_DEAL_CLASS_PRIVATE)},
+	}
+	require.NoError(t, f.decide(t, 101))
+	require.Empty(t, f.pins.adds)
+	decline, ok := f.chain.submitted[0].(*types.MsgDeclineDeal)
+	require.True(t, ok)
+	require.Equal(t, ReasonPrivateRoot, decline.Reason)
+	require.False(t, f.runner.AssignedPublic(name), "POST /pins refuses a root a private slot waits for")
+
+	require.Len(t, f.runner.state.Pending, 1, "the declined slot left the waiting list")
+	f.runner.state.Pending[0].Class = 0
+	f.chain.submitted = nil
+	require.ErrorContains(t, f.decide(t, 101), "not read yet", "an unread class is retried, not guessed")
+	require.Empty(t, f.chain.submitted)
+}
+
+func TestNoteClasses_readsEveryWaitingSlotsClassBeforeAnyIsDecided(t *testing.T) {
+	f := newPublicFixture(t, types.DealClass_DEAL_CLASS_PUBLIC_PIN)
+	f.chain.classes = map[uint64]types.DealClass{9: types.DealClass_DEAL_CLASS_PRIVATE}
+	name := hex.EncodeToString(f.root)
+	f.runner.state.Pending = []pendingSlot{{DealID: 5, Slot: 1, Root: name}, {DealID: 9, Slot: 0, Root: name}}
+	require.NoError(t, f.runner.noteClasses(context.Background()))
+	require.Equal(t, int32(types.DealClass_DEAL_CLASS_PUBLIC_PIN), f.runner.state.Pending[0].Class)
+	require.Equal(t, int32(types.DealClass_DEAL_CLASS_PRIVATE), f.runner.state.Pending[1].Class)
+
+	f.runner.pins = nil
+	f.runner.state.Pending[0].Class = 0
+	require.NoError(t, f.runner.noteClasses(context.Background()))
+	require.Zero(t, f.runner.state.Pending[0].Class, "a node with no public Kubo reads no class")
+}
+
+func TestDecide_aPrivateSlotUnpublishesAPieceAnEarlierPublicDealPinned(t *testing.T) {
+	f := newPublicFixture(t, types.DealClass_DEAL_CLASS_PUBLIC_PIN)
+	require.NoError(t, f.decide(t, 101))
+	require.Equal(t, []ipfsPin{{CID: testCID, Pinned: true}}, mustPins(t, f.store, f.name))
+
+	f.chain.classes = map[uint64]types.DealClass{7: types.DealClass_DEAL_CLASS_PRIVATE}
+	f.slot.DealId = 7
+	f.slot.Index = 0
+	require.NoError(t, f.decide(t, 101))
+	require.Equal(t, []string{testCID}, f.pins.unpins, "the ciphertext left the public Kubo")
+	require.Empty(t, mustPins(t, f.store, f.name))
+}
+
+func TestDenylist_aCIDv0AndTheCIDv1OfTheSameHashAreOneEntry(t *testing.T) {
+	v0, err := gocid.V0Builder{}.Sum([]byte("denied content"))
+	require.NoError(t, err)
+	v1 := gocid.NewCidV1(gocid.DagProtobuf, v0.Hash())
+	other, err := gocid.V0Builder{}.Sum([]byte("other content"))
+	require.NoError(t, err)
+	store, err := Open(t.TempDir(), []string{"# comment", v0.String(), "  ", "0123abcd"}, nil)
+	require.NoError(t, err)
+	require.True(t, store.Denied(v0.String()))
+	require.True(t, store.Denied(v1.String()), "the other spelling of the same hash is denied too")
+	require.False(t, store.Denied(other.String()))
+	require.True(t, store.Denied("0123abcd"), "a piece root is compared as written")
+	require.False(t, store.Denied(testCID))
 }
 
 func TestDecide_theCIDIsRecordedBeforeADenylistCheckCanFail(t *testing.T) {
@@ -445,4 +514,33 @@ func TestPin_aCIDPastTheCapIsRefused(t *testing.T) {
 		require.NoError(t, store.AddIPFS(name, fmt.Sprintf("bafkrei%052d", i)))
 	}
 	require.Equal(t, http.StatusConflict, postPin(h, name, "bafkrei"+strings.Repeat("c", 52)))
+}
+
+func TestStore_concurrentUploadsAndRecordUpdatesLoseNothing(t *testing.T) {
+	store, err := Open(t.TempDir(), nil, nil)
+	require.NoError(t, err)
+	data := make([]byte, 3000)
+	data[1] = 3
+	name, root := rootHex(t, data)
+	_, err = store.Ingest(name, data, root)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, _ = store.Ingest(name, data, root)
+			_ = store.AddIPFS(name, fmt.Sprintf("bafkrei%052d", i%MaxPieceCIDs))
+			_ = store.MarkPinned(name, fmt.Sprintf("bafkrei%052d", i%MaxPieceCIDs))
+			_, _ = store.IPFSPins(name)
+		}(i)
+	}
+	wg.Wait()
+	pins := mustPins(t, store, name)
+	require.Len(t, pins, MaxPieceCIDs, "every CID survived, none was overwritten by a racing writer")
+	for _, p := range pins {
+		require.True(t, p.Pinned)
+	}
+	require.True(t, store.Has(name))
 }

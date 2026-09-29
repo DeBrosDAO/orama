@@ -74,6 +74,8 @@ func (s *Store) Release(dealID uint64, slot uint32, keep func(cid string) bool) 
 	if !remove {
 		return nil
 	}
+	s.recMu.Lock()
+	defer s.recMu.Unlock()
 	for _, path := range []string{s.piecePath(cid), s.metaPath(cid)} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove released piece %s: %w", cid, err)

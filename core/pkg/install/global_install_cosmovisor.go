@@ -22,30 +22,36 @@ import (
 // cosmovisorTarballLimit bounds the staged cosmovisor release tarball.
 const cosmovisorTarballLimit = 128 << 20
 
-// installCosmovisor puts the pinned cosmovisor in the bin directory. The
-// operator stages the official release tarball (constants.CosmovisorTarball)
-// beside the other binaries. Its SHA-256 must equal the pinned digest for
-// this architecture, so the bytes are the release the pin names and nothing
-// else. Only the tarball's cosmovisor file is installed.
-func installCosmovisor(h GlobalHost, stagedDir string) error {
+// verifyCosmovisor reads the staged official release tarball
+// (constants.CosmovisorTarball), requires its SHA-256 to equal the pinned
+// digest for this architecture, so the bytes are the release the pin names and
+// nothing else, and returns the tarball's cosmovisor file. It changes nothing
+// on the host.
+func verifyCosmovisor(h GlobalHost, stagedDir string) ([]byte, error) {
 	pin, ok := h.CosmovisorPins[h.Arch]
 	if !ok {
-		return fmt.Errorf("no cosmovisor %s is pinned for %s; the global chain runs on linux amd64 or arm64", constants.CosmovisorVersion, h.Arch)
+		return nil, fmt.Errorf("no cosmovisor %s is pinned for %s; the global chain runs on linux amd64 or arm64", constants.CosmovisorVersion, h.Arch)
 	}
 	name := constants.CosmovisorTarball(h.Arch)
 	tarball, err := rootfs.At(stagedDir).ReadFile(filepath.Join(stagedDir, name), cosmovisorTarballLimit)
 	if err != nil {
-		return fmt.Errorf("read the staged cosmovisor release (download %s from the cosmos-sdk release cosmovisor/%s into %s): %w",
+		return nil, fmt.Errorf("read the staged cosmovisor release (download %s from the cosmos-sdk release cosmovisor/%s into %s): %w",
 			name, constants.CosmovisorVersion, stagedDir, err)
 	}
 	sum := sha256.Sum256(tarball)
 	if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(pin)) != 1 {
-		return fmt.Errorf("%s has sha256 %x, not the pinned %s; it is not the official cosmovisor %s release", name, sum, pin, constants.CosmovisorVersion)
+		return nil, fmt.Errorf("%s has sha256 %x, not the pinned %s; it is not the official cosmovisor %s release", name, sum, pin, constants.CosmovisorVersion)
 	}
 	binary, err := extractCosmovisor(tarball)
 	if err != nil {
-		return fmt.Errorf("%s: %w", name, err)
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
+	return binary, nil
+}
+
+// installCosmovisor writes the verified cosmovisor file to the bin directory,
+// root-owned 0755.
+func installCosmovisor(h GlobalHost, binary []byte) error {
 	dst := filepath.Join(h.BinDir, constants.CosmovisorBinary)
 	if err := h.BinRoot.WriteFile(dst, binary, globalBinaryMode); err != nil {
 		return fmt.Errorf("install %s: %w", dst, err)
@@ -87,19 +93,31 @@ func extractCosmovisor(tarball []byte) ([]byte, error) {
 	}
 }
 
-// checkStagedGenesis refuses, before anything on the host changes, a staged
-// oramad that differs from the genesis binary already in the cosmovisor
-// layout. Without it the bytes in the bin directory would be replaced before
-// the refusal, leaving a mixed state.
-func checkStagedGenesis(h GlobalHost, stagedDir string) error {
-	data, err := rootfs.At(stagedDir).ReadFile(filepath.Join(stagedDir, globalOramadBinary), globalBinaryLimit)
+// preflightChain runs every check that can refuse the chain install before
+// anything on the host changes: the staged cosmovisor tarball against its pin
+// (returning the cosmovisor file), a chain home with a genesis to stage oramad
+// for (unless --init-chain will create it), and a staged oramad that matches
+// the genesis binary already in the cosmovisor layout.
+func preflightChain(h GlobalHost, opts GlobalInstallOptions) ([]byte, error) {
+	cosmovisorBinary, err := verifyCosmovisor(h, opts.StagedDir)
 	if err != nil {
-		return fmt.Errorf("read the staged %s (put the release's %s in %s): %w", globalOramadBinary, globalOramadBinary, stagedDir, err)
+		return nil, err
+	}
+	if opts.InitChain == nil {
+		if _, err := os.Lstat(filepath.Join(h.ChainHome, "config", "genesis.json")); err != nil {
+			return nil, fmt.Errorf("the chain home %s has no genesis, so there is nothing to stage oramad for; run with --init-chain and --genesis, or restore the node's home first", h.ChainHome)
+		}
+	}
+	data, err := rootfs.At(opts.StagedDir).ReadFile(filepath.Join(opts.StagedDir, globalOramadBinary), globalBinaryLimit)
+	if err != nil {
+		return nil, fmt.Errorf("read the staged %s (put the release's %s in %s): %w", globalOramadBinary, globalOramadBinary, opts.StagedDir, err)
 	}
 	sum := sha256.Sum256(data)
 	layout := cosmovisor.Layout{Home: h.ChainHome, Daemon: constants.ChainDaemonName}
-	_, err = stagedBinaryHasSum(layout.GenesisBinary(), hex.EncodeToString(sum[:]))
-	return err
+	if _, err := stagedBinaryHasSum(layout.GenesisBinary(), hex.EncodeToString(sum[:])); err != nil {
+		return nil, err
+	}
+	return cosmovisorBinary, nil
 }
 
 // stageGenesisBinary puts oramad in the cosmovisor layout as the genesis
@@ -109,9 +127,6 @@ func checkStagedGenesis(h GlobalHost, stagedDir string) error {
 // refused when it is not: a chain binary is changed with
 // `orama global stage-oramad --upgrade`, never by staging over the layout.
 func stageGenesisBinary(h GlobalHost, src, sum string) error {
-	if _, err := os.Lstat(filepath.Join(h.ChainHome, "config", "genesis.json")); err != nil {
-		return fmt.Errorf("the chain home %s has no genesis, so there is nothing to stage oramad for; run with --init-chain and --genesis, or restore the node's home first", h.ChainHome)
-	}
 	dst, err := h.StageGenesis(src, sum)
 	if err != nil {
 		return err
