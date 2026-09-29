@@ -2264,7 +2264,12 @@ staticlib crate, so there is one copy of the Rust std. It is built with Rust 1.9
 `x86_64-unknown-linux-musl`, C parts through zig (`scripts/zigcc.sh`), with `native/Cargo.lock`. wasmer_vm calls
 `__rust_probestack`, which rustc no longer provides after about 1.85 and the Orchard crate needs rustc 1.88, so
 `native/src/probestack.rs` carries compiler_builtins' x86_64 routine. The sha256 of the archive is recorded in
-`native/libwasmvm_muslc.x86_64.a.sha256` with the wasmvm, rustc and zig versions it holds for. The result was
+`native/libwasmvm_muslc.x86_64.a.sha256` with the wasmvm, rustc and zig versions it holds for (zig 0.15.2:
+`ORAMA_ZIG=/opt/homebrew/opt/zig@0.15/bin/zig` on macOS). The build is reproducible across checkouts: cargo hashes
+a path dependency's location into crate metadata and symbol names, so `build.sh` copies the crate and its
+`x/shielded/orchardffi` path dependency into one fixed directory (`/tmp/orama-native-build`, override with
+`ORAMA_NATIVE_STAGE`) and remaps it, the cargo home and the Rust sysroot out of the archive; two checkouts at
+different paths produce the same sha256, and `build.sh verify` checks it. The result was
 linked, not run: `file` reports `ELF 64-bit LSB executable, x86-64, statically linked` for
 `build/oramad-linux-amd64-full` (about 166 MB). `make build-linux-amd64-full` passes
 `-tags "muslc orchardffi netgo osusergo"`.

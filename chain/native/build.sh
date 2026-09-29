@@ -36,16 +36,32 @@ if [ ! -f "$here/Cargo.lock" ]; then
 	echo "seeded Cargo.lock from wasmvm $wasmvm_ver" >&2
 fi
 
+# The archive must not depend on where the checkout lives. Cargo hashes a path dependency's location
+# into every crate's metadata (and so into symbol names), and paths leak into debug strings, so the
+# crate and its path dependency are built from one fixed directory, with that directory, the cargo
+# home and the toolchain remapped. The recorded hash then matches a build from any checkout on any
+# machine with the same toolchain. One build at a time: the directory is fixed.
+stage="${ORAMA_NATIVE_STAGE:-/tmp/orama-native-build}"
+rm -rf "$stage"
+mkdir -p "$stage/native" "$stage/x/shielded"
+cp -R "$here/Cargo.toml" "$here/Cargo.lock" "$here/src" "$here/vendor" "$stage/native/"
+rsync -a --exclude target "$chain/x/shielded/orchardffi" "$stage/x/shielded/"
+cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+sysroot="$(rustup run "$toolchain" rustc --print sysroot)"
+remap="--remap-path-prefix=$stage=/orama --remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$sysroot=/rustc"
+cmap="-ffile-prefix-map=$stage=/orama -ffile-prefix-map=$cargo_home=/cargo"
 (
-	cd "$here"
+	cd "$stage/native"
 	ORAMA_ZIG="$zig" ZIG_TARGET=x86_64-linux-musl \
 		CC_x86_64_unknown_linux_musl="$chain/scripts/zigcc.sh" \
 		AR_x86_64_unknown_linux_musl="$zig ar" \
+		CFLAGS_x86_64_unknown_linux_musl="$cmap" \
+		CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="$remap" \
 		rustup run "$toolchain" cargo build --release --locked --target "$target"
 )
 
 mkdir -p "$out"
-cp "$here/target/$target/release/liborama_native.a" "$out/libwasmvm_muslc.x86_64.a"
+cp "$stage/native/target/$target/release/liborama_native.a" "$out/libwasmvm_muslc.x86_64.a"
 rm -f "$out/liborama_orchard.a"
 "$zig" ar rc "$out/liborama_orchard.a"
 
