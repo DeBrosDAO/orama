@@ -19,7 +19,7 @@ func TestGlobalFirewall_isTaggedApartFromClusterRules(t *testing.T) {
 	}
 
 	fp := NewFirewallProvisioner(FirewallConfig{Global: GlobalFirewall{
-		ChainP2P: true, PublicStorage: true, TorRelay: true, Dirauth: true,
+		ChainP2P: true, PublicStorage: true, Provider: true, TorRelay: true, Dirauth: true,
 	}})
 	args := fp.GlobalAllowArgs()
 	want := map[string]bool{
@@ -60,5 +60,19 @@ func TestGlobalFirewall_isTaggedApartFromClusterRules(t *testing.T) {
 	}
 	if constants.ChainP2PPort != 31000 || constants.GlobalProviderPort != 31013 {
 		t.Fatalf("ports drifted")
+	}
+}
+
+func TestGlobalAllowArgs_providerAloneOpensOnlyItsPort(t *testing.T) {
+	fp := NewFirewallProvisioner(FirewallConfig{Global: GlobalFirewall{Provider: true}})
+	args := fp.GlobalAllowArgs()
+	if len(args) != 1 || args[0][1] != "31013/tcp" {
+		t.Fatalf("provider rules = %v, want only 31013/tcp", args)
+	}
+	fp = NewFirewallProvisioner(FirewallConfig{Global: GlobalFirewall{PublicStorage: true}})
+	for _, argv := range fp.GlobalAllowArgs() {
+		if argv[1] == "31013/tcp" {
+			t.Fatal("the public Kubo swarm opened the provider port")
+		}
 	}
 }

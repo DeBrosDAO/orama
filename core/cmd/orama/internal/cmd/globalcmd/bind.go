@@ -11,14 +11,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Cmd signs a service-key binding on this machine. It does not send a transaction.
+// Cmd is the global role: installing and running the orama-global-* units on
+// this node, the validator key, and the on-chain node messages.
 var Cmd = &cobra.Command{
 	Use:   "global",
-	Short: "Sign a global-node service key binding",
-	Long: `Sign the binding that proves a service key belongs to an operator.
+	Short: "Install and operate a global node, and build its chain messages",
+	Long: `Operate the global role.
 
-The private key stays in its file. The command writes the public key and the
-signature, and nothing else. Sending MsgRegisterNode is a separate step.`,
+On the node, as root: install puts the global services on this machine;
+start, stop, restart and status run their units in order, chain first;
+validator backs up and migrates the consensus key and builds unjail and edit
+messages; stage-oramad places a verified chain binary for cosmovisor.
+
+bind signs the binding that proves a service key belongs to an operator. The
+private key stays in its file; the command writes the public key and the
+signature. register, bond, unbond, capacity and retire build the node's chain
+messages.`,
 }
 
 var bindFlags struct {

@@ -1086,9 +1086,14 @@ The global-role unit that `core/pkg/install` renders (`RenderGlobalChainUnit`,
 read-only (`ReadOnlyPaths=`). Cosmovisor runs `DAEMON_HOME/cosmovisor/current/bin/oramad`
 and, when the chain halts at an upgrade plan's height, points `current` at
 `cosmovisor/upgrades/<name>` and restarts. It never downloads a binary; a plan with no staged
-binary halts the chain until one is staged. Nothing installs this unit or the cosmovisor binary
-yet: the templates are rendered and tested only, and the stagenet deploy script below still
-writes its own unit that runs `oramad` directly.
+binary halts the chain until one is staged. Nothing installs this unit or the cosmovisor binary:
+no cosmovisor release is pinned. `orama global install` writes a different chain unit
+(`RenderGlobalChainDirectUnit`) that runs `/usr/lib/orama-global/bin/oramad start` with the same
+home and listeners and no cosmovisor, so binaries staged by `stage-oramad` below are not run by
+the installed unit; a chain binary is changed by staging a new `oramad` for `orama global
+install` and restarting the chain. [RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md) covers the
+install, the ordered lifecycle and the validator key operations. The stagenet deploy script
+below still writes its own unit that runs `oramad` directly.
 
 Binaries enter the layout only through `orama global stage-oramad` (run as root):
 
@@ -1123,10 +1128,11 @@ runs `stage-oramad` for every upgrade.
 
 ## The stagenet deploy script
 
-`chain/scripts/stagenet/deploy.sh up|status|invariants|reset` is an **interim** deployment path for the
-project's own stagenet nodes, standing in until plan B2/B3 (the `orama` CLI's global-node role)
-exists to manage `oramad` the same way it manages cluster services. Until then, this script drives
-its own systemd unit directly. It refuses to run unless `CHAIN_ID` contains `-stagenet-` or
+`chain/scripts/stagenet/deploy.sh up|status|invariants|reset` is the deployment path for the
+project's own stagenet nodes, which run the chain over their WireGuard mesh with a genesis the
+script builds. It drives its own systemd unit directly. A global-role node is installed with
+`orama global install` instead ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md)), which has no
+WireGuard dependency and does not build a genesis. It refuses to run unless `CHAIN_ID` contains `-stagenet-` or
 `-devnet-`, builds `oramad` with the same `-trimpath`/version `ldflags` as `make build`, transfers
 it gzip-compressed straight into `sudo install` via `/dev/stdin` (no intermediate file of any name,
 predictable or not, ever touches the remote disk), and validates every value it reads back from a

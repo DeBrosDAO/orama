@@ -1161,6 +1161,46 @@ internal-auth check both accept.
 
 See [SECURITY.md](SECURITY.md) for the full security hardening reference.
 
+### Global role
+
+A global node runs the public chain and the services beside it, not a cluster.
+`orama global install` (`core/pkg/install/global_install*.go`) puts them on the
+machine; `orama global start|stop|restart|status` (`core/pkg/globalnode`) runs
+their units; [RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md) is the operator guide.
+
+| Service | Unit | Account | Public port |
+|---|---|---|---|
+| chain (`oramad start`, no cosmovisor) | `orama-global-chain.service` | `orama-chain` | 31000 tcp+udp |
+| provider (`orama-global provider`) | `orama-global-provider.service` | `orama-provider` | 31013 tcp |
+| archiver (`orama-global archiver`) | `orama-global-archiver.service` | `orama-archiver` | none |
+| repair (`orama-global repair`) | `orama-global-repair.service` | `orama-repair` | none |
+
+Binaries live in `/usr/lib/orama-global/bin` (root, 0755); state in
+`/var/lib/orama-global/<service>` (the unit's own account, 0700). Every unit
+hides `/opt/orama`, denies private address ranges, and is not part of
+`orama-node.service`. The chain is started first and stopped last: the other
+services reach it only through its RPC on `127.0.0.1:31001`.
+
+Trust points:
+
+- **The staged binaries.** Install copies `oramad`, `orama-global` and the
+  `orama` CLI (which the chain unit runs as root for its sign-floor check) from a
+  root-owned directory without following a symlink, but does not verify them
+  against the release root. Whoever can write that directory decides what runs.
+- **The consensus key.** `priv_validator_key.json` is in the chain home, readable
+  by `orama-chain`. It leaves the host only sealed (ORBK) to a key the node holds
+  only the public half of: the operator's (`validator export-key`) or a new
+  host's one-time migration key (`validator migrate`).
+- **The sign floor.** A migration records the old host's last sign state in
+  `/var/lib/orama-global`, where no service account can write, on both hosts.
+  The chain unit's `ExecStartPre=+` check refuses every start, however it is
+  triggered, while the state is behind the floor or the key is missing. It
+  cannot detect a key copied by any other means.
+- **The operator wallet** is never on the node. Chain messages (register, bond,
+  unjail, edit) are built as sign documents and signed by the RootWallet agent.
+- **Service hot keys** (provider, archiver) are created by each service in its
+  own home, mode 0600, and never leave it.
+
 ### TLS/HTTPS
 
 - Automatic ACME (Let's Encrypt) certificates via Caddy, using DNS-01 challenges answered by the network's own DNS

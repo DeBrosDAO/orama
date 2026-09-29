@@ -38,7 +38,10 @@ in --release-metadata (threshold, timestamp expiry, snapshot rollback, length
 and hashes); only then is it linked into place. Every directory on the way is
 opened without following symlinks and must be root's; a symlink or a
 directory another account owns or may write is refused. Nothing stages
-automatically: a validator's operator runs this for every chain upgrade.`,
+automatically: a validator's operator runs this for every chain upgrade.
+
+The chain unit 'orama global install' writes runs oramad directly, not through
+cosmovisor, and does not read this layout.`,
 	Args: cobra.NoArgs,
 	RunE: runStageOramad,
 }

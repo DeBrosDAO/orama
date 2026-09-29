@@ -40,10 +40,23 @@ const (
 	GlobalIPFSUnit     = "orama-global-ipfs.service"
 	GlobalProviderUnit = "orama-global-provider.service"
 	GlobalRelayUnit    = "orama-global-relay.service"
+	GlobalArchiverUnit = "orama-global-archiver.service"
+	GlobalRepairUnit   = "orama-global-repair.service"
 
+	// GlobalStateRoot is the root-owned parent of every global state
+	// directory. Root keeps its own files for the global role here (the
+	// validator sign floor, a migration's recipient key, quarantined keys),
+	// where no service account can write.
+	GlobalStateRoot    = "/var/lib/orama-global"
 	GlobalIPFSHome     = "/var/lib/orama-global/ipfs"
 	GlobalProviderHome = "/var/lib/orama-global/provider"
 	GlobalRelayHome    = "/var/lib/orama-global/relay"
+	GlobalArchiverHome = "/var/lib/orama-global/archiver"
+	GlobalRepairHome   = "/var/lib/orama-global/repair"
+
+	// GlobalBinDir holds the binaries the global units run: root-owned, 0755,
+	// outside /opt/orama so the units' tmpfs over /opt/orama does not hide them.
+	GlobalBinDir = "/usr/lib/orama-global/bin"
 
 	// GlobalIPFSAPITokenFile is the public Kubo RPC bearer, mode 0640, in GlobalIPFSHome.
 	GlobalIPFSAPITokenFile = "api-token"

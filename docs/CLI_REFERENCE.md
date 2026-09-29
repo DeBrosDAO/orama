@@ -95,14 +95,30 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama function triggers delete`](#orama-function-triggers-delete) — Delete a trigger
     - [`orama function triggers list`](#orama-function-triggers-list) — List triggers for a function
   - [`orama function versions`](#orama-function-versions) — List all versions of a function
-- [`orama global`](#orama-global) — Sign a global-node service key binding
+- [`orama global`](#orama-global) — Install and operate a global node, and build its chain messages
   - [`orama global bind`](#orama-global-bind) — Sign orama-global-bind-v1 for one service key
   - [`orama global bond`](#orama-global-bond) — Bond norama to one role on a global node
   - [`orama global capacity`](#orama-global-capacity) — Declare how many bytes a storage node will hold
+  - [`orama global install`](#orama-global-install) — Install the global services on this node (run as root)
   - [`orama global register`](#orama-global-register) — Register a global node from signed service-key bindings
+  - [`orama global restart`](#orama-global-restart) — Restart the installed global services in order (run as root)
   - [`orama global retire`](#orama-global-retire) — Retire a global node
   - [`orama global stage-oramad`](#orama-global-stage-oramad) — Place a TUF-verified oramad in the cosmovisor layout
+  - [`orama global start`](#orama-global-start) — Start the installed global services, chain first (run as root)
+  - [`orama global status`](#orama-global-status) — Show the state of each installed global service (run as root)
+  - [`orama global stop`](#orama-global-stop) — Stop the installed global services, chain last (run as root)
   - [`orama global unbond`](#orama-global-unbond) — Start unbonding norama from one role
+  - [`orama global validator`](#orama-global-validator) — Back up, move and manage this node's validator key
+    - [`orama global validator check-sign-floor`](#orama-global-validator-check-sign-floor) — Fail when the chain must not start: key moved away or state behind its floor
+    - [`orama global validator edit`](#orama-global-validator-edit) — Build or send MsgEditValidator (description, commission)
+    - [`orama global validator export-key`](#orama-global-validator-export-key) — Write priv_validator_key.json sealed to the operator's public key (run as root)
+    - [`orama global validator migrate`](#orama-global-validator-migrate) — Move the validator key to another host without a double sign
+      - [`orama global validator migrate cancel`](#orama-global-validator-migrate-cancel) — Remove this host's prepared migration key (run on the new host)
+      - [`orama global validator migrate export`](#orama-global-validator-migrate-export) — Stop the chain and seal the key and its sign state (run on the old host)
+      - [`orama global validator migrate import`](#orama-global-validator-migrate-import) — Install a migrated key and record its sign floor (run on the new host)
+      - [`orama global validator migrate prepare`](#orama-global-validator-migrate-prepare) — Print this host's migration key (run on the new host)
+    - [`orama global validator reseal`](#orama-global-validator-reseal) — Turn a key backup into a migration bundle for a new host
+    - [`orama global validator unjail`](#orama-global-validator-unjail) — Build or send MsgUnjail for the operator's validator
 - [`orama inspect`](#orama-inspect) — Inspect cluster health via SSH
 - [`orama invite`](#orama-invite) — Mint an invite for a new node
 - [`orama members`](#orama-members) — Manage who may work in a namespace
@@ -1305,18 +1321,25 @@ Shows all deployed versions of a specific function.
 
 ### orama global
 
-Sign a global-node service key binding
+Install and operate a global node, and build its chain messages
 
 ```
 orama global
 ```
 
-Sign the binding that proves a service key belongs to an operator.
+Operate the global role.
 
-The private key stays in its file. The command writes the public key and the
-signature, and nothing else. Sending MsgRegisterNode is a separate step.
+On the node, as root: install puts the global services on this machine;
+start, stop, restart and status run their units in order, chain first;
+validator backs up and migrates the consensus key and builds unjail and edit
+messages; stage-oramad places a verified chain binary for cosmovisor.
 
-Subcommands: `bind`, `bond`, `capacity`, `register`, `retire`, `stage-oramad`, `unbond`
+bind signs the binding that proves a service key belongs to an operator. The
+private key stays in its file; the command writes the public key and the
+signature. register, bond, unbond, capacity and retire build the node's chain
+messages.
+
+Subcommands: `bind`, `bond`, `capacity`, `install`, `register`, `restart`, `retire`, `stage-oramad`, `start`, `status`, `stop`, `unbond`, `validator`
 
 ### orama global bind
 
@@ -1390,6 +1413,53 @@ submit it.
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 
+### orama global install
+
+Install the global services on this node (run as root)
+
+```
+orama global install [flags]
+```
+
+Install global services on this machine: chain, and optionally provider,
+archiver or repair. The chain is required: the other services reach it only on
+this host's loopback RPC. provider and repair are never installed together.
+
+For each service it creates the service's system account, copies its binaries
+(oramad and this orama CLI for the chain, whose unit runs 'orama global
+validator check-sign-floor' before every start; orama-global for the others)
+from --staged-dir into /usr/lib/orama-global/bin
+(root-owned, 0755; a symlink in the staged directory is refused, and as root the
+directory must be root's and not writable by others), writes and enables its
+orama-global-* unit, and opens its public port in ufw (31000 tcp+udp for the
+chain, 31013 tcp for the provider) with the comment orama-global. It does not
+start anything: 'orama global start' does, chain first.
+
+The chain unit runs oramad directly. cosmovisor is not installed: no cosmovisor
+release is pinned. A new chain binary is installed by running this command again
+with the new oramad staged, then 'orama global restart chain'.
+
+--init-chain creates the chain home with 'oramad init' as orama-chain and puts
+the network's --genesis in place. It is never done without the flag, and it is
+refused when the home already has a genesis.
+
+An inactive ufw is refused unless --enable-firewall is given; then incoming is
+denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
+be a port 'sshd -T' reports, or nothing is changed. Running the
+command again with the same flags changes nothing but the binaries' bytes.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--chain-id` | — | Chain id, with --init-chain |
+| `--enable-firewall` | `false` | Enable an inactive ufw (deny incoming, allow --ssh-port) |
+| `--genesis` | — | The network's genesis.json, with --init-chain |
+| `--init-chain` | `false` | Create the chain home with oramad init and install --genesis |
+| `--moniker` | — | Node moniker, with --init-chain |
+| `--persistent-peers` | — | Chain peers, id@host:port,... (written into the chain unit) |
+| `--services` | — | Services: chain[,provider,archiver,repair] [required] |
+| `--ssh-port` | `22` | SSH port --enable-firewall allows |
+| `--staged-dir` | — | Directory holding the release's oramad and orama-global [required] |
+
 ### orama global register
 
 Register a global node from signed service-key bindings
@@ -1427,6 +1497,17 @@ this --chain-id and --operator.
 | `--region` | — | Region hint |
 | `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
 | `--sequence` | `0` | Account sequence, when not read from --node |
+
+### orama global restart
+
+Restart the installed global services in order (run as root)
+
+```
+orama global restart [service...]
+```
+
+Stop then start the named global services (all installed ones when none is
+named). Restarting the chain restarts every installed service, chain first.
 
 ### orama global retire
 
@@ -1476,6 +1557,9 @@ opened without following symlinks and must be root's; a symlink or a
 directory another account owns or may write is refused. Nothing stages
 automatically: a validator's operator runs this for every chain upgrade.
 
+The chain unit 'orama global install' writes runs oramad directly, not through
+cosmovisor, and does not read this layout.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--binary` | — | The oramad binary to stage [required] |
@@ -1484,6 +1568,42 @@ automatically: a validator's operator runs this for every chain upgrade.
 | `--release-metadata` | — | Directory holding timestamp.json, snapshot.json and targets.json [required] |
 | `--release-target` | — | Name the binary has in the release targets metadata [required] |
 | `--upgrade` | — | Upgrade plan name to stage for |
+
+### orama global start
+
+Start the installed global services, chain first (run as root)
+
+```
+orama global start [service...]
+```
+
+Start the installed orama-global-* units, or only the named ones.
+
+The chain starts first. Before it starts, a validator key migrated to this host
+is checked against the sign state it last had on its old host; a state behind
+it is refused, since it could sign a step the old host already signed. The other
+services start once the chain's loopback RPC answers. Starting provider,
+archiver or repair alone needs the chain already running.
+
+### orama global status
+
+Show the state of each installed global service (run as root)
+
+```
+orama global status
+```
+
+### orama global stop
+
+Stop the installed global services, chain last (run as root)
+
+```
+orama global stop [service...]
+```
+
+Stop the installed orama-global-* units, or only the named ones, in reverse
+start order. Stopping the chain stops every installed service that needs it
+first.
 
 ### orama global unbond
 
@@ -1510,6 +1630,201 @@ prints the sign document and does not submit it.
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+
+### orama global validator
+
+Back up, move and manage this node's validator key
+
+```
+orama global validator
+```
+
+Subcommands: `check-sign-floor`, `edit`, `export-key`, `migrate`, `reseal`, `unjail`
+
+### orama global validator check-sign-floor
+
+Fail when the chain must not start: key moved away or state behind its floor
+
+```
+orama global validator check-sign-floor
+```
+
+The double-sign guard. orama-global-chain.service runs it as root before every
+start (ExecStartPre), from /usr/lib/orama-global/bin, where 'orama global
+install' puts this CLI. With no sign floor recorded it passes. With one, it
+fails when priv_validator_key.json is missing (the key moved to another host)
+or priv_validator_state.json is behind the floor.
+
+### orama global validator edit
+
+Build or send MsgEditValidator (description, commission)
+
+```
+orama global validator edit [flags]
+```
+
+Build x/staking MsgEditValidator for the operator's validator. Only the flags
+given change; every other description field is sent as [do-not-modify]. An empty
+value clears that field. --commission-rate is a decimal from 0 to 1; x/staking
+allows one commission change per 24 hours, within the validator's
+max-change-rate. Without --node the command prints the sign document.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--commission-rate` | — | New commission rate, 0 to 1 |
+| `--details` | — | New details |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--identity` | — | New identity (for example a keybase id) |
+| `--moniker` | — | New moniker |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--operator` | — | Validator operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--security-contact` | — | New security contact |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+| `--website` | — | New website |
+
+### orama global validator export-key
+
+Write priv_validator_key.json sealed to the operator's public key (run as root)
+
+```
+orama global validator export-key [flags]
+```
+
+Seal priv_validator_key.json to --recipient, an X25519 public key (64 hex
+characters), with the same ORBK seal as a namespace backup, and write it to --to.
+The node never holds the private half, so it cannot open the file. --to must
+not exist.
+
+To restore the key on a new host, run 'orama global validator migrate prepare'
+there, then 'orama global validator reseal' on the machine holding the private
+key, then 'orama global validator migrate import' on the new host. Restore only
+when the old host is gone: two hosts signing with one key is a double sign.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--recipient` | — | Operator X25519 public key, hex [required] |
+| `--to` | — | File to write; must not exist [required] |
+
+### orama global validator migrate
+
+Move the validator key to another host without a double sign
+
+```
+orama global validator migrate
+```
+
+Move priv_validator_key.json and priv_validator_state.json from this host to
+another, in three steps, each run as root:
+
+  1. on the new host:  orama global validator migrate prepare
+  2. on the old host:  orama global validator migrate export --recipient <key> --to <file>
+  3. copy <file> to the new host, then:
+                       orama global validator migrate import --from <file>
+
+export stops and disables the old host's chain (and stops the services that
+need it) before it reads anything. It seals the key and state in memory, records
+the state as the old host's sign floor, keeps a copy of the state, moves the key
+out of the chain home, and then writes the bundle. The chain unit checks the
+floor before every start, so the old host's chain no longer starts: the floor is
+recorded and the key is gone. import refuses while the new host's chain runs,
+records the old host's last sign state as the new host's floor, writes the
+state, and installs the key last; the chain unit then refuses to start from a
+state behind the floor. cancel removes a prepared migration key.
+
+Subcommands: `cancel`, `export`, `import`, `prepare`
+
+### orama global validator migrate cancel
+
+Remove this host's prepared migration key (run on the new host)
+
+```
+orama global validator migrate cancel
+```
+
+### orama global validator migrate export
+
+Stop the chain and seal the key and its sign state (run on the old host)
+
+```
+orama global validator migrate export [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--recipient` | — | The new host's migration key, from prepare [required] |
+| `--to` | — | Bundle file to write; must not exist [required] |
+
+### orama global validator migrate import
+
+Install a migrated key and record its sign floor (run on the new host)
+
+```
+orama global validator migrate import [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | — | Bundle file from export or reseal [required] |
+
+### orama global validator migrate prepare
+
+Print this host's migration key (run on the new host)
+
+```
+orama global validator migrate prepare
+```
+
+### orama global validator reseal
+
+Turn a key backup into a migration bundle for a new host
+
+```
+orama global validator reseal [flags]
+```
+
+Open a key backup from 'orama global validator export-key' with the operator's
+X25519 private key (--identity-file, hex, mode 0600) and seal the key to the new
+host's migration key (--recipient, printed by 'orama global validator migrate
+prepare'). Run it on the machine that holds the private key, not on a node. The
+bundle carries no sign state: nobody knows what a lost host last signed.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | — | Key backup from export-key [required] |
+| `--identity-file` | — | File holding the operator X25519 private key, hex, mode 0600 [required] |
+| `--recipient` | — | The new host's migration key, hex [required] |
+| `--to` | — | Bundle file to write; must not exist [required] |
+
+### orama global validator unjail
+
+Build or send MsgUnjail for the operator's validator
+
+```
+orama global validator unjail [flags]
+```
+
+Build x/slashing MsgUnjail for the validator whose operator account is
+--operator (the same bytes as its oramavaloper address), signed by that account.
+
+x/slashing refuses it while the jail period runs, when the validator has no
+self-delegation or less than its minimum, and for a tombstoned validator, which
+can never unjail. Without --node the command prints the sign document and does
+not submit it; with --node the RootWallet agent signs and it is broadcast.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--chain-id` | — | Chain id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
+| `--operator` | — | Validator operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 
 ### orama inspect

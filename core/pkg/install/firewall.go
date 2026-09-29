@@ -58,10 +58,13 @@ type FirewallConfig struct {
 // GlobalFirewall is which global services publish a port. Loopback listeners
 // (chain RPC, gRPC, REST, Prometheus, Kubo RPC and gateway) are not here.
 type GlobalFirewall struct {
-	ChainP2P      bool
+	ChainP2P bool
+	// PublicStorage is the public Kubo swarm.
 	PublicStorage bool
-	TorRelay      bool
-	Dirauth       bool
+	// Provider is the storage provider's upload and retrieval HTTP.
+	Provider bool
+	TorRelay bool
+	Dirauth  bool
 }
 
 // GlobalRuleComment tags rules Reconcile must not treat as cluster rules.
@@ -69,7 +72,7 @@ const GlobalRuleComment = "orama-global"
 
 // Enabled reports whether any global service publishes a port.
 func (g GlobalFirewall) Enabled() bool {
-	return g.ChainP2P || g.PublicStorage || g.TorRelay || g.Dirauth
+	return g.ChainP2P || g.PublicStorage || g.Provider || g.TorRelay || g.Dirauth
 }
 
 // FirewallProvisioner manages UFW firewall setup
@@ -183,8 +186,9 @@ func (fp *FirewallProvisioner) GenerateRules() []string {
 // listener. The comment is orama-global, not orama, so a cluster reconcile
 // does not add these and does not delete them.
 //
-// IPv6 stays disabled for a global node, the same as for a cluster node.
-// KeepIPv6 is not a flag yet: both roles are v4-only until a later phase.
+// `orama global install` adds these rules and changes nothing else about
+// IPv6: it does not run the cluster's sysctl that disables it. ufw applies
+// the same rules to IPv6 when /etc/default/ufw sets IPV6=yes.
 func (fp *FirewallProvisioner) GlobalAllowArgs() [][]string {
 	if fp == nil || !fp.config.Global.Enabled() {
 		return nil
@@ -199,8 +203,10 @@ func (fp *FirewallProvisioner) GlobalAllowArgs() [][]string {
 		specs = append(specs,
 			fmt.Sprintf("%d/tcp", constants.GlobalIPFSSwarmPort),
 			fmt.Sprintf("%d/udp", constants.GlobalIPFSSwarmPort),
-			fmt.Sprintf("%d/tcp", constants.GlobalProviderPort),
 		)
+	}
+	if fp.config.Global.Provider {
+		specs = append(specs, fmt.Sprintf("%d/tcp", constants.GlobalProviderPort))
 	}
 	if fp.config.Global.TorRelay {
 		specs = append(specs, fmt.Sprintf("%d/tcp", constants.GlobalTorORPort))

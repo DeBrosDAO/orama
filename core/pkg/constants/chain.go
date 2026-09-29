@@ -30,9 +30,19 @@ const (
 	ChainUser = "orama-chain"
 	// ChainDaemonName is the chain binary, cosmovisor's DAEMON_NAME.
 	ChainDaemonName = "oramad"
+	// ChainDenom is the chain's base denom, which `oramad init` is given.
+	ChainDenom = "norama"
 	// ChainNodeKeyPath is CometBFT's node_key.json under ChainHome: the
 	// ed25519 key the node's p2p id is derived from.
 	ChainNodeKeyPath = ChainHome + "/config/node_key.json"
+	// ChainValidatorKeyPath is CometBFT's priv_validator_key.json: the
+	// consensus key a validator signs blocks with.
+	ChainValidatorKeyPath = ChainHome + "/config/priv_validator_key.json"
+	// ChainValidatorStatePath is priv_validator_state.json, the last height,
+	// round and step the key signed. CometBFT refuses to sign at or below it.
+	ChainValidatorStatePath = ChainHome + "/data/priv_validator_state.json"
+	// ChainGenesisPath is the genesis file oramad reads.
+	ChainGenesisPath = ChainHome + "/config/genesis.json"
 )
 
 // LocalChainRPCURL is the chain's CometBFT RPC on this node. It is bound to

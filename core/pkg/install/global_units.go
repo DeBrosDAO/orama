@@ -8,14 +8,17 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/cosmovisor"
 )
 
-// Global unit accounts and paths. These templates are not installed: install
-// still writes only orama-node.service and the orama-namespace-* templates.
+// Global unit accounts and paths. `orama global install` (InstallGlobal)
+// writes the chain (RenderGlobalChainDirectUnit), provider, archiver and
+// repair units; the cluster install writes none of them, and the other
+// renderers here are not installed by anything yet.
 // chain/scripts/stagenet/deploy.sh writes its own orama-global-chain unit for
 // the stagenet mesh; this one is the global-role unit, with no WireGuard
 // dependency and no cluster secret path.
 const (
-	globalBinDir = "/usr/lib/orama-global/bin"
-	// globalCosmovisor runs oramad. Nothing installs it yet.
+	globalBinDir = constants.GlobalBinDir
+	// globalCosmovisor is where RenderGlobalChainUnit expects cosmovisor.
+	// Nothing installs it: no cosmovisor release is pinned.
 	globalCosmovisor = globalBinDir + "/cosmovisor"
 	globalChainUser  = constants.ChainUser
 	globalIPFSUser   = "orama-ipfs-pub"
@@ -79,8 +82,7 @@ IPAddressAllow=localhost
 // instrumentation flag, so the prometheus listen address is recorded here
 // and still has to be set in config.toml.
 func RenderGlobalChainUnit() string {
-	exec := fmt.Sprintf("%s run start --home %s --p2p.laddr tcp://0.0.0.0:%d --rpc.laddr tcp://127.0.0.1:%d --grpc.enable=true --grpc.address 127.0.0.1:%d --api.enable=true --api.address tcp://127.0.0.1:%d",
-		globalCosmovisor, constants.ChainHome, constants.ChainP2PPort, constants.ChainRPCPort, constants.ChainGRPCPort, constants.ChainAPIPort)
+	exec := globalCosmovisor + " run " + chainStartArgs()
 	env := fmt.Sprintf("Environment=DAEMON_NAME=%s\nEnvironment=DAEMON_HOME=%s\nEnvironment=DAEMON_ALLOW_DOWNLOAD_BINARIES=false\nEnvironment=DAEMON_RESTART_AFTER_UPGRADE=true\nReadOnlyPaths=%s\n",
 		constants.ChainDaemonName, constants.ChainHome,
 		strings.Join(cosmovisor.Layout{Home: constants.ChainHome}.ReadOnlyDirs(), " "))
@@ -89,8 +91,55 @@ func RenderGlobalChainUnit() string {
 		globalChainUser,
 		constants.ChainHome,
 		exec,
-		env+fmt.Sprintf("# CometBFT v0.39 registers no prometheus flag; config.toml prometheus_listen_addr is 127.0.0.1:%d.\n", constants.ChainPrometheusPort),
+		env+chainPrometheusNote(),
 	)
+}
+
+// RenderGlobalChainDirectUnit is the orama-global-chain.service that
+// `orama global install` writes: oramad started directly from GlobalBinDir,
+// with no cosmovisor. Nothing installs or pins a cosmovisor binary, so the
+// installed unit cannot run one; RenderGlobalChainUnit is the cosmovisor form
+// and is not installed. An upgrade under this unit is an operator replacing
+// the binary with the install command and restarting the chain.
+// persistentPeers (id@host:port,...) is passed to oramad as
+// --p2p.persistent_peers when set; ValidatePersistentPeers checks it first.
+func RenderGlobalChainDirectUnit(persistentPeers string) string {
+	exec := globalBinDir + "/" + constants.ChainDaemonName + " " + chainStartArgs()
+	if persistentPeers != "" {
+		exec += " --p2p.persistent_peers " + persistentPeers
+	}
+	return renderGlobalUnit(
+		"Orama L1 node (oramad)",
+		globalChainUser,
+		constants.ChainHome,
+		exec,
+		"ExecStartPre=+"+GlobalSignFloorCheck+"\n"+chainPrometheusNote(),
+	)
+}
+
+// GlobalSignFloorCheck is the double-sign guard the direct chain unit runs,
+// as root ("+"), before every start: at boot, on Restart=always, and on a
+// manual start, not only through `orama global start`. It is the orama CLI
+// that `orama global install` puts in GlobalBinDir beside oramad, and it
+// fails when a migrated key's state is behind its floor or the key has moved
+// to another host.
+const GlobalSignFloorCheck = globalBinDir + "/" + globalOramaCLI + " global validator check-sign-floor"
+
+// needsChain orders a service after the local chain, whose RPC it uses.
+func needsChain(unit string) string {
+	dep := "After=network-online.target " + constants.ChainServiceUnit + "\nWants=network-online.target " + constants.ChainServiceUnit + "\n"
+	return strings.Replace(unit, "After=network-online.target\nWants=network-online.target\n", dep, 1)
+}
+
+// chainStartArgs is oramad's start command with the chain's listeners: p2p
+// public, everything else on loopback.
+func chainStartArgs() string {
+	return fmt.Sprintf("start --home %s --p2p.laddr tcp://0.0.0.0:%d --rpc.laddr tcp://127.0.0.1:%d --grpc.enable=true --grpc.address 127.0.0.1:%d --api.enable=true --api.address tcp://127.0.0.1:%d",
+		constants.ChainHome, constants.ChainP2PPort, constants.ChainRPCPort, constants.ChainGRPCPort, constants.ChainAPIPort)
+}
+
+func chainPrometheusNote() string {
+	return fmt.Sprintf("# CometBFT v0.39 registers no prometheus flag; config.toml prometheus_listen_addr is 127.0.0.1:%d.\n", constants.ChainPrometheusPort)
 }
 
 // RenderGlobalIPFSUnit is orama-global-ipfs.service. The API is the public
@@ -137,8 +186,8 @@ WantedBy=timers.target
 // in that home.
 func RenderGlobalProviderUnit() string {
 	exec := fmt.Sprintf("%s/orama-global provider --listen 0.0.0.0:%d", globalBinDir, constants.GlobalProviderPort)
-	return renderGlobalUnitExtra("Orama storage provider", globalProviderUser, globalProviderUser, "orama-ipfs-pub-rpc",
-		"orama-global/provider", constants.GlobalProviderHome, exec, "")
+	return needsChain(renderGlobalUnitExtra("Orama storage provider", globalProviderUser, globalProviderUser, "orama-ipfs-pub-rpc",
+		"orama-global/provider", constants.GlobalProviderHome, exec, ""))
 }
 
 // RenderGlobalRelayUnit is orama-global-relay.service. Metrics listen on
@@ -242,12 +291,12 @@ func RenderGlobalReporterUnit() string {
 // local oramad RPC on loopback and has no access to the chain home.
 func RenderGlobalArchiverUnit() string {
 	exec := fmt.Sprintf("%s/orama-global archiver", globalBinDir)
-	return renderGlobalUnit("Orama history archiver", globalArchiverUser, "/var/lib/orama-global/archiver", exec, "")
+	return needsChain(renderGlobalUnit("Orama history archiver", globalArchiverUser, constants.GlobalArchiverHome, exec, ""))
 }
 
 // RenderGlobalRepairUnit holds repair seeds. A host that runs it does not
 // also run the storage provider.
 func RenderGlobalRepairUnit() string {
 	exec := fmt.Sprintf("%s/orama-global repair", globalBinDir)
-	return renderGlobalUnit("Orama repair delegate", globalRepairUser, "/var/lib/orama-global/repair", exec, "")
+	return needsChain(renderGlobalUnit("Orama repair delegate", globalRepairUser, constants.GlobalRepairHome, exec, ""))
 }

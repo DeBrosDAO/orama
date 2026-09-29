@@ -75,7 +75,7 @@ var legacyUnits = map[string]bool{
 var unitVerbs = map[string]bool{"start": true, "stop": true, "restart": true, "enable": true, "disable": true}
 
 // globalUnits are the host units a global node may start, stop, restart, or
-// ask the status of. The list is exact: orama-global-evil is not on it, and
+// ask the status (or is-active state) of. The list is exact: orama-global-evil is not on it, and
 // enable/disable are not verbs these units accept through the helper.
 var globalUnits = map[string]bool{
 	"orama-global-chain.service":       true,
@@ -93,7 +93,7 @@ var globalUnits = map[string]bool{
 	"orama-global-repair.service":      true,
 }
 
-var globalUnitVerbs = map[string]bool{"start": true, "stop": true, "restart": true, "status": true}
+var globalUnitVerbs = map[string]bool{"start": true, "stop": true, "restart": true, "status": true, "is-active": true}
 
 // Validate parses argv (tool first) and returns the invocation it allows.
 func Validate(argv []string) (Invocation, error) {
