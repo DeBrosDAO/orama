@@ -522,3 +522,44 @@ func TestArchiveDealActive_onlyAnActiveArchiveDeal(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok, "an expired ARCHIVE deal does not count")
 }
+
+// A deal asks x/fees to top the payer's bank balance up by exactly what it will pull, after its
+// own checks, and only for the signer's own money.
+func TestDealMessagesAskForTheirExactEarningsTopUp(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	client := acc(9)
+	f.fund(client, 10_000_000)
+	pieces := []types.PieceCommitment{commit(t, payload(1)), commit(t, payload(2)), commit(t, payload(3))}
+	p, err := f.Keeper.Params.Get(f.Ctx)
+	require.NoError(t, err)
+
+	id := f.createDeal(t, types.DealClass_DEAL_CLASS_PRIVATE, client, "", 3, 1000, 2, pieces)
+	require.Len(t, f.Earnings.funded, 1)
+	require.True(t, f.Earnings.funded[0].addr.Equals(client))
+	require.True(t, f.Earnings.funded[0].amount.Equal(p.DealFee.Add(math.NewInt(3*1000*2))), "fee plus escrow")
+
+	_, err = f.Msg.ExtendDeal(f.Ctx, &types.MsgExtendDeal{Signer: client.String(), DealId: id, ExtraEpochs: 4})
+	require.NoError(t, err)
+	require.Len(t, f.Earnings.funded, 2)
+	require.True(t, f.Earnings.funded[1].amount.Equal(math.NewInt(3*1000*4)), "the extra epochs' escrow only")
+
+	before := len(f.Earnings.funded)
+	_, err = f.Msg.ExtendDeal(f.Ctx, &types.MsgExtendDeal{Signer: acc(8).String(), DealId: id, ExtraEpochs: 1})
+	require.Error(t, err)
+	_, err = f.Msg.ExtendDeal(f.Ctx, &types.MsgExtendDeal{Signer: client.String(), DealId: 424242, ExtraEpochs: 1})
+	require.Error(t, err)
+	require.Len(t, f.Earnings.funded, before, "a message its own checks reject never asks for a top-up")
+}
+
+func TestCreateDealWithAGranterNeverToppsUpTheSignerEarnings(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	_, err := f.Msg.CreateDeal(f.Ctx, &types.MsgCreateDeal{
+		Signer: acc(9).String(), Granter: acc(10).String(), Class: types.DealClass_DEAL_CLASS_PRIVATE,
+		DealNonce: bytesOf(types.NonceLen, 0x42), Replicas: 3, PricePerEpoch: math.NewInt(1000), DurationEpochs: 2,
+		Pieces: []types.PieceCommitment{commit(t, payload(1)), commit(t, payload(2)), commit(t, payload(3))},
+	})
+	require.Error(t, err, "there is no grant")
+	require.Empty(t, f.Earnings.funded)
+}

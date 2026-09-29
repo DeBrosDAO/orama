@@ -84,6 +84,7 @@ var lockedRows = []lockedRow{
 	{"nodes", "min_service_volume_bytes", "1", "track-c C5 proven service volume (1 byte); " + citeG1},
 	{"nodes", "max_endpoints", "8", "track-c C6 record bound (code default)"},
 	{"nodes", "max_bindings", "8", "track-c C6 record bound (code default)"},
+	{"nodes", "network_identity_lock_seconds", "1209600", "14 days, the D17 parameter timelock; track-c C5/C7 give no number for how long a declared /16 and ASN must stand (launch default), " + citeG1},
 
 	// x/storage: C7, G1.
 	{"storage", "min_deal_bytes", "1024", citeC7},

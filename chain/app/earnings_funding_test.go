@@ -9,7 +9,6 @@ import (
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtprototypes "github.com/cometbft/cometbft/proto/tendermint/types"
 	"github.com/stretchr/testify/require"
-	protov2 "google.golang.org/protobuf/proto"
 
 	"cosmossdk.io/math"
 
@@ -19,17 +18,11 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/piece"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
-	feesante "github.com/DeBrosOfficial/network/chain/x/fees/ante"
 	storagekeeper "github.com/DeBrosOfficial/network/chain/x/storage/keeper"
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 	tokenkeeper "github.com/DeBrosOfficial/network/chain/x/token/keeper"
 	tokentypes "github.com/DeBrosOfficial/network/chain/x/token/types"
 )
-
-type oneMsgTx struct{ msg sdk.Msg }
-
-func (t oneMsgTx) GetMsgs() []sdk.Msg                    { return []sdk.Msg{t.msg} }
-func (t oneMsgTx) GetMsgsV2() ([]protov2.Message, error) { return nil, nil }
 
 // earningsOnlyChain is a committed app whose account holds earnings and no bank balance, the
 // state of every provider or operator that has only been paid (C2).
@@ -60,15 +53,6 @@ func newEarningsOnlyChain(t *testing.T, earnings int64) earningsOnlyChain {
 	require.NoError(t, oramaApp.FeesKeeper.CreditEarnings(ctx, emissiontypes.ModuleName, addr, coin))
 	require.True(t, oramaApp.BankKeeper.GetBalance(ctx, addr, params.BaseDenom).Amount.IsZero())
 	return earningsOnlyChain{app: oramaApp, ctx: ctx, addr: addr}
-}
-
-func (c earningsOnlyChain) topUp(t *testing.T, msg sdk.Msg) {
-	t.Helper()
-	dec := feesante.NewBondTopUpDecorator(c.app.BankKeeper, c.app.FeesKeeper, c.app.NodesKeeper, c.app.StorageKeeper, c.app.TokenKeeper)
-	_, err := dec.AnteHandle(c.ctx, oneMsgTx{msg: msg}, false, func(ctx sdk.Context, _ sdk.Tx, _ bool) (sdk.Context, error) {
-		return ctx, nil
-	})
-	require.NoError(t, err)
 }
 
 func requireEarningsInvariant(t *testing.T, c earningsOnlyChain) {
@@ -104,42 +88,38 @@ func TestEarningsFundOwnStorageDeal(t *testing.T) {
 	c := newEarningsOnlyChain(t, 1_000_000)
 	msg := c.createDealMsg(t, 2)
 	msgServer := storagekeeper.NewMsgServer(c.app.StorageKeeper)
-
-	_, err := msgServer.CreateDeal(c.ctx, msg)
-	require.ErrorContains(t, err, "insufficient funds", "without the top-up an earnings-only signer cannot open a deal")
-
-	c.topUp(t, msg)
 	p, err := c.app.StorageKeeper.Params.Get(c.ctx)
 	require.NoError(t, err)
 	need := p.DealFee.Add(msg.PricePerEpoch.MulRaw(int64(msg.Replicas)).MulRaw(int64(msg.DurationEpochs)))
-	require.True(t, c.earnings(t).Equal(math.NewInt(1_000_000).Sub(need)), "exactly the deal fee and escrow left the earnings")
 
 	res, err := msgServer.CreateDeal(c.ctx, msg)
-	require.NoError(t, err)
+	require.NoError(t, err, "the handler funds the shortfall from earnings itself")
 	require.NotZero(t, res.DealId)
+	require.True(t, c.earnings(t).Equal(math.NewInt(1_000_000).Sub(need)), "exactly the deal fee and escrow left the earnings")
 	require.True(t, c.app.BankKeeper.GetBalance(c.ctx, c.addr, params.BaseDenom).Amount.IsZero(), "the deal consumed the whole top-up")
-
 	requireEarningsInvariant(t, c)
 
 	extend := &storagetypes.MsgExtendDeal{Signer: c.addr.String(), DealId: res.DealId, ExtraEpochs: 3}
 	before := c.earnings(t)
-	c.topUp(t, extend)
-	extra := msg.PricePerEpoch.MulRaw(int64(msg.Replicas)).MulRaw(3)
-	require.True(t, before.Sub(c.earnings(t)).Equal(extra), "an extension escrows the extra epochs from earnings")
 	_, err = msgServer.ExtendDeal(c.ctx, extend)
 	require.NoError(t, err)
+	extra := msg.PricePerEpoch.MulRaw(int64(msg.Replicas)).MulRaw(3)
+	require.True(t, before.Sub(c.earnings(t)).Equal(extra), "an extension escrows the extra epochs from earnings")
+	requireEarningsInvariant(t, c)
 }
 
-func TestEarningsTopUpLeavesOtherPeoplesDealsAlone(t *testing.T) {
+func TestEarningsLeaveOtherPeoplesDealsAlone(t *testing.T) {
 	c := newEarningsOnlyChain(t, 1_000_000)
+	msgServer := storagekeeper.NewMsgServer(c.app.StorageKeeper)
 	msg := c.createDealMsg(t, 2)
 	msg.Granter = sdk.AccAddress(bytes.Repeat([]byte{0x43}, 20)).String()
 	before := c.earnings(t)
-	c.topUp(t, msg)
+	_, err := msgServer.CreateDeal(c.ctx, msg)
+	require.Error(t, err, "there is no grant")
 	require.True(t, c.earnings(t).Equal(before), "a grantee spends the granter's money, never its own earnings")
 
-	extend := &storagetypes.MsgExtendDeal{Signer: c.addr.String(), DealId: 999, ExtraEpochs: 1}
-	c.topUp(t, extend)
+	_, err = msgServer.ExtendDeal(c.ctx, &storagetypes.MsgExtendDeal{Signer: c.addr.String(), DealId: 999, ExtraEpochs: 1})
+	require.Error(t, err)
 	require.True(t, c.earnings(t).Equal(before), "extending a deal that does not exist moves nothing")
 }
 
@@ -149,20 +129,14 @@ func TestEarningsFundOwnTokenCreation(t *testing.T) {
 	msgServer := tokenkeeper.NewMsgServerImpl(c.app.TokenKeeper)
 
 	_, err := msgServer.CreateToken(c.ctx, msg)
-	require.ErrorContains(t, err, "insufficient", "without the top-up an earnings-only signer cannot create a token")
-
-	c.topUp(t, msg)
-	_, err = msgServer.CreateToken(c.ctx, msg)
-	require.NoError(t, err)
+	require.NoError(t, err, "the handler funds the fee and metadata deposit from earnings")
 	require.True(t, c.app.BankKeeper.GetBalance(c.ctx, c.addr, params.BaseDenom).Amount.IsZero())
 	requireEarningsInvariant(t, c)
 }
 
-func TestEarningsTopUpLeavesAnUnaffordableDealToFail(t *testing.T) {
+func TestEarningsThatCannotCoverADealAreLeftUntouched(t *testing.T) {
 	c := newEarningsOnlyChain(t, 10)
-	msg := c.createDealMsg(t, 2)
-	c.topUp(t, msg)
-	require.True(t, c.earnings(t).Equal(math.NewInt(10)), "earnings that cannot cover the deal are left untouched")
-	_, err := storagekeeper.NewMsgServer(c.app.StorageKeeper).CreateDeal(c.ctx, msg)
+	_, err := storagekeeper.NewMsgServer(c.app.StorageKeeper).CreateDeal(c.ctx, c.createDealMsg(t, 2))
 	require.Error(t, err)
+	require.True(t, c.earnings(t).Equal(math.NewInt(10)), "a partial top-up cannot make the deal succeed, so none is made")
 }

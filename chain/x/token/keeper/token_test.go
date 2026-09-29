@@ -555,3 +555,24 @@ func TestGenesis_roundTrip(t *testing.T) {
 	require.True(t, q.SupplyMatches, q.Detail)
 	require.True(t, q.DepositsMatch, q.Detail)
 }
+
+func TestCreate_asksForItsExactEarningsTopUpAfterItsChecks(t *testing.T) {
+	f := newTestFixture(t, nil)
+	f.initGenesis(t, nil)
+	creator := addr(1)
+	msg := &types.MsgCreateToken{Creator: creator.String(), Subdenom: "cash", Name: "Cash", Symbol: "CASH"}
+	p := types.DefaultParams()
+	need := p.CreationFee.Add(types.DepositFor(p.DepositPerByte, msg.Subdenom, msg.Name, msg.Symbol, msg.Description))
+	f.fund(creator.String(), params.BaseDenom, need)
+	srv := keeper.NewMsgServerImpl(f.Keeper)
+
+	_, err := srv.CreateToken(f.Ctx, msg)
+	require.NoError(t, err)
+	require.Len(t, f.Fees.funded, 1)
+	require.True(t, f.Fees.funded[0].addr.Equals(creator))
+	require.True(t, f.Fees.funded[0].amount.Equal(need), "the fee plus the metadata deposit")
+
+	_, err = srv.CreateToken(f.Ctx, msg)
+	require.Error(t, err, "the denom exists")
+	require.Len(t, f.Fees.funded, 1, "a creation its own checks reject never asks for a top-up")
+}

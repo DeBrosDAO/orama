@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bytes"
 	stded25519 "crypto/ed25519"
 	"testing"
 	"time"
@@ -18,8 +19,11 @@ import (
 
 	"github.com/DeBrosOfficial/network/chain/app"
 	"github.com/DeBrosOfficial/network/chain/app/params"
+	"github.com/DeBrosOfficial/network/chain/piece"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
 	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
+	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
+	tokentypes "github.com/DeBrosOfficial/network/chain/x/token/types"
 )
 
 // earningsFixture is a chain with one signer that holds only earnings: no bank balance, the case
@@ -180,4 +184,60 @@ func TestApp_failedBondNodeDoesNotTurnEarningsIntoBank(t *testing.T) {
 	inv, err := f.app.FeesKeeper.CheckInvariants(ctx)
 	require.NoError(t, err)
 	require.True(t, inv.EarningsMatchModule && inv.DepositsMatchModule && inv.FeesBalance, inv.Detail)
+}
+
+func (f *earningsFixture) dealMsg(t *testing.T, epochs uint64) *storagetypes.MsgCreateDeal {
+	t.Helper()
+	commitment, err := piece.Commit(make([]byte, 2048))
+	require.NoError(t, err)
+	return &storagetypes.MsgCreateDeal{
+		Signer: f.addr.String(), Class: storagetypes.DealClass_DEAL_CLASS_PUBLIC_PIN,
+		DealNonce: bytes.Repeat([]byte{1}, storagetypes.NonceLen), Replicas: storagetypes.MinReplicas,
+		PricePerEpoch: math.NewInt(1000), DurationEpochs: epochs,
+		Pieces: []storagetypes.PieceCommitment{{
+			Root: commitment.Root, RealLeafCount: commitment.RealLeafCount,
+			PaddedLeafCount: commitment.PaddedLeafCount, PieceBytes: 2048,
+		}},
+	}
+}
+
+// failing is a message the handler rejects, used to fail a transaction after an earlier message
+// in it has already topped up from earnings.
+func (f *earningsFixture) failing() sdk.Msg {
+	return &storagetypes.MsgExtendDeal{Signer: f.addr.String(), DealId: 987654, ExtraEpochs: 1}
+}
+
+func TestApp_failedCreateDealRevertsItsEarningsTopUp(t *testing.T) {
+	f := newEarningsFixture(t, 1_000_000_000)
+	code, log := f.run(t, 40, f.dealMsg(t, 2), f.failing())
+	f.requireOnlyFeesSpent(t, code, log, 1)
+	_, err := f.app.StorageKeeper.Deals.Get(f.app.NewContext(true), 1)
+	require.Error(t, err, "the deal of the failed transaction was reverted with its top-up")
+}
+
+func TestApp_failedExtendDealRevertsItsEarningsTopUp(t *testing.T) {
+	f := newEarningsFixture(t, 1_000_000_000)
+	code, log := f.run(t, 41, f.dealMsg(t, 2))
+	require.Zero(t, code, log)
+	after := func() math.Int {
+		e, err := f.app.FeesKeeper.GetEarnings(f.app.NewContext(true), f.addr)
+		require.NoError(t, err)
+		return e
+	}
+	before := after()
+	extend := &storagetypes.MsgExtendDeal{Signer: f.addr.String(), DealId: 1, ExtraEpochs: 3}
+	code, log = f.run(t, 42, extend, f.failing())
+	require.NotZero(t, code, log)
+	require.True(t, before.Sub(after()).LTE(math.NewInt(int64(f.gas))), "only the fee left the earnings, not the extension's escrow")
+	require.True(t, f.app.BankKeeper.GetBalance(f.app.NewContext(true), f.addr, params.BaseDenom).Amount.IsZero())
+}
+
+func TestApp_failedCreateTokenRevertsItsEarningsTopUp(t *testing.T) {
+	f := newEarningsFixture(t, 10_000_000_000_000)
+	msg := &tokentypes.MsgCreateToken{Creator: f.addr.String(), Subdenom: "gold", Name: "Gold", Symbol: "GLD"}
+	code, log := f.run(t, 43, msg, f.failing())
+	f.requireOnlyFeesSpent(t, code, log, 1)
+	has, err := f.app.TokenKeeper.Tokens.Has(f.app.NewContext(true), "factory/"+f.addr.String()+"/gold")
+	require.NoError(t, err)
+	require.False(t, has, "the token of the failed transaction was reverted")
 }

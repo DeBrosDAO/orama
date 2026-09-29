@@ -14,7 +14,7 @@ import (
 // real notes, must pass the same verifier the chain runs.
 func TestVerify_walletBuilderBundlesAccept(t *testing.T) {
 	s := loadWalletScenario(t)
-	v := New(s.ChainID)
+	v := mustNew(t, s.ChainID)
 	for _, step := range s.Steps {
 		if err := v.Verify(mustHex(t, step.Bundle)); err != nil {
 			t.Errorf("%s (%s): %v", step.Name, step.Kind, err)
@@ -24,7 +24,7 @@ func TestVerify_walletBuilderBundlesAccept(t *testing.T) {
 
 func TestVerify_walletBuilderBundlesRejectTampering(t *testing.T) {
 	s := loadWalletScenario(t)
-	v := New(s.ChainID)
+	v := mustNew(t, s.ChainID)
 	for _, step := range s.Steps {
 		bundle := mustHex(t, step.Bundle)
 		n := int(bundle[0])
@@ -57,7 +57,7 @@ func TestVerify_walletBuilderBundlesRejectTampering(t *testing.T) {
 				t.Errorf("%s/%s: got %v, want %v", step.Name, label, err, c.want)
 			}
 		}
-		if err := New(s.ChainID + "-other").Verify(bundle); !errors.Is(err, verify.ErrSignatureRejected) {
+		if err := mustNew(t, s.ChainID+"-other").Verify(bundle); !errors.Is(err, verify.ErrSignatureRejected) {
 			t.Errorf("%s: wrong chain id: got %v", step.Name, err)
 		}
 	}

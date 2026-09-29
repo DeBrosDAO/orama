@@ -229,7 +229,19 @@ func (b *fakeBank) GetSupply(_ context.Context, denom string) sdk.Coin {
 // fakeFees matches x/fees LockDeposit / ReleaseDeposit: the full amount is
 // locked, and release refunds 99% to an earnings balance while burning 1%,
 // using x/fees' own SplitDeposit and default params.
+type fundCall struct {
+	addr   sdk.AccAddress
+	amount math.Int
+}
+
+// FundBondFromEarnings only records the request: what it moves is x/fees' own tested behaviour.
+func (f *fakeFees) FundBondFromEarnings(_ context.Context, addr sdk.AccAddress, _ string, needed math.Int) error {
+	f.funded = append(f.funded, fundCall{addr: addr, amount: needed})
+	return nil
+}
+
 type fakeFees struct {
+	funded   []fundCall
 	bank     *fakeBank
 	deposits map[string]feestypes.Deposit
 	earnings map[string]math.Int
