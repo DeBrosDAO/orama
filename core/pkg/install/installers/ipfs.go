@@ -74,6 +74,9 @@ func (ii *IPFSInstaller) InitializeRepo(root rootfs.Root, ipfsRepoPath string, s
 	if _, err := os.Stat(configPath); err == nil {
 		repoExists = true
 		fmt.Fprintf(ii.logWriter, "    IPFS repo already exists, ensuring configuration...\n")
+		if err := checkRepoConfig(root, ipfsRepoPath); err != nil {
+			return err
+		}
 	} else {
 		fmt.Fprintf(ii.logWriter, "    Initializing IPFS repo...\n")
 	}
@@ -397,4 +400,22 @@ func (ii *IPFSInstaller) configurePeering(root rootfs.Root, ipfsRepoPath string,
 	}
 
 	return nil
+}
+
+// checkRepoConfig refuses a Kubo config that is not JSON. Such a file (a
+// zero-filled one is what an unsynced write leaves after a crash) has lost
+// the node's IPFS identity too, so it cannot be patched. It is not re-created
+// here: the operator decides to give the node a new IPFS identity.
+func checkRepoConfig(root rootfs.Root, repoPath string) error {
+	configPath := filepath.Join(repoPath, "config")
+	data, err := root.ReadFile(configPath, rootfs.SmallFileLimit)
+	if err != nil {
+		return fmt.Errorf("failed to read IPFS config %s: %w", configPath, err)
+	}
+	if json.Valid(data) {
+		return nil
+	}
+	return fmt.Errorf("IPFS config %s is corrupt (not JSON; the node's IPFS identity in it is lost). "+
+		"Stop the node, move %s aside, and run the upgrade again: a new repo and IPFS identity are created, "+
+		"cluster peers re-learn it, and IPFS Cluster re-pins this node's replicas", configPath, repoPath)
 }

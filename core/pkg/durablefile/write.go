@@ -1,4 +1,6 @@
-package rqlite
+// Package durablefile replaces a file so that a crash or power loss leaves
+// either the old contents or the new, never a truncated or zero-filled file.
+package durablefile
 
 import (
 	"fmt"
@@ -6,14 +8,14 @@ import (
 	"path/filepath"
 )
 
-// writeFileDurable replaces path with data so that a reader sees the old
+// Write replaces path with data so that a reader sees the old
 // contents or the new, never part of either, and so that the new contents
 // survive a power loss once this returns.
 //
 // The temporary file has a unique name (two writers never share one) and is
 // synced before the rename; the directory is synced after it, which is what
 // makes the rename itself durable.
-func writeFileDurable(path string, data []byte, perm os.FileMode) error {
+func Write(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {

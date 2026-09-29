@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
 )
 
 // ClusterServiceConfig is the part of service.json the node writes. Every
@@ -66,7 +68,7 @@ func (cm *ClusterConfigManager) saveConfig(path string, cfg *ClusterServiceConfi
 	if err != nil {
 		return fmt.Errorf("failed to marshal service.json: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := durablefile.Write(path, data, 0644); err != nil {
 		return fmt.Errorf("write the IPFS Cluster config %s: %w", path, err)
 	}
 	return nil

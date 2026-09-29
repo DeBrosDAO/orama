@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
+
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"go.uber.org/zap"
 )
@@ -199,7 +201,7 @@ func (cm *ClusterConfigManager) addTrustedPeer(peerID string) error {
 		}
 	}
 	existing = append(existing, peerID)
-	return os.WriteFile(cm.trustedPeersPath, []byte(strings.Join(existing, "\n")+"\n"), 0600)
+	return durablefile.Write(cm.trustedPeersPath, []byte(strings.Join(existing, "\n")+"\n"), 0600)
 }
 
 // loadTrustedPeersWithSelf loads trusted peers from file and ensures this node's

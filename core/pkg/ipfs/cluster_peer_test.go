@@ -192,3 +192,47 @@ func TestEnsureConfig_trustsEveryAuthenticatedPeer(t *testing.T) {
 		t.Errorf("this node's cluster peer ID was not recorded for the join handshake; file = %q", peersFile)
 	}
 }
+
+// The Kubo config used to be rewritten in place with os.WriteFile. A crash
+// before the data reached disk left a zero-filled config, and Kubo then
+// crash-looped on "invalid character '\x00'" (stagenet superman, 2026-09-29).
+// The config is now replaced by a synced rename: a new inode, never a partial file.
+func TestUpdateIPFSPeeringConfig_replacesTheConfigByRename(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "ipfs", "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(repo, "config")
+	if err := os.WriteFile(configPath, []byte(`{"Peering":{"Peers":[{"ID":"12D3KooWexisting","Addrs":["/ip4/10.0.0.2/tcp/4101"]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.Node.DataDir = dir
+	cm := &ClusterConfigManager{cfg: cfg, logger: zap.NewNop()}
+	if err := cm.UpdateIPFSPeeringConfig(nil); err != nil {
+		t.Fatalf("UpdateIPFSPeeringConfig: %v", err)
+	}
+	after, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(before, after) {
+		t.Fatal("the IPFS config was rewritten in place; a crash could leave it zero-filled")
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("config is not JSON after the write: %v", err)
+	}
+	if after.Mode().Perm() != 0o600 {
+		t.Fatalf("config mode %o", after.Mode().Perm())
+	}
+}

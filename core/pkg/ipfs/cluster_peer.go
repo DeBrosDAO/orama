@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
+
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -297,7 +299,7 @@ func (cm *ClusterConfigManager) UpdateIPFSPeeringConfig(peers []IPFSPeerEntry) e
 		return fmt.Errorf("failed to marshal IPFS config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, updatedData, 0600); err != nil {
+	if err := durablefile.Write(configPath, updatedData, 0600); err != nil {
 		return fmt.Errorf("failed to write IPFS config: %w", err)
 	}
 

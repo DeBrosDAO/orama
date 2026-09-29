@@ -174,3 +174,27 @@ func TestConfigureDatastore_missingConfig(t *testing.T) {
 		t.Error("expected error when IPFS config file is missing, got nil")
 	}
 }
+
+// A zero-filled config (an unsynced write lost in a crash) is refused with the
+// recovery named, not patched and not silently re-created.
+func TestCheckRepoConfig_refusesACorruptConfigWithTheRecovery(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := rootfs.At(dir)
+	if err := os.WriteFile(filepath.Join(repo, "config"), make([]byte, 3762), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := checkRepoConfig(root, repo)
+	if err == nil || !strings.Contains(err.Error(), "corrupt") || !strings.Contains(err.Error(), "move "+repo+" aside") {
+		t.Fatalf("got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "config"), []byte(`{"Identity":{"PeerID":"x"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkRepoConfig(root, repo); err != nil {
+		t.Fatalf("a valid config was refused: %v", err)
+	}
+}

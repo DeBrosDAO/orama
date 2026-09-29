@@ -1,8 +1,9 @@
 package rqlite
 
 import (
-	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/discovery"
 )
 
 func TestShouldReplaceHost(t *testing.T) {

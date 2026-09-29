@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
+
 	"go.uber.org/zap"
 )
 
@@ -96,7 +98,7 @@ func WriteClusterMembership(path string, m ClusterMembership) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
-	if err := writeFileDurable(path, append(data, '\n'), 0o644); err != nil {
+	if err := durablefile.Write(path, append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("write cluster membership record: %w", err)
 	}
 	return nil

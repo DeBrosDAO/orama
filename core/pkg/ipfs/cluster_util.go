@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
 )
 
 // clusterSecretHexLen is the length of the shared secret as stored: 32 random
@@ -67,7 +69,7 @@ func loadOrGenerateClusterSecret(path string, clusterPath string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("generate cluster secret: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+	if err := durablefile.Write(path, []byte(secret), 0o600); err != nil {
 		// Returning the secret after a failed write is how the old code produced
 		// a DIFFERENT secret on every restart.
 		return "", fmt.Errorf("write new cluster secret to %s: %w", path, err)

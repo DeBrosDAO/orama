@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
+
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"go.uber.org/zap"
 )
@@ -289,7 +291,7 @@ func writeMarker(dataDir, name, value string) error {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return fmt.Errorf("create data dir %s: %w", dataDir, err)
 	}
-	return writeFileDurable(filepath.Join(dataDir, name), []byte(value+"\n"), 0o644)
+	return durablefile.Write(filepath.Join(dataDir, name), []byte(value+"\n"), 0o644)
 }
 
 // RaftNodeID reports the raft id this node is registered under.

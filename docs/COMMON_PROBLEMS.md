@@ -488,6 +488,22 @@ the content owner's decision.
 
 ---
 
+## 19. IPFS daemon crash-loops: "error loading plugins: invalid character '\x00'"
+
+**Symptom:** `orama-namespace-ipfs@<ns>` restarts every few seconds, IPFS Cluster on that node
+fails, and the gateway reports `ipfs: error`. The journal shows
+`Error: error loading plugins: invalid character '\x00' looking for beginning of value`.
+
+**Cause:** the Kubo repo `config` is zero-filled. Before 0.122.113, `orama-node` rewrote that file
+in place when it refreshed the peering list, with no sync; a crash or reboot before the data
+reached disk left NUL bytes. The node's IPFS identity lives in that file, so it is lost.
+Since 0.122.113 the file is replaced by a synced rename (`pkg/durablefile`), so this cannot recur.
+
+**Fix:** `orama node upgrade` refuses the corrupt config and says so. Stop the node, move the repo
+directory it names aside, and run the upgrade on that node again. A new repo and IPFS identity are
+created, the other nodes re-learn it through the peering sync, and IPFS Cluster re-pins this node's
+replicas from the other two.
+
 ## General Debugging Tips
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands
