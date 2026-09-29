@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/install/installers"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"go.uber.org/zap"
 )
@@ -235,11 +236,55 @@ func (ps *ProductionSetup) InstallNamespaceTemplates() (err error) {
 	}
 
 	// The manager logs each template; the operator-facing summary is ours.
-	if err := systemd.NewManager("", zap.NewNop()).InstallTemplateUnits(sourceDir); err != nil {
-		return fmt.Errorf("install namespace systemd templates from %s: %w", sourceDir, err)
+	err = installIsolatedTemplates(isolationSteps{
+		ensureAccounts: ps.EnsureServiceAccounts,
+		installTemplates: func() error {
+			if err := systemd.NewManager("", zap.NewNop()).InstallTemplateUnits(sourceDir); err != nil {
+				return fmt.Errorf("install namespace systemd templates from %s: %w", sourceDir, err)
+			}
+			return nil
+		},
+		handRootConfigs: installers.RestrictCorefileToCoreDNS,
+	})
+	if err != nil {
+		return err
 	}
 
 	ps.logf("  ✓ Installed %d namespace template units from %s (daemon reloaded)",
 		len(systemd.UnitFilesToInstall()), sourceDir)
+	return nil
+}
+
+// isolationSteps are the parts of installing the templates that decide which
+// account each service runs as.
+type isolationSteps struct {
+	// ensureAccounts creates the isolated services' accounts.
+	ensureAccounts func() error
+	// installTemplates writes the unit files, isolated ones rendered with
+	// their account, and reloads systemd.
+	installTemplates func() error
+	// handRootConfigs gives the root-owned configs an isolated service reads
+	// (the Corefile) to that service's group.
+	handRootConfigs func() error
+}
+
+// installIsolatedTemplates runs steps in the one order that keeps every unit
+// able to read its config:
+//
+//   - the accounts first, since the units about to be loaded name them;
+//   - the templates next;
+//   - the configs' group last, right after the unit that reads them as that
+//     group is installed. A failure before it leaves the Corefile in the
+//     group the unit still on disk runs as.
+func installIsolatedTemplates(steps isolationSteps) error {
+	if err := steps.ensureAccounts(); err != nil {
+		return err
+	}
+	if err := steps.installTemplates(); err != nil {
+		return err
+	}
+	if err := steps.handRootConfigs(); err != nil {
+		return fmt.Errorf("hand the Corefile to the account the installed CoreDNS unit runs as: %w", err)
+	}
 	return nil
 }

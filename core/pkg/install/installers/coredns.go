@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"path/filepath"
 	"strconv"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -83,21 +82,37 @@ func (ci *CoreDNSInstaller) Configure(domain string, rq rqlite.Endpoint) error {
 	}
 
 	// Create Corefile (uses only RQLite plugin)
-	// The Corefile carries the cluster-wide rqlite password, so only root and
-	// the group CoreDNS runs as (orama-coredns, pkg/systemd isolatedServices)
-	// may read it — not the orama group, which every other Orama daemon is in.
-	// Chmod/chown as well, because WriteFile keeps an existing file's mode and
-	// owner: it used to be 0644, then root:orama.
+	// The Corefile carries the cluster-wide rqlite password, so it is 0640:
+	// chmod as well, because WriteFile keeps an existing file's mode — it used
+	// to be 0644. Its owner is left as it is: the group is the account the
+	// installed CoreDNS unit runs as, and it changes only together with that
+	// unit (RestrictCorefileToCoreDNS, after the templates are installed). A
+	// node upgraded from a release that ran CoreDNS as orama keeps root:orama
+	// until then, so its CoreDNS can read the Corefile until its new unit is.
 	corefile := ci.generateCorefile(domain, rq)
-	corefilePath := filepath.Join(configDir, "Corefile")
+	corefilePath := CorefilePath
 	if err := os.WriteFile(corefilePath, []byte(corefile), 0o640); err != nil {
 		return fmt.Errorf("failed to write Corefile: %w", err)
 	}
-	group, err := systemd.ServiceUser(string(systemd.ServiceTypeCoreDNS), systemd.Isolated(string(systemd.ServiceTypeCoreDNS)))
+	if err := os.Chmod(corefilePath, 0o640); err != nil {
+		return fmt.Errorf("chmod %s 0640: %w", corefilePath, err)
+	}
+	return nil
+}
+
+// CorefilePath is CoreDNS's config, read by orama-namespace-coredns@.
+const CorefilePath = "/etc/coredns/Corefile"
+
+// RestrictCorefileToCoreDNS makes the Corefile root:<group CoreDNS runs as>
+// 0640. It runs right after the namespace templates are installed, so the
+// Corefile's group and the installed CoreDNS unit's account change together.
+func RestrictCorefileToCoreDNS() error {
+	service := string(systemd.ServiceTypeCoreDNS)
+	group, err := systemd.ServiceUser(service, systemd.Isolated(service))
 	if err != nil {
 		return fmt.Errorf("the group CoreDNS reads its Corefile as: %w", err)
 	}
-	return restrictToGroup(corefilePath, group)
+	return restrictToGroup(CorefilePath, group)
 }
 
 // generateCorefile creates the CoreDNS configuration (RQLite only). The

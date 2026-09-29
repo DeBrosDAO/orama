@@ -444,8 +444,13 @@ Phase 2b installs the helper under the archive lock, and the post-swap step (`En
 Every gateway runs as `orama-namespace-gateway@<ns>` (`User=orama`, `ProtectSystem=strict`), to which `secrets/` and `configs/` are read-only, so it writes only under `data/`: its own keys and encryption-root cache in `data/namespaces/<ns>/gateway/`, tenant SQLite in `data/sqlite/`, deployments in `data/deployments/`, and the host TURN config in `data/turn/turn.yaml`. Namespace units read their env files from the root-owned `/var/lib/orama-unit-env/<ns>/<svc>.env`, and deployments read their environment and workload token from the root-only `/var/lib/orama-deploy/` — both written only through `orama-privhelper` (see [SECURITY.md](SECURITY.md)). A 0.122.x node holds all of this where the old code wrote it.
 
 Two namespace services run as their own account rather than as orama: `orama-namespace-coredns@` as `orama-coredns` and `orama-namespace-sfu@` as `orama-sfu`. Every other daemon still runs as orama; SECURITY.md, "Per-service accounts", says what keeps each one there. Install and upgrade handle the accounts themselves, so there is nothing to run by hand:
-- Phase 4 creates any account that is missing (`useradd --system --user-group --no-create-home --shell /usr/sbin/nologin`) and adds the orama user to `orama-sfu`. It then writes the Corefile `root:orama-coredns 0640`.
-- Phase 4b renders those two templates with `User=`/`Group=` set to the account and copies every other template unchanged.
+- Phase 4 writes the Corefile's content and mode (0640) and leaves its owner as it is.
+- Phase 4b runs three steps in order:
+  1. It creates any account that is missing (`useradd --system --user-group --no-create-home --shell /usr/sbin/nologin`, or `-g <name>` if the group already exists without its user) and adds the orama user to `orama-sfu`.
+  2. It renders those two templates with `User=`/`Group=` set to the account and copies every other template unchanged.
+  3. It hands the Corefile to `root:orama-coredns 0640`.
+
+  A failure before the last step leaves the Corefile in the group of the CoreDNS unit still on disk.
 - Phase 5 runs `chown -R orama:orama` on the tree, then sets every existing `data/namespaces/*/configs/sfu-*.yaml` to `orama:orama-sfu 0640`, before `orama-node` restarts.
 
 The steps run on every upgrade, and a node where they have already run is left as it is. The SFU runs `/usr/local/bin/sfu`, the copy Phase 2b installs, because `orama-sfu` cannot execute from `/opt/orama/bin` (`root:orama 0750`). The spawner, running as orama, writes new SFU configs into the `orama-sfu` group itself. If that group is missing, the node was not upgraded through `orama node upgrade`, and the SFU spawn fails and names the group.
