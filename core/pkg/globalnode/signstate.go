@@ -60,17 +60,16 @@ func (s SignState) String() string {
 	return fmt.Sprintf("height %d round %d step %d", s.Height, s.Round, s.Step)
 }
 
-// precommitStep is CometBFT's last signing step within a round.
-const precommitStep = 3
-
-// RestoreFloor is the floor a restored backup starts from: the operator's
-// reading of the network's current height, at its last step. The key then
-// signs nothing at or below that height, which a lost host may have signed.
-func RestoreFloor(height int64) (SignState, error) {
-	if height <= 0 {
-		return SignState{}, fmt.Errorf("the floor height must be the network's current height, above 0")
+// RestoreFloor is the floor a restored backup starts from, given the
+// network's latest committed height: the next height, round 0, step 0 (no
+// step signed). CometBFT then signs nothing at or below the latest committed
+// height, in any round. It may sign at the next height, so a vote the lost
+// host cast there is only excluded if it stopped before that height began.
+func RestoreFloor(latestCommitted int64) (SignState, error) {
+	if latestCommitted <= 0 {
+		return SignState{}, fmt.Errorf("the floor height must be the network's latest committed height, above 0")
 	}
-	return SignState{Height: height, Round: 0, Step: precommitStep}, nil
+	return SignState{Height: latestCommitted + 1}, nil
 }
 
 // encodeSignState writes s as CometBFT's priv_validator_state.json, with no

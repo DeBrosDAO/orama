@@ -36,8 +36,10 @@ state behind the floor. cancel removes a prepared migration key.
 
 A bundle from 'orama global validator reseal' (a restored backup) has no sign
 state. Its import needs --old-host-destroyed and --floor-height with the
-network's current height; that height (round 0, step 3) becomes both the floor
-and the state, so the restored key signs nothing a lost host may have signed.`,
+network's latest committed height H. The floor and the state become height H+1,
+round 0, before any step: the restored key signs nothing at or below H, in any
+round. It can sign at H+1, so a vote the lost host cast at H+1 is excluded only
+if that host stopped before H+1 began.`,
 }
 
 var migratePrepareCmd = &cobra.Command{
@@ -127,7 +129,7 @@ func init() {
 	i := migrateImportCmd.Flags()
 	i.StringVar(&migrateImportFlags.from, "from", "", "Bundle file from export or reseal [required]")
 	i.BoolVar(&migrateImportFlags.oldHostDestroyed, "old-host-destroyed", false, "For a reseal bundle: confirm the old host can never start again")
-	i.Int64Var(&migrateImportFlags.floorHeight, "floor-height", 0, "For a reseal bundle: the network's current height, the restored key's floor")
+	i.Int64Var(&migrateImportFlags.floorHeight, "floor-height", 0, "For a reseal bundle: the network's latest committed height; the key signs only above it")
 	migrateCmd.AddCommand(migratePrepareCmd, migrateExportCmd, migrateImportCmd, migrateCancelCmd)
 	validatorCmd.AddCommand(checkSignFloorCmd)
 	validatorCmd.AddCommand(migrateCmd)
@@ -218,7 +220,11 @@ func restoreFloor() (*globalnode.SignState, error) {
 
 // warnIfMigratedAway prints a warning when this host's validator key was
 // migrated away. The chain unit's ExecStartPre check is what refuses a start.
+// It says nothing when not run as root, which cannot read the state root.
 func warnIfMigratedAway(cmd *cobra.Command) {
+	if os.Geteuid() != 0 {
+		return
+	}
 	away, err := globalnode.DefaultHost().MigratedAway()
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not check the sign floor: %v\n", err)

@@ -1,11 +1,12 @@
 package globalnode
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"syscall"
+
+	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
 // Exported is what ExportMigration left behind on the old host.
@@ -36,7 +37,7 @@ func (h Host) ExportMigration(recipient *[32]byte, stillStopped func() error) (s
 		return nil, Exported{}, err
 	}
 	defer func() {
-		if rmErr := os.Remove(h.sentinelPath()); rmErr != nil {
+		if rmErr := h.Root.Remove(h.sentinelPath()); rmErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove the export sentinel %s: %w", h.sentinelPath(), rmErr))
 		}
 	}()
@@ -46,6 +47,13 @@ func (h Host) ExportMigration(recipient *[32]byte, stillStopped func() error) (s
 	}
 	if err := stillStopped(); err != nil {
 		return nil, Exported{}, fmt.Errorf("the chain is no longer stopped after its state was read: %w", err)
+	}
+	again, err := h.read(h.StatePath)
+	if err != nil {
+		return nil, Exported{}, err
+	}
+	if !bytes.Equal(again, state) {
+		return nil, Exported{}, fmt.Errorf("%s changed while the export read it; the chain signed during the export", h.StatePath)
 	}
 	return h.leave(recipient, key, state)
 }
@@ -88,12 +96,27 @@ func (h Host) leave(recipient *[32]byte, key, state []byte) ([]byte, Exported, e
 // createSentinel creates the export sentinel; one already there means another
 // export runs, or one was interrupted.
 func (h Host) createSentinel() error {
-	f, err := os.OpenFile(h.sentinelPath(), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, secretMode)
-	if errors.Is(err, fs.ErrExist) {
+	present, err := h.sentinelPresent()
+	if err != nil {
+		return err
+	}
+	if present {
 		return fmt.Errorf("%s exists: another export is running, or one was interrupted; check the chain home before removing it", h.sentinelPath())
 	}
-	if err != nil {
+	if err := h.Root.WriteFile(h.sentinelPath(), nil, secretMode); err != nil {
 		return fmt.Errorf("create %s: %w", h.sentinelPath(), err)
 	}
-	return f.Close()
+	return nil
+}
+
+// sentinelPresent reports whether the export sentinel exists.
+func (h Host) sentinelPresent() (bool, error) {
+	_, err := h.Root.ReadFile(h.sentinelPath(), rootfs.SmallFileLimit)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check %s: %w", h.sentinelPath(), err)
+	}
+	return true, nil
 }

@@ -60,7 +60,7 @@ host's migration key (--recipient, printed by 'orama global validator migrate
 prepare'). Run it on the machine that holds the private key, not on a node. The
 bundle carries no sign state: nobody knows what a lost host last signed. Its
 import therefore needs --old-host-destroyed and --floor-height <the network's
-current height>, which become the new host's floor and state.`,
+latest committed height>; the key then signs only above that height.`,
 	Args: cobra.NoArgs,
 	RunE: runReseal,
 }
@@ -123,7 +123,7 @@ func writeNewFile(cmd *cobra.Command, path string, data []byte) error {
 	if err != nil {
 		return clierr.Failure("create %s: %w", path, err)
 	}
-	if err := fillNewFile(f, data); err != nil {
+	if err := fillFile(f, data); err != nil {
 		if rmErr := os.Remove(path); rmErr != nil {
 			return clierr.Failure("%s: %v; the partial file could not be removed: %v", path, err, rmErr)
 		}
@@ -132,6 +132,9 @@ func writeNewFile(cmd *cobra.Command, path string, data []byte) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", path)
 	return nil
 }
+
+// fillFile is fillNewFile; a test replaces it to fail a write part-way.
+var fillFile = fillNewFile
 
 // fillNewFile writes, syncs and closes f.
 func fillNewFile(f *os.File, data []byte) error {

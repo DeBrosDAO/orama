@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,7 +123,7 @@ func TestRestoreFloor_flagsGoTogether(t *testing.T) {
 	}
 	migrateImportFlags.oldHostDestroyed = true
 	floor, err := restoreFloor()
-	if err != nil || floor == nil || floor.Height != 100 || floor.Step != 3 {
+	if err != nil || floor == nil || floor.Height != 101 || floor.Step != 0 {
 		t.Fatalf("restore floor = %v (%v)", floor, err)
 	}
 	migrateImportFlags.floorHeight = 0
@@ -143,5 +144,23 @@ func TestFillNewFile_failureIsReported(t *testing.T) {
 	f.Close()
 	if err := fillNewFile(f, []byte("x")); err == nil {
 		t.Fatal("a write to a closed file succeeded")
+	}
+}
+
+func TestWriteNewFile_removesThePartialFileOnFailure(t *testing.T) {
+	cmd, _ := newTestCmd()
+	path := filepath.Join(t.TempDir(), "sealed")
+	fillFile = func(f *os.File, data []byte) error {
+		f.Write(data[:1])
+		f.Close()
+		return errors.New("disk full")
+	}
+	t.Cleanup(func() { fillFile = fillNewFile })
+	err := writeNewFile(cmd, path, []byte("sealed"))
+	if err == nil || !strings.Contains(err.Error(), "partial file was removed") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("the partial file is still there")
 	}
 }

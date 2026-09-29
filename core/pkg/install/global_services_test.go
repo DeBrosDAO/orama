@@ -113,9 +113,18 @@ func TestGlobalServiceUnits_orderAfterTheChain(t *testing.T) {
 }
 
 func TestSSHDPorts_readsPortAndListenAddressLines(t *testing.T) {
-	out := "port 22\nlistenaddress [::]:2222\nlistenaddress 0.0.0.0:22\nlistenaddress 10.0.0.5\npermitrootlogin no\n"
-	if got := sshdPorts(out); !slices.Equal(got, []string{"22", "2222"}) {
-		t.Fatalf("ports = %v", got)
+	out := "port 22\nlistenaddress [::]:2222\nlistenaddress 0.0.0.0:2200 rdomain mgmt\nlistenaddress 10.0.0.5\npermitrootlogin no\n"
+	if got := sshdPorts(out); !slices.Equal(got, []string{"2222", "2200"}) {
+		t.Fatalf("ports = %v, want only the listenaddress ports", got)
+	}
+	if got := sshdPorts("port 22\nport 2022\n"); !slices.Equal(got, []string{"22", "2022"}) {
+		t.Fatalf("with no listenaddress, ports = %v", got)
+	}
+	listenOnly := func(string, ...string) ([]byte, error) {
+		return []byte("port 22\nlistenaddress 0.0.0.0:2222\n"), nil
+	}
+	if err := checkSSHPort(listenOnly, 22); err == nil {
+		t.Fatal("--ssh-port 22 was accepted while sshd listens only on 0.0.0.0:2222")
 	}
 	run := func(string, ...string) ([]byte, error) { return []byte("listenaddress [::]:2222\n"), nil }
 	if err := checkSSHPort(run, 2222); err != nil {

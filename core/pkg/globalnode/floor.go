@@ -85,10 +85,10 @@ func (h Host) CheckSignFloor() error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Lstat(h.sentinelPath()); err == nil {
+	if present, err := h.sentinelPresent(); err != nil {
+		return err
+	} else if present {
 		return fmt.Errorf("a validator migration export is in progress (%s); the chain must not start", h.sentinelPath())
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("check %s: %w", h.sentinelPath(), err)
 	}
 	if floor == nil {
 		return nil

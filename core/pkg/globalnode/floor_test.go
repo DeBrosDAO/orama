@@ -101,3 +101,34 @@ func TestExportMigration_oldHostCannotStartAgain(t *testing.T) {
 		t.Fatalf("the restored key and state are refused: %v", err)
 	}
 }
+
+func TestExportMigration_stateChangedDuringExportAborts(t *testing.T) {
+	src := newHost(t)
+	write(t, src.StatePath, stateJSON("10", 0, 3))
+	pub, _, _ := box.GenerateKey(rand.Reader)
+	signed := func() error {
+		write(t, src.StatePath, stateJSON("11", 0, 1))
+		return nil
+	}
+	if _, _, err := src.ExportMigration(pub, signed); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("err = %v, want the changed state refused", err)
+	}
+	if _, err := os.Stat(src.KeyPath); err != nil {
+		t.Fatal("an aborted export moved the key")
+	}
+}
+
+func TestExportSentinel_leftoverBlocksExportAndStart(t *testing.T) {
+	h := newHost(t)
+	write(t, h.sentinelPath(), nil)
+	pub, _, _ := box.GenerateKey(rand.Reader)
+	if _, _, err := h.ExportMigration(pub, stopped); err == nil || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("err = %v, want a second export refused", err)
+	}
+	if err := h.CheckSignFloor(); err == nil || !strings.Contains(err.Error(), "in progress") {
+		t.Fatalf("err = %v, want the start refused", err)
+	}
+	if _, err := os.Stat(h.sentinelPath()); err != nil {
+		t.Fatal("a refused export removed another export's marker")
+	}
+}

@@ -122,28 +122,30 @@ func checkSSHPort(run commandRunner, port int) error {
 	return fmt.Errorf("sshd listens on port %s, not --ssh-port %d; enabling ufw would cut SSH, so pass the port sshd uses", strings.Join(ports, ", "), port)
 }
 
-// sshdPorts are the ports in `sshd -T` output.
+// sshdPorts are the ports sshd listens on, from `sshd -T` output. sshd
+// binds its ListenAddress entries when there are any, each with its own port
+// (`listenaddress host:port`, optionally followed by `rdomain <name>`), and
+// its Port entries only when there are none.
 func sshdPorts(out string) []string {
-	var ports []string
+	var listen, plain []string
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) != 2 {
+		if len(fields) < 2 {
 			continue
 		}
-		port := ""
-		switch fields[0] {
-		case "port":
-			port = fields[1]
-		case "listenaddress":
-			if _, p, err := net.SplitHostPort(fields[1]); err == nil {
-				port = p
+		switch {
+		case fields[0] == "listenaddress":
+			if _, p, err := net.SplitHostPort(fields[1]); err == nil && !slices.Contains(listen, p) {
+				listen = append(listen, p)
 			}
-		}
-		if port != "" && !slices.Contains(ports, port) {
-			ports = append(ports, port)
+		case fields[0] == "port" && len(fields) == 2 && !slices.Contains(plain, fields[1]):
+			plain = append(plain, fields[1])
 		}
 	}
-	return ports
+	if len(listen) > 0 {
+		return listen
+	}
+	return plain
 }
 
 // applyGlobalFirewall adds the public rules of the installed services. They

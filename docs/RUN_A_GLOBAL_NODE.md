@@ -246,12 +246,15 @@ Only when the old host is gone for good:
 
 1. New host: `sudo orama global validator migrate prepare`.
 2. Your machine: `orama global validator reseal --from validator-key.orbk --identity-file <private key file, 0600> --recipient <key> --to restore.orbk`.
-3. New host: `sudo orama global validator migrate import --from restore.orbk --old-host-destroyed --floor-height <the network's current height>`.
+3. New host: `sudo orama global validator migrate import --from restore.orbk --old-host-destroyed --floor-height <the network's latest committed height>`.
 
 A backup carries no sign state, so the import refuses it without both flags.
-The height you give (round 0, step 3) becomes the floor and the state: the
-restored key signs nothing at or below it. Read the height from a node you trust
-right before the import. If the old host can still start with its copy of the
+Give the network's **latest committed height** H, read from a node you trust
+right before the import. The floor and the state become H+1, round 0, before
+any step: the restored key signs nothing at or below H, in any round. It can
+sign at H+1, so a vote the lost host cast at H+1 is excluded only if that host
+stopped before H+1 began. An import never lowers a floor already recorded on
+the host; a bundle or height below it is refused. If the old host can still start with its copy of the
 key, it and the new host will double sign; the flag is your statement that it
 cannot.
 
