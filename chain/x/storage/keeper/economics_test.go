@@ -256,3 +256,48 @@ func TestEarlyNetworkSubsidyIsZero(t *testing.T) {
 	require.True(t, f.epochMint(t, 1).IsZero())
 	f.requireInvariants(t)
 }
+
+// A settlement queue that lags past x/emission's ceiling window must still
+// pay. The payments were minted into reserve when the epoch closed, so a
+// pruned ceiling record cannot fail EndBlock and halt the chain.
+func TestSettlement_paysFromTheReserveAfterTheCeilingIsPruned(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, func(gs *types.GenesisState) {
+		gs.Params.SMinProviders = 2
+		gs.Params.SFullProviders = 2
+		gs.Params.MaxSettlementsPerBlock = 1
+	})
+	f.Emission.ceiling[1] = math.NewInt(100_000)
+	f.threeNodes(t, 1<<20)
+	client := acc(9)
+	f.fund(client, 100_000_000)
+	data := payload(7)
+	id := f.createDeal(t, types.DealClass_DEAL_CLASS_PRIVATE, client, "", 3, 1_000, 1, []types.PieceCommitment{
+		commit(t, data), commit(t, data), commit(t, data),
+	})
+	f.end(t)
+	f.begin(t)
+	f.acceptAll(t, id, 3)
+	for i := uint32(0); i < 3; i++ {
+		f.proveSlot(t, id, i, data)
+	}
+	f.end(t)
+	f.Emission.epoch = 2
+	f.begin(t) // closes epoch 1 and reserves its storage payments
+	reserved := f.Emission.minted[1]
+	require.True(t, reserved.IsPositive(), "the epoch's payments were minted when it closed")
+	f.requireInvariants(t)
+
+	delete(f.Emission.ceiling, 1) // x/emission pruned the record
+	for blocks := 0; ; blocks++ {
+		require.NoError(t, f.Keeper.EndBlock(f.Ctx), "a pruned ceiling must not fail EndBlock")
+		q, err := f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
+		require.NoError(t, err)
+		if q.Pending == 0 {
+			break
+		}
+		require.Less(t, blocks, 50)
+	}
+	require.True(t, f.epochMint(t, 1).Equal(reserved), "every reserved payment was paid")
+	f.requireInvariants(t)
+}

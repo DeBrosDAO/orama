@@ -84,43 +84,16 @@ func (k Keeper) CheckInvariants(ctx sdk.Context) (StorageInvariants, error) {
 	}); err != nil {
 		return StorageInvariants{}, err
 	}
-	seenEpoch := map[uint64]struct{}{}
-	if err := k.EpochMinted.Walk(ctx, nil, func(epoch uint64, minted math.Int) (bool, error) {
-		seenEpoch[epoch] = struct{}{}
-		ceiling, err := k.emission.StorageCeiling(ctx, epoch)
-		if err != nil {
-			return false, err
-		}
-		if ceiling.IsNil() {
-			ceiling = math.ZeroInt()
-		}
-		pending := pendingMint[epoch]
-		if pending.IsNil() {
-			pending = math.ZeroInt()
-		}
-		if minted.Add(pending).GT(ceiling) {
-			subsidyOK = false
-			subsidyDetail = fmt.Sprintf("epoch %d minted %s + pending %s exceeds ceiling %s", epoch, minted, pending, ceiling)
-		}
-		return false, nil
-	}); err != nil {
-		return StorageInvariants{}, err
+	// Every queued mint payment was minted into the storage module account
+	// when its epoch closed, and x/emission refused anything past that
+	// epoch's ceiling then. The account holds exactly what is still owed.
+	owed := math.ZeroInt()
+	for _, pending := range pendingMint {
+		owed = owed.Add(pending)
 	}
-	for epoch, pending := range pendingMint {
-		if _, ok := seenEpoch[epoch]; ok {
-			continue
-		}
-		ceiling, err := k.emission.StorageCeiling(ctx, epoch)
-		if err != nil {
-			return StorageInvariants{}, err
-		}
-		if ceiling.IsNil() {
-			ceiling = math.ZeroInt()
-		}
-		if pending.GT(ceiling) {
-			subsidyOK = false
-			subsidyDetail = fmt.Sprintf("epoch %d pending mint %s exceeds ceiling %s", epoch, pending, ceiling)
-		}
+	if held := k.moduleBalance(ctx, types.ModuleName); !held.Equal(owed) {
+		subsidyOK = false
+		subsidyDetail = fmt.Sprintf("storage account holds %s but queued mint payments are %s", held, owed)
 	}
 
 	reservedOK := true

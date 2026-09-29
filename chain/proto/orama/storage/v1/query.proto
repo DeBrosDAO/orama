@@ -93,6 +93,10 @@ message QueryInvariantsRequest {}
 
 message QueryInvariantsResponse {
   bool escrow_conserved = 1;
+  // subsidy_within_ceiling: each epoch's storage payments are minted by
+  // x/emission when the epoch closes, which refuses more than the epoch's
+  // ceiling, and the storage module account holds exactly the payments the
+  // settlement queue still owes.
   bool subsidy_within_ceiling = 2;
   bool distinct_operators = 3;
   bool reserved_within_declared = 4;

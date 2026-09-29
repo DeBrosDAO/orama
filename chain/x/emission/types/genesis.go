@@ -20,6 +20,7 @@ func DefaultGenesisState() *GenesisState {
 			CumulativeBurned:            math.ZeroInt(),
 			GenesisSupply:               math.ZeroInt(),
 			CumulativeDevelopmentMinted: math.ZeroInt(),
+			CumulativeServiceMinted:     math.ZeroInt(),
 		},
 		Ceilings: []CeilingRecord{},
 	}
@@ -64,6 +65,7 @@ func (gs GenesisState) Validate() error {
 
 	seen := make(map[uint64]bool, len(gs.Ceilings))
 	developmentMintedSum := math.ZeroInt()
+	serviceMintedSum := math.ZeroInt()
 	for _, c := range gs.Ceilings {
 		if seen[c.Epoch] {
 			return fmt.Errorf("duplicate ceiling record for epoch %d", c.Epoch)
@@ -94,6 +96,14 @@ func (gs GenesisState) Validate() error {
 		if mintedRelay.IsNegative() || mintedRelay.GT(c.RelayCeiling) {
 			return fmt.Errorf("ceiling record for epoch %d relay_minted must be in [0, relay_ceiling], got %s", c.Epoch, mintedRelay)
 		}
+		mintedStorage := c.StorageMinted
+		if mintedStorage.IsNil() {
+			mintedStorage = math.ZeroInt()
+		}
+		if mintedStorage.IsNegative() || mintedStorage.GT(c.StorageCeiling) {
+			return fmt.Errorf("ceiling record for epoch %d storage_minted must be in [0, storage_ceiling], got %s", c.Epoch, mintedStorage)
+		}
+		serviceMintedSum = serviceMintedSum.Add(mintedRelay).Add(mintedStorage)
 
 		want := SplitEpochMint(MaxMintableForEpoch(c.Epoch))
 		if !c.StorageCeiling.Equal(want.Storage) || !c.RelayCeiling.Equal(want.Relay) ||
@@ -117,6 +127,16 @@ func (gs GenesisState) Validate() error {
 	// The total may be larger: pruning drops the record and keeps the cumulative.
 	if cumulativeDevelopment.LT(developmentMintedSum) {
 		return fmt.Errorf("cumulative_development_minted %s is less than the %s still recorded on ceiling records", cumulativeDevelopment, developmentMintedSum)
+	}
+	cumulativeService := gs.EpochState.CumulativeServiceMinted
+	if cumulativeService.IsNil() {
+		cumulativeService = math.ZeroInt()
+	}
+	if cumulativeService.IsNegative() {
+		return fmt.Errorf("cumulative_service_minted must be a non-negative integer")
+	}
+	if cumulativeService.LT(serviceMintedSum) {
+		return fmt.Errorf("cumulative_service_minted %s is less than the %s still recorded on ceiling records", cumulativeService, serviceMintedSum)
 	}
 
 	return nil

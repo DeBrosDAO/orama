@@ -768,7 +768,11 @@ func (m *QueryInvariantsRequest) XXX_DiscardUnknown() {
 var xxx_messageInfo_QueryInvariantsRequest proto.InternalMessageInfo
 
 type QueryInvariantsResponse struct {
-	EscrowConserved        bool   `protobuf:"varint,1,opt,name=escrow_conserved,json=escrowConserved,proto3" json:"escrow_conserved,omitempty"`
+	EscrowConserved bool `protobuf:"varint,1,opt,name=escrow_conserved,json=escrowConserved,proto3" json:"escrow_conserved,omitempty"`
+	// subsidy_within_ceiling: each epoch's storage payments are minted by
+	// x/emission when the epoch closes, which refuses more than the epoch's
+	// ceiling, and the storage module account holds exactly the payments the
+	// settlement queue still owes.
 	SubsidyWithinCeiling   bool   `protobuf:"varint,2,opt,name=subsidy_within_ceiling,json=subsidyWithinCeiling,proto3" json:"subsidy_within_ceiling,omitempty"`
 	DistinctOperators      bool   `protobuf:"varint,3,opt,name=distinct_operators,json=distinctOperators,proto3" json:"distinct_operators,omitempty"`
 	ReservedWithinDeclared bool   `protobuf:"varint,4,opt,name=reserved_within_declared,json=reservedWithinDeclared,proto3" json:"reserved_within_declared,omitempty"`

@@ -117,6 +117,9 @@ func (k Keeper) closeEpoch(ctx sdk.Context, epoch uint64) error {
 		rows = append(rows, row)
 	}
 	mints, tops := types.ComputeMintPlan(claims, ceiling, cap)
+	if err := k.reserveMints(ctx, epoch, mints); err != nil {
+		return err
+	}
 	for _, row := range rows {
 		mint := math.ZeroInt()
 		top := math.ZeroInt()
@@ -143,6 +146,25 @@ func (k Keeper) closeEpoch(ctx sdk.Context, epoch uint64) error {
 		if err := k.Challenges.Remove(ctx, item.key); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// reserveMints has x/emission mint the epoch's whole storage payment into the
+// storage module account when the epoch closes, while its ceiling record is
+// certain to exist. Settlement later pays each item from that reserve, so a
+// settlement queue that lags past x/emission's ceiling window never needs a
+// pruned record.
+func (k Keeper) reserveMints(ctx sdk.Context, epoch uint64, mints []math.Int) error {
+	total := math.ZeroInt()
+	for _, m := range mints {
+		total = total.Add(m)
+	}
+	if !total.IsPositive() {
+		return nil
+	}
+	if err := k.emission.MintStorageService(ctx, epoch, total); err != nil {
+		return fmt.Errorf("failed to reserve epoch %d storage payments: %w", epoch, err)
 	}
 	return nil
 }
@@ -331,9 +353,7 @@ func (k Keeper) payItem(ctx sdk.Context, deal *types.Deal, item types.Settlement
 		credited = true
 	}
 	if item.MintPay.IsPositive() {
-		if err := k.emission.MintStorageService(ctx, item.Epoch, item.MintPay); err != nil {
-			return false, fmt.Errorf("failed to mint storage payment: %w", err)
-		}
+		// Minted when the epoch closed (reserveMints); paid from that reserve.
 		if err := k.payService(ctx, types.ModuleName, operator, item.MintPay); err != nil {
 			return false, err
 		}

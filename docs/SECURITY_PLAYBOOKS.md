@@ -13,7 +13,7 @@ Each module that holds or moves norama checks its own books.
 |---|---|---|
 | `x/emission` | Minted matches the schedule. Bank supply equals genesis supply + validator mints + development mints + storage/relay service mints − burned | `oramad query emission invariants` |
 | `x/fees` | Earnings total equals the fees account, open deposits equal the deposits account, burned + distributed equals collected | `oramad query fees invariants` |
-| `x/storage` | Escrow conserved, subsidy within ceiling, distinct operators, reserved within declared, settlement queue well formed | `oramad query storage invariants` |
+| `x/storage` | Escrow conserved; the storage account holds exactly the queued mint payments (minted at epoch close, within the ceiling); distinct operators; reserved within declared; settlement queue well formed | `oramad query storage invariants` |
 | `x/nodes` | Module balance equals role bonds plus unbonding entries; active and capacity rules | `oramad query nodes invariants` |
 | `x/relay` | Each settled epoch mints within its relay ceiling and its payouts sum to what was minted | `oramad query relay invariants` |
 | `x/houses` | Locked house bonds equal the houses account | `oramad query houses invariants` |
