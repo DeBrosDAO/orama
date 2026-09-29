@@ -162,6 +162,10 @@ Sandbox nodes get their certificates from Let's Encrypt's staging CA (`--acme-ca
 
 The SSH host keys each server presents on first contact (trust on first use) are pinned in `~/.orama/sandboxes/<name>.known_hosts` — not in your `~/.ssh/known_hosts`, because Hetzner reuses addresses. They are read with `ssh-keyscan` right after the server is created, as soon as its sshd answers and before any command, archive or invite is sent to it; cloud-init writes the host keys before sshd starts. `create`'s floating-IP setup, archive uploads, staging, invites, installs and health waits, and `rollout`'s push to the first node, leader detection and upgrades check against them. `orama push` uploads from this machine to each node and does not copy SSH keys onto a hub; each node verifies the archive against its trust anchor regardless. `status`, `ssh` and create's final health report do not check host keys. See [SECURITY.md](SECURITY.md), "Build-archive signing and the trust anchor".
 
+## Running the cluster guide against a sandbox
+
+`orama sandbox create` installs the cluster itself, so it cannot run the install steps of [RUN_YOUR_OWN_CLUSTER.md](RUN_YOUR_OWN_CLUSTER.md) (those need bare machines). Its cluster does serve as the fixture for the guide's "Use it" and "Check it" sections: `E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster`. See [DEV_DEPLOY.md](DEV_DEPLOY.md), "Cluster guide e2e".
+
 ## Cost
 
 | Resource | Cost | Qty |

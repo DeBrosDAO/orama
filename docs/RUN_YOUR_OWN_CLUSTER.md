@@ -93,10 +93,29 @@ orama deploy static ./site --name www
 
 `orama auth login` signs in to the active environment's gateway. Creating a
 namespace does not sign you into it; the second login does. `orama deploy
-static` publishes the directory as the deployment `www`.
+static` publishes a directory (any directory with an `index.html`; `./site` here)
+as the deployment `www`.
 
 Further nameserver detail, including installing by hand on the VPS with
 `orama node install`, is [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md).
+
+## Check it
+
+```bash
+orama status --env mycluster
+orama app list
+```
+
+`orama status` reads every node's health from the cluster's operator telemetry
+API, so it needs the sign-in above, with the RootWallet account you ran
+`orama node setup` with: that account is the cluster's operator. A node is healthy when its gateway answers
+and its RQLite is Leader or Follower; all three of yours should say so.
+`orama app list` shows `www`.
+
+Every command in Install, Use it and Check it is executed, in this order, by
+`make e2e-cluster` against machines the repo's owner provides
+(`core/e2e/clusterguide`, see [DEV_DEPLOY.md](DEV_DEPLOY.md), "Cluster guide
+e2e"). Change a command here and that test fails until its plan matches.
 
 ## A sealed backup
 

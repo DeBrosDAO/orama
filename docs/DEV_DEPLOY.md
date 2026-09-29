@@ -124,6 +124,78 @@ The convergence predicates (`Converged`, `LeaderAgreement`, `Forgotten`,
 recorded report shapes. That is what stops the harness from going green by
 asserting nothing.
 
+### Cluster guide e2e
+
+`docs/RUN_YOUR_OWN_CLUSTER.md` is a promise that a stranger can go from bare
+machines to a working private cluster with no manual SQL. `core/e2e/clusterguide`
+keeps it by executing the page: it parses the page's command blocks and runs them
+in order (install the first node, print the delegation, join two more,
+`orama env use`, `orama auth login`, `orama namespace create`, sign in to the
+namespace, `orama deploy static`, then `orama status --json` and `orama app
+list`), substituting the page's example addresses, domain, environment and
+archive with the fixture's. It checks the results: the delegation output names
+your domain, all three nodes report `healthy`, and `www` is listed.
+
+The page and the executed steps cannot drift. `Plan()` in
+`core/e2e/clusterguide/plan.go` lists every command the page must contain, with
+the flags each needs; `TestPlanMatchesTheGuideOnDisk` runs in `make test`, with no
+machines, and fails when the page gains, loses, reorders or renames a command,
+drops a needed flag, or introduces an example value the fixture cannot bind.
+The parser and the step runner are unit-tested against a fake executor.
+
+The run against machines is behind the `e2e_cluster` build tag and skips unless
+`E2E_CLUSTER_BASE_DOMAIN` is set. It installs Orama on the servers you name, so it
+is not part of `make test`; you run it:
+
+```bash
+E2E_CLUSTER_IPS=<ip1>,<ip2>,<ip3> \
+E2E_CLUSTER_BASE_DOMAIN=<a domain whose NS you can publish> \
+E2E_CLUSTER_ARCHIVE=<the path orama build printed> \
+make e2e-cluster
+```
+
+| Variable | Purpose |
+|----------|---------|
+| `E2E_CLUSTER_BASE_DOMAIN` | The domain the cluster is named under (required) |
+| `E2E_CLUSTER_IPS` | Three or more bare Linux machines, comma separated; the first is the genesis nameserver |
+| `E2E_CLUSTER_ARCHIVE` | Build archive, signed by the RootWallet account that is unlocked (`orama build`) |
+| `E2E_CLUSTER_ENV` | Environment name to create (default `e2eguide`; the page's `mycluster` is replaced by it) |
+| `E2E_CLUSTER_CLOUDFLARE_TOKEN_FILE` | Optional. Runs the page's `--cloudflare-token-file` step; without it the delegation must already exist |
+| `E2E_CLUSTER_DELEGATION_WAIT` | How long to wait for the NS records and the genesis certificate (default `20m`) |
+| `E2E_CLUSTER_HOST_KEYS` | Optional SSH fingerprints (`SHA256:...`), one per IP; without them the harness reads each machine's with `ssh-keyscan` |
+| `E2E_CLUSTER_MODE` | `full` (default) or `use-only` |
+| `E2E_CLUSTER_ORAMA` | The `orama` binary (default: built into `core/bin/orama`) |
+
+Before running: the RootWallet desktop app open and unlocked, and a vault login
+for each machine (`rw vault add <ip>`), because the page's `orama node setup`
+uses `--password`. The harness never types a secret and never runs `rw`. The page
+installs with `--acme-ca letsencrypt-staging`, so no production certificate quota
+is used. The run records the environment in `~/.orama` and makes it the active one
+(`orama env use`); switch back with `orama env use <previous>`.
+
+**The sandbox and this test.** `orama sandbox create` (see [SANDBOX.md](SANDBOX.md))
+provisions servers and installs the cluster itself, over an SSH key, from its own
+code path, so it cannot stand in for the page's install steps: those need machines
+that are still bare and that have a password login. It does fit the second half.
+`E2E_CLUSTER_MODE=use-only` skips the Install section (it is still matched against
+the page) and runs Use it and Check it against a cluster that already exists:
+
+```bash
+orama sandbox create --name guide
+E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox \
+E2E_CLUSTER_BASE_DOMAIN=<the sandbox domain from orama sandbox setup> \
+make e2e-cluster
+orama sandbox destroy --name guide
+```
+
+`create` records the environment as `sandbox`. For the install half, use any
+three fresh servers (a Hetzner project of your own, for instance), destroy them
+afterwards, and expect about half an hour plus the DNS wait.
+
+What it does not check: that the deployed site answers over HTTPS on its own
+name (the page names no URL to fetch), and that the cluster survives a restart
+(that is the lifecycle harness above).
+
 ## Deploying to VPS
 
 All binaries are pre-compiled locally and shipped as a binary archive. Zero compilation on the VPS.

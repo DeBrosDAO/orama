@@ -164,6 +164,30 @@ rollout-testnet:
 docs:
 	go test -count=1 ./cmd/orama -run TestCLIReference -update-cli-reference
 
+# The run-your-own-cluster guide (docs/RUN_YOUR_OWN_CLUSTER.md) executed step by
+# step against machines you provide. It installs Orama on real servers, so it
+# never runs from `make test`: see docs/DEV_DEPLOY.md, "Cluster guide e2e".
+.PHONY: e2e-cluster
+e2e-cluster:
+	@if [ -z "$$E2E_CLUSTER_BASE_DOMAIN" ]; then \
+		echo "E2E_CLUSTER_BASE_DOMAIN is not set."; \
+		echo "  full run:  E2E_CLUSTER_IPS=ip1,ip2,ip3 E2E_CLUSTER_BASE_DOMAIN=<domain> E2E_CLUSTER_ARCHIVE=<orama build archive> make e2e-cluster"; \
+		echo "  use-only:  E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster"; \
+		echo "  see docs/DEV_DEPLOY.md, Cluster guide e2e"; \
+		exit 2; \
+	fi
+	@mkdir -p bin
+	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/orama/
+	E2E_CLUSTER_ORAMA="$${E2E_CLUSTER_ORAMA:-$(CURDIR)/bin/orama}" \
+		go test -count=1 -v -tags e2e_cluster -timeout 100m -run TestRunYourOwnClusterGuide ./e2e/clusterguide/...
+
+# The co-located network namespace layout (core/pkg/globalnetns) built for real
+# on this Linux machine. Needs root, iproute2 and nftables; it never runs on
+# darwin. See docs/RUN_A_GLOBAL_NODE.md, "Sharing a machine with a cluster node".
+.PHONY: test-netns
+test-netns:
+	go test -count=1 -v -tags netns_integration ./pkg/globalnetns/...
+
 # Contract tests against the fixtures in ../contracts.
 #
 # -count=1 is required: the fixtures live above this Go module, so the test

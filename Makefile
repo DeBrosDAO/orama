@@ -19,6 +19,11 @@ core-lint:
 core-clean:
 	$(MAKE) -C core clean
 
+# === Cluster guide e2e (executes docs/RUN_YOUR_OWN_CLUSTER.md on machines you provide) ===
+.PHONY: e2e-cluster
+e2e-cluster:
+	$(MAKE) -C core e2e-cluster
+
 # === Website ===
 .PHONY: website website-dev website-build
 website-dev:
