@@ -1105,8 +1105,9 @@ rejected.
 `bond * 1 GiB / bond_per_gib` when the STORAGE bond is positive, and
 `probation_capacity_bytes` when it is zero (C2's probation cap). `Slash` burns the same
 fraction of the role's bond and of that role's unbonding entries. It clamps declared capacity
-down to the new backing, and it fails without writing if reserved bytes would then exceed that
-backing. `Jail` / `Unjail` are keeper methods: a jailed node is not active and leaves the
+down to the new backing and then clamps reserved bytes down to the clamped declaration: a slash
+is a penalty and never fails because the node is busy (x/storage, which keeps the reservations of
+its own replicas, releases the replicas the smaller declaration cannot hold). `Jail` / `Unjail` are keeper methods: a jailed node is not active and leaves the
 capacity index. `ReserveCapacity` / `ReleaseCapacity` move free capacity for a later storage
 module. `CreditRoleBond` increases a role bond only when the module account already holds the
 coins; it does not mint.
@@ -1251,29 +1252,59 @@ either can still hold PRIVATE and PUBLIC_PIN user deals, where only distinct ope
 fails `FinalizeBlock` on every validator, so a per-node, per-deal or per-user record that cannot be
 processed must not do it. The per-item work of x/storage (node reconciliation, each settlement row,
 deal assignment, accept windows, challenge opening, deal expiry, probation expiry, the scheduled
-protocol deals, scoring a closed challenge, counting active operators) runs on its own cache branch:
-a failure rolls that item back, emits `storage_item_failed` (`kind`, `subject`, `consecutive`,
-`error`) and the block goes on. Reading or writing the module's own indexes and counters still fails
-the block, because then the state can no longer be trusted. What happens to the failed item depends on
-it:
-- a settlement row is **dropped**: it pays nothing, the deal keeps the escrow the row would have moved
-  (returned to the client when the deal expires), and the mint reserved for it is burned so the
-  storage account keeps holding exactly the mint payments still queued;
+protocol deals, scoring a closed challenge, counting active operators, the penalty of a miss) runs on
+its own cache branch: a failure rolls that item back, emits `storage_item_failed` (`kind`, `subject`,
+`consecutive`, `error`) and the block goes on.
+
+Only failures that are about the one item are isolated: an error marked `ErrItemRejected` (every
+error a collaborator module returns while x/storage asks it to act for the item, an item that
+cannot be paid, a malformed record) or a record the item points to that is gone. Every other error,
+and every error that wraps a collections encoding fault even when a collaborator reports it, is a
+fault of the state machine and fails the block: reading or writing the module's own indexes and
+counters, or decoding what they hold, means the state can no longer be trusted. What happens to
+the failed item depends on it:
+- a settlement row is **queued again** behind the rows already waiting, with its `attempts` raised
+  (`storage_settlement_requeued`), so a failure that clears by itself costs the operator nothing. On
+  the `MaxSettlementAttempts`-th failure (5, a constant: it only bounds how long a broken row can
+  occupy the queue) the row is **dropped** (`storage_settlement_dropped`): it pays nothing, the deal
+  keeps the escrow the row would have moved (returned to the client when the deal expires), and the
+  mint reserved for it is burned so the storage account keeps holding exactly the mint payments
+  still queued and x/emission's supply invariant keeps holding. The burn must succeed; if it fails
+  the block fails, because a mint left behind breaks the storage invariant;
 - node reconciliation, deal assignment, accept windows, challenge opening, deal expiry and probation
   expiry are **retried** in the next block;
 - a scheduled protocol deal that cannot be created still counts as scheduled for its epoch.
 
+**A miss is always recorded and always evicts at the threshold.** A missed challenge raises the
+slot's consecutive misses, a slot at `miss_threshold` is evicted and repaired, and from the second
+consecutive miss on the node is penalized. The penalty runs in its own isolated branch after the
+miss is recorded (`slash` failures), so a node whose penalty fails still loses the slot it does not
+serve. The penalty is `slash_fraction` of one epoch's price of the missed deal:
+- a bonded node is slashed through x/nodes, which clamps its declared capacity to what the smaller
+  bond backs; x/storage then evicts the node's most recently assigned replicas until its reserved
+  bytes fit the clamped declaration, so reserved never exceeds declared;
+- a probation node has no bond: its record deposit is its stake and is burned (`SlashDeposit`, at
+  most what it holds; a deposit burned in full is closed and the node earns a new one from its next
+  credit, `storage_probation_slashed`). A probation node that has not earned a deposit yet has
+  nothing to slash: its miss still counts and it is still evicted.
+
 x/storage counts the consecutive failures per subject (a node id, or `deal/<id>`) and kind (`sync`,
-`settlement`, `deposit`, `challenge`, `scoring`, `operators`, `probation`, `deal`): the
+`settlement`, `deposit`, `challenge`, `scoring`, `operators`, `probation`, `deal`, `slash`): the
 `NodeFailures` query returns a node's counts (empty when it applies cleanly), the counts are in
 genesis (`failure_counts`), and every 100th consecutive failure of a subject also emits
 `storage_item_stuck` and an error-level log line, so a node that never recovers is visible to a
 monitor. A success clears the count.
 
-The same rule holds in the other modules' block hooks: x/nodes skips a matured unbonding it cannot
-pay (`nodes_unbonding_failed`, retried next block), x/houses closes a proposal it cannot advance as
-FAILED with the reason (`houses_proposal_failed`), and x/power returns a validator's reward it cannot
-pay to the emission module (`power_reward_failed`) so its own account still ends the block empty.
+The same rule holds in the other modules' block hooks, each with its own marker for what is about
+one item and with every other failure fatal: x/nodes skips a matured unbonding it cannot pay
+(`nodes_unbonding_failed`, retried every block until it can be paid), x/power returns a validator's
+reward it cannot pay to the emission module (`power_reward_failed`) so its own account still ends the
+block empty, and x/houses retries a proposal it cannot advance in the next block, counting
+`advance_failures` on the proposal and closing it as FAILED with the reason only after
+`MaxAdvanceAttempts` (5) consecutive failures (`houses_proposal_failed` on each). A proposal whose
+enactment is refused when its timelock ends is FAILED at once and is not retried: C5 records a
+refused spend as failed, an enactment runs once against the state the vote was cast on, and a
+proposer who wants the action again submits a new proposal.
 
 ### Service days
 

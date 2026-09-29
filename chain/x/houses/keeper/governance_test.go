@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 	"github.com/stretchr/testify/require"
 
@@ -565,21 +566,57 @@ func lastAddress(addrs ...sdk.AccAddress) sdk.AccAddress {
 	return addrs[len(addrs)-1]
 }
 
-// A proposal whose tally cannot be read is closed as FAILED with the reason; it must not fail
-// EndBlock, which would halt every validator over one proposal, and it must not hold up the others.
-func TestAdvance_oneUnreadableProposalDoesNotHaltTheBlock(t *testing.T) {
+// A proposal whose tally cannot be read must not fail EndBlock, which would halt every validator over
+// one proposal, and it must not hold up the others. A failure that clears is not held against the
+// proposal: it is retried in the next block and advances as soon as the read works.
+func TestAdvance_aTransientTallyFailureIsRetriedNotFailed(t *testing.T) {
 	f := openParameter(t)
 	id := f.submitParameter(t)
 	f.Staking.failTotal = true
 	f.advance(t, 24*time.Hour)
+	f.advance(t, time.Second)
 	p := f.proposal(t, id)
-	require.Equal(t, types.ProposalStatus_FAILED, p.Status)
-	require.Contains(t, p.FailReason, "staking store unreadable")
+	require.Equal(t, types.ProposalStatus_VOTING, p.Status, "a failed read does not close the vote")
+	require.Equal(t, uint32(2), p.AdvanceFailures)
 	var reported bool
 	for _, e := range f.Ctx.EventManager().Events() {
 		reported = reported || e.Type == "houses_proposal_failed"
 	}
 	require.True(t, reported)
+
+	f.Staking.failTotal = false
+	f.advance(t, time.Second)
+	p = f.proposal(t, id)
+	require.NotEqual(t, types.ProposalStatus_VOTING, p.Status, "the vote closes once the read works")
+	require.NotEqual(t, types.ProposalStatus_FAILED, p.Status)
+	require.Zero(t, p.AdvanceFailures, "the failures were not consecutive any more")
+}
+
+// A proposal that can never be tallied does not stay active for ever: it is closed as FAILED with
+// the reason after MaxAdvanceAttempts blocks in a row.
+func TestAdvance_aProposalThatNeverAdvancesIsFailedAtTheBound(t *testing.T) {
+	f := openParameter(t)
+	id := f.submitParameter(t)
+	f.Staking.failTotal = true
+	f.advance(t, 24*time.Hour)
+	for i := uint32(1); i < types.MaxAdvanceAttempts; i++ {
+		require.Equal(t, types.ProposalStatus_VOTING, f.proposal(t, id).Status, "still retried after %d failures", i)
+		f.advance(t, time.Second)
+	}
+	p := f.proposal(t, id)
+	require.Equal(t, types.ProposalStatus_FAILED, p.Status)
+	require.Contains(t, p.FailReason, "staking store unreadable")
 	f.Staking.failTotal = false
 	f.advance(t, time.Hour)
+}
+
+// A fault that is not about the proposal (a store that cannot be decoded) fails the block instead of
+// being counted against the proposal.
+func TestAdvance_aStoreFaultStaysFatal(t *testing.T) {
+	f := openParameter(t)
+	id := f.submitParameter(t)
+	f.Staking.failTotalWith = fmt.Errorf("decode staking: %w", collections.ErrEncoding)
+	f.Ctx = f.Ctx.WithBlockTime(f.Ctx.BlockTime().Add(24 * time.Hour))
+	require.ErrorIs(t, f.Keeper.Advance(f.Ctx), collections.ErrEncoding)
+	require.Equal(t, types.ProposalStatus_VOTING, f.proposal(t, id).Status)
 }

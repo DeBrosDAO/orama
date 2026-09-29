@@ -42,9 +42,13 @@ func (k Keeper) completeUnbondings(ctx sdk.Context) error {
 	}
 	for _, id := range due {
 		if err := k.transact(ctx, func(c sdk.Context) error { return k.payUnbonding(c, id) }); err != nil {
-			// One unbonding that cannot be paid (an unreadable entry, a recipient the bank
-			// refuses) stays queued and is retried next block. Returning its error would fail
-			// EndBlock, and with it FinalizeBlock on every validator, over one operator's entry.
+			if !isUnbondingFailure(err) {
+				return fmt.Errorf("failed to pay matured unbonding %d: %w", id, err)
+			}
+			// One unbonding that cannot be paid (a missing entry, a recipient the bank refuses)
+			// stays queued and is retried next block. Returning its error would fail EndBlock, and
+			// with it FinalizeBlock on every validator, over one operator's entry. A fault that is
+			// not about the entry (a collection that cannot be decoded) is returned.
 			k.Logger(ctx).Error("matured unbonding could not be paid; retrying next block", "unbonding", id, "err", err)
 			ctx.EventManager().EmitEvent(sdk.NewEvent("nodes_unbonding_failed",
 				sdk.NewAttribute("unbonding_id", fmt.Sprintf("%d", id)),
@@ -62,14 +66,14 @@ func (k Keeper) payUnbonding(ctx sdk.Context, id uint64) error {
 	}
 	operator, err := sdk.AccAddressFromBech32(entry.Operator)
 	if err != nil {
-		return fmt.Errorf("unbonding %d operator: %w", id, err)
+		return rejectUnbonding(fmt.Errorf("unbonding %d operator: %w", id, err))
 	}
 	coins, err := norama(entry.Amount)
 	if err != nil {
-		return fmt.Errorf("unbonding %d: %w", id, err)
+		return rejectUnbonding(fmt.Errorf("unbonding %d: %w", id, err))
 	}
 	if err := k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, operator, coins); err != nil {
-		return fmt.Errorf("pay unbonding %d to %s: %w", id, entry.Operator, err)
+		return rejectUnbonding(fmt.Errorf("pay unbonding %d to %s: %w", id, entry.Operator, err))
 	}
 	return k.deleteUnbonding(ctx, entry)
 }

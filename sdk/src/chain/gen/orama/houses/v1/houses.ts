@@ -306,6 +306,11 @@ export interface Proposal {
   operatorAbstain: bigint;
   eligibleOperators: bigint;
   failReason: string;
+  /**
+   * advance_failures counts the consecutive blocks advancing this proposal failed. It is cleared by
+   * a block that advances it, and the proposal is closed as FAILED at MaxAdvanceAttempts.
+   */
+  advanceFailures: number;
 }
 
 /**
@@ -1521,6 +1526,7 @@ function createBaseProposal(): Proposal {
     operatorAbstain: 0n,
     eligibleOperators: 0n,
     failReason: "",
+    advanceFailures: 0,
   };
 }
 
@@ -1600,6 +1606,9 @@ export const Proposal: MessageFns<Proposal> = {
     }
     if (message.failReason !== "") {
       writer.uint32(130).string(message.failReason);
+    }
+    if (message.advanceFailures !== 0) {
+      writer.uint32(136).uint32(message.advanceFailures);
     }
     return writer;
   },
@@ -1739,6 +1748,14 @@ export const Proposal: MessageFns<Proposal> = {
           message.failReason = reader.string();
           continue;
         }
+        case 17: {
+          if (tag !== 136) {
+            break;
+          }
+
+          message.advanceFailures = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1766,6 +1783,7 @@ export const Proposal: MessageFns<Proposal> = {
       operatorAbstain: isSet(object.operatorAbstain) ? BigInt(object.operatorAbstain) : 0n,
       eligibleOperators: isSet(object.eligibleOperators) ? BigInt(object.eligibleOperators) : 0n,
       failReason: isSet(object.failReason) ? globalThis.String(object.failReason) : "",
+      advanceFailures: isSet(object.advanceFailures) ? globalThis.Number(object.advanceFailures) : 0,
     };
   },
 
@@ -1819,6 +1837,9 @@ export const Proposal: MessageFns<Proposal> = {
     if (message.failReason !== "") {
       obj.failReason = message.failReason;
     }
+    if (message.advanceFailures !== 0) {
+      obj.advanceFailures = Math.round(message.advanceFailures);
+    }
     return obj;
   },
 
@@ -1845,6 +1866,7 @@ export const Proposal: MessageFns<Proposal> = {
     message.operatorAbstain = object.operatorAbstain ?? 0n;
     message.eligibleOperators = object.eligibleOperators ?? 0n;
     message.failReason = object.failReason ?? "";
+    message.advanceFailures = object.advanceFailures ?? 0;
     return message;
   },
 };

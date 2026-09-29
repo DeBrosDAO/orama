@@ -37,17 +37,17 @@ func (k Keeper) Tiers(ctx context.Context) (TierView, error) {
 	}
 	lambda, err := k.power.Lambda(ctx)
 	if err != nil {
-		return TierView{}, fmt.Errorf("failed to load lambda: %w", err)
+		return TierView{}, rejectAdvance(fmt.Errorf("failed to load lambda: %w", err))
 	}
 	if lambda.IsNil() {
-		return TierView{}, fmt.Errorf("lambda is unset")
+		return TierView{}, rejectAdvance(fmt.Errorf("lambda is unset"))
 	}
 	bonded, err := k.staking.TotalBondedTokens(ctx)
 	if err != nil {
-		return TierView{}, fmt.Errorf("failed to load bonded stake: %w", err)
+		return TierView{}, rejectAdvance(fmt.Errorf("failed to load bonded stake: %w", err))
 	}
 	if bonded.IsNil() || bonded.IsNegative() {
-		return TierView{}, fmt.Errorf("bonded stake must be a non-negative integer")
+		return TierView{}, rejectAdvance(fmt.Errorf("bonded stake must be a non-negative integer"))
 	}
 	eligible, err := k.eligibleSet(ctx)
 	if err != nil {
@@ -90,7 +90,7 @@ func (k Keeper) eligibleSet(ctx context.Context) (map[string]eligibleOperator, e
 	}
 	operators, err := k.operators.Operators(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load operators: %w", err)
+		return nil, rejectAdvance(fmt.Errorf("failed to load operators: %w", err))
 	}
 	type candidate struct {
 		eligibleOperator

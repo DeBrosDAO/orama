@@ -99,9 +99,14 @@ type fakeStaking struct {
 	dels  []types.BondedDelegation
 	// failTotal makes TotalBondedTokens fail, as an unreadable staking store would.
 	failTotal bool
+	// failTotalWith, when set, is the error TotalBondedTokens fails with.
+	failTotalWith error
 }
 
 func (s *fakeStaking) TotalBondedTokens(context.Context) (math.Int, error) {
+	if s.failTotalWith != nil {
+		return math.Int{}, s.failTotalWith
+	}
 	if s.failTotal {
 		return math.Int{}, fmt.Errorf("staking store unreadable")
 	}

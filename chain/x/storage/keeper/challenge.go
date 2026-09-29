@@ -109,7 +109,7 @@ func (k Keeper) openNodeChallenges(ctx sdk.Context, epoch uint64, nodeID string,
 		var dealID uint64
 		var slot uint32
 		if _, err := fmt.Sscanf(key.K2(), "%d/%d", &dealID, &slot); err != nil {
-			return false, fmt.Errorf("bad rechallenge key %q: %w", key.K2(), err)
+			return false, rejectf("bad rechallenge key %q: %w", key.K2(), err)
 		}
 		ref := types.SlotRef{DealId: dealID, Slot: slot}
 		want[challengeID(nodeID, dealID, slot)] = ref
@@ -126,7 +126,7 @@ func (k Keeper) openNodeChallenges(ctx sdk.Context, epoch uint64, nodeID string,
 			// Every write keeps replicas and rechallenges on the slot's holder
 			// (detachSlot removes both, genesis refuses a mismatch). A mismatch
 			// here is a corrupt index, not something to skip.
-			return fmt.Errorf("deal %d slot %d is indexed for node %s but held by %q", ref.DealId, ref.Slot, nodeID, slot.NodeId)
+			return rejectf("deal %d slot %d is indexed for node %s but held by %q", ref.DealId, ref.Slot, nodeID, slot.NodeId)
 		}
 		if err := k.openSlotChallenge(ctx, epoch, slot); err != nil {
 			return err
@@ -159,10 +159,10 @@ func (k Keeper) openSlotChallenge(ctx sdk.Context, epoch uint64, slot types.Slot
 	}
 	leaf, err := piece.LeafIndex(types.LeafChallengeSeed(epoch, slot.DealId, slot.Index, slot.NodeId), slot.RealLeafCount)
 	if err != nil {
-		return fmt.Errorf("failed to draw leaf challenge: %w", err)
+		return rejectf("failed to draw leaf challenge: %w", err)
 	}
 	if leaf >= slot.RealLeafCount {
-		return fmt.Errorf("challenge %d landed on padding (real %d)", leaf, slot.RealLeafCount)
+		return rejectf("challenge %d landed on padding (real %d)", leaf, slot.RealLeafCount)
 	}
 	return k.Challenges.Set(ctx, key, types.ChallengeRecord{LeafIndex: leaf, Proved: false})
 }

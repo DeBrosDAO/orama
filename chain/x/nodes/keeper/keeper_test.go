@@ -45,6 +45,8 @@ type fakeBankKeeper struct {
 	burned   math.Int
 	// refuseTo makes SendCoinsFromModuleToAccount fail for this recipient address.
 	refuseTo string
+	// refuseWith, when set, is the error the refused transfer fails with.
+	refuseWith error
 }
 
 func newFakeBankKeeper() *fakeBankKeeper {
@@ -110,6 +112,9 @@ func (b *fakeBankKeeper) SendCoinsFromAccountToModule(_ context.Context, senderA
 
 func (b *fakeBankKeeper) SendCoinsFromModuleToAccount(_ context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error {
 	if b.refuseTo != "" && b.refuseTo == recipientAddr.String() {
+		if b.refuseWith != nil {
+			return b.refuseWith
+		}
 		return fmt.Errorf("%s is a blocked recipient", recipientAddr)
 	}
 	amount, err := coinAmount(amt)

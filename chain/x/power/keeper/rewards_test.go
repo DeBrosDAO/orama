@@ -1,10 +1,12 @@
 package keeper_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -182,4 +184,22 @@ func TestDistributeEpochRewards_anUnpayableValidatorDoesNotHaltTheEpoch(t *testi
 		reported = reported || e.Type == "power_reward_failed"
 	}
 	require.True(t, reported)
+}
+
+// A fault that is not about the one validator (a collection that cannot be decoded) must not be
+// swallowed as an unpayable reward: the epoch close fails instead of running on state it cannot read.
+func TestDistributeEpochRewards_aStoreFaultStaysFatal(t *testing.T) {
+	f := newTestFixture(t)
+	memberAddr := setupSingleCommitteeGenesis(t, f)
+	p, err := f.Keeper.Params.Get(f.Ctx)
+	require.NoError(t, err)
+	p.ForceBondFraction = math.LegacyZeroDec()
+	require.NoError(t, f.Keeper.Params.Set(f.Ctx, p))
+	f.Emission.epoch = 1
+	f.Bank.fund(testEmissionModule, math.NewInt(1_000))
+	f.Earnings.failFor = memberAddr.String()
+	f.Earnings.failWith = fmt.Errorf("decode earnings: %w", collections.ErrEncoding)
+
+	_, err = f.Keeper.DistributeEpochRewards(f.Ctx, f.Emission, testEmissionModule, math.NewInt(1_000))
+	require.ErrorIs(t, err, collections.ErrEncoding)
 }

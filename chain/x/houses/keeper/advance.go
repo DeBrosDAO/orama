@@ -1,9 +1,12 @@
 package keeper
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"time"
+
+	"cosmossdk.io/collections"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -13,6 +16,14 @@ import (
 
 // Advance closes voting, closes veto windows and executes timelocks that
 // have elapsed. EndBlock calls it. There is no path that skips a timelock.
+//
+// One proposal that cannot be advanced (a staking read that fails, a tally over data that does not
+// add up) must not fail EndBlock, and with it FinalizeBlock on every validator. Its writes are
+// rolled back, the failure is reported and counted on the proposal, and it is tried again in the
+// next block. A proposal that fails MaxAdvanceAttempts blocks in a row is closed as FAILED with the
+// reason, so a proposal that can never be tallied does not stay active for ever. A failure that is
+// not about the proposal (a collection that cannot be read or decoded) is returned and fails the
+// block.
 func (k Keeper) Advance(ctx sdk.Context) error {
 	ids, err := k.activeIDs(ctx)
 	if err != nil {
@@ -22,21 +33,45 @@ func (k Keeper) Advance(ctx sdk.Context) error {
 	for _, id := range ids {
 		p, err := k.getProposal(ctx, id)
 		if err != nil {
+			if !errors.Is(err, collections.ErrNotFound) {
+				return err
+			}
 			k.reportProposalFailure(ctx, id, err)
 			continue
 		}
+		failures := p.AdvanceFailures
+		p.AdvanceFailures = 0
 		cacheCtx, write := ctx.CacheContext()
 		if err := k.advanceProposal(cacheCtx, p); err != nil {
-			// One proposal that cannot be advanced (an unreadable tally, a staking read that
-			// fails) is closed as FAILED with the reason. Returning its error would fail EndBlock,
-			// and with it FinalizeBlock on every validator, over one proposal.
+			if !errors.Is(err, types.ErrAdvanceRejected) {
+				return fmt.Errorf("failed to advance proposal %d: %w", id, err)
+			}
 			k.reportProposalFailure(ctx, id, err)
-			if ferr := k.finish(ctx, p, types.ProposalStatus_FAILED, err.Error()); ferr != nil {
-				return ferr
+			p.AdvanceFailures = failures + 1
+			if p.AdvanceFailures >= types.MaxAdvanceAttempts {
+				err = k.finish(ctx, p, types.ProposalStatus_FAILED, err.Error())
+			} else {
+				err = k.Proposals.Set(ctx, p.Id, p)
+			}
+			if err != nil {
+				return err
 			}
 			continue
 		}
 		write()
+		if failures == 0 {
+			continue
+		}
+		// The proposal advanced, so the failures were not consecutive: clear the count that a step
+		// that leaves the proposal unchanged (a window still open) did not.
+		advanced, err := k.getProposal(ctx, id)
+		if err != nil {
+			return err
+		}
+		advanced.AdvanceFailures = 0
+		if err := k.Proposals.Set(ctx, id, advanced); err != nil {
+			return fmt.Errorf("failed to clear the advance failures of proposal %d: %w", id, err)
+		}
 	}
 	return nil
 }
@@ -100,7 +135,7 @@ func (k Keeper) closeVoting(ctx sdk.Context, p types.Proposal) error {
 	}
 	bonded, err := k.staking.TotalBondedTokens(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load bonded stake: %w", err)
+		return rejectAdvance(fmt.Errorf("failed to load bonded stake: %w", err))
 	}
 	passed := tokenHousePasses(yes, no, abstain, bonded, params.TokenQuorum, params.TokenPassThreshold)
 	if p.Content.Kind() == types.KindParameter {
@@ -152,10 +187,16 @@ func (k Keeper) closeVeto(ctx sdk.Context, p types.Proposal) error {
 }
 
 // execute applies p on a cache context: a refused action leaves no partial
-// write behind, and the proposal is recorded as FAILED.
+// write behind, and the proposal is recorded as FAILED. FAILED is final and is not retried: C5
+// records a spend that x/emission refuses as failed, an enactment runs once, when its timelock
+// ends, against the state the vote was cast on, and a proposer who wants the action again submits a
+// new proposal. A collection that cannot be decoded is not a refusal of the action: it fails the block.
 func (k Keeper) execute(ctx sdk.Context, p types.Proposal) error {
 	cacheCtx, write := ctx.CacheContext()
 	if err := k.apply(cacheCtx, p); err != nil {
+		if errors.Is(err, collections.ErrEncoding) {
+			return fmt.Errorf("failed to execute proposal %d: %w", p.Id, err)
+		}
 		return k.finish(ctx, p, types.ProposalStatus_FAILED, err.Error())
 	}
 	write()

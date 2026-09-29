@@ -205,12 +205,12 @@ func parseChallengeID(id string) (dealID uint64, slot uint32, nodeID string, err
 		}
 	}
 	if n != 2 {
-		return 0, 0, "", fmt.Errorf("bad challenge id %q", id)
+		return 0, 0, "", rejectf("bad challenge id %q", id)
 	}
 	parts := split3(id)
 	nodeID = parts[0]
 	if _, err = fmt.Sscanf(parts[1]+" "+parts[2], "%d %d", &dealID, &slot); err != nil {
-		return 0, 0, "", fmt.Errorf("bad challenge id %q: %w", id, err)
+		return 0, 0, "", reject(fmt.Errorf("bad challenge id %q: %w", id, err))
 	}
 	return dealID, slot, nodeID, nil
 }
@@ -290,14 +290,18 @@ func (k Keeper) SettleQueue(ctx sdk.Context) error {
 }
 
 // settleOne applies one queue row on its own cache branch. A row that cannot be applied (the
-// operator cannot be paid, a module account is short, the deal or slot record is unreadable) is
-// dropped: its writes are rolled back, a storage_item_failed event and the node's settlement
-// failure count report it, and the queue moves on. Returning the error instead would fail
-// EndBlock, and with it FinalizeBlock on every validator, over one node's payout.
+// operator cannot be paid, a module account is short, the deal or slot record is unreadable) has its
+// writes rolled back, a storage_item_failed event and the node's settlement failure count report it,
+// and the queue moves on. Returning the error instead would fail EndBlock, and with it FinalizeBlock
+// on every validator, over one node's payout.
 //
-// A dropped row pays nothing: the deal keeps the escrow the row would have moved, which returns
-// to the client when the deal expires, and any subsidy or protocol mint reserved for the row is
-// burned so the storage account keeps holding exactly the mint payments still queued.
+// A failed row is not lost on the first failure: it is queued again behind the rows already waiting
+// with its attempts raised, so a failure that clears by itself does not cost the operator the
+// payout. On the MaxSettlementAttempts-th failure the row is dropped: it pays nothing, the deal keeps
+// the escrow the row would have moved (returned to the client when the deal expires), and any
+// subsidy or protocol mint reserved for the row is burned so the storage account keeps holding
+// exactly the mint payments still queued. A failure that is not about the row (see isItemFailure)
+// is returned and fails the block.
 func (k Keeper) settleOne(ctx sdk.Context, p types.Params, item types.Settlement) error {
 	subject := item.NodeId
 	if subject == "" {
@@ -306,24 +310,39 @@ func (k Keeper) settleOne(ctx sdk.Context, p types.Params, item types.Settlement
 	failed, err := k.isolate(ctx, FailureKindSettlement, subject, func(c sdk.Context) error {
 		return k.applySettlement(c, p, item)
 	})
-	if err != nil {
+	if err != nil || !failed {
 		return err
 	}
-	if failed && item.MintPay.IsPositive() {
-		k.burnDroppedMint(ctx, item)
+	item.Attempts++
+	if item.Attempts < types.MaxSettlementAttempts {
+		if err := k.enqueue(ctx, item); err != nil {
+			return err
+		}
+		ctx.EventManager().EmitEvent(sdk.NewEvent("storage_settlement_requeued",
+			sdk.NewAttribute("deal_id", fmt.Sprintf("%d", item.DealId)),
+			sdk.NewAttribute("node_id", item.NodeId),
+			sdk.NewAttribute("attempts", fmt.Sprintf("%d", item.Attempts)),
+		))
+		return nil
 	}
-	return nil
+	ctx.EventManager().EmitEvent(sdk.NewEvent("storage_settlement_dropped",
+		sdk.NewAttribute("deal_id", fmt.Sprintf("%d", item.DealId)),
+		sdk.NewAttribute("node_id", item.NodeId),
+		sdk.NewAttribute("attempts", fmt.Sprintf("%d", item.Attempts)),
+	))
+	if !item.MintPay.IsPositive() {
+		return nil
+	}
+	return k.burnDroppedMint(ctx, item)
 }
 
-func (k Keeper) burnDroppedMint(ctx sdk.Context, item types.Settlement) {
+// burnDroppedMint burns the mint reserved for a dropped row. It must succeed: the storage account
+// holds the mint of every queued row, so a mint that stays behind breaks the storage invariant.
+func (k Keeper) burnDroppedMint(ctx sdk.Context, item types.Settlement) error {
 	if err := k.bank.BurnCoins(ctx, types.ModuleName, coins(item.MintPay)); err != nil {
-		k.Logger(ctx).Error("failed to burn the mint reserved for a dropped settlement", "seq", item.Seq, "amount", item.MintPay.String(), "err", err)
-		ctx.EventManager().EmitEvent(sdk.NewEvent("storage_dropped_mint_unburned",
-			sdk.NewAttribute("seq", fmt.Sprintf("%d", item.Seq)),
-			sdk.NewAttribute("amount", item.MintPay.String()),
-			sdk.NewAttribute("error", err.Error()),
-		))
+		return fmt.Errorf("failed to burn the %s reserved for dropped settlement %d: %w", item.MintPay, item.Seq, err)
 	}
+	return nil
 }
 
 func (k Keeper) applySettlement(ctx sdk.Context, p types.Params, item types.Settlement) error {
@@ -364,45 +383,165 @@ func (k Keeper) applySettlement(ctx sdk.Context, p types.Params, item types.Sett
 	return k.noteService(ctx, p, item, paid)
 }
 
+// applyMiss records one missed challenge: the node's consecutive misses rise, a slot at the miss
+// threshold is evicted, any other missed slot is challenged again next epoch, and from the second
+// consecutive miss on the node is penalized. The miss and the eviction never depend on the penalty:
+// a node that cannot be slashed (its capacity state, no bond, a refusing collaborator) still loses
+// a slot it does not serve.
 func (k Keeper) applyMiss(ctx sdk.Context, p types.Params, deal types.Deal, slot types.Slot) error {
 	slot.ConsecutiveMisses++
-	if slot.ConsecutiveMisses >= 2 && slot.NodeId != "" {
-		slashAmt := types.ApplyRate(deal.PricePerEpoch, p.SlashFraction)
-		if slashAmt.IsPositive() {
-			if err := k.nodes.Slash(ctx, slot.NodeId, slashAmt); err != nil {
-				return fmt.Errorf("failed to slash %s: %w", slot.NodeId, err)
-			}
-		}
-	}
-	if slot.ConsecutiveMisses >= p.MissThreshold && slot.NodeId != "" {
-		op := slot.Operator
-		nodeID := slot.NodeId
-		if err := k.detachSlot(ctx, &slot); err != nil {
+	nodeID := slot.NodeId
+	penalized := slot.ConsecutiveMisses >= 2 && nodeID != ""
+	switch {
+	case slot.ConsecutiveMisses >= p.MissThreshold && nodeID != "":
+		if err := k.evictSlot(ctx, deal, slot); err != nil {
 			return err
 		}
-		slot.ExcludedOperator = op
-		slot.Status = types.SlotStatus_SLOT_STATUS_UNASSIGNED
-		slot.ConsecutiveMisses = 0
+	default:
+		if nodeID != "" {
+			if err := k.Rechallenge.Set(ctx, collections.Join(nodeID, rechallengeID(slot.DealId, slot.Index))); err != nil {
+				return err
+			}
+		}
 		if err := k.saveSlot(ctx, slot); err != nil {
 			return err
 		}
-		deal.AssignAtHeight = ctx.BlockHeight() + 1
-		if err := k.saveDeal(ctx, deal); err != nil {
+	}
+	if !penalized {
+		return nil
+	}
+	_, err := k.isolate(ctx, FailureKindSlash, nodeID, func(c sdk.Context) error {
+		return k.penalize(c, p, deal, nodeID)
+	})
+	return err
+}
+
+// evictSlot takes a slot from the node that holds it: the node's replica and reserved bytes go
+// (detachSlot), the operator cannot be assigned the slot again, and the deal is queued for
+// reassignment in the next block.
+func (k Keeper) evictSlot(ctx sdk.Context, deal types.Deal, slot types.Slot) error {
+	op := slot.Operator
+	nodeID := slot.NodeId
+	if err := k.detachSlot(ctx, &slot); err != nil {
+		return err
+	}
+	slot.ExcludedOperator = op
+	slot.Status = types.SlotStatus_SLOT_STATUS_UNASSIGNED
+	slot.ConsecutiveMisses = 0
+	if err := k.saveSlot(ctx, slot); err != nil {
+		return err
+	}
+	deal.AssignAtHeight = ctx.BlockHeight() + 1
+	if err := k.saveDeal(ctx, deal); err != nil {
+		return err
+	}
+	ctx.EventManager().EmitEvent(sdk.NewEvent("storage_slot_evicted",
+		sdk.NewAttribute("deal_id", fmt.Sprintf("%d", deal.Id)),
+		sdk.NewAttribute("slot", fmt.Sprintf("%d", slot.Index)),
+		sdk.NewAttribute("node_id", nodeID),
+	))
+	return k.Pending.Set(ctx, deal.Id)
+}
+
+// penalize applies the C7 slash of a node with consecutive misses: slash_fraction of one epoch's
+// price of the missed deal. A bonded node is slashed through x/nodes, which clamps its declared
+// capacity to the smaller backing; the replicas that no longer fit are then evicted. A probation
+// node has no bond: the record deposit taken from its first earnings is its stake and is slashed
+// instead, and a probation node that has not earned a deposit yet has nothing to slash.
+func (k Keeper) penalize(ctx sdk.Context, p types.Params, deal types.Deal, nodeID string) error {
+	amount := types.ApplyRate(deal.PricePerEpoch, p.SlashFraction)
+	if !amount.IsPositive() {
+		return nil
+	}
+	state, err := k.Nodes.Get(ctx, nodeID)
+	if err != nil && !errors.Is(err, collections.ErrNotFound) {
+		return fmt.Errorf("failed to load tracked state of %s: %w", nodeID, err)
+	}
+	if err == nil && state.DepositLocked {
+		return k.slashProbationDeposit(ctx, state, amount)
+	}
+	if err := k.nodes.Slash(ctx, nodeID, amount); err != nil {
+		return fmt.Errorf("failed to slash %s: %w", nodeID, err)
+	}
+	return k.trimReserved(ctx, nodeID)
+}
+
+// slashProbationDeposit burns up to amount of a probation node's record deposit. A deposit burned
+// in full is gone, so the node no longer counts as holding one: it is opened again from its next
+// earnings.
+func (k Keeper) slashProbationDeposit(ctx sdk.Context, state types.NodeState, amount math.Int) error {
+	id := probationDepositID(state.NodeId)
+	held, found, err := k.deposits.DepositAmount(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to read probation deposit of %s: %w", state.NodeId, err)
+	}
+	if !found {
+		return rejectf("probation node %s is marked as holding a deposit but none is open", state.NodeId)
+	}
+	burned, err := k.deposits.SlashDeposit(ctx, id, amount)
+	if err != nil {
+		return fmt.Errorf("failed to slash probation deposit of %s: %w", state.NodeId, err)
+	}
+	if burned.GTE(held) {
+		state.DepositLocked = false
+		if err := k.Nodes.Set(ctx, state.NodeId, state); err != nil {
+			return fmt.Errorf("failed to record the burned probation deposit of %s: %w", state.NodeId, err)
+		}
+	}
+	ctx.EventManager().EmitEvent(sdk.NewEvent("storage_probation_slashed",
+		sdk.NewAttribute("node_id", state.NodeId),
+		sdk.NewAttribute("amount", burned.String()),
+	))
+	return nil
+}
+
+// trimReserved evicts replicas from a node whose reserved bytes exceed its declared capacity, most
+// recently assigned first, until they fit. A slash lowers the capacity the bond backs and
+// x/nodes clamps the declaration down with it; the replicas the smaller declaration cannot hold
+// are released here so reserved never exceeds declared.
+func (k Keeper) trimReserved(ctx sdk.Context, nodeID string) error {
+	declared, err := k.nodes.DeclaredCapacity(ctx, nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to read declared capacity of %s: %w", nodeID, err)
+	}
+	reserved, err := k.reservedOf(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	if reserved <= declared {
+		return nil
+	}
+	var refs []types.SlotRef
+	rng := collections.NewPrefixedPairRange[string, uint64](nodeID).Descending()
+	if err := k.ReplicaAt.Walk(ctx, rng, func(_ collections.Pair[string, uint64], ref types.SlotRef) (bool, error) {
+		refs = append(refs, ref)
+		return false, nil
+	}); err != nil {
+		return fmt.Errorf("failed to list replicas of %s: %w", nodeID, err)
+	}
+	for _, ref := range refs {
+		if reserved <= declared {
+			return nil
+		}
+		slot, err := k.loadSlot(ctx, ref.DealId, ref.Slot)
+		if err != nil {
 			return err
 		}
-		ctx.EventManager().EmitEvent(sdk.NewEvent("storage_slot_evicted",
-			sdk.NewAttribute("deal_id", fmt.Sprintf("%d", deal.Id)),
-			sdk.NewAttribute("slot", fmt.Sprintf("%d", slot.Index)),
-			sdk.NewAttribute("node_id", nodeID),
-		))
-		return k.Pending.Set(ctx, deal.Id)
-	}
-	if slot.NodeId != "" {
-		if err := k.Rechallenge.Set(ctx, collections.Join(slot.NodeId, rechallengeID(slot.DealId, slot.Index))); err != nil {
+		deal, err := k.loadDeal(ctx, ref.DealId)
+		if err != nil {
+			return err
+		}
+		if err := k.evictSlot(ctx, deal, slot); err != nil {
+			return err
+		}
+		if reserved, err = k.reservedOf(ctx, nodeID); err != nil {
 			return err
 		}
 	}
-	return k.saveSlot(ctx, slot)
+	if reserved > declared {
+		return rejectf("node %s still reserves %d bytes above its declared %d after every replica was released", nodeID, reserved, declared)
+	}
+	return nil
 }
 
 func (k Keeper) payItem(ctx sdk.Context, deal *types.Deal, item types.Settlement) (paid math.Int, err error) {
@@ -416,7 +555,7 @@ func (k Keeper) payItem(ctx sdk.Context, deal *types.Deal, item types.Settlement
 	}
 	if item.EscrowPay.IsPositive() {
 		if deal.Escrow.LT(item.EscrowPay) {
-			return math.ZeroInt(), fmt.Errorf("deal %d escrow %s cannot cover %s", deal.Id, deal.Escrow, item.EscrowPay)
+			return math.ZeroInt(), rejectf("deal %d escrow %s cannot cover %s", deal.Id, deal.Escrow, item.EscrowPay)
 		}
 		deal.Escrow = deal.Escrow.Sub(item.EscrowPay)
 		got, err := k.payService(ctx, types.EscrowModuleName, operator, item.EscrowPay)
@@ -480,7 +619,7 @@ func (k Keeper) payItem(ctx sdk.Context, deal *types.Deal, item types.Settlement
 func (k Keeper) payService(ctx sdk.Context, source string, operator sdk.AccAddress, amount math.Int) (math.Int, error) {
 	bal := k.bank.GetBalance(ctx, authtypes.NewModuleAddress(source), params.BaseDenom).Amount
 	if bal.LT(amount) {
-		return math.ZeroInt(), fmt.Errorf("module %s holds %s, need %s to pay %s", source, bal, amount, operator)
+		return math.ZeroInt(), rejectf("module %s holds %s, need %s to pay %s", source, bal, amount, operator)
 	}
 	toProvider, burn, archive := types.SplitServicePayment(amount)
 	if toProvider.IsPositive() {

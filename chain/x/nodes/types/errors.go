@@ -21,4 +21,9 @@ var (
 	ErrCapacity = errors.New("declared capacity exceeds backed capacity")
 	// ErrReserved is returned when a capacity change would drop below what is reserved.
 	ErrReserved = errors.New("reserved capacity exceeds the declaration")
+	// ErrUnbondingRejected marks a matured unbonding entry that cannot be paid (an unusable
+	// recipient, a bank that refuses the transfer). The entry stays queued and is retried in the next
+	// block. Any other failure of the payment (a collection that cannot be read or decoded) fails the
+	// block.
+	ErrUnbondingRejected = errors.New("unbonding cannot be paid")
 )

@@ -415,6 +415,11 @@ export interface Settlement {
    * rather than a protocol-deal payment.
    */
   subsidy: boolean;
+  /**
+   * attempts counts how many times this row has already failed to apply. A failed row is queued
+   * again until it reaches MaxSettlementAttempts, then dropped.
+   */
+  attempts: number;
 }
 
 /**
@@ -2254,6 +2259,7 @@ function createBaseSettlement(): Settlement {
     mintPay: "",
     archiveTopUp: "",
     subsidy: false,
+    attempts: 0,
   };
 }
 
@@ -2300,6 +2306,9 @@ export const Settlement: MessageFns<Settlement> = {
     }
     if (message.subsidy !== false) {
       writer.uint32(88).bool(message.subsidy);
+    }
+    if (message.attempts !== 0) {
+      writer.uint32(96).uint32(message.attempts);
     }
     return writer;
   },
@@ -2399,6 +2408,14 @@ export const Settlement: MessageFns<Settlement> = {
           message.subsidy = reader.bool();
           continue;
         }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.attempts = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2421,6 +2438,7 @@ export const Settlement: MessageFns<Settlement> = {
       mintPay: isSet(object.mintPay) ? globalThis.String(object.mintPay) : "",
       archiveTopUp: isSet(object.archiveTopUp) ? globalThis.String(object.archiveTopUp) : "",
       subsidy: isSet(object.subsidy) ? globalThis.Boolean(object.subsidy) : false,
+      attempts: isSet(object.attempts) ? globalThis.Number(object.attempts) : 0,
     };
   },
 
@@ -2459,6 +2477,9 @@ export const Settlement: MessageFns<Settlement> = {
     if (message.subsidy !== false) {
       obj.subsidy = message.subsidy;
     }
+    if (message.attempts !== 0) {
+      obj.attempts = Math.round(message.attempts);
+    }
     return obj;
   },
 
@@ -2478,6 +2499,7 @@ export const Settlement: MessageFns<Settlement> = {
     message.mintPay = object.mintPay ?? "";
     message.archiveTopUp = object.archiveTopUp ?? "";
     message.subsidy = object.subsidy ?? false;
+    message.attempts = object.attempts ?? 0;
     return message;
   },
 };

@@ -1,11 +1,13 @@
 package keeper_test
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -124,27 +126,23 @@ func TestProbationDeposit_aFailedLockNeverHaltsTheBlockOrLosesThePayout(t *testi
 	require.Zero(t, n, "a success clears the failure count")
 }
 
-// One operator whose earnings account cannot be credited must not stop the queue: its row is
-// dropped, everyone else is paid, the reserved mint is burned so the storage account keeps holding
-// exactly what is still queued, and the failure is counted against that node.
-func TestSettlement_oneUnpayableRowIsDroppedAndTheQueueKeepsDraining(t *testing.T) {
+// One operator whose earnings account cannot be credited must not stop the queue: everyone else is
+// paid, and its own row is retried behind the queue MaxSettlementAttempts times. A row that fails
+// every time is then dropped, the reserved mint is burned so the storage account keeps holding
+// exactly what is still queued, and the failures are counted against that node.
+func TestSettlement_oneUnpayableRowIsRetriedThenDroppedAndTheQueueKeepsDraining(t *testing.T) {
 	f, nodes, id, data := probationFixture(t)
 	f.nextEpoch(t)
 	f.proveAll(t, id, data)
 	bad := f.slot(t, id, 0).NodeId
 	f.Earnings.failCredit = f.nodeOperator(nodes, bad).String()
-	supplyBefore := f.Bank.burned
 
 	f.nextEpoch(t)
 
-	head, err := f.Keeper.QueueHead.Get(f.Ctx)
+	queued, err := f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
 	require.NoError(t, err)
-	tail, err := f.Keeper.QueueTail.Get(f.Ctx)
-	require.NoError(t, err)
-	require.Equal(t, tail, head, "the queue drained past the unpayable row")
-	n, err := f.Keeper.FailureCount(f.Ctx, bad, keeper.FailureKindSettlement)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), n)
+	require.Equal(t, uint64(1), queued.Pending, "only the unpayable row is left, queued again")
+	require.Contains(t, eventTypes(f.Ctx), "storage_settlement_requeued")
 	require.Contains(t, eventTypes(f.Ctx), "storage_item_failed")
 	for _, other := range nodes {
 		if other.id == bad {
@@ -152,15 +150,102 @@ func TestSettlement_oneUnpayableRowIsDroppedAndTheQueueKeepsDraining(t *testing.
 		}
 		require.Equal(t, math.NewInt(900), f.Deposits.locked[probationDepositKeyPrefix+other.id], "the other nodes are paid and lock their deposit")
 	}
-	require.True(t, f.Bank.burned.GT(supplyBefore))
 	f.requireInvariants(t)
+	burnedBefore := f.Bank.burned
 
-	pending, err := f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
+	for i := uint32(1); i < types.MaxSettlementAttempts-1; i++ {
+		f.begin(t)
+		f.end(t)
+		queued, err = f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), queued.Pending, "the row is still retried on attempt %d", i+1)
+	}
+	f.begin(t)
+	f.end(t)
+
+	queued, err = f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
 	require.NoError(t, err)
-	require.Zero(t, pending.Pending)
+	require.Zero(t, queued.Pending, "the row is dropped on its last attempt")
+	require.Contains(t, eventTypes(f.Ctx), "storage_settlement_dropped")
+	require.True(t, f.Bank.burned.GT(burnedBefore), "the dropped row's reserved mint is burned")
+	f.requireInvariants(t)
 	res, err := f.Query.NodeFailures(f.Ctx, &types.QueryNodeFailuresRequest{NodeId: bad})
 	require.NoError(t, err)
-	require.Equal(t, []types.FailureCount{{NodeId: bad, Kind: keeper.FailureKindSettlement, Consecutive: 1}}, res.Failures)
+	require.Equal(t, []types.FailureCount{{NodeId: bad, Kind: keeper.FailureKindSettlement, Consecutive: uint64(types.MaxSettlementAttempts)}}, res.Failures)
+}
+
+// A failure that clears by itself costs the operator nothing: the row is applied on a later attempt
+// and nothing is burned for it.
+func TestSettlement_aTransientFailureIsRetriedAndPaid(t *testing.T) {
+	f, nodes, id, data := probationFixture(t)
+	f.nextEpoch(t)
+	f.proveAll(t, id, data)
+	bad := f.slot(t, id, 0).NodeId
+	op := f.nodeOperator(nodes, bad)
+	f.Earnings.failCredit = op.String()
+	f.nextEpoch(t)
+	require.True(t, f.Earnings.get(op).IsZero())
+
+	f.Earnings.failCredit = ""
+	burnedBefore := f.Bank.burned
+	f.begin(t)
+	f.end(t)
+
+	queued, err := f.Query.Queue(f.Ctx, &types.QueryQueueRequest{})
+	require.NoError(t, err)
+	require.Zero(t, queued.Pending)
+	require.Equal(t, math.NewInt(900), f.Deposits.locked[probationDepositKeyPrefix+bad], "the retried row pays: its credit fills the deposit")
+	require.NotContains(t, eventTypes(f.Ctx), "storage_settlement_dropped")
+	require.True(t, f.Bank.burned.GT(burnedBefore), "only the ordinary service burn, not a dropped mint")
+	n, err := f.Keeper.FailureCount(f.Ctx, bad, keeper.FailureKindSettlement)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	f.requireInvariants(t)
+}
+
+// A row that points at a deal that is gone is data about that row, not a fault of the state.
+func TestSettlement_aRowOfAMissingDealIsIsolated(t *testing.T) {
+	f, _, id, data := probationFixture(t)
+	f.nextEpoch(t)
+	f.proveAll(t, id, data)
+	f.nextEpoch(t)
+	require.NoError(t, f.Keeper.Queue.Set(f.Ctx, 999, types.Settlement{Seq: 999, DealId: 12345, Slot: 0, NodeId: "n", Proved: true}))
+	require.NoError(t, f.Keeper.QueueTail.Set(f.Ctx, 1000))
+	require.NoError(t, f.Keeper.QueueHead.Set(f.Ctx, 999))
+	require.NoError(t, f.Keeper.EndBlock(f.Ctx))
+	n, err := f.Keeper.FailureCount(f.Ctx, "n", keeper.FailureKindSettlement)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), n)
+}
+
+// Only failures about one item are isolated. Everything else (an unexpected error, an encoding
+// fault, even one reported by a collaborator) is returned so the block fails.
+func TestIsolate_onlyItemFailuresAreIsolated(t *testing.T) {
+	f := newFixture(t)
+	f.init(t, nil)
+	run := func(err error) (bool, error) {
+		return f.Keeper.Isolate(f.Ctx, keeper.FailureKindDeal, "deal/1", func(sdk.Context) error { return err })
+	}
+
+	failed, err := run(keeper.Reject(errors.New("operator cannot be paid")))
+	require.NoError(t, err)
+	require.True(t, failed, "a rejection is isolated")
+	failed, err = run(fmt.Errorf("load: %w", collections.ErrNotFound))
+	require.NoError(t, err)
+	require.True(t, failed, "a missing record is isolated")
+
+	failed, err = run(errors.New("counter went negative"))
+	require.Error(t, err, "an unexpected error is fatal")
+	require.True(t, failed)
+	_, err = run(fmt.Errorf("decode: %w", collections.ErrEncoding))
+	require.Error(t, err, "an encoding fault is fatal")
+	_, err = run(keeper.Reject(fmt.Errorf("collaborator: %w", collections.ErrEncoding)))
+	require.Error(t, err, "an encoding fault reported by a collaborator stays fatal")
+	require.NoError(t, keeper.Reject(nil))
+
+	n, err := f.Keeper.FailureCount(f.Ctx, "deal/1", keeper.FailureKindDeal)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), n, "only the two isolated failures were counted")
 }
 
 func TestSyncNodes_failureCountRisesUntilTheNodeRecovers(t *testing.T) {

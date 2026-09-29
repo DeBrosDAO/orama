@@ -39,6 +39,12 @@ type wiringChain struct {
 
 func newWiringChain(t *testing.T) *wiringChain {
 	t.Helper()
+	return newWiringChainWith(t, nil)
+}
+
+// newWiringChainWith is newWiringChain with the x/nodes genesis adjusted first.
+func newWiringChainWith(t *testing.T, mutate func(*nodestypes.GenesisState)) *wiringChain {
+	t.Helper()
 	oramaApp := buildTestApp(t)
 	genesis := time.Unix(1_700_000_000, 0)
 	genState, _ := committeeGenesis(t, oramaApp, 1, 365)
@@ -46,6 +52,9 @@ func newWiringChain(t *testing.T) *wiringChain {
 	var nodesGen nodestypes.GenesisState
 	oramaApp.AppCodec().MustUnmarshalJSON(genState[nodestypes.ModuleName], &nodesGen)
 	nodesGen.Params.NetworkIdentityLockSeconds = 0
+	if mutate != nil {
+		mutate(&nodesGen)
+	}
 	genState[nodestypes.ModuleName] = oramaApp.AppCodec().MustMarshalJSON(&nodesGen)
 	initChain(t, oramaApp, genState, 0, genesis)
 	finalize(t, oramaApp, 1, genesis.Add(2*time.Second))

@@ -139,9 +139,11 @@ func (k Keeper) Tombstone(ctx sdk.Context, nodeID string) error {
 }
 
 // Slash burns fraction of a role's bond and of every unbonding entry for that
-// role. fraction is in (0, 1]. A slash that would drop backed capacity below
-// reserved bytes fails and changes nothing. Declared capacity is clamped down
-// to the new backing when the node is not closed.
+// role. fraction is in (0, 1]. When the node is not closed, declared capacity is
+// clamped down to the new backing and reserved bytes are clamped to the clamped
+// declaration: a slash is a penalty and never fails because the node is busy. The
+// module that owns the reservation (x/storage) releases the replicas the smaller
+// declaration cannot hold.
 func (k Keeper) Slash(ctx sdk.Context, nodeID string, role types.Role, fraction math.LegacyDec) (math.Int, error) {
 	var slashed math.Int
 	err := k.transact(ctx, func(ctx sdk.Context) error {
@@ -208,11 +210,11 @@ func (k Keeper) slash(ctx sdk.Context, nodeID string, role types.Role, fraction 
 		if err != nil {
 			return math.Int{}, err
 		}
-		if node.ReservedCapacityBytes > backed {
-			return math.Int{}, fmt.Errorf("slash would drop backed capacity %d below reserved %d", backed, node.ReservedCapacityBytes)
-		}
 		if node.DeclaredCapacityBytes > backed {
 			node.DeclaredCapacityBytes = backed
+		}
+		if node.ReservedCapacityBytes > node.DeclaredCapacityBytes {
+			node.ReservedCapacityBytes = node.DeclaredCapacityBytes
 		}
 	}
 	if total.IsPositive() {

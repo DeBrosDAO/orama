@@ -205,6 +205,9 @@ message Proposal {
   uint64 operator_abstain = 14;
   uint64 eligible_operators = 15;
   string fail_reason = 16;
+  // advance_failures counts the consecutive blocks advancing this proposal failed. It is cleared by
+  // a block that advances it, and the proposal is closed as FAILED at MaxAdvanceAttempts.
+  uint32 advance_failures = 17;
 }
 
 // Vote is one address's vote on one proposal. A second, different operator

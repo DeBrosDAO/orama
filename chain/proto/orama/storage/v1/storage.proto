@@ -241,6 +241,9 @@ message Settlement {
   // subsidy is true when mint_pay is a PRIVATE subsidy (capped per operator)
   // rather than a protocol-deal payment.
   bool subsidy = 11;
+  // attempts counts how many times this row has already failed to apply. A failed row is queued
+  // again until it reaches MaxSettlementAttempts, then dropped.
+  uint32 attempts = 12;
 }
 
 // ChallengeRecord is one epoch's leaf challenge for a slot, and whether a

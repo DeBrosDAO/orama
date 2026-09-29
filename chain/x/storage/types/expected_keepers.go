@@ -43,6 +43,10 @@ type DepositKeeper interface {
 	// DepositAmount returns the amount locked under id, and false when no deposit is open.
 	DepositAmount(ctx context.Context, id string) (amount math.Int, found bool, err error)
 	ReleaseDeposit(ctx context.Context, id string) (refund, burn math.Int, err error)
+	// SlashDeposit burns up to amount of the deposit under id (the whole deposit when it holds
+	// less) and returns what it burned. It is the penalty for a probation node, whose record
+	// deposit is its only stake.
+	SlashDeposit(ctx context.Context, id string, amount math.Int) (burned math.Int, err error)
 }
 
 // EmissionKeeper is the storage-ceiling view of x/emission. StorageCeiling matches

@@ -112,10 +112,15 @@ func (k Keeper) DistributeEpochRewards(ctx sdk.Context, emissionKeeper types.Emi
 // returned to sourceModule so x/power's account still ends the block empty, and a
 // power_reward_failed event reports it. Returning the error instead would fail BeginBlock, and
 // with it FinalizeBlock on every validator, over one validator's delegators. It reports whether
-// the share was paid. Only the return transfer failing is an error, since then x/power's account can no longer be balanced.
+// the share was paid. Only a failure that is not about the one validator (see rejectReward) or the
+// return transfer failing is an error: the first means the state cannot be trusted, the second that
+// x/power's account can no longer be balanced.
 func (k Keeper) distributeIsolated(ctx sdk.Context, sourceModule, valoperAddr string, amount math.Int, denom string) (paid bool, err error) {
 	cacheCtx, write := ctx.CacheContext()
 	if err := k.distributeValidatorReward(cacheCtx, valoperAddr, amount, denom); err != nil {
+		if !errors.Is(err, types.ErrRewardRejected) {
+			return false, fmt.Errorf("failed to pay the reward of %q with a fault that is not about that validator: %w", valoperAddr, err)
+		}
 		k.Logger(ctx).Error("validator reward could not be paid; returned to the source module", "validator", valoperAddr, "amount", amount.String(), "err", err)
 		ctx.EventManager().EmitEvent(sdk.NewEvent("power_reward_failed",
 			sdk.NewAttribute("validator", valoperAddr),
@@ -139,14 +144,14 @@ func (k Keeper) distributeIsolated(ctx sdk.Context, sourceModule, valoperAddr st
 func (k Keeper) distributeValidatorReward(ctx sdk.Context, valoperAddr string, amount math.Int, denom string) error {
 	valAddr, err := sdk.ValAddressFromBech32(valoperAddr)
 	if err != nil {
-		return fmt.Errorf("invalid validator operator address %q: %w", valoperAddr, err)
+		return rejectReward(fmt.Errorf("invalid validator operator address %q: %w", valoperAddr, err))
 	}
 	operatorAcc := sdk.AccAddress(valAddr)
 
 	validator, err := k.stakingKeeper.GetValidator(ctx, valAddr)
 	hasValidator := err == nil
 	if err != nil && !isValidatorNotFound(err) {
-		return fmt.Errorf("failed to load validator %q: %w", valoperAddr, err)
+		return rejectReward(fmt.Errorf("failed to load validator %q: %w", valoperAddr, err))
 	}
 
 	if !hasValidator || validator.DelegatorShares.IsZero() {
@@ -158,14 +163,14 @@ func (k Keeper) distributeValidatorReward(ctx sdk.Context, valoperAddr string, a
 
 	delegations, err := k.stakingKeeper.GetValidatorDelegations(ctx, valAddr)
 	if err != nil {
-		return fmt.Errorf("failed to load delegations for %q: %w", valoperAddr, err)
+		return rejectReward(fmt.Errorf("failed to load delegations for %q: %w", valoperAddr, err))
 	}
 
 	distributedShared := math.ZeroInt()
 	for _, d := range delegations {
 		delAddr, err := sdk.AccAddressFromBech32(d.DelegatorAddress)
 		if err != nil {
-			return fmt.Errorf("invalid delegator address %q: %w", d.DelegatorAddress, err)
+			return rejectReward(fmt.Errorf("invalid delegator address %q: %w", d.DelegatorAddress, err))
 		}
 		portion := d.Shares.Quo(validator.DelegatorShares).MulInt(shared).TruncateInt()
 		distributedShared = distributedShared.Add(portion)
@@ -218,7 +223,7 @@ func (k Keeper) creditRecipient(ctx sdk.Context, addr sdk.AccAddress, committeeV
 		return nil
 	}
 	if err := k.earningsKeeper.CreditEarnings(ctx, types.ModuleName, addr, sdk.NewCoin(denom, remaining)); err != nil {
-		return fmt.Errorf("failed to credit earnings for %s: %w", addr, err)
+		return rejectReward(fmt.Errorf("failed to credit earnings for %s: %w", addr, err))
 	}
 	return nil
 }
@@ -246,7 +251,7 @@ func (k Keeper) forceBondCommitteeReward(ctx sdk.Context, valoperAddr string, me
 
 	valAddr, err := sdk.ValAddressFromBech32(valoperAddr)
 	if err != nil {
-		return math.ZeroInt(), fmt.Errorf("invalid validator operator address %q: %w", valoperAddr, err)
+		return math.ZeroInt(), rejectReward(fmt.Errorf("invalid validator operator address %q: %w", valoperAddr, err))
 	}
 	validator, err := k.stakingKeeper.GetValidator(ctx, valAddr)
 	if err != nil {
@@ -256,7 +261,7 @@ func (k Keeper) forceBondCommitteeReward(ctx sdk.Context, valoperAddr string, me
 			// self-bond and create one - see the package doc comment on this deliberate gap.
 			return math.ZeroInt(), nil
 		}
-		return math.ZeroInt(), fmt.Errorf("failed to load validator %q: %w", valoperAddr, err)
+		return math.ZeroInt(), rejectReward(fmt.Errorf("failed to load validator %q: %w", valoperAddr, err))
 	}
 	if validator.Jailed || validator.InvalidExRate() {
 		// Security review C1: never call Delegate on an ineligible validator. The full reward
@@ -270,7 +275,7 @@ func (k Keeper) forceBondCommitteeReward(ctx sdk.Context, valoperAddr string, me
 	if err == nil {
 		selfBonded = selfDelegation.Shares.Mul(validator.Tokens.ToLegacyDec()).Quo(validator.DelegatorShares).TruncateInt()
 	} else if !errors.Is(err, stakingtypes.ErrNoDelegation) {
-		return math.ZeroInt(), fmt.Errorf("failed to load self-delegation for %q: %w", valoperAddr, err)
+		return math.ZeroInt(), rejectReward(fmt.Errorf("failed to load self-delegation for %q: %w", valoperAddr, err))
 	}
 	if selfBonded.GTE(ceiling) {
 		return math.ZeroInt(), nil
@@ -286,10 +291,10 @@ func (k Keeper) forceBondCommitteeReward(ctx sdk.Context, valoperAddr string, me
 	}
 
 	if err := k.bankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, memberAcc, sdk.NewCoins(sdk.NewCoin(denom, wanted))); err != nil {
-		return math.ZeroInt(), fmt.Errorf("failed to fund %s for force-bonding: %w", memberAcc, err)
+		return math.ZeroInt(), rejectReward(fmt.Errorf("failed to fund %s for force-bonding: %w", memberAcc, err))
 	}
 	if _, err := k.stakingKeeper.Delegate(ctx, memberAcc, wanted, stakingtypes.Unbonded, validator, true); err != nil {
-		return math.ZeroInt(), fmt.Errorf("failed to force-bond %s into %s: %w", wanted, valoperAddr, err)
+		return math.ZeroInt(), rejectReward(fmt.Errorf("failed to force-bond %s into %s: %w", wanted, valoperAddr, err))
 	}
 
 	total, err := k.CommitteeSelfBond.Get(ctx, valoperAddr)

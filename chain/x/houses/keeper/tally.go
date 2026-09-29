@@ -13,11 +13,11 @@ import (
 func (k Keeper) tallyToken(ctx context.Context, proposalID uint64) (yes, no, abstain math.Int, err error) {
 	bonded, err := k.staking.TotalBondedTokens(ctx)
 	if err != nil {
-		return math.Int{}, math.Int{}, math.Int{}, fmt.Errorf("failed to load bonded stake: %w", err)
+		return math.Int{}, math.Int{}, math.Int{}, rejectAdvance(fmt.Errorf("failed to load bonded stake: %w", err))
 	}
 	dels, err := k.staking.Delegations(ctx)
 	if err != nil {
-		return math.Int{}, math.Int{}, math.Int{}, fmt.Errorf("failed to load delegations: %w", err)
+		return math.Int{}, math.Int{}, math.Int{}, rejectAdvance(fmt.Errorf("failed to load delegations: %w", err))
 	}
 	votes, err := k.voteOptions(ctx, k.TokenVotes, proposalID)
 	if err != nil {
@@ -31,7 +31,7 @@ func (k Keeper) tallyToken(ctx context.Context, proposalID uint64) (yes, no, abs
 // full.
 func tallyTokenVotes(bonded math.Int, dels []types.BondedDelegation, votes map[string]types.VoteOption) (yes, no, abstain math.Int, err error) {
 	if bonded.IsNil() || bonded.IsNegative() {
-		return math.Int{}, math.Int{}, math.Int{}, fmt.Errorf("bonded stake must be a non-negative integer")
+		return math.Int{}, math.Int{}, math.Int{}, rejectAdvance(fmt.Errorf("bonded stake must be a non-negative integer"))
 	}
 	yes, no, abstain = math.ZeroInt(), math.ZeroInt(), math.ZeroInt()
 	cap := bonded.MulRaw(types.DelegatedVoteCapPercent).QuoRaw(100)
@@ -40,7 +40,7 @@ func tallyTokenVotes(bonded math.Int, dels []types.BondedDelegation, votes map[s
 	sum := math.ZeroInt()
 	for _, d := range dels {
 		if d.Delegator == nil || d.Validator == nil || d.Amount.IsNil() || d.Amount.IsNegative() {
-			return math.Int{}, math.Int{}, math.Int{}, fmt.Errorf("delegation is incomplete")
+			return math.Int{}, math.Int{}, math.Int{}, rejectAdvance(fmt.Errorf("delegation is incomplete"))
 		}
 		sum = sum.Add(d.Amount)
 		delegator := d.Delegator.String()
@@ -63,7 +63,7 @@ func tallyTokenVotes(bonded math.Int, dels []types.BondedDelegation, votes map[s
 		inheritedOpt[validator] = opt
 	}
 	if sum.GT(bonded) {
-		return math.Int{}, math.Int{}, math.Int{}, fmt.Errorf("delegations %s exceed bonded stake %s", sum, bonded)
+		return math.Int{}, math.Int{}, math.Int{}, rejectAdvance(fmt.Errorf("delegations %s exceed bonded stake %s", sum, bonded))
 	}
 	for validator, amt := range inherited {
 		counted := amt

@@ -183,6 +183,39 @@ func (k Keeper) ReleaseDepositPart(ctx context.Context, id string, part math.Int
 	return refund, burn, nil
 }
 
+// SlashDeposit burns up to amount of an open deposit, the whole deposit when it holds less, and
+// returns what it burned. Unlike a release, nothing is refunded: it is the penalty for whoever
+// locked the deposit as a stake. A deposit burned in full is removed, so no zero-amount row is
+// left behind.
+func (k Keeper) SlashDeposit(ctx context.Context, id string, amount math.Int) (burned math.Int, err error) {
+	if !amount.IsPositive() {
+		return math.Int{}, fmt.Errorf("deposit slash must be positive, got %s", amount)
+	}
+	deposit, err := k.Deposits.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, collections.ErrNotFound) {
+			return math.Int{}, fmt.Errorf("deposit id %q does not exist", id)
+		}
+		return math.Int{}, fmt.Errorf("failed to load deposit %q: %w", id, err)
+	}
+	burned = math.MinInt(amount, deposit.Amount)
+	burnCoins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, burned))
+	if err := k.bankKeeper.BurnCoins(ctx, types.DepositsModuleName, burnCoins); err != nil {
+		return math.Int{}, fmt.Errorf("failed to burn slashed deposit %q: %w", id, err)
+	}
+	deposit.Amount = deposit.Amount.Sub(burned)
+	if deposit.Amount.IsZero() {
+		if err := k.Deposits.Remove(ctx, id); err != nil {
+			return math.Int{}, fmt.Errorf("failed to remove slashed deposit %q: %w", id, err)
+		}
+		return burned, nil
+	}
+	if err := k.Deposits.Set(ctx, id, deposit); err != nil {
+		return math.Int{}, fmt.Errorf("failed to update slashed deposit %q: %w", id, err)
+	}
+	return burned, nil
+}
+
 // payOutDeposit moves refund from the deposits account into the owner's earnings and burns burn.
 func (k Keeper) payOutDeposit(ctx context.Context, owner sdk.AccAddress, refund, burn math.Int) error {
 	if refund.IsPositive() {

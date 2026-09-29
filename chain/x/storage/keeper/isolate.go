@@ -7,6 +7,8 @@ import (
 	"cosmossdk.io/collections"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
 const (
@@ -27,6 +29,9 @@ const (
 	FailureKindOperators = "operators"
 	// FailureKindDeal counts consecutive blocks one deal's BeginBlock work failed.
 	FailureKindDeal = "deal"
+	// FailureKindSlash counts consecutive misses of a node whose penalty (bond slash or probation
+	// deposit slash) could not be applied. The miss itself and any eviction still happened.
+	FailureKindSlash = "slash"
 
 	// failureEscalationEvery is the consecutive-failure interval at which a stuck subject is
 	// logged at error level and reported with a storage_item_stuck event, so an operator
@@ -37,6 +42,19 @@ const (
 // dealSubject names a deal in the failure counters, which are keyed by node id otherwise.
 func dealSubject(dealID uint64) string { return fmt.Sprintf("deal/%d", dealID) }
 
+// isItemFailure reports whether err is data about the one item being processed: a failure marked
+// with types.ErrItemRejected (a collaborator module refusing the item's write, an item that cannot
+// be paid, a malformed record) or a record the item points to that no longer exists. Anything else
+// (a collection that cannot be read or decoded, a broken counter, an unexpected condition) is a
+// fault of the state machine itself. Swallowing it would let every validator run on state it cannot
+// trust, so isolate returns it and the block fails.
+func isItemFailure(err error) bool {
+	if errors.Is(err, collections.ErrEncoding) {
+		return false
+	}
+	return errors.Is(err, types.ErrItemRejected) || errors.Is(err, collections.ErrNotFound)
+}
+
 // isolate runs one item's work on a cache branch of ctx. When fn fails, the branch is dropped,
 // the failure is counted against subject, a storage_item_failed event carries the reason, and
 // isolate reports failed=true so the caller can decide whether the item is retried or dropped.
@@ -44,11 +62,15 @@ func dealSubject(dealID uint64) string { return fmt.Sprintf("deal/%d", dealID) }
 //
 // A per-node, per-deal or per-user record that cannot be processed is data about that one item,
 // not a reason to stop the chain: returning its error out of BeginBlock or EndBlock would fail
-// FinalizeBlock and halt every validator on one node's funds. The returned error is only for the
-// failure counters themselves not being writable, which is a store fault and stays fatal.
+// FinalizeBlock and halt every validator on one node's funds. Only failures that isItemFailure
+// recognizes are isolated. The returned error is any other failure of fn (a store or encoding
+// fault) and the failure counters themselves not being writable; both stay fatal.
 func (k Keeper) isolate(ctx sdk.Context, kind, subject string, fn func(sdk.Context) error) (failed bool, err error) {
 	branch, write := ctx.CacheContext()
 	if ferr := fn(branch); ferr != nil {
+		if !isItemFailure(ferr) {
+			return true, fmt.Errorf("%s work for %s failed with a fault that is not about one item: %w", kind, subject, ferr)
+		}
 		return true, k.recordFailure(ctx, kind, subject, ferr)
 	}
 	write()

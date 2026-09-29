@@ -104,7 +104,7 @@ func (k Keeper) CreateDeal(ctx sdk.Context, msg *types.MsgCreateDeal) (uint64, e
 // deal. User messages cannot reach it.
 func (k Keeper) CreateProtocolDeal(ctx sdk.Context, class types.DealClass, payload []byte, price math.Int, duration uint64) (uint64, error) {
 	if len(payload) == 0 {
-		return 0, fmt.Errorf("protocol deal payload is empty")
+		return 0, rejectf("protocol deal payload is empty")
 	}
 	commitment, err := piece.Commit(payload)
 	if err != nil {
@@ -136,13 +136,13 @@ func (k Keeper) CreateArchiveDeal(ctx sdk.Context, pc types.PieceCommitment, dur
 
 func (k Keeper) createProtocolDeal(ctx sdk.Context, class types.DealClass, pc types.PieceCommitment, price math.Int, duration uint64) (uint64, error) {
 	if class != types.DealClass_DEAL_CLASS_ARCHIVE && class != types.DealClass_DEAL_CLASS_PUBLIC_PIN {
-		return 0, fmt.Errorf("protocol deals must be ARCHIVE or PUBLIC_PIN, got %s", class)
+		return 0, rejectf("protocol deals must be ARCHIVE or PUBLIC_PIN, got %s", class)
 	}
 	if price.IsNil() || !price.IsPositive() {
-		return 0, fmt.Errorf("protocol price must be positive")
+		return 0, rejectf("protocol price must be positive")
 	}
 	if duration == 0 || duration > types.MaxDurationEpochs {
-		return 0, fmt.Errorf("protocol duration must be in [1, %d]", types.MaxDurationEpochs)
+		return 0, rejectf("protocol duration must be in [1, %d]", types.MaxDurationEpochs)
 	}
 	epoch, err := k.currentEpoch(ctx)
 	if err != nil {
@@ -380,7 +380,7 @@ func (k Keeper) returnEscrow(ctx sdk.Context, deal *types.Deal) error {
 		return nil
 	}
 	if deal.Client == "" {
-		return fmt.Errorf("deal %d holds escrow %s but has no client", deal.Id, deal.Escrow)
+		return rejectf("deal %d holds escrow %s but has no client", deal.Id, deal.Escrow)
 	}
 	client, err := parseAddr(deal.Client)
 	if err != nil {

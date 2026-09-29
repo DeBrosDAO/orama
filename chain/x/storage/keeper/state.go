@@ -25,7 +25,7 @@ func coins(amount math.Int) sdk.Coins {
 func parseAddr(bech32 string) (sdk.AccAddress, error) {
 	addr, err := sdk.AccAddressFromBech32(bech32)
 	if err != nil {
-		return nil, fmt.Errorf("invalid address %q: %w", bech32, err)
+		return nil, rejectf("invalid address %q: %w", bech32, err)
 	}
 	return addr, nil
 }
@@ -46,7 +46,7 @@ func (k Keeper) loadDeal(ctx sdk.Context, id uint64) (types.Deal, error) {
 	deal, err := k.Deals.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, collections.ErrNotFound) {
-			return types.Deal{}, fmt.Errorf("deal %d does not exist", id)
+			return types.Deal{}, rejectf("deal %d does not exist", id)
 		}
 		return types.Deal{}, fmt.Errorf("failed to load deal %d: %w", id, err)
 	}
@@ -64,7 +64,7 @@ func (k Keeper) loadSlot(ctx sdk.Context, dealID uint64, index uint32) (types.Sl
 	slot, err := k.Slots.Get(ctx, collections.Join(dealID, index))
 	if err != nil {
 		if errors.Is(err, collections.ErrNotFound) {
-			return types.Slot{}, fmt.Errorf("deal %d slot %d does not exist", dealID, index)
+			return types.Slot{}, rejectf("deal %d slot %d does not exist", dealID, index)
 		}
 		return types.Slot{}, fmt.Errorf("failed to load deal %d slot %d: %w", dealID, index, err)
 	}

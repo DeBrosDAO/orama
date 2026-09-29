@@ -252,6 +252,25 @@ func (d *fakeDeposits) ReleaseDeposit(_ context.Context, id string) (math.Int, m
 	return amt, math.ZeroInt(), nil
 }
 
+// SlashDeposit burns up to amount of the deposit and removes a deposit burned in full, like x/fees.
+func (d *fakeDeposits) SlashDeposit(_ context.Context, id string, amount math.Int) (math.Int, error) {
+	held, ok := d.locked[id]
+	if !ok {
+		return math.Int{}, errf("deposit %s missing", id)
+	}
+	burned := math.MinInt(amount, held)
+	if err := d.bank.BurnCoins(context.Background(), "fees_deposits", sdk.NewCoins(sdk.NewCoin(params.BaseDenom, burned))); err != nil {
+		return math.Int{}, err
+	}
+	if burned.Equal(held) {
+		delete(d.locked, id)
+		delete(d.owner, id)
+		return burned, nil
+	}
+	d.locked[id] = held.Sub(burned)
+	return burned, nil
+}
+
 type fakeEmission struct {
 	epoch   uint64
 	ceiling map[uint64]math.Int
@@ -296,6 +315,11 @@ type nodeInfo struct {
 	slashN    int
 	slashed   math.Int
 	jailed    bool
+	// slashErr makes Slash fail, like x/nodes refusing a slash it cannot apply.
+	slashErr error
+	// capacityAfterSlash, when non-zero, is the declared capacity a slash clamps the node to,
+	// like x/nodes lowering the declaration to what the smaller bond backs.
+	capacityAfterSlash uint64
 }
 
 type fakeNodes struct {
@@ -382,7 +406,13 @@ func (n *fakeNodes) Slash(_ context.Context, id string, amount math.Int) error {
 	if err != nil {
 		return err
 	}
+	if info.slashErr != nil {
+		return info.slashErr
+	}
 	info.slashN++
+	if info.capacityAfterSlash != 0 && info.capacity > info.capacityAfterSlash {
+		info.capacity = info.capacityAfterSlash
+	}
 	if info.slashed.IsNil() {
 		info.slashed = math.ZeroInt()
 	}

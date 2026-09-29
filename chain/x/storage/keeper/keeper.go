@@ -76,11 +76,11 @@ func NewKeeper(
 	sb := collections.NewSchemaBuilder(storeService)
 	k := Keeper{
 		cdc:               cdc,
-		bank:              bank,
-		earnings:          earnings,
-		deposits:          deposits,
-		emission:          emission,
-		nodes:             nodes,
+		bank:              boundBank{bank},
+		earnings:          boundEarnings{earnings},
+		deposits:          boundDeposits{deposits},
+		emission:          boundEmission{emission},
+		nodes:             boundNodes{nodes},
 		Params:            collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
 		NextDealID:        collections.NewItem(sb, types.NextDealIDKey, "next_deal_id", collections.Uint64Value),
 		LastEpoch:         collections.NewItem(sb, types.LastEpochKey, "last_epoch", collections.Uint64Value),

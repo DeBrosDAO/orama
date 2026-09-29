@@ -9,6 +9,11 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app/params"
 )
 
+// MaxAdvanceAttempts is how many blocks in a row advancing one proposal may fail before the
+// proposal is closed as FAILED. It is a constant, not a parameter: it only bounds how long a
+// proposal that can never be tallied stays active, and no governance vote should tune it.
+const MaxAdvanceAttempts uint32 = 5
+
 const (
 	// DefaultVotingPeriod is one week. Bounds keep a vote from being shorter
 	// than a day or longer than four weeks.

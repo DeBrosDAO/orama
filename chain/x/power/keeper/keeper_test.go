@@ -303,6 +303,8 @@ type fakeEarningsKeeper struct {
 	credited map[string]math.Int
 	// failFor makes CreditEarnings fail for this address.
 	failFor string
+	// failWith, when set, is the error CreditEarnings returns for failFor.
+	failWith error
 }
 
 func newFakeEarningsKeeper() *fakeEarningsKeeper {
@@ -311,6 +313,9 @@ func newFakeEarningsKeeper() *fakeEarningsKeeper {
 
 func (e *fakeEarningsKeeper) CreditEarnings(_ context.Context, _ string, addr sdk.AccAddress, amt sdk.Coin) error {
 	if e.failFor != "" && e.failFor == addr.String() {
+		if e.failWith != nil {
+			return e.failWith
+		}
 		return fmt.Errorf("earnings of %s unavailable", addr)
 	}
 	key := addr.String()

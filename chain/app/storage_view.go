@@ -83,7 +83,8 @@ func (s storageNodes) Jail(ctx context.Context, nodeID string) error {
 }
 
 // Slash turns an absolute norama amount into a fraction of the STORAGE role
-// bond and slashes that role. A node with no storage bond is not slashed.
+// bond and slashes that role. A node with no storage bond has nothing here to slash: x/storage
+// penalizes a probation node through its record deposit, so this is a no-op for it.
 func (s storageNodes) Slash(ctx context.Context, nodeID string, amount math.Int) error {
 	if amount.IsNil() || !amount.IsPositive() {
 		return nil
@@ -100,7 +101,7 @@ func (s storageNodes) Slash(ctx context.Context, nodeID string, amount math.Int)
 		}
 	}
 	if bond.IsNil() || !bond.IsPositive() {
-		return fmt.Errorf("node %s has no storage bond to slash", nodeID)
+		return nil
 	}
 	fraction := math.LegacyNewDecFromInt(amount).Quo(math.LegacyNewDecFromInt(bond))
 	if fraction.GT(math.LegacyOneDec()) {

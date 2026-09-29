@@ -605,6 +605,54 @@ func TestEndBlock_anUnpayableUnbondingDoesNotHaltTheBlock(t *testing.T) {
 	f.requireInvariants(t)
 }
 
+// A fault that is not about the entry (a store that cannot be decoded) is not skipped as an
+// unpayable entry: EndBlock fails instead of running on state it cannot read.
+func TestEndBlock_anUnbondingStoreFaultStaysFatal(t *testing.T) {
+	f := newTestFixture(t)
+	op := newAccount(t)
+	f.fund(op, 100)
+	f.registerOperator(t, op)
+	f.registerNode(t, op, newAccount(t), "n", []types.Role{types.RoleStorage}, []types.Binding{
+		secpBinding(t, testChainID, op.String(), "hot"),
+	})
+	_, err := f.Msg.BondNode(f.Ctx, &types.MsgBondNode{Operator: op.String(), NodeId: "n", Role: types.RoleStorage, Amount: orama(2)})
+	require.NoError(t, err)
+	_, err = f.Msg.UnbondNode(f.Ctx, &types.MsgUnbondNode{Operator: op.String(), NodeId: "n", Role: types.RoleStorage, Amount: orama(1)})
+	require.NoError(t, err)
+	f.Bank.refuseTo = op.String()
+	f.Bank.refuseWith = errors.Join(errors.New("decode bank balance"), collections.ErrEncoding)
+
+	f.Ctx = f.Ctx.WithBlockTime(f.Ctx.BlockTime().Add(time.Duration(types.DefaultUnbondingSeconds) * time.Second))
+	require.ErrorIs(t, f.Keeper.EndBlock(f.Ctx), collections.ErrEncoding)
+}
+
+// A slash is a penalty and never fails because the node is busy: a slash that leaves the bond backing
+// less than the node has reserved clamps the declaration and the reservation down to the backing
+// and burns the bond.
+func TestSlash_clampsDeclaredAndReservedCapacityInsteadOfFailing(t *testing.T) {
+	f := newTestFixture(t)
+	op := newAccount(t)
+	f.fund(op, 100)
+	f.registerOperator(t, op)
+	f.registerNode(t, op, newAccount(t), "full", []types.Role{types.RoleStorage}, []types.Binding{
+		edBinding(t, testChainID, op.String(), "ipfs"),
+	})
+	_, err := f.Msg.BondNode(f.Ctx, &types.MsgBondNode{Operator: op.String(), NodeId: "full", Role: types.RoleStorage, Amount: orama(1)})
+	require.NoError(t, err)
+	_, err = f.Msg.DeclareCapacity(f.Ctx, &types.MsgDeclareCapacity{Operator: op.String(), NodeId: "full", CapacityBytes: types.GiB})
+	require.NoError(t, err)
+	require.NoError(t, f.Keeper.ReserveCapacity(f.Ctx, "full", types.GiB))
+
+	slashed, err := f.Keeper.Slash(f.Ctx, "full", types.RoleStorage, math.LegacyMustNewDecFromStr("0.5"))
+	require.NoError(t, err, "a fully reserved node is slashed all the same")
+	require.True(t, slashed.Equal(orama(1).QuoRaw(2)))
+	node, err := f.Keeper.GetNode(f.Ctx, "full")
+	require.NoError(t, err)
+	require.Equal(t, types.GiB/2, node.DeclaredCapacityBytes)
+	require.Equal(t, types.GiB/2, node.ReservedCapacityBytes, "the reservation cannot exceed the declaration")
+	f.requireInvariants(t)
+}
+
 // A public query must not walk every unbonding an operator queued on one node.
 func TestNodeUnbondingsQuery_isBounded(t *testing.T) {
 	f := newTestFixture(t)
