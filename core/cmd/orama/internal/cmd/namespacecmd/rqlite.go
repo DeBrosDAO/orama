@@ -2,15 +2,14 @@ package namespacecmd
 
 import (
 	"bufio"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/spf13/cobra"
 )
 
@@ -72,12 +71,7 @@ func rqliteExport(cmd *cobra.Command, args []string) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	client := &http.Client{
-		Timeout: 0,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
+	client := gatewayHTTPClient()
 
 	fmt.Printf("Exporting RQLite database to %s...\n", output)
 
@@ -174,12 +168,7 @@ func rqliteImport(cmd *cobra.Command, args []string) error {
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.ContentLength = info.Size()
 
-	client := &http.Client{
-		Timeout: 0,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
+	client := gatewayHTTPClient()
 
 	fmt.Printf("Importing database...\n")
 

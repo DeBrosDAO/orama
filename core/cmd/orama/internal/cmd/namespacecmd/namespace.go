@@ -3,7 +3,7 @@ package namespacecmd
 import (
 	"strings"
 
-	"github.com/DeBrosOfficial/network/cmd/orama/internal"
+	cli "github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/spf13/cobra"

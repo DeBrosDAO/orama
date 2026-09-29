@@ -162,8 +162,9 @@ func (store *EnhancedCredentialStore) Save() error {
 	return os.WriteFile(credPath, data, 0600)
 }
 
-// AddCredential adds a new credential for the gateway
-func (store *EnhancedCredentialStore) AddCredential(gatewayURL string, creds *Credentials) {
+// AddCredential adds a new credential for the gateway, or replaces the one for
+// the same wallet and namespace, and returns the index it is stored at.
+func (store *EnhancedCredentialStore) AddCredential(gatewayURL string, creds *Credentials) int {
 	if store.Gateways == nil {
 		store.Gateways = make(map[string]*GatewayCredentials)
 	}
@@ -190,12 +191,13 @@ func (store *EnhancedCredentialStore) AddCredential(gatewayURL string, creds *Cr
 		if strings.EqualFold(existing.Wallet, creds.Wallet) && existing.Namespace == creds.Namespace {
 			// Update existing credential
 			gatewayCredentials.Credentials[i] = creds
-			return
+			return i
 		}
 	}
 
 	// Add new credential
 	gatewayCredentials.Credentials = append(gatewayCredentials.Credentials, creds)
+	return len(gatewayCredentials.Credentials) - 1
 }
 
 // GetDefaultCredential returns the default credential for a gateway

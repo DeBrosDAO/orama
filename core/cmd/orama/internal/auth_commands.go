@@ -89,14 +89,11 @@ func AuthLogin(namespace, deviceKeyPath string) error {
 		return clierr.Auth("authentication failed: %w", err)
 	}
 
-	// Add to enhanced store
-	store.AddCredential(gatewayURL, creds)
-
-	// Set as default
-	gwCreds = store.Gateways[gatewayURL]
-	if gwCreds != nil {
-		store.SetDefaultCredential(gatewayURL, len(gwCreds.Credentials)-1)
-	}
+	// The credential just signed in becomes the default. When it replaced an
+	// existing one for the same wallet and namespace it keeps that slot, which
+	// is not necessarily the last; defaulting to the last slot used to leave
+	// the next command acting on another namespace.
+	store.SetDefaultCredential(gatewayURL, store.AddCredential(gatewayURL, creds))
 
 	if err := store.Save(); err != nil {
 		return clierr.Failure("failed to save credentials: %w", err)

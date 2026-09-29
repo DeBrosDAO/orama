@@ -3,7 +3,6 @@ package namespacecmd
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
 	backuphandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/backup"
 	"github.com/DeBrosOfficial/network/pkg/nsbackup"
+	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"github.com/spf13/cobra"
 )
 
@@ -114,6 +114,13 @@ type gatewayTarget struct {
 	client *http.Client
 }
 
+// gatewayHTTPClient talks to the gateway with the CLI's TLS roots, including a
+// CA the active environment trusts for its domain (a staging certificate).
+// It has no overall timeout: backups and database exports can be large.
+func gatewayHTTPClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsutil.GetTLSConfig()}}
+}
+
 func resolveGateway() (gatewayTarget, error) {
 	url, err := shared.GetAPIURL()
 	if err != nil {
@@ -123,9 +130,7 @@ func resolveGateway() (gatewayTarget, error) {
 	if err != nil {
 		return gatewayTarget{}, err
 	}
-	return gatewayTarget{url: url, token: token, client: &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
-	}}, nil
+	return gatewayTarget{url: url, token: token, client: gatewayHTTPClient()}, nil
 }
 
 // runRestore does everything that can fail on this machine first, so a wrong
