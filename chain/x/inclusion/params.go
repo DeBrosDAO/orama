@@ -23,7 +23,8 @@ const (
 	// DefaultMaxAnteAttempts caps how many listed transactions one block's
 	// walk runs through the full ante chain. Each attempt is charged to its
 	// sender's byte budget as well, but the ante chain is the expensive
-	// step, so the count is bounded on its own.
+	// step, so the count is bounded on its own. Like the verify cap it is the
+	// block's total, divided among the extensions that list anything.
 	DefaultMaxAnteAttempts = 1024
 
 	// DefaultMaxVerifyAttempts caps how many listed transactions one block's
@@ -36,11 +37,15 @@ const (
 	// passes Verify is charged and counted against MaxAnteAttempts, so an
 	// honest list needs about one verification per attempt.
 	//
-	// The cost of the bound is starvation: transactions are judged in
-	// lexicographic byte order, so junk that sorts first and passes the cheap
-	// checks can use up the verifications, and valid listed transactions after
-	// it are then not required in the block. They are not refused: a proposer
-	// may still include them, and they stay in every node's mempool.
+	// The cap is the block's total, and it is divided evenly among the vote
+	// extensions that list anything, each transaction being charged to the
+	// extension that lists it and has the most left. A validator that lists
+	// junk therefore uses up its own share, not another validator's: the
+	// transactions only others list are still verified and required. The cost
+	// of the bound is that a validator (or coalition of f of N) can still
+	// starve what only it lists, and no more than f/N of the total. Skipped
+	// transactions are not refused: a proposer may still include them, and
+	// they stay in every node's mempool.
 	DefaultMaxVerifyAttempts = 4096
 )
 

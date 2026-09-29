@@ -381,3 +381,120 @@ func TestDefaultParams_verifyCapIsAtLeastTheAnteCap(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// One validator's junk must not use up the verifications another validator's transaction needs. The
+// junk validator lists far more distinct junk than the block's verify total, all sorting before the
+// honest validator's one valid transaction; before, the shared budget ran out inside the junk and the
+// valid transaction was not required.
+func TestRequired_oneValidatorsJunkDoesNotStarveAnotherValidatorsTransaction(t *testing.T) {
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 2
+	v.Params.MaxVerifyAttempts = 20
+	var junk [][]byte
+	for i := 0; i < 200; i++ {
+		junk = append(junk, mustTx(t, "victim", 0, 5, 10+i))
+	}
+	junk = sortedTxs(junk...)
+	// The valid transaction sorts behind every junk one.
+	good := mustTx(t, "victim", 0, 5, 300)
+	if bytes.Compare(good, junk[len(junk)-1]) < 0 {
+		t.Fatal("test setup: the valid transaction must sort last")
+	}
+	verified := 0
+	v.Verify = func(raw []byte, _ Meta) bool {
+		verified++
+		return bytes.Equal(raw, good)
+	}
+	v.Admit = func([]byte, Meta) bool { return true }
+	c := Commit{Extensions: []Extension{
+		{PubKey: []byte("a-junk"), Power: 1, Height: 4, Txs: junk[:100]},
+		{PubKey: []byte("b-junk"), Power: 0, Height: 4, Txs: nil},
+		{PubKey: []byte("z-honest"), Power: 1, Height: 4, Txs: [][]byte{good}},
+	}}
+	// Power 0 extensions are dropped by accept; keep the honest and the junk one only.
+	c.Extensions = []Extension{c.Extensions[0], c.Extensions[2]}
+	need, err := Required(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(need) != 1 || !bytes.Equal(need[0], good) {
+		t.Fatalf("the honest validator's valid transaction is required, got %d transactions", len(need))
+	}
+	if verified > v.Params.MaxVerifyAttempts {
+		t.Fatalf("Verify ran %d times, above the block total of %d", verified, v.Params.MaxVerifyAttempts)
+	}
+}
+
+// Overlapping honest lists cost one run per distinct transaction, not one per validator listing it.
+func TestRequired_sharedTransactionsAreChargedOnce(t *testing.T) {
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 3
+	v.Params.MaxVerifyAttempts = 30
+	v.Params.MaxAnteAttempts = 30
+	var txs [][]byte
+	for i := 0; i < 30; i++ {
+		txs = append(txs, mustTx(t, string(rune('a'+i%26))+string(rune('a'+i/26)), 0, 5, 10))
+	}
+	txs = sortedTxs(txs...)
+	v.Verify = func([]byte, Meta) bool { return true }
+	v.Admit = func([]byte, Meta) bool { return true }
+	var exts []Extension
+	for i := 0; i < 3; i++ {
+		exts = append(exts, Extension{PubKey: []byte{byte(i)}, Power: 1, Height: 4, Txs: txs})
+	}
+	need, err := Required(v, Commit{Extensions: exts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(need) != 30 {
+		t.Fatalf("required %d of 30 transactions every validator lists: shared transactions were charged more than once", len(need))
+	}
+}
+
+// The total work stays bounded: a validator that lists only junk can spend its own share and no more.
+func TestRequired_aJunkValidatorSpendsOnlyItsOwnShare(t *testing.T) {
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 3, 0, 3
+	v.Params.MaxVerifyAttempts = 30
+	var junk [][]byte
+	for i := 0; i < 100; i++ {
+		junk = append(junk, mustTx(t, "victim", 0, 5, 10+i))
+	}
+	verified := 0
+	v.Verify = func([]byte, Meta) bool { verified++; return false }
+	v.Admit = func([]byte, Meta) bool { return true }
+	c := Commit{Extensions: []Extension{
+		{PubKey: []byte{1}, Power: 1, Height: 3, Txs: sortedTxs(junk...)},
+		{PubKey: []byte{2}, Power: 1, Height: 3, Txs: [][]byte{mustTx(t, "other", 0, 5, 10)}},
+		{PubKey: []byte{3}, Power: 1, Height: 3, Txs: [][]byte{mustTx(t, "third", 0, 5, 10)}},
+	}}
+	if _, err := Required(v, c); err != nil {
+		t.Fatal(err)
+	}
+	// 30 runs over 3 listing extensions is 10 each: the junk validator's 100 cost 10 runs, the two
+	// others one each.
+	if verified != 12 {
+		t.Fatalf("Verify ran %d times, want 12 (10 for the junk validator, 1 each for the others)", verified)
+	}
+}
+
+// More listing validators than the block total still each get one run, so nobody is silenced.
+func TestRequired_everyListingValidatorGetsAtLeastOneRun(t *testing.T) {
+	v := listView()
+	v.Height, v.Round, v.TotalPower = 4, 0, 4
+	v.Params.MaxVerifyAttempts = 2
+	v.Verify = func([]byte, Meta) bool { return true }
+	v.Admit = func([]byte, Meta) bool { return true }
+	var exts []Extension
+	for i := 0; i < 4; i++ {
+		exts = append(exts, Extension{PubKey: []byte{byte(i)}, Power: 1, Height: 4,
+			Txs: [][]byte{mustTx(t, string(rune('a'+i)), 0, 5, 10)}})
+	}
+	need, err := Required(v, Commit{Extensions: exts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(need) != 4 {
+		t.Fatalf("required %d of 4 transactions, one per listing validator", len(need))
+	}
+}

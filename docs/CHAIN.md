@@ -1930,15 +1930,26 @@ over the budget, so an oversized commit has one deterministic outcome.
 **CPU limits on listed transactions.** The walk checks each candidate's signature against its
 sender's account (`inclusionTxRules.verifier`) before charging it. A transaction that only names a
 sender it cannot sign for is skipped without costing that sender's budget or an ante attempt, but
-each such check is a signature verification, so at most 4096 (`max_verify_attempts`) run per block
-and the walk stops there: without the bound, junk that names a real sender at its next sequence
-(roughly 20,000 of the smallest fit in the 4 MiB embedded cap) would cost every node that many
-signature checks per proposal. Every other candidate that reaches the ante chain is charged to its
-sender's 32 KiB byte budget whether or not it passes, and at most 1024 (`max_ante_attempts`) run the
-ante chain per block; the walk stops there too. The caps bound work; the cost is that junk (or
-validly signed transactions) that sorts first can use them up, so a later transaction is then not
-*required* (a proposer can still include it, and it stays in the mempool). `VerifyVoteExtension`
-cannot check signatures, which need the account number.
+each such check is a signature verification, so at most 4096 (`max_verify_attempts`) run per block:
+without the bound, junk that names a real sender at its next sequence (roughly 20,000 of the
+smallest fit in the 4 MiB embedded cap) would cost every node that many signature checks per
+proposal. Every other candidate that reaches the ante chain is charged to its sender's 32 KiB byte
+budget whether or not it passes, and at most 1024 (`max_ante_attempts`) run the ante chain per
+block.
+
+Both caps are the block's totals and are budgeted **per listing extension**, so one validator's junk
+cannot use up what the others' transactions need. The totals are divided evenly among the vote
+extensions that list anything (at least one run each, so total work is at most the larger of the
+total and the number of listing validators). The walk still visits the deduplicated transactions in
+lexicographic order, and each verification or ante run is charged to the extension that lists the
+transaction and has the most budget left (the first in public-key order on a tie), so a transaction
+that many validators list costs one run, not one per validator. A transaction that every validator
+listing it can no longer afford is skipped and the walk goes on. A validator listing only junk runs
+out of its own share and its remaining junk is skipped; a valid transaction another validator lists
+is still verified and required. What the bound still costs: a validator (or f of N validators) can
+starve the transactions that only it lists, and no more than f/N of the total runs. A skipped
+transaction is not *required*, but a proposer can still include it and it stays in the mempool.
+`VerifyVoteExtension` cannot check signatures, which need the account number.
 
 **State the rule is judged on.** `ProcessProposal` judges listed transactions on the last committed
 state, but they execute after this block's `BeginBlock`. The judgement can drift (the base fee moves by
