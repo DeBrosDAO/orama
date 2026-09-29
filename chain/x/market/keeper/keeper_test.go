@@ -14,6 +14,7 @@ import (
 	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	cnftkeeper "github.com/DeBrosOfficial/network/chain/x/cnft/keeper"
@@ -84,6 +85,9 @@ func (b *fakeBank) SendCoinsFromModuleToModule(_ context.Context, from, to strin
 }
 
 func (b *fakeBank) GetBalance(_ context.Context, addr sdk.AccAddress, denom string) sdk.Coin {
+	if addr.Equals(authtypes.NewModuleAddress(types.ModuleName)) {
+		return sdk.NewCoin(denom, b.get(modKey(types.ModuleName)))
+	}
 	return sdk.NewCoin(denom, b.get(userKey(addr)))
 }
 

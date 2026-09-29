@@ -164,9 +164,10 @@ var (
 	DefaultNodeHome string
 
 	// maccPerms lists every module account and the mint/burn permissions it holds. Only
-	// x/emission may mint (and only the validator/delegator share, per
-	// plans/open-network/track-c-chain.md C3); the staking pools burn as part of the standard
-	// bond/unbond accounting, and x/fees' two module accounts burn the base fee and the 1%
+	// x/emission mints norama: the validator/delegator share (plans/open-network/track-c-chain.md
+	// C3), development spends, and storage and relay payments, which it moves on to the paying
+	// module. x/token holds Minter only for its own denoms (app/mint_policy.go). The staking
+	// pools burn as part of the standard bond/unbond accounting, and x/fees' two module accounts burn the base fee and the 1%
 	// deposit-burn share (C2). x/power holds no permissions at all: it only moves already-minted
 	// coins between other modules' accounts and delegates on a committee member's behalf, through
 	// x/staking's own keeper.

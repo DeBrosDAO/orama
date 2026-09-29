@@ -112,6 +112,14 @@ func TestSettle_acceptsBidFromEscrow(t *testing.T) {
 	bid, err := f.msg.Bid(f.ctx, &types.MsgBid{Bidder: bidder, ListingId: listing.Id, Amount: math.NewInt(2000)})
 	require.NoError(t, err)
 	require.True(t, f.bank.get(userKey(bidderAddr)).IsZero())
+	detail, broken, err := f.keeper.CheckInvariants(f.ctx)
+	require.NoError(t, err)
+	require.False(t, broken, detail)
+	f.bank.add(modKey(types.ModuleName), math.NewInt(1))
+	_, broken, err = f.keeper.CheckInvariants(f.ctx)
+	require.NoError(t, err)
+	require.True(t, broken, "a stray coin in escrow breaks the invariant")
+	require.NoError(t, f.bank.sub(modKey(types.ModuleName), math.NewInt(1)))
 
 	res, err := f.msg.Settle(f.ctx, &types.MsgSettle{
 		Signer: seller, ListingId: listing.Id, BidId: bid.Id, Leaf: body, Proof: proof,
@@ -124,6 +132,9 @@ func TestSettle_acceptsBidFromEscrow(t *testing.T) {
 	require.True(t, f.bank.get(userKey(mustAddr(t, creator))).IsZero())
 	require.True(t, f.earnings.get(mustAddr(t, creator)).Equal(math.NewInt(100)))
 	require.True(t, f.earnings.get(mustAddr(t, seller)).Equal(math.NewInt(1900)))
+	detail, broken, err = f.keeper.CheckInvariants(f.ctx)
+	require.NoError(t, err)
+	require.False(t, broken, detail)
 }
 
 func TestProtoMarshalRoundTrip(t *testing.T) {
