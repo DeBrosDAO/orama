@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 	"net/http"
 	"strings"
 	"time"
@@ -201,16 +202,12 @@ func (a *AuditLog) RecordFromRequest(ctx context.Context, r *http.Request, event
 	a.Record(ctx, event)
 }
 
-// clientIP is the address to record. X-Forwarded-For is what the reverse proxy
-// in front of the gateway sets; its first entry is the client.
+// clientIP is the address to record: the peer address, or, only when the peer is the local reverse
+// proxy, the last X-Forwarded-For entry it appended (the first is what the caller wrote). See
+// clientkey.Resolve.
 func clientIP(r *http.Request) string {
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-		if comma := strings.IndexByte(forwarded, ','); comma >= 0 {
-			return strings.TrimSpace(forwarded[:comma])
-		}
-		return forwarded
-	}
-	return r.RemoteAddr
+	client, _ := clientkey.Resolve(r)
+	return client
 }
 
 func truncate(s string, max int) string {

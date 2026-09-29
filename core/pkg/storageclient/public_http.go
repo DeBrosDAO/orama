@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"net"
 	"net/http"
 	"syscall"
@@ -49,11 +50,6 @@ func refuseNonPublic(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-// IsPublic reports whether ip is a globally routable unicast address.
-func IsPublic(ip net.IP) bool {
-	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() &&
-		!cgnat.Contains(ip)
-}
-
-// cgnat is 100.64.0.0/10, shared address space that is not public.
-var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+// IsPublic reports whether ip is a public address: not in any range of the shared list in
+// pkg/netguard.
+func IsPublic(ip net.IP) bool { return !netguard.Reserved(ip) }

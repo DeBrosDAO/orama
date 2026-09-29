@@ -392,9 +392,16 @@ stage_tools() {
 global_install() {
 	local alias="$1" name="$2" phase="$3" peers="${4:-}" services="chain,ipfs,provider,archiver"
 	[ "$name" = "$INDEXER_NODE" ] && services="$services,indexer"
+	# The login user is resolved on its own line: inside the array a failing command substitution
+	# would not stop the script (the status of `local` and of an array assignment hides it).
+	local login
+	login="$(login_user "$alias")"
 	local args=(sudo "$STAGE_DIR/orama" global install --colocated --services "$services"
-		--public-storage-gb "$PUBLIC_STORAGE_GB" --staged-dir "$STAGE_DIR"
-		--chain-client-user "$(login_user "$alias")")
+		--public-storage-gb "$PUBLIC_STORAGE_GB" --staged-dir "$STAGE_DIR")
+	# root is always allowed to reach the chain, and the install refuses it as a client user.
+	if [ "$login" != root ]; then
+		args+=(--chain-client-user "$login")
+	fi
 	if [ "$phase" = 1 ]; then
 		args+=(--init-chain --chain-id "$CHAIN_ID" --moniker "$name" --genesis "$STAGE_DIR/genesis.json")
 	else

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 	"hash/fnv"
 	"io"
 	"net"
@@ -1283,23 +1284,13 @@ func remoteAddrIP(r *http.Request) string {
 	return host
 }
 
-// getClientIP extracts the client IP from headers or RemoteAddr
+// getClientIP is the address a request is attributed to (request log, namespace affinity, the
+// X-Forwarded-For handed to a proxied service): the peer address, or, only when the peer is the
+// local reverse proxy, the last X-Forwarded-For entry it appended. The first entry is whatever the
+// caller wrote and is never used, and neither is X-Real-IP. See clientkey.Resolve.
 func getClientIP(r *http.Request) string {
-	// X-Forwarded-For may contain a list of IPs, take the first
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		parts := strings.Split(xff, ",")
-		if len(parts) > 0 {
-			return strings.TrimSpace(parts[0])
-		}
-	}
-	if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
-		return xr
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	client, _ := clientkey.Resolve(r)
+	return client
 }
 
 // domainRoutingMiddleware handles requests to deployment domains and namespace gateways

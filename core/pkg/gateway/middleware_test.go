@@ -312,36 +312,12 @@ func TestGetClientIP(t *testing.T) {
 		remoteAddr string
 		want       string
 	}{
-		{
-			name:       "X-Forwarded-For single IP",
-			xff:        "1.2.3.4",
-			remoteAddr: "9.9.9.9:1234",
-			want:       "1.2.3.4",
-		},
-		{
-			name:       "X-Forwarded-For multiple IPs",
-			xff:        "1.2.3.4, 5.6.7.8",
-			remoteAddr: "9.9.9.9:1234",
-			want:       "1.2.3.4",
-		},
-		{
-			name:       "X-Real-IP fallback",
-			xRealIP:    "1.2.3.4",
-			remoteAddr: "9.9.9.9:1234",
-			want:       "1.2.3.4",
-		},
-		{
-			name:       "RemoteAddr fallback",
-			remoteAddr: "9.8.7.6:1234",
-			want:       "9.8.7.6",
-		},
-		{
-			name:       "X-Forwarded-For takes priority over X-Real-IP",
-			xff:        "1.2.3.4",
-			xRealIP:    "5.6.7.8",
-			remoteAddr: "9.9.9.9:1234",
-			want:       "1.2.3.4",
-		},
+		{name: "a direct caller's X-Forwarded-For is ignored", xff: "1.2.3.4", remoteAddr: "9.9.9.9:1234", want: "9.9.9.9"},
+		{name: "a direct caller's X-Real-IP is ignored", xRealIP: "1.2.3.4", remoteAddr: "9.9.9.9:1234", want: "9.9.9.9"},
+		{name: "RemoteAddr", remoteAddr: "9.8.7.6:1234", want: "9.8.7.6"},
+		{name: "through the local proxy the last entry counts", xff: "6.6.6.6, 1.2.3.4", remoteAddr: "127.0.0.1:1234", want: "1.2.3.4"},
+		{name: "a spoofed first entry is never the client", xff: "1.2.3.4, 5.6.7.8", remoteAddr: "127.0.0.1:1234", want: "5.6.7.8"},
+		{name: "X-Real-IP is not used through the proxy either", xff: "5.6.7.8", xRealIP: "1.2.3.4", remoteAddr: "127.0.0.1:1234", want: "5.6.7.8"},
 	}
 
 	for _, tc := range tests {
@@ -832,5 +808,21 @@ func TestIsPlatformPage_onlyTheGatewaysOwnPages(t *testing.T) {
 		if got := isPlatformPage(path); got != want {
 			t.Errorf("isPlatformPage(%q) = %v, want %v", path, got, want)
 		}
+	}
+}
+
+// The request log, the namespace affinity key and the X-Forwarded-For handed to a proxied service
+// all use getClientIP, so a spoofed first entry must not reach any of them.
+func TestGetClientIP_aSpoofedFirstForwardedForEntryIsNotForwardedOrKeyed(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "127.0.0.1:5555"
+	r.Header.Set("X-Forwarded-For", "10.9.9.9, 203.0.113.50")
+	if got := getClientIP(r); got != "203.0.113.50" {
+		t.Fatalf("client = %q, want the address the proxy appended", got)
+	}
+	out := httptest.NewRequest(http.MethodGet, "/", nil)
+	out.Header.Set("X-Forwarded-For", getClientIP(r))
+	if out.Header.Get("X-Forwarded-For") != "203.0.113.50" {
+		t.Errorf("the forwarded X-Forwarded-For carries the spoofed entry: %q", out.Header.Get("X-Forwarded-For"))
 	}
 }

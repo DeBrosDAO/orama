@@ -1,6 +1,7 @@
-// Package clientkey decides which address a request is charged to for rate limiting, and the bucket
-// key that address is limited under. The cluster gateway and the vault proxy share it, so no handler
-// keeps its own reading of X-Forwarded-For.
+// Package clientkey decides which address a request is attributed to (rate limits, the request log,
+// namespace affinity, the audit trail, the X-Forwarded-For handed to proxied services) and the
+// bucket key that address is limited under. The cluster gateway, its auth audit and the vault proxy
+// share it, so no handler keeps its own reading of X-Forwarded-For.
 package clientkey
 
 import (

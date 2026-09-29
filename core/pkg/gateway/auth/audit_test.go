@@ -162,7 +162,7 @@ func TestAuditLog_recordsTheClientAddressNotTheProxys(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/auth/verify", nil)
 	req.RemoteAddr = "127.0.0.1:54321"
-	req.Header.Set("X-Forwarded-For", "203.0.113.4, 10.0.0.1")
+	req.Header.Set("X-Forwarded-For", "10.0.0.1, 203.0.113.4")
 	req.Header.Set("User-Agent", "anchat/2.1")
 
 	log.RecordFromRequest(context.Background(), req, AuditEvent{Action: AuditVerifySucceeded})
@@ -170,7 +170,7 @@ func TestAuditLog_recordsTheClientAddressNotTheProxys(t *testing.T) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if db.rows[0][5] != "203.0.113.4" {
-		t.Errorf("ip = %v, want the client's address", db.rows[0][5])
+		t.Errorf("ip = %v, want the address the proxy appended, not the spoofed first entry", db.rows[0][5])
 	}
 	if db.rows[0][6] != "anchat/2.1" {
 		t.Errorf("user agent = %v", db.rows[0][6])
@@ -186,8 +186,24 @@ func TestAuditLog_fallsBackToRemoteAddrWithNoProxyHeader(t *testing.T) {
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	if db.rows[0][5] != "198.51.100.7:1234" {
+	if db.rows[0][5] != "198.51.100.7" {
 		t.Errorf("ip = %v", db.rows[0][5])
+	}
+}
+
+// A direct caller cannot choose the address the audit trail records by writing a header.
+func TestAuditLog_aDirectCallersForwardedForIsIgnored(t *testing.T) {
+	log, db := newTestAudit()
+	req := httptest.NewRequest("POST", "/v1/auth/verify", nil)
+	req.RemoteAddr = "198.51.100.7:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.99")
+
+	log.RecordFromRequest(context.Background(), req, AuditEvent{Action: AuditVerifySucceeded})
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.rows[0][5] != "198.51.100.7" {
+		t.Errorf("ip = %v, want the peer address", db.rows[0][5])
 	}
 }
 

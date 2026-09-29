@@ -25,7 +25,7 @@ func TestGlobalCollectScript_readsTheChainOnTheNamespaceAddressWhenCoLocated(t *
 
 func TestGlobalCollectScript_asksThroughSudoOnTheNamespaceAddressAndSaysWhenItFails(t *testing.T) {
 	script := globalCollectScript()
-	if !strings.Contains(script, `if [ "$chain_host" = 198.18.0.2 ]; then sudo -n curl -sf --max-time 3 "$1"; else curl -sf --max-time 3 "$1"; fi || echo `+chainCurlFailed) {
+	if !strings.Contains(script, `if [ "$chain_host" = 198.18.0.2 ]; then sudo -n curl -sf --max-time 3 "$1" || echo `+chainCurlFailedSudo+`; else curl -sf --max-time 3 "$1" || echo `+chainCurlFailed+`; fi`) {
 		t.Errorf("chain_curl does not use sudo -n on the namespace address and report failure:\n%s", script)
 	}
 	if strings.Contains(script, "curl -sf --max-time 3 http://$chain_host") || strings.Contains(script, `curl -sf --max-time 3 "http://$chain_host`) {
@@ -47,5 +47,16 @@ func TestChainFromSections_anActiveChainThatCannotBeAskedIsAnError(t *testing.T)
 	}, time.Now())
 	if quiet == nil || strings.Contains(quiet.Error, "sudo") {
 		t.Errorf("a stopped chain must not be reported as a sudo failure: %+v", quiet)
+	}
+}
+
+func TestChainFromSections_theSudoHintIsOnlyForTheSudoPath(t *testing.T) {
+	sudo := chainFromSections(map[string]string{"chain_load": "loaded", "chain_state": "active", "status": chainCurlFailedSudo}, time.Now())
+	if sudo == nil || !strings.Contains(sudo.Error, "sudo") {
+		t.Errorf("a failed sudo request must name sudo: %+v", sudo)
+	}
+	plain := chainFromSections(map[string]string{"chain_load": "loaded", "chain_state": "active", "status": chainCurlFailed}, time.Now())
+	if plain == nil || plain.Error == "" || strings.Contains(plain.Error, "sudo") {
+		t.Errorf("a failed loopback request must not mention sudo: %+v", plain)
 	}
 }

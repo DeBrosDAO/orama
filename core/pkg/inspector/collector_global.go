@@ -26,6 +26,10 @@ func collectGlobalNode(ctx context.Context, node Node) (*report.ChainReport, *re
 // chainCurlFailed is what the collection script prints in a chain section when the request failed.
 const chainCurlFailed = "ORAMA_CHAIN_CURL_FAILED"
 
+// chainCurlFailedSudo is the same, printed when the request went through sudo -n (a co-located
+// machine), where a failed sudo is one of the causes.
+const chainCurlFailedSudo = "ORAMA_CHAIN_CURL_FAILED_SUDO"
+
 func globalCollectScript() string {
 	return fmt.Sprintf(`
 mark() { echo "===ORAMA_GLOBAL $1==="; }
@@ -35,7 +39,7 @@ chain_host=127.0.0.1
 # accounts the install allowed reach: ask through sudo, and say so when the answer does not come
 # instead of printing nothing (a chain that is down and one that cannot be asked look the same).
 chain_curl() {
-  if [ "$chain_host" = %s ]; then sudo -n curl -sf --max-time 3 "$1"; else curl -sf --max-time 3 "$1"; fi || echo %s
+  if [ "$chain_host" = %s ]; then sudo -n curl -sf --max-time 3 "$1" || echo %s; else curl -sf --max-time 3 "$1" || echo %s; fi
 }
 unit_load() { systemctl show -p LoadState --value "$1" 2>/dev/null || echo unknown; }
 unit_state() { systemctl is-active "$1" 2>/dev/null || true; }
@@ -81,7 +85,7 @@ unit_state %s
 mark relay_monitor
 sudo -n head -c 4096 %s/%s 2>/dev/null || true
 `,
-		globalnetns.UnitName, constants.GlobalNetnsAddr, constants.GlobalNetnsAddr, chainCurlFailed,
+		globalnetns.UnitName, constants.GlobalNetnsAddr, constants.GlobalNetnsAddr, chainCurlFailedSudo, chainCurlFailed,
 		constants.ChainServiceUnit, constants.ChainServiceUnit,
 		constants.ChainRPCPort, constants.ChainRPCPort, constants.ChainRPCPort,
 		constants.ChainAPIPort, constants.ChainAPIPort, constants.ChainAPIPort,
@@ -124,10 +128,16 @@ func chainFromSections(sections map[string]string, now time.Time) *report.ChainR
 	if state == "" {
 		state = "inactive"
 	}
-	if state == "active" && strings.Contains(sections["status"], chainCurlFailed) {
+	if state == "active" && strings.Contains(sections["status"], chainCurlFailedSudo) {
 		return &report.ChainReport{
 			ServiceActive: true, UnitState: state,
 			Error: "the chain unit is active but its RPC could not be read from this machine (co-located: sudo -n curl to the namespace address failed; check the node account's passwordless sudo)",
+		}
+	}
+	if state == "active" && strings.Contains(sections["status"], chainCurlFailed) {
+		return &report.ChainReport{
+			ServiceActive: true, UnitState: state,
+			Error: "the chain unit is active but its RPC could not be read from this machine",
 		}
 	}
 	for _, key := range []string{"status", "net", "validators", "params", "signing", "staking"} {

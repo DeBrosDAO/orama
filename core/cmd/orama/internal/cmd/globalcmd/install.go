@@ -2,6 +2,7 @@ package globalcmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/install"
@@ -121,8 +122,8 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		PublicStorageBytes: installFlags.publicStorageGB * bytesPerGB,
 		ChainClientUsers:   installFlags.chainClientUsers,
 	}
-	if len(opts.ChainClientUsers) > 0 && !opts.Colocated {
-		return clierr.Usage("--chain-client-user only applies with --colocated")
+	if err := checkChainClientUsers(opts.ChainClientUsers, opts.Colocated); err != nil {
+		return err
 	}
 	if installFlags.initChain {
 		opts.InitChain = &install.ChainInit{
@@ -141,5 +142,18 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(out, "installed %v; start them with: orama global start\n", installFlags.services)
 	warnIfMigratedAway(cmd)
+	return nil
+}
+
+// checkChainClientUsers refuses an empty --chain-client-user value, and the flag without --colocated.
+func checkChainClientUsers(users []string, colocated bool) error {
+	for _, u := range users {
+		if strings.TrimSpace(u) == "" {
+			return clierr.Usage("--chain-client-user needs an account name, got an empty value")
+		}
+	}
+	if len(users) > 0 && !colocated {
+		return clierr.Usage("--chain-client-user only applies with --colocated")
+	}
 	return nil
 }

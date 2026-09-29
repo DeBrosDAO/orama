@@ -449,7 +449,10 @@ the install, on one node at a time.
 local accounts to that set: names are resolved to uids at install, an unknown
 one (or root, which is always allowed) refuses the install, and the set is kept
 in `/var/lib/orama-global/netns-chain-clients` so a later install without the
-flag keeps it. The stagenet `deploy.sh` passes each node's ssh login user, which
+flag keeps it. The set only grows: to drop an account, edit or delete
+`/var/lib/orama-global/netns-chain-clients` and run the install again, which
+re-renders the host rules. The rule holds numeric uids, resolved at install, so an
+account that is deleted and re-created (a new uid) needs a re-install too. The stagenet `deploy.sh` passes each node's ssh login user, which
 the smoke tunnel (`ssh -L ...:198.18.0.2:port`) and `orama chain` run as.
 
 **Residual.** The output rule names accounts, not programs: root, the
