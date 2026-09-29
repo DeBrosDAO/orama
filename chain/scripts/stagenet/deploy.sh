@@ -259,9 +259,16 @@ configure_node() {
 		-e 's#^pruning-keep-recent = .*#pruning-keep-recent = \"100\"#' \
 		-e 's#^pruning-interval = .*#pruning-interval = \"10\"#' \
 		-e 's#^app-db-backend = .*#app-db-backend = \"pebbledb\"#' \
+		-e '/^\[api\]/,/^\[/ s#^enable = false#enable = true#' \
 		$HOME_DIR/config/app.toml"
 	assert_set "$alias" "$HOME_DIR/config/app.toml" "address = \"127.0.0.1:$GRPC_PORT\"" "the gRPC listen address"
 	assert_set "$alias" "$HOME_DIR/config/app.toml" "app-db-backend = \"pebbledb\"" "the app-db-backend"
+	# The REST API (loopback 31003) is off by default; the gateway's /v1/chain/
+	# proxy and the node monitor read it.
+	if ! on "$alias" "sudo -u $SVC_USER awk '/^\[api\]/{a=1;next} /^\[/{a=0} a && /^enable = true/{f=1} END{exit !f}' $HOME_DIR/config/app.toml"; then
+		echo "failed to enable the REST API in $HOME_DIR/config/app.toml on $alias" >&2
+		exit 1
+	fi
 }
 
 write_unit() {
