@@ -63,6 +63,26 @@ func (k Keeper) StorageEligible(ctx sdk.Context, nodeID string) (bool, error) {
 	return ok, err
 }
 
+// StorageProbation reports whether a node is a fee-free probation registration for the STORAGE
+// role (C2, C7): it has the role, has posted no STORAGE bond, and is Registered, not jailed,
+// retired or tombstoned. Such a node cannot be StorageEligible, which needs the bond; x/storage
+// tracks it separately, with a small capped capacity and only protocol-deal slots. A node with a
+// bond below min_bond is not a probation node: it chose to bond and has not finished. A node that
+// does not exist is not one either.
+func (k Keeper) StorageProbation(ctx sdk.Context, nodeID string) (bool, error) {
+	node, err := k.GetNode(ctx, nodeID)
+	if errors.Is(err, types.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if node.Status != types.NodeStatusRegistered || !types.HasRole(node.Roles, types.RoleStorage) {
+		return false, nil
+	}
+	return bondOf(node, types.RoleStorage).IsZero(), nil
+}
+
 // NodeNetwork returns the node's network group (the /16 derived from its
 // endpoints, "" when none carries a literal IP) and its declared ASN (0 when
 // undeclared). Both are operator declarations: see docs/CHAIN.md.

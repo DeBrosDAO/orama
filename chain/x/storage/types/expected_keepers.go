@@ -56,11 +56,17 @@ type EmissionKeeper interface {
 // when the operator declared none; neither is verified on chain (docs/CHAIN.md, "Node network
 // identity").
 //
+// IsProbation means the node is a fee-free probation registration: it has the STORAGE role, no
+// STORAGE bond, and is not jailed, retired or tombstoned. Such a node is not IsActive; x/storage
+// tracks it with Probation set, gives it only protocol-deal slots under the probation caps, and
+// recovers its record deposit when it graduates or is untracked.
+//
 // TakeStorageChanges drains the ids of STORAGE-role nodes written since the previous call, in id
 // order. MarkStorageChanged queues one back. x/storage reconciles its own node set from these in
 // BeginBlock (see Keeper.syncNodes).
 type NodeView interface {
 	IsActive(ctx context.Context, nodeID string) (bool, error)
+	IsProbation(ctx context.Context, nodeID string) (bool, error)
 	TakeStorageChanges(ctx context.Context) ([]string, error)
 	MarkStorageChanged(ctx context.Context, nodeID string) error
 	HotKey(ctx context.Context, nodeID string) (sdk.AccAddress, error)

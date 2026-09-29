@@ -29,6 +29,10 @@ func (s storageNodes) IsActive(ctx context.Context, nodeID string) (bool, error)
 	return s.nodes.StorageEligible(s.sdk(ctx), nodeID)
 }
 
+func (s storageNodes) IsProbation(ctx context.Context, nodeID string) (bool, error) {
+	return s.nodes.StorageProbation(s.sdk(ctx), nodeID)
+}
+
 func (s storageNodes) TakeStorageChanges(ctx context.Context) ([]string, error) {
 	return s.nodes.TakeStorageChanges(s.sdk(ctx))
 }

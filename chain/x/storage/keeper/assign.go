@@ -173,6 +173,12 @@ func (k Keeper) candidates(ctx sdk.Context) ([]types.Candidate, error) {
 		if err != nil {
 			return false, fmt.Errorf("failed to read active flag of %s: %w", id, err)
 		}
+		onProbation := state.Probation && !state.Graduated
+		if !active && onProbation {
+			if active, err = k.nodes.IsProbation(ctx, id); err != nil {
+				return false, fmt.Errorf("failed to read probation status of %s: %w", id, err)
+			}
+		}
 		op, err := k.nodes.Operator(ctx, id)
 		if err != nil {
 			return false, err
@@ -198,7 +204,7 @@ func (k Keeper) candidates(ctx sdk.Context) ([]types.Candidate, error) {
 			Operator:  op,
 			Network16: net,
 			ASN:       asn,
-			Probation: state.Probation && !state.Graduated,
+			Probation: onProbation,
 			Active:    active,
 			Declared:  declared,
 			Reserved:  reserved,

@@ -1,9 +1,14 @@
 package keeper
 
 import (
+	"errors"
 	"fmt"
 
+	"cosmossdk.io/collections"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
 // syncNodes reconciles x/storage's tracked node set with x/nodes. x/nodes queues every
@@ -11,34 +16,60 @@ import (
 // that queue, so the work is proportional to what changed, never to the node count.
 //
 // A node is tracked while NodeView.IsActive holds: its STORAGE role is bonded at min_bond and it is
-// not jailed, retired or tombstoned. A node that stops qualifying is untracked only once it holds
+// not jailed, retired or tombstoned. A fee-free probation registration (NodeView.IsProbation: the
+// role, no bond, not jailed) is tracked as a probation node instead, so it can take the few
+// protocol-deal slots probation allows (C7). A probation node that bonds graduates on the spot: it
+// is an ordinary provider from then on. A node that stops qualifying is untracked only once it holds
 // no replicas: challenge sampling and settlement still read the state of a node that holds slots,
 // so such a node stays tracked (assignment already skips it, because it is not active) and is
-// re-queued until its last replica is released, evicted or expired.
+// re-queued until its last replica is released, evicted or expired. A probation node that
+// graduated without a bond stays tracked, without slots, until it bonds; it does not start a
+// second probation.
 func (k Keeper) syncNodes(ctx sdk.Context) error {
 	ids, err := k.nodes.TakeStorageChanges(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read x/nodes storage changes: %w", err)
 	}
 	for _, id := range ids {
-		eligible, err := k.nodes.IsActive(ctx, id)
-		if err != nil {
-			return fmt.Errorf("failed to read storage eligibility of %s: %w", id, err)
+		if err := k.syncNode(ctx, id); err != nil {
+			return err
 		}
-		tracked, err := k.Nodes.Has(ctx, id)
-		if err != nil {
-			return fmt.Errorf("failed to read tracked state of %s: %w", id, err)
-		}
+	}
+	return nil
+}
+
+func (k Keeper) syncNode(ctx sdk.Context, id string) error {
+	eligible, err := k.nodes.IsActive(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to read storage eligibility of %s: %w", id, err)
+	}
+	state, err := k.Nodes.Get(ctx, id)
+	if err != nil && !errors.Is(err, collections.ErrNotFound) {
+		return fmt.Errorf("failed to read tracked state of %s: %w", id, err)
+	}
+	tracked := err == nil
+	if eligible {
 		switch {
-		case eligible && !tracked:
-			if err := k.TrackNode(ctx, id, false); err != nil {
-				return err
-			}
-		case !eligible && tracked:
-			if err := k.untrackIdleNode(ctx, id); err != nil {
-				return err
-			}
+		case !tracked:
+			return k.TrackNode(ctx, id, false)
+		case state.Probation:
+			return k.endProbation(ctx, state, true)
 		}
+		return nil
+	}
+	probation := false
+	if !tracked || (state.Probation && !state.Graduated) {
+		if probation, err = k.nodes.IsProbation(ctx, id); err != nil {
+			return fmt.Errorf("failed to read probation status of %s: %w", id, err)
+		}
+	}
+	switch {
+	case !tracked && probation:
+		return k.TrackNode(ctx, id, true)
+	case tracked && state.Probation && probation, tracked && state.Graduated:
+		return nil
+	case tracked:
+		return k.untrackIdleNode(ctx, id)
 	}
 	return nil
 }
@@ -64,6 +95,60 @@ func (k Keeper) untrackIdleNode(ctx sdk.Context, nodeID string) error {
 	}
 	if err := k.Nodes.Remove(ctx, nodeID); err != nil {
 		return fmt.Errorf("failed to untrack %s: %w", nodeID, err)
+	}
+	return nil
+}
+
+// endProbation takes a node out of probation. A slot it holds no longer counts against the probation
+// caps, and a locked record deposit is recovered. graduated marks it as a proven provider (it bonded,
+// or it proved storage and outlived probation); otherwise it stays a plain tracked node that will
+// be jailed or untracked by the caller.
+func (k Keeper) endProbation(ctx sdk.Context, state types.NodeState, graduated bool) error {
+	if err := k.releaseProbationCounters(ctx, state); err != nil {
+		return err
+	}
+	if state.DepositLocked {
+		if _, _, err := k.deposits.ReleaseDeposit(ctx, probationDepositID(state.NodeId)); err != nil {
+			return fmt.Errorf("failed to recover probation deposit of %s: %w", state.NodeId, err)
+		}
+		state.DepositLocked = false
+	}
+	state.Probation = false
+	state.Graduated = graduated
+	if err := k.Nodes.Set(ctx, state.NodeId, state); err != nil {
+		return fmt.Errorf("failed to end probation of %s: %w", state.NodeId, err)
+	}
+	return nil
+}
+
+// releaseProbationCounters removes the probation-cap counts of every protocol-deal slot the node
+// holds. The counts are taken at assignment and released at detach, and detach releases only for a
+// node still on probation, so a node that leaves probation while it holds slots must release them
+// here or its operator, /16 and ASN stay charged for slots it no longer counts.
+func (k Keeper) releaseProbationCounters(ctx sdk.Context, state types.NodeState) error {
+	var refs []types.SlotRef
+	rng := collections.NewPrefixedPairRange[string, uint64](state.NodeId)
+	if err := k.ReplicaAt.Walk(ctx, rng, func(_ collections.Pair[string, uint64], ref types.SlotRef) (bool, error) {
+		refs = append(refs, ref)
+		return false, nil
+	}); err != nil {
+		return fmt.Errorf("failed to list replicas of %s: %w", state.NodeId, err)
+	}
+	for _, ref := range refs {
+		deal, err := k.loadDeal(ctx, ref.DealId)
+		if err != nil {
+			return err
+		}
+		if !deal.Protocol {
+			continue
+		}
+		slot, err := k.loadSlot(ctx, ref.DealId, ref.Slot)
+		if err != nil {
+			return err
+		}
+		if err := k.noteProbationAssign(ctx, state, slot.Operator, slot.Network16, slot.Asn, -1); err != nil {
+			return err
+		}
 	}
 	return nil
 }

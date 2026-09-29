@@ -242,9 +242,11 @@ type nodeInfo struct {
 	asn      uint32
 	capacity uint64
 	active   bool
-	slashN   int
-	slashed  math.Int
-	jailed   bool
+	// probation marks a fee-free registration with no bond: not active, tracked as probation.
+	probation bool
+	slashN    int
+	slashed   math.Int
+	jailed    bool
 }
 
 type fakeNodes struct {
@@ -276,6 +278,14 @@ func (n *fakeNodes) IsActive(_ context.Context, id string) (bool, error) {
 		return false, errf("unknown node %s", id)
 	}
 	return info.active && !info.jailed, nil
+}
+
+func (n *fakeNodes) IsProbation(_ context.Context, id string) (bool, error) {
+	info, ok := n.byID[id]
+	if !ok {
+		return false, errf("unknown node %s", id)
+	}
+	return info.probation && !info.active && !info.jailed, nil
 }
 
 func (n *fakeNodes) HotKey(_ context.Context, id string) (sdk.AccAddress, error) {
@@ -422,7 +432,7 @@ func (f *fixture) addNode(t *testing.T, id, net string, asn uint32, capacity uin
 	f.seq++
 	info := &nodeInfo{
 		id: id, hot: acc(f.seq), operator: acc(f.seq + 100),
-		net: net, asn: asn, capacity: capacity, active: true, slashed: math.ZeroInt(),
+		net: net, asn: asn, capacity: capacity, active: !probation, probation: probation, slashed: math.ZeroInt(),
 	}
 	f.Nodes.byID[id] = info
 	require.NoError(t, f.Keeper.TrackNode(f.Ctx, id, probation))

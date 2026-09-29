@@ -140,6 +140,10 @@ func eligible(c Candidate, rules PickRules) bool {
 	if c.Reserved+rules.PieceBytes > c.Declared {
 		return false
 	}
+	if c.Probation && !rules.Protocol {
+		// A probation node has posted no bond, so a slash on a user deal would take nothing.
+		return false
+	}
 	if rules.Protocol {
 		// A node with no known network or ASN cannot prove it is distinct, so it cannot
 		// take a protocol-deal slot: "" and 0 would otherwise count as one shared value.

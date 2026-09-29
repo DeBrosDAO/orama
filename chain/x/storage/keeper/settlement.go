@@ -584,22 +584,12 @@ func (k Keeper) expireProbation(ctx sdk.Context, epoch uint64) error {
 		return err
 	}
 	for _, state := range due {
-		if state.EverProved {
-			if state.DepositLocked {
-				if _, _, err := k.deposits.ReleaseDeposit(ctx, probationDepositID(state.NodeId)); err != nil {
-					return fmt.Errorf("failed to recover probation deposit of %s: %w", state.NodeId, err)
-				}
-				state.DepositLocked = false
-			}
-			state.Probation = false
-			state.Graduated = true
-		} else {
+		if !state.EverProved {
 			if err := k.nodes.Jail(ctx, state.NodeId); err != nil {
 				return fmt.Errorf("failed to jail probation node %s: %w", state.NodeId, err)
 			}
-			state.Probation = false
 		}
-		if err := k.Nodes.Set(ctx, state.NodeId, state); err != nil {
+		if err := k.endProbation(ctx, state, state.EverProved); err != nil {
 			return err
 		}
 	}
