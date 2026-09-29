@@ -134,9 +134,9 @@ func (c *Client) upload(ctx context.Context, base string, root, body []byte) err
 }
 
 // Get fetches the first slot of dealID that a provider serves with the
-// on-chain root, strips its slot layer and decrypts it. A wrong seed or
-// repair seed returns storagefile.ErrNotForKey and nothing else is tried.
-func (c *Client) Get(ctx context.Context, dealID uint64, seed, repairSeed []byte) ([]byte, error) {
+// on-chain root, strips its slot layer and decrypts it. A wrong storage key
+// or repair seed returns storagefile.ErrNotForKey and nothing else is tried.
+func (c *Client) Get(ctx context.Context, dealID uint64, storageKey, repairSeed []byte) ([]byte, error) {
 	deal, err := c.chain.Deal(ctx, dealID)
 	if err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func (c *Client) Get(ctx context.Context, dealID uint64, seed, repairSeed []byte
 			errs = append(errs, fmt.Errorf("slot %d: %w", i, err))
 			continue
 		}
-		plain, err := storagefile.Open(seed, repairSeed, deal.Nonce, i, body)
+		plain, err := storagefile.Open(storageKey, repairSeed, deal.Nonce, i, body)
 		if err != nil {
 			return nil, fmt.Errorf("slot %d: %w", i, err)
 		}

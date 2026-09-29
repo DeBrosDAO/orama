@@ -1,7 +1,10 @@
 // Package storagefile builds the bytes a private storage deal uploads.
 //
 // The inner layer is XChaCha20-Poly1305 under a random file key. That key is
-// wrapped by HKDF-SHA256 of the owner seed with info "orama-storage-v1".
+// wrapped, with XChaCha20-Poly1305, by the owner's 32-byte storage key: the
+// output of RootWallet's "orama-storage-v1" HKDF branch. Callers hold that key,
+// never the wallet seed. DeriveStorageKey recomputes it from the BIP-39 seed
+// for seed recovery.
 // Each slot then XORs a ChaCha20 keystream (zero nonce) whose 32-byte key is
 // HKDF-SHA256 of the repair seed with info deal_nonce || slot, slot as 4
 // big-endian bytes. The piece root
@@ -30,10 +33,16 @@ const (
 	// DealNonceLen matches x/storage's deal_nonce width.
 	DealNonceLen = 32
 	keyLen       = 32
-	nonceLen     = chacha20poly1305.NonceSizeX
+
+	// StorageKeyLen is the width of the orama-storage-v1 branch output.
+	StorageKeyLen = 32
+
+	// storageBranch is the HKDF salt RootWallet gives the storage branch.
+	storageBranch = "orama-storage-v1"
+	nonceLen      = chacha20poly1305.NonceSizeX
 )
 
-// ErrNotForKey means the seed or the repair seed cannot open this blob.
+// ErrNotForKey means the storage key or the repair seed cannot open this blob.
 var ErrNotForKey = errors.New("storage file cannot be opened with this key")
 
 // Slot is one replica's ciphertext and the piece root a deal records.
@@ -46,9 +55,9 @@ type Slot struct {
 }
 
 // Prepare seals plaintext and returns one distinct replica per slot.
-func Prepare(seed, repairSeed, dealNonce []byte, replicas int, plaintext []byte) ([]Slot, error) {
-	if len(seed) < keyLen {
-		return nil, errors.New("storage seed must be at least 32 bytes")
+func Prepare(storageKey, repairSeed, dealNonce []byte, replicas int, plaintext []byte) ([]Slot, error) {
+	if err := checkStorageKey(storageKey); err != nil {
+		return nil, err
 	}
 	if len(repairSeed) < keyLen {
 		return nil, errors.New("repair seed must be at least 32 bytes")
@@ -59,7 +68,7 @@ func Prepare(seed, repairSeed, dealNonce []byte, replicas int, plaintext []byte)
 	if replicas < 1 || replicas > 32 {
 		return nil, errors.New("replicas must be from 1 to 32")
 	}
-	inner, err := sealInner(seed, plaintext)
+	inner, err := sealInner(storageKey, plaintext)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +91,11 @@ func Prepare(seed, repairSeed, dealNonce []byte, replicas int, plaintext []byte)
 }
 
 // Open strips slot's outer layer and decrypts the inner file.
-func Open(seed, repairSeed, dealNonce []byte, slot uint32, blob []byte) ([]byte, error) {
-	if len(seed) < keyLen || len(repairSeed) < keyLen {
+func Open(storageKey, repairSeed, dealNonce []byte, slot uint32, blob []byte) ([]byte, error) {
+	if err := checkStorageKey(storageKey); err != nil {
+		return nil, err
+	}
+	if len(repairSeed) < keyLen {
 		return nil, ErrNotForKey
 	}
 	if len(dealNonce) != DealNonceLen {
@@ -93,18 +105,35 @@ func Open(seed, repairSeed, dealNonce []byte, slot uint32, blob []byte) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	plain, err := openInner(seed, inner)
+	plain, err := openInner(storageKey, inner)
 	if err != nil {
 		return nil, ErrNotForKey
 	}
 	return plain, nil
 }
 
-func sealInner(seed, plaintext []byte) ([]byte, error) {
-	wrapKey, err := derive(seed, []byte("orama-storage-v1"), keyLen)
-	if err != nil {
-		return nil, err
+// DeriveStorageKey is RootWallet's orama-storage-v1 branch:
+// HKDF-SHA256(IKM = BIP-39 seed, salt = "orama-storage-v1", info = "", L = 32).
+// It is the seed-recovery path; day to day the key comes out of RootWallet.
+func DeriveStorageKey(seed []byte) ([]byte, error) {
+	if len(seed) == 0 {
+		return nil, errors.New("wallet seed is empty")
 	}
+	out := make([]byte, StorageKeyLen)
+	if _, err := io.ReadFull(hkdf.New(sha256.New, seed, []byte(storageBranch), nil), out); err != nil {
+		return nil, fmt.Errorf("derive storage key: %w", err)
+	}
+	return out, nil
+}
+
+func checkStorageKey(key []byte) error {
+	if len(key) != StorageKeyLen {
+		return fmt.Errorf("storage key must be exactly %d bytes (the orama-storage-v1 key from RootWallet), got %d", StorageKeyLen, len(key))
+	}
+	return nil
+}
+
+func sealInner(wrapKey, plaintext []byte) ([]byte, error) {
 	fileKey := make([]byte, keyLen)
 	if _, err := rand.Read(fileKey); err != nil {
 		return nil, err
@@ -135,11 +164,7 @@ func sealInner(seed, plaintext []byte) ([]byte, error) {
 	return out, nil
 }
 
-func openInner(seed, blob []byte) ([]byte, error) {
-	wrapKey, err := derive(seed, []byte("orama-storage-v1"), keyLen)
-	if err != nil {
-		return nil, err
-	}
+func openInner(wrapKey, blob []byte) ([]byte, error) {
 	need := 5 + nonceLen + keyLen + 16 + nonceLen + 16
 	if len(blob) < need || string(blob[:4]) != magic || blob[4] != ver {
 		return nil, errors.New("not an Orama storage file")

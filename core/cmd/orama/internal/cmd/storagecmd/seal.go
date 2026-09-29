@@ -16,19 +16,19 @@ func init() {
 		Short: "Seal a file into one ciphertext per storage slot",
 		Long: `Seal a private file before a storage deal.
 
-The file key is wrapped under the owner seed. Each slot gets a different
+The file key is wrapped under the owner's orama-storage-v1 key from RootWallet. Each slot gets a different
 ciphertext. The command writes slot-N files and prints each piece root.
 It does not upload the bytes and it does not submit a deal.`,
 		Args: cobra.NoArgs,
 		RunE: runSeal,
 	}
-	seal.Flags().String("seed-file", "", "File holding the owner seed, hex, at least 32 bytes, mode 0600")
+	seal.Flags().String("storage-key-file", "", "File holding the orama-storage-v1 key from RootWallet (never the wallet seed), hex, exactly 32 bytes, mode 0600")
 	seal.Flags().String("repair-seed-file", "", "File holding the repair seed, hex, at least 32 bytes, mode 0600")
 	seal.Flags().String("nonce", "", "Deal nonce, 32 bytes hex")
 	seal.Flags().Int("replicas", 3, "Number of slots, 1 to 32")
 	seal.Flags().String("in", "", "Plaintext file")
 	seal.Flags().String("out-dir", "", "Directory for slot-N files")
-	for _, name := range []string{"seed-file", "repair-seed-file", "nonce", "in", "out-dir"} {
+	for _, name := range []string{"storage-key-file", "repair-seed-file", "nonce", "in", "out-dir"} {
 		_ = seal.MarkFlagRequired(name)
 	}
 	Cmd.AddCommand(seal)
@@ -38,24 +38,24 @@ It does not upload the bytes and it does not submit a deal.`,
 		Short: "Open one sealed storage slot",
 		Long: `Open one slot file written by seal.
 
-A wrong seed, repair seed, or slot fails and writes nothing.`,
+A wrong storage key, repair seed, or slot fails and writes nothing.`,
 		Args: cobra.NoArgs,
 		RunE: runOpen,
 	}
-	open.Flags().String("seed-file", "", "File holding the owner seed, hex, at least 32 bytes, mode 0600")
+	open.Flags().String("storage-key-file", "", "File holding the orama-storage-v1 key from RootWallet (never the wallet seed), hex, exactly 32 bytes, mode 0600")
 	open.Flags().String("repair-seed-file", "", "File holding the repair seed, hex, at least 32 bytes, mode 0600")
 	open.Flags().String("nonce", "", "Deal nonce, 32 bytes hex")
 	open.Flags().Uint32("slot", 0, "Slot index")
 	open.Flags().String("in", "", "Sealed slot file")
 	open.Flags().String("out", "", "Plaintext output file")
-	for _, name := range []string{"seed-file", "repair-seed-file", "nonce", "in", "out"} {
+	for _, name := range []string{"storage-key-file", "repair-seed-file", "nonce", "in", "out"} {
 		_ = open.MarkFlagRequired(name)
 	}
 	Cmd.AddCommand(open)
 }
 
 func runSeal(cmd *cobra.Command, _ []string) error {
-	seed, repair, nonce, err := sealKeys(cmd)
+	storageKey, repair, nonce, err := sealKeys(cmd)
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func runSeal(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", inPath, err)
 	}
-	slots, err := storagefile.Prepare(seed, repair, nonce, replicas, plain)
+	slots, err := storagefile.Prepare(storageKey, repair, nonce, replicas, plain)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func runSeal(cmd *cobra.Command, _ []string) error {
 }
 
 func runOpen(cmd *cobra.Command, _ []string) error {
-	seed, repair, nonce, err := sealKeys(cmd)
+	storageKey, repair, nonce, err := sealKeys(cmd)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func runOpen(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", inPath, err)
 	}
-	plain, err := storagefile.Open(seed, repair, nonce, slot, blob)
+	plain, err := storagefile.Open(storageKey, repair, nonce, slot, blob)
 	if err != nil {
 		return err
 	}
@@ -105,8 +105,8 @@ func runOpen(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func sealKeys(cmd *cobra.Command) (seed, repair, nonce []byte, err error) {
-	seed, repair, err = repairAndSeed(cmd)
+func sealKeys(cmd *cobra.Command) (storageKey, repair, nonce []byte, err error) {
+	storageKey, repair, err = ownerAndRepairKeys(cmd)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -114,5 +114,5 @@ func sealKeys(cmd *cobra.Command) (seed, repair, nonce []byte, err error) {
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return seed, repair, nonce, nil
+	return storageKey, repair, nonce, nil
 }

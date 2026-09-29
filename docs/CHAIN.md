@@ -1043,8 +1043,11 @@ serves these routes at `/v1/chain/index/…` (see Explorer).
 ### Client side
 
 `core/pkg/storagefile` seals a private file before upload:
-- The file key is wrapped by HKDF-SHA256 of the owner seed with info
-  `orama-storage-v1`.
+- The file key is wrapped, with XChaCha20-Poly1305, by the owner's 32-byte
+  storage key: RootWallet's `orama-storage-v1` HKDF branch
+  (HKDF-SHA256, IKM = BIP-39 seed, salt = `orama-storage-v1`, empty info).
+  This side only ever holds that derived key, never the wallet seed.
+  `storagefile.DeriveStorageKey` recomputes it from the seed for recovery.
 - Each slot XORs that blob with a ChaCha20 keystream (all-zero nonce). Its
   32-byte key is HKDF-SHA256 of the repair seed with info `deal_nonce` ||
   slot (4 bytes, big-endian). Every (nonce, slot) has its own key.
@@ -1052,12 +1055,13 @@ serves these routes at `/v1/chain/index/…` (see Explorer).
   are locked to `chain/storagekey/testdata/outer_vectors.json`.
 - The piece root is `core/pkg/pieceroot`, checked against `chain/piece`
   vectors.
-- A wrong seed, repair seed, or slot fails closed.
+- A wrong storage key, repair seed, or slot fails closed.
 
 The storage commands:
-- Seeds are read from files (`--seed-file`, `--repair-seed-file`). A file
-  that other users can read is refused; the commands take no seed as an
-  argument.
+- Keys are read from files: `--storage-key-file` (the `orama-storage-v1` key
+  from RootWallet, hex, exactly 32 bytes; the wallet seed is refused) and
+  `--repair-seed-file`. A file that other users can read is refused; the
+  commands take no key as an argument.
 - `orama storage seal` writes one ciphertext per slot and prints each piece
   root. `orama storage open` reads one of those files.
 - `orama storage rewrap` rebuilds one slot from another with the repair seed.

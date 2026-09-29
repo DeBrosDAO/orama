@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/storageclient"
+	"github.com/DeBrosOfficial/network/pkg/storagefile"
 	"github.com/spf13/cobra"
 )
 
@@ -41,17 +42,17 @@ provider endpoint is the node's first http(s) endpoint in x/nodes.`,
 		Use:   "get",
 		Short: "Fetch and open a private file from its providers",
 		Long: `Fetch the first slot of a deal that a provider serves with the on-chain
-piece root, strip its slot layer, and decrypt it. A wrong seed or repair seed
+piece root, strip its slot layer, and decrypt it. A wrong storage key or repair seed
 fails and writes nothing.`,
 		Args: cobra.NoArgs,
 		RunE: runGet,
 	}
 	get.Flags().Uint64("deal-id", 0, "Deal id")
 	get.Flags().String("rpc", "", "oramad CometBFT RPC, for example http://127.0.0.1:31001")
-	get.Flags().String("seed-file", "", "File holding the owner seed, hex, at least 32 bytes, mode 0600")
+	get.Flags().String("storage-key-file", "", "File holding the orama-storage-v1 key from RootWallet (never the wallet seed), hex, exactly 32 bytes, mode 0600")
 	get.Flags().String("repair-seed-file", "", "File holding the repair seed, hex, at least 32 bytes, mode 0600")
 	get.Flags().String("out", "", "Plaintext output file")
-	for _, name := range []string{"deal-id", "rpc", "seed-file", "repair-seed-file", "out"} {
+	for _, name := range []string{"deal-id", "rpc", "storage-key-file", "repair-seed-file", "out"} {
 		_ = get.MarkFlagRequired(name)
 	}
 	Cmd.AddCommand(get)
@@ -100,7 +101,7 @@ func runPut(cmd *cobra.Command, _ []string) error {
 
 func runGet(cmd *cobra.Command, _ []string) error {
 	dealID, _ := cmd.Flags().GetUint64("deal-id")
-	seed, repair, err := repairAndSeed(cmd)
+	storageKey, repair, err := ownerAndRepairKeys(cmd)
 	if err != nil {
 		return clierr.Usage("%v", err)
 	}
@@ -109,7 +110,7 @@ func runGet(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	plain, err := client.Get(cmd.Context(), dealID, seed, repair)
+	plain, err := client.Get(cmd.Context(), dealID, storageKey, repair)
 	if err != nil {
 		return clierr.Failure("%v", err)
 	}
@@ -119,8 +120,8 @@ func runGet(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func repairAndSeed(cmd *cobra.Command) (seed, repair []byte, err error) {
-	seed, err = secretFile(cmd, "seed-file", "seed")
+func ownerAndRepairKeys(cmd *cobra.Command) (storageKey, repair []byte, err error) {
+	storageKey, err = storageKeyFile(cmd)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -128,33 +129,61 @@ func repairAndSeed(cmd *cobra.Command) (seed, repair []byte, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return seed, repair, nil
+	return storageKey, repair, nil
 }
 
-// secretFile reads a hex secret from the file named by flag. Seeds are not
-// taken on the command line, where ps and shell history would keep them, and
-// a file other users can read is refused.
+// secretFile reads a hex repair seed from the file named by flag.
 func secretFile(cmd *cobra.Command, flag, what string) ([]byte, error) {
-	path, _ := cmd.Flags().GetString(flag)
-	info, err := os.Stat(path)
+	secret, path, err := readHexSecret(cmd, flag)
 	if err != nil {
-		return nil, fmt.Errorf("--%s: %w", flag, err)
+		return nil, err
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("--%s %s is mode %o; chmod 600 it", flag, path, info.Mode().Perm())
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("--%s: %w", flag, err)
-	}
-	secret, err := hex.DecodeString(strings.TrimSpace(string(body)))
-	if err != nil || len(secret) < minSeedLen {
+	if len(secret) < minSeedLen {
 		return nil, fmt.Errorf("%s in %s must be at least %d bytes of hex", what, path, minSeedLen)
 	}
 	return secret, nil
 }
 
-// minSeedLen is storagefile's minimum seed and repair-seed length.
+// storageKeyFile reads the owner's orama-storage-v1 key, exactly
+// storagefile.StorageKeyLen bytes of hex. A longer value is most likely the
+// wallet seed, which never belongs on this side, so it is refused.
+func storageKeyFile(cmd *cobra.Command) ([]byte, error) {
+	const flag = "storage-key-file"
+	key, path, err := readHexSecret(cmd, flag)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != storagefile.StorageKeyLen {
+		return nil, fmt.Errorf("the storage key in %s must be exactly %d bytes of hex, the orama-storage-v1 key from RootWallet, got %d bytes",
+			path, storagefile.StorageKeyLen, len(key))
+	}
+	return key, nil
+}
+
+// readHexSecret reads a hex secret from the file named by flag. Secrets are
+// not taken on the command line, where ps and shell history would keep them,
+// and a file other users can read is refused.
+func readHexSecret(cmd *cobra.Command, flag string) (secret []byte, path string, err error) {
+	path, _ = cmd.Flags().GetString(flag)
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, path, fmt.Errorf("--%s: %w", flag, err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return nil, path, fmt.Errorf("--%s %s is mode %o; chmod 600 it", flag, path, info.Mode().Perm())
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, path, fmt.Errorf("--%s: %w", flag, err)
+	}
+	secret, err = hex.DecodeString(strings.TrimSpace(string(body)))
+	if err != nil {
+		return nil, path, fmt.Errorf("--%s %s is not hex: %w", flag, path, err)
+	}
+	return secret, path, nil
+}
+
+// minSeedLen is storagefile's minimum repair-seed length.
 const minSeedLen = 32
 
 // transferTimeout bounds one storage put or get.

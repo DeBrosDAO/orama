@@ -3693,7 +3693,7 @@ orama storage get [flags]
 ```
 
 Fetch the first slot of a deal that a provider serves with the on-chain
-piece root, strip its slot layer, and decrypt it. A wrong seed or repair seed
+piece root, strip its slot layer, and decrypt it. A wrong storage key or repair seed
 fails and writes nothing.
 
 | Flag | Default | Description |
@@ -3702,7 +3702,7 @@ fails and writes nothing.
 | `--out` | — | Plaintext output file |
 | `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
 | `--rpc` | — | oramad CometBFT RPC, for example http://127.0.0.1:31001 |
-| `--seed-file` | — | File holding the owner seed, hex, at least 32 bytes, mode 0600 |
+| `--storage-key-file` | — | File holding the orama-storage-v1 key from RootWallet (never the wallet seed), hex, exactly 32 bytes, mode 0600 |
 
 ### orama storage grant
 
@@ -3745,7 +3745,7 @@ orama storage open [flags]
 
 Open one slot file written by seal.
 
-A wrong seed, repair seed, or slot fails and writes nothing.
+A wrong storage key, repair seed, or slot fails and writes nothing.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -3753,8 +3753,8 @@ A wrong seed, repair seed, or slot fails and writes nothing.
 | `--nonce` | — | Deal nonce, 32 bytes hex |
 | `--out` | — | Plaintext output file |
 | `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
-| `--seed-file` | — | File holding the owner seed, hex, at least 32 bytes, mode 0600 |
 | `--slot` | `0` | Slot index |
+| `--storage-key-file` | — | File holding the orama-storage-v1 key from RootWallet (never the wallet seed), hex, exactly 32 bytes, mode 0600 |
 
 ### orama storage prove
 
@@ -3862,7 +3862,7 @@ orama storage seal [flags]
 
 Seal a private file before a storage deal.
 
-The file key is wrapped under the owner seed. Each slot gets a different
+The file key is wrapped under the owner's orama-storage-v1 key from RootWallet. Each slot gets a different
 ciphertext. The command writes slot-N files and prints each piece root.
 It does not upload the bytes and it does not submit a deal.
 
@@ -3873,7 +3873,7 @@ It does not upload the bytes and it does not submit a deal.
 | `--out-dir` | — | Directory for slot-N files |
 | `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
 | `--replicas` | `3` | Number of slots, 1 to 32 |
-| `--seed-file` | — | File holding the owner seed, hex, at least 32 bytes, mode 0600 |
+| `--storage-key-file` | — | File holding the orama-storage-v1 key from RootWallet (never the wallet seed), hex, exactly 32 bytes, mode 0600 |
 
 ### orama version
 
