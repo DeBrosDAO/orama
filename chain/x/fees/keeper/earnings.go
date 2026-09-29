@@ -223,6 +223,24 @@ func (k Keeper) FundFeeBalance(ctx context.Context, from, to sdk.AccAddress, amo
 	return k.setFeeBalance(ctx, to, current.Add(amount))
 }
 
+// CreditFeeBalance moves amt from senderModule's own account into x/fees's module account and credits
+// it to addr's fee-only balance. It is the entry point for value that becomes fee money from
+// outside the earnings ledger: x/shielded's unshield to the signer's own fee balance. The balance
+// keeps every restriction FundFeeBalance documents: it pays base fees and nothing else.
+func (k Keeper) CreditFeeBalance(ctx context.Context, senderModule string, addr sdk.AccAddress, amt sdk.Coin) error {
+	if !amt.IsPositive() {
+		return fmt.Errorf("fee balance credit must be positive, got %s", amt)
+	}
+	if err := k.bankKeeper.SendCoinsFromModuleToModule(ctx, senderModule, types.ModuleName, sdk.NewCoins(amt)); err != nil {
+		return fmt.Errorf("failed to move %s from %s into %s: %w", amt, senderModule, types.ModuleName, err)
+	}
+	current, err := k.GetFeeBalance(ctx, addr)
+	if err != nil {
+		return err
+	}
+	return k.setFeeBalance(ctx, addr, current.Add(amt.Amount))
+}
+
 // debitFeeBalanceUpTo debits up to want from addr's fee balance and returns what it debited. Like
 // DebitEarningsUpTo it moves no coins; the caller burns what it debited.
 func (k Keeper) debitFeeBalanceUpTo(ctx context.Context, addr sdk.AccAddress, want math.Int) (math.Int, error) {

@@ -95,10 +95,13 @@ VERIFIER_CRATE := x/shielded/orchardverifier-bin
 VERIFIER_NAME := orama-orchard-verifier
 orchard-verifier:
 	cd $(VERIFIER_CRATE) && cargo build --release --locked
+	@echo "sha256 (give it to oramad as --shielded-verifier-sha256):"
+	@shasum -a 256 $(VERIFIER_CRATE)/target/release/$(VERIFIER_NAME) | cut -d' ' -f1
 
 ## orchard-verifier-linux-amd64: the same binary for linux/amd64, static (musl, C parts via zig).
 ## It lands in build/ next to oramad-linux-amd64-orchard; oramad finds it with --shielded-verifier or
-## at <home>/bin/$(VERIFIER_NAME).
+## at <home>/bin/$(VERIFIER_NAME). The .sha256 file beside it is the pin: pass it as
+## --shielded-verifier-sha256 (or link it in with -X .../app.ShieldedVerifierSHA256=<hex>).
 orchard-verifier-linux-amd64:
 	cd $(VERIFIER_CRATE) && \
 		ORAMA_ZIG="$(ORAMA_ZIG)" ZIG_TARGET=$(ORCHARD_LINUX_AMD64_ZIG_TARGET) \
@@ -109,6 +112,7 @@ orchard-verifier-linux-amd64:
 		cargo build --release --locked --target $(ORCHARD_LINUX_AMD64_RUST_TARGET)
 	mkdir -p $(BUILD_DIR)
 	cp $(VERIFIER_CRATE)/target/$(ORCHARD_LINUX_AMD64_RUST_TARGET)/release/$(VERIFIER_NAME) $(BUILD_DIR)/$(VERIFIER_NAME)-linux-amd64
+	shasum -a 256 $(BUILD_DIR)/$(VERIFIER_NAME)-linux-amd64 | cut -d' ' -f1 > $(BUILD_DIR)/$(VERIFIER_NAME)-linux-amd64.sha256
 
 ## orchard-test: Rust tests of all three crates (library, verifier binary, wallet), then the Go tests with both verifiers linked (the
 ## library through cgo, the binary out of process).

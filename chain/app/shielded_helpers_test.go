@@ -36,9 +36,10 @@ import (
 )
 
 // vectorChainID is the chain ID the committed Ironwood vectors were signed for
-// (chain/x/shielded/orchardffi/testdata/chain-id). It is a production-shaped ID, so the genesis
-// needs a full bootstrap committee.
-const vectorChainID = "orama-orchard-vector-1"
+// (chain/x/shielded/orchardffi/testdata/chain-id). It is a localnet ID so the locked genesis
+// parameters do not apply and tests can set small fees and caps; a production ID would need every
+// shielded parameter at its locked value and a full bootstrap committee.
+const vectorChainID = "orama-localnet-orchard-vector-1"
 
 const shieldedTestCommittee = 30
 
@@ -72,6 +73,12 @@ func shieldedApp(t *testing.T, home, verifier string) *app.OramaApp {
 // open it again on the same data.
 func shieldedAppOn(t *testing.T, db dbm.DB, home, verifier string) *app.OramaApp {
 	t.Helper()
+	return shieldedAppFor(t, vectorChainID, db, home, verifier)
+}
+
+// shieldedAppFor is shieldedAppOn for another chain ID, such as the wallet scenario's.
+func shieldedAppFor(t *testing.T, chainID string, db dbm.DB, home, verifier string) *app.OramaApp {
+	t.Helper()
 	app.SetAddressPrefixes()
 	opts := simtestutil.AppOptionsMap{}
 	if home != "" {
@@ -79,8 +86,11 @@ func shieldedAppOn(t *testing.T, db dbm.DB, home, verifier string) *app.OramaApp
 	}
 	if verifier != "" {
 		opts[app.FlagShieldedVerifier] = verifier
+		pin, err := app.FileSHA256(verifier)
+		require.NoError(t, err)
+		opts[app.FlagShieldedVerifierSHA256] = pin
 	}
-	oramaApp := app.NewOramaApp(log.NewNopLogger(), db, true, opts, baseapp.SetChainID(vectorChainID))
+	oramaApp := app.NewOramaApp(log.NewNopLogger(), db, true, opts, baseapp.SetChainID(chainID))
 	t.Cleanup(func() { _ = oramaApp.Close() })
 	return oramaApp
 }
@@ -90,6 +100,7 @@ func shieldedAppOn(t *testing.T, db dbm.DB, home, verifier string) *app.OramaApp
 // gen_flow_vectors.rs, which is given the same two addresses).
 type shieldedChain struct {
 	app       *app.OramaApp
+	chainID   string
 	committee []committeeKey
 	genesis   time.Time
 	alice     cryptotypes.PrivKey
@@ -110,7 +121,7 @@ func newShieldedChain(t *testing.T, oramaApp *app.OramaApp, mutate func(*shielde
 		opt(&cfg)
 	}
 	c := &shieldedChain{
-		app: oramaApp, genesis: time.Unix(1_700_000_000, 0),
+		app: oramaApp, chainID: oramaApp.ChainID(), genesis: time.Unix(1_700_000_000, 0),
 		alice: secretKey("orama-shielded-test-alice"), bob: secretKey("orama-shielded-test-bob"),
 	}
 	genState := app.NewDefaultGenesisState(oramaApp)
@@ -143,7 +154,7 @@ func newShieldedChain(t *testing.T, oramaApp *app.OramaApp, mutate func(*shielde
 	stateBytes, err := json.Marshal(genState)
 	require.NoError(t, err)
 	_, err = oramaApp.InitChain(&abci.RequestInitChain{
-		ChainId: vectorChainID, InitialHeight: 1, Time: c.genesis, AppStateBytes: stateBytes,
+		ChainId: c.chainID, InitialHeight: 1, Time: c.genesis, AppStateBytes: stateBytes,
 		ConsensusParams: &cmtproto.ConsensusParams{
 			Block:     &cmtproto.BlockParams{MaxGas: 50_000_000, MaxBytes: 22_020_096},
 			Evidence:  &cmtproto.EvidenceParams{MaxAgeNumBlocks: 100_000, MaxAgeDuration: time.Hour, MaxBytes: 1_048_576},
@@ -210,7 +221,7 @@ func (c *shieldedChain) signed(t *testing.T, who cryptotypes.PrivKey, gas uint64
 	require.NotNil(t, acc)
 	tx, err := simtestutil.GenSignedMockTx(
 		rand.New(rand.NewSource(int64(c.height))), c.app.TxConfig(),
-		[]sdk.Msg{msg}, sdk.NewCoins(sdk.NewCoin(params.BaseDenom, math.NewInt(int64(gas)))), gas, vectorChainID,
+		[]sdk.Msg{msg}, sdk.NewCoins(sdk.NewCoin(params.BaseDenom, math.NewInt(int64(gas)))), gas, c.chainID,
 		[]uint64{acc.GetAccountNumber()}, []uint64{acc.GetSequence()}, who,
 	)
 	require.NoError(t, err)
@@ -260,3 +271,5 @@ type chainConfig struct{ minDelegation int64 }
 type chainOption func(*chainConfig)
 
 func withMinDelegation(n int64) chainOption { return func(c *chainConfig) { c.minDelegation = n } }
+
+func dbmMem() dbm.DB { return dbm.NewMemDB() }

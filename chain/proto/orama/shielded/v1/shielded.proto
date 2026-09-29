@@ -42,6 +42,9 @@ message Params {
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
+  // max_signerless_per_block is the most signer-less transfers a block may hold. They pay for their
+  // proof only through the value balance, so the block's share of proof work is bounded here.
+  uint32 max_signerless_per_block = 8;
 }
 
 // UnshieldTarget is where an unshield may send value. Nobody can unshield

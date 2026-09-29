@@ -23,6 +23,10 @@ fn hash(step: &Step) -> [u8; 32] {
     bytes(&step.sighash).try_into().unwrap()
 }
 
+fn binding(step: &Step) -> Option<Vec<u8>> {
+    (!step.binding.is_empty()).then(|| bytes(&step.binding))
+}
+
 fn flipped(b: &[u8], at: usize) -> Vec<u8> {
     let mut c = b.to_vec();
     c[at] ^= 1;
@@ -34,7 +38,7 @@ fn committed_scenario_has_shields_a_transfer_and_an_unshield_with_real_spends() 
     let kinds: Vec<_> = committed().steps.iter().map(|s| (s.kind.as_str(), s.real_spends, s.value_balance)).collect();
     assert_eq!(
         kinds,
-        [("shield", 0, -10_000), ("shield", 0, -7_000), ("transfer", 1, 0), ("unshield", 1, 5_000)]
+        [("shield", 0, -10_000), ("shield", 0, -7_000), ("transfer", 1, 100), ("unshield", 1, 5_000)]
     );
 }
 
@@ -50,7 +54,7 @@ fn sighash_matches_the_chain_definition_over_the_bundle_bytes() {
     // The Go tests recompute the same value with orchard.Sighash; both must equal the stored hash.
     for s in &committed().steps {
         let b = bytes(&s.bundle);
-        assert_eq!(sighash(&committed().chain_id, &b).to_vec(), bytes(&s.sighash), "{}", s.name);
+        assert_eq!(sighash(&committed().chain_id, binding(s).as_deref(), &b).to_vec(), bytes(&s.sighash), "{}", s.name);
         assert!(b.starts_with(&bytes(&s.effecting_data)), "{}", s.name);
     }
 }
@@ -72,7 +76,7 @@ fn tampering_is_rejected() {
         for (what, at, want) in cases {
             // The chain recomputes the sighash from the bytes it receives, so do the same.
             let mutated = flipped(&b, at);
-            let h = sighash(&committed().chain_id, &mutated);
+            let h = sighash(&committed().chain_id, binding(s).as_deref(), &mutated);
             assert_eq!(verify(&mutated, &h), want, "{} / {what}", s.name);
         }
         let mut bad_hash = hash(s);
@@ -86,7 +90,7 @@ fn tampering_is_rejected() {
 #[test]
 fn a_bundle_for_another_chain_id_is_rejected() {
     let s = &committed().steps[2];
-    let other = sighash("some-other-orama-chain", &bytes(&s.bundle));
+    let other = sighash("some-other-orama-chain", None, &bytes(&s.bundle));
     assert_eq!(verify(&bytes(&s.bundle), &other), SIGNATURE_REJECTED);
 }
 
@@ -129,7 +133,7 @@ fn spending_a_note_that_is_not_in_the_tree_is_refused() {
     let pk = proving_key();
     let empty = NoteTree::new();
 
-    let shield = build_bundle(&mut rng, &pk, "test", &empty, &[], &[Output { recipient: addr, value: 500 }]).unwrap();
+    let shield = build_bundle(&mut rng, &pk, "test", None, &empty, &[], &[Output { recipient: addr, value: 500 }]).unwrap();
     let notes = scan(&shield.bundle, &a.fvk.to_ivk(Scope::External));
     let (_, note) = notes.into_iter().find(|(_, n)| n.value().inner() == 500).unwrap();
 
@@ -137,6 +141,7 @@ fn spending_a_note_that_is_not_in_the_tree_is_refused() {
         &mut rng,
         &pk,
         "test",
+        None,
         &empty,
         &[Spend { account: &a, note, position: 0 }],
         &[Output { recipient: addr, value: 500 }],
@@ -145,6 +150,40 @@ fn spending_a_note_that_is_not_in_the_tree_is_refused() {
     .expect("must fail");
     assert!(matches!(err, BundleError::UnknownPosition(0)), "{err:?}");
 
-    let err = build_bundle(&mut rng, &pk, "test", &empty, &[], &[]).err().expect("must fail");
+    let err = build_bundle(&mut rng, &pk, "test", None, &empty, &[], &[]).err().expect("must fail");
     assert!(matches!(err, BundleError::Build(_) | BundleError::Empty), "{err:?}");
+}
+
+#[test]
+fn only_the_unshield_is_bound_and_its_binding_is_the_documented_encoding() {
+    use orama_shielded_wallet::scenario::UNSHIELD_SIGNER;
+    use orama_shielded_wallet::sighash::{unshield_binding, Target};
+    for s in &committed().steps {
+        assert_eq!(!s.binding.is_empty(), s.kind == "unshield", "{}", s.name);
+    }
+    let want = unshield_binding(&UNSHIELD_SIGNER, Target::FeeTopup);
+    let mut by_hand = vec![20u8];
+    by_hand.extend_from_slice(&UNSHIELD_SIGNER);
+    by_hand.extend_from_slice(&[3, 0, 0, 0, 0]);
+    assert_eq!(want, by_hand);
+    let unshield = committed().steps.last().unwrap();
+    assert_eq!(binding(unshield).unwrap(), want);
+}
+
+#[test]
+fn an_unshield_under_another_signer_or_target_fails_its_signatures() {
+    use orama_shielded_wallet::scenario::UNSHIELD_SIGNER;
+    use orama_shielded_wallet::sighash::{unshield_binding, Target};
+    let s = committed().steps.last().unwrap();
+    let b = bytes(&s.bundle);
+    let mut other_signer = UNSHIELD_SIGNER;
+    other_signer[0] ^= 1;
+    for (what, binding) in [
+        ("another signer", unshield_binding(&other_signer, Target::FeeTopup)),
+        ("another target", unshield_binding(&UNSHIELD_SIGNER, Target::Bond { validator: &[7; 20] })),
+    ] {
+        let h = sighash(&committed().chain_id, Some(&binding), &b);
+        assert_eq!(verify(&b, &h), SIGNATURE_REJECTED, "{what}");
+    }
+    assert_eq!(verify(&b, &sighash(&committed().chain_id, None, &b)), SIGNATURE_REJECTED, "unbound");
 }

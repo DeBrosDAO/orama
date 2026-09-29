@@ -53,7 +53,13 @@ func TestVerify_flippedByteRejects(t *testing.T) {
 		for label, c := range cases {
 			mut := bytes.Clone(bundle)
 			mut[c.at] ^= 1
-			if err := mustNew(t, chainID).Verify(mut, nil); !errors.Is(err, c.want) {
+			err := mustNew(t, chainID).Verify(mut, nil)
+			// A flipped epk bit is usually a different valid point, which only the sighash catches,
+			// and sometimes bytes that are not a point at all, which the parser refuses first.
+			if label == "epk of an action" && errors.Is(err, verify.ErrMalformed) {
+				continue
+			}
+			if !errors.Is(err, c.want) {
 				t.Errorf("%s/%s: got %v, want %v", name, label, err, c.want)
 			}
 		}

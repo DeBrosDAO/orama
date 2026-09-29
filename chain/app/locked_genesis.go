@@ -35,7 +35,7 @@ var testnetChainIDMarkers = []string{"-devnet-", "-stagenet-"}
 // the module's genesis key.
 var lockedModules = []string{
 	"emission", "fees", "power", "nodes", "storage", "relay", "token", "archive", "houses",
-	"staking", "slashing", "distribution",
+	"staking", "slashing", "distribution", "shielded",
 }
 
 // wasmPolicyModule is locked on its sunset height (P6) and its state-deposit parameters (P3 and the

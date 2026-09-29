@@ -183,3 +183,34 @@ func TestPayEarnings_rejectsZero(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got.IsZero())
 }
+
+func TestCreditFeeBalance_movesCoinsIntoTheFeesAccountAsFeeOnlyMoney(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	f.Bank.fund(testSourceModule, math.NewInt(400))
+	to := sdk.AccAddress("credit_to____________")
+
+	require.NoError(t, f.Keeper.CreditFeeBalance(f.Ctx, testSourceModule, to, sdk.NewCoin(params.BaseDenom, math.NewInt(400))))
+
+	got, err := f.Keeper.GetFeeBalance(f.Ctx, to)
+	require.NoError(t, err)
+	require.True(t, got.Equal(math.NewInt(400)))
+	earned, err := f.Keeper.GetEarnings(f.Ctx, to)
+	require.NoError(t, err)
+	require.True(t, earned.IsZero(), "it is not earnings: nothing can bond or shield it")
+	require.True(t, f.Bank.balanceOf(types.ModuleName).Equal(math.NewInt(400)))
+	require.True(t, f.Bank.balanceOf(testSourceModule).IsZero())
+	inv, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, inv.EarningsMatchModule, inv.Detail)
+}
+
+func TestCreditFeeBalance_refusesNonPositiveCredits(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	to := sdk.AccAddress("credit_to____________")
+	require.Error(t, f.Keeper.CreditFeeBalance(f.Ctx, testSourceModule, to, sdk.NewCoin(params.BaseDenom, math.ZeroInt())))
+	got, err := f.Keeper.GetFeeBalance(f.Ctx, to)
+	require.NoError(t, err)
+	require.True(t, got.IsZero())
+}

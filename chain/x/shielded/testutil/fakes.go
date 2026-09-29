@@ -138,6 +138,7 @@ func (b *Bank) GetBalance(_ context.Context, addr sdk.AccAddress, denom string) 
 type Fees struct {
 	Bank         *Bank
 	Earnings     map[string]math.Int
+	FeeBalances  map[string]math.Int
 	BaseFee      math.Int
 	Proposer     sdk.AccAddress
 	EarningsAcct string
@@ -145,7 +146,7 @@ type Fees struct {
 
 // NewFees returns fees with a 1 norama/gas base fee and no proposer.
 func NewFees(bank *Bank) *Fees {
-	return &Fees{Bank: bank, Earnings: map[string]math.Int{}, BaseFee: math.OneInt(), EarningsAcct: "fees"}
+	return &Fees{Bank: bank, Earnings: map[string]math.Int{}, FeeBalances: map[string]math.Int{}, BaseFee: math.OneInt(), EarningsAcct: "fees"}
 }
 
 // EarningsOf is an address's earnings.
@@ -169,6 +170,23 @@ func (f *Fees) CreditEarnings(ctx context.Context, module string, addr sdk.AccAd
 	}
 	f.Earnings[addr.String()] = f.EarningsOf(addr).Add(amt.Amount)
 	return nil
+}
+
+// CreditFeeBalance implements the shielded FeesKeeper.
+func (f *Fees) CreditFeeBalance(ctx context.Context, module string, addr sdk.AccAddress, amt sdk.Coin) error {
+	if err := f.Bank.SendCoinsFromModuleToModule(ctx, module, f.EarningsAcct, sdk.NewCoins(amt)); err != nil {
+		return err
+	}
+	f.FeeBalances[addr.String()] = f.FeeBalanceOf(addr).Add(amt.Amount)
+	return nil
+}
+
+// FeeBalanceOf is an address's fee-only balance.
+func (f *Fees) FeeBalanceOf(addr sdk.AccAddress) math.Int {
+	if v, ok := f.FeeBalances[addr.String()]; ok {
+		return v
+	}
+	return math.ZeroInt()
 }
 
 // DebitEarningsUpTo implements the shielded FeesKeeper.
@@ -258,11 +276,12 @@ func paramsInt(v int64) math.Int { return math.NewInt(v) }
 // snapshot is a copy of the fakes' state. The real bank and fee keepers live in the multistore and
 // roll back with it; the fakes are maps, so the Env copies them at the same points.
 type snapshot struct {
-	balances  map[string]math.Int
-	burned    math.Int
-	earnings  map[string]math.Int
-	delegated map[string]math.Int
-	bonds     int
+	balances    map[string]math.Int
+	burned      math.Int
+	earnings    map[string]math.Int
+	feeBalances map[string]math.Int
+	delegated   map[string]math.Int
+	bonds       int
 }
 
 func cloneInts(m map[string]math.Int) map[string]math.Int {

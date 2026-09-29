@@ -40,7 +40,7 @@ use zcash_primitives::transaction::components::orchard::{read_v6_bundle, write_v
 use zcash_protocol::consensus::BranchId;
 use zcash_protocol::value::ZatBalance;
 
-const CHAIN_ID: &str = "orama-orchard-vector-1";
+const CHAIN_ID: &str = "orama-localnet-orchard-vector-1";
 const SIGHASH_DOMAIN: &[u8] = b"orama-shielded-ironwood-sighash-v1";
 const SIGHASH_BOUND_DOMAIN: &[u8] = b"orama-shielded-ironwood-sighash-bound-v1";
 /// UNSHIELD_TARGET_BOND and UNSHIELD_TARGET_FEE_TOPUP in proto/orama/shielded/v1/shielded.proto.

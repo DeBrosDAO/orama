@@ -3,6 +3,7 @@
 package app_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"cosmossdk.io/log/v2"
+	"github.com/DeBrosOfficial/network/chain/app"
 	dbm "github.com/cosmos/cosmos-db"
+	"github.com/cosmos/cosmos-sdk/baseapp"
+	"github.com/cosmos/cosmos-sdk/client/flags"
+	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
 	"github.com/stretchr/testify/require"
 
 	"cosmossdk.io/math"
@@ -160,12 +166,12 @@ func TestShieldedReal_shieldTransferUnshieldThroughFinalizeBlock(t *testing.T) {
 	require.Equal(t, "89", tip.String(), "100 less 10 base fee and 1 nullifier fee, paid to the proposer")
 	c.requireInvariants(t)
 
-	// Unshield: a fee top-up to alice's own earnings.
-	before, err := c.app.FeesKeeper.GetEarnings(c.app.NewContext(true), c.aliceAddr())
+	// Unshield: a fee top-up to alice's own fee-only balance.
+	before, err := c.app.FeesKeeper.GetFeeBalance(c.app.NewContext(true), c.aliceAddr())
 	require.NoError(t, err)
 	results = c.block(t, c.unshieldTx(t, c.alice, c.topup(t, loadVector(t, "ironwood-unshield"))))
 	requireTxOK(t, results, 0, "unshield")
-	after, err := c.app.FeesKeeper.GetEarnings(c.app.NewContext(true), c.aliceAddr())
+	after, err := c.app.FeesKeeper.GetFeeBalance(c.app.NewContext(true), c.aliceAddr())
 	require.NoError(t, err)
 	require.Equal(t, "4899", after.Sub(before).String(), "4900 unshielded less one nullifier fee")
 	require.True(t, c.poolBalance(t).IsZero(), "the pool is exactly drained: it paid out what the notes were worth")
@@ -438,4 +444,60 @@ func TestShieldedReal_aBondThatWouldBeDustIsNotPaid(t *testing.T) {
 	c.block(t)
 	require.Equal(t, "0", c.delegated(t))
 	c.requireInvariants(t)
+}
+
+func panicMessage(t *testing.T, fn func()) (msg string) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected the node to refuse to start")
+		if err, ok := r.(error); ok {
+			msg = err.Error()
+			return
+		}
+		msg = fmt.Sprint(r)
+	}()
+	fn()
+	return ""
+}
+
+// A node whose nullifier database does not fold to the committed state would accept a spent
+// nullifier: it refuses to start, and says where the database is and what to do.
+func TestShieldedReal_aNodeRefusesToStartWithAMissingOrShortNullifierDatabase(t *testing.T) {
+	vectorChainIDFromFile(t)
+	home := t.TempDir()
+	db := dbm.NewMemDB()
+	first := shieldedAppOn(t, db, home, realVerifierPath(t))
+	c := newShieldedChain(t, first, nil)
+	c.fund(t, c.alice, 10_000_000)
+	requireTxOK(t, c.block(t, c.shieldMsg(t)), 0, "shield")
+	require.NoError(t, first.Close())
+
+	// The same data starts.
+	again := shieldedAppOn(t, db, home, realVerifierPath(t))
+	require.NoError(t, again.Close())
+
+	// The nullifier database is gone, as after restoring only application.db.
+	require.NoError(t, os.RemoveAll(filepath.Join(home, "data", "shielded_nullifiers.db")))
+	msg := panicMessage(t, func() { shieldedAppOn(t, db, home, realVerifierPath(t)) })
+	require.Contains(t, msg, "shielded_nullifiers.db")
+	require.Contains(t, msg, "does not match the chain state")
+}
+
+// The verifier binary is pinned by hash: a different file, or no pin at all, stops the node.
+func TestShieldedReal_aNodeRefusesToStartWithAVerifierBinaryThatIsNotItsPin(t *testing.T) {
+	vectorChainIDFromFile(t)
+	path := realVerifierPath(t)
+	open := func(pin string) {
+		opts := simtestutil.AppOptionsMap{
+			flags.FlagHome: t.TempDir(), app.FlagShieldedVerifier: path, app.FlagShieldedVerifierSHA256: pin,
+		}
+		a := app.NewOramaApp(log.NewNopLogger(), dbm.NewMemDB(), true, opts, baseapp.SetChainID(vectorChainID))
+		_ = a.Close()
+	}
+	require.Contains(t, panicMessage(t, func() { open("") }), "no sha256 pin")
+	require.Contains(t, panicMessage(t, func() { open(strings.Repeat("0", 64)) }), "does not match its pin")
+	good, err := app.FileSHA256(path)
+	require.NoError(t, err)
+	open(good) // a matching pin starts
 }

@@ -51,7 +51,7 @@ type Env struct {
 
 func (e *Env) snapshot() snapshot {
 	return snapshot{
-		balances: cloneInts(e.Bank.Balances), burned: e.Bank.Burned, earnings: cloneInts(e.Fees.Earnings),
+		balances: cloneInts(e.Bank.Balances), burned: e.Bank.Burned, earnings: cloneInts(e.Fees.Earnings), feeBalances: cloneInts(e.Fees.FeeBalances),
 		delegated: cloneInts(e.Bonder.Delegated), bonds: len(e.Nodes.Bonds),
 	}
 }
@@ -59,6 +59,7 @@ func (e *Env) snapshot() snapshot {
 func (e *Env) restore(s snapshot) {
 	e.Bank.Balances, e.Bank.Burned = cloneInts(s.balances), s.burned
 	e.Fees.Earnings = cloneInts(s.earnings)
+	e.Fees.FeeBalances = cloneInts(s.feeBalances)
 	e.Bonder.Delegated = cloneInts(s.delegated)
 	e.Nodes.Bonds = e.Nodes.Bonds[:s.bonds]
 }

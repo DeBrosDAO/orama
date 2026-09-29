@@ -158,3 +158,10 @@ func TestGenesis_validate(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckNullifierStore_refusesADatabaseThatDisagreesWithState(t *testing.T) {
+	e := busyEnv(t)
+	require.NoError(t, e.Keeper.CheckNullifierStore(e.Ctx))
+	require.NoError(t, e.Store.Reset(), "a restore that lost the nullifier database")
+	require.ErrorIs(t, e.Keeper.CheckNullifierStore(e.Ctx), types.ErrNullifierStore)
+}

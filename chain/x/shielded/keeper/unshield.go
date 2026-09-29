@@ -79,8 +79,8 @@ func (k Keeper) pay(
 	validator, nodeID string, role nodestypes.Role, amount math.Int,
 ) error {
 	if target == types.UnshieldTargetFeeTopup {
-		if err := k.deps.Fees.CreditEarnings(ctx, types.ModuleName, owner, sdk.NewCoin(params.BaseDenom, amount)); err != nil {
-			return fmt.Errorf("top up %s's earnings: %w", owner, err)
+		if err := k.deps.Fees.CreditFeeBalance(ctx, types.ModuleName, owner, sdk.NewCoin(params.BaseDenom, amount)); err != nil {
+			return fmt.Errorf("top up %s's fee balance: %w", owner, err)
 		}
 		return nil
 	}

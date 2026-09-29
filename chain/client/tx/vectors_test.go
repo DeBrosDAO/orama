@@ -29,6 +29,7 @@ import (
 	markettypes "github.com/DeBrosOfficial/network/chain/x/market/types"
 	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
 	relaytypes "github.com/DeBrosOfficial/network/chain/x/relay/types"
+	shieldedtypes "github.com/DeBrosOfficial/network/chain/x/shielded/types"
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 	tokentypes "github.com/DeBrosOfficial/network/chain/x/token/types"
 )
@@ -157,6 +158,10 @@ func vectorMessages(signer string) []struct {
 		{"market_bid", &markettypes.MsgBid{Bidder: signer, ListingId: 8, Amount: math.NewInt(500)}, ""},
 		{"cnft_transfer", &cnfttypes.MsgTransfer{Signer: signer, TreeId: 2, Current: leaf, NewOwner: other, NewDelegate: "", Proof: proof}, ""},
 		{"archive_attest", &archivetypes.MsgAttest{Archiver: signer, StartHeight: 100, EndHeight: 200, BundleCid: "bafyarchive", BundleHash: bytesOf(1, 32), MerkleRoot: bytesOf(2, 32), NodeId: "node-1"}, ""},
+		{"shielded_shield", &shieldedtypes.MsgShield{Signer: signer, Bundle: bytesOf(1, 300)}, ""},
+		{"shielded_shield_earnings", &shieldedtypes.MsgShieldEarnings{Signer: signer, Bundle: bytesOf(2, 300)}, ""},
+		{"shielded_unshield_bond", &shieldedtypes.MsgUnshield{Signer: signer, Bundle: bytesOf(3, 300), Target: shieldedtypes.UnshieldTargetBond, Validator: otherVal}, ""},
+		{"shielded_unshield_node_bond", &shieldedtypes.MsgUnshield{Signer: signer, Bundle: bytesOf(4, 300), Target: shieldedtypes.UnshieldTargetNodeBond, NodeId: "node-1", Role: nodestypes.RoleStorage}, ""},
 		{"relay_register_relay", &relaytypes.MsgRegisterRelay{Operator: signer, NodeId: "node-1", RsaFingerprint: bytesOf(1, 32), Exit: true, Ed25519Signature: bytesOf(2, 64)}, ""},
 	}
 }

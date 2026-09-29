@@ -39,6 +39,13 @@ func (m msgServer) ShieldedTransfer(goCtx context.Context, msg *types.MsgShielde
 	if err != nil {
 		return nil, err
 	}
+	p, err := m.params(work)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.takeSignerlessSlot(work, p); err != nil {
+		return nil, err
+	}
 	if err := m.Verify(ctx, msg.Bundle, nil, adm); err != nil {
 		return nil, err
 	}

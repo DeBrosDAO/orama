@@ -124,6 +124,18 @@ var lockedRows = []lockedRow{
 	// x/archive: C14, D22.
 	{"archive", "retention_window_blocks", "201600", "plans/open-network.md D22: validators keep 14 days of blocks (6-second blocks)"},
 
+	// x/shielded: C12, D19, D20, P5. The plan fixes the 2% cap (P5, a constant in x/shielded/pool) and
+	// names the other parameters without numbers; C12a's spec text does not exist yet, so each is a
+	// launch default until the G1 model and the C12a spec sign one.
+	{"shielded", "anchor_window_blocks", "14400", "track-c C12a names the anchor window without a number; 24 hours of 6-second blocks (launch default)"},
+	{"shielded", "nullifier_fee", "1000000", "track-c C12: a burned per-nullifier fee with no number; 0.001 ORAMA; " + citeG1},
+	{"shielded", "action_gas", "250000", "track-c C12: the per-action verify gas is unmeasured (C0-4); " + citeG1},
+	{"shielded", "max_actions_per_bundle", "16", "track-c C12 (structure only): bounds proof work per bundle (launch default)"},
+	{"shielded", "unshield_floor", "1000000000", "P5: the cap is max(2% of the pool, a floor); 1 ORAMA; " + citeG1},
+	{"shielded", "max_fee_topup", "10000000", "track-c C12: max_fee_topup per unshield to the fee balance, no number; 0.01 ORAMA; " + citeG1},
+	{"shielded", "queue_per_address_cap", "100000000000", "track-c C12: the per-address limit of the unshield queue, no number; 100 ORAMA; " + citeG1},
+	{"shielded", "max_signerless_per_block", "64", "track-c C12 (structure only): bounds signer-less proof work per block (launch default)"},
+
 	// x/houses: D17, C5, G4.
 	{"houses", "bootstrap_exit_stake", "271000000000000", "P1: 271,000 ORAMA"},
 	{"houses", "token_quorum", "0.4", citeC5G4},

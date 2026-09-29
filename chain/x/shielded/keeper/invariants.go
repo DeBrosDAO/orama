@@ -93,3 +93,18 @@ func (k Keeper) checkAccumulator(ctx sdk.Context, inv *Invariants) error {
 	}
 	return nil
 }
+
+// CheckNullifierStore verifies that the nullifier database folds, in insertion order, to the
+// accumulator and count the committed state holds. A node runs it at start: a database that
+// disagrees (missing after a restore, from another chain, cut short) would accept a spent
+// nullifier or refuse a fresh one, and the node would diverge on the first shielded bundle.
+func (k Keeper) CheckNullifierStore(ctx sdk.Context) error {
+	inv := Invariants{AccumulatorMatches: true}
+	if err := k.checkAccumulator(ctx, &inv); err != nil {
+		return err
+	}
+	if !inv.AccumulatorMatches {
+		return fmt.Errorf("%w: %s", types.ErrNullifierStore, inv.Detail)
+	}
+	return nil
+}

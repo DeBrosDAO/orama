@@ -17,6 +17,7 @@ import (
 // replayed, and Commit (nullifier.Store) drops the records this attempt left so the replay
 // writes its own.
 func (k Keeper) EndBlock(ctx sdk.Context) error {
+	k.admission.newBlock()
 	if err := k.serveQueue(ctx); err != nil {
 		return fmt.Errorf("serve the unshield queue: %w", err)
 	}

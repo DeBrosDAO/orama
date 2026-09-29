@@ -82,7 +82,8 @@ func TestUnshield_feeTopupCreditsTheSignersOwnEarnings(t *testing.T) {
 	resp, err := unshield(t, e, topup(2, 41, alice))
 	require.NoError(t, err)
 	require.False(t, resp.Queued)
-	require.Equal(t, "40", e.Fees.EarningsOf(alice).String(), "41 leaves the pool, 1 nullifier fee is burned")
+	require.Equal(t, "40", e.Fees.FeeBalanceOf(alice).String(), "41 leaves the pool, 1 nullifier fee is burned")
+	require.True(t, e.Fees.EarningsOf(alice).IsZero(), "the top-up is fee-only money, not earnings")
 	require.Equal(t, "959", poolBalance(t, e).String())
 	requireInvariants(t, e)
 }
@@ -104,7 +105,7 @@ func TestUnshield_overTheCapFeeTopupFailsAtomically(t *testing.T) {
 	_, err = unshield(t, e, topup(3, 41, alice))
 	require.ErrorIs(t, err, pool.ErrCapExhausted, "40 + 40 is over the 50 cap and a fee top-up is not queued")
 	require.Equal(t, poolBefore.String(), poolBalance(t, e).String(), "nothing left the pool")
-	require.Equal(t, "40", e.Fees.EarningsOf(alice).String())
+	require.Equal(t, "40", e.Fees.FeeBalanceOf(alice).String())
 	empty, _ := e.Keeper.Queue.Iterate(e.Ctx, nil)
 	defer empty.Close()
 	require.False(t, empty.Valid(), "it did not queue")
@@ -353,8 +354,8 @@ func TestUnshield_theTargetIsTheSignerAndNobodyElse(t *testing.T) {
 	require.Equal(t, "0", delegated(e, alice), "a bond goes to the signer's own delegation")
 	_, err = unshield(t, e, topup(3, 21, bob))
 	require.NoError(t, err)
-	require.Equal(t, "20", e.Fees.EarningsOf(bob).String())
-	require.True(t, e.Fees.EarningsOf(alice).IsZero())
+	require.Equal(t, "20", e.Fees.FeeBalanceOf(bob).String())
+	require.True(t, e.Fees.FeeBalanceOf(alice).IsZero())
 }
 
 func TestMsg_validateBasic(t *testing.T) {

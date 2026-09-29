@@ -21,7 +21,7 @@ use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use zcash_primitives::transaction::components::orchard::write_v6_bundle;
 
-const CHAIN_ID: &str = "orama-orchard-vector-1";
+const CHAIN_ID: &str = "orama-localnet-orchard-vector-1";
 const SIGHASH_DOMAIN: &[u8] = b"orama-shielded-ironwood-sighash-v1";
 const ACTION_LEN: usize = 820;
 const HEADER_LEN: usize = 41;

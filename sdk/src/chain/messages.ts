@@ -4,12 +4,14 @@ import * as houses from "./gen/orama/houses/v1/tx";
 import * as market from "./gen/orama/market/v1/tx";
 import * as nodes from "./gen/orama/nodes/v1/tx";
 import * as relay from "./gen/orama/relay/v1/tx";
+import * as shielded from "./gen/orama/shielded/v1/tx";
 import * as storage from "./gen/orama/storage/v1/tx";
 import * as token from "./gen/orama/token/v1/tx";
 import { roleToJSON, keyTypeToJSON } from "./gen/orama/nodes/v1/nodes";
 import { dealClassToJSON, releaseReasonToJSON } from "./gen/orama/storage/v1/storage";
 import { voteOptionToJSON } from "./gen/orama/houses/v1/houses";
 import { extensionToJSON } from "./gen/orama/token/v1/token";
+import { unshieldTargetToJSON } from "./gen/orama/shielded/v1/shielded";
 import * as bank from "./gen/cosmos/bank/v1beta1/tx";
 import * as staking from "./gen/cosmos/staking/v1beta1/tx";
 import * as slashing from "./gen/cosmos/slashing/v1beta1/tx";
@@ -355,6 +357,35 @@ export const MSG = {
   relayUpdateReporters: defineMsg("/orama.relay.v1.MsgUpdateReporters", relay.MsgUpdateReporters, (m) =>
     desc("Update relay reporters", `Replace the relay reporter set with ${list(m.reporters)}`, [], true),
   ),
+
+  // ---- x/shielded ----
+  shieldedShieldedTransfer: defineMsg("/orama.shielded.v1.MsgShieldedTransfer", shielded.MsgShieldedTransfer, (m) =>
+    desc("Shielded transfer", `Move value inside the shielded pool (${m.bundle.length}-byte bundle ${shortHex(m.bundle)})`, [
+      "Nobody signs this: the fee is paid from the bundle's own value balance, and the amount and recipients are not shown here.",
+    ]),
+  ),
+  shieldedShield: defineMsg("/orama.shielded.v1.MsgShield", shielded.MsgShield, (m) =>
+    desc("Shield", `Move norama from ${m.signer}'s balance into the shielded pool (${m.bundle.length}-byte bundle ${shortHex(m.bundle)})`, [
+      "The amount is inside the bundle; the nullifier fee is paid on top of it.",
+    ]),
+  ),
+  shieldedShieldEarnings: defineMsg("/orama.shielded.v1.MsgShieldEarnings", shielded.MsgShieldEarnings, (m) =>
+    desc("Shield earnings", `Move ${m.signer}'s earnings into the shielded pool (${m.bundle.length}-byte bundle ${shortHex(m.bundle)})`, [
+      "The amount is inside the bundle; the nullifier fee is paid on top of it.",
+    ]),
+  ),
+  shieldedUnshield: defineMsg("/orama.shielded.v1.MsgUnshield", shielded.MsgUnshield, (m) => {
+    const target = unshieldTargetToJSON(m.target);
+    const where =
+      m.validator !== ""
+        ? `${target} to validator ${m.validator}`
+        : m.nodeId !== ""
+          ? `${target} of node ${m.nodeId} (${roleToJSON(m.role)})`
+          : target;
+    return desc("Unshield", `Move value out of the shielded pool to ${m.signer}'s own ${where} (${m.bundle.length}-byte bundle ${shortHex(m.bundle)})`, [
+      "The amount is inside the bundle. Over the daily cap a bond waits in a queue and is paid in later windows.",
+    ]);
+  }),
 } as const;
 
 /** Every message the registry holds, by type URL. */

@@ -16,7 +16,7 @@ func TestVerify_walletBuilderBundlesAccept(t *testing.T) {
 	s := loadWalletScenario(t)
 	v := mustNew(t, s.ChainID)
 	for _, step := range s.Steps {
-		if err := v.Verify(mustHex(t, step.Bundle), nil); err != nil {
+		if err := v.Verify(mustHex(t, step.Bundle), stepBinding(t, step)); err != nil {
 			t.Errorf("%s (%s): %v", step.Name, step.Kind, err)
 		}
 	}
@@ -45,7 +45,7 @@ func TestVerify_walletBuilderBundlesRejectTampering(t *testing.T) {
 		for label, c := range cases {
 			mut := bytes.Clone(bundle)
 			mut[c.at] ^= 1
-			err := v.Verify(mut, nil)
+			err := v.Verify(mut, stepBinding(t, step))
 			if label == "nullifier" {
 				// nf is a public input of the proof and is also under the sighash.
 				if err == nil || !errors.Is(err, verify.ErrTampered) {
@@ -57,7 +57,7 @@ func TestVerify_walletBuilderBundlesRejectTampering(t *testing.T) {
 				t.Errorf("%s/%s: got %v, want %v", step.Name, label, err, c.want)
 			}
 		}
-		if err := mustNew(t, s.ChainID+"-other").Verify(bundle, nil); !errors.Is(err, verify.ErrSignatureRejected) {
+		if err := mustNew(t, s.ChainID+"-other").Verify(bundle, stepBinding(t, step)); !errors.Is(err, verify.ErrSignatureRejected) {
 			t.Errorf("%s: wrong chain id: got %v", step.Name, err)
 		}
 	}

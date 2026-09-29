@@ -44,9 +44,10 @@ var (
 
 // The collections prefixes of the transient store.
 var (
-	PendingListPrefix = collections.NewPrefix(0)
-	PendingSetPrefix  = collections.NewPrefix(1)
-	PendingSeqPrefix  = collections.NewPrefix(2)
+	PendingListPrefix  = collections.NewPrefix(0)
+	PendingSetPrefix   = collections.NewPrefix(1)
+	PendingSeqPrefix   = collections.NewPrefix(2)
+	SignerlessCountKey = collections.NewPrefix(3)
 )
 
 // SignerlessAddress is the fixed address a MsgShieldedTransfer names as its signer. It is a

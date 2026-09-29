@@ -44,6 +44,7 @@ type Keeper struct {
 	deps Dependencies
 
 	emptyRoot *emptyRootCache
+	admission *admission
 
 	Schema         collections.Schema
 	Params         collections.Item[types.Params]
@@ -63,6 +64,7 @@ type Keeper struct {
 	pendingList   collections.Map[uint64, []byte]
 	pendingSet    collections.KeySet[[]byte]
 	pendingSeq    collections.Sequence
+	signerless    collections.Item[uint64]
 }
 
 // emptyRootCache computes the empty tree's root once. The Sinsemilla hashing is not free.
@@ -88,6 +90,7 @@ func NewKeeper(
 	k := Keeper{
 		deps:      deps,
 		emptyRoot: &emptyRootCache{},
+		admission: newAdmission(),
 		Params:    collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
 		Pools:     collections.NewMap(sb, types.PoolsPrefix, "pools", poolKey, sdk.IntValue),
 		Limiters:  collections.NewMap(sb, types.LimitersPrefix, "limiters", poolKey, codec.CollValue[types.Limiter](cdc)),
@@ -118,6 +121,7 @@ func (k *Keeper) initPending(transient storetypes.KVStoreService) {
 	k.pendingList = collections.NewMap(tb, types.PendingListPrefix, "pending_list", collections.Uint64Key, collections.BytesValue)
 	k.pendingSet = collections.NewKeySet(tb, types.PendingSetPrefix, "pending_set", collections.BytesKey)
 	k.pendingSeq = collections.NewSequence(tb, types.PendingSeqPrefix, "pending_seq")
+	k.signerless = collections.NewItem(tb, types.SignerlessCountKey, "signerless_count", collections.Uint64Value)
 	schema, err := tb.Build()
 	if err != nil {
 		panic(err)

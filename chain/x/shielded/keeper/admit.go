@@ -79,8 +79,31 @@ func (k Keeper) Admit(ctx sdk.Context, raw, binding []byte, kind Kind, verifyPro
 }
 
 // Verify charges the bundle's gas and runs every verifier on it. All must accept.
+//
+// In the mempool (CheckTx) a bundle that already failed is refused from memory, and each node
+// verifies at most MaxCheckVerificationsPerBlock proofs between blocks, so a stream of bundles
+// that fail only their proof costs a node one verification per distinct bundle and a bounded
+// number per block. In a block neither applies: every node verifies.
 func (k Keeper) Verify(ctx sdk.Context, raw, binding []byte, adm *Admitted) error {
 	ctx.GasMeter().ConsumeGas(adm.Gas, "shielded proof verification")
+	if !ctx.IsCheckTx() {
+		return k.check(raw, binding)
+	}
+	key := admissionKey(raw, binding)
+	if err, failed := k.admission.recalled(key); failed {
+		return fmt.Errorf("shielded bundle refused (already rejected): %w", err)
+	}
+	if !k.admission.spend() {
+		return ErrMempoolBusy
+	}
+	err := k.check(raw, binding)
+	if err != nil {
+		k.admission.remember(key, err)
+	}
+	return err
+}
+
+func (k Keeper) check(raw, binding []byte) error {
 	if err := verify.Check(raw, binding, k.deps.Verifiers...); err != nil {
 		return fmt.Errorf("shielded bundle refused: %w", err)
 	}

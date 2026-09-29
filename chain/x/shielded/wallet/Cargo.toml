@@ -9,10 +9,6 @@ description = "Wallet-side shielded core for Orama (F7): key tree, note tree and
 [lib]
 name = "orama_shielded_wallet"
 
-[[bin]]
-name = "orama-shielded-builder"
-path = "src/bin/orama-shielded-builder.rs"
-
 [dependencies]
 # Same exact pins as ../orchardffi/Cargo.toml: the wallet must build what the node verifies.
 orchard = { version = "=0.15.5", features = ["circuit"] }

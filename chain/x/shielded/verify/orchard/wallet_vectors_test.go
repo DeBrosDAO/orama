@@ -20,6 +20,7 @@ type walletStep struct {
 	Sighash       string   `json:"sighash"`
 	Anchor        string   `json:"anchor"`
 	ValueBalance  int64    `json:"value_balance"`
+	Binding       string   `json:"binding"`
 	Nullifiers    []string `json:"nullifiers"`
 	RealSpends    int      `json:"real_spends"`
 }
@@ -36,6 +37,15 @@ func mustHex(t testing.TB, s string) []byte {
 		t.Fatalf("hex: %v", err)
 	}
 	return b
+}
+
+// stepBinding is the sighash binding the wallet signed the step with: none except an unshield's.
+func stepBinding(t testing.TB, step walletStep) []byte {
+	t.Helper()
+	if step.Binding == "" {
+		return nil
+	}
+	return mustHex(t, step.Binding)
 }
 
 func loadWalletScenario(t testing.TB) walletScenario {
@@ -60,7 +70,7 @@ func TestSighash_matchesWalletBuilder(t *testing.T) {
 	s := loadWalletScenario(t)
 	for _, step := range s.Steps {
 		bundle := mustHex(t, step.Bundle)
-		got, err := Sighash(s.ChainID, nil, bundle)
+		got, err := Sighash(s.ChainID, stepBinding(t, step), bundle)
 		if err != nil {
 			t.Fatalf("%s: %v", step.Name, err)
 		}

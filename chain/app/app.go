@@ -734,6 +734,7 @@ func NewOramaApp(
 		if err := app.LoadLatestVersion(); err != nil {
 			panic(fmt.Errorf("error loading last version: %w", err))
 		}
+		app.checkShieldedStoreAtStart()
 	}
 
 	return app

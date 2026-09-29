@@ -24,6 +24,9 @@ type BankKeeper interface {
 type FeesKeeper interface {
 	// CreditEarnings moves amt from senderModule into x/fees and credits addr's earnings.
 	CreditEarnings(ctx context.Context, senderModule string, addr sdk.AccAddress, amt sdk.Coin) error
+	// CreditFeeBalance moves amt from senderModule into x/fees and credits addr's fee-only balance,
+	// which pays base fees and nothing else.
+	CreditFeeBalance(ctx context.Context, senderModule string, addr sdk.AccAddress, amt sdk.Coin) error
 	// DebitEarningsUpTo debits up to want from addr's earnings ledger and returns what it
 	// debited. The coins stay in x/fees' account for the caller to move.
 	DebitEarningsUpTo(ctx context.Context, addr sdk.AccAddress, want math.Int) (math.Int, error)

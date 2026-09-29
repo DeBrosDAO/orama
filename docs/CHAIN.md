@@ -299,6 +299,19 @@ contract may hold ORAMA and issue a public IOU for it, and the genesis token wra
 | `upgrade_timelock_seconds` | `5184000` | plan D17: 60 days for upgrades |
 | `spend_timelock_seconds` | `604800` | plan D17: 7 days for fund spending |
 
+`shielded`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `anchor_window_blocks` | `14400` | track-c C12a names the anchor window without a number; 24 hours of 6-second blocks (launch default) |
+| `nullifier_fee` | `1000000` | track-c C12: a burned per-nullifier fee with no number; 0.001 ORAMA; G1 launch default (see note below) |
+| `action_gas` | `250000` | track-c C12: the per-action verify gas is unmeasured (C0-4); G1 launch default (see note below) |
+| `max_actions_per_bundle` | `16` | track-c C12 (structure only): bounds proof work per bundle (launch default) |
+| `unshield_floor` | `1000000000 (1 ORAMA)` | P5: the cap is max(2% of the pool, a floor); 1 ORAMA; G1 launch default (see note below) |
+| `max_fee_topup` | `10000000` | track-c C12: max_fee_topup per unshield to the fee balance, no number; 0.01 ORAMA; G1 launch default (see note below) |
+| `queue_per_address_cap` | `100000000000 (100 ORAMA)` | track-c C12: the per-address limit of the unshield queue, no number; 100 ORAMA; G1 launch default (see note below) |
+| `max_signerless_per_block` | `64` | track-c C12 (structure only): bounds signer-less proof work per block (launch default) |
+
 `staking`
 
 | Parameter | Locked value | Source |
@@ -2200,6 +2213,7 @@ the G1 sign-off, like P2.
 | `anchor_window_blocks` | 14,400 | how far back an anchor may be (24 h at 6-second blocks) |
 | `action_gas` | 250,000 | gas one action declares and is charged |
 | `max_actions_per_bundle` | 16 | bounds proof work before any proof runs |
+| `max_signerless_per_block` | 64 | most signer-less transfers one block may hold; a later one fails and gives its slot back |
 | `nullifier_fee` | 1,000,000 norama | burned for every nullifier a bundle inserts |
 | `unshield_floor` | 1,000,000,000 norama | floor of the 24 h unshield cap |
 | `max_fee_topup` | 10,000,000 norama | most one unshield to the signer's own earnings may move |
@@ -2245,7 +2259,7 @@ the structural vote. There is no vintage-migration message yet because there is 
 |---|---|
 | `BOND` | the signer's own delegation to `validator`, through x/staking's `MsgDelegate`, held to x/power's `min_delegation_for_rewards` (the rule its ante decorator applies to a signed `MsgDelegate`, which a delegation made from this module would skip): a payment that would leave the delegation strictly between zero and the minimum is refused. Over the cap, or behind a non-empty queue, it **queues**. |
 | `NODE_BOND` | the signer's own x/nodes role bond on `node_id` (`MsgBondNode` with the signer as operator, so x/nodes refuses a node the signer does not own). Queues like `BOND`. |
-| `FEE_TOPUP` | credits the signer's own earnings account, at most `max_fee_topup` per tx. Counts against the cap and **fails the whole tx** when it does not fit; it is not queued. |
+| `FEE_TOPUP` | credits the signer's own **fee-only balance** (`x/fees` `CreditFeeBalance`, the `FeeBalances` ledger `MsgFundHotKey` also credits: it pays base fees and cannot be bonded, sent, shielded or deposited), at most `max_fee_topup` per tx. Counts against the cap and **fails the whole tx** when it does not fit; it is not queued. |
 | `DEPOSIT` | **not linked** (refused in `ValidateBasic`, before any proof work): no module has a path that tops up an existing deposit. |
 | `CONTRACT` | **not linked** (refused in `ValidateBasic`): the audited unshield-call-reshield adapter is not built. It would fail atomically over the cap, as specified. |
 
@@ -2264,9 +2278,6 @@ the structural vote. There is no vintage-migration message yet because there is 
   A target that refuses a payment (a validator that no longer exists, a retired node, a delegation
   that would be dust) keeps its request queued and the block emits `shielded_queue_payment_failed`; the other requests are paid.
   There is no cancel message, so a request whose target never accepts stays queued.
-* **Known gap.** A `FEE_TOPUP` credits the signer's ordinary earnings account. The spec's "fees
-  only, cannot be bonded, sent or re-shielded" needs a separate ledger in `x/fees`, which this
-  module does not add. Today that balance can also be bonded from earnings or re-shielded.
 
 ### The note-commitment tree and anchors
 
@@ -2409,13 +2420,48 @@ incident. The timeout is generous for that reason.
 |---|---|
 | `CGO_ENABLED=0`, or no `orchardffi` tag | the library verifier refuses every bundle (`ErrVerifierNotLinked`); nothing is accepted |
 | verifier binary missing or `--shielded-verifier` unset with nothing at the default path | the second verifier refuses every bundle; the node logs a warning at start |
-| chain ID not known yet | both refuse (`verify.ForChain`): a sighash bound to no chain would replay across networks |
+| chain ID empty | no verifiers are built (the CLI's throwaway app instance), so `verify.Check` refuses; a verifier is never built for the empty chain (`ErrEmptyChainID`) |
+| verifier binary not the pinned one | the process verifier refuses to start it (`ErrBinaryPin`); a node that configured it will not start |
 | fewer than 2 verifiers, or a nil one | `verify.Check` refuses |
 | one verifier rejects or faults | the bundle is refused |
 
 `TestShielded_buildWithoutTheVerifierAcceptsNoBundle` runs a real vector through `FinalizeBlock` in
 the default build. `orama-orchard-verifier` is found by, in order of precedence, the
 `--shielded-verifier <path>` flag of `oramad start`, then `<home>/bin/orama-orchard-verifier`.
+
+**Start-up.** A node with a chain ID does all of this before it serves a block, and stops with a
+message that names the cause and the flag when any step fails:
+
+* the orchard library's verifying key is built (`orchard.Warm`, an `orchardffi` build);
+* the verifier binary is read and its **SHA-256 must equal the pin**, `--shielded-verifier-sha256`
+  or the release's link-time `app.ShieldedVerifierSHA256` (`make orchard-verifier` prints it,
+  `make build-linux-amd64-orchard` writes `build/orama-orchard-verifier-linux-amd64.sha256`); no pin
+  refuses too. The file is hashed and then executed, so its directory must be writable only by
+  the node's user;
+* a configured verifier binary (the flag, or a file at the default path) is started and warmed;
+* **the nullifier database must fold to the committed accumulator and count**
+  (`Keeper.CheckNullifierStore`, first `count` records; records past that are an uncommitted
+  block's). A missing, short or foreign database stops the node: restore
+  `data/shielded_nullifiers.db` together with `application.db`, or reset the node's data and sync
+  again. The fold reads the whole set, so it grows with the chain.
+
+### Admission control in the mempool
+
+A signer-less transfer pays nothing before its proof is checked, so `CheckTx` limits what a stream
+of bad bundles can cost (`keeper.Verify`, `admission.go`; all of it local to a node, none of it in
+a block):
+
+* cheap checks first: size, value balance and fee, nullifiers (spent or pending), anchor, the
+  signer-less shape and gas, and only then a proof;
+* a bounded memory (4096) of bundles that failed a proof or signature check, keyed by the hash of
+  their exact bytes, so a repeat costs nothing; a verifier fault is never remembered, and one
+  changed byte is another bundle;
+* at most `MaxCheckVerificationsPerBlock` (256) proofs verified per node between two blocks; more
+  are refused with `ErrMempoolBusy` (not invalid, send again next block);
+* in a block, `max_signerless_per_block` bounds the signer-less transfers a block may hold.
+
+These bound the cost, they do not remove it: an attacker who mutates proof bytes still costs each
+node one verification per distinct bundle up to the per-block budget. A per-peer rate limit is E3's.
 
 ### Genesis, export and invariants
 
@@ -2449,7 +2495,7 @@ they were not run on linux.
 
 ### Test vectors and tests
 
-`orchardffi/testdata/` holds real Ironwood bundles for chain ID `orama-orchard-vector-1`, each
+`orchardffi/testdata/` holds real Ironwood bundles for chain ID `orama-localnet-orchard-vector-1` (a localnet ID, so the locked genesis parameters do not apply and tests set small fees and caps; a production ID needs every shielded parameter at its locked value), each
 with its sighash: `ironwood-1-action` and `ironwood-2-action` (shielding; spends disabled, dummy
 spends), then a flow that continues the 1-action bundle's note: `ironwood-transfer` (spends the
 5000 note, pays a fee of 100, value balance +100), and two alternatives that spend the 4900 change
@@ -2527,24 +2573,17 @@ linked, not run.
 
 * A Go or otherwise independent second implementation (open item above).
 * The contract path (`CONTRACT`) and the audited adapter, and `DEPOSIT` unshields.
-* A separate fees-only earnings ledger for `FEE_TOPUP`.
 * Vintage migration (`Move` is logic only), multi-asset, shielded delegation tokens, cNFT
   burn-leaf notes, and private delegator ballots.
 * Mempool DoS limits per peer and per onion service (E3), and the gas price: `action_gas` and
   `nullifier_fee` are placeholders.
 * A real two-node state-sync of the nullifier database, and a verifier run on linux.
-* Admission control for `CheckTx`: a signer-less tx pays nothing before its proof is verified, so
-  crafted bundles that fail only the Halo 2 proof cost every node a verification each (the
-  second verifier is serialized behind one mutex). A per-peer rate limit is E3's.
-* Startup checks: a node does not compare the nullifier database with the committed count at
-  start, does not pin the verifier binary by hash or version, and does not warm the verifiers, so
-  the first bundle after a start pays the key builds. A node without either verifier, or with a
-  database missing from a restore, diverges and halts on the first bundle it should have
-  accepted or refused (fail-stop).
+* Per-peer admission control for `CheckTx` (E3); the per-node budget above bounds the cost, it does not remove it.
+* The start-up check does not pin the verifier binary by version, only by hash, and the library's
+  own build is not pinned at all; both fail-stop if they differ between nodes.
 * The `Invariants` and `Pools` queries read the whole nullifier database and queue, unpaginated;
   keep them off public RPC nodes.
-* Wallet builders (F7). A wallet must sign an unshield with the binding, put the fee in a
-  transfer's value balance, and pay the nullifier fees on top of a shield. `oramad query shielded ...` and `oramad tx shielded ...` are the
+* `oramad query shielded ...` and `oramad tx shielded ...` are the
   autocli commands generated from the services (`params`, `pools`, `tree-state`,
   `nullifier-spent`, `invariants`); there is no hand-written CLI.
 * A store upgrade: the module has its own store, so a chain that already produced blocks needs an
@@ -2553,8 +2592,7 @@ linked, not run.
 
 ### Shielded keys (F7)
 
-Code: `chain/x/shielded/wallet` (Rust crate `orama-shielded-wallet`, binary
-`orama-shielded-builder`). It is wallet-side: it proves, it is not a dependency of `oramad`, and
+Code: `chain/x/shielded/wallet` (Rust crate `orama-shielded-wallet`, library and the `gen_scenario` example). It is wallet-side: it proves, it is not a dependency of `oramad`, and
 no node links it. It pins the same `orchard` 0.15.5 as `orchardffi` (exact `=` pins; `zip32` and
 `zcash_spec` are the versions orchard resolves to) and its `Cargo.lock` is committed.
 
@@ -2589,13 +2627,23 @@ key, full viewing key (96 bytes), external and internal IVK (64 bytes) and OVK (
 first three external addresses. `cargo test` recomputes them and also checks the framework against
 orchard's own `SpendingKey::from_zip32_seed` under Zcash's personalization.
 
-**Builder and bundle vectors.** `orama-shielded-builder bundle-vectors <dir>` builds real Ironwood
-v6 bundles from an in-memory note tree and writes `testdata/bundles/scenario.json`: two shields, a
-transfer that spends a real note (one real spend, change back), and an unshield that spends a real
-note. Each step carries the canonical bundle bytes, the effecting data, the Orama sighash (for chain
-ID `orama-shielded-wallet-vector-1`), the anchor, the nullifiers, the commitments and the value
+**Builder and bundle vectors.** `cargo run --release --example gen_scenario > testdata/bundles/scenario.json`
+builds real Ironwood v6 bundles from an in-memory note tree: two shields, a transfer that spends a
+real note (one real spend, change back, **and a fee of 100 left in its value balance**, which the
+chain requires of a transfer), and an unshield that spends a real note and is **bound to its signer
+and target** (`sighash::unshield_binding`; the scenario's signer is the app tests' alice and the
+target is `FEE_TOPUP`). A shield needs nothing extra in its bundle: the chain takes the nullifier
+fee on top of the amount from the funds that pay for it. Each step carries the canonical bundle bytes, the effecting data, the Orama sighash (for chain
+ID `orama-localnet-shielded-wallet-1`, the binding when it has one), the anchor, the nullifiers, the commitments and the value
 balance. Generation uses a seeded ChaCha20 RNG, so a regeneration reproduces the file byte for byte
-(about 20 s of proving). `orama-shielded-builder key-vectors <dir>` writes `keys.json`.
+(about 20 s of proving).
+
+**Chain path.** `TestShieldedReal_theWalletBuilderScenarioRunsThroughTheChain` (`orchardffi` build,
+both real verifiers, `FinalizeBlock`) runs the scenario in order: shield from a bank balance,
+shield from earnings, the signer-less transfer with its fee, the bound unshield to a fee-only
+balance. Before each step the chain's tree root equals the anchor the wallet used, the wallet's
+binding equals `MsgUnshield.Binding`, the tip and fee balance are the expected numbers, every
+nullifier is spent and the invariants hold; the same unshield at another target is refused.
 
 **Verify path.** Every committed bundle is checked three ways: Rust `cargo test` passes it through
 `orama-orchard-ffi` (the chain's verifier crate); the Go test `TestSighash_matchesWalletBuilder`

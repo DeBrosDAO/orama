@@ -182,3 +182,19 @@ func (app *OramaApp) Close() error {
 	}
 	return err
 }
+
+// checkShieldedStoreAtStart refuses to start a node whose nullifier database does not fold to the
+// accumulator and count the committed state holds. Such a node would accept a spent nullifier or
+// refuse a fresh one, and diverge from the network on the first shielded bundle.
+func (app *OramaApp) checkShieldedStoreAtStart() {
+	height := app.LastBlockHeight()
+	if height == 0 {
+		return
+	}
+	ctx := app.NewContextLegacy(true, cmtproto.Header{Height: height})
+	if err := app.ShieldedKeeper.CheckNullifierStore(ctx); err != nil {
+		panic(fmt.Errorf("the shielded nullifier database does not match the chain state at height %d: %w; "+
+			"it lives in <home>/data/shielded_nullifiers.db and must be restored together with application.db "+
+			"(or state-synced with the snapshot extension); to rebuild, reset the node's data and sync again", height, err))
+	}
+}

@@ -108,6 +108,15 @@ func New(cfg Config) (*Verifier, error) {
 	return &Verifier{cfg: cfg}, nil
 }
 
+// Warm starts the process and waits for its ready frame, so the verifying key is built before the
+// first bundle. A missing binary, a bad pin or a process that will not start is an error.
+func (v *Verifier) Warm() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	_, err := v.running()
+	return err
+}
+
 // Close stops the process. The Verifier can still be used; it starts a new one.
 func (v *Verifier) Close() error {
 	v.mu.Lock()

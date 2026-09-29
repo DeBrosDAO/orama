@@ -85,12 +85,20 @@ fn zat(v: i64) -> Result<ZatBalance, BundleError> {
 
 /// Builds, proves and signs one bundle against the tree's current root.
 ///
+/// The bundle's public value balance is what the spends hold minus what the outputs pay: nothing
+/// spent and something paid shields (negative balance); more spent than paid leaves value for the
+/// chain. A **transfer** must leave its fee that way (the chain refuses a transfer whose balance is
+/// below `base_fee x action_gas x actions + nullifier_fee x actions`), and an **unshield** must pass
+/// the binding of its signer and target ([`crate::sighash::unshield_binding`]). A shield needs the
+/// nullifier fee on top of its amount in the funds that pay for it; the bundle does not carry it.
+///
 /// Spends need an `account` that owns the note. Outputs are sealed to their recipients, and to the
 /// first spender's outgoing viewing key when there is one (a shield has no sender to recover it).
 pub fn build_bundle<R: RngCore + CryptoRng>(
     rng: &mut R,
     pk: &ProvingKey,
     chain_id: &str,
+    binding: Option<&[u8]>,
     tree: &NoteTree,
     spends: &[Spend<'_>],
     outputs: &[Output],
@@ -128,11 +136,11 @@ pub fn build_bundle<R: RngCore + CryptoRng>(
         .clone()
         .apply_signatures(&mut *rng, [0u8; 32], &asks)
         .map_err(BundleError::Build)?;
-    let hash = sighash(chain_id, &encode(probe)?.0);
+    let hash = sighash(chain_id, binding, &encode(probe)?.0);
 
     let signed = proven.apply_signatures(&mut *rng, hash, &asks).map_err(BundleError::Build)?;
     let (bytes, bundle) = encode(signed)?;
-    debug_assert_eq!(sighash(chain_id, &bytes), hash, "prefix must not depend on signatures");
+    debug_assert_eq!(sighash(chain_id, binding, &bytes), hash, "prefix must not depend on signatures");
 
     Ok(Built {
         effecting_data: effecting_data(&bytes).to_vec(),

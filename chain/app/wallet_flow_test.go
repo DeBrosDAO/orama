@@ -12,6 +12,7 @@ import (
 	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 
+	shieldedtypes "github.com/DeBrosOfficial/network/chain/x/shielded/types"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
@@ -215,11 +216,51 @@ func TestWalletFlow_publicUserToUserNoramaSendIsRefused(t *testing.T) {
 	require.Equal(t, norama(10).SubRaw(feeOf(1)).String(), f.bank(alice.addr, params.BaseDenom).String(), "the sender kept its balance, less the fee the failed transaction still paid")
 }
 
-func TestWalletFlow_noShieldedTransactionMessageExistsYet(t *testing.T) {
+// The wallet builds and signs the shielded messages with the same builder as every other message.
+// A node with neither verifier linked, which is what these tests run, refuses every bundle: the
+// fee is taken, the pool is untouched, nothing is accepted without both verifiers (an orchardffi
+// build with the library linked refuses on the signature instead, the flow's chain ID being no
+// vector's: either way the bundle is "refused"). The real proofs
+// go through shielded_real_test.go and shielded_wallet_test.go (the orchardffi build).
+func TestWalletFlow_shieldedMessagesAreRegisteredSignedByTheWalletAndRefusedWithoutBothVerifiers(t *testing.T) {
 	f := newFlow(t)
+	registered := map[string]bool{}
 	for _, url := range f.app.InterfaceRegistry().ListImplementations(sdk.MsgInterfaceProtoName) {
-		require.False(t, strings.HasPrefix(url, "/orama.shielded"), "%s is registered: extend this suite with shield, unshield and private send", url)
+		registered[url] = true
 	}
+	for _, url := range []string{
+		"/orama.shielded.v1.MsgShieldedTransfer", "/orama.shielded.v1.MsgShield",
+		"/orama.shielded.v1.MsgShieldEarnings", "/orama.shielded.v1.MsgUnshield",
+	} {
+		require.True(t, registered[url], "%s is not registered", url)
+	}
+
+	alice := f.newWallet()
+	f.fundBank(alice, 10)
+	bundle := loadVector(t, "ironwood-1-action")
+	signer := alice.addr.String()
+	start := f.bank(alice.addr, params.BaseDenom)
+
+	shield := f.deliver(alice, &shieldedtypes.MsgShield{Signer: signer, Bundle: bundle})
+	requireRejected(t, shield, "shielded bundle refused")
+	earnings := f.deliver(alice, &shieldedtypes.MsgShieldEarnings{Signer: signer, Bundle: bundle})
+	requireRejected(t, earnings, "shielded bundle refused")
+	unshield := f.deliver(alice, &shieldedtypes.MsgUnshield{
+		Signer: signer, Bundle: loadVector(t, "ironwood-unshield"), Target: shieldedtypes.UnshieldTargetFeeTopup,
+	})
+	// The vector's 4900 does not cover the default nullifier fee: a cheap check refuses it before any proof.
+	requireRejected(t, unshield, "nullifier fees")
+	require.Equal(t, start.SubRaw(3*feeOf(1)).String(), f.bank(alice.addr, params.BaseDenom).String(), "each refused message still paid its fee, and nothing else moved")
+
+	// A shielded message shares its tx with nothing.
+	two := f.deliver(alice,
+		&shieldedtypes.MsgShield{Signer: signer, Bundle: bundle},
+		&shieldedtypes.MsgShield{Signer: signer, Bundle: bundle})
+	requireRejected(t, two, "only message")
+
+	_, err := f.app.ShieldedKeeper.Pools.Get(f.app.NewContext(true), poolKey())
+	require.Error(t, err, "no pool exists: nothing was accepted")
+	f.requireInvariants()
 }
 
 // ---- stake ----

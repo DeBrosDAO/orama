@@ -24,18 +24,21 @@ const (
 	DefaultMaxFeeTopup int64 = 10_000_000
 	// DefaultQueuePerAddressCap is 100 ORAMA, in norama.
 	DefaultQueuePerAddressCap int64 = 100_000_000_000
+	// DefaultMaxSignerlessPerBlock bounds the proof work signer-less transfers put in one block.
+	DefaultMaxSignerlessPerBlock uint32 = 64
 )
 
 // DefaultParams returns the genesis defaults.
 func DefaultParams() Params {
 	return Params{
-		AnchorWindowBlocks:  DefaultAnchorWindowBlocks,
-		NullifierFee:        math.NewInt(DefaultNullifierFee),
-		ActionGas:           DefaultActionGas,
-		MaxActionsPerBundle: DefaultMaxActions,
-		UnshieldFloor:       math.NewInt(pool.UnshieldFloor),
-		MaxFeeTopup:         math.NewInt(DefaultMaxFeeTopup),
-		QueuePerAddressCap:  math.NewInt(DefaultQueuePerAddressCap),
+		AnchorWindowBlocks:    DefaultAnchorWindowBlocks,
+		NullifierFee:          math.NewInt(DefaultNullifierFee),
+		ActionGas:             DefaultActionGas,
+		MaxActionsPerBundle:   DefaultMaxActions,
+		UnshieldFloor:         math.NewInt(pool.UnshieldFloor),
+		MaxFeeTopup:           math.NewInt(DefaultMaxFeeTopup),
+		QueuePerAddressCap:    math.NewInt(DefaultQueuePerAddressCap),
+		MaxSignerlessPerBlock: DefaultMaxSignerlessPerBlock,
 	}
 }
 
@@ -49,6 +52,9 @@ func (p Params) Validate() error {
 	}
 	if p.MaxActionsPerBundle == 0 {
 		return fmt.Errorf("max_actions_per_bundle must be positive")
+	}
+	if p.MaxSignerlessPerBlock == 0 {
+		return fmt.Errorf("max_signerless_per_block must be positive")
 	}
 	if p.ActionGas > ^uint64(0)/uint64(p.MaxActionsPerBundle) {
 		return fmt.Errorf("action_gas x max_actions_per_bundle overflows uint64")
