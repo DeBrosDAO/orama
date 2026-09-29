@@ -254,6 +254,13 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(owned(auth.DomainDB, auth.ActionRead), "/v1/rqlite/export")
 	t.Add(owned(auth.DomainDB, auth.ActionWrite), "/v1/rqlite/import")
 
+	// A backup is every secret in the namespace, sealed to a key the caller
+	// names; a restore replaces the database. Both handlers also require the
+	// owner's grant. The restore key is public and only names what to seal to.
+	t.Add(owned(auth.DomainSecrets, auth.ActionRead), "/v1/namespace/backup")
+	t.Add(owned(auth.DomainDB, auth.ActionRead), "/v1/namespace/restore-key")
+	t.Add(owned(auth.DomainDB, auth.ActionWrite), "/v1/namespace/restore")
+
 	// Handing out authority in a namespace is the control plane's own control
 	// plane. Transferring goes further and needs the owner, which the handler
 	// checks: a permission set cannot express "owner", only what an owner may

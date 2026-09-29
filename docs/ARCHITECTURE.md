@@ -1150,6 +1150,7 @@ internal-auth check both accept.
 - **Refresh tokens:** Stored as SHA-256 hashes (never plaintext)
 - **API keys:** Stored as HMAC-SHA256 hashes with a server-side secret
 - **TURN secrets, function secrets, push tokens, deployment env, agent tokens:** Encrypted at rest with AES-256-GCM. The key is HKDF of the encryption root (a cluster-wide IKM that starts as a copy of the cluster secret): the registry's `encryption_roots` is the source of truth, each gateway caches it in its state directory, and `secrets/encryption-root` (written at join) seeds an empty cache. `orama operator rotate-secrets --rotate` replaces the IKM and re-encrypts; the cluster secret (IPFS-Cluster PSK / mesh bearer) is not touched
+- **Namespace backups:** `/v1/namespace/backup` decrypts those secrets and seals them, with the RQLite snapshot and pin list, to the owner's X25519 public key (nacl sealed box, `ORBK`); the cluster never has the private key. A restore is opened on the owner's machine and its secrets re-sealed to the destination gateway's restore key, `HKDF(encryption root, "orama-restore-v1")`, which the gateway derives and never stores
 - **Binary signing:** Build archives signed with rootwallet EVM signature, verified on install
 
 ### Process Isolation

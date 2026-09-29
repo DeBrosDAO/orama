@@ -162,6 +162,7 @@ unit test read, so a shape change on either side fails without a cluster.
 
 | Route | Owner | Notes |
 |-------|-------|-------|
+| `/v1/namespace/backup` | CLI | Owner only. The namespace's RQLite snapshot, pinned CIDs and decrypted secrets, sealed to the X25519 public key in the body. The gateway never sees the private key. Namespace gateways only. `orama namespace backup`. |
 | `/v1/namespace/delete` | CLI | Destroy a namespace. |
 | `/v1/namespace/keys` | CLI | Mint and list scoped API keys. `orama namespace keys`. |
 | `/v1/namespace/keys/` | CLI | Revoke a key. |
@@ -170,6 +171,8 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/namespace/members/` | CLI | Remove a member, or transfer the namespace. `orama members remove|transfer`. |
 | `/v1/namespaces` | CLI | Create a namespace: writes the owner grant and starts provisioning. Who may call it is `namespace_creation` (`operators`, `allowlist`, or `open`). A new cluster is `operators`; one that already had data stays `open` until an operator changes it. Per-wallet cap defaults to 10. `orama namespace create`. |
 | `/v1/namespace/rate-limit` | CLI | Per-namespace rate limit. |
+| `/v1/namespace/restore` | CLI | Owner only. Replaces the namespace's RQLite with a backup, writes its secrets under this cluster's encryption root and pins its CIDs. The secrets arrive sealed to `/v1/namespace/restore-key`. `orama namespace restore`. |
+| `/v1/namespace/restore-key` | CLI | This gateway's X25519 restore public key, derived from the cluster's current encryption root. `orama namespace restore-key`. |
 | `/v1/namespace/devices` | direct | An operator's list of one account's devices (`?subject=<wallet>`), for recovering an account under the `approval` policy. The members-write permission. No CLI command. See AUTH.md. |
 | `/v1/namespace/devices/` | direct | `DELETE /v1/namespace/devices/{id}` — an operator revokes a device of any account in the namespace. The members-write permission. No CLI command. |
 | `/v1/namespace/session-policy` | direct | Whether end-user sessions must be bound to a device, and whether a new device needs an existing one's approval (`optional`, `required`, `approval`). An owner's setting, made once per namespace over HTTP; the CLI has no command for it. See AUTH.md. |

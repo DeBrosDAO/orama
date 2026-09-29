@@ -122,6 +122,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama monitor service`](#orama-monitor-service) — Service status across the cluster (one-shot)
   - [`orama monitor traffic`](#orama-monitor-traffic) — Gateway requests, errors and latency (one-shot)
 - [`orama namespace`](#orama-namespace) — Manage namespaces
+  - [`orama namespace backup`](#orama-namespace-backup) — Take a backup of the namespace, sealed to your X25519 public key
   - [`orama namespace backup-open`](#orama-namespace-backup-open) — Decrypt a backup file with an X25519 private key
   - [`orama namespace backup-seal`](#orama-namespace-backup-seal) — Encrypt a backup file to an X25519 public key
   - [`orama namespace create`](#orama-namespace-create) — Create a namespace and start its cluster
@@ -136,6 +137,8 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama namespace keys rotate`](#orama-namespace-keys-rotate) — Mint a successor to a key and keep the old one working for an overlap
   - [`orama namespace list`](#orama-namespace-list) — List namespaces owned by the current wallet
   - [`orama namespace repair`](#orama-namespace-repair) — Repair an under-provisioned namespace cluster
+  - [`orama namespace restore`](#orama-namespace-restore) — Restore a namespace backup onto the namespace gateway (DESTRUCTIVE)
+  - [`orama namespace restore-key`](#orama-namespace-restore-key) — Print the namespace gateway's restore public key
   - [`orama namespace rqlite`](#orama-namespace-rqlite) — Manage the namespace's internal RQLite database
     - [`orama namespace rqlite export`](#orama-namespace-rqlite-export) — Export the namespace's RQLite database to a local SQLite file
     - [`orama namespace rqlite import`](#orama-namespace-rqlite-import) — Import a SQLite dump into the namespace's RQLite (DESTRUCTIVE)
@@ -392,7 +395,7 @@ grants given and taken away, deployments, functions, secrets and namespace chang
 Events are shown oldest first. --follow keeps the command running and prints new
 ones as they are recorded.
 
-Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer, auth.device.start, auth.device.approve, auth.device.deny, auth.device.claim, auth.device.revoke, namespace.session_policy, node.register, node.key.enrol
+Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer, namespace.backup, namespace.restore, auth.device.start, auth.device.approve, auth.device.deny, auth.device.claim, auth.device.revoke, namespace.session_policy, node.register, node.key.enrol
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -1754,7 +1757,25 @@ Aliases: `ns`
 
 List, delete, and repair namespaces on the Orama network.
 
-Subcommands: `backup-open`, `backup-seal`, `create`, `delete`, `disable`, `enable`, `keys`, `list`, `repair`, `rqlite`, `webrtc-status`
+Subcommands: `backup-open`, `backup-seal`, `backup`, `create`, `delete`, `disable`, `enable`, `keys`, `list`, `repair`, `restore-key`, `restore`, `rqlite`, `webrtc-status`
+
+### orama namespace backup
+
+Take a backup of the namespace, sealed to your X25519 public key
+
+```
+orama namespace backup [flags]
+```
+
+Ask the namespace gateway for a backup: its RQLite snapshot, the CIDs it
+has pinned, and its secrets, decrypted by the cluster and sealed with the rest
+to the public key you give. The cluster never holds the private key and cannot
+open what it wrote. Keep the private key off the cluster.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--key` | — | your X25519 backup public key, 64 hex characters |
+| `--out` | — | file to write the sealed backup to |
 
 ### orama namespace backup-open
 
@@ -1781,7 +1802,8 @@ orama namespace backup-seal [flags]
 Encrypt a file to the owner's backup public key.
 
 The cluster holds only that public key. It cannot decrypt the file.
-The full namespace restore (RQLite, pins, and secret re-wrap) is not this command.
+This seals any file. A namespace's own backup is 'orama namespace backup', and
+putting one back is 'orama namespace restore'.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -1955,6 +1977,43 @@ orama namespace repair <namespace>
 ```
 
 Repair an under-provisioned namespace cluster. Run it on a node. It talks to that node's gateway on the node's WireGuard address; localhost is where public traffic arrives, so a repair sent there is refused.
+
+### orama namespace restore
+
+Restore a namespace backup onto the namespace gateway (DESTRUCTIVE)
+
+```
+orama namespace restore [flags]
+```
+
+Open a backup on this machine with your private key, seal its secrets to
+the destination gateway's restore key (--dest-key, from 'orama namespace
+restore-key'), and send it to the namespace gateway you are signed in to.
+
+The gateway replaces the namespace's entire RQLite database with the backup,
+writes the secrets under its own cluster's encryption root, and pins every CID
+in the backup. The namespace must already exist on the destination, and
+--namespace must name the namespace the backup was taken of. A wrong key, a
+corrupt file or a different namespace stops before anything is sent.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dest-key` | — | destination gateway's restore public key, from 'orama namespace restore-key' |
+| `--in` | — | sealed backup file |
+| `--key-file` | — | file holding your X25519 backup private key, 64 hex characters |
+| `--namespace` | — | namespace the backup was taken of; must match the backup |
+
+### orama namespace restore-key
+
+Print the namespace gateway's restore public key
+
+```
+orama namespace restore-key
+```
+
+Print the X25519 public key a restore's secrets are sealed to. It is
+derived from the destination cluster's encryption root, so it changes when
+that root is rotated. Pass it to 'orama namespace restore --dest-key'.
 
 ### orama namespace rqlite
 

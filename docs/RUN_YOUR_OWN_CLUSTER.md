@@ -100,9 +100,47 @@ Further nameserver detail, including installing by hand on the VPS with
 
 ## A sealed backup
 
-`orama namespace backup-seal` encrypts a file to an X25519 public key. The
-cluster can run that command. It cannot decrypt the file: opening it is
-`orama namespace backup-open` and needs the private key. A restore that
-rebuilds RQLite, pins, and secrets on another cluster is not implemented.
-If the source cluster dies before a backup includes the secrets, those
-secrets are gone.
+A namespace backup is sealed to an X25519 keypair you keep. The cluster is
+only ever given the public key, so it can write backups it cannot read.
+
+```bash
+# On the cluster the namespace lives on, signed in as its owner:
+orama namespace backup --key <public key hex> --out myapp.orbk
+```
+
+The gateway puts three things in the file: the namespace's RQLite snapshot
+(the same `/db/backup` that `orama namespace rqlite export` downloads), every
+CID the namespace holds pinned (stored objects and each deployment's content
+and build), and its stored secrets (function secrets, push tokens and
+credentials, TURN secret, deployment environment). The secrets are decrypted
+by the source cluster, because they are encrypted under its encryption root
+and no other cluster can read them. If the source cluster dies before a backup
+was taken, its secrets are gone.
+
+To restore onto another cluster, create the namespace there, sign in to it as
+its owner, and run:
+
+```bash
+orama namespace restore-key            # the destination's restore public key
+orama namespace restore --in myapp.orbk --key-file ./backup.key \
+  --namespace myapp --dest-key <restore public key hex>
+```
+
+`restore` opens the backup on your machine; the private key never leaves it.
+It seals each secret to the destination gateway's restore key, which is derived
+from that cluster's encryption root and changes when the root is rotated. The
+gateway replaces the namespace's RQLite with the snapshot, writes the secrets
+under its own encryption root, and pins the CIDs. A wrong key, a corrupt or
+truncated file, or a backup of a different namespace is refused before
+anything is written. A failure after the database was replaced says so;
+running the same restore again is safe.
+
+What it does not do: create the namespace, redeploy deployments or functions
+onto the new cluster's nodes, or copy the pinned content. IPFS Cluster
+accepts each pin; the content only arrives if it is still reachable on IPFS. The backup and the
+restore request are held in memory whole (one nacl box; the restore request
+is capped at 1 GiB). Backups are taken when you run the command; there is no
+schedule and no storage deal.
+
+`orama namespace backup-seal` and `backup-open` seal and open any file with
+the same keys.

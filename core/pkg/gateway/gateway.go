@@ -22,6 +22,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	authhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/auth"
+	backuphandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/backup"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/cache"
 	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 	enrollhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/enroll"
@@ -115,6 +116,9 @@ type Gateway struct {
 	// IPFS storage client
 	ipfsClient      ipfs.IPFSClient
 	storageHandlers *storage.Handlers
+
+	// Namespace backup and restore; nil on the cluster gateway.
+	backupHandler *backuphandlers.Handler
 
 	// Local pub/sub bypass for same-gateway subscribers
 	localSubscribers map[string][]*localSubscriber // topic+namespace -> subscribers
@@ -580,6 +584,8 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// the audit trail, and it is replicated to every node, so without this
 	// it grows for ever (the shape of bug-237).
 	deps.AuthService.Audit().StartPruning(context.Background())
+
+	gw.initNamespaceBackup(deps)
 
 	// Initialize middleware cache (60s TTL for auth/routing lookups)
 	gw.mwCache = newMiddlewareCache(CredentialStaleness)

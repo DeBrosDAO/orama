@@ -139,6 +139,12 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/rqlite/export", g.rqliteExportHandler)
 	mux.HandleFunc("/v1/rqlite/import", g.rqliteImportHandler)
 
+	// Namespace backup (sealed to the owner's key) and restore (secrets sealed
+	// to this gateway's restore key). Namespace gateways only.
+	mux.HandleFunc("/v1/namespace/backup", g.namespaceBackupHandler)
+	mux.HandleFunc("/v1/namespace/restore-key", g.namespaceRestoreKeyHandler)
+	mux.HandleFunc("/v1/namespace/restore", g.namespaceRestoreHandler)
+
 	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints). It composes its
 	// own patterns, so it reports them and they are checked against the policy
 	// table before its handlers go on.

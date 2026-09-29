@@ -15,7 +15,8 @@ var backupSealCmd = &cobra.Command{
 	Long: `Encrypt a file to the owner's backup public key.
 
 The cluster holds only that public key. It cannot decrypt the file.
-The full namespace restore (RQLite, pins, and secret re-wrap) is not this command.`,
+This seals any file. A namespace's own backup is 'orama namespace backup', and
+putting one back is 'orama namespace restore'.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runBackup(cmd, true)
 	},

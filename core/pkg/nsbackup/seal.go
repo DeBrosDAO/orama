@@ -1,6 +1,6 @@
 // Package nsbackup seals a namespace backup to the owner's X25519 public key.
 // The cluster is given only that public key. Opening the backup needs the
-// private key, which this package will use and which the cluster must not store.
+// private key, which only the owner's machine uses and the cluster never holds.
 package nsbackup
 
 import (

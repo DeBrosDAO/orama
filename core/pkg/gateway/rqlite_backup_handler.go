@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +11,17 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
+)
+
+// RQLite's native endpoints for a whole-database snapshot and its restore.
+// /v1/rqlite/export, /v1/rqlite/import and the namespace backup all use them.
+const (
+	rqliteBackupPath = "/db/backup"
+	rqliteLoadPath   = "/db/load"
+	// rqliteSnapshotTimeout covers streaming the whole database either way.
+	rqliteSnapshotTimeout = 5 * time.Minute
+	// rqliteErrorBodyBytes is how much of an RQLite error body is kept.
+	rqliteErrorBodyBytes = 4096
 )
 
 // rqliteExportHandler handles GET /v1/rqlite/export
@@ -26,9 +39,9 @@ func (g *Gateway) rqliteExportHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	backupURL := rqliteURL + "/db/backup"
+	backupURL := rqliteURL + rqliteBackupPath
 
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := &http.Client{Timeout: rqliteSnapshotTimeout}
 	resp, err := client.Get(backupURL)
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "rqlite export: failed to reach RQLite backup endpoint",
@@ -39,7 +52,7 @@ func (g *Gateway) rqliteExportHandler(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, rqliteErrorBodyBytes))
 		writeError(w, resp.StatusCode, fmt.Sprintf("RQLite backup failed: %s", string(body)))
 		return
 	}
@@ -83,7 +96,7 @@ func (g *Gateway) rqliteImportHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	loadURL := rqliteURL + "/db/load"
+	loadURL := rqliteURL + rqliteLoadPath
 
 	proxyReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, loadURL, r.Body)
 	if err != nil {
@@ -95,7 +108,7 @@ func (g *Gateway) rqliteImportHandler(w http.ResponseWriter, r *http.Request) {
 		proxyReq.ContentLength = r.ContentLength
 	}
 
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := &http.Client{Timeout: rqliteSnapshotTimeout}
 	resp, err := client.Do(proxyReq)
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "rqlite import: failed to reach RQLite load endpoint",
@@ -105,7 +118,7 @@ func (g *Gateway) rqliteImportHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, rqliteErrorBodyBytes))
 
 	if resp.StatusCode != http.StatusOK {
 		writeError(w, resp.StatusCode, fmt.Sprintf("RQLite load failed: %s", string(body)))
@@ -128,4 +141,56 @@ func (g *Gateway) rqliteBaseURL() string {
 		dsn = dsn[:idx]
 	}
 	return strings.TrimRight(dsn, "/")
+}
+
+// rqliteSnapshots is the namespace backup's handle on the same /db/backup and
+// /db/load the export and import routes proxy.
+type rqliteSnapshots struct {
+	baseURL string
+	client  *http.Client
+}
+
+func newRQLiteSnapshots(baseURL string) rqliteSnapshots {
+	return rqliteSnapshots{baseURL: baseURL, client: &http.Client{Timeout: rqliteSnapshotTimeout}}
+}
+
+// Backup returns the whole database as a SQLite file.
+func (s rqliteSnapshots) Backup(ctx context.Context) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.baseURL+rqliteBackupPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build the RQLite backup request: %w", err)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("reach RQLite %s: %w", rqliteBackupPath, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, rqliteErrorBodyBytes))
+		return nil, fmt.Errorf("RQLite %s returned %d: %s", rqliteBackupPath, resp.StatusCode, body)
+	}
+	db, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read the RQLite backup: %w", err)
+	}
+	return db, nil
+}
+
+// Load replaces the whole database with db.
+func (s rqliteSnapshots) Load(ctx context.Context, db []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+rqliteLoadPath, bytes.NewReader(db))
+	if err != nil {
+		return fmt.Errorf("build the RQLite load request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("reach RQLite %s: %w", rqliteLoadPath, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, rqliteErrorBodyBytes))
+		return fmt.Errorf("RQLite %s returned %d: %s", rqliteLoadPath, resp.StatusCode, body)
+	}
+	return nil
 }

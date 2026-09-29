@@ -53,6 +53,10 @@ const (
 	AuditGrantAdded       = "grant.add"
 	AuditGrantRevoked     = "grant.revoke"
 	AuditOwnerTransferred = "namespace.transfer"
+	// A backup hands every secret in a namespace out, sealed to a key the
+	// caller chose; a restore replaces the namespace's database.
+	AuditNamespaceBackedUp = "namespace.backup"
+	AuditNamespaceRestored = "namespace.restore"
 	// A login from a machine with no wallet on it. All four are recorded
 	// because the interesting question afterwards is not "did someone log in"
 	// but "who approved the code that logged this machine in".
@@ -82,6 +86,7 @@ var AuditActions = []string{
 	AuditFunctionDeployed, AuditFunctionDeleted, AuditDeploymentCreated, AuditDeploymentDeleted,
 	AuditOperatorAction, AuditLegacyCredential,
 	AuditGrantAdded, AuditGrantRevoked, AuditOwnerTransferred,
+	AuditNamespaceBackedUp, AuditNamespaceRestored,
 	AuditDeviceLoginStarted, AuditDeviceLoginApproved, AuditDeviceLoginDenied, AuditDeviceLoginClaimed,
 	AuditDeviceRevoked, AuditSessionPolicySet,
 	AuditNodeRegistered, AuditNodeKeyEnrolled,
