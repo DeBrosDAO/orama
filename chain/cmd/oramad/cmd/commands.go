@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	cmtcfg "github.com/cometbft/cometbft/config"
 	dbm "github.com/cosmos/cosmos-db"
@@ -23,6 +25,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/module"
 	authcmd "github.com/cosmos/cosmos-sdk/x/auth/client/cli"
 	genutilcli "github.com/cosmos/cosmos-sdk/x/genutil/client/cli"
+	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
 
 	"github.com/DeBrosOfficial/network/chain/app"
 	"github.com/DeBrosOfficial/network/chain/app/params"
@@ -94,7 +97,47 @@ func genesisCommand(txConfig client.TxConfig, basicManager module.BasicManager) 
 	cmd := genutilcli.Commands(txConfig, basicManager, app.DefaultNodeHome)
 	cmd.AddCommand(emissioncli.SetEmissionParamsCmd(app.DefaultNodeHome))
 	cmd.AddCommand(powercli.AddBootstrapValidatorCmd(app.DefaultNodeHome))
+	lockValidateCommand(cmd, basicManager)
 	return cmd
+}
+
+// lockValidateCommand makes `oramad genesis validate` also run the G1 locked-parameter
+// check (app.ValidateLockedGenesis) after genutil's own module validation, on the genesis
+// file's chain-id. InitChain runs the same check, so a genesis that passes here starts.
+func lockValidateCommand(genesisCmd *cobra.Command, basicManager module.BasicManager) {
+	for _, sub := range genesisCmd.Commands() {
+		if sub.Name() != "validate" {
+			continue
+		}
+		validate := sub.RunE
+		sub.RunE = func(cmd *cobra.Command, args []string) error {
+			if err := validate(cmd, args); err != nil {
+				return err
+			}
+			return validateLockedGenesisFile(cmd, args, basicManager)
+		}
+		return
+	}
+}
+
+func validateLockedGenesisFile(cmd *cobra.Command, args []string, basicManager module.BasicManager) error {
+	path := server.GetServerContextFromCmd(cmd).Config.GenesisFile()
+	if len(args) == 1 {
+		path = args[0]
+	}
+	appGenesis, err := genutiltypes.AppGenesisFromFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read genesis %s: %w", path, err)
+	}
+	var genState app.GenesisState
+	if err := json.Unmarshal(appGenesis.AppState, &genState); err != nil {
+		return fmt.Errorf("failed to parse app_state of %s: %w", path, err)
+	}
+	defaults := basicManager.DefaultGenesis(client.GetClientContextFromCmd(cmd).Codec)
+	if err := app.ValidateLockedGenesis(appGenesis.ChainID, defaults, genState); err != nil {
+		return fmt.Errorf("genesis file %s: %w", path, err)
+	}
+	return nil
 }
 
 func queryCommand() *cobra.Command {
