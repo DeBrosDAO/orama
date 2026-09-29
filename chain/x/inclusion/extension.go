@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"sort"
 )
 
 const (
@@ -48,40 +47,7 @@ func BuildExtension(priv ed25519.PrivateKey, power int64, v View, candidates [][
 		return Extension{}, fmt.Errorf("inclusion: private key has no ed25519 public key")
 	}
 
-	ordered := append([][]byte(nil), candidates...)
-	sort.Slice(ordered, func(i, j int) bool {
-		return bytes.Compare(ordered[i], ordered[j]) < 0
-	})
-
-	chosen := make([][]byte, 0, len(ordered))
-	used := 0
-	senderUsed := make(map[string]int)
-	var prev []byte
-	for _, tx := range ordered {
-		if len(tx) == 0 || (prev != nil && bytes.Equal(prev, tx)) {
-			prev = tx
-			continue
-		}
-		prev = tx
-		meta, err := DecodeTx(tx)
-		if err != nil || meta.Fee < v.BaseFee {
-			continue
-		}
-		if len(tx) > math.MaxUint32 || len(tx) > v.Params.ListMaxBytes || len(tx) > v.Params.MaxSenderBytes {
-			continue
-		}
-		if used > v.Params.ListMaxBytes-len(tx) {
-			continue
-		}
-		key := SenderKey(meta.Sender)
-		have := senderUsed[key]
-		if have > v.Params.MaxSenderBytes-len(tx) {
-			continue
-		}
-		chosen = append(chosen, bytes.Clone(tx))
-		used += len(tx)
-		senderUsed[key] = have + len(tx)
-	}
+	chosen := SelectList(v, candidates)
 
 	if len(chosen) > math.MaxUint32 {
 		return Extension{}, fmt.Errorf("inclusion: too many transactions")

@@ -99,7 +99,7 @@ func requiredTxs(exts []Extension, v View) [][]byte {
 	used := 0
 	var need [][]byte
 	for _, raw := range uniqueTxs(exts) {
-		meta, err := DecodeTx(raw)
+		meta, err := v.decode(raw)
 		if err != nil || meta.Fee < v.BaseFee {
 			continue
 		}
@@ -111,6 +111,9 @@ func requiredTxs(exts []Extension, v View) [][]byte {
 			continue
 		}
 		if len(raw) > v.Params.MaxBlockBytes || used > v.Params.MaxBlockBytes-len(raw) {
+			continue
+		}
+		if v.Admit != nil && !v.Admit(raw, meta) {
 			continue
 		}
 		need = append(need, bytes.Clone(raw))

@@ -250,6 +250,9 @@ type OramaApp struct {
 	BasicModuleManager module.BasicManager
 
 	configurator module.Configurator
+
+	anteHandler sdk.AnteHandler
+	inclusion   *inclusionHandlers
 }
 
 func init() {
@@ -691,6 +694,7 @@ func NewOramaApp(
 	app.SetBeginBlocker(app.BeginBlocker)
 	app.SetEndBlocker(app.EndBlocker)
 	app.setAnteHandler(txConfig)
+	app.setInclusionHandlers()
 	app.setPostHandler()
 
 	if loadLatest {
@@ -739,7 +743,8 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		ante.NewSigVerificationDecorator(app.AccountKeeper, txConfig.SignModeHandler()),
 		ante.NewIncrementSequenceDecorator(app.AccountKeeper),
 	}
-	app.SetAnteHandler(sdk.ChainAnteDecorators(anteDecorators...))
+	app.anteHandler = sdk.ChainAnteDecorators(anteDecorators...)
+	app.SetAnteHandler(app.anteHandler)
 }
 
 func (app *OramaApp) setPostHandler() {

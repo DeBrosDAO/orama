@@ -16,6 +16,30 @@ type View struct {
 	BaseFee    uint64
 	State      State
 	Params     Params
+
+	// Decode reads a transaction's Meta. Nil means DecodeTx. The app supplies
+	// its own so that real chain transactions can be listed.
+	Decode func(raw []byte) (Meta, error)
+
+	// Admit is the last check on a listed transaction that already passed
+	// every other rule. It is called once per candidate, in walk order, and
+	// may apply state so that a later candidate is judged against it. A false
+	// return marks the transaction invalid, and it is skipped. It must be
+	// deterministic. Nil admits everything.
+	Admit func(raw []byte, meta Meta) bool
+
+	// Authenticated says the caller already proved where each Extension came
+	// from (CometBFT verified the vote extension signature), so the
+	// Extension's own Signature is not checked. The app sets it; PubKey is
+	// then only an identity key for de-duplication.
+	Authenticated bool
+}
+
+func (v View) decode(raw []byte) (Meta, error) {
+	if v.Decode != nil {
+		return v.Decode(raw)
+	}
+	return DecodeTx(raw)
 }
 
 // Commit is the extended commit a proposer embeds in a block: the vote
@@ -56,7 +80,10 @@ func accept(v View, exts []Extension) ([]Extension, error) {
 	}
 	kept := make([]Extension, 0, len(exts))
 	for _, e := range exts {
-		if e.Height != v.Height || e.Round != v.Round || e.Power <= 0 || !e.validSig() {
+		if e.Height != v.Height || e.Round != v.Round || e.Power <= 0 {
+			continue
+		}
+		if !v.Authenticated && !e.validSig() {
 			continue
 		}
 		n, ok := listBytes(e.Txs)
@@ -64,6 +91,9 @@ func accept(v View, exts []Extension) ([]Extension, error) {
 			continue
 		}
 		kept = append(kept, copyExtension(e))
+	}
+	if v.Authenticated {
+		kept = trimToEmbeddedCap(kept, v.Params.MaxEmbeddedListBytes)
 	}
 	sort.Slice(kept, func(i, j int) bool {
 		c := bytes.Compare(kept[i].PubKey, kept[j].PubKey)
@@ -80,6 +110,43 @@ func accept(v View, exts []Extension) ([]Extension, error) {
 		return nil, ErrEmbeddedTooLarge
 	}
 	return kept, nil
+}
+
+// trimToEmbeddedCap keeps extensions, highest power first (ties by public
+// key), while the deduplicated transaction bytes stay within limit, and drops
+// the rest. An app cannot choose which votes an extended commit contains, so
+// an over-full set is cut by a fixed rule instead of failing the block.
+func trimToEmbeddedCap(exts []Extension, limit int) []Extension {
+	order := append([]Extension(nil), exts...)
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].Power != order[j].Power {
+			return order[i].Power > order[j].Power
+		}
+		return bytes.Compare(order[i].PubKey, order[j].PubKey) < 0
+	})
+	seen := make(map[string]struct{})
+	size := 0
+	kept := make([]Extension, 0, len(order))
+	for _, e := range order {
+		added := 0
+		fresh := make([]string, 0, len(e.Txs))
+		for _, tx := range e.Txs {
+			if _, ok := seen[string(tx)]; ok || len(tx) == 0 {
+				continue
+			}
+			fresh = append(fresh, string(tx))
+			added += len(tx)
+		}
+		if added > limit-size {
+			continue
+		}
+		for _, tx := range fresh {
+			seen[tx] = struct{}{}
+		}
+		size += added
+		kept = append(kept, e)
+	}
+	return kept
 }
 
 func powerOK(exts []Extension, total int64) bool {
