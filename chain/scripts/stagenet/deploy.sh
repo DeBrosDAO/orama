@@ -380,7 +380,7 @@ cmd_status() {
 # emission, fees, storage, nodes, relay, houses, token, market (bid escrow) and power (its
 # pass-through account is empty). x/cnft and x/archive hold no norama of their own: cNFT deposits
 # sit in x/fees' deposits account and archive payments go through x/storage.
-INVARIANT_MODULES=(emission fees storage nodes relay houses token market power)
+INVARIANT_MODULES=(emission fees storage nodes relay houses token market power shielded)
 
 # cmd_invariants runs every module's invariant query on every node and fails if any query fails
 # or reports a broken invariant (each response carries booleans that must all be true).

@@ -21,6 +21,7 @@ Each module that holds or moves norama checks its own books.
 | `x/token` | Each token's issued supply equals its bank supply, and its metadata deposit matches x/fees | `oramad query token invariants` |
 | `x/market` | Market balance equals the open bids | `oramad query market invariants` |
 | `x/power` | The module account holds no norama: it passes an epoch's validator share through inside one call | `oramad query power invariants` |
+| `x/shielded` | The module account holds exactly the pool balances plus the queued unshields; no pool is negative; the nullifier database (`data/shielded_nullifiers.db`) folds to the accumulator in state | `oramad query shielded invariants` |
 
 `x/cnft` and `x/archive` hold no norama of their own (cNFT deposits sit in `x/fees`' deposits account,
 archive payments go through `x/storage`), so they have no invariant query. Every module above is in
@@ -62,7 +63,11 @@ height, or the chain splits. There is no on-chain switch that can do it for them
    under cosmovisor. Validators stay in notify mode; nothing installs by itself.
 7. **Restart after `H`.** Blocks resume once validators holding more than two thirds of
    voting power run the fix. Before the λ hand-over that means the bootstrap committee.
-8. **Check** every invariant query above on every validator.
+8. **Check** every invariant query above on every validator. A patched binary runs on the
+   same home: it must keep `data/shielded_nullifiers.db`, which lives outside the app
+   database, and the verifier binary `x/shielded` needs (`docs/CHAIN.md`). A validator that
+   starts from a copy of only `application.db` has an empty nullifier database: it would
+   accept a spent nullifier, its app hash would diverge and the invariant fails.
 
 This procedure has not been rehearsed on a live chain yet.
 
@@ -254,27 +259,28 @@ adds one item per challenge.
 
 ### Unshield run
 
-**There is nothing to run today.** No shielded module, keeper, message or store is in the app. `x/shielded`
-is libraries: the pool and turnstile accounting (`pool`), the nullifier set, the unshield target policy
-and the verifier interface. There is no `MsgShield` or `MsgUnshield`, `MsgShieldEarnings` is not
-implemented, `oramad query shielded` does not exist, and proof verification fails closed: only the
-Orchard verifier is linked and two independent verifiers are required, so every bundle is refused
-(`verify.ErrVerifierNotLinked`). User-to-user norama sends are refused by the bank send restriction, so
-an unshield run has no path to begin with.
+**What runs.** `x/shielded` is wired. A node accepts a bundle only with both verifiers (the orchard
+library and the pinned verifier binary); every other node accepts none. Read the books with
+`oramad query shielded pools` (pool balances and the queue), `tree-state` and `invariants`
+(module balance equals pools plus queue, no negative pool, the nullifier database folds to the
+accumulator). `shielded` is in `INVARIANT_MODULES` in `deploy.sh`.
 
-**What the design requires once a shielded module is wired** (this is the code in `x/shielded/pool`, not a
-procedure):
-- Net unshield from a pool is capped at 2% of it (at least 1 ORAMA) per 24 hours. Over the cap, a
-  contract or adapter unshield and a fee top-up fail, and bond and deposit unshields queue and are
-  paid pro rata with a per-address limit, so one large holder cannot take the head of the queue.
-- Each vintage and each asset has a turnstile: a pool cannot pay out more than went in, and a
-  vintage migrates only to a newer pool.
-- An unshield is signed by the target's owner and goes only to that owner's own contract, bond,
-  deposit or fee balance, never to another user's account.
-- The cap is an ossified constant. It cannot be changed or bypassed by a vote, and there is no
-  pause. If a circuit bug is found, the response is the coordinated halt-height fix (a patched
-  build that validators holding two thirds of power choose to run), and the cap bounds the loss
-  meanwhile.
+**The brakes** (`docs/CHAIN.md`, "`x/shielded`"), all in code and none of them a switch:
+- Net unshield from a pool is capped at 2% of it (at least the floor, 1 ORAMA) per 24 hours. A
+  signer-less transfer's tip counts against it, burned fees do not. A fee top-up over the cap fails;
+  bond unshields over it queue and are paid pro rata per window with a per-address limit.
+- Each vintage and asset has a turnstile: a pool cannot pay out more than went in.
+- An unshield is signed by the target's owner, committed to its signer and target in the sighash,
+  and goes only to that owner's own bond, node bond or fee-only balance.
+- There is no pause. If a circuit bug is found, the response is the coordinated halt-height fix, and
+  the cap bounds the loss meanwhile. Both verifiers call the same upstream `orchard` crate, so a
+  soundness bug in it is not caught by the second one.
 
-**Before a shielded module ships, this playbook needs**: the queries that show a pool's balance, its
-turnstile and the cap used, a shielded invariant in `INVARIANT_MODULES`, and a rehearsal on stagenet.
+**What an operator does.** Watch `pools` for a pool draining faster than its cap allows (it cannot;
+a drop past the cap means the invariant query will fail), and for a growing queue. A node that
+halts on the first shielded bundle after a restart is missing a verifier, has the wrong verifier
+binary (`--shielded-verifier`, `--shielded-verifier-sha256`) or lost `data/shielded_nullifiers.db`;
+it refuses to start with a message that says which.
+
+**Not rehearsed**: a shielded incident on stagenet, and a state-sync of the nullifier database
+between two nodes.
