@@ -35,6 +35,8 @@ P2P_PORT=31000
 RPC_PORT=31001
 GRPC_PORT=31002
 API_PORT=31003
+# Keep equal to defaultQueryGasLimit in chain/cmd/oramad/cmd/commands.go.
+QUERY_GAS_LIMIT=2000000
 PROM_PORT=31004
 BIN_DIR="/usr/lib/orama-global/bin"
 HOME_DIR="/var/lib/orama-global/chain"
@@ -284,10 +286,14 @@ configure_node() {
 		-e 's#^pruning-interval = .*#pruning-interval = \"10\"#' \
 		-e 's#^min-retain-blocks = .*#min-retain-blocks = 201600#' \
 		-e 's#^app-db-backend = .*#app-db-backend = \"pebbledb\"#' \
+		-e 's#^query-gas-limit = .*#query-gas-limit = \"$QUERY_GAS_LIMIT\"#' \
 		-e '/^\[api\]/,/^\[/ s#^enable = false#enable = true#' \
 		$HOME_DIR/config/app.toml"
 	assert_set "$alias" "$HOME_DIR/config/app.toml" "address = \"127.0.0.1:$GRPC_PORT\"" "the gRPC listen address"
 	assert_set "$alias" "$HOME_DIR/config/app.toml" "app-db-backend = \"pebbledb\"" "the app-db-backend"
+	# The public /v1/chain/query route reaches every module query. A gas limit stops one that
+	# scans state; oramad init writes the same value (chain/cmd/oramad/cmd defaultQueryGasLimit).
+	assert_set "$alias" "$HOME_DIR/config/app.toml" "query-gas-limit = \"$QUERY_GAS_LIMIT\"" "the query gas limit"
 	# 201600 blocks is 14 days at 6 seconds (x/archive DefaultBlocksIn14Days). oramad's Commit
 	# never returns a retain height above the last archived height, so this prunes nothing while
 	# no range is archived.

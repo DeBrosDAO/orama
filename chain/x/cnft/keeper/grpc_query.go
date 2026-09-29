@@ -16,6 +16,10 @@ import (
 
 var _ types.QueryServer = queryServer{}
 
+// MaxSnapshotsPerQuery bounds one Snapshots response so a public query never walks a whole tree's
+// history: the first MaxSnapshotsPerQuery snapshots, oldest first.
+const MaxSnapshotsPerQuery = 1000
+
 type queryServer struct {
 	Keeper
 }
@@ -73,7 +77,7 @@ func (q queryServer) Snapshots(goCtx context.Context, req *types.QuerySnapshotsR
 	rng := collections.NewPrefixedPairRange[uint64, uint64](req.TreeId)
 	if err := q.Keeper.Snapshots.Walk(ctx, rng, func(_ collections.Pair[uint64, uint64], snap types.Snapshot) (bool, error) {
 		snaps = append(snaps, snap)
-		return false, nil
+		return len(snaps) >= MaxSnapshotsPerQuery, nil
 	}); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Errorf("failed to walk snapshots: %w", err).Error())
 	}

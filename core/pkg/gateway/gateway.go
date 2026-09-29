@@ -201,6 +201,9 @@ type Gateway struct {
 	// capabilityRateLimiter caps the function WebSocket upgrades opened with
 	// a capability rather than a credential, per client address.
 	capabilityRateLimiter *RateLimiter
+	// chainQueryRateLimiter caps the public module-query route (/v1/chain/query/),
+	// per client address, far below the general limit. See isChainQueryPath.
+	chainQueryRateLimiter *RateLimiter
 	namespaceRateLimiter  *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
 	// rateLimitManager (feature #69) handles per-namespace rate limits with
 	// tenant self-service config via /v1/namespace/rate-limit. When set,
@@ -1539,6 +1542,9 @@ func configureRateLimiters(gw *Gateway) {
 
 	gw.capabilityRateLimiter = NewRateLimiter(capabilityUpgradesPerMinute, capabilityUpgradeBurst)
 	gw.capabilityRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+
+	gw.chainQueryRateLimiter = NewRateLimiter(chainQueriesPerMinute, chainQueryBurst)
+	gw.chainQueryRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
 }
 
 // apiKeyRegistryProbeTimeout bounds the one query that proves the registry is

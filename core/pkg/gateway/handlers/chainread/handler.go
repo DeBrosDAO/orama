@@ -16,7 +16,9 @@
 package chainread
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -27,6 +29,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -57,8 +60,13 @@ const (
 
 	// A block's transactions are base64 in JSON, so the body is larger than
 	// the block. Anything past this is refused whole: a truncated body would
-	// no longer be the upstream body.
-	defaultMaxBody = 16 << 20
+	// no longer be the upstream body. The explorer's largest read is one block;
+	// blocks are far below this in practice, and every request holds a body of
+	// this size in memory while it is copied.
+	defaultMaxBody = 8 << 20
+
+	// statusMaxBody bounds the /status answer read for the height window.
+	statusMaxBody = 64 << 10
 
 	upstreamTimeout = 10 * time.Second
 )
@@ -103,6 +111,13 @@ type Proxy struct {
 	client  *http.Client
 	maxBody int64
 	timeout time.Duration
+
+	// querySlots bounds the module queries in flight (query.go).
+	querySlots chan struct{}
+	// heightMu guards the cached latest height the query window check reads.
+	heightMu  sync.Mutex
+	heightVal int64
+	heightAt  time.Time
 }
 
 // New checks the upstream URLs. A URL with a path, query, fragment, user
@@ -129,6 +144,8 @@ func New(cfg Config) (*Proxy, error) {
 		client:  newClient(cfg.Client),
 		maxBody: defaultMaxBody,
 		timeout: upstreamTimeout,
+
+		querySlots: make(chan struct{}, queryMaxConcurrent),
 	}, nil
 }
 
@@ -431,6 +448,12 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, base *url.URL, p
 	if !ok {
 		return
 	}
+	// An upstream failure is answered with a fixed body of this proxy's own, never the
+	// upstream's: the node's message can carry paths, store details and internal addresses.
+	if code, failed := upstreamFailure(resp.StatusCode, base == p.rpc, body); failed {
+		writeErr(w, code, failureBody(code))
+		return
+	}
 	w.Header().Set("Content-Type", passContentType(resp.Header.Get("Content-Type")))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -498,4 +521,45 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
 	_, _ = io.WriteString(w, msg)
 	_, _ = io.WriteString(w, "\n")
+}
+
+const (
+	msgNotFound     = "not found on chain"
+	msgChainFailure = "chain request failed"
+)
+
+func failureBody(code int) string {
+	if code == http.StatusNotFound {
+		return msgNotFound
+	}
+	return msgChainFailure
+}
+
+// upstreamFailure reports whether an upstream answer is an error, and the status to answer with:
+// 404 when the thing asked for does not exist, 502 for everything else. CometBFT reports an error
+// as a JSON-RPC error object, sometimes under a 200, so an RPC body is checked as well as the
+// status.
+func upstreamFailure(status int, rpc bool, body []byte) (int, bool) {
+	if status == http.StatusNotFound {
+		return http.StatusNotFound, true
+	}
+	if status >= 400 {
+		return http.StatusBadGateway, true
+	}
+	if !rpc || !bytes.Contains(body, []byte(`"error"`)) {
+		return 0, false
+	}
+	var env struct {
+		Error *struct {
+			Message string `json:"message"`
+			Data    string `json:"data"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &env) != nil || env.Error == nil {
+		return 0, false
+	}
+	if strings.Contains(strings.ToLower(env.Error.Message+" "+env.Error.Data), "not found") {
+		return http.StatusNotFound, true
+	}
+	return http.StatusBadGateway, true
 }

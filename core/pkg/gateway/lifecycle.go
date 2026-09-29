@@ -99,4 +99,7 @@ func (g *Gateway) Close() {
 	if g.rateLimiter != nil {
 		g.rateLimiter.Stop()
 	}
+	if g.chainQueryRateLimiter != nil {
+		g.chainQueryRateLimiter.Stop()
+	}
 }

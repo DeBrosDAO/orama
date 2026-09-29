@@ -3,6 +3,7 @@ package keeper_test
 import (
 	"testing"
 
+	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 	"github.com/stretchr/testify/require"
 
@@ -360,4 +361,21 @@ func prove(t *testing.T, leaves [][]byte, index int, depth uint32) types.MerkleP
 	siblings, root, err := types.Proof(leaves, index, depth)
 	require.NoError(t, err)
 	return types.MerkleProof{Root: root, Index: uint32(index), Siblings: siblings}
+}
+
+// A public query must not walk a whole tree's history: Snapshots returns at most
+// MaxSnapshotsPerQuery entries, oldest first.
+func TestSnapshotsQuery_isBounded(t *testing.T) {
+	f := newFixture(t)
+	for id := uint64(1); id <= keeper.MaxSnapshotsPerQuery+5; id++ {
+		require.NoError(t, f.keeper.Snapshots.Set(f.ctx, collections.Join(uint64(1), id), types.Snapshot{TreeId: 1, Id: id, Cid: "c", Sequence: id}))
+	}
+	res, err := keeper.NewQueryServerImpl(f.keeper).Snapshots(f.ctx, &types.QuerySnapshotsRequest{TreeId: 1})
+	require.NoError(t, err)
+	require.Len(t, res.Snapshots, keeper.MaxSnapshotsPerQuery)
+	require.Equal(t, uint64(1), res.Snapshots[0].Id)
+
+	res, err = keeper.NewQueryServerImpl(f.keeper).Snapshots(f.ctx, &types.QuerySnapshotsRequest{TreeId: 2})
+	require.NoError(t, err)
+	require.Empty(t, res.Snapshots)
 }

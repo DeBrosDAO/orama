@@ -365,3 +365,57 @@ func mustProxy(t *testing.T, rpc, rest string) *Proxy {
 	}
 	return p
 }
+
+// An upstream failure is answered with the proxy's own fixed body, never the node's message, which
+// can carry paths, store details and internal addresses.
+func TestProxy_upstreamFailuresGetAFixedBody(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   int
+		text   string
+	}{
+		{"rpc 500", http.StatusInternalServerError, `{"error":{"message":"open /var/lib/orama/db: EOF"}}`, http.StatusBadGateway, "chain request failed"},
+		{"rpc 400", http.StatusBadRequest, `{"error":"height 9 must be <= 5 at 10.0.0.1"}`, http.StatusBadGateway, "chain request failed"},
+		{"json-rpc error under a 200", http.StatusOK, `{"jsonrpc":"2.0","error":{"code":-32603,"message":"Internal error","data":"panic at /src/x.go:1"}}`, http.StatusBadGateway, "chain request failed"},
+		{"tx not found under a 200", http.StatusOK, `{"error":{"message":"Internal error","data":"tx (ABC) not found"}}`, http.StatusNotFound, "not found on chain"},
+		{"404", http.StatusNotFound, `not indexed: /data/idx`, http.StatusNotFound, "not found on chain"},
+	}
+	for _, tc := range cases {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		p := mustProxy(t, upstream.URL, upstream.URL)
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/chain/status", nil))
+		upstream.Close()
+		if rec.Code != tc.want || strings.TrimSpace(rec.Body.String()) != tc.text {
+			t.Errorf("%s: status %d body %q, want %d %q", tc.name, rec.Code, rec.Body.String(), tc.want, tc.text)
+		}
+	}
+}
+
+// A healthy answer is still copied unchanged, including a result that merely mentions the word.
+func TestProxy_healthyAnswersAreStillCopied(t *testing.T) {
+	body := []byte(`{"result":{"log":"no \"error\" here","error":null}}`)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(upstream.Close)
+	p := mustProxy(t, upstream.URL, upstream.URL)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/chain/status", nil))
+	if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), body) {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.Bytes())
+	}
+}
+
+func TestProxy_bodyCapIsAtMostEightMiB(t *testing.T) {
+	if defaultMaxBody > 8<<20 {
+		t.Fatalf("defaultMaxBody is %d; every request holds a body of this size", defaultMaxBody)
+	}
+}

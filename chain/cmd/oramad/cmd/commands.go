@@ -46,6 +46,12 @@ func initCometBFTConfig() *cmtcfg.Config {
 // validator that never touches its own app.toml still charges something.
 const defaultMinGasPriceNorama = "0.000001"
 
+// defaultQueryGasLimit is the gas one gRPC or ABCI query may use (app.toml query-gas-limit).
+// A point lookup costs a few thousand gas; this stops a query that scans state, on any node that
+// serves the public /v1/chain/query route, from running past a couple of thousand store reads.
+// chain/scripts/stagenet/deploy.sh sets the same value on nodes whose app.toml already exists.
+const defaultQueryGasLimit uint64 = 2_000_000
+
 // initAppConfig returns oramad's default app.toml template and config.
 //
 // AppDBBackend defaults to pebbledb, not the SDK's own default (goleveldb): goleveldb, as shipped
@@ -60,6 +66,7 @@ func initAppConfig() (string, interface{}) {
 	srvCfg := serverconfig.DefaultConfig()
 	srvCfg.MinGasPrices = defaultMinGasPriceNorama + params.BaseDenom
 	srvCfg.AppDBBackend = "pebbledb"
+	srvCfg.QueryGasLimit = defaultQueryGasLimit
 	return serverconfig.DefaultConfigTemplate, srvCfg
 }
 

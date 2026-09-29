@@ -215,3 +215,63 @@ func TestAuthRateLimiterIsMuchTighterThanTheGeneralOne(t *testing.T) {
 			g.authRateLimiter.burst, g.rateLimiter.burst)
 	}
 }
+
+func TestIsChainQueryPath(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/v1/chain/query/orama.nodes.v1.Query/Node": true,
+		"/v1/chain/query/":                          true,
+		"/v1/chain/status":                          false,
+		"/v1/chain/index/blocks":                    false,
+		"/v1/chain/queryx":                          false,
+		"/v1/db/query":                              false,
+	} {
+		if got := isChainQueryPath(path); got != want {
+			t.Errorf("isChainQueryPath(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// Every module query runs on the chain process, so /v1/chain/query/ draws on a bucket of its own:
+// a client that exhausts it is limited on that route and not on the ordinary ones, and a forged
+// forwarding header does not move it to another bucket.
+func TestRateLimitMiddleware_chainQueriesHaveTheirOwnBucket(t *testing.T) {
+	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	g := &Gateway{
+		logger:                logger,
+		rateLimiter:           NewRateLimiter(100000, 100000),
+		chainQueryRateLimiter: NewRateLimiter(60, 3),
+	}
+	served := 0
+	handler := g.rateLimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { served++ }))
+
+	var lastCode int
+	for i := 0; i < 10; i++ {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, request("127.0.0.1:9999", "10.0.0.1, 198.51.100.7", "/v1/chain/query/orama.nodes.v1.Query/Node"))
+		lastCode = w.Code
+	}
+	if served != 3 || lastCode != http.StatusTooManyRequests {
+		t.Errorf("served %d of 10 module queries with last code %d; want the burst of 3 and a 429", served, lastCode)
+	}
+
+	served = 0
+	for i := 0; i < 10; i++ {
+		handler.ServeHTTP(httptest.NewRecorder(), request("127.0.0.1:9999", "198.51.100.7", "/v1/chain/status"))
+	}
+	if served != 10 {
+		t.Errorf("%d of 10 explorer requests were served; the query bucket must not apply to them", served)
+	}
+}
+
+func TestChainQueryRateLimiterIsMuchTighterThanTheGeneralOne(t *testing.T) {
+	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	g := &Gateway{logger: logger}
+	configureRateLimiters(g)
+	if g.chainQueryRateLimiter == nil {
+		t.Fatal("the chain query limiter is missing")
+	}
+	if g.chainQueryRateLimiter.rate >= g.rateLimiter.rate/10 || g.chainQueryRateLimiter.burst >= g.rateLimiter.burst/10 {
+		t.Errorf("the chain query bucket (%.2f/s, burst %d) is not far tighter than the general one (%.2f/s, burst %d)",
+			g.chainQueryRateLimiter.rate, g.chainQueryRateLimiter.burst, g.rateLimiter.rate, g.rateLimiter.burst)
+	}
+}

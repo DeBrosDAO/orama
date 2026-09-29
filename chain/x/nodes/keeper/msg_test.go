@@ -9,10 +9,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/DeBrosOfficial/network/chain/x/nodes/keeper"
 	"github.com/DeBrosOfficial/network/chain/x/nodes/types"
 )
 
@@ -601,4 +603,22 @@ func TestEndBlock_anUnpayableUnbondingDoesNotHaltTheBlock(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, entries, "the entry is paid once the bank accepts the recipient")
 	f.requireInvariants(t)
+}
+
+// A public query must not walk every unbonding an operator queued on one node.
+func TestNodeUnbondingsQuery_isBounded(t *testing.T) {
+	f := newTestFixture(t)
+	for id := uint64(1); id <= keeper.MaxUnbondingsPerQuery+5; id++ {
+		entry := types.UnbondingEntry{Id: id, NodeId: "node-1", Operator: newAccount(t).String(), Amount: math.NewInt(1), CompletionUnix: 1_900_000_000}
+		require.NoError(t, f.Keeper.Unbondings.Set(f.Ctx, id, entry))
+		require.NoError(t, f.Keeper.UnbondingByNode.Set(f.Ctx, collections.Join("node-1", id), id))
+	}
+	res, err := keeper.NewQueryServerImpl(f.Keeper).NodeUnbondings(f.Ctx, &types.QueryNodeUnbondingsRequest{NodeId: "node-1"})
+	require.NoError(t, err)
+	require.Len(t, res.Unbondings, keeper.MaxUnbondingsPerQuery)
+	require.Equal(t, uint64(1), res.Unbondings[0].Id)
+
+	all, err := f.Keeper.NodeUnbondings(f.Ctx, "node-1")
+	require.NoError(t, err)
+	require.Len(t, all, keeper.MaxUnbondingsPerQuery+5, "the keeper's own view is not capped")
 }

@@ -12,6 +12,10 @@ import (
 
 var _ types.QueryServer = queryServer{}
 
+// MaxUnbondingsPerQuery bounds one NodeUnbondings response: an operator can queue many small
+// unbondings on a node, and a public query must not walk them all.
+const MaxUnbondingsPerQuery = 1000
+
 type queryServer struct {
 	Keeper
 }
@@ -71,7 +75,7 @@ func (q queryServer) NodeUnbondings(goCtx context.Context, req *types.QueryNodeU
 		return nil, status.Error(codes.InvalidArgument, "node_id is required")
 	}
 	ctx := sdk.UnwrapSDKContext(goCtx)
-	entries, err := q.Keeper.NodeUnbondings(ctx, req.NodeId)
+	entries, err := q.Keeper.nodeUnbondingsUpTo(ctx, req.NodeId, MaxUnbondingsPerQuery)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

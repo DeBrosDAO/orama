@@ -390,6 +390,11 @@ func (k Keeper) deleteUnbonding(ctx sdk.Context, entry types.UnbondingEntry) err
 
 // NodeUnbondings returns the unbonding entries for a node, ordered by id.
 func (k Keeper) NodeUnbondings(ctx sdk.Context, nodeID string) ([]types.UnbondingEntry, error) {
+	return k.nodeUnbondingsUpTo(ctx, nodeID, 0)
+}
+
+// nodeUnbondingsUpTo returns at most max unbonding entries of a node (all of them when max is 0).
+func (k Keeper) nodeUnbondingsUpTo(ctx sdk.Context, nodeID string, max int) ([]types.UnbondingEntry, error) {
 	var out []types.UnbondingEntry
 	err := k.UnbondingByNode.Walk(ctx, collections.NewPrefixedPairRange[string, uint64](nodeID), func(key collections.Pair[string, uint64], id uint64) (bool, error) {
 		entry, err := k.Unbondings.Get(ctx, id)
@@ -397,7 +402,7 @@ func (k Keeper) NodeUnbondings(ctx sdk.Context, nodeID string) ([]types.Unbondin
 			return true, fmt.Errorf("load unbonding %d: %w", id, err)
 		}
 		out = append(out, entry)
-		return false, nil
+		return max > 0 && len(out) >= max, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("walk unbondings for node %s: %w", nodeID, err)

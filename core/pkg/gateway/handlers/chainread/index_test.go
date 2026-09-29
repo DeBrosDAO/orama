@@ -77,11 +77,12 @@ func TestIndexProxy_buildsEachUpstreamURL(t *testing.T) {
 	}
 }
 
-func TestIndexProxy_passesTheIndexersNotFound(t *testing.T) {
+// The indexer's 404 is kept, its message is not: the body is the proxy's own.
+func TestIndexProxy_answersTheIndexersNotFoundWithAFixedBody(t *testing.T) {
 	p, _ := indexProxy(t)
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/chain/index/blocks/404", nil))
-	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "not indexed") {
+	if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != "not found on chain" {
 		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
 	}
 }

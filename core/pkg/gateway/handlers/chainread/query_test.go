@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/chainread"
 )
 
 // abciUpstream answers abci_query with value (or a chain error) and records what it was asked.
@@ -19,9 +22,20 @@ type abciUpstream struct {
 	code  uint32
 	log   string
 	value []byte
+	// latest is the height /status reports; zero means 1000.
+	latest int64
 }
 
 func (u *abciUpstream) handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/status" {
+		latest := u.latest
+		if latest == 0 {
+			latest = 1000
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":{"sync_info":{"latest_block_height":"` + strconv.FormatInt(latest, 10) + `"}}}`))
+		return
+	}
 	u.mu.Lock()
 	u.calls = append(u.calls, r.URL.Query())
 	u.paths = append(u.paths, r.URL.Path)
@@ -62,7 +76,7 @@ func TestQuery_dataFormReachesAbciQueryAndDecodesTheAnswer(t *testing.T) {
 	up := &abciUpstream{value: nodeAnswer}
 	p := queryProxy(t, up)
 	data := base64.StdEncoding.EncodeToString([]byte{0x0a, 0x03, 'n', '-', '1'})
-	rr := getQuery(p, http.MethodGet, nodeQuery+"?data="+url.QueryEscape(data)+"&height=42")
+	rr := getQuery(p, http.MethodGet, nodeQuery+"?data="+url.QueryEscape(data)+"&height=1000")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d body %q", rr.Code, rr.Body.String())
 	}
@@ -79,7 +93,7 @@ func TestQuery_dataFormReachesAbciQueryAndDecodesTheAnswer(t *testing.T) {
 	}
 	q := up.calls[0]
 	if q.Get("path") != `"/orama.nodes.v1.Query/Node"` || q.Get("data") != "0x0a036e2d31" ||
-		q.Get("height") != "42" || q.Get("prove") != "false" {
+		q.Get("height") != "1000" || q.Get("prove") != "false" {
 		t.Fatalf("upstream query %v", q)
 	}
 	if rr.Header().Get("Cache-Control") != "no-store" {
@@ -129,6 +143,11 @@ func TestQuery_refusesEverythingThatIsNotAnEmbeddedQuery(t *testing.T) {
 		name, method, target string
 		want                 int
 	}{
+		{"module invariants", http.MethodGet, "/v1/chain/query/orama.storage.v1.Query/Invariants", 404},
+		{"every invariants", http.MethodGet, "/v1/chain/query/orama.fees.v1.Query/Invariants", 404},
+		{"houses tiers", http.MethodGet, "/v1/chain/query/orama.houses.v1.Query/Tiers", 404},
+		{"shielded pools", http.MethodGet, "/v1/chain/query/orama.shielded.v1.Query/Pools", 404},
+		{"shielded invariants", http.MethodGet, "/v1/chain/query/orama.shielded.v1.Query/Invariants", 404},
 		{"unknown service", http.MethodGet, "/v1/chain/query/orama.nope.v1.Query/Node", 404},
 		{"unknown method", http.MethodGet, "/v1/chain/query/orama.nodes.v1.Query/Nope", 404},
 		{"msg service", http.MethodGet, "/v1/chain/query/orama.nodes.v1.Msg/RegisterNode", 404},
@@ -202,5 +221,118 @@ func TestQuery_onlyQueryServicesAreAllowed(t *testing.T) {
 		if !strings.HasPrefix(service, "orama.") || !strings.HasSuffix(service, ".Query") {
 			t.Errorf("%s is served but is not an Orama Query service", name)
 		}
+	}
+}
+
+// Every embedded Query method is decided: served by publicQuery or refused by withheldQuery. A new
+// module query that is in neither fails here, so it cannot become public by being embedded, and
+// nothing is on both lists.
+func TestQuery_everyEmbeddedMethodIsClassified(t *testing.T) {
+	all, err := chainread.Methods()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range all {
+		service, method, _ := strings.Cut(n, "/")
+		if !strings.HasSuffix(service, ".Query") {
+			continue
+		}
+		_, pub := publicQuery[n]
+		_, held := withheldQuery[n]
+		if pub == held {
+			t.Errorf("%s must be on exactly one of publicQuery and withheldQuery (public=%v withheld=%v)", n, pub, held)
+		}
+		if method == "Invariants" && pub {
+			t.Errorf("%s walks a module's whole state and must never be public", n)
+		}
+	}
+	for n := range publicQuery {
+		if _, held := withheldQuery[n]; held {
+			t.Errorf("%s is both public and withheld", n)
+		}
+	}
+	allowed, err := queryAllowed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := range allowed {
+		if strings.HasSuffix(n, "/Invariants") || n == "orama.houses.v1.Query/Tiers" {
+			t.Errorf("%s is served", n)
+		}
+	}
+}
+
+func TestQuery_heightMustBeWithinTheLastBlocks(t *testing.T) {
+	up := &abciUpstream{value: nodeAnswer, latest: 5000}
+	p := queryProxy(t, up)
+	for height, want := range map[string]int{
+		"5000": http.StatusOK,
+		"4900": http.StatusOK,
+		"4899": http.StatusBadRequest,
+		"1":    http.StatusBadRequest,
+	} {
+		rr := getQuery(p, http.MethodGet, nodeQuery+"?height="+height)
+		if rr.Code != want {
+			t.Errorf("height %s: status %d, want %d (%q)", height, rr.Code, want, rr.Body.String())
+		}
+	}
+	calls := len(up.calls)
+	if rr := getQuery(p, http.MethodGet, nodeQuery+"?height=1"); rr.Code != http.StatusBadRequest || len(up.calls) != calls {
+		t.Fatalf("a query outside the window reached the chain: %d, %d calls", rr.Code, len(up.calls)-calls)
+	}
+	if rr := getQuery(p, http.MethodGet, nodeQuery); rr.Code != http.StatusOK {
+		t.Fatalf("a latest-height query needs no window check: %d", rr.Code)
+	}
+}
+
+func TestQuery_heightWindowFailsClosedWhenTheLatestHeightIsUnreadable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":{"sync_info":{"latest_block_height":"soon"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	broken, err := New(Config{RPCURL: srv.URL, RESTURL: srv.URL, IndexURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := getQuery(broken, http.MethodGet, nodeQuery+"?height=5"); rr.Code != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502", rr.Code)
+	}
+}
+
+// Only queryMaxConcurrent module queries run at once; the rest are told to retry.
+func TestQuery_concurrencyIsCapped(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{}, queryMaxConcurrent+4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":{"response":{"code":0,"value":""}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	p, err := New(Config{RPCURL: srv.URL, RESTURL: srv.URL, IndexURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < queryMaxConcurrent; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			getQuery(p, http.MethodGet, nodeQuery)
+		}()
+	}
+	for i := 0; i < queryMaxConcurrent; i++ {
+		<-entered
+	}
+	rr := getQuery(p, http.MethodGet, nodeQuery)
+	if rr.Code != http.StatusServiceUnavailable || rr.Header().Get("Retry-After") == "" {
+		t.Errorf("query %d over the cap: status %d retry-after %q", queryMaxConcurrent+1, rr.Code, rr.Header().Get("Retry-After"))
+	}
+	close(release)
+	wg.Wait()
+	if rr := getQuery(p, http.MethodGet, nodeQuery); rr.Code == http.StatusServiceUnavailable {
+		t.Errorf("the slots were not released: %d", rr.Code)
 	}
 }
