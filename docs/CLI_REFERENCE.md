@@ -196,9 +196,11 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama storage create`](#orama-storage-create) — Open a private or public-pin storage deal
   - [`orama storage decline`](#orama-storage-decline) — Decline an assigned storage slot
   - [`orama storage extend`](#orama-storage-extend) — Add epochs to a storage deal
+  - [`orama storage get`](#orama-storage-get) — Fetch and open a private file from its providers
   - [`orama storage grant`](#orama-storage-grant) — Grant a cluster a capped deal allowance
   - [`orama storage open`](#orama-storage-open) — Open one sealed storage slot
   - [`orama storage prove`](#orama-storage-prove) — Submit storage challenge proofs
+  - [`orama storage put`](#orama-storage-put) — Upload sealed slots to the providers a deal assigned
   - [`orama storage revoke`](#orama-storage-revoke) — Revoke a deal allowance
   - [`orama storage rewrap`](#orama-storage-rewrap) — Rebuild one storage slot from another slot's ciphertext
   - [`orama storage seal`](#orama-storage-seal) — Seal a file into one ciphertext per storage slot
@@ -3132,7 +3134,7 @@ Storage deals on the Orama chain
 orama storage
 ```
 
-Subcommands: `accept`, `create`, `decline`, `extend`, `grant`, `open`, `prove`, `revoke`, `rewrap`, `seal`
+Subcommands: `accept`, `create`, `decline`, `extend`, `get`, `grant`, `open`, `prove`, `put`, `revoke`, `rewrap`, `seal`
 
 ### orama storage accept
 
@@ -3242,6 +3244,26 @@ Add epochs to a user deal. Without --node the command prints the sign document a
 | `--sequence` | `0` | Account sequence, when not read from --node |
 | `--signer` | — | Signing account (orama1...) [required] |
 
+### orama storage get
+
+Fetch and open a private file from its providers
+
+```
+orama storage get [flags]
+```
+
+Fetch the first slot of a deal that a provider serves with the on-chain
+piece root, strip its slot layer, and decrypt it. A wrong seed or repair seed
+fails and writes nothing.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--deal-id` | `0` | Deal id |
+| `--out` | — | Plaintext output file |
+| `--repair-seed` | — | Repair seed, hex, at least 32 bytes |
+| `--rpc` | — | oramad CometBFT RPC, for example http://127.0.0.1:31001 |
+| `--seed` | — | Owner seed, hex, at least 32 bytes |
+
 ### orama storage grant
 
 Grant a cluster a capped deal allowance
@@ -3322,6 +3344,29 @@ and does not submit it.
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 | `--signer` | — | Hot key account (orama1...) [required] |
+
+### orama storage put
+
+Upload sealed slots to the providers a deal assigned
+
+```
+orama storage put [flags]
+```
+
+Upload the slot-N files written by seal to the providers the chain assigned.
+
+The deal must already exist (orama storage create, with the roots seal printed).
+Every file's piece root is checked against its slot on chain before any byte
+is sent, so a wrong file or a wrong deal uploads nothing. The command waits
+for each slot to be assigned and for its provider to accept the root. The
+provider endpoint is the node's first http(s) endpoint in x/nodes.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--deal-id` | `0` | Deal id |
+| `--dir` | — | Directory holding slot-N files from seal |
+| `--rpc` | — | oramad CometBFT RPC, for example http://127.0.0.1:31001 |
+| `--wait` | `5m0s` | How long to wait for assignment and acceptance |
 
 ### orama storage revoke
 
