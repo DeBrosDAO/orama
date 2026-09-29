@@ -7,6 +7,20 @@ unbuilt is in `plans/open-network.md` and `plans/open-network/track-c-chain.md`.
 `chain/` is its own Go module (`github.com/DeBrosOfficial/network/chain`). `core/go.mod` does not
 require it, and nothing in `chain/` imports `core/`.
 
+**This release is state-breaking; there is no in-place upgrade.** It changes stored types and their
+semantics: `x/archive` `RangeRecord` and `Params`, `x/storage` `Settlement.attempts` (and the settlement
+retry and miss/penalty split), `x/houses` `Proposal.advance_failures`, and slash and settlement behaviour.
+No module's `ConsensusVersion` was bumped and no migration was written, so a chain running an earlier
+build cannot load this state and a new binary cannot be staged as an upgrade plan over it. A running chain
+restarts from a new genesis: on stagenet, `chain/scripts/stagenet/deploy.sh reset` and then `deploy.sh up`. Do not
+try to start the new `oramad` on an existing chain home.
+
+Every node also needs `query-gas-limit = "2000000"` in `<home>/config/app.toml`: `oramad start` refuses a
+limit of 0 on any chain id that does not contain `-localnet-` (see "Explorer"). `oramad init`, and so
+`orama global install --init-chain`, writes it into a new `app.toml`. Nothing rewrites an existing one, so
+a node whose home was created by an earlier build must have the line set by hand before the new binary
+starts.
+
 ## What's running
 
 `oramad` is a [Cosmos SDK](https://github.com/cosmos/cosmos-sdk) v0.54.4 +
@@ -2077,8 +2091,9 @@ should be. `orama chain query --rpc` and the node's own gRPC serve all of them.
 Three more limits keep a public caller from putting unbounded work on the node. The route has its own
 per-address rate-limit bucket (120 a minute, burst 30) apart from the gateway's general one; at most 16
 module queries run at once, and the rest get `503` with `Retry-After`; and the node's `app.toml`
-carries `query-gas-limit = "2000000"` (`oramad init` writes it, and the stagenet deploy script sets it
-on nodes that already have an `app.toml`), which stops a query that scans state after about two thousand
+carries `query-gas-limit = "2000000"` (`oramad init` writes it, so `orama global install --init-chain` and
+the stagenet deploy script's fresh install get it, and the script asserts it after the install; nothing
+patches an `app.toml` that already exists), which stops a query that scans state after about two thousand
 store reads. A limit of 0 means unbounded in the SDK, so `oramad start` refuses to start with one on
 any chain id that does not contain `-localnet-`, and its error names the setting to fix.
 

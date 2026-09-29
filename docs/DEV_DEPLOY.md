@@ -520,6 +520,15 @@ Requirements on this machine: `make`, Go, zig and the Rust toolchain (`make buil
 refuses an inactive one, and enabling it would change the cluster's firewall, so the script does not), and systemd
 242 or newer.
 
+**This release is state-breaking (no in-place upgrade).** Stored types and their semantics changed
+(`x/archive` `RangeRecord` and `Params`, `x/storage` `Settlement.attempts`, `x/houses` `Proposal.advance_failures`,
+slash and settlement behaviour) and no `ConsensusVersion` was bumped, so a running stagenet chain does not
+upgrade: run `./deploy.sh reset` and then `./deploy.sh up`, which starts from a new genesis. The new `oramad`
+also refuses to start with `query-gas-limit = "0"` in `<home>/config/app.toml` on any chain id that is not a
+localnet. `up` installs with `--init-chain`, so `oramad init` writes `query-gas-limit = "2000000"` and the
+script asserts it; a node kept from an earlier install (not the reset-then-up path) must have that line set
+in `app.toml` by hand before the new binary is started.
+
 ```bash
 cd chain/scripts/stagenet
 

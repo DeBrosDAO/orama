@@ -114,6 +114,15 @@ sudo orama global install \
   is refused before anything changes. Loopback
   listeners (RPC 31001, gRPC 31002, REST 31003, Prometheus 31004) are not opened.
   The installer does not change IPv6.
+- `oramad start` refuses to start when `<home>/config/app.toml` has
+  `query-gas-limit = "0"` (unbounded) on any chain id that is not a localnet.
+  `--init-chain` runs `oramad init`, which writes `query-gas-limit = "2000000"`.
+  A chain home created by an earlier build keeps its old `app.toml` (install
+  never rewrites it): before starting the new binary on such a node, set
+  `query-gas-limit = "2000000"` in `<home>/config/app.toml`. This release is
+  also state-breaking, so a chain home from an earlier build cannot be carried
+  over at all: the chain restarts from a new genesis
+  ([CHAIN.md](CHAIN.md#what-s-running)).
 - Running the command again with the same flags changes nothing but the
   binaries' bytes. A service left out of `--services` is not removed.
 
