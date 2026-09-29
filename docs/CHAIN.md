@@ -120,6 +120,216 @@ proof verification fails closed until a verifier is linked, so a user cannot pay
   placeholder fee/gas before either is known, and must never be rejected by either this policy or
   `x/fees`' own base-fee check - mirroring stock `x/auth/ante`'s own `!simulate` guard).
 
+## Genesis parameters (G1)
+
+Every genesis parameter is locked at the value the plan signs off (`plans/open-network.md` P1-P10 and
+D12-D17, `track-c-chain.md`, `track-g-token-legal-security.md` G1). The check is
+`app.ValidateLockedGenesis` (`chain/app/locked_genesis.go`). It compares each locked module's
+`params` in a genesis, key by key, with the app's own default genesis, and reports every difference
+by name. It runs in two places, so a genesis that passes one starts:
+
+- `oramad genesis validate [file]` runs genutil's own module validation, then the locked check
+  on the file's chain-id;
+- `InitChain` runs it on the request's chain-id before any module's `InitGenesis`, and refuses to
+  start on a difference.
+
+What is locked depends on the chain-id:
+
+| Chain-id | Locked |
+|---|---|
+| contains `-localnet-` | nothing: local tests and `scripts/localnet` need short epochs and one-seat committees |
+| contains `-devnet-` or `-stagenet-` | everything except `emission.epoch_duration_seconds`, `emission.min_blocks_per_epoch`, `emission.allow_bootstrap_stake` and `power.min_committee_size`, which `scripts/stagenet/deploy.sh` shortens on purpose. `x/emission` and `x/power` keep their own production floors on the same split |
+| anything else | every row below, plus `wasmpolicy.upload_sunset_height` |
+
+The rows below list each locked parameter, its plan value, and where the plan states it.
+`TestLockedGenesis_defaultsEqualPlanValues` pins the module default to each row's literal,
+`TestLockedGenesis_everyGenesisParameterHasARow` fails when a module gains a parameter that has no
+row (so a new parameter cannot ship unlocked), and `TestLockedGenesis_productionChainRejectsEveryChangedParameter`
+changes each row in turn and requires a refusal that names it. A value in a genesis may be written
+`"0.05"`, `0.05` or `"0.050000000000000000"`; numbers compare as decimals.
+
+**Plan values that are not chain parameters.** P5 (the 2% per 24 hours unshield cap) is an ossified
+constant in `x/shielded/pool` (`UnshieldNumerator`, `UnshieldDenominator`) and P6 is the wasmpolicy
+genesis `upload_sunset_height` (locked here). P8 (network and app names), P9 (public IPFS DHT
+policy) and P10 (VPN pricing) are off-chain and have no genesis field.
+
+**Launch values the plan does not number.** The plan names `min_self_bond`, the role bonds,
+`bond_per_gib`, the `x/storage` and `x/relay` numbers, the probation numbers and `house_bond`
+but gives no figure (`track-g` G1: "sized ... see C7/C8", pending the G1 spreadsheet model). The
+launch value for those is the code default at this commit, marked "G1 launch default" below, and the
+locked check holds a genesis to it. Changing one is a change to `DefaultParams` and to its row in
+the test, so the number and its citation move together. Two plan values are placeholders that
+need a testnet price: P2 (`fees.min_base_fee`, 1 norama/gas, not yet a dollar figure) and P4
+(`token.creation_fee`, 10 ORAMA). P7 (the active-set size, 60 to 100) is not chosen: the C0 benchmark
+that sets it has not been run (`plans/open-network/decisions/C0-spikes.md`). The locked
+`staking.max_validators` is the stock 100 and does not decide P7.
+
+**Owner decisions, recorded as values.** O-A: the 5% development ceiling stays. It is
+`DevelopmentSharePercent = 5` in `x/emission/types/split.go`, and it is minted only when both houses
+pass a spend (`x/houses` `applySpend` calls `MintDevelopmentSpend`) after governance opens. O-B: a
+contract may hold ORAMA and issue a public IOU for it, and the genesis token wrapper may not:
+`wasmpolicy.RefuseNoramaWrapper` refuses a wrapper that creates or holds norama.
+
+
+`emission`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `epoch_duration_seconds` | `86400` | track-c C3: an epoch is 24 hours of BFT time |
+| `min_blocks_per_epoch` | `14400` | track-c C3: minimum blocks per epoch (code default, production floor) |
+| `allow_bootstrap_stake` | `false` | plan D12: zero premine |
+
+`fees`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `target_block_gas_fraction` | `0.5` | track-c C2: base fee targets 50% fullness |
+| `max_base_fee_change_fraction` | `0.125` | track-c C2: at most 12.5% per block |
+| `min_base_fee` | `1` | P2 fee floor: 1 norama/gas placeholder; the dollar peg needs a testnet price (G1) |
+| `initial_base_fee` | `1` | P2 fee floor (equal to min_base_fee at genesis) |
+| `deposit_refund_fraction` | `0.99` | plan D14: 99% of a state deposit is refunded |
+| `deposit_burn_fraction` | `0.01` | plan D14: 1% of a state deposit is burned |
+
+`power`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `min_committee_size` | `30` | plan D16: at least 30 bootstrap validators |
+| `bootstrap_exit_stake` | `271000000000000 (271000 ORAMA)` | P1: 5% of year-1 emission, 271,000 ORAMA |
+| `bootstrap_deadline_epochs` | `365` | P1, D16: about 12 months of daily epochs |
+| `cap_fraction_normal` | `0.05` | plan D15: 5% cap |
+| `cap_fraction_reduced` | `0.03` | plan D15: 3% cap above 60 validators |
+| `cap_step_down_validator_count` | `60` | plan D15: step down past 60 validators |
+| `cap_step_up_validator_count` | `50` | track-c C4: hysteresis returns to 5% below 50 |
+| `cap_hysteresis_epochs` | `30` | track-c C4: for 30 days |
+| `ramp_epochs` | `30` | plan D15: 30-day ramp |
+| `force_bond_fraction` | `0.5` | plan D16: 50% of committee rewards force-bonded |
+| `self_bond_cap_multiplier` | `2` | track-c C4: self-bond target 2x the minimum |
+| `min_self_bond` | `1000000000000 (1000 ORAMA)` | 1,000 ORAMA; G1 launch default (see note below) |
+| `useful_work_multiplier` | `1` | plan D15: M coded at 1.0 |
+| `useful_work_multiplier_activated` | `false` | plan D15: M off until a two-house vote |
+| `comet_power_scale` | `1000000000` | chain security review (code default) |
+| `max_redistribution_multiplier` | `2` | chain security review (code default) H3(b) |
+| `pre_gate_lambda_cap` | `0.95` | chain security review (code default) H3(a) |
+| `min_delegation_for_rewards` | `1000000000 (1 ORAMA)` | chain security review (code default) M2: 1 ORAMA |
+
+`nodes`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `min_bond` | `1000000000 (1 ORAMA) for each of the six roles` | track-c C6, track-g G1 min_bond[role]: 1 ORAMA per role; G1 launch default (see note below) |
+| `bond_per_gib` | `1000000000 (1 ORAMA)` | track-g G1 bond_per_gib: 1 ORAMA; G1 launch default (see note below) |
+| `unbonding_seconds` | `1814400` | plan D16: 21 days |
+| `deposit_per_byte` | `68359` | P3: about 0.07 ORAMA/KiB |
+| `probation_capacity_bytes` | `1073741824` | track-c C2 probation capacity (1 GiB); G1 launch default (see note below) |
+| `min_service_volume_bytes` | `1` | track-c C5 proven service volume (1 byte); G1 launch default (see note below) |
+| `max_endpoints` | `8` | track-c C6 record bound (code default) |
+| `max_bindings` | `8` | track-c C6 record bound (code default) |
+
+`storage`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `min_deal_bytes` | `1024` | track-c C7 (structure only); G1 launch default (see note below) |
+| `deal_fee` | `1000` | track-c C7 (structure only); G1 launch default (see note below) |
+| `max_deals_per_block` | `100` | track-c C7 (structure only); G1 launch default (see note below) |
+| `k_c` | `8` | track-c C7 (structure only); G1 launch default (see note below) |
+| `miss_threshold` | `4` | track-c C7 (structure only); G1 launch default (see note below) |
+| `max_settlements_per_block` | `100` | track-c C7 (structure only); G1 launch default (see note below) |
+| `s_min_providers` | `8` | track-c C7 (structure only); G1 launch default (see note below) |
+| `s_full_providers` | `32` | track-c C7 (structure only); G1 launch default (see note below) |
+| `accept_window_blocks` | `50` | track-c C7 (structure only); G1 launch default (see note below) |
+| `probation_slots` | `1` | track-c C7 (structure only); G1 launch default (see note below) |
+| `probation_operator_cap` | `2` | track-c C7 (structure only); G1 launch default (see note below) |
+| `probation_network16_cap` | `2` | track-c C7 (structure only); G1 launch default (see note below) |
+| `probation_asn_cap` | `2` | track-c C7 (structure only); G1 launch default (see note below) |
+| `probation_expiry_epochs` | `4` | track-c C7 (structure only); G1 launch default (see note below) |
+| `probation_deposit` | `1000` | track-c C7 (structure only); G1 launch default (see note below) |
+| `max_releases_per_epoch` | `2` | track-c C7 (structure only); G1 launch default (see note below) |
+| `protocol_every_epochs` | `0` | track-c C7 (structure only); G1 launch default (see note below) |
+| `slash_fraction` | `0.1` | track-c C7 (structure only); G1 launch default (see note below) |
+| `protocol_piece_bytes` | `1024` | track-c C7 (structure only); G1 launch default (see note below) |
+| `protocol_price_per_epoch` | `1000` | track-c C7 (structure only); G1 launch default (see note below) |
+| `protocol_duration_epochs` | `1` | track-c C7 (structure only); G1 launch default (see note below) |
+
+`relay`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `min_reporters_quorum` | `2` | track-c C8: a majority of the initial 3 dirauths |
+| `min_uptime_fraction` | `0.9` | track-c C8 (structure only); G1 launch default (see note below) |
+| `exit_multiplier` | `2` | track-c C8 (structure only); G1 launch default (see note below) |
+| `per_relay_cap` | `100000000000 (100 ORAMA)` | track-c C8 (structure only); G1 launch default (see note below) |
+| `per_operator_cap` | `200000000000 (200 ORAMA)` | track-c C8 (structure only); G1 launch default (see note below) |
+| `per_prefix16_cap` | `200000000000 (200 ORAMA)` | track-c C8 (structure only); G1 launch default (see note below) |
+
+`token`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `creation_fee` | `10000000000 (10 ORAMA)` | P4: about $10-25 in ORAMA, burned; 10 ORAMA at genesis (no price peg before a testnet price exists) |
+| `deposit_per_byte` | `68359` | P3: about 0.07 ORAMA/KiB |
+
+`archive`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `retention_window_blocks` | `201600` | plan D22: validators keep 14 days of blocks (6-second blocks) |
+
+`houses`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `bootstrap_exit_stake` | `271000000000000 (271000 ORAMA)` | P1: 271,000 ORAMA |
+| `token_quorum` | `0.4` | track-c C5, track-g G4 |
+| `token_pass_threshold` | `0.5` | track-c C5, track-g G4 |
+| `voting_period_seconds` | `604800` | track-c C5, track-g G4: 7 days |
+| `house_bond` | `1000000000000 (1000 ORAMA)` | track-c C5, track-g G4: 1,000 ORAMA; G1 launch default (see note below) |
+| `max_eligible_per_prefix16` | `3` | track-c C5, track-g G4 |
+| `max_eligible_per_asn` | `5` | track-c C5, track-g G4 |
+| `min_house_size` | `21` | plan D17, track-g G1: min_house_size 21 |
+| `veto_window_seconds` | `604800` | plan D17: the operator house vetoes within 7 days |
+| `parameter_timelock_seconds` | `1209600` | plan D17: 14 days for parameters |
+| `upgrade_timelock_seconds` | `5184000` | plan D17: 60 days for upgrades |
+| `spend_timelock_seconds` | `604800` | plan D17: 7 days for fund spending |
+
+`staking`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `bond_denom` | `"norama"` | plan D12: norama is the bond denom |
+| `unbonding_time` | `"1814400s"` | plan D16, track-c C4 (staking unbonding, slashing) |
+| `max_validators` | `100` | P7 is not chosen (track-c C0-2 pending); the stock value 100 is the top of the plan's 60-100 range |
+| `max_entries` | `7` | stock x/staking default |
+| `historical_entries` | `10000` | stock x/staking default |
+| `min_commission_rate` | `0` | stock x/staking default |
+
+`slashing`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `slash_fraction_double_sign` | `0.05` | plan D16: double-sign costs 5% |
+| `slash_fraction_downtime` | `0.0001` | plan D16: downtime costs 0.01% |
+| `signed_blocks_window` | `10000` | chain security review B3 (code default) |
+| `min_signed_per_window` | `0.5` | stock x/slashing default |
+| `downtime_jail_duration` | `"600s"` | stock x/slashing default |
+
+`distribution`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `community_tax` | `0` | track-c C2: community_tax = 0 |
+| `base_proposer_reward` | `0` | stock x/distribution (deprecated field) |
+| `bonus_proposer_reward` | `0` | stock x/distribution (deprecated field) |
+| `withdraw_addr_enabled` | `true` | stock x/distribution default |
+
+`wasmpolicy`
+
+| Parameter | Locked value | Source |
+|---|---|---|
+| `upload_sunset_height` | `3162240` | P6: 183 days of 5-second blocks; D11 |
+
+
 ## `x/emission`: the halving-with-tail schedule
 
 `chain/x/emission` is a small, queries-only module (**no `Msg` service at all** - nothing can ever
@@ -215,6 +425,19 @@ denoms it creates, but its bank keeper refuses a norama mint (`app/mint_policy.g
 Remainders from each share's integer division always fold into the validator share, so the four
 shares of any epoch's maximum sum back to that maximum exactly, to the norama.
 
+**The split can move, but only through `x/houses`.** Each closed epoch reads the split in force from
+`x/houses` (`types.SplitSource`, wired in `chain/app/enactment.go`): the canonical 60/25/10/5 until
+a structural proposal has passed its 60-day timelock, then the enacted percentages. Each share may
+sit within 10 points of its canonical value and the four must sum to 100
+(`SplitPercents.Validate`; `x/houses` checks the same bounds when the proposal is submitted).
+The split an epoch closed under is written on its `CeilingRecord` (`validator_percent`,
+`storage_percent`, `relay_percent`, `development_percent`; all zero means canonical), so a
+later storage, relay or development mint uses that epoch's own ceiling. `EpochState.validator_split_delta`
+keeps the running difference between what was minted to validators and what the canonical schedule
+would have minted, so invariant 1 below still holds exactly. The halving schedule and the tail
+(the maximum per epoch) are ossified and no proposal can touch them. An epoch closes under the split in
+force at the block that closes it: a split enacted mid-epoch applies to that epoch's close.
+
 ### Genesis starts at exactly zero supply, and its premine gate
 
 A real network genesis starts at exactly zero balance: `x/emission`'s bootstrap committee
@@ -279,9 +502,10 @@ invariant holding without `x/emission` needing a direct dependency on `x/slashin
 
 1. **Minted matches the schedule exactly:** `cumulative_minted` must equal exactly
    `CumulativeValidatorMinted` for the epochs already completed - not merely "no more than", since
-   `CloseEpoch` mints that exact amount unconditionally every time an epoch closes. Every
-   `CeilingRecord` is checked the same way: its four amounts must match `SplitEpochMint` for its
-   epoch exactly.
+   `CloseEpoch` mints that exact amount unconditionally every time an epoch closes. When
+   `x/houses` has enacted a split, the target is the canonical cumulative plus
+   `validator_split_delta`. Every `CeilingRecord` is checked the same way: its four amounts must
+   match `SplitEpochMintAt` for its epoch and the split recorded on it exactly.
 2. **Supply matches minted:** `bank_supply == genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted - cumulative_burned`,
    with `cumulative_burned` kept current by `ReconcileBurns` (above). `cumulative_development_minted`
    is zero until `MintDevelopmentSpend` runs; `cumulative_service_minted` is zero until a storage
@@ -492,7 +716,9 @@ reports CometBFT power, and that power is not the slash base.
 ### Queries
 
 `oramad query power ...`: `params`, `bootstrap-committee`, `lambda` (current lambda, cap state and
-hysteresis streak), `validator-power [valoper-address]`. `validator-power` returns the last
+hysteresis streak), `validator-power [valoper-address]`, `invariants`. `invariants` reports whether
+`x/power`'s module account is empty: it only passes an epoch's validator share through inside one
+call, so a balance left there between blocks is a stranded amount. `validator-power` returns the last
 CometBFT power assigned (`comet_power`). Its `bootstrap_share`, `capped_share` and `power_share`
 fields are always zero: filling them would rerun the block's power computation, and the query
 server does not hold an `EmissionKeeper`.
@@ -615,7 +841,8 @@ owner's earnings. The coins sit in a **second, separate module account** (`fees_
 `ReleaseDeposit` and is registered, so a token
 create locks a metadata deposit. `x/nodes` calls the same interface and is registered.
 `x/cnft` locks a tree deposit through the same interface and is registered. `x/market` is
-registered and does not lock a listing deposit. A sale credits earnings.
+registered and does not lock a listing deposit. A sale credits earnings. `oramad query market
+invariants` checks that the market module account holds exactly the open bids.
 `x/storage` is registered. Its deal escrow is its own module account,
 not this deposit ledger. The per-byte contract deposit meter is not hooked into wasmd's store.
 
@@ -685,7 +912,7 @@ deposit walk.
 ## `x/houses`: two-house governance
 
 `chain/x/houses` implements plans/open-network/track-c-chain.md C5 and decisions D17 and D18.
-It is registered. `EndBlock` closes elapsed votes. An operator is eligible only with a /16 network
+It is registered. `EndBlock` closes elapsed votes and executes elapsed timelocks. An operator is eligible only with a /16 network
 and an ASN, which `chain/app/houses_view.go` reads from `x/nodes` (see "Node network identity"):
 the identity of the operator's lowest-id ACTIVE node that has both. An operator with no such node
 is skipped.
@@ -717,11 +944,57 @@ and the other structural actions, and 7 days for spends.
 
 A passed spend calls `x/emission.Keeper.MintDevelopmentSpend` and then
 `EarningsKeeper.CreditEarnings` (`x/fees`; unit tests use a fake). If the
-mint refuses the amount, the proposal is marked failed and nothing is credited. Other structural
-decisions are stored on `Enacted` only: a software-upgrade name and height, an emission split
-within ±10 points of 60/25/10/5, a one-way M activation and an `m_max` in [0.75, 1.25], and
-relay-reporter / code-upload / adapter allow-lists. `x/emission`'s schedule, tail and mint math
-do not read the split. `x/power` does not read M. No allow-list is enforced outside this module.
+mint refuses the amount, the proposal is marked failed and nothing is credited. Execution runs on a
+cache context, so a refused action of any kind leaves no partial write and the proposal is
+marked `FAILED` with its reason.
+
+### Governance enactment
+
+A passed structural proposal changes a module's behaviour only once its timelock ends and someone
+executes it (`EndBlock` does, and so can any account with `MsgExecuteProposal`). Each outcome is
+consumed like this:
+
+| Outcome | Consumer | What changes |
+|---|---|---|
+| Emission split | `x/emission` reads `x/houses`' enacted split when it closes an epoch (`emissionSplitSource`) | The next closed epoch mints and records ceilings at the new percentages. See "The split, and what actually gets minted" |
+| Relay reporters | `x/relay`, through its own `MsgUpdateReporters` handler | `relayReporterEnactor` computes the new set from the current one plus `add` and `remove`, then calls the handler with `relaykeeper.WithAllowReporterChange`, the only way that message is accepted. A change that would empty the set, or name a bad address, fails the proposal and leaves the set as it was |
+| Code-upload allow-list | `x/wasmpolicy` reads `Keeper.CodeUploadAllowed` on every `MsgStoreCode` before `upload_sunset_height` | A code blob whose SHA-256 (of the uncompressed wasm; a gzip upload is decompressed, capped at 4 MiB) is on the list may be stored before the sunset. Any other hash stays closed. Removing a hash closes it again. After the sunset every store is allowed anyway, and nothing can move the sunset |
+| Software upgrade | The SDK `x/upgrade` module | `upgradeScheduler` calls `UpgradeKeeper.ScheduleUpgrade` with the plan name and height when the timelock ends. A height already past fails the proposal. At the plan height `x/upgrade`'s PreBlocker runs a registered handler, or halts the node with "UPGRADE NEEDED" so its operator (cosmovisor, see "Running `oramad` under cosmovisor") swaps in the new binary. `x/upgrade` is wired; only its `MsgSoftwareUpgrade` stays unreachable |
+| Development spend | `x/emission` and `x/fees` | Mints against the epoch's development ceiling and credits the recipient's earnings |
+| M activation and `m_max` | none | Recorded on `Enacted` only: `x/power` computes no useful-work multiplier yet (`useful_work_multiplier` is a coded 1.0), so there is nothing to read it |
+| Adapter allow-list | none | Recorded on `Enacted` and readable with `Keeper.AdapterAllowed`. The shielded adapter path that would consult it is not built |
+
+A software upgrade or reporter proposal fails, and records why, when its consumer is not wired
+(`WithEnactors`), so an outcome that nothing reads is never reported as enacted.
+
+### Governance parameters are genesis parameters (G4)
+
+Everything that shapes governance is a `Params` field with a coded bound checked by
+`Params.Validate` (at `InitGenesis`, in `genesis validate`, and on a parameter proposal):
+
+| Parameter | Default | Bounds |
+|---|---|---|
+| `token_quorum` | 0.4 | 0.334 to 0.667 |
+| `token_pass_threshold` | 0.5 | 0.5 to 0.667 |
+| `voting_period_seconds` | 7 days | 1 day to 28 days |
+| `house_bond` | 1000 ORAMA | 1 ORAMA to 1,000,000 ORAMA |
+| `max_eligible_per_prefix16` | 3 | 1 to 21 |
+| `max_eligible_per_asn` | 5 | 1 to 21 |
+| `min_house_size` | 21 | 21 to 101 |
+| `veto_window_seconds` | 7 days | 7 days to 28 days |
+| `parameter_timelock_seconds` | 14 days | 14 days to 60 days |
+| `upgrade_timelock_seconds` | 60 days | 60 days to 180 days |
+| `spend_timelock_seconds` | 7 days | 7 days to 30 days |
+
+The last five are fixed at genesis: a parameter proposal cannot move them (nor `bootstrap_exit_stake`),
+and each floor is the plan value, so a genesis may lengthen a delay but never shorten it or open
+governance to a smaller house. The other rows move only inside their bounds by a parameter proposal.
+These fields are new: houses `Params` stored by an older binary decode them as 0 and fail `Params.Validate`, and `x/houses` has no migration (`ConsensusVersion` 1), so a chain that ran the older binary must restart from a new genesis. No production chain exists, and stagenet and devnet are reset.
+`TestParamsValidate_bounds` tests every bound at the minimum, the maximum, and one past each. Still
+coded, and not parameters: the 3% delegated-vote cap, the 30% veto share, the 90 service days, the 7
+/16 networks and 5 ASNs the structural tier needs, and the 64 active proposals.
+
+### Ossified rules and invariants
 
 Ossified rules have no message and no field a message can set: the emission schedule and tail,
 the burn rule, privacy-by-default, and the absence of freeze, blacklist, halt, pause, circuit
@@ -729,7 +1002,7 @@ breaker, multisig or authority. `bootstrap_exit_stake` is genesis-only. `TestNoM
 walks every `sdk.Msg` and rejects a field that is not on the allow-list.
 
 The bond invariant is: sum of locked house bonds equals the `houses` module account balance.
-Queries, once the module is wired, are `oramad query houses params|proposal|tiers|invariants`.
+Queries are `oramad query houses params|proposal|tiers|invariants`.
 
 ## `x/nodes`: operators, global nodes, bonds, and an optional cluster registry
 
@@ -1238,8 +1511,27 @@ The storage commands:
 
 ### Other fail-closed pieces
 
-- `chain/x/confidential` refuses every attestation report. It does not treat
-  a blob as a TEE measurement.
+- `chain/x/confidential` refuses every attestation. It is the software boundary for track H
+  and is not imported by the app or any module (a test enforces that):
+  - `AttestationVerifier.Verify(quote, expectedMeasurement)` returns a `VerifiedReport` or an
+    error. A `VerifiedReport` has an unexported `verified` field, so only a verifier inside the package
+    can produce one, and none does.
+  - `DefaultVerifier()` checks the quote's structure (`ParseQuote`: a 1184-byte SEV-SNP report of
+    version 2, 3 or 5 with the ECDSA P-384 algorithm, or a TDX v4 quote with the P-256 attestation
+    key) and then needs an accepted vendor root for that TEE. The vendor root registry
+    (`RootRegistry`) is empty by default and a root can enter only through `NewRootRegistry` (a
+    known kind, a self-signed CA certificate, no duplicates). Even with a root present, the
+    signature and certificate-chain check is not implemented, so the verifier returns
+    `ErrVerifierNotLinked`. Nothing parses a quote into trust.
+  - `RegisterNode` (a confidential-node registration) and `NewListing` (a marketplace listing) both
+    require a verified report, a measurement equal to the expected one, and report data that binds
+    the operator, node id and node key (`ReportDataFor`). With the default verifier every quote
+    (nil, empty, garbage, an unsigned SEV-SNP report, a TDX quote with a bogus signature) is
+    refused.
+  - `Listing.Lease` always returns `ErrMarketplaceNotLive`. There is no message, module or path that
+    trades, and `MarketplaceLive` is `false`.
+  - The tests use a stub verifier that returns a verified report so the checks after verification
+    can be tested. It exists only in `_test.go`, and it is not a quote.
 - `core/pkg/tornet` accepts a parameter set only when it names at least three
   authorities, the exit policy is `reject *:*`, and signing certificates last
   12 months. `StartExit` refuses to launch an exit.
