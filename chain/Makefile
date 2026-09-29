@@ -93,6 +93,8 @@ orchard-lib-linux-amd64:
 ## x/shielded. It has its own crate and its own Cargo.lock, and shares no source with the library.
 VERIFIER_CRATE := x/shielded/orchardverifier-bin
 VERIFIER_NAME := orama-orchard-verifier
+# The pin linked into oramad: the sha256 file orchard-verifier-linux-amd64 writes.
+VERIFIER_PIN_LDFLAG = -X github.com/DeBrosOfficial/network/chain/app.ShieldedVerifierSHA256=$$(cat $(BUILD_DIR)/$(VERIFIER_NAME)-linux-amd64.sha256)
 orchard-verifier:
 	cd $(VERIFIER_CRATE) && cargo build --release --locked
 	@echo "sha256 (give it to oramad as --shielded-verifier-sha256):"
@@ -133,7 +135,7 @@ build-linux-amd64-orchard: orchard-lib-linux-amd64 orchard-verifier-linux-amd64
 		CGO_LDFLAGS="-lunwind" \
 		CC="$(ORAMA_ZIG) cc -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
 		CXX="$(ORAMA_ZIG) c++ -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
-		go build -tags "nowasm orchardffi netgo osusergo" -trimpath -ldflags "$(LDFLAGS) -linkmode external -extldflags -static" \
+		go build -tags "nowasm orchardffi netgo osusergo" -trimpath -ldflags "$(LDFLAGS) $(VERIFIER_PIN_LDFLAG) -linkmode external -extldflags -static" \
 		-o $(BUILD_DIR)/$(BINARY)-linux-amd64-orchard $(PKG)
 
 ## orchard-smoke: build and run the smoke binary on this machine (host static library).
@@ -161,15 +163,17 @@ orchard-smoke-linux-amd64: orchard-lib-linux-amd64
 native-lib-linux-amd64:
 	./native/build.sh build
 
-## build-linux-amd64-full: the static linux/amd64 oramad with CosmWasm and the Orchard verifier in one binary
-## (what scripts/stagenet/deploy.sh builds). One native library, so one copy of the Rust std.
-build-linux-amd64-full: native-lib-linux-amd64
+## build-linux-amd64-full: the static linux/amd64 oramad with CosmWasm and the Orchard verifier library in one
+## binary (what scripts/stagenet/deploy.sh builds), and beside it build/orama-orchard-verifier-linux-amd64, the
+## out-of-process second verifier whose sha256 is linked into oramad (the pin: oramad runs no other file).
+## One native library, so one copy of the Rust std.
+build-linux-amd64-full: native-lib-linux-amd64 orchard-verifier-linux-amd64
 	mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
 		CGO_LDFLAGS="-L$(CURDIR)/$(BUILD_DIR)/native -lunwind" \
 		CC="$(ORAMA_ZIG) cc -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
 		CXX="$(ORAMA_ZIG) c++ -target $(ORCHARD_LINUX_AMD64_ZIG_TARGET)" \
-		go build -tags "muslc orchardffi netgo osusergo" -trimpath -ldflags "$(LDFLAGS) -linkmode external -extldflags -static" \
+		go build -tags "muslc orchardffi netgo osusergo" -trimpath -ldflags "$(LDFLAGS) $(VERIFIER_PIN_LDFLAG) -linkmode external -extldflags -static" \
 		-o $(BUILD_DIR)/$(BINARY)-linux-amd64-full $(PKG)
 
 ## chain-test: alias for test, matching plans/open-network/track-c-chain.md's `make chain-test`.

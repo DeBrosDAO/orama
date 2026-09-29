@@ -2435,7 +2435,7 @@ message that names the cause and the flag when any step fails:
 * the orchard library's verifying key is built (`orchard.Warm`, an `orchardffi` build);
 * the verifier binary is read and its **SHA-256 must equal the pin**, `--shielded-verifier-sha256`
   or the release's link-time `app.ShieldedVerifierSHA256` (`make orchard-verifier` prints it,
-  `make build-linux-amd64-orchard` writes `build/orama-orchard-verifier-linux-amd64.sha256`); no pin
+  `make build-linux-amd64-orchard` and `-full` write `build/orama-orchard-verifier-linux-amd64.sha256`); no pin
   refuses too. The file is hashed and then executed, so its directory must be writable only by
   the node's user;
 * a configured verifier binary (the flag, or a file at the default path) is started and warmed;
@@ -2485,13 +2485,19 @@ rustup target add x86_64-unknown-linux-musl
 ORAMA_ZIG=/opt/homebrew/opt/zig@0.15/bin/zig make build-linux-amd64-orchard
 ```
 
-`make build-linux-amd64-orchard` writes **two files** into `build/`, both static
-linux/amd64 (musl, C parts through zig): `oramad-linux-amd64-orchard` (the library linked) and
-`orama-orchard-verifier-linux-amd64` (the binary). Ship the second as
-`<home>/bin/orama-orchard-verifier` or point `--shielded-verifier` at it. `orama build` does not
-build `oramad`; these targets are the release path, and `make build` is unchanged and produces
-nodes that accept no shielded bundle. Both were built and linked for linux/amd64 on macOS/arm64;
-they were not run on linux.
+`make build-linux-amd64-orchard` (nowasm) and `make build-linux-amd64-full` (CosmWasm and the
+library, one static native library so one copy of the Rust std, `chain/native`) each write **two
+files** into `build/`, both static linux/amd64 (musl, C parts through zig): `oramad-linux-amd64-orchard`
+or `oramad-linux-amd64-full`, and `orama-orchard-verifier-linux-amd64` with its
+`orama-orchard-verifier-linux-amd64.sha256`. The same make run **links that sha256 into oramad** (the
+pin), so a release's oramad runs exactly the verifier built with it and no other file. `native/`
+carries the orchard library (with the note-commitment tree function) as an rlib of the one static
+library; the verifier binary is a separate crate and is not part of it.
+`scripts/stagenet/deploy.sh` installs both: the binary goes in the root-owned `BIN_DIR` next to
+`oramad`, and the unit passes `--shielded-verifier $BIN_DIR/orama-orchard-verifier`. `orama build`
+does not build `oramad`; these targets are the release path, and `make build` is unchanged and
+produces nodes that accept no shielded bundle. All were built and linked for linux/amd64 on
+macOS/arm64; they were not run on linux.
 
 ### Test vectors and tests
 

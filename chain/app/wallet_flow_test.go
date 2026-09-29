@@ -222,6 +222,15 @@ func TestWalletFlow_publicUserToUserNoramaSendIsRefused(t *testing.T) {
 // build with the library linked refuses on the signature instead, the flow's chain ID being no
 // vector's: either way the bundle is "refused"). The real proofs
 // go through shielded_real_test.go and shielded_wallet_test.go (the orchardffi build).
+// requireShieldedRefused asserts a shielded message failed because no bundle is accepted here: the
+// tree cannot be hashed without the library ("not linked"), or a linked verifier refused the bundle.
+func requireShieldedRefused(t *testing.T, res *abci.ExecTxResult) {
+	t.Helper()
+	require.NotZero(t, res.Code, "tx unexpectedly succeeded")
+	log := strings.ToLower(res.Log)
+	require.True(t, strings.Contains(log, "not linked") || strings.Contains(log, "refused"), res.Log)
+}
+
 func TestWalletFlow_shieldedMessagesAreRegisteredSignedByTheWalletAndRefusedWithoutBothVerifiers(t *testing.T) {
 	f := newFlow(t)
 	registered := map[string]bool{}
@@ -242,9 +251,9 @@ func TestWalletFlow_shieldedMessagesAreRegisteredSignedByTheWalletAndRefusedWith
 	start := f.bank(alice.addr, params.BaseDenom)
 
 	shield := f.deliver(alice, &shieldedtypes.MsgShield{Signer: signer, Bundle: bundle})
-	requireRejected(t, shield, "shielded bundle refused")
+	requireShieldedRefused(t, shield)
 	earnings := f.deliver(alice, &shieldedtypes.MsgShieldEarnings{Signer: signer, Bundle: bundle})
-	requireRejected(t, earnings, "shielded bundle refused")
+	requireShieldedRefused(t, earnings)
 	unshield := f.deliver(alice, &shieldedtypes.MsgUnshield{
 		Signer: signer, Bundle: loadVector(t, "ironwood-unshield"), Target: shieldedtypes.UnshieldTargetFeeTopup,
 	})

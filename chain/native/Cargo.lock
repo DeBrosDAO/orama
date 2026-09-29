@@ -2219,6 +2219,7 @@ dependencies = [
 name = "orama-orchard-ffi"
 version = "0.1.0"
 dependencies = [
+ "incrementalmerkletree",
  "orchard",
  "zcash_primitives",
  "zcash_protocol",

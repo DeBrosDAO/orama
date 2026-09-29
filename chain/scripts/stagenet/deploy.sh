@@ -127,12 +127,16 @@ put_file() {
 # (`make build-linux-amd64-full`): the genesis stores the standard contracts, so a node without libwasmvm
 # could not start (a nowasm binary refuses a genesis that has a wasm module). The native library is
 # built from source, libwasmvm from the module cache at the pinned version plus the Orchard crate,
+# and the out-of-process verifier binary built beside it (its sha256 is linked into oramad),
 # through zig (chain/native/build.sh); nothing prebuilt is downloaded, and its sha256 is recorded in
 # chain/native/libwasmvm_muslc.x86_64.a.sha256.
 build() {
 	log "building oramad for linux/amd64 with libwasmvm and the Orchard verifier ($VERSION, $COMMIT)"
 	(cd "$chain_root" && make build-linux-amd64-full)
 	cp "$chain_root/build/oramad-linux-amd64-full" "$work/oramad"
+	# The second shielded verifier: a separately built and pinned Rust binary, run out of process. The
+	# same make target links its sha256 into oramad, so oramad refuses any other file.
+	cp "$chain_root/build/orama-orchard-verifier-linux-amd64" "$work/orama-orchard-verifier"
 }
 
 install_node() {
@@ -143,6 +147,10 @@ install_node() {
 	# earlier /tmp size stall and any TOCTOU/symlink risk a shared /tmp path would carry.
 	on "$alias" "sudo install -d -m 0755 $BIN_DIR"
 	gzip -c "$work/oramad" | on "$alias" "gunzip -c | sudo sh -c 'umask 022; tmp=\$(mktemp $BIN_DIR/.oramad.XXXXXX) && cat > \"\$tmp\" && chmod 0755 \"\$tmp\" && mv -f \"\$tmp\" $BIN_DIR/oramad'"
+	# The verifier goes in the root-owned BIN_DIR beside oramad, not in the chain user's home: the node
+	# passes --shielded-verifier for it, and a file the node's own user could rewrite would only be
+	# protected by the pin.
+	gzip -c "$work/orama-orchard-verifier" | on "$alias" "gunzip -c | sudo sh -c 'umask 022; tmp=\$(mktemp $BIN_DIR/.verifier.XXXXXX) && cat > \"\$tmp\" && chmod 0755 \"\$tmp\" && mv -f \"\$tmp\" $BIN_DIR/orama-orchard-verifier'"
 	on "$alias" "id $SVC_USER >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin $SVC_USER"
 	on "$alias" "sudo install -d -m 0700 -o $SVC_USER -g $SVC_USER $HOME_DIR"
 	# The state directory is mode 0700 and owned by the chain user, so the SSH
@@ -308,7 +316,7 @@ Wants=network-online.target
 [Service]
 User=$SVC_USER
 Group=$SVC_USER
-ExecStart=$BIN_DIR/oramad start --home $HOME_DIR
+ExecStart=$BIN_DIR/oramad start --home $HOME_DIR --shielded-verifier $BIN_DIR/orama-orchard-verifier
 Restart=always
 RestartSec=5
 LimitNOFILE=65535
