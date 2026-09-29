@@ -725,10 +725,11 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		ante.NewConsumeGasForTxSizeDecorator(app.AccountKeeper),
 		feesante.NewFeeDecorator(app.AccountKeeper, app.FeeGrantKeeper, app.StakingKeeper, app.FeesKeeper),
 		// Security review B8 ("outsiders can never bond"): tops up a signer's own
-		// MsgCreateValidator/MsgDelegate shortfall from their own earnings, before that message
-		// runs - this chain starts every account at zero norama, so without it nobody outside the
+		// MsgCreateValidator/MsgDelegate/MsgBondNode shortfall, and the deal fee and escrow of their own
+		// storage deals and the fee of their own tokens (C2 item 4), from their own earnings, before that
+		// message runs - this chain starts every account at zero norama, so without it nobody outside the
 		// genesis bootstrap committee could ever accumulate a public bank balance to bond with.
-		feesante.NewBondTopUpDecorator(app.BankKeeper, app.FeesKeeper, app.NodesKeeper),
+		feesante.NewBondTopUpDecorator(app.BankKeeper, app.FeesKeeper, app.NodesKeeper, app.StorageKeeper, app.TokenKeeper),
 		// Security review B1/M4 ("lock the force-bonded stake"): rejects a bootstrap committee
 		// member's own MsgUndelegate/MsgBeginRedelegate if it would take their self-bond below
 		// what x/power has force-bonded into it, while lambda < 1.

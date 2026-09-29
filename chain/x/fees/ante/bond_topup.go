@@ -27,6 +27,16 @@ type NodeLookup interface {
 	GetNode(ctx sdk.Context, nodeID string) (nodestypes.Node, error)
 }
 
+// OwnFundsQuoter is implemented by a module whose messages pull their signer's own money out of its bank
+// balance (deal fee and escrow, token creation fee and metadata deposit). OwnFunds returns the payer
+// and the norama the message will take from the payer's bank balance. A message the module does
+// not price, or one whose payer is not the signer (a deal paid by a grantor), returns a nil payer.
+// The quote must be exactly what the message handler will pull: a smaller one leaves the message
+// to fail on insufficient funds, a larger one moves earnings the message never spends.
+type OwnFundsQuoter interface {
+	OwnFunds(ctx sdk.Context, msg sdk.Msg) (payer sdk.AccAddress, amount math.Int, err error)
+}
+
 // BondTopUpDecorator funds a signer's own MsgCreateValidator/MsgDelegate/x/nodes MsgBondNode shortfall from their own
 // earnings account before the real staking message handler runs (security review B8: "outsiders
 // can never bond ... implement bonding from earnings"). This chain starts every account at exactly
@@ -50,15 +60,23 @@ type NodeLookup interface {
 // survive a failed message, so topping up for a nonexistent or foreign node would move the signer's
 // earnings into its bank balance and then fail the message. The real handler still rejects such a
 // message with its own error.
+//
+// The same top-up covers a signer's own storage deal (fee and escrow, create and extend) and token
+// creation (fee and metadata deposit) through the OwnFundsQuoters it is built with (C2 item 4:
+// "fund deposits and escrow for the signer's own deals, tokens, trees and contracts"). Those
+// modules pull from the bank balance only, so without the top-up a provider or operator that
+// holds only earnings could never open a deal. Tree and node deposits already fall back to
+// earnings inside x/fees' LockDeposit.
 type BondTopUpDecorator struct {
 	bankKeeper BankKeeperSpendable
 	feesKeeper keeper.Keeper
 	nodes      NodeLookup
+	quoters    []OwnFundsQuoter
 }
 
 // NewBondTopUpDecorator builds a BondTopUpDecorator.
-func NewBondTopUpDecorator(bankKeeper BankKeeperSpendable, feesKeeper keeper.Keeper, nodes NodeLookup) BondTopUpDecorator {
-	return BondTopUpDecorator{bankKeeper: bankKeeper, feesKeeper: feesKeeper, nodes: nodes}
+func NewBondTopUpDecorator(bankKeeper BankKeeperSpendable, feesKeeper keeper.Keeper, nodes NodeLookup, quoters ...OwnFundsQuoter) BondTopUpDecorator {
+	return BondTopUpDecorator{bankKeeper: bankKeeper, feesKeeper: feesKeeper, nodes: nodes, quoters: quoters}
 }
 
 func (d BondTopUpDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (sdk.Context, error) {
@@ -94,6 +112,11 @@ func (d BondTopUpDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool
 				continue // the bond handler rejects it; earnings must not move for it
 			}
 			needs = addNeed(needs, operator, params.BaseDenom, m.Amount)
+		default:
+			var err error
+			if needs, err = d.quoteOwnFunds(ctx, needs, msg); err != nil {
+				return ctx, err
+			}
 		}
 	}
 	for _, n := range needs {
@@ -102,6 +125,21 @@ func (d BondTopUpDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool
 		}
 	}
 	return next(ctx, tx, simulate)
+}
+
+// quoteOwnFunds adds what msg will pull from its payer's bank balance, as quoted by the module that
+// owns it, to the running needs.
+func (d BondTopUpDecorator) quoteOwnFunds(ctx sdk.Context, needs []bondNeed, msg sdk.Msg) ([]bondNeed, error) {
+	for _, q := range d.quoters {
+		payer, amount, err := q.OwnFunds(ctx, msg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to price %s for the earnings top-up: %w", sdk.MsgTypeURL(msg), err)
+		}
+		if payer != nil {
+			return addNeed(needs, payer, params.BaseDenom, amount), nil
+		}
+	}
+	return needs, nil
 }
 
 // operatesNode reports whether nodeID exists and signer is its operator. A missing node is not an
