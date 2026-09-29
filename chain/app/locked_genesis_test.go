@@ -125,6 +125,7 @@ var lockedRows = []lockedRow{
 	{"archive", "retention_window_blocks", "201600", "plans/open-network.md D22: validators keep 14 days of blocks (6-second blocks)"},
 	{"archive", "max_piece_bytes", "4294967296", "track-c C14 (structure only): 4 GiB caps the bundle file an attestation commits to; " + citeG1},
 	{"archive", "max_candidates_per_range", "4", "track-c C14 (structure only): bounds the conflicting tuples one undecided range keeps, an honest one, wrong ones and a fork; " + citeG1},
+	{"archive", "range_blocks", "1000", "track-c C14 (structure only): every archived range is exactly this many blocks and starts at a multiple of it plus 1, so ranges never overlap; " + citeG1},
 
 	// x/shielded: C12, D19, D20, P5. The plan fixes the 2% cap (P5, a constant in x/shielded/pool) and
 	// names the other parameters without numbers; C12a's spec text does not exist yet, so each is a

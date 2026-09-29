@@ -21,6 +21,10 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/archive/types"
 )
 
+// testRangeBlocks is the range width the tests' genesis sets: the ranges the tests attest are
+// 1-50, 51-100 and so on.
+const testRangeBlocks int64 = 50
+
 type testFixture struct {
 	Ctx     sdk.Context
 	Keeper  keeper.Keeper
@@ -54,6 +58,15 @@ func (f *fakeNodes) ArchiverOperator(_ context.Context, nodeID, signer string) (
 		return op, nil
 	}
 	return opOf(n), nil
+}
+
+// ArchiverActive: a node is active when it is numbered and not listed in inactive.
+func (f *fakeNodes) ArchiverActive(_ context.Context, nodeID string) (bool, error) {
+	var n byte
+	if _, err := fmt.Sscanf(nodeID, "node-%d", &n); err != nil {
+		return false, nil
+	}
+	return !f.inactive[nodeID], nil
 }
 
 // opOf is node-N's default operator account.
@@ -132,6 +145,7 @@ func newTestFixture(t *testing.T) *testFixture {
 func (f *testFixture) initGenesis(t *testing.T, mutate func(*types.GenesisState)) {
 	t.Helper()
 	gs := types.DefaultGenesisState()
+	gs.Params.RangeBlocks = testRangeBlocks
 	if mutate != nil {
 		mutate(gs)
 	}

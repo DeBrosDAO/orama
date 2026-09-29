@@ -65,6 +65,15 @@ func QueryRange(ctx context.Context, client *node.Client, start, end int64) (typ
 	return resp.Range, true, nil
 }
 
+// QueryRangeBlocks reads Params.RangeBlocks, the width every archived range must have.
+func QueryRangeBlocks(ctx context.Context, client *node.Client) (int64, error) {
+	var resp types.QueryParamsResponse
+	if err := client.Query(ctx, "/orama.archive.v1.Query/Params", &types.QueryParamsRequest{}, &resp); err != nil {
+		return 0, fmt.Errorf("failed to read the archive params: %w", err)
+	}
+	return resp.Params.RangeBlocks, nil
+}
+
 // Submit signs msgs with the archiver key and waits for inclusion.
 func (c *NodeChain) Submit(ctx context.Context, msgs ...sdk.Msg) error {
 	_, err := c.Client.Submit(ctx, c.signer, msgs...)

@@ -20,6 +20,8 @@ import (
 	archivetypes "github.com/DeBrosOfficial/network/chain/x/archive/types"
 )
 
+const rangeBlocksUsage = "Blocks per archived range; 0 (the default) reads the chain's range_blocks, and any other value must equal it"
+
 const (
 	archiverInterval   = time.Minute
 	historyHTTPLimit   = 1 << 30
@@ -56,7 +58,7 @@ height.`,
 	}
 	cmd.Flags().StringVar(&rpc, "rpc", defaultRPC, "oramad CometBFT RPC")
 	cmd.Flags().StringVar(&home, "home", ".", "Archiver state directory")
-	cmd.Flags().Int64Var(&width, "range-blocks", archiver.DefaultRangeBlocks, "Blocks per archived range")
+	cmd.Flags().Int64Var(&width, "range-blocks", 0, rangeBlocksUsage)
 	cmd.Flags().DurationVar(&interval, "interval", archiverInterval, "Time between passes")
 	return cmd
 }
@@ -77,6 +79,10 @@ func runArchiver(ctx context.Context, rpc, home string, width int64, interval ti
 		return err
 	}
 	client, err := node.Dial(rpc)
+	if err != nil {
+		return err
+	}
+	width, err = resolveRangeBlocks(ctx, client, width)
 	if err != nil {
 		return err
 	}
@@ -106,6 +112,28 @@ func runArchiver(ctx context.Context, rpc, home string, width int64, interval ti
 	}
 }
 
+// resolveRangeBlocks returns the chain's range width. x/archive accepts only ranges of exactly that
+// width starting at k*width+1, so a flag that differs from it would make every attestation fail.
+func resolveRangeBlocks(ctx context.Context, client *node.Client, flag int64) (int64, error) {
+	onChain, err := archiver.QueryRangeBlocks(ctx, client)
+	if err != nil {
+		return 0, err
+	}
+	return pickRangeBlocks(flag, onChain)
+}
+
+func pickRangeBlocks(flag, onChain int64) (int64, error) {
+	switch {
+	case flag < 0:
+		return 0, errors.New("--range-blocks must not be negative")
+	case flag != 0 && flag != onChain:
+		return 0, fmt.Errorf("--range-blocks %d differs from the chain's range_blocks %d: x/archive accepts only ranges of the chain's width", flag, onChain)
+	case onChain < 1:
+		return 0, fmt.Errorf("the chain reports range_blocks %d", onChain)
+	}
+	return onChain, nil
+}
+
 func historyCmd() *cobra.Command {
 	history := &cobra.Command{Use: "history", Short: "Read archived chain history"}
 	var rpc, from, out string
@@ -126,7 +154,7 @@ does not verify writes nothing.`,
 	get.Flags().StringVar(&from, "from", "", "Archiver home directory or http(s) base [required]")
 	get.Flags().StringVar(&out, "out", "", "File for the block's protobuf bytes [required]")
 	get.Flags().Int64Var(&height, "height", 0, "Block height [required]")
-	get.Flags().Int64Var(&width, "range-blocks", archiver.DefaultRangeBlocks, "Blocks per archived range")
+	get.Flags().Int64Var(&width, "range-blocks", 0, rangeBlocksUsage)
 	for _, name := range []string{"from", "out", "height"} {
 		_ = get.MarkFlagRequired(name)
 	}
@@ -135,15 +163,19 @@ does not verify writes nothing.`,
 }
 
 func runHistoryGet(cmd *cobra.Command, rpc, from, out string, height, width int64) error {
-	if height < 1 || width < 1 {
-		return errors.New("--height and --range-blocks must be positive")
+	if height < 1 {
+		return errors.New("--height must be positive")
 	}
-	start := (height-1)/width*width + 1
-	end := start + width - 1
 	client, err := node.Dial(rpc)
 	if err != nil {
 		return err
 	}
+	width, err = resolveRangeBlocks(cmd.Context(), client, width)
+	if err != nil {
+		return err
+	}
+	start := (height-1)/width*width + 1
+	end := start + width - 1
 	rec, found, err := archiver.QueryRange(cmd.Context(), client, start, end)
 	if err != nil {
 		return err

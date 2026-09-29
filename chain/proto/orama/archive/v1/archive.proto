@@ -22,6 +22,11 @@ message Params {
   // operator may attest one tuple per range, so a range with this many candidates has this many
   // distinct operators disagreeing with each other.
   uint32 max_candidates_per_range = 3;
+  // range_blocks is the width of every archived range. A range is canonical when it starts at
+  // k*range_blocks+1 and ends at start+range_blocks-1, and only canonical ranges are accepted,
+  // so ranges never overlap and no operator can squat an arbitrary span of heights. Every
+  // archiver of a chain reads this value; it is fixed at genesis.
+  int64 range_blocks = 4;
 }
 
 // Candidate is one tuple attested for a range that no tuple has won yet: the bundle CID, the
@@ -40,6 +45,10 @@ message Candidate {
   repeated string archivers = 8;
   // operators[i] is the x/nodes operator of archivers[i]. Each operator counts once.
   repeated string operators = 9;
+  // node_ids[i] is the x/nodes node archivers[i] signed for. A candidate none of whose nodes
+  // still has an active ARCHIVER role is freed when the next attestation of the range arrives,
+  // so its slot cannot be held by operators that have left.
+  repeated string node_ids = 10;
 }
 
 // RangeRecord is one height range in the archive registry. Attestations are tallied per tuple

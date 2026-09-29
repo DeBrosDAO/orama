@@ -245,8 +245,10 @@ adds one item per challenge.
 `ARCHIVE` deals hold it.
 - Detect: `oramad query archive last-archived-height` (the contiguous archived prefix; one unarchived
   range stalls it), `range <start> <end>`, `retain-height` and `params`.
-- Archivers must use the same `--range-blocks` (default 1000) or ranges overlap and are refused. An
-  archiver that finds a root conflict writes `<home>/conflicts/<start>-<end>.json`.
+- x/archive accepts only canonical ranges of the `range_blocks` param (1000 at launch): start at a
+  multiple of it plus 1, exactly that long. The archiver reads the width from the chain and refuses a
+  `--range-blocks` that differs. An archiver that finds a root conflict writes
+  `<home>/conflicts/<start>-<end>.json`.
 - Verify a bundle: `orama-global history get --from <archiver home or URL> --height H --out F --rpc ...`
   checks the file hash, each block against its header, and the root against `x/archive`.
 - The retain height never rises above the last archived height, but **nothing feeds it into a node's

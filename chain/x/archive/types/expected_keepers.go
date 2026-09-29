@@ -9,6 +9,9 @@ import (
 // its hot key, and an error otherwise.
 type NodesKeeper interface {
 	ArchiverOperator(ctx context.Context, nodeID, signer string) (string, error)
+	// ArchiverActive reports whether nodeID is active with an ARCHIVER role bond. A node that does
+	// not exist is not active. It is how a candidate tuple whose attesters have all left is found.
+	ArchiverActive(ctx context.Context, nodeID string) (bool, error)
 }
 
 // StorageKeeper is x/archive's view of x/storage. ArchiveDealActive reports whether dealID is an

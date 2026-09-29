@@ -297,6 +297,7 @@ contract may hold ORAMA and issue a public IOU for it, and the genesis token wra
 | `retention_window_blocks` | `201600` | plan D22: validators keep 14 days of blocks (6-second blocks) |
 | `max_piece_bytes` | `4294967296` | track-c C14 (structure only): 4 GiB caps the bundle file an attestation commits to; G1 launch default |
 | `max_candidates_per_range` | `4` | track-c C14 (structure only): bounds the conflicting tuples one undecided range keeps, an honest one, wrong ones and a fork; G1 launch default |
+| `range_blocks` | `1000` | track-c C14 (structure only): every archived range is exactly this many blocks and starts at a multiple of it plus 1, so ranges never overlap; G1 launch default |
 
 `houses`
 
@@ -1508,9 +1509,12 @@ evict its slot, the delegate restores it, and the new provider proves it.
 
 ### History archiver (`orama-global archiver`, `orama-global history get`)
 
-The archiver reads each finalised range of `--range-blocks` (default 1000)
-blocks over RPC. Ranges start at 1, 1+w, and so on. x/archive refuses
-overlapping ranges, so every archiver of a chain must use the same width.
+The archiver reads each finalised range of the chain's `archive` param `range_blocks` (1000 at
+launch, locked in G1) blocks over RPC. Ranges start at 1, 1+w, and so on. x/archive accepts only these
+canonical ranges (`ErrNotCanonicalRange`): a range must start at k*w+1 and be exactly w blocks long, so
+ranges never overlap and one operator cannot squat an arbitrary span or a slice of a neighbouring
+range. The archiver reads w from the chain at start; `--range-blocks` defaults to 0 (use the chain's
+value) and any other value must equal it, or the archiver refuses to start.
 
 For each range, it writes `<home>/bundles/<start>-<end>.orbh`. This is not a
 CAR file. The layout is magic `ORBH`, version 1, the start height and the
@@ -1536,8 +1540,10 @@ own tuple and attests it: the tuple that three operators agree on wins. Only a r
 has already won cannot be attested; the archiver writes `<home>/conflicts/<start>-<end>.json` with both
 sets of values, reports `ErrRootConflict` once, and moves on to the next range. An archiver whose own
 earlier attestation differs from what it reads now is a conflict too, and so is a range another tuple wins
-after this archiver attested it (it stops following that range). A range of a different width that
-overlaps is refused by x/archive on every attempt.
+after this archiver attested it (it stops following that range). When another key of the same operator
+already attested a different tuple, the chain refuses this archiver's attestation for as long as that
+stands (`ErrConflictingAttestation`, one tuple per operator per range): the archiver records the
+conflict once the same way, moves its cursor past the range and does not retry it.
 
 `history get --height H --from <home or http base>` loads the range's
 bundle. It checks the file hash, each block's bytes against its header hash,
@@ -1596,9 +1602,28 @@ only the winning tuple (a different one is refused with `ErrWrongRoot`, `ErrWron
 `ErrWrongPiece`, naming the field that differs) and more operators attesting it as extra evidence up to
 64. An operator counts toward one tuple per range: a second attestation of a different tuple by the same
 operator, or by another of its nodes, is refused (`ErrConflictingAttestation`), so an operator cannot
-fill the candidate set. Residual: a coalition of as many distinct bonded operators as the candidate cap
-can still keep an honest tuple out of an undecided range if they attest first; nothing slashes them (the
-root is checkable by anyone against the chain's own block hashes). `MsgAttachReplicas` and
+fill the candidate set. A candidate none of whose attesting nodes (`Candidate.node_ids`, parallel to its
+archivers) still has an active ARCHIVER role bond (lost the role, jailed, retired or gone) is freed when
+the next attestation of the range arrives: x/archive reads the nodes at that moment, so nothing runs
+per block, and the operators of a freed candidate may attest another tuple. Residual: a coalition of as
+many distinct bonded operators as the candidate cap can still keep an honest tuple out of an undecided
+range while they stay bonded if they attest first.
+
+**Trust model of the root, and why it is not checked on chain.** x/archive does not verify the
+attested block-hash Merkle root; what makes a root trustworthy is that three distinct bonded
+operators computed the same one from their own node's blocks, and that anyone can recompute it
+(`orama-global history get`, `VerifyBundle`) from a bundle and the chain's block hashes. The app
+cannot check it itself, for three reasons. The app's state holds no block hashes: `BaseApp` builds
+the header in the context from the fields `FinalizeBlock` carries, which lack the ones the CometBFT
+block hash commits to (the last commit hash, the data hash, the evidence hash and others), so the
+headers `x/staking` keeps in `HistoricalInfo` cannot be hashed back into block hashes; the block
+hash of the block being executed is available in `HeaderInfo` and is not stored anywhere. Only the
+last `historical_entries` (10000) of them exist in any case, a fraction of the 14-day window. A
+per-block hash index written by the app would be a new consensus-state write on every block, and
+verifying an attestation would read and hash a whole range (1000 hashes at launch) inside one
+transaction. It is not built. Nothing slashes or jails an operator whose tuple loses a decided
+range: C14 defines no penalty for it, so none is invented here; the loser is only counted toward a
+tuple that did not win, and its archiver records the conflict locally. `MsgAttachReplicas` and
 `MsgCreateArchiveDeal` need a decided range (`ErrQuorumPending`). Genesis export writes `decided` and the
 candidates, refuses state that breaks these rules (a decided range with candidates or under three
 operators, an undecided one with an operator in two candidates or over the cap), and `ExportGenesis` runs
@@ -1620,7 +1645,7 @@ After that `archived` is permanent. `MsgAttachReplicas` does not require the dea
 made by `MsgCreateArchiveDeal`: the scheduled ARCHIVE protocol deals, which carry a synthetic
 payload, can still be attached, and the deal's stored bytes are not checked against the bundle, so the
 attesting operators and the winning piece commitment are what vouch for it. Nothing slashes a wrong root
-yet; the root is checkable by anyone against the chain's own block hashes.
+(C14 defines no penalty); the root is checkable by anyone against the chain's own block hashes.
 
 **Retention.** The app enforces C14's retain height in `OramaApp.Commit`. `BaseApp` returns the height
 its own rules give (`min-retain-blocks`, the evidence age and the snapshot interval; 0, prune

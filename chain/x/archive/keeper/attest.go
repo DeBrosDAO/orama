@@ -22,6 +22,12 @@ import (
 // fields become the range's, and the other candidates are dropped. A decided range accepts only
 // further attestations of the winning tuple.
 //
+// The range must be canonical (Params.RangeBlocks): it starts at k*range_blocks+1 and is
+// range_blocks long, so ranges never overlap and one operator cannot hold an arbitrary span. A
+// candidate none of whose attesting nodes still has an active ARCHIVER role is freed when the next
+// attestation of the range arrives (the nodes are read at that moment, not by a hook), so
+// departed operators cannot hold the candidate slots of an undecided range.
+//
 // The signer must be the hot key of msg.NodeId, an x/nodes node with an active ARCHIVER role bond.
 // Each operator counts once: a repeat by the same key or by another node of the same operator for
 // the same tuple is accepted and changes nothing, so an operator's second archiver or a rotated key
@@ -34,15 +40,18 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 	if err != nil {
 		return false, 0, err
 	}
-	if err := k.requirePieceWithinCap(ctx, msg.PieceBytes); err != nil {
-		return false, 0, err
-	}
-	if err := requireFinalized(ctx, msg.EndHeight); err != nil {
-		return false, 0, err
-	}
 	params, err := k.Params.Get(ctx)
 	if err != nil {
 		return false, 0, fmt.Errorf("failed to get archive params: %w", err)
+	}
+	if err := types.CheckCanonicalRange(msg.StartHeight, msg.EndHeight, params.RangeBlocks); err != nil {
+		return false, 0, err
+	}
+	if msg.PieceBytes > params.MaxPieceBytes {
+		return false, 0, fmt.Errorf("%w: %d bytes, max is %d", types.ErrPieceTooLarge, msg.PieceBytes, params.MaxPieceBytes)
+	}
+	if err := requireFinalized(ctx, msg.EndHeight); err != nil {
+		return false, 0, err
 	}
 	key := collections.Join(msg.StartHeight, msg.EndHeight)
 	rec, err := k.Ranges.Get(ctx, key)
@@ -63,15 +72,15 @@ func (k Keeper) Attest(ctx sdk.Context, msg *types.MsgAttest) (bool, uint32, err
 		return false, 0, fmt.Errorf("archiver %s: %w", canonical, err)
 	}
 	if fresh {
-		if err := k.rejectOverlap(ctx, msg.StartHeight, msg.EndHeight); err != nil {
-			return false, 0, err
-		}
 		rec = types.RangeRecord{StartHeight: msg.StartHeight, EndHeight: msg.EndHeight}
 	}
 	if rec.Decided {
 		return k.attestDecided(ctx, rec, tuple, canonical, operator)
 	}
-	rec, attesters, err := attestCandidate(rec, tuple, canonical, operator, params.MaxCandidatesPerRange)
+	if rec.Candidates, err = k.liveCandidates(ctx, rec.Candidates); err != nil {
+		return false, 0, err
+	}
+	rec, attesters, err := attestCandidate(rec, tuple, canonical, msg.NodeId, operator, params.MaxCandidatesPerRange)
 	if err != nil {
 		return false, 0, err
 	}
@@ -137,7 +146,7 @@ func (k Keeper) attestDecided(ctx sdk.Context, rec types.RangeRecord, tuple type
 // has room, and decides the range when the candidate reaches the operator quorum. It returns the
 // number of operators the tuple now has, or 0 when the operator had already attested it and the
 // record is unchanged.
-func attestCandidate(rec types.RangeRecord, tuple types.Tuple, archiver, operator string, maxCandidates uint32) (types.RangeRecord, uint32, error) {
+func attestCandidate(rec types.RangeRecord, tuple types.Tuple, archiver, nodeID, operator string, maxCandidates uint32) (types.RangeRecord, uint32, error) {
 	index := -1
 	for i, c := range rec.Candidates {
 		if slices.Contains(c.Operators, operator) {
@@ -162,6 +171,7 @@ func attestCandidate(rec types.RangeRecord, tuple types.Tuple, archiver, operato
 	c := candidates[index]
 	c.Archivers = append(slices.Clone(c.Archivers), archiver)
 	c.Operators = append(slices.Clone(c.Operators), operator)
+	c.NodeIds = append(slices.Clone(c.NodeIds), nodeID)
 	candidates[index] = c
 	if len(c.Operators) < types.MinArchiverAttestations {
 		rec.Candidates = candidates
@@ -185,16 +195,30 @@ func candidateOf(rec types.RangeRecord, tuple types.Tuple) types.Candidate {
 	return types.Candidate{}
 }
 
-// requirePieceWithinCap refuses a bundle file larger than Params.MaxPieceBytes.
-func (k Keeper) requirePieceWithinCap(ctx sdk.Context, pieceBytes uint64) error {
-	params, err := k.Params.Get(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get archive params: %w", err)
+// liveCandidates returns the candidates of an undecided range that still have an attester whose
+// node holds an active ARCHIVER role. A candidate every one of whose attesting nodes has lost the
+// role, been jailed or retired, or no longer exists is dropped: it can never gather the operators it
+// needs from its own side, and it must not keep a slot (Params.MaxCandidatesPerRange) or hold its
+// operators to a tuple they can no longer stand behind.
+func (k Keeper) liveCandidates(ctx sdk.Context, candidates []types.Candidate) ([]types.Candidate, error) {
+	live := make([]types.Candidate, 0, len(candidates))
+	for _, c := range candidates {
+		alive := false
+		for _, nodeID := range c.NodeIds {
+			active, err := k.nodes.ArchiverActive(ctx, nodeID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read archiver node %s: %w", nodeID, err)
+			}
+			if active {
+				alive = true
+				break
+			}
+		}
+		if alive {
+			live = append(live, c)
+		}
 	}
-	if pieceBytes > params.MaxPieceBytes {
-		return fmt.Errorf("%w: %d bytes, max is %d", types.ErrPieceTooLarge, pieceBytes, params.MaxPieceBytes)
-	}
-	return nil
+	return live, nil
 }
 
 // AttachReplicas records deal ids for an attested range. The signer must be
@@ -337,21 +361,6 @@ func requireFinalized(ctx sdk.Context, end int64) error {
 		return fmt.Errorf("%w: range ends at %d, current height is %d", types.ErrNotFinalized, end, tip)
 	}
 	return nil
-}
-
-func (k Keeper) rejectOverlap(ctx sdk.Context, start, end int64) error {
-	var overlap error
-	err := k.Ranges.Walk(ctx, nil, func(_ collections.Pair[int64, int64], rec types.RangeRecord) (bool, error) {
-		if start <= rec.EndHeight && rec.StartHeight <= end {
-			overlap = fmt.Errorf("%w: %d-%d overlaps %d-%d", types.ErrOverlap, start, end, rec.StartHeight, rec.EndHeight)
-			return true, nil
-		}
-		return false, nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to walk ranges: %w", err)
-	}
-	return overlap
 }
 
 func mergeDealIDs(existing, add []string) ([]string, bool, error) {

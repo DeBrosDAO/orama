@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -17,10 +18,10 @@ import (
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
-// DefaultRangeBlocks is the width of one archived range. x/archive refuses
-// overlapping ranges, so every archiver of a chain must use the same width
-// and the ranges start at 1, 1+w, 1+2w, and so on.
-const DefaultRangeBlocks = 1000
+// DefaultRangeBlocks is the genesis default of x/archive's range_blocks. x/archive accepts only
+// canonical ranges (start at k*range_blocks+1, range_blocks long), so every archiver of a chain
+// must use the chain's own width: the archiver command reads it from the chain (QueryRangeBlocks).
+const DefaultRangeBlocks = types.DefaultRangeBlocks
 
 // ErrRootConflict is a range that x/archive holds a different tuple for than the blocks this node
 // reads: it was won by another tuple, or this archiver's own earlier attestation differs from what
@@ -255,11 +256,37 @@ func (r *Runner) archiveRange(ctx context.Context, start, end int64) error {
 			BundleCid: local.BundleCid, BundleHash: local.BundleHash, MerkleRoot: local.MerkleRoot,
 			PieceRoot: local.Piece.Root, RealLeafCount: local.Piece.RealLeafCount, PaddedLeafCount: local.Piece.PaddedLeafCount, PieceBytes: local.Piece.PieceBytes,
 		})
+		if isConflictingAttestation(err) {
+			// Another key of this operator already attested a different tuple for the range, and
+			// x/archive counts an operator toward one tuple per range: this archiver can never
+			// attest its own. Record the two once and move on instead of retrying every pass.
+			return r.recordConflict(start, end, local, otherTuple(rec, local))
+		}
 		if err != nil {
 			return err
 		}
 	}
 	return r.track(start, end)
+}
+
+// isConflictingAttestation reports whether err is the chain refusing an attestation because the
+// operator already attested another tuple of the range. The chain reports it as text in the
+// transaction log, so the sentinel's message is what identifies it.
+func isConflictingAttestation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), types.ErrConflictingAttestation.Error())
+}
+
+// otherTuple is the first tuple of rec that is not local, or an empty tuple when rec holds none.
+func otherTuple(rec types.RangeRecord, local Tuple) Tuple {
+	if rec.Decided && !rec.Winner().Equal(local) {
+		return rec.Winner()
+	}
+	for _, c := range rec.Candidates {
+		if !c.Tuple().Equal(local) {
+			return c.Tuple()
+		}
+	}
+	return Tuple{}
 }
 
 func writeAtomic(path string, body []byte, mode os.FileMode) error {

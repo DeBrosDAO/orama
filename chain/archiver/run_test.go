@@ -683,3 +683,38 @@ func TestRunner_aRangeWonByAnotherTupleStopsBeingFollowed(t *testing.T) {
 	_, err = r.Step(context.Background())
 	require.NoError(t, err, "the conflict is reported once")
 }
+
+// Another key of this operator already attested a different tuple: x/archive counts an operator
+// toward one tuple per range and refuses this archiver's attestation on every pass. The archiver
+// records the conflict once, moves its cursor past the range and stops retrying it.
+func TestRunner_aConflictingAttestationOfAnotherKeyOfTheOperatorIsRecordedOnce(t *testing.T) {
+	chain := newFakeChain(t, 12)
+	other := types.NewCandidate(types.Tuple{
+		BundleCid: "bafyother", BundleHash: bytes.Repeat([]byte{1}, 32), MerkleRoot: bytes.Repeat([]byte{2}, 32),
+		Piece: types.Piece{Root: bytes.Repeat([]byte{3}, 32), RealLeafCount: 1, PaddedLeafCount: 1, PieceBytes: 1024},
+	})
+	other.Archivers, other.Operators = []string{"orama1otherkey"}, []string{"orama1operator"}
+	chain.ranges[[2]int64{1, 10}] = types.RangeRecord{StartHeight: 1, EndHeight: 10, Candidates: []types.Candidate{other}}
+	chain.fail = fmt.Errorf("rpc error: %w: operator orama1operator, range 1-10", types.ErrConflictingAttestation)
+	dir := t.TempDir()
+	r, err := NewRunner(chain, noUpload{}, "orama1archiver", "node-1", dir, 10)
+	require.NoError(t, err)
+
+	_, err = r.Step(context.Background())
+	require.ErrorIs(t, err, ErrRootConflict)
+	_, statErr := os.Stat(ConflictPath(dir, 1, 10))
+	require.NoError(t, statErr, "the conflict is recorded")
+	cursor, err := LoadCursor(r.cursorPath())
+	require.NoError(t, err)
+	require.Equal(t, int64(10), cursor, "the range is not retried")
+
+	_, err = r.Step(context.Background())
+	require.NoError(t, err, "the conflict is reported once")
+	require.Zero(t, chain.submits)
+}
+
+func TestIsConflictingAttestation(t *testing.T) {
+	require.False(t, isConflictingAttestation(nil))
+	require.False(t, isConflictingAttestation(errors.New("not included")))
+	require.True(t, isConflictingAttestation(fmt.Errorf("deliver tx: %s", types.ErrConflictingAttestation.Error())))
+}

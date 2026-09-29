@@ -102,7 +102,7 @@ func TestParams_maxPieceBytesIsBounded(t *testing.T) {
 }
 
 func TestGenesis_aRangeMustCarryAValidPieceWithinTheCap(t *testing.T) {
-	gs := types.DefaultGenesisState()
+	gs := genesisWidth(10)
 	rec := archivedRecord(1, 10)
 	gs.Ranges, gs.LastArchivedHeight = []types.RangeRecord{rec}, 10
 	require.NoError(t, gs.Validate())

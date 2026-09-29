@@ -114,6 +114,14 @@ func (r RangeRecord) validateUndecided() error {
 		if err := validateAttesters(fmt.Sprintf("%s candidate %d", where, i), c.Archivers, c.Operators, 1, MinArchiverAttestations-1); err != nil {
 			return err
 		}
+		if len(c.NodeIds) != len(c.Archivers) {
+			return fmt.Errorf("%s candidate %d has %d archivers but %d node ids", where, i, len(c.Archivers), len(c.NodeIds))
+		}
+		for _, id := range c.NodeIds {
+			if err := ValidateNodeID(id); err != nil {
+				return fmt.Errorf("%s candidate %d: %w", where, i, err)
+			}
+		}
 		for _, op := range c.Operators {
 			if _, ok := seenOperators[op]; ok {
 				return fmt.Errorf("%s: operator %s attested two candidate tuples", where, op)
@@ -177,6 +185,9 @@ func (gs GenesisState) Validate() error {
 	dealOwner := map[string]int64{}
 	for i, r := range ordered {
 		if err := r.Validate(); err != nil {
+			return err
+		}
+		if err := CheckCanonicalRange(r.StartHeight, r.EndHeight, gs.Params.RangeBlocks); err != nil {
 			return err
 		}
 		if r.PieceBytes > gs.Params.MaxPieceBytes {

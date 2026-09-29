@@ -12,17 +12,24 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/archive/types"
 )
 
+// genesisWidth is an empty genesis whose ranges are width blocks long.
+func genesisWidth(width int64) *types.GenesisState {
+	gs := types.DefaultGenesisState()
+	gs.Params.RangeBlocks = width
+	return gs
+}
+
 func TestDefaultGenesis_valid(t *testing.T) {
 	require.NoError(t, types.DefaultGenesisState().Validate())
 }
 
 func TestGenesis_contiguousPrefixIgnoresGap(t *testing.T) {
-	gs := types.DefaultGenesisState()
+	gs := genesisWidth(10)
 	gs.Ranges = []types.RangeRecord{
 		archivedRecord(1, 10),
-		archivedRecord(12, 20),
+		archivedRecord(21, 30),
 	}
-	gs.LastArchivedHeight = 20
+	gs.LastArchivedHeight = 30
 	require.Error(t, gs.Validate())
 
 	gs.LastArchivedHeight = 10
@@ -33,14 +40,16 @@ func TestGenesis_contiguousPrefixIgnoresGap(t *testing.T) {
 func TestGenesis_archivedWithoutQuorum(t *testing.T) {
 	rec := archivedRecord(1, 10)
 	rec.DealIds = rec.DealIds[:2]
-	gs := types.DefaultGenesisState()
+	gs := genesisWidth(10)
 	gs.Ranges = []types.RangeRecord{rec}
 	gs.LastArchivedHeight = 10
 	require.Error(t, gs.Validate())
 }
 
-func TestGenesis_overlap(t *testing.T) {
-	gs := types.DefaultGenesisState()
+// A range that is not one of the fixed ranges is refused, which also makes overlapping ranges
+// impossible.
+func TestGenesis_aMisalignedOrOverlappingRangeIsRefused(t *testing.T) {
+	gs := genesisWidth(10)
 	gs.Ranges = []types.RangeRecord{
 		archivedRecord(1, 10),
 		archivedRecord(10, 20),
@@ -52,7 +61,7 @@ func TestGenesis_overlap(t *testing.T) {
 func TestGenesis_quorumNotMarkedArchived(t *testing.T) {
 	rec := archivedRecord(1, 10)
 	rec.Archived = false
-	gs := types.DefaultGenesisState()
+	gs := genesisWidth(10)
 	gs.Ranges = []types.RangeRecord{rec}
 	require.Error(t, gs.Validate())
 }
@@ -91,6 +100,7 @@ func undecidedRecord(start, end int64) types.RangeRecord {
 		for _, n := range archivers {
 			c.Archivers = append(c.Archivers, addr(n))
 			c.Operators = append(c.Operators, addr(n+100))
+			c.NodeIds = append(c.NodeIds, fmt.Sprintf("node-%d", n))
 		}
 		return c
 	}
@@ -101,7 +111,7 @@ func undecidedRecord(start, end int64) types.RangeRecord {
 }
 
 func TestGenesis_anUndecidedRangeKeepsItsCandidates(t *testing.T) {
-	gs := types.DefaultGenesisState()
+	gs := genesisWidth(10)
 	gs.Ranges = []types.RangeRecord{undecidedRecord(1, 10)}
 	require.NoError(t, gs.Validate())
 	require.Equal(t, int64(0), types.ContiguousArchivedHeight(gs.Ranges), "an undecided range archives nothing")
@@ -109,7 +119,7 @@ func TestGenesis_anUndecidedRangeKeepsItsCandidates(t *testing.T) {
 
 func TestGenesis_undecidedRangesAreValidatedStrictly(t *testing.T) {
 	validate := func(rec types.RangeRecord, mutate func(*types.GenesisState)) error {
-		gs := types.DefaultGenesisState()
+		gs := genesisWidth(10)
 		gs.Ranges = []types.RangeRecord{rec}
 		if mutate != nil {
 			mutate(gs)
@@ -150,7 +160,7 @@ func TestGenesis_undecidedRangesAreValidatedStrictly(t *testing.T) {
 func TestGenesis_aDecidedRangeKeepsNoCandidates(t *testing.T) {
 	rec := archivedRecord(1, 10)
 	rec.Candidates = undecidedRecord(1, 10).Candidates
-	gs := types.DefaultGenesisState()
+	gs := genesisWidth(10)
 	gs.Ranges, gs.LastArchivedHeight = []types.RangeRecord{rec}, 10
 	require.ErrorContains(t, gs.Validate(), "keeps 2 candidates")
 
@@ -183,7 +193,7 @@ func decidedCandidate(t *testing.T) types.Candidate {
 }
 
 func TestGenesis_operatorsPairWithArchiversAndAreDistinct(t *testing.T) {
-	gs := types.DefaultGenesisState()
+	gs := genesisWidth(100)
 	rec := archivedRecord(1, 100)
 	gs.LastArchivedHeight = 100
 	gs.Ranges = []types.RangeRecord{rec}
@@ -209,4 +219,45 @@ func TestGenesis_operatorsPairWithArchiversAndAreDistinct(t *testing.T) {
 	gs.Ranges = []types.RangeRecord{rec, shared}
 	gs.LastArchivedHeight = 200
 	require.ErrorContains(t, gs.Validate(), "backs both")
+}
+
+func TestGenesis_aRangeThatIsNotCanonicalIsRefused(t *testing.T) {
+	for name, r := range map[string][2]int64{
+		"wider than the width":    {1, 20},
+		"shifted by one":          {2, 11},
+		"narrower than the width": {1, 5},
+	} {
+		gs := genesisWidth(10)
+		gs.Ranges = []types.RangeRecord{archivedRecord(r[0], r[1])}
+		gs.LastArchivedHeight = types.ContiguousArchivedHeight(gs.Ranges)
+		require.ErrorIs(t, gs.Validate(), types.ErrNotCanonicalRange, name)
+	}
+}
+
+func TestParams_rangeBlocksMustBeWithinBounds(t *testing.T) {
+	require.NoError(t, types.DefaultParams().Validate())
+	require.Equal(t, types.DefaultRangeBlocks, types.DefaultParams().RangeBlocks)
+	for _, width := range []int64{0, -1, types.MaxRangeBlocksLimit + 1} {
+		p := types.DefaultParams()
+		p.RangeBlocks = width
+		require.Error(t, p.Validate(), "range_blocks %d", width)
+	}
+	for _, width := range []int64{1, types.MaxRangeBlocksLimit} {
+		p := types.DefaultParams()
+		p.RangeBlocks = width
+		require.NoError(t, p.Validate(), "range_blocks %d", width)
+	}
+}
+
+func TestGenesis_candidateNodeIdsPairWithArchivers(t *testing.T) {
+	gs := genesisWidth(10)
+	rec := undecidedRecord(1, 10)
+	rec.Candidates[0].NodeIds = rec.Candidates[0].NodeIds[:1]
+	gs.Ranges = []types.RangeRecord{rec}
+	require.ErrorContains(t, gs.Validate(), "node ids")
+
+	rec = undecidedRecord(1, 10)
+	rec.Candidates[0].NodeIds[0] = ""
+	gs.Ranges = []types.RangeRecord{rec}
+	require.Error(t, gs.Validate())
 }

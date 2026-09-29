@@ -21,6 +21,9 @@ var (
 	ErrUnknownRange = errors.New("unknown height range")
 	// ErrOverlap is returned when a new range shares a height with an existing one.
 	ErrOverlap = errors.New("height range overlaps an existing range")
+	// ErrNotCanonicalRange is returned when a range is not one of the fixed ranges of
+	// Params.RangeBlocks heights.
+	ErrNotCanonicalRange = errors.New("height range is not a canonical range")
 	// ErrNotFinalized is returned when a range includes the block being executed
 	// or a later one. Only already-committed heights can be archived.
 	ErrNotFinalized = errors.New("height range is not finalized")

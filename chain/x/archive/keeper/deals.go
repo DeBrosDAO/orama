@@ -53,9 +53,6 @@ func (k Keeper) CreateArchiveDeal(ctx sdk.Context, msg *types.MsgCreateArchiveDe
 	if !rec.PieceOf().Equal(msg.PieceOf()) {
 		return 0, false, 0, fmt.Errorf("%w: range %d-%d is pinned to a different piece", types.ErrWrongPiece, msg.StartHeight, msg.EndHeight)
 	}
-	if err := k.requirePieceWithinCap(ctx, rec.PieceBytes); err != nil {
-		return 0, false, 0, err
-	}
 	live, err := k.dropEndedDeals(ctx, rec.DealIds)
 	if err != nil {
 		return 0, false, 0, err

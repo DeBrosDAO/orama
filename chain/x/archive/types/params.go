@@ -10,6 +10,7 @@ func DefaultParams() Params {
 		RetentionWindowBlocks: DefaultBlocksIn14Days,
 		MaxPieceBytes:         DefaultMaxPieceBytes,
 		MaxCandidatesPerRange: DefaultMaxCandidatesPerRange,
+		RangeBlocks:           DefaultRangeBlocks,
 	}
 }
 
@@ -26,6 +27,22 @@ func (p Params) Validate() error {
 	}
 	if p.MaxCandidatesPerRange == 0 || p.MaxCandidatesPerRange > MaxCandidatesLimit {
 		return fmt.Errorf("max_candidates_per_range must be in [1, %d], got %d", MaxCandidatesLimit, p.MaxCandidatesPerRange)
+	}
+	if p.RangeBlocks < 1 || p.RangeBlocks > MaxRangeBlocksLimit {
+		return fmt.Errorf("range_blocks must be in [1, %d], got %d", MaxRangeBlocksLimit, p.RangeBlocks)
+	}
+	return nil
+}
+
+// CheckCanonicalRange refuses a range that is not one of the fixed ranges of width blocks: it must
+// start at k*width+1 and end at start+width-1. Canonical ranges never overlap, so one operator
+// cannot hold an arbitrary span of heights or a slice of another range.
+func CheckCanonicalRange(start, end, width int64) error {
+	if err := ValidateHeights(start, end); err != nil {
+		return err
+	}
+	if (start-1)%width != 0 || end != start+width-1 {
+		return fmt.Errorf("%w: %d-%d, ranges are %d blocks and start at a multiple of %d plus 1", ErrNotCanonicalRange, start, end, width, width)
 	}
 	return nil
 }

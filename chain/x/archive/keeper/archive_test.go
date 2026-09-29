@@ -20,7 +20,7 @@ func TestAttest_archivedOnlyAfterThreeArchiversAndThreeDeals(t *testing.T) {
 
 	const (
 		start = int64(1)
-		end   = int64(100)
+		end   = int64(50)
 		cid   = "bafyarchivecid"
 	)
 	bundle := digest(0x11)
@@ -247,7 +247,7 @@ func TestAttachReplicas_unknownRangeAndFutureHeightRefused(t *testing.T) {
 	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
 		Archiver:    acc(1).String(),
 		NodeId:      nodeOf(1),
-		StartHeight: 1,
+		StartHeight: f.Ctx.BlockHeight() - testRangeBlocks + 1,
 		EndHeight:   f.Ctx.BlockHeight(),
 		BundleCid:   "bafyarchivecid",
 		BundleHash:  digest(1),
@@ -256,74 +256,97 @@ func TestAttachReplicas_unknownRangeAndFutureHeightRefused(t *testing.T) {
 	require.ErrorIs(t, err, types.ErrNotFinalized)
 }
 
-func TestAttest_overlapRefused(t *testing.T) {
+// Only the fixed ranges of Params.RangeBlocks are accepted, so an operator cannot squat an arbitrary
+// span or a slice of a neighbouring range, and two accepted ranges can never overlap.
+func TestAttest_onlyCanonicalRangesAreAccepted(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	f.attest(t, 1, 1, 100, "bafyarchivecid", digest(1), digest(2))
+	attest := func(start, end int64) error {
+		_, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
+			Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: start, EndHeight: end,
+			BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
+		}))
+		return err
+	}
+	for name, r := range map[string][2]int64{
+		"twice as wide":            {1, 100},
+		"shifted by one":           {2, 51},
+		"squatting a slice":        {25, 74},
+		"narrower than the width":  {1, 25},
+		"a single height":          {51, 51},
+		"overlaps its predecessor": {50, 99},
+	} {
+		require.ErrorIs(t, attest(r[0], r[1]), types.ErrNotCanonicalRange, name)
+	}
+	require.NoError(t, attest(1, 50))
+	require.NoError(t, attest(51, 100))
+	require.NoError(t, attest(1_001, 1_050), "a range far ahead is canonical too")
+	_, err := f.Keeper.GetRange(f.Ctx, 25, 74)
+	require.ErrorIs(t, err, types.ErrUnknownRange)
+}
 
+func TestAttest_rangeWidthFollowsTheGenesisParam(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, func(gs *types.GenesisState) { gs.Params.RangeBlocks = 10 })
+	f.attest(t, 1, 11, 20, "bafyarchivecid", digest(1), digest(2))
 	_, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
-		Archiver:    acc(2).String(),
-		NodeId:      nodeOf(2),
-		StartHeight: 100,
-		EndHeight:   150,
-		BundleCid:   "bafyarchivecid",
-		BundleHash:  digest(1),
-		MerkleRoot:  digest(2),
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(2),
 	}))
-	require.ErrorIs(t, err, types.ErrOverlap)
+	require.ErrorIs(t, err, types.ErrNotCanonicalRange)
 }
 
 func TestLastArchivedHeight_gapDoesNotJump(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 
-	archiveRange(t, f, 1, 100)
+	archiveRange(t, f, 1, 50)
 	last, err := f.Keeper.LastArchivedHeight.Get(f.Ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(100), last)
+	require.Equal(t, int64(50), last)
 
-	archiveRange(t, f, 201, 300)
+	archiveRange(t, f, 101, 150)
 	last, err = f.Keeper.LastArchivedHeight.Get(f.Ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(100), last)
+	require.Equal(t, int64(50), last)
 
-	archiveRange(t, f, 101, 200)
+	archiveRange(t, f, 51, 100)
 	last, err = f.Keeper.LastArchivedHeight.Get(f.Ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(300), last)
+	require.Equal(t, int64(150), last)
 }
 
 func TestRetainHeight_stallForAYearStaysAtLastArchived(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	archiveRange(t, f, 1, 100)
+	archiveRange(t, f, 1, 50)
 
 	blocks := types.DefaultBlocksIn14Days
 	year := blocks * 365 / 14
-	tip := int64(100) + year
+	tip := int64(50) + year
 	ctx := f.Ctx.WithBlockHeight(tip)
 
 	retain, err := f.Keeper.RetainHeight(ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(100), retain)
-	require.Equal(t, retain, archive.RetainHeight(tip, blocks, 100))
-	require.LessOrEqual(t, retain, int64(100))
+	require.Equal(t, int64(50), retain)
+	require.Equal(t, retain, archive.RetainHeight(tip, blocks, 50))
+	require.LessOrEqual(t, retain, int64(50))
 
 	naive := tip - blocks
-	require.Greater(t, naive, int64(100), "a year ahead, the 14-day window is far past the archive")
+	require.Greater(t, naive, int64(50), "a year ahead, the 14-day window is far past the archive")
 
 	// Pruning the last archived block, or anything past it, is refused.
-	for _, height := range []int64{100, 101, naive - 1, tip - 1} {
+	for _, height := range []int64{50, 51, naive - 1, tip - 1} {
 		ok, err := f.Keeper.PruneAllowed(ctx, height)
 		require.NoError(t, err)
 		require.False(t, ok, "height %d", height)
 	}
-	ok, err := f.Keeper.PruneAllowed(ctx, 99)
+	ok, err := f.Keeper.PruneAllowed(ctx, 49)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// Nothing is archived above 100, so a node must not prune there even one block later.
-	ok, err = f.Keeper.PruneAllowed(ctx, 100)
+	// Nothing is archived above 50, so a node must not prune there even one block later.
+	ok, err = f.Keeper.PruneAllowed(ctx, 50)
 	require.NoError(t, err)
 	require.False(t, ok)
 }
@@ -332,10 +355,15 @@ func TestRetainHeight_fourteenDayWindowBindsWhenArchiveIsCaughtUp(t *testing.T) 
 	f := newTestFixture(t)
 	f.initGenesis(t, func(gs *types.GenesisState) {
 		gs.Params.RetentionWindowBlocks = types.MinBlocksIn14Days
+		gs.Params.RangeBlocks = types.MaxRangeBlocksLimit
 	})
-	tip := int64(1_000_000)
-	archiveRange(t, f, 1, tip-1)
-	ctx := f.Ctx.WithBlockHeight(tip)
+	const ranges = 25
+	tip := ranges*types.MaxRangeBlocksLimit + 1
+	f.Ctx = f.Ctx.WithBlockHeight(tip)
+	for i := int64(0); i < ranges; i++ {
+		archiveRange(t, f, i*types.MaxRangeBlocksLimit+1, (i+1)*types.MaxRangeBlocksLimit)
+	}
+	ctx := f.Ctx
 
 	retain, err := f.Keeper.RetainHeight(ctx)
 	require.NoError(t, err)
@@ -358,14 +386,17 @@ func TestVerifyBundle_mutatedHeaderFails(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
 
-	blockHashes := [][]byte{digest(1), digest(2), digest(3)}
+	blockHashes := make([][]byte, testRangeBlocks)
+	for i := range blockHashes {
+		blockHashes[i] = digest(byte(i + 1))
+	}
 	root := merkle.HashFromByteSlices(blockHashes)
 	bundle := digest(9)
 	require.NotEqual(t, bundle, root)
 
 	const (
 		start = int64(1)
-		end   = int64(3)
+		end   = testRangeBlocks
 		cid   = "bafyarchivecid"
 	)
 	for i := byte(1); i <= 3; i++ {
@@ -389,23 +420,23 @@ func TestVerifyBundle_mutatedHeaderFails(t *testing.T) {
 func TestQuery_rangeAndRetainHeight(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	archiveRange(t, f, 1, 40)
+	archiveRange(t, f, 1, 50)
 
 	params, err := f.Query.Params(f.Ctx, &types.QueryParamsRequest{})
 	require.NoError(t, err)
 	require.Equal(t, types.DefaultBlocksIn14Days, params.Params.RetentionWindowBlocks)
 
-	got, err := f.Query.Range(f.Ctx, &types.QueryRangeRequest{StartHeight: 1, EndHeight: 40})
+	got, err := f.Query.Range(f.Ctx, &types.QueryRangeRequest{StartHeight: 1, EndHeight: 50})
 	require.NoError(t, err)
 	require.True(t, got.Range.Archived)
 
 	last, err := f.Query.LastArchivedHeight(f.Ctx, &types.QueryLastArchivedHeightRequest{})
 	require.NoError(t, err)
-	require.Equal(t, int64(40), last.LastArchivedHeight)
+	require.Equal(t, int64(50), last.LastArchivedHeight)
 
 	retain, err := f.Query.RetainHeight(f.Ctx, &types.QueryRetainHeightRequest{})
 	require.NoError(t, err)
-	require.Equal(t, int64(40), retain.LastArchivedHeight)
+	require.Equal(t, int64(50), retain.LastArchivedHeight)
 	require.Equal(t, f.Ctx.BlockHeight(), retain.Tip)
 	require.LessOrEqual(t, retain.RetainHeight, retain.LastArchivedHeight)
 }
@@ -450,12 +481,12 @@ func archiveRange(t *testing.T, f *testFixture, start, end int64) {
 func TestExportGenesis_roundTrip(t *testing.T) {
 	f := newTestFixture(t)
 	f.initGenesis(t, nil)
-	archiveRange(t, f, 1, 25)
+	archiveRange(t, f, 1, 50)
 
 	exported, err := f.Keeper.ExportGenesis(f.Ctx)
 	require.NoError(t, err)
 	require.NoError(t, exported.Validate())
-	require.Equal(t, int64(25), exported.LastArchivedHeight)
+	require.Equal(t, int64(50), exported.LastArchivedHeight)
 	require.Len(t, exported.Ranges, 1)
 
 	f2 := newTestFixture(t)
@@ -844,4 +875,53 @@ func TestAttest_anUnshapedPieceIsRefused(t *testing.T) {
 	msg.PieceRoot = nil
 	_, err := f.Msg.Attest(f.Ctx, msg)
 	require.ErrorContains(t, err, "piece_root")
+}
+
+// A candidate whose every attesting node has left frees its slot the next time the range is
+// attested, so departed operators cannot hold the candidate slots of an undecided range, and the
+// operators it held are free to attest another tuple.
+func TestAttest_aCandidateOfDepartedArchiversIsFreed(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, func(gs *types.GenesisState) { gs.Params.MaxCandidatesPerRange = 1 })
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+
+	_, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
+		Archiver: acc(2).String(), NodeId: nodeOf(2), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(3),
+	}))
+	require.ErrorIs(t, err, types.ErrCandidatesFull, "while its archiver is active the candidate keeps its slot")
+
+	f.Nodes.inactive[nodeOf(1)] = true
+	f.attest(t, 2, 1, 50, "bafyarchivecid", digest(1), digest(3))
+
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Len(t, rec.Candidates, 1)
+	require.Equal(t, digest(3), rec.Candidates[0].MerkleRoot, "the departed operator's tuple is gone")
+	require.Equal(t, []string{nodeOf(2)}, rec.Candidates[0].NodeIds)
+
+	f.Nodes.inactive[nodeOf(1)] = false
+	_, err = f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
+		Archiver: acc(1).String(), NodeId: nodeOf(1), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(3),
+	}))
+	require.NoError(t, err, "an operator freed from its old tuple can attest the tuple the others hold")
+}
+
+// A candidate keeps its slot while any one of its attesting nodes still has the role.
+func TestAttest_aCandidateWithOneActiveArchiverKeepsItsSlot(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, func(gs *types.GenesisState) { gs.Params.MaxCandidatesPerRange = 1 })
+	f.attest(t, 1, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.attest(t, 2, 1, 50, "bafyarchivecid", digest(1), digest(2))
+	f.Nodes.inactive[nodeOf(1)] = true
+
+	_, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
+		Archiver: acc(4).String(), NodeId: nodeOf(4), StartHeight: 1, EndHeight: 50,
+		BundleCid: "bafyarchivecid", BundleHash: digest(1), MerkleRoot: digest(3),
+	}))
+	require.ErrorIs(t, err, types.ErrCandidatesFull)
+	rec, err := f.Keeper.GetRange(f.Ctx, 1, 50)
+	require.NoError(t, err)
+	require.Len(t, rec.Candidates[0].NodeIds, 2)
 }

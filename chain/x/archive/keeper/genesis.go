@@ -94,6 +94,7 @@ func cloneCandidates(in []types.Candidate) []types.Candidate {
 		c.PieceRoot = append([]byte(nil), c.PieceRoot...)
 		c.Archivers = append([]string(nil), c.Archivers...)
 		c.Operators = append([]string(nil), c.Operators...)
+		c.NodeIds = append([]string(nil), c.NodeIds...)
 		out[i] = c
 	}
 	return out

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -38,6 +39,16 @@ func (a archiveNodes) ArchiverOperator(ctx context.Context, nodeID, signer strin
 		return "", fmt.Errorf("%s is not the hot key of node %s", signer, nodeID)
 	}
 	return node.Operator, nil
+}
+
+// ArchiverActive reports whether nodeID is an active node with a bonded ARCHIVER role. A node that
+// no longer exists is not active.
+func (a archiveNodes) ArchiverActive(ctx context.Context, nodeID string) (bool, error) {
+	ok, err := a.nodes.IsRoleActive(sdk.UnwrapSDKContext(ctx), nodeID, nodestypes.RoleArchiver)
+	if errors.Is(err, nodestypes.ErrNotFound) {
+		return false, nil
+	}
+	return ok, err
 }
 
 // archiveStorage is x/archive's view of x/storage deals.

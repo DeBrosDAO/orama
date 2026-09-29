@@ -417,9 +417,24 @@ export interface Settlement {
   subsidy: boolean;
   /**
    * attempts counts how many times this row has already failed to apply. A failed row is queued
-   * again until it reaches MaxSettlementAttempts, then dropped.
+   * again until it reaches MaxSettlementAttempts, then dropped. Only a payout or a penalty is ever
+   * dropped: the miss counter and the eviction of a missed slot are applied when the row is first
+   * processed, in a step that reads and writes only x/storage's own state, and never retried.
    */
   attempts: number;
+  /**
+   * not_before_epoch is the first epoch the row may be applied in. A row that failed is queued
+   * again with the next epoch here, so its retries are spaced by epochs and a failure that lasts
+   * a few blocks does not use up every attempt at once. Zero (a row that never failed) is due
+   * immediately.
+   */
+  notBeforeEpoch: bigint;
+  /**
+   * penalty_only is true for the row that carries the penalty of a miss whose miss counter and
+   * eviction were already applied: it changes no counter and pays nothing, and applying it is one
+   * attempt to slash the node.
+   */
+  penaltyOnly: boolean;
 }
 
 /**
@@ -2260,6 +2275,8 @@ function createBaseSettlement(): Settlement {
     archiveTopUp: "",
     subsidy: false,
     attempts: 0,
+    notBeforeEpoch: 0n,
+    penaltyOnly: false,
   };
 }
 
@@ -2309,6 +2326,15 @@ export const Settlement: MessageFns<Settlement> = {
     }
     if (message.attempts !== 0) {
       writer.uint32(96).uint32(message.attempts);
+    }
+    if (message.notBeforeEpoch !== 0n) {
+      if (BigInt.asUintN(64, message.notBeforeEpoch) !== message.notBeforeEpoch) {
+        throw new globalThis.Error("value provided for field message.notBeforeEpoch of type uint64 too large");
+      }
+      writer.uint32(104).uint64(message.notBeforeEpoch);
+    }
+    if (message.penaltyOnly !== false) {
+      writer.uint32(112).bool(message.penaltyOnly);
     }
     return writer;
   },
@@ -2416,6 +2442,22 @@ export const Settlement: MessageFns<Settlement> = {
           message.attempts = reader.uint32();
           continue;
         }
+        case 13: {
+          if (tag !== 104) {
+            break;
+          }
+
+          message.notBeforeEpoch = reader.uint64() as bigint;
+          continue;
+        }
+        case 14: {
+          if (tag !== 112) {
+            break;
+          }
+
+          message.penaltyOnly = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2439,6 +2481,8 @@ export const Settlement: MessageFns<Settlement> = {
       archiveTopUp: isSet(object.archiveTopUp) ? globalThis.String(object.archiveTopUp) : "",
       subsidy: isSet(object.subsidy) ? globalThis.Boolean(object.subsidy) : false,
       attempts: isSet(object.attempts) ? globalThis.Number(object.attempts) : 0,
+      notBeforeEpoch: isSet(object.notBeforeEpoch) ? BigInt(object.notBeforeEpoch) : 0n,
+      penaltyOnly: isSet(object.penaltyOnly) ? globalThis.Boolean(object.penaltyOnly) : false,
     };
   },
 
@@ -2480,6 +2524,12 @@ export const Settlement: MessageFns<Settlement> = {
     if (message.attempts !== 0) {
       obj.attempts = Math.round(message.attempts);
     }
+    if (message.notBeforeEpoch !== 0n) {
+      obj.notBeforeEpoch = message.notBeforeEpoch.toString();
+    }
+    if (message.penaltyOnly !== false) {
+      obj.penaltyOnly = message.penaltyOnly;
+    }
     return obj;
   },
 
@@ -2500,6 +2550,8 @@ export const Settlement: MessageFns<Settlement> = {
     message.archiveTopUp = object.archiveTopUp ?? "";
     message.subsidy = object.subsidy ?? false;
     message.attempts = object.attempts ?? 0;
+    message.notBeforeEpoch = object.notBeforeEpoch ?? 0n;
+    message.penaltyOnly = object.penaltyOnly ?? false;
     return message;
   },
 };

@@ -48,6 +48,14 @@ const (
 	// one range reserve most of a provider's disk.
 	DefaultMaxPieceBytes uint64 = 4 << 30
 
+	// DefaultRangeBlocks is the genesis default for Params.RangeBlocks: the width of one archived
+	// range.
+	DefaultRangeBlocks int64 = 1000
+
+	// MaxRangeBlocksLimit is the largest range_blocks genesis may set. An archiver holds a whole
+	// range in memory to pack it, and the bundle must fit max_piece_bytes.
+	MaxRangeBlocksLimit int64 = 10_000
+
 	// MaxPieceBytesLimit is the largest max_piece_bytes genesis may set: 1 TiB.
 	MaxPieceBytesLimit uint64 = 1 << 40
 
