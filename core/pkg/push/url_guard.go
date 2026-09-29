@@ -1,13 +1,14 @@
 package push
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 )
 
 // url_guard.go — SSRF guard for TENANT-supplied push base URLs.
@@ -138,34 +139,11 @@ func IsInternalBaseURL(baseURL string) bool {
 	return looksLikeNumericHost(host)
 }
 
-// isReservedIP reports whether ip is in a range a tenant must never be able to
-// reach via a push base URL: loopback, link-local (incl. 169.254.169.254 cloud
-// metadata), RFC1918 private, ULA, unspecified, multicast, and 100.64/10 CGNAT.
-func isReservedIP(ip net.IP) bool {
-	if ip == nil {
-		return true // unparseable → treat as unsafe
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		// 100.64.0.0/10 — carrier-grade NAT (not covered by IsPrivate). The
-		// second-octet band [64,127] is the /10.
-		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			return true
-		}
-	} else if ip16 := ip.To16(); ip16 != nil {
-		// NAT64 well-known prefix 64:ff9b::/96 (RFC 6052) embeds an IPv4 address
-		// a NAT64 gateway would translate — so it can reach internal v4.
-		if bytes.Equal(ip16[:12], []byte{0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0}) {
-			return true
-		}
-	}
-	return ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() ||
-		ip.IsMulticast() ||
-		ip.IsPrivate() || // 10/8, 172.16/12, 192.168/16, fc00::/7
-		ip.IsUnspecified()
-}
+// isReservedIP reports whether ip is in a range a tenant must never be able to reach via a push
+// base URL: the shared list in pkg/netguard (loopback, private, link-local incl. the cloud metadata
+// address, CGNAT, benchmarking incl. the co-located chain namespace, multicast, IPv6 forms that embed
+// an IPv4 host).
+func isReservedIP(ip net.IP) bool { return netguard.Reserved(ip) }
 
 // looksLikeNumericHost reports whether host is a non-standard numeric IPv4
 // encoding — hex ("0x7f000001", "0x7f.0.0.1"), decimal ("2130706433"), or octal

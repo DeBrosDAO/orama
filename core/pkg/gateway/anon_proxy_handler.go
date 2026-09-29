@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"io"
 	"net"
 	"net/http"
@@ -245,5 +246,5 @@ func isPrivateOrLocalHost(host string) bool {
 		return false
 	}
 
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+	return netguard.Reserved(ip)
 }

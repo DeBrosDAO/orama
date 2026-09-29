@@ -1246,6 +1246,8 @@ Every per-client bucket (general, credential, capability upgrade and chain query
 the client's network, not its address: an IPv4 client by its address (an IPv4-mapped IPv6 address
 as the IPv4 one) and an IPv6 client by its /64, since a subscriber routinely holds a whole /64
 and can source a request from any address in it.
+The vault proxy's per-address limits use the same resolution and key (`pkg/gateway/clientkey`), so a
+forged `X-Forwarded-For` or `X-Real-IP` does not pick a bucket there either.
 
 The endpoints that mint or exchange credentials — challenge, verify, api-key,
 token and refresh — have their own bucket, 30 a minute per address bursting to

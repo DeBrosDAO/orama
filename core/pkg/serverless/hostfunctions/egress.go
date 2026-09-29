@@ -3,6 +3,7 @@ package hostfunctions
 import (
 	"context"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"net"
 	"net/http"
 	"syscall"
@@ -30,50 +31,7 @@ import (
 
 // blockedIP reports whether an address belongs to a range tenant code has no
 // business reaching from a cluster node.
-func blockedIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
-		return true
-	}
-	// net.IP.IsPrivate covers RFC 1918 and RFC 4193 only. The ranges below
-	// are routable-looking but reach infrastructure rather than the internet.
-	for _, cidr := range blockedCIDRs {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// blockedCIDRs are the ranges IsPrivate and the IsLinkLocal family do not cover.
-var blockedCIDRs = mustParseCIDRs(
-	"100.64.0.0/10",   // RFC 6598 carrier-grade NAT, used by some hosts for internal fabric
-	"192.0.0.0/24",    // RFC 6890 IETF protocol assignments
-	"198.18.0.0/15",   // RFC 2544 benchmarking
-	"192.31.196.0/24", // AS112-v4
-	"192.52.193.0/24", // AMT
-	"255.255.255.255/32",
-	"64:ff9b::/96", // NAT64, which maps straight onto IPv4 including private space
-	"2002::/16",    // 6to4, likewise
-	"::/128",
-	"::1/128",
-)
-
-func mustParseCIDRs(cidrs ...string) []*net.IPNet {
-	out := make([]*net.IPNet, 0, len(cidrs))
-	for _, c := range cidrs {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			panic("hostfunctions: bad blocked CIDR " + c + ": " + err.Error())
-		}
-		out = append(out, n)
-	}
-	return out
-}
+func blockedIP(ip net.IP) bool { return netguard.Reserved(ip) }
 
 // errBlockedDestination is what a refused dial returns. It names the address so
 // a function author can see which destination was refused, and says why.

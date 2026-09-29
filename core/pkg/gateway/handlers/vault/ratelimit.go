@@ -1,11 +1,11 @@
 package vault
 
 import (
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 )
 
 // Per-source-IP rate limits for the public vault proxy endpoints. These bound
@@ -139,23 +139,11 @@ func (rl *IPRateLimiter) cleanup(maxAge time.Duration) {
 	cleanMap(&rl.pullBuckets)
 }
 
-// clientIP extracts the client IP from reverse-proxy headers (X-Forwarded-For,
-// then X-Real-IP) and falls back to the TCP peer address. It mirrors the gateway
-// package's getClientIP, duplicated here because that helper is unexported.
+// clientIP is the bucket key a request is limited under: the peer address (X-Forwarded-For counts
+// only when the peer is the local reverse proxy, and then only its last entry) and, for IPv6, the
+// client's /64. It is the same resolution the cluster gateway's own limits use (clientkey), so a
+// caller cannot pick its own bucket with a header or by rotating addresses inside its prefix.
 func clientIP(r *http.Request) string {
-	// X-Forwarded-For may be a comma-separated list; the original client is first.
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return xff
-	}
-	if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
-		return xr
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	client, _ := clientkey.Resolve(r)
+	return clientkey.BucketKey(client)
 }

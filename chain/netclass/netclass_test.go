@@ -2,6 +2,9 @@ package netclass_test
 
 import (
 	"net/netip"
+	"os"
+	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -90,4 +93,20 @@ func TestIsPublic_zeroAndZonedAddressesAreNot(t *testing.T) {
 	require.False(t, netclass.IsPublic(netip.MustParseAddr("fe80::1%eth0")))
 	require.False(t, netclass.IsPublic(netip.MustParseAddr("2606:4700::1%eth0")))
 	require.True(t, netclass.IsPublic(netip.MustParseAddr("2606:4700::1")))
+}
+
+// core cannot import this module, so core/pkg/netguard keeps its own list of reserved ranges. Every
+// range this classifier refuses must be in it (it may add more: AS112, AMT and the IPv6 loopback and
+// unspecified addresses), or a tenant could reach through core what the chain refuses.
+func TestNetclassRangesAreCoveredByCoreNetguard(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "core", "pkg", "netguard", "netguard.go"))
+	require.NoError(t, err)
+	core := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^\t"([0-9a-f:.]+/[0-9]+)",$`).FindAllStringSubmatch(string(src), -1) {
+		core[m[1]] = true
+	}
+	require.NotEmpty(t, core, "no ranges found in core/pkg/netguard/netguard.go")
+	for _, p := range netclass.SpecialPrefixes() {
+		require.Truef(t, core[p.String()], "netclass refuses %s but core/pkg/netguard does not list it", p)
+	}
 }

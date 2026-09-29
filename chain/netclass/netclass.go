@@ -11,6 +11,7 @@ package netclass
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -197,3 +198,7 @@ func isNumericLabel(label string) bool {
 func isHexDigit(c rune) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
+
+// SpecialPrefixes returns the ranges the classifier refuses as not globally routable, for the
+// cross-check against core's own list.
+func SpecialPrefixes() []netip.Prefix { return slices.Clone(special) }

@@ -59,7 +59,7 @@ func TestIsReservedIP(t *testing.T) {
 		"64:ff9b::a00:1",     // NAT64-embedded 10.0.0.1
 		"64:ff9b::a9fe:a9fe", // NAT64-embedded 169.254.169.254 (metadata)
 	}
-	public := []string{"1.1.1.1", "8.8.8.8", "203.0.113.10", "2606:4700:4700::1111"}
+	public := []string{"1.1.1.1", "8.8.8.8", "93.184.216.10", "2606:4700:4700::1111"}
 	for _, s := range reserved {
 		if ip := net.ParseIP(s); !isReservedIP(ip) {
 			t.Errorf("isReservedIP(%s) = false; want true (reserved)", s)
@@ -117,7 +117,7 @@ func TestCheckBaseURLResolvable(t *testing.T) {
 
 	t.Run("hostname resolving to public is allowed", func(t *testing.T) {
 		lookupIP = func(_ context.Context, host string) ([]net.IP, error) {
-			return []net.IP{net.ParseIP("203.0.113.50")}, nil
+			return []net.IP{net.ParseIP("93.184.216.50")}, nil
 		}
 		if err := CheckBaseURLResolvable(context.Background(), "https://push.example.com"); err != nil {
 			t.Fatalf("public-resolving host should pass: %v", err)
@@ -126,7 +126,7 @@ func TestCheckBaseURLResolvable(t *testing.T) {
 
 	t.Run("any internal IP among results is rejected", func(t *testing.T) {
 		lookupIP = func(_ context.Context, host string) ([]net.IP, error) {
-			return []net.IP{net.ParseIP("203.0.113.50"), net.ParseIP("127.0.0.1")}, nil
+			return []net.IP{net.ParseIP("93.184.216.50"), net.ParseIP("127.0.0.1")}, nil
 		}
 		if err := CheckBaseURLResolvable(context.Background(), "https://mixed.example.com"); err == nil {
 			t.Fatal("a host resolving to ANY internal address must be rejected")
