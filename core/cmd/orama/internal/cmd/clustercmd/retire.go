@@ -40,6 +40,7 @@ func init() {
 	f.StringVar(&retireFlags.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&retireFlags.gas, "gas", 0, "Gas limit [required]")
 	f.StringVar(&retireFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	globalcmd.AddOnionFlags(f)
 	Cmd.AddCommand(retireClusterCmd)
 }
 

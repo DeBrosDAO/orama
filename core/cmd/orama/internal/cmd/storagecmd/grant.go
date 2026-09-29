@@ -60,6 +60,7 @@ count. Without --node the command prints the sign document and does not submit i
 		f.StringVar(&grantFlags.fee, "fee", "", "Fee in norama [required]")
 		f.Uint64Var(&grantFlags.gas, "gas", 0, "Gas limit [required]")
 		f.StringVar(&grantFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+		globalcmd.AddOnionFlags(f)
 	}
 	add(grant)
 	add(revoke)

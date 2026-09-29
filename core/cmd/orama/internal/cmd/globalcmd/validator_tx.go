@@ -28,6 +28,7 @@ func (t *txFlags) register(f *pflag.FlagSet) {
 	f.StringVar(&t.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&t.gas, "gas", 0, "Gas limit [required]")
 	f.StringVar(&t.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	AddOnionFlags(f)
 }
 
 func (t *txFlags) submit(cmd *cobra.Command, typeURL string, msg []byte, verb string) error {

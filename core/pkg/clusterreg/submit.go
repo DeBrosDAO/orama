@@ -129,11 +129,28 @@ func postJSON(ctx context.Context, url string, payload []byte) ([]byte, error) {
 	return doLimited(req)
 }
 
+type httpClientKey struct{}
+
+// WithHTTPClient makes every chain request made with ctx use client instead
+// of http.DefaultClient, and the client's Timeout instead of the default
+// request timeout when it is set. An onion submission passes a client whose
+// only route to the network is a Tor SOCKS proxy.
+func WithHTTPClient(ctx context.Context, client *http.Client) context.Context {
+	return context.WithValue(ctx, httpClientKey{}, client)
+}
+
 func doLimited(req *http.Request) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(req.Context(), submitTimeout)
+	client, timeout := http.DefaultClient, submitTimeout
+	if c, ok := req.Context().Value(httpClientKey{}).(*http.Client); ok && c != nil {
+		client = c
+		if c.Timeout > 0 {
+			timeout = c.Timeout
+		}
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), timeout)
 	defer cancel()
 	req = req.WithContext(ctx)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

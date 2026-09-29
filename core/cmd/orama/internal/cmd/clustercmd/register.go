@@ -1,14 +1,9 @@
 package clustercmd
 
 import (
-	"context"
-	"encoding/hex"
-	"fmt"
-	"os"
-
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/globalcmd"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
-	"github.com/DeBrosOfficial/network/pkg/rwagent"
 	"github.com/spf13/cobra"
 )
 
@@ -43,7 +38,10 @@ tenants, or any cluster secret, and registering it does not join a node.
 --node is that chain's REST API. The command reads the account there, builds
 a SIGN_MODE_DIRECT transaction, asks the RootWallet agent to sign that one
 transaction, and broadcasts it. Without --node it prints the sign document
-and does not submit anything.
+and does not submit anything. --onion sends the same transaction to a validator
+onion service through a Tor SOCKS proxy on this machine instead, on a fresh
+circuit, and never falls back to the clearnet: when Tor or the service is
+unreachable the command fails and the transaction is not sent.
 
 The fee is an explicit amount of norama. There is no default.`,
 	Args: cobra.NoArgs,
@@ -64,6 +62,7 @@ func init() {
 	f.StringVar(&reg.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&reg.gas, "gas", 0, "Gas limit [required]")
 	f.StringVar(&reg.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	globalcmd.AddOnionFlags(f)
 	Cmd.AddCommand(registerCmd)
 }
 
@@ -75,60 +74,10 @@ func runRegister(cmd *cobra.Command, args []string) error {
 	if err := clusterreg.Validate(regn); err != nil {
 		return clierr.Usage("%v", err)
 	}
-	in := clusterreg.SignInput{
-		Registration: regn, FeeAmount: reg.fee, Gas: reg.gas, ChainID: reg.chainID,
+	in := clusterreg.Direct{
+		TypeURL: clusterreg.RegisterClusterTypeURL, Msg: clusterreg.EncodeRegisterCluster(regn),
+		FeeAmount: reg.fee, Gas: reg.gas, ChainID: reg.chainID,
 		AccountNumber: reg.account, Sequence: reg.sequence,
 	}
-	if reg.pubKey != "" {
-		pub, err := hex.DecodeString(reg.pubKey)
-		if err != nil {
-			return clierr.Usage("pubkey is not hex")
-		}
-		in.PubKey = pub
-	}
-	ctx := cmd.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if reg.node != "" {
-		acct, err := clusterreg.FetchAccount(ctx, reg.node, reg.operator)
-		if err != nil {
-			return clierr.Failure("read the chain account: %w", err)
-		}
-		if !cmd.Flags().Changed("account-number") {
-			in.AccountNumber = acct.Number
-		}
-		if !cmd.Flags().Changed("sequence") {
-			in.Sequence = acct.Sequence
-		}
-		if len(in.PubKey) == 0 {
-			in.PubKey = acct.PubKey
-		}
-	}
-	doc, err := in.SignDoc()
-	if err != nil {
-		return clierr.Usage("%v", err)
-	}
-	if reg.node == "" {
-		fmt.Fprintf(os.Stdout, "sign document (not submitted):\n%x\n", doc)
-		return nil
-	}
-	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
-	sig, err := client.SignOramaTx(ctx, doc)
-	if err != nil {
-		return clierr.Failure("sign the registration: %w", err)
-	}
-	if sig.Address != reg.operator || hex.EncodeToString(sig.PubKey) != hex.EncodeToString(in.PubKey) {
-		return clierr.Failure("the agent signed as %s, not the operator", sig.Address)
-	}
-	tx, err := in.TxRaw(sig.Signature)
-	if err != nil {
-		return clierr.Failure("build the transaction: %w", err)
-	}
-	hash, err := clusterreg.Broadcast(ctx, reg.node, tx)
-	if err != nil {
-		return clierr.Failure("%v", err)
-	}
-	fmt.Fprintf(os.Stdout, "registered %s: %s\n", reg.id, hash)
-	return nil
+	return globalcmd.SubmitDirect(cmd, reg.operator, reg.node, reg.pubKey, reg.account, reg.sequence, in, "registered "+reg.id)
 }

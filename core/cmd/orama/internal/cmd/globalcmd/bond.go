@@ -60,6 +60,7 @@ func newBondCmd(use, short, long, typeURL, verb string) *cobra.Command {
 	f.StringVar(&bondFlags.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&bondFlags.gas, "gas", 0, "Gas limit [required]")
 	f.StringVar(&bondFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	AddOnionFlags(f)
 	return cmd
 }
 

@@ -47,6 +47,7 @@ and does not submit it.`,
 	f.StringVar(&proveFlags.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&proveFlags.gas, "gas", 0, "Gas limit [required]")
 	f.StringVar(&proveFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	globalcmd.AddOnionFlags(f)
 	Cmd.AddCommand(prove)
 }
 

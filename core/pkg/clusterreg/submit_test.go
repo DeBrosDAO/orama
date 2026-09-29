@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -44,5 +46,54 @@ func TestBroadcast_nonzeroCodeIsAnError(t *testing.T) {
 	defer srv.Close()
 	if _, err := Broadcast(context.Background(), srv.URL, []byte{1}); err == nil {
 		t.Fatal("a rejected tx was accepted")
+	}
+}
+
+type rtFunc func(*http.Request) (*http.Response, error)
+
+func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestWithHTTPClient_routesRequestsThroughThatClientOnly(t *testing.T) {
+	old := http.DefaultTransport
+	http.DefaultTransport = rtFunc(func(r *http.Request) (*http.Response, error) {
+		t.Errorf("request used the default transport: %s", r.URL)
+		return nil, http.ErrUseLastResponse
+	})
+	defer func() { http.DefaultTransport = old }()
+
+	var urls []string
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		urls = append(urls, r.URL.String())
+		body := `{"tx_response":{"code":0,"txhash":"AB"}}`
+		if r.Method == http.MethodGet {
+			body = `{"account":{"account_number":"1","sequence":"2"}}`
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+	})}
+	ctx := WithHTTPClient(context.Background(), client)
+
+	if _, err := FetchAccount(ctx, "http://x.onion", vectorAddress); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Broadcast(ctx, "http://x.onion", []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if len(urls) != 2 {
+		t.Fatalf("client saw %v", urls)
+	}
+}
+
+func TestWithHTTPClient_failureIsReturnedNotRetried(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return nil, io.ErrUnexpectedEOF
+	})}
+	ctx := WithHTTPClient(context.Background(), client)
+	if _, err := Broadcast(ctx, "http://x.onion", []byte{1}); err == nil {
+		t.Fatal("a failed request was reported as sent")
+	}
+	if calls != 1 {
+		t.Fatalf("client was called %d times, want 1", calls)
 	}
 }

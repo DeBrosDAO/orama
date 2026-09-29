@@ -71,6 +71,14 @@ func DialThrough(ctx context.Context, addr, isolationKey string) (net.Conn, erro
 	return dialThrough(ctx, Address(), addr, isolationKey)
 }
 
+// DialVia is DialThrough against an explicit SOCKS5 address instead of the
+// node's own Tor client, for a CLI that talks to a Tor daemon on the operator's
+// machine. It never dials anything but socksAddr: a failure is returned, not
+// retried directly.
+func DialVia(ctx context.Context, socksAddr, addr, isolationKey string) (net.Conn, error) {
+	return dialThrough(ctx, socksAddr, addr, isolationKey)
+}
+
 func dialThrough(ctx context.Context, socksAddr, addr, isolationKey string) (net.Conn, error) {
 	var auth *goproxy.Auth
 	if isolationKey != "" {

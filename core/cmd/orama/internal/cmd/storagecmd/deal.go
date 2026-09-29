@@ -77,6 +77,7 @@ prints the sign document and does not submit it.`,
 		f.StringVar(&dealFlags.fee, "fee", "", "Fee in norama [required]")
 		f.Uint64Var(&dealFlags.gas, "gas", 0, "Gas limit [required]")
 		f.StringVar(&dealFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+		globalcmd.AddOnionFlags(f)
 	}
 	addChain(create)
 	addChain(extend)

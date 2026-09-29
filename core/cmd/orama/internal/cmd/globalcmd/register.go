@@ -63,6 +63,7 @@ func init() {
 	f.StringVar(&nodeFlags.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&nodeFlags.gas, "gas", 0, "Gas limit [required]")
 	f.StringVar(&nodeFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	AddOnionFlags(f)
 	Cmd.AddCommand(registerNodeCmd)
 }
 

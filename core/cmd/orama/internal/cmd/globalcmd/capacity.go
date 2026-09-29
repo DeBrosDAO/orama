@@ -46,6 +46,7 @@ func init() {
 	addChainFlags := func(f interface {
 		StringVar(*string, string, string, string)
 		Uint64Var(*uint64, string, uint64, string)
+		String(name, value, usage string) *string
 	}, idHelp string) {
 		f.StringVar(&capacityFlags.chainID, "chain-id", "", "Chain id [required]")
 		f.StringVar(&capacityFlags.operator, "operator", "", "Operator account (orama1...) [required]")
@@ -56,6 +57,7 @@ func init() {
 		f.StringVar(&capacityFlags.fee, "fee", "", "Fee in norama [required]")
 		f.Uint64Var(&capacityFlags.gas, "gas", 0, "Gas limit [required]")
 		f.StringVar(&capacityFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+		AddOnionFlags(f)
 	}
 	addChainFlags(capacityCmd.Flags(), "Node id [required]")
 	capacityCmd.Flags().Uint64Var(&capacityFlags.bytes, "bytes", 0, "Declared capacity in bytes")

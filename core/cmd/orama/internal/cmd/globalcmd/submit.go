@@ -12,10 +12,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// submitDirect fills the account from the chain REST API when --node is set,
-// prints the sign document when it is not, and otherwise signs and broadcasts.
 // SubmitDirect fills the account from the chain REST API when node is set,
 // prints the sign document when it is empty, and otherwise signs and broadcasts.
+// --onion (or ORAMA_CHAIN_ONION) replaces node with a validator onion service
+// reached only through Tor: an unreachable proxy or service is an error, never
+// a clearnet send.
 func SubmitDirect(cmd *cobra.Command, operator, node, pubHex string, account, sequence uint64, in clusterreg.Direct, verb string) error {
 	if pubHex != "" {
 		pub, err := hex.DecodeString(pubHex)
@@ -27,6 +28,10 @@ func SubmitDirect(cmd *cobra.Command, operator, node, pubHex string, account, se
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	ctx, node, err := chainTarget(cmd, ctx, node)
+	if err != nil {
+		return err
 	}
 	if node != "" {
 		acct, err := clusterreg.FetchAccount(ctx, node, operator)
