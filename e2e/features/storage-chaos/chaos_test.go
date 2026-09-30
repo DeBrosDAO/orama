@@ -68,9 +68,14 @@ func TestIPFSDown_contentStillServedAndRecovers(t *testing.T) {
 // checkRecovered: the node serves what was uploaded while it was down, and the
 // content returns to RF 3.
 func checkRecovered(t *testing.T, f *fleet.Fleet, n *ns.Namespace, victim fleet.Node, cid string, data []byte) {
-	if s := f.Unit(t, victim, clusterUnit); s != "active" {
-		t.Errorf("%s is %q after the daemon returned", clusterUnit, s)
-	}
+	// Only the IPFS daemon was restarted; the cluster unit recovers through the
+	// node's reconcile loop, so it is waited for, not read once.
+	eventually.Require(t, 5*time.Second, recoverBudget, clusterUnit+" to be active again", func() (bool, error) {
+		if s := f.Unit(t, victim, clusterUnit); s != "active" {
+			return false, fmt.Errorf("%s is %q", clusterUnit, s)
+		}
+		return true, nil
+	})
 	waitContent(t, n.Client.PinTo(victim.PublicIP), tenancy.Owner(n), cid, data)
 	eventually.Require(t, time.Minute, recoverBudget, cid+" back at RF 3", func() (bool, error) {
 		return pinnedPeers(t, n.Client, tenancy.Owner(n), cid) >= rf, nil
