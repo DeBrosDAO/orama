@@ -1428,6 +1428,9 @@ func (g *Gateway) namespaceProxyAuthFor(r *http.Request) namespaceProxyAuth {
 // the validated identity in signed internal-auth headers.
 func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request, namespaceName string, a namespaceProxyAuth) {
 	markTrafficNamespace(r, namespaceName)
+	if refuseCrossSiteUpgrade(w, r) {
+		return
+	}
 	validatedNamespace, validatedClaims, validatedScopes, authErr := a.namespace, a.claims, a.scopes, a.errMsg
 	isWS := isWebSocketUpgrade(r)
 	isPublic := g.policyFor(r).Access.Anonymous()

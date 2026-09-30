@@ -45,6 +45,8 @@ const (
 	// CodeOwnershipRequired — the credential is valid, in the right namespace,
 	// and is not an owner of it.
 	CodeOwnershipRequired = "OWNERSHIP_REQUIRED"
+	// CodeOriginNotAllowed — a WebSocket upgrade from a page on another site.
+	CodeOriginNotAllowed = "ORIGIN_NOT_ALLOWED"
 	// CodeOperatorRequired — the route is the cluster operator's. Also the
 	// shipped spelling.
 	CodeOperatorRequired = "NOT_AN_OPERATOR"
@@ -61,6 +63,7 @@ var authHints = map[string]string{
 	CodeScopeMissing:          "mint a key with the grant named in required_scope",
 	CodeNamespaceMismatch:     "use a credential belonging to this namespace",
 	CodeOwnershipRequired:     "use the namespace owner's credential, or an admin key for this namespace",
+	CodeOriginNotAllowed:      "open the socket from a page served by this host, or from a client that sends no Origin",
 	CodeOperatorRequired:      "this is a cluster operator's route; an admin key for a namespace is not enough",
 	CodeDestinationNotAllowed: "a different credential will not help; the destination itself is refused",
 }

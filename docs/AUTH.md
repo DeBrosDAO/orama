@@ -738,6 +738,7 @@ about it — plus the fields that make it actionable.
 | `USER_JWT_REQUIRED` | this operation needs a logged-in user; a key alone is not enough |
 | `INSUFFICIENT_SCOPE` | the credential lacks a grant; `required_scope` names it |
 | `NAMESPACE_MISMATCH` | the credential belongs to another namespace |
+| `ORIGIN_NOT_ALLOWED` | a WebSocket upgrade whose `Origin` is not this host or a name under it (403) |
 | `OWNERSHIP_REQUIRED` | the credential holds no grant in this namespace |
 | `NOT_AN_OPERATOR` | the wallet is not on the cluster's operator list |
 | `DESTINATION_NOT_ALLOWED` | the proxy refused the destination |

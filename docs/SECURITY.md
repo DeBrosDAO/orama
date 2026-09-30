@@ -286,6 +286,7 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 
 **WebSocket Origin Validation (Step 1.4)**
 - All WebSocket upgraders validate the `Origin` header against the node's configured domain
+- The cluster gateway checks it too, for a namespace's host, before it validates the credential or chooses a namespace gateway, against the host it was asked for and never a client's own `X-Forwarded-Host`; so a cross-site upgrade is a `403` whether or not that namespace's gateway can be reached
 - Non-browser clients (no Origin header) are still allowed
 - Prevents cross-site WebSocket hijacking attacks
 
