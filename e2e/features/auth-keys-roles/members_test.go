@@ -109,9 +109,11 @@ func TestMembers_transferIsOneStep(t *testing.T) {
 	}
 }
 
+// signIn signs w in to n through the main gateway. It does not go through
+// n.Owner: a namespace created by the operator (ns.ViaOperator) has none.
 func signIn(t testing.TB, n *ns.Namespace, w *wallet.EVM) string {
 	t.Helper()
-	s, err := n.Owner.Client.For(t).SignIn(t.Context(), w, n.Name, nil)
+	s, err := harness.GW(t).For(t).SignIn(t.Context(), w, n.Name, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
