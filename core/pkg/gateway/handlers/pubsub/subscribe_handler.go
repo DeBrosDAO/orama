@@ -240,7 +240,8 @@ func (p *PubSubHandlers) libp2pSubscriber(ctx context.Context, topic string, msg
 		}
 	}
 
-	if err := p.client.PubSub().Subscribe(ctx, topic, h); err != nil {
+	stop, err := p.client.PubSub().SubscribeHandle(ctx, topic, h)
+	if err != nil {
 		p.logger.ComponentWarn("gateway", "pubsub ws: libp2p subscribe failed (will use local-only)",
 			zap.String("topic", topic),
 			zap.Error(err))
@@ -251,7 +252,11 @@ func (p *PubSubHandlers) libp2pSubscriber(ctx context.Context, topic string, msg
 
 	// Keep subscription alive until done
 	<-done
-	_ = p.client.PubSub().Unsubscribe(ctx, topic)
+	if err := stop(); err != nil {
+		p.logger.ComponentWarn("gateway", "pubsub ws: libp2p unsubscribe failed",
+			zap.String("topic", topic),
+			zap.Error(err))
+	}
 	p.logger.ComponentInfo("gateway", "pubsub ws: libp2p subscription closed",
 		zap.String("topic", topic))
 }

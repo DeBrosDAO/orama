@@ -1,7 +1,6 @@
 package pubsub
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -11,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -28,7 +26,7 @@ type HTTPClient struct {
 	logger    *zap.Logger
 
 	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
+	streams map[string]*stream // namespace.topic -> the one upstream stream
 }
 
 var _ Bus = (*HTTPClient)(nil)
@@ -58,7 +56,7 @@ func NewHTTPClient(socketPath, namespace string, logger *zap.Logger) *HTTPClient
 		transport: transport,
 		http:      &http.Client{Timeout: requestTimeout, Transport: transport},
 		logger:    logger.Named("pubsub-http"),
-		cancels:   make(map[string]context.CancelFunc),
+		streams:   make(map[string]*stream),
 	}
 }
 
@@ -135,59 +133,6 @@ func (c *HTTPClient) PublishSame(ctx context.Context, topics []string, data []by
 	return c.PublishBatch(ctx, msgs, opts)
 }
 
-func (c *HTTPClient) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
-	ns := c.ns(ctx)
-	key := ns + "." + topic
-	subCtx, cancel := context.WithCancel(context.Background())
-	c.mu.Lock()
-	if prev, ok := c.cancels[key]; ok {
-		prev()
-	}
-	c.cancels[key] = cancel
-	c.mu.Unlock()
-
-	url := fmt.Sprintf("%s/subscribe?namespace=%s&topic=%s", c.baseURL, url.QueryEscape(ns), url.QueryEscape(topic))
-	req, err := http.NewRequestWithContext(subCtx, http.MethodGet, url, nil)
-	if err != nil {
-		cancel()
-		return err
-	}
-	go func() {
-		client := &http.Client{Transport: c.transport}
-		resp, err := client.Do(req)
-		if err != nil {
-			c.logger.Warn("subscribe request failed", zap.Error(err))
-			return
-		}
-		defer resp.Body.Close()
-		sc := bufio.NewScanner(resp.Body)
-		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-		for sc.Scan() {
-			line := sc.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(line, "data: "))
-			if err != nil {
-				continue
-			}
-			_ = handler(topic, raw)
-		}
-	}()
-	return nil
-}
-
-func (c *HTTPClient) Unsubscribe(_ context.Context, topic string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	key := c.namespace + "." + topic
-	if cancel, ok := c.cancels[key]; ok {
-		cancel()
-		delete(c.cancels, key)
-	}
-	return nil
-}
-
 // ListTopics returns the topics of the client's namespace (or the namespace
 // override in ctx) that this node's pubsub service has a subscription on.
 func (c *HTTPClient) ListTopics(ctx context.Context) ([]string, error) {
@@ -213,12 +158,14 @@ func (c *HTTPClient) ListTopics(ctx context.Context) ([]string, error) {
 	return out.Topics, nil
 }
 
+// Close ends every upstream stream. Handlers stop receiving; their stop
+// functions become no-ops.
 func (c *HTTPClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for k, cancel := range c.cancels {
-		cancel()
-		delete(c.cancels, k)
+	for k, st := range c.streams {
+		st.cancel()
+		delete(c.streams, k)
 	}
 	return nil
 }

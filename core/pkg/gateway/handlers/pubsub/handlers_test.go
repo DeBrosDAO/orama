@@ -26,8 +26,10 @@ type mockPubSubClient struct {
 	PublishBatchFunc func(ctx context.Context, msgs []client.TopicMessage, opts client.PublishBatchOptions) error
 	PublishSameFunc  func(ctx context.Context, topics []string, data []byte, opts client.PublishBatchOptions) error
 	SubscribeFunc    func(ctx context.Context, topic string, handler client.MessageHandler) error
-	UnsubscribeFunc  func(ctx context.Context, topic string) error
-	ListTopicsFunc   func(ctx context.Context) ([]string, error)
+	// SubscribeHandleFunc, when set, receives every SubscribeHandle call.
+	SubscribeHandleFunc func(ctx context.Context, topic string, handler client.MessageHandler) (func() error, error)
+	UnsubscribeFunc     func(ctx context.Context, topic string) error
+	ListTopicsFunc      func(ctx context.Context) ([]string, error)
 }
 
 func (m *mockPubSubClient) Publish(ctx context.Context, topic string, data []byte) error {
@@ -56,6 +58,13 @@ func (m *mockPubSubClient) Subscribe(ctx context.Context, topic string, handler 
 		return m.SubscribeFunc(ctx, topic, handler)
 	}
 	return nil
+}
+
+func (m *mockPubSubClient) SubscribeHandle(ctx context.Context, topic string, handler client.MessageHandler) (func() error, error) {
+	if m.SubscribeHandleFunc != nil {
+		return m.SubscribeHandleFunc(ctx, topic, handler)
+	}
+	return func() error { return nil }, nil
 }
 
 func (m *mockPubSubClient) Unsubscribe(ctx context.Context, topic string) error {

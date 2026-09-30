@@ -130,14 +130,9 @@ func Handler(mgr *Manager, logger *zap.Logger) http.Handler {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.WriteHeader(http.StatusOK)
-		flusher.Flush()
-
 		ch := make(chan []byte, 32)
 		ctx := WithNamespace(r.Context(), ns)
-		err := mgr.Subscribe(ctx, topic, func(_ string, data []byte) error {
+		stop, err := mgr.SubscribeHandle(ctx, topic, func(_ string, data []byte) error {
 			select {
 			case ch <- data:
 			default:
@@ -146,9 +141,17 @@ func Handler(mgr *Manager, logger *zap.Logger) http.Handler {
 		})
 		if err != nil {
 			logger.Warn("subscribe failed", zap.Error(err))
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer func() { _ = mgr.Unsubscribe(ctx, topic) }()
+		defer func() { _ = stop() }()
+
+		// The headers go out only once the subscription exists: a client whose
+		// request has returned is subscribed, and a failure is a status it sees.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
 
 		for {
 			select {

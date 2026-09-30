@@ -46,6 +46,11 @@ type DatabaseClient interface {
 // PubSubClient provides publish/subscribe messaging
 type PubSubClient interface {
 	Subscribe(ctx context.Context, topic string, handler MessageHandler) error
+	// SubscribeHandle is Subscribe for a caller that must leave on its own:
+	// the returned function removes exactly this handler (idempotent), and the
+	// upstream subscription ends with the last handler. Unlike Unsubscribe it
+	// never removes another subscriber's handler.
+	SubscribeHandle(ctx context.Context, topic string, handler MessageHandler) (func() error, error)
 	Publish(ctx context.Context, topic string, data []byte) error
 	// PublishBatch publishes multiple messages in parallel, one per topic.
 	// See pubsub.Manager.PublishBatch for semantics (fail-fast vs. best-effort).
