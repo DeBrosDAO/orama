@@ -48,8 +48,12 @@ will check — a signature over a message the gateway did not issue proves
 nothing about which site asked for it.
 
 The access token lasts 15 minutes. The refresh token lasts 30 days, is stored
-hashed, and rotates on every use: presenting one twice is a replay, and the
-second attempt fails and is recorded.
+hashed, and rotates on every use. A rotated token is accepted **once more**, for
+60 seconds, so a client that lost the response to its refresh can recover; after
+that — or once that slot is spent, or the session was logged out — presenting it
+is a replay: it is refused with `401` and recorded as `auth.refresh.replay`. A
+token nobody issued, or one that has merely expired, is refused the same way but
+is not a replay.
 
 `orama auth login` does this with RootWallet, which signs without the key
 leaving it. What it keeps is the session — the access and refresh tokens above.
