@@ -23,6 +23,9 @@ Thumbs.db
 .claude/
 .codex/
 secrets/
+# Go packages named secrets are source code, not secret material.
+!/core/pkg/secrets/
+!/e2e/harness/secrets/
 
 # === Core (Go) ===
 core/phantom-auth/
