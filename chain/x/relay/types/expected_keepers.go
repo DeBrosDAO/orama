@@ -10,10 +10,12 @@ import (
 
 // NodeView is the subset of x/nodes x/relay reads. It is not imported: x/nodes
 // does not exist in this binary yet. RelayBinding returns the RELAY role's
-// ed25519 identity, the operator account, and the node's IPv4 address or CIDR
-// (used only to derive the /16 cap bucket).
+// ed25519 identity, the operator account, and the node's effective network from
+// x/nodes: a canonical "A.B.0.0/16" derived from its literal-IP endpoints, or ""
+// when it has none or its identity is still inside network_identity_lock_seconds.
+// It is used only to derive the /16 cap bucket (see RelayPrefix16).
 type NodeView interface {
-	RelayBinding(ctx context.Context, nodeID string) (ed25519Pub []byte, operator sdk.AccAddress, ipv4 string, err error)
+	RelayBinding(ctx context.Context, nodeID string) (ed25519Pub []byte, operator sdk.AccAddress, network string, err error)
 }
 
 // EmissionKeeper is the subset of x/emission x/relay mints against. RelayCeiling

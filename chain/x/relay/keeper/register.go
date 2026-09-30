@@ -24,7 +24,7 @@ func (k Keeper) registerRelay(ctx sdk.Context, msg *types.MsgRegisterRelay) erro
 	if err != nil {
 		return fmt.Errorf("register relay: invalid operator: %w", err)
 	}
-	pub, boundOperator, ipv4, err := k.nodes.RelayBinding(ctx, msg.NodeId)
+	pub, boundOperator, network, err := k.nodes.RelayBinding(ctx, msg.NodeId)
 	if err != nil {
 		return fmt.Errorf("register relay: node %s: %w", msg.NodeId, err)
 	}
@@ -37,7 +37,7 @@ func (k Keeper) registerRelay(ctx sdk.Context, msg *types.MsgRegisterRelay) erro
 	if !types.VerifyCrossCert(pub, msg.NodeId, msg.RsaFingerprint, msg.Ed25519Signature) {
 		return fmt.Errorf("register relay: %w", types.ErrCrossCertMismatch)
 	}
-	prefix16, err := types.CanonicalPrefix16(ipv4)
+	prefix16, err := types.RelayPrefix16(network)
 	if err != nil {
 		return fmt.Errorf("register relay: node %s: %w", msg.NodeId, err)
 	}

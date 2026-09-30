@@ -5,6 +5,21 @@ import (
 	"net"
 )
 
+// UnidentifiedPrefix16 is the one shared bucket for relays whose node has no
+// identified network (no literal-IP endpoint, or an identity still inside
+// x/nodes' network_identity_lock_seconds). Every such relay shares a single
+// per_prefix16_cap, matching x/nodes' "counts as unidentified" convention.
+const UnidentifiedPrefix16 = "unidentified"
+
+// RelayPrefix16 maps the network x/nodes reports for a node (a canonical
+// "A.B.0.0/16", or "" when unidentified) to the bucket the per-/16 cap uses.
+func RelayPrefix16(network string) (string, error) {
+	if network == "" {
+		return UnidentifiedPrefix16, nil
+	}
+	return CanonicalPrefix16(network)
+}
+
 // CanonicalPrefix16 maps an IPv4 address or CIDR to the /16 that contains it,
 // "A.B.0.0/16". IPv6 is rejected. The per-/16 cap buckets on this string.
 func CanonicalPrefix16(raw string) (string, error) {

@@ -283,6 +283,15 @@ contract may hold ORAMA and issue a public IOU for it, and the genesis token wra
 | `per_operator_cap` | `200000000000 (200 ORAMA)` | track-c C8 (structure only); G1 launch default (see note below) |
 | `per_prefix16_cap` | `200000000000 (200 ORAMA)` | track-c C8 (structure only); G1 launch default (see note below) |
 
+The `per_prefix16_cap` bucket of a relay is its node's effective network from `x/nodes` (the /16 derived from
+its literal-IP endpoints, see the identity section below), read when `MsgRegisterRelay` runs and stored as the
+relay's `prefix16` (`A.B.0.0/16`). A node with no literal-IP endpoint, or whose identity is still inside
+`network_identity_lock_seconds`, has no identified network: every such relay goes into one shared bucket,
+stored as `unidentified`, so all of them together share a single `per_prefix16_cap`. Genesis accepts
+`unidentified` as canonical, so export and import round-trip. The bucket is a snapshot taken at registration;
+a later endpoint change does not move an existing relay. A literal IPv6 endpoint yields a `/32` network, which
+`MsgRegisterRelay` rejects (the cap buckets IPv4 /16 only).
+
 `token`
 
 | Parameter | Locked value | Source |

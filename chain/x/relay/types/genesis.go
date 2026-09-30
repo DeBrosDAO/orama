@@ -85,9 +85,12 @@ func validateRelays(relays []Relay) (map[string]Relay, error) {
 		if operator != relay.Operator {
 			return nil, fmt.Errorf("relay %s operator must be canonical", relay.NodeId)
 		}
-		canonical, err := CanonicalPrefix16(relay.Prefix16)
-		if err != nil {
-			return nil, fmt.Errorf("relay %s: %w", relay.NodeId, err)
+		canonical := relay.Prefix16
+		if relay.Prefix16 != UnidentifiedPrefix16 {
+			canonical, err = CanonicalPrefix16(relay.Prefix16)
+			if err != nil {
+				return nil, fmt.Errorf("relay %s: %w", relay.NodeId, err)
+			}
 		}
 		if canonical != relay.Prefix16 {
 			return nil, fmt.Errorf("relay %s prefix16 must be canonical, got %q", relay.NodeId, relay.Prefix16)
