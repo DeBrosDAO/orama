@@ -91,8 +91,12 @@ func networkRoutesOtherNamespaceCredentialRefused(t *testing.T, opNS *ns.Namespa
 }
 
 // forgedStamp is a coordination MAC of the right shape that no key made.
+// Set canonicalizes the name, so Get finds it again (a literal map key
+// spelled "...-MAC" would not be found by Get's "...-Mac").
 func forgedStamp() http.Header {
-	return http.Header{coordinationHeader: {fmt.Sprintf("%d.%s", time.Now().Unix(), strings.Repeat("0", macHexLen))}}
+	h := http.Header{}
+	h.Set(coordinationHeader, fmt.Sprintf("%d.%s", time.Now().Unix(), strings.Repeat("0", macHexLen)))
+	return h
 }
 
 // TestNetworkDetail_forgedCoordinationStampIs404: a request carrying a
