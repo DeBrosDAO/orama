@@ -41,7 +41,7 @@ func forwardFixture(t *testing.T, overlayIP string) (*SQLiteHandler, *httptest.S
 	hits := 0
 	home := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
-		if r.Header.Get("Authorization") != "Bearer session" {
+		if r.Header.Get("Authorization") != "Bearer session" && r.Header.Get("X-API-Key") != "orama_rk_key" {
 			t.Errorf("forward dropped the caller credential")
 		}
 		if r.Header.Get(forwardHeader) != "1" {
@@ -104,6 +104,28 @@ func TestQueryDatabase_forwardsToTheHomeNode(t *testing.T) {
 	}
 	if *hits != 1 {
 		t.Fatalf("home was asked %d times", *hits)
+	}
+}
+
+// A caller that authenticated with an API key is re-authenticated by the home
+// node too, so the key travels; it used to be dropped and the home answered 401.
+func TestQueryDatabase_forwardCarriesAnAPIKey(t *testing.T) {
+	h, _, hits := forwardFixture(t, "127.0.0.1")
+	req := queryRequest(`{"database_name":"proofdb","query":"SELECT 1"}`, false)
+	req.Header.Del("Authorization")
+	req.Header.Set("X-API-Key", "orama_rk_key")
+	rr := httptest.NewRecorder()
+	h.QueryDatabase(rr, req)
+	if rr.Code != http.StatusOK || *hits != 1 {
+		t.Fatalf("status %d, home asked %d times: %s", rr.Code, *hits, rr.Body.String())
+	}
+}
+
+// A handler whose registry was never set says so; it does not panic.
+func TestHomeGateway_noRegistryIsAnError(t *testing.T) {
+	h := &SQLiteHandler{}
+	if _, _, err := h.homeGateway(context.Background(), "home-peer", "ns"); err == nil {
+		t.Fatal("want an error for a handler with no registry")
 	}
 }
 
