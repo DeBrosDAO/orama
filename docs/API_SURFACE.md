@@ -76,6 +76,8 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/rqlite/select` | SDK | `QueryBuilder.getMany()` / `getOne()` |
 | `/v1/rqlite/transaction` | SDK | `db.transaction()` |
 
+On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transaction op, the statement `select` and `find` build, create-table, drop-table) may not name a platform table such as `grants`, `api_keys`, `ipfs_content_ownership` or `deployments`, however it is quoted. A request that does is refused with `403` and `code: SQL_NOT_ALLOWED`, whoever the caller is. The list is under "Function SQL" in [SECURITY.md](SECURITY.md#function-sql) and [SERVERLESS.md](SERVERLESS.md). The cluster gateway's `/v1/rqlite/*` is an operator's and is not filtered.
+
 ### Cache
 
 | Route | Owner | Notes |

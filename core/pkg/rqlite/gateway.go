@@ -49,6 +49,12 @@ type HTTPGateway struct {
 
 	// Optional: Request timeout. If > 0, handlers will use a context with this timeout.
 	Timeout time.Duration
+
+	// SQLGuard, when set, is asked about every statement a request would run —
+	// query, exec, each op of a transaction, the SQL a find or select builds,
+	// create-table and drop-table — and a refusal is a 403 before anything
+	// reaches the database. Nil means unguarded.
+	SQLGuard SQLGuard
 }
 
 // NewHTTPGateway constructs a new HTTPGateway with sensible defaults.
@@ -275,6 +281,10 @@ func (g *HTTPGateway) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body: {sql, args?}")
 		return
 	}
+	if err := g.checkSQL(body.SQL); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 	args := normalizeArgs(body.Args)
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
@@ -301,6 +311,10 @@ func (g *HTTPGateway) handleExec(w http.ResponseWriter, r *http.Request) {
 	var body execRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.SQL) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {sql, args?}")
+		return
+	}
+	if err := g.checkSQL(body.SQL); err != nil {
+		refuseSQL(w, err)
 		return
 	}
 	args := normalizeArgs(body.Args)
@@ -335,6 +349,10 @@ func (g *HTTPGateway) handleFind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts := makeFindOptions(mergeFindOptions(body))
+	if err := g.checkFind(body.Table, body.Criteria, opts); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
@@ -363,6 +381,10 @@ func (g *HTTPGateway) handleFindOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts := makeFindOptions(mergeFindOptions(body))
+	if err := g.checkFind(body.Table, body.Criteria, opts); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
@@ -434,6 +456,10 @@ func (g *HTTPGateway) handleSelect(w http.ResponseWriter, r *http.Request) {
 	if body.Offset != nil {
 		qb = qb.Offset(*body.Offset)
 	}
+	if err := g.checkBuilt(qb); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 
 	if body.One {
 		row := make(map[string]any)
@@ -495,6 +521,10 @@ func (g *HTTPGateway) handleTransaction(w http.ResponseWriter, r *http.Request) 
 		kind := BatchOpKind(strings.ToLower(strings.TrimSpace(op.Kind)))
 		if kind != BatchOpExec && kind != BatchOpQuery {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid op kind: %s", op.Kind))
+			return
+		}
+		if err := g.checkSQL(op.SQL); err != nil {
+			refuseSQL(w, fmt.Errorf("op %d: %w", len(batchOps), err))
 			return
 		}
 		batchOps = append(batchOps, BatchOp{
@@ -607,6 +637,10 @@ func (g *HTTPGateway) handleCreateTable(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid body: {schema}")
 		return
 	}
+	if err := g.checkSQL(body.Schema); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
@@ -639,10 +673,14 @@ func (g *HTTPGateway) handleDropTable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid table identifier")
 		return
 	}
+	stmt := "DROP TABLE " + tbl
+	if err := g.checkSQL(stmt); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
-	stmt := "DROP TABLE " + tbl
 	if _, err := g.Client.Exec(ctx, stmt); err != nil {
 		if strings.Contains(err.Error(), "no such table") {
 			writeError(w, http.StatusNotFound, err.Error())

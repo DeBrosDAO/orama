@@ -7,6 +7,8 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	authhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/sqlguard"
 	"go.uber.org/zap"
 )
 
@@ -41,6 +43,35 @@ func (g *Gateway) servesCoreRegistry() bool {
 		return false
 	}
 	return ownNamespace(g.cfg) == auth.LobbyNamespace
+}
+
+// configureORMGateway mounts the ORM gateway at its base path and installs the
+// SQL guard for the database this gateway serves.
+func (g *Gateway) configureORMGateway() {
+	g.ormHTTP.BasePath = ormBasePath
+	g.ormHTTP.SQLGuard = g.ormSQLGuard()
+}
+
+// ormSQLGuard is the filter the ORM gateway runs tenant SQL through: the same
+// one a function's SQL goes through, so raw SQL over /v1/rqlite cannot name the
+// platform tables that share a namespace's database (grants, ipfs_content_ownership,
+// namespaces, deployments and the rest of sqlguard's list).
+//
+// Who is exempt is decided by which database the gateway serves, never by who
+// is calling. The cluster gateway serves the registry, and requireOperatorForCoreRegistry
+// already refuses every /v1/rqlite request on it that does not come from an
+// operator, whose job there is precisely to read and write those tables. A
+// namespace gateway serves a tenant's database, and everyone reaching it is a
+// tenant — the owner and an admin included. An admin who could write api_keys
+// directly would bypass the key-minting path and its scope checks, and one who
+// could write grants would bypass the owner-only transfer. Nothing is exempt on
+// that side, and a gateway whose configuration is missing is treated as one
+// (servesCoreRegistry is false without a config), so the failure mode is refusal.
+func (g *Gateway) ormSQLGuard() rqlite.SQLGuard {
+	if g.servesCoreRegistry() {
+		return nil
+	}
+	return sqlguard.Check
 }
 
 // functionDatabaseNamespace is the namespace whose functions may use a

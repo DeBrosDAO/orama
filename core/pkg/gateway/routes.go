@@ -149,7 +149,7 @@ func (g *Gateway) Routes() http.Handler {
 	// own patterns, so it reports them and they are checked against the policy
 	// table before its handlers go on.
 	if g.ormHTTP != nil {
-		g.ormHTTP.BasePath = ormBasePath
+		g.configureORMGateway()
 		mux.RegisterAll(g.ormHTTP.Routes(), g.ormHTTP.RegisterRoutes)
 	}
 
