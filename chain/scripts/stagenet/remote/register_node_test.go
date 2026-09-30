@@ -12,7 +12,7 @@ import (
 func registerArgs(mutate func(args []string)) []string {
 	args := []string{
 		"orama-stagenet-1", "node-id", "203.0.113.7", "16276", "1000000000", "1000000000",
-		"10737418240", "2000000000", "600000", "1500000",
+		"10737418240", "2000000000", "600000",
 	}
 	mutate(args)
 	return args
@@ -25,7 +25,7 @@ func runRegister(t *testing.T, args []string) (string, error) {
 }
 
 func TestRegisterNode_refusesANumberThatIsNotAPlainDecimal(t *testing.T) {
-	names := map[int]string{3: "ASN", 4: "STORAGE_BOND", 5: "ARCHIVER_BOND", 6: "CAPACITY_BYTES", 7: "HOT_KEY_FUND", 8: "TX_GAS", 9: "TX_FEE"}
+	names := map[int]string{3: "ASN", 4: "STORAGE_BOND", 5: "ARCHIVER_BOND", 6: "CAPACITY_BYTES", 7: "HOT_KEY_FUND", 8: "TX_GAS"}
 	for idx, name := range names {
 		for _, bad := range []string{"", "12x", "-1", "1e9", "0x10", "1 2", "$(id)", "1234567890123456", "07; rm -rf /", "010", "00", "0123"} {
 			out, err := runRegister(t, registerArgs(func(a []string) { a[idx] = bad }))

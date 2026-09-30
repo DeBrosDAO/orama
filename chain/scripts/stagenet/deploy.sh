@@ -41,7 +41,7 @@
 #   STORAGE_BOND_NORAMA      the STORAGE bond; default is the least that backs the capacity.
 #   ARCHIVER_BOND_NORAMA     the ARCHIVER bond (1 ORAMA, the role minimum).
 #   HOT_KEY_FUND_NORAMA      the fee-only balance given to each hot key (2 ORAMA).
-#   TX_GAS TX_FEE            gas limit and fee of each `orama global` transaction.
+#   TX_GAS                   gas limit of each `orama global` transaction; its fee is gas x the base fee.
 #   EPOCH_DURATION EPOCH_MIN_BLOCKS VOTE_EXTENSIONS_ENABLE_HEIGHT   as before (genesis).
 #   CA_FILE                  PEM bundle that signs the gateway certificate (smoke).
 #   GATEWAY_URL              the gateway smoke reads through (https://stagenet.dbrsteting.bid).
@@ -98,7 +98,6 @@ PUBLIC_STORAGE_GB="${PUBLIC_STORAGE_GB:-10}"
 ARCHIVER_BOND_NORAMA="${ARCHIVER_BOND_NORAMA:-1000000000}"
 HOT_KEY_FUND_NORAMA="${HOT_KEY_FUND_NORAMA:-2000000000}"
 TX_GAS="${TX_GAS:-600000}"
-TX_FEE="${TX_FEE:-1500000}"
 CA_FILE="${CA_FILE:-/Users/pen/orama-stagenet-handoff/le-staging-roots.pem}"
 GATEWAY_URL="${GATEWAY_URL:-https://stagenet.dbrsteting.bid}"
 SHIELDED_SCENARIO="${SHIELDED_SCENARIO:-}"
@@ -124,7 +123,7 @@ if ! [[ "$EPOCH_DURATION" =~ ^[0-9]+(h|m|s)$ ]]; then
 	echo "invalid EPOCH_DURATION (expected e.g. 300s, 5m, 1h): $EPOCH_DURATION" >&2
 	exit 1
 fi
-for v in EPOCH_MIN_BLOCKS VOTE_EXTENSIONS_ENABLE_HEIGHT PUBLIC_STORAGE_GB ARCHIVER_BOND_NORAMA HOT_KEY_FUND_NORAMA TX_GAS TX_FEE; do
+for v in EPOCH_MIN_BLOCKS VOTE_EXTENSIONS_ENABLE_HEIGHT PUBLIC_STORAGE_GB ARCHIVER_BOND_NORAMA HOT_KEY_FUND_NORAMA TX_GAS; do
 	if ! [[ "${!v}" =~ ^[0-9]{1,15}$ ]]; then
 		echo "invalid $v (expected a plain integer): ${!v}" >&2
 		exit 1
@@ -688,7 +687,7 @@ cmd_register() {
 		log "[$name] registering (asn $asn, endpoint http://$ip:$PROVIDER_PORT)"
 		run_remote_script "$alias" register-node.sh "$CHAIN_ID" "stagenet-$name" "$ip" "$asn" \
 			"$STORAGE_BOND_NORAMA" "$ARCHIVER_BOND_NORAMA" "$CAPACITY_BYTES" "$HOT_KEY_FUND_NORAMA" \
-			"$TX_GAS" "$TX_FEE"
+			"$TX_GAS"
 	done
 }
 

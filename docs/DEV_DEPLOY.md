@@ -627,7 +627,7 @@ cause the script detected in the chain's state and is never used to hide a failu
 | `STORAGE_BOND_NORAMA` | the least that backs the capacity | 1 ORAMA of bond backs 1 GiB |
 | `ARCHIVER_BOND_NORAMA` | `1000000000` | 1 ORAMA, the role minimum |
 | `HOT_KEY_FUND_NORAMA` | `2000000000` | fee-only balance of each hot key |
-| `TX_GAS`, `TX_FEE` | `600000`, `1500000` | gas limit and fee of each `orama global` transaction |
+| `TX_GAS` | `600000` | gas limit of each `orama global` transaction. Its fee is read from the chain right before it is sent: gas × the current base fee, with no tip, because the operator pays from earnings and x/fees pays a tip only from a bank balance |
 | `EPOCH_DURATION`, `EPOCH_MIN_BLOCKS`, `VOTE_EXTENSIONS_ENABLE_HEIGHT` | `300s`, `10`, `2` | genesis |
 | `CA_FILE` | `/Users/pen/orama-stagenet-handoff/le-staging-roots.pem` | CA bundle that signs the gateway's certificate |
 | `GATEWAY_URL` | `https://stagenet.dbrsteting.bid` | the gateway `smoke` reads through |

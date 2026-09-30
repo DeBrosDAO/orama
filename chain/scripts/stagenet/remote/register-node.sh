@@ -7,7 +7,7 @@
 # host and is never printed, stored or copied off it. Stagenet only (deploy.sh checks the chain id).
 #
 # Arguments: chain-id node-id public-ip asn storage-bond archiver-bond capacity-bytes hot-key-fund
-#            tx-gas tx-fee   (amounts in norama; deploy.sh validates every one)
+#            tx-gas   (amounts in norama; deploy.sh validates every one)
 #
 # The chain's RPC (31001) and REST API (31003) listen on the orama-global namespace address 198.18.0.2,
 # which this host reaches directly. Every step is idempotent: a re-run skips what the chain already
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 CHAIN_ID=$1 NODE_ID=$2 PUBLIC_IP=$3 ASN=$4 STORAGE_BOND=$5 ARCHIVER_BOND=$6
-CAPACITY_BYTES=$7 HOT_KEY_FUND=$8 TX_GAS=$9 TX_FEE=${10}
+CAPACITY_BYTES=$7 HOT_KEY_FUND=$8 TX_GAS=$9
 
 BIN_DIR=/usr/lib/orama-global/bin
 ORAMAD=$BIN_DIR/oramad
@@ -48,9 +48,19 @@ die() { printf '[%s] ERROR: %s\n' "$NODE_ID" "$*" >&2; exit 1; }
 # before it stages this script, but this script runs as root on the node and does not rely on that:
 # a value that is not a plain decimal of at most 15 digits with no leading zero (bash would read 010 as octal, and no sum of them may overflow) is refused
 # before anything is changed.
-for v in ASN STORAGE_BOND ARCHIVER_BOND CAPACITY_BYTES HOT_KEY_FUND TX_GAS TX_FEE; do
+for v in ASN STORAGE_BOND ARCHIVER_BOND CAPACITY_BYTES HOT_KEY_FUND TX_GAS; do
 	[[ ${!v} =~ ^(0|[1-9][0-9]{0,14})$ ]] || die "$v is not a plain number of at most 15 digits without leading zeros: ${!v}"
 done
+
+# tx_fee is the fee of one `orama global` transaction at the chain's current base fee, with no tip:
+# the operator pays from earnings, and x/fees pays a tip only from a bank balance. It is read right
+# before each transaction, since the base fee moves with load.
+tx_fee() {
+	local f
+	f=$("$HELPER" tx-fee --rpc "$RPC" --gas "$TX_GAS")
+	[[ $f =~ ^[1-9][0-9]{0,14}$ ]] || die "the transaction fee read as '$f', not a positive number of at most 15 digits"
+	printf '%s\n' "$f"
+}
 
 # The operator key, as one hex line, from oramad's test keyring. Anything else it prints is ignored
 # by the helper.
@@ -127,7 +137,8 @@ done
 # --- earnings must cover the bonds --------------------------------------------------------------
 earnings=$("$HELPER" earnings --rpc "$RPC" --address "$operator")
 [[ $earnings =~ ^(0|[1-9][0-9]{0,14})$ ]] || die "the operator's earnings read as '$earnings', not a number the chain could hold"
-need=$((STORAGE_BOND + ARCHIVER_BOND + HOT_KEY_FUND + EARNINGS_MARGIN + 6 * TX_FEE))
+fee=$(tx_fee)
+need=$((STORAGE_BOND + ARCHIVER_BOND + HOT_KEY_FUND + EARNINGS_MARGIN + 6 * fee))
 if [ "$(node_field exists)" != true ] && [ "$earnings" -lt "$need" ]; then
 	die "the operator's earnings are $earnings norama; registering needs about $need. Let the chain run longer (more epochs) and retry"
 fi
@@ -138,11 +149,12 @@ operator_key | "$HELPER" register-operator --rpc "$RPC"
 if [ "$(node_field exists)" != true ]; then
 	"$ORAMA" global bind --chain-id "$CHAIN_ID" --operator "$operator" --service hot-key \
 		--key-file "$PROVIDER_HOME/hot-key" --key-type secp256k1 >"$work/hot-key.binding.json"
+	fee=$(tx_fee)
 	env RW_AGENT_SOCK="$AGENT_SOCK" "$ORAMA" global register \
 		--chain-id "$CHAIN_ID" --operator "$operator" --id "$NODE_ID" --hot-key "$hot_key" \
 		--role storage --role archiver --binding "$work/hot-key.binding.json" \
 		--endpoint "http://$PUBLIC_IP:$PROVIDER_PORT" --asn "$ASN" \
-		--fee "$TX_FEE" --gas "$TX_GAS" --node "$REST"
+		--fee "$fee" --gas "$TX_GAS" --node "$REST"
 	poll_field exists true "register"
 else
 	log "node already registered"
@@ -151,9 +163,10 @@ fi
 bond() {
 	local role=$1 amount=$2 field=$3
 	if [ "$(node_field "$field")" = 0 ]; then
+		fee=$(tx_fee)
 		env RW_AGENT_SOCK="$AGENT_SOCK" "$ORAMA" global bond \
 			--chain-id "$CHAIN_ID" --operator "$operator" --id "$NODE_ID" --role "$role" --amount "$amount" \
-			--fee "$TX_FEE" --gas "$TX_GAS" --node "$REST"
+			--fee "$fee" --gas "$TX_GAS" --node "$REST"
 		poll_field "$field" "$amount" "bond $role"
 	else
 		log "$role already bonded"
@@ -171,9 +184,10 @@ else
 fi
 
 if [ "$(node_field capacity)" != "$CAPACITY_BYTES" ]; then
+	fee=$(tx_fee)
 	env RW_AGENT_SOCK="$AGENT_SOCK" "$ORAMA" global capacity \
 		--chain-id "$CHAIN_ID" --operator "$operator" --id "$NODE_ID" --bytes "$CAPACITY_BYTES" \
-		--fee "$TX_FEE" --gas "$TX_GAS" --node "$REST"
+		--fee "$fee" --gas "$TX_GAS" --node "$REST"
 	poll_field capacity "$CAPACITY_BYTES" "declare capacity"
 fi
 

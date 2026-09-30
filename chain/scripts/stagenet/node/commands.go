@@ -22,7 +22,7 @@ const defaultRPC = "tcp://198.18.0.2:31001"
 
 func run(ctx context.Context, args []string, stdin io.Reader, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: stagenet-node agent|address|epoch|earnings|fee-balance|register-operator|fund-hot-key|node-status [flags]")
+		return errors.New("usage: stagenet-node agent|address|epoch|earnings|fee-balance|tx-fee|register-operator|fund-hot-key|node-status [flags]")
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -36,6 +36,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, out io.Writer) err
 		return cmdEarnings(ctx, rest, out)
 	case "fee-balance":
 		return cmdFeeBalance(ctx, rest, out)
+	case "tx-fee":
+		return cmdTxFee(ctx, rest, out)
 	case "register-operator":
 		return cmdRegisterOperator(ctx, rest, stdin, out)
 	case "fund-hot-key":
