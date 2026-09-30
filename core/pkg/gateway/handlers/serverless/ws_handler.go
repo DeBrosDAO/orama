@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"net/http"
 	"net/url"
 	"strings"
@@ -90,6 +91,13 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	// credential's namespace (bugboard #423).
 	namespace, ok := managedNamespace(w, r)
 	if !ok {
+		return
+	}
+	// A grant narrowed to `fn:name=` limits which functions a socket may run,
+	// as it limits HTTP invocation (invoke_handler.go); checked before the
+	// upgrade and before a persistent instance is taken.
+	if err := auth.AuthorizeResource(r.Context(), auth.Resource{Domain: auth.SelectorFn, Name: name}); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 

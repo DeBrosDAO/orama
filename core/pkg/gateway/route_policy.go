@@ -114,15 +114,16 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/internal/acme/present", "/v1/internal/acme/cleanup", "/v1/internal/tls/check",
 		// Peer health probing. Returns the node id and nothing else.
 		"/v1/internal/ping",
-		// The invoker decides whether the caller may run the function, and a
-		// public function is open by design.
-		"/v1/invoke/",
 		// Read-only chain proxy for the explorer. The handler allowlists
 		// Comet and bank/staking reads, the chain indexer's routes under
 		// /v1/chain/index/ and the Orama modules' Query services under
 		// /v1/chain/query/. It does not forward an arbitrary path.
 		"/v1/chain/",
 	)
+	// The invoker decides whether the caller may run the function, and a
+	// public function is open by design — but a grant narrowed to
+	// `fn:name=` still limits it, on this route as on /v1/functions/<fn>/invoke.
+	t.Add(policyInvoke, "/v1/invoke/")
 
 	// --- The handler authenticates the caller --------------------------
 	t.Add(policyHandlerAuth,
@@ -435,13 +436,20 @@ func ormGatewayRoutes() []string {
 // the path's suffix, so `/v1/functions/{fn}/triggers/invoke` and
 // `/v1/functions/secrets/invoke` were "invoke", public, and dispatched to the
 // trigger and secret handlers.
+// policyInvoke is the policy of the HTTP invoke routes: open (a public function
+// needs no credential; whether a caller may run a private one is the
+// invoker's decision), but a grant narrowed to `fn:name=` is resolved and
+// applied (narrowOpenRoute), so a narrowed wallet runs only its functions.
+var policyInvoke = func() routepolicy.Policy {
+	p := policyOpen
+	p.NarrowedByGrant = true
+	return p
+}()
+
 func functionRoutePolicy(r *http.Request) routepolicy.Policy {
 	switch {
 	case serverlesshandlers.IsFunctionAction(r.URL.Path, "invoke"):
-		// Open, but a grant narrowed to `fn:name=` still applies to it.
-		p := policyOpen
-		p.NarrowedByGrant = true
-		return p
+		return policyInvoke
 	case isCapabilityUpgrade(r):
 		return policyHandlerAuth
 	case serverlesshandlers.IsFunctionAction(r.URL.Path, "ws"):

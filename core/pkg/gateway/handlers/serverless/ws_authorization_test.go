@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -118,5 +119,27 @@ func TestHandleWebSocket_persistentAllowsAnAuthorizedCaller(t *testing.T) {
 				t.Fatalf("an authorized caller was refused: %s", rec.Body.String())
 			}
 		})
+	}
+}
+
+// A grant narrowed to one function opens a socket to that function only; the
+// socket is an invocation like POST /v1/invoke/ and the selector binds it too.
+func TestHandleWebSocket_aGrantNarrowedToAFunctionOpensOnlyThatFunction(t *testing.T) {
+	narrowed := map[any]any{
+		ctxkeys.Permissions: auth.PermissionsFor(auth.RoleRuntime, "fn:name=checkout"),
+	}
+
+	refund := handlersWith(persistentFn("refund", true, false))
+	rec := httptest.NewRecorder()
+	refund.HandleWebSocket(rec, upgradeRequest(narrowed), "refund", 0)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("refund status = %d, want 403 — a grant narrowed to fn:name=checkout opened another function's socket", rec.Code)
+	}
+
+	checkout := handlersWith(persistentFn("checkout", true, false))
+	rec = httptest.NewRecorder()
+	checkout.HandleWebSocket(rec, upgradeRequest(narrowed), "checkout", 0)
+	if rec.Code == http.StatusForbidden {
+		t.Fatalf("checkout status = 403 (%s), want the grant to admit its own function", strings.TrimSpace(rec.Body.String()))
 	}
 }

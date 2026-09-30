@@ -297,3 +297,18 @@ func TestForwardedInvoke_onlyANarrowedGrantChangesTheOpenRoute(t *testing.T) {
 		}
 	})
 }
+
+// POST /v1/invoke/<namespace>/<function> is the canonical invoke route and was
+// registered on its own, as a plain open route: a wallet narrowed to one
+// function still ran every other one through it.
+func TestForwardedInvoke_theInvokeRouteIsNarrowedToo(t *testing.T) {
+	g, registry := namespaceGatewayForHops(t, "runtime")
+	registry.resource = "fn:name=checkout"
+	for fn, want := range map[string]int{"checkout": http.StatusOK, "refund": http.StatusForbidden} {
+		r := hop(t, g, http.MethodPost, "/v1/invoke/"+hopNamespace+"/"+fn, hopNamespace, hopWallet)
+		status, reached := serveHopAuthorizing(g, r, auth.Resource{Domain: auth.SelectorFn, Name: fn})
+		if !reached || status != want {
+			t.Errorf("/v1/invoke/%s/%s: reached %v, status %d, want %d", hopNamespace, fn, reached, status, want)
+		}
+	}
+}
