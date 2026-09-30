@@ -65,7 +65,8 @@ only when there is no session to renew.
 The CLI renews the access token a minute before it expires. Only the gateway
 refusing the refresh token — `401` (unknown, expired, revoked or replayed) or
 `403` (a device-bound session refused for its device's sake) — ends the session
-and asks for `orama auth login` again. A gateway that cannot be reached, a `5xx`
+and asks for `orama auth login` again, and the command exits `3` (auth), the same
+as a missing login. A gateway that cannot be reached, a `5xx`
 (`/v1/auth/refresh` answers `503` while the rqlite leader moves during a rolling
 upgrade), a `429` or a `400` leaves the stored session untouched and fails only
 that attempt, so the next one — or `orama monitor`'s next reconnect — renews it.
