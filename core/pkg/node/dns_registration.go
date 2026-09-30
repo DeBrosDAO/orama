@@ -820,7 +820,11 @@ func configuredPublicIP(publicIP string) (string, error) {
 // Old code versions could insert WireGuard IPs (10.0.0.x) into the table. This runs on
 // every heartbeat to self-heal.
 func cleanupPrivateIPRecords(ctx context.Context, db *sql.DB, logger *logging.ColoredLogger) {
-	query := `DELETE FROM dns_records WHERE record_type = 'A' AND namespace = 'system'
+	// A deployment's records are public too: a replica's used to be written
+	// with the node's WireGuard address (SetupDynamicReplica), and nothing
+	// removed them once that stopped.
+	query := `DELETE FROM dns_records WHERE record_type = 'A'
+		AND (namespace = 'system' OR COALESCE(deployment_id, '') != '')
 		AND (value LIKE '10.%' OR value LIKE '172.16.%' OR value LIKE '172.17.%' OR value LIKE '172.18.%'
 		OR value LIKE '172.19.%' OR value LIKE '172.2_.%' OR value LIKE '172.30.%' OR value LIKE '172.31.%'
 		OR value LIKE '192.168.%' OR value = '127.0.0.1')`

@@ -513,20 +513,31 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 	)
 
 	// Create DNS record for the replica node (after successful setup)
+	s.publishReplicaRecord(ctx, deployment, nodeID)
+}
+
+// publishReplicaRecord adds the replica node's A record for the deployment.
+// The record is public: it takes the node's public address, as the home
+// node's does (getNodeIP). The WireGuard overlay address the internal setup
+// call used is reachable by nobody on the internet; the replica's record
+// used to publish it.
+func (s *DeploymentService) publishReplicaRecord(ctx context.Context, deployment *deployments.Deployment, nodeID string) {
 	dnsName := deployment.Subdomain
 	if dnsName == "" {
 		dnsName = deployment.Name
 	}
 	fqdn := fmt.Sprintf("%s.%s.", dnsName, s.BaseDomain())
-	if err := s.createDNSRecord(ctx, fqdn, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
-		s.logger.Error("Failed to create DNS record for replica", zap.String("node_id", nodeID), zap.Error(err))
-	} else {
-		s.logger.Info("Created DNS record for replica",
-			zap.String("fqdn", fqdn),
-			zap.String("ip", nodeIP),
-			zap.String("node_id", nodeID),
-		)
+	publicIP, err := s.getNodeIP(ctx, nodeID)
+	if err != nil {
+		s.logger.Error("Failed to get the replica node's public IP for its DNS record", zap.String("node_id", nodeID), zap.Error(err))
+		return
 	}
+	if err := s.createDNSRecord(ctx, fqdn, "A", publicIP, deployment.Namespace, deployment.ID); err != nil {
+		s.logger.Error("Failed to create DNS record for replica", zap.String("node_id", nodeID), zap.Error(err))
+		return
+	}
+	s.logger.Info("Created DNS record for replica",
+		zap.String("fqdn", fqdn), zap.String("ip", publicIP), zap.String("node_id", nodeID))
 }
 
 // callInternalAPI makes an HTTP POST to a node's internal API.
