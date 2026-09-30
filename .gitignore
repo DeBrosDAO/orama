@@ -23,9 +23,14 @@ Thumbs.db
 .claude/
 .codex/
 secrets/
-# Go packages named secrets are source code, not secret material.
+# Go packages named secrets are source code, not secret material: only their .go files are tracked,
+# so a key dropped into one is still ignored.
 !/core/pkg/secrets/
+/core/pkg/secrets/*
+!/core/pkg/secrets/*.go
 !/e2e/harness/secrets/
+/e2e/harness/secrets/*
+!/e2e/harness/secrets/*.go
 
 # === Core (Go) ===
 core/phantom-auth/

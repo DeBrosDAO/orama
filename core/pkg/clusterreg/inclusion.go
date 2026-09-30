@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -21,6 +23,19 @@ const (
 	maxResultLog  = 300
 )
 
+var txHashPattern = regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
+
+// printable drops control characters (terminal escapes among them) from text the chain sent, which
+// is printed to the operator's terminal.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // ErrNotIncluded is returned when a broadcast transaction is not in a block by the deadline.
 var ErrNotIncluded = errors.New("the transaction is not in a block")
 
@@ -29,6 +44,11 @@ var ErrNotIncluded = errors.New("the transaction is not in a block")
 // it can still fail when its block runs it, and that failure is returned here with the chain's log.
 // Not found means not in a block yet; any other error ends the wait.
 func WaitIncluded(ctx context.Context, base, hash string, timeout, poll time.Duration) (int64, error) {
+	// The hash came back from the node that took the broadcast: only a transaction hash may go
+	// into the lookup's path.
+	if !txHashPattern.MatchString(hash) {
+		return 0, fmt.Errorf("the chain returned %q as the transaction hash, which is not a 64-digit hex hash", printable(hash))
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	tick := time.NewTicker(poll)
@@ -84,7 +104,7 @@ func txResult(ctx context.Context, url string) (int64, bool, error) {
 		return 0, false, fmt.Errorf("transaction result has no block height (%q)", resp.TxResponse.Height)
 	}
 	if resp.TxResponse.Code != 0 {
-		log := resp.TxResponse.RawLog
+		log := printable(resp.TxResponse.RawLog)
 		if len(log) > maxResultLog {
 			log = log[:maxResultLog]
 		}

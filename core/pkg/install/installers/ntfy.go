@@ -2,7 +2,6 @@ package installers
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -63,6 +62,29 @@ const (
 	ntfyDataDir    = "/var/lib/ntfy"
 	ntfyUser       = "ntfy"
 )
+
+// ntfyTarballSHA256 pins the SHA-256 of ntfy_<ntfyVersion>_linux_<arch>.tar.gz. It is recorded here,
+// not read from the release's own checksums file, so a release altered after upload (tarball and
+// checksums together) is refused. Update it with ntfyVersion: hash the downloaded tarball and
+// compare it with upstream's checksums.txt.
+var ntfyTarballSHA256 = map[string]string{
+	"amd64": "881a1530e30e01f1dec202c7f41e1664e57edfb7844e73e21e345159ac3ea9b7",
+	"arm64": "18a13411e315ba44781df222c432d27527fc089c2229a994c593beb9c1e247a0",
+}
+
+// verifyNtfyTarball refuses a tarball whose SHA-256 is not the pinned digest for arch.
+func verifyNtfyTarball(arch string, data []byte) (string, error) {
+	want, ok := ntfyTarballSHA256[arch]
+	if !ok {
+		return "", fmt.Errorf("no pinned ntfy %s digest for %s", ntfyVersion, arch)
+	}
+	sum := sha256.Sum256(data)
+	got := hex.EncodeToString(sum[:])
+	if got != want {
+		return "", fmt.Errorf("ntfy tarball SHA-256 mismatch: got %s, want %s — refusing to install (possible supply-chain tampering)", got, want)
+	}
+	return got, nil
+}
 
 // NtfyInstaller installs and configures a self-hosted ntfy server.
 // Designed for ns1 on devnet (per feature #72) and a dedicated node on
@@ -188,12 +210,12 @@ func (ni *NtfyInstaller) ensureDirs() error {
 }
 
 // downloadBinary fetches the ntfy release archive, verifies its
-// SHA-256 against the upstream checksums file, and installs the
+// SHA-256 against the digest pinned in this file, and installs the
 // binary at /usr/local/bin/ntfy with 0755 permissions.
 //
 // Defense-in-depth: HTTPS to github.com pins the TLS chain; the
-// checksum verification catches the case where a release was modified
-// after upload (compromised maintainer, mirror swap, etc.). Either
+// pinned digest catches a release modified after upload, even with its
+// checksums file (compromised maintainer, mirror swap, etc.). Either
 // failing gate stops the install.
 //
 // Release URL pattern:
@@ -213,15 +235,6 @@ func (ni *NtfyInstaller) downloadBinary() error {
 	tarballURL := fmt.Sprintf(
 		"https://github.com/binwiederhier/ntfy/releases/download/v%s/%s",
 		ntfyVersion, tarballName)
-	// Upstream ntfy publishes the checksum file as plain "checksums.txt"
-	// at the release root — NOT "ntfy_<VER>_checksums.txt". Verified
-	// against the v2.28.0 release assets list. If a future ntfy version
-	// changes the naming convention, this URL will 404 loud at install
-	// time and the bump-ntfy-version PR should update it here.
-	checksumsURL := fmt.Sprintf(
-		"https://github.com/binwiederhier/ntfy/releases/download/v%s/checksums.txt",
-		ntfyVersion)
-
 	fmt.Fprintf(ni.logWriter, "    Downloading %s...\n", tarballURL)
 	client := &http.Client{Timeout: 5 * time.Minute}
 
@@ -233,22 +246,9 @@ func (ni *NtfyInstaller) downloadBinary() error {
 		return fmt.Errorf("download tarball: %w", err)
 	}
 
-	// Fetch the upstream checksums file and find the line for our tarball.
-	checksumsBody, err := httpGetLimited(client, checksumsURL, 64*1024)
+	actualHex, err := verifyNtfyTarball(arch, tarballBytes)
 	if err != nil {
-		return fmt.Errorf("download checksums: %w", err)
-	}
-	expectedSHA, err := findChecksumFor(checksumsBody, tarballName)
-	if err != nil {
-		return fmt.Errorf("locate checksum for %s: %w", tarballName, err)
-	}
-
-	// Verify.
-	actual := sha256.Sum256(tarballBytes)
-	actualHex := hex.EncodeToString(actual[:])
-	if !strings.EqualFold(actualHex, expectedSHA) {
-		return fmt.Errorf("ntfy tarball SHA-256 mismatch: got %s, want %s — refusing to install (possible supply-chain tampering)",
-			actualHex, expectedSHA)
+		return err
 	}
 	fmt.Fprintf(ni.logWriter, "    ✓ SHA-256 verified: %s\n", actualHex[:16]+"…")
 
@@ -338,35 +338,6 @@ func httpGetLimited(client *http.Client, url string, maxBytes int64) ([]byte, er
 		return nil, fmt.Errorf("response body exceeds %d bytes (got at least %d)", maxBytes, len(buf))
 	}
 	return buf, nil
-}
-
-// findChecksumFor scans an upstream-style checksums file (one entry
-// per line: "<hex-sha256>  <filename>") and returns the SHA-256 hex
-// digest for the given filename, or an error if not present.
-func findChecksumFor(body []byte, filename string) (string, error) {
-	sc := bufio.NewScanner(bytes.NewReader(body))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		// "*" prefix marks binary mode in BSD checksum tools; strip it.
-		name := strings.TrimPrefix(fields[1], "*")
-		if name == filename {
-			if len(fields[0]) != 64 {
-				return "", fmt.Errorf("entry for %s has wrong digest length %d (want 64)", filename, len(fields[0]))
-			}
-			return fields[0], nil
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return "", fmt.Errorf("scan checksums: %w", err)
-	}
-	return "", fmt.Errorf("filename %q not in checksums file", filename)
 }
 
 // generateServerYAML produces the contents of /etc/ntfy/server.yml.
