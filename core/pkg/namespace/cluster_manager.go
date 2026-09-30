@@ -432,6 +432,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	if err := cm.verifyClusterHealthy(ctx, nodes, portBlocks); err != nil {
 		cm.logger.Error("Namespace cluster failed health verification after provisioning",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.withdrawFailedCluster(ctx, cluster)
 		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return nil, fmt.Errorf("namespace cluster did not come up healthy: %w", err)
@@ -1035,6 +1036,12 @@ func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *Nam
 	// Deallocate ports
 	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
 
+	// Withdraw the DNS records and node membership. A rollback that left them
+	// leaked them for good: the nodes kept re-advertising a namespace that had
+	// been rolled back, and once the failed cluster row was deleted nothing
+	// knew to remove them.
+	cm.withdrawFailedCluster(ctx, cluster)
+
 	// Update cluster status
 	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, "Provisioning failed and rolled back")
 }
@@ -1160,14 +1167,17 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
 	cm.webrtcPortAllocator.DeallocateAll(ctx, cluster.ID)
 
-	// 5. Delete namespace DNS records (gateway + TURN + stealth)
-	cm.dnsManager.DeleteNamespaceRecords(ctx, cluster.NamespaceName)
-	cm.dnsManager.DeleteTURNRecords(ctx, cluster.NamespaceName)
-	cm.dnsManager.DeleteStealthTURNRecords(ctx, cluster.NamespaceName)
+	// 5. Withdraw node membership, then the DNS records (gateway + TURN +
+	// stealth). Membership first: a node's 30s sweep re-adds its own gateway
+	// record for every cluster it is still a member of, so deleting DNS first
+	// left a window in which the record came straight back. A failure aborts
+	// here, with the cluster row still in place, so the caller's retry finds it.
+	if err := cm.removeClusterServingRecords(ctx, cluster); err != nil {
+		return fmt.Errorf("failed to remove the DNS records of namespace %s: %w", cluster.NamespaceName, err)
+	}
 
 	// 6. Explicitly delete child tables (FK cascades disabled in rqlite)
 	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_events WHERE namespace_cluster_id = ?`, cluster.ID)
-	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_nodes WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM webrtc_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM webrtc_rooms WHERE namespace_cluster_id = ?`, cluster.ID)
@@ -1394,6 +1404,11 @@ func (cm *ClusterManager) CheckNamespaceCluster(ctx context.Context, namespaceNa
 			zap.String("namespace", namespaceName),
 			zap.String("cluster_id", cluster.ID),
 		)
+		// Withdraw its DNS records and membership before the row that lets
+		// anything find them goes. Deleting the row alone orphaned them.
+		if err := cm.removeClusterServingRecords(ctx, cluster); err != nil {
+			return "", "", false, fmt.Errorf("failed to clean up the failed cluster of namespace %s: %w", namespaceName, err)
+		}
 		// Delete the failed cluster record
 		query := `DELETE FROM namespace_clusters WHERE id = ?`
 		cm.db.Exec(ctx, query, cluster.ID)
@@ -1558,6 +1573,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 	if err := cm.verifyClusterHealthy(ctx, nodes, portBlocks); err != nil {
 		cm.logger.Error("Namespace cluster failed health verification after provisioning",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.withdrawFailedCluster(ctx, cluster)
 		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return

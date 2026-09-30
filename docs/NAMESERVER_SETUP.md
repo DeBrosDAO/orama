@@ -112,6 +112,15 @@ idempotent, so no leader election is needed:
 | Ensure (re-advertise) | WebRTC reconcile loop, per hosted namespace | Additively inserts **this node's own** A record if absent, and re-enables that same row when this node's tenant gateway answers `GET /v1/health` on its WireGuard address. It does not touch another node's record. A tenant gateway does not listen on loopback, so the probe is `local_ip` from `cluster-state.json`. |
 | Withdraw / restore | Index gateway, every 30s | Probes this node's tenant gateway with `GET /v1/health` on its WireGuard address. After 3 consecutive failures it soft-disables this node's own `ns-<ns>` and `*.ns-<ns>` rows, never the last active record for that name. After 3 consecutive healthy probes it restores a row this process withdrew. A loopback probe cannot see the tenant gateway, so it must not be what decides the withdrawal. |
 | Purge | Every 30s DNS sweep | Deletes A records whose value is a node that is non-active **and** silent longer than the staleness window (15 min). |
+| Orphan purge | Every 30s DNS sweep | Deletes every per-namespace record (tags `namespace:<ns>`, `namespace-turn:<ns>`, `namespace-turn-stealth:<ns>`) whose namespace is absent from `namespaces`, whatever node it points at. `system`, deployment and domain records carry other tags and are never touched. This is what cleans rows leaked by a failed provision or a delete that raced a node, so it also heals old leaked rows on upgrade. |
+
+A namespace's records are removed with its cluster: `DeprovisionCluster`, a rolled-back or
+health-failed provision, and the retry that discards a `failed` cluster row all delete the
+cluster's node membership first and then its DNS records (gateway, wildcard, TURN,
+stealth). Membership goes first because each node's sweep re-advertises itself for every
+cluster it is a running gateway of. That ensure skips a cluster that is `failed` or
+`deprovisioning`, and a namespace that is not in `namespaces`, so it can not write a record
+back after a delete.
 
 Two safety properties matter:
 

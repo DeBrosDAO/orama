@@ -210,7 +210,7 @@ func (drm *DNSRecordManager) UpdateNamespaceRecord(ctx context.Context, namespac
 				now := time.Now()
 				tag := "namespace:" + namespaceName
 				if _, ierr := drm.db.Exec(internalCtx, ensureNamespaceHostRecordSQL,
-					f, newIP, tag, now, now, f, newIP, tag); ierr != nil {
+					f, newIP, tag, now, now, tag, f, newIP, tag); ierr != nil {
 					drm.logger.Warn("Failed to insert replacement DNS record after a no-op update",
 						zap.String("fqdn", f), zap.String("new_ip", newIP), zap.Error(ierr))
 					continue
@@ -415,9 +415,15 @@ func (drm *DNSRecordManager) EnsureTURNRecordForNode(ctx context.Context, namesp
 // row, and an existing row that recovery deliberately soft-disabled
 // (DisableNamespaceRecord, used by the suspect-node path) must stay disabled —
 // re-enabling it would fight the health monitor.
+//
+// The record is written only while the namespace is in `namespaces` (the tag's
+// last argument is matched against 'namespace:'||name). A node mid-spawn can
+// reach this after the namespace was deleted; without the guard it re-created the
+// records the delete had just removed.
 const ensureNamespaceHostRecordSQL = `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at)
 	SELECT ?, 'A', ?, 60, ?, 'namespace-dns-reconcile', ?, ?
-	WHERE NOT EXISTS (
+	WHERE EXISTS (SELECT 1 FROM namespaces WHERE 'namespace:'||name = ?)
+	  AND NOT EXISTS (
 	    SELECT 1 FROM dns_records
 	    WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = ?
 	)`
@@ -449,7 +455,7 @@ func (drm *DNSRecordManager) EnsureNamespaceHostRecordForNode(ctx context.Contex
 		fmt.Sprintf("*.ns-%s.%s.", namespaceName, drm.baseDomain),
 	} {
 		if _, err := drm.db.Exec(internalCtx, ensureNamespaceHostRecordSQL,
-			fqdn, nodeIP, tag, now, now, fqdn, nodeIP, tag); err != nil {
+			fqdn, nodeIP, tag, now, now, tag, fqdn, nodeIP, tag); err != nil {
 			return &ClusterError{
 				Message: fmt.Sprintf("ensure namespace host A record %s -> %s", fqdn, nodeIP),
 				Cause:   err,
