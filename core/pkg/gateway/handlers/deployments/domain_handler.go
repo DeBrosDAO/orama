@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -443,17 +444,36 @@ func generateVerificationToken() string {
 	return "orama-verify-" + hex.EncodeToString(bytes)
 }
 
+// domainLabel is one DNS label: letters, digits and inner hyphens, 1 to 63.
+var domainLabel = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// isValidDomain reports whether domain is a hostname a deployment can be
+// served at: at least two labels, each a DNS label, and a top-level label
+// that is not all digits (that would be an IP address). The name reaches the
+// proxy's configuration and DNS, so anything else is refused rather than
+// stored: "-bad-.com" used to be accepted, and so was any character inside a
+// label.
 func isValidDomain(domain string) bool {
-	// Basic domain validation
 	if len(domain) == 0 || len(domain) > 253 {
 		return false
 	}
-	if strings.Contains(domain, "..") || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
 		return false
 	}
-	parts := strings.Split(domain, ".")
-	if len(parts) < 2 {
-		return false
+	for _, l := range labels {
+		if !domainLabel.MatchString(l) {
+			return false
+		}
+	}
+	return !allDigits(labels[len(labels)-1])
+}
+
+func allDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
 	}
 	return true
 }

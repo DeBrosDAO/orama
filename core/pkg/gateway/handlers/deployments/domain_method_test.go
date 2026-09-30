@@ -86,3 +86,30 @@ func TestDomainHandlers_reject_the_wrong_method_before_doing_anything(t *testing
 		})
 	}
 }
+
+// "-bad-.com" was accepted and stored (stagenet e2e audit, 2026-09-30); the
+// name reaches the proxy configuration and DNS, so only hostnames pass.
+func TestIsValidDomain(t *testing.T) {
+	for domain, want := range map[string]bool{
+		"example.com":                    true,
+		"app.example.co.uk":              true,
+		"xn--bcher-kva.example":          true,
+		"a-b.example.com":                true,
+		"-bad-.com":                      false,
+		"bad-.com":                       false,
+		"exa mple.com":                   false,
+		"example.com\n":                  false,
+		"{evil}.com":                     false,
+		"example":                        false,
+		"example..com":                   false,
+		".example.com":                   false,
+		"example.com.":                   false,
+		"1.2.3.4":                        false,
+		"":                               false,
+		strings.Repeat("a", 64) + ".com": false,
+	} {
+		if got := isValidDomain(domain); got != want {
+			t.Errorf("isValidDomain(%q) = %v, want %v", domain, got, want)
+		}
+	}
+}
