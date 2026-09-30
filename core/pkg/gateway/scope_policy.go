@@ -29,6 +29,12 @@ func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 	// whichever principal the credential named. It is the answer whenever the
 	// route resolves one.
 	if grant, _ := ctx.Value(ctxKeyGrant).(*auth.Grant); grant != nil {
+		if grant.PrincipalType == auth.PrincipalServiceAccount {
+			// A key's role is runtime or admin and nothing between, so its
+			// own scopes say what it holds.
+			scopes, _ := ctx.Value(ctxKeyScopes).(auth.ScopeSet)
+			return auth.KeyPermissions(scopes.Canonical(), grant.Role, grant.Resource)
+		}
 		return auth.PermissionsFor(grant.Role, grant.Resource)
 	}
 

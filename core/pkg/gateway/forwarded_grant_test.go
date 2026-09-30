@@ -93,12 +93,20 @@ func TestAuthorizationMiddleware_forwardedCallerGetsItsGrantOnTheControlPlane(t 
 	for _, sub := range []string{hopWallet, "ak_exchanged_key"} {
 		g, registry := namespaceGatewayForHops(t, "owner")
 
-		rec, reached := serveHop(g, hop(t, g, http.MethodPost, "/v1/functions", hopNamespace, sub))
+		// A key's hop carries the scopes on its row, and they are what it
+		// holds: an admin key here, since a deploy is the control plane.
+		r := hop(t, g, http.MethodPost, "/v1/functions", hopNamespace, sub)
+		if sub != hopWallet {
+			r = keyHop(t, g, http.MethodPost, "/v1/functions", "admin")
+		}
+		rec, reached := serveHop(g, r)
 
 		if !reached {
 			t.Errorf("%s: an owner's forwarded deploy was refused %d: %s", sub, rec.Code, rec.Body.String())
 		}
-		if registry.queries == 0 {
+		// A wallet's authority is its grant, so it is read; a key's scopes
+		// already answer the route.
+		if sub == hopWallet && registry.queries == 0 {
 			t.Errorf("%s: the grant was not read from the registry", sub)
 		}
 	}

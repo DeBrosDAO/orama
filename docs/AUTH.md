@@ -501,13 +501,19 @@ half would not be applied.
 ## Keys
 
 ```bash
-orama namespace keys create --scope app-runtime --label web   # data plane only
+orama namespace keys create --scope app-runtime --label web   # invoke, storage, push, webrtc, proxy
 orama namespace keys create --scope admin --label ci          # everything
 orama namespace keys list
 orama namespace keys rotate --id <id>
 orama namespace keys revoke --id <id>
 ```
 
+- A key reaches what its **scopes** say, on every route. `app-runtime` is
+  `invoke`, `storage`, `push`, `webrtc` and `proxy` — not `pubsub` and not
+  `cache`; a key that publishes or uses the cache is minted with them named
+  (`--scope invoke,pubsub,cache`). The membership role a key is recorded with is
+  `runtime` or `admin` and nothing finer, so it never widens a key past its
+  scopes.
 - Every key expires: 90 days by default, a year at most. There is no way to ask
   for one that does not.
 - A key does **not** name its namespace. It used to be `ak_<random>:<namespace>`,
