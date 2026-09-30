@@ -202,7 +202,8 @@ func stderrSuffix(stderr string) string {
 type sshShell struct{ target sshx.Target }
 
 func dialSSH(st State, n Node) Shell {
-	return &sshShell{target: sshx.Target{Host: n.PublicIP, User: n.SSHUser, KeyFile: st.SSHKeyFile, KnownHostsFile: st.KnownHostsFile}}
+	return &sshShell{target: sshx.Target{Host: n.PublicIP, User: n.SSHUser, KeyFile: st.SSHKeyFile, KnownHostsFile: st.KnownHostsFile,
+		Sudo: n.SSHUser != "" && n.SSHUser != "root"}}
 }
 
 func (s *sshShell) Run(ctx context.Context, cmd string) (Output, error) {

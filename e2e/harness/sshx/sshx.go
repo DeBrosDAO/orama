@@ -44,6 +44,22 @@ type Target struct {
 	KeyFile string
 	// KnownHostsFile holds the pinned host key; nothing else is trusted.
 	KnownHostsFile string
+	// Sudo runs every command as root through `sudo -n` when the login is not root (the
+	// stagenet nodes' debian/ubuntu logins). Tests are written for a root login.
+	Sudo bool
+}
+
+// asRoot is cmd run as root through non-interactive sudo, when t asks for it.
+func (t Target) asRoot(cmd string) string {
+	if !t.Sudo {
+		return cmd
+	}
+	return "sudo -n -- bash -c " + singleQuote(cmd)
+}
+
+// singleQuote quotes s as one shell word.
+func singleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // safeRemotePath is an absolute path of plain characters: it is embedded in a
@@ -136,7 +152,7 @@ func run(ctx context.Context, t Target, cmd string, stdin *bytes.Reader, stdout,
 	session.Stdout, session.Stderr = stdout, stderr
 
 	done := make(chan error, 1)
-	go func() { done <- session.Run(cmd) }()
+	go func() { done <- session.Run(t.asRoot(cmd)) }()
 	select {
 	case <-ctx.Done():
 		// Closing the connection ends session.Run; wait for it so nothing
