@@ -3,6 +3,7 @@
 package deployments
 
 import (
+	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
@@ -171,10 +173,15 @@ func TestDeployGo_cliCrossCompilesAndServes(t *testing.T) {
 	tn := newTenant(t)
 	u := tn.deploy(t, "go", tenancy.WriteProbeApp(t, "go-v1"), "goapp")
 	everyNodeServes(t, tn, u, "/version", "go-v1")
-	nodes := unitNodes(t, tn.f, "orama-deploy-go@"+tn.instance("goapp")+".service")
-	if len(nodes) != replicas {
-		t.Errorf("%d nodes run the app, want %d (DefaultReplicaCount, core/pkg/deployments/types.go)", len(nodes), replicas)
-	}
+	// The replica is set up asynchronously, and a node without the app serves
+	// it by proxy, so the count is waited for.
+	eventually.Require(t, pollEvery, startBudget, "the home node and its replica to run the app", func() (bool, error) {
+		nodes := unitNodes(t, tn.f, "orama-deploy-go@"+tn.instance("goapp")+".service")
+		if len(nodes) != replicas {
+			return false, fmt.Errorf("%d nodes run the app, want %d (DefaultReplicaCount, core/pkg/deployments/types.go)", len(nodes), replicas)
+		}
+		return true, nil
+	})
 }
 
 // replicas is how many nodes run a dynamic deployment: its home node and

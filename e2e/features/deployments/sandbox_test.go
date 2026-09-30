@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
+	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
+	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
@@ -33,15 +35,30 @@ func TestDeploySandbox_fromInside(t *testing.T) {
 	tn := newTenant(t)
 	u := tn.deploy(t, "go", tenancy.WriteProbeApp(t, "sb"), "sandbox")
 	other := tn.deploy(t, "go", tenancy.WriteProbeApp(t, "sb2"), "neighbour")
-	c, oc := tn.app(u), tn.app(other)
-	serving(t, c, "/health", "")
-	serving(t, oc, "/health", "")
+	serving(t, tn.app(u), "/health", "")
+	serving(t, tn.app(other), "/health", "")
+	// Each node that runs the app gives it its own PORT, and DNS is round
+	// robin: every probe goes to one node, or PORT would change between them.
+	c, oc := tn.pinnedToARunner(t, u, "sandbox"), tn.pinnedToARunner(t, other, "neighbour")
 	uid, otherUID := probe(t, c, "/uid", nil).Detail, probe(t, oc, "/uid", nil).Detail
 	if strings.HasPrefix(uid, "0 ") || uid == otherUID {
 		t.Errorf("uids: app %q, neighbour %q; want non-root and distinct", uid, otherUID)
 	}
 	tn.checkFiles(t, c)
 	tn.checkNetwork(t, c)
+}
+
+// pinnedToARunner returns a client for the app at appURL pinned to one node
+// that runs its unit, once replica setup (asynchronous) has left one there.
+func (tn *tenant) pinnedToARunner(t testing.TB, appURL, name string) *gw.Client {
+	t.Helper()
+	unit := "orama-deploy-go@" + tn.instance(name) + ".service"
+	var nodes []fleet.Node
+	eventually.Require(t, pollEvery, startBudget, unit+" to be active on a node", func() (bool, error) {
+		nodes = unitNodes(t, tn.f, unit)
+		return len(nodes) > 0, nil
+	})
+	return tn.app(appURL).PinTo(nodes[0].PublicIP)
 }
 
 // checkFiles: the app writes and reads back its state directory (the
@@ -132,13 +149,15 @@ func TestDeploySandbox_unitConfinement(t *testing.T) {
 	tn := newTenant(t)
 	u := tn.deploy(t, "go", tenancy.WriteProbeApp(t, "unit"), "confined")
 	serving(t, tn.app(u), "/health", "")
-	port := probe(t, tn.app(u), "/getenv", url.Values{"k": {"PORT"}}).Detail
 	unit := "orama-deploy-go@" + tn.instance("confined") + ".service"
 	nodes := unitNodes(t, tn.f, unit)
 	if len(nodes) == 0 {
 		t.Fatal("no node runs the app")
 	}
 	for _, node := range nodes {
+		// The replica has a port of its own (the next free one on its node), so
+		// each node's allow-list is compared with the PORT that node gives it.
+		port := probe(t, tn.app(u).PinTo(node.PublicIP), "/getenv", url.Values{"k": {"PORT"}}).Detail
 		props := tn.f.MustExec(t, node, "systemctl show "+unit+" -p DynamicUser,ProtectSystem,PrivateTmp,NoNewPrivileges,MemoryMax,TasksMax,SocketBindAllow,SocketBindDeny,UMask").Stdout
 		for _, want := range []string{"DynamicUser=yes", "ProtectSystem=strict", "PrivateTmp=yes", "NoNewPrivileges=yes", "UMask=0077", "SocketBindAllow=tcp:" + port} {
 			if !strings.Contains(props, want) {
