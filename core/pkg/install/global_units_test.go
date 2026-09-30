@@ -234,3 +234,32 @@ func TestGlobalChainUnit_runsOramadUnderCosmovisorWithoutDownloads(t *testing.T)
 		t.Errorf("the chain unit turns on the CometBFT RPC's unsafe routes:\n%s", unit)
 	}
 }
+
+// Every global account has no home directory and ProtectHome hides /home, so a
+// unit whose HOME stays at the account's /home path breaks any program that
+// resolves files under it: Kubo refused to start on stagenet because its
+// denylist directory was "permission denied" under /home/orama-ipfs-pub.
+func TestGlobalUnits_homeIsTheUnitsOwnStateDirectory(t *testing.T) {
+	units := map[string]string{
+		"chain":    RenderGlobalChainUnit(""),
+		"ipfs":     RenderGlobalIPFSUnit(),
+		"gc":       RenderGlobalIPFSGCUnit(),
+		"provider": RenderGlobalProviderUnit(),
+		"relay":    RenderGlobalRelayUnit(),
+		"tor":      RenderGlobalTorRelayUnit(),
+		"sbws":     RenderGlobalSBWSUnit(),
+		"reporter": RenderGlobalReporterUnit(),
+		"archiver": RenderGlobalArchiverUnit(),
+		"repair":   RenderGlobalRepairUnit(),
+		"indexer":  RenderGlobalIndexerUnit(),
+	}
+	for name, unit := range units {
+		wd := mustDirective(t, unit, "WorkingDirectory")
+		if !strings.Contains(unit, "\nEnvironment=HOME="+wd+"\n") {
+			t.Errorf("%s: HOME is not its WorkingDirectory %s:\n%s", name, wd, unit)
+		}
+		if strings.HasPrefix(wd, "/home/") {
+			t.Errorf("%s: WorkingDirectory %s is under /home, which ProtectHome hides", name, wd)
+		}
+	}
+}

@@ -213,6 +213,9 @@ func renderGlobalUnit(description, user, home, exec, extra string) string {
 	return renderGlobalUnitExtra(description, user, user, "", state, home, exec, extra)
 }
 
+// The global service accounts have no home directory, and ProtectHome hides
+// /home anyway, so HOME is the unit's own state directory: Kubo, for one,
+// resolves its denylists and caches under it and refuses to start otherwise.
 func renderGlobalUnitExtra(description, user, group, supplementary, state, home, exec, extra string) string {
 	supp := ""
 	if supplementary != "" {
@@ -232,6 +235,7 @@ Group=%s
 StateDirectoryMode=0700
 %sReadWritePaths=%s
 WorkingDirectory=%s
+Environment=HOME=%s
 ExecStart=%s
 Restart=always
 RestartSec=5
@@ -239,9 +243,10 @@ LimitNOFILE=65535
 %s
 [Install]
 WantedBy=multi-user.target
-`, description, user, group, supp, state, extra, home, home, exec, globalSandboxTail)
+`, description, user, group, supp, state, extra, home, home, home, exec, globalSandboxTail)
 }
 
+// renderGlobalOneshot sets HOME as renderGlobalUnitExtra does.
 func renderGlobalOneshot(description, user, state, home, exec string) string {
 	return fmt.Sprintf(`[Unit]
 Description=%s
@@ -255,9 +260,10 @@ Group=%s
 StateDirectory=%s
 StateDirectoryMode=0700
 WorkingDirectory=%s
+Environment=HOME=%s
 ExecStart=%s
 %s
-`, description, user, user, state, home, exec, globalSandboxTail)
+`, description, user, user, state, home, home, exec, globalSandboxTail)
 }
 
 // RenderGlobalTorRelayUnit is the public relay. Tor is the distro binary.
