@@ -184,12 +184,13 @@ func (h *UpdateHandler) updateStatic(ctx context.Context, existing *deployments.
 		}
 	}
 
-	// Record in history
-	h.service.recordHistory(ctx, existing, "updated")
-
 	existing.ContentCID = cid
 	existing.Version = newVersion
 	existing.UpdatedAt = now
+
+	// History holds one row per version, so the row is the deployment as it
+	// now is, not as it was before this update.
+	h.service.recordHistory(ctx, existing, "updated")
 
 	h.logger.Info("Static deployment updated",
 		zap.String("deployment", existing.Name),
@@ -310,9 +311,6 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 		committed = true
 	}
 
-	// Record in history
-	h.service.recordHistory(ctx, existing, "updated")
-
 	// Cleanup old
 	removeDirectory(oldPath)
 
@@ -326,6 +324,12 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 	existing.BuildCID = cid
 	existing.Version = newVersion
 	existing.UpdatedAt = now
+
+	// History holds one row per version: the deployment as it now is. A commit
+	// that failed above leaves the version unchanged, so it has no row.
+	if committed {
+		h.service.recordHistory(ctx, existing, "updated")
+	}
 
 	h.logger.Info("Dynamic deployment updated",
 		zap.String("deployment", existing.Name),
