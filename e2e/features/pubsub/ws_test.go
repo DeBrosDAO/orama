@@ -39,6 +39,13 @@ const (
 	// frameBuffer holds frames the reader has received and the test not yet read.
 	frameBuffer = 1024
 	pollEvery   = time.Second
+	// settleWindow is how long the tests keep listening after the last message
+	// they waited for, for a duplicate or late frame: publishing is
+	// synchronous, but frames of separate requests are not ordered.
+	settleWindow = 5 * time.Second
+	// envelopeSkew bounds the server timestamp of a frame against the runner's
+	// clock.
+	envelopeSkew = time.Minute
 )
 
 // frame is one message as the socket delivers it: an envelope
@@ -156,6 +163,13 @@ func (s *sub) next(t testing.TB, budget time.Duration) (frame, bool) {
 // returns the frames that came before it.
 func (s *sub) await(t testing.TB, want []byte, budget time.Duration) []frame {
 	t.Helper()
+	_, before := s.awaitFrame(t, want, budget)
+	return before
+}
+
+// awaitFrame is await returning the frame that carried want as well.
+func (s *sub) awaitFrame(t testing.TB, want []byte, budget time.Duration) (frame, []frame) {
+	t.Helper()
 	var before []frame
 	deadline := time.Now().Add(budget)
 	for {
@@ -164,10 +178,46 @@ func (s *sub) await(t testing.TB, want []byte, budget time.Duration) []frame {
 			t.Fatalf("no frame carrying %q within %s (saw %d others)", truncate(want), budget, len(before))
 		}
 		if bytes.Equal(f.Data, want) {
-			return before
+			return f, before
 		}
 		before = append(before, f)
 	}
+}
+
+// settle reads whatever else arrives during window and returns it: a frame
+// that is late, or a duplicate, shows up here instead of going unseen after
+// the last one the test waited for.
+func (s *sub) settle(t testing.TB, window time.Duration) []frame {
+	t.Helper()
+	var late []frame
+	deadline := time.Now().Add(window)
+	for {
+		f, ok := s.next(t, time.Until(deadline))
+		if !ok {
+			return late
+		}
+		late = append(late, f)
+	}
+}
+
+// gather counts the frames by payload until done reports the counts complete
+// (failing after budget), then keeps counting for settleWindow, so a duplicate
+// that trails the last message is counted too.
+func (s *sub) gather(t testing.TB, done func(map[string]int) bool, budget time.Duration) map[string]int {
+	t.Helper()
+	seen := map[string]int{}
+	deadline := time.Now().Add(budget)
+	for !done(seen) {
+		f, ok := s.next(t, time.Until(deadline))
+		if !ok {
+			t.Fatalf("the messages did not all arrive within %s: %v", budget, seen)
+		}
+		seen[string(f.Data)]++
+	}
+	for _, f := range s.settle(t, settleWindow) {
+		seen[string(f.Data)]++
+	}
+	return seen
 }
 
 // publish sends one message through c.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
@@ -27,7 +28,13 @@ func TestPubsub_sameNodeDelivery(t *testing.T) {
 	warmUp(t, c, tenancy.Owner(n), s, "room")
 	payload := []byte{0x00, 0xff, 'h', 'i', 0x80}
 	publish(t, c, tenancy.Owner(n), "room", payload).Expect(t, http.StatusOK)
-	s.await(t, payload, deliveryBudget)
+	fr, _ := s.awaitFrame(t, payload, deliveryBudget)
+	if fr.Topic != "room" {
+		t.Errorf("the envelope's topic is %q, want the topic subscribed to: room", fr.Topic)
+	}
+	if skew := time.Since(time.UnixMilli(fr.Timestamp)); fr.Timestamp == 0 || skew > envelopeSkew || skew < -envelopeSkew {
+		t.Errorf("the envelope's timestamp %d (ms) is %s from now, want a server time within %s", fr.Timestamp, skew, envelopeSkew)
+	}
 }
 
 // TestPubsub_crossNodeDelivery: a subscriber on each node receives what is
@@ -71,13 +78,19 @@ func TestPubsub_eachMessageDeliveredOnce(t *testing.T) {
 	for i := range count {
 		publish(t, nodes[0].Client, tenancy.Owner(n), "once", []byte(fmt.Sprintf("m-%02d", i))).Expect(t, http.StatusOK)
 	}
-	sentinel := []byte("sentinel")
-	publish(t, nodes[0].Client, tenancy.Owner(n), "once", sentinel).Expect(t, http.StatusOK)
-	for name, s := range map[string]*sub{"same node": local, "other node": remote} {
-		seen := map[string]int{}
-		for _, fr := range s.await(t, sentinel, deliveryBudget) {
-			seen[string(fr.Data)]++
+	// Frames of separate publishes are not ordered, so a sentinel says nothing
+	// about the ones before it: wait for the counts, then listen a while longer
+	// for a duplicate.
+	allSeen := func(seen map[string]int) bool {
+		for i := range count {
+			if seen[fmt.Sprintf("m-%02d", i)] == 0 {
+				return false
+			}
 		}
+		return true
+	}
+	for name, s := range map[string]*sub{"same node": local, "other node": remote} {
+		seen := s.gather(t, allSeen, deliveryBudget)
 		for i := range count {
 			if k := fmt.Sprintf("m-%02d", i); seen[k] != 1 {
 				t.Errorf("%s subscriber received %s %d times, want once", name, k, seen[k])

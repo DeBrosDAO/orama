@@ -4,7 +4,6 @@ package pubsub
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -172,20 +171,21 @@ func TestPubsub_oneSubscriberLeavingKeepsOthers(t *testing.T) {
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
 	nodes := tenancy.PerNode(t, f, n.Client)
-	stays := subscribe(t, nodes[0].Client, nodes[0].Node.PublicIP, "shared", tenancy.Owner(n), nil)
-	leaves := subscribe(t, nodes[0].Client, nodes[0].Node.PublicIP, "shared", tenancy.Owner(n), nil)
+	c := &clientPin{Client: nodes[0].Client, IP: nodes[0].Node.PublicIP}
+	stays := subscribe(t, c.Client, c.IP, "shared", tenancy.Owner(n), url.Values{"presence": {"true"}, "member_id": {"stays"}})
+	leaves := subscribe(t, c.Client, c.IP, "shared", tenancy.Owner(n), url.Values{"presence": {"true"}, "member_id": {"leaves"}})
 	warmUp(t, nodes[1].Client, tenancy.Owner(n), stays, "shared")
 	leaves.drain(t)
 	if err := leaves.conn.Close(); err != nil {
 		t.Fatal(err)
 	}
-	eventually.Require(t, pollEvery, deliveryBudget, "the closed socket to be gone", func() (bool, error) {
-		select {
-		case err := <-leaves.closed:
-			return err != nil, nil
-		default:
-			return false, errors.New("reader still running")
+	// Presence shows the gateway has run the leaver's unsubscribe, so the
+	// message below can only reach the other socket if leaving kept it.
+	eventually.Require(t, pollEvery, deliveryBudget, "the gateway to drop the closed socket", func() (bool, error) {
+		if ids := presenceMembers(t, n, c, "shared"); !slices.Equal(ids, []string{"stays"}) {
+			return false, fmt.Errorf("presence lists %v, want [stays]", ids)
 		}
+		return true, nil
 	})
 	msg := []byte("still-here")
 	publish(t, nodes[1].Client, tenancy.Owner(n), "shared", msg).Expect(t, http.StatusOK)

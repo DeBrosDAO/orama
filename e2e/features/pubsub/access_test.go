@@ -4,6 +4,7 @@ package pubsub
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
@@ -94,9 +96,17 @@ func TestPubsubAuth_revokedSessionClosesSocket(t *testing.T) {
 	if !errors.As(err, &ce) || ce.Code != closeRevoked {
 		t.Fatalf("the revoked session's socket was not closed with %d within %s: %v", closeRevoked, sweepBudget, err)
 	}
-	if _, resp, derr := dial(t, c, node.PublicIP, pathWS+"?topic=private", tenancy.Cred{Bearer: m.Token()}); derr == nil {
-		t.Fatalf("the revoked token opened a new socket (HTTP %v)", statusOf(resp))
-	}
+	// This node's revocation list refreshes on its own schedule (up to
+	// sweepBudget), so a dial right after the close may still be let in: wait
+	// for the refusal.
+	eventually.Require(t, pollEvery, sweepBudget, "the revoked token to be refused a new socket", func() (bool, error) {
+		conn, resp, derr := dial(t, c, node.PublicIP, pathWS+"?topic=private", tenancy.Cred{Bearer: m.Token()})
+		if derr == nil {
+			_ = conn.Close()
+			return false, fmt.Errorf("the revoked token opened a new socket (HTTP %v)", statusOf(resp))
+		}
+		return true, nil
+	})
 }
 
 // TestPubsubIsolation_topicsAreNamespaced: B publishing on a topic of the same
@@ -118,7 +128,11 @@ func TestPubsubIsolation_topicsAreNamespaced(t *testing.T) {
 		t.Fatalf("B's session subscribed at A's gateway (HTTP %v)", statusOf(resp))
 	}
 	publish(t, ca, tenancy.Owner(a), "chat", []byte("from-a")).Expect(t, http.StatusOK)
-	for _, fr := range s.await(t, []byte("from-a"), deliveryBudget) {
+	// B's frames could arrive before or after A's own, so listen for a while
+	// after it too.
+	seen := s.await(t, []byte("from-a"), deliveryBudget)
+	seen = append(seen, s.settle(t, settleWindow)...)
+	for _, fr := range seen {
 		if d := string(fr.Data); d == "from-b" || d == "b-into-a" || d == "b-key-into-a" {
 			t.Fatalf("A's subscriber received %q from B", fr.Data)
 		}
