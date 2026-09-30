@@ -3,6 +3,7 @@ package shared
 import (
 	"fmt"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/auth"
 )
 
@@ -57,7 +58,7 @@ func AuthToken(override string) (string, error) {
 
 	creds := store.GetDefaultCredential(gatewayURL)
 	if creds == nil {
-		return "", fmt.Errorf("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
+		return "", clierr.Auth("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
 	}
 	return auth.Bearer(gatewayURL, store, creds)
 }

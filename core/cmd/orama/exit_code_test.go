@@ -33,9 +33,23 @@ func newTestTree() *cobra.Command {
 	})
 	root.AddCommand(group)
 
+	needs := &cobra.Command{Use: "enroll", RunE: func(*cobra.Command, []string) error { return nil }}
+	needs.Flags().String("gateway", "", "")
+	_ = needs.MarkFlagRequired("gateway")
+	needs.Flags().String("topic", "", "")
+	needs.Flags().String("schedule", "", "")
+	needs.MarkFlagsOneRequired("topic", "schedule")
+	ran := false
+	needs.PreRun = func(*cobra.Command, []string) { ran = true }
+	root.AddCommand(needs)
+	preRunRan = func() bool { return ran }
+
 	classifyUsageErrors(root)
 	return root
 }
+
+// preRunRan reports whether the last tree's "enroll" PreRun ran.
+var preRunRan func() bool
 
 func execTree(t *testing.T, args ...string) error {
 	t.Helper()
@@ -141,5 +155,28 @@ func TestRootDefinesJSONForEveryCommand(t *testing.T) {
 		if leaf.InheritedFlags().Lookup("json") == nil {
 			t.Errorf("`orama %s` does not inherit --json", leaf.CommandPath())
 		}
+	}
+}
+
+// A missing required flag, or an unsatisfied flag group, is a usage mistake
+// (stagenet e2e, 2026-09-30: `node enroll` without --gateway exited 1).
+func TestRequiredFlagMissingExitsWithTheUsageCode(t *testing.T) {
+	for name, args := range map[string][]string{
+		"required flag": {"enroll", "--topic", "t"},
+		"flag group":    {"enroll", "--gateway", "https://g"},
+	} {
+		err := execTree(t, args...)
+		if got := clierr.CodeOf(err); got != clierr.CodeUsage {
+			t.Errorf("%s: exit code = %d (%v), want %d", name, got, err, clierr.CodeUsage)
+		}
+	}
+}
+
+func TestRequiredFlagsPresentStillRunTheCommandsPreRun(t *testing.T) {
+	if err := execTree(t, "enroll", "--gateway", "https://g", "--topic", "t"); err != nil {
+		t.Fatalf("a complete command line failed: %v", err)
+	}
+	if !preRunRan() {
+		t.Error("the command's own PreRun did not run")
 	}
 }

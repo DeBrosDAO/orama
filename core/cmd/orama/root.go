@@ -176,8 +176,35 @@ func classifyUsageErrors(cmd *cobra.Command) {
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return clierr.Wrap(clierr.CodeUsage, err)
 	})
+	if cmd.Runnable() {
+		classifyRequiredFlags(cmd)
+	}
 	for _, sub := range cmd.Commands() {
 		classifyUsageErrors(sub)
+	}
+}
+
+// classifyRequiredFlags makes a missing required flag, or a flag group left
+// unsatisfied, a usage error. Cobra checks both after PreRunE and returns its
+// own plain error, which came back as the generic failure code: `orama node
+// enroll` without --gateway exited 1, the same as a gateway that was down. The
+// same checks run here first, before whatever PreRun the command had.
+func classifyRequiredFlags(cmd *cobra.Command) {
+	prevE, prev := cmd.PreRunE, cmd.PreRun
+	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		if err := c.ValidateRequiredFlags(); err != nil {
+			return clierr.Wrap(clierr.CodeUsage, err)
+		}
+		if err := c.ValidateFlagGroups(); err != nil {
+			return clierr.Wrap(clierr.CodeUsage, err)
+		}
+		if prevE != nil {
+			return prevE(c, args)
+		}
+		if prev != nil {
+			prev(c, args)
+		}
+		return nil
 	}
 }
 

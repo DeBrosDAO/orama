@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
@@ -167,7 +168,7 @@ func LoadBearer(gatewayURL string) (string, error) {
 
 	creds := store.GetDefaultCredential(gatewayURL)
 	if creds == nil {
-		return "", fmt.Errorf("no credentials found for %s", gatewayURL)
+		return "", clierr.Auth("no credentials found for %s (run 'orama auth login' first)", gatewayURL)
 	}
 	return auth.Bearer(gatewayURL, store, creds)
 }

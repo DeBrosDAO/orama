@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/auth"
 )
 
@@ -279,5 +280,16 @@ func storeCredentialAppend(t *testing.T, home, gatewayURL, apiKey string) {
 	out, _ := json.MarshalIndent(store, "", "  ")
 	if err := os.WriteFile(path, out, 0600); err != nil {
 		t.Fatalf("write credentials.json: %v", err)
+	}
+}
+
+// No credential is an authentication problem, and a script reads it from the
+// exit code (stagenet e2e, 2026-09-30: every command exited 1 for it).
+func TestAuthToken_noCredentialIsTheAuthExit(t *testing.T) {
+	home := isolatedHome(t)
+	writeActiveEnvironment(t, home, "devnet", "https://gateway-without-creds")
+	_, err := GetAuthToken()
+	if got := clierr.CodeOf(err); got != clierr.CodeAuth {
+		t.Fatalf("exit code %d (%v), want %d", got, err, clierr.CodeAuth)
 	}
 }
