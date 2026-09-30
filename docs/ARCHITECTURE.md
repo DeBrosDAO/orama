@@ -938,6 +938,17 @@ serverless PubSub triggers and is published to that service, which delivers it
 once to every subscriber on the publishing node (GossipSub's loopback) and to
 those on other nodes. The gateway does not also push it to its own sockets.
 
+The publish is made inside the request. `POST /v1/pubsub/publish` (and
+`/publish-batch`) answer `200 {"status":"ok"}` only once the pubsub service has
+accepted the message, so one client's sequential publishes to a topic reach
+subscribers in the order they were sent (a local hand-off, about 0.1 ms). When
+the service does not take it the answer is `503` with an `{"error": ...}` body
+naming the cause, or `504` if the service did not answer within 10 seconds, and
+neither the message nor its serverless triggers go out; a client that hangs up
+mid-publish cancels the hand-off. Delivery to the subscribers is still
+asynchronous after the `200`, and publishes from different clients have no
+relative order.
+
 Per gateway and namespace-topic, the gateway's pubsub client (`pkg/pubsub`
 `HTTPClient`) holds one upstream stream and fans it out to every subscribed
 socket; a socket removes only its own handler, and the stream closes with the

@@ -23,6 +23,9 @@ const (
 	wsWriteTimeout = 30 * time.Second
 	// wsControlWriteTimeout bounds one ping or close frame.
 	wsControlWriteTimeout = 5 * time.Second
+	// defaultPublishTimeout bounds the hand-off of one publish, or one batch, to
+	// the node's pubsub service.
+	defaultPublishTimeout = 10 * time.Second
 )
 
 // PubSubHandlers handles all pubsub-related HTTP and WebSocket endpoints
@@ -37,6 +40,10 @@ type PubSubHandlers struct {
 	// defaults); tests shorten them.
 	pingInterval time.Duration
 	pongWait     time.Duration
+
+	// publishTimeout bounds one publish's hand-off to the pubsub service; tests
+	// shorten it.
+	publishTimeout time.Duration
 
 	// onPublish is called when a message is published, to dispatch PubSub triggers.
 	// Set via SetOnPublish. May be nil if serverless triggers are not configured.
@@ -64,6 +71,7 @@ func NewPubSubHandlers(client client.NetworkClient, sessions *wssession.Registry
 		presenceMembers: make(map[string][]PresenceMember),
 		pingInterval:    defaultWSPingInterval,
 		pongWait:        defaultWSPongWait,
+		publishTimeout:  defaultPublishTimeout,
 		sessions:        sessions,
 	}
 }

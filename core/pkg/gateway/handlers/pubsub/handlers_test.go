@@ -263,12 +263,11 @@ func TestPublishHandler_Success(t *testing.T) {
 		t.Errorf("expected status 'ok', got %q", resp["status"])
 	}
 
-	// The publish to libp2p happens asynchronously; wait briefly for it
+	// The hand-off to the pubsub service is made inside the request.
 	select {
 	case <-published:
-		// success
-	case <-time.After(2 * time.Second):
-		t.Error("timed out waiting for async publish call")
+	default:
+		t.Error("the answer went out before the pubsub service was called")
 	}
 }
 
