@@ -48,7 +48,7 @@ func TestSignInStagenetOperator_runsAuthLoginInTheStagenetHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := st.Home + " auth login"; strings.TrimSpace(string(got)) != want {
+	if want := st.Home + " auth login --namespace " + config.StagenetOperatorNamespace; strings.TrimSpace(string(got)) != want {
 		t.Fatalf("orama ran as %q, want %q", strings.TrimSpace(string(got)), want)
 	}
 }

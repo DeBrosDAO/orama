@@ -29,6 +29,12 @@ const (
 	// StagenetChainHost is where a node's co-located chain answers (RPC 31001, REST 31003, indexer 31015):
 	// inside the orama-global netns, reachable from the host's root namespace.
 	StagenetChainHost = "198.18.0.2"
+	// StagenetOperatorNamespace is the namespace the operator's wallet owns
+	// and signs in to for a run. docs/AUTH.md: /v1/operator/* needs an admin
+	// grant as well as the operator list, and a lobby session holds no grant,
+	// so the operator's session has to stand in a namespace it owns; a wallet
+	// session anywhere also creates namespaces and lists the wallet's own.
+	StagenetOperatorNamespace = "stagenetproof"
 )
 
 // Paths under the owner's real home that the stagenet target uses.

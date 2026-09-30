@@ -37,17 +37,19 @@ func refuseStagenetState(cmd string, st *fleet.State) error {
 	return nil
 }
 
-// signInStagenetOperator makes the operator's wallet session the stagenet
-// HOME's current credential, as provisioning does for a fleet it builds:
-// tests create namespaces as the operator, and the gateway refuses that to
-// any other credential (a namespace key or a service account the owner's own
-// work left current: "creating a namespace requires a signed-in wallet").
+// signInStagenetOperator makes the operator's wallet session, in the
+// namespace the operator owns, the stagenet HOME's current credential, as
+// provisioning does for a fleet it builds. Tests create namespaces and call
+// the operator routes as the operator: the gateway refuses the first to any
+// credential but a wallet session (a service account the owner's own work
+// left current: "creating a namespace requires a signed-in wallet"), and the
+// second to a session holding no admin grant (the lobby).
 func signInStagenetOperator(ctx context.Context, st *fleet.State) error {
 	cli := oramacli.ForState(st, nil)
 	if err := cli.Check(); err != nil {
 		return err
 	}
-	res, err := cli.Run(ctx, "auth", "login")
+	res, err := cli.Run(ctx, "auth", "login", "--namespace", config.StagenetOperatorNamespace)
 	if err != nil {
 		return fmt.Errorf("failed to sign the operator in to stagenet: %w", err)
 	}
