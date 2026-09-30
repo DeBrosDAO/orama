@@ -121,8 +121,11 @@ func NamespaceKeysCreate(ns, scope, label string, expiresInDays int) error {
 		return clierr.Usage("--scope is required: a profile (invoke-only, app-runtime, admin) " +
 			"or an explicit grant list such as \"invoke,storage,push\"")
 	}
+	if expiresInDays < 0 {
+		return clierr.Usage("--expires-in-days is at least 1; omit it for the default")
+	}
 
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -156,7 +159,7 @@ func NamespaceKeysCreate(ns, scope, label string, expiresInDays int) error {
 
 // NamespaceKeysList lists a namespace's API keys.
 func NamespaceKeysList(ns string) error {
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -200,11 +203,14 @@ func NamespaceKeysList(ns string) error {
 // NamespaceKeysRotate mints a successor to a key and shortens the original's
 // life to the overlap.
 func NamespaceKeysRotate(ns string, id, overlapDays, expiresInDays int) error {
+	if overlapDays < 0 || expiresInDays < 0 {
+		return clierr.Usage("--overlap-days and --expires-in-days are at least 1; omit them for the defaults")
+	}
 	if id <= 0 {
 		return clierr.Usage("--id must be a positive key id; 'orama namespace keys list' shows them")
 	}
 
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -241,7 +247,7 @@ func NamespaceKeysRevoke(ns string, id int) error {
 		return clierr.Usage("--id must be a positive key id; 'orama namespace keys list' shows them")
 	}
 
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -257,7 +263,7 @@ func NamespaceKeysRevoke(ns string, id int) error {
 
 // NamespaceKeysRevokeLegacy revokes every unscoped (legacy) key.
 func NamespaceKeysRevokeLegacy(ns string, force bool) error {
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -331,7 +337,7 @@ func NamespaceRepair(namespaceName string) error {
 
 // NamespaceDelete deletes the namespace the active credential belongs to.
 func NamespaceDelete(force bool) error {
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace("")
 	if err != nil {
 		return err
 	}
@@ -386,7 +392,7 @@ func NamespaceDelete(force bool) error {
 
 // NamespaceList lists namespaces owned by the current wallet.
 func NamespaceList(out *printer.Printer) error {
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace("")
 	if err != nil {
 		return err
 	}
@@ -464,7 +470,7 @@ func namespaceWebRTCToggle(ns string, enable bool) error {
 		return clierr.Usage("--namespace is required: orama namespace %s webrtc --namespace <name>", verb)
 	}
 
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -503,7 +509,7 @@ func namespaceStealthToggle(ns string, enable bool) error {
 		return clierr.Usage("--namespace is required: orama namespace %s webrtc-stealth --namespace <name>", verb)
 	}
 
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -532,7 +538,7 @@ func namespaceStealthToggle(ns string, enable bool) error {
 
 // NamespaceWebRTCStatus reports a namespace's WebRTC configuration.
 func NamespaceWebRTCStatus(ns string) error {
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace(ns)
 	if err != nil {
 		return err
 	}
@@ -572,14 +578,16 @@ func NamespaceWebRTCStatus(ns string) error {
 
 // loadAuthForNamespace resolves the gateway and the bearer to call it with:
 // ORAMA_TOKEN when it is set, else the stored session.
-func loadAuthForNamespace() (gatewayURL, token string, err error) {
+// ns, when set, is the --namespace the command was given: the credential
+// of that namespace is used, since the routes act on the credential's own.
+func loadAuthForNamespace(ns string) (gatewayURL, token string, err error) {
 	gatewayURL, err = getGatewayURL()
 	if err != nil {
 		return "", "", err
 	}
 	// A short-lived token, not the key. Key management is the last place to
 	// send a key on every request.
-	token, err = shared.AuthToken(gatewayURL)
+	token, err = shared.AuthTokenFor(gatewayURL, ns)
 	if err != nil {
 		return "", "", err
 	}
@@ -598,7 +606,7 @@ func NamespaceCreate(name string) error {
 		return clierr.Usage("a namespace name is required: orama namespace create <name>")
 	}
 
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace("")
 	if err != nil {
 		return err
 	}

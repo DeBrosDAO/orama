@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/auth"
@@ -291,5 +292,46 @@ func TestAuthToken_noCredentialIsTheAuthExit(t *testing.T) {
 	_, err := GetAuthToken()
 	if got := clierr.CodeOf(err); got != clierr.CodeAuth {
 		t.Fatalf("exit code %d (%v), want %d", got, err, clierr.CodeAuth)
+	}
+}
+
+// storeSessions saves one live session per namespace for gatewayURL; the
+// first is the default.
+func storeSessions(t *testing.T, home, gatewayURL string, tokens map[string]string, order ...string) {
+	t.Helper()
+	creds := []map[string]any{}
+	expires := time.Now().Add(10 * time.Minute).Format(time.RFC3339)
+	for _, ns := range order {
+		creds = append(creds, map[string]any{"namespace": ns, "wallet": "0xabc", "access_token": tokens[ns], "access_token_expires_at": expires})
+	}
+	store := map[string]any{"version": "2.0", "gateways": map[string]any{
+		gatewayURL: map[string]any{"credentials": creds, "default_index": 0, "last_used_index": 0}}}
+	data, _ := json.MarshalIndent(store, "", "  ")
+	if err := os.MkdirAll(filepath.Join(home, ".orama"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".orama", "credentials.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --namespace was read and ignored: a command aimed at one namespace acted
+// with whichever session was current (stagenet e2e, 2026-09-30: `keys create
+// --namespace A` minted the key in B).
+func TestAuthTokenFor_usesTheNamedNamespacesSession(t *testing.T) {
+	home := isolatedHome(t)
+	const gw = "https://gateway.example"
+	writeActiveEnvironment(t, home, "devnet", gw)
+	storeSessions(t, home, gw, map[string]string{"current": "tok-current", "other": "tok-other"}, "current", "other")
+
+	if tok, err := AuthTokenFor(gw, "other"); err != nil || tok != "tok-other" {
+		t.Fatalf("--namespace other: %q, %v; want other's session", tok, err)
+	}
+	if tok, err := AuthTokenFor(gw, ""); err != nil || tok != "tok-current" {
+		t.Fatalf("no --namespace: %q, %v; want the current session", tok, err)
+	}
+	_, err := AuthTokenFor(gw, "never-signed-in")
+	if clierr.CodeOf(err) != clierr.CodeAuth || !strings.Contains(err.Error(), "--namespace never-signed-in") {
+		t.Fatalf("an unknown namespace: %v, want the auth exit naming the login", err)
 	}
 }

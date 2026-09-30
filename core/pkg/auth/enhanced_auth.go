@@ -215,6 +215,23 @@ func (store *EnhancedCredentialStore) GetDefaultCredential(gatewayURL string) *C
 	return gatewayCredentials.Credentials[gatewayCredentials.DefaultIndex]
 }
 
+// CredentialForNamespace returns the stored credential for a namespace at a
+// gateway, or nil when there is none. A wallet signed in to the namespace more
+// than once has one slot for it (AddCredential replaces by wallet and
+// namespace); the first match is the one.
+func (store *EnhancedCredentialStore) CredentialForNamespace(gatewayURL, namespace string) *Credentials {
+	gatewayCredentials := store.Gateways[gatewayURL]
+	if gatewayCredentials == nil {
+		return nil
+	}
+	for _, c := range gatewayCredentials.Credentials {
+		if c != nil && c.Namespace == namespace {
+			return c
+		}
+	}
+	return nil
+}
+
 // SetDefaultCredential sets the default credential by index
 func (store *EnhancedCredentialStore) SetDefaultCredential(gatewayURL string, index int) bool {
 	gatewayCredentials := store.Gateways[gatewayURL]

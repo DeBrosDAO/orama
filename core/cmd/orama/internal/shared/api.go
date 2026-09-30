@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/auth"
@@ -66,6 +67,48 @@ func AuthToken(override string) (string, error) {
 	creds := store.GetDefaultCredential(gatewayURL)
 	if creds == nil {
 		return "", clierr.Auth("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
+	}
+	return auth.Bearer(gatewayURL, store, creds)
+}
+
+// AuthTokenFor is AuthToken for a named namespace: the credential a command
+// given --namespace acts with. An empty namespace is AuthToken's own answer.
+//
+// Namespace-scoped routes act on the credential's namespace, so the flag has
+// to choose the credential. It used to be read and ignored, and a command aimed
+// at one namespace acted on whichever one the current session was in. An
+// ORAMA_TOKEN belongs to one namespace; asked for another, it is refused
+// rather than used on the wrong one.
+func AuthTokenFor(override, namespace string) (string, error) {
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" {
+		return AuthToken(override)
+	}
+	gatewayURL, err := GatewayURL(override)
+	if err != nil {
+		return "", err
+	}
+	if envToken() != "" {
+		bearer, err := AuthToken(override)
+		if err != nil {
+			return "", err
+		}
+		have, err := BearerNamespace(gatewayURL, bearer)
+		if err != nil {
+			return "", err
+		}
+		if have != namespace {
+			return "", clierr.Usage("ORAMA_TOKEN belongs to namespace %q, not %q: use a token of %q or drop --namespace", have, namespace, namespace)
+		}
+		return bearer, nil
+	}
+	store, err := auth.LoadEnhancedCredentials()
+	if err != nil {
+		return "", fmt.Errorf("failed to load credentials: %w", err)
+	}
+	creds := store.CredentialForNamespace(gatewayURL, namespace)
+	if creds == nil {
+		return "", clierr.Auth("not signed in to namespace %q at %s: run 'orama auth login --namespace %s'", namespace, gatewayURL, namespace)
 	}
 	return auth.Bearer(gatewayURL, store, creds)
 }

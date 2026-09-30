@@ -35,3 +35,17 @@ func TestValidateNewEnvironment(t *testing.T) {
 		}
 	}
 }
+
+// A negative lifetime was dropped before the request and the key minted with
+// the default (stagenet e2e, 2026-09-30); it is a usage mistake.
+func TestNamespaceKeys_negativeDaysAreUsage(t *testing.T) {
+	if err := NamespaceKeysCreate("acme", "cache", "", -1); clierr.CodeOf(err) != clierr.CodeUsage {
+		t.Errorf("create --expires-in-days -1: %v (code %d)", err, clierr.CodeOf(err))
+	}
+	if err := NamespaceKeysRotate("acme", 1, -1, 0); clierr.CodeOf(err) != clierr.CodeUsage {
+		t.Errorf("rotate --overlap-days -1: %v", err)
+	}
+	if err := NamespaceKeysRotate("acme", 1, 0, -2); clierr.CodeOf(err) != clierr.CodeUsage {
+		t.Errorf("rotate --expires-in-days -2: %v", err)
+	}
+}

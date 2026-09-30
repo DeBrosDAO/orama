@@ -70,7 +70,7 @@ func TestEnvToken_isTheCredentialOfEveryGatewayCommand(t *testing.T) {
 	g := newTokenGateway(t)
 	envTokenHome(t, g.URL)
 
-	gatewayURL, token, err := loadAuthForNamespace()
+	gatewayURL, token, err := loadAuthForNamespace("")
 	if err != nil {
 		t.Fatalf("namespace, members and audit: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestEnvToken_absentStillMeansLogin(t *testing.T) {
 	envTokenHome(t, g.URL)
 	t.Setenv("ORAMA_TOKEN", "")
 
-	_, _, err := loadAuthForNamespace()
+	_, _, err := loadAuthForNamespace("")
 	if got := clierr.CodeOf(err); got != clierr.CodeAuth || !strings.Contains(err.Error(), "orama auth login") {
 		t.Fatalf("no credential: exit %d, %v; want %d and the login hint", got, err, clierr.CodeAuth)
 	}

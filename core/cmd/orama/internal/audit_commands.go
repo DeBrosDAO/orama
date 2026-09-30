@@ -54,7 +54,7 @@ func AuditList(out *printer.Printer, filter AuditFilter) error {
 			filter.Action, strings.Join(auth.AuditActions, ", "))
 	}
 
-	gatewayURL, apiKey, err := loadAuthForNamespace()
+	gatewayURL, apiKey, err := loadAuthForNamespace(filter.Namespace)
 	if err != nil {
 		return err
 	}
