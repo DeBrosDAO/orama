@@ -18,6 +18,13 @@ const (
 	gosecFindings       = 1
 )
 
+// staticcheckPackage is the staticcheck the modules are linted with, run
+// through `go run` so the linter is built by the Go toolchain that builds the
+// modules. A staticcheck installed on the runner is as old as its last
+// install: 2025.1.1 cannot load Go 1.27 code and reported that as findings.
+// v0.8.1 is staticcheck 2026.2.1, the first release after Go 1.27.
+const staticcheckPackage = "honnef.co/go/tools/cmd/staticcheck@v0.8.1"
+
 // tagArgs is the -tags flag for m, or nothing.
 func tagArgs(m module) []string {
 	if m.tags == "" {
@@ -53,12 +60,12 @@ func TestGovulncheck_modulesUnaffected(t *testing.T) {
 // TestStaticcheck_modulesClean: staticcheck reports nothing in any module.
 func TestStaticcheck_modulesClean(t *testing.T) {
 	t.Parallel()
-	realistic.Tool(t, "staticcheck", "install honnef.co/go/tools/cmd/staticcheck to lint the modules")
+	realistic.Tool(t, "go", "the pinned staticcheck is built and run with `go run`")
 	s := newScan(t)
 	for _, m := range goModules {
 		t.Run(m.dir, func(t *testing.T) {
 			t.Parallel()
-			res := s.run(t, m.dir, staticBudget, "staticcheck", append(tagArgs(m), "./...")...)
+			res := s.run(t, m.dir, staticBudget, "go", append(append([]string{"run", staticcheckPackage}, tagArgs(m)...), "./...")...)
 			switch res.Exit {
 			case 0:
 			case staticcheckFindings:
