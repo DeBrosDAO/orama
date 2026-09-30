@@ -8,37 +8,62 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/client"
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 )
 
+// auditQueryDB is the registry the audit trail is written to and read from.
 type auditQueryDB struct {
+	client.DatabaseClient
 	lastSQL  string
 	lastArgs []interface{}
-	rows     []interface{}
+	rows     [][]interface{}
 	err      error
 }
 
-func (d *auditQueryDB) Query(_ context.Context, sql string, args ...interface{}) (*QueryResult, error) {
+func (d *auditQueryDB) Query(_ context.Context, sql string, args ...interface{}) (*client.QueryResult, error) {
 	d.lastSQL = sql
 	d.lastArgs = args
 	if d.err != nil {
 		return nil, d.err
 	}
-	return &QueryResult{Count: len(d.rows), Rows: d.rows}, nil
+	return &client.QueryResult{Count: int64(len(d.rows)), Rows: d.rows}, nil
 }
 
-type auditQueryNet struct{ db *auditQueryDB }
+type auditQueryNet struct {
+	client.NetworkClient
+	db *auditQueryDB
+}
 
-func (n *auditQueryNet) Database() DatabaseClient { return n.db }
+func (n *auditQueryNet) Database() client.DatabaseClient { return n.db }
 
+// errString is an error that is only a message.
+type errString string
+
+func (e errString) Error() string { return string(e) }
+
+// auditHandlers reads the trail through the auth service, which is the handle
+// it is written through. The handlers' own client is deliberately a different
+// one that must never be asked: on a namespace gateway it is the tenant's
+// database, and the events are not there.
 func auditHandlers(t *testing.T, db *auditQueryDB) *Handlers {
 	t.Helper()
-	svc, err := authsvc.NewService(nil, nil, "", "default")
+	svc, err := authsvc.NewService(nil, &auditQueryNet{db: db}, "", "default")
 	if err != nil {
 		t.Fatalf("auth service: %v", err)
 	}
-	return &Handlers{authService: svc, netClient: &auditQueryNet{db: db}}
+	return &Handlers{authService: svc, netClient: &tenantNet{t: t}}
+}
+
+type tenantNet struct {
+	NetworkClient
+	t *testing.T
+}
+
+func (n *tenantNet) Database() DatabaseClient {
+	n.t.Error("the audit trail was read from the handlers' own database, not the registry it is written to")
+	return nil
 }
 
 func auditRequest(namespace, query string) *http.Request {
@@ -78,8 +103,8 @@ func TestAuditHandler_refusesACallerWithNoNamespace(t *testing.T) {
 }
 
 func TestAuditHandler_returnsTheEvents(t *testing.T) {
-	db := &auditQueryDB{rows: []interface{}{
-		[]interface{}{"key.issue", "0xowner", "key 7", "success", "203.0.113.4", "orama-cli", `{"scopes":"admin"}`, "2026-09-04T10:00:00Z"},
+	db := &auditQueryDB{rows: [][]interface{}{
+		{"key.issue", "0xowner", "key 7", "success", "203.0.113.4", "orama-cli", `{"scopes":"admin"}`, "2026-09-04T10:00:00Z"},
 	}}
 	rec := httptest.NewRecorder()
 	auditHandlers(t, db).AuditHandler(rec, auditRequest("acme", ""))

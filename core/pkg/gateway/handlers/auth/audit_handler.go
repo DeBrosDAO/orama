@@ -154,11 +154,6 @@ func parseAuditSince(raw string) (string, error) {
 
 // readAuditEvents returns this namespace's events, most recent first.
 func (h *Handlers) readAuditEvents(ctx context.Context, namespace string, filter auditFilter) ([]AuditEntry, error) {
-	db := h.auditDB()
-	if db == nil {
-		return nil, errNoAuditDatabase
-	}
-
 	query := `SELECT action, actor, resource, result, ip, user_agent, metadata, created_at
 	          FROM audit_events WHERE namespace = ?`
 	args := []interface{}{namespace}
@@ -177,7 +172,7 @@ func (h *Handlers) readAuditEvents(ctx context.Context, namespace string, filter
 	query += " ORDER BY created_at DESC, id DESC LIMIT ?"
 	args = append(args, filter.Limit)
 
-	res, err := db.Query(h.internalCtx(ctx), query, args...)
+	res, err := h.authService.Audit().Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +182,8 @@ func (h *Handlers) readAuditEvents(ctx context.Context, namespace string, filter
 		return entries, nil
 	}
 	for _, raw := range res.Rows {
-		row, ok := raw.([]interface{})
-		if !ok || len(row) < 8 {
+		row := raw
+		if len(row) < 8 {
 			continue
 		}
 		entries = append(entries, AuditEntry{
@@ -205,31 +200,9 @@ func (h *Handlers) readAuditEvents(ctx context.Context, namespace string, filter
 	return entries, nil
 }
 
-// auditDB is the database the events were written to: the same handle the auth
-// service writes through.
-func (h *Handlers) auditDB() DatabaseClient {
-	if h.netClient == nil {
-		return nil
-	}
-	return h.netClient.Database()
-}
-
-func (h *Handlers) internalCtx(ctx context.Context) context.Context {
-	if h.internalAuthFn != nil {
-		return h.internalAuthFn(ctx)
-	}
-	return ctx
-}
-
 func stringCell(v any) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
 	return ""
 }
-
-var errNoAuditDatabase = errString("this gateway has no database to read the audit trail from")
-
-type errString string
-
-func (e errString) Error() string { return string(e) }
