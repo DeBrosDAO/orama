@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,9 +11,14 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
+
+// testClusterSecret is the cluster secret every test gateway shares.
+const testClusterSecret = "test-cluster-secret-for-evict-macs"
 
 // mockStorageDB is a minimal rqlite.Client for the eviction-path tests. It
 // embeds the interface (so unimplemented methods panic if ever hit) and answers
@@ -27,9 +33,9 @@ type mockStorageDB struct {
 	nodeIPs       []string // active node internal IPs
 	queryErr      error
 
-	refsQueried      bool
-	otherQueried     bool
-	nodesQueried     bool
+	refsQueried  bool
+	otherQueried bool
+	nodesQueried bool
 
 	// namespaceScoped marks this mock as a NAMESPACE gateway's own database.
 	// dns_nodes exists there but is never written, so it answers topology reads
@@ -107,7 +113,7 @@ func newHandlersWithDB(client IPFSClient, db rqlite.Client) *Handlers {
 func globalMock(h *Handlers) *mockStorageDB { return h.globalDB.(*mockStorageDB) }
 
 func newHandlersWithDBs(client IPFSClient, db, globalDB rqlite.Client) *Handlers {
-	return New(client, newTestLogger(), Config{IPFSReplicationFactor: 3, IPFSAPIURL: "http://localhost:5001"}, db, globalDB)
+	return New(client, newTestLogger(), Config{IPFSReplicationFactor: 3, IPFSAPIURL: "http://localhost:5001", ClusterSecret: testClusterSecret}, db, globalDB)
 }
 
 // --- remainingPinsForCID ------------------------------------------------------
@@ -279,39 +285,123 @@ func portOf(t *testing.T, rawURL string) int {
 
 // --- EvictHandler (per-node internal endpoint) --------------------------------
 
-func evictReq(t *testing.T, body, remoteAddr, marker string) (*httptest.ResponseRecorder, *http.Request) {
+// evictReq builds the request a peer gateway's fan-out sends for cid: the CID
+// in the query string, where the MAC covers it. secret is what the sender
+// signs with ("" sends the pre-MAC marker header alone).
+func evictReq(t *testing.T, cid, remoteAddr, secret string) (*httptest.ResponseRecorder, *http.Request) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/internal/storage/evict", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, evictPath+"?"+url.Values{"cid": {cid}}.Encode(),
+		strings.NewReader(`{"cid":"`+cid+`"}`))
 	req.RemoteAddr = remoteAddr
-	if marker != "" {
-		req.Header.Set("X-Orama-Internal-Auth", marker)
+	req.Header.Set("X-Orama-Internal-Auth", storageInternalAuthMarker)
+	if secret != "" {
+		key, err := auth.CoordinationKey(secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := auth.SignCoordination(key, req, time.Now()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return httptest.NewRecorder(), req
 }
 
 func TestEvictHandler_forbiddenWithoutWireGuard(t *testing.T) {
 	h := newTestHandlers(&mockIPFSClient{})
-	rec, req := evictReq(t, `{"cid":"QmX"}`, "203.0.113.9:5000", storageInternalAuthMarker) // public IP
+	rec, req := evictReq(t, "QmX", "203.0.113.9:5000", testClusterSecret) // signed, but a public IP
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
 	}
 }
 
-func TestEvictHandler_forbiddenWithoutMarker(t *testing.T) {
-	h := newTestHandlers(&mockIPFSClient{})
-	rec, req := evictReq(t, `{"cid":"QmX"}`, "10.0.0.7:5000", "") // WG IP but no marker
+// Bug: the marker header plus a WireGuard source address was the whole
+// credential, and the marker is a constant in this repository. Any local
+// process on a node could evict any namespace's blobs from a peer. e2e:
+// TestInternal_evictNeedsMoreThanTheOverlay.
+//
+// Mutation check: accept the marker again and this fails.
+func TestEvictHandler_markerAndWireGuardAloneAreRefused(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmVictim", "10.0.0.7:5000", "") // WG source + marker, no MAC
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
+	}
+	if mock.evictCalls != 0 {
+		t.Fatal("an unauthenticated request evicted a blob")
+	}
+}
+
+func TestEvictHandler_wrongSecretRefused(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmVictim", "10.0.0.7:5000", "another-cluster-entirely-secret")
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none", rec.Code, mock.evictCalls)
+	}
+}
+
+// A MAC captured for one CID cannot be replayed onto another: the CID is in the
+// query string the MAC covers.
+func TestEvictHandler_macDoesNotMoveToAnotherCID(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmMine", "10.0.0.7:5000", testClusterSecret)
+	req.URL.RawQuery = url.Values{"cid": {"QmTheirs"}}.Encode()
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none", rec.Code, mock.evictCalls)
+	}
+}
+
+// The body is not authenticated, so it must not choose what is evicted.
+func TestEvictHandler_bodyCIDIsIgnored(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmSigned", "10.0.0.7:5000", testClusterSecret)
+	req.Body = io.NopCloser(strings.NewReader(`{"cid":"QmInjected"}`))
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(mock.evictedCIDs) != 1 || mock.evictedCIDs[0] != "QmSigned" {
+		t.Errorf("evicted %v, want only the signed CID", mock.evictedCIDs)
+	}
+}
+
+func TestEvictHandler_staleStampRefused(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmX", "10.0.0.7:5000", "")
+	key, _ := auth.CoordinationKey(testClusterSecret)
+	if err := auth.SignCoordination(key, req, time.Now().Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none (replay window)", rec.Code, mock.evictCalls)
+	}
+}
+
+// A gateway with no cluster secret cannot authenticate anything, so it refuses
+// everything rather than accepting what it cannot check.
+func TestEvictHandler_noClusterSecretRefusesAll(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := New(mock, newTestLogger(), Config{}, nil, nil)
+	rec, req := evictReq(t, "QmX", "10.0.0.7:5000", testClusterSecret)
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none", rec.Code, mock.evictCalls)
 	}
 }
 
 func TestEvictHandler_wrongMethod(t *testing.T) {
 	h := newTestHandlers(&mockIPFSClient{})
-	req := httptest.NewRequest(http.MethodGet, "/v1/internal/storage/evict", nil)
+	req := httptest.NewRequest(http.MethodGet, evictPath, nil)
 	req.RemoteAddr = "10.0.0.7:5000"
-	req.Header.Set("X-Orama-Internal-Auth", storageInternalAuthMarker)
 	rec := httptest.NewRecorder()
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -321,7 +411,7 @@ func TestEvictHandler_wrongMethod(t *testing.T) {
 
 func TestEvictHandler_missingCID(t *testing.T) {
 	h := newTestHandlers(&mockIPFSClient{})
-	rec, req := evictReq(t, `{}`, "10.0.0.7:5000", storageInternalAuthMarker)
+	rec, req := evictReq(t, "", "10.0.0.7:5000", testClusterSecret)
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
@@ -331,7 +421,7 @@ func TestEvictHandler_missingCID(t *testing.T) {
 func TestEvictHandler_success(t *testing.T) {
 	mock := &mockIPFSClient{evictRemoved: 4}
 	h := newTestHandlers(mock)
-	rec, req := evictReq(t, `{"cid":"QmGone"}`, "10.0.0.7:5000", storageInternalAuthMarker)
+	rec, req := evictReq(t, "QmGone", "10.0.0.7:5000", testClusterSecret)
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -342,6 +432,61 @@ func TestEvictHandler_success(t *testing.T) {
 	body := decodeBody(t, rec)
 	if body["removed"] != float64(4) {
 		t.Errorf("removed = %v, want 4", body["removed"])
+	}
+}
+
+// The fan-out and the handler agree: what evictBlobEverywhere sends is accepted
+// by EvictHandler (verifier sees the peer's address as WireGuard), and a fan-out
+// whose secret differs from the receiver's is refused.
+func TestEvictFanout_signedRequestIsAcceptedByTheHandler(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		receiver   string
+		wantStatus string
+		wantEvict  int
+	}{
+		{"same cluster", testClusterSecret, "true", 1},
+		{"other cluster", "a-different-cluster-secret", "partial", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recv := &mockIPFSClient{}
+			receiver := New(recv, newTestLogger(), Config{ClusterSecret: tc.receiver}, nil, nil)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				r.RemoteAddr = "10.0.0.7:5000" // the overlay address a peer arrives from
+				receiver.EvictHandler(w, r)
+			}))
+			defer srv.Close()
+
+			h := newHandlersWithDBs(&mockIPFSClient{},
+				&mockStorageDB{namespaceScoped: true},
+				&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+			h.evictPort = portOf(t, srv.URL)
+
+			if got := h.maybeImmediateEvict(context.Background(), "QmGone", true); got != tc.wantStatus {
+				t.Errorf("evicted = %q, want %q", got, tc.wantStatus)
+			}
+			if recv.evictCalls != tc.wantEvict {
+				t.Errorf("receiver evicted %d times, want %d", recv.evictCalls, tc.wantEvict)
+			}
+		})
+	}
+}
+
+// A sender with no cluster secret must not fire unsigned calls.
+func TestEvictFanout_noClusterSecret_sendsNothing(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+	}))
+	defer srv.Close()
+	h := New(&mockIPFSClient{}, newTestLogger(), Config{}, &mockStorageDB{namespaceScoped: true},
+		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+	h.evictPort = portOf(t, srv.URL)
+	if got := h.maybeImmediateEvict(context.Background(), "QmGone", true); got != "partial" {
+		t.Errorf("evicted = %q, want partial", got)
+	}
+	if atomic.LoadInt32(&hits) != 0 {
+		t.Error("an unsigned evict call was sent")
 	}
 }
 

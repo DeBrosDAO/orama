@@ -31,6 +31,10 @@ type Config struct {
 	IPFSReplicationFactor int
 	// IPFSAPIURL is the IPFS API endpoint URL
 	IPFSAPIURL string
+	// ClusterSecret keys the coordination MAC that authenticates node-to-node
+	// evict calls (pkg/auth/coordination.go). Every gateway of a cluster holds
+	// the same one.
+	ClusterSecret string
 }
 
 // Handlers provides HTTP handlers for IPFS storage operations.

@@ -143,6 +143,7 @@ func newTestHandlers(client IPFSClient) *Handlers {
 	return New(client, newTestLogger(), Config{
 		IPFSReplicationFactor: 3,
 		IPFSAPIURL:            "http://localhost:5001",
+		ClusterSecret:         testClusterSecret,
 	}, nil, nil) // db=nil -> ownership checks bypassed
 }
 
