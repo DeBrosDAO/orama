@@ -88,6 +88,18 @@ func (e *ErrUnknownRole) Error() string {
 	return fmt.Sprintf("unknown role %q (valid: %s)", e.Role, strings.Join(AllRoles(), ", "))
 }
 
+// ErrInvalidGrant is a grant request that is wrong as asked — an ownership
+// grant, a selector that is malformed, narrows what the role does not hold, or
+// is not applied by the data path. It is the caller's to fix, so it is told
+// apart from a storage failure.
+type ErrInvalidGrant struct{ Reason string }
+
+func (e *ErrInvalidGrant) Error() string { return e.Reason }
+
+func invalidGrant(format string, args ...any) error {
+	return &ErrInvalidGrant{Reason: fmt.Sprintf(format, args...)}
+}
+
 // ErrNotAMember is returned when a principal holds no live grant in a namespace.
 var ErrNotAMember = errors.New("this principal holds no grant in this namespace")
 
@@ -290,7 +302,7 @@ type GrantRequest struct {
 // be able to make somebody an owner is how the namespace-takeover bug worked.
 func (s *Service) Grant(ctx context.Context, req GrantRequest) error {
 	if req.Role == RoleOwner {
-		return fmt.Errorf("ownership is not granted: it is established by creating the namespace and moved by transferring it")
+		return invalidGrant("ownership is not granted: it is established by creating the namespace and moved by transferring it")
 	}
 	return s.writeGrant(ctx, req)
 }
@@ -311,19 +323,19 @@ func (s *Service) writeGrant(ctx context.Context, req GrantRequest) error {
 	if resource != "" {
 		selector, err := ParseSelector(resource)
 		if err != nil {
-			return err
+			return invalidGrant("%s", err.Error())
 		}
 		// A selector for something the role cannot reach anyway is a grant
 		// nobody could ever act on, whichever way the enforcement lands.
 		if want := selector.RequiredScope(); !req.Role.Scopes().Has(want) {
-			return fmt.Errorf("role %q does not hold the %q grant that selector %q narrows",
+			return invalidGrant("role %q does not hold the %q grant that selector %q narrows",
 				req.Role, want, resource)
 		}
 		// A selector nothing applies is a restriction that is not there. It
 		// would show in `orama members list` as a narrowed grant and authorise
 		// nothing, which is the worse of the two ways to be wrong.
 		if !SelectorEnforced(selector.Domain) {
-			return fmt.Errorf("a %s selector is not applied by the data path yet, so this grant "+
+			return invalidGrant("a %s selector is not applied by the data path yet, so this grant "+
 				"would authorise nothing: narrow a grant in %s, or leave the selector off",
 				selector.Domain, strings.Join(EnforcedSelectorDomains(), " or "))
 		}
