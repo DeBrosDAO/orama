@@ -67,7 +67,7 @@ type ClientConfig struct {
     AppName           string        // Application name (required)
     DatabaseName      string        // Database name (default: "<AppName>_db")
     BootstrapPeers    []string      // LibP2P bootstrap peer multiaddresses
-    DatabaseEndpoints []string      // RQLite database endpoints
+    DatabaseEndpoints []string      // RQLite nodes to dial directly (in-mesh only); empty = through the gateway
     GatewayURL        string        // Gateway URL for HTTP API access
     ConnectTimeout    time.Duration // Connection timeout (default: 30s)
     RetryAttempts     int           // Retry attempts (default: 3)
@@ -101,7 +101,7 @@ if err != nil {
 }
 ```
 
-`DefaultClientConfig` fills in default bootstrap peers and database endpoints; `NewClient` returns an error if the config is nil or the app name is empty.
+`DefaultClientConfig` fills in default bootstrap peers and leaves `DatabaseEndpoints` empty; `NewClient` returns an error if the config is nil or the app name is empty.
 
 ## Authentication
 
@@ -245,7 +245,20 @@ fmt.Printf("Status: %s, Replication factor: %d, Peers: %v\n",
 
 ## Database Client
 
-Query RQLite distributed SQL database.
+Query the namespace's RQLite distributed SQL database.
+
+With the configuration of the Quick Start (a `GatewayURL` and a credential, no
+`DatabaseEndpoints`) the database client goes through the gateway's
+`/v1/rqlite` API and authenticates each request with the client's `APIKey` or
+`JWT`, as the storage client does, so it works from anywhere the gateway is
+reachable. What the credential may do is the database access its role and scope
+grant. Set `DatabaseEndpoints` (for example to `client.DefaultDatabaseEndpoints()`)
+to dial RQLite nodes directly instead; that needs a route into the WireGuard
+mesh and is how a gateway reaches its own database.
+
+Through the gateway, `DropTable` of a table that is not there succeeds, and
+`GetSchema` leaves out the platform's own tables that the gateway does not let
+a tenant query.
 
 ### Write Query
 

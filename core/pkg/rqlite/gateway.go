@@ -8,7 +8,7 @@ package rqlite
 // helpers into JSON-over-HTTP endpoints that can be called from any language.
 //
 // Endpoints (under BasePath, default: /v1/db):
-//   - POST  {base}/query           -> arbitrary SELECT; returns rows as []map[string]any
+//   - POST  {base}/query           -> arbitrary SELECT; returns rows as []map[string]any and "columns", their names in SELECT order
 //   - POST  {base}/exec            -> write statement (INSERT/UPDATE/DELETE/DDL); returns {rows_affected,last_insert_id}
 //   - POST  {base}/find            -> FindBy(table, criteria, opts...) -> returns []map
 //   - POST  {base}/find-one        -> FindOneBy(table, criteria, opts...) -> returns map
@@ -289,14 +289,15 @@ func (g *HTTPGateway) handleQuery(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
-	out := make([]map[string]any, 0, 16)
+	var out ColumnRows
 	if err := g.Client.Query(ctx, &out, body.SQL, args...); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": out,
-		"count": len(out),
+		"items":   out.Rows,
+		"count":   len(out.Rows),
+		"columns": out.Columns,
 	})
 }
 

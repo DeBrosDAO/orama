@@ -160,10 +160,10 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 	if len(cfg.BootstrapPeers) > 0 {
 		cliCfg.BootstrapPeers = cfg.BootstrapPeers
 	}
-	// Explicit rqlite_dsn always wins (bugboard #162). DefaultClientConfig
-	// pre-fills DatabaseEndpoints from RQLITE_NODES / bootstrap peers on
-	// the index RQLite port, which used to swallow the tenant DSN.
-	endpoints, err := resolveDatabaseEndpoints(cfg, cliCfg.DatabaseEndpoints)
+	// Explicit rqlite_dsn always wins (bugboard #162). A gateway dials RQLite
+	// itself, so it always has endpoints: the client would otherwise reach the
+	// database through a gateway, this one.
+	endpoints, err := resolveDatabaseEndpoints(cfg, client.DefaultDatabaseEndpoints())
 	if err != nil {
 		return nil, err
 	}

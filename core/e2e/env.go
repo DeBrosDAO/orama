@@ -742,6 +742,8 @@ func NewNetworkClient(t *testing.T) client.NetworkClient {
 		cfg.BootstrapPeers = peers
 	}
 
+	// These suites run inside the mesh and dial RQLite directly.
+	cfg.DatabaseEndpoints = client.DefaultDatabaseEndpoints()
 	if nodes := GetRQLiteNodes(); len(nodes) > 0 {
 		cfg.DatabaseEndpoints = nodes
 	}
