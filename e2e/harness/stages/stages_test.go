@@ -297,3 +297,14 @@ func TestRun_prefixWrapsEveryPackage(t *testing.T) {
 		t.Fatalf("args %v", fe.calls[0])
 	}
 }
+
+func TestGoTestArgs_parallelOnlyWhenSet(t *testing.T) {
+	def := strings.Join((&Runner{}).goTestArgs("5m0s"), " ")
+	if strings.Contains(def, "-parallel") {
+		t.Errorf("default args %q carry -parallel", def)
+	}
+	set := strings.Join((&Runner{TestParallel: 2}).goTestArgs("5m0s"), " ")
+	if !strings.HasSuffix(set, "-timeout 5m0s -parallel 2") {
+		t.Errorf("args %q, want -parallel 2 after -timeout", set)
+	}
+}

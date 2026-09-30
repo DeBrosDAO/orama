@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,9 +43,13 @@ type Runner struct {
 	// ExtraEnv is added after the filter: KEY=VALUE pairs the runner itself
 	// hands every package (E2E_BROKER_SOCK).
 	ExtraEnv []string
-	Exec     Executor
-	Now      func() time.Time
-	Logf     func(format string, args ...any)
+	// TestParallel is go test's -parallel for every package: how many of a
+	// package's t.Parallel tests run at once. 0 leaves go's default (the
+	// runner's GOMAXPROCS), sized for the fleet's dedicated servers.
+	TestParallel int
+	Exec         Executor
+	Now          func() time.Time
+	Logf         func(format string, args ...any)
 	// Prefix runs every package under a wrapper (E2E_SANDBOX=1: bwrap);
 	// empty runs it directly.
 	Prefix []string
@@ -147,12 +152,21 @@ func (r *Runner) runPackage(ctx context.Context, stage Stage, feature string) Pa
 	name := fmt.Sprintf("stage-%02d-%s", stage.ID, feature)
 	rel := filepath.Join(GoTestDir, name+".json")
 	pr := PackageRun{Feature: feature, Output: rel, Evidence: filepath.Join(evidence.DirName, name), Start: r.Now()}
-	args := []string{"go", "test", "-tags", BuildTag, "-json", "-count=1",
-		"-timeout", binaryTimeout(stage.Timeout), "./features/" + feature}
+	args := append(r.goTestArgs(binaryTimeout(stage.Timeout)), "./features/"+feature)
 	pr.Exit, pr.Error = r.execTo(ctx, rel, pr.Evidence, args, time.Duration(stage.Timeout))
 	pr.End = r.Now()
 	r.Logf("stage %d: %s exit %d", stage.ID, feature, pr.Exit)
 	return pr
+}
+
+// goTestArgs is the go test command line up to the package, with -timeout
+// timeout and the runner's -parallel.
+func (r *Runner) goTestArgs(timeout string) []string {
+	args := []string{"go", "test", "-tags", BuildTag, "-json", "-count=1", "-timeout", timeout}
+	if r.TestParallel > 0 {
+		args = append(args, "-parallel", strconv.Itoa(r.TestParallel))
+	}
+	return args
 }
 
 // binaryTimeout is the go test -timeout for a package whose budget is

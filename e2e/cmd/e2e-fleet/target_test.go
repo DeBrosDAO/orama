@@ -279,3 +279,18 @@ func TestRefuseStagenetEnv_otherStates(t *testing.T) {
 		t.Fatalf("missing state: %v", err)
 	}
 }
+
+// Stagenet's nodes are shared VPSs: its packages run two tests at a time unless the flag says otherwise;
+// the fleet keeps go's default.
+func TestTestParallel_defaultsPerTarget(t *testing.T) {
+	stagenet := &fleet.State{Target: config.TargetStagenet}
+	if got := testParallel(stagenet, -1); got != stagenetTestParallel {
+		t.Errorf("stagenet default = %d, want %d", got, stagenetTestParallel)
+	}
+	if got := testParallel(stagenet, 6); got != 6 {
+		t.Errorf("stagenet with --parallel 6 = %d", got)
+	}
+	if got := testParallel(&fleet.State{}, -1); got != 0 {
+		t.Errorf("fleet default = %d, want 0 (go's default)", got)
+	}
+}

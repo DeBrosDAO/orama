@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/harness/config"
+	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/provision"
 	"github.com/DeBrosOfficial/network/e2e/harness/report"
 	"github.com/DeBrosOfficial/network/e2e/harness/secrets"
@@ -76,6 +77,7 @@ func cmdTest(parent context.Context, args []string) (int, error) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	only := fs.Int("stage", 0, "run only this stage id")
 	resume := fs.Bool("resume", false, "skip stages already completed in this artifact dir")
+	parallel := fs.Int("parallel", -1, "go test -parallel for each package (default: the target's; 0 is go's default)")
 	if err := parseFlags(fs, args); err != nil {
 		return exitUsage, err
 	}
@@ -99,6 +101,7 @@ func cmdTest(parent context.Context, args []string) (int, error) {
 		return exitFail, err
 	}
 	err = withBroker(ctx, lay, st, statePath, func(r *stages.Runner) error {
+		r.TestParallel = testParallel(st, *parallel)
 		_, err := r.Run(ctx, steps, stages.Options{Only: *only, Resume: *resume})
 		return err
 	})
@@ -106,6 +109,22 @@ func cmdTest(parent context.Context, args []string) (int, error) {
 		return exitFail, err
 	}
 	return writeReport(lay, reportRun{artifactDir: st.ArtifactDir, statePath: statePath, runID: st.RunID}, false)
+}
+
+// stagenetTestParallel bounds how many tests of a package run at once on the stagenet target: its
+// three nodes are shared, oversubscribed VPSs that also serve the cluster, and ten namespaces
+// provisioning at once starved one of them until provisioning rolled back (2026-09-30).
+const stagenetTestParallel = 2
+
+// testParallel is the -parallel for st: flag when set (>= 0), else the target's default.
+func testParallel(st *fleet.State, flag int) int {
+	if flag >= 0 {
+		return flag
+	}
+	if st.IsStagenet() {
+		return stagenetTestParallel
+	}
+	return 0
 }
 
 func cmdTeardown(parent context.Context, args []string) (int, error) {
