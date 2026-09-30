@@ -93,8 +93,8 @@ func TestRoles_matrix(t *testing.T) {
 			resp := c.MustSend(t, req)
 			refused := resp.Status == http.StatusUnauthorized || resp.Status == http.StatusForbidden
 			switch {
-			case rc.allows[role] && refused:
-				t.Errorf("%s: %s refused (%d %s)", rc.name, role, resp.Status, resp.ErrorCode())
+			case rc.allows[role] && !reached(resp):
+				t.Errorf("%s: %s was not served (%d %s): %.200s", rc.name, role, resp.Status, resp.ErrorCode(), resp.Body)
 			case !rc.allows[role] && !refused:
 				t.Errorf("%s: %s reached it (%d)", rc.name, role, resp.Status)
 			case !rc.allows[role] && !deniedCodes[resp.ErrorCode()]:
@@ -182,8 +182,8 @@ func TestRoles_keyScopes(t *testing.T) {
 			req.Bearer = key
 			resp := c.MustSend(t, req)
 			refused := resp.Status == http.StatusUnauthorized || resp.Status == http.StatusForbidden
-			if refused == want[scope] {
-				t.Errorf("%s with a %s key: HTTP %d %s", rc.name, scope, resp.Status, resp.ErrorCode())
+			if want[scope] != reached(resp) || (!want[scope] && !refused) {
+				t.Errorf("%s with a %s key: HTTP %d %s (want served=%v)", rc.name, scope, resp.Status, resp.ErrorCode(), want[scope])
 			}
 		}
 	}

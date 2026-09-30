@@ -25,6 +25,14 @@ func denied(resp *gw.Response) bool {
 	return resp.Status == http.StatusForbidden
 }
 
+// reached reports whether a request got past authorization and was served: a
+// 401/403 is a refusal, and a 5xx says the request broke, not that anyone
+// was let in, so neither is evidence of access. (A 4xx about the body is: the
+// gate had already said yes.)
+func reached(resp *gw.Response) bool {
+	return resp.Status < http.StatusInternalServerError && resp.Status != http.StatusUnauthorized && resp.Status != http.StatusForbidden
+}
+
 // TestGrants_pubsubTopicSelector: `pubsub:topic=chat.*` publishes to chat
 // topics and nothing else, and never widens past pub/sub
 // (docs/AUTH.md#narrowing-a-grant).
@@ -38,8 +46,8 @@ func TestGrants_pubsubTopicSelector(t *testing.T) {
 		return send(t, c, http.MethodPost, pathPublish, tok, map[string]string{"topic": topic, "data_base64": "aGk="})
 	}
 	for _, topic := range []string{"chat.room", "chat.a.b"} {
-		if r := pub(topic); denied(r) {
-			t.Errorf("publishing to %s under chat.*: %d %s", topic, r.Status, r.Body)
+		if r := pub(topic); r.Status != http.StatusOK {
+			t.Errorf("publishing to %s under chat.*: want 200, got %d %s", topic, r.Status, r.Body)
 		}
 	}
 	for _, topic := range []string{"orders", "chatroom", "x.chat.room"} {
@@ -64,8 +72,8 @@ func TestGrants_cacheKeySelector(t *testing.T) {
 		return send(t, c, http.MethodPost, pathCachePut, tok, map[string]string{"dmap": dmap, "key": key, "value": "v"})
 	}
 	for _, key := range []string{"abc", "../tokens/x", "a/b/c"} {
-		if r := put("sessions", key); denied(r) {
-			t.Errorf("put sessions/%s under sessions/*: %d %s", key, r.Status, r.Body)
+		if r := put("sessions", key); r.Status != http.StatusOK {
+			t.Errorf("put sessions/%s under sessions/*: want 200, got %d %s", key, r.Status, r.Body)
 		}
 	}
 	if r := put("tokens", "x"); !denied(r) {
