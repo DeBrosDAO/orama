@@ -216,6 +216,7 @@ func TestCallerPermissions(t *testing.T) {
 
 	// Wallet JWT, no grant resolved → the data plane, never the control plane.
 	rWallet := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})
+	rWallet = rWallet.WithContext(context.WithValue(rWallet.Context(), CtxKeyNamespaceOverride, "anchat"))
 	wallet := g.callerPermissions(rWallet)
 	if wallet.IsAdmin() {
 		t.Error("a plain wallet JWT is admin")
@@ -461,5 +462,26 @@ func TestCallerPermissions_lobbySessionHoldsNothing(t *testing.T) {
 	inNamespace = inNamespace.WithContext(context.WithValue(inNamespace.Context(), CtxKeyNamespaceOverride, "anchat"))
 	if !g.callerPermissions(inNamespace).PermitsDomain(auth.DomainCache, auth.ActionWrite) {
 		t.Error("a session in a namespace lost the data plane")
+	}
+}
+
+// A grant recorded in the lobby (a cluster from before ownership was fixed
+// gave one to whichever wallet signed in first) confers nothing, and a wallet
+// session naming no namespace is the lobby's (security review, 2026-09-30).
+func TestCallerPermissions_lobbyGrantAndNamelessSessionHoldNothing(t *testing.T) {
+	g := &Gateway{}
+	owner := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xFIRST"}), &auth.Grant{Role: auth.RoleOwner})
+	owner = owner.WithContext(context.WithValue(owner.Context(), CtxKeyNamespaceOverride, auth.LobbyNamespace))
+	if p := g.callerPermissions(owner); len(p) != 0 {
+		t.Errorf("a lobby owner grant holds %v", p.List())
+	}
+	nameless := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})
+	if p := g.callerPermissions(nameless); len(p) != 0 {
+		t.Errorf("a session naming no namespace holds %v", p.List())
+	}
+	elsewhere := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xOWNER"}), &auth.Grant{Role: auth.RoleOwner})
+	elsewhere = elsewhere.WithContext(context.WithValue(elsewhere.Context(), CtxKeyNamespaceOverride, "anchat"))
+	if !g.callerPermissions(elsewhere).IsAdmin() {
+		t.Error("an owner grant in a namespace lost its authority")
 	}
 }

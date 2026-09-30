@@ -28,7 +28,18 @@ func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 	// The grant the authorization middleware resolved for this namespace, for
 	// whichever principal the credential named. It is the answer whenever the
 	// route resolves one.
+	// The lobby belongs to nobody and holds nothing (docs/AUTH.md, "The
+	// lobby"): its session reaches only the routes that ask for no
+	// permission. That holds for a grant too — a cluster from before
+	// ownership was fixed may still record one for whichever wallet signed in
+	// to it first. A wallet session naming no namespace is read the same way.
+	ns, _ := ctx.Value(CtxKeyNamespaceOverride).(string)
+	inLobby := auth.IsLobbyNamespace(ns) || strings.TrimSpace(ns) == ""
+
 	if grant, _ := ctx.Value(ctxKeyGrant).(*auth.Grant); grant != nil {
+		if auth.IsLobbyNamespace(ns) {
+			return auth.PermissionSet{}
+		}
 		return auth.PermissionsFor(grant.Role, grant.Resource)
 	}
 
@@ -44,12 +55,10 @@ func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 			}
 			return auth.PermissionSet{}
 		}
-		// The lobby belongs to nobody and holds nothing: its session reaches
-		// only the routes that ask for no permission (creating a namespace,
-		// listing the wallet's own). It used to get the data plane like any
-		// other session, so every signed-in wallet shared the index
-		// namespace's cache, pub/sub and storage (docs/AUTH.md, "The lobby").
-		if ns, _ := ctx.Value(CtxKeyNamespaceOverride).(string); auth.IsLobbyNamespace(ns) {
+		// A lobby session used to get the data plane like any other, so every
+		// signed-in wallet shared the index namespace's cache, pub/sub and
+		// storage.
+		if inLobby {
 			return auth.PermissionSet{}
 		}
 		// A logged-in user with no grant in this namespace gets the data

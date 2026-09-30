@@ -548,6 +548,14 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 		return "", "", "", 0, fmt.Errorf("%w: registry client not initialized", ErrRefreshTransient)
 	}
 
+	// The same name the lookup below resolves: an empty namespace is the
+	// lobby. Passed on as given, it minted a token naming no namespace,
+	// which the permission check did not recognise as the lobby.
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" {
+		namespace = LobbyNamespace
+	}
+
 	nsID, err := s.ResolveNamespaceID(ctx, namespace)
 	if err != nil {
 		// Bugboard #125: namespace resolution runs an rqlite query BEFORE the

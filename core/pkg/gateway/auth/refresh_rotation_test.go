@@ -935,3 +935,23 @@ func TestRefreshToken_registryUnavailableIsTransient(t *testing.T) {
 		t.Fatalf("err = %v, want ErrRefreshTransient", err)
 	}
 }
+
+// A refresh naming no namespace minted a token naming none, which the
+// permission check did not read as the lobby (security review, 2026-09-30).
+func TestRefreshToken_noNamespaceIsTheLobby(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const old = "lobby-refresh-token"
+	ormDB.subjectByToken[sha256Hex(old)] = "0xWALLET"
+
+	access, _, _, _, err := s.RefreshToken(context.Background(), old, "  ", nil)
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if claims.Namespace != LobbyNamespace {
+		t.Fatalf("token names namespace %q, want %q", claims.Namespace, LobbyNamespace)
+	}
+}
