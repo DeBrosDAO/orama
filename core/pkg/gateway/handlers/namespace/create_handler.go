@@ -194,6 +194,15 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespaceID, err := h.create(ctx, name, wallet)
+	if errors.Is(err, errNamespaceTaken) {
+		// Another create of the same name committed between the check above
+		// and this insert: the same answer the check gives.
+		writeCreateJSON(w, http.StatusConflict, map[string]any{
+			"error": "namespace " + name + " already exists",
+			"code":  ErrCodeNamespaceTaken,
+		})
+		return
+	}
 	if err != nil {
 		h.logger.Error("could not create the namespace", zap.String("namespace", name), zap.Error(err))
 		writeCreateJSON(w, http.StatusInternalServerError, map[string]any{
@@ -288,9 +297,22 @@ func (h *CreateHandler) countOwned(ctx context.Context, wallet string) (int, err
 // The grant is what makes the namespace someone's. Writing the namespace
 // without it would leave a row anybody could then claim by signing in, which
 // is the shape of the bug this replaces.
+//
+// The existence check before it does not hold across concurrent creates of
+// one name, so the insert itself decides: the name is UNIQUE, the insert
+// ignores a conflict, and a create that inserted nothing lost the race and
+// returns errNamespaceTaken without writing an owner.
 func (h *CreateHandler) create(ctx context.Context, name, wallet string) (int64, error) {
-	if _, err := h.ormClient.Exec(ctx, "INSERT INTO namespaces(name) VALUES (?)", name); err != nil {
+	res, err := h.ormClient.Exec(ctx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", name)
+	if err != nil {
 		return 0, fmt.Errorf("insert namespace: %w", err)
+	}
+	inserted, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("insert namespace: could not read whether the row was written: %w", err)
+	}
+	if inserted == 0 {
+		return 0, errNamespaceTaken
 	}
 
 	var rows []struct {
@@ -317,6 +339,10 @@ func (h *CreateHandler) create(ctx context.Context, name, wallet string) (int64,
 	}
 	return rows[0].ID, nil
 }
+
+// errNamespaceTaken is create's answer when another create of the same name
+// won the insert.
+var errNamespaceTaken = errors.New("namespace already exists")
 
 func creationDenied(mode string) string {
 	switch mode {

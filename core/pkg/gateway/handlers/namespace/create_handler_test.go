@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -34,6 +35,9 @@ type registry struct {
 	failNamespaceQuery bool
 	failOperators      bool
 	failCreators       bool
+	// lostRace makes the namespace insert write nothing, as when another
+	// create of the same name committed after the existence check.
+	lostRace bool
 
 	// mode is the stored namespace_creation value. Empty means no row, which
 	// the handler reads as operators. newRegistry sets open: these tests
@@ -124,7 +128,10 @@ func allowListed(dest any, members map[string]bool, args []any) error {
 
 func (r *registry) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
 	r.writes = append(r.writes, query)
-	if strings.Contains(query, "INSERT INTO namespaces") {
+	if strings.Contains(query, "INTO namespaces") {
+		if r.lostRace {
+			return createExecResult{affected: 0}, nil
+		}
 		name, _ := args[0].(string)
 		r.existing[name] = r.nextID
 		r.nextID++
@@ -133,13 +140,13 @@ func (r *registry) Exec(_ context.Context, query string, args ...any) (sql.Resul
 		wallet, _ := args[1].(string)
 		r.owned[wallet]++
 	}
-	return createExecResult{}, nil
+	return createExecResult{affected: 1}, nil
 }
 
-type createExecResult struct{}
+type createExecResult struct{ affected int64 }
 
-func (createExecResult) LastInsertId() (int64, error) { return 1, nil }
-func (createExecResult) RowsAffected() (int64, error) { return 1, nil }
+func (createExecResult) LastInsertId() (int64, error)   { return 1, nil }
+func (r createExecResult) RowsAffected() (int64, error) { return r.affected, nil }
 
 type errString string
 
@@ -272,6 +279,34 @@ func TestCreate_refusesATakenName(t *testing.T) {
 	}
 	if len(db.writes) != 0 {
 		t.Error("a taken name was written over")
+	}
+}
+
+// Two creates of one name both pass the existence check; the one whose insert
+// writes nothing must answer 409 like the check, not 500, and must not write
+// an owner grant for a namespace it did not create.
+func TestCreate_lostInsertRaceIsAConflict(t *testing.T) {
+	db := newRegistry()
+	db.lostRace = true
+	prov := &recordingProvisioner{}
+	h := NewCreateHandler(db, prov, nil, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, createRequest("0xsomeoneelse", "myapp"))
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if decodeCreate(t, w)["code"] != ErrCodeNamespaceTaken {
+		t.Error("no machine-readable code on a lost race")
+	}
+	for _, q := range db.writes {
+		if strings.Contains(q, "grants") || strings.Contains(q, "principals") {
+			t.Errorf("the losing create wrote an owner: %s", q)
+		}
+	}
+	if prov.called {
+		t.Error("the losing create started provisioning")
 	}
 }
 
@@ -570,5 +605,51 @@ func TestCreate_walletCapDeniesTheEleventhUntilRaised(t *testing.T) {
 	h.ServeHTTP(twelfth, createRequest(wallet, "app12"))
 	if twelfth.Code != http.StatusForbidden || decodeCreate(t, twelfth)["code"] != ErrCodeNamespaceQuota {
 		t.Fatalf("12th: %d %s", twelfth.Code, twelfth.Body.String())
+	}
+}
+
+// The real schema: creates of one name racing through the handler at once
+// leave exactly one namespace and one owner, every loser answers 409, and
+// none answers 500 (stagenet e2e, 2026-09-30: five of six racers got 500).
+func TestCreate_concurrentSameNameOneWinner(t *testing.T) {
+	db := migratedDB(t)
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`INSERT INTO cluster_settings (key, value, updated_by) VALUES (?, ?, 'test')`,
+		operator.SettingNamespaceCreation, operator.CreationOpen); err != nil {
+		t.Fatal(err)
+	}
+	h := NewCreateHandler(rqlite.NewClient(db), nil, nil, zap.NewNop())
+	const racers = 6
+	codes := make(chan int, racers)
+	var wg sync.WaitGroup
+	for i := range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, createRequest(fmt.Sprintf("0x%040d", i+1), "myapp"))
+			codes <- w.Code
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	won := 0
+	for c := range codes {
+		switch c {
+		case http.StatusCreated:
+			won++
+		case http.StatusConflict:
+		default:
+			t.Errorf("a racer got %d, want 201 or 409", c)
+		}
+	}
+	if won != 1 {
+		t.Errorf("%d racers won, want 1", won)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM namespaces WHERE name = 'myapp'`); n != 1 {
+		t.Errorf("namespace rows = %d, want 1", n)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM grants WHERE role = 'owner'`); n != 1 {
+		t.Errorf("owner grants = %d, want 1", n)
 	}
 }
