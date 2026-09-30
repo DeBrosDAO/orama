@@ -44,6 +44,14 @@ func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 			}
 			return auth.PermissionSet{}
 		}
+		// The lobby belongs to nobody and holds nothing: its session reaches
+		// only the routes that ask for no permission (creating a namespace,
+		// listing the wallet's own). It used to get the data plane like any
+		// other session, so every signed-in wallet shared the index
+		// namespace's cache, pub/sub and storage (docs/AUTH.md, "The lobby").
+		if ns, _ := ctx.Value(CtxKeyNamespaceOverride).(string); auth.IsLobbyNamespace(ns) {
+			return auth.PermissionSet{}
+		}
 		// A logged-in user with no grant in this namespace gets the data
 		// plane, as they always have.
 		return auth.DataPlanePermissions()

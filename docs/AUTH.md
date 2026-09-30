@@ -77,8 +77,9 @@ refresh token, and the second would be refused as a replay.
 
 A challenge with no namespace signs you in to `default`. That is the **lobby**:
 it belongs to nobody, needs no grant, and writes none. What you get there is a
-session and no key, and the one thing that session reaches is
-`POST /v1/namespaces`. That creates a namespace and makes you its owner when
+session and no key, and it holds no permission: what it reaches is
+`POST /v1/namespaces` and `GET /v1/namespace/list` (the wallet's own
+namespaces), the routes that ask for none. The first creates a namespace and makes you its owner when
 this cluster's namespace-creation setting allows the wallet. A new cluster
 allows its operators only. A cluster that already had data allows any
 signed-in wallet until an operator changes it

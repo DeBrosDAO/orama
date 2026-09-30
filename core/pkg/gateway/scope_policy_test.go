@@ -445,3 +445,21 @@ func TestCredentialStaleness_isTheCachesTTL(t *testing.T) {
 		t.Error("a credential is cached for ever")
 	}
 }
+
+// A lobby session holds nothing (docs/AUTH.md, "The lobby"). It used to get
+// the data plane like any wallet session, so every signed-in wallet shared the
+// index namespace's cache, pub/sub and storage (stagenet e2e, 2026-09-30).
+func TestCallerPermissions_lobbySessionHoldsNothing(t *testing.T) {
+	g := &Gateway{}
+	r := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})
+	r = r.WithContext(context.WithValue(r.Context(), CtxKeyNamespaceOverride, auth.LobbyNamespace))
+	if p := g.callerPermissions(r); len(p) != 0 {
+		t.Fatalf("a lobby session holds %v, want nothing", p.List())
+	}
+
+	inNamespace := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})
+	inNamespace = inNamespace.WithContext(context.WithValue(inNamespace.Context(), CtxKeyNamespaceOverride, "anchat"))
+	if !g.callerPermissions(inNamespace).PermitsDomain(auth.DomainCache, auth.ActionWrite) {
+		t.Error("a session in a namespace lost the data plane")
+	}
+}
