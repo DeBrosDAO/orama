@@ -264,8 +264,8 @@ func (h *Handlers) EvictHandler(w http.ResponseWriter, r *http.Request) {
 // originate from the WireGuard mesh. The overlay alone is no credential — every
 // tenant's services are on it, so any local process on a node could otherwise
 // evict any namespace's blobs from a peer. The MAC covers method, path, query
-// (the CID) and a timestamp, so it cannot be replayed onto another CID or, past
-// the skew window, at all.
+// (the CID), the body, a single-use nonce and a timestamp, so it cannot be
+// replayed onto another CID or, past the skew window, at all.
 func (h *Handlers) isInternalStorageRequest(r *http.Request) bool {
 	if !auth.IsWireGuardPeer(r.RemoteAddr) {
 		return false

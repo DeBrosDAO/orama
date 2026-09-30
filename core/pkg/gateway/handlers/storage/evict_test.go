@@ -346,18 +346,16 @@ func TestEvictHandler_macDoesNotMoveToAnotherCID(t *testing.T) {
 	}
 }
 
-// The body is not authenticated, so it must not choose what is evicted.
-func TestEvictHandler_bodyCIDIsIgnored(t *testing.T) {
+// The v2 MAC covers the body, so a body swapped after signing is refused; the
+// handler reads the CID from the signed query, never the body.
+func TestEvictHandler_swappedBodyIsRefused(t *testing.T) {
 	mock := &mockIPFSClient{}
 	h := newTestHandlers(mock)
 	rec, req := evictReq(t, "QmSigned", "10.0.0.7:5000", testClusterSecret)
 	req.Body = io.NopCloser(strings.NewReader(`{"cid":"QmInjected"}`))
 	h.EvictHandler(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if len(mock.evictedCIDs) != 1 || mock.evictedCIDs[0] != "QmSigned" {
-		t.Errorf("evicted %v, want only the signed CID", mock.evictedCIDs)
+	if rec.Code != http.StatusForbidden || len(mock.evictedCIDs) != 0 {
+		t.Errorf("status = %d, evicted %v; want 403 and none", rec.Code, mock.evictedCIDs)
 	}
 }
 

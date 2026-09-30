@@ -28,8 +28,16 @@ import (
 //
 // A coordination request now carries a MAC over what it is asking for, keyed by
 // a value derived from the cluster secret. A caller that does not hold the
-// cluster secret cannot produce one, and a MAC captured from one request cannot
-// be replayed onto a different method, path or namespace.
+// cluster secret cannot produce one.
+//
+// The v1 MAC covers the method, path, query and a timestamp, and nothing in the
+// body. A request that carries its parameters in the body — the namespace spawn
+// endpoint carries the action and the namespace there — therefore has the same
+// v1 MAC input whatever it asks for, and a captured stamp could be replayed
+// inside its window onto a different body. The v2 MAC (coordination_v2.go)
+// also covers the SHA-256 of the body and a single-use nonce. A v1 MAC is still
+// accepted, for requests that do not destroy anything, only while a rolling
+// upgrade has nodes that sign nothing else (AcceptLegacyCoordinationMAC).
 //
 // This is not node *identity* — every node holds the cluster secret, so any
 // node can sign for any other. Node identity is the node-principal work; this
@@ -68,9 +76,11 @@ func CoordinationKey(clusterSecret string) ([]byte, error) {
 
 // coordinationPayload is the exact string a MAC covers.
 //
-// The query string is in it because the namespace travels there: without it, a
-// MAC for `?namespace=mine` would be replayable onto `?namespace=yours`, which
-// is the whole thing this is for.
+// This is the v1 payload, kept byte-for-byte so a node on the previous build
+// still verifies what a node on this one signs. The query string is in it
+// because some endpoints take the namespace there: without it, a MAC for
+// `?namespace=mine` would be replayable onto `?namespace=yours`. It says nothing
+// about the body; coordinationPayloadV2 does.
 func coordinationPayload(method, path, query string, ts int64) string {
 	return strings.Join([]string{
 		"orama-coordination-v1",
@@ -81,29 +91,16 @@ func coordinationPayload(method, path, query string, ts int64) string {
 	}, "\n")
 }
 
-// SignCoordination stamps a request as coming from inside the cluster.
-func SignCoordination(key []byte, r *http.Request, now time.Time) error {
-	if len(key) == 0 {
-		return fmt.Errorf("no coordination key: this node has no cluster secret, so it cannot " +
-			"prove to another node that this request came from inside the cluster")
-	}
+// signCoordinationV1 sets the v1 stamp.
+func signCoordinationV1(key []byte, r *http.Request, now time.Time) {
 	ts := now.Unix()
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(coordinationPayload(r.Method, r.URL.Path, r.URL.RawQuery, ts)))
 	r.Header.Set(CoordinationMACHeader, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(mac.Sum(nil)))
-	return nil
 }
 
-// VerifyCoordination reports whether a request was stamped by something holding
-// the cluster secret.
-//
-// It answers false for every reason: no key on this side, no stamp, a malformed
-// stamp, a stale or future timestamp, or a MAC over a different request than
-// the one that arrived.
-func VerifyCoordination(key []byte, r *http.Request, now time.Time) bool {
-	if len(key) == 0 {
-		return false
-	}
+// verifyCoordinationV1 checks the v1 stamp. It never reads the body.
+func verifyCoordinationV1(key []byte, r *http.Request, now time.Time) bool {
 	stamp, sig, ok := strings.Cut(strings.TrimSpace(r.Header.Get(CoordinationMACHeader)), ".")
 	if !ok {
 		return false

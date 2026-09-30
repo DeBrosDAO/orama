@@ -1019,6 +1019,24 @@ Accepting an older MAC gives nobody anything they did not have: removing the
 newer one from a genuine hop takes a position inside the WireGuard mesh, which
 is a node, and every node holds the cluster secret every version is keyed from.
 
+### Coordination calls between nodes
+
+A node asking another to do something (spawn or stop a namespace's services,
+repair a cluster, fetch telemetry or network status, re-encrypt secrets, evict a
+blob) proves it holds the cluster secret with a coordination MAC, keyed by
+`HKDF(cluster secret, "internal-coordination")`. The v2 MAC
+(`X-Orama-Coordination-MAC-V2`) is an HMAC over method, path, query, the SHA-256
+of the body, a random nonce (`X-Orama-Coordination-Nonce`) and the time, valid
+for one minute either side of the receiver's clock. The receiver hashes the
+body (at most 1 MiB) and restores it for the handler, and refuses a nonce it saw
+in the last two minutes (`auth.CheckCoordination`). The v1 MAC
+(`X-Orama-Coordination-MAC`, no body, no nonce) is written beside it so a peer
+on the previous build keeps accepting the request during a rolling upgrade; this
+build accepts a v1-only request except for the spawn actions that remove or
+replace data, which require v2. The v1 acceptance is removed in the next
+release. It proves cluster membership, not which node signed. Details and the
+list of v2-only actions: SECURITY.md, "Node-to-node coordination".
+
 The source IP is not consulted, and must not be: every public request arrives
 from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.
 
