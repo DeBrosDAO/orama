@@ -103,6 +103,7 @@ func TestCheck_violations(t *testing.T) {
 		"tick":           {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { <-time.Tick(1) }\n", "time.Tick"},
 		"new ticker":     {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.NewTicker(1) }\n", "time.NewTicker"},
 		"after func":     {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.AfterFunc(1, nil) }\n", "time.AfterFunc"},
+		"always error":   {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"fmt\"\n\nfunc h(n int) (bool, error) { return n == 2, fmt.Errorf(\"%d\", n) }\n", "poll closure must return true, nil"},
 		"bare skip":      {"x_test.go", strings.Replace(goodTest, `harness.SkipNotApplicable(t, "reason")`, `t.Skip("later")`, 1), "bare Skip"},
 		"skipnow":        {"x_test.go", strings.Replace(goodTest, `harness.SkipNotApplicable(t, "reason")`, `t.SkipNow()`, 1), "bare SkipNow"},
 		"no tag":         {"x_test.go", strings.Replace(goodTest, "//go:build e2e_fleet\n", "", 1), "missing //go:build"},

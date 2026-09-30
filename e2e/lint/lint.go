@@ -159,7 +159,7 @@ func checkBuildTag(fset *token.FileSet, path string, f *ast.File) []Problem {
 // has a TestMain calling harness.Main and any Test function.
 func checkFile(fset *token.FileSet, path string, f *ast.File) ([]Problem, bool, bool) {
 	harnessPkg := importName(f, harnessImport)
-	out := bannedCalls(fset, f)
+	out := append(bannedCalls(fset, f), alwaysErrorPolls(fset, f)...)
 	hasMain, hasTests := false, false
 	isTestFile := strings.HasSuffix(path, "_test.go")
 	for _, d := range f.Decls {
@@ -176,6 +176,47 @@ func checkFile(fset *token.FileSet, path string, f *ast.File) ([]Problem, bool, 
 		hasTests = hasTests || isTest
 	}
 	return out, hasMain, hasTests
+}
+
+// alwaysErrorPolls reports a return of (condition, fmt.Errorf(...)) or
+// (condition, errors.New(...)): the error is built whether or not the
+// condition holds, and eventually.Poll treats a done with a non-nil error as
+// not done, so a poll closure that ends like that never succeeds. Return
+// `true, nil` when the condition holds.
+func alwaysErrorPolls(fset *token.FileSet, f *ast.File) []Problem {
+	var out []Problem
+	ast.Inspect(f, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok || len(ret.Results) != 2 {
+			return true
+		}
+		cond, ok := ret.Results[0].(*ast.BinaryExpr)
+		if !ok || !isConditionOp(cond.Op) {
+			return true
+		}
+		call, ok := ret.Results[1].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if x, _ := sel.X.(*ast.Ident); x != nil && ((x.Name == "fmt" && sel.Sel.Name == "Errorf") || (x.Name == "errors" && sel.Sel.Name == "New")) {
+			out = append(out, Problem{Pos: fset.Position(ret.Pos()).String(),
+				Msg: "return of a condition with an error built unconditionally: a poll closure must return true, nil when the condition holds (eventually.Poll treats done with an error as not done)"})
+		}
+		return true
+	})
+	return out
+}
+
+func isConditionOp(op token.Token) bool {
+	switch op {
+	case token.EQL, token.NEQ, token.LSS, token.GTR, token.LEQ, token.GEQ, token.LAND, token.LOR:
+		return true
+	}
+	return false
 }
 
 // bannedCalls reports timer waits and bare skips.
