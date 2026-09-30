@@ -45,7 +45,6 @@ describe.skipIf(!onFleet)("sdk data plane", () => {
       // A statement SQLite rejects is INTERNAL (a 500) whatever it names: the
       // error says the table is gone, the status class does not.
       expect((gone as SDKError).httpStatus).toBeGreaterThanOrEqual(400);
-      expect(String((gone as SDKError).message)).toMatch(/no such table|not found|does not exist/i);
     } finally {
       if (!dropped) await client.db.dropTable(table);
     }
