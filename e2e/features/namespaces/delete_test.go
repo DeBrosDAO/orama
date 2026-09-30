@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
@@ -20,8 +21,8 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// dnsTeardownBudget: NXDOMAIN is cached 30s (docs/ARCHITECTURE.md "DNS
-// degrades rather than failing"), on top of the record's removal.
+// dnsTeardownBudget bounds the removal of the namespace's DNS records from the
+// registry after the delete.
 const dnsTeardownBudget = ns.TeardownBudget
 
 // exitAborted is the CLI's exit code for a declined confirmation
@@ -71,15 +72,21 @@ func TestNamespaceDelete_tearsEverythingDown(t *testing.T) {
 	for _, node := range f.State.Nodes {
 		eventually.Require(t, pollEvery, ns.TeardownBudget, node.Name+" to hold nothing of "+n.Name, residue(t, f, node, n.Name, blocks[node.Name]))
 	}
-	for _, nsNode := range tenancy.Nameservers(f) {
-		eventually.Require(t, pollEvery, dnsTeardownBudget, nsNode.Name+" to stop resolving "+host, func() (bool, error) {
-			addrs, err := tenancy.ResolveAt(t.Context(), nsNode.PublicIP, host)
-			if err != nil || len(addrs) != 0 {
-				return false, fmt.Errorf("answers %v (%v)", addrs, err)
-			}
-			return true, nil
-		})
-	}
+	// The name withdrawn is the namespace's own records. Whether it still
+	// resolves proves nothing where the zone has a *.<base> wildcard (stagenet
+	// does): every name under the base answers then, a deleted namespace's too.
+	eventually.Require(t, pollEvery, dnsTeardownBudget, "the registry to hold no DNS record of "+n.Name, func() (bool, error) {
+		res := infra.IndexQuery(t, f, f.State.Nodes[0],
+			`SELECT fqdn FROM dns_records WHERE namespace = ? OR fqdn LIKE ?`,
+			"namespace:"+n.Name, "%.ns-"+n.Name+"."+f.State.BaseDomain+".")
+		if res.Error != "" {
+			return false, fmt.Errorf("query: %s", res.Error)
+		}
+		if len(res.Values) != 0 {
+			return false, fmt.Errorf("still holds %v", res.Values)
+		}
+		return true, nil
+	})
 	if _, resp, err := harness.GW(t).Token(t.Context(), key); err == nil || resp == nil || resp.Status != http.StatusUnauthorized {
 		t.Errorf("the deleted namespace's key still exchanges for a token: %v", err)
 	}
