@@ -111,6 +111,13 @@ export const AuthCode = {
   Revoked: "AUTH_REVOKED",
   /** The credential expired. Refresh, or sign in again. */
   Expired: "AUTH_EXPIRED",
+  /**
+   * The gateway cannot tell right now whether this credential was revoked (its
+   * revocation list is older than its bound and the registry is not answering).
+   * Retryable: the same request may succeed in a moment. Not a refusal of the
+   * credential.
+   */
+  Unavailable: "AUTH_UNAVAILABLE",
   /** The grant is held but the operation needs a logged-in user. */
   UserLoginRequired: "USER_JWT_REQUIRED",
   /** The credential lacks the grant named in `requiredScope`. */
