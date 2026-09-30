@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,12 +55,28 @@ type upstream struct {
 	handlers map[int]client.MessageHandler
 	next     int
 	stopped  []int
+
+	// published counts the messages published to the service; the service loops
+	// each one back to every subscriber, as gossipsub does.
+	published atomic.Int64
 }
 
 func newUpstream() *upstream { return &upstream{handlers: map[int]client.MessageHandler{}} }
 
 func (u *upstream) client() *mockPubSubClient {
 	return &mockPubSubClient{
+		PublishFunc: func(_ context.Context, topic string, data []byte) error {
+			u.feed(topic, data)
+			u.published.Add(1)
+			return nil
+		},
+		PublishBatchFunc: func(_ context.Context, msgs []client.TopicMessage, _ client.PublishBatchOptions) error {
+			for _, m := range msgs {
+				u.feed(m.Topic, m.Data)
+				u.published.Add(1)
+			}
+			return nil
+		},
 		SubscribeHandleFunc: func(_ context.Context, _ string, h client.MessageHandler) (func() error, error) {
 			u.mu.Lock()
 			defer u.mu.Unlock()

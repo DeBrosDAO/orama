@@ -67,6 +67,34 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Use internal auth context when interacting with client to avoid circular auth requirements
+	ctx := client.WithInternalAuth(r.Context())
+	// Apply namespace isolation
+	ctx = pubsub.WithNamespace(ctx, ns)
+
+	// The one path a message reaches this socket by is the node's pubsub
+	// service, which delivers to this gateway's subscribers whether the message
+	// was published here or on another node. The subscription exists before the
+	// upgrade, so nothing published after the socket opens can be missed, and a
+	// service that cannot subscribe is a refusal the client sees.
+	msgs := make(chan []byte, 128)
+	stopSubscription, err := p.client.PubSub().SubscribeHandle(ctx, topic, p.forwardToSocket(topic, msgs))
+	if err != nil {
+		p.logger.ComponentWarn("gateway", "pubsub ws: subscribe failed",
+			zap.String("topic", topic),
+			zap.String("namespace", ns),
+			zap.Error(err))
+		writeError(w, http.StatusServiceUnavailable, "pubsub subscribe failed")
+		return
+	}
+	defer func() {
+		if err := stopSubscription(); err != nil {
+			p.logger.ComponentWarn("gateway", "pubsub ws: unsubscribe failed",
+				zap.String("topic", topic),
+				zap.Error(err))
+		}
+	}()
+
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		p.logger.ComponentWarn("gateway", "pubsub ws: upgrade failed")
@@ -81,20 +109,7 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 	sock := p.sessions.Register(claims, subscriberCloser(conn))
 	defer sock.Unregister()
 
-	// Channel to deliver PubSub messages to WS writer
-	msgs := make(chan []byte, 128)
-
-	// Register as local subscriber for direct message delivery
-	localSub := &localSubscriber{
-		msgChan:   msgs,
-		namespace: ns,
-	}
 	topicKey := fmt.Sprintf("%s.%s", ns, topic)
-
-	p.mu.Lock()
-	p.localSubscribers[topicKey] = append(p.localSubscribers[topicKey], localSub)
-	subscriberCount := len(p.localSubscribers[topicKey])
-	p.mu.Unlock()
 
 	connID := uuid.New().String()
 	if enablePresence {
@@ -117,27 +132,12 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 			zap.String("member_id", memberID))
 	}
 
-	p.logger.ComponentInfo("gateway", "pubsub ws: registered local subscriber",
+	p.logger.ComponentInfo("gateway", "pubsub ws: subscriber registered",
 		zap.String("topic", topic),
-		zap.String("namespace", ns),
-		zap.Int("total_subscribers", subscriberCount))
+		zap.String("namespace", ns))
 
 	// Unregister on close
 	defer func() {
-		p.mu.Lock()
-		subs := p.localSubscribers[topicKey]
-		for i, sub := range subs {
-			if sub == localSub {
-				p.localSubscribers[topicKey] = append(subs[:i], subs[i+1:]...)
-				break
-			}
-		}
-		remainingCount := len(p.localSubscribers[topicKey])
-		if remainingCount == 0 {
-			delete(p.localSubscribers, topicKey)
-		}
-		p.mu.Unlock()
-
 		if enablePresence {
 			p.presenceMu.Lock()
 			members := p.presenceMembers[topicKey]
@@ -160,23 +160,13 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 				zap.String("member_id", memberID))
 		}
 
-		p.logger.ComponentInfo("gateway", "pubsub ws: unregistered local subscriber",
-			zap.String("topic", topic),
-			zap.Int("remaining_subscribers", remainingCount))
+		p.logger.ComponentInfo("gateway", "pubsub ws: subscriber unregistered",
+			zap.String("topic", topic))
 	}()
 
-	// Use internal auth context when interacting with client to avoid circular auth requirements
-	ctx := client.WithInternalAuth(r.Context())
-	// Apply namespace isolation
-	ctx = pubsub.WithNamespace(ctx, ns)
-
-	// Writer loop - START THIS FIRST before libp2p subscription
 	done := make(chan struct{})
 	wsClient := newWSClient(conn, topic, p.logger)
 	go p.writerLoop(ctx, wsClient, msgs, done)
-
-	// Subscribe to libp2p for cross-node messages (in background, non-blocking)
-	go p.libp2pSubscriber(ctx, topic, msgs, done)
 
 	// Reader loop: treat any client message as publish to the same topic
 	p.readerLoop(ctx, wsClient, topic, done)
@@ -219,46 +209,19 @@ func (p *PubSubHandlers) writerLoop(ctx context.Context, wsClient *wsClient, msg
 	}
 }
 
-// libp2pSubscriber handles subscribing to libp2p pubsub for cross-node messages
-func (p *PubSubHandlers) libp2pSubscriber(ctx context.Context, topic string, msgs chan []byte, done chan struct{}) {
-	h := func(_ string, data []byte) error {
-		p.logger.ComponentInfo("gateway", "pubsub ws: received message from libp2p",
-			zap.String("topic", topic),
-			zap.Int("data_len", len(data)))
-
+// forwardToSocket is the handler that feeds one socket's writer from the
+// node's pubsub service.
+func (p *PubSubHandlers) forwardToSocket(topic string, msgs chan []byte) client.MessageHandler {
+	return func(_ string, data []byte) error {
 		select {
 		case msgs <- data:
-			p.logger.ComponentInfo("gateway", "pubsub ws: forwarded to client",
-				zap.String("topic", topic),
-				zap.String("source", "libp2p"))
-			return nil
 		default:
 			// Drop if client is slow to avoid blocking network
 			p.logger.ComponentWarn("gateway", "pubsub ws: client slow, dropping message",
 				zap.String("topic", topic))
-			return nil
 		}
+		return nil
 	}
-
-	stop, err := p.client.PubSub().SubscribeHandle(ctx, topic, h)
-	if err != nil {
-		p.logger.ComponentWarn("gateway", "pubsub ws: libp2p subscribe failed (will use local-only)",
-			zap.String("topic", topic),
-			zap.Error(err))
-		return
-	}
-	p.logger.ComponentInfo("gateway", "pubsub ws: libp2p subscription established",
-		zap.String("topic", topic))
-
-	// Keep subscription alive until done
-	<-done
-	if err := stop(); err != nil {
-		p.logger.ComponentWarn("gateway", "pubsub ws: libp2p unsubscribe failed",
-			zap.String("topic", topic),
-			zap.Error(err))
-	}
-	p.logger.ComponentInfo("gateway", "pubsub ws: libp2p subscription closed",
-		zap.String("topic", topic))
 }
 
 // readerLoop handles reading messages from the WebSocket client and publishing them
@@ -290,13 +253,10 @@ func (p *PubSubHandlers) readerLoop(ctx context.Context, wsClient *wsClient, top
 	<-done
 }
 
-// broadcastPresenceEvent broadcasts a presence join/leave event to all subscribers
+// broadcastPresenceEvent publishes a presence join/leave event on the topic.
+// It reaches every subscriber, on this gateway and on others, by the same path
+// as any other message.
 func (p *PubSubHandlers) broadcastPresenceEvent(ns, topic, eventType, memberID string, meta map[string]interface{}, timestamp int64) {
-	p.broadcastPresenceEventExcluding(ns, topic, eventType, memberID, meta, timestamp, "")
-}
-
-// broadcastPresenceEventExcluding broadcasts a presence event, optionally excluding a specific connection
-func (p *PubSubHandlers) broadcastPresenceEventExcluding(ns, topic, eventType, memberID string, meta map[string]interface{}, timestamp int64, excludeConnID string) {
 	event := map[string]interface{}{
 		"type":      eventType,
 		"member_id": memberID,
@@ -305,26 +265,16 @@ func (p *PubSubHandlers) broadcastPresenceEventExcluding(ns, topic, eventType, m
 	if meta != nil {
 		event["meta"] = meta
 	}
-	eventData, _ := json.Marshal(event)
+	eventData, err := json.Marshal(event)
+	if err != nil {
+		p.logger.ComponentWarn("gateway", "pubsub ws: presence event not encodable",
+			zap.String("topic", topic), zap.String("event", eventType), zap.Error(err))
+		return
+	}
 
-	// Send to PubSub for remote delivery
 	broadcastCtx := pubsub.WithNamespace(client.WithInternalAuth(context.Background()), ns)
-	_ = p.client.PubSub().Publish(broadcastCtx, topic, eventData)
-
-	// Also deliver directly to local subscribers on this gateway (non-blocking)
-	topicKey := fmt.Sprintf("%s.%s", ns, topic)
-	p.mu.RLock()
-	localSubs := p.localSubscribers[topicKey]
-	p.mu.RUnlock()
-
-	for _, sub := range localSubs {
-		// Skip the excluded connection if specified
-		// Note: We don't have direct access to connID in localSubscriber, so we use a different approach
-		// The excluded client already received its own event directly, so this is best-effort
-		select {
-		case sub.msgChan <- eventData:
-		default:
-			// Channel full, skip (client will see it via PubSub if they're still subscribed)
-		}
+	if err := p.client.PubSub().Publish(broadcastCtx, topic, eventData); err != nil {
+		p.logger.ComponentWarn("gateway", "pubsub ws: presence event not published",
+			zap.String("topic", topic), zap.String("event", eventType), zap.Error(err))
 	}
 }

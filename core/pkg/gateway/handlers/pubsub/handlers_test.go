@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -287,40 +288,54 @@ func TestPublishHandler_NilClient(t *testing.T) {
 	}
 }
 
-func TestPublishHandler_LocalDelivery(t *testing.T) {
-	mock := &mockPubSubClient{}
+// A publish fires the serverless PubSub triggers once and publishes to the
+// pubsub service once; delivering to subscribers is the service's job.
+func TestPublishHandler_firesTriggersAndPublishesOnce(t *testing.T) {
+	var mu sync.Mutex
+	var published []string
+	mock := &mockPubSubClient{PublishFunc: func(_ context.Context, topic string, data []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		published = append(published, topic+":"+string(data))
+		return nil
+	}}
 	h := newTestHandlers(&mockNetworkClient{pubsub: mock})
-
-	// Register a local subscriber
-	msgChan := make(chan []byte, 1)
-	localSub := &localSubscriber{
-		msgChan:   msgChan,
-		namespace: "test-ns",
-	}
-	topicKey := "test-ns.chat"
-	h.mu.Lock()
-	h.localSubscribers[topicKey] = append(h.localSubscribers[topicKey], localSub)
-	h.mu.Unlock()
+	fired := make(chan string, 4)
+	h.SetOnPublish(func(_ context.Context, ns, topic string, data []byte) {
+		fired <- ns + "/" + topic + ":" + string(data)
+	})
 
 	body, _ := json.Marshal(PublishRequest{Topic: "chat", DataB64: "aGVsbG8="}) // "hello"
-	req := httptest.NewRequest(http.MethodPost, "/v1/pubsub/publish", bytes.NewReader(body))
-	req = withNamespace(req, "test-ns")
+	req := withNamespace(httptest.NewRequest(http.MethodPost, "/v1/pubsub/publish", bytes.NewReader(body)), "test-ns")
 	rr := httptest.NewRecorder()
-
 	h.PublishHandler(rr, req)
-
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
 	}
 
-	// Verify local delivery
 	select {
-	case msg := <-msgChan:
-		if string(msg) != "hello" {
-			t.Errorf("expected 'hello', got %q", string(msg))
+	case got := <-fired:
+		if got != "test-ns/chat:hello" {
+			t.Errorf("trigger fired with %q", got)
 		}
-	case <-time.After(1 * time.Second):
-		t.Error("timed out waiting for local delivery")
+	case <-time.After(time.Second):
+		t.Fatal("the publish trigger never fired")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		mu.Lock()
+		n := len(published)
+		mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("service saw %d publishes, want 1", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(fired) != 0 {
+		t.Errorf("the trigger fired more than once")
 	}
 }
 
@@ -626,32 +641,5 @@ func TestNamespacePrefix(t *testing.T) {
 	expected := "ns::my-ns::"
 	if result != expected {
 		t.Errorf("expected %q, got %q", expected, result)
-	}
-}
-
-func TestGetLocalSubscribers(t *testing.T) {
-	h := newTestHandlers(&mockNetworkClient{pubsub: &mockPubSubClient{}})
-
-	// No subscribers
-	subs := h.getLocalSubscribers("chat", "test-ns")
-	if subs != nil {
-		t.Errorf("expected nil for no subscribers, got %v", subs)
-	}
-
-	// Add a subscriber
-	sub := &localSubscriber{
-		msgChan:   make(chan []byte, 1),
-		namespace: "test-ns",
-	}
-	h.mu.Lock()
-	h.localSubscribers["test-ns.chat"] = []*localSubscriber{sub}
-	h.mu.Unlock()
-
-	subs = h.getLocalSubscribers("chat", "test-ns")
-	if len(subs) != 1 {
-		t.Errorf("expected 1 subscriber, got %d", len(subs))
-	}
-	if subs[0] != sub {
-		t.Error("returned subscriber does not match registered subscriber")
 	}
 }
