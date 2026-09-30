@@ -15,6 +15,11 @@ import (
 // valid but does not belong to an operator of this cluster.
 const ErrCodeNotAnOperator = "NOT_AN_OPERATOR"
 
+// notAnOperatorHint is what to do about NOT_AN_OPERATOR. docs/AUTH.md promises
+// every refusal {error, code, hint}; the gateway's own refusal of the same
+// code says the same.
+const notAnOperatorHint = "sign in with a wallet on this cluster's operator list; an operator adds one with `orama operator add`"
+
 // requireOperator resolves the caller's wallet and refuses unless that wallet
 // is on the cluster's operator list.
 //
@@ -31,15 +36,6 @@ const ErrCodeNotAnOperator = "NOT_AN_OPERATOR"
 //
 // It reports and writes the response on refusal; a false return means the
 // handler must return immediately.
-// Authorize is requireOperator for a handler outside this package.
-//
-// An operator endpoint served from elsewhere — rotating the gateway's signing
-// key — has to make the same check, and making it twice in two places is how
-// the two drift apart.
-func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) (string, bool) {
-	return h.requireOperator(w, r)
-}
-
 func (h *Handler) requireOperator(w http.ResponseWriter, r *http.Request) (string, bool) {
 	wallet := h.walletFromRequest(r)
 	if wallet == "" {
@@ -62,10 +58,20 @@ func (h *Handler) requireOperator(w http.ResponseWriter, r *http.Request) (strin
 		writeJSON(w, http.StatusForbidden, map[string]any{
 			"error": "wallet " + wallet + " is not an operator of this cluster",
 			"code":  ErrCodeNotAnOperator,
+			"hint":  notAnOperatorHint,
 		})
 		return "", false
 	}
 	return wallet, true
+}
+
+// Authorize is requireOperator for a handler outside this package.
+//
+// An operator endpoint served from elsewhere — rotating the gateway's signing
+// key — has to make the same check, and making it twice in two places is how
+// the two drift apart.
+func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) (string, bool) {
+	return h.requireOperator(w, r)
 }
 
 // isOperator reports whether a wallet is on the cluster's operator list.
