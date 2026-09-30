@@ -26,3 +26,24 @@ func TestOr(t *testing.T) {
 		}
 	}
 }
+
+// The saved-credential menu read EOF without a terminal, so `auth login` in a
+// HOME that already had a credential failed in every script (stagenet e2e,
+// 2026-09-30), and --namespace was ignored until a choice was made.
+func TestOffersSavedCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		namespace   string
+		interactive bool
+		want        bool
+	}{
+		{"", true, true},
+		{"  ", true, true},
+		{"anchat", true, false},
+		{"", false, false},
+		{"anchat", false, false},
+	} {
+		if got := offersSavedCredentials(tc.namespace, tc.interactive); got != tc.want {
+			t.Errorf("namespace %q interactive %v: %v, want %v", tc.namespace, tc.interactive, got, tc.want)
+		}
+	}
+}

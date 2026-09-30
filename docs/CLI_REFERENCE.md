@@ -488,6 +488,10 @@ orama auth login [flags]
 
 Sign in, here or from another machine.
 
+Run at a terminal with no --namespace and a credential already saved, it first
+offers the saved ones to switch to. With --namespace, or without a terminal
+(a script, CI), it signs in straight away.
+
 --device-key enrolls that Ed25519 key with this sign-in. The file is a private
 JWK and stays on this machine; the gateway receives the public half and the
 device's signature over the same message the wallet signs.

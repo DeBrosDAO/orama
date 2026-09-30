@@ -2,11 +2,27 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
+
+	"github.com/mattn/go-isatty"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/auth"
 )
+
+// offersSavedCredentials reports whether a login offers the saved credentials
+// to switch to before signing in. Only an interactive login that named no
+// namespace has anything to choose: --namespace says where to sign in, and
+// without a terminal the menu read EOF and the login failed, so a script
+// could sign in exactly once per HOME.
+func offersSavedCredentials(namespace string, interactive bool) bool {
+	return interactive && strings.TrimSpace(namespace) == ""
+}
+
+func stdinIsTerminal() bool {
+	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
+}
 
 // AuthLogin authenticates with a wallet and stores the credential.
 func AuthLogin(namespace, deviceKeyPath string) error {
@@ -28,7 +44,7 @@ func AuthLogin(namespace, deviceKeyPath string) error {
 
 	// Check if we already have credentials for this gateway
 	gwCreds := store.Gateways[gatewayURL]
-	if gwCreds != nil && len(gwCreds.Credentials) > 0 {
+	if gwCreds != nil && len(gwCreds.Credentials) > 0 && offersSavedCredentials(namespace, stdinIsTerminal()) {
 		// Show existing credentials and offer choice
 		choice, credIndex, menuErr := store.DisplayCredentialMenu(gatewayURL)
 		if menuErr != nil {
