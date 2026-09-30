@@ -465,8 +465,10 @@ is reconciled, not stopped (see `docs/WEBRTC.md`).
 
 The backstop is the tenant reconciler's orphan sweep (`reapOrphanedTenants`,
 every 60s on every node). It lists the tenant namespaces with state on the node
-(a data directory with a provisioned tenant unit, or a loaded tenant unit
-instance) and tears down each one the registry assigns nothing of to this node
+(a data directory with a provisioned tenant unit, or a tenant unit instance
+that is running or starting, or enabled — systemd keeps listing an instance it
+has stopped and disabled, and such a unit cannot start again, so it is not
+counted) and tears down each one the registry assigns nothing of to this node
 (no `namespace_cluster_nodes` and no `namespace_port_allocations` row for it,
 in any cluster of that name). Teardown is destructive, so it acts only when the
 registry read succeeded (a leader read, like every registry read of the cluster
