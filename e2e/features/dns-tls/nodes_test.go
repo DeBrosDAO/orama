@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,11 +41,21 @@ func TestCoreDNS_isolatedAccountAndEmptyOptOrama(t *testing.T) {
 		}
 		out := f.MustExec(t, n, fmt.Sprintf("ls -A /proc/%d/root/opt/orama | wc -l; findmnt -N %d -no FSTYPE,OPTIONS /opt/orama", pid, pid))
 		lines := strings.Split(strings.TrimSpace(out.Stdout), "\n")
-		if len(lines) < 2 || strings.TrimSpace(lines[0]) != "0" || !strings.HasPrefix(lines[1], "tmpfs") || !strings.Contains(lines[1], "ro") {
+		if len(lines) < 2 || strings.TrimSpace(lines[0]) != "0" || !strings.HasPrefix(lines[1], "tmpfs") || !mountOption(lines[1], "ro") {
 			t.Errorf("%s: CoreDNS sees /opt/orama as %q, want an empty read-only tmpfs", n.Name, out.Stdout)
 		}
 		infra.RequireStat(t, f, n, corefilePath, "root", corednsUser, "640")
 	}
+}
+
+// mountOption reports whether findmnt's "FSTYPE OPTIONS" line has opt as a
+// whole option ("ro" is a substring of "rw,...,relatime,inode64,mode=755").
+func mountOption(line, opt string) bool {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return false
+	}
+	return slices.Contains(strings.Split(fields[1], ","), opt)
 }
 
 // TestCoreDNS_port53OnlyOnNameservers: a nameserver listens on 53/tcp and

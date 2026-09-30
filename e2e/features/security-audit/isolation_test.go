@@ -38,7 +38,7 @@ func TestIsolation_everyUnitRunsAsItsAccount(t *testing.T) {
 				t.Errorf("%s: %s runs as %q, want %s", n.Name, unit, got, want)
 			}
 		}
-		out := f.Exec(t, n, "for u in $(systemctl list-units --no-legend --state=running 'orama-namespace-sfu@*' | awk '{print $1}'); do ps -o user= -p $(systemctl show -p MainPID --value $u); done").Stdout
+		out := f.Exec(t, n, "for u in $(systemctl list-units --no-legend --state=running 'orama-namespace-sfu@*' | awk '{print $1}'); do ps -o user:32= -p $(systemctl show -p MainPID --value $u); done").Stdout
 		for _, u := range strings.Fields(out) {
 			if u != "orama-sfu" {
 				t.Errorf("%s: an SFU runs as %q, want orama-sfu", n.Name, u)
@@ -47,9 +47,21 @@ func TestIsolation_everyUnitRunsAsItsAccount(t *testing.T) {
 	}
 }
 
-// permissionDenied is what the shell prints when the kernel refuses to open
-// another process's /proc/<pid>/environ.
-const permissionDenied = "Permission denied"
+// What the shell prints when the kernel refuses to open another process's
+// /proc/<pid>/environ: "Permission denied" where the entry is visible but
+// protected, "No such file or directory" where the unit's ProtectProc=invisible
+// hides other accounts' processes altogether (the CoreDNS unit does). Either
+// way the read fails at the kernel, not in the shell or for a missing tool.
+var environRefusals = []string{"Permission denied", "No such file or directory"}
+
+func refusedByKernel(stderr string) bool {
+	for _, r := range environRefusals {
+		if strings.Contains(stderr, r) {
+			return true
+		}
+	}
+	return false
+}
 
 // readEnviron counts target's /proc environ bytes as user from inside from's
 // mount namespace (as that unit's process would read it), and returns the
@@ -79,7 +91,8 @@ func requireNamespaceTools(t *testing.T, f *fleet.Fleet, n fleet.Node) {
 // holds"; "Not done yet: ... a runtime test ... that each unit cannot read
 // another's /proc/<pid>/environ"). So Caddy reads the cluster gateway's
 // environment. The isolated account does not: CoreDNS is refused by the
-// kernel (a non-zero exit saying Permission denied, not any failure). When
+// kernel (a non-zero exit saying Permission denied, or No such file where the
+// unit hides other processes with ProtectProc=invisible, not any failure). When
 // the gap is closed this test fails on its first half; update it and
 // SECURITY.md together.
 func TestIsolation_environAcrossAccounts(t *testing.T) {
@@ -96,9 +109,9 @@ func TestIsolation_environAcrossAccounts(t *testing.T) {
 			"update docs/SECURITY.md \"Per-service accounts\" and this test", caddy.Exit, size, err, f.Redact(caddy.Stderr))
 	}
 	coredns := readEnviron(t, f, n, edge.CoreDNSUnit, "orama-coredns", gateway)
-	if coredns.Exit == 0 || !strings.Contains(coredns.Stderr, permissionDenied) {
-		t.Errorf("CoreDNS (orama-coredns) reading the cluster gateway's environ: exit %d, stdout %q, stderr %q; want a non-zero exit with %q",
-			coredns.Exit, strings.TrimSpace(coredns.Stdout), f.Redact(coredns.Stderr), permissionDenied)
+	if coredns.Exit == 0 || !refusedByKernel(coredns.Stderr) {
+		t.Errorf("CoreDNS (orama-coredns) reading the cluster gateway's environ: exit %d, stdout %q, stderr %q; want a non-zero exit with one of %q",
+			coredns.Exit, strings.TrimSpace(coredns.Stdout), f.Redact(coredns.Stderr), environRefusals)
 	}
 }
 

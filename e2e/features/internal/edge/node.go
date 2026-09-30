@@ -96,10 +96,11 @@ func MainPID(t testing.TB, f *fleet.Fleet, n fleet.Node, unit string) int {
 	return pid
 }
 
-// ProcessUser is the user name the process pid runs as on n.
+// ProcessUser is the user name the process pid runs as on n. `ps -o user=`
+// cuts a name at eight characters ("orama-c+"), so the column is widened.
 func ProcessUser(t testing.TB, f *fleet.Fleet, n fleet.Node, pid int) string {
 	t.Helper()
-	out := f.MustExec(t, n, fmt.Sprintf("ps -o user= -p %d", pid))
+	out := f.MustExec(t, n, fmt.Sprintf("ps -o user:32= -p %d", pid))
 	return strings.TrimSpace(out.Stdout)
 }
 
