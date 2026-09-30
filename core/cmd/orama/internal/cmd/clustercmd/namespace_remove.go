@@ -3,12 +3,20 @@ package clustercmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
 	"github.com/spf13/cobra"
 )
+
+// removeTimeout bounds the removal call. The gateway answers after the whole
+// teardown — the cluster stopped on every node, content released, rows
+// deleted — which takes minutes; the CLI's usual 30s bound gave up while the
+// gateway carried on, and reported a removal that then completed as a failure.
+const removeTimeout = 10 * time.Minute
 
 var (
 	removeReason string
@@ -61,7 +69,16 @@ func removeNamespace(cmd *cobra.Command, args []string) error {
 		fmt.Sprintf("This removes namespace %s and everything in it. Type its name to confirm", name), name) {
 		return clierr.Aborted("cancelled: what you typed did not match %q", name)
 	}
-	raw, err := shared.Request("POST", "/v1/operator/namespaces/remove", map[string]string{"namespace": name, "reason": reason})
+	gatewayURL, err := shared.GetAPIURL()
+	if err != nil {
+		return err
+	}
+	token, err := shared.GetAuthToken()
+	if err != nil {
+		return err
+	}
+	raw, _, err := shared.RequestWith(&http.Client{Timeout: removeTimeout}, gatewayURL, token,
+		"POST", "/v1/operator/namespaces/remove", map[string]string{"namespace": name, "reason": reason})
 	if err != nil {
 		return err
 	}
