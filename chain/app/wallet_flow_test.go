@@ -35,10 +35,11 @@ import (
 // ante chain (signature, fee from earnings, bond top-up) and the message
 // router like a real one. State is read back from the keepers afterwards.
 //
-// The chain refuses public user-to-user norama sends and has no shielded
-// transaction message yet, so the payment tests pin what a wallet can actually
-// do today: pay fees from earnings, move value only in factory denoms, and
-// turn earnings into stake, bonds, hot-key funds and market proceeds.
+// The chain refuses public user-to-user norama sends, and without the Orchard
+// verifiers linked it refuses every shielded bundle, so the payment tests pin
+// what a wallet can do on this build: pay fees from earnings, move value only in
+// factory denoms, and turn earnings into stake, bonds, hot-key funds and market
+// proceeds.
 
 const (
 	oneOrama   = int64(params.NoramaPerOrama)

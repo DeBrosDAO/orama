@@ -152,9 +152,14 @@ func (d FeeDecorator) simulateSettle(ctx sdk.Context, feeTx sdk.FeeTx) {
 	fee := feeTx.GetFee().AmountOf(params.BaseDenom)
 	tipAmount := fee.Sub(baseFeeAmount)
 	// With no gas limit yet (the simulation is what finds it), the declared fee is settled as base
-	// fee, as the delivered transaction pays it. Counting it as a tip, which only a bank balance
-	// pays, skipped the gas of paying the base fee from earnings for an earnings-only payer.
-	if feeTx.GetGas() == 0 || tipAmount.IsNegative() {
+	// fee, as the delivered transaction pays it, and at least one norama: a delivered transaction
+	// always pays a positive base fee, and an empty fee settles nothing. Counting the fee as a tip,
+	// which only a bank balance pays, skipped the gas of paying the base fee from earnings for an
+	// earnings-only payer.
+	if feeTx.GetGas() == 0 {
+		tipAmount = math.ZeroInt()
+		baseFeeAmount = math.MaxInt(fee, math.OneInt())
+	} else if tipAmount.IsNegative() {
 		tipAmount = math.ZeroInt()
 		baseFeeAmount = fee
 	}

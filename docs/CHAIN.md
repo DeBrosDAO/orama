@@ -844,8 +844,9 @@ trying to discover), `FeeDecorator` runs the same settlement logic on a branched
 error (insufficient funds, an unresolvable payer/proposer) since the guessed fee/gas is not final
 yet - mirroring stock `x/auth/ante`'s own `!simulate` guard around its equivalent fee check. While the
 simulated transaction declares no gas limit (gas 0, the usual `--gas auto` request), its whole declared
-fee is settled as base fee, as the delivered transaction pays it: counted as a tip, which only a bank
-balance pays, it would skip the gas of paying the base fee from earnings for a payer with no bank balance.
+fee, and at least one norama, is settled as base fee, as the delivered transaction pays it: counted as a
+tip, which only a bank balance pays, or left empty, it would skip the gas of paying the base fee from
+earnings for a payer with no bank balance.
 
 ### Earnings accounts
 
@@ -2202,9 +2203,10 @@ carries the human-readable decoders, must hold all of them. Regenerate both with
 **Wallet-flow tests.** `chain/app/wallet_flow_test.go` drives the builder against a real app through
 `FinalizeBlock`, with secp256k1 accounts, so each transaction crosses the ante chain and the message
 router. What the chain lets a wallet do today: the fee comes from the bank balance and falls back to
-earnings when the bank is short; `x/bank` refuses public user-to-user norama sends; there is no
-shielded transaction message yet (a test fails when one is registered, to be replaced by shield and
-unshield flows); a wallet delegates and undelegates from earnings; votes in the token house; registers
+earnings when the bank is short; `x/bank` refuses public user-to-user norama sends; the four
+shielded messages are registered and signed by the same builder, and refused here because this build
+links neither verifier (the accepted proofs run in `shielded_real_test.go` and
+`shielded_wallet_test.go` under the `orchardffi` build); a wallet delegates and undelegates from earnings; votes in the token house; registers
 a node, bonds it from earnings and funds its hot key from earnings; creates a token and enforces its
 powers (mint, freeze, pause, permanent delegate, non-transferable, renounce); mints, transfers, lists
 and buys a compressed NFT with the royalty paid to earnings. The parameter tier of `x/houses` is closed

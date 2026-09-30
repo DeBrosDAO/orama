@@ -210,3 +210,44 @@ func TestPublicKuboConfig_keepsWhatIPFSInitWrote(t *testing.T) {
 		t.Errorf("API = %v", got["API"])
 	}
 }
+
+// An address announced by hand in an earlier config would keep being announced
+// after a re-install, since the config is merged, not replaced.
+func TestPublicKuboConfig_dropsHandAnnouncedAddresses(t *testing.T) {
+	existing := []byte(`{"Addresses": {"Announce": ["/ip4/10.0.0.1/tcp/4101"], "AppendAnnounce": ["/ip4/192.168.1.2/tcp/4101"]}}`)
+	out, err := PublicKuboConfig(existing, "tok123", 10<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Addresses map[string][]string }
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"Announce", "AppendAnnounce"} {
+		if len(got.Addresses[key]) != 0 {
+			t.Errorf("Addresses.%s = %v, want empty", key, got.Addresses[key])
+		}
+	}
+}
+
+// A section an operator edited into something other than an object cannot be
+// merged into; replacing it would silently drop it, so the config is refused.
+func TestPublicKuboConfig_refusesASectionThatIsNotAnObject(t *testing.T) {
+	for _, existing := range []string{`{"Datastore": "10GB"}`, `{"Swarm": ["x"]}`, `{"API": 5}`} {
+		_, err := PublicKuboConfig([]byte(existing), "tok123", 10<<30)
+		if err == nil || !strings.Contains(err.Error(), "not an object") {
+			t.Errorf("%s: err = %v, want a not-an-object refusal", existing, err)
+		}
+	}
+}
+
+// A section written as null is absent: it is created.
+func TestPublicKuboConfig_createsANullSection(t *testing.T) {
+	out, err := PublicKuboConfig([]byte(`{"Routing": null}`), "tok123", 10<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"Type": "dht"`) {
+		t.Errorf("Routing was not set:\n%s", out)
+	}
+}

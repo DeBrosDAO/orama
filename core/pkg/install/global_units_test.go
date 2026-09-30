@@ -247,6 +247,8 @@ func TestGlobalUnits_homeIsTheUnitsOwnStateDirectory(t *testing.T) {
 		"provider": RenderGlobalProviderUnit(),
 		"relay":    RenderGlobalRelayUnit(),
 		"tor":      RenderGlobalTorRelayUnit(),
+		"dirauth":  RenderGlobalTorDirauthUnit(),
+		"onion":    RenderGlobalTorOnionUnit(),
 		"sbws":     RenderGlobalSBWSUnit(),
 		"reporter": RenderGlobalReporterUnit(),
 		"archiver": RenderGlobalArchiverUnit(),

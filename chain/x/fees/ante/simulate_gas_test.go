@@ -57,10 +57,13 @@ func TestFeeDecorator_simulationCountsTheGasOfPayingTheBaseFeeFromEarnings(t *te
 		require.NoError(t, err)
 		return run.GasMeter().GasConsumed()
 	}
-	simulated := gasOf(fakeFeeTx{fee: sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1)), gas: simulatedGasLimit, feePayer: payer}, true)
 	delivered := gasOf(fakeFeeTx{fee: sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 90_000)), gas: 90_000, feePayer: payer}, false)
-	// A client scales the estimate by its own margin (chain/client/node: 1.5x), which covers a small
-	// difference, never a missing settlement path.
-	require.InEpsilon(t, float64(delivered), float64(simulated), simulationGasTolerance,
-		"the simulation counted %d gas for the fee, delivery uses %d", simulated, delivered)
+	// A nominal fee (chain/client/node) and an empty one (a typical `--gas auto` request) alike.
+	for _, fee := range []sdk.Coins{sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1)), sdk.NewCoins()} {
+		simulated := gasOf(fakeFeeTx{fee: fee, gas: simulatedGasLimit, feePayer: payer}, true)
+		// A client scales the estimate by its own margin (chain/client/node: 1.5x), which covers a
+		// small difference, never a missing settlement path.
+		require.InEpsilon(t, float64(delivered), float64(simulated), simulationGasTolerance,
+			"fee %q: the simulation counted %d gas for the fee, delivery uses %d", fee, simulated, delivered)
+	}
 }

@@ -93,24 +93,11 @@ func PublicKuboConfig(existing []byte, token string, declaredBytes uint64) ([]by
 	// replacing a whole section drops what Kubo requires, such as
 	// Datastore.Spec, and the connection-manager defaults of the server
 	// profile.
-	addresses := section(config, "Addresses")
-	addresses["API"] = []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSAPIPort)}
-	addresses["Gateway"] = []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSGatewayPort)}
-	addresses["Swarm"] = []string{
-		fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", constants.GlobalIPFSSwarmPort),
-		fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", constants.GlobalIPFSSwarmPort),
+	sections, err := configSections(config, "Addresses", "Swarm", "API", "Provide", "Routing", "Datastore")
+	if err != nil {
+		return nil, err
 	}
-	addresses["NoAnnounce"] = append([]string{}, publicSwarmFilters...)
-	section(config, "Swarm")["AddrFilters"] = append([]string{}, publicSwarmFilters...)
-	section(config, "API")["Authorizations"] = map[string]interface{}{
-		ipfs.KuboAPIUser: map[string]interface{}{
-			"AuthSecret":   "bearer:" + token,
-			"AllowedPaths": append([]string{}, PublicAPIAllowedPaths...),
-		},
-	}
-	section(config, "Provide")["Strategy"] = "pinned"
-	section(config, "Routing")["Type"] = "dht"
-	section(config, "Datastore")["StorageMax"] = PublicStorageMax(declaredBytes)
+	setPublicSections(sections, token, declaredBytes)
 
 	out, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -122,14 +109,51 @@ func PublicKuboConfig(existing []byte, token string, declaredBytes uint64) ([]by
 	return out, nil
 }
 
-// section is config[key] as a map, created empty when absent or not an object.
-func section(config map[string]interface{}, key string) map[string]interface{} {
-	if m, ok := config[key].(map[string]interface{}); ok {
-		return m
+// configSections returns config's sections named by keys as maps, creating
+// the absent ones. A section that is present but not an object is an error:
+// merging into it is impossible and replacing it would drop what it holds.
+func configSections(config map[string]interface{}, keys ...string) (map[string]map[string]interface{}, error) {
+	sections := make(map[string]map[string]interface{}, len(keys))
+	for _, key := range keys {
+		switch v := config[key].(type) {
+		case map[string]interface{}:
+			sections[key] = v
+		case nil:
+			m := map[string]interface{}{}
+			config[key] = m
+			sections[key] = m
+		default:
+			return nil, fmt.Errorf("public kubo config: %s is a %T, not an object; fix or remove it in the repo config and retry", key, v)
+		}
 	}
-	m := map[string]interface{}{}
-	config[key] = m
-	return m
+	return sections, nil
+}
+
+// setPublicSections sets the public node's listeners, filters, RPC bearer,
+// providing, routing and storage limit.
+func setPublicSections(sections map[string]map[string]interface{}, token string, declaredBytes uint64) {
+	addresses := sections["Addresses"]
+	addresses["API"] = []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSAPIPort)}
+	addresses["Gateway"] = []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSGatewayPort)}
+	addresses["Swarm"] = []string{
+		fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", constants.GlobalIPFSSwarmPort),
+		fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", constants.GlobalIPFSSwarmPort),
+	}
+	// The node announces what it listens on and nothing else: an address
+	// announced by hand in an earlier config is dropped.
+	addresses["Announce"] = []string{}
+	addresses["AppendAnnounce"] = []string{}
+	addresses["NoAnnounce"] = append([]string{}, publicSwarmFilters...)
+	sections["Swarm"]["AddrFilters"] = append([]string{}, publicSwarmFilters...)
+	sections["API"]["Authorizations"] = map[string]interface{}{
+		ipfs.KuboAPIUser: map[string]interface{}{
+			"AuthSecret":   "bearer:" + token,
+			"AllowedPaths": append([]string{}, PublicAPIAllowedPaths...),
+		},
+	}
+	sections["Provide"]["Strategy"] = "pinned"
+	sections["Routing"]["Type"] = "dht"
+	sections["Datastore"]["StorageMax"] = PublicStorageMax(declaredBytes)
 }
 
 // WritePublicKuboFiles writes config, the RPC token, and an empty denylist
