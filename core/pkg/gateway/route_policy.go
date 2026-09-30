@@ -68,9 +68,9 @@ func owned(domain auth.Domain, action auth.Action) routepolicy.Policy {
 // dataPlane is a data-plane grant, with the kind of token it requires.
 //
 // ownership says whether the caller must additionally hold a live grant in the
-// namespace. Storage and cache do not ask for one, which is why a resource
-// selector on a storage grant authorises nothing yet: no grant is resolved on
-// those requests to carry a selector. See chg-392.
+// namespace. Storage and cache do not ask for one — a wallet with no grant holds
+// the data plane — but a wallet that does hold a narrowed grant has it resolved
+// on those routes so its selector applies (narrowed_grant.go).
 func dataPlane(domain auth.Domain, action auth.Action, ownership bool, token routepolicy.TokenRequirement) routepolicy.Policy {
 	return routepolicy.Policy{
 		Domain:    string(domain),

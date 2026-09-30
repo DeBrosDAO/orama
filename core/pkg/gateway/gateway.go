@@ -71,6 +71,11 @@ type Gateway struct {
 	// says who still has to move without a row per request.
 	credentialDeprecations *deprecationLog
 
+	// narrowedGrants remembers the grant each wallet holds in a namespace, so
+	// applying a resource selector on the data path is not a registry read per
+	// request. See narrowed_grant.go.
+	narrowedGrants grantCache
+
 	// shutdownCtx is cancelled by Close. Background work owned by the gateway
 	// derives from it so nothing keeps running against torn-down dependencies.
 	shutdownCtx context.Context

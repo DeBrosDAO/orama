@@ -478,6 +478,14 @@ one would let `avatars/../keys/x` match `avatars/*`. A cache key is not a path
 and is not normalised — `sessions/../tokens/x` is a key called `../tokens/x` in
 the `sessions` map, and the map is what the grant names.
 
+On a route that does not otherwise require a grant — storage and the cache — the
+gateway reads the caller's grant only to find out whether it is narrowed, and
+remembers the answer for ten seconds per namespace and wallet: a lookup is
+registry round trips, and these are the hot paths. A grant narrowed or revoked
+therefore reaches the data plane within ten seconds. `enforced` in
+`orama members list` and in the answer to adding a member says whether the
+selector's domain is one of the four above.
+
 A selector can only narrow. `storage:avatars/*` on a `reader`, who holds
 nothing, grants nothing: a narrowing that widens is not a narrowing.
 
