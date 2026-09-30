@@ -131,25 +131,35 @@ func requireMediaThroughOthers(t *testing.T, fx *fixture, room string) {
 	})
 }
 
-// TestNodeDeath_rolesReallocated: node-3 cut off from the other two for
+// TestNodeDeath_rolesReallocated: a TURN holder cut off from the other two for
 // longer than the viability grace loses its roles: TURN DNS for the namespace
 // stops naming it and names only live nodes, which serve relays; when the
-// partition heals the cluster converges again.
+// partition heals the cluster converges again. Two of the three nodes hold
+// TURN, so the victim is whichever of node-2 and node-3 does (node-1 is the
+// resolver): cutting off a node that never held it would prove nothing.
 func TestNodeDeath_rolesReallocated(t *testing.T) {
 	fx := setup(t)
-	dead := fx.f.Node(t, "node-3")
 	host := "turn.ns-" + fx.n.Name + "." + fx.f.State.BaseDomain
 	resolver := fx.f.Node(t, "node-1").PublicIP
-	eventually.Require(t, pollEvery, readyBudget, "TURN DNS for "+host, func() (bool, error) {
+	var dead fleet.Node
+	eventually.Require(t, pollEvery, readyBudget, "TURN DNS for "+host+" to name two nodes", func() (bool, error) {
 		got, err := tenancy.ResolveAt(t.Context(), resolver, host)
-		if len(got) == 2 {
-			return true, nil
+		if len(got) != 2 {
+			return false, fmt.Errorf("%v %v", got, err)
 		}
-		return false, fmt.Errorf("%v %v", got, err)
+		for _, name := range []string{"node-2", "node-3"} {
+			if n := fx.f.Node(t, name); slices.Contains(got, n.PublicIP) {
+				dead = n
+				return true, nil
+			}
+		}
+		return false, eventually.Stop(fmt.Errorf("neither node-2 nor node-3 holds TURN: %v", got))
 	})
-	t.Run("node-3 partitioned", func(t *testing.T) {
-		for _, peer := range []string{"node-1", "node-2"} {
-			fx.f.IPTablesBlock(t, dead, fx.f.Node(t, peer))
+	t.Run(dead.Name+" partitioned", func(t *testing.T) {
+		for _, peer := range fx.f.State.Nodes {
+			if peer.Name != dead.Name {
+				fx.f.IPTablesBlock(t, dead, peer)
+			}
 		}
 		eventually.Require(t, time.Minute, reallocBudget, "TURN roles off node-3", func() (bool, error) {
 			got, err := tenancy.ResolveAt(t.Context(), resolver, host)
