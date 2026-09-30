@@ -1,7 +1,6 @@
 package wasmpolicy
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
@@ -13,12 +12,12 @@ import (
 // is allowed: contracts may escrow ORAMA (plans/open-network.md O-B).
 func RefuseNoramaWrapper(createDenom string, holdDenoms []string) error {
 	if isNoramaDenom(createDenom) {
-		return fmt.Errorf("%w: create %q", types.ErrNoramaWrapper, createDenom)
+		return types.ErrNoramaWrapper.Wrapf("create %q", createDenom)
 	}
 	for _, denom := range holdDenoms {
 		sub, ok := factorySubdenom(denom)
 		if ok && sub == params.BaseDenom {
-			return fmt.Errorf("%w: hold %q", types.ErrNoramaWrapper, denom)
+			return types.ErrNoramaWrapper.Wrapf("hold %q", denom)
 		}
 	}
 	return nil

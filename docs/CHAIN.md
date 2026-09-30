@@ -2308,12 +2308,14 @@ token. A contract pays a user ORAMA through the `earnings` binding below.
 The static linux/amd64 binary links one Rust archive, `chain/native` (`make native-lib-linux-amd64`,
 `native/build.sh build|verify`): libwasmvm at the version `go.mod` pins (copied from the module cache, so its
 source is the one `go.sum` covers, not downloaded prebuilt) and the Orchard verifier as rlibs of one
-staticlib crate, so there is one copy of the Rust std. It is built with Rust 1.92.0 for
+staticlib crate, so there is one copy of the Rust std. It is built with Rust 1.98.1 for
 `x86_64-unknown-linux-musl`, C parts through zig (`scripts/zigcc.sh`), with `native/Cargo.lock`. wasmer_vm calls
-`__rust_probestack`, which rustc no longer provides after about 1.85 and the Orchard crate needs rustc 1.88, so
-`native/src/probestack.rs` carries compiler_builtins' x86_64 routine. The sha256 of the archive is recorded in
+`__rust_probestack`, which compiler_builtins now exports only under a mangled name, so
+`native/src/probestack.rs` carries its x86_64 routine unmangled. The sha256 of the archive is recorded in
 `native/libwasmvm_muslc.x86_64.a.sha256` with the wasmvm, rustc and zig versions it holds for (zig 0.15.2:
-`ORAMA_ZIG=/opt/homebrew/opt/zig@0.15/bin/zig` on macOS). The build is reproducible across checkouts: cargo hashes
+`ORAMA_ZIG=/opt/homebrew/opt/zig@0.15/bin/zig` on macOS). wasmvm stays on v3.0.7 (wasmd v0.70.3): v3.0.8, which
+wasmd v0.70.4 requires, moves to wasmer 7, whose `sha2 ^0.11` cannot share one crate graph with the
+`bip32 =0.6.0-pre.1` (`sha2 =0.11.0-pre.4`) that `zcash_primitives 0.30.1` pulls in for the Orchard verifier. The build is reproducible across checkouts: cargo hashes
 a path dependency's location into crate metadata and symbol names, so `build.sh` copies the crate and its
 `x/shielded/orchardffi` path dependency into one fixed directory (`/tmp/orama-native-build`, override with
 `ORAMA_NATIVE_STAGE`) and remaps it, the cargo home and the Rust sysroot out of the archive; two checkouts at

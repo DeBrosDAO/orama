@@ -3,7 +3,6 @@ package wasmbindings
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 
 	"cosmossdk.io/math"
 
@@ -197,10 +196,10 @@ func decodeStrict(raw []byte, into any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
-		return fmt.Errorf("%w: %v", ErrBadMessage, err)
+		return ErrBadMessage.Wrapf("%v", err)
 	}
 	if dec.More() {
-		return fmt.Errorf("%w: trailing data", ErrBadMessage)
+		return ErrBadMessage.Wrap("trailing data")
 	}
 	return nil
 }
@@ -213,7 +212,7 @@ func one(name string, set ...bool) error {
 		}
 	}
 	if n != 1 {
-		return fmt.Errorf("%w: %s needs exactly one variant, got %d", ErrBadMessage, name, n)
+		return ErrBadMessage.Wrapf("%s needs exactly one variant, got %d", name, n)
 	}
 	return nil
 }

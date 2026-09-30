@@ -3,7 +3,6 @@ package wasmbindings
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -124,7 +123,7 @@ func (q Querier) Query(ctx sdk.Context, raw json.RawMessage) ([]byte, error) {
 	case req.Market != nil && req.Market.Listing != nil:
 		out, err = q.listing(ctx, req.Market.Listing.ID)
 	default:
-		return nil, fmt.Errorf("%w: no known query variant", ErrBadMessage)
+		return nil, ErrBadMessage.Wrap("no known query variant")
 	}
 	if err != nil {
 		return nil, err
@@ -173,11 +172,11 @@ func (q Querier) verifyProof(ctx sdk.Context, treeID uint64, leaf cnfttypes.Leaf
 		return nil, err
 	}
 	if err := proof.ValidateBasic(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBadMessage, err)
+		return nil, ErrBadMessage.Wrapf("%v", err)
 	}
 	hash, err := cnfttypes.HashLeaf(leaf)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBadMessage, err)
+		return nil, ErrBadMessage.Wrapf("%v", err)
 	}
 	if err := tree.Prove(proof.Root, hash, proof.Index, proof.Siblings); err != nil {
 		return ProofResult{Valid: false, Reason: err.Error()}, nil
