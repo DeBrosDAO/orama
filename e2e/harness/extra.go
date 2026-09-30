@@ -28,6 +28,7 @@ type Extra struct {
 // fleet (under its lock), so Lookup, Node and AllNodes find it while it lives.
 func ExtraNode(t testing.TB, name, location string) Extra {
 	t.Helper()
+	requireNotStagenet(t, "ExtraNode")
 	f := Fleet(t)
 	own := *f.State
 	own.Extras = append([]fleet.Node{}, f.State.Extras...)

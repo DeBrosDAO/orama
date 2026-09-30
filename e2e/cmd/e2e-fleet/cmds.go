@@ -33,6 +33,9 @@ func parseFlags(fs *flag.FlagSet, args []string) error {
 }
 
 func cmdProvision(parent context.Context, args []string) (int, error) {
+	if err := refuseStagenetEnv("provision"); err != nil {
+		return exitFail, err
+	}
 	if err := parseFlags(flag.NewFlagSet("provision", flag.ContinueOnError), args); err != nil {
 		return exitUsage, err
 	}
@@ -86,8 +89,10 @@ func cmdTest(parent context.Context, args []string) (int, error) {
 	if err != nil {
 		return exitFail, err
 	}
-	if _, err := runTTL(lay, os.LookupEnv); err != nil {
-		return exitFail, err
+	if !st.IsStagenet() {
+		if _, err := runTTL(lay, os.LookupEnv); err != nil {
+			return exitFail, err
+		}
 	}
 	steps, err := planStages(lay)
 	if err != nil {
@@ -104,6 +109,9 @@ func cmdTest(parent context.Context, args []string) (int, error) {
 }
 
 func cmdTeardown(parent context.Context, args []string) (int, error) {
+	if err := refuseStagenetEnv("teardown"); err != nil {
+		return exitFail, err
+	}
 	if err := parseFlags(flag.NewFlagSet("teardown", flag.ContinueOnError), args); err != nil {
 		return exitUsage, err
 	}
@@ -120,6 +128,9 @@ func cmdTeardown(parent context.Context, args []string) (int, error) {
 }
 
 func cmdSweep(parent context.Context, args []string) (int, error) {
+	if err := refuseStagenetEnv("sweep"); err != nil {
+		return exitFail, err
+	}
 	fs := flag.NewFlagSet("sweep", flag.ContinueOnError)
 	maxAge := fs.Duration("max-age", defaultSweepAge, "delete e2e resources without an e2e-ttl label older than this (labelled ones go at their own TTL)")
 	force := fs.Bool("force", false, "accept a --max-age under "+minSweepAge.String())

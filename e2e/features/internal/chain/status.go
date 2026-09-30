@@ -26,7 +26,7 @@ type Status struct {
 // Comet fetches a CometBFT RPC path on n's loopback and decodes result.
 func (c *Chain) Comet(t testing.TB, n fleet.Node, path string, result any) error {
 	t.Helper()
-	out := c.Run(t, n, QueryBudget, "curl -sS --max-time 10 "+fleet.ShellQuote(RPCHTTP+path))
+	out := c.Run(t, n, QueryBudget, "curl -sS --max-time 10 "+fleet.ShellQuote(c.RPCHTTP()+path))
 	if out.Exit != 0 {
 		return fmt.Errorf("%s: GET %s exited %d: %s", n.Name, path, out.Exit, out.Stderr)
 	}

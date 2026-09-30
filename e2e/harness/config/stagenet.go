@@ -1,0 +1,132 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+// Targets of the runner. The default target is a disposable fleet the run
+// provisions; TargetStagenet is the existing stagenet cluster, which the
+// runner only tests: it never provisions, destroys or sweeps anything there.
+const (
+	TargetFleet    = ""
+	TargetStagenet = "stagenet"
+)
+
+// The stagenet target is pinned to exactly these values: a state that names
+// anything else is refused, so a state file cannot aim the suite at devnet,
+// testnet or any other cluster.
+const (
+	StagenetEnv        = "stagenet"
+	StagenetBaseDomain = "stagenet.dbrsteting.bid"
+	StagenetGatewayURL = "https://stagenet.dbrsteting.bid"
+	// StagenetDefaultChainID is the chain id `e2e-fleet target stagenet` writes unless --chain-id says otherwise.
+	StagenetDefaultChainID = "orama-stagenet-4"
+	// StagenetChainHost is where a node's co-located chain answers (RPC 31001, REST 31003, indexer 31015):
+	// inside the orama-global netns, reachable from the host's root namespace.
+	StagenetChainHost = "198.18.0.2"
+)
+
+// Paths under the owner's real home that the stagenet target uses.
+const (
+	// StagenetRWSockRel is the socket of the dev RootWallet headless agent.
+	StagenetRWSockRel = "rwdev/agent.sock"
+	// StagenetRWReadyRel is the ready file that agent wrote; it holds the wallet address.
+	StagenetRWReadyRel = "rwdev/ready.json"
+	// StagenetHomeRel is the CLI HOME (it holds ~/.orama/environments.json for the stagenet env).
+	StagenetHomeRel = "orama-stagenet-handoff/cli-home"
+	// StagenetCAFileRel is the Let's Encrypt staging roots bundle.
+	StagenetCAFileRel = "orama-stagenet-handoff/le-staging-roots.pem"
+	// StagenetSSHKeyRel is the private key that reaches the stagenet nodes.
+	StagenetSSHKeyRel = ".ssh/debros-nodes"
+	// StagenetKnownHostsRel is the owner's known_hosts the pinned host keys are cross-checked against.
+	StagenetKnownHostsRel = ".ssh/known_hosts"
+)
+
+// StagenetNode is one stagenet node.
+type StagenetNode struct {
+	Name, Label, IP, User, WGIP string
+}
+
+// StagenetNodes are the three stagenet nodes, in state order. Every one is a nameserver.
+var StagenetNodes = []StagenetNode{
+	{Name: "node-1", Label: "athena", IP: "37.59.116.212", User: "debian", WGIP: "10.0.0.1"},
+	{Name: "node-2", Label: "superman", IP: "141.227.165.168", User: "ubuntu", WGIP: "10.0.0.2"},
+	{Name: "node-3", Label: "poseidon", IP: "57.128.226.141", User: "ubuntu", WGIP: "10.0.0.3"},
+}
+
+var (
+	stagenetChainID = regexp.MustCompile(`^orama-stagenet-[0-9]+$`)
+	// stagenetRunID is stagenet-<yyyymmdd>-<hhmmss>.
+	stagenetRunID = regexp.MustCompile(`^stagenet-[0-9]{8}-[0-9]{6}$`)
+)
+
+// StagenetRunID reports whether id has the shape of a stagenet run id.
+func StagenetRunID(id string) bool { return stagenetRunID.MatchString(id) }
+
+// StagenetPath is rel under realHome.
+func StagenetPath(realHome, rel string) string { return filepath.Join(realHome, rel) }
+
+// StagenetIPs are the pinned public addresses, sorted.
+func StagenetIPs() []string {
+	out := make([]string, 0, len(StagenetNodes))
+	for _, n := range StagenetNodes {
+		out = append(out, n.IP)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CheckTarget refuses a target name that is neither the default nor stagenet.
+func CheckTarget(target string) error {
+	if target != TargetFleet && target != TargetStagenet {
+		return fmt.Errorf("target %q is unknown (use %q or the default fleet target)", target, TargetStagenet)
+	}
+	return nil
+}
+
+// StagenetPins are the values of a state the stagenet target pins exactly.
+type StagenetPins struct {
+	RunID, Env, BaseDomain, GatewayURL, ChainID string
+	// NodeIPs are the public addresses of every node, extra and probe of the state.
+	NodeIPs []string
+}
+
+// CheckStagenet requires every pinned value to match exactly. Every mismatch is reported.
+func CheckStagenet(p StagenetPins) error {
+	var errs []error
+	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf("stagenet target: "+format, args...)) }
+	if !stagenetRunID.MatchString(p.RunID) {
+		fail("run id %q is not stagenet-<yyyymmdd>-<hhmmss>", p.RunID)
+	}
+	if p.Env != StagenetEnv {
+		fail("environment %q is not %q", p.Env, StagenetEnv)
+	}
+	if p.BaseDomain != StagenetBaseDomain {
+		fail("base domain %q is not %q", p.BaseDomain, StagenetBaseDomain)
+	}
+	if p.GatewayURL != StagenetGatewayURL {
+		fail("gateway url %q is not %q", p.GatewayURL, StagenetGatewayURL)
+	}
+	if !stagenetChainID.MatchString(p.ChainID) {
+		fail("chain id %q does not match %s", p.ChainID, stagenetChainID)
+	}
+	got := append([]string{}, p.NodeIPs...)
+	sort.Strings(got)
+	if want := StagenetIPs(); strings.Join(got, ",") != strings.Join(want, ",") {
+		fail("node public addresses [%s] are not exactly [%s]", strings.Join(got, ", "), strings.Join(want, ", "))
+	}
+	return errors.Join(errs...)
+}
+
+// CheckStagenetChainID requires id to be a stagenet chain id.
+func CheckStagenetChainID(id string) error {
+	if !stagenetChainID.MatchString(id) {
+		return fmt.Errorf("chain id %q does not match %s", id, stagenetChainID)
+	}
+	return nil
+}

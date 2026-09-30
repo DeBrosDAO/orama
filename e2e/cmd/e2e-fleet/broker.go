@@ -180,12 +180,18 @@ func withBroker(ctx context.Context, lay layout, st *fleet.State, statePath stri
 	if err != nil {
 		return err
 	}
+	r := newStageRunner(lay, statePath, st.ArtifactDir)
+	r.BaseEnv, r.ExtraEnv = base, []string{"HOME=" + home}
+	r.AfterDestructive, r.Prefix = restoreNodes(st), prefix
+	if st.IsStagenet() {
+		// No broker: it holds the cloud credentials the stagenet target never
+		// uses. A test that needs one fails (harness.Broker, ExtraNode).
+		return fn(r)
+	}
 	b, err := startBrokerChild(ctx, statePath)
 	if err != nil {
 		return err
 	}
-	r := newStageRunner(lay, statePath, st.ArtifactDir)
-	r.BaseEnv, r.ExtraEnv = base, []string{broker.EnvSock + "=" + b.path, "HOME=" + home}
-	r.AfterDestructive, r.Prefix = restoreNodes(st), prefix
+	r.ExtraEnv = append(r.ExtraEnv, broker.EnvSock+"="+b.path)
 	return errors.Join(fn(r), b.stop())
 }

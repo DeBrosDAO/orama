@@ -233,6 +233,7 @@ a crashed run left behind, found by the `e2e-run` label.
 | `make e2e-test-unit` | Unit tests of the harness itself |
 | `e2e-fleet test --stage N`, `--resume` | Re-run one stage, or continue an interrupted run |
 | `e2e-fleet teardown`, `sweep` | Destroy a run's resources, or orphans by label |
+| `e2e-fleet target stagenet --out state.json`, then `E2E_FLEET_STATE=state.json e2e-fleet test --stage N` | Run a stage against the existing stagenet cluster instead of fresh servers; the runner only tests there, it never provisions, sweeps or destroys (`e2e/README.md`, "Running against stagenet") |
 
 `make test` runs the lint, the coverage gate and the harness unit tests.
 Stages run in a fixed order and destructive packages run alone at the end of their

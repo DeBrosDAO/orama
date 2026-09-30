@@ -225,7 +225,7 @@ func (c *Chain) retireAtCleanup(t testing.TB, k Key, id string) {
 			Status string `json:"status"`
 		} `json:"node"`
 	}
-	out, err := c.cleanupRun(t, k.Node, OramadCmd("query", "nodes", "node", id, "--node", RPC, "--output", "json"))
+	out, err := c.cleanupRun(t, k.Node, OramadCmd("query", "nodes", "node", id, "--node", c.RPC(), "--output", "json"))
 	if err != nil || out.Exit != 0 {
 		t.Errorf("cleanup: failed to read node %s: %v %s", id, err, out.Stderr)
 		return

@@ -59,6 +59,10 @@ type Runner struct {
 	// WorkDir is the run's work dir (beside state.json): RunOpts.Dir may be
 	// inside it, or inside Home. harness.CLI sets it.
 	WorkDir string
+	// Target is the run's fleet.State.Target. The stagenet target signs through
+	// the dev RootWallet agent, whose socket is in the owner's home (never in
+	// ~/.rootwallet); every other target's agent lives outside the home.
+	Target string
 	// noWallet marks a NoWallet runner: its agent socket must not exist.
 	noWallet bool
 }
@@ -76,7 +80,11 @@ func (r *Runner) Check() error {
 	if err != nil {
 		return err
 	}
-	if err := secrets.CheckAgentSockOutsideHome(r.AgentSock, realHome); err != nil {
+	checkSock := secrets.CheckAgentSockOutsideHome
+	if r.Target == config.TargetStagenet {
+		checkSock = secrets.CheckAgentSockNotRealWallet
+	}
+	if err := checkSock(r.AgentSock, realHome); err != nil {
 		return fmt.Errorf("refusing to run orama: %w", err)
 	}
 	if r.Home == "" || !filepath.IsAbs(r.Home) {

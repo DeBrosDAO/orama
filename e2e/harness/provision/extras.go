@@ -32,6 +32,10 @@ type extraLimits struct {
 //
 // In a feature process (E2E_BROKER_SOCK set) the runner's broker creates it.
 func AddExtra(ctx context.Context, st *fleet.State, name, location string) (fleet.Node, error) {
+	if err := refuseStagenet("AddExtra", st); err != nil {
+		return fleet.Node{}, err
+	}
+
 	b, err := runBroker()
 	if err != nil {
 		return fleet.Node{}, err
@@ -137,6 +141,10 @@ func bootAndPin(ctx context.Context, st *fleet.State, id int64, key ssh.PublicKe
 //
 // In a feature process (E2E_BROKER_SOCK set) the runner's broker deletes it.
 func RemoveExtra(ctx context.Context, st *fleet.State, name string) error {
+	if err := refuseStagenet("RemoveExtra", st); err != nil {
+		return err
+	}
+
 	b, err := runBroker()
 	if err != nil {
 		return err

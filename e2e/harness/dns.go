@@ -24,7 +24,7 @@ const (
 // feature process (E2E_BROKER_SOCK unset).
 func Broker(t testing.TB) *broker.Client {
 	t.Helper()
-	Fleet(t)
+	requireNotStagenet(t, "the runner's broker")
 	c, err := broker.FromEnv(os.LookupEnv)
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +41,7 @@ func Broker(t testing.TB) *broker.Client {
 // lowercase letters or digits, starting with a letter.
 func CustomDomain(t testing.TB, label string) string {
 	t.Helper()
+	requireNotStagenet(t, "CustomDomain (a Cloudflare name of the run)")
 	f := Fleet(t)
 	zone, ok := strings.CutPrefix(f.State.BaseDomain, "e2e-"+f.State.RunID+".")
 	if !ok {
@@ -77,6 +78,7 @@ func DNSTXT(t testing.TB, name, value string) {
 // declares requires.extra_nodes for its server.
 func ExtraCluster(t testing.TB, name string) provision.EvalCluster {
 	t.Helper()
+	requireNotStagenet(t, "ExtraCluster")
 	f := Fleet(t)
 	own := *f.State
 	run, release := runctx.With(t.Context())
@@ -96,4 +98,14 @@ func ExtraCluster(t testing.TB, name string) provision.EvalCluster {
 		}
 	})
 	return cl
+}
+
+// requireNotStagenet fails a test that needs a server, DNS record or broker
+// operation of its own: the stagenet target only tests the existing cluster,
+// so such a test fails loudly instead of running against nothing.
+func requireNotStagenet(t testing.TB, what string) {
+	t.Helper()
+	if Fleet(t).State.IsStagenet() {
+		t.Fatalf("%s is not available on the stagenet target: the existing stagenet cluster is only tested, never provisioned, changed or destroyed", what)
+	}
 }

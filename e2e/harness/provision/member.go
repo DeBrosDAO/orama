@@ -49,6 +49,10 @@ rm -rf "$dir"`, stagedSignature, breakBackupDir, breakMarker)
 // In a feature process (E2E_BROKER_SOCK set) only an extra can be destroyed,
 // through the runner's broker.
 func DestroyNode(ctx context.Context, st *fleet.State, host string) error {
+	if err := refuseStagenet("DestroyNode", st); err != nil {
+		return err
+	}
+
 	b, err := runBroker()
 	if err != nil {
 		return err
@@ -100,11 +104,19 @@ func findMember(st *fleet.State, match func(fleet.Node) bool) (*[]fleet.Node, in
 // puts the signature back. A push after BreakUpgrade re-stages a valid
 // signature, which RestoreUpgrade then refuses to overwrite.
 func BreakUpgrade(ctx context.Context, st *fleet.State, host string) error {
+	if err := refuseStagenet("BreakUpgrade", st); err != nil {
+		return err
+	}
+
 	return runOnMember(ctx, st, host, breakScript, sshxRemote{}, defaultTiming())
 }
 
 // RestoreUpgrade undoes BreakUpgrade on the node at host.
 func RestoreUpgrade(ctx context.Context, st *fleet.State, host string) error {
+	if err := refuseStagenet("RestoreUpgrade", st); err != nil {
+		return err
+	}
+
 	return runOnMember(ctx, st, host, restoreScript, sshxRemote{}, defaultTiming())
 }
 

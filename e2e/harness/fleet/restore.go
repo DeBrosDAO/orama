@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/e2e/harness/config"
 )
 
 // restoreTest attributes the runner's node restoration in the evidence.
@@ -50,8 +52,11 @@ func (f *Fleet) RestoreNodes(ctx context.Context) error {
 }
 
 // runIDShape is the run id's shape (provision's runIDPattern): lowercase
-// letters and digits.
+// letters and digits, or a stagenet run id.
 func runIDShape(id string) bool {
+	if config.StagenetRunID(id) {
+		return true
+	}
 	if len(id) < 4 || len(id) > 16 {
 		return false
 	}

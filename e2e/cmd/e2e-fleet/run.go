@@ -74,6 +74,9 @@ type runState struct {
 }
 
 func cmdRun(parent context.Context, args []string) (int, error) {
+	if err := refuseStagenetEnv("run"); err != nil {
+		return exitFail, err
+	}
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	keep := fs.Bool("keep-on-fail", false, "leave the fleet up when the verdict is not PASS (tear down later with `e2e-fleet teardown`)")
 	bugs := fs.Bool("bug-drafts", false, "also write bugboard-drafts.json")

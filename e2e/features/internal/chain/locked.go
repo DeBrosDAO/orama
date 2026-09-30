@@ -44,8 +44,8 @@ type LockedEdit struct {
 }
 
 // accountScript reads k's live account number and sequence into $AN and $SEQ.
-func accountScript(k Key) string {
-	q := OramadCmd("query", "auth", "account", k.Address, "--node", RPC, "--output", "json")
+func (c *Chain) accountScript(k Key) string {
+	q := OramadCmd("query", "auth", "account", k.Address, "--node", c.RPC(), "--output", "json")
 	return fmt.Sprintf("A=$(%s | python3 -c %s) || exit 95\nset -- $A; AN=$1; SEQ=$2\n", q, fleet.ShellQuote(accountPy))
 }
 
@@ -69,14 +69,14 @@ func (c *Chain) SignAndBroadcastLocked(t testing.TB, k Key, opts TxOptions, edit
 	if !strings.Contains(sign, `"$AN"`) || !strings.Contains(sign, `"$SEQ"`) {
 		t.Fatalf("the sign command has no offline account flags to fill: %s", sign)
 	}
-	script := "D=" + fleet.ShellQuote(dir) + "\n" + lockScript(k) + feeScript(opts) + accountScript(k) +
+	script := "D=" + fleet.ShellQuote(dir) + "\n" + lockScript(k) + c.feeScript(opts) + c.accountScript(k) +
 		fmt.Sprintf("AN=$((AN + %d))\n", edit.AccountNumberDelta) + sign
 	if edit.Memo != "" {
 		script += fmt.Sprintf("python3 -c %s \"$D/s.json\" %s || exit 96\n",
 			fleet.ShellQuote(`import json,sys;p=sys.argv[1];d=json.load(open(p));d["body"]["memo"]=sys.argv[2];json.dump(d,open(p,"w"))`),
 			fleet.ShellQuote(edit.Memo))
 	}
-	r, err := c.runTxScript(t, k.Node, script+broadcastScript())
+	r, err := c.runTxScript(t, k.Node, script+c.broadcastScript())
 	if err != nil {
 		t.Fatal(c.F.Redact(err.Error()))
 	}
@@ -94,9 +94,9 @@ func (c *Chain) ReplayLocked(t testing.TB, k Key, signed []byte) (r Result, befo
 		t.Fatal(err)
 	}
 	script := "D=" + fleet.ShellQuote(dir) + "\n" + lockScript(k) +
-		accountScript(k) + "echo " + markSeqBefore + "; echo \"$SEQ\"\n" +
-		"(\n" + broadcastScript() + ")\n" +
-		accountScript(k) + "echo " + markSeqAfter + "; echo \"$SEQ\"\n"
+		c.accountScript(k) + "echo " + markSeqBefore + "; echo \"$SEQ\"\n" +
+		"(\n" + c.broadcastScript() + ")\n" +
+		c.accountScript(k) + "echo " + markSeqAfter + "; echo \"$SEQ\"\n"
 	out, err := c.run(t, k.Node, TxBudget, script)
 	if err != nil || out.Exit != 0 {
 		t.Fatal(c.F.Redact(fmt.Sprintf("%s: replay script exited %d: %v %s", k.Node.Name, out.Exit, err, out.Stderr)))

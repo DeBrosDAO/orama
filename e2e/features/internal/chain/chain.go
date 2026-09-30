@@ -41,8 +41,6 @@ const (
 	ServiceUser  = "orama-chain"
 	Unit         = "orama-global-chain.service"
 	ValidatorKey = "validator"
-	RPC          = "tcp://127.0.0.1:31001"
-	RPCHTTP      = "http://127.0.0.1:31001"
 	P2PPort      = 31000
 	RPCPort      = 31001
 	GRPCPort     = 31002
@@ -51,7 +49,8 @@ const (
 	Denom        = "norama"
 	// NoramaPerOrama is chain/app/params.NoramaPerOrama (9 decimals).
 	NoramaPerOrama = 1_000_000_000
-	// DevnetMarker must be in every chain id this package talks to.
+	// DevnetMarker must be in every chain id a fleet run talks to (the stagenet
+	// target pins its own chain id: config.CheckStagenetChainID).
 	DevnetMarker = "-devnet-"
 )
 
@@ -78,14 +77,15 @@ type Chain struct {
 }
 
 // New returns the run's chain, skipping (not covered) when the run has none,
-// and refusing a chain id that is not a devnet id.
+// and refusing a chain id that is not the target's: a devnet id for a fleet
+// run, a stagenet id for the stagenet target.
 func New(t testing.TB) *Chain {
 	t.Helper()
 	harness.RequireChain(t)
 	f := harness.Fleet(t)
 	id := f.State.ChainID
-	if !strings.Contains(id, DevnetMarker) {
-		t.Fatalf("refusing chain %q: every run chain is a devnet chain (id contains %s)", id, DevnetMarker)
+	if err := checkChainID(f.State, id); err != nil {
+		t.Fatalf("refusing chain %q: %v", id, err)
 	}
 	return &Chain{F: f, ID: id}
 }
@@ -152,10 +152,10 @@ func (c *Chain) CleanupExec(t testing.TB, n fleet.Node, cmd string) {
 }
 
 // QueryOut runs `oramad query <args> --output json` on n against its
-// loopback RPC and returns the raw output, whatever the exit code.
+// node-local RPC (c.RPC) and returns the raw output, whatever the exit code.
 func (c *Chain) QueryOut(t testing.TB, n fleet.Node, args ...string) fleet.Output {
 	t.Helper()
-	full := append(append([]string{"query"}, args...), "--node", RPC, "--output", "json")
+	full := append(append([]string{"query"}, args...), "--node", c.RPC(), "--output", "json")
 	return c.Run(t, n, QueryBudget, OramadCmd(full...))
 }
 

@@ -25,7 +25,7 @@ evidence in the report when it fails.
 ```
 e2e/
   go.mod                 own module (github.com/DeBrosOfficial/network/e2e), replaces ../core
-  cmd/e2e-fleet/         the runner: run, provision, test, teardown, sweep, report, coverage, hook
+  cmd/e2e-fleet/         the runner: run, provision, test, teardown, sweep, report, coverage, hook, target
   harness/               what tests import (below); provision/hetzner/cloudflare/agent/sshx provision the fleet
   harness/broker/        the runner's credential broker (DNS TXT, extras, eval clusters) on a unix socket
   harness/monitor/       `orama monitor report --json` types and the cluster predicates
@@ -534,6 +534,81 @@ the runner: `ORAMA_LIFECYCLE_DESTROY="e2e-fleet hook destroy"`,
 `ORAMA_LIFECYCLE_BREAK="e2e-fleet hook break"`,
 `ORAMA_LIFECYCLE_PROVISION="e2e-fleet hook provision"` (prints the new IP), all
 reading `E2E_FLEET_STATE`.
+
+## Running against stagenet
+
+The suite can run stage by stage against the existing stagenet cluster instead
+of fresh Hetzner servers. The runner **only tests** there: it never creates,
+changes, sweeps or destroys a server, and it holds no cloud credential.
+
+```bash
+cd e2e
+go run ./cmd/e2e-fleet target stagenet --out /tmp/stagenet-state.json   # read-only: ssh-keyscan + local files
+E2E_FLEET_STATE=/tmp/stagenet-state.json go run ./cmd/e2e-fleet test --stage 1
+```
+
+`target stagenet` writes the state (`"target": "stagenet"`): `node-1` athena
+`37.59.116.212` (user `debian`, WG `10.0.0.1`), `node-2` superman
+`141.227.165.168` and `node-3` poseidon `57.128.226.141` (user `ubuntu`, WG
+`10.0.0.2` / `10.0.0.3`), all three nameservers; the SSH key `~/.ssh/debros-nodes`;
+the CA bundle `~/orama-stagenet-handoff/le-staging-roots.pem`; the CLI HOME
+`~/orama-stagenet-handoff/cli-home` (its `.orama/environments.json` must hold the
+`stagenet` env); `core/bin/orama` as the CLI under test (build it first); the
+operator address from the dev RootWallet agent's `~/rwdev/ready.json` (that agent,
+`~/rwdev/agent.sock`, must be running and unlocked); the chain id
+`orama-stagenet-4` (`--chain-id` to change it) and the run id
+`stagenet-<yyyymmdd>-<hhmmss>`; artifacts in `e2e/artifacts/stagenet-<ts>`. The
+host keys come from `ssh-keyscan` of the three addresses and are written to
+`<state>.known_hosts` only when your `~/.ssh/known_hosts` holds the same key for
+that address: a changed key, or an address your file has never seen, is refused
+(`ssh` to it once and verify the fingerprint first).
+
+**Safety pins.** Every loader of a state (`test`, `report`, `harness.Main`) runs
+`fleet.CheckState`, which for this target accepts exactly: env `stagenet`, base
+domain `stagenet.dbrsteting.bid`, gateway `https://stagenet.dbrsteting.bid`, a chain id
+matching `^orama-stagenet-[0-9]+$`, the three node addresses above and nothing
+else (no extra, no probe), the agent socket `$HOME/rwdev/agent.sock` (never
+under `~/.rootwallet`), the CLI HOME, CA bundle and SSH key above. Anything else,
+including devnet/testnet names and domains or a fleet state carrying
+`"target": "stagenet"`, is refused with every mismatch listed. The constants
+live in `harness/config/stagenet.go`. `run`, `provision`, `teardown`, `sweep`
+and `hook destroy|break|provision` refuse a stagenet state when
+`E2E_FLEET_STATE` names it; `test` starts no broker (`E2E_BROKER_SOCK` is unset),
+so `harness.ExtraNode`, `ExtraCluster`, `DNSTXT`, `CustomDomain` and
+`harness.Broker` fail the test with "not available on the stagenet target", as do
+`provision.AddExtra/RemoveExtra/AddEvalCluster/DestroyNode/BreakUpgrade/RestoreUpgrade/UpgradeToHead`
+and the probe vantage of `external-vantage`. After a destructive package the
+runner still removes the iptables rules tagged `e2e-<run>-` on the three nodes and
+turns NTP back on where a test left it off (`Fleet.RestoreNodes`).
+
+**What runs.** Stages 1-7 and 9 are tests of the running cluster. Some packages
+cannot pass there and fail on purpose: the ones that need an extra server
+(`boot-lifecycle`, `chaos-lifecycle`, `install-extra`, `invite-join-destructive`,
+`namespace-backup-chaos`, `release-tuf`), the probe VM (`external-vantage`), the
+brokered DNS (`dns-tls` CLI test), and the release archives, which the stagenet
+state does not carry (`install`, `install-extra`, `release-checks`,
+`release-tuf`, `rollout-upgrade`, `scanners` secrets scan, `cli-env-auth-misc`
+rollout test). Stages 10 and 11 disturb the live cluster (upgrades, partitions,
+kills): run them only on purpose.
+
+**Chain stage (8).** The chain helpers (`features/internal/chain`) run the real
+`oramad` on the node as the chain user, exactly as `e2e/scripts/chain-deploy.sh`
+lays it out, and stagenet uses the same binary, home, unit and user
+(`/usr/lib/orama-global/bin/oramad`, `/var/lib/orama-global/chain`,
+`orama-global-chain.service`, `orama-chain`). What differs, and what is target-aware
+now: the RPC and REST address. A fleet validator listens on `127.0.0.1:31001/31003`;
+stagenet's chain is inside the `orama-global` netns and answers on
+`198.18.0.2:31001` (RPC), `:31003` (REST), `:31015` (indexer) from the host.
+`Chain.Host()`, `RPC()` and `RPCHTTP()` return the right address for the state's
+target, and `Chain.Tunnel` forwards to it; the chain id check accepts a devnet id
+on a fleet run and a stagenet id on this target. Not target-aware, so the chain
+packages that depend on it fail or are meaningless on stagenet: the validator
+operator keys in each node's `test` keyring under the chain home (`chain-deploy.sh`
+creates and funds them; a stagenet node's keyring is not assumed to hold them, so
+every test that signs fails there), the genesis and epoch settings the deploy script
+gives a run chain (zero supply, the E2E epoch length), and the assertions that the
+chain listens on loopback (`chain-global/cohost_test.go`, `open-network-phases`,
+`wireguard-firewall`), which describe the fleet layout, not the netns.
 
 ## Evidence and the report
 

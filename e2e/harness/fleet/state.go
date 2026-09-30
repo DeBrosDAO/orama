@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/DeBrosOfficial/network/e2e/harness/config"
 )
 
 // Node roles, matching the roles the orama CLI installs.
@@ -35,6 +37,9 @@ type Node struct {
 // State is everything a test needs to know about the run. It is written once by
 // the provisioner and re-written when stages add or remove nodes.
 type State struct {
+	// Target is config.TargetFleet (empty: a fleet the run provisioned) or
+	// config.TargetStagenet (the existing stagenet cluster, only tested).
+	Target string `json:"target,omitempty"`
 	// RunID is unique per run and is the value of the Hetzner label e2e-run.
 	RunID string `json:"run_id"`
 	// Env is the name of the orama environment the CLI was pointed at (orama env add).
@@ -79,6 +84,9 @@ type State struct {
 	// ArtifactDir receives logs, reports and evidence for the run.
 	ArtifactDir string `json:"artifact_dir"`
 }
+
+// IsStagenet reports whether the state targets the existing stagenet cluster.
+func (s *State) IsStagenet() bool { return s.Target == config.TargetStagenet }
 
 // Load reads a state file.
 func Load(path string) (*State, error) {

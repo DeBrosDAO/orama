@@ -62,7 +62,7 @@ func (c *Chain) ABCIQuery(t testing.TB, n fleet.Node, path string, req PB) ABCIA
 	if !grpcPath.MatchString(path) && !storePath.MatchString(path) {
 		t.Fatalf("abci_query path %q is neither an orama Query method nor a module store read", path)
 	}
-	url := fmt.Sprintf(`%s/abci_query?path="%s"&data=0x%s`, RPCHTTP, path, hex.EncodeToString(req))
+	url := fmt.Sprintf(`%s/abci_query?path="%s"&data=0x%s`, c.RPCHTTP(), path, hex.EncodeToString(req))
 	out := c.Run(t, n, QueryBudget, "curl -sS --max-time 20 "+fleet.ShellQuote(url))
 	if out.Exit != 0 {
 		t.Fatalf("%s: abci_query %s exited %d: %s", n.Name, path, out.Exit, out.Stderr)

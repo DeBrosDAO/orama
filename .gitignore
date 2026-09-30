@@ -128,4 +128,6 @@ plans/
 
 # e2e fleet runner build output
 /e2e/e2e-fleet
+# stagenet-target run artifacts (e2e/README.md, "Running against stagenet")
+/e2e/artifacts/
 /e2e/cmd/e2e-fleet/e2e-fleet

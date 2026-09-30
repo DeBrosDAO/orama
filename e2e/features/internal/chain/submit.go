@@ -100,7 +100,7 @@ func (c *Chain) submit(t testing.TB, k Key, opts TxOptions, raw []byte) (Result,
 	if err != nil {
 		return Result{}, err
 	}
-	script := "D=" + fleet.ShellQuote(dir) + "\n" + lockScript(k) + feeScript(opts) + signScript(c, k, opts) + broadcastScript()
+	script := "D=" + fleet.ShellQuote(dir) + "\n" + lockScript(k) + c.feeScript(opts) + signScript(c, k, opts) + c.broadcastScript()
 	return c.runTxScript(t, k.Node, script)
 }
 
@@ -138,7 +138,7 @@ func (c *Chain) signOnly(t testing.TB, k Key, opts TxOptions, msgs []Msg) map[st
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := "D=" + fleet.ShellQuote(dir) + "\ntrap 'rm -rf -- \"$D\"' EXIT\n" + feeScript(opts) + signScript(c, k, opts)
+	script := "D=" + fleet.ShellQuote(dir) + "\ntrap 'rm -rf -- \"$D\"' EXIT\n" + c.feeScript(opts) + signScript(c, k, opts)
 	out := c.Run(t, k.Node, TxBudget, script)
 	if out.Exit != 0 {
 		t.Fatal(c.F.Redact(fmt.Sprintf("%s: signing exited %d: %s", k.Node.Name, out.Exit, out.Stderr)))
@@ -155,7 +155,7 @@ func (c *Chain) Broadcast(t testing.TB, n fleet.Node, signed []byte) Result {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := "D=" + fleet.ShellQuote(dir) + "\ntrap 'rm -rf -- \"$D\"' EXIT\n" + broadcastScript()
+	script := "D=" + fleet.ShellQuote(dir) + "\ntrap 'rm -rf -- \"$D\"' EXIT\n" + c.broadcastScript()
 	r, err := c.runTxScript(t, n, script)
 	if err != nil {
 		t.Fatal(c.F.Redact(err.Error()))
@@ -169,8 +169,10 @@ func (c *Chain) checkedTx(t testing.TB, opts TxOptions, msgs []Msg) []byte {
 	if opts.Mode == FeeAbsolute && !digits.MatchString(opts.FeeAmount) {
 		t.Fatalf("FeeAmount %q must be a non-negative integer of norama", opts.FeeAmount)
 	}
-	if opts.ChainID != "" && !strings.Contains(opts.ChainID, DevnetMarker) {
-		t.Fatalf("refusing to sign for chain %q: only devnet chain ids", opts.ChainID)
+	if opts.ChainID != "" {
+		if err := checkChainID(c.F.State, opts.ChainID); err != nil {
+			t.Fatalf("refusing to sign for chain %q: %v", opts.ChainID, err)
+		}
 	}
 	raw, err := unsignedTx(opts, msgs)
 	if err != nil {

@@ -70,7 +70,7 @@ func (c *Chain) PrepareLoad(t testing.TB, k Key, perKey int) string {
 	t.Cleanup(func() { c.cleanupDir(t, k.Node, dir) })
 	var script strings.Builder
 	script.WriteString("D=" + fleet.ShellQuote(dir) + "\nset -e\n")
-	script.WriteString(feeScript(TxOptions{Gas: LoadGas}))
+	script.WriteString(c.feeScript(TxOptions{Gas: LoadGas}))
 	for i := 0; i < perKey; i++ {
 		opts := TxOptions{Offline: true, AccountNumber: acc.Number, Sequence: acc.Sequence + uint64(i)}
 		sign := strings.Replace(signScript(c, k, opts), `"$D"'/s.json'`, fmt.Sprintf(`"$D"'/s%02d.json'`, i), 1)
@@ -88,11 +88,11 @@ func (c *Chain) PrepareLoad(t testing.TB, k Key, perKey int) string {
 // broadcastLoadScript sends every prepared transaction, in sequence order,
 // straight to CometBFT's broadcast_tx_sync (so each is in the mempool before
 // the next arrives), and prints one CheckTx code per transaction.
-func broadcastLoadScript(dir string) string {
+func (c *Chain) broadcastLoadScript(dir string) string {
 	return "D=" + fleet.ShellQuote(dir) + `
 for f in "$D"/tx*.b64; do
   printf '{"jsonrpc":"2.0","id":1,"method":"broadcast_tx_sync","params":{"tx":"%s"}}' "$(tr -d '\n' < "$f")" > "$D/req.json"
-  curl -sS --max-time 20 -H 'Content-Type: application/json' --data-binary @"$D/req.json" ` + RPCHTTP + ` |
+  curl -sS --max-time 20 -H 'Content-Type: application/json' --data-binary @"$D/req.json" ` + c.RPCHTTP() + ` |
     python3 -c 'import json,sys;d=json.load(sys.stdin);r=d.get("result") or {};print("code", r.get("code", "rpc-error:"+json.dumps(d.get("error"))))'
 done
 `
@@ -113,7 +113,7 @@ func (c *Chain) FireLoad(t testing.TB, dirs map[Key]string) map[string][]string 
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), TxBudget)
 			defer cancel()
-			out, err := c.F.SSHFor(t, k.Node).Run(ctx, broadcastLoadScript(dir))
+			out, err := c.F.SSHFor(t, k.Node).Run(ctx, c.broadcastLoadScript(dir))
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil || out.Exit != 0 {

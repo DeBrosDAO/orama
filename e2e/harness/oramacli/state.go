@@ -22,7 +22,7 @@ const (
 // ForState returns the runner for the run's CLI under test, signing as the
 // run's operator wallet and paced against the run's gateway host.
 func ForState(st *fleet.State, rec *evidence.Recorder) *Runner {
-	return &Runner{Bin: st.OramaBin, Home: st.Home, AgentSock: st.RWSock, Recorder: rec,
+	return &Runner{Bin: st.OramaBin, Home: st.Home, AgentSock: st.RWSock, Target: st.Target, Recorder: rec,
 		GatewayHost: gatewayHost(st.GatewayURL), Wallet: st.OperatorAddress}
 }
 
@@ -43,7 +43,7 @@ func ForPreviousRelease(t testing.TB, st *fleet.State, rec *evidence.Recorder) *
 	if st.PreviousOramaBin == "" {
 		t.Fatal("the run has no previous release CLI (state.previous_orama_bin is empty)")
 	}
-	return &Runner{Bin: st.PreviousOramaBin, Home: st.Home, AgentSock: st.RWSock, Recorder: rec,
+	return &Runner{Bin: st.PreviousOramaBin, Home: st.Home, AgentSock: st.RWSock, Target: st.Target, Recorder: rec,
 		GatewayHost: gatewayHost(st.GatewayURL), Wallet: st.OperatorAddress}
 }
 

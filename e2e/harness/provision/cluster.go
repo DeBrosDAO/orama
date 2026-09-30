@@ -36,6 +36,10 @@ var evalNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,11}$`)
 // everything it made is removed. In a feature process (E2E_BROKER_SOCK set)
 // the runner's broker installs it.
 func AddEvalCluster(ctx context.Context, st *fleet.State, name string) (EvalCluster, error) {
+	if err := refuseStagenet("AddEvalCluster", st); err != nil {
+		return EvalCluster{}, err
+	}
+
 	b, err := runBroker()
 	if err != nil {
 		return EvalCluster{}, err
@@ -50,6 +54,10 @@ func AddEvalCluster(ctx context.Context, st *fleet.State, name string) (EvalClus
 // its server, its environment and its CA file. Parts already gone are not an
 // error.
 func RemoveEvalCluster(ctx context.Context, st *fleet.State, name string) error {
+	if err := refuseStagenet("RemoveEvalCluster", st); err != nil {
+		return err
+	}
+
 	b, err := runBroker()
 	if err != nil {
 		return err

@@ -19,6 +19,10 @@ import (
 // second call finds nothing and succeeds. Each part is attempted even when
 // another fails; the errors are joined.
 func Down(ctx context.Context, st *fleet.State, log Logger) error {
+	if err := refuseStagenet("Down", st); err != nil {
+		return err
+	}
+
 	d, err := depsFromEnv()
 	if err != nil {
 		return err
