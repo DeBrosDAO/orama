@@ -31,6 +31,10 @@ here="$(cd "$(dirname "$0")" && pwd)"
 manifest="$here/manifest.json"
 work="${WORK_DIR:-$(mktemp -d)}"
 trap '[ -n "${WORK_DIR:-}" ] || rm -rf "$work"' EXIT
+# The physical path: cargo compiles from it (on macOS mktemp's /var is a symlink to /private/var),
+# so --remap-path-prefix must name it, or the work directory leaks into every contract that embeds
+# a source location and its hash changes with the directory.
+work="$(cd "$work" && pwd -P)"
 
 field() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {"d": d}))' "$manifest" "$1"; }
 
