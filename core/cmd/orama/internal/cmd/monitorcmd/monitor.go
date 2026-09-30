@@ -38,6 +38,10 @@ age of the data. Live view keys: tab/shift+tab or 1-9 switch tabs, ↑/↓ (j/k)
 select or scroll, enter opens a node's full report on the Nodes tab, esc goes
 back, c/w/i/a filter the Alerts tab by severity, r refreshes, ? shows help,
 q quits.`,
+	// A positional argument can only be a view name that does not exist; it
+	// was ignored and the live view opened anyway, so a typo looked like
+	// success (and without a terminal, failed on the TTY).
+	Args: cobra.NoArgs,
 	RunE: runLive,
 }
 
