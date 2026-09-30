@@ -119,6 +119,9 @@ func TestBearer_rejectedRefreshTokenEndsTheSession(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "session has ended") {
 				t.Fatalf("err = %v, want the session to have ended", err)
 			}
+			if !errors.Is(err, ErrSessionEnded) {
+				t.Errorf("err = %v, want ErrSessionEnded for the caller to classify", err)
+			}
 			if creds.RefreshToken != "" {
 				t.Errorf("the refused refresh token was kept: %q", creds.RefreshToken)
 			}

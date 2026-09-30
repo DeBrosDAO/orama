@@ -16,8 +16,18 @@ var Cmd = &cobra.Command{
 	Use:   "inspect",
 	Short: "Inspect cluster health via SSH",
 	Long: `SSH into cluster nodes and run health checks.
-Supports AI-powered failure analysis and result export.`,
+Supports AI-powered failure analysis and result export.
+
+The report is written to stdout and progress to stderr, so --format json is one
+JSON document. A bad flag value (an unknown --subsystem or --format, a timeout
+that is not positive) is refused as usage before any node is contacted.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Before resolving nodes, which asks the gateway: a mistake on the
+		// command line is refused without a round trip.
+		if err := inspectOpts.Validate(); err != nil {
+			return err
+		}
 		if inspectOpts.ConfigPath == "" {
 			nodes, err := noderesolver.ResolveNodes(inspectOpts.Env)
 			if err != nil {

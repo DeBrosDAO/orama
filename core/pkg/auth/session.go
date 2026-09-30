@@ -14,6 +14,12 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
 
+// ErrSessionEnded is what a renewal returns when the gateway refused the
+// refresh token and there is no key to fall back to: the stored session is
+// gone and only a new sign-in brings it back. Callers that classify a failure
+// (the CLI's exit code) match it with errors.Is rather than reading the text.
+var ErrSessionEnded = errors.New("this session has ended")
+
 // A session, rather than a key on every request.
 //
 // The CLI stored an API key at login and sent it as the bearer credential of
@@ -122,7 +128,7 @@ func renewSession(gatewayURL string, creds *Credentials) (string, error) {
 		// one more failed round trip before falling through to the key.
 		creds.RefreshToken = ""
 		if strings.TrimSpace(creds.APIKey) == "" {
-			return "", fmt.Errorf("this session has ended (%w); run 'orama auth login'", err)
+			return "", fmt.Errorf("%w (%w); run 'orama auth login'", ErrSessionEnded, err)
 		}
 	}
 

@@ -68,7 +68,7 @@ func AuthToken(override string) (string, error) {
 	if creds == nil {
 		return "", clierr.Auth("no credentials found for %s. Run 'orama auth login' to authenticate", gatewayURL)
 	}
-	return auth.Bearer(gatewayURL, store, creds)
+	return renewedBearer(gatewayURL, store, creds)
 }
 
 // AuthTokenFor is AuthToken for a named namespace: the credential a command
@@ -110,7 +110,25 @@ func AuthTokenFor(override, namespace string) (string, error) {
 	if creds == nil {
 		return "", clierr.Auth("not signed in to namespace %q at %s: run 'orama auth login --namespace %s'", namespace, gatewayURL, namespace)
 	}
-	return auth.Bearer(gatewayURL, store, creds)
+	return renewedBearer(gatewayURL, store, creds)
+}
+
+// renewedBearer is auth.Bearer with the failure classified for the exit code:
+// a session the gateway ended, or a key it refused, is an authentication
+// failure like a missing login. A renewal that failed without the gateway
+// judging the session (unreachable, 5xx, 429) keeps the code it had, because
+// the session is intact and the command may be retried.
+func renewedBearer(gatewayURL string, store *auth.EnhancedCredentialStore, creds *auth.Credentials) (string, error) {
+	bearer, err := auth.Bearer(gatewayURL, store, creds)
+	if err == nil {
+		return bearer, nil
+	}
+	var refusal *auth.GatewayError
+	if errors.Is(err, auth.ErrSessionEnded) ||
+		(errors.As(err, &refusal) && (refusal.Status == http.StatusUnauthorized || refusal.Status == http.StatusForbidden)) {
+		return "", clierr.Wrap(clierr.CodeAuth, err)
+	}
+	return "", err
 }
 
 // envTokenError is the exit code for an ORAMA_TOKEN that could not become a

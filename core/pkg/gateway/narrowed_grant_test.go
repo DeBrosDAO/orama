@@ -124,10 +124,9 @@ func TestForwardedDataPlane_anAPIKeyIsNotLookedUp(t *testing.T) {
 	g, registry := namespaceGatewayForHops(t, "runtime")
 	registry.resource = "cache:key=sessions/*"
 
-	narrowed, err := g.callerHoldsNarrowedGrant(hop(t, g, http.MethodPost, "/v1/cache/put", hopNamespace, "ak_exchanged_key"),
-		g.policyFor(hop(t, g, http.MethodPost, "/v1/cache/put", hopNamespace, "ak_exchanged_key")))
-	if err != nil || narrowed {
-		t.Errorf("a key was treated as holding a wallet's narrowed grant (%v, %v)", narrowed, err)
+	rec, reached := serveHop(g, keyHop(t, g, http.MethodPost, "/v1/cache/put", "cache"))
+	if !reached {
+		t.Errorf("a cache key was refused the cache: %d", rec.Code)
 	}
 	if registry.queries != 0 {
 		t.Errorf("a key made %d registry queries", registry.queries)

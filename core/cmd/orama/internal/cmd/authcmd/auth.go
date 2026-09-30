@@ -37,6 +37,7 @@ offers the saved ones to switch to. With --namespace, or without a terminal
 --device-key enrolls that Ed25519 key with this sign-in. The file is a private
 JWK and stays on this machine; the gateway receives the public half and the
 device's signature over the same message the wallet signs.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cli.AuthLogin(loginNamespace, loginDeviceKey)
 	},
@@ -66,6 +67,7 @@ var logoutAll bool
 var logoutCmd = &cobra.Command{
 	Use:   "logout",
 	Short: "End this session on the gateway and clear it here",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cli.AuthLogout(logoutAll)
 	},
@@ -74,6 +76,7 @@ var logoutCmd = &cobra.Command{
 var whoamiCmd = &cobra.Command{
 	Use:   "whoami",
 	Short: "Ask the gateway who this credential is and what it may do",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cli.AuthWhoami()
 	},
@@ -82,6 +85,7 @@ var whoamiCmd = &cobra.Command{
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show what is stored on this machine, without asking the gateway",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cli.AuthStatus()
 	},
@@ -90,6 +94,7 @@ var statusCmd = &cobra.Command{
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all stored credentials",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cli.AuthList()
 	},
@@ -98,6 +103,7 @@ var listCmd = &cobra.Command{
 var switchCmd = &cobra.Command{
 	Use:   "switch",
 	Short: "Switch between stored credentials",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cli.AuthSwitch()
 	},
@@ -106,6 +112,7 @@ var switchCmd = &cobra.Command{
 var sessionsCmd = &cobra.Command{
 	Use:   "sessions",
 	Short: "Which machines are signed in as this wallet",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cli.AuthSessionsList()
 	},

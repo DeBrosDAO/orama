@@ -65,7 +65,8 @@ only when there is no session to renew.
 The CLI renews the access token a minute before it expires. Only the gateway
 refusing the refresh token — `401` (unknown, expired, revoked or replayed) or
 `403` (a device-bound session refused for its device's sake) — ends the session
-and asks for `orama auth login` again. A gateway that cannot be reached, a `5xx`
+and asks for `orama auth login` again, and the command exits `3` (auth), the same
+as a missing login. A gateway that cannot be reached, a `5xx`
 (`/v1/auth/refresh` answers `503` while the rqlite leader moves during a rolling
 upgrade), a `429` or a `400` leaves the stored session untouched and fails only
 that attempt, so the next one — or `orama monitor`'s next reconnect — renews it.
@@ -482,11 +483,18 @@ one would let `avatars/../keys/x` match `avatars/*`. A cache key is not a path
 and is not normalised — `sessions/../tokens/x` is a key called `../tokens/x` in
 the `sessions` map, and the map is what the grant names.
 
-On a route that does not otherwise require a grant — storage and the cache — the
-gateway reads the caller's grant only to find out whether it is narrowed, and
-remembers the answer for ten seconds per namespace and wallet: a lookup is
-registry round trips, and these are the hot paths. A grant narrowed or revoked
-therefore reaches the data plane within ten seconds. `enforced` in
+On a data-plane route a wallet's grant is always read, so that its role decides:
+a `reader` reaches none of storage, pubsub, cache, push, webrtc or proxy, and
+`runtime` and above reach all of them, narrowed or not. The gateway remembers
+the answer for ten seconds per namespace and wallet — a lookup is registry round
+trips, and these are the hot paths, so a wallet costs those round trips on the
+first request of each ten seconds and a map lookup on every other. A grant
+narrowed, revoked or moved to another role therefore reaches the data plane
+within ten seconds. A read that fails is not remembered and answers `503`: a
+role that cannot be read is not a role, and a wallet is not handed the data
+plane in its place. A wallet that holds no grant in the namespace holds the data
+plane, as every signed-in user does; an API key stays on its own scopes and is
+never looked up here. `enforced` in
 `orama members list` and in the answer to adding a member says whether the
 selector's domain is one of the four above.
 
@@ -572,7 +580,7 @@ every request that run makes.
 |--------|----------------------|
 | Revoking a key | at once, everywhere — the revocation list is replicated and consulted before any cache |
 | Revoking a token | at once, by its `jti` |
-| Narrowing a **wallet's** grant | on the next request on routes that resolve the grant; within 10 seconds on storage and cache, where it is read through a short cache |
+| Narrowing a **wallet's** grant, or changing its role | on the next request on routes that resolve the grant; within 10 seconds on the data plane (storage, pubsub, cache, push, webrtc, proxy), where it is read through a short cache |
 | Narrowing a **key** — editing its scopes, or revoking a grant it holds | within one minute, on every gateway that had seen it |
 | Revoking the token an open WebSocket was opened with | the socket is closed within 10 seconds (`4403`) |
 | Ending a session (`DELETE /v1/auth/sessions/{id}`) | its access tokens are refused, and its sockets closed, within 10 seconds |
@@ -812,7 +820,9 @@ while that subject was still the raw key.
 `/v1/operator/*` — minting a cluster invite, listing nodes, claiming one —
 requires the `admin` grant **and** a wallet on the cluster's operator list. An
 invite is handed every secret the cluster holds, including the one the JWT
-signing key is derived from.
+signing key is derived from. Listing nodes (`GET /v1/operator/nodes`, what
+`orama ssh` and node resolution call) is a read and asks for `operator:read`;
+the routes that change a node or the cluster ask for `operator:write`.
 
 A cluster with an empty operator list refuses every operator endpoint. An
 unreadable list refuses too: not knowing whether someone is an operator is not

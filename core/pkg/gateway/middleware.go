@@ -950,12 +950,9 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// The header is here only because internalAuthMiddleware verified its
 		// MAC. It used to be believed on the strength of the source IP, which
 		// made this the shortest unauthenticated path to any namespace's data.
-		needsGrant, grantErr := g.forwardedCallerNeedsGrant(r, policy)
-		if grantErr != nil {
-			g.refuseUnreadableGrant(w, grantErr)
-			return
-		}
-		if r.Header.Get(HeaderInternalAuthValidated) == "true" && !needsGrant {
+		needsGrant := g.forwardedCallerNeedsGrant(r, policy)
+		forwarded := r.Header.Get(HeaderInternalAuthValidated) == "true"
+		if forwarded && !needsGrant {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -993,8 +990,14 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// holds a grant narrowed to a resource in the route's domain. Without
 		// the first, an owner holds only the data plane and namespace list,
 		// deployments and the database answer 403. Without the second, a grant
-		// narrowed to sessions/* is the whole cache.
-		if !policy.Ownership {
+		// narrowed to sessions/* is the whole cache, and a reader reaches it.
+		//
+		// A forwarded wallet on an owned data-plane route (publish, push) takes
+		// the same path: the ownership gate below is ~300ms of registry round
+		// trips a request, and a hop has never paid it there. Its grant is read
+		// through the cache and its role decides, which is what the gate would
+		// have concluded for a wallet that holds one.
+		if !policy.Ownership || (forwarded && grantIsDataPlane(policy)) {
 			if needsGrant {
 				grant, err := g.resolveRequestGrant(r, policy)
 				if err != nil {

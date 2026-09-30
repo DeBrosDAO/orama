@@ -144,18 +144,25 @@ func TestAuthorizationMiddleware_forwardedOwnerReachesAControlRoute(t *testing.T
 	}
 }
 
-// The data plane a wallet reaches without a grant stays free of registry
-// round trips: that is the path every publish takes.
-func TestAuthorizationMiddleware_forwardedDataPlaneSkipsTheGrantLookup(t *testing.T) {
+// The data plane reads the wallet's role through the grant cache: the first
+// publish pays the registry round trips and the rest of the lifetime does not,
+// which is what keeps the path every publish takes cheap.
+func TestAuthorizationMiddleware_forwardedDataPlaneReadsTheGrantOncePerLifetime(t *testing.T) {
 	g, registry := namespaceGatewayForHops(t, "owner")
 
 	rec, reached := serveHop(g, hop(t, g, http.MethodPost, "/v1/pubsub/publish", hopNamespace, hopWallet))
-
 	if !reached {
 		t.Fatalf("a forwarded publish was refused %d: %s", rec.Code, rec.Body.String())
 	}
+	if registry.queries == 0 {
+		t.Fatal("the first publish did not read the wallet's grant")
+	}
+	registry.queries = 0
+	if _, reached := serveHop(g, hop(t, g, http.MethodPost, "/v1/pubsub/publish", hopNamespace, hopWallet)); !reached {
+		t.Fatal("the second publish was refused")
+	}
 	if registry.queries != 0 {
-		t.Errorf("a forwarded publish made %d registry queries", registry.queries)
+		t.Errorf("the second publish made %d registry queries", registry.queries)
 	}
 }
 
