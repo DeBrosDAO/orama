@@ -111,6 +111,7 @@ func ClassifyBatchError(err error) string {
 		return BatchCodeDeadlineExceeded
 	case strings.Contains(msg, "connection refused"),
 		strings.Contains(msg, "no leader"),
+		strings.Contains(msg, "not leader"),
 		strings.Contains(msg, "leader not found"),
 		strings.Contains(msg, "not configured"),
 		strings.Contains(msg, "connection reset"),

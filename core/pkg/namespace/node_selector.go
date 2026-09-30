@@ -2,6 +2,7 @@ package namespace
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -61,6 +62,11 @@ func (cns *ClusterNodeSelector) ListEligibleNodes(ctx context.Context) ([]NodeCa
 	eligibleNodes := make([]NodeCapacity, 0)
 	for _, node := range activeNodes {
 		capacity, err := cns.getNodeCapacity(internalCtx, node.NodeID, node.IPAddress, node.InternalIP)
+		if err != nil && rqlite.ClassifyBatchError(err) == rqlite.BatchCodeUnavailable {
+			// The registry, not this node, is what failed: skipping the node
+			// would report a healthy fleet as too small.
+			return nil, fmt.Errorf("failed to read capacity of node %s: %w", node.NodeID, err)
+		}
 		if err != nil {
 			cns.logger.Warn("Failed to get node capacity, skipping",
 				zap.String("node_id", node.NodeID),

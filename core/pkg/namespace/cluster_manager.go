@@ -378,9 +378,9 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	// Log event
 	cm.logEvent(ctx, cluster.ID, EventProvisioningStarted, "", "Cluster provisioning started", nil)
 
-	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, bp.SelectCount)
+	nodes, err := cm.selectNodesWaitingForLeader(ctx, bp.SelectCount)
 	if err != nil {
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
 		return nil, fmt.Errorf("failed to select nodes: %w", err)
 	}
 
@@ -393,13 +393,13 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	// Allocate ports on each node
 	portBlocks := make([]*PortBlock, len(nodes))
 	for i, node := range nodes {
-		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID, bp)
+		block, err := cm.allocatePortsWaitingForLeader(ctx, node.NodeID, cluster.ID, bp)
 		if err != nil {
 			// Rollback previous allocations
 			for j := 0; j < i; j++ {
 				cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, nodes[j].NodeID)
 			}
-			cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+			cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
 			return nil, fmt.Errorf("failed to allocate ports on node %s: %w", node.NodeID, err)
 		}
 		portBlocks[i] = block
@@ -421,7 +421,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 		cm.logger.Error("Failed to create DNS records for a new namespace",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.markProvisioningFailed(cluster.ID, cluster.NamespaceName, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return nil, fmt.Errorf("namespace cluster has no DNS records, so nothing can reach it: %w", err)
 	}
@@ -433,7 +433,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 		cm.logger.Error("Namespace cluster failed health verification after provisioning",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 		cm.withdrawFailedCluster(ctx, cluster)
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.markProvisioningFailed(cluster.ID, cluster.NamespaceName, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return nil, fmt.Errorf("namespace cluster did not come up healthy: %w", err)
 	}
@@ -1043,7 +1043,7 @@ func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *Nam
 	cm.withdrawFailedCluster(ctx, cluster)
 
 	// Update cluster status
-	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, "Provisioning failed and rolled back")
+	cm.markProvisioningFailed(cluster.ID, cluster.NamespaceName, "Provisioning failed and rolled back")
 }
 
 // deprovisionActiveNodesQuery selects the cluster members a teardown should
@@ -1487,6 +1487,29 @@ func (cm *ClusterManager) logEvalProvision(namespaceName string, bp Blueprint) {
 	)
 }
 
+// selectNodesWaitingForLeader is SelectNodesForCluster that waits out a
+// registry leader election instead of failing the provisioning on it.
+func (cm *ClusterManager) selectNodesWaitingForLeader(ctx context.Context, count int) ([]NodeCapacity, error) {
+	var nodes []NodeCapacity
+	err := retryWhileNoLeader(ctx, cm.logger, "select nodes", func(ctx context.Context) (err error) {
+		nodes, err = cm.nodeSelector.SelectNodesForCluster(ctx, count)
+		return err
+	})
+	return nodes, err
+}
+
+// allocatePortsWaitingForLeader is AllocatePortBlock that waits out a registry
+// leader election. AllocatePortBlock first returns an existing allocation, so
+// a retry after an ambiguous failure cannot double-allocate.
+func (cm *ClusterManager) allocatePortsWaitingForLeader(ctx context.Context, nodeID, clusterID string, bp Blueprint) (*PortBlock, error) {
+	var block *PortBlock
+	err := retryWhileNoLeader(ctx, cm.logger, "allocate ports", func(ctx context.Context) (err error) {
+		block, err = cm.portAllocator.AllocatePortBlock(ctx, nodeID, clusterID, bp)
+		return err
+	})
+	return block, err
+}
+
 // provisionClusterAsync performs the actual cluster provisioning in the background
 func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Blueprint, namespaceID int, namespaceName, provisionedBy string) {
 	defer func() {
@@ -1497,8 +1520,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 				zap.String("namespace", namespaceName),
 				zap.Any("panic", r),
 			)
-			bgCtx := context.Background()
-			cm.updateClusterStatus(bgCtx, cluster.ID, ClusterStatusFailed,
+			cm.markProvisioningFailed(cluster.ID, namespaceName,
 				fmt.Sprintf("provisioning panicked: %v", r))
 		}
 		cm.provisioningMu.Lock()
@@ -1508,7 +1530,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 
 	// Overall timeout — prevents the goroutine from hanging indefinitely
 	// if a remote spawn request or RQLite write blocks.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), provisioningTimeout)
 	defer cancel()
 
 	cm.logger.Info("Starting async cluster provisioning",
@@ -1518,10 +1540,11 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 		zap.String("provisioned_by", provisionedBy),
 	)
 
-	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, bp.SelectCount)
+	nodes, err := cm.selectNodesWaitingForLeader(ctx, bp.SelectCount)
 	if err != nil {
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
-		cm.logger.Error("Failed to select nodes for cluster", zap.Error(err))
+		cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
+		cm.logger.Error("Failed to select nodes for cluster",
+			zap.String("namespace", namespaceName), zap.String("cluster_id", cluster.ID), zap.Error(err))
 		return
 	}
 
@@ -1534,14 +1557,15 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 	// Allocate ports on each node
 	portBlocks := make([]*PortBlock, len(nodes))
 	for i, node := range nodes {
-		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID, bp)
+		block, err := cm.allocatePortsWaitingForLeader(ctx, node.NodeID, cluster.ID, bp)
 		if err != nil {
 			// Rollback previous allocations
 			for j := 0; j < i; j++ {
 				cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, nodes[j].NodeID)
 			}
-			cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
-			cm.logger.Error("Failed to allocate ports", zap.Error(err))
+			cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
+			cm.logger.Error("Failed to allocate ports",
+				zap.String("namespace", namespaceName), zap.String("cluster_id", cluster.ID), zap.Error(err))
 			return
 		}
 		portBlocks[i] = block
@@ -1562,7 +1586,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 		cm.logger.Error("Failed to create DNS records for a new namespace",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric)
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.markProvisioningFailed(cluster.ID, cluster.NamespaceName, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return
 	}
@@ -1574,7 +1598,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 		cm.logger.Error("Namespace cluster failed health verification after provisioning",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 		cm.withdrawFailedCluster(ctx, cluster)
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.markProvisioningFailed(cluster.ID, cluster.NamespaceName, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return
 	}
@@ -1583,7 +1607,14 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 	now := time.Now()
 	cluster.Status = ClusterStatusReady
 	cluster.ReadyAt = &now
-	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
+	if err := retryWhileNoLeader(ctx, cm.logger, "mark cluster ready", func(ctx context.Context) error {
+		return cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
+	}); err != nil {
+		cm.logger.Error("Cluster came up but its ready status could not be recorded",
+			zap.String("namespace", namespaceName), zap.String("cluster_id", cluster.ID), zap.Error(err))
+		cm.markProvisioningFailed(cluster.ID, namespaceName, fmt.Sprintf("cluster started but ready status was not recorded: %v", err))
+		return
+	}
 	cm.logEvent(ctx, cluster.ID, EventClusterReady, "", "Cluster is ready", nil)
 
 	// Save cluster-state.json on all nodes (local + remote) for disk-based restore

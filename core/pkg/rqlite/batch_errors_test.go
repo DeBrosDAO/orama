@@ -28,6 +28,7 @@ func TestClassifyBatchError(t *testing.T) {
 		{"row cap", errors.New("op 2 returned too many rows"), BatchCodePayloadTooLarge},
 		{"timeout wording", errors.New("Post \"http://leader:5001\": context deadline exceeded"), BatchCodeDeadlineExceeded},
 		{"leader gone", errors.New("rqlite.Batch: no leader"), BatchCodeUnavailable},
+		{"mid-election read", errors.New("failed to query active nodes: not leader"), BatchCodeUnavailable},
 		{"connection refused", errors.New("dial tcp 10.0.0.2:5001: connect: connection refused"), BatchCodeUnavailable},
 		{"no native conn is a configuration fault", fmt.Errorf("rqlite.Batch: %w", ErrNoNativeConnection), BatchCodeInternal},
 		{"malformed input", errors.New("invalid json: unexpected end of JSON input"), BatchCodeInvalidArgument},

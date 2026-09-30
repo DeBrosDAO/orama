@@ -351,6 +351,17 @@ allocation the address is built from — after that there is nothing left to nam
 in the removal, and the departed node stays a configured voter for ever. That
 was the gap: pruning released the ports and the membership row and stopped.
 
+**Provisioning waits out a registry election and never strands a cluster.**
+Provisioning runs as one 5-minute goroutine on the node that took the create
+request. Its registry reads and writes (node selection, port allocation, the
+ready/failed status) wait, with backoff, while the registry has no raft leader,
+and fail at once on any other error. A failure is written on a fresh 2-minute
+context, and if even that write cannot land it is logged at error level with the
+namespace and cluster id. Every node's sweep also fails a cluster still in
+`provisioning` after 7 minutes (the timeout plus a margin) and not in flight on
+that node, using an `UPDATE ... WHERE status = 'provisioning'` so exactly one
+node wins, then releases its port allocations and DNS records.
+
 A remote stop that fails is recorded in `namespace_pending_cleanup` and retried
 every sweep, rather than logged. The unit keeps running and keeps holding a port
 the allocator has already released, and the next namespace given that port finds

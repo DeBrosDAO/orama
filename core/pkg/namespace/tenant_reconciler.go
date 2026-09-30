@@ -85,6 +85,9 @@ func (cm *ClusterManager) reconcileTenantsOnce(ctx context.Context) {
 	if err := cm.replayPendingCleanups(ctx); err != nil {
 		cm.logger.Warn("Tenant reconcile: could not replay pending cleanups this sweep", zap.Error(err))
 	}
+	if err := cm.failStaleProvisioning(ctx); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not fail stale provisioning clusters this sweep", zap.Error(err))
+	}
 	if err := cm.reconcileClusterMembership(ctx); err != nil {
 		cm.logger.Warn("Tenant reconcile: could not reconcile cluster membership this sweep", zap.Error(err))
 	}
