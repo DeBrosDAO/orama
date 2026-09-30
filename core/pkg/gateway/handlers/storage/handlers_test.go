@@ -623,6 +623,7 @@ func TestStatusHandler_MissingCID(t *testing.T) {
 	h := newTestHandlers(mock)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/status/", nil)
+	req = withNamespace(req, "test-ns")
 	rec := httptest.NewRecorder()
 
 	h.StatusHandler(rec, req)
@@ -649,6 +650,7 @@ func TestStatusHandler_Success(t *testing.T) {
 	h := newTestHandlers(mock)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/status/QmTestCID", nil)
+	req = withNamespace(req, "test-ns")
 	rec := httptest.NewRecorder()
 
 	h.StatusHandler(rec, req)

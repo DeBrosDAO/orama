@@ -207,6 +207,12 @@ func (h *Handlers) pinRequestedWithin(ctx context.Context, cid, namespace string
 	return len(rows) > 0 && countFromRow(rows[0]["count"]) > 0, nil
 }
 
+// writePinNotFound is the one answer for a CID with no pin status to show,
+// whether nobody pinned it or the caller's namespace does not reference it.
+func writePinNotFound(w http.ResponseWriter, cid string) {
+	httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("pin not found: %s", cid))
+}
+
 // StatusHandler handles GET /v1/storage/status/:cid.
 // It retrieves the pin status of a CID from the IPFS cluster,
 // including replication information and peer distribution.
@@ -228,6 +234,34 @@ func (h *Handlers) StatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	namespace := h.getNamespaceFromContext(ctx)
+	if namespace == "" {
+		httputil.WriteError(w, http.StatusUnauthorized, "namespace required")
+		return
+	}
+	// The pin status carries the object's name and the peers holding it, and
+	// the cluster keeps one pin per CID for every namespace. A namespace is told
+	// about a CID only if it references it; for any other CID the answer is
+	// exactly the one for a CID nobody pinned, so the endpoint is no oracle for
+	// what other tenants store.
+	hasAccess, err := h.checkCIDOwnership(ctx, path, namespace)
+	if err != nil {
+		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
+			zap.Error(err), zap.String("cid", path), zap.String("namespace", namespace))
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to verify access")
+		return
+	}
+	if !hasAccess {
+		h.logger.ComponentDebug(logging.ComponentGeneral, "status asked for a CID the namespace does not reference",
+			zap.String("cid", path), zap.String("namespace", namespace))
+		writePinNotFound(w, path)
+		return
+	}
+	if !h.authorizeCID(w, r, path, namespace, gwauth.ActionRead) {
+		return
+	}
+
 	status, err := h.ipfsClient.PinStatus(ctx, path)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to get pin status",
@@ -235,7 +269,7 @@ func (h *Handlers) StatusHandler(w http.ResponseWriter, r *http.Request) {
 
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "404") || strings.Contains(errStr, "invalid") {
-			httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("pin not found: %s", path))
+			writePinNotFound(w, path)
 		} else {
 			httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get status: %v", err))
 		}

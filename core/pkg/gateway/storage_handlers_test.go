@@ -423,6 +423,7 @@ func TestStorageStatusHandler_Success(t *testing.T) {
 	gw := newTestGatewayWithIPFS(t, mockClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/status/"+expectedCID, nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns"))
 	w := httptest.NewRecorder()
 
 	gw.storageHandlers.StatusHandler(w, req)
