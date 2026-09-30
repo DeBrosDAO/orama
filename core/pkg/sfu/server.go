@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/sfu/roomid"
 	"github.com/DeBrosOfficial/network/pkg/turn"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -164,6 +165,12 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	var joinData JoinData
 	if err := json.Unmarshal(msg.Data, &joinData); err != nil || joinData.RoomID == "" || joinData.UserID == "" {
 		conn.WriteMessage(websocket.TextMessage, mustMarshal(NewErrorMessage("invalid_join", "roomId and userId required")))
+		conn.Close()
+		return
+	}
+
+	if err := roomid.Validate(joinData.RoomID); err != nil {
+		conn.WriteMessage(websocket.TextMessage, mustMarshal(NewErrorMessage("invalid_join", err.Error())))
 		conn.Close()
 		return
 	}

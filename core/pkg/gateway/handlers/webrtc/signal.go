@@ -3,19 +3,28 @@ package webrtc
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/sfu/roomid"
 	"go.uber.org/zap"
 )
 
-// roomQueryParam carries the room the socket will join, so the gateway can
-// route the upgrade before the join frame exists. The SFU rejects a join whose
-// roomId differs from it.
-const roomQueryParam = "room"
+const (
+	// roomQueryParam optionally carries the room the socket will join, so the
+	// gateway can route the upgrade without reading the join frame. The SFU
+	// rejects a join whose roomId differs from it.
+	roomQueryParam = "room"
+
+	// joinRetryAfterSeconds is the Retry-After of a rate-limited join.
+	joinRetryAfterSeconds = 10
+)
 
 // SignalHandler handles WebSocket /v1/webrtc/signal.
-// It proxies the socket to the SFU that owns the requested room, wherever in
-// the namespace that SFU runs, so every peer of a room meets in one process.
+// It sends the socket to the SFU that owns the requested room, wherever in the
+// namespace that SFU runs, so every peer of a room meets in one process. The
+// room comes from ?room= when present (the socket is then piped through as-is),
+// otherwise from the client's join frame (signal_join.go).
 func (h *WebRTCHandlers) SignalHandler(w http.ResponseWriter, r *http.Request) {
 	ns := resolveNamespaceFromRequest(r)
 	if ns == "" {
@@ -28,9 +37,20 @@ func (h *WebRTCHandlers) SignalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.joinAllowed != nil && !h.joinAllowed(r) {
+		w.Header().Set("Retry-After", strconv.Itoa(joinRetryAfterSeconds))
+		writeError(w, http.StatusTooManyRequests, "too many WebRTC joins from this identity; wait a moment and retry")
+		return
+	}
+
 	room := r.URL.Query().Get(roomQueryParam)
 	if room == "" {
-		writeError(w, http.StatusBadRequest, "the room query parameter is required: /v1/webrtc/signal?room=<roomId>")
+		// A client that does not name the room in the URL is routed by its join frame.
+		h.signalByJoinFrame(w, r, ns)
+		return
+	}
+	if err := roomid.Validate(room); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid room query parameter: "+err.Error())
 		return
 	}
 

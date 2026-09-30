@@ -3,6 +3,7 @@ package webrtc
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -33,8 +34,21 @@ type WebRTCHandlers struct {
 	sfuDirectory SFUDirectory
 	probe        sfuProber
 
+	// joinAllowed reports whether the caller of this request may open another
+	// signalling socket now (a per-identity limit owned by the gateway). nil = no limit.
+	joinAllowed func(r *http.Request) bool
+
+	// joinTimeout is how long a socket without ?room= has to send its join frame.
+	joinTimeout time.Duration
+
 	// proxyWebSocket is injected from the gateway to reuse its WebSocket proxy logic
 	proxyWebSocket func(w http.ResponseWriter, r *http.Request, targetHost string) bool
+}
+
+// SetJoinLimiter sets the per-identity limit on opening signalling sockets.
+// Safe to call before serving begins.
+func (h *WebRTCHandlers) SetJoinLimiter(allowed func(r *http.Request) bool) {
+	h.joinAllowed = allowed
 }
 
 // SetSFUDirectory sets where the namespace's SFU nodes are read from. Safe to
@@ -76,6 +90,7 @@ func NewWebRTCHandlers(
 		turnSecret:     turnSecret,
 		proxyWebSocket: proxyWS,
 		probe:          httpSFUProbe(newSFUProbeClient()),
+		joinTimeout:    joinFrameTimeout,
 	}
 }
 

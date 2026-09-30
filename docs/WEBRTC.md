@@ -130,9 +130,10 @@ const ws = new WebSocket(
   // the page makes, and history.
   `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&token=${encodeURIComponent(accessToken)}`
 );
-// `room` is required and must equal the roomId of the join frame: the gateway
-// routes the socket by it (see Room Placement). A missing `room` is a 400; a
-// join for a different room is refused by the SFU with `room_mismatch`.
+// `room` is optional but recommended. With it the gateway routes the upgrade
+// straight to the room's SFU; without it the gateway reads your first (join)
+// frame and routes by its roomId (see Room Placement). When both are present
+// they must match: a join for a different room is refused with `room_mismatch`.
 
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
@@ -211,8 +212,17 @@ every peer of a call must reach the same SFU. Clients resolve the namespace host
 round-robin, so peers of one room arrive at different nodes' gateways; each
 gateway therefore routes the socket to the room's SFU, not to its own node's.
 
-The gateway decides on `GET /v1/webrtc/signal?room=<roomId>`, before the join
-frame exists:
+The gateway learns the room one of two ways. With `?room=<roomId>` on the URL
+it decides at the upgrade and pipes the socket through untouched. Without it
+(existing clients) the gateway accepts the upgrade itself, waits up to 5 s for
+the first frame, requires it to be a text `join` frame of at most 4096 bytes
+with a `userId` and a valid `roomId`, then dials the owning SFU (naming the room
+in the URL, so the SFU's check applies), replays that frame verbatim and copies
+frames both ways until either side closes. A first frame that is late,
+oversized, not JSON, not a join, or names an invalid room gets an `error` frame
+(`invalid_join`) and a close; nothing reaches an SFU. If no SFU can take the
+room the client gets `no_sfu` (or `sfu_unreachable`) and a close. Either way the
+owner is chosen as follows:
 
 1. List the namespace's SFU nodes: the `sfu` rows of `webrtc_port_allocations`
    on nodes `dns_nodes` still counts as active (cluster registry, cached 10 s).
@@ -251,6 +261,14 @@ rolling upgrade an old gateway still proxies to its own node's SFU; a new
 gateway finds any room already live on an SFU, so calls started by old gateways
 are joined, not duplicated (an old SFU ignores `?room=` and reports no room, so
 new gateways then rely on rank alone).
+
+Room ids are 1 to 128 printable ASCII characters (no whitespace or control
+characters); the gateway and the SFU apply the same rule
+(`core/pkg/sfu/roomid`). A bad `?room=` is a 400.
+
+Joins are limited per signed-in identity (the wallet subject), 60 a minute with a
+burst of 20; over it the gateway answers 429 with `Retry-After`. One call is one
+socket, and the burst covers a reconnect after an SFU drains.
 
 `GET /v1/webrtc/rooms` still reports the health of the SFU on the gateway's own
 node only.

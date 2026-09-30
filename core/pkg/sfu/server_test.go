@@ -171,3 +171,21 @@ func TestRoomManagerHasParticipants_emptyRoomDoesNotCount(t *testing.T) {
 		t.Error("an absent room reports participants")
 	}
 }
+
+func TestSignal_joinWithInvalidRoomIdIsRefused(t *testing.T) {
+	s, err := NewServer(testConfig(), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, room := range []string{"has a space", strings.Repeat("a", 129)} {
+		conn := dialSignal(t, s, "")
+		sendJoin(t, conn, room)
+		m := readFrame(t, conn)
+		if m.Type != MessageTypeError || !strings.Contains(string(m.Data), "invalid_join") {
+			t.Fatalf("room %q: frame = %s %s, want error invalid_join", room, m.Type, m.Data)
+		}
+	}
+	if s.roomManager.RoomCount() != 0 {
+		t.Error("an invalid room id created a room")
+	}
+}

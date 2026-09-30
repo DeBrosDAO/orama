@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/gorilla/websocket"
 )
 
 // fakeSFU answers /health?room= the way core/pkg/sfu does.
@@ -22,12 +23,15 @@ type fakeSFU struct {
 	mu       sync.Mutex
 	draining bool
 	rooms    map[string]bool
+	joins    chan string // first frame of each signalling socket, with its ?room=
 }
 
 func newFakeSFU(t *testing.T, id string) *fakeSFU {
 	t.Helper()
-	f := &fakeSFU{rooms: map[string]bool{}}
-	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f := &fakeSFU{rooms: map[string]bool{}, joins: make(chan string, 16)}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws/signal", f.handleSignal)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if f.draining {
@@ -36,7 +40,8 @@ func newFakeSFU(t *testing.T, id string) *fakeSFU {
 			return
 		}
 		fmt.Fprintf(w, `{"status":"ok","rooms":%d,"hasRoom":%t}`, len(f.rooms), f.rooms[r.URL.Query().Get("room")])
-	}))
+	})
+	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	host, port, err := net.SplitHostPort(f.srv.Listener.Addr().String())
 	if err != nil {
@@ -45,6 +50,28 @@ func newFakeSFU(t *testing.T, id string) *fakeSFU {
 	p, _ := strconv.Atoi(port)
 	f.node = SFUNode{NodeID: id, Host: host, Port: p}
 	return f
+}
+
+// handleSignal records the first frame and its ?room=, answers welcome, then echoes.
+func (f *fakeSFU) handleSignal(w http.ResponseWriter, r *http.Request) {
+	c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer c.Close()
+	_, first, err := c.ReadMessage()
+	if err != nil {
+		return
+	}
+	f.joins <- r.URL.Query().Get("room") + "|" + string(first)
+	_ = c.WriteMessage(websocket.TextMessage, []byte(`{"type":"welcome"}`))
+	for {
+		typ, data, err := c.ReadMessage()
+		if err != nil {
+			return
+		}
+		_ = c.WriteMessage(typ, data)
+	}
 }
 
 func (f *fakeSFU) setDraining(v bool) { f.mu.Lock(); f.draining = v; f.mu.Unlock() }
@@ -333,15 +360,12 @@ func TestSignalHandler_setChangeMovesOnlyRoomsOfRemovedNode(t *testing.T) {
 
 // --- handler errors ---
 
-func TestSignalHandler_missingRoomIs400(t *testing.T) {
+func TestSignalHandler_invalidRoomQueryIs400(t *testing.T) {
 	_, dir := threeSFUs(t)
 	var target string
-	w := signalTo(gatewayFor(dir, &target), "ns", "")
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
-	}
-	if target != "" {
-		t.Fatal("proxied a socket with no room")
+	w := signalTo(gatewayFor(dir, &target), "ns", "has a space")
+	if w.Code != http.StatusBadRequest || target != "" {
+		t.Fatalf("status = %d target = %q, want 400 and no proxy", w.Code, target)
 	}
 }
 

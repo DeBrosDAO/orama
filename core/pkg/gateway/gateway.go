@@ -199,6 +199,8 @@ type Gateway struct {
 	// chainQueryRateLimiter caps the public module-query route (/v1/chain/query/),
 	// per client address, far below the general limit. See isChainQueryPath.
 	chainQueryRateLimiter *RateLimiter
+	// webrtcJoinRateLimiter caps the signalling sockets one identity opens. See webrtcJoinAllowed.
+	webrtcJoinRateLimiter *RateLimiter
 	namespaceRateLimiter  *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
 	// rateLimitManager (feature #69) handles per-namespace rate limits with
 	// tenant self-service config via /v1/namespace/rate-limit. When set,
@@ -516,6 +518,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			cfg.TURNSecret,
 			gw.proxyWebSocket,
 		)
+		gw.webrtcHandlers.SetJoinLimiter(gw.webrtcJoinAllowed)
 		// Rooms are placed on one SFU by the cluster registry's view of which
 		// nodes hold the SFU role; the tenant's own rqlite has no such table rows.
 		if deps.globalSQLDB != nil {
@@ -1529,6 +1532,9 @@ func configureRateLimiters(gw *Gateway) {
 
 	gw.chainQueryRateLimiter = NewRateLimiter(chainQueriesPerMinute, chainQueryBurst)
 	gw.chainQueryRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+
+	gw.webrtcJoinRateLimiter = NewRateLimiter(webrtcJoinsPerMinute, webrtcJoinBurst)
+	gw.webrtcJoinRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
 }
 
 // apiKeyRegistryProbeTimeout bounds the one query that proves the registry is
