@@ -1,0 +1,34 @@
+package cli
+
+import (
+	"testing"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+)
+
+// An environment no command could use was stored as given (stagenet e2e,
+// 2026-09-30). It is a usage error now, before anything is written.
+func TestValidateNewEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name, url string
+		ok        bool
+	}{
+		{"stagenet", "https://stagenet.example", true},
+		{"local", "http://localhost:6001", true},
+		{"", "https://g.example", false},
+		{"   ", "https://g.example", false},
+		{"x", "", false},
+		{"x", "https://", false},
+		{"x", "not a url", false},
+		{"x", "ftp://g.example", false},
+		{"x", "g.example", false},
+	} {
+		err := validateNewEnvironment(tc.name, tc.url)
+		if (err == nil) != tc.ok {
+			t.Errorf("(%q, %q): err %v, want ok=%v", tc.name, tc.url, err, tc.ok)
+		}
+		if err != nil && clierr.CodeOf(err) != clierr.CodeUsage {
+			t.Errorf("(%q, %q): code %d, want usage", tc.name, tc.url, clierr.CodeOf(err))
+		}
+	}
+}
