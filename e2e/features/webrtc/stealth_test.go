@@ -17,31 +17,6 @@ import (
 
 const stealthRung = ":443"
 
-// What a failed `namespace enable webrtc-stealth` may say: the documented
-// failure (namespace/cluster_manager_stealth.go: the TURN re-spawn with the
-// stealth certificate failed and the enable was rolled back), or a gateway
-// without WebRTC management (gateway.go namespaceWebRTCStealthPublicHandler).
-const (
-	stealthRolledBack  = "stealth rolled back"
-	noWebRTCManagement = "WebRTC management not enabled"
-)
-
-// requireRolledBack accepts a failed stealth enable only for the documented
-// reason, and then only when no stealth rung is advertised; a gateway
-// without WebRTC management is a missing prerequisite (not applicable).
-func requireRolledBack(t *testing.T, fx *fixture, out string) {
-	t.Helper()
-	switch {
-	case strings.Contains(out, noWebRTCManagement):
-		harness.SkipNotApplicable(t, "the namespace gateway has no WebRTC management, so stealth cannot be toggled: "+out)
-	case !strings.Contains(out, stealthRolledBack):
-		t.Fatalf("stealth enable failed for a reason other than the documented rollback: %s", out)
-	}
-	if u := stealthURI(t, fx); u != "" {
-		t.Errorf("stealth enable failed (%s) but %s is advertised: no rollback", out, u)
-	}
-}
-
 // stealthURI is the credentials' turns:cdn-<hash>.<base>:443 rung, or "".
 func stealthURI(t testing.TB, fx *fixture) string {
 	t.Helper()
@@ -54,10 +29,12 @@ func stealthURI(t testing.TB, fx *fixture) string {
 	return ""
 }
 
-// TestStealth_enableDisableOrRollBack: enabling stealth either adds the
-// turns:cdn-<hash>.<base>:443 rung to the credentials, or fails and is rolled
-// back so no rung is advertised; disabling removes the rung and keeps the
-// baseline ladder (docs/STEALTH_TURN.md#enabling-stealth-for-a-namespace).
+// TestStealth_enableDisableOrRollBack: enabling stealth adds the
+// turns:cdn-<hash>.<base>:443 rung to the credentials; disabling removes the
+// rung and keeps the baseline ladder (docs/STEALTH_TURN.md#enabling-stealth-for-a-namespace).
+// The documented rollback (the TURN re-spawn with the stealth certificate
+// failing) is a failure here: the cluster has a valid wildcard certificate, so
+// a run that always rolls back must not pass.
 func TestStealth_enableDisableOrRollBack(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -70,8 +47,7 @@ func TestStealth_enableDisableOrRollBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Exit != 0 {
-		requireRolledBack(t, fx, strings.TrimSpace(res.Stdout+res.Stderr))
-		return
+		t.Fatalf("enabling stealth failed (%d): %s", res.Exit, strings.TrimSpace(res.Stdout+res.Stderr))
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), cleanupBudget)

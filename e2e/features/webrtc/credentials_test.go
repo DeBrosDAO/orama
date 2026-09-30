@@ -14,10 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/DeBrosOfficial/network/e2e/features/internal/services"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
+	"github.com/DeBrosOfficial/network/pkg/turn"
 )
 
 // TestCredentials_restShapeAndAccess: the REST credential is
@@ -74,17 +77,36 @@ func TestTURN_relayOnlyAuth(t *testing.T) {
 		}
 	}
 	parts := strings.SplitN(cr.Username, ":", 2)
+	// The two forgeries that must isolate the namespace and the expiry checks
+	// are signed with the namespace's real secret: signed with a wrong one
+	// they would be refused for that alone.
+	secret := tenantSecret(t, fx, holders[0])
 	forged := map[string]services.TURNCreds{
-		"unknown namespace":  {URIs: cr.URIs, Username: parts[0] + ":e2e-no-such-ns", Password: sign("guess", parts[0]+":e2e-no-such-ns")},
+		"unknown namespace":  {URIs: cr.URIs, Username: parts[0] + ":e2e-no-such-ns", Password: sign(secret, parts[0]+":e2e-no-such-ns")},
 		"tampered password":  {URIs: cr.URIs, Username: cr.Username, Password: sign("guess", cr.Username)},
 		"moved expiry":       {URIs: cr.URIs, Username: strconv.FormatInt(time.Now().Add(48*time.Hour).Unix(), 10) + ":" + fx.n.Name, Password: cr.Password},
-		"expired, re-signed": {URIs: cr.URIs, Username: "1:" + fx.n.Name, Password: sign("guess", "1:"+fx.n.Name)},
+		"expired, re-signed": {URIs: cr.URIs, Username: "1:" + fx.n.Name, Password: sign(secret, "1:"+fx.n.Name)},
 	}
 	for name, bad := range forged {
 		if got := gather(t, bad); len(got) != 0 {
 			t.Errorf("%s: allocated %v", name, got)
 		}
 	}
+}
+
+// tenantSecret is the namespace's TURN secret as the shared TURN process on n
+// holds it (docs/WEBRTC.md#turn-topology, turn.yaml).
+func tenantSecret(t *testing.T, fx *fixture, n fleet.Node) string {
+	t.Helper()
+	var cfg turn.Config
+	if err := yaml.Unmarshal([]byte(fx.f.MustExec(t, n, "cat "+turnYAML).Stdout), &cfg); err != nil {
+		t.Fatalf("%s: turn.yaml is not YAML: %v", n.Name, err)
+	}
+	secret, ok := cfg.TenantSecret(fx.n.Name)
+	if !ok {
+		t.Fatalf("%s: turn.yaml holds no secret for %s", n.Name, fx.n.Name)
+	}
+	return secret
 }
 
 func gather(t *testing.T, cr services.TURNCreds) []string {

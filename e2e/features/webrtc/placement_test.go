@@ -48,7 +48,7 @@ func TestPlacement_sfuEverywhereWGOnlyTurnOnTwo(t *testing.T) {
 	fx := setup(t)
 	holders := waitPlaced(t, fx)
 	for _, n := range fx.f.State.Nodes {
-		sfuBindsWGOnly(t, fx.f, n)
+		sfuBindsWGOnly(t, fx, n)
 		// The per-namespace TURN unit was retired for the shared one (bug-283;
 		// core/pkg/namespace/host_turn.go stopLegacyPerNamespaceTURN).
 		if s := fx.f.Unit(t, n, "orama-namespace-turn@"+fx.n.Name+".service"); s == "active" {
@@ -64,18 +64,32 @@ func TestPlacement_sfuEverywhereWGOnlyTurnOnTwo(t *testing.T) {
 	for _, host := range []string{"turn.ns-" + fx.n.Name + "." + fx.f.State.BaseDomain, "turn-" + fx.n.Name + "." + fx.f.State.BaseDomain} {
 		eventually.Require(t, pollEvery, readyBudget, host+" to name the TURN nodes", func() (bool, error) {
 			got, err := tenancy.ResolveAt(t.Context(), tenancy.Nameservers(fx.f)[0].PublicIP, host)
-			return slices.Equal(got, ips), fmt.Errorf("%v (%v), want %v", got, err, ips)
+			if slices.Equal(got, ips) {
+				return true, nil
+			}
+			return false, fmt.Errorf("%v (%v), want %v", got, err, ips)
 		})
 	}
 }
 
-func sfuBindsWGOnly(t *testing.T, f *fleet.Fleet, n fleet.Node) {
+// sfuBindsWGOnly checks the sockets of this namespace's SFU process, found by
+// the unit's main PID: other namespaces' SFUs run on the node at the same
+// time, and a relay-only ICE agent opens 0.0.0.0 ephemeral UDP sockets that are
+// not the signalling listeners.
+func sfuBindsWGOnly(t *testing.T, fx *fixture, n fleet.Node) {
 	t.Helper()
+	f := fx.f
+	pid := strings.TrimSpace(f.MustExec(t, n, "systemctl show -p MainPID --value "+sfuUnit(fx.n.Name)).Stdout)
+	if pid == "" || pid == "0" {
+		t.Fatalf("%s: %s has no main process", n.Name, sfuUnit(fx.n.Name))
+	}
+	out := f.Exec(t, n, "ss -H -ltnup | grep -F "+fleet.ShellQuote("pid="+pid+","))
+	listeners, err := fleet.ParseSS(out.Stdout)
+	if err != nil {
+		t.Fatalf("failed to parse ss on %s: %v", n.Name, err)
+	}
 	signal := false
-	for _, l := range f.Listeners(t, n) {
-		if l.Process != "sfu" {
-			continue
-		}
+	for _, l := range listeners {
 		if l.Addr != n.WGIP {
 			t.Errorf("%s: the SFU listens on %s %s:%d, want the WireGuard address", n.Name, l.Proto, l.Addr, l.Port)
 		}
