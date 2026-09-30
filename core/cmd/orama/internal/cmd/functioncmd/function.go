@@ -14,6 +14,7 @@ var Cmd = &cobra.Command{
 A function is a folder containing:
   function.go    — your handler code (uses the fn SDK)
   function.yaml  — configuration (name, memory, timeout, etc.)
+  go.mod         — the Go module TinyGo builds
 
 Quick start:
   orama function init my-function
