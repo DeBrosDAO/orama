@@ -1572,7 +1572,7 @@ loopback for a node that runs an RPC or index endpoint.
 
 For each service it creates the service's system account, copies its binaries
 (oramad and this orama CLI for the chain, whose unit runs 'orama global
-validator check-sign-floor' before every start; ipfs, Kubo v0.38.2, for ipfs;
+validator check-sign-floor' before every start; ipfs, Kubo v0.43.1, for ipfs;
 orama-global for the others) from --staged-dir into /usr/lib/orama-global/bin
 (root-owned, 0755; a symlink in the staged directory is refused, and as root the
 directory must be root's and not writable by others), writes and enables its
@@ -3024,7 +3024,7 @@ What happens:
   1. Stop orama-node on every node
   2. Reset the kept node to a single-member cluster, preserving its data
   3. Start it and confirm it comes back as Leader with its data intact
-  4. Delete raft.db, raft/, db.sqlite (+shm/wal) and rsnapshots on every other
+  4. Delete raft.db, raft/, db.sqlite (+shm/wal) and wsnapshots (rsnapshots) on every other
      node, and record the kept node as the member each one re-joins
      (data/cluster-membership.json)
   5. Start them one at a time; each pulls a full snapshot from the kept node

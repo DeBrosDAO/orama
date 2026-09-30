@@ -99,7 +99,7 @@ stop *and* restart, so it is reserved for the cases where one unit is genuinely
 useless without another. Two qualify: `ipfs-cluster@` and `ipfs-gc@` on
 `ipfs@` — a controller with no daemon has nothing to control, and `ipfs repo gc`
 works through the running daemon's API. `ipfs-cluster@`'s process is
-`orama serve-ipfs-cluster`: ipfs-cluster v1.1.2 cannot send Kubo's bearer, so
+`orama serve-ipfs-cluster`: ipfs-cluster v1.1.6 cannot send Kubo's bearer, so
 that process proxies `127.0.0.1:10110` to the RPC and adds it
 (`pkg/ipfs.ServeCluster`), admitting only connections whose socket the
 `orama` user owns (asked of the kernel by `sock_diag`). It is TCP rather than a unix
@@ -614,7 +614,7 @@ overlay candidate it now refuses to rewrite rather than substituting a public
 IP. And a node that finds itself in the raft configuration under a different id
 logs it at Error on every start instead of discarding the result.
 
-RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index`: its HTTP API is the unix socket `/run/orama-pubsub/pubsub.sock`, which admits only callers running as the service's own user (the gateways), and its libp2p host listens on the node's WireGuard address. Caddy reverse_proxies to `localhost:10104`; the index gateway listens there and on the node's WireGuard address, never on the public interface. Caddy's admin API is the unix socket `/run/orama-caddy/admin.sock`, and its DNS-01 calls to the gateway are signed with the key install writes to `/etc/caddy/orama-acme.key`. CoreDNS reads index RQLite `dns_records` at the node's WireGuard address (`<wg-ip>:10100`, with credentials). Olric v0.7.0 is in-memory only (`olric-server` is not given a data directory); a cold disk snapshot of the cache dir yields nothing.
+RQLiteManager is a **client** of `orama-namespace-rqlite@index` (data dir `~/.orama/data/rqlite`, adopted in place). App GossipSub is `orama-namespace-pubsub@index`: its HTTP API is the unix socket `/run/orama-pubsub/pubsub.sock`, which admits only callers running as the service's own user (the gateways), and its libp2p host listens on the node's WireGuard address. Caddy reverse_proxies to `localhost:10104`; the index gateway listens there and on the node's WireGuard address, never on the public interface. Caddy's admin API is the unix socket `/run/orama-caddy/admin.sock`, and its DNS-01 calls to the gateway are signed with the key install writes to `/etc/caddy/orama-acme.key`. CoreDNS reads index RQLite `dns_records` at the node's WireGuard address (`<wg-ip>:10100`, with credentials). Olric v0.7.4 is in-memory only (`olric-server` is not given a data directory); a cold disk snapshot of the cache dir yields nothing.
 
 ## Core Components
 
@@ -1128,7 +1128,7 @@ internal-auth check both accept.
 ### Service Authentication
 
 - **RQLite:** credentials are generated at genesis. `orama-namespace-rqlite@*` copies `rqlite-auth.json` into the instance data dir and starts rqlited with `-auth`. HTTP/Raft bind the WireGuard advertise address, not `0.0.0.0`. Gateway YAML carries `rqlite_username` / `rqlite_password`. Missing auth file refuses to start. See `docs/SECURITY.md`
-- **Olric:** memberlist binds the WireGuard address. An upgrade rewrites that config and seeds it from the WireGuard allowed IPs and the bootstrap multiaddrs, so genesis and the joiners name every other node and the index cache stays one cluster. Olric v0.7.0 YAML has no `encryptionKey`; overlay is the control
+- **Olric:** memberlist binds the WireGuard address. An upgrade rewrites that config and seeds it from the WireGuard allowed IPs and the bootstrap multiaddrs, so genesis and the joiners name every other node and the index cache stays one cluster. Olric v0.7.4 YAML has no `encryptionKey`; overlay is the control
 - **IPFS Cluster:** `TrustedPeers` is `["*"]`; membership is CLUSTER_SECRET + overlay + invite. Install refuses to initialize IPFS Cluster with an empty `CLUSTER_SECRET`. Private blobs are encrypted before Add (`HKDF(cluster-secret, "ipfs-wrap-v1")`)
 - **TLS:** Caddy terminates public TLS (DNS-01). The gateway process does not bind `:80`/`:443` and refuses `enable_https: true`
 - **Internal endpoints:** every `/v1/internal/wg/*` endpoint requires the caller to be on the WireGuard overlay **and** to present the cluster secret. A gateway with no cluster secret configured refuses them outright rather than serving them unauthenticated

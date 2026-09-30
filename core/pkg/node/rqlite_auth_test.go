@@ -17,7 +17,11 @@ func TestIndexRQLiteExtraArgs_no_auth_flag(t *testing.T) {
 	if strings.Contains(args, "-auth") {
 		t.Fatalf("extra-args must not pass -auth: %s", args)
 	}
-	for _, want := range []string{"-raft-election-timeout", "-raft-timeout", "-raft-apply-timeout", "-raft-leader-lease-timeout"} {
+	// rqlite v10 renamed -raft-timeout to -raft-heartbeat-timeout and rejects the old name.
+	if strings.Contains(args, "-raft-timeout") {
+		t.Fatalf("extra-args must not pass the removed -raft-timeout: %s", args)
+	}
+	for _, want := range []string{"-raft-election-timeout", "-raft-heartbeat-timeout", "-raft-apply-timeout", "-raft-leader-lease-timeout"} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("missing %s in %s", want, args)
 		}

@@ -146,7 +146,7 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	}
 	is.mu.Unlock()
 
-	// Config + logs only. Olric v0.7.0 is in-memory; a dataDir is never passed
+	// Config + logs only. Olric v0.7.4 is in-memory; a dataDir is never passed
 	// to olric-server and must not be created (empty dirs looked like persistence).
 	configDir := filepath.Join(is.baseDir, cfg.Namespace, "configs")
 	logsDir := filepath.Join(is.baseDir, cfg.Namespace, "logs")

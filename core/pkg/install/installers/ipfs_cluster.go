@@ -146,7 +146,7 @@ func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, sec
 		delete(api, "ipfsproxy")
 	}
 
-	// ipfs-cluster v1.1.2 dials this address with no Authorization header, and
+	// ipfs-cluster v1.1.6 dials this address with no Authorization header, and
 	// its config has no field for one (an unknown key is ignored). Kubo's RPC
 	// refuses that. The cluster unit listens on loopback TCP and forwards to
 	// the RPC port below with the bearer; the connector dials the proxy. It

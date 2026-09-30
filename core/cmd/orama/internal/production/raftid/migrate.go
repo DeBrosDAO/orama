@@ -376,7 +376,7 @@ JOIN_ADDR=%[4]s
 systemctl stop orama-namespace-rqlite@index.service
 
 %[6]s sh -c 'set -eu
-rm -rf "$1"/raft.db "$1"/rsnapshots "$1"/raft "$1"/peers.json "$1"/db.sqlite*
+rm -rf "$1"/raft.db "$1"/wsnapshots "$1"/rsnapshots "$1"/raft "$1"/peers.json "$1"/db.sqlite*
 mkdir -p "$1"
 printf "%%s\n" "$2" > "$1"/%[5]s' sh "$DATA_DIR" "$PEER_ID"
 

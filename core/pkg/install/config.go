@@ -591,7 +591,7 @@ rqlite_url = http://%s
 }
 
 // GenerateOlricConfig generates Olric configuration.
-// Olric v0.7.0's YAML loader has no encryptionKey field (bugboard #246);
+// Olric v0.7.4's YAML loader has no encryptionKey field (bugboard #246);
 // WireGuard is the confidentiality control for memberlist.
 func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort int, memberlistBindAddr string, memberlistPort int, memberlistEnv string, advertiseAddr string, peers []string) (string, error) {
 	data := templates.OlricConfigData{

@@ -25,8 +25,8 @@ type Flags struct {
 	Force          bool   // Skip confirmation
 }
 
-// rqlite on-disk layout (rqlite v8, as deployed by the production installer).
-// The committed data lives in db.sqlite* and rsnapshots/, which are SEPARATE
+// rqlite on-disk layout (rqlite v10, as deployed by the production installer).
+// The committed data lives in db.sqlite* and wsnapshots/ (rsnapshots/ before the node first starts under v10), which are SEPARATE
 // from the Raft log/stable store (raft.db). This separation is what lets us
 // reset the Raft configuration on the leader while preserving all data.
 const (
@@ -129,7 +129,7 @@ func execute(flags *Flags) error {
 		fmt.Printf("⚠️  THIS WILL:\n")
 		fmt.Printf("  1. Stop orama-node on ALL %d survivor nodes (brief main-cluster outage)\n", len(nodes))
 		fmt.Printf("  2. On %s: delete raft.db and write a single-node recovery peers.json\n", leader.Host)
-		fmt.Printf("     (db.sqlite + rsnapshots preserved — no data loss)\n")
+		fmt.Printf("     (db.sqlite + snapshots preserved — no data loss)\n")
 		fmt.Printf("  3. On %d follower(s): WIPE all rqlite state (raft + db.sqlite) so they re-sync fresh,\n", len(followers))
 		fmt.Printf("     and record the leader as the member they re-join\n")
 		fmt.Printf("  4. Restart leader (single-node), then followers re-join as voters\n")
@@ -543,7 +543,7 @@ func followerWipeScript(encodedRecord, recordPath string) string {
 rm -f %[1]s
 rm -rf %[2]s
 rm -f %[3]s/db.sqlite %[3]s/db.sqlite-shm %[3]s/db.sqlite-wal
-rm -rf %[3]s/rsnapshots
+rm -rf %[3]s/wsnapshots %[3]s/rsnapshots
 rm -f %[4]s
 printf %%s %[5]s | base64 -d > %[6]s.tmp
 mv %[6]s.tmp %[6]s

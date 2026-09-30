@@ -7,24 +7,24 @@ import (
 	"testing"
 )
 
-// The real tail of `ntfy --help` for 2.11.0. `ntfy --version` is not a flag,
-// so reading it made IsInstalled false forever.
+// The real tail of `ntfy --help` for 2.28.0. Releases before 2.28 have no
+// `--version` flag, so reading it made IsInstalled false forever on them.
 const ntfyHelpTail = `   --help, -h   show help
 
-ntfy 2.11.0 (d11b100), runtime go1.22.2, built at 2024-05-13T20:16:12Z
-Copyright (C) 2022 Philipp C. Heckel, licensed under Apache License 2.0 & GPLv2
+ntfy 2.28.0 (10cb650), runtime go1.27.0, built at 2026-08-27T20:25:10Z
+Copyright (C) Philipp C. Heckel, licensed under Apache License 2.0 & GPLv2
 `
 
 func TestNtfyReportsVersion(t *testing.T) {
-	if !ntfyReportsVersion(ntfyHelpTail, "2.11.0") {
+	if !ntfyReportsVersion(ntfyHelpTail, "2.28.0") {
 		t.Error("the installed version was not recognised")
 	}
-	for _, v := range []string{"2.11", "2.1", "2.11.1", "1.0.0"} {
+	for _, v := range []string{"2.28", "2.2", "2.28.1", "1.0.0"} {
 		if ntfyReportsVersion(ntfyHelpTail, v) {
-			t.Errorf("version %q matched help for 2.11.0", v)
+			t.Errorf("version %q matched help for 2.28.0", v)
 		}
 	}
-	if ntfyReportsVersion("Incorrect Usage: flag provided but not defined: -version", "2.11.0") {
+	if ntfyReportsVersion("Incorrect Usage: flag provided but not defined: -version", "2.28.0") {
 		t.Error("an error message was read as a version")
 	}
 }

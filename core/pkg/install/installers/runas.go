@@ -2,6 +2,7 @@ package installers
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"os/user"
 	"strconv"
@@ -59,9 +60,11 @@ func serviceUserCommand(env []string, name string, args ...string) (*exec.Cmd, e
 	// Setsid puts the service user's process in its own session. Without it
 	// the child stays in the installing root's session: it keeps that
 	// controlling terminal and receives the installer's signals.
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{Uid: acct.uid, Gid: acct.gid, Groups: []uint32{}},
-		Setsid:     true,
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// Already the service user (or a test standing one in): there is nothing to
+	// drop to, and only root may change credentials.
+	if uint32(os.Geteuid()) != acct.uid {
+		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: acct.uid, Gid: acct.gid, Groups: []uint32{}}
 	}
 	cmd.Env = append([]string{serviceUserPath, "HOME=" + acct.home}, env...)
 	cmd.Dir = acct.home

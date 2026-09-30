@@ -18,7 +18,7 @@ const (
 
 	// IPFSClusterKuboProxyPort is where the cluster unit's bearer proxy
 	// listens on 127.0.0.1 for ipfs-cluster's connector (ipfs.ServeCluster).
-	// It is TCP, not a unix socket: ipfs-cluster v1.1.2 dials a /unix address
+	// It is TCP, not a unix socket: ipfs-cluster v1.1.6 dials a /unix address
 	// with a transport that ignores request cancellation, which disables
 	// pin_timeout, unpin_timeout and ipfs_request_timeout.
 	IPFSClusterKuboProxyPort = IndexPortBase + 10 // 10110

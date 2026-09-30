@@ -80,12 +80,12 @@ func TestNtfyConfigure_rejectsEmptyBaseURL(t *testing.T) {
 }
 
 func TestFindChecksumFor_picksRightLine(t *testing.T) {
-	body := []byte(`# ntfy v2.11.0 checksums
-abc123  ntfy_2.11.0_linux_arm64.tar.gz
-DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF  ntfy_2.11.0_linux_amd64.tar.gz
-9999999999999999999999999999999999999999999999999999999999999999  ntfy_2.11.0_darwin_amd64.tar.gz
+	body := []byte(`# ntfy v2.28.0 checksums
+abc123  ntfy_2.28.0_linux_arm64.tar.gz
+DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF  ntfy_2.28.0_linux_amd64.tar.gz
+9999999999999999999999999999999999999999999999999999999999999999  ntfy_2.28.0_darwin_amd64.tar.gz
 `)
-	got, err := findChecksumFor(body, "ntfy_2.11.0_linux_amd64.tar.gz")
+	got, err := findChecksumFor(body, "ntfy_2.28.0_linux_amd64.tar.gz")
 	if err != nil {
 		t.Fatalf("findChecksumFor: %v", err)
 	}
@@ -97,21 +97,21 @@ DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF  ntfy_2.11.0_li
 
 func TestFindChecksumFor_rejectsMissingFile(t *testing.T) {
 	body := []byte(`abc123  some_other_file.tar.gz`)
-	if _, err := findChecksumFor(body, "ntfy_2.11.0_linux_amd64.tar.gz"); err == nil {
+	if _, err := findChecksumFor(body, "ntfy_2.28.0_linux_amd64.tar.gz"); err == nil {
 		t.Error("expected error for missing filename")
 	}
 }
 
 func TestFindChecksumFor_rejectsWrongDigestLength(t *testing.T) {
-	body := []byte(`tooshort  ntfy_2.11.0_linux_amd64.tar.gz`)
-	if _, err := findChecksumFor(body, "ntfy_2.11.0_linux_amd64.tar.gz"); err == nil {
+	body := []byte(`tooshort  ntfy_2.28.0_linux_amd64.tar.gz`)
+	if _, err := findChecksumFor(body, "ntfy_2.28.0_linux_amd64.tar.gz"); err == nil {
 		t.Error("expected error for short digest")
 	}
 }
 
 func TestFindChecksumFor_handlesBSDStarPrefix(t *testing.T) {
-	body := []byte(`DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF *ntfy_2.11.0_linux_amd64.tar.gz`)
-	if _, err := findChecksumFor(body, "ntfy_2.11.0_linux_amd64.tar.gz"); err != nil {
+	body := []byte(`DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF *ntfy_2.28.0_linux_amd64.tar.gz`)
+	if _, err := findChecksumFor(body, "ntfy_2.28.0_linux_amd64.tar.gz"); err != nil {
 		t.Errorf("BSD `*<file>` prefix should be tolerated; got %v", err)
 	}
 }

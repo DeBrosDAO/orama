@@ -229,6 +229,6 @@ func indexRQLiteExtraArgs(db config.DatabaseConfig) string {
 	if lease == 0 {
 		lease = 2 * time.Second
 	}
-	return fmt.Sprintf("-raft-election-timeout %s -raft-timeout %s -raft-apply-timeout %s -raft-leader-lease-timeout %s",
+	return fmt.Sprintf("-raft-election-timeout %s -raft-heartbeat-timeout %s -raft-apply-timeout %s -raft-leader-lease-timeout %s",
 		election, heartbeat, apply, lease)
 }

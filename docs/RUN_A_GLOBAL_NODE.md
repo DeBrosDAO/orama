@@ -25,7 +25,7 @@ The code does not check hardware. These are the sizes the plan gives
 ## Install
 
 Stage the release's `oramad`, `orama-global` and `orama` (this CLI; the chain
-unit runs its sign-floor check), Kubo's `ipfs` (v0.38.2, when you install the
+unit runs its sign-floor check), Kubo's `ipfs` (v0.43.1, when you install the
 `ipfs` service) and the official cosmovisor release tarball
 `cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz` (from the cosmos-sdk release
 `cosmovisor/v1.7.3`) in a directory that root owns
@@ -36,7 +36,7 @@ could change.
 **You are trusting these binaries.** The installer does not verify `oramad`, `orama`,
 `orama-global` or `ipfs` (it does verify the cosmovisor tarball against a pinned
 SHA-256, and runs `ipfs --version` as an unprivileged account to require Kubo
-v0.38.2). It does not verify them
+v0.43.1). It does not verify them
 against the release root or any signature: the release archive does not carry
 `oramad` or `orama-global` yet, so there is nothing to check them against. The
 chain unit runs the staged `orama` as root before every start (the sign-floor

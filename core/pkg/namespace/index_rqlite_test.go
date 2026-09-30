@@ -104,10 +104,10 @@ func TestEnsureRQLite_readsTheCoreRaftDirectory(t *testing.T) {
 // The resolved raft id is passed as -node-id; an empty one passes nothing.
 func TestEnsureRQLite_raftIdentityBecomesNodeIDArg(t *testing.T) {
 	f := &fakeIndexRQLite{hasState: true, identity: rqlite.RaftIdentity{NodeID: "12D3Koo", Migrated: true}}
-	if err := f.supervisor(t.TempDir()).EnsureRQLite(context.Background(), "node-1", "12D3Koo", testHTTPAdv, testRaftAdv, "", "-raft-timeout 5s"); err != nil {
+	if err := f.supervisor(t.TempDir()).EnsureRQLite(context.Background(), "node-1", "12D3Koo", testHTTPAdv, testRaftAdv, "", "-raft-heartbeat-timeout 5s"); err != nil {
 		t.Fatal(err)
 	}
-	if f.spawned.ExtraArgs != "-raft-timeout 5s -node-id 12D3Koo" {
+	if f.spawned.ExtraArgs != "-raft-heartbeat-timeout 5s -node-id 12D3Koo" {
 		t.Errorf("ExtraArgs = %q", f.spawned.ExtraArgs)
 	}
 

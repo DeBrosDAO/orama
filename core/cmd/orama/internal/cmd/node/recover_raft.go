@@ -21,7 +21,7 @@ What happens:
   1. Stop orama-node on every node
   2. Reset the kept node to a single-member cluster, preserving its data
   3. Start it and confirm it comes back as Leader with its data intact
-  4. Delete raft.db, raft/, db.sqlite (+shm/wal) and rsnapshots on every other
+  4. Delete raft.db, raft/, db.sqlite (+shm/wal) and wsnapshots (rsnapshots) on every other
      node, and record the kept node as the member each one re-joins
      (data/cluster-membership.json)
   5. Start them one at a time; each pulls a full snapshot from the kept node
