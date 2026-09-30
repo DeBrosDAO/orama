@@ -15,6 +15,7 @@ import (
 func TestRoutePolicy_operatorListRoutesStayOnTheIndexGateway(t *testing.T) {
 	for _, path := range []string{
 		"/v1/network/status", "/v1/network/peers",
+		"/v1/network/connect", "/v1/network/disconnect",
 		"/v1/operator/health", "/v1/operator/nodes", "/v1/operator/node/register",
 		"/v1/operator/operators", "/v1/operator/operators/0xabc",
 		"/v1/operator/rotate-signing-key", "/v1/operator/rotate-secrets",
@@ -43,7 +44,7 @@ func TestRoutePolicy_aStampedNetworkRequestIsNotAnOperatorListRoute(t *testing.T
 // The routes that need no operator list are unchanged: they act on the node or
 // the namespace they are addressed to.
 func TestRoutePolicy_nodeLocalRoutesAreNotPinnedToTheIndexGateway(t *testing.T) {
-	for _, path := range []string{"/v1/node/status", "/v1/node/logs", "/v1/network/connect", "/v1/node/leave"} {
+	for _, path := range []string{"/v1/node/status", "/v1/node/logs", "/v1/node/leave"} {
 		if gatewayRoutes.For(httptest.NewRequest(http.MethodGet, path, nil)).MainGateway {
 			t.Errorf("%s is pinned to the index gateway", path)
 		}

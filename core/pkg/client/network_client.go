@@ -230,13 +230,17 @@ func (n *NetworkInfoImpl) ConnectToPeer(ctx context.Context, peerAddr string) er
 	// Parse the multiaddr
 	ma, err := multiaddr.NewMultiaddr(peerAddr)
 	if err != nil {
-		return fmt.Errorf("invalid multiaddr: %w", err)
+		return fmt.Errorf("%w: %q is not a multiaddr: %v", ErrInvalidPeer, peerAddr, err)
 	}
 
 	// Extract peer info
 	peerInfo, err := peer.AddrInfoFromP2pAddr(ma)
 	if err != nil {
-		return fmt.Errorf("failed to extract peer info: %w", err)
+		return fmt.Errorf("%w: %q must end in /p2p/<peer id>: %v", ErrInvalidPeer, peerAddr, err)
+	}
+
+	if len(peerInfo.Addrs) == 0 {
+		return fmt.Errorf("%w: %q names a peer but no address to dial it at", ErrInvalidPeer, peerAddr)
 	}
 
 	// Connect to the peer
@@ -265,7 +269,7 @@ func (n *NetworkInfoImpl) DisconnectFromPeer(ctx context.Context, peerID string)
 	// Parse the peer ID
 	pid, err := peer.Decode(peerID)
 	if err != nil {
-		return fmt.Errorf("invalid peer ID: %w", err)
+		return fmt.Errorf("%w: %q is not a peer ID: %v", ErrInvalidPeer, peerID, err)
 	}
 
 	// Close the connection to the peer

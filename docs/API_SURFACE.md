@@ -123,8 +123,8 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 
 | Route | Owner | Notes |
 |-------|-------|-------|
-| `/v1/network/connect` | CLI | Topology mutation, admin-scoped. |
-| `/v1/network/disconnect` | CLI | Topology mutation, admin-scoped. |
+| `/v1/network/connect` | CLI | Topology mutation: `{multiaddr}` (`/ip4/.../tcp/.../p2p/<peer id>`). An operator's (operator grant **and** the operator list, checked before the body is read, so a non-operator is `403 NOT_AN_OPERATOR`); served by the index gateway like `/v1/network/peers`. A malformed body or an address that names no peer is 400, a body over 4 KiB 413, a dial the peer or network refuses 502, one that outlasts 10 s 504. |
+| `/v1/network/disconnect` | CLI | Topology mutation: `{peer_id}`. Same access and refusals as connect; disconnecting a peer that is not connected is a 200 no-op. |
 | `/v1/network/peers` | SDK | `network.peers()`. An operator's (operator grant **and** the operator list), or another node's with a coordination MAC over the mesh. It was open to anyone. Every route that checks the operator list (these two, `/v1/operator/*`) is served by the index gateway even when the host is `ns-<name>`, because the list is in the cluster registry and not in a namespace's database: a namespace credential is refused `403 NOT_AN_OPERATOR`. |
 | `/v1/network/status` | SDK | `network.status()`. Same as `/v1/network/peers`: an operator, or a node's IPFS Cluster peer discovery (`pkg/ipfs`) with a coordination MAC. |
 | `/v1/proxy/anon` | SDK | `network.proxyAnon()` |

@@ -249,8 +249,11 @@ func buildRoutePolicies() *routepolicy.Table {
 	// 405, so there is no write on this path.
 	t.Add(operatorListRoute(control(auth.DomainOperator, auth.ActionRead)), "/v1/operator/nodes")
 	t.Add(control(auth.DomainOperator, auth.ActionWrite),
-		"/v1/network/connect", "/v1/network/disconnect",
 		"/v1/node/command", "/v1/node/leave")
+	// Connecting and disconnecting peers changes the cluster's map, so the
+	// handlers check the operator list too.
+	t.Add(operatorListRoute(control(auth.DomainOperator, auth.ActionWrite)),
+		"/v1/network/connect", "/v1/network/disconnect")
 	t.Add(operatorListRoute(control(auth.DomainOperator, auth.ActionWrite)),
 		"/v1/operator/node/register",
 		"/v1/operator/operators", "/v1/operator/operators/",
