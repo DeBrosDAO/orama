@@ -77,7 +77,7 @@ func TestPubsubMesh_eachServiceConnectsToTheOthersRegistered(t *testing.T) {
 	}
 	// a ran first and saw nobody; c, last, saw both. Every service learns the
 	// others by its next round.
-	if len(svcA.connected) != 0 {
+	if dialledAny(svcA) {
 		t.Errorf("a connected %v before anyone else registered", svcA.connected)
 	}
 	if err := a.reconcile(ctx); err != nil {
@@ -121,7 +121,7 @@ func TestPubsubMesh_aRegistrationNobodyRefreshesIsNotDialled(t *testing.T) {
 	if err := b.reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(svcB.connected) != 0 {
+	if dialledAny(svcB) {
 		t.Fatalf("b dialled %v, a registration older than the TTL", svcB.connected)
 	}
 
@@ -131,8 +131,9 @@ func TestPubsubMesh_aRegistrationNobodyRefreshesIsNotDialled(t *testing.T) {
 	if err := b.reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(svcB.connected) != 1 || svcB.connected[0][0] != "/ip4/10.0.0.1/tcp/1/p2p/peer-a" {
-		t.Fatalf("b connected %v after a refreshed, want a", svcB.connected)
+	last := svcB.connected[len(svcB.connected)-1]
+	if len(last) != 1 || last[0] != "/ip4/10.0.0.1/tcp/1/p2p/peer-a" {
+		t.Fatalf("b's latest round dialled %v after a refreshed, want a", last)
 	}
 }
 
@@ -335,5 +336,30 @@ func TestRingPredecessors(t *testing.T) {
 		if got := ringPredecessors(peers, c.self, c.limit); strings.Join(got, ",") != strings.Join(c.want, ",") {
 			t.Errorf("%s: %v, want %v", name, got, c.want)
 		}
+	}
+}
+
+// dialledAny reports whether any round asked the service to dial a peer. A
+// round with nothing to dial is still sent: it clears what the last one allowed.
+func dialledAny(f *fakeMeshService) bool {
+	for _, addrs := range f.connected {
+		if len(addrs) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// A registry with nobody else in it is still a round, so the service drops the
+// peers the previous one allowed.
+func TestPubsubMesh_anEmptyRegistryStillSendsARound(t *testing.T) {
+	db := meshRegistry(t)
+	now := time.Unix(1_800_000_000, 0)
+	m, svc := newTestMesh(t, db, "n1", "p1", "/ip4/10.0.0.1/tcp/4001/p2p/p1", &now)
+	if err := m.reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(svc.connected) != 1 || len(svc.connected[0]) != 0 || len(svc.allowed[0]) != 0 {
+		t.Fatalf("rounds = %v / %v, want one empty round", svc.connected, svc.allowed)
 	}
 }

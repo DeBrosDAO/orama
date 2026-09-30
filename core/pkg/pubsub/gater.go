@@ -66,6 +66,9 @@ func (g *OverlayGater) SetMeshPeers(ids ...peer.ID) {
 	g.mesh = next
 }
 
+// Admits reports whether the gate currently admits the peer.
+func (g *OverlayGater) Admits(id peer.ID) bool { return g.isAllowed(id) }
+
 func (g *OverlayGater) isAllowed(id peer.ID) bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()

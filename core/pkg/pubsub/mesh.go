@@ -120,10 +120,29 @@ func (m *Mesh) ConnectPeers(ctx context.Context, addrs, allow []string) (MeshCon
 		ids = append(ids, t.info.ID)
 	}
 	m.gater.SetMeshPeers(ids...)
+	// The gate only judges new connections: close the ones to peers this
+	// round no longer names, so a peer that left the registry is cut off, not
+	// just refused the next time it connects.
+	result.Failed = append(result.Failed, m.closeUnadmitted()...)
 
 	dialled := m.dialPeers(ctx, targets)
 	dialled.Failed = append(result.Failed, dialled.Failed...)
 	return dialled, nil
+}
+
+// closeUnadmitted closes every connection to a peer the gate no longer
+// admits, and reports the ones it could not close.
+func (m *Mesh) closeUnadmitted() []MeshPeerFailure {
+	var failed []MeshPeerFailure
+	for _, p := range m.host.Network().Peers() {
+		if m.gater.Admits(p) {
+			continue
+		}
+		if err := m.host.Network().ClosePeer(p); err != nil {
+			failed = append(failed, MeshPeerFailure{Addr: p.String(), Error: "close a peer no longer in the mesh: " + err.Error()})
+		}
+	}
+	return failed
 }
 
 // meshTarget is one parsed peer entry.

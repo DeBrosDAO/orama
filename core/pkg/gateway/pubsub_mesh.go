@@ -139,9 +139,8 @@ func (m *PubsubMesh) reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(peers) == 0 {
-		return nil
-	}
+	// An empty registry is still a round: it clears the peers the service
+	// admitted from the last one.
 	addrs := ringSuccessors(peers, self.PeerID, pubsub.MaxMeshPeers)
 	allow := ringPredecessors(peers, self.PeerID, pubsub.MaxMeshPeers)
 	result, err := m.service.MeshConnect(ctx, addrs, allow)
@@ -155,6 +154,12 @@ func (m *PubsubMesh) reconcile(ctx context.Context) error {
 	return nil
 }
 
+// registeredPeer is one live registration.
+type registeredPeer struct {
+	id   string
+	addr string
+}
+
 // The live registrations excluding this service are split in two, each at
 // most pubsub.MaxMeshPeers long: the peers that follow this one in peer-id
 // order (wrapping) are dialled, the ones that precede it are allowlisted to
@@ -162,12 +167,7 @@ func (m *PubsubMesh) reconcile(ctx context.Context) error {
 // is within B's first MaxMeshPeers predecessors: whoever dials a node is
 // always on its allowlist, at any fleet size. The service refuses a longer
 // list, and GossipSub needs a connected graph, not every pair.
-// registeredPeer is one live registration.
-type registeredPeer struct {
-	id   string
-	addr string
-}
-
+//
 // ringPredecessors returns up to limit addresses of the peers (sorted by id)
 // that precede self, nearest first, wrapping around.
 func ringPredecessors(peers []registeredPeer, self string, limit int) []string {

@@ -989,7 +989,8 @@ peers of the gateway's latest `/mesh/peers` round, which replaces that set.
 Each round the gateway sends the node's ring successors by peer id (dialled)
 and its ring predecessors (allowed to connect in), each at most 256: whoever
 dials a node is among its predecessors, so the mesh forms at any fleet size,
-and a peer that left the registry stops being admitted within a round. An
+and a peer that left the registry is disconnected and stops being admitted
+within a round (an empty registry still sends a round, which clears the set). An
 inbound connection from an unknown peer id is refused at the handshake; a peer
 that connects before this node's gateway has named it connects on its next
 round. GossipSub peer exchange is off. There is no libp2p pre-shared key on the

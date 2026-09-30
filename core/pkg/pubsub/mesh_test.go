@@ -307,3 +307,26 @@ func TestMesh_aPeerNamedOnlyInAllowCanConnectIn(t *testing.T) {
 		t.Fatalf("a dial to a peer that allows us was refused: %+v", res)
 	}
 }
+
+// A peer the next round no longer names is cut off, not only refused the next
+// time it connects: its live connection is closed.
+func TestMesh_aPeerDroppedFromTheRoundIsDisconnected(t *testing.T) {
+	a, b := startNode(t), startNode(t)
+	bs, err := b.mesh.Self()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.gater.Pin(a.id)
+	if res, err := a.mesh.ConnectPeers(context.Background(), bs.Addrs, nil); err != nil || res.Connected != 1 {
+		t.Fatalf("connect: %+v %v", res, err)
+	}
+	if a.mesh.host.Network().Connectedness(b.id) != network.Connected {
+		t.Fatal("not connected after the first round")
+	}
+	if _, err := a.mesh.ConnectPeers(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if a.mesh.host.Network().Connectedness(b.id) == network.Connected {
+		t.Fatal("a peer dropped from the round is still connected")
+	}
+}
