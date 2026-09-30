@@ -15,8 +15,9 @@ func testFetcher(srv *httptest.Server) HTTPFetcher {
 	return HTTPFetcher{
 		Client:  srv.Client(),
 		BaseURL: func(string) string { return srv.URL },
-		Sign: func(r *http.Request) error {
+		Sign: func(r *http.Request, audience string) error {
 			r.Header.Set("X-Test-Signed", "yes")
+			r.Header.Set("X-Test-Audience", audience)
 			return nil
 		},
 	}
@@ -24,7 +25,7 @@ func testFetcher(srv *httptest.Server) HTTPFetcher {
 
 func TestHTTPFetcherFetch_signedRequestAndReport(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != InternalReportPath || r.Header.Get("X-Test-Signed") != "yes" {
+		if r.URL.Path != InternalReportPath || r.Header.Get("X-Test-Signed") != "yes" || r.Header.Get("X-Test-Audience") != "p" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -101,7 +102,7 @@ func TestHTTPFetcherFetch_signingFailureStopsRequest(t *testing.T) {
 	f := HTTPFetcher{
 		Client:  http.DefaultClient,
 		BaseURL: func(string) string { return "http://127.0.0.1:1" },
-		Sign:    func(*http.Request) error { return errors.New("no cluster secret") },
+		Sign:    func(*http.Request, string) error { return errors.New("no cluster secret") },
 	}
 	if _, err := f.Fetch(context.Background(), Peer{WGIP: "10.0.0.2"}); err == nil || !strings.Contains(err.Error(), "no cluster secret") {
 		t.Fatalf("err = %v", err)

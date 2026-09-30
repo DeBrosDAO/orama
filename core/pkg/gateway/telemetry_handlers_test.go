@@ -200,6 +200,7 @@ func selfCollected(t *testing.T, rpt string) *hub.SelfCollector {
 func TestInternalTelemetryHandler_signedMeshRequestGetsReportAndAge(t *testing.T) {
 	g := telemetryGateway(t)
 	g.cfg.ClusterSecret = "test-cluster-secret-with-enough-entropy-0123456789"
+	g.cfg.NodePeerID = coordinationTestNode
 	g.telemetry.self = selfCollected(t, `{"hostname":"athena","timestamp":"`+time.Now().UTC().Format(time.RFC3339Nano)+`"}`)
 	req := httptest.NewRequest(http.MethodGet, "/v1/internal/telemetry", nil)
 	req.RemoteAddr = "10.0.0.2:4000"
@@ -207,7 +208,7 @@ func TestInternalTelemetryHandler_signedMeshRequestGetsReportAndAge(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := nodeauth.SignCoordination(key, req, time.Now()); err != nil {
+	if err := nodeauth.SignCoordination(key, req, time.Now(), coordinationTestNode); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()

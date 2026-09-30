@@ -561,6 +561,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 			IPFSAPIURL:            cfg.IPFSAPIURL,
 			ClusterSecret:         cfg.ClusterSecret,
+			NodePeerID:            cfg.NodePeerID,
 		}, deps.ORMClient, deps.GlobalORMClient)
 		gw.storageHandlers.HoldUntilCIDRefBackfill() // the backfill itself starts once the schema is ready (afterReadySteps)
 	}
@@ -720,6 +721,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		if gw.cfg.NodePeerID != "" {
 			gw.deploymentService.SetNodePeerID(gw.cfg.NodePeerID)
 		}
+		gw.deploymentService.SetCoordinationSecret(gw.cfg.ClusterSecret)
 
 		// Create deployment handlers
 		gw.staticHandler = deploymentshandlers.NewStaticDeploymentHandler(

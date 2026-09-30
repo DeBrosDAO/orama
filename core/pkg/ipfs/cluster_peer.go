@@ -61,8 +61,9 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 	var clusterPeers []string
 	var ipfsPeers []IPFSPeerEntry
 
-	// Get unique IPs from connected libp2p peers
-	peerIPs := make(map[string]bool)
+	// Get unique IPs from connected libp2p peers, each with the peer id the
+	// request to it is signed for.
+	peerIPs := make(map[string]string)
 	for _, p := range h.Peerstore().Peers() {
 		if p == h.ID() {
 			continue
@@ -74,7 +75,7 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 			// for inter-node queries since the index gateway port is blocked on public interfaces by UFW
 			ip := extractIPFromMultiaddr(addr)
 			if ip != "" && strings.HasPrefix(ip, "10.0.0.") {
-				peerIPs[ip] = true
+				peerIPs[ip] = p.String()
 			}
 		}
 	}
@@ -91,8 +92,8 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 		return err
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	for ip := range peerIPs {
-		resp, err := fetchPeerNetworkStatus(client, coordKey, constants.GatewayURLFor(ip))
+	for ip, peerID := range peerIPs {
+		resp, err := fetchPeerNetworkStatus(client, coordKey, constants.GatewayURLFor(ip), peerID)
 		if err != nil {
 			cm.logger.Debug("Failed to query peer status", zap.String("ip", ip), zap.Error(err))
 			continue
@@ -352,13 +353,14 @@ func (cm *ClusterConfigManager) findIPFSRepoPath() string {
 }
 
 // fetchPeerNetworkStatus asks the gateway at gatewayURL for its node's network
-// status, stamped with the coordination MAC.
-func fetchPeerNetworkStatus(client *http.Client, coordKey []byte, gatewayURL string) (*http.Response, error) {
+// status, stamped with the coordination MAC for the node whose peer id is
+// audience.
+func fetchPeerNetworkStatus(client *http.Client, coordKey []byte, gatewayURL, audience string) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodGet, gatewayURL+"/v1/network/status", nil)
 	if err != nil {
 		return nil, err
 	}
-	if err := auth.SignCoordination(coordKey, req, time.Now()); err != nil {
+	if err := auth.SignCoordination(coordKey, req, time.Now(), audience); err != nil {
 		return nil, err
 	}
 	resp, err := client.Do(req)

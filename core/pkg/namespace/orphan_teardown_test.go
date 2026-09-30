@@ -497,3 +497,83 @@ func TestRegistryDisownedTenants_persistsThenClears(t *testing.T) {
 		t.Fatalf("still reported after the registry assigned a tenant: %v", got)
 	}
 }
+
+// Two namespaces whose teardown never succeeds must not hold both slots for
+// good once a third has failed once: each due namespace is attempted in turn,
+// the one attempted longest ago first.
+//
+// Mutation check: order by "failed or not" and then by name and d is never
+// retried once it has failed, because a and b sort before it.
+func TestReapOrphanedTenants_everyDueNamespaceIsAttemptedInTurn(t *testing.T) {
+	h := newOrphanHarness([]string{"a", "b", "d", "kept"}, []string{"kept"}, 3)
+	h.failNS = map[string]bool{"a": true, "b": true}
+	_ = h.sweep(t)
+	_ = h.sweep(t) // due: a and b take both slots and fail
+
+	h.failNS["d"] = true // d fails transiently, once
+	_ = h.sweep(t)
+	delete(h.failNS, "d")
+	for i := 0; i < 3 && len(h.tornDown) == 0; i++ {
+		_ = h.sweep(t)
+	}
+	if !reflect.DeepEqual(h.tornDown, []string{"d"}) {
+		t.Fatalf("torn down = %v, want d taken after its transient failure while a and b keep failing", h.tornDown)
+	}
+}
+
+// The failed-attempt record of a namespace that is no longer orphaned is
+// dropped, so the map does not grow with every namespace that ever failed.
+func TestReapOrphanedTenants_aRecoveredNamespaceIsForgotten(t *testing.T) {
+	h := newOrphanHarness([]string{"a", "kept"}, []string{"kept"}, 3)
+	h.failNS = map[string]bool{"a": true}
+	_ = h.sweep(t)
+	_ = h.sweep(t)
+	if len(h.cm.teardownAttempt) != 1 {
+		t.Fatalf("attempts = %v, want a recorded", h.cm.teardownAttempt)
+	}
+	h.registered = []string{"a", "kept"}
+	_ = h.sweep(t)
+	if len(h.cm.teardownAttempt) != 0 {
+		t.Fatalf("attempts = %v, want none for a namespace that is registered again", h.cm.teardownAttempt)
+	}
+}
+
+// An empty registry beside tenants pauses teardown, and that has to reach the
+// operator like the registry disowning every tenant does.
+func TestRegistryDisownedTenants_anEmptyRegistryRaisesIt(t *testing.T) {
+	h := newOrphanHarness([]string{"solo"}, nil, 0)
+	_ = h.sweep(t)
+	if got := h.cm.RegistryDisownedTenants(); got != nil {
+		t.Fatalf("reported after one sweep: %v", got)
+	}
+	_ = h.sweep(t)
+	if got := h.cm.RegistryDisownedTenants(); !reflect.DeepEqual(got, []string{"solo"}) {
+		t.Fatalf("got %v, want the tenant reported after %d sweeps of an empty registry", got, orphanSweepsRequired)
+	}
+	if len(h.tornDown) != 0 {
+		t.Fatalf("torn down = %v from an empty registry", h.tornDown)
+	}
+}
+
+// A failed read says nothing about the registry: it neither raises the alert
+// nor clears one that is up.
+func TestRegistryDisownedTenants_aFailedReadKeepsThePreviousState(t *testing.T) {
+	h := newOrphanHarness([]string{"x", "y"}, []string{"other"}, 3)
+	_ = h.sweep(t)
+	h.readErr = errors.New("rqlite unavailable")
+	_ = h.sweep(t) // a failed read between two disowning sweeps
+	if got := h.cm.RegistryDisownedTenants(); got != nil {
+		t.Fatalf("a failed read counted as a disowning sweep: %v", got)
+	}
+	h.readErr = nil
+	_ = h.sweep(t)
+	_ = h.sweep(t)
+	if got := h.cm.RegistryDisownedTenants(); len(got) != 2 {
+		t.Fatalf("got %v, want the alert raised after consecutive disowning sweeps", got)
+	}
+	h.readErr = errors.New("rqlite unavailable")
+	_ = h.sweep(t)
+	if got := h.cm.RegistryDisownedTenants(); len(got) != 2 {
+		t.Fatalf("a failed read cleared the alert: %v", got)
+	}
+}

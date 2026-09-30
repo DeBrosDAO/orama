@@ -27,10 +27,10 @@ func TestCoordination_signAndVerify(t *testing.T) {
 	now := time.Now()
 
 	r := coordinationRequest(http.MethodPost, "/v1/internal/namespace/spawn?namespace=acme")
-	if err := SignCoordination(key, r, now); err != nil {
+	if err := SignCoordination(key, r, now, testAudience); err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	if !VerifyCoordination(key, r, now) {
+	if !VerifyCoordination(key, r, now, testAudience) {
 		t.Fatal("a request this node signed did not verify")
 	}
 }
@@ -42,7 +42,7 @@ func TestCoordination_refuses(t *testing.T) {
 
 	signed := func() *http.Request {
 		r := coordinationRequest(http.MethodPost, "/v1/internal/namespace/spawn?namespace=acme")
-		if err := SignCoordination(key, r, now); err != nil {
+		if err := SignCoordination(key, r, now, testAudience); err != nil {
 			t.Fatalf("sign: %v", err)
 		}
 		return r
@@ -51,13 +51,13 @@ func TestCoordination_refuses(t *testing.T) {
 	t.Run("no stamp at all — which is what the old constant amounted to", func(t *testing.T) {
 		r := coordinationRequest(http.MethodPost, "/v1/internal/namespace/spawn?namespace=acme")
 		r.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
-		if VerifyCoordination(key, r, now) {
+		if VerifyCoordination(key, r, now, testAudience) {
 			t.Error("an unsigned request verified")
 		}
 	})
 
 	t.Run("another cluster's secret", func(t *testing.T) {
-		if VerifyCoordination(other, signed(), now) {
+		if VerifyCoordination(other, signed(), now, testAudience) {
 			t.Error("a stamp from one cluster verified in another")
 		}
 	})
@@ -65,7 +65,7 @@ func TestCoordination_refuses(t *testing.T) {
 	t.Run("replayed onto a different namespace", func(t *testing.T) {
 		r := signed()
 		r.URL.RawQuery = "namespace=victim"
-		if VerifyCoordination(key, r, now) {
+		if VerifyCoordination(key, r, now, testAudience) {
 			t.Error("a stamp for one namespace verified for another — the query is what carries it")
 		}
 	})
@@ -73,7 +73,7 @@ func TestCoordination_refuses(t *testing.T) {
 	t.Run("replayed onto a different path", func(t *testing.T) {
 		r := signed()
 		r.URL.Path = "/v1/internal/namespace/repair"
-		if VerifyCoordination(key, r, now) {
+		if VerifyCoordination(key, r, now, testAudience) {
 			t.Error("a stamp for one route verified on another")
 		}
 	})
@@ -81,19 +81,19 @@ func TestCoordination_refuses(t *testing.T) {
 	t.Run("replayed onto a different method", func(t *testing.T) {
 		r := signed()
 		r.Method = http.MethodDelete
-		if VerifyCoordination(key, r, now) {
+		if VerifyCoordination(key, r, now, testAudience) {
 			t.Error("a stamp made on a POST verified on a DELETE")
 		}
 	})
 
 	t.Run("an old stamp", func(t *testing.T) {
-		if VerifyCoordination(key, signed(), now.Add(2*coordinationMaxSkew)) {
+		if VerifyCoordination(key, signed(), now.Add(2*coordinationMaxSkew), testAudience) {
 			t.Error("a stale stamp verified; a captured request would be replayable forever")
 		}
 	})
 
 	t.Run("a stamp from the future", func(t *testing.T) {
-		if VerifyCoordination(key, signed(), now.Add(-2*coordinationMaxSkew)) {
+		if VerifyCoordination(key, signed(), now.Add(-2*coordinationMaxSkew), testAudience) {
 			t.Error("a stamp from the future verified; it is as much a sign of forgery as an old one")
 		}
 	})
@@ -102,14 +102,14 @@ func TestCoordination_refuses(t *testing.T) {
 		for _, value := range []string{"", "nonsense", "123", "123.", ".abcd", "abc.def", "999999999999999999999.aa"} {
 			r := coordinationRequest(http.MethodPost, "/v1/internal/namespace/spawn?namespace=acme")
 			r.Header.Set(CoordinationMACHeader, value)
-			if VerifyCoordination(key, r, now) {
+			if VerifyCoordination(key, r, now, testAudience) {
 				t.Errorf("the stamp %q verified", value)
 			}
 		}
 	})
 
 	t.Run("no key on the verifying side", func(t *testing.T) {
-		if VerifyCoordination(nil, signed(), now) {
+		if VerifyCoordination(nil, signed(), now, testAudience) {
 			t.Error("a node with no cluster secret accepted a coordination request")
 		}
 	})
@@ -125,7 +125,7 @@ func TestCoordination_refusesToSignWithoutASecret(t *testing.T) {
 		}
 	}
 	r := coordinationRequest(http.MethodPost, "/v1/internal/namespace/spawn")
-	if err := SignCoordination(nil, r, time.Now()); err == nil {
+	if err := SignCoordination(nil, r, time.Now(), testAudience); err == nil {
 		t.Error("a request was signed with no key")
 	}
 	if r.Header.Get(CoordinationMACHeader) != "" {

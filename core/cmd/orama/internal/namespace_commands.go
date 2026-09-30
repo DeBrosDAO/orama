@@ -18,6 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/encryption"
 	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
 )
 
@@ -690,5 +691,23 @@ func signCoordinationRequest(r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return auth.SignCoordination(key, r, time.Now())
+	audience, err := localNodePeerID()
+	if err != nil {
+		return err
+	}
+	return auth.SignCoordination(key, r, time.Now(), audience)
+}
+
+// localNodePeerID is the libp2p peer id of the node this command runs on, from
+// the identity key install wrote. A coordination stamp is signed for it: the
+// request goes to this node's own gateway, which accepts only a stamp made for
+// its own id.
+func localNodePeerID() (string, error) {
+	path := filepath.Join(oramainstall.OramaData, "identity.key")
+	info, err := encryption.LoadIdentity(path)
+	if err != nil {
+		return "", fmt.Errorf("cannot read this node's identity at %s, so the request cannot be "+
+			"signed for this node's gateway — run this on a node: %w", path, err)
+	}
+	return info.PeerID.String(), nil
 }

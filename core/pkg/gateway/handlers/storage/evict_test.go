@@ -20,6 +20,13 @@ import (
 // testClusterSecret is the cluster secret every test gateway shares.
 const testClusterSecret = "test-cluster-secret-for-evict-macs"
 
+// testNodePeerID is the peer id of the node the handlers under test run on, and
+// so the audience an evict call must be signed for.
+const testNodePeerID = "12D3KooWEvictTestNode"
+
+// nodeIDFor is the dns_nodes id the mock gives a node with the given IP.
+func nodeIDFor(ip string) string { return "node-" + ip }
+
 // mockStorageDB is a minimal rqlite.Client for the eviction-path tests. It
 // embeds the interface (so unimplemented methods panic if ever hit) and answers
 // only the two SELECTs the evict path issues, plus the ownership SELECT and the
@@ -67,7 +74,7 @@ func (m *mockStorageDB) Query(_ context.Context, dest any, query string, _ ...an
 		}
 		rows := make([]map[string]interface{}, 0, len(m.nodeIPs))
 		for _, ip := range m.nodeIPs {
-			rows = append(rows, map[string]interface{}{"ip": ip})
+			rows = append(rows, map[string]interface{}{"id": nodeIDFor(ip), "ip": ip})
 		}
 		*out = rows
 	case strings.Contains(query, "ipfs_content_ownership"):
@@ -183,18 +190,21 @@ func TestMaybeImmediateEvict_zeroPins_noNodes_partial(t *testing.T) {
 // "partial", and no block was ever reclaimed — while every unit test passed,
 // because the mock answered both roles from one handle.
 //
-// Mutation check: point activeNodeInternalIPs back at h.db and this fails.
+// Mutation check: point activeNodes back at h.db and this fails.
 func TestActiveNodeInternalIPs_readsGlobalNotNamespaceDB(t *testing.T) {
 	nsDB := &mockStorageDB{namespaceScoped: true, nodeIPs: []string{"10.0.0.99"}}
 	global := &mockStorageDB{nodeIPs: []string{"10.0.0.1", "10.0.0.2", "10.0.0.17"}}
 	h := newHandlersWithDBs(&mockIPFSClient{}, nsDB, global)
 
-	ips, err := h.activeNodeInternalIPs(context.Background())
+	nodes, err := h.activeNodes(context.Background())
 	if err != nil {
-		t.Fatalf("activeNodeInternalIPs: %v", err)
+		t.Fatalf("activeNodes: %v", err)
 	}
-	if len(ips) != 3 {
-		t.Fatalf("got %d node IPs %v, want the 3 from the GLOBAL database", len(ips), ips)
+	if len(nodes) != 3 {
+		t.Fatalf("got %d nodes %v, want the 3 from the GLOBAL database", len(nodes), nodes)
+	}
+	if nodes[0].ID != nodeIDFor("10.0.0.1") || nodes[0].IP != "10.0.0.1" {
+		t.Fatalf("node 0 = %+v, want its id and IP", nodes[0])
 	}
 	if nsDB.topologyReadHere {
 		t.Error("topology was read from the namespace database, which is empty in production")
@@ -207,7 +217,7 @@ func TestActiveNodeInternalIPs_readsGlobalNotNamespaceDB(t *testing.T) {
 func TestActiveNodeInternalIPs_noGlobalHandleIsAnError(t *testing.T) {
 	// A missing global handle must surface, not read as "cluster has no nodes".
 	h := &Handlers{logger: newTestLogger()}
-	if _, err := h.activeNodeInternalIPs(context.Background()); err == nil {
+	if _, err := h.activeNodes(context.Background()); err == nil {
 		t.Fatal("want an error when no global database handle is configured")
 	}
 }
@@ -288,7 +298,7 @@ func evictReq(t *testing.T, cid, remoteAddr, secret string) (*httptest.ResponseR
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := auth.SignCoordination(key, req, time.Now()); err != nil {
+		if err := auth.SignCoordination(key, req, time.Now(), testNodePeerID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -364,7 +374,7 @@ func TestEvictHandler_staleStampRefused(t *testing.T) {
 	h := newTestHandlers(mock)
 	rec, req := evictReq(t, "QmX", "10.0.0.7:5000", "")
 	key, _ := auth.CoordinationKey(testClusterSecret)
-	if err := auth.SignCoordination(key, req, time.Now().Add(-10*time.Minute)); err != nil {
+	if err := auth.SignCoordination(key, req, time.Now().Add(-10*time.Minute), testNodePeerID); err != nil {
 		t.Fatal(err)
 	}
 	h.EvictHandler(rec, req)
@@ -437,7 +447,7 @@ func TestEvictFanout_signedRequestIsAcceptedByTheHandler(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recv := &mockIPFSClient{}
-			receiver := New(recv, newTestLogger(), Config{ClusterSecret: tc.receiver}, nil, nil)
+			receiver := New(recv, newTestLogger(), Config{ClusterSecret: tc.receiver, NodePeerID: nodeIDFor("127.0.0.1")}, nil, nil)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				r.RemoteAddr = "10.0.0.7:5000" // the overlay address a peer arrives from
 				receiver.EvictHandler(w, r)
@@ -570,3 +580,42 @@ var errStorageTest = errStorage("boom")
 type errStorage string
 
 func (e errStorage) Error() string { return string(e) }
+
+// The fan-out signs each call for the node it dials, so a captured call cannot
+// be replayed at another node.
+func TestMaybeImmediateEvict_signsEachCallForItsNode(t *testing.T) {
+	key, _ := auth.CoordinationKey(testClusterSecret)
+	var audienceOK int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if auth.VerifyCoordination(key, r, time.Now(), nodeIDFor("127.0.0.1")) {
+			atomic.AddInt32(&audienceOK, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	h := newHandlersWithDBs(&mockIPFSClient{},
+		&mockStorageDB{namespaceScoped: true, refCount: 0},
+		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+	h.evictPort = portOf(t, srv.URL)
+	h.maybeImmediateEvict(context.Background(), "QmGone", true)
+	if atomic.LoadInt32(&audienceOK) != 1 {
+		t.Fatal("the evict call was not signed for the node it was sent to")
+	}
+}
+
+// A call signed for another node is refused here.
+func TestEvictHandler_aCallSignedForAnotherNodeIsRefused(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmX", "10.0.0.7:5000", "")
+	key, _ := auth.CoordinationKey(testClusterSecret)
+	if err := auth.SignCoordination(key, req, time.Now(), "12D3KooWSomeOtherNode"); err != nil {
+		t.Fatal(err)
+	}
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none", rec.Code, mock.evictCalls)
+	}
+}

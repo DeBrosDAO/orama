@@ -165,6 +165,10 @@ func (g *Gateway) handleInternalReencrypt(w http.ResponseWriter, r *http.Request
 		return
 	}
 	root := req.Root
+	if err := secrets.CheckSuccessor(g.encHolder.Get(), root); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	// Cached before it is used. A gateway that swapped to a root it could not
 	// persist would boot next time — registry unreachable — on the previous
 	// one, and fail on everything encrypted in between. The failure goes back
@@ -199,12 +203,14 @@ func (g *Gateway) handleInternalReencrypt(w http.ResponseWriter, r *http.Request
 func (g *Gateway) fanoutReencrypt(ctx context.Context, root secrets.Root) []nsWalkResult {
 	type target struct {
 		Namespace  string `db:"namespace_name"`
+		NodeID     string `db:"node_id"`
 		InternalIP string `db:"internal_ip"`
 		Port       int    `db:"gateway_http_port"`
 	}
 	var rows []target
 	q := `
 		SELECT DISTINCT nc.namespace_name,
+		       dn.id AS node_id,
 		       COALESCE(dn.internal_ip, dn.ip_address) AS internal_ip,
 		       pa.gateway_http_port
 		  FROM namespace_clusters nc
@@ -244,7 +250,7 @@ func (g *Gateway) fanoutReencrypt(ctx context.Context, root secrets.Root) []nsWa
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if err := nodeauth.SignCoordination(key, req, time.Now()); err != nil {
+		if err := nodeauth.SignCoordination(key, req, time.Now(), row.NodeID); err != nil {
 			nr.Error = err.Error()
 			out = append(out, nr)
 			continue

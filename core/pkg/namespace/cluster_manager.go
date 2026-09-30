@@ -118,10 +118,12 @@ type ClusterManager struct {
 	// registry (reapOrphanedTenants).
 	orphanMu     sync.Mutex
 	orphanStreak map[string]int
-	// teardownFailed is the set of namespaces whose teardown failed on the last
-	// pass that attempted them; the next pass tries the others first so a
-	// namespace that keeps failing cannot starve the rest under the cap.
-	teardownFailed map[string]bool
+	// teardownAttempt records, per namespace whose teardown failed, when it was
+	// last attempted as a position in teardownSeq. The per-pass cap takes the
+	// namespaces attempted longest ago first, so every due namespace is tried in
+	// turn however many keep failing.
+	teardownAttempt map[string]uint64
+	teardownSeq     uint64
 	// disownedTenants is the tenant list of the last sweep that found the
 	// registry disowning every one of them, and disownedStreak how many
 	// consecutive sweeps did (RegistryDisownedTenants).
@@ -940,6 +942,11 @@ func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, r
 	if cm.spawnRequestFn != nil {
 		return cm.spawnRequestFn(ctx, nodeIP, req)
 	}
+	targetNodeID, _ := req["node_id"].(string)
+	if targetNodeID == "" {
+		return nil, fmt.Errorf("spawn request %q for namespace %v to %s names no node_id: the stamp is "+
+			"signed for one node and the endpoint refuses a request for any other", req["action"], req["namespace"], nodeIP)
+	}
 	url := fmt.Sprintf("http://%s:%d/v1/internal/namespace/spawn", nodeIP, IndexGatewayHTTPPort)
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -951,7 +958,7 @@ func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, r
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if err := cm.signCoordination(httpReq); err != nil {
+	if err := cm.signCoordination(httpReq, targetNodeID); err != nil {
 		return nil, err
 	}
 
@@ -2888,9 +2895,12 @@ func (cm *ClusterManager) GetClusterStatusByID(ctx context.Context, clusterID st
 // tenant workload that could reach a node's gateway port could spawn or stop
 // services for any namespace on it.
 //
+// audience is the peer id of the node the request is sent to; only that node
+// accepts the stamp.
+//
 // The secret is read per request rather than cached, so a rotation does not
 // require restarting every node before coordination works again.
-func (cm *ClusterManager) signCoordination(r *http.Request) error {
+func (cm *ClusterManager) signCoordination(r *http.Request, audience string) error {
 	secret, err := os.ReadFile(cm.clusterSecretPath)
 	if err != nil {
 		return fmt.Errorf("cannot read the cluster secret at %s, so this node cannot prove a "+
@@ -2900,7 +2910,7 @@ func (cm *ClusterManager) signCoordination(r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return auth.SignCoordination(key, r, time.Now())
+	return auth.SignCoordination(key, r, time.Now(), audience)
 }
 
 // namespaceGatewayHealthURL is where this node's copy of a namespace gateway

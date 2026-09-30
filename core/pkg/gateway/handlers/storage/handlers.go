@@ -34,6 +34,9 @@ type Config struct {
 	// evict calls (pkg/auth/coordination.go). Every gateway of a cluster holds
 	// the same one.
 	ClusterSecret string
+	// NodePeerID is this node's libp2p peer id: the audience an evict call must
+	// have been signed for to be accepted here.
+	NodePeerID string
 }
 
 // Handlers provides HTTP handlers for IPFS storage operations.

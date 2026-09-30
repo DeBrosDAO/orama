@@ -63,16 +63,17 @@ const (
 )
 
 // coordinationPayloadV2 is the exact string a v2 MAC covers: everything v1
-// covers, plus the recipient's Host (the overlay ip:port the signer dialled),
-// the SHA-256 of the body and the nonce. The label is the one
-// SignACME's payload uses; the two are keyed differently, so a stamp for one
-// never verifies as the other.
-func coordinationPayloadV2(method, host, path, query string, body []byte, nonce string, ts int64) string {
+// covers, plus the audience (the libp2p peer id of the node the request is for),
+// the SHA-256 of the body and the nonce. The audience is not read from the
+// request: the signer puts the node it is calling there and the verifier puts
+// its own id there, so a stamp for one node never verifies at another, however
+// the request is addressed.
+func coordinationPayloadV2(method, audience, path, query string, body []byte, nonce string, ts int64) string {
 	sum := sha256.Sum256(body)
 	return strings.Join([]string{
 		"orama-coordination-v2",
 		strings.ToUpper(method),
-		strings.ToLower(host),
+		audience,
 		path,
 		query,
 		hex.EncodeToString(sum[:]),
@@ -82,14 +83,19 @@ func coordinationPayloadV2(method, host, path, query string, body []byte, nonce 
 }
 
 // SignCoordination stamps a request as coming from inside the cluster, with the
-// v2 MAC and, beside it, the v1 MAC a not-yet-upgraded peer reads.
+// v2 MAC and, beside it, the v1 MAC a not-yet-upgraded peer reads. audience is
+// the peer id of the node the request is sent to; only that node verifies it.
 //
 // The body is part of what the v2 MAC covers, so it must be complete before the
 // request is signed; changing it afterwards makes the request fail verification.
-func SignCoordination(key []byte, r *http.Request, now time.Time) error {
+func SignCoordination(key []byte, r *http.Request, now time.Time, audience string) error {
 	if len(key) == 0 {
 		return fmt.Errorf("no coordination key: this node has no cluster secret, so it cannot " +
 			"prove to another node that this request came from inside the cluster")
+	}
+	if audience == "" {
+		return fmt.Errorf("no audience for the coordination request to %s: the node it is for "+
+			"must be named, or any node could be made to accept it", r.URL.Path)
 	}
 	body, err := signableBody(r)
 	if err != nil {
@@ -103,22 +109,11 @@ func SignCoordination(key []byte, r *http.Request, now time.Time) error {
 	ts := now.Unix()
 
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(coordinationPayloadV2(r.Method, requestHost(r), r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
+	mac.Write([]byte(coordinationPayloadV2(r.Method, audience, r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
 	r.Header.Set(CoordinationNonceHeader, nonce)
 	r.Header.Set(CoordinationMACV2Header, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(mac.Sum(nil)))
 	signCoordinationV1(key, r, now)
 	return nil
-}
-
-// requestHost is the host a request is addressed to: the Host a client sends
-// (r.Host, or the URL's when unset) and the Host a server receives (r.Host).
-// Coordination calls go straight to the node's overlay address, not through a
-// proxy, so signer and verifier see the same value.
-func requestHost(r *http.Request) string {
-	if r.Host != "" {
-		return r.Host
-	}
-	return r.URL.Host
 }
 
 // signableBody returns the bytes r will send, leaving r able to send them. It
@@ -141,8 +136,8 @@ func signableBody(r *http.Request) ([]byte, error) {
 // VerifyCoordination reports whether a request was stamped by something holding
 // the cluster secret, under either stamp. Use CheckCoordination where the
 // endpoint has to know which.
-func VerifyCoordination(key []byte, r *http.Request, now time.Time) bool {
-	_, ok := CheckCoordination(key, r, now)
+func VerifyCoordination(key []byte, r *http.Request, now time.Time, audience string) bool {
+	_, ok := CheckCoordination(key, r, now, audience)
 	return ok
 }
 
@@ -150,29 +145,32 @@ func VerifyCoordination(key []byte, r *http.Request, now time.Time) bool {
 // it for a route whose parameters travel in the body or that changes what a
 // service points at: the v1 stamp does not cover the body, so a stripped-v2
 // replay with a swapped body would pass VerifyCoordination.
-func VerifyCoordinationV2(key []byte, r *http.Request, now time.Time) bool {
-	v, ok := CheckCoordination(key, r, now)
+func VerifyCoordinationV2(key []byte, r *http.Request, now time.Time, audience string) bool {
+	v, ok := CheckCoordination(key, r, now, audience)
 	return ok && v == CoordinationV2
 }
 
 // CheckCoordination verifies a coordination request and says which stamp it
-// carried.
+// carried. audience is this node's own libp2p peer id, from its configuration
+// and never from the request: a v2 stamp is valid only if it was signed for it.
+// A v1 stamp names no audience.
 //
 // It answers false for every reason: no key on this side, no stamp, a malformed
 // one, a stale or future timestamp, a MAC over a different request or body than
-// the one that arrived, or a nonce already seen. A v2 stamp that fails is never
+// the one that arrived, a stamp signed for another node or made before this
+// process started, or a nonce already seen. A v2 stamp that fails is never
 // retried as v1: a request whose body was swapped still carries the v1 stamp
 // it was signed with.
 //
 // A v2 verification reads the body (at most CoordinationMaxBody) and puts it
 // back, so the handler reads it as if nothing had. The nonce is consumed only
 // once the MAC is right, so nothing without the key can fill the replay cache.
-func CheckCoordination(key []byte, r *http.Request, now time.Time) (CoordinationVersion, bool) {
+func CheckCoordination(key []byte, r *http.Request, now time.Time, audience string) (CoordinationVersion, bool) {
 	if len(key) == 0 {
 		return 0, false
 	}
 	if r.Header.Get(CoordinationMACV2Header) != "" {
-		return CoordinationV2, verifyCoordinationV2(key, r, now)
+		return CoordinationV2, audience != "" && verifyCoordinationV2(key, r, now, audience)
 	}
 	if AcceptLegacyCoordinationMAC && verifyCoordinationV1(key, r, now) {
 		return CoordinationV1, true
@@ -180,7 +178,7 @@ func CheckCoordination(key []byte, r *http.Request, now time.Time) (Coordination
 	return 0, false
 }
 
-func verifyCoordinationV2(key []byte, r *http.Request, now time.Time) bool {
+func verifyCoordinationV2(key []byte, r *http.Request, now time.Time, audience string) bool {
 	stamp, sig, ok := strings.Cut(strings.TrimSpace(r.Header.Get(CoordinationMACV2Header)), ".")
 	if !ok {
 		return false
@@ -190,6 +188,13 @@ func verifyCoordinationV2(key []byte, r *http.Request, now time.Time) bool {
 		return false
 	}
 	if skew := now.Sub(time.Unix(ts, 0)); skew > coordinationMaxSkew || skew < -coordinationMaxSkew {
+		return false
+	}
+	// The nonce cache is per process and empty after a restart, so a stamp made
+	// before this process started cannot be told from a replay of one it already
+	// served. Refusing it costs a sender whose clock runs behind this node's a
+	// retry in the first seconds after a restart.
+	if ts < coordinationProcessStart.Unix() {
 		return false
 	}
 	nonce := r.Header.Get(CoordinationNonceHeader)
@@ -205,7 +210,7 @@ func verifyCoordinationV2(key []byte, r *http.Request, now time.Time) bool {
 		return false
 	}
 	expected := hmac.New(sha256.New, key)
-	expected.Write([]byte(coordinationPayloadV2(r.Method, requestHost(r), r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
+	expected.Write([]byte(coordinationPayloadV2(r.Method, audience, r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
 	if !hmac.Equal(presented, expected.Sum(nil)) {
 		return false
 	}
@@ -241,6 +246,9 @@ type replayCache struct {
 	capacity int
 	ttl      time.Duration
 }
+
+// coordinationProcessStart is when this process's nonce cache began empty.
+var coordinationProcessStart = time.Now()
 
 var coordinationReplays = newReplayCache(coordinationReplayCapacity, coordinationReplayTTL)
 

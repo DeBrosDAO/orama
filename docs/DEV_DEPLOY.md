@@ -277,13 +277,19 @@ orama node upgrade --env testnet --yes
 
 Upgrading from 0.122.x the first time: see [First upgrade from 0.122.x](#first-upgrade-from-0122x).
 
-**Pause namespace create and delete during a rolling upgrade.** Every namespace
-spawn action (and the secrets re-encrypt fan-out of `orama operator rotate-secrets`)
-needs the v2 coordination MAC, which a node still on the previous build does not
-send (see SECURITY.md, "Coordination MAC v2"). While the fleet is mixed, such a
-request from a not-yet-upgraded node to an upgraded one is refused `401`. After the last node is upgraded, check that
-`namespace_pending_cleanup` drains: a teardown refused in the window is recorded
-there and replayed by the tenant reconciler.
+**Pause namespace and deployment create and delete during a rolling upgrade.**
+Coordination between nodes now needs the v2 coordination MAC signed for the
+receiving node's peer id, and the deployment replica routes
+(`/v1/internal/deployments/replica/*`) take it instead of the constant header
+they used to. A build that signs only v1 (or signs the replica header) cannot
+coordinate spawns, teardowns or replica operations with an upgraded node, and an
+upgraded node cannot with it, until every node is upgraded: such requests are
+refused `401`/`403` (see SECURITY.md, "Coordination MAC v2"). The same goes for
+the secrets re-encrypt fan-out of `orama operator rotate-secrets`. Network
+status, telemetry, namespace repair and storage evict still accept v1 during the
+upgrade, so `orama monitor` keeps working. After the last node is upgraded,
+check that `namespace_pending_cleanup` drains: a teardown refused in the window
+is recorded there and replayed by the tenant reconciler.
 
 ### Signed archives
 

@@ -125,7 +125,7 @@ func coordinationRequest(t *testing.T, path, remote string, key []byte) *http.Re
 	r := httptest.NewRequest(http.MethodGet, path, nil)
 	r.RemoteAddr = remote
 	if key != nil {
-		if err := nodeauth.SignCoordination(key, r, time.Now()); err != nil {
+		if err := nodeauth.SignCoordination(key, r, time.Now(), coordinationTestNode); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -137,6 +137,7 @@ func coordinationRequest(t *testing.T, path, remote string, key []byte) *http.Re
 func TestNetworkDetail_admitsANodeOverTheMesh(t *testing.T) {
 	g := readyGatewayWithReport(t, "0xoperator")
 	g.cfg.ClusterSecret = "network-detail-secret"
+	g.cfg.NodePeerID = coordinationTestNode
 	key, err := nodeauth.CoordinationKey(g.cfg.ClusterSecret)
 	if err != nil {
 		t.Fatal(err)

@@ -498,13 +498,17 @@ still holding a namespace deleted by an older release starts it for up to two
 sweeps (about two minutes) before the orphan sweep removes it: the upgrade
 cannot ask the registry, and this is the only window.
 
-The per-sweep cap rotates: a namespace whose teardown failed on the last pass is
-tried after the ones that did not fail, so two orphans that keep failing cannot
-take both slots every pass and starve the rest.
+The per-sweep cap rotates: the due namespaces are ordered by when their last
+failed teardown was attempted (never attempted first, then the one attempted
+longest ago), so however many orphans keep failing, each due namespace reaches
+the front in turn and none is starved. The record of a namespace that is no
+longer orphaned is dropped.
 
-**When the registry disowns every tenant on the node** the sweep and the boot
+**When the registry disowns every tenant on the node, or holds no cluster at
+all while the node has tenants,** the sweep and the boot
 restore tear nothing down (above), and a node left in that state would do so
-silently for ever. After two consecutive sweeps the node's telemetry report
+silently for ever. A failed registry read neither raises nor clears the alert.
+After two consecutive sweeps the node's telemetry report
 carries `registry_disowned_tenants` and `orama monitor report` raises a critical
 `namespace` alert naming them. Recovery depends on which side is wrong:
 

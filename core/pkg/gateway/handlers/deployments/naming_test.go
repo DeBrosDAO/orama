@@ -227,12 +227,15 @@ func TestUpdateHandler_legacyDottedNameIsNotRefused(t *testing.T) {
 // separator into DeployDir is refused before anything touches the disk.
 func TestReplicaHandler_invalidInstanceIs400(t *testing.T) {
 	base := t.TempDir()
-	h := NewReplicaHandler(&DeploymentService{db: &mockRQLiteClient{}, logger: zap.NewNop()}, nil, nil, zap.NewNop(), base)
+	svc := replicaTestService()
+	h := NewReplicaHandler(svc, nil, nil, zap.NewNop(), base)
 	for _, handle := range []func(http.ResponseWriter, *http.Request){h.HandleSetup, h.HandleUpdate, h.HandleTeardown} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/internal/deployments/replica/x",
 			strings.NewReader(`{"deployment_id":"d1","namespace":"acme","name":"web/../../x"}`))
-		req.Header.Set("X-Orama-Internal-Auth", "replica-coordination")
 		req.RemoteAddr = "10.0.0.2:4000"
+		if err := svc.signReplicaRequest(req, replicaTestNodeID); err != nil {
+			t.Fatal(err)
+		}
 		rr := httptest.NewRecorder()
 
 		handle(rr, req)

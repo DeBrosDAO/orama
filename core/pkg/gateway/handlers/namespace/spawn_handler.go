@@ -143,7 +143,7 @@ func (h *SpawnHandler) verifyCoordination(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return auth.VerifyCoordinationV2(key, r, time.Now())
+	return auth.VerifyCoordinationV2(key, r, time.Now(), h.nodeID)
 }
 
 // ServeHTTP implements http.Handler

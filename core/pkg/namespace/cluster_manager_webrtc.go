@@ -690,16 +690,17 @@ func (cm *ClusterManager) updateClusterStateWithWebRTC(
 					zap.Error(err))
 			}
 		} else {
-			cm.saveRemoteState(ctx, node.InternalIP, cluster.NamespaceName, state)
+			cm.saveRemoteState(ctx, node.InternalIP, node.NodeID, cluster.NamespaceName, state)
 		}
 	}
 }
 
 // saveRemoteState sends cluster state to a remote node for persistence.
-func (cm *ClusterManager) saveRemoteState(ctx context.Context, nodeIP, namespace string, state *ClusterLocalState) {
+func (cm *ClusterManager) saveRemoteState(ctx context.Context, nodeIP, nodeID, namespace string, state *ClusterLocalState) {
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
 		"action":        "save-cluster-state",
 		"namespace":     namespace,
+		"node_id":       nodeID,
 		"cluster_state": state,
 	})
 	if err != nil {

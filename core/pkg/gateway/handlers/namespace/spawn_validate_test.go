@@ -114,7 +114,7 @@ func TestSpawnHandler_refusesAnInvalidRequestBeforeSpawning(t *testing.T) {
 	body, _ := json.Marshal(bad)
 	r := httptest.NewRequest(http.MethodPost, "/v1/internal/namespace/spawn", bytes.NewReader(body))
 	r.RemoteAddr = "10.0.0.5:40000"
-	if err := auth.SignCoordination(key, r, time.Now()); err != nil {
+	if err := auth.SignCoordination(key, r, time.Now(), "12D3KooWQmExamplePeerID"); err != nil {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
@@ -186,7 +186,7 @@ func TestSpawnHandler_teardownRefusesThePlatformNamespaces(t *testing.T) {
 		body, _ := json.Marshal(SpawnRequest{Action: tc.action, Namespace: ns, NodeID: "node-1"})
 		r := httptest.NewRequest(http.MethodPost, "/v1/internal/namespace/spawn", bytes.NewReader(body))
 		r.RemoteAddr = "10.0.0.5:40000"
-		if err := auth.SignCoordination(key, r, time.Now()); err != nil {
+		if err := auth.SignCoordination(key, r, time.Now(), "node-1"); err != nil {
 			t.Fatal(err)
 		}
 		w := httptest.NewRecorder()

@@ -258,19 +258,19 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 |-------|-------|-------|
 | `/v1/internal/acme/cleanup` | internal | Caddy on this host, with a MAC under the ACME challenge key install gives it (`/etc/caddy/orama-acme.key`); only `_acme-challenge` records under the base domain. Anything else is 404 (unsigned) or 400 (a record it has no business writing). |
 | `/v1/internal/acme/present` | internal | Same as cleanup. |
-| `/v1/internal/deployments/replica/rollback` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/deployments/replica/setup` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/deployments/replica/teardown` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/deployments/replica/update` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
+| `/v1/internal/deployments/replica/rollback` | internal | Node-to-node over the WireGuard overlay. Coordination MAC v2 signed for the receiving node's peer id (body and nonce covered) + overlay source; the former constant header is refused. Never reachable by a client. |
+| `/v1/internal/deployments/replica/setup` | internal | Node-to-node over the WireGuard overlay. Coordination MAC v2 signed for the receiving node's peer id (body and nonce covered) + overlay source; the former constant header is refused. Never reachable by a client. |
+| `/v1/internal/deployments/replica/teardown` | internal | Node-to-node over the WireGuard overlay. Coordination MAC v2 signed for the receiving node's peer id (body and nonce covered) + overlay source; the former constant header is refused. Never reachable by a client. |
+| `/v1/internal/deployments/replica/update` | internal | Node-to-node over the WireGuard overlay. Coordination MAC v2 signed for the receiving node's peer id (body and nonce covered) + overlay source; the former constant header is refused. Never reachable by a client. |
 | `/v1/internal/join` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/namespace/repair` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/secrets/reencrypt` | internal | Index fans out `orama operator rotate-secrets` to each namespace gateway. Coordination MAC, v2 only (the new root key is in the body), + overlay. |
+| `/v1/internal/secrets/reencrypt` | internal | Index fans out `orama operator rotate-secrets` to each namespace gateway. Coordination MAC, v2 only (the new root key is in the body) signed for the receiving node's peer id, + overlay. A root older than the gateway's is refused `409`. |
 | `/v1/internal/namespace/spawn` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/node/enrol-key` | internal | From the node's own process over loopback, stamped with the node's libp2p identity key. Refused from off the host. |
 | `/v1/internal/node/heartbeat` | internal | From the node's own process over loopback, stamped with the key that node enrolled. Refused from off the host. |
 | `/v1/internal/node/register` | internal | From the node's own process over loopback, stamped with the key that node enrolled. Refused from off the host. |
 | `/v1/internal/ping` | internal | Node-to-node over the WireGuard overlay. Answers `{"status":"ok"}` and nothing else. |
-| `/v1/internal/storage/evict` | internal | A peer gateway's immediate-reclaim fan-out (`unpin?immediate=true`). Coordination MAC over the request (the CID is in the query string, which the MAC covers; the body is ignored) + overlay source; the overlay and the old `X-Orama-Internal-Auth` marker alone are refused with 403. |
+| `/v1/internal/storage/evict` | internal | A peer gateway's immediate-reclaim fan-out (`unpin?immediate=true`). Coordination MAC over the request (v2 signed for the receiving node, or v1 during a rolling upgrade; the CID is in the query string, which the MAC covers; the body is ignored) + overlay source; the overlay and the old `X-Orama-Internal-Auth` marker alone are refused with 403. |
 | `/v1/internal/telemetry` | internal | A peer's cluster gateway asking for this node's latest health report. Coordination MAC + overlay source; anything else is 404. |
 | `/v1/internal/tls/check` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/wg/peer` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |

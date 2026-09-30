@@ -19,16 +19,16 @@ import (
 // See pkg/auth/coordination.go for what the MAC covers.
 func (g *Gateway) verifyCoordination(r *http.Request) bool {
 	key, ok := g.coordinationKey(r)
-	return ok && nodeauth.VerifyCoordination(key, r, time.Now())
+	return ok && nodeauth.VerifyCoordination(key, r, time.Now(), g.cfg.NodePeerID)
 }
 
 // verifyCoordinationV2 is verifyCoordination for a route whose parameters
-// travel in the body: only the v2 stamp, which covers the body, recipient and a
-// single-use nonce, is accepted. The v1 stamp covers none of those, so a
+// travel in the body: only the v2 stamp, which covers the body, the audience (this
+// node's peer id) and a single-use nonce, is accepted. The v1 stamp covers none of those, so a
 // stripped-v2 replay with a swapped body would otherwise verify.
 func (g *Gateway) verifyCoordinationV2(r *http.Request) bool {
 	key, ok := g.coordinationKey(r)
-	return ok && nodeauth.VerifyCoordinationV2(key, r, time.Now())
+	return ok && nodeauth.VerifyCoordinationV2(key, r, time.Now(), g.cfg.NodePeerID)
 }
 
 // coordinationKey is the MAC key for a request that arrived over the overlay.

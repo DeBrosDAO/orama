@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -173,6 +174,7 @@ func (cm *ClusterManager) reapOrphanedTenants(ctx context.Context) error {
 	if len(tenants) == 0 {
 		cm.confirmOrphans(nil)
 		cm.setRegistryDisowned(nil)
+		cm.pruneTeardownAttempts(nil)
 		return nil
 	}
 
@@ -185,6 +187,7 @@ func (cm *ClusterManager) reapOrphanedTenants(ctx context.Context) error {
 	}
 	if clusters == 0 {
 		cm.confirmOrphans(nil)
+		cm.setRegistryDisowned(tenants)
 		cm.logger.Warn("Orphan sweep skipped: the registry holds no namespace clusters although this node has tenant state; not treating an empty registry as proof that every namespace is gone",
 			zap.Strings("local_namespaces", tenants))
 		return nil
@@ -204,6 +207,7 @@ func (cm *ClusterManager) reapOrphanedTenants(ctx context.Context) error {
 			orphans = append(orphans, ns)
 		}
 	}
+	cm.pruneTeardownAttempts(orphans)
 	return cm.teardownOrphans(ctx, cm.confirmOrphans(orphans))
 }
 
@@ -211,7 +215,7 @@ func (cm *ClusterManager) reapOrphanedTenants(ctx context.Context) error {
 // enough, at most orphanTeardownsPerPass of them. The rest keep their streak
 // and are taken on a later sweep.
 func (cm *ClusterManager) teardownOrphans(ctx context.Context, due []string) error {
-	due = cm.untriedFirst(due)
+	due = cm.leastRecentlyAttempted(due)
 	if len(due) > orphanTeardownsPerPass {
 		cm.logger.Warn("More namespaces are orphaned than one sweep tears down; the rest wait for the next sweep",
 			zap.Int("orphaned", len(due)), zap.Int("per_sweep", orphanTeardownsPerPass))
@@ -231,37 +235,48 @@ func (cm *ClusterManager) teardownOrphans(ctx context.Context, due []string) err
 	return errors.Join(errs...)
 }
 
-// untriedFirst orders namespaces due for teardown so those whose last attempt
-// failed come after the rest, each group alphabetical. The per-pass cap takes a
-// prefix of this list: without the rotation, two namespaces whose teardown keeps
-// failing would take both slots of every pass and starve all the others.
-func (cm *ClusterManager) untriedFirst(due []string) []string {
+// leastRecentlyAttempted orders namespaces due for teardown by when their last
+// failed attempt was: those never attempted first, then the one attempted
+// longest ago, ties alphabetical. The per-pass cap takes a prefix of this list,
+// so however many teardowns keep failing, each due namespace reaches the front
+// in turn instead of the same few holding every slot.
+func (cm *ClusterManager) leastRecentlyAttempted(due []string) []string {
 	cm.orphanMu.Lock()
 	defer cm.orphanMu.Unlock()
-	ordered := make([]string, 0, len(due))
-	var failed []string
-	for _, ns := range due {
-		if cm.teardownFailed[ns] {
-			failed = append(failed, ns)
-		} else {
-			ordered = append(ordered, ns)
-		}
-	}
-	return append(ordered, failed...)
+	ordered := append([]string(nil), due...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return cm.teardownAttempt[ordered[i]] < cm.teardownAttempt[ordered[j]]
+	})
+	return ordered
 }
 
-// recordTeardown remembers whether the teardown of ns failed.
+// recordTeardown remembers when the teardown of ns last failed, and forgets ns
+// once it succeeded.
 func (cm *ClusterManager) recordTeardown(ns string, err error) {
 	cm.orphanMu.Lock()
 	defer cm.orphanMu.Unlock()
 	if err == nil {
-		delete(cm.teardownFailed, ns)
+		delete(cm.teardownAttempt, ns)
 		return
 	}
-	if cm.teardownFailed == nil {
-		cm.teardownFailed = make(map[string]bool)
+	if cm.teardownAttempt == nil {
+		cm.teardownAttempt = make(map[string]uint64)
 	}
-	cm.teardownFailed[ns] = true
+	cm.teardownSeq++
+	cm.teardownAttempt[ns] = cm.teardownSeq
+}
+
+// pruneTeardownAttempts forgets the attempts of namespaces that are no longer
+// orphaned: a namespace that was registered again or is gone from the disk has
+// nothing left to retry.
+func (cm *ClusterManager) pruneTeardownAttempts(orphans []string) {
+	cm.orphanMu.Lock()
+	defer cm.orphanMu.Unlock()
+	for ns := range cm.teardownAttempt {
+		if !slices.Contains(orphans, ns) {
+			delete(cm.teardownAttempt, ns)
+		}
+	}
 }
 
 // setRegistryDisowned records the outcome of a sweep's check of the registry
@@ -278,8 +293,8 @@ func (cm *ClusterManager) setRegistryDisowned(tenants []string) {
 }
 
 // RegistryDisownedTenants returns the tenant namespaces on this node while the
-// registry has disowned every one of them on orphanSweepsRequired consecutive
-// sweeps, else nil. The orphan sweep and the boot restore do nothing in that
+// registry has disowned every one of them — or held no cluster at all — on
+// orphanSweepsRequired consecutive sweeps, else nil. The orphan sweep and the boot restore do nothing in that
 // state, so it is surfaced to the operator through the node's telemetry report
 // (a monitor alert) instead of only a log line every minute.
 func (cm *ClusterManager) RegistryDisownedTenants() []string {

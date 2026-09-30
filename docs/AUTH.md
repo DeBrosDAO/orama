@@ -1025,17 +1025,22 @@ A node asking another to do something (spawn or stop a namespace's services,
 repair a cluster, fetch telemetry or network status, re-encrypt secrets, evict a
 blob) proves it holds the cluster secret with a coordination MAC, keyed by
 `HKDF(cluster secret, "internal-coordination")`. The v2 MAC
-(`X-Orama-Coordination-MAC-V2`) is an HMAC over method, the recipient Host (the
-overlay `ip:port` the signer dialled), path, query, the SHA-256 of the body, a random nonce (`X-Orama-Coordination-Nonce`) and the time, valid
-for one minute either side of the receiver's clock. The receiver hashes the
+(`X-Orama-Coordination-MAC-V2`) is an HMAC over method, the audience (the peer id
+of the node the request is for: the signer names it, the verifier uses its own
+configured id, never anything in the request), path, query, the SHA-256 of the
+body, a random nonce (`X-Orama-Coordination-Nonce`) and the time, valid
+for one minute either side of the receiver's clock, and not before the
+receiver's process started (its nonce cache is empty until then). The receiver hashes the
 body (at most 1 MiB) and restores it for the handler, and refuses a nonce it saw
 in the last two minutes (`auth.CheckCoordination`). The v1 MAC
 (`X-Orama-Coordination-MAC`, no body, no nonce) is written beside it so a peer
 on the previous build keeps accepting the request during a rolling upgrade; this
 build accepts a v1-only request only on routes whose every parameter is in the
 path or query (network status, telemetry, repair, evict). Every namespace spawn
-action and secrets re-encrypt carry parameters in the body and require v2, and
-the spawn handler also refuses a `node_id` that is not its own node's. The v1
+action, the secrets re-encrypt and the deployment replica routes
+(`/v1/internal/deployments/replica/*`) carry parameters in the body and require
+v2, and the spawn handler also refuses a `node_id` that is not its own node's.
+A re-encrypt whose root is older than the gateway's is refused. The v1
 acceptance is removed in the next release. It proves cluster membership, not
 which node signed. Details: SECURITY.md, "Coordination MAC v2".
 

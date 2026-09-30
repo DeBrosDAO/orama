@@ -73,7 +73,14 @@ func countFromRow(v interface{}) int {
 	}
 }
 
-// activeNodeInternalIPs returns the internal (WireGuard) IPs of all active
+// evictTarget is a node an eviction is fanned out to: its WireGuard address and
+// the peer id the call is signed for.
+type evictTarget struct {
+	ID string
+	IP string
+}
+
+// activeNodes returns the id and internal (WireGuard) IP of all active
 // cluster nodes — the fan-out target set for immediate eviction. A node that
 // does not hold the block simply no-ops its local block rm, so targeting all
 // active nodes is safe (and the cluster's RF replicas are a subset).
@@ -84,7 +91,7 @@ func countFromRow(v interface{}) int {
 // rows forever. Reading it there returned an empty target set on every call, so
 // the fan-out ran against nobody, `evicted` was permanently "partial", and no
 // block was ever reclaimed — the exact ~6h window this feature removes.
-func (h *Handlers) activeNodeInternalIPs(ctx context.Context) ([]string, error) {
+func (h *Handlers) activeNodes(ctx context.Context) ([]evictTarget, error) {
 	if h.globalDB == nil {
 		return nil, fmt.Errorf("no global database handle (cluster topology unavailable)")
 	}
@@ -92,17 +99,19 @@ func (h *Handlers) activeNodeInternalIPs(ctx context.Context) ([]string, error) 
 	// internal-auth call that must travel the WG mesh (the receiver rejects any
 	// non-10.0.0.x source), so never fall back to a public ip_address.
 	var result []map[string]interface{}
-	query := `SELECT internal_ip as ip FROM dns_nodes WHERE status = 'active' AND internal_ip IS NOT NULL AND internal_ip != ''`
+	query := `SELECT id, internal_ip as ip FROM dns_nodes WHERE status = 'active' AND internal_ip IS NOT NULL AND internal_ip != ''`
 	if err := h.globalDB.Query(ctx, &result, query); err != nil {
 		return nil, err
 	}
-	ips := make([]string, 0, len(result))
+	nodes := make([]evictTarget, 0, len(result))
 	for _, row := range result {
-		if ip, ok := row["ip"].(string); ok && ip != "" {
-			ips = append(ips, ip)
+		ip, _ := row["ip"].(string)
+		id, _ := row["id"].(string)
+		if ip != "" && id != "" {
+			nodes = append(nodes, evictTarget{ID: id, IP: ip})
 		}
 	}
-	return ips, nil
+	return nodes, nil
 }
 
 // evictNodePort is the internal gateway port the fan-out dials on each peer.
@@ -119,13 +128,13 @@ func (h *Handlers) evictNodePort() int {
 // so eviction is disk-reclaim + privacy hardening layered on top. Returns true
 // only when every targeted node reported success.
 func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
-	ips, err := h.activeNodeInternalIPs(ctx)
+	nodes, err := h.activeNodes(ctx)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "immediate evict: failed to list cluster nodes; no blocks reclaimed",
 			zap.String("cid", cid), zap.Error(err))
 		return false
 	}
-	if len(ips) == 0 {
+	if len(nodes) == 0 {
 		// Not a normal state: a running cluster always has at least this node
 		// registered active in the main RQLite. An empty set means the topology
 		// read reached the wrong database or the node registry is broken, and
@@ -163,9 +172,10 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 		allOK = false
 		mu.Unlock()
 	}
-	for _, ip := range ips {
+	for _, node := range nodes {
 		wg.Add(1)
-		go func(ip string) {
+		go func(node evictTarget) {
+			ip := node.IP
 			defer wg.Done()
 			endpoint := fmt.Sprintf("http://%s:%d%s?%s", ip, h.evictNodePort(), evictPath, url.Values{"cid": {cid}}.Encode())
 			reqCtx, cancel := context.WithTimeout(ctx, evictFanoutTimeout)
@@ -177,7 +187,7 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-Orama-Internal-Auth", storageInternalAuthMarker)
-			if err := auth.SignCoordination(key, req, time.Now()); err != nil {
+			if err := auth.SignCoordination(key, req, time.Now(), node.ID); err != nil {
 				markFailed()
 				return
 			}
@@ -216,7 +226,7 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 					zap.String("cid", cid), zap.String("node_ip", ip), zap.String("node_status", nodeResp.Status))
 				markFailed()
 			}
-		}(ip)
+		}(node)
 	}
 	wg.Wait()
 	return allOK
@@ -278,5 +288,5 @@ func (h *Handlers) isInternalStorageRequest(r *http.Request) bool {
 			zap.Error(err))
 		return false
 	}
-	return auth.VerifyCoordination(key, r, time.Now())
+	return auth.VerifyCoordination(key, r, time.Now(), h.config.NodePeerID)
 }

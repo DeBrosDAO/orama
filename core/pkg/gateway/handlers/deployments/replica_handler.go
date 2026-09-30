@@ -11,7 +11,6 @@ import (
 
 	"os/exec"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -230,7 +229,13 @@ func (h *ReplicaHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
+	h.applyUpdate(w, r)
+}
 
+// applyUpdate is HandleUpdate past authentication. A stamp is single-use, so
+// the rollback route, which does the same work, authenticates once itself and
+// calls this rather than HandleUpdate, which would refuse its own nonce.
+func (h *ReplicaHandler) applyUpdate(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req replicaUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -370,7 +375,7 @@ func (h *ReplicaHandler) HandleRollback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Rollback uses the same logic as update — the caller sends the target CID
-	h.HandleUpdate(w, r)
+	h.applyUpdate(w, r)
 }
 
 // replicaTeardownRequest is the payload for tearing down a replica.
@@ -499,14 +504,4 @@ func (h *ReplicaHandler) extractFromIPFS(ctx context.Context, cid, destPath stri
 	}
 
 	return nil
-}
-
-// isInternalRequest checks if the request is an internal node-to-node call.
-// Requires both the static auth header AND that the request originates from
-// the WireGuard mesh subnet (cryptographic peer authentication).
-func (h *ReplicaHandler) isInternalRequest(r *http.Request) bool {
-	if r.Header.Get("X-Orama-Internal-Auth") != "replica-coordination" {
-		return false
-	}
-	return auth.IsWireGuardPeer(r.RemoteAddr)
 }

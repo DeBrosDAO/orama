@@ -66,8 +66,9 @@ type HTTPFetcher struct {
 	Client *http.Client
 	// BaseURL maps a peer's WireGuard address to its gateway's base URL.
 	BaseURL func(wgIP string) string
-	// Sign authenticates the request as coming from inside the cluster.
-	Sign func(r *http.Request) error
+	// Sign authenticates the request as coming from inside the cluster, for the
+	// node whose peer id is audience.
+	Sign func(r *http.Request, audience string) error
 }
 
 // Fetch GETs the peer's report. The request is sent only to an address on the
@@ -83,7 +84,7 @@ func (f HTTPFetcher) Fetch(ctx context.Context, p Peer) (PeerReport, error) {
 	if err != nil {
 		return PeerReport{}, fmt.Errorf("build telemetry request for %s: %w", p.WGIP, err)
 	}
-	if err := f.Sign(req); err != nil {
+	if err := f.Sign(req, p.ID); err != nil {
 		return PeerReport{}, fmt.Errorf("sign telemetry request: %w", err)
 	}
 	sent := time.Now()

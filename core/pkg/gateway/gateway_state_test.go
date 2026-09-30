@@ -144,7 +144,7 @@ func TestHandleInternalReencrypt_refusesARootItCannotPersist(t *testing.T) {
 	}
 	previous := secrets.Root{CurrentID: "1", CurrentIKM: "old-root"}
 	g := &Gateway{
-		cfg:       &Config{ClusterSecret: clusterSecret, StateDir: filepath.Join(blocker, "gateway")},
+		cfg:       &Config{ClusterSecret: clusterSecret, NodePeerID: coordinationTestNode, StateDir: filepath.Join(blocker, "gateway")},
 		encHolder: secrets.NewHolder(previous),
 	}
 
@@ -155,7 +155,7 @@ func TestHandleInternalReencrypt_refusesARootItCannotPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := nodeauth.SignCoordination(key, r, time.Now()); err != nil {
+	if err := nodeauth.SignCoordination(key, r, time.Now(), coordinationTestNode); err != nil {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()

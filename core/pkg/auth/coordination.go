@@ -35,9 +35,11 @@ import (
 // endpoint carries the action and the namespace there — therefore has the same
 // v1 MAC input whatever it asks for, and a captured stamp could be replayed
 // inside its window onto a different body. The v2 MAC (coordination_v2.go)
-// also covers the SHA-256 of the body and a single-use nonce. A v1 MAC is still
-// accepted, for requests that do not destroy anything, only while a rolling
-// upgrade has nodes that sign nothing else (AcceptLegacyCoordinationMAC).
+// also covers the SHA-256 of the body, a single-use nonce and the audience, the
+// peer id of the node the request is for. A v1 MAC is still accepted, on routes
+// whose every parameter is in the path or query (network status, telemetry,
+// repair, evict) and nowhere else, only while a rolling upgrade has nodes that
+// sign nothing else (AcceptLegacyCoordinationMAC).
 //
 // This is not node *identity* — every node holds the cluster secret, so any
 // node can sign for any other. Node identity is the node-principal work; this

@@ -103,12 +103,12 @@ func (g *Gateway) telemetryFetcher() hub.HTTPFetcher {
 	return hub.HTTPFetcher{
 		Client:  &http.Client{Timeout: telemetryPeerTimeout},
 		BaseURL: constants.GatewayURLFor,
-		Sign: func(r *http.Request) error {
+		Sign: func(r *http.Request, audience string) error {
 			key, err := nodeauth.CoordinationKey(g.cfg.ClusterSecret)
 			if err != nil {
 				return err
 			}
-			return nodeauth.SignCoordination(key, r, time.Now())
+			return nodeauth.SignCoordination(key, r, time.Now(), audience)
 		},
 	}
 }

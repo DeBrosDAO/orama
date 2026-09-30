@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
+	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
@@ -32,6 +34,27 @@ type DeleteHandler struct {
 	refs   *storage.CIDRefs
 	audit  *auth.AuditLog
 	logger *zap.Logger
+	// clusterSecretPath is where the cluster secret the replica teardown calls
+	// are stamped with is read from, per call, as the spawn requests do.
+	clusterSecretPath string
+}
+
+// SetClusterSecretPath sets where the replica teardown calls get their key.
+func (h *DeleteHandler) SetClusterSecretPath(path string) { h.clusterSecretPath = path }
+
+// signReplicaTeardown stamps a replica teardown for the node whose peer id is
+// audience.
+func (h *DeleteHandler) signReplicaTeardown(req *http.Request, audience string) error {
+	secret, err := os.ReadFile(h.clusterSecretPath)
+	if err != nil {
+		return fmt.Errorf("cannot read the cluster secret at %q, so the replica teardown for node %s "+
+			"cannot be stamped: %w", h.clusterSecretPath, audience, err)
+	}
+	key, err := nodeauth.CoordinationKey(string(secret))
+	if err != nil {
+		return err
+	}
+	return nodeauth.SignCoordination(key, req, time.Now(), audience)
 }
 
 // NewDeleteHandler creates a new delete handler
@@ -287,7 +310,11 @@ func (h *DeleteHandler) teardownDeploymentReplicas(ctx context.Context, ns, depl
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Orama-Internal-Auth", "replica-coordination")
+		if err := h.signReplicaTeardown(req, node.NodeID); err != nil {
+			h.logger.Warn("Failed to sign the teardown request",
+				zap.String("node_id", node.NodeID), zap.Error(err))
+			continue
+		}
 
 		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(req)

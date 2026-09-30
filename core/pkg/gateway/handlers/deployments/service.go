@@ -38,6 +38,10 @@ type DeploymentService struct {
 	baseDomain      string // Base domain for deployments (e.g., "dbrs.space")
 	nodePeerID      string // Current node's peer ID (deployments run on this node)
 
+	// coordinationSecret is the cluster secret the replica coordination calls
+	// to and from other nodes are stamped with.
+	coordinationSecret string
+
 	// envCodec seals a deployment's environment before it is stored. The
 	// column held plaintext JSON, and it is where the platform's own guide
 	// tells people to put their secrets, so every tenant's API keys and
@@ -481,7 +485,7 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 		"max_restart_count": deployment.MaxRestartCount,
 	}
 
-	resp, err := s.callInternalAPI(nodeIP, "/v1/internal/deployments/replica/setup", payload)
+	resp, err := s.callInternalAPI(nodeID, nodeIP, "/v1/internal/deployments/replica/setup", payload)
 	if err != nil {
 		s.logger.Error("Failed to set up dynamic replica on remote node",
 			zap.String("deployment_id", deployment.ID),
@@ -540,8 +544,9 @@ func (s *DeploymentService) publishReplicaRecord(ctx context.Context, deployment
 		zap.String("fqdn", fqdn), zap.String("ip", publicIP), zap.String("node_id", nodeID))
 }
 
-// callInternalAPI makes an HTTP POST to a node's internal API.
-func (s *DeploymentService) callInternalAPI(nodeIP, path string, payload map[string]interface{}) (map[string]interface{}, error) {
+// callInternalAPI makes an HTTP POST to the internal API of the node nodeID,
+// stamped for that node.
+func (s *DeploymentService) callInternalAPI(nodeID, nodeIP, path string, payload map[string]interface{}) (map[string]interface{}, error) {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
@@ -555,7 +560,9 @@ func (s *DeploymentService) callInternalAPI(nodeIP, path string, payload map[str
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Orama-Internal-Auth", "replica-coordination")
+	if err := s.signReplicaRequest(req, nodeID); err != nil {
+		return nil, err
+	}
 
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
@@ -907,7 +914,7 @@ func (s *DeploymentService) FanOutToReplicas(ctx context.Context, deployment *de
 		}
 
 		go func(ip, nid string) {
-			_, err := s.callInternalAPI(ip, path, payload)
+			_, err := s.callInternalAPI(nid, ip, path, payload)
 			if err != nil {
 				s.logger.Error("Replica fan-out failed",
 					zap.String("node_id", nid),
