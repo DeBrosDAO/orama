@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
+	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
@@ -22,9 +23,6 @@ import (
 const (
 	// feature names the artifact directory the journeys' numbers go to.
 	feature = "reference-apps"
-	// nodeBinary is what orama-deploy-node@ and orama-deploy-npm@ execute
-	// (core/systemd/orama-deploy-node@.service ExecStart).
-	nodeBinary = "/usr/bin/node"
 	// replicas is how many nodes run a dynamic deployment
 	// (core/pkg/deployments/types.go DefaultReplicaCount).
 	replicas = 2
@@ -52,11 +50,7 @@ func requireNPM(t testing.TB) {
 // and sudo on a node (core/pkg/install/prebuilt.go installMinimalDeps).
 func requireNodeRuntime(t testing.TB, f *fleet.Fleet) {
 	t.Helper()
-	for _, n := range f.State.Nodes {
-		if out := f.Exec(t, n, "test -x "+nodeBinary); out.Exit != 0 {
-			t.Fatalf("%s has no %s: a Node.js deployment's unit cannot start there (orama-deploy-node@.service ExecStart)", n.Name, nodeBinary)
-		}
-	}
+	tenancy.RequireNodeRuntime(t, f)
 }
 
 // appUnitNodes are the core nodes where the deployment's unit is active.

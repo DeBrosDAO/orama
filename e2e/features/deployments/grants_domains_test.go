@@ -28,7 +28,14 @@ func TestDeployGrants_runtimeYesControlPlaneNo(t *testing.T) {
 	if out := tn.cli.MustOK(t, "app", "grants", "list", "granted").Stdout; !strings.Contains(out, "runtime") {
 		t.Fatalf("grants list does not show runtime:\n%s", out)
 	}
-	tn.cli.MustOK(t, "app", "grants", "set", "granted", "reader", "--resource", "pubsub:topic=orders.*")
+	// A selector narrows a scope the role holds: runtime has scopes, reader has
+	// none, so a reader with a selector is refused by design
+	// (core/pkg/gateway/auth/grants.go).
+	tn.cli.MustOK(t, "app", "grants", "set", "granted", "runtime", "--resource", "pubsub:topic=orders.*")
+	if res, err := tn.cli.Run(t.Context(), "app", "grants", "set", "granted", "reader", "--resource", "pubsub:topic=orders.*"); err != nil || res.Exit == 0 {
+		t.Errorf("a reader grant with a selector was accepted, but a reader holds no scope to narrow (%v)", err)
+	}
+	tn.cli.MustOK(t, "app", "grants", "set", "granted", "reader")
 	for _, role := range []string{"admin", "owner", "superuser", ""} {
 		if res, err := tn.cli.Run(t.Context(), "app", "grants", "set", "granted", role); err != nil || res.Exit == 0 {
 			t.Errorf("an app was granted %q (%v)", role, err)

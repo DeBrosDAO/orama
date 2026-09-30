@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/e2e/harness"
 )
 
 // probeMain is a Go backend that reports, from inside its own sandbox, what
@@ -18,6 +20,9 @@ const probeMain = `package main
 
 import (
 	"bufio"
+	"crypto/tls"
+	"crypto/x509"
+	_ "embed"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -27,6 +32,22 @@ import (
 )
 
 const version = "VERSION"
+
+// caPEM is the run's CA bundle (Let's Encrypt staging roots): nodes do not
+// trust them, only the harness and the CLI do, so the app's own gateway calls
+// carry the bundle the way a real app deployed against a staging cluster would.
+//
+//go:embed ca.pem
+var caPEM []byte
+
+func gatewayClient() *http.Client {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	pool.AppendCertsFromPEM(caPEM)
+	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+}
 
 type answer struct {
 	OK     bool   ` + "`json:\"ok\"`" + `
@@ -106,7 +127,7 @@ func main() {
 		}
 		req, _ := http.NewRequest(http.MethodPost, os.Getenv("ORAMA_GATEWAY_URL")+"/v1/auth/renew", nil)
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := gatewayClient().Do(req)
 		if err != nil {
 			reply(w, false, "renew: "+err.Error())
 			return
@@ -135,15 +156,20 @@ func main() {
 }
 `
 
-// WriteProbeApp writes the probe backend, stamped with version, into a fresh
-// directory and returns it. `orama deploy go` builds it on the runner. The
-// deployments packages share it.
+// WriteProbeApp writes the probe backend, stamped with version, and the run's
+// CA bundle (ca.pem, embedded) into a fresh directory and returns it. `orama
+// deploy go` builds it on the runner. The deployments packages share it.
 func WriteProbeApp(t testing.TB, version string) string {
 	t.Helper()
+	ca, err := os.ReadFile(harness.Fleet(t).State.CAFile)
+	if err != nil {
+		t.Fatalf("failed to read the run's CA bundle for the probe app: %v", err)
+	}
 	dir := t.TempDir()
 	files := map[string]string{
 		"go.mod":  "module probe\n\ngo 1.22\n",
 		"main.go": strings.Replace(probeMain, `"VERSION"`, `"`+version+`"`, 1),
+		"ca.pem":  string(ca),
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {

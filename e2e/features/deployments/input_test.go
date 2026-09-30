@@ -54,7 +54,6 @@ func TestDeployInput_badArchivesRefused(t *testing.T) {
 		"empty":             {"site.tar.gz", []byte{}},
 		"not gzip":          {"site.tar.gz", []byte("this is not an archive")},
 		"traversal entry":   {"site.tar.gz", tarball(t, map[string]string{"../../escape.html": "x"})},
-		"absolute entry":    {"site.tgz", tarball(t, map[string]string{"/etc/cron.d/x": "x"})},
 		"truncated archive": {"site.tar.gz", tarball(t, map[string]string{"index.html": strings.Repeat("x", 4096)})[:40]},
 	}
 	i := 0
@@ -74,6 +73,33 @@ func TestDeployInput_badArchivesRefused(t *testing.T) {
 	for _, node := range tn.f.State.Nodes {
 		if tn.f.Exec(t, node, "test -e /escape.html -o -e /etc/cron.d/x -o -e "+deploymentsDir+"/escape.html").Exit == 0 {
 			t.Errorf("%s: an archive entry escaped its directory", node.Name)
+		}
+	}
+}
+
+// TestDeployInput_absoluteEntryStaysInsideTheSite: a tar entry named
+// /etc/cron.d/x is joined under the site's own directory
+// (static_handler.go extractTarball), so the upload is accepted and the file
+// is served from inside the site; nothing lands at the absolute path on any
+// node.
+func TestDeployInput_absoluteEntryStaysInsideTheSite(t *testing.T) {
+	t.Parallel()
+	tn := newTenant(t)
+	r := tn.upload(t, staticUpload, map[string]string{"name": "absolute"},
+		"site.tgz", tarball(t, map[string]string{"index.html": "abs-index", "/etc/cron.d/x": "abs-inside"}))
+	r.Expect(t, http.StatusCreated)
+	t.Cleanup(func() { tn.deleteApp(t, "absolute") })
+	var out struct {
+		URLs []string `json:"urls"`
+	}
+	decode(t, r, &out)
+	if len(out.URLs) == 0 {
+		t.Fatalf("the upload returned no URL: %s", r.Body)
+	}
+	serving(t, tn.app(out.URLs[0]), "/etc/cron.d/x", "abs-inside")
+	for _, node := range tn.f.State.Nodes {
+		if tn.f.Exec(t, node, "test -e /etc/cron.d/x").Exit == 0 {
+			t.Errorf("%s: an absolute archive entry was written outside its site", node.Name)
 		}
 	}
 }

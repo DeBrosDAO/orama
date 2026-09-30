@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 )
 
 // nodeUpload is the Node.js upload route the CLI uses.
@@ -20,6 +22,7 @@ const pwnScript = `node -e \"require('fs').writeFileSync('node_modules/.pwned','
 func TestDeployNPM_installScriptsNeverRun(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
+	tenancy.RequireNodeRuntime(t, tn.f, tenancy.NodeBinary, tenancy.NPMBinary)
 	pkg := `{"name":"hostile","version":"1.0.0","main":"index.js","scripts":{` +
 		`"preinstall":"` + pwnScript + `","install":"` + pwnScript + `","postinstall":"` + pwnScript + `","prepare":"` + pwnScript + `"},` +
 		`"dependencies":{"ms":"2.1.3"}}`
@@ -55,20 +58,39 @@ func TestDeployNPM_nonRegistrySourcesRefused(t *testing.T) {
 		"workspaces":   `{"name":"a","version":"1.0.0","workspaces":["packages/*"]}`,
 	}
 	for name, pkg := range pkgs {
-		tn.expectInstallRefused(t, name, map[string]string{"package.json": pkg, "index.js": nodeServer})
+		tn.expectInstallRefused(t, name, refusalFor(name), map[string]string{"package.json": pkg, "index.js": nodeServer})
 	}
 	lock := `{"name":"a","version":"1.0.0","lockfileVersion":3,"packages":{"":{"dependencies":{"ms":"2.1.3"}},` +
 		`"node_modules/ms":{"version":"2.1.3","resolved":"http://evil.example/ms-2.1.3.tgz"}}}`
-	tn.expectInstallRefused(t, "plain-http lockfile entry", map[string]string{
+	tn.expectInstallRefused(t, "plain-http lockfile entry", refusalRegistryTarball, map[string]string{
 		"package.json": `{"name":"a","version":"1.0.0","dependencies":{"ms":"2.1.3"}}`, "package-lock.json": lock, "index.js": nodeServer})
 	gitLock := strings.Replace(lock, "http://evil.example/ms-2.1.3.tgz", "git+https://evil.example/ms.git", 1)
-	tn.expectInstallRefused(t, "git lockfile entry", map[string]string{
+	tn.expectInstallRefused(t, "git lockfile entry", refusalRegistryTarball, map[string]string{
 		"package.json": `{"name":"a","version":"1.0.0","dependencies":{"ms":"2.1.3"}}`, "package-lock.json": gitLock, "index.js": nodeServer})
 }
 
+// What the server's refusal says (core/pkg/deployments/process/npmspec.go).
+const (
+	refusalNotRegistry     = "is not a registry version"
+	refusalWorkspaces      = "workspaces are not supported"
+	refusalRegistryTarball = "not a registry tarball"
+)
+
+// refusalFor is the message expected of the manifest case named what.
+func refusalFor(what string) string {
+	switch what {
+	case "workspaces":
+		return refusalWorkspaces
+	default:
+		return refusalNotRegistry
+	}
+}
+
 // expectInstallRefused uploads files as a Node.js app and requires the
-// refusal (500 naming the problem, per the guide) with no app left running.
-func (tn *tenant) expectInstallRefused(t testing.TB, what string, files map[string]string) {
+// refusal (500 with a message naming the problem, per the guide) with no app
+// left running. A bare "status >= 400" would also pass when npm is missing or a
+// registry host is unreachable, with the guard deleted.
+func (tn *tenant) expectInstallRefused(t testing.TB, what, message string, files map[string]string) {
 	t.Helper()
 	name := "npm" + strings.NewReplacer(" ", "", ":", "", "/", "", "+", "", "-", "").Replace(what)
 	if len(name) > 40 {
@@ -79,6 +101,9 @@ func (tn *tenant) expectInstallRefused(t testing.TB, what string, files map[stri
 		tn.deleteApp(t, name)
 		t.Errorf("%s: the install was accepted (%d)", what, r.Status)
 		return
+	}
+	if r.Status != http.StatusInternalServerError || !strings.Contains(string(r.Body), message) {
+		t.Errorf("%s: want HTTP 500 saying %q, got %d: %.300s", what, message, r.Status, r.Body)
 	}
 	if tn.api(t, http.MethodGet, pathGet+"?name="+name, nil).Status == http.StatusOK {
 		tn.deleteApp(t, name)

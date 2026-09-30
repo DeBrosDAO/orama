@@ -69,6 +69,7 @@ func TestDeployNextStatic_exportServed(t *testing.T) {
 func TestDeployNextSSR_standaloneServerRuns(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
+	tenancy.RequireNodeRuntime(t, tn.f)
 	tgz := tarball(t, map[string]string{
 		"server.js":           replaceVersion(nodeServer, "next-ssr"),
 		"package.json":        `{"name":"ssr","version":"1.0.0","main":"server.js"}`,
@@ -100,6 +101,7 @@ func TestDeployNextSSR_cliBuildsAndDeploys(t *testing.T) {
 		harness.SkipNotApplicable(t, "the runner has no npm; `orama deploy nextjs --ssr` builds the app on the operator's machine")
 	}
 	tn := newTenant(t)
+	tenancy.RequireNodeRuntime(t, tn.f)
 	dir := writeTree(t, map[string]string{
 		"package.json":        `{"name":"e2e-next","private":true,"scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"14.2.15","react":"18.3.1","react-dom":"18.3.1"}}`,
 		"next.config.js":      "module.exports = { output: 'standalone' }\n",
@@ -115,6 +117,7 @@ func TestDeployNextSSR_cliBuildsAndDeploys(t *testing.T) {
 func TestDeployNode_cliDeployServes(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
+	tenancy.RequireNodeRuntime(t, tn.f)
 	u := tn.deploy(t, "nodejs", nodeApp(t, "node-v1", plainPackage), "nodeapp")
 	everyNodeServes(t, tn, u, "/version", "node-v1")
 	if nodes := unitNodes(t, tn.f, "orama-deploy-node@"+tn.instance("nodeapp")+".service"); len(nodes) == 0 {
@@ -128,18 +131,37 @@ func TestDeployNode_cliDeployServes(t *testing.T) {
 func TestDeployNode_startScriptRunsUnderNPM(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
-	pkg := `{"name":"e2e-npm","version":"1.0.0","scripts":{"start":"node index.js"}}`
+	tenancy.RequireNodeRuntime(t, tn.f, tenancy.NodeBinary, tenancy.NPMBinary)
+	// A start script that is exactly "node <file>" runs under node@ directly
+	// (nodejs_handler.go detectEntryPoint); only anything else goes to npm.
+	pkg := `{"name":"e2e-npm","version":"1.0.0","scripts":{"start":"NODE_ENV=production node index.js"}}`
 	u := tn.deploy(t, "nodejs", nodeApp(t, "npm-start", pkg), "npmapp")
 	everyNodeServes(t, tn, u, "/version", "npm-start")
 	if nodes := unitNodes(t, tn.f, "orama-deploy-npm@"+tn.instance("npmapp")+".service"); len(nodes) == 0 {
 		t.Error("no node runs the app under orama-deploy-npm@")
 	}
 	for _, node := range tn.f.State.Nodes {
-		if out := tn.f.Exec(t, node, "systemctl show -p Result --value orama-deploy-build@"+tn.instance("npmapp")+".service"); strings.TrimSpace(out.Stdout) == "success" {
+		if buildInstallRan(tn.f.Exec(t, node, "systemctl show -p Result -p ExecMainExitTimestamp orama-deploy-build@"+tn.instance("npmapp")+".service").Stdout) {
 			return
 		}
 	}
 	t.Error("no node shows a successful orama-deploy-build@ install for the app")
+}
+
+// buildInstallRan reads `systemctl show -p Result -p ExecMainExitTimestamp` of
+// a build unit: Result is "success" for a unit that never ran too, so the
+// install counts only when it also recorded an exit time.
+func buildInstallRan(show string) bool {
+	var result, exited string
+	for _, line := range strings.Split(show, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Result="); ok {
+			result = v
+		}
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ExecMainExitTimestamp="); ok {
+			exited = v
+		}
+	}
+	return result == "success" && exited != ""
 }
 
 // TestDeployGo_cliCrossCompilesAndServes: `orama deploy go` builds

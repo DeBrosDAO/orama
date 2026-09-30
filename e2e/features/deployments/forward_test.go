@@ -17,6 +17,7 @@ import (
 func TestDeployForward_updateThroughANodeWithoutTheApp(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
+	tenancy.RequireNodeRuntime(t, tn.f)
 	u := tn.deploy(t, "nodejs", nodeApp(t, "fwd-v1", plainPackage), "fwd")
 	serving(t, tn.app(u), "/version", "fwd-v1")
 	running := unitNodes(t, tn.f, "orama-deploy-node@"+tn.instance("fwd")+".service")
