@@ -41,11 +41,31 @@ func DefaultMaxLive(coreNodes int) int {
 	return max(1, coreNodes*blocksPerNode/nodesPerNamespace-liveHeadroom)
 }
 
+// StagenetMaxLive is the default cap on the stagenet target. Its three nodes
+// are shared, small VPSs that also serve the owner's own namespaces, and a
+// namespace that nobody can delete (its owner was a run's throwaway wallet)
+// keeps its port block: sixteen at once starved them until provisioning
+// rolled back and then answered "insufficient nodes available" (2026-09-30).
+const StagenetMaxLive = 4
+
 // MaxLiveFromEnv is EnvMaxLive through lookup, or DefaultMaxLive(coreNodes).
 func MaxLiveFromEnv(lookup func(string) (string, bool), coreNodes int) (int, error) {
+	return maxLive(lookup, DefaultMaxLive(coreNodes))
+}
+
+// MaxLiveForTarget is EnvMaxLive through lookup, or the target's default:
+// StagenetMaxLive on stagenet, DefaultMaxLive for a fleet of coreNodes.
+func MaxLiveForTarget(lookup func(string) (string, bool), stagenet bool, coreNodes int) (int, error) {
+	if stagenet {
+		return maxLive(lookup, StagenetMaxLive)
+	}
+	return MaxLiveFromEnv(lookup, coreNodes)
+}
+
+func maxLive(lookup func(string) (string, bool), fallback int) (int, error) {
 	v, ok := lookup(EnvMaxLive)
 	if !ok || strings.TrimSpace(v) == "" {
-		return DefaultMaxLive(coreNodes), nil
+		return fallback, nil
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 1 {

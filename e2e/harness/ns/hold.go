@@ -81,7 +81,7 @@ func takeFleetSlots(t testing.TB, f *fleet.Fleet, count int) bool {
 	if mode.StatePath == "" {
 		return false
 	}
-	capacity, err := MaxLiveFromEnv(os.LookupEnv, len(f.State.Nodes))
+	capacity, err := MaxLiveForTarget(os.LookupEnv, f.State.IsStagenet(), len(f.State.Nodes))
 	if err != nil {
 		t.Fatal(err)
 	}

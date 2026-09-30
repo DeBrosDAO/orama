@@ -223,3 +223,21 @@ func TestHold_newUsesHeldSlotsFirst(t *testing.T) {
 	}
 	_ = s.Release()
 }
+
+func TestMaxLiveForTarget_stagenetHasItsOwnDefault(t *testing.T) {
+	none := func(string) (string, bool) { return "", false }
+	if n, err := MaxLiveForTarget(none, true, 3); err != nil || n != StagenetMaxLive {
+		t.Fatalf("stagenet default = %d, %v; want %d", n, err, StagenetMaxLive)
+	}
+	if n, err := MaxLiveForTarget(none, false, 3); err != nil || n != DefaultMaxLive(3) {
+		t.Fatalf("fleet default = %d, %v; want %d", n, err, DefaultMaxLive(3))
+	}
+	two := func(string) (string, bool) { return "2", true }
+	if n, err := MaxLiveForTarget(two, true, 3); err != nil || n != 2 {
+		t.Fatalf("override on stagenet = %d, %v; want 2", n, err)
+	}
+	bad := func(string) (string, bool) { return "0", true }
+	if _, err := MaxLiveForTarget(bad, true, 3); err == nil {
+		t.Fatal("a zero override was accepted")
+	}
+}

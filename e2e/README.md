@@ -356,7 +356,9 @@ every package of the run through flock'd files in `<work dir>/ns-slots/`
 (a crashed process releases its slots with its descriptors), and releases
 it after the namespace's teardown. The cap is `E2E_MAX_LIVE_NAMESPACES`,
 default `ns.DefaultMaxLive(len(nodes))`: 20 port blocks per node, 3 nodes per
-namespace, minus 4 of headroom = **16** on three nodes. A test that creates
+namespace, minus 4 of headroom = **16** on three nodes. On the stagenet
+target the default is `ns.StagenetMaxLive` (**4**): its nodes are shared, small
+VPSs that also serve the owner's own namespaces. A test that creates
 several namespaces calls `ns.Hold(t, f, n)` first (all its slots at once; the
 next `n` `ns.New` use them), so it never holds some slots while waiting for
 the rest. **`ns.New` fails a test that already holds a slot and has no held
