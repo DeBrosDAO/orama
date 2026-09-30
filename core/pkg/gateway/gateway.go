@@ -516,6 +516,11 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			cfg.TURNSecret,
 			gw.proxyWebSocket,
 		)
+		// Rooms are placed on one SFU by the cluster registry's view of which
+		// nodes hold the SFU role; the tenant's own rqlite has no such table rows.
+		if deps.globalSQLDB != nil {
+			gw.webrtcHandlers.SetSFUDirectory(newRegistrySFUDirectory(deps.globalSQLDB, sfuDirectoryTTL))
+		}
 		// TURNS (:5349) must advertise the single-label host so the *.<base>
 		// wildcard cert validates it in browsers; UDP/TCP keep the legacy host.
 		if tlsHost := turn.TLSHostFromLegacyTURNHost(cfg.TURNDomain); tlsHost != "" {

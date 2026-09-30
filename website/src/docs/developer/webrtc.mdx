@@ -107,11 +107,11 @@ The `iceTransportPolicy: "relay"` setting is mandatory. The SFU rejects non-rela
 
 ### 3. Connect Signaling WebSocket
 
-The signaling channel is a WebSocket connection proxied by the gateway to the SFU. Pass authentication as a query parameter. All messages in both directions use an envelope of the form `{ type, data }`, and the first message you send must be a `join` with both `roomId` and `userId` in `data` — the SFU rejects the connection if either is missing. Rooms are created implicitly on first join.
+The signaling channel is a WebSocket connection proxied by the gateway to the SFU. Pass authentication as a query parameter. All messages in both directions use an envelope of the form `{ type, data }`, and the first message you send must be a `join` with both `roomId` and `userId` in `data` — the SFU rejects the connection if either is missing. The `room` query parameter is required and must equal the `roomId` you join with: the gateway uses it to send every peer of a room to the one SFU that owns it. Rooms are created implicitly on first join.
 
 ```typescript
 const ws = new WebSocket(
-  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}`
+  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}&room=${encodeURIComponent(roomId)}`
 );
 
 ws.onopen = () => {
@@ -247,7 +247,7 @@ function reconnect() {
   ws.close();
   // Re-establish signaling connection — the gateway routes to an available SFU
   const newWs = new WebSocket(
-    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}`
+    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}&room=${encodeURIComponent(roomId)}`
   );
   // Re-attach handlers and send a new join message on open...
 }
@@ -375,7 +375,7 @@ async function joinRoom(roomId: string, userId: string, apiKey: string) {
 
   // 5. Connect signaling
   const ws = new WebSocket(
-    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}`
+    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}&room=${encodeURIComponent(roomId)}`
   );
 
   ws.onopen = async () => {

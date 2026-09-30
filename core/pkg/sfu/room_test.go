@@ -285,8 +285,8 @@ func TestHealthEndpointOK(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 	body := w.Body.String()
-	if body != `{"status":"ok","rooms":0}` {
-		t.Errorf("body = %q, want %q", body, `{"status":"ok","rooms":0}`)
+	if body != `{"status":"ok","rooms":0,"hasRoom":false}` {
+		t.Errorf("body = %q, want %q", body, `{"status":"ok","rooms":0,"hasRoom":false}`)
 	}
 }
 
@@ -310,8 +310,8 @@ func TestHealthEndpointDraining(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
 	body := w.Body.String()
-	if body != `{"status":"draining","rooms":0}` {
-		t.Errorf("body = %q, want %q", body, `{"status":"draining","rooms":0}`)
+	if body != `{"status":"draining","rooms":0,"hasRoom":false}` {
+		t.Errorf("body = %q, want %q", body, `{"status":"draining","rooms":0,"hasRoom":false}`)
 	}
 }
 
