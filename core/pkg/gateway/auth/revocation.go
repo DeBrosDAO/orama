@@ -43,6 +43,10 @@ const (
 	// nothing once past expires_at; this keeps the table the size of the
 	// revocations still in flight.
 	revocationPruneInterval = 1 * time.Hour
+
+	// revocationReloadTimeout bounds one reload, and so how long a request can
+	// wait for one. A reload that takes the whole staleness bound has failed.
+	revocationReloadTimeout = RevocationStaleness
 )
 
 // revocation is one row: either a named token, or every token issued to a
@@ -69,6 +73,9 @@ type RevocationList struct {
 	bySubject   map[string]int64 // subject -> issued_before
 	lastRefresh time.Time
 	loaded      bool
+	// flight is the reload in progress, nil when none is. At most one runs per
+	// list, however many requests find the copy stale.
+	flight *reloadFlight
 
 	// now is time.Now, replaced in tests.
 	now func() time.Time
@@ -256,16 +263,55 @@ func nullable(s string) any {
 	return s
 }
 
+// reloadFlight is one reload in progress; done closes when it has finished,
+// whether or not it succeeded.
+type reloadFlight struct{ done chan struct{} }
+
 // refreshIfStale reloads the list when the in-memory copy is older than the
-// refresh interval.
+// refresh interval, with at most one reload in flight.
+//
+// The request that finds the copy stale and no reload running starts one and
+// waits for it, as before. A request that finds one already running keeps using
+// the copy it has — unless that copy is older than RevocationStaleness, which a
+// request must never be served from: then it waits for the running reload
+// rather than starting another. Without this, a registry slower than the
+// interval made every request its own blocking full-table read.
+//
+// The wait is bounded by revocationReloadTimeout, the reload's own deadline:
+// the request path has no context to bound it with. A reload that fails leaves
+// the previous list in place (see Refresh).
 func (r *RevocationList) refreshIfStale() {
-	r.mu.RLock()
-	fresh := r.loaded && r.now().Sub(r.lastRefresh) < RevocationRefreshInterval
-	r.mu.RUnlock()
-	if fresh {
+	r.mu.Lock()
+	age := r.now().Sub(r.lastRefresh)
+	if r.loaded && age < RevocationRefreshInterval {
+		r.mu.Unlock()
 		return
 	}
-	r.Refresh(context.Background())
+	f, running := r.flight, r.flight != nil
+	if !running {
+		f = &reloadFlight{done: make(chan struct{})}
+		r.flight = f
+		go r.reload(f)
+	}
+	mustWait := !running || !r.loaded || age >= RevocationStaleness
+	r.mu.Unlock()
+
+	if mustWait {
+		<-f.done
+	}
+}
+
+// reload runs one flight to completion and releases the waiters.
+func (r *RevocationList) reload(f *reloadFlight) {
+	ctx, cancel := context.WithTimeout(context.Background(), revocationReloadTimeout)
+	defer cancel()
+	defer func() {
+		r.mu.Lock()
+		r.flight = nil
+		r.mu.Unlock()
+		close(f.done)
+	}()
+	r.Refresh(ctx)
 }
 
 // Refresh reloads the list from the database.

@@ -611,6 +611,13 @@ the second kind, which covers every outstanding token from it. A token minted
 The list is held in memory and reloaded every 5 seconds. A request reads a copy
 as old as the reload that filled it began, so a revocation takes effect within 10
 seconds: one interval, plus the reload itself, plus the wait for the next request.
+At most one reload runs per gateway. A request that finds the copy stale with no
+reload running starts one and waits for it; a request that finds one running
+keeps using its copy, unless that copy is already 10 seconds old, in which case
+it waits for the running reload (bounded by the reload's own 10-second deadline)
+instead of starting another. A slow registry therefore costs one read at a time,
+not one per request. A failed reload keeps the previous list and is not retried
+until the next interval.
 
 Logging out revokes the refresh token **and** the access token, so "log me out"
 does not mean "stop me getting a new one".
