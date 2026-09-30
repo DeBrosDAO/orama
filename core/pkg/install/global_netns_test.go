@@ -52,6 +52,15 @@ func newColocatedFixture(t *testing.T) *colocatedFixture {
 		case strings.HasSuffix(name, "/ip"):
 			f.node.calls = append(f.node.calls, append([]string{name}, args...))
 			return nil, nil
+		case name == "apt-get":
+			// A successful install puts the package's tool on the PATH.
+			f.node.calls = append(f.node.calls, append([]string{name}, args...))
+			for tool, pkg := range globalnetns.ToolPackages {
+				if slices.Contains(args, pkg) {
+					delete(f.missing, tool)
+				}
+			}
+			return nil, nil
 		}
 		return f.node.run(name, args...)
 	}
@@ -195,8 +204,13 @@ func TestInstallGlobal_colocatedRefusalsChangeNothing(t *testing.T) {
 		setup func(*testing.T, *colocatedFixture)
 		want  string
 	}{
-		{"no ip binary", func(_ *testing.T, f *colocatedFixture) { f.missing["ip"] = true }, "apt-get install -y iproute2"},
-		{"no nft binary", func(_ *testing.T, f *colocatedFixture) { f.missing["nft"] = true }, "apt-get install -y nftables"},
+		{"nft cannot be installed", func(_ *testing.T, f *colocatedFixture) {
+			f.missing["nft"] = true
+			f.probeErr = "apt-get install"
+		}, "apt-get install -y nftables"},
+		{"no apt-get to install nft with", func(_ *testing.T, f *colocatedFixture) {
+			f.missing["nft"], f.missing["apt-get"] = true, true
+		}, "no apt-get"},
 		{"kernel refuses a namespace", func(_ *testing.T, f *colocatedFixture) { f.probeErr = "netns add" }, "cannot create a network namespace"},
 		{"no cluster node", func(t *testing.T, f *colocatedFixture) {
 			if err := os.Remove(filepath.Join(f.oramaDir, "preferences.yaml")); err != nil {
@@ -632,5 +646,21 @@ func TestClusterGatewayRunsAsTheAccountTheHostRuleAllows(t *testing.T) {
 	}
 	if got != supervisorUser {
 		t.Errorf("the gateway runs as %q, but the host ruleset allows only root and %q to reach the chain", got, supervisorUser)
+	}
+}
+
+// A machine without nftables (a stock Debian 12 image: stagenet athena) is
+// provisioned, not refused: the install puts the package on and carries on.
+func TestInstallGlobal_colocatedInstallsTheLayoutsMissingTools(t *testing.T) {
+	f := newColocatedFixture(t)
+	f.missing["nft"] = true
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.node.named("apt-get"); len(got) != 1 || got[0] != "install -y --no-install-recommends nftables" {
+		t.Fatalf("apt-get calls = %q, want one install of nftables alone", got)
+	}
+	if _, err := os.Stat(filepath.Join(f.host.Netns.ConfigDir, "netns.nft")); err != nil {
+		t.Errorf("the layout was not written after the tools were installed: %v", err)
 	}
 }

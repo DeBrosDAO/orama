@@ -133,3 +133,46 @@ func TestVerify(t *testing.T) {
 		}
 	}
 }
+
+// A Debian image may ship without nftables (stagenet athena, 2026-09-30); the
+// co-located install provisions the layout's tools like it does WireGuard.
+func TestInstallTools_installsOnlyTheMissingPackages(t *testing.T) {
+	f := goodHost()
+	f.missing = map[string]bool{"nft": true, "ip": true}
+	if err := InstallTools(f.host()); err != nil {
+		t.Fatal(err)
+	}
+	want := "apt-get install -y --no-install-recommends iproute2 nftables"
+	if len(f.calls) != 1 || f.calls[0] != want {
+		t.Fatalf("calls = %q, want [%q]", f.calls, want)
+	}
+}
+
+func TestInstallTools_leavesACompleteMachineAlone(t *testing.T) {
+	f := goodHost()
+	if err := InstallTools(f.host()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("a machine with every tool ran %q", f.calls)
+	}
+	f.goos = "darwin"
+	f.missing = map[string]bool{"nft": true}
+	if err := InstallTools(f.host()); err != nil || len(f.calls) != 0 {
+		t.Fatalf("non-linux: err %v, calls %q; Preflight refuses it, InstallTools must not act", err, f.calls)
+	}
+}
+
+func TestInstallTools_refusals(t *testing.T) {
+	noApt := goodHost()
+	noApt.missing = map[string]bool{"nft": true, "apt-get": true}
+	if err := InstallTools(noApt.host()); err == nil || !strings.Contains(err.Error(), "no apt-get") || !strings.Contains(err.Error(), "nftables") {
+		t.Errorf("no apt-get: err = %v", err)
+	}
+	failing := goodHost()
+	failing.missing = map[string]bool{"nft": true}
+	failing.failOn = "apt-get install"
+	if err := InstallTools(failing.host()); err == nil || !strings.Contains(err.Error(), "apt-get install -y nftables") {
+		t.Errorf("apt-get failure: err = %v", err)
+	}
+}

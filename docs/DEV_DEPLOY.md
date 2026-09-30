@@ -520,7 +520,7 @@ node (`orama node restart`, one node at a time) after the first `up`, as the co-
 The node report needs no restart.
 
 Requirements on this machine: `make`, Go, zig and the Rust toolchain (`make build-linux-amd64-full`), `python3`,
-`curl` and `ssh` access to the nodes. On each node: `ip` (iproute2), `nft`, `python3`, an **active** ufw (the install
+`curl` and `ssh` access to the nodes. On each node: `apt-get` (the install adds iproute2 and nftables if they are missing), an **active** ufw (the install
 refuses an inactive one, and enabling it would change the cluster's firewall, so the script does not), and systemd
 242 or newer.
 

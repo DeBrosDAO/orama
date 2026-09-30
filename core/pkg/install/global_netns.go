@@ -77,6 +77,9 @@ type netnsPlan struct {
 // the machine is not already global-only.
 func planNetns(g GlobalHost, opts GlobalInstallOptions) (*netnsPlan, error) {
 	h := g.Netns
+	if err := globalnetns.InstallTools(h.Probe); err != nil {
+		return nil, fmt.Errorf("this machine cannot share a cluster node with global services: %w", err)
+	}
 	tools, err := globalnetns.Preflight(h.Probe)
 	if err != nil {
 		return nil, fmt.Errorf("this machine cannot share a cluster node with global services: %w", err)

@@ -56,13 +56,47 @@ func Preflight(h Host) (Tools, error) {
 	return tools, nil
 }
 
+// toolNames are the binaries the namespace unit runs, and ToolPackages the
+// Debian/Ubuntu packages that provide them.
+var (
+	toolNames    = []string{"ip", "nft", "sysctl"}
+	ToolPackages = map[string]string{"ip": "iproute2", "nft": "nftables", "sysctl": "procps"}
+)
+
+// InstallTools installs with apt-get the package of every layout tool this
+// machine lacks, as the installer's WireGuard and firewall steps do for
+// theirs; a machine with all of them is not touched. It is the one change a
+// co-located install makes before Preflight, which needs the tools' paths. A
+// non-Linux machine is left to Preflight to refuse.
+func InstallTools(h Host) error {
+	if h.GOOS != "linux" {
+		return nil
+	}
+	var missing []string
+	for _, name := range toolNames {
+		if _, err := h.LookPath(name); err != nil {
+			missing = append(missing, ToolPackages[name])
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if _, err := h.LookPath("apt-get"); err != nil {
+		return fmt.Errorf("the network namespace needs %s, and this machine has no apt-get to install it with: install it and retry", strings.Join(missing, " "))
+	}
+	args := append([]string{"install", "-y", "--no-install-recommends"}, missing...)
+	if out, err := h.Run("apt-get", args...); err != nil {
+		return fmt.Errorf("apt-get install -y %s: %w\n%s", strings.Join(missing, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func findTools(h Host) (Tools, error) {
-	hints := map[string]string{"ip": "iproute2", "nft": "nftables", "sysctl": "procps"}
 	var paths []string
-	for _, name := range []string{"ip", "nft", "sysctl"} {
+	for _, name := range toolNames {
 		p, err := h.LookPath(name)
 		if err != nil {
-			return Tools{}, fmt.Errorf("%s is required for the network namespace and was not found: apt-get install -y %s", name, hints[name])
+			return Tools{}, fmt.Errorf("%s is required for the network namespace and was not found: apt-get install -y %s", name, ToolPackages[name])
 		}
 		paths = append(paths, p)
 	}

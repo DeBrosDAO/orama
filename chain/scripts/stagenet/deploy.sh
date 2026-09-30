@@ -350,10 +350,8 @@ preflight() {
 		echo "[$name] ufw is inactive. The install refuses an inactive ufw, and enabling it would change the cluster's firewall: not doing that here." >&2
 		exit 1
 	}
-	on "$alias" "command -v ip >/dev/null && command -v nft >/dev/null && command -v python3 >/dev/null" || {
-		echo "[$name] ip (iproute2), nft (nftables) and python3 are required" >&2
-		exit 1
-	}
+	# ip and nft are not checked here: orama global install --colocated installs iproute2 and
+	# nftables itself when they are missing (globalnetns.InstallTools).
 	if on "$alias" "sudo test -e $HOME_DIR/config/genesis.json"; then
 		echo "[$name] a chain home already exists at $HOME_DIR; run '$0 reset' first" >&2
 		exit 1

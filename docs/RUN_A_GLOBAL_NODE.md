@@ -353,9 +353,12 @@ node. It refuses, before changing anything, when:
 - the machine has no cluster node (`/opt/orama/.orama/preferences.yaml` is
   missing; `orama node setup` would overwrite the co-located role if it ran
   later) or its role is `global`;
-- it is not Linux, its kernel has no network namespaces or veth, `ip` (iproute2),
-  `nft` (nftables) or `sysctl` is missing, or systemd is older than 242
-  (`NetworkNamespacePath=`). Each message says what to install. The check
+- it is not Linux, its kernel has no network namespaces or veth, or systemd is
+  older than 242 (`NetworkNamespacePath=`). A missing `ip` (iproute2), `nft`
+  (nftables) or `sysctl` (procps) is installed with `apt-get` first, the one
+  change the install makes before this check (a stock Debian 12 image has no
+  nftables); a machine with no `apt-get`, or an install that fails, is refused
+  with the package to install. The check
   creates and deletes a throwaway namespace and veth pair to prove the kernel
   allows them, so a container without `CAP_NET_ADMIN` is refused here and not
   halfway through;
