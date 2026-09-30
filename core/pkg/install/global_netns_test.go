@@ -25,11 +25,15 @@ type colocatedFixture struct {
 	probeErr string
 	// forwarding is what `sysctl -n net.ipv4.ip_forward` prints before the install.
 	forwarding string
+	// netnsState is what `systemctl is-active orama-global-netns.service` prints.
+	netnsState string
+	// loadFail makes an nft -f load whose command line contains it fail.
+	loadFail string
 }
 
 func newColocatedFixture(t *testing.T) *colocatedFixture {
 	t.Helper()
-	f := &colocatedFixture{globalFixture: newGlobalFixture(t), missing: map[string]bool{}, forwarding: "0"}
+	f := &colocatedFixture{globalFixture: newGlobalFixture(t), missing: map[string]bool{}, forwarding: "0", netnsState: "inactive"}
 	tmp := t.TempDir()
 	f.oramaDir = filepath.Join(tmp, "opt", "orama", ".orama")
 	f.etc = filepath.Join(tmp, "etc")
@@ -44,6 +48,12 @@ func newColocatedFixture(t *testing.T) *colocatedFixture {
 		switch {
 		case name == "systemctl" && len(args) == 1 && args[0] == "--version":
 			return []byte("systemd 252 (252.22-1)\n"), nil
+		case name == "systemctl" && len(args) == 2 && args[0] == "is-active" && args[1] == globalnetns.UnitName:
+			f.node.calls = append(f.node.calls, append([]string{name}, args...))
+			return []byte(f.netnsState + "\n"), nil
+		case f.loadFail != "" && strings.Contains(call, "nft -f") && strings.Contains(call, f.loadFail):
+			f.node.calls = append(f.node.calls, append([]string{name}, args...))
+			return []byte("Error: Could not process rule"), errors.New("exit status 1")
 		case f.probeErr != "" && strings.Contains(call, f.probeErr):
 			return []byte("not permitted"), errors.New("exit status 1")
 		case strings.HasSuffix(name, "/sysctl") && len(args) == 2 && args[0] == "-n":
@@ -587,6 +597,28 @@ func TestInstallGlobal_colocatedSaysTheGatewayNeedsANodeRestart(t *testing.T) {
 	}
 }
 
+// A re-install rewrites the units and the Kubo address but restarts nothing, so it says which
+// restart picks the new address up.
+func TestInstallGlobal_colocatedIPFSSaysToRestartTheGlobalServices(t *testing.T) {
+	f := newColocatedFixture(t)
+	var logged []string
+	f.host.Logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	if err := InstallGlobal(f.options(GlobalServiceChain, GlobalServiceIPFS), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, "orama global restart") && strings.Contains(l, "198.18.0.2:31011") }) {
+		t.Errorf("the install did not tell the operator to run orama global restart:\n%s", strings.Join(logged, "\n"))
+	}
+
+	logged = nil
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, "orama global restart") }) {
+		t.Error("an install without the public Kubo told the operator to restart for its address")
+	}
+}
+
 func uidLookup(uids map[string]int) func(string) (int, int, error) {
 	return func(name string) (int, int, error) {
 		uid, ok := uids[name]
@@ -696,5 +728,98 @@ func TestHostPorts_includeTheKuboRPCOnlyWithKubo(t *testing.T) {
 	without := GlobalInstallOptions{Services: []GlobalService{GlobalServiceChain}}.hostPorts()
 	if slices.Contains(without, constants.GlobalIPFSAPIPort) {
 		t.Errorf("hostPorts = %v, want no Kubo RPC port", without)
+	}
+}
+
+// nftLoads are the calls that load a ruleset into the running layout.
+func nftLoads(f *colocatedFixture) []string {
+	var out []string
+	for _, c := range f.node.calls {
+		if call := strings.Join(c, " "); strings.Contains(call, "nft -f") {
+			out = append(out, call)
+		}
+	}
+	return out
+}
+
+// reinstallWithIPFS installs the chain, then re-installs it with the public Kubo, which adds the
+// Kubo RPC to the host-only ports and so rewrites both rulesets.
+func reinstallWithIPFS(t *testing.T, f *colocatedFixture) error {
+	t.Helper()
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	f.node.calls = nil
+	return InstallGlobal(f.options(GlobalServiceChain, GlobalServiceIPFS), f.host)
+}
+
+func TestInstallGlobal_reinstallLoadsChangedRulesIntoARunningLayout(t *testing.T) {
+	f := newColocatedFixture(t)
+	f.netnsState = "active"
+	if err := reinstallWithIPFS(t, f); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"/usr/sbin/nft -f " + globalnetns.HostRulesFile,
+		"/usr/sbin/ip netns exec " + globalnetns.Name + " /usr/sbin/nft -f " + globalnetns.NSRulesFile,
+	}
+	if got := nftLoads(f); !slices.Equal(got, want) {
+		t.Errorf("nft loads = %v, want %v", got, want)
+	}
+	if slices.Contains(f.node.named("systemctl"), "restart "+globalnetns.UnitName) {
+		t.Error("the namespace unit was restarted, which stops the global units bound to it")
+	}
+}
+
+func TestInstallGlobal_reinstallWithUnchangedRulesLoadsNothing(t *testing.T) {
+	f := newColocatedFixture(t)
+	f.netnsState = "active"
+	opts := f.options(GlobalServiceChain)
+	if err := InstallGlobal(opts, f.host); err != nil {
+		t.Fatal(err)
+	}
+	f.node.calls = nil
+	if err := InstallGlobal(opts, f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := nftLoads(f); len(got) != 0 {
+		t.Errorf("unchanged rules were loaded: %v", got)
+	}
+}
+
+func TestInstallGlobal_firstInstallLoadsNothing(t *testing.T) {
+	f := newColocatedFixture(t)
+	f.netnsState = "active"
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := nftLoads(f); len(got) != 0 {
+		t.Errorf("a first install loaded rules: %v", got)
+	}
+}
+
+func TestInstallGlobal_reinstallLoadsNothingWhenTheLayoutIsNotRunning(t *testing.T) {
+	f := newColocatedFixture(t)
+	f.netnsState = "inactive"
+	if err := reinstallWithIPFS(t, f); err != nil {
+		t.Fatal(err)
+	}
+	if got := nftLoads(f); len(got) != 0 {
+		t.Errorf("rules were loaded into a layout that is not running: %v", got)
+	}
+}
+
+func TestInstallGlobal_reinstallFailsWhenARunningLoadFails(t *testing.T) {
+	for _, target := range []string{globalnetns.HostRulesFile, globalnetns.NSRulesFile} {
+		f := newColocatedFixture(t)
+		f.netnsState = "active"
+		f.loadFail = target
+		err := reinstallWithIPFS(t, f)
+		if err == nil {
+			t.Fatalf("a failing load of %s did not fail the install", target)
+		}
+		if !strings.Contains(err.Error(), target) || !strings.Contains(err.Error(), "Could not process rule") {
+			t.Errorf("error does not name the file and nft's output: %v", err)
+		}
 	}
 }

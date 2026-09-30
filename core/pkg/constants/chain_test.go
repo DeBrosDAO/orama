@@ -55,6 +55,22 @@ func TestStagenetDeployScript_usesTheNamespaceAddress(t *testing.T) {
 	}
 }
 
+// The chain module cannot import core, so provider/kubo.go repeats the namespace address it
+// trusts for the bearer token. A change on either side must fail here.
+func TestProviderKubo_colocatedHostIsTheNamespaceAddress(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "chain", "provider", "kubo.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^const colocatedKuboHost = "([^"]*)"$`).FindSubmatch(data)
+	if m == nil {
+		t.Fatal("chain/provider/kubo.go has no colocatedKuboHost constant")
+	}
+	if got := string(m[1]); got != constants.GlobalNetnsAddr {
+		t.Errorf("colocatedKuboHost is %q, constants.GlobalNetnsAddr is %q", got, constants.GlobalNetnsAddr)
+	}
+}
+
 func TestColocatedChainURLs_areTheNamespaceAddress(t *testing.T) {
 	for got, want := range map[string]string{
 		constants.ColocatedChainRPCURL():      "http://198.18.0.2:31001",

@@ -209,6 +209,23 @@ func TestRenderRules_areIPv4Only(t *testing.T) {
 	}
 }
 
+// One nft -f transaction must replace a running table: declare it, delete it, define it again.
+func TestRenderRules_replaceTheirTableAtomically(t *testing.T) {
+	l := testLayout()
+	for name, tc := range map[string]struct{ rules, table string }{
+		"host":      {l.RenderHostRules(), hostTable},
+		"namespace": {l.RenderNSRules(), nsTable},
+	} {
+		want := "table ip " + tc.table + " {}\ndelete table ip " + tc.table + "\ntable ip " + tc.table + " {\n"
+		if !strings.HasPrefix(tc.rules, want) {
+			t.Errorf("%s rules do not start with the atomic-replace header %q:\n%s", name, want, tc.rules)
+		}
+		if got := strings.Count(tc.rules, "delete table"); got != 1 {
+			t.Errorf("%s rules delete a table %d times, want 1", name, got)
+		}
+	}
+}
+
 func hostOnlyLayout() Layout {
 	l := testLayout()
 	l.HostPorts = []int{31015, 31001, 31003, 31001}

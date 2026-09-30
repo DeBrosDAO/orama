@@ -200,6 +200,15 @@ func RenderSysctl() string {
 	return "# Written by orama global install --colocated; the rulesets in " + ConfigDir + " confine what is forwarded.\nnet.ipv4.ip_forward = 1\n"
 }
 
+// writeReplaceHeader opens a ruleset that replaces its table atomically. Declaring the table (a
+// no-op when it exists, and what makes the delete valid when it does not), deleting it and defining
+// it again in one file is one nft transaction, so loading it over a running layout leaves no
+// moment with the rules absent.
+func writeReplaceHeader(b *strings.Builder, table string) {
+	fmt.Fprintf(b, "table ip %s {}\ndelete table ip %s\n", table, table)
+	fmt.Fprintf(b, "table ip %s {\n", table)
+}
+
 // RenderHostRules is the ruleset loaded in the root namespace. It publishes
 // the listed ports into the namespace with DNAT, masquerades the namespace's
 // outbound traffic, refuses it any private destination, refuses everything
@@ -210,7 +219,7 @@ func RenderSysctl() string {
 // namespace address: any other local process would otherwise reach them through the veth.
 func (l Layout) RenderHostRules() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "table ip %s {\n", hostTable)
+	writeReplaceHeader(&b, hostTable)
 	b.WriteString("\tchain prerouting {\n\t\ttype nat hook prerouting priority dstnat; policy accept;\n")
 	for _, proto := range []string{"tcp", "udp"} {
 		if set := l.portSet(proto); set != "" {
@@ -241,7 +250,7 @@ func (l Layout) RenderHostRules() string {
 // a private network.
 func (l Layout) RenderNSRules() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "table ip %s {\n", nsTable)
+	writeReplaceHeader(&b, nsTable)
 	b.WriteString("\tchain input {\n\t\ttype filter hook input priority 0; policy drop;\n")
 	b.WriteString("\t\tiifname \"lo\" accept\n\t\tct state established,related accept\n")
 	if set := l.hostPortSet(); set != "" {

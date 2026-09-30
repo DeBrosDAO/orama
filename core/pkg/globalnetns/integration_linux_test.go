@@ -177,6 +177,26 @@ func TestLayout_privateNetworksAreUnreachableFromInside(t *testing.T) {
 	}
 }
 
+func TestLayout_rulesetsReloadOverARunningLayout(t *testing.T) {
+	l := integrationLayout(t)
+	buildLayout(t, l)
+
+	// The install loads the rewritten rulesets over a running layout on a re-install: one
+	// transaction per table, the rules present afterwards.
+	dir := t.TempDir()
+	hostFile, nsFile := dir+"/host.nft", dir+"/ns.nft"
+	if err := os.WriteFile(hostFile, []byte(l.RenderHostRules()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nsFile, []byte(l.RenderNSRules()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run(t, l.Tools.Nft, "-f", hostFile)
+	run(t, l.Tools.IP, "netns", "exec", Name, l.Tools.Nft, "-f", nsFile)
+	run(t, l.Tools.Nft, "list", "table", "ip", hostTable)
+	run(t, l.Tools.IP, "netns", "exec", Name, l.Tools.Nft, "list", "table", "ip", nsTable)
+}
+
 // The chain's RPC listens on the namespace address for the host alone: the
 // host reaches it, a source that is not the host's veth address does not, and
 // it is not published (no DNAT).

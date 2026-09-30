@@ -164,6 +164,26 @@ func TestLifecycleRestart_chainRestartsEverythingInOrder(t *testing.T) {
 	}
 }
 
+// The provider and the GC oneshot call the public Kubo's RPC, so after a re-install moves its
+// address a restart must have Kubo listening before the provider starts.
+func TestLifecycleRestart_kuboStartsBeforeTheProvider(t *testing.T) {
+	ipfsUnit := install.GlobalServiceUnit(install.GlobalServiceIPFS)
+	for _, only := range [][]install.GlobalService{
+		nil,
+		{install.GlobalServiceProvider, install.GlobalServiceIPFS},
+	} {
+		l, f := newLifecycle(t, install.GlobalServiceChain, install.GlobalServiceIPFS, install.GlobalServiceProvider)
+		f.states[chainUnit] = "active"
+		if err := l.Restart(context.Background(), only); err != nil {
+			t.Fatal(err)
+		}
+		ipfs, provider := slices.Index(f.calls, "start "+ipfsUnit), slices.Index(f.calls, "start "+providerUnit)
+		if ipfs < 0 || provider < 0 || ipfs > provider {
+			t.Errorf("restart %v: start order = %v, want Kubo before the provider", only, f.calls)
+		}
+	}
+}
+
 func TestLifecycle_notInstalledIsAnError(t *testing.T) {
 	l, _ := newLifecycle(t, install.GlobalServiceChain)
 	if err := l.Stop([]install.GlobalService{install.GlobalServiceRepair}); err == nil {

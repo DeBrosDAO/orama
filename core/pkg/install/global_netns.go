@@ -29,6 +29,10 @@ const (
 	priorForwardLimit = 16
 	// chainClientsLimit bounds the recorded account list read back.
 	chainClientsLimit = 4096
+	// rulesetReadLimit bounds a ruleset read back to compare it with the one about to be written.
+	rulesetReadLimit = 1 << 20
+	// rulesetFiles is how many of writeNetns's files are nft rulesets loaded into the layout.
+	rulesetFiles = 2
 
 	// roleCluster, roleGlobal and roleBoth are the values preferences.yaml
 	// records; they are boot.Role's strings without importing the node package.
@@ -248,7 +252,16 @@ func writeNetns(h GlobalHost, plan *netnsPlan) error {
 		{n.ConfigDir + "/resolv.conf", globalnetns.RenderResolvConf()},
 		{n.SysctlFile, globalnetns.RenderSysctl()},
 	}
-	for _, f := range files {
+	// The first rulesetFiles entries are the nft rulesets.
+	rulesChanged := false
+	for i, f := range files {
+		if i < rulesetFiles {
+			changed, err := rewritesExisting(n.Root, f.path, f.data)
+			if err != nil {
+				return err
+			}
+			rulesChanged = rulesChanged || changed
+		}
 		if err := n.Root.WriteFile(f.path, []byte(f.data), netnsFileMode); err != nil {
 			return fmt.Errorf("write %s: %w", f.path, err)
 		}
@@ -257,6 +270,53 @@ func writeNetns(h GlobalHost, plan *netnsPlan) error {
 	if err := h.UnitRoot.WriteFile(path, []byte(plan.layout.RenderUnit()), globalUnitMode); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
+	if rulesChanged {
+		return loadRunningRules(h, plan)
+	}
+	return nil
+}
+
+// rewritesExisting reports whether path exists with content other than data. A missing file is a
+// first install, which has no running rules to update.
+func rewritesExisting(root rootfs.Root, path, data string) (bool, error) {
+	old, err := root.ReadFile(path, rulesetReadLimit)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	return string(old) != data, nil
+}
+
+// loadRunningRules applies rewritten rulesets to a running layout. The rules are loaded only by
+// ExecStart of the namespace's oneshot, which stays active after it runs, and restarting it would
+// stop the global units bound to it. Each file replaces its table in one nft transaction, so the
+// running rules are never absent. An inactive layout loads the files when it starts.
+func loadRunningRules(h GlobalHost, plan *netnsPlan) error {
+	out, err := h.Run("systemctl", "is-active", globalnetns.UnitName)
+	state := strings.TrimSpace(string(out))
+	if state == "" || strings.ContainsAny(state, " \n") {
+		return fmt.Errorf("systemctl is-active %s: %v: %q", globalnetns.UnitName, err, state)
+	}
+	if state != "active" {
+		return nil
+	}
+	tools := plan.layout.Tools
+	loads := []struct {
+		what string
+		argv []string
+	}{
+		{"host", []string{tools.Nft, "-f", globalnetns.HostRulesFile}},
+		{"namespace", []string{tools.IP, "netns", "exec", globalnetns.Name, tools.Nft, "-f", globalnetns.NSRulesFile}},
+	}
+	for _, l := range loads {
+		if out, err := h.Run(l.argv[0], l.argv[1:]...); err != nil {
+			return fmt.Errorf("load the rewritten %s firewall rules into the running %s layout (%s): %w: %s; the files are written and %s loads them when it next starts, but restarting it stops the global services bound to it",
+				l.what, globalnetns.Name, strings.Join(l.argv, " "), err, strings.TrimSpace(string(out)), globalnetns.UnitName)
+		}
+	}
+	h.Logf("  ✓ rewritten firewall rules loaded into the running %s layout", globalnetns.Name)
 	return nil
 }
 
