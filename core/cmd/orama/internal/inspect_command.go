@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	// Import checks package so init() registers the checkers
 	_ "github.com/DeBrosOfficial/network/pkg/inspector/checks"
 )

@@ -69,7 +69,9 @@ func stubWipeRun(t *testing.T, wipeErr, forgetErr error) (wiped, forgotten *[]st
 	t.Helper()
 	wiped, forgotten = &[]string{}, &[]string{}
 	origResolve, origKeys, origWipe, origForget := resolveWipeNodes, prepareWipeKeys, wipeRemote, forgetNodeKey
-	t.Cleanup(func() { resolveWipeNodes, prepareWipeKeys, wipeRemote, forgetNodeKey = origResolve, origKeys, origWipe, origForget })
+	t.Cleanup(func() {
+		resolveWipeNodes, prepareWipeKeys, wipeRemote, forgetNodeKey = origResolve, origKeys, origWipe, origForget
+	})
 	resolveWipeNodes = func(string) ([]inspector.Node, error) { return stagenet, nil }
 	prepareWipeKeys = func([]inspector.Node) (func(), error) { return func() {}, nil }
 	wipeRemote = func(n inspector.Node, _ bool) error { *wiped = append(*wiped, n.Host); return wipeErr }

@@ -7,8 +7,8 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
-	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	"github.com/spf13/cobra"
 )
 

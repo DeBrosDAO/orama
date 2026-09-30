@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/spf13/cobra"
 )
 

@@ -32,7 +32,7 @@ func newMem(wallets ...string) *memOperators {
 type counted struct{ n int64 }
 
 func (c counted) LastInsertId() (int64, error) { return 0, nil }
-func (c counted) RowsAffected() (int64, error)  { return c.n, nil }
+func (c counted) RowsAffected() (int64, error) { return c.n, nil }
 
 func (m *memOperators) Query(_ context.Context, dest any, query string, args ...any) error {
 	if m.fail {
