@@ -888,8 +888,7 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 	}
 	ownerScopes := grant.Scopes().Canonical()
 	if ownerScopes == "" {
-		return "", fmt.Errorf("this wallet's role in %q is %s, which holds nothing, so there is no key to mint",
-			namespace, grant.Role)
+		return "", fmt.Errorf("%w: this wallet's role in %q is %s", ErrNoKeyForRole, namespace, grant.Role)
 	}
 
 	// The wallet's previous key, if it has one. Its id, not its value: what is

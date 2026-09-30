@@ -23,6 +23,9 @@ const ErrCodeNamespaceUnowned = "NAMESPACE_UNOWNED"
 // ErrCodeNoKeysHere is minting a key in the lobby, which has none.
 const ErrCodeNoKeysHere = "NAMESPACE_HAS_NO_KEYS"
 
+// ErrCodeNoKeyForRole is minting a key for a member whose role holds no grant.
+const ErrCodeNoKeyForRole = "ROLE_HAS_NO_KEY"
+
 // writeCredentialError turns a credential-issuing failure into a response.
 //
 // A namespace owned by another wallet is the caller's answer, not a server
@@ -43,6 +46,14 @@ func writeCredentialError(w http.ResponseWriter, namespace string, err error) {
 			"error": "namespace " + namespace + " has no owner, so nobody may sign in to it: " +
 				"it was created by a path that no longer exists, and the platform has to adopt or remove it",
 			"code":      ErrCodeNamespaceUnowned,
+			"namespace": namespace,
+		})
+		return
+	}
+	if errors.Is(err, authsvc.ErrNoKeyForRole) {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error":     err.Error(),
+			"code":      ErrCodeNoKeyForRole,
 			"namespace": namespace,
 		})
 		return

@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -17,7 +19,8 @@ import (
 // POST /v1/auth/verify
 // Request body: VerifyRequest
 // Response 200: { "access_token", "token_type", "expires_in", "refresh_token", "subject", "namespace", "nonce", "signature_verified" }
-// plus "api_key", except in the lobby namespace, which has none.
+// plus "api_key", except in the lobby namespace, on a device-bound sign-in, and for
+// a member whose role holds no grant (a reader), none of which gets one.
 // Response 202: { "status": "provisioning", "cluster_id", "poll_url", "access_token", "refresh_token", "api_key", ... }
 func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	if h.authService == nil {
@@ -86,20 +89,10 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The lobby has no keys. A wallet signing in there gets a session and
-	// nothing else; the one thing that session reaches is POST /v1/namespaces,
-	// which creates a namespace and makes the caller its owner.
-	//
-	// Neither does a device-bound sign-in get one. The device is the
-	// credential; a key for the whole account handed out beside it would
-	// outlive revoking the device, which is the point of binding one.
-	apiKey := ""
-	if !authsvc.IsLobbyNamespace(namespace) && binding.deviceID == "" {
-		apiKey, err = h.authService.GetOrCreateAPIKey(ctx, wallet, namespace)
-		if err != nil {
-			writeCredentialError(w, namespace, err)
-			return
-		}
+	apiKey, err := signInKey(ctx, h.authService.GetOrCreateAPIKey, wallet, namespace, binding.deviceID)
+	if err != nil {
+		writeCredentialError(w, namespace, err)
+		return
 	}
 
 	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
@@ -126,4 +119,29 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		body["device_id"] = binding.deviceID
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// signInKey is the API key a sign-in hands back beside its session, or "" when
+// it hands back none.
+//
+// The lobby has no keys. A wallet signing in there gets a session and nothing
+// else; the one thing that session reaches is POST /v1/namespaces, which
+// creates a namespace and makes the caller its owner.
+//
+// Neither does a device-bound sign-in get one. The device is the credential;
+// a key for the whole account handed out beside it would outlive revoking the
+// device, which is the point of binding one.
+//
+// Nor does a member whose role holds no grant (a reader): there is nothing to
+// put in a key, and the session alone reaches what the role may reach.
+func signInKey(ctx context.Context, mint func(context.Context, string, string) (string, error),
+	wallet, namespace, deviceID string) (string, error) {
+	if authsvc.IsLobbyNamespace(namespace) || deviceID != "" {
+		return "", nil
+	}
+	key, err := mint(ctx, wallet, namespace)
+	if errors.Is(err, authsvc.ErrNoKeyForRole) {
+		return "", nil
+	}
+	return key, err
 }

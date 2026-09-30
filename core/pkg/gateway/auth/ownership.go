@@ -48,6 +48,12 @@ func IsLobbyNamespace(namespace string) bool {
 // namespace.
 var ErrNoKeysInLobby = errors.New("the lobby namespace has no keys")
 
+// ErrNoKeyForRole is returned for a key asked for by a member whose role holds
+// no grant (a reader). There is nothing to put in the key; the member's
+// session is its whole credential and reaches only the routes that ask for no
+// permission.
+var ErrNoKeyForRole = errors.New("this role holds no grant, so there is no key to mint")
+
 // ErrNamespaceUnowned is returned for a namespace nobody holds. Signing in used
 // to claim one; a namespace that belongs to nobody is now one nobody can enter,
 // and creating a namespace is what makes it yours.

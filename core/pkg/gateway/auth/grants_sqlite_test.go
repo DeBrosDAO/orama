@@ -386,8 +386,8 @@ func TestGetOrCreateAPIKey_carriesTheCallersOwnRole(t *testing.T) {
 	}
 
 	// A reader holds nothing, so there is nothing to mint.
-	if _, err := s.GetOrCreateAPIKey(ctx, "0xguest", "anchat"); err == nil {
-		t.Error("a reader was handed a key")
+	if _, err := s.GetOrCreateAPIKey(ctx, "0xguest", "anchat"); !errors.Is(err, ErrNoKeyForRole) {
+		t.Errorf("a reader's key answered %v, want ErrNoKeyForRole", err)
 	}
 }
 
