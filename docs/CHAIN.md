@@ -2472,6 +2472,9 @@ server is the authority: it runs every check whatever the ante handler did.
 mempool's check state the mark is what refuses a second bundle with the same nullifier, and
 `Commit` clears it. In a block the mark is written by the message, so a tx that fails after
 marking rolls it back with everything else, and a tx that fails in the ante handler marks nothing.
+A simulation (`Simulate`, a wallet's gas estimate) runs on the check state but also runs the message,
+so the ante handler neither verifies nor marks there: the message does both, as in a block. Marked in
+the ante handler, the message would refuse its own nullifiers as pending.
 
 ### Fees and gas
 

@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"cosmossdk.io/math"
+
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
@@ -107,4 +109,14 @@ func TestRunOrama_reportsFailureWithItsOutput(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, out, "out")
 	require.Contains(t, err.Error(), "err")
+}
+
+// The deal's signer holds only earnings, so its fee is exactly gas times the base fee: at the idle
+// floor of 1 norama, a fixed 1500000 fee for 600000 gas was a 900000 tip and was refused.
+func TestStorageTxFee_isTheBaseFeeWithNoTip(t *testing.T) {
+	for _, tc := range []struct{ base, want int64 }{{1, txGas}, {7, 7 * txGas}} {
+		if got := storageTxFee(math.NewInt(tc.base)); !got.Equal(math.NewInt(tc.want)) {
+			t.Errorf("base fee %d: fee = %s, want %d", tc.base, got, tc.want)
+		}
+	}
 }

@@ -88,7 +88,9 @@ func (ShapeDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next
 // ProofDecorator checks a signed shielded message's bundle in the mempool: the cheap checks, then
 // the proofs, after the signature has been verified so unsigned garbage never costs proof work. It
 // also marks the nullifiers pending so a second bundle with the same nullifier is refused. In a
-// block it does nothing: the message server verifies there, once.
+// block it does nothing: the message server verifies there, once. A simulation runs on the check
+// state but then runs the message too, which checks and marks the nullifiers itself, so it does
+// nothing there either: marked here, the message would refuse its own nullifiers as pending.
 type ProofDecorator struct{ keeper keeper.Keeper }
 
 // NewProofDecorator builds the decorator.
@@ -96,7 +98,7 @@ func NewProofDecorator(k keeper.Keeper) ProofDecorator { return ProofDecorator{k
 
 // AnteHandle implements sdk.AnteDecorator.
 func (d ProofDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (sdk.Context, error) {
-	if !ctx.IsCheckTx() && !ctx.IsReCheckTx() {
+	if simulate || (!ctx.IsCheckTx() && !ctx.IsReCheckTx()) {
 		return next(ctx, tx, simulate)
 	}
 	for _, msg := range tx.GetMsgs() {
@@ -159,7 +161,8 @@ func (d SignerlessDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate boo
 			return ctx, err
 		}
 	}
-	if ctx.IsCheckTx() {
+	// A simulation's message marks the nullifiers itself (see ProofDecorator).
+	if ctx.IsCheckTx() && !simulate {
 		if err := d.keeper.MarkPending(work, adm.Bundle.Nullifiers); err != nil {
 			return ctx, err
 		}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/chain/client/node"
+	feestypes "github.com/DeBrosOfficial/network/chain/x/fees/types"
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
@@ -63,9 +64,13 @@ func checkStoragePrivate(ctx context.Context, e *env) Result {
 	if err != nil {
 		return fail(storageName, "%v", err)
 	}
+	var bf feestypes.QueryBaseFeeResponse
+	if err := c.Query(ctx, "/orama.fees.v1.Query/BaseFee", &feestypes.QueryBaseFeeRequest{}, &bf); err != nil {
+		return fail(storageName, "read the base fee: %v", err)
+	}
 	args := []string{"storage", "create", "--chain-id", e.chainID, "--signer", e.signer.AccountAddress(), "--class", "private",
 		"--nonce", fx.nonce, "--replicas", strconv.Itoa(privateReplicas), "--price", dealPricePerEpoch,
-		"--duration-epochs", strconv.Itoa(dealDurationEpochs), "--fee", strconv.Itoa(txFee), "--gas", strconv.Itoa(txGas),
+		"--duration-epochs", strconv.Itoa(dealDurationEpochs), "--fee", storageTxFee(bf.BaseFee).String(), "--gas", strconv.Itoa(txGas),
 		"--node", "http://" + rest}
 	for _, s := range specs {
 		args = append(args, "--piece", s)

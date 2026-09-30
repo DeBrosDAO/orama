@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"cosmossdk.io/math"
+
 	"github.com/DeBrosOfficial/network/chain/client/node"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
 	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
@@ -27,10 +29,9 @@ const (
 	dealDurationEpochs = 3
 	// dealPricePerEpoch is per replica, in norama: 0.001 ORAMA, so the escrow is 9 million norama.
 	dealPricePerEpoch = "1000000"
-	// txGas and txFee are what `orama storage create` submits with; the fee is well above gas times
-	// the floor base fee of 1 norama.
+	// txGas is what `orama storage create` submits with. Its fee is storageTxFee: the signer is an
+	// operator that holds only earnings, which pay a base fee and never a tip.
 	txGas             = 600_000
-	txFee             = 1_500_000
 	minPlaintextBytes = 4096
 	dealScanLimit     = 5000
 	putWait           = 6 * time.Minute
@@ -142,6 +143,12 @@ func writeSecret(path string, data []byte) error {
 }
 
 // findDealByNonce scans deal ids from 1 for the deal whose nonce is nonce.
+// storageTxFee is the fee of the deal's transaction at baseFee: gas times the base fee and no more,
+// since anything above it is a tip, which x/fees pays only from a bank balance.
+func storageTxFee(baseFee math.Int) math.Int {
+	return baseFee.MulRaw(txGas)
+}
+
 func findDealByNonce(ctx context.Context, c *node.Client, nonce []byte) (uint64, error) {
 	for id := uint64(1); id <= dealScanLimit; id++ {
 		var resp storagetypes.QueryDealResponse
