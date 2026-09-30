@@ -40,9 +40,12 @@ func TestOperatorReadRoutes_refuseNonOperators(t *testing.T) {
 			t.Errorf("%s with a garbage token: %d, want 401: %.200s", req.Path, resp.Status, resp.Body)
 		}
 		req.Bearer = stranger.Token()
+		// A lobby session holds no permission at all, so the scope gate may
+		// refuse it before the operator-list check gets to: both are the same
+		// refusal of the same caller.
 		resp := c.MustSend(t, req)
-		if resp.Status != http.StatusForbidden || resp.ErrorCode() != tenancy.CodeNotOperator {
-			t.Errorf("%s as a non-operator wallet: %d %s, want 403 %s", req.Path, resp.Status, resp.ErrorCode(), tenancy.CodeNotOperator)
+		if code := resp.ErrorCode(); resp.Status != http.StatusForbidden || (code != tenancy.CodeNotOperator && code != tenancy.CodeScope) {
+			t.Errorf("%s as a non-operator wallet: %d %s, want 403 %s or %s", req.Path, resp.Status, code, tenancy.CodeNotOperator, tenancy.CodeScope)
 		}
 	}
 }

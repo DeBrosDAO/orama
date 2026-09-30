@@ -238,15 +238,19 @@ func TestMonitorTraffic_countsGatewayRequests(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	c := harness.GW(t)
-	for range 20 {
-		c.MustSend(t, gw.Req{Method: http.MethodGet, Path: "/v1/health"})
+	// Not /health or /v1/health: the gateway leaves its own health and
+	// telemetry plumbing out of the request metrics (pkg/gateway/traffic.go
+	// trafficExcludedPaths), so counting those would never show.
+	const burst = 20
+	for range burst {
+		c.MustSend(t, gw.Req{Method: http.MethodGet, Path: "/v1/status"})
 	}
 	eventually.Require(t, pollEvery, telemetryBudget, "gateway requests counted", func() (bool, error) {
 		var tr trafficReport
 		if err := jsonOf(run(t, harness.CLI(t), "monitor", "traffic", "--env", f.State.Env, "--json"), &tr); err != nil {
 			return false, err
 		}
-		if tr.Totals.Reporting >= 1 && tr.Totals.Requests > 0 {
+		if tr.Totals.Reporting >= 1 && tr.Totals.Requests >= burst {
 			return true, nil
 		}
 		return false, fmt.Errorf("reporting=%d requests=%d", tr.Totals.Reporting, tr.Totals.Requests)
