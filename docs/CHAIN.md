@@ -289,8 +289,8 @@ relay's `prefix16` (`A.B.0.0/16`). A node with no literal-IP endpoint, or whose 
 `network_identity_lock_seconds`, has no identified network: every such relay goes into one shared bucket,
 stored as `unidentified`, so all of them together share a single `per_prefix16_cap`. Genesis accepts
 `unidentified` as canonical, so export and import round-trip. The bucket is a snapshot taken at registration;
-a later endpoint change does not move an existing relay. A literal IPv6 endpoint yields a `/32` network, which
-`MsgRegisterRelay` rejects (the cap buckets IPv4 /16 only).
+a later endpoint change does not move an existing relay. A node identified by a literal IPv6 endpoint (x/nodes
+reports a `/32` network) has no IPv4 /16, so its relay also goes into the `unidentified` bucket.
 
 `token`
 

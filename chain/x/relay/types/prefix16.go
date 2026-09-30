@@ -3,6 +3,7 @@ package types
 import (
 	"fmt"
 	"net"
+	"net/netip"
 )
 
 // UnidentifiedPrefix16 is the one shared bucket for relays whose node has no
@@ -15,6 +16,12 @@ const UnidentifiedPrefix16 = "unidentified"
 // "A.B.0.0/16", or "" when unidentified) to the bucket the per-/16 cap uses.
 func RelayPrefix16(network string) (string, error) {
 	if network == "" {
+		return UnidentifiedPrefix16, nil
+	}
+	// The cap buckets IPv4 /16s. A node identified by an IPv6 network (x/nodes reports a /32 for a
+	// literal IPv6 endpoint) has no IPv4 /16, so it shares the unidentified bucket rather than being
+	// refused a relay.
+	if prefix, err := netip.ParsePrefix(network); err == nil && prefix.Addr().Is6() && !prefix.Addr().Is4In6() {
 		return UnidentifiedPrefix16, nil
 	}
 	return CanonicalPrefix16(network)
