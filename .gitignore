@@ -33,6 +33,8 @@ core/bin/
 /core/gateway
 /core/privhelper
 /core/pubsub
+/core/cli
+/core/sni-router
 core/bin-linux/
 core/dist/
 core/orama-cli-linux
