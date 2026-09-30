@@ -27,8 +27,11 @@ type DeleteHandler struct {
 	deprovisioner NamespaceDeprovisioner
 	ormClient     rqlite.Client
 	ipfsClient    ipfs.IPFSClient // can be nil
-	audit         *auth.AuditLog
-	logger        *zap.Logger
+	// refs is the cluster-wide reference index. orm is the cluster registry, so
+	// it is the index itself.
+	refs   *storage.CIDRefs
+	audit  *auth.AuditLog
+	logger *zap.Logger
 }
 
 // NewDeleteHandler creates a new delete handler
@@ -37,6 +40,7 @@ func NewDeleteHandler(dp NamespaceDeprovisioner, orm rqlite.Client, ipfsClient i
 		deprovisioner: dp,
 		ormClient:     orm,
 		ipfsClient:    ipfsClient,
+		refs:          storage.NewCIDRefs(orm),
 		audit:         audit,
 		logger:        logger.With(zap.String("component", "namespace-delete-handler")),
 	}
@@ -169,22 +173,6 @@ func (h *DeleteHandler) cleanupDeployments(ctx context.Context, ns string) {
 		h.teardownDeploymentReplicas(ctx, ns, dep.ID, dep.Name, dep.Type)
 	}
 
-	// 2. Unpin deployment IPFS content
-	if h.ipfsClient != nil {
-		for _, dep := range deps {
-			if err := storage.UnpinIfLastPinner(ctx, h.ormClient, h.ipfsClient, dep.ContentCID, ns); err != nil {
-				h.logger.Warn("Failed to unpin deployment content CID",
-					zap.String("deployment_id", dep.ID),
-					zap.String("cid", dep.ContentCID), zap.Error(err))
-			}
-			if err := storage.UnpinIfLastPinner(ctx, h.ormClient, h.ipfsClient, dep.BuildCID, ns); err != nil {
-				h.logger.Warn("Failed to unpin deployment build CID",
-					zap.String("deployment_id", dep.ID),
-					zap.String("cid", dep.BuildCID), zap.Error(err))
-			}
-		}
-	}
-
 	// 3. Clean up deployment DB records (children first, since FK cascades disabled in rqlite)
 	for _, dep := range deps {
 		// Child tables with FK to deployments(id)
@@ -266,37 +254,27 @@ func (h *DeleteHandler) teardownDeploymentReplicas(ctx context.Context, ns, depl
 	}
 }
 
-// unpinNamespaceContent unpins all IPFS content owned by the namespace.
-// Best-effort: individual failures are logged but do not abort deletion.
+// unpinNamespaceContent releases every reference the namespace holds in the
+// cluster reference index (its storage pins and its deployments' content and
+// build CIDs) and removes the cluster pin of each CID that leaves no reference
+// anywhere. The index, not the namespace's database, is what says who holds a
+// CID. Best-effort per CID: failures are logged and do not abort deletion.
 func (h *DeleteHandler) unpinNamespaceContent(ctx context.Context, ns string) {
-	if h.ipfsClient == nil {
-		h.logger.Debug("IPFS client not available, skipping IPFS cleanup")
-		return
-	}
-
-	type cidRow struct {
-		CID string `db:"cid"`
-	}
-	var rows []cidRow
-	if err := h.ormClient.Query(ctx, &rows,
-		"SELECT cid FROM ipfs_content_ownership WHERE namespace = ?", ns); err != nil {
-		h.logger.Warn("Failed to query IPFS content for namespace",
+	orphaned, err := h.refs.ReleaseNamespace(ctx, ns)
+	if err != nil {
+		h.logger.Warn("Failed to release the namespace's IPFS references; its pins stay in place",
 			zap.String("namespace", ns), zap.Error(err))
+	}
+	if h.ipfsClient == nil || len(orphaned) == 0 {
 		return
 	}
-
-	if len(rows) == 0 {
-		return
-	}
-
 	h.logger.Info("Unpinning IPFS content for namespace",
 		zap.String("namespace", ns),
-		zap.Int("cid_count", len(rows)))
-
-	for _, row := range rows {
-		if err := storage.UnpinIfLastPinner(ctx, h.ormClient, h.ipfsClient, row.CID, ns); err != nil {
+		zap.Int("cid_count", len(orphaned)))
+	for _, cid := range orphaned {
+		if err := h.ipfsClient.Unpin(ctx, cid); err != nil {
 			h.logger.Warn("Failed to unpin CID (best-effort)",
-				zap.String("cid", row.CID),
+				zap.String("cid", cid),
 				zap.String("namespace", ns),
 				zap.Error(err))
 		}
@@ -352,7 +330,6 @@ func (h *DeleteHandler) cleanupGlobalTables(ctx context.Context, ns string) {
 	}{
 		{"global_deployment_subdomains", "namespace"},
 		{"ipfs_content_ownership", "namespace"},
-		{"ipfs_cid_refs", "namespace"},
 		{"functions", "namespace"},
 		{"function_secrets", "namespace"},
 		{"namespace_sqlite_databases", "namespace"},

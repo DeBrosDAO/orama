@@ -71,34 +71,33 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 	// the CLUSTER-WIDE index and only the release that leaves zero references
 	// removes the cluster pin. A namespace's own RQLite cannot answer this: it
 	// holds no rows for other namespaces (see cidrefs.go).
-	if h.refSyncPending.Load() {
+	if h.db != nil && !h.refs.Ready() {
 		httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
-			"the cluster reference index is still being built on this gateway, so an unpin cannot tell whether other namespaces hold this content; retry shortly",
+			ErrRefIndexNotReady.Error()+", so an unpin cannot tell whether other namespaces hold this content; retry shortly",
 			httputil.WithRetryable())
 		return
 	}
-	remaining, refErr := h.releaseCIDRef(ctx, path, namespace)
+	// The row is marked unpinned before the reference is released, so nothing
+	// that reads the row while the release is in flight sees a pin whose
+	// reference is already gone.
+	if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
+			zap.Error(uerr), zap.String("cid", path))
+	}
+	remaining, refErr := h.releaseRef(ctx, path, namespace)
 	if refErr != nil {
 		// Can't confirm we're the last pinner — fail safe: do NOT remove the
 		// shared cluster pin (a leaked pin is recoverable via a later unpin/GC;
-		// deleting another namespace's live data is not). Still mark this
-		// namespace logically unpinned.
+		// deleting another namespace's live data is not). This namespace is
+		// already logically unpinned.
 		h.logger.ComponentWarn(logging.ComponentGeneral, "unpin: cross-namespace reference check failed; leaving cluster pin intact (fail-safe)",
 			zap.Error(refErr), zap.String("cid", path), zap.String("namespace", namespace))
-		if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
-			h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
-				zap.Error(uerr), zap.String("cid", path))
-		}
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "evicted": "skipped"})
 		return
 	}
 	if remaining > 0 {
 		// Another reference still exists — leave the cluster pin and the
-		// blocks intact; this namespace is only logically unpinned.
-		if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
-			h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
-				zap.Error(uerr), zap.String("cid", path))
-		}
+		// blocks intact.
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "shared": true, "evicted": "shared"})
 		return
 	}
@@ -110,10 +109,6 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 		// end state, so treat "not pinned / not found" as success rather than a
 		// 500. A retention cron re-unpinning already-gone CIDs must not error.
 		if isAlreadyUnpinned(err) {
-			if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
-				h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
-					zap.Error(uerr), zap.String("cid", path))
-			}
 			evicted := h.maybeImmediateEvict(ctx, path, immediate)
 			httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "already_unpinned": true, "evicted": evicted})
 			return
@@ -123,12 +118,6 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 		// Don't leak internal cluster/kubo error text to the tenant.
 		httputil.WriteError(w, http.StatusInternalServerError, "failed to unpin")
 		return
-	}
-
-	// Update pin status in database
-	if err := h.updatePinStatus(ctx, path, namespace, false); err != nil {
-		h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
-			zap.Error(err), zap.String("cid", path))
 	}
 
 	evicted := h.maybeImmediateEvict(ctx, path, immediate)

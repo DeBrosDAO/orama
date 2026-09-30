@@ -547,7 +547,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			IPFSAPIURL:            cfg.IPFSAPIURL,
 			ClusterSecret:         cfg.ClusterSecret,
 		}, deps.ORMClient, deps.GlobalORMClient)
-		gw.storageHandlers.StartCIDRefSync(gw.shutdownCtx, ownNamespace(cfg))
+		gw.storageHandlers.StartCIDRefBackfill(gw.shutdownCtx, ownNamespace(cfg))
 	}
 
 	// Create adapter for auth handlers to use the client
@@ -698,6 +698,9 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			envCodec,
 			deps.AuthService.Audit(),
 		)
+		// Deployments hold their content in the same cluster reference index as
+		// storage pins, so one readiness state covers both.
+		gw.deploymentService.SetCIDRefs(gw.storageHandlers.CIDRefs())
 		// Set node peer ID so deployments run on the node that receives the request
 		if gw.cfg.NodePeerID != "" {
 			gw.deploymentService.SetNodePeerID(gw.cfg.NodePeerID)
