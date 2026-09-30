@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/e2e/harness/pace"
+	"github.com/DeBrosOfficial/network/pkg/auth"
 )
 
 // Pacing the CLI (e2e/README.md, "Pacing"). The CLI calls the gateway's
@@ -95,26 +96,23 @@ func (r *Runner) resolvePacer() (*pace.Pacer, error) {
 	return p, nil
 }
 
-// tokenEnvVar is the CLI's pre-issued credential (core/pkg/auth TokenEnvVar).
-// Given an API key rather than a token, the CLI exchanges it on
-// /v1/auth/token before its command runs: one credential request that
-// changes no file, so nothing after the run would see it.
-const tokenEnvVar = "ORAMA_TOKEN"
-
 // exchangesEnvToken reports whether env (KEY=VALUE, the last one winning, as
 // exec does) hands the CLI an ORAMA_TOKEN it will exchange: anything that is
-// not already a token (core/pkg/auth LooksLikeJWT).
+// not already a token. The CLI decides that with auth.LooksLikeJWT, which is
+// used here so the two cannot drift. Given an API key, the CLI exchanges it on
+// /v1/auth/token before its command runs: one credential request that changes
+// no file, so nothing after the run would see it.
 func exchangesEnvToken(env []string) bool {
 	value, set := "", false
 	for _, kv := range env {
-		if k, v, ok := strings.Cut(kv, "="); ok && k == tokenEnvVar {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == auth.TokenEnvVar {
 			value, set = strings.TrimSpace(v), true
 		}
 	}
 	if !set || value == "" {
 		return false
 	}
-	return strings.Count(value, ".") != 2 || !strings.HasPrefix(value, "ey")
+	return !auth.LooksLikeJWT(value)
 }
 
 // paceBefore waits for the tokens args spends beforehand. extraEnv is the

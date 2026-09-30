@@ -12,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/config"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/pace"
+	"github.com/DeBrosOfficial/network/pkg/auth"
 )
 
 const testGatewayHost = "e2e-x.dbrsteting.bid"
@@ -175,7 +176,7 @@ func TestForState_setsPacingFields(t *testing.T) {
 // and was refused 429 (stagenet, 2026-09-30).
 func TestRun_envTokenKeyExchangeChargedBeforehand(t *testing.T) {
 	r, clk := pacedRunner(t, 1, 1)
-	r.Env = append(r.Env, tokenEnvVar+"=orama_rk_garbage")
+	r.Env = append(r.Env, auth.TokenEnvVar+"=orama_rk_garbage")
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
 		if _, err := r.Run(ctx, "namespace", "list"); err != nil {
@@ -193,9 +194,9 @@ func TestRun_envTokenKeyExchangeChargedBeforehand(t *testing.T) {
 // RunOpts.Env overrides the runner's Env, as exec does with a later value.
 func TestRun_envTokenJWTIsNotCharged(t *testing.T) {
 	r, clk := pacedRunner(t, 1, 1)
-	r.Env = append(r.Env, tokenEnvVar+"=orama_rk_key")
+	r.Env = append(r.Env, auth.TokenEnvVar+"=orama_rk_key")
 	ctx := context.Background()
-	jwt := RunOpts{Env: []string{tokenEnvVar + "=eyJhbGciOi.eyJzdWIiOi.c2ln"}}
+	jwt := RunOpts{Env: []string{auth.TokenEnvVar + "=eyJhbGciOi.eyJzdWIiOi.c2ln"}}
 	for i := 0; i < 3; i++ {
 		if _, err := r.RunWith(ctx, jwt, "namespace", "list"); err != nil {
 			t.Fatal(err)
