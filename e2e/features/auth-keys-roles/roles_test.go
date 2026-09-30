@@ -35,7 +35,7 @@ var (
 		{"members (members:write)", gw.Req{Path: pathMembers}, operating},
 		{"keys (members:write)", gw.Req{Path: pathKeys}, operating},
 		{"app grants (members:write)", gw.Req{Path: pathGrants}, operating},
-		{"namespace list (namespace:read)", gw.Req{Path: "/v1/namespace/list"}, operating},
+		{"namespace list (the wallet's own, any member)", gw.Req{Path: "/v1/namespace/list"}, everyone},
 		{"session policy (namespace:write)", gw.Req{Path: "/v1/namespace/session-policy"}, operating},
 		{"functions (fn:manage)", gw.Req{Path: "/v1/functions"}, building},
 		{"deployments (deploy:read)", gw.Req{Path: "/v1/deployments/list"}, building},
