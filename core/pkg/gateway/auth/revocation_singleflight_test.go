@@ -37,20 +37,20 @@ func waitOrFail(t *testing.T, wg *sync.WaitGroup, within time.Duration, what str
 func TestRevocationList_concurrentRequestsDuringASlowReloadCauseOneReload(t *testing.T) {
 	list, db, clock := newTestRevocations(t)
 	claims := &JWTClaims{Sub: "ak_key:ns", Iat: clock.Unix() - 60}
-	list.Denies(claims, []string{"ak_key:ns"}) // first load
+	mustDenies(list, claims, []string{"ak_key:ns"}) // first load
 
 	*clock = clock.Add(RevocationRefreshInterval + time.Second) // stale, but inside RevocationStaleness
 	started, release, reloads := slowReload(db)
 
 	var starter sync.WaitGroup
 	starter.Add(1)
-	go func() { defer starter.Done(); list.Denies(claims, []string{"ak_key:ns"}) }()
+	go func() { defer starter.Done(); mustDenies(list, claims, []string{"ak_key:ns"}) }()
 	<-started
 
 	var others sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		others.Add(1)
-		go func() { defer others.Done(); list.Denies(claims, []string{"ak_key:ns"}) }()
+		go func() { defer others.Done(); mustDenies(list, claims, []string{"ak_key:ns"}) }()
 	}
 	waitOrFail(t, &others, 2*time.Second, "requests blocked on a reload although their list was within the staleness bound")
 
@@ -66,7 +66,7 @@ func TestRevocationList_concurrentRequestsDuringASlowReloadCauseOneReload(t *tes
 func TestRevocationList_aListOlderThanTheStalenessBoundWaitsForTheRunningReload(t *testing.T) {
 	list, db, clock := newTestRevocations(t)
 	claims := &JWTClaims{Sub: "ak_key:ns", Iat: clock.Unix() - 60}
-	list.Denies(claims, []string{"ak_key:ns"}) // first load
+	mustDenies(list, claims, []string{"ak_key:ns"}) // first load
 
 	// Revoked elsewhere; only the reload can reveal it.
 	db.mu.Lock()
@@ -78,13 +78,13 @@ func TestRevocationList_aListOlderThanTheStalenessBoundWaitsForTheRunningReload(
 
 	var starter sync.WaitGroup
 	starter.Add(1)
-	go func() { defer starter.Done(); list.Denies(claims, []string{"ak_key:ns"}) }()
+	go func() { defer starter.Done(); mustDenies(list, claims, []string{"ak_key:ns"}) }()
 	<-started
 
 	var denied atomic.Bool
 	var waiter sync.WaitGroup
 	waiter.Add(1)
-	go func() { defer waiter.Done(); denied.Store(list.Denies(claims, []string{"ak_key:ns"})) }()
+	go func() { defer waiter.Done(); denied.Store(mustDenies(list, claims, []string{"ak_key:ns"})) }()
 
 	time.Sleep(100 * time.Millisecond) // the waiter must still be parked
 	if denied.Load() {

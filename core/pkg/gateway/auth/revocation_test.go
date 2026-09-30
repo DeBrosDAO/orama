@@ -21,6 +21,10 @@ type revocationDB struct {
 	failAlways bool
 	lastDelete string
 	onSelect   func() // runs while a reload is in flight
+	// afterSnapshot runs after the SELECT has read its rows and before it
+	// returns, with the fake unlocked: what a slow registry does, answering
+	// from a moment that is already in the past.
+	afterSnapshot func()
 }
 
 func (d *revocationDB) Query(_ context.Context, sql string, args ...interface{}) (*client.QueryResult, error) {
@@ -59,6 +63,11 @@ func (d *revocationDB) Query(_ context.Context, sql string, args ...interface{})
 			out.Rows = append(out.Rows, []interface{}{r.jti, r.subject, r.issuedBefore, r.expiresAt})
 		}
 		out.Count = int64(len(out.Rows))
+		if hook := d.afterSnapshot; hook != nil {
+			d.mu.Unlock()
+			hook()
+			d.mu.Lock()
+		}
 		return out, nil
 
 	case strings.HasPrefix(strings.TrimSpace(sql), "DELETE FROM revoked_tokens"):
@@ -104,14 +113,14 @@ func TestRevocationList_revokingASubjectDeniesTokensAlreadyIssued(t *testing.T) 
 	list, _, clock := newTestRevocations(t)
 
 	issuedEarlier := &JWTClaims{Sub: "ak_key:ns", Iat: clock.Unix() - 60, Jti: "token-1"}
-	if list.Denies(issuedEarlier, []string{"ak_key:ns"}) {
+	if mustDenies(list, issuedEarlier, []string{"ak_key:ns"}) {
 		t.Fatal("a token was denied before anything was revoked")
 	}
 
 	if err := list.RevokeSubject(context.Background(), "ak_key:ns", "revoked", time.Hour); err != nil {
 		t.Fatalf("RevokeSubject: %v", err)
 	}
-	if !list.Denies(issuedEarlier, []string{"ak_key:ns"}) {
+	if !mustDenies(list, issuedEarlier, []string{"ak_key:ns"}) {
 		t.Fatal("a token issued before the revocation is still accepted")
 	}
 }
@@ -125,7 +134,7 @@ func TestRevocationList_aTokenIssuedAfterTheRevocationIsNotDenied(t *testing.T) 
 		t.Fatalf("RevokeSubject: %v", err)
 	}
 	later := &JWTClaims{Sub: "0xwallet", Iat: clock.Unix() + 1} // the next second
-	if list.Denies(later, []string{"0xwallet"}) {
+	if mustDenies(list, later, []string{"0xwallet"}) {
 		t.Error("a token minted after the revocation was denied; signing in again would not work")
 	}
 }
@@ -140,10 +149,10 @@ func TestRevocationList_revokingOneTokenLeavesTheOthers(t *testing.T) {
 	if err := list.RevokeToken(context.Background(), mine.Jti, mine.Exp, "logged out"); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
-	if !list.Denies(mine, []string{"0xwallet"}) {
+	if !mustDenies(list, mine, []string{"0xwallet"}) {
 		t.Error("the token that was logged out is still accepted")
 	}
-	if list.Denies(other, []string{"0xwallet"}) {
+	if mustDenies(list, other, []string{"0xwallet"}) {
 		t.Error("logging out of one session ended another")
 	}
 }
@@ -156,7 +165,7 @@ func TestRevocationList_subjectMatchingIgnoresCase(t *testing.T) {
 		t.Fatalf("RevokeSubject: %v", err)
 	}
 	claims := &JWTClaims{Sub: "0xwallet", Iat: clock.Unix() - 1}
-	if !list.Denies(claims, []string{"0xWaLLeT"}) {
+	if !mustDenies(list, claims, []string{"0xWaLLeT"}) {
 		t.Error("the same wallet in different case was not denied")
 	}
 }
@@ -169,7 +178,7 @@ func TestRevocationList_aTokenWithNoIDIsStillCoveredBySubject(t *testing.T) {
 		t.Fatalf("RevokeSubject: %v", err)
 	}
 	legacy := &JWTClaims{Sub: "ak_old:ns", Iat: clock.Unix() - 1} // no Jti
-	if !list.Denies(legacy, []string{"ak_old:ns"}) {
+	if !mustDenies(list, legacy, []string{"ak_old:ns"}) {
 		t.Error("a token minted before jti existed escaped its key's revocation")
 	}
 }
@@ -181,19 +190,19 @@ func TestRevocationList_picksUpARevocationMadeElsewhere(t *testing.T) {
 	list, db, clock := newTestRevocations(t)
 	claims := &JWTClaims{Sub: "ak_key:ns", Iat: clock.Unix() - 60}
 
-	list.Denies(claims, []string{"ak_key:ns"}) // first load
+	mustDenies(list, claims, []string{"ak_key:ns"}) // first load
 
 	// Another gateway records a revocation straight into the table.
 	db.mu.Lock()
 	db.rows = append(db.rows, revocation{subject: "ak_key:ns", issuedBefore: clock.Unix(), expiresAt: clock.Unix() + 3600})
 	db.mu.Unlock()
 
-	if list.Denies(claims, []string{"ak_key:ns"}) {
+	if mustDenies(list, claims, []string{"ak_key:ns"}) {
 		t.Error("the list refreshed sooner than its interval; that is a query per request")
 	}
 
 	*clock = clock.Add(RevocationRefreshInterval + time.Second)
-	if !list.Denies(claims, []string{"ak_key:ns"}) {
+	if !mustDenies(list, claims, []string{"ak_key:ns"}) {
 		t.Errorf("a revocation made elsewhere was not honoured within %s", RevocationRefreshInterval)
 	}
 }
@@ -206,7 +215,7 @@ func TestRevocationList_keepsTheListWhenAReloadFails(t *testing.T) {
 		t.Fatalf("RevokeSubject: %v", err)
 	}
 	claims := &JWTClaims{Sub: "ak_key:ns", Iat: clock.Unix() - 60}
-	if !list.Denies(claims, []string{"ak_key:ns"}) {
+	if !mustDenies(list, claims, []string{"ak_key:ns"}) {
 		t.Fatal("the revocation did not apply")
 	}
 
@@ -215,34 +224,8 @@ func TestRevocationList_keepsTheListWhenAReloadFails(t *testing.T) {
 	db.mu.Unlock()
 	*clock = clock.Add(RevocationRefreshInterval + time.Second)
 
-	if !list.Denies(claims, []string{"ak_key:ns"}) {
+	if !mustDenies(list, claims, []string{"ak_key:ns"}) {
 		t.Error("a failed reload cleared the list, so every revoked token would work again")
-	}
-}
-
-// A database that is down must not mean a query per request.
-func TestRevocationList_doesNotRetryOnEveryRequestWhileTheDatabaseIsDown(t *testing.T) {
-	list, db, clock := newTestRevocations(t)
-	claims := &JWTClaims{Sub: "0xwallet", Iat: clock.Unix()}
-
-	db.mu.Lock()
-	db.failAlways = true
-	db.mu.Unlock()
-	list.Denies(claims, []string{"0xwallet"})
-
-	db.mu.Lock()
-	before := db.selects
-	db.mu.Unlock()
-
-	for i := 0; i < 50; i++ {
-		list.Denies(claims, []string{"0xwallet"})
-	}
-
-	db.mu.Lock()
-	after := db.selects
-	db.mu.Unlock()
-	if after != before {
-		t.Errorf("%d extra queries for 50 requests while the database was failing", after-before)
 	}
 }
 
@@ -297,7 +280,7 @@ func TestRevocationList_refusesWhatItCannotRecord(t *testing.T) {
 	if err := nilList.RevokeToken(context.Background(), "jti", 0, ""); err == nil {
 		t.Error("a nil list reported a token revocation as recorded")
 	}
-	if nilList.Denies(&JWTClaims{Sub: "x"}, []string{"x"}) {
+	if mustDenies(nilList, &JWTClaims{Sub: "x"}, []string{"x"}) {
 		t.Error("a nil list denied a token")
 	}
 
@@ -347,18 +330,37 @@ func TestRevocationList_aSlowReloadIsAgedFromWhenItBegan(t *testing.T) {
 	db.onSelect = func() { *clock = clock.Add(3 * time.Second) }
 	db.mu.Unlock()
 
-	list.Denies(claims, []string{"ak_key:ns"}) // first load, takes 3s
+	mustDenies(list, claims, []string{"ak_key:ns"}) // first load, takes 3s
 	db.mu.Lock()
 	db.onSelect = nil
 	before := db.selects
 	db.mu.Unlock()
 
 	*clock = clock.Add(RevocationRefreshInterval - 3*time.Second) // one interval since the read began
-	list.Denies(claims, []string{"ak_key:ns"})
+	mustDenies(list, claims, []string{"ak_key:ns"})
 	db.mu.Lock()
 	reloaded := db.selects - before
 	db.mu.Unlock()
 	if reloaded != 1 {
 		t.Errorf("%d reloads one interval after the last began, want 1", reloaded)
 	}
+}
+
+// mustDenies is Denies for a test whose list is expected to be fit to answer.
+func mustDenies(list *RevocationList, claims *JWTClaims, keys []string) bool {
+	denied, err := list.Denies(claims, keys)
+	if err != nil {
+		panic("the revocation list could not answer: " + err.Error())
+	}
+	return denied
+}
+
+// mustRevoked is Service.Revoked for a test whose list is expected to be fit
+// to answer.
+func mustRevoked(s *Service, claims *JWTClaims) bool {
+	revoked, err := s.Revoked(claims)
+	if err != nil {
+		panic("the revocation list could not answer: " + err.Error())
+	}
+	return revoked
 }

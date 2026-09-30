@@ -228,7 +228,11 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 	// A signature that verifies says the gateway minted this token, not that
 	// the token is still good. Revoking a key used to stop the key and leave
 	// its tokens working for the rest of their lifetime.
-	if s.revocations.Denies(&claims, s.revocationSubjectKeys(claims.Sub)) {
+	denied, err := s.revocations.Denies(&claims, s.revocationSubjectKeys(claims.Sub))
+	if err != nil {
+		return nil, err
+	}
+	if denied {
 		return nil, ErrTokenRevoked
 	}
 	// Validate registered claims

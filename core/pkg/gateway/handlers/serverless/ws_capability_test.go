@@ -21,7 +21,9 @@ import (
 
 type revokedSet map[string]bool
 
-func (r revokedSet) Revoked(c *auth.JWTClaims) bool { return r[c.Jti] || r["device:"+c.Did] }
+func (r revokedSet) Revoked(c *auth.JWTClaims) (bool, error) {
+	return r[c.Jti] || r["device:"+c.Did], nil
+}
 
 func capabilityFn(name string) *serverless.Function {
 	fn := persistentFn(name, false, false)

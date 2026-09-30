@@ -176,11 +176,11 @@ func TestRevocationList_refusesARevokedDeviceOrSessionWhenever(t *testing.T) {
 		"the device":  {Sub: "0xa", Did: "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k", Iat: later},
 		"the session": {Sub: "0xa", Sid: "session-1", Iat: later},
 	} {
-		if !s.Revoked(c) {
+		if !mustRevoked(s, c) {
 			t.Errorf("a token of %s was accepted after it was revoked", name)
 		}
 	}
-	if s.Revoked(&JWTClaims{Sub: "0xa", Did: "another", Sid: "session-2", Iat: later}) {
+	if mustRevoked(s, &JWTClaims{Sub: "0xa", Did: "another", Sid: "session-2", Iat: later}) {
 		t.Error("a token of another device and session was refused")
 	}
 	if err := s.revocations.RevokeSessionID(ctx, ""); err == nil {

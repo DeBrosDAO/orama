@@ -250,12 +250,21 @@ func claimsFromInternalAuthHeaders(h http.Header, namespace string, now time.Tim
 // tells a revoked session from an unknown credential (namespaceProxyAuthCode).
 const sessionRevokedMessage = "this session was ended, or the key it came from was revoked"
 
+// authUnavailableMessage is what a request answers when whether its credential
+// was revoked cannot be told (auth.ErrRevocationsUnavailable). The namespace
+// proxy carries a refusal as a message, so this is also how it is told apart
+// from a refused credential: it answers 503, not 401, and the client retries.
+const authUnavailableMessage = "cannot check whether this credential was revoked; retry shortly"
+
 // namespaceProxyAuthCode is the code a refused namespace-proxy credential
 // answers with: a revoked session is AUTH_REVOKED, any other refusal names a
 // credential this cluster does not know.
 func namespaceProxyAuthCode(errMsg string) string {
 	if errMsg == sessionRevokedMessage {
 		return CodeAuthRevoked
+	}
+	if errMsg == authUnavailableMessage {
+		return CodeAuthUnavailable
 	}
 	return CodeAuthInvalidKey
 }
@@ -297,6 +306,9 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 				if errors.Is(err, auth.ErrTokenRevoked) {
 					return "", nil, "", sessionRevokedMessage
 				}
+				if errors.Is(err, auth.ErrRevocationsUnavailable) {
+					return "", nil, "", authUnavailableMessage
+				}
 				// JWT verification failed - fall through to API key check
 			}
 		}
@@ -325,6 +337,9 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 			if errors.Is(err, auth.ErrTokenRevoked) {
 				return "", nil, "", sessionRevokedMessage
 			}
+			if errors.Is(err, auth.ErrRevocationsUnavailable) {
+				return "", nil, "", authUnavailableMessage
+			}
 		}
 	}
 
@@ -338,6 +353,9 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 	// namespace gateway, which does not re-look-up the key (bugboard #148).
 	ns, rawScopes, err := g.lookupAPIKeyEntry(r.Context(), key, g.apiKeyDB())
 	if err != nil {
+		if errors.Is(err, auth.ErrRevocationsUnavailable) {
+			return "", nil, "", authUnavailableMessage
+		}
 		return "", nil, "", "invalid API key"
 	}
 	return ns, nil, auth.ScopesFromStored(rawScopes).Canonical(), ""
@@ -371,9 +389,14 @@ func (g *Gateway) lookupAPIKeyEntry(ctx context.Context, key string, q apiKeyQue
 	// list is replicated and reloaded every ten seconds, so consulting it first
 	// is both shorter and cluster-wide. It is checked under both spellings
 	// because RevokeKey only ever has the hash.
-	if g.authService != nil &&
-		g.authService.Revocations().DeniesSubject(key, g.authService.HashAPIKey(key)) {
-		return "", "", fmt.Errorf("invalid API key")
+	if g.authService != nil {
+		denied, err := g.authService.Revocations().DeniesSubject(key, g.authService.HashAPIKey(key))
+		if err != nil {
+			return "", "", fmt.Errorf("lookupAPIKeyEntry: %w", err)
+		}
+		if denied {
+			return "", "", fmt.Errorf("invalid API key")
+		}
 	}
 
 	// Cache uses raw key as cache key (in-memory only, never persisted)
@@ -433,8 +456,14 @@ func (g *Gateway) lookupStoredAPIKey(ctx context.Context, stored string) (string
 	if stored == "" {
 		return "", "", fmt.Errorf("invalid API key")
 	}
-	if g.authService != nil && g.authService.Revocations().DeniesSubject(stored) {
-		return "", "", fmt.Errorf("invalid API key")
+	if g.authService != nil {
+		denied, err := g.authService.Revocations().DeniesSubject(stored)
+		if err != nil {
+			return "", "", fmt.Errorf("lookupStoredAPIKey: %w", err)
+		}
+		if denied {
+			return "", "", fmt.Errorf("invalid API key")
+		}
 	}
 	if g.mwCache != nil {
 		if cachedNS, cachedScopes, ok := g.mwCache.GetAPIKeyEntry(stored); ok {
@@ -479,6 +508,9 @@ func (g *Gateway) exchangedKeyScopes(ctx context.Context, claims *auth.JWTClaims
 	}
 	ns, raw, err := g.lookupStoredAPIKey(ctx, claims.Sub)
 	if err != nil {
+		if errors.Is(err, auth.ErrRevocationsUnavailable) {
+			return "", "", authUnavailableMessage
+		}
 		return "", "", "this API key is not one this cluster knows"
 	}
 	if tokenNS := strings.TrimSpace(claims.Namespace); tokenNS != "" && ns != tokenNS {
@@ -497,6 +529,10 @@ func (g *Gateway) withExchangedKeyScopes(w http.ResponseWriter, ctx context.Cont
 	if errMsg != "" {
 		if isPublic {
 			return ctx, true
+		}
+		if errMsg == authUnavailableMessage {
+			unavailable(w, CodeAuthUnavailable, errMsg)
+			return ctx, false
 		}
 		if keyNS != "" {
 			forbidden(w, CodeNamespaceMismatch, errMsg,
@@ -794,6 +830,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 						unauthorized(w, CodeAuthRevoked, sessionRevokedMessage, nil)
 						return
 					}
+					if errors.Is(err, auth.ErrRevocationsUnavailable) && !isPublic {
+						unavailable(w, CodeAuthUnavailable, authUnavailableMessage)
+						return
+					}
 					// If it looked like a JWT but failed verification, fall through to API key check
 				}
 			}
@@ -826,7 +866,12 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			// EdDSA / RS256 JWTs issued by this gateway are well under 4 KB.
 			// Anything larger is either malformed or a DoS attempt.
 			if tok != "" && len(tok) <= maxQueryJWTLength && strings.Count(tok, ".") == 2 {
-				if claims, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+				claims, err := g.authService.ParseAndVerifyJWT(tok)
+				if errors.Is(err, auth.ErrRevocationsUnavailable) && !isPublic {
+					unavailable(w, CodeAuthUnavailable, authUnavailableMessage)
+					return
+				}
+				if err == nil {
 					stripJWTQueryParam(r)
 					ctx := context.WithValue(r.Context(), ctxKeyJWT, claims)
 					if ns := strings.TrimSpace(claims.Namespace); ns != "" {
@@ -867,6 +912,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		if err != nil {
 			if isPublic {
 				next.ServeHTTP(w, r)
+				return
+			}
+			if errors.Is(err, auth.ErrRevocationsUnavailable) {
+				unavailable(w, CodeAuthUnavailable, authUnavailableMessage)
 				return
 			}
 			unauthorized(w, CodeAuthInvalidKey, "this API key is not one this cluster knows", nil)
@@ -1498,6 +1547,10 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 				zap.String("upgrade_header", r.Header.Get("Upgrade")),
 				zap.String("user_agent", r.Header.Get("User-Agent")),
 			)
+		}
+		if authErr == authUnavailableMessage {
+			unavailable(w, CodeAuthUnavailable, authErr)
+			return
 		}
 		unauthorized(w, namespaceProxyAuthCode(authErr), authErr, nil)
 		return

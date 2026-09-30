@@ -13,8 +13,8 @@ import (
 // revokedJTIs denies the tokens it names.
 type revokedJTIs map[string]bool
 
-func (d revokedJTIs) Revoked(c *auth.JWTClaims) bool     { return d[c.Jti] }
-func (d revokedJTIs) RefreshRevocations(context.Context) {}
+func (d revokedJTIs) Revoked(c *auth.JWTClaims) (bool, error) { return d[c.Jti], nil }
+func (d revokedJTIs) RefreshRevocations(context.Context)      {}
 
 // closeLog records what a socket was closed with.
 type closeLog struct {
@@ -215,11 +215,11 @@ func (d *countingDenier) RefreshRevocations(context.Context) {
 	d.mu.Unlock()
 }
 
-func (d *countingDenier) Revoked(c *auth.JWTClaims) bool {
+func (d *countingDenier) Revoked(c *auth.JWTClaims) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.askedAt = append(d.askedAt, d.refreshes)
-	return d.revoked[c.Jti]
+	return d.revoked[c.Jti], nil
 }
 
 func TestRun_reloadsTheListThenSweepsUntilCancelled(t *testing.T) {
@@ -329,5 +329,32 @@ func TestRefresh_refusesAnotherDevice(t *testing.T) {
 	same.Did = "device-1"
 	if err := s.Refresh(same); err != nil {
 		t.Errorf("a refresh from the same device was refused: %v", err)
+	}
+}
+
+// unknownDenier cannot tell whether anything is revoked.
+type unknownDenier struct{}
+
+func (unknownDenier) Revoked(*auth.JWTClaims) (bool, error) {
+	return false, auth.ErrRevocationsUnavailable
+}
+func (unknownDenier) RefreshRevocations(context.Context) {}
+
+// A list too old to answer must not close every socket on the gateway, nor
+// close none for good: the socket is left for the next pass, and an expired one
+// is still closed, since that needs no list.
+func TestSweep_leavesASocketOpenWhenRevocationCannotBeChecked(t *testing.T) {
+	r := NewRegistry(nil)
+	var live, expired closeLog
+	r.Register(token("live", now.Add(time.Minute)), live.closer())
+	r.Register(token("expired", now.Add(-time.Hour)), expired.closer())
+
+	r.Sweep(now, unknownDenier{})
+
+	if len(live.got()) != 0 {
+		t.Error("a socket was closed on an unknown revocation state")
+	}
+	if got := expired.got(); len(got) != 1 || got[0] != CloseExpired {
+		t.Errorf("expired socket closed with %v, want [%d]", got, CloseExpired)
 	}
 }

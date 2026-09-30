@@ -19,8 +19,8 @@ import (
 
 type denyAll struct{}
 
-func (denyAll) Revoked(*auth.JWTClaims) bool       { return true }
-func (denyAll) RefreshRevocations(context.Context) {}
+func (denyAll) Revoked(*auth.JWTClaims) (bool, error) { return true, nil }
+func (denyAll) RefreshRevocations(context.Context)    {}
 
 func wsURL(srv *httptest.Server, path string) string {
 	return "ws" + strings.TrimPrefix(srv.URL, "http") + path

@@ -51,7 +51,14 @@ func (i *Issuer) Revoke(ctx context.Context, namespace, token string) error {
 	if err != nil {
 		return fmt.Errorf("not a capability of %q: %w", namespace, err)
 	}
-	if i.now().Unix() >= claims.ExpiresAt || i.revocations.Denies(claims.RevocationClaims(), nil) {
+	if i.now().Unix() >= claims.ExpiresAt {
+		return nil
+	}
+	revoked, err := i.revocations.Denies(claims.RevocationClaims(), nil)
+	if err != nil {
+		return fmt.Errorf("check whether capability %s in %q is already revoked: %w", claims.ID, namespace, err)
+	}
+	if revoked {
 		return nil
 	}
 	// Kept through the sweeper's grace past expiry, which is how long a socket

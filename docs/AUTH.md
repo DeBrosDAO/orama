@@ -616,8 +616,21 @@ reload running starts one and waits for it; a request that finds one running
 keeps using its copy, unless that copy is already 10 seconds old, in which case
 it waits for the running reload (bounded by the reload's own 10-second deadline)
 instead of starting another. A slow registry therefore costs one read at a time,
-not one per request. A failed reload keeps the previous list and is not retried
-until the next interval.
+not one per request.
+
+The 10 seconds is a flat bound, and the list fails **closed**. A failed or hung
+reload (the deadline is enforced by the gateway, not left to the registry
+client) keeps the previous list and never ages it: the copy stays as old as the
+read that filled it began. While that copy is under 10 seconds old it keeps
+answering; once it is older, or if it was never loaded, a request that presents a
+credential cannot be checked and is refused `503` with `AUTH_UNAVAILABLE` and a
+`Retry-After` header, the way a grant that cannot be read is. An unknown state is
+never treated as "not revoked". Retries are limited to one reload attempt per
+second, and a read that finishes late never replaces a newer list. A revocation
+this gateway recorded itself is kept across a reload whose read began before it
+committed. Open WebSockets are the exception: the sweeper that re-checks them
+leaves a socket open on a pass where the list cannot answer, logs it, and checks
+again on the next pass.
 
 Logging out revokes the refresh token **and** the access token, so "log me out"
 does not mean "stop me getting a new one".
@@ -743,7 +756,7 @@ signatures) are not implemented.
 
 ## When a request is refused
 
-Every 401 and 403 carries `{error, code, hint}` — what happened, and what to do
+Every 401, 403 and `AUTH_UNAVAILABLE` 503 carries `{error, code, hint}` — what happened, and what to do
 about it — plus the fields that make it actionable.
 
 | Code | Means |
@@ -751,6 +764,7 @@ about it — plus the fields that make it actionable.
 | `AUTH_MISSING` | no credential was presented |
 | `AUTH_INVALID_KEY` | the key is not one this cluster knows |
 | `AUTH_REVOKED` | the credential was revoked — sign in again |
+| `AUTH_UNAVAILABLE` | the gateway could not tell whether the credential was revoked (503, `Retry-After`) — retry with the same credential |
 | `AUTH_EXPIRED` | the token expired — refresh |
 | `USER_JWT_REQUIRED` | this operation needs a logged-in user; a key alone is not enough |
 | `INSUFFICIENT_SCOPE` | the credential lacks a grant; `required_scope` names it |

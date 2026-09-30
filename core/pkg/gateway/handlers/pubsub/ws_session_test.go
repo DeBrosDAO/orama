@@ -19,8 +19,8 @@ import (
 
 type denyAll struct{}
 
-func (denyAll) Revoked(*gwauth.JWTClaims) bool     { return true }
-func (denyAll) RefreshRevocations(context.Context) {}
+func (denyAll) Revoked(*gwauth.JWTClaims) (bool, error) { return true, nil }
+func (denyAll) RefreshRevocations(context.Context)      {}
 
 // subscribe opens a real subscriber socket authorized by claims, and returns it
 // with the registry it was registered in.
@@ -109,5 +109,5 @@ func TestWebsocketHandler_aKeySocketIsNotRegistered(t *testing.T) {
 
 type revokedNothing struct{}
 
-func (revokedNothing) Revoked(*gwauth.JWTClaims) bool     { return false }
-func (revokedNothing) RefreshRevocations(context.Context) {}
+func (revokedNothing) Revoked(*gwauth.JWTClaims) (bool, error) { return false, nil }
+func (revokedNothing) RefreshRevocations(context.Context)      {}

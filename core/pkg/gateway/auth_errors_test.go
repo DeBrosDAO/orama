@@ -76,7 +76,7 @@ func TestWriteAuthError_carriesTheCauseSpecificFields(t *testing.T) {
 // and not what to do.
 func TestAuthHints_coverEveryCode(t *testing.T) {
 	for _, code := range []string{
-		CodeAuthMissing, CodeAuthInvalidKey, CodeAuthRevoked, CodeAuthExpired,
+		CodeAuthMissing, CodeAuthInvalidKey, CodeAuthRevoked, CodeAuthExpired, CodeAuthUnavailable,
 		CodeAuthUserJWTRequired, CodeScopeMissing, CodeNamespaceMismatch,
 		CodeOwnershipRequired, CodeOperatorRequired, CodeDestinationNotAllowed,
 	} {
@@ -94,6 +94,7 @@ func TestAuthCodes_areDistinct(t *testing.T) {
 		"CodeAuthInvalidKey":        CodeAuthInvalidKey,
 		"CodeAuthRevoked":           CodeAuthRevoked,
 		"CodeAuthExpired":           CodeAuthExpired,
+		"CodeAuthUnavailable":       CodeAuthUnavailable,
 		"CodeAuthUserJWTRequired":   CodeAuthUserJWTRequired,
 		"CodeScopeMissing":          CodeScopeMissing,
 		"CodeNamespaceMismatch":     CodeNamespaceMismatch,

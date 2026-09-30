@@ -64,7 +64,10 @@ type Denier interface {
 	// RefreshRevocations reloads the revocation list, so the sweep that
 	// follows applies every revocation recorded before it.
 	RefreshRevocations(ctx context.Context)
-	Revoked(claims *auth.JWTClaims) bool
+	// Revoked returns an error when the list is too old to say; the sweep then
+	// leaves the socket for the next pass, since closing every socket on a
+	// registry blip is worse than checking it again a few seconds later.
+	Revoked(claims *auth.JWTClaims) (bool, error)
 }
 
 // Closer ends one socket: a close frame carrying code and reason, then the
@@ -130,20 +133,29 @@ func (r *Registry) Sweep(now time.Time, d Denier) int {
 	r.mu.Unlock()
 
 	var (
-		wg     sync.WaitGroup
-		slots  = make(chan struct{}, sweepCloseConcurrency)
-		mu     sync.Mutex
-		closed int
+		wg         sync.WaitGroup
+		slots      = make(chan struct{}, sweepCloseConcurrency)
+		mu         sync.Mutex
+		closed     int
+		unknown    int
+		unknownErr error
 	)
 	for _, s := range open {
 		claims := s.Claims()
 		code, reason := CloseExpired, ReasonExpired
 		switch {
 		case expired(claims.Exp, now):
-		case d.Revoked(&claims):
-			code, reason = CloseRevoked, ReasonRevoked
 		default:
-			continue
+			revoked, err := d.Revoked(&claims)
+			if err != nil {
+				unknown++
+				unknownErr = err
+				continue
+			}
+			if !revoked {
+				continue
+			}
+			code, reason = CloseRevoked, ReasonRevoked
 		}
 		wg.Add(1)
 		slots <- struct{}{}
@@ -164,6 +176,10 @@ func (r *Registry) Sweep(now time.Time, d Denier) int {
 		}(s, claims, code, reason)
 	}
 	wg.Wait()
+	if unknown > 0 {
+		r.logger.Warn("could not tell whether open WebSockets were revoked; they are checked again next pass",
+			zap.Int("sockets", unknown), zap.Error(unknownErr))
+	}
 	return closed
 }
 

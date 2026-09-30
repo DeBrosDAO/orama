@@ -142,7 +142,7 @@ func TestRefreshToken_needsTheDeviceAndRevocationEndsIt(t *testing.T) {
 	if err := s.RevokeDevice(ctx, "anchat", deviceOwner, d.id); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if !s.Revoked(nextClaims) {
+	if !mustRevoked(s, nextClaims) {
 		t.Error("an access token of a revoked device is still accepted")
 	}
 	if _, _, _, _, err := s.RefreshToken(ctx, rotated, "anchat", proofFor(d, DeviceProofRefresh, "anchat", rotated)); err == nil {
@@ -204,7 +204,7 @@ func TestEndSession_refusesItsAccessTokensAtOnce(t *testing.T) {
 	if err := s.EndSession(ctx, "anchat", deviceOwner, cellInt64(res.Rows[0][0])); err != nil {
 		t.Fatalf("end: %v", err)
 	}
-	if !s.Revoked(claims) {
+	if !mustRevoked(s, claims) {
 		t.Error("an ended session's access token is still accepted")
 	}
 }

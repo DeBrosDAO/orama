@@ -15,13 +15,13 @@ func TestRevoked_seesEveryRevocationOfVerifiedClaims(t *testing.T) {
 	now := time.Now().Unix()
 
 	session := &JWTClaims{Sub: "0xwallet", Jti: "session-1", Iat: now, Exp: now + 900}
-	if s.Revoked(session) {
+	if mustRevoked(s, session) {
 		t.Fatal("claims nobody revoked were reported revoked")
 	}
 	if err := s.RevokeSession(ctx, session); err != nil {
 		t.Fatalf("RevokeSession: %v", err)
 	}
-	if !s.Revoked(session) {
+	if !mustRevoked(s, session) {
 		t.Error("an ended session's claims were not reported revoked")
 	}
 
@@ -29,7 +29,7 @@ func TestRevoked_seesEveryRevocationOfVerifiedClaims(t *testing.T) {
 	if err := s.RevokeAllSessions(ctx, "0xother"); err != nil {
 		t.Fatalf("RevokeAllSessions: %v", err)
 	}
-	if !s.Revoked(other) {
+	if !mustRevoked(s, other) {
 		t.Error("claims issued before their subject's revocation were not reported revoked")
 	}
 
@@ -38,11 +38,11 @@ func TestRevoked_seesEveryRevocationOfVerifiedClaims(t *testing.T) {
 	if err := s.revocations.RevokeSubject(ctx, s.HashAPIKey(rawKey), "key revoked", time.Hour); err != nil {
 		t.Fatalf("RevokeSubject: %v", err)
 	}
-	if !s.Revoked(exchanged) {
+	if !mustRevoked(s, exchanged) {
 		t.Error("claims exchanged from a revoked key were not reported revoked")
 	}
 
-	if s.Revoked(nil) {
+	if mustRevoked(s, nil) {
 		t.Error("no claims were reported revoked")
 	}
 }

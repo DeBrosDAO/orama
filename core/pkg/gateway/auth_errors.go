@@ -25,6 +25,11 @@ const (
 	CodeDestinationNotAllowed = "DESTINATION_NOT_ALLOWED"
 	// CodeAuthRevoked — the credential was valid and has been revoked.
 	CodeAuthRevoked = "AUTH_REVOKED"
+	// CodeAuthUnavailable — the gateway could not tell whether the credential
+	// was revoked (the revocation list is older than its bound and the registry
+	// cannot be read). Answered with a 503: the credential may be fine, so
+	// retry.
+	CodeAuthUnavailable = "AUTH_UNAVAILABLE"
 	// CodeAuthExpired — the credential was valid and has expired.
 	CodeAuthExpired = "AUTH_EXPIRED"
 	// CodeAuthUserJWTRequired — the grant is held but this operation needs a
@@ -58,6 +63,7 @@ var authHints = map[string]string{
 	CodeAuthMissing:           "send the credential in an Authorization header, or X-API-Key",
 	CodeAuthInvalidKey:        "check the key is for this cluster and has not been deleted",
 	CodeAuthRevoked:           "this credential or session was revoked; sign in again or use a new key",
+	CodeAuthUnavailable:       "this is temporary; retry in a few seconds with the same credential",
 	CodeAuthExpired:           "refresh the token, or sign in again",
 	CodeAuthUserJWTRequired:   "exchange the key for a token, or sign in as a user",
 	CodeScopeMissing:          "mint a key with the grant named in required_scope",
@@ -83,6 +89,9 @@ func writeAuthError(w http.ResponseWriter, status int, code, message string, ext
 	for k, v := range extra {
 		body[k] = v
 	}
+	if status == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", authRetryAfterSeconds)
+	}
 	if status == http.StatusUnauthorized {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="gateway", charset="UTF-8"`)
 	}
@@ -96,4 +105,14 @@ func unauthorized(w http.ResponseWriter, code, message string, extra map[string]
 
 func forbidden(w http.ResponseWriter, code, message string, extra map[string]any) {
 	writeAuthError(w, http.StatusForbidden, code, message, extra)
+}
+
+// authRetryAfterSeconds is the Retry-After of an AUTH_UNAVAILABLE answer: a
+// little over the revocation list's retry interval.
+const authRetryAfterSeconds = "2"
+
+// unavailable is the refusal for a credential that cannot be checked right
+// now: retryable, unlike unauthorized.
+func unavailable(w http.ResponseWriter, code, message string) {
+	writeAuthError(w, http.StatusServiceUnavailable, code, message, nil)
 }

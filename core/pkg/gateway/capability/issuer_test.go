@@ -50,7 +50,11 @@ func issuer(t *testing.T) (*Issuer, *auth.RevocationList) {
 }
 
 func denied(list *auth.RevocationList, c *Claims) bool {
-	return list.Denies(c.RevocationClaims(), nil)
+	revoked, err := list.Denies(c.RevocationClaims(), nil)
+	if err != nil {
+		panic("the revocation list could not answer: " + err.Error())
+	}
+	return revoked
 }
 
 func TestIssuer_MintReturnsWhatTheTokenGrants(t *testing.T) {

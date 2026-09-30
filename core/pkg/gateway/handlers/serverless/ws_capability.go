@@ -48,7 +48,7 @@ type capabilityCtxKey struct{}
 // CapabilityRevocations answers whether a capability, or the device that
 // issued it, has been revoked. *auth.Service is the one the gateway uses.
 type CapabilityRevocations interface {
-	Revoked(claims *auth.JWTClaims) bool
+	Revoked(claims *auth.JWTClaims) (bool, error)
 }
 
 // SetCapabilities lets these handlers accept capability-opened WebSockets.
@@ -145,7 +145,14 @@ func (h *ServerlessHandlers) checkCapability(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "forbidden: "+capability.ErrInvalid.Error(), http.StatusForbidden)
 		return nil, false
 	}
-	if h.capabilityRevocations.Revoked(claims.RevocationClaims()) {
+	revoked, err := h.capabilityRevocations.Revoked(claims.RevocationClaims())
+	if err != nil {
+		h.logger.Error("capability WebSocket: the revocation list could not be checked",
+			zap.String("namespace", namespace), zap.String("function", name), zap.Error(err))
+		http.Error(w, "could not check the capability; retry", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	if revoked {
 		http.Error(w, "forbidden: this capability, or the device that issued it, was revoked", http.StatusForbidden)
 		return nil, false
 	}
