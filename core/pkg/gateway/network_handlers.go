@@ -116,13 +116,18 @@ func decodeNetworkMutationBody(w http.ResponseWriter, r *http.Request, dst any, 
 }
 
 // writeNetworkMutationError answers a failed connect or disconnect: a peer
-// the caller named wrongly is 400, a dial that ran out of time is 504, and a
-// dial the peer or the network refused is 502. Nothing the client reports
-// here is this gateway's own fault.
+// the caller named wrongly is 400; this gateway's libp2p client not being up
+// is 503, and it not carrying its own internal credential is 500 (a bug here,
+// not the caller's); a dial that ran out of time is 504, and a dial the peer
+// or the network refused is 502.
 func writeNetworkMutationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, client.ErrInvalidPeer):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, client.ErrNotConnected), errors.Is(err, client.ErrNoHost):
+		writeError(w, http.StatusServiceUnavailable, "this gateway's network client is not running; retry shortly")
+	case errors.Is(err, client.ErrAuthRequired):
+		writeError(w, http.StatusInternalServerError, "the gateway could not authorize its own network call")
 	case errors.Is(err, context.DeadlineExceeded):
 		writeError(w, http.StatusGatewayTimeout, err.Error())
 	default:

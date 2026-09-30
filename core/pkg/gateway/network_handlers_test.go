@@ -165,6 +165,9 @@ func TestNetworkMutation_clientFailuresAreNotInternalErrors(t *testing.T) {
 		"bad peer":     {fmt.Errorf("%w: nope", client.ErrInvalidPeer), http.StatusBadRequest},
 		"dial timeout": {fmt.Errorf("failed to connect to peer: %w", context.DeadlineExceeded), http.StatusGatewayTimeout},
 		"dial refused": {errors.New("failed to connect to peer: connection refused"), http.StatusBadGateway},
+		"client down":  {client.ErrNotConnected, http.StatusServiceUnavailable},
+		"no host":      {client.ErrNoHost, http.StatusServiceUnavailable},
+		"no own auth":  {fmt.Errorf("%w: access denied", client.ErrAuthRequired), http.StatusInternalServerError},
 	}
 	for what, tc := range cases {
 		g := networkMutationGateway(t, &fakeNetworkInfo{err: tc.err})

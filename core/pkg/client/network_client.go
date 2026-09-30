@@ -22,11 +22,11 @@ type NetworkInfoImpl struct {
 // GetPeers returns information about connected peers
 func (n *NetworkInfoImpl) GetPeers(ctx context.Context) ([]PeerInfo, error) {
 	if !n.client.isConnected() {
-		return nil, fmt.Errorf("client not connected")
+		return nil, ErrNotConnected
 	}
 
 	if err := n.client.requireAccess(ctx); err != nil {
-		return nil, fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
+		return nil, fmt.Errorf("%w: %w - run CLI commands to authenticate automatically", ErrAuthRequired, err)
 	}
 
 	// Get peers from LibP2P host
@@ -34,7 +34,7 @@ func (n *NetworkInfoImpl) GetPeers(ctx context.Context) ([]PeerInfo, error) {
 	host := n.client.host
 	n.client.mu.RUnlock()
 	if host == nil {
-		return nil, fmt.Errorf("no host available")
+		return nil, ErrNoHost
 	}
 
 	// Get connected peers
@@ -84,11 +84,11 @@ func (n *NetworkInfoImpl) GetPeers(ctx context.Context) ([]PeerInfo, error) {
 // GetStatus returns network status
 func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error) {
 	if !n.client.isConnected() {
-		return nil, fmt.Errorf("client not connected")
+		return nil, ErrNotConnected
 	}
 
 	if err := n.client.requireAccess(ctx); err != nil {
-		return nil, fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
+		return nil, fmt.Errorf("%w: %w - run CLI commands to authenticate automatically", ErrAuthRequired, err)
 	}
 
 	n.client.mu.RLock()
@@ -97,7 +97,7 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 	directDatabase := n.client.usesRQLiteEndpoints()
 	n.client.mu.RUnlock()
 	if host == nil {
-		return nil, fmt.Errorf("no host available")
+		return nil, ErrNoHost
 	}
 
 	// Get actual network status
@@ -215,16 +215,16 @@ func queryIPFSClusterPeerInfo(apiURL, password string) *IPFSClusterPeerInfo {
 // ConnectToPeer connects to a specific peer
 func (n *NetworkInfoImpl) ConnectToPeer(ctx context.Context, peerAddr string) error {
 	if !n.client.isConnected() {
-		return fmt.Errorf("client not connected")
+		return ErrNotConnected
 	}
 
 	if err := n.client.requireAccess(ctx); err != nil {
-		return fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
+		return fmt.Errorf("%w: %w - run CLI commands to authenticate automatically", ErrAuthRequired, err)
 	}
 
 	host := n.client.host
 	if host == nil {
-		return fmt.Errorf("no host available")
+		return ErrNoHost
 	}
 
 	// Parse the multiaddr
@@ -254,16 +254,16 @@ func (n *NetworkInfoImpl) ConnectToPeer(ctx context.Context, peerAddr string) er
 // DisconnectFromPeer disconnects from a specific peer
 func (n *NetworkInfoImpl) DisconnectFromPeer(ctx context.Context, peerID string) error {
 	if !n.client.isConnected() {
-		return fmt.Errorf("client not connected")
+		return ErrNotConnected
 	}
 
 	if err := n.client.requireAccess(ctx); err != nil {
-		return fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
+		return fmt.Errorf("%w: %w - run CLI commands to authenticate automatically", ErrAuthRequired, err)
 	}
 
 	host := n.client.host
 	if host == nil {
-		return fmt.Errorf("no host available")
+		return ErrNoHost
 	}
 
 	// Parse the peer ID
