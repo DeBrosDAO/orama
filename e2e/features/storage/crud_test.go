@@ -23,14 +23,16 @@ const (
 
 // TestUpload_multipartRoundTrip: the SDK's storage.upload()/get()
 // (docs/API_SURFACE.md#storage) stores bytes and returns them unchanged,
-// named as uploaded, with the logical size.
+// named as uploaded, with the logical size. A multipart file name is reduced to
+// its last element by the standard library, so a path-like name travels in the
+// JSON form.
 func TestUpload_multipartRoundTrip(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
 	data := randomBytes(t, smallBytes)
-	u := upload(t, n.Client, tenancy.Owner(n), "docs/readme.bin", data)
-	if u.Name != "docs/readme.bin" || u.Size != int64(len(data)) {
-		t.Errorf("upload answered name %q size %d, want docs/readme.bin %d", u.Name, u.Size, len(data))
+	u := upload(t, n.Client, tenancy.Owner(n), "readme.bin", data)
+	if u.Name != "readme.bin" || u.Size != int64(len(data)) {
+		t.Errorf("upload answered name %q size %d, want readme.bin %d", u.Name, u.Size, len(data))
 	}
 	waitContent(t, n.Client, tenancy.Owner(n), u.Cid, data)
 	r := get(t, n.Client, tenancy.Owner(n), u.Cid)
@@ -84,7 +86,7 @@ func TestUpload_malformedInput(t *testing.T) {
 		"json truncated":         tenancy.Post(t, n.Client, pathUpload, who, []byte(`{"data":"aGk=`)),
 		"json over 1 MiB":        tenancy.Post(t, n.Client, pathUpload, who, append(append([]byte(`{"data":"`), over...), '"', '}')),
 		"multipart without file": multipartNoFile(t, n.Client, who),
-		"name with ..":           uploadRaw(t, n.Client, who, "avatars/../keys/x", []byte("x")),
+		"name with ..":           uploadJSON(t, n.Client, who, "avatars/../keys/x", []byte("x")),
 		"name over 1024 chars":   uploadRaw(t, n.Client, who, strings.Repeat("n", 1025), []byte("x")),
 	}
 	for name, r := range cases {
@@ -109,7 +111,10 @@ func multipartNoFile(t testing.TB, c *gw.Client, who tenancy.Cred) *gw.Response 
 func TestUpload_nameNormalized(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
-	u := upload(t, n.Client, tenancy.Owner(n), "  /avatars//me/./photo.png ", []byte("x"))
+	var u uploaded
+	if err := uploadJSON(t, n.Client, tenancy.Owner(n), "  /avatars//me/./photo.png ", []byte("x")).Expect(t, http.StatusOK).Decode(&u); err != nil {
+		t.Fatal(err)
+	}
 	if u.Name != "avatars/me/photo.png" {
 		t.Errorf("name normalised to %q, want avatars/me/photo.png", u.Name)
 	}
