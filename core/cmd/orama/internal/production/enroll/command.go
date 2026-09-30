@@ -52,8 +52,7 @@ func enrollWithGateway(gatewayURL, token, code, nodeIP string) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := enrollClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -66,10 +65,27 @@ func enrollWithGateway(gatewayURL, token, code, nodeIP string) error {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("bad request: %s", string(respBody))
 	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return fmt.Errorf("the gateway redirected the enrollment (%d to %q); the invite token is not sent anywhere but the https URL given",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("gateway returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil
+}
+
+// enrollTimeout bounds the enrollment call.
+const enrollTimeout = 60 * time.Second
+
+// enrollClient never follows a redirect. The request body carries the invite
+// token, and Go replays a body on a 307/308 — to any URL, http included, while
+// dropping only the Authorization header on a cross-host hop.
+func enrollClient() *http.Client {
+	return &http.Client{
+		Timeout:       enrollTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
