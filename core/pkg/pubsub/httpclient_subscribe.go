@@ -69,7 +69,11 @@ func (c *HTTPClient) subscribe(ctx context.Context, topic string, handler Messag
 	c.mu.Unlock()
 
 	if !exists {
-		c.open(st, key, ns, topic)
+		// Not inline: the opener waits on the service for up to requestTimeout,
+		// and the first subscriber's context must end its own wait like any
+		// other's. If every subscriber leaves meanwhile, release cancels the
+		// stream and the opener unwinds.
+		go c.open(st, key, ns, topic)
 	}
 	select {
 	case <-st.ready:

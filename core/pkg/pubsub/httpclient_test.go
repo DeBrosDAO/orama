@@ -2,6 +2,9 @@ package pubsub
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -159,6 +162,100 @@ func TestHTTPClient_Subscribe_failureIsReturnedNotSwallowed(t *testing.T) {
 	c.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("%d streams left after a failed subscribe", n)
+	}
+}
+
+// The bug: open ran before the wait on the caller's context, so a first
+// subscriber whose service never answered was held for the whole request
+// timeout however soon its own context ended.
+func TestHTTPClient_Subscribe_firstSubscriberHonoursItsContext(t *testing.T) {
+	sock := shortSocketPath(t)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() { // accepts and never answers
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+	c := NewHTTPClient(sock, "ns", zap.NewNop())
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = c.Subscribe(ctx, "t", (&collector{}).handle)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Subscribe returned %v, want the context's deadline error", err)
+	}
+	if took := time.Since(start); took > requestTimeout/4 {
+		t.Fatalf("Subscribe held its caller for %s past a 100ms context", took)
+	}
+	// The abandoned attempt leaves no stream behind once the opener unwinds.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		c.mu.Lock()
+		n := len(c.streams)
+		c.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d streams left after the only subscriber gave up", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A publisher's sequential publishes, each answered before the next is sent,
+// reach a subscriber in the order they were sent.
+func TestHTTPClient_Publish_sequentialPublishesArriveInOrder(t *testing.T) {
+	sock, _ := startAPI(t)
+	c := NewHTTPClient(sock, "ns", zap.NewNop())
+	defer c.Close()
+
+	sub := &collector{}
+	if err := c.Subscribe(context.Background(), "ordered", sub.handle); err != nil {
+		t.Fatal(err)
+	}
+	publishUntil(t, c, "ordered", "ready", sub) // the subscription is being fed
+
+	const n = 200
+	want := make([]string, n)
+	for i := range want {
+		want[i] = fmt.Sprintf("m%03d", i)
+		if err := c.Publish(context.Background(), "ordered", []byte(want[i])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for sub.count(want[n-1]) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%q never arrived", want[n-1])
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	var got []string
+	for _, m := range sub.msgs {
+		if m != "ready" {
+			got = append(got, m)
+		}
+	}
+	if len(got) != n {
+		t.Fatalf("subscriber got %d of %d messages", len(got), n)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("message %d arrived as %q, want %q", i, got[i], want[i])
+		}
 	}
 }
 

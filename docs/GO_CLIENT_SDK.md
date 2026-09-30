@@ -325,6 +325,10 @@ if err != nil {
 }
 ```
 
+`Publish` returns nil only once the node's pubsub service holds the message; an
+error means it was not published. Sequential publishes to a topic are delivered
+in order.
+
 ### Subscribe to Topic
 
 The handler is a `func(topic string, data []byte) error`:

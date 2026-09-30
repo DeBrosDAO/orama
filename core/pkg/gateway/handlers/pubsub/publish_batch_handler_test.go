@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
@@ -132,13 +131,9 @@ func TestPublishBatchHandler_happy_calls_PublishBatch(t *testing.T) {
 		t.Fatalf("expected 200, got %d (body: %s)", rr.Code, rr.Body.String())
 	}
 
-	// PublishBatch is invoked from a goroutine; give it a moment to run.
-	deadline := time.Now().Add(2 * time.Second)
-	for atomic.LoadInt32(&called) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("PublishBatch was not called within 2s")
-		}
-		time.Sleep(10 * time.Millisecond)
+	// PublishBatch runs inside the request, so it has been called by now.
+	if atomic.LoadInt32(&called) != 1 {
+		t.Fatalf("PublishBatch called %d times before the answer, want 1", atomic.LoadInt32(&called))
 	}
 
 	mu.Lock()
