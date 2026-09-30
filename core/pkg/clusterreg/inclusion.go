@@ -20,7 +20,8 @@ const (
 	InclusionTimeout = 2 * time.Minute
 	// InclusionPoll is how often the chain is asked whether the transaction is in a block.
 	InclusionPoll = time.Second
-	maxResultLog  = 300
+	// maxResultLog is how many characters of the chain's log a failure quotes.
+	maxResultLog = 300
 )
 
 var txHashPattern = regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
@@ -104,11 +105,11 @@ func txResult(ctx context.Context, url string) (int64, bool, error) {
 		return 0, false, fmt.Errorf("transaction result has no block height (%q)", resp.TxResponse.Height)
 	}
 	if resp.TxResponse.Code != 0 {
-		log := printable(resp.TxResponse.RawLog)
+		log := []rune(printable(resp.TxResponse.RawLog))
 		if len(log) > maxResultLog {
 			log = log[:maxResultLog]
 		}
-		return height, true, fmt.Errorf("the transaction failed in block %d (code %d): %s", height, resp.TxResponse.Code, log)
+		return height, true, fmt.Errorf("the transaction failed in block %d (code %d): %s", height, resp.TxResponse.Code, string(log))
 	}
 	return height, true, nil
 }

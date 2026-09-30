@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 const testPoll = time.Millisecond
@@ -109,6 +110,16 @@ func TestWaitIncluded_theChainsLogLosesControlCharacters(t *testing.T) {
 	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"height":"7","code":3,"raw_log":"bad\u001b[2Jthing\n"}}`)
 	_, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll)
 	if err == nil || strings.ContainsAny(err.Error(), "\x1b\n") || !strings.Contains(err.Error(), "bad[2Jthing") {
+		t.Fatalf("err = %q", err)
+	}
+}
+
+// The quoted log is cut on a character, never inside one.
+func TestWaitIncluded_aLongLogIsCutOnACharacter(t *testing.T) {
+	long := strings.Repeat("é", maxResultLog+10)
+	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"height":"7","code":3,"raw_log":"`+long+`"}}`)
+	_, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll)
+	if err == nil || !utf8.ValidString(err.Error()) || !strings.Contains(err.Error(), strings.Repeat("é", maxResultLog)) {
 		t.Fatalf("err = %q", err)
 	}
 }

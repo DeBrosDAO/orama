@@ -16,7 +16,8 @@ import (
 // holds raft state, deciding whether a restore restarts the member it was
 // (peers.json recovery) or joins as a new one.
 //
-// rqlite v8 keeps raft.db and rsnapshots/ at the data directory's root. This
+// rqlite keeps raft.db and its snapshots (rsnapshots/ up to v9, wsnapshots/ from
+// v10; rqlite.HasRaftState reads both) at the data directory's root. This
 // used to look for a raft/ subdirectory, which only ever holds the peers.json
 // this manager writes: false on every real member, so peers.json recovery never
 // ran and a restarted member was handed -join instead.

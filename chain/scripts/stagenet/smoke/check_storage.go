@@ -142,13 +142,14 @@ func writeSecret(path string, data []byte) error {
 	return os.WriteFile(path, data, keyFileMode)
 }
 
-// findDealByNonce scans deal ids from 1 for the deal whose nonce is nonce.
-// storageTxFee is the fee of the deal's transaction at baseFee: gas times the base fee and no more,
-// since anything above it is a tip, which x/fees pays only from a bank balance.
+// storageTxFee is the fee of the deal's transaction at baseFee: gas times the base fee and no more.
+// It has no margin for a base fee that rises before inclusion: x/fees counts anything above the base
+// fee as a tip and pays a tip only from a bank balance, which this earnings-only signer does not have.
 func storageTxFee(baseFee math.Int) math.Int {
 	return baseFee.MulRaw(txGas)
 }
 
+// findDealByNonce scans deal ids from 1 for the deal whose nonce is nonce.
 func findDealByNonce(ctx context.Context, c *node.Client, nonce []byte) (uint64, error) {
 	for id := uint64(1); id <= dealScanLimit; id++ {
 		var resp storagetypes.QueryDealResponse
