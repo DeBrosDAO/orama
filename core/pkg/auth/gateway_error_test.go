@@ -112,3 +112,43 @@ func TestScopeFromMessage(t *testing.T) {
 		}
 	}
 }
+
+// The rate limiter and most of the gateway answer in the nested shape; it was
+// read as an unparseable body and the retry advice was lost.
+func TestGatewayErrorFrom_nestedShapeKeepsCodeAndRetry(t *testing.T) {
+	e := GatewayErrorFrom(http.StatusTooManyRequests, []byte(
+		`{"ok":false,"error":{"code":"RATE_LIMITED","message":"too many authentication attempts","retryable":true,"retry_after":60}}`))
+	if e.Code != "RATE_LIMITED" || e.Message != "too many authentication attempts" || !e.Retryable || e.RetryAfter != 60 {
+		t.Fatalf("parsed %+v", e)
+	}
+	if !e.IsRetryable() || e.IsUnauthorized() {
+		t.Errorf("a rate limit is retryable and not about the credential: %+v", e)
+	}
+}
+
+func TestGatewayError_isRetryable(t *testing.T) {
+	cases := map[string]struct {
+		e    *GatewayError
+		want bool
+	}{
+		"429":           {&GatewayError{Status: http.StatusTooManyRequests}, true},
+		"503":           {&GatewayError{Status: http.StatusServiceUnavailable}, true},
+		"flagged 500":   {&GatewayError{Status: http.StatusInternalServerError, Retryable: true}, true},
+		"401":           {&GatewayError{Status: http.StatusUnauthorized, Code: CodeAuthInvalidKey}, false},
+		"403 signature": {&GatewayError{Status: http.StatusForbidden, Code: "AUTH_SIGNATURE_INVALID"}, false},
+		"nil":           {nil, false},
+	}
+	for name, c := range cases {
+		if got := c.e.IsRetryable(); got != c.want {
+			t.Errorf("%s: IsRetryable = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// The flat auth-refusal shape still parses as before.
+func TestGatewayErrorFrom_flatShapeUnchanged(t *testing.T) {
+	e := GatewayErrorFrom(http.StatusUnauthorized, []byte(`{"error":"no credential was presented","code":"AUTH_MISSING"}`))
+	if e.Code != CodeAuthMissing || e.Message != "no credential was presented" || e.Retryable {
+		t.Fatalf("parsed %+v", e)
+	}
+}

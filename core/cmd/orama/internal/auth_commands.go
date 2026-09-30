@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -102,7 +103,7 @@ func AuthLogin(namespace, deviceKeyPath string) error {
 		creds, err = deviceLogin(gatewayURL, namespace)
 	}
 	if err != nil {
-		return clierr.Auth("authentication failed: %w", err)
+		return loginFailure(err)
 	}
 
 	// The credential just signed in becomes the default. When it replaced an
@@ -388,4 +389,23 @@ func AuthApprove(userCode, namespace string, deny bool) error {
 	}
 	fmt.Printf("Approved as %s. The machine waiting on %s has its session.\n", wallet, userCode)
 	return nil
+}
+
+// loginFailure classifies a failed sign-in. A gateway that could not be reached,
+// or answered "not now" (a rate limit, a database without a leader), is
+// Unavailable: the same login may succeed later, and a script must not read it
+// as a refused wallet. Everything else — a refused signature, a namespace the
+// wallet may not enter, a wallet that could not sign — is Auth.
+func loginFailure(err error) error {
+	var refusal *auth.GatewayError
+	if errors.As(err, &refusal) && refusal.IsRetryable() {
+		if refusal.RetryAfter > 0 {
+			return clierr.Unavailable("sign-in not accepted right now; retry in %ds: %w", refusal.RetryAfter, err)
+		}
+		return clierr.Unavailable("sign-in not accepted right now; retry shortly: %w", err)
+	}
+	if errors.Is(err, auth.ErrGatewayUnreachable) {
+		return clierr.Unavailable("authentication failed: %w", err)
+	}
+	return clierr.Auth("authentication failed: %w", err)
 }

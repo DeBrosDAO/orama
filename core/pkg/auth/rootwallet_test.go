@@ -124,7 +124,9 @@ func TestRequestChallenge_surfacesAGatewayRefusal(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 404 was read as a challenge")
 	}
-	if !strings.Contains(err.Error(), "NAMESPACE_UNKNOWN") {
+	var refusal *GatewayError
+	if !errors.As(err, &refusal) || refusal.Code != "NAMESPACE_UNKNOWN" || refusal.Status != http.StatusNotFound ||
+		!strings.Contains(err.Error(), "namespace acme does not exist") {
 		t.Errorf("the gateway's own answer was dropped: %v", err)
 	}
 }

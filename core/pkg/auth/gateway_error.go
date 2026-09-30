@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -16,6 +17,10 @@ import (
 // with a different `--scope`. The code is the part worth switching on, and it
 // is what this maps.
 
+// ErrGatewayUnreachable is a request that never got an answer from the gateway:
+// a refused connection, a timeout, a name that does not resolve.
+var ErrGatewayUnreachable = errors.New("the gateway could not be reached")
+
 // GatewayError is a refusal, with its code kept.
 type GatewayError struct {
 	Status  int
@@ -26,6 +31,26 @@ type GatewayError struct {
 	Namespace string
 	// CredentialNamespace is the namespace that was asked for.
 	CredentialNamespace string
+	// Retryable is the gateway saying the same request may succeed later — a
+	// rate limit, a database without a leader — rather than being wrong.
+	Retryable bool
+	// RetryAfter is how many seconds the gateway asked the caller to wait, 0
+	// when it named none.
+	RetryAfter int
+}
+
+// IsRetryable reports whether a later identical request could succeed: the
+// gateway said so, or the status is one that means "not now" (429, 502, 503,
+// 504) rather than "not this".
+func (e *GatewayError) IsRetryable() bool {
+	if e == nil {
+		return false
+	}
+	switch e.Status {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return e.Retryable
 }
 
 func (e *GatewayError) Error() string {
@@ -117,6 +142,25 @@ func scopeFromMessage(message string) string {
 // way sends people to the wrong place.
 func GatewayErrorFrom(status int, body []byte) *GatewayError {
 	out := &GatewayError{Status: status}
+
+	// Two shapes: the flat {"error": "...", "code": "..."} of the auth
+	// refusals, and the {"ok": false, "error": {"code", "message",
+	// "retryable", "retry_after"}} of the rest (rate limits included).
+	var nested struct {
+		Error struct {
+			Code       string `json:"code"`
+			Message    string `json:"message"`
+			Retryable  bool   `json:"retryable"`
+			RetryAfter int    `json:"retry_after"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &nested); err == nil && (nested.Error.Code != "" || nested.Error.Message != "") {
+		out.Code = strings.TrimSpace(nested.Error.Code)
+		out.Message = strings.TrimSpace(nested.Error.Message)
+		out.Retryable = nested.Error.Retryable
+		out.RetryAfter = nested.Error.RetryAfter
+		return out
+	}
 
 	var parsed struct {
 		Error               string `json:"error"`

@@ -211,13 +211,13 @@ func requestChallenge(client *http.Client, gatewayURL, wallet, namespace, device
 
 	resp, err := client.Post(gatewayURL+"/v1/auth/challenge", "application/json", bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("failed to call gateway: %w", err)
+		return "", fmt.Errorf("%w: %w", ErrGatewayUnreachable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("gateway returned status %d: %s", resp.StatusCode, string(body))
+		return "", GatewayErrorFrom(resp.StatusCode, body)
 	}
 
 	var result struct {
@@ -294,13 +294,13 @@ func verifySignature(client *http.Client, gatewayURL, message, signature, namesp
 
 	resp, err := client.Post(gatewayURL+"/v1/auth/verify", "application/json", bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("failed to call gateway: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrGatewayUnreachable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("gateway returned status %d: %s", resp.StatusCode, string(body))
+		return nil, GatewayErrorFrom(resp.StatusCode, body)
 	}
 
 	var result struct {
