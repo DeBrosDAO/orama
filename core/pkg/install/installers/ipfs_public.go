@@ -73,8 +73,9 @@ func PublicStorageMax(declaredBytes uint64) string {
 
 // PublicKuboConfig builds a repo config. existing may be nil or a config
 // ipfs init already wrote; Identity is kept when it is present. token is the
-// RPC bearer. An empty token is refused.
-func PublicKuboConfig(existing []byte, token string, declaredBytes uint64) ([]byte, error) {
+// RPC bearer. An empty token is refused. apiHost is the address the RPC
+// listens on; it overwrites the API address of an existing config.
+func PublicKuboConfig(existing []byte, token string, declaredBytes uint64, apiHost string) ([]byte, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, fmt.Errorf("public kubo token is empty")
@@ -97,7 +98,7 @@ func PublicKuboConfig(existing []byte, token string, declaredBytes uint64) ([]by
 	if err != nil {
 		return nil, err
 	}
-	setPublicSections(sections, token, declaredBytes)
+	setPublicSections(sections, token, declaredBytes, apiHost)
 
 	out, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -131,9 +132,9 @@ func configSections(config map[string]interface{}, keys ...string) (map[string]m
 
 // setPublicSections sets the public node's listeners, filters, RPC bearer,
 // providing, routing and storage limit.
-func setPublicSections(sections map[string]map[string]interface{}, token string, declaredBytes uint64) {
+func setPublicSections(sections map[string]map[string]interface{}, token string, declaredBytes uint64, apiHost string) {
 	addresses := sections["Addresses"]
-	addresses["API"] = []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSAPIPort)}
+	addresses["API"] = []string{fmt.Sprintf("/ip4/%s/tcp/%d", apiHost, constants.GlobalIPFSAPIPort)}
 	addresses["Gateway"] = []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSGatewayPort)}
 	addresses["Swarm"] = []string{
 		fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", constants.GlobalIPFSSwarmPort),
@@ -160,14 +161,14 @@ func setPublicSections(sections map[string]map[string]interface{}, token string,
 // into dir. It refuses when dir already contains swarm.key. root is required
 // because install runs as root and must not follow a symlink planted in the
 // repo.
-func WritePublicKuboFiles(root rootfs.Root, dir, token string, declaredBytes uint64, existing []byte) error {
+func WritePublicKuboFiles(root rootfs.Root, dir, token string, declaredBytes uint64, existing []byte, apiHost string) error {
 	swarm := filepath.Join(dir, "swarm.key")
 	if _, err := root.ReadFile(swarm, rootfs.SmallFileLimit); err == nil {
 		return fmt.Errorf("public kubo repo %s already has a swarm.key; it would join a private swarm", dir)
 	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("read swarm.key: %w", err)
 	}
-	body, err := PublicKuboConfig(existing, token, declaredBytes)
+	body, err := PublicKuboConfig(existing, token, declaredBytes, apiHost)
 	if err != nil {
 		return err
 	}

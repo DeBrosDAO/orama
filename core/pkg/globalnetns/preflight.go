@@ -191,6 +191,10 @@ func Installed(unitDir string, exists func(string) bool) bool {
 	return exists(DefaultPaths(unitDir).Unit)
 }
 
+// KuboAPIHost is the address the public Kubo's RPC listens on: NSAddr when
+// co-located, loopback otherwise. Like the chain's listeners it is host-only.
+func KuboAPIHost(colocated bool) string { return ChainHost(colocated) }
+
 // ChainHost is the address the chain's RPC and REST API and the indexer
 // listen on: NSAddr when co-located, loopback otherwise.
 func ChainHost(colocated bool) string {

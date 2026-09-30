@@ -135,7 +135,7 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 		}
 	}
 	if slices.Contains(opts.Services, GlobalServiceIPFS) {
-		if err := installPublicKubo(h, opts.PublicStorageBytes); err != nil {
+		if err := installPublicKubo(h, opts.PublicStorageBytes, opts.Colocated); err != nil {
 			return err
 		}
 	}

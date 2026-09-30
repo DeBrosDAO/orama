@@ -1433,8 +1433,8 @@ Retrieval is `GET`/`HEAD /pieces/<hex piece root>` on port 31013, with a
 per-address rate limit.
 
 Public Kubo (`--ipfs-api`, `--ipfs-token-file`; the unit passes
-`http://127.0.0.1:31011` and `/var/lib/orama-global/ipfs/api-token`). The client
-(`chain/provider/kubo.go`) sends the bearer token only to a loopback `http` URL
+`http://127.0.0.1:31011`, or `http://198.18.0.2:31011` on a co-located machine, and `/var/lib/orama-global/ipfs/api-token`). The client
+(`chain/provider/kubo.go`) sends the bearer token only to a loopback `http` URL or the co-located namespace address `198.18.0.2`
 and follows no redirect. The token allows only `add`, `cat`, `pin/add`,
 `pin/rm` and `repo/gc` (`installers.PublicAPIAllowedPaths`). When it is
 configured:
@@ -1897,7 +1897,7 @@ starts every node in the background on distinct localhost ports in the 31000-310
 (P2P/RPC/gRPC/API/Prometheus/pprof, ten ports per node so up to ten validators fit). That packing
 is localnet only. A production global node uses 31000–31004 for the chain (p2p public, RPC, gRPC,
 REST and Prometheus on loopback), 31010–31013 for public storage (swarm public, Kubo RPC and
-gateway on loopback, provider HTTP public), 31014 for relay metrics on loopback, 31015 for the
+gateway on loopback (the RPC on the namespace address when co-located), provider HTTP public), 31014 for relay metrics on loopback, 31015 for the
 chain indexer's read API on loopback, and 31020–31021
 for a Tor relay and a dirauth. The public Kubo on a global node has no swarm.key,
 announces only pinned content (`Provide.Strategy=pinned`, which Kubo has read since v0.38), and

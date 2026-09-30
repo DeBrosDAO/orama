@@ -88,7 +88,8 @@ sudo orama global install \
   own repo in `/var/lib/orama-global/ipfs` created with `ipfs init
   --profile=server` as `orama-ipfs-pub`, no `swarm.key`, the swarm on 31010
   tcp+udp (open in ufw), private address ranges filtered and not announced,
-  and only pinned content announced. Its RPC is `127.0.0.1:31011` behind a
+  and only pinned content announced. Its RPC is `127.0.0.1:31011` (on a co-located
+  machine, `198.18.0.2:31011`, see below) behind a
   bearer token in `api-token` (mode 0640, group `orama-ipfs-pub-rpc`, which only
   the provider joins; a second install keeps the token; the token allows only
   `add`, `cat`, `pin/add`, `pin/rm` and `repo/gc`). The GC unit passes the token
@@ -394,8 +395,9 @@ it then runs the same graph as a cluster node, because the global services are
 their own units, not components of `orama-node`. Units are enabled and not
 started, like a global-only install: `orama global start` starts them, and its
 wait for the chain's RPC dials it at the namespace address (below). The
-provider reaches the public Kubo's RPC on `127.0.0.1:31011` in the same
-namespace; the cluster's own Kubo (10107) is a different daemon on the other side.
+provider and the GC oneshot reach the public Kubo's RPC on `198.18.0.2:31011` in the same
+namespace (the install writes that address as Kubo's `Addresses.API`, also over an existing
+repo config); the cluster's own Kubo (10107) is a different daemon on the other side.
 
 **The rulesets.**
 
@@ -409,8 +411,8 @@ namespace; the cluster's own Kubo (10107) is a different daemon on the other sid
   connections and their replies are forwarded into the namespace. Its `output`
   chain lets only root and the account the cluster node runs as (`orama`, whose
   uid the install resolves; the install is refused when it cannot) open a
-  connection to `198.18.0.2` on the host-only ports (31001, 31003 and, with the
-  indexer, 31015): every local process shares the veth's route to the namespace,
+  connection to `198.18.0.2` on the host-only ports (31001, 31003, with the
+  indexer 31015, and with the public Kubo its RPC 31011): every local process shares the veth's route to the namespace,
   and a tenant deployment (a systemd dynamic user) must not reach the chain's RPC,
   REST API or indexer through it.
 - Inside the namespace: input is default-drop except loopback, replies, the
@@ -433,12 +435,13 @@ namespace; the cluster's own Kubo (10107) is a different daemon on the other sid
 can reach the global services only through their published ports at `198.18.0.2`,
 and a global service reaches the outside only through the masqueraded veth. The
 namespace has no IPv6 (the units may open only IPv4 and Unix sockets). The
-chain's RPC (31001) and REST API (31003) and the indexer's read API (31015) are
+chain's RPC (31001) and REST API (31003), the indexer's read API (31015) and the public Kubo's RPC (31011) are
 not published: on a co-located machine they listen on the namespace address
 `198.18.0.2` instead of loopback, the namespace firewall admits them from the
 host's veth address `198.18.0.1` alone, and they are not DNAT'd, so neither the
 public network nor the WireGuard mesh reaches them. The host reaches them
-directly: `curl http://198.18.0.2:31001/status`, and `orama global register`
+directly: `curl http://198.18.0.2:31001/status`, and the Kubo RPC (bearer token, root only) at
+`http://198.18.0.2:31011/api/v0/...`, and `orama global register`
 and the other signed transactions take `--node http://198.18.0.2:31003`. The
 global services' own clients (the provider, archiver, repair delegate and
 indexer) are given `--rpc tcp://198.18.0.2:31001` by their units. The chain's

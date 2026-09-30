@@ -1590,7 +1590,7 @@ an existing home). A binary already staged there with different bytes is
 refused: change the chain binary with 'orama global stage-oramad --upgrade'.
 
 The ipfs service is a public Kubo of its own: no swarm.key, its own repo in
-/var/lib/orama-global/ipfs, swarm on 31010, RPC on 127.0.0.1:31011 behind a
+/var/lib/orama-global/ipfs, swarm on 31010, RPC on 127.0.0.1:31011 (198.18.0.2:31011 with --colocated) behind a
 token only the provider's group can read, and a GC timer. --public-storage-gb
 is the capacity you will declare with 'orama global capacity'; Kubo's
 StorageMax is that plus 10%. It never touches a private cluster's Kubo.

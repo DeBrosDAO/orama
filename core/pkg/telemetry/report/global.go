@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 )
 
 const globalMonitorLimit = 4096
@@ -22,10 +23,19 @@ var (
 	publicKuboTokenPath = filepath.Join(constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile)
 	providerMonitorPath = filepath.Join(constants.GlobalProviderHome, constants.GlobalMonitorFile)
 	relayMonitorPath    = filepath.Join(constants.GlobalRelayHome, constants.GlobalMonitorFile)
-	globalIPFSAPI       = constants.LocalGlobalIPFSAPIURL()
 	globalSystemctl     = chainSystemctl
 	globalIPFSPost      = postBearer
 )
+
+// globalIPFSAPI is the public Kubo RPC as this machine's host reaches it: loopback, or on a
+// co-located machine the namespace address. Like chainEndpoints it is read for each collection.
+// It is a variable so tests can stand in for the node.
+var globalIPFSAPI = func() string {
+	if globalnetns.Installed(constants.SystemdUnitDir, func(p string) bool { _, err := os.Stat(p); return err == nil }) {
+		return constants.ColocatedGlobalIPFSAPIURL()
+	}
+	return constants.LocalGlobalIPFSAPIURL()
+}
 
 // collectGlobal reports public Kubo, the provider, and the relay when those
 // units are installed. A cluster node has none of them, and the section is nil.
@@ -97,7 +107,7 @@ func readPublicIPFS(ctx context.Context) *PublicIPFSReport {
 		r.Error = shortChainError(err)
 		return r
 	}
-	body, err := globalIPFSPost(ctx, globalIPFSAPI+"/api/v0/repo/stat", token)
+	body, err := globalIPFSPost(ctx, globalIPFSAPI()+"/api/v0/repo/stat", token)
 	if err != nil {
 		r.Error = shortChainError(err)
 		return r

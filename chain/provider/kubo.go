@@ -43,8 +43,15 @@ var cidPattern = regexp.MustCompile(`^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,1
 // ValidIPFSCID reports whether s is a CIDv0 or a base32 CIDv1.
 func ValidIPFSCID(s string) bool { return cidPattern.MatchString(s) }
 
+// colocatedKuboHost is the address of the orama-global network namespace, where
+// the public Kubo's RPC listens on a machine shared with a cluster node
+// (core/pkg/constants GlobalNetnsAddr). It is a link-local address of that
+// namespace's veth, not a route to another machine.
+const colocatedKuboHost = "198.18.0.2"
+
 // NewKubo returns a client for the RPC at apiURL, which must be a loopback
-// http URL: the bearer token is never sent anywhere else.
+// http URL, or the namespace address of a co-located machine: the bearer
+// token is never sent anywhere else.
 func NewKubo(apiURL, token string) (*Kubo, error) {
 	u, err := url.Parse(apiURL)
 	if err != nil || u.Scheme != "http" || u.Host == "" || u.Path != "" && u.Path != "/" {
@@ -54,8 +61,8 @@ func NewKubo(apiURL, token string) (*Kubo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kubo RPC %q has no port: %w", apiURL, err)
 	}
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		return nil, fmt.Errorf("kubo RPC host %q is not a loopback address; the token is sent only to this host's own Kubo", host)
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() && host != colocatedKuboHost {
+		return nil, fmt.Errorf("kubo RPC host %q is not a loopback or namespace address; the token is sent only to this host's own Kubo", host)
 	}
 	token = strings.TrimSpace(token)
 	if token == "" {

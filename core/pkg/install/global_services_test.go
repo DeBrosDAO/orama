@@ -122,7 +122,7 @@ func TestRenderGlobalChainUnit_checksTheSignFloorBeforeEveryStart(t *testing.T) 
 
 func TestGlobalServiceUnits_orderAfterTheChain(t *testing.T) {
 	for name, unit := range map[string]string{
-		"provider": RenderGlobalProviderUnit(),
+		"provider": RenderGlobalProviderUnit("127.0.0.1"),
 		"archiver": RenderGlobalArchiverUnit(),
 		"indexer":  RenderGlobalIndexerUnit(),
 		"repair":   RenderGlobalRepairUnit(),

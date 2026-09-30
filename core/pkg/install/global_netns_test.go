@@ -324,10 +324,22 @@ func TestInstallGlobal_colocatedPutsTheKuboIndexerAndCosmovisorUnitsInTheNamespa
 	if err != nil || strings.Contains(string(timer), "NetworkNamespacePath=") || string(timer) != RenderGlobalIPFSGCTimer() {
 		t.Errorf("the GC timer must be written unchanged, outside the namespace (%v)", err)
 	}
-	// The provider and Kubo share the namespace, so the provider's dial of 127.0.0.1:31011 stays local.
+	// The provider, the GC and Kubo share the namespace, where the RPC listens on the namespace address.
 	provider, _ := os.ReadFile(filepath.Join(f.host.UnitDir, constants.GlobalProviderUnit))
-	if !strings.Contains(string(provider), "--ipfs-api http://127.0.0.1:31011") {
-		t.Errorf("provider does not use Kubo's loopback RPC:\n%s", provider)
+	if !strings.Contains(string(provider), "--ipfs-api http://198.18.0.2:31011") {
+		t.Errorf("provider does not use Kubo's namespace RPC:\n%s", provider)
+	}
+	gc, _ := os.ReadFile(filepath.Join(f.host.UnitDir, globalIPFSGCUnit))
+	if !strings.Contains(string(gc), "--api=/ip4/198.18.0.2/tcp/31011 ") || strings.Contains(string(gc), "127.0.0.1") {
+		t.Errorf("GC does not use Kubo's namespace RPC:\n%s", gc)
+	}
+	raw, err := os.ReadFile(filepath.Join(f.host.StateDir, "ipfs", "config"))
+	if err != nil || !strings.Contains(string(raw), "/ip4/198.18.0.2/tcp/31011") || strings.Contains(string(raw), "/ip4/127.0.0.1/tcp/31011") {
+		t.Errorf("Kubo's API address is not the namespace address (%v):\n%s", err, raw)
+	}
+	nsRules, err := os.ReadFile(filepath.Join(f.host.Netns.ConfigDir, "netns.nft"))
+	if err != nil || !strings.Contains(string(nsRules), "31011") {
+		t.Errorf("the namespace rules do not admit the host to the Kubo RPC (%v):\n%s", err, nsRules)
 	}
 	wantRoutes := []string{
 		"route delete allow in on ogl-host",
@@ -662,5 +674,27 @@ func TestInstallGlobal_colocatedInstallsTheLayoutsMissingTools(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.host.Netns.ConfigDir, "netns.nft")); err != nil {
 		t.Errorf("the layout was not written after the tools were installed: %v", err)
+	}
+}
+
+func TestInstallGlobal_colocatedWithoutKuboAdmitsNoKuboRPCPort(t *testing.T) {
+	f := newColocatedFixture(t)
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := os.ReadFile(filepath.Join(f.host.Netns.ConfigDir, "netns.nft"))
+	if err != nil || strings.Contains(string(rules), "31011") {
+		t.Errorf("namespace rules name the Kubo RPC without Kubo (%v):\n%s", err, rules)
+	}
+}
+
+func TestHostPorts_includeTheKuboRPCOnlyWithKubo(t *testing.T) {
+	with := GlobalInstallOptions{Services: []GlobalService{GlobalServiceChain, GlobalServiceIPFS}}.hostPorts()
+	if !slices.Contains(with, constants.GlobalIPFSAPIPort) {
+		t.Errorf("hostPorts = %v, want the Kubo RPC port", with)
+	}
+	without := GlobalInstallOptions{Services: []GlobalService{GlobalServiceChain}}.hostPorts()
+	if slices.Contains(without, constants.GlobalIPFSAPIPort) {
+		t.Errorf("hostPorts = %v, want no Kubo RPC port", without)
 	}
 }

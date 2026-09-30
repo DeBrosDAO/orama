@@ -202,7 +202,7 @@ func TestPublicKuboConfig_kuboStartsAndAnnouncesNoPrivateAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := hex.EncodeToString(bytes.Repeat([]byte{0x5a}, 32))
-	if err := WritePublicKuboFiles(rootfs.At(repo), repo, token, 5_000_000_000, existing); err != nil {
+	if err := WritePublicKuboFiles(rootfs.At(repo), repo, token, 5_000_000_000, existing, "127.0.0.1"); err != nil {
 		t.Fatalf("WritePublicKuboFiles: %v", err)
 	}
 

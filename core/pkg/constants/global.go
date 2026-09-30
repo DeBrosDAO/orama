@@ -13,7 +13,7 @@ package constants
 const (
 	// GlobalIPFSSwarmPort is the public Kubo swarm (TCP and QUIC).
 	GlobalIPFSSwarmPort = 31010
-	// GlobalIPFSAPIPort is the public Kubo RPC, on 127.0.0.1, token-gated.
+	// GlobalIPFSAPIPort is the public Kubo RPC, on 127.0.0.1 (the namespace address on a co-located machine), token-gated.
 	GlobalIPFSAPIPort = 31011
 	// GlobalIPFSGatewayPort is Kubo's HTTP gateway, on 127.0.0.1.
 	GlobalIPFSGatewayPort = 31012
@@ -78,6 +78,9 @@ const (
 	// The node report reads it. No process in this repo writes it yet.
 	GlobalMonitorFile = "monitor.json"
 )
+
+// ColocatedGlobalIPFSAPIURL is the public Kubo RPC on a co-located machine.
+func ColocatedGlobalIPFSAPIURL() string { return hostPortURL(GlobalNetnsAddr, GlobalIPFSAPIPort) }
 
 // LocalGlobalIPFSAPIURL is the public Kubo RPC on this node.
 func LocalGlobalIPFSAPIURL() string { return hostPortURL("127.0.0.1", GlobalIPFSAPIPort) }

@@ -100,3 +100,13 @@ func TestParseMonitor_unknownFieldIsRejected(t *testing.T) {
 		t.Fatal("an unknown field was accepted")
 	}
 }
+
+func TestGlobalIPFSAPI_isLoopbackWithoutTheNamespaceLayout(t *testing.T) {
+	// The test machine has no orama-global-netns unit.
+	if got := globalIPFSAPI(); got != constants.LocalGlobalIPFSAPIURL() {
+		t.Errorf("globalIPFSAPI() = %q, want %q", got, constants.LocalGlobalIPFSAPIURL())
+	}
+	if constants.ColocatedGlobalIPFSAPIURL() != "http://198.18.0.2:31011" {
+		t.Errorf("ColocatedGlobalIPFSAPIURL = %q", constants.ColocatedGlobalIPFSAPIURL())
+	}
+}
