@@ -280,6 +280,38 @@ func TestRQLiteIsolation_platformTablesRefusedToEveryRole(t *testing.T) {
 	}
 }
 
+// TestRQLiteIsolation_triggerAndHistoryTablesRefusedToADeveloper: a cron or
+// pubsub firing skips the caller check (docs/SECURITY.md), so a db:write member
+// who could insert a trigger row could run a private function, and a forged
+// deployment_history row picks the CID a rollback restores. The developer role
+// holds db:write and nothing else; both are refused through exec and inside a
+// transaction, and so is the `functions` table itself.
+func TestRQLiteIsolation_triggerAndHistoryTablesRefusedToADeveloper(t *testing.T) {
+	t.Parallel()
+	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
+	dev := &db{t: t, n: n, who: tenancy.Cred{Bearer: tenancy.Member(t, n, tenancy.RoleDeveloper).Token()}, c: n.Client}
+	for _, sql := range []string{
+		"INSERT INTO function_cron_triggers (id, function_id, cron_expression) VALUES ('forged', 'f', '* * * * *')",
+		"INSERT INTO function_pubsub_triggers (id, function_id, topic) VALUES ('forged', 'f', 'x')",
+		"INSERT INTO deployment_history (id, deployment_id, version, content_cid) VALUES ('forged', 'd', 1, 'QmForged')",
+		"UPDATE functions SET is_public = 1",
+	} {
+		refused := map[string]map[string]any{
+			pathExec: {"sql": sql},
+			pathTx: {"ops": []map[string]any{
+				{"kind": "exec", "sql": "CREATE TABLE IF NOT EXISTS guard_ok (id INTEGER)"},
+				{"kind": "exec", "sql": sql},
+			}},
+		}
+		for path, body := range refused {
+			r := dev.call(path, body)
+			if r.Status != http.StatusForbidden || r.ErrorCode() != "SQL_NOT_ALLOWED" {
+				t.Errorf("%s %q: HTTP %d %s, want 403 SQL_NOT_ALLOWED", path, sql, r.Status, r.ErrorCode())
+			}
+		}
+	}
+}
+
 func TestSchemaStatus_inSyncOnEveryGateway(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

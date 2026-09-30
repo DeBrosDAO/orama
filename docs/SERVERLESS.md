@@ -244,14 +244,21 @@ The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `dns_nodes`, `dns_nameservers`, `raft_evicted_nodes`, `cluster_locks`,
 `orama_schema_migrations`, `namespaces`, `ipfs_content_ownership`,
 `ipfs_cid_refs`, `deployments`, `deployment_domains`, `deployment_replicas`,
-`home_node_assignments` and `port_allocations` (the list in
+`home_node_assignments`, `port_allocations`, `functions`,
+`function_cron_triggers`, `function_pubsub_triggers`, `function_db_triggers`,
+`deployment_history`, `namespace_push_config`, `namespace_webrtc_config`,
+`namespace_sqlite_databases`, `namespace_sqlite_backups`, `webrtc_rooms`,
+`webrtc_port_allocations`, `namespace_cluster_events`,
+`namespace_pending_cleanup`, `node_health_events` and `rqlite_backups` (the list in
 `core/pkg/sqlguard/sqlguard.go`, which is also what the namespace gateway's
 raw-database routes apply to a tenant's SQL: see
 [SECURITY.md](SECURITY.md#function-sql)). A deployment is created and changed
 through `/v1/deployments`, which validates its content, entry point and port;
 SQL against the deployment tables would skip all of that, so they are reserved.
 The tables that only record what happened (`deployment_events`,
-`deployment_health_checks`, `deployment_history`) are not.
+`deployment_health_checks`) are not. `functions` is a generic name: an
+application that owns a table of that name cannot use it from a function or
+over `/v1/rqlite`, and must rename it.
 
 **A function's database is its own namespace's.** Every database host function
 also refuses a call from a function whose namespace is not the one the

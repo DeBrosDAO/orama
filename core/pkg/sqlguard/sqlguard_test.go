@@ -51,8 +51,9 @@ func TestCheck_refusesTheTablesThatGrantAuthority(t *testing.T) {
 
 // What runs where is platform state. A deployment row written by SQL skips the
 // validation /v1/deployments applies to the content, entry point and port, so
-// the tables that hold it are reserved with the rest. Tables that only record
-// what happened (events, health checks, history) stay reachable.
+// the tables that hold it are reserved with the rest, and so is the history a
+// rollback reads its target CID from. Tables that only record what happened
+// (events, health checks) stay reachable.
 func TestCheck_refusesTheDeploymentTables(t *testing.T) {
 	for _, query := range []string{
 		"UPDATE deployments SET content_cid = ? WHERE name = ?",
@@ -61,6 +62,7 @@ func TestCheck_refusesTheDeploymentTables(t *testing.T) {
 		"SELECT * FROM deployment_replicas",
 		"UPDATE home_node_assignments SET home_node_id = 'x'",
 		"INSERT INTO port_allocations(port) VALUES (1)",
+		"INSERT INTO deployment_history(content_cid) VALUES ('QmForged')",
 		"SELECT d.name FROM messages m JOIN [deployments] d ON 1=1",
 	} {
 		if err := Check(query); err == nil {
@@ -70,7 +72,6 @@ func TestCheck_refusesTheDeploymentTables(t *testing.T) {
 	for _, query := range []string{
 		"SELECT * FROM deployment_events",
 		"SELECT * FROM deployment_health_checks",
-		"SELECT * FROM deployment_history",
 	} {
 		if err := Check(query); err != nil {
 			t.Errorf("refused %q: %v", query, err)
@@ -357,18 +358,14 @@ func TestCheck_emptyAndTrivial(t *testing.T) {
 var reachableTables = map[string]bool{
 	"apps":                     true,
 	"deployment_events":        true,
-	"deployment_health_checks": true, "deployment_history": true,
-	"functions": true, "function_invocations": true, "function_logs": true,
+	"deployment_health_checks": true,
+	"function_invocations":     true, "function_logs": true,
 	"function_jobs": true, "function_timers": true, "function_rate_limits": true,
-	"function_cron_triggers": true, "function_db_triggers": true,
-	"function_pubsub_triggers": true, "function_db_change_tracking": true,
-	"namespace_sqlite_backups":   true,
-	"namespace_sqlite_databases": true, "namespace_publish_seq": true,
-	"namespace_webrtc_config": true, "namespace_push_config": true,
-	"namespace_cluster_events": true, "namespace_pending_cleanup": true,
-	"node_health_events": true, "request_logs": true, "rqlite_backups": true,
-	"push_devices": true, "webrtc_rooms": true, "webrtc_port_allocations": true,
-	"schema_migrations": true, "subscriptions": true,
+	"function_db_change_tracking": true,
+	"namespace_publish_seq":       true,
+	"request_logs":                true,
+	"push_devices":                true,
+	"schema_migrations":           true, "subscriptions": true,
 }
 
 // The protected list is a decision about each core table. A migration that adds
@@ -487,6 +484,68 @@ func TestProtectedTables_coverEveryClusterOnlyTable(t *testing.T) {
 			t.Errorf("%q lives only in the cluster registry and guest SQL may still name it. "+
 				"Stripping it from a namespace database makes the query fail anyway, but the "+
 				"refusal should say what it is rather than 'no such table'.", table)
+		}
+	}
+}
+
+// The platform-trust tables that were placed in a namespace database and
+// reachable by tenant SQL (the platform-state design's finding F2), and the
+// control-plane tables placement now says a namespace gateway never touches.
+// Each is refused for a write, a read, and a quoted name.
+func TestCheck_refusesEveryTableThatWasOnceReachable(t *testing.T) {
+	for _, table := range []string{
+		"functions", "function_cron_triggers", "function_pubsub_triggers", "function_db_triggers",
+		"namespace_push_config", "namespace_webrtc_config", "deployment_history",
+		"namespace_sqlite_databases", "namespace_sqlite_backups", "webrtc_rooms",
+		"webrtc_port_allocations", "namespace_cluster_events", "namespace_pending_cleanup",
+		"node_health_events", "rqlite_backups",
+	} {
+		for _, query := range []string{
+			"INSERT INTO " + table + " (id) VALUES (1)",
+			"SELECT * FROM " + table,
+			`DELETE FROM "` + table + `"`,
+			"UPDATE main." + strings.ToUpper(table) + " SET id = 2",
+		} {
+			var refused *ErrNotAllowed
+			if err := Check(query); !errors.As(err, &refused) {
+				t.Errorf("Check(%q) = %v, want a refusal", query, err)
+			}
+		}
+	}
+}
+
+// The class of hole this closes: a table the platform acts on, placed in a
+// namespace database, that nobody added to the denylist. Placement carries a
+// trust class per table, and every platform-trust table has to be reserved here,
+// whichever database it is placed in. A table added to the placement without a
+// trust class is platform-trust by default, so forgetting fails this test.
+func TestProtectedTables_coverEveryPlatformTrustTable(t *testing.T) {
+	platform := rqlite.TablesOfTrust(rqlite.TrustPlatform)
+	if len(platform) < 30 {
+		t.Fatalf("only %d platform-trust tables; the placement is not being read", len(platform))
+	}
+	for _, table := range platform {
+		if _, protected := protectedTables[table]; !protected {
+			t.Errorf("%q is platform-trust in rqlite's tablePlacement, so the platform acts on its rows, "+
+				"and tenant SQL may still name it. Add it to protectedTables with a reason; if a tenant's "+
+				"rows in it are worth nothing to the platform, classify it TrustTenantData or TrustTelemetry instead.", table)
+		}
+	}
+}
+
+// The other direction, for the tables a tenant is allowed to name: one that is
+// classified as tenant data or telemetry and is also reserved is a decision
+// somebody should have to state, because the reserved name breaks any tenant
+// application that owns a table of that name. push_topics is the one reason
+// that is allowed today (FEAT-265): it is tenant data whose rows must not be
+// joined against an invocation.
+func TestProtectedTables_nonPlatformEntriesAreDeliberate(t *testing.T) {
+	deliberate := map[string]bool{"push_topics": true}
+	for _, trust := range []rqlite.Trust{rqlite.TrustTenantData, rqlite.TrustTelemetry} {
+		for _, table := range rqlite.TablesOfTrust(trust) {
+			if _, protected := protectedTables[table]; protected && !deliberate[table] {
+				t.Errorf("%q is reserved but placement says the platform does not act on its rows", table)
+			}
 		}
 	}
 }

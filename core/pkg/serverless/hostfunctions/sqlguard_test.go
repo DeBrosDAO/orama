@@ -2,6 +2,7 @@ package hostfunctions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -93,6 +94,45 @@ func TestExecAndPublish_refusesAProtectedTable(t *testing.T) {
 	}
 }
 
+// A function is a tenant's code: it may not write a trigger row that makes the
+// platform run a function without a caller check, or a history row that picks
+// a rollback's CID. Every database host function refuses, before the database.
+func TestDBHostFunctions_allRefuseTriggerAndHistoryTables(t *testing.T) {
+	h := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, dbNamespace: testNamespace, pubsub: &publishingBus{}}
+	ctx := nsCtx()
+	pubCtx := serverless.WithPublishCounter(invocationCtx(&serverless.InvocationContext{Namespace: testNamespace}))
+
+	for _, sql := range []string{
+		"INSERT INTO function_cron_triggers (id, function_id, cron_expression) VALUES ('t', 'f', '* * * * *')",
+		"INSERT INTO function_pubsub_triggers (id, function_id, topic) VALUES ('t', 'f', 'x')",
+		"INSERT INTO deployment_history (id, deployment_id, content_cid) VALUES ('h', 'd', 'QmForged')",
+		"UPDATE functions SET is_public = 1",
+	} {
+		opsJSON, _ := json.Marshal(map[string]any{"ops": []map[string]any{{"kind": "exec", "sql": sql}}})
+		calls := map[string]func() error{
+			"db_query":       func() error { _, err := h.DBQuery(ctx, sql, nil); return err },
+			"db_execute":     func() error { _, err := h.DBExecute(ctx, sql, nil); return err },
+			"db_execute_v2":  func() error { _, err := h.DBExecuteV2(ctx, sql, nil); return err },
+			"db_query_v2":    func() error { _, err := h.DBQueryV2(ctx, sql, nil); return err },
+			"db_transaction": func() error { _, err := h.DBTransaction(ctx, opsJSON); return err },
+			"db_query_batch": func() error {
+				_, err := h.DBQueryBatch(ctx, opsJSON)
+				return err
+			},
+			"exec_and_publish": func() error {
+				_, err := h.ExecAndPublish(pubCtx, opsJSON, "wake", []byte("{}"))
+				return err
+			},
+		}
+		for fn, call := range calls {
+			var refused *sqlguard.ErrNotAllowed
+			if err := call(); !errors.As(err, &refused) {
+				t.Errorf("%s(%s): err = %v, want the SQL guard's refusal", fn, sql, err)
+			}
+		}
+	}
+}
+
 // A protected table hidden behind an innocent first op still has to be caught.
 func TestDBTransaction_checksEveryOp(t *testing.T) {
 	h := &HostFunctions{logger: zap.NewNop(), db: refusingDB{}, dbNamespace: testNamespace}
@@ -105,4 +145,3 @@ func TestDBTransaction_checksEveryOp(t *testing.T) {
 		t.Errorf("the refusal does not say which op: %v", err)
 	}
 }
-

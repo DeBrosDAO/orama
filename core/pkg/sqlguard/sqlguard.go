@@ -127,6 +127,34 @@ var protectedTables = map[string]string{
 	// shared pin. It lives in the cluster registry only, but a caller should
 	// be told what it is rather than "no such table".
 	"ipfs_cid_refs": "the cluster-wide count of who references stored content",
+
+	// What a function is, and what fires it. A cron or pubsub firing skips the
+	// caller check (docs/SECURITY.md), so a trigger row a tenant could write is
+	// a way to run a private or internal function nobody granted it. A
+	// `functions` row is the code and the visibility that decide who may
+	// invoke it; a deploy through /v1/functions validates both.
+	"functions":                "which function runs, its code and who may invoke it",
+	"function_cron_triggers":   "which function a schedule fires, without a caller check",
+	"function_pubsub_triggers": "which function a topic fires, without a caller check",
+	"function_db_triggers":     "which function a database change fires",
+	// Rollback reads it to pick the CID a deployment is restored to, so a
+	// forged row rolls a deployment back to content of the caller's choosing.
+	"deployment_history": "which content a rollback restores",
+	// Where the platform's own per-namespace configuration is kept. Each is
+	// written by a handler that validates it; a row written here skips that.
+	"namespace_push_config":      "where and how a namespace's push is delivered",
+	"namespace_webrtc_config":    "the TURN shared secret of a namespace",
+	"namespace_sqlite_databases": "which tenant SQLite files exist and where",
+	"namespace_sqlite_backups":   "which backup belongs to which tenant SQLite file",
+	// Nothing on a namespace gateway reads these: the cluster manager owns
+	// them, in the registry, and a reserved name says so rather than "no such
+	// table".
+	"webrtc_rooms":              "which SFU hosts a room",
+	"webrtc_port_allocations":   "which node runs which WebRTC role",
+	"namespace_cluster_events":  "cluster topology history",
+	"namespace_pending_cleanup": "cleanup the cluster still owes a node",
+	"node_health_events":        "what the cluster's nodes reported about each other",
+	"rqlite_backups":            "where the registry's off-box backups are",
 }
 
 // deniedStatements are statement kinds tenant SQL has no use for and that step
