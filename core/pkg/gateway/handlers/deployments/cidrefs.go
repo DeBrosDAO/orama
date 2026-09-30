@@ -2,7 +2,6 @@ package deployments
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
@@ -23,36 +22,37 @@ import (
 func (s *DeploymentService) SetCIDRefs(refs *storage.CIDRefs) { s.cidRefs = refs }
 
 // registerCIDs records that the deployment's namespace holds each CID and
-// returns those that were new, for dropFreshCIDs if the change they belong to
-// does not happen. Registration precedes the change, so another namespace
-// unpinning the same bytes meanwhile already counts it.
+// returns the CIDs it registered, for unregisterCIDs if the change they belong
+// to does not happen. Registrations are counted by the index, so undoing one
+// leaves a concurrent registration of the same content (another create with
+// identical content, say) standing. Registration precedes the change, so
+// another namespace unpinning the same bytes meanwhile already counts it.
 func (s *DeploymentService) registerCIDs(ctx context.Context, namespace string, cids ...string) ([]string, error) {
 	if s.cidRefs == nil {
 		return nil, nil
 	}
-	var fresh []string
+	var registered []string
+	seen := make(map[string]struct{}, len(cids))
 	for _, cid := range cids {
-		if cid == "" {
+		if _, dup := seen[cid]; cid == "" || dup {
 			continue
 		}
-		isNew, err := s.cidRefs.Register(ctx, cid, namespace, storage.KindDeployment)
-		if err != nil {
-			s.dropFreshCIDs(ctx, namespace, fresh)
+		seen[cid] = struct{}{}
+		if err := s.cidRefs.Register(ctx, cid, namespace, storage.KindDeployment); err != nil {
+			s.unregisterCIDs(ctx, namespace, registered)
 			return nil, fmt.Errorf("failed to register deployment content of namespace %s: %w", namespace, err)
 		}
-		if isNew {
-			fresh = append(fresh, cid)
-		}
+		registered = append(registered, cid)
 	}
-	return fresh, nil
+	return registered, nil
 }
 
-// dropFreshCIDs undoes registerCIDs when the change did not happen. It runs on
+// unregisterCIDs undoes registerCIDs when the change did not happen. It runs on
 // a context that outlives the request.
-func (s *DeploymentService) dropFreshCIDs(ctx context.Context, namespace string, fresh []string) {
-	for _, cid := range fresh {
-		if _, err := s.cidRefs.Release(context.WithoutCancel(ctx), cid, namespace, storage.KindDeployment); err != nil {
-			s.logger.Error("Failed to drop the reference of a deployment change that did not happen; the CID stays referenced until the namespace's deployments stop using it",
+func (s *DeploymentService) unregisterCIDs(ctx context.Context, namespace string, registered []string) {
+	for _, cid := range registered {
+		if err := s.cidRefs.Unregister(context.WithoutCancel(ctx), cid, namespace, storage.KindDeployment); err != nil {
+			s.logger.Error("Failed to take back the reference of a deployment change that did not happen; the CID stays referenced until the namespace's deployments stop using it",
 				zap.String("namespace", namespace), zap.String("cid", cid), zap.Error(err))
 		}
 	}
@@ -77,13 +77,7 @@ func (s *DeploymentService) releaseCID(ctx context.Context, ipfs storage.Cluster
 	if len(rows) > 0 && rowCount(rows[0]["count"]) > 0 {
 		return nil
 	}
-	if err := storage.UnpinIfLastRef(ctx, s.cidRefs, ipfs, cid, namespace, storage.KindDeployment); err != nil {
-		if errors.Is(err, storage.ErrRefIndexNotReady) {
-			return fmt.Errorf("the pin of %s was left in place: %w", cid, err)
-		}
-		return err
-	}
-	return nil
+	return storage.UnpinIfLastRef(ctx, s.cidRefs, ipfs, cid, namespace, storage.KindDeployment)
 }
 
 // rowCount coerces a COUNT(*) cell (rqlite returns float64 or int64) to int.

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -71,11 +72,11 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 	// the CLUSTER-WIDE index and only the release that leaves zero references
 	// removes the cluster pin. A namespace's own RQLite cannot answer this: it
 	// holds no rows for other namespaces (see cidrefs.go).
-	if h.db != nil && !h.refs.Ready() {
-		httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
-			ErrRefIndexNotReady.Error()+", so an unpin cannot tell whether other namespaces hold this content; retry shortly",
-			httputil.WithRetryable())
-		return
+	if h.db != nil {
+		if err := h.refs.CheckReady(ctx, ""); err != nil {
+			h.writeRefIndexNotReady(w, err, path)
+			return
+		}
 	}
 	// The row is marked unpinned before the reference is released, so nothing
 	// that reads the row while the release is in flight sees a pin whose
@@ -168,4 +169,27 @@ func isAlreadyUnpinned(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "not part of the pinset") ||
 		strings.Contains(msg, "not pinned")
+}
+
+// writeRefIndexNotReady answers an unpin the index cannot yet decide. A namespace
+// that has not loaded its references is named in the log, for the operator, and
+// never in the answer, which reaches a tenant.
+func (h *Handlers) writeRefIndexNotReady(w http.ResponseWriter, err error, cid string) {
+	var missing *NotBackfilledError
+	if errors.As(err, &missing) {
+		h.logger.ComponentError(logging.ComponentGeneral, "unpin refused: namespaces have not loaded their existing references into the cluster reference index",
+			zap.Strings("namespaces", missing.Namespaces), zap.String("cid", cid))
+	} else {
+		h.logger.ComponentError(logging.ComponentGeneral, "unpin refused: the cluster reference index cannot be trusted yet",
+			zap.Error(err), zap.String("cid", cid))
+	}
+	if errors.Is(err, ErrRefIndexNotReady) {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
+			err.Error()+", so an unpin cannot tell whether other namespaces hold this content; retry shortly",
+			httputil.WithRetryable())
+		return
+	}
+	httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
+		"the cluster reference index could not be read, so an unpin cannot tell whether other namespaces hold this content; retry shortly",
+		httputil.WithRetryable())
 }
