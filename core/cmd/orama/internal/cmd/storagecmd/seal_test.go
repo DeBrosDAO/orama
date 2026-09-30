@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 )
 
 func writeSecret(t *testing.T, dir, name, hexValue string) string {
@@ -139,5 +141,41 @@ func TestSeal_seedFileFlagIsGone(t *testing.T) {
 		if c.Flags().Lookup("storage-key-file") == nil {
 			t.Fatalf("%s lacks --storage-key-file", name)
 		}
+	}
+}
+
+// Bug: a malformed nonce or an out-of-range replica count exited 1, the code
+// for "something went wrong"; they are bad values on the command line.
+func TestSeal_badNonceOrReplicasIsUsage(t *testing.T) {
+	dir := t.TempDir()
+	key := writeSecret(t, dir, "key", strings.Repeat("11", 32))
+	repair := writeSecret(t, dir, "repair", strings.Repeat("22", 32))
+	in := filepath.Join(dir, "plain")
+	if err := os.WriteFile(in, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	good := strings.Repeat("33", 32)
+	for name, c := range map[string]struct{ nonce, replicas string }{
+		"short nonce":   {"abcd", "3"},
+		"nonce not hex": {strings.Repeat("zz", 32), "3"},
+		"empty nonce":   {"", "3"},
+		"zero replicas": {good, "0"},
+		"negative":      {good, "-1"},
+		"too many":      {good, "33"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := filepath.Join(dir, "slots-"+strings.ReplaceAll(name, " ", "-"))
+			Cmd.SetOut(&bytes.Buffer{})
+			Cmd.SetErr(&bytes.Buffer{})
+			Cmd.SetArgs([]string{"seal", "--storage-key-file", key, "--repair-seed-file", repair,
+				"--nonce", c.nonce, "--replicas", c.replicas, "--in", in, "--out-dir", out})
+			err := Cmd.Execute()
+			if got := clierr.CodeOf(err); got != clierr.CodeUsage {
+				t.Fatalf("exit code %d (%v), want %d", got, err, clierr.CodeUsage)
+			}
+			if _, statErr := os.Stat(out); statErr == nil {
+				t.Errorf("a refused seal created %s", out)
+			}
+		})
 	}
 }

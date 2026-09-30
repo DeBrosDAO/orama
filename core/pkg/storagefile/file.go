@@ -34,6 +34,10 @@ const (
 	DealNonceLen = 32
 	keyLen       = 32
 
+	// MinReplicas and MaxReplicas bound how many slots one file is sealed into.
+	MinReplicas = 1
+	MaxReplicas = 32
+
 	// StorageKeyLen is the width of the orama-storage-v1 branch output.
 	StorageKeyLen = 32
 
@@ -65,8 +69,8 @@ func Prepare(storageKey, repairSeed, dealNonce []byte, replicas int, plaintext [
 	if len(dealNonce) != DealNonceLen {
 		return nil, fmt.Errorf("deal nonce must be %d bytes", DealNonceLen)
 	}
-	if replicas < 1 || replicas > 32 {
-		return nil, errors.New("replicas must be from 1 to 32")
+	if replicas < MinReplicas || replicas > MaxReplicas {
+		return nil, fmt.Errorf("replicas must be from %d to %d", MinReplicas, MaxReplicas)
 	}
 	inner, err := sealInner(storageKey, plaintext)
 	if err != nil {

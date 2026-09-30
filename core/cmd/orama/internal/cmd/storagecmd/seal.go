@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/storagefile"
 	"github.com/spf13/cobra"
 )
@@ -55,11 +56,14 @@ A wrong storage key, repair seed, or slot fails and writes nothing.`,
 }
 
 func runSeal(cmd *cobra.Command, _ []string) error {
+	replicas, _ := cmd.Flags().GetInt("replicas")
+	if replicas < storagefile.MinReplicas || replicas > storagefile.MaxReplicas {
+		return clierr.Usage("--replicas must be from %d to %d, got %d", storagefile.MinReplicas, storagefile.MaxReplicas, replicas)
+	}
 	storageKey, repair, nonce, err := sealKeys(cmd)
 	if err != nil {
 		return err
 	}
-	replicas, _ := cmd.Flags().GetInt("replicas")
 	inPath, _ := cmd.Flags().GetString("in")
 	outDir, _ := cmd.Flags().GetString("out-dir")
 	plain, err := os.ReadFile(inPath)
