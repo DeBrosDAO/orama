@@ -383,7 +383,9 @@ func (s *SystemdSpawner) SpawnRQLite(ctx context.Context, namespace, nodeID stri
 		"JOIN_ARGS":     joinArgs,
 		"NODE_ID":       nodeID,
 		"DATA_DIR":      dataDir,
-		"EXTRA_ARGS":    strings.TrimSpace(cfg.ExtraArgs + " -auth " + authDest),
+		// Every instance runs with the platform's Raft timing; rqlite's LAN
+		// defaults made the namespace clusters elect every few seconds.
+		"EXTRA_ARGS": strings.TrimSpace(rqlite.WithDefaultRaftTimeouts(cfg.ExtraArgs) + " -auth " + authDest),
 	}
 
 	if err := s.systemdMgr.GenerateEnvFile(namespace, nodeID, systemd.ServiceTypeRQLite, envVars); err != nil {

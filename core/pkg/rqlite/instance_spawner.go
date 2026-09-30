@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -120,12 +121,7 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	}
 
 	// Raft tuning — match the global node's tuning for consistency
-	args = append(args,
-		"-raft-election-timeout", "5s",
-		"-raft-heartbeat-timeout", "2s",
-		"-raft-apply-timeout", "30s",
-		"-raft-leader-lease-timeout", "2s",
-	)
+	args = append(args, strings.Fields(DefaultRaftTimeouts().Args())...)
 
 	// RQLite HTTP Basic Auth
 	if cfg.AuthFile != "" {

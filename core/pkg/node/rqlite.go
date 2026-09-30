@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	database "github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -213,22 +212,18 @@ func (n *Node) recordClusterMembership(ctx context.Context) error {
 }
 
 func indexRQLiteExtraArgs(db config.DatabaseConfig) string {
-	election := db.RaftElectionTimeout
-	if election == 0 {
-		election = 5 * time.Second
+	t := database.DefaultRaftTimeouts()
+	if db.RaftElectionTimeout != 0 {
+		t.Election = db.RaftElectionTimeout
 	}
-	heartbeat := db.RaftHeartbeatTimeout
-	if heartbeat == 0 {
-		heartbeat = 2 * time.Second
+	if db.RaftHeartbeatTimeout != 0 {
+		t.Heartbeat = db.RaftHeartbeatTimeout
 	}
-	apply := db.RaftApplyTimeout
-	if apply == 0 {
-		apply = 30 * time.Second
+	if db.RaftApplyTimeout != 0 {
+		t.Apply = db.RaftApplyTimeout
 	}
-	lease := db.RaftLeaderLeaseTimeout
-	if lease == 0 {
-		lease = 2 * time.Second
+	if db.RaftLeaderLeaseTimeout != 0 {
+		t.LeaderLease = db.RaftLeaderLeaseTimeout
 	}
-	return fmt.Sprintf("-raft-election-timeout %s -raft-heartbeat-timeout %s -raft-apply-timeout %s -raft-leader-lease-timeout %s",
-		election, heartbeat, apply, lease)
+	return t.Args()
 }
