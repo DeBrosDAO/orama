@@ -229,18 +229,76 @@ func Check(query string) error {
 	return nil
 }
 
-// tenantRefusedPragmas are the pragmas that reach beyond the tenant's own
-// data: where SQLite writes files, or the schema's integrity itself. Matched
-// as a word anywhere in a PRAGMA statement, so `PRAGMA main.<name>` is covered.
-var tenantRefusedPragmas = map[string]string{
-	"temp_store_directory": "it chooses the directory SQLite writes temporary files to",
-	"data_store_directory": "it chooses the directory SQLite resolves database files in",
-	"writable_schema":      "it lets SQL rewrite sqlite_schema and corrupt the database",
+// tenantAllowedPragmas are the pragmas tenant SQL may run: each reads or sets
+// something of the tenant's own file or connection. Anything else is refused.
+// A denylist was the wrong shape: hard_heap_limit and soft_heap_limit set
+// SQLite's process-wide heap limit, so one tenant could make every other
+// tenant's query on the same gateway fail, and database_list returned the
+// file's absolute path on the node; neither reaches another file, and a list
+// of what does missed them. A pragma SQLite adds later is refused until it is
+// judged here.
+var tenantAllowedPragmas = map[string]bool{
+	"table_info": true, "table_xinfo": true, "table_list": true,
+	"index_list": true, "index_info": true, "index_xinfo": true,
+	"foreign_key_list": true, "foreign_key_check": true,
+	"foreign_keys": true, "defer_foreign_keys": true,
+	"user_version": true, "application_id": true,
+	"integrity_check": true, "quick_check": true,
+	"page_count": true, "freelist_count": true, "optimize": true,
 }
 
-func refuseTenantPragma(name string) error {
-	if why, refused := tenantRefusedPragmas[name]; refused {
-		return &ErrNotAllowed{Reason: fmt.Sprintf("PRAGMA %s is not available to tenant SQL: %s", name, why)}
+// checkTenantPragma judges a PRAGMA statement's tokens (tokens[0] is PRAGMA):
+// the name, optionally qualified by the main schema, must be allowed. SQLite
+// takes a quoted name or a string as a pragma's name, so those are read too.
+func checkTenantPragma(tokens []token) error {
+	rest := tokens[1:]
+	if len(rest) >= 3 && rest[1].kind == tokenDot {
+		if schema := normalizeName(rest[0].text); schema != "main" {
+			return &ErrNotAllowed{Reason: fmt.Sprintf("PRAGMA on schema %q is not available to tenant SQL; only the main database is the tenant's", schema)}
+		}
+		rest = rest[2:]
+	}
+	if len(rest) == 0 {
+		return &ErrNotAllowed{Reason: "PRAGMA needs a name"}
+	}
+	switch rest[0].kind {
+	case tokenWord, tokenQuotedIdent, tokenString:
+	default:
+		return &ErrNotAllowed{Reason: "PRAGMA needs a name"}
+	}
+	name := normalizeName(rest[0].text)
+	if !tenantAllowedPragmas[name] {
+		return &ErrNotAllowed{Reason: fmt.Sprintf("PRAGMA %s is not available to tenant SQL; the pragmas that are: see tenantAllowedPragmas in the gateway's SQL guard (table_info, index_list, foreign_keys, user_version, integrity_check, ...)", name)}
+	}
+	return nil
+}
+
+// pragmaFunctionPrefix names SQLite's table-valued pragma functions
+// (`SELECT * FROM pragma_table_info('t')`), which run a pragma without the
+// PRAGMA keyword; they are held to the same allowlist.
+const pragmaFunctionPrefix = "pragma_"
+
+func checkPragmaFunction(name string) error {
+	n := normalizeName(name)
+	if !strings.HasPrefix(n, pragmaFunctionPrefix) {
+		return nil
+	}
+	if pragma := strings.TrimPrefix(n, pragmaFunctionPrefix); !tenantAllowedPragmas[pragma] {
+		return &ErrNotAllowed{Reason: fmt.Sprintf("%s runs PRAGMA %s, which is not available to tenant SQL", n, pragma)}
+	}
+	return nil
+}
+
+// refuseControlBytes refuses a NUL or another control character that is not
+// whitespace. SQLite stops reading at a NUL, and a driver that runs a query's
+// tail as further statements splits where the guard, which reads the whole
+// text, saw one: the guard must never judge less than SQLite runs.
+func refuseControlBytes(query string) error {
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if c < 0x20 && c != '\t' && c != '\n' && c != '\v' && c != '\f' && c != '\r' {
+			return &ErrNotAllowed{Reason: fmt.Sprintf("tenant SQL may not contain the control byte 0x%02x", c)}
+		}
 	}
 	return nil
 }
@@ -248,12 +306,15 @@ func refuseTenantPragma(name string) error {
 // CheckTenantSQLite refuses what a tenant may not run against its own SQLite
 // file (/v1/db/sqlite/query). That file holds only the tenant's data, so the
 // platform-table names Check reserves are not reserved here; what must be
-// refused is every way a statement reaches outside the file: more than one
-// statement, ATTACH and DETACH, VACUUM INTO, which writes a copy of the
-// database to a path of the caller's choosing, and the pragmas in
-// tenantRefusedPragmas. It works on tokens, so a
-// keyword inside a string literal, a comment or a quoted identifier is data.
+// refused is every way a statement reaches outside the file, or into the
+// process that serves it: more than one statement, ATTACH and DETACH, VACUUM
+// INTO (it writes a copy of the database to a path of the caller's choosing),
+// a pragma not in tenantAllowedPragmas, and control bytes. It works on tokens,
+// so a keyword inside a string literal, a comment or a quoted identifier is data.
 func CheckTenantSQLite(query string) error {
+	if err := refuseControlBytes(query); err != nil {
+		return err
+	}
 	tokens := tokenizeSQL(query)
 	var first string
 	vacuum := false
@@ -263,28 +324,30 @@ func CheckTenantSQLite(query string) error {
 			if hasMoreContent(tokens[i+1:]) {
 				return &ErrNotAllowed{Reason: "one call runs one statement; send them one at a time"}
 			}
+		case tokenQuotedIdent:
+			if err := checkPragmaFunction(tok.text); err != nil {
+				return err
+			}
 		case tokenWord:
-			word := strings.ToLower(tok.text)
-			if first == "" {
-				first = word
-				if first == "attach" || first == "detach" {
-					return &ErrNotAllowed{Reason: fmt.Sprintf("%s is not available to tenant SQL: it reaches another database file", strings.ToUpper(tok.text))}
+			if err := checkPragmaFunction(tok.text); err != nil {
+				return err
+			}
+			if first != "" {
+				if vacuum && strings.EqualFold(tok.text, "into") {
+					return &ErrNotAllowed{Reason: "VACUUM INTO is not available to tenant SQL: it writes a file to a path of the caller's choosing"}
 				}
-				vacuum = first == "vacuum"
-			} else if vacuum && word == "into" {
-				return &ErrNotAllowed{Reason: "VACUUM INTO is not available to tenant SQL: it writes a file to a path of the caller's choosing"}
-			} else if first == "pragma" {
-				if err := refuseTenantPragma(word); err != nil {
+				continue
+			}
+			first = strings.ToLower(tok.text)
+			switch first {
+			case "attach", "detach":
+				return &ErrNotAllowed{Reason: fmt.Sprintf("%s is not available to tenant SQL: it reaches another database file", strings.ToUpper(tok.text))}
+			case "pragma":
+				if err := checkTenantPragma(tokens[i:]); err != nil {
 					return err
 				}
 			}
-		case tokenQuotedIdent, tokenString:
-			// SQLite takes a quoted name, or a string, as a pragma's name.
-			if first == "pragma" {
-				if err := refuseTenantPragma(normalizeName(tok.text)); err != nil {
-					return err
-				}
-			}
+			vacuum = first == "vacuum"
 		}
 	}
 	return nil

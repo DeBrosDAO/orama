@@ -590,6 +590,13 @@ func TestCheckTenantSQLite_refusesWhatReachesOutsideTheFile(t *testing.T) {
 		"PRAGMA temp_store_directory = '/tmp/x'", "pragma main.data_store_directory='/x'",
 		"PRAGMA writable_schema = ON", `PRAGMA "writable_schema" = 1`, "PRAGMA 'temp_store_directory' = '/x'",
 		"PRAGMA [data_store_directory]", "PRAGMA WRITABLE_SCHEMA",
+		// Process-wide state and disclosure (security review 2026-09-30).
+		"PRAGMA hard_heap_limit=4096", "PRAGMA soft_heap_limit = 1", "PRAGMA database_list",
+		"PRAGMA main.hard_heap_limit=1", "PRAGMA temp.table_info(t)", "PRAGMA", "PRAGMA ;",
+		"PRAGMA mmap_size=1", "PRAGMA threads=8", "PRAGMA trusted_schema=1",
+		"SELECT * FROM pragma_database_list", `SELECT * FROM "pragma_database_list"`,
+		"SELECT * FROM pragma_hard_heap_limit(1)",
+		"SELECT 1\x00; VACUUM INTO '/x.db'", "SELECT 1\x01",
 	} {
 		var na *ErrNotAllowed
 		if err := CheckTenantSQLite(q); !errors.As(err, &na) {
@@ -605,6 +612,9 @@ func TestCheckTenantSQLite_keywordsAsDataAreAllowed(t *testing.T) {
 		"SELECT * FROM t;", "VACUUM", "SELECT into_x, vacuum FROM t", "SELECT 1;;",
 		"SELECT * FROM functions", "",
 		"PRAGMA table_info(t)", "PRAGMA foreign_keys = ON", "SELECT 'writable_schema'",
+		"PRAGMA main.table_info(t)", `PRAGMA "user_version" = 3`, "PRAGMA integrity_check",
+		"SELECT * FROM pragma_table_info('t')", "SELECT 'pragma_database_list'",
+		"SELECT\t1\r\nFROM t", "SELECT 'hard_heap_limit'",
 		"INSERT INTO t VALUES ('temp_store_directory')",
 	} {
 		if err := CheckTenantSQLite(q); err != nil {
