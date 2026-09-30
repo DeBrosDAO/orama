@@ -63,7 +63,7 @@ func (r *Runner) StartWith(ctx context.Context, opts RunOpts, args ...string) (*
 	if err := errors.Join(r.Check(), r.checkOpts(opts)); err != nil {
 		return nil, err
 	}
-	plan, err := r.paceBefore(ctx, args)
+	plan, err := r.paceBefore(ctx, args, opts.Env)
 	if err != nil {
 		return nil, err
 	}

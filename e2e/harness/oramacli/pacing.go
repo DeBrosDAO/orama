@@ -95,8 +95,31 @@ func (r *Runner) resolvePacer() (*pace.Pacer, error) {
 	return p, nil
 }
 
-// paceBefore waits for the tokens args spends beforehand.
-func (r *Runner) paceBefore(ctx context.Context, args []string) (*pacePlan, error) {
+// tokenEnvVar is the CLI's pre-issued credential (core/pkg/auth TokenEnvVar).
+// Given an API key rather than a token, the CLI exchanges it on
+// /v1/auth/token before its command runs: one credential request that
+// changes no file, so nothing after the run would see it.
+const tokenEnvVar = "ORAMA_TOKEN"
+
+// exchangesEnvToken reports whether env (KEY=VALUE, the last one winning, as
+// exec does) hands the CLI an ORAMA_TOKEN it will exchange: anything that is
+// not already a token (core/pkg/auth LooksLikeJWT).
+func exchangesEnvToken(env []string) bool {
+	value, set := "", false
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == tokenEnvVar {
+			value, set = strings.TrimSpace(v), true
+		}
+	}
+	if !set || value == "" {
+		return false
+	}
+	return strings.Count(value, ".") != 2 || !strings.HasPrefix(value, "ey")
+}
+
+// paceBefore waits for the tokens args spends beforehand. extraEnv is the
+// invocation's own additions to the runner's Env.
+func (r *Runner) paceBefore(ctx context.Context, args, extraEnv []string) (*pacePlan, error) {
 	p, err := r.resolvePacer()
 	if err != nil || p == nil {
 		return nil, err
@@ -107,6 +130,9 @@ func (r *Runner) paceBefore(ctx context.Context, args []string) (*pacePlan, erro
 	}
 	plan := &pacePlan{pacer: p, host: r.GatewayHost, cost: commandCost(args, r.noWallet),
 		credsPath: filepath.Join(r.Home, ConfigDirName, CredentialsFile)}
+	if exchangesEnvToken(append(append([]string{}, r.Env...), extraEnv...)) {
+		plan.cost.cred++
+	}
 	if plan.cost.challenge {
 		if r.Wallet == "" {
 			return nil, fmt.Errorf("refusing to run orama %s: it signs a challenge, and the runner has no Wallet to pace the per-wallet challenge bucket (set Runner.Wallet to the address its agent signs with)", cmdline)

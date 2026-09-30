@@ -195,8 +195,11 @@ the package starts. Pacing is automatic:
 - `oramacli`: before `auth login` (with a wallet: 2 address tokens + the
   runner's `Wallet` challenge bucket; on a `NoWallet` runner: 1, then 1 per
   `/v1/auth/device/token` poll as the CLI prints its progress dot) and
-  `auth approve` (2 + the approver's challenge bucket). Any other command may
-  renew its session (refresh or API-key exchange): when the HOME's
+  `auth approve` (2 + the approver's challenge bucket). A command whose
+  environment (`Runner.Env` plus `RunOpts.Env`) gives `ORAMA_TOKEN` an API key
+  rather than a token spends 1 beforehand, for the exchange on
+  `/v1/auth/token`, which changes no file. Any other command may renew its
+  session (refresh or API-key exchange): when the HOME's
   `.orama/credentials.json` changed, one address token is charged afterwards.
   Pacing targets `Runner.GatewayHost` (the env's gateway host) and
   `Runner.Wallet` (the address the runner's agent signs with); `ForState`

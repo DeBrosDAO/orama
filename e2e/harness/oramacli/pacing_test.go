@@ -168,3 +168,60 @@ func TestForState_setsPacingFields(t *testing.T) {
 		t.Fatal("unparseable URL has a host")
 	}
 }
+
+// A key in ORAMA_TOKEN is exchanged on /v1/auth/token before the command runs;
+// that request changes no file, so it was never charged, and a test running
+// eleven commands with a key in a row spent eleven unpaced credential requests
+// and was refused 429 (stagenet, 2026-09-30).
+func TestRun_envTokenKeyExchangeChargedBeforehand(t *testing.T) {
+	r, clk := pacedRunner(t, 1, 1)
+	r.Env = append(r.Env, tokenEnvVar+"=orama_rk_garbage")
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if _, err := r.Run(ctx, "namespace", "list"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One token a minute, burst one: the first exchange takes it, the second
+	// waits a minute for the next.
+	if clk.total() != time.Minute {
+		t.Fatalf("slept %s, want 1m (one exchange charged per command)", clk.total())
+	}
+}
+
+// A token in ORAMA_TOKEN is sent as it is: nothing is exchanged or charged.
+// RunOpts.Env overrides the runner's Env, as exec does with a later value.
+func TestRun_envTokenJWTIsNotCharged(t *testing.T) {
+	r, clk := pacedRunner(t, 1, 1)
+	r.Env = append(r.Env, tokenEnvVar+"=orama_rk_key")
+	ctx := context.Background()
+	jwt := RunOpts{Env: []string{tokenEnvVar + "=eyJhbGciOi.eyJzdWIiOi.c2ln"}}
+	for i := 0; i < 3; i++ {
+		if _, err := r.RunWith(ctx, jwt, "namespace", "list"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if clk.total() != 0 {
+		t.Fatalf("slept %s for commands that exchange nothing", clk.total())
+	}
+}
+
+func TestExchangesEnvToken(t *testing.T) {
+	cases := map[string]struct {
+		env  []string
+		want bool
+	}{
+		"none":         {nil, false},
+		"key":          {[]string{"ORAMA_TOKEN=orama_rk_x"}, true},
+		"garbage":      {[]string{"ORAMA_TOKEN=not-a-credential"}, true},
+		"jwt":          {[]string{"ORAMA_TOKEN=eyA.eyB.sig"}, false},
+		"empty":        {[]string{"ORAMA_TOKEN="}, false},
+		"later wins":   {[]string{"ORAMA_TOKEN=orama_rk_x", "ORAMA_TOKEN=eyA.eyB.sig"}, false},
+		"similar name": {[]string{"ORAMA_TOKEN_X=orama_rk_x"}, false},
+	}
+	for name, c := range cases {
+		if got := exchangesEnvToken(c.env); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}

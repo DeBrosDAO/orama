@@ -66,7 +66,7 @@ func (r *Runner) RunWith(ctx context.Context, opts RunOpts, args ...string) (Res
 		ctx, cancel = context.WithTimeout(ctx, DefaultBudget)
 		defer cancel()
 	}
-	plan, err := r.paceBefore(ctx, args)
+	plan, err := r.paceBefore(ctx, args, opts.Env)
 	if err != nil {
 		return Result{Args: args, Exit: -1}, err
 	}
