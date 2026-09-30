@@ -49,24 +49,35 @@ var slotHostname = regexp.MustCompile(`^ns[1-9][0-9]*$`)
 // the shape pkg/invite accepts for a server name.
 var dnsName = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
 
+// The cluster calls Read makes; tests replace them.
+var (
+	resolveNodes    = noderesolver.ResolveNodes
+	prepareNodeKeys = remotessh.PrepareNodeKeys
+	querySQL        = clusterops.QuerySQL
+)
+
 // Read returns the environment's delegations, read over SSH from its first
 // node (every node holds the same registry).
 func Read(env string) ([]Delegation, error) {
-	nodes, err := noderesolver.ResolveNodes(env)
+	nodes, err := resolveNodes(env)
 	if err != nil {
 		return nil, err
 	}
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("no nodes found for environment %q (register them with `orama node setup`)", env)
 	}
-	node := nodes[0]
-	cleanup, err := remotessh.PrepareNodeKeys([]inspector.Node{node})
+	// PrepareNodeKeys sets the key on the slice it is given; the node queried
+	// has to be that element, not a copy made before it (a copy has no key,
+	// and every run failed "no SSH key for …").
+	keyed := []inspector.Node{nodes[0]}
+	cleanup, err := prepareNodeKeys(keyed)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
+	node := keyed[0]
 
-	body, err := clusterops.QuerySQL(node, Query)
+	body, err := querySQL(node, Query)
 	if err != nil {
 		return nil, fmt.Errorf("read the nameserver slots from %s: %w", node.Host, err)
 	}
