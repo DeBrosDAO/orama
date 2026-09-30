@@ -33,6 +33,11 @@ type NodeReport struct {
 	// Traffic is filled in by the cluster gateway, which serves this node's
 	// requests, not by a collector: it is what the gateway counted in memory.
 	Traffic *TrafficReport `json:"traffic,omitempty"`
+
+	// RegistryDisownedTenants is filled in by the cluster gateway: the tenant
+	// namespaces on this node while the registry assigns it none of them, which
+	// pauses the orphan sweep and the boot restore's teardown.
+	RegistryDisownedTenants []string `json:"registry_disowned_tenants,omitempty"`
 }
 
 // --- System ---

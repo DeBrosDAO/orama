@@ -92,6 +92,9 @@ func (g *Gateway) startTelemetry() {
 // decorateNodeReport adds what only this gateway knows to its node's report.
 func (g *Gateway) decorateNodeReport(r *report.NodeReport) {
 	r.Traffic = g.TrafficSnapshot()
+	if g.registryDisownedTenants != nil {
+		r.RegistryDisownedTenants = g.registryDisownedTenants()
+	}
 }
 
 // telemetryFetcher asks peers' cluster gateways over the mesh, each request

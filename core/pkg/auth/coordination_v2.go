@@ -63,14 +63,16 @@ const (
 )
 
 // coordinationPayloadV2 is the exact string a v2 MAC covers: everything v1
-// covers, plus the SHA-256 of the body and the nonce. The label is the one
+// covers, plus the recipient's Host (the overlay ip:port the signer dialled),
+// the SHA-256 of the body and the nonce. The label is the one
 // SignACME's payload uses; the two are keyed differently, so a stamp for one
 // never verifies as the other.
-func coordinationPayloadV2(method, path, query string, body []byte, nonce string, ts int64) string {
+func coordinationPayloadV2(method, host, path, query string, body []byte, nonce string, ts int64) string {
 	sum := sha256.Sum256(body)
 	return strings.Join([]string{
 		"orama-coordination-v2",
 		strings.ToUpper(method),
+		strings.ToLower(host),
 		path,
 		query,
 		hex.EncodeToString(sum[:]),
@@ -101,11 +103,22 @@ func SignCoordination(key []byte, r *http.Request, now time.Time) error {
 	ts := now.Unix()
 
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(coordinationPayloadV2(r.Method, r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
+	mac.Write([]byte(coordinationPayloadV2(r.Method, requestHost(r), r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
 	r.Header.Set(CoordinationNonceHeader, nonce)
 	r.Header.Set(CoordinationMACV2Header, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(mac.Sum(nil)))
 	signCoordinationV1(key, r, now)
 	return nil
+}
+
+// requestHost is the host a request is addressed to: the Host a client sends
+// (r.Host, or the URL's when unset) and the Host a server receives (r.Host).
+// Coordination calls go straight to the node's overlay address, not through a
+// proxy, so signer and verifier see the same value.
+func requestHost(r *http.Request) string {
+	if r.Host != "" {
+		return r.Host
+	}
+	return r.URL.Host
 }
 
 // signableBody returns the bytes r will send, leaving r able to send them. It
@@ -131,6 +144,15 @@ func signableBody(r *http.Request) ([]byte, error) {
 func VerifyCoordination(key []byte, r *http.Request, now time.Time) bool {
 	_, ok := CheckCoordination(key, r, now)
 	return ok
+}
+
+// VerifyCoordinationV2 reports whether a request carries a valid v2 stamp. Use
+// it for a route whose parameters travel in the body or that changes what a
+// service points at: the v1 stamp does not cover the body, so a stripped-v2
+// replay with a swapped body would pass VerifyCoordination.
+func VerifyCoordinationV2(key []byte, r *http.Request, now time.Time) bool {
+	v, ok := CheckCoordination(key, r, now)
+	return ok && v == CoordinationV2
 }
 
 // CheckCoordination verifies a coordination request and says which stamp it
@@ -183,7 +205,7 @@ func verifyCoordinationV2(key []byte, r *http.Request, now time.Time) bool {
 		return false
 	}
 	expected := hmac.New(sha256.New, key)
-	expected.Write([]byte(coordinationPayloadV2(r.Method, r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
+	expected.Write([]byte(coordinationPayloadV2(r.Method, requestHost(r), r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
 	if !hmac.Equal(presented, expected.Sum(nil)) {
 		return false
 	}

@@ -277,6 +277,14 @@ orama node upgrade --env testnet --yes
 
 Upgrading from 0.122.x the first time: see [First upgrade from 0.122.x](#first-upgrade-from-0122x).
 
+**Pause namespace create and delete during a rolling upgrade.** Every namespace
+spawn action (and the secrets re-encrypt fan-out of `orama operator rotate-secrets`)
+needs the v2 coordination MAC, which a node still on the previous build does not
+send (see SECURITY.md, "Coordination MAC v2"). While the fleet is mixed, such a
+request from a not-yet-upgraded node to an upgraded one is refused `401`. After the last node is upgraded, check that
+`namespace_pending_cleanup` drains: a teardown refused in the window is recorded
+there and replayed by the tenant reconciler.
+
 ### Signed archives
 
 Nodes install only build archives signed by an address they trust. The list of

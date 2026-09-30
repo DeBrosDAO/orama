@@ -172,6 +172,7 @@ func (cm *ClusterManager) reapOrphanedTenants(ctx context.Context) error {
 	tenants := tenantsOnly(local)
 	if len(tenants) == 0 {
 		cm.confirmOrphans(nil)
+		cm.setRegistryDisowned(nil)
 		return nil
 	}
 
@@ -190,11 +191,13 @@ func (cm *ClusterManager) reapOrphanedTenants(ctx context.Context) error {
 	}
 	if registryDisownsEveryTenant(tenants, registered) {
 		cm.confirmOrphans(nil)
+		cm.setRegistryDisowned(tenants)
 		cm.logger.Error("Orphan sweep skipped: the registry assigns this node none of its tenant namespaces. That points at a wrong or rolled-back registry (an older snapshot, another cluster's database), not at every namespace having been deleted",
 			zap.Strings("local_namespaces", tenants), zap.Int("registry_clusters", clusters))
 		return nil
 	}
 
+	cm.setRegistryDisowned(nil)
 	var orphans []string
 	for _, ns := range tenants {
 		if !registered[ns] && !cm.isProvisioningLocally(ns) {
@@ -208,6 +211,7 @@ func (cm *ClusterManager) reapOrphanedTenants(ctx context.Context) error {
 // enough, at most orphanTeardownsPerPass of them. The rest keep their streak
 // and are taken on a later sweep.
 func (cm *ClusterManager) teardownOrphans(ctx context.Context, due []string) error {
+	due = cm.untriedFirst(due)
 	if len(due) > orphanTeardownsPerPass {
 		cm.logger.Warn("More namespaces are orphaned than one sweep tears down; the rest wait for the next sweep",
 			zap.Int("orphaned", len(due)), zap.Int("per_sweep", orphanTeardownsPerPass))
@@ -218,11 +222,73 @@ func (cm *ClusterManager) teardownOrphans(ctx context.Context, due []string) err
 		cm.logger.Warn("Tearing down a namespace the registry no longer assigns to this node: its units and data would otherwise start again on the next upgrade or reboot",
 			zap.String("namespace", ns),
 			zap.Int("consecutive_sweeps", orphanSweepsRequired))
-		if err := cm.teardownUnassigned(ctx, ns); err != nil {
+		err := cm.teardownUnassigned(ctx, ns)
+		cm.recordTeardown(ns, err)
+		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", ns, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// untriedFirst orders namespaces due for teardown so those whose last attempt
+// failed come after the rest, each group alphabetical. The per-pass cap takes a
+// prefix of this list: without the rotation, two namespaces whose teardown keeps
+// failing would take both slots of every pass and starve all the others.
+func (cm *ClusterManager) untriedFirst(due []string) []string {
+	cm.orphanMu.Lock()
+	defer cm.orphanMu.Unlock()
+	ordered := make([]string, 0, len(due))
+	var failed []string
+	for _, ns := range due {
+		if cm.teardownFailed[ns] {
+			failed = append(failed, ns)
+		} else {
+			ordered = append(ordered, ns)
+		}
+	}
+	return append(ordered, failed...)
+}
+
+// recordTeardown remembers whether the teardown of ns failed.
+func (cm *ClusterManager) recordTeardown(ns string, err error) {
+	cm.orphanMu.Lock()
+	defer cm.orphanMu.Unlock()
+	if err == nil {
+		delete(cm.teardownFailed, ns)
+		return
+	}
+	if cm.teardownFailed == nil {
+		cm.teardownFailed = make(map[string]bool)
+	}
+	cm.teardownFailed[ns] = true
+}
+
+// setRegistryDisowned records the outcome of a sweep's check of the registry
+// against the node's tenants: the tenants it disowns entirely, or nil.
+func (cm *ClusterManager) setRegistryDisowned(tenants []string) {
+	cm.orphanMu.Lock()
+	defer cm.orphanMu.Unlock()
+	if len(tenants) == 0 {
+		cm.disownedTenants, cm.disownedStreak = nil, 0
+		return
+	}
+	cm.disownedTenants = append([]string(nil), tenants...)
+	cm.disownedStreak++
+}
+
+// RegistryDisownedTenants returns the tenant namespaces on this node while the
+// registry has disowned every one of them on orphanSweepsRequired consecutive
+// sweeps, else nil. The orphan sweep and the boot restore do nothing in that
+// state, so it is surfaced to the operator through the node's telemetry report
+// (a monitor alert) instead of only a log line every minute.
+func (cm *ClusterManager) RegistryDisownedTenants() []string {
+	cm.orphanMu.Lock()
+	defer cm.orphanMu.Unlock()
+	if cm.disownedStreak < orphanSweepsRequired {
+		return nil
+	}
+	return append([]string(nil), cm.disownedTenants...)
 }
 
 // confirmOrphans records which namespaces this sweep found orphaned and returns

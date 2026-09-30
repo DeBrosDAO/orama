@@ -300,3 +300,17 @@ func TestStatusHandler_variesOnAccept(t *testing.T) {
 		t.Fatal("/status negotiates on Accept without Vary: Accept")
 	}
 }
+
+func TestDecorateNodeReport_carriesTheDisownedTenants(t *testing.T) {
+	g := &Gateway{}
+	r := &report.NodeReport{}
+	g.decorateNodeReport(r)
+	if r.RegistryDisownedTenants != nil {
+		t.Fatalf("got %v without a source", r.RegistryDisownedTenants)
+	}
+	g.SetRegistryDisownedSource(func() []string { return []string{"acme"} })
+	g.decorateNodeReport(r)
+	if len(r.RegistryDisownedTenants) != 1 || r.RegistryDisownedTenants[0] != "acme" {
+		t.Fatalf("got %v", r.RegistryDisownedTenants)
+	}
+}

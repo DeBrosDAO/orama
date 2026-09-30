@@ -94,18 +94,64 @@ func TestOwnedDeploymentInstances_noDeploymentsDirectory(t *testing.T) {
 	}
 }
 
-func TestOwnedDeploymentInstances_corruptMarkerIsAnError(t *testing.T) {
-	m, _ := newFakeManager(t)
-	m.deploymentsBase = t.TempDir()
-	dir := filepath.Join(m.deploymentsBase, "acme-web")
+func writeMarker(t *testing.T, m *Manager, instance, content string) {
+	t.Helper()
+	dir := filepath.Join(m.deploymentsDir(), instance)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, deployOwnerMarkerName), []byte("{not json"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, deployOwnerMarkerName), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A corrupt marker in a directory that could be this namespace's is an error:
+// it may be the one that says the deployment is ours.
+func TestOwnedDeploymentInstances_corruptMarkerOfACandidateIsAnError(t *testing.T) {
+	m, _ := newFakeManager(t)
+	m.deploymentsBase = t.TempDir()
+	writeMarker(t, m, "acme-web", "{not json")
 	if _, err := m.OwnedDeploymentInstances("acme"); err == nil {
 		t.Fatal("an unreadable owner marker was skipped: its deployment could survive the teardown unnoticed")
+	}
+}
+
+// Another tenant's corrupt marker must not block this namespace's teardown.
+func TestOwnedDeploymentInstances_corruptMarkerOfAnotherTenantIsSkipped(t *testing.T) {
+	m, _ := newFakeManager(t)
+	m.deploymentsBase = t.TempDir()
+	writeMarker(t, m, "zeta-web", "{not json")
+	seedDeployment(t, m, "acme", "web", "acme-web")
+	got, err := m.OwnedDeploymentInstances("acme")
+	if err != nil {
+		t.Fatalf("another tenant's bad marker blocked the teardown: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"acme-web"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestOwnedDeploymentInstances_dotsInTheNamespaceAreHyphensInTheInstance(t *testing.T) {
+	m, _ := newFakeManager(t)
+	m.deploymentsBase = t.TempDir()
+	writeMarker(t, m, "my-ns-web", "{not json")
+	if _, err := m.OwnedDeploymentInstances("my.ns"); err == nil {
+		t.Fatal("a candidate directory of a dotted namespace was skipped")
+	}
+}
+
+// A marker that is a symlink is not followed: it names no owner.
+func TestReadDeployOwnerMarker_doesNotFollowASymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "real")
+	if err := os.WriteFile(target, []byte(`{"namespace":"acme","name":"web"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, deployOwnerMarkerName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readDeployOwnerMarker(dir); err == nil {
+		t.Fatal("a symlinked marker was read")
 	}
 }
 

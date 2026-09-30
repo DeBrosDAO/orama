@@ -157,3 +157,40 @@ func TestReplayCache_boundedAndExpires(t *testing.T) {
 		t.Fatal("an expired nonce stayed remembered")
 	}
 }
+
+func TestVerifyCoordinationV2_refusesV1Only(t *testing.T) {
+	key := v2Key(t)
+	r := httptest.NewRequest(http.MethodPost, "/v1/internal/secrets/reencrypt", bytes.NewReader([]byte(`{"root":"attacker"}`)))
+	if err := SignCoordination(key, r, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !VerifyCoordination(key, r, time.Now()) {
+		t.Fatal("a fully stamped request does not verify")
+	}
+	r2 := httptest.NewRequest(http.MethodPost, "/v1/internal/secrets/reencrypt", bytes.NewReader([]byte(`{"root":"attacker"}`)))
+	r2.Header = r.Header.Clone()
+	r2.Header.Del(CoordinationMACV2Header)
+	r2.Header.Del(CoordinationNonceHeader)
+	if !VerifyCoordination(key, r2, time.Now()) {
+		t.Fatal("v1 stamp no longer verifies under VerifyCoordination")
+	}
+	if VerifyCoordinationV2(key, r2, time.Now()) {
+		t.Fatal("a stripped-v2 request verified under VerifyCoordinationV2")
+	}
+}
+
+func TestVerifyCoordinationV2_bindsTheRecipientHost(t *testing.T) {
+	key := v2Key(t)
+	r := httptest.NewRequest(http.MethodPost, "http://10.0.0.1:6001/x", bytes.NewReader([]byte("b")))
+	if err := SignCoordination(key, r, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r.Host = "10.0.0.2:6001"
+	if VerifyCoordinationV2(key, r, time.Now()) {
+		t.Fatal("a stamp signed for 10.0.0.1 verified at 10.0.0.2")
+	}
+	r.Host = "10.0.0.1:6001"
+	if !VerifyCoordinationV2(key, r, time.Now()) {
+		t.Fatal("the stamp does not verify at the host it was signed for")
+	}
+}

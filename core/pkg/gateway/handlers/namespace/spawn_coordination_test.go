@@ -15,7 +15,10 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/auth"
 )
 
-const coordTestSecret = "ab"
+const (
+	coordTestSecret = "ab"
+	coordTestNodeID = "n1"
+)
 
 func coordHandler(t *testing.T) (*SpawnHandler, []byte) {
 	t.Helper()
@@ -28,7 +31,7 @@ func coordHandler(t *testing.T) (*SpawnHandler, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewSpawnHandler(nil, path, zap.NewNop()), key
+	return NewSpawnHandler(nil, path, coordTestNodeID, zap.NewNop()), key
 }
 
 func spawnRequestWith(t *testing.T, key []byte, body string) *http.Request {
@@ -76,43 +79,46 @@ func TestSpawnHandler_refusesAReplayedRequest(t *testing.T) {
 	}
 }
 
-// A node still on the previous build stamps v1 only. That is accepted for a
-// request that only starts something, and refused for anything that removes.
-func TestSpawnHandler_v1StampOnlyForNonDestructiveActions(t *testing.T) {
+// Every spawn action carries its parameters in the body (DSNs, peer addresses,
+// TURN and encryption secrets), which the v1 stamp does not cover: a request
+// stamped only with v1 is refused for every action, so a captured stamp cannot
+// be replayed with a swapped body.
+func TestSpawnHandler_v1StampRefusedForEveryAction(t *testing.T) {
 	h, key := coordHandler(t)
-	for _, tc := range []struct {
-		body string
-		want int
-	}{
-		{`{"action":"teardown-namespace","namespace":"index","node_id":"n1"}`, http.StatusUnauthorized},
-		{`{"action":"stop-rqlite","namespace":"mine","node_id":"n1"}`, http.StatusUnauthorized},
-		{`{"action":"delete-cluster-state","namespace":"mine","node_id":"n1"}`, http.StatusUnauthorized},
-		{`{"action":"spawn-olric","namespace":"mine","node_id":"n1"}`, http.StatusBadRequest},
+	for _, action := range []string{
+		"teardown-namespace", "stop-rqlite", "delete-cluster-state",
+		"spawn-olric", "spawn-gateway", "restart-gateway", "spawn-sfu", "save-cluster-state", "spawn-rqlite",
 	} {
-		r := spawnRequestWith(t, key, tc.body)
+		r := spawnRequestWith(t, key, `{"action":"`+action+`","namespace":"mine","node_id":"n1"}`)
 		r.Header.Del(auth.CoordinationMACV2Header)
 		r.Header.Del(auth.CoordinationNonceHeader)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
-		if w.Code != tc.want {
-			t.Errorf("v1 %s: status %d, want %d: %s", tc.body, w.Code, tc.want, w.Body.String())
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("v1 %s: status %d, want 401: %s", action, w.Code, w.Body.String())
 		}
 	}
 }
 
-func TestRequiresBodyBoundMAC(t *testing.T) {
-	for action, want := range map[string]bool{
-		"teardown-namespace": true, "teardown-sfu": true, "teardown-turn": true,
-		"stop-rqlite": true, "stop-olric": true, "stop-gateway": true, "stop-sfu": true, "stop-turn": true,
-		"delete-cluster-state": true, "unknown-action": true, "": true,
-		"spawn-olric": false, "spawn-gateway": false, "restart-gateway": false,
-		"spawn-sfu": false, "save-cluster-state": false, "spawn-rqlite": false,
-	} {
-		if got := requiresBodyBoundMAC(&SpawnRequest{Action: action}); got != want {
-			t.Errorf("%q: %v, want %v", action, got, want)
-		}
+// A v2 teardown captured on its way to node A must not act on node B: the node
+// id in the body has to be this node's, and the MAC covers the Host it dialled.
+func TestSpawnHandler_refusesARequestForAnotherNode(t *testing.T) {
+	h, key := coordHandler(t)
+	r := spawnRequestWith(t, key, `{"action":"teardown-namespace","namespace":"mine","node_id":"other-node"}`)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403: %s", w.Code, w.Body.String())
 	}
-	if !requiresBodyBoundMAC(&SpawnRequest{Action: "spawn-rqlite", RQLiteFreshStart: true}) {
-		t.Error("a fresh-start spawn-rqlite accepted under v1")
+}
+
+func TestSpawnHandler_refusesAStampForAnotherHost(t *testing.T) {
+	h, key := coordHandler(t)
+	r := spawnRequestWith(t, key, `{"action":"teardown-namespace","namespace":"mine","node_id":"n1"}`)
+	r.Host = "10.0.0.9:6001"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401: %s", w.Code, w.Body.String())
 	}
 }

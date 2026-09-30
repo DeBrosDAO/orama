@@ -263,9 +263,11 @@ func (h *Handlers) EvictHandler(w http.ResponseWriter, r *http.Request) {
 // coordination MAC made with the cluster secret (pkg/auth/coordination.go) AND
 // originate from the WireGuard mesh. The overlay alone is no credential — every
 // tenant's services are on it, so any local process on a node could otherwise
-// evict any namespace's blobs from a peer. The MAC covers method, path, query
-// (the CID), the body, a single-use nonce and a timestamp, so it cannot be
-// replayed onto another CID or, past the skew window, at all.
+// evict any namespace's blobs from a peer. Both stamps are accepted: the only
+// parameter that is acted on, the CID, is in the query, which the v1 MAC covers
+// with the method, path and a timestamp, so it cannot be replayed onto another
+// CID or, past the skew window, at all. (The body repeats the CID and is not
+// read.) A route that acts on its body must use the v2-only check instead.
 func (h *Handlers) isInternalStorageRequest(r *http.Request) bool {
 	if !auth.IsWireGuardPeer(r.RemoteAddr) {
 		return false

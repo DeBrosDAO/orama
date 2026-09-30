@@ -52,3 +52,14 @@ func TestCheckNodeTor_legacyAnyone(t *testing.T) {
 		t.Errorf("expected one Anyone-leftover alert, got %v", alerts)
 	}
 }
+
+func TestCheckNodeNamespaces_registryDisownsEveryTenant(t *testing.T) {
+	if alerts := checkNodeNamespaces(&report.NodeReport{}, "10.0.0.1"); len(alerts) != 0 {
+		t.Fatalf("a node with no disowned tenants alerted: %v", alerts)
+	}
+	r := &report.NodeReport{RegistryDisownedTenants: []string{"acme", "zeta"}}
+	alerts := checkNodeNamespaces(r, "10.0.0.1")
+	if len(alerts) != 1 || alerts[0].Severity != AlertCritical || !strings.Contains(alerts[0].Message, "acme, zeta") {
+		t.Fatalf("got %v, want one critical alert naming the tenants", alerts)
+	}
+}

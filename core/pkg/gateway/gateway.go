@@ -269,6 +269,10 @@ type Gateway struct {
 
 	// WebRTC manager for enable/disable operations
 	webrtcManager authhandlers.WebRTCManager
+	// registryDisownedTenants reports the tenants the namespace registry has
+	// disowned on this node, for the telemetry report (nil when namespace
+	// provisioning is not enabled).
+	registryDisownedTenants func() []string
 
 	// Circuit breakers for proxy targets (per-target failure tracking)
 	circuitBreakers *CircuitBreakerRegistry
@@ -1087,6 +1091,12 @@ func (g *Gateway) SetNodeRecoverer(nr authhandlers.NodeRecoverer) {
 	g.nodeRecoverer = nr
 }
 
+// SetRegistryDisownedSource sets where the node's telemetry report learns that
+// the namespace registry disowns every tenant on this node.
+func (g *Gateway) SetRegistryDisownedSource(fn func() []string) {
+	g.registryDisownedTenants = fn
+}
+
 // SetWebRTCManager sets the WebRTC lifecycle manager for enable/disable operations.
 func (g *Gateway) SetWebRTCManager(wm authhandlers.WebRTCManager) {
 	g.webrtcManager = wm
@@ -1374,7 +1384,8 @@ func (g *Gateway) namespaceClusterStatusHandler(w http.ResponseWriter, r *http.R
 
 // namespaceClusterRepairHandler handles POST /v1/internal/namespace/repair?namespace={name}
 // This endpoint repairs under-provisioned namespace clusters by adding missing nodes.
-// Internal-only: authenticated by X-Orama-Internal-Auth header.
+// Internal-only: authenticated by the coordination MAC; every parameter is in
+// the query, which the v1 stamp covers.
 func (g *Gateway) namespaceClusterRepairHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

@@ -109,34 +109,41 @@ type SpawnHandler struct {
 	// read per request rather than at construction so that a node whose secret
 	// is rotated does not have to be restarted to accept coordination calls.
 	clusterSecretPath string
+	// nodeID is this node's peer ID. A spawn request is addressed to one node by
+	// the node_id in its body; a request for any other node is refused, so a
+	// stamped request captured on its way to one node cannot act on another.
+	nodeID string
 }
 
 // NewSpawnHandler creates a new spawn handler
-func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, clusterSecretPath string, logger *zap.Logger) *SpawnHandler {
+func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, clusterSecretPath, nodeID string, logger *zap.Logger) *SpawnHandler {
 	return &SpawnHandler{
 		systemdSpawner:    systemdSpawner,
 		clusterSecretPath: clusterSecretPath,
+		nodeID:            nodeID,
 		logger:            logger.With(zap.String("component", "namespace-spawn-handler")),
 	}
 }
 
 // verifyCoordination reports whether this spawn request came from inside the
-// cluster. See pkg/auth/coordination.go.
-func (h *SpawnHandler) verifyCoordination(r *http.Request) (auth.CoordinationVersion, bool) {
+// cluster. See pkg/auth/coordination.go. Only the v2 stamp is accepted: every
+// spawn action carries its parameters in the body (DSNs, peer addresses, TURN
+// and encryption secrets), which the v1 stamp does not cover.
+func (h *SpawnHandler) verifyCoordination(r *http.Request) bool {
 	if !auth.IsWireGuardPeer(r.RemoteAddr) {
-		return 0, false
+		return false
 	}
 	secret, err := os.ReadFile(h.clusterSecretPath)
 	if err != nil {
 		h.logger.Error("cannot read the cluster secret, so no coordination request can be authenticated",
 			zap.String("path", h.clusterSecretPath), zap.Error(err))
-		return 0, false
+		return false
 	}
 	key, err := auth.CoordinationKey(string(secret))
 	if err != nil {
-		return 0, false
+		return false
 	}
-	return auth.CheckCoordination(key, r, time.Now())
+	return auth.VerifyCoordinationV2(key, r, time.Now())
 }
 
 // ServeHTTP implements http.Handler
@@ -154,8 +161,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//
 	// The action and the namespace are in the body, so verification reads it
 	// (bounded, and restored for the decode below) and the v2 MAC covers it.
-	version, ok := h.verifyCoordination(r)
-	if !ok {
+	if !h.verifyCoordination(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -166,15 +172,15 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "invalid request body"})
 		return
 	}
-	if version == auth.CoordinationV1 && requiresBodyBoundMAC(&req) {
-		h.logger.Warn("refused a spawn request stamped only with the v1 coordination MAC",
-			zap.String("action", req.Action), zap.String("namespace", req.Namespace))
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	if req.Namespace == "" || req.NodeID == "" {
 		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "namespace and node_id are required"})
+		return
+	}
+	if req.NodeID != h.nodeID {
+		h.logger.Warn("refused a spawn request addressed to another node",
+			zap.String("action", req.Action), zap.String("namespace", req.Namespace),
+			zap.String("request_node_id", req.NodeID), zap.String("this_node_id", h.nodeID))
+		writeSpawnResponse(w, http.StatusForbidden, SpawnResponse{Error: "node_id is not this node"})
 		return
 	}
 	if err := req.validate(); err != nil {

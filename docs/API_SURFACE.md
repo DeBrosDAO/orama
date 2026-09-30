@@ -264,7 +264,7 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 | `/v1/internal/deployments/replica/update` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/join` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/namespace/repair` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/secrets/reencrypt` | internal | Index fans out `orama operator rotate-secrets` to each namespace gateway. Coordination MAC + overlay. |
+| `/v1/internal/secrets/reencrypt` | internal | Index fans out `orama operator rotate-secrets` to each namespace gateway. Coordination MAC, v2 only (the new root key is in the body), + overlay. |
 | `/v1/internal/namespace/spawn` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/node/enrol-key` | internal | From the node's own process over loopback, stamped with the node's libp2p identity key. Refused from off the host. |
 | `/v1/internal/node/heartbeat` | internal | From the node's own process over loopback, stamped with the key that node enrolled. Refused from off the host. |

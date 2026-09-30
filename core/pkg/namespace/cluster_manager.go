@@ -118,6 +118,15 @@ type ClusterManager struct {
 	// registry (reapOrphanedTenants).
 	orphanMu     sync.Mutex
 	orphanStreak map[string]int
+	// teardownFailed is the set of namespaces whose teardown failed on the last
+	// pass that attempted them; the next pass tries the others first so a
+	// namespace that keeps failing cannot starve the rest under the cap.
+	teardownFailed map[string]bool
+	// disownedTenants is the tenant list of the last sweep that found the
+	// registry disowning every one of them, and disownedStreak how many
+	// consecutive sweeps did (RegistryDisownedTenants).
+	disownedTenants []string
+	disownedStreak  int
 
 	// bootTeardowns counts the namespaces the boot restore has torn down
 	// (restoreAssigned), capped at orphanTeardownsPerPass. Read and written by

@@ -58,6 +58,12 @@ func checkNodeProcesses(r *report.NodeReport, host string) []Alert {
 
 func checkNodeNamespaces(r *report.NodeReport, host string) []Alert {
 	var alerts []Alert
+	if n := len(r.RegistryDisownedTenants); n > 0 {
+		alerts = append(alerts, Alert{AlertCritical, "namespace", host,
+			fmt.Sprintf("Registry assigns this node none of its %d tenant namespaces (%s); orphan teardown and boot-restore teardown are paused. "+
+				"Check the registry is the right cluster's database first; see docs/ARCHITECTURE.md, \"A removed namespace is removed, not stopped\"",
+				n, strings.Join(r.RegistryDisownedTenants, ", "))})
+	}
 	for _, ns := range r.Namespaces {
 		if !ns.GatewayUp {
 			alerts = append(alerts, Alert{AlertWarning, "namespace", host,

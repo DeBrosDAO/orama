@@ -3,6 +3,7 @@ package gateway
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,5 +95,38 @@ func TestNamespaceClusterRepairHandler_refusesAnUnsignedRequest(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status %d, want 401", w.Code)
+	}
+}
+
+// The reencrypt route carries the new root key material in its body, which the
+// v1 stamp does not cover: a stripped-v2 replay with an attacker-chosen root
+// must be refused before the body is read.
+func TestHandleInternalReencrypt_requiresTheV2Stamp(t *testing.T) {
+	g := coordinationGateway("a cluster secret")
+	key, _ := nodeauth.CoordinationKey("a cluster secret")
+	body := `{"root":{"current_ikm":"attacker"}}`
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/internal/secrets/reencrypt", strings.NewReader(body))
+	r.RemoteAddr = "10.0.0.7:41000"
+	if err := nodeauth.SignCoordination(key, r, time.Now()); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	r.Header.Del(nodeauth.CoordinationMACV2Header)
+	r.Header.Del(nodeauth.CoordinationNonceHeader)
+	w := httptest.NewRecorder()
+	g.handleInternalReencrypt(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("v1-only reencrypt: status %d, want 401: %s", w.Code, w.Body.String())
+	}
+
+	r = httptest.NewRequest(http.MethodPost, "/v1/internal/secrets/reencrypt", strings.NewReader(body))
+	r.RemoteAddr = "10.0.0.7:41000"
+	if err := nodeauth.SignCoordination(key, r, time.Now()); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	w = httptest.NewRecorder()
+	g.handleInternalReencrypt(w, r)
+	if w.Code == http.StatusUnauthorized {
+		t.Fatalf("a v2-stamped reencrypt was refused: %s", w.Body.String())
 	}
 }

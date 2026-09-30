@@ -18,15 +18,27 @@ import (
 //
 // See pkg/auth/coordination.go for what the MAC covers.
 func (g *Gateway) verifyCoordination(r *http.Request) bool {
-	if !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
-		return false
-	}
-	if g.cfg == nil {
-		return false
+	key, ok := g.coordinationKey(r)
+	return ok && nodeauth.VerifyCoordination(key, r, time.Now())
+}
+
+// verifyCoordinationV2 is verifyCoordination for a route whose parameters
+// travel in the body: only the v2 stamp, which covers the body, recipient and a
+// single-use nonce, is accepted. The v1 stamp covers none of those, so a
+// stripped-v2 replay with a swapped body would otherwise verify.
+func (g *Gateway) verifyCoordinationV2(r *http.Request) bool {
+	key, ok := g.coordinationKey(r)
+	return ok && nodeauth.VerifyCoordinationV2(key, r, time.Now())
+}
+
+// coordinationKey is the MAC key for a request that arrived over the overlay.
+func (g *Gateway) coordinationKey(r *http.Request) ([]byte, bool) {
+	if !nodeauth.IsWireGuardPeer(r.RemoteAddr) || g.cfg == nil {
+		return nil, false
 	}
 	key, err := nodeauth.CoordinationKey(g.cfg.ClusterSecret)
 	if err != nil {
-		return false
+		return nil, false
 	}
-	return nodeauth.VerifyCoordination(key, r, time.Now())
+	return key, true
 }

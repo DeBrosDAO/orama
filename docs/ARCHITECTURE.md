@@ -437,7 +437,14 @@ on the namespace name. An instance name is `<namespace>-<name>` with dots as
 hyphens and cannot be split back: tearing down `acme` with a glob on `acme-*`
 also stopped and disabled `acme-corp`'s deployments. Only instances whose marker
 names the namespace are stopped and disabled (`orama-deploy-*@<instance>`); a
-directory with no marker belongs to nobody that can be named and is left alone.
+directory with no marker belongs to nobody that can be named and is left alone
+(logged at warn). A marker that cannot be read or parsed (or is a symlink: it is
+opened without following links) belongs to a directory whose instance name may
+not be this namespace's: when the name does not start with this namespace's
+instance prefix (`<namespace>-`, dots as hyphens) it is skipped with a warning, so
+one tenant's bad marker does not block every other namespace's teardown; when it
+does, the read fails the teardown, because that marker may be the one that names
+this namespace.
 A deployment unit that cannot be stopped or disabled fails the teardown like
 any other unit.
 
@@ -490,6 +497,30 @@ namespace is restored, with a warning or an error. A node that is upgraded while
 still holding a namespace deleted by an older release starts it for up to two
 sweeps (about two minutes) before the orphan sweep removes it: the upgrade
 cannot ask the registry, and this is the only window.
+
+The per-sweep cap rotates: a namespace whose teardown failed on the last pass is
+tried after the ones that did not fail, so two orphans that keep failing cannot
+take both slots every pass and starve the rest.
+
+**When the registry disowns every tenant on the node** the sweep and the boot
+restore tear nothing down (above), and a node left in that state would do so
+silently for ever. After two consecutive sweeps the node's telemetry report
+carries `registry_disowned_tenants` and `orama monitor report` raises a critical
+`namespace` alert naming them. Recovery depends on which side is wrong:
+
+1. The registry is wrong (restored from an older snapshot by `recover-raft`, or
+   this node points at another cluster's database): fix the registry — restore
+   the right database, repoint the node — and remove nothing. The sweep resumes
+   on its own within a minute once the registry assigns the node a tenant, and the
+   alert clears.
+2. The registry is right and these are leftovers of namespaces that were deleted
+   while this node was down: if they are still in the registry's `namespaces`
+   table (an owner who can no longer delete them), remove each with
+   `orama cluster namespace remove <namespace> --reason <why>`. A node left with
+   one tenant is no longer covered by the disown guard, so the sweep takes the
+   last one itself under the two-sweep rule. There is no CLI that tears down a
+   namespace the registry has no record of at all; that needs an operator on the
+   node, deciding against the registry first.
 
 **One writer for membership.** A node's existence is recorded in five places —
 `dns_nodes`, `wireguard_peers`, the index raft configuration, ipfs-cluster's

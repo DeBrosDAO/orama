@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -23,6 +24,7 @@ type orphanHarness struct {
 	tornDown   []string
 	purged     map[string]bool // namespaces torn down with their tenant data
 	teardownEr error
+	failNS     map[string]bool // namespaces whose teardown fails
 	assigned   int // rows of the restore self-check's count
 	// nsClusters is how many clusters of the namespace the registry holds; the
 	// default 0 means the namespace was deleted.
@@ -65,6 +67,9 @@ func newOrphanHarness(local, registered []string, clusters int) *orphanHarness {
 		teardownLocalFn: func(_ context.Context, ns string, purge bool) error {
 			if h.teardownEr != nil {
 				return h.teardownEr
+			}
+			if h.failNS[ns] {
+				return errors.New("unit will not stop")
 			}
 			h.tornDown = append(h.tornDown, ns)
 			h.purged[ns] = purge
@@ -447,5 +452,48 @@ func TestOrphanRegistryReads_goThroughTheRegistryHandle(t *testing.T) {
 		if !seen[q] {
 			t.Errorf("registry read not issued through cm.db: %.60s", q)
 		}
+	}
+}
+
+// Two orphans whose teardown keeps failing must not take both slots of every
+// pass: the namespaces that did not fail last time are attempted first.
+func TestReapOrphanedTenants_aFailingTeardownDoesNotStarveTheOthers(t *testing.T) {
+	h := newOrphanHarness([]string{"a", "b", "c", "d", "kept"}, []string{"kept"}, 3)
+	h.failNS = map[string]bool{"a": true, "b": true}
+	h.sweep(t)
+	if err := h.sweep(t); err == nil {
+		t.Fatal("the failing teardowns were not reported")
+	}
+	if len(h.tornDown) != 0 {
+		t.Fatalf("torn down = %v, want a and b attempted and failed", h.tornDown)
+	}
+	if err := h.sweep(t); err != nil && !strings.Contains(err.Error(), "a:") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sort.Strings(h.tornDown)
+	if !reflect.DeepEqual(h.tornDown, []string{"c", "d"}) {
+		t.Fatalf("torn down = %v, want c and d taken while a and b keep failing", h.tornDown)
+	}
+}
+
+// The registry disowning every tenant pauses teardown; that has to reach the
+// operator (the node report) once it persists, and clear when it heals.
+func TestRegistryDisownedTenants_persistsThenClears(t *testing.T) {
+	h := newOrphanHarness([]string{"x", "y"}, []string{"other"}, 3)
+	h.sweep(t)
+	if got := h.cm.RegistryDisownedTenants(); got != nil {
+		t.Fatalf("reported after one sweep: %v", got)
+	}
+	h.sweep(t)
+	if got := h.cm.RegistryDisownedTenants(); !reflect.DeepEqual(got, []string{"x", "y"}) {
+		t.Fatalf("got %v, want both tenants after %d sweeps", got, orphanSweepsRequired)
+	}
+	if len(h.tornDown) != 0 {
+		t.Fatalf("torn down = %v while the registry disowns everything", h.tornDown)
+	}
+	h.registered = []string{"x"}
+	h.sweep(t)
+	if got := h.cm.RegistryDisownedTenants(); got != nil {
+		t.Fatalf("still reported after the registry assigned a tenant: %v", got)
 	}
 }

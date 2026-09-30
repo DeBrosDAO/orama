@@ -153,7 +153,9 @@ func (g *Gateway) handleInternalReencrypt(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if !g.verifyCoordination(r) {
+	// The new root key material is in the body, so only the stamp that covers
+	// the body will do.
+	if !g.verifyCoordinationV2(r) {
 		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
 		return
 	}

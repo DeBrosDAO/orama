@@ -106,7 +106,7 @@ func TestSpawnHandler_refusesAnInvalidRequestBeforeSpawning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewSpawnHandler(nil, secretPath, zap.NewNop())
+	h := NewSpawnHandler(nil, secretPath, "12D3KooWQmExamplePeerID", zap.NewNop())
 
 	bad := validRQLiteSpawn()
 	bad.Namespace = "../../../opt/orama/.orama/secrets"
@@ -176,7 +176,7 @@ func TestSpawnHandler_teardownRefusesThePlatformNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewSpawnHandler(nil, secretPath, zap.NewNop())
+	h := NewSpawnHandler(nil, secretPath, "node-1", zap.NewNop())
 
 	for _, tc := range []struct{ action, ns string }{
 		{"teardown-namespace", "index"}, {"teardown-namespace", "nameserver"}, {"teardown-namespace", "system"},
