@@ -3,6 +3,7 @@
 package authdevices
 
 import (
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -213,6 +214,10 @@ func TestDeviceLogin_expires(t *testing.T) {
 			return true, nil
 		case "authorization_pending":
 			return false, nil
+		case "slow_down":
+			// RFC 8628: the poller is told to back off, not that the login
+			// failed. The next tick is a full expiryPollEvery away.
+			return false, fmt.Errorf("slow_down")
 		default:
 			return false, eventually.Stop(&gw.StatusError{Path: pathDeviceToken, Status: resp.Status, Body: string(resp.Body)})
 		}

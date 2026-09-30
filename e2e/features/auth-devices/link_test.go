@@ -25,21 +25,26 @@ type pending struct {
 // approveLink is POST /v1/auth/devices/approve from an active device's session.
 func approveLink(t testing.TB, c *gw.Client, bearer string, approver *wallet.Device, namespace, userCode string) *gw.Response {
 	t.Helper()
+	// A device proof carries its issue time and the gateway accepts it for a
+	// short window: the pacer's wait for this request's token comes first, and
+	// the proof is built only after it, so it is fresh when it is sent.
+	paid := prepay(t, c)
 	body := map[string]any{"user_code": userCode}
 	if approver != nil {
 		body["device_proof"] = proof(t, approver, wallet.ProofApprove, namespace, userCode)
 	}
-	return postJSON(t, c, pathLinkApprove, bearer, body)
+	return postJSON(t, paid, pathLinkApprove, bearer, body)
 }
 
 // claim collects a linked session with the new device's proof over the code.
 func claim(t testing.TB, c *gw.Client, dev *wallet.Device, namespace, deviceCode string) *gw.Response {
 	t.Helper()
+	paid := prepay(t, c)
 	var p *wallet.Proof
 	if dev != nil {
 		p = proof(t, dev, wallet.ProofClaim, namespace, deviceCode)
 	}
-	return poll(t, c, deviceCode, p)
+	return poll(t, paid, deviceCode, p)
 }
 
 // TestSessionPolicy_approvalPendsANewDevice: under `approval` an account's

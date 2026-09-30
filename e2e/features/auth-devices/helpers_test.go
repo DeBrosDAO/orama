@@ -145,6 +145,17 @@ func proof(t testing.TB, d *wallet.Device, action, namespace, binding string) *w
 	return p
 }
 
+// prepay takes the pacer token of the one credential request about to be
+// sent and returns a client that sends it without waiting again.
+func prepay(t testing.TB, c *gw.Client) *gw.Client {
+	t.Helper()
+	paid, err := c.Prepay(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return paid
+}
+
 // whoamiStatus is GET /v1/auth/whoami's status for bearer on c.
 func whoamiStatus(t testing.TB, c *gw.Client, bearer string) (int, string) {
 	t.Helper()
