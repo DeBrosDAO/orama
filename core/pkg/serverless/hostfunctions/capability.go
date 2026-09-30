@@ -69,6 +69,15 @@ func (h *HostFunctions) RevokeCapability(ctx context.Context, token string) erro
 		return capabilityErr("capability_revoke", errNoCapabilityIssuer)
 	}
 	if err := h.capabilityIssuer.Revoke(ctx, cur.Namespace, token); err != nil {
+		if errors.Is(err, serverless.ErrCapabilityUnavailable) {
+			// The function gets the constant; the cause names why the
+			// registry could not be reached, and stays in the log.
+			if h.logger != nil {
+				h.logger.Error("capability revoke could not reach the revocation list",
+					zap.String("namespace", cur.Namespace), zap.Error(err))
+			}
+			return capabilityErr("capability_revoke", serverless.ErrCapabilityUnavailable)
+		}
 		return capabilityErr("capability_revoke", err)
 	}
 	return nil

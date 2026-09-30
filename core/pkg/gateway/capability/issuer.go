@@ -56,7 +56,8 @@ func (i *Issuer) Revoke(ctx context.Context, namespace, token string) error {
 	}
 	revoked, err := i.revocations.Denies(claims.RevocationClaims(), nil)
 	if err != nil {
-		return fmt.Errorf("check whether capability %s in %q is already revoked: %w", claims.ID, namespace, err)
+		return fmt.Errorf("check whether capability %s in %q is already revoked: %w: %w",
+			claims.ID, namespace, serverless.ErrCapabilityUnavailable, err)
 	}
 	if revoked {
 		return nil
@@ -65,7 +66,7 @@ func (i *Issuer) Revoke(ctx context.Context, namespace, token string) error {
 	// opened with the capability may stay open.
 	expiresAt := claims.ExpiresAt + int64(wssession.ExpiryGrace/time.Second)
 	if err := i.revocations.RevokeToken(ctx, RevocationID(namespace, claims.ID), expiresAt, "capability revoked"); err != nil {
-		return fmt.Errorf("revoke capability %s in %q: %w", claims.ID, namespace, err)
+		return fmt.Errorf("revoke capability %s in %q: %w: %w", claims.ID, namespace, serverless.ErrCapabilityUnavailable, err)
 	}
 	return nil
 }

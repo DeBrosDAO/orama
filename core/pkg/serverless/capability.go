@@ -2,6 +2,7 @@ package serverless
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -34,6 +35,12 @@ type CapabilityGrant struct {
 	IssuerDevice string `json:"issuer_device"`
 	ExpiresAt    int64  `json:"expires_at"`
 }
+
+// ErrCapabilityUnavailable is a capability operation the gateway could not
+// complete for a reason of its own — the revocation list or its registry could
+// not be read or written — not because the caller asked for something wrong.
+// A function sees only this text; the cause is logged.
+var ErrCapabilityUnavailable = errors.New("capabilities are temporarily unavailable; retry shortly")
 
 // CapabilityIssuer mints and revokes capabilities. The gateway provides it; a
 // function reaches it through the capability host calls.

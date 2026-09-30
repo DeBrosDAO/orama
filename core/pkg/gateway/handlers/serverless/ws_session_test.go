@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +22,7 @@ type denyAll struct{}
 
 func (denyAll) Revoked(*auth.JWTClaims) (bool, error) { return true, nil }
 func (denyAll) RefreshRevocations(context.Context)    {}
+func (denyAll) RevocationsUsable() bool               { return true }
 
 func wsURL(srv *httptest.Server, path string) string {
 	return "ws" + strings.TrimPrefix(srv.URL, "http") + path
@@ -176,5 +178,37 @@ func TestHandleAuthRefresh_refusesATokenOnAKeylessSocket(t *testing.T) {
 	}
 	if ack := readAck(t, client); ack.OK {
 		t.Fatal("a keyless socket took on a token's identity")
+	}
+}
+
+// The revocation list being unreadable says nothing about the token, and its
+// error names why the registry could not be read — internal addresses. The ack
+// the client sees is constant and retryable, not the refusal of an invalid token.
+func TestHandleAuthRefresh_anUnreadableRevocationListAcksARetryableConstant(t *testing.T) {
+	sessions := wssession.NewRegistry(nil)
+	now := time.Now()
+	sock := sessions.Register(&auth.JWTClaims{Sub: "0xalice", Namespace: "anchat", Jti: "a",
+		Iat: now.Unix(), Exp: now.Add(time.Minute).Unix()}, func(int, string) {})
+	h := newTestHandlers(nil)
+	h.SetJWTVerifier(&fakeJWTVerifier{err: fmt.Errorf("%w: dial tcp 10.0.0.7:4001: connection refused",
+		auth.ErrRevocationsUnavailable)})
+	server, client := serverConn(t)
+
+	fn := &serverless.Function{Name: "rpc", Namespace: "anchat"}
+	if err := h.handleAuthRefresh(oramaControlFrame{Type: "auth.refresh", JWT: "x.y.z"}, fn, nil, sock, "anchat", "c1", server); err != nil {
+		t.Fatalf("ack write: %v", err)
+	}
+	ack := readAck(t, client)
+	if ack.OK {
+		t.Fatal("a token was installed on an unknown revocation state")
+	}
+	if ack.Error != authRefreshUnavailableMessage {
+		t.Errorf("ack error = %q, want the constant %q", ack.Error, authRefreshUnavailableMessage)
+	}
+	if strings.Contains(ack.Error, "10.0.0") || strings.Contains(ack.Error, "invalid") {
+		t.Errorf("ack error %q leaks the cause or calls the token invalid", ack.Error)
+	}
+	if got := sock.Claims(); got.Jti != "a" {
+		t.Errorf("the socket's token changed to %+v", got)
 	}
 }

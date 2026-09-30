@@ -32,7 +32,7 @@ func newAuthServiceForTest(t *testing.T) *auth.Service {
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
 	})
-	s, err := auth.NewService(logger, nil, string(rsaPEM), "default")
+	s, err := auth.NewService(logger, emptyRegistryNet{}, string(rsaPEM), "default")
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
 	}

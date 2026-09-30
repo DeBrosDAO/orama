@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ type revocationDB struct {
 	selects    int
 	failNext   bool
 	failAlways bool
+	failText   string // what a failing SELECT says; a registry error names internal hosts
 	lastDelete string
 	onSelect   func() // runs while a reload is in flight
 	// afterSnapshot runs after the SELECT has read its rows and before it
@@ -52,6 +54,9 @@ func (d *revocationDB) Query(_ context.Context, sql string, args ...interface{})
 		}
 		if d.failAlways || d.failNext {
 			d.failNext = false
+			if d.failText != "" {
+				return nil, errString(d.failText)
+			}
 			return nil, errString("the registry did not answer")
 		}
 		cutoff := toInt64(args[0])
@@ -202,8 +207,30 @@ func TestRevocationList_picksUpARevocationMadeElsewhere(t *testing.T) {
 	}
 
 	*clock = clock.Add(RevocationRefreshInterval + time.Second)
+	// The request that finds the copy stale is answered from it, inside the
+	// bound, and starts the reload; the next one sees the result.
+	mustDenies(list, claims, []string{"ak_key:ns"})
+	waitForReloadToEnd(t, list)
 	if !mustDenies(list, claims, []string{"ak_key:ns"}) {
 		t.Errorf("a revocation made elsewhere was not honoured within %s", RevocationRefreshInterval)
+	}
+}
+
+// waitForReloadToEnd polls until no reload is in flight.
+func waitForReloadToEnd(t *testing.T, list *RevocationList) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		list.mu.RLock()
+		running := list.flight != nil
+		list.mu.RUnlock()
+		if !running {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a reload never ended")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -280,8 +307,11 @@ func TestRevocationList_refusesWhatItCannotRecord(t *testing.T) {
 	if err := nilList.RevokeToken(context.Background(), "jti", 0, ""); err == nil {
 		t.Error("a nil list reported a token revocation as recorded")
 	}
-	if mustDenies(nilList, &JWTClaims{Sub: "x"}, []string{"x"}) {
-		t.Error("a nil list denied a token")
+	if _, err := nilList.Denies(&JWTClaims{Sub: "x"}, []string{"x"}); !errors.Is(err, ErrRevocationsUnavailable) {
+		t.Errorf("Denies on a nil list: err = %v, want ErrRevocationsUnavailable; a gateway with no list must not wave tokens through", err)
+	}
+	if _, err := nilList.DeniesSubject("x"); !errors.Is(err, ErrRevocationsUnavailable) {
+		t.Errorf("DeniesSubject on a nil list: err = %v, want ErrRevocationsUnavailable", err)
 	}
 
 	list, _, _ := newTestRevocations(t)
@@ -338,6 +368,7 @@ func TestRevocationList_aSlowReloadIsAgedFromWhenItBegan(t *testing.T) {
 
 	*clock = clock.Add(RevocationRefreshInterval - 3*time.Second) // one interval since the read began
 	mustDenies(list, claims, []string{"ak_key:ns"})
+	waitForReloadToEnd(t, list)
 	db.mu.Lock()
 	reloaded := db.selects - before
 	db.mu.Unlock()

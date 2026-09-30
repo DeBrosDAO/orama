@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -38,6 +39,11 @@ type oramaControlFrame struct {
 	Type string `json:"__orama"`
 	JWT  string `json:"jwt,omitempty"`
 }
+
+// authRefreshUnavailableMessage is the ack error for a token whose revocation
+// state could not be read. Constant, and worded as retryable, so a client can
+// tell it from a refused token ("invalid or expired jwt").
+const authRefreshUnavailableMessage = "cannot check whether this token was revoked; retry shortly"
 
 // oramaControlAck is the response shape sent back on the WS after a
 // control frame is handled. Clients SHOULD await this before assuming
@@ -377,6 +383,19 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 		})
 	}
 	claims, err := h.jwtVerifier.ParseAndVerifyJWT(ctrl.JWT)
+	if errors.Is(err, auth.ErrRevocationsUnavailable) {
+		// Not a verdict on the token: the gateway could not tell whether it
+		// was revoked. The client keeps its socket and retries. The ack never
+		// carries err, which can name why the registry could not be read.
+		h.logger.Warn("persistent WS: auth.refresh could not be checked against the revocation list",
+			zap.String("client_id", clientID),
+			zap.Error(err))
+		return h.writeControlAck(conn, oramaControlAck{
+			Type:  "auth.refresh",
+			OK:    false,
+			Error: authRefreshUnavailableMessage,
+		})
+	}
 	if err != nil {
 		h.logger.Info("persistent WS: auth.refresh rejected (invalid jwt)",
 			zap.String("client_id", clientID),

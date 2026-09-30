@@ -45,11 +45,16 @@ const (
 	// revocations still in flight.
 	revocationPruneInterval = 1 * time.Hour
 
-	// revocationReloadTimeout bounds one reload, and so how long a request can
-	// wait for one. A reload that takes the whole staleness bound has failed.
-	// It is enforced here, not left to the registry client: a client that
-	// ignores its context would otherwise hold every stale request forever.
-	revocationReloadTimeout = RevocationStaleness
+	// revocationReloadTimeout bounds one read of the table, and so the longest
+	// a request whose copy is already past RevocationStaleness waits for an
+	// answer. It is well under the bound: a read of a few hundred small rows is
+	// milliseconds, so one that has taken three seconds is hung, and waiting
+	// the full ten on every request during a registry hang only delays the 503
+	// the client is going to get. It is also under RevocationRefreshInterval,
+	// so one attempt ends before the next is due. It is enforced here, not left
+	// to the registry client: a client that ignores its context would otherwise
+	// hold every stale request forever.
+	revocationReloadTimeout = 3 * time.Second
 
 	// revocationRetryInterval is the least time between two reload attempts, so
 	// a registry that is down costs one query a second, not one per request.
@@ -61,6 +66,9 @@ const (
 // refresh it. Whether the token is revoked is then unknown, and an unknown
 // state is never "not revoked": the caller refuses the request with a
 // retryable 503, the way a grant that cannot be read is refused.
+//
+// Its text is what reaches clients, so it never carries why the registry could
+// not be read: that holds internal addresses and stays in the log.
 var ErrRevocationsUnavailable = errors.New("token revocations temporarily unavailable")
 
 // revocation is one row: either a named token, or every token issued to a
@@ -90,10 +98,9 @@ type RevocationList struct {
 	lastRefresh time.Time
 	loaded      bool
 	// lastAttempt is when the last reload began, successful or not; it only
-	// rate-limits retries. lastErr is why the last one failed, nil after a
-	// success.
+	// rate-limits retries. Why one failed is logged, never kept: the text
+	// reaches nobody.
 	lastAttempt time.Time
-	lastErr     error
 	// readSeq numbers reads as they begin and appliedSeq is the newest one whose
 	// result is in the maps, so a read that finishes late cannot overwrite a
 	// newer list.
@@ -102,6 +109,13 @@ type RevocationList struct {
 	// local holds the revocations this gateway recorded itself, so a reload
 	// whose read began before one committed does not drop it.
 	local []localRevocation
+	// abandoned is true while a read Refresh gave up on at its deadline has not
+	// returned. It keeps running until the registry client lets it go, so at
+	// most one exists: a new attempt does not start another on top of it, which
+	// under a registry that never answers would leak a goroutine and a
+	// connection every interval. A read that is not abandoned ends within the
+	// reload timeout, so this is the only way readers can pile up.
+	abandoned bool
 	// flight is the reload in progress, nil when none is. At most one runs per
 	// list, however many requests find the copy stale.
 	flight *reloadFlight
@@ -132,6 +146,13 @@ func NewRevocationList(registry func() client.DatabaseClient, logger *logging.Co
 	}
 }
 
+// nilListError is what a nil list answers. A list that does not exist knows
+// nothing, and "nothing is known" is never "nothing is revoked": a gateway
+// built without one refuses instead of waving every token through.
+func nilListError() error {
+	return fmt.Errorf("%w: this gateway has no revocation list", ErrRevocationsUnavailable)
+}
+
 // Denies reports whether a token must be refused.
 //
 // subjectKeys are the names this token's subject may have been revoked under.
@@ -146,7 +167,10 @@ func NewRevocationList(registry func() client.DatabaseClient, logger *logging.Co
 // The error is ErrRevocationsUnavailable when the list is too old to answer and
 // cannot be refreshed; the bool is then meaningless and the caller must refuse.
 func (r *RevocationList) Denies(claims *JWTClaims, subjectKeys []string) (bool, error) {
-	if r == nil || claims == nil {
+	if r == nil {
+		return false, nilListError()
+	}
+	if claims == nil {
 		return false, nil
 	}
 	if err := r.refreshIfStale(); err != nil {
@@ -326,14 +350,16 @@ type reloadFlight struct{ done chan struct{} }
 // refresh interval, with at most one reload in flight, and reports whether the
 // copy it leaves is fit to answer from.
 //
-// The request that finds the copy stale and no reload running starts one and
-// waits for it. A request that finds one already running keeps using the copy
-// it has — unless that copy is older than RevocationStaleness, which a request
-// must never be served from: then it waits for the running reload rather than
-// starting another. Without this, a registry slower than the interval made
-// every request its own blocking full-table read.
+// The request that finds the copy stale and no reload running starts one. A
+// request whose copy is still younger than RevocationStaleness never waits: it
+// is answered from the copy, which is what the bound permits, so a hung
+// registry costs it nothing. Only a request whose copy is past the bound — or
+// that has no copy — waits, for the reload in flight rather than starting
+// another, because it must never be served from that copy. Without this, a
+// registry slower than the interval made every request its own blocking
+// full-table read.
 //
-// The wait is bounded by the reload's own deadline, which Refresh enforces
+// The wait is bounded by the read's own deadline, which Refresh enforces
 // whatever the registry client does. A copy older than RevocationStaleness
 // after that wait — the reload failed, or none was attempted because one failed
 // a moment ago — is ErrRevocationsUnavailable: the state is unknown, and unknown
@@ -346,14 +372,12 @@ func (r *RevocationList) refreshIfStale() error {
 		return nil
 	}
 	f := r.flight
-	started := false
 	if f == nil && now.Sub(r.lastAttempt) >= revocationRetryInterval {
 		f = &reloadFlight{done: make(chan struct{})}
 		r.flight = f
-		started = true
 		go r.reload(f)
 	}
-	mustWait := f != nil && (started || !r.loaded || now.Sub(r.lastRefresh) >= RevocationStaleness)
+	mustWait := f != nil && (!r.loaded || now.Sub(r.lastRefresh) >= RevocationStaleness)
 	r.mu.Unlock()
 
 	if mustWait {
@@ -369,12 +393,18 @@ func (r *RevocationList) usable() error {
 	if r.loaded && r.now().Sub(r.lastRefresh) < RevocationStaleness {
 		return nil
 	}
-	if r.lastErr != nil {
-		return fmt.Errorf("%w: the list is older than %s and the registry could not be read, check it is reachable: %v",
-			ErrRevocationsUnavailable, RevocationStaleness, r.lastErr)
-	}
-	return fmt.Errorf("%w: the list is older than %s and is being reloaded",
-		ErrRevocationsUnavailable, RevocationStaleness)
+	// Why the registry could not be read is in the log (failed). It is not
+	// here: this text reaches clients, and the cause holds internal addresses.
+	return fmt.Errorf("%w: the list is older than %s", ErrRevocationsUnavailable, RevocationStaleness)
+}
+
+// Usable reports whether the list can answer now, from the copy it holds,
+// without starting a reload or waiting for one. The socket sweeper asks it once
+// per pass to learn whether the registry is reachable before it makes a
+// per-socket decision, so a pass over many sockets during a hang costs one
+// question, not one wait per socket.
+func (r *RevocationList) Usable() bool {
+	return r != nil && r.usable() == nil
 }
 
 // reload runs one flight to completion and releases the waiters. Refresh logs a
@@ -423,16 +453,37 @@ func (r *RevocationList) Refresh(ctx context.Context) error {
 	if db == nil {
 		return r.failed(errors.New("no registry database is configured on this gateway"))
 	}
+	r.mu.Lock()
+	stuck := r.abandoned
+	r.mu.Unlock()
+	if stuck {
+		return r.failed(fmt.Errorf("%w: a read of the registry that timed out has still not returned", ErrRevocationsUnavailable))
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, r.reloadTimeout)
 	defer cancel()
 	result := make(chan revocationRead, 1)
-	go func() { result <- readRevocations(ctx, db, started) }()
+	attempt := &readAttempt{}
+	go func() {
+		read := readRevocations(ctx, db, started)
+		r.mu.Lock()
+		attempt.finished = true
+		if attempt.abandoned {
+			r.abandoned = false
+		}
+		r.mu.Unlock()
+		result <- read
+	}()
 
 	var read revocationRead
 	select {
 	case read = <-result:
 	case <-ctx.Done():
+		r.mu.Lock()
+		if !attempt.finished {
+			attempt.abandoned, r.abandoned = true, true
+		}
+		r.mu.Unlock()
 		read.err = fmt.Errorf("the registry did not answer within %s: %w", r.reloadTimeout, ctx.Err())
 	}
 	if read.err != nil {
@@ -448,7 +499,6 @@ func (r *RevocationList) Refresh(ctx context.Context) error {
 	r.byJTI, r.bySubject = read.byJTI, read.bySubject
 	r.lastRefresh = started
 	r.loaded = true
-	r.lastErr = nil
 	// A revocation recorded at or after this read began may not be in it.
 	kept := r.local[:0]
 	for _, l := range r.local {
@@ -461,12 +511,12 @@ func (r *RevocationList) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// failed records why a reload did not produce a list and logs it. Nothing about
+// readAttempt is one read goroutine's state, guarded by RevocationList.mu.
+type readAttempt struct{ finished, abandoned bool }
+
+// failed logs why a reload did not produce a list. Nothing about
 // the copy changes, so it ages towards RevocationStaleness.
 func (r *RevocationList) failed(err error) error {
-	r.mu.Lock()
-	r.lastErr = err
-	r.mu.Unlock()
 	if r.logger != nil {
 		r.logger.ComponentWarn(logging.ComponentGeneral,
 			"could not reload the token revocations; requests are refused once the list is older than its bound",
@@ -603,6 +653,10 @@ func (s *Service) Revoked(claims *JWTClaims) (bool, error) {
 	return s.revocations.Denies(claims, s.revocationSubjectKeys(claims.Sub))
 }
 
+// RevocationsUsable reports whether the list can answer from the copy it holds,
+// without reading the registry or waiting on it. See RevocationList.Usable.
+func (s *Service) RevocationsUsable() bool { return s.revocations.Usable() }
+
 // RefreshRevocations reloads the revocation list now rather than when it next
 // goes stale. The socket sweeper calls it before each pass, so a pass applies
 // every revocation recorded before it began.
@@ -610,6 +664,9 @@ func (s *Service) Revoked(claims *JWTClaims) (bool, error) {
 // A failure is logged by the list and leaves it aging; Revoked is what reports
 // it, once the list is too old to answer from.
 func (s *Service) RefreshRevocations(ctx context.Context) {
+	if s.revocations == nil {
+		return
+	}
 	_ = s.revocations.Refresh(ctx)
 }
 
@@ -629,7 +686,7 @@ func (s *Service) RefreshRevocations(ctx context.Context) {
 // The error is ErrRevocationsUnavailable, as for Denies.
 func (r *RevocationList) DeniesSubject(subjects ...string) (bool, error) {
 	if r == nil {
-		return false, nil
+		return false, nilListError()
 	}
 	if err := r.refreshIfStale(); err != nil {
 		return false, err

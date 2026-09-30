@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +80,23 @@ func TestRevokeCapability_revokesInTheCallersNamespace(t *testing.T) {
 	ctx := invocationCtx(&serverless.InvocationContext{Namespace: "anchat", FunctionName: "fn"})
 	if err := h.RevokeCapability(ctx, "cap-1"); err != nil || issuer.namespace != "anchat" || issuer.revoked != "cap-1" {
 		t.Errorf("RevokeCapability: %v, %+v", err, issuer)
+	}
+}
+
+// The function (tenant code) must never see why the registry could not be
+// reached: the issuer's error names internal addresses.
+func TestRevokeCapability_anUnavailableRegistryShowsTheFunctionOnlyAConstant(t *testing.T) {
+	cause := fmt.Errorf("%w: dial tcp 10.0.0.7:4001: connection refused", serverless.ErrCapabilityUnavailable)
+	h := &HostFunctions{}
+	h.SetCapabilityIssuer(&recordingIssuer{err: cause})
+	ctx := invocationCtx(&serverless.InvocationContext{Namespace: "anchat", FunctionName: "fn"})
+
+	err := h.RevokeCapability(ctx, "token")
+	if !errors.Is(err, serverless.ErrCapabilityUnavailable) {
+		t.Fatalf("err = %v, want ErrCapabilityUnavailable", err)
+	}
+	if strings.Contains(err.Error(), "10.0.0.7") || strings.Contains(err.Error(), "refused") {
+		t.Errorf("the function was shown the registry's error: %q", err)
 	}
 }
 

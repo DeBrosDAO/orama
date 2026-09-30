@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ type revokedJTIs map[string]bool
 
 func (d revokedJTIs) Revoked(c *auth.JWTClaims) (bool, error) { return d[c.Jti], nil }
 func (d revokedJTIs) RefreshRevocations(context.Context)      {}
+func (d revokedJTIs) RevocationsUsable() bool                 { return true }
 
 // closeLog records what a socket was closed with.
 type closeLog struct {
@@ -215,6 +217,8 @@ func (d *countingDenier) RefreshRevocations(context.Context) {
 	d.mu.Unlock()
 }
 
+func (d *countingDenier) RevocationsUsable() bool { return true }
+
 func (d *countingDenier) Revoked(c *auth.JWTClaims) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -332,29 +336,139 @@ func TestRefresh_refusesAnotherDevice(t *testing.T) {
 	}
 }
 
-// unknownDenier cannot tell whether anything is revoked.
-type unknownDenier struct{}
+// unavailableDenier cannot answer: the list is past its bound and the registry
+// does not respond. Revoked hangs, as a wait on a hung registry would, so a
+// sweep that called it would never return.
+type unavailableDenier struct {
+	probes int32
+	asked  int32
+	hang   chan struct{}
+}
 
-func (unknownDenier) Revoked(*auth.JWTClaims) (bool, error) {
+func newUnavailableDenier() *unavailableDenier { return &unavailableDenier{hang: make(chan struct{})} }
+
+func (d *unavailableDenier) RefreshRevocations(context.Context) {}
+func (d *unavailableDenier) RevocationsUsable() bool {
+	atomic.AddInt32(&d.probes, 1)
+	return false
+}
+func (d *unavailableDenier) Revoked(*auth.JWTClaims) (bool, error) {
+	atomic.AddInt32(&d.asked, 1)
+	<-d.hang
 	return false, auth.ErrRevocationsUnavailable
 }
-func (unknownDenier) RefreshRevocations(context.Context) {}
 
-// A list too old to answer must not close every socket on the gateway, nor
-// close none for good: the socket is left for the next pass, and an expired one
-// is still closed, since that needs no list.
-func TestSweep_leavesASocketOpenWhenRevocationCannotBeChecked(t *testing.T) {
+// registryAt is a registry whose clock is the fixed `now`.
+func registryAt(at time.Time) *Registry {
 	r := NewRegistry(nil)
+	r.now = func() time.Time { return at }
+	return r
+}
+
+// A list too old to answer must not close every socket on the gateway at once,
+// nor leave them open for good: the socket stays inside the cap, and an expired
+// one is still closed, since that needs no list.
+func TestSweep_leavesASocketOpenWhenRevocationCannotBeCheckedWithinTheCap(t *testing.T) {
+	r := registryAt(now)
 	var live, expired closeLog
-	r.Register(token("live", now.Add(time.Minute)), live.closer())
+	r.Register(token("live", now.Add(time.Hour)), live.closer())
 	r.Register(token("expired", now.Add(-time.Hour)), expired.closer())
 
-	r.Sweep(now, unknownDenier{})
+	r.Sweep(now.Add(maxUncheckedSocketAge-time.Second), newUnavailableDenier())
 
 	if len(live.got()) != 0 {
-		t.Error("a socket was closed on an unknown revocation state")
+		t.Error("a socket was closed on an unknown revocation state inside the cap")
 	}
 	if got := expired.got(); len(got) != 1 || got[0] != CloseExpired {
 		t.Errorf("expired socket closed with %v, want [%d]", got, CloseExpired)
+	}
+}
+
+// The exposure of an open socket is bounded: a session revoked while the
+// registry is unreachable must not stay open for as long as the outage lasts.
+func TestSweep_closesASocketUncheckedPastTheCap(t *testing.T) {
+	r := registryAt(now)
+	var live closeLog
+	r.Register(token("live", now.Add(time.Hour)), live.closer())
+
+	r.Sweep(now.Add(maxUncheckedSocketAge+time.Second), newUnavailableDenier())
+
+	if got := live.got(); len(got) != 1 || got[0] != CloseUnavailable {
+		t.Errorf("socket closed with %v, want [%d]", got, CloseUnavailable)
+	}
+}
+
+// A successful check restarts the clock: the cap counts from the last time the
+// list vouched for the socket, not from when it opened.
+func TestSweep_aSuccessfulCheckRestartsTheUncheckedClock(t *testing.T) {
+	r := registryAt(now)
+	var live closeLog
+	r.Register(token("live", now.Add(time.Hour)), live.closer())
+
+	checkedAt := now.Add(time.Minute)
+	if r.Sweep(checkedAt, revokedJTIs{}) != 0 {
+		t.Fatal("a socket nobody revoked was closed")
+	}
+	r.Sweep(checkedAt.Add(maxUncheckedSocketAge-time.Second), newUnavailableDenier())
+	if len(live.got()) != 0 {
+		t.Error("the cap was counted from the open, not from the last successful check")
+	}
+	r.Sweep(checkedAt.Add(maxUncheckedSocketAge+time.Second), newUnavailableDenier())
+	if got := live.got(); len(got) != 1 || got[0] != CloseUnavailable {
+		t.Errorf("socket closed with %v, want [%d]", got, CloseUnavailable)
+	}
+}
+
+// Under a hung registry the sweep asks one availability question and never
+// waits on the list: before, every socket waited for a flight of its own, so
+// closing the expired ones took ten seconds per socket.
+func TestSweep_underAHungRegistryClosesExpiredSocketsPromptlyWithOneProbe(t *testing.T) {
+	r := registryAt(now)
+	var expired closeLog
+	for i := 0; i < 20; i++ {
+		r.Register(token("live", now.Add(time.Hour)), func(int, string) {})
+	}
+	r.Register(token("expired", now.Add(-time.Hour)), expired.closer())
+	d := newUnavailableDenier()
+	defer close(d.hang)
+
+	done := make(chan struct{})
+	go func() { r.Sweep(now, d); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the sweep waited on a hung registry")
+	}
+	if got := expired.got(); len(got) != 1 || got[0] != CloseExpired {
+		t.Errorf("expired socket closed with %v, want [%d]", got, CloseExpired)
+	}
+	if probes := atomic.LoadInt32(&d.probes); probes != 1 {
+		t.Errorf("%d availability probes in one sweep of 21 sockets, want 1", probes)
+	}
+	if asked := atomic.LoadInt32(&d.asked); asked != 0 {
+		t.Errorf("%d per-socket list calls while the list was unavailable, want 0", asked)
+	}
+}
+
+// A refreshed token was checked against the list when it was verified.
+func TestSocketRefresh_countsAsACheck(t *testing.T) {
+	var at atomic.Value
+	at.Store(now)
+	r := NewRegistry(nil)
+	r.now = func() time.Time { return at.Load().(time.Time) }
+	first := token("a", now.Add(time.Hour))
+	first.Sub = "0xwallet"
+	var live closeLog
+	s := r.Register(first, live.closer())
+
+	at.Store(now.Add(time.Minute))
+	next := token("b", now.Add(2*time.Hour))
+	next.Sub = "0xwallet"
+	if err := s.Refresh(next); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	r.Sweep(now.Add(time.Minute+maxUncheckedSocketAge-time.Second), newUnavailableDenier())
+	if len(live.got()) != 0 {
+		t.Error("a socket whose token was just refreshed was closed as unchecked")
 	}
 }

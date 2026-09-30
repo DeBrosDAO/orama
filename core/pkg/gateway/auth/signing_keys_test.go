@@ -294,7 +294,7 @@ func TestParseAndVerifyJWT_refusesAnUnknownKeyID(t *testing.T) {
 // to a namespace (or to nothing, for the index gateway).
 func serviceWithKey(t *testing.T, namespace string) *Service {
 	t.Helper()
-	svc, err := NewService(nil, nil, "", "default")
+	svc, err := NewService(nil, &revocationNet{db: &revocationDB{}}, "", "default")
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

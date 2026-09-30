@@ -28,7 +28,7 @@ func (f *fakeAPIKeyQuerier) Query(ctx context.Context, sql string, args ...inter
 // lookupAPIKeyEntry's hashed/raw dual lookup.
 func hashingGatewayFixture(t *testing.T) *Gateway {
 	t.Helper()
-	svc, err := gwauth.NewService(newRQLiteTestLogger(), nil, "", "default")
+	svc, err := gwauth.NewService(newRQLiteTestLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to construct auth service: %v", err)
 	}

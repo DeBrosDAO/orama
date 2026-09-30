@@ -611,12 +611,14 @@ the second kind, which covers every outstanding token from it. A token minted
 The list is held in memory and reloaded every 5 seconds. A request reads a copy
 as old as the reload that filled it began, so a revocation takes effect within 10
 seconds: one interval, plus the reload itself, plus the wait for the next request.
-At most one reload runs per gateway. A request that finds the copy stale with no
-reload running starts one and waits for it; a request that finds one running
-keeps using its copy, unless that copy is already 10 seconds old, in which case
-it waits for the running reload (bounded by the reload's own 10-second deadline)
-instead of starting another. A slow registry therefore costs one read at a time,
-not one per request.
+At most one reload runs per gateway. A request whose copy is under 10 seconds old
+never waits: it is answered from the copy, and if none is running it starts the
+reload. Only a request whose copy is 10 seconds old or more (or that has none)
+waits, for the running reload rather than starting another, and for at most the
+3-second read timeout: a read of a few hundred small rows is milliseconds, so one
+that takes 3 seconds is hung, and waiting longer only delays the `503`. A slow
+registry therefore costs one read at a time, not one per request, and a hung one
+costs a request past the bound at most 3 seconds.
 
 The 10 seconds is a flat bound, and the list fails **closed**. A failed or hung
 reload (the deadline is enforced by the gateway, not left to the registry
@@ -626,11 +628,27 @@ answering; once it is older, or if it was never loaded, a request that presents 
 credential cannot be checked and is refused `503` with `AUTH_UNAVAILABLE` and a
 `Retry-After` header, the way a grant that cannot be read is. An unknown state is
 never treated as "not revoked". Retries are limited to one reload attempt per
-second, and a read that finishes late never replaces a newer list. A revocation
+second, and a read that finishes late never replaces a newer list. A read the
+gateway gave up on at its timeout keeps running until the registry client lets
+it go, so at most one such read exists at a time: while it is alive no further
+read starts (the attempt fails unavailable), and a registry that never answers
+costs one goroutine and one connection, not one per attempt. The `503` body
+never says why the registry could not be read, since that names internal
+addresses: the cause is in the gateway log. A gateway built without a list
+refuses in the same way rather than letting every token through. A revocation
 this gateway recorded itself is kept across a reload whose read began before it
-committed. Open WebSockets are the exception: the sweeper that re-checks them
-leaves a socket open on a pass where the list cannot answer, logs it, and checks
-again on the next pass.
+committed. Open WebSockets are the exception: on a pass where the list cannot
+answer, the sweeper leaves a socket open and checks again on the next pass,
+but only for so long. Expired sockets are closed first and without asking the
+list anything, so a hung registry never delays them. The list is then probed
+once per pass (a question that never starts or waits on a read); if it cannot
+answer, no socket is checked against it that pass. Each socket remembers when
+the list last vouched for it (the upgrade, a token refresh on the socket, or a
+sweep), and one that has gone 2 minutes without a successful check is closed
+with `4503`, so a session revoked during a registry outage cannot stay open for
+as long as the outage lasts. Two minutes is about twelve times the request
+bound: long enough that a blip that heals by itself does not make every client
+reconnect at once, short enough to bound the exposure.
 
 Logging out revokes the refresh token **and** the access token, so "log me out"
 does not mean "stop me getting a new one".
@@ -651,6 +669,7 @@ gateway closes the sockets it covers on every gateway within 10 seconds:
 |------------|-------|
 | `4401` | the token expired more than two minutes ago and was not refreshed on the socket — reconnect with a fresh token |
 | `4403` | the token, its session or its subject was revoked — sign in again |
+| `4503` | the gateway could not check whether the session was revoked for 2 minutes — reconnect shortly (it is refused `503` `AUTH_UNAVAILABLE` until the list can be read) |
 
 The two minutes cover clock skew and a client refreshing its token on the
 socket: a persistent function socket takes `{"__orama":"auth.refresh","jwt":…}`

@@ -92,7 +92,7 @@ func TestChallengeHandler_MissingWallet(t *testing.T) {
 	// So we must supply a non-nil *authsvc.Service.  We can create one with
 	// an empty signing key (NewService returns error for empty PEM only if
 	// the PEM is non-empty but unparseable).  An empty PEM is fine.
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestChallengeHandler_MissingWallet(t *testing.T) {
 }
 
 func TestChallengeHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestChallengeHandler_NilAuthService(t *testing.T) {
 // do" looks like.
 func whoamiHandlers(t *testing.T) *Handlers {
 	t.Helper()
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("auth service: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestLogoutHandler_MissingRefreshToken(t *testing.T) {
 }
 
 func TestLogoutHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestLogoutHandler_InvalidMethod(t *testing.T) {
 }
 
 func TestLogoutHandler_AllTrueNoJWT(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestLogoutHandler_AllTrueNoJWT(t *testing.T) {
 // --- RefreshHandler tests -------------------------------------------------
 
 func TestRefreshHandler_MissingRefreshToken(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestRefreshHandler_MissingRefreshToken(t *testing.T) {
 }
 
 func TestRefreshHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestRefreshHandler_NilAuthService(t *testing.T) {
 // Retry-After header — NOT a 401 that would force a locked device into an
 // impossible SIWE re-auth mid-call-ring.
 func TestRefreshHandler_TransientError_returns503Retryable(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestRefreshHandler_TransientError_returns503Retryable(t *testing.T) {
 // --- APIKeyToJWTHandler tests ---------------------------------------------
 
 func TestAPIKeyToJWTHandler_MissingKey(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestAPIKeyToJWTHandler_MissingKey(t *testing.T) {
 }
 
 func TestAPIKeyToJWTHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -496,7 +496,7 @@ func TestAPIKeyToJWTHandler_NilAuthService(t *testing.T) {
 // (EdDSA signing key set).
 func jwtCapableService(t *testing.T, hmacSecret string) *authsvc.Service {
 	t.Helper()
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("NewService failed: %v", err)
 	}
@@ -709,7 +709,7 @@ func TestApiKeyLookupCandidates(t *testing.T) {
 func TestConsumeNonce_FailsClosedWhenSingleUseNotGuaranteed(t *testing.T) {
 	// A service with no rqlite client cannot perform the conditional UPDATE
 	// that makes consumption atomic.
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -837,7 +837,7 @@ func TestExtractAPIKey_AuthorizationNoSchemeJWTSkipped(t *testing.T) {
 // --- ChallengeHandler invalid JSON ----------------------------------------
 
 func TestChallengeHandler_InvalidJSON(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -884,7 +884,7 @@ func TestWhoamiHandler_NamespaceOverride(t *testing.T) {
 // --- LogoutHandler invalid JSON -------------------------------------------
 
 func TestLogoutHandler_InvalidJSON(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -904,7 +904,7 @@ func TestLogoutHandler_InvalidJSON(t *testing.T) {
 // --- RefreshHandler invalid JSON ------------------------------------------
 
 func TestRefreshHandler_InvalidJSON(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}

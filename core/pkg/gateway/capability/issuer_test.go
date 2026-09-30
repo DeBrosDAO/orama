@@ -11,6 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
+	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
 
 // revokedTokensTable is the revoked_tokens table, enough of it for the list to
@@ -167,5 +168,44 @@ func TestIssuer_RevokeWritesOneRowThatEndsWithTheCapability(t *testing.T) {
 	want := c.ExpiresAt + int64(wssession.ExpiryGrace/time.Second)
 	if expiresAt, _ := table.rows[0][3].(int64); expiresAt != want {
 		t.Errorf("the row expires at %d; the capability's sockets may last until %d", expiresAt, want)
+	}
+}
+
+// brokenTable is a registry that fails what it is told to, with an error that
+// names an internal address.
+type brokenTable struct {
+	revokedTokensTable
+	failSelect, failInsert bool
+}
+
+func (t *brokenTable) Query(ctx context.Context, sql string, args ...interface{}) (*client.QueryResult, error) {
+	insert := strings.HasPrefix(strings.TrimSpace(sql), "INSERT")
+	if (insert && t.failInsert) || (!insert && t.failSelect) {
+		return nil, errors.New("dial tcp 10.0.0.7:4001: connection refused")
+	}
+	return t.revokedTokensTable.Query(ctx, sql, args...)
+}
+
+// What a function is shown when its capability cannot be revoked must be the
+// constant, never the registry's error; the registry's error stays reachable
+// for the log.
+func TestIssuer_RevokeOnAnUnreachableRegistryIsMarkedUnavailable(t *testing.T) {
+	for name, table := range map[string]*brokenTable{
+		"list cannot be read":   {failSelect: true},
+		"row cannot be written": {failInsert: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			list := auth.NewRevocationList(func() client.DatabaseClient { return table }, nil)
+			i, err := NewIssuer(authority(t), list)
+			if err != nil {
+				t.Fatalf("issuer: %v", err)
+			}
+			token, _, _ := i.authority.Mint("anchat", "rpc-router", "m", "device-1", time.Hour, time.Now())
+
+			err = i.Revoke(context.Background(), "anchat", token)
+			if !errors.Is(err, serverless.ErrCapabilityUnavailable) {
+				t.Fatalf("Revoke: err = %v, want ErrCapabilityUnavailable", err)
+			}
+		})
 	}
 }

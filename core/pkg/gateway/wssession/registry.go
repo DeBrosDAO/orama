@@ -32,10 +32,28 @@ const (
 	// refused; the client has to sign in again.
 	CloseRevoked = 4403
 
-	// ReasonExpired and ReasonRevoked are the close reasons that go with the
-	// two codes.
-	ReasonExpired = "token expired; reconnect with a fresh token"
-	ReasonRevoked = "session revoked; sign in again"
+	// CloseUnavailable is the close code for a socket the gateway could not
+	// check against the revocation list for longer than maxUncheckedSocketAge.
+	// The session is not known to be revoked; reconnecting is right, and is
+	// refused with a retryable 503 until the list can be read again.
+	CloseUnavailable = 4503
+
+	// ReasonExpired, ReasonRevoked and ReasonUnavailable are the close reasons
+	// that go with the three codes.
+	ReasonExpired     = "token expired; reconnect with a fresh token"
+	ReasonRevoked     = "session revoked; sign in again"
+	ReasonUnavailable = "cannot check this session right now; reconnect shortly"
+
+	// maxUncheckedSocketAge is how long an open socket is kept while the
+	// revocation list cannot be read, counted from its last successful check
+	// (the upgrade, a token refresh, or a sweep). A request is refused as soon
+	// as the list is older than auth.RevocationStaleness; closing every socket
+	// on that same blip would turn a short registry hiccup into a reconnect
+	// storm, so sockets get longer. Not unbounded: a session revoked while the
+	// registry is unreachable must not stay open for as long as the outage
+	// lasts. Two minutes is about twelve times the request bound, and past any
+	// blip that heals on its own.
+	maxUncheckedSocketAge = 2 * time.Minute
 
 	// ExpiryGrace is how long past its token's exp a socket is kept open. It
 	// covers clock skew between the gateway that minted the token and this one,
@@ -64,9 +82,12 @@ type Denier interface {
 	// RefreshRevocations reloads the revocation list, so the sweep that
 	// follows applies every revocation recorded before it.
 	RefreshRevocations(ctx context.Context)
+	// RevocationsUsable reports, without touching the registry or waiting on
+	// it, whether the list can answer now. A sweep asks once, so a hung
+	// registry costs it one question, not one wait per socket.
+	RevocationsUsable() bool
 	// Revoked returns an error when the list is too old to say; the sweep then
-	// leaves the socket for the next pass, since closing every socket on a
-	// registry blip is worse than checking it again a few seconds later.
+	// treats the socket as unchecked (see maxUncheckedSocketAge).
 	Revoked(claims *auth.JWTClaims) (bool, error)
 }
 
@@ -81,6 +102,8 @@ type Registry struct {
 	next    uint64
 	sockets map[uint64]*Socket
 	logger  *zap.Logger
+	// now is time.Now, replaced in tests.
+	now func() time.Time
 }
 
 // NewRegistry builds an empty registry. logger records each socket the
@@ -89,7 +112,7 @@ func NewRegistry(logger *zap.Logger) *Registry {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Registry{sockets: map[uint64]*Socket{}, logger: logger}
+	return &Registry{sockets: map[uint64]*Socket{}, logger: logger, now: time.Now}
 }
 
 // Register starts holding a socket to claims. A request with no token claims —
@@ -101,7 +124,9 @@ func (r *Registry) Register(claims *auth.JWTClaims, closeFn Closer) *Socket {
 	if claims == nil || closeFn == nil {
 		return nil
 	}
-	s := &Socket{registry: r, claims: *claims, close: closeFn}
+	// The upgrade checked the token against the list, so the socket starts out
+	// checked.
+	s := &Socket{registry: r, claims: *claims, close: closeFn, checkedAt: r.now()}
 
 	r.mu.Lock()
 	r.next++
@@ -118,12 +143,25 @@ func (r *Registry) Len() int {
 	return len(r.sockets)
 }
 
-// Sweep closes every socket whose token expired more than ExpiryGrace ago or
-// has been revoked, and reports how many it closed.
+// closeJob is one socket a sweep has decided to end, and why.
+type closeJob struct {
+	socket *Socket
+	claims auth.JWTClaims
+	code   int
+	reason string
+}
+
+// Sweep closes every socket whose token expired more than ExpiryGrace ago, has
+// been revoked, or has gone unchecked for longer than maxUncheckedSocketAge,
+// and reports how many it closed.
 //
-// The registry lock is held only to copy the set: the revocation check reads
-// a shared list, and a close writes to the network. Closes run in parallel,
-// up to sweepCloseConcurrency at once, and the sweep waits for them.
+// Expired sockets are closed first and without asking the list anything, so a
+// registry that does not answer never delays them. The list is then probed
+// once; if it cannot answer, no socket is checked against it this pass and each
+// is held only until its last successful check is too old. The registry lock is
+// held only to copy the set: a revocation check reads a shared list and a close
+// writes to the network. Closes run in parallel, up to sweepCloseConcurrency at
+// once, and the sweep waits for them.
 func (r *Registry) Sweep(now time.Time, d Denier) int {
 	r.mu.Lock()
 	open := make([]*Socket, 0, len(r.sockets))
@@ -132,54 +170,84 @@ func (r *Registry) Sweep(now time.Time, d Denier) int {
 	}
 	r.mu.Unlock()
 
+	var expiredJobs []closeJob
+	var live []*Socket
+	for _, s := range open {
+		if claims := s.Claims(); expired(claims.Exp, now) {
+			expiredJobs = append(expiredJobs, closeJob{s, claims, CloseExpired, ReasonExpired})
+		} else {
+			live = append(live, s)
+		}
+	}
+	closed := r.closeAll(expiredJobs)
+	if len(live) == 0 {
+		return closed
+	}
+	return closed + r.closeAll(r.judgeLive(live, now, d))
+}
+
+// judgeLive decides which sockets that have not expired must close: revoked
+// ones, and ones the list could not vouch for within maxUncheckedSocketAge.
+func (r *Registry) judgeLive(live []*Socket, now time.Time, d Denier) []closeJob {
+	usable := d.RevocationsUsable()
 	var (
-		wg         sync.WaitGroup
-		slots      = make(chan struct{}, sweepCloseConcurrency)
-		mu         sync.Mutex
-		closed     int
+		jobs       []closeJob
 		unknown    int
 		unknownErr error
 	)
-	for _, s := range open {
+	for _, s := range live {
 		claims := s.Claims()
-		code, reason := CloseExpired, ReasonExpired
-		switch {
-		case expired(claims.Exp, now):
-		default:
+		if usable {
 			revoked, err := d.Revoked(&claims)
-			if err != nil {
-				unknown++
-				unknownErr = err
+			if err == nil {
+				s.markChecked(now)
+				if revoked {
+					jobs = append(jobs, closeJob{s, claims, CloseRevoked, ReasonRevoked})
+				}
 				continue
 			}
-			if !revoked {
-				continue
-			}
-			code, reason = CloseRevoked, ReasonRevoked
+			unknownErr = err
 		}
+		unknown++
+		if now.Sub(s.lastChecked()) > maxUncheckedSocketAge {
+			jobs = append(jobs, closeJob{s, claims, CloseUnavailable, ReasonUnavailable})
+		}
+	}
+	if unknown > 0 {
+		r.logger.Warn("could not tell whether open WebSockets were revoked; they are closed once unchecked for too long",
+			zap.Int("sockets", unknown), zap.Duration("max_unchecked", maxUncheckedSocketAge), zap.Error(unknownErr))
+	}
+	return jobs
+}
+
+// closeAll ends the sockets in parallel and reports how many this call closed.
+func (r *Registry) closeAll(jobs []closeJob) int {
+	var (
+		wg     sync.WaitGroup
+		slots  = make(chan struct{}, sweepCloseConcurrency)
+		mu     sync.Mutex
+		closed int
+	)
+	for _, j := range jobs {
 		wg.Add(1)
 		slots <- struct{}{}
-		go func(s *Socket, claims auth.JWTClaims, code int, reason string) {
+		go func(j closeJob) {
 			defer wg.Done()
 			defer func() { <-slots }()
-			if !s.end(code, reason) {
+			if !j.socket.end(j.code, j.reason) {
 				return
 			}
 			mu.Lock()
 			closed++
 			mu.Unlock()
 			r.logger.Info("closed a WebSocket whose token no longer authorizes it",
-				zap.Int("code", code),
-				zap.String("subject", auth.RedactSubject(claims.Sub)),
-				zap.String("jti", claims.Jti),
-				zap.Int64("exp", claims.Exp))
-		}(s, claims, code, reason)
+				zap.Int("code", j.code),
+				zap.String("subject", auth.RedactSubject(j.claims.Sub)),
+				zap.String("jti", j.claims.Jti),
+				zap.Int64("exp", j.claims.Exp))
+		}(j)
 	}
 	wg.Wait()
-	if unknown > 0 {
-		r.logger.Warn("could not tell whether open WebSockets were revoked; they are checked again next pass",
-			zap.Int("sockets", unknown), zap.Error(unknownErr))
-	}
 	return closed
 }
 
@@ -234,6 +302,20 @@ type Socket struct {
 	mu     sync.Mutex
 	claims auth.JWTClaims
 	ended  bool
+	// checkedAt is when the revocation list last vouched for this socket.
+	checkedAt time.Time
+}
+
+func (s *Socket) markChecked(at time.Time) {
+	s.mu.Lock()
+	s.checkedAt = at
+	s.mu.Unlock()
+}
+
+func (s *Socket) lastChecked() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.checkedAt
 }
 
 // Claims is a copy of the claims the socket is currently held to.
@@ -298,8 +380,11 @@ func (s *Socket) Refresh(claims *auth.JWTClaims) error {
 	if err := s.CheckRefresh(claims); err != nil {
 		return err
 	}
+	// The caller verified the token, which asked the list, so the socket is
+	// checked as of now.
 	s.mu.Lock()
 	s.claims = *claims
+	s.checkedAt = s.registry.now()
 	s.mu.Unlock()
 	return nil
 }

@@ -21,6 +21,7 @@ type denyAll struct{}
 
 func (denyAll) Revoked(*gwauth.JWTClaims) (bool, error) { return true, nil }
 func (denyAll) RefreshRevocations(context.Context)      {}
+func (denyAll) RevocationsUsable() bool                 { return true }
 
 // subscribe opens a real subscriber socket authorized by claims, and returns it
 // with the registry it was registered in.
@@ -111,3 +112,4 @@ type revokedNothing struct{}
 
 func (revokedNothing) Revoked(*gwauth.JWTClaims) (bool, error) { return false, nil }
 func (revokedNothing) RefreshRevocations(context.Context)      {}
+func (revokedNothing) RevocationsUsable() bool                 { return true }

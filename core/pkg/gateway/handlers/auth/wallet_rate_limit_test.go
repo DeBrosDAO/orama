@@ -130,7 +130,7 @@ func TestChallengeHandler_refusesAnExhaustedWallet(t *testing.T) {
 	limiter.allow("0xvictim")
 	limiter.allow("0xvictim")
 
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("auth service: %v", err)
 	}
