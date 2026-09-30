@@ -245,6 +245,21 @@ func claimsFromInternalAuthHeaders(h http.Header, namespace string, now time.Tim
 	return claims, nil
 }
 
+// sessionRevokedMessage is what a refused revoked token says. The namespace
+// proxy carries a refusal as a message, so the message is also how the caller
+// tells a revoked session from an unknown credential (namespaceProxyAuthCode).
+const sessionRevokedMessage = "this session was ended, or the key it came from was revoked"
+
+// namespaceProxyAuthCode is the code a refused namespace-proxy credential
+// answers with: a revoked session is AUTH_REVOKED, any other refusal names a
+// credential this cluster does not know.
+func namespaceProxyAuthCode(errMsg string) string {
+	if errMsg == sessionRevokedMessage {
+		return CodeAuthRevoked
+	}
+	return CodeAuthInvalidKey
+}
+
 // validateAuthForNamespaceProxy validates the request's auth credentials against the MAIN
 // cluster RQLite and returns the namespace the credentials belong to plus the
 // JWT claims when the caller authenticated with a Bearer JWT.
@@ -259,34 +274,6 @@ func claimsFromInternalAuthHeaders(h http.Header, namespace string, now time.Tim
 //   - ("", nil, errorMessage) if auth is invalid.
 //   - ("", nil, "") if no auth credentials provided (for public paths).
 //
-// namespaceGatewayTargetsQuery resolves the live gateway targets for a namespace.
-//
-// Bugboard #278: this used to require nc.status = 'ready', so a cluster marked
-// 'degraded' returned zero rows and the namespace 404'd on EVERY node —
-// including nodes whose gateways were perfectly healthy. One node's gateway row
-// flipping to 'failed' took a whole tenant offline, which defeats the point of
-// running three replicas. A degraded cluster is now served from its healthy
-// members: selection is on the per-node status, not the cluster-level rollup, so
-// the namespace 404s only when there is genuinely no live gateway.
-//
-// dn.status = 'active' is the other half of that. A namespace_cluster_nodes row
-// says 'running' until something updates it, and nothing did when a NODE went
-// away rather than a service — so traffic kept being proxied to a machine the
-// fleet had already given up on, until the tenant reconciler pruned it.
-const namespaceGatewayTargetsQuery = `
-			SELECT COALESCE(dn.internal_ip, dn.ip_address), npa.gateway_http_port
-			FROM namespace_port_allocations npa
-			JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
-			JOIN dns_nodes dn ON npa.node_id = dn.id
-			JOIN namespace_cluster_nodes ncn
-			  ON ncn.namespace_cluster_id = nc.id
-			 AND ncn.node_id = npa.node_id
-			 AND ncn.role = 'gateway'
-			WHERE nc.namespace_name = ?
-			  AND nc.status IN ('ready', 'degraded')
-			  AND ncn.status = 'running'
-			  AND dn.status = 'active'
-		`
 
 func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace string, claims *auth.JWTClaims, scopes string, errMsg string) {
 	// 1) Try JWT Bearer first
@@ -295,7 +282,8 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 		if strings.HasPrefix(lower, "bearer ") {
 			tok := strings.TrimSpace(authHeader[len("Bearer "):])
 			if strings.Count(tok, ".") == 2 {
-				if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+				c, err := g.authService.ParseAndVerifyJWT(tok)
+				if err == nil {
 					if ns := strings.TrimSpace(c.Namespace); ns != "" {
 						scopes, _, scopeErr := g.exchangedKeyScopes(r.Context(), c)
 						if scopeErr != "" {
@@ -303,6 +291,11 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 						}
 						return ns, c, scopes, ""
 					}
+				}
+				// A revoked token is not an absent one: falling through would
+				// have the request answered "no credential was presented".
+				if errors.Is(err, auth.ErrTokenRevoked) {
+					return "", nil, "", sessionRevokedMessage
 				}
 				// JWT verification failed - fall through to API key check
 			}
@@ -319,7 +312,8 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 	if isWebSocketUpgrade(r) {
 		tok := strings.TrimSpace(r.URL.Query().Get("jwt"))
 		if tok != "" && len(tok) <= maxQueryJWTLength && strings.Count(tok, ".") == 2 {
-			if c, err := g.authService.ParseAndVerifyJWT(tok); err == nil {
+			c, err := g.authService.ParseAndVerifyJWT(tok)
+			if err == nil {
 				if ns := strings.TrimSpace(c.Namespace); ns != "" {
 					scopes, _, scopeErr := g.exchangedKeyScopes(r.Context(), c)
 					if scopeErr != "" {
@@ -327,6 +321,9 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 					}
 					return ns, c, scopes, ""
 				}
+			}
+			if errors.Is(err, auth.ErrTokenRevoked) {
+				return "", nil, "", sessionRevokedMessage
 			}
 		}
 	}
@@ -794,7 +791,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 					// unknown credential, which tells the holder nothing about
 					// why their session stopped working.
 					if errors.Is(err, auth.ErrTokenRevoked) && !isPublic {
-						unauthorized(w, CodeAuthRevoked, "this session was ended, or the key it came from was revoked", nil)
+						unauthorized(w, CodeAuthRevoked, sessionRevokedMessage, nil)
 						return
 					}
 					// If it looked like a JWT but failed verification, fall through to API key check
@@ -1502,7 +1499,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 				zap.String("user_agent", r.Header.Get("User-Agent")),
 			)
 		}
-		unauthorized(w, CodeAuthInvalidKey, authErr, nil)
+		unauthorized(w, namespaceProxyAuthCode(authErr), authErr, nil)
 		return
 	}
 
@@ -1562,13 +1559,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		)
 	}
 
-	// Check middleware cache for namespace gateway targets
-	type namespaceGatewayTarget struct {
-		ip   string
-		port int
-	}
 	var targets []namespaceGatewayTarget
-
 	if g.mwCache != nil {
 		if cached, ok := g.mwCache.GetNamespaceTargets(namespaceName); ok {
 			for _, t := range cached {
@@ -1577,59 +1568,29 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Cache miss — look up namespace cluster gateway from DB
+	// Cache miss — look the namespace's live gateways up in the registry.
 	if len(targets) == 0 {
-		db := g.client.Database()
-		internalCtx := client.WithInternalAuth(r.Context())
-
-		// Query the namespace's LIVE gateways and choose a stable target.
-		// Random selection causes WS subscribe and publish calls to hit different
-		// nodes, which makes pubsub delivery flaky for short-lived subscriptions.
-		//
-		// Bugboard #278: this used to require nc.status = 'ready', which meant a
-		// cluster marked 'degraded' returned zero rows and the namespace 404'd on
-		// EVERY node — including the nodes whose gateways were perfectly healthy.
-		// One node's gateway row flipping to 'failed' took a whole tenant offline,
-		// which defeats the point of running three replicas. Serve a degraded
-		// cluster from its healthy members instead, selecting on the per-node
-		// status rather than the cluster-level rollup; 404 only when there is
-		// genuinely no live gateway.
-		result, err := db.Query(internalCtx, namespaceGatewayTargetsQuery, namespaceName)
-		if err != nil || result == nil || len(result.Rows) == 0 {
+		var err error
+		targets, err = g.namespaceGatewayTargets(r.Context(), namespaceName)
+		if err != nil {
+			// A registry that cannot answer says nothing about the namespace:
+			// reporting "not found" told a client with a perfectly live tenant
+			// that it does not exist, and not to retry.
+			g.logger.ComponentError(logging.ComponentGeneral, "could not read the namespace's gateways",
+				zap.String("namespace", namespaceName), zap.Error(err))
+			httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+				httputil.ErrCodeServiceUnavailable,
+				"the namespace's gateways could not be looked up right now; retry shortly",
+				httputil.WithRetryable())
+			return
+		}
+		if len(targets) == 0 {
 			g.logger.ComponentWarn(logging.ComponentGeneral, "namespace gateway not found",
-				zap.String("namespace", namespaceName),
-				zap.Error(err),
-				zap.Bool("result_nil", result == nil),
-				zap.Int("row_count", func() int {
-					if result != nil {
-						return len(result.Rows)
-					}
-					return -1
-				}()),
-			)
+				zap.String("namespace", namespaceName))
 			http.Error(w, "Namespace gateway not found", http.StatusNotFound)
 			return
 		}
-
-		for _, row := range result.Rows {
-			if len(row) == 0 {
-				continue
-			}
-			ip := getString(row[0])
-			if ip == "" {
-				continue
-			}
-			port := 10004
-			if len(row) > 1 {
-				if p := getInt(row[1]); p > 0 {
-					port = p
-				}
-			}
-			targets = append(targets, namespaceGatewayTarget{ip: ip, port: port})
-		}
-
-		// Cache the result for subsequent requests
-		if g.mwCache != nil && len(targets) > 0 {
+		if g.mwCache != nil {
 			cacheTargets := make([]gatewayTarget, len(targets))
 			for i, t := range targets {
 				cacheTargets[i] = gatewayTarget{ip: t.ip, port: t.port}

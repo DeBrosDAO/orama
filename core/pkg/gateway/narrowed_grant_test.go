@@ -78,6 +78,38 @@ func TestForwardedDataPlane_storageSelectorNarrowsTheWallet(t *testing.T) {
 	}
 }
 
+// Publish and subscribe are owned routes: a hop used to skip the grant for them,
+// so a wallet narrowed to pubsub:topic=chat.* published to billing (stagenet
+// e2e TestPubsubAuth_topicSelectorGrant saw a 200).
+func TestForwardedDataPlane_pubsubSelectorNarrowsTheWallet(t *testing.T) {
+	g, registry := namespaceGatewayForHops(t, "runtime")
+	registry.resource = "pubsub:topic=chat.*"
+
+	for name, tc := range map[string]struct {
+		method string
+		path   string
+		action auth.Action
+		topic  string
+		want   int
+	}{
+		"publish inside the selector":   {http.MethodPost, "/v1/pubsub/publish", auth.ActionWrite, "chat.room1", http.StatusOK},
+		"publish to another topic":      {http.MethodPost, "/v1/pubsub/publish", auth.ActionWrite, "billing", http.StatusForbidden},
+		"batch to another topic":        {http.MethodPost, "/v1/pubsub/publish-batch", auth.ActionWrite, "billing", http.StatusForbidden},
+		"subscribe inside the selector": {http.MethodGet, "/v1/pubsub/ws", auth.ActionRead, "chat.room1", http.StatusOK},
+		"subscribe to another topic":    {http.MethodGet, "/v1/pubsub/ws", auth.ActionRead, "billing", http.StatusForbidden},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := hop(t, g, tc.method, tc.path, hopNamespace, hopWallet)
+			status, reached := serveHopAuthorizing(g, r, auth.Resource{
+				Domain: auth.DomainPubsub, Action: tc.action, Name: tc.topic,
+			})
+			if !reached || status != tc.want {
+				t.Errorf("%s %s: reached %v, status %d, want %d", tc.path, tc.topic, reached, status, tc.want)
+			}
+		})
+	}
+}
+
 // A selector in another domain says nothing about this one, and a grant
 // narrowed to it holds only what it names: cache is not part of it.
 func TestForwardedDataPlane_aSelectorInAnotherDomainDoesNotReachTheCache(t *testing.T) {
