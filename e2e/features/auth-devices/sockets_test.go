@@ -3,9 +3,9 @@
 package authdevices
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -47,7 +47,18 @@ func subscribe(t testing.TB, c *gw.Client, bearer string, query url.Values) (*we
 	return conn, resp, err
 }
 
-func mustSubscribe(t testing.TB, c *gw.Client, bearer string, query url.Values) *websocket.Conn {
+// watched is an open socket with a goroutine reading it from the moment it
+// opens. The server pings and drops a connection that does not answer within
+// 75s, without a close frame; a socket nobody reads never answers, so a test
+// that reads only when it asks for the close code would see 1006 instead of
+// the server's close.
+type watched struct {
+	*websocket.Conn
+	// closed receives the error that ended the read loop.
+	closed chan error
+}
+
+func mustSubscribe(t testing.TB, c *gw.Client, bearer string, query url.Values) *watched {
 	t.Helper()
 	conn, resp, err := subscribe(t, c, bearer, query)
 	if err != nil {
@@ -57,31 +68,35 @@ func mustSubscribe(t testing.TB, c *gw.Client, bearer string, query url.Values) 
 		}
 		t.Fatalf("subscribing: HTTP %d: %v", status, err)
 	}
-	return conn
+	w := &watched{Conn: conn, closed: make(chan error, 1)}
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				w.closed <- err
+				return
+			}
+		}
+	}()
+	return w
 }
 
-// closeCode reads until the server closes conn or within passes, and returns
-// the close code (0 when the socket stayed open).
-func closeCode(t testing.TB, conn *websocket.Conn, within time.Duration) int {
+// closeCode waits up to within for the server to close the socket and returns
+// the close code (0 when the socket stayed open). An end without a close frame
+// fails the test.
+func (w *watched) closeCode(t testing.TB, within time.Duration) int {
 	t.Helper()
-	if err := conn.SetReadDeadline(time.Now().Add(within)); err != nil {
-		t.Fatal(err)
-	}
-	for {
-		_, _, err := conn.ReadMessage()
-		if err == nil {
-			continue
-		}
+	ctx, cancel := context.WithTimeout(t.Context(), within)
+	defer cancel()
+	select {
+	case err := <-w.closed:
 		var ce *websocket.CloseError
 		if errors.As(err, &ce) {
 			return ce.Code
 		}
-		var ne net.Error
-		if errors.As(err, &ne) && ne.Timeout() {
-			return 0
-		}
 		t.Fatalf("socket failed without a close frame: %v", err)
+	case <-ctx.Done():
 	}
+	return 0
 }
 
 // TestSocketRevocation_closesWith4403: a subscription opened with a token is
@@ -119,8 +134,8 @@ func TestSocketRevocation_closesWith4403(t *testing.T) {
 		viaMain := mustSubscribe(t, c, s.AccessToken, nil)
 		viaNS := mustSubscribe(t, n.Client, s.AccessToken, nil)
 		revoke(s, d, plain)
-		for gwName, conn := range map[string]*websocket.Conn{"public gateway": viaMain, "namespace gateway": viaNS} {
-			if code := closeCode(t, conn, sweepBudget); code != closeRevoked {
+		for gwName, conn := range map[string]*watched{"public gateway": viaMain, "namespace gateway": viaNS} {
+			if code := conn.closeCode(t, sweepBudget); code != closeRevoked {
 				t.Errorf("%s, %s: socket closed with %d, want %d within %s", name, gwName, code, closeRevoked, sweepBudget)
 			}
 		}
@@ -180,7 +195,7 @@ func TestSocketRevocation_keySocketsStayOpen(t *testing.T) {
 		}
 		return true, nil
 	})
-	if code := closeCode(t, byKey, sweepBudget); code != 0 {
+	if code := byKey.closeCode(t, sweepBudget); code != 0 {
 		t.Errorf("the key's open socket was closed with %d; key sockets are not re-checked", code)
 	}
 }

@@ -231,3 +231,25 @@ func TestProtect_registersAndRefusesEmpty(t *testing.T) {
 		t.Fatal("empty secret accepted")
 	}
 }
+
+func TestPrepay_takesTheTokensOnceAndSendsWithoutWaiting(t *testing.T) {
+	srv, hits := statusServer(t, http.StatusOK)
+	c, clk, _ := pacedClient(t, srv.URL)
+	pre, err := c.Prepay(context.Background(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One token a minute with a burst of one: three tokens cost two waits.
+	if clk.total() != 2*time.Minute {
+		t.Fatalf("prepaying 3 tokens slept %s, want 2m", clk.total())
+	}
+	for range 3 {
+		if resp, err := pre.Send(context.Background(), Req{Method: http.MethodPost, Path: PathRefresh}); err != nil || resp.Status != http.StatusOK {
+			t.Fatalf("resp %+v err %v", resp, err)
+		}
+	}
+	n, _ := hits.Load(PathRefresh)
+	if clk.total() != 2*time.Minute || *n.(*int) != 3 {
+		t.Fatalf("sending waited again (slept %s) or lost a request (%d hits)", clk.total(), *n.(*int))
+	}
+}

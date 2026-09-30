@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/e2e/harness/pace"
@@ -67,6 +68,28 @@ func (c *Client) Unpaced() *Client {
 	cp := *c
 	cp.unpaced = true
 	return &cp
+}
+
+// Prepay waits now for the n address tokens the next credential requests will
+// spend and returns a client that sends them without waiting again. It is for
+// a sequence whose requests must land within a time window of one another (a
+// refresh token's reuse grace is 60s): paced one by one, the later requests
+// queue behind other tests' and miss the window. The tokens are taken, so the
+// run's budget is charged exactly as if the requests had been paced; the
+// caller must send at most n credential requests through the returned client.
+func (c *Client) Prepay(ctx context.Context, n int) (*Client, error) {
+	if c.pacer != nil && !c.unpaced {
+		u, err := url.Parse(c.BaseURL)
+		if err != nil || u.Hostname() == "" {
+			return nil, fmt.Errorf("client base URL %q has no host", c.BaseURL)
+		}
+		for range n {
+			if err := c.pacer.Wait(ctx, u.Hostname(), pace.BucketCred); err != nil {
+				return nil, fmt.Errorf("prepay %d credential requests to %s: %w", n, u.Hostname(), err)
+			}
+		}
+	}
+	return c.Unpaced(), nil
 }
 
 // WithPacer returns a copy of c paced by p (nil: not paced). Clients built by

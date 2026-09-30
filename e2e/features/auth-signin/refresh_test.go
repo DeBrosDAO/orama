@@ -61,9 +61,16 @@ func TestRefresh_replayRefusedAfterGrace(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)
 	s := signIn(t, c, newWallet(t), "")
-	refresh(t, c, s.RefreshToken, lobby).Expect(t, http.StatusOK)
-	refresh(t, c, s.RefreshToken, lobby).Expect(t, http.StatusOK)
-	expectRefreshRefused(t, refresh(t, c, s.RefreshToken, lobby), "third use of a rotated token inside the grace")
+	// The grace is 60s from the rotation. The three uses take their pacer
+	// tokens first: paced one by one behind the other packages' credential
+	// calls, the second could land after the grace and be refused for that.
+	inGrace, err := c.Prepay(t.Context(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresh(t, inGrace, s.RefreshToken, lobby).Expect(t, http.StatusOK)
+	refresh(t, inGrace, s.RefreshToken, lobby).Expect(t, http.StatusOK)
+	expectRefreshRefused(t, refresh(t, inGrace, s.RefreshToken, lobby), "third use of a rotated token inside the grace")
 
 	s2 := signIn(t, c, newWallet(t), "")
 	var next gw.Session
