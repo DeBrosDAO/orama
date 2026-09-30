@@ -82,6 +82,11 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(req.Key) > MaxKeyBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("key too large: a key is at most %d bytes", MaxKeyBytes))
+		return
+	}
+
 	putOpts, err := putOptionsForTTL(req.TTL)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -102,7 +107,7 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 	olricCluster := h.olricClient.GetClient()
 	dm, err := olricCluster.NewDMap(namespacedDMap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to create DMap", err)
 		return
 	}
 
@@ -111,6 +116,11 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 	valueToStore, err := encodeStoredValue(req.Value)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !entryFitsTable(req.Key, valueToStore) {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"value too large: an entry must fit in one cache table (%d bytes), key and encoding included; store less under one key", OlricTableSizeBytes))
 		return
 	}
 

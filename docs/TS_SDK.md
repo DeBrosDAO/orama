@@ -352,8 +352,9 @@ A value is any JSON value except `null`, and `get` returns exactly what was put,
 type included: the string `"123"` comes back a string, `true` comes back `true`.
 A value written before entries were typed holds raw text and is read as what it
 looks like (JSON when it parses, else a string). One entry must fit in a single
-cache table (1 MiB, key and encoding included); a larger value is refused with a
-413 and nothing is stored.
+cache table (1 MiB, key and encoding included) and a key is at most 255 bytes;
+a larger value or longer key is refused by the gateway with a 413 and nothing is
+stored.
 
 ---
 

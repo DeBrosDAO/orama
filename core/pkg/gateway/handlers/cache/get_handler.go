@@ -78,7 +78,7 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 	olricCluster := h.olricClient.GetClient()
 	dm, err := olricCluster.NewDMap(namespacedDMap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to create DMap", err)
 		return
 	}
 
@@ -93,7 +93,7 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 			zap.String("dmap", req.DMap),
 			zap.String("key", req.Key),
 			zap.Error(err))
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get key: %v", err))
+		writeError(w, http.StatusInternalServerError, "failed to get key")
 		return
 	}
 
@@ -103,7 +103,7 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 			zap.String("dmap", req.DMap),
 			zap.String("key", req.Key),
 			zap.Error(err))
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to decode value: %v", err))
+		writeError(w, http.StatusInternalServerError, "failed to decode value")
 		return
 	}
 
@@ -183,7 +183,7 @@ func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) 
 	olricCluster := h.olricClient.GetClient()
 	dm, err := olricCluster.NewDMap(namespacedDMap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to create DMap", err)
 		return
 	}
 
@@ -234,4 +234,12 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // writeError writes a standardized JSON error response.
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
+}
+
+// writeCacheFailure answers a failure of the cache itself. The client is told
+// what failed, as a constant; why — the Olric error, which can name member
+// addresses on the overlay — goes to the log only.
+func (h *CacheHandlers) writeCacheFailure(w http.ResponseWriter, code int, what string, err error) {
+	h.logger.ComponentError(logging.ComponentGeneral, what, zap.Error(err))
+	writeError(w, code, what)
 }

@@ -69,7 +69,7 @@ func (h *CacheHandlers) ScanHandler(w http.ResponseWriter, r *http.Request) {
 	olricCluster := h.olricClient.GetClient()
 	dm, err := olricCluster.NewDMap(namespacedDMap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to create DMap", err)
 		return
 	}
 
@@ -81,7 +81,7 @@ func (h *CacheHandlers) ScanHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to scan: %v", err))
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to scan", err)
 		return
 	}
 	defer iterator.Close()
@@ -136,7 +136,7 @@ func (h *CacheHandlers) HealthHandler(w http.ResponseWriter, r *http.Request) {
 
 	err := h.olricClient.Health(ctx)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("cache health check failed: %v", err))
+		h.writeCacheFailure(w, http.StatusServiceUnavailable, "cache health check failed", err)
 		return
 	}
 

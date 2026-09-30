@@ -16,8 +16,18 @@ import (
 	"github.com/olric-data/olric/config"
 )
 
-// startTimeout bounds how long a test waits for the member to come up.
-const startTimeout = 5 * time.Second
+const (
+	// startTimeout bounds how long a test waits for the member to come up.
+	startTimeout = 5 * time.Second
+
+	// clusterFormTimeout bounds how long a test waits for every member to see
+	// the whole cluster and own partitions; joining and the first routing
+	// table distribution take a few hundred milliseconds on loopback.
+	clusterFormTimeout = 15 * time.Second
+
+	// clusterPollInterval is how often the cluster is asked whether it formed.
+	clusterPollInterval = 50 * time.Millisecond
+)
 
 // Server is one running Olric member.
 type Server struct {
@@ -30,6 +40,15 @@ type Server struct {
 // functions are handed on a node.
 func (s *Server) EmbeddedClient() olriclib.Client {
 	return s.db.NewEmbeddedClient()
+}
+
+// Stop shuts the member down now, so a test can see how a client fails when the
+// cache goes away. The shutdown at the end of the test is then a no-op.
+func (s *Server) Stop(t *testing.T) {
+	t.Helper()
+	if err := s.db.Shutdown(context.Background()); err != nil {
+		t.Fatalf("olrictest: failed to stop the member: %v", err)
+	}
 }
 
 // Start runs Olric on a free loopback port and stops it when the test ends.
@@ -52,7 +71,47 @@ func StartCluster(t *testing.T, n int) []*Server {
 	for i := 1; i < n; i++ {
 		members = append(members, startMember(t, 0, []string{seed}))
 	}
+	waitForCluster(t, members)
 	return members
+}
+
+// waitForCluster fails the test unless, within clusterFormTimeout, every member
+// reports all n members and owns partitions. A cluster that has not formed
+// answers from one member, which is the single-member case a cluster test
+// exists to get away from.
+func waitForCluster(t *testing.T, members []*Server) {
+	t.Helper()
+	deadline := time.Now().Add(clusterFormTimeout)
+	var last string
+	for {
+		last = clusterGap(members)
+		if last == "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("olrictest: the %d-member cluster did not form within %s: %s", len(members), clusterFormTimeout, last)
+		}
+		time.Sleep(clusterPollInterval)
+	}
+}
+
+// clusterGap says what is missing from a formed cluster, or "" when nothing is.
+func clusterGap(members []*Server) string {
+	ctx, cancel := context.WithTimeout(context.Background(), clusterFormTimeout)
+	defer cancel()
+	for _, m := range members {
+		st, err := m.EmbeddedClient().Stats(ctx, m.Addr)
+		if err != nil {
+			return fmt.Sprintf("member %s cannot report its stats: %v", m.Addr, err)
+		}
+		if len(st.ClusterMembers) != len(members) {
+			return fmt.Sprintf("member %s sees %d of %d members", m.Addr, len(st.ClusterMembers), len(members))
+		}
+		if len(st.Partitions) == 0 {
+			return fmt.Sprintf("member %s owns no partitions yet", m.Addr)
+		}
+	}
+	return ""
 }
 
 // startMember runs one member. memberlistPort 0 picks a free one; peers are

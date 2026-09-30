@@ -76,7 +76,7 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	olricCluster := h.olricClient.GetClient()
 	dm, err := olricCluster.NewDMap(namespacedDMap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to create DMap", err)
 		return
 	}
 
@@ -91,11 +91,11 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to look the key up: %v", err))
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to look the key up", err)
 		return
 	}
 	if _, err := dm.Delete(ctx, req.Key); err != nil && !isKeyNotFound(err) {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete key: %v", err))
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to delete key", err)
 		return
 	}
 
