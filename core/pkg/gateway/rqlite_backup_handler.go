@@ -56,9 +56,35 @@ func rqliteStatusError(path string, resp *http.Response) error {
 // rqliteExportHandler handles GET /v1/rqlite/export
 // Proxies to the namespace's RQLite /db/backup endpoint to download a raw SQLite snapshot.
 // Protected by requiresNamespaceOwnership() via the /v1/rqlite/ prefix.
+// refuseWholeDatabaseToNonOwner refuses a namespace's whole-database export or
+// import to anyone but its owner, and reports whether it did.
+//
+// A namespace's RQLite holds the platform's rows about it as well as the
+// tenant's own: keys, grants, secrets. The SQL guard keeps statements off
+// them, but a snapshot is every row and a load replaces every row, and no
+// statement filter sees either. With db:read and db:write they were a
+// developer's way to read every credential and to write themselves an owner
+// grant. The backup and restore routes already require the owner; these are
+// the same act without the sealing. The cluster gateway's own registry is
+// operator-only, and requireOperatorForCoreRegistry has refused everyone else.
+func (g *Gateway) refuseWholeDatabaseToNonOwner(w http.ResponseWriter, r *http.Request) bool {
+	if g.servesCoreRegistry() {
+		return false
+	}
+	if _, owner := backupCaller(r); owner {
+		return false
+	}
+	forbidden(w, CodeOwnershipRequired,
+		"only the namespace's owner may export or import its whole database: it holds every key, grant and secret of the namespace", nil)
+	return true
+}
+
 func (g *Gateway) rqliteExportHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if g.refuseWholeDatabaseToNonOwner(w, r) {
 		return
 	}
 
@@ -115,6 +141,9 @@ func (g *Gateway) rqliteExportHandler(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) rqliteImportHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if g.refuseWholeDatabaseToNonOwner(w, r) {
 		return
 	}
 

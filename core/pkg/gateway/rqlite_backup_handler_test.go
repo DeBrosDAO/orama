@@ -1,12 +1,14 @@
 package gateway
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
@@ -209,5 +211,55 @@ func TestRqliteImportHandler_RQLiteError(t *testing.T) {
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Errorf("got status %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+}
+
+// On a namespace gateway a whole-database export or import is the owner's.
+// It needed only db:read / db:write, so a developer could read every key and
+// grant, or load a database that makes them the owner.
+func TestRqliteWholeDatabase_ownerOnlyOnANamespaceGateway(t *testing.T) {
+	reached := 0
+	mockRQLite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockRQLite.Close()
+	gw := &Gateway{cfg: &Config{RQLiteDSN: mockRQLite.URL, ClientNamespace: "anchat"}, logger: newRQLiteTestLogger()}
+
+	requests := func(role auth.Role) []*http.Request {
+		exp := httptest.NewRequest(http.MethodGet, "/v1/rqlite/export", nil)
+		imp := httptest.NewRequest(http.MethodPost, "/v1/rqlite/import", strings.NewReader("db"))
+		imp.Header.Set("Content-Type", "application/octet-stream")
+		out := []*http.Request{}
+		for _, r := range []*http.Request{exp, imp} {
+			ctx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, "anchat")
+			out = append(out, markGrant(r.WithContext(ctx), &auth.Grant{Role: role}))
+		}
+		return out
+	}
+	serve := func(r *http.Request) int {
+		rr := httptest.NewRecorder()
+		if r.Method == http.MethodGet {
+			gw.rqliteExportHandler(rr, r)
+		} else {
+			gw.rqliteImportHandler(rr, r)
+		}
+		return rr.Code
+	}
+
+	for _, role := range []auth.Role{auth.RoleDeveloper, auth.RoleAdmin, auth.RoleRuntime} {
+		for _, r := range requests(role) {
+			if code := serve(r); code != http.StatusForbidden {
+				t.Errorf("%s %s as %s: status %d, want 403", r.Method, r.URL.Path, role, code)
+			}
+		}
+	}
+	if reached != 0 {
+		t.Fatalf("a refused request reached RQLite %d times", reached)
+	}
+	for _, r := range requests(auth.RoleOwner) {
+		if code := serve(r); code != http.StatusOK {
+			t.Errorf("%s %s as the owner: status %d, want 200", r.Method, r.URL.Path, code)
+		}
 	}
 }

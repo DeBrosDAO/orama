@@ -261,6 +261,8 @@ func buildRoutePolicies() *routepolicy.Table {
 	// --- Control plane on a namespace's own resources ------------------
 
 	// The raw database: an export is every row in it, an import replaces them.
+	// On a namespace gateway the handlers also require the owner's grant
+	// (refuseWholeDatabaseToNonOwner): the rows include every key and grant.
 	t.Add(owned(auth.DomainDB, auth.ActionRead), "/v1/rqlite/export")
 	t.Add(owned(auth.DomainDB, auth.ActionWrite), "/v1/rqlite/import")
 
