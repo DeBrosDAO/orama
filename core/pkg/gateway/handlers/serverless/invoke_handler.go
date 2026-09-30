@@ -266,6 +266,17 @@ func (h *ServerlessHandlers) ListVersions(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	writeVersions(w, versions)
+}
+
+// writeVersions answers a version listing. A function that exists has at least
+// one version, and deleting a function deletes its versions, so an empty list
+// means there is no such function: a 404, not a 200 with nothing in it.
+func writeVersions(w http.ResponseWriter, versions []*serverless.Function) {
+	if len(versions) == 0 {
+		writeError(w, http.StatusNotFound, "Function not found")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"versions": versions,
 		"count":    len(versions),

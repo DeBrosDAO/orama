@@ -13,7 +13,7 @@ var VersionsCmd = &cobra.Command{
 	Use:   "versions <name>",
 	Short: "List all versions of a function",
 	Long:  "Shows all deployed versions of a specific function.",
-	Args:  cobra.ExactArgs(1),
+	Args:  functionNameArgs(1),
 	RunE:  runVersions,
 }
 

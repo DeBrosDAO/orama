@@ -12,7 +12,7 @@ var GetCmd = &cobra.Command{
 	Use:   "get <name>",
 	Short: "Get details of a deployed function",
 	Long:  "Retrieves and displays detailed information about a specific function.",
-	Args:  cobra.ExactArgs(1),
+	Args:  functionNameArgs(1),
 	RunE:  runGet,
 }
 

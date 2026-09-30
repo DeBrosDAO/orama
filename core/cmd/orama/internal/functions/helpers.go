@@ -12,7 +12,9 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,6 +70,22 @@ var wasmMagicBytes = []byte{0x00, 0x61, 0x73, 0x6d}
 
 // validNameRegex validates function names (alphanumeric, hyphens, underscores).
 var validNameRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
+
+// functionNameArgs is the Args of a command that takes exactly n positional
+// arguments, the first of which names a deployed function. A name that is not
+// a function name is refused as a usage error before any request: it is
+// written into a request path, where "../" would reach another route.
+func functionNameArgs(n int) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := cobra.ExactArgs(n)(cmd, args); err != nil {
+			return err
+		}
+		if !validNameRegex.MatchString(args[0]) {
+			return fmt.Errorf("invalid function name %q: must start with a letter and contain only letters, digits, hyphens, or underscores", args[0])
+		}
+		return nil
+	}
+}
 
 // LoadConfig reads and parses a function.yaml from the given directory.
 func LoadConfig(dir string) (*FunctionConfig, error) {
@@ -160,7 +178,29 @@ func apiRequest(method, endpoint string, body io.Reader, contentType string) (*h
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	return http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, clierr.Unavailable("failed to reach the gateway at %s: %w", apiURL, err)
+	}
+	return resp, nil
+}
+
+// apiStatusError is the error for a gateway answer that is not a success, with
+// the exit code that says what kind of answer it was: a credential the gateway
+// refuses is an auth failure, a function or trigger that is not there is "not
+// found", and a gateway that cannot serve right now is unavailable, which a
+// script may retry. Any other refusal is the generic failure.
+func apiStatusError(what string, status int, body []byte) error {
+	err := fmt.Errorf("%s (%d): %s", what, status, string(body))
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return clierr.Wrap(clierr.CodeAuth, err)
+	case http.StatusNotFound:
+		return clierr.Wrap(clierr.CodeNotFound, err)
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return clierr.Wrap(clierr.CodeUnavailable, err)
+	}
+	return err
 }
 
 // apiGet performs an authenticated GET request and returns the parsed JSON response.
@@ -177,7 +217,7 @@ func apiGet(endpoint string) (map[string]interface{}, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiStatusError("API error", resp.StatusCode, respBody)
 	}
 
 	var result map[string]interface{}
@@ -202,7 +242,7 @@ func apiDelete(endpoint string) (map[string]interface{}, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiStatusError("API error", resp.StatusCode, respBody)
 	}
 
 	var result map[string]interface{}
@@ -286,7 +326,7 @@ func uploadWASMFunction(wasmPath string, cfg *FunctionConfig) (map[string]interf
 	}
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("deploy failed (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiStatusError("deploy failed", resp.StatusCode, respBody)
 	}
 
 	var result map[string]interface{}

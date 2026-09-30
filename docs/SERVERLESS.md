@@ -671,6 +671,10 @@ Every invocation is logged with: request ID, duration, status (success/error/tim
 orama function logs my-function
 ```
 
+`logs` and `versions` of a function that does not exist answer 404, which the
+CLI exits with 4 (not found); a function that exists and has not run has an
+empty log and a 200.
+
 ## CLI Reference
 
 Every flag of every command is in the [CLI reference](CLI_REFERENCE.md), which
