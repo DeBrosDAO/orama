@@ -307,6 +307,11 @@ only when the subscription is finished for good, so it is not raised for a drop
 that is about to be repaired. Configure or disable it with
 `wsConfig.reconnect`.
 
+Any number of subscriptions on one topic each receive every message, and one
+closing does not affect the others. A message published on the same node is
+delivered once, not twice. `client.pubsub.topics()` lists the topics of your
+namespace that the gateway's node is subscribed to.
+
 Presence is opt-in per subscription:
 
 ```typescript
@@ -319,6 +324,10 @@ await client.pubsub.subscribe("room:general", {
   },
 });
 ```
+
+`onLeave` fires for every way a member goes: a close, a dropped connection, or
+a client that stops answering the gateway's pings (it is dropped after 75
+seconds of silence).
 
 ---
 

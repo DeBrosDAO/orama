@@ -49,9 +49,10 @@ func (p *PubSubHandlers) PublishHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	p.deliverLocal(ns, body.Topic, data)
+	p.firePublishTriggers(ns, body.Topic, data)
 
-	// Publish to libp2p asynchronously for cross-node delivery.
+	// Publish through the pubsub service asynchronously; it delivers to every
+	// subscriber, on this node and on others, exactly once.
 	go func() {
 		publishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -94,8 +95,8 @@ const MaxPerMessageBytes = 1 << 20
 
 // PublishBatchHandler handles POST /v1/pubsub/publish-batch.
 // Accepts up to MaxPublishBatchSize messages and publishes them in parallel,
-// preserving namespace isolation. Local subscribers receive messages
-// immediately; libp2p delivery is async.
+// preserving namespace isolation. Delivery, to subscribers on this node as on
+// others, is through the pubsub service and asynchronous.
 func (p *PubSubHandlers) PublishBatchHandler(w http.ResponseWriter, r *http.Request) {
 	if p.client == nil {
 		writeError(w, http.StatusServiceUnavailable, "client not initialized")
@@ -153,12 +154,11 @@ func (p *PubSubHandlers) PublishBatchHandler(w http.ResponseWriter, r *http.Requ
 		decoded = append(decoded, pubsub.TopicMessage{Topic: m.Topic, Data: data})
 	}
 
-	// Deliver locally + dispatch triggers per topic synchronously (fast in-process).
 	for _, msg := range decoded {
-		p.deliverLocal(ns, msg.Topic, msg.Data)
+		p.firePublishTriggers(ns, msg.Topic, msg.Data)
 	}
 
-	// Async libp2p batch publish, similar to PublishHandler's approach.
+	// Async batch publish through the pubsub service, similar to PublishHandler's approach.
 	go func() {
 		publishCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -175,35 +175,16 @@ func (p *PubSubHandlers) PublishBatchHandler(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, PublishBatchResponse{Status: "ok"})
 }
 
-// deliverLocal handles local-subscriber delivery and fires PubSub triggers.
-// It does NOT publish to libp2p — callers handle that themselves (single
-// or batched) so this helper stays focused on in-process fan-out.
-func (p *PubSubHandlers) deliverLocal(ns, topic string, data []byte) {
-	p.mu.RLock()
-	localSubs := p.getLocalSubscribers(topic, ns)
-	p.mu.RUnlock()
-
-	localDeliveryCount := 0
-	if len(localSubs) > 0 {
-		for _, sub := range localSubs {
-			select {
-			case sub.msgChan <- data:
-				localDeliveryCount++
-			default:
-				p.logger.ComponentWarn("gateway", "local subscriber buffer full, dropping message",
-					zap.String("topic", topic))
-			}
-		}
-	}
-
+// firePublishTriggers dispatches the PubSub triggers of serverless functions
+// for a message published through this gateway. It does not deliver the message
+// to anyone: subscribers, on this node or another, receive it from the node's
+// pubsub service, which the caller publishes to.
+func (p *PubSubHandlers) firePublishTriggers(ns, topic string, data []byte) {
 	p.logger.ComponentInfo("gateway", "pubsub publish: processing message",
 		zap.String("topic", topic),
 		zap.String("namespace", ns),
-		zap.Int("data_len", len(data)),
-		zap.Int("local_subscribers", len(localSubs)),
-		zap.Int("local_delivered", localDeliveryCount))
+		zap.Int("data_len", len(data)))
 
-	// Fire PubSub triggers for serverless functions (non-blocking).
 	if p.onPublish != nil {
 		go p.onPublish(context.Background(), ns, topic, data)
 	}

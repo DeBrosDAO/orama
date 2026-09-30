@@ -925,14 +925,33 @@ Client WebSocket Connect
     ↓
 [Authentication]
     ↓
-[Subscribe to Topic]
+[Subscribe to the node's pubsub service (unix socket)]
     ↓
-[LibP2P PubSub] ←→ [Local Subscribers]
-    ↓
-[Message Broadcasting]
+[LibP2P PubSub (GossipSub)] ←→ [subscribers on this node and on others]
     ↓
 Client Receives Messages
 ```
+
+A message reaches a subscriber by exactly one path: the node's pubsub service
+(`orama-namespace-pubsub@index`). A publish through the gateway fires the
+serverless PubSub triggers and is published to that service, which delivers it
+once to every subscriber on the publishing node (GossipSub's loopback) and to
+those on other nodes. The gateway does not also push it to its own sockets.
+
+Per gateway and namespace-topic, the gateway's pubsub client (`pkg/pubsub`
+`HTTPClient`) holds one upstream stream and fans it out to every subscribed
+socket; a socket removes only its own handler, and the stream closes with the
+last one. A socket subscribes before its upgrade, so a service that cannot
+subscribe is a `503` and no message published after the socket opens is missed.
+
+A subscriber socket lives as long as its reader. The gateway pings every 30
+seconds and reads with a 75-second deadline that any frame, a pong included,
+refreshes; a read error, a close, a missed deadline or a ping that cannot be
+written ends the connection, and presence (`presence.leave`, the member list)
+and the subscription are always cleaned up. `GET /v1/pubsub/topics` lists the
+topics of the caller's namespace that the node's pubsub service holds a
+subscription on (`GET /topics?namespace=` on its socket), never another
+namespace's.
 
 ### 3. Serverless Invocation Flow
 

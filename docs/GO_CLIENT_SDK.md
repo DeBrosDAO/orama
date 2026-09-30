@@ -335,6 +335,21 @@ if err != nil {
 defer c.PubSub().Unsubscribe(ctx, topic)
 ```
 
+Any number of handlers may subscribe to one topic and each receives every
+message. `Subscribe` returns once the pubsub service holds the subscription, and
+`Unsubscribe` undoes one `Subscribe` (the most recent), closing the stream when
+none is left. A caller that shares a topic with others and must remove exactly
+its own handler uses `SubscribeHandle`, which returns that handler's stop
+function (idempotent):
+
+```go
+stop, err := c.PubSub().SubscribeHandle(ctx, topic, handler)
+if err != nil {
+    log.Fatal(err)
+}
+defer stop()
+```
+
 ### Batch Publish
 
 `PublishBatch` publishes multiple messages in parallel (one per topic), and `PublishSame` sends the same payload to every topic:
@@ -356,6 +371,10 @@ if err != nil {
 }
 fmt.Printf("Topics: %v\n", topics)
 ```
+
+`ListTopics` returns the topics of the client's namespace that this node's
+pubsub service holds a subscription on, sorted; another namespace's topics are
+never listed.
 
 ## Anonymity Proxy
 

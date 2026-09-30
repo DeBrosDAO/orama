@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
@@ -11,16 +12,31 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
+const (
+	// defaultWSPingInterval is how often a subscriber socket is pinged.
+	defaultWSPingInterval = 30 * time.Second
+	// defaultWSPongWait is how long a subscriber socket may be silent, pongs
+	// and client frames both counting, before it is dead: two missed pings and
+	// slack. It must exceed the ping interval.
+	defaultWSPongWait = 75 * time.Second
+	// wsWriteTimeout bounds one data-frame write to a subscriber socket.
+	wsWriteTimeout = 30 * time.Second
+	// wsControlWriteTimeout bounds one ping or close frame.
+	wsControlWriteTimeout = 5 * time.Second
+)
+
 // PubSubHandlers handles all pubsub-related HTTP and WebSocket endpoints
 type PubSubHandlers struct {
 	client client.NetworkClient
 	logger *logging.ColoredLogger
 
-	// Local pub/sub bypass for same-gateway subscribers
-	localSubscribers map[string][]*localSubscriber // topic+namespace -> subscribers
-	presenceMembers  map[string][]PresenceMember   // topicKey -> members
-	mu               sync.RWMutex
-	presenceMu       sync.RWMutex
+	presenceMembers map[string][]PresenceMember // topicKey -> members
+	presenceMu      sync.RWMutex
+
+	// pingInterval and pongWait drive subscriber-socket liveness (see the
+	// defaults); tests shorten them.
+	pingInterval time.Duration
+	pongWait     time.Duration
 
 	// onPublish is called when a message is published, to dispatch PubSub triggers.
 	// Set via SetOnPublish. May be nil if serverless triggers are not configured.
@@ -43,18 +59,13 @@ func (p *PubSubHandlers) SetOnPublish(fn func(ctx context.Context, namespace, to
 // its sweeper can close the ones whose token expires or is revoked.
 func NewPubSubHandlers(client client.NetworkClient, sessions *wssession.Registry, logger *logging.ColoredLogger) *PubSubHandlers {
 	return &PubSubHandlers{
-		client:           client,
-		logger:           logger,
-		localSubscribers: make(map[string][]*localSubscriber),
-		presenceMembers:  make(map[string][]PresenceMember),
-		sessions:         sessions,
+		client:          client,
+		logger:          logger,
+		presenceMembers: make(map[string][]PresenceMember),
+		pingInterval:    defaultWSPingInterval,
+		pongWait:        defaultWSPongWait,
+		sessions:        sessions,
 	}
-}
-
-// localSubscriber represents a local websocket subscriber on this gateway node
-type localSubscriber struct {
-	msgChan   chan []byte
-	namespace string
 }
 
 // PresenceMember represents a member in a topic's presence list
@@ -69,15 +80,6 @@ type PresenceMember struct {
 type PublishRequest struct {
 	Topic   string `json:"topic"`
 	DataB64 string `json:"data_base64"`
-}
-
-// getLocalSubscribers returns local subscribers for a given topic and namespace
-func (p *PubSubHandlers) getLocalSubscribers(topic, namespace string) []*localSubscriber {
-	topicKey := namespace + "." + topic
-	if subs, ok := p.localSubscribers[topicKey]; ok {
-		return subs
-	}
-	return nil
 }
 
 // resolveNamespaceFromRequest gets namespace from context set by auth middleware
