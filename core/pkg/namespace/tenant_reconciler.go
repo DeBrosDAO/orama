@@ -258,6 +258,11 @@ func (cm *ClusterManager) desiredLocalConfig(ctx context.Context, clusterID stri
 	// to nodes that are still active: a peer list that includes a departed
 	// node is what made every gateway restart stall for minutes timing out
 	// against it.
+	//
+	// Membership is an EXISTS, not a JOIN: namespace_cluster_nodes holds one row
+	// per role (rqlite, olric, gateway), so a join listed every peer three times.
+	// That desired list never equalled the one spawn wrote, and the reconciler
+	// restarted every freshly provisioned gateway as "drifted".
 	type peerRow struct {
 		NodeID              string `db:"node_id"`
 		InternalIP          string `db:"internal_ip"`
@@ -271,9 +276,9 @@ func (cm *ClusterManager) desiredLocalConfig(ctx context.Context, clusterID stri
 		       pa.olric_memberlist_port, pa.olric_http_port
 		  FROM namespace_port_allocations pa
 		  JOIN dns_nodes dn ON pa.node_id = dn.id
-		  JOIN namespace_cluster_nodes cn
-		    ON cn.namespace_cluster_id = pa.namespace_cluster_id AND cn.node_id = pa.node_id
-		 WHERE pa.namespace_cluster_id = ? AND dn.status = 'active'`, clusterID); err != nil {
+		 WHERE pa.namespace_cluster_id = ? AND dn.status = 'active'
+		   AND EXISTS (SELECT 1 FROM namespace_cluster_nodes cn
+		                WHERE cn.namespace_cluster_id = pa.namespace_cluster_id AND cn.node_id = pa.node_id)`, clusterID); err != nil {
 		return nil, fmt.Errorf("read cluster peers: %w", err)
 	}
 
@@ -419,9 +424,9 @@ func (cm *ClusterManager) survivingNodes(ctx context.Context, clusterID string) 
 		       pa.olric_http_port, pa.olric_memberlist_port, pa.gateway_http_port
 		  FROM namespace_port_allocations pa
 		  JOIN dns_nodes dn ON pa.node_id = dn.id
-		  JOIN namespace_cluster_nodes cn
-		    ON cn.namespace_cluster_id = pa.namespace_cluster_id AND cn.node_id = pa.node_id
-		 WHERE pa.namespace_cluster_id = ? AND dn.status = 'active'`, clusterID)
+		 WHERE pa.namespace_cluster_id = ? AND dn.status = 'active'
+		   AND EXISTS (SELECT 1 FROM namespace_cluster_nodes cn
+		                WHERE cn.namespace_cluster_id = pa.namespace_cluster_id AND cn.node_id = pa.node_id)`, clusterID)
 	if err != nil {
 		return nil, fmt.Errorf("read surviving members: %w", err)
 	}
