@@ -23,6 +23,9 @@ async function join() {
       pc.ontrack = (ev) => { document.getElementById('remote').srcObject = ev.streams[0]; };
       pc.onicecandidate = (ev) => ev.candidate && ws.send(JSON.stringify({type: 'ice-candidate', data: ev.candidate}));
     }
+    if (m.type === 'refresh-credentials' && pc) {
+      pc.setConfiguration({...pc.getConfiguration(), iceServers: [{urls: m.data.uris, username: m.data.username, credential: m.data.password}]});
+    }
     if (m.type === 'offer' && pc) {
       await pc.setRemoteDescription(m.data);
       await pc.setLocalDescription(await pc.createAnswer());

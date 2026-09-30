@@ -123,6 +123,16 @@ func (rm *RoomManager) GetRoom(roomID string) *Room {
 	return rm.rooms[roomID]
 }
 
+// HasParticipants reports whether roomID is open here with at least one peer.
+// An empty room awaiting cleanup does not count: it hosts no call to join.
+func (rm *RoomManager) HasParticipants(roomID string) bool {
+	if roomID == "" {
+		return false
+	}
+	room := rm.GetRoom(roomID)
+	return room != nil && !room.IsClosed() && room.GetParticipantCount() > 0
+}
+
 // CloseAll closes all rooms (for graceful shutdown).
 func (rm *RoomManager) CloseAll() {
 	rm.mu.Lock()

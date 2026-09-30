@@ -130,6 +130,10 @@ const ws = new WebSocket(
   // the page makes, and history.
   `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&token=${encodeURIComponent(accessToken)}`
 );
+// `room` is optional but recommended. With it the gateway routes the upgrade
+// straight to the room's SFU; without it the gateway reads your first (join)
+// frame and routes by its roomId (see Room Placement). When both are present
+// they must match: a join for a different room is refused with `room_mismatch`.
 
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
@@ -139,9 +143,11 @@ ws.onmessage = (event) => {
     case 'ice-candidate': handleICE(msg);   break;
     case 'peer-joined':   handleJoin(msg);  break;
     case 'peer-left':     handleLeave(msg); break;
-    case 'turn-credentials':
-    case 'refresh-credentials':
-      updateTURN(msg);  // SFU sends refreshed creds at 80% TTL
+    case 'turn-credentials':      // sent once, on join
+      setTURN(msg);
+      break;
+    case 'refresh-credentials':   // sent by the SFU at 80% of the credential TTL
+      updateTURN(msg);
       break;
     case 'server-draining':
       reconnect();  // SFU shutting down, reconnect to another node
@@ -195,9 +201,77 @@ await fetch('/v1/webrtc/rooms?room_id=my-room', {
 | `leave` | Client → SFU | Leave room |
 | `peer-joined` | SFU → Client | New peer notification |
 | `peer-left` | SFU → Client | Peer departure |
-| `turn-credentials` | SFU → Client | Initial TURN credentials |
-| `refresh-credentials` | SFU → Client | Refreshed credentials (at 80% TTL) |
+| `turn-credentials` | SFU → Client | Initial TURN credentials, sent once after `welcome` |
+| `refresh-credentials` | SFU → Client | Replacement credentials, sent at 80% of the TTL (same `{ username, password, ttl, uris }` payload). Never sent as `turn-credentials` |
 | `server-draining` | SFU → Client | SFU shutting down |
+
+## Room Placement
+
+A room lives in exactly one SFU process (rooms are in that process's memory), so
+every peer of a call must reach the same SFU. Clients resolve the namespace host
+round-robin, so peers of one room arrive at different nodes' gateways; each
+gateway therefore routes the socket to the room's SFU, not to its own node's.
+
+The gateway learns the room one of two ways. With `?room=<roomId>` on the URL
+it decides at the upgrade and pipes the socket through untouched. Without it
+(existing clients) the gateway accepts the upgrade itself, waits up to 5 s for
+the first frame, requires it to be a text `join` frame of at most 4096 bytes
+with a `userId` and a valid `roomId`, then dials the owning SFU (naming the room
+in the URL, so the SFU's check applies), replays that frame verbatim and copies
+frames both ways until either side closes. A first frame that is late,
+oversized, not JSON, not a join, or names an invalid room gets an `error` frame
+(`invalid_join`) and a close; nothing reaches an SFU. If no SFU can take the
+room the client gets `no_sfu` (or `sfu_unreachable`) and a close. Either way the
+owner is chosen as follows:
+
+1. List the namespace's SFU nodes: the `sfu` rows of `webrtc_port_allocations`
+   on nodes `dns_nodes` still counts as active (cluster registry, cached 10 s).
+2. Rank them by rendezvous (highest-random-weight) hash of
+   `namespace|room|nodeID`. Every gateway computes the same order.
+3. Probe each in parallel with `GET /health?room=<roomId>` (1.5 s timeout). An
+   SFU that does not answer, or answers 503 (draining), is skipped. A healthy
+   one reports `hasRoom`: whether the room has participants on it.
+4. The owner is the first healthy node in rank that already hosts the room;
+   with no live room, the top-ranked healthy node.
+5. Proxy the socket to `<owner WireGuard IP>:<signalling port>`.
+
+Why computed and not recorded: nothing is written on the join path, so there is
+no lease to expire, no stale row naming a dead node, and no registry write per
+join. The cost is O(SFU nodes) small health requests over WireGuard per join
+(three by design; SFU count is bounded by the namespace's node count, not by the
+number of rooms or peers), so joins scale with peers, not with cluster state.
+The alternative (a conditional insert into the namespace's `webrtc_rooms`) puts a
+Raft write on every first join and needs heartbeats to expire ownership when the
+owner dies; it was rejected for that.
+
+Behaviour on change:
+
+| Event | Result |
+|---|---|
+| Two gateways, same room, at once | Both rank identically and both find no live room, so both pick the same node |
+| Owner SFU stops or drains | It fails its probe. `server-draining` (or the closed socket) sends peers back; each reconnect, through any gateway, lands on the same next-ranked healthy node |
+| Owner comes back while the call lives elsewhere | Not taken back: the node hosting the room wins over rank, so a running call is never split by a recovery |
+| SFU added or removed | Only rooms whose top rank changed can move; a live room stays on the node hosting it (rule 4), so adding a node never splits a running call. Rooms hosted on a removed node re-home as in the row above |
+| No SFU registered / none healthy / registry unreadable | 503 with the reason. There is no fallback to the local SFU, which would split the call |
+
+Limits: a network partition between one gateway and the owner makes that
+gateway rank the owner down and pick the next node, splitting the room for the
+duration; peers reconverge on reconnect once the probe views agree. During a
+rolling upgrade an old gateway still proxies to its own node's SFU; a new
+gateway finds any room already live on an SFU, so calls started by old gateways
+are joined, not duplicated (an old SFU ignores `?room=` and reports no room, so
+new gateways then rely on rank alone).
+
+Room ids are 1 to 128 printable ASCII characters (no whitespace or control
+characters); the gateway and the SFU apply the same rule
+(`core/pkg/sfu/roomid`). A bad `?room=` is a 400.
+
+Joins are limited per signed-in identity (the wallet subject), 60 a minute with a
+burst of 20; over it the gateway answers 429 with `Retry-After`. One call is one
+socket, and the burst covers a reconnect after an SFU drains.
+
+`GET /v1/webrtc/rooms` still reports the health of the SFU on the gateway's own
+node only.
 
 ## Port Allocation
 
@@ -251,8 +325,9 @@ config and Caddy's wildcard certificate and writes nothing.
   (bugboard #155).
 - SFU signaling path TTL: per-namespace `turn_credential_ttl` (default 600s). The
   SFU proactively sends `refresh-credentials` over the signaling WebSocket at 80%
-  of TTL, so a short TTL is safe there.
-- Clients should update ICE servers on receiving refresh
+  of TTL (the initial credential arrives as `turn-credentials`), so a short TTL is
+  safe there.
+- Clients should update ICE servers on receiving `refresh-credentials`
 
 ## TURNS TLS Certificate
 
@@ -416,7 +491,7 @@ SFU ports are NOT opened in the firewall — they are WireGuard-internal only.
 | Table | Purpose |
 |-------|---------|
 | `namespace_webrtc_config` | Per-namespace WebRTC config (enabled, TURN secret, node counts) |
-| `webrtc_rooms` | Room-to-SFU-node affinity |
+| `webrtc_rooms` | Not used: room placement is computed (see Room Placement), never recorded. Emptied when WebRTC is disabled |
 | `webrtc_port_allocations` | SFU/TURN port tracking |
 
 ## Cold Boot Recovery

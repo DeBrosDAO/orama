@@ -32,6 +32,7 @@ covers:
     - orama-namespace-turn@.service
   claims:
     - "docs/WEBRTC.md#architecture: SFU on all 3 nodes bound to WireGuard only; TURN on 2 of 3; relay-only ICE"
+    - "docs/WEBRTC.md#room-placement: every peer of a room reaches the room's one SFU whichever node's gateway it connects through (1:1 and group calls across three gateways)"
     - "docs/WEBRTC.md#turn-topology: one shared TURN per host; turn.yaml is 0600; isolation is the per-tenant secret; relays from 49152-65535"
     - "docs/WEBRTC.md#turn-credential-protocol: REST credentials last 24 h; SFU credentials 600 s refreshed at 80%"
     - "docs/WEBRTC.md#turns-tls-certificate: TURNS on 5349 presents the wildcard for turn-<ns>.<base>"
