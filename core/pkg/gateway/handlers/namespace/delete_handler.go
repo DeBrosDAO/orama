@@ -95,6 +95,20 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		zap.Int64("namespace_id", namespaceID),
 	)
 
+	// 0. Refuse while the cluster reference index cannot say who else holds this
+	// namespace's content: deleting first and finding out later would leave the
+	// cluster torn down and another tenant's pin possibly removed. The namespace
+	// being deleted does not count against its own readiness.
+	if err := h.refs.CheckReady(r.Context(), ns); err != nil {
+		h.logger.Error("Namespace delete refused: the cluster reference index cannot be trusted yet",
+			zap.String("namespace", ns), zap.Error(err))
+		writeDeleteResponse(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"error":     "the cluster reference index is not ready to release this namespace's content; retry shortly",
+			"retryable": true,
+		})
+		return
+	}
+
 	// 1. Deprovision the cluster (stops infra on ALL nodes, deletes cluster-state, deallocates ports, deletes DNS)
 	if err := h.deprovisioner.DeprovisionCluster(r.Context(), namespaceID); err != nil {
 		h.logger.Error("Failed to deprovision cluster", zap.Error(err))
@@ -106,7 +120,14 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.cleanupDeployments(r.Context(), ns)
 
 	// 3. Unpin IPFS content from ipfs_content_ownership (separate from deployment CIDs)
-	h.unpinNamespaceContent(r.Context(), ns)
+	if err := h.unpinNamespaceContent(r.Context(), ns); err != nil {
+		h.logger.Error("Failed to release the namespace's IPFS references", zap.String("namespace", ns), zap.Error(err))
+		writeDeleteResponse(w, http.StatusInternalServerError, map[string]interface{}{
+			"error":     "the namespace's IPFS references could not be released; retry the delete",
+			"retryable": true,
+		})
+		return
+	}
 
 	// 4. Clean up global tables that use namespace TEXT (not FK cascade)
 	h.cleanupGlobalTables(r.Context(), ns)
@@ -256,29 +277,31 @@ func (h *DeleteHandler) teardownDeploymentReplicas(ctx context.Context, ns, depl
 
 // unpinNamespaceContent releases every reference the namespace holds in the
 // cluster reference index (its storage pins and its deployments' content and
-// build CIDs) and removes the cluster pin of each CID that leaves no reference
-// anywhere. The index, not the namespace's database, is what says who holds a
-// CID. Best-effort per CID: failures are logged and do not abort deletion.
-func (h *DeleteHandler) unpinNamespaceContent(ctx context.Context, ns string) {
-	orphaned, err := h.refs.ReleaseNamespace(ctx, ns)
-	if err != nil {
-		h.logger.Warn("Failed to release the namespace's IPFS references; its pins stay in place",
-			zap.String("namespace", ns), zap.Error(err))
-	}
-	if h.ipfsClient == nil || len(orphaned) == 0 {
-		return
-	}
-	h.logger.Info("Unpinning IPFS content for namespace",
-		zap.String("namespace", ns),
-		zap.Int("cid_count", len(orphaned)))
-	for _, cid := range orphaned {
-		if err := h.ipfsClient.Unpin(ctx, cid); err != nil {
-			h.logger.Warn("Failed to unpin CID (best-effort)",
-				zap.String("cid", cid),
-				zap.String("namespace", ns),
-				zap.Error(err))
+// build CIDs, and its backfill marker) and removes the cluster pin of each CID
+// that leaves no reference anywhere. The index, not the namespace's database,
+// is what says who holds a CID. A failure to release is returned, so the delete
+// fails and is retried: references left behind would hold other tenants' pins
+// and skip the backfill of a namespace recreated under the same name. Failing
+// to unpin an orphaned CID is only logged, as it always was.
+func (h *DeleteHandler) unpinNamespaceContent(ctx context.Context, ns string) error {
+	orphaned, releaseErr := h.refs.ReleaseNamespace(ctx, ns)
+	if h.ipfsClient != nil && len(orphaned) > 0 {
+		h.logger.Info("Unpinning IPFS content for namespace",
+			zap.String("namespace", ns),
+			zap.Int("cid_count", len(orphaned)))
+		for _, cid := range orphaned {
+			if err := h.ipfsClient.Unpin(ctx, cid); err != nil {
+				h.logger.Warn("Failed to unpin CID (best-effort)",
+					zap.String("cid", cid),
+					zap.String("namespace", ns),
+					zap.Error(err))
+			}
 		}
 	}
+	if releaseErr != nil {
+		return fmt.Errorf("failed to release the IPFS references of namespace %s: %w", ns, releaseErr)
+	}
+	return nil
 }
 
 // namespaceFKChildren are tables that declare REFERENCES namespaces(id)

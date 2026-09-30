@@ -208,10 +208,10 @@ The delete and the count are two statements in that order, so of two
 namespaces unpinning at once the later one sees zero and neither can miss the
 other. Deployments register the content and build CIDs they serve in the same index,
 and deployment update and delete, and namespace delete, release through the
-same count. A gateway that has just started answers `503` (retryable) to an
-unpin until it has loaded its namespace's existing references into the index
-(once, at the upgrade that introduced it), and a registry read that fails
-leaves the pin in place (`evicted: "skipped"`).
+same count. An unpin answers a retryable `503` while the index is still being
+built (once, at the upgrade that introduced it, until every namespace has
+loaded its existing references), and a registry read that fails leaves the pin
+in place (`evicted: "skipped"`).
 The response carries an `evicted` field:
 
 | Value | Meaning |

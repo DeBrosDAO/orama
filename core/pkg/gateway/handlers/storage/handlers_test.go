@@ -74,6 +74,8 @@ type mockIPFSClient struct {
 	unpinMu     sync.Mutex
 	// onUnpin runs inside Unpin, for tests that inspect state at that moment.
 	onUnpin func()
+	// onPin runs inside Pin, before it answers.
+	onPin func()
 	// evict tracking (bugboard #153)
 	evictRemoved int
 	evictErr     error
@@ -86,6 +88,9 @@ func (m *mockIPFSClient) Add(_ context.Context, _ io.Reader, _ string) (*ipfs.Ad
 }
 
 func (m *mockIPFSClient) Pin(_ context.Context, _ string, _ string, _ int) (*ipfs.PinResponse, error) {
+	if m.onPin != nil {
+		m.onPin()
+	}
 	return m.pinResp, m.pinErr
 }
 
@@ -1038,4 +1043,10 @@ func TestUploadHandler_QuotaExceeded(t *testing.T) {
 	if errObj == nil || errObj["code"] != "STORAGE_QUOTA_EXCEEDED" {
 		t.Errorf("expected STORAGE_QUOTA_EXCEEDED envelope, got %v", body)
 	}
+}
+
+func (m *mockIPFSClient) unpinCallCount() int {
+	m.unpinMu.Lock()
+	defer m.unpinMu.Unlock()
+	return m.unpinCalls
 }

@@ -56,11 +56,10 @@ func TestPinAsync_givingUp_dropsTheReference(t *testing.T) {
 	registry := registrySchema(t)
 	mock := &mockIPFSClient{pinErr: errors.New("cluster down")}
 	a := gatewayFor(t, mock, namespaceSchema(t), registry)
-	fresh, err := a.registerRef(context.Background(), sharedCID, "ns-a")
-	if err != nil || !fresh {
-		t.Fatalf("register = %v, %v", fresh, err)
+	if err := a.registerRef(context.Background(), sharedCID, "ns-a"); err != nil {
+		t.Fatal(err)
 	}
-	a.pinAsync(sharedCID, "f", 3, "ns-a", fresh)
+	a.pinAsync(sharedCID, "f", 3, "ns-a")
 	if n := refsOf(t, registry, sharedCID); n != 0 {
 		t.Fatalf("a pin that was given up on left %d references", n)
 	}
@@ -89,7 +88,7 @@ func TestRelease_withoutARegistry_isAnErrorNotZero(t *testing.T) {
 	if n, err := refs.Release(context.Background(), sharedCID, "ns-a", KindStorage); !errors.Is(err, ErrRefIndexUnavailable) {
 		t.Fatalf("Release = %d, %v; want ErrRefIndexUnavailable", n, err)
 	}
-	if _, err := refs.Register(context.Background(), sharedCID, "ns-a", KindStorage); !errors.Is(err, ErrRefIndexUnavailable) {
+	if err := refs.Register(context.Background(), sharedCID, "ns-a", KindStorage); !errors.Is(err, ErrRefIndexUnavailable) {
 		t.Fatalf("Register err = %v", err)
 	}
 	if _, err := refs.Count(context.Background(), sharedCID); !errors.Is(err, ErrRefIndexUnavailable) {
@@ -109,7 +108,7 @@ func TestUnpinIfLastRef(t *testing.T) {
 
 	t.Run("last reference unpins", func(t *testing.T) {
 		refs, ipfsMock, _ := setup(t)
-		if _, err := refs.Register(ctx, sharedCID, "ns-a", KindDeployment); err != nil {
+		if err := refs.Register(ctx, sharedCID, "ns-a", KindDeployment); err != nil {
 			t.Fatal(err)
 		}
 		if err := UnpinIfLastRef(ctx, refs, ipfsMock, sharedCID, "ns-a", KindDeployment); err != nil || ipfsMock.unpinCalls != 1 {
@@ -119,7 +118,7 @@ func TestUnpinIfLastRef(t *testing.T) {
 	t.Run("another kind in the same namespace keeps it", func(t *testing.T) {
 		refs, ipfsMock, _ := setup(t)
 		for _, k := range []string{KindStorage, KindDeployment} {
-			if _, err := refs.Register(ctx, sharedCID, "ns-a", k); err != nil {
+			if err := refs.Register(ctx, sharedCID, "ns-a", k); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -130,7 +129,7 @@ func TestUnpinIfLastRef(t *testing.T) {
 	t.Run("another namespace keeps it", func(t *testing.T) {
 		refs, ipfsMock, _ := setup(t)
 		for _, ns := range []string{"ns-a", "ns-b"} {
-			if _, err := refs.Register(ctx, sharedCID, ns, KindDeployment); err != nil {
+			if err := refs.Register(ctx, sharedCID, ns, KindDeployment); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -138,13 +137,18 @@ func TestUnpinIfLastRef(t *testing.T) {
 			t.Fatalf("err %v, unpins %d", err, ipfsMock.unpinCalls)
 		}
 	})
-	t.Run("not ready refuses", func(t *testing.T) {
-		refs, ipfsMock, registry := setup(t)
+	t.Run("not ready defers the unpin until it is", func(t *testing.T) {
+		refs, ipfsMock, _ := setup(t)
 		refs.pending.Store(true)
-		if err := UnpinIfLastRef(ctx, refs, ipfsMock, sharedCID, "ns-a", KindDeployment); !errors.Is(err, ErrRefIndexNotReady) || ipfsMock.unpinCalls != 0 {
-			t.Fatalf("err %v, unpins %d", err, ipfsMock.unpinCalls)
+		if err := refs.Register(ctx, sharedCID, "ns-a", KindDeployment); err != nil {
+			t.Fatal(err)
 		}
-		_ = registry
+		if err := UnpinIfLastRef(ctx, refs, ipfsMock, sharedCID, "ns-a", KindDeployment); err != nil || ipfsMock.unpinCalls != 0 {
+			t.Fatalf("err %v, unpins %d; want the unpin deferred", err, ipfsMock.unpinCalls)
+		}
+		if !refs.hasDeferred() {
+			t.Fatal("the unpin was not remembered")
+		}
 	})
 	t.Run("registry error never unpins", func(t *testing.T) {
 		refs, ipfsMock, registry := setup(t)
@@ -180,7 +184,7 @@ func TestReleaseNamespace(t *testing.T) {
 		{"QmShared", "ns-b", KindStorage},
 		{"", "ns-a", kindBackfilled},
 	} {
-		if _, err := refs.Register(ctx, r[0], r[1], r[2]); err != nil {
+		if err := refs.Register(ctx, r[0], r[1], r[2]); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -197,15 +201,5 @@ func TestReleaseNamespace(t *testing.T) {
 	}
 	if orphaned, err := refs.ReleaseNamespace(ctx, "ns-empty"); err != nil || len(orphaned) != 0 {
 		t.Fatalf("empty namespace: %v, %v", orphaned, err)
-	}
-}
-
-func TestRegister_reportsWhetherTheRowIsNew(t *testing.T) {
-	refs := NewCIDRefs(registrySchema(t))
-	for i, want := range []bool{true, false} {
-		got, err := refs.Register(context.Background(), sharedCID, "ns-a", KindStorage)
-		if err != nil || got != want {
-			t.Fatalf("register #%d = %v, %v; want %v", i+1, got, err, want)
-		}
 	}
 }

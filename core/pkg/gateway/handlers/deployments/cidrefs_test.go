@@ -19,6 +19,11 @@ func refsService(t *testing.T, rows ...[2]string) (*DeploymentService, *storage.
 	svc := registryWith(t, rows...)
 	refs := storage.NewCIDRefs(svc.db)
 	svc.SetCIDRefs(refs)
+	// Every live namespace has loaded its existing references.
+	if _, err := svc.db.Exec(context.Background(),
+		`INSERT INTO ipfs_cid_refs (cid, namespace, kind) SELECT '', name, 'backfilled' FROM namespaces`); err != nil {
+		t.Fatal(err)
+	}
 	return svc, refs
 }
 
@@ -47,7 +52,7 @@ func TestReleaseCID_anotherNamespacesReferenceKeepsThePin(t *testing.T) {
 	if _, err := svc.registerCIDs(ctx, "acme", "QmShared"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := refs.Register(ctx, "QmShared", "other", storage.KindStorage); err != nil {
+	if err := refs.Register(ctx, "QmShared", "other", storage.KindStorage); err != nil {
 		t.Fatal(err)
 	}
 	rec := &unpinRecorder{}
@@ -113,16 +118,11 @@ func TestReleaseCID_edgeCases(t *testing.T) {
 	}
 }
 
-func TestRegisterCIDs_onlyNewOnesAreReportedFresh(t *testing.T) {
+func TestRegisterCIDs_returnsWhatItRegisteredWithoutDuplicates(t *testing.T) {
 	svc, _ := refsService(t)
-	ctx := context.Background()
-	fresh, err := svc.registerCIDs(ctx, "acme", "QmA", "", "QmB")
-	if err != nil || len(fresh) != 2 {
-		t.Fatalf("fresh = %v, %v", fresh, err)
-	}
-	fresh, err = svc.registerCIDs(ctx, "acme", "QmA", "QmC")
-	if err != nil || len(fresh) != 1 || fresh[0] != "QmC" {
-		t.Fatalf("fresh = %v, %v; want only QmC", fresh, err)
+	registered, err := svc.registerCIDs(context.Background(), "acme", "QmA", "", "QmB", "QmA")
+	if err != nil || len(registered) != 2 {
+		t.Fatalf("registered = %v, %v; want QmA and QmB once", registered, err)
 	}
 }
 
@@ -194,7 +194,7 @@ func TestUpdateHandler_staticUpdateMovesTheReference(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.otherHold {
-				if _, err := refs.Register(ctx, "QmOld", "other", storage.KindStorage); err != nil {
+				if err := refs.Register(ctx, "QmOld", "other", storage.KindStorage); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -550,8 +550,8 @@ func TestUnpinHandler_lastPinner_removesClusterPin(t *testing.T) {
 	}
 }
 
-// If the cross-namespace check errors, fail safe: do NOT remove the shared
-// cluster pin, but still return 200 (this namespace is logically unpinned).
+// If the reference index cannot be read, fail safe: do NOT remove the shared
+// cluster pin, and answer a retryable 503 so the caller tries again.
 func TestUnpinHandler_refcountError_failsSafeLeavingPin(t *testing.T) {
 	mock := &mockIPFSClient{}
 	db := &mockStorageDB{refQueryErr: errStorageTest}
@@ -559,8 +559,8 @@ func TestUnpinHandler_refcountError_failsSafeLeavingPin(t *testing.T) {
 	rec, req := unpinReq("ns-A")
 	h.UnpinHandler(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (logical unpin still succeeds)", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 	if mock.unpinCalls != 0 {
 		t.Errorf("on refcount error the cluster pin must be left intact; unpinCalls=%d", mock.unpinCalls)

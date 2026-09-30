@@ -167,13 +167,13 @@ func (h *UpdateHandler) updateStatic(ctx context.Context, existing *deployments.
 		WHERE namespace = ? AND name = ?
 	`
 
-	fresh, err := h.service.registerCIDs(ctx, existing.Namespace, cid)
+	registered, err := h.service.registerCIDs(ctx, existing.Namespace, cid)
 	if err != nil {
 		return nil, err
 	}
 	_, err = h.service.db.Exec(ctx, query, cid, newVersion, now, existing.Namespace, existing.Name)
 	if err != nil {
-		h.service.dropFreshCIDs(ctx, existing.Namespace, fresh)
+		h.service.unregisterCIDs(ctx, existing.Namespace, registered)
 		return nil, fmt.Errorf("failed to update deployment: %w", err)
 	}
 
@@ -222,14 +222,14 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 	// The new build is recorded before anything is replaced, and the record is
 	// dropped again unless the database update below commits it, so an update
 	// that fails half way does not hold the CID referenced for ever.
-	fresh, err := h.service.registerCIDs(ctx, existing.Namespace, cid)
+	registered, err := h.service.registerCIDs(ctx, existing.Namespace, cid)
 	if err != nil {
 		return nil, err
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			h.service.dropFreshCIDs(ctx, existing.Namespace, fresh)
+			h.service.unregisterCIDs(ctx, existing.Namespace, registered)
 		}
 	}()
 

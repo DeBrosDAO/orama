@@ -27,7 +27,7 @@ func (u *unpinRecorder) Unpin(_ context.Context, cid string) error {
 func addRefs(t *testing.T, h *DeleteHandler, ns string, cids ...string) {
 	t.Helper()
 	for _, cid := range cids {
-		if _, err := h.refs.Register(context.Background(), cid, ns, "storage"); err != nil {
+		if err := h.refs.Register(context.Background(), cid, ns, "storage"); err != nil {
 			t.Fatal(err)
 		}
 	}

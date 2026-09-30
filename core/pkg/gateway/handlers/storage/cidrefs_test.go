@@ -30,12 +30,19 @@ func registrySchema(t *testing.T) *sqliteDB {
 	if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
-	ddl, err := os.ReadFile("../../../../migrations/064_ipfs_cid_refs.sql")
-	if err != nil {
+	// namespaces is the registry's list of live namespaces, which the index
+	// readiness check reads.
+	if _, err := db.Exec(`CREATE TABLE namespaces (name TEXT PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(string(ddl)); err != nil {
-		t.Fatalf("apply 064: %v", err)
+	for _, f := range []string{"064_ipfs_cid_refs.sql", "065_ipfs_cid_refs_holders.sql"} {
+		ddl, err := os.ReadFile("../../../../migrations/" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(string(ddl)); err != nil {
+			t.Fatalf("apply %s: %v", f, err)
+		}
 	}
 	return &sqliteDB{db: db}
 }
@@ -135,7 +142,7 @@ func TestUnpin_otherNamespaceDeploymentKeepsPin(t *testing.T) {
 	registry := registrySchema(t)
 	mock := &mockIPFSClient{pinResp: &ipfs.PinResponse{Cid: sharedCID}}
 	a := gatewayFor(t, mock, namespaceSchema(t), registry)
-	if _, err := NewCIDRefs(registry).Register(context.Background(), sharedCID, "ns-b", KindDeployment); err != nil {
+	if err := NewCIDRefs(registry).Register(context.Background(), sharedCID, "ns-b", KindDeployment); err != nil {
 		t.Fatal(err)
 	}
 	pinAs(t, a, "ns-a", sharedCID)
@@ -216,6 +223,22 @@ func TestUnpin_registryError_leavesPin(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	rec := unpinAs(a, "ns-a", sharedCID)
+	if rec.Code != http.StatusServiceUnavailable || mock.unpinCalls != 0 {
+		t.Fatalf("status %d, unpins %d; want a retryable 503 and the pin kept", rec.Code, mock.unpinCalls)
+	}
+}
+
+// A registry that answers the readiness check but fails the release still
+// leaves the pin alone; the namespace is logically unpinned.
+func TestUnpin_releaseError_leavesPin(t *testing.T) {
+	registry := registrySchema(t)
+	mock := &mockIPFSClient{pinResp: &ipfs.PinResponse{Cid: sharedCID}}
+	a := gatewayFor(t, mock, namespaceSchema(t), registry)
+	pinAs(t, a, "ns-a", sharedCID)
+	if _, err := registry.db.Exec(`CREATE TRIGGER refuse_delete BEFORE DELETE ON ipfs_cid_refs BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
 	rec := unpinAs(a, "ns-a", sharedCID)
 	if rec.Code != http.StatusOK || mock.unpinCalls != 0 {
 		t.Fatalf("status %d, unpins %d; want 200 and the pin kept", rec.Code, mock.unpinCalls)
@@ -326,7 +349,7 @@ func TestStartCIDRefBackfill_gatesUntilLoaded(t *testing.T) {
 	h := gatewayFor(t, &mockIPFSClient{}, namespaceSchema(t), registry)
 	h.StartCIDRefBackfill(t.Context(), "ns-a")
 	deadline := time.Now().Add(5 * time.Second)
-	for !h.refs.Ready() {
+	for h.refs.CheckReady(t.Context(), "") != nil {
 		if time.Now().After(deadline) {
 			t.Fatal("the backfill of an empty namespace never completed")
 		}

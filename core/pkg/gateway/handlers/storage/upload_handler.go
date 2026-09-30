@@ -172,11 +172,8 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// The reference goes into the cluster index before the pin is requested, so
 	// another namespace unpinning the same bytes right now counts it.
-	freshRef := false
 	if shouldPin {
-		var err error
-		freshRef, err = h.registerRef(ctx, addResp.Cid, namespace)
-		if err != nil {
+		if err := h.registerRef(ctx, addResp.Cid, namespace); err != nil {
 			h.logger.ComponentError(logging.ComponentGeneral, "failed to record the pin reference", zap.Error(err), zap.String("cid", addResp.Cid))
 			httputil.WriteError(w, http.StatusServiceUnavailable, "the content was stored but could not be registered for pinning; retry the upload")
 			return
@@ -185,7 +182,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Pin asynchronously in background if requested
 	if shouldPin {
-		go h.pinAsync(addResp.Cid, name, replicationFactor, namespace, freshRef)
+		go h.pinAsync(addResp.Cid, name, replicationFactor, namespace)
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, response)
@@ -202,8 +199,8 @@ const (
 
 // pinAsync pins a CID asynchronously in the background with retry logic.
 // It retries once if the first attempt fails, then gives up and drops the
-// reference the upload registered (freshRef), since no pin will exist for it.
-func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace string, freshRef bool) {
+// registration the upload made, since no pin will exist for it.
+func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace string) {
 	ctx := context.Background()
 
 	// First attempt
@@ -227,7 +224,7 @@ func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace s
 		// Final failure - log and give up
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin retry failed, giving up",
 			zap.Error(err), zap.String("cid", cid))
-		h.dropFreshRef(ctx, cid, namespace, freshRef)
+		h.dropRef(ctx, cid, namespace)
 	} else {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded on retry", zap.String("cid", cid))
 		// Update pin status in database

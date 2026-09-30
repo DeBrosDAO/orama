@@ -268,9 +268,9 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		return fmt.Errorf("failed to encode the environment of %s/%s: %w", deployment.Namespace, deployment.Name, err)
 	}
 
-	fresh, err := s.registerCIDs(ctx, deployment.Namespace, deployment.ContentCID, deployment.BuildCID)
+	registered, err := s.registerCIDs(ctx, deployment.Namespace, deployment.ContentCID, deployment.BuildCID)
 	if err != nil {
-		return err
+		return s.createFailed(ctx, deployment, registeredSubdomain, err)
 	}
 
 	// Insert deployment + record history in a single transaction
@@ -307,7 +307,7 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		return histErr
 	})
 	if err != nil {
-		s.dropFreshCIDs(ctx, deployment.Namespace, fresh)
+		s.unregisterCIDs(ctx, deployment.Namespace, registered)
 		return s.createFailed(ctx, deployment, registeredSubdomain, err)
 	}
 
@@ -335,7 +335,7 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 // gives, rather than a 500. Static sites claim no instance directory, so for
 // them the insert is the only thing that decides a race.
 func (s *DeploymentService) createFailed(ctx context.Context, deployment *deployments.Deployment, registeredSubdomain bool, insertErr error) error {
-	err := fmt.Errorf("failed to insert deployment: %w", insertErr)
+	err := fmt.Errorf("failed to create deployment: %w", insertErr)
 	if isDeploymentNameConflict(insertErr) {
 		err = &instanceTakenError{instance: process.InstanceName(deployment.Namespace, deployment.Name), exists: true}
 	}

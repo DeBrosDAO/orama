@@ -193,13 +193,13 @@ func (h *RollbackHandler) rollbackStatic(ctx context.Context, current *deploymen
 		WHERE namespace = ? AND name = ?
 	`
 
-	fresh, err := h.service.registerCIDs(ctx, current.Namespace, history.ContentCID)
+	registered, err := h.service.registerCIDs(ctx, current.Namespace, history.ContentCID)
 	if err != nil {
 		return nil, err
 	}
 	_, err = h.service.db.Exec(ctx, query, history.ContentCID, newVersion, now, current.Namespace, current.Name)
 	if err != nil {
-		h.service.dropFreshCIDs(ctx, current.Namespace, fresh)
+		h.service.unregisterCIDs(ctx, current.Namespace, registered)
 		return nil, fmt.Errorf("failed to update deployment: %w", err)
 	}
 
@@ -310,14 +310,14 @@ func (h *RollbackHandler) rollbackDynamic(ctx context.Context, current *deployme
 		WHERE namespace = ? AND name = ?
 	`
 
-	fresh, err := h.service.registerCIDs(ctx, current.Namespace, cid)
+	registered, err := h.service.registerCIDs(ctx, current.Namespace, cid)
 	if err != nil {
 		return nil, err
 	}
 	_, err = h.service.db.Exec(ctx, query, cid, newVersion, now, current.Namespace, current.Name)
 	if err != nil {
 		h.logger.Error("Failed to update database", zap.Error(err))
-		h.service.dropFreshCIDs(ctx, current.Namespace, fresh)
+		h.service.unregisterCIDs(ctx, current.Namespace, registered)
 	}
 
 	// Record rollback in history

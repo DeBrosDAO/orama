@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -40,9 +41,21 @@ const (
 	// refQueryTimeout bounds one registry round trip on the request path.
 	refQueryTimeout = 5 * time.Second
 
-	// refBackfillRetryInterval is the cadence of backfill attempts until one
-	// succeeds.
+	// refBackfillRetryInterval and refBackfillMaxInterval bound the backoff
+	// between failed backfill attempts (it doubles from the first to the
+	// second).
 	refBackfillRetryInterval = 5 * time.Second
+	refBackfillMaxInterval   = 5 * time.Minute
+
+	// refDeferredInterval is how often a gateway holding deferred unpins checks
+	// whether the index has become ready for them.
+	refDeferredInterval = 30 * time.Second
+
+	// maxReportedNamespaces caps the namespaces named in a not-ready error.
+	maxReportedNamespaces = 20
+
+	// maxDeferredUnpins bounds the unpins remembered while the index loads.
+	maxDeferredUnpins = 100_000
 
 	// refInsertChunk caps rows per multi-row INSERT so a large namespace's
 	// backfill stays well inside SQLite's bound-variable limit (3 per row).
@@ -56,20 +69,55 @@ const (
 // lower it.
 var maxBackfillRefs = 1_000_000
 
+// releaseBatch is how many of a namespace's CIDs ReleaseNamespace deletes and
+// counts per round trip, and maxReleaseBatches how many rounds one call makes.
+// A namespace with more remains partly held and the call says so; the caller
+// retries, and the rows not yet released are still there to find. Variables
+// only so a test can lower them.
+var (
+	releaseBatch      = 500
+	maxReleaseBatches = 200
+)
+
 var (
 	// ErrRefIndexUnavailable is returned when there is no registry handle to
 	// count in. A caller must not read it as "no references".
 	ErrRefIndexUnavailable = errors.New("the cluster reference index is not available on this gateway")
 
-	// ErrRefIndexNotReady is returned while this gateway's namespace has not yet
-	// been loaded into the index, so "last reference" cannot be decided.
-	ErrRefIndexNotReady = errors.New("the cluster reference index is still being built on this gateway")
+	errBackfillTooLarge = errors.New("the namespace is too large to load into the cluster reference index")
+
+	// ErrNamespaceRefsRemain is returned by ReleaseNamespace when the namespace
+	// holds more references than one call releases. Nothing is lost: call again.
+	ErrNamespaceRefsRemain = errors.New("the namespace still holds references in the cluster reference index")
+
+	// ErrRefIndexNotReady is returned while the index does not yet hold every
+	// namespace's existing references, so "last reference" cannot be decided.
+	ErrRefIndexNotReady = errors.New("the cluster reference index is still being built")
 )
+
+// NotBackfilledError says which namespaces have not loaded their existing
+// references into the index. It is an ErrRefIndexNotReady. Its message does not
+// name them (it reaches tenants); log Namespaces for the operator.
+type NotBackfilledError struct{ Namespaces []string }
+
+func (e *NotBackfilledError) Error() string {
+	return fmt.Sprintf("%s: %d namespaces have not loaded their existing references yet", ErrRefIndexNotReady, len(e.Namespaces))
+}
+
+func (e *NotBackfilledError) Is(target error) bool { return target == ErrRefIndexNotReady }
 
 // CIDRefs is the cluster-wide reference index over the cluster registry.
 type CIDRefs struct {
 	registry rqlite.Client
 	pending  atomic.Bool
+	// failure is set, once, when this gateway's own namespace can never be
+	// loaded (it is over maxBackfillRefs); it is the operator-visible reason.
+	failure atomic.Pointer[string]
+
+	// mu makes "the index becomes ready" and "an unpin is deferred until it
+	// does" one step each, so a deferral is never added after the flush.
+	mu       sync.Mutex
+	deferred map[string]ClusterUnpinner
 }
 
 // NewCIDRefs returns the index over the registry's RQLite. A nil registry
@@ -78,30 +126,83 @@ func NewCIDRefs(registry rqlite.Client) *CIDRefs {
 	return &CIDRefs{registry: registry}
 }
 
-// Ready reports whether "last reference" can be decided on this gateway.
-func (r *CIDRefs) Ready() bool { return !r.pending.Load() }
-
-// Register records that namespace holds cid as kind, and reports whether the
-// row is new. A caller that fails after registering releases the reference only
-// if it was new: an existing one may be what another holder of the same CID in
-// that namespace depends on. It runs BEFORE the cluster pin is requested, so a
-// concurrent unpin by another namespace already counts it.
-func (r *CIDRefs) Register(ctx context.Context, cid, namespace, kind string) (bool, error) {
+// CheckReady reports whether "last reference" can be decided, as nil or an
+// error that is an ErrRefIndexNotReady. It is ready only when this gateway's own
+// namespace has been loaded and every other live namespace has too: an
+// unloaded namespace's references are missing from the count, and a count that
+// omits a holder deletes that holder's data. except is a namespace being
+// deleted, whose own references no longer matter.
+func (r *CIDRefs) CheckReady(ctx context.Context, except string) error {
 	if r == nil || r.registry == nil {
-		return false, ErrRefIndexUnavailable
+		return ErrRefIndexUnavailable
+	}
+	if msg := r.failure.Load(); msg != nil {
+		return fmt.Errorf("%w: %s", ErrRefIndexNotReady, *msg)
+	}
+	if r.pending.Load() {
+		return ErrRefIndexNotReady
 	}
 	ctx, cancel := context.WithTimeout(ctx, refQueryTimeout)
 	defer cancel()
-	res, err := r.registry.Exec(ctx,
-		`INSERT OR IGNORE INTO ipfs_cid_refs (cid, namespace, kind) VALUES (?, ?, ?)`, cid, namespace, kind)
-	if err != nil {
-		return false, fmt.Errorf("failed to record the %s reference of namespace %s to %s in the cluster reference index: %w", kind, namespace, cid, err)
+	var rows []map[string]interface{}
+	if err := r.registry.Query(ctx, &rows,
+		`SELECT name FROM namespaces
+		  WHERE name != ?
+		    AND NOT EXISTS (SELECT 1 FROM ipfs_cid_refs r
+		                     WHERE r.namespace = namespaces.name AND r.cid = '' AND r.kind = ?)
+		  LIMIT ?`, except, kindBackfilled, maxReportedNamespaces); err != nil {
+		return fmt.Errorf("failed to read which namespaces have loaded their references into the cluster reference index: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("failed to tell whether the %s reference of namespace %s to %s was new: %w", kind, namespace, cid, err)
+	var missing []string
+	for _, row := range rows {
+		if n, ok := row["name"].(string); ok {
+			missing = append(missing, n)
+		}
 	}
-	return n > 0, nil
+	if len(missing) > 0 {
+		return &NotBackfilledError{Namespaces: missing}
+	}
+	return nil
+}
+
+// Register records that namespace holds cid as kind. Registrations are
+// counted (holders): a row shared by two concurrent registrants of the same
+// content survives the failure of one of them, see Unregister. It runs BEFORE
+// the cluster pin is requested, so a concurrent unpin by another namespace
+// already counts it.
+func (r *CIDRefs) Register(ctx context.Context, cid, namespace, kind string) error {
+	if r == nil || r.registry == nil {
+		return ErrRefIndexUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, refQueryTimeout)
+	defer cancel()
+	if _, err := r.registry.Exec(ctx,
+		`INSERT INTO ipfs_cid_refs (cid, namespace, kind) VALUES (?, ?, ?)
+		 ON CONFLICT(cid, namespace, kind) DO UPDATE SET holders = holders + 1`, cid, namespace, kind); err != nil {
+		return fmt.Errorf("failed to record the %s reference of namespace %s to %s in the cluster reference index: %w", kind, namespace, cid, err)
+	}
+	return nil
+}
+
+// Unregister takes back one Register whose pin or deployment did not happen.
+// The row goes only when no other registration stands behind it, so a request
+// that failed cannot delete the reference a concurrent request that succeeded
+// depends on. Use Release, not this, when the namespace lets go of the CID.
+func (r *CIDRefs) Unregister(ctx context.Context, cid, namespace, kind string) error {
+	if r == nil || r.registry == nil {
+		return ErrRefIndexUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, refQueryTimeout)
+	defer cancel()
+	if _, err := r.registry.Exec(ctx,
+		`UPDATE ipfs_cid_refs SET holders = holders - 1 WHERE cid = ? AND namespace = ? AND kind = ?`, cid, namespace, kind); err != nil {
+		return fmt.Errorf("failed to take back the %s registration of namespace %s for %s: %w", kind, namespace, cid, err)
+	}
+	if _, err := r.registry.Exec(ctx,
+		`DELETE FROM ipfs_cid_refs WHERE cid = ? AND namespace = ? AND kind = ? AND holders <= 0`, cid, namespace, kind); err != nil {
+		return fmt.Errorf("failed to remove the unheld %s reference of namespace %s to %s: %w", kind, namespace, cid, err)
+	}
+	return nil
 }
 
 // Release drops namespace's kind reference to cid and returns how many
@@ -150,45 +251,97 @@ func (r *CIDRefs) count(ctx context.Context, cid string) (int, error) {
 
 // ReleaseNamespace drops every reference namespace holds, and returns the CIDs
 // that no namespace references any more, whose pins may now be removed. Each
-// CID is counted after the whole namespace is released, so a concurrent release
-// elsewhere still leaves exactly one of the two seeing zero.
+// namespace CID is deleted first and counted second, in batches, so of two
+// releases racing on one CID the later delete sees zero. A batch that fails
+// leaves its rows and every later one in place: the call returns what it had
+// found so far and the error, and calling again finishes the job. The
+// namespace's marker row goes with the last batch, so a namespace recreated
+// under the same name is backfilled afresh. A namespace larger than
+// maxReleaseBatches*releaseBatch CIDs returns ErrNamespaceRefsRemain.
 func (r *CIDRefs) ReleaseNamespace(ctx context.Context, namespace string) ([]string, error) {
 	if r == nil || r.registry == nil {
 		return nil, ErrRefIndexUnavailable
 	}
+	var orphaned []string
+	for range maxReleaseBatches {
+		batch, err := r.releaseBatch(ctx, namespace)
+		orphaned = append(orphaned, batch.orphaned...)
+		if err != nil {
+			return orphaned, err
+		}
+		if len(batch.cids) == 0 {
+			return orphaned, r.deleteMarker(ctx, namespace)
+		}
+	}
+	return orphaned, ErrNamespaceRefsRemain
+}
+
+type releasedBatch struct {
+	cids     []string
+	orphaned []string
+}
+
+// releaseBatch releases up to releaseBatch of the namespace's CIDs, each round
+// trip under its own budget.
+func (r *CIDRefs) releaseBatch(ctx context.Context, namespace string) (releasedBatch, error) {
 	ctx, cancel := context.WithTimeout(ctx, refQueryTimeout)
 	defer cancel()
 	var held []map[string]interface{}
 	if err := r.registry.Query(ctx, &held,
-		`SELECT DISTINCT cid FROM ipfs_cid_refs WHERE namespace = ? AND cid != ''`, namespace); err != nil {
-		return nil, fmt.Errorf("failed to list the references of namespace %s: %w", namespace, err)
+		`SELECT DISTINCT cid FROM ipfs_cid_refs WHERE namespace = ? AND cid != '' LIMIT ?`, namespace, releaseBatch); err != nil {
+		return releasedBatch{}, fmt.Errorf("failed to list the references of namespace %s: %w", namespace, err)
 	}
-	if _, err := r.registry.Exec(ctx, `DELETE FROM ipfs_cid_refs WHERE namespace = ?`, namespace); err != nil {
-		return nil, fmt.Errorf("failed to release the references of namespace %s: %w", namespace, err)
+	cids := cidsOf(held)
+	if len(cids) == 0 {
+		return releasedBatch{}, nil
+	}
+	in := "(" + strings.TrimSuffix(strings.Repeat("?,", len(cids)), ",") + ")"
+	args := make([]any, 0, len(cids)+1)
+	args = append(args, namespace)
+	for _, c := range cids {
+		args = append(args, c)
+	}
+	if _, err := r.registry.Exec(ctx, `DELETE FROM ipfs_cid_refs WHERE namespace = ? AND cid IN `+in, args...); err != nil {
+		return releasedBatch{}, fmt.Errorf("failed to release %d references of namespace %s: %w", len(cids), namespace, err)
+	}
+	var still []map[string]interface{}
+	if err := r.registry.Query(ctx, &still, `SELECT DISTINCT cid FROM ipfs_cid_refs WHERE cid IN `+in, args[1:]...); err != nil {
+		return releasedBatch{cids: cids}, fmt.Errorf("failed to count the references that remain after releasing namespace %s: %w", namespace, err)
+	}
+	remaining := make(map[string]struct{}, len(still))
+	for _, c := range cidsOf(still) {
+		remaining[c] = struct{}{}
 	}
 	var orphaned []string
-	for _, cid := range cidsOf(held) {
-		n, err := r.count(ctx, cid)
-		if err != nil {
-			return orphaned, err
-		}
-		if n == 0 {
-			orphaned = append(orphaned, cid)
+	for _, c := range cids {
+		if _, ok := remaining[c]; !ok {
+			orphaned = append(orphaned, c)
 		}
 	}
-	return orphaned, nil
+	return releasedBatch{cids: cids, orphaned: orphaned}, nil
+}
+
+func (r *CIDRefs) deleteMarker(ctx context.Context, namespace string) error {
+	ctx, cancel := context.WithTimeout(ctx, refQueryTimeout)
+	defer cancel()
+	if _, err := r.registry.Exec(ctx, `DELETE FROM ipfs_cid_refs WHERE namespace = ?`, namespace); err != nil {
+		return fmt.Errorf("failed to remove the reference index marker of namespace %s: %w", namespace, err)
+	}
+	return nil
 }
 
 // UnpinIfLastRef releases namespace's kind reference to cid and removes the
 // cluster pin only if that leaves no reference anywhere. It never unpins when
-// the count cannot be made: a leaked pin is recoverable, another tenant's
-// deleted data is not. Empty cid or nil unpinner is a no-op.
+// the count cannot be trusted: a leaked pin is recoverable, another tenant's
+// deleted data is not. While the index is not ready (CheckReady) references
+// written by older gateways may be missing, so a release that leaves none does
+// not unpin now: the CID is remembered and, once the index is ready, recounted
+// and unpinned if still unreferenced. The memory is the process's; a restart
+// inside that window loses it and the pin stays. Empty cid or nil unpinner is a
+// no-op.
 func UnpinIfLastRef(ctx context.Context, refs *CIDRefs, ipfs ClusterUnpinner, cid, namespace, kind string) error {
 	if cid == "" || ipfs == nil {
 		return nil
-	}
-	if !refs.Ready() {
-		return ErrRefIndexNotReady
 	}
 	remaining, err := refs.Release(ctx, cid, namespace, kind)
 	if err != nil {
@@ -197,18 +350,73 @@ func UnpinIfLastRef(ctx context.Context, refs *CIDRefs, ipfs ClusterUnpinner, ci
 	if remaining > 0 {
 		return nil
 	}
+	if err := refs.CheckReady(ctx, ""); err != nil {
+		if errors.Is(err, ErrRefIndexNotReady) {
+			refs.deferUnpin(cid, ipfs)
+			return nil
+		}
+		return err
+	}
 	if err := ipfs.Unpin(ctx, cid); err != nil {
 		return fmt.Errorf("failed to remove the cluster pin of %s, which no namespace references any more: %w", cid, err)
 	}
 	return nil
 }
 
+// deferUnpin remembers an unpin for when the index is ready. When the memory is
+// full nothing is remembered and the pin is left in place.
+func (r *CIDRefs) deferUnpin(cid string, ipfs ClusterUnpinner) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.deferred) >= maxDeferredUnpins {
+		return
+	}
+	if r.deferred == nil {
+		r.deferred = make(map[string]ClusterUnpinner)
+	}
+	r.deferred[cid] = ipfs
+}
+
+func (r *CIDRefs) takeDeferred() map[string]ClusterUnpinner {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d := r.deferred
+	r.deferred = nil
+	return d
+}
+
+func (r *CIDRefs) hasDeferred() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.deferred) > 0
+}
+
+// applyDeferred unpins each deferred CID that still has no reference. A CID
+// that was registered again meanwhile is left alone.
+func (h *Handlers) applyDeferred(ctx context.Context, deferred map[string]ClusterUnpinner) {
+	for cid, ipfs := range deferred {
+		n, err := h.refs.Count(ctx, cid)
+		if err != nil {
+			h.logger.ComponentError(logging.ComponentGeneral, "could not recount a deferred unpin; the pin stays",
+				zap.String("cid", cid), zap.Error(err))
+			continue
+		}
+		if n > 0 {
+			continue
+		}
+		if err := ipfs.Unpin(ctx, cid); err != nil {
+			h.logger.ComponentError(logging.ComponentGeneral, "deferred unpin failed; the pin stays",
+				zap.String("cid", cid), zap.Error(err))
+		}
+	}
+}
+
 // registerRef and releaseRef are the handlers' entry to the index. A handler
 // set built with no database at all is the unit-test configuration (as in
 // checkCIDOwnership), and has no references to keep.
-func (h *Handlers) registerRef(ctx context.Context, cid, namespace string) (bool, error) {
+func (h *Handlers) registerRef(ctx context.Context, cid, namespace string) error {
 	if h.db == nil {
-		return false, nil
+		return nil
 	}
 	return h.refs.Register(ctx, cid, namespace, KindStorage)
 }
@@ -220,24 +428,25 @@ func (h *Handlers) releaseRef(ctx context.Context, cid, namespace string) (int, 
 	return h.refs.Release(ctx, cid, namespace, KindStorage)
 }
 
-// dropFreshRef undoes a registration whose pin never happened, so it does not
-// hold other namespaces' unpins back forever. Only a reference this call
-// created is dropped: an existing one belongs to a pin that still stands. It
-// runs on a context that outlives the request, since a cancelled request is
-// one of the reasons a pin fails.
-func (h *Handlers) dropFreshRef(ctx context.Context, cid, namespace string, fresh bool) {
-	if !fresh {
+// dropRef takes back a registration whose pin never happened, so it does not
+// hold other namespaces' unpins back forever. It only subtracts this request's
+// registration: a concurrent request registering the same content keeps its
+// own. It runs on a context that outlives the request, since a cancelled
+// request is one of the reasons a pin fails.
+func (h *Handlers) dropRef(ctx context.Context, cid, namespace string) {
+	if h.db == nil {
 		return
 	}
-	if _, err := h.releaseRef(context.WithoutCancel(ctx), cid, namespace); err != nil {
-		h.logger.ComponentError(logging.ComponentGeneral, "failed to drop the reference of a pin that did not happen; the cid stays referenced until the namespace unpins it",
+	if err := h.refs.Unregister(context.WithoutCancel(ctx), cid, namespace, KindStorage); err != nil {
+		h.logger.ComponentError(logging.ComponentGeneral, "failed to take back the reference of a pin that did not happen; the cid stays referenced until the namespace unpins it",
 			zap.Error(err), zap.String("cid", cid), zap.String("namespace", namespace))
 	}
 }
 
 // StartCIDRefBackfill loads this namespace's existing pins and deployments
 // into the index ONCE, for the upgrade that introduced it: content pinned by an
-// older gateway has no row until then. Until it succeeds unpins are refused.
+// older gateway has no row until then. Until every live namespace has done so
+// (CheckReady) unpins are refused or deferred.
 //
 // This is the one place a reference is copied from tenant-writable tables. It
 // is bounded: it runs once per namespace (a marker row records that it did),
@@ -245,24 +454,48 @@ func (h *Handlers) dropFreshRef(ctx context.Context, cid, namespace string, fres
 // namespace with more than maxBackfillRefs references instead of loading part
 // of it. A row forged into those tables BEFORE the upgrade cannot be told from
 // a real one.
+//
+// A failed attempt is retried with exponential backoff. A namespace over the
+// bound is not retried: it is logged once as an error, and it is the reason
+// unpins answer 503 on this gateway; every other gateway's unpins are refused
+// too, because this namespace never gets its marker (see docs/SECURITY.md for
+// how an operator resolves it). After the backfill the loop applies the unpins
+// deferred while the index was not ready.
 func (h *Handlers) StartCIDRefBackfill(ctx context.Context, namespace string) {
 	h.refs.pending.Store(true)
 	go func() {
-		var wait time.Duration
+		wait := time.Duration(0)
+		backoff := refBackfillRetryInterval
+		loaded := false
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
 			}
-			if err := h.backfillCIDRefs(ctx, namespace); err != nil {
-				h.logger.ComponentError(logging.ComponentGeneral, "cid reference backfill failed; unpin stays disabled until it succeeds",
-					zap.String("namespace", namespace), zap.Error(err))
-				wait = refBackfillRetryInterval
-				continue
+			if !loaded {
+				err := h.backfillCIDRefs(ctx, namespace)
+				switch {
+				case errors.Is(err, errBackfillTooLarge):
+					msg := "this gateway's namespace holds more references than the one-time load into the cluster reference index allows, so no unpin can be decided; an operator must resolve it"
+					h.refs.failure.Store(&msg)
+					h.logger.ComponentError(logging.ComponentGeneral, "cid reference backfill cannot complete; unpins are disabled cluster-wide until an operator resolves it",
+						zap.String("namespace", namespace), zap.Error(err))
+					return
+				case err != nil:
+					h.logger.ComponentError(logging.ComponentGeneral, "cid reference backfill failed; unpin stays disabled until it succeeds",
+						zap.String("namespace", namespace), zap.Duration("retry_in", backoff), zap.Error(err))
+					wait = backoff
+					backoff = min(backoff*2, refBackfillMaxInterval)
+					continue
+				}
+				loaded = true
+				h.refs.pending.Store(false)
 			}
-			h.refs.pending.Store(false)
-			return
+			wait = refDeferredInterval
+			if h.refs.hasDeferred() && h.refs.CheckReady(ctx, "") == nil {
+				h.applyDeferred(ctx, h.refs.takeDeferred())
+			}
 		}
 	}()
 }
@@ -314,7 +547,7 @@ func (h *Handlers) backfillSource(ctx context.Context, query string, args ...any
 		return nil, fmt.Errorf("failed to read the namespace's existing references: %w", err)
 	}
 	if len(rows) > maxBackfillRefs {
-		return nil, fmt.Errorf("the namespace has more than %d references to load into the cluster reference index", maxBackfillRefs)
+		return nil, fmt.Errorf("%w: more than %d references", errBackfillTooLarge, maxBackfillRefs)
 	}
 	return cidsOf(rows), nil
 }
