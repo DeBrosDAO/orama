@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/remotessh"
 	// Import checks package so init() registers the checkers
@@ -61,38 +63,57 @@ type InspectOptions struct {
 	AIAPIKey  string
 }
 
+// inspectFormats are the --format values.
+var inspectFormats = []string{"table", "json"}
+
+// Validate refuses options that cannot work, before any node is asked
+// anything: a mistake on the command line is exit 2, not an inspection that
+// runs and reports on nothing.
+func (o InspectOptions) Validate() error {
+	if o.Env == "" {
+		return clierr.Usage("--env is required (devnet, testnet)")
+	}
+	if !slices.Contains(inspectFormats, o.Format) {
+		return clierr.Usage("unknown --format %q (one of: %s)", o.Format, strings.Join(inspectFormats, ", "))
+	}
+	if o.Timeout <= 0 {
+		return clierr.Usage("--timeout must be positive, got %s", o.Timeout)
+	}
+	if err := inspector.ValidateSubsystems(o.subsystems()); err != nil {
+		return clierr.Usage("--subsystem: %w", err)
+	}
+	return nil
+}
+
+// subsystems is the --subsystem list, or nil for all of them.
+func (o InspectOptions) subsystems() []string {
+	if o.Subsystem == "all" {
+		return nil
+	}
+	return strings.Split(o.Subsystem, ",")
+}
+
 // RunInspect inspects cluster health over SSH.
 func RunInspect(opts InspectOptions) error {
 	// Load .env file from current directory (only sets unset vars)
 	loadDotEnv(".env")
 
-	configPath := &opts.ConfigPath
-	env := &opts.Env
-	subsystem := &opts.Subsystem
-	format := &opts.Format
-	timeout := &opts.Timeout
-	verbose := &opts.Verbose
-	outputDir := &opts.OutputDir
-	aiEnabled := &opts.AIEnabled
-	aiModel := &opts.AIModel
-	aiAPIKey := &opts.AIAPIKey
-
-	if *env == "" {
-		return clierr.Usage("--env is required (devnet, testnet)")
+	if err := opts.Validate(); err != nil {
+		return err
 	}
 
 	// Nodes come from the caller when it resolved them (the normal path), and
 	// from an explicit --config file otherwise.
 	nodes := opts.Nodes
 	if len(nodes) == 0 {
-		loaded, err := inspector.LoadNodes(*configPath)
+		loaded, err := inspector.LoadNodes(opts.ConfigPath)
 		if err != nil {
-			return fmt.Errorf("loading %s: %w", *configPath, err)
+			return fmt.Errorf("loading %s: %w", opts.ConfigPath, err)
 		}
-		nodes = inspector.FilterByEnv(loaded, *env)
+		nodes = inspector.FilterByEnv(loaded, opts.Env)
 	}
 	if len(nodes) == 0 {
-		return clierr.NotFound("no nodes found for environment %q", *env)
+		return clierr.NotFound("no nodes found for environment %q", opts.Env)
 	}
 
 	// Prepare wallet-derived SSH keys
@@ -102,88 +123,64 @@ func RunInspect(opts InspectOptions) error {
 	}
 	defer cleanup()
 
-	// Parse subsystems
-	var subsystems []string
-	if *subsystem != "all" {
-		subsystems = strings.Split(*subsystem, ",")
-	}
+	return inspectNodes(nodes, opts, os.Stdout, os.Stderr)
+}
 
-	fmt.Printf("Inspecting %d %s nodes", len(nodes), *env)
+// inspectNodes collects from nodes, checks, and reports.
+//
+// stdout carries the report and nothing else, so `--format json` is one JSON
+// document a program can parse; everything that says what the command is doing
+// goes to stderr.
+func inspectNodes(nodes []inspector.Node, opts InspectOptions, stdout, stderr io.Writer) error {
+	subsystems := opts.subsystems()
+
+	fmt.Fprintf(stderr, "Inspecting %d %s nodes", len(nodes), opts.Env)
 	if len(subsystems) > 0 {
-		fmt.Printf(" [%s]", strings.Join(subsystems, ","))
+		fmt.Fprintf(stderr, " [%s]", strings.Join(subsystems, ","))
 	}
-	if *aiEnabled {
-		fmt.Printf(" (AI: %s)", *aiModel)
+	if opts.AIEnabled {
+		fmt.Fprintf(stderr, " (AI: %s)", opts.AIModel)
 	}
-	fmt.Printf("...\n\n")
+	fmt.Fprintf(stderr, "...\n\n")
 
 	// Phase 1: Collect
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout+10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout+10*time.Second)
 	defer cancel()
 
-	if *verbose {
-		fmt.Printf("Collecting data from %d nodes (timeout: %s)...\n", len(nodes), timeout)
+	if opts.Verbose {
+		fmt.Fprintf(stderr, "Collecting data from %d nodes (timeout: %s)...\n", len(nodes), opts.Timeout)
 	}
 
-	data := inspector.Collect(ctx, nodes, subsystems, *verbose)
+	data := inspector.Collect(ctx, nodes, subsystems, opts.Verbose)
 
-	if *verbose {
-		fmt.Printf("Collection complete in %.1fs\n\n", data.Duration.Seconds())
+	if opts.Verbose {
+		fmt.Fprintf(stderr, "Collection complete in %.1fs\n\n", data.Duration.Seconds())
 	}
 
 	// Phase 2: Check
 	results := inspector.RunChecks(data, subsystems)
 
 	// Phase 3: Report
-	switch *format {
+	switch opts.Format {
 	case "json":
-		inspector.PrintJSON(results, os.Stdout)
+		inspector.PrintJSON(results, stdout)
 	default:
-		inspector.PrintTable(results, os.Stdout)
+		inspector.PrintTable(results, stdout)
 	}
 
 	// Phase 4: AI Analysis (if enabled and there are failures or warnings)
 	var analysis *inspector.AnalysisResult
-	if *aiEnabled {
-		issues := results.FailuresAndWarnings()
-		if len(issues) == 0 {
-			fmt.Printf("\nAll checks passed — no AI analysis needed.\n")
-		} else if *outputDir != "" {
-			// Per-group AI analysis for file output
-			groups := inspector.GroupFailures(results)
-			fmt.Printf("\nAnalyzing %d unique issues with %s...\n", len(groups), *aiModel)
-			var err error
-			analysis, err = inspector.AnalyzeGroups(groups, results, data, *aiModel, *aiAPIKey)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "\nAI analysis failed: %v\n", err)
-			} else {
-				inspector.PrintAnalysis(analysis, os.Stdout)
-			}
-		} else {
-			// Per-subsystem AI analysis for terminal output
-			subs := map[string]bool{}
-			for _, c := range issues {
-				subs[c.Subsystem] = true
-			}
-			fmt.Printf("\nAnalyzing %d issues across %d subsystems with %s...\n", len(issues), len(subs), *aiModel)
-			var err error
-			analysis, err = inspector.Analyze(results, data, *aiModel, *aiAPIKey)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "\nAI analysis failed: %v\n", err)
-			} else {
-				inspector.PrintAnalysis(analysis, os.Stdout)
-			}
-		}
+	if opts.AIEnabled {
+		analysis = analyzeInspection(results, data, opts, stdout, stderr)
 	}
 
 	// Phase 5: Write results to disk (if --output is set)
-	if *outputDir != "" {
-		outPath, err := inspector.WriteResults(*outputDir, *env, results, data, analysis)
+	if opts.OutputDir != "" {
+		outPath, err := inspector.WriteResults(opts.OutputDir, opts.Env, results, data, analysis)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\nError writing results: %v\n", err)
-		} else {
-			fmt.Printf("\nResults saved to %s\n", outPath)
+			return clierr.Failure("could not save the results to %s: %w", opts.OutputDir, err)
 		}
+		fmt.Fprintf(stderr, "\nResults saved to %s\n", outPath)
 	}
 
 	// A failed check is a failed command.
@@ -191,4 +188,44 @@ func RunInspect(opts InspectOptions) error {
 		return fmt.Errorf("%d health check(s) failed", len(failures))
 	}
 	return nil
+}
+
+// analyzeInspection runs the AI analysis of what failed, and returns it, or nil
+// when nothing needed analysing or the analysis failed. A failed analysis is
+// reported on stderr and does not change the inspection's result: the checks
+// are the result, the analysis is commentary on them.
+func analyzeInspection(results *inspector.Results, data *inspector.ClusterData, opts InspectOptions, stdout, stderr io.Writer) *inspector.AnalysisResult {
+	issues := results.FailuresAndWarnings()
+	if len(issues) == 0 {
+		fmt.Fprintf(stderr, "\nAll checks passed — no AI analysis needed.\n")
+		return nil
+	}
+
+	var analysis *inspector.AnalysisResult
+	var err error
+	if opts.OutputDir != "" {
+		// Per-group AI analysis for file output
+		groups := inspector.GroupFailures(results)
+		fmt.Fprintf(stderr, "\nAnalyzing %d unique issues with %s...\n", len(groups), opts.AIModel)
+		analysis, err = inspector.AnalyzeGroups(groups, results, data, opts.AIModel, opts.AIAPIKey)
+	} else {
+		// Per-subsystem AI analysis for terminal output
+		subs := map[string]bool{}
+		for _, c := range issues {
+			subs[c.Subsystem] = true
+		}
+		fmt.Fprintf(stderr, "\nAnalyzing %d issues across %d subsystems with %s...\n", len(issues), len(subs), opts.AIModel)
+		analysis, err = inspector.Analyze(results, data, opts.AIModel, opts.AIAPIKey)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "\nAI analysis failed: %v\n", err)
+		return nil
+	}
+	// The analysis is part of the report, but a JSON report is one document.
+	if opts.Format == "json" {
+		inspector.PrintAnalysis(analysis, stderr)
+	} else {
+		inspector.PrintAnalysis(analysis, stdout)
+	}
+	return analysis
 }

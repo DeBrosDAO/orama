@@ -2088,6 +2088,10 @@ orama inspect [flags]
 SSH into cluster nodes and run health checks.
 Supports AI-powered failure analysis and result export.
 
+The report is written to stdout and progress to stderr, so --format json is one
+JSON document. A bad flag value (an unknown --subsystem or --format, a timeout
+that is not positive) is refused as usage before any node is contacted.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--ai` | `false` | Enable AI analysis of failures |
