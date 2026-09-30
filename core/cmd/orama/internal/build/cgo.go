@@ -3,6 +3,8 @@ package build
 import (
 	"fmt"
 	"os"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 )
 
 // The gateway links github.com/mattn/go-sqlite3 for namespace SQLite
@@ -30,6 +32,15 @@ func zigTargetFor(arch string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported architecture for a zig cross-compile: %s (supported: amd64, arm64)", arch)
 	}
+}
+
+// validateArch refuses, as a usage error, an architecture the build cannot
+// target. zigTargetFor is the one list of them.
+func validateArch(arch string) error {
+	if _, err := zigTargetFor(arch); err != nil {
+		return clierr.Usage("--arch: %w", err)
+	}
+	return nil
 }
 
 // cgoEnv returns the environment for a cgo cross-compile to linux/arch with

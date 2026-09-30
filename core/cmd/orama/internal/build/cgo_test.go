@@ -6,7 +6,29 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 )
+
+// Bug: `build --arch sparc` exited 1 after the project-root and zig lookups;
+// a bad value is a usage error, raised before the build looks for anything.
+func TestBuild_badArchIsUsageBeforeAnyLookup(t *testing.T) {
+	err := NewBuilder(&Flags{Arch: "sparc", Unsigned: true}).Build()
+	if got := clierr.CodeOf(err); got != clierr.CodeUsage {
+		t.Fatalf("exit code %d (%v), want %d", got, err, clierr.CodeUsage)
+	}
+	if !strings.Contains(err.Error(), "sparc") {
+		t.Errorf("the error does not name the bad value: %v", err)
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		if err := validateArch(arch); err != nil {
+			t.Errorf("%s refused: %v", arch, err)
+		}
+	}
+	if err := validateArch(""); clierr.CodeOf(err) != clierr.CodeUsage {
+		t.Errorf("an empty arch is not a usage error: %v", err)
+	}
+}
 
 // A binary that links mattn/go-sqlite3 but is built with CGO_ENABLED=0 gets
 // the driver's stub: it compiled until CHG-202 and failed every Open at

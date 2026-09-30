@@ -55,6 +55,12 @@ func (b *Builder) OutputPath() string { return b.outputPath }
 func (b *Builder) Build() error {
 	start := time.Now()
 
+	// A bad --arch is a command-line mistake; say so before looking for a
+	// project root, a zig toolchain or anything else the build needs.
+	if err := validateArch(b.flags.Arch); err != nil {
+		return err
+	}
+
 	// Find project root
 	projectDir, err := findProjectRoot()
 	if err != nil {
