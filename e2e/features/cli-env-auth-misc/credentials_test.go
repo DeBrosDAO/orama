@@ -56,20 +56,44 @@ func TestCredentials_missingIsAuthError(t *testing.T) {
 	}
 }
 
+// tokenCommands are commands that take their credential from ORAMA_TOKEN when
+// it is set (docs/AUTH.md "ORAMA_TOKEN is the CI credential"), whatever else
+// the HOME holds. A command that ignores it answers with the login hint, which
+// is the same exit code as a refused token: the message tells them apart.
+func tokenCommands(env string) [][]string {
+	return [][]string{
+		{"app", "list"},
+		{"db", "list"},
+		{"domain", "list"},
+		{"operator", "list"},
+		{"cluster", "settings", "show"},
+		{"namespace", "list"},
+		{"namespace", "keys", "list"},
+		{"members", "list"},
+		{"audit"},
+		{"auth", "sessions"},
+		{"monitor", "alerts", "--env", env},
+	}
+}
+
 // TestCredentials_garbageEnvTokenRefused: an ORAMA_TOKEN no gateway issued is
-// refused as an auth failure and never printed back.
+// read (the refusal names ORAMA_TOKEN, not "orama auth login"), refused as an
+// auth failure, and never printed back.
 func TestCredentials_garbageEnvTokenRefused(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	cli := isolated(t)
 	cli.Env = append(cli.Env, tokenEnvVar+"="+garbageToken)
-	for _, args := range credentialCommands(f.State.Env)[2:6] {
+	for _, args := range tokenCommands(f.State.Env) {
 		res := run(t, cli, args...)
 		if res.Exit == exitOK {
 			t.Errorf("orama %v accepted a garbage %s:\n%s", args, tokenEnvVar, output(res))
 		}
 		if res.Exit != exitAuth {
 			t.Errorf("orama %v with a garbage %s: exit %d, want %d\n%s", args, tokenEnvVar, res.Exit, exitAuth, output(res))
+		}
+		if !strings.Contains(output(res), tokenEnvVar) {
+			t.Errorf("orama %v did not read %s (it answered as if there were no credential):\n%s", args, tokenEnvVar, output(res))
 		}
 		expectNoEcho(t, res, garbageToken)
 	}
@@ -82,9 +106,9 @@ func TestCredentials_hostileEnvTokenRefused(t *testing.T) {
 	cli := isolated(t)
 	hostile := "x\r\nX-Orama-Injected: 1"
 	cli.Env = append(cli.Env, tokenEnvVar+"="+hostile)
-	res := run(t, cli, "namespace", "list")
+	res := run(t, cli, "app", "list")
 	if res.Exit == exitOK {
-		t.Fatalf("namespace list accepted a token with CR/LF:\n%s", output(res))
+		t.Fatalf("app list accepted a token with CR/LF:\n%s", output(res))
 	}
 	if strings.Contains(output(res), "X-Orama-Injected") {
 		t.Errorf("the CLI printed the hostile token back:\n%s", output(res))

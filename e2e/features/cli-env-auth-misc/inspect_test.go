@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
 // inspectBudget bounds one `orama inspect` of the fleet (an SSH round to
@@ -41,6 +42,22 @@ type inspectReport struct {
 	} `json:"checks"`
 }
 
+// expectInspected fails unless inspect ran its checks: it exits 0, or exits 1
+// because a check failed (a failed check is a failed command). A fleet under
+// test is not required to be clean: the other packages' chaos leaves it
+// degraded, and what this package tests is that inspect inspects and reports.
+func expectInspected(t testing.TB, res oramacli.Result, want ...string) {
+	t.Helper()
+	if res.Exit != exitOK && res.Exit != exitFailure {
+		t.Fatalf("orama inspect exit %d, want 0 or 1 (failed checks)\n%s", res.Exit, output(res))
+	}
+	for _, w := range want {
+		if !strings.Contains(output(res), w) {
+			t.Errorf("orama inspect (exit %d) did not print %q:\n%s", res.Exit, w, output(res))
+		}
+	}
+}
+
 // jsonTail decodes the JSON document that starts at the first "{" of out.
 func jsonTail(t testing.TB, out string) inspectReport {
 	t.Helper()
@@ -56,17 +73,21 @@ func jsonTail(t testing.TB, out string) inspectReport {
 }
 
 // TestInspect_checksEveryNodeOverSSH: inspect SSHes into every node of the
-// environment and a healthy fresh fleet passes the checks (docs/CLI_REFERENCE.md#orama-inspect;
-// a failed check is a failed command, inspect_command.go).
+// environment and reports every check it ran; its exit code says whether any
+// failed (docs/CLI_REFERENCE.md#orama-inspect; a failed check is a failed
+// command, inspect_command.go).
 func TestInspect_checksEveryNodeOverSSH(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	res := infra.RunFor(t, harness.CLI(t), inspectBudget,
 		"inspect", "--env", f.State.Env, "--subsystem", inspectSubsystems, "--format", "json")
-	infra.ExpectExit(t, res, exitOK)
+	expectInspected(t, res)
 	r := jsonTail(t, res.Stdout)
-	if r.Summary.Total == 0 || r.Summary.Total != len(r.Checks) || r.Summary.Failed != 0 {
+	if r.Summary.Total == 0 || r.Summary.Total != len(r.Checks) {
 		t.Fatalf("inspect summary %+v with %d checks", r.Summary, len(r.Checks))
+	}
+	if failed := r.Summary.Failed > 0; failed != (res.Exit == exitFailure) {
+		t.Errorf("inspect exit %d with %d failed checks: a failed check is a failed command and nothing else is", res.Exit, r.Summary.Failed)
 	}
 	for _, c := range r.Checks {
 		if !inspectedSubsystems[c.Subsystem] {
@@ -91,7 +112,7 @@ func TestInspect_jsonFormatIsPureJSON(t *testing.T) {
 	f := harness.Fleet(t)
 	res := infra.RunFor(t, harness.CLI(t), inspectBudget,
 		"inspect", "--env", f.State.Env, "--subsystem", "system", "--format", "json")
-	infra.ExpectExit(t, res, exitOK)
+	expectInspected(t, res)
 	var v map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &v); err != nil {
 		t.Errorf("inspect --format json stdout is not one JSON document (%v): starts %q",
@@ -107,7 +128,7 @@ func TestInspect_writesResultsDirectory(t *testing.T) {
 	dir := t.TempDir()
 	res := infra.RunFor(t, harness.CLI(t), inspectBudget,
 		"inspect", "--env", f.State.Env, "--subsystem", "system", "--output", dir)
-	infra.ExpectExit(t, res, exitOK, "Results saved to")
+	expectInspected(t, res, "Results saved to")
 	// <dir>/<env>/<timestamp>/summary.md (core/pkg/inspector/results_writer.go).
 	md, err := filepath.Glob(filepath.Join(dir, f.State.Env, "*", "summary.md"))
 	if err != nil {
