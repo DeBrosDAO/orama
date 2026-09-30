@@ -4,11 +4,25 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+)
+
+const (
+	// defaultWSPingInterval is how often a subscriber socket is pinged.
+	defaultWSPingInterval = 30 * time.Second
+	// defaultWSPongWait is how long a subscriber socket may be silent, pongs
+	// and client frames both counting, before it is dead: two missed pings and
+	// slack. It must exceed the ping interval.
+	defaultWSPongWait = 75 * time.Second
+	// wsWriteTimeout bounds one data-frame write to a subscriber socket.
+	wsWriteTimeout = 30 * time.Second
+	// wsControlWriteTimeout bounds one ping or close frame.
+	wsControlWriteTimeout = 5 * time.Second
 )
 
 // PubSubHandlers handles all pubsub-related HTTP and WebSocket endpoints
@@ -18,6 +32,11 @@ type PubSubHandlers struct {
 
 	presenceMembers map[string][]PresenceMember // topicKey -> members
 	presenceMu      sync.RWMutex
+
+	// pingInterval and pongWait drive subscriber-socket liveness (see the
+	// defaults); tests shorten them.
+	pingInterval time.Duration
+	pongWait     time.Duration
 
 	// onPublish is called when a message is published, to dispatch PubSub triggers.
 	// Set via SetOnPublish. May be nil if serverless triggers are not configured.
@@ -43,6 +62,8 @@ func NewPubSubHandlers(client client.NetworkClient, sessions *wssession.Registry
 		client:          client,
 		logger:          logger,
 		presenceMembers: make(map[string][]PresenceMember),
+		pingInterval:    defaultWSPingInterval,
+		pongWait:        defaultWSPongWait,
 		sessions:        sessions,
 	}
 }

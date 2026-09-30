@@ -3,7 +3,6 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
@@ -109,77 +107,44 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 	sock := p.sessions.Register(claims, subscriberCloser(conn))
 	defer sock.Unregister()
 
-	topicKey := fmt.Sprintf("%s.%s", ns, topic)
-
-	connID := uuid.New().String()
-	if enablePresence {
-		member := PresenceMember{
-			MemberID: memberID,
-			JoinedAt: time.Now().Unix(),
-			Meta:     memberMeta,
-			ConnID:   connID,
-		}
-
-		p.presenceMu.Lock()
-		p.presenceMembers[topicKey] = append(p.presenceMembers[topicKey], member)
-		p.presenceMu.Unlock()
-
-		// Broadcast join event (will be received via PubSub by others AND via local delivery)
-		p.broadcastPresenceEvent(ns, topic, "presence.join", memberID, memberMeta, member.JoinedAt)
-
-		p.logger.ComponentInfo("gateway", "pubsub ws: member joined presence",
-			zap.String("topic", topic),
-			zap.String("member_id", memberID))
-	}
+	presence := p.joinPresence(ns, topic, enablePresence, memberID, memberMeta)
+	defer p.leavePresence(presence)
 
 	p.logger.ComponentInfo("gateway", "pubsub ws: subscriber registered",
 		zap.String("topic", topic),
 		zap.String("namespace", ns))
+	defer p.logger.ComponentInfo("gateway", "pubsub ws: subscriber unregistered",
+		zap.String("topic", topic))
 
-	// Unregister on close
-	defer func() {
-		if enablePresence {
-			p.presenceMu.Lock()
-			members := p.presenceMembers[topicKey]
-			for i, m := range members {
-				if m.ConnID == connID {
-					p.presenceMembers[topicKey] = append(members[:i], members[i+1:]...)
-					break
-				}
-			}
-			if len(p.presenceMembers[topicKey]) == 0 {
-				delete(p.presenceMembers, topicKey)
-			}
-			p.presenceMu.Unlock()
-
-			// Broadcast leave event
-			p.broadcastPresenceEvent(ns, topic, "presence.leave", memberID, nil, time.Now().Unix())
-
-			p.logger.ComponentInfo("gateway", "pubsub ws: member left presence",
-				zap.String("topic", topic),
-				zap.String("member_id", memberID))
-		}
-
-		p.logger.ComponentInfo("gateway", "pubsub ws: subscriber unregistered",
-			zap.String("topic", topic))
-	}()
-
+	// The connection lives exactly as long as its reader: a read error, a
+	// close from the client, a read deadline missed by a peer that stopped
+	// answering pings, or the sweeper closing the socket all end it. Then the
+	// writer is stopped and waited for, and the deferred leave and unsubscribe
+	// run whichever way it ended.
+	wsCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	done := make(chan struct{})
 	wsClient := newWSClient(conn, topic, p.logger)
-	go p.writerLoop(ctx, wsClient, msgs, done)
+	go p.writerLoop(wsCtx, wsClient, msgs, done)
 
 	// Reader loop: treat any client message as publish to the same topic
-	p.readerLoop(ctx, wsClient, topic, done)
+	p.readerLoop(wsCtx, wsClient, topic)
+	cancel()
+	<-done
 }
 
 // writerLoop handles writing messages from the msgs channel to the WebSocket client
+// It closes the connection when it stops, which ends the reader, and closes
+// done.
 func (p *PubSubHandlers) writerLoop(ctx context.Context, wsClient *wsClient, msgs chan []byte, done chan struct{}) {
 	p.logger.ComponentInfo("gateway", "pubsub ws: writer goroutine started",
 		zap.String("topic", wsClient.topic))
+	defer close(done)
+	defer func() { _ = wsClient.close() }()
 	defer p.logger.ComponentInfo("gateway", "pubsub ws: writer goroutine exiting",
 		zap.String("topic", wsClient.topic))
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(p.pingInterval)
 	defer ticker.Stop()
 
 	for {
@@ -189,21 +154,24 @@ func (p *PubSubHandlers) writerLoop(ctx context.Context, wsClient *wsClient, msg
 				p.logger.ComponentWarn("gateway", "pubsub ws: message channel closed",
 					zap.String("topic", wsClient.topic))
 				_ = wsClient.writeControl(websocket.CloseMessage, []byte{}, time.Now().Add(5*time.Second))
-				close(done)
 				return
 			}
 
 			if err := wsClient.writeMessage(b); err != nil {
-				close(done)
 				return
 			}
 
 		case <-ticker.C:
-			// Ping keepalive
-			_ = wsClient.writeControl(websocket.PingMessage, []byte("ping"), time.Now().Add(5*time.Second))
+			// Ping keepalive: the peer's pong is what keeps its read deadline
+			// from expiring. A ping that cannot be written is a dead connection.
+			if err := wsClient.writeControl(websocket.PingMessage, []byte("ping"), time.Now().Add(wsControlWriteTimeout)); err != nil {
+				p.logger.ComponentWarn("gateway", "pubsub ws: ping failed, closing connection",
+					zap.String("topic", wsClient.topic),
+					zap.Error(err))
+				return
+			}
 
 		case <-ctx.Done():
-			close(done)
 			return
 		}
 	}
@@ -224,12 +192,30 @@ func (p *PubSubHandlers) forwardToSocket(topic string, msgs chan []byte) client.
 	}
 }
 
-// readerLoop handles reading messages from the WebSocket client and publishing them
-func (p *PubSubHandlers) readerLoop(ctx context.Context, wsClient *wsClient, topic string, done chan struct{}) {
+// readerLoop reads messages from the WebSocket client and publishes them. It
+// returns when the connection ends, for whatever reason: a close or read error,
+// or no frame, pong included, within the pong wait.
+func (p *PubSubHandlers) readerLoop(ctx context.Context, wsClient *wsClient, topic string) {
+	conn := wsClient.conn
+	refreshDeadline := func() error { return conn.SetReadDeadline(time.Now().Add(p.pongWait)) }
+	if err := refreshDeadline(); err != nil {
+		p.logger.ComponentWarn("gateway", "pubsub ws: cannot set the read deadline, closing connection",
+			zap.String("topic", topic), zap.Error(err))
+		return
+	}
+	conn.SetPongHandler(func(string) error { return refreshDeadline() })
+
 	for {
 		mt, data, err := wsClient.readMessage()
 		if err != nil {
-			break
+			p.logger.ComponentInfo("gateway", "pubsub ws: read ended, closing connection",
+				zap.String("topic", topic), zap.Error(err))
+			return
+		}
+		if err := refreshDeadline(); err != nil {
+			p.logger.ComponentWarn("gateway", "pubsub ws: cannot set the read deadline, closing connection",
+				zap.String("topic", topic), zap.Error(err))
+			return
 		}
 		if mt != websocket.TextMessage && mt != websocket.BinaryMessage {
 			continue
@@ -246,11 +232,12 @@ func (p *PubSubHandlers) readerLoop(ctx context.Context, wsClient *wsClient, top
 		}
 
 		if err := p.client.PubSub().Publish(ctx, topic, data); err != nil {
+			p.logger.ComponentWarn("gateway", "pubsub ws: publish from socket failed",
+				zap.String("topic", topic), zap.Error(err))
 			// Best-effort notify client
-			_ = wsClient.conn.WriteMessage(websocket.TextMessage, []byte("publish_error"))
+			_ = wsClient.writeText([]byte("publish_error"))
 		}
 	}
-	<-done
 }
 
 // broadcastPresenceEvent publishes a presence join/leave event on the topic.
