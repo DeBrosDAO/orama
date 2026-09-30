@@ -1789,10 +1789,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 	}
 
 	// Proxy regular HTTP request to the namespace gateway
-	targetURL := "http://" + targetHost + r.URL.Path
-	if r.URL.RawQuery != "" {
-		targetURL += "?" + r.URL.RawQuery
-	}
+	targetURL := proxyTargetURL("http://"+targetHost, r.URL)
 
 	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
 	if err != nil {
@@ -2101,10 +2098,7 @@ serveLocal:
 	}
 
 	// Create a new request to the backend
-	backendURL := target + r.URL.Path
-	if r.URL.RawQuery != "" {
-		backendURL += "?" + r.URL.RawQuery
-	}
+	backendURL := proxyTargetURL(target, r.URL)
 
 	proxyReq, err := http.NewRequest(r.Method, backendURL, r.Body)
 	if err != nil {
@@ -2204,10 +2198,7 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 		return g.proxyWebSocket(w, r, targetHost)
 	}
 
-	targetURL := "http://" + targetHost + r.URL.Path
-	if r.URL.RawQuery != "" {
-		targetURL += "?" + r.URL.RawQuery
-	}
+	targetURL := proxyTargetURL("http://"+targetHost, r.URL)
 
 	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
 	if err != nil {
@@ -2334,10 +2325,7 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 		return g.proxyWebSocket(w, r, targetHost)
 	}
 
-	targetURL := "http://" + targetHost + r.URL.Path
-	if r.URL.RawQuery != "" {
-		targetURL += "?" + r.URL.RawQuery
-	}
+	targetURL := proxyTargetURL("http://"+targetHost, r.URL)
 
 	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
 	if err != nil {

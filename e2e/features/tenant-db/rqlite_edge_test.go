@@ -175,7 +175,12 @@ func TestRQLiteIsolation_clusterRegistryNeedsOperator(t *testing.T) {
 	body := []byte(`{"sql":"SELECT COUNT(*) AS n FROM operators"}`)
 	lobby := gw.NewUser(t, f, gw.LobbyNamespace)
 	tenancy.ExpectRefused(t, tenancy.Post(t, c, pathQuery, tenancy.Cred{Bearer: lobby.Token()}, body), http.StatusForbidden, tenancy.CodeNotOperator)
-	op := gw.NewUser(t, f, gw.LobbyNamespace)
+	// An operator reaches the registry with a credential of a namespace it
+	// administers: the lobby belongs to nobody and its sessions hold no
+	// permission, so a lobby sign-in is never served a db route
+	// (docs/AUTH.md "The lobby"), operator or not.
+	op := tenancy.Member(t, tenancy.Namespace(t, f, ns.Options{}), tenancy.RoleAdmin)
+	tenancy.ExpectRefused(t, tenancy.Post(t, c, pathQuery, tenancy.Cred{Bearer: op.Token()}, body), http.StatusForbidden, tenancy.CodeNotOperator)
 	cli := harness.CLI(t)
 	cli.MustOK(t, "operator", "add", op.Wallet.Address())
 	t.Cleanup(func() {

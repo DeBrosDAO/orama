@@ -102,7 +102,7 @@ func (h *Handlers) authorizeDownload(w http.ResponseWriter, r *http.Request, cid
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
 			zap.Error(err), zap.String("cid", cid), zap.String("namespace", namespace))
-		httputil.WriteRPCError(w, http.StatusInternalServerError, httputil.ErrCodeInternal, "failed to verify access")
+		writeStoreError(w, "failed to verify access", err)
 		return false
 	}
 	if !hasAccess {
@@ -174,7 +174,7 @@ func (h *Handlers) writeNotStored(ctx context.Context, w http.ResponseWriter, ci
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to read the CID's pin-request time",
 			zap.Error(err), zap.String("cid", cid))
-		httputil.WriteRPCError(w, http.StatusInternalServerError, httputil.ErrCodeInternal, "failed to classify the missing content")
+		writeStoreError(w, "failed to classify the missing content", err)
 		return
 	}
 	if recent {
@@ -249,7 +249,7 @@ func (h *Handlers) StatusHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
 			zap.Error(err), zap.String("cid", path), zap.String("namespace", namespace))
-		httputil.WriteError(w, http.StatusInternalServerError, "failed to verify access")
+		writeStoreError(w, "failed to verify access", err)
 		return
 	}
 	if !hasAccess {

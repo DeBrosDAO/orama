@@ -34,7 +34,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/status` | direct | Open. A browser (`Accept: text/html`) gets the public status page; anything else gets the same JSON as `/v1/status`. |
 | `/status/assets/` | direct | Open. The status page's script and stylesheet, served under a CSP that allows nothing else. |
 | `/v1/health` | direct | Same as `/health`, kept for older callers. |
-| `/v1/schema-status` | CLI | Migration state, polled during provisioning. |
+| `/v1/schema-status` | CLI | Migration state, polled during provisioning. Reads the tracker of the database the gateway serves: `schema_migrations` on the index gateway, `orama_schema_migrations` on a namespace gateway (whose `schema_migrations` belongs to the tenant). A database with no leader or past its deadline is a retryable 503. |
 | `/v1/status` | direct | Open: `status` and `server` (up since when), and on a cluster gateway the public view of the network — overall state and headline, node counts, each service's state and 90-day daily uptime, the chain's height, block time and validator shares, and network request rate, error rate and p95. No node address, peer id, hostname or error text (`cluster.PublicStatus`). Cached 5s. Per-node detail is `/v1/operator/telemetry`; peer ids and addresses are `/v1/network/status`, for operators. |
 | `/v1/version` | CLI | Build version. `orama version` and the upgrade checks read it. |
 
@@ -61,6 +61,8 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/audit` | CLI | The namespace's record of who was given what and when. Admin grant; the namespace comes from the credential, never the query string. `?action=`, `?principal=`, `?since=` and `?limit=` narrow it (50 by default, 200 at most). `orama audit [--follow]`. |
 
 ### Database (RQLite)
+
+Every ORM route below (`query`, `exec`, `find`, `find-one`, `select`, `transaction`, `create-table`, `drop-table`) reads at most 4 MiB of request body (`rqlite.MaxRequestBodyBytes`): a larger one is `413` before any statement is parsed, an unparsable or blank one `400`.
 
 | Route | Owner | Notes |
 |-------|-------|-------|
@@ -103,7 +105,7 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 
 | Route | Owner | Notes |
 |-------|-------|-------|
-| `/v1/storage/get/` | SDK | `storage.get()`, `storage.getBinary()` |
+| `/v1/storage/get/` | SDK | `storage.get()`, `storage.getBinary()`. A CID that does not parse, or is not in canonical form (a NUL or a space included), is `400 VALIDATION_FAILED`. On `get`, `status`, `pin` and `unpin`, a namespace database with no leader or past its deadline is a retryable `503`, not a `500`. |
 | `/v1/storage/pin` | SDK | `storage.pin()` |
 | `/v1/storage/status/` | SDK | `storage.status()` |
 | `/v1/storage/unpin/` | SDK | `storage.unpin()` |

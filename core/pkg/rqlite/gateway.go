@@ -277,7 +277,10 @@ func (g *HTTPGateway) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body queryRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.SQL) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {sql, args?}") {
+		return
+	}
+	if strings.TrimSpace(body.SQL) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {sql, args?}")
 		return
 	}
@@ -310,7 +313,10 @@ func (g *HTTPGateway) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body execRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.SQL) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {sql, args?}") {
+		return
+	}
+	if strings.TrimSpace(body.SQL) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {sql, args?}")
 		return
 	}
@@ -345,7 +351,10 @@ func (g *HTTPGateway) handleFind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body findRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Table) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {table, criteria, options?}") {
+		return
+	}
+	if strings.TrimSpace(body.Table) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {table, criteria, options?}")
 		return
 	}
@@ -377,7 +386,10 @@ func (g *HTTPGateway) handleFindOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body findOneRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Table) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {table, criteria, options?}") {
+		return
+	}
+	if strings.TrimSpace(body.Table) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {table, criteria, options?}")
 		return
 	}
@@ -410,7 +422,10 @@ func (g *HTTPGateway) handleSelect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body selectRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Table) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {table, select?, where?, joins?, order_by?, group_by?, limit?, offset?, one?}") {
+		return
+	}
+	if strings.TrimSpace(body.Table) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {table, select?, where?, joins?, order_by?, group_by?, limit?, offset?, one?}")
 		return
 	}
@@ -496,8 +511,7 @@ func (g *HTTPGateway) handleTransaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body transactionRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: {ops:[{kind,sql,args?}], return_results?} or {statements:[sql...]}")
+	if !decodeBody(w, r, &body, "invalid body: {ops:[{kind,sql,args?}], return_results?} or {statements:[sql...]}") {
 		return
 	}
 
@@ -634,7 +648,10 @@ func (g *HTTPGateway) handleCreateTable(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		Schema string `json:"schema"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Schema) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {schema}") {
+		return
+	}
+	if strings.TrimSpace(body.Schema) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {schema}")
 		return
 	}
@@ -665,7 +682,10 @@ func (g *HTTPGateway) handleDropTable(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Table string `json:"table"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Table) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {table}") {
+		return
+	}
+	if strings.TrimSpace(body.Table) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {table}")
 		return
 	}

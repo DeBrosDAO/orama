@@ -50,7 +50,7 @@ func (h *Handlers) PinHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
 			zap.Error(err), zap.String("cid", req.Cid), zap.String("namespace", namespace))
-		httputil.WriteError(w, http.StatusInternalServerError, "failed to verify access")
+		writeStoreError(w, "failed to verify access", err)
 		return
 	}
 	if !hasAccess {
