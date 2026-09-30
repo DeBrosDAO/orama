@@ -60,7 +60,7 @@ type JoinResponse struct {
 	SwarmKey         string `json:"swarm_key"`
 	APIKeyHMACSecret string `json:"api_key_hmac_secret,omitempty"`
 	RQLitePassword   string `json:"rqlite_password,omitempty"`
-	// Unused: Olric v0.7.0 YAML loader ignores encryptionKey (bugboard #246).
+	// Unused: Olric v0.7.4 YAML loader ignores encryptionKey (bugboard #246).
 	// Kept so older joiners still decode the field.
 	OlricEncryptionKey string `json:"olric_encryption_key,omitempty"`
 	// Serverless secrets encryption key (bugboard #837) — must be identical on

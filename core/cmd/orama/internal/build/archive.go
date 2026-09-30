@@ -220,6 +220,23 @@ func sha256File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// verifyPinnedSHA256 refuses the file at path unless its SHA-256 equals the
+// digest pinned for arch in pins.
+func verifyPinnedSHA256(path, name, arch string, pins map[string]string) error {
+	want, ok := pins[arch]
+	if !ok {
+		return fmt.Errorf("no SHA-256 is pinned for %s on %s; pin the release digest in pkg/constants/release_digests.go", name, arch)
+	}
+	got, err := sha256File(path)
+	if err != nil {
+		return fmt.Errorf("hash %s: %w", name, err)
+	}
+	if got != want {
+		return fmt.Errorf("%s has sha256 %s, not the pinned %s; it is not the release the version pin names", name, got, want)
+	}
+	return nil
+}
+
 // downloadFile downloads a URL to a local file path.
 func downloadFile(url, destPath string) error {
 	client := &http.Client{Timeout: 5 * time.Minute}

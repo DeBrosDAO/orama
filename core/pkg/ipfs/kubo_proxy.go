@@ -20,7 +20,7 @@ import (
 
 const kuboReadyPath = "/api/v0/id"
 
-// ipfs-cluster v1.1.2 cannot send Kubo's bearer — its ipfshttp connector sets
+// ipfs-cluster v1.1.6 cannot send Kubo's bearer — its ipfshttp connector sets
 // only Content-Type, and service.json has no header field — so the cluster
 // unit listens on loopback and forwards to the RPC with the header.
 //

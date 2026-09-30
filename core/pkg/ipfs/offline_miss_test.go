@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// kuboOfflineMissBody is Kubo 0.38.2's exact answer to an offline `cat` of a
+// kuboOfflineMissBody is Kubo 0.43.1's exact answer to an offline `cat` of a
 // block it does not hold, captured from a live daemon: HTTP 500, not 404.
 const kuboOfflineMissBody = `{"Message":"block was not found locally (offline): ipld: could not find QmfYzxZHqYpmy29rVWqs6f4igzYngACaxSxPWdf7FspuDV","Code":0,"Type":"error"}`
 

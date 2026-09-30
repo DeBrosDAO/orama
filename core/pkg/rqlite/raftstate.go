@@ -12,14 +12,22 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// rqlite's on-disk layout (rqlite v8 store/store.go, rqlite/raft-boltdb).
+// rqlite's on-disk layout (rqlite v10 store/store.go, rqlite/rqlite store/log).
+// v8 kept snapshots in rsnapshots/; v10 keeps them in wsnapshots/ and, on its
+// first start, moves the newest v8 snapshot there and removes rsnapshots/
+// (snapshot.Upgrade8To10). A node that has not started under v10 yet has
+// rsnapshots/, one that has has wsnapshots/, so both are read.
 const (
-	raftDBFile        = "raft.db"
-	raftSnapshotsDir  = "rsnapshots"
-	raftSnapshotMeta  = "meta.json"
-	raftLogsBucket    = "logs"
-	raftDBLockTimeout = time.Second
+	raftDBFile         = "raft.db"
+	raftSnapshotsDir   = "wsnapshots"
+	raftSnapshotsDirV8 = "rsnapshots"
+	raftSnapshotMeta   = "meta.json"
+	raftLogsBucket     = "logs"
+	raftDBLockTimeout  = time.Second
 )
+
+// raftSnapshotDirs are the snapshot directories a node's data directory can hold.
+var raftSnapshotDirs = []string{raftSnapshotsDir, raftSnapshotsDirV8}
 
 // ErrRaftStateLocked means rqlited has raft.db open, so its state can only be
 // read from the running node.
@@ -32,9 +40,11 @@ var ErrRaftStateLocked = errors.New("raft.db is held by a running rqlited")
 // nothing in it. Reading that file as membership is what turned a node whose
 // join was refused into a single-node cluster of its own.
 func HasRaftState(dataDir string) (bool, error) {
-	snap, err := hasSnapshot(filepath.Join(dataDir, raftSnapshotsDir))
-	if err != nil || snap {
-		return snap, err
+	for _, name := range raftSnapshotDirs {
+		snap, err := hasSnapshot(filepath.Join(dataDir, name))
+		if err != nil || snap {
+			return snap, err
+		}
 	}
 
 	path := filepath.Join(dataDir, raftDBFile)

@@ -42,7 +42,7 @@ loopback for a node that runs an RPC or index endpoint.
 
 For each service it creates the service's system account, copies its binaries
 (oramad and this orama CLI for the chain, whose unit runs 'orama global
-validator check-sign-floor' before every start; ipfs, Kubo v0.38.2, for ipfs;
+validator check-sign-floor' before every start; ipfs, Kubo v0.43.1, for ipfs;
 orama-global for the others) from --staged-dir into /usr/lib/orama-global/bin
 (root-owned, 0755; a symlink in the staged directory is refused, and as root the
 directory must be root's and not writable by others), writes and enables its

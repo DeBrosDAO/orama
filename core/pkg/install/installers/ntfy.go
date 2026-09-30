@@ -51,7 +51,7 @@ const (
 	// Update intentionally — newer ntfy versions occasionally tweak
 	// server.yml schema; verify server.yml still validates before
 	// bumping.
-	ntfyVersion = "2.11.0"
+	ntfyVersion = "2.28.0"
 
 	// NtfyListenPort is the localhost port ntfy binds to. Caddy reverse-
 	// proxies to it; exposed nowhere else.
@@ -85,9 +85,10 @@ func (ni *NtfyInstaller) IsInstalled() bool {
 	if _, err := os.Stat(ntfyBinaryPath); os.IsNotExist(err) {
 		return false
 	}
-	// ntfy has no version flag: `--version` is "flag provided but not
-	// defined", so asking for it made every install re-download ntfy over
-	// the running binary. `--help` ends with "ntfy 2.11.0 (d11b100), ...".
+	// Older ntfy releases (the ones an upgrade replaces) have no version
+	// flag: `--version` is "flag provided but not defined", so asking for it
+	// made every install re-download ntfy over the running binary. `--help`
+	// ends with "ntfy 2.28.0 (...), ..." on every release.
 	out, err := exec.Command(ntfyBinaryPath, "--help").Output()
 	if err != nil {
 		return false
@@ -214,7 +215,7 @@ func (ni *NtfyInstaller) downloadBinary() error {
 		ntfyVersion, tarballName)
 	// Upstream ntfy publishes the checksum file as plain "checksums.txt"
 	// at the release root — NOT "ntfy_<VER>_checksums.txt". Verified
-	// against the v2.11.0 release assets list. If a future ntfy version
+	// against the v2.28.0 release assets list. If a future ntfy version
 	// changes the naming convention, this URL will 404 loud at install
 	// time and the bump-ntfy-version PR should update it here.
 	checksumsURL := fmt.Sprintf(
@@ -371,7 +372,7 @@ func findChecksumFor(body []byte, filename string) (string, error) {
 // generateServerYAML produces the contents of /etc/ntfy/server.yml.
 // Hardened defaults: listens on localhost, behind-proxy mode on, cache
 // + persistence configured, attachments disabled. There is no auth-file
-// in v1 — ntfy 2.11.0 with no auth-file does **not** default to deny.
+// in v1 — ntfy 2.28.0 with no auth-file does **not** default to deny.
 func (ni *NtfyInstaller) generateServerYAML(publicBaseURL string) string {
 	return fmt.Sprintf(`# ntfy server config (Orama #72). Generated — do not edit by hand.
 # Re-running the orchestrator's Phase 4 will overwrite changes here.

@@ -122,7 +122,7 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	// Raft tuning — match the global node's tuning for consistency
 	args = append(args,
 		"-raft-election-timeout", "5s",
-		"-raft-timeout", "2s",
+		"-raft-heartbeat-timeout", "2s",
 		"-raft-apply-timeout", "30s",
 		"-raft-leader-lease-timeout", "2s",
 	)

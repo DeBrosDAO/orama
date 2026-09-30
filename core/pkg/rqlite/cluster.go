@@ -406,8 +406,8 @@ func (r *RQLiteManager) hasExistingRaftState(rqliteDataDir string) bool {
 // as an empty node. Moving costs disk and keeps the only local copy of the
 // cluster's state recoverable by hand; deleting costs the data.
 //
-// rsnapshots is included, which it was not. Removing raft.db while leaving the
-// snapshots produced a node with snapshots and no log to apply them against —
+// The snapshot directories are included, which they were not. Removing raft.db
+// while leaving the snapshots produced a node with snapshots and no log to apply them against —
 // a state neither rqlite nor the next recovery attempt reasons about correctly.
 func (r *RQLiteManager) clearRaftState(rqliteDataDir string) error {
 	stamp := time.Now().UTC().Format("20060102T150405Z")
@@ -417,11 +417,15 @@ func (r *RQLiteManager) clearRaftState(rqliteDataDir string) error {
 		return fmt.Errorf("create %s to set the raft state aside: %w", discarded, err)
 	}
 
-	// raft.db is the log; rsnapshots holds what it was compacted into; raft/
-	// carries peers.json. All three describe one membership, so they move
+	// raft.db is the log; the snapshot directory (wsnapshots under rqlite v10,
+	// rsnapshots before its first start) holds what it was compacted into; raft/
+	// carries peers.json. All of them describe one membership, so they move
 	// together or the remainder is inconsistent.
+	toMove := []string{raftDBFile}
+	toMove = append(toMove, raftSnapshotDirs...)
+	toMove = append(toMove, "raft", "discovery-peers.json")
 	moved := 0
-	for _, name := range []string{"raft.db", "rsnapshots", "raft", "discovery-peers.json"} {
+	for _, name := range toMove {
 		src := filepath.Join(rqliteDataDir, name)
 		if _, err := os.Stat(src); err != nil {
 			if os.IsNotExist(err) {

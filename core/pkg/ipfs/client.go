@@ -673,7 +673,7 @@ func (c *Client) Unpin(ctx context.Context, cid string) error {
 	return nil
 }
 
-// clusterNotInPinset is how IPFS Cluster (v1.1.2) words the 404 for a CID its
+// clusterNotInPinset is how IPFS Cluster (v1.1.6) words the 404 for a CID its
 // pinset does not hold: {"code":404,"message":"pin is not part of the pinset"},
 // seen live on devnet. Only that answer means "absent"; any other 404 is a
 // failure, so a state error is never read as "gone".
@@ -786,7 +786,7 @@ func isContentNotFound(err error) bool { return errors.Is(err, errContentNotFoun
 
 // kuboLocalMiss is how Kubo words an offline `cat` of a block it does not
 // hold. It answers such a request with HTTP 500 and this message, never 404:
-// verified against Kubo 0.38.2 (bugboard #414). Recognising only a 404 meant a
+// verified against Kubo 0.43.1 (bugboard #414). Recognising only a 404 meant a
 // node that did not hold an object never fetched it from its peers.
 const kuboLocalMiss = "not found locally"
 

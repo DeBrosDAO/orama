@@ -54,10 +54,10 @@ func ShowDryRunSummary(vpsIP, domain, branch string, peers []string, joinAddress
 
 	fmt.Printf("\n🔧 Binaries that would be installed:\n")
 	fmt.Printf("  - Go (if not present)\n")
-	fmt.Printf("  - RQLite 8.43.0\n")
-	fmt.Printf("  - IPFS/Kubo 0.38.2\n")
+	fmt.Printf("  - RQLite 10.4.0\n")
+	fmt.Printf("  - IPFS/Kubo 0.43.1\n")
 	fmt.Printf("  - IPFS Cluster (latest)\n")
-	fmt.Printf("  - Olric 0.7.0\n")
+	fmt.Printf("  - Olric 0.7.4\n")
 	fmt.Printf("  - tor (client only, from deb.torproject.org)\n")
 	fmt.Printf("  - Orama binaries (built from %s branch)\n", branch)
 

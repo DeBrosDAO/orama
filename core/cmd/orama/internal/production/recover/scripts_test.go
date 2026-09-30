@@ -76,7 +76,7 @@ func TestFollowerWipeScript_writesOnlyAsTheOramaUser(t *testing.T) {
 	script := followerWipeScript("eyJ9", recordPath)
 	assertValidShell(t, script)
 	assertOnlyOramaWrites(t, script)
-	for _, want := range []string{raftDBFile, raftSubdir, discoveryPeers, rqliteRoot + "/rsnapshots", "systemctl is-active --quiet orama-node",
+	for _, want := range []string{raftDBFile, raftSubdir, discoveryPeers, rqliteRoot + "/wsnapshots", rqliteRoot + "/rsnapshots", "systemctl is-active --quiet orama-node",
 		"base64 -d > " + recordPath + ".tmp", "mv " + recordPath + ".tmp " + recordPath} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script lacks %q:\n%s", want, script)

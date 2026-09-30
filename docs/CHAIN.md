@@ -3031,7 +3031,7 @@ What the script does that the docs of the individual commands do not say:
 - **Binaries.** `oramad` is `make build-linux-amd64-full` (CosmWasm and the Orchard verifier in one static
   binary, see "Native library" under "`x/wasm`: contracts") beside the pinned `orama-orchard-verifier`;
   `orama-global` and the `stagenet-node` helper are `make build-linux-amd64-global`; the `orama` CLI is
-  `make -C core build-linux`. Kubo v0.38.2 and cosmovisor v1.7.3 are downloaded from their official releases
+  `make -C core build-linux`. Kubo v0.43.1 and cosmovisor v1.7.3 are downloaded from their official releases
   and checked against pinned digests before anything is staged: Kubo's sha512 is the release's published
   `.sha512` file and its sha256 the digest GitHub reports for the asset; the cosmovisor sha256 is the one
   `core/pkg/constants/cosmovisor.go` pins, and the script checks the two agree.

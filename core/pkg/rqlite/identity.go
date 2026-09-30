@@ -16,7 +16,7 @@ import (
 // Raft node identity.
 //
 // rqlite defaults a node's raft id to its raft advertise address (confirmed in
-// rqlite 8.43's flag validation: `if c.NodeID == "" { c.NodeID = c.RaftAdv }`).
+// rqlite v10's flag validation: `if c.NodeID == "" { c.NodeID = c.RaftAdv }`).
 // That makes identity a function of routing: give the same machine a new
 // overlay address — a replacement, a WireGuard re-provision, a 10.0.0.x
 // reassignment, or a release that moves the index raft port — and it mints a

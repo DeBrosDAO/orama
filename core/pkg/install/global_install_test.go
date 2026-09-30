@@ -157,7 +157,7 @@ func newGlobalFixture(t *testing.T) *globalFixture {
 	if err := os.WriteFile(filepath.Join(chainHome, "config", "genesis.json"), []byte(`{"chain_id":"existing"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f.node = &fakeGlobalNode{fakeAccounts: newFakeAccounts(), ufwActive: true, chainHome: chainHome, sshdPort: "22", kuboVersion: "ipfs version 0.38.2\n"}
+	f.node = &fakeGlobalNode{fakeAccounts: newFakeAccounts(), ufwActive: true, chainHome: chainHome, sshdPort: "22", kuboVersion: "ipfs version 0.43.1\n"}
 	f.host = GlobalHost{
 		Run:            f.node.run,
 		BinRoot:        rootfs.At(filepath.Join(tmp, "usrlib")),

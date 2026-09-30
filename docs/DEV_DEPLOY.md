@@ -598,7 +598,7 @@ SHIELDED_SCENARIO=build/stagenet-shielded-scenario.json ./deploy.sh smoke
 ```
 
 `up` builds `oramad` (`make build-linux-amd64-full`), `orama-global` and the `stagenet-node` helper
-(`make build-linux-amd64-global`) and the linux `orama` CLI, downloads Kubo v0.38.2 and cosmovisor v1.7.3 from their
+(`make build-linux-amd64-global`) and the linux `orama` CLI, downloads Kubo v0.43.1 and cosmovisor v1.7.3 from their
 official releases into `chain/build/stagenet-cache` and checks the pinned digests, stages a root-owned release
 directory (`/root/orama-global-release`) on each node, and runs `orama global install --colocated --services
 chain,ipfs,provider,archiver` (plus `indexer` on athena) twice: first with `--init-chain` and a placeholder genesis
@@ -837,6 +837,12 @@ RQLite leadership to another voter, **aborts** if it cannot, and then confirms
 another node has actually taken leadership before allowing the stop — a node
 that stepped down into a cluster where nobody was elected must not be removed
 from it.
+
+#### Bundled service versions and the rqlite v10 upgrade
+
+The archive bundles the versions in `core/pkg/constants/versions.go`: rqlite 10.4.0, Kubo v0.43.1, IPFS Cluster v1.1.6, Olric v0.7.4 and Caddy 2.11.4 (ntfy 2.28.0 is pinned in the ntfy installer). The build refuses a Kubo or rqlite tarball whose SHA-256 differs from the digest pinned in `core/pkg/constants/release_digests.go`; bump the digest with the version.
+
+**The rqlite v10 upgrade is one way.** On its first start a v10 `rqlited` converts the node's v8/v9 snapshots (`rsnapshots/`) into its own format (`wsnapshots/`) and deletes `rsnapshots/`. A v10 node cannot join a v9-or-older cluster, and a node that has started under v10 cannot go back: a downgrade is a restore from a backup into a new pre-v10 cluster. Take a backup first (see below). Roll it node by node, as any upgrade, and finish **every** cluster before adding a node: the index cluster, then each namespace cluster (`orama-namespace-rqlite@<ns>`). During the roll the cluster is mixed v9/v10 and that works, but a new v10 node cannot join it: add no node until every member is on v10. rqlite v10 renamed `-raft-timeout` to `-raft-heartbeat-timeout` and rejects the old name, so the generated env files carry the new one; an `rqlite.env` written by an older release is rewritten when `orama-node` starts. Code that reads a node's raft state (`rqlite.HasRaftState`, the persisted-index read, the raft-state wipe in recovery) looks in `wsnapshots/` and, for a node that has not started under v10 yet, `rsnapshots/`.
 
 #### What NOT to Do
 
@@ -1122,7 +1128,7 @@ What happens:
    leaving the leader outside its own configuration.
 3. Start it and confirm it comes back as Leader with its data intact — before
    touching any other node, so a failed recovery leaves every copy intact
-4. Delete `raft.db`, `raft/`, `db.sqlite` (+`-shm`/`-wal`) and `rsnapshots` on
+4. Delete `raft.db`, `raft/`, `db.sqlite` (+`-shm`/`-wal`) and `wsnapshots` (`rsnapshots` before rqlite v10) on
    every other node, and write its `data/cluster-membership.json` naming the kept
    node — so a wiped node with no join address of its own (the genesis node)
    joins it rather than bootstrapping or refusing to start (see

@@ -28,9 +28,15 @@ func managerWithDataDir(t *testing.T) (*RQLiteManager, string) {
 	return r, dir
 }
 
+// writeSnapshot writes a snapshot as rqlite v10 keeps it (wsnapshots/).
 func writeSnapshot(t *testing.T, dir, name string, meta any) {
 	t.Helper()
-	snapDir := filepath.Join(dir, "rsnapshots", name)
+	writeSnapshotIn(t, dir, raftSnapshotsDir, name, meta)
+}
+
+func writeSnapshotIn(t *testing.T, dir, snapshotsDir, name string, meta any) {
+	t.Helper()
+	snapDir := filepath.Join(dir, snapshotsDir, name)
 	if err := os.MkdirAll(snapDir, 0o755); err != nil {
 		t.Fatalf("mkdir snapshot: %v", err)
 	}
@@ -76,6 +82,42 @@ func TestGetPersistedRaftLogIndex_readsTheHighestIndex(t *testing.T) {
 	}
 }
 
+// A node that has not started under rqlite v10 yet still has v8's rsnapshots/;
+// one that has has wsnapshots/. The index is the highest across both.
+func TestGetPersistedRaftLogIndex_readsBothSnapshotLayouts(t *testing.T) {
+	r, dir := managerWithDataDir(t)
+	writeSnapshotIn(t, dir, raftSnapshotsDirV8, "snap-8", struct {
+		Index uint64 `json:"Index"`
+	}{Index: 120})
+	index, known := r.getPersistedRaftLogIndex()
+	if index != 120 || !known {
+		t.Fatalf("v8 layout: got (%d, %v), want (120, true)", index, known)
+	}
+	writeSnapshot(t, dir, "snap-10", struct {
+		Index uint64 `json:"Index"`
+	}{Index: 200})
+	index, known = r.getPersistedRaftLogIndex()
+	if index != 200 || !known {
+		t.Fatalf("both layouts: got (%d, %v), want (200, true)", index, known)
+	}
+}
+
+// rqlite writes a snapshot into "<id>.tmp" and renames it; the directory has no
+// meta.json until then, and that is not an unreadable snapshot.
+func TestGetPersistedRaftLogIndex_ignoresUnfinishedSnapshot(t *testing.T) {
+	r, dir := managerWithDataDir(t)
+	writeSnapshot(t, dir, "snap-1", struct {
+		Index uint64 `json:"Index"`
+	}{Index: 42})
+	if err := os.MkdirAll(filepath.Join(dir, raftSnapshotsDir, "snap-2.tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	index, known := r.getPersistedRaftLogIndex()
+	if index != 42 || !known {
+		t.Fatalf("got (%d, %v), want (42, true)", index, known)
+	}
+}
+
 func TestGetPersistedRaftLogIndex_unparseableMetaIsUnknownNotZero(t *testing.T) {
 	// This is the bug. An unreadable snapshot used to produce the same zero as
 	// an empty node, and the caller deletes the raft log on a zero.
@@ -98,7 +140,7 @@ func TestGetPersistedRaftLogIndex_unreadableMetaIsUnknown(t *testing.T) {
 		Index uint64 `json:"Index"`
 	}{Index: 7})
 
-	metaPath := filepath.Join(dir, "rsnapshots", "snap-1", "meta.json")
+	metaPath := filepath.Join(dir, raftSnapshotsDir, "snap-1", "meta.json")
 	if err := os.Chmod(metaPath, 0o000); err != nil {
 		t.Skipf("cannot make the file unreadable here: %v", err)
 	}
@@ -120,6 +162,9 @@ func TestClearRaftState_movesEverythingAsideRatherThanDeleting(t *testing.T) {
 	writeSnapshot(t, dir, "snap-1", struct {
 		Index uint64 `json:"Index"`
 	}{Index: 12})
+	writeSnapshotIn(t, dir, raftSnapshotsDirV8, "snap-0", struct {
+		Index uint64 `json:"Index"`
+	}{Index: 3})
 	if err := os.MkdirAll(filepath.Join(dir, "raft"), 0o755); err != nil {
 		t.Fatalf("mkdir raft: %v", err)
 	}
@@ -132,16 +177,16 @@ func TestClearRaftState_movesEverythingAsideRatherThanDeleting(t *testing.T) {
 	}
 
 	// Nothing is left in place.
-	for _, name := range []string{"raft.db", "rsnapshots", "raft"} {
+	for _, name := range []string{"raft.db", "wsnapshots", "rsnapshots", "raft"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 			t.Errorf("%s was left in place", name)
 		}
 	}
 
-	// Everything is recoverable. rsnapshots was previously left behind, which
-	// produced a node with snapshots and no log to apply them against.
+	// Everything is recoverable. The snapshots were previously left behind,
+	// which produced a node with snapshots and no log to apply them against.
 	discarded := findDiscardedDir(t, dir)
-	for _, name := range []string{"raft.db", "rsnapshots", "raft"} {
+	for _, name := range []string{"raft.db", "wsnapshots", "rsnapshots", "raft"} {
 		if _, err := os.Stat(filepath.Join(discarded, name)); err != nil {
 			t.Errorf("%s was destroyed rather than set aside: %v", name, err)
 		}

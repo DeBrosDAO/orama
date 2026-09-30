@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -65,7 +66,7 @@ func (r *RQLiteManager) getRaftLogIndex() (uint64, bool) {
 //
 // The distinction is the whole point. Every error used to become a zero, and a
 // caller reads a zero as "this node has no data" and deletes its raft log. An
-// unreadable meta.json, a permissions problem on rsnapshots — any of them could
+// unreadable meta.json, a permissions problem on the snapshot directory — any of them could
 // destroy the only good copy of the cluster's state.
 func (r *RQLiteManager) getPersistedRaftLogIndex() (uint64, bool) {
 	rqliteDataDir, err := r.rqliteDataDirPath()
@@ -73,7 +74,22 @@ func (r *RQLiteManager) getPersistedRaftLogIndex() (uint64, bool) {
 		return 0, false
 	}
 
-	snapshotsDir := filepath.Join(rqliteDataDir, "rsnapshots")
+	var maxIndex uint64
+	for _, name := range raftSnapshotDirs {
+		index, known := r.snapshotDirIndex(filepath.Join(rqliteDataDir, name))
+		if !known {
+			return 0, false
+		}
+		if index > maxIndex {
+			maxIndex = index
+		}
+	}
+	return maxIndex, true
+}
+
+// snapshotDirIndex is the highest raft index in the snapshot metadata under
+// snapshotsDir, and whether it is KNOWN. An absent directory is a known zero.
+func (r *RQLiteManager) snapshotDirIndex(snapshotsDir string) (uint64, bool) {
 	entries, err := os.ReadDir(snapshotsDir)
 	if err != nil {
 		// An ABSENT directory is a trustworthy zero: this node has taken no
@@ -90,13 +106,13 @@ func (r *RQLiteManager) getPersistedRaftLogIndex() (uint64, bool) {
 
 	var maxIndex uint64
 	for _, entry := range entries {
-		// Only process directories (snapshot directories)
-		if !entry.IsDir() {
+		// Only completed snapshot directories count: rqlite writes into
+		// "<id>.tmp" and renames, so a .tmp directory has no meta.json yet.
+		if !entry.IsDir() || strings.HasSuffix(entry.Name(), ".tmp") {
 			continue
 		}
 
-		// Read meta.json from the snapshot directory
-		metaPath := filepath.Join(snapshotsDir, entry.Name(), "meta.json")
+		metaPath := filepath.Join(snapshotsDir, entry.Name(), raftSnapshotMeta)
 		raw, err := os.ReadFile(metaPath)
 		if err != nil {
 			// A snapshot whose metadata cannot be read might hold the highest
@@ -107,7 +123,6 @@ func (r *RQLiteManager) getPersistedRaftLogIndex() (uint64, bool) {
 			return 0, false
 		}
 
-		// Parse the metadata JSON to extract the Index field
 		var meta struct {
 			Index uint64 `json:"Index"`
 		}
@@ -116,13 +131,10 @@ func (r *RQLiteManager) getPersistedRaftLogIndex() (uint64, bool) {
 				zap.String("path", metaPath), zap.Error(err))
 			return 0, false
 		}
-
-		// Track the highest index found
 		if meta.Index > maxIndex {
 			maxIndex = meta.Index
 		}
 	}
-
 	return maxIndex, true
 }
 

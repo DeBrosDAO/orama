@@ -573,7 +573,7 @@ go 1.22
 
 require (
 	github.com/caddyserver/caddy/v2 v2.%s
-	github.com/libdns/libdns v1.1.0
+	github.com/libdns/libdns v1.1.1
 )
 `, constants.CaddyVersion[2:])
 	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(goMod), 0644); err != nil {
@@ -630,6 +630,9 @@ func (b *Builder) downloadIPFS() error {
 	if err := downloadFile(url, tarPath); err != nil {
 		return err
 	}
+	if err := verifyPinnedSHA256(tarPath, tarball, arch, constants.IPFSKuboTarballSHA256); err != nil {
+		return err
+	}
 
 	// Extract ipfs binary from kubo/ipfs
 	if err := extractFileFromTarball(tarPath, "kubo/ipfs", filepath.Join(b.binDir, "ipfs")); err != nil {
@@ -649,6 +652,9 @@ func (b *Builder) downloadRQLite() error {
 	tarPath := filepath.Join(b.tmpDir, tarball)
 
 	if err := downloadFile(url, tarPath); err != nil {
+		return err
+	}
+	if err := verifyPinnedSHA256(tarPath, tarball, arch, constants.RQLiteTarballSHA256); err != nil {
 		return err
 	}
 

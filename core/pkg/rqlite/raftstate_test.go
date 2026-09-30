@@ -99,6 +99,23 @@ func TestHasRaftState_snapshotWithoutLog(t *testing.T) {
 	}
 }
 
+// rqlite v10 moves v8's rsnapshots/ to wsnapshots/ on its first start; before
+// that, a member holds rsnapshots/.
+func TestHasRaftState_snapshotInTheV8Layout(t *testing.T) {
+	dir := t.TempDir()
+	snap := filepath.Join(dir, raftSnapshotsDirV8, "2-519-1790390231116")
+	if err := os.MkdirAll(snap, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snap, raftSnapshotMeta), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	has, err := HasRaftState(dir)
+	if err != nil || !has {
+		t.Fatalf("HasRaftState = %v, %v; want true, nil", has, err)
+	}
+}
+
 func TestHasRaftState_ignoresUnfinishedSnapshots(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"2-519-1790390231116.tmp", "3-600-1790390231117"} {

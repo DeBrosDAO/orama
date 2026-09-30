@@ -13,6 +13,6 @@ func TestGenerateOlricConfig_omitsIgnoredEncryptionKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(out, "encryptionKey") {
-		t.Fatalf("Olric v0.7.0 YAML loader ignores encryptionKey; must not emit it:\n%s", out)
+		t.Fatalf("Olric v0.7.4 YAML loader ignores encryptionKey; must not emit it:\n%s", out)
 	}
 }
