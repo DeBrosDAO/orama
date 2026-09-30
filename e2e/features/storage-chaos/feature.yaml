@@ -1,0 +1,18 @@
+# Storage with a node's IPFS daemon down: content uploaded before stays
+# readable through the other nodes, uploads keep working, and after the
+# daemon returns the node serves again and every CID is back at the
+# replication factor (ipfs-cluster recovery or the 15-minute pin sweep).
+id: storage-chaos
+title: IPFS storage with a node's daemon down
+area: storage
+subtasks: [2836]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  claims:
+    - "docs/ARCHITECTURE.md#node-process-model: ipfs-cluster@ and ipfs-gc@ Require ipfs@; stopping the daemon stops them and they return with it"
+    - "docs/API_SURFACE.md#storage: content pinned at RF 3 survives one node's IPFS being down and returns to RF 3 after"

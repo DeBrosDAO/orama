@@ -1,0 +1,39 @@
+# CLI conformance for the environment, auth and miscellaneous commands, and
+# the whole command tree against docs/CLI_REFERENCE.md: the binary under test
+# shows exactly the documented commands, flags, aliases and usage lines;
+# unknown commands, flags and subcommands are usage errors; `orama env`
+# add/use/remove/list/current in isolated HOMEs (custom environment signing
+# in end to end, CA scoping and a lost CA file, invalid values, concurrent
+# adds); every credential-needing command without a credential is an auth
+# error naming `orama auth login`; ORAMA_TOKEN garbage and hostile values;
+# `orama inspect` over SSH (JSON, --output, bad arguments); `orama ssh` with
+# pinned, missing and forged host keys; `orama rollout` refusing bad flags
+# before it builds. Nothing here changes the fleet.
+id: cli-env-auth-misc
+title: CLI conformance - command tree, environments, credentials, inspect, ssh
+area: cli
+subtasks: [2845]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama env
+    - orama env add
+    - orama env current
+    - orama env list
+    - orama env remove
+    - orama env use
+    - orama inspect
+    - orama ssh
+    - orama rollout
+  claims:
+    - "docs/CLI_REFERENCE.md: generated from the cobra tree, so the binary shows exactly the documented commands, flags, aliases and usage lines"
+    - "docs/CLI_REFERENCE.md#orama-env-add: --ca-file trusts a PEM bundle for this environment's domain only; without it the staging chain is refused"
+    - "docs/DEVNET_INSTALL.md: a missing CA file is an error naming the environment"
+    - "docs/AUTH.md: ORAMA_TOKEN is the CI credential; a garbage one is refused"
+    - "docs/DEVNET_INSTALL.md: node host keys are pinned in ~/.orama/known_hosts; orama ssh must not trust on first use"
+    - "docs/CLI_REFERENCE.md#orama-rollout: orama rollout and orama node rollout are the same command"

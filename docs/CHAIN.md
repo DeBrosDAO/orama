@@ -2065,13 +2065,54 @@ execution calls its finalize path directly and would skip this, so it must stay 
 
 ## Explorer
 
-The website explorer (`website/src/pages/explorer.tsx`, `website/src/explorer`) reads the
-chain through the gateway. The browser calls `/v1/chain/…` on the same origin. It does not
-open CometBFT (`127.0.0.1:31001`), the SDK REST API (`127.0.0.1:31003`), or the chain
-indexer (`127.0.0.1:31015`).
+The website explorer (`website/src/explorer`, mounted at `/explorer` by `website/src/pages/explorer.tsx`)
+**runs on demo data today. It does not read the chain.** The header, the footer and the tab title
+say "demo", and none of the wallets or transactions it shows exist.
+
+Layout of `website/src/explorer`:
+
+| Folder | Holds |
+|---|---|
+| `model/` | domain types (`types.ts`), ORAMA/norama formatting (`units.ts`), what a pasted string is (`search.ts`, with a bech32 checksum check), the investigation trail (`trail.ts`), and how a transaction reads as a sentence (`describe.ts`) |
+| `data/` | the `ExplorerDataSource` interface (`source.ts`), the React provider and the `useQuery` / `useLiveQuery` hooks |
+| `data/demo/` | the demo source: a seeded simulation of about 20,000 transactions over 30 days (transfers, staking, reward claims, storage deals, failed transactions) that replays every balance, so each transaction's before/after rows sum to zero and total supply is conserved. History is anchored to the start of the UTC day, so a link keeps working across reloads within a day; the head advances every 2 s |
+| `ui/` | shared building blocks (amounts, wallet links, sentences, transaction rows, help tips) |
+| `shell/` | the header, the ⌘K search palette, the investigation trail bar, and the transaction preview drawer |
+| `pages/` | Home, Transaction, Block, Wallet, and Validators (the λ hand-over is a card on that page) |
+
+Pages only ever call `ExplorerDataSource`. Its contract is written per method in `data/source.ts`:
+a lookup for something that does not exist resolves to `null` (never an invented empty record); a
+real failure rejects with a readable `Error`; ordering is stated per method; pagination is
+cursor-based and a bad cursor is rejected; limits are clamped. Connecting the explorer to the chain
+means writing one implementation of that interface and passing it to `<ExplorerApp source={…}>`.
+Nothing in `ui/`, `shell/` or `pages/` changes.
+
+That implementation reads the chain indexer ("Chain indexer" above) and the module queries through the
+gateway's chain proxy below. The pages ask for things CometBFT and the SDK REST API cannot serve
+directly: every transaction of a wallet, its counterparties, its balance over time, and the
+transactions of a block, decoded. `tx_search` is capped at 100 per page and is not a public API, and
+the Orama modules speak gRPC only, with no REST annotations.
+
+### What the chain adapter must do
+
+The UI trusts its data source; these are the adapter's duties, because chain data is written by
+anyone:
+
+- Validate every amount as a base-unit integer string of bounded length before returning it; a
+  malformed record must reject the query (an error box), not reach a page.
+- Strip control and bidirectional-override characters from labels, monikers, memos and failure
+  reasons. `verified` on a wallet must come from a curated registry shipped with the site, never
+  from a chain-writable field.
+- Percent-encode every path segment and query value when building indexer requests, and return
+  reader-safe error messages (no internal hostnames or raw upstream errors).
+- Clamp `limit` and search-query length, and keep the indexer's search rate-limited: the palette
+  sends a debounced query while the reader types.
+- Serve only finalized blocks as the head.
+
+### The gateway's chain proxy
 
 `core/pkg/gateway/routes.go` mounts the read-only `core/pkg/gateway/handlers/chainread` proxy
-at `/v1/chain/` (an open route in `route_policy.go`). The upstream bases are
+at `/v1/chain/` (an open route in `route_policy.go`). **The explorer does not use it yet.** The upstream bases are
 `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and `ORAMA_CHAIN_INDEX_URL`, defaulting to those
 three loopback URLs, or, on a co-located machine (the `orama-global` namespace layout is installed), to the
 same ports on the namespace address `198.18.0.2`, where the chain and indexer listen there and only the

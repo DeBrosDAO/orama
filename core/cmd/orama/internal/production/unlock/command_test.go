@@ -1,8 +1,11 @@
 package unlock
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
 // The command's first step was GET /v1/agent/genesis-key on the node. The
@@ -52,5 +55,16 @@ func TestRun_requiresGenesis(t *testing.T) {
 	err := Run(&Flags{NodeIP: "10.0.0.1", KeyFile: "/tmp/key"})
 	if err == nil || !strings.Contains(err.Error(), "genesis") {
 		t.Errorf("--genesis must be required: %v", err)
+	}
+}
+
+// Under ORAMA_E2E=1 the command must never shell out to `rw`, which would
+// decrypt with the operator's real wallet instead of the run's test agent.
+func TestDecryptGenesisKey_refusedUnderE2E(t *testing.T) {
+	t.Setenv(rwagent.E2EEnvVar, "1")
+	t.Setenv("PATH", t.TempDir()) // no rw can run even if the guard fails
+	_, err := decryptGenesisKey("ZW5j")
+	if !errors.Is(err, rwagent.ErrE2EGuard) {
+		t.Fatalf("rw decrypt was attempted under %s=1: %v", rwagent.E2EEnvVar, err)
 	}
 }

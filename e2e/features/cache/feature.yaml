@@ -1,0 +1,34 @@
+# The namespace cache (Olric) through the namespace gateway: every route with
+# every JSON type, TTL expiry and bounds, mget and scan semantics, large and
+# hostile input, roles, scoped keys, member selectors, revocation, namespace
+# isolation, races, and cross-node consistency through each node's gateway.
+# Member loss, the gateway's client supervisor and the memory-only property
+# are in cache-chaos, which runs alone.
+id: cache
+title: Namespace cache (Olric) over the gateway
+area: data-plane
+subtasks: [2834]
+stage: 4
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/cache/delete
+    - /v1/cache/get
+    - /v1/cache/health
+    - /v1/cache/mget
+    - /v1/cache/put
+    - /v1/cache/scan
+    - /v1/namespace/members
+    - /v1/namespace/members/
+    - /v1/namespace/keys
+    - /v1/namespace/keys/
+  claims:
+    - "docs/API_SURFACE.md#cache: get/put/delete/mget/scan/health serve the namespace cache"
+    - "docs/ARCHITECTURE.md: a grant may be narrowed to cache:key=...; the cache endpoints apply it"
+    - "docs/CLI_REFERENCE.md#orama-members: runtime holds the data plane, reader holds nothing"
+    - "docs/AUTH.md#revoking: a logged-out session stops working on every gateway within the reload"
+    - "docs/SECURITY.md: a credential of another namespace is refused with NAMESPACE_MISMATCH"

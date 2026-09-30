@@ -1,0 +1,40 @@
+# Post-install audit of every core node, the way an auditor with a root shell
+# reads it: kernel and RAM hygiene, file ownership and modes of every secret,
+# binary and trust anchor, the unit layout, the firewall, and the local node
+# commands, and the refusals that cannot install anything even should they
+# regress (the runner-side push usage, a non-root install or stage). The
+# install and push refusals that would install on a live node if they
+# regressed run in install-extra, against the disposable joined extra.
+id: install
+title: Post-install audit and archive trust on live nodes
+area: infrastructure
+subtasks: [2820]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama push
+    - orama node stage-archive
+    - orama node install
+    - orama node status
+    - orama node doctor
+    - orama node report
+  units:
+    - orama-namespace-coredns@.service
+    - orama-namespace-wireguard@.service
+  claims:
+    - "docs/SECURITY.md#network-isolation: IPv6 is disabled at runtime and on every boot"
+    - "docs/SECURITY.md#ram-to-disk-swap-and-cores: swap off, swap.target masked, fs.suid_dumpable=0, coredump Storage=none, secret units MemorySwapMax=0"
+    - "docs/SECURITY.md#tls--transport: wg0.conf is 0600"
+    - "docs/SECURITY.md#process-isolation: /opt/orama/bin is root:orama 0750 and the orama user cannot replace a binary"
+    - "docs/SECURITY.md#process-isolation: orama-node and the index daemons run as orama; CoreDNS as orama-coredns"
+    - "docs/SECURITY.md#supply-chain: /etc/orama/archive-signers is root:root 0644 and trusts exactly the operator wallet"
+    - "docs/SECURITY.md#supply-chain: --release-metadata without an adopted release root refuses the archive, never falling back to the wallet check"
+    - "docs/SECURITY.md#process-isolation: orama-privhelper.socket is root:orama 0660"
+    - "docs/SECURITY.md#network-isolation: every allow rule is tagged orama and nothing outside the desired set is open"
+    - "docs/SECURITY.md#network-isolation: the overlay rule is in on wg0 from 10.0.0.0/24"
+    - "docs/ARCHITECTURE.md: install enables only orama-node.service; every daemon is an orama-namespace-*@index instance"

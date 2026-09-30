@@ -1,0 +1,25 @@
+# The smoke feature proves the pipeline end to end: the fleet answers on its
+# public name through the real delegation, TLS chains to the pinned staging
+# roots over HTTP/1.1, the open endpoints leak nothing, the CLI under test is
+# the build the fleet runs, and every node's main service is active.
+id: smoke
+title: Fleet smoke test
+area: platform
+subtasks: [2819]
+stage: 1
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama version
+  routes:
+    - /health
+    - /status
+    - /v1/health
+    - /v1/status
+    - /v1/version
+  claims:
+    - "docs/API_SURFACE.md#health-and-version: /v1/status shows no node address, peer id, hostname or error text"

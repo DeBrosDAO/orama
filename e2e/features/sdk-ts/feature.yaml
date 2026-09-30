@@ -1,0 +1,35 @@
+# The TypeScript SDK (@debros/orama, sdk/src) against the fleet through
+# vitest: the SDK's own e2e suite (sdk/tests/e2e) and this feature's
+# additions under tests/ (auth verify with a real signature, whoami, refresh
+# rotation, refresh-on-401 replay, logout, renew refused for a user, device
+# list and device link pending, storage getBinary, db Repository and
+# dropTable, functions.invoke not-found, the chain read proxy, every key
+# profile minted with exactly the SDK's scopes, the workload client's
+# refusals, a WebSocket closed when its session ends), each vitest test
+# reported as a Go subtest. Needs node and pnpm on the runner and sdk/
+# installed; without them the package is not applicable (not covered).
+id: sdk-ts
+title: TypeScript SDK against the fleet
+area: clients
+subtasks: [2846]
+stage: 4
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/chain/
+    - /v1/auth/renew
+    - /v1/auth/device
+    - /v1/auth/device/token
+    - /v1/auth/devices
+    - /v1/invoke/
+    - /v1/pubsub/ws
+    - /v1/namespace/keys
+    - /v1/namespace/keys/
+  claims:
+    - "docs/TS_SDK.md: the SDK's methods work against a live gateway with a namespace session"
+    - "docs/AUTH.md: ending a session closes the sockets its tokens hold open within ten seconds"
+    - "docs/API_SURFACE.md: the chain proxy is read-only and refuses every other path"

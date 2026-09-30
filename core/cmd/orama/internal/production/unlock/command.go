@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/pkg/rwagent"
 	"io"
 	"net/http"
 	"os"
@@ -87,6 +88,12 @@ func (f *Flags) validate() error {
 // The key was encrypted with: AES-256-GCM(luksKey, HKDF(rootwalletKey, "genesis-luks"))
 // For now, we use `rw decrypt` if available, or a local HKDF+AES-GCM implementation.
 func decryptGenesisKey(encryptedKey string) ([]byte, error) {
+	// `rw` decrypts with the wallet under $HOME, which an e2e run cannot
+	// point at its throwaway agent: under ORAMA_E2E=1 it would use the
+	// operator's real ~/.rootwallet, so it is never run.
+	if os.Getenv(rwagent.E2EEnvVar) == "1" {
+		return nil, fmt.Errorf("%w: refusing to run `rw decrypt`: it would use the operator's real RootWallet, not the run's test agent", rwagent.ErrE2EGuard)
+	}
 	// Try rw decrypt first
 	cmd := exec.Command("rw", "decrypt", encryptedKey, "--purpose", "genesis-luks", "--chain", "evm")
 	output, err := cmd.Output()

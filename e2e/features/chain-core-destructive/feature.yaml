@@ -1,0 +1,32 @@
+# Stage 11, destructive half of E2E-28 (runs alone): a validator stopped and
+# started again catches up to the same blocks (and, with three equal
+# bootstrap seats, the survivors cannot commit without it: exactly 2/3 is not
+# a CometBFT quorum); full blocks raise the x/fees base fee and it falls back
+# to the floor; `oramad export` on a stopped validator yields a valid genesis
+# of the same chain; a committee member cannot withdraw its force-bonded
+# self-bond while lambda < 1 (here because a broken guard would unbond a
+# validator under the parallel packages). Downtime jailing and double-sign are not exercised:
+# stopping one of three equal validators halts the chain, so no downtime is
+# ever recorded, and a double-sign tombstones a bootstrap seat for the rest of
+# the run (see the waiver proposals in the chain report).
+id: chain-core-destructive
+title: Chain restart catch-up, base fee under load, export
+area: chain
+subtasks: [2847]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  queries:
+    - orama.fees.v1.BaseFee
+    - orama.emission.v1.CurrentEpoch
+    - orama.power.v1.Lambda
+  claims:
+    - "docs/CHAIN.md#x-fees: the base fee rises on blocks over 50% full (at least 1 norama at the floor) and falls back to min_base_fee"
+    - "docs/CHAIN.md#x-power: three equal bootstrap seats: the chain halts rather than commits without one of them"
+    - "docs/CHAIN.md: a restarted validator catches up to the same block and app hashes"
+    - "docs/CHAIN.md#deviations: oramad export of a stopped node is a valid genesis carrying every custom module"
+    - "docs/CHAIN.md#x-power: UndelegateGuard locks force-bonded self-bond while lambda < 1"

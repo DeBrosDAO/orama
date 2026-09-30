@@ -196,6 +196,58 @@ What it does not check: that the deployed site answers over HTTPS on its own
 name (the page names no URL to fetch), and that the cluster survives a restart
 (that is the lifecycle harness above).
 
+### Fleet e2e (release gate)
+
+`e2e/` is the automated suite that exercises every shipped feature on three fresh
+servers. One command creates the servers, installs the cluster with the chain
+validators co-hosted on the same three machines, runs every stage, collects
+evidence, writes the report and destroys everything:
+
+```bash
+make e2e-fleet
+```
+
+The target runs `infisical run` against the `orama-e2e` project (environment
+`e2e`, folders `/hetzner`, `/cloudflare`, `/rootwallet`, `/release`, `/notify`),
+so the operator needs the Infisical CLI logged in, or a machine identity through
+`INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET`. The runner needs
+`HCLOUD_TOKEN`, `CF_API_TOKEN` and `CF_ZONE` (`dbrsteting.bid`), `E2E_RW_BIN` and
+`E2E_RW_AGENT_BIN` (the RootWallet CLI and the headless agent binary), plus
+`E2E_RUNNER_CIDR`, the public address of the machine running the suite
+(`a.b.c.d/32`): the run's Hetzner firewall lets only that address reach SSH
+(`E2E_ALLOW_OPEN_SSH=1` opens it to the internet instead). The Hetzner project
+behind `HCLOUD_TOKEN` must be used only for e2e: teardown and sweep delete by the
+`e2e-run` label. Nothing is
+persisted: the run works in a private directory, creates a throwaway RootWallet
+agent and wallet in an isolated home, delegates a per-run subdomain
+`e2e-<id>.dbrsteting.bid` through Cloudflare with Let's Encrypt **staging**
+certificates, and tears down the servers, DNS records, agent and secrets on exit
+(also on failure and on SIGINT/SIGTERM/SIGHUP). `e2e-fleet sweep` removes anything
+a crashed run left behind, found by the `e2e-run` label.
+
+| Command | What it does |
+|---------|--------------|
+| `make e2e-fleet` | The whole run: provision, stages, artifacts, report, teardown |
+| `make e2e-coverage` | The coverage gate, no servers needed: every CLI command, gateway route, chain Msg/Query and systemd unit must be covered by a `features/*/feature.yaml` or waived in `e2e/waivers.yaml` |
+| `make e2e-lint` | Contract lint over `e2e/features` (build tag, manifest, `harness.Main`, no sleeps, no bare skips) |
+| `make e2e-test-unit` | Unit tests of the harness itself |
+| `e2e-fleet test --stage N`, `--resume` | Re-run one stage, or continue an interrupted run |
+| `e2e-fleet teardown`, `sweep` | Destroy a run's resources, or orphans by label |
+
+`make test` runs the lint, the coverage gate and the harness unit tests.
+Stages run in a fixed order and destructive packages run alone at the end of their
+stage: bootstrap, namespaces, auth, data plane, deployments and serverless,
+realtime, security audit, chain, ops, upgrade, chaos and soak. A skipped test
+counts as **not covered**, a re-run only labels a failure deterministic or flaky
+and never turns it green, and the exit code is 0 for PASS, 1 for FAIL and 3 for
+INCOMPLETE. The report (`report.html`, `report.json`, JUnit, optional Bugboard
+drafts) lands in the run's artifact directory next to the collected journals and
+node state.
+
+Every change ships its e2e test: add or extend a `features/<x>` package and list
+what it exercises under `covers:`. See `e2e/README.md` for the contract, the
+helper API and the edge-case checklist, and `plans/e2e-fleet.md` for the design.
+
 ## Deploying to VPS
 
 All binaries are pre-compiled locally and shipped as a binary archive. Zero compilation on the VPS.

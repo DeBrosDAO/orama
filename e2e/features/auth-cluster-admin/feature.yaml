@@ -1,0 +1,53 @@
+# Cluster-wide identity switches and the sign-in floods. Every test here
+# changes something every other package depends on — who may create a
+# namespace, the per-wallet cap, the operator list, the signing key — or
+# drains the per-address sign-in bucket the whole runner shares, so the
+# package runs alone and restores what it changed (the signing-key rotation
+# cannot be undone; the new key simply becomes the cluster's key).
+# "orama operator remove refuses to delete the last operator" is not claimed:
+# TestOperator_neverRemovesTheLast can only observe it on a cluster with
+# exactly one operator and skips (not applicable) on any other.
+id: auth-cluster-admin
+title: Namespace-creation policy, operators, key rotation and sign-in limits
+area: auth
+subtasks: [2826, 2828]
+stage: 3
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama cluster
+    - orama cluster creators
+    - orama cluster creators add
+    - orama cluster creators list
+    - orama cluster creators remove
+    - orama cluster settings
+    - orama cluster settings set
+    - orama cluster settings show
+    - orama operator
+    - orama operator add
+    - orama operator list
+    - orama operator remove
+    - orama operator rotate-secrets
+    - orama operator rotate-signing-key
+  routes:
+    - /v1/operator/creators
+    - /v1/operator/creators/
+    - /v1/operator/operators
+    - /v1/operator/operators/
+    - /v1/operator/rotate-secrets
+    - /v1/operator/rotate-signing-key
+    - /v1/operator/settings
+    - /v1/operator/settings/
+  claims:
+    - "docs/AUTH.md#the-lobby: namespace creation follows the cluster's setting: operators, allowlist or open"
+    - "docs/CLI_REFERENCE.md#orama-cluster-creators: an operator is not on the allowlist unless added; an empty list admits nobody"
+    - "docs/API_SURFACE.md#namespace-management: a wallet at its per-wallet cap is refused (NAMESPACE_QUOTA)"
+    - "docs/AUTH.md#operating-the-cluster: operator endpoints need a wallet on the operator list (NOT_AN_OPERATOR)"
+    - "docs/AUTH.md#which-key-signed-a-token: rotate-signing-key publishes a new key; the outgoing one keeps verifying for one access-token lifetime; nobody is signed out"
+    - "docs/CLI_REFERENCE.md#orama-operator-rotate-secrets: the walker is idempotent"
+    - "docs/AUTH.md#when-a-request-is-refused: TOO_MANY_CHALLENGES after ten unanswered challenges"
+    - "docs/AUTH.md#signing-in: a nonce is single-use cluster-wide; concurrent verifies on every gateway have exactly one winner"

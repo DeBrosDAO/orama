@@ -1,0 +1,53 @@
+# The tenant's databases through the namespace gateway. RQLite: every ORM
+# route, atomic transactions (409 rollback with the failing index, op limit,
+# legacy form), bound arguments that never execute, identifiers that are not
+# interpolated, constraint and syntax errors that change nothing, malformed and
+# oversized input, roles and keys (the raw database is admin), namespace
+# isolation, the cluster registry closed to tenants (NOT_AN_OPERATOR), the
+# platform tables in the namespace database closed to a non-owner, and
+# /v1/schema-status on every node. SQLite: `orama db` end to end and every
+# route, 0600/0700 files on the home node, forwarding from every node,
+# ATTACH/DETACH/multi-statement/VACUUM INTO refused, name validation, backups,
+# isolation.
+id: tenant-db
+title: Tenant RQLite and SQLite databases
+area: data-plane
+subtasks: [2833]
+stage: 4
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama db
+    - orama db backup
+    - orama db backups
+    - orama db create
+    - orama db delete
+    - orama db list
+    - orama db query
+  routes:
+    - /v1/rqlite/create-table
+    - /v1/rqlite/drop-table
+    - /v1/rqlite/exec
+    - /v1/rqlite/find
+    - /v1/rqlite/find-one
+    - /v1/rqlite/query
+    - /v1/rqlite/schema
+    - /v1/rqlite/select
+    - /v1/rqlite/transaction
+    - /v1/schema-status
+    - /v1/db/sqlite/backup
+    - /v1/db/sqlite/backups
+    - /v1/db/sqlite/create
+    - /v1/db/sqlite/delete
+    - /v1/db/sqlite/list
+    - /v1/db/sqlite/query
+  claims:
+    - "docs/API_SURFACE.md#database-rqlite: db.transaction() is atomic; a failing op rolls back the whole batch"
+    - "docs/SECURITY.md: the cluster gateway's database is the registry, which only an operator may read or write"
+    - "docs/SECURITY.md#function-sql: api_keys, grants and the other platform tables are not reachable by tenant SQL"
+    - "docs/ARCHITECTURE.md: tenant SQLite files are 0600 in 0700 directories, read and written only by the gateway"
+    - "docs/SECURITY.md: ATTACH/DETACH and multiple statements are refused on tenant SQLite (bugboard 252)"

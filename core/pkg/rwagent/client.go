@@ -56,11 +56,17 @@ type Client struct {
 	// warn receives the one-line warnings a background operation cannot
 	// return as an error (KeepUnlocked). Stderr outside tests.
 	warn io.Writer
+	// guardErr refuses every request of an e2e run pointed at the real
+	// wallet (e2eguard.go); nil otherwise.
+	guardErr error
 }
 
 // New creates a client that connects to the agent's Unix socket.
-// If socketPath is empty, defaults to ~/.rootwallet/agent.sock.
+// If socketPath is empty, defaults to ~/.rootwallet/agent.sock, except under
+// ORAMA_E2E=1, where every request fails instead (see e2eGuard).
 func New(socketPath string) *Client {
+	requested := socketPath
+	guardErr := e2eGuard(requested)
 	if socketPath == "" {
 		home, _ := os.UserHomeDir()
 		socketPath = filepath.Join(home, ".rootwallet", DefaultSocketName)
@@ -69,9 +75,16 @@ func New(socketPath string) *Client {
 	return &Client{
 		socketPath: socketPath,
 		warn:       os.Stderr,
+		guardErr:   guardErr,
 		httpClient: &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					// The guard runs again at every dial: a path that was
+					// safe when the client was made may since have been
+					// swapped for a link into the real wallet.
+					if err := e2eGuard(requested); err != nil {
+						return nil, err
+					}
 					if err := checkAgentSocket(socketPath); err != nil {
 						return nil, err
 					}
@@ -410,6 +423,9 @@ func (c *Client) Lock(ctx context.Context) error {
 // agent reports a locked wallet as 423 after waiting, and as 401 when it
 // refuses without waiting.
 func (c *Client) doJSON(ctx context.Context, method, path string, body any, result any) (int, error) {
+	if c.guardErr != nil {
+		return 0, c.guardErr
+	}
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)

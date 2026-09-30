@@ -1,0 +1,22 @@
+# Release-quality scanners run on the runner against the checkout the run was
+# built from and the archive it built: govulncheck, staticcheck and gosec
+# (high severity, high confidence) on the core, chain and e2e modules; pnpm
+# audit of the SDKs' production dependencies; a secret scan (gitleaks, else
+# infisical scan) of the committed tree and of the built release archive;
+# every Fuzz target of core/pkg for a short run; and the race detector over the
+# packages that start the most goroutines (gateway, rqlite, namespace, node).
+# A tool that is not installed is not applicable (not covered), never a pass.
+id: scanners
+title: Static analysis, vulnerability, secret, fuzz and race scanners
+area: quality
+subtasks: [2865]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  claims:
+    - "plans/e2e-fleet.md: P5 performance baselines and scanners gate every release"
+    - "plans/e2e-fleet.md: release.sh refuses a commit without a green fleet report, the scanners included"

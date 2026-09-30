@@ -1,0 +1,30 @@
+# The examples users copy out of the documents (README.md, sdk/README.md,
+# sdk/QUICKSTART.md, docs/DEPLOYMENT_GUIDE.md, docs/GO_CLIENT_SDK.md,
+# docs/TS_SDK.md, docs/SERVERLESS.md, docs/examples, sdk/examples), checked
+# for real: every `orama` command line in a shell block names a real command,
+# subcommand and flags (validated against the binary, never executed unless
+# read-only); the read-only ones run as written against the fleet with the
+# environment and namespace placeholders rewritten; every whole Go program
+# builds against the checkout's core; the function examples build with Go
+# and, when TinyGo is present, to WASM; every TypeScript/JavaScript block
+# parses; every json block is JSON; sdk/examples type-check and run against
+# a fresh namespace to their completion line. A failure names the file:line.
+# Skipped on purpose: shell lines that deploy, delete, log in, mint keys or
+# manage nodes (the owning features test them; running a doc copy would
+# change the fleet), lines with unresolved placeholders, streaming commands.
+id: docs-examples
+title: Documentation examples run and build
+area: docs
+subtasks: [2866]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  claims:
+    - "docs/DEPLOYMENT_GUIDE.md: every orama command example names a real command and real flags, and the read-only ones succeed"
+    - "docs/GO_CLIENT_SDK.md: the Quick Start program builds against the SDK"
+    - "docs/SERVERLESS.md: the function examples build with Go and TinyGo"
+    - "docs/TS_SDK.md: every TypeScript example parses"

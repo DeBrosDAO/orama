@@ -11,11 +11,20 @@ import (
 	"testing"
 )
 
+// shortSocketBase holds test socket directories: short enough for sun_path.
+const shortSocketBase = "/tmp"
+
 // startMockAgent creates a mock agent server on a Unix socket for testing.
 func startMockAgent(t *testing.T, handler http.Handler) (socketPath string, cleanup func()) {
 	t.Helper()
 
-	tmpDir := t.TempDir()
+	// t.TempDir() is too long for a Unix socket on macOS (sun_path holds
+	// 104 bytes), so the socket lives in a short directory under /tmp.
+	tmpDir, err := os.MkdirTemp(shortSocketBase, "rwt")
+	if err != nil {
+		t.Fatalf("create a socket directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 	socketPath = filepath.Join(tmpDir, "test-agent.sock")
 
 	listener, err := net.Listen("unix", socketPath)
@@ -315,7 +324,7 @@ func TestAgentSocketAllowed(t *testing.T) {
 }
 
 func TestCheckAgentSocket_refusesWhatAnotherUserCouldPlant(t *testing.T) {
-	dir, err := os.MkdirTemp("", "rwa")
+	dir, err := os.MkdirTemp(shortSocketBase, "rwa")
 	if err != nil {
 		t.Fatal(err)
 	}

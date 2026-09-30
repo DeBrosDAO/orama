@@ -10,6 +10,7 @@ Operational constraints:
 - Drive nodes through the `orama` CLI (`orama node …`), never raw `systemctl`.
 - Inter-node traffic uses the WireGuard overlay (`10.0.0.x`), not public IPs.
 - When you change behavior, update the matching doc under `docs/` in the same change.
+- Every change ships its fleet e2e test: add or extend `e2e/features/<x>/` and list what it exercises under `covers:` in its `feature.yaml`. `make test` fails when a CLI command, gateway route, chain Msg/Query or systemd unit has no e2e mapping and no waiver (see `docs/DEV_DEPLOY.md`, "Fleet e2e", and `e2e/README.md`).
 
 <!-- rules:start -->
 # DeBros Engineering Rules

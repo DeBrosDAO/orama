@@ -1,0 +1,28 @@
+# The index raft under failure, driven through the CLI on the nodes and
+# from the runner: a stop that would break quorum is refused as a conflict,
+# as is a removal; the leader stopping hands raft to a survivor that serves
+# strong reads; quorum loss stops strong reads and recovers when the voters
+# return; and recover-raft refuses bad input, declines without --force, and
+# after a real quorum loss reforms the cluster around the leader's data.
+id: rqlite-raft-destructive
+title: Raft quorum, leader loss and recover-raft
+area: infrastructure
+subtasks: [2823]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node stop
+    - orama node start
+    - orama node recover-raft
+    - orama node remove
+  units:
+    - orama-namespace-rqlite@.service
+  claims:
+    - "docs/CLI_REFERENCE.md#orama-node-stop: a stop that would break quorum is refused; --force bypasses it"
+    - "docs/CLI_REFERENCE.md#orama-node-remove: a removal that would cost a cluster its quorum is refused"
+    - "docs/CLI_REFERENCE.md#orama-node-recover-raft: with quorum lost, --leader-raft-addr reforms the cluster around the kept node's data"
