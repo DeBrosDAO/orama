@@ -22,6 +22,9 @@ const (
 type upstreamHit struct {
 	path      string
 	namespace string
+	// contentLength is the length the namespace gateway read the request with:
+	// -1 is a chunked body, whose length a handler cannot know in advance.
+	contentLength int64
 }
 
 // clusterGatewayFixture is a cluster gateway (client_namespace "default")
@@ -37,7 +40,7 @@ func newClusterGatewayFixture(t *testing.T, clientNamespace string) *clusterGate
 	t.Helper()
 	f := &clusterGatewayFixture{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		f.hits = append(f.hits, upstreamHit{path: r.URL.Path, namespace: r.Header.Get(HeaderInternalAuthNamespace)})
+		f.hits = append(f.hits, upstreamHit{path: r.URL.Path, namespace: r.Header.Get(HeaderInternalAuthNamespace), contentLength: r.ContentLength})
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(upstream.Close)
@@ -360,5 +363,32 @@ func TestClusterServerlessRouting_capabilityUpgradeNamingNoNamespaceIsRefused(t 
 	}
 	if f.local != 0 || len(f.hits) != 0 {
 		t.Error("a capability upgrade naming no namespace was served")
+	}
+}
+
+// A body forwarded to the namespace gateway keeps its length. It went out
+// chunked, and a handler that asks "is there a body" by ContentLength > 0 —
+// the device link start — saw none and dropped the device key it carried.
+func TestClusterServerlessRouting_aProxiedBodyKeepsItsLength(t *testing.T) {
+	f := newClusterGatewayFixture(t, "default")
+	const body = `{"device_key":{"kty":"OKP"}}`
+
+	rec := f.serve(httptest.NewRequest(http.MethodPost, "/v1/invoke/"+tenantNamespace+"/hello", strings.NewReader(body)))
+
+	if rec.Code != http.StatusOK || len(f.hits) != 1 {
+		t.Fatalf("status %d, upstream hits %d; want the request proxied once", rec.Code, len(f.hits))
+	}
+	if got := f.hits[0].contentLength; got != int64(len(body)) {
+		t.Errorf("the namespace gateway read ContentLength %d, want %d", got, len(body))
+	}
+}
+
+func TestClusterServerlessRouting_aProxiedRequestWithoutABodyHasNoLength(t *testing.T) {
+	f := newClusterGatewayFixture(t, "default")
+
+	f.serve(httptest.NewRequest(http.MethodPost, "/v1/invoke/"+tenantNamespace+"/hello", nil))
+
+	if len(f.hits) != 1 || f.hits[0].contentLength != 0 {
+		t.Fatalf("hits %+v; want one request with ContentLength 0", f.hits)
 	}
 }

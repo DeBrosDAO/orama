@@ -1789,6 +1789,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	keepBodyLength(proxyReq, r)
 
 	// Copy headers
 	for key, values := range r.Header {
@@ -2096,6 +2097,7 @@ serveLocal:
 		http.Error(w, "Failed to create proxy request", http.StatusInternalServerError)
 		return
 	}
+	keepBodyLength(proxyReq, r)
 
 	// Copy headers
 	for key, values := range r.Header {
@@ -2198,6 +2200,7 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 		g.logger.Error("Failed to create cross-node proxy request", zap.Error(err))
 		return false
 	}
+	keepBodyLength(proxyReq, r)
 
 	// Copy headers and set Host header to original domain for routing
 	for key, values := range r.Header {
@@ -2327,6 +2330,7 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 		g.logger.Error("Failed to create cross-node proxy request", zap.Error(err))
 		return false
 	}
+	keepBodyLength(proxyReq, r)
 
 	for key, values := range r.Header {
 		for _, value := range values {
@@ -2400,4 +2404,13 @@ func getInt(v interface{}) int {
 		return int(f)
 	}
 	return 0
+}
+
+// keepBodyLength gives a forwarded request the length of the body it was
+// received with. http.NewRequest knows the length only of a body it can see the
+// size of, so a forwarded r.Body went out chunked, and the next gateway then
+// read ContentLength as "no body": a device link's key was dropped that way and
+// the answer was for a login that named no device.
+func keepBodyLength(out, in *http.Request) {
+	out.ContentLength = in.ContentLength
 }

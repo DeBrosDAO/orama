@@ -2,6 +2,8 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -88,12 +90,12 @@ func (h *Handlers) requireCallerDeviceProof(w http.ResponseWriter, r *http.Reque
 		return true
 	}
 	var req DeviceProofRequest
-	if r.ContentLength != 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json body: expected {\"device_proof\": {...}}")
-			return false
-		}
+	// An empty body (chunked or not) carries no proof; a device-bound caller
+	// is then refused below for the proof it did not send.
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid json body: expected {\"device_proof\": {...}}")
+		return false
 	}
 	device, err := h.authService.RequireActiveDevice(r.Context(), namespace, claims.Sub, claims.Did)
 	if err == nil {

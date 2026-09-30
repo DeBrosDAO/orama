@@ -3,13 +3,18 @@ package operator
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"io"
 	"net/http"
 	"time"
 
 	"go.uber.org/zap"
 )
+
+// maxInviteBody bounds the invite request body; it only ever holds an expiry.
+const maxInviteBody = 4096
 
 // InviteRequest is the optional body for POST /v1/operator/invite.
 type InviteRequest struct {
@@ -37,11 +42,22 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse optional expiry from body (default: 60min, max: 7 days).
+	// Optional expiry from the body (default and cap: 60 min). An empty body,
+	// chunked or not, takes the default; a body that is not the request is
+	// refused rather than silently ignored.
 	expiryMinutes := 60
-	if r.Body != nil && r.ContentLength > 0 {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxInviteBody))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read the request body")
+		return
+	}
+	if len(body) > 0 {
 		var req InviteRequest
-		if err := decodeJSON(r, &req); err == nil && req.ExpiryMinutes > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body: expected {\"expiry_minutes\": N} or no body at all")
+			return
+		}
+		if req.ExpiryMinutes > 0 {
 			expiryMinutes = req.ExpiryMinutes
 		}
 	}
@@ -67,7 +83,7 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 	expiresAtStr := expiresAt.Format("2006-01-02 15:04:05")
 
 	ctx := r.Context()
-	_, err := h.rqliteClient.Exec(ctx,
+	_, err = h.rqliteClient.Exec(ctx,
 		"INSERT INTO invite_tokens (token, created_by, expires_at, operator_wallet) VALUES (?, ?, ?, ?)",
 		HashInviteToken(token), fmt.Sprintf("operator:%s", wallet), expiresAtStr, wallet)
 	if err != nil {

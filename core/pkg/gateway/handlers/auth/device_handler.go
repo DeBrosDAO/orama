@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -74,11 +75,11 @@ func (h *Handlers) DeviceAuthorizationHandler(w http.ResponseWriter, r *http.Req
 	var req DeviceAuthorizationRequest
 	// An empty body is a request for a session in whichever namespace the
 	// approver signs in to, which is the common case from a fresh machine.
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json body: expected {\"namespace\": \"...\"} or no body at all")
-			return
-		}
+	// Empty is judged by reading, not by ContentLength: a chunked body has
+	// none (-1) and still carries the request.
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid json body: expected {\"namespace\": \"...\"} or no body at all")
+		return
 	}
 
 	pending, deviceID, err := h.startPendingLogin(r.Context(), req)
