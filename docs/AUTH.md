@@ -813,7 +813,9 @@ while that subject was still the raw key.
 `/v1/operator/*` — minting a cluster invite, listing nodes, claiming one —
 requires the `admin` grant **and** a wallet on the cluster's operator list. An
 invite is handed every secret the cluster holds, including the one the JWT
-signing key is derived from.
+signing key is derived from. Listing nodes (`GET /v1/operator/nodes`, what
+`orama ssh` and node resolution call) is a read and asks for `operator:read`;
+the routes that change a node or the cluster ask for `operator:write`.
 
 A cluster with an empty operator list refuses every operator endpoint. An
 unreadable list refuses too: not knowing whether someone is an operator is not

@@ -241,10 +241,14 @@ func buildRoutePolicies() *routepolicy.Table {
 	// else needs to be an operator.
 	t.AddDynamic("/v1/network/status", networkDetailPolicy)
 	t.AddDynamic("/v1/network/peers", networkDetailPolicy)
+	// Listing the operator's nodes is a read. The table is keyed by path, not
+	// method; HandleListNodes serves GET only and answers every other method
+	// 405, so there is no write on this path.
+	t.Add(control(auth.DomainOperator, auth.ActionRead), "/v1/operator/nodes")
 	t.Add(control(auth.DomainOperator, auth.ActionWrite),
 		"/v1/network/connect", "/v1/network/disconnect",
 		"/v1/node/command", "/v1/node/leave",
-		"/v1/operator/nodes", "/v1/operator/node/register",
+		"/v1/operator/node/register",
 		"/v1/operator/operators", "/v1/operator/operators/",
 		"/v1/operator/rotate-signing-key", "/v1/operator/rotate-secrets")
 	// Who may create a namespace, and the allowlist. cluster_settings and
