@@ -75,7 +75,9 @@ it shows against your provider's console — and every connection of the run
 
 `--genesis` records the environment as `https://<base-domain>` in
 `~/.orama/environments.json` and leaves the active environment alone; name it
-with `--env` in later commands. Joins need the minting node's certificate
+with `--env` in later commands. Every `orama env` and setup change to that file
+holds an exclusive lock (`environments.json.lock`) and replaces the file by
+rename, so commands running in parallel each keep their environment. Joins need the minting node's certificate
 issued: the invite names that node by its public IP and its site name, and the
 joiner pins the fingerprint of the certificate it serves — delegate the domain
 to the cluster ([NAMESERVER_SETUP.md](NAMESERVER_SETUP.md)) before joining more
