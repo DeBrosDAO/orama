@@ -438,7 +438,10 @@ func ormGatewayRoutes() []string {
 func functionRoutePolicy(r *http.Request) routepolicy.Policy {
 	switch {
 	case serverlesshandlers.IsFunctionAction(r.URL.Path, "invoke"):
-		return policyOpen
+		// Open, but a grant narrowed to `fn:name=` still applies to it.
+		p := policyOpen
+		p.NarrowedByGrant = true
+		return p
 	case isCapabilityUpgrade(r):
 		return policyHandlerAuth
 	case serverlesshandlers.IsFunctionAction(r.URL.Path, "ws"):

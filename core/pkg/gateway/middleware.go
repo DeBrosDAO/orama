@@ -959,6 +959,12 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// exemptions here because the path lists disagreed about them.
 		policy := g.policyFor(r)
 		if r.Method == http.MethodOptions || policy.Access.Anonymous() {
+			if r.Method != http.MethodOptions && policy.NarrowedByGrant {
+				var ok bool
+				if r, ok = g.narrowOpenRoute(w, r); !ok {
+					return
+				}
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

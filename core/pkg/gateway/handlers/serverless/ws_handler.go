@@ -76,17 +76,20 @@ func (h *ServerlessHandlers) closeClient(clientID string) wssession.Closer {
 //   - WSPersistent=true: persistent per-connection WASM instance (plan 06)
 //   - WSPersistent=false (default): per-frame stateless invocation
 func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Request, name string, version int) {
-	// The WebSocket needs a credential, and it runs functions of that
-	// credential's namespace (bugboard #423).
-	namespace, ok := managedNamespace(w, r)
-	if !ok {
+	// A capability is the whole authorization of its socket, checked here —
+	// before the upgrade and before a persistent instance is taken. It carries
+	// no credential, so there is no credential namespace to manage with: the
+	// namespace is the one the URL names (?namespace=), which the capability's
+	// key is derived from.
+	if token := capabilityToken(r); token != "" {
+		h.serveCapabilityWebSocket(w, r, invokeNamespace(r), name, version, token)
 		return
 	}
 
-	// A capability is the whole authorization of its socket, checked here —
-	// before the upgrade and before a persistent instance is taken.
-	if token := capabilityToken(r); token != "" {
-		h.serveCapabilityWebSocket(w, r, namespace, name, version, token)
+	// Any other WebSocket needs a credential, and it runs functions of that
+	// credential's namespace (bugboard #423).
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 

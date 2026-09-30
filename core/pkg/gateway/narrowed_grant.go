@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -154,4 +155,32 @@ func (g *Gateway) resolveRequestGrant(r *http.Request, policy routepolicy.Policy
 func (g *Gateway) refuseUnreadableGrant(w http.ResponseWriter, err error) {
 	g.logger.ComponentError(logging.ComponentGeneral, "could not read the caller's grant; refusing the request", zap.Error(err))
 	writeError(w, http.StatusServiceUnavailable, "the caller's grant could not be read right now; retry shortly")
+}
+
+// narrowOpenRoute carries a narrowed grant onto a route that is open to anyone
+// (invoking a function). Such a route skips the authorization and scope
+// gates, so a caller's grant was never resolved and its selector never read:
+// a wallet narrowed to `fn:name=checkout` invoked any function of the
+// namespace. A caller with no credential, no grant, or a grant with no
+// selector is left as it was — whether it may run the function is the
+// invoker's decision, and this only takes access away.
+//
+// It reports whether the request may continue; on false the response has been
+// written.
+func (g *Gateway) narrowOpenRoute(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	claims, _ := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims)
+	if claims == nil {
+		return r, true
+	}
+	// Invoking is the data plane, the hot path: the cached read.
+	grant, err := g.cachedRequestGrant(r, claims.Sub)
+	if err != nil {
+		g.refuseUnreadableGrant(w, err)
+		return nil, false
+	}
+	if grant == nil || strings.TrimSpace(grant.Resource) == "" {
+		return r, true
+	}
+	r = markGrant(r, grant)
+	return r.WithContext(context.WithValue(r.Context(), ctxkeys.Permissions, g.callerPermissions(r))), true
 }

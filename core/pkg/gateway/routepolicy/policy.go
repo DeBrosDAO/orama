@@ -104,6 +104,12 @@ type Policy struct {
 	// are exempt; see the scope middleware.
 	Token TokenRequirement
 
+	// NarrowedByGrant is for an Open route whose handler applies the caller's
+	// resource selector (`fn:name=checkout`). Open skips the authorization and
+	// scope gates, so without it no grant is resolved and a selector is never
+	// read. A caller presenting no credential is unaffected.
+	NarrowedByGrant bool
+
 	// MainGateway keeps the route on the gateway that serves the cluster
 	// registry rather than proxying it to a namespace gateway. API keys live
 	// only in that registry, so a namespace gateway cannot answer for them.

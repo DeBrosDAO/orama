@@ -240,3 +240,60 @@ func TestGrantCache_fullCacheKeepsLiveEntries(t *testing.T) {
 		t.Fatal("the new entry is not served")
 	}
 }
+
+// Invoking a function is an open route: whether a caller may run it is the
+// invoker's decision. A grant narrowed to fn:name= still has to apply, and it
+// never did, because an open route resolves no grant (stagenet e2e
+// TestCapabilitySocket_lifecycle/fn_selector saw a 200 for another function).
+func TestForwardedInvoke_fnSelectorNarrowsTheWallet(t *testing.T) {
+	g, registry := namespaceGatewayForHops(t, "runtime")
+	registry.resource = "fn:name=checkout"
+
+	for name, tc := range map[string]struct {
+		function string
+		want     int
+	}{
+		"the named function":                  {"checkout", http.StatusOK},
+		"another function":                    {"refund", http.StatusForbidden},
+		"a name that only starts the same":    {"checkout-2", http.StatusForbidden},
+		"the same name in a longer path tail": {"checkoutx", http.StatusForbidden},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := hop(t, g, http.MethodPost, "/v1/functions/"+tc.function+"/invoke", hopNamespace, hopWallet)
+			status, reached := serveHopAuthorizing(g, r, auth.Resource{Domain: auth.SelectorFn, Name: tc.function})
+			if !reached || status != tc.want {
+				t.Errorf("invoke %s: reached %v, status %d, want %d", tc.function, reached, status, tc.want)
+			}
+		})
+	}
+}
+
+// Only a narrowed grant changes anything on the open route: a wallet holding
+// the whole role or no grant reaches every function as before, an anonymous
+// caller reads no grant at all, and a grant that cannot be read refuses rather
+// than widens.
+func TestForwardedInvoke_onlyANarrowedGrantChangesTheOpenRoute(t *testing.T) {
+	object := auth.Resource{Domain: auth.SelectorFn, Name: "refund"}
+	for name, role := range map[string]string{"whole role": "runtime", "no grant": ""} {
+		t.Run(name, func(t *testing.T) {
+			g, _ := namespaceGatewayForHops(t, role)
+			r := hop(t, g, http.MethodPost, "/v1/functions/refund/invoke", hopNamespace, hopWallet)
+			if status, reached := serveHopAuthorizing(g, r, object); !reached || status != http.StatusOK {
+				t.Errorf("reached %v, status %d, want 200", reached, status)
+			}
+		})
+	}
+
+	t.Run("anonymous", func(t *testing.T) {
+		g, registry := namespaceGatewayForHops(t, "runtime")
+		registry.resource = "fn:name=checkout"
+		registry.queries = 0
+		r := httptest.NewRequest(http.MethodPost, "/v1/functions/refund/invoke", nil)
+		if status, reached := serveHopAuthorizing(g, r, object); !reached || status != http.StatusOK {
+			t.Errorf("reached %v, status %d, want 200", reached, status)
+		}
+		if registry.queries != 0 {
+			t.Errorf("an anonymous invoke read the registry %d times", registry.queries)
+		}
+	})
+}

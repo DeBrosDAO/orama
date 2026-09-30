@@ -1,9 +1,11 @@
 package serverless
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,8 +54,18 @@ func mintFor(t *testing.T, a *capability.Authority, namespace, function string, 
 	return token, claims
 }
 
+// capabilityRequest is a socket opened on a capability alone, the way a client
+// opens one: the namespace in the URL and no credential, so the request
+// carries no credential namespace. upgradeRequest would put one on it, which
+// hid a handler that demanded one (the e2e suite saw 403 "the namespace this
+// credential belongs to could not be resolved").
 func capabilityRequest(token string, ctxValues map[any]any) *http.Request {
-	r := upgradeRequest(ctxValues)
+	r := httptest.NewRequest(http.MethodGet, "/?namespace=anchat-test", nil)
+	ctx := r.Context()
+	for k, v := range ctxValues {
+		ctx = context.WithValue(ctx, k, v)
+	}
+	r = r.WithContext(ctx)
 	q := r.URL.Query()
 	q.Set(CapabilityQueryParam, token)
 	r.URL.RawQuery = q.Encode()
@@ -306,3 +318,35 @@ func TestHandleAuthRefresh_aCapabilitySocketIsRefusedBeforeTheTokenIsRead(t *tes
 }
 
 var errRegistryDown = errors.New("registry unavailable")
+
+// A capability socket is judged by the capability, not by a credential's
+// namespace: with none on the request a genuine token gets past every check,
+// and a bad one gets the identical refusal, never the management scoping's.
+func TestHandleWebSocket_aCapabilityNeedsNoCredentialNamespace(t *testing.T) {
+	fn := capabilityFn("rpc-router")
+	h, authority := capabilityHandlers(t, fn, revokedSet{})
+	good, _ := mintFor(t, authority, "anchat-test", "rpc-router", time.Now())
+	otherNS, _ := mintFor(t, authority, "elsewhere", "rpc-router", time.Now())
+
+	r := capabilityRequest(good, nil)
+	if ns := credentialNamespace(r); ns != "" {
+		t.Fatalf("the test request carries credential namespace %q", ns)
+	}
+	if code := openWith(h, r, "rpc-router"); code != http.StatusServiceUnavailable {
+		t.Errorf("a genuine capability with no credential: status %d, want it past the checks (503: no engine here)", code)
+	}
+
+	rec := httptest.NewRecorder()
+	h.HandleWebSocket(rec, capabilityRequest(otherNS, nil), "rpc-router", 0)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), capability.ErrInvalid.Error()) {
+		t.Errorf("a capability for another namespace: %d %q, want the identical refusal", rec.Code, rec.Body.String())
+	}
+
+	noNamespace := capabilityRequest(good, nil)
+	noNamespace.URL.RawQuery = CapabilityQueryParam + "=" + good
+	rec = httptest.NewRecorder()
+	h.HandleWebSocket(rec, noNamespace, "rpc-router", 0)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), capability.ErrInvalid.Error()) {
+		t.Errorf("a capability naming no namespace: %d %q, want the identical refusal", rec.Code, rec.Body.String())
+	}
+}
