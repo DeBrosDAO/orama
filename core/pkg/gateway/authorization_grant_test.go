@@ -214,12 +214,12 @@ func TestAuthorizationMiddleware_namespaceListNeedsAWalletNotAGrant(t *testing.T
 	}
 }
 
-// A reader grant is empty. Applying it on cache would take the data plane away
-// from a member the route never asked to own, so only a grant narrowed to a
-// resource is applied there. Whether the caller holds one is read once and
-// remembered (narrowed_grant.go), not once per request.
-func TestAuthorizationMiddleware_dataPlaneAppliesOnlyANarrowedGrant(t *testing.T) {
-	for _, role := range []string{string(auth.RoleOwner), string(auth.RoleReader)} {
+// The wallet's role decides the data plane: an owner reaches the cache and a
+// reader, who holds none of it, does not (docs/AUTH.md, "Roles"). Either way
+// the grant is read once and remembered (narrowed_grant.go), not once per
+// request.
+func TestAuthorizationMiddleware_dataPlaneFollowsTheWalletsRole(t *testing.T) {
+	for role, want := range map[string]bool{string(auth.RoleOwner): true, string(auth.RoleReader): false} {
 		t.Run(role, func(t *testing.T) {
 			g, registry := controlPlaneGateway(t, role)
 
@@ -228,8 +228,8 @@ func TestAuthorizationMiddleware_dataPlaneAppliesOnlyANarrowedGrant(t *testing.T
 				w := httptest.NewRecorder()
 				chain.ServeHTTP(w, grantWalletRequest(http.MethodPost, "/v1/cache/get", "0xmember", "anchat"))
 
-				if !*reached {
-					t.Fatalf("cache refused a %s: %d %s", role, w.Code, strings.TrimSpace(w.Body.String()))
+				if *reached != want {
+					t.Fatalf("a %s reached the cache: %v, want %v (%d %s)", role, *reached, want, w.Code, strings.TrimSpace(w.Body.String()))
 				}
 				if i == 0 {
 					registry.queries = 0

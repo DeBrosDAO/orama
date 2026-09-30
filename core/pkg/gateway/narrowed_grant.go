@@ -12,17 +12,23 @@ import (
 	"go.uber.org/zap"
 )
 
-// A wallet's grant may be narrowed to a resource — `cache:key=sessions/*`,
-// `storage:avatars/*` — and the data path applies the narrowing by reading the
-// grant's selector. On a route that does not require ownership no grant is
-// resolved, so the wallet was handed the whole data plane and the selector was
-// never read: a grant narrowed to sessions/* could write tokens/x.
+// A wallet's authority is its grant, on the data plane as much as anywhere: its
+// role says which of cache, pub/sub, storage and the rest it reaches (a reader
+// none of them), and the grant may be narrowed to a resource —
+// `cache:key=sessions/*`, `storage:avatars/*` — which the data path applies by
+// reading the grant's selector. A route that does not require ownership
+// resolved no grant, so every wallet was handed the whole data plane: a reader
+// put and read the cache, and a grant narrowed to sessions/* could write
+// tokens/x.
 //
 // The grant is resolved for those routes now, and it is resolved from a short
-// cache, because reading it is registry round trips (~300ms) and cache and
-// storage are the hot path. What the cache costs is bounded by its lifetime: a
-// grant narrowed or revoked reaches the data plane within narrowedGrantTTL, on
-// every node, and a grant already narrowed never widens in the meantime.
+// cache, because reading it is registry round trips (~300ms) and the data plane
+// is the hot path: a wallet pays them once per namespace per narrowedGrantTTL
+// and every other request is a map hit. What the cache costs is bounded by its
+// lifetime: a grant narrowed, revoked or moved to another role reaches the data
+// plane within narrowedGrantTTL, on every node, and a grant already narrowed
+// never widens in the meantime. A read that fails is not cached and refuses the
+// request.
 const (
 	narrowedGrantTTL = 10 * time.Second
 
@@ -84,32 +90,10 @@ func (c *grantCache) makeRoom(now time.Time) {
 	}
 }
 
-// grantIsNarrowable reports whether a selector on a grant can change what this
-// route allows: the route sits in a domain the data path narrows, and does not
-// already resolve the grant itself through the ownership gate.
-func grantIsNarrowable(policy routepolicy.Policy) bool {
-	return !policy.Ownership && auth.SelectorEnforced(auth.SelectorDomain(policy.Domain))
-}
-
-// callerHoldsNarrowedGrant reports whether this request's wallet holds a grant
-// narrowed to a resource in the route's domain. An error means the grant could
-// not be read, and the request is refused rather than given the data plane.
-//
-// Only a wallet's: a key's scopes are its authority on a route that does not
-// resolve a grant, and they are read from the row on every request already.
-func (g *Gateway) callerHoldsNarrowedGrant(r *http.Request, policy routepolicy.Policy) (bool, error) {
-	if !grantIsNarrowable(policy) {
-		return false, nil
-	}
-	claims, _ := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims)
-	if claims == nil || strings.TrimSpace(claims.Sub) == "" || auth.IsAPIKeySubject(claims.Sub) {
-		return false, nil
-	}
-	grant, err := g.cachedRequestGrant(r, claims.Sub)
-	if err != nil {
-		return false, err
-	}
-	return grant != nil && strings.TrimSpace(grant.Resource) != "", nil
+// grantIsDataPlane reports whether a route is one the data plane reaches: the
+// hot path, whose grant is read through the cache.
+func grantIsDataPlane(policy routepolicy.Policy) bool {
+	return auth.DataPlanePermissions().PermitsDomain(auth.Domain(policy.Domain), auth.Action(policy.Action))
 }
 
 // cachedRequestGrant is lookupRequestGrant through the cache. Only an answer
@@ -129,11 +113,11 @@ func (g *Gateway) cachedRequestGrant(r *http.Request, subject string) (*auth.Gra
 	return grant, nil
 }
 
-// resolveRequestGrant is the grant a route that does not require ownership
-// still has to carry: the cached one where a selector may apply, the live one
-// for a control route, where a stale answer would be a stale refusal.
+// resolveRequestGrant is the grant a route that does not go through the
+// ownership gate still has to carry: the cached one on the data plane, the live one for a
+// control route, where a stale answer would be a stale refusal.
 func (g *Gateway) resolveRequestGrant(r *http.Request, policy routepolicy.Policy) (*auth.Grant, error) {
-	if !grantIsNarrowable(policy) {
+	if !grantIsDataPlane(policy) {
 		return g.lookupRequestGrant(r)
 	}
 	claims, _ := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims)
