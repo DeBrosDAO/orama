@@ -1202,6 +1202,7 @@ func (cm *ClusterManager) GetClusterStatus(ctx context.Context, clusterID string
 	status := &ClusterProvisioningStatus{
 		Status:    cluster.Status,
 		ClusterID: cluster.ID,
+		Namespace: cluster.NamespaceName,
 	}
 
 	// Check individual service status by inspecting cluster nodes
