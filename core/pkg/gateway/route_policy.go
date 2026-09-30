@@ -225,7 +225,10 @@ func buildRoutePolicies() *routepolicy.Table {
 	// Minting a cluster invite hands out the cluster secret, the swarm key and
 	// every other secret the cluster holds — so this is the one place that
 	// still asks for everything, because that is what it gives.
-	t.Add(control(auth.DomainOperator, auth.ActionRead), "/v1/node/status", "/v1/node/logs", "/v1/operator/health")
+	t.Add(control(auth.DomainOperator, auth.ActionRead), "/v1/node/status", "/v1/node/logs")
+	// The handler checks the operator list, which only the cluster registry
+	// has: MainGateway (see operatorListRoute).
+	t.Add(operatorListRoute(control(auth.DomainOperator, auth.ActionRead)), "/v1/operator/health")
 
 	// The whole cluster's health, one-shot and streamed: every node's report,
 	// addresses and versions included, so it is an operator's. The handlers
@@ -244,10 +247,11 @@ func buildRoutePolicies() *routepolicy.Table {
 	// Listing the operator's nodes is a read. The table is keyed by path, not
 	// method; HandleListNodes serves GET only and answers every other method
 	// 405, so there is no write on this path.
-	t.Add(control(auth.DomainOperator, auth.ActionRead), "/v1/operator/nodes")
+	t.Add(operatorListRoute(control(auth.DomainOperator, auth.ActionRead)), "/v1/operator/nodes")
 	t.Add(control(auth.DomainOperator, auth.ActionWrite),
 		"/v1/network/connect", "/v1/network/disconnect",
-		"/v1/node/command", "/v1/node/leave",
+		"/v1/node/command", "/v1/node/leave")
+	t.Add(operatorListRoute(control(auth.DomainOperator, auth.ActionWrite)),
 		"/v1/operator/node/register",
 		"/v1/operator/operators", "/v1/operator/operators/",
 		"/v1/operator/rotate-signing-key", "/v1/operator/rotate-secrets")
@@ -260,7 +264,7 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(namespaceCreation,
 		"/v1/operator/settings", "/v1/operator/settings/",
 		"/v1/operator/creators", "/v1/operator/creators/")
-	t.Add(policyUnrestricted, "/v1/operator/invite")
+	t.Add(operatorListRoute(policyUnrestricted), "/v1/operator/invite")
 	// Removing a namespace its owner can no longer delete. The handler also
 	// checks the operator list. MainGateway: only the index gateway has the
 	// handler, and the namespace comes from the body, not the host.
@@ -462,7 +466,19 @@ func networkDetailPolicy(r *http.Request) routepolicy.Policy {
 	if r.Header.Get(nodeauth.CoordinationMACHeader) != "" {
 		return policyHandlerAuth
 	}
-	return control(auth.DomainOperator, auth.ActionRead)
+	return operatorListRoute(control(auth.DomainOperator, auth.ActionRead))
+}
+
+// operatorListRoute keeps a route whose handler checks the operator list on the
+// gateway that has one. The list is in the cluster registry and is stripped
+// from a namespace's RQLite, so the same request addressed to ns-<name> and
+// proxied into the tenant's gateway could not be answered: it came back as a
+// retryable 503, "the registry did not answer", to a caller who was simply
+// not an operator. Served by the index gateway it is the 403 it should be, and
+// a credential of another namespace is refused for the host it names.
+func operatorListRoute(p routepolicy.Policy) routepolicy.Policy {
+	p.MainGateway = true
+	return p
 }
 
 // credentialServesHostNamespace refuses a request to a route the index gateway

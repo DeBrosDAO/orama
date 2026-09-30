@@ -125,7 +125,7 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 |-------|-------|-------|
 | `/v1/network/connect` | CLI | Topology mutation, admin-scoped. |
 | `/v1/network/disconnect` | CLI | Topology mutation, admin-scoped. |
-| `/v1/network/peers` | SDK | `network.peers()`. An operator's (operator grant **and** the operator list), or another node's with a coordination MAC over the mesh. It was open to anyone. |
+| `/v1/network/peers` | SDK | `network.peers()`. An operator's (operator grant **and** the operator list), or another node's with a coordination MAC over the mesh. It was open to anyone. Every route that checks the operator list (these two, `/v1/operator/*`) is served by the index gateway even when the host is `ns-<name>`, because the list is in the cluster registry and not in a namespace's database: a namespace credential is refused `403 NOT_AN_OPERATOR`. |
 | `/v1/network/status` | SDK | `network.status()`. Same as `/v1/network/peers`: an operator, or a node's IPFS Cluster peer discovery (`pkg/ipfs`) with a coordination MAC. |
 | `/v1/proxy/anon` | SDK | `network.proxyAnon()` |
 | `/v1/proxy/tunnel` | direct | Raw CONNECT-style tunnelling through the anonymity proxy. Not a JSON call; the SDK has nothing to wrap. |

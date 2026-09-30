@@ -14,18 +14,25 @@ describe.skipIf(!hasGateway())("Network", () => {
     expect(typeof healthy).toBe("boolean");
   });
 
-  it("should get network status", async () => {
+  // The peer map is an operator's: the operator grant and a wallet on the
+  // cluster's operator list (docs/API_SURFACE.md). A namespace's owner or key
+  // is neither on the list nor meant to be, so the suite's credential is
+  // refused — a 403, not an answer and not a 503 from a gateway that cannot
+  // read the list. An operator's reads are the fleet's network-routes feature.
+  it("should refuse network status to a namespace credential", async () => {
     const client = await createTestClient();
-    const status = await client.network.status();
-    expect(status).toBeDefined();
-    expect(typeof status.connected).toBe("boolean");
-    expect(typeof status.peer_count).toBe("number");
+    await expect(client.network.status()).rejects.toMatchObject({
+      httpStatus: 403,
+      code: expect.stringMatching(/^(NOT_AN_OPERATOR|INSUFFICIENT_SCOPE)$/),
+    });
   });
 
-  it("should list peers", async () => {
+  it("should refuse the peer list to a namespace credential", async () => {
     const client = await createTestClient();
-    const peers = await client.network.peers();
-    expect(Array.isArray(peers)).toBe(true);
+    await expect(client.network.peers()).rejects.toMatchObject({
+      httpStatus: 403,
+      code: expect.stringMatching(/^(NOT_AN_OPERATOR|INSUFFICIENT_SCOPE)$/),
+    });
   });
 
   it("should proxy request through Anyone network", async () => {
