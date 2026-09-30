@@ -17,10 +17,10 @@ CoreDNS plugins must be compiled into the binary. Follow these steps:
 ### 1. Install Prerequisites
 
 ```bash
-# Install Go 1.26.7 or later (see core/go.mod)
-wget https://go.dev/dl/go1.26.7.linux-amd64.tar.gz
+# Install Go 1.27.1 or later (see core/go.mod)
+wget https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.26.7.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.1.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 # Verify Go installation

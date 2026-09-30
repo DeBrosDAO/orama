@@ -271,13 +271,19 @@ func TestClient_oneClientKeepsOneCircuitForItsTransaction(t *testing.T) {
 	base, _ := chainonion.Base(testOnion)
 	c, _ := chainonion.NewClient(proxy.addr())
 	for _, path := range []string{"/account", "/broadcast"} {
-		resp, err := c.Get(base + path)
+		req, err := http.NewRequest(http.MethodGet, base+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Close forces a new connection per request, so the credential is
+		// sent again. Closing idle connections after the fact races the
+		// transport returning the connection to its idle pool.
+		req.Close = true
+		resp, err := c.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		resp.Body.Close()
-		// Force a new connection so the credential is sent again.
-		c.CloseIdleConnections()
 	}
 	seen := proxy.connects()
 	if len(seen) != 2 || seen[0].user != seen[1].user {
