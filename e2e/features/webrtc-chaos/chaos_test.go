@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/services"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
@@ -31,6 +32,9 @@ const (
 	// row pruned after 15; the reconciler sweeps every 60 s
 	// (docs/WEBRTC.md#role-reconciliation).
 	reallocBudget = 25 * time.Minute
+	// chainAdvance is how many blocks every co-hosted validator must commit
+	// after the heal.
+	chainAdvance = 2
 )
 
 type fixture struct {
@@ -95,29 +99,35 @@ func TestSFUDown_drainAndReconnect(t *testing.T) {
 				return false, nil
 			}
 		})
-		other := fx.c.PinTo(fx.f.Node(t, "node-2").PublicIP)
-		pub, err := services.JoinRoom(t.Context(), other, fx.token, room, "rejoined-pub")
-		if err != nil {
-			t.Fatalf("reconnecting through node-2: %v", err)
+		requireMediaThroughOthers(t, fx, room)
+	})
+}
+
+// requireMediaThroughOthers rejoins room through node-2 (publisher) and
+// node-3 (subscriber) and waits for media to flow between them.
+func requireMediaThroughOthers(t *testing.T, fx *fixture, room string) {
+	t.Helper()
+	pub, err := services.JoinRoom(t.Context(), fx.c.PinTo(fx.f.Node(t, "node-2").PublicIP), fx.token, room, "rejoined-pub")
+	if err != nil {
+		t.Fatalf("reconnecting through node-2: %v", err)
+	}
+	defer pub.Close()
+	sub, err := services.JoinRoom(t.Context(), fx.c.PinTo(fx.f.Node(t, "node-3").PublicIP), fx.token, room, "rejoined-sub")
+	if err != nil {
+		t.Fatalf("reconnecting through node-3: %v", err)
+	}
+	defer sub.Close()
+	if err := pub.Start(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := sub.Start(false); err != nil {
+		t.Fatal(err)
+	}
+	eventually.Require(t, time.Second, mediaBudget, "media after the reconnect", func() (bool, error) {
+		if err := pub.Publish(); err != nil {
+			return false, err
 		}
-		defer pub.Close()
-		sub, err := services.JoinRoom(t.Context(), fx.c.PinTo(fx.f.Node(t, "node-3").PublicIP), fx.token, room, "rejoined-sub")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer sub.Close()
-		if err := pub.Start(true); err != nil {
-			t.Fatal(err)
-		}
-		if err := sub.Start(false); err != nil {
-			t.Fatal(err)
-		}
-		eventually.Require(t, time.Second, mediaBudget, "media after the reconnect", func() (bool, error) {
-			if err := pub.Publish(); err != nil {
-				return false, err
-			}
-			return sub.Received() > 0, nil
-		})
+		return sub.Received() > 0, nil
 	})
 }
 
@@ -158,4 +168,18 @@ func TestNodeDeath_rolesReallocated(t *testing.T) {
 		}
 	})
 	infra.WaitConverged(t, len(fx.f.State.Nodes), reallocBudget, "the cluster after the partition heals")
+	requireChainAdvances(t, fx.f)
+}
+
+// requireChainAdvances: when the run co-hosts a chain, cutting one of its
+// three equal validators off halts it (exactly 2/3 is no CometBFT quorum,
+// docs/CHAIN.md "x/power"), so after the heal every validator must commit
+// chainAdvance blocks past the head again before the next package runs.
+func requireChainAdvances(t *testing.T, f *fleet.Fleet) {
+	t.Helper()
+	if f.State.ChainID == "" {
+		return
+	}
+	c := chain.New(t)
+	c.WaitHeight(t, c.Height(t)+chainAdvance)
 }

@@ -148,9 +148,10 @@ func TestTunnel_refusals(t *testing.T) {
 }
 
 // TestAnon_exitIsTorForEveryUser: two users of one namespace both leave
-// through Tor exits (check.torproject.org says IsTor); the SOCKS port
-// isolates circuits per credential (IsolateSOCKSAuth, checked on the node by
-// TestTor_unitHardening), so their streams do not share a circuit.
+// through Tor exits (check.torproject.org says IsTor). It does not claim
+// circuit isolation between them: two circuits may share an exit, so exit
+// addresses cannot prove it; the torrc's IsolateSOCKSAuth is checked on the
+// node by TestTor_unitHardening.
 func TestAnon_exitIsTorForEveryUser(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

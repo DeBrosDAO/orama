@@ -59,40 +59,43 @@ func parseProbe(out fleet.Output) Probe {
 	return p
 }
 
-// curlCmd is a curl of url with method and optional header, printing the body
-// then the status.
-func curlCmd(method, url, header, prefix string) string {
-	h := ""
-	if header != "" {
-		h = ` -H "` + header + `"`
+// curlCmd is a curl of url with method, printing the body then the status.
+// stdinOpt, when set, is a curl option that reads from stdin, and feed the
+// shell (a builtin printf) that writes the credential into it: a credential
+// never appears on a command line, where any local user reads it from
+// /proc/<pid>/cmdline.
+func curlCmd(method, url, feed, stdinOpt, prefix string) string {
+	pipe, opt := "", ""
+	if stdinOpt != "" {
+		pipe, opt = feed+" | ", " "+stdinOpt
 	}
-	return prefix + `curl -sS --max-time 20 -X ` + method + h + ` -w '` +
+	return prefix + pipe + `curl -sS --max-time 20 -X ` + method + opt + ` -w '` +
 		strings.ReplaceAll(statusMarker, "\n", `\n`) + `%{http_code}' '` + url + `'`
 }
 
-// Kubo calls the Kubo RPC on node n; with auth the bearer derived on the node.
+// Kubo calls the Kubo RPC on node n; with auth the bearer derived on the node,
+// given to curl as a header read from stdin.
 func Kubo(t testing.TB, f *fleet.Fleet, n fleet.Node, pathQuery string, auth bool) Probe {
 	t.Helper()
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", KuboAPIPort, pathQuery)
 	if !auth {
-		return parseProbe(f.Exec(t, n, curlCmd("POST", url, "", "")))
+		return parseProbe(f.Exec(t, n, curlCmd("POST", url, "", "", "")))
 	}
 	prefix := "TOK=$(" + deriveScript(KuboTokenPurpose) + ") && "
-	return parseProbe(f.Exec(t, n, curlCmd("POST", url, "Authorization: Bearer $TOK", prefix)))
+	return parseProbe(f.Exec(t, n, curlCmd("POST", url, `printf 'Authorization: Bearer %s\n' "$TOK"`, "-H @-", prefix)))
 }
 
 // ClusterREST calls IPFS Cluster's REST API on node n; with auth the basic
-// credentials derived on the node.
+// credentials derived on the node, given to curl as a config read from stdin.
 func ClusterREST(t testing.TB, f *fleet.Fleet, n fleet.Node, path string, auth bool) Probe {
 	t.Helper()
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", ClusterRESTPort, path)
 	if !auth {
-		return parseProbe(f.Exec(t, n, curlCmd("GET", url, "", "")))
+		return parseProbe(f.Exec(t, n, curlCmd("GET", url, "", "", "")))
 	}
 	prefix := "PW=$(" + deriveScript(ClusterRESTPurpose) + ") && "
-	cmd := prefix + `curl -sS --max-time 20 -u "` + ClusterRESTUser + `:$PW" -w '` +
-		strings.ReplaceAll(statusMarker, "\n", `\n`) + `%{http_code}' '` + url + `'`
-	return parseProbe(f.Exec(t, n, cmd))
+	feed := `printf 'user = "` + ClusterRESTUser + `:%s"\n' "$PW"`
+	return parseProbe(f.Exec(t, n, curlCmd("GET", url, feed, "-K -", prefix)))
 }
 
 // ClusterKuboProxyAs calls the serve-ipfs-cluster proxy as a local user:
@@ -104,5 +107,5 @@ func ClusterKuboProxyAs(t testing.TB, f *fleet.Fleet, n fleet.Node, user string)
 	if user != "" {
 		prefix = "sudo -n -u " + fleet.ShellQuote(user) + " "
 	}
-	return parseProbe(f.Exec(t, n, curlCmd("POST", url, "", prefix)))
+	return parseProbe(f.Exec(t, n, curlCmd("POST", url, "", "", prefix)))
 }

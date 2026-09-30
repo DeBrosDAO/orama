@@ -24,6 +24,8 @@ const (
 	codeInvalidGasLimit = 41
 	codeInvalidPubKey   = 8
 	codeSigVerifyFailed = 4
+	// codeTxInMempoolCache is sdkerrors.ErrTxInMempoolCache.
+	codeTxInMempoolCache = 19
 )
 
 // feesParams is orama.fees.v1.Params.

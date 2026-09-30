@@ -4,6 +4,7 @@ package oramaos
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
+	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
 const (
@@ -37,7 +39,9 @@ const (
 	guestSSH     = 22
 	// bootBudget covers a boot without KVM, under emulation.
 	bootBudget = 15 * time.Minute
-	feature    = "oramaos"
+	// consolePoll is how often the captured console is searched.
+	consolePoll = 2 * time.Second
+	feature     = "oramaos"
 )
 
 // codeLine is how the agent prints its registration code on the console.
@@ -65,6 +69,9 @@ func bootVM(t *testing.T) *vm {
 	if out, err := exec.Command(img, "create", "-q", "-f", "qcow2", "-b", image, "-F", "qcow2", overlay).CombinedOutput(); err != nil {
 		t.Fatalf("qemu-img create an overlay of %s: %v %s", image, err, out)
 	}
+	// Captured before the cleanup is registered: harness.Fleet refuses once
+	// the run is interrupted, and the cleanup must still stop QEMU.
+	f := harness.Fleet(t)
 	v := &vm{exited: make(chan struct{})}
 	ports := freePorts(t, 3)
 	v.enroll, v.command, v.sshd = ports[0], ports[1], ports[2]
@@ -76,7 +83,7 @@ func bootVM(t *testing.T) *vm {
 	}
 	go v.capture(pr)
 	go func() { _ = v.cmd.Wait(); _ = pw.Close(); close(v.exited) }()
-	t.Cleanup(func() { v.stop(t) })
+	t.Cleanup(func() { v.stop(t, f) })
 	return v
 }
 
@@ -138,7 +145,7 @@ func (v *vm) Console() string {
 func (v *vm) waitConsole(t *testing.T, re *regexp.Regexp, what string) []string {
 	t.Helper()
 	var m []string
-	eventually.Require(t, 2*time.Second, bootBudget, what, func() (bool, error) {
+	eventually.Require(t, consolePoll, bootBudget, what, func() (bool, error) {
 		select {
 		case <-v.exited:
 			return false, eventually.Stop(fmt.Errorf("QEMU exited:\n%s", realistic.Tail(v.Console())))
@@ -152,11 +159,13 @@ func (v *vm) waitConsole(t *testing.T, re *regexp.Regexp, what string) []string 
 
 // stop kills QEMU, waits for it and keeps the console (the registration
 // code masked) as an artifact.
-func (v *vm) stop(t *testing.T) {
-	_ = v.cmd.Process.Kill()
+func (v *vm) stop(t *testing.T, f *fleet.Fleet) {
+	if err := v.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Errorf("cleanup: failed to kill QEMU (pid %d): %v", v.cmd.Process.Pid, err)
+	}
 	<-v.exited
 	log := codeLine.ReplaceAllString(v.Console(), "ENROLLMENT CODE: [masked]")
-	realistic.WriteText(t, harness.Fleet(t), feature, strings.ReplaceAll(t.Name(), "/", "_")+"-console.log", log)
+	realistic.WriteText(t, f, feature, strings.ReplaceAll(t.Name(), "/", "_")+"-console.log", log)
 }
 
 // freePorts are loopback ports free right now.

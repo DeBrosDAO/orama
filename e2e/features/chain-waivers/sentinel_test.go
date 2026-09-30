@@ -120,16 +120,35 @@ func TestUnwired_noMessageOfAnUnwiredModule(t *testing.T) {
 	}
 }
 
+// Answers of a module the app does not wire (cosmos-sdk baseapp
+// handleQueryGRPC / rootmulti Store.Query, both ErrUnknownRequest).
+const (
+	noQueryRoute = "unknown query path"
+	noStore      = "no such store"
+)
+
+// queryProbes are the Query methods asked of every unwired module. A wired
+// module answers at least one of them or, whatever its methods are called,
+// mounts its store, which the store probe reads.
+var queryProbes = []string{"Params", "State", "Status", "Config"}
+
 // TestUnwired_noQueryServiceAndNoGenesisState: none of the unwired modules
-// answers a query on the node, and none has genesis state.
+// has a query route or a mounted KV store on the node, and none has genesis
+// state.
 func TestUnwired_noQueryServiceAndNoGenesisState(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	n := c.Node(t, 0)
 	for _, m := range unwired {
-		a := c.ABCIQuery(t, n, "/orama."+m+".v1.Query/Params", chain.PB{})
-		if a.Code == 0 {
-			t.Errorf("x/%s answers queries on the node: write its tests and drop its waiver", m)
+		for _, method := range queryProbes {
+			a := c.ABCIQuery(t, n, "/orama."+m+".v1.Query/"+method, chain.PB{})
+			if a.Code == 0 || !strings.Contains(a.Log, noQueryRoute) {
+				t.Errorf("x/%s Query/%s is routed on the node (code %d: %s): write its tests and drop its waiver", m, method, a.Code, a.Log)
+			}
+		}
+		a := c.ABCIQuery(t, n, "/store/"+m+"/key", chain.PB{}.Text(1, m))
+		if a.Code == 0 || !strings.Contains(a.Log, noStore) {
+			t.Errorf("the node mounts a %s store (code %d: %s): the module is wired; write its tests and drop its waiver", m, a.Code, a.Log)
 		}
 	}
 	out := c.Run(t, n, chain.QueryBudget, "sudo -u "+chain.ServiceUser+" python3 -c "+
@@ -156,7 +175,11 @@ func TestUnwired_noVoteExtensions(t *testing.T) {
 	if err := c.Comet(t, c.Node(t, 0), "/consensus_params", &r); err != nil {
 		t.Fatal(err)
 	}
-	if h, ok := findString(r, "vote_extensions_enable_height"); ok && h != "0" {
+	h, ok := findString(r, "vote_extensions_enable_height")
+	if !ok {
+		t.Fatalf("consensus_params carries no vote_extensions_enable_height: the tripwire cannot read it: %v", r)
+	}
+	if h != "0" {
 		t.Errorf("vote extensions are enabled from height %s: x/inclusion may now carry bytes; write its tests", h)
 	}
 }

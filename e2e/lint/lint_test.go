@@ -101,6 +101,8 @@ func TestCheck_violations(t *testing.T) {
 		"time after":     {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { <-time.After(1) }\n", "time.After"},
 		"new timer":      {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.NewTimer(1) }\n", "time.NewTimer"},
 		"tick":           {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { <-time.Tick(1) }\n", "time.Tick"},
+		"new ticker":     {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.NewTicker(1) }\n", "time.NewTicker"},
+		"after func":     {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.AfterFunc(1, nil) }\n", "time.AfterFunc"},
 		"bare skip":      {"x_test.go", strings.Replace(goodTest, `harness.SkipNotApplicable(t, "reason")`, `t.Skip("later")`, 1), "bare Skip"},
 		"skipnow":        {"x_test.go", strings.Replace(goodTest, `harness.SkipNotApplicable(t, "reason")`, `t.SkipNow()`, 1), "bare SkipNow"},
 		"no tag":         {"x_test.go", strings.Replace(goodTest, "//go:build e2e_fleet\n", "", 1), "missing //go:build"},

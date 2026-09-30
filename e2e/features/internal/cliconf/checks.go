@@ -3,8 +3,10 @@
 package cliconf
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
@@ -60,16 +62,53 @@ var runnableGroups = map[string]bool{
 	"orama monitor":       true, // opens the live view (cmd/monitorcmd/monitor.go runLive)
 }
 
+// runnableProbeBudget bounds the unknown-subcommand probe of a runnable
+// group: a group that refuses does so at once, one that takes the word as an
+// argument would otherwise run its own action (the live monitor: up to
+// oramacli.DefaultBudget).
+const runnableProbeBudget = 20 * time.Second
+
+// runnableGroupGap names the product gap the probe of a runnable group finds.
+const runnableGroupGap = "product gap: the group accepts any argument (cobra Args unset) and runs its own action instead of " +
+	"refusing an unknown subcommand with the usage code (core/cmd/orama/root.go, cmd/monitorcmd/monitor.go, cmd/authcmd/auth.go)"
+
 // CheckGroup: a group with no argument prints its help and succeeds; an
 // unknown subcommand is a usage error that names what was typed
-// (core/cmd/orama/root.go classifyUsageErrors).
-func CheckGroup(t testing.TB, cli *oramacli.Runner, c Command) {
+// (core/cmd/orama/root.go classifyUsageErrors). A runnable group is never run
+// bare, and its probe runs without a wallet and bounded (checkRunnableGroup).
+func CheckGroup(t testing.TB, cli, noWallet *oramacli.Runner, c Command) {
 	t.Helper()
-	if !runnableGroups[c.Path] {
-		res := infra.Run(t, cli, c.Args()...)
-		infra.ExpectExit(t, res, infra.ExitOK, secCommands)
+	if runnableGroups[c.Path] {
+		checkRunnableGroup(t, noWallet, c)
+		return
 	}
-	res := infra.Run(t, cli, append(c.Args(), BogusSubcommand)...)
+	res := infra.Run(t, cli, c.Args()...)
+	infra.ExpectExit(t, res, infra.ExitOK, secCommands)
+	res = infra.Run(t, cli, append(c.Args(), BogusSubcommand)...)
+	infra.ExpectExit(t, res, infra.ExitUsage, BogusSubcommand)
+}
+
+// checkRunnableGroup probes a runnable group with an unknown subcommand on a
+// NoWallet runner (no credentials for the action it might run), killing its
+// process group after runnableProbeBudget. Not refusing in time, or exiting
+// 0, is the product gap.
+func checkRunnableGroup(t testing.TB, noWallet *oramacli.Runner, c Command) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), runnableProbeBudget)
+	defer cancel()
+	p, err := noWallet.Start(ctx, append(c.Args(), BogusSubcommand)...)
+	if err != nil {
+		t.Fatalf("%s %s: %v", c.Path, BogusSubcommand, err)
+	}
+	res, err := p.Wait()
+	switch {
+	case ctx.Err() != nil:
+		t.Fatalf("%s %s did not refuse within %v (killed): %s", c.Path, BogusSubcommand, runnableProbeBudget, runnableGroupGap)
+	case err != nil:
+		t.Fatalf("%s %s: %v", c.Path, BogusSubcommand, err)
+	case res.Exit == infra.ExitOK:
+		t.Fatalf("%s %s exited 0: %s\n%s%s", c.Path, BogusSubcommand, runnableGroupGap, res.Stdout, res.Stderr)
+	}
 	infra.ExpectExit(t, res, infra.ExitUsage, BogusSubcommand)
 }
 
@@ -122,7 +161,7 @@ func Conformance(t *testing.T, cli, noWallet *oramacli.Runner, ref *Reference, p
 				CheckHelpWithJSON(t, cli, c)
 				CheckUnknownFlag(t, cli, c)
 				if c.Group() {
-					CheckGroup(t, cli, c)
+					CheckGroup(t, cli, noWallet, c)
 					return
 				}
 				CheckArity(t, noWallet, c)

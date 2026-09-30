@@ -26,11 +26,19 @@ import (
 // transaction pays, and it takes no key lock between its two phases.
 const (
 	// LoadDetailBytes keeps one transaction under CometBFT's default
-	// mempool max_tx_bytes (1 MiB).
-	LoadDetailBytes = 900_000
-	// LoadGas covers the size charge (about 10 gas per byte) and the
-	// signature; ten of them fit the run chain's 100,000,000 block max_gas.
-	LoadGas = 9_500_000
+	// max_body_bytes (1,000,000) once broadcast_tx_sync carries it base64
+	// in a JSON-RPC body (4/3 inflation: ~867 KB), and so under the mempool's
+	// max_tx_bytes (1 MiB) too.
+	LoadDetailBytes = 650_000
+	// TxSizeCostPerByte is x/auth's default gas charge per transaction byte.
+	TxSizeCostPerByte = 10
+	// LoadGasConsumed is the least gas one load transaction consumes: the
+	// size charge of its details alone (~6.5M; with the envelope and the
+	// signature about 6.6M).
+	LoadGasConsumed = LoadDetailBytes * TxSizeCostPerByte
+	// LoadGas covers that consumption with room to spare; fourteen of them
+	// fit the run chain's 100,000,000 block max_gas.
+	LoadGas = 7_000_000
 )
 
 // LoadMsg is one load transaction's message for valoper.

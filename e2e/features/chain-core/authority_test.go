@@ -4,6 +4,7 @@ package chaincore
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
@@ -60,6 +61,10 @@ func TestAuthority_gatedMsgsRefusedForAnySigner(t *testing.T) {
 	c.RequireInvariants(t, "refused authority-gated messages")
 }
 
+// wrongSignerRefusal is cosmos-sdk ErrorInvalidSigner (types/errors), what
+// `tx sign` says for a transaction whose required signer is not the key.
+const wrongSignerRefusal = "tx intended signer does not match"
+
 // TestAuthority_noKeySignsForTheUnreachableAuthority: a message naming the
 // real authority cannot be signed by any key the node holds: the client
 // refuses to sign a transaction whose required signer is not the key
@@ -69,7 +74,7 @@ func TestAuthority_noKeySignsForTheUnreachableAuthority(t *testing.T) {
 	c := chain.New(t)
 	k := c.Validator(t, c.Node(t, 0))
 	msg := authorityMsgs(chain.ModuleAddress(chain.UnreachableAuthorityName))["upgrade"]
-	if e := c.SignExpectRefused(t, k, chain.TxOptions{}, msg); e == "" {
-		t.Fatal("the client refused without saying why")
+	if e := c.SignExpectRefused(t, k, chain.TxOptions{}, msg); !strings.Contains(e, wrongSignerRefusal) {
+		t.Fatalf("the client refused to sign for another reason than the signer mismatch: %q", e)
 	}
 }

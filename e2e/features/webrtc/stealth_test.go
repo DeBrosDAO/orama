@@ -17,6 +17,31 @@ import (
 
 const stealthRung = ":443"
 
+// What a failed `namespace enable webrtc-stealth` may say: the documented
+// failure (namespace/cluster_manager_stealth.go: the TURN re-spawn with the
+// stealth certificate failed and the enable was rolled back), or a gateway
+// without WebRTC management (gateway.go namespaceWebRTCStealthPublicHandler).
+const (
+	stealthRolledBack  = "stealth rolled back"
+	noWebRTCManagement = "WebRTC management not enabled"
+)
+
+// requireRolledBack accepts a failed stealth enable only for the documented
+// reason, and then only when no stealth rung is advertised; a gateway
+// without WebRTC management is a missing prerequisite (not applicable).
+func requireRolledBack(t *testing.T, fx *fixture, out string) {
+	t.Helper()
+	switch {
+	case strings.Contains(out, noWebRTCManagement):
+		harness.SkipNotApplicable(t, "the namespace gateway has no WebRTC management, so stealth cannot be toggled: "+out)
+	case !strings.Contains(out, stealthRolledBack):
+		t.Fatalf("stealth enable failed for a reason other than the documented rollback: %s", out)
+	}
+	if u := stealthURI(t, fx); u != "" {
+		t.Errorf("stealth enable failed (%s) but %s is advertised: no rollback", out, u)
+	}
+}
+
 // stealthURI is the credentials' turns:cdn-<hash>.<base>:443 rung, or "".
 func stealthURI(t testing.TB, fx *fixture) string {
 	t.Helper()
@@ -45,9 +70,7 @@ func TestStealth_enableDisableOrRollBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Exit != 0 {
-		if u := stealthURI(t, fx); u != "" {
-			t.Errorf("stealth enable failed (%s) but %s is advertised: no rollback", strings.TrimSpace(res.Stderr), u)
-		}
+		requireRolledBack(t, fx, strings.TrimSpace(res.Stdout+res.Stderr))
 		return
 	}
 	t.Cleanup(func() {
@@ -75,12 +98,13 @@ func TestStealth_enableDisableOrRollBack(t *testing.T) {
 func TestWebRTC_notEnabledAndPrerequisites(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
-	tenancy.Reserve(t, harness.Fleet(t), 1)
+	tenancy.Reserve(t, f, 1)
 	n := ns.New(t, f, ns.Options{Via: ns.ViaOperator})
 	c := harness.GW(t).WithBase(gw.NamespaceURL(f.State, n.Name))
 	token := member(t, n, c, "runtime")
-	if r := c.MustSend(t, gw.Req{Method: http.MethodPost, Path: pathCreds, Bearer: token}); r.Status == http.StatusOK {
-		t.Errorf("TURN credentials were issued for a namespace without WebRTC: %.200s", r.Body)
+	// Without WebRTC the gateway registers no credentials route (routes.go).
+	if r := c.MustSend(t, gw.Req{Method: http.MethodPost, Path: pathCreds, Bearer: token}); r.Status != http.StatusNotFound {
+		t.Errorf("TURN credentials for a namespace without WebRTC: want 404 (no route), got %d %.200s", r.Status, r.Body)
 	}
 	if res, err := n.CLI.For(t).Run(t.Context(), "namespace", "enable", "webrtc-stealth", "--namespace", n.Name); err != nil || res.Exit == 0 {
 		t.Errorf("stealth enabled without WebRTC: %v", err)

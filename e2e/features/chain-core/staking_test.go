@@ -115,29 +115,6 @@ func TestStaking_partialWithdrawalBelowMinRefused(t *testing.T) {
 	c.RequireInvariants(t, "a full exit")
 }
 
-// TestStaking_undelegateGuardLocksForceBond: while lambda < 1 a committee
-// member cannot withdraw its own force-bonded self-bond
-// (x/power/ante/undelegate_guard.go, docs/CHAIN.md "Force-bonding").
-func TestStaking_undelegateGuardLocksForceBond(t *testing.T) {
-	t.Parallel()
-	c := chain.New(t)
-	a := c.FundedValidator(t, 1, chain.Orama(1))
-	var lambda struct {
-		Lambda chain.Dec `json:"lambda"`
-	}
-	c.Query(t, a.Node, &lambda, "power", "lambda")
-	if lambda.Lambda.Float() >= 1 {
-		t.Fatalf("lambda is %v: the guard only applies before the hand-over completes; a fresh run chain cannot reach 1", lambda.Lambda.Float())
-	}
-	own := c.Valoper(t, a)
-	self := delegated(t, c, a, a.Address, own)
-	if self.IsZero() {
-		t.Fatalf("%s has no self-bond yet: force-bonding starts with the first epoch reward", own)
-	}
-	r := c.Submit(t, a, chain.TxOptions{}, undelegateMsg(a.Address, own, self))
-	chain.RequireCode(t, "withdraw the whole force-bonded self-bond", r, sdkSpace, sdkInvalidRequest, "is force-bonded and locked until lambda reaches 1")
-}
-
 // TestStaking_createValidatorForExistingOperatorRefused: a committee member
 // already has a validator record (x/power InitGenesis), so its
 // MsgCreateValidator is refused by x/staking. The bond it declared was

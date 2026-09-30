@@ -5,7 +5,9 @@ package chaineconomics
 import (
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
@@ -110,15 +112,11 @@ func TestPower_bootstrapCommitteeIsGenesis(t *testing.T) {
 			continue
 		}
 		m := com.Members[i]
-		st := c.MustStatus(t, n)
 		pub := consensusPubkey(t, c, n)
 		if m.Moniker != n.Name || m.ConsensusPubkey != pub {
 			t.Errorf("%s: member moniker %q key %s, want %q %s", n.Name, m.Moniker, m.ConsensusPubkey, n.Name, pub)
 		}
-		vp := validatorPower(t, c, n0, c.Valoper(t, k))
-		if vp.CometPower.Int64() <= 0 || vp.CometPower.Int64() != st.VotingPow {
-			t.Errorf("%s: x/power comet_power %d, CometBFT voting power %d", n.Name, vp.CometPower.Int64(), st.VotingPow)
-		}
+		vp := requireCometPowerMatches(t, c, n0, n, c.Valoper(t, k))
 		for name, d := range map[string]chain.Dec{"bootstrap_share": vp.BootstrapShare, "capped_share": vp.CappedShare, "power_share": vp.PowerShare} {
 			if d.Float() != 0 {
 				t.Errorf("%s: %s = %v, documented as always zero", n.Name, name, d.Float())
@@ -129,7 +127,35 @@ func TestPower_bootstrapCommitteeIsGenesis(t *testing.T) {
 	if vp := validatorPower(t, c, n0, c.Valoper(t, stranger)); vp.CometPower.Int64() != 0 {
 		t.Errorf("a key that is no validator has comet_power %d", vp.CometPower.Int64())
 	}
-	c.QueryFails(t, n0, "power", "validator-power", stranger.Address)
+	// An account address is not a valoper: ValAddressFromBech32 refuses its
+	// prefix (x/power/keeper/grpc_query.go ValidatorPower, InvalidArgument).
+	if out := c.QueryFails(t, n0, "power", "validator-power", stranger.Address); !strings.Contains(out, "InvalidArgument") ||
+		!strings.Contains(out, "expected oramavaloper") {
+		t.Errorf("validator-power of an account address: want InvalidArgument naming the oramavaloper prefix, got %s", out)
+	}
+}
+
+// powerLagBudget bounds how long x/power's assigned power and CometBFT's
+// voting power may disagree: an update from an epoch close reaches the
+// CometBFT validator set blocks later (EndBlock at H applies at H+2).
+const powerLagBudget = time.Minute
+
+// requireCometPowerMatches waits until n's CometBFT voting power equals
+// x/power's comet_power for valoper (read on reader), both positive, and
+// returns the last validator-power read (Eventually reports a disagreement).
+func requireCometPowerMatches(t *testing.T, c *chain.Chain, reader, n fleet.Node, valoper string) valPower {
+	t.Helper()
+	var vp valPower
+	eventually.Eventually(t, chain.PollEvery, powerLagBudget, n.Name+" CometBFT power to equal x/power comet_power", func() (bool, error) {
+		vp = validatorPower(t, c, reader, valoper)
+		st, err := c.NodeStatus(t, n)
+		if err != nil {
+			return false, err
+		}
+		got := vp.CometPower.Int64()
+		return got > 0 && got == st.VotingPow, fmt.Errorf("comet_power %d, CometBFT voting power %d", got, st.VotingPow)
+	})
+	return vp
 }
 
 type valPower struct {

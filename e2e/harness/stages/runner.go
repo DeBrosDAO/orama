@@ -45,6 +45,9 @@ type Runner struct {
 	Exec     Executor
 	Now      func() time.Time
 	Logf     func(format string, args ...any)
+	// Prefix runs every package under a wrapper (E2E_SANDBOX=1: bwrap);
+	// empty runs it directly.
+	Prefix []string
 	// AfterDestructive runs after every destructive package, even when the
 	// run is being stopped (its context is not the run's): it restores what
 	// the package may have left on the nodes (cmd/e2e-fleet sweeps the run's
@@ -145,19 +148,28 @@ func (r *Runner) runPackage(ctx context.Context, stage Stage, feature string) Pa
 	rel := filepath.Join(GoTestDir, name+".json")
 	pr := PackageRun{Feature: feature, Output: rel, Evidence: filepath.Join(evidence.DirName, name), Start: r.Now()}
 	args := []string{"go", "test", "-tags", BuildTag, "-json", "-count=1",
-		"-timeout", time.Duration(stage.Timeout).String(), "./features/" + feature}
-	pr.Exit, pr.Error = r.execTo(ctx, rel, pr.Evidence, args)
+		"-timeout", binaryTimeout(stage.Timeout), "./features/" + feature}
+	pr.Exit, pr.Error = r.execTo(ctx, rel, pr.Evidence, args, time.Duration(stage.Timeout))
 	pr.End = r.Now()
 	r.Logf("stage %d: %s exit %d", stage.ID, feature, pr.Exit)
 	return pr
 }
 
-// execTo runs args with stdout into the artifact file rel and stderr beside
+// binaryTimeout is the go test -timeout for a package whose budget is
+// budget. The budget itself is enforced by the executor (Command.Budget),
+// which interrupts the package so its running tests clean up; the test
+// binary's own timeout panics and runs no t.Cleanup, so it only fires once
+// the grace period after the interrupt is spent.
+func binaryTimeout(budget Duration) string {
+	return (time.Duration(budget) + StopGrace).String()
+}
+
+// execTo runs args, stopped once budget is spent, with stdout into the artifact file rel and stderr beside
 // it, and the package's evidence in evDir (relative to the artifact dir),
 // emptied first: a re-run of the package replaces its output and its
 // evidence together, so records of two attempts never interleave. Both
 // output files are redacted once the process is done.
-func (r *Runner) execTo(ctx context.Context, rel, evDir string, args []string) (int, string) {
+func (r *Runner) execTo(ctx context.Context, rel, evDir string, args []string, budget time.Duration) (int, string) {
 	evAbs := filepath.Join(r.ArtifactDir, evDir)
 	if err := os.RemoveAll(evAbs); err != nil {
 		return -1, fmt.Sprintf("failed to clear evidence dir %s: %v", evDir, err)
@@ -177,7 +189,7 @@ func (r *Runner) execTo(ctx context.Context, rel, evDir string, args []string) (
 	defer errFile.Close()
 	env := append(append(FeatureEnv(r.BaseEnv), r.ExtraEnv...), config.EnvState+"="+r.StatePath, config.EnvStrict+"=1",
 		config.EnvEvidenceDir+"="+evAbs)
-	exit, err := r.Exec(ctx, Command{Dir: r.ModuleDir, Env: env, Args: args, Stdout: out, Stderr: errFile})
+	exit, err := r.Exec(ctx, Command{Dir: r.ModuleDir, Env: env, Args: append(append([]string{}, r.Prefix...), args...), Stdout: out, Stderr: errFile, Budget: budget})
 	msgs := []string{}
 	if err != nil {
 		msgs = append(msgs, err.Error())

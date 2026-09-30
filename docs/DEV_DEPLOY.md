@@ -140,7 +140,12 @@ The target runs `infisical run` against the `orama-e2e` project (environment
 so the operator needs the Infisical CLI logged in, or a machine identity through
 `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET`. The runner needs
 `HCLOUD_TOKEN`, `CF_API_TOKEN` and `CF_ZONE` (`dbrsteting.bid`), `E2E_RW_BIN` and
-`E2E_RW_AGENT_BIN` (the RootWallet CLI and the headless agent binary). Nothing is
+`E2E_RW_AGENT_BIN` (the RootWallet CLI and the headless agent binary), plus
+`E2E_RUNNER_CIDR`, the public address of the machine running the suite
+(`a.b.c.d/32`): the run's Hetzner firewall lets only that address reach SSH
+(`E2E_ALLOW_OPEN_SSH=1` opens it to the internet instead). The Hetzner project
+behind `HCLOUD_TOKEN` must be used only for e2e: teardown and sweep delete by the
+`e2e-run` label. Nothing is
 persisted: the run works in a private directory, creates a throwaway RootWallet
 agent and wallet in an isolated home, delegates a per-run subdomain
 `e2e-<id>.dbrsteting.bid` through Cloudflare with Let's Encrypt **staging**

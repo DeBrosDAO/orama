@@ -31,6 +31,12 @@ const (
 	RequestBudget = 30 * time.Second
 	// MaxResponseBytes bounds a response body read into memory.
 	MaxResponseBytes = 32 << 20
+	// Connection reuse bounds: a package builds many clients (one per
+	// namespace, per user), so idle connections are closed instead of
+	// being kept, each with its file descriptor, until the process exits.
+	idleConnTimeout     = 30 * time.Second
+	maxIdleConnsPerHost = 4
+	tlsHandshakeTimeout = 15 * time.Second
 )
 
 // Client talks to one gateway base URL.
@@ -92,10 +98,13 @@ func NewWithTLS(baseURL string, tlsCfg *tls.Config, rec *evidence.Recorder) (*Cl
 		return nil, fmt.Errorf("failed to set up credential pacing for %s: %w", baseURL, err)
 	}
 	transport := &http.Transport{
-		TLSClientConfig:   tlsCfg,
-		ForceAttemptHTTP2: false,
-		TLSNextProto:      map[string]func(string, *tls.Conn) http.RoundTripper{},
-		Proxy:             nil,
+		TLSClientConfig:     tlsCfg,
+		ForceAttemptHTTP2:   false,
+		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{},
+		Proxy:               nil,
+		IdleConnTimeout:     idleConnTimeout,
+		MaxIdleConnsPerHost: maxIdleConnsPerHost,
+		TLSHandshakeTimeout: tlsHandshakeTimeout,
 	}
 	return &Client{
 		BaseURL: strings.TrimRight(baseURL, "/"),

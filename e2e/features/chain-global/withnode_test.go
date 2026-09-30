@@ -32,8 +32,8 @@ func requireREST(t *testing.T, c *chain.Chain) {
 	n := c.Node(t, chain.OperatorNode)
 	out := c.F.Exec(t, n, fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --max-time 10 http://127.0.0.1:%d%s", chain.APIPort, restProbePath))
 	if strings.TrimSpace(out.Stdout) != "200" {
-		t.Fatalf("%s serves no chain REST API on 127.0.0.1:%d (got %q): the chain deploy leaves app.toml [api] enable=false "+
-			"(e2e/scripts/chain-deploy.sh edits only the address), so no --node command can read an account", n.Name, chain.APIPort, out.Stdout)
+		t.Fatalf("%s serves no chain REST API on 127.0.0.1:%d (got %q): e2e/scripts/chain-deploy.sh enables app.toml [api] and "+
+			"`chain-deploy.sh status` checks it, so the deploy or the chain unit is broken; no --node command can read an account", n.Name, chain.APIPort, out.Stdout)
 	}
 }
 

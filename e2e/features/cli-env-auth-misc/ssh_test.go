@@ -22,6 +22,24 @@ const sshBudget = 2 * time.Minute
 // having run on the node and nothing else.
 const sshMarker = "e2e-orama-ssh-ok"
 
+// hostKeyRefusals are what OpenSSH (which orama ssh runs, its stderr passed
+// through) says when it refuses a host key: a key that changed from the
+// pinned one, or one it has no pin for under strict checking. A refusal for
+// another reason (no key, no route) is not the host-key check under test.
+var hostKeyRefusals = []string{"REMOTE HOST IDENTIFICATION HAS CHANGED", "Host key verification failed", "host key is known for"}
+
+// expectHostKeyRefusal fails unless res was refused by host-key verification.
+func expectHostKeyRefusal(t testing.TB, res oramacli.Result, n fleet.Node) {
+	t.Helper()
+	text := output(res)
+	for _, want := range hostKeyRefusals {
+		if strings.Contains(text, want) {
+			return
+		}
+	}
+	t.Errorf("orama ssh to %s was not refused for its host key (want one of %q):\n%s", n.PublicIP, hostKeyRefusals, text)
+}
+
 // knownHostsPaths are where the CLI and OpenSSH look for pinned host keys in
 // a HOME (docs/DEVNET_INSTALL.md "~/.orama/known_hosts"; ssh's default).
 var knownHostsPaths = []string{".orama/known_hosts", ".ssh/known_hosts"}
@@ -100,6 +118,8 @@ func TestSSH_refusesUnpinnedHostKey(t *testing.T) {
 	res := sshRun(t, cli, f.State.Env, n)
 	if res.Exit == exitOK || strings.Contains(res.Stdout, sshMarker) {
 		t.Errorf("orama ssh ran a command on %s without a pinned host key (trust on first use):\n%s", n.PublicIP, output(res))
+	} else {
+		expectHostKeyRefusal(t, res, n)
 	}
 	if raw, err := os.ReadFile(filepath.Join(cli.Home, ".ssh", "known_hosts")); err == nil && strings.Contains(string(raw), n.PublicIP) {
 		t.Errorf("orama ssh pinned %s's host key on first contact:\n%s", n.PublicIP, raw)
@@ -123,6 +143,8 @@ func TestSSH_refusesWrongHostKey(t *testing.T) {
 	res := sshRun(t, sshHome(t, forged), f.State.Env, victim)
 	if res.Exit == exitOK || strings.Contains(res.Stdout, sshMarker) {
 		t.Errorf("orama ssh accepted %s under %s's pinned key:\n%s", victim.PublicIP, other.PublicIP, output(res))
+	} else {
+		expectHostKeyRefusal(t, res, victim)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
+	"github.com/DeBrosOfficial/network/e2e/harness/evidence"
 )
 
 // scriptBudget bounds one read-only run of the chain deploy script.
@@ -21,7 +22,8 @@ const scriptBudget = chain.TxBudget
 var deployScript = filepath.Join("..", "..", "scripts", "chain-deploy.sh")
 
 var (
-	statusLine    = regexp.MustCompile(`(?m)^(node-\d+)\s+height (\d+)$`)
+	// statusLine is cmd_status's line for a healthy node: height and REST API.
+	statusLine    = regexp.MustCompile(`(?m)^(node-\d+)\s+height (\d+), api ok$`)
 	invariantLine = regexp.MustCompile(`(?m)^(node-\d+)\s+(\w+)\s+ok$`)
 )
 
@@ -39,25 +41,21 @@ func runDeployScript(t *testing.T, c *chain.Chain, verb string) (string, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), scriptBudget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", deployScript, verb)
-	// Only what the script needs: never the run's secrets.
-	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "LANG=C"}, "CHAIN_ID="+c.ID, "E2E_CHAIN_NODES="+strings.Join(spec, " "),
-		"E2E_SSH_USER="+c.Nodes()[0].SSHUser, "E2E_SSH_KEY="+c.F.State.SSHKeyFile, "E2E_KNOWN_HOSTS="+c.F.State.KnownHostsFile,
-		"CHAIN_ROOT="+filepath.Join("..", "..", "..", "chain"))
-	out, err := cmd.CombinedOutput()
-	exit := 0
+	// Only what the script needs: never the run's secrets, and no HOME (its
+	// ssh runs with -F /dev/null and the run's pinned known_hosts).
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "LANG=C", "CHAIN_ID=" + c.ID, "E2E_CHAIN_NODES=" + strings.Join(spec, " "),
+		"E2E_SSH_USER=" + c.Nodes()[0].SSHUser, "E2E_SSH_KEY=" + c.F.State.SSHKeyFile, "E2E_KNOWN_HOSTS=" + c.F.State.KnownHostsFile,
+		"CHAIN_ROOT=" + filepath.Join("..", "..", "..", "chain")}
+	res, err := evidence.RunRecorded(t, c.F.Recorder(), "chain-deploy.sh "+verb, cmd)
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			exit = ee.ExitCode()
-		} else {
-			t.Fatalf("chain-deploy.sh %s could not run: %v", verb, err)
-		}
+		t.Fatalf("chain-deploy.sh %s could not run: %v", verb, err)
 	}
-	return c.F.Redact(string(out)), exit
+	return c.F.Redact(res.Stdout + res.Stderr), res.Exit
 }
 
 // TestDeployScript_statusAndInvariantsReadOnly: the run's chain deploy
 // script (docs/CHAIN.md "The stagenet deploy script", e2e/scripts)
-// `status` reports a height for every node, and `invariants` reports every
+// `status` reports a height and a REST API that answers for every node, and `invariants` reports every
 // module ok on every node; both exit 0.
 func TestDeployScript_statusAndInvariantsReadOnly(t *testing.T) {
 	t.Parallel()

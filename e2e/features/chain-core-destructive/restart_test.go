@@ -3,6 +3,7 @@
 package chaincoredestructive
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -23,6 +24,9 @@ const (
 	blockInterval = 3 * time.Second
 	// catchUpBudget bounds the restarted validator's return to the head.
 	catchUpBudget = 5 * time.Minute
+	// cleanupAdvance is how many blocks every validator must commit past
+	// the head before a stopped validator's test is over.
+	cleanupAdvance = 2
 )
 
 // validatorSet is CometBFT /validators.
@@ -55,6 +59,7 @@ func TestChainRestart_stoppedValidatorCatchesUp(t *testing.T) {
 		total += v.VotingPower.Int64()
 	}
 	quorumWithout := 3*(total-victimPower) > 2*total
+	chainAdvancesAtCleanup(t, c)
 	c.F.StopService(t, victim, chain.Unit)
 	h0 := c.MustStatus(t, survivors[0]).Height
 	// Watching for a fixed number of block intervals is the observation
@@ -105,4 +110,43 @@ func requireCaughtUp(t *testing.T, c *chain.Chain, victim fleet.Node) {
 		}
 	}
 	c.RequireInvariants(t, "a validator restart")
+}
+
+// chainAdvancesAtCleanup registers, BEFORE the test stops a validator, a
+// cleanup that waits (on a context of its own) until every validator has
+// committed cleanupAdvance blocks past the highest head seen once all of
+// them answer. Cleanups run last-in first-out, so it runs after
+// StopService's cleanup restarted the unit: the next package starts on a
+// chain that moves again, even when the test failed before its own
+// catch-up check.
+func chainAdvancesAtCleanup(t *testing.T, c *chain.Chain) {
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), catchUpBudget)
+		defer cancel()
+		target := int64(0)
+		err := eventually.Poll(ctx, chain.PollEvery, catchUpBudget, "every validator to advance after the restart", func() (bool, error) {
+			heights := map[string]int64{}
+			for _, n := range c.Nodes() {
+				s, err := c.NodeStatus(t, n)
+				if err != nil {
+					return false, err
+				}
+				heights[n.Name] = s.Height
+			}
+			if target == 0 {
+				for _, h := range heights {
+					target = max(target, h+cleanupAdvance)
+				}
+			}
+			for name, h := range heights {
+				if h < target {
+					return false, fmt.Errorf("%s is at %d, want %d", name, h, target)
+				}
+			}
+			return true, nil
+		})
+		if err != nil {
+			t.Errorf("cleanup: the chain did not advance after the validator came back: %v", err)
+		}
+	})
 }

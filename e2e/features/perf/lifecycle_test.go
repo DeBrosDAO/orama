@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	provisionBound = ns.ReadyBudget
+	// provisionBound is the performance bound of one provisioning, well
+	// under ns.ReadyBudget (the harness's give-up time, not a target).
+	provisionBound = 5 * time.Minute
 	deployBound    = 3 * time.Minute
 	coldBound      = 15 * time.Second
 	warmBound      = 2 * time.Second

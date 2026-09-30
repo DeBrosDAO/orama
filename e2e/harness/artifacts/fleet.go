@@ -64,18 +64,18 @@ type FleetCollector struct {
 // recorded in the index with its error; only failing to write locally is an
 // error, because the collection runs precisely when things are broken.
 func (c *FleetCollector) Collect(ctx context.Context, dir string) (Index, error) {
-	w := &writer{dir: dir, maxBytes: c.MaxBytes, red: c.Redactor}
+	red := c.Redactor
+	if red == nil {
+		red = secrets.NewRedactor()
+	}
+	w := &writer{dir: dir, maxBytes: c.MaxBytes, red: red}
 	if w.maxBytes <= 0 {
 		w.maxBytes = DefaultMaxBytes
 	}
+	nodes, errs := c.readableNodes(ctx, w, red)
 	var mu sync.Mutex
-	var errs []error
 	var wg sync.WaitGroup
-	for _, n := range c.Fleet.AllNodes() {
-		if !nodeName.MatchString(n.Name) {
-			errs = append(errs, fmt.Errorf("node %q: not a node name, nothing collected from %s", n.Name, n.PublicIP))
-			continue
-		}
+	for _, n := range nodes {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -93,6 +93,31 @@ func (c *FleetCollector) Collect(ctx context.Context, dir string) (Index, error)
 	idx, err := w.finish()
 	return idx, errors.Join(append(errs, err)...)
 }
+
+// readableNodes are the nodes to collect from: every node with a valid
+// name whose secrets were read and registered with red first (a secret of
+// one node can show up in another's journal, so all are read before any
+// is collected). A node whose secrets cannot be read is not collected from
+// at all: its output could not be redacted of them.
+func (c *FleetCollector) readableNodes(ctx context.Context, w *writer, red *secrets.Redactor) ([]fleet.Node, []error) {
+	var nodes []fleet.Node
+	var errs []error
+	for _, n := range c.Fleet.AllNodes() {
+		if !nodeName.MatchString(n.Name) {
+			errs = append(errs, fmt.Errorf("node %q: not a node name, nothing collected from %s", n.Name, n.PublicIP))
+			continue
+		}
+		if err := registerNodeSecrets(ctx, c.Fleet.SSH(ctx, n), red); err != nil {
+			errs = append(errs, w.write(path.Join("nodes", n.Name, withheldName), n.Name, "(node secrets)", secrets.Withheld, err))
+			continue
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, errs
+}
+
+// withheldName records a node nothing was collected from, and why.
+const withheldName = "withheld.txt"
 
 type item struct {
 	rel, cmd, out string

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
 // concurrentAdds is how many `orama env add` run at once in one HOME.
@@ -34,7 +35,15 @@ func TestEnvAdd_customEnvironmentSignsInThroughIt(t *testing.T) {
 		t.Fatalf("env current after env use %s:\n%s", name, cur)
 	}
 	cli.MustOK(t, "auth", "login")
-	t.Cleanup(func() { cli.MustOK(t, "auth", "logout") })
+	t.Cleanup(func() {
+		// t.Context() is cancelled before cleanups run: MustOK would fail
+		// at once and leave the session signed in.
+		ctx, cancel := fleet.CleanupContext(t)
+		defer cancel()
+		if res, err := cli.Run(ctx, "auth", "logout"); err != nil || res.Exit != 0 {
+			t.Errorf("cleanup: orama auth logout through %s: exit %d: %v\n%s", name, res.Exit, err, res.Stderr)
+		}
+	})
 	who := cli.MustOK(t, "auth", "whoami").Stdout
 	if !strings.Contains(strings.ToLower(who), strings.ToLower(f.State.OperatorAddress)) {
 		t.Errorf("whoami through %s does not name the operator %s:\n%s", name, f.State.OperatorAddress, who)

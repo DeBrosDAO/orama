@@ -5,7 +5,6 @@ import { createClient, MemoryStorage } from "../../../../sdk/src/index";
 import { need, nsClient, onFleet, unique, until } from "./fleet";
 
 const revocationWindowMs = 10_000;
-const slackMs = 10_000;
 
 describe.skipIf(!onFleet)("sdk websocket", () => {
   it("a subscription receives what is published, and closes when its session is ended", async () => {
@@ -29,7 +28,7 @@ describe.skipIf(!onFleet)("sdk websocket", () => {
 
       const ender = createClient({ baseURL: need("GATEWAY_BASE_URL"), jwt: need("E2E_WS_JWT") });
       await ender.auth.logout();
-      await until("the gateway closing the revoked session's socket", () => closed, revocationWindowMs + slackMs);
+      await until("the gateway closing the revoked session's socket", () => closed, revocationWindowMs);
     } finally {
       sub.close();
     }

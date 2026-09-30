@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -157,19 +156,6 @@ func (f *fakeCloud) addServer(name string, labels map[string]string, created tim
 	s := hetzner.Server{ID: f.id(), Name: name, Status: "running", Labels: labels, Created: created}
 	f.servers[s.ID] = s
 	return s
-}
-
-func (f *fakeCloud) GetServer(ctx context.Context, id int64) (*hetzner.Server, error) {
-	if f.ctxAware && ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	s, ok := f.servers[id]
-	if !ok {
-		return nil, &hetzner.APIError{Method: "GET", Path: fmt.Sprintf("/servers/%d", id), Status: http.StatusNotFound, Code: "not_found"}
-	}
-	return &s, nil
 }
 
 func (f *fakeCloud) ListServers(_ context.Context, sel string) ([]hetzner.Server, error) {

@@ -17,7 +17,7 @@ import (
 // feature names this package's artifact directory.
 const feature = "scanners"
 
-// Budgets per tool run. The stage gives a package 60 minutes and the tests
+// Budgets per tool run. The stage gives a package 90 minutes and the tests
 // run in parallel, so each bound is generous but below that.
 const (
 	vulnBudget   = 15 * time.Minute

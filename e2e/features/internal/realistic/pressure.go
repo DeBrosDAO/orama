@@ -73,11 +73,25 @@ func FillDisk(t testing.TB, f *fleet.Fleet, n fleet.Node, targetPct int) (DiskUs
 // memHogPrefix names the transient units MemoryHog starts.
 const memHogPrefix = "e2e-memhog-"
 
-// MemoryHog starts a transient unit on n that allocates and holds mb MiB
-// under a cgroup limit of limitMB (MemoryMax, no swap), so the pressure is
-// real but the kernel kills the hog, not a node daemon, if the limit is hit.
-// The cleanup stops it and checks it is gone.
-func MemoryHog(t testing.TB, f *fleet.Fleet, n fleet.Node, mb, limitMB int) string {
+// The hog's cgroup bounds, in percent of what it holds. MemoryHigh throttles
+// it (reclaim pressure, never a kill) a little above its size; MemoryMax is
+// only a backstop well above that. Hitting MemoryMax would be a cgroup OOM
+// kill, which writes "Memory cgroup out of memory" to the kernel log and
+// raises the node's permanent critical OOM alert
+// (core/pkg/telemetry/report/system.go counts `dmesg | grep -ci 'out of
+// memory'`): a pressure test must never cause one (OOMKills checks it).
+const (
+	hogHighPct = 110
+	hogMaxPct  = 150
+	percent    = 100
+)
+
+// MemoryHog starts a transient unit on n that allocates and holds mb MiB,
+// throttled above hogHighPct and capped at hogMaxPct of that (no swap), so
+// the pressure is real and neither the hog nor a node daemon is killed. The
+// caller keeps mb*hogMaxPct/100 below the node's available memory. The
+// cleanup stops it and checks it is gone.
+func MemoryHog(t testing.TB, f *fleet.Fleet, n fleet.Node, mb int) string {
 	t.Helper()
 	unit := memHogPrefix + f.State.RunID + "-" + newTag(t)
 	t.Cleanup(func() {
@@ -86,9 +100,27 @@ func MemoryHog(t testing.TB, f *fleet.Fleet, n fleet.Node, mb, limitMB int) stri
 	// tail keeps its whole input (no newline) in memory, then blocks writing
 	// to a reader that never reads: the memory stays held until the stop.
 	hog := fmt.Sprintf("head -c %dM /dev/zero | tail | sleep infinity", mb)
-	f.MustExec(t, n, fmt.Sprintf("systemd-run --unit=%s -p MemoryMax=%dM -p MemorySwapMax=0 --collect sh -c %s",
-		unit, limitMB, fleet.ShellQuote(hog)))
+	f.MustExec(t, n, fmt.Sprintf("systemd-run --unit=%s -p MemoryHigh=%dM -p MemoryMax=%dM -p MemorySwapMax=0 --collect sh -c %s",
+		unit, mb*hogHighPct/percent, mb*hogMaxPct/percent, fleet.ShellQuote(hog)))
 	return unit
+}
+
+// HogFootprintPct is the most of its size a MemoryHog may use (its MemoryMax),
+// in percent: a caller sizes the hog so this much still fits.
+const HogFootprintPct = hogMaxPct
+
+// OOMKills is the node's kernel-log OOM count, read the way its telemetry
+// reads it (core/pkg/telemetry/report/system.go): a pressure test records it
+// before and asserts it unchanged after, since any increase is a permanent
+// critical alert on that node.
+func OOMKills(t testing.TB, f *fleet.Fleet, n fleet.Node) int {
+	t.Helper()
+	out := strings.TrimSpace(f.MustExec(t, n, "dmesg 2>/dev/null | grep -ci 'out of memory' || true").Stdout)
+	v, err := strconv.Atoi(out)
+	if err != nil {
+		t.Fatalf("%s: the kernel log OOM count is %q: %v", n.Name, out, err)
+	}
+	return v
 }
 
 // MemoryCurrentMB is the unit's cgroup memory.current in MiB.

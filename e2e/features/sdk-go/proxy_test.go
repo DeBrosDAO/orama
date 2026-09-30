@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
@@ -108,6 +109,7 @@ func TestAnonProxy_requestLeavesThroughTor(t *testing.T) {
 			t.Errorf("%s: %s is %s", node.Name, torUnit, st)
 		}
 	}
+	realistic.RequireReachableFromNode(t, f, f.State.Nodes[0], torCheckURL)
 	n := tenancy.Namespace(t, f, ns.Options{})
 	eventually.Require(t, 5*time.Second, torBudget, "request through Tor", func() (bool, error) {
 		var out struct {

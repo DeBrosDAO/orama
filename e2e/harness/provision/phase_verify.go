@@ -72,7 +72,7 @@ func (r *run) checkHealth(ctx context.Context) error {
 		return err
 	}
 	c := command{name: r.st.OramaBin, args: []string{"monitor", "report", "--env", r.st.Env, "--json"}, env: r.cliEnv(),
-		log: filepath.Join(r.cfg.ArtifactDir, "provision-poll-monitor-report.log")}
+		log: filepath.Join(r.cfg.ArtifactDir, "provision-poll-monitor-report.log"), redact: r.red.Redact}
 	out, err := waitReport(ctx, r.d.cmd, c, r.d.timing, func(h healthReport) string { return h.problem(len(r.st.Nodes)) })
 	if err != nil {
 		return err

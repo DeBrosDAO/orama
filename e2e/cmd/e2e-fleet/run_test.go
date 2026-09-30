@@ -15,6 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/provision"
 	"github.com/DeBrosOfficial/network/e2e/harness/report"
+	"github.com/DeBrosOfficial/network/e2e/harness/stages"
 )
 
 // fakeProvisioner replaces Up and Down for one test.
@@ -155,4 +156,38 @@ func TestWithSignals_hangupStops(t *testing.T) {
 	eventually.Require(t, 10*time.Millisecond, 10*time.Second, "SIGHUP to cancel the run", func() (bool, error) {
 		return ctx.Err() != nil, nil
 	})
+}
+
+// TestRunStages_noReRunOnceStopped: after an interrupt the recorded failures
+// are not re-run (the re-runs could only be cancelled); a run that was not
+// stopped re-runs them.
+func TestRunStages_noReRunOnceStopped(t *testing.T) {
+	rs := testRunState(t)
+	art := rs.cfg.ArtifactDir
+	if err := os.MkdirAll(filepath.Join(art, stages.GoTestDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(stages.GoTestDir, "stage-01-anon-tor.json")
+	fail := `{"Action":"fail","Package":"x/anon-tor","Test":"TestA"}` + "\n"
+	if err := os.WriteFile(filepath.Join(art, out), []byte(fail), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tl := &stages.Timeline{Stages: []stages.StageRun{{Stage: stages.Stage{ID: 1}, Completed: true,
+		Packages: []stages.PackageRun{{Feature: "anon-tor", Output: out, Exit: 1}}}}}
+	if err := tl.Save(filepath.Join(art, stages.StateFileName)); err != nil {
+		t.Fatal(err)
+	}
+	var execs int
+	r := newStageRunner(rs.lay, rs.statePath(), art)
+	r.Exec = func(context.Context, stages.Command) (int, error) { execs++; return 0, nil }
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+	rs.runStages(stopped, r, nil)
+	if execs != 0 {
+		t.Fatalf("a stopped run re-ran %d packages", execs)
+	}
+	rs.runStages(context.Background(), r, nil)
+	if execs == 0 {
+		t.Fatal("a finished run did not re-run its failure")
+	}
 }

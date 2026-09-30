@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	mrand "math/rand/v2"
 	"strings"
 	"testing"
 
@@ -19,6 +20,39 @@ import (
 // archiver would start (docs/CHAIN.md "History archiver": ranges 1, 1+w, ...),
 // so they never block one.
 const rangeWidth = 10
+
+// Where freeRange looks: aligned slots from minSlot up to headMargin below
+// the head, at most freeRangeTries random picks.
+const (
+	minSlot        = 10
+	headMargin     = 2 * rangeWidth
+	freeRangeTries = 20
+)
+
+// freeRange picks an aligned range (start 1 + j*rangeWidth) below the head
+// that no range occupies. Every range these tests pin is aligned and of the
+// same width, so two of them either coincide or do not overlap at all: an
+// exact range query that finds nothing proves the slot free of every other
+// test's range, and a random slot keeps concurrent tests apart.
+func freeRange(t *testing.T, c *chain.Chain) attestation {
+	t.Helper()
+	top := (c.Height(t) - headMargin - 1) / rangeWidth
+	if top <= minSlot {
+		t.Fatalf("the chain is at %d: too low for an aligned range above slot %d", c.Height(t), minSlot)
+	}
+	for i := 0; i < freeRangeTries; i++ {
+		a := newAttestation(t, 1+(minSlot+mrand.Int64N(top-minSlot))*rangeWidth)
+		out := c.QueryOut(t, c.Node(t, 0), "archive", "range", fmt.Sprint(a.start), fmt.Sprint(a.end))
+		if out.Exit != 0 && chain.NotFound(out.Stdout+out.Stderr) {
+			return a
+		}
+		if out.Exit != 0 {
+			t.Fatalf("archive range %d %d: %s", a.start, a.end, out.Stderr)
+		}
+	}
+	t.Fatalf("no free aligned range in %d random picks below height %d", freeRangeTries, top*rangeWidth)
+	return attestation{}
+}
 
 // attestation is one archiver's claim about a height range.
 type attestation struct {
@@ -78,7 +112,7 @@ func TestArchive_firstAttestationPinsTheRange(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	keys := []chain.Key{c.FundedValidator(t, 0, chain.Orama(1)), c.FundedValidator(t, 1, chain.Orama(1)), c.FundedValidator(t, 2, chain.Orama(1))}
-	a := newAttestation(t, c.Height(t)-3*rangeWidth)
+	a := freeRange(t, c)
 	lastBefore := lastArchived(t, c)
 	chain.RequireOK(t, "first attestation", c.Submit(t, keys[0], chain.TxOptions{}, a.msg(keys[0].Address)))
 	wrongRoot, wrongBundle := a, a
@@ -113,7 +147,7 @@ func TestArchive_rangeRefusals(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := c.FundedValidator(t, 2, chain.Orama(1))
-	a := newAttestation(t, c.Height(t)-6*rangeWidth)
+	a := freeRange(t, c)
 	chain.RequireOK(t, "pin a range", c.Submit(t, k, chain.TxOptions{}, a.msg(k.Address)))
 	overlap := newAttestation(t, a.start+rangeWidth/2)
 	chain.RequireRefused(t, "overlapping range", c.Submit(t, k, chain.TxOptions{}, overlap.msg(k.Address)), "overlaps an existing range")

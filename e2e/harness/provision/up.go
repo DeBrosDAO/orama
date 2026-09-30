@@ -13,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/e2e/harness/agent"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
+	"github.com/DeBrosOfficial/network/e2e/harness/secrets"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -47,6 +48,9 @@ type run struct {
 	ownsCloud bool
 	pubKey    string
 	logSeq    atomic.Int32
+	// red redacts every log and error of this Up: the environment's
+	// secrets plus the test wallet's password and mnemonic.
+	red *secrets.Redactor
 }
 
 // UpError is how Up fails: Owned reports whether the failed Up registered
@@ -107,7 +111,8 @@ func newRun(cfg Config, log Logger, d deps) *run {
 		ArtifactDir: cfg.ArtifactDir,
 		OramaBin:    filepath.Join(cfg.WorkDir, binDir, oramaBinName),
 	}
-	return &run{cfg: cfg, log: log, d: d, st: st, hostKeys: map[string]string{}, serverKeys: map[string]ssh.PublicKey{}}
+	return &run{cfg: cfg, log: log, d: d, st: st, hostKeys: map[string]string{}, serverKeys: map[string]ssh.PublicKey{},
+		red: secrets.FromEnv(secrets.LookupEnv)}
 }
 
 // checkpoint saves the state once there is something to tear down, so a
@@ -204,6 +209,7 @@ func (r *run) runLogged(ctx context.Context, c command) (string, error) {
 		label += "-" + c.args[0]
 	}
 	c.log = filepath.Join(r.cfg.ArtifactDir, fmt.Sprintf("provision-%02d-%s.log", n, sanitize(label)))
+	c.redact = r.red.Redact
 	return r.d.cmd.Run(ctx, c)
 }
 

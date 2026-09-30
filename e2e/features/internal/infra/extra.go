@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
+	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/monitor"
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
@@ -50,8 +51,9 @@ func JoinExtra(t testing.TB, extra harness.Extra) {
 	f := harness.Fleet(t)
 	RequireHealthy(t)
 	archive := RunningArchive(t, f)
-	t.Cleanup(func() { RemoveIfMember(t, extra.PublicIP) })
-	res := RunFor(t, harness.CLI(t), InstallBudget, SetupArgs(t, extra, archive)...)
+	cli := harness.CLI(t)
+	t.Cleanup(func() { RemoveMembers(t, f, cli, extra.PublicIP) })
+	res := RunFor(t, cli, InstallBudget, SetupArgs(t, extra, archive)...)
 	ExpectExit(t, res, ExitOK, "setup complete")
 	r := WaitConverged(t, len(f.State.Nodes)+1, ConvergeBudget, extra.Name+" to join as a full member")
 	if _, err := ReportFor(r, extra.Node); err != nil {
@@ -65,27 +67,45 @@ func NewExtra(t testing.TB, name string) harness.Extra {
 	return harness.ExtraNode(t, name, extraLocation)
 }
 
-// RemoveIfMember removes host from the cluster when the monitor still lists
-// it, then waits for the core nodes to converge. For cleanups: it reports,
-// it does not Fatal.
+// RemoveIfMember is RemoveMembers for one host with the run's fleet and CLI
+// looked up at call time. Inside a cleanup that lookup fails once the run is
+// interrupted (harness.Fleet refuses), so cleanups use RemoveMembers with the
+// fleet and CLI captured before registering; this form remains for callers
+// outside this change's scope (invite-join-destructive).
 func RemoveIfMember(t testing.TB, host string) {
-	f := harness.Fleet(t)
-	ctx, cancel := context.WithTimeout(context.Background(), InstallBudget)
+	t.Helper()
+	RemoveMembers(t, harness.Fleet(t), harness.CLI(t), host)
+}
+
+// RemoveMembers removes every host the monitor still lists from the cluster,
+// then waits once for the core nodes to converge without all of them: a
+// convergence wait per host would expect the core count while the other
+// joiners are still members and never succeed. For cleanups: f and cli are
+// captured before the cleanup is registered, and it reports, never Fatals.
+func RemoveMembers(t testing.TB, f *fleet.Fleet, cli *oramacli.Runner, hosts ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), InstallBudget+ConvergeBudget)
 	defer cancel()
-	cli := harness.CLI(t)
-	if !isMember(ctx, cli, f.State.Env, host) {
+	removed := false
+	for _, host := range hosts {
+		if !isMember(ctx, cli, f.State.Env, host) {
+			continue
+		}
+		args := []string{"node", "remove", "--env", f.State.Env, "--node", host, "--force"}
+		if !sshReachable(host) {
+			args = append(args, "--offline")
+		}
+		res, err := cli.Run(ctx, args...)
+		if err != nil || res.Exit != 0 {
+			t.Errorf("cleanup: orama node remove %s failed (exit %d): %v\n%s%s", host, res.Exit, err, res.Stdout, f.Redact(res.Stderr))
+			continue
+		}
+		removed = true
+	}
+	if !removed {
 		return
 	}
-	args := []string{"node", "remove", "--env", f.State.Env, "--node", host, "--force"}
-	if !sshReachable(host) {
-		args = append(args, "--offline")
-	}
-	res, err := cli.Run(ctx, args...)
-	if err != nil || res.Exit != 0 {
-		t.Errorf("cleanup: orama node remove %s failed (exit %d): %v\n%s%s", host, res.Exit, err, res.Stdout, f.Redact(res.Stderr))
-		return
-	}
-	err = eventually.Poll(ctx, PollEvery, ConvergeBudget, "the core nodes to converge without "+host, func() (bool, error) {
+	err := eventually.Poll(ctx, PollEvery, ConvergeBudget, "the core nodes to converge without the joiners", func() (bool, error) {
 		r, err := monitor.Get(ctx, cli, f.State.Env)
 		if err != nil {
 			return false, err

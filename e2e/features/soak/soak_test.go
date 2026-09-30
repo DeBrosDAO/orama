@@ -14,34 +14,55 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
+	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
 const (
-	// EnvSoakMinutes is how long the traffic runs; the stage's package
-	// timeout (stages.yaml, 120m) must leave room for setup and recovery.
+	// EnvSoakMinutes is how long the traffic runs; it is capped at what the
+	// stage budget leaves after setup, the faults and teardown (soakDuration).
 	EnvSoakMinutes     = "E2E_SOAK_MINUTES"
 	defaultSoakMinutes = 30
 	feature            = "soak"
+	// setupBudget bounds the workload's setup: its namespace becoming ready
+	// and the static site deployed.
+	setupBudget = 2 * ns.ReadyBudget
+	// eventWorst is the most one scheduled fault takes beyond its planned
+	// gap: the fault (a restart, or a hold), the convergence after it and
+	// its cleanup restoring the node.
+	eventWorst = restartBudget + faultHold + infra.ConvergeBudget + fleet.CleanupBudget
+	// teardownBudget covers the final convergence and the namespace's teardown.
+	teardownBudget = infra.ConvergeBudget + ns.TeardownBudget
 )
 
-func soakDuration(t *testing.T) time.Duration {
+// soakDuration is E2E_SOAK_MINUTES (default 30), refused when it does not fit
+// in the stage budget with the setup, every fault at its worst and the
+// teardown: past the budget the runner interrupts the soak mid-fault.
+func soakDuration(t *testing.T, events int) time.Duration {
 	t.Helper()
-	raw := os.Getenv(EnvSoakMinutes)
-	if raw == "" {
-		return defaultSoakMinutes * time.Minute
+	d := defaultSoakMinutes * time.Minute
+	if raw := os.Getenv(EnvSoakMinutes); raw != "" {
+		m, err := strconv.Atoi(raw)
+		if err != nil || m <= 0 {
+			t.Fatalf("%s=%q is not a positive number of minutes", EnvSoakMinutes, raw)
+		}
+		d = time.Duration(m) * time.Minute
 	}
-	m, err := strconv.Atoi(raw)
-	if err != nil || m <= 0 {
-		t.Fatalf("%s=%q is not a positive number of minutes", EnvSoakMinutes, raw)
+	overhead := setupBudget + time.Duration(events)*eventWorst + teardownBudget
+	if left, ok := realistic.StageRemaining(t); ok && d > left-overhead {
+		t.Fatalf("%s=%d does not fit: the stage budget leaves %v, and setup, %d faults at their worst and teardown take %v; "+
+			"at most %d minutes (or raise stage 11's timeout in e2e/stages/stages.yaml)",
+			EnvSoakMinutes, int(d/time.Minute), left.Round(time.Minute), events, overhead, int((left-overhead)/time.Minute))
 	}
-	return time.Duration(m) * time.Minute
+	return d
 }
 
 // TestSoak_mixedTrafficUnderScheduledChaos runs the soak described in
 // feature.yaml and records its numbers in <artifacts>/soak/slo.json.
 func TestSoak_mixedTrafficUnderScheduledChaos(t *testing.T) {
 	f := harness.Fleet(t)
-	d := soakDuration(t)
+	// schedule's closures reference the workload only when they run: here
+	// only the number of faults is read.
+	d := soakDuration(t, len(schedule(f, nil)))
 	infra.RequireHealthy(t)
 	w := setupWorkload(t)
 	units := watched(f, w.tn.N.Name)
@@ -91,6 +112,11 @@ func runSchedule(t *testing.T, f *fleet.Fleet, w *workload, ws *windows, d time.
 	killed := map[string]int{}
 	for i, ev := range events {
 		quiet(t, time.Until(start.Add(time.Duration(i+1)*gap)))
+		if !realistic.FitsStageBudget(t, eventWorst+teardownBudget) {
+			t.Errorf("not firing %q or the %d faults after it: the stage budget no longer fits one at its worst (%v) and the teardown; "+
+				"raise stage 11's timeout or lower %s", ev.name, len(events)-i-1, eventWorst, EnvSoakMinutes)
+			break
+		}
 		fire(t, ws, ev)
 		for _, k := range ev.kills {
 			killed[k]++

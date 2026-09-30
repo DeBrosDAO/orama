@@ -25,6 +25,7 @@ const (
 // (docs/ARCHITECTURE.md; rqlite needs a majority of voters).
 func TestChaos_symmetricPartitionHeals(t *testing.T) {
 	f := harness.Fleet(t)
+	realistic.RequireFaultBudget(t, "the symmetric partition", faultWorst)
 	victim := infra.Followers(t, infra.RequireHealthy(t))[0]
 	survivors := others(f, victim)
 	s := newStore(t)
@@ -61,6 +62,7 @@ func TestChaos_asymmetricPartitionHeals(t *testing.T) {
 		{"leader deaf to follower", func(l, fo fleet.Node) (fleet.Node, fleet.Node) { return l, fo }},
 	}
 	for _, c := range cases {
+		realistic.RequireFaultBudget(t, c.name, faultWorst)
 		r := infra.RequireHealthy(t)
 		leader, follower := infra.Leader(t, r), infra.Followers(t, r)[0]
 		deaf, unheard := c.pick(leader, follower)
@@ -82,6 +84,7 @@ func TestChaos_asymmetricPartitionHeals(t *testing.T) {
 // through the degraded node still land; afterwards the cluster converges.
 func TestChaos_lossyOverlayKeepsServing(t *testing.T) {
 	f := harness.Fleet(t)
+	realistic.RequireFaultBudget(t, "the lossy overlay", faultWorst)
 	victim := infra.Followers(t, infra.RequireHealthy(t))[0]
 	s := newStore(t)
 	t.Run("degraded", func(t *testing.T) {

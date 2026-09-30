@@ -69,8 +69,10 @@ func TestInvoke_accessMatrix(t *testing.T) {
 	if r := invokeKey(t, fx, "e2e-private", mintKey(t, fx, "invoke-only")); r.Status != http.StatusOK {
 		t.Errorf("invoke-only key: %d %.200s", r.Status, r.Body)
 	}
-	if r := invokeKey(t, fx, "e2e-private", mintKey(t, fx, "storage")); r.Status == http.StatusOK {
-		t.Errorf("a storage-only key invoked a private function")
+	// A storage-only key lacks the invoke grant: the invoker's ErrUnauthorized
+	// (serverless/invoke.go canInvokeFn, handler classifyInvokeError).
+	if r := invokeKey(t, fx, "e2e-private", mintKey(t, fx, "storage")); r.Status != http.StatusUnauthorized {
+		t.Errorf("a storage-only key invoking a private function: want 401, got %d %.200s", r.Status, r.Body)
 	}
 	for name, bearer := range map[string]string{"garbage": "x.y.z", "expired-looking": strings.Repeat("a", 40)} {
 		if r := invoke(t, fx.c, "e2e-private", bearer, map[string]any{"op": "echo"}); r.Status != http.StatusUnauthorized {
@@ -161,9 +163,11 @@ func TestInvoke_memoryLimit(t *testing.T) {
 	fx := setup(t)
 	deploy(t, fx, fnSpec{name: "e2e-mem", yaml: "memory: 16\n"})
 	call(t, fx, "e2e-mem", map[string]any{"op": "alloc", "size": 2})
+	// The guest traps when its memory cannot grow; the invoker reports a
+	// failed execution (classifyInvokeError's default).
 	r := invoke(t, fx.c, "e2e-mem", fx.admin, map[string]any{"op": "alloc", "size": 64})
-	if r.Status == http.StatusOK {
-		t.Errorf("a 64 MB allocation under memory 16 succeeded: %.200s", r.Body)
+	if r.Status != http.StatusInternalServerError || rpcCode(r) != codeExecFailed {
+		t.Errorf("a 64 MB allocation under memory 16: want 500 %s, got %d %.200s", codeExecFailed, r.Status, r.Body)
 	}
 }
 
@@ -219,9 +223,8 @@ func TestInvoke_concurrencyBounded(t *testing.T) {
 // (docs/SERVERLESS.md#http-api-reference; SECURITY.md bugboard #423/#427).
 func TestInvoke_crossNamespace(t *testing.T) {
 	t.Parallel()
-	fx := setup(t)
+	fx := setupN(t, 2)
 	deploy(t, fx, fnSpec{name: "e2e-home"})
-	tenancy.Reserve(t, harness.Fleet(t), 1)
 	other := ns.New(t, fx.f, ns.Options{})
 	foreign := other.Owner.Token()
 	main := harness.GW(t)

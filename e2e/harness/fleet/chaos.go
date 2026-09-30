@@ -30,31 +30,47 @@ const (
 const unitActive = "active"
 
 // Kill sends SIGKILL to every process of unit, the way a crash does. The unit's
-// own Restart= policy decides what happens next; the cleanup makes sure it is
-// active again before the next test.
+// own Restart= policy decides what happens next; the cleanup puts the unit
+// back in the state it was in before (see restoreUnit) before the next test.
 func (f *Fleet) Kill(t testing.TB, n Node, unit string) {
 	t.Helper()
 	requireSafe(t, "unit", unit)
-	t.Cleanup(func() { f.ensureActive(t, n, unit) })
+	prior := f.Unit(t, n, unit)
+	t.Cleanup(func() { f.restoreUnit(t, n, unit, prior) })
 	f.MustExec(t, n, "systemctl kill --signal=SIGKILL "+unit)
 }
 
-// StopService stops unit cleanly; the cleanup starts it again.
+// StopService stops unit cleanly; the cleanup puts it back in the state it
+// was in before.
 func (f *Fleet) StopService(t testing.TB, n Node, unit string) {
 	t.Helper()
 	requireSafe(t, "unit", unit)
-	t.Cleanup(func() { f.ensureActive(t, n, unit) })
+	prior := f.Unit(t, n, unit)
+	t.Cleanup(func() { f.restoreUnit(t, n, unit, prior) })
 	f.MustExec(t, n, "systemctl stop "+unit)
 }
 
-// ensureActive starts unit if needed and polls until it is active.
+// restoreUnit clears the failed state the disturbance left (a killed unit
+// past its start limit would otherwise refuse to start) and puts unit back
+// in its prior state: active again, or stopped when it was not running.
+func (f *Fleet) restoreUnit(t testing.TB, n Node, unit, prior string) {
+	t.Helper()
+	if prior == unitActive {
+		f.ensureActive(t, n, unit)
+		return
+	}
+	f.cleanupExec(t, n, "systemctl reset-failed "+unit+" 2>/dev/null; systemctl stop "+unit+"; ! systemctl is-active --quiet "+unit)
+}
+
+// ensureActive resets the unit's failed state, starts it if needed and
+// polls until it is active.
 func (f *Fleet) ensureActive(t testing.TB, n Node, unit string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), UnitRecoverBudget)
 	defer cancel()
 	sh := f.shellFor(t.Name(), n)
 	err := eventually.Poll(ctx, recoverPoll, UnitRecoverBudget, n.Name+" "+unit+" active", func() (bool, error) {
-		out, err := sh.Run(ctx, "systemctl is-active "+unit+" || systemctl start "+unit)
+		out, err := sh.Run(ctx, "systemctl is-active "+unit+" || { systemctl reset-failed "+unit+" 2>/dev/null; systemctl start "+unit+"; }")
 		if err != nil {
 			return false, err
 		}

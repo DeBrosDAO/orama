@@ -100,10 +100,7 @@ func (c *Chain) submit(t testing.TB, k Key, opts TxOptions, raw []byte) (Result,
 	if err != nil {
 		return Result{}, err
 	}
-	script := "D=" + fleet.ShellQuote(dir) + "\ntrap 'rm -rf -- \"$D\"' EXIT\n" +
-		"exec 9>" + lockFile(k) + " || exit 90\n" +
-		fmt.Sprintf("flock -w %d 9 || { echo lock timeout >&2; exit 91; }\n", lockWaitSeconds) +
-		feeScript(opts) + signScript(c, k, opts) + broadcastScript()
+	script := "D=" + fleet.ShellQuote(dir) + "\n" + lockScript(k) + feeScript(opts) + signScript(c, k, opts) + broadcastScript()
 	return c.runTxScript(t, k.Node, script)
 }
 
@@ -215,15 +212,19 @@ func (c *Chain) AccountOf(t testing.TB, n fleet.Node, addr string) (Account, boo
 	if err := json.Unmarshal([]byte(out.Stdout), &doc); err != nil {
 		t.Fatalf("auth account %s: %v: %s", addr, err, out.Stdout)
 	}
+	// proto3 JSON omits zero values: the first account ever created has
+	// account_number 0 and no member for it, and a fresh one sequence 0.
+	if _, ok := findField(doc, "address"); !ok {
+		t.Fatalf("auth account %s: the output holds no account: %s", addr, out.Stdout)
+	}
 	num, okN := findField(doc, "account_number")
 	seq, okS := findField(doc, "sequence")
-	if !okN {
-		t.Fatalf("auth account %s: no account_number in %s", addr, out.Stdout)
-	}
 	a := Account{}
 	var err error
-	if a.Number, err = Uint(num); err != nil {
-		t.Fatal(err)
+	if okN {
+		if a.Number, err = Uint(num); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if okS {
 		if a.Sequence, err = Uint(seq); err != nil {

@@ -121,7 +121,7 @@ func TestGlobalBind_refusals(t *testing.T) {
 	infra.ExpectExit(t, infra.Run(t, cli, "global", "bind", "--chain-id", c.ID, "--operator", operator, "--service", "relay",
 		"--key-file", filepath.Join(t.TempDir(), "absent.key"), "--key-type", "ed25519"), infra.ExitFailure)
 	infra.ExpectRefused(t, infra.Run(t, cli, "global", "bind", "--chain-id", c.ID, "--operator", operator, "--service", "Relay!",
-		"--key-file", key, "--key-type", "ed25519"))
+		"--key-file", key, "--key-type", "ed25519"), `service "Relay!" must match`)
 }
 
 // TestGroupCommands_listTheirSubcommands: `orama global` and `orama storage`

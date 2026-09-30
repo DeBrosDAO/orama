@@ -30,33 +30,48 @@ type snippet struct {
 
 func (s snippet) Where() string { return fmt.Sprintf("%s:%d", s.File, s.Line) }
 
-var fenceRe = regexp.MustCompile("(?m)^```([A-Za-z0-9_+-]*)[^\\n]*\\n")
+// fenceRe is an opening fence, indented or not (a block inside a list item
+// is indented by the item's depth): its indent, backticks and language.
+var fenceRe = regexp.MustCompile("^([ \t]*)(`{3,})([A-Za-z0-9_+-]*)")
 
-// snippets returns every fenced block of rel whose language is one of langs.
+// snippets returns every fenced block of rel whose language is one of langs,
+// with the opening fence's indent taken off each line of its body.
 func snippets(t testing.TB, rel string, langs ...string) []snippet {
 	t.Helper()
-	text := cliconf.ReadRepoFile(t, rel)
 	want := map[string]bool{}
 	for _, l := range langs {
 		want[l] = true
 	}
+	lines := strings.Split(cliconf.ReadRepoFile(t, rel), "\n")
 	var out []snippet
-	for pos := 0; ; {
-		open := fenceRe.FindStringSubmatchIndex(text[pos:])
-		if open == nil {
-			return out
+	for i := 0; i < len(lines); i++ {
+		m := fenceRe.FindStringSubmatch(lines[i])
+		if m == nil {
+			continue
 		}
-		start := pos + open[1]
-		end := strings.Index(text[start:], "\n```")
-		if end < 0 {
-			t.Fatalf("%s: a code fence opened at line %d never closes", rel, strings.Count(text[:pos+open[0]], "\n")+1)
+		body, closed := fenceBody(lines[i+1:], m[1], m[2])
+		if !closed {
+			t.Fatalf("%s: a code fence opened at line %d never closes", rel, i+1)
 		}
-		lang := text[pos+open[2] : pos+open[3]]
-		if want[lang] {
-			out = append(out, snippet{File: rel, Line: strings.Count(text[:pos+open[0]], "\n") + 1, Lang: lang, Body: text[start : start+end+1]})
+		if want[m[3]] {
+			out = append(out, snippet{File: rel, Line: i + 1, Lang: m[3], Body: strings.Join(body, "\n") + "\n"})
 		}
-		pos = start + end + len("\n```")
+		i += len(body) + 1
 	}
+	return out
+}
+
+// fenceBody collects the lines up to the closing fence (at least ticks
+// backticks and nothing else, at any indent), each without indent.
+func fenceBody(lines []string, indent, ticks string) (body []string, closed bool) {
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, ticks) && strings.Trim(trimmed, "`") == "" {
+			return body, true
+		}
+		body = append(body, strings.TrimPrefix(l, indent))
+	}
+	return body, false
 }
 
 // allSnippets is snippets over every example document.
@@ -75,6 +90,11 @@ func allSnippets(t testing.TB, langs ...string) []snippet {
 func TestDocsExamples_jsonBlocksParse(t *testing.T) {
 	t.Parallel()
 	blocks := allSnippets(t, "json")
+	if len(blocks) == 0 {
+		// docs/SERVERLESS.md has json blocks: none found means the fence
+		// parsing broke, and passing would check nothing.
+		t.Fatalf("no json block found in %v: the fence parsing or the documents changed", exampleDocs)
+	}
 	for _, s := range blocks {
 		var v any
 		if err := json.Unmarshal([]byte(s.Body), &v); err != nil {

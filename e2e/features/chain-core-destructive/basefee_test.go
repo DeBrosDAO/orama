@@ -10,9 +10,9 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 )
 
-// loadPerValidator: three validators x 5 transactions of ~9.5M gas wanted is
-// ~142M, more than one 100M block holds, so at least one block is over half
-// full wherever the proposer cuts.
+// loadPerValidator: three validators x 5 transactions of 7M gas wanted is
+// 105M, more than one 100M block holds; each consumes at least ~6.5M
+// (chain.LoadGasConsumed), so the 15 consume ~98M, far over the 50M target.
 const loadPerValidator = 5
 
 // TestBaseFee_risesOnFullBlocksAndFloorsAtMin: blocks more than half full
@@ -43,8 +43,8 @@ func TestBaseFee_risesOnFullBlocksAndFloorsAtMin(t *testing.T) {
 			}
 		}
 	}
-	if accepted*chain.LoadGas <= blockMaxGas/2 {
-		t.Fatalf("only %d load transactions entered the mempool: not enough gas to fill half a block", accepted)
+	if accepted*chain.LoadGasConsumed <= blockMaxGas/2 {
+		t.Fatalf("only %d load transactions entered the mempool: at least ~%d gas is not over half a block", accepted, accepted*chain.LoadGasConsumed)
 	}
 	peak := waitBaseFeeAbove(t, c, floor, start)
 	eventually.Require(t, chain.PollEvery, chain.EpochBudget, "the base fee to fall back to the floor", func() (bool, error) {
@@ -54,7 +54,7 @@ func TestBaseFee_risesOnFullBlocksAndFloorsAtMin(t *testing.T) {
 		}
 		return true, nil
 	})
-	end := c.Height(t)
+	end := c.Height(t) - 1 // one below the head: its state is readable
 	for h := start; h <= end; h++ {
 		if bf := c.BaseFeeAt(t, n, h); bf.Cmp(floor) < 0 {
 			t.Errorf("height %d: base fee %s under the floor %s", h, bf.String(), floor.String())
@@ -75,7 +75,7 @@ func waitBaseFeeAbove(t *testing.T, c *chain.Chain, floor chain.Int, start int64
 	next := start
 	var peak chain.Int
 	eventually.Require(t, chain.PollEvery, chain.EpochBudget, "a block to raise the base fee", func() (bool, error) {
-		head := c.Height(t)
+		head := c.Height(t) - 1 // scan only heights below the head
 		for ; next <= head; next++ {
 			if bf := c.BaseFeeAt(t, n, next); bf.Cmp(floor) > 0 {
 				peak = bf

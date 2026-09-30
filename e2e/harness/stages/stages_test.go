@@ -82,16 +82,18 @@ func TestPlan_splitsDestructive(t *testing.T) {
 }
 
 type fakeExec struct {
-	mu    sync.Mutex
-	calls [][]string
-	envs  [][]string
-	exit  map[string]int
+	mu      sync.Mutex
+	calls   [][]string
+	envs    [][]string
+	budgets []time.Duration
+	exit    map[string]int
 }
 
 func (f *fakeExec) run(_ context.Context, c Command) (int, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, c.Args)
 	f.envs = append(f.envs, c.Env)
+	f.budgets = append(f.budgets, c.Budget)
 	f.mu.Unlock()
 	pkg := c.Args[len(c.Args)-1]
 	fmt.Fprintf(c.Stdout, `{"Action":"run","Package":"%s","Test":"TestX"}`+"\n", pkg)
@@ -130,8 +132,13 @@ func TestRun_allStagesDestructiveLastAndEnv(t *testing.T) {
 		t.Fatalf("env %s", env)
 	}
 	args := strings.Join(fe.calls[0], " ")
-	if !strings.Contains(args, "-tags e2e_fleet -json -count=1 -timeout 1m0s") {
+	// The binary's own timeout (which runs no cleanup) sits a grace period
+	// past the stage budget the executor enforces with an interrupt.
+	if !strings.Contains(args, "-tags e2e_fleet -json -count=1 -timeout 11m0s") {
 		t.Fatalf("args %s", args)
+	}
+	if fe.budgets[0] != time.Minute {
+		t.Fatalf("budget %v, want the stage timeout", fe.budgets[0])
 	}
 	if _, err := os.Stat(filepath.Join(r.ArtifactDir, GoTestDir, "stage-01-a.json")); err != nil {
 		t.Fatalf("output file: %v", err)
@@ -269,10 +276,24 @@ func TestRun_restoresNodesAfterEachDestructivePackage(t *testing.T) {
 func TestWorstCase_parallelOnceDestructiveEach(t *testing.T) {
 	steps, _ := Plan(testStages(), []manifest.Manifest{{ID: "a", Stage: 1}, {ID: "b", Stage: 1},
 		{ID: "k1", Stage: 1, Destructive: true}, {ID: "k2", Stage: 2, Destructive: true}})
-	if got := WorstCase(steps); got != 3*time.Minute {
-		t.Fatalf("worst case %s, want 3m (stage 1: parallel + k1; stage 2: k2)", got)
+	// Each slot can run its stage timeout plus StopGrace before the runner kills it.
+	if got, want := WorstCase(steps), 3*time.Minute+3*StopGrace; got != want {
+		t.Fatalf("worst case %s, want %s (stage 1: parallel + k1; stage 2: k2, each with the stop grace)", got, want)
 	}
 	if got := WorstCase(nil); got != 0 {
 		t.Fatalf("no steps: %s", got)
+	}
+}
+
+func TestRun_prefixWrapsEveryPackage(t *testing.T) {
+	fe := &fakeExec{}
+	r := newRunner(t, fe)
+	r.Prefix = []string{"bwrap", "--"}
+	steps, _ := Plan(testStages(), []manifest.Manifest{{ID: "a", Stage: 1}})
+	if _, err := r.Run(context.Background(), steps, Options{Only: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(fe.calls[0][:4], " "); got != "bwrap -- go test" {
+		t.Fatalf("args %v", fe.calls[0])
 	}
 }

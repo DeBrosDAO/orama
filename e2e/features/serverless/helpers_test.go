@@ -52,11 +52,20 @@ type fixture struct {
 // it), creates the namespace and signs members in.
 func setup(t *testing.T) *fixture {
 	t.Helper()
+	return setupN(t, 1)
+}
+
+// setupN is setup for a test that creates total namespaces in all: it
+// reserves every slot at once (a second Reserve while holding one is a
+// hold-and-wait the harness refuses), and the fixture's namespace takes the
+// first; the test's own ns.New calls take the rest.
+func setupN(t *testing.T, total int) *fixture {
+	t.Helper()
 	if _, err := exec.LookPath("tinygo"); err != nil {
 		harness.SkipNotApplicable(t, "tinygo is not on the runner's PATH; `orama function build/deploy` compiles with it")
 	}
 	f := harness.Fleet(t)
-	tenancy.Reserve(t, harness.Fleet(t), 1)
+	tenancy.Reserve(t, f, total)
 	n := ns.New(t, f, ns.Options{Via: ns.ViaOperator})
 	c := harness.GW(t).WithBase(gw.NamespaceURL(f.State, n.Name))
 	return &fixture{f: f, n: n, c: c, admin: member(t, n, c, roleAdmin), runtime: member(t, n, c, roleRuntime)}

@@ -20,7 +20,8 @@ import (
 const (
 	// leaksFound is the exit code both scanners are told to use for findings.
 	leaksFound = 3
-	// maxExtractedFile bounds one file taken out of an archive to scan.
+	// maxExtractedFile bounds one file taken out of an archive to scan (512
+	// MiB); a larger one fails the scan, it is never truncated.
 	maxExtractedFile = 512 << 20
 )
 
@@ -153,13 +154,19 @@ func extractEntry(tr *tar.Reader, h *tar.Header, dest string) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return fmt.Errorf("failed to create the directory of %s: %w", h.Name, err)
 		}
+		if h.Size > maxExtractedFile {
+			return fmt.Errorf("entry %q is %d bytes, over the %d the scan extracts: scanning a truncated copy would miss what is past the cut", h.Name, h.Size, int64(maxExtractedFile))
+		}
 		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			return fmt.Errorf("failed to create %s: %w", h.Name, err)
 		}
-		_, cerr := io.Copy(out, io.LimitReader(tr, maxExtractedFile))
+		n, cerr := io.Copy(out, io.LimitReader(tr, maxExtractedFile+1))
 		if err := errors.Join(cerr, out.Close()); err != nil {
 			return fmt.Errorf("failed to extract %s: %w", h.Name, err)
+		}
+		if n > maxExtractedFile {
+			return fmt.Errorf("entry %q holds more than the %d bytes the scan extracts", h.Name, int64(maxExtractedFile))
 		}
 	}
 	return nil

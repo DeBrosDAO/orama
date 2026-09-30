@@ -140,7 +140,7 @@ func TestStopService_cleanupStartsAndWaits(t *testing.T) {
 	sh := &fakeShell{answer: func(cmd string) (Output, error) {
 		if strings.HasPrefix(cmd, "systemctl is-active") {
 			calls++
-			if calls < 2 {
+			if calls == 2 {
 				return Output{Stdout: "inactive\n", Exit: 3}, nil
 			}
 			return Output{Stdout: "active\n"}, nil
@@ -151,8 +151,30 @@ func TestStopService_cleanupStartsAndWaits(t *testing.T) {
 	t.Run("stop", func(t *testing.T) {
 		f.StopService(t, f.Node(t, "node-1"), "orama-node.service")
 	})
-	if calls != 2 {
-		t.Fatalf("cleanup polled %d times", calls)
+	// One read of the prior state, then the cleanup polled twice.
+	if calls != 3 {
+		t.Fatalf("is-active ran %d times", calls)
+	}
+	if countCmds(sh, "systemctl reset-failed orama-node.service") == 0 {
+		t.Fatalf("the cleanup never reset the failed state: %v", sh.cmds)
+	}
+}
+
+// TestKill_restoresAnInactiveUnitToInactive: a unit that was not running
+// before the test is stopped again by the cleanup, not started.
+func TestKill_restoresAnInactiveUnitToInactive(t *testing.T) {
+	sh := &fakeShell{answer: func(cmd string) (Output, error) {
+		if strings.HasPrefix(cmd, "systemctl is-active orama") {
+			return Output{Stdout: "inactive\n", Exit: 3}, nil
+		}
+		return Output{}, nil
+	}}
+	f := newFake(t, sh)
+	t.Run("kill", func(t *testing.T) {
+		f.Kill(t, f.Node(t, "node-1"), "orama-node.service")
+	})
+	if countCmds(sh, "systemctl start") != 0 || countCmds(sh, "systemctl stop orama-node.service") != 1 {
+		t.Fatalf("an inactive unit was not left inactive: %v", sh.cmds)
 	}
 }
 

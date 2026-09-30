@@ -49,6 +49,7 @@ func TestChainExport_stoppedNodeExportsValidGenesis(t *testing.T) {
 	c := chain.New(t)
 	victim := c.Node(t, len(c.Nodes())-1)
 	live := c.Epoch(t, victim, 0)
+	chainAdvancesAtCleanup(t, c)
 	c.F.StopService(t, victim, chain.Unit)
 	dir := "/tmp/e2e-chainexport"
 	t.Cleanup(func() { c.CleanupExec(t, victim, "rm -rf -- "+dir) })

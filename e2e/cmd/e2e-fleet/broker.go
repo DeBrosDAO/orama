@@ -176,12 +176,16 @@ func withBroker(ctx context.Context, lay layout, st *fleet.State, statePath stri
 	if err != nil {
 		return err
 	}
+	prefix, err := sandboxOf(lay, filepath.Dir(statePath), base)
+	if err != nil {
+		return err
+	}
 	b, err := startBrokerChild(ctx, statePath)
 	if err != nil {
 		return err
 	}
 	r := newStageRunner(lay, statePath, st.ArtifactDir)
 	r.BaseEnv, r.ExtraEnv = base, []string{broker.EnvSock + "=" + b.path, "HOME=" + home}
-	r.AfterDestructive = restoreNodes(st)
+	r.AfterDestructive, r.Prefix = restoreNodes(st), prefix
 	return errors.Join(fn(r), b.stop())
 }

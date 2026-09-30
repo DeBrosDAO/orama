@@ -38,9 +38,9 @@ func (r *Runner) Rerun(ctx context.Context, failed []FailedTest, timeout Duratio
 		name := fmt.Sprintf("%03d-%s", i+1, f.Feature)
 		rel := filepath.Join(RerunDir, name+".json")
 		args := []string{"go", "test", "-tags", BuildTag, "-json", "-count=1",
-			"-timeout", time.Duration(timeout).String(), "-run", "^" + regexp.QuoteMeta(f.Test) + "$",
+			"-timeout", binaryTimeout(timeout), "-run", "^" + regexp.QuoteMeta(f.Test) + "$",
 			"./features/" + f.Feature}
-		if _, msg := r.execTo(ctx, rel, filepath.Join(RerunDir, evidence.DirName, name), args); msg != "" {
+		if _, msg := r.execTo(ctx, rel, filepath.Join(RerunDir, evidence.DirName, name), args, time.Duration(timeout)); msg != "" {
 			return out, fmt.Errorf("failed to re-run %s %s: %s", f.Feature, f.Test, msg)
 		}
 		results, err := parseFile(filepath.Join(r.ArtifactDir, rel))

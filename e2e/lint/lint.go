@@ -2,7 +2,8 @@
 // servers: every feature has a manifest and a TestMain that calls
 // harness.Main, every file carries the e2e_fleet build tag, tests are named
 // Test{Function}_{scenario}, and nothing waits on a timer (time.Sleep,
-// time.After, time.NewTimer, time.Tick) or skips with a bare t.Skip.
+// time.After, time.NewTimer, time.Tick, time.NewTicker, time.AfterFunc) or
+// skips with a bare t.Skip.
 //
 // features/internal/ holds helper packages shared by features. They are not
 // features (no manifest, no TestMain, no tests), but the build tag, timer and
@@ -38,7 +39,7 @@ var bannedSkips = map[string]bool{"Skip": true, "Skipf": true, "SkipNow": true}
 
 // bannedTimers are the time functions that wait on a clock instead of a
 // readiness signal.
-var bannedTimers = map[string]bool{"Sleep": true, "After": true, "NewTimer": true, "Tick": true}
+var bannedTimers = map[string]bool{"Sleep": true, "After": true, "NewTimer": true, "Tick": true, "NewTicker": true, "AfterFunc": true}
 
 // InternalDir is the directory of shared helper packages under features/.
 const InternalDir = "internal"

@@ -27,7 +27,10 @@ func tagArgs(m module) []string {
 }
 
 // TestGovulncheck_modulesUnaffected: no module calls a function with a known
-// vulnerability (govulncheck reports only reachable ones).
+// vulnerability (govulncheck reports only reachable ones). Network: govulncheck
+// downloads the Go vulnerability database (vuln.go.dev) and, like go build,
+// may fetch modules through GOPROXY, from the runner; it sends module paths
+// and versions, never source.
 func TestGovulncheck_modulesUnaffected(t *testing.T) {
 	t.Parallel()
 	realistic.Tool(t, "govulncheck", "install golang.org/x/vuln/cmd/govulncheck to scan for known vulnerabilities")

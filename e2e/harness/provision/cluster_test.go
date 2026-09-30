@@ -124,7 +124,7 @@ func TestAddExtra_featureProcessUsesTheBroker(t *testing.T) {
 		t.Fatalf("destroy: %v, extras %v", err, st.Extras)
 	}
 	st.Nodes = []fleet.Node{{Name: "node-1", PublicIP: "203.0.113.1"}}
-	if err := DestroyNode(context.Background(), st, "203.0.113.1"); err == nil {
+	if err := DestroyNode(context.Background(), st, "203.0.113.1"); err == nil || !strings.Contains(err.Error(), "outside any feature process") {
 		t.Fatal("a feature process destroyed a core node")
 	}
 	if _, err := AddEvalCluster(context.Background(), st, "evalx"); err != nil {

@@ -17,7 +17,8 @@ destructive: true
 requires:
   extra_nodes: 0
   probe: false
-  chain: false
+  # B5, B6, C and D run against the chain (chainNodes, the chain RPC).
+  chain: true
 covers:
   cli:
     - orama operator list

@@ -185,8 +185,9 @@ func (p *Pacer) budgetFor(bucket string) (Budget, error) {
 	return Budget{}, fmt.Errorf("unknown pacing bucket %q: use pace.BucketCred or pace.ChallengeBucket(wallet)", bucket)
 }
 
-// timerSleep waits d or until ctx ends. It is the only timer wait of the
-// harness: pacing is a budget over time, not a readiness signal to poll.
+// timerSleep waits d or until ctx ends. Pacing is a budget over time, not a
+// readiness signal to poll, so this is a plain timer wait (the lint allows
+// timers in the harness only, never in feature packages).
 func timerSleep(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()

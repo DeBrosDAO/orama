@@ -17,28 +17,50 @@ const blockMaxGas = 100_000_000
 // maxMemoChars is x/auth's default MaxMemoCharacters (the app keeps it).
 const maxMemoChars = 256
 
-// TestTx_replayRefused: broadcasting a delivered transaction again is refused
-// (its sequence is spent), and state does not change a second time.
+// wrongAccountNumberDelta moves the signed account number far from the
+// signer's own.
+const wrongAccountNumberDelta = 1000
+
+// TestTx_replayRefused: broadcasting a delivered transaction again to the
+// same node is refused before CheckTx runs: CometBFT's mempool cache still
+// holds it (mempool/clist_mempool.go ErrTxInCache), which the SDK client
+// reports as sdk/19 ErrTxInMempoolCache with exit 0 (client/broadcast.go
+// CheckCometError). Under k's lock, k's sequence does not move.
 func TestTx_replayRefused(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := c.FundedValidator(t, 1, chain.Orama(1))
 	first := chain.RequireOK(t, "original", c.Submit(t, k, chain.TxOptions{}, harmlessMsg(t, c, k)))
-	again := c.Broadcast(t, k.Node, first.Signed)
-	if again.OK() {
-		t.Fatalf("the replay was delivered: %s", again)
+	again, before, after := c.ReplayLocked(t, k, first.Signed)
+	if again.Stage != chain.StageCheck || again.Codespace != sdkSpace || again.Code != codeTxInMempoolCache {
+		t.Fatalf("want the replay refused as %s/%d at CheckTx, got %s", sdkSpace, codeTxInMempoolCache, again)
 	}
-	if again.Stage == chain.StageRPC {
-		if !strings.Contains(again.Log, "already exists") {
-			t.Fatalf("the RPC refused the replay for another reason: %s", again.Log)
-		}
-		return
+	if after != before {
+		t.Fatalf("the replay moved %s's sequence from %d to %d", k.Address, before, after)
 	}
-	chain.RequireCode(t, "replay", again, sdkSpace, codeWrongSequence, "account sequence mismatch")
+}
+
+// TestTx_spentSequenceRefused: a NEW body (its own memo, so it is no cached
+// replay) signed for a sequence the account already spent is refused by
+// CheckTx.
+func TestTx_spentSequenceRefused(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	k := c.FundedValidator(t, 1, chain.Orama(1))
+	chain.RequireOK(t, "spend a sequence", c.Submit(t, k, chain.TxOptions{}, harmlessMsg(t, c, k)))
+	acc, ok := c.AccountOf(t, k.Node, k.Address)
+	if !ok || acc.Sequence == 0 {
+		t.Fatalf("validator %s has no spent sequence (account found %v, sequence %d)", k.Address, ok, acc.Sequence)
+	}
+	opts := chain.TxOptions{Offline: true, AccountNumber: acc.Number, Sequence: acc.Sequence - 1, Memo: chain.UniqueID(t, "spent-")}
+	r := c.Broadcast(t, k.Node, c.Sign(t, k, opts, harmlessMsg(t, c, k)))
+	chain.RequireCode(t, "spent sequence", r, sdkSpace, codeWrongSequence, "account sequence mismatch")
 }
 
 // TestTx_badSequenceRefused: a transaction signed for a sequence ahead of (or
-// behind) the account's is refused by CheckTx.
+// behind) the account's is refused by CheckTx. Each body carries a unique
+// memo, so no earlier byte-identical transaction answers from the mempool
+// cache instead.
 func TestTx_badSequenceRefused(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -51,21 +73,21 @@ func TestTx_badSequenceRefused(t *testing.T) {
 		if seq == acc.Sequence {
 			continue
 		}
-		signed := c.Sign(t, k, chain.TxOptions{Offline: true, AccountNumber: acc.Number, Sequence: seq}, harmlessMsg(t, c, k))
-		r := c.Broadcast(t, k.Node, signed)
+		opts := chain.TxOptions{Offline: true, AccountNumber: acc.Number, Sequence: seq, Memo: chain.UniqueID(t, "badseq-")}
+		r := c.Broadcast(t, k.Node, c.Sign(t, k, opts, harmlessMsg(t, c, k)))
 		chain.RequireCode(t, "sequence out of order", r, sdkSpace, codeWrongSequence, "account sequence mismatch")
 	}
 }
 
 // TestTx_wrongAccountNumberRefused: the signature commits to the account
-// number; another one fails signature verification.
+// number; another one fails signature verification. It is signed for the
+// live sequence and broadcast under k's lock, so no sequence race can turn
+// the refusal into a sequence mismatch.
 func TestTx_wrongAccountNumberRefused(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := c.FundedValidator(t, 1, chain.Orama(1))
-	acc, _ := c.AccountOf(t, k.Node, k.Address)
-	signed := c.Sign(t, k, chain.TxOptions{Offline: true, AccountNumber: acc.Number + 1000, Sequence: acc.Sequence}, harmlessMsg(t, c, k))
-	r := c.Broadcast(t, k.Node, signed)
+	r := c.SignAndBroadcastLocked(t, k, chain.TxOptions{}, chain.LockedEdit{AccountNumberDelta: wrongAccountNumberDelta}, harmlessMsg(t, c, k))
 	chain.RequireCode(t, "wrong account number", r, sdkSpace, codeSigVerifyFailed, "signature verification failed")
 }
 
@@ -75,8 +97,7 @@ func TestTx_wrongChainIDRefused(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := c.FundedValidator(t, 1, chain.Orama(1))
-	signed := c.Sign(t, k, chain.TxOptions{ChainID: c.ID + "-other"}, harmlessMsg(t, c, k))
-	r := c.Broadcast(t, k.Node, signed)
+	r := c.SignAndBroadcastLocked(t, k, chain.TxOptions{ChainID: c.ID + "-other"}, chain.LockedEdit{}, harmlessMsg(t, c, k))
 	chain.RequireCode(t, "wrong chain id", r, sdkSpace, codeSigVerifyFailed, "signature verification failed")
 }
 
@@ -95,23 +116,14 @@ func TestTx_wrongSignerRefused(t *testing.T) {
 	chain.RequireCode(t, "body re-pointed at another validator", r, sdkSpace, codeInvalidPubKey, "pubKey does not match signer address")
 }
 
-// TestTx_tamperedBodyRefused: changing one byte of a signed body (the memo)
-// breaks the signature.
+// TestTx_tamperedBodyRefused: changing the memo of a signed body breaks the
+// signature (signed and broadcast under k's lock, like the account number
+// test).
 func TestTx_tamperedBodyRefused(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := c.FundedValidator(t, 1, chain.Orama(1))
-	signed := c.Sign(t, k, chain.TxOptions{Memo: "e2e original"}, harmlessMsg(t, c, k))
-	var tx map[string]any
-	if err := json.Unmarshal(signed, &tx); err != nil {
-		t.Fatal(err)
-	}
-	tx["body"].(map[string]any)["memo"] = "e2e tampered"
-	forged, err := json.Marshal(tx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := c.Broadcast(t, k.Node, forged)
+	r := c.SignAndBroadcastLocked(t, k, chain.TxOptions{Memo: "e2e original"}, chain.LockedEdit{Memo: "e2e tampered"}, harmlessMsg(t, c, k))
 	chain.RequireCode(t, "tampered memo", r, sdkSpace, codeSigVerifyFailed, "signature verification failed")
 }
 

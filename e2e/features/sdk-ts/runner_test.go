@@ -5,16 +5,19 @@ package sdkts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/cliconf"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/evidence"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
@@ -25,6 +28,11 @@ import (
 const (
 	// vitestBudget bounds the whole TypeScript run.
 	vitestBudget = 20 * time.Minute
+	// vitestWaitDelay bounds the output pipes staying open after vitest's
+	// process group was killed.
+	vitestWaitDelay = 10 * time.Second
+	// sdkTestsDir is the SDK's own e2e suite, under sdk/.
+	sdkTestsDir = "tests/e2e"
 	// featureTestsDir holds this feature's TypeScript tests.
 	featureTestsDir = "e2e/features/sdk-ts/tests"
 	// The TypeScript tests' credential calls are not paced by the harness
@@ -69,20 +77,44 @@ func TestSDKTypeScript_suiteAgainstFleet(t *testing.T) {
 	dir := t.TempDir()
 	cfg := writeVitestConfig(t, dir, sdkDir, filepath.Join(root, featureTestsDir))
 	report := filepath.Join(dir, "vitest-report.json")
+	exit := runVitest(t, f, pnpm, sdkDir, cfg, report, env)
+	r := readReport(t, report)
+	requireEveryFile(t, r, []string{filepath.Join(sdkDir, sdkTestsDir), filepath.Join(root, featureTestsDir)})
+	if replay(t, r, f.Redact) == 0 && exit != 0 {
+		t.Errorf("vitest exited %d with no failed assertion (a hook, a load or a teardown failed): see the recorded vitest output", exit)
+	}
+}
+
+// runVitest runs the suite in a process group of its own, killed as a whole
+// (pnpm, node and any worker) when vitestBudget passes, with its output
+// recorded as evidence. It returns vitest's exit code and fails when vitest
+// could not run or wrote no report.
+func runVitest(t *testing.T, f *fleet.Fleet, pnpm, sdkDir, cfg, report string, env []string) int {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), vitestBudget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, pnpm, "--dir", sdkDir, "exec", "vitest", "run",
 		"--config", cfg, "--reporter=json", "--outputFile="+report)
-	cmd.Env, cmd.Dir = env, dir
-	out, err := cmd.CombinedOutput()
-	var exitErr *exec.ExitError
-	if err != nil && !errors.As(err, &exitErr) {
+	cmd.Env, cmd.Dir = env, filepath.Dir(report)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return fmt.Errorf("failed to kill vitest's process group %d: %w", cmd.Process.Pid, err)
+		}
+		return nil
+	}
+	cmd.WaitDelay = vitestWaitDelay
+	res, err := evidence.RunRecorded(t, f.Recorder(), "vitest", cmd)
+	if err != nil {
 		t.Fatalf("failed to run vitest: %v", err)
 	}
-	if _, statErr := os.Stat(report); statErr != nil {
-		t.Fatalf("vitest exited without a report (%v):\n%s", err, f.Redact(string(out)))
+	if ctx.Err() != nil {
+		t.Fatalf("vitest did not finish within %v and was killed", vitestBudget)
 	}
-	replay(t, readReport(t, report), f.Redact)
+	if _, statErr := os.Stat(report); statErr != nil {
+		t.Fatalf("vitest exited %d without a report:\n%s%s", res.Exit, f.Redact(res.Stdout), f.Redact(res.Stderr))
+	}
+	return res.Exit
 }
 
 // suiteEnv is the whole environment of the vitest process: nothing of the

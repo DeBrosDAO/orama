@@ -19,6 +19,15 @@ import (
 // sealedReplicas is the replica count the round trip seals.
 const sealedReplicas = 3
 
+// The CLI's own refusal texts: storagefile.ErrNotForKey (a slot opened as
+// another slot), storagecmd secretFile (a seed file others can read) and
+// storageclient.ErrNotFound (a deal the chain does not hold).
+const (
+	notForKey       = "storage file cannot be opened with this key"
+	seedModeRefused = "chmod 600 it"
+	dealNotFound    = "not found on chain"
+)
+
 var sealedRoot = regexp.MustCompile(`(?m)^slot (\d+) root ([0-9a-f]{64})$`)
 
 // sealFixture is a plaintext, its two seeds and a nonce, in a private dir.
@@ -80,7 +89,7 @@ func TestStorageFiles_sealOpenRewrapRoundTrip(t *testing.T) {
 	}
 	wrongOut := filepath.Join(f.dir, "wrong")
 	infra.ExpectRefused(t, infra.Run(t, cli, "storage", "open", "--in", filepath.Join(out, "slot-1"), "--nonce", f.nonce, "--slot", "2",
-		"--out", wrongOut, "--seed-file", f.seed, "--repair-seed-file", f.repair))
+		"--out", wrongOut, "--seed-file", f.seed, "--repair-seed-file", f.repair), notForKey)
 	if _, err := os.Stat(wrongOut); err == nil {
 		t.Errorf("a failed open wrote %s", wrongOut)
 	}
@@ -88,7 +97,7 @@ func TestStorageFiles_sealOpenRewrapRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	infra.ExpectRefused(t, infra.Run(t, cli, "storage", "open", "--in", filepath.Join(out, "slot-1"), "--nonce", f.nonce, "--slot", "1",
-		"--out", wrongOut, "--seed-file", f.seed, "--repair-seed-file", f.repair))
+		"--out", wrongOut, "--seed-file", f.seed, "--repair-seed-file", f.repair), seedModeRefused)
 }
 
 // TestStorageFiles_putAndGetCheckTheChainFirst: `orama storage put` checks
@@ -107,13 +116,13 @@ func TestStorageFiles_putAndGetCheckTheChainFirst(t *testing.T) {
 	infra.ExpectExit(t, infra.Run(t, cli, "storage", "seal", "--in", f.plain, "--nonce", f.nonce, "--out-dir", out,
 		"--seed-file", f.seed, "--repair-seed-file", f.repair), infra.ExitOK)
 	put := infra.Run(t, cli, "storage", "put", "--deal-id", "987654321", "--dir", out, "--rpc", rpc, "--wait", "15s")
-	infra.ExpectRefused(t, put, "987654321")
+	infra.ExpectRefused(t, put, "987654321", dealNotFound)
 	if bytes.Contains([]byte(put.Stdout), []byte("uploaded")) {
 		t.Errorf("put reported an upload for a deal that does not exist: %s", put.Stdout)
 	}
 	got := filepath.Join(f.dir, "got")
 	infra.ExpectRefused(t, infra.Run(t, cli, "storage", "get", "--deal-id", "987654321", "--out", got, "--rpc", rpc,
-		"--seed-file", f.seed, "--repair-seed-file", f.repair))
+		"--seed-file", f.seed, "--repair-seed-file", f.repair), dealNotFound)
 	if _, err := os.Stat(got); err == nil {
 		t.Errorf("a failed get wrote %s", got)
 	}

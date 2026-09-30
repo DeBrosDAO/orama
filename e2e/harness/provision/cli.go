@@ -64,6 +64,9 @@ type command struct {
 	stdin []byte
 	// log is the file that receives stdout and stderr; empty for none.
 	log string
+	// redact is applied to the log and to the output an error quotes; nil
+	// redacts the environment's secrets and the known credential shapes.
+	redact func(string) string
 }
 
 func (c command) String() string { return c.name + " " + strings.Join(c.args, " ") }
@@ -104,28 +107,51 @@ func (execCommander) Run(ctx context.Context, c command) (string, error) {
 	if c.stdin != nil {
 		cmd.Stdin = bytes.NewReader(c.stdin)
 	}
+	red := c.redact
+	if red == nil {
+		red = secrets.FromEnv(secrets.LookupEnv).Redact
+	}
 	var out bytes.Buffer
 	tail := &tailWriter{limit: cmdTailBytes}
-	var logW io.Writer = io.Discard
-	if c.log != "" {
-		f, err := os.OpenFile(c.log, os.O_WRONLY|os.O_CREATE|os.O_APPEND, logFileMode)
-		if err != nil {
-			return "", fmt.Errorf("failed to open the command log %s: %w", c.log, err)
-		}
-		defer f.Close()
-		logW = f
+	logW, closeLog, err := openCommandLog(c.log, red)
+	if err != nil {
+		return "", err
 	}
 	cmd.Stdout = io.MultiWriter(&out, tail, logW)
 	cmd.Stderr = io.MultiWriter(tail, logW)
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	if err := closeLog(); err != nil {
+		runErr = errors.Join(runErr, err)
+	}
+	if runErr != nil {
 		code := -1
 		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if errors.As(runErr, &ee) {
 			code = ee.ExitCode()
 		}
-		return out.String(), &cmdError{cmd: c.String(), exit: code, tail: tail.String(), err: err}
+		return out.String(), &cmdError{cmd: red(c.String()), exit: code, tail: red(tail.String()), err: runErr}
 	}
 	return out.String(), nil
+}
+
+// openCommandLog opens the command log at path (none when empty) behind a
+// writer that redacts it line by line; the returned func flushes and
+// closes it.
+func openCommandLog(path string, red func(string) string) (io.Writer, func() error, error) {
+	if path == "" {
+		return io.Discard, func() error { return nil }, nil
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, logFileMode)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open the command log %s: %w", path, err)
+	}
+	w := secrets.NewRedactingWriter(f, red)
+	return w, func() error {
+		if err := errors.Join(w.Close(), f.Close()); err != nil {
+			return fmt.Errorf("failed to finish the command log %s: %w", path, err)
+		}
+		return nil
+	}, nil
 }
 
 // tailWriter keeps the last limit bytes; stdout and stderr write to it from

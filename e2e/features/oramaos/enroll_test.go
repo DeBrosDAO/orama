@@ -42,6 +42,7 @@ var loginPrompt = regexp.MustCompile(`(?m)login:\s*$`)
 // accepted exactly once, and the enrollment port closed after it
 // (docs/ORAMAOS_DEPLOYMENT.md "Enrollment Flow"; docs/SECURITY.md).
 func TestOramaOS_firstBootEnrollmentContract(t *testing.T) {
+	t.Parallel()
 	v := bootVM(t)
 	code := v.waitConsole(t, codeLine, "the registration code on the console")[1]
 	if len(code) != codeHex {

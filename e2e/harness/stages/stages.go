@@ -153,7 +153,7 @@ func WorstCase(steps []Step) time.Duration {
 		if len(s.Parallel) > 0 {
 			n++
 		}
-		d += time.Duration(n) * time.Duration(s.Stage.Timeout)
+		d += time.Duration(n) * (time.Duration(s.Stage.Timeout) + StopGrace)
 	}
 	return d
 }

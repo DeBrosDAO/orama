@@ -486,7 +486,7 @@ Synthetic events are published **on the same topic** the state lives on, with
 the `_orama` control-frame discriminator (same dispatch pattern as the
 `auth.refresh` frame). Subscribers update their local view from the stream:
 
-```json
+```jsonl
 {"_orama":"ephemeral.set",  "topic":"typing:room1", "key":"user-7", "client_id":"ws-abc", "payload":"<base64>"}
 {"_orama":"ephemeral.clear","topic":"typing:room1", "key":"user-7", "client_id":"ws-abc", "reason":"disconnect"}
 ```
@@ -619,7 +619,7 @@ orama function triggers delete call-push-handler <trigger-id>
 
 When triggered via PubSub, the function receives this JSON via stdin:
 
-```json
+```jsonc
 {
   "topic": "calls:invite",
   "data": { ... },
@@ -728,7 +728,7 @@ opened it for as long as it stays open:
 - A persistent socket stays open across token rotation with a control frame,
   answered with an `__orama_ack`:
 
-  ```json
+  ```jsonl
   {"__orama":"auth.refresh","jwt":"<new token>"}
   {"__orama_ack":"auth.refresh","ok":true,"subject":"<wallet>"}
   ```

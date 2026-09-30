@@ -30,6 +30,12 @@ type Command struct {
 	Args   []string
 	Stdout io.Writer
 	Stderr io.Writer
+	// Budget is how long the command may run before it is stopped like a
+	// cancelled one (stopSignal, then SIGKILL after the grace period): the
+	// stage timeout. 0 is no budget. The runner hands go test a -timeout of
+	// Budget+StopGrace, so the test binary is interrupted (and its cleanups
+	// run) instead of panicking on its own timeout, which runs none.
+	Budget time.Duration
 }
 
 // Executor starts a command and returns its exit code. err is reserved for a
@@ -45,25 +51,33 @@ func ExecCommand(ctx context.Context, c Command) (int, error) {
 }
 
 func execWithGrace(ctx context.Context, c Command, grace time.Duration) (int, error) {
-	cmd := exec.CommandContext(ctx, c.Args[0], c.Args[1:]...)
+	runCtx, cancel := context.WithCancel(ctx)
+	if c.Budget > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, c.Budget)
+	}
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, c.Args[0], c.Args[1:]...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = c.Dir, c.Env, c.Stdout, c.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return signalGroup(cmd.Process, stopSignal) }
 	cmd.WaitDelay = grace
 	err := cmd.Run()
-	var killErr error
-	if ctx.Err() != nil && cmd.Process != nil {
+	var stopErr error
+	if runCtx.Err() != nil && cmd.Process != nil {
 		// Whatever outlived the grace period (or the go command) goes now.
-		killErr = signalGroup(cmd.Process, syscall.SIGKILL)
+		stopErr = signalGroup(cmd.Process, syscall.SIGKILL)
+	}
+	if ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		stopErr = errors.Join(fmt.Errorf("the package overran its stage timeout of %v and was interrupted: raise the stage timeout in stages.yaml or shorten the package", c.Budget), stopErr)
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode(), killErr
+		return exitErr.ExitCode(), stopErr
 	}
 	if err != nil {
-		return -1, errors.Join(fmt.Errorf("failed to run %v: %w", c.Args, err), killErr)
+		return -1, errors.Join(fmt.Errorf("failed to run %v: %w", c.Args, err), stopErr)
 	}
-	return 0, killErr
+	return 0, stopErr
 }
 
 // signalGroup signals the process group p leads. A group that is already

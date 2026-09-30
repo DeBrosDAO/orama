@@ -36,7 +36,9 @@ func brokerDestroy(ctx context.Context, b *broker.Client, st *fleet.State, host 
 			return nil
 		}
 	}
-	return fmt.Errorf("%s is not an extra server of run %s: a feature process destroys only its extras (core nodes: e2e-fleet hook destroy)", host, st.RunID)
+	return fmt.Errorf("%s is not an extra server of run %s: a feature process destroys only extras it created; "+
+		"core nodes and probes need the cloud credentials, which only the runner holds (`e2e-fleet hook destroy` run outside any feature process)",
+		host, st.RunID)
 }
 
 // brokerRemoveExtra removes the extra called name through the broker and

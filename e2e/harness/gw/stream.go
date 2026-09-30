@@ -66,7 +66,8 @@ func (c *Client) Stream(ctx context.Context, r Req) (*StreamResp, error) {
 		req.Header.Set("Accept", eventStreamType)
 	}
 	body := snapshotBody(req)
-	if _, err := c.paceRequest(ctx, req, body); err != nil {
+	paced, err := c.paceRequest(ctx, req, body)
+	if err != nil {
 		return nil, err
 	}
 	s := &StreamResp{c: c, req: req, reqBody: body, start: time.Now()}
@@ -77,7 +78,18 @@ func (c *Client) Stream(ctx context.Context, r Req) (*StreamResp, error) {
 	}
 	s.Status, s.Header, s.body = resp.StatusCode, resp.Header, resp.Body
 	s.br = bufio.NewReaderSize(resp.Body, readBufferBytes)
+	if paced && resp.StatusCode == http.StatusTooManyRequests {
+		return nil, s.pacingFailure()
+	}
 	return s, nil
+}
+
+// pacingFailure closes a paced stream the gateway answered 429 and returns
+// the *PacingError, as Do does for a paced request.
+func (s *StreamResp) pacingFailure() error {
+	raw, rerr := io.ReadAll(io.LimitReader(s.body, maxEventLineBytes))
+	perr := pacingErr(s.req, &Response{Status: s.Status, Header: s.Header, Body: raw})
+	return errors.Join(perr, rerr, s.Close())
 }
 
 // readBufferBytes is the stream reader's buffer.

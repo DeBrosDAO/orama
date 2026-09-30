@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -116,7 +117,7 @@ func TestPhaseB4_identityKeyBindingFromTheLiveKey(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Stdout), &b); err != nil || b.Signature == "" {
 		t.Fatalf("bind printed no binding: %v %s", err, res.Stdout)
 	}
-	status := f.MustExec(t, n, "curl -fsS http://127.0.0.1:31001/status").Stdout
+	status := f.MustExec(t, n, fmt.Sprintf("curl -fsS http://127.0.0.1:%d/status", infra.ChainRPCPort)).Stdout
 	var st struct {
 		Result struct {
 			ValidatorInfo struct {

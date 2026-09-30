@@ -2,6 +2,8 @@ package provision
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -65,4 +67,17 @@ func TestDown_failsWhenSomethingIsLeft(t *testing.T) {
 	if err := down(context.Background(), st, &testLogger{}, e.d); err == nil || !strings.Contains(err.Error(), "left 0 servers, 0 firewalls and 1 SSH keys") {
 		t.Fatalf("err %v", err)
 	}
+}
+
+func (f *fakeCloud) GetServer(ctx context.Context, id int64) (*hetzner.Server, error) {
+	if f.ctxAware && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.servers[id]
+	if !ok {
+		return nil, &hetzner.APIError{Method: "GET", Path: fmt.Sprintf("/servers/%d", id), Status: http.StatusNotFound, Code: "not_found"}
+	}
+	return &s, nil
 }

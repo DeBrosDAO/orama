@@ -60,14 +60,17 @@ func TestReferenceFunctions_cronPubsubPushAndFetch(t *testing.T) {
 		t.Errorf("the relay trigger fired %d times for one publish, want once", n)
 	}
 	checkCron(t, tn, usr.Token())
-	out, err := realistic.Invoke(t.Context(), tn.C, "ref-fetch", usr.Token(), map[string]string{"url": publicURL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	status, _ := out["status"].(float64)
-	if size, _ := out["bytes"].(float64); status != http.StatusOK || size == 0 {
-		t.Errorf("http_fetch of %s: %v", publicURL, out)
-	}
+	t.Run("http_fetch reaches a public page", func(t *testing.T) {
+		realistic.RequireReachableFromNode(t, tn.F, tn.F.State.Nodes[0], publicURL)
+		out, err := realistic.Invoke(t.Context(), tn.C, "ref-fetch", usr.Token(), map[string]string{"url": publicURL})
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, _ := out["status"].(float64)
+		if size, _ := out["bytes"].(float64); status != http.StatusOK || size == 0 {
+			t.Errorf("http_fetch of %s: %v", publicURL, out)
+		}
+	})
 }
 
 func randomTopic(t testing.TB) string {

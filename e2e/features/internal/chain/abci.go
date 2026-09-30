@@ -24,6 +24,11 @@ import (
 
 var grpcPath = regexp.MustCompile(`^/(orama\.[a-z]+\.v1\.Query|cosmos\.base\.reflection\.v1beta1\.ReflectionService)/[A-Z][A-Za-z]+$`)
 
+// storePath is a raw KV read of one module store (/store/<name>/key, the
+// request being the key): it answers "no such store" for a store the app
+// does not mount, whatever the module's query methods are called.
+var storePath = regexp.MustCompile(`^/store/[a-z]+/key$`)
+
 // PB is a protobuf message under construction.
 type PB []byte
 
@@ -50,12 +55,12 @@ type ABCIAnswer struct {
 	Value []byte
 }
 
-// ABCIQuery asks path (a gRPC method, /orama.<module>.v1.Query/<Rpc>) with
-// the encoded request on node n.
+// ABCIQuery asks path (a gRPC method, /orama.<module>.v1.Query/<Rpc>, or a
+// module store read, /store/<name>/key) with the encoded request on node n.
 func (c *Chain) ABCIQuery(t testing.TB, n fleet.Node, path string, req PB) ABCIAnswer {
 	t.Helper()
-	if !grpcPath.MatchString(path) {
-		t.Fatalf("abci_query path %q is not an orama Query method", path)
+	if !grpcPath.MatchString(path) && !storePath.MatchString(path) {
+		t.Fatalf("abci_query path %q is neither an orama Query method nor a module store read", path)
 	}
 	url := fmt.Sprintf(`%s/abci_query?path="%s"&data=0x%s`, RPCHTTP, path, hex.EncodeToString(req))
 	out := c.Run(t, n, QueryBudget, "curl -sS --max-time 20 "+fleet.ShellQuote(url))

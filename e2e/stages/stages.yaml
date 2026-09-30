@@ -1,20 +1,45 @@
 # Ordered stages of a fleet e2e run. A feature's manifest (features/<id>/feature.yaml)
 # names its stage. Inside a stage, non-destructive packages run in parallel;
-# destructive ones run alone, after them. The timeout is per package (go test -timeout).
-# Ids must run 1..11 in order: harness/manifest.MaxStage.
+# destructive ones run alone, after them. Ids must run 1..11 in order:
+# harness/manifest.MaxStage.
+#
+# The timeout is each package's budget. The runner interrupts a package that
+# spends it (SIGINT to its process group: running tests finish and their
+# t.Cleanup restore the fleet, harness/interrupt.go) and kills the group
+# stages.StopGrace (10m) later; go test itself gets -timeout <timeout + StopGrace>,
+# so its own panic (which runs no cleanup) never comes first. A timeout below
+# a package's worst case therefore fails it cleanly, never leaves a fault.
+#
+# Budget math (worst case per package, from the packages' own bounds):
+#   2  namespaces   provisioning packages create and tear down several
+#                   namespaces in sequence (ns.ReadyBudget 10m + TeardownBudget
+#                   5m each) under the fleet-wide namespace slots: 90m.
+#   4  data-plane   sdk-ts: namespace 15m + vitest 20m; sdk-go and
+#                   contracts-live wait up to 3m per Tor exchange and hold a
+#                   namespace each while queued on the slots: 90m.
+#   9  ops          perf: provisioning 15m + one data-plane namespace 15m +
+#                   bursts and the 3m pin wait + two tenants (deploy, function)
+#                   ~40m = ~75m; scanners: race run 45m beside the others: 90m.
+#   11 chaos-soak   soak: setup 20m + E2E_SOAK_MINUTES (30) + 6 faults x 16m
+#                   worst + teardown 15m, ~135m typical worst (soak_test.go
+#                   caps E2E_SOAK_MINUTES at what fits); chaos: 7 service
+#                   classes + 6 faults at up to 26m each, >150m worst, each
+#                   fault refused when the rest of the budget cannot hold it;
+#                   chaos-lifecycle: an interrupted upgrade 145m worst: 180m.
+# The other stages' packages are well inside their timeouts.
 stages:
   - id: 1
     name: bootstrap
     timeout: 30m
   - id: 2
     name: namespaces
-    timeout: 30m
+    timeout: 90m
   - id: 3
     name: auth
     timeout: 30m
   - id: 4
     name: data-plane
-    timeout: 30m
+    timeout: 90m
   - id: 5
     name: deployments-serverless
     timeout: 45m
@@ -29,10 +54,10 @@ stages:
     timeout: 45m
   - id: 9
     name: ops
-    timeout: 60m
+    timeout: 90m
   - id: 10
     name: upgrade
     timeout: 60m
   - id: 11
     name: chaos-soak
-    timeout: 120m
+    timeout: 180m

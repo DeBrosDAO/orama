@@ -48,6 +48,7 @@ func TestChaos_killEachServiceClassRecoversByItself(t *testing.T) {
 	f := harness.Fleet(t)
 	for _, sc := range realistic.ServiceClasses {
 		t.Run(sc.Name, func(t *testing.T) {
+			realistic.RequireFaultBudget(t, "killing "+sc.Name, faultWorst)
 			victim := victimFor(t, f, infra.RequireHealthy(t), sc)
 			if state := f.Unit(t, victim, sc.Unit); state != "active" {
 				t.Fatalf("%s: %s is %q before the kill", victim.Name, sc.Unit, state)

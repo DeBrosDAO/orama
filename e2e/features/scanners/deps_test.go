@@ -21,7 +21,9 @@ type auditReport struct {
 }
 
 // TestPnpmAudit_sdkProductionDependencies: no production dependency of the
-// SDKs has a known advisory, at any severity.
+// SDKs has a known advisory, at any severity. Network: pnpm audit sends the
+// lockfile's dependency list to the npm registry's advisory endpoint
+// (registry.npmjs.org) from the runner; nothing of the fleet is sent.
 func TestPnpmAudit_sdkProductionDependencies(t *testing.T) {
 	t.Parallel()
 	realistic.Tool(t, "pnpm", "install pnpm to audit the SDKs' dependencies")

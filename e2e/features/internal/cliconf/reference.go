@@ -125,7 +125,11 @@ func ParseReference(text string) (*Reference, error) {
 
 func parseSection(path string, line int, body []string) (Command, error) {
 	c := Command{Path: path, Line: line}
-	inTable, sawUsage := false, false
+	// prose is set by the first line after the usage block that is not the
+	// aliases line: the generator writes "Aliases: `a`" right after the usage
+	// block, before the Long text, so an "Aliases: ..." in the Long text is
+	// prose, not the command's aliases.
+	inTable, sawUsage, prose := false, false, false
 	for i := 0; i < len(body); i++ {
 		l := body[i]
 		switch {
@@ -134,16 +138,18 @@ func parseSection(path string, line int, body []string) (Command, error) {
 			i += 2
 		case c.Short == "" && !sawUsage && strings.TrimSpace(l) != "":
 			c.Short = strings.TrimSpace(l)
-		case strings.HasPrefix(l, aliasesPrefix):
+		case sawUsage && !prose && strings.HasPrefix(l, aliasesPrefix):
 			c.Aliases = ticked(l)
 		case strings.HasPrefix(l, subsPrefix):
-			c.Subcommands = ticked(l)
+			c.Subcommands, prose = ticked(l), true
 		case l == flagTableHeader:
-			inTable = true
+			inTable, prose = true, true
 		case inTable && strings.HasPrefix(l, "| `"):
 			c.Flags = append(c.Flags, flagNames(l)...)
 		case inTable && !strings.HasPrefix(l, "|"):
 			inTable = false
+		case sawUsage && strings.TrimSpace(l) != "":
+			prose = true
 		}
 	}
 	if !sawUsage {

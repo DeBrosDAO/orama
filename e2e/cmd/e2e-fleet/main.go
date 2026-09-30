@@ -25,6 +25,9 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/e2e/harness/config"
+	"github.com/DeBrosOfficial/network/e2e/harness/secrets"
 )
 
 // Exit codes.
@@ -80,11 +83,11 @@ func dispatch(ctx context.Context, args []string) int {
 	}
 	code, err := c.run(ctx, args[1:])
 	if errors.Is(err, errUsage) {
-		fmt.Fprintln(os.Stderr, "e2e-fleet:", err)
+		fmt.Fprintln(os.Stderr, "e2e-fleet:", redactText(err.Error()))
 		return exitUsage
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "e2e-fleet:", err)
+		fmt.Fprintln(os.Stderr, "e2e-fleet:", redactText(err.Error()))
 		if code == exitOK {
 			code = exitFail
 		}
@@ -106,9 +109,23 @@ func usage(cmds map[string]command) {
 	fmt.Fprint(os.Stderr, b.String())
 }
 
-// stdLogger is provision.Logger on stdout.
+// stdLogger is provision.Logger on stdout, redacted.
 type stdLogger struct{}
 
 func (stdLogger) Infof(format string, args ...any) {
-	fmt.Fprintf(os.Stdout, "e2e-fleet: "+format+"\n", args...)
+	fmt.Fprintln(os.Stdout, "e2e-fleet:", redactText(fmt.Sprintf(format, args...)))
+}
+
+// redactText masks the secret environment (sealed or not), the run's token
+// registry when E2E_FLEET_STATE names the run, and every credential shape,
+// in text the runner prints.
+func redactText(s string) string {
+	if path, ok := os.LookupEnv(config.EnvState); ok && path != "" {
+		red, err := secrets.ForRun(secrets.LookupEnv, path)
+		if err != nil {
+			return secrets.Withheld
+		}
+		return red.Redact(s)
+	}
+	return secrets.FromEnv(secrets.LookupEnv).Redact(s)
 }

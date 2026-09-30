@@ -70,8 +70,9 @@ func TestPhaseB6_unverifiedOramadIsNotStaged(t *testing.T) {
 	f.MustExec(t, n, "mkdir -m 0700 "+metaDir)
 	res := onNode(t, f, n, "global", "stage-oramad", "--binary", "/usr/lib/orama-global/bin/oramad",
 		"--release-metadata", metaDir, "--release-target", "oramad-linux-amd64", "--upgrade", stageName)
-	if res.Exit == exitOK {
-		t.Fatalf("%s: stage-oramad staged a binary with no release metadata:\n%s", n.Name, res.Stdout)
+	expectVerifyRefusal(t, f, n, res)
+	if strings.Contains(res.Stdout, "staged ") {
+		t.Errorf("%s: stage-oramad reported staging a binary with no release metadata:\n%s", n.Name, res.Stdout)
 	}
 	if f.Exec(t, n, "test -e "+staged).Exit == 0 {
 		t.Errorf("%s: a refused stage-oramad left %s behind", n.Name, staged)

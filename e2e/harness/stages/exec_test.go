@@ -81,3 +81,42 @@ func TestExecCommand_exitCodeAndMissingBinary(t *testing.T) {
 		t.Fatal("a missing binary was not an error")
 	}
 }
+
+// cleanupScript stands in for a package whose test overruns: it records the
+// interrupt (its cleanup) and exits.
+const cleanupScript = `#!/bin/sh
+trap 'echo cleaned > "$1"; exit 2' INT
+sleep 300 &
+wait
+`
+
+// overrunBudget leaves the shell ample time to install its trap before the
+// budget interrupts it, even on a loaded machine (the SIGINT of a shell that
+// has not reached its trap yet kills it instead).
+const overrunBudget = 5 * time.Second
+
+func TestExecCommand_overrunBudgetInterruptsAndCleanupRuns(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-go")
+	if err := os.WriteFile(script, []byte(cleanupScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cleaned := filepath.Join(dir, "cleaned")
+	exit, err := execWithGrace(context.Background(), Command{Args: []string{script, cleaned}, Budget: overrunBudget}, 2*overrunBudget)
+	if exit != 2 {
+		t.Fatalf("exit %d, want the trap's 2 (%v)", exit, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "overran its stage timeout") {
+		t.Fatalf("an overrun was not reported: %v", err)
+	}
+	if b, rerr := os.ReadFile(cleaned); rerr != nil || !strings.Contains(string(b), "cleaned") {
+		t.Fatalf("the overrunning package did not get SIGINT and clean up: %v", rerr)
+	}
+}
+
+func TestExecCommand_withinBudgetIsNotAnOverrun(t *testing.T) {
+	exit, err := ExecCommand(context.Background(), Command{Args: []string{"/bin/sh", "-c", "exit 0"}, Budget: time.Minute})
+	if err != nil || exit != 0 {
+		t.Fatalf("exit %d err %v", exit, err)
+	}
+}

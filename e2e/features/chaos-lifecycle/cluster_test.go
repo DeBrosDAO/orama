@@ -23,6 +23,12 @@ const (
 	upgradeDone     = "Rolling upgrade complete"
 	setupDone       = "setup complete"
 	joiners         = 2
+	// upgradeWorst: reaching the victim's step, the interrupted upgrade
+	// ending, the re-run completing, and the convergence after it.
+	upgradeWorst = lineBudget + 2*infra.UpgradeBudget + convergeBudget
+	// joinsWorst: the concurrent joins, the convergence with them, and the
+	// cleanup removing them and converging without them.
+	joinsWorst = 2*infra.InstallBudget + 2*convergeBudget
 )
 
 // TestChaosLifecycle_nodeKilledMidUpgrade: the node supervisor of the node
@@ -31,12 +37,13 @@ const (
 // cluster converges, and the node answers with the release every other node
 // runs (docs/CLI_REFERENCE.md "orama node upgrade").
 func TestChaosLifecycle_nodeKilledMidUpgrade(t *testing.T) {
+	realistic.RequireFaultBudget(t, "the interrupted upgrade", upgradeWorst)
 	f := harness.Fleet(t)
 	victim := infra.Followers(t, infra.RequireHealthy(t))[0]
 	cli := harness.CLI(t)
 	args := []string{"node", "upgrade", "--env", f.State.Env, "--node", victim.PublicIP, "--yes"}
 	p := start(t, cli, args...)
-	waitLine(t, p, upgradeStepLine+victim.PublicIP)
+	waitLine(t, p, upgradeStepLine+victim.PublicIP+" (")
 	f.Kill(t, victim, nodeUnit)
 	res := finish(t, p, infra.UpgradeBudget)
 	t.Logf("the interrupted upgrade exited %d", res.Exit)
@@ -66,6 +73,7 @@ func TestChaosLifecycle_nodeKilledMidUpgrade(t *testing.T) {
 // and the core cluster converges again (docs/DEV_DEPLOY.md;
 // docs/DEPLOYMENT_GUIDE.md "Cross-Node Routing").
 func TestChaosLifecycle_concurrentJoinsWhileDeploying(t *testing.T) {
+	realistic.RequireFaultBudget(t, "the concurrent joins", joinsWorst)
 	f := harness.Fleet(t)
 	infra.RequireHealthy(t)
 	tn := realistic.NewTenant(t)
@@ -75,10 +83,12 @@ func TestChaosLifecycle_concurrentJoinsWhileDeploying(t *testing.T) {
 	var hosts []string
 	for i := range joiners {
 		extra := infra.NewExtra(t, fmt.Sprintf("extra-chaos-%d", i))
-		t.Cleanup(func() { infra.RemoveIfMember(t, extra.PublicIP) })
 		setups = append(setups, infra.SetupArgs(t, extra, archive))
 		hosts = append(hosts, extra.PublicIP)
 	}
+	// One cleanup for every joiner, registered after the servers (so it runs
+	// before they are deleted): each is removed, then the core converges once.
+	t.Cleanup(func() { infra.RemoveMembers(t, f, cli, hosts...) })
 	results := runConcurrently(t, cli, setups)
 	u := tn.Deploy(t, "static", realistic.CopyApp(t, realistic.AppStatic, map[string]string{realistic.ReleaseMarker: "joins"}, nil), "joins")
 	for i, res := range results.wait() {

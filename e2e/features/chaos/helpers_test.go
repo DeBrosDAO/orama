@@ -27,7 +27,13 @@ const (
 	// Restart= or the node's supervisor, before the harness would start it.
 	recoverBudget  = 2 * time.Minute
 	convergeBudget = infra.ConvergeBudget
-	tableDDL       = "CREATE TABLE IF NOT EXISTS chaos (key TEXT PRIMARY KEY, phase TEXT NOT NULL)"
+	// faultWorst is the most one fault of this package can take with its
+	// recovery: the nodes serving through and after it (serveBudget each,
+	// three nodes), its own wait (the disk alert raising and clearing, or a
+	// unit's restart), and the convergence after it. No fault starts when
+	// less of the stage budget is left (realistic.RequireFaultBudget).
+	faultWorst = 3*serveBudget + 2*alertBudget + recoverBudget + convergeBudget
+	tableDDL   = "CREATE TABLE IF NOT EXISTS chaos (key TEXT PRIMARY KEY, phase TEXT NOT NULL)"
 )
 
 // others are the core nodes other than victim.

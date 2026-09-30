@@ -4,6 +4,7 @@ package docsclaims
 
 import (
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/cliconf"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
 var (
@@ -83,8 +85,12 @@ func unknownMentions(t testing.TB, ref *cliconf.Reference, files []string) []men
 	return out
 }
 
-// confirmUnknown keeps the mentions the binary under test also refuses: a
-// hidden command (serve-ipfs-cluster) is real though the reference omits it.
+// confirmUnknown keeps the mentions the binary under test also lacks. Only
+// --help is ever run, never the group itself: a runnable group (`orama
+// monitor`) takes any word as its argument and would run its action. A word
+// is known when the parent's help lists it under Available Commands, or when
+// it is a hidden command (serve-ipfs-cluster; the reference omits it too):
+// `orama <parent> <word> --help` then prints the word's own usage line.
 func confirmUnknown(t *testing.T, ms []mention) []mention {
 	t.Helper()
 	cli := harness.CLI(t)
@@ -92,18 +98,43 @@ func confirmUnknown(t *testing.T, ms []mention) []mention {
 	var out []mention
 	for _, m := range ms {
 		prefix := strings.Fields(m.Text)
-		key := strings.Join(prefix[:indexOf(prefix, m.Unknown)+1], " ")
-		refused, done := verdict[key]
+		at := indexOf(prefix, m.Unknown)
+		key := strings.Join(prefix[:at+1], " ")
+		unknown, done := verdict[key]
 		if !done {
-			args := append(strings.Fields(key)[1:], "--help")
-			refused = infra.Run(t, cli, args...).Exit != infra.ExitOK
-			verdict[key] = refused
+			unknown = !listed(t, cli, prefix[1:at], m.Unknown) && !hidden(t, cli, key)
+			verdict[key] = unknown
 		}
-		if refused {
+		if unknown {
 			out = append(out, m)
 		}
 	}
 	return out
+}
+
+// listed reports whether `orama <parent> --help` lists word under Available
+// Commands.
+func listed(t *testing.T, cli *oramacli.Runner, parent []string, word string) bool {
+	t.Helper()
+	res := infra.Run(t, cli, append(append([]string{}, parent...), "--help")...)
+	infra.ExpectExit(t, res, infra.ExitOK)
+	return slices.Contains(cliconf.ParseHelp(res.Stdout).Subcommands, word)
+}
+
+// hidden reports whether key ("orama a b") is a command the help does not
+// list: its --help succeeds with a usage line of its own, not the parent's.
+func hidden(t *testing.T, cli *oramacli.Runner, key string) bool {
+	t.Helper()
+	res := infra.Run(t, cli, append(strings.Fields(key)[1:], "--help")...)
+	if res.Exit != infra.ExitOK {
+		return false
+	}
+	for _, u := range cliconf.ParseHelp(res.Stdout).Usage {
+		if u == key || strings.HasPrefix(u, key+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 func indexOf(words []string, w string) int {

@@ -32,6 +32,9 @@ func TestNamespaceCap_liveDefaultIsTen(t *testing.T) {
 	}
 }
 
+// emissionInvariants are the verdicts `query emission invariants` answers.
+var emissionInvariants = []string{"minted_within_schedule", "supply_matches_minted"}
+
 // TestSupplyInvariant_holdsOnEveryNode: the emission module's invariants,
 // the supply rule among them (docs/CHAIN.md "Supply matches minted"), hold
 // on every co-hosted validator, asked the way docs/SECURITY_PLAYBOOKS.md and
@@ -48,17 +51,13 @@ func TestSupplyInvariant_holdsOnEveryNode(t *testing.T) {
 		if err := json.Unmarshal([]byte(out.Stdout), &inv); err != nil {
 			t.Fatalf("%s: emission invariants are not JSON: %v\n%s", n.Name, err, out.Stdout)
 		}
-		checked := 0
-		for name, v := range inv {
-			if ok, isBool := v.(bool); isBool {
-				checked++
-				if !ok {
-					t.Errorf("%s: emission invariant %s is broken: %s", n.Name, name, out.Stdout)
-				}
+		// Named, not counted: a renamed field or a false left out of the JSON
+		// (proto3 omits it) must fail, not shrink the set silently
+		// (chain/proto/orama/emission/v1/query.proto QueryInvariantsResponse).
+		for _, name := range emissionInvariants {
+			if ok, isBool := inv[name].(bool); !isBool || !ok {
+				t.Errorf("%s: emission invariant %s is %v, want true: %s", n.Name, name, inv[name], out.Stdout)
 			}
-		}
-		if checked == 0 {
-			t.Errorf("%s: the emission invariants answer holds no verdict: %s", n.Name, out.Stdout)
 		}
 	}
 }

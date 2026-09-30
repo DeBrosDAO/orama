@@ -189,7 +189,8 @@ func TestEmission_mintedMatchesScheduleAndSupply(t *testing.T) {
 	c := chain.New(t)
 	n := c.Node(t, 0)
 	for i := 0; i < 3; i++ {
-		h := c.Height(t)
+		// One below the head: a height whose state every query can read.
+		h := c.Height(t) - 1
 		e := c.Epoch(t, n, h)
 		completed := uint64(e.CurrentEpoch.Int64()) - 1
 		if want := validatorMinted(completed); e.CumulativeMinted.Cmp(want) != 0 {
@@ -228,10 +229,14 @@ func TestEmission_epochClosesOnlyWhenTimeAndBlocksHold(t *testing.T) {
 	c.Query(t, n, &p, "emission", "params")
 	dur := time.Duration(p.Params.EpochDurationSeconds.Int64()) * time.Second
 	minBlocks := p.Params.MinBlocksPerEpoch.Int64()
-	from := c.Height(t)
+	// Historical reads stay one below the head, a height whose state every
+	// query can read; hi is the head once the next block is committed.
+	from := c.Height(t) - 1
 	start := c.Epoch(t, n, from).CurrentEpoch
 	waitEpochAfter(t, c, start)
-	closeAt := firstHeightPast(t, c, from, c.Height(t), start)
+	hi := c.Height(t)
+	c.WaitHeight(t, hi+1)
+	closeAt := firstHeightPast(t, c, from, hi, start)
 	before, after := c.Epoch(t, n, closeAt-1), c.Epoch(t, n, closeAt)
 	prevHdr, closeHdr := header(t, c, closeAt-1), header(t, c, closeAt)
 	startedAt := time.Unix(0, before.EpochStartUnixNano.Int64())

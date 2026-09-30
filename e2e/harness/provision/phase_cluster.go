@@ -209,6 +209,6 @@ func fleetIP(nodes []fleet.Node, ip string) bool {
 // while waiting.
 func (r *run) runPolled(ctx context.Context, label string, args ...string) (string, error) {
 	c := command{name: r.st.OramaBin, args: args, env: r.cliEnv(),
-		log: filepath.Join(r.cfg.ArtifactDir, "provision-poll-"+sanitize(label)+".log")}
+		log: filepath.Join(r.cfg.ArtifactDir, "provision-poll-"+sanitize(label)+".log"), redact: r.red.Redact}
 	return r.d.cmd.Run(ctx, c)
 }

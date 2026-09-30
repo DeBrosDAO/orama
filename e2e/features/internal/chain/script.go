@@ -22,8 +22,12 @@ const (
 	markWaitErr = "__E2E_WAITERR__"
 	markSignErr = "__E2E_SIGNERR__"
 	markEnd     = "__E2E_END__"
-	// lockWaitSeconds bounds the wait for a key's lock, inside TxBudget.
+	// lockWaitSeconds bounds the wait for a key's turn, inside TxBudget.
+	// The queue is FIFO (lockScript), so a waiter is behind at most the
+	// transactions that arrived before it, never starved by later ones.
 	lockWaitSeconds = 480
+	// lockPollSeconds paces a waiter's look at the head of its key's queue.
+	lockPollSeconds = "0.2"
 	lockDir         = "/run/lock"
 )
 
@@ -38,6 +42,36 @@ func lockFile(k Key) string {
 		id = k.KeyringDir[strings.LastIndex(k.KeyringDir, "/")+1:] + "-" + k.Name
 	}
 	return lockDir + "/e2e-chain-" + lockNamePattern.ReplaceAllString(id, "-") + ".lock"
+}
+
+// lockScript waits for k's turn and takes k's lock, then removes $D and its
+// ticket on exit. flock alone is not FIFO: with a stage's chain packages
+// queueing on three keys, a waiter could lose the race every time until its
+// wait ran out. So each waiter first drops a ticket named by its arrival
+// time and pid in the key's queue directory and waits until its ticket is
+// the oldest one whose process is still alive (a dead waiter's ticket is
+// removed by whoever finds it), then takes the flock.
+func lockScript(k Key) string {
+	lock := lockFile(k)
+	queue := strings.TrimSuffix(lock, ".lock") + ".queue"
+	return fmt.Sprintf(`Q=%s
+mkdir -p "$Q" || exit 90
+TK="$Q/$(date +%%s%%N)-$$"
+trap 'rm -f -- "$TK"; rm -rf -- "$D"' EXIT
+: > "$TK" || exit 90
+END=$(( $(date +%%s) + %d ))
+while :; do
+  for f in "$Q"/*; do
+    [ "$f" = "$TK" ] && break 2
+    [ -d "/proc/${f##*-}" ] && break
+    rm -f -- "$f"
+  done
+  [ "$(date +%%s)" -lt "$END" ] || { echo lock timeout >&2; exit 91; }
+  sleep %s
+done
+exec 9>%s || exit 90
+flock -w %d 9 || { echo lock timeout >&2; exit 91; }
+`, fleet.ShellQuote(queue), lockWaitSeconds, lockPollSeconds, lock, lockWaitSeconds)
 }
 
 // feeScript rewrites the fee of $D/u.json: base_fee*gas+delta, or an absolute
@@ -118,7 +152,7 @@ func (c *Chain) stageDir(t testing.TB, n fleet.Node, name string, data []byte) (
 
 // sections splits the script's stdout at its markers.
 func sections(stdout string) map[string]string {
-	marks := []string{markSigned, markBcast, markRPCErr, markResult, markWaitErr, markSignErr}
+	marks := []string{markSigned, markBcast, markRPCErr, markResult, markWaitErr, markSignErr, markSeqBefore, markSeqAfter}
 	out := map[string]string{}
 	lines := strings.Split(stdout, "\n")
 	cur := ""

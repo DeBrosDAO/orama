@@ -3,11 +3,9 @@
 package opennetworkphases
 
 import (
-	"context"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
@@ -15,9 +13,15 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
+	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-const trackA = "plans/open-network/track-a-private-clusters.md"
+const (
+	trackA = "plans/open-network/track-a-private-clusters.md"
+	// creationSetting prefixes the namespace-creation line of
+	// `orama cluster settings show`.
+	creationSetting = "namespace-creation: "
+)
 
 // TestPhaseA1_genesisWalletOperatesTheCluster: the wallet that created the
 // cluster is on its operator list with no SQL by hand, and an operator route
@@ -54,30 +58,49 @@ func TestPhaseA2_freshCLIPointsAtNoCluster(t *testing.T) {
 
 // TestPhaseA3_creationPolicyEnforced: with namespace creation set to
 // operators, a wallet that is not one is refused before anything is
-// created; the setting is shown back, and open is restored (A3; the
-// bootstrap contract keeps the run open).
+// created; the setting is shown back, and open is restored and read back
+// (A3; the bootstrap contract keeps the run open). A slot is held for the
+// namespace a broken policy would let through, and an accepted one is
+// adopted so it is deleted.
 func TestPhaseA3_creationPolicyEnforced(t *testing.T) {
 	phase(t, "A3", "docs/CLI_REFERENCE.md", "### orama cluster settings set", trackA+" A3")
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
-	t.Cleanup(func() { restoreOpen(t, f) })
+	tenancy.Reserve(t, f, 1)
+	t.Cleanup(func() { restoreOpen(t, f, cli) })
 	cli.MustOK(t, "cluster", "settings", "set", "namespace-creation", "operators")
-	if shown := cli.MustOK(t, "cluster", "settings", "show").Stdout; !strings.Contains(shown, "namespace-creation: operators") {
+	if shown := cli.MustOK(t, "cluster", "settings", "show").Stdout; !strings.Contains(shown, creationSetting+"operators") {
 		t.Fatalf("settings show after set:\n%s", shown)
 	}
 	stranger := gw.NewUser(t, f, gw.LobbyNamespace)
 	r := tenancy.Create(t, stranger, ns.UniqueName(t.Name()))
-	if r.Status != http.StatusForbidden || r.ErrorCode() != "NAMESPACE_CREATION_DENIED" {
+	if r.Status >= http.StatusOK && r.Status < http.StatusMultipleChoices {
+		var c tenancy.Created
+		if err := r.Decode(&c); err == nil && c.ClusterID != "" {
+			tenancy.Adopt(t, f, stranger, c)
+		}
 		t.Fatalf("a non-operator created a namespace under the operators policy: HTTP %d %s", r.Status, r.Body)
+	}
+	if r.Status != http.StatusForbidden || r.ErrorCode() != "NAMESPACE_CREATION_DENIED" {
+		t.Fatalf("a non-operator's creation under the operators policy: HTTP %d %s, want 403 NAMESPACE_CREATION_DENIED", r.Status, r.Body)
 	}
 }
 
-func restoreOpen(t *testing.T, f *fleet.Fleet) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+// restoreOpen sets namespace creation back to open and reads it back, from a
+// cleanup: f and cli are captured before it is registered (harness.CLI
+// refuses once the run is interrupted).
+func restoreOpen(t *testing.T, f *fleet.Fleet, cli *oramacli.Runner) {
+	ctx, cancel := fleet.CleanupContext(t)
 	defer cancel()
-	res, err := harness.CLI(t).Run(ctx, "cluster", "settings", "set", "namespace-creation", "open")
+	res, err := cli.Run(ctx, "cluster", "settings", "set", "namespace-creation", "open")
 	if err != nil || res.Exit != exitOK {
 		t.Errorf("cleanup: restoring namespace-creation open on %s: %v %s — later stages cannot create namespaces", f.State.Env, err, res.Stderr)
+		return
+	}
+	shown, err := cli.Run(ctx, "cluster", "settings", "show")
+	if err != nil || shown.Exit != exitOK || !strings.Contains(shown.Stdout, creationSetting+"open") {
+		t.Errorf("cleanup: namespace-creation on %s does not read back open (exit %d): %v\n%s — later stages cannot create namespaces",
+			f.State.Env, shown.Exit, err, shown.Stdout)
 	}
 }
 
@@ -98,8 +121,9 @@ func TestPhaseA4_releaseRootRefusesBeforeExtracting(t *testing.T) {
 	f.MustExec(t, n, "mkdir -m 0700 "+metaDir)
 	before := f.MustExec(t, n, "stat -c '%i %Y' "+infra.StagedManifest).Stdout
 	res := onNode(t, f, n, "node", "stage-archive", "--archive", remote, "--release-metadata", metaDir, "--release-target", "orama-linux-amd64.tar.gz")
-	if res.Exit == exitOK {
-		t.Fatalf("stage-archive accepted an archive whose release metadata does not exist:\n%s", res.Stdout)
+	expectVerifyRefusal(t, f, n, res)
+	if !strings.Contains(res.Stdout+res.Stderr, "release root: ") {
+		t.Errorf("stage-archive's refusal does not come from the release root check:\n%s", f.Redact(res.Stdout+res.Stderr))
 	}
 	if after := f.MustExec(t, n, "stat -c '%i %Y' "+infra.StagedManifest).Stdout; after != before {
 		t.Errorf("a refused archive changed %s (%s -> %s)", infra.StagedManifest, before, after)

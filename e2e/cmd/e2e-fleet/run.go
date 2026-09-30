@@ -27,11 +27,16 @@ const (
 	rerunBudget    = stages.Duration(15 * time.Minute)
 )
 
-// provisionUp and provisionDown are the provisioner; tests replace them.
+// provisionUp, provisionDown and provisionLiveExtras are the provisioner;
+// tests replace them.
 var (
-	provisionUp   = provision.Up
-	provisionDown = provision.Down
+	provisionUp         = provision.Up
+	provisionDown       = provision.Down
+	provisionLiveExtras = provision.LiveExtras
 )
+
+// agentLogArtifact is the redacted copy of the test agent's log.
+const agentLogArtifact = "agent.log"
 
 // stopSignals end a run: Ctrl-C, a kill, and a closed terminal or SSH session.
 var stopSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP}
@@ -176,12 +181,7 @@ func (rs *runState) testAndCollect(ctx context.Context) {
 		return
 	}
 	err = withBroker(ctx, rs.lay, rs.st, rs.statePath(), func(r *stages.Runner) error {
-		if _, err := r.Run(ctx, steps, stages.Options{}); err != nil {
-			rs.runErrs = append(rs.runErrs, "stages: "+err.Error())
-		}
-		if err := rerunFailures(ctx, r, rs.lay); err != nil {
-			rs.runErrs = append(rs.runErrs, "re-run: "+err.Error())
-		}
+		rs.runStages(ctx, r, steps)
 		return nil
 	})
 	if err != nil {
@@ -192,8 +192,25 @@ func (rs *runState) testAndCollect(ctx context.Context) {
 	}
 }
 
+// runStages runs every stage, then labels the failures by a targeted
+// re-run, recording each step's failure. A stopped run labels nothing: the
+// re-runs would only be cancelled.
+func (rs *runState) runStages(ctx context.Context, r *stages.Runner, steps []stages.Step) {
+	if _, err := r.Run(ctx, steps, stages.Options{}); err != nil {
+		rs.runErrs = append(rs.runErrs, "stages: "+err.Error())
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if err := rerunFailures(ctx, r, rs.lay); err != nil {
+		rs.runErrs = append(rs.runErrs, "re-run: "+err.Error())
+	}
+}
+
 // collect gathers artifacts, redacted with the run's secrets and every
-// credential the feature processes minted.
+// credential the feature processes minted: from every member of the state
+// and every extra the broker created that is still up, plus a redacted copy
+// of the test agent's log (which stays in the private work dir).
 func (rs *runState) collect(ctx context.Context) error {
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), collectBudget)
 	defer cancel()
@@ -201,9 +218,13 @@ func (rs *runState) collect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c := &artifacts.FleetCollector{Fleet: fleet.New(rs.st, nil), CLI: oramacli.ForState(rs.st, nil), Since: rs.start, Redactor: red}
-	_, err = c.Collect(cctx, filepath.Join(rs.st.ArtifactDir, artifacts.DirName))
-	return err
+	st := *rs.st
+	extras, lerr := provisionLiveExtras(cctx, rs.st)
+	st.Extras = append(append([]fleet.Node{}, rs.st.Extras...), extras...)
+	dir := filepath.Join(rs.st.ArtifactDir, artifacts.DirName)
+	c := &artifacts.FleetCollector{Fleet: fleet.New(&st, nil), CLI: oramacli.ForState(rs.st, nil), Since: rs.start, Redactor: red}
+	_, err = c.Collect(cctx, dir)
+	return errors.Join(err, lerr, copyRedacted(provision.AgentLogPath(rs.cfg.WorkDir), filepath.Join(dir, agentLogArtifact), red.Redact))
 }
 
 // finish writes the report and returns the exit code of its verdict.

@@ -7,9 +7,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
+	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
@@ -37,6 +40,7 @@ const (
 	uploadBound  = 5 * time.Second
 	getBound     = 3 * time.Second
 	pinVisible   = 3 * time.Minute // download_handler.go pinPropagationWindow plus slack
+	pinPoll      = 2 * time.Second
 )
 
 // jsonOp posts body to path on c as bearer and wants 200.
@@ -57,11 +61,22 @@ func TestPerf_gatewayHealth(t *testing.T) {
 	record(t, f, realistic.Summarize("gateway-health", samples, nil), healthBound)
 }
 
-// TestPerf_databaseExecAndQuery: single-row inserts, then point reads, on a
-// namespace's RQLite through its gateway.
-func TestPerf_databaseExecAndQuery(t *testing.T) {
+// TestPerf_namespaceDataPlane: database, cache, pubsub and storage are
+// measured on one namespace, one metric group after the other: one
+// provisioning and teardown instead of four keeps the package's worst case
+// inside stage 9's budget (e2e/stages/stages.yaml).
+func TestPerf_namespaceDataPlane(t *testing.T) {
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
+	t.Run("database exec and query", func(t *testing.T) { databaseExecAndQuery(t, f, n) })
+	t.Run("cache put and get", func(t *testing.T) { cachePutAndGet(t, f, n) })
+	t.Run("pubsub publish", func(t *testing.T) { pubsubPublish(t, f, n) })
+	t.Run("storage upload and get", func(t *testing.T) { storageUploadAndGet(t, f, n) })
+}
+
+// databaseExecAndQuery: single-row inserts, then point reads, on the
+// namespace's RQLite through its gateway.
+func databaseExecAndQuery(t *testing.T, f *fleet.Fleet, n *ns.Namespace) {
 	tok := n.Owner.Token()
 	if _, err := n.Client.JSON(t.Context(), http.MethodPost, "/v1/rqlite/create-table", tok,
 		map[string]string{"schema": "CREATE TABLE perf (id INTEGER PRIMARY KEY, v TEXT NOT NULL)"}, nil); err != nil {
@@ -77,10 +92,8 @@ func TestPerf_databaseExecAndQuery(t *testing.T) {
 	record(t, f, realistic.Summarize("db-query", query, nil), queryBound)
 }
 
-// TestPerf_cachePutAndGet: puts then gets of the same keys in one dmap.
-func TestPerf_cachePutAndGet(t *testing.T) {
-	f := harness.Fleet(t)
-	n := tenancy.Namespace(t, f, ns.Options{})
+// cachePutAndGet: puts then gets of the same keys in one dmap.
+func cachePutAndGet(t *testing.T, f *fleet.Fleet, n *ns.Namespace) {
 	tok := n.Owner.Token()
 	put := realistic.Burst(t.Context(), workers, requests, jsonOp(n.Client, "/v1/cache/put", tok, func(i int) any {
 		return map[string]any{"dmap": "perf", "key": fmt.Sprintf("k%d", i%requests), "value": map[string]any{"i": i}}
@@ -92,10 +105,8 @@ func TestPerf_cachePutAndGet(t *testing.T) {
 	record(t, f, realistic.Summarize("cache-get", get, nil), cacheBound)
 }
 
-// TestPerf_pubsubPublish: publishes with no subscriber waiting on them.
-func TestPerf_pubsubPublish(t *testing.T) {
-	f := harness.Fleet(t)
-	n := tenancy.Namespace(t, f, ns.Options{})
+// pubsubPublish: publishes with no subscriber waiting on them.
+func pubsubPublish(t *testing.T, f *fleet.Fleet, n *ns.Namespace) {
 	data := base64.StdEncoding.EncodeToString([]byte(`{"perf":true}`))
 	pub := realistic.Burst(t.Context(), workers, requests, jsonOp(n.Client, "/v1/pubsub/publish", n.Owner.Token(), func(int) any {
 		return map[string]string{"topic": "perf", "data_base64": data}
@@ -103,11 +114,9 @@ func TestPerf_pubsubPublish(t *testing.T) {
 	record(t, f, realistic.Summarize("pubsub-publish", pub, nil), publishBound)
 }
 
-// TestPerf_storageUploadAndGet: 64 KiB uploads, then downloads of them once
-// each is visible everywhere.
-func TestPerf_storageUploadAndGet(t *testing.T) {
-	f := harness.Fleet(t)
-	n := tenancy.Namespace(t, f, ns.Options{})
+// storageUploadAndGet: 64 KiB uploads, then downloads of them once every one
+// is visible everywhere (one pinVisible wait for all, not one per upload).
+func storageUploadAndGet(t *testing.T, f *fleet.Fleet, n *ns.Namespace) {
 	tok := n.Owner.Token()
 	var mu sync.Mutex
 	var cids []string
@@ -121,12 +130,19 @@ func TestPerf_storageUploadAndGet(t *testing.T) {
 		return err
 	})
 	record(t, f, realistic.Summarize("storage-upload", up, nil), uploadBound)
-	for _, cid := range cids {
-		eventually.Require(t, 2*time.Second, pinVisible, "download of "+cid, func() (bool, error) {
-			err := check(n.Client.Send(t.Context(), gw.Req{Path: "/v1/storage/get/" + cid, Bearer: tok}))
-			return err == nil, err
-		})
+	if len(cids) == 0 {
+		t.Fatal("no upload succeeded: nothing to download")
 	}
+	pending := slices.Clone(cids)
+	eventually.Require(t, pinPoll, pinVisible, "every upload to download", func() (bool, error) {
+		var errs []error
+		pending = slices.DeleteFunc(pending, func(cid string) bool {
+			err := check(n.Client.Send(t.Context(), gw.Req{Path: "/v1/storage/get/" + cid, Bearer: tok}))
+			errs = append(errs, err)
+			return err == nil
+		})
+		return len(pending) == 0, errors.Join(errs...)
+	})
 	get := realistic.Burst(t.Context(), workers, 3*len(cids), func(ctx context.Context, _, i int) error {
 		return check(n.Client.Send(ctx, gw.Req{Path: "/v1/storage/get/" + cids[i%len(cids)], Bearer: tok}))
 	})

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
@@ -176,7 +177,9 @@ func upload(t testing.TB, n *ns.Namespace) string {
 func TestContractsProxy_anonLiveShapeMatches(t *testing.T) {
 	t.Parallel()
 	fx := loadFixtures(t)
-	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
+	fl := harness.Fleet(t)
+	realistic.RequireReachableFromNode(t, fl, fl.State.Nodes[0], torCheckURL)
+	n := tenancy.Namespace(t, fl, ns.Options{})
 	f := fx["network/proxy-anon"]
 	var body []byte
 	eventually.Require(t, pollEvery, torBudget, "proxy answers through Tor", func() (bool, error) {

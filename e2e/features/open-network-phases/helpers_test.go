@@ -17,11 +17,35 @@ import (
 )
 
 const (
-	planIndex = "plans/open-network/INDEX.md"
-	pollEvery = 5 * time.Second
-	exitOK    = infra.ExitOK
-	exitUsage = infra.ExitUsage
+	planIndex   = "plans/open-network/INDEX.md"
+	pollEvery   = 5 * time.Second
+	exitOK      = infra.ExitOK
+	exitFailure = infra.ExitFailure
+	exitUsage   = infra.ExitUsage
 )
+
+// verifyRefusals are what the node's TUF check (core/pkg/releaseverify
+// CheckFile) says about metadata that does not verify: the node has adopted
+// no release root, or the metadata dir lacks timestamp/snapshot/targets.
+var verifyRefusals = []string{"no release root adopted", "read release metadata"}
+
+// expectVerifyRefusal fails unless a command on n was refused by the release
+// verification itself: the runtime failure exit class (not usage, which a
+// bad flag gives) and a message naming the TUF check. A refusal for any
+// other reason would let a broken check pass.
+func expectVerifyRefusal(t *testing.T, f *fleet.Fleet, n fleet.Node, res fleet.Output) {
+	t.Helper()
+	text := res.Stdout + res.Stderr
+	if res.Exit != exitFailure {
+		t.Fatalf("%s: exit %d, want %d (the release verification refusal)\n%s", n.Name, res.Exit, exitFailure, f.Redact(text))
+	}
+	for _, want := range verifyRefusals {
+		if strings.Contains(text, want) {
+			return
+		}
+	}
+	t.Errorf("%s: the refusal names no release verification failure (%q)\n%s", n.Name, verifyRefusals, f.Redact(text))
+}
 
 // phase makes a test apply only when the checkout's doc documents what the
 // phase delivered: the plan's status lines were never updated, and the docs

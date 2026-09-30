@@ -101,10 +101,18 @@ func TestSend_statusCodes(t *testing.T) {
 		if s := f.Unit(t, node, ntfyUnit); s != "active" {
 			t.Errorf("%s: %s is %q", node.Name, ntfyUnit, s)
 		}
+		loopback := false
 		for _, l := range f.Listeners(t, node) {
-			if l.Port == ntfyPort && l.Addr != "127.0.0.1" {
+			if l.Port != ntfyPort {
+				continue
+			}
+			if l.Addr != "127.0.0.1" {
 				t.Errorf("%s: ntfy listens on %s", node.Name, l.Addr)
 			}
+			loopback = loopback || l.Addr == "127.0.0.1"
+		}
+		if !loopback {
+			t.Errorf("%s: nothing listens on 127.0.0.1:%d, where ntfy must", node.Name, ntfyPort)
 		}
 	}
 }

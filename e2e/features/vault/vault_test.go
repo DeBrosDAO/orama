@@ -79,16 +79,20 @@ func TestPush_versionsAreMonotonic(t *testing.T) {
 	pullEquals(t, c, o, v2)
 }
 
-// TestPush_largeEnvelope: an envelope at the guardians' 512 KiB share limit
-// round-trips; one over it is never reported stored and leaves the old one.
+// TestPush_largeEnvelope: the gateway sends each guardian a share of one
+// x-coordinate byte plus len(envelope) bytes (handlers/vault/push_handler.go)
+// and a guardian refuses a decoded share over its 512 KiB limit
+// (vault/src/server/handler_push.zig MAX_SHARE_SIZE). So an envelope of
+// shareMax-1 bytes is the largest that round-trips; one of shareMax is
+// never reported stored and leaves the old one.
 func TestPush_largeEnvelope(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)
 	o := services.NewVaultOwner(t)
-	env := envelope(t, shareMax)
+	env := envelope(t, shareMax-shareXByte)
 	pushOK(t, c, o, 1, env)
 	pullEquals(t, c, o, env)
-	if r := push(t, c, o, 2, envelope(t, shareMax+1)); r.Status == http.StatusOK {
+	if r := push(t, c, o, 2, envelope(t, shareMax)); r.Status == http.StatusOK {
 		t.Errorf("an envelope over the share limit was stored: %s", r.Body)
 	}
 	pullEquals(t, c, o, env)
@@ -122,11 +126,12 @@ func TestOwnership_wrongOwnerRefused(t *testing.T) {
 }
 
 // TestPull_neverPushedIdentity: an identity nothing was stored for has no
-// read set: not 200, and no envelope.
+// read set: 503 with no version-consistent shares
+// (handlers/vault/pull_handler.go), and no envelope.
 func TestPull_neverPushedIdentity(t *testing.T) {
 	t.Parallel()
 	r := pull(t, harness.GW(t), services.NewVaultOwner(t))
-	if r.Status == http.StatusOK || strings.Contains(string(r.Body), `"envelope"`) {
-		t.Fatalf("pull of an identity that never pushed: %d %.200s", r.Status, r.Body)
+	if r.Status != http.StatusServiceUnavailable || !strings.Contains(string(r.Body), noReadSet) || strings.Contains(string(r.Body), `"envelope"`) {
+		t.Fatalf("pull of an identity that never pushed: want 503 %q, got %d %.200s", noReadSet, r.Status, r.Body)
 	}
 }

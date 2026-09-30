@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/e2e/features/internal/edge"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
@@ -21,6 +22,8 @@ const (
 	absentDeal = "999999999"
 	// putWait bounds how long put waits for an assignment that cannot come.
 	putWait = "15s"
+	// dealQuery is the ABCI query path storage put reads the deal through.
+	dealQuery = "/orama.storage.v1.Query/Deal"
 )
 
 // onNode runs orama on n and returns its output.
@@ -36,6 +39,23 @@ func expectNodeRefused(t testing.TB, f *fleet.Fleet, out fleet.Output, want stri
 	if out.Exit == exitOK || !strings.Contains(text, want) {
 		t.Errorf("exit %d, want a refusal saying %q\n%s", out.Exit, want, f.Redact(text))
 	}
+}
+
+// expectNodeFailure fails unless the command on n exited with the runtime
+// failure class (not usage, not success) and said one of anyOf: a refusal
+// for some other reason (a missing flag, a crash) is not the one under test.
+func expectNodeFailure(t testing.TB, f *fleet.Fleet, out fleet.Output, anyOf ...string) {
+	t.Helper()
+	text := out.Stdout + out.Stderr
+	if out.Exit != exitFailure {
+		t.Fatalf("exit %d, want %d (a verification refusal)\n%s", out.Exit, exitFailure, f.Redact(text))
+	}
+	for _, want := range anyOf {
+		if strings.Contains(text, want) {
+			return
+		}
+	}
+	t.Errorf("the refusal names none of %q\n%s", anyOf, f.Redact(text))
 }
 
 // TestChainTx_accountWithoutHistoryStopsBeforeSigning: with --node, the
@@ -77,7 +97,7 @@ func TestStorageGet_absentDealWritesNothing(t *testing.T) {
 	n := f.State.Nodes[0]
 	seed, repair := nodeSeeds(t, f, n)
 	out := seed + "-out"
-	t.Cleanup(func() { f.Exec(t, n, "rm -f "+fleet.ShellQuote(out)) })
+	t.Cleanup(func() { edge.RunInCleanup(t, f, n, "rm -f -- "+fleet.ShellQuote(out)) })
 	res := onNode(t, f, n, "storage", "get", "--deal-id", absentDeal, "--rpc", chainRPC,
 		"--seed-file", seed, "--repair-seed-file", repair, "--out", out)
 	if res.Exit == exitOK {
@@ -97,11 +117,16 @@ func TestStoragePut_absentDealUploadsNothing(t *testing.T) {
 	f := harness.Fleet(t)
 	n := f.State.Nodes[0]
 	dir := strings.TrimSpace(f.MustExec(t, n, "mktemp -d /root/e2e-cli-storage-put-XXXXXX").Stdout)
-	t.Cleanup(func() { f.MustExec(t, n, "rm -rf -- "+fleet.ShellQuote(dir)) })
+	t.Cleanup(func() { edge.RunInCleanup(t, f, n, "rm -rf -- "+fleet.ShellQuote(dir)) })
 	f.WriteFile(t, n, dir+"/slot-0", []byte("not a sealed slot"), 0o600)
 	res := onNode(t, f, n, "storage", "put", "--deal-id", absentDeal, "--dir", dir, "--rpc", chainRPC, "--wait", putWait)
-	if res.Exit == exitOK {
-		t.Fatalf("storage put for deal %s succeeded:\n%s", absentDeal, f.Redact(res.Stdout))
+	// The chain answers the deal lookup with not-found before any slot is
+	// waited for or sent (storageclient.Client.Put, parseABCIAnswer): a
+	// runtime failure (not usage) naming the deal query, and no upload line.
+	// An unreachable RPC ("query ... at ...: connection refused") does not pass.
+	expectNodeFailure(t, f, res, "not found on chain: "+dealQuery, dealQuery+" failed with code")
+	if strings.Contains(res.Stdout, "uploaded") {
+		t.Errorf("storage put for absent deal %s reported an upload:\n%s", absentDeal, f.Redact(res.Stdout))
 	}
 }
 
@@ -116,13 +141,16 @@ func TestGlobalStageOramad_unverifiedBinaryRefused(t *testing.T) {
 	f := harness.Fleet(t)
 	n := f.State.Nodes[0]
 	home := strings.TrimSpace(f.MustExec(t, n, "mktemp -d /root/e2e-stage-XXXXXX").Stdout)
-	t.Cleanup(func() { f.MustExec(t, n, "rm -rf -- "+fleet.ShellQuote(home)) })
+	t.Cleanup(func() { edge.RunInCleanup(t, f, n, "rm -rf -- "+fleet.ShellQuote(home)) })
 	meta := home + "/metadata"
 	f.MustExec(t, n, "mkdir -m 0700 "+fleet.ShellQuote(meta))
 	out := onNode(t, f, n, "global", "stage-oramad", "--binary", "/bin/true", "--release-metadata", meta,
 		"--release-target", "oramad", "--upgrade", "e2e-bogus", "--home", home)
-	if out.Exit == exitOK {
-		t.Fatalf("stage-oramad staged an unverified binary:\n%s", out.Stdout)
+	// Refused by release verification (releaseverify.CheckFile): the node has
+	// no adopted root, or the empty metadata dir lacks the TUF files.
+	expectNodeFailure(t, f, out, "no release root adopted", "read release metadata")
+	if strings.Contains(out.Stdout, "staged ") {
+		t.Errorf("stage-oramad reported staging an unverified binary:\n%s", f.Redact(out.Stdout))
 	}
 	staged := home + "/cosmovisor/upgrades/e2e-bogus/bin/oramad"
 	if f.Exec(t, n, "test -e "+fleet.ShellQuote(staged)).Exit == 0 {

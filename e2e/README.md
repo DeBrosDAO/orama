@@ -114,7 +114,12 @@ or `<artifacts>/evidence/` when run by hand.
 
 On SIGINT or SIGTERM the package does not die: running tests finish and their
 cleanups restore the fleet, and a test that calls `harness.Fleet` afterwards
-fails at once ("the run was interrupted").
+fails at once ("the run was interrupted"). The interrupt also cancels the
+package's run-wide context (`harness/runctx`), so the harness's own waits in a
+running test (`eventually.Require`/`Eventually`, namespace readiness,
+`ExtraNode`, `ExtraCluster`) stop at once and the test reaches its cleanups
+inside the stop grace. `eventually.Poll` with a context of your own (what a
+cleanup uses) is not affected.
 
 ### Test names
 
@@ -126,8 +131,8 @@ rejects other `Test*` names and flags a `func(*testing.T)` that is not named
 
 ## Rules
 
-- **No sleeps.** `time.Sleep`, `time.After`, `time.NewTimer` and `time.Tick`
-  are banned in `features/**`. Wait for a readiness signal with
+- **No sleeps.** `time.Sleep`, `time.After`, `time.NewTimer`, `time.Tick`,
+  `time.NewTicker` and `time.AfterFunc` are banned in `features/**`. Wait for a readiness signal with
   `eventually.Require` / `eventually.Eventually` / `eventually.Poll`.
 - **No bare skips.** `t.Skip`, `t.Skipf`, `t.SkipNow` are banned. Use
   `harness.SkipNotApplicable(t, reason)`; the reason says what would make the
@@ -274,9 +279,9 @@ import (
 | `WriteFile(t, n, path, data, mode)` | write a file (existence probed with `test -e`: exit 1 absent, anything else fails the test) | restores the old content/mode or deletes, then reads back content and mode (or checks absence) |
 | `Listeners(t, n) []Listener` | `ss -ltnup` parsed; `Listener.Public()` | — |
 | `Firewall(t, n) Firewall` | `ufw status` parsed; `Firewall.Allows("443/tcp")` | — |
-| `IPTablesBlock(t, from, to)` | partition `from` from `to` (public + WG addresses; `ip6tables` for IPv6) with rules tagged per call, so two tests blocking the same pair each hold their own | cleanup registered before the insert; deletes its own rules until `iptables -C` says they are gone |
-| `Kill(t, n, unit)` | SIGKILL every process of the unit | waits until the unit is active |
-| `StopService(t, n, unit)` | stop the unit | starts it, waits until active |
+| `IPTablesBlock(t, from, to)` | partition `from` from `to` (public + WG addresses; `ip6tables` for IPv6; every call with `-w`, waiting for the xtables lock) with rules tagged `e2e-<run>-<tag>` per call, so two tests blocking the same pair each hold their own | cleanup registered before the insert; deletes its own rules until `iptables -C` says they are gone; the runner also sweeps every rule tagged `e2e-<run>-` after each destructive package |
+| `Kill(t, n, unit)` | SIGKILL every process of the unit | `systemctl reset-failed`, then back to its state before the test: started and waited until active, or stopped when it was not running |
+| `StopService(t, n, unit)` | stop the unit | as `Kill` |
 | `ClockSkew(t, n, offset)` | NTP off, clock moved | clock reset, NTP on, drift checked |
 | `Tunnel(t, n, remoteAddr) string` | `ssh -L`: a runner loopback port carried to `remoteAddr` as `n` dials it (`"127.0.0.1:31003"`: the node's chain REST API); returns `"127.0.0.1:<port>"`; recorded as evidence | listener and SSH connection closed |
 | `ReverseForward(t, n, localAddr) string` | `ssh -R`: `n` listens on a loopback port of its own and carries each connection back to `localAddr` in the test process (a mock APNs/Expo/ntfy upstream); returns the node-side `"127.0.0.1:<port>"` to configure on the node | node listener and SSH connection closed |
@@ -354,9 +359,15 @@ default `ns.DefaultMaxLive(len(nodes))`: 20 port blocks per node, 3 nodes per
 namespace, minus 4 of headroom = **16** on three nodes. A test that creates
 several namespaces calls `ns.Hold(t, f, n)` first (all its slots at once; the
 next `n` `ns.New` use them), so it never holds some slots while waiting for
-the rest. `ns.Reserve(ctx, workDir, count, capacity) (*Slots, error)` and
+the rest. **`ns.New` fails a test that already holds a slot and has no held
+one left** ("call ns.Hold first"), and so does a second `Hold`: either would
+wait for a slot while holding one. Waiters are served in arrival order across
+the run (a flock'd ticket per waiter in `ns-slots/`), so a `Hold` of several
+slots is never starved by a stream of single ones.
+`ns.Reserve(ctx, workDir, count, capacity) (*Slots, error)` and
 `(*Slots).Release()` are the primitive. `features/internal/tenancy` keeps its
-own per-package cap on top.
+own per-package cap on top, and its `Reserve`/`Namespaces` take the fleet
+slots with `ns.Hold` before anything is created.
 `ViaUser` (default) creates it as a fresh wallet (adding it to the creator
 allowlist when the cluster's mode is `allowlist`; failing in `operators` mode);
 `Namespace.Owner` is that wallet signed in to the namespace, `Namespace.Client`
@@ -490,13 +501,21 @@ roots only, HTTP/1.1, and a node file round trip with cleanup.
 `stages/stages.yaml`: 1 bootstrap, 2 namespaces, 3 auth, 4 data-plane,
 5 deployments-serverless, 6 realtime, 7 security-audit, 8 chain, 9 ops,
 10 upgrade, 11 chaos-soak. Each stage runs
-`go test -tags e2e_fleet -json -count=1 -timeout <stage timeout> ./features/<id>`
+`go test -tags e2e_fleet -json -count=1 -timeout <stage timeout + StopGrace> ./features/<id>`
 for its packages: non-destructive ones in parallel, then each destructive one
-alone. A stage's failures never stop later stages. `e2e-fleet test --stage N`
-runs one stage against an existing fleet; `--resume` skips the stages
-`stages-state.json` records as completed (a completed stage is never re-run,
-failed or not). A package run replaces its earlier attempt whole: output and
-evidence dir.
+alone. When the stage timeout is spent the runner sends SIGINT to the package's
+process group, so running tests finish and their `t.Cleanup`s restore the fleet,
+and SIGKILL `StopGrace` (10 minutes) later; an overrun is reported as an error
+and never as a pass. A stage's failures never stop later stages. `e2e-fleet test --stage N`
+runs one stage against an existing fleet and replaces only that stage in
+`stages-state.json` (the other stages' results stay in the report);
+`--resume` skips the stages it records as completed (a completed stage is
+never re-run, failed or not). A package run replaces its earlier attempt
+whole: output and evidence dir. After every destructive package, even on an
+interrupted run, the runner removes every iptables/ip6tables rule tagged
+`e2e-<run>-` from every node and turns NTP back on (clock set to the runner's
+time) where a test left it off; a failure there fails that package. An
+interrupted run does not re-run failures to label them.
 
 Each package runs in a process group of its own. When the run is interrupted
 the group gets SIGINT (the go command waits for its test binary, whose
@@ -506,8 +525,11 @@ SIGKILL.
 Extra servers: `harness.ExtraNode(t, "extra-join", "hel1")` in the test, and
 `requires.extra_nodes` in the manifest (an eval cluster from
 `harness.ExtraCluster` counts as one). The broker creates them with the
-runner's credentials. `e2e-fleet hook provision` names an
-extra `extra-<N>` one above the highest in use, so a name is never reused. The core/e2e lifecycle hooks map onto
+runner's credentials. `e2e-fleet hook provision` names an extra `extra-<N>`,
+one above the highest `extra-<n>` the state lists; extras the broker created
+for feature processes are not in the state, and a name removed from the top
+can come back, so pass `--name` when that matters (the broker refuses a name
+already in use). The core/e2e lifecycle hooks map onto
 the runner: `ORAMA_LIFECYCLE_DESTROY="e2e-fleet hook destroy"`,
 `ORAMA_LIFECYCLE_BREAK="e2e-fleet hook break"`,
 `ORAMA_LIFECYCLE_PROVISION="e2e-fleet hook provision"` (prints the new IP), all
@@ -523,26 +545,50 @@ attributed to the test (re-runs record under `rerun/evidence/`, which the
 report never reads). For a failed test the report shows its last ten records.
 
 Redaction masks the run's secrets, every credential minted during the run,
-and recognised shapes: Authorization/X-API-Key/Cookie/Set-Cookie values,
-JSON members whose key names a token, secret, password, API or private key,
-mnemonic, PSK or swarm key (any case, plain or escaped JSON), `KEY=value` and
-YAML forms, `user:password@` in URLs, WireGuard `PrivateKey`, the IPFS swarm
-key body, PEM private keys, JWTs and Orama API keys. Credentials a feature
+each node's own secrets (cluster secret, RQLite password and auth file,
+secrets encryption key, TURN and API-key HMAC secrets, swarm key: read once
+per node before anything is collected; a node whose secrets cannot be read is
+not collected from, `nodes/<node>/withheld.txt` says why), and recognised
+shapes: Authorization, Cookie/Set-Cookie and any `X-*-Token`/`X-*-Key`/`X-*-Auth`
+header value, JSON members whose key names a token, secret, password,
+passphrase, API, private, signing, encryption or HMAC key, privkey, mnemonic,
+seed, PSK or swarm key (any case, plain, escaped or double-escaped JSON, string,
+number or array-of-numbers values; the JWK `"d"` and `"device_code"` only as
+quoted keys, so `"id"`, `"node_id"` and `"cid"` are kept), `KEY=value`, YAML
+and `--flag value` forms, `-u`/`--user user:password`, mid-line
+`cluster secret:`/`rqlite password=` and the like, `?key=`/`&sig=` query
+values, `user:password@` in URLs, WireGuard `PrivateKey`, the IPFS swarm key
+body, PEM private keys, `0x` + 64 hex digits (an EVM private key; a
+transaction hash looks the same and is masked too), a 12-24 word phrase after
+a mnemonic/seed/phrase label, JWTs and Orama API keys. Redaction fails
+closed: when the run's redactor cannot be loaded, or a file cannot be
+rewritten redacted, that package's `gotest/` output and stderr are replaced
+by `[withheld: redaction failed]` (the next package loads the redactor
+afresh). Over-long lines are cut and marked, never a reason to skip
+redaction. Credentials a feature
 process mints are appended to the run's token registry (`redact-tokens`,
 mode 0600, beside `state.json`, never in the artifact dir); the runner reads
 it to redact each package's `gotest/` output and stderr after the package
-ends, the collected artifacts, and everything the report shows. Before teardown the runner collects
+ends, the collected artifacts, and everything the report shows. The
+provisioning logs (`provision-NN-*.log`), the errors quoting a command's
+output, the broker's answers and log lines and whatever the runner prints go
+through the same redaction; the test agent's log stays in the work dir
+(`agent.log`; the agent writes it directly) and the artifacts get a redacted
+copy, `collected/agent.log`. Before teardown the runner collects
 journals of every `orama-*`, `caddy*`, `coredns*`, `wg-quick@*` unit,
 `orama node report --json`, listeners, WireGuard (no keys), ufw, disk, clock
 and (when the run has a chain) chain status from every node, and `orama monitor report --json` and
-`orama inspect` from the runner, into `<artifacts>/collected/`.
+`orama inspect` from the runner, into `<artifacts>/collected/`: from every
+member of the state and every extra or eval cluster server the broker created
+that is still up (found by the run's label).
 
 The artifact dir then holds `report.html` (self-contained), `report.json`,
 `report.junit.xml`, `summary.txt` (the push notification line) and, with
 `--bug-drafts`, `bugboard-drafts.json` (drafts only; nothing is filed).
 Verdicts: **PASS** (everything passed, nothing skipped, coverage gate OK),
-**INCOMPLETE** (nothing failed, something not covered: a skip, a feature that
-never ran or executed no test, a coverage gap), **FAIL** (a test, package or
+**INCOMPLETE** (nothing failed, something not covered: a skip, a skipped
+subtest of a passing test included, a feature that never ran or executed no
+test, a coverage gap), **FAIL** (a test, package or
 run step failed; a package whose `go test` exited non-zero fails with the tail
 of its stderr even when every parsed test passed; a failed teardown is a run
 error; a flaky failure is still a failure). Exit codes 0, 3, 1 (2 for usage).
@@ -578,44 +624,159 @@ stale waivers).
 - Secrets come only from `infisical run` (project `orama-e2e`, env `e2e`):
   `HCLOUD_TOKEN`, `CF_API_TOKEN`, `CF_ZONE`. Missing ones are named, never
   printed. Neither the CLI under test nor any feature process sees them.
+  **`HCLOUD_TOKEN` must belong to a Hetzner project used only by e2e runs**:
+  teardown and sweep delete by label, and every delete is checked against the
+  label and name first (below), but a project shared with anything else is
+  one bug away from losing it.
+- **Sealing.** `e2e-fleet run` and `e2e-fleet test` re-execute themselves at
+  start with every secret variable (`secrets.SecretEnvNames`, `INFISICAL_*`)
+  removed from their environment; the values cross the `exec` in an
+  inherited pipe (`E2E_SEALED_FD`, the fd number only) and live in memory
+  (`secrets.Seal`, read with `secrets.LookupEnv`). The runner's
+  `/proc/<pid>/environ` (`ps -E` on macOS) and the environment every child
+  inherits hold none of them.
+- **The broker is a child process.** `run` and `test` start
+  `e2e-fleet broker-serve` in a process group of its own; it receives
+  `HCLOUD_TOKEN` and `CF_API_TOKEN` over an inherited pipe on fd 3, never in
+  argv or its environment (its `/proc/<pid>/environ` holds neither), serves
+  `<work dir>/broker/broker.sock`, prints `ready <socket>` and serves until
+  the runner closes its stdin. It ignores SIGINT/SIGTERM/SIGHUP: an interrupt
+  does not stop it, so features clean up through it during their stop grace;
+  the runner stops it once the stages are over. The directory must be the
+  runner's own (owner uid checked) and 0700, the socket 0600. Operations,
+  each scoped to the run: `dns.txt.set`/`dns.txt.delete` (a name inside
+  `e2e-<run>.<zone>` or a cluster subdomain `e2e-<run>-<label>.<zone>`;
+  anything else is refused before Cloudflare is called; at most 64 TXT names
+  held at once), `dns.records.list` (the run's own records),
+  `extra.add`/`extra.remove` (extras only, never a core node or probe; one
+  name at a time), `cluster.add`/`cluster.remove` (eval clusters it
+  installed). Extras, clusters and adds in flight together are capped at
+  `E2E_BROKER_MAX_SERVERS` (default 3, `manifest.MaxExtraNodes`; raise it
+  when a stage runs several extra-hungry features in parallel). A connection
+  has 10 s to send its request, and 8 are served at once (others wait in the
+  backlog). In a feature process `provision.AddExtra`, `RemoveExtra`,
+  `DestroyNode` (extras only), `AddEvalCluster` and `RemoveEvalCluster` go
+  through it; the switch is `E2E_BROKER_SOCK` being set, never a missing
+  token. A process started with `E2E_BROKER_SOCK` set refuses to serve one.
+  Its answers and log lines are redacted with the run's secrets and token
+  registry (withheld when the registry cannot be read). Teardown deletes
+  every record of the run's cluster subdomains as well as its own subdomain.
 - **Feature environment is an allowlist** (`stages.FeatureEnv`): `PATH`,
-  `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `TZ`, the Go variables (`GOFLAGS`,
-  `GOCACHE`, `GOMODCACHE`, `GOPATH`, `GOTOOLCHAIN`, `GOPROXY`, `GOPRIVATE`,
-  `GONOSUMDB`, `GONOPROXY`, `GOSUMDB`), the proxies (`HTTP(S)_PROXY`,
-  `NO_PROXY`, either case) and `E2E_*`; never `HOME`, `SSH_AUTH_SOCK`,
-  `XDG_*`, `INFISICAL_*` or a variable `secrets.SecretEnvNames` lists. The
-  runner resolves `GOPATH`, `GOMODCACHE` and `GOCACHE` with `go env` when
-  unset, and adds `E2E_FLEET_STATE`, `E2E_STRICT`, `E2E_EVIDENCE_DIR` and
-  `E2E_BROKER_SOCK`.
-- **The broker** (`harness/broker`): `e2e-fleet run` and `e2e-fleet test`
-  serve the cloud operations a feature legitimately needs on a unix socket,
-  `<work dir>/broker/broker.sock` (directory 0700, socket 0600), up exactly
-  while the stages run, and pass its path as `E2E_BROKER_SOCK`. It holds the
-  credentials; feature processes do not. Operations, each scoped to the run:
-  `dns.txt.set`/`dns.txt.delete` (a name inside `e2e-<run>.<zone>` or a
-  cluster subdomain `e2e-<run>-<label>.<zone>`; anything else is refused before
-  Cloudflare is called), `dns.records.list` (the run's own records),
-  `extra.add`/`extra.remove` (extras only, never a core node or probe; one name
-  at a time), `cluster.add`/`cluster.remove` (eval clusters it installed).
-  In a feature process `provision.AddExtra`, `RemoveExtra`, `DestroyNode`
-  (extras only), `AddEvalCluster` and `RemoveEvalCluster` go through it; the
-  switch is `E2E_BROKER_SOCK` being set, never a missing token. A runner
-  started with `E2E_BROKER_SOCK` set refuses to serve one. Errors it returns
-  are redacted. Teardown deletes every record of the run's cluster
-  subdomains as well as its own subdomain.
+  `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `TZ`, `GOCACHE`, `GOMODCACHE`, `GOPATH`,
+  `GOTOOLCHAIN`, the proxies (`HTTP(S)_PROXY`, `NO_PROXY`, either case, with
+  any `user:password@` removed; an unparsable one with an `@` is dropped) and
+  these run settings by name: `E2E_STRICT`, `E2E_FLEET_STATE`,
+  `E2E_EVIDENCE_DIR`, `E2E_BROKER_SOCK`, `E2E_PACE_*` (the four),
+  `E2E_MAX_LIVE_NAMESPACES`, `E2E_REPO_ROOT`, `E2E_SOAK_MINUTES`,
+  `E2E_PERF_REGRESSION_PCT`, `E2E_BASELINE_FILE`, `E2E_INSTALL_PREVIOUS`,
+  `E2E_ORAMA_TX_SIGNING`, `E2E_ORAMAOS_IMAGE`, `E2E_ORAMAOS_OVMF`. `GOFLAGS`,
+  `GOPROXY`, `GOSUMDB`, `GONOSUMDB`, `GOPRIVATE`, `GONOPROXY` and
+  `GOINSECURE` pass only with `E2E_ALLOW_GO_ENV=1`; otherwise the go command
+  uses its default proxy and checksum database, and the runner runs
+  `go mod download` for the e2e module first, so the feature builds find
+  their dependencies in the module cache it resolved. Never `SSH_AUTH_SOCK`,
+  `XDG_*`, `INFISICAL_*` or a secret variable. The runner resolves `GOPATH`,
+  `GOMODCACHE` and `GOCACHE` with `go env` when unset, and adds
+  `E2E_FLEET_STATE`, `E2E_STRICT`, `E2E_EVIDENCE_DIR`, `E2E_BROKER_SOCK` and
+  **`HOME=<work dir>/feature-home`**: an empty 0700 directory, recreated for
+  each `run`/`test`, which is neither the owner's home nor the test agent's,
+  so go, git, pnpm and tinygo have a home to write to.
+- `E2E_SANDBOX=1` (Linux, needs `bwrap`) runs every feature package under
+  bubblewrap with the owner's real home hidden behind an empty tmpfs and only
+  the repository, the work dir and the Go caches bound back. It is
+  best-effort (see "Residual risks"); on another OS, or without `bwrap`, the
+  run refuses instead of running unsandboxed.
+- **SSH source.** The firewall lets SSH in only from `E2E_RUNNER_CIDR` (the
+  public address the runner's traffic leaves from, e.g. `203.0.113.7/32`; the
+  runner does not ask a third party for it). Without it the run is refused,
+  unless `E2E_ALLOW_OPEN_SSH=1` opens SSH to `0.0.0.0/0,::/0` on purpose.
+- **Deletes are checked.** Before `DestroyNode` or an extra's removal
+  deletes a server, it reads it back and refuses unless it is labelled
+  `e2e-run=<this run>` and named `e2e-<run>-...` (exactly
+  `e2e-<run>-<extra>` for an extra). Down lists the run's servers, firewalls
+  and SSH keys by label once more at the end and fails when anything is left.
+  A failed `Up` tears down by label only when it registered something itself
+  (`provision.UpError.Owned`, `provision.OwnsResources`): a run id that
+  already labels another fleet is refused in the preflight and never torn
+  down.
+- **TTL and sweep.** The `e2e-ttl` label is the stage plan's worst case (each
+  stage's timeout once for its parallel packages plus once per destructive
+  package, `stages.WorstCase`) plus 3 h for provisioning, re-runs,
+  collection and teardown; `E2E_TTL` may raise it, never lower it. The sweep
+  deletes only servers, firewalls and SSH keys named `e2e-...` whose
+  `e2e-run` label has a run id's shape, when they are past their own
+  `e2e-ttl` (or, without one, older than `--max-age`); a run's DNS records go
+  only once the run has no live server. So `--max-age` can never undercut a
+  live run. `--max-age` under 1 h is refused without `--force`.
+- **Directories.** The work dir (default `$TMPDIR/orama-e2e-<run>`, a
+  predictable name) must be a real directory owned by the runner's uid; it is
+  made 0700, and one that is a link or someone else's is refused. It is not
+  created with `os.MkdirTemp` because the broker socket path under it must
+  stay within the 103-byte `sun_path` budget.
+- **The test wallet.** Its password file exists only until the agent reports
+  ready (`rw-agent-headless` reads it once at start), then it is shredded.
+  `rw init` still gets the password in `ROOTWALLET_PASSWORD` for the few
+  seconds it runs: it reads a new password only from that variable or a
+  terminal. The password and the mnemonic are registered with the
+  provisioning redactor as soon as they are generated.
 - Guards are allowlists. `CF_ZONE` must be exactly `dbrsteting.bid`; the
   CLI environment must start with `e2e-`; the base domain must be
   `e2e-<run>.dbrsteting.bid`; the chain id must contain `-e2e-`. Run ids,
   zones, environments and base domains containing `testnet`, `mainnet`,
   `devnet` or `stagenet` are refused (chain ids: all but `devnet`, which every
   run chain is), and so is any `RW_AGENT_SOCK` inside the real `~/.rootwallet`
-  (found through the user database, not `$HOME`). The guards run in the
-  preflight, after provisioning, and on every state a command
-  (`test`, `report`, `teardown`, `hook`) or a feature package loads.
+  (found through the user database, not `$HOME`; compared by name and by file
+  identity up every ancestor, so a symlink, a hard link or a case-folded path
+  cannot pass). The state's CLI `HOME` must be an `e2e-rw-...` directory
+  directly under `/tmp` (links resolved) and `RW_AGENT_SOCK` exactly its
+  `a.sock`. The guards run in the preflight, after provisioning, and on every
+  state a command (`test`, `report`, `teardown`, `hook`) or a feature package
+  loads. Under `ORAMA_E2E=1` the CLI re-checks the agent socket at every
+  dial, and `orama production unlock` refuses to shell out to `rw decrypt`
+  (which would use the real wallet).
 - A fleet client refuses plain `http://` and a missing TLS config.
+- Every orama CLI invocation runs in a process group of its own: a cancelled
+  or killed invocation takes what it started with it, and a helper it left
+  holding its output gets 10 s before its group is killed and the pipes
+  closed, so no `Run`/`Wait` hangs on it (reported as an error).
 - Teardown runs from a `defer` and after SIGINT/SIGTERM/SIGHUP (a second
   signal does not interrupt it). A failed teardown exits 1 and is written into
   the report. `e2e-fleet provision` tears down whatever it created when
   provisioning fails or is interrupted. `--keep-on-fail` keeps a non-PASS fleet for debugging;
-  `e2e-fleet teardown` removes it, `e2e-fleet sweep` removes anything labelled
-  e2e older than `--max-age`.
+  `e2e-fleet teardown` removes it, `e2e-fleet sweep` removes the leftovers
+  of crashed runs (above).
+
+### Residual risks
+
+What the harness cannot close, and how to live with it:
+
+- **Same-uid code.** Feature packages run as the owner's OS user. Code in
+  them (or in a dependency they build) can still read the owner's real
+  `~/.rootwallet`, use an exported `ssh-agent`, and read other processes of
+  the same user (`/proc/<pid>/mem` or ptrace where the kernel allows it,
+  the broker child's memory included). Run the suite under a dedicated OS
+  user or in a VM with no real wallet and no agent; `E2E_SANDBOX=1` hides the
+  home directory on Linux but is best-effort. The processes that launch the
+  runner keep the tokens too: `infisical run` holds them, and `go run`
+  (what `make e2e-fleet` uses) has them in its own environ; run a built
+  binary (`go build -o e2e-fleet ./cmd/e2e-fleet && infisical run ... --
+  ./e2e-fleet run`) to keep them out of a long-lived `go` process.
+- **Host keys through the metadata service.** Each server's pinned SSH host
+  key reaches it in its Hetzner user data, which any process on that server
+  can read back from the metadata service for the server's life.
+- **Port forwards.** `Fleet.Tunnel` and `ReverseForward` open loopback ports
+  on the runner and on nodes; any local process of the same user (runner) or
+  any process on the node can connect to them while they are up.
+- **Supply chain.** The `apps/next-ssr` fixture has no lockfile: `next`,
+  `react` and `react-dom` are pinned by version only and installed by the
+  deployment's own `npm install` on the fleet, so their integrity rests on
+  the npm registry at run time. Reported, not changed by the harness.
+
+### Dependency versions
+
+`github.com/gorilla/websocket` is pinned to the pseudo-version
+`v1.5.4-0.20250319132907-e064f32e3674` (a commit after v1.5.3, with no tag
+since) and `github.com/pion/*` to the versions `core/go.mod` uses: the e2e
+module replaces `github.com/DeBrosOfficial/network` with `../core`, so it
+builds the gateway's own WebSocket and WebRTC code paths with the same
+modules the product ships.

@@ -30,6 +30,9 @@ const (
 // goPassThrough are Go settings of the operator's environment the builds keep.
 var goPassThrough = []string{"GOFLAGS", "GOTOOLCHAIN", "GOPROXY", "GOPRIVATE", "GONOSUMDB", "GONOPROXY", "GOSUMDB"}
 
+// AgentLogPath is the test agent's log in the run's work dir.
+func AgentLogPath(workDir string) string { return filepath.Join(workDir, agentLogName) }
+
 func (r *run) makeWorkDir(context.Context) error {
 	if _, err := os.Stat(StatePath(r.cfg.WorkDir)); err == nil {
 		return fmt.Errorf("%s already holds a run's state: tear it down with Down, or use another %s", r.cfg.WorkDir, EnvWorkDir)
@@ -151,12 +154,16 @@ func (r *run) startTestAgent(ctx context.Context) error {
 	if r.st.PreviousOramaBin != "" {
 		approvals = append(approvals, agent.Approval{Binary: r.st.PreviousOramaBin, Caps: agentCaps()})
 	}
-	logPath := filepath.Join(r.cfg.ArtifactDir, agentLogName)
+	// The agent writes its log itself, for its whole life, so no redacting
+	// writer can sit in between: the log stays in the private work dir, and
+	// the runner collects a redacted copy (AgentLogPath).
+	logPath := AgentLogPath(r.cfg.WorkDir)
 	logFile, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, logFileMode)
 	if err != nil {
 		return fmt.Errorf("failed to open %s: %w", logPath, err)
 	}
-	a, err := r.d.startAgent(ctx, agent.StartConfig{RWBin: r.cfg.RWBin, AgentBin: r.cfg.RWAgentBin, Approvals: approvals, Log: logFile})
+	a, err := r.d.startAgent(ctx, agent.StartConfig{RWBin: r.cfg.RWBin, AgentBin: r.cfg.RWAgentBin, Approvals: approvals,
+		Log: logFile, Redact: r.red.Add})
 	if err != nil {
 		return errors.Join(fmt.Errorf("failed to start the test RootWallet agent: %w", err), logFile.Close())
 	}
