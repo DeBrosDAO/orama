@@ -2161,6 +2161,8 @@ Make another wallet the owner of this namespace.
 Only the current owner may do this, and it is one step rather than a removal and
 a grant, so there is no moment where the namespace has no owner.
 You keep an admin grant, so handing a project over does not lock you out of it.
+<wallet> must be a wallet address (0x and 40 hex digits, or a Solana public key);
+the gateway refuses anything else rather than hand the namespace to nobody.
 
 | Flag | Default | Description |
 |------|---------|-------------|

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth/siw"
 	"go.uber.org/zap"
 )
 
@@ -57,6 +58,9 @@ func (g *Gateway) namespaceMemberByIDHandler(w http.ResponseWriter, r *http.Requ
 	}
 	g.removeNamespaceMember(w, r, sub)
 }
+
+// errNotAWallet refuses a member or new owner that is not a wallet address.
+const errNotAWallet = "wallet must be a wallet address: 0x and 40 hex digits, or a Solana public key"
 
 func (g *Gateway) listNamespaceMembers(w http.ResponseWriter, r *http.Request) {
 	ns := keysNamespace(r)
@@ -119,6 +123,10 @@ func (g *Gateway) addNamespaceMember(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(body.Wallet) == "" {
 		writeError(w, http.StatusBadRequest, "wallet is required")
+		return
+	}
+	if !siw.IsWalletAddress(strings.TrimSpace(body.Wallet)) {
+		writeError(w, http.StatusBadRequest, errNotAWallet)
 		return
 	}
 	role, err := auth.ParseRole(body.Role)
@@ -217,6 +225,14 @@ func (g *Gateway) transferNamespace(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body: expected JSON {wallet}")
+		return
+	}
+
+	// Checked here, before anything is written: a namespace handed to a string
+	// no wallet can sign in as is a namespace nobody owns any more, and its
+	// owner lost it by mistyping.
+	if !siw.IsWalletAddress(strings.TrimSpace(body.Wallet)) {
+		writeError(w, http.StatusBadRequest, errNotAWallet)
 		return
 	}
 

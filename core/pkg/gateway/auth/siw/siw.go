@@ -369,6 +369,18 @@ func validateDomain(domain string) error {
 	return nil
 }
 
+// IsWalletAddress reports whether address could be a wallet that signs in: a
+// 0x-prefixed 20-byte hex address in any case, or a Solana public key. It is
+// for addresses a caller names (a new member, a new owner) rather than signs
+// with, so an unchecksummed Ethereum address is accepted; a grant or an
+// ownership recorded for anything else belongs to nobody who can ever sign in.
+func IsWalletAddress(address string) bool {
+	if strings.HasPrefix(address, "0x") || strings.HasPrefix(address, "0X") {
+		return common.IsHexAddress(address)
+	}
+	return validateAddress(Solana, address) == nil
+}
+
 // validateAddress checks the address is well-formed for its chain. Whether the
 // key behind it made the signature is the verifier's question, not this one's.
 func validateAddress(chain Chain, address string) error {
