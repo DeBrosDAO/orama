@@ -115,11 +115,13 @@ func sdkExamples(t testing.TB, sdk string) []string {
 }
 
 // TestDocsExamples_sdkExamplesTypecheck: the SDK's example programs
-// type-check against the SDK source they import, strictly.
+// type-check against the SDK source they import, strictly. TypeScript 6 refuses
+// files on the command line next to a tsconfig.json unless --ignoreConfig says
+// the command line is the whole configuration.
 func TestDocsExamples_sdkExamplesTypecheck(t *testing.T) {
 	t.Parallel()
 	sdk := requireNode(t)
-	args := append([]string{"--dir", sdk, "exec", "tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "es2022",
+	args := append([]string{"--dir", sdk, "exec", "tsc", "--ignoreConfig", "--noEmit", "--strict", "--skipLibCheck", "--target", "es2022",
 		"--module", "esnext", "--moduleResolution", "bundler", "--lib", "es2022,dom", "--types", "node"}, sdkExamples(t, sdk)...)
 	if out, err := runTool(t, sdk, toolEnv(), "pnpm", args...); err != nil {
 		t.Errorf("sdk/examples do not type-check (%v):\n%s", err, out)
