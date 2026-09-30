@@ -842,7 +842,10 @@ base-fee check above (both of which require a real, already-known fee/gas that a
 trying to discover), `FeeDecorator` runs the same settlement logic on a branched, discarded context
 (`ctx.CacheContext()`) purely so its gas consumption is reflected in the estimate, swallowing any
 error (insufficient funds, an unresolvable payer/proposer) since the guessed fee/gas is not final
-yet - mirroring stock `x/auth/ante`'s own `!simulate` guard around its equivalent fee check.
+yet - mirroring stock `x/auth/ante`'s own `!simulate` guard around its equivalent fee check. While the
+simulated transaction declares no gas limit (gas 0, the usual `--gas auto` request), its whole declared
+fee is settled as base fee, as the delivered transaction pays it: counted as a tip, which only a bank
+balance pays, it would skip the gas of paying the base fee from earnings for a payer with no bank balance.
 
 ### Earnings accounts
 
