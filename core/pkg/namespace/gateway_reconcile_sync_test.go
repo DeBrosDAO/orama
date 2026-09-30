@@ -31,9 +31,12 @@ func spawnedGateway(t *testing.T) (*SystemdSpawner, gatewayspec.InstanceConfig, 
 
 	s := NewSystemdSpawner(namespaceBase, "", zap.NewNop())
 	cfg := gatewayspec.InstanceConfig{
-		Namespace:            "anchat-test",
-		NodeID:               "node-1",
-		HTTPPort:             deadPort(t),
+		Namespace: "anchat-test",
+		NodeID:    "node-1",
+		// No port: this test only compares configs, and a picked "free" port can be taken by a
+		// parallel test before SpawnGateway checks it, which then waits and returns before it
+		// writes anything. ensurePortsFree skips a port of 0.
+		HTTPPort:             0,
 		BaseDomain:           "orama-devnet.network",
 		RQLiteDSN:            tenantRQLiteURL("10.0.0.5", 10200),
 		GlobalRQLiteDSN:      "http://orama:" + testRQLitePass + "@10.0.0.1:10100",
@@ -47,12 +50,13 @@ func spawnedGateway(t *testing.T) (*SystemdSpawner, gatewayspec.InstanceConfig, 
 		TURNDomain:           "turn.ns-anchat-test.orama-devnet.network",
 		TURNSecret:           "the-turn-secret",
 	}
-	_ = s.SpawnGateway(context.Background(), cfg.Namespace, cfg.NodeID, cfg)
+	// Without systemd the start fails after the config is written; that error is expected.
+	spawnErr := s.SpawnGateway(context.Background(), cfg.Namespace, cfg.NodeID, cfg)
 
 	path := filepath.Join(namespaceBase, cfg.Namespace, "configs", "gateway-"+cfg.NodeID+".yaml")
 	written, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("SpawnGateway did not write its config: %v", err)
+		t.Fatalf("SpawnGateway did not write its config: %v (spawn: %v)", err, spawnErr)
 	}
 	return s, cfg, path, written
 }
