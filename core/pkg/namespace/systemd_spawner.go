@@ -43,6 +43,12 @@ type SystemdSpawner struct {
 	// (caddyServiceStorageDir). Only set in tests so resolveTURNSCert can be
 	// exercised without touching /var/lib.
 	caddyStorageDirOverride string
+
+	// teardownUnitsFn and deleteStateFn replace the two steps of
+	// TeardownNamespace. Nil in production; set in tests, which have no systemd
+	// and no privileged helper to delete unit env files through.
+	teardownUnitsFn func(namespace string) error
+	deleteStateFn   func(namespace string) error
 }
 
 // wildcardCertPaths returns the cert/key paths for the `*.<baseDomain>` wildcard

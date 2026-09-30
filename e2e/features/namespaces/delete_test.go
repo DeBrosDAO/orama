@@ -94,13 +94,19 @@ func TestNamespaceDelete_tearsEverythingDown(t *testing.T) {
 	tenancy.Post(t, reborn.Client, "/v1/cache/get", tenancy.Owner(reborn), map[string]any{"dmap": "m", "key": "k"}).Expect(t, http.StatusNotFound)
 }
 
-// residue is an eventually probe for "node holds no unit, directory,
+// residue is an eventually probe for "node holds no unit (running or enabled), directory,
 // environment or listener of name".
 func residue(t testing.TB, f *fleet.Fleet, node fleet.Node, name string, block []int) func() (bool, error) {
 	return func() (bool, error) {
 		for _, unit := range tenancy.TenantUnits(name) {
 			if s := f.Unit(t, node, unit); s == "active" || s == "activating" {
 				return false, fmt.Errorf("%s is %s", unit, s)
+			}
+			// Stopped is not gone: an enabled unit is started again by the next
+			// `orama node upgrade`, which enables and restarts every namespace
+			// unit it finds.
+			if s := strings.TrimSpace(f.Exec(t, node, "systemctl is-enabled "+unit).Stdout); s == "enabled" {
+				return false, fmt.Errorf("%s is still enabled", unit)
 			}
 		}
 		for _, dir := range []string{tenancy.NamespacesDir + "/" + name, tenancy.UnitEnvDir + "/" + name} {

@@ -19,7 +19,7 @@ import (
 
 // SpawnRequest represents a request to spawn or stop a namespace instance
 type SpawnRequest struct {
-	Action    string `json:"action"` // spawn-{rqlite,olric,gateway,sfu,turn}, stop-{rqlite,olric,gateway,sfu,turn}, save-cluster-state, delete-cluster-state
+	Action    string `json:"action"` // spawn-{rqlite,olric,gateway,sfu,turn}, stop-{rqlite,olric,gateway,sfu,turn}, teardown-namespace, save-cluster-state, delete-cluster-state
 	Namespace string `json:"namespace"`
 	NodeID    string `json:"node_id"`
 
@@ -362,6 +362,17 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "delete-cluster-state":
 		if err := h.systemdSpawner.DeleteClusterState(req.Namespace); err != nil {
 			h.logger.Error("Failed to delete cluster state", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "teardown-namespace":
+		// Stop AND disable every unit of the namespace, then delete its data and
+		// env files: nothing is left for an upgrade or boot to start again. The
+		// stop-* actions only stop, and are for restarts.
+		if err := h.systemdSpawner.TeardownNamespace(ctx, req.Namespace); err != nil {
+			h.logger.Error("Failed to tear down namespace", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}

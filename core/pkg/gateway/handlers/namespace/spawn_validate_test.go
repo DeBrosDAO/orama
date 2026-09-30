@@ -161,3 +161,39 @@ func TestSpawnRequestValidate_joinVerifyURL(t *testing.T) {
 		t.Error("a verify URL with no join address was accepted")
 	}
 }
+
+// A teardown request names a namespace this node must never remove as a
+// tenant: the node's own instances are refused by the spawner, with the
+// handler reporting the refusal rather than deleting anything. The handler
+// here has no spawner state, so a request that got past the refusal would
+// panic.
+func TestSpawnHandler_teardownRefusesThePlatformNamespaces(t *testing.T) {
+	secretPath := filepath.Join(t.TempDir(), "cluster-secret")
+	if err := os.WriteFile(secretPath, []byte(strings.Repeat("ab", 32)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := auth.CoordinationKey(strings.Repeat("ab", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewSpawnHandler(nil, secretPath, zap.NewNop())
+
+	for _, ns := range []string{"index", "nameserver", "system"} {
+		body, _ := json.Marshal(SpawnRequest{Action: "teardown-namespace", Namespace: ns, NodeID: "node-1"})
+		r := httptest.NewRequest(http.MethodPost, "/v1/internal/namespace/spawn", bytes.NewReader(body))
+		r.RemoteAddr = "10.0.0.5:40000"
+		if err := auth.SignCoordination(key, r, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("%s: status %d, want 500: %s", ns, w.Code, w.Body.String())
+		}
+		var resp SpawnResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil || !strings.Contains(resp.Error, "not a tenant namespace") {
+			t.Errorf("%s: response %+v (%v) does not say why", ns, resp, err)
+		}
+	}
+}

@@ -415,8 +415,7 @@ func (m *Manager) StopService(namespace string, serviceType ServiceType) error {
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := Systemctl("stop", svcName)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := m.runUnit("stop", svcName); err != nil {
 		// Don't error if service is already stopped or doesn't exist
 		if strings.Contains(string(output), "not loaded") || strings.Contains(string(output), "inactive") {
 			m.logger.Debug("Service already stopped or not loaded", zap.String("service", svcName))
@@ -468,8 +467,7 @@ func (m *Manager) DisableService(namespace string, serviceType ServiceType) erro
 		zap.String("service", svcName),
 		zap.String("namespace", namespace))
 
-	cmd := Systemctl("disable", svcName)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := m.runUnit("disable", svcName); err != nil {
 		// Don't error if service is already disabled or doesn't exist
 		if strings.Contains(string(output), "not loaded") {
 			m.logger.Debug("Service not loaded", zap.String("service", svcName))

@@ -25,7 +25,8 @@ import (
 // authority:
 //
 //   - The PER-NODE leg is what this node owes the namespaces it hosts: start
-//     what is missing, and rewrite a config that has drifted. Every node runs
+//     what is missing, rewrite a config that has drifted, and tear down what the
+//     registry no longer assigns to it (orphan_teardown.go). Every node runs
 //     it, for its own services only.
 //   - The COORDINATOR leg is cluster-wide state — pruning departed members,
 //     releasing their ports, taking them out of the namespace's raft. Exactly
@@ -79,6 +80,10 @@ func (cm *ClusterManager) reconcileTenantsOnce(ctx context.Context) {
 	}
 	if err := cm.reconcileLocalDrift(ctx); err != nil {
 		cm.logger.Warn("Tenant reconcile: could not reconcile local service configs this sweep", zap.Error(err))
+	}
+
+	if err := cm.reapOrphanedTenants(ctx); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not tear down orphaned namespaces this sweep", zap.Error(err))
 	}
 
 	// Coordinator leg.

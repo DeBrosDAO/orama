@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +112,18 @@ type ClusterManager struct {
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
 	provisioning   map[string]bool // namespace -> in progress
+
+	// orphanStreak counts, per namespace, the consecutive tenant reconciler
+	// sweeps that found it on this node's disk with no assignment in the
+	// registry (reapOrphanedTenants).
+	orphanMu     sync.Mutex
+	orphanStreak map[string]int
+
+	// localTenantsFn and teardownLocalFn replace the node-local namespace
+	// listing and teardown. Nil in production; set in tests, which have no
+	// systemd.
+	localTenantsFn  func() ([]string, error)
+	teardownLocalFn func(ctx context.Context, namespace string) error
 
 	// Leadership-locality reconciler cooldown (bugboard #708): per-namespace
 	// timestamp of the last leadership transfer, to bound churn. Lazy-init.
@@ -417,9 +428,9 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
 	}
 
-	state, err := cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
+	_, err = cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
 	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric, err.Error())
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, err.Error())
 		return nil, err
 	}
 
@@ -430,7 +441,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
 		cm.logger.Error("Failed to create DNS records for a new namespace",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric, err.Error())
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return nil, fmt.Errorf("namespace cluster has no DNS records, so nothing can reach it: %w", err)
 	}
@@ -456,7 +467,7 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 		return cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
 	}); err != nil {
 		reason := fmt.Sprintf("cluster started but ready status was not recorded: %v", err)
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric, reason)
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, reason)
 		return nil, fmt.Errorf("namespace %s: %s", namespaceName, reason)
 	}
 	cm.logEvent(ctx, cluster.ID, EventClusterReady, "", "Cluster is ready", nil)
@@ -1033,29 +1044,27 @@ func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *Namespa
 // failure once, with reason as the message. It runs on its own bounded context:
 // the provisioning context is frequently the one that just expired, and a
 // rollback on a dead context stops nothing.
-func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance, reason string) {
+func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, reason string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
 	defer cancel()
 
 	cm.logger.Info("Rolling back failed provisioning", zap.String("cluster_id", cluster.ID))
 
-	// Stop all namespace services (Gateway, Olric, RQLite) using systemd
-	cm.systemdSpawner.StopAll(ctx, cluster.NamespaceName)
-
-	// Stop Olric instances on each node
-	if olricInstances != nil && nodes != nil {
-		for _, node := range nodes {
-			cm.stopOlricOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
+	// Tear the namespace down on every node it was given: units stopped AND
+	// disabled, data directory and unit env files deleted. Stopping alone left
+	// enabled units and their on-disk state behind, and the membership rows
+	// withdrawn below are what a later deprovision uses to find those nodes, so
+	// a rolled-back namespace that was then deleted was never cleaned up and
+	// came back on the next `orama node upgrade`. A node that cannot be reached
+	// keeps a pending-cleanup record (sendStopRequest) and, failing that, is
+	// reaped by its own tenant reconciler once it sees the namespace is gone.
+	members := make([]staleClusterNode, len(nodes))
+	for i, node := range nodes {
+		members[i] = staleClusterNode{NodeID: node.NodeID, InternalIP: node.InternalIP}
 	}
-
-	// Stop RQLite instances on each node
-	if rqliteInstances != nil && nodes != nil {
-		for i, inst := range rqliteInstances {
-			if inst != nil && i < len(nodes) {
-				cm.stopRQLiteOnNode(ctx, nodes[i].NodeID, nodes[i].InternalIP, cluster.NamespaceName, inst)
-			}
-		}
+	if err := cm.teardownNamespaceOnNodes(ctx, members, cluster.NamespaceName); err != nil {
+		cm.logger.Error("Rollback could not tear the namespace down on every node; the tenant reconciler reaps what is left",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 	}
 
 	// Deallocate ports
@@ -1090,8 +1099,9 @@ const deprovisionActiveNodesQuery = `
 	`
 
 // DeprovisionCluster tears down a namespace cluster on all nodes.
-// Stops namespace infrastructure (Gateway, Olric, RQLite) on every cluster node,
-// deletes cluster-state.json, deallocates ports, removes DNS records, and cleans up DB.
+// Stops and disables the namespace's units (Gateway, Olric, RQLite, WebRTC) on every
+// cluster node, deletes its data directory and unit env files, deallocates ports,
+// removes DNS records, and cleans up DB.
 func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID int64) error {
 	cluster, err := cm.GetClusterByNamespaceID(ctx, namespaceID)
 	if err != nil {
@@ -1117,75 +1127,33 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	var deprovisionDataErr error
 
 	// 1. Get cluster nodes WITH IPs (must happen before any DB deletion)
-	type deprovisionNodeInfo struct {
-		NodeID     string `db:"node_id"`
-		InternalIP string `db:"internal_ip"`
-	}
-	var clusterNodes []deprovisionNodeInfo
-	// Only fan stop requests out to nodes that are still ACTIVE.
+	var clusterNodes []staleClusterNode
+	// Only fan teardown requests out to nodes that are still ACTIVE.
 	//
-	// Every stop RPC uses a 60s HTTP timeout, and deprovisioning issues roughly
-	// six per node (SFU, TURN, gateway, olric, rqlite, delete-cluster-state),
-	// serially. A namespace whose nodes are gone — the exact case you delete such
-	// a namespace for — therefore blocked for ~18 minutes on three dead hosts
-	// before the control-plane rows were touched, which reads as a hang. There is
-	// nothing to stop on a node that is no longer part of the fleet: skip the
-	// round trips and let the row cleanup below proceed. Should such a node ever
-	// return, the periodic sweep stops services it no longer holds an allocation
-	// for (stopUnallocatedWebRTCServices) and prunes its membership.
+	// Every remote request uses a 60s HTTP timeout, and a teardown used to issue
+	// roughly six per node, serially. A namespace whose nodes are gone — the
+	// exact case you delete such a namespace for — therefore blocked for ~18
+	// minutes on three dead hosts before the control-plane rows were touched,
+	// which reads as a hang. There is nothing to stop on a node that is no
+	// longer part of the fleet: skip the round trips and let the row cleanup
+	// below proceed. Should such a node ever return, its own tenant reconciler
+	// tears down a namespace the registry no longer assigns it (reapOrphanedTenants).
 	if err := cm.db.Query(ctx, &clusterNodes, deprovisionActiveNodesQuery, cluster.ID); err != nil {
-		cm.logger.Warn("Failed to query cluster nodes for deprovisioning, falling back to local-only stop", zap.Error(err))
-		// Fall back to local-only stop (individual methods, NOT StopAll which uses dangerous glob)
-		// Stop WebRTC services first (SFU → TURN), then core services (Gateway → Olric → RQLite)
-		cm.systemdSpawner.StopSFU(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.StopTURN(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.StopGateway(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.StopOlric(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.StopRQLite(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
-	} else {
-		// 2. Stop WebRTC services first (SFU → TURN), then core infra (Gateway → Olric → RQLite)
-		for _, node := range clusterNodes {
-			cm.stopSFUOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
-		for _, node := range clusterNodes {
-			cm.stopTURNOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
-		for _, node := range clusterNodes {
-			cm.stopGatewayOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
-		for _, node := range clusterNodes {
-			cm.stopOlricOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
-		for _, node := range clusterNodes {
-			cm.stopRQLiteOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName, nil)
-		}
+		cm.logger.Warn("Failed to query cluster nodes for deprovisioning, falling back to local-only teardown", zap.Error(err))
+		clusterNodes = []staleClusterNode{{NodeID: cm.localNodeID}}
+	}
 
-		// 3. Delete the namespace data directory on all nodes.
-		//
-		// Bugboard #281: these failures used to be swallowed, so a delete that
-		// left the tenant's data on disk still reported success — and re-creating
-		// a namespace of the same name then inherited its raft state. Collect the
-		// failures and surface them; the caller decides, but it must be told.
-		var dataErrs []string
-		for _, node := range clusterNodes {
-			var derr error
-			if node.NodeID == cm.localNodeID {
-				derr = cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
-			} else {
-				derr = cm.sendStopRequest(ctx, node.InternalIP, "delete-cluster-state", cluster.NamespaceName, node.NodeID)
-			}
-			if derr != nil {
-				dataErrs = append(dataErrs, fmt.Sprintf("%s: %v", node.NodeID, derr))
-			}
-		}
-		if len(dataErrs) > 0 {
-			cm.logger.Error("Namespace data directory was NOT removed on every node — re-creating this namespace would inherit its state (bugboard #281)",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.Strings("failures", dataErrs))
-			deprovisionDataErr = fmt.Errorf("namespace data not removed on %d node(s): %s",
-				len(dataErrs), strings.Join(dataErrs, "; "))
-		}
+	// 2. Tear the namespace down on every node: units stopped AND disabled, data
+	// directory and unit env files deleted.
+	//
+	// Bugboard #281: failures here used to be swallowed, so a delete that left
+	// the tenant's data on disk still reported success — and re-creating a
+	// namespace of the same name then inherited its raft state. They are
+	// collected and surfaced; the caller decides, but it must be told.
+	if err := cm.teardownNamespaceOnNodes(ctx, clusterNodes, cluster.NamespaceName); err != nil {
+		cm.logger.Error("Namespace was NOT torn down on every node — re-creating this namespace would inherit its state (bugboard #281)",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		deprovisionDataErr = fmt.Errorf("namespace not torn down on every node: %w", err)
 	}
 
 	// 4. Deallocate all ports (core + WebRTC)
@@ -1602,9 +1570,9 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
 	}
 
-	state, err := cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
+	_, err = cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
 	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric, err.Error())
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, err.Error())
 		cm.logger.Error("Failed to start cluster services", zap.Error(err))
 		return
 	}
@@ -1614,7 +1582,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
 		cm.logger.Error("Failed to create DNS records for a new namespace",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric, err.Error())
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return
 	}
@@ -1642,7 +1610,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 			zap.String("namespace", namespaceName), zap.String("cluster_id", cluster.ID), zap.Error(err))
 		// The services, DNS records and ports are live but the registry will not
 		// say so: undo them, and mark failed only once that is done.
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, state.rqlite, state.olric,
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks,
 			fmt.Sprintf("cluster started but ready status was not recorded: %v", err))
 		return
 	}
@@ -2406,24 +2374,15 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 	)
 
 	// Self-check: verify this node is still assigned to this cluster in the DB.
-	// If we were replaced during downtime, do NOT restore — stop services instead.
+	// A node that was replaced, or a namespace that was deleted, during the
+	// downtime must NOT be restored.
 	if cm.db != nil {
-		type countResult struct {
-			Count int `db:"count"`
+		proceed, err := cm.restoreAssigned(ctx, state)
+		if err != nil {
+			return err
 		}
-		var results []countResult
-		verifyQuery := `SELECT COUNT(*) as count FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? AND node_id = ?`
-		if err := cm.db.Query(ctx, &results, verifyQuery, state.ClusterID, cm.localNodeID); err == nil && len(results) > 0 {
-			if results[0].Count == 0 {
-				cm.logger.Warn("Node was replaced during downtime, stopping orphaned services instead of restoring",
-					zap.String("namespace", state.NamespaceName),
-					zap.String("cluster_id", state.ClusterID))
-				cm.systemdSpawner.StopAll(ctx, state.NamespaceName)
-				// Delete the stale cluster-state.json
-				stateFilePath := filepath.Join(cm.baseDataDir, state.NamespaceName, "cluster-state.json")
-				os.Remove(stateFilePath)
-				return nil
-			}
+		if !proceed {
+			return nil
 		}
 	}
 

@@ -140,8 +140,8 @@ func TestFailStaleProvisioning_stops_services_before_releasing_ports(t *testing.
 	if err := sw.cm.failStaleProvisioning(context.Background()); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if got := sw.count("stop:"); got != 6 {
-		t.Fatalf("stops = %d, want gateway+olric+rqlite on each of 2 nodes (events %v)", got, sw.events)
+	if got := sw.count("stop:teardown-namespace"); got != 2 || sw.count("stop:") != 2 {
+		t.Fatalf("teardowns = %d, want exactly one per node, and no plain stop that leaves units enabled (events %v)", got, sw.events)
 	}
 	lastStop := -1
 	for i, e := range sw.events {
@@ -164,7 +164,7 @@ func TestFailStaleProvisioning_stops_services_before_releasing_ports(t *testing.
 func TestFailStaleProvisioning_failed_remote_stop_is_recorded_and_ports_stay_until_it_succeeds(t *testing.T) {
 	sw := newStaleSweep(oneStaleCluster, twoRemoteNodes, false)
 	sw.stopErr = func(action string) error {
-		if action == "stop-olric" {
+		if action == teardownAction {
 			return errors.New("node unreachable")
 		}
 		return nil
@@ -342,7 +342,7 @@ func TestRollbackProvisioning_records_the_failure_once_with_the_given_reason(t *
 	sw.cm.systemdSpawner = &SystemdSpawner{systemdMgr: systemd.NewManager(t.TempDir(), zap.NewNop()), logger: zap.NewNop()}
 	c := &NamespaceCluster{ID: "c1", NamespaceName: "ns"}
 
-	sw.cm.rollbackProvisioning(context.Background(), c, nil, nil, nil, nil, "dns exploded")
+	sw.cm.rollbackProvisioning(context.Background(), c, nil, nil, "dns exploded")
 
 	var marks []mockExecCall
 	for _, call := range sw.db.execCalls {

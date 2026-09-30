@@ -372,17 +372,62 @@ minute) and not in flight on that node. Age is judged in SQL on the registry's
 clock (`provisioned_at` is written with `CURRENT_TIMESTAMP`, and the sweep
 compares it with `datetime('now', ...)`), never by one node's timestamp against
 another node's clock; a NULL or unparseable `provisioned_at` is logged and
-skipped, not failed. The sweep first stops the cluster's gateway, Olric and
-RQLite on every active node holding one of its port blocks. A stop that fails
+skipped, not failed. The sweep first tears the namespace down (see "A removed
+namespace is removed, not stopped" below) on every active node holding one of
+its port blocks. A teardown that fails
 is recorded in `namespace_pending_cleanup` and the cluster stays `provisioning`
-with its ports held, so the next sweep retries. Only when every stop succeeded
+with its ports held, so the next sweep retries. Only when every teardown succeeded
 does the guarded `UPDATE ... WHERE status = 'provisioning'` run, so exactly one
 node wins, and that node releases the port allocations and DNS records.
 
-A remote stop that fails is recorded in `namespace_pending_cleanup` and retried
+A remote stop or teardown that fails is recorded in `namespace_pending_cleanup` and retried
 every sweep, rather than logged. The unit keeps running and keeps holding a port
 the allocator has already released, and the next namespace given that port finds
 it occupied and joins a foreign raft group.
+
+**A removed namespace is removed, not stopped.** `orama node upgrade` enables
+and restarts every namespace unit it finds on disk (a namespace directory with a
+unit env file in `/var/lib/orama-unit-env/<ns>/`), and a reboot starts the same
+set. A namespace that was only *stopped* therefore came back: a provisioning
+that failed, was rolled back and was then deleted by its owner left enabled
+`orama-namespace-{rqlite,olric,gateway}@<ns>` units and their data on every
+node, because the rollback withdrew the membership rows a later delete uses to
+find the nodes, and neither path disabled anything. A rolling upgrade started
+the deleted namespace again on all three.
+
+Every path that takes a namespace away — the rollback of a failed provisioning,
+`DeprovisionCluster` (the owner's delete and the operator's remove), the
+stale-provisioning sweep, and the cleanup of a recovered node that was replaced
+— now calls `SystemdSpawner.TeardownNamespace`, locally or through the
+`teardown-namespace` spawn action. It stops **and disables** every tenant unit
+(rqlite, olric, gateway, sfu, turn) and the namespace's deployment units, and
+only then deletes the namespace's data directory and unit env files. If a unit
+cannot be stopped or disabled the data and env files are kept and the error is
+returned: they are the handle a retry finds the namespace by. The `stop-*` spawn
+actions and `systemd.Manager.StopService` keep their meaning — stop for a
+restart, unit stays enabled — and are not used to remove a namespace. The
+platform instances (`index`, `nameserver`, `system`, `default`) are refused by
+`TeardownNamespace`.
+
+The backstop is the tenant reconciler's orphan sweep (`reapOrphanedTenants`,
+every 60s on every node). It lists the tenant namespaces with state on the node
+(a data directory with a provisioned tenant unit, or a loaded tenant unit
+instance) and tears down each one the registry assigns nothing of to this node
+(no `namespace_cluster_nodes` and no `namespace_port_allocations` row for it,
+in any cluster of that name). Teardown is destructive, so it acts only when the
+registry read succeeded and holds at least one cluster (an empty registry beside
+a node full of tenants is a fresh or lagging database, not proof that every
+namespace was deleted), never on a namespace being provisioned by this process
+or on a platform instance, and only after the namespace has been seen orphaned
+on two consecutive sweeps. Each teardown is logged at warn with the reason. At
+boot, `RestoreLocalClustersFromDisk` applies the same rule to a namespace whose
+cluster id the registry no longer assigns to this node: when the registry
+answers, is non-empty and does not know the namespace under any cluster id, it
+is not restored and is torn down; when the registry cannot be read, the local
+state is all there is and the namespace is restored, with a warning. A node that
+is upgraded while still holding a namespace deleted by an older release starts
+it for up to two sweeps (about two minutes) before the orphan sweep removes it:
+the upgrade cannot ask the registry, and this is the only window.
 
 **One writer for membership.** A node's existence is recorded in five places —
 `dns_nodes`, `wireguard_peers`, the index raft configuration, ipfs-cluster's

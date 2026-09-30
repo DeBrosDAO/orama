@@ -173,18 +173,19 @@ func (cm *ClusterManager) HandleRecoveredNode(ctx context.Context, nodeID string
 		cm.logger.Warn("Failed to query recovery events for cleanup", zap.Error(err))
 	}
 
-	// Send stop requests for each orphaned namespace
+	// Tear down each orphaned namespace
+	clusterMember := staleClusterNode{NodeID: nodeID, InternalIP: ips.InternalIP}
 	for _, evt := range events {
 		cm.logger.Info("Stopping orphaned namespace services on recovered node",
 			zap.String("node_id", nodeID),
 			zap.String("namespace", evt.NamespaceName))
-		cm.sendStopRequest(ctx, ips.InternalIP, "stop-all", evt.NamespaceName, nodeID)
-		// Also delete the stale cluster-state.json
-		cm.sendSpawnRequest(ctx, ips.InternalIP, map[string]interface{}{
-			"action":    "delete-cluster-state",
-			"namespace": evt.NamespaceName,
-			"node_id":   nodeID,
-		})
+		// Teardown, not stop: the node was replaced in this namespace, so its
+		// units and data must not come back with the next upgrade. (This used to
+		// send "stop-all", which the spawn handler has no case for.)
+		if err := cm.teardownNamespaceOnNode(ctx, clusterMember, evt.NamespaceName); err != nil {
+			cm.logger.Warn("Could not tear down orphaned namespace on recovered node",
+				zap.String("node_id", nodeID), zap.String("namespace", evt.NamespaceName), zap.Error(err))
+		}
 	}
 
 	// Mark node as active again — it's available for future use

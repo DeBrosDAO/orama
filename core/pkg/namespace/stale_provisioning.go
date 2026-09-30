@@ -49,10 +49,6 @@ const (
 		WHERE pa.namespace_cluster_id = ? AND dn.status = 'active'`
 )
 
-// staleClusterStopActions are the stop requests for the services provisioning
-// starts, dependents first (Gateway, Olric, RQLite).
-var staleClusterStopActions = []string{"stop-gateway", "stop-olric", "stop-rqlite"}
-
 type staleClusterNode struct {
 	NodeID     string `db:"node_id"`
 	InternalIP string `db:"internal_ip"`
@@ -156,43 +152,14 @@ func (cm *ClusterManager) failStaleCluster(ctx context.Context, c *NamespaceClus
 	return nil
 }
 
-// stopStaleClusterServices stops the cluster's gateway, olric and rqlite on
-// every active node holding one of its port blocks, attempting all of them and
-// joining the failures.
+// stopStaleClusterServices tears the cluster down on every active node holding
+// one of its port blocks, attempting all of them and joining the failures.
+// Teardown, not stop: the stale cluster is about to be marked failed, and a
+// failed cluster's units must not be left enabled for the next upgrade to start.
 func (cm *ClusterManager) stopStaleClusterServices(ctx context.Context, c *NamespaceCluster) error {
 	var nodes []staleClusterNode
 	if err := cm.db.Query(ctx, &nodes, staleClusterNodesQuery, c.ID); err != nil {
 		return fmt.Errorf("failed to list the nodes of cluster %s: %w", c.ID, err)
 	}
-
-	var errs []error
-	for _, node := range nodes {
-		for _, action := range staleClusterStopActions {
-			if err := cm.stopNamespaceUnit(ctx, node, action, c.NamespaceName); err != nil {
-				errs = append(errs, fmt.Errorf("%s on node %s: %w", action, node.NodeID, err))
-			}
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// stopNamespaceUnit stops one service on a node, locally or through the node's
-// spawn endpoint, and returns the failure. A failed remote stop is recorded for
-// replay by sendStopRequest.
-func (cm *ClusterManager) stopNamespaceUnit(ctx context.Context, node staleClusterNode, action, namespace string) error {
-	if node.NodeID != cm.localNodeID {
-		if node.InternalIP == "" {
-			return fmt.Errorf("node %s has no overlay address recorded, so it cannot be asked to stop %s", node.NodeID, namespace)
-		}
-		return cm.sendStopRequest(ctx, node.InternalIP, action, namespace, node.NodeID)
-	}
-	switch action {
-	case "stop-gateway":
-		return cm.systemdSpawner.StopGateway(ctx, namespace, node.NodeID)
-	case "stop-olric":
-		return cm.systemdSpawner.StopOlric(ctx, namespace, node.NodeID)
-	case "stop-rqlite":
-		return cm.systemdSpawner.StopRQLite(ctx, namespace, node.NodeID)
-	}
-	return fmt.Errorf("unknown stop action %q", action)
+	return cm.teardownNamespaceOnNodes(ctx, nodes, c.NamespaceName)
 }
