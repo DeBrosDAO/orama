@@ -44,6 +44,12 @@ func (k Keeper) FundHotKey(ctx sdk.Context, msg *types.MsgFundHotKey) error {
 		if err := k.earningsKeeper.FundFeeBalance(ctx, from, to, msg.Amount); err != nil {
 			return fmt.Errorf("fund hot key of node %s: %w", node.NodeId, err)
 		}
+		// The fee balance is for the hot key's own transactions, and an address with no account
+		// cannot sign one: the first funding creates it. A funded key keeps its account (and
+		// sequence) on every later funding.
+		if !k.accountKeeper.HasAccount(ctx, to) {
+			k.accountKeeper.SetAccount(ctx, k.accountKeeper.NewAccountWithAddress(ctx, to))
+		}
 		ctx.EventManager().EmitEvent(sdk.NewEvent(types.EventTypeFundHotKey,
 			sdk.NewAttribute(types.AttributeOperator, operator),
 			sdk.NewAttribute(types.AttributeNodeID, node.NodeId),

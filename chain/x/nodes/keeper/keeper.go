@@ -24,6 +24,7 @@ type Keeper struct {
 	bankKeeper     types.BankKeeper
 	depositKeeper  types.DepositKeeper
 	earningsKeeper types.EarningsKeeper
+	accountKeeper  types.AccountKeeper
 
 	Schema          collections.Schema
 	Params          collections.Item[types.Params]
@@ -55,6 +56,7 @@ func NewKeeper(
 	bankKeeper types.BankKeeper,
 	depositKeeper types.DepositKeeper,
 	earningsKeeper types.EarningsKeeper,
+	accountKeeper types.AccountKeeper,
 ) Keeper {
 	if bankKeeper == nil {
 		panic("x/nodes bank keeper is nil")
@@ -65,6 +67,9 @@ func NewKeeper(
 	if earningsKeeper == nil {
 		panic("x/nodes earnings keeper is nil")
 	}
+	if accountKeeper == nil {
+		panic("x/nodes account keeper is nil")
+	}
 	sb := collections.NewSchemaBuilder(storeService)
 	k := Keeper{
 		cdc:            cdc,
@@ -72,6 +77,7 @@ func NewKeeper(
 		bankKeeper:     bankKeeper,
 		depositKeeper:  depositKeeper,
 		earningsKeeper: earningsKeeper,
+		accountKeeper:  accountKeeper,
 		Params:         collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
 		Operators:      collections.NewMap(sb, types.OperatorPrefix, "operators", collections.StringKey, codec.CollValue[types.Operator](cdc)),
 		Nodes:          collections.NewMap(sb, types.NodePrefix, "nodes", collections.StringKey, codec.CollValue[types.Node](cdc)),

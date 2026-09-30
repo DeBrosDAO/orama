@@ -259,6 +259,7 @@ type testFixture struct {
 	Bank     *fakeBankKeeper
 	Deposits *fakeDeposits
 	Earnings *fakeEarnings
+	Accounts *fakeAccounts
 	Msg      types.MsgServer
 }
 
@@ -283,8 +284,9 @@ func newRawFixture(t *testing.T) *testFixture {
 	bank := newFakeBankKeeper()
 	deps := newFakeDeposits(bank)
 	earn := newFakeEarnings(bank)
-	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, deps, earn)
-	return &testFixture{Ctx: ctx, Keeper: k, Bank: bank, Deposits: deps, Earnings: earn, Msg: keeper.NewMsgServerImpl(k)}
+	accounts := newFakeAccounts()
+	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), bank, deps, earn, accounts)
+	return &testFixture{Ctx: ctx, Keeper: k, Bank: bank, Deposits: deps, Earnings: earn, Accounts: accounts, Msg: keeper.NewMsgServerImpl(k)}
 }
 
 func (f *testFixture) fund(addr sdk.AccAddress, orama int64) {

@@ -40,3 +40,12 @@ type EarningsKeeper interface {
 	FundFeeBalance(ctx context.Context, from, to sdk.AccAddress, amount math.Int) error
 	FundSpendFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
 }
+
+// AccountKeeper is the subset of x/auth x/nodes uses to give a node's hot key an account when
+// the operator funds it: a fee balance is for signing, and an address with no account cannot sign
+// (the ante handler reads its account number and sequence).
+type AccountKeeper interface {
+	HasAccount(ctx context.Context, addr sdk.AccAddress) bool
+	NewAccountWithAddress(ctx context.Context, addr sdk.AccAddress) sdk.AccountI
+	SetAccount(ctx context.Context, acc sdk.AccountI)
+}

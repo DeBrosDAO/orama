@@ -493,6 +493,7 @@ func NewOramaApp(
 		app.BankKeeper,
 		app.FeesKeeper,
 		app.FeesKeeper,
+		app.AccountKeeper,
 	)
 	app.CnftKeeper = cnftkeeper.NewKeeper(
 		appCodec,
