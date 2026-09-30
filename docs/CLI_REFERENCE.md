@@ -1327,7 +1327,7 @@ Create a new serverless function project
 orama function init <name>
 ```
 
-Scaffolds a new directory with function.go and function.yaml templates.
+Scaffolds a new directory with function.go, function.yaml, go.mod and a copy of the function SDK, ready for 'orama function build'.
 
 ### orama function invoke
 

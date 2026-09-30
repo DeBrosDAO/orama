@@ -32,8 +32,16 @@ orama function logs my-function
 ```
 my-function/
 ├── function.go      # Handler code
-└── function.yaml    # Configuration
+├── function.yaml    # Configuration
+├── go.mod           # Go module, named after the function
+└── fn/fn.go         # The function SDK (`sdk/fn`), copied in
 ```
+
+`orama function init` writes all four. The SDK is copied into the project
+because its import path in this repository is not one a function's module can
+fetch, and so `orama function build` fetches nothing. TinyGo builds a module,
+so a function written by hand needs a `go.mod` too; a handler that uses only
+the standard library needs nothing else.
 
 ### function.yaml
 
