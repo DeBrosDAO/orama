@@ -31,7 +31,7 @@ type publishBatchBody struct {
 // Handler serves the node's pubsub HTTP API on top of a Manager. It trusts the
 // namespace a request names, so it must only be served on a listener that
 // admits the gateways alone (ListenSocket).
-func Handler(mgr *Manager, logger *zap.Logger) http.Handler {
+func Handler(mgr *Manager, logger *zap.Logger, opts ...HandlerOption) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -163,5 +163,8 @@ func Handler(mgr *Manager, logger *zap.Logger) http.Handler {
 			}
 		}
 	})
+	for _, opt := range opts {
+		opt(mux, logger)
+	}
 	return mux
 }

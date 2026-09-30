@@ -99,7 +99,7 @@ func main() {
 		os.Exit(1)
 	}
 	srv := &http.Server{
-		Handler:           pubsub.Handler(mgr, logger.Logger),
+		Handler:           pubsub.Handler(mgr, logger.Logger, pubsub.WithMesh(pubsub.NewMesh(h, constants.WireGuardOverlay()))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

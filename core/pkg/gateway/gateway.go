@@ -931,6 +931,26 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		}
 	}
 
+	// The cluster gateway of every node joins its node's pubsub service to the
+	// other nodes' (pubsub_mesh.go). Without it a message reaches only the
+	// subscribers on the node it was published through.
+	if !servesNamedNamespace(cfg.ClientNamespace) && deps.Client != nil && deps.SQLDB != nil {
+		if service := pubsubMeshServiceOf(deps.Client); service != nil {
+			mesh := NewPubsubMesh(service, deps.SQLDB, cfg.NodePeerID, logger.Logger)
+			go func() {
+				if !gw.AwaitReady(gw.shutdownCtx) {
+					return
+				}
+				if err := mesh.Run(gw.shutdownCtx); err != nil {
+					logger.ComponentError(logging.ComponentGeneral, "pubsub mesh stopped", zap.Error(err))
+				}
+			}()
+		} else {
+			logger.ComponentWarn(logging.ComponentGeneral,
+				"the pubsub service is not reachable through this gateway's client: messages will not cross nodes")
+		}
+	}
+
 	// Start node health monitor (ring-based peer failure detection).
 	//
 	// Index gateway only. The ring is built from dns_nodes, which is written by

@@ -966,6 +966,23 @@ serverless PubSub triggers and is published to that service, which delivers it
 once to every subscriber on the publishing node (GossipSub's loopback) and to
 those on other nodes. The gateway does not also push it to its own sockets.
 
+The services of different nodes are one GossipSub mesh only because something
+connects them. Each service is a libp2p host of its own on its node's WireGuard
+address (an OS-picked port, its own identity), and no node's configuration
+names another node's service; the node libp2p hosts it bootstraps from carry no
+app topics. So the cluster gateway (`orama-namespace-gateway@index`, every node;
+`pkg/gateway/pubsub_mesh.go`) does it: every 15 seconds it asks its service for
+its address (`GET /mesh/self` on the service's socket), registers it in the
+cluster registry table `_pubsub_mesh_peers` (peer id, node id, multiaddr, last
+seen), and has the service connect to every other service seen in the last two
+minutes (`POST /mesh/peers`, `pkg/pubsub` `Mesh`). The service dials only
+`/ip4/<overlay ip>/tcp/<port>/p2p/<peer id>` addresses inside the WireGuard
+prefix (at most 256 per call) and refuses the whole list otherwise; a peer that
+does not answer is reported and retried at the next round while it stays
+registered. A node whose service restarts is found again within one round. A
+gateway that cannot reach its service logs
+`pubsub mesh: reconcile failed, will retry`.
+
 The publish is made inside the request. `POST /v1/pubsub/publish` (and
 `/publish-batch`) answer `200 {"status":"ok"}` only once the pubsub service has
 accepted the message, so one client's sequential publishes to a topic reach

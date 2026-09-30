@@ -169,3 +169,35 @@ func (c *HTTPClient) Close() error {
 	}
 	return nil
 }
+
+// meshCall makes one request to the mesh API and decodes the reply into out.
+func (c *HTTPClient) meshCall(ctx context.Context, method, path string, in, out any) error {
+	var body io.Reader
+	if in != nil {
+		encoded, err := json.Marshal(in)
+		if err != nil {
+			return fmt.Errorf("encode request: %w", err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		slurp, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("%s %s: %s %s", method, path, resp.Status, slurp)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("%s %s: decode reply: %w", method, path, err)
+	}
+	return nil
+}
