@@ -5,6 +5,7 @@ package deployments
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -12,6 +13,10 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
+
+// deployTypeGo is what the gateway calls a Go backend deployment
+// (core/pkg/deployments/types.go); `orama deploy go` is the CLI's runtime name.
+const deployTypeGo = "go-backend"
 
 // TestDeployLifecycle_updateRollbackVersions: an update bumps the version and
 // serves the new build; versions lists both; rollback serves the old build
@@ -25,19 +30,30 @@ func TestDeployLifecycle_updateRollbackVersions(t *testing.T) {
 	tn.deploy(t, "go", tenancy.WriteProbeApp(t, "life-v2"), "life", "--update")
 	serving(t, tn.app(u), "/version", "life-v2")
 	var versions struct {
+		Current  int `json:"current_version"`
 		Versions []struct {
 			Version int `json:"version"`
 		} `json:"versions"`
 	}
 	decode(t, tn.api(t, http.MethodGet, pathVersions+"?name=life", nil).Expect(t, http.StatusOK), &versions)
-	if len(versions.Versions) < 2 {
-		t.Fatalf("versions lists %+v, want 1 and 2", versions.Versions)
+	seen := map[int]int{}
+	for _, v := range versions.Versions {
+		seen[v.Version]++
 	}
-	tn.cli.MustOK(t, "app", "rollback", "life", "--version", "1")
+	if versions.Current != 2 || seen[1] != 1 || seen[2] != 1 || len(seen) != 2 {
+		t.Errorf("after one update the versions are %+v at current %d, want exactly one row each for 1 and 2", versions.Versions, versions.Current)
+	}
+	// The rollback asks "(y/N)" on stdin; without an answer it cancels and
+	// exits 0, so every run here answers y and a refusal is the API's.
+	confirm := oramacli.RunOpts{Stdin: []byte("y\n")}
+	rolled, err := tn.cli.RunWith(t.Context(), confirm, "app", "rollback", "life", "--version", "1")
+	if err != nil || rolled.Exit != 0 || strings.Contains(rolled.Stdout, "Cancelled") {
+		t.Fatalf("orama app rollback life --version 1: exit %d %v %s", rolled.Exit, err, rolled.Stdout)
+	}
 	serving(t, tn.app(u), "/version", "life-v1")
 	for _, bad := range [][]string{{"app", "rollback", "life", "--version", "99"}, {"app", "rollback", "life"}, {"app", "rollback", "nope", "--version", "1"}} {
-		if res, err := tn.cli.Run(t.Context(), bad...); err != nil || res.Exit == 0 {
-			t.Errorf("orama %s succeeded (%v)", strings.Join(bad, " "), err)
+		if res, err := tn.cli.RunWith(t.Context(), confirm, bad...); err != nil || res.Exit == 0 {
+			t.Errorf("orama %s succeeded (%v): %s", strings.Join(bad, " "), err, res.Stdout)
 		}
 	}
 	tn.describes(t, "life")
@@ -58,10 +74,10 @@ func (tn *tenant) describes(t testing.TB, name string) {
 	if err := oramacli.DecodeJSON(tn.cli.MustOK(t, "app", "list", "--json"), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Deployments) == 0 || list.Deployments[0].Name != name || list.Deployments[0].Type != "go" {
+	if len(list.Deployments) == 0 || list.Deployments[0].Name != name || list.Deployments[0].Type != deployTypeGo {
 		t.Errorf("app list shows %+v", list.Deployments)
 	}
-	if out := tn.cli.MustOK(t, "app", "get", name).Stdout; !strings.Contains(out, "Type:             go") || !strings.Contains(out, "https://") {
+	if out := tn.cli.MustOK(t, "app", "get", name).Stdout; !regexp.MustCompile(`(?m)^Type:\s+`+deployTypeGo+`$`).MatchString(out) || !strings.Contains(out, "https://") {
 		t.Errorf("app get printed %q", out)
 	}
 	tn.cli.MustOK(t, "app", "logs", name, "-n", "20")
