@@ -258,3 +258,26 @@ func TestGatewayDatabase_schemaLeavesOutTablesTheGatewayRefuses(t *testing.T) {
 		t.Errorf("schema lists %v, want only notes", names)
 	}
 }
+
+// A redirect is refused, never followed: Go forwards X-API-Key on a
+// cross-host hop, so following one could hand the key to another host
+// (security review, 2026-09-30).
+func TestGatewayDatabase_aRedirectIsRefusedNotFollowed(t *testing.T) {
+	followed := false
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		followed = true
+	}))
+	defer elsewhere.Close()
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer gw.Close()
+	c := &Client{config: &ClientConfig{AppName: "app", APIKey: "ak_secret:app", GatewayURL: gw.URL}, connected: true}
+	_, err := newGatewayDatabaseClient(c).Query(context.Background(), "SELECT 1")
+	if err == nil || !strings.Contains(err.Error(), "redirected") {
+		t.Fatalf("err %v, want the redirect refused", err)
+	}
+	if followed {
+		t.Fatal("the request, with its key, followed the redirect")
+	}
+}

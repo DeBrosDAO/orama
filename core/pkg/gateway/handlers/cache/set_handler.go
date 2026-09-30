@@ -11,8 +11,10 @@ import (
 
 	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	olriclib "github.com/olric-data/olric"
+	"go.uber.org/zap"
 )
 
 // getNamespaceFromContext extracts the namespace from the request context
@@ -114,6 +116,10 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := dm.Put(ctx, req.Key, valueToStore, putOpts...); err != nil {
 		status, message := putFailure(err)
+		if status == http.StatusInternalServerError {
+			h.logger.ComponentError(logging.ComponentGeneral, "failed to put key into cache",
+				zap.String("dmap", req.DMap), zap.Error(err))
+		}
 		writeError(w, status, message)
 		return
 	}
@@ -159,6 +165,7 @@ func putFailure(err error) (int, string) {
 	case errors.Is(err, olriclib.ErrKeyTooLarge):
 		return http.StatusRequestEntityTooLarge, "key too large: use a shorter key"
 	default:
-		return http.StatusInternalServerError, fmt.Sprintf("failed to put key: %v", err)
+		// Olric's text can name cluster members; it is the operator's, in the log.
+		return http.StatusInternalServerError, "failed to put key; retry, and if it persists the cache is unavailable"
 	}
 }

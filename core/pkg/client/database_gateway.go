@@ -34,7 +34,13 @@ type gatewayDatabaseClient struct {
 }
 
 func newGatewayDatabaseClient(c *Client) *gatewayDatabaseClient {
-	return &gatewayDatabaseClient{client: c, http: &http.Client{Timeout: gatewayDatabaseTimeout}}
+	// No redirects: a redirect is answered as it is, never followed. Go strips
+	// Authorization on a cross-host hop but forwards X-API-Key, which the
+	// request carries too.
+	return &gatewayDatabaseClient{client: c, http: &http.Client{
+		Timeout:       gatewayDatabaseTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}
 }
 
 // checkAccess is what every call needs before it is sent.
@@ -242,6 +248,10 @@ func (d *gatewayDatabaseClient) do(req *http.Request, out any) error {
 		return fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+		return fmt.Errorf("the gateway redirected the request (%d to %q); the database client does not follow redirects, so point it at the gateway itself",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDatabaseResponse+1))
 	if err != nil {
 		return fmt.Errorf("failed to read the response: %w", err)
