@@ -137,8 +137,15 @@ func renewedBearer(gatewayURL string, store *auth.EnhancedCredentialStore, creds
 // the code it already had.
 func envTokenError(err error) error {
 	var refusal *auth.GatewayError
-	if errors.As(err, &refusal) && (refusal.Status == http.StatusUnauthorized || refusal.Status == http.StatusForbidden) {
+	switch {
+	case errors.As(err, &refusal) && (refusal.Status == http.StatusUnauthorized || refusal.Status == http.StatusForbidden):
 		return clierr.Wrap(clierr.CodeAuth, err)
+	case errors.As(err, &refusal) && refusal.IsRetryable():
+		// A rate limit or a gateway without a leader: the key may be fine,
+		// and the same command may work in a moment.
+		return clierr.Wrap(clierr.CodeUnavailable, err)
+	case errors.Is(err, auth.ErrGatewayUnreachable):
+		return clierr.Wrap(clierr.CodeUnavailable, err)
 	}
 	return err
 }

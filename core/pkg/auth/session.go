@@ -214,7 +214,7 @@ func postForSession(client *http.Client, url string, payload []byte, bearer stri
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("reach %s: %w", url, err)
+		return nil, fmt.Errorf("%w: reach %s: %w", ErrGatewayUnreachable, url, err)
 	}
 	defer resp.Body.Close()
 
