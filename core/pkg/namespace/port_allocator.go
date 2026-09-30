@@ -28,13 +28,28 @@ func NewNamespacePortAllocator(db rqlite.Client, logger *zap.Logger) *NamespaceP
 	}
 }
 
+const (
+	// portAllocMaxAttempts bounds how often an allocation that lost a race for
+	// a free block is retried.
+	portAllocMaxAttempts = 10
+	// portAllocInitialBackoff is the first wait between attempts; it doubles.
+	portAllocInitialBackoff = 100 * time.Millisecond
+)
+
 // AllocatePortBlock finds and allocates a contiguous block sized to bp.PortNeedCount().
+//
+// It is idempotent per (cluster, node): a block already recorded for the pair
+// is returned as is. That covers a retry after an ambiguous failure whose first
+// INSERT had in fact committed, including the case where the retry's own INSERT
+// is what hits UNIQUE(namespace_cluster_id, node_id).
 func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID, namespaceClusterID string, bp Blueprint) (*PortBlock, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
-	// Check if allocation already exists for this namespace on this node
 	existingBlock, err := npa.GetPortBlock(ctx, namespaceClusterID, nodeID)
-	if err == nil && existingBlock != nil {
+	if err != nil {
+		return nil, fmt.Errorf("failed to check for an existing port block of cluster %s on node %s: %w", namespaceClusterID, nodeID, err)
+	}
+	if existingBlock != nil {
 		npa.logger.Debug("Port block already allocated",
 			zap.String("node_id", nodeID),
 			zap.String("namespace_cluster_id", namespaceClusterID),
@@ -43,11 +58,8 @@ func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID
 		return existingBlock, nil
 	}
 
-	// Retry logic for handling concurrent allocation conflicts
-	maxRetries := 10
-	retryDelay := 100 * time.Millisecond
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	retryDelay := portAllocInitialBackoff
+	for attempt := 1; attempt <= portAllocMaxAttempts; attempt++ {
 		block, err := npa.tryAllocatePortBlock(internalCtx, nodeID, namespaceClusterID, bp)
 		if err == nil {
 			npa.logger.Info("Port block allocated successfully",
@@ -55,30 +67,42 @@ func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID
 				zap.String("namespace_cluster_id", namespaceClusterID),
 				zap.Int("port_start", block.PortStart),
 				zap.Int("port_end", block.PortEnd),
-				zap.Int("attempt", attempt+1),
+				zap.Int("attempt", attempt),
 			)
 			return block, nil
 		}
-
-		// If it's a conflict error, retry with exponential backoff
-		if isConflictError(err) {
-			npa.logger.Debug("Port allocation conflict, retrying",
-				zap.String("node_id", nodeID),
-				zap.String("namespace_cluster_id", namespaceClusterID),
-				zap.Int("attempt", attempt+1),
-				zap.Error(err),
-			)
-			time.Sleep(retryDelay)
-			retryDelay *= 2
-			continue
+		if !isConflictError(err) {
+			return nil, err
 		}
 
-		// Other errors are non-retryable
-		return nil, err
+		// A conflict is either another cluster taking the block first (retry
+		// with fresh ranges) or this very allocation already being recorded.
+		existing, getErr := npa.GetPortBlock(ctx, namespaceClusterID, nodeID)
+		if getErr != nil {
+			return nil, fmt.Errorf("port allocation conflicted (%v) and the existing block of cluster %s on node %s could not be read: %w", err, namespaceClusterID, nodeID, getErr)
+		}
+		if existing != nil {
+			return existing, nil
+		}
+
+		npa.logger.Debug("Port allocation conflict, retrying",
+			zap.String("node_id", nodeID),
+			zap.String("namespace_cluster_id", namespaceClusterID),
+			zap.Int("attempt", attempt),
+			zap.Error(err),
+		)
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("port allocation for cluster %s on node %s abandoned after %d conflicts: %w", namespaceClusterID, nodeID, attempt, ctx.Err())
+		case <-timer.C:
+		}
+		retryDelay *= 2
 	}
 
 	return nil, &ClusterError{
-		Message: fmt.Sprintf("failed to allocate port block after %d retries", maxRetries),
+		Message: fmt.Sprintf("failed to allocate port block after %d retries", portAllocMaxAttempts),
 	}
 }
 

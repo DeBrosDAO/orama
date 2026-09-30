@@ -352,15 +352,32 @@ in the removal, and the departed node stays a configured voter for ever. That
 was the gap: pruning released the ports and the membership row and stopped.
 
 **Provisioning waits out a registry election and never strands a cluster.**
-Provisioning runs as one 5-minute goroutine on the node that took the create
-request. Its registry reads and writes (node selection, port allocation, the
-ready/failed status) wait, with backoff, while the registry has no raft leader,
-and fail at once on any other error. A failure is written on a fresh 2-minute
-context, and if even that write cannot land it is logged at error level with the
-namespace and cluster id. Every node's sweep also fails a cluster still in
-`provisioning` after 7 minutes (the timeout plus a margin) and not in flight on
-that node, using an `UPDATE ... WHERE status = 'provisioning'` so exactly one
-node wins, then releases its port allocations and DNS records.
+Provisioning (both the async and the synchronous entry point) runs under one
+5-minute bound on the node that took the create request. Its registry reads and
+writes (node selection, port allocation, the ready/failed status) wait, with
+backoff, while the registry has no raft leader, and fail at once on any other
+error. Port allocation is idempotent per (cluster, node): a retry whose first
+INSERT committed but whose reply was lost gets that block back instead of a
+UNIQUE failure, and its backoff ends with the context. A failed run is rolled
+back on its own 3-minute context (the provisioning one is often the one that
+just expired) and the failure is recorded once, with the most informative
+message, on a fresh 2-minute context; a cluster that came up but whose ready
+status cannot be recorded is rolled back the same way rather than left running
+under a `failed` row. If even the failure write cannot land it is logged at
+error level with the namespace and cluster id.
+
+Every node's sweep also fails a cluster still in `provisioning` after 11
+minutes (`provisioningTimeout + rollbackTimeout + markFailedTimeout` plus a
+minute) and not in flight on that node. Age is judged in SQL on the registry's
+clock (`provisioned_at` is written with `CURRENT_TIMESTAMP`, and the sweep
+compares it with `datetime('now', ...)`), never by one node's timestamp against
+another node's clock; a NULL or unparseable `provisioned_at` is logged and
+skipped, not failed. The sweep first stops the cluster's gateway, Olric and
+RQLite on every active node holding one of its port blocks. A stop that fails
+is recorded in `namespace_pending_cleanup` and the cluster stays `provisioning`
+with its ports held, so the next sweep retries. Only when every stop succeeded
+does the guarded `UPDATE ... WHERE status = 'provisioning'` run, so exactly one
+node wins, and that node releases the port allocations and DNS records.
 
 A remote stop that fails is recorded in `namespace_pending_cleanup` and retried
 every sweep, rather than logged. The unit keeps running and keeps holding a port

@@ -18,10 +18,18 @@ const (
 	// swallow the status change, and is long enough to outlast a Raft election.
 	markFailedTimeout = 2 * time.Minute
 
-	// staleProvisioningMargin is added to provisioningTimeout before a cluster
-	// still in 'provisioning' is declared abandoned, so a run that is merely
-	// finishing its last write is never failed from under itself.
-	staleProvisioningMargin = 2 * time.Minute
+	// rollbackTimeout bounds the cleanup of a failed provisioning run. The
+	// rollback runs on its own context, because the provisioning context is
+	// often the thing that just expired.
+	rollbackTimeout = 3 * time.Minute
+
+	// staleProvisioningAfter is how old a cluster still in 'provisioning' must
+	// be before it is declared abandoned. A live run is over by
+	// provisioningTimeout, then spends up to rollbackTimeout cleaning up and
+	// markFailedTimeout recording the failure; the extra minute keeps the
+	// threshold strictly beyond all three, so a run that is merely finishing
+	// its last write is never failed from under itself.
+	staleProvisioningAfter = provisioningTimeout + rollbackTimeout + markFailedTimeout + time.Minute
 
 	registryRetryInitialBackoff = 250 * time.Millisecond
 	registryRetryMaxBackoff     = 5 * time.Second
