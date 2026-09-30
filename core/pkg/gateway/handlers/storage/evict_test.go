@@ -26,15 +26,12 @@ const testClusterSecret = "test-cluster-secret-for-evict-macs"
 // pin-status UPDATE that UnpinHandler runs first.
 type mockStorageDB struct {
 	rqlite.Client
-	refCount      int      // references to the CID across ALL namespaces (ipfs_cid_refs)
-	refQueryErr   error    // error from the cluster reference index
-	otherPinCount int      // is_pinned=1 rows in OTHER namespaces (bugboard #156)
-	otherQueryErr error    // error to return from the cross-namespace check only
-	nodeIPs       []string // active node internal IPs
-	queryErr      error
+	refCount    int      // references to the CID across ALL namespaces (ipfs_cid_refs)
+	refQueryErr error    // error from the cluster reference index
+	nodeIPs     []string // active node internal IPs
+	queryErr    error
 
 	refsQueried  bool
-	otherQueried bool
 	nodesQueried bool
 
 	// namespaceScoped marks this mock as a NAMESPACE gateway's own database.
@@ -55,14 +52,6 @@ func (m *mockStorageDB) Query(_ context.Context, dest any, query string, _ ...an
 		return nil
 	}
 	switch {
-	case strings.Contains(query, "namespace != ?") && strings.Contains(query, "ipfs_content_ownership"):
-		// CIDInUseByOtherNamespace (bugboard #156), still used by deployments and
-		// namespace delete.
-		m.otherQueried = true
-		if m.otherQueryErr != nil {
-			return m.otherQueryErr
-		}
-		*out = []map[string]interface{}{{"count": float64(m.otherPinCount)}}
 	case strings.Contains(query, "ipfs_cid_refs"):
 		m.refsQueried = true
 		if m.refQueryErr != nil {

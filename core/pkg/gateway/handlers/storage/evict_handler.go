@@ -53,12 +53,10 @@ const (
 // cluster pin, so immediate eviction must only proceed when no namespace still
 // references it — otherwise a shared blob would be destroyed for the others.
 func (h *Handlers) remainingPinsForCID(ctx context.Context, cid string) (int, error) {
-	if h.globalDB == nil {
+	if h.db == nil {
 		return 0, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, refQueryTimeout)
-	defer cancel()
-	return h.countCIDRefs(ctx, cid)
+	return h.refs.Count(ctx, cid)
 }
 
 // countFromRow coerces a COUNT(*) cell (rqlite returns float64 or int64) to int.

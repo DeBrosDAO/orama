@@ -12,7 +12,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
-	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"go.uber.org/zap"
 )
 
@@ -168,14 +167,19 @@ func (h *UpdateHandler) updateStatic(ctx context.Context, existing *deployments.
 		WHERE namespace = ? AND name = ?
 	`
 
+	fresh, err := h.service.registerCIDs(ctx, existing.Namespace, cid)
+	if err != nil {
+		return nil, err
+	}
 	_, err = h.service.db.Exec(ctx, query, cid, newVersion, now, existing.Namespace, existing.Name)
 	if err != nil {
+		h.service.dropFreshCIDs(ctx, existing.Namespace, fresh)
 		return nil, fmt.Errorf("failed to update deployment: %w", err)
 	}
 
 	// Unpin old IPFS content (best-effort)
 	if oldContentCID != "" && oldContentCID != cid {
-		if unpinErr := storage.UnpinIfLastPinner(ctx, h.service.db, h.staticHandler.ipfsClient, oldContentCID, existing.Namespace); unpinErr != nil {
+		if unpinErr := h.service.releaseCID(ctx, h.staticHandler.ipfsClient, existing.ID, existing.Namespace, oldContentCID); unpinErr != nil {
 			h.logger.Warn("Failed to unpin old content CID", zap.String("cid", oldContentCID), zap.Error(unpinErr))
 		}
 	}
@@ -214,6 +218,20 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 	cid := addResp.Cid
 
 	oldBuildCID := existing.BuildCID
+
+	// The new build is recorded before anything is replaced, and the record is
+	// dropped again unless the database update below commits it, so an update
+	// that fails half way does not hold the CID referenced for ever.
+	fresh, err := h.service.registerCIDs(ctx, existing.Namespace, cid)
+	if err != nil {
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			h.service.dropFreshCIDs(ctx, existing.Namespace, fresh)
+		}
+	}()
 
 	h.logger.Info("New build uploaded",
 		zap.String("deployment", existing.Name),
@@ -288,6 +306,8 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 	_, err = h.service.db.Exec(ctx, query, cid, newVersion, now, existing.Namespace, existing.Name)
 	if err != nil {
 		h.logger.Error("Failed to update database", zap.Error(err))
+	} else {
+		committed = true
 	}
 
 	// Record in history
@@ -297,8 +317,8 @@ func (h *UpdateHandler) updateDynamic(ctx context.Context, existing *deployments
 	removeDirectory(oldPath)
 
 	// Unpin old IPFS build (best-effort)
-	if oldBuildCID != "" && oldBuildCID != cid {
-		if unpinErr := storage.UnpinIfLastPinner(ctx, h.service.db, h.nextjsHandler.ipfsClient, oldBuildCID, existing.Namespace); unpinErr != nil {
+	if committed && oldBuildCID != "" && oldBuildCID != cid {
+		if unpinErr := h.service.releaseCID(ctx, h.nextjsHandler.ipfsClient, existing.ID, existing.Namespace, oldBuildCID); unpinErr != nil {
 			h.logger.Warn("Failed to unpin old build CID", zap.String("cid", oldBuildCID), zap.Error(unpinErr))
 		}
 	}

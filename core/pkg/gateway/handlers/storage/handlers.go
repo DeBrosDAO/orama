@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"io"
-	"sync/atomic"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
@@ -54,11 +53,18 @@ type Handlers struct {
 	// fan-out dials. Zero selects internalGatewayPort, which is what production
 	// always uses; tests set it to point the fan-out at a local stub node.
 	evictPort int
-	// refSyncPending is true from StartCIDRefSync until the cluster reference
-	// index has been filled from this namespace's database once. While it is
-	// set, an unpin cannot tell whether it is the last reference.
-	refSyncPending atomic.Bool
+	// refs is the cluster-wide reference index an unpin decides "last
+	// reference" from (cidrefs.go). It reads the registry, not this namespace's
+	// database.
+	refs *CIDRefs
 }
+
+// CIDRefs is the reference index this handler set decides unpins from.
+func (h *Handlers) CIDRefs() *CIDRefs { return h.refs }
+
+// SetCIDRefs makes this handler set share the gateway's reference index with
+// the deployment and namespace handlers, so one readiness state covers them.
+func (h *Handlers) SetCIDRefs(refs *CIDRefs) { h.refs = refs }
 
 // New creates a new storage handlers instance with the provided dependencies.
 // db is this gateway's own RQLite (content ownership); globalDB is the MAIN
@@ -73,6 +79,7 @@ func New(ipfsClient IPFSClient, logger *logging.ColoredLogger, config Config, db
 		config:     config,
 		db:         db,
 		globalDB:   globalDB,
+		refs:       NewCIDRefs(globalDB),
 	}
 }
 

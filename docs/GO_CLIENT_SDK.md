@@ -206,9 +206,12 @@ namespace database: a pin and a deployment register a reference, an unpin
 releases the caller's, and only the release that leaves none removes the pin.
 The delete and the count are two statements in that order, so of two
 namespaces unpinning at once the later one sees zero and neither can miss the
-other. A gateway that has just started answers `503` (retryable) to an unpin
-until it has loaded its namespace's references into the index, and a registry
-read that fails leaves the pin in place (`evicted: "skipped"`).
+other. Deployments register the content and build CIDs they serve in the same index,
+and deployment update and delete, and namespace delete, release through the
+same count. A gateway that has just started answers `503` (retryable) to an
+unpin until it has loaded its namespace's existing references into the index
+(once, at the upgrade that introduced it), and a registry read that fails
+leaves the pin in place (`evicted: "skipped"`).
 The response carries an `evicted` field:
 
 | Value | Meaning |

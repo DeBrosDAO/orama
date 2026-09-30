@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 )
@@ -134,12 +135,7 @@ func TestUnpin_otherNamespaceDeploymentKeepsPin(t *testing.T) {
 	registry := registrySchema(t)
 	mock := &mockIPFSClient{pinResp: &ipfs.PinResponse{Cid: sharedCID}}
 	a := gatewayFor(t, mock, namespaceSchema(t), registry)
-	bDB := namespaceSchema(t)
-	b := gatewayFor(t, mock, bDB, registry)
-	if _, err := bDB.db.Exec(`INSERT INTO deployments (id, namespace, name, type, content_cid, deployed_by) VALUES ('d1', 'ns-b', 'site', 'static', ?, 'x')`, sharedCID); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.syncCIDRefs(context.Background(), "ns-b"); err != nil {
+	if _, err := NewCIDRefs(registry).Register(context.Background(), sharedCID, "ns-b", KindDeployment); err != nil {
 		t.Fatal(err)
 	}
 	pinAs(t, a, "ns-a", sharedCID)
@@ -199,7 +195,7 @@ func TestUnpin_refuses_whileIndexIsBuilding(t *testing.T) {
 	mock := &mockIPFSClient{pinResp: &ipfs.PinResponse{Cid: sharedCID}}
 	a := gatewayFor(t, mock, namespaceSchema(t), registry)
 	pinAs(t, a, "ns-a", sharedCID)
-	a.refSyncPending.Store(true)
+	a.refs.pending.Store(true)
 
 	rec := unpinAs(a, "ns-a", sharedCID)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -263,9 +259,9 @@ func TestPin_registryFailure_failsThePin(t *testing.T) {
 	}
 }
 
-// The sync fills the index from what a namespace already holds (content pinned
-// before the index existed) and keeps deployment references exact.
-func TestSyncCIDRefs_backfillsAndPrunes(t *testing.T) {
+// The backfill loads what a namespace already holds (content pinned before the
+// index existed), once.
+func TestBackfill_loadsExistingContentOnce(t *testing.T) {
 	registry := registrySchema(t)
 	nsDB := namespaceSchema(t)
 	h := gatewayFor(t, &mockIPFSClient{}, nsDB, registry)
@@ -278,17 +274,63 @@ func TestSyncCIDRefs_backfillsAndPrunes(t *testing.T) {
 	if _, err := nsDB.db.Exec(`INSERT INTO deployments (id, namespace, name, type, content_cid, build_cid, deployed_by) VALUES ('d1', 'ns-a', 'app', 'nodejs', 'QmContent', 'QmBuild', 'x')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.db.Exec(`INSERT INTO ipfs_cid_refs (cid, namespace, kind) VALUES ('QmStale', 'ns-a', 'deployment'), ('QmOtherNs', 'ns-b', 'deployment')`); err != nil {
+	if err := h.backfillCIDRefs(ctx, "ns-a"); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := h.syncCIDRefs(ctx, "ns-a"); err != nil {
-		t.Fatal(err)
-	}
-	for cid, want := range map[string]int{"QmLegacyPinned": 1, "QmNotPinned": 0, "QmContent": 1, "QmBuild": 1, "QmStale": 0, "QmOtherNs": 1} {
+	for cid, want := range map[string]int{"QmLegacyPinned": 1, "QmNotPinned": 0, "QmContent": 1, "QmBuild": 1} {
 		if got := refsOf(t, registry, cid); got != want {
 			t.Errorf("references to %s = %d, want %d", cid, got, want)
 		}
+	}
+
+	// A row a tenant writes into its own tables afterwards never reaches the
+	// index: the backfill does not run again.
+	if _, err := nsDB.db.Exec(`INSERT INTO ipfs_content_ownership (id, cid, namespace, is_pinned, uploaded_at, uploaded_by)
+		VALUES ('3', 'QmVictimsCID', 'ns-a', 1, datetime('now'), 'ns-a')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.backfillCIDRefs(ctx, "ns-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := refsOf(t, registry, "QmVictimsCID"); got != 0 {
+		t.Fatalf("a forged row written after the backfill became %d references", got)
+	}
+}
+
+// A namespace over the bound is not loaded in part: a partial index would call
+// live content unreferenced.
+func TestBackfill_refusesANamespaceOverTheBound(t *testing.T) {
+	registry := registrySchema(t)
+	nsDB := namespaceSchema(t)
+	h := gatewayFor(t, &mockIPFSClient{}, nsDB, registry)
+	defer func(old int) { maxBackfillRefs = old }(maxBackfillRefs)
+	maxBackfillRefs = 10
+	if _, err := nsDB.db.Exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < ?)
+		INSERT INTO ipfs_content_ownership (id, cid, namespace, is_pinned, uploaded_at, uploaded_by)
+		SELECT 'id'||i, 'Qm'||i, 'ns-a', 1, datetime('now'), 'x' FROM n`, maxBackfillRefs+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.backfillCIDRefs(t.Context(), "ns-a"); err == nil {
+		t.Fatal("a namespace over the bound was loaded")
+	}
+	var n int
+	if err := registry.db.QueryRow(`SELECT COUNT(*) FROM ipfs_cid_refs`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the index holds %d rows (%v) after a refused backfill", n, err)
+	}
+}
+
+// Until the backfill succeeds unpins are refused; StartCIDRefBackfill flips the
+// gateway to ready when it has.
+func TestStartCIDRefBackfill_gatesUntilLoaded(t *testing.T) {
+	registry := registrySchema(t)
+	h := gatewayFor(t, &mockIPFSClient{}, namespaceSchema(t), registry)
+	h.StartCIDRefBackfill(t.Context(), "ns-a")
+	deadline := time.Now().Add(5 * time.Second)
+	for !h.refs.Ready() {
+		if time.Now().After(deadline) {
+			t.Fatal("the backfill of an empty namespace never completed")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -300,7 +342,7 @@ func TestSyncCIDRefs_chunkBoundaries(t *testing.T) {
 	for i := 0; i < refInsertChunk*2+1; i++ {
 		cids = append(cids, "Qm"+strings.Repeat("x", 3)+string(rune('A'+i/26))+string(rune('a'+i%26)))
 	}
-	if err := h.insertRefs(context.Background(), cids, "ns-a", refKindStorage); err != nil {
+	if err := h.insertRefs(context.Background(), cids, "ns-a", KindStorage); err != nil {
 		t.Fatal(err)
 	}
 	var n int
@@ -310,7 +352,7 @@ func TestSyncCIDRefs_chunkBoundaries(t *testing.T) {
 	if n != len(cids) {
 		t.Fatalf("stored %d references, want %d", n, len(cids))
 	}
-	if err := h.insertRefs(context.Background(), nil, "ns-a", refKindStorage); err != nil {
+	if err := h.insertRefs(context.Background(), nil, "ns-a", KindStorage); err != nil {
 		t.Fatalf("empty insert: %v", err)
 	}
 }

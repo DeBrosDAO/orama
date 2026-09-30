@@ -15,6 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -47,6 +48,10 @@ type DeploymentService struct {
 	// audit records who deployed and who deleted. A nil one drops the event,
 	// which is the test case; a gateway always has one.
 	audit *auth.AuditLog
+
+	// cidRefs is the cluster-wide reference index the deployment's content and
+	// build CIDs are recorded in (cidrefs.go).
+	cidRefs *storage.CIDRefs
 }
 
 // NewDeploymentService creates a new deployment service.
@@ -263,6 +268,11 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		return fmt.Errorf("failed to encode the environment of %s/%s: %w", deployment.Namespace, deployment.Name, err)
 	}
 
+	fresh, err := s.registerCIDs(ctx, deployment.Namespace, deployment.ContentCID, deployment.BuildCID)
+	if err != nil {
+		return err
+	}
+
 	// Insert deployment + record history in a single transaction
 	err = s.db.Tx(ctx, func(tx rqlite.Tx) error {
 		insertQuery := `
@@ -297,6 +307,7 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		return histErr
 	})
 	if err != nil {
+		s.dropFreshCIDs(ctx, deployment.Namespace, fresh)
 		return s.createFailed(ctx, deployment, registeredSubdomain, err)
 	}
 

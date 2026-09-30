@@ -90,7 +90,8 @@ func (h *Handlers) PinHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Recorded before the pin is requested: an unpin by another namespace that
 	// races this call must already count this reference.
-	if err := h.registerCIDRef(ctx, req.Cid, namespace); err != nil {
+	fresh, err := h.registerRef(ctx, req.Cid, namespace)
+	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to record the pin reference",
 			zap.Error(err), zap.String("cid", req.Cid))
 		httputil.WriteError(w, http.StatusServiceUnavailable, "the pin could not be registered in the cluster reference index; retry")
@@ -99,6 +100,7 @@ func (h *Handlers) PinHandler(w http.ResponseWriter, r *http.Request) {
 
 	pinResp, err := h.ipfsClient.Pin(ctx, req.Cid, req.Name, replicationFactor)
 	if err != nil {
+		h.dropFreshRef(ctx, req.Cid, namespace, fresh)
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to pin CID",
 			zap.Error(err), zap.String("cid", req.Cid))
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("failed to pin: %v", err))
