@@ -212,7 +212,8 @@ client                                          gateway
 ```
 
 `orama auth login --device-key <file>` does this. The file is an Ed25519
-private JWK and stays on the machine that signs in; the request carries the
+private JWK (RFC 8037: `d` is the 32-byte seed, base64url, and `x` must be its
+public key) and stays on the machine that signs in; the request carries the
 public half.
 
 `device_key` is the public JWK; `device_id` is its RFC 7638 thumbprint, which
@@ -607,8 +608,9 @@ verifies on its signature alone, so there is a revocation list: one token by its
 the second kind, which covers every outstanding token from it. A token minted
 *after* the revocation is a new grant and is deliberately not covered.
 
-The list is held in memory and reloaded every 10 seconds. That interval is the
-staleness: a revocation takes effect within it.
+The list is held in memory and reloaded every 5 seconds. A request reads a copy
+as old as the reload that filled it began, so a revocation takes effect within 10
+seconds: one interval, plus the reload itself, plus the wait for the next request.
 
 Logging out revokes the refresh token **and** the access token, so "log me out"
 does not mean "stop me getting a new one".
@@ -621,9 +623,9 @@ as long as the client kept it, and no revocation reached it.
 
 Every socket opened with a token — a function socket, stateless or persistent,
 and a pub/sub subscription — is now registered with that token's claims. Every
-10 seconds, the revocation list's own staleness, each gateway reloads the list
+5 seconds, the revocation list's reload interval, each gateway reloads the list
 and re-checks all of its open sockets against it, so a revocation recorded on any
-gateway closes the sockets it covers on every gateway within that interval:
+gateway closes the sockets it covers on every gateway within 10 seconds:
 
 | Close code | Means |
 |------------|-------|

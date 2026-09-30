@@ -242,7 +242,7 @@ func newestHopVersion(h http.Header) int {
 func hopTokenTimes(h http.Header, now time.Time) (exp, iat int64, err error) {
 	raw := strings.TrimSpace(h.Get(HeaderInternalAuthJWTExp))
 	if raw == "" {
-		return now.Add(auth.MaxTokenLifetime).Unix(), now.Add(-auth.RevocationRefreshInterval).Unix(), nil
+		return now.Add(auth.MaxTokenLifetime).Unix(), now.Add(-auth.RevocationStaleness).Unix(), nil
 	}
 	exp, err = strconv.ParseInt(raw, 10, 64)
 	if err != nil {

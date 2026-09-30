@@ -24,13 +24,20 @@ import (
 // per request costs a cross-region hop and this runs on every authenticated
 // call.
 //
-// The refresh interval is the staleness: a revocation takes effect within it.
-// Fifteen minutes became ten seconds, which is the point.
+// A revocation takes effect within RevocationStaleness. Fifteen minutes became
+// ten seconds, which is the point. The list is reloaded at half that, because
+// the bound is not the interval alone: the copy a request reads is as old as
+// the read that filled it began, which is up to one interval plus the time the
+// reload takes, and on a loaded registry that is seconds (stagenet, 2026-09-30:
+// a reload every ten seconds took fifteen to reach a gateway).
 
 const (
-	// RevocationRefreshInterval is how stale the in-memory list may be, and so
-	// how long a revoked token may still be accepted.
-	RevocationRefreshInterval = 10 * time.Second
+	// RevocationStaleness is how long a revoked token may still be accepted,
+	// the bound the docs promise.
+	RevocationStaleness = 10 * time.Second
+
+	// RevocationRefreshInterval is how often the in-memory list is reloaded.
+	RevocationRefreshInterval = RevocationStaleness / 2
 
 	// revocationPruneInterval is how often expired rows are deleted. They deny
 	// nothing once past expires_at; this keeps the table the size of the
@@ -272,7 +279,10 @@ func (r *RevocationList) Refresh(ctx context.Context) {
 		return
 	}
 
-	now := r.now().Unix()
+	// The list is as old as the read that filled it began, not as old as the
+	// moment the read returned.
+	started := r.now()
+	now := started.Unix()
 	internalCtx := client.WithInternalAuth(ctx)
 	res, err := db.Query(internalCtx,
 		"SELECT jti, subject, issued_before, expires_at FROM revoked_tokens WHERE expires_at > ?", now)
@@ -321,7 +331,7 @@ func (r *RevocationList) Refresh(ctx context.Context) {
 	r.mu.Lock()
 	r.byJTI = byJTI
 	r.bySubject = bySubject
-	r.lastRefresh = r.now()
+	r.lastRefresh = started
 	r.loaded = true
 	r.mu.Unlock()
 }

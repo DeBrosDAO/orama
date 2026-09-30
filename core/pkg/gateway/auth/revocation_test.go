@@ -20,6 +20,7 @@ type revocationDB struct {
 	failNext   bool
 	failAlways bool
 	lastDelete string
+	onSelect   func() // runs while a reload is in flight
 }
 
 func (d *revocationDB) Query(_ context.Context, sql string, args ...interface{}) (*client.QueryResult, error) {
@@ -42,6 +43,9 @@ func (d *revocationDB) Query(_ context.Context, sql string, args ...interface{})
 
 	case strings.HasPrefix(strings.TrimSpace(sql), "SELECT jti"):
 		d.selects++
+		if d.onSelect != nil {
+			d.onSelect()
+		}
 		if d.failAlways || d.failNext {
 			d.failNext = false
 			return nil, errString("the registry did not answer")
@@ -321,5 +325,40 @@ func TestRevocationList_storesAbsentFieldsAsNull(t *testing.T) {
 	}
 	if db.rows[0].subject != "" {
 		t.Errorf("subject = %q, want empty", db.rows[0].subject)
+	}
+}
+
+// The documented bound is not the reload interval alone: a request reads a copy
+// as old as its reload began, and the next reload waits one interval from then.
+// The interval plus a reload as slow as the bound's other half must fit.
+func TestRevocationList_theIntervalLeavesRoomForASlowReload(t *testing.T) {
+	if RevocationRefreshInterval*2 > RevocationStaleness {
+		t.Fatalf("a %s reload interval leaves %s for the reload itself, inside %s",
+			RevocationRefreshInterval, RevocationStaleness-RevocationRefreshInterval, RevocationStaleness)
+	}
+}
+
+// A slow reload must not make the list look younger than it is: it is as old
+// as the read began, so the next request after an interval reloads again.
+func TestRevocationList_aSlowReloadIsAgedFromWhenItBegan(t *testing.T) {
+	list, db, clock := newTestRevocations(t)
+	claims := &JWTClaims{Sub: "ak_key:ns", Iat: clock.Unix() - 60}
+	db.mu.Lock()
+	db.onSelect = func() { *clock = clock.Add(3 * time.Second) }
+	db.mu.Unlock()
+
+	list.Denies(claims, []string{"ak_key:ns"}) // first load, takes 3s
+	db.mu.Lock()
+	db.onSelect = nil
+	before := db.selects
+	db.mu.Unlock()
+
+	*clock = clock.Add(RevocationRefreshInterval - 3*time.Second) // one interval since the read began
+	list.Denies(claims, []string{"ak_key:ns"})
+	db.mu.Lock()
+	reloaded := db.selects - before
+	db.mu.Unlock()
+	if reloaded != 1 {
+		t.Errorf("%d reloads one interval after the last began, want 1", reloaded)
 	}
 }
