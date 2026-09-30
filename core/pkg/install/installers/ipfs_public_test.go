@@ -158,7 +158,7 @@ func TestPublicKuboConfig_tokenAllowsOnlyWhatTheProviderAndGCCall(t *testing.T) 
 	for _, auth := range config.API.Authorizations {
 		paths = auth.AllowedPaths
 	}
-	want := []string{"/api/v0/add", "/api/v0/cat", "/api/v0/pin/add", "/api/v0/pin/rm", "/api/v0/repo/gc"}
+	want := []string{"/api/v0/add", "/api/v0/cat", "/api/v0/pin/add", "/api/v0/pin/rm", "/api/v0/repo/gc", "/api/v0/repo/stat"}
 	if strings.Join(paths, ",") != strings.Join(want, ",") {
 		t.Fatalf("allowed paths = %v, want %v", paths, want)
 	}

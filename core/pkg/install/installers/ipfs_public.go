@@ -43,6 +43,8 @@ const PublicAPITokenFile = constants.GlobalIPFSAPITokenFile
 // token can not read or change the config, the peer key or the swarm.
 var PublicAPIAllowedPaths = []string{
 	"/api/v0/add", "/api/v0/cat", "/api/v0/pin/add", "/api/v0/pin/rm", "/api/v0/repo/gc",
+	// Read-only repo size and StorageMax, which the node report and the inspector read.
+	"/api/v0/repo/stat",
 }
 
 // PublicDenylistFile is the CID denylist the provider checks before it accepts

@@ -92,7 +92,8 @@ sudo orama global install \
   machine, `198.18.0.2:31011`, see below) behind a
   bearer token in `api-token` (mode 0640, group `orama-ipfs-pub-rpc`, which only
   the provider joins; a second install keeps the token; the token allows only
-  `add`, `cat`, `pin/add`, `pin/rm` and `repo/gc`). The GC unit passes the token
+  `add`, `cat`, `pin/add`, `pin/rm`, `repo/gc` and the read-only `repo/stat`, which the
+  node report and the inspector read). The GC unit passes the token
   to `ipfs --api-auth`, so it is on that process's command line for the length of a run. `--public-storage-gb` is the capacity you will
   declare with `orama global capacity`; Kubo's `StorageMax` is that plus 10%,
   and `orama-global-ipfs-gc.timer` (20 minutes after start, then every 6 hours)

@@ -1445,7 +1445,7 @@ Public Kubo (`--ipfs-api`, `--ipfs-token-file`; the unit passes
 `http://127.0.0.1:31011`, or `http://198.18.0.2:31011` on a co-located machine, and `/var/lib/orama-global/ipfs/api-token`). The client
 (`chain/provider/kubo.go`) sends the bearer token only to a loopback `http` URL or the co-located namespace address `198.18.0.2`
 and follows no redirect. The token allows only `add`, `cat`, `pin/add`,
-`pin/rm` and `repo/gc` (`installers.PublicAPIAllowedPaths`). When it is
+`pin/rm`, `repo/gc` and the read-only `repo/stat` (`installers.PublicAPIAllowedPaths`). When it is
 configured:
 - Before it accepts a slot of a **PUBLIC_PIN or ARCHIVE** deal, the runner reads
   the deal's class from x/storage and pins the stored piece in the public Kubo.
