@@ -113,7 +113,8 @@ func writeStagenetState(ctx context.Context, in targetInput) (*fleet.State, erro
 		CAFile:   config.StagenetPath(in.realHome, config.StagenetCAFileRel),
 		OramaBin: filepath.Join(in.lay.repo, oramaBinRel), Home: config.StagenetPath(in.realHome, config.StagenetHomeRel),
 		RWSock: config.StagenetPath(in.realHome, config.StagenetRWSockRel), OperatorAddress: addr,
-		SSHKeyFile: config.StagenetPath(in.realHome, config.StagenetSSHKeyRel), KnownHostsFile: hosts,
+		OperatorNamespace: config.StagenetOperatorNamespace,
+		SSHKeyFile:        config.StagenetPath(in.realHome, config.StagenetSSHKeyRel), KnownHostsFile: hosts,
 		ChainID: in.chainID, ChainRPC: stagenetRPCURL,
 		ArtifactDir: filepath.Join(in.lay.module, artifactsDirName, runID),
 	}

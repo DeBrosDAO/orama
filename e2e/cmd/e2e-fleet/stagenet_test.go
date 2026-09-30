@@ -34,7 +34,7 @@ func stagenetTestState(t *testing.T, bin string) *fleet.State {
 	return &fleet.State{
 		Target: config.TargetStagenet, Env: config.StagenetEnv, GatewayURL: config.StagenetGatewayURL,
 		OramaBin: bin, Home: filepath.Join(dir, "home"), RWSock: filepath.Join(dir, "agent.sock"),
-		OperatorAddress: testAddress,
+		OperatorAddress: testAddress, OperatorNamespace: config.StagenetOperatorNamespace,
 	}
 }
 

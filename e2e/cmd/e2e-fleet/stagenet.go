@@ -49,7 +49,7 @@ func signInStagenetOperator(ctx context.Context, st *fleet.State) error {
 	if err := cli.Check(); err != nil {
 		return err
 	}
-	res, err := cli.Run(ctx, "auth", "login", "--namespace", config.StagenetOperatorNamespace)
+	res, err := cli.Run(ctx, "auth", "login", "--namespace", st.OperatorNamespace)
 	if err != nil {
 		return fmt.Errorf("failed to sign the operator in to stagenet: %w", err)
 	}

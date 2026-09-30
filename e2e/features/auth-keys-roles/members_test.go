@@ -73,9 +73,10 @@ func TestMembers_removalLandsOnTheNextRequest(t *testing.T) {
 	n := ns.New(t, f, ns.Options{})
 	c := harness.GW(t)
 	w, tok := memberToken(t, n, roleDev, "")
-	send(t, c, http.MethodPost, pathQuery, tok, map[string]string{"sql": "SELECT 1"}).Expect(t, http.StatusOK)
+	// The query goes to the namespace's own database, at its host.
+	send(t, n.Client, http.MethodPost, pathQuery, tok, map[string]string{"sql": "SELECT 1"}).Expect(t, http.StatusOK)
 	send(t, c, http.MethodDelete, pathMembers+"/"+w.Address(), n.Owner.Token(), nil).Expect(t, http.StatusOK)
-	if r := send(t, c, http.MethodPost, pathQuery, tok, map[string]string{"sql": "SELECT 1"}); r.Status != http.StatusForbidden {
+	if r := send(t, n.Client, http.MethodPost, pathQuery, tok, map[string]string{"sql": "SELECT 1"}); r.Status != http.StatusForbidden {
 		t.Errorf("the removed developer's next request: want 403, got %d %s", r.Status, r.Body)
 	}
 	if r := send(t, c, http.MethodDelete, pathMembers+"/"+n.Owner.Wallet.Address(), n.Owner.Token(), nil); r.Status != http.StatusConflict {

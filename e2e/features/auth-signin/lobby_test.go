@@ -39,6 +39,10 @@ func TestRemovedEndpoints_goneForEveryCaller(t *testing.T) {
 	}
 }
 
+// lobbyRefusalCodes are the ways a lobby session is refused: no grant here,
+// a missing permission, or not a cluster operator.
+var lobbyRefusalCodes = map[string]bool{"INSUFFICIENT_SCOPE": true, "OWNERSHIP_REQUIRED": true, "NOT_AN_OPERATOR": true}
+
 // TestLobby_reachesOnlyNamespaceCreation: a lobby session holds no grant, and
 // the one thing it reaches is POST /v1/namespaces (docs/AUTH.md#the-lobby).
 // Every other route refuses it with a 401/403 carrying {error, code, hint}.
@@ -60,13 +64,14 @@ func TestLobby_reachesOnlyNamespaceCreation(t *testing.T) {
 	for _, r := range probes {
 		r.Bearer = tok
 		resp := c.MustSend(t, r)
-		// The token is valid, so the refusal is the scope gate's (a lobby
-		// session holds no permission) or, on the operator routes, the
-		// operator list's; never a 401, which would mean the token was not
-		// read at all.
+		// The token is valid, so the refusal is a 403, never a 401, which
+		// would mean the token was not read at all.
 		code := resp.ErrorCode()
-		if resp.Status != http.StatusForbidden || (code != "INSUFFICIENT_SCOPE" && code != "NOT_AN_OPERATOR") {
-			t.Errorf("lobby token at %s %s: HTTP %d %s, want 403 INSUFFICIENT_SCOPE (or NOT_AN_OPERATOR): %.200s", r.Method, r.Path, resp.Status, code, resp.Body)
+		// A route that needs a grant here refuses with OWNERSHIP_REQUIRED before
+		// the scope gate runs; one that does not, with INSUFFICIENT_SCOPE. Both
+		// say the lobby holds nothing.
+		if resp.Status != http.StatusForbidden || !lobbyRefusalCodes[code] {
+			t.Errorf("lobby token at %s %s: HTTP %d %s, want 403 with one of %v: %.200s", r.Method, r.Path, resp.Status, code, lobbyRefusalCodes, resp.Body)
 			continue
 		}
 		expectRefusal(t, resp, http.StatusForbidden, code)

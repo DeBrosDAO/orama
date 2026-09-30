@@ -17,7 +17,8 @@ import (
 // RPC_PORT; loopback only, so these commands run on the node).
 const (
 	chainREST = "http://127.0.0.1:31003"
-	chainRPC  = "http://127.0.0.1:31001"
+	// defaultChainRPC is where a fleet node's own chain answers.
+	defaultChainRPC = "http://127.0.0.1:31001"
 	// absentDeal is a deal id a fresh chain has not reached.
 	absentDeal = "999999999"
 	// putWait bounds how long put waits for an assignment that cannot come.
@@ -98,7 +99,7 @@ func TestStorageGet_absentDealWritesNothing(t *testing.T) {
 	seed, repair := nodeSeeds(t, f, n)
 	out := seed + "-out"
 	t.Cleanup(func() { edge.RunInCleanup(t, f, n, "rm -f -- "+fleet.ShellQuote(out)) })
-	res := onNode(t, f, n, "storage", "get", "--deal-id", absentDeal, "--rpc", chainRPC,
+	res := onNode(t, f, n, "storage", "get", "--deal-id", absentDeal, "--rpc", nodeChainRPC(f),
 		"--storage-key-file", seed, "--repair-seed-file", repair, "--out", out)
 	if res.Exit == exitOK {
 		t.Fatalf("storage get of deal %s succeeded", absentDeal)
@@ -119,7 +120,7 @@ func TestStoragePut_absentDealUploadsNothing(t *testing.T) {
 	dir := strings.TrimSpace(f.MustExec(t, n, "mktemp -d /root/e2e-cli-storage-put-XXXXXX").Stdout)
 	t.Cleanup(func() { edge.RunInCleanup(t, f, n, "rm -rf -- "+fleet.ShellQuote(dir)) })
 	f.WriteFile(t, n, dir+"/slot-0", []byte("not a sealed slot"), 0o600)
-	res := onNode(t, f, n, "storage", "put", "--deal-id", absentDeal, "--dir", dir, "--rpc", chainRPC, "--wait", putWait)
+	res := onNode(t, f, n, "storage", "put", "--deal-id", absentDeal, "--dir", dir, "--rpc", nodeChainRPC(f), "--wait", putWait)
 	// The chain answers the deal lookup with not-found before any slot is
 	// waited for or sent (storageclient.Client.Put, parseABCIAnswer): a
 	// runtime failure (not usage) naming the deal query, and no upload line.
@@ -174,4 +175,14 @@ func TestGlobalStageOramad_argumentChecks(t *testing.T) {
 		return
 	}
 	infra.ExpectRefused(t, res)
+}
+
+// nodeChainRPC is where a node's chain answers, as the node sees it: the run's
+// recorded endpoint when there is one (stagenet runs the chain co-located, in
+// its own network namespace at 198.18.0.2), else the fleet node's localhost.
+func nodeChainRPC(f *fleet.Fleet) string {
+	if f.State.ChainRPC != "" {
+		return f.State.ChainRPC
+	}
+	return defaultChainRPC
 }

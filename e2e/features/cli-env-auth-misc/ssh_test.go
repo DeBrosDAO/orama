@@ -52,7 +52,13 @@ var knownHostsPaths = []string{".orama/known_hosts", ".ssh/known_hosts"}
 func signedInHome(t testing.TB) *oramacli.Runner {
 	t.Helper()
 	cli := isolated(t)
-	cli.MustOK(t, "auth", "login")
+	args := []string{"auth", "login"}
+	if ns := harness.Fleet(t).State.OperatorNamespace; ns != "" {
+		// Listing the nodes is an operator route, which a lobby session
+		// cannot reach.
+		args = append(args, "--namespace", ns)
+	}
+	cli.MustOK(t, args...)
 	return cli
 }
 

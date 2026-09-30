@@ -86,11 +86,15 @@ func TestRoles_matrix(t *testing.T) {
 			t.Errorf("whoami for a %s reports role %v", role, who.Role)
 		}
 	}
+	// Through the namespace host, where a tenant's routes are served: the
+	// database, cache and functions are its gateway's, and the index gateway
+	// refuses its own registry to anyone but an operator. Routes the index
+	// serves itself (keys, members) are still answered there for this host.
 	for _, rc := range matrixRoutes {
 		for _, role := range matrixRoles {
 			req := rc.req
 			req.Bearer = tokens[role]
-			resp := c.MustSend(t, req)
+			resp := n.Client.MustSend(t, req)
 			refused := resp.Status == http.StatusUnauthorized || resp.Status == http.StatusForbidden
 			switch {
 			case rc.allows[role] && !reached(resp):

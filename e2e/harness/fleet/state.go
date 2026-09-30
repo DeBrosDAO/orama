@@ -70,6 +70,11 @@ type State struct {
 	RWSock string `json:"rw_sock"`
 	// OperatorAddress is the EVM address of the throwaway operator wallet.
 	OperatorAddress string `json:"operator_address"`
+	// OperatorNamespace, when set, is a namespace the operator's wallet owns.
+	// /v1/operator/* needs an admin grant as well as the operator list, and a
+	// lobby session holds no grant, so a CLI acting as the operator signs in
+	// there. Empty signs in to the lobby.
+	OperatorNamespace string `json:"operator_namespace,omitempty"`
 
 	// SSHKeyFile is the per-run private key the harness uses to reach nodes directly.
 	SSHKeyFile string `json:"ssh_key_file"`
