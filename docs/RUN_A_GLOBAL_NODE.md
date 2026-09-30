@@ -416,8 +416,9 @@ repo config); the cluster's own Kubo (10107) is a different daemon on the other 
   and a tenant deployment (a systemd dynamic user) must not reach the chain's RPC,
   REST API or indexer through it.
 - Inside the namespace: input is default-drop except loopback, replies, the
-  published ports, and the chain's RPC and REST API and the indexer's read API
-  (TCP 31001, 31003 and, with the indexer, 31015) from `198.18.0.1`, the host's
+  published ports, and the chain's RPC and REST API, the indexer's read API and the
+  public Kubo's RPC (TCP 31001, 31003 and, when installed, the indexer's 31015 and
+  Kubo's 31011) from `198.18.0.1`, the host's
   veth address, alone; forwarding is off; output to the private ranges above is
   dropped. The units' own `IPAddressDeny=` on the same ranges is a third layer
   for IPv4. Both rulesets are `table ip`, so they say nothing about IPv6: the
@@ -457,6 +458,23 @@ The install does not restart it (`orama node restart` takes the node's
 quorum duties with it, and a restart of one node at a time is the rule), and
 prints that the restart is needed: run `orama node restart` on the machine after
 the install, on one node at a time.
+
+**Re-installing over a running co-located node.** Two things need attention:
+
+- The rulesets (`netns-host.nft`, `netns.nft` in `/etc/orama-global`) are loaded
+  by `orama-global-netns.service`, a oneshot that stays active. Each file replaces
+  its table in one `nft -f` transaction (it declares the table, deletes it and
+  defines it again), so when the re-install rewrites them and that unit is active,
+  the install loads them itself (`nft -f` on the host, `ip netns exec
+  orama-global nft -f` inside) with no moment without rules. It never restarts the
+  unit: the global units are bound to it and would stop. A failed load fails the
+  install and names the file. When the unit is not active, or the rules did not
+  change, nothing is loaded.
+- The public Kubo's RPC moves to `198.18.0.2:31011` (`Addresses.API`) and the
+  provider and GC units are rewritten to call it there, but the install starts and
+  restarts nothing. Run `sudo orama global restart` afterwards: it restarts the
+  installed services in start order, so Kubo listens before the provider starts
+  (the install prints this when it installed the public Kubo).
 
 `orama global install --colocated --chain-client-user <name>` (repeatable) adds
 local accounts to that set: names are resolved to uids at install, an unknown

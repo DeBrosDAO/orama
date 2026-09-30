@@ -45,8 +45,8 @@ func ValidIPFSCID(s string) bool { return cidPattern.MatchString(s) }
 
 // colocatedKuboHost is the address of the orama-global network namespace, where
 // the public Kubo's RPC listens on a machine shared with a cluster node
-// (core/pkg/constants GlobalNetnsAddr). It is a link-local address of that
-// namespace's veth, not a route to another machine.
+// (core/pkg/constants GlobalNetnsAddr). It is the namespace's veth address, in the
+// 198.18.0.0/15 benchmarking range: this machine's own namespace, not a route to another machine.
 const colocatedKuboHost = "198.18.0.2"
 
 // NewKubo returns a client for the RPC at apiURL, which must be a loopback

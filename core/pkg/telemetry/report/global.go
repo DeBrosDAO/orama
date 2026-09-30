@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
-	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 )
 
 const globalMonitorLimit = 4096
@@ -31,7 +30,7 @@ var (
 // co-located machine the namespace address. Like chainEndpoints it is read for each collection.
 // It is a variable so tests can stand in for the node.
 var globalIPFSAPI = func() string {
-	if globalnetns.Installed(constants.SystemdUnitDir, func(p string) bool { _, err := os.Stat(p); return err == nil }) {
+	if colocatedGlobal() {
 		return constants.ColocatedGlobalIPFSAPIURL()
 	}
 	return constants.LocalGlobalIPFSAPIURL()

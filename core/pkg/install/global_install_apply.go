@@ -151,6 +151,9 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err := savePreferencesBoth(h.Netns, plan.prefs); err != nil {
 		return fmt.Errorf("record the co-located role: %w", err)
 	}
+	if slices.Contains(opts.Services, GlobalServiceIPFS) {
+		h.Logf("  ! the public Kubo's RPC listens on %s:%d in the namespace and the provider and GC units now call it there; on a node that was already running, restart them so they pick it up: orama global restart (Kubo starts before the provider)", constants.GlobalNetnsAddr, constants.GlobalIPFSAPIPort)
+	}
 	h.Logf("  ! the cluster gateway reads the chain's listeners when it starts, so its /v1/chain/ route follows the namespace address only after this node restarts (orama node restart, one node at a time: it is not done here because it takes the node's quorum duties with it); the node report already follows")
 	return nil
 }
