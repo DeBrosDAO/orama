@@ -1,7 +1,9 @@
 package cache
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
@@ -55,42 +57,46 @@ type ScanRequest struct {
 	Match string `json:"match"` // Optional regex pattern to match keys
 }
 
-// decodeValueFromOlric decodes a value from Olric GetResponse.
-// Handles JSON-serialized complex types and basic types (string, number, bool).
-// This function attempts multiple strategies to decode the value:
-// 1. First tries to get as bytes and unmarshal as JSON
-// 2. Falls back to string if JSON unmarshal fails
-// 3. Finally attempts to scan as any type
-func decodeValueFromOlric(gr *olriclib.GetResponse) (any, error) {
-	var value any
+// storedValueMarker starts every value this API stores. Olric keeps bytes with
+// no type: the string "123", the number 123 and true (stored as 1) are
+// indistinguishable there, which is how a value used to come back as something
+// other than what was put. A stored value is therefore the marker followed by
+// the value's JSON, and the JSON carries the type. The marker's NUL byte and
+// version keep it from being taken for a value written before values were
+// typed.
+const storedValueMarker = "\x00orama.json.v1\x00"
 
-	// First, try to get as bytes (for JSON-serialized complex types)
-	var bytesVal []byte
-	if err := gr.Scan(&bytesVal); err == nil && len(bytesVal) > 0 {
-		// Try to deserialize as JSON
-		var jsonVal any
-		if err := json.Unmarshal(bytesVal, &jsonVal); err == nil {
-			value = jsonVal
-		} else {
-			// If JSON unmarshal fails, treat as string
-			value = string(bytesVal)
-		}
-	} else {
-		// Try as string (for simple string values)
-		if strVal, err := gr.String(); err == nil {
-			value = strVal
-		} else {
-			// Fallback: try to scan as any type
-			var anyVal any
-			if err := gr.Scan(&anyVal); err == nil {
-				value = anyVal
-			} else {
-				// Last resort: try String() again, ignoring error
-				strVal, _ := gr.String()
-				value = strVal
-			}
-		}
+// encodeStoredValue is the bytes a value is stored as: its JSON, typed.
+func encodeStoredValue(value any) ([]byte, error) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode the value as JSON: %w", err)
 	}
+	return append([]byte(storedValueMarker), body...), nil
+}
 
+// decodeValueFromOlric returns the value exactly as it was put.
+//
+// A value without the marker was written before values were typed and holds
+// raw text. Its type was never recorded, so it is read as what it looks like:
+// JSON when it parses (objects and arrays were always stored as JSON, and a
+// number as its digits), else a string. Only those entries are ambiguous; every
+// entry written since is exact.
+func decodeValueFromOlric(gr *olriclib.GetResponse) (any, error) {
+	var raw []byte
+	if err := gr.Scan(&raw); err != nil {
+		return nil, fmt.Errorf("failed to read the stored value: %w", err)
+	}
+	if body, typed := bytes.CutPrefix(raw, []byte(storedValueMarker)); typed {
+		var value any
+		if err := json.Unmarshal(body, &value); err != nil {
+			return nil, fmt.Errorf("the stored value is not valid JSON: %w", err)
+		}
+		return value, nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return string(raw), nil
+	}
 	return value, nil
 }
