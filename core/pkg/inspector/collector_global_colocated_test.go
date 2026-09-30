@@ -1,6 +1,9 @@
 package inspector
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -73,5 +76,42 @@ func TestGlobalCollectScript_asksTheKuboRPCOnTheNamespaceAddressThroughSudoWhenC
 	}
 	if strings.Contains(script, "http://127.0.0.1:31011") {
 		t.Error("script still reads the Kubo RPC on loopback unconditionally")
+	}
+}
+
+// The Kubo bearer reaches curl on stdin, never in its argv (ps shows argv), including the
+// co-located path that runs curl under sudo.
+func TestGlobalCollectScript_sendsTheKuboBearerOnStdinOnly(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	var line string
+	for _, l := range strings.Split(globalCollectScript(), "\n") {
+		if strings.Contains(l, "/api/v0/repo/stat") {
+			line = strings.TrimSpace(l)
+		}
+	}
+	if line == "" || strings.Contains(line, "-H ") {
+		t.Fatalf("repo/stat line = %q", line)
+	}
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "curl")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho \"$@\" > \"$FAKE_DIR/argv\"\ncat > \"$FAKE_DIR/stdin\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const token = "the-kubo-bearer-token"
+	run := exec.Command(bash, "-c", "tok="+token+"; chain_host=198.18.0.2; kubo_curl="+fake+"; "+line)
+	run.Env = append(os.Environ(), "FAKE_DIR="+dir)
+	if out, err := run.CombinedOutput(); err != nil {
+		t.Fatalf("pipeline failed: %v\n%s", err, out)
+	}
+	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
+	stdin, _ := os.ReadFile(filepath.Join(dir, "stdin"))
+	if strings.Contains(string(argv), token) || !strings.Contains(string(argv), "-K -") {
+		t.Errorf("curl argv = %s", argv)
+	}
+	if strings.TrimSpace(string(stdin)) != `header = "Authorization: Bearer `+token+`"` {
+		t.Errorf("curl config on stdin = %q", stdin)
 	}
 }

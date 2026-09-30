@@ -69,7 +69,8 @@ if [ "$(systemctl is-active %s 2>/dev/null || true)" = active ]; then
     tok=$(sudo -n cat %s/%s | tr -d '\n')
     # On a co-located machine the RPC is on the namespace address, reachable by root only.
     if [ "$chain_host" = %s ]; then kubo_curl="sudo -n curl"; else kubo_curl=curl; fi
-    $kubo_curl -sf --max-time 3 -X POST -H "Authorization: Bearer ${tok}" http://$chain_host:%d/api/v0/repo/stat || true
+    # The bearer goes to curl as a config line on stdin, never on a command line (ps shows those).
+    printf 'header = "Authorization: Bearer %%s"\n' "$tok" | $kubo_curl -sf --max-time 3 -K - -X POST http://$chain_host:%d/api/v0/repo/stat || true
   else
     echo token-unreadable
   fi
