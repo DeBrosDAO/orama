@@ -66,7 +66,10 @@ func TestTrigger_cronFiresOncePerSlot(t *testing.T) {
 				return false, eventually.Stop(fmt.Errorf("slot %s fired %d times", r.Slot, r.N))
 			}
 		}
-		return len(rows) >= minSlots, fmt.Errorf("%d slots so far", len(rows))
+		if len(rows) >= minSlots {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d slots so far", len(rows))
 	})
 }
 
@@ -89,7 +92,10 @@ func TestTrigger_pubsubDepthLimited(t *testing.T) {
 	})
 	eventually.Require(t, pollEvery, triggerWait, "depth 5 reached", func() (bool, error) {
 		d := depths(t, fx)
-		return d[maxDepth] > 0, fmt.Errorf("depths %v", d)
+		if d[maxDepth] > 0 {
+			return true, nil
+		}
+		return false, fmt.Errorf("depths %v", d)
 	})
 	err := eventually.Poll(t.Context(), pollEvery, quietWindow, "a fire beyond depth 5", func() (bool, error) {
 		for depth := range depths(t, fx) {

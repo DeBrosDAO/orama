@@ -63,7 +63,10 @@ func waitForAction(t testing.TB, c *gw.Client, bearer, action string) []auditEve
 			return false, eventually.Stop(fmt.Errorf("GET /v1/audit: %d %s", resp.Status, resp.Body))
 		}
 		got = page.Events
-		return len(got) > 0, fmt.Errorf("no %s event yet", action)
+		if len(got) > 0 {
+			return true, nil
+		}
+		return false, fmt.Errorf("no %s event yet", action)
 	})
 	return got
 }

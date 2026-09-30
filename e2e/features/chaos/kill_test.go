@@ -59,7 +59,10 @@ func TestChaos_killEachServiceClassRecoversByItself(t *testing.T) {
 			eventually.Require(t, unitPoll, recoverBudget, sc.Unit+" restarted by itself on "+victim.Name, func() (bool, error) {
 				state := f.Unit(t, victim, sc.Unit)
 				since := tenancy.ActiveSince(t, f, victim, sc.Unit)
-				return state == "active" && since != before, fmt.Errorf("%s (started at %s, was %s)", state, since, before)
+				if state == "active" && since != before {
+					return true, nil
+				}
+				return false, fmt.Errorf("%s (started at %s, was %s)", state, since, before)
 			})
 			healed(t, "the cluster after "+sc.Name+" was killed on "+victim.Name)
 			requireServing(t, f.State.Nodes, "after "+sc.Name+" recovered")

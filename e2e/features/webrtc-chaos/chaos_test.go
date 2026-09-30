@@ -142,7 +142,10 @@ func TestNodeDeath_rolesReallocated(t *testing.T) {
 	resolver := fx.f.Node(t, "node-1").PublicIP
 	eventually.Require(t, pollEvery, readyBudget, "TURN DNS for "+host, func() (bool, error) {
 		got, err := tenancy.ResolveAt(t.Context(), resolver, host)
-		return len(got) == 2, fmt.Errorf("%v %v", got, err)
+		if len(got) == 2 {
+			return true, nil
+		}
+		return false, fmt.Errorf("%v %v", got, err)
 	})
 	t.Run("node-3 partitioned", func(t *testing.T) {
 		for _, peer := range []string{"node-1", "node-2"} {
@@ -153,7 +156,10 @@ func TestNodeDeath_rolesReallocated(t *testing.T) {
 			if err != nil {
 				return false, err
 			}
-			return len(got) > 0 && !slices.Contains(got, dead.PublicIP), fmt.Errorf("TURN DNS %v", got)
+			if len(got) > 0 && !slices.Contains(got, dead.PublicIP) {
+				return true, nil
+			}
+			return false, fmt.Errorf("TURN DNS %v", got)
 		})
 		r := fx.c.PinTo(fx.f.Node(t, "node-1").PublicIP).MustSend(t, gw.Req{Method: http.MethodPost, Path: "/v1/webrtc/turn/credentials", Bearer: fx.token})
 		var cr services.TURNCreds

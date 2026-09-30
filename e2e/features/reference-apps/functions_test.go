@@ -157,6 +157,9 @@ func checkCron(t testing.TB, tn *realistic.Tenant, bearer string) {
 				return false, eventually.Stop(fmt.Errorf("minute %v fired %v times", r["slot"], n))
 			}
 		}
-		return len(rows) >= cronSlots, fmt.Errorf("%d minutes so far", len(rows))
+		if len(rows) >= cronSlots {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d minutes so far", len(rows))
 	})
 }

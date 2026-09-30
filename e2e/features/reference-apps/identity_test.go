@@ -74,6 +74,9 @@ func redeployAs(t *testing.T, tn *realistic.Tenant, u, role, version string) {
 	tn.EveryNodeServes(t, u, "/version", version)
 	eventually.Require(t, pollEvery, realistic.StartBudget, "both replicas on "+version, func() (bool, error) {
 		n := len(appUnitNodes(t, tn, "node", todoApp))
-		return n == replicas, fmt.Errorf("%d nodes run it", n)
+		if n == replicas {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d nodes run it", n)
 	})
 }

@@ -150,7 +150,10 @@ func TestAuthSessions_cliListAndRevoke(t *testing.T) {
 	}
 	eventually.Require(t, pollEvery, revocationStaleness+stalenessSlack, "the ended machine to be refused", func() (bool, error) {
 		res := runCLI(t, other, "auth", "whoami")
-		return res.Exit == exitAuth, fmt.Errorf("whoami exit %d", res.Exit)
+		if res.Exit == exitAuth {
+			return true, nil
+		}
+		return false, fmt.Errorf("whoami exit %d", res.Exit)
 	})
 	n.CLI.MustOK(t, "auth", "whoami")
 	for _, args := range [][]string{{"revoke"}, {"revoke", "0"}, {"revoke", "abc"}, {"revoke", "999999999"}} {

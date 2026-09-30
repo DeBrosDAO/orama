@@ -83,7 +83,10 @@ func TestGoClientStorage_uploadGetPinStatusUnpin(t *testing.T) {
 		if !pinStates[st.Status] {
 			return false, eventually.Stop(fmt.Errorf("status %q is not a documented pin state", st.Status))
 		}
-		return st.Status == "pinned", fmt.Errorf("status %s", st.Status)
+		if st.Status == "pinned" {
+			return true, nil
+		}
+		return false, fmt.Errorf("status %s", st.Status)
 	})
 	if err := c.Storage().Unpin(ctx, up.Cid); err != nil {
 		t.Fatalf("Storage().Unpin: %v", err)

@@ -104,7 +104,10 @@ func TestEphemeral_limitsAndDisconnect(t *testing.T) {
 	conn.Close()
 	eventually.Require(t, time.Second, clearBudget, "disconnect to clear the socket's state", func() (bool, error) {
 		n := len(entries(t, fx, c, fn, topic))
-		return n == 0, fmt.Errorf("%d entries remain", n)
+		if n == 0 {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d entries remain", n)
 	})
 }
 

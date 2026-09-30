@@ -30,7 +30,10 @@ func waitPlaced(t *testing.T, fx *fixture) []fleet.Node {
 			}
 		}
 		holders = turnHolders(t, fx.f, fx.n.Name)
-		return len(holders) == turnNodes, fmt.Errorf("%d TURN holders", len(holders))
+		if len(holders) == turnNodes {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d TURN holders", len(holders))
 	})
 	return holders
 }

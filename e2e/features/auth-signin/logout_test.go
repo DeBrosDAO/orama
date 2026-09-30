@@ -123,6 +123,9 @@ func TestRefresh_replayIsAudited(t *testing.T) {
 		if err := resp.Decode(&out); err != nil {
 			return false, eventually.Stop(err)
 		}
-		return len(out.Events) > 0, fmt.Errorf("%d replay events", len(out.Events))
+		if len(out.Events) > 0 {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d replay events", len(out.Events))
 	})
 }

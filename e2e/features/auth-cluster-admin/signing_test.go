@@ -135,7 +135,10 @@ func freshVerifiesEverywhere(t testing.TB, nodes []nodeClient, newKid string) {
 	for _, nc := range nodes {
 		eventually.Require(t, pollEvery, keyReloadBudget, nc.Node.Name+" to accept the new key", func() (bool, error) {
 			resp := nc.Client.MustSend(t, gw.Req{Path: gw.PathWhoami, Bearer: fresh})
-			return resp.Status == http.StatusOK, fmt.Errorf("HTTP %d", resp.Status)
+			if resp.Status == http.StatusOK {
+				return true, nil
+			}
+			return false, fmt.Errorf("HTTP %d", resp.Status)
 		})
 	}
 }

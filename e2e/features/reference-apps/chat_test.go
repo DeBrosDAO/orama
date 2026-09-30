@@ -131,7 +131,10 @@ func (ch *chat) requirePresent(t *testing.T, want int) {
 				return false, eventually.Stop(fmt.Errorf("%s is listed by %d gateways", id, n))
 			}
 		}
-		return len(seen) == want, fmt.Errorf("%d present: %v", len(seen), seen)
+		if len(seen) == want {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d present: %v", len(seen), seen)
 	})
 }
 

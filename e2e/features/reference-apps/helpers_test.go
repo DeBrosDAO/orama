@@ -78,7 +78,10 @@ func requireReplicas(t testing.TB, tn *realistic.Tenant, runtime, name string) {
 	t.Helper()
 	eventually.Require(t, pollEvery, realistic.StartBudget, name+" running on its home node and replica", func() (bool, error) {
 		n := len(appUnitNodes(t, tn, runtime, name))
-		return n == replicas, fmt.Errorf("%d nodes run it", n)
+		if n == replicas {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d nodes run it", n)
 	})
 }
 

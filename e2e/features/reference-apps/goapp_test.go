@@ -129,6 +129,9 @@ func deleteAndCheckTeardown(t *testing.T, tn *realistic.Tenant, name string) {
 	r.Expect(t, http.StatusOK)
 	eventually.Require(t, pollEvery, teardownWait, name+" stopped on every node", func() (bool, error) {
 		left := appUnitNodes(t, tn, "go", name)
-		return len(left) == 0, fmt.Errorf("still active on %d node(s)", len(left))
+		if len(left) == 0 {
+			return true, nil
+		}
+		return false, fmt.Errorf("still active on %d node(s)", len(left))
 	})
 }

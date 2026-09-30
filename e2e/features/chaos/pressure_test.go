@@ -88,7 +88,10 @@ func TestChaos_memoryPressureKeepsDaemonsAlive(t *testing.T) {
 		unit := realistic.MemoryHog(t, f, victim, mb)
 		eventually.Require(t, pollEvery, recoverBudget, "the hog to hold its memory", func() (bool, error) {
 			held := realistic.MemoryCurrentMB(t, f, victim, unit)
-			return held >= mb*memHeld/100, fmt.Errorf("%d of %d MiB resident", held, mb)
+			if held >= mb*memHeld/100 {
+				return true, nil
+			}
+			return false, fmt.Errorf("%d of %d MiB resident", held, mb)
 		})
 		requireServing(t, []fleet.Node{victim}, "under memory pressure")
 		s.writeN(t, victim, "memory", rowsPerPhase)

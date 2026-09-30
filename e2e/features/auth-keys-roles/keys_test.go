@@ -150,12 +150,18 @@ func TestKeys_revokeStopsKeyAndItsTokens(t *testing.T) {
 	var resp *gw.Response
 	eventually.Require(t, pollEvery, revocationStaleness+stalenessSlack, "the revoked key to be refused", func() (bool, error) {
 		resp = c.MustSend(t, gw.Req{Method: http.MethodPost, Path: gw.PathToken, Bearer: k.APIKey})
-		return resp.Status == http.StatusUnauthorized, fmt.Errorf("HTTP %d %s", resp.Status, resp.ErrorCode())
+		if resp.Status == http.StatusUnauthorized {
+			return true, nil
+		}
+		return false, fmt.Errorf("HTTP %d %s", resp.Status, resp.ErrorCode())
 	})
 	refusal(t, resp, http.StatusUnauthorized, "AUTH_INVALID_KEY")
 	eventually.Require(t, pollEvery, revocationStaleness+stalenessSlack, "the exchanged token to be refused", func() (bool, error) {
 		r := c.MustSend(t, gw.Req{Path: gw.PathWhoami, Bearer: s.AccessToken})
-		return r.Status == http.StatusUnauthorized, fmt.Errorf("HTTP %d %s", r.Status, r.ErrorCode())
+		if r.Status == http.StatusUnauthorized {
+			return true, nil
+		}
+		return false, fmt.Errorf("HTTP %d %s", r.Status, r.ErrorCode())
 	})
 	if r := send(t, c, http.MethodDelete, keyPath(k.ID), n.Owner.Token(), nil); r.Status != http.StatusNotFound {
 		t.Errorf("revoking twice: want 404, got %d", r.Status)

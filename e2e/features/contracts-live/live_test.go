@@ -185,7 +185,10 @@ func TestContractsProxy_anonLiveShapeMatches(t *testing.T) {
 	eventually.Require(t, pollEvery, torBudget, "proxy answers through Tor", func() (bool, error) {
 		resp := send(t, n.Client, n.Owner.Token(), f, map[string]any{"url": torCheckURL})
 		body = resp.Body
-		return resp.Status == http.StatusOK, fmt.Errorf("HTTP %d: %.200s", resp.Status, resp.Body)
+		if resp.Status == http.StatusOK {
+			return true, nil
+		}
+		return false, fmt.Errorf("HTTP %d: %.200s", resp.Status, resp.Body)
 	})
 	checkShape(t, f, body)
 }

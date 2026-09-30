@@ -153,7 +153,10 @@ func requireCometPowerMatches(t *testing.T, c *chain.Chain, reader, n fleet.Node
 			return false, err
 		}
 		got := vp.CometPower.Int64()
-		return got > 0 && got == st.VotingPow, fmt.Errorf("comet_power %d, CometBFT voting power %d", got, st.VotingPow)
+		if got > 0 && got == st.VotingPow {
+			return true, nil
+		}
+		return false, fmt.Errorf("comet_power %d, CometBFT voting power %d", got, st.VotingPow)
 	})
 	return vp
 }

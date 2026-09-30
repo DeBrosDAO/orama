@@ -103,7 +103,10 @@ func TestPhaseC_chainProducesBlocks(t *testing.T) {
 	first := chainHeight(t, f, n)
 	eventually.Require(t, pollEvery, chainProgress, "a new block on "+n.Name, func() (bool, error) {
 		h := chainHeight(t, f, n)
-		return h > first, fmt.Errorf("height %d, was %d", h, first)
+		if h > first {
+			return true, nil
+		}
+		return false, fmt.Errorf("height %d, was %d", h, first)
 	})
 }
 

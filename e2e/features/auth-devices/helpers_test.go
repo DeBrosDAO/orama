@@ -177,7 +177,10 @@ func refusedEverywhere(t testing.TB, nodes []nodeClient, bearer, what string) {
 	for _, nc := range nodes {
 		eventually.Require(t, pollEvery, revocationStaleness+stalenessSlack, nc.Node.Name+" to refuse "+what, func() (bool, error) {
 			st, code := whoamiStatus(t, nc.Client, bearer)
-			return st == http.StatusUnauthorized, fmt.Errorf("HTTP %d %s", st, code)
+			if st == http.StatusUnauthorized {
+				return true, nil
+			}
+			return false, fmt.Errorf("HTTP %d %s", st, code)
 		})
 	}
 	if took := time.Since(start); took > revocationStaleness+stalenessSlack {

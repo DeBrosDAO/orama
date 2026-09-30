@@ -59,7 +59,10 @@ func requireServing(t testing.TB, nodes []fleet.Node, what string) {
 			if err != nil {
 				return false, err
 			}
-			return r.Status == http.StatusOK, fmt.Errorf("HTTP %d", r.Status)
+			if r.Status == http.StatusOK {
+				return true, nil
+			}
+			return false, fmt.Errorf("HTTP %d", r.Status)
 		})
 	}
 }
@@ -119,7 +122,10 @@ func (s *store) requireRows(t testing.TB, node fleet.Node, phase string, want in
 		if err != nil {
 			return false, err
 		}
-		return n == want, fmt.Errorf("%d rows, want %d", n, want)
+		if n == want {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d rows, want %d", n, want)
 	})
 }
 

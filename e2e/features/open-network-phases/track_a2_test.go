@@ -137,7 +137,10 @@ func TestPhaseA9_sealedBackupRestoresTheDatabase(t *testing.T) {
 	n.CLI.MustOK(t, "namespace", "restore", "--in", file, "--key-file", keyFile, "--namespace", n.Name, "--dest-key", lastHexLine(dest))
 	eventually.Require(t, pollEvery, restoreVisible, "the backup's 3 rows after the restore", func() (bool, error) {
 		got := db.count(t)
-		return got == 3, fmt.Errorf("%d rows", got)
+		if got == 3 {
+			return true, nil
+		}
+		return false, fmt.Errorf("%d rows", got)
 	})
 }
 

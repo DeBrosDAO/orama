@@ -34,7 +34,10 @@ func waitLog(t *testing.T, fx *fixture, fn, marker string) {
 		if err != nil {
 			return false, err
 		}
-		return res.Exit == 0 && strings.Contains(res.Stdout, marker), fmt.Errorf("exit %d", res.Exit)
+		if res.Exit == 0 && strings.Contains(res.Stdout, marker) {
+			return true, nil
+		}
+		return false, fmt.Errorf("exit %d", res.Exit)
 	})
 }
 

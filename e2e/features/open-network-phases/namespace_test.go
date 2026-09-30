@@ -54,7 +54,10 @@ func waitListed(t *testing.T, cli *oramacli.Runner, name string) {
 		if status == ns.StatusFailed {
 			return false, eventually.Stop(errors.New("provisioning failed"))
 		}
-		return ok && status == ns.StatusReady, fmt.Errorf("listed=%t status=%q", ok, status)
+		if ok && status == ns.StatusReady {
+			return true, nil
+		}
+		return false, fmt.Errorf("listed=%t status=%q", ok, status)
 	})
 }
 

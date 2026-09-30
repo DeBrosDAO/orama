@@ -216,7 +216,10 @@ func TestMonitorNamespaces_newNamespaceHealthyOnEveryNode(t *testing.T) {
 				healthy++
 			}
 		}
-		return healthy == len(f.State.Nodes), fmt.Errorf("%s healthy on %d of %d nodes", n.Name, healthy, len(f.State.Nodes))
+		if healthy == len(f.State.Nodes) {
+			return true, nil
+		}
+		return false, fmt.Errorf("%s healthy on %d of %d nodes", n.Name, healthy, len(f.State.Nodes))
 	})
 }
 
@@ -243,7 +246,9 @@ func TestMonitorTraffic_countsGatewayRequests(t *testing.T) {
 		if err := jsonOf(run(t, harness.CLI(t), "monitor", "traffic", "--env", f.State.Env, "--json"), &tr); err != nil {
 			return false, err
 		}
-		return tr.Totals.Reporting >= 1 && tr.Totals.Requests > 0,
-			fmt.Errorf("reporting=%d requests=%d", tr.Totals.Reporting, tr.Totals.Requests)
+		if tr.Totals.Reporting >= 1 && tr.Totals.Requests > 0 {
+			return true, nil
+		}
+		return false, fmt.Errorf("reporting=%d requests=%d", tr.Totals.Reporting, tr.Totals.Requests)
 	})
 }

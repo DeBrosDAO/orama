@@ -107,7 +107,10 @@ func stopTor(t *testing.T, f *fleet.Fleet, victim fleet.Node) {
 			return false, fmt.Errorf("health %d is not JSON: %w: %.200s", r.Status, err, r.Body)
 		}
 		got := h.Checks["anon_proxy"].Status
-		return r.Status == http.StatusOK && got == anonProxyUnavailable, fmt.Errorf("health %d, anon_proxy %q", r.Status, got)
+		if r.Status == http.StatusOK && got == anonProxyUnavailable {
+			return true, nil
+		}
+		return false, fmt.Errorf("health %d, anon_proxy %q", r.Status, got)
 	})
 }
 
@@ -117,7 +120,10 @@ func requireProxyBack(t *testing.T, c *gw.Client, owner string) {
 	t.Helper()
 	eventually.Require(t, pollEvery, recoverBudget, "the proxy back after Tor restarts", func() (bool, error) {
 		r := tenancy.Post(t, c, "/v1/proxy/anon", tenancy.Cred{Bearer: owner}, map[string]any{"url": target, "method": "GET"})
-		return r.Status == http.StatusOK, fmt.Errorf("HTTP %d", r.Status)
+		if r.Status == http.StatusOK {
+			return true, nil
+		}
+		return false, fmt.Errorf("HTTP %d", r.Status)
 	})
 }
 

@@ -147,7 +147,10 @@ func waitTerminal(t *testing.T, owner *gw.User, clusterID string) *ns.ClusterSta
 			return false, err
 		}
 		last = st
-		return st.Status == ns.StatusReady || st.Status == ns.StatusFailed, fmt.Errorf("status=%s", st.Status)
+		if st.Status == ns.StatusReady || st.Status == ns.StatusFailed {
+			return true, nil
+		}
+		return false, fmt.Errorf("status=%s", st.Status)
 	})
 	return last
 }
