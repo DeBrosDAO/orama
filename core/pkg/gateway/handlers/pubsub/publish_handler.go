@@ -168,18 +168,18 @@ func (p *PubSubHandlers) PublishBatchHandler(w http.ResponseWriter, r *http.Requ
 
 // writePublishError answers a publish the pubsub service did not accept: 504
 // when it did not answer in time, 503 otherwise. what names the message(s).
+// The cause and the unit to check go to the operator's log; the tenant is told
+// the publish did not happen and may be retried, not the node's internals.
 func (p *PubSubHandlers) writePublishError(w http.ResponseWriter, what string, err error) {
-	p.logger.ComponentWarn("gateway", "pubsub publish failed",
-		zap.String("what", what), zap.Error(err))
+	p.logger.ComponentWarn("gateway", "pubsub publish failed: check that orama-namespace-pubsub@index is running",
+		zap.String("what", what), zap.Duration("timeout", p.publishTimeout), zap.Error(err))
 	if errors.Is(err, context.DeadlineExceeded) {
 		writeError(w, http.StatusGatewayTimeout, fmt.Sprintf(
-			"publish of %s: the pubsub service did not answer within %s, check that orama-namespace-pubsub@index is running: %v",
-			what, p.publishTimeout, err))
+			"publish of %s was not confirmed within %s and may not have been delivered; retry it", what, p.publishTimeout))
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, fmt.Sprintf(
-		"publish of %s was not handed to the pubsub service, check that orama-namespace-pubsub@index is running: %v",
-		what, err))
+		"publish of %s was not delivered: the pub/sub service is unavailable on this node; retry it", what))
 }
 
 // firePublishTriggers dispatches the PubSub triggers of serverless functions

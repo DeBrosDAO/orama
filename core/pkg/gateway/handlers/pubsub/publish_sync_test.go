@@ -79,9 +79,13 @@ func TestPublishHandler_service_failure_is_reported(t *testing.T) {
 		t.Fatalf("status %d, want 503 (body %s)", rr.Code, rr.Body.String())
 	}
 	msg, _ := decodeResponse(t, rr.Body)["error"].(string)
-	for _, want := range []string{"chat", "orama-namespace-pubsub@index", "connection refused"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error %q does not mention %q", msg, want)
+	if !strings.Contains(msg, "chat") {
+		t.Errorf("error %q does not name the topic", msg)
+	}
+	// The node's internals are the operator's, in the log, not the tenant's.
+	for _, leak := range []string{"orama-namespace-pubsub@index", "connection refused", "/run/orama"} {
+		if strings.Contains(msg, leak) {
+			t.Errorf("error %q exposes %q", msg, leak)
 		}
 	}
 	select {
@@ -183,7 +187,7 @@ func TestPublishBatchHandler_service_failure_is_reported(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d, want 503 (body %s)", rr.Code, rr.Body.String())
 	}
-	if msg, _ := decodeResponse(t, rr.Body)["error"].(string); !strings.Contains(msg, "connection refused") {
-		t.Errorf("error %q does not carry the cause", msg)
+	if msg, _ := decodeResponse(t, rr.Body)["error"].(string); !strings.Contains(msg, "not delivered") || strings.Contains(msg, "connection refused") {
+		t.Errorf("error %q must say the batch was not delivered, without the node's internal cause", msg)
 	}
 }
