@@ -2,10 +2,12 @@ package namespace
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,16 +40,36 @@ func listenOn(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
-// freePort returns a port number nothing is listening on.
+// freePortRange is below every OS's ephemeral range (Linux 32768+, macOS and
+// Windows 49152+), so no process listening on :0 is ever handed a port in it.
+const (
+	freePortLow  = 20000
+	freePortHigh = 30000
+)
+
+// freePort returns a port number nothing is listening on. It is taken from
+// below the ephemeral range: a port released by a ":0" listener is the next
+// one any concurrently running test process may be given, which made a "free"
+// port busy by the time it was checked.
+// Successive calls hand out distinct ports, so a test asking for two gets two.
+var freePortCursor atomic.Int32
+
 func freePort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
+	for {
+		port := freePortLow + int(freePortCursor.Add(1))
+		if port >= freePortHigh {
+			break
+		}
+		ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+		if err != nil {
+			continue
+		}
+		_ = ln.Close()
+		return port
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-	return port
+	t.Fatalf("no free port in [%d, %d)", freePortLow, freePortHigh)
+	return 0
 }
 
 func TestEnsurePortsFree_passesWhenPortsAreFree(t *testing.T) {
