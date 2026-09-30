@@ -188,8 +188,29 @@ func (c *HTTPClient) Unsubscribe(_ context.Context, topic string) error {
 	return nil
 }
 
-func (c *HTTPClient) ListTopics(context.Context) ([]string, error) {
-	return nil, nil
+// ListTopics returns the topics of the client's namespace (or the namespace
+// override in ctx) that this node's pubsub service has a subscription on.
+func (c *HTTPClient) ListTopics(ctx context.Context) ([]string, error) {
+	ns := c.ns(ctx)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.baseURL+"/topics?namespace="+url.QueryEscape(ns), nil)
+	if err != nil {
+		return nil, fmt.Errorf("pubsub list topics: build request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("pubsub list topics for namespace %q: %w", ns, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		slurp, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("pubsub list topics for namespace %q: %s %s", ns, resp.Status, slurp)
+	}
+	var out topicsBody
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("pubsub list topics for namespace %q: decode reply: %w", ns, err)
+	}
+	return out.Topics, nil
 }
 
 func (c *HTTPClient) Close() error {

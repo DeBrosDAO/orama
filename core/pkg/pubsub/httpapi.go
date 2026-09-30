@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 
 	"go.uber.org/zap"
 )
@@ -14,6 +15,11 @@ type publishBody struct {
 	Namespace string `json:"namespace"`
 	Topic     string `json:"topic"`
 	DataB64   string `json:"data"`
+}
+
+// topicsBody is the reply to GET /topics.
+type topicsBody struct {
+	Topics []string `json:"topics"`
 }
 
 type publishBatchBody struct {
@@ -82,6 +88,31 @@ func Handler(mgr *Manager, logger *zap.Logger) http.Handler {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/topics", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		ns := r.URL.Query().Get("namespace")
+		if ns == "" {
+			http.Error(w, "namespace required", http.StatusBadRequest)
+			return
+		}
+		topics, err := mgr.ListTopics(WithNamespace(r.Context(), ns))
+		if err != nil {
+			logger.Warn("list topics failed", zap.Error(err))
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if topics == nil {
+			topics = []string{}
+		}
+		sort.Strings(topics)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(topicsBody{Topics: topics}); err != nil {
+			logger.Warn("write topics reply failed", zap.Error(err))
+		}
 	})
 	mux.HandleFunc("/subscribe", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
