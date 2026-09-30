@@ -24,7 +24,7 @@ npm install @debros/orama
 ```
 
 The package ships ESM and CommonJS, so both `import` and `require` work, in
-Node and in a browser bundle. Node 20 or later; the chain module needs Node 20.19 or
+Node and in a browser bundle. Node 20.19 or later (the package's `engines` field); the chain module needs Node 20.19 or
 later, because its cryptography peers (`@noble/*` 2.x, `@scure/base` 2.x) are ESM-only and a
 CommonJS `require` of them relies on `require(esm)`, which Node 20.19 and 22.12 enable by default.
 Developing the SDK itself needs Node 22.12 or later (the repo pins Node 24 in `.nvmrc`).

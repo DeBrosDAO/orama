@@ -3,6 +3,9 @@
 Client for the Orama Network vault guardians: Shamir-split secret storage across
 the guardian daemons that run on every node.
 
+Requires Node 20.19 or later: its @noble dependencies are ESM-only, and a CommonJS `require` of them
+relies on `require(esm)`, which Node 20.19 and 22.12 enable by default.
+
 ## Who this is for
 
 **Not applications.** Guardians listen on the WireGuard overlay (`10.0.0.x`), so
