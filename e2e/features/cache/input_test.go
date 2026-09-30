@@ -18,8 +18,12 @@ import (
 const (
 	// bodyLimit is every cache handler's MaxBytesReader (handlers/cache).
 	bodyLimit = 10 << 20
-	// largeValue is well under the limit and well over any packet.
-	largeValue = 2 << 20
+	// largeValue is well over any packet and under Olric's 1 MiB table size,
+	// which is what bounds one value: a 2 MiB one does not fit however small
+	// the 10 MiB body limit says the request is.
+	largeValue = 768 << 10
+	// tableOverflow is a value no Olric table holds.
+	tableOverflow = 2 << 20
 	// writers is how many goroutines race on one key.
 	writers = 16
 )
@@ -58,8 +62,9 @@ func TestCacheInput_wrongMethodRefused(t *testing.T) {
 	}
 }
 
-// TestCacheInput_largeValues: a 2 MiB value round-trips; a body over the
-// 10 MiB limit is refused, not stored and not a 5xx.
+// TestCacheInput_largeValues: a 768 KiB value round-trips; a value too big for
+// one Olric table (2 MiB) and a body over the 10 MiB limit are each refused
+// as a client error, not stored and not a 5xx.
 func TestCacheInput_largeValues(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -68,6 +73,11 @@ func TestCacheInput_largeValues(t *testing.T) {
 	if got := mustGet(t, n.Client, tenancy.Owner(n), "big", "fits"); got != big {
 		t.Fatalf("the %d-byte value came back as %d bytes", len(big), len(fmt.Sprint(got)))
 	}
+	overflow := put(t, n.Client, tenancy.Owner(n), "big", "table", strings.Repeat("x", tableOverflow), "")
+	if overflow.Status != http.StatusBadRequest && overflow.Status != http.StatusRequestEntityTooLarge {
+		t.Errorf("a %d-byte value, more than one table holds, answered %d, want 400/413: %.200s", tableOverflow, overflow.Status, overflow.Body)
+	}
+	get(t, n.Client, tenancy.Owner(n), "big", "table").Expect(t, http.StatusNotFound)
 	huge := strings.Repeat("x", bodyLimit+1)
 	resp := put(t, n.Client, tenancy.Owner(n), "big", "over", huge, "")
 	if resp.Status != http.StatusBadRequest && resp.Status != http.StatusRequestEntityTooLarge {
