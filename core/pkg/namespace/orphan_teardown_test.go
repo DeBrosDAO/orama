@@ -25,7 +25,7 @@ type orphanHarness struct {
 	purged     map[string]bool // namespaces torn down with their tenant data
 	teardownEr error
 	failNS     map[string]bool // namespaces whose teardown fails
-	assigned   int // rows of the restore self-check's count
+	assigned   int             // rows of the restore self-check's count
 	// nsClusters is how many clusters of the namespace the registry holds; the
 	// default 0 means the namespace was deleted.
 	nsClusters int
