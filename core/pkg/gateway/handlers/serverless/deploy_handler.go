@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -288,4 +289,20 @@ func codeForStatus(status int) httputil.RPCErrorCode {
 	default:
 		return httputil.ErrCodeInternal
 	}
+}
+
+// writeStoreError answers a failed read or write of the namespace's own
+// database. One that is not answering right now (no leader, a timeout) is a
+// retryable 503: the functions are there, and the next request can reach them.
+// It used to be a 500 like any other fault, which a client cannot tell from a
+// broken gateway. The cause is the operator's, in the log; the caller is told
+// what failed, never the driver's text.
+func writeStoreError(w http.ResponseWriter, what string, err error) {
+	switch rqlite.ClassifyBatchError(err) {
+	case rqlite.BatchCodeUnavailable, rqlite.BatchCodeDeadlineExceeded:
+		writeRPCError(w, http.StatusServiceUnavailable, codeForStatus(http.StatusServiceUnavailable),
+			what+": the namespace's database is not answering right now; retry shortly", httputil.WithRetryable())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, what)
 }

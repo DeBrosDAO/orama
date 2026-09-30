@@ -234,7 +234,7 @@ func (h *ServerlessHandlers) GetFunctionInfo(w http.ResponseWriter, r *http.Requ
 		if serverless.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "Function not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "Failed to get function")
+			writeStoreError(w, "Failed to get function", err)
 		}
 		return
 	}
@@ -262,7 +262,7 @@ func (h *ServerlessHandlers) ListVersions(w http.ResponseWriter, r *http.Request
 
 	versions, err := reg.ListVersions(ctx, namespace, name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to list versions")
+		writeStoreError(w, "Failed to list versions", err)
 		return
 	}
 

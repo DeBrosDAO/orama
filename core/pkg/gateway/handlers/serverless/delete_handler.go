@@ -24,7 +24,7 @@ func (h *ServerlessHandlers) DeleteFunction(w http.ResponseWriter, r *http.Reque
 		if serverless.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "Function not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "Failed to delete function")
+			writeStoreError(w, "Failed to delete function", err)
 		}
 		return
 	}

@@ -176,8 +176,9 @@ func TestHandleSetSecret_recordsNothingWhenTheStoreRefuses(t *testing.T) {
 	h.HandleSetSecret(rec, namespacedRequest(http.MethodPut, "/v1/functions/secrets",
 		"acme", testWallet, `{"name":"K","value":"v"}`))
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
+	// A store that timed out is not answering right now: a retryable 503.
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 	if rows := db.recorded(); len(rows) != 0 {
 		t.Errorf("a failed write was recorded as a success: %v", rows)

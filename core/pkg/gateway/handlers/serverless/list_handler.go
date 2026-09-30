@@ -23,7 +23,7 @@ func (h *ServerlessHandlers) ListFunctions(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		h.logger.Error("Failed to list functions",
 			zap.Error(err))
-		writeError(w, http.StatusInternalServerError, "Failed to list functions")
+		writeStoreError(w, "Failed to list functions", err)
 		return
 	}
 

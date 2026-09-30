@@ -60,7 +60,7 @@ func (h *ServerlessHandlers) GetFunctionLogs(w http.ResponseWriter, r *http.Requ
 				zap.String("namespace", namespace),
 				zap.Error(err),
 			)
-			writeError(w, http.StatusInternalServerError, "Failed to get logs")
+			writeStoreError(w, "Failed to get logs", err)
 			return
 		}
 		if len(logs) == 0 && !h.functionKnown(ctx, w, namespace, name) {
@@ -82,7 +82,7 @@ func (h *ServerlessHandlers) GetFunctionLogs(w http.ResponseWriter, r *http.Requ
 			zap.String("namespace", namespace),
 			zap.Error(err),
 		)
-		writeError(w, http.StatusInternalServerError, "Failed to get invocations")
+		writeStoreError(w, "Failed to get invocations", err)
 		return
 	}
 	if len(invocations) == 0 && !h.functionKnown(ctx, w, namespace, name) {
@@ -107,7 +107,7 @@ func (h *ServerlessHandlers) functionKnown(ctx context.Context, w http.ResponseW
 		if serverless.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "Function not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "Failed to look up function")
+			writeStoreError(w, "Failed to look up function", err)
 		}
 		return false
 	}

@@ -55,7 +55,7 @@ func (h *ServerlessHandlers) HandleSetSecret(w http.ResponseWriter, r *http.Requ
 			zap.String("name", req.Name),
 			zap.Error(err),
 		)
-		writeError(w, http.StatusInternalServerError, "Failed to set secret: "+err.Error())
+		writeStoreError(w, "Failed to set secret", err)
 		return
 	}
 
@@ -97,7 +97,7 @@ func (h *ServerlessHandlers) HandleListSecrets(w http.ResponseWriter, r *http.Re
 			zap.String("namespace", namespace),
 			zap.Error(err),
 		)
-		writeError(w, http.StatusInternalServerError, "Failed to list secrets")
+		writeStoreError(w, "Failed to list secrets", err)
 		return
 	}
 
@@ -133,7 +133,7 @@ func (h *ServerlessHandlers) HandleDeleteSecret(w http.ResponseWriter, r *http.R
 			zap.String("name", secretName),
 			zap.Error(err),
 		)
-		writeError(w, http.StatusInternalServerError, "Failed to delete secret: "+err.Error())
+		writeStoreError(w, "Failed to delete secret", err)
 		return
 	}
 

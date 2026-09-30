@@ -49,7 +49,7 @@ func (h *ServerlessHandlers) HandleAddTrigger(w http.ResponseWriter, r *http.Req
 		if serverless.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "Function not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "Failed to look up function")
+			writeStoreError(w, "Failed to look up function", err)
 		}
 		return
 	}
@@ -93,7 +93,7 @@ func (h *ServerlessHandlers) HandleAddTrigger(w http.ResponseWriter, r *http.Req
 			zap.String("topic", req.Topic),
 			zap.Error(err),
 		)
-		writeError(w, http.StatusInternalServerError, "Failed to add trigger: "+err.Error())
+		writeStoreError(w, "Failed to add trigger", err)
 		return
 	}
 	if h.dispatcher != nil {
@@ -144,7 +144,7 @@ func (h *ServerlessHandlers) HandleListTriggers(w http.ResponseWriter, r *http.R
 		if serverless.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "Function not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "Failed to look up function")
+			writeStoreError(w, "Failed to look up function", err)
 		}
 		return
 	}
@@ -153,7 +153,7 @@ func (h *ServerlessHandlers) HandleListTriggers(w http.ResponseWriter, r *http.R
 	if h.triggerStore != nil {
 		pubsubTriggers, err := h.triggerStore.ListByFunction(ctx, fn.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Failed to list pubsub triggers")
+			writeStoreError(w, "Failed to list pubsub triggers", err)
 			return
 		}
 		for _, t := range pubsubTriggers {
@@ -168,7 +168,7 @@ func (h *ServerlessHandlers) HandleListTriggers(w http.ResponseWriter, r *http.R
 	if h.cronStore != nil {
 		cronTriggers, err := h.cronStore.ListByFunction(ctx, fn.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Failed to list cron triggers")
+			writeStoreError(w, "Failed to list cron triggers", err)
 			return
 		}
 		for _, t := range cronTriggers {
@@ -212,7 +212,7 @@ func (h *ServerlessHandlers) HandleDeleteTrigger(w http.ResponseWriter, r *http.
 		if serverless.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "Function not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "Failed to look up function")
+			writeStoreError(w, "Failed to look up function", err)
 		}
 		return
 	}
@@ -233,7 +233,7 @@ func (h *ServerlessHandlers) HandleDeleteTrigger(w http.ResponseWriter, r *http.
 
 	if triggerTopic != "" {
 		if err := h.triggerStore.Remove(ctx, triggerID); err != nil {
-			writeError(w, http.StatusInternalServerError, "Failed to remove trigger: "+err.Error())
+			writeStoreError(w, "Failed to remove trigger", err)
 			return
 		}
 		if h.dispatcher != nil {

@@ -55,8 +55,9 @@ func TestGetFunctionLogs_theHistoryOfADeletedFunctionIsStillShown(t *testing.T) 
 func TestGetFunctionLogs_aFailedLookupIsNotReportedAsNotFound(t *testing.T) {
 	reg := newMockRegistry()
 	reg.getErr = http.ErrHandlerTimeout
-	if rec := logsOf(t, reg, ""); rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status %d, want 500", rec.Code)
+	// Not a 404: a registry that timed out is a retryable 503.
+	if rec := logsOf(t, reg, ""); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503", rec.Code)
 	}
 }
 
