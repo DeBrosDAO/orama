@@ -230,6 +230,12 @@ func deployBindPort(instance, runtime, portArg string) privhelper.Response {
 // unitEnv stores or clears namespace units' env files (arguments already
 // validated), owned root:orama.
 func unitEnv(args []string, input []byte) privhelper.Response {
+	if args[0] == "clear" && len(args) == 3 {
+		if err := unitenv.Clear(unitenv.Dir, args[1], args[2]); err != nil {
+			return failure(err)
+		}
+		return privhelper.Response{Output: "cleared " + args[1] + "/" + args[2] + "\n"}
+	}
 	if args[0] == "clear" {
 		if err := unitenv.ClearNamespace(unitenv.Dir, args[1]); err != nil {
 			return failure(err)

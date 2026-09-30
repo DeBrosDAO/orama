@@ -49,7 +49,7 @@ orama namespace enable webrtc --namespace myapp
 # Check status
 orama namespace webrtc-status --namespace myapp
 
-# Disable WebRTC (stops services, deallocates ports, removes DNS)
+# Disable WebRTC (tears down the SFU, drops the namespace from the shared TURN, deallocates ports, removes DNS)
 orama namespace disable webrtc --namespace myapp
 ```
 
@@ -63,12 +63,16 @@ orama namespace disable webrtc --namespace myapp
 7. Updates cluster state on all nodes (for cold-boot restoration)
 
 ### What happens on disable:
-1. Stops SFU on all 3 nodes
-2. Stops TURN on 2 nodes
+1. Tears down the SFU on every cluster node: the unit is stopped **and disabled**, and its env file and `sfu-<node>.yaml` config (which holds the TURN secret) are removed. Stopping alone left the unit enabled with its env file, and `orama node upgrade` restarts every unit it finds, so a namespace that had turned WebRTC off got its SFU back. Locally this is `SystemdSpawner.TeardownSFU`; on a remote node the `teardown-sfu` spawn action (`stop-sfu` keeps its restart meaning).
+2. Does **not** stop TURN. TURN is one shared server per host (`orama-turn.service`) used by every namespace on that host, so disabling WebRTC for one namespace must not touch it. The namespace leaves the shared server's tenant list (its credentials, realm and stealth host) when `ReconcileHostTURN` rewrites the shared config after the allocation and WebRTC config are deleted; the running process re-reads the list without a restart, and the host TURN stops only when its last tenant leaves. The disabling node does this immediately; every other node on its next WebRTC reconcile sweep (60s). The only per-namespace TURN unit that can still exist is the pre-shared `orama-namespace-turn@<ns>`; the `teardown-turn` spawn action retires it (stop, disable, env file removed). `stop-turn` only ever addressed that legacy unit.
 3. Deallocates all WebRTC ports
 4. Deletes TURN DNS records
 5. Cleans up DB records (`namespace_webrtc_config`, `webrtc_rooms`)
 6. Updates cluster state
+
+Steps 3 to 5 are not fire-and-forget: a port deallocation, a DNS deletion or a DB delete that fails is returned with the other cleanup failures, because a config row that survives leaves WebRTC looking enabled.
+
+A node that cannot be reached, or that is still on a release without `teardown-sfu`/`teardown-turn` (it answers "unknown action"), is not skipped silently: the failed teardown is recorded in `namespace_pending_cleanup` with the cluster id it was owed for and replayed by the tenant reconciler, and `DisableWebRTC` returns the failures after completing the rest. The replay is dropped, not sent, when the registry shows another cluster of that namespace on that node (a namespace deleted and created again), and allocating SFU or TURN ports on a node deletes the `teardown-sfu`/`teardown-turn` still owed there, so a late replay cannot remove the SFU that was just started. A failed enablement is rolled back the same way, so a half-enabled namespace is not resurrected by an upgrade either.
 
 ## Client Integration (JavaScript)
 

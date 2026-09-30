@@ -60,3 +60,24 @@ func TestClearNamespace_RemovesItsFilesOnly(t *testing.T) {
 		t.Error("a traversing namespace must be refused")
 	}
 }
+
+func TestClear_removesOneServiceOnly(t *testing.T) {
+	dir := t.TempDir()
+	Write(dir, "a", "sfu", []byte("x"), self())
+	Write(dir, "a", "gateway", []byte("y"), self())
+	if err := Clear(dir, "a", "sfu"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(Path(dir, "a", "sfu")); !os.IsNotExist(err) {
+		t.Error("the sfu env survived")
+	}
+	if _, err := os.Stat(Path(dir, "a", "gateway")); err != nil {
+		t.Error("another service's env was removed")
+	}
+	if err := Clear(dir, "a", "sfu"); err != nil {
+		t.Errorf("clearing an absent env must succeed: %v", err)
+	}
+	if err := Clear(dir, "../a", "sfu"); err == nil {
+		t.Error("a traversing namespace must be refused")
+	}
+}

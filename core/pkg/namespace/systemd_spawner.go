@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -49,6 +50,13 @@ type SystemdSpawner struct {
 	// and no privileged helper to delete unit env files through.
 	teardownUnitsFn func(namespace string) error
 	deleteStateFn   func(namespace string) error
+	// removeTenantDataFn replaces the removal of a deleted namespace's SQLite
+	// databases and deployment directories (TeardownNamespaceAndData).
+	removeTenantDataFn func(namespace string) error
+
+	// teardownServiceFn replaces the stop+disable+env removal of one WebRTC
+	// unit (TeardownSFU/TeardownTURN). Nil in production; set in tests.
+	teardownServiceFn func(namespace string, svc systemd.ServiceType) error
 }
 
 // wildcardCertPaths returns the cert/key paths for the `*.<baseDomain>` wildcard
@@ -1363,10 +1371,10 @@ func (s *SystemdSpawner) StopAll(ctx context.Context, namespace string) error {
 		zap.String("namespace", namespace))
 
 	// Stop deployment processes first (they depend on the cluster services)
-	s.systemdMgr.StopDeploymentServicesForNamespace(namespace)
+	deployErr := s.systemdMgr.StopDeploymentServicesForNamespace(namespace)
 
 	// Then stop infrastructure services (Gateway → Olric → RQLite)
-	return s.systemdMgr.StopAllNamespaceServices(namespace)
+	return errors.Join(deployErr, s.systemdMgr.StopAllNamespaceServices(namespace))
 }
 
 // waitForService waits for a systemd service to become active

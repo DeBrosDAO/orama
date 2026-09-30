@@ -158,13 +158,14 @@ func (cm *ClusterManager) HandleRecoveredNode(ctx context.Context, nodeID string
 
 	// Find which namespaces were moved away by querying recovery events
 	type eventInfo struct {
+		ClusterID     string `db:"cluster_id"`
 		NamespaceName string `db:"namespace_name"`
 	}
 	var events []eventInfo
 	// Bugboard #282: compare in UTC — event timestamps are stored UTC.
 	cutoff := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
 	eventsQuery := `
-		SELECT DISTINCT c.namespace_name
+		SELECT DISTINCT c.id AS cluster_id, c.namespace_name
 		FROM namespace_cluster_events e
 		JOIN namespace_clusters c ON e.namespace_cluster_id = c.id
 		WHERE e.node_id = ? AND e.event_type = ? AND e.created_at > ?
@@ -182,7 +183,7 @@ func (cm *ClusterManager) HandleRecoveredNode(ctx context.Context, nodeID string
 		// Teardown, not stop: the node was replaced in this namespace, so its
 		// units and data must not come back with the next upgrade. (This used to
 		// send "stop-all", which the spawn handler has no case for.)
-		if err := cm.teardownNamespaceOnNode(ctx, clusterMember, evt.NamespaceName); err != nil {
+		if err := cm.teardownNamespaceOnNode(ctx, clusterMember, evt.NamespaceName, cleanupScope{ClusterID: evt.ClusterID}); err != nil {
 			cm.logger.Warn("Could not tear down orphaned namespace on recovered node",
 				zap.String("node_id", nodeID), zap.String("namespace", evt.NamespaceName), zap.Error(err))
 		}

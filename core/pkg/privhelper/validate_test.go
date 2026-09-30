@@ -184,4 +184,12 @@ func TestValidate_unitEnvRefusesUnitsNotRunAsOrama(t *testing.T) {
 	if _, err := Validate([]string{ToolUnitEnv, "clear", "index"}); err != nil {
 		t.Errorf("unitenv clear refused: %v", err)
 	}
+	if _, err := Validate([]string{ToolUnitEnv, "clear", "acme", "sfu"}); err != nil {
+		t.Errorf("unitenv clear of one service refused: %v", err)
+	}
+	for _, bad := range [][]string{{"clear", "../x", "sfu"}, {"clear", "acme", "../sfu"}, {"clear", "acme", "sfu", "x"}} {
+		if _, err := Validate(append([]string{ToolUnitEnv}, bad...)); err == nil {
+			t.Errorf("unitenv %v was allowed", bad)
+		}
+	}
 }

@@ -29,7 +29,9 @@ func newFakeManager(t *testing.T) (*Manager, *fakeUnits) {
 	m.activeSince = func(string) (time.Time, error) { return f.since, nil }
 	m.runUnitCmd = func(args ...string) ([]byte, error) {
 		f.calls = append(f.calls, strings.Join(args, " "))
-		f.active[args[1]] = true
+		if len(args) > 1 {
+			f.active[args[1]] = true
+		}
 		return nil, nil
 	}
 	return m, f

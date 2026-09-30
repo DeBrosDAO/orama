@@ -21,17 +21,25 @@ type orphanHarness struct {
 	readErr    error
 	listErr    error
 	tornDown   []string
+	purged     map[string]bool // namespaces torn down with their tenant data
 	teardownEr error
 	assigned   int // rows of the restore self-check's count
+	// nsClusters is how many clusters of the namespace the registry holds; the
+	// default 0 means the namespace was deleted.
+	nsClusters int
+	queries    []string
 }
 
 func newOrphanHarness(local, registered []string, clusters int) *orphanHarness {
-	h := &orphanHarness{local: local, registered: registered, clusters: clusters, assigned: 1}
+	h := &orphanHarness{local: local, registered: registered, clusters: clusters, assigned: 1, purged: map[string]bool{}}
 	db := &recoveryMockDB{queryFunc: func(dest any, query string, _ ...any) error {
 		if h.readErr != nil {
 			return h.readErr
 		}
+		h.queries = append(h.queries, query)
 		switch query {
+		case namespaceClustersQuery:
+			h.setCount(dest, h.nsClusters)
 		case registeredNamespacesQuery:
 			rows := reflect.ValueOf(dest).Elem()
 			for _, ns := range h.registered {
@@ -54,11 +62,12 @@ func newOrphanHarness(local, registered []string, clusters int) *orphanHarness {
 		localTenantsFn: func() ([]string, error) {
 			return h.local, h.listErr
 		},
-		teardownLocalFn: func(_ context.Context, ns string) error {
+		teardownLocalFn: func(_ context.Context, ns string, purge bool) error {
 			if h.teardownEr != nil {
 				return h.teardownEr
 			}
 			h.tornDown = append(h.tornDown, ns)
+			h.purged[ns] = purge
 			return nil
 		},
 	}
@@ -247,13 +256,15 @@ func TestRestoreAssigned_restoresFromLocalStateWhenTheRegistryCannotBeRead(t *te
 	}
 }
 
-func TestRestoreAssigned_anEmptyRegistryTearsNothingDown(t *testing.T) {
+// T5: an empty registry proves nothing, so the tenants that are on the node
+// come back from their local state rather than staying down.
+func TestRestoreAssigned_anEmptyRegistryRestoresFromLocalState(t *testing.T) {
 	h := newOrphanHarness(nil, nil, 0)
 	h.assigned = 0
 
 	proceed, err := h.cm.restoreAssigned(context.Background(), &ClusterLocalState{ClusterID: "c1", NamespaceName: "acme"})
-	if err != nil || proceed || len(h.tornDown) != 0 {
-		t.Fatalf("proceed = %v, err = %v, torn down = %v; want no restore and no teardown", proceed, err, h.tornDown)
+	if err != nil || !proceed || len(h.tornDown) != 0 {
+		t.Fatalf("proceed = %v, err = %v, torn down = %v; want a restore and no teardown", proceed, err, h.tornDown)
 	}
 }
 
@@ -265,5 +276,176 @@ func TestRestoreAssigned_aFailedTeardownIsAnError(t *testing.T) {
 	proceed, err := h.cm.restoreAssigned(context.Background(), &ClusterLocalState{ClusterID: "c-old", NamespaceName: "gone"})
 	if err == nil || proceed {
 		t.Fatalf("proceed = %v, err = %v; want the failure reported", proceed, err)
+	}
+}
+
+// T2: a node with an allocation for THIS cluster id and no membership row yet
+// (recovery writes the membership after the spawn) is joining the namespace,
+// not holding a previous incarnation of it. The judgement is by cluster id.
+func TestRestoreAssigned_anAllocationForThisClusterIDIsAnAssignment(t *testing.T) {
+	h := newOrphanHarness([]string{"acme", "x"}, []string{"acme"}, 3)
+	var gotArgs []any
+	h.cm.db = &recoveryMockDB{queryFunc: func(dest any, query string, args ...any) error {
+		if query == clusterAssignedQuery {
+			gotArgs = args
+			h.setCount(dest, 1) // the allocation row, no membership row
+		}
+		return nil
+	}}
+
+	proceed, err := h.cm.restoreAssigned(context.Background(), &ClusterLocalState{ClusterID: "c-new", NamespaceName: "acme"})
+	if err != nil || !proceed || len(h.tornDown) != 0 {
+		t.Fatalf("proceed = %v, err = %v, torn down = %v", proceed, err, h.tornDown)
+	}
+	if !reflect.DeepEqual(gotArgs, []any{"c-new", "local", "c-new", "local"}) {
+		t.Fatalf("assignment checked with %v, want the cluster id (not the name) against membership and allocation", gotArgs)
+	}
+}
+
+// The query itself, against SQLite: allocation only, membership only, another
+// cluster's rows, and another node's rows.
+func TestClusterAssignedQuery_countsMembershipOrAllocationOfThatClusterID(t *testing.T) {
+	reg := newRegistryRig(t)
+	db := reg.db
+	for _, id := range []string{"c-alloc", "c-member", "c-other-node"} {
+		reg.cluster(id, "acme-"+id)
+	}
+	reg.allocation("c-alloc", "n1")
+	reg.membership("c-member", "n1")
+	reg.allocation("c-other-node", "n2")
+
+	count := func(cluster, node string) int {
+		var n int
+		if err := db.QueryRow(clusterAssignedQuery, cluster, node, cluster, node).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	for _, tc := range []struct {
+		cluster, node string
+		want          int
+	}{
+		{"c-alloc", "n1", 1}, {"c-member", "n1", 1}, {"c-other-node", "n1", 0}, {"c-gone", "n1", 0}, {"c-alloc", "n2", 0},
+	} {
+		if got := count(tc.cluster, tc.node); got != tc.want {
+			t.Errorf("count(%s, %s) = %d, want %d", tc.cluster, tc.node, got, tc.want)
+		}
+	}
+}
+
+// T3: a registry that disowns every tenant on the node is wrong, not a fleet
+// that deleted them all.
+func TestReapOrphanedTenants_aRegistryThatDisownsEveryTenantTearsNothingDown(t *testing.T) {
+	h := newOrphanHarness([]string{"a", "b", "c"}, []string{"elsewhere"}, 3)
+
+	for i := 0; i < 4; i++ {
+		if err := h.sweep(t); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(h.tornDown) != 0 {
+		t.Fatalf("torn down = %v from a registry that knows none of this node's tenants", h.tornDown)
+	}
+}
+
+func TestReapOrphanedTenants_oneRegisteredTenantMakesTheRegistryCredible(t *testing.T) {
+	h := newOrphanHarness([]string{"a", "kept"}, []string{"kept"}, 3)
+	_ = h.sweep(t)
+	_ = h.sweep(t)
+	if !reflect.DeepEqual(h.tornDown, []string{"a"}) {
+		t.Fatalf("torn down = %v", h.tornDown)
+	}
+}
+
+// T3: at most orphanTeardownsPerPass per sweep; the rest keep their streak and
+// go on the next sweep.
+func TestReapOrphanedTenants_capsTheTeardownsPerSweep(t *testing.T) {
+	h := newOrphanHarness([]string{"kept", "a", "b", "c", "d", "e"}, []string{"kept"}, 3)
+	_ = h.sweep(t)
+	_ = h.sweep(t)
+	if len(h.tornDown) != orphanTeardownsPerPass {
+		t.Fatalf("torn down = %v after one confirming sweep, want %d", h.tornDown, orphanTeardownsPerPass)
+	}
+	_ = h.sweep(t)
+	_ = h.sweep(t)
+	sort.Strings(h.tornDown)
+	if len(h.tornDown) < 2*orphanTeardownsPerPass {
+		t.Fatalf("torn down = %v, the remainder must follow on later sweeps", h.tornDown)
+	}
+}
+
+// Boot restore is guarded the same way: a wrong registry restores from local
+// state instead of tearing tenants down, and the cap bounds one boot.
+func TestRestoreAssigned_aRegistryThatDisownsEveryTenantRestoresFromLocalState(t *testing.T) {
+	h := newOrphanHarness([]string{"a", "b"}, []string{"elsewhere"}, 3)
+	h.assigned = 0
+
+	proceed, err := h.cm.restoreAssigned(context.Background(), &ClusterLocalState{ClusterID: "c", NamespaceName: "a"})
+	if err != nil || !proceed || len(h.tornDown) != 0 {
+		t.Fatalf("proceed = %v, err = %v, torn down = %v", proceed, err, h.tornDown)
+	}
+}
+
+func TestRestoreAssigned_capsTheTeardownsOfOneBoot(t *testing.T) {
+	h := newOrphanHarness([]string{"kept", "a", "b", "c"}, []string{"kept"}, 3)
+	h.assigned = 0
+
+	var restored []string
+	for _, ns := range []string{"a", "b", "c"} {
+		proceed, err := h.cm.restoreAssigned(context.Background(), &ClusterLocalState{ClusterID: "c-" + ns, NamespaceName: ns})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if proceed {
+			restored = append(restored, ns)
+		}
+	}
+	if len(h.tornDown) != orphanTeardownsPerPass || len(restored) != 1 {
+		t.Fatalf("torn down = %v, restored from local state = %v", h.tornDown, restored)
+	}
+}
+
+// T6: the data goes when the registry holds no cluster of that name at all (the
+// namespace was deleted), and stays when the namespace lives on other nodes.
+func TestReapOrphanedTenants_purgesTenantDataOnlyForADeletedNamespace(t *testing.T) {
+	h := newOrphanHarness([]string{"deleted", "moved", "kept"}, []string{"kept"}, 3)
+	base := h.cm.db.(*recoveryMockDB).queryFunc
+	h.cm.db.(*recoveryMockDB).queryFunc = func(dest any, query string, args ...any) error {
+		if query == namespaceClustersQuery {
+			n := 0
+			if args[0] == "moved" {
+				n = 1
+			}
+			h.setCount(dest, n)
+			return nil
+		}
+		return base(dest, query, args...)
+	}
+	_ = h.sweep(t)
+	_ = h.sweep(t)
+
+	if !h.purged["deleted"] || h.purged["moved"] {
+		t.Fatalf("purged = %v, want data removed for the deleted namespace only", h.purged)
+	}
+}
+
+// The reviewer's note: the registry reads of the sweep and of the boot restore
+// go through cm.db, the registry handle, which reads at level=weak (the leader)
+// — never through a node-local handle, which can be a stale follower.
+func TestOrphanRegistryReads_goThroughTheRegistryHandle(t *testing.T) {
+	h := newOrphanHarness([]string{"a", "kept"}, []string{"kept"}, 3)
+	h.assigned = 0
+	_ = h.sweep(t)
+	_, _ = h.cm.restoreAssigned(context.Background(), &ClusterLocalState{ClusterID: "c", NamespaceName: "a"})
+
+	db := h.cm.db.(*recoveryMockDB)
+	seen := map[string]bool{}
+	for _, c := range db.queryCalls {
+		seen[c.Query] = true
+	}
+	for _, q := range []string{registeredNamespacesQuery, registryClusterCountQuery, clusterAssignedQuery} {
+		if !seen[q] {
+			t.Errorf("registry read not issued through cm.db: %.60s", q)
+		}
 	}
 }

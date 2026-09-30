@@ -146,3 +146,63 @@ func TestTenantNamespacesOnDisk_noNamespacesDirectory(t *testing.T) {
 		t.Fatalf("got %v, %v; want nothing and no error", got, err)
 	}
 }
+
+// WebRTC turned off on a namespace that stays: the unit is stopped, disabled
+// and its env file removed, so the upgrade restart finds nothing to start.
+// Other services of the namespace are untouched.
+func TestTeardownServiceAndEnv_disablesAndRemovesTheEnv(t *testing.T) {
+	m, f := newFakeManager(t)
+	owner := unitenv.Owner{UID: os.Getuid(), GID: os.Getgid()}
+	for _, svc := range []string{"sfu", "gateway"} {
+		if err := unitenv.Write(m.unitEnvDir, "acme", svc, []byte("A=1\n"), owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.clearUnitEnv = func(ns, svc string) error { return unitenv.Clear(m.unitEnvDir, ns, svc) }
+
+	if err := m.TeardownServiceAndEnv("acme", ServiceTypeSFU); err != nil {
+		t.Fatal(err)
+	}
+	want := "stop orama-namespace-sfu@acme.service|disable orama-namespace-sfu@acme.service"
+	if got := strings.Join(f.calls, "|"); got != want {
+		t.Fatalf("calls = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(unitenv.Path(m.unitEnvDir, "acme", "sfu")); !os.IsNotExist(err) {
+		t.Error("the sfu env file survived: the next upgrade would restart it")
+	}
+	if _, err := os.Stat(unitenv.Path(m.unitEnvDir, "acme", "gateway")); err != nil {
+		t.Error("the gateway's env file was removed")
+	}
+}
+
+// The env file is the retry handle: kept when the unit could not be disabled.
+func TestTeardownServiceAndEnv_keepsTheEnvWhenTheUnitCannotBeDisabled(t *testing.T) {
+	m, _ := newFakeManager(t)
+	owner := unitenv.Owner{UID: os.Getuid(), GID: os.Getgid()}
+	if err := unitenv.Write(m.unitEnvDir, "acme", "sfu", []byte("A=1\n"), owner); err != nil {
+		t.Fatal(err)
+	}
+	cleared := false
+	m.clearUnitEnv = func(string, string) error { cleared = true; return nil }
+	m.runUnitCmd = func(args ...string) ([]byte, error) {
+		if args[0] == "disable" {
+			return []byte("Failed"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+
+	if err := m.TeardownServiceAndEnv("acme", ServiceTypeSFU); err == nil {
+		t.Fatal("a failed disable was not reported")
+	}
+	if cleared {
+		t.Fatal("the env file was removed although the unit is still enabled")
+	}
+}
+
+func TestTeardownServiceAndEnv_reportsAnEnvRemovalFailure(t *testing.T) {
+	m, _ := newFakeManager(t)
+	m.clearUnitEnv = func(string, string) error { return errors.New("helper refused") }
+	if err := m.TeardownServiceAndEnv("acme", ServiceTypeSFU); err == nil || !strings.Contains(err.Error(), "helper refused") {
+		t.Fatalf("err = %v", err)
+	}
+}

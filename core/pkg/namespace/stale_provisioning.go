@@ -161,5 +161,5 @@ func (cm *ClusterManager) stopStaleClusterServices(ctx context.Context, c *Names
 	if err := cm.db.Query(ctx, &nodes, staleClusterNodesQuery, c.ID); err != nil {
 		return fmt.Errorf("failed to list the nodes of cluster %s: %w", c.ID, err)
 	}
-	return cm.teardownNamespaceOnNodes(ctx, nodes, c.NamespaceName)
+	return cm.teardownNamespaceOnNodes(ctx, nodes, c.NamespaceName, cleanupScope{ClusterID: c.ID})
 }

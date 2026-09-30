@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -32,11 +30,28 @@ import (
 //     anything, keep it registered on every other node;
 //   - an orphan must be seen on orphanSweepsRequired consecutive sweeps, so one
 //     inconsistent read cannot delete a namespace;
-//   - the node's own instances (index, nameserver, system) are never candidates.
+//   - the node's own instances (index, nameserver, system) are never candidates;
+//   - a registry that disowns EVERY tenant on the node is a registry problem (a
+//     database restored from an older snapshot, a node pointed at another
+//     cluster's), not a fleet that deleted them all: nothing is torn down;
+//   - at most orphanTeardownsPerPass namespaces are torn down in one pass, so a
+//     registry that is wrong about a few still cannot wipe the node at once.
 
 // orphanSweepsRequired is how many consecutive sweeps must find a namespace
 // orphaned before it is torn down.
 const orphanSweepsRequired = 2
+
+const (
+	// orphanTeardownsPerPass caps the namespaces one sweep, or one boot
+	// restore, tears down.
+	orphanTeardownsPerPass = 2
+
+	// orphanGuardMinTenants is how many tenants a node must hold for "the
+	// registry disowns all of them" to mean anything: a node with one tenant
+	// cannot tell a deleted namespace from a wrong registry, and is protected
+	// by the two-sweep rule and the cap alone.
+	orphanGuardMinTenants = 2
+)
 
 const (
 	// registeredNamespacesQuery names the namespaces the registry assigns to
@@ -52,6 +67,10 @@ const (
 		               WHERE pa.namespace_cluster_id = c.id AND pa.node_id = ?)`
 
 	registryClusterCountQuery = `SELECT COUNT(*) AS count FROM namespace_clusters`
+
+	// namespaceClustersQuery counts the clusters of one namespace in the
+	// registry, on any node.
+	namespaceClustersQuery = `SELECT COUNT(*) AS count FROM namespace_clusters WHERE namespace_name = ?`
 )
 
 // registeredNamespaces reads the namespaces the registry assigns to this node
@@ -91,11 +110,54 @@ func (cm *ClusterManager) localTenantNamespaces() ([]string, error) {
 	return cm.systemdSpawner.systemdMgr.LocalTenantNamespaces()
 }
 
-func (cm *ClusterManager) teardownLocal(ctx context.Context, namespace string) error {
+// teardownLocal tears a namespace down on this node; purgeData also removes its
+// tenant data (TeardownNamespaceAndData).
+func (cm *ClusterManager) teardownLocal(ctx context.Context, namespace string, purgeData bool) error {
 	if cm.teardownLocalFn != nil {
-		return cm.teardownLocalFn(ctx, namespace)
+		return cm.teardownLocalFn(ctx, namespace, purgeData)
+	}
+	if purgeData {
+		return cm.systemdSpawner.TeardownNamespaceAndData(ctx, namespace)
 	}
 	return cm.systemdSpawner.TeardownNamespace(ctx, namespace)
+}
+
+// registryDisownsEveryTenant reports whether none of the node's tenants is
+// registered to it, on a node that holds enough of them for that to be
+// suspicious (orphanGuardMinTenants).
+func registryDisownsEveryTenant(tenants []string, registered map[string]bool) bool {
+	if len(tenants) < orphanGuardMinTenants {
+		return false
+	}
+	for _, ns := range tenants {
+		if registered[ns] {
+			return false
+		}
+	}
+	return true
+}
+
+// tenantsOnly drops the node's own instances from a list of namespaces.
+func tenantsOnly(local []string) []string {
+	var tenants []string
+	for _, ns := range local {
+		if !isPlatformNamespace(ns) {
+			tenants = append(tenants, ns)
+		}
+	}
+	return tenants
+}
+
+// teardownUnassigned tears down a namespace the registry does not assign to
+// this node. When the registry holds no cluster of that name at all the
+// namespace was deleted, and its tenant data goes with it; when the namespace
+// lives on other nodes this node only stops hosting it, and its data is left.
+func (cm *ClusterManager) teardownUnassigned(ctx context.Context, namespace string) error {
+	clusters, err := cm.countRows(ctx, namespaceClustersQuery, namespace)
+	if err != nil {
+		return fmt.Errorf("check whether the registry still knows namespace %s: %w", namespace, err)
+	}
+	return cm.teardownLocal(ctx, namespace, clusters == 0)
 }
 
 // reapOrphanedTenants tears down tenant namespaces that have state on this node
@@ -107,7 +169,8 @@ func (cm *ClusterManager) reapOrphanedTenants(ctx context.Context) error {
 		cm.confirmOrphans(nil)
 		return fmt.Errorf("list this node's tenant namespaces: %w", err)
 	}
-	if len(local) == 0 {
+	tenants := tenantsOnly(local)
+	if len(tenants) == 0 {
 		cm.confirmOrphans(nil)
 		return nil
 	}
@@ -122,23 +185,40 @@ func (cm *ClusterManager) reapOrphanedTenants(ctx context.Context) error {
 	if clusters == 0 {
 		cm.confirmOrphans(nil)
 		cm.logger.Warn("Orphan sweep skipped: the registry holds no namespace clusters although this node has tenant state; not treating an empty registry as proof that every namespace is gone",
-			zap.Strings("local_namespaces", local))
+			zap.Strings("local_namespaces", tenants))
+		return nil
+	}
+	if registryDisownsEveryTenant(tenants, registered) {
+		cm.confirmOrphans(nil)
+		cm.logger.Error("Orphan sweep skipped: the registry assigns this node none of its tenant namespaces. That points at a wrong or rolled-back registry (an older snapshot, another cluster's database), not at every namespace having been deleted",
+			zap.Strings("local_namespaces", tenants), zap.Int("registry_clusters", clusters))
 		return nil
 	}
 
 	var orphans []string
-	for _, ns := range local {
-		if !isPlatformNamespace(ns) && !registered[ns] && !cm.isProvisioningLocally(ns) {
+	for _, ns := range tenants {
+		if !registered[ns] && !cm.isProvisioningLocally(ns) {
 			orphans = append(orphans, ns)
 		}
 	}
+	return cm.teardownOrphans(ctx, cm.confirmOrphans(orphans))
+}
 
+// teardownOrphans tears down the namespaces that have been orphaned for long
+// enough, at most orphanTeardownsPerPass of them. The rest keep their streak
+// and are taken on a later sweep.
+func (cm *ClusterManager) teardownOrphans(ctx context.Context, due []string) error {
+	if len(due) > orphanTeardownsPerPass {
+		cm.logger.Warn("More namespaces are orphaned than one sweep tears down; the rest wait for the next sweep",
+			zap.Int("orphaned", len(due)), zap.Int("per_sweep", orphanTeardownsPerPass))
+		due = due[:orphanTeardownsPerPass]
+	}
 	var errs []error
-	for _, ns := range cm.confirmOrphans(orphans) {
+	for _, ns := range due {
 		cm.logger.Warn("Tearing down a namespace the registry no longer assigns to this node: its units and data would otherwise start again on the next upgrade or reboot",
 			zap.String("namespace", ns),
 			zap.Int("consecutive_sweeps", orphanSweepsRequired))
-		if err := cm.teardownLocal(ctx, ns); err != nil {
+		if err := cm.teardownUnassigned(ctx, ns); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", ns, err))
 		}
 	}
@@ -164,54 +244,4 @@ func (cm *ClusterManager) confirmOrphans(orphans []string) []string {
 	cm.orphanStreak = next
 	sort.Strings(due)
 	return due
-}
-
-// restoreAssigned reports whether a namespace found in this node's local state
-// should be restored at boot, acting on the ones that must not be.
-//
-// The registry may be unreachable this early in boot (this restore exists so
-// tenants come up before the index rqlite has a leader), and then the local
-// state is all there is: it restores, and says so. When the registry answers
-// and assigns this node no part of the cluster, the namespace is gone or this
-// node was replaced: it is not restored, and a namespace the registry knows
-// nothing about is torn down rather than left for the upgrade to start. An
-// empty registry proves nothing and tears nothing down.
-func (cm *ClusterManager) restoreAssigned(ctx context.Context, state *ClusterLocalState) (bool, error) {
-	var rows []struct {
-		Count int `db:"count"`
-	}
-	const assignedQuery = `SELECT COUNT(*) AS count FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? AND node_id = ?`
-	if err := cm.db.Query(ctx, &rows, assignedQuery, state.ClusterID, cm.localNodeID); err != nil || len(rows) == 0 {
-		cm.logger.Warn("Cannot verify against the registry that this node still hosts the namespace; restoring it from local state",
-			zap.String("namespace", state.NamespaceName), zap.Error(err))
-		return true, nil
-	}
-	if rows[0].Count > 0 {
-		return true, nil
-	}
-
-	registered, clusters, err := cm.registeredNamespaces(ctx)
-	switch {
-	case err != nil:
-		return false, fmt.Errorf("verify namespace %s against the registry: %w", state.NamespaceName, err)
-	case clusters == 0:
-		cm.logger.Warn("The registry holds no namespace clusters, so it cannot show that this namespace is gone; not restoring it and not removing it",
-			zap.String("namespace", state.NamespaceName))
-	case registered[state.NamespaceName]:
-		// The namespace was re-created under a new cluster id and this node is
-		// part of it: the state on disk belongs to the old incarnation.
-		cm.logger.Warn("Local cluster state belongs to a previous incarnation of the namespace; stopping it and dropping the state",
-			zap.String("namespace", state.NamespaceName), zap.String("cluster_id", state.ClusterID))
-		cm.systemdSpawner.StopAll(ctx, state.NamespaceName)
-		if err := os.Remove(filepath.Join(cm.baseDataDir, state.NamespaceName, "cluster-state.json")); err != nil && !os.IsNotExist(err) {
-			return false, fmt.Errorf("remove stale cluster state of %s: %w", state.NamespaceName, err)
-		}
-	default:
-		cm.logger.Warn("The registry no longer assigns this namespace to this node; tearing it down instead of restoring it",
-			zap.String("namespace", state.NamespaceName), zap.String("cluster_id", state.ClusterID))
-		if err := cm.teardownLocal(ctx, state.NamespaceName); err != nil {
-			return false, fmt.Errorf("tear down namespace %s: %w", state.NamespaceName, err)
-		}
-	}
-	return false, nil
 }

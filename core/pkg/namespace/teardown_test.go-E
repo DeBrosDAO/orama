@@ -77,7 +77,7 @@ func TestTeardownNamespace_refusesThePlatformNamespaces(t *testing.T) {
 func TestTeardownNamespaceOnNode_remoteSendsTheTeardownAction(t *testing.T) {
 	sw := newStaleSweep(nil, nil, false)
 
-	err := sw.cm.teardownNamespaceOnNode(context.Background(), staleClusterNode{NodeID: "n1", InternalIP: "10.0.0.1"}, "acme", cleanupScope{})
+	err := sw.cm.teardownNamespaceOnNode(context.Background(), staleClusterNode{NodeID: "n1", InternalIP: "10.0.0.1"}, "acme")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestTeardownNamespaceOnNode_remoteSendsTheTeardownAction(t *testing.T) {
 func TestTeardownNamespaceOnNode_remoteWithoutAnOverlayAddressIsAnError(t *testing.T) {
 	sw := newStaleSweep(nil, nil, false)
 
-	err := sw.cm.teardownNamespaceOnNode(context.Background(), staleClusterNode{NodeID: "n1"}, "acme", cleanupScope{})
+	err := sw.cm.teardownNamespaceOnNode(context.Background(), staleClusterNode{NodeID: "n1"}, "acme")
 	if err == nil || len(sw.events) != 0 {
 		t.Fatalf("err = %v, events = %v; want an error and no request", err, sw.events)
 	}
@@ -102,7 +102,7 @@ func TestTeardownNamespaceOnNode_localUsesTheSpawner(t *testing.T) {
 		func(ns string) error { tornDown = append(tornDown, ns); return nil },
 		func(string) error { return nil })
 
-	if err := sw.cm.teardownNamespaceOnNode(context.Background(), staleClusterNode{NodeID: "local"}, "acme", cleanupScope{}); err != nil {
+	if err := sw.cm.teardownNamespaceOnNode(context.Background(), staleClusterNode{NodeID: "local"}, "acme"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(tornDown, []string{"acme"}) || len(sw.events) != 0 {
@@ -114,7 +114,7 @@ func TestTeardownNamespaceOnNodes_attemptsEveryNodeAndJoinsFailures(t *testing.T
 	sw := newStaleSweep(nil, nil, false)
 	sw.stopErr = func(string) error { return errors.New("node unreachable") }
 
-	err := sw.cm.teardownNamespaceOnNodes(context.Background(), twoRemoteNodes, "acme", cleanupScope{})
+	err := sw.cm.teardownNamespaceOnNodes(context.Background(), twoRemoteNodes, "acme")
 	if err == nil || strings.Count(err.Error(), "node unreachable") != 2 {
 		t.Fatalf("err = %v, want both nodes' failures", err)
 	}
@@ -125,7 +125,7 @@ func TestTeardownNamespaceOnNodes_attemptsEveryNodeAndJoinsFailures(t *testing.T
 
 func TestTeardownNamespaceOnNodes_noNodes(t *testing.T) {
 	sw := newStaleSweep(nil, nil, false)
-	if err := sw.cm.teardownNamespaceOnNodes(context.Background(), nil, "acme", cleanupScope{}); err != nil || len(sw.events) != 0 {
+	if err := sw.cm.teardownNamespaceOnNodes(context.Background(), nil, "acme"); err != nil || len(sw.events) != 0 {
 		t.Fatalf("err = %v, events = %v", err, sw.events)
 	}
 }
@@ -164,76 +164,5 @@ func TestRollbackProvisioning_aFailedTeardownDoesNotStopTheRollback(t *testing.T
 	}
 	if countExecs(sw.db.recoveryMockDB, "DELETE FROM namespace_port_allocations") == 0 {
 		t.Fatal("the rollback stopped at a node it could not reach")
-	}
-}
-
-// T6: a deleted namespace's tenant data goes after its units and state; a
-// teardown that failed removes none of it.
-func TestTeardownNamespaceAndData_removesTheTenantDataAfterTheTeardown(t *testing.T) {
-	var order []string
-	s := newTeardownSpawner(
-		func(ns string) error { order = append(order, "units:"+ns); return nil },
-		func(ns string) error { order = append(order, "state:"+ns); return nil })
-	s.removeTenantDataFn = func(ns string) error { order = append(order, "data:"+ns); return nil }
-
-	if err := s.TeardownNamespaceAndData(context.Background(), "acme"); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(order, []string{"units:acme", "state:acme", "data:acme"}) {
-		t.Fatalf("order = %v", order)
-	}
-}
-
-func TestTeardownNamespaceAndData_keepsTheDataWhenTheTeardownFailed(t *testing.T) {
-	removed := false
-	s := newTeardownSpawner(
-		func(string) error { return errors.New("disable failed") },
-		func(string) error { return nil })
-	s.removeTenantDataFn = func(string) error { removed = true; return nil }
-
-	if err := s.TeardownNamespaceAndData(context.Background(), "acme"); err == nil {
-		t.Fatal("the failed teardown was not reported")
-	}
-	if removed {
-		t.Fatal("tenant data was removed under a unit that could not be stopped")
-	}
-}
-
-func TestTeardownNamespaceAndData_reportsAFailedRemoval(t *testing.T) {
-	s := newTeardownSpawner(func(string) error { return nil }, func(string) error { return nil })
-	s.removeTenantDataFn = func(string) error { return errors.New("rm failed") }
-
-	if err := s.TeardownNamespaceAndData(context.Background(), "acme"); err == nil || !strings.Contains(err.Error(), "rm failed") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestTeardownNamespaceAndData_refusesThePlatformNamespaces(t *testing.T) {
-	s := newTeardownSpawner(func(string) error { return nil }, func(string) error { return nil })
-	s.removeTenantDataFn = func(string) error { t.Fatal("data removed"); return nil }
-
-	if err := s.TeardownNamespaceAndData(context.Background(), "index"); err == nil {
-		t.Fatal("a platform namespace was accepted")
-	}
-}
-
-// Only a delete purges: DeprovisionCluster's teardown asks for it, a rollback
-// and the stale sweep do not.
-func TestTeardownNamespaceOnNodes_purgeTravelsWithTheRequest(t *testing.T) {
-	sw := newStaleSweep(nil, nil, false)
-	var got []map[string]interface{}
-	inner := sw.cm.spawnRequestFn
-	sw.cm.spawnRequestFn = func(ctx context.Context, ip string, req map[string]interface{}) (*spawnResponse, error) {
-		got = append(got, req)
-		return inner(ctx, ip, req)
-	}
-
-	_ = sw.cm.teardownNamespaceOnNodes(context.Background(), twoRemoteNodes[:1], "acme", cleanupScope{ClusterID: "c1"})
-	_ = sw.cm.teardownNamespaceOnNodes(context.Background(), twoRemoteNodes[:1], "acme", cleanupScope{ClusterID: "c1", PurgeData: true})
-	if _, has := got[0]["purge_data"]; has {
-		t.Errorf("a rollback's request asked for a purge: %v", got[0])
-	}
-	if purge, _ := got[1]["purge_data"].(bool); !purge {
-		t.Errorf("a delete's request did not ask for a purge: %v", got[1])
 	}
 }

@@ -178,8 +178,12 @@ func TestSpawnHandler_teardownRefusesThePlatformNamespaces(t *testing.T) {
 	}
 	h := NewSpawnHandler(nil, secretPath, zap.NewNop())
 
-	for _, ns := range []string{"index", "nameserver", "system"} {
-		body, _ := json.Marshal(SpawnRequest{Action: "teardown-namespace", Namespace: ns, NodeID: "node-1"})
+	for _, tc := range []struct{ action, ns string }{
+		{"teardown-namespace", "index"}, {"teardown-namespace", "nameserver"}, {"teardown-namespace", "system"},
+		{"teardown-sfu", "index"}, {"teardown-turn", "index"},
+	} {
+		ns := tc.ns
+		body, _ := json.Marshal(SpawnRequest{Action: tc.action, Namespace: ns, NodeID: "node-1"})
 		r := httptest.NewRequest(http.MethodPost, "/v1/internal/namespace/spawn", bytes.NewReader(body))
 		r.RemoteAddr = "10.0.0.5:40000"
 		if err := auth.SignCoordination(key, r, time.Now()); err != nil {

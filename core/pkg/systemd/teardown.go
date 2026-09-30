@@ -30,6 +30,21 @@ func (m *Manager) TeardownService(namespace string, serviceType ServiceType) err
 	return m.DisableService(namespace, serviceType)
 }
 
+// TeardownServiceAndEnv retires one service of a namespace that stays: it is
+// stopped, disabled and its env file removed. The env file is what `orama node
+// upgrade` discovers the service from, so with it gone nothing restarts the
+// service. The env file is kept when the stop or disable failed — it is the
+// retry handle, and the failure is returned.
+func (m *Manager) TeardownServiceAndEnv(namespace string, serviceType ServiceType) error {
+	if err := m.TeardownService(namespace, serviceType); err != nil {
+		return err
+	}
+	if err := m.clearUnitEnv(namespace, string(serviceType)); err != nil {
+		return fmt.Errorf("remove the env file of %s: %w", m.serviceName(namespace, serviceType), err)
+	}
+	return nil
+}
+
 // TeardownAllNamespaceServices stops and disables every tenant service of a
 // namespace, and removes its deployment units. Unlike StopAllNamespaceServices
 // it attempts every service and returns every failure: a unit that could not
@@ -37,9 +52,10 @@ func (m *Manager) TeardownService(namespace string, serviceType ServiceType) err
 func (m *Manager) TeardownAllNamespaceServices(namespace string) error {
 	m.logger.Info("Tearing down all namespace services", zap.String("namespace", namespace))
 
-	m.StopDeploymentServicesForNamespace(namespace)
-
 	var errs []error
+	if err := m.StopDeploymentServicesForNamespace(namespace); err != nil {
+		errs = append(errs, fmt.Errorf("tear down the deployment units of namespace %s: %w", namespace, err))
+	}
 	for _, st := range tenantTeardownOrder {
 		if err := m.TeardownService(namespace, st); err != nil {
 			errs = append(errs, err)

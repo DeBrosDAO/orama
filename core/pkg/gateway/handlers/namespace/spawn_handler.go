@@ -19,9 +19,14 @@ import (
 
 // SpawnRequest represents a request to spawn or stop a namespace instance
 type SpawnRequest struct {
-	Action    string `json:"action"` // spawn-{rqlite,olric,gateway,sfu,turn}, stop-{rqlite,olric,gateway,sfu,turn}, teardown-namespace, save-cluster-state, delete-cluster-state
+	Action    string `json:"action"` // spawn-{rqlite,olric,gateway,sfu,turn}, stop-{rqlite,olric,gateway,sfu,turn}, teardown-{namespace,sfu,turn}, save-cluster-state, delete-cluster-state
 	Namespace string `json:"namespace"`
 	NodeID    string `json:"node_id"`
+
+	// PurgeData, with action = "teardown-namespace", also removes the
+	// namespace's tenant data (SQLite databases, deployment directories): the
+	// namespace is being deleted, not moved or rolled back.
+	PurgeData bool `json:"purge_data,omitempty"`
 
 	// RQLite config (when action = "spawn-rqlite")
 	RQLiteHTTPPort    int      `json:"rqlite_http_port,omitempty"`
@@ -117,21 +122,21 @@ func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, clusterSecretP
 
 // verifyCoordination reports whether this spawn request came from inside the
 // cluster. See pkg/auth/coordination.go.
-func (h *SpawnHandler) verifyCoordination(r *http.Request) bool {
+func (h *SpawnHandler) verifyCoordination(r *http.Request) (auth.CoordinationVersion, bool) {
 	if !auth.IsWireGuardPeer(r.RemoteAddr) {
-		return false
+		return 0, false
 	}
 	secret, err := os.ReadFile(h.clusterSecretPath)
 	if err != nil {
 		h.logger.Error("cannot read the cluster secret, so no coordination request can be authenticated",
 			zap.String("path", h.clusterSecretPath), zap.Error(err))
-		return false
+		return 0, false
 	}
 	key, err := auth.CoordinationKey(string(secret))
 	if err != nil {
-		return false
+		return 0, false
 	}
-	return auth.VerifyCoordination(key, r, time.Now())
+	return auth.CheckCoordination(key, r, time.Now())
 }
 
 // ServeHTTP implements http.Handler
@@ -146,7 +151,11 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// overlay. The MAC is the credential — the header this replaces was a
 	// constant in the source, and being on the overlay is not a privilege,
 	// since every namespace's services are on that mesh.
-	if !h.verifyCoordination(r) {
+	//
+	// The action and the namespace are in the body, so verification reads it
+	// (bounded, and restored for the decode below) and the v2 MAC covers it.
+	version, ok := h.verifyCoordination(r)
+	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -155,6 +164,12 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req SpawnRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "invalid request body"})
+		return
+	}
+	if version == auth.CoordinationV1 && requiresBodyBoundMAC(&req) {
+		h.logger.Warn("refused a spawn request stamped only with the v1 coordination MAC",
+			zap.String("action", req.Action), zap.String("namespace", req.Namespace))
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -371,7 +386,14 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Stop AND disable every unit of the namespace, then delete its data and
 		// env files: nothing is left for an upgrade or boot to start again. The
 		// stop-* actions only stop, and are for restarts.
-		if err := h.systemdSpawner.TeardownNamespace(ctx, req.Namespace); err != nil {
+		// purge_data is the namespace's delete: its SQLite databases and
+		// deployment directories go too. A node on the previous release ignores
+		// the field and keeps them.
+		teardown := h.systemdSpawner.TeardownNamespace
+		if req.PurgeData {
+			teardown = h.systemdSpawner.TeardownNamespaceAndData
+		}
+		if err := teardown(ctx, req.Namespace); err != nil {
 			h.logger.Error("Failed to tear down namespace", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
@@ -400,6 +422,24 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stop-sfu":
 		if err := h.systemdSpawner.StopSFU(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop SFU instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "teardown-sfu":
+		// Stop, disable and remove the env/config: a restart must not find it.
+		if err := h.systemdSpawner.TeardownSFU(ctx, req.Namespace, req.NodeID); err != nil {
+			h.logger.Error("Failed to tear down SFU instance", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "teardown-turn":
+		// Retires only the legacy per-namespace unit, never the shared host TURN.
+		if err := h.systemdSpawner.TeardownTURN(ctx, req.Namespace, req.NodeID); err != nil {
+			h.logger.Error("Failed to tear down TURN instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}

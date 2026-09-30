@@ -13,7 +13,7 @@ const ToolUnitEnv = "unitenv"
 
 const (
 	unitEnvSet   = "set"   // set <namespace> <service>, the file on input
-	unitEnvClear = "clear" // clear <namespace>
+	unitEnvClear = "clear" // clear <namespace> [<service>]
 )
 
 // noUnitEnv are the services whose units run as an account Orama does not
@@ -40,6 +40,11 @@ func validateUnitEnv(args []string) error {
 			return fmt.Errorf("namespace %q is not valid", args[1])
 		}
 		return nil
+	case len(args) == 3 && args[0] == unitEnvClear:
+		if !unitenv.Valid(args[1], args[2]) {
+			return fmt.Errorf("unit env %q/%q is not valid", args[1], args[2])
+		}
+		return nil
 	default:
 		return fmt.Errorf("unitenv %q is not allowed", args)
 	}
@@ -59,6 +64,15 @@ func SetUnitEnv(namespace, service, contents string) error {
 func ClearUnitEnv(namespace string) error {
 	if out, err := Command(ToolUnitEnv, unitEnvClear, namespace).CombinedOutput(); err != nil {
 		return fmt.Errorf("clear env files of %s: %w: %s", namespace, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// ClearUnitEnvService removes the env file of one service in namespace through
+// the helper.
+func ClearUnitEnvService(namespace, service string) error {
+	if out, err := Command(ToolUnitEnv, unitEnvClear, namespace, service).CombinedOutput(); err != nil {
+		return fmt.Errorf("clear env of %s/%s: %w: %s", namespace, service, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

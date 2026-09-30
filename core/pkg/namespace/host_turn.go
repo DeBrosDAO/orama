@@ -73,6 +73,9 @@ type hostTURNTenant struct {
 // a config path the writer could not write left host TURN unconfigured on every
 // node while each reconcile reported nothing to its caller.
 func (cm *ClusterManager) ReconcileHostTURN(ctx context.Context) ([]string, error) {
+	if cm.reconcileHostTURNFn != nil {
+		return cm.reconcileHostTURNFn(ctx)
+	}
 	if cm.systemdSpawner == nil || cm.systemdSpawner.systemdMgr == nil || cm.localNodeID == "" {
 		return nil, nil
 	}

@@ -385,6 +385,23 @@ every sweep, rather than logged. The unit keeps running and keeps holding a port
 the allocator has already released, and the next namespace given that port finds
 it occupied and joins a foreign raft group.
 
+A teardown is destructive, so its replay is checked before it is sent. The row
+carries the cluster id the teardown was owed for and whether it was the
+namespace's delete (`purge_data`). A namespace deleted and created again can be
+placed on the same node before the replay succeeds; replaying the old teardown
+would then delete the new namespace. So `replayPendingCleanups` drops a
+`teardown-namespace`, `teardown-sfu` or `teardown-turn` row instead of sending it
+when the registry places another cluster of that name on the node (a membership
+or port-allocation row; for SFU/TURN also a WebRTC allocation of that type under
+another cluster). A row written before the `cluster_id` column (migration 066)
+treats every cluster as another one. When the registry cannot answer the check,
+nothing is sent. Allocating a port block (or WebRTC ports) to a node for a
+namespace also deletes the destructive rows owed there for that namespace. One
+window remains: an allocation written between the replay's check and its request
+reaching the node; the spawn that follows an allocation takes seconds, the
+window is one round trip. The `stop-*` rows are not checked: a repeated stop is
+harmless.
+
 **A removed namespace is removed, not stopped.** `orama node upgrade` enables
 and restarts every namespace unit it finds on disk (a namespace directory with a
 unit env file in `/var/lib/orama-unit-env/<ns>/`), and a reboot starts the same
@@ -409,25 +426,70 @@ restart, unit stays enabled — and are not used to remove a namespace. The
 platform instances (`index`, `nameserver`, `system`, `default`) are refused by
 `TeardownNamespace`.
 
+"Could not be stopped or disabled" is judged by systemd's state, not by the
+wording of an error: a failed `stop` counts as done only when `systemctl show`
+reports the unit `not-found`, `inactive` or `failed`, and a failed `disable`
+only when it is `not-found`. A reply that cannot be read is a failure.
+
+The namespace's deployment units are found through the deployment directories'
+owner markers (`.orama-owner`, which name the namespace exactly), never by a glob
+on the namespace name. An instance name is `<namespace>-<name>` with dots as
+hyphens and cannot be split back: tearing down `acme` with a glob on `acme-*`
+also stopped and disabled `acme-corp`'s deployments. Only instances whose marker
+names the namespace are stopped and disabled (`orama-deploy-*@<instance>`); a
+directory with no marker belongs to nobody that can be named and is left alone.
+A deployment unit that cannot be stopped or disabled fails the teardown like
+any other unit.
+
+The data a namespace keeps outside `data/namespaces/<ns>` — its SQLite databases
+(`data/sqlite/<ns>`) and its deployment directories — is removed only when the
+namespace is deleted (`DeprovisionCluster`: the owner's delete and the operator's
+remove), by the `purge_data` flag on `teardown-namespace`
+(`SystemdSpawner.TeardownNamespaceAndData`, after the units and state are gone),
+scoped to those two base directories and to directories whose marker names the
+namespace. A rollback, the stale sweep and the cleanup of a replaced node do not
+purge: they never held tenant data, or the namespace lives on. A node still on
+the previous release ignores the flag and keeps the data.
+
+A namespace that stays but turns WebRTC off has the same exposure for its SFU,
+so `DisableWebRTC` tears the SFU down (`teardown-sfu`: stop, disable, env file
+and config removed) rather than stopping it; TURN is the shared host server and
+is reconciled, not stopped (see `docs/WEBRTC.md`).
+
 The backstop is the tenant reconciler's orphan sweep (`reapOrphanedTenants`,
 every 60s on every node). It lists the tenant namespaces with state on the node
 (a data directory with a provisioned tenant unit, or a loaded tenant unit
 instance) and tears down each one the registry assigns nothing of to this node
 (no `namespace_cluster_nodes` and no `namespace_port_allocations` row for it,
 in any cluster of that name). Teardown is destructive, so it acts only when the
-registry read succeeded and holds at least one cluster (an empty registry beside
-a node full of tenants is a fresh or lagging database, not proof that every
-namespace was deleted), never on a namespace being provisioned by this process
-or on a platform instance, and only after the namespace has been seen orphaned
-on two consecutive sweeps. Each teardown is logged at warn with the reason. At
-boot, `RestoreLocalClustersFromDisk` applies the same rule to a namespace whose
-cluster id the registry no longer assigns to this node: when the registry
-answers, is non-empty and does not know the namespace under any cluster id, it
-is not restored and is torn down; when the registry cannot be read, the local
-state is all there is and the namespace is restored, with a warning. A node that
-is upgraded while still holding a namespace deleted by an older release starts
-it for up to two sweeps (about two minutes) before the orphan sweep removes it:
-the upgrade cannot ask the registry, and this is the only window.
+registry read succeeded (a leader read, like every registry read of the cluster
+manager) and holds at least one cluster (an empty registry beside a node full of
+tenants is a fresh or lagging database, not proof that every namespace was
+deleted), never on a namespace being provisioned by this process or on a
+platform instance, and only after the namespace has been seen orphaned on two
+consecutive sweeps. Two more guards protect against a registry that is wrong
+rather than empty — restored from an older snapshot by `recover-raft`, or a node
+pointed at another cluster's database, where the table is non-empty but misses
+live namespaces: a node holding two or more tenants of which the registry
+assigns it none logs an error and tears nothing down, and at most two
+namespaces are torn down per sweep (`orphanTeardownsPerPass`; the rest keep
+their streak and follow on later sweeps). A node with a single tenant cannot be
+cross-checked that way and relies on the two-sweep rule and the cap. The tenant
+data is purged too only when the registry holds no cluster of that name at all;
+a namespace that lives on other nodes is only torn down here. Each teardown is
+logged at warn with the reason. At boot, `RestoreLocalClustersFromDisk` judges a
+namespace by **cluster id**, not by name: a node the registry assigns to that
+cluster — by membership or by port allocation (recovery writes the allocation
+first and the membership after the spawn, so a node rebooting in between holds
+only the allocation) — restores. A node assigned to another cluster of the same
+name holds a previous incarnation: stopped, its state dropped. A node the
+registry assigns nothing is torn down rather than restored, under the same
+guards (and at most two per boot). When the registry cannot be read, is empty, or
+disowns every tenant on the node, the local state is all there is and the
+namespace is restored, with a warning or an error. A node that is upgraded while
+still holding a namespace deleted by an older release starts it for up to two
+sweeps (about two minutes) before the orphan sweep removes it: the upgrade
+cannot ask the registry, and this is the only window.
 
 **One writer for membership.** A node's existence is recorded in five places —
 `dns_nodes`, `wireguard_peers`, the index raft configuration, ipfs-cluster's

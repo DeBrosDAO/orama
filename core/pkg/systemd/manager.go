@@ -145,11 +145,20 @@ type Manager struct {
 	// (pkg/unitenv); writeUnitEnv stores one there.
 	unitEnvDir   string
 	writeUnitEnv func(namespace, service, contents string) error
+	clearUnitEnv func(namespace, service string) error
 
 	// Seams for tests; NewManager sets the real ones.
-	unitActive  func(unit string) bool
-	activeSince func(unit string) (time.Time, error)
-	runUnitCmd  func(args ...string) ([]byte, error)
+	unitActive   func(unit string) bool
+	activeSince  func(unit string) (time.Time, error)
+	runUnitCmd   func(args ...string) ([]byte, error)
+	unitState    func(unit string) (unitState, error)
+	listUnitsCmd func(args ...string) ([]byte, error)
+
+	// deploymentsBase and sqliteBase override the directories beside the
+	// namespaces directory that hold tenant deployments and SQLite databases.
+	// Empty in production; set in tests.
+	deploymentsBase string
+	sqliteBase      string
 }
 
 // NewManager creates a new systemd manager
@@ -162,9 +171,11 @@ func NewManager(namespaceBase string, logger *zap.Logger) *Manager {
 		deferred:      map[string]bool{},
 		unitEnvDir:    unitenv.Dir,
 		writeUnitEnv:  storeUnitEnv,
+		clearUnitEnv:  clearStoredUnitEnv,
 		unitActive:    queryUnitActive,
 		activeSince:   queryActiveSince,
 		runUnitCmd:    func(args ...string) ([]byte, error) { return Systemctl(args...).CombinedOutput() },
+		unitState:     queryUnitState,
 	}
 }
 
@@ -410,22 +421,31 @@ func parseActiveEnter(s string) (time.Time, error) {
 
 // StopService stops a namespace service
 func (m *Manager) StopService(namespace string, serviceType ServiceType) error {
-	svcName := m.serviceName(namespace, serviceType)
-	m.logger.Info("Stopping systemd service",
-		zap.String("service", svcName),
-		zap.String("namespace", namespace))
+	return m.stopUnit(m.serviceName(namespace, serviceType))
+}
 
-	if output, err := m.runUnit("stop", svcName); err != nil {
-		// Don't error if service is already stopped or doesn't exist
-		if strings.Contains(string(output), "not loaded") || strings.Contains(string(output), "inactive") {
-			m.logger.Debug("Service already stopped or not loaded", zap.String("service", svcName))
-			return nil
-		}
-		return fmt.Errorf("failed to stop %s: %w; output: %s", svcName, err, string(output))
+// stopUnit stops a unit. A failed stop is success only when systemd confirms
+// there is nothing running: the unit is not loaded, or it is inactive or
+// failed. The teardown keeps a namespace's data when a unit could not be
+// stopped, so the answer comes from systemd's state, never from the wording of
+// the failure.
+func (m *Manager) stopUnit(unit string) error {
+	m.logger.Info("Stopping systemd service", zap.String("service", unit))
+
+	output, err := m.runUnit("stop", unit)
+	if err == nil {
+		m.logger.Info("Service stopped successfully", zap.String("service", unit))
+		return nil
 	}
-
-	m.logger.Info("Service stopped successfully", zap.String("service", svcName))
-	return nil
+	state, stateErr := m.readUnitState(unit)
+	if stateErr != nil {
+		return fmt.Errorf("failed to stop %s: %w; output: %s (and its state could not be read: %v)", unit, err, string(output), stateErr)
+	}
+	if !state.loaded() || state.Active == activeStateInactive || state.Active == activeStateFailed {
+		m.logger.Debug("Service already stopped or not loaded", zap.String("service", unit), zap.String("active", state.Active))
+		return nil
+	}
+	return fmt.Errorf("failed to stop %s (still %s): %w; output: %s", unit, state.Active, err, string(output))
 }
 
 // RestartService restarts a namespace service
@@ -460,24 +480,31 @@ func (m *Manager) EnableService(namespace string, serviceType ServiceType) error
 	return nil
 }
 
-// DisableService disables a namespace service
+// DisableService disables a namespace service so it does not start on boot
 func (m *Manager) DisableService(namespace string, serviceType ServiceType) error {
-	svcName := m.serviceName(namespace, serviceType)
-	m.logger.Info("Disabling systemd service",
-		zap.String("service", svcName),
-		zap.String("namespace", namespace))
+	return m.disableUnit(m.serviceName(namespace, serviceType))
+}
 
-	if output, err := m.runUnit("disable", svcName); err != nil {
-		// Don't error if service is already disabled or doesn't exist
-		if strings.Contains(string(output), "not loaded") {
-			m.logger.Debug("Service not loaded", zap.String("service", svcName))
-			return nil
-		}
-		return fmt.Errorf("failed to disable %s: %w; output: %s", svcName, err, string(output))
+// disableUnit disables a unit. A failed disable is success only when systemd
+// has no such unit loaded: a unit that exists and could not be disabled is one
+// the next upgrade or boot starts again.
+func (m *Manager) disableUnit(unit string) error {
+	m.logger.Info("Disabling systemd service", zap.String("service", unit))
+
+	output, err := m.runUnit("disable", unit)
+	if err == nil {
+		m.logger.Info("Service disabled successfully", zap.String("service", unit))
+		return nil
 	}
-
-	m.logger.Info("Service disabled successfully", zap.String("service", svcName))
-	return nil
+	state, stateErr := m.readUnitState(unit)
+	if stateErr != nil {
+		return fmt.Errorf("failed to disable %s: %w; output: %s (and its state could not be read: %v)", unit, err, string(output), stateErr)
+	}
+	if !state.loaded() {
+		m.logger.Debug("Service not loaded", zap.String("service", unit))
+		return nil
+	}
+	return fmt.Errorf("failed to disable %s: %w; output: %s", unit, err, string(output))
 }
 
 // IsServiceActive checks if a namespace service is active
@@ -523,8 +550,7 @@ func (m *Manager) IsServiceActive(namespace string, serviceType ServiceType) (bo
 // ReloadDaemon reloads systemd daemon configuration
 func (m *Manager) ReloadDaemon() error {
 	m.logger.Info("Reloading systemd daemon")
-	cmd := Systemctl("daemon-reload")
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := m.runUnit("daemon-reload"); err != nil {
 		return fmt.Errorf("failed to reload systemd daemon: %w; output: %s", err, string(output))
 	}
 	return nil
@@ -638,82 +664,6 @@ func (m *Manager) StopAllNamespaceServicesGlobally() error {
 	return nil
 }
 
-// StopDeploymentServicesForNamespace stops all deployment systemd units for a given namespace.
-//
-// A deployment runs as an instance of a per-runtime template:
-// orama-deploy-{runtime}@{namespace}-{name}.service, with dots replaced by
-// hyphens. The glob has to name the runtime segment too — `orama-deploy-<ns>-*`
-// matched the units the gateway used to write itself and matches none of these.
-// This is best-effort: individual failures are logged but do not abort the operation.
-func (m *Manager) StopDeploymentServicesForNamespace(namespace string) {
-	// Match the sanitization from deployments/process.InstanceName.
-	sanitizedNS := strings.ReplaceAll(namespace, ".", "-")
-	pattern := fmt.Sprintf("orama-deploy-*@%s-*", sanitizedNS)
-
-	m.logger.Info("Stopping deployment services for namespace",
-		zap.String("namespace", namespace),
-		zap.String("pattern", pattern))
-
-	cmd := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend", "--plain", pattern)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		m.logger.Warn("Failed to list deployment services",
-			zap.String("namespace", namespace),
-			zap.Error(err))
-		return
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	stopped := 0
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-		svc := fields[0]
-
-		// Stop the service
-		if stopOut, stopErr := Systemctl("stop", svc).CombinedOutput(); stopErr != nil {
-			m.logger.Warn("Failed to stop deployment service",
-				zap.String("service", svc),
-				zap.Error(stopErr),
-				zap.String("output", string(stopOut)))
-		}
-
-		// Disable the service
-		if disOut, disErr := Systemctl("disable", svc).CombinedOutput(); disErr != nil {
-			m.logger.Warn("Failed to disable deployment service",
-				zap.String("service", svc),
-				zap.Error(disErr),
-				zap.String("output", string(disOut)))
-		}
-
-		// Remove the service file
-		serviceFile := filepath.Join(m.systemdDir, svc)
-		if !strings.HasSuffix(serviceFile, ".service") {
-			serviceFile += ".service"
-		}
-		if rmErr := os.Remove(serviceFile); rmErr != nil && !os.IsNotExist(rmErr) {
-			m.logger.Warn("Failed to remove deployment service file",
-				zap.String("file", serviceFile),
-				zap.Error(rmErr))
-		}
-
-		stopped++
-		m.logger.Info("Stopped deployment service", zap.String("service", svc))
-	}
-
-	if stopped > 0 {
-		m.ReloadDaemon()
-		m.logger.Info("Deployment services cleanup complete",
-			zap.String("namespace", namespace),
-			zap.Int("stopped", stopped))
-	}
-}
-
 // CleanupOrphanedProcesses finds and kills any orphaned namespace processes not managed by systemd
 // This is for cleaning up after migration from old exec.Command approach
 func (m *Manager) CleanupOrphanedProcesses() error {
@@ -756,6 +706,15 @@ func storeUnitEnv(namespace, service, contents string) error {
 		return fmt.Errorf("orama group id %q: %w", g.Gid, err)
 	}
 	return unitenv.Write(unitenv.Dir, namespace, service, []byte(contents), unitenv.Owner{UID: 0, GID: gid})
+}
+
+// clearStoredUnitEnv removes one env file from the root-owned tree: directly
+// when this process is root, otherwise through orama-privhelper.
+func clearStoredUnitEnv(namespace, service string) error {
+	if os.Geteuid() != 0 {
+		return privhelper.ClearUnitEnvService(namespace, service)
+	}
+	return unitenv.Clear(unitenv.Dir, namespace, service)
 }
 
 // RemoveNamespaceEnv removes every env file of namespace, as its data

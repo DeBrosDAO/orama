@@ -395,6 +395,16 @@ func (wpa *WebRTCPortAllocator) insertPortBlock(ctx context.Context, block *WebR
 		}
 	}
 
+	// A teardown still owed for this service on this node would remove the one
+	// that is about to be spawned.
+	teardown := teardownSFUAction
+	if block.ServiceType == "turn" {
+		teardown = teardownTURNAction
+	}
+	if err := withdrawPendingTeardowns(ctx, wpa.db, block.NamespaceClusterID, block.NodeID, teardown); err != nil {
+		return fmt.Errorf("allocate the %s ports of cluster %s on node %s: %w", block.ServiceType, block.NamespaceClusterID, block.NodeID, err)
+	}
+
 	return nil
 }
 

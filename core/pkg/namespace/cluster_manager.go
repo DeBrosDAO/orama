@@ -119,11 +119,20 @@ type ClusterManager struct {
 	orphanMu     sync.Mutex
 	orphanStreak map[string]int
 
+	// bootTeardowns counts the namespaces the boot restore has torn down
+	// (restoreAssigned), capped at orphanTeardownsPerPass. Read and written by
+	// the one restore pass at boot only.
+	bootTeardowns int
+
 	// localTenantsFn and teardownLocalFn replace the node-local namespace
 	// listing and teardown. Nil in production; set in tests, which have no
 	// systemd.
 	localTenantsFn  func() ([]string, error)
-	teardownLocalFn func(ctx context.Context, namespace string) error
+	teardownLocalFn func(ctx context.Context, namespace string, purgeData bool) error
+
+	// reconcileHostTURNFn replaces ReconcileHostTURN, which drives the real
+	// shared TURN unit. Nil in production; set in tests, which have no systemd.
+	reconcileHostTURNFn func(ctx context.Context) ([]string, error)
 
 	// Leadership-locality reconciler cooldown (bugboard #708): per-namespace
 	// timestamp of the last leadership transfer, to bound churn. Lazy-init.
@@ -966,7 +975,7 @@ func (cm *ClusterManager) stopRQLiteOnNode(ctx context.Context, nodeID, nodeIP, 
 	if nodeID == cm.localNodeID {
 		cm.systemdSpawner.StopRQLite(ctx, namespace, nodeID)
 	} else {
-		cm.sendStopRequest(ctx, nodeIP, "stop-rqlite", namespace, nodeID)
+		cm.sendStopRequest(ctx, nodeIP, "stop-rqlite", namespace, nodeID, cleanupScope{})
 	}
 }
 
@@ -975,7 +984,7 @@ func (cm *ClusterManager) stopOlricOnNode(ctx context.Context, nodeID, nodeIP, n
 	if nodeID == cm.localNodeID {
 		cm.systemdSpawner.StopOlric(ctx, namespace, nodeID)
 	} else {
-		cm.sendStopRequest(ctx, nodeIP, "stop-olric", namespace, nodeID)
+		cm.sendStopRequest(ctx, nodeIP, "stop-olric", namespace, nodeID, cleanupScope{})
 	}
 }
 
@@ -984,17 +993,22 @@ func (cm *ClusterManager) stopGatewayOnNode(ctx context.Context, nodeID, nodeIP,
 	if nodeID == cm.localNodeID {
 		cm.systemdSpawner.StopGateway(ctx, namespace, nodeID)
 	} else {
-		cm.sendStopRequest(ctx, nodeIP, "stop-gateway", namespace, nodeID)
+		cm.sendStopRequest(ctx, nodeIP, "stop-gateway", namespace, nodeID, cleanupScope{})
 	}
 }
 
-// sendStopRequest sends a stop request to a remote node
-func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string) error {
-	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
+// sendStopRequest sends a stop or teardown request to a remote node. scope is
+// what the request is owed for, kept with the retry record of a failed one.
+func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string, scope cleanupScope) error {
+	req := map[string]interface{}{
 		"action":    action,
 		"namespace": namespace,
 		"node_id":   nodeID,
-	})
+	}
+	if scope.PurgeData && action == teardownAction {
+		req["purge_data"] = true
+	}
+	_, err := cm.sendSpawnRequest(ctx, nodeIP, req)
 	if err != nil {
 		// A stop that did not happen is work still owed, not a warning. The
 		// unit keeps running and keeps holding a port the allocator has
@@ -1005,7 +1019,7 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 			zap.String("action", action),
 			zap.Error(err),
 		)
-		cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, action, err)
+		cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, action, scope, err)
 	} else {
 		cm.clearPendingCleanup(ctx, namespace, nodeID, action)
 	}
@@ -1062,7 +1076,7 @@ func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *Nam
 	for i, node := range nodes {
 		members[i] = staleClusterNode{NodeID: node.NodeID, InternalIP: node.InternalIP}
 	}
-	if err := cm.teardownNamespaceOnNodes(ctx, members, cluster.NamespaceName); err != nil {
+	if err := cm.teardownNamespaceOnNodes(ctx, members, cluster.NamespaceName, cleanupScope{ClusterID: cluster.ID}); err != nil {
 		cm.logger.Error("Rollback could not tear the namespace down on every node; the tenant reconciler reaps what is left",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 	}
@@ -1150,7 +1164,7 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	// the tenant's data on disk still reported success — and re-creating a
 	// namespace of the same name then inherited its raft state. They are
 	// collected and surfaced; the caller decides, but it must be told.
-	if err := cm.teardownNamespaceOnNodes(ctx, clusterNodes, cluster.NamespaceName); err != nil {
+	if err := cm.teardownNamespaceOnNodes(ctx, clusterNodes, cluster.NamespaceName, cleanupScope{ClusterID: cluster.ID, PurgeData: true}); err != nil {
 		cm.logger.Error("Namespace was NOT torn down on every node — re-creating this namespace would inherit its state (bugboard #281)",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 		deprovisionDataErr = fmt.Errorf("namespace not torn down on every node: %w", err)

@@ -96,6 +96,19 @@ func ClearNamespace(dir, namespace string) error {
 	return nil
 }
 
+// Clear removes the env file of one service in namespace. A file that is
+// already gone is not an error: clearing is how a service is retired, and it
+// is retried.
+func Clear(dir, namespace, service string) error {
+	if !Valid(namespace, service) {
+		return fmt.Errorf("unit env %q/%q is not a valid namespace/service name", namespace, service)
+	}
+	if err := os.Remove(Path(dir, namespace, service)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove env of %s/%s: %w", namespace, service, err)
+	}
+	return nil
+}
+
 func own(path string, mode os.FileMode, owner Owner) error {
 	if err := os.Chown(path, owner.UID, owner.GID); err != nil {
 		return fmt.Errorf("chown %s: %w", path, err)

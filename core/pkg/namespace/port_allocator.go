@@ -292,6 +292,12 @@ func (npa *NamespacePortAllocator) tryAllocatePortBlock(ctx context.Context, nod
 		}
 	}
 
+	// A teardown still owed for an earlier incarnation of this namespace on
+	// this node would delete the namespace that is about to be spawned.
+	if err := withdrawPendingTeardowns(ctx, npa.db, namespaceClusterID, nodeID, teardownAction); err != nil {
+		return nil, fmt.Errorf("allocate the port block of cluster %s on node %s: %w", namespaceClusterID, nodeID, err)
+	}
+
 	return block, nil
 }
 
