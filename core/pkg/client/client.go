@@ -31,10 +31,11 @@ type Client struct {
 	logger *zap.Logger
 
 	// Components
-	database *DatabaseClientImpl
-	network  *NetworkInfoImpl
-	pubsub   *pubSubBridge
-	storage  *StorageClientImpl
+	database        *DatabaseClientImpl
+	gatewayDatabase *gatewayDatabaseClient
+	network         *NetworkInfoImpl
+	pubsub          *pubSubBridge
+	storage         *StorageClientImpl
 
 	// State
 	connected bool
@@ -69,15 +70,27 @@ func NewClient(config *ClientConfig) (NetworkClient, error) {
 
 	// Initialize components (will be configured when connected)
 	client.database = &DatabaseClientImpl{client: client}
+	client.gatewayDatabase = newGatewayDatabaseClient(client)
 	client.network = &NetworkInfoImpl{client: client}
 	client.storage = &StorageClientImpl{client: client}
 
 	return client, nil
 }
 
+// usesRQLiteEndpoints reports whether the database client dials RQLite itself:
+// it does when the config names DatabaseEndpoints, which is how a gateway
+// reaches its own database. Without them the database is reached through the
+// gateway (see gatewayDatabaseClient).
+func (c *Client) usesRQLiteEndpoints() bool {
+	return len(c.config.DatabaseEndpoints) > 0
+}
+
 // Database returns the database client
 func (c *Client) Database() DatabaseClient {
-	return c.database
+	if c.usesRQLiteEndpoints() {
+		return c.database
+	}
+	return c.gatewayDatabase
 }
 
 // PubSub returns the pub/sub client

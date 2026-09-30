@@ -9,9 +9,14 @@ import (
 
 // ClientConfig represents configuration for network clients
 type ClientConfig struct {
-	AppName           string        `json:"app_name"`
-	DatabaseName      string        `json:"database_name"`
-	BootstrapPeers    []string      `json:"peers"`
+	AppName        string   `json:"app_name"`
+	DatabaseName   string   `json:"database_name"`
+	BootstrapPeers []string `json:"peers"`
+	// DatabaseEndpoints are RQLite nodes the database client dials directly,
+	// which needs a route into the WireGuard mesh: it is how a gateway reaches
+	// its own database. Left empty, the database client goes through the
+	// gateway at GatewayURL with the client's credential. DefaultDatabaseEndpoints
+	// is the in-mesh default.
 	DatabaseEndpoints []string      `json:"database_endpoints"`
 	GatewayURL        string        `json:"gateway_url"` // Gateway URL for HTTP API access
 	ConnectTimeout    time.Duration `json:"connect_timeout"`
@@ -40,20 +45,18 @@ type ClientConfig struct {
 func DefaultClientConfig(appName string) *ClientConfig {
 	// Base defaults
 	peers := DefaultBootstrapPeers()
-	endpoints := DefaultDatabaseEndpoints()
 
 	return &ClientConfig{
-		AppName:           appName,
-		DatabaseName:      fmt.Sprintf("%s_db", appName),
-		BootstrapPeers:    peers,
-		DatabaseEndpoints: endpoints,
-		GatewayURL:        "",
-		ConnectTimeout:    time.Second * 30,
-		RetryAttempts:     3,
-		RetryDelay:        time.Second * 5,
-		QuietMode:         false,
-		APIKey:            "",
-		JWT:               "",
-		PubSubSocket:      pubsub.DefaultSocketPath,
+		AppName:        appName,
+		DatabaseName:   fmt.Sprintf("%s_db", appName),
+		BootstrapPeers: peers,
+		GatewayURL:     "",
+		ConnectTimeout: time.Second * 30,
+		RetryAttempts:  3,
+		RetryDelay:     time.Second * 5,
+		QuietMode:      false,
+		APIKey:         "",
+		JWT:            "",
+		PubSubSocket:   pubsub.DefaultSocketPath,
 	}
 }

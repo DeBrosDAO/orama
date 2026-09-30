@@ -175,10 +175,13 @@ func (d *DatabaseClientImpl) Query(ctx context.Context, sql string, args ...inte
 
 // isWriteOperation determines if a SQL statement is a write operation
 func (d *DatabaseClientImpl) isWriteOperation(sql string) bool {
-	// Convert to uppercase for comparison
+	return isWriteStatement(sql)
+}
+
+// isWriteStatement reports whether sql is a write, from its first keyword.
+func isWriteStatement(sql string) bool {
 	sqlUpper := strings.ToUpper(strings.TrimSpace(sql))
 
-	// List of write operation keywords
 	writeKeywords := []string{
 		"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER",
 		"TRUNCATE", "REPLACE", "MERGE", "PRAGMA",

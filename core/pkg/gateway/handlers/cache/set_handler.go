@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -103,18 +104,17 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serialize complex types (maps, slices) to JSON bytes for Olric storage
-	// Olric can handle basic types (string, number, bool) directly, but complex
-	// types need to be serialized to bytes
-	valueToStore, err := prepareValueForStorage(req.Value)
+	// Olric stores untyped bytes; the value is stored as typed JSON so a read
+	// returns exactly what was put (see storedValueMarker).
+	valueToStore, err := encodeStoredValue(req.Value)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to prepare value: %v", err))
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	err = dm.Put(ctx, req.Key, valueToStore, putOpts...)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to put key: %v", err))
+	if err := dm.Put(ctx, req.Key, valueToStore, putOpts...); err != nil {
+		status, message := putFailure(err)
+		writeError(w, status, message)
 		return
 	}
 
@@ -149,34 +149,16 @@ func putOptionsForTTL(ttl string) ([]olriclib.PutOption, error) {
 	return []olriclib.PutOption{olriclib.EX(d)}, nil
 }
 
-// prepareValueForStorage prepares a value for storage in Olric.
-// Complex types (maps, slices) are serialized to JSON bytes.
-// Basic types (string, number, bool) are stored directly.
-func prepareValueForStorage(value any) (any, error) {
-	switch value.(type) {
-	case map[string]any:
-		// Serialize maps to JSON bytes
-		jsonBytes, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal map value: %w", err)
-		}
-		return jsonBytes, nil
-	case []any:
-		// Serialize slices to JSON bytes
-		jsonBytes, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal array value: %w", err)
-		}
-		return jsonBytes, nil
-	case string, float64, int, int64, bool, nil:
-		// Basic types can be stored directly
-		return value, nil
+// putFailure is the status and message for a put Olric refused. An entry or a
+// key too large for a table is the caller's request, and says what to change;
+// anything else is the cache failing.
+func putFailure(err error) (int, string) {
+	switch {
+	case errors.Is(err, olriclib.ErrEntryTooLarge):
+		return http.StatusRequestEntityTooLarge, "value too large: an entry must fit in one cache table (1 MiB), key and encoding included; store less under one key"
+	case errors.Is(err, olriclib.ErrKeyTooLarge):
+		return http.StatusRequestEntityTooLarge, "key too large: use a shorter key"
 	default:
-		// For any other type, serialize to JSON to be safe
-		jsonBytes, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal value: %w", err)
-		}
-		return jsonBytes, nil
+		return http.StatusInternalServerError, fmt.Sprintf("failed to put key: %v", err)
 	}
 }

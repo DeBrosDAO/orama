@@ -16,7 +16,7 @@ var DeleteCmd = &cobra.Command{
 	Use:   "delete <name>",
 	Short: "Delete a deployed function",
 	Long:  "Deletes a function from the Orama Network. This action cannot be undone.",
-	Args:  cobra.ExactArgs(1),
+	Args:  functionNameArgs(1),
 	RunE:  runDelete,
 }
 

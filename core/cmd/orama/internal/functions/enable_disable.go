@@ -23,7 +23,7 @@ new invocations are rejected. Use 'orama function enable' to resume.
 
 Useful during incident response — pause a misbehaving function until you
 can root-cause without losing its deployed code or version history.`,
-	Args: cobra.ExactArgs(1),
+	Args: functionNameArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSetEnabled(args[0], false)
 	},
@@ -34,7 +34,7 @@ var EnableCmd = &cobra.Command{
 	Use:   "enable <name>",
 	Short: "Re-enable a previously disabled function",
 	Long:  `Re-enables a function that was paused with 'orama function disable'.`,
-	Args:  cobra.ExactArgs(1),
+	Args:  functionNameArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSetEnabled(args[0], true)
 	},
@@ -76,7 +76,7 @@ func apiPostNoBody(endpoint string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, apiStatusError("API error", resp.StatusCode, respBody)
 	}
 	var result map[string]interface{}
 	if err := json.Unmarshal(respBody, &result); err != nil {

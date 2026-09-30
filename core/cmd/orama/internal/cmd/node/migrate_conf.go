@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
-	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
 	"github.com/spf13/cobra"
 )
 
@@ -34,30 +35,21 @@ Requires: orama auth login (for API authentication)`,
 			env = active.Name
 		}
 
-		// Load nodes from nodes.conf
+		// The gateway and the credential come first: with no login there is
+		// nothing to register the nodes with, and that is the answer, whatever
+		// the node inventory says.
+		envConfig, err := cli.GetEnvironmentByName(env)
+		if err != nil {
+			return clierr.Usage("environment %q not configured (see 'orama env list'): %w", env, err)
+		}
+		token, err := shared.AuthToken(envConfig.GatewayURL)
+		if err != nil {
+			return err
+		}
+
 		nodes, err := noderesolver.ResolveNodes(env)
 		if err != nil {
 			return fmt.Errorf("failed to load nodes.conf: %w", err)
-		}
-
-		// Get gateway URL
-		envConfig, err := cli.GetEnvironmentByName(env)
-		if err != nil {
-			return fmt.Errorf("environment %q not configured: %w", env, err)
-		}
-
-		// Load stored credentials
-		store, err := auth.LoadEnhancedCredentials()
-		if err != nil {
-			return fmt.Errorf("failed to load credentials: %w", err)
-		}
-		creds := store.GetDefaultCredential(envConfig.GatewayURL)
-		if creds == nil {
-			return fmt.Errorf("no credentials for %s — run 'orama auth login' first", envConfig.GatewayURL)
-		}
-		token, err := auth.Bearer(envConfig.GatewayURL, store, creds)
-		if err != nil {
-			return err
 		}
 
 		if len(nodes) == 0 {

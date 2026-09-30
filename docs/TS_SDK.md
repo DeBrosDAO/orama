@@ -348,6 +348,13 @@ expires after that long, and without a TTL (or with `"0s"`) it lives until
 deleted. A TTL that does not parse, is negative, or exceeds 10 years is refused
 with a 400.
 
+A value is any JSON value except `null`, and `get` returns exactly what was put,
+type included: the string `"123"` comes back a string, `true` comes back `true`.
+A value written before entries were typed holds raw text and is read as what it
+looks like (JSON when it parses, else a string). One entry must fit in a single
+cache table (1 MiB, key and encoding included); a larger value is refused with a
+413 and nothing is stored.
+
 ---
 
 ## Storage

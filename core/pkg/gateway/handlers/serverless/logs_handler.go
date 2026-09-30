@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
 
@@ -62,6 +63,9 @@ func (h *ServerlessHandlers) GetFunctionLogs(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusInternalServerError, "Failed to get logs")
 			return
 		}
+		if len(logs) == 0 && !h.functionKnown(ctx, w, namespace, name) {
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"name":      name,
 			"namespace": namespace,
@@ -81,6 +85,9 @@ func (h *ServerlessHandlers) GetFunctionLogs(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "Failed to get invocations")
 		return
 	}
+	if len(invocations) == 0 && !h.functionKnown(ctx, w, namespace, name) {
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"name":        name,
@@ -88,4 +95,21 @@ func (h *ServerlessHandlers) GetFunctionLogs(w http.ResponseWriter, r *http.Requ
 		"invocations": invocations,
 		"count":       len(invocations),
 	})
+}
+
+// functionKnown is asked when a function has no history to show: an empty
+// answer for a function that does not exist is a 404, not a 200 with nothing
+// in it, which a caller cannot tell from a function that has not run yet. A
+// function that was deleted keeps the history it made and never gets here. It
+// reports false after writing the response.
+func (h *ServerlessHandlers) functionKnown(ctx context.Context, w http.ResponseWriter, namespace, name string) bool {
+	if _, err := h.registry.Get(ctx, namespace, name, 0); err != nil {
+		if serverless.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "Function not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "Failed to look up function")
+		}
+		return false
+	}
+	return true
 }

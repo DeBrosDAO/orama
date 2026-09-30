@@ -16,7 +16,7 @@ var InvokeCmd = &cobra.Command{
 	Use:   "invoke <name>",
 	Short: "Invoke a deployed function",
 	Long:  "Sends a request to invoke the named function with optional JSON payload.",
-	Args:  cobra.ExactArgs(1),
+	Args:  functionNameArgs(1),
 	RunE:  runInvoke,
 }
 
@@ -49,7 +49,7 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("invocation failed (%d): %s", resp.StatusCode, string(respBody))
+		return apiStatusError("invocation failed", resp.StatusCode, respBody)
 	}
 
 	fmt.Printf("\nOutput:\n%s\n", string(respBody))

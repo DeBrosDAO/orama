@@ -102,7 +102,7 @@ func runSecretsSet(cmd *cobra.Command, args []string) error {
 	}
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return apiStatusError("API error", resp.StatusCode, respBody)
 	}
 
 	fmt.Printf("Secret %q set successfully.\n", name)

@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
-	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/spf13/cobra"
 )
 
@@ -113,20 +112,20 @@ func rqliteImport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("input path is a directory, not a file")
 	}
 
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		return fmt.Errorf("failed to load credentials: %w", err)
-	}
-	gatewayURL, err := shared.GetAPIURL()
+	apiURL, err := nsRQLiteAPIURL()
 	if err != nil {
 		return err
 	}
-	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil || !creds.IsValid() {
-		return fmt.Errorf("not authenticated. Run 'orama auth login' first")
+	token, err := nsRQLiteAuthToken()
+	if err != nil {
+		return err
 	}
-
-	namespace := creds.Namespace
+	// The namespace to confirm is the one the credential in use belongs to:
+	// the stored session's, or ORAMA_TOKEN's.
+	namespace, err := shared.BearerNamespace(apiURL, token)
+	if err != nil {
+		return err
+	}
 	if namespace == "" {
 		namespace = "default"
 	}
@@ -141,15 +140,6 @@ func rqliteImport(cmd *cobra.Command, args []string) error {
 	confirmation := strings.TrimSpace(scanner.Text())
 	if confirmation != namespace {
 		return fmt.Errorf("aborted - namespace name did not match")
-	}
-
-	apiURL, err := nsRQLiteAPIURL()
-	if err != nil {
-		return err
-	}
-	token, err := nsRQLiteAuthToken()
-	if err != nil {
-		return err
 	}
 
 	file, err := os.Open(input)

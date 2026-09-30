@@ -3,7 +3,10 @@ package globalcmd
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
@@ -37,7 +40,7 @@ func SubmitDirect(cmd *cobra.Command, operator, node, pubHex string, account, se
 	if node != "" {
 		acct, err := clusterreg.FetchAccount(ctx, node, operator)
 		if err != nil {
-			return clierr.Failure("read the chain account: %w", err)
+			return chainErr(err, "read the chain account")
 		}
 		if !cmd.Flags().Changed("account-number") {
 			in.AccountNumber = acct.Number
@@ -72,16 +75,30 @@ func SubmitDirect(cmd *cobra.Command, operator, node, pubHex string, account, se
 	return broadcastAndWait(ctx, node, tx, verb)
 }
 
+// chainErr classifies a failure of a chain REST call. A request that got no
+// answer (a refused connection, a timeout, a 5xx) is Unavailable, so a script
+// may retry it; an answer that says no is a Failure, which retrying will not
+// change. what names the step and comes first in the message.
+func chainErr(err error, what string, args ...any) error {
+	wrapped := fmt.Errorf("%s: %w", fmt.Sprintf(what, args...), err)
+	var transport *url.Error
+	var status *clusterreg.StatusError
+	if errors.As(err, &transport) || (errors.As(err, &status) && status.Code >= http.StatusInternalServerError) {
+		return clierr.Wrap(clierr.CodeUnavailable, wrapped)
+	}
+	return clierr.Wrap(clierr.CodeFailure, wrapped)
+}
+
 // broadcastAndWait sends tx and reports it only once it is in a block: admission to the mempool
 // is not success, since the block that runs it can still refuse it.
 func broadcastAndWait(ctx context.Context, node string, tx []byte, verb string) error {
 	hash, err := clusterreg.Broadcast(ctx, node, tx)
 	if err != nil {
-		return clierr.Failure("%v", err)
+		return chainErr(err, "broadcast the transaction")
 	}
 	height, err := clusterreg.WaitIncluded(ctx, node, hash, clusterreg.InclusionTimeout, clusterreg.InclusionPoll)
 	if err != nil {
-		return clierr.Failure("transaction %s: %w", hash, err)
+		return chainErr(err, "transaction %s", hash)
 	}
 	fmt.Fprintf(os.Stdout, "%s: %s (block %d)\n", verb, hash, height)
 	return nil

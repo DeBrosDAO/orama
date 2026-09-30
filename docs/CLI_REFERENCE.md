@@ -1238,6 +1238,7 @@ Deploy, invoke, and manage serverless functions on the Orama Network.
 A function is a folder containing:
   function.go    — your handler code (uses the fn SDK)
   function.yaml  — configuration (name, memory, timeout, etc.)
+  go.mod         — the Go module TinyGo builds
 
 Quick start:
   orama function init my-function
@@ -1327,7 +1328,7 @@ Create a new serverless function project
 orama function init <name>
 ```
 
-Scaffolds a new directory with function.go and function.yaml templates.
+Scaffolds a new directory with function.go, function.yaml, go.mod and a copy of the function SDK, ready for 'orama function build'.
 
 ### orama function invoke
 
@@ -3780,6 +3781,10 @@ orama ssh <ip-or-hostname> [-- command] [flags]
 
 SSH into a node by IP address or hostname.
 Resolves the SSH key from rootwallet automatically.
+
+The node's host key must already be pinned in ~/.orama/known_hosts, where
+'orama node setup' writes it. A host with no pinned key is refused, never
+trusted on first use, and a key that differs from the pinned one is refused.
 
 Pass a command after the IP to run it non-interactively:
   orama ssh 1.2.3.4 'sudo systemctl status orama-node'

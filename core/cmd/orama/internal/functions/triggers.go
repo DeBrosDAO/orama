@@ -45,7 +45,7 @@ var TriggersAddCmd = &cobra.Command{
 Pass exactly one of --topic (PubSub) or --schedule (cron). Schedules
 accept either 5-field crontab (minute hour dom month dow) or 6-field
 with seconds (sec minute hour dom month dow).`,
-	Args: cobra.ExactArgs(1),
+	Args: functionNameArgs(1),
 	RunE: runTriggersAdd,
 }
 
@@ -53,7 +53,7 @@ with seconds (sec minute hour dom month dow).`,
 var TriggersListCmd = &cobra.Command{
 	Use:   "list <function-name>",
 	Short: "List triggers for a function",
-	Args:  cobra.ExactArgs(1),
+	Args:  functionNameArgs(1),
 	RunE:  runTriggersList,
 }
 
@@ -61,7 +61,7 @@ var TriggersListCmd = &cobra.Command{
 var TriggersDeleteCmd = &cobra.Command{
 	Use:   "delete <function-name> <trigger-id>",
 	Short: "Delete a trigger",
-	Args:  cobra.ExactArgs(2),
+	Args:  functionNameArgs(2),
 	RunE:  runTriggersDelete,
 }
 
@@ -96,7 +96,7 @@ func runTriggersAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	if resp.StatusCode != 201 && resp.StatusCode != 200 {
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		return apiStatusError("API error", resp.StatusCode, respBody)
 	}
 
 	var result map[string]interface{}

@@ -32,7 +32,7 @@ log_info / log_error have those entries nested under each record.
 
 Pass --wasm-only to retrieve only the WASM-emitted log lines (legacy
 behavior; rarely useful on functions that don't call log_info).`,
-	Args: cobra.ExactArgs(1),
+	Args: functionNameArgs(1),
 	RunE: runLogs,
 }
 

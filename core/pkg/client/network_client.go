@@ -94,6 +94,7 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 	n.client.mu.RLock()
 	host := n.client.host
 	dbClient := n.client.database
+	directDatabase := n.client.usesRQLiteEndpoints()
 	n.client.mu.RUnlock()
 	if host == nil {
 		return nil, fmt.Errorf("no host available")
@@ -103,18 +104,11 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 	connectedPeers := host.Network().Peers()
 
 	// Try to get database size from RQLite (optional - don't fail if unavailable)
+	// A client that reaches its database through a gateway has no RQLite
+	// connection to size.
 	var dbSize int64 = 0
-	if conn, err := dbClient.getRQLiteConnection(); err == nil {
-		// Query database size (rough estimate)
-		if result, err := conn.QueryOne("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()"); err == nil {
-			for result.Next() {
-				if row, err := result.Slice(); err == nil && len(row) > 0 {
-					if size, ok := row[0].(int64); ok {
-						dbSize = size
-					}
-				}
-			}
-		}
+	if directDatabase {
+		dbSize = rqliteDatabaseSize(dbClient)
 	}
 
 	// Try to get IPFS peer info (optional - don't fail if unavailable)
@@ -280,4 +274,25 @@ func (n *NetworkInfoImpl) DisconnectFromPeer(ctx context.Context, peerID string)
 	}
 
 	return nil
+}
+
+// rqliteDatabaseSize is the database's size in bytes, 0 when it cannot be read.
+func rqliteDatabaseSize(dbClient *DatabaseClientImpl) int64 {
+	conn, err := dbClient.getRQLiteConnection()
+	if err != nil {
+		return 0
+	}
+	result, err := conn.QueryOne("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
+	if err != nil {
+		return 0
+	}
+	var size int64
+	for result.Next() {
+		if row, err := result.Slice(); err == nil && len(row) > 0 {
+			if n, ok := row[0].(int64); ok {
+				size = n
+			}
+		}
+	}
+	return size
 }

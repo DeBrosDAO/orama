@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/storagefile"
 	"github.com/spf13/cobra"
 )
@@ -68,7 +69,7 @@ func nonceFlag(cmd *cobra.Command) ([]byte, error) {
 	nonceHex, _ := cmd.Flags().GetString("nonce")
 	nonce, err := hex.DecodeString(nonceHex)
 	if err != nil || len(nonce) != storagefile.DealNonceLen {
-		return nil, fmt.Errorf("nonce must be %d bytes of hex", storagefile.DealNonceLen)
+		return nil, clierr.Usage("--nonce must be %d bytes of hex", storagefile.DealNonceLen)
 	}
 	return nonce, nil
 }
