@@ -9,6 +9,7 @@ import (
 	"time"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"go.uber.org/zap"
 )
 
 // A record nobody can read is not a record. The events are written to a
@@ -102,7 +103,8 @@ func (h *Handlers) AuditHandler(w http.ResponseWriter, r *http.Request) {
 		Limit:     limit,
 	})
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "the audit trail could not be read: "+err.Error())
+		h.logger.Error("the audit trail could not be read", zap.String("namespace", namespace), zap.Error(err))
+		writeError(w, http.StatusServiceUnavailable, "the audit trail could not be read right now; retry shortly")
 		return
 	}
 

@@ -34,21 +34,21 @@ func (g *Gateway) grantDB() client.DatabaseClient {
 // gateway directly. A control route that does not set Ownership — namespace
 // list, deployments, the database — used to skip the read, and the scope gate
 // then refused the owner with the data plane's permissions.
-func (g *Gateway) forwardedCallerNeedsGrant(r *http.Request, policy routepolicy.Policy) bool {
+func (g *Gateway) forwardedCallerNeedsGrant(r *http.Request, policy routepolicy.Policy) (bool, error) {
 	if policy.Domain == "" {
-		return false
+		return false, nil
 	}
 	claims, _ := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims)
 	if claims == nil || strings.TrimSpace(claims.Sub) == "" {
-		return false
+		return false, nil
 	}
 	// A key's scopes already answer a route that does not resolve a grant.
 	// An owned route still looks the grant up: the selector lives on it.
 	if auth.IsAPIKeySubject(claims.Sub) && !policy.Ownership {
-		return false
+		return false, nil
 	}
 	if !g.callerPermissions(r).PermitsDomain(auth.Domain(policy.Domain), auth.Action(policy.Action)) {
-		return true
+		return true, nil
 	}
 	// The data plane reaches the route, but a wallet narrowed to part of it
 	// reaches only that part, and only the grant says which.

@@ -53,7 +53,7 @@ func auditHandlers(t *testing.T, db *auditQueryDB) *Handlers {
 	if err != nil {
 		t.Fatalf("auth service: %v", err)
 	}
-	return &Handlers{authService: svc, netClient: &tenantNet{t: t}}
+	return &Handlers{authService: svc, netClient: &tenantNet{t: t}, logger: testLogger()}
 }
 
 type tenantNet struct {
@@ -194,6 +194,10 @@ func TestAuditHandler_saysSoWhenItCannotRead(t *testing.T) {
 		AuditHandler(rec, auditRequest("acme", ""))
 	if rec.Code == http.StatusOK {
 		t.Fatalf("an unreadable trail came back as an empty one: %s", rec.Body.String())
+	}
+	// The registry's error is the operator's, in the log; not the tenant's.
+	if strings.Contains(rec.Body.String(), "registry did not answer") {
+		t.Errorf("the refusal exposes the internal error: %s", rec.Body.String())
 	}
 }
 

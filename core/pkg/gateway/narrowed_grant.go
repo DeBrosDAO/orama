@@ -8,6 +8,8 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"go.uber.org/zap"
 )
 
 // A wallet's grant may be narrowed to a resource — `cache:key=sessions/*`,
@@ -24,10 +26,10 @@ import (
 const (
 	narrowedGrantTTL = 10 * time.Second
 
-	// narrowedGrantCacheMax bounds the cache. A full one is emptied rather
-	// than evicted from: an entry is one registry lookup to rebuild, and a
-	// cache too small to hold the callers of the moment is one that costs
-	// nothing to be wrong about.
+	// narrowedGrantCacheMax bounds the cache. A full cache drops its expired
+	// entries, then one arbitrary live one: it used to be emptied, so a caller
+	// cycling through wallets could flush every other caller's entry and send
+	// each of their requests to the registry.
 	narrowedGrantCacheMax = 4096
 )
 
@@ -56,10 +58,30 @@ func (c *grantCache) get(key string, now time.Time) (*auth.Grant, bool) {
 func (c *grantCache) put(key string, grant *auth.Grant, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.entries == nil || len(c.entries) >= narrowedGrantCacheMax {
+	if c.entries == nil {
 		c.entries = make(map[string]grantCacheEntry)
 	}
+	if _, present := c.entries[key]; !present && len(c.entries) >= narrowedGrantCacheMax {
+		c.makeRoom(now)
+	}
 	c.entries[key] = grantCacheEntry{grant: grant, expires: now.Add(narrowedGrantTTL)}
+}
+
+// makeRoom drops the expired entries, or one arbitrary entry when none has
+// expired. The caller holds mu.
+func (c *grantCache) makeRoom(now time.Time) {
+	for k, e := range c.entries {
+		if !now.Before(e.expires) {
+			delete(c.entries, k)
+		}
+	}
+	if len(c.entries) < narrowedGrantCacheMax {
+		return
+	}
+	for k := range c.entries {
+		delete(c.entries, k)
+		return
+	}
 }
 
 // grantIsNarrowable reports whether a selector on a grant can change what this
@@ -70,44 +92,60 @@ func grantIsNarrowable(policy routepolicy.Policy) bool {
 }
 
 // callerHoldsNarrowedGrant reports whether this request's wallet holds a grant
-// narrowed to a resource in the route's domain.
+// narrowed to a resource in the route's domain. An error means the grant could
+// not be read, and the request is refused rather than given the data plane.
 //
 // Only a wallet's: a key's scopes are its authority on a route that does not
 // resolve a grant, and they are read from the row on every request already.
-func (g *Gateway) callerHoldsNarrowedGrant(r *http.Request, policy routepolicy.Policy) bool {
+func (g *Gateway) callerHoldsNarrowedGrant(r *http.Request, policy routepolicy.Policy) (bool, error) {
 	if !grantIsNarrowable(policy) {
-		return false
+		return false, nil
 	}
 	claims, _ := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims)
 	if claims == nil || strings.TrimSpace(claims.Sub) == "" || auth.IsAPIKeySubject(claims.Sub) {
-		return false
+		return false, nil
 	}
-	grant := g.cachedRequestGrant(r, claims.Sub)
-	return grant != nil && strings.TrimSpace(grant.Resource) != ""
+	grant, err := g.cachedRequestGrant(r, claims.Sub)
+	if err != nil {
+		return false, err
+	}
+	return grant != nil && strings.TrimSpace(grant.Resource) != "", nil
 }
 
-// cachedRequestGrant is lookupRequestGrant through the cache.
-func (g *Gateway) cachedRequestGrant(r *http.Request, subject string) *auth.Grant {
+// cachedRequestGrant is lookupRequestGrant through the cache. Only an answer
+// is cached, "no grant" included; a failed read is not, so it cannot stand in
+// for the grant for the cache's lifetime.
+func (g *Gateway) cachedRequestGrant(r *http.Request, subject string) (*auth.Grant, error) {
 	key := g.requestNamespace(r) + "\x00" + strings.TrimSpace(subject)
 	now := time.Now()
 	if grant, ok := g.narrowedGrants.get(key, now); ok {
-		return grant
+		return grant, nil
 	}
-	grant := g.lookupRequestGrant(r)
+	grant, err := g.lookupRequestGrant(r)
+	if err != nil {
+		return nil, err
+	}
 	g.narrowedGrants.put(key, grant, now)
-	return grant
+	return grant, nil
 }
 
 // resolveRequestGrant is the grant a route that does not require ownership
 // still has to carry: the cached one where a selector may apply, the live one
 // for a control route, where a stale answer would be a stale refusal.
-func (g *Gateway) resolveRequestGrant(r *http.Request, policy routepolicy.Policy) *auth.Grant {
+func (g *Gateway) resolveRequestGrant(r *http.Request, policy routepolicy.Policy) (*auth.Grant, error) {
 	if !grantIsNarrowable(policy) {
 		return g.lookupRequestGrant(r)
 	}
 	claims, _ := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims)
 	if claims == nil {
-		return nil
+		return nil, nil
 	}
 	return g.cachedRequestGrant(r, claims.Sub)
+}
+
+// refuseUnreadableGrant answers a request whose grant could not be read: a
+// retryable 503, never the data plane a missing grant would leave.
+func (g *Gateway) refuseUnreadableGrant(w http.ResponseWriter, err error) {
+	g.logger.ComponentError(logging.ComponentGeneral, "could not read the caller's grant; refusing the request", zap.Error(err))
+	writeError(w, http.StatusServiceUnavailable, "the caller's grant could not be read right now; retry shortly")
 }

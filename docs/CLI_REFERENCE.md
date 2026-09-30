@@ -2164,7 +2164,7 @@ orama members add <wallet> [flags]
 | `--expires-in-hours` | `0` | Expire the grant after this many hours (default: never) |
 | `--name` | — | Human label for this member |
 | `--namespace` | — | Namespace name |
-| `--resource` | — | Narrow the role to a resource, e.g. storage:avatars/* — RECORDED BUT NOT ENFORCED YET, so a grant carrying one authorises nothing |
+| `--resource` | — | Narrow the role to a resource, e.g. storage:avatars/* (applied in the cache, fn, pubsub, storage domains; any other is refused) |
 | `--role` | — | Role to grant (reader, runtime, developer, admin) |
 
 ### orama members list

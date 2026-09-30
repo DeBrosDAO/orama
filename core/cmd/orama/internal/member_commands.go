@@ -54,11 +54,21 @@ func MembersList(ns string) error {
 			fmt.Printf("  expires %s", expires)
 		}
 		if resource, _ := entry["resource"].(string); resource != "" {
-			fmt.Printf("  [%s — NOT ENFORCED]", resource)
+			fmt.Printf("  [%s]", describeSelector(resource, entry["enforced"]))
 		}
 		fmt.Println()
 	}
 	return nil
+}
+
+// describeSelector is how a narrowed grant reads in the list: the selector, and
+// a warning when the gateway reports it is not applied (a domain whose data
+// path does not narrow, where the grant authorises nothing).
+func describeSelector(resource string, enforced any) string {
+	if applied, _ := enforced.(bool); applied {
+		return resource
+	}
+	return resource + " — NOT ENFORCED"
 }
 
 // MembersAdd gives a wallet a role in a namespace.

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,12 +20,17 @@ const hopNamespace = "anchat"
 type countingGrantRegistry struct {
 	*grantRegistry
 	queries int
+	// failGrants makes the grant read fail, as an unreachable registry does.
+	failGrants bool
 }
 
 func (c *countingGrantRegistry) Database() client.DatabaseClient { return c }
 
 func (c *countingGrantRegistry) Query(ctx context.Context, query string, args ...interface{}) (*client.QueryResult, error) {
 	c.queries++
+	if c.failGrants && strings.Contains(query, "SELECT g.role") {
+		return nil, errors.New("registry unreachable")
+	}
 	return c.grantRegistry.Query(ctx, query, args...)
 }
 

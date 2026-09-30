@@ -3,6 +3,7 @@ package gateway
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -123,9 +124,10 @@ func TestForwardedDataPlane_anAPIKeyIsNotLookedUp(t *testing.T) {
 	g, registry := namespaceGatewayForHops(t, "runtime")
 	registry.resource = "cache:key=sessions/*"
 
-	if g.callerHoldsNarrowedGrant(hop(t, g, http.MethodPost, "/v1/cache/put", hopNamespace, "ak_exchanged_key"),
-		g.policyFor(hop(t, g, http.MethodPost, "/v1/cache/put", hopNamespace, "ak_exchanged_key"))) {
-		t.Error("a key was treated as holding a wallet's narrowed grant")
+	narrowed, err := g.callerHoldsNarrowedGrant(hop(t, g, http.MethodPost, "/v1/cache/put", hopNamespace, "ak_exchanged_key"),
+		g.policyFor(hop(t, g, http.MethodPost, "/v1/cache/put", hopNamespace, "ak_exchanged_key")))
+	if err != nil || narrowed {
+		t.Errorf("a key was treated as holding a wallet's narrowed grant (%v, %v)", narrowed, err)
 	}
 	if registry.queries != 0 {
 		t.Errorf("a key made %d registry queries", registry.queries)
@@ -158,5 +160,52 @@ func TestGrantCache_entriesExpireAndAreBounded(t *testing.T) {
 	}
 	if len(c.entries) > narrowedGrantCacheMax {
 		t.Errorf("the cache holds %d entries, bound is %d", len(c.entries), narrowedGrantCacheMax)
+	}
+}
+
+// A failed grant read was cached as "no grant" for the cache's lifetime, and
+// no grant is the whole data plane: a wallet narrowed to sessions/* reached
+// every key while the registry was unreachable and for 10s after (review,
+// 2026-09-30). It is refused instead, and nothing is cached.
+func TestForwardedDataPlane_unreadableGrantIsRefusedNotWidened(t *testing.T) {
+	g, registry := namespaceGatewayForHops(t, "runtime")
+	registry.resource = "cache:key=sessions/*"
+	registry.failGrants = true
+
+	put := func(key string) (int, bool) {
+		r := hop(t, g, http.MethodPost, "/v1/cache/put", hopNamespace, hopWallet)
+		return serveHopAuthorizing(g, r, auth.Resource{Domain: auth.DomainCache, Action: auth.ActionWrite, Name: key})
+	}
+	if status, reached := put("tokens/x"); reached || status != http.StatusServiceUnavailable {
+		t.Fatalf("with the registry down: reached %v, status %d; want 503 before the handler", reached, status)
+	}
+
+	registry.failGrants = false
+	if status, reached := put("tokens/x"); !reached || status != http.StatusForbidden {
+		t.Fatalf("after the registry recovered: reached %v, status %d; want the selector to refuse (403), not a cached widening", reached, status)
+	}
+}
+
+// A full cache no longer empties itself: one caller cycling through wallets
+// could flush every other caller's entry (security review, 2026-09-30).
+func TestGrantCache_fullCacheKeepsLiveEntries(t *testing.T) {
+	var c grantCache
+	now := time.Now()
+	keep := &auth.Grant{Role: auth.RoleRuntime}
+	for i := 0; i < narrowedGrantCacheMax*2; i++ {
+		c.put("cycle-"+strconv.Itoa(i), nil, now)
+	}
+	if len(c.entries) > narrowedGrantCacheMax {
+		t.Fatalf("cache holds %d entries, over the bound %d", len(c.entries), narrowedGrantCacheMax)
+	}
+	// Once every entry has expired, making room drops all of them rather
+	// than a live one.
+	later := now.Add(narrowedGrantTTL + time.Second)
+	c.put("after-expiry", keep, later)
+	if len(c.entries) != 1 {
+		t.Fatalf("expired entries were not dropped first: %d entries remain", len(c.entries))
+	}
+	if g, ok := c.get("after-expiry", later); !ok || g != keep {
+		t.Fatal("the new entry is not served")
 	}
 }

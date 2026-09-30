@@ -572,7 +572,7 @@ every request that run makes.
 |--------|----------------------|
 | Revoking a key | at once, everywhere — the revocation list is replicated and consulted before any cache |
 | Revoking a token | at once, by its `jti` |
-| Narrowing a **wallet's** grant | on the next request; the grant is resolved per request |
+| Narrowing a **wallet's** grant | on the next request on routes that resolve the grant; within 10 seconds on storage and cache, where it is read through a short cache |
 | Narrowing a **key** — editing its scopes, or revoking a grant it holds | within one minute, on every gateway that had seen it |
 | Revoking the token an open WebSocket was opened with | the socket is closed within 10 seconds (`4403`) |
 | Ending a session (`DELETE /v1/auth/sessions/{id}`) | its access tokens are refused, and its sockets closed, within 10 seconds |

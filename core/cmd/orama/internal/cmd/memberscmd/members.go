@@ -83,8 +83,8 @@ func init() {
 	addCmd.Flags().String("role", "",
 		"Role to grant ("+strings.Join(grantableRoles(), ", ")+")")
 	addCmd.Flags().String("resource", "",
-		"Narrow the role to a resource, e.g. storage:avatars/* — RECORDED BUT NOT ENFORCED YET, "+
-			"so a grant carrying one authorises nothing")
+		"Narrow the role to a resource, e.g. storage:avatars/* (applied in the "+
+			strings.Join(auth.EnforcedSelectorDomains(), ", ")+" domains; any other is refused)")
 	addCmd.Flags().String("name", "", "Human label for this member")
 	addCmd.Flags().Int("expires-in-hours", 0, "Expire the grant after this many hours (default: never)")
 

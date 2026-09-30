@@ -47,3 +47,16 @@ func TestOffersSavedCredentials(t *testing.T) {
 		}
 	}
 }
+
+// Every narrowed grant was listed "NOT ENFORCED" after selectors became
+// enforced in four domains; the list follows what the gateway reports.
+func TestDescribeSelector(t *testing.T) {
+	if got := describeSelector("storage:avatars/*", true); got != "storage:avatars/*" {
+		t.Errorf("an enforced selector reads %q", got)
+	}
+	for _, v := range []any{false, nil, "true"} {
+		if got := describeSelector("db:table=x", v); got != "db:table=x — NOT ENFORCED" {
+			t.Errorf("enforced=%v reads %q", v, got)
+		}
+	}
+}

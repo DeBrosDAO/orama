@@ -950,7 +950,12 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// The header is here only because internalAuthMiddleware verified its
 		// MAC. It used to be believed on the strength of the source IP, which
 		// made this the shortest unauthenticated path to any namespace's data.
-		if r.Header.Get(HeaderInternalAuthValidated) == "true" && !g.forwardedCallerNeedsGrant(r, policy) {
+		needsGrant, grantErr := g.forwardedCallerNeedsGrant(r, policy)
+		if grantErr != nil {
+			g.refuseUnreadableGrant(w, grantErr)
+			return
+		}
+		if r.Header.Get(HeaderInternalAuthValidated) == "true" && !needsGrant {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -990,8 +995,13 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// deployments and the database answer 403. Without the second, a grant
 		// narrowed to sessions/* is the whole cache.
 		if !policy.Ownership {
-			if g.forwardedCallerNeedsGrant(r, policy) {
-				if grant := g.resolveRequestGrant(r, policy); grant != nil {
+			if needsGrant {
+				grant, err := g.resolveRequestGrant(r, policy)
+				if err != nil {
+					g.refuseUnreadableGrant(w, err)
+					return
+				}
+				if grant != nil {
 					r = markGrant(r, grant)
 				}
 			}
@@ -1139,33 +1149,24 @@ func (g *Gateway) requestNamespace(r *http.Request) string {
 }
 
 // lookupRequestGrant is the live grant the caller holds in the namespace the
-// credential names, or nil when there is none or it cannot be read. It does
-// not write a response: the ownership gate is what turns "none" into a 403.
-func (g *Gateway) lookupRequestGrant(r *http.Request) *auth.Grant {
+// credential names, or nil when there is none. It does not write a response:
+// the ownership gate is what turns "none" into a 403.
+//
+// A registry that cannot be read is an error, never "none": "none" leaves a
+// wallet the whole data plane, so reading a failure as it would widen a
+// narrowed grant for as long as the registry is unreachable.
+func (g *Gateway) lookupRequestGrant(r *http.Request) (*auth.Grant, error) {
 	if g.authService == nil {
-		return nil
+		return nil, nil
 	}
 	ctx := r.Context()
 	ns := g.requestNamespace(r)
 	if ns == "" {
-		return nil
+		return nil, nil
 	}
-
-	ownerType, ownerID := "", ""
-	if v := ctx.Value(ctxKeyJWT); v != nil {
-		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
-			subj := strings.TrimSpace(claims.Sub)
-			if subj != "" {
-				if auth.IsAPIKeySubject(subj) {
-					ownerType, ownerID = "api_key", subj
-				} else {
-					ownerType, ownerID = "wallet", subj
-				}
-			}
-		}
-	}
-	if ownerType == "" || ownerID == "" {
-		return nil
+	ownerType, ownerID := requestPrincipal(ctx)
+	if ownerType == "" {
+		return nil, nil
 	}
 
 	db := g.grantDB()
@@ -1173,8 +1174,11 @@ func (g *Gateway) lookupRequestGrant(r *http.Request) *auth.Grant {
 	// Read only. The ownership gate is what creates a missing namespace row;
 	// a list or a deploy must not insert one as a side effect of the check.
 	nres, err := db.Query(internalCtx, "SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns)
-	if err != nil || nres == nil || nres.Count == 0 || len(nres.Rows) == 0 || len(nres.Rows[0]) == 0 {
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("read namespace %q to resolve the caller's grant: %w", ns, err)
+	}
+	if nres == nil || nres.Count == 0 || len(nres.Rows) == 0 || len(nres.Rows[0]) == 0 {
+		return nil, nil
 	}
 	nsID := nres.Rows[0][0]
 
@@ -1186,11 +1190,32 @@ func (g *Gateway) lookupRequestGrant(r *http.Request) *auth.Grant {
 	}
 	for _, c := range principalIdentifierCandidates(ownerType, ownerID, hashed) {
 		grant, gerr := g.authService.GrantIn(internalCtx, db, nsID, ptype, c)
-		if gerr == nil {
-			return grant
+		switch {
+		case gerr == nil:
+			return grant, nil
+		case !errors.Is(gerr, auth.ErrNotAMember):
+			return nil, fmt.Errorf("read the caller's grant in %q: %w", ns, gerr)
 		}
 	}
-	return nil
+	return nil, nil
+}
+
+// requestPrincipal is the kind ("wallet" or "api_key") and identifier of the
+// JWT's subject, or empty when the request carries none.
+func requestPrincipal(ctx context.Context) (string, string) {
+	claims, _ := ctx.Value(ctxKeyJWT).(*auth.JWTClaims)
+	if claims == nil {
+		return "", ""
+	}
+	subj := strings.TrimSpace(claims.Sub)
+	switch {
+	case subj == "":
+		return "", ""
+	case auth.IsAPIKeySubject(subj):
+		return "api_key", subj
+	default:
+		return "wallet", subj
+	}
 }
 
 // loggableOwnerID is how an owner appears in a log line. For an API key the
