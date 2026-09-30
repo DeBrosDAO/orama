@@ -3781,6 +3781,10 @@ orama ssh <ip-or-hostname> [-- command] [flags]
 SSH into a node by IP address or hostname.
 Resolves the SSH key from rootwallet automatically.
 
+The node's host key must already be pinned in ~/.orama/known_hosts, where
+'orama node setup' writes it. A host with no pinned key is refused, never
+trusted on first use, and a key that differs from the pinned one is refused.
+
 Pass a command after the IP to run it non-interactively:
   orama ssh 1.2.3.4 'sudo systemctl status orama-node'
 
