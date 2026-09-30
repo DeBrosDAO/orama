@@ -229,6 +229,67 @@ func Check(query string) error {
 	return nil
 }
 
+// tenantRefusedPragmas are the pragmas that reach beyond the tenant's own
+// data: where SQLite writes files, or the schema's integrity itself. Matched
+// as a word anywhere in a PRAGMA statement, so `PRAGMA main.<name>` is covered.
+var tenantRefusedPragmas = map[string]string{
+	"temp_store_directory": "it chooses the directory SQLite writes temporary files to",
+	"data_store_directory": "it chooses the directory SQLite resolves database files in",
+	"writable_schema":      "it lets SQL rewrite sqlite_schema and corrupt the database",
+}
+
+func refuseTenantPragma(name string) error {
+	if why, refused := tenantRefusedPragmas[name]; refused {
+		return &ErrNotAllowed{Reason: fmt.Sprintf("PRAGMA %s is not available to tenant SQL: %s", name, why)}
+	}
+	return nil
+}
+
+// CheckTenantSQLite refuses what a tenant may not run against its own SQLite
+// file (/v1/db/sqlite/query). That file holds only the tenant's data, so the
+// platform-table names Check reserves are not reserved here; what must be
+// refused is every way a statement reaches outside the file: more than one
+// statement, ATTACH and DETACH, VACUUM INTO, which writes a copy of the
+// database to a path of the caller's choosing, and the pragmas in
+// tenantRefusedPragmas. It works on tokens, so a
+// keyword inside a string literal, a comment or a quoted identifier is data.
+func CheckTenantSQLite(query string) error {
+	tokens := tokenizeSQL(query)
+	var first string
+	vacuum := false
+	for i, tok := range tokens {
+		switch tok.kind {
+		case tokenSemicolon:
+			if hasMoreContent(tokens[i+1:]) {
+				return &ErrNotAllowed{Reason: "one call runs one statement; send them one at a time"}
+			}
+		case tokenWord:
+			word := strings.ToLower(tok.text)
+			if first == "" {
+				first = word
+				if first == "attach" || first == "detach" {
+					return &ErrNotAllowed{Reason: fmt.Sprintf("%s is not available to tenant SQL: it reaches another database file", strings.ToUpper(tok.text))}
+				}
+				vacuum = first == "vacuum"
+			} else if vacuum && word == "into" {
+				return &ErrNotAllowed{Reason: "VACUUM INTO is not available to tenant SQL: it writes a file to a path of the caller's choosing"}
+			} else if first == "pragma" {
+				if err := refuseTenantPragma(word); err != nil {
+					return err
+				}
+			}
+		case tokenQuotedIdent, tokenString:
+			// SQLite takes a quoted name, or a string, as a pragma's name.
+			if first == "pragma" {
+				if err := refuseTenantPragma(normalizeName(tok.text)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // refuseProtected refuses an identifier that is a platform table's name, in
 // any role — table, column, alias or named parameter. A role is not tracked:
 // the name is reserved.

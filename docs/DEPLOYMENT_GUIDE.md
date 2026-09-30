@@ -533,7 +533,7 @@ orama db create my-database
 # Created:   2024-01-22T10:30:00Z
 ```
 
-The database file is stored on the home node at `/opt/orama/.orama/data/sqlite/{your-namespace}/my-database.db`. A query, delete, or backup that arrives on another node is forwarded to that home node over the WireGuard overlay; the caller does not choose the node.
+The database file is stored on the home node at `/opt/orama/.orama/data/sqlite/{your-namespace}/my-database.db`. A query, delete, or backup that arrives on another node is forwarded to that home node over the WireGuard overlay (to your namespace's gateway port on that node); the caller does not choose the node.
 
 ### Executing Queries
 
@@ -609,7 +609,7 @@ them. Back up first with `orama db backup` if you may want the data again.
 ### Database Features
 
 - ✅ **WAL Mode**: Write-Ahead Logging for better concurrency
-- ✅ **Namespace Isolation**: Complete separation between namespaces. Tenant SQL cannot `ATTACH`/`DETACH` another database file, and extra statements in one query are rejected.
+- ✅ **Namespace Isolation**: Complete separation between namespaces. Tenant SQL cannot `ATTACH`/`DETACH` another database file or `VACUUM INTO` a path, cannot set the pragmas that choose where SQLite writes files (`temp_store_directory`, `data_store_directory`) or unlock the schema (`writable_schema`), and extra statements in one query are rejected.
 - ✅ **On-Demand Backups**: Back up to IPFS anytime with `orama db backup`
 - ✅ **ACID Transactions**: Full SQLite transactional support
 - ✅ **Concurrent Reads**: Multiple readers can query simultaneously

@@ -821,6 +821,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			sqliteBase,
 			cfg.NodePeerID,
 		)
+		gw.sqliteHandler.UseClusterRegistry(deps.GlobalORMClient, isNamespaceGateway(cfg))
 
 		gw.sqliteBackupHandler = sqlitehandlers.NewBackupHandler(
 			gw.sqliteHandler,

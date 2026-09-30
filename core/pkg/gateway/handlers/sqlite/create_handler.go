@@ -28,6 +28,20 @@ type SQLiteHandler struct {
 	logger          *zap.Logger
 	basePath        string
 	currentNodeID   string // The node's peer ID for affinity checks
+
+	// registry is the main cluster's rqlite, where dns_nodes and the namespace
+	// port allocations live. It is db on the index gateway; a namespace
+	// gateway's db is the namespace's own rqlite, which holds neither.
+	registry         rqlite.Client
+	namespaceGateway bool
+}
+
+// UseClusterRegistry points the cross-node forward at the main cluster's
+// rqlite. namespaceGateway is true on a namespace gateway, which forwards to
+// the namespace's gateway port on the home node instead of the index port.
+func (h *SQLiteHandler) UseClusterRegistry(registry rqlite.Client, namespaceGateway bool) {
+	h.registry = registry
+	h.namespaceGateway = namespaceGateway
 }
 
 // NewSQLiteHandler creates a new SQLite handler
@@ -53,6 +67,7 @@ func NewSQLiteHandler(db rqlite.Client, homeNodeManager *deployments.HomeNodeMan
 		logger:          logger,
 		basePath:        basePath,
 		currentNodeID:   nodeID,
+		registry:        db,
 	}
 }
 

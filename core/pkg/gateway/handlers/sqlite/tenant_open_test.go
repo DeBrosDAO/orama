@@ -12,6 +12,10 @@ func TestRejectCrossDBSQL(t *testing.T) {
 		"DETACH other",
 		"SELECT 1; SELECT 2",
 		"SELECT 1; ATTACH DATABASE 'x' AS y",
+		"/**/ATTACH/**/'x'/**/AS y",
+		"VACUUM INTO '/opt/orama/.orama/data/sqlite/other/planted.db'",
+		"vacuum main into 'x'",
+		"VACUUM/**/INTO 'x'",
 		"",
 		"   ",
 		";",
@@ -27,6 +31,12 @@ func TestRejectCrossDBSQL(t *testing.T) {
 		"UPDATE t SET a = 1 WHERE id = 2",
 		"SELECT 'attach' AS label",
 		"SELECT * FROM t;",
+		"INSERT INTO w VALUES ('please ATTACH this; now')",
+		"INSERT INTO w VALUES ('VACUUM INTO x')",
+		"SELECT 1 -- ATTACH x",
+		"SELECT \"attach\" FROM t",
+		"SELECT vacuum, into_col FROM t",
+		"VACUUM",
 	}
 	for _, q := range allowed {
 		if err := rejectCrossDBSQL(q); err != nil {

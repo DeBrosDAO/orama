@@ -581,3 +581,43 @@ func TestProtectedTables_matchTheDocumentedList(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckTenantSQLite_refusesWhatReachesOutsideTheFile(t *testing.T) {
+	for _, q := range []string{
+		"ATTACH DATABASE '/x.db' AS x", "  attach '/x.db' as x", "/**/ATTACH/**/'/x.db'/**/AS x",
+		"DETACH DATABASE main", "SELECT 1; SELECT 2", "SELECT 1; ATTACH '/x.db' AS x",
+		"VACUUM INTO '/x.db'", "vacuum main into '/x.db'", "VACUUM/**/INTO '/x.db'",
+		"PRAGMA temp_store_directory = '/tmp/x'", "pragma main.data_store_directory='/x'",
+		"PRAGMA writable_schema = ON", `PRAGMA "writable_schema" = 1`, "PRAGMA 'temp_store_directory' = '/x'",
+		"PRAGMA [data_store_directory]", "PRAGMA WRITABLE_SCHEMA",
+	} {
+		var na *ErrNotAllowed
+		if err := CheckTenantSQLite(q); !errors.As(err, &na) {
+			t.Errorf("CheckTenantSQLite(%q) = %v, want ErrNotAllowed", q, err)
+		}
+	}
+}
+
+func TestCheckTenantSQLite_keywordsAsDataAreAllowed(t *testing.T) {
+	for _, q := range []string{
+		"INSERT INTO w VALUES ('please ATTACH this; now')", "SELECT 'VACUUM INTO x'",
+		"SELECT 1 -- ATTACH x", "SELECT 1 /* DETACH */", "SELECT \"attach\", [detach] FROM t",
+		"SELECT * FROM t;", "VACUUM", "SELECT into_x, vacuum FROM t", "SELECT 1;;",
+		"SELECT * FROM functions", "",
+		"PRAGMA table_info(t)", "PRAGMA foreign_keys = ON", "SELECT 'writable_schema'",
+		"INSERT INTO t VALUES ('temp_store_directory')",
+	} {
+		if err := CheckTenantSQLite(q); err != nil {
+			t.Errorf("CheckTenantSQLite(%q) = %v, want nil", q, err)
+		}
+	}
+}
+
+func TestCheck_vacuumIntoAndAttachLiteral(t *testing.T) {
+	if err := Check("VACUUM INTO '/x.db'"); err == nil {
+		t.Error("VACUUM INTO must be refused")
+	}
+	if err := Check("INSERT INTO w VALUES ('please ATTACH this')"); err != nil {
+		t.Errorf("a literal mentioning ATTACH was refused: %v", err)
+	}
+}

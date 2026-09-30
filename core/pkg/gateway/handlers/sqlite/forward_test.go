@@ -16,6 +16,16 @@ import (
 	"go.uber.org/zap"
 )
 
+func fillIntField(dest interface{}, field string, value int) {
+	rv := reflect.ValueOf(dest).Elem()
+	elem := reflect.New(rv.Type().Elem()).Elem()
+	f := elem.FieldByName(field)
+	if f.IsValid() && f.CanSet() {
+		f.SetInt(int64(value))
+	}
+	rv.Set(reflect.Append(rv, elem))
+}
+
 func fillStringField(dest interface{}, field, value string) {
 	rv := reflect.ValueOf(dest).Elem()
 	elem := reflect.New(rv.Type().Elem()).Elem()
@@ -120,5 +130,71 @@ func TestQueryDatabase_doesNotForwardToAPublicAddress(t *testing.T) {
 	}
 	if *hits != 0 {
 		t.Fatal("a public address was used as the home node")
+	}
+}
+
+// On a namespace gateway db is the namespace's own rqlite, where dns_nodes is
+// empty; the forward must read the main cluster's registry and call the
+// namespace's gateway port, not the index port.
+func TestQueryDatabase_namespaceGatewayForwardsViaTheClusterRegistry(t *testing.T) {
+	h, home, hits := forwardFixture(t, "127.0.0.1")
+	_, port, _ := net.SplitHostPort(home.Listener.Addr().String())
+	nsPort, _ := strconv.Atoi(port)
+	sqliteGatewayPort = 1 // the index port must not be used
+
+	var registryQueries []string
+	h.UseClusterRegistry(&mockRQLiteClient{
+		QueryFunc: func(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+			registryQueries = append(registryQueries, query)
+			if len(args) != 2 || args[0] != "stagenetproof" || args[1] != "home-peer" {
+				t.Errorf("registry asked with %v", args)
+			}
+			rv := reflect.ValueOf(dest).Elem()
+			elem := reflect.New(rv.Type().Elem()).Elem()
+			elem.FieldByName("IP").SetString("127.0.0.1")
+			elem.FieldByName("Port").SetInt(int64(nsPort))
+			rv.Set(reflect.Append(rv, elem))
+			return nil
+		},
+	}, true)
+	h.db = &mockRQLiteClient{QueryFunc: func(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+		if strings.Contains(query, "namespace_sqlite_databases") {
+			fillStringField(dest, "HomeNodeID", "home-peer")
+		}
+		return nil
+	}}
+
+	rr := httptest.NewRecorder()
+	h.QueryDatabase(rr, queryRequest(`{"database_name":"proofdb","query":"SELECT 1"}`, false))
+	if rr.Code != http.StatusOK || *hits != 1 {
+		t.Fatalf("status %d hits %d body %s", rr.Code, *hits, rr.Body.String())
+	}
+	if len(registryQueries) != 1 || !strings.Contains(registryQueries[0], "namespace_port_allocations") {
+		t.Fatalf("registry queries = %v", registryQueries)
+	}
+}
+
+func TestQueryDatabase_namespaceGatewayWithNoRegistryRowIsMisdirected(t *testing.T) {
+	h, _, hits := forwardFixture(t, "127.0.0.1")
+	h.UseClusterRegistry(&mockRQLiteClient{}, true)
+	rr := httptest.NewRecorder()
+	h.QueryDatabase(rr, queryRequest(`{"database_name":"proofdb","query":"SELECT 1"}`, false))
+	if rr.Code != http.StatusMisdirectedRequest || *hits != 0 {
+		t.Fatalf("status %d hits %d", rr.Code, *hits)
+	}
+}
+
+func TestQueryDatabase_namespaceGatewayWithoutAPortIsMisdirected(t *testing.T) {
+	h, _, hits := forwardFixture(t, "127.0.0.1")
+	h.UseClusterRegistry(&mockRQLiteClient{
+		QueryFunc: func(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+			fillStringField(dest, "IP", "127.0.0.1")
+			return nil
+		},
+	}, true)
+	rr := httptest.NewRecorder()
+	h.QueryDatabase(rr, queryRequest(`{"database_name":"proofdb","query":"SELECT 1"}`, false))
+	if rr.Code != http.StatusMisdirectedRequest || *hits != 0 {
+		t.Fatalf("status %d hits %d", rr.Code, *hits)
 	}
 }

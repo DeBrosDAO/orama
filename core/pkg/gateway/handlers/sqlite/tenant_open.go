@@ -3,19 +3,16 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 
+	"github.com/DeBrosOfficial/network/pkg/sqlguard"
 	"github.com/mattn/go-sqlite3"
 )
 
 const tenantDriver = "sqlite3_tenant_noattach"
 
 var tenantDriverOnce sync.Once
-
-var attachWord = regexp.MustCompile(`(?i)\b(ATTACH|DETACH)\b`)
-var sqlStringLit = regexp.MustCompile(`'([^']|'')*'|"([^"]|"")*"`)
 
 func registerTenantDriver() {
 	tenantDriverOnce.Do(func() {
@@ -33,22 +30,12 @@ func openTenantDB(path string) (*sql.DB, error) {
 	return sql.Open(tenantDriver, path)
 }
 
-// rejectCrossDBSQL blocks ATTACH/DETACH and extra statements. Tenant SQL is
-// allowed against one file; multi-statement + ATTACH is the cross-namespace
-// escape (bugboard #252).
+// rejectCrossDBSQL blocks statements that reach outside the tenant's own file:
+// ATTACH/DETACH, VACUUM INTO and extra statements (bugboard #252). The check is
+// over SQL tokens (sqlguard.CheckTenantSQLite), not the query text.
 func rejectCrossDBSQL(query string) error {
-	trimmed := strings.TrimSpace(query)
-	for strings.HasSuffix(trimmed, ";") {
-		trimmed = strings.TrimSpace(trimmed[:len(trimmed)-1])
-	}
-	if trimmed == "" {
+	if strings.Trim(query, " \t\r\n\f\v;") == "" {
 		return fmt.Errorf("empty query")
 	}
-	if strings.Contains(trimmed, ";") {
-		return fmt.Errorf("multiple SQL statements are not allowed")
-	}
-	if attachWord.MatchString(sqlStringLit.ReplaceAllString(trimmed, " ")) {
-		return fmt.Errorf("ATTACH/DETACH is not allowed")
-	}
-	return nil
+	return sqlguard.CheckTenantSQLite(query)
 }
