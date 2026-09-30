@@ -435,8 +435,12 @@ role, and a role is a set of permissions.
 | `runtime` | the data plane: storage, pubsub, cache, push, webrtc, proxy, and invoking functions |
 | `reader` | nothing beyond the routes that ask for no permission |
 
-A `reader` signing in gets a session and no API key: there is no grant to put
-in one. Asking for a key outright answers 403 `ROLE_HAS_NO_KEY`.
+A `reader` or a `developer` signing in gets a session and no API key. A key
+stores legacy scope words, and neither role can be written in them: a reader
+holds nothing, and a developer's `db`, `deploy`, `secrets` and `fn:manage` have
+no word short of `admin`. The session carries the role itself, so a developer
+signed in reaches everything the table above says. Asking for a key outright
+answers 403 `ROLE_HAS_NO_KEY`.
 
 `developer` is new, and it could not exist before: every control-plane route
 required the single `admin` word, so the role would have resolved to exactly the
@@ -733,7 +737,7 @@ the wrong message" are different problems:
 | `NAMESPACE_NOT_OWNED` | the namespace belongs to another wallet |
 | `NAMESPACE_UNOWNED` | the namespace has no owner, so nobody may sign in to it |
 | `NAMESPACE_HAS_NO_KEYS` | the lobby namespace has no keys; create a namespace first |
-| `ROLE_HAS_NO_KEY` | a key was asked for (`POST /v1/auth/api-key`) by a member whose role holds no grant (`reader`) (403) |
+| `ROLE_HAS_NO_KEY` | a key was asked for (`POST /v1/auth/api-key`) by a member whose role a key cannot carry (`reader`, `developer`) (403) |
 | `TOO_MANY_CHALLENGES` | too many challenges asked for; slow down |
 
 A device-bound session has its own, because the next move differs — sign a
