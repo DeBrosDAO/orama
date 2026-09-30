@@ -631,8 +631,10 @@ cmd_invariants() {
 		local alias name; alias="$(field "$n" 2)"; name="$(field "$n" 1)"
 		for m in "${INVARIANT_MODULES[@]}"; do
 			local out
-			# stdout only: a warning on stderr must not be parsed as the answer.
-			if ! out="$(remote_run "$alias" sudo -u "$SVC_USER" "$BIN_DIR/oramad" --home "$HOME_DIR" query "$m" invariants --node "$RPC_ADDR" --output json)"; then
+			# stdout only: a warning on stderr must not be parsed as the answer. The query runs as the ssh
+			# login user, an allowed chain client: the co-located host rules drop the chain's own account
+			# (RUN_A_GLOBAL_NODE.md), and a query needs nothing from the chain's home.
+			if ! out="$(remote_run "$alias" "$BIN_DIR/oramad" query "$m" invariants --node "$RPC_ADDR" --output json)"; then
 				printf '%-9s %-9s query failed: %s\n' "$name" "$m" "$out"
 				failed=1
 				continue
