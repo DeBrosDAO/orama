@@ -871,9 +871,25 @@ second node reaching it a minute after the first revoked every token issued in
 between — a silent fleet-wide logout.
 
 The lock is TTL-bounded (10 minutes), so a node that dies mid-apply does not
-block the fleet. That also means **every migration's DML must be re-runnable**:
-an apply that dies before recording its version re-runs the whole file next
-start. `migrations/idempotence_test.go` applies every migration, snapshots the
+block the fleet.
+
+**A migration is one transaction.** Its statements and its tracker row
+(`schema_migrations`, or `orama_schema_migrations` in a namespace RQLite) go to
+rqlite as a single `/db/execute?transaction` request, so a migration is either
+applied and recorded or not applied at all; a lost leader (`503 leader not
+found`) between two statements can no longer leave it half-applied or applied
+but unrecorded. Earlier engines sent each statement and the record as separate
+requests, and the retry re-ran a migration against a schema its own earlier
+attempt, or a later migration, had already changed (`no such table`). The
+tracker tables are unchanged, so old and new engines can apply against the same
+RQLite during a rolling upgrade. The "already exists" / "duplicate column name"
+tolerance is kept for databases an older engine left half-migrated: the
+transaction aborts on such a statement, so the engine drops that one statement
+and sends the transaction again.
+
+Because the record is committed with the migration, a re-run only happens
+after a crash of the old engine, but **every migration's DML should still be
+re-runnable**. `migrations/idempotence_test.go` applies every migration, snapshots the
 database, applies them all again and asserts nothing moved — a new migration
 whose DML is not guarded fails at `go test`, not in production.
 

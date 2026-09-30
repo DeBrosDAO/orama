@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rqlite/gorqlite"
 	"go.uber.org/zap"
 )
 
@@ -83,7 +84,6 @@ func ApplyEmbeddedMigrationsNamespace(ctx context.Context, db *sql.DB, fsys fs.F
 		return fmt.Errorf("load applied versions: %w", err)
 	}
 
-	insert := fmt.Sprintf(`INSERT OR IGNORE INTO %s(version) VALUES (?)`, namespaceMigrationsTracker)
 	for _, mf := range files {
 		if applied[mf.Version] {
 			continue
@@ -93,11 +93,9 @@ func ApplyEmbeddedMigrationsNamespace(ctx context.Context, db *sql.DB, fsys fs.F
 			return fmt.Errorf("read embedded migration %s: %w", mf.Path, err)
 		}
 		logger.Info("Applying namespace migration", zap.Int("version", mf.Version), zap.String("name", mf.Name))
-		if err := applySQLNamespace(ctx, db, string(sqlBytes)); err != nil {
+		record := recordMigrationStmt(namespaceMigrationsTracker, mf.Version)
+		if err := applySQLNamespace(ctx, db, string(sqlBytes), &record); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", mf.Version, mf.Name, err)
-		}
-		if _, err := SafeExecContext(db, ctx, insert, mf.Version); err != nil {
-			return fmt.Errorf("record migration %d: %w", mf.Version, err)
 		}
 	}
 
@@ -218,28 +216,18 @@ func stmtTargetsStrippedTable(stmt string) bool {
 // applySQLNamespace is applySQL for the namespace path: it drops any statement
 // that targets a namespace-stripped table (schema_migrations / subscriptions)
 // before executing, so core's embedded self-recording and dead-table DDL never
-// run against a tenant's database. Same "already applied" tolerance as applySQL.
-func applySQLNamespace(ctx context.Context, db *sql.DB, script string) error {
-	s := strings.TrimSpace(script)
-	if s == "" {
-		return nil
-	}
-	stmts := filterOutTxnControls(splitSQLStatements(s))
-	for _, stmt := range stmts {
-		if strings.TrimSpace(stmt) == "" {
-			continue
-		}
+// run against a tenant's database. Same atomicity and "already applied"
+// tolerance as applySQL.
+func applySQLNamespace(ctx context.Context, db *sql.DB, script string, record *gorqlite.ParameterizedStatement) error {
+	stmts := filterOutTxnControls(splitSQLStatements(strings.TrimSpace(script)))
+	kept := make([]string, 0, len(stmts))
+	for _, stmt := range nonEmptyStatements(stmts) {
 		if stmtTargetsStrippedTable(stmt) {
 			continue // core self-recording or dead-table DDL — never in a namespace DB
 		}
-		if _, err := SafeExecContext(db, ctx, stmt); err != nil {
-			if isAlreadyAppliedError(err) {
-				continue
-			}
-			return fmt.Errorf("exec stmt failed: %w (stmt: %s)", err, snippet(stmt))
-		}
+		kept = append(kept, stmt)
 	}
-	return nil
+	return applyStatementsAtomically(ctx, db, kept, record)
 }
 
 // isolateNamespaceSchema removes core-owned tables from a namespace RQLite whose

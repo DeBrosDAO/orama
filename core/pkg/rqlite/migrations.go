@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/rqlite/gorqlite"
 	_ "github.com/rqlite/gorqlite/stdlib"
 	"go.uber.org/zap"
 )
@@ -66,12 +67,9 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, dir string, logger *zap.Lo
 		}
 
 		logger.Info("Applying migration", zap.Int("version", mf.Version), zap.String("name", mf.Name))
-		if err := applySQL(ctx, db, string(sqlBytes)); err != nil {
+		record := recordMigrationStmt(migrationsTracker, mf.Version)
+		if err := applySQL(ctx, db, string(sqlBytes), &record); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", mf.Version, mf.Name, err)
-		}
-
-		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)`, mf.Version); err != nil {
-			return fmt.Errorf("record migration %d: %w", mf.Version, err)
 		}
 		logger.Info("Migration applied", zap.Int("version", mf.Version), zap.String("name", mf.Name))
 	}
@@ -129,12 +127,9 @@ func ApplyMigrationsDirs(ctx context.Context, db *sql.DB, dirs []string, logger 
 		}
 
 		logger.Info("Applying migration", zap.Int("version", mf.Version), zap.String("name", mf.Name), zap.String("path", mf.Path))
-		if err := applySQL(ctx, db, string(sqlBytes)); err != nil {
+		record := recordMigrationStmt(migrationsTracker, mf.Version)
+		if err := applySQL(ctx, db, string(sqlBytes), &record); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", mf.Version, mf.Name, err)
-		}
-
-		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)`, mf.Version); err != nil {
-			return fmt.Errorf("record migration %d: %w", mf.Version, err)
 		}
 		logger.Info("Migration applied", zap.Int("version", mf.Version), zap.String("name", mf.Name))
 	}
@@ -295,43 +290,29 @@ func isNoSuchTable(err error) bool {
 }
 
 // applySQL splits the script into individual statements, strips explicit
-// transaction control (BEGIN/COMMIT/ROLLBACK/END), and executes statements
-// sequentially to avoid nested transaction issues with rqlite.
+// transaction control (BEGIN/COMMIT/ROLLBACK/END) and applies the rest, plus
+// the optional tracker record, as one transaction (applyStatementsAtomically).
 //
 // Idempotency: certain SQLite errors are treated as "already applied" so that
-// a partially-applied migration can be safely re-run. Specifically:
+// a migration a pre-atomic engine left half-applied can be safely re-run:
 //   - "duplicate column name" — ALTER TABLE ADD COLUMN that already happened
 //   - "table ... already exists" — CREATE TABLE that already exists (when
 //     the migration didn't use IF NOT EXISTS)
 //   - "index ... already exists" — same for indexes
-//
-// This makes ALTER TABLE ADD COLUMN safe to retry, which is the common
-// case where partial application leaves schema_migrations un-recorded
-// but some columns added.
-func applySQL(ctx context.Context, db *sql.DB, script string) error {
-	s := strings.TrimSpace(script)
-	if s == "" {
-		return nil
-	}
-	stmts := splitSQLStatements(s)
-	stmts = filterOutTxnControls(stmts)
+func applySQL(ctx context.Context, db *sql.DB, script string, record *gorqlite.ParameterizedStatement) error {
+	stmts := filterOutTxnControls(splitSQLStatements(strings.TrimSpace(script)))
+	return applyStatementsAtomically(ctx, db, nonEmptyStatements(stmts), record)
+}
 
-	for _, stmt := range stmts {
-		if strings.TrimSpace(stmt) == "" {
-			continue
-		}
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			if isAlreadyAppliedError(err) {
-				// Treat as no-op so the migration can be marked complete.
-				// We log via fmt.Sprintf into the returned error message —
-				// the caller of applySQL has the migration version + name
-				// and can decide how loud to be about it.
-				continue
-			}
-			return fmt.Errorf("exec stmt failed: %w (stmt: %s)", err, snippet(stmt))
+// nonEmptyStatements drops blank statements.
+func nonEmptyStatements(stmts []string) []string {
+	out := make([]string, 0, len(stmts))
+	for _, s := range stmts {
+		if strings.TrimSpace(s) != "" {
+			out = append(out, s)
 		}
 	}
-	return nil
+	return out
 }
 
 // isAlreadyAppliedError returns true when an SQL error indicates the
@@ -539,12 +520,9 @@ func ApplyEmbeddedMigrations(ctx context.Context, db *sql.DB, fsys fs.FS, logger
 		}
 
 		logger.Info("Applying migration", zap.Int("version", mf.Version), zap.String("name", mf.Name))
-		if err := applySQL(ctx, db, string(sqlBytes)); err != nil {
+		record := recordMigrationStmt(migrationsTracker, mf.Version)
+		if err := applySQL(ctx, db, string(sqlBytes), &record); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", mf.Version, mf.Name, err)
-		}
-
-		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)`, mf.Version); err != nil {
-			return fmt.Errorf("record migration %d: %w", mf.Version, err)
 		}
 		logger.Info("Migration applied", zap.Int("version", mf.Version), zap.String("name", mf.Name))
 	}

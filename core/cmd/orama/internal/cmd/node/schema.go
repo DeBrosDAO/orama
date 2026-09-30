@@ -10,8 +10,8 @@
 //
 // `orama node schema apply`  — applies any pending migrations. Idempotent
 //
-//	and safe to re-run; ALTER TABLE failures for
-//	existing columns are tolerated. Confirms
+//	and safe to re-run; each migration is one
+//	transaction with its tracker row. Confirms
 //	before running unless --yes is passed.
 //
 // These are the long-term fix for the "schema lag after gateway-only
@@ -103,10 +103,12 @@ var schemaApplyCmd = &cobra.Command{
 	Short: "Apply pending migrations to the local RQLite",
 	Long: `Apply every embedded migration not yet recorded in schema_migrations.
 
-ALTER TABLE statements that target an already-existing column are tolerated
-(the migration is marked complete). Other errors abort the run with the
-schema in a partially-applied state — re-running is safe because each
-migration is independently versioned.`,
+Each migration runs as one transaction together with its schema_migrations
+row, so it is applied and recorded, or not applied at all. A statement whose
+effect is already in place (an existing column, table or index, left by an older
+engine that applied migrations statement by statement) is skipped. Any other
+error aborts the run at that migration, which leaves no trace; re-running is
+safe because each migration is independently versioned.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, dsn, err := openSchemaDB()
 		if err != nil {
