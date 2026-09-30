@@ -29,10 +29,6 @@ const (
 	priorForwardLimit = 16
 	// chainClientsLimit bounds the recorded account list read back.
 	chainClientsLimit = 4096
-	// rulesetReadLimit bounds a ruleset read back to compare it with the one about to be written.
-	rulesetReadLimit = 1 << 20
-	// rulesetFiles is how many of writeNetns's files are nft rulesets loaded into the layout.
-	rulesetFiles = 2
 
 	// roleCluster, roleGlobal and roleBoth are the values preferences.yaml
 	// records; they are boot.Role's strings without importing the node package.
@@ -252,16 +248,7 @@ func writeNetns(h GlobalHost, plan *netnsPlan) error {
 		{n.ConfigDir + "/resolv.conf", globalnetns.RenderResolvConf()},
 		{n.SysctlFile, globalnetns.RenderSysctl()},
 	}
-	// The first rulesetFiles entries are the nft rulesets.
-	rulesChanged := false
-	for i, f := range files {
-		if i < rulesetFiles {
-			changed, err := rewritesExisting(n.Root, f.path, f.data)
-			if err != nil {
-				return err
-			}
-			rulesChanged = rulesChanged || changed
-		}
+	for _, f := range files {
 		if err := n.Root.WriteFile(f.path, []byte(f.data), netnsFileMode); err != nil {
 			return fmt.Errorf("write %s: %w", f.path, err)
 		}
@@ -270,23 +257,10 @@ func writeNetns(h GlobalHost, plan *netnsPlan) error {
 	if err := h.UnitRoot.WriteFile(path, []byte(plan.layout.RenderUnit()), globalUnitMode); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	if rulesChanged {
-		return loadRunningRules(h, plan)
-	}
-	return nil
-}
-
-// rewritesExisting reports whether path exists with content other than data. A missing file is a
-// first install, which has no running rules to update.
-func rewritesExisting(root rootfs.Root, path, data string) (bool, error) {
-	old, err := root.ReadFile(path, rulesetReadLimit)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read %s: %w", path, err)
-	}
-	return string(old) != data, nil
+	// Loaded whenever the layout is running, not only when a file changed: a load that failed after
+	// the files were rewritten would otherwise be skipped by the retry, which then reports success
+	// while the old rules keep running. Each load is an atomic, idempotent replace.
+	return loadRunningRules(h, plan)
 }
 
 // loadRunningRules applies rewritten rulesets to a running layout. The rules are loaded only by

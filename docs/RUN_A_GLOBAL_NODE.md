@@ -464,12 +464,12 @@ the install, on one node at a time.
 - The rulesets (`netns-host.nft`, `netns.nft` in `/etc/orama-global`) are loaded
   by `orama-global-netns.service`, a oneshot that stays active. Each file replaces
   its table in one `nft -f` transaction (it declares the table, deletes it and
-  defines it again), so when the re-install rewrites them and that unit is active,
-  the install loads them itself (`nft -f` on the host, `ip netns exec
-  orama-global nft -f` inside) with no moment without rules. It never restarts the
-  unit: the global units are bound to it and would stop. A failed load fails the
-  install and names the file. When the unit is not active, or the rules did not
-  change, nothing is loaded.
+  defines it again), so whenever that unit is active the install loads them itself
+  (`nft -f` on the host, `ip netns exec orama-global nft -f` inside) with no moment
+  without rules, whether or not they changed: a retry after a failed load therefore
+  loads them too. It never restarts the unit: the global units are bound to it and
+  would stop. A failed load fails the install and names the file. When the unit is
+  not active, nothing is loaded; it loads the files when it starts.
 - The public Kubo's RPC moves to `198.18.0.2:31011` (`Addresses.API`) and the
   provider and GC units are rewritten to call it there, but the install starts and
   restarts nothing. Run `sudo orama global restart` afterwards: it restarts the

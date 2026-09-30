@@ -160,7 +160,8 @@ func TestInstallGlobal_colocatedWritesTheNamespaceLayout(t *testing.T) {
 		!strings.Contains(got, "nameserver: true") {
 		t.Errorf("preferences = %q, want role both, the namespace, and the cluster's own settings kept", got)
 	}
-	wantSystemctl := []string{"daemon-reload", "enable " + constants.ChainServiceUnit, "enable " + constants.GlobalProviderUnit, "enable " + globalnetns.UnitName}
+	// is-active: a running layout is reloaded in place; this one is not running, so nothing loads.
+	wantSystemctl := []string{"is-active " + globalnetns.UnitName, "daemon-reload", "enable " + constants.ChainServiceUnit, "enable " + constants.GlobalProviderUnit, "enable " + globalnetns.UnitName}
 	if got := f.node.named("systemctl"); !slices.Equal(got, wantSystemctl) {
 		t.Errorf("systemctl calls = %v, want %v", got, wantSystemctl)
 	}
@@ -606,7 +607,9 @@ func TestInstallGlobal_colocatedIPFSSaysToRestartTheGlobalServices(t *testing.T)
 	if err := InstallGlobal(f.options(GlobalServiceChain, GlobalServiceIPFS), f.host); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, "orama global restart") && strings.Contains(l, "198.18.0.2:31011") }) {
+	if !slices.ContainsFunc(logged, func(l string) bool {
+		return strings.Contains(l, "orama global restart") && strings.Contains(l, "198.18.0.2:31011")
+	}) {
 		t.Errorf("the install did not tell the operator to run orama global restart:\n%s", strings.Join(logged, "\n"))
 	}
 
@@ -771,7 +774,9 @@ func TestInstallGlobal_reinstallLoadsChangedRulesIntoARunningLayout(t *testing.T
 	}
 }
 
-func TestInstallGlobal_reinstallWithUnchangedRulesLoadsNothing(t *testing.T) {
+// Loading does not depend on whether a file changed: a running layout is reloaded on every
+// install (the load is an atomic, idempotent replace), so a retry after a failed load still loads.
+func TestInstallGlobal_reinstallWithUnchangedRulesStillLoadsARunningLayout(t *testing.T) {
 	f := newColocatedFixture(t)
 	f.netnsState = "active"
 	opts := f.options(GlobalServiceChain)
@@ -782,14 +787,15 @@ func TestInstallGlobal_reinstallWithUnchangedRulesLoadsNothing(t *testing.T) {
 	if err := InstallGlobal(opts, f.host); err != nil {
 		t.Fatal(err)
 	}
-	if got := nftLoads(f); len(got) != 0 {
-		t.Errorf("unchanged rules were loaded: %v", got)
+	if got := nftLoads(f); len(got) != 2 {
+		t.Errorf("nft loads = %v, want both rulesets", got)
 	}
 }
 
+// A first install runs before the namespace unit has started, which loads the files itself.
 func TestInstallGlobal_firstInstallLoadsNothing(t *testing.T) {
 	f := newColocatedFixture(t)
-	f.netnsState = "active"
+	f.netnsState = "inactive"
 	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
 		t.Fatal(err)
 	}
@@ -813,13 +819,39 @@ func TestInstallGlobal_reinstallFailsWhenARunningLoadFails(t *testing.T) {
 	for _, target := range []string{globalnetns.HostRulesFile, globalnetns.NSRulesFile} {
 		f := newColocatedFixture(t)
 		f.netnsState = "active"
+		if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+			t.Fatal(err)
+		}
 		f.loadFail = target
-		err := reinstallWithIPFS(t, f)
+		err := InstallGlobal(f.options(GlobalServiceChain, GlobalServiceIPFS), f.host)
 		if err == nil {
 			t.Fatalf("a failing load of %s did not fail the install", target)
 		}
 		if !strings.Contains(err.Error(), target) || !strings.Contains(err.Error(), "Could not process rule") {
 			t.Errorf("error does not name the file and nft's output: %v", err)
 		}
+	}
+}
+
+// The files are rewritten before the load, so after a failed load they already hold the new rules.
+// The retry must still load them, not see "unchanged" and report success over stale running rules.
+func TestInstallGlobal_retryAfterAFailedLoadLoadsTheRules(t *testing.T) {
+	f := newColocatedFixture(t)
+	f.netnsState = "active"
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	opts := f.options(GlobalServiceChain, GlobalServiceIPFS)
+	f.loadFail = globalnetns.NSRulesFile
+	if err := InstallGlobal(opts, f.host); err == nil {
+		t.Fatal("the failing load did not fail the install")
+	}
+	f.loadFail = ""
+	f.node.calls = nil
+	if err := InstallGlobal(opts, f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := nftLoads(f); len(got) != 2 {
+		t.Errorf("the retry loaded %v, want both rulesets", got)
 	}
 }
