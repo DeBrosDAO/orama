@@ -128,7 +128,7 @@ const ws = new WebSocket(
   // goes in the query string — and it is a short-lived token, never a key: a
   // query string ends up in the access log, the Referer of the next request
   // the page makes, and history.
-  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&token=${encodeURIComponent(accessToken)}`
+  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?room=${roomId}&jwt=${encodeURIComponent(accessToken)}`
 );
 // `room` is optional but recommended. With it the gateway routes the upgrade
 // straight to the room's SFU; without it the gateway reads your first (join)
@@ -468,7 +468,7 @@ systemctl status orama-turn
 - **Forced relay**: `iceTransportPolicy: relay` enforced server-side. Clients cannot bypass TURN.
 - **HMAC credentials**: Per-namespace TURN shared secret. REST/host-fn credentials expire after 24h (long enough to outlast any call, since they are not refreshed mid-call); SFU-signaled credentials use the shorter per-namespace TTL and are refreshed over the signaling channel.
 - **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
-- **A logged-in user, not a key**: every WebRTC endpoint requires a wallet token (`Authorization: Bearer`). An API key alone is refused, which is what makes a runtime key extracted from an app bundle worthless here. On the signalling WebSocket the token goes in `?token=`, because a browser cannot set a header on an upgrade.
+- **A logged-in user, not a key**: every WebRTC endpoint requires a wallet token (`Authorization: Bearer`). An API key alone is refused, which is what makes a runtime key extracted from an app bundle worthless here. On the signalling WebSocket the token goes in `?jwt=`, because a browser cannot set a header on an upgrade (`?token=` is read as an API key, which these endpoints refuse).
 - **Room management**: Creating/closing rooms requires namespace ownership.
 - **SFU on WireGuard only**: SFU binds to 10.0.0.x, never 0.0.0.0. Only reachable via TURN relay.
 - **Permissions-Policy**: `camera=(self), microphone=(self)` — only same-origin can access media devices.
