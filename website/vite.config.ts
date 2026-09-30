@@ -17,7 +17,7 @@ import type { Plugin } from "vite";
  */
 function readRepoStats() {
   const git = (...args: string[]) =>
-    execFileSync("git", args, { cwd: __dirname, encoding: "utf-8" }).trim();
+    execFileSync("git", args, { cwd: import.meta.dirname, encoding: "utf-8" }).trim();
   let shallow: string, commits: number, firstCommit: string;
   try {
     shallow = git("rev-parse", "--is-shallow-repository");
@@ -58,7 +58,7 @@ function docsSearchIndexPlugin(): Plugin {
     load(id) {
       if (id !== resolvedId) return;
 
-      const docsDir = path.resolve(__dirname, "src/docs");
+      const docsDir = path.resolve(import.meta.dirname, "src/docs");
       const entries: {
         pageTitle: string;
         pageSlug: string;
@@ -125,7 +125,7 @@ export default defineConfig({
   },
   server: {
     // The whitepaper's source lives in the repo-root docs/ tree.
-    fs: { allow: [__dirname, path.resolve(__dirname, "../docs/whitepaper")] },
+    fs: { allow: [import.meta.dirname, path.resolve(import.meta.dirname, "../docs/whitepaper")] },
   },
   resolve: {
     // ...and a file out there has no node_modules of its own: resolve the

@@ -1,6 +1,6 @@
-import { ed25519 } from '@noble/curves/ed25519';
-import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex } from '@noble/hashes/utils';
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 const SEED_SIZE = 32;
 

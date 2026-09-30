@@ -389,8 +389,6 @@ export const MSG = {
 } as const;
 
 /** Every message the registry holds, by type URL. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const MESSAGE_REGISTRY: ReadonlyMap<string, MsgDef<any>> = new Map(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Object.values(MSG).map((def) => [def.typeUrl, def as MsgDef<any>]),
 );

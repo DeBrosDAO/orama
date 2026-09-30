@@ -7,7 +7,9 @@ export default defineConfig({
   // consumers are CLIs and operator tooling, not only bundled applications.
   format: ["esm", "cjs"],
 
-  dts: true,
+  // tsup 8 injects the deprecated `baseUrl` into its declaration build;
+  // TypeScript 6 rejects it unless the deprecation is acknowledged.
+  dts: { compilerOptions: { ignoreDeprecations: "6.0" } },
   sourcemap: true,
   clean: true,
   shims: true,

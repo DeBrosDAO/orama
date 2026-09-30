@@ -16,9 +16,9 @@
  * - Authentication tags are verified before decryption
  */
 
-import { gcm } from '@noble/ciphers/aes';
-import { randomBytes } from '@noble/ciphers/webcrypto';
-import { bytesToHex, hexToBytes, concatBytes } from '@noble/hashes/utils';
+import { gcm } from '@noble/ciphers/aes.js';
+import { randomBytes } from '@noble/ciphers/utils.js';
+import { bytesToHex, hexToBytes, concatBytes } from '@noble/hashes/utils.js';
 
 /**
  * Size constants
@@ -82,7 +82,7 @@ export function decrypt(encryptedData: EncryptedData, key: Uint8Array): Uint8Arr
   try {
     return cipher.decrypt(encryptedData.ciphertext);
   } catch (error) {
-    throw new Error('Decryption failed: invalid ciphertext or authentication tag');
+    throw new Error('Decryption failed: invalid ciphertext or authentication tag', { cause: error });
   }
 }
 

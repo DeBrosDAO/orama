@@ -1,6 +1,6 @@
 import { bech32 } from "@scure/base";
-import { ripemd160 } from "@noble/hashes/ripemd160";
-import { sha256 } from "@noble/hashes/sha256";
+import { ripemd160 } from "@noble/hashes/legacy.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { BECH32_PREFIX } from "./format";
 
 const PUBKEY_BYTES = 33;

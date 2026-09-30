@@ -15,7 +15,7 @@ import {
   signUtf8,
   unixSeconds,
 } from "./crypto/ownership";
-import { bytesToHex } from "@noble/hashes/utils";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { adaptiveThreshold, writeQuorum } from "./quorum";
 import type {
   VaultConfig,
