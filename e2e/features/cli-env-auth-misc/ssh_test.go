@@ -44,10 +44,22 @@ func expectHostKeyRefusal(t testing.TB, res oramacli.Result, n fleet.Node) {
 // a HOME (docs/DEVNET_INSTALL.md "~/.orama/known_hosts"; ssh's default).
 var knownHostsPaths = []string{".orama/known_hosts", ".ssh/known_hosts"}
 
-// sshHome is an isolated HOME whose known_hosts files hold lines.
-func sshHome(t testing.TB, lines []string) *oramacli.Runner {
+// signedInHome is an isolated HOME signed in as the operator: `orama ssh`
+// finds the node in the gateway's inventory (an isolated HOME has no
+// credential and no nodes.conf, so it would stop at "failed to resolve nodes"
+// before any host-key check), and the isolation keeps the known_hosts under
+// test out of the HOME every other test shares.
+func signedInHome(t testing.TB) *oramacli.Runner {
 	t.Helper()
 	cli := isolated(t)
+	cli.MustOK(t, "auth", "login")
+	return cli
+}
+
+// sshHome is a signed-in isolated HOME whose known_hosts files hold lines.
+func sshHome(t testing.TB, lines []string) *oramacli.Runner {
+	t.Helper()
+	cli := signedInHome(t)
 	for _, rel := range knownHostsPaths {
 		path := filepath.Join(cli.Home, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -114,7 +126,7 @@ func TestSSH_refusesUnpinnedHostKey(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := f.State.Nodes[0]
-	cli := isolated(t)
+	cli := signedInHome(t)
 	res := sshRun(t, cli, f.State.Env, n)
 	if res.Exit == exitOK || strings.Contains(res.Stdout, sshMarker) {
 		t.Errorf("orama ssh ran a command on %s without a pinned host key (trust on first use):\n%s", n.PublicIP, output(res))

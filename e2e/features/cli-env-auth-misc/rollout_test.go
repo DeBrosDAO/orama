@@ -9,6 +9,11 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness"
 )
 
+// dummyArchive is an archive path that names nothing: State.ArchivePath is
+// empty on a fleet the run did not build (stagenet), and these commands are
+// refused at validation or at the environment lookup, before any file is read.
+const dummyArchive = "/nonexistent/e2e-orama.tar.gz"
+
 // TestRollout_refusesBadFlagsBeforeBuilding: `orama rollout` and `orama node
 // rollout` are the same command (docs/CLI_REFERENCE.md#orama-rollout) and
 // check their flags before building or pushing anything; a flag mistake is
@@ -24,7 +29,7 @@ func TestRollout_refusesBadFlagsBeforeBuilding(t *testing.T) {
 	}{
 		{nil, "--env is required"},
 		{[]string{"--env", f.State.Env, "--no-build"}, "--no-build needs --archive"},
-		{[]string{"--env", f.State.Env, "--archive", f.State.ArchivePath}, "--archive is only for --no-build"},
+		{[]string{"--env", f.State.Env, "--archive", dummyArchive}, "--archive is only for --no-build"},
 		{[]string{"--env", f.State.Env, "--delay", "not-a-number"}, "delay"},
 	}
 	for _, cmd := range [][]string{{"rollout"}, {"node", "rollout"}} {
@@ -45,8 +50,8 @@ func TestRollout_refusesBadFlagsBeforeBuilding(t *testing.T) {
 // build runs).
 func TestRollout_unknownEnvironmentReachesNoNode(t *testing.T) {
 	t.Parallel()
-	f := harness.Fleet(t)
-	res := run(t, harness.CLI(t).NoWallet(t), "rollout", "--env", e2eEnvPrefix+"absent", "--no-build", "--archive", f.State.ArchivePath)
+	harness.Fleet(t)
+	res := run(t, harness.CLI(t).NoWallet(t), "rollout", "--env", e2eEnvPrefix+"absent", "--no-build", "--archive", dummyArchive)
 	if res.Exit == exitOK {
 		t.Fatalf("rollout to an unconfigured environment succeeded:\n%s", output(res))
 	}
