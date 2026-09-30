@@ -69,7 +69,7 @@ func TestExtractIPFromMultiaddr_Nil(t *testing.T) {
 
 // TestWireGuardIPFiltering verifies that only 10.0.0.x IPs would be selected
 // for peer discovery queries. This tests the filtering logic used in
-// DiscoverClusterPeersFromLibP2P.
+// DiscoverClusterPeers.
 func TestWireGuardIPFiltering(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -92,7 +92,7 @@ func TestWireGuardIPFiltering(t *testing.T) {
 				t.Fatalf("failed to parse multiaddr: %v", err)
 			}
 			ip := extractIPFromMultiaddr(ma)
-			// Replicate the filtering logic from DiscoverClusterPeersFromLibP2P
+			// Replicate the filtering logic from DiscoverClusterPeers
 			accepted := ip != "" && len(ip) >= 7 && ip[:7] == "10.0.0."
 			if accepted != tt.accepted {
 				t.Errorf("IP %q: accepted=%v, want %v", ip, accepted, tt.accepted)

@@ -128,10 +128,20 @@ func (n *Node) getClusterDiscovery() *database.ClusterDiscoveryService {
 
 // discoverClusterPeers rewrites service.json's peer addresses, so it takes
 // the lock the config component holds.
-func (n *Node) discoverClusterPeers(cm *ipfs.ClusterConfigManager) error {
+func (n *Node) discoverClusterPeers(ctx context.Context, cm *ipfs.ClusterConfigManager) error {
+	adapter := n.getRQLiteAdapter()
+	if adapter == nil {
+		return fmt.Errorf("cannot discover IPFS cluster peers: the node registry (RQLite) is not connected yet")
+	}
+	h := n.hostRef()
+	if h == nil {
+		return fmt.Errorf("cannot discover IPFS cluster peers: the libp2p host is not started yet")
+	}
 	n.clusterCfgMu.Lock()
 	defer n.clusterCfgMu.Unlock()
-	return cm.DiscoverClusterPeersFromLibP2P(n.host)
+	return cm.DiscoverClusterPeers(ctx, h.ID().String(), func(ctx context.Context) ([]ipfs.PeerTarget, error) {
+		return activeOverlayPeers(ctx, adapter.GetSQLDB())
+	})
 }
 
 // gatewayBootstrapPeers is the peer list the index gateway's libp2p client

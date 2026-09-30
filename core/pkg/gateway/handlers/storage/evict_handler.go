@@ -27,13 +27,6 @@ const (
 	// evictPath is the per-node evict route.
 	evictPath = "/v1/internal/storage/evict"
 
-	// storageInternalAuthMarker is the X-Orama-Internal-Auth value the pre-MAC
-	// evict used as its whole credential. It is no longer checked; it is still
-	// sent so a node that has not been upgraded yet, which checks only this and
-	// the WireGuard source, keeps accepting a rolling upgrade's evict calls.
-	// Remove it with the release that drops the rolling window.
-	storageInternalAuthMarker = "storage-coordination"
-
 	// evictFanoutTimeout bounds a single node's evict call during fan-out.
 	evictFanoutTimeout = 30 * time.Second
 
@@ -186,7 +179,6 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 				return
 			}
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Orama-Internal-Auth", storageInternalAuthMarker)
 			if err := auth.SignCoordination(key, req, time.Now(), node.ID); err != nil {
 				markFailed()
 				return

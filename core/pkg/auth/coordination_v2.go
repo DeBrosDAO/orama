@@ -194,7 +194,7 @@ func verifyCoordinationV2(key []byte, r *http.Request, now time.Time, audience s
 	// before this process started cannot be told from a replay of one it already
 	// served. Refusing it costs a sender whose clock runs behind this node's a
 	// retry in the first seconds after a restart.
-	if ts < coordinationProcessStart.Unix() {
+	if !madeAfterProcessStart(ts, now) {
 		return false
 	}
 	nonce := r.Header.Get(CoordinationNonceHeader)
@@ -247,8 +247,25 @@ type replayCache struct {
 	ttl      time.Duration
 }
 
-// coordinationProcessStart is when this process's nonce cache began empty.
+// coordinationProcessStart is when this process's nonce cache began empty. It
+// carries a monotonic reading, so the time since it is immune to the wall clock
+// being stepped.
 var coordinationProcessStart = time.Now()
+
+// madeAfterProcessStart reports whether a stamp made at unix second ts is
+// later than this process's start. The threshold is now minus the monotonic
+// time elapsed since start, so a wall clock stepped backwards after start
+// neither moves it nor refuses all traffic. It is rounded up to the next second
+// because a stamp carries whole seconds: one made in the start second may
+// predate the process, and is refused.
+func madeAfterProcessStart(ts int64, now time.Time) bool {
+	start := now.Add(-time.Since(coordinationProcessStart))
+	threshold := start.Unix()
+	if start.Nanosecond() != 0 {
+		threshold++
+	}
+	return ts >= threshold
+}
 
 var coordinationReplays = newReplayCache(coordinationReplayCapacity, coordinationReplayTTL)
 

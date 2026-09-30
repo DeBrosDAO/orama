@@ -26,6 +26,11 @@ import (
 // audience their requests are signed for.
 const coordinationTestNode = "12D3KooWCoordinationTestNode"
 
+// testStampLead makes a stamp in a test later than the second the test process
+// started in: a stamp from that second is refused as possibly older than the
+// process.
+const testStampLead = 2 * time.Second
+
 func coordinationGateway(secret string) *Gateway {
 	return &Gateway{cfg: &Config{ClusterSecret: secret, NodePeerID: coordinationTestNode}}
 }
@@ -44,7 +49,7 @@ func TestVerifyCoordination_acceptsASignedRequestFromTheMesh(t *testing.T) {
 	}
 
 	r := meshRequest(http.MethodPost, "/v1/internal/namespace/repair?namespace=acme")
-	if err := nodeauth.SignCoordination(key, r, time.Now(), coordinationTestNode); err != nil {
+	if err := nodeauth.SignCoordination(key, r, time.Now().Add(testStampLead), coordinationTestNode); err != nil {
 		t.Fatalf("sign: %v", err)
 	}
 	if !g.verifyCoordination(r) {
@@ -110,6 +115,36 @@ func TestNamespaceClusterRepairHandler_refusesAnUnsignedRequest(t *testing.T) {
 	}
 }
 
+// Repair changes state, and a v1 stamp names no audience: one captured on the
+// overlay would repair the namespace from any node for a minute. Only v2 is
+// accepted.
+func TestNamespaceClusterRepairHandler_requiresTheV2Stamp(t *testing.T) {
+	g := coordinationGateway("a cluster secret")
+	key, _ := nodeauth.CoordinationKey("a cluster secret")
+
+	v1Only := meshRequest(http.MethodPost, "/v1/internal/namespace/repair?namespace=acme")
+	if err := nodeauth.SignCoordination(key, v1Only, time.Now(), coordinationTestNode); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	v1Only.Header.Del(nodeauth.CoordinationMACV2Header)
+	v1Only.Header.Del(nodeauth.CoordinationNonceHeader)
+	w := httptest.NewRecorder()
+	g.namespaceClusterRepairHandler(w, v1Only)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("v1-only stamp: status %d, want 401", w.Code)
+	}
+
+	v2 := meshRequest(http.MethodPost, "/v1/internal/namespace/repair?namespace=acme")
+	if err := nodeauth.SignCoordination(key, v2, time.Now().Add(testStampLead), coordinationTestNode); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	w = httptest.NewRecorder()
+	g.namespaceClusterRepairHandler(w, v2)
+	if w.Code == http.StatusUnauthorized {
+		t.Errorf("v2 stamp refused: %s", w.Body.String())
+	}
+}
+
 // The reencrypt route carries the new root key material in its body, which the
 // v1 stamp does not cover: a stripped-v2 replay with an attacker-chosen root
 // must be refused before the body is read.
@@ -151,7 +186,7 @@ func signedReencrypt(t *testing.T, secret, audience, body string) *http.Request 
 	}
 	r := httptest.NewRequest(http.MethodPost, "/v1/internal/secrets/reencrypt", strings.NewReader(body))
 	r.RemoteAddr = "10.0.0.7:41000"
-	if err := nodeauth.SignCoordination(key, r, time.Now(), audience); err != nil {
+	if err := nodeauth.SignCoordination(key, r, time.Now().Add(testStampLead), audience); err != nil {
 		t.Fatal(err)
 	}
 	return r

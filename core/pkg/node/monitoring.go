@@ -256,7 +256,7 @@ func (n *Node) monitorConnections(ctx context.Context) {
 			// Discover from LibP2P connections every 2 ticks (once per minute)
 			// Works even if cluster peers aren't connected yet
 			if tickCount%2 == 0 {
-				if err := n.discoverClusterPeers(cm); err != nil {
+				if err := n.discoverClusterPeers(ctx, cm); err != nil {
 					n.logger.ComponentWarn(logging.ComponentNode, "Failed to discover cluster peers from LibP2P", zap.Error(err))
 				} else {
 					n.logger.ComponentInfo(logging.ComponentNode, "Cluster peer addresses discovered from LibP2P")

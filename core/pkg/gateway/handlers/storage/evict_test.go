@@ -292,7 +292,6 @@ func evictReq(t *testing.T, cid, remoteAddr, secret string) (*httptest.ResponseR
 	req := httptest.NewRequest(http.MethodPost, evictPath+"?"+url.Values{"cid": {cid}}.Encode(),
 		strings.NewReader(`{"cid":"`+cid+`"}`))
 	req.RemoteAddr = remoteAddr
-	req.Header.Set("X-Orama-Internal-Auth", storageInternalAuthMarker)
 	if secret != "" {
 		key, err := auth.CoordinationKey(secret)
 		if err != nil {
@@ -466,6 +465,30 @@ func TestEvictFanout_signedRequestIsAcceptedByTheHandler(t *testing.T) {
 				t.Errorf("receiver evicted %d times, want %d", recv.evictCalls, tc.wantEvict)
 			}
 		})
+	}
+}
+
+// The sender's credential is the stamp alone; the pre-MAC constant header is
+// not sent.
+func TestEvictFanout_sendsNoConstantCredentialHeader(t *testing.T) {
+	var gotHeader string
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		gotHeader = r.Header.Get("X-Orama-Internal-Auth")
+	}))
+	defer srv.Close()
+	h := newHandlersWithDBs(&mockIPFSClient{},
+		&mockStorageDB{namespaceScoped: true},
+		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+	h.config.ClusterSecret = testClusterSecret
+	h.evictPort = portOf(t, srv.URL)
+	h.maybeImmediateEvict(context.Background(), "QmGone", true)
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("evict call sent %d times, want 1", hits)
+	}
+	if gotHeader != "" {
+		t.Errorf("X-Orama-Internal-Auth = %q, want none", gotHeader)
 	}
 }
 

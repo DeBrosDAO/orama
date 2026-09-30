@@ -285,9 +285,9 @@ they used to. A build that signs only v1 (or signs the replica header) cannot
 coordinate spawns, teardowns or replica operations with an upgraded node, and an
 upgraded node cannot with it, until every node is upgraded: such requests are
 refused `401`/`403` (see SECURITY.md, "Coordination MAC v2"). The same goes for
-the secrets re-encrypt fan-out of `orama operator rotate-secrets`. Network
-status, telemetry, namespace repair and storage evict still accept v1 during the
-upgrade, so `orama monitor` keeps working. After the last node is upgraded,
+the secrets re-encrypt fan-out of `orama operator rotate-secrets`, and for
+namespace repair. Network status, telemetry, network detail and storage evict
+still accept v1 during the upgrade, so `orama monitor` keeps working. After the last node is upgraded,
 check that `namespace_pending_cleanup` drains: a teardown refused in the window
 is recorded there and replayed by the tenant reconciler.
 

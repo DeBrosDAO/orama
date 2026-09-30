@@ -1386,15 +1386,16 @@ func (g *Gateway) namespaceClusterStatusHandler(w http.ResponseWriter, r *http.R
 
 // namespaceClusterRepairHandler handles POST /v1/internal/namespace/repair?namespace={name}
 // This endpoint repairs under-provisioned namespace clusters by adding missing nodes.
-// Internal-only: authenticated by the coordination MAC; every parameter is in
-// the query, which the v1 stamp covers.
+// Internal-only: authenticated by the v2 coordination MAC, signed for this node.
+// The route changes state, so the v1 stamp, which names no audience and can be
+// replayed at any node inside its window, is not accepted.
 func (g *Gateway) namespaceClusterRepairHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	if !g.verifyCoordination(r) {
+	if !g.verifyCoordinationV2(r) {
 		unauthorized(w, CodeAuthMissing, "this route is reached from inside the cluster and the caller did not present what it requires", nil)
 		return
 	}

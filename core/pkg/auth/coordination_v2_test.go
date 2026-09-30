@@ -228,21 +228,59 @@ func TestSignCoordination_noAudienceIsRefused(t *testing.T) {
 	}
 }
 
+func init() {
+	// Stamps in these tests are made the instant the test binary starts; the
+	// process counts as started an hour ago so they are not "before the start".
+	coordinationProcessStart = time.Now().Add(-time.Hour)
+}
+
 // The nonce cache is empty after a restart, so a stamp made before the process
 // started could be a replay of one it already served.
 func TestCheckCoordination_aStampFromBeforeTheProcessStartedIsRefused(t *testing.T) {
 	key := v2Key(t)
-	start := time.Now().Add(-time.Hour)
 	old := coordinationProcessStart
 	coordinationProcessStart = time.Now()
 	defer func() { coordinationProcessStart = old }()
 
-	before := signedPost(t, key, `{}`, start)
-	if VerifyCoordinationV2(key, before, start, testAudience) {
+	before := signedPost(t, key, `{}`, time.Now().Add(-30*time.Second))
+	if VerifyCoordinationV2(key, before, time.Now(), testAudience) {
 		t.Fatal("a stamp made before this process started verified")
 	}
-	after := signedPost(t, key, `{}`, time.Now())
+	after := signedPost(t, key, `{}`, time.Now().Add(2*time.Second))
 	if !VerifyCoordinationV2(key, after, time.Now(), testAudience) {
 		t.Fatal("a stamp made after this process started was refused")
+	}
+}
+
+// A wall clock stepped back after start must not refuse every stamp: the
+// threshold follows the monotonic time since start, not the wall time at init.
+func TestCheckCoordination_aClockSteppedBackDoesNotRefuseEveryStamp(t *testing.T) {
+	key := v2Key(t)
+	old := coordinationProcessStart
+	coordinationProcessStart = time.Now()
+	defer func() { coordinationProcessStart = old }()
+
+	stepped := time.Now().Add(-time.Hour)
+	r := signedPost(t, key, `{}`, stepped.Add(2*time.Second))
+	if !VerifyCoordinationV2(key, r, stepped, testAudience) {
+		t.Fatal("a stamp made on a clock stepped back after start was refused")
+	}
+}
+
+// A stamp carries whole seconds: one made in the second the process started may
+// predate it, so only a later second is accepted.
+func TestMadeAfterProcessStart_theStartSecondIsRefused(t *testing.T) {
+	old := coordinationProcessStart
+	defer func() { coordinationProcessStart = old }()
+	for time.Now().Nanosecond() > 500_000_000 || time.Now().Nanosecond() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	coordinationProcessStart = time.Now()
+	now := time.Now()
+	if madeAfterProcessStart(coordinationProcessStart.Unix(), now) {
+		t.Error("a stamp from the start second was accepted")
+	}
+	if !madeAfterProcessStart(coordinationProcessStart.Unix()+1, now) {
+		t.Error("a stamp from the second after start was refused")
 	}
 }

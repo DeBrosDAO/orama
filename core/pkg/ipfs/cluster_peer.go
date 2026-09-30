@@ -15,7 +15,6 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/constants"
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
 	"go.uber.org/zap"
@@ -50,39 +49,44 @@ func (cm *ClusterConfigManager) UpdatePeerAddresses(addrs []string) error {
 	return cm.saveConfig(serviceJSONPath, cfg)
 }
 
-// DiscoverClusterPeersFromLibP2P discovers IPFS and IPFS Cluster peers by querying
-// the /v1/network/status endpoint of connected libp2p peers.
-// This is the correct approach since IPFS/Cluster peer IDs are different from libp2p peer IDs.
-func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) error {
-	if h == nil {
+// PeerTarget is a registered cluster node: its overlay address and the node
+// peer id a request to it is signed for.
+type PeerTarget struct {
+	ID string
+	IP string
+}
+
+// ActivePeersFunc lists the active nodes in the cluster registry.
+type ActivePeersFunc func(ctx context.Context) ([]PeerTarget, error)
+
+// DiscoverClusterPeers discovers IPFS and IPFS Cluster peers by querying the
+// /v1/network/status endpoint of every other active node in the registry.
+// The registry, not the libp2p peerstore, names the targets: the peerstore can
+// hold several peer ids for one overlay address (a gateway client's own
+// identity, a node's id from before it was replaced at that address), and the
+// id a stamp is signed for must be the node's own or the node refuses it.
+// IPFS/Cluster peer IDs are different from libp2p peer IDs, hence the query.
+func (cm *ClusterConfigManager) DiscoverClusterPeers(ctx context.Context, selfID string, list ActivePeersFunc) error {
+	all, err := list(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list active cluster nodes for IPFS peer discovery: %w", err)
+	}
+	var targets []PeerTarget
+	for _, t := range all {
+		if t.ID != selfID {
+			targets = append(targets, t)
+		}
+	}
+	return cm.discoverFrom(targets, constants.GatewayURLFor)
+}
+
+func (cm *ClusterConfigManager) discoverFrom(targets []PeerTarget, gatewayURLFor func(ip string) string) error {
+	if len(targets) == 0 {
 		return nil
 	}
 
 	var clusterPeers []string
 	var ipfsPeers []IPFSPeerEntry
-
-	// Get unique IPs from connected libp2p peers, each with the peer id the
-	// request to it is signed for.
-	peerIPs := make(map[string]string)
-	for _, p := range h.Peerstore().Peers() {
-		if p == h.ID() {
-			continue
-		}
-
-		info := h.Peerstore().PeerInfo(p)
-		for _, addr := range info.Addrs {
-			// Extract IP from multiaddr — only use WireGuard IPs (10.0.0.x)
-			// for inter-node queries since the index gateway port is blocked on public interfaces by UFW
-			ip := extractIPFromMultiaddr(addr)
-			if ip != "" && strings.HasPrefix(ip, "10.0.0.") {
-				peerIPs[ip] = p.String()
-			}
-		}
-	}
-
-	if len(peerIPs) == 0 {
-		return nil
-	}
 
 	// Query each peer's /v1/network/status endpoint to get IPFS and Cluster
 	// info. The endpoint answers another node only when the request carries
@@ -92,8 +96,9 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 		return err
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	for ip, peerID := range peerIPs {
-		resp, err := fetchPeerNetworkStatus(client, coordKey, constants.GatewayURLFor(ip), peerID)
+	for _, t := range targets {
+		ip := t.IP
+		resp, err := fetchPeerNetworkStatus(client, coordKey, gatewayURLFor(ip), t.ID)
 		if err != nil {
 			cm.logger.Debug("Failed to query peer status", zap.String("ip", ip), zap.Error(err))
 			continue
