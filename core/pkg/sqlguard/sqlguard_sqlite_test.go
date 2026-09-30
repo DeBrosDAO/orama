@@ -1,4 +1,4 @@
-package hostfunctions
+package sqlguard
 
 import (
 	"database/sql"
@@ -15,7 +15,7 @@ import (
 // know (form feed, a \v after a space) or a position it did not track (after a
 // comma, inside a parenthesis, after UPDATE OR REPLACE) let a statement through
 // that SQLite then ran.
-func TestCheckGuestSQL_refusesWhateverSQLiteReadsAsTheTable(t *testing.T) {
+func TestCheck_refusesWhateverSQLiteReadsAsTheTable(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestCheckGuestSQL_refusesWhateverSQLiteReadsAsTheTable(t *testing.T) {
 						continue // SQLite does not read this as the table
 					}
 					ran++
-					if checkGuestSQL(q) == nil {
+					if Check(q) == nil {
 						t.Errorf("SQLite ran %q against api_keys, and the guard let it through", q)
 					}
 				}

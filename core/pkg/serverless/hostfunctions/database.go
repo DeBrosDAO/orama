@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/sqlguard"
 )
 
 // dbQueryBatchTimeout caps the rqlite round-trip for a single
@@ -27,7 +28,7 @@ func (h *HostFunctions) DBQuery(ctx context.Context, query string, args []interf
 	if err := h.checkDatabaseAccess(ctx, "db_query"); err != nil {
 		return nil, err
 	}
-	if err := checkGuestSQL(query); err != nil {
+	if err := sqlguard.Check(query); err != nil {
 		return nil, &serverless.HostFunctionError{Function: "db_query", Cause: err}
 	}
 
@@ -54,7 +55,7 @@ func (h *HostFunctions) DBExecute(ctx context.Context, query string, args []inte
 	if err := h.checkDatabaseAccess(ctx, "db_execute"); err != nil {
 		return 0, err
 	}
-	if err := checkGuestSQL(query); err != nil {
+	if err := sqlguard.Check(query); err != nil {
 		return 0, &serverless.HostFunctionError{Function: "db_execute", Cause: err}
 	}
 
@@ -88,7 +89,7 @@ func (h *HostFunctions) DBExecuteV2(ctx context.Context, query string, args []in
 	if err := h.checkDatabaseAccess(ctx, "db_execute_v2"); err != nil {
 		return nil, err
 	}
-	if err := checkGuestSQL(query); err != nil {
+	if err := sqlguard.Check(query); err != nil {
 		return nil, &serverless.HostFunctionError{Function: "db_execute_v2", Cause: err}
 	}
 
@@ -129,7 +130,7 @@ func (h *HostFunctions) DBQueryV2(ctx context.Context, query string, args []inte
 	if err := h.checkDatabaseAccess(ctx, "db_query_v2"); err != nil {
 		return nil, err
 	}
-	if err := checkGuestSQL(query); err != nil {
+	if err := sqlguard.Check(query); err != nil {
 		return nil, &serverless.HostFunctionError{Function: "db_query_v2", Cause: err}
 	}
 
@@ -219,7 +220,7 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 // was once missing from one of them (bugboard #425).
 func checkGuestOps(fn string, ops []rqlite.BatchOp) error {
 	for i, op := range ops {
-		if err := checkGuestSQL(op.SQL); err != nil {
+		if err := sqlguard.Check(op.SQL); err != nil {
 			return &serverless.HostFunctionError{Function: fn, Cause: fmt.Errorf("op %d: %w", i, err)}
 		}
 	}

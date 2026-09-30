@@ -221,7 +221,7 @@ if res.Error != "" {
 
 The legacy `db_execute` is kept indefinitely so existing functions don't break. New code should use `db_execute_v2` for any path where distinguishing "no rows" from "SQL error" matters — most paths.
 
-**What a function's SQL may not do.** Every database host function refuses,
+**What a function's SQL may not do.** The same filter runs on the namespace gateway's raw-database routes (see SECURITY.md). Every database host function refuses,
 before anything runs: a second statement in one call; `ATTACH`, `DETACH`,
 `PRAGMA`, `VACUUM` and `CREATE TRIGGER`; `sqlite_dbpage` and `dbstat`; any
 identifier that is a platform table's name, however it is quoted and in any
@@ -242,8 +242,16 @@ The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `namespace_rate_limit_config`, `namespace_clusters`, `namespace_cluster_nodes`,
 `namespace_port_allocations`, `global_deployment_subdomains`, `dns_records`,
 `dns_nodes`, `dns_nameservers`, `raft_evicted_nodes`, `cluster_locks`,
-`orama_schema_migrations`, `namespaces`, `ipfs_content_ownership` and
-`ipfs_cid_refs` (the list in `core/pkg/serverless/hostfunctions/sqlguard.go`).
+`orama_schema_migrations`, `namespaces`, `ipfs_content_ownership`,
+`ipfs_cid_refs`, `deployments`, `deployment_domains`, `deployment_replicas`,
+`home_node_assignments` and `port_allocations` (the list in
+`core/pkg/sqlguard/sqlguard.go`, which is also what the namespace gateway's
+raw-database routes apply to a tenant's SQL: see
+[SECURITY.md](SECURITY.md#function-sql)). A deployment is created and changed
+through `/v1/deployments`, which validates its content, entry point and port;
+SQL against the deployment tables would skip all of that, so they are reserved.
+The tables that only record what happened (`deployment_events`,
+`deployment_health_checks`, `deployment_history`) are not.
 
 **A function's database is its own namespace's.** Every database host function
 also refuses a call from a function whose namespace is not the one the

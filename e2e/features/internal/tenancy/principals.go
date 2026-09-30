@@ -24,6 +24,8 @@ const (
 	RoleRuntime = "runtime"
 	RoleReader  = "reader"
 	RoleAdmin   = "admin"
+	// RoleDeveloper holds db:write and not members or namespace.
+	RoleDeveloper = "developer"
 	// cleanupBudget bounds one cleanup request.
 	cleanupBudget = time.Minute
 )

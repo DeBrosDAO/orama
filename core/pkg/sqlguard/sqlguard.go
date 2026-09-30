@@ -1,17 +1,15 @@
-package hostfunctions
-
-import (
-	"fmt"
-	"strings"
-)
-
-// A function's db_query and db_execute hand the guest's SQL to the gateway's
-// own database handle. On a namespace gateway that handle points at the
-// namespace's rqlite — which is both the tenant's application database and the
-// database that authenticates the namespace. The core migrations run there, so
-// api_keys, principals, grants, refresh_tokens, nonces, operators,
-// wireguard_peers and function_secrets sit in the same schema as the tenant's
-// own tables, and a function could read and write all of them.
+// Package sqlguard is the filter between tenant-written SQL and the platform's
+// own tables.
+//
+// Two paths hand a tenant's SQL to a namespace gateway's database handle: a
+// function's db_query and db_execute host calls, and the raw-database routes
+// of the ORM gateway (/v1/rqlite/exec, query, transaction, select, find,
+// create-table and drop-table). On a namespace gateway that handle points at
+// the namespace's rqlite — which is both the tenant's application database and
+// the database that authenticates the namespace. The core migrations run
+// there, so tables such as principals, grants, function_secrets and
+// ipfs_content_ownership sit in the same schema as the tenant's own tables, and
+// tenant SQL could read and write all of them.
 //
 // That is not a hole in one query; it is one database doing two jobs. Until the
 // platform's own state lives somewhere a tenant's SQL cannot name, the only
@@ -25,8 +23,14 @@ import (
 // name, because the statement doing the querying does not mention the protected
 // table at all. Separating platform state from tenant data is the fix; this
 // closes the direct path in the meantime.
+package sqlguard
 
-// protectedTables are the core tables a function's SQL may not name.
+import (
+	"fmt"
+	"strings"
+)
+
+// protectedTables are the core tables tenant SQL may not name.
 //
 // The list is not "every table the core migrations create". Several of those
 // have generic names a tenant may already be using as their own — a namespace
@@ -108,13 +112,24 @@ var protectedTables = map[string]string{
 	// namespace holding a row here, decrypted with the cluster-wide wrap key,
 	// so writing one is reading another tenant's content (bugboard #431).
 	"ipfs_content_ownership": "which namespace may read stored content",
+	// What runs where, and on which port. The gateway reads these rows to start,
+	// route to and health-check a deployment, and a deployment's row names its
+	// content CID, its entry point and its environment. A tenant deploys through
+	// /v1/deployments, which validates all of that; a row written here skips it,
+	// so it would run content the deploy path refused, on a port and a node the
+	// tenant chose. No documented tenant workflow runs SQL against them.
+	"deployments":           "what runs, from which content, on which port",
+	"deployment_domains":    "which host names route to which deployment",
+	"deployment_replicas":   "which nodes run a deployment",
+	"home_node_assignments": "which node hosts a deployment",
+	"port_allocations":      "which ports a deployment holds",
 	// The cluster-wide reference count that decides whether an unpin removes a
-	// shared pin. It lives in the cluster registry only, but a function should
+	// shared pin. It lives in the cluster registry only, but a caller should
 	// be told what it is rather than "no such table".
 	"ipfs_cid_refs": "the cluster-wide count of who references stored content",
 }
 
-// deniedStatements are statement kinds a function has no use for and that step
+// deniedStatements are statement kinds tenant SQL has no use for and that step
 // outside the database it was given: ATTACH reaches another database file,
 // PRAGMA reads and changes engine state, VACUUM INTO writes a copy of the whole
 // database to a path of the caller's choosing.
@@ -135,18 +150,20 @@ var rawStorageTables = map[string]bool{
 	"dbstat":        true,
 }
 
-// ErrSQLNotAllowed is what a refused statement returns.
-type ErrSQLNotAllowed struct {
+// ErrNotAllowed is what a refused statement returns. Callers tell a refusal
+// from a database failure by errors.As on it.
+type ErrNotAllowed struct {
 	Reason string
 }
 
-func (e *ErrSQLNotAllowed) Error() string { return e.Reason }
+func (e *ErrNotAllowed) Error() string { return e.Reason }
 
-// checkGuestSQL refuses a statement a function may not run.
-func checkGuestSQL(query string) error {
+// Check refuses a statement tenant SQL may not run. It reads one statement: a
+// caller with several checks each of them.
+func Check(query string) error {
 	tokens := tokenizeSQL(query)
 	if isCreateTrigger(tokens) {
-		return &ErrSQLNotAllowed{Reason: "CREATE TRIGGER is not available to a function: a trigger runs statements the guard never sees"}
+		return &ErrNotAllowed{Reason: "CREATE TRIGGER is not available to tenant SQL: a trigger runs statements the guard never sees"}
 	}
 
 	seenStatement := false
@@ -157,14 +174,14 @@ func checkGuestSQL(query string) error {
 			// statement. One host call runs one statement; a trailing
 			// semicolon with nothing after it is fine.
 			if hasMoreContent(tokens[i+1:]) {
-				return &ErrSQLNotAllowed{Reason: "a database host call runs one statement; send them one at a time"}
+				return &ErrNotAllowed{Reason: "one call runs one statement; send them one at a time"}
 			}
 		case tokenWord:
 			if !seenStatement {
 				seenStatement = true
 				if why, denied := deniedStatements[strings.ToLower(tok.text)]; denied {
-					return &ErrSQLNotAllowed{
-						Reason: fmt.Sprintf("%s is not available to a function: it %s", strings.ToUpper(tok.text), why),
+					return &ErrNotAllowed{
+						Reason: fmt.Sprintf("%s is not available to tenant SQL: it %s", strings.ToUpper(tok.text), why),
 					}
 				}
 			}
@@ -190,11 +207,11 @@ func checkGuestSQL(query string) error {
 func refuseProtected(name string) error {
 	n := normalizeName(name)
 	if why, protected := protectedTables[n]; protected {
-		return &ErrSQLNotAllowed{Reason: fmt.Sprintf(
-			"the name %s is reserved for a platform table (%s) and may not appear in a function's SQL, as a table, column, alias or parameter name", n, why)}
+		return &ErrNotAllowed{Reason: fmt.Sprintf(
+			"the name %s is reserved for a platform table (%s) and may not appear in tenant SQL, as a table, column, alias or parameter name", n, why)}
 	}
 	if rawStorageTables[n] {
-		return &ErrSQLNotAllowed{Reason: fmt.Sprintf("%s reads the database file below the table level and is not available to a function", n)}
+		return &ErrNotAllowed{Reason: fmt.Sprintf("%s reads the database file below the table level and is not available to tenant SQL", n)}
 	}
 	return nil
 }
@@ -205,12 +222,12 @@ func refuseProtected(name string) error {
 // `FROM ('api_keys')` and `UPDATE OR REPLACE 'api_keys'` all reach the table.
 // Tracking which positions those are meant re-implementing SQLite's grammar,
 // and every list of them missed one (bugboard #425). So the literal is refused
-// wherever it appears. A function that needs that text as data binds it as an
+// wherever it appears. A caller that needs that text as data binds it as an
 // argument, which never reaches the SQL text at all.
 func refuseProtectedLiteral(text string) error {
 	n := normalizeName(text)
 	if _, protected := protectedTables[n]; protected || rawStorageTables[n] {
-		return &ErrSQLNotAllowed{Reason: fmt.Sprintf(
+		return &ErrNotAllowed{Reason: fmt.Sprintf(
 			"the string literal '%s' is the name of a platform table, and SQLite reads a string literal as a table name in many positions; pass the value as a bound argument (?) instead", n)}
 	}
 	return nil
@@ -225,7 +242,7 @@ func normalizeName(name string) string {
 
 // isCreateTrigger reports whether the statement so far is CREATE [TEMP|
 // TEMPORARY] TRIGGER. A trigger body is statements run later by SQLite on its
-// own, so nothing a function sends may create one. (Every trigger body today
+// own, so nothing a tenant sends may create one. (Every trigger body today
 // also contains a ';', which the one-statement rule refuses; this does not
 // rely on that.)
 func isCreateTrigger(tokens []token) bool {

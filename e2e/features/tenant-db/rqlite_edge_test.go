@@ -235,6 +235,51 @@ func TestRQLiteIsolation_platformTablesUnreachable(t *testing.T) {
 	}
 }
 
+// TestRQLiteIsolation_platformTablesRefusedToEveryRole: the raw-database routes
+// run the same SQL filter as a function (docs/SECURITY.md "Function SQL"). A
+// developer holds db:write and nothing that manages members, and must not mint
+// authority or claim another tenant's content by writing the platform tables
+// directly — through exec, inside a transaction, or through the builders. The
+// owner and an admin are refused too: writing api_keys directly bypasses the
+// key-minting path. The tenant's own tables are untouched.
+func TestRQLiteIsolation_platformTablesRefusedToEveryRole(t *testing.T) {
+	t.Parallel()
+	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
+	callers := map[string]tenancy.Cred{
+		"owner":     tenancy.Owner(n),
+		"admin":     {Bearer: tenancy.Member(t, n, tenancy.RoleAdmin).Token()},
+		"developer": {Bearer: tenancy.Member(t, n, tenancy.RoleDeveloper).Token()},
+	}
+	refused := map[string]map[string]any{
+		pathExec:  {"sql": "INSERT INTO ipfs_content_ownership (cid, namespace, uploaded_by) VALUES ('QmVictim', 'x', 'x')"},
+		pathQuery: {"sql": `SELECT * FROM "api_keys"`},
+		pathTx: {"ops": []map[string]any{
+			{"kind": "exec", "sql": "CREATE TABLE IF NOT EXISTS guard_ok (id INTEGER)"},
+			{"kind": "exec", "sql": "UPDATE grants SET role = 'owner'"},
+		}},
+		pathSelect:      {"table": "grants"},
+		pathFind:        {"table": "deployments"},
+		pathCreateTable: {"schema": "CREATE TABLE api_keys (id INTEGER)"},
+	}
+	for who, cred := range callers {
+		d := &db{t: t, n: n, who: cred, c: n.Client}
+		for path, body := range refused {
+			r := d.call(path, body)
+			if r.Status != http.StatusForbidden || r.ErrorCode() != "SQL_NOT_ALLOWED" {
+				t.Errorf("%s %s: HTTP %d %s, want 403 SQL_NOT_ALLOWED", who, path, r.Status, r.ErrorCode())
+			}
+		}
+	}
+	dev := &db{t: t, n: n, who: callers["developer"], c: n.Client}
+	if r := dev.call(pathCreateTable, map[string]any{"schema": "CREATE TABLE guard_ok (id INTEGER PRIMARY KEY, v TEXT)"}); r.Status >= 300 {
+		t.Fatalf("a developer's own table was refused: HTTP %d %s", r.Status, r.ErrorCode())
+	}
+	dev.exec("INSERT INTO guard_ok (v) VALUES (?)", "grants").Expect(t, http.StatusOK)
+	if got := dev.query("SELECT v FROM guard_ok"); got.Count != 1 {
+		t.Errorf("the developer's own row is missing: %v", got)
+	}
+}
+
 func TestSchemaStatus_inSyncOnEveryGateway(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
