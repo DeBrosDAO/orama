@@ -1,4 +1,4 @@
-// Package olrictest starts a real single-member Olric for tests, so cache
+// Package olrictest starts a real Olric (one member, or a cluster) for tests, so cache
 // behaviour (expiry above all) is exercised against Olric itself rather than
 // against a mock that only records the arguments it was given.
 package olrictest
@@ -19,7 +19,7 @@ import (
 // startTimeout bounds how long a test waits for the member to come up.
 const startTimeout = 5 * time.Second
 
-// Server is a running single-member Olric.
+// Server is one running Olric member.
 type Server struct {
 	// Addr is the member's client address, for olriclib.NewClusterClient.
 	Addr string
@@ -35,6 +35,30 @@ func (s *Server) EmbeddedClient() olriclib.Client {
 // Start runs Olric on a free loopback port and stops it when the test ends.
 func Start(t *testing.T) *Server {
 	t.Helper()
+	return startMember(t, 0, nil)
+}
+
+// StartCluster runs n members that form one cluster, so a key's partition can
+// be owned by a member other than the one a client asked: the case a single
+// member never exercises.
+func StartCluster(t *testing.T, n int) []*Server {
+	t.Helper()
+	first, err := freePort()
+	if err != nil {
+		t.Fatalf("olrictest: %v", err)
+	}
+	seed := fmt.Sprintf("127.0.0.1:%d", first)
+	members := []*Server{startMember(t, first, nil)}
+	for i := 1; i < n; i++ {
+		members = append(members, startMember(t, 0, []string{seed}))
+	}
+	return members
+}
+
+// startMember runs one member. memberlistPort 0 picks a free one; peers are
+// the memberlist addresses it joins.
+func startMember(t *testing.T, memberlistPort int, peers []string) *Server {
+	t.Helper()
 
 	port, err := freePort()
 	if err != nil {
@@ -45,7 +69,8 @@ func Start(t *testing.T) *Server {
 	c.BindAddr = "127.0.0.1"
 	c.BindPort = port
 	c.MemberlistConfig.BindAddr = "127.0.0.1"
-	c.MemberlistConfig.BindPort = 0
+	c.MemberlistConfig.BindPort = memberlistPort
+	c.Peers = peers
 	c.Logger = log.New(io.Discard, "", 0)
 
 	started := make(chan struct{})

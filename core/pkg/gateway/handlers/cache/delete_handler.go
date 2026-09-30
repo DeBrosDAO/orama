@@ -80,18 +80,22 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	deletedCount, err := dm.Delete(ctx, req.Key)
-	if err != nil {
-		// Check for key not found error - handle both wrapped and direct errors
-		if errors.Is(err, olriclib.ErrKeyNotFound) || err.Error() == "key not found" || strings.Contains(err.Error(), "key not found") {
+	// Whether the key exists is asked of its owner first. Olric's Delete count
+	// cannot answer it (olric v0.7.4 internal/dmap/delete.go deleteKeys): a key
+	// whose partition another member owns is forwarded, deleted, and reported
+	// as 0; one this member owns is reported as deleted whether or not it was
+	// there. Reading the count turned every delete of a key held on another
+	// member into "key not found".
+	if _, err := dm.Get(ctx, req.Key); err != nil {
+		if isKeyNotFound(err) {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete key: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to look the key up: %v", err))
 		return
 	}
-	if deletedCount == 0 {
-		writeError(w, http.StatusNotFound, "key not found")
+	if _, err := dm.Delete(ctx, req.Key); err != nil && !isKeyNotFound(err) {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete key: %v", err))
 		return
 	}
 
@@ -100,4 +104,9 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 		"key":    req.Key,
 		"dmap":   req.DMap,
 	})
+}
+
+// isKeyNotFound reports Olric's missing-key answer, wrapped or not.
+func isKeyNotFound(err error) bool {
+	return errors.Is(err, olriclib.ErrKeyNotFound) || strings.Contains(err.Error(), "key not found")
 }
