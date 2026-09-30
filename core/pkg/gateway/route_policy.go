@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -450,4 +451,23 @@ func networkDetailPolicy(r *http.Request) routepolicy.Policy {
 		return policyHandlerAuth
 	}
 	return control(auth.DomainOperator, auth.ActionRead)
+}
+
+// credentialServesHostNamespace refuses a request to a route the index gateway
+// serves for an ns-<name> host when the credential belongs to another
+// namespace. A namespace gateway refuses a foreign credential on its own; the
+// index gateway serves every namespace, so the host is the only thing that
+// says which one the caller meant.
+func credentialServesHostNamespace(w http.ResponseWriter, r *http.Request) bool {
+	host, _ := r.Context().Value(hostNamespaceKey{}).(string)
+	if host == "" {
+		return true
+	}
+	credential, _ := r.Context().Value(CtxKeyNamespaceOverride).(string)
+	if strings.EqualFold(strings.TrimSpace(credential), host) {
+		return true
+	}
+	forbidden(w, CodeNamespaceMismatch, "this credential belongs to another namespace",
+		map[string]any{"namespace": host, "credential_namespace": credential})
+	return false
 }

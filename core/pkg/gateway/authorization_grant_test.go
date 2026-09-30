@@ -250,3 +250,25 @@ func controlPlaneGateway(t *testing.T, role string) (*Gateway, *countingGrantReg
 		cfg:         &Config{ClientNamespace: "anchat", BaseDomain: "dbrs.space"},
 	}, registry
 }
+
+// The index gateway serves namespace delete (and every MainGateway route) for
+// an ns-<name> host itself. The credential's namespace replaced the host's, so
+// a credential of one namespace sent to ns-other acted on its own namespace;
+// it is refused instead, and a credential of the host's namespace goes through.
+func TestAuthorizationMiddleware_indexRouteOnANamespaceHostNeedsThatNamespace(t *testing.T) {
+	g, _ := controlPlaneGateway(t, string(auth.RoleOwner))
+	g.cfg.ClientNamespace = ""
+	for credential, wantReached := range map[string]bool{"anchat": true, "ANCHAT": true, "other": false} {
+		chain, reached := controlChain(g)
+		r := grantWalletRequest(http.MethodDelete, "/v1/namespace/delete", "0xowner", credential)
+		r = r.WithContext(context.WithValue(r.Context(), hostNamespaceKey{}, "anchat"))
+		w := httptest.NewRecorder()
+		chain.ServeHTTP(w, r)
+		if *reached != wantReached {
+			t.Errorf("credential of %q on ns-anchat: reached %v, want %v (%d %s)", credential, *reached, wantReached, w.Code, strings.TrimSpace(w.Body.String()))
+		}
+		if !wantReached && (w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), CodeNamespaceMismatch)) {
+			t.Errorf("credential of %q: %d %s, want 403 %s", credential, w.Code, w.Body.String(), CodeNamespaceMismatch)
+		}
+	}
+}

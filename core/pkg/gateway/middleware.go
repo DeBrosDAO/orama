@@ -930,6 +930,10 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		if !credentialServesHostNamespace(w, r) {
+			return
+		}
+
 		// A request pre-authenticated by the main gateway skips the grant
 		// lookup when what it was forwarded with already reaches the route —
 		// an API key's scopes, a wallet's data plane. The main gateway
@@ -1328,7 +1332,8 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 				// never authenticate). Serve them on the main gateway instead,
 				// pinning the namespace from the subdomain.
 				if g.policyFor(r).MainGateway {
-					r = r.WithContext(context.WithValue(r.Context(), CtxKeyNamespaceOverride, namespaceName))
+					ctx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, namespaceName)
+					r = r.WithContext(context.WithValue(ctx, hostNamespaceKey{}, namespaceName))
 					next.ServeHTTP(w, r)
 					return
 				}
