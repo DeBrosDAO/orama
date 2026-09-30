@@ -619,8 +619,7 @@ func (m *Manager) StartAllNamespaceServices(namespace string) error {
 
 // ListNamespaceServices returns all namespace services currently registered in systemd
 func (m *Manager) ListNamespaceServices() ([]string, error) {
-	cmd := exec.Command("systemctl", "list-units", "--all", "--no-legend", "--plain", "orama-namespace-*@*.service")
-	output, err := cmd.CombinedOutput()
+	output, err := m.listUnits("--all", "--no-legend", "--plain", "orama-namespace-*@*.service")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list namespace services: %w; output: %s", err, string(output))
 	}

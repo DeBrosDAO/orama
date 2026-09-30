@@ -206,3 +206,46 @@ func TestTeardownServiceAndEnv_reportsAnEnvRemovalFailure(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// systemd keeps listing an instance after it was stopped and disabled. Such a
+// unit is not a namespace on this node: counting it made the orphan sweep tear
+// the same removed namespace down on every pass, spending its per-sweep cap.
+// A running unit, or a stopped but enabled one (it starts at boot), counts.
+func TestLocalTenantNamespaces_aStoppedDisabledUnitIsNotANamespace(t *testing.T) {
+	m, _ := newFakeManager(t)
+	m.listUnitsCmd = func(...string) ([]byte, error) {
+		return []byte(strings.Join([]string{
+			"orama-namespace-rqlite@gone.service loaded inactive dead Orama Namespace RQLite (gone)",
+			"orama-namespace-rqlite@running.service loaded active running Orama Namespace RQLite (running)",
+			"orama-namespace-olric@boots.service loaded inactive dead Orama Namespace Olric (boots)",
+			"orama-namespace-gateway@crashed.service loaded failed failed Orama Namespace Gateway (crashed)",
+		}, "\n")), nil
+	}
+	states := map[string]unitState{
+		"orama-namespace-rqlite@gone.service":     {Load: "loaded", Active: "inactive", UnitFile: "disabled"},
+		"orama-namespace-rqlite@running.service":  {Load: "loaded", Active: "active", UnitFile: "enabled"},
+		"orama-namespace-olric@boots.service":     {Load: "loaded", Active: "inactive", UnitFile: "enabled"},
+		"orama-namespace-gateway@crashed.service": {Load: "loaded", Active: "failed", UnitFile: "disabled"},
+	}
+	m.unitState = func(u string) (unitState, error) { return states[u], nil }
+
+	got, err := m.LocalTenantNamespaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, []string{"boots", "running"}) {
+		t.Fatalf("got %v, want [boots running]: a stopped, disabled unit is not a namespace", got)
+	}
+}
+
+func TestLocalTenantNamespaces_anUnreadableUnitStateIsAnError(t *testing.T) {
+	m, _ := newFakeManager(t)
+	m.listUnitsCmd = func(...string) ([]byte, error) {
+		return []byte("orama-namespace-rqlite@x.service loaded active running x\n"), nil
+	}
+	m.unitState = func(string) (unitState, error) { return unitState{}, errors.New("systemctl show failed") }
+	if _, err := m.LocalTenantNamespaces(); err == nil {
+		t.Fatal("an unreadable unit state was treated as an answer")
+	}
+}

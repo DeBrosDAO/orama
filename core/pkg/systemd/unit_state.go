@@ -18,6 +18,24 @@ const (
 type unitState struct {
 	Load   string
 	Active string
+	// UnitFile is systemd's UnitFileState ("enabled", "disabled", ...), empty
+	// when systemd did not report it.
+	UnitFile string
+}
+
+// unitFileStatesThatStart are the UnitFileState values of a unit systemd
+// starts on its own (at boot, or when its target is reached).
+var unitFileStatesThatStart = map[string]bool{"enabled": true, "enabled-runtime": true}
+
+// live reports whether the unit can run: it is running or on its way, or it is
+// enabled and so starts on the next boot. A loaded unit that is neither — an
+// instance systemd still remembers after it was stopped and disabled — can
+// never start again on its own.
+func (s unitState) live() bool {
+	if s.Active != activeStateInactive && s.Active != activeStateFailed {
+		return true
+	}
+	return unitFileStatesThatStart[s.UnitFile]
 }
 
 // loaded reports whether systemd has a unit file for it. A unit that is not
@@ -36,7 +54,7 @@ func (m *Manager) readUnitState(unit string) (unitState, error) {
 // that needs no privilege. `show` exits 0 for a unit that does not exist and
 // reports it as not-found, so a non-zero exit is a failure to ask.
 func queryUnitState(unit string) (unitState, error) {
-	out, err := exec.Command("systemctl", "show", "-p", "LoadState", "-p", "ActiveState", unit).CombinedOutput()
+	out, err := exec.Command("systemctl", "show", "-p", "LoadState", "-p", "ActiveState", "-p", "UnitFileState", unit).CombinedOutput()
 	if err != nil {
 		return unitState{}, fmt.Errorf("systemctl show %s: %w; output: %s", unit, err, strings.TrimSpace(string(out)))
 	}
@@ -53,6 +71,9 @@ func parseUnitState(out string) (unitState, error) {
 		}
 		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ActiveState="); ok {
 			s.Active = v
+		}
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "UnitFileState="); ok {
+			s.UnitFile = v
 		}
 	}
 	if s.Load == "" || s.Active == "" {

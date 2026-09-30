@@ -83,10 +83,23 @@ func (m *Manager) LocalTenantNamespaces() ([]string, error) {
 		return nil, err
 	}
 	for _, u := range units {
-		if ns, ok := TenantNamespaceFromUnit(u); ok && !seen[ns] {
-			seen[ns] = true
-			found = append(found, ns)
+		ns, ok := TenantNamespaceFromUnit(u)
+		if !ok || seen[ns] {
+			continue
 		}
+		// systemd keeps listing an instance it has seen after it was stopped
+		// and disabled; such a unit cannot start again, so it is not a
+		// namespace on this node. Counting it made the orphan sweep tear the
+		// same removed namespace down on every pass and spend its cap on it.
+		st, err := m.readUnitState(u)
+		if err != nil {
+			return nil, fmt.Errorf("read the state of %s: %w", u, err)
+		}
+		if !st.live() {
+			continue
+		}
+		seen[ns] = true
+		found = append(found, ns)
 	}
 	return found, nil
 }

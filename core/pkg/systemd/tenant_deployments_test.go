@@ -248,11 +248,11 @@ func TestStopService_judgesAFailureBySystemdState(t *testing.T) {
 		stateEr error
 		wantErr bool
 	}{
-		"not loaded":                           {"Unit x not loaded.", unitState{"not-found", "inactive"}, nil, false},
-		"inactive":                             {"boom", unitState{"loaded", "inactive"}, nil, false},
-		"failed":                               {"boom", unitState{"loaded", "failed"}, nil, false},
-		"still active though it says inactive": {"Failed: unit is not inactive", unitState{"loaded", "active"}, nil, true},
-		"still activating":                     {"timeout", unitState{"loaded", "activating"}, nil, true},
+		"not loaded":                           {"Unit x not loaded.", unitState{Load: "not-found", Active: "inactive"}, nil, false},
+		"inactive":                             {"boom", unitState{Load: "loaded", Active: "inactive"}, nil, false},
+		"failed":                               {"boom", unitState{Load: "loaded", Active: "failed"}, nil, false},
+		"still active though it says inactive": {"Failed: unit is not inactive", unitState{Load: "loaded", Active: "active"}, nil, true},
+		"still activating":                     {"timeout", unitState{Load: "loaded", Active: "activating"}, nil, true},
 		"state unreadable":                     {"boom", unitState{}, errors.New("no bus"), true},
 	}
 	for name, tc := range cases {
@@ -274,8 +274,8 @@ func TestDisableService_judgesAFailureBySystemdState(t *testing.T) {
 		stateEr error
 		wantErr bool
 	}{
-		"no such unit":                {"Failed to disable unit: Unit file x does not exist.", unitState{"not-found", "inactive"}, nil, false},
-		"loaded and will not disable": {"Failed to disable unit: not loaded by policy", unitState{"loaded", "active"}, nil, true},
+		"no such unit":                {"Failed to disable unit: Unit file x does not exist.", unitState{Load: "not-found", Active: "inactive"}, nil, false},
+		"loaded and will not disable": {"Failed to disable unit: not loaded by policy", unitState{Load: "loaded", Active: "active"}, nil, true},
 		"state unreadable":            {"boom", unitState{}, errors.New("no bus"), true},
 	}
 	for name, tc := range cases {
@@ -292,7 +292,7 @@ func TestDisableService_judgesAFailureBySystemdState(t *testing.T) {
 
 func TestParseUnitState(t *testing.T) {
 	got, err := parseUnitState("LoadState=loaded\nActiveState=active\n")
-	if err != nil || got != (unitState{"loaded", "active"}) {
+	if err != nil || got != (unitState{Load: "loaded", Active: "active"}) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	if _, err := parseUnitState("ActiveState=active\n"); err == nil {
