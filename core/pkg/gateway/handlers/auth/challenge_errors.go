@@ -48,5 +48,12 @@ func writeChallengeError(w http.ResponseWriter, namespace string, err error) {
 		return
 	}
 
+	// The caller's own input (a wallet that is not an address, a chain this
+	// gateway does not sign in with): a 400, not a server fault.
+	if errors.Is(err, authsvc.ErrChallengeMessage) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	writeError(w, http.StatusInternalServerError, err.Error())
 }

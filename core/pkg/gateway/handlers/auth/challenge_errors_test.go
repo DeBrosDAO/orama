@@ -76,3 +76,27 @@ func TestWriteChallengeError_otherFailuresStay500(t *testing.T) {
 		t.Error("a server fault was given one of the caller-facing codes")
 	}
 }
+
+// A wallet that is not an address is the caller's mistake (stagenet e2e,
+// 2026-09-30: "0x123", "not-a-wallet" and SQL-looking strings answered 500).
+func TestWriteChallengeError_refusedMessageIs400(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeChallengeError(w, "myapp", fmt.Errorf("%w: %q is not an Ethereum address", authsvc.ErrChallengeMessage, "0x123"))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", w.Code)
+	}
+}
+
+func TestChallengeHandler_oversizedWalletIs400WithoutEchoingIt(t *testing.T) {
+	h := NewHandlers(testLogger(), &authsvc.Service{}, nil, "default", noopInternalAuth)
+	wallet := strings.Repeat("0x", 4000)
+	body := `{"wallet":"` + wallet + `"}`
+	w := httptest.NewRecorder()
+	h.ChallengeHandler(w, httptest.NewRequest(http.MethodPost, "/v1/auth/challenge", strings.NewReader(body)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", w.Code)
+	}
+	if strings.Contains(w.Body.String(), wallet[:200]) {
+		t.Error("the refusal echoes the oversized wallet")
+	}
+}

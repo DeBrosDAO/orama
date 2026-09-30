@@ -10,6 +10,10 @@ import (
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
 
+// maxWalletLen bounds the wallet a challenge is asked for: a 0x Ethereum
+// address is 42 bytes, a Solana key at most 44.
+const maxWalletLen = 128
+
 // ChallengeHandler issues the message a wallet is asked to sign.
 //
 // It used to answer with a bare 32-byte nonce. A signature over that says only
@@ -41,6 +45,12 @@ func (h *Handlers) ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Wallet) == "" {
 		writeError(w, http.StatusBadRequest, "wallet is required")
+		return
+	}
+	// No address is this long; refusing here keeps the refusal from echoing
+	// kilobytes of whatever was sent back to the caller.
+	if len(req.Wallet) > maxWalletLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("wallet is not an address: longer than %d bytes", maxWalletLen))
 		return
 	}
 	req.Namespace = strings.TrimSpace(req.Namespace)

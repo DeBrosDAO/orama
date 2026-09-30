@@ -838,19 +838,27 @@ func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all 
 	// so the legitimate lost-response grace path is unaffected; this only closes
 	// the logout-bypass where a just-logged-out token would otherwise be
 	// grace-eligible for the 60s window.
+	//
+	// all goes first: a logout of every session that also names the caller's
+	// own refresh token used to revoke only that token, and every other
+	// session of the wallet kept refreshing.
+	if all && subject != "" {
+		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE namespace_id = ? AND subject = ? AND revoked_at IS NULL", nsID, subject)
+		return err
+	}
+
 	if token != "" {
 		hashedToken := refreshTokenHash(token)
 		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL", nsID, hashedToken)
 		return err
 	}
 
-	if all && subject != "" {
-		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE namespace_id = ? AND subject = ? AND revoked_at IS NULL", nsID, subject)
-		return err
-	}
-
-	return fmt.Errorf("nothing to revoke")
+	return ErrNothingToRevoke
 }
+
+// ErrNothingToRevoke is a logout that named no refresh token and did not ask
+// for every session: the caller's mistake, not the gateway's.
+var ErrNothingToRevoke = errors.New("nothing to revoke: send the refresh_token to end, or all=true with a signed-in session")
 
 // GetOrCreateAPIKey returns an existing API key or creates a new one for a wallet in a namespace.
 //

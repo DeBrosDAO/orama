@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -72,5 +73,18 @@ func TestWriteCredentialError_noKeyForRoleIsA403WithACode(t *testing.T) {
 	}
 	if body := decodeRefusal(t, rec); body["code"] != ErrCodeNoKeyForRole {
 		t.Errorf("code %v, want %s", body["code"], ErrCodeNoKeyForRole)
+	}
+}
+
+// A logout naming nothing is a client mistake: 400, never 500 (stagenet e2e,
+// 2026-09-30: `{}` answered 500 "nothing to revoke").
+func TestLogoutHandler_nothingNamedIs400(t *testing.T) {
+	h := NewHandlers(testLogger(), &authsvc.Service{}, nil, "default", noopInternalAuth)
+	for _, body := range []string{`{}`, `{"refresh_token":"   "}`, `{"all":false}`} {
+		w := httptest.NewRecorder()
+		h.LogoutHandler(w, httptest.NewRequest(http.MethodPost, "/v1/auth/logout", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", body, w.Code)
+		}
 	}
 }

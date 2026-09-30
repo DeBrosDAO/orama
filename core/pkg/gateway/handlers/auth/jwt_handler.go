@@ -254,6 +254,11 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.TrimSpace(req.RefreshToken) == "" && !req.All {
+		writeError(w, http.StatusBadRequest, authsvc.ErrNothingToRevoke.Error())
+		return
+	}
+
 	ctx := r.Context()
 	var claims *authsvc.JWTClaims
 	if v := ctx.Value(CtxKeyJWT); v != nil {
@@ -272,7 +277,11 @@ func (h *Handlers) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.authService.RevokeToken(ctx, req.Namespace, req.RefreshToken, req.All, subject); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		status := http.StatusInternalServerError
+		if errors.Is(err, authsvc.ErrNothingToRevoke) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 
