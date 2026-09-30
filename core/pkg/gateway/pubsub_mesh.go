@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -72,13 +73,10 @@ func NewPubsubMesh(service pubsubMeshService, db *sql.DB, nodeID string, logger 
 }
 
 // Run registers the service and connects its peers now and then every
-// pubsubMeshInterval until ctx ends. A reconcile that fails is logged and
-// retried at the next tick: the service may not be up yet, or the registry
-// between leaders.
+// pubsubMeshInterval until ctx ends. A reconcile that fails — the table not
+// yet created, the service not up, the registry between leaders — is logged
+// and retried at the next tick; nothing ends the mesh but ctx.
 func (m *PubsubMesh) Run(ctx context.Context) error {
-	if err := m.initTable(ctx); err != nil {
-		return err
-	}
 	m.reconcileLogged(ctx)
 	ticker := time.NewTicker(pubsubMeshInterval)
 	defer ticker.Stop()
@@ -117,6 +115,12 @@ func (m *PubsubMesh) initTable(ctx context.Context) error {
 // reconcile registers this node's service, forgets registrations nobody
 // refreshes and has the service connect to every live peer.
 func (m *PubsubMesh) reconcile(ctx context.Context) error {
+	// CREATE TABLE IF NOT EXISTS is idempotent, so it is part of every pass:
+	// run once at boot, one failure (a leader election mid-upgrade) ended the
+	// mesh for the life of the gateway.
+	if err := m.initTable(ctx); err != nil {
+		return err
+	}
 	self, err := m.service.MeshSelf(ctx)
 	if err != nil {
 		return fmt.Errorf("ask the pubsub service for its address (check that orama-namespace-pubsub@index is running): %w", err)
@@ -149,26 +153,56 @@ func (m *PubsubMesh) reconcile(ctx context.Context) error {
 	return nil
 }
 
-// livePeers is the multiaddr of every registered service except excluding that
-// was refreshed within pubsubMeshPeerTTL.
+// livePeers is the multiaddr of the registered services refreshed within
+// pubsubMeshPeerTTL, excluding this one, at most pubsub.MaxMeshPeers of them:
+// the ones that follow this peer in peer-id order, wrapping. The service
+// refuses a longer list outright, and a node does not need every peer —
+// GossipSub needs a connected graph — so each node takes its successors on
+// the ring, which spreads the connections instead of piling them on the
+// lowest ids.
 func (m *PubsubMesh) livePeers(ctx context.Context, excluding string, now time.Time) ([]string, error) {
+	all, err := m.registeredPeers(ctx, excluding, now)
+	if err != nil {
+		return nil, err
+	}
+	return ringSuccessors(all, excluding, pubsub.MaxMeshPeers), nil
+}
+
+// registeredPeer is one live registration.
+type registeredPeer struct {
+	id   string
+	addr string
+}
+
+// ringSuccessors returns up to limit addresses of the peers (sorted by id)
+// that follow self, wrapping around.
+func ringSuccessors(peers []registeredPeer, self string, limit int) []string {
+	start := sort.Search(len(peers), func(i int) bool { return peers[i].id > self })
+	out := make([]string, 0, min(limit, len(peers)))
+	for i := 0; i < len(peers) && len(out) < limit; i++ {
+		out = append(out, peers[(start+i)%len(peers)].addr)
+	}
+	return out
+}
+
+func (m *PubsubMesh) registeredPeers(ctx context.Context, excluding string, now time.Time) ([]registeredPeer, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT multiaddr FROM _pubsub_mesh_peers WHERE peer_id != ? AND last_seen >= ? ORDER BY peer_id`,
+		`SELECT peer_id, multiaddr FROM _pubsub_mesh_peers WHERE peer_id != ? AND last_seen >= ? ORDER BY peer_id`,
 		excluding, now.Add(-pubsubMeshPeerTTL).Unix())
 	if err != nil {
 		return nil, fmt.Errorf("list registered pubsub services: %w", err)
 	}
 	defer rows.Close()
-	var addrs []string
+	var peers []registeredPeer
 	for rows.Next() {
-		var addr string
-		if err := rows.Scan(&addr); err != nil {
+		var p registeredPeer
+		if err := rows.Scan(&p.id, &p.addr); err != nil {
 			return nil, fmt.Errorf("read a registered pubsub service: %w", err)
 		}
-		addrs = append(addrs, addr)
+		peers = append(peers, p)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list registered pubsub services: %w", err)
 	}
-	return addrs, nil
+	return peers, nil
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -88,7 +90,10 @@ func TestPubsubMesh_eachServiceConnectsToTheOthersRegistered(t *testing.T) {
 		svcC: {"/ip4/10.0.0.1/tcp/1/p2p/peer-a", "/ip4/10.0.0.2/tcp/2/p2p/peer-b"},
 	}
 	for svc, addrs := range want {
-		got := svc.connected[len(svc.connected)-1]
+		// Which peers, not in what order: a node lists its successors on the
+		// peer-id ring, starting after itself.
+		got := append([]string(nil), svc.connected[len(svc.connected)-1]...)
+		sort.Strings(got)
 		if !reflect.DeepEqual(got, addrs) {
 			t.Errorf("service %s connected %v, want %v", svc.self.PeerID, got, addrs)
 		}
@@ -207,5 +212,70 @@ func TestPubsubMesh_registeringTwiceKeepsOneRowPerService(t *testing.T) {
 func TestPubsubMeshServiceOf_onlyTheOramaClientReachesAService(t *testing.T) {
 	if got := pubsubMeshServiceOf(nil); got != nil {
 		t.Fatalf("a nil client has a pubsub service: %v", got)
+	}
+}
+
+// The table used to be created once, before the loop, and a failure there
+// (a registry mid-election during an upgrade) ended the mesh for good. Every
+// reconcile now creates it, so a mesh started against a registry with no
+// table forms on its first pass.
+func TestPubsubMesh_aReconcileCreatesTheTableItNeeds(t *testing.T) {
+	db := meshRegistry(t)
+	now := time.Unix(1_800_000_000, 0)
+	svc := &fakeMeshService{self: pubsub.MeshSelf{PeerID: "p1", Addrs: []string{"/ip4/10.0.0.1/tcp/4001/p2p/p1"}}}
+	m := NewPubsubMesh(svc, db, "n1", zap.NewNop())
+	m.now = func() time.Time { return now }
+
+	if err := m.reconcile(context.Background()); err != nil {
+		t.Fatalf("a reconcile against a registry with no table: %v", err)
+	}
+	var rows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM _pubsub_mesh_peers`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("registered rows = %d, err %v; want this service registered", rows, err)
+	}
+}
+
+func TestRingSuccessors(t *testing.T) {
+	peers := []registeredPeer{{"a", "A"}, {"c", "C"}, {"e", "E"}, {"g", "G"}}
+	cases := map[string]struct {
+		self  string
+		limit int
+		want  []string
+	}{
+		"from the middle, wrapping": {"d", 3, []string{"E", "G", "A"}},
+		"after the last":            {"z", 2, []string{"A", "C"}},
+		"all when under the limit":  {"b", 10, []string{"C", "E", "G", "A"}},
+		"none allowed":              {"b", 0, []string{}},
+	}
+	for name, c := range cases {
+		got := ringSuccessors(peers, c.self, c.limit)
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+	if got := ringSuccessors(nil, "x", 5); len(got) != 0 {
+		t.Errorf("no peers: %v", got)
+	}
+}
+
+// More live services than one ConnectPeers call takes: the service refused
+// the whole list and the mesh formed for nobody. A node now asks for at most
+// pubsub.MaxMeshPeers, its successors on the ring.
+func TestPubsubMesh_aNodeAsksForNoMoreThanTheServiceTakes(t *testing.T) {
+	db := meshRegistry(t)
+	now := time.Unix(1_800_000_000, 0)
+	m, svc := newTestMesh(t, db, "n0", "p-self", "/ip4/10.0.0.1/tcp/4001/p2p/p-self", &now)
+	for i := 0; i < pubsub.MaxMeshPeers+20; i++ {
+		id := fmt.Sprintf("p-%04d", i)
+		if _, err := db.Exec(`INSERT INTO _pubsub_mesh_peers (peer_id, node_id, multiaddr, last_seen) VALUES (?, ?, ?, ?)`,
+			id, "n"+id, "/ip4/10.0.0.2/tcp/4001/p2p/"+id, now.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(svc.connected) != 1 || len(svc.connected[0]) != pubsub.MaxMeshPeers {
+		t.Fatalf("asked the service for %d peers, want %d", len(svc.connected[0]), pubsub.MaxMeshPeers)
 	}
 }
