@@ -147,14 +147,23 @@ func TestPrivhelper_symlinkedDeployDirRefused(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := f.State.Nodes[0]
-	instance := edge.RandomLabel(t, "e2e-sym-")
-	link := "/opt/orama/.orama/data/deployments/" + instance
+	instance, real := edge.RandomLabel(t, "e2e-sym-"), edge.RandomLabel(t, "e2e-real-")
+	dir := "/opt/orama/.orama/data/deployments/"
+	link, target := dir+instance, dir+real
 	t.Cleanup(func() {
-		edge.RunInCleanup(t, f, n, "rm -f "+fleet.ShellQuote(link)+" && ! test -e "+fleet.ShellQuote(link))
+		edge.RunInCleanup(t, f, n, "rm -f "+fleet.ShellQuote(link)+" && rmdir "+fleet.ShellQuote(target)+" && ! test -e "+fleet.ShellQuote(link)+" && ! test -e "+fleet.ShellQuote(target))
 	})
-	f.MustExec(t, n, "ln -s /etc "+fleet.ShellQuote(link))
+	// The target is a real directory owned by the orama user: the one thing
+	// the check accepts. A symlink to /etc would also be refused for being
+	// root's, whether or not the check looks for symlinks; a symlink to a
+	// directory that passes by itself is refused for being a symlink only.
+	f.MustExec(t, n, "install -d -o orama -g orama -m 0755 "+fleet.ShellQuote(target))
+	if ok := f.Exec(t, n, edge.PrivhelperBin+" verify-deploy-dir "+real); ok.Exit != 0 {
+		t.Fatalf("verify-deploy-dir refused a real directory owned by orama (exit %d): %s%s", ok.Exit, ok.Stdout, f.Redact(ok.Stderr))
+	}
+	f.MustExec(t, n, "ln -s "+fleet.ShellQuote(target)+" "+fleet.ShellQuote(link))
 	o := f.Exec(t, n, edge.PrivhelperBin+" verify-deploy-dir "+instance)
 	if o.Exit == 0 {
-		t.Fatalf("verify-deploy-dir accepted a symlink to /etc: %s", o.Stdout)
+		t.Fatalf("verify-deploy-dir accepted a symlink to a directory that passes by itself: %s", o.Stdout)
 	}
 }

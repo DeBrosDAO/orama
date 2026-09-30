@@ -140,8 +140,12 @@ func refusedJoinsKeepTheInvite(t *testing.T, f *fleet.Fleet, joiner fleet.Node, 
 			t.Fatal(err)
 		}
 		out := installWith(t, f, joiner, encoded, "--expect-archive-signers", stranger.Address())
-		if out.Exit == 0 {
-			t.Fatalf("a joiner expecting %s joined:\n%s", stranger.Address(), f.Redact(out.Stdout))
+		// The archive preflight refuses it, before any join request:
+		// "the build archive ... cannot be installed, so the join was not
+		// requested" (pkg/install/archive_signers.go preflightArchive). Any
+		// other failure (a flag, the network) is not the check under test.
+		if out.Exit == 0 || !strings.Contains(out.Stdout+out.Stderr, "so the join was not requested") {
+			t.Fatalf("a joiner expecting %s: exit %d, want the archive preflight's refusal:\n%s", stranger.Address(), out.Exit, f.Redact(out.Stdout+out.Stderr))
 		}
 		requireUnused(t, f, minter, inv.Token)
 	})

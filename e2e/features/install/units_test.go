@@ -4,6 +4,7 @@ package install
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -89,6 +90,18 @@ func TestInstall_nameserversRunCoreDNS(t *testing.T) {
 	}
 }
 
+// servicesRunning is the summary line `orama node status` ends with, "5 of 5
+// running" (production/status/command.go).
+var servicesRunning = regexp.MustCompile(`(?m)^(\d+) of (\d+) running$`)
+
+// allServicesRunning reports whether that line says every listed service runs
+// and lists at least one: a bare "running" substring is also in "0 of 5
+// running".
+func allServicesRunning(out string) bool {
+	m := servicesRunning.FindStringSubmatch(out)
+	return m != nil && m[1] == m[2] && m[2] != "0"
+}
+
 // TestInstall_nodeStatusAndDoctor: the local commands an operator runs on
 // the node itself report a healthy install: `orama node status` lists the
 // services running, `orama node doctor` passes every check
@@ -98,7 +111,7 @@ func TestInstall_nodeStatusAndDoctor(t *testing.T) {
 	f := harness.Fleet(t)
 	for _, n := range f.State.Nodes {
 		st := infra.OnNode(t, f, n, "node", "status")
-		if st.Exit != 0 || !strings.Contains(st.Stdout, "running") || strings.Contains(st.Stdout, "No Orama services") {
+		if st.Exit != 0 || strings.Contains(st.Stdout, "No Orama services") || !allServicesRunning(st.Stdout) {
 			t.Errorf("%s: orama node status exit %d:\n%s%s", n.Name, st.Exit, st.Stdout, st.Stderr)
 		}
 		doc := infra.OnNode(t, f, n, "node", "doctor")
