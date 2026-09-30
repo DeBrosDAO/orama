@@ -52,6 +52,12 @@ func (cm *ClusterConfigManager) loadConfig(path string) (*ClusterServiceConfig, 
 	return &cfg, nil
 }
 
+// ServiceJSONMode keeps IPFS Cluster's service.json to the orama user: it holds
+// the cluster secret and the REST API password. Install wrote it 0600 and the
+// node rewrote it 0644 each time it updated the peer addresses, so it was
+// world-readable on every running node.
+const ServiceJSONMode = 0o600
+
 // saveConfig writes the node's fields into service.json, leaving the rest as
 // install wrote it.
 func (cm *ClusterConfigManager) saveConfig(path string, cfg *ClusterServiceConfig) error {
@@ -68,7 +74,7 @@ func (cm *ClusterConfigManager) saveConfig(path string, cfg *ClusterServiceConfi
 	if err != nil {
 		return fmt.Errorf("failed to marshal service.json: %w", err)
 	}
-	if err := durablefile.Write(path, data, 0644); err != nil {
+	if err := durablefile.Write(path, data, ServiceJSONMode); err != nil {
 		return fmt.Errorf("write the IPFS Cluster config %s: %w", path, err)
 	}
 	return nil

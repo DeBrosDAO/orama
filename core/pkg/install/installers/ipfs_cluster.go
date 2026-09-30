@@ -177,9 +177,9 @@ func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, sec
 	return nil
 }
 
-// serviceJSONMode keeps service.json to the orama user: it holds the cluster
-// secret and the REST API password. It was written 0644.
-const serviceJSONMode = 0o600
+// serviceJSONMode is the node's own mode for service.json (ipfs.ServiceJSONMode):
+// install and every later rewrite by the node must agree.
+const serviceJSONMode = ipfs.ServiceJSONMode
 
 // setKuboConnector points ipfs-cluster's ipfshttp connector at multiaddr,
 // creating the section when init did not. The address is the unit's proxy,
