@@ -29,7 +29,8 @@ func (g *Gateway) grantDB() client.DatabaseClient {
 // authority is its grant, and a wallet with none holds only the data plane, so
 // the grant is read when the route asks for something the data plane does not
 // have. Cache and publish do not: the lookup is registry round trips on every
-// one of those calls. The same question applies to a wallet that called this
+// one of those calls, unless the wallet holds a narrowed grant: that is read
+// through a short cache (narrowed_grant.go). The same question applies to a wallet that called this
 // gateway directly. A control route that does not set Ownership — namespace
 // list, deployments, the database — used to skip the read, and the scope gate
 // then refused the owner with the data plane's permissions.
@@ -46,5 +47,10 @@ func (g *Gateway) forwardedCallerNeedsGrant(r *http.Request, policy routepolicy.
 	if auth.IsAPIKeySubject(claims.Sub) && !policy.Ownership {
 		return false
 	}
-	return !g.callerPermissions(r).PermitsDomain(auth.Domain(policy.Domain), auth.Action(policy.Action))
+	if !g.callerPermissions(r).PermitsDomain(auth.Domain(policy.Domain), auth.Action(policy.Action)) {
+		return true
+	}
+	// The data plane reaches the route, but a wallet narrowed to part of it
+	// reaches only that part, and only the grant says which.
+	return g.callerHoldsNarrowedGrant(r, policy)
 }

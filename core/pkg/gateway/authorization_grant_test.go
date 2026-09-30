@@ -27,6 +27,8 @@ type grantRegistry struct {
 	// role is what the namespace's grant lookup returns; "" means the caller
 	// holds no grant at all.
 	role string
+	// resource is the selector that grant is narrowed to, if any.
+	resource string
 }
 
 func (g *grantRegistry) Database() client.DatabaseClient { return g }
@@ -42,7 +44,7 @@ func (g *grantRegistry) Query(_ context.Context, query string, _ ...interface{})
 			return &client.QueryResult{}, nil
 		}
 		return &client.QueryResult{Count: 1, Rows: [][]interface{}{
-			{g.role, "", "", "", "", ""},
+			{g.role, g.resource, "", "", "", ""},
 		}}, nil
 	}
 	return &client.QueryResult{}, nil
@@ -212,24 +214,29 @@ func TestAuthorizationMiddleware_namespaceListNeedsAWalletNotAGrant(t *testing.T
 	}
 }
 
-// A reader grant is empty. Resolving it on cache would take the data plane
-// away from a member the route never asked to own. The lookup stays off this
-// path, including for an owner: a selector on a storage grant is not applied
-// by a route that does not resolve one.
-func TestAuthorizationMiddleware_dataPlaneDoesNotResolveAGrant(t *testing.T) {
+// A reader grant is empty. Applying it on cache would take the data plane away
+// from a member the route never asked to own, so only a grant narrowed to a
+// resource is applied there. Whether the caller holds one is read once and
+// remembered (narrowed_grant.go), not once per request.
+func TestAuthorizationMiddleware_dataPlaneAppliesOnlyANarrowedGrant(t *testing.T) {
 	for _, role := range []string{string(auth.RoleOwner), string(auth.RoleReader)} {
 		t.Run(role, func(t *testing.T) {
 			g, registry := controlPlaneGateway(t, role)
-			chain, reached := controlChain(g)
 
-			w := httptest.NewRecorder()
-			chain.ServeHTTP(w, grantWalletRequest(http.MethodPost, "/v1/cache/get", "0xmember", "anchat"))
+			for i := 0; i < 2; i++ {
+				chain, reached := controlChain(g)
+				w := httptest.NewRecorder()
+				chain.ServeHTTP(w, grantWalletRequest(http.MethodPost, "/v1/cache/get", "0xmember", "anchat"))
 
-			if !*reached {
-				t.Fatalf("cache refused a %s: %d %s", role, w.Code, strings.TrimSpace(w.Body.String()))
+				if !*reached {
+					t.Fatalf("cache refused a %s: %d %s", role, w.Code, strings.TrimSpace(w.Body.String()))
+				}
+				if i == 0 {
+					registry.queries = 0
+				}
 			}
 			if registry.queries != 0 {
-				t.Errorf("cache made %d registry queries", registry.queries)
+				t.Errorf("the second cache request made %d registry queries", registry.queries)
 			}
 		})
 	}

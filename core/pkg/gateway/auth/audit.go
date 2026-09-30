@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -163,6 +164,13 @@ func (a *AuditLog) Record(ctx context.Context, event AuditEvent) {
 	if event.Result == "" {
 		event.Result = AuditSuccess
 	}
+	// Whoever the request was made by, when the caller did not say. Recording
+	// from inside the service, where a key is minted or a grant given, has no
+	// request to hand ActorFromRequest, and those were the events with nobody
+	// against them.
+	if event.Actor == "" {
+		event.Actor = ActorFromContext(ctx)
+	}
 
 	metadata := ""
 	if len(event.Metadata) > 0 {
@@ -190,6 +198,23 @@ func (a *AuditLog) Record(ctx context.Context, event AuditEvent) {
 			zap.String("namespace", event.Namespace),
 			zap.Error(err))
 	}
+}
+
+// ErrNoAuditDatabase is returned when this gateway has nowhere to read the
+// record from.
+var ErrNoAuditDatabase = errors.New("this gateway has no database to read the audit trail from")
+
+// Query reads the record, from the database it is written to.
+//
+// The reader used to be the gateway's own client. On a namespace gateway that
+// is the tenant's rqlite and the writer is the cluster registry, so every event
+// was written where the trail was never read from.
+func (a *AuditLog) Query(ctx context.Context, query string, args ...interface{}) (*client.QueryResult, error) {
+	db := a.database()
+	if db == nil {
+		return nil, ErrNoAuditDatabase
+	}
+	return db.Query(client.WithInternalAuth(ctx), query, args...)
 }
 
 // RecordFromRequest fills in the parts of an event that come from the request.
@@ -307,7 +332,12 @@ func ActorFromRequest(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
-	claims, ok := r.Context().Value(ctxkeys.JWT).(*JWTClaims)
+	return ActorFromContext(r.Context())
+}
+
+// ActorFromContext is ActorFromRequest for code that has only the context.
+func ActorFromContext(ctx context.Context) string {
+	claims, ok := ctx.Value(ctxkeys.JWT).(*JWTClaims)
 	if !ok || claims == nil {
 		return ""
 	}

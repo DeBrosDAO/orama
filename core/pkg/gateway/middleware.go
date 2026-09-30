@@ -984,14 +984,14 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		}
 
 		// A route that does not require a grant still has to carry one when the
-		// scope gate will ask for more than the data plane. Without that, an
-		// owner holds only the data plane and namespace list, deployments and
-		// the database answer 403. Cache and storage already pass on the data
-		// plane, and resolving a grant there would apply a selector the route
-		// has not asked to apply.
+		// scope gate will ask for more than the data plane, or when the caller
+		// holds a grant narrowed to a resource in the route's domain. Without
+		// the first, an owner holds only the data plane and namespace list,
+		// deployments and the database answer 403. Without the second, a grant
+		// narrowed to sessions/* is the whole cache.
 		if !policy.Ownership {
 			if g.forwardedCallerNeedsGrant(r, policy) {
-				if grant := g.lookupRequestGrant(r); grant != nil {
+				if grant := g.resolveRequestGrant(r, policy); grant != nil {
 					r = markGrant(r, grant)
 				}
 			}
@@ -1126,6 +1126,18 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// requestNamespace is the namespace the credential names, or the one this
+// gateway serves when it names none.
+func (g *Gateway) requestNamespace(r *http.Request) string {
+	if s, ok := r.Context().Value(CtxKeyNamespaceOverride).(string); ok && strings.TrimSpace(s) != "" {
+		return strings.TrimSpace(s)
+	}
+	if g.cfg != nil {
+		return strings.TrimSpace(g.cfg.ClientNamespace)
+	}
+	return ""
+}
+
 // lookupRequestGrant is the live grant the caller holds in the namespace the
 // credential names, or nil when there is none or it cannot be read. It does
 // not write a response: the ownership gate is what turns "none" into a 403.
@@ -1134,15 +1146,7 @@ func (g *Gateway) lookupRequestGrant(r *http.Request) *auth.Grant {
 		return nil
 	}
 	ctx := r.Context()
-	ns := ""
-	if v := ctx.Value(CtxKeyNamespaceOverride); v != nil {
-		if s, ok := v.(string); ok {
-			ns = strings.TrimSpace(s)
-		}
-	}
-	if ns == "" && g.cfg != nil {
-		ns = strings.TrimSpace(g.cfg.ClientNamespace)
-	}
+	ns := g.requestNamespace(r)
 	if ns == "" {
 		return nil
 	}
@@ -1424,6 +1428,9 @@ func (g *Gateway) namespaceProxyAuthFor(r *http.Request) namespaceProxyAuth {
 // the validated identity in signed internal-auth headers.
 func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request, namespaceName string, a namespaceProxyAuth) {
 	markTrafficNamespace(r, namespaceName)
+	if refuseCrossSiteUpgrade(w, r) {
+		return
+	}
 	validatedNamespace, validatedClaims, validatedScopes, authErr := a.namespace, a.claims, a.scopes, a.errMsg
 	isWS := isWebSocketUpgrade(r)
 	isPublic := g.policyFor(r).Access.Anonymous()

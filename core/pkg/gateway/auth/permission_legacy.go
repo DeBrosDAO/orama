@@ -68,6 +68,34 @@ func PermissionsFor(role Role, selector string) PermissionSet {
 	return PermissionSet{narrowed}
 }
 
+// KeyPermissions is what an API key may do on a route that resolved its grant.
+//
+// A key has two answers to "what may it reach": the scopes on its row, and the
+// role of the grant it was given when it was minted. The role is coarse — every
+// key that is not `admin` is a `runtime` one — so a key minted for `invoke`, or
+// for `cache` alone, held a runtime role's whole data plane on any route that
+// asked for a grant, pub/sub included. A key reaches what both say: its scopes
+// bound its role, and a selector on the grant narrows what is left.
+func KeyPermissions(storedScopes string, role Role, selector string) PermissionSet {
+	scoped := PermissionsFromScopes(storedScopes)
+	held := PermissionsFor(role, selector)
+	if strings.TrimSpace(selector) != "" {
+		return within(held, scoped)
+	}
+	return within(scoped, held)
+}
+
+// within keeps what is in ps that bound also reaches.
+func within(ps, bound PermissionSet) PermissionSet {
+	out := PermissionSet{}
+	for _, p := range ps {
+		if bound.PermitsDomain(p.Domain, p.Action) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // PermissionFromSelector reads a stored selector as the permission it was
 // trying to describe.
 //

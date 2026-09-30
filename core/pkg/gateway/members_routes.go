@@ -94,8 +94,9 @@ func (g *Gateway) listNamespaceMembers(w http.ResponseWriter, r *http.Request) {
 		if m.Resource != "" {
 			entry["resource"] = m.Resource
 			// Said on every row that has one, so nobody reads a narrowed grant
-			// as a working one.
-			entry["enforced"] = false
+			// as a working one: a row written before its domain was applied
+			// (or by a binary that knew more) says false.
+			entry["enforced"] = selectorEnforced(m.Resource)
 		}
 		out = append(out, entry)
 	}
@@ -170,9 +171,7 @@ func (g *Gateway) addNamespaceMember(w http.ResponseWriter, r *http.Request) {
 	}
 	if resource := strings.TrimSpace(body.Resource); resource != "" {
 		response["resource"] = resource
-		response["enforced"] = false
-		response["warning"] = "resource selectors are recorded but not enforced yet, so this grant " +
-			"authorises nothing until the data plane can apply them"
+		response["enforced"] = selectorEnforced(resource)
 	}
 	writeJSON(w, http.StatusCreated, response)
 }
@@ -248,6 +247,13 @@ func (g *Gateway) transferNamespace(w http.ResponseWriter, r *http.Request) {
 		"previous_owner": grant.Identifier,
 		"status":         "transferred",
 	})
+}
+
+// selectorEnforced reports whether the data path applies this selector's
+// domain. A selector that does not parse is applied by nothing.
+func selectorEnforced(resource string) bool {
+	selector, err := auth.ParseSelector(resource)
+	return err == nil && auth.SelectorEnforced(selector.Domain)
 }
 
 // callerGrant returns the grant the authorization middleware resolved for this

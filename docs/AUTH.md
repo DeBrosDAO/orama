@@ -48,8 +48,12 @@ will check — a signature over a message the gateway did not issue proves
 nothing about which site asked for it.
 
 The access token lasts 15 minutes. The refresh token lasts 30 days, is stored
-hashed, and rotates on every use: presenting one twice is a replay, and the
-second attempt fails and is recorded.
+hashed, and rotates on every use. A rotated token is accepted **once more**, for
+60 seconds, so a client that lost the response to its refresh can recover; after
+that — or once that slot is spent, or the session was logged out — presenting it
+is a replay: it is refused with `401` and recorded as `auth.refresh.replay`. A
+token nobody issued, or one that has merely expired, is refused the same way but
+is not a replay.
 
 `orama auth login` does this with RootWallet, which signs without the key
 leaving it. What it keeps is the session — the access and refresh tokens above.
@@ -478,6 +482,14 @@ one would let `avatars/../keys/x` match `avatars/*`. A cache key is not a path
 and is not normalised — `sessions/../tokens/x` is a key called `../tokens/x` in
 the `sessions` map, and the map is what the grant names.
 
+On a route that does not otherwise require a grant — storage and the cache — the
+gateway reads the caller's grant only to find out whether it is narrowed, and
+remembers the answer for ten seconds per namespace and wallet: a lookup is
+registry round trips, and these are the hot paths. A grant narrowed or revoked
+therefore reaches the data plane within ten seconds. `enforced` in
+`orama members list` and in the answer to adding a member says whether the
+selector's domain is one of the four above.
+
 A selector can only narrow. `storage:avatars/*` on a `reader`, who holds
 nothing, grants nothing: a narrowing that widens is not a narrowing.
 
@@ -493,13 +505,19 @@ half would not be applied.
 ## Keys
 
 ```bash
-orama namespace keys create --scope app-runtime --label web   # data plane only
+orama namespace keys create --scope app-runtime --label web   # invoke, storage, push, webrtc, proxy
 orama namespace keys create --scope admin --label ci          # everything
 orama namespace keys list
 orama namespace keys rotate --id <id>
 orama namespace keys revoke --id <id>
 ```
 
+- A key reaches what its **scopes** say, on every route. `app-runtime` is
+  `invoke`, `storage`, `push`, `webrtc` and `proxy` — not `pubsub` and not
+  `cache`; a key that publishes or uses the cache is minted with them named
+  (`--scope invoke,pubsub,cache`). The membership role a key is recorded with is
+  `runtime` or `admin` and nothing finer, so it never widens a key past its
+  scopes.
 - Every key expires: 90 days by default, a year at most. There is no way to ask
   for one that does not.
 - A key does **not** name its namespace. It used to be `ak_<random>:<namespace>`,
@@ -720,6 +738,7 @@ about it — plus the fields that make it actionable.
 | `USER_JWT_REQUIRED` | this operation needs a logged-in user; a key alone is not enough |
 | `INSUFFICIENT_SCOPE` | the credential lacks a grant; `required_scope` names it |
 | `NAMESPACE_MISMATCH` | the credential belongs to another namespace |
+| `ORIGIN_NOT_ALLOWED` | a WebSocket upgrade whose `Origin` is not this host or a name under it (403) |
 | `OWNERSHIP_REQUIRED` | the credential holds no grant in this namespace |
 | `NOT_AN_OPERATOR` | the wallet is not on the cluster's operator list |
 | `DESTINATION_NOT_ALLOWED` | the proxy refused the destination |

@@ -627,8 +627,23 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			return "", "", "", 0, ErrRefreshTransient
 		}
 		if !gOK {
-			// Genuinely not found / revoked outside grace / grace already
-			// consumed / expired — a real bad token.
+			// Not found, expired, revoked outside the grace, or its grace
+			// already consumed — a real bad token. One that was issued and
+			// has since been spent is a replay, and is told apart so the
+			// handler records it: only a concurrent race used to be.
+			spent, serr := s.refreshTokenSpent(internalCtx, ormDB, nsID, hashedRefresh)
+			if serr != nil {
+				s.logger.ComponentWarn(logging.ComponentGeneral,
+					"refresh replay check failed (transient rqlite error, surfacing retryable)",
+					zap.String("namespace", namespace), zap.Error(serr))
+				return "", "", "", 0, ErrRefreshTransient
+			}
+			if spent {
+				s.logger.ComponentWarn(logging.ComponentGeneral,
+					"refresh token replay: a revoked token was presented outside its reuse grace",
+					zap.String("namespace", namespace))
+				return "", "", "", 0, ErrRefreshTokenReplay
+			}
 			return "", "", "", 0, fmt.Errorf("invalid or expired refresh token")
 		}
 		session = gSession
@@ -804,6 +819,20 @@ func (s *Service) lookupReuseGrace(ctx context.Context, ormDB client.DatabaseCli
 		return refreshRow{}, false, nil // defensive: never grace-mint an anonymous session
 	}
 	return session, true, nil
+}
+
+// refreshTokenSpent reports whether a refresh token was issued in this
+// namespace and has since been revoked — rotated away, or ended by a logout. A
+// token nobody ever issued, or one that merely expired, is not: presenting it is
+// a mistake, and presenting a spent one is what a stolen token looks like.
+func (s *Service) refreshTokenSpent(ctx context.Context, ormDB client.DatabaseClient, nsID interface{}, hashedRefresh string) (bool, error) {
+	res, err := ormDB.Query(ctx,
+		`SELECT 1 FROM refresh_tokens WHERE namespace_id = ? AND token = ? AND revoked_at IS NOT NULL LIMIT 1`,
+		nsID, hashedRefresh)
+	if err != nil {
+		return false, err
+	}
+	return res != nil && res.Count > 0 && len(res.Rows) > 0, nil
 }
 
 // claimReuseGrace spends a rotated token's reuse grace: a single-use CAS.

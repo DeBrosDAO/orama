@@ -25,9 +25,6 @@ import (
 func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 	ctx := r.Context()
 
-	// The grant the authorization middleware resolved for this namespace, for
-	// whichever principal the credential named. It is the answer whenever the
-	// route resolves one.
 	// The lobby belongs to nobody and holds nothing (docs/AUTH.md, "The
 	// lobby"): its session reaches only the routes that ask for no
 	// permission. That holds for a grant too — a cluster from before
@@ -36,9 +33,18 @@ func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 	ns, _ := ctx.Value(CtxKeyNamespaceOverride).(string)
 	inLobby := auth.IsLobbyNamespace(ns) || strings.TrimSpace(ns) == ""
 
+	// The grant the authorization middleware resolved for this namespace, for
+	// whichever principal the credential named. It is the answer whenever the
+	// route resolves one.
 	if grant, _ := ctx.Value(ctxKeyGrant).(*auth.Grant); grant != nil {
 		if auth.IsLobbyNamespace(ns) {
 			return auth.PermissionSet{}
+		}
+		if grant.PrincipalType == auth.PrincipalServiceAccount {
+			// A key's role is runtime or admin and nothing between, so its
+			// own scopes say what it holds.
+			scopes, _ := ctx.Value(ctxKeyScopes).(auth.ScopeSet)
+			return auth.KeyPermissions(scopes.Canonical(), grant.Role, grant.Resource)
 		}
 		return auth.PermissionsFor(grant.Role, grant.Resource)
 	}

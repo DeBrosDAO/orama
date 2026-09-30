@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -90,14 +91,15 @@ func (g *Gateway) setAppGrant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if role == auth.RoleAdmin {
-		// An app with the control plane can deploy over itself, mint keys and
-		// read the raw database. If that is what somebody wants they can say
-		// so with a wallet; a deployment asking for it is almost always a
-		// mistake, and it is the mistake this whole change exists to end.
+	if role != auth.RoleRuntime && role != auth.RoleReader {
+		// An app with the control plane (admin, owner, developer) can deploy
+		// over itself, mint keys and read the raw database. If that is what
+		// somebody wants they can say so with a wallet; a deployment asking
+		// for it is almost always a mistake, and it is the mistake this whole
+		// change exists to end.
 		writeError(w, http.StatusBadRequest,
 			"a deployment cannot hold the control plane: grant it 'runtime' for the data plane, "+
-				"or name the grants it needs")
+				"or 'reader' for none")
 		return
 	}
 
@@ -114,6 +116,11 @@ func (g *Gateway) setAppGrant(w http.ResponseWriter, r *http.Request) {
 		Resource:      strings.TrimSpace(body.Resource),
 		CreatedBy:     auth.ActorFromRequest(r),
 	}); err != nil {
+		var invalid *auth.ErrInvalidGrant
+		if errors.As(err, &invalid) {
+			writeError(w, http.StatusBadRequest, invalid.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
