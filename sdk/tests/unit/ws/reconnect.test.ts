@@ -273,3 +273,33 @@ describe('backoff', () => {
     expect(delays[2]).toBeLessThanOrEqual(313);
   });
 });
+
+describe('WSClient auth parameter', () => {
+  it('sends the token as ?jwt=, the parameter the gateway verifies as a JWT on an upgrade', () => {
+    FakeSocket.instances = [];
+    const ws = new WSClient({
+      wsURL: 'wss://gw.example/v1/pubsub/ws?topic=t',
+      authToken: 'a.b.c',
+      WebSocket: FakeSocket as any,
+      reconnect: { enabled: false },
+    });
+    void ws.connect().catch(() => undefined);
+    const url = new URL(FakeSocket.instances[0].url);
+    expect(url.searchParams.get('jwt')).toBe('a.b.c');
+    expect(url.searchParams.get('token')).toBeNull();
+    expect(url.searchParams.get('topic')).toBe('t');
+  });
+
+  it('sends no credential parameter without a token', () => {
+    FakeSocket.instances = [];
+    const ws = new WSClient({
+      wsURL: 'wss://gw.example/v1/pubsub/ws?topic=t',
+      WebSocket: FakeSocket as any,
+      reconnect: { enabled: false },
+    });
+    void ws.connect().catch(() => undefined);
+    const url = new URL(FakeSocket.instances[0].url);
+    expect(url.searchParams.get('jwt')).toBeNull();
+    expect(url.searchParams.get('token')).toBeNull();
+  });
+});

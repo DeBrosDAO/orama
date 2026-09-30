@@ -119,6 +119,8 @@ export const AuthCode = {
   NamespaceMismatch: "NAMESPACE_MISMATCH",
   /** The credential is not an owner of this namespace. */
   OwnershipRequired: "OWNERSHIP_REQUIRED",
+  /** A WebSocket upgrade from a page on another site; the gateway refuses it at the edge. */
+  OriginNotAllowed: "ORIGIN_NOT_ALLOWED",
   /** The route is the cluster operator's. */
   OperatorRequired: "NOT_AN_OPERATOR",
   /** The destination is refused; a different credential will not help. */

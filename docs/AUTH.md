@@ -557,8 +557,8 @@ That is the form to use, for a key and for a JWT alike. A token exchanged from
 a key carries the key's **stored** form as its subject, not the key: a JWT
 payload is base64, not encryption, and a 15-minute token goes to more places
 than a 90-day credential should. On a WebSocket upgrade,
-where a browser cannot set a header, `?api_key=` or `?token=` is read instead
-— and only there: a credential in a query string ends up in the access log, in
+where a browser cannot set a header, a token goes in `?jwt=` and a key in
+`?api_key=` or `?token=` — and only there: a credential in a query string ends up in the access log, in
 the Referer of the next request the page makes, and in history.
 
 Three other spellings are still accepted and are going away: `X-API-Key`,

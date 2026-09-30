@@ -288,13 +288,15 @@ export class WSClient {
     let url = this.wsURL;
 
     if (this.authToken) {
-      // Always `token`, always a token. This used to look at the credential
+      // Always `jwt`, always a token. This used to look at the credential
       // and send `api_key=<the key itself>` when it started with `ak_`, so a
       // long-lived key went into the URL — into the gateway's access log, and
       // into the browser's history. The SDK exchanges a key for a token before
-      // it opens a socket.
+      // it opens a socket. The gateway verifies a JWT in `?jwt=` on an upgrade
+      // (and strips it before the proxy hop); `?token=` is read as an API key,
+      // so a token sent there is looked up as one and refused.
       const separator = url.includes("?") ? "&" : "?";
-      url += `${separator}token=${encodeURIComponent(this.authToken)}`;
+      url += `${separator}jwt=${encodeURIComponent(this.authToken)}`;
     }
 
     return url;
