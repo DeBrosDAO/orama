@@ -61,7 +61,11 @@ func TestRaw_malformedRequestsRefusedNotServed(t *testing.T) {
 		if err != nil && len(codes) == 0 {
 			continue // the connection was closed without an answer: refused
 		}
-		if len(codes) == 0 || !refusal(codes[0]) {
+		// A malformed chunk size is refused by the gateway behind Caddy, and
+		// Caddy reports that upstream failure as 502 (bad gateway): the request
+		// was still not served.
+		badChunkAt502 := what == "bad chunk size" && len(codes) > 0 && codes[0] == http.StatusBadGateway
+		if len(codes) == 0 || (!refusal(codes[0]) && !badChunkAt502) {
 			t.Errorf("%s: answered %v (%v), want a refusal (4xx, or 505 for a version): %.200q", what, codes, err, raw)
 		}
 	}

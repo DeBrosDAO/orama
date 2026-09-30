@@ -73,8 +73,18 @@ func TestStatusPage_assetsServedUnderTheCSP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.HasPrefix(raw, []byte("HTTP/1.1 200")) && bytes.Contains(raw, []byte("<html")) {
-		t.Error("an encoded traversal under /status/assets/ served a file from outside the assets directory")
+	// The mux answers an unclean path with a redirect to the cleaned one, so
+	// the request is never served as sent; what must hold is that nothing
+	// answers 200 for it.
+	if bytes.HasPrefix(raw, []byte("HTTP/1.1 200")) {
+		t.Errorf("an encoded traversal under /status/assets/ was served: %.200q", raw)
+	}
+	raw, err = c.Raw(t.Context(), []byte("GET /status/assets/../../etc/passwd HTTP/1.1\r\nHost: "+harness.Fleet(t).State.BaseDomain+"\r\nConnection: close\r\n\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.HasPrefix(raw, []byte("HTTP/1.1 200")) || bytes.Contains(raw, []byte("root:")) {
+		t.Errorf("a dot-dot traversal under /status/assets/ was served: %.200q", raw)
 	}
 }
 

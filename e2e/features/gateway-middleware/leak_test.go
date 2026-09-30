@@ -73,7 +73,12 @@ func TestOpenEndpoints_nameNoNode(t *testing.T) {
 				continue // only the index gateway serves the ping (docs/MONITORING.md "ring monitor")
 			}
 			resp := c.MustSend(t, gw.Req{Path: path, Header: http.Header{"Accept": {"application/json"}}})
-			if resp.Status != http.StatusOK {
+			// The health handlers answer 503 while any check is degraded (a
+			// node mid-restart in a chaos neighbour's run): still an answer
+			// whose body must name no node.
+			healthy := resp.Status == http.StatusOK
+			degraded := resp.Status == http.StatusServiceUnavailable && (path == "/health" || path == "/v1/health")
+			if !healthy && !degraded {
 				t.Errorf("%s %s: HTTP %d, want 200 (open endpoint)", where, path, resp.Status)
 				continue
 			}
