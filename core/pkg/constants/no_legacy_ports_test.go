@@ -22,7 +22,7 @@ var legacyPorts = map[string]string{
 	"5001": "index RQLite HTTP — use constants.RQLiteHTTPPort / rqlite.LocalNodeEndpoint",
 	"7001": "index RQLite Raft — use constants.RQLiteRaftPort / RQLiteRaftAddrFor",
 	"6001": "index gateway — use constants.GatewayAPIPort / LocalGatewayURL / GatewayURLFor",
-	"3320": "index Olric — use constants.OlricHTTPPort / OlricAddrFor / config.InstalledOlricURL",
+	"3320": "index Olric — use constants.OlricHTTPPort / OlricAddrFor / config.InstalledOlricAddr",
 	"4501": "Kubo HTTP API — use constants.IPFSAPIPort / LocalIPFSAPIURL",
 }
 

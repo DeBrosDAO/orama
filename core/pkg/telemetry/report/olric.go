@@ -2,18 +2,21 @@ package report
 
 import (
 	"context"
-	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/olric"
 )
 
 // indexOlricUnit is the index Olric service. It replaced the pre-namespace
 // orama-olric.service, which the index migration stops and disables.
 const indexOlricUnit = "orama-namespace-olric@index"
+
+// olricMembersTimeout bounds the member-list call to the index Olric.
+const olricMembersTimeout = 3 * time.Second
 
 // collectOlric gathers Olric distributed cache health information.
 func collectOlric() *OlricReport {
@@ -99,45 +102,17 @@ func collectOlric() *OlricReport {
 		}
 	}
 
-	// 8. Member info: try HTTP GET to the index Olric HTTP API, at the WireGuard address the
-	// installer bound it to (never loopback).
-	if olricURL, err := config.InstalledOlricURL(config.ProductionNodeConfigPath); err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// 8. Member info from the index Olric at the address the installer bound it to (never
+	// loopback), through an Olric client call: Olric has no HTTP API on that port.
+	if addr, err := config.InstalledOlricAddr(config.ProductionNodeConfigPath); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), olricMembersTimeout)
 		defer cancel()
-
-		if body, err := httpGet(ctx, olricURL+"/"); err == nil {
-			var info struct {
-				Coordinator string `json:"coordinator"`
-				Members     []struct {
-					Name string `json:"name"`
-				} `json:"members"`
-				// Some Olric versions expose a flat member list or a different structure.
-			}
-			if err := json.Unmarshal(body, &info); err == nil {
-				r.Coordinator = info.Coordinator
-				r.MemberCount = len(info.Members)
-				for _, m := range info.Members {
-					r.Members = append(r.Members, m.Name)
-				}
-			}
-
-			// Fallback: try to extract member count from a different JSON layout.
-			if r.MemberCount == 0 {
-				var raw map[string]interface{}
-				if err := json.Unmarshal(body, &raw); err == nil {
-					if members, ok := raw["members"]; ok {
-						if arr, ok := members.([]interface{}); ok {
-							r.MemberCount = len(arr)
-							for _, m := range arr {
-								if s, ok := m.(string); ok {
-									r.Members = append(r.Members, s)
-								}
-							}
-						}
-					}
-					if coord, ok := raw["coordinator"].(string); ok && r.Coordinator == "" {
-						r.Coordinator = coord
-					}
+		if members, err := olric.Members(ctx, addr, olricMembersTimeout); err == nil {
+			r.MemberCount = len(members)
+			for _, m := range members {
+				r.Members = append(r.Members, m.Name)
+				if m.Coordinator {
+					r.Coordinator = m.Name
 				}
 			}
 		}

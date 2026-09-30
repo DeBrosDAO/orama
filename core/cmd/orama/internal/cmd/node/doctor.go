@@ -16,6 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/spf13/cobra"
 )
@@ -33,6 +34,9 @@ type check struct {
 	Status string // PASS, FAIL, WARN
 	Detail string
 }
+
+// olricProbeTimeout bounds doctor's call to the index Olric.
+const olricProbeTimeout = 5 * time.Second
 
 func runDoctor(cmd *cobra.Command, args []string) error {
 	fmt.Println("Node Doctor")
@@ -77,15 +81,14 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	// 4. Check Olric health, where the installer bound it (the WireGuard address).
-	olricURL, err := config.InstalledOlricURL(config.ProductionNodeConfigPath)
-	if err != nil {
+	// 4. Check Olric health, where the installer bound it (the WireGuard address), with an Olric
+	// client call: Olric has no HTTP API on that port.
+	if addr, err := config.InstalledOlricAddr(config.ProductionNodeConfigPath); err != nil {
 		checks = append(checks, check{"Olric reachable", "FAIL", err.Error()})
-	} else if resp, err := client.Get(olricURL + "/"); err != nil {
-		checks = append(checks, check{"Olric reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
+	} else if members, err := olric.Members(context.Background(), addr, olricProbeTimeout); err != nil {
+		checks = append(checks, check{"Olric reachable", "FAIL", fmt.Sprintf("Cannot reach: %v", err)})
 	} else {
-		resp.Body.Close()
-		checks = append(checks, check{"Olric reachable", "PASS", "Responding on " + olricURL})
+		checks = append(checks, check{"Olric reachable", "PASS", fmt.Sprintf("Responding on %s, %d member(s)", addr, len(members))})
 	}
 
 	// 5. Check Gateway health

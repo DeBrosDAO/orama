@@ -8,11 +8,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// InstalledOlricURL is the index Olric HTTP API of the node that wrote the node config at path
+// InstalledOlricAddr is the index Olric client address (host:port) of the node that wrote the node config at path
 // (ProductionNodeConfigPath on an installed node): the first of http_gateway.olric_servers. Olric
 // binds the node's WireGuard address, never loopback, so on-node tooling reads the address the
 // installer configured instead of assuming localhost.
-func InstalledOlricURL(path string) (string, error) {
+func InstalledOlricAddr(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read node config %s (run this on an installed node, as root): %w", path, err)
@@ -32,5 +32,5 @@ func InstalledOlricURL(path string) (string, error) {
 	if host, port, err := net.SplitHostPort(addr); err != nil || host == "" || port == "" {
 		return "", fmt.Errorf("node config %s: olric server %q is not host:port", path, addr)
 	}
-	return "http://" + addr, nil
+	return addr, nil
 }
