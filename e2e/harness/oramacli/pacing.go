@@ -62,6 +62,11 @@ func commandCost(args []string, noWallet bool) cost {
 			}
 			return cost{cred: walletLoginCred, challenge: true, known: true}
 		case "approve":
+			if noWallet {
+				// No agent to sign with: the command stops at its own argument
+				// or agent check, before any challenge is asked for.
+				return cost{known: true}
+			}
 			return cost{cred: approveCred, challenge: true, known: true}
 		}
 	}
