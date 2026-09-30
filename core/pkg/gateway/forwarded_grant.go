@@ -48,8 +48,10 @@ func (g *Gateway) forwardedCallerNeedsGrant(r *http.Request, policy routepolicy.
 	if claims == nil || strings.TrimSpace(claims.Sub) == "" {
 		return false
 	}
-	isKey := auth.IsAPIKeySubject(claims.Sub)
+	isKey := subjectOwnerType(strings.TrimSpace(claims.Sub)) == "api_key"
 	// A key's scopes already answer a route that does not resolve a grant.
+	// A workload's do not: its token carries its role's scopes, and the
+	// selector its grant narrows them with lives only on the grant.
 	// An owned route still looks the grant up: the selector lives on it.
 	if isKey && !policy.Ownership {
 		return false

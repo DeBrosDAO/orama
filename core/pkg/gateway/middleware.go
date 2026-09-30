@@ -1091,13 +1091,8 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 				// recognisably a wallet is a key: see auth.IsWalletSubject for
 				// why that is the safe direction.
 				subj := strings.TrimSpace(claims.Sub)
-				if auth.IsAPIKeySubject(subj) {
-					ownerType = "api_key"
-					ownerID = subj
-				} else {
-					ownerType = "wallet"
-					ownerID = subj
-				}
+				ownerType = subjectOwnerType(subj)
+				ownerID = subj
 			}
 		}
 		if ownerType == "" && ownerID == "" {
@@ -1151,13 +1146,11 @@ func (g *Gateway) authorizationMiddleware(next http.Handler) http.Handler {
 		// they actually belong to (blocked function deploy / push config).
 		grantFor := func(ot, oid string) *auth.Grant {
 			hashed := ""
-			ptype := auth.PrincipalWallet
 			if ot == "api_key" {
-				ptype = auth.PrincipalServiceAccount
 				hashed = g.authService.HashAPIKey(oid)
 			}
 			for _, c := range principalIdentifierCandidates(ot, oid, hashed) {
-				grant, gerr := g.authService.GrantIn(internalCtx, db, nsID, ptype, c)
+				grant, gerr := g.authService.GrantIn(internalCtx, db, nsID, grantPrincipalType(ot), c)
 				if gerr == nil {
 					return grant
 				}
@@ -1237,14 +1230,12 @@ func (g *Gateway) lookupRequestGrant(r *http.Request) (*auth.Grant, error) {
 	}
 	nsID := nres.Rows[0][0]
 
-	ptype := auth.PrincipalWallet
 	hashed := ""
 	if ownerType == "api_key" {
-		ptype = auth.PrincipalServiceAccount
 		hashed = g.authService.HashAPIKey(ownerID)
 	}
 	for _, c := range principalIdentifierCandidates(ownerType, ownerID, hashed) {
-		grant, gerr := g.authService.GrantIn(internalCtx, db, nsID, ptype, c)
+		grant, gerr := g.authService.GrantIn(internalCtx, db, nsID, grantPrincipalType(ownerType), c)
 		switch {
 		case gerr == nil:
 			return grant, nil
@@ -1255,21 +1246,46 @@ func (g *Gateway) lookupRequestGrant(r *http.Request) (*auth.Grant, error) {
 	return nil, nil
 }
 
-// requestPrincipal is the kind ("wallet" or "api_key") and identifier of the
-// JWT's subject, or empty when the request carries none.
+// requestPrincipal is the kind ("wallet", "app" or "api_key") and identifier
+// of the JWT's subject, or empty when the request carries none.
 func requestPrincipal(ctx context.Context) (string, string) {
 	claims, _ := ctx.Value(ctxKeyJWT).(*auth.JWTClaims)
 	if claims == nil {
 		return "", ""
 	}
 	subj := strings.TrimSpace(claims.Sub)
-	switch {
-	case subj == "":
+	if subj == "" {
 		return "", ""
+	}
+	return subjectOwnerType(subj), subj
+}
+
+// subjectOwnerType is the kind of principal a JWT subject names. A workload's
+// subject (app:<ns>/<name>) is not a wallet, and auth.IsAPIKeySubject is "not a
+// wallet", so it used to be read as a key: its grant, written under the app
+// principal, was looked for under a service account and never found — an
+// app's selector was never applied and an owned route refused it.
+func subjectOwnerType(subj string) string {
+	switch {
+	case auth.IsWorkloadSubject(subj):
+		return "app"
 	case auth.IsAPIKeySubject(subj):
-		return "api_key", subj
+		return "api_key"
 	default:
-		return "wallet", subj
+		return "wallet"
+	}
+}
+
+// grantPrincipalType is the principal type a grant for an owner kind is
+// recorded under.
+func grantPrincipalType(ownerType string) auth.PrincipalType {
+	switch ownerType {
+	case "app":
+		return auth.PrincipalApp
+	case "api_key":
+		return auth.PrincipalServiceAccount
+	default:
+		return auth.PrincipalWallet
 	}
 }
 

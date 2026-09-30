@@ -312,3 +312,38 @@ func TestForwardedInvoke_theInvokeRouteIsNarrowedToo(t *testing.T) {
 		}
 	}
 }
+
+// A deployment's grant is recorded under the app principal. Its token's
+// subject is not a wallet, so the gateway read it as a key: the grant was
+// looked for under a service account and never found, and a selector the
+// app-grants API accepted narrowed nothing.
+func TestForwardedWorkload_theAppGrantSelectorNarrowsTheWorkload(t *testing.T) {
+	g, registry := namespaceGatewayForHops(t, "runtime")
+	registry.principalType = auth.PrincipalApp
+	workload := auth.WorkloadSubject(hopNamespace, "web")
+
+	registry.resource = "fn:name=checkout"
+	for _, path := range []string{"/v1/invoke/" + hopNamespace + "/", "/v1/functions/"} {
+		for fn, want := range map[string]int{"checkout": http.StatusOK, "refund": http.StatusForbidden} {
+			target := path + fn
+			if path == "/v1/functions/" {
+				target += "/invoke"
+			}
+			r := hop(t, g, http.MethodPost, target, hopNamespace, workload)
+			status, reached := serveHopAuthorizing(g, r, auth.Resource{Domain: auth.SelectorFn, Name: fn})
+			if !reached || status != want {
+				t.Errorf("%s: reached %v, status %d, want %d", target, reached, status, want)
+			}
+		}
+	}
+
+	registry.resource = "cache:key=sessions/*"
+	g.narrowedGrants = grantCache{}
+	for key, want := range map[string]int{"sessions/abc": http.StatusOK, "tokens/x": http.StatusForbidden} {
+		r := hop(t, g, http.MethodPost, "/v1/cache/put", hopNamespace, workload)
+		status, reached := serveHopAuthorizing(g, r, auth.Resource{Domain: auth.DomainCache, Action: auth.ActionWrite, Name: key})
+		if !reached || status != want {
+			t.Errorf("cache put %s: reached %v, status %d, want %d", key, reached, status, want)
+		}
+	}
+}

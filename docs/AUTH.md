@@ -941,7 +941,10 @@ is holding — so nothing long-lived is on the node, and nothing privileged has 
 rewrite anything while the app runs.
 
 Grants are resolved when the token is minted, not baked in at deploy: taking one
-away reaches a running app on its next renewal. An app nobody has granted
+away reaches a running app on its next renewal. The gateway also reads the app's
+grant on the routes that resolve one, under the app principal, so a selector on
+it (`"resource": "fn:name=checkout"` in `POST /v1/deployments/grants`) narrows the app
+as it narrows a wallet, within the grant cache's ten seconds. An app nobody has granted
 anything to holds a token that reaches nothing, which is the only safe default —
 the alternative is every app starting with the namespace's whole data plane,
 which is the permanent key this replaces wearing a different hat.

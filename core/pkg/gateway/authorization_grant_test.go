@@ -29,11 +29,15 @@ type grantRegistry struct {
 	role string
 	// resource is the selector that grant is narrowed to, if any.
 	resource string
+	// principalType, when set, is the only principal type the grant is
+	// recorded under: a lookup under any other type finds nothing, as the
+	// registry's WHERE p.type = ? would.
+	principalType auth.PrincipalType
 }
 
 func (g *grantRegistry) Database() client.DatabaseClient { return g }
 
-func (g *grantRegistry) Query(_ context.Context, query string, _ ...interface{}) (*client.QueryResult, error) {
+func (g *grantRegistry) Query(_ context.Context, query string, args ...interface{}) (*client.QueryResult, error) {
 	switch {
 	case strings.Contains(query, "INSERT OR IGNORE INTO namespaces"):
 		return &client.QueryResult{Count: 1}, nil
@@ -41,6 +45,9 @@ func (g *grantRegistry) Query(_ context.Context, query string, _ ...interface{})
 		return &client.QueryResult{Count: 1, Rows: [][]interface{}{{int64(1)}}}, nil
 	case strings.Contains(query, "SELECT g.role, g.resource"):
 		if g.role == "" {
+			return &client.QueryResult{}, nil
+		}
+		if g.principalType != "" && (len(args) < 2 || args[1] != string(g.principalType)) {
 			return &client.QueryResult{}, nil
 		}
 		return &client.QueryResult{Count: 1, Rows: [][]interface{}{
