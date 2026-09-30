@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/push"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/upgrade"
 )
@@ -28,13 +29,13 @@ func Run(flags *Flags) error {
 
 func (f *Flags) validate() error {
 	if f.Env == "" {
-		return fmt.Errorf("--env is required\nUsage: orama node rollout --env <devnet|testnet>")
+		return clierr.Usage("--env is required\nUsage: orama node rollout --env <devnet|testnet>")
 	}
 	if f.NoBuild && f.Archive == "" {
-		return fmt.Errorf("--no-build needs --archive <path>: the build to roll out")
+		return clierr.Usage("--no-build needs --archive <path>: the build to roll out")
 	}
 	if !f.NoBuild && f.Archive != "" {
-		return fmt.Errorf("--archive is only for --no-build; a rollout that builds rolls out what it built")
+		return clierr.Usage("--archive is only for --no-build; a rollout that builds rolls out what it built")
 	}
 	return nil
 }

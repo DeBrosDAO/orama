@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
@@ -57,7 +58,7 @@ func Run(flags *Flags) error {
 
 func (f *Flags) validate() error {
 	if f.Env == "" {
-		return fmt.Errorf("--env is required\nUsage: orama node recover-raft --env <devnet|testnet>")
+		return clierr.Usage("--env is required\nUsage: orama node recover-raft --env <devnet|testnet>")
 	}
 	// --leader is optional: without it the command reads every node's applied
 	// index and keeps the furthest-ahead one, printing what it found so the

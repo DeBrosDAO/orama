@@ -27,6 +27,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -66,7 +67,7 @@ type Flags struct {
 // Run is the `orama node migrate-raft-id` entry point.
 func Run(flags *Flags) error {
 	if flags.Env == "" {
-		return fmt.Errorf("--env is required")
+		return clierr.Usage("--env is required")
 	}
 	return execute(flags)
 }

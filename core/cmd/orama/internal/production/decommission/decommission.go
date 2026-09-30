@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -33,7 +34,7 @@ func Run(flags *Flags) error {
 
 func (f *Flags) validate() error {
 	if f.Env == "" {
-		return fmt.Errorf("--env is required\nUsage: orama node remove --env <devnet|testnet> --node <ip> [--offline] [--force]")
+		return clierr.Usage("--env is required\nUsage: orama node remove --env <devnet|testnet> --node <ip> [--offline] [--force]")
 	}
 	if f.Node == "" {
 		return fmt.Errorf("--node is required: decommission removes ONE node")

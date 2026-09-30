@@ -1,9 +1,9 @@
 package node
 
 import (
-	"fmt"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/logs"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
 	"github.com/spf13/cobra"
@@ -34,7 +34,7 @@ Aliases: ` + strings.Join(utils.ServiceAliases(), ", "),
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if logsLines < 1 {
-			return fmt.Errorf("--lines must be at least 1, got %d", logsLines)
+			return clierr.Usage("--lines must be at least 1, got %d", logsLines)
 		}
 		return logs.Run(args[0], logs.Options{
 			Follow:   logsFollow,

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/remotessh"
 )
@@ -32,7 +33,7 @@ func RunWipe(flags *WipeFlags) error {
 
 func (f *WipeFlags) validate() error {
 	if f.Env == "" {
-		return fmt.Errorf("--env is required\nUsage: orama node wipe --env <devnet|testnet> [--node <ip>] --force")
+		return clierr.Usage("--env is required\nUsage: orama node wipe --env <devnet|testnet> [--node <ip>] --force")
 	}
 	return nil
 }
