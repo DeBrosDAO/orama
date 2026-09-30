@@ -228,7 +228,7 @@ identifier that is a platform table's name, however it is quoted and in any
 role — table, column, alias or named parameter; and a string literal whose whole
 text is one, such as `VALUES ('grants')`, because SQLite reads a string literal
 as a table name in many positions. Pass such a value as a bound argument (`?`)
-instead. The refusal is returned as the host call's error.
+instead. A refusal is a failed host call: `db_query_v2` and `db_execute_v2` return `0`, which a function reads as no result at all (an accepted statement always returns a result object), and the reason goes to the gateway's log.
 
 The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `nonces`, `device_authorizations`, `session_devices`,

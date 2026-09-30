@@ -128,12 +128,15 @@ func TestHostDB_guardRefusals(t *testing.T) {
 	fx := setup(t)
 	const fn = "e2e-dbguard"
 	deploy(t, fx, fnSpec{name: fn})
+	// A refused statement is a failed host call: db_query_v2 and db_execute_v2
+	// return 0, which the function sees as no result at all (null), where an
+	// accepted statement always gives a result object (engine.go hDBQueryV2).
 	ok := call(t, fx, fn, map[string]any{"op": "db_exec", "sql": "CREATE TABLE IF NOT EXISTS e2e_t (id INTEGER PRIMARY KEY, v TEXT UNIQUE)"})
-	if ok["error"] != "" && ok["error"] != nil {
+	if hostCallRefused(ok) {
 		t.Fatalf("control DDL refused: %v", ok)
 	}
 	bound := call(t, fx, fn, map[string]any{"op": "db_exec", "sql": "INSERT INTO e2e_t (v) VALUES (?)", "args": []any{"grants"}})
-	if bound["error"] != "" && bound["error"] != nil {
+	if hostCallRefused(bound) {
 		t.Errorf("a reserved name as a bound value was refused: %v", bound)
 	}
 	for _, sql := range []string{
@@ -146,11 +149,21 @@ func TestHostDB_guardRefusals(t *testing.T) {
 	} {
 		for _, op := range []string{"db_query", "db_exec"} {
 			res := call(t, fx, fn, map[string]any{"op": op, "sql": sql})
-			if e, _ := res["error"].(string); e == "" {
+			if !hostCallRefused(res) {
 				t.Errorf("%s %q was not refused: %v", op, sql, res)
 			}
 		}
 	}
+}
+
+// hostCallRefused reports whether a database host call's result says it was
+// refused: no result at all (null, the host returned 0), or an error string.
+func hostCallRefused(res map[string]any) bool {
+	if res == nil {
+		return true
+	}
+	e, _ := res["error"].(string)
+	return e != ""
 }
 
 // TestHostDB_batchLimitsAndTransactions: 100 statements commit and 101 fail
