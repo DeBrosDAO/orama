@@ -380,3 +380,22 @@ func TestSyncCIDRefs_chunkBoundaries(t *testing.T) {
 		t.Fatalf("empty insert: %v", err)
 	}
 }
+
+// addServingNamespaces registers namespaces with a ready cluster: ones that
+// hold content and that the reference index waits for.
+func addServingNamespaces(registry *sqliteDB, names ...string) error {
+	for _, n := range names {
+		res, err := registry.db.Exec(`INSERT INTO namespaces (name) VALUES (?)`, n)
+		if err != nil {
+			return err
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		if _, err := registry.db.Exec(`INSERT INTO namespace_clusters (namespace_id, status, ready_at) VALUES (?, 'ready', datetime('now'))`, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}

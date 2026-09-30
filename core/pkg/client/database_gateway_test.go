@@ -281,3 +281,21 @@ func TestGatewayDatabase_aRedirectIsRefusedNotFollowed(t *testing.T) {
 		t.Fatal("the request, with its key, followed the redirect")
 	}
 }
+
+// With no column order (a gateway from before it sent one) every row decoded
+// empty, and with a column name twice one value was lost; both are errors
+// now, not wrong rows (review, 2026-09-30).
+func TestCheckResultColumns(t *testing.T) {
+	if err := checkResultColumns(2, nil); err == nil {
+		t.Error("rows without a column order were accepted")
+	}
+	if err := checkResultColumns(0, nil); err != nil {
+		t.Errorf("an empty result without columns was refused: %v", err)
+	}
+	if err := checkResultColumns(1, []string{"id", "name", "id"}); err == nil || !strings.Contains(err.Error(), "AS") {
+		t.Errorf("duplicate column names: %v", err)
+	}
+	if err := checkResultColumns(1, []string{"id", "name"}); err != nil {
+		t.Errorf("distinct columns refused: %v", err)
+	}
+}

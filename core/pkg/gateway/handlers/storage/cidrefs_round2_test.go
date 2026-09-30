@@ -180,7 +180,7 @@ func TestUnpin_refusedWhileAnotherNamespaceIsNotLoaded(t *testing.T) {
 	a := gatewayFor(t, mock, namespaceSchema(t), registry)
 	pinAs(t, a, "ns-a", sharedCID)
 	markBackfilled(t, registry, "ns-a")
-	if _, err := registry.db.Exec(`INSERT INTO namespaces (name) VALUES ('ns-b-secret')`); err != nil { // never backfilled
+	if err := addServingNamespaces(registry, "ns-b-secret"); err != nil { // never backfilled
 		t.Fatal(err)
 	}
 
@@ -201,7 +201,7 @@ func TestUnpin_refusedWhileAnotherNamespaceIsNotLoaded(t *testing.T) {
 func TestCheckReady_namesTheMissingNamespacesAndExcludesTheDeletedOne(t *testing.T) {
 	registry := registrySchema(t)
 	refs := NewCIDRefs(registry)
-	if _, err := registry.db.Exec(`INSERT INTO namespaces (name) VALUES ('gone'), ('late')`); err != nil {
+	if err := addServingNamespaces(registry, "gone", "late"); err != nil {
 		t.Fatal(err)
 	}
 	err := refs.CheckReady(context.Background(), "gone")
@@ -224,7 +224,7 @@ func TestUnpinIfLastRef_deferredUntilEveryNamespaceIsLoaded(t *testing.T) {
 	ctx := context.Background()
 	registry := registrySchema(t)
 	markBackfilled(t, registry, "ns-a")
-	if _, err := registry.db.Exec(`INSERT INTO namespaces (name) VALUES ('ns-b')`); err != nil {
+	if err := addServingNamespaces(registry, "ns-b"); err != nil {
 		t.Fatal(err)
 	}
 	refs := NewCIDRefs(registry)

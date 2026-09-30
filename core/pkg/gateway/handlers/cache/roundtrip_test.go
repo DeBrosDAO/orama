@@ -148,3 +148,27 @@ func TestPutFailure_keepsInternalTextOut(t *testing.T) {
 		t.Fatalf("status %d message %q exposes the internal error", status, msg)
 	}
 }
+
+// A gateway from before values were typed reads a value by parsing it as JSON,
+// falling back to a string. It must read what this one writes exactly, or the
+// gateways of a rolling upgrade (or a rollback) disagree (review, 2026-09-30:
+// the tagged format this replaced came back to an old gateway as a string).
+func TestEncodeStoredValue_readByAPreviousGateway(t *testing.T) {
+	previousGatewayRead := func(b []byte) any {
+		var v any
+		if err := json.Unmarshal(b, &v); err != nil {
+			return string(b)
+		}
+		return v
+	}
+	for _, v := range []any{"123", "true", "hello", float64(123), true, nil,
+		map[string]any{"a": float64(1)}, []any{"x", float64(2)}} {
+		b, err := encodeStoredValue(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := previousGatewayRead(b); !reflect.DeepEqual(got, v) {
+			t.Errorf("%#v: a previous gateway reads %#v", v, got)
+		}
+	}
+}

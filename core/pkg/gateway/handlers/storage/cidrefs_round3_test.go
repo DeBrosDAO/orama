@@ -96,10 +96,10 @@ func TestCheckReady_waitsOnlyForNamespacesThatCanHoldContent(t *testing.T) {
 	refs := NewCIDRefs(registry)
 	ctx := context.Background()
 	for _, stmt := range []string{
-		`INSERT INTO namespaces (id, name) VALUES (1, 'default'), (2, 'ready-ns'), (3, 'failed-create'), (4, 'once-ready-now-failed'), (5, 'going-away'), (6, 'still-provisioning')`,
+		`INSERT INTO namespaces (id, name) VALUES (1, 'default'), (2, 'ready-ns'), (3, 'failed-create'), (4, 'once-ready-now-failed'), (5, 'going-away'), (6, 'still-provisioning'), (7, 'never-provisioned'), (8, 'serving-without-ready-at')`,
 		`INSERT INTO namespace_clusters (namespace_id, status, ready_at) VALUES
 		   (2, 'ready', datetime('now')), (3, 'failed', NULL), (4, 'failed', datetime('now')),
-		   (5, 'deprovisioning', datetime('now')), (6, 'provisioning', NULL)`,
+		   (5, 'deprovisioning', datetime('now')), (6, 'provisioning', NULL), (8, 'ready', NULL)`,
 	} {
 		if _, err := registry.db.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -114,7 +114,11 @@ func TestCheckReady_waitsOnlyForNamespacesThatCanHoldContent(t *testing.T) {
 	for _, n := range missing.Namespaces {
 		got[n] = true
 	}
-	want := map[string]bool{"default": true, "ready-ns": true, "once-ready-now-failed": true}
+	// never-provisioned has no cluster (its provisioning never started) and no
+	// gateway, so it is not waited for (stagenet, 2026-09-30: four such
+	// namespaces blocked every unpin). serving-without-ready-at is ready but its
+	// ready_at write was lost: it is serving, so it is waited for (review).
+	want := map[string]bool{"default": true, "ready-ns": true, "once-ready-now-failed": true, "serving-without-ready-at": true}
 	if len(got) != len(want) {
 		t.Fatalf("waiting for %v, want %v", got, want)
 	}

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
@@ -133,11 +134,14 @@ func NewCIDRefs(registry rqlite.Client) *CIDRefs {
 // omits a holder deletes that holder's data. except is a namespace being
 // deleted, whose own references no longer matter.
 //
-// A namespace whose cluster never became ready, or is being torn down, has no
-// running gateway to load anything and holds no content, so it is not waited
-// for; without that, one failed create would refuse every unpin in the cluster.
-// The lobby "default" namespace has no cluster row and is always waited for (its
-// gateway is the index gateway). A namespace whose cluster WAS ready and is now
+// A namespace whose cluster is being torn down, or never became ready (still
+// provisioning, or failed before it was ever ready), has no running gateway to
+// load anything and holds no content, so it is not waited for; nor is one with
+// no cluster at all (a create whose provisioning never started). Without that,
+// one failed create would refuse every unpin in the cluster. The lobby
+// "default" namespace has no cluster row and is always waited for (its gateway
+// is the index gateway). A cluster whose ready_at was never written but whose
+// status is ready or degraded is waited for: it is serving. A namespace whose cluster WAS ready and is now
 // failed keeps blocking: its content is real and may be unprotected until it is
 // repaired or removed (`orama cluster namespace remove`).
 func (r *CIDRefs) CheckReady(ctx context.Context, except string) error {
@@ -160,8 +164,10 @@ func (r *CIDRefs) CheckReady(ctx context.Context, except string) error {
 		                     WHERE r.namespace = namespaces.name AND r.cid = '' AND r.kind = ?)
 		    AND NOT EXISTS (SELECT 1 FROM namespace_clusters c
 		                     WHERE c.namespace_id = namespaces.id
-		                       AND (c.ready_at IS NULL OR c.status = 'deprovisioning'))
-		  LIMIT ?`, except, kindBackfilled, maxReportedNamespaces); err != nil {
+		                       AND (c.status = 'deprovisioning'
+		                            OR (c.ready_at IS NULL AND c.status IN ('provisioning', 'failed'))))
+		    AND (name = ? OR EXISTS (SELECT 1 FROM namespace_clusters c WHERE c.namespace_id = namespaces.id))
+		  LIMIT ?`, except, kindBackfilled, gwauth.LobbyNamespace, maxReportedNamespaces); err != nil {
 		return fmt.Errorf("failed to read which namespaces have loaded their references into the cluster reference index: %w", err)
 	}
 	var missing []string

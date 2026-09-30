@@ -88,6 +88,9 @@ func (d *gatewayDatabaseClient) Query(ctx context.Context, sql string, args ...i
 	if err := d.post(ctx, "/query", body, &out); err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
+	if err := checkResultColumns(len(out.Items), out.Columns); err != nil {
+		return nil, err
+	}
 	result := &QueryResult{
 		Columns: out.Columns,
 		Rows:    make([][]interface{}, 0, len(out.Items)),
@@ -105,6 +108,25 @@ func (d *gatewayDatabaseClient) Query(ctx context.Context, sql string, args ...i
 		result.Rows = append(result.Rows, row)
 	}
 	return result, nil
+}
+
+// checkResultColumns refuses a result whose rows cannot be put in the
+// statement's column order. The gateway sends each row as a map keyed by
+// column name plus the names in order; with no names (a gateway from before
+// it sent them) every row would decode empty, and with a name twice (SELECT
+// a.id, b.id) one of the two values is already lost in the map.
+func checkResultColumns(rows int, columns []string) error {
+	if rows > 0 && len(columns) == 0 {
+		return fmt.Errorf("the gateway did not say the result's column order; upgrade the gateway")
+	}
+	seen := make(map[string]bool, len(columns))
+	for _, c := range columns {
+		if seen[c] {
+			return fmt.Errorf("the result has two columns named %q; give them distinct names with AS", c)
+		}
+		seen[c] = true
+	}
+	return nil
 }
 
 // Transaction runs statements atomically: all of them, or none.

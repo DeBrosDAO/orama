@@ -2,6 +2,7 @@ package namespace
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -28,6 +29,13 @@ func seedNamespaces(t *testing.T, h *DeleteHandler, names ...string) {
 	}
 	for i, n := range names {
 		if _, err := h.ormClient.Exec(context.Background(), `INSERT INTO namespaces (id, name) VALUES (?, ?)`, 100+i, n); err != nil {
+			t.Fatal(err)
+		}
+		// A serving cluster: a namespace without one holds no content and is
+		// not waited for by the reference index.
+		if _, err := h.ormClient.Exec(context.Background(),
+			`INSERT INTO namespace_clusters (id, namespace_id, namespace_name, status, provisioned_by, ready_at)
+			 VALUES (?, ?, ?, 'ready', 'test', datetime('now'))`, fmt.Sprintf("c-%d", 100+i), 100+i, n); err != nil {
 			t.Fatal(err)
 		}
 	}
