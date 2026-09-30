@@ -3,6 +3,7 @@
 package sdkgo
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -127,8 +128,14 @@ func TestAnonProxy_requestLeavesThroughTor(t *testing.T) {
 			IsTor bool   `json:"IsTor"`
 			IP    string `json:"IP"`
 		}
-		if err := json.Unmarshal([]byte(out.Body), &check); err != nil {
-			return false, fmt.Errorf("checker answered %d: %.200s", out.StatusCode, out.Body)
+		// The gateway base64-encodes the destination's body so binary survives
+		// the JSON envelope (anon_proxy_handler.go).
+		decoded, err := base64.StdEncoding.DecodeString(out.Body)
+		if err != nil {
+			return false, eventually.Stop(fmt.Errorf("the proxied body is not base64: %w", err))
+		}
+		if err := json.Unmarshal(decoded, &check); err != nil {
+			return false, fmt.Errorf("checker answered %d: %.200s", out.StatusCode, decoded)
 		}
 		if _, isNode := f.Lookup(check.IP); isNode || !check.IsTor {
 			return false, eventually.Stop(fmt.Errorf("the destination saw %s (IsTor=%v): not a Tor exit", check.IP, check.IsTor))

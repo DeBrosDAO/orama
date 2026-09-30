@@ -423,6 +423,10 @@ the headers and the body in cleartext. Appropriate for fetching a single
 document (a link preview, an article); **not** appropriate for general browsing,
 where it would make the gateway a complete browsing-history observer.
 
+The answer is `{"status_code", "headers", "body"}` with `body` the destination's
+response body **base64-encoded**, so binary content survives the JSON envelope;
+decode it before use. A failed upstream request is a 200 with an `error` field.
+
 ### Anonymity tunnel — `GET /v1/proxy/tunnel` (WebSocket)
 
 Carries an **opaque TCP stream**. The client negotiates TLS end-to-end with the
