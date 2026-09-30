@@ -132,18 +132,18 @@ func TestPhaseD_sealedSlotsOpenOnlyWithTheSeeds(t *testing.T) {
 	seed, repair, wrong := seedFile(t, dir, "seed"), seedFile(t, dir, "repair"), seedFile(t, dir, "wrong")
 	nonce := hex.EncodeToString(randomBytes(t, seedBytes))
 	outDir := filepath.Join(dir, "slots")
-	cli.MustOK(t, "storage", "seal", "--in", plain, "--nonce", nonce, "--out-dir", outDir, "--seed-file", seed, "--repair-seed-file", repair, "--replicas", sealReplicas)
+	cli.MustOK(t, "storage", "seal", "--in", plain, "--nonce", nonce, "--out-dir", outDir, "--storage-key-file", seed, "--repair-seed-file", repair, "--replicas", sealReplicas)
 	s0, s1 := readSlot(t, outDir, 0), readSlot(t, outDir, 1)
 	if bytes.Equal(s0, s1) {
 		t.Error("two slots carry the same ciphertext")
 	}
 	opened := filepath.Join(dir, "opened.bin")
-	cli.MustOK(t, "storage", "open", "--in", filepath.Join(outDir, "slot-1"), "--nonce", nonce, "--slot", "1", "--out", opened, "--seed-file", seed, "--repair-seed-file", repair)
+	cli.MustOK(t, "storage", "open", "--in", filepath.Join(outDir, "slot-1"), "--nonce", nonce, "--slot", "1", "--out", opened, "--storage-key-file", seed, "--repair-seed-file", repair)
 	if !bytes.Equal(readLocal(t, opened), readLocal(t, plain)) {
 		t.Error("slot 1 did not open to the sealed file")
 	}
 	bad := filepath.Join(dir, "bad.bin")
-	res := run(t, cli, "storage", "open", "--in", filepath.Join(outDir, "slot-1"), "--nonce", nonce, "--slot", "1", "--out", bad, "--seed-file", wrong, "--repair-seed-file", repair)
+	res := run(t, cli, "storage", "open", "--in", filepath.Join(outDir, "slot-1"), "--nonce", nonce, "--slot", "1", "--out", bad, "--storage-key-file", wrong, "--repair-seed-file", repair)
 	if _, err := os.Stat(bad); res.Exit == exitOK || err == nil {
 		t.Errorf("a wrong owner seed opened the slot (exit %d, output written: %t)", res.Exit, err == nil)
 	}

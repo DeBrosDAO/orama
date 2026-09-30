@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
+	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 )
 
 // bindPrefix is the domain separator every binding signs
@@ -135,17 +136,44 @@ func TestGlobalRegister_bindingForThisChainOnly(t *testing.T) {
 		return path
 	}
 	good, other := write("good.json", signChainID), write("other.json", signChainID+"-other")
-	args := func(b string) []string {
-		return withSigner("--operator", "global", "register", "--id", nodeID, "--role", "storage",
-			"--hot-key", hotKey, "--binding", b, "--endpoint", "https://e2e.example.com")
+	// A node's hot key is proved by a "hot-key" binding, a secp256k1 key whose
+	// account is the --hot-key (clusterreg.checkHotKeyBinding).
+	hotSecret := secretFile(t, dir, "hot-secret", 0x09, 0o600)
+	hotBinding := cli.MustOK(t, "global", "bind", "--chain-id", signChainID, "--operator", operator,
+		"--service", clusterreg.HotKeyService, "--key-type", "secp256k1", "--key-file", hotSecret).Stdout
+	var hb binding
+	if err := json.Unmarshal([]byte(hotBinding), &hb); err != nil {
+		t.Fatalf("bind printed no binding JSON: %v\n%s", err, hotBinding)
 	}
-	doc := signDoc(t, run(t, cli, args(good)...))
-	expectContains(t, "global register", doc, []byte("/orama.nodes.v1.MsgRegisterNode"), []byte(hotKey), pub)
+	hotPub, err := hex.DecodeString(hb.Pubkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hot, err := clusterreg.AccountAddressOf(hotPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hotFile := filepath.Join(dir, "hot.json")
+	if err := os.WriteFile(hotFile, []byte(hotBinding), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := func(hotKeyAccount string, bindings ...string) []string {
+		a := withSigner("--operator", "global", "register", "--id", nodeID, "--role", "storage",
+			"--hot-key", hotKeyAccount, "--endpoint", "https://e2e.example.com")
+		for _, b := range bindings {
+			a = append(a, "--binding", b)
+		}
+		return a
+	}
+	doc := signDoc(t, run(t, cli, args(hot, good, hotFile)...))
+	expectContains(t, "global register", doc, []byte("/orama.nodes.v1.MsgRegisterNode"), []byte(hot), pub)
 	for label, a := range map[string][]string{
-		"other chain binding": args(other),
-		"hot key is operator": replace(args(good), "--hot-key", operator),
-		"no role":             without(args(good), "--role"),
-		"binding not json":    args(proofFileNotBinding(t, dir)),
+		"other chain binding":             args(hot, other, hotFile),
+		"no hot-key binding":              args(hot, good),
+		"hot binding for a wrong account": args(hotKey, good, hotFile),
+		"hot key is operator":             args(operator, good, hotFile),
+		"no role":                         without(args(hot, good, hotFile), "--role"),
+		"binding not json":                args(hot, proofFileNotBinding(t, dir), hotFile),
 	} {
 		if res := run(t, cli, a...); res.Exit != exitUsage {
 			t.Errorf("register with %s: exit %d, want %d\n%s", label, res.Exit, exitUsage, output(res))

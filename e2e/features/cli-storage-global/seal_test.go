@@ -49,12 +49,12 @@ func newSealKit(t testing.TB) sealKit {
 }
 
 func (k sealKit) sealArgs() []string {
-	return []string{"storage", "seal", "--seed-file", k.seed, "--repair-seed-file", k.repair,
+	return []string{"storage", "seal", "--storage-key-file", k.seed, "--repair-seed-file", k.repair,
 		"--nonce", k.nonce, "--in", k.plain, "--out-dir", k.out, "--replicas", fmt.Sprint(sealReplicas)}
 }
 
 func (k sealKit) openArgs(slot int, seed, out string) []string {
-	return []string{"storage", "open", "--seed-file", seed, "--repair-seed-file", k.repair, "--nonce", k.nonce,
+	return []string{"storage", "open", "--storage-key-file", seed, "--repair-seed-file", k.repair, "--nonce", k.nonce,
 		"--slot", fmt.Sprint(slot), "--in", k.slotFile(slot), "--out", out}
 }
 
@@ -185,7 +185,7 @@ func TestStorageSeal_refusals(t *testing.T) {
 	cli := cliNoWallet(t)
 	k := newSealKit(t)
 	loose := secretFile(t, k.dir, "loose-seed", 0x04, 0o644)
-	infra.ExpectRefused(t, run(t, cli, replace(k.sealArgs(), "--seed-file", loose)...), "chmod 600")
+	infra.ExpectRefused(t, run(t, cli, replace(k.sealArgs(), "--storage-key-file", loose)...), "chmod 600")
 	for label, args := range map[string][]string{
 		"short nonce":    replace(k.sealArgs(), "--nonce", "abcd"),
 		"nonce not hex":  replace(k.sealArgs(), "--nonce", strings.Repeat("zz", 32)),

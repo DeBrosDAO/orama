@@ -62,7 +62,7 @@ func TestStorageFiles_sealOpenRewrapRoundTrip(t *testing.T) {
 	cli := harness.CLI(t)
 	f := newSealFixture(t)
 	out := filepath.Join(f.dir, "sealed")
-	res := infra.Run(t, cli, "storage", "seal", "--in", f.plain, "--nonce", f.nonce, "--out-dir", out, "--seed-file", f.seed,
+	res := infra.Run(t, cli, "storage", "seal", "--in", f.plain, "--nonce", f.nonce, "--out-dir", out, "--storage-key-file", f.seed,
 		"--repair-seed-file", f.repair, "--replicas", fmt.Sprint(sealedReplicas))
 	infra.ExpectExit(t, res, infra.ExitOK)
 	if roots := sealedRoot.FindAllStringSubmatch(res.Stdout, -1); len(roots) != sealedReplicas || roots[0][2] == roots[1][2] {
@@ -77,7 +77,7 @@ func TestStorageFiles_sealOpenRewrapRoundTrip(t *testing.T) {
 	}
 	opened := filepath.Join(f.dir, "opened")
 	infra.ExpectExit(t, infra.Run(t, cli, "storage", "open", "--in", filepath.Join(out, "slot-1"), "--nonce", f.nonce, "--slot", "1",
-		"--out", opened, "--seed-file", f.seed, "--repair-seed-file", f.repair), infra.ExitOK)
+		"--out", opened, "--storage-key-file", f.seed, "--repair-seed-file", f.repair), infra.ExitOK)
 	if got, _ := os.ReadFile(opened); !bytes.Equal(got, f.content) {
 		t.Errorf("open of slot 1 did not return the plaintext")
 	}
@@ -89,7 +89,7 @@ func TestStorageFiles_sealOpenRewrapRoundTrip(t *testing.T) {
 	}
 	wrongOut := filepath.Join(f.dir, "wrong")
 	infra.ExpectRefused(t, infra.Run(t, cli, "storage", "open", "--in", filepath.Join(out, "slot-1"), "--nonce", f.nonce, "--slot", "2",
-		"--out", wrongOut, "--seed-file", f.seed, "--repair-seed-file", f.repair), notForKey)
+		"--out", wrongOut, "--storage-key-file", f.seed, "--repair-seed-file", f.repair), notForKey)
 	if _, err := os.Stat(wrongOut); err == nil {
 		t.Errorf("a failed open wrote %s", wrongOut)
 	}
@@ -97,7 +97,7 @@ func TestStorageFiles_sealOpenRewrapRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	infra.ExpectRefused(t, infra.Run(t, cli, "storage", "open", "--in", filepath.Join(out, "slot-1"), "--nonce", f.nonce, "--slot", "1",
-		"--out", wrongOut, "--seed-file", f.seed, "--repair-seed-file", f.repair), seedModeRefused)
+		"--out", wrongOut, "--storage-key-file", f.seed, "--repair-seed-file", f.repair), seedModeRefused)
 }
 
 // TestStorageFiles_putAndGetCheckTheChainFirst: `orama storage put` checks
@@ -114,7 +114,7 @@ func TestStorageFiles_putAndGetCheckTheChainFirst(t *testing.T) {
 	f := newSealFixture(t)
 	out := filepath.Join(f.dir, "sealed")
 	infra.ExpectExit(t, infra.Run(t, cli, "storage", "seal", "--in", f.plain, "--nonce", f.nonce, "--out-dir", out,
-		"--seed-file", f.seed, "--repair-seed-file", f.repair), infra.ExitOK)
+		"--storage-key-file", f.seed, "--repair-seed-file", f.repair), infra.ExitOK)
 	put := infra.Run(t, cli, "storage", "put", "--deal-id", "987654321", "--dir", out, "--rpc", rpc, "--wait", "15s")
 	infra.ExpectRefused(t, put, "987654321", dealNotFound)
 	if bytes.Contains([]byte(put.Stdout), []byte("uploaded")) {
@@ -122,7 +122,7 @@ func TestStorageFiles_putAndGetCheckTheChainFirst(t *testing.T) {
 	}
 	got := filepath.Join(f.dir, "got")
 	infra.ExpectRefused(t, infra.Run(t, cli, "storage", "get", "--deal-id", "987654321", "--out", got, "--rpc", rpc,
-		"--seed-file", f.seed, "--repair-seed-file", f.repair), dealNotFound)
+		"--storage-key-file", f.seed, "--repair-seed-file", f.repair), dealNotFound)
 	if _, err := os.Stat(got); err == nil {
 		t.Errorf("a failed get wrote %s", got)
 	}

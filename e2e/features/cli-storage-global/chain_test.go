@@ -99,7 +99,7 @@ func TestStorageGet_absentDealWritesNothing(t *testing.T) {
 	out := seed + "-out"
 	t.Cleanup(func() { edge.RunInCleanup(t, f, n, "rm -f -- "+fleet.ShellQuote(out)) })
 	res := onNode(t, f, n, "storage", "get", "--deal-id", absentDeal, "--rpc", chainRPC,
-		"--seed-file", seed, "--repair-seed-file", repair, "--out", out)
+		"--storage-key-file", seed, "--repair-seed-file", repair, "--out", out)
 	if res.Exit == exitOK {
 		t.Fatalf("storage get of deal %s succeeded", absentDeal)
 	}
