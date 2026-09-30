@@ -93,7 +93,7 @@ func (c nodeChain) Challenges(_ context.Context, epoch uint64, nodeID string) ([
 	return res.Challenges, nil
 }
 
-func (c nodeChain) Balance(_ context.Context, addr string) (math.Int, error) {
+func (c nodeChain) FeeFunds(_ context.Context, addr string) (math.Int, error) {
 	return c.sim.f.Bank.balanceOf(addr), nil
 }
 

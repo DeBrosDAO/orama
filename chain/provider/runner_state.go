@@ -184,7 +184,8 @@ func (r *Runner) writeMonitor(ctx context.Context, misses int) error {
 	if r.monitorPath == "" {
 		return nil
 	}
-	bal, err := r.chain.Balance(ctx, r.signer)
+	// What the hot key can pay a proof's base fee from, not its bank balance: a hot key has none.
+	bal, err := r.chain.FeeFunds(ctx, r.signer)
 	if err != nil {
 		return err
 	}

@@ -49,7 +49,8 @@ type Chain interface {
 	Deal(ctx context.Context, dealID uint64) (types.Deal, error)
 	CurrentEpoch(ctx context.Context) (uint64, error)
 	Challenges(ctx context.Context, epoch uint64, nodeID string) ([]types.Challenge, error)
-	Balance(ctx context.Context, addr string) (math.Int, error)
+	// FeeFunds is what addr can pay a base fee from: bank plus fee-only balance.
+	FeeFunds(ctx context.Context, addr string) (math.Int, error)
 	Submit(ctx context.Context, msgs ...sdk.Msg) error
 }
 

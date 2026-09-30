@@ -212,6 +212,24 @@ func (c *Client) Block(ctx context.Context, height int64) (*coretypes.ResultBloc
 	return res, nil
 }
 
+// FeeFunds is what addr can pay a transaction's base fee from: its spendable norama plus its x/fees
+// fee-only balance. A node's hot key has only the latter (MsgFundHotKey fills it), so its bank
+// balance alone reads zero while it can pay.
+func (c *Client) FeeFunds(ctx context.Context, addr string) (math.Int, error) {
+	bank, err := c.Balance(ctx, addr)
+	if err != nil {
+		return math.Int{}, err
+	}
+	var resp feestypes.QueryFeeBalanceResponse
+	if err := c.Query(ctx, "/orama.fees.v1.Query/FeeBalance", &feestypes.QueryFeeBalanceRequest{Address: addr}, &resp); err != nil {
+		return math.Int{}, fmt.Errorf("read the fee balance of %s: %w", addr, err)
+	}
+	if resp.Balance.IsNil() {
+		return bank, nil
+	}
+	return bank.Add(resp.Balance), nil
+}
+
 // Balance returns addr's spendable norama.
 func (c *Client) Balance(ctx context.Context, addr string) (math.Int, error) {
 	var resp banktypes.QueryBalanceResponse
