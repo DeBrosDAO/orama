@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,6 +71,9 @@ type mockIPFSClient struct {
 	getDeadline time.Time
 	unpinErr    error
 	unpinCalls  int
+	unpinMu     sync.Mutex
+	// onUnpin runs inside Unpin, for tests that inspect state at that moment.
+	onUnpin func()
 	// evict tracking (bugboard #153)
 	evictRemoved int
 	evictErr     error
@@ -111,7 +115,12 @@ func (m *mockIPFSClient) Get(ctx context.Context, _ string, _ string) (io.ReadCl
 }
 
 func (m *mockIPFSClient) Unpin(_ context.Context, _ string) error {
+	m.unpinMu.Lock()
+	defer m.unpinMu.Unlock()
 	m.unpinCalls++
+	if m.onUnpin != nil {
+		m.onUnpin()
+	}
 	return m.unpinErr
 }
 

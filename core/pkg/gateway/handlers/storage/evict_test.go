@@ -20,13 +20,14 @@ import (
 // pin-status UPDATE that UnpinHandler runs first.
 type mockStorageDB struct {
 	rqlite.Client
-	pinCount      int      // remaining is_pinned=1 rows across ALL namespaces
+	refCount      int      // references to the CID across ALL namespaces (ipfs_cid_refs)
+	refQueryErr   error    // error from the cluster reference index
 	otherPinCount int      // is_pinned=1 rows in OTHER namespaces (bugboard #156)
 	otherQueryErr error    // error to return from the cross-namespace check only
 	nodeIPs       []string // active node internal IPs
 	queryErr      error
 
-	remainingQueried bool
+	refsQueried      bool
 	otherQueried     bool
 	nodesQueried     bool
 
@@ -49,16 +50,19 @@ func (m *mockStorageDB) Query(_ context.Context, dest any, query string, _ ...an
 	}
 	switch {
 	case strings.Contains(query, "namespace != ?") && strings.Contains(query, "ipfs_content_ownership"):
-		// cidPinnedByOtherNamespace (bugboard #156) — must be checked before the
-		// generic is_pinned branch (both contain "is_pinned = 1").
+		// CIDInUseByOtherNamespace (bugboard #156), still used by deployments and
+		// namespace delete.
 		m.otherQueried = true
 		if m.otherQueryErr != nil {
 			return m.otherQueryErr
 		}
 		*out = []map[string]interface{}{{"count": float64(m.otherPinCount)}}
-	case strings.Contains(query, "is_pinned = 1") && strings.Contains(query, "ipfs_content_ownership"):
-		m.remainingQueried = true
-		*out = []map[string]interface{}{{"count": float64(m.pinCount)}}
+	case strings.Contains(query, "ipfs_cid_refs"):
+		m.refsQueried = true
+		if m.refQueryErr != nil {
+			return m.refQueryErr
+		}
+		*out = []map[string]interface{}{{"count": float64(m.refCount)}}
 	case strings.Contains(query, "dns_nodes"):
 		m.nodesQueried = true
 		if m.namespaceScoped {
@@ -92,9 +96,15 @@ func newHandlersWithDB(client IPFSClient, db rqlite.Client) *Handlers {
 	if m, ok := db.(*mockStorageDB); ok {
 		m.namespaceScoped = true
 		global.nodeIPs = m.nodeIPs
+		global.refCount = m.refCount
+		global.refQueryErr = m.refQueryErr
 	}
 	return newHandlersWithDBs(client, db, global)
 }
+
+// globalMock is the cluster-registry mock a handler set built by newHandlersWithDB
+// reads references and topology from.
+func globalMock(h *Handlers) *mockStorageDB { return h.globalDB.(*mockStorageDB) }
 
 func newHandlersWithDBs(client IPFSClient, db, globalDB rqlite.Client) *Handlers {
 	return New(client, newTestLogger(), Config{IPFSReplicationFactor: 3, IPFSAPIURL: "http://localhost:5001"}, db, globalDB)
@@ -112,7 +122,7 @@ func TestRemainingPinsForCID(t *testing.T) {
 		{"shared", 3, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHandlersWithDB(&mockIPFSClient{}, &mockStorageDB{pinCount: tc.pin})
+			h := newHandlersWithDB(&mockIPFSClient{}, &mockStorageDB{refCount: tc.pin})
 			got, err := h.remainingPinsForCID(context.Background(), "QmCID")
 			if err != nil {
 				t.Fatalf("remainingPinsForCID: %v", err)
@@ -127,27 +137,27 @@ func TestRemainingPinsForCID(t *testing.T) {
 // --- maybeImmediateEvict gate -------------------------------------------------
 
 func TestMaybeImmediateEvict_skippedWhenNotRequested(t *testing.T) {
-	db := &mockStorageDB{pinCount: 0}
+	db := &mockStorageDB{refCount: 0}
 	h := newHandlersWithDB(&mockIPFSClient{}, db)
 	if got := h.maybeImmediateEvict(context.Background(), "QmCID", false); got != "skipped" {
 		t.Errorf("evicted = %q, want skipped", got)
 	}
-	if db.remainingQueried || db.nodesQueried {
+	if g := globalMock(h); g.refsQueried || g.nodesQueried {
 		t.Error("no DB work should happen when immediate is not requested")
 	}
 }
 
 func TestMaybeImmediateEvict_sharedCIDNotEvicted(t *testing.T) {
 	// Another namespace still pins the CID → must NOT fan out an eviction.
-	db := &mockStorageDB{pinCount: 2}
+	db := &mockStorageDB{refCount: 2}
 	h := newHandlersWithDB(&mockIPFSClient{}, db)
 	if got := h.maybeImmediateEvict(context.Background(), "QmShared", true); got != "shared" {
 		t.Errorf("evicted = %q, want shared", got)
 	}
-	if !db.remainingQueried {
-		t.Error("expected the cross-namespace reference check to run")
+	if !globalMock(h).refsQueried {
+		t.Error("expected the cluster-wide reference check to run")
 	}
-	if db.nodesQueried {
+	if globalMock(h).nodesQueried {
 		t.Error("shared CID must short-circuit BEFORE fan-out (dns_nodes must not be queried)")
 	}
 }
@@ -156,14 +166,14 @@ func TestMaybeImmediateEvict_zeroPins_noNodes_partial(t *testing.T) {
 	// A genuinely empty cluster topology cannot reclaim anything → partial.
 	// This is the honest failure signal; the bug it used to hide is covered by
 	// TestActiveNodeInternalIPs_readsGlobalNotNamespaceDB below.
-	db := &mockStorageDB{pinCount: 0}
+	db := &mockStorageDB{refCount: 0}
 	global := &mockStorageDB{nodeIPs: nil}
 	db.namespaceScoped = true
 	h := newHandlersWithDBs(&mockIPFSClient{}, db, global)
 	if got := h.maybeImmediateEvict(context.Background(), "QmGone", true); got != "partial" {
 		t.Errorf("evicted = %q, want partial", got)
 	}
-	if !db.remainingQueried {
+	if !global.refsQueried {
 		t.Error("zero-pin path must check references")
 	}
 	if !global.nodesQueried {
@@ -219,7 +229,7 @@ func TestMaybeImmediateEvict_evictsUsingGlobalTopology(t *testing.T) {
 	defer srv.Close()
 
 	h := newHandlersWithDBs(&mockIPFSClient{},
-		&mockStorageDB{namespaceScoped: true, pinCount: 0},
+		&mockStorageDB{namespaceScoped: true, refCount: 0},
 		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
 	h.evictPort = portOf(t, srv.URL)
 
@@ -243,7 +253,7 @@ func TestMaybeImmediateEvict_nodePartialBodyIsNotTrue(t *testing.T) {
 	defer srv.Close()
 
 	h := newHandlersWithDBs(&mockIPFSClient{},
-		&mockStorageDB{namespaceScoped: true, pinCount: 0},
+		&mockStorageDB{namespaceScoped: true, refCount: 0},
 		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
 	h.evictPort = portOf(t, srv.URL)
 
@@ -367,7 +377,7 @@ func unpinReq(ns string) (*httptest.ResponseRecorder, *http.Request) {
 // (removing it would orphan the other namespace's data at the next GC).
 func TestUnpinHandler_sharedByOtherNamespace_keepsClusterPin(t *testing.T) {
 	mock := &mockIPFSClient{}
-	db := &mockStorageDB{otherPinCount: 1} // another namespace still pins it
+	db := &mockStorageDB{refCount: 1} // another namespace still references it
 	h := newHandlersWithDB(mock, db)
 	rec, req := unpinReq("ns-A")
 	h.UnpinHandler(rec, req)
@@ -390,7 +400,7 @@ func TestUnpinHandler_sharedByOtherNamespace_keepsClusterPin(t *testing.T) {
 // The LAST pinner (no other namespace) DOES remove the cluster pin.
 func TestUnpinHandler_lastPinner_removesClusterPin(t *testing.T) {
 	mock := &mockIPFSClient{}
-	db := &mockStorageDB{otherPinCount: 0}
+	db := &mockStorageDB{refCount: 0}
 	h := newHandlersWithDB(mock, db)
 	rec, req := unpinReq("ns-A")
 	h.UnpinHandler(rec, req)
@@ -401,8 +411,8 @@ func TestUnpinHandler_lastPinner_removesClusterPin(t *testing.T) {
 	if mock.unpinCalls != 1 {
 		t.Errorf("last pinner must remove the cluster pin exactly once; unpinCalls=%d", mock.unpinCalls)
 	}
-	if !db.otherQueried {
-		t.Error("expected the cross-namespace reference check to run")
+	if !globalMock(h).refsQueried {
+		t.Error("expected the cluster-wide reference check to run")
 	}
 }
 
@@ -410,7 +420,7 @@ func TestUnpinHandler_lastPinner_removesClusterPin(t *testing.T) {
 // cluster pin, but still return 200 (this namespace is logically unpinned).
 func TestUnpinHandler_refcountError_failsSafeLeavingPin(t *testing.T) {
 	mock := &mockIPFSClient{}
-	db := &mockStorageDB{otherQueryErr: errStorageTest}
+	db := &mockStorageDB{refQueryErr: errStorageTest}
 	h := newHandlersWithDB(mock, db)
 	rec, req := unpinReq("ns-A")
 	h.UnpinHandler(rec, req)

@@ -108,6 +108,10 @@ var protectedTables = map[string]string{
 	// namespace holding a row here, decrypted with the cluster-wide wrap key,
 	// so writing one is reading another tenant's content (bugboard #431).
 	"ipfs_content_ownership": "which namespace may read stored content",
+	// The cluster-wide reference count that decides whether an unpin removes a
+	// shared pin. It lives in the cluster registry only, but a function should
+	// be told what it is rather than "no such table".
+	"ipfs_cid_refs": "the cluster-wide count of who references stored content",
 }
 
 // deniedStatements are statement kinds a function has no use for and that step

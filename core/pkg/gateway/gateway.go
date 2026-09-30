@@ -538,6 +538,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			IPFSReplicationFactor: cfg.IPFSReplicationFactor,
 			IPFSAPIURL:            cfg.IPFSAPIURL,
 		}, deps.ORMClient, deps.GlobalORMClient)
+		gw.storageHandlers.StartCIDRefSync(gw.shutdownCtx, ownNamespace(cfg))
 	}
 
 	// Create adapter for auth handlers to use the client

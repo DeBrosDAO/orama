@@ -242,8 +242,8 @@ The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `namespace_rate_limit_config`, `namespace_clusters`, `namespace_cluster_nodes`,
 `namespace_port_allocations`, `global_deployment_subdomains`, `dns_records`,
 `dns_nodes`, `dns_nameservers`, `raft_evicted_nodes`, `cluster_locks`,
-`orama_schema_migrations`, `namespaces` and `ipfs_content_ownership`
-(the list in `core/pkg/serverless/hostfunctions/sqlguard.go`).
+`orama_schema_migrations`, `namespaces`, `ipfs_content_ownership` and
+`ipfs_cid_refs` (the list in `core/pkg/serverless/hostfunctions/sqlguard.go`).
 
 **A function's database is its own namespace's.** Every database host function
 also refuses a call from a function whose namespace is not the one the

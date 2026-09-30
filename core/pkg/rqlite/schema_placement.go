@@ -77,6 +77,7 @@ var tablePlacement = map[string]tableNote{
 	"namespace_creators":       {PlacementCluster, "the allowlist for namespace creation; a tenant copy would let the tenant add themselves"},
 	"audit_events":             {PlacementCluster, "a record its own subject could delete is not a record"},
 	"encryption_roots":         {PlacementCluster, "the IKM stored secrets are derived from; a tenant copy would be a KEK they can rewrite"},
+	"ipfs_cid_refs":            {PlacementCluster, "the cross-namespace reference count that decides whether an unpin may remove the shared cluster pin; a namespace RQLite only sees its own references"},
 
 	// --- the tenant's data plane: the namespace's own RQLite --------------
 	//

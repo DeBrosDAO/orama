@@ -352,6 +352,7 @@ func (h *DeleteHandler) cleanupGlobalTables(ctx context.Context, ns string) {
 	}{
 		{"global_deployment_subdomains", "namespace"},
 		{"ipfs_content_ownership", "namespace"},
+		{"ipfs_cid_refs", "namespace"},
 		{"functions", "namespace"},
 		{"function_secrets", "namespace"},
 		{"namespace_sqlite_databases", "namespace"},

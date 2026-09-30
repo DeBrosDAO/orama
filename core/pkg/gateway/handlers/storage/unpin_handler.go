@@ -67,10 +67,17 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 	// bugboard #156: the same CID can be pinned by multiple namespaces and
 	// IPFS-Cluster dedups to ONE pin per CID. Removing the cluster pin while
 	// another namespace still references the content would orphan that
-	// namespace's data at the next GC. So gate the cluster-pin removal on a
-	// cross-namespace reference check: only the LAST pinner actually removes the
-	// cluster pin; a non-last unpin just marks this namespace's row unpinned.
-	sharedByOthers, refErr := h.cidPinnedByOtherNamespace(ctx, path, namespace)
+	// namespace's data at the next GC. So the caller's reference is released in
+	// the CLUSTER-WIDE index and only the release that leaves zero references
+	// removes the cluster pin. A namespace's own RQLite cannot answer this: it
+	// holds no rows for other namespaces (see cidrefs.go).
+	if h.refSyncPending.Load() {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
+			"the cluster reference index is still being built on this gateway, so an unpin cannot tell whether other namespaces hold this content; retry shortly",
+			httputil.WithRetryable())
+		return
+	}
+	remaining, refErr := h.releaseCIDRef(ctx, path, namespace)
 	if refErr != nil {
 		// Can't confirm we're the last pinner — fail safe: do NOT remove the
 		// shared cluster pin (a leaked pin is recoverable via a later unpin/GC;
@@ -85,8 +92,8 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "evicted": "skipped"})
 		return
 	}
-	if sharedByOthers {
-		// Another namespace still pins this CID — leave the cluster pin and the
+	if remaining > 0 {
+		// Another reference still exists — leave the cluster pin and the
 		// blocks intact; this namespace is only logically unpinned.
 		if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
 			h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",

@@ -43,35 +43,17 @@ const (
 	maxEvictResponseBytes = 64 << 10
 )
 
-// remainingPinsForCID returns how many namespaces still hold a live pin on this
-// CID (bugboard #153). A CID uploaded by multiple namespaces shares ONE cluster
-// pin, so immediate eviction must only proceed when no namespace still
+// remainingPinsForCID returns how many references to the CID remain across all
+// namespaces (bugboard #153). A CID uploaded by multiple namespaces shares ONE
+// cluster pin, so immediate eviction must only proceed when no namespace still
 // references it — otherwise a shared blob would be destroyed for the others.
 func (h *Handlers) remainingPinsForCID(ctx context.Context, cid string) (int, error) {
-	if h.db == nil {
+	if h.globalDB == nil {
 		return 0, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, refQueryTimeout)
 	defer cancel()
-
-	var result []map[string]interface{}
-	query := `SELECT COUNT(*) as count FROM ipfs_content_ownership WHERE cid = ? AND is_pinned = 1`
-	if err := h.db.Query(ctx, &result, query, cid); err != nil {
-		return 0, err
-	}
-	if len(result) == 0 {
-		return 0, nil
-	}
-	return countFromRow(result[0]["count"]), nil
-}
-
-// cidPinnedByOtherNamespace reports whether any namespace OTHER than the given
-// one still holds a live pin on this CID (bugboard #156). IPFS-Cluster dedups to
-// one pin per CID, so the caller's unpin must NOT remove the shared cluster pin
-// while another namespace still references the content — doing so orphans that
-// namespace's data at the next GC. Used to gate the cluster-pin removal.
-func (h *Handlers) cidPinnedByOtherNamespace(ctx context.Context, cid, namespace string) (bool, error) {
-	return CIDInUseByOtherNamespace(ctx, h.db, cid, namespace)
+	return h.countCIDRefs(ctx, cid)
 }
 
 // countFromRow coerces a COUNT(*) cell (rqlite returns float64 or int64) to int.

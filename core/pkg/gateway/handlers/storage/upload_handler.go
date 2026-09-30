@@ -170,6 +170,16 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		Size: addResp.Size,
 	}
 
+	// The reference goes into the cluster index before the pin is requested, so
+	// another namespace unpinning the same bytes right now counts it.
+	if shouldPin {
+		if err := h.registerCIDRef(ctx, addResp.Cid, namespace); err != nil {
+			h.logger.ComponentError(logging.ComponentGeneral, "failed to record the pin reference", zap.Error(err), zap.String("cid", addResp.Cid))
+			httputil.WriteError(w, http.StatusServiceUnavailable, "the content was stored but could not be registered for pinning; retry the upload")
+			return
+		}
+	}
+
 	// Pin asynchronously in background if requested
 	if shouldPin {
 		go h.pinAsync(addResp.Cid, name, replicationFactor, namespace)
