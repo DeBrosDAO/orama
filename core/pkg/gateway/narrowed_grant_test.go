@@ -347,3 +347,28 @@ func TestForwardedWorkload_theAppGrantSelectorNarrowsTheWorkload(t *testing.T) {
 		}
 	}
 }
+
+func TestSubjectOwnerType_eachPrincipalKindIsLookedUpUnderItsOwnType(t *testing.T) {
+	for sub, want := range map[string]auth.PrincipalType{
+		hopWallet: auth.PrincipalWallet,
+		auth.WorkloadSubject(hopNamespace, "web"): auth.PrincipalApp,
+		"ak_exchanged_key":                        auth.PrincipalServiceAccount,
+	} {
+		if got := grantPrincipalType(subjectOwnerType(sub)); got != want {
+			t.Errorf("%s: looked up as %s, want %s", sub, got, want)
+		}
+	}
+}
+
+// A workload nobody has granted anything reaches nothing, the safe default
+// docs/AUTH.md promises; resolving its grant must not turn "none" into the
+// data plane a wallet with no grant is given.
+func TestForwardedWorkload_withNoGrantReachesNothing(t *testing.T) {
+	g, registry := namespaceGatewayForHops(t, "")
+	registry.principalType = auth.PrincipalApp
+	r := hop(t, g, http.MethodPost, "/v1/cache/put", hopNamespace, auth.WorkloadSubject(hopNamespace, "web"))
+	status, _ := serveHopAuthorizing(g, r, auth.Resource{Domain: auth.DomainCache, Action: auth.ActionWrite, Name: "sessions/k"})
+	if status != http.StatusForbidden {
+		t.Errorf("an ungranted workload wrote the cache: status %d, want 403", status)
+	}
+}
