@@ -220,6 +220,42 @@ func TestUnguardedGateway_operatorSQLOnPlatformTablesRuns(t *testing.T) {
 	}
 }
 
+// The trigger and history tables were reachable: a cron or pubsub firing skips
+// the caller check, so a db:write member inserting a trigger row could run a
+// private function, and a deployment_history row picks the CID a rollback
+// restores. The refusal does not depend on the caller's role, so this is the
+// developer's case too, through exec and through a transaction.
+func TestGuardedGateway_execAndTransaction_refuseTriggerAndHistoryRows(t *testing.T) {
+	for _, sql := range []string{
+		"INSERT INTO function_cron_triggers (id, function_id, cron_expression) VALUES ('t', 'f', '* * * * *')",
+		"INSERT INTO function_pubsub_triggers (id, function_id, topic) VALUES ('t', 'f', 'x')",
+		"INSERT INTO deployment_history (id, deployment_id, version, content_cid) VALUES ('h', 'd', 1, 'QmForged')",
+		"UPDATE functions SET is_public = 1",
+	} {
+		g, c := guardedGateway(sqlguard.Check)
+		body, _ := json.Marshal(map[string]any{"sql": sql})
+		status, out := post(t, g, "/v1/rqlite/exec", string(body))
+		wantRefused(t, "exec "+sql, status, out, c)
+
+		g, c = guardedGateway(sqlguard.Check)
+		body, _ = json.Marshal(map[string]any{"ops": []map[string]any{
+			{"kind": "exec", "sql": "INSERT INTO messages(body) VALUES ('x')"},
+			{"kind": "exec", "sql": sql},
+		}})
+		status, out = post(t, g, "/v1/rqlite/transaction", string(body))
+		wantRefused(t, "transaction "+sql, status, out, c)
+	}
+}
+
+// A tenant's own table with a name near a reserved one is untouched.
+func TestGuardedGateway_tenantTableNamedLikeAReservedOneStillRuns(t *testing.T) {
+	g, c := guardedGateway(sqlguard.Check)
+	status, out := post(t, g, "/v1/rqlite/exec", `{"sql":"INSERT INTO function_cron_triggers_archive (id) VALUES (1)"}`)
+	if status == http.StatusForbidden || len(c.reached) != 1 {
+		t.Errorf("status %d (%v), reached %v; a differently named table must pass", status, out, c.reached)
+	}
+}
+
 func TestGuardedGateway_findRefusesACriteriaKeyThatIsNotAColumn(t *testing.T) {
 	for _, key := range []string{"a = 1 OR a", "a'--", "a;b", "", "a.b.c", "1a"} {
 		g, c := guardedGateway(sqlguard.Check)

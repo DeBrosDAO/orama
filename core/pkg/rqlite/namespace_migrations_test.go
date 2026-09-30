@@ -381,6 +381,56 @@ func TestNamespaceApply_removesClusterOnlyTablesAnEarlierReleaseCreated(t *testi
 	}
 }
 
+// The control-plane tables whose readers were checked (schema_placement.go) are
+// not created in a tenant's database, and the ones a namespace gateway still
+// reads on its own handle are, so that code keeps getting an empty answer
+// rather than "no such table".
+func TestNamespaceApply_controlPlaneTablesFollowTheirPlacement(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if err := ApplyEmbeddedMigrationsNamespace(ctx, db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	for _, table := range []string{
+		"dns_nameservers", "raft_evicted_nodes", "node_health_events", "rqlite_backups",
+		"namespace_cluster_events", "namespace_pending_cleanup", "webrtc_port_allocations", "webrtc_rooms",
+	} {
+		if exists, _ := tableExists(ctx, db, table); exists {
+			t.Errorf("%q is placed in the cluster registry and was created in the tenant's database", table)
+		}
+	}
+	for _, table := range []string{
+		"namespace_clusters", "namespace_cluster_nodes", "namespace_port_allocations",
+		"dns_nodes", "dns_records", "wireguard_peers", "invite_tokens", "global_deployment_subdomains",
+	} {
+		if exists, _ := tableExists(ctx, db, table); !exists {
+			t.Errorf("%q is read on a namespace gateway's own handle and was not created", table)
+		}
+	}
+}
+
+// A tenant that already owns a table with one of the newly reclassified names
+// keeps it, rows and all: the name is reserved from now on, but the data is
+// not the platform's to delete.
+func TestNamespaceApply_leavesATenantsPopulatedReclassifiedTable(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE webrtc_rooms (id INTEGER PRIMARY KEY, title TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO webrtc_rooms(id, title) VALUES (1, 'standup')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyEmbeddedMigrationsNamespace(ctx, db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if n, err := tableRowCount(ctx, db, "webrtc_rooms"); err != nil || n != 1 {
+		t.Errorf("the tenant's table has %d rows (err %v), want its one row", n, err)
+	}
+}
+
 // A table with rows in it is left where it is. The rows are almost certainly
 // the platform's — legacy keys from before validation moved to the registry —
 // but a tenant may have created a table under the same name, and destroying a

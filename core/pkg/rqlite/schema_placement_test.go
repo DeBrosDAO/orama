@@ -108,6 +108,60 @@ func TestEveryPlacementSaysWhy(t *testing.T) {
 	}
 }
 
+// Everything that lives only in the cluster registry is there because the
+// platform acts on it, so it is platform-trust. A telemetry or tenant-data
+// class on a registry table would exempt it from the guard cross-check in
+// pkg/sqlguard while the table is still one a tenant must not name.
+func TestClusterPlacementIsPlatformTrust(t *testing.T) {
+	for _, table := range ClusterOnlyTables() {
+		note, _ := PlacementOf(table)
+		if note.Trust != TrustPlatform {
+			t.Errorf("%q lives only in the cluster registry and is classed %d, not TrustPlatform", table, note.Trust)
+		}
+	}
+}
+
+// The classes partition the placement: every table is in exactly one, and the
+// two that a tenant may write are not empty, so the trust field is being used
+// rather than left at its default.
+func TestTablesOfTrust_partitionThePlacement(t *testing.T) {
+	seen := map[string]Trust{}
+	for _, trust := range []Trust{TrustPlatform, TrustTenantData, TrustTelemetry} {
+		tables := TablesOfTrust(trust)
+		if len(tables) == 0 {
+			t.Errorf("no table is classed %d", trust)
+		}
+		for _, table := range tables {
+			if prev, dup := seen[table]; dup {
+				t.Errorf("%q is in trust class %d and %d", table, prev, trust)
+			}
+			seen[table] = trust
+		}
+	}
+	if len(seen) != len(tablePlacement) {
+		t.Errorf("the classes cover %d tables, the placement has %d", len(seen), len(tablePlacement))
+	}
+}
+
+// What a tenant's own application data and the platform's request log are
+// classed as is a decision the guard depends on: a platform decision must never
+// rest on them. Naming the ones that must stay out of TrustPlatform keeps a
+// mass reclassification from silently widening the guard.
+func TestTrust_tenantDataAndTelemetryAreNotPlatform(t *testing.T) {
+	for _, table := range []string{"apps", "push_devices", "request_logs", "function_logs", "function_invocations", "deployment_events"} {
+		note, ok := PlacementOf(table)
+		if !ok || note.Trust == TrustPlatform {
+			t.Errorf("%q must not be platform-trust (placed: %v)", table, ok)
+		}
+	}
+	for _, table := range []string{"functions", "function_cron_triggers", "deployment_history", "ipfs_content_ownership", "namespace_quotas"} {
+		note, ok := PlacementOf(table)
+		if !ok || note.Trust != TrustPlatform {
+			t.Errorf("%q must be platform-trust (placed: %v)", table, ok)
+		}
+	}
+}
+
 // The stripped list is derived rather than kept beside the placements, because
 // two lists that must agree are two lists that will not.
 func TestClusterOnlyTablesAreWhatIsStripped(t *testing.T) {
