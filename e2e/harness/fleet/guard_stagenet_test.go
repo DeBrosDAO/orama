@@ -11,7 +11,7 @@ const stagenetHome = "/home/o"
 
 func stagenetState() *State {
 	st := &State{
-		Target: config.TargetStagenet, RunID: "stagenet-20260930-101500", Env: config.StagenetEnv,
+		Target: config.TargetStagenet, RunID: "stagenet-20260930-101500", Env: config.StagenetEnv, OperatorNamespace: config.StagenetOperatorNamespace,
 		BaseDomain: config.StagenetBaseDomain, GatewayURL: config.StagenetGatewayURL, ChainID: "orama-stagenet-4",
 		Home:       config.StagenetPath(stagenetHome, config.StagenetHomeRel),
 		RWSock:     config.StagenetPath(stagenetHome, config.StagenetRWSockRel),

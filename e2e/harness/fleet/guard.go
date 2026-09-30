@@ -75,7 +75,7 @@ func checkAgentLayout(st *State) error {
 // dev RootWallet agent, the CLI HOME, the CA bundle and the SSH key), and the
 // state holds no extra server or probe: nothing is ever created there.
 func checkStagenetState(st *State, realHome string) error {
-	pins := config.StagenetPins{RunID: st.RunID, Env: st.Env, BaseDomain: st.BaseDomain, GatewayURL: st.GatewayURL, ChainID: st.ChainID}
+	pins := config.StagenetPins{RunID: st.RunID, Env: st.Env, BaseDomain: st.BaseDomain, GatewayURL: st.GatewayURL, ChainID: st.ChainID, OperatorNamespace: st.OperatorNamespace}
 	for _, n := range append(append(append([]Node{}, st.Nodes...), st.Extras...), st.Probes...) {
 		pins.NodeIPs = append(pins.NodeIPs, n.PublicIP)
 	}

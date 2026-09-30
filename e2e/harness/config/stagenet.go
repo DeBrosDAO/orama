@@ -98,6 +98,10 @@ func CheckTarget(target string) error {
 // StagenetPins are the values of a state the stagenet target pins exactly.
 type StagenetPins struct {
 	RunID, Env, BaseDomain, GatewayURL, ChainID string
+	// OperatorNamespace is the namespace the operator signs in to. A state
+	// written before it was recorded holds none, and signing in to "" is the
+	// lobby, where no operator route answers: every stage then failed.
+	OperatorNamespace string
 	// NodeIPs are the public addresses of every node, extra and probe of the state.
 	NodeIPs []string
 }
@@ -120,6 +124,9 @@ func CheckStagenet(p StagenetPins) error {
 	}
 	if !stagenetChainID.MatchString(p.ChainID) {
 		fail("chain id %q does not match %s", p.ChainID, stagenetChainID)
+	}
+	if p.OperatorNamespace != StagenetOperatorNamespace {
+		fail("operator namespace %q is not %q (re-run `e2e-fleet target stagenet`)", p.OperatorNamespace, StagenetOperatorNamespace)
 	}
 	got := append([]string{}, p.NodeIPs...)
 	sort.Strings(got)

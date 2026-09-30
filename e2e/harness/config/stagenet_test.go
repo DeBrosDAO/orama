@@ -6,7 +6,7 @@ import (
 )
 
 func goodPins() StagenetPins {
-	return StagenetPins{RunID: "stagenet-20260930-101500", Env: StagenetEnv, BaseDomain: StagenetBaseDomain,
+	return StagenetPins{RunID: "stagenet-20260930-101500", Env: StagenetEnv, BaseDomain: StagenetBaseDomain, OperatorNamespace: StagenetOperatorNamespace,
 		GatewayURL: StagenetGatewayURL, ChainID: "orama-stagenet-4", NodeIPs: []string{"57.128.226.141", "37.59.116.212", "141.227.165.168"}}
 }
 
