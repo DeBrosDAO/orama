@@ -366,3 +366,20 @@ func containsArg(args []interface{}, want string) bool {
 	}
 	return false
 }
+
+// A node with no overlay address is not sent the signed stop over its public
+// one: the stop fails, nothing is released, and no request leaves the mesh.
+func TestFailStaleProvisioning_a_node_without_an_overlay_address_keeps_its_ports(t *testing.T) {
+	sw := newStaleSweep(oneStaleCluster, []staleClusterNode{{NodeID: "n1", InternalIP: ""}}, false)
+
+	err := sw.cm.failStaleProvisioning(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "no overlay address") {
+		t.Fatalf("err = %v, want the missing overlay address named", err)
+	}
+	if got := sw.count("stop:"); got != 0 {
+		t.Fatalf("%d stop requests were sent to a node with no overlay address", got)
+	}
+	if countExecs(sw.db.recoveryMockDB, "DELETE FROM namespace_port_allocations") != 0 {
+		t.Fatal("ports were released without the node's services being stopped")
+	}
+}

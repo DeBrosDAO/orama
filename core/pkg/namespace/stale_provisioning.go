@@ -35,9 +35,15 @@ const (
 
 	// staleClusterNodesQuery lists the active nodes holding a port block of the
 	// cluster: the nodes whose services must be stopped before the block is
-	// released. A node that is gone has nothing to stop.
+	// released. A node that is gone has nothing to stop. A node marked inactive
+	// is left out on purpose: a permanently departed node would otherwise pin
+	// every stale cluster it held in provisioning for ever.
+	//
+	// Only the overlay address is used. The stop is a signed request in plain
+	// HTTP; sending it to a public address would carry it off the WireGuard
+	// mesh, so a node with none cannot be stopped and keeps its ports.
 	staleClusterNodesQuery = `SELECT DISTINCT pa.node_id AS node_id,
-		COALESCE(dn.internal_ip, dn.ip_address) AS internal_ip
+		COALESCE(dn.internal_ip, '') AS internal_ip
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
 		WHERE pa.namespace_cluster_id = ? AND dn.status = 'active'`
@@ -175,6 +181,9 @@ func (cm *ClusterManager) stopStaleClusterServices(ctx context.Context, c *Names
 // replay by sendStopRequest.
 func (cm *ClusterManager) stopNamespaceUnit(ctx context.Context, node staleClusterNode, action, namespace string) error {
 	if node.NodeID != cm.localNodeID {
+		if node.InternalIP == "" {
+			return fmt.Errorf("node %s has no overlay address recorded, so it cannot be asked to stop %s", node.NodeID, namespace)
+		}
 		return cm.sendStopRequest(ctx, node.InternalIP, action, namespace, node.NodeID)
 	}
 	switch action {
