@@ -2,7 +2,7 @@
 # OramaOS full image build script.
 #
 # Prerequisites:
-#   - Go 1.23+ installed
+#   - Go 1.27+ installed
 #   - Buildroot downloaded (set BUILDROOT_SRC or it clones automatically)
 #   - Host tools: genimage, qemu-img (optional), veritysetup (optional)
 #

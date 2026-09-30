@@ -22,12 +22,12 @@ jobs:
     name: Go tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26.7"
+          go-version: "1.27.1"
           cache-dependency-path: core/go.sum
 
       - name: Vet
@@ -56,12 +56,12 @@ jobs:
     name: OramaOS agent tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26.7"
+          go-version: "1.27.1"
           cache-dependency-path: os/agent/go.sum
 
       - name: Vet
@@ -94,15 +94,15 @@ jobs:
       run:
         working-directory: sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 
@@ -133,15 +133,15 @@ jobs:
       run:
         working-directory: sdk-vault
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 
@@ -167,7 +167,7 @@ jobs:
       run:
         working-directory: vault
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Pinned to the version in vault/build.zig.zon. The guardian does not
       # compile on 0.16, where std.crypto.random was removed, so an unpinned
@@ -190,7 +190,7 @@ jobs:
     name: Verify VERSION ↔ package.json sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Compare versions
         run: |
           ROOT=$(tr -d '[:space:]' < VERSION)
