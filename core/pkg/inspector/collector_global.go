@@ -67,7 +67,9 @@ mark repo
 if [ "$(systemctl is-active %s 2>/dev/null || true)" = active ]; then
   if sudo -n test -r %s/%s; then
     tok=$(sudo -n cat %s/%s | tr -d '\n')
-    curl -sf --max-time 3 -X POST -H "Authorization: Bearer ${tok}" http://127.0.0.1:%d/api/v0/repo/stat || true
+    # On a co-located machine the RPC is on the namespace address, reachable by root only.
+    if [ "$chain_host" = %s ]; then kubo_curl="sudo -n curl"; else kubo_curl=curl; fi
+    $kubo_curl -sf --max-time 3 -X POST -H "Authorization: Bearer ${tok}" http://$chain_host:%d/api/v0/repo/stat || true
   else
     echo token-unreadable
   fi
@@ -92,7 +94,7 @@ sudo -n head -c 4096 %s/%s 2>/dev/null || true
 		constants.GlobalIPFSUnit, constants.GlobalIPFSUnit, constants.GlobalIPFSUnit,
 		constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile,
 		constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile,
-		constants.GlobalIPFSAPIPort,
+		constants.GlobalNetnsAddr, constants.GlobalIPFSAPIPort,
 		constants.GlobalProviderUnit, constants.GlobalProviderUnit,
 		constants.GlobalProviderHome, constants.GlobalMonitorFile,
 		constants.GlobalRelayUnit, constants.GlobalRelayUnit,

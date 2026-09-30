@@ -13,7 +13,7 @@ import (
 
 func TestPublicKuboConfig_hasNoSwarmKeyAndFiltersPrivateRanges(t *testing.T) {
 	existing := []byte(`{"Identity":{"PeerID":"12D3KooWexample"}}`)
-	body, err := PublicKuboConfig(existing, "abc123token", 5_000_000_000)
+	body, err := PublicKuboConfig(existing, "abc123token", 5_000_000_000, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestPublicKuboConfig_hasNoSwarmKeyAndFiltersPrivateRanges(t *testing.T) {
 }
 
 func TestPublicKuboConfig_refusesAnEmptyToken(t *testing.T) {
-	if _, err := PublicKuboConfig(nil, "  ", 0); err == nil {
+	if _, err := PublicKuboConfig(nil, "  ", 0, "127.0.0.1"); err == nil {
 		t.Fatal("empty token was accepted")
 	}
 }
@@ -85,7 +85,7 @@ func TestPublicStorageMax_addsHeadroom(t *testing.T) {
 func TestWritePublicKuboFiles_tokenModeAndNoSwarmKey(t *testing.T) {
 	dir := t.TempDir()
 	root := rootfs.At(dir)
-	if err := WritePublicKuboFiles(root, dir, "abc123token", 1_000_000_000, nil); err != nil {
+	if err := WritePublicKuboFiles(root, dir, "abc123token", 1_000_000_000, nil, "127.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(dir, PublicAPITokenFile))
@@ -101,7 +101,7 @@ func TestWritePublicKuboFiles_tokenModeAndNoSwarmKey(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "swarm.key"), []byte("key"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := WritePublicKuboFiles(root, dir, "abc123token", 1_000_000_000, nil); err == nil {
+	if err := WritePublicKuboFiles(root, dir, "abc123token", 1_000_000_000, nil, "127.0.0.1"); err == nil {
 		t.Fatal("a repo that already has a swarm.key was accepted")
 	}
 }
@@ -142,7 +142,7 @@ func asStrings(t *testing.T, v interface{}) []string {
 }
 
 func TestPublicKuboConfig_tokenAllowsOnlyWhatTheProviderAndGCCall(t *testing.T) {
-	body, err := PublicKuboConfig(nil, "tok", 1)
+	body, err := PublicKuboConfig(nil, "tok", 1, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestPublicKuboConfig_keepsWhatIPFSInitWrote(t *testing.T) {
   "API": {"HTTPHeaders": {}},
   "Routing": {"AcceleratedDHTClient": false}
 }`)
-	out, err := PublicKuboConfig(existing, "tok123", 10<<30)
+	out, err := PublicKuboConfig(existing, "tok123", 10<<30, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestPublicKuboConfig_keepsWhatIPFSInitWrote(t *testing.T) {
 // after a re-install, since the config is merged, not replaced.
 func TestPublicKuboConfig_dropsHandAnnouncedAddresses(t *testing.T) {
 	existing := []byte(`{"Addresses": {"Announce": ["/ip4/10.0.0.1/tcp/4101"], "AppendAnnounce": ["/ip4/192.168.1.2/tcp/4101"]}}`)
-	out, err := PublicKuboConfig(existing, "tok123", 10<<30)
+	out, err := PublicKuboConfig(existing, "tok123", 10<<30, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestPublicKuboConfig_dropsHandAnnouncedAddresses(t *testing.T) {
 // merged into; replacing it would silently drop it, so the config is refused.
 func TestPublicKuboConfig_refusesASectionThatIsNotAnObject(t *testing.T) {
 	for _, existing := range []string{`{"Datastore": "10GB"}`, `{"Swarm": ["x"]}`, `{"API": 5}`} {
-		_, err := PublicKuboConfig([]byte(existing), "tok123", 10<<30)
+		_, err := PublicKuboConfig([]byte(existing), "tok123", 10<<30, "127.0.0.1")
 		if err == nil || !strings.Contains(err.Error(), "not an object") {
 			t.Errorf("%s: err = %v, want a not-an-object refusal", existing, err)
 		}
@@ -243,11 +243,36 @@ func TestPublicKuboConfig_refusesASectionThatIsNotAnObject(t *testing.T) {
 
 // A section written as null is absent: it is created.
 func TestPublicKuboConfig_createsANullSection(t *testing.T) {
-	out, err := PublicKuboConfig([]byte(`{"Routing": null}`), "tok123", 10<<30)
+	out, err := PublicKuboConfig([]byte(`{"Routing": null}`), "tok123", 10<<30, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(out), `"Type": "dht"`) {
 		t.Errorf("Routing was not set:\n%s", out)
+	}
+}
+
+func TestPublicKuboConfig_apiHostOverwritesAnExistingAPIAddress(t *testing.T) {
+	existing := []byte(`{"Addresses": {"API": ["/ip4/127.0.0.1/tcp/31011"], "Gateway": "/ip4/127.0.0.1/tcp/8080"}}`)
+	out, err := PublicKuboConfig(existing, "tok123", 10<<30, "198.18.0.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Addresses map[string][]string }
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if api := got.Addresses["API"]; len(api) != 1 || api[0] != "/ip4/198.18.0.2/tcp/31011" {
+		t.Errorf("API = %v", api)
+	}
+	if gw := got.Addresses["Gateway"]; len(gw) != 1 || gw[0] != "/ip4/127.0.0.1/tcp/31012" {
+		t.Errorf("Gateway = %v, want it left on loopback", gw)
+	}
+	back, err := PublicKuboConfig(out, "tok123", 10<<30, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(back), "/ip4/127.0.0.1/tcp/31011") || strings.Contains(string(back), "198.18.0.2") {
+		t.Errorf("a non-co-located re-install kept the namespace address:\n%s", back)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/install/installers"
 )
 
@@ -29,7 +30,7 @@ const (
 // environment. The repo is the Kubo account's; the token is readable by the
 // group orama-ipfs-pub-rpc, which the provider belongs to. A second run keeps
 // the repo's identity and its token.
-func installPublicKubo(h GlobalHost, storageBytes uint64) error {
+func installPublicKubo(h GlobalHost, storageBytes uint64, colocated bool) error {
 	repo := filepath.Join(h.StateDir, filepath.Base(constants.GlobalIPFSHome))
 	uid, gid, err := h.Lookup(globalIPFSUser)
 	if err != nil {
@@ -53,7 +54,7 @@ func installPublicKubo(h GlobalHost, storageBytes uint64) error {
 	if err != nil {
 		return err
 	}
-	if err := installers.WritePublicKuboFiles(h.StateRoot, repo, token, storageBytes, existing); err != nil {
+	if err := installers.WritePublicKuboFiles(h.StateRoot, repo, token, storageBytes, existing, globalnetns.KuboAPIHost(colocated)); err != nil {
 		return err
 	}
 	env := "IPFS_API_AUTH=bearer:" + token + "\n"

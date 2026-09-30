@@ -110,8 +110,8 @@ func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
 	units := map[string]string{
 		"chain":    RenderGlobalChainUnit(""),
 		"ipfs":     RenderGlobalIPFSUnit(),
-		"gc":       RenderGlobalIPFSGCUnit(),
-		"provider": RenderGlobalProviderUnit(),
+		"gc":       RenderGlobalIPFSGCUnit("127.0.0.1"),
+		"provider": RenderGlobalProviderUnit("127.0.0.1"),
 		"relay":    RenderGlobalRelayUnit(),
 		"tor":      RenderGlobalTorRelayUnit(),
 		"dirauth":  RenderGlobalTorDirauthUnit(),
@@ -156,7 +156,7 @@ func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
 	if strings.Contains(RenderGlobalChainUnit(""), "MemoryDenyWriteExecute=yes") {
 		t.Error("the Go chain unit sets MemoryDenyWriteExecute; the runtime cannot start under it")
 	}
-	provider := RenderGlobalProviderUnit()
+	provider := RenderGlobalProviderUnit("127.0.0.1")
 	if !strings.Contains(provider, "SupplementaryGroups=orama-ipfs-pub-rpc") {
 		t.Error("provider cannot read the Kubo RPC token group")
 	}
@@ -243,8 +243,8 @@ func TestGlobalUnits_homeIsTheUnitsOwnStateDirectory(t *testing.T) {
 	units := map[string]string{
 		"chain":    RenderGlobalChainUnit(""),
 		"ipfs":     RenderGlobalIPFSUnit(),
-		"gc":       RenderGlobalIPFSGCUnit(),
-		"provider": RenderGlobalProviderUnit(),
+		"gc":       RenderGlobalIPFSGCUnit("127.0.0.1"),
+		"provider": RenderGlobalProviderUnit("127.0.0.1"),
 		"relay":    RenderGlobalRelayUnit(),
 		"tor":      RenderGlobalTorRelayUnit(),
 		"dirauth":  RenderGlobalTorDirauthUnit(),
@@ -263,5 +263,20 @@ func TestGlobalUnits_homeIsTheUnitsOwnStateDirectory(t *testing.T) {
 		if strings.HasPrefix(wd, "/home/") {
 			t.Errorf("%s: WorkingDirectory %s is under /home, which ProtectHome hides", name, wd)
 		}
+	}
+}
+
+func TestGlobalUnits_kuboRPCHostIsThreadedThrough(t *testing.T) {
+	gc := mustDirective(t, RenderGlobalIPFSGCUnit("198.18.0.2"), "ExecStart")
+	if !strings.Contains(gc, "--api=/ip4/198.18.0.2/tcp/31011 ") {
+		t.Errorf("GC ExecStart = %q", gc)
+	}
+	provider := mustDirective(t, RenderGlobalProviderUnit("198.18.0.2"), "ExecStart")
+	if !strings.Contains(provider, "--ipfs-api http://198.18.0.2:31011 ") {
+		t.Errorf("provider ExecStart = %q", provider)
+	}
+	loop := mustDirective(t, RenderGlobalProviderUnit("127.0.0.1"), "ExecStart")
+	if !strings.Contains(loop, "--ipfs-api http://127.0.0.1:31011 ") {
+		t.Errorf("provider ExecStart = %q", loop)
 	}
 }

@@ -2,6 +2,8 @@ package install
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -165,8 +167,8 @@ func RenderGlobalIPFSUnit() string {
 // RenderGlobalIPFSGCUnit is the oneshot that garbage-collects the public Kubo
 // repo through the running daemon's RPC. Its timer is RenderGlobalIPFSGCTimer.
 // Neither is PartOf orama-node.
-func RenderGlobalIPFSGCUnit() string {
-	api := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSAPIPort)
+func RenderGlobalIPFSGCUnit(apiHost string) string {
+	api := fmt.Sprintf("/ip4/%s/tcp/%d", apiHost, constants.GlobalIPFSAPIPort)
 	exec := fmt.Sprintf("%s/ipfs --api=%s --api-auth=${IPFS_API_AUTH} repo gc", globalBinDir, api)
 	unit := renderGlobalOneshot("Orama public IPFS garbage collection", globalIPFSUser, "orama-global/ipfs", globalIPFSHome, exec)
 	unit = strings.Replace(unit, "After=network-online.target\n", "After=network-online.target "+constants.GlobalIPFSUnit+"\n", 1)
@@ -194,9 +196,9 @@ WantedBy=timers.target
 // RenderGlobalProviderUnit is orama-global-provider.service. It may read the
 // public Kubo RPC token through the supplementary group, and nothing else
 // in that home.
-func RenderGlobalProviderUnit() string {
-	exec := fmt.Sprintf("%s/orama-global provider --listen 0.0.0.0:%d --ipfs-api %s --ipfs-token-file %s/%s",
-		globalBinDir, constants.GlobalProviderPort, constants.LocalGlobalIPFSAPIURL(), constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile)
+func RenderGlobalProviderUnit(apiHost string) string {
+	exec := fmt.Sprintf("%s/orama-global provider --listen 0.0.0.0:%d --ipfs-api http://%s --ipfs-token-file %s/%s",
+		globalBinDir, constants.GlobalProviderPort, net.JoinHostPort(apiHost, strconv.Itoa(constants.GlobalIPFSAPIPort)), constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile)
 	return needsIPFS(needsChain(renderGlobalUnitExtra("Orama storage provider", globalProviderUser, globalProviderUser, globalIPFSRPCGroup,
 		"orama-global/provider", constants.GlobalProviderHome, exec, "")))
 }

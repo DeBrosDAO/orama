@@ -87,6 +87,10 @@ func TestNewKubo_refusesWhatCouldLeakTheToken(t *testing.T) {
 	require.Error(t, err, "an empty token")
 	_, err = NewKubo("http://[::1]:31011", "tok")
 	require.NoError(t, err, "IPv6 loopback")
+	_, err = NewKubo("http://198.18.0.2:31011", "tok")
+	require.NoError(t, err, "the co-located namespace address")
+	_, err = NewKubo("http://198.18.0.3:31011", "tok")
+	require.Error(t, err, "another address in the namespace's range")
 }
 
 func TestKubo_addPinsUnderACIDv1AndSendsTheBearer(t *testing.T) {

@@ -307,7 +307,7 @@ func TestInstallGlobal_ipfsWritesTheGCTimerAndEnablesOnlyWhatCanBeEnabled(t *tes
 	}
 	for name, want := range map[string]string{
 		constants.GlobalIPFSUnit: RenderGlobalIPFSUnit(),
-		globalIPFSGCUnit:         RenderGlobalIPFSGCUnit(),
+		globalIPFSGCUnit:         RenderGlobalIPFSGCUnit("127.0.0.1"),
 		globalIPFSGCTimer:        RenderGlobalIPFSGCTimer(),
 	} {
 		got, err := os.ReadFile(filepath.Join(f.host.UnitDir, name))
@@ -319,7 +319,7 @@ func TestInstallGlobal_ipfsWritesTheGCTimerAndEnablesOnlyWhatCanBeEnabled(t *tes
 	if !slices.Contains(enabled, "enable "+globalIPFSGCTimer) || slices.Contains(enabled, "enable "+globalIPFSGCUnit) {
 		t.Errorf("systemctl = %v: enable the timer, never the oneshot", enabled)
 	}
-	gc := RenderGlobalIPFSGCUnit()
+	gc := RenderGlobalIPFSGCUnit("127.0.0.1")
 	if !strings.Contains(gc, "EnvironmentFile=/var/lib/orama-global/ipfs/gc.env\n") ||
 		!strings.Contains(mustDirective(t, gc, "ExecStart"), "--api=/ip4/127.0.0.1/tcp/31011 --api-auth=${IPFS_API_AUTH} repo gc") {
 		t.Errorf("the GC unit does not authenticate to the daemon's RPC:\n%s", gc)
@@ -340,7 +340,7 @@ func TestGlobalIPFSUnit_repoIsReadableByTheRPCGroupOnly(t *testing.T) {
 	if !strings.Contains(unit, "UMask=0077") {
 		t.Error("files the daemon writes are not private")
 	}
-	provider := RenderGlobalProviderUnit()
+	provider := RenderGlobalProviderUnit("127.0.0.1")
 	exec := mustDirective(t, provider, "ExecStart")
 	if !strings.Contains(exec, "--ipfs-api http://127.0.0.1:31011 --ipfs-token-file /var/lib/orama-global/ipfs/api-token") {
 		t.Errorf("provider ExecStart = %q", exec)
@@ -402,7 +402,7 @@ func TestGlobalIPFSUnit_onlyTheDaemonMayUseNetlink(t *testing.T) {
 		t.Error("libp2p reads interfaces over netlink; the daemon cannot start without it")
 	}
 	for name, unit := range map[string]string{
-		"gc": RenderGlobalIPFSGCUnit(), "provider": RenderGlobalProviderUnit(), "chain": RenderGlobalChainUnit(""),
+		"gc": RenderGlobalIPFSGCUnit("127.0.0.1"), "provider": RenderGlobalProviderUnit("127.0.0.1"), "chain": RenderGlobalChainUnit(""),
 	} {
 		if strings.Contains(unit, "AF_NETLINK") {
 			t.Errorf("%s may use netlink", name)

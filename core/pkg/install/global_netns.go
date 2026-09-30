@@ -303,8 +303,8 @@ func netnsRouteArgs(specs []string) [][]string {
 
 // hostPorts are the loopback listeners that move to the namespace address on
 // a co-located machine, for the services installed: the chain's RPC and REST
-// API, and the indexer's read API. The host's gateway and node report read
-// them there.
+// API, the indexer's read API, and the public Kubo's RPC. The host's gateway
+// and node report read them there.
 func (o GlobalInstallOptions) hostPorts() []int {
 	var ports []int
 	if slices.Contains(o.Services, GlobalServiceChain) {
@@ -312,6 +312,9 @@ func (o GlobalInstallOptions) hostPorts() []int {
 	}
 	if slices.Contains(o.Services, GlobalServiceIndexer) {
 		ports = append(ports, constants.GlobalIndexerPort)
+	}
+	if slices.Contains(o.Services, GlobalServiceIPFS) {
+		ports = append(ports, constants.GlobalIPFSAPIPort)
 	}
 	return ports
 }

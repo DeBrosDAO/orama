@@ -241,11 +241,11 @@ func (o GlobalInstallOptions) unitFiles(s GlobalService) []globalUnitFile {
 		main.body = RenderGlobalIPFSUnit()
 		return []globalUnitFile{
 			main,
-			{name: globalIPFSGCUnit, body: RenderGlobalIPFSGCUnit()},
+			{name: globalIPFSGCUnit, body: RenderGlobalIPFSGCUnit(globalnetns.KuboAPIHost(o.Colocated))},
 			{name: globalIPFSGCTimer, body: RenderGlobalIPFSGCTimer(), enable: true},
 		}
 	case GlobalServiceProvider:
-		main.body = RenderGlobalProviderUnit()
+		main.body = RenderGlobalProviderUnit(globalnetns.KuboAPIHost(o.Colocated))
 	case GlobalServiceArchiver:
 		main.body = RenderGlobalArchiverUnit()
 	case GlobalServiceIndexer:
@@ -258,8 +258,7 @@ func (o GlobalInstallOptions) unitFiles(s GlobalService) []globalUnitFile {
 
 // unitFilesFor is unitFiles as installed: inside the orama-global network
 // namespace when the install is co-located. Every service and the public
-// Kubo's GC oneshot join it (the GC calls Kubo's loopback RPC, which lives
-// there); a timer runs no process of its own and stays in the root namespace.
+// Kubo's GC oneshot join it (the GC calls Kubo's RPC, which lives there); a timer runs no process of its own and stays in the root namespace.
 func (o GlobalInstallOptions) unitFilesFor(s GlobalService) ([]globalUnitFile, error) {
 	files := o.unitFiles(s)
 	if !o.Colocated {

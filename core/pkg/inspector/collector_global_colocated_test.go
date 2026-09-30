@@ -60,3 +60,18 @@ func TestChainFromSections_theSudoHintIsOnlyForTheSudoPath(t *testing.T) {
 		t.Errorf("a failed loopback request must not mention sudo: %+v", plain)
 	}
 }
+
+func TestGlobalCollectScript_asksTheKuboRPCOnTheNamespaceAddressThroughSudoWhenCoLocated(t *testing.T) {
+	script := globalCollectScript()
+	for _, want := range []string{
+		`if [ "$chain_host" = 198.18.0.2 ]; then kubo_curl="sudo -n curl"; else kubo_curl=curl; fi`,
+		"http://$chain_host:31011/api/v0/repo/stat",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %q", want)
+		}
+	}
+	if strings.Contains(script, "http://127.0.0.1:31011") {
+		t.Error("script still reads the Kubo RPC on loopback unconditionally")
+	}
+}

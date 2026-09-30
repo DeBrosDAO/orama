@@ -387,3 +387,9 @@ func TestRenderUnit_failsWhenIPv6CouldNotBeSwitchedOff(t *testing.T) {
 		t.Errorf("a kernel with no IPv6 must pass: %v %s", err, out)
 	}
 }
+
+func TestKuboAPIHost(t *testing.T) {
+	if KuboAPIHost(true) != "198.18.0.2" || KuboAPIHost(false) != "127.0.0.1" {
+		t.Errorf("KuboAPIHost = %q / %q", KuboAPIHost(true), KuboAPIHost(false))
+	}
+}
