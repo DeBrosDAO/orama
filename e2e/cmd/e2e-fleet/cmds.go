@@ -91,10 +91,12 @@ func cmdTest(parent context.Context, args []string) (int, error) {
 	if err != nil {
 		return exitFail, err
 	}
-	if !st.IsStagenet() {
-		if _, err := runTTL(lay, os.LookupEnv); err != nil {
+	if st.IsStagenet() {
+		if err := signInStagenetOperator(ctx, st); err != nil {
 			return exitFail, err
 		}
+	} else if _, err := runTTL(lay, os.LookupEnv); err != nil {
+		return exitFail, err
 	}
 	steps, err := planStages(lay)
 	if err != nil {
