@@ -67,7 +67,7 @@ func init() {
 	f.Uint64Var(&nodeFlags.sequence, "sequence", 0, "Account sequence, when not read from --node")
 	f.StringVar(&nodeFlags.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&nodeFlags.gas, "gas", 0, "Gas limit [required]")
-	f.StringVar(&nodeFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	f.StringVar(&nodeFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it")
 	AddOnionFlags(f)
 	Cmd.AddCommand(registerNodeCmd)
 }

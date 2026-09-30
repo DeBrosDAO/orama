@@ -59,7 +59,7 @@ func newBondCmd(use, short, long, typeURL, verb string) *cobra.Command {
 	f.Uint64Var(&bondFlags.sequence, "sequence", 0, "Account sequence, when not read from --node")
 	f.StringVar(&bondFlags.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&bondFlags.gas, "gas", 0, "Gas limit [required]")
-	f.StringVar(&bondFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	f.StringVar(&bondFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it")
 	AddOnionFlags(f)
 	return cmd
 }

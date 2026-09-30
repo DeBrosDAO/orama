@@ -139,6 +139,11 @@ func WithHTTPClient(ctx context.Context, client *http.Client) context.Context {
 	return context.WithValue(ctx, httpClientKey{}, client)
 }
 
+// StatusError is an HTTP error status from the chain API.
+type StatusError struct{ Code int }
+
+func (e *StatusError) Error() string { return fmt.Sprintf("chain API returned HTTP %d", e.Code) }
+
 func doLimited(req *http.Request) ([]byte, error) {
 	client, timeout := http.DefaultClient, submitTimeout
 	if c, ok := req.Context().Value(httpClientKey{}).(*http.Client); ok && c != nil {
@@ -163,7 +168,7 @@ func doLimited(req *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("response from the chain is over %d bytes", submitLimit)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("chain API returned HTTP %d", resp.StatusCode)
+		return nil, &StatusError{Code: resp.StatusCode}
 	}
 	return body, nil
 }

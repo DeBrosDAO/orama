@@ -39,7 +39,7 @@ func init() {
 	f.Uint64Var(&retireFlags.sequence, "sequence", 0, "Account sequence, when not read from --node")
 	f.StringVar(&retireFlags.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&retireFlags.gas, "gas", 0, "Gas limit [required]")
-	f.StringVar(&retireFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	f.StringVar(&retireFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it")
 	globalcmd.AddOnionFlags(f)
 	Cmd.AddCommand(retireClusterCmd)
 }

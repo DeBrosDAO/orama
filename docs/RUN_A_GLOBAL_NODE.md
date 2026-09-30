@@ -158,6 +158,13 @@ The operator's wallet never touches the node. On the operator's machine:
 3. `orama global bond --role <role> --amount <norama>` bonds each role.
 4. `orama global capacity` declares storage bytes for a provider.
 
+Every command that signs a transaction (`orama global register`, `bond`, `capacity`, the validator
+commands, `orama cluster register` and `retire`, and `orama storage create`, `grant` and `prove`)
+returns only once the transaction is in a block, and prints its hash and height. Admission to the
+mempool is not success: a transaction the block refuses (out of gas, insufficient funds, a failed
+check) is reported as a failure with the chain's log, and one that is not in a block within two
+minutes is reported with its hash so it can be looked up.
+
 A role is active only while its bond is at least `min_bond`. Until the genesis
 parameters are signed off, every role's minimum is 1 ORAMA, `bond_per_gib` is
 1 ORAMA (1 ORAMA of storage bond backs 1 GiB), and unbonding takes 21 days.

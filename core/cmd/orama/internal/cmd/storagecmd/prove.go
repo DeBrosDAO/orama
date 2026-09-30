@@ -46,7 +46,7 @@ and does not submit it.`,
 	f.Uint64Var(&proveFlags.sequence, "sequence", 0, "Account sequence, when not read from --node")
 	f.StringVar(&proveFlags.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&proveFlags.gas, "gas", 0, "Gas limit [required]")
-	f.StringVar(&proveFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	f.StringVar(&proveFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it")
 	globalcmd.AddOnionFlags(f)
 	Cmd.AddCommand(prove)
 }

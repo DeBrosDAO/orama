@@ -59,7 +59,7 @@ count. Without --node the command prints the sign document and does not submit i
 		f.Uint64Var(&grantFlags.sequence, "sequence", 0, "Account sequence, when not read from --node")
 		f.StringVar(&grantFlags.fee, "fee", "", "Fee in norama [required]")
 		f.Uint64Var(&grantFlags.gas, "gas", 0, "Gas limit [required]")
-		f.StringVar(&grantFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+		f.StringVar(&grantFlags.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it")
 		globalcmd.AddOnionFlags(f)
 	}
 	add(grant)

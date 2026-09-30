@@ -13,7 +13,8 @@ import (
 )
 
 // SubmitDirect fills the account from the chain REST API when node is set,
-// prints the sign document when it is empty, and otherwise signs and broadcasts.
+// prints the sign document when it is empty, and otherwise signs, broadcasts, and waits until the
+// transaction is in a block.
 // --onion (or ORAMA_CHAIN_ONION) replaces node with a validator onion service
 // reached only through Tor: an unreachable proxy or service is an error, never
 // a clearnet send.
@@ -68,10 +69,20 @@ func SubmitDirect(cmd *cobra.Command, operator, node, pubHex string, account, se
 	if err != nil {
 		return clierr.Failure("build the transaction: %w", err)
 	}
+	return broadcastAndWait(ctx, node, tx, verb)
+}
+
+// broadcastAndWait sends tx and reports it only once it is in a block: admission to the mempool
+// is not success, since the block that runs it can still refuse it.
+func broadcastAndWait(ctx context.Context, node string, tx []byte, verb string) error {
 	hash, err := clusterreg.Broadcast(ctx, node, tx)
 	if err != nil {
 		return clierr.Failure("%v", err)
 	}
-	fmt.Fprintf(os.Stdout, "%s: %s\n", verb, hash)
+	height, err := clusterreg.WaitIncluded(ctx, node, hash, clusterreg.InclusionTimeout, clusterreg.InclusionPoll)
+	if err != nil {
+		return clierr.Failure("transaction %s: %w", hash, err)
+	}
+	fmt.Fprintf(os.Stdout, "%s: %s (block %d)\n", verb, hash, height)
 	return nil
 }

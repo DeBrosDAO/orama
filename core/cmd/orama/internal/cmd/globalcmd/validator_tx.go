@@ -27,7 +27,7 @@ func (t *txFlags) register(f *pflag.FlagSet) {
 	f.Uint64Var(&t.sequence, "sequence", 0, "Account sequence, when not read from --node")
 	f.StringVar(&t.fee, "fee", "", "Fee in norama [required]")
 	f.Uint64Var(&t.gas, "gas", 0, "Gas limit [required]")
-	f.StringVar(&t.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003")
+	f.StringVar(&t.node, "node", "", "Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it")
 	AddOnionFlags(f)
 }
 
