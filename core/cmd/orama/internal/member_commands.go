@@ -19,7 +19,7 @@ import (
 
 // MembersList prints who holds a grant in a namespace.
 func MembersList(ns string) error {
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, apiKey, err := loadAuthForNamespace()
 	if err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func MembersAdd(ns, wallet, role, resource, displayName string, expiresInHours i
 			"or reader (a member with no grant). Ownership is not granted; transfer it instead")
 	}
 
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, apiKey, err := loadAuthForNamespace()
 	if err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func MembersRemove(ns, wallet string) error {
 		return clierr.Usage("which wallet: orama members remove <wallet>")
 	}
 
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, apiKey, err := loadAuthForNamespace()
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func MembersTransfer(ns, wallet string, force bool) error {
 		return clierr.Usage("which wallet: orama members transfer <wallet>")
 	}
 
-	gatewayURL, apiKey, err := loadAuthForNamespace(ns)
+	gatewayURL, apiKey, err := loadAuthForNamespace()
 	if err != nil {
 		return err
 	}

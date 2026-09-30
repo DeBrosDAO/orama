@@ -14,8 +14,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
-	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -157,18 +156,10 @@ func GatewayURLForEnv(env string) (string, error) {
 	return e.GatewayURL, nil
 }
 
-// LoadBearer returns a short-lived credential for a gateway, renewing the
-// stored session if it has to. Every operator API call the CLI makes — node
-// resolution here, `orama monitor`'s telemetry — authenticates this way.
+// LoadBearer returns the credential to send to a gateway: ORAMA_TOKEN when it
+// is set, else the stored session renewed if it has to be. Every operator API
+// call the CLI makes — node resolution here, `orama monitor`'s telemetry —
+// authenticates this way.
 func LoadBearer(gatewayURL string) (string, error) {
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		return "", fmt.Errorf("failed to load credentials: %w", err)
-	}
-
-	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil {
-		return "", clierr.Auth("no credentials found for %s (run 'orama auth login' first)", gatewayURL)
-	}
-	return auth.Bearer(gatewayURL, store, creds)
+	return shared.AuthToken(gatewayURL)
 }

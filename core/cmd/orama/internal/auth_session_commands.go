@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
 	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 )
@@ -241,21 +242,11 @@ func AuthSessionsRevoke(id int64, all bool) error {
 	return nil
 }
 
-// currentBearer is the credential this machine holds for a gateway.
+// currentBearer is the credential these commands send to a gateway: the one
+// ORAMA_TOKEN names, else the one this machine holds. It is the resolution
+// every other command uses.
 func currentBearer(gatewayURL string) (string, error) {
-	store, err := auth.LoadEnhancedCredentials()
-	if err != nil {
-		return "", clierr.Failure("failed to load credentials: %w", err)
-	}
-	creds := store.GetDefaultCredential(gatewayURL)
-	if creds == nil {
-		return "", clierr.Auth("not authenticated for %s: run 'orama auth login'", gatewayURL)
-	}
-	token, err := auth.Bearer(gatewayURL, store, creds)
-	if err != nil {
-		return "", clierr.Auth("%w", err)
-	}
-	return token, nil
+	return shared.AuthToken(gatewayURL)
 }
 
 // authRequest is one call to an auth endpoint, returning the body whatever the
