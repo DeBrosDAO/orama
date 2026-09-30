@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/google/uuid"
@@ -236,12 +238,14 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 
 	// Generate unique subdomain with random suffix if not already set
 	// Format: {name}-{random} (e.g., "myapp-f3o4if")
+	registeredSubdomain := false
 	if deployment.Subdomain == "" {
 		subdomain, err := s.generateSubdomain(ctx, deployment.Name, deployment.Namespace, deployment.ID)
 		if err != nil {
 			return fmt.Errorf("failed to generate subdomain: %w", err)
 		}
 		deployment.Subdomain = subdomain
+		registeredSubdomain = true
 	}
 
 	// Allocate port for dynamic deployments
@@ -293,7 +297,7 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		return histErr
 	})
 	if err != nil {
-		return fmt.Errorf("failed to insert deployment: %w", err)
+		return s.createFailed(ctx, deployment, registeredSubdomain, err)
 	}
 
 	// Create replica records
@@ -311,6 +315,35 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 	)
 
 	return nil
+}
+
+// createFailed is CreateDeployment's answer when the insert failed. The
+// subdomain it registered for the deployment is released, since no deployment
+// will use it. A conflict on UNIQUE(namespace, name) is another create of the
+// same deployment that won the insert: the same answer CheckNewDeploymentName
+// gives, rather than a 500. Static sites claim no instance directory, so for
+// them the insert is the only thing that decides a race.
+func (s *DeploymentService) createFailed(ctx context.Context, deployment *deployments.Deployment, registeredSubdomain bool, insertErr error) error {
+	err := fmt.Errorf("failed to insert deployment: %w", insertErr)
+	if isDeploymentNameConflict(insertErr) {
+		err = &instanceTakenError{instance: process.InstanceName(deployment.Namespace, deployment.Name), exists: true}
+	}
+	if !registeredSubdomain {
+		return err
+	}
+	if _, relErr := s.db.Exec(ctx, `DELETE FROM global_deployment_subdomains WHERE deployment_id = ?`, deployment.ID); relErr != nil {
+		return errors.Join(err, fmt.Errorf("failed to release subdomain %s of the deployment that was not created: %w", deployment.Subdomain, relErr))
+	}
+	return err
+}
+
+// isDeploymentNameConflict reports whether err is the deployments table's
+// UNIQUE(namespace, name) refusing a row. rqlite passes SQLite's message
+// through as a string, with no code to compare, and SQLite names the columns.
+func isDeploymentNameConflict(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique constraint failed") &&
+		strings.Contains(msg, "deployments.namespace") && strings.Contains(msg, "deployments.name")
 }
 
 // createDeploymentReplicas creates replica records for a deployment.

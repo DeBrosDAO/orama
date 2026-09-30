@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,39 +93,12 @@ func (h *StaticDeploymentHandler) HandleUpload(w http.ResponseWriter, r *http.Re
 		zap.Int64("size", header.Size),
 	)
 
-	// Extract tarball to temporary directory
-	// Create a wrapper directory so IPFS creates a root CID
-	tmpDir, err := os.MkdirTemp("", "static-deploy-*")
+	cid, err := uploadSite(ctx, h.ipfsClient, file)
 	if err != nil {
-		h.logger.Error("Failed to create temp directory", zap.Error(err))
+		h.logger.Error("Failed to store the static site", zap.Error(err))
 		http.Error(w, "Failed to process tarball", http.StatusInternalServerError)
 		return
 	}
-	defer os.RemoveAll(tmpDir)
-
-	// Extract into a subdirectory called "site" so we get a root directory CID
-	siteDir := filepath.Join(tmpDir, "site")
-	if err := os.MkdirAll(siteDir, 0755); err != nil {
-		h.logger.Error("Failed to create site directory", zap.Error(err))
-		http.Error(w, "Failed to process tarball", http.StatusInternalServerError)
-		return
-	}
-
-	if err := extractTarball(file, siteDir); err != nil {
-		h.logger.Error("Failed to extract tarball", zap.Error(err))
-		http.Error(w, "Failed to extract tarball", http.StatusInternalServerError)
-		return
-	}
-
-	// Upload the parent directory (tmpDir) to IPFS, which will create a CID for the "site" subdirectory
-	addResp, err := h.ipfsClient.AddDirectory(ctx, tmpDir)
-	if err != nil {
-		h.logger.Error("Failed to upload to IPFS", zap.Error(err))
-		http.Error(w, "Failed to upload content", http.StatusInternalServerError)
-		return
-	}
-
-	cid := addResp.Cid
 
 	h.logger.Info("Content uploaded to IPFS",
 		zap.String("cid", cid),
@@ -150,6 +124,11 @@ func (h *StaticDeploymentHandler) HandleUpload(w http.ResponseWriter, r *http.Re
 
 	// Save deployment
 	if err := h.service.CreateDeployment(ctx, deployment); err != nil {
+		var taken *instanceTakenError
+		if errors.As(err, &taken) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		h.logger.Error("Failed to create deployment", zap.Error(err))
 		http.Error(w, "Failed to create deployment", http.StatusInternalServerError)
 		return
@@ -175,6 +154,35 @@ func (h *StaticDeploymentHandler) HandleUpload(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(resp)
+}
+
+// uploadSite extracts a site's tarball and adds it to IPFS as a directory,
+// returning the directory's CID, which is what serving resolves paths under.
+//
+// Creating a static site, updating one and a Next.js static export all store
+// their content this way. Update used to add the tarball itself, so the new
+// CID was a file and every path under it failed to resolve.
+func uploadSite(ctx context.Context, client ipfs.IPFSClient, tarball io.Reader) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "static-deploy-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create a temporary directory for the site: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Extracted into "site" under tmpDir, so adding tmpDir yields a root
+	// directory CID for it.
+	siteDir := filepath.Join(tmpDir, "site")
+	if err := os.MkdirAll(siteDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create the site directory: %w", err)
+	}
+	if err := extractTarball(tarball, siteDir); err != nil {
+		return "", fmt.Errorf("failed to extract the site tarball: %w", err)
+	}
+	addResp, err := client.AddDirectory(ctx, tmpDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to add the site to IPFS: %w", err)
+	}
+	return addResp.Cid, nil
 }
 
 // HandleServe serves static content from IPFS

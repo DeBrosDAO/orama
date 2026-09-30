@@ -128,6 +128,7 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		"version":          updated.Version,
 		"previous_version": existing.Version,
 		"content_cid":      updated.ContentCID,
+		"urls":             h.service.BuildDeploymentURLs(updated),
 		"updated_at":       updated.UpdatedAt,
 	}
 
@@ -138,19 +139,16 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 // updateStatic updates a static deployment (zero-downtime CID swap)
 func (h *UpdateHandler) updateStatic(ctx context.Context, existing *deployments.Deployment, r *http.Request) (*deployments.Deployment, error) {
 	// Get new tarball
-	file, header, err := r.FormFile("tarball")
+	file, _, err := r.FormFile("tarball")
 	if err != nil {
 		return nil, fmt.Errorf("tarball file required for update")
 	}
 	defer file.Close()
 
-	// Upload to IPFS
-	addResp, err := h.staticHandler.ipfsClient.Add(ctx, file, header.Filename)
+	cid, err := uploadSite(ctx, h.staticHandler.ipfsClient, file)
 	if err != nil {
-		return nil, fmt.Errorf("failed to upload to IPFS: %w", err)
+		return nil, err
 	}
-
-	cid := addResp.Cid
 
 	oldContentCID := existing.ContentCID
 

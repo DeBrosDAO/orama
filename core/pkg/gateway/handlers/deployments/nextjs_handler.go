@@ -126,7 +126,7 @@ func (h *NextJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Static export mode - extract tarball first, then upload directory to IPFS
 		var uploadErr error
-		cid, uploadErr = h.uploadStaticContent(ctx, file)
+		cid, uploadErr = uploadSite(ctx, h.ipfsClient, file)
 		if uploadErr != nil {
 			h.logger.Error("Failed to process static content", zap.Error(uploadErr))
 			http.Error(w, "Failed to process content: "+uploadErr.Error(), http.StatusInternalServerError)
@@ -250,40 +250,6 @@ func (h *NextJSHandler) deployStatic(ctx context.Context, namespace, name, subdo
 	}
 
 	return deployment, nil
-}
-
-// uploadStaticContent extracts a tarball and uploads the directory to IPFS
-// Returns the CID of the uploaded directory
-func (h *NextJSHandler) uploadStaticContent(ctx context.Context, file io.Reader) (string, error) {
-	// Create temp directory for extraction
-	tmpDir, err := os.MkdirTemp("", "nextjs-static-*")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Create site subdirectory (so IPFS creates a proper root CID)
-	siteDir := filepath.Join(tmpDir, "site")
-	if err := os.MkdirAll(siteDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create site directory: %w", err)
-	}
-
-	// Extract tarball to site directory
-	if err := extractTarball(file, siteDir); err != nil {
-		return "", fmt.Errorf("failed to extract tarball: %w", err)
-	}
-
-	// Upload the extracted directory to IPFS
-	addResp, err := h.ipfsClient.AddDirectory(ctx, tmpDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to upload to IPFS: %w", err)
-	}
-
-	h.logger.Info("Static content uploaded to IPFS",
-		zap.String("cid", addResp.Cid),
-	)
-
-	return addResp.Cid, nil
 }
 
 // extractFromIPFS extracts a tarball from IPFS to a directory
