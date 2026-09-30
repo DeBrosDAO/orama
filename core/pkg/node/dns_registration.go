@@ -539,6 +539,12 @@ const purgeInactiveNamespaceHostRecordsSQL = `DELETE FROM dns_records
 //	6 nodeID,                                            -- which namespaces
 //	7 prefix, 8 baseDomain, 9 nodeIP                     -- NOT EXISTS guard
 //
+// A cluster that failed or is being torn down, and a cluster whose namespace is
+// gone from `namespaces`, are never advertised. Their membership rows can
+// outlive them (a rolled-back provision used to leave them 'running'), and this
+// statement is what kept re-writing the records of namespaces that no longer
+// existed.
+//
 // is_active is left to its TRUE default and never forced: a row recovery
 // deliberately disabled (DisableNamespaceRecord) blocks the insert via NOT EXISTS
 // and stays dark, so this can never resurrect traffic to a drained node.
@@ -557,6 +563,8 @@ const ensureNamespaceHostRecordsSQL = `INSERT INTO dns_records (fqdn, record_typ
 	  FROM namespace_cluster_nodes ncn
 	  JOIN namespace_clusters nc ON ncn.namespace_cluster_id = nc.id
 	 WHERE ncn.node_id = ? AND ncn.role = 'gateway' AND ncn.status = 'running'
+	   AND nc.status NOT IN ('failed', 'deprovisioning')
+	   AND EXISTS (SELECT 1 FROM namespaces ns WHERE ns.name = nc.namespace_name)
 	   AND NOT EXISTS (
 	       SELECT 1 FROM dns_records r
 	        WHERE r.fqdn = ?||'ns-'||nc.namespace_name||'.'||?||'.'
@@ -725,6 +733,7 @@ func (n *Node) purgeInactiveNodeRecords(ctx context.Context) {
 	}{
 		{"TURN/stealth", purgeInactiveTURNRecordsSQL, []interface{}{cutoff}},
 		{"namespace host", purgeInactiveNamespaceHostRecordsSQL, []interface{}{cutoff, cutoff}},
+		{"orphaned namespace", purgeOrphanedNamespaceRecordsSQL, nil},
 	} {
 		res, err := rqlite.SafeExecContext(db, ctx, p.sql, p.args...)
 		if err != nil {

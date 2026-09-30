@@ -66,6 +66,12 @@ func TestEnsureNamespaceHostRecordSQL_additiveIdempotent(t *testing.T) {
 	if _, err := db.Exec(`CREATE TABLE dns_records (fqdn TEXT, record_type TEXT, value TEXT, ttl INT, namespace TEXT, created_by TEXT, created_at TEXT, updated_at TEXT, is_active BOOLEAN NOT NULL DEFAULT TRUE)`); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
+	if _, err := db.Exec(`CREATE TABLE namespaces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)`); err != nil {
+		t.Fatalf("create namespaces: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO namespaces (name) VALUES ('x')`); err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
 	// Another gateway node already advertises for the same round-robin fqdn.
 	if _, err := db.Exec(`INSERT INTO dns_records (fqdn,record_type,value,ttl,namespace,created_by,created_at,updated_at) VALUES ('ns-x.d.','A','2.2.2.2',60,'namespace:x','cluster-manager','t','t')`); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -73,7 +79,7 @@ func TestEnsureNamespaceHostRecordSQL_additiveIdempotent(t *testing.T) {
 
 	fqdn, tag, ip := "ns-x.d.", "namespace:x", "1.1.1.1"
 	run := func() int64 {
-		res, err := db.Exec(ensureNamespaceHostRecordSQL, fqdn, ip, tag, "t", "t", fqdn, ip, tag)
+		res, err := db.Exec(ensureNamespaceHostRecordSQL, fqdn, ip, tag, "t", "t", tag, fqdn, ip, tag)
 		if err != nil {
 			t.Fatalf("ensure exec: %v", err)
 		}
