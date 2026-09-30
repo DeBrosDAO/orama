@@ -189,10 +189,17 @@ func (s *sshRunner) startAgent(ctx context.Context, alias, localSock string) (*a
 	return sess, nil
 }
 
+// agentProbeCommand asks the agent on the node for its account through the forwarded socket. It is
+// the readiness check, not the socket file's existence: a socket file left by an earlier run's agent
+// exists before the new agent has replaced it, and a request through it fails.
+func agentProbeCommand() string {
+	return shellJoin("curl", "-sf", "--max-time", "2", "--unix-socket", agentFwdSock, "http://agent"+agentAccountPath)
+}
+
 func (s *sshRunner) waitRemoteSocket(ctx context.Context, alias string) error {
 	deadline := time.Now().Add(agentReadyWait)
 	for time.Now().Before(deadline) {
-		if _, err := s.output(ctx, alias, "test -S "+agentFwdSock); err == nil {
+		if _, err := s.output(ctx, alias, agentProbeCommand()); err == nil {
 			return nil
 		}
 		select {

@@ -24,8 +24,13 @@ import (
 	"syscall"
 )
 
+// stopSignals end the helper cleanly, so an agent removes its sockets. SIGHUP is the one an agent
+// gets when the ssh session that started it closes; unhandled, it killed the process before its
+// cleanup ran and left a stale socket that the next run's readiness check mistook for the new one.
+var stopSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
+
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "stagenet-node:", err)

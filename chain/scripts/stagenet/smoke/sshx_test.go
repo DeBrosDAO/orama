@@ -42,3 +42,17 @@ func TestAbbreviate(t *testing.T) {
 	require.Equal(t, "short", abbreviate("short"))
 	require.Len(t, abbreviate(strings.Repeat("x", 200)), 83)
 }
+
+// Readiness is the agent answering through the socket, not the socket file existing: a stale file
+// from an earlier run exists before the new agent listens.
+func TestAgentProbeCommand_asksTheAgentThroughTheForwardedSocket(t *testing.T) {
+	got := agentProbeCommand()
+	for _, want := range []string{"curl", "--unix-socket", agentFwdSock, "http://agent" + agentAccountPath} {
+		if !strings.Contains(got, want) {
+			t.Errorf("probe %q lacks %q", got, want)
+		}
+	}
+	if strings.Contains(got, "test -S") {
+		t.Errorf("probe %q only checks the file", got)
+	}
+}
