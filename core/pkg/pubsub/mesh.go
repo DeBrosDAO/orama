@@ -34,12 +34,15 @@ const (
 type Mesh struct {
 	host    host.Host
 	overlay netip.Prefix
+	gater   *OverlayGater
 }
 
 // NewMesh returns the mesh of h, which dials and advertises only addresses
-// inside overlay, the WireGuard prefix.
-func NewMesh(h host.Host, overlay netip.Prefix) *Mesh {
-	return &Mesh{host: h, overlay: overlay}
+// inside overlay, the WireGuard prefix. gater is the connection gate h was
+// built with (libp2p.ConnectionGater); every peer ConnectPeers dials is added
+// to its allowlist first.
+func NewMesh(h host.Host, overlay netip.Prefix, gater *OverlayGater) *Mesh {
+	return &Mesh{host: h, overlay: overlay, gater: gater}
 }
 
 // MeshSelf is how other nodes' services reach this one.
@@ -88,12 +91,13 @@ func (m *Mesh) Self() (MeshSelf, error) {
 }
 
 // ConnectPeers connects the host to every peer in addrs, a list of
-// /ip4/<overlay ip>/tcp/<port>/p2p/<peer id>. The whole list is refused, and
-// nothing dialled, when any entry is not such an address or there are more than
-// MaxMeshPeers: the caller is another process on the node, and the service
-// dials nothing outside the overlay on its behalf. A peer that does not answer
-// is reported in Failed, not an error, so one node that is down does not keep
-// the others from connecting.
+// /ip4/<overlay ip>/tcp/<port>/p2p/<peer id>. A list of more than MaxMeshPeers
+// is refused whole, as a caller error. An entry that is not such an address, or
+// a peer that does not answer, is reported in Failed and the others are still
+// dialled, so one bad registry row or one node that is down does not keep the
+// rest from connecting. The service dials nothing outside the overlay on the
+// caller's behalf, and the valid peers are added to the gate's allowlist, which
+// is what lets them connect back.
 func (m *Mesh) ConnectPeers(ctx context.Context, addrs []string) (MeshConnectResult, error) {
 	if len(addrs) > MaxMeshPeers {
 		return MeshConnectResult{}, fmt.Errorf("%d peers, at most %d are accepted", len(addrs), MaxMeshPeers)
@@ -102,23 +106,24 @@ func (m *Mesh) ConnectPeers(ctx context.Context, addrs []string) (MeshConnectRes
 		addr string
 		info peer.AddrInfo
 	}
-	targets := make([]target, 0, len(addrs))
-	for _, a := range addrs {
-		info, err := m.parsePeer(a)
-		if err != nil {
-			return MeshConnectResult{}, err
-		}
-		if info.ID == m.host.ID() {
-			continue
-		}
-		targets = append(targets, target{addr: a, info: info})
-	}
-
 	var (
 		mu     sync.Mutex
 		wg     sync.WaitGroup
 		result MeshConnectResult
 	)
+	targets := make([]target, 0, len(addrs))
+	for _, a := range addrs {
+		info, err := m.parsePeer(a)
+		if err != nil {
+			result.Failed = append(result.Failed, MeshPeerFailure{Addr: a, Error: err.Error()})
+			continue
+		}
+		if info.ID == m.host.ID() {
+			continue
+		}
+		m.gater.Allow(info.ID)
+		targets = append(targets, target{addr: a, info: info})
+	}
 	for _, t := range targets {
 		wg.Add(1)
 		go func() {

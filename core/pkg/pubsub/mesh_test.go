@@ -21,17 +21,19 @@ var loopback = netip.MustParsePrefix("127.0.0.0/8")
 // node is one pubsub service's libp2p host, manager and mesh, as cmd/pubsub
 // builds them, on loopback.
 type node struct {
-	mgr  *Manager
-	mesh *Mesh
-	sock string
-	id   peer.ID
+	mgr   *Manager
+	mesh  *Mesh
+	gater *OverlayGater
+	sock  string
+	id    peer.ID
 }
 
 func startNode(t *testing.T) node {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	gater := NewOverlayGater(loopback)
+	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"), libp2p.ConnectionGater(gater))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +44,7 @@ func startNode(t *testing.T) node {
 	}
 	mgr := NewManager(gs, "", zap.NewNop())
 	t.Cleanup(func() { _ = mgr.Close() })
-	mesh := NewMesh(h, loopback)
+	mesh := NewMesh(h, loopback, gater)
 
 	sock := shortSocketPath(t)
 	ln, err := ListenSocket(sock, zap.NewNop())
@@ -52,7 +54,7 @@ func startNode(t *testing.T) node {
 	srv := &http.Server{Handler: Handler(mgr, zap.NewNop(), WithMesh(mesh))}
 	go srv.Serve(ln)
 	t.Cleanup(func() { _ = srv.Close() })
-	return node{mgr: mgr, mesh: mesh, sock: sock, id: h.ID()}
+	return node{mgr: mgr, mesh: mesh, gater: gater, sock: sock, id: h.ID()}
 }
 
 // receives subscribes on n to topic (in namespace ns) and returns what it gets.
@@ -91,6 +93,7 @@ func TestMesh_servicesOnTwoNodesDeliverToEachOther(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 
+	b.gater.Allow(a.id) // b's own gateway has told its service about a
 	ca := NewHTTPClient(a.sock, "ns", zap.NewNop())
 	defer ca.Close()
 	cb := NewHTTPClient(b.sock, "ns", zap.NewNop())
@@ -136,6 +139,7 @@ func TestMesh_connectIsIdempotentAndSkipsSelf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	b.gater.Allow(a.id)
 	addrs := append(append([]string{}, bs.Addrs...), as.Addrs...)
 	for range 2 {
 		res, err := a.mesh.ConnectPeers(context.Background(), addrs)
@@ -173,6 +177,7 @@ func TestMesh_anUnreachablePeerIsReportedAndDoesNotStopTheOthers(t *testing.T) {
 	if err := dead.mesh.host.Close(); err != nil {
 		t.Fatal(err)
 	}
+	b.gater.Allow(a.id)
 	res, err := a.mesh.ConnectPeers(context.Background(), append(deadAddr.Addrs, bs.Addrs...))
 	if err != nil {
 		t.Fatal(err)
@@ -185,9 +190,17 @@ func TestMesh_anUnreachablePeerIsReportedAndDoesNotStopTheOthers(t *testing.T) {
 	}
 }
 
-func TestMesh_refusesWhatIsNotAnOverlayPeer(t *testing.T) {
-	a := startNode(t)
-	valid := "/ip4/127.0.0.1/tcp/4001/p2p/" + startNode(t).id.String()
+// A bad registry row used to refuse the whole list, so one row stopped every
+// node from adding any peer. It is reported in Failed and the valid entries are
+// still dialled.
+func TestMesh_aBadEntryIsReportedAndTheValidOnesAreStillDialled(t *testing.T) {
+	a, b := startNode(t), startNode(t)
+	b.gater.Allow(a.id)
+	bs, err := b.mesh.Self()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := bs.Addrs[0]
 	cases := map[string]string{
 		"not a multiaddr":    "nonsense",
 		"no peer id":         "/ip4/127.0.0.1/tcp/4001",
@@ -198,12 +211,15 @@ func TestMesh_refusesWhatIsNotAnOverlayPeer(t *testing.T) {
 	}
 	for name, bad := range cases {
 		t.Run(name, func(t *testing.T) {
-			res, err := a.mesh.ConnectPeers(context.Background(), []string{valid, bad})
-			if err == nil {
-				t.Fatalf("accepted %q: %+v", bad, res)
+			res, err := a.mesh.ConnectPeers(context.Background(), []string{bad, valid})
+			if err != nil {
+				t.Fatalf("a bad entry refused the whole list: %v", err)
 			}
-			if a.mesh.host.Network().Connectedness(peerIDOf(t, valid)) == network.Connected {
-				t.Fatal("a valid entry was dialled although the list was refused")
+			if res.Connected != 1 || len(res.Failed) != 1 || res.Failed[0].Addr != bad {
+				t.Fatalf("result = %+v, want the valid peer connected and %q reported", res, bad)
+			}
+			if a.mesh.host.Network().Connectedness(b.id) != network.Connected {
+				t.Fatal("the valid entry was not dialled")
 			}
 		})
 	}
@@ -227,7 +243,8 @@ func TestMesh_selfNeedsAnOverlayAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer h.Close()
-	m := NewMesh(h, netip.MustParsePrefix("10.0.0.0/24"))
+	overlay := netip.MustParsePrefix("10.0.0.0/24")
+	m := NewMesh(h, overlay, NewOverlayGater(overlay))
 	if self, err := m.Self(); err == nil {
 		t.Fatalf("a host listening outside the overlay advertised %+v", self)
 	}
@@ -237,9 +254,9 @@ func TestMeshAPI_badRequestsAreClientErrors(t *testing.T) {
 	a := startNode(t)
 	c := NewHTTPClient(a.sock, "ns", zap.NewNop())
 	defer c.Close()
-	_, err := c.MeshConnect(context.Background(), []string{"/ip4/8.8.8.8/tcp/4001/p2p/" + a.id.String()})
+	_, err := c.MeshConnect(context.Background(), make([]string, MaxMeshPeers+1))
 	if err == nil || !strings.Contains(err.Error(), "400") {
-		t.Fatalf("err = %v, want the service's 400 for an address outside the overlay", err)
+		t.Fatalf("err = %v, want the service's 400 for a list over the limit", err)
 	}
 }
 

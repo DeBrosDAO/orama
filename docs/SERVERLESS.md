@@ -257,7 +257,7 @@ The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `deployment_history`, `namespace_push_config`, `namespace_webrtc_config`,
 `namespace_sqlite_databases`, `namespace_sqlite_backups`, `webrtc_rooms`,
 `webrtc_port_allocations`, `namespace_cluster_events`,
-`namespace_pending_cleanup`, `node_health_events` and `rqlite_backups` (the list in
+`namespace_pending_cleanup`, `node_health_events`, `rqlite_backups`, `_pubsub_mesh_peers` and `_namespace_libp2p_peers` (the list in
 `core/pkg/sqlguard/sqlguard.go`, which is also what the namespace gateway's
 raw-database routes apply to a tenant's SQL: see
 [SECURITY.md](SECURITY.md#function-sql)). A deployment is created and changed

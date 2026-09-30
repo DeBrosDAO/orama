@@ -41,8 +41,14 @@ func main() {
 		logger.ComponentError(logging.ComponentGeneral, "pubsub libp2p listener", zap.Error(err))
 		os.Exit(1)
 	}
+	bootstrapPeers := parseBootstrap(bootstrap, logger.Logger)
+	gater := pubsub.NewOverlayGater(constants.WireGuardOverlay())
+	for _, info := range bootstrapPeers {
+		gater.Allow(info.ID)
+	}
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddr),
+		libp2p.ConnectionGater(gater),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.DefaultMuxers,
 	}
@@ -69,25 +75,17 @@ func main() {
 	}
 	defer h.Close()
 
-	gs, err := libp2ppubsub.NewGossipSub(ctx, h,
-		libp2ppubsub.WithPeerExchange(true),
-		libp2ppubsub.WithFloodPublish(true),
-	)
+	gs, err := libp2ppubsub.NewGossipSub(ctx, h, gossipSubOptions()...)
 	if err != nil {
 		logger.ComponentError(logging.ComponentGeneral, "gossipsub", zap.Error(err))
 		os.Exit(1)
 	}
 
-	for _, addr := range bootstrap {
-		ma, err := multiaddr.NewMultiaddr(addr)
-		if err != nil {
-			continue
+	for _, info := range bootstrapPeers {
+		if err := h.Connect(ctx, info); err != nil {
+			logger.ComponentWarn(logging.ComponentGeneral, "pubsub bootstrap peer unreachable",
+				zap.String("peer_id", info.ID.String()), zap.Error(err))
 		}
-		info, err := peer.AddrInfoFromP2pAddr(ma)
-		if err != nil {
-			continue
-		}
-		_ = h.Connect(ctx, *info)
 	}
 
 	mgr := pubsub.NewManager(gs, "", logger.Logger)
@@ -99,7 +97,7 @@ func main() {
 		os.Exit(1)
 	}
 	srv := &http.Server{
-		Handler:           pubsub.Handler(mgr, logger.Logger, pubsub.WithMesh(pubsub.NewMesh(h, constants.WireGuardOverlay()))),
+		Handler:           pubsub.Handler(mgr, logger.Logger, pubsub.WithMesh(pubsub.NewMesh(h, constants.WireGuardOverlay(), gater))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -119,6 +117,38 @@ func main() {
 	shCtx, shCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shCancel()
 	_ = srv.Shutdown(shCtx)
+}
+
+// gossipSubOptions configures GossipSub. Peer exchange stays off: it lets a
+// pruning peer hand this host addresses to dial, and the only discovery the
+// service accepts is the registry mesh (pkg/pubsub Mesh), which the gateway
+// feeds and the connection gate bounds.
+func gossipSubOptions() []libp2ppubsub.Option {
+	return []libp2ppubsub.Option{
+		libp2ppubsub.WithPeerExchange(false),
+		libp2ppubsub.WithFloodPublish(true),
+	}
+}
+
+// parseBootstrap is the node libp2p hosts the service bootstraps from. An
+// address that does not name a peer is logged and skipped; the rest are still
+// used.
+func parseBootstrap(addrs []string, logger *zap.Logger) []peer.AddrInfo {
+	out := make([]peer.AddrInfo, 0, len(addrs))
+	for _, addr := range addrs {
+		ma, err := multiaddr.NewMultiaddr(addr)
+		if err != nil {
+			logger.Warn("pubsub bootstrap address ignored", zap.String("addr", addr), zap.Error(err))
+			continue
+		}
+		info, err := peer.AddrInfoFromP2pAddr(ma)
+		if err != nil {
+			logger.Warn("pubsub bootstrap address names no peer", zap.String("addr", addr), zap.Error(err))
+			continue
+		}
+		out = append(out, *info)
+	}
+	return out
 }
 
 // overlayListenAddr is where the pubsub libp2p host listens: this node's

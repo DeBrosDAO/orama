@@ -977,9 +977,21 @@ cluster registry table `_pubsub_mesh_peers` (peer id, node id, multiaddr, last
 seen), and has the service connect to every other service seen in the last two
 minutes (`POST /mesh/peers`, `pkg/pubsub` `Mesh`). The service dials only
 `/ip4/<overlay ip>/tcp/<port>/p2p/<peer id>` addresses inside the WireGuard
-prefix (at most 256 per call) and refuses the whole list otherwise; a peer that
-does not answer is reported and retried at the next round while it stays
-registered. A node whose service restarts is found again within one round. A
+prefix (at most 256 per call; a longer list is refused with `400`). A
+malformed or out-of-overlay entry, like a peer that does not answer, is
+reported in the reply's `failed` list and the other entries are still dialled;
+unreachable peers are retried at the next round while they stay registered.
+
+The service's libp2p host is gated (`pkg/pubsub` `OverlayGater`): it dials and
+accepts only TCP addresses inside the WireGuard prefix, and only peers it was
+told about, namely the node libp2p hosts in `BOOTSTRAP_PEERS` and the peers the
+gateway passes to `/mesh/peers` (allowlisted before they are dialled). An
+inbound connection from an unknown peer id is refused at the handshake. Because
+the gateway passes every live peer on each round, after one round two services
+allow each other; a peer that connects first is refused and connects on the next
+round. GossipSub peer exchange is off. There is no libp2p pre-shared key on the
+pubsub host or the node hosts. `_pubsub_mesh_peers` is a runtime-created
+cluster registry table and is on the tenant SQL refused list. A node whose service restarts is found again within one round. A
 gateway that cannot reach its service logs
 `pubsub mesh: reconcile failed, will retry`.
 

@@ -385,6 +385,10 @@ func TestProtectedTables_everyCoreTableIsTriaged(t *testing.T) {
 	}
 }
 
+// runtimeCreatedTables are protected tables the gateway creates with CREATE
+// TABLE IF NOT EXISTS when it starts, which no migration file mentions.
+var runtimeCreatedTables = map[string]bool{"_pubsub_mesh_peers": true, "_namespace_libp2p_peers": true}
+
 // A protected name that no migration creates is a name that has been renamed or
 // removed, and a stale entry reads as protection that is not there.
 func TestProtectedTables_everyEntryStillExists(t *testing.T) {
@@ -393,7 +397,7 @@ func TestProtectedTables_everyEntryStillExists(t *testing.T) {
 	for table := range protectedTables {
 		// orama_schema_migrations is created by the namespace migration
 		// runner, not by a migration file.
-		if table == "orama_schema_migrations" {
+		if table == "orama_schema_migrations" || runtimeCreatedTables[table] {
 			continue
 		}
 		if !tables[table] {
@@ -567,7 +571,7 @@ func TestProtectedTables_matchTheDocumentedList(t *testing.T) {
 		t.Fatal("reserved-name list in docs/SERVERLESS.md has no end marker")
 	}
 	documented := map[string]bool{}
-	for _, m := range regexp.MustCompile("`([a-z_]+)`").FindAllStringSubmatch(text[start:start+end], -1) {
+	for _, m := range regexp.MustCompile("`([a-z0-9_]+)`").FindAllStringSubmatch(text[start:start+end], -1) {
 		documented[m[1]] = true
 	}
 	for name := range protectedTables {
@@ -637,5 +641,25 @@ func TestCheck_vacuumIntoAndAttachLiteral(t *testing.T) {
 	}
 	if err := Check("INSERT INTO w VALUES ('please ATTACH this')"); err != nil {
 		t.Errorf("a literal mentioning ATTACH was refused: %v", err)
+	}
+}
+
+// The gateway creates these two at runtime, so no migration-driven test sees
+// them, and each holds addresses a node dials: a tenant that could write one
+// would point the platform at a host of its choosing.
+func TestCheck_refusesTheRuntimeCreatedPeerTables(t *testing.T) {
+	for _, table := range []string{"_pubsub_mesh_peers", "_namespace_libp2p_peers"} {
+		for _, query := range []string{
+			"INSERT INTO " + table + " (peer_id) VALUES ('x')",
+			"SELECT * FROM " + table,
+			`DELETE FROM "` + table + `"`,
+			"UPDATE main." + strings.ToUpper(table) + " SET peer_id = 'y'",
+			"SELECT 1 FROM t JOIN " + table + " ON 1",
+		} {
+			var refused *ErrNotAllowed
+			if err := Check(query); !errors.As(err, &refused) {
+				t.Errorf("Check(%q) = %v, want a refusal", query, err)
+			}
+		}
 	}
 }

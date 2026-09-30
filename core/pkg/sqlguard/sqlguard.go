@@ -155,6 +155,12 @@ var protectedTables = map[string]string{
 	"namespace_pending_cleanup": "cleanup the cluster still owes a node",
 	"node_health_events":        "what the cluster's nodes reported about each other",
 	"rqlite_backups":            "where the registry's off-box backups are",
+	// Created at runtime by the gateway, not by a migration. A row names an
+	// address a service dials, so a forged one points a node at a host the
+	// tenant chose: the pubsub mesh's registry of services, and the namespace
+	// libp2p peer discovery table.
+	"_pubsub_mesh_peers":      "which pubsub services every node dials",
+	"_namespace_libp2p_peers": "which libp2p peers a namespace's gateways dial",
 }
 
 // deniedStatements are statement kinds tenant SQL has no use for and that step

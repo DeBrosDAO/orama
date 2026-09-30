@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	"github.com/libp2p/go-libp2p"
+	libp2ppubsub "github.com/libp2p/go-libp2p-pubsub"
+	"go.uber.org/zap"
 )
 
 func fixedIP(ip string, err error) func() (string, error) {
@@ -29,5 +34,33 @@ func TestOverlayListenAddr(t *testing.T) {
 				t.Fatalf("listened on %q", got)
 			}
 		})
+	}
+}
+
+const bootstrapPeerID = "12D3KooWRBhwfeP2Y4TCx1SM6s9rUoHhR5STiGwxBhgFRcw3UERE"
+
+func TestParseBootstrap(t *testing.T) {
+	good := "/ip4/10.0.0.1/tcp/4001/p2p/" + bootstrapPeerID
+	got := parseBootstrap([]string{"nonsense", "/ip4/10.0.0.2/tcp/4001", good}, zap.NewNop())
+	if len(got) != 1 || got[0].ID.String() != bootstrapPeerID {
+		t.Fatalf("got %v, want only the address that names a peer", got)
+	}
+	if got := parseBootstrap(nil, zap.NewNop()); len(got) != 0 {
+		t.Fatalf("got %v from no addresses", got)
+	}
+}
+
+// GossipSub builds with the service's options. Peer exchange is left out of
+// them (WithPeerExchange(false)): it is off by default and the router exposes
+// no getter, so what holds the line when it is on is the connection gate
+// (pkg/pubsub gater tests).
+func TestGossipSubOptions_buildARouter(t *testing.T) {
+	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if _, err := libp2ppubsub.NewGossipSub(context.Background(), h, gossipSubOptions()...); err != nil {
+		t.Fatal(err)
 	}
 }
