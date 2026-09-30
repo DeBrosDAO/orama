@@ -265,7 +265,7 @@ unit test read, so a shape change on either side fails without a cluster.
 | `/v1/internal/node/heartbeat` | internal | From the node's own process over loopback, stamped with the key that node enrolled. Refused from off the host. |
 | `/v1/internal/node/register` | internal | From the node's own process over loopback, stamped with the key that node enrolled. Refused from off the host. |
 | `/v1/internal/ping` | internal | Node-to-node over the WireGuard overlay. Answers `{"status":"ok"}` and nothing else. |
-| `/v1/internal/storage/evict` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
+| `/v1/internal/storage/evict` | internal | A peer gateway's immediate-reclaim fan-out (`unpin?immediate=true`). Coordination MAC over the request (the CID is in the query string, which the MAC covers; the body is ignored) + overlay source; the overlay and the old `X-Orama-Internal-Auth` marker alone are refused with 403. |
 | `/v1/internal/telemetry` | internal | A peer's cluster gateway asking for this node's latest health report. Coordination MAC + overlay source; anything else is 404. |
 | `/v1/internal/tls/check` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/wg/peer` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |

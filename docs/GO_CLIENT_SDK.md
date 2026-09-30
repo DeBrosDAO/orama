@@ -199,13 +199,23 @@ cluster-wide right away so the content is no longer fetchable. Use it only for
 genuine privacy deletes — it fans out per-node work and should not be set on
 routine unpins (e.g. avatar rotation) (bugboard #153).
 
+The cluster keeps ONE pin per CID however many namespaces uploaded the same
+bytes. Whether an unpin removes it is decided from a cluster-wide reference
+count in the cluster registry (`ipfs_cid_refs`), never from the caller's own
+namespace database: a pin and a deployment register a reference, an unpin
+releases the caller's, and only the release that leaves none removes the pin.
+The delete and the count are two statements in that order, so of two
+namespaces unpinning at once the later one sees zero and neither can miss the
+other. A gateway that has just started answers `503` (retryable) to an unpin
+until it has loaded its namespace's references into the index, and a registry
+read that fails leaves the pin in place (`evicted: "skipped"`).
 The response carries an `evicted` field:
 
 | Value | Meaning |
 |---|---|
 | `"true"` | Every active node confirmed a complete local reclaim. The bytes are gone cluster-wide. |
 | `"partial"` | At least one node did not confirm — unreachable, errored, or reported an incomplete reclaim. The pin is still removed everywhere, but the blocks survive on that node until the next GC sweep (≤6h). |
-| `"shared"` | Another namespace still pins this CID, so nothing was evicted. Correct and expected for deduplicated content. |
+| `"shared"` | Another namespace still references this CID (a storage pin or a deployment), so nothing was removed or evicted. Correct and expected for deduplicated content. |
 | `"skipped"` | Immediate reclaim was not requested, or the reference check could not run. |
 
 Only `"true"` is a delete-for-everyone guarantee. Do not surface "permanently

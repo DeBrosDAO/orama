@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
@@ -30,6 +31,10 @@ type Config struct {
 	IPFSReplicationFactor int
 	// IPFSAPIURL is the IPFS API endpoint URL
 	IPFSAPIURL string
+	// ClusterSecret keys the coordination MAC that authenticates node-to-node
+	// evict calls (pkg/auth/coordination.go). Every gateway of a cluster holds
+	// the same one.
+	ClusterSecret string
 }
 
 // Handlers provides HTTP handlers for IPFS storage operations.
@@ -49,6 +54,10 @@ type Handlers struct {
 	// fan-out dials. Zero selects internalGatewayPort, which is what production
 	// always uses; tests set it to point the fan-out at a local stub node.
 	evictPort int
+	// refSyncPending is true from StartCIDRefSync until the cluster reference
+	// index has been filled from this namespace's database once. While it is
+	// set, an unpin cannot tell whether it is the last reference.
+	refSyncPending atomic.Bool
 }
 
 // New creates a new storage handlers instance with the provided dependencies.
