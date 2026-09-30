@@ -21,14 +21,16 @@ type fakeMeshService struct {
 	selfErr   error
 	connectFn func(addrs []string) (pubsub.MeshConnectResult, error)
 	connected [][]string
+	allowed   [][]string
 }
 
 func (f *fakeMeshService) MeshSelf(context.Context) (pubsub.MeshSelf, error) {
 	return f.self, f.selfErr
 }
 
-func (f *fakeMeshService) MeshConnect(_ context.Context, addrs []string) (pubsub.MeshConnectResult, error) {
+func (f *fakeMeshService) MeshConnect(_ context.Context, addrs, allow []string) (pubsub.MeshConnectResult, error) {
 	f.connected = append(f.connected, append([]string(nil), addrs...))
+	f.allowed = append(f.allowed, append([]string(nil), allow...))
 	if f.connectFn != nil {
 		return f.connectFn(addrs)
 	}
@@ -277,5 +279,61 @@ func TestPubsubMesh_aNodeAsksForNoMoreThanTheServiceTakes(t *testing.T) {
 	}
 	if len(svc.connected) != 1 || len(svc.connected[0]) != pubsub.MaxMeshPeers {
 		t.Fatalf("asked the service for %d peers, want %d", len(svc.connected[0]), pubsub.MaxMeshPeers)
+	}
+}
+
+// Past MaxMeshPeers live services, a node dials only its ring successors. The
+// gate on the other side admits only who it was told about, so it must be told
+// about every node that dials it: for every node X and every Y that X dials, X
+// is in Y's allow list, at a fleet size where most pairs are not.
+func TestRing_whoeverDialsANodeIsOnItsAllowList(t *testing.T) {
+	const fleet = 600
+	peers := make([]registeredPeer, fleet)
+	for i := range peers {
+		id := fmt.Sprintf("peer-%04d", i)
+		peers[i] = registeredPeer{id: id, addr: id}
+	}
+	allowOf := make(map[string]map[string]bool, fleet)
+	for _, p := range peers {
+		others := withoutPeer(peers, p.id)
+		allowOf[p.id] = make(map[string]bool)
+		for _, a := range ringPredecessors(others, p.id, pubsub.MaxMeshPeers) {
+			allowOf[p.id][a] = true
+		}
+	}
+	for _, x := range peers {
+		for _, y := range ringSuccessors(withoutPeer(peers, x.id), x.id, pubsub.MaxMeshPeers) {
+			if !allowOf[y][x.id] {
+				t.Fatalf("%s dials %s, which does not allow it", x.id, y)
+			}
+		}
+	}
+}
+
+func withoutPeer(peers []registeredPeer, id string) []registeredPeer {
+	out := make([]registeredPeer, 0, len(peers)-1)
+	for _, p := range peers {
+		if p.id != id {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func TestRingPredecessors(t *testing.T) {
+	peers := []registeredPeer{{"a", "A"}, {"c", "C"}, {"e", "E"}, {"g", "G"}}
+	cases := map[string]struct {
+		self  string
+		limit int
+		want  []string
+	}{
+		"from the middle, wrapping": {"d", 3, []string{"C", "A", "G"}},
+		"before the first":          {"0", 2, []string{"G", "E"}},
+		"all when under the limit":  {"f", 10, []string{"E", "C", "A", "G"}},
+	}
+	for name, c := range cases {
+		if got := ringPredecessors(peers, c.self, c.limit); strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
 	}
 }

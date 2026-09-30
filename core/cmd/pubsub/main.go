@@ -44,7 +44,7 @@ func main() {
 	bootstrapPeers := parseBootstrap(bootstrap, logger.Logger)
 	gater := pubsub.NewOverlayGater(constants.WireGuardOverlay())
 	for _, info := range bootstrapPeers {
-		gater.Allow(info.ID)
+		gater.Pin(info.ID)
 	}
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddr),

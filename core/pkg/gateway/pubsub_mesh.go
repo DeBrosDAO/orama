@@ -43,7 +43,7 @@ const (
 // (pubsub.HTTPClient).
 type pubsubMeshService interface {
 	MeshSelf(ctx context.Context) (pubsub.MeshSelf, error)
-	MeshConnect(ctx context.Context, addrs []string) (pubsub.MeshConnectResult, error)
+	MeshConnect(ctx context.Context, addrs, allow []string) (pubsub.MeshConnectResult, error)
 }
 
 // pubsubMeshServiceOf is the pubsub service behind c, or nil when c does not
@@ -135,14 +135,16 @@ func (m *PubsubMesh) reconcile(ctx context.Context) error {
 		`DELETE FROM _pubsub_mesh_peers WHERE last_seen < ?`, now.Add(-pubsubMeshRetention).Unix()); err != nil {
 		return fmt.Errorf("forget stale pubsub registrations: %w", err)
 	}
-	addrs, err := m.livePeers(ctx, self.PeerID, now)
+	peers, err := m.registeredPeers(ctx, self.PeerID, now)
 	if err != nil {
 		return err
 	}
-	if len(addrs) == 0 {
+	if len(peers) == 0 {
 		return nil
 	}
-	result, err := m.service.MeshConnect(ctx, addrs)
+	addrs := ringSuccessors(peers, self.PeerID, pubsub.MaxMeshPeers)
+	allow := ringPredecessors(peers, self.PeerID, pubsub.MaxMeshPeers)
+	result, err := m.service.MeshConnect(ctx, addrs, allow)
 	if err != nil {
 		return fmt.Errorf("have the pubsub service connect to %d peers: %w", len(addrs), err)
 	}
@@ -153,25 +155,28 @@ func (m *PubsubMesh) reconcile(ctx context.Context) error {
 	return nil
 }
 
-// livePeers is the multiaddr of the registered services refreshed within
-// pubsubMeshPeerTTL, excluding this one, at most pubsub.MaxMeshPeers of them:
-// the ones that follow this peer in peer-id order, wrapping. The service
-// refuses a longer list outright, and a node does not need every peer —
-// GossipSub needs a connected graph — so each node takes its successors on
-// the ring, which spreads the connections instead of piling them on the
-// lowest ids.
-func (m *PubsubMesh) livePeers(ctx context.Context, excluding string, now time.Time) ([]string, error) {
-	all, err := m.registeredPeers(ctx, excluding, now)
-	if err != nil {
-		return nil, err
-	}
-	return ringSuccessors(all, excluding, pubsub.MaxMeshPeers), nil
-}
-
+// The live registrations excluding this service are split in two, each at
+// most pubsub.MaxMeshPeers long: the peers that follow this one in peer-id
+// order (wrapping) are dialled, the ones that precede it are allowlisted to
+// connect in. If A dials B, B is within A's first MaxMeshPeers successors, so A
+// is within B's first MaxMeshPeers predecessors: whoever dials a node is
+// always on its allowlist, at any fleet size. The service refuses a longer
+// list, and GossipSub needs a connected graph, not every pair.
 // registeredPeer is one live registration.
 type registeredPeer struct {
 	id   string
 	addr string
+}
+
+// ringPredecessors returns up to limit addresses of the peers (sorted by id)
+// that precede self, nearest first, wrapping around.
+func ringPredecessors(peers []registeredPeer, self string, limit int) []string {
+	start := sort.Search(len(peers), func(i int) bool { return peers[i].id >= self }) - 1
+	out := make([]string, 0, min(limit, len(peers)))
+	for i := 0; i < len(peers) && len(out) < limit; i++ {
+		out = append(out, peers[((start-i)%len(peers)+len(peers))%len(peers)].addr)
+	}
+	return out
 }
 
 // ringSuccessors returns up to limit addresses of the peers (sorted by id)

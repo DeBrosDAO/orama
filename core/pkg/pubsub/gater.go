@@ -23,44 +23,71 @@ import (
 //     libp2p hosts it bootstraps from, and the peers the gateway passed to
 //     Mesh.ConnectPeers.
 //
-// The gateway passes every live registered peer on each 15-second round, so
-// after one round two services allow each other. A peer that connects before
-// this node's gateway has told the service about it is refused at the security
-// handshake; its own gateway dials again on the next round, by which time this
-// side has learned it. Peers are added and never removed: the set is bounded by
-// the cluster's nodes and is reset when the service restarts.
+// The allowlist has two parts. The node hosts the service bootstraps from are
+// pinned for its life. The mesh peers are replaced on every round the gateway
+// sends (Mesh.ConnectPeers): each round names the peers this service dials and
+// the ones it lets connect in, so a peer that left the registry — departed,
+// or removed — stops being admitted within a round instead of staying trusted
+// until the service restarts. A peer that connects before this node's gateway
+// has named it is refused at the security handshake and dials again on its own
+// next round.
 type OverlayGater struct {
 	overlay netip.Prefix
 
-	mu      sync.RWMutex
-	allowed map[peer.ID]struct{}
+	mu     sync.RWMutex
+	pinned map[peer.ID]struct{}
+	mesh   map[peer.ID]struct{}
 }
 
 // NewOverlayGater returns a gate that admits only addresses inside overlay and
-// only peers added with Allow.
+// only peers pinned with Pin or named in the last SetMeshPeers.
 func NewOverlayGater(overlay netip.Prefix) *OverlayGater {
-	return &OverlayGater{overlay: overlay, allowed: make(map[peer.ID]struct{})}
+	return &OverlayGater{overlay: overlay, pinned: make(map[peer.ID]struct{}), mesh: make(map[peer.ID]struct{})}
 }
 
-// Allow admits the peers. Call it before dialling them.
-func (g *OverlayGater) Allow(ids ...peer.ID) {
+// Pin admits the peers for the life of the gate: the bootstrap node hosts.
+func (g *OverlayGater) Pin(ids ...peer.ID) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, id := range ids {
-		g.allowed[id] = struct{}{}
+		g.pinned[id] = struct{}{}
 	}
+}
+
+// SetMeshPeers replaces the mesh part of the allowlist with ids. Call it before
+// dialling them.
+func (g *OverlayGater) SetMeshPeers(ids ...peer.ID) {
+	next := make(map[peer.ID]struct{}, len(ids))
+	for _, id := range ids {
+		next[id] = struct{}{}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.mesh = next
 }
 
 func (g *OverlayGater) isAllowed(id peer.ID) bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	_, ok := g.allowed[id]
+	if _, ok := g.pinned[id]; ok {
+		return true
+	}
+	_, ok := g.mesh[id]
 	return ok
 }
 
-// inOverlay reports whether addr is /ip4/<overlay ip>/tcp/<port>.
+// inOverlay reports whether addr is exactly /ip4/<overlay ip>/tcp/<port>,
+// optionally followed by /p2p/<id>: nothing layered on it (a relay circuit, a
+// websocket) passes, whatever overlay address it starts with.
 func (g *OverlayGater) inOverlay(addr multiaddr.Multiaddr) bool {
 	if addr == nil {
+		return false
+	}
+	protos := addr.Protocols()
+	if len(protos) == 3 && protos[2].Code == multiaddr.P_P2P {
+		protos = protos[:2]
+	}
+	if len(protos) != 2 || protos[0].Code != multiaddr.P_IP4 || protos[1].Code != multiaddr.P_TCP {
 		return false
 	}
 	ip, err := addr.ValueForProtocol(multiaddr.P_IP4)
@@ -68,11 +95,7 @@ func (g *OverlayGater) inOverlay(addr multiaddr.Multiaddr) bool {
 		return false
 	}
 	parsed, err := netip.ParseAddr(ip)
-	if err != nil || !g.overlay.Contains(parsed) {
-		return false
-	}
-	_, err = addr.ValueForProtocol(multiaddr.P_TCP)
-	return err == nil
+	return err == nil && g.overlay.Contains(parsed)
 }
 
 // InterceptPeerDial refuses to dial a peer the service was not told about.

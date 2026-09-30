@@ -98,32 +98,68 @@ func (m *Mesh) Self() (MeshSelf, error) {
 // rest from connecting. The service dials nothing outside the overlay on the
 // caller's behalf, and the valid peers are added to the gate's allowlist, which
 // is what lets them connect back.
-func (m *Mesh) ConnectPeers(ctx context.Context, addrs []string) (MeshConnectResult, error) {
-	if len(addrs) > MaxMeshPeers {
-		return MeshConnectResult{}, fmt.Errorf("%d peers, at most %d are accepted", len(addrs), MaxMeshPeers)
+//
+// allow names the peers that may connect in without this host dialling them
+// (see pubsub_mesh.go: a node dials its ring successors and allows its ring
+// predecessors, so whoever dials it is always allowed). It is held to the same
+// limit and validation; its entries are only allowlisted, never dialled.
+func (m *Mesh) ConnectPeers(ctx context.Context, addrs, allow []string) (MeshConnectResult, error) {
+	if len(addrs) > MaxMeshPeers || len(allow) > MaxMeshPeers {
+		return MeshConnectResult{}, fmt.Errorf("%d peers to dial and %d to allow, at most %d of each are accepted", len(addrs), len(allow), MaxMeshPeers)
 	}
-	type target struct {
-		addr string
-		info peer.AddrInfo
+	var result MeshConnectResult
+	allowed, failed := m.parsePeers(allow, "not allowed: ")
+	result.Failed = append(result.Failed, failed...)
+	targets, failed := m.parsePeers(addrs, "")
+	result.Failed = append(result.Failed, failed...)
+
+	// This round names every mesh peer the service may talk to: the ones it
+	// dials and the ones it lets in. Anything else leaves the allowlist.
+	ids := make([]peer.ID, 0, len(allowed)+len(targets))
+	for _, t := range append(allowed, targets...) {
+		ids = append(ids, t.info.ID)
 	}
+	m.gater.SetMeshPeers(ids...)
+
+	dialled := m.dialPeers(ctx, targets)
+	dialled.Failed = append(result.Failed, dialled.Failed...)
+	return dialled, nil
+}
+
+// meshTarget is one parsed peer entry.
+type meshTarget struct {
+	addr string
+	info peer.AddrInfo
+}
+
+// parsePeers parses entries, dropping this host itself; an entry that is not
+// a peer address is returned as a failure, its error prefixed with prefix.
+func (m *Mesh) parsePeers(entries []string, prefix string) ([]meshTarget, []MeshPeerFailure) {
 	var (
-		mu     sync.Mutex
-		wg     sync.WaitGroup
-		result MeshConnectResult
+		out    []meshTarget
+		failed []MeshPeerFailure
 	)
-	targets := make([]target, 0, len(addrs))
-	for _, a := range addrs {
+	for _, a := range entries {
 		info, err := m.parsePeer(a)
 		if err != nil {
-			result.Failed = append(result.Failed, MeshPeerFailure{Addr: a, Error: err.Error()})
+			failed = append(failed, MeshPeerFailure{Addr: a, Error: prefix + err.Error()})
 			continue
 		}
 		if info.ID == m.host.ID() {
 			continue
 		}
-		m.gater.Allow(info.ID)
-		targets = append(targets, target{addr: a, info: info})
+		out = append(out, meshTarget{addr: a, info: info})
 	}
+	return out, failed
+}
+
+// dialPeers dials every target at once and reports the ones that failed.
+func (m *Mesh) dialPeers(ctx context.Context, targets []meshTarget) MeshConnectResult {
+	var (
+		mu     sync.Mutex
+		wg     sync.WaitGroup
+		result MeshConnectResult
+	)
 	for _, t := range targets {
 		wg.Add(1)
 		go func() {
@@ -139,7 +175,7 @@ func (m *Mesh) ConnectPeers(ctx context.Context, addrs []string) (MeshConnectRes
 		}()
 	}
 	wg.Wait()
-	return result, nil
+	return result
 }
 
 func (m *Mesh) connect(ctx context.Context, info peer.AddrInfo) error {

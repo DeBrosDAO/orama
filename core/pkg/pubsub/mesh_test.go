@@ -93,7 +93,7 @@ func TestMesh_servicesOnTwoNodesDeliverToEachOther(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 
-	b.gater.Allow(a.id) // b's own gateway has told its service about a
+	b.gater.Pin(a.id) // b's own gateway has told its service about a
 	ca := NewHTTPClient(a.sock, "ns", zap.NewNop())
 	defer ca.Close()
 	cb := NewHTTPClient(b.sock, "ns", zap.NewNop())
@@ -105,7 +105,7 @@ func TestMesh_servicesOnTwoNodesDeliverToEachOther(t *testing.T) {
 	if self.PeerID != b.id.String() || len(self.Addrs) != 1 || !strings.HasSuffix(self.Addrs[0], "/p2p/"+b.id.String()) {
 		t.Fatalf("self = %+v, want b's overlay address with its peer id", self)
 	}
-	res, err := ca.MeshConnect(context.Background(), self.Addrs)
+	res, err := ca.MeshConnect(context.Background(), self.Addrs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,10 +139,10 @@ func TestMesh_connectIsIdempotentAndSkipsSelf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.gater.Allow(a.id)
+	b.gater.Pin(a.id)
 	addrs := append(append([]string{}, bs.Addrs...), as.Addrs...)
 	for range 2 {
-		res, err := a.mesh.ConnectPeers(context.Background(), addrs)
+		res, err := a.mesh.ConnectPeers(context.Background(), addrs, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -154,7 +154,7 @@ func TestMesh_connectIsIdempotentAndSkipsSelf(t *testing.T) {
 
 func TestMesh_emptyListConnectsNothing(t *testing.T) {
 	a := startNode(t)
-	res, err := a.mesh.ConnectPeers(context.Background(), nil)
+	res, err := a.mesh.ConnectPeers(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,8 +177,8 @@ func TestMesh_anUnreachablePeerIsReportedAndDoesNotStopTheOthers(t *testing.T) {
 	if err := dead.mesh.host.Close(); err != nil {
 		t.Fatal(err)
 	}
-	b.gater.Allow(a.id)
-	res, err := a.mesh.ConnectPeers(context.Background(), append(deadAddr.Addrs, bs.Addrs...))
+	b.gater.Pin(a.id)
+	res, err := a.mesh.ConnectPeers(context.Background(), append(deadAddr.Addrs, bs.Addrs...), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestMesh_anUnreachablePeerIsReportedAndDoesNotStopTheOthers(t *testing.T) {
 // still dialled.
 func TestMesh_aBadEntryIsReportedAndTheValidOnesAreStillDialled(t *testing.T) {
 	a, b := startNode(t), startNode(t)
-	b.gater.Allow(a.id)
+	b.gater.Pin(a.id)
 	bs, err := b.mesh.Self()
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +211,7 @@ func TestMesh_aBadEntryIsReportedAndTheValidOnesAreStillDialled(t *testing.T) {
 	}
 	for name, bad := range cases {
 		t.Run(name, func(t *testing.T) {
-			res, err := a.mesh.ConnectPeers(context.Background(), []string{bad, valid})
+			res, err := a.mesh.ConnectPeers(context.Background(), []string{bad, valid}, nil)
 			if err != nil {
 				t.Fatalf("a bad entry refused the whole list: %v", err)
 			}
@@ -232,7 +232,7 @@ func TestMesh_refusesMoreThanMaxPeers(t *testing.T) {
 	for i := range addrs {
 		addrs[i] = addr
 	}
-	if _, err := a.mesh.ConnectPeers(context.Background(), addrs); err == nil {
+	if _, err := a.mesh.ConnectPeers(context.Background(), addrs, nil); err == nil {
 		t.Fatal("accepted more peers than MaxMeshPeers")
 	}
 }
@@ -254,7 +254,7 @@ func TestMeshAPI_badRequestsAreClientErrors(t *testing.T) {
 	a := startNode(t)
 	c := NewHTTPClient(a.sock, "ns", zap.NewNop())
 	defer c.Close()
-	_, err := c.MeshConnect(context.Background(), make([]string, MaxMeshPeers+1))
+	_, err := c.MeshConnect(context.Background(), make([]string, MaxMeshPeers+1), nil)
 	if err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("err = %v, want the service's 400 for a list over the limit", err)
 	}
@@ -277,4 +277,33 @@ func peerIDOf(t *testing.T, addr string) peer.ID {
 		t.Fatal(fmt.Errorf("decode peer id in %q: %w", addr, err))
 	}
 	return id
+}
+
+// A node dials its ring successors and only allows its predecessors: B never
+// dials A, it names A in allow. A's dial must be admitted, and an allow entry
+// is never dialled.
+func TestMesh_aPeerNamedOnlyInAllowCanConnectIn(t *testing.T) {
+	a, b := startNode(t), startNode(t)
+	as, err := a.mesh.Self()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs, err := b.mesh.Self()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := b.mesh.ConnectPeers(context.Background(), nil, as.Addrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Connected != 0 || len(res.Failed) != 0 {
+		t.Fatalf("an allow-only round dialled or failed: %+v", res)
+	}
+	res, err = a.mesh.ConnectPeers(context.Background(), bs.Addrs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Connected != 1 {
+		t.Fatalf("a dial to a peer that allows us was refused: %+v", res)
+	}
 }

@@ -983,12 +983,15 @@ reported in the reply's `failed` list and the other entries are still dialled;
 unreachable peers are retried at the next round while they stay registered.
 
 The service's libp2p host is gated (`pkg/pubsub` `OverlayGater`): it dials and
-accepts only TCP addresses inside the WireGuard prefix, and only peers it was
-told about, namely the node libp2p hosts in `BOOTSTRAP_PEERS` and the peers the
-gateway passes to `/mesh/peers` (allowlisted before they are dialled). An
-inbound connection from an unknown peer id is refused at the handshake. Because
-the gateway passes every live peer on each round, after one round two services
-allow each other; a peer that connects first is refused and connects on the next
+accepts only plain `/ip4/<overlay ip>/tcp/<port>` addresses, and only peers it
+was told about — the node libp2p hosts in `BOOTSTRAP_PEERS`, pinned, and the
+peers of the gateway's latest `/mesh/peers` round, which replaces that set.
+Each round the gateway sends the node's ring successors by peer id (dialled)
+and its ring predecessors (allowed to connect in), each at most 256: whoever
+dials a node is among its predecessors, so the mesh forms at any fleet size,
+and a peer that left the registry stops being admitted within a round. An
+inbound connection from an unknown peer id is refused at the handshake; a peer
+that connects before this node's gateway has named it connects on its next
 round. GossipSub peer exchange is off. There is no libp2p pre-shared key on the
 pubsub host or the node hosts. `_pubsub_mesh_peers` is a runtime-created
 cluster registry table and is on the tenant SQL refused list. A node whose service restarts is found again within one round. A

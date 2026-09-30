@@ -15,6 +15,9 @@ type HandlerOption func(mux *http.ServeMux, logger *zap.Logger)
 // meshPeersBody is the request to POST /mesh/peers.
 type meshPeersBody struct {
 	Addrs []string `json:"addrs"`
+	// Allow are peers allowlisted without being dialled. An older gateway
+	// sends none.
+	Allow []string `json:"allow,omitempty"`
 }
 
 // WithMesh serves GET /mesh/self and POST /mesh/peers, through which the
@@ -44,7 +47,7 @@ func WithMesh(mesh *Mesh) HandlerOption {
 				http.Error(w, "invalid body: expected {addrs: [...]}", http.StatusBadRequest)
 				return
 			}
-			result, err := mesh.ConnectPeers(r.Context(), body.Addrs)
+			result, err := mesh.ConnectPeers(r.Context(), body.Addrs, body.Allow)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -70,11 +73,11 @@ func (c *HTTPClient) MeshSelf(ctx context.Context) (MeshSelf, error) {
 	return self, nil
 }
 
-// MeshConnect has the service connect to the peers at addrs (see
-// Mesh.ConnectPeers).
-func (c *HTTPClient) MeshConnect(ctx context.Context, addrs []string) (MeshConnectResult, error) {
+// MeshConnect has the service connect to the peers at addrs and allow the
+// peers at allow to connect in (see Mesh.ConnectPeers).
+func (c *HTTPClient) MeshConnect(ctx context.Context, addrs, allow []string) (MeshConnectResult, error) {
 	var out MeshConnectResult
-	if err := c.meshCall(ctx, http.MethodPost, "/mesh/peers", meshPeersBody{Addrs: addrs}, &out); err != nil {
+	if err := c.meshCall(ctx, http.MethodPost, "/mesh/peers", meshPeersBody{Addrs: addrs, Allow: allow}, &out); err != nil {
 		return MeshConnectResult{}, fmt.Errorf("pubsub mesh connect: %w", err)
 	}
 	return out, nil

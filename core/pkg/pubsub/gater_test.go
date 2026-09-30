@@ -57,7 +57,7 @@ func TestOverlayGater_refusesToDialAPeerItWasNotTold(t *testing.T) {
 	if g.InterceptPeerDial(id) {
 		t.Fatal("dial to an unknown peer allowed")
 	}
-	g.Allow(id)
+	g.Pin(id)
 	if !g.InterceptPeerDial(id) {
 		t.Fatal("dial to an allowlisted peer refused")
 	}
@@ -70,7 +70,7 @@ func TestOverlayGater_inboundFromAnUnknownPeerIsRefused(t *testing.T) {
 	if g.InterceptSecured(network.DirInbound, id, cm) {
 		t.Fatal("an unknown peer's inbound connection was accepted")
 	}
-	g.Allow(id)
+	g.Pin(id)
 	if !g.InterceptSecured(network.DirInbound, id, cm) {
 		t.Fatal("an allowlisted peer's inbound connection was refused")
 	}
@@ -79,7 +79,7 @@ func TestOverlayGater_inboundFromAnUnknownPeerIsRefused(t *testing.T) {
 func TestOverlayGater_inboundFromOutsideTheOverlayIsRefusedEvenForAnAllowedPeer(t *testing.T) {
 	g := NewOverlayGater(testOverlay)
 	id := peer.ID("peer-a")
-	g.Allow(id)
+	g.Pin(id)
 	for _, addr := range []string{"/ip4/8.8.8.8/tcp/5000", "/ip4/127.0.0.1/tcp/5000", "/ip6/::1/tcp/5000"} {
 		cm := connAddrs{mustAddr(t, addr)}
 		if g.InterceptAccept(cm) {
@@ -133,7 +133,7 @@ func TestOverlayGater_hostRefusesAStrangerAndAcceptsAnAllowedPeer(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer friend.Close()
-	g.Allow(friend.ID())
+	g.Pin(friend.ID())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := friend.Connect(ctx, peer.AddrInfo{ID: server.ID(), Addrs: server.Addrs()}); err != nil {
@@ -164,7 +164,7 @@ func TestOverlayGater_hostWithTheOverlayPrefixDoesNotDialLoopback(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer target.Close()
-	g.Allow(target.ID())
+	g.Pin(target.ID())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := h.Connect(ctx, peer.AddrInfo{ID: target.ID(), Addrs: target.Addrs()}); err == nil {
@@ -181,8 +181,8 @@ func TestMesh_connectPeersAllowsThePeersItDials(t *testing.T) {
 	if a.gater.InterceptPeerDial(b.id) {
 		t.Fatal("b allowed before it was named")
 	}
-	b.gater.Allow(a.id)
-	if _, err := a.mesh.ConnectPeers(context.Background(), bs.Addrs); err != nil {
+	b.gater.Pin(a.id)
+	if _, err := a.mesh.ConnectPeers(context.Background(), bs.Addrs, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !a.gater.InterceptPeerDial(b.id) {
@@ -198,7 +198,7 @@ func TestMesh_anEarlyInboundIsRefusedAndTheNextRoundConnects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := a.mesh.ConnectPeers(context.Background(), bs.Addrs)
+	res, err := a.mesh.ConnectPeers(context.Background(), bs.Addrs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,12 +210,12 @@ func TestMesh_anEarlyInboundIsRefusedAndTheNextRoundConnects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.mesh.ConnectPeers(context.Background(), as.Addrs); err != nil {
+	if _, err := b.mesh.ConnectPeers(context.Background(), as.Addrs, nil); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		res, err = a.mesh.ConnectPeers(context.Background(), bs.Addrs)
+		res, err = a.mesh.ConnectPeers(context.Background(), bs.Addrs, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -225,4 +225,42 @@ func TestMesh_anEarlyInboundIsRefusedAndTheNextRoundConnects(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 	}
 	t.Fatalf("a never connected to b after b learned a: %+v", res)
+}
+
+// An address that starts on the overlay but layers a relay circuit or a
+// websocket on it is not an overlay TCP address and is refused.
+func TestOverlayGater_onlyAPlainOverlayTCPAddressPasses(t *testing.T) {
+	g := NewOverlayGater(testOverlay)
+	for _, addr := range []string{
+		"/ip4/10.0.0.5/tcp/4001/p2p/12D3KooWHNzqqHg1jgvcfNaG1jUfZJ1KLLG7rLrUFbGpoUBUDEPt/p2p-circuit",
+		"/ip4/10.0.0.5/tcp/4001/ws",
+		"/ip4/10.0.0.5/udp/4001/quic-v1",
+	} {
+		if g.InterceptAddrDial("", mustAddr(t, addr)) {
+			t.Errorf("dial to %s allowed", addr)
+		}
+	}
+	if !g.InterceptAddrDial("", mustAddr(t, "/ip4/10.0.0.5/tcp/4001/p2p/12D3KooWHNzqqHg1jgvcfNaG1jUfZJ1KLLG7rLrUFbGpoUBUDEPt")) {
+		t.Error("an overlay TCP address with its peer id was refused")
+	}
+}
+
+// Each round replaces the mesh peers: one no longer named — departed or
+// removed from the registry — is refused from then on. Pinned bootstrap peers
+// stay.
+func TestOverlayGater_aPeerDroppedFromTheRoundIsNoLongerAdmitted(t *testing.T) {
+	g := NewOverlayGater(testOverlay)
+	boot, a, b := peer.ID("boot"), peer.ID("peer-a"), peer.ID("peer-b")
+	g.Pin(boot)
+	g.SetMeshPeers(a, b)
+	if !g.InterceptPeerDial(a) || !g.InterceptPeerDial(b) {
+		t.Fatal("peers named in the round are not admitted")
+	}
+	g.SetMeshPeers(b)
+	if g.InterceptPeerDial(a) {
+		t.Error("a peer dropped from the round is still admitted")
+	}
+	if !g.InterceptPeerDial(b) || !g.InterceptPeerDial(boot) {
+		t.Error("a peer still named, or a pinned one, is refused")
+	}
 }
