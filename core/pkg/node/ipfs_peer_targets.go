@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/netip"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
@@ -15,24 +17,30 @@ import (
 const activeOverlayPeersSQL = `SELECT id, internal_ip FROM dns_nodes WHERE status = 'active' AND internal_ip IS NOT NULL AND internal_ip != ''`
 
 // activeOverlayPeers lists the cluster's active nodes from the registry, each
-// with its own node peer id.
-func activeOverlayPeers(ctx context.Context, db *sql.DB) ([]ipfs.PeerTarget, error) {
+// with its own node peer id. A row whose address is not inside the WireGuard
+// overlay is not a target — requests signed for a node go only over the mesh —
+// and is counted in skipped for the caller to report.
+func activeOverlayPeers(ctx context.Context, db *sql.DB) (targets []ipfs.PeerTarget, skipped int, err error) {
 	rows, err := rqlite.SafeQueryContext(db, ctx, activeOverlayPeersSQL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read dns_nodes: %w", err)
+		return nil, 0, fmt.Errorf("failed to read dns_nodes: %w", err)
 	}
 	defer rows.Close()
 
-	var out []ipfs.PeerTarget
+	overlay := constants.WireGuardOverlay()
 	for rows.Next() {
 		var t ipfs.PeerTarget
 		if err := rows.Scan(&t.ID, &t.IP); err != nil {
-			return nil, fmt.Errorf("failed to scan dns_nodes: %w", err)
+			return nil, 0, fmt.Errorf("failed to scan dns_nodes: %w", err)
 		}
-		out = append(out, t)
+		if ip, perr := netip.ParseAddr(t.IP); perr != nil || !overlay.Contains(ip) {
+			skipped++
+			continue
+		}
+		targets = append(targets, t)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate dns_nodes: %w", err)
+		return nil, 0, fmt.Errorf("failed to iterate dns_nodes: %w", err)
 	}
-	return out, nil
+	return targets, skipped, nil
 }

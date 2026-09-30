@@ -3,8 +3,10 @@ package node
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/multiformats/go-multiaddr"
@@ -137,12 +139,27 @@ func (n *Node) discoverClusterPeers(ctx context.Context, cm *ipfs.ClusterConfigM
 	if h == nil {
 		return fmt.Errorf("cannot discover IPFS cluster peers: the libp2p host is not started yet")
 	}
+	// The registry is read before the lock, under its own deadline: a registry
+	// without quorum must not hold up the other service.json writers.
+	readCtx, cancel := context.WithTimeout(ctx, clusterPeerRegistryTimeout)
+	targets, skipped, err := activeOverlayPeers(readCtx, adapter.GetSQLDB())
+	cancel()
+	if err != nil {
+		return fmt.Errorf("cannot discover IPFS cluster peers: %w", err)
+	}
+	if skipped > 0 {
+		n.logger.ComponentWarn(logging.ComponentNode, "IPFS cluster peer discovery skipped registry rows whose address is not on the WireGuard overlay",
+			zap.Int("skipped", skipped))
+	}
 	n.clusterCfgMu.Lock()
 	defer n.clusterCfgMu.Unlock()
-	return cm.DiscoverClusterPeers(ctx, h.ID().String(), func(ctx context.Context) ([]ipfs.PeerTarget, error) {
-		return activeOverlayPeers(ctx, adapter.GetSQLDB())
+	return cm.DiscoverClusterPeers(ctx, h.ID().String(), func(context.Context) ([]ipfs.PeerTarget, error) {
+		return targets, nil
 	})
 }
+
+// clusterPeerRegistryTimeout bounds the registry read of one discovery pass.
+const clusterPeerRegistryTimeout = 10 * time.Second
 
 // gatewayBootstrapPeers is the peer list the index gateway's libp2p client
 // dials: this node first, over its overlay address, then the configured
