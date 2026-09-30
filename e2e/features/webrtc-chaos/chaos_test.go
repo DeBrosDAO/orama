@@ -63,7 +63,7 @@ func setup(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	n.CLI.MustOK(t, "members", "add", w.Address(), "--role", "runtime")
-	s, err := c.For(t).SignIn(t.Context(), w, n.Name, nil)
+	s, err := harness.GW(t).For(t).SignIn(t.Context(), w, n.Name, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

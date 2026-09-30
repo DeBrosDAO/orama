@@ -4,6 +4,7 @@ package push
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,6 +27,9 @@ func TestCredentials_apnsLifecycle(t *testing.T) {
 	owner := tenancy.Owner(n)
 	key := p8Key(t)
 	body := strings.Split(key, "\n")[2] // a line of the key's base64 body
+	if configured := configuredProviders(t, n, owner); slices.Contains(configured, "apns") {
+		t.Fatalf("a new namespace already has apns configured: %v", configured)
+	}
 	r := put(t, n.Client, pathCredsAPNs, owner, apnsCreds(t, key)).Expect(t, http.StatusOK)
 	for _, resp := range [][]byte{r.Body, tenancy.Get(t, n.Client, pathCredsAPNs, owner).Expect(t, http.StatusOK).Body} {
 		s := string(resp)
@@ -33,9 +37,9 @@ func TestCredentials_apnsLifecycle(t *testing.T) {
 			t.Errorf("a credential answer carries the key or lacks has_p8_key: %.400s", s)
 		}
 	}
-	summary := string(tenancy.Get(t, n.Client, pathCreds, owner).Expect(t, http.StatusOK).Body)
-	if !strings.Contains(summary, `"apns"`) {
-		t.Errorf("summary does not list apns: %s", summary)
+	// "supported" always lists apns; only "configured" says it is stored.
+	if configured := configuredProviders(t, n, owner); !slices.Contains(configured, "apns") {
+		t.Errorf("the summary's configured list is %v after the PUT, want apns in it", configured)
 	}
 	for _, node := range f.State.Nodes {
 		out := f.Exec(t, node, "grep -rlF -- "+fleet.ShellQuote(body)+" "+namespacesDir+"/"+n.Name+" 2>/dev/null | head -3")
@@ -48,6 +52,23 @@ func TestCredentials_apnsLifecycle(t *testing.T) {
 	if s := string(tenancy.Get(t, n.Client, pathCredsAPNs, owner).Body); strings.Contains(s, `"has_p8_key":true`) {
 		t.Errorf("a deleted credential still reads configured: %s", s)
 	}
+	if configured := configuredProviders(t, n, owner); slices.Contains(configured, "apns") {
+		t.Errorf("the summary's configured list is %v after the DELETE, want no apns", configured)
+	}
+}
+
+// configuredProviders is the "configured" list of GET
+// /v1/namespace/push-credentials (its "supported" list names every provider
+// the gateway knows, stored or not).
+func configuredProviders(t testing.TB, n *ns.Namespace, who tenancy.Cred) []string {
+	t.Helper()
+	var summary struct {
+		Configured []string `json:"configured"`
+	}
+	if err := tenancy.Get(t, n.Client, pathCreds, who).Expect(t, http.StatusOK).Decode(&summary); err != nil {
+		t.Fatal(err)
+	}
+	return summary.Configured
 }
 
 // TestCredentials_validation: APNs and ntfy records are validated at PUT;
@@ -123,8 +144,12 @@ func TestLegacyConfig_boundsAndRedaction(t *testing.T) {
 	token := "expo-" + randomTopic(t)
 	put(t, n.Client, pathConfig, owner, map[string]any{"expo_access_token": token}).Expect(t, http.StatusOK)
 	t.Cleanup(func() { tenancy.Restore(t, n.Client, http.MethodDelete, pathConfig, owner, nil, http.StatusOK) })
-	if s := string(tenancy.Get(t, n.Client, pathConfig, owner).Expect(t, http.StatusOK).Body); strings.Contains(s, token) {
+	s := string(tenancy.Get(t, n.Client, pathConfig, owner).Expect(t, http.StatusOK).Body)
+	if strings.Contains(s, token) {
 		t.Errorf("GET /v1/push/config returned the stored token")
+	}
+	if !strings.Contains(s, `"has_expo_access_token":true`) {
+		t.Errorf("GET /v1/push/config does not say a token is stored, so an empty answer would pass: %.300s", s)
 	}
 	status(t, "over 16 KiB", put(t, n.Client, pathConfig, owner, map[string]any{"expo_access_token": strings.Repeat("x", maxConfigBody)}),
 		http.StatusBadRequest, http.StatusRequestEntityTooLarge)

@@ -48,7 +48,7 @@ func TestCredentials_restShapeAndAccess(t *testing.T) {
 		t.Errorf("GET credentials: want 405, got %d", r.Status)
 	}
 	tenancy.ExpectRefused(t, fx.c.MustSend(t, gw.Req{Method: http.MethodPost, Path: pathCreds}), http.StatusUnauthorized, tenancy.CodeMissing)
-	reader := member(t, fx.n, fx.c, "reader")
+	reader := member(t, fx.n, "reader")
 	tenancy.ExpectRefused(t, fx.c.MustSend(t, gw.Req{Method: http.MethodPost, Path: pathCreds, Bearer: reader}), http.StatusForbidden, tenancy.CodeScope)
 }
 

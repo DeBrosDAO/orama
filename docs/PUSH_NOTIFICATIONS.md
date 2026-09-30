@@ -69,10 +69,11 @@ URL each device subscribes to. Three modes:
 | `user`    | `<userId>`                            | Reveals user IDs  | Minimal — rarely useful            |
 
 > **An ntfy topic is a single path segment.** ntfy serves topics at
-> `https://<host>/<topic>`, so a topic containing `/` is not a nested topic —
-> it is a different URL that ntfy answers with `404 page not found`, and every
-> push to it fails. Use a separator that is not `/` (this is why `path` mode
-> uses `-`). `topic_mode` is a convention between your client and your own
+> `https://<host>/<topic>`, so a topic containing `/` is not a nested topic.
+> ntfy 2.28 reads `POST /<topic>/<sequence-id>` as a publish to `<topic>` that
+> updates an earlier message with that sequence ID, so a token `T/x` delivers to
+> `T` and the rest of it is taken as a sequence ID. Use a separator that is not
+> `/` (this is why `path` mode uses `-`). `topic_mode` is a convention between your client and your own
 > topic-derivation code: the gateway publishes to whatever token the device
 > registered and never re-derives it from the mode.
 

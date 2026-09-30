@@ -101,7 +101,7 @@ func TestWebRTC_notEnabledAndPrerequisites(t *testing.T) {
 	tenancy.Reserve(t, f, 1)
 	n := ns.New(t, f, ns.Options{Via: ns.ViaOperator})
 	c := harness.GW(t).WithBase(gw.NamespaceURL(f.State, n.Name))
-	token := member(t, n, c, "runtime")
+	token := member(t, n, "runtime")
 	// Without WebRTC the gateway registers no credentials route (routes.go).
 	if r := c.MustSend(t, gw.Req{Method: http.MethodPost, Path: pathCreds, Bearer: token}); r.Status != http.StatusNotFound {
 		t.Errorf("TURN credentials for a namespace without WebRTC: want 404 (no route), got %d %.200s", r.Status, r.Body)

@@ -88,11 +88,11 @@ func TestDevices_revokedDeviceRegistrationDropped(t *testing.T) {
 	tenancy.Post(t, n.Client, tenancy.PathMembers, tenancy.Owner(n), map[string]string{"wallet": w.Address(), "role": tenancy.RoleRuntime}).
 		Expect(t, http.StatusCreated)
 	dev := gw.NewDevice(t, wallet.AlgEd25519)
-	bound, err := n.Client.For(t).SignIn(t.Context(), w, n.Name, dev)
+	bound, err := n.Owner.Client.For(t).SignIn(t.Context(), w, n.Name, dev)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, err := n.Client.For(t).SignIn(t.Context(), w, n.Name, nil)
+	plain, err := n.Owner.Client.For(t).SignIn(t.Context(), w, n.Name, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestDevices_revokedDeviceRegistrationDropped(t *testing.T) {
 	if got := len(devices(t, n.Client, tenancy.Cred{Bearer: plain.AccessToken}).Devices); got != 2 {
 		t.Fatalf("%d registrations before the revoke, want 2", got)
 	}
-	if _, err := n.Client.For(t).RevokeDevice(t.Context(), plain.AccessToken, dev.ID(), nil); err != nil {
+	if _, err := n.Owner.Client.For(t).RevokeDevice(t.Context(), plain.AccessToken, dev.ID(), nil); err != nil {
 		t.Fatalf("revoking the device: %v", err)
 	}
 	l := devices(t, n.Client, tenancy.Cred{Bearer: plain.AccessToken})

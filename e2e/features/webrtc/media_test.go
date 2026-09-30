@@ -19,7 +19,7 @@ import (
 func joinPeer(t *testing.T, fx *fixture, i int, room string, publish bool) *services.RTCPeer {
 	t.Helper()
 	c := fx.c.PinTo(fx.f.State.Nodes[i%len(fx.f.State.Nodes)].PublicIP)
-	token := member(t, fx.n, fx.c, "runtime")
+	token := member(t, fx.n, "runtime")
 	p, err := services.JoinRoom(t.Context(), c, token, room, "user-"+strconv.Itoa(i))
 	if err != nil {
 		t.Fatalf("peer %d joining %s: %v", i, room, err)

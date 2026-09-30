@@ -68,16 +68,23 @@ func TestNtfy_selfHostedDeliveryEveryNode(t *testing.T) {
 		map[string]any{"user_id": foreign.Owner.Session.Subject, "title": "x", "body": "y"}), http.StatusBadGateway)
 }
 
-// TestNtfy_topicWithSlashFails: an ntfy topic is one path segment; a token
-// with "/" is a different URL, and the send reports the failure
+// TestNtfy_topicWithSlashIsASequenceID: an ntfy topic is one path segment. ntfy
+// 2.28 reads POST /<topic>/<sequence-id> as a publish to <topic> with that
+// sequence ID (an update of an earlier message), so a token "T/user" is not a
+// nested topic and does not fail: the push lands on T. It is delivered to the
+// first segment, which is why a token must not contain "/"
 // (docs/PUSH_NOTIFICATIONS.md#step-2--choose-an-ntfy-topic-mode-android--web-only).
-func TestNtfy_topicWithSlashFails(t *testing.T) {
+func TestNtfy_topicWithSlashIsASequenceID(t *testing.T) {
 	t.Parallel()
-	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
+	f := harness.Fleet(t)
+	n := tenancy.Namespace(t, f, ns.Options{})
 	owner := tenancy.Owner(n)
-	register(t, n.Client, owner, "slash", "ntfy", "ns-"+n.Name+"/user").Expect(t, http.StatusOK)
-	status(t, "send to a topic with a slash", tenancy.Post(t, n.Client, pathSend, owner,
-		map[string]any{"user_id": n.Owner.Session.Subject, "title": "x", "body": "y"}), http.StatusBadGateway)
+	topic := randomTopic(t)
+	marker := "e2e-slash-" + randomTopic(t)
+	register(t, n.Client, owner, "slash", "ntfy", topic+"/user").Expect(t, http.StatusOK)
+	tenancy.Post(t, n.Client, pathSend, owner,
+		map[string]any{"user_id": n.Owner.Session.Subject, "title": "x", "body": marker}).Expect(t, http.StatusOK)
+	waitDelivered(t, f, topic, marker)
 }
 
 // TestSend_statusCodes: /v1/push/send needs user_id, a JSON body under

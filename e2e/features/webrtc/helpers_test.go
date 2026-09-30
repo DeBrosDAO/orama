@@ -65,7 +65,7 @@ func setup(t *testing.T) *fixture {
 	n.CLI.MustOK(t, "namespace", "enable", "webrtc", "--namespace", n.Name)
 	t.Cleanup(func() { disable(t, n) })
 	c := harness.GW(t).WithBase(gw.NamespaceURL(f.State, n.Name))
-	return &fixture{f: f, n: n, c: c, token: member(t, n, c, "runtime")}
+	return &fixture{f: f, n: n, c: c, token: member(t, n, "runtime")}
 }
 
 func disable(t *testing.T, n *ns.Namespace) {
@@ -78,14 +78,16 @@ func disable(t *testing.T, n *ns.Namespace) {
 }
 
 // member adds a fresh wallet with role and returns its session token.
-func member(t *testing.T, n *ns.Namespace, c *gw.Client, role string) string {
+// The member signs in at the index gateway, the one that signs everybody in
+// (the namespace's own gateway is the data plane).
+func member(t *testing.T, n *ns.Namespace, role string) string {
 	t.Helper()
 	w, err := wallet.NewEVM()
 	if err != nil {
 		t.Fatal(err)
 	}
 	n.CLI.MustOK(t, "members", "add", w.Address(), "--role", role)
-	s, err := c.For(t).SignIn(t.Context(), w, n.Name, nil)
+	s, err := harness.GW(t).For(t).SignIn(t.Context(), w, n.Name, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
