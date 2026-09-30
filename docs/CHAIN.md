@@ -871,7 +871,9 @@ deposits** (`LockDeposit` takes the bank balance first and the shortfall from th
 earnings). `x/shielded`'s `MsgShieldEarnings` moves the signer's own earnings into the shielded pool (never fee-only balances). The only
 message that moves earnings to another address is `x/nodes` `MsgFundHotKey`, and what it moves is
 not earnings any more: `Keeper.FundFeeBalance` debits the operator's earnings and credits a separate
-**fee-only balance** (`FeeBalances`) of the hot key registered on the operator's own node. A fee-only
+**fee-only balance** (`FeeBalances`) of the hot key registered on the operator's own node. The first
+funding also creates the hot key's account, since an address with no account cannot sign; a later
+funding leaves the account and its sequence as they are. A fee-only
 balance can pay a transaction's base fee (`SettleFee` draws it after the bank balance and before
 the payer's earnings) and nothing else: it is never bonded, shielded, put into a deposit, used for
 a tip, drawn through a fee granter, or moved on. It is backed by the same `fees` module account, and
