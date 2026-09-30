@@ -22,6 +22,7 @@ type BinaryInstaller struct {
 	coredns     *installers.CoreDNSInstaller
 	caddy       *installers.CaddyInstaller
 	ntfy        *installers.NtfyInstaller      // feature #72; installed only when EnableNtfy is set
+	nodejs      *installers.NodeJSInstaller    // the runtime of Node.js, Next.js SSR and npm deployments
 	sniRouter   *installers.SNIRouterInstaller // feat-124; configured only when sni_router.enabled
 }
 
@@ -38,6 +39,7 @@ func NewBinaryInstaller(arch string, logWriter io.Writer) *BinaryInstaller {
 		coredns:     installers.NewCoreDNSInstaller(arch, logWriter, oramaHome),
 		caddy:       installers.NewCaddyInstaller(arch, logWriter, oramaHome),
 		ntfy:        installers.NewNtfyInstaller(arch, logWriter),
+		nodejs:      installers.NewNodeJSInstaller(arch, logWriter),
 		sniRouter:   installers.NewSNIRouterInstaller(arch, logWriter, OramaDir),
 	}
 }
@@ -109,6 +111,12 @@ func (bi *BinaryInstaller) ConfigureSNIRouter(baseDomain string) error {
 // directory). Feature #72. Idempotent.
 func (bi *BinaryInstaller) InstallNtfy() error {
 	return bi.ntfy.Install()
+}
+
+// InstallNodeJS installs the pinned Node.js release the Node.js, Next.js SSR
+// and npm deployment units run (/usr/bin/node, /usr/bin/npm). Idempotent.
+func (bi *BinaryInstaller) InstallNodeJS() error {
+	return bi.nodejs.Install()
 }
 
 // ConfigureNtfy writes /etc/ntfy/server.yml with the given public base

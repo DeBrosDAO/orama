@@ -434,7 +434,9 @@ func main() {
 
 ## Deploying Node.js Backends
 
-Deploy Node.js/Express/TypeScript backends.
+Deploy Node.js/Express/TypeScript backends. Nodes run them on Node.js 24 LTS
+(24.21.0), which every node installs; there is no per-deployment choice of
+version.
 
 ### Prerequisites
 

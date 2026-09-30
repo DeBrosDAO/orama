@@ -102,6 +102,13 @@ func (ps *ProductionSetup) installFromPreBuilt(detected *PreBuiltManifest) (err 
 		return fmt.Errorf("install ntfy: %w", err)
 	}
 
+	// Node.js, Next.js SSR and npm deployments run /usr/bin/node and
+	// /usr/bin/npm; nothing installed them, so every such deployment failed
+	// to start on a node installed from scratch.
+	if err := ps.binaryInstaller.InstallNodeJS(); err != nil {
+		return fmt.Errorf("install node.js: %w", err)
+	}
+
 	if err := freeResolverPort(ps.isNameserver, ps.disableResolvedStub); err != nil {
 		return err
 	}
@@ -119,7 +126,8 @@ func (ps *ProductionSetup) installMinimalSystemDeps() error {
 		ps.logf("    Warning: apt update failed")
 	}
 
-	// Only install runtime deps — no build-essential, make, nodejs, npm needed
+	// Only install runtime deps — no build-essential or make. Node.js is the
+	// pinned nodejs.org release (installers/nodejs.go), not the distro's.
 	// sudo: the orama user's root actions go through `sudo orama-privhelper`,
 	// and minimal Debian images ship without it.
 	cmd = exec.Command("apt-get", "install", "-y", "curl", "wget", "unzip", "sudo")
