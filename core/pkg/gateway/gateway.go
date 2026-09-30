@@ -121,13 +121,8 @@ type Gateway struct {
 	// Namespace backup and restore; nil on the cluster gateway.
 	backupHandler *backuphandlers.Handler
 
-	// Local pub/sub bypass for same-gateway subscribers
-	localSubscribers map[string][]*localSubscriber // topic+namespace -> subscribers
-	presenceMembers  map[string][]PresenceMember   // topicKey -> members
-	mu               sync.RWMutex
-	presenceMu       sync.RWMutex
-	pubsubHandlers   *pubsubhandlers.PubSubHandlers
-	pushHandlers     *pushhandlers.Handlers
+	pubsubHandlers *pubsubhandlers.PubSubHandlers
+	pushHandlers   *pushhandlers.Handlers
 
 	// Serverless function engine
 	serverlessEngine    *serverless.Engine
@@ -276,20 +271,6 @@ type Gateway struct {
 	nsHealth *namespaceHealthState
 }
 
-// localSubscriber represents a WebSocket subscriber for local message delivery
-type localSubscriber struct {
-	msgChan   chan []byte
-	namespace string
-}
-
-// PresenceMember represents a member in a topic's presence list
-type PresenceMember struct {
-	MemberID string                 `json:"member_id"`
-	JoinedAt int64                  `json:"joined_at"` // Unix timestamp
-	Meta     map[string]interface{} `json:"meta,omitempty"`
-	ConnID   string                 `json:"-"` // Internal: for tracking which connection
-}
-
 // authClientAdapter adapts client.NetworkClient to authhandlers.NetworkClient
 type authClientAdapter struct {
 	client client.NetworkClient
@@ -407,8 +388,6 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		serverlessHandlers:     deps.ServerlessHandlers,
 		authService:            deps.AuthService,
 		wsSessions:             deps.WSSessions,
-		localSubscribers:       make(map[string][]*localSubscriber),
-		presenceMembers:        make(map[string][]PresenceMember),
 		circuitBreakers:        NewCircuitBreakerRegistry(),
 		proxyTransport: &http.Transport{
 			MaxIdleConns:        200,
