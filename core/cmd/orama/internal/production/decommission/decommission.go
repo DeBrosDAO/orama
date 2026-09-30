@@ -37,7 +37,7 @@ func (f *Flags) validate() error {
 		return clierr.Usage("--env is required\nUsage: orama node remove --env <devnet|testnet> --node <ip> [--offline] [--force]")
 	}
 	if f.Node == "" {
-		return fmt.Errorf("--node is required: decommission removes ONE node")
+		return clierr.Usage("--node is required: decommission removes ONE node")
 	}
 	return nil
 }

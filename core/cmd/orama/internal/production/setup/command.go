@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/invitemint"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/push"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
@@ -70,7 +71,7 @@ type Options struct {
 // Run executes the node setup.
 func Run(opts Options) error {
 	if opts.IP == "" {
-		return fmt.Errorf("--ip is required")
+		return clierr.Usage("--ip is required")
 	}
 	if opts.User == "" {
 		opts.User = "root"
@@ -767,7 +768,7 @@ func EnsureArchive(node inspector.Node, archivePath string, trusted []string) er
 func EnsureArchives(nodes []inspector.Node, archivePath string, trusted []string) (err error) {
 	if archivePath == "" {
 		// /tmp is shared: its newest archive can be another checkout's build.
-		return fmt.Errorf("--archive is required: the path `orama build` printed")
+		return clierr.Usage("--archive is required: the path `orama build` printed")
 	}
 	upload, err := archivetrust.PrepareUpload(archivePath, trusted)
 	if err != nil {

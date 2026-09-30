@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
 	"github.com/DeBrosOfficial/network/pkg/config/validate"
 	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
@@ -29,7 +30,7 @@ func NewValidator(flags *Flags, oramaDir string) *Validator {
 // ValidateFlags validates required flags
 func (v *Validator) ValidateFlags() error {
 	if v.flags.VpsIP == "" && !v.flags.DryRun {
-		return fmt.Errorf("--vps-ip is required for installation\nExample: orama node install --vps-ip 1.2.3.4")
+		return clierr.Usage("--vps-ip is required for installation\nExample: orama node install --vps-ip 1.2.3.4")
 	}
 	// It becomes node.public_ip, which invites and upgrades require to be a
 	// public IPv4 address; recording anything else here only defers the error.

@@ -75,10 +75,10 @@ func Run(flags *Flags) error {
 // validate checks the flag combination.
 func (f *Flags) validate() error {
 	if f.NodeIP == "" {
-		return fmt.Errorf("--node-ip is required")
+		return clierr.Usage("--node-ip is required")
 	}
 	if f.KeyFile == "" {
-		return fmt.Errorf("--key-file is required: the encrypted genesis key is written " +
+		return clierr.Usage("--key-file is required: the encrypted genesis key is written " +
 			"where the node was created, and the OramaOS agent does not serve it")
 	}
 	return nil

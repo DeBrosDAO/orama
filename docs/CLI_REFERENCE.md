@@ -1140,6 +1140,10 @@ orama env add <name> <gateway_url> [description] [flags]
 
 Add a custom environment, or update one already configured.
 
+The name may not be blank, and the gateway URL must be https:// with a host
+(http:// only for a gateway on this machine: localhost or a loopback address),
+because every command sends its credential there.
+
 --ca-file trusts a PEM bundle for this environment's domain and every name
 under it, in addition to the system roots: a cluster on Let's Encrypt's
 staging CA, or on a private CA. It is not trusted for any other host.
@@ -2789,6 +2793,9 @@ The code is not served over the network. A GET on port 9999 used to return it.
 
 Usage:
   orama node enroll --node-ip <ip> --code <code> --token <invite-token> --gateway <url>
+
+--gateway must be an https:// URL: the invite token is a credential and is never
+sent in the clear.
 
 The node must be reachable over the public internet on port 9999 (enrollment only).
 After enrollment, port 9999 is permanently closed and all communication goes over WireGuard.

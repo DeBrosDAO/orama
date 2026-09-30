@@ -15,6 +15,9 @@ func TestValidateNewEnvironment(t *testing.T) {
 	}{
 		{"stagenet", "https://stagenet.example", true},
 		{"local", "http://localhost:6001", true},
+		{"loopback", "http://127.0.0.1:6001", true},
+		{"loopback6", "http://[::1]:6001", true},
+		{"remote-http", "http://gw.example", false},
 		{"", "https://g.example", false},
 		{"   ", "https://g.example", false},
 		{"x", "", false},

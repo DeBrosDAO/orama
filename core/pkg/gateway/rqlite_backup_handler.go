@@ -53,9 +53,6 @@ func rqliteStatusError(path string, resp *http.Response) error {
 	return fmt.Errorf("RQLite %s returned %d: %s", path, resp.StatusCode, body)
 }
 
-// rqliteExportHandler handles GET /v1/rqlite/export
-// Proxies to the namespace's RQLite /db/backup endpoint to download a raw SQLite snapshot.
-// Protected by requiresNamespaceOwnership() via the /v1/rqlite/ prefix.
 // refuseWholeDatabaseToNonOwner refuses a namespace's whole-database export or
 // import to anyone but its owner, and reports whether it did.
 //
@@ -79,6 +76,10 @@ func (g *Gateway) refuseWholeDatabaseToNonOwner(w http.ResponseWriter, r *http.R
 	return true
 }
 
+// rqliteExportHandler handles GET /v1/rqlite/export
+// Proxies to the namespace's RQLite /db/backup endpoint to download a raw SQLite snapshot.
+// Protected by requiresNamespaceOwnership() via the /v1/rqlite/ prefix, and on a
+// namespace gateway by refuseWholeDatabaseToNonOwner.
 func (g *Gateway) rqliteExportHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

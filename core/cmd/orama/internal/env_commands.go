@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 
@@ -89,10 +90,25 @@ func validateNewEnvironment(name, gatewayURL string) error {
 	if err != nil || u.Host == "" {
 		return clierr.Usage("gateway URL %q is not a URL: give it as https://<host>", gatewayURL)
 	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return clierr.Usage("gateway URL %q must be https:// (or http:// for a local gateway)", gatewayURL)
+	switch {
+	case u.Scheme == "https":
+		return nil
+	case u.Scheme == "http" && isLoopbackHost(u.Hostname()):
+		return nil
 	}
-	return nil
+	return clierr.Usage("gateway URL %q must be https:// (http:// only for a gateway on this machine): "+
+		"every command sends its credential to it", gatewayURL)
+}
+
+// isLoopbackHost reports whether host is this machine: localhost, a
+// *.localhost name, or a loopback address.
+func isLoopbackHost(host string) bool {
+	h := strings.ToLower(host)
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 // EnvAdd registers a custom environment pointing at a gateway URL. args are

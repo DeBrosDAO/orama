@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
@@ -38,7 +39,7 @@ const stageHint = "without --trust-signers each node verifies the archive with i
 
 // errArchiveRequired names the archive to push explicitly: /tmp is shared, and
 // "the newest archive there" was a build from another checkout often enough.
-var errArchiveRequired = fmt.Errorf("--archive is required: the path `orama build` printed")
+var errArchiveRequired = clierr.Usage("--archive is required: the path `orama build` printed")
 
 // Run is the entry point for the push command.
 func Run(flags *Flags) error {

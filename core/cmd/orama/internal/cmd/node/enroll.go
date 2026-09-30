@@ -21,6 +21,9 @@ The code is not served over the network. A GET on port 9999 used to return it.
 Usage:
   orama node enroll --node-ip <ip> --code <code> --token <invite-token> --gateway <url>
 
+--gateway must be an https:// URL: the invite token is a credential and is never
+sent in the clear.
+
 The node must be reachable over the public internet on port 9999 (enrollment only).
 After enrollment, port 9999 is permanently closed and all communication goes over WireGuard.`,
 	RunE: func(cmd *cobra.Command, args []string) error {

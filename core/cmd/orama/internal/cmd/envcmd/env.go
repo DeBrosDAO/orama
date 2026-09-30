@@ -46,6 +46,10 @@ var addCmd = &cobra.Command{
 	Short: "Add a custom environment",
 	Long: `Add a custom environment, or update one already configured.
 
+The name may not be blank, and the gateway URL must be https:// with a host
+(http:// only for a gateway on this machine: localhost or a loopback address),
+because every command sends its credential there.
+
 --ca-file trusts a PEM bundle for this environment's domain and every name
 under it, in addition to the system roots: a cluster on Let's Encrypt's
 staging CA, or on a private CA. It is not trusted for any other host.`,
