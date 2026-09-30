@@ -60,6 +60,7 @@ const (
 	allowChownR     = "GNU chown -R without -H/-L never dereferences a symlink (it lchowns)"
 	allowCaddyVar   = "/var/lib is root-owned; chown -R without -H/-L never dereferences a symlink"
 	allowNtfy       = "root-owned /etc/ntfy; /var/lib/ntfy is only created, then chown -R (no dereference)"
+	allowNodeJS     = "root-owned /usr/local/lib/nodejs and /usr/bin links into it; the tarball is root's own 0600 temp file"
 	allowAnyone     = "legacy Anyone paths in root-owned /etc and /var trees; its .orama files go through rootfs"
 	allowTor        = "root-owned /etc apt and tor paths (ti.path prefixes a test root)"
 	allowTorkey     = "private os.MkdirTemp GNUPGHOME"
@@ -91,6 +92,18 @@ var rootFileAccessAllowed = map[string]string{
 	"pkg/install/installers/coredns.go restrictToGroup os.Chmod(path)":                                                                      allowEtc,
 	"pkg/install/installers/coredns.go restrictToGroup os.Chown(path)":                                                                      allowEtc,
 	"pkg/install/installers/host_units_legacy.go (*LegacyHostUnitCleaner) removeUnit os.Remove(path)":                                       allowUnit,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) Install os.Remove(tarball)":                                                        allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) download os.CreateTemp(\"\")":                                                      allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) download os.Remove(f.Name())":                                                      allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) link os.Remove(tmp)":                                                               allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) link os.Rename(tmp)":                                                               allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) link os.Symlink(filepath.Join(dir, \"bin\", name))":                                allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) unpack os.Chmod(staging)":                                                          allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) unpack os.MkdirAll(ni.root)":                                                       allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) unpack os.MkdirTemp(ni.root)":                                                      allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) unpack os.RemoveAll(dir)":                                                          allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) unpack os.RemoveAll(staging)":                                                      allowNodeJS,
+	"pkg/install/installers/nodejs.go (*NodeJSInstaller) unpack os.Rename(unpacked)":                                                        allowNodeJS,
 	"pkg/install/installers/ntfy.go (*NtfyInstaller) Configure exec.Command(\"chown\", \"root:\" + ntfyUser, ntfyConfigPath)":               allowNtfy,
 	"pkg/install/installers/ntfy.go (*NtfyInstaller) Configure os.WriteFile(ntfyConfigPath)":                                                allowNtfy,
 	"pkg/install/installers/ntfy.go (*NtfyInstaller) ensureDirs exec.Command(\"chown\", \"-R\", ntfyUser + \":\" + ntfyUser, ntfyDataDir)":  allowNtfy,
