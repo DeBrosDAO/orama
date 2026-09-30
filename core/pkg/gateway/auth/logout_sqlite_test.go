@@ -33,12 +33,23 @@ func TestRevokeToken_allWithATokenEndsEverySession(t *testing.T) {
 	insertRefresh(t, db, "0xwallet", "first")
 	insertRefresh(t, db, "0xwallet", "second")
 	insertRefresh(t, db, "0xbystander", "theirs")
+	if _, err := db.Exec(`INSERT INTO namespaces(id, name) VALUES (11, 'other')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO refresh_tokens(namespace_id, subject, token, expires_at)
+		VALUES (11, '0xwallet', ?, datetime('now', '+1 day'))`, refreshTokenHash("elsewhere")); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := s.RevokeToken(context.Background(), "anchat", "first", true, "0xwallet"); err != nil {
 		t.Fatalf("logout all: %v", err)
 	}
 	if !revoked(t, db, "first") || !revoked(t, db, "second") {
 		t.Error("a session of the wallet survived logout all")
+	}
+	// Every session means every namespace (security review, 2026-09-30).
+	if !revoked(t, db, "elsewhere") {
+		t.Error("the wallet's session in another namespace survived logout all")
 	}
 	if revoked(t, db, "theirs") {
 		t.Error("another wallet's session was revoked")
