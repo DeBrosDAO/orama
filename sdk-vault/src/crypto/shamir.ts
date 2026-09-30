@@ -8,7 +8,7 @@
  * same as AES. This is the standard choice for byte-level SSS.
  */
 
-import { randomBytes } from '@noble/ciphers/webcrypto';
+import { randomBytes } from '@noble/ciphers/utils.js';
 
 // ── GF(2^8) Arithmetic ─────────────────────────────────────────────────────
 

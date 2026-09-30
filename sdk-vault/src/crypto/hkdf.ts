@@ -4,8 +4,8 @@
  * Derives deterministic sub-keys from a master secret using HKDF-SHA256 (RFC 5869).
  */
 
-import { hkdf } from '@noble/hashes/hkdf';
-import { sha256 } from '@noble/hashes/sha256';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { sha256 } from '@noble/hashes/sha2.js';
 
 /** Default output length in bytes (256 bits) */
 const DEFAULT_KEY_LENGTH = 32;

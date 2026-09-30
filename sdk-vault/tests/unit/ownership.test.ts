@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ed25519 } from '@noble/curves/ed25519';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import { identityFromSeed, publicKeyFromSeed, signUtf8 } from '../../src/crypto/ownership';
 
 describe('ownership helpers', () => {
