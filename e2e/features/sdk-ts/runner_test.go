@@ -125,7 +125,7 @@ func suiteEnv(t *testing.T, f *fleet.Fleet, n *ns.Namespace) []string {
 	if err := n.Client.Protect(key); err != nil {
 		t.Fatal(err)
 	}
-	member, wsUser := tenancy.Member(t, n, "admin"), tenancy.Member(t, n, "admin")
+	member, wsUser, endedUser := tenancy.Member(t, n, "admin"), tenancy.Member(t, n, "admin"), tenancy.Member(t, n, "admin")
 	w, msg, sig := lobbySignIn(t)
 	env := []string{
 		"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "LANG=C.UTF-8", "CI=1",
@@ -135,6 +135,9 @@ func suiteEnv(t *testing.T, f *fleet.Fleet, n *ns.Namespace) []string {
 		"E2E_SIWE_WALLET=" + w, "E2E_SIWE_MESSAGE=" + msg, "E2E_SIWE_SIGNATURE=" + sig,
 		"E2E_MEMBER_REFRESH=" + member.Session.RefreshToken,
 		"E2E_WS_JWT=" + wsUser.Token(), "E2E_WS_REFRESH=" + wsUser.Session.RefreshToken,
+		// The SDK's own auth test logs a session out: a session of its own, or
+		// it would revoke the owner's GATEWAY_JWT every later test uses.
+		"E2E_LOGOUT_JWT=" + endedUser.Token(), "E2E_LOGOUT_REFRESH=" + endedUser.Session.RefreshToken,
 	}
 	if f.State.ChainID != "" {
 		env = append(env, "E2E_CHAIN=1")

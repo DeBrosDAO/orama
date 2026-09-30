@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { createTestClient, hasGateway } from "./setup";
+import { createClient, MemoryStorage } from "../../src/index";
+import { createTestClient, getGatewayUrl, hasGateway } from "./setup";
 
 describe.skipIf(!hasGateway())("Auth", () => {
   beforeAll(() => {
@@ -32,7 +33,16 @@ describe.skipIf(!hasGateway())("Auth", () => {
   });
 
   it("should handle logout", async () => {
-    const client = await createTestClient();
+    // Logging out revokes the session it names. The suite's shared credential
+    // (GATEWAY_JWT, the namespace owner's) must stay alive for every test
+    // after this one, so a run that provides a session of its own for this
+    // (E2E_LOGOUT_JWT) ends that; without one there is no session to end.
+    const jwt = process.env.E2E_LOGOUT_JWT;
+    const storage = new MemoryStorage();
+    if (process.env.E2E_LOGOUT_REFRESH) {
+      await storage.set("refreshToken", process.env.E2E_LOGOUT_REFRESH);
+    }
+    const client = createClient({ baseURL: getGatewayUrl(), jwt, storage });
     await client.auth.logout();
     expect(client.auth.getToken()).toBeUndefined();
   });
