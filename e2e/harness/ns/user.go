@@ -140,6 +140,9 @@ func (n *Namespace) status(ctx context.Context) (*ClusterStatus, error) {
 // route no longer knows the cluster and the namespace gateway stops serving.
 func (n *Namespace) deleteViaUser(t testing.TB) {
 	t.Helper()
+	if n.removed {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), TeardownBudget)
 	defer cancel()
 	if n.Owner.Session == nil {
@@ -154,7 +157,29 @@ func (n *Namespace) deleteViaUser(t testing.TB) {
 		t.Errorf("cleanup: failed to delete namespace %s: %v", n.Name, err)
 		return
 	}
-	err := eventually.Poll(ctx, PollInterval, TeardownBudget, "namespace "+n.Name+" to be gone", func() (bool, error) {
+	if err := n.pollGone(ctx); err != nil {
+		t.Errorf("cleanup: teardown of %s not verified: %v", n.Name, err)
+	}
+}
+
+// MarkRemoved records that something other than the owner (an operator's
+// removal) deleted the namespace, and waits until its cluster status is gone
+// and its gateway has stopped serving; it fails t when that does not happen.
+// The owner's teardown then has nothing left to do.
+func (n *Namespace) MarkRemoved(t testing.TB) {
+	t.Helper()
+	n.removed = true
+	ctx, cancel := context.WithTimeout(t.Context(), TeardownBudget)
+	defer cancel()
+	if err := n.pollGone(ctx); err != nil {
+		t.Fatalf("namespace %s was not torn down: %v", n.Name, err)
+	}
+}
+
+// pollGone waits until the namespace's cluster status is 404 and its gateway
+// no longer serves /health.
+func (n *Namespace) pollGone(ctx context.Context) error {
+	return eventually.Poll(ctx, PollInterval, TeardownBudget, "namespace "+n.Name+" to be gone", func() (bool, error) {
 		_, err := n.status(ctx)
 		var se *gw.StatusError
 		if !errors.As(err, &se) || se.Status != http.StatusNotFound {
@@ -162,9 +187,6 @@ func (n *Namespace) deleteViaUser(t testing.TB) {
 		}
 		return n.gatewayGone(ctx)
 	})
-	if err != nil {
-		t.Errorf("cleanup: teardown of %s not verified: %v", n.Name, err)
-	}
 }
 
 // gatewayGone reports whether the namespace gateway stopped serving health.

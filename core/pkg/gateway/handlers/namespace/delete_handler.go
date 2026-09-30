@@ -64,7 +64,14 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeDeleteResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "cannot delete default namespace"})
 		return
 	}
+	h.remove(w, r, ns, auth.AuditNamespaceDeleted, nil)
+}
 
+// remove tears namespace ns down and deletes it: its cluster, deployments,
+// content references, rows and grants. The owner's delete and an operator's
+// removal of a namespace whose owner is gone both come here; action and
+// metadata are what the audit trail records for it.
+func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, action string, metadata map[string]string) {
 	if h.deprovisioner == nil {
 		writeDeleteResponse(w, http.StatusServiceUnavailable, map[string]interface{}{"error": "cluster provisioning not enabled"})
 		return
@@ -151,9 +158,10 @@ func (h *DeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// audit trail on the previous tenant's wallet.
 	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
 		Actor:    auth.ActorFromRequest(r),
-		Action:   auth.AuditNamespaceDeleted,
+		Action:   action,
 		Resource: ns,
 		Result:   auth.AuditSuccess,
+		Metadata: metadata,
 	})
 
 	writeDeleteResponse(w, http.StatusOK, map[string]interface{}{

@@ -24,6 +24,8 @@ covers:
     - orama cluster creators add
     - orama cluster creators list
     - orama cluster creators remove
+    - orama cluster namespace
+    - orama cluster namespace remove
     - orama cluster settings
     - orama cluster settings set
     - orama cluster settings show
@@ -36,6 +38,7 @@ covers:
   routes:
     - /v1/operator/creators
     - /v1/operator/creators/
+    - /v1/operator/namespaces/remove
     - /v1/operator/operators
     - /v1/operator/operators/
     - /v1/operator/rotate-secrets
@@ -50,4 +53,5 @@ covers:
     - "docs/AUTH.md#which-key-signed-a-token: rotate-signing-key publishes a new key; the outgoing one keeps verifying for one access-token lifetime; nobody is signed out"
     - "docs/CLI_REFERENCE.md#orama-operator-rotate-secrets: the walker is idempotent"
     - "docs/AUTH.md#when-a-request-is-refused: TOO_MANY_CHALLENGES after ten unanswered challenges"
+    - "docs/API_SURFACE.md#operator: an operator removes a namespace whose owner can no longer delete it; its owner, not an operator, is refused"
     - "docs/AUTH.md#signing-in: a nonce is single-use cluster-wide; concurrent verifies on every gateway have exactly one winner"

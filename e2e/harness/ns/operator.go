@@ -93,6 +93,9 @@ func statusOf(resp *gw.Response, err error) string {
 // namespace is no longer listed and its gateway stops serving.
 func (n *Namespace) deleteViaOperator(t testing.TB, shared *oramacli.Runner) {
 	t.Helper()
+	if n.removed {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), TeardownBudget)
 	defer cancel()
 	for _, args := range [][]string{{"auth", "login", "--namespace", n.Name}, {"namespace", "delete", "--force"}} {

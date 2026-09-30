@@ -55,6 +55,8 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama cluster creators add`](#orama-cluster-creators-add) — Let a wallet create namespaces when creation is allowlist
     - [`orama cluster creators list`](#orama-cluster-creators-list) — List wallets allowed to create namespaces
     - [`orama cluster creators remove`](#orama-cluster-creators-remove) — Take a wallet off the namespace-creator list
+  - [`orama cluster namespace`](#orama-cluster-namespace) — Operator actions on a namespace
+    - [`orama cluster namespace remove`](#orama-cluster-namespace-remove) — Remove a namespace whose owner can no longer delete it
   - [`orama cluster register-onchain`](#orama-cluster-register-onchain) — Register this cluster's public name on the Orama chain
   - [`orama cluster retire-onchain`](#orama-cluster-retire-onchain) — Retire this cluster's public row on the Orama chain
   - [`orama cluster settings`](#orama-cluster-settings) — Show or change namespace-creation settings
@@ -420,7 +422,7 @@ grants given and taken away, deployments, functions, secrets and namespace chang
 Events are shown oldest first. --follow keeps the command running and prints new
 ones as they are recorded.
 
-Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer, namespace.backup, namespace.restore, auth.device.start, auth.device.approve, auth.device.deny, auth.device.claim, auth.device.revoke, namespace.session_policy, node.register, node.key.enrol
+Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, namespace.operator_remove, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer, namespace.backup, namespace.restore, auth.device.start, auth.device.approve, auth.device.deny, auth.device.claim, auth.device.revoke, namespace.session_policy, node.register, node.key.enrol
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -748,7 +750,7 @@ The per-wallet cap stays 10 until an operator raises or lowers it.
 Changing a setting or the creator list needs the operator grant and a wallet
 on the operator list, and is written to the audit trail.
 
-Subcommands: `creators`, `register-onchain`, `retire-onchain`, `settings`
+Subcommands: `creators`, `namespace`, `register-onchain`, `retire-onchain`, `settings`
 
 ### orama cluster creators
 
@@ -788,6 +790,43 @@ Take a wallet off the namespace-creator list
 ```
 orama cluster creators remove <wallet>
 ```
+
+### orama cluster namespace
+
+Operator actions on a namespace
+
+```
+orama cluster namespace
+```
+
+Subcommands: `remove`
+
+### orama cluster namespace remove
+
+Remove a namespace whose owner can no longer delete it
+
+```
+orama cluster namespace remove <namespace> [flags]
+```
+
+Remove a namespace and everything in it: its cluster on every node, its
+deployments, its stored content (unless another namespace holds the same), its
+keys and its grants.
+
+The owner deletes a namespace with 'orama namespace delete'. This is for a
+namespace whose owner cannot: the owner's wallet is lost, or it belonged to a
+test run's throwaway wallet. Such a namespace keeps its port blocks and
+processes on three nodes until an operator removes it.
+
+It needs the operator grant and a wallet on the operator list. --reason is
+required and is written to the audit trail with your wallet
+(namespace.operator_remove). You are asked to type the namespace name unless
+--force is given.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | `false` | Do not ask to type the namespace name |
+| `--reason` | — | Why the namespace is removed; recorded in the audit trail [required] |
 
 ### orama cluster register-onchain
 

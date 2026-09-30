@@ -28,24 +28,27 @@ import (
 // connection fill a Raft-replicated table.
 
 const (
-	AuditChallengeIssued   = "auth.challenge"
-	AuditVerifySucceeded   = "auth.verify"
-	AuditRefreshed         = "auth.refresh"
-	AuditRefreshReplayed   = "auth.refresh.replay"
-	AuditLoggedOut         = "auth.logout"
-	AuditKeyIssued         = "key.issue"
-	AuditKeyRevoked        = "key.revoke"
-	AuditKeyRotated        = "key.rotate"
-	AuditKeysRevokedBulk   = "key.revoke_all"
-	AuditNamespaceCreated  = "namespace.create"
-	AuditNamespaceDeleted  = "namespace.delete"
-	AuditSecretSet         = "secret.set"
-	AuditSecretDeleted     = "secret.delete"
-	AuditFunctionDeployed  = "function.deploy"
-	AuditFunctionDeleted   = "function.delete"
-	AuditDeploymentCreated = "deployment.deploy"
-	AuditDeploymentDeleted = "deployment.delete"
-	AuditOperatorAction    = "operator.action"
+	AuditChallengeIssued  = "auth.challenge"
+	AuditVerifySucceeded  = "auth.verify"
+	AuditRefreshed        = "auth.refresh"
+	AuditRefreshReplayed  = "auth.refresh.replay"
+	AuditLoggedOut        = "auth.logout"
+	AuditKeyIssued        = "key.issue"
+	AuditKeyRevoked       = "key.revoke"
+	AuditKeyRotated       = "key.rotate"
+	AuditKeysRevokedBulk  = "key.revoke_all"
+	AuditNamespaceCreated = "namespace.create"
+	AuditNamespaceDeleted = "namespace.delete"
+	// AuditNamespaceRemovedByOperator is an operator removing a namespace it
+	// does not own (its owner's wallet is gone).
+	AuditNamespaceRemovedByOperator = "namespace.operator_remove"
+	AuditSecretSet                  = "secret.set"
+	AuditSecretDeleted              = "secret.delete"
+	AuditFunctionDeployed           = "function.deploy"
+	AuditFunctionDeleted            = "function.delete"
+	AuditDeploymentCreated          = "deployment.deploy"
+	AuditDeploymentDeleted          = "deployment.delete"
+	AuditOperatorAction             = "operator.action"
 	// A credential that arrived in a spelling that is going away. Recorded
 	// once per namespace per form, not once per request.
 	AuditLegacyCredential = "auth.legacy_credential"
@@ -83,7 +86,7 @@ const (
 var AuditActions = []string{
 	AuditChallengeIssued, AuditVerifySucceeded, AuditRefreshed, AuditRefreshReplayed,
 	AuditLoggedOut, AuditKeyIssued, AuditKeyRevoked, AuditKeyRotated, AuditKeysRevokedBulk,
-	AuditNamespaceCreated, AuditNamespaceDeleted, AuditSecretSet, AuditSecretDeleted,
+	AuditNamespaceCreated, AuditNamespaceDeleted, AuditNamespaceRemovedByOperator, AuditSecretSet, AuditSecretDeleted,
 	AuditFunctionDeployed, AuditFunctionDeleted, AuditDeploymentCreated, AuditDeploymentDeleted,
 	AuditOperatorAction, AuditLegacyCredential,
 	AuditGrantAdded, AuditGrantRevoked, AuditOwnerTransferred,

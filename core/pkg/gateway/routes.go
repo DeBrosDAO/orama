@@ -161,6 +161,11 @@ func (g *Gateway) Routes() http.Handler {
 		mux.Handle("/v1/namespace/delete", g.namespaceDeleteHandler)
 	}
 
+	// an operator's removal of a namespace whose owner is gone
+	if g.namespaceOperatorRemoveHandler != nil {
+		mux.Handle("/v1/operator/namespaces/remove", g.namespaceOperatorRemoveHandler)
+	}
+
 	// namespace list (authenticated — lists namespaces owned by the current wallet)
 	if g.namespaceListHandler != nil {
 		mux.Handle("/v1/namespace/list", g.namespaceListHandler)

@@ -257,6 +257,12 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/operator/settings", "/v1/operator/settings/",
 		"/v1/operator/creators", "/v1/operator/creators/")
 	t.Add(policyUnrestricted, "/v1/operator/invite")
+	// Removing a namespace its owner can no longer delete. The handler also
+	// checks the operator list. MainGateway: only the index gateway has the
+	// handler, and the namespace comes from the body, not the host.
+	operatorRemoval := control(auth.DomainOperator, auth.ActionWrite)
+	operatorRemoval.MainGateway = true
+	t.Add(operatorRemoval, "/v1/operator/namespaces/remove")
 
 	// --- Control plane on a namespace's own resources ------------------
 

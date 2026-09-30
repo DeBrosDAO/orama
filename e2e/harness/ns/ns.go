@@ -69,6 +69,9 @@ type Namespace struct {
 	Client *gw.Client
 	// CLI is signed in to this namespace in a HOME of its own (ViaOperator only).
 	CLI *oramacli.Runner
+	// removed is set by MarkRemoved: something other than the owner removed
+	// the namespace, so the owner's teardown has nothing left to delete.
+	removed bool
 }
 
 // New creates a namespace, waits for it to serve and registers its deletion.

@@ -238,7 +238,8 @@ type Gateway struct {
 	spawnHandler http.Handler
 
 	// Namespace delete handler
-	namespaceDeleteHandler http.Handler
+	namespaceDeleteHandler         http.Handler
+	namespaceOperatorRemoveHandler http.Handler
 
 	// Namespace list handler
 	namespaceListHandler http.Handler
@@ -1068,6 +1069,12 @@ func (g *Gateway) SetSpawnHandler(h http.Handler) {
 // SetNamespaceDeleteHandler sets the handler for namespace deletion requests.
 func (g *Gateway) SetNamespaceDeleteHandler(h http.Handler) {
 	g.namespaceDeleteHandler = h
+}
+
+// SetNamespaceOperatorRemoveHandler sets the handler for an operator's removal
+// of a namespace it does not own.
+func (g *Gateway) SetNamespaceOperatorRemoveHandler(h http.Handler) {
+	g.namespaceOperatorRemoveHandler = h
 }
 
 // SetNamespaceListHandler sets the handler for namespace list requests.

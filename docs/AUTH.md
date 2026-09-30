@@ -803,6 +803,13 @@ genesis node, while the list is still empty — adds its wallet. A node that
 joins does not. Further wallets are `orama operator add`, and `orama operator
 remove` refuses to delete the last one.
 
+A namespace belongs to its owner, and only the owner deletes it. When the
+owner's wallet is gone — a lost key, or a test run's throwaway wallet — an
+operator removes it with `orama cluster namespace remove <name> --reason …`
+(`POST /v1/operator/namespaces/remove`): the same teardown as the owner's
+delete, recorded as `namespace.operator_remove` with the operator's wallet and
+the reason. The lobby and the platform's reserved names cannot be removed.
+
 ---
 
 ## Which key signed a token
