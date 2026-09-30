@@ -17,9 +17,13 @@ import (
 
 const (
 	shieldedName = "shielded"
-	// scenarioScale multiplies the wallet scenario's amounts: 1,000,000 makes the first shield
-	// 0.01 ORAMA and the fees of a production-priced chain a small part of every amount.
-	scenarioScale = 1_000_000
+	// scenarioUnshieldUnits and scenarioChangeUnits are the wallet scenario's unshield and the
+	// transfer's change before the fee, in units its scale multiplies (x/shielded/wallet scenario.rs).
+	scenarioUnshieldUnits = 5_000
+	scenarioChangeUnits   = 4_000
+	// scenarioUnshieldActions is the unshield bundle's action count: Orchard pads a bundle to two
+	// actions, and each spends a nullifier the unshield pays a fee for.
+	scenarioUnshieldActions = 2
 	// feeMargin doubles the base fee the transfer's fee is sized for, since the base fee moves by up
 	// to 12.5% a block.
 	feeMargin = 2
@@ -114,6 +118,24 @@ func suggestedTransferFee(actions, actionGas uint64, baseFee, nullifierFee math.
 	gas := math.NewIntFromUint64(actions).Mul(math.NewIntFromUint64(actionGas))
 	base := gas.Mul(baseFee).MulRaw(feeMargin)
 	return base.Add(nullifierFee.MulRaw(int64(actions))).AddRaw(1)
+}
+
+// scenarioScaleFor is the largest multiplier of the wallet scenario's amounts the chain accepts.
+// The scenario unshields to its signer's fee-only balance, which x/shielded caps at max_fee_topup
+// per unshield (net of its nullifier fees), and its transfer's fee must stay below the change it
+// leaves. A scale fixed without the cap (1,000,000) made the unshield 4998000000 norama over a
+// 10000000 cap on stagenet.
+func scenarioScaleFor(maxFeeTopup, nullifierFee, fee math.Int) (uint64, error) {
+	room := maxFeeTopup.Add(nullifierFee.MulRaw(scenarioUnshieldActions))
+	scale := room.QuoRaw(scenarioUnshieldUnits)
+	if !scale.IsPositive() || !scale.IsUint64() {
+		return 0, fmt.Errorf("max_fee_topup %s leaves no room for the scenario's unshield of %d units", maxFeeTopup, scenarioUnshieldUnits)
+	}
+	if fee.GTE(scale.MulRaw(scenarioChangeUnits)) {
+		return 0, fmt.Errorf("the transfer fee %s is not below the scenario's change at scale %s (%d units); max_fee_topup %s is too small for this fee",
+			fee, scale, scenarioChangeUnits, maxFeeTopup)
+	}
+	return scale.Uint64(), nil
 }
 
 // addressBytesHex is the 20 address bytes of an orama bech32 account, in hex, as the wallet

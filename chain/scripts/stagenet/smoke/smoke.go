@@ -128,7 +128,11 @@ func runShieldedEnv(ctx context.Context, args []string) (int, error) {
 	}
 	const transferActions = 2
 	fee := suggestedTransferFee(transferActions, sp.Params.ActionGas, bf.BaseFee, sp.Params.NullifierFee)
-	fmt.Print(shieldedEnvLines(common.chainID, signerHex, scenarioScale, fee))
+	scale, err := scenarioScaleFor(sp.Params.MaxFeeTopup, sp.Params.NullifierFee, fee)
+	if err != nil {
+		return 2, err
+	}
+	fmt.Print(shieldedEnvLines(common.chainID, signerHex, scale, fee))
 	return 0, nil
 }
 

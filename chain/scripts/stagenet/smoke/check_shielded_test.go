@@ -127,3 +127,22 @@ func TestAddressBytesHex(t *testing.T) {
 	_, err = addressBytesHex(other)
 	require.ErrorContains(t, err, "not an orama account")
 }
+
+// With the chain's default parameters the scenario's unshield lands exactly on max_fee_topup net of
+// its nullifier fees, and the transfer's fee stays below its change.
+func TestScenarioScaleFor_fitsTheDefaultParams(t *testing.T) {
+	p := shieldedtypes.DefaultParams()
+	fee := suggestedTransferFee(2, p.ActionGas, math.OneInt(), p.NullifierFee)
+	scale, err := scenarioScaleFor(p.MaxFeeTopup, p.NullifierFee, fee)
+	require.NoError(t, err)
+	net := math.NewIntFromUint64(scale).MulRaw(scenarioUnshieldUnits).Sub(p.NullifierFee.MulRaw(scenarioUnshieldActions))
+	require.True(t, net.LTE(p.MaxFeeTopup), "net unshield %s over the cap %s", net, p.MaxFeeTopup)
+	require.True(t, fee.LT(math.NewIntFromUint64(scale).MulRaw(scenarioChangeUnits)))
+}
+
+func TestScenarioScaleFor_refusesACapTooSmallForTheFee(t *testing.T) {
+	_, err := scenarioScaleFor(math.NewInt(4_999), math.ZeroInt(), math.NewInt(1))
+	require.ErrorContains(t, err, "no room")
+	_, err = scenarioScaleFor(math.NewInt(10_000), math.ZeroInt(), math.NewInt(8_000))
+	require.ErrorContains(t, err, "not below the scenario's change")
+}

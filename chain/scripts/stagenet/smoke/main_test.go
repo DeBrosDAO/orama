@@ -46,8 +46,8 @@ func TestCommonFlagsValidate_refusesANonStagenetChain(t *testing.T) {
 
 func TestShieldedEnvLines(t *testing.T) {
 	require.Equal(t,
-		"ORAMA_SCENARIO_CHAIN_ID=orama-stagenet-1\nORAMA_SCENARIO_UNSHIELD_SIGNER=aabb\nORAMA_SCENARIO_SCALE=1000000\nORAMA_SCENARIO_FEE=202001\n",
-		shieldedEnvLines("orama-stagenet-1", "aabb", scenarioScale, math.NewInt(202001)))
+		"ORAMA_SCENARIO_CHAIN_ID=orama-stagenet-1\nORAMA_SCENARIO_UNSHIELD_SIGNER=aabb\nORAMA_SCENARIO_SCALE=2000\nORAMA_SCENARIO_FEE=202001\n",
+		shieldedEnvLines("orama-stagenet-1", "aabb", 2_000, math.NewInt(202001)))
 }
 
 func TestRun_refusesUnknownAndMissingCommands(t *testing.T) {
