@@ -60,11 +60,16 @@ func TestLobby_reachesOnlyNamespaceCreation(t *testing.T) {
 	for _, r := range probes {
 		r.Bearer = tok
 		resp := c.MustSend(t, r)
-		if resp.Status != http.StatusUnauthorized && resp.Status != http.StatusForbidden {
-			t.Errorf("lobby token reached %s %s: HTTP %d %.200s", r.Method, r.Path, resp.Status, resp.Body)
+		// The token is valid, so the refusal is the scope gate's (a lobby
+		// session holds no permission) or, on the operator routes, the
+		// operator list's; never a 401, which would mean the token was not
+		// read at all.
+		code := resp.ErrorCode()
+		if resp.Status != http.StatusForbidden || (code != "INSUFFICIENT_SCOPE" && code != "NOT_AN_OPERATOR") {
+			t.Errorf("lobby token at %s %s: HTTP %d %s, want 403 INSUFFICIENT_SCOPE (or NOT_AN_OPERATOR): %.200s", r.Method, r.Path, resp.Status, code, resp.Body)
 			continue
 		}
-		expectRefusal(t, resp, resp.Status, resp.ErrorCode())
+		expectRefusal(t, resp, http.StatusForbidden, code)
 	}
 }
 
