@@ -62,11 +62,17 @@ func TestGuardianDown_readsSurviveWritesRefused(t *testing.T) {
 			t.Errorf("health with 2 of 3 guardians: %q (%v), want degraded", h.Status, err)
 		}
 		mustPull(t, c, o, env)
+		refused := randomEnvelope(t)
 		var r services.PushResult
-		if err := json.Unmarshal(mustPush(t, c, o, 2, randomEnvelope(t), http.StatusServiceUnavailable).Body, &r); err != nil || r.Status != "insufficient_quorum" {
+		if err := json.Unmarshal(mustPush(t, c, o, 2, refused, http.StatusServiceUnavailable).Body, &r); err != nil || r.Status != "insufficient_quorum" {
 			t.Errorf("push with 2 of 3 guardians: %+v, want insufficient_quorum", r)
 		}
-		mustPull(t, c, o, env)
+		// Refusing the push does not undo it: the two live guardians stored
+		// their shares of version 2, and two is the read threshold, so a pull
+		// reconstructs the newer envelope ("a sub-quorum write may be
+		// unrecoverable", handlers/vault/push_handler.go). What it must never
+		// be is neither: an error, or something that was never pushed.
+		mustPullOneOf(t, c, o, env, refused)
 	})
 	eventually.Require(t, pollEvery, probeBudget, "the guardian back", func() (bool, error) {
 		var s status
@@ -119,13 +125,24 @@ func mustPush(t testing.TB, c *gw.Client, o *services.VaultOwner, v uint64, env 
 
 func mustPull(t testing.TB, c *gw.Client, o *services.VaultOwner, want []byte) {
 	t.Helper()
+	mustPullOneOf(t, c, o, want)
+}
+
+// mustPullOneOf pulls and requires the envelope to be one of want (every
+// envelope in it was pushed, so anything else is corruption or a stranger's).
+func mustPullOneOf(t testing.TB, c *gw.Client, o *services.VaultOwner, want ...[]byte) {
+	t.Helper()
 	var r services.PullResult
 	if err := services.PostJSON(t, c, services.VaultPull, o.PullBody(o.Identity(), time.Now(), o)).
 		Expect(t, http.StatusOK).Decode(&r); err != nil {
 		t.Fatal(err)
 	}
 	got, err := base64.StdEncoding.DecodeString(r.Envelope)
-	if err != nil || !bytes.Equal(got, want) || r.Threshold != threshold {
-		t.Errorf("pull: %d bytes, K %d, want the pushed envelope with K %d", len(got), r.Threshold, threshold)
+	matched := false
+	for _, w := range want {
+		matched = matched || bytes.Equal(got, w)
+	}
+	if err != nil || !matched || r.Threshold != threshold {
+		t.Errorf("pull: %d bytes, K %d, want one of the %d pushed envelope(s) with K %d", len(got), r.Threshold, len(want), threshold)
 	}
 }
