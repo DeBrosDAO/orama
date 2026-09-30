@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 // A wallet's authority is its grant, on the data plane as much as anywhere: its
@@ -37,6 +39,11 @@ const (
 	// cycling through wallets could flush every other caller's entry and send
 	// each of their requests to the registry.
 	narrowedGrantCacheMax = 4096
+
+	// grantLookupTimeout bounds one shared registry read of a grant. The read
+	// is detached from the request that started it (see cachedRequestGrant),
+	// so it needs its own bound.
+	grantLookupTimeout = 10 * time.Second
 )
 
 // grantCache remembers the grant each caller held in a namespace, including
@@ -44,6 +51,11 @@ const (
 type grantCache struct {
 	mu      sync.Mutex
 	entries map[string]grantCacheEntry
+
+	// lookups collapses concurrent misses for one key into one registry read:
+	// when an entry expires under load, its callers wait for a single lookup
+	// instead of each paying the round trips.
+	lookups singleflight.Group
 }
 
 type grantCacheEntry struct {
@@ -101,15 +113,25 @@ func grantIsDataPlane(policy routepolicy.Policy) bool {
 // for the grant for the cache's lifetime.
 func (g *Gateway) cachedRequestGrant(r *http.Request, subject string) (*auth.Grant, error) {
 	key := g.requestNamespace(r) + "\x00" + strings.TrimSpace(subject)
-	now := time.Now()
-	if grant, ok := g.narrowedGrants.get(key, now); ok {
+	if grant, ok := g.narrowedGrants.get(key, time.Now()); ok {
 		return grant, nil
 	}
-	grant, err := g.lookupRequestGrant(r)
+	// The shared read runs on a context detached from this request, so one
+	// caller hanging up does not fail the lookup for every caller waiting on it.
+	v, err, _ := g.narrowedGrants.lookups.Do(key, func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), grantLookupTimeout)
+		defer cancel()
+		grant, err := g.lookupRequestGrant(r.WithContext(ctx))
+		if err != nil {
+			return nil, err
+		}
+		g.narrowedGrants.put(key, grant, time.Now())
+		return grant, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	g.narrowedGrants.put(key, grant, now)
+	grant, _ := v.(*auth.Grant)
 	return grant, nil
 }
 
