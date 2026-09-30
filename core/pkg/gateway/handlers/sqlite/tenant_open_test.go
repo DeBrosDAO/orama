@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +60,20 @@ func TestOpenTenantDB_attachDenied(t *testing.T) {
 	other := filepath.Join(dir, "other.db")
 	if _, err := db.Exec("ATTACH DATABASE ? AS other", other); err == nil {
 		t.Fatal("ATTACH must fail when SQLITE_LIMIT_ATTACHED=0")
+	}
+}
+
+// Extension loading stays off on a tenant connection. The guard does not refuse
+// load_extension by name: the engine refusing it is the control, and it holds
+// only while the driver is built and registered without extension loading.
+func TestOpenTenantDB_loadExtensionDenied(t *testing.T) {
+	db, err := openTenantDB(filepath.Join(t.TempDir(), "tenant.db"))
+	if err != nil {
+		t.Fatalf("openTenantDB: %v", err)
+	}
+	defer db.Close()
+	var out any
+	if err := db.QueryRow("SELECT load_extension('/nonexistent/ext')").Scan(&out); err == nil || !strings.Contains(err.Error(), "not authorized") {
+		t.Fatalf("load_extension = %v, want the engine's \"not authorized\"", err)
 	}
 }
