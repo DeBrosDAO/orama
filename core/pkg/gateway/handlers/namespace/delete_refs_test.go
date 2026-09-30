@@ -19,6 +19,14 @@ type unpinRecorder struct {
 	err  error
 }
 
+func (u *unpinRecorder) Pin(context.Context, string, string, int) (*ipfs.PinResponse, error) {
+	return &ipfs.PinResponse{}, nil
+}
+
+func (u *unpinRecorder) PinStatus(context.Context, string) (*ipfs.PinStatus, error) {
+	return nil, nil
+}
+
 func (u *unpinRecorder) Unpin(_ context.Context, cid string) error {
 	u.cids = append(u.cids, cid)
 	return u.err

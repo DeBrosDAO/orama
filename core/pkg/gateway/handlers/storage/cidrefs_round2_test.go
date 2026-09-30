@@ -141,9 +141,15 @@ func TestReleaseNamespace_failureLeavesTheRestToRetry(t *testing.T) {
 	if len(first)+len(rest) != 20 {
 		t.Fatalf("%d + %d orphans found across the two calls, want 20: something leaked", len(first), len(rest))
 	}
-	var marker int
-	if err := registry.db.QueryRow(`SELECT COUNT(*) FROM ipfs_cid_refs WHERE namespace = 'ns-a'`).Scan(&marker); err != nil || marker != 0 {
-		t.Fatalf("rows or the marker survived: %d (%v)", marker, err)
+	var left int
+	if err := registry.db.QueryRow(`SELECT COUNT(*) FROM ipfs_cid_refs WHERE namespace = 'ns-a' AND kind != 'backfilled'`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("references survived: %d (%v)", left, err)
+	}
+	if err := refs.RemoveMarker(ctx, "ns-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.db.QueryRow(`SELECT COUNT(*) FROM ipfs_cid_refs WHERE namespace = 'ns-a'`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("the marker survived RemoveMarker: %d (%v)", left, err)
 	}
 }
 
@@ -249,7 +255,7 @@ func TestApplyDeferred_skipsWhatWasReferencedAgain(t *testing.T) {
 	if err := refs.Register(ctx, sharedCID, "ns-b", KindStorage); err != nil {
 		t.Fatal(err)
 	}
-	h.applyDeferred(ctx, map[string]ClusterUnpinner{sharedCID: mock, "QmFree": mock})
+	h.applyDeferred(ctx, map[string]ClusterPinner{sharedCID: mock, "QmFree": mock})
 	if mock.unpinCalls != 1 {
 		t.Fatalf("unpins = %d, want only the unreferenced CID", mock.unpinCalls)
 	}

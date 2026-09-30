@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 )
 
 // refsService is a service whose database is the real schema and which is its
@@ -37,6 +38,14 @@ func refCount(t *testing.T, refs *storage.CIDRefs, cid string) int {
 }
 
 type unpinRecorder struct{ cids []string }
+
+func (u *unpinRecorder) Pin(context.Context, string, string, int) (*ipfs.PinResponse, error) {
+	return &ipfs.PinResponse{}, nil
+}
+
+func (u *unpinRecorder) PinStatus(context.Context, string) (*ipfs.PinStatus, error) {
+	return nil, nil
+}
 
 func (u *unpinRecorder) Unpin(_ context.Context, cid string) error {
 	u.cids = append(u.cids, cid)

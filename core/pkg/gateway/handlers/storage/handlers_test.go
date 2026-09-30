@@ -72,6 +72,7 @@ type mockIPFSClient struct {
 	unpinErr    error
 	unpinCalls  int
 	unpinMu     sync.Mutex
+	pinCalls    int
 	// onUnpin runs inside Unpin, for tests that inspect state at that moment.
 	onUnpin func()
 	// onPin runs inside Pin, before it answers.
@@ -88,6 +89,9 @@ func (m *mockIPFSClient) Add(_ context.Context, _ io.Reader, _ string) (*ipfs.Ad
 }
 
 func (m *mockIPFSClient) Pin(_ context.Context, _ string, _ string, _ int) (*ipfs.PinResponse, error) {
+	m.unpinMu.Lock()
+	m.pinCalls++
+	m.unpinMu.Unlock()
 	if m.onPin != nil {
 		m.onPin()
 	}

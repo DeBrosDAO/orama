@@ -104,25 +104,48 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Last pinner — safe to remove the cluster pin.
-	if err := h.ipfsClient.Unpin(ctx, path); err != nil {
-		// Idempotent reclaim (bugboard #140/#151): a CID that is already absent
-		// from the cluster pinset (never pinned, or already GC'd) is the desired
-		// end state, so treat "not pinned / not found" as success rather than a
-		// 500. A retention cron re-unpinning already-gone CIDs must not error.
-		if isAlreadyUnpinned(err) {
-			evicted := h.maybeImmediateEvict(ctx, path, immediate)
-			httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "already_unpinned": true, "evicted": evicted})
-			return
-		}
+	out, err := h.unpinUnreferenced(ctx, path)
+	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to unpin CID",
 			zap.Error(err), zap.String("cid", path))
 		// Don't leak internal cluster/kubo error text to the tenant.
 		httputil.WriteError(w, http.StatusInternalServerError, "failed to unpin")
 		return
 	}
+	if out.Restored {
+		// A namespace registered the CID while its pin was being removed; the pin
+		// is back, and the content is shared after all.
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "shared": true, "evicted": "shared"})
+		return
+	}
+	if out.AlreadyUnpinned {
+		// Idempotent reclaim (bugboard #140/#151): a CID that is already absent
+		// from the cluster pinset (never pinned, or already GC'd) is the desired
+		// end state, so it is success rather than a 500. A retention cron
+		// re-unpinning already-gone CIDs must not error.
+		evicted := h.maybeImmediateEvict(ctx, path, immediate)
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "already_unpinned": true, "evicted": evicted})
+		return
+	}
 
 	evicted := h.maybeImmediateEvict(ctx, path, immediate)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "evicted": evicted})
+}
+
+// unpinUnreferenced removes the cluster pin through the reference index's
+// verified path. A handler set with no database at all is the unit-test
+// configuration and has no index: it unpins directly.
+func (h *Handlers) unpinUnreferenced(ctx context.Context, cid string) (UnpinOutcome, error) {
+	if h.db != nil {
+		return h.refs.UnpinUnreferenced(ctx, h.ipfsClient, cid)
+	}
+	if err := h.ipfsClient.Unpin(ctx, cid); err != nil {
+		if isAlreadyUnpinned(err) {
+			return UnpinOutcome{AlreadyUnpinned: true}, nil
+		}
+		return UnpinOutcome{}, err
+	}
+	return UnpinOutcome{}, nil
 }
 
 // maybeImmediateEvict performs privacy-grade immediate reclaim when the caller

@@ -116,10 +116,25 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 		return
 	}
 
+	// From here the cluster is touched, so a failure is recorded in the audit
+	// trail as well as logged: a removal that stopped half way is exactly what
+	// someone will later ask about. The response carries a fixed message; the
+	// detail (driver and registry text) is only logged.
+	failed := func(stage, message string, err error) {
+		h.logger.Error("Namespace removal failed", zap.String("namespace", ns), zap.String("stage", stage), zap.Error(err))
+		h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+			Actor:    auth.ActorFromRequest(r),
+			Action:   action,
+			Resource: ns,
+			Result:   auth.AuditFailure,
+			Metadata: metadata,
+		})
+		writeDeleteResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": message, "retryable": true})
+	}
+
 	// 1. Deprovision the cluster (stops infra on ALL nodes, deletes cluster-state, deallocates ports, deletes DNS)
 	if err := h.deprovisioner.DeprovisionCluster(r.Context(), namespaceID); err != nil {
-		h.logger.Error("Failed to deprovision cluster", zap.Error(err))
-		writeDeleteResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		failed("deprovision", "the namespace's cluster could not be deprovisioned; retry the delete", err)
 		return
 	}
 
@@ -128,11 +143,7 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 
 	// 3. Unpin IPFS content from ipfs_content_ownership (separate from deployment CIDs)
 	if err := h.unpinNamespaceContent(r.Context(), ns); err != nil {
-		h.logger.Error("Failed to release the namespace's IPFS references", zap.String("namespace", ns), zap.Error(err))
-		writeDeleteResponse(w, http.StatusInternalServerError, map[string]interface{}{
-			"error":     "the namespace's IPFS references could not be released; retry the delete",
-			"retryable": true,
-		})
+		failed("release-ipfs-references", "the namespace's IPFS references could not be released; retry the delete", err)
 		return
 	}
 
@@ -142,9 +153,18 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 	// 5. Delete FK children explicitly (ON DELETE CASCADE is decorative:
 	// rqlited is not started with -fk, bugboard #164). Check every error.
 	if err := h.deleteNamespaceRows(r.Context(), namespaceID, ns); err != nil {
-		h.logger.Error("Failed to delete namespace rows", zap.Error(err))
-		writeDeleteResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		failed("delete-rows", "the namespace's records could not be deleted; retry the delete", err)
 		return
+	}
+
+	// Last, after the namespace row is gone: the marker is what keeps every
+	// other namespace's readiness check true for a namespace that still exists,
+	// so it must not be removed before the steps that can still fail. A marker
+	// that outlives its namespace is inert: nothing counts a namespace that is
+	// not in the registry, and a namespace recreated under the name only skips a
+	// backfill it has no content for.
+	if err := h.refs.RemoveMarker(r.Context(), ns); err != nil {
+		h.logger.Error("Namespace deleted, but its reference index marker could not be removed; it is inert", zap.String("namespace", ns), zap.Error(err))
 	}
 
 	h.logger.Info("Namespace deleted successfully", zap.String("namespace", ns))
@@ -285,7 +305,7 @@ func (h *DeleteHandler) teardownDeploymentReplicas(ctx context.Context, ns, depl
 
 // unpinNamespaceContent releases every reference the namespace holds in the
 // cluster reference index (its storage pins and its deployments' content and
-// build CIDs, and its backfill marker) and removes the cluster pin of each CID
+// build CIDs) and removes the cluster pin of each CID
 // that leaves no reference anywhere. The index, not the namespace's database,
 // is what says who holds a CID. A failure to release is returned, so the delete
 // fails and is retried: references left behind would hold other tenants' pins
@@ -298,7 +318,7 @@ func (h *DeleteHandler) unpinNamespaceContent(ctx context.Context, ns string) er
 			zap.String("namespace", ns),
 			zap.Int("cid_count", len(orphaned)))
 		for _, cid := range orphaned {
-			if err := h.ipfsClient.Unpin(ctx, cid); err != nil {
+			if _, err := h.refs.UnpinUnreferenced(ctx, h.ipfsClient, cid); err != nil {
 				h.logger.Warn("Failed to unpin CID (best-effort)",
 					zap.String("cid", cid),
 					zap.String("namespace", ns),
