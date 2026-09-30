@@ -119,15 +119,29 @@ func APIKey(t testing.TB, n *ns.Namespace, scope string) string {
 	return mintKey(t, n, scope).APIKey
 }
 
+// APIKeyDroppedWithNamespace mints a key with scope in n and leaves it to the
+// namespace: a test that deletes n itself uses it, because a revoke at cleanup
+// would then be sent to a gateway that no longer exists.
+func APIKeyDroppedWithNamespace(t testing.TB, n *ns.Namespace, scope string) string {
+	t.Helper()
+	return newKey(t, n, scope).APIKey
+}
+
 // mintKey is APIKey returning the id too.
 func mintKey(t testing.TB, n *ns.Namespace, scope string) key {
+	t.Helper()
+	k := newKey(t, n, scope)
+	t.Cleanup(func() { revokeKey(t, n, k.ID) })
+	return k
+}
+
+func newKey(t testing.TB, n *ns.Namespace, scope string) key {
 	t.Helper()
 	var k key
 	resp := Post(t, n.Client, PathKeys, Owner(n), map[string]any{"scope": scope, "label": "e2e-" + scope})
 	if err := resp.Expect(t, http.StatusCreated).Decode(&k); err != nil || k.APIKey == "" {
 		t.Fatalf("minting a %q key returned no key: %v", scope, err)
 	}
-	t.Cleanup(func() { revokeKey(t, n, k.ID) })
 	return k
 }
 

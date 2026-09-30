@@ -55,7 +55,7 @@ func TestNamespaceDelete_tearsEverythingDown(t *testing.T) {
 	f := harness.Fleet(t)
 	tenancy.Reserve(t, f, 2) // this namespace, and the one recreated with its name
 	n := adopted(t, f)
-	key := tenancy.APIKey(t, n, "cache")
+	key := tenancy.APIKeyDroppedWithNamespace(t, n, "cache")
 	tenancy.Post(t, n.Client, "/v1/cache/put", tenancy.Owner(n), map[string]any{"dmap": "m", "key": "k", "value": "old"}).Expect(t, http.StatusOK)
 	blocks := map[string][]int{}
 	for _, node := range f.State.Nodes {

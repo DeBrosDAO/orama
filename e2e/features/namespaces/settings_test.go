@@ -49,6 +49,9 @@ func TestNamespaceSessionPolicy_ownerSetsRuntimeCannot(t *testing.T) {
 	if got := read(); got != "optional" {
 		t.Fatalf("a new namespace's device policy is %q, want optional", got)
 	}
+	// The member signs in while the policy is still optional: once it is
+	// required a session without a device is refused, and this member has none.
+	runtime := tenancy.Cred{Bearer: tenancy.Member(t, n, tenancy.RoleRuntime).Token()}
 	tenancy.Send(t, n.Client, http.MethodPut, pathSessionPolicy, tenancy.Owner(n), map[string]string{"device_policy": "required"}).Expect(t, http.StatusOK)
 	t.Cleanup(func() {
 		tenancy.Restore(t, n.Client, http.MethodPut, pathSessionPolicy, tenancy.Owner(n), map[string]string{"device_policy": "optional"}, http.StatusOK)
@@ -61,7 +64,6 @@ func TestNamespaceSessionPolicy_ownerSetsRuntimeCannot(t *testing.T) {
 			t.Errorf("policy %.20q: want 400, got %d", bad, r.Status)
 		}
 	}
-	runtime := tenancy.Cred{Bearer: tenancy.Member(t, n, tenancy.RoleRuntime).Token()}
 	if r := tenancy.Send(t, n.Client, http.MethodPut, pathSessionPolicy, runtime, map[string]string{"device_policy": "optional"}); r.Status != http.StatusForbidden {
 		t.Errorf("a runtime member set the session policy: %d", r.Status)
 	}
@@ -79,6 +81,9 @@ func TestNamespaceRateLimit_overrideBitesAndClears(t *testing.T) {
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
 	c := n.Client.PinTo(f.State.Nodes[0].PublicIP)
+	// The member signs in through the index gateway, which the override does
+	// not limit, and before the override bites.
+	runtime := tenancy.Cred{Bearer: tenancy.Member(t, n, tenancy.RoleRuntime).Token()}
 	var cfg struct {
 		Source            string `json:"source"`
 		RequestsPerMinute int    `json:"requests_per_minute"`
@@ -93,7 +98,12 @@ func TestNamespaceRateLimit_overrideBitesAndClears(t *testing.T) {
 		}
 	}
 	tenancy.Send(t, c, http.MethodPut, pathRateLimit, tenancy.Owner(n), map[string]int{"requests_per_minute": 6, "burst": 2}).Expect(t, http.StatusOK)
-	t.Cleanup(func() { tenancy.Restore(t, c, http.MethodDelete, pathRateLimit, tenancy.Owner(n), nil, http.StatusOK) })
+	cleared := false
+	t.Cleanup(func() {
+		if !cleared {
+			clearRateLimit(t, c, n)
+		}
+	})
 	eventually.Require(t, pollEvery, rateBudget, "the limit to answer 429", func() (bool, error) {
 		for range burstRequests {
 			r := tenancy.Get(t, c, pathCacheHealth, tenancy.Owner(n))
@@ -106,13 +116,38 @@ func TestNamespaceRateLimit_overrideBitesAndClears(t *testing.T) {
 		}
 		return false, fmt.Errorf("%d requests, none limited", burstRequests)
 	})
-	tenancy.Send(t, c, http.MethodDelete, pathRateLimit, tenancy.Owner(n), nil).Expect(t, http.StatusOK)
+	// The DELETE is itself limited until the bucket refills.
+	clearRateLimit(t, c, n)
+	cleared = true
 	if err := tenancy.Get(t, c, pathRateLimit, tenancy.Owner(n)).Expect(t, http.StatusOK).Decode(&cfg); err != nil || cfg.Source != "default" {
 		t.Fatalf("after DELETE the limit is %+v (%v)", cfg, err)
 	}
-	runtime := tenancy.Cred{Bearer: tenancy.Member(t, n, tenancy.RoleRuntime).Token()}
 	if r := tenancy.Send(t, c, http.MethodPut, pathRateLimit, runtime, map[string]int{"requests_per_minute": 1, "burst": 1}); r.Status != http.StatusForbidden {
 		t.Errorf("a runtime member set the rate limit: %d", r.Status)
+	}
+}
+
+// clearRateLimit DELETEs the override, waiting out the 429s the override itself
+// answers while the bucket refills, on a context of its own because it runs in
+// cleanups too.
+func clearRateLimit(t testing.TB, c *gw.Client, n *ns.Namespace) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), rateBudget)
+	defer cancel()
+	err := eventually.Poll(ctx, pollEvery, rateBudget, "the rate limit override of "+n.Name+" to be deleted", func() (bool, error) {
+		r, err := c.Send(ctx, gw.Req{Method: http.MethodDelete, Path: pathRateLimit, Bearer: n.Owner.Token()})
+		switch {
+		case err != nil:
+			return false, err
+		case r.Status == http.StatusOK:
+			return true, nil
+		case r.Status == http.StatusTooManyRequests:
+			return false, fmt.Errorf("HTTP 429")
+		}
+		return false, eventually.Stop(fmt.Errorf("HTTP %d: %.200s", r.Status, r.Body))
+	})
+	if err != nil {
+		t.Errorf("failed to restore the default rate limit: %v", err)
 	}
 }
 
