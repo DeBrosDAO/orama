@@ -196,7 +196,9 @@ func TestReleaseNamespace(t *testing.T) {
 		t.Fatalf("orphaned = %v, want only QmOnlyA (QmShared is still held by ns-b)", orphaned)
 	}
 	var n int
-	if err := registry.db.QueryRow(`SELECT COUNT(*) FROM ipfs_cid_refs WHERE namespace = 'ns-a'`).Scan(&n); err != nil || n != 0 {
+	// Only the backfill marker survives: it outlives every step that can still
+	// fail and is removed by RemoveMarker as the delete's last act.
+	if err := registry.db.QueryRow(`SELECT COUNT(*) FROM ipfs_cid_refs WHERE namespace = 'ns-a' AND kind != 'backfilled'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("ns-a still has %d rows (%v)", n, err)
 	}
 	if orphaned, err := refs.ReleaseNamespace(ctx, "ns-empty"); err != nil || len(orphaned) != 0 {

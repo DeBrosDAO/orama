@@ -64,7 +64,7 @@ func (s *DeploymentService) unregisterCIDs(ctx context.Context, namespace string
 // (cid, namespace, kind), which those deployments share. The namespace's own
 // database is trusted for that count because a forged row there only makes the
 // namespace keep its own reference.
-func (s *DeploymentService) releaseCID(ctx context.Context, ipfs storage.ClusterUnpinner, deploymentID, namespace, cid string) error {
+func (s *DeploymentService) releaseCID(ctx context.Context, ipfs storage.ClusterPinner, deploymentID, namespace, cid string) error {
 	if cid == "" || s.cidRefs == nil {
 		return nil
 	}

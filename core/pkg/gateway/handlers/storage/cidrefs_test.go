@@ -32,7 +32,8 @@ func registrySchema(t *testing.T) *sqliteDB {
 	}
 	// namespaces is the registry's list of live namespaces, which the index
 	// readiness check reads.
-	if _, err := db.Exec(`CREATE TABLE namespaces (name TEXT PRIMARY KEY)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE namespaces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE);
+		CREATE TABLE namespace_clusters (namespace_id INTEGER NOT NULL UNIQUE, status TEXT NOT NULL, ready_at TIMESTAMP)`); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"064_ipfs_cid_refs.sql", "065_ipfs_cid_refs_holders.sql"} {
