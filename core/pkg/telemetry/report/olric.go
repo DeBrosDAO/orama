@@ -3,10 +3,12 @@ package report
 import (
 	"context"
 	"encoding/json"
-	"github.com/DeBrosOfficial/network/pkg/constants"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // indexOlricUnit is the index Olric service. It replaced the pre-namespace
@@ -97,12 +99,13 @@ func collectOlric() *OlricReport {
 		}
 	}
 
-	// 8. Member info: try HTTP GET to the index Olric HTTP API
-	{
+	// 8. Member info: try HTTP GET to the index Olric HTTP API, at the WireGuard address the
+	// installer bound it to (never loopback).
+	if olricURL, err := config.InstalledOlricURL(config.ProductionNodeConfigPath); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		if body, err := httpGet(ctx, constants.LocalOlricURL()+"/"); err == nil {
+		if body, err := httpGet(ctx, olricURL+"/"); err == nil {
 			var info struct {
 				Coordinator string `json:"coordinator"`
 				Members     []struct {

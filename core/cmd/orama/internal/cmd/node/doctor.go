@@ -77,20 +77,22 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	// 4. Check Olric health
-	resp, err := client.Get(constants.LocalOlricURL() + "/")
+	// 4. Check Olric health, where the installer bound it (the WireGuard address).
+	olricURL, err := config.InstalledOlricURL(config.ProductionNodeConfigPath)
 	if err != nil {
+		checks = append(checks, check{"Olric reachable", "FAIL", err.Error()})
+	} else if resp, err := client.Get(olricURL + "/"); err != nil {
 		checks = append(checks, check{"Olric reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
 	} else {
 		resp.Body.Close()
-		checks = append(checks, check{"Olric reachable", "PASS", fmt.Sprintf("Responding on :%d", constants.OlricHTTPPort)})
+		checks = append(checks, check{"Olric reachable", "PASS", "Responding on " + olricURL})
 	}
 
 	// 5. Check Gateway health
 	// 8443 was never the gateway's port on a node; the index gateway listens on
 	// constants.GatewayAPIPort. The check therefore always failed, which is
 	// half of why doctor exited 1 on a healthy node.
-	resp, err = client.Get(constants.LocalGatewayURL() + "/health")
+	resp, err := client.Get(constants.LocalGatewayURL() + "/health")
 	if err != nil {
 		checks = append(checks, check{"Gateway reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
 	} else {

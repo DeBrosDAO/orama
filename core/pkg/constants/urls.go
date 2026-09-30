@@ -31,9 +31,6 @@ func hostPortURL(host string, port int) string {
 // LocalGatewayURL is the index gateway HTTP API on this node.
 func LocalGatewayURL() string { return hostPortURL("localhost", GatewayAPIPort) }
 
-// LocalOlricURL is the index Olric HTTP API on this node.
-func LocalOlricURL() string { return hostPortURL("localhost", OlricHTTPPort) }
-
 // LocalIPFSAPIURL is the Kubo HTTP API on this node.
 func LocalIPFSAPIURL() string { return hostPortURL("localhost", IPFSAPIPort) }
 

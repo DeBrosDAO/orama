@@ -16,7 +16,6 @@ func TestLocalURLs(t *testing.T) {
 		want string
 	}{
 		{"gateway", constants.LocalGatewayURL(), "http://localhost:10104"},
-		{"olric", constants.LocalOlricURL(), "http://localhost:10102"},
 		{"ipfs api", constants.LocalIPFSAPIURL(), "http://localhost:10107"},
 		{"ipfs cluster", constants.LocalIPFSClusterURL(), "http://localhost:10108"},
 	}
