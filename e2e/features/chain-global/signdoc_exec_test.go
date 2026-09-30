@@ -53,11 +53,11 @@ func TestOnchainDocs_nodeDocumentsExecute(t *testing.T) {
 	c := chain.New(t)
 	s := newSigner(t, c, chain.OperatorNode)
 	c.EnsureOperator(t, s.k)
-	hot := c.Validator(t, c.Node(t, 1)).Address
+	hot, hotFile := hotKeyBinding(t, c, s.k.Address)
 	id := chain.UniqueID(t, "e2e-cli-")
 	t.Cleanup(func() { retireNodeAtCleanup(t, c, s, id) })
 	reg := doc(t, c, s, "global", "register", "--operator", s.k.Address, "--id", id, "--role", "relay", "--role", "storage",
-		"--hot-key", hot, "--binding", edBinding(t, c, s.k.Address), "--endpoint", "relay.example.com:443")
+		"--hot-key", hot, "--binding", edBinding(t, c, s.k.Address), "--binding", hotFile, "--endpoint", "relay.example.com:443")
 	chain.RequireOK(t, "the CLI's node registration", execute(t, c, s, reg))
 	var v struct {
 		Node struct {
@@ -67,7 +67,7 @@ func TestOnchainDocs_nodeDocumentsExecute(t *testing.T) {
 		} `json:"node"`
 	}
 	c.Query(t, s.k.Node, &v, "nodes", "node", id)
-	if v.Node.HotKey != hot || v.Node.Status != "NODE_STATUS_REGISTERED" || len(v.Node.Bindings) != 1 {
+	if v.Node.HotKey != hot || v.Node.Status != "NODE_STATUS_REGISTERED" || len(v.Node.Bindings) != 2 {
 		t.Errorf("node %+v", v.Node)
 	}
 	capDoc := doc(t, c, s, "global", "capacity", "--operator", s.k.Address, "--id", id, "--bytes", "1048576")

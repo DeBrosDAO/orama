@@ -39,6 +39,38 @@ func TestSSHFor_recordsTransfersAttributedToTest(t *testing.T) {
 	}
 }
 
+// A sealed key backup matches no redaction pattern, so a transfer records the file's digest and
+// never its bytes.
+func TestSSHFor_recordsADigestNotTheContentsOfATransferredFile(t *testing.T) {
+	sh := &fakeShell{files: map[string][]byte{}, modes: map[string]os.FileMode{}}
+	dir := t.TempDir()
+	rec, err := evidence.New(dir, "fleet", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := NewWithDialer(testState(), rec, func(State, Node) Shell { return sh })
+	shell := f.SSHFor(t, f.Node(t, "node-1"))
+	sealed := []byte("ciphertext-of-a-validator-key-3f9a")
+	if err := shell.Put(t.Context(), "/tmp/e2e-keybackup-1", sealed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shell.Get(t.Context(), "/tmp/e2e-keybackup-1"); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := evidence.Load(dir)
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("recs %+v err %v", recs, err)
+	}
+	for _, r := range recs {
+		if strings.Contains(r.Input+r.Output, string(sealed)) {
+			t.Fatalf("the file's bytes reached the evidence: %+v", r)
+		}
+		if got := r.Input + r.Output; got != fileDigest(sealed) {
+			t.Fatalf("recorded %q, want the digest %q", got, fileDigest(sealed))
+		}
+	}
+}
+
 // TestRecordedShell_recordErrorKeepsOperationError: when evidence cannot be
 // written, the command's own failure must still reach the caller.
 func TestRecordedShell_recordErrorKeepsOperationError(t *testing.T) {

@@ -2,7 +2,8 @@
 
 // Package chain is what the chain feature packages (chain-core,
 // chain-economics, chain-services, chain-assets, chain-global,
-// chain-waivers and their destructive packages) share: running the real
+// chain-shielded, chain-hotkey-archive, chain-cli, chain-waivers and their
+// destructive packages) share: running the real
 // oramad of a co-hosted validator on its node, building, signing and
 // broadcasting transactions with the validator's own keyring, reading
 // module queries, and the invariant check every step ends with.

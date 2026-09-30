@@ -1,0 +1,35 @@
+# Stage 8: the hot-key fee balance, protocol archive deals and the storage
+# failure counters on the live run chain. MsgFundHotKey moves the operator's own
+# earnings to the fee-only balance of the hot key its node registered (the
+# node registers with the hot key's proof-of-possession binding, made in the
+# test process: the hot key is never on a server) and FeeBalance reads it;
+# every refusal (another signer, a zero or negative amount, more than the
+# earnings, an unknown or a retired node) leaves it as it was.
+# MsgCreateArchiveDeal is signed only by the hot key of an active node with a
+# bonded ARCHIVER role and needs a range three operators attested: a role
+# bond is a bank balance no run account holds, so the tests drive the
+# refusals (message shape, a range that is not finalised, an unknown node, a
+# node without an active ARCHIVER role) and NodeFailures answers empty for
+# nodes whose work applies cleanly.
+id: chain-hotkey-archive
+title: Hot-key funding, archive deals, fee balances and node failures
+area: chain
+subtasks: []
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  msgs:
+    - orama.nodes.v1.MsgFundHotKey
+    - orama.archive.v1.MsgCreateArchiveDeal
+  queries:
+    - orama.fees.v1.FeeBalance
+    - orama.storage.v1.NodeFailures
+  claims:
+    - "docs/CHAIN.md#x-nodes: MsgFundHotKey pays the fee-only balance of the hot key registered on the operator's own node from the operator's earnings; the balance pays base fees and cannot be bonded, sent, shielded or deposited"
+    - "docs/CHAIN.md#x-nodes: a node's hot key must prove it holds itself with a hot-key binding it signed"
+    - "docs/CHAIN.md#history-archiver: MsgCreateArchiveDeal is signed by the hot key of an active ARCHIVER node and opens deals only for a finalised range"
+    - "docs/CHAIN.md#history-archiver: REFUSAL PATHS ONLY: orama.archive.v1.MsgCreateArchiveDeal; the success path needs an active ARCHIVER role bond (a bank balance) and a range attested by three operators (trigger: a funding path exists)"

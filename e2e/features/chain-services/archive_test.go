@@ -7,181 +7,184 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	mrand "math/rand/v2"
 	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
+	"github.com/DeBrosOfficial/network/e2e/harness"
 )
 
-// rangeWidth is the width of the ranges this test attests. x/archive has no
-// message that removes a range, so the records stay for the (disposable)
-// run chain; they sit well away from height 1, where an orama-global
-// archiver would start (docs/CHAIN.md "History archiver": ranges 1, 1+w, ...),
-// so they never block one.
-const rangeWidth = 10
-
-// Where freeRange looks: aligned slots from minSlot up to headMargin below
-// the head, at most freeRangeTries random picks.
+// A piece of 4 KiB is four 1 KiB leaves and a padded tree of four
+// (chain/piece: 1 KiB leaves, the leaf count padded to a power of two).
 const (
-	minSlot        = 10
-	headMargin     = 2 * rangeWidth
-	freeRangeTries = 20
+	attestPieceBytes = 4096
+	attestPieceLeafs = 4
+	// leafSize is chain/piece.LeafSize, the size a piece_bytes value divides by.
+	pieceLeafSize = 1024
 )
 
-// freeRange picks an aligned range (start 1 + j*rangeWidth) below the head
-// that no range occupies. Every range these tests pin is aligned and of the
-// same width, so two of them either coincide or do not overlap at all: an
-// exact range query that finds nothing proves the slot free of every other
-// test's range, and a random slot keeps concurrent tests apart.
-func freeRange(t *testing.T, c *chain.Chain) attestation {
-	t.Helper()
-	top := (c.Height(t) - headMargin - 1) / rangeWidth
-	if top <= minSlot {
-		t.Fatalf("the chain is at %d: too low for an aligned range above slot %d", c.Height(t), minSlot)
-	}
-	for i := 0; i < freeRangeTries; i++ {
-		a := newAttestation(t, 1+(minSlot+mrand.Int64N(top-minSlot))*rangeWidth)
-		out := c.QueryOut(t, c.Node(t, 0), "archive", "range", fmt.Sprint(a.start), fmt.Sprint(a.end))
-		if out.Exit != 0 && chain.NotFound(out.Stdout+out.Stderr) {
-			return a
-		}
-		if out.Exit != 0 {
-			t.Fatalf("archive range %d %d: %s", a.start, a.end, out.Stderr)
-		}
-	}
-	t.Fatalf("no free aligned range in %d random picks below height %d", freeRangeTries, top*rangeWidth)
-	return attestation{}
-}
-
-// attestation is one archiver's claim about a height range.
+// attestation is one archiver's claim about a canonical height range: x/archive
+// ranges are params.range_blocks long and start at a multiple of it plus 1.
 type attestation struct {
 	start, end int64
+	node       string
 	cid        string
 	hash, root []byte
+	piece      []byte
+	real, pad  uint64
+	pieceBytes uint64
 }
 
-func newAttestation(t *testing.T, start int64) attestation {
+// rangeBlocks is x/archive's range width (orama.archive.v1 Params).
+func rangeBlocks(t *testing.T, c *chain.Chain) int64 {
 	t.Helper()
-	root := make([]byte, 32)
+	var p struct {
+		Params struct {
+			RangeBlocks chain.Int `json:"range_blocks"`
+		} `json:"params"`
+	}
+	c.Query(t, c.Node(t, 0), &p, "archive", "params")
+	if p.Params.RangeBlocks.Int64() <= 0 {
+		t.Fatalf("archive range_blocks is %s", p.Params.RangeBlocks.String())
+	}
+	return p.Params.RangeBlocks.Int64()
+}
+
+// newAttestation is a well-formed attestation of the canonical range number
+// slot (0 is heights 1..width) by the archiver node nodeID.
+func newAttestation(t *testing.T, width, slot int64, nodeID string) attestation {
+	t.Helper()
+	root := make([]byte, sha256Len)
 	if _, err := rand.Read(root); err != nil {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(root)
-	return attestation{start: start, end: start + rangeWidth - 1, cid: fmt.Sprintf("bafk-e2e-%x", hash[:6]), hash: hash[:], root: root}
+	start := slot*width + 1
+	return attestation{start: start, end: start + width - 1, node: nodeID, cid: fmt.Sprintf("bafk-e2e-%x", hash[:6]), hash: hash[:], root: root,
+		piece: hash[:], real: attestPieceLeafs, pad: attestPieceLeafs, pieceBytes: attestPieceBytes}
 }
+
+const sha256Len = 32
 
 func (a attestation) msg(archiver string) chain.Msg {
 	return chain.NewMsg("/orama.archive.v1.MsgAttest", map[string]any{
 		"archiver": archiver, "start_height": fmt.Sprint(a.start), "end_height": fmt.Sprint(a.end), "bundle_cid": a.cid,
-		"bundle_hash": base64.StdEncoding.EncodeToString(a.hash), "merkle_root": base64.StdEncoding.EncodeToString(a.root),
+		"bundle_hash": base64.StdEncoding.EncodeToString(a.hash), "merkle_root": base64.StdEncoding.EncodeToString(a.root), "node_id": a.node,
+		"piece_root": base64.StdEncoding.EncodeToString(a.piece), "real_leaf_count": fmt.Sprint(a.real),
+		"padded_leaf_count": fmt.Sprint(a.pad), "piece_bytes": fmt.Sprint(a.pieceBytes),
 	})
 }
 
-func attachMsg(archiver string, start, end int64, ids ...string) chain.Msg {
+func attachMsg(archiver, nodeID string, start, end int64, ids ...string) chain.Msg {
 	return chain.NewMsg("/orama.archive.v1.MsgAttachReplicas", map[string]any{
-		"archiver": archiver, "start_height": fmt.Sprint(start), "end_height": fmt.Sprint(end), "deal_ids": ids,
+		"archiver": archiver, "start_height": fmt.Sprint(start), "end_height": fmt.Sprint(end), "deal_ids": ids, "node_id": nodeID,
 	})
 }
 
-// rangeView is `oramad query archive range`.
-type rangeView struct {
-	Range struct {
-		BundleCID string   `json:"bundle_cid"`
-		Archivers []string `json:"archivers"`
-		DealIDs   []string `json:"deal_ids"`
-		Archived  bool     `json:"archived"`
-	} `json:"range"`
-}
-
-func queryRange(t *testing.T, c *chain.Chain, a attestation) rangeView {
-	t.Helper()
-	var v rangeView
-	c.Query(t, c.Node(t, 0), &v, "archive", "range", fmt.Sprint(a.start), fmt.Sprint(a.end))
-	return v
-}
-
-// TestArchive_firstAttestationPinsTheRange: the first attestation of a
-// finalised range pins its root, bundle hash and CID; another archiver with a
-// different root or bundle is refused; the same archiver again changes
-// nothing; a range only becomes archived with three matching archivers AND
-// three replica deal ids (docs/CHAIN.md "History archiver"); an archived
-// range that does not start at 1 does not move the contiguous last archived
-// height.
-func TestArchive_firstAttestationPinsTheRange(t *testing.T) {
-	t.Parallel()
-	c := chain.New(t)
-	keys := []chain.Key{c.FundedValidator(t, 0, chain.Orama(1)), c.FundedValidator(t, 1, chain.Orama(1)), c.FundedValidator(t, 2, chain.Orama(1))}
-	a := freeRange(t, c)
-	lastBefore := lastArchived(t, c)
-	chain.RequireOK(t, "first attestation", c.Submit(t, keys[0], chain.TxOptions{}, a.msg(keys[0].Address)))
-	wrongRoot, wrongBundle := a, a
-	wrongRoot.root = append([]byte{a.root[0] ^ 0xff}, a.root[1:]...)
-	wrongBundle.cid += "-other"
-	chain.RequireRefused(t, "different root", c.Submit(t, keys[1], chain.TxOptions{}, wrongRoot.msg(keys[1].Address)), "wrong merkle root")
-	chain.RequireRefused(t, "different bundle", c.Submit(t, keys[1], chain.TxOptions{}, wrongBundle.msg(keys[1].Address)), "bundle does not match the pinned range")
-	chain.RequireOK(t, "same archiver again", c.Submit(t, keys[0], chain.TxOptions{}, a.msg(keys[0].Address)))
-	if v := queryRange(t, c, a); len(v.Range.Archivers) != 1 || v.Range.BundleCID != a.cid || v.Range.Archived {
-		t.Fatalf("range after one archiver (twice): %+v", v.Range)
-	}
-	for _, k := range keys[1:] {
-		chain.RequireOK(t, "matching attestation", c.Submit(t, k, chain.TxOptions{}, a.msg(k.Address)))
-	}
-	chain.RequireOK(t, "two replicas", c.Submit(t, keys[0], chain.TxOptions{}, attachMsg(keys[0].Address, a.start, a.end, "e2e-1", "e2e-2")))
-	if v := queryRange(t, c, a); len(v.Range.Archivers) != 3 || v.Range.Archived {
-		t.Fatalf("three archivers and two deal ids must not archive: %+v", v.Range)
-	}
-	chain.RequireOK(t, "third replica", c.Submit(t, keys[1], chain.TxOptions{}, attachMsg(keys[1].Address, a.start, a.end, "e2e-2", "e2e-3")))
-	if v := queryRange(t, c, a); !v.Range.Archived || len(v.Range.DealIDs) != 3 {
-		t.Fatalf("three archivers and three deal ids must archive: %+v", v.Range)
-	}
-	if got := lastArchived(t, c); got != lastBefore {
-		t.Errorf("last archived height moved %d -> %d for a range that does not start at 1", lastBefore, got)
-	}
-}
-
-// TestArchive_rangeRefusals: a range overlapping a pinned one, a range that
-// is not finalised (it ends at or after the executing block), malformed
-// heights, CID and hashes, and replicas for an unknown range are refused.
-func TestArchive_rangeRefusals(t *testing.T) {
+// TestArchive_attestShapeRefusals: MsgAttest's own shape is checked before
+// any state (x/archive/types ValidateAttestation): heights from 1 and not
+// descending, a node id, a printable CID of 1-128 bytes, 32-byte hashes and
+// roots, and a piece commitment whose leaf counts are the ones piece_bytes
+// implies.
+func TestArchive_attestShapeRefusals(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := c.FundedValidator(t, 2, chain.Orama(1))
-	a := freeRange(t, c)
-	chain.RequireOK(t, "pin a range", c.Submit(t, k, chain.TxOptions{}, a.msg(k.Address)))
-	overlap := newAttestation(t, a.start+rangeWidth/2)
-	chain.RequireRefused(t, "overlapping range", c.Submit(t, k, chain.TxOptions{}, overlap.msg(k.Address)), "overlaps an existing range")
-	future := newAttestation(t, c.Height(t)+1000)
-	chain.RequireRefused(t, "range in the future", c.Submit(t, k, chain.TxOptions{}, future.msg(k.Address)), "height range is not finalized")
+	width := rangeBlocks(t, c)
 	bad := map[string]struct {
 		mut  func(*attestation)
 		want string
 	}{
-		"start 0":            {func(x *attestation) { x.start = 0 }, "start height must be at least 1"},
-		"end below start":    {func(x *attestation) { x.end = x.start - 1 }, "is below start height"},
-		"empty cid":          {func(x *attestation) { x.cid = "" }, "bundle cid length must be"},
-		"cid with a space":   {func(x *attestation) { x.cid = "bafk e2e" }, "printable ASCII without spaces"},
-		"31-byte root":       {func(x *attestation) { x.root = x.root[:31] }, "merkle_root must be 32 bytes"},
-		"33-byte hash":       {func(x *attestation) { x.hash = append(x.hash, 0) }, "bundle_hash must be 32 bytes"},
-		"cid over 128 bytes": {func(x *attestation) { x.cid = strings.Repeat("c", 129) }, "bundle cid length must be"},
+		"start 0":             {func(x *attestation) { x.start = 0 }, "start height must be at least 1"},
+		"end below start":     {func(x *attestation) { x.end = x.start - 1 }, "is below start height"},
+		"no node id":          {func(x *attestation) { x.node = "" }, "node id length must be"},
+		"empty cid":           {func(x *attestation) { x.cid = "" }, "bundle cid length must be"},
+		"cid with a space":    {func(x *attestation) { x.cid = "bafk e2e" }, "printable ASCII without spaces"},
+		"cid over 128 bytes":  {func(x *attestation) { x.cid = strings.Repeat("c", 129) }, "bundle cid length must be"},
+		"31-byte root":        {func(x *attestation) { x.root = x.root[:sha256Len-1] }, "merkle_root must be 32 bytes"},
+		"33-byte hash":        {func(x *attestation) { x.hash = append(x.hash, 0) }, "bundle_hash must be 32 bytes"},
+		"31-byte piece root":  {func(x *attestation) { x.piece = x.piece[:sha256Len-1] }, "piece_root must be 32 bytes"},
+		"a piece of no bytes": {func(x *attestation) { x.pieceBytes = 0 }, "piece_bytes must be in"},
+		"wrong real leaves":   {func(x *attestation) { x.real = attestPieceLeafs - 1 }, "implies"},
+		"wrong padded leaves": {func(x *attestation) { x.pad = attestPieceLeafs * 2 }, "padded_leaf_count must be"},
 	}
 	for name, tc := range bad {
-		x := newAttestation(t, 1)
+		x := newAttestation(t, width, 0, "e2e-archiver")
 		tc.mut(&x)
 		chain.RequireRefused(t, name, c.Submit(t, k, chain.TxOptions{}, x.msg(k.Address)), tc.want)
 	}
-	chain.RequireRefused(t, "replicas for an unknown range", c.Submit(t, k, chain.TxOptions{}, attachMsg(k.Address, 7, 8, "e2e-x")), "unknown height range")
-	chain.RequireRefused(t, "duplicate deal id", c.Submit(t, k, chain.TxOptions{}, attachMsg(k.Address, a.start, a.end, "e2e-d", "e2e-d")), "duplicate deal id")
-	chain.RequireRefused(t, "no deal id", c.Submit(t, k, chain.TxOptions{}, attachMsg(k.Address, a.start, a.end)), "at least one deal id is required")
+	chain.RequireRefused(t, "replicas with no node id", c.Submit(t, k, chain.TxOptions{}, attachMsg(k.Address, "", 1, width, "1")), "node id length must be")
+	chain.RequireRefused(t, "no deal id", c.Submit(t, k, chain.TxOptions{}, attachMsg(k.Address, "e2e-archiver", 1, width)), "at least one deal id is required")
+	chain.RequireRefused(t, "duplicate deal id", c.Submit(t, k, chain.TxOptions{}, attachMsg(k.Address, "e2e-archiver", 1, width, "7", "7")), "duplicate deal id")
+	chain.RequireRefused(t, "a deal id that is not decimal", c.Submit(t, k, chain.TxOptions{}, attachMsg(k.Address, "e2e-archiver", 1, width, "e2e-1")), "is not a decimal x/storage deal id")
 }
 
-func lastArchived(t *testing.T, c *chain.Chain) int64 {
-	t.Helper()
-	var r struct {
-		LastArchivedHeight chain.Int `json:"last_archived_height"`
+// TestArchive_attestRangeRefusals: state-free rules of the keeper come before
+// the archiver is looked up: a range must be one of the canonical ranges
+// (start at a multiple of range_blocks plus 1, exactly range_blocks long), a
+// piece may not exceed max_piece_bytes, and a range that ends at or after
+// the executing block is not finalised.
+func TestArchive_attestRangeRefusals(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	k := c.FundedValidator(t, 1, chain.Orama(1))
+	width := rangeBlocks(t, c)
+	off := newAttestation(t, width, 0, "e2e-archiver")
+	off.start, off.end = 2, width+1
+	chain.RequireRefused(t, "a range that does not start at a multiple plus 1", c.Submit(t, k, chain.TxOptions{}, off.msg(k.Address)), "height range is not a canonical range")
+	short := newAttestation(t, width, 0, "e2e-archiver")
+	short.end = width - 1
+	chain.RequireRefused(t, "a range shorter than range_blocks", c.Submit(t, k, chain.TxOptions{}, short.msg(k.Address)), "height range is not a canonical range")
+	huge := newAttestation(t, width, 0, "e2e-archiver")
+	var params struct {
+		Params struct {
+			MaxPieceBytes chain.Int `json:"max_piece_bytes"`
+		} `json:"params"`
 	}
-	c.Query(t, c.Node(t, 0), &r, "archive", "last-archived-height")
-	return r.LastArchivedHeight.Int64()
+	c.Query(t, c.Node(t, 0), &params, "archive", "params")
+	huge.pieceBytes = uint64(params.Params.MaxPieceBytes.Int64()) + 1
+	huge.real = (huge.pieceBytes + pieceLeafSize - 1) / pieceLeafSize
+	huge.pad = uint64(1)
+	for huge.pad < huge.real {
+		huge.pad <<= 1
+	}
+	chain.RequireRefused(t, "a piece over max_piece_bytes", c.Submit(t, k, chain.TxOptions{}, huge.msg(k.Address)), "larger than max_piece_bytes")
+	future := newAttestation(t, width, c.Height(t)/width+1, "e2e-archiver")
+	chain.RequireRefused(t, "a range in the future", c.Submit(t, k, chain.TxOptions{}, future.msg(k.Address)), "height range is not finalized")
+	chain.RequireRefused(t, "replicas for a range in the future", c.Submit(t, k, chain.TxOptions{}, attachMsg(k.Address, "e2e-archiver", future.start, future.end, "1")), "height range is not finalized")
+}
+
+// TestArchive_onlyAnActiveArchiverAttests: the signer of MsgAttest and
+// MsgAttachReplicas must be the hot key of an active node with a bonded
+// ARCHIVER role, which no account of a run chain can be (a role bond is a bank
+// balance no run account holds, and a range is decided only by three such
+// operators). So the first attestation that pins a range, three archivers
+// and three replica deals archiving it, overlapping and conflicting
+// attestations are blocked; what is reachable is the refusal of an unknown
+// node, of a node that registered the ARCHIVER role and never bonded it, and
+// of a node of another role, for a finalised canonical range.
+func TestArchive_onlyAnActiveArchiverAttests(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	k := c.FundedValidator(t, chain.OperatorNode, chain.Orama(1))
+	c.EnsureOperator(t, k)
+	width := rangeBlocks(t, c)
+	if c.Height(t) <= width {
+		harness.SkipNotApplicable(t, fmt.Sprintf("the run chain is at height %d and the first canonical range ends at %d: it applies once the chain is that old", c.Height(t), width))
+	}
+	archiver := c.RegisterProvenNode(t, k, []string{chain.RoleArchiver}, "archiver")
+	relay := c.RegisterProvenNode(t, k, []string{chain.RoleRelay}, "relay")
+	cases := map[string]string{"an unknown node": chain.UniqueID(t, "e2e-none-"), "an ARCHIVER node with no bond": archiver.ID, "a relay node": relay.ID}
+	for name, id := range cases {
+		want := "has no active ARCHIVER role"
+		if strings.Contains(name, "unknown") {
+			want = "not found"
+		}
+		a := newAttestation(t, width, 0, id)
+		chain.RequireRefused(t, "attest by "+name, c.Submit(t, k, chain.TxOptions{}, a.msg(k.Address)), want)
+		chain.RequireRefused(t, "replicas by "+name, c.Submit(t, k, chain.TxOptions{}, attachMsg(k.Address, id, a.start, a.end, "1")), want)
+	}
+	c.RequireInvariants(t, "refused archive attestations")
 }
 
 // TestArchive_retainHeightQuery: the retain height is the lower of the last

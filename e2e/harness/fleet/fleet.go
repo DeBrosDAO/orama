@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -156,7 +157,7 @@ func (s *recordedShell) Put(ctx context.Context, path string, data []byte, mode 
 	err := s.inner.Put(ctx, path, data, mode)
 	rec := evidence.Record{
 		Kind: evidence.KindSSH, Test: s.test, Summary: fmt.Sprintf("%s: put %s (%d bytes, mode %o)", s.node.Name, path, len(data), mode),
-		DurationMS: time.Since(start).Milliseconds(), Input: string(data),
+		DurationMS: time.Since(start).Milliseconds(), Input: fileDigest(data),
 	}
 	return s.record(rec, err)
 }
@@ -166,7 +167,7 @@ func (s *recordedShell) Get(ctx context.Context, path string) ([]byte, error) {
 	data, err := s.inner.Get(ctx, path)
 	rec := evidence.Record{
 		Kind: evidence.KindSSH, Test: s.test, Summary: fmt.Sprintf("%s: get %s (%d bytes)", s.node.Name, path, len(data)),
-		DurationMS: time.Since(start).Milliseconds(), Output: string(data),
+		DurationMS: time.Since(start).Milliseconds(), Output: fileDigest(data),
 	}
 	return data, s.record(rec, err)
 }
@@ -181,6 +182,13 @@ func (s *recordedShell) record(rec evidence.Record, opErr error) error {
 		return errors.Join(opErr, fmt.Errorf("failed to record evidence for %s: %w", s.node.Name, recErr))
 	}
 	return opErr
+}
+
+// fileDigest stands in for a transferred file's contents in the evidence: files the harness moves
+// include sealed validator-key backups and migration bundles, which the redactor cannot recognise,
+// so the evidence names the file by its digest and never holds its bytes.
+func fileDigest(data []byte) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 }
 
 func stderrSuffix(stderr string) string {

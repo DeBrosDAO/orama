@@ -169,33 +169,53 @@ func (c *Chain) EnsureOperator(t testing.TB, k Key) {
 	}
 }
 
-// RegisterTestNode registers a node for operator k with one fresh ed25519
-// binding per service and a fresh hot key, and retires it at cleanup (which
-// releases its deposit: x/nodes RetireNode). It returns the node id and the
-// bindings.
-func (c *Chain) RegisterTestNode(t testing.TB, k Key, roles []string, services ...string) (string, []Binding) {
-	t.Helper()
-	hot := c.NewKey(t, k.Node, "e2e-hot")
-	return c.RegisterNodeWithHotKey(t, k, hot.Address, roles, services...)
+// TestNode is a node a test registered: its id, its hot key and the service
+// bindings it was registered with (the hot-key binding is not among them).
+type TestNode struct {
+	ID       string
+	HotKey   string
+	Bindings []Binding
 }
 
-// RegisterNodeWithHotKey is RegisterTestNode with a chosen hot key (e.g. a
-// funded validator's address, so the hot-key-only messages can be signed).
-func (c *Chain) RegisterNodeWithHotKey(t testing.TB, k Key, hot string, roles []string, services ...string) (string, []Binding) {
+// RegisterTestNode registers a node for operator k with one fresh ed25519
+// binding per service and a fresh hot key that proved it holds itself
+// (HotKeyBinding), and retires it at cleanup (which releases its deposit:
+// x/nodes RetireNode). It returns the node id and the service bindings.
+func (c *Chain) RegisterTestNode(t testing.TB, k Key, roles []string, services ...string) (string, []Binding) {
 	t.Helper()
-	id := UniqueID(t, "e2e-node-")
+	n := c.RegisterProvenNode(t, k, roles, services...)
+	return n.ID, n.Bindings
+}
+
+// RegisterProvenNode is RegisterTestNode returning the node with its hot key.
+func (c *Chain) RegisterProvenNode(t testing.TB, k Key, roles []string, services ...string) TestNode {
+	t.Helper()
+	hot, proof := HotKeyBinding(t, c.ID, k.Address)
+	n := TestNode{ID: UniqueID(t, "e2e-node-"), HotKey: hot, Bindings: c.serviceBindings(t, k, services)}
+	c.registerNode(t, k, NodeSpec{Operator: k.Address, NodeID: n.ID, Roles: roles, HotKey: hot,
+		Bindings: append(append([]Binding{}, n.Bindings...), proof)})
+	return n
+}
+
+func (c *Chain) serviceBindings(t testing.TB, k Key, services []string) []Binding {
 	var bindings []Binding
 	for _, s := range services {
 		bindings = append(bindings, Ed25519Binding(t, c.ID, k.Address, s))
 	}
-	spec := NodeSpec{Operator: k.Address, NodeID: id, Roles: roles, HotKey: hot, Bindings: bindings,
-		Endpoints: []string{fmt.Sprintf("https://%s:31013", k.Node.PublicIP)}}
+	return bindings
+}
+
+// registerNode submits spec with a hostname endpoint of its own (x/nodes
+// refuses a public IP another live node holds, and every test node of a
+// run shares its operator's server) and retires the node at cleanup.
+func (c *Chain) registerNode(t testing.TB, k Key, spec NodeSpec) {
+	t.Helper()
+	spec.Endpoints = []string{fmt.Sprintf("https://%s.example.com:31013", spec.NodeID)}
 	r := c.Submit(t, k, TxOptions{}, RegisterNodeMsg(spec))
 	if !r.OK() {
-		t.Fatalf("failed to register node %s: %s", id, r)
+		t.Fatalf("failed to register node %s: %s", spec.NodeID, r)
 	}
-	t.Cleanup(func() { c.retireAtCleanup(t, k, id) })
-	return id, bindings
+	t.Cleanup(func() { c.retireAtCleanup(t, k, spec.NodeID) })
 }
 
 // retireAtCleanup retires a node the test registered, unless the test did.

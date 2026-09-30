@@ -209,3 +209,50 @@ func NodeByHost(f *fleet.Fleet, host string) (fleet.Node, error) {
 	}
 	return fleet.Node{}, fmt.Errorf("%q is no member of run %s", host, f.State.RunID)
 }
+
+// Unprivileged is an account with no privileges: `orama` commands that need
+// root refuse it with the usage code and MustBeRoot.
+const (
+	Unprivileged = "nobody"
+	MustBeRoot   = "must be run as root"
+)
+
+// OnNodeUnprivileged runs `orama <args>` on n as Unprivileged, with a HOME it
+// cannot write (a refused command must not need one).
+func OnNodeUnprivileged(t testing.TB, f *fleet.Fleet, n fleet.Node, args ...string) fleet.Output {
+	t.Helper()
+	return f.Exec(t, n, "sudo -u "+Unprivileged+" env HOME=/nonexistent "+OramaCommand(args...))
+}
+
+// ExpectNodeExit fails unless out, the result of a command run on a node,
+// exited want and printed every one of the fragments (ExpectExit for a
+// node-side command).
+func ExpectNodeExit(t testing.TB, what string, out fleet.Output, want int, fragments ...string) {
+	t.Helper()
+	all := out.Stdout + out.Stderr
+	if out.Exit != want {
+		t.Fatalf("%s: exit %d, want %d:\n%s", what, out.Exit, want, all)
+	}
+	for _, frag := range fragments {
+		if !strings.Contains(all, frag) {
+			t.Errorf("%s: output lacks %q:\n%s", what, frag, all)
+		}
+	}
+}
+
+// systemd states of a unit as `systemctl is-active` and `is-enabled` print them.
+const (
+	UnitActive   = "active"
+	UnitInactive = "inactive"
+	UnitDisabled = "disabled"
+)
+
+// Prefixes of the files the validator key tests write on a node (each name
+// gets a random suffix and is removed at cleanup).
+const (
+	TmpKeyBackup     = "/tmp/e2e-keybackup-"
+	TmpMigrateBundle = "/tmp/e2e-migrate-"
+	TmpRestoreBundle = "/tmp/e2e-restore-"
+	// NoSuchFile is a path nothing creates, for refusals that must not read it.
+	NoSuchFile = "/e2e-no-such-file"
+)

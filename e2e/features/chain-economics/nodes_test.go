@@ -84,7 +84,7 @@ func TestNodesOperator_registerIsPermanentAndUnique(t *testing.T) {
 
 // TestNodesRegister_happyPathLocksDepositFromEarnings: a node with two roles,
 // an ed25519 and a secp256k1 binding, a hot key that is not the operator and
-// a public endpoint is registered in status REGISTERED (no role bonded yet),
+// proved it holds itself (its own "hot-key" binding) and a public endpoint is registered in status REGISTERED (no role bonded yet),
 // its deposit is locked under nodes/node/<id> (paid from earnings: the
 // operator's bank balance is empty), and retiring it releases the deposit.
 func TestNodesRegister_happyPathLocksDepositFromEarnings(t *testing.T) {
@@ -92,13 +92,13 @@ func TestNodesRegister_happyPathLocksDepositFromEarnings(t *testing.T) {
 	c := chain.New(t)
 	k := operator(t, c)
 	id := chain.UniqueID(t, "e2e-node-")
-	hot := c.NewKey(t, k.Node, "e2e-hot")
-	spec := chain.NodeSpec{Operator: k.Address, NodeID: id, Roles: []string{chain.RoleStorage, chain.RoleRelay}, HotKey: hot.Address,
-		Bindings:  []chain.Binding{chain.Ed25519Binding(t, c.ID, k.Address, "relay"), chain.Secp256k1Binding(t, c.ID, k.Address, "storage")},
+	hot, proof := chain.HotKeyBinding(t, c.ID, k.Address)
+	spec := chain.NodeSpec{Operator: k.Address, NodeID: id, Roles: []string{chain.RoleStorage, chain.RoleRelay}, HotKey: hot,
+		Bindings:  []chain.Binding{chain.Ed25519Binding(t, c.ID, k.Address, "relay"), chain.Secp256k1Binding(t, c.ID, k.Address, "storage"), proof},
 		Endpoints: []string{fmt.Sprintf("https://%s:31013", k.Node.PublicIP), "relay.example.com:443"}, Region: "eu-central"}
 	r := chain.RequireOK(t, "register node", c.Submit(t, k, chain.TxOptions{}, chain.RegisterNodeMsg(spec)))
 	v := queryNode(t, c, id)
-	if v.Node.Status != "NODE_STATUS_REGISTERED" || v.Node.Operator != k.Address || v.Node.HotKey != hot.Address || len(v.Node.Bindings) != 2 {
+	if v.Node.Status != "NODE_STATUS_REGISTERED" || v.Node.Operator != k.Address || v.Node.HotKey != hot || len(v.Node.Bindings) != 3 {
 		t.Errorf("node record %+v", v.Node)
 	}
 	dep := deposit(t, c, "nodes/node/"+id)
@@ -159,11 +159,17 @@ type refusal struct {
 
 func registerRefusals(t *testing.T, c *chain.Chain, k chain.Key) map[string]refusal {
 	t.Helper()
-	hot := c.NewKey(t, k.Node, "e2e-hot").Address
+	hot, proof := chain.HotKeyBinding(t, c.ID, k.Address)
+	// good is a valid registration with mut applied; a binding set mut leaves
+	// non-empty keeps the hot key's proof (without it the chain refuses the
+	// set for that reason, not for the fault under test).
 	good := func(mut func(*chain.NodeSpec)) chain.NodeSpec {
 		s := chain.NodeSpec{Operator: k.Address, NodeID: chain.UniqueID(t, "e2e-bad-"), Roles: []string{chain.RoleRelay}, HotKey: hot,
 			Bindings: []chain.Binding{chain.Ed25519Binding(t, c.ID, k.Address, "relay")}}
 		mut(&s)
+		if len(s.Bindings) > 0 {
+			s.Bindings = append(append([]chain.Binding{}, s.Bindings...), proof)
+		}
 		return s
 	}
 	wrongDomain := chain.SignedEd25519Binding(t, "relay", func(pub []byte) []byte {
@@ -201,9 +207,9 @@ func TestNodesRegister_notAnOperatorRefused(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := nonOperator(t, c)
-	hot := c.NewKey(t, k.Node, "e2e-hot")
+	hot, proof := chain.HotKeyBinding(t, c.ID, k.Address)
 	spec := chain.NodeSpec{Operator: k.Address, NodeID: chain.UniqueID(t, "e2e-node-"), Roles: []string{chain.RoleRelay},
-		HotKey: hot.Address, Bindings: []chain.Binding{chain.Ed25519Binding(t, c.ID, k.Address, "relay")}}
+		HotKey: hot, Bindings: []chain.Binding{chain.Ed25519Binding(t, c.ID, k.Address, "relay"), proof}}
 	r := c.Submit(t, k, chain.TxOptions{}, chain.RegisterNodeMsg(spec))
 	chain.RequireRefused(t, "node of a non-operator", r, "not found")
 }
@@ -217,13 +223,13 @@ func TestNodesRegister_duplicateAndReusedKeysRefused(t *testing.T) {
 	c := chain.New(t)
 	k := operator(t, c)
 	id, bindings := c.RegisterTestNode(t, k, []string{chain.RoleRelay}, "relay")
-	hot := c.NewKey(t, k.Node, "e2e-hot2")
-	sameID := chain.NodeSpec{Operator: k.Address, NodeID: id, Roles: []string{chain.RoleRelay}, HotKey: hot.Address,
-		Bindings: []chain.Binding{chain.Ed25519Binding(t, c.ID, k.Address, "relay")}}
+	hot, proof := chain.HotKeyBinding(t, c.ID, k.Address)
+	sameID := chain.NodeSpec{Operator: k.Address, NodeID: id, Roles: []string{chain.RoleRelay}, HotKey: hot,
+		Bindings: []chain.Binding{chain.Ed25519Binding(t, c.ID, k.Address, "relay"), proof}}
 	chain.RequireRefused(t, "same node id", c.Submit(t, k, chain.TxOptions{}, chain.RegisterNodeMsg(sameID)), "already exists")
 	reuse := sameID
 	reuse.NodeID = chain.UniqueID(t, "e2e-node-")
-	reuse.Bindings = bindings
+	reuse.Bindings = append(append([]chain.Binding{}, bindings...), proof)
 	chain.RequireRefused(t, "live pubkey on a second node", c.Submit(t, k, chain.TxOptions{}, chain.RegisterNodeMsg(reuse)), "cannot be reused")
 	chain.RequireOK(t, "retire", c.Submit(t, k, chain.TxOptions{}, chain.RetireNodeMsg(k.Address, id)))
 	chain.RequireRefused(t, "revoked pubkey after retire", c.Submit(t, k, chain.TxOptions{}, chain.RegisterNodeMsg(reuse)), "cannot be reused")

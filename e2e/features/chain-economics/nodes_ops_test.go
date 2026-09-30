@@ -20,33 +20,37 @@ func nodeMsg(typ string, fields map[string]any) chain.Msg {
 // TestNodesUpdate_rotatesHotKeyBindingsAndEndpoints: MsgUpdateNode rotates the
 // hot key, replaces the whole binding set (the replaced pubkey is revoked for
 // good) and the endpoints; an update that changes nothing, a hot key equal
-// to the operator, and an update by another account are refused
+// to the operator or a new hot key that did not sign its own binding, and an
+// update by another account are refused
 // (docs/CHAIN.md "x/nodes" Messages).
 func TestNodesUpdate_rotatesHotKeyBindingsAndEndpoints(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := operator(t, c)
 	id, old := c.RegisterTestNode(t, k, []string{chain.RoleRelay}, "relay")
-	newHot := c.NewKey(t, k.Node, "e2e-hot-new")
+	newHot, newProof := chain.HotKeyBinding(t, c.ID, k.Address)
 	fresh := chain.Ed25519Binding(t, c.ID, k.Address, "relay")
-	update := nodeMsg("MsgUpdateNode", map[string]any{"operator": k.Address, "node_id": id, "hot_key": newHot.Address,
-		"bindings": []any{fresh.JSON()}, "set_endpoints": true, "endpoints": []string{"relay-new.example.com:443"},
+	update := nodeMsg("MsgUpdateNode", map[string]any{"operator": k.Address, "node_id": id, "hot_key": newHot,
+		"bindings": []any{fresh.JSON(), newProof.JSON()}, "set_endpoints": true, "endpoints": []string{"relay-new.example.com:443"},
 		"set_region_hint": true, "region_hint": "eu-west"})
 	chain.RequireOK(t, "update node", c.Submit(t, k, chain.TxOptions{}, update))
 	v := queryNode(t, c, id)
-	if v.Node.HotKey != newHot.Address || len(v.Node.Endpoints) != 1 || v.Node.Endpoints[0] != "relay-new.example.com:443" || v.Node.RegionHint != "eu-west" {
+	if v.Node.HotKey != newHot || len(v.Node.Endpoints) != 1 || v.Node.Endpoints[0] != "relay-new.example.com:443" || v.Node.RegionHint != "eu-west" {
 		t.Errorf("node after update %+v", v.Node)
 	}
 	nothing := nodeMsg("MsgUpdateNode", map[string]any{"operator": k.Address, "node_id": id})
 	chain.RequireRefused(t, "update that changes nothing", c.Submit(t, k, chain.TxOptions{}, nothing), "update changes nothing")
 	selfHot := nodeMsg("MsgUpdateNode", map[string]any{"operator": k.Address, "node_id": id, "hot_key": k.Address})
-	chain.RequireRefused(t, "hot key = operator", c.Submit(t, k, chain.TxOptions{}, selfHot), "hot key must differ from the operator")
+	chain.RequireRefused(t, "hot key = operator", c.Submit(t, k, chain.TxOptions{}, selfHot), "hot-key")
+	unproven, _ := chain.HotKeyBinding(t, c.ID, k.Address)
+	noProof := nodeMsg("MsgUpdateNode", map[string]any{"operator": k.Address, "node_id": id, "hot_key": unproven})
+	chain.RequireRefused(t, "a new hot key that proved nothing", c.Submit(t, k, chain.TxOptions{}, noProof), "hot-key")
 	other := c.FundedValidator(t, 1, chain.Orama(1))
 	foreign := nodeMsg("MsgUpdateNode", map[string]any{"operator": other.Address, "node_id": id, "set_region_hint": true, "region_hint": "x"})
 	chain.RequireRefused(t, "update by another account", c.Submit(t, other, chain.TxOptions{}, foreign), "signer is not the operator")
-	hot2 := c.NewKey(t, k.Node, "e2e-hot-3")
+	hot2, proof2 := chain.HotKeyBinding(t, c.ID, k.Address)
 	stale := chain.NodeSpec{Operator: k.Address, NodeID: chain.UniqueID(t, "e2e-node-"), Roles: []string{chain.RoleRelay},
-		HotKey: hot2.Address, Bindings: old}
+		HotKey: hot2, Bindings: append(append([]chain.Binding{}, old...), proof2)}
 	chain.RequireRefused(t, "rotated-out pubkey on a new node", c.Submit(t, k, chain.TxOptions{}, chain.RegisterNodeMsg(stale)), "cannot be reused")
 	c.RequireInvariants(t, "a node update")
 }

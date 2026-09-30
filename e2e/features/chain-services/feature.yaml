@@ -3,9 +3,11 @@
 # boundaries; ExtendDeal rules; deal allowances capping spend, piece size,
 # duration and replicas, revoke and expiry; Accept/Decline/SubmitProofs/
 # ReleaseReplica only by the node's hot key; the Slot, Authorization,
-# Challenges and EpochMint queries through abci_query), x/archive (the first
-# attestation pins a range; quorum of 3 archivers + 3 deal ids; overlap,
-# finality and shape refusals; retain height), and x/relay (cross-certified
+# Challenges and EpochMint queries through abci_query), x/archive (MsgAttest
+# and MsgAttachReplicas shape, canonical-range, piece-size, finality and
+# active-ARCHIVER refusals; the pinning, quorum and overlap paths need three
+# bonded ARCHIVER nodes whose hot keys sign, which a run chain cannot have:
+# a bond is a bank balance and a hot key has no account; retain height), and x/relay (cross-certified
 # relay registration and its refusals; the reporter set closed to messages).
 # Deal escrow, bonds and bids come from a BANK balance no run account holds
 # (features/internal/chain funds.go), so an accepted slot, a real proof and
@@ -57,7 +59,9 @@ covers:
   claims:
     - "docs/CHAIN.md#x-nodes: orama storage grant is a deal allowance capping spend, piece size, duration and replica count"
     - "docs/CHAIN.md: accept and decline are signed by the node's hot key"
-    - "docs/CHAIN.md#history-archiver: x/archive pins the first attestation; a range is archived with three archivers and three deal ids; overlapping ranges are refused"
+    - "docs/CHAIN.md#history-archiver: a range is one of the canonical ranges of range_blocks; an attestation or replica record is signed by the hot key of an active ARCHIVER node"
+    - "docs/CHAIN.md#history-archiver: REFUSAL PATHS ONLY: orama.archive.v1.MsgAttest; pinning a range and the three-archiver quorum need bonded ARCHIVER nodes (trigger: a funding path exists)"
+    - "docs/CHAIN.md#history-archiver: REFUSAL PATHS ONLY: orama.archive.v1.MsgAttachReplicas; recording deals needs a decided range (trigger: a funding path exists)"
     - "docs/CHAIN.md#the-split: the storage ceiling of a closed epoch is 25% of its schedule; nothing is minted without proofs"
     - "docs/CHAIN.md#storage-provider: REFUSAL PATHS ONLY: orama.storage.v1.MsgCreateDeal; the success path needs a funded bank balance (trigger: a funding path exists)"
     - "docs/CHAIN.md#storage-provider: REFUSAL PATHS ONLY: orama.storage.v1.MsgExtendDeal; the success path needs a funded bank balance (trigger: a funding path exists)"

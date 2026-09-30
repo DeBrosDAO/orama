@@ -5,7 +5,9 @@
 # edge cases (replay, sequence, account number, chain id, signer, tamper,
 # gas, timeout, memo, unfunded payer) and staking funded from earnings
 # (MinDelegation; UndelegateGuard is in chain-core-destructive). Every state-changing step ends with every
-# module's Invariants query on every validator. Transactions are signed on
+# module's Invariants query on every validator (every module the protos give
+# one: emission, fees, houses, market, nodes, power, relay, shielded, storage,
+# token; TestInvariants_everyModuleAnswersOnEveryValidator). Transactions are signed on
 # the node by the validator's own keyring (features/internal/chain).
 # The destructive half (stop/restart catch-up, fee load, export) is
 # chain-core-destructive.
@@ -28,11 +30,14 @@ covers:
     - orama.emission.v1.CurrentEpoch
     - orama.emission.v1.Invariants
     - orama.houses.v1.Invariants
+    - orama.market.v1.Invariants
     - orama.nodes.v1.Invariants
     - orama.relay.v1.Invariants
     - orama.storage.v1.Invariants
     - orama.token.v1.Invariants
     - orama.power.v1.Params
+    - orama.power.v1.Invariants
+    - orama.shielded.v1.Invariants
   claims:
     - "docs/CHAIN.md#x-fees: a fee below base_fee*gas is refused; the base fee is burned in full and paid from earnings when the bank balance is empty"
     - "docs/CHAIN.md#x-fees: a tip is paid from the bank balance only, never from earnings"

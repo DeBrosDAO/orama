@@ -392,7 +392,7 @@ cmd_status() {
 }
 
 # INVARIANT_MODULES must hold on every node (docs/SECURITY_PLAYBOOKS.md). A literal list.
-INVARIANT_MODULES=(emission fees storage nodes relay houses token)
+INVARIANT_MODULES=(emission fees storage nodes relay houses token market power shielded)
 
 cmd_invariants() {
 	local failed=0 n ip name m out
@@ -405,9 +405,11 @@ cmd_invariants() {
 				failed=1
 				continue
 			fi
+			# x/shielded is printed by autocli, which leaves a false boolean out: its members must be present and true.
 			if echo "$out" | python3 -c 'import json,sys
 d=json.load(sys.stdin)
-sys.exit(1 if [k for k,v in d.items() if isinstance(v,bool) and not v] else 0)'; then
+req={"shielded":["balance_matches","pools_non_negative","accumulator_matches"]}.get(sys.argv[1],[])
+sys.exit(1 if req and [k for k in req if d.get(k) is not True] or [k for k,v in d.items() if isinstance(v,bool) and not v] else 0)' "$m"; then
 				printf '%-12s %-9s ok\n' "$name" "$m"
 			else
 				printf '%-12s %-9s BROKEN %s\n' "$name" "$m" "$out"

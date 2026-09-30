@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/crypto"
+
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 )
 
@@ -42,14 +44,15 @@ func randomHex(t *testing.T, n int) string {
 }
 
 func docCases(t *testing.T, c *chain.Chain, s signer, bindingFile string) map[string]docCase {
+	hot, hotFile := hotKeyBinding(t, c, s.k.Address)
 	op, other := s.k.Address, c.Validator(t, c.Node(t, 1)).Address
 	node, cluster := chain.UniqueID(t, "e2e-doc-"), chain.UniqueID(t, "e2e-doc-")
 	return map[string]docCase{
 		"cluster register-onchain": {[]string{"cluster", "register-onchain", "--operator", op, "--id", cluster,
 			"--base-domain", c.F.State.BaseDomain, "--endpoint", c.F.State.GatewayURL}, "/orama.nodes.v1.MsgRegisterCluster"},
 		"cluster retire-onchain": {[]string{"cluster", "retire-onchain", "--operator", op, "--id", cluster}, "/orama.nodes.v1.MsgRetireCluster"},
-		"global register": {[]string{"global", "register", "--operator", op, "--id", node, "--role", "relay", "--hot-key", other,
-			"--binding", bindingFile}, "/orama.nodes.v1.MsgRegisterNode"},
+		"global register": {[]string{"global", "register", "--operator", op, "--id", node, "--role", "relay", "--hot-key", hot,
+			"--binding", bindingFile, "--binding", hotFile}, "/orama.nodes.v1.MsgRegisterNode"},
 		"global bond":     {[]string{"global", "bond", "--operator", op, "--id", node, "--role", "storage", "--amount", "1"}, "/orama.nodes.v1.MsgBondNode"},
 		"global unbond":   {[]string{"global", "unbond", "--operator", op, "--id", node, "--role", "storage", "--amount", "1"}, "/orama.nodes.v1.MsgUnbondNode"},
 		"global capacity": {[]string{"global", "capacity", "--operator", op, "--id", node, "--bytes", "1024"}, "/orama.nodes.v1.MsgDeclareCapacity"},
@@ -76,6 +79,25 @@ func edBinding(t *testing.T, c *chain.Chain, operator string) string {
 	}
 	_, file := bind(t, c.ID, operator, "relay", writeSecret(t, "relay.key", priv.Seed()), "ed25519")
 	return file
+}
+
+// hotKeyBinding makes a fresh secp256k1 hot key, has `orama global bind` sign
+// the "hot-key" binding for operator with it (the proof of possession
+// `orama global register` requires: x/nodes refuses a hot key that did not
+// sign), and returns the key's account address and the binding file. The
+// secret is never used again.
+func hotKeyBinding(t *testing.T, c *chain.Chain, operator string) (string, string) {
+	t.Helper()
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, file := bind(t, c.ID, operator, chain.HotKeyService, writeSecret(t, "hot.key", crypto.FromECDSA(key)), "secp256k1")
+	addr, err := chain.AddressOfPubKey(decodeHex(t, "pubkey", b.Pubkey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return addr, file
 }
 
 // TestOnchainDocs_withoutNodeOnlyPrintTheSignDocument: every chain command of

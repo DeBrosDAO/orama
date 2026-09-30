@@ -1,7 +1,7 @@
 //go:build e2e_fleet
 
 // Package chainwaivers pins the CURRENT, documented absence of the chain
-// surfaces that are built as libraries but not wired into oramad: x/shielded,
+// surfaces that are built as libraries but not wired into oramad:
 // x/inclusion, x/vpnlaunch, x/confidential and x/wasmbindings. Each test is a
 // tripwire: when one of them ships a message, a query, genesis state or vote
 // extensions on the live chain, the matching test turns red and forces real
@@ -21,10 +21,10 @@ import (
 
 // unwired are the module names (proto package segment and genesis key) that
 // have no live surface today (docs/CHAIN.md: "chain/x/inclusion ... oramad
-// does not put them in a block"; "There is no shielded payment path"; "chain/
+// does not put them in a block"; "chain/
 // x/confidential refuses every attestation report"; x/wasmbindings answers
 // NOT_LINKED; x/vpnlaunch is a pure gate).
-var unwired = []string{"shielded", "inclusion", "vpnlaunch", "confidential", "wasmbindings"}
+var unwired = []string{"inclusion", "vpnlaunch", "confidential", "wasmbindings"}
 
 // msgInterface is the interface every sdk.Msg implementation is registered under.
 const msgInterface = "cosmos.base.v1beta1.Msg"
@@ -90,8 +90,8 @@ func liveMsgs(t *testing.T, c *chain.Chain) []string {
 }
 
 // TestUnwired_noMessageOfAnUnwiredModule: the live node registers no message
-// of x/shielded, x/inclusion, x/vpnlaunch, x/confidential or x/wasmbindings
-// (so no shielded payment, no inclusion tx, no attestation can be submitted),
+// of x/inclusion, x/vpnlaunch, x/confidential or x/wasmbindings (so no
+// inclusion tx, no attestation can be submitted),
 // and its orama messages are exactly the ones chain/proto declares: a new
 // message anywhere turns this red until it is added to the coverage universe
 // and tested.
@@ -184,9 +184,10 @@ func TestUnwired_noVoteExtensions(t *testing.T) {
 	}
 }
 
-// TestUnwired_noPublicPaymentPath: with no shielded pool and the norama send
-// restriction, a user cannot pay another user at all (docs/CHAIN.md "Denom
-// and accounts").
+// TestUnwired_noPublicPaymentPath: with the norama send restriction a user
+// cannot pay another user in the public denom (docs/CHAIN.md "Denom and
+// accounts"); the private path between users is x/shielded, tested by
+// chain-shielded.
 func TestUnwired_noPublicPaymentPath(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

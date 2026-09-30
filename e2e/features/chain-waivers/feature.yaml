@@ -1,6 +1,5 @@
 # Stage 8, E2E-37: tripwires for the chain code that is built but not wired
-# into oramad (x/shielded, x/inclusion, x/vpnlaunch, x/confidential,
-# x/wasmbindings). They assert the documented absence on the live chain: no
+# into oramad (x/inclusion, x/vpnlaunch, x/confidential, x/wasmbindings). They assert the documented absence on the live chain: no
 # message registered, no query answered, no genesis state, vote extensions
 # off, no user-to-user payment; and that the orama messages the node
 # registers are exactly those chain/proto declares. A surface that ships
@@ -18,6 +17,6 @@ requires:
 covers:
   claims:
     - "docs/CHAIN.md#modules-wired: x/inclusion bytes are never put in a block (no vote extensions)"
-    - "docs/CHAIN.md#denom-and-accounts: there is no shielded payment path; a user cannot pay another user"
+    - "docs/CHAIN.md#denom-and-accounts: a user cannot pay another user in the public denom; the private path is x/shielded (chain-shielded)"
     - "docs/CHAIN.md#other-fail-closed-pieces: x/confidential accepts no attestation; nothing on chain reaches it"
     - "docs/CHAIN.md#modules-wired: the node registers exactly the orama messages chain/proto declares"

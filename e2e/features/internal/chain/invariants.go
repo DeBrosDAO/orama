@@ -14,7 +14,13 @@ import (
 
 // InvariantModules are the modules with an Invariants query, the same list
 // e2e/scripts/chain-deploy.sh `invariants` checks (docs/SECURITY_PLAYBOOKS.md).
-var InvariantModules = []string{"emission", "fees", "houses", "nodes", "relay", "storage", "token"}
+var InvariantModules = []string{"emission", "fees", "houses", "market", "nodes", "power", "relay", "shielded", "storage", "token"}
+
+// requiredTrue are the members a module's Invariants answer must carry as
+// true. A module without a hand-written query CLI is printed by autocli's
+// amino-JSON encoder, which leaves a false boolean out: for it, an absent
+// member is a broken invariant (x/shielded; the others print every member).
+var requiredTrue = map[string][]string{"shielded": {"balance_matches", "pools_non_negative", "accumulator_matches"}}
 
 // invariantMark separates the modules' answers in one node's output.
 const invariantMark = "__E2E_INVARIANTS__ "
@@ -52,11 +58,20 @@ func brokenOf(t testing.TB, n fleet.Node, module, body string) []string {
 	}
 	broken := []string{}
 	bools := 0
+	detail, _ := doc["detail"].(string)
+	for _, k := range requiredTrue[module] {
+		if v, ok := doc[k].(bool); !ok || !v {
+			broken = append(broken, k+" (false or absent: "+detail+")")
+		}
+	}
+	if len(requiredTrue[module]) > 0 {
+		sort.Strings(broken)
+		return broken
+	}
 	for k, v := range doc {
 		if b, ok := v.(bool); ok {
 			bools++
 			if !b {
-				detail, _ := doc["detail"].(string)
 				broken = append(broken, k+" ("+detail+")")
 			}
 		}

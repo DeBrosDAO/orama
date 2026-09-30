@@ -125,18 +125,19 @@ func revokeAtCleanup(t *testing.T, c *chain.Chain, granter chain.Key, grantee st
 // TestStorageHotKey_onlyTheHotKeyAnswersASlot: MsgAcceptDeal, MsgDeclineDeal,
 // MsgSubmitProofs and MsgReleaseReplica are signed by the node's HOT key
 // (docs/CHAIN.md: "The signer of those two is the node's hot key"): the
-// operator is refused, and the hot key gets past the check to the slot,
-// which does not exist (no deal can be funded on the run chain, so accepting
-// a real slot, a bad proof on a real challenge and the release rate limit
-// are blocked). A proof leaf of the wrong size and a release reason other
+// operator is refused. A hot key that proved it holds itself (the node
+// registers with a hot-key binding made in the test) has no account on the run
+// chain, and a transaction from an account that does not exist is refused
+// before any message runs, so a hot-key-signed message reaching the slot,
+// accepting a real slot, a bad proof on a real challenge and the release rate
+// limit are blocked. A proof leaf of the wrong size and a release reason other
 // than LEGAL are refused before any state is read.
 func TestStorageHotKey_onlyTheHotKeyAnswersASlot(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	op := c.FundedValidator(t, chain.OperatorNode, chain.Orama(1))
 	c.EnsureOperator(t, op)
-	hot := c.FundedValidator(t, 1, chain.Orama(1))
-	id, _ := c.RegisterNodeWithHotKey(t, op, hot.Address, []string{chain.RoleStorage}, "storage")
+	id := c.RegisterProvenNode(t, op, []string{chain.RoleStorage}, "storage").ID
 	const deal = "987654321"
 	leaf := base64.StdEncoding.EncodeToString(make([]byte, leafSize))
 	msgs := func(signer string) map[string]chain.Msg {
@@ -151,16 +152,13 @@ func TestStorageHotKey_onlyTheHotKeyAnswersASlot(t *testing.T) {
 	for name, m := range msgs(op.Address) {
 		chain.RequireRefused(t, name+" by the operator", c.Submit(t, op, chain.TxOptions{}, m), "is not the hot key of node "+id)
 	}
-	for name, m := range msgs(hot.Address) {
-		chain.RequireRefused(t, name+" by the hot key on no slot", c.Submit(t, hot, chain.TxOptions{}, m), "deal "+deal+" slot 0 does not exist")
-	}
-	short := chain.NewMsg("/orama.storage.v1.MsgSubmitProofs", map[string]any{"signer": hot.Address, "node_id": id,
+	short := chain.NewMsg("/orama.storage.v1.MsgSubmitProofs", map[string]any{"signer": op.Address, "node_id": id,
 		"proofs": []any{map[string]any{"deal_id": deal, "slot": 0, "leaf_index": "0", "leaf": leaf[:8]}}})
-	chain.RequireRefused(t, "proof leaf of the wrong size", c.Submit(t, hot, chain.TxOptions{}, short), "leaf is")
-	notLegal := chain.NewMsg("/orama.storage.v1.MsgReleaseReplica", map[string]any{"signer": hot.Address, "node_id": id, "deal_id": deal, "slot": 0, "reason": "RELEASE_REASON_UNSPECIFIED"})
-	chain.RequireRefused(t, "release for no legal reason", c.Submit(t, hot, chain.TxOptions{}, notLegal), "release reason must be LEGAL")
-	unknown := chain.NewMsg("/orama.storage.v1.MsgAcceptDeal", map[string]any{"signer": hot.Address, "node_id": "e2e-no-such-node", "deal_id": deal, "slot": 0})
-	chain.RequireRefused(t, "accept for an unknown node", c.Submit(t, hot, chain.TxOptions{}, unknown), "failed to read hot key of e2e-no-such-node")
+	chain.RequireRefused(t, "proof leaf of the wrong size", c.Submit(t, op, chain.TxOptions{}, short), "leaf is")
+	notLegal := chain.NewMsg("/orama.storage.v1.MsgReleaseReplica", map[string]any{"signer": op.Address, "node_id": id, "deal_id": deal, "slot": 0, "reason": "RELEASE_REASON_UNSPECIFIED"})
+	chain.RequireRefused(t, "release for no legal reason", c.Submit(t, op, chain.TxOptions{}, notLegal), "release reason must be LEGAL")
+	unknown := chain.NewMsg("/orama.storage.v1.MsgAcceptDeal", map[string]any{"signer": op.Address, "node_id": "e2e-no-such-node", "deal_id": deal, "slot": 0})
+	chain.RequireRefused(t, "accept for an unknown node", c.Submit(t, op, chain.TxOptions{}, unknown), "failed to read hot key of e2e-no-such-node")
 	requireNoSlotOrChallenge(t, c, id)
 }
 
