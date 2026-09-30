@@ -424,6 +424,16 @@ func ormGatewayRoutes() []string {
 	return orm.Routes()
 }
 
+// policyInvoke is the policy of the HTTP invoke routes: open (a public function
+// needs no credential; whether a caller may run a private one is the
+// invoker's decision), but a grant narrowed to `fn:name=` is resolved and
+// applied (narrowOpenRoute), so a narrowed wallet runs only its functions.
+var policyInvoke = func() routepolicy.Policy {
+	p := policyOpen
+	p.NarrowedByGrant = true
+	return p
+}()
+
 // functionRoutePolicy is the policy of one operation on /v1/functions/.
 //
 // Invoking is public: the invoker decides whether the caller may run the
@@ -436,16 +446,6 @@ func ormGatewayRoutes() []string {
 // the path's suffix, so `/v1/functions/{fn}/triggers/invoke` and
 // `/v1/functions/secrets/invoke` were "invoke", public, and dispatched to the
 // trigger and secret handlers.
-// policyInvoke is the policy of the HTTP invoke routes: open (a public function
-// needs no credential; whether a caller may run a private one is the
-// invoker's decision), but a grant narrowed to `fn:name=` is resolved and
-// applied (narrowOpenRoute), so a narrowed wallet runs only its functions.
-var policyInvoke = func() routepolicy.Policy {
-	p := policyOpen
-	p.NarrowedByGrant = true
-	return p
-}()
-
 func functionRoutePolicy(r *http.Request) routepolicy.Policy {
 	switch {
 	case serverlesshandlers.IsFunctionAction(r.URL.Path, "invoke"):

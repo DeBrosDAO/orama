@@ -473,7 +473,7 @@ A grant may be narrowed to a resource, and four domains apply it today:
 | Selector | What it matches |
 |----------|-----------------|
 | `pubsub:topic=chat.*` | publish, publish-batch, and the subscribe WebSocket |
-| `fn:name=checkout` | function invocation (HTTP and WebSocket); the invoke route is open to anonymous callers, but a caller presenting a credential whose grant is narrowed is held to the selector |
+| `fn:name=checkout` | function invocation (HTTP and WebSocket); the invoke route is open to anonymous callers, but a caller presenting a credential whose grant is narrowed is held to the selector. The selector bounds the entry points the caller reaches: a function it may run that calls another through `function_invoke` runs that function as its own code, and a socket already open is not re-checked when the grant later narrows |
 | `storage:avatars/*` | upload, get, pin and unpin, against the name the object was uploaded with |
 | `cache:key=sessions/*` | get, mget, put, delete and scan, against `<map>/<key>` |
 
