@@ -104,14 +104,14 @@ SHIELDED_SCENARIO="${SHIELDED_SCENARIO:-}"
 DEFAULT_ASN=16276
 
 # Pinned release artifacts. Each digest is the release's own: the Kubo sha512 is the release's
-# published kubo_v0.38.2_linux-amd64.tar.gz.sha512 (the same file dist.ipfs.tech serves), and its
-# sha256 is the digest GitHub reports for the asset; the cosmovisor sha256 is the one
+# published kubo_<version>_linux-amd64.tar.gz.sha512 (the same file dist.ipfs.tech serves), and its
+# sha256 is the one core/pkg/constants/release_digests.go pins (checked against it below); the cosmovisor sha256 is the one
 # core/pkg/constants/cosmovisor.go pins (checked against it below) and the release's SHA256SUMS.
-KUBO_VERSION="v0.38.2"
+KUBO_VERSION="v0.43.1"
 KUBO_TARBALL="kubo_${KUBO_VERSION}_linux-amd64.tar.gz"
 KUBO_URL="https://github.com/ipfs/kubo/releases/download/${KUBO_VERSION}/${KUBO_TARBALL}"
-KUBO_SHA256="b034a74ddb0cc8f416c2dfe79c8e29044da8b070400b391449a998c8fdae0766"
-KUBO_SHA512="b233313505b686d80a2cb2b137f16cdf52af09561dd06df35284e5982cd9fc6c37e2da82bfad63c4550a62e82044e4d40dc3671c5a5660a34ce33764fc670726"
+KUBO_SHA256="3f2bf974ab2a3ec6d997fac7d8cb46f59983a7cddd0b55ef998e6ce379155fb2"
+KUBO_SHA512="ff53b2428794fc8cca39505d28c15b4cceaef4b90a09284f291f611fcdc8c06399690575fc89cbd4d85ef71f3652581296c6f2e710386f887c8edf36b6e89d71"
 COSMOVISOR_VERSION="v1.7.3"
 COSMOVISOR_TARBALL="cosmovisor-${COSMOVISOR_VERSION}-linux-amd64.tar.gz"
 COSMOVISOR_URL="https://github.com/cosmos/cosmos-sdk/releases/download/cosmovisor%2F${COSMOVISOR_VERSION}/${COSMOVISOR_TARBALL}"
@@ -274,6 +274,10 @@ verify_pins() {
 	fi
 	if ! grep -q "IPFSKuboVersion *= \"$KUBO_VERSION\"" "$core_root/pkg/constants/versions.go"; then
 		echo "core/pkg/constants/versions.go pins another Kubo than $KUBO_VERSION" >&2
+		exit 1
+	fi
+	if ! grep -q "\"amd64\": \"$KUBO_SHA256\"" "$core_root/pkg/constants/release_digests.go"; then
+		echo "the Kubo digest in this script is not the one core/pkg/constants/release_digests.go pins" >&2
 		exit 1
 	fi
 }

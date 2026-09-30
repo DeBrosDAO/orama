@@ -1900,7 +1900,7 @@ REST and Prometheus on loopback), 31010–31013 for public storage (swarm public
 gateway on loopback, provider HTTP public), 31014 for relay metrics on loopback, 31015 for the
 chain indexer's read API on loopback, and 31020–31021
 for a Tor relay and a dirauth. The public Kubo on a global node has no swarm.key,
-announces only pinned content (`Provide.Strategy=pinned` for Kubo v0.38), and
+announces only pinned content (`Provide.Strategy=pinned`, which Kubo has read since v0.38), and
 does not dial or announce private ranges, so it cannot join a cluster's mesh.
 Every setup
 command's output goes to `scripts/localnet/.localnet/setup.log` rather than being discarded, so a

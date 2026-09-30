@@ -17,7 +17,7 @@ import (
 
 // Public Kubo is a second daemon. It is not the cluster's private swarm:
 // there is no swarm.key, private ranges are filtered rather than cleared,
-// and it announces only what a deal pinned. Kubo v0.38 reads Provide.Strategy
+// and it announces only what a deal pinned. Kubo (v0.38 and later) reads Provide.Strategy
 // (the Reprovider.Strategy key is the older name and is not written).
 
 // publicSwarmFilters are the ranges a public daemon must not dial or announce.
