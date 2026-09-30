@@ -12,8 +12,10 @@ import (
 
 	"github.com/DeBrosOfficial/network/migrations"
 	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/rqlite/rqlitetest"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
@@ -105,7 +107,7 @@ func TestPostSchemaSteps_gatingAndAfterReadyGroups(t *testing.T) {
 	if want := []string{"publish this gateway's signing key", "hash plaintext API keys"}; strings.Join(gating, "|") != strings.Join(want, "|") {
 		t.Fatalf("gating steps = %q, want %q", gating, want)
 	}
-	after := g.afterReadySteps(context.Background(), deps)
+	after := g.afterReadySteps(context.Background(), &Config{}, deps)
 	want := []string{
 		"revoke API keys of deleted namespaces",
 		"backfill push token fingerprints",
@@ -150,7 +152,7 @@ func TestRunAfterReady_retriesUntilThePassSucceeds(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		g.runAfterReady(context.Background(), g.afterReadySteps(context.Background(), deps))
+		g.runAfterReady(context.Background(), g.afterReadySteps(context.Background(), &Config{}, deps))
 		close(done)
 	}()
 	select {
@@ -172,7 +174,7 @@ func TestRunAfterReady_waitsForReadiness(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	g.runAfterReady(ctx, g.afterReadySteps(ctx, deps))
+	g.runAfterReady(ctx, g.afterReadySteps(ctx, &Config{}, deps))
 	if backfill.calls != 0 {
 		t.Fatalf("backfill ran %d times before the gateway was ready", backfill.calls)
 	}
@@ -188,7 +190,7 @@ func shortBackoff(t *testing.T) {
 // A gateway whose push subsystem did not come up has no backfill step.
 func TestAfterReadySteps_noPushStoreNoBackfill(t *testing.T) {
 	g, deps := postSchemaGateway(t, openSQLite(t))
-	for _, s := range g.afterReadySteps(context.Background(), deps) {
+	for _, s := range g.afterReadySteps(context.Background(), &Config{}, deps) {
 		if strings.Contains(s.name, "push") {
 			t.Fatalf("unexpected step %q without a push store", s.name)
 		}
@@ -263,5 +265,58 @@ func TestRunAfterReady_aStuckStepDoesNotBlockTheOthers(t *testing.T) {
 	case <-ran:
 	case <-time.After(5 * time.Second):
 		t.Fatal("a failing step kept the next one from running")
+	}
+}
+
+// The storage reference backfill reads tables the migrations create. Started
+// when the handlers were built it ran before them and logged "no such table"
+// at ERROR on every new namespace gateway. It now starts only as an after-ready
+// step, and unpins stay refused from construction until it has loaded.
+func TestAfterReadySteps_storageBackfillStartsOnlyOnceTheSchemaIsReady(t *testing.T) {
+	client, db := rqlitetest.SQLite(t)
+	g, deps := postSchemaGateway(t, db)
+	g.storageHandlers = storage.New(nil, newRQLiteTestLogger(), storage.Config{}, client, client)
+	g.storageHandlers.HoldUntilCIDRefBackfill()
+
+	var start postSchemaStep
+	for _, s := range g.afterReadySteps(t.Context(), &Config{}, deps) {
+		if s.name == "start the storage reference backfill" {
+			start = s
+		}
+	}
+	if start.run == nil {
+		t.Fatal("no step starts the storage reference backfill")
+	}
+
+	// Schema present but the step not run: the backfill must not have started,
+	// and the index must not look ready.
+	migrate(t, db)
+	time.Sleep(200 * time.Millisecond)
+	if err := g.storageHandlers.CIDRefs().CheckReady(t.Context(), ""); !errors.Is(err, storage.ErrRefIndexNotReady) {
+		t.Fatalf("before the step ran: CheckReady = %v, want ErrRefIndexNotReady", err)
+	}
+
+	if err := start.run(t.Context()); err != nil {
+		t.Fatalf("start step: %v", err)
+	}
+	if err := start.run(t.Context()); err != nil {
+		t.Fatalf("a second run of the start step must be a no-op: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for g.storageHandlers.CIDRefs().CheckReady(t.Context(), "") != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the backfill never completed after its step ran")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Without storage handlers there is nothing to backfill.
+func TestAfterReadySteps_noStorageHandlersNoBackfillStep(t *testing.T) {
+	g, deps := postSchemaGateway(t, openSQLite(t))
+	for _, s := range g.afterReadySteps(t.Context(), &Config{}, deps) {
+		if strings.Contains(s.name, "storage") {
+			t.Fatalf("unexpected step %q without storage handlers", s.name)
+		}
 	}
 }

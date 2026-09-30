@@ -233,7 +233,7 @@ func (g *Gateway) startSchemaReadiness(ctx context.Context, cfg *Config, deps *D
 	raftState := func() string { return observedRaftState(ctx, cfg) }
 
 	go g.convergeSchema(ctx, prepare, raftState)
-	go g.runAfterReady(ctx, g.afterReadySteps(ctx, deps))
+	go g.runAfterReady(ctx, g.afterReadySteps(ctx, cfg, deps))
 }
 
 // convergeSchema is startSchemaReadiness's loop, with its two effects injected

@@ -551,6 +551,14 @@ func (h *Handlers) dropRef(ctx context.Context, cid, namespace string) {
 	}
 }
 
+// HoldUntilCIDRefBackfill refuses unpins until StartCIDRefBackfill has loaded
+// the namespace. A gateway whose backfill starts later than its handlers are
+// built (it waits for its schema) calls this at construction, so there is no
+// window in which the index looks ready before the load.
+func (h *Handlers) HoldUntilCIDRefBackfill() {
+	h.refs.pending.Store(true)
+}
+
 // StartCIDRefBackfill loads this namespace's existing pins and deployments
 // into the index ONCE, for the upgrade that introduced it: content pinned by an
 // older gateway has no row until then. Until every live namespace has done so
@@ -570,7 +578,7 @@ func (h *Handlers) dropRef(ctx context.Context, cid, namespace string) {
 // how an operator resolves it). After the backfill the loop applies the unpins
 // deferred while the index was not ready.
 func (h *Handlers) StartCIDRefBackfill(ctx context.Context, namespace string) {
-	h.refs.pending.Store(true)
+	h.HoldUntilCIDRefBackfill()
 	go func() {
 		wait := time.Duration(0)
 		backoff := refBackfillRetryInterval

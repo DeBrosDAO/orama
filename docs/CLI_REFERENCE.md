@@ -3242,10 +3242,12 @@ orama node schema apply [flags]
 
 Apply every embedded migration not yet recorded in schema_migrations.
 
-ALTER TABLE statements that target an already-existing column are tolerated
-(the migration is marked complete). Other errors abort the run with the
-schema in a partially-applied state — re-running is safe because each
-migration is independently versioned.
+Each migration runs as one transaction together with its schema_migrations
+row, so it is applied and recorded, or not applied at all. A statement whose
+effect is already in place (an existing column, table or index, left by an older
+engine that applied migrations statement by statement) is skipped. Any other
+error aborts the run at that migration, which leaves no trace; re-running is
+safe because each migration is independently versioned.
 
 | Flag | Default | Description |
 |------|---------|-------------|

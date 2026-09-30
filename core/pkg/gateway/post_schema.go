@@ -120,7 +120,7 @@ func (g *Gateway) postSchemaSteps(cfg *Config, deps *Dependencies) []postSchemaS
 // runs independently of the others (runAfterReady).
 // life is the gateway's lifetime: the cron scheduler's loop runs under it, not
 // under one attempt's timeout.
-func (g *Gateway) afterReadySteps(life context.Context, deps *Dependencies) []postSchemaStep {
+func (g *Gateway) afterReadySteps(life context.Context, cfg *Config, deps *Dependencies) []postSchemaStep {
 	steps := []postSchemaStep{{
 		name: "revoke API keys of deleted namespaces",
 		run: func(ctx context.Context) error {
@@ -133,6 +133,22 @@ func (g *Gateway) afterReadySteps(life context.Context, deps *Dependencies) []po
 			run: func(ctx context.Context) error {
 				return g.logCount(ctx, "Backfilled push token fingerprints", b.BackfillTokenFP)
 			},
+		})
+	}
+
+	// The storage reference backfill reads this namespace's
+	// ipfs_content_ownership and the registry's ipfs_cid_refs, so it cannot
+	// start before the schema exists: started at construction it logged
+	// "no such table" at ERROR on every new namespace gateway until the first
+	// migration pass finished. Unpins stay refused until it completes
+	// (HoldUntilCIDRefBackfill, called where the handlers are built).
+	if g.storageHandlers != nil {
+		steps = append(steps, postSchemaStep{
+			name: "start the storage reference backfill",
+			run: onceSucceeded(func(context.Context) error {
+				g.storageHandlers.StartCIDRefBackfill(life, ownNamespace(cfg))
+				return nil
+			}),
 		})
 	}
 

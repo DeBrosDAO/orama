@@ -30,6 +30,28 @@ const readyTimeout = 15 * time.Second
 // (database/sql plus the native connection). The node stops when the test ends.
 func Start(t *testing.T) rqlite.Client {
 	t.Helper()
+	httpAddr := StartNode(t)
+
+	// The same parameters the gateway adds (appendRQLiteQueryParams).
+	dsn := "http://" + httpAddr + "?disableClusterDiscovery=true&level=weak"
+	db, err := sql.Open("rqlite", dsn)
+	if err != nil {
+		t.Fatalf("rqlitetest: sql.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	client, err := rqlite.NewClientWithDSN(db, dsn)
+	if err != nil {
+		t.Fatalf("rqlitetest: NewClientWithDSN: %v", err)
+	}
+	return client
+}
+
+// StartNode runs a real single-node rqlited that has elected itself and returns
+// its HTTP address (host:port). The node stops when the test ends. Tests that
+// need the wire itself, for example to put a fault-injecting proxy in front of
+// it, use this; most use Start.
+func StartNode(t *testing.T) string {
+	t.Helper()
 
 	bin, err := exec.LookPath("rqlited")
 	if err != nil {
@@ -56,18 +78,7 @@ func Start(t *testing.T) rqlite.Client {
 		t.Fatalf("rqlitetest: %v\nrqlited stderr:\n%s", err, stderr.String())
 	}
 
-	// The same parameters the gateway adds (appendRQLiteQueryParams).
-	dsn := "http://" + httpAddr + "?disableClusterDiscovery=true&level=weak"
-	db, err := sql.Open("rqlite", dsn)
-	if err != nil {
-		t.Fatalf("rqlitetest: sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	client, err := rqlite.NewClientWithDSN(db, dsn)
-	if err != nil {
-		t.Fatalf("rqlitetest: NewClientWithDSN: %v", err)
-	}
-	return client
+	return httpAddr
 }
 
 func waitLeader(httpAddr string) error {
