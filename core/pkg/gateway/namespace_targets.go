@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
@@ -44,6 +45,15 @@ const namespaceGatewayTargetsQuery = `
 			  AND dn.status = 'active'
 		`
 
+// namespaceTargetLookupTimeout bounds one shared registry read of a
+// namespace's gateways.
+const namespaceTargetLookupTimeout = 10 * time.Second
+
+type namespaceTargetRow struct {
+	IP   string `db:"ip"`
+	Port int    `db:"port"`
+}
+
 // namespaceGatewayTargets reads a namespace's live gateways from the cluster
 // registry. It is a leader read (the registry handle reads at level=weak), not
 // this node's local copy: a node that has not yet applied a freshly provisioned
@@ -54,13 +64,23 @@ func (g *Gateway) namespaceGatewayTargets(ctx context.Context, namespace string)
 	if g.registry == nil {
 		return nil, fmt.Errorf("this gateway has no cluster registry handle to look namespace %q up in", namespace)
 	}
-	var rows []struct {
-		IP   string `db:"ip"`
-		Port int    `db:"port"`
+	// Concurrent misses for one namespace (a hot namespace whose cache entry
+	// just expired) share one registry read. The read is detached from the
+	// request that started it, so that caller hanging up does not fail it for
+	// the others, and bounded on its own.
+	v, err, _ := g.namespaceTargetLookups.Do(namespace, func() (any, error) {
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceTargetLookupTimeout)
+		defer cancel()
+		var rows []namespaceTargetRow
+		if err := g.registry.Query(client.WithInternalAuth(readCtx), &rows, namespaceGatewayTargetsQuery, namespace); err != nil {
+			return nil, fmt.Errorf("read the gateways of namespace %q: %w", namespace, err)
+		}
+		return rows, nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	if err := g.registry.Query(client.WithInternalAuth(ctx), &rows, namespaceGatewayTargetsQuery, namespace); err != nil {
-		return nil, fmt.Errorf("read the gateways of namespace %q: %w", namespace, err)
-	}
+	rows, _ := v.([]namespaceTargetRow)
 	targets := make([]namespaceGatewayTarget, 0, len(rows))
 	for _, row := range rows {
 		ip := strings.TrimSpace(row.IP)

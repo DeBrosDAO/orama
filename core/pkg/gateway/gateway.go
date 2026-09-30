@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/sync/singleflight"
 	"net/http"
 	"reflect"
 	"strings"
@@ -75,6 +76,10 @@ type Gateway struct {
 	// applying a resource selector on the data path is not a registry read per
 	// request. See narrowed_grant.go.
 	narrowedGrants grantCache
+
+	// namespaceTargetLookups collapses concurrent registry reads of one
+	// namespace's gateways (namespace_targets.go).
+	namespaceTargetLookups singleflight.Group
 
 	// shutdownCtx is cancelled by Close. Background work owned by the gateway
 	// derives from it so nothing keeps running against torn-down dependencies.

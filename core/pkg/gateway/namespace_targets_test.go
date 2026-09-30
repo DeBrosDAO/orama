@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -78,5 +80,62 @@ func TestNamespaceGatewayTargets_unknownNamespaceIsNoTargetsNotAnError(t *testin
 func TestNamespaceGatewayTargets_noRegistryIsAnError(t *testing.T) {
 	if _, err := (&Gateway{}).namespaceGatewayTargets(context.Background(), "acme"); err == nil {
 		t.Fatal("a gateway with no registry must say so, not report no gateways")
+	}
+}
+
+// gatedTargetsRegistry holds every lookup until release is closed and counts
+// how many reached it.
+type gatedTargetsRegistry struct {
+	rqlite.Client
+	lookups atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedTargetsRegistry) Query(ctx context.Context, dest any, query string, args ...any) error {
+	if g.lookups.Add(1) == 1 {
+		close(g.entered)
+	}
+	<-g.release
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return g.Client.Query(ctx, dest, query, args...)
+}
+
+// Concurrent misses for one namespace share one registry read.
+func TestNamespaceGatewayTargets_concurrentMissesShareOneRead(t *testing.T) {
+	registry := &gatedTargetsRegistry{Client: targetsDB(t, acmeOnTwoNodes...), entered: make(chan struct{}), release: make(chan struct{})}
+	g := &Gateway{registry: registry}
+	const callers = 6
+
+	counts := make(chan int, callers)
+	lookup := func() {
+		got, err := g.namespaceGatewayTargets(context.Background(), "acme")
+		if err != nil {
+			t.Errorf("namespaceGatewayTargets: %v", err)
+		}
+		counts <- len(got)
+	}
+	go lookup()
+	<-registry.entered
+	for i := 1; i < callers; i++ {
+		go lookup()
+	}
+	// Followers sharing the read cannot be seen waiting; an unshared follower
+	// would show up as a second lookup within this window.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) && registry.lookups.Load() < callers {
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(registry.release)
+
+	for i := 0; i < callers; i++ {
+		if n := <-counts; n != 2 {
+			t.Errorf("a caller got %d targets, want 2", n)
+		}
+	}
+	if n := registry.lookups.Load(); n != 1 {
+		t.Errorf("%d registry reads for %d concurrent callers, want 1", n, callers)
 	}
 }
