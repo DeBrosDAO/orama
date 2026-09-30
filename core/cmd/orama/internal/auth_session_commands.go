@@ -116,8 +116,26 @@ func AuthLogoutOnline(all bool) error {
 	return nil
 }
 
-// endSessionOnGateway revokes the refresh token, and every session when asked.
+// endSessionOnGateway revokes the refresh token and the access token this
+// machine holds, and every session when asked.
+//
+// The access token has to be presented: the refresh token in the body stops a
+// new one being bought, and only the token in the Authorization header tells
+// the gateway which session to end. Without it the access token this machine
+// held kept working until it expired, which is not logging out.
 func endSessionOnGateway(gatewayURL string, store *auth.EnhancedCredentialStore, creds *auth.Credentials, all bool) error {
+	// Revoking every session needs an access token that is good, so it is
+	// renewed if it must be. Revoking one ends the token that is held as it
+	// is: renewing it first would mint the very thing being thrown away, and
+	// one that has expired is already ended.
+	token := strings.TrimSpace(creds.AccessToken)
+	if all {
+		var err error
+		if token, err = auth.Bearer(gatewayURL, store, creds); err != nil {
+			return err
+		}
+	}
+
 	payload, err := json.Marshal(map[string]any{
 		"refresh_token": creds.RefreshToken,
 		"namespace":     creds.Namespace,
@@ -125,15 +143,6 @@ func endSessionOnGateway(gatewayURL string, store *auth.EnhancedCredentialStore,
 	})
 	if err != nil {
 		return fmt.Errorf("encode the request: %w", err)
-	}
-
-	// Revoking every session needs to say who is asking; revoking one needs
-	// only the token being revoked, which is already in the body.
-	token := ""
-	if all {
-		if token, err = auth.Bearer(gatewayURL, store, creds); err != nil {
-			return err
-		}
 	}
 
 	body, status, err := authRequest(http.MethodPost, gatewayURL+"/v1/auth/logout", token, payload)
