@@ -10,7 +10,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"golang.org/x/sync/singleflight"
 	"net/http"
 	"reflect"
 	"strings"
@@ -56,6 +55,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/turn"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 type Gateway struct {

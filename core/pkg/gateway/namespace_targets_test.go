@@ -139,3 +139,39 @@ func TestNamespaceGatewayTargets_concurrentMissesShareOneRead(t *testing.T) {
 		t.Errorf("%d registry reads for %d concurrent callers, want 1", n, callers)
 	}
 }
+
+// The shared read does not belong to the request that started it: that caller
+// hanging up must not fail the lookup for the callers waiting on it.
+func TestNamespaceGatewayTargets_aCancelledLeaderDoesNotFailItsFollowers(t *testing.T) {
+	registry := &gatedTargetsRegistry{Client: targetsDB(t, acmeOnTwoNodes...), entered: make(chan struct{}), release: make(chan struct{})}
+	g := &Gateway{registry: registry}
+
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	leaderDone := make(chan struct{})
+	go func() {
+		defer close(leaderDone)
+		_, _ = g.namespaceGatewayTargets(leaderCtx, "acme")
+	}()
+	<-registry.entered
+
+	type result struct {
+		n   int
+		err error
+	}
+	follower := make(chan result, 1)
+	go func() {
+		got, err := g.namespaceGatewayTargets(context.Background(), "acme")
+		follower <- result{len(got), err}
+	}()
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) && registry.lookups.Load() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	close(registry.release)
+	<-leaderDone
+
+	if r := <-follower; r.err != nil || r.n != 2 {
+		t.Errorf("follower got %d targets, err %v, after the leader hung up; want 2, nil", r.n, r.err)
+	}
+}

@@ -60,9 +60,9 @@ func (h *SQLiteHandler) forwardToHome(w http.ResponseWriter, r *http.Request, bo
 	// request: it re-authenticates the caller, so one that came with a key
 	// and arrived without it was refused there (401) for a request this node
 	// had accepted. A ?api_key= parameter travels in the request URI.
-	for _, h := range forwardedCredentialHeaders {
-		if v := r.Header.Get(h); v != "" {
-			req.Header.Set(h, v)
+	for _, name := range forwardedCredentialHeaders {
+		if v := r.Header.Get(name); v != "" {
+			req.Header.Set(name, v)
 		}
 	}
 	req.Header.Set(forwardHeader, "1")
@@ -94,6 +94,10 @@ func namespaceFromRequest(r *http.Request) string {
 	return ns
 }
 
+// forwardedCredentialHeaders are the credential headers a forward to the home
+// node carries.
+var forwardedCredentialHeaders = []string{"Authorization", "X-API-Key"}
+
 // homeGateway is the overlay address and port of the gateway that serves this
 // namespace on the home node.
 //
@@ -103,10 +107,6 @@ func namespaceFromRequest(r *http.Request) string {
 // on each node (namespace_port_allocations), not on the index gateway, which
 // holds none of the namespace's databases. Only a private address is used, so
 // the hop stays on the overlay.
-// forwardedCredentialHeaders are the credential headers a forward to the home
-// node carries.
-var forwardedCredentialHeaders = []string{"Authorization", "X-API-Key"}
-
 func (h *SQLiteHandler) homeGateway(ctx context.Context, nodeID, namespace string) (string, int, error) {
 	if h.registry == nil {
 		return "", 0, fmt.Errorf("this gateway has no cluster registry handle to find node %s in", nodeID)
