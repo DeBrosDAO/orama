@@ -596,6 +596,12 @@ func TestCheckTenantSQLite_refusesWhatReachesOutsideTheFile(t *testing.T) {
 		"PRAGMA mmap_size=1", "PRAGMA threads=8", "PRAGMA trusted_schema=1",
 		"SELECT * FROM pragma_database_list", `SELECT * FROM "pragma_database_list"`,
 		"SELECT * FROM pragma_hard_heap_limit(1)",
+		// EXPLAIN compiles the statement, and a setting pragma takes effect at
+		// compile time (security review 2026-09-30).
+		"EXPLAIN PRAGMA hard_heap_limit=1", "EXPLAIN QUERY PLAN PRAGMA writable_schema=1",
+		"/*x*/ explain pragma soft_heap_limit=1", "EXPLAIN ATTACH '/x.db' AS x", "EXPLAIN VACUUM INTO '/x.db'",
+		// A string literal is a table name in FROM.
+		"SELECT * FROM 'pragma_database_list'", "SELECT * FROM 'PRAGMA_COMPILE_OPTIONS'",
 		"SELECT 1\x00; VACUUM INTO '/x.db'", "SELECT 1\x01",
 	} {
 		var na *ErrNotAllowed
@@ -613,7 +619,9 @@ func TestCheckTenantSQLite_keywordsAsDataAreAllowed(t *testing.T) {
 		"SELECT * FROM functions", "",
 		"PRAGMA table_info(t)", "PRAGMA foreign_keys = ON", "SELECT 'writable_schema'",
 		"PRAGMA main.table_info(t)", `PRAGMA "user_version" = 3`, "PRAGMA integrity_check",
-		"SELECT * FROM pragma_table_info('t')", "SELECT 'pragma_database_list'",
+		"SELECT * FROM pragma_table_info('t')", "SELECT 'pragma_notes are data'",
+		"EXPLAIN PRAGMA table_info(t)", "EXPLAIN QUERY PLAN SELECT * FROM t", "EXPLAIN SELECT 1",
+		"SELECT * FROM 'pragma_table_info'",
 		"SELECT\t1\r\nFROM t", "SELECT 'hard_heap_limit'",
 		"INSERT INTO t VALUES ('temp_store_directory')",
 	} {

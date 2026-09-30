@@ -275,7 +275,10 @@ func checkTenantPragma(tokens []token) error {
 
 // pragmaFunctionPrefix names SQLite's table-valued pragma functions
 // (`SELECT * FROM pragma_table_info('t')`), which run a pragma without the
-// PRAGMA keyword; they are held to the same allowlist.
+// PRAGMA keyword; they are held to the same allowlist, as a word, a quoted
+// name or a string literal. A string whose whole text is such a name is
+// refused as data too: telling a table name from a value would mean
+// re-implementing SQLite's grammar. Bind it as an argument instead.
 const pragmaFunctionPrefix = "pragma_"
 
 func checkPragmaFunction(name string) error {
@@ -283,10 +286,28 @@ func checkPragmaFunction(name string) error {
 	if !strings.HasPrefix(n, pragmaFunctionPrefix) {
 		return nil
 	}
-	if pragma := strings.TrimPrefix(n, pragmaFunctionPrefix); !tenantAllowedPragmas[pragma] {
+	pragma := strings.TrimPrefix(n, pragmaFunctionPrefix)
+	if !isPragmaName(pragma) {
+		return nil // not a name SQLite could resolve to a pragma function
+	}
+	if !tenantAllowedPragmas[pragma] {
 		return &ErrNotAllowed{Reason: fmt.Sprintf("%s runs PRAGMA %s, which is not available to tenant SQL", n, pragma)}
 	}
 	return nil
+}
+
+// isPragmaName reports whether s could be a pragma's name: lower-case letters,
+// digits and underscores (the text is already case-folded).
+func isPragmaName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // refuseControlBytes refuses a NUL or another control character that is not
@@ -316,38 +337,55 @@ func CheckTenantSQLite(query string) error {
 		return err
 	}
 	tokens := tokenizeSQL(query)
-	var first string
-	vacuum := false
 	for i, tok := range tokens {
 		switch tok.kind {
 		case tokenSemicolon:
 			if hasMoreContent(tokens[i+1:]) {
 				return &ErrNotAllowed{Reason: "one call runs one statement; send them one at a time"}
 			}
-		case tokenQuotedIdent:
+		case tokenWord, tokenQuotedIdent, tokenString:
+			// SQLite reads a string literal as a table name in FROM, so
+			// 'pragma_database_list' runs the pragma as much as the bare word.
 			if err := checkPragmaFunction(tok.text); err != nil {
 				return err
 			}
-		case tokenWord:
-			if err := checkPragmaFunction(tok.text); err != nil {
-				return err
+		}
+	}
+	return checkTenantStatement(statementTokens(tokens))
+}
+
+// statementTokens drops a leading EXPLAIN or EXPLAIN QUERY PLAN: SQLite applies
+// a setting pragma while compiling, so `EXPLAIN PRAGMA hard_heap_limit=1` sets
+// the limit as surely as the pragma itself, and the statement under the
+// EXPLAIN is what has to be judged.
+func statementTokens(tokens []token) []token {
+	if len(tokens) == 0 || tokens[0].kind != tokenWord || !strings.EqualFold(tokens[0].text, "explain") {
+		return tokens
+	}
+	tokens = tokens[1:]
+	if len(tokens) >= 2 && tokens[0].kind == tokenWord && tokens[1].kind == tokenWord &&
+		strings.EqualFold(tokens[0].text, "query") && strings.EqualFold(tokens[1].text, "plan") {
+		tokens = tokens[2:]
+	}
+	return tokens
+}
+
+// checkTenantStatement judges one statement by its first word: ATTACH and
+// DETACH are refused, a PRAGMA must be allowed, and VACUUM may not write INTO.
+func checkTenantStatement(tokens []token) error {
+	if len(tokens) == 0 || tokens[0].kind != tokenWord {
+		return nil
+	}
+	switch first := strings.ToLower(tokens[0].text); first {
+	case "attach", "detach":
+		return &ErrNotAllowed{Reason: fmt.Sprintf("%s is not available to tenant SQL: it reaches another database file", strings.ToUpper(first))}
+	case "pragma":
+		return checkTenantPragma(tokens)
+	case "vacuum":
+		for _, tok := range tokens[1:] {
+			if tok.kind == tokenWord && strings.EqualFold(tok.text, "into") {
+				return &ErrNotAllowed{Reason: "VACUUM INTO is not available to tenant SQL: it writes a file to a path of the caller's choosing"}
 			}
-			if first != "" {
-				if vacuum && strings.EqualFold(tok.text, "into") {
-					return &ErrNotAllowed{Reason: "VACUUM INTO is not available to tenant SQL: it writes a file to a path of the caller's choosing"}
-				}
-				continue
-			}
-			first = strings.ToLower(tok.text)
-			switch first {
-			case "attach", "detach":
-				return &ErrNotAllowed{Reason: fmt.Sprintf("%s is not available to tenant SQL: it reaches another database file", strings.ToUpper(tok.text))}
-			case "pragma":
-				if err := checkTenantPragma(tokens[i:]); err != nil {
-					return err
-				}
-			}
-			vacuum = first == "vacuum"
 		}
 	}
 	return nil
