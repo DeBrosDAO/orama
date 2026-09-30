@@ -152,10 +152,10 @@ func TestAuthorizationMiddleware_ownerReachesAControlRouteThatDoesNotRequireOwne
 	chain, reached := controlChain(g)
 
 	w := httptest.NewRecorder()
-	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/list", "0xowner", "anchat"))
+	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/rate-limit", "0xowner", "anchat"))
 
 	if !*reached {
-		t.Fatalf("an owner was refused namespace list: %d %s", w.Code, strings.TrimSpace(w.Body.String()))
+		t.Fatalf("an owner was refused the namespace settings: %d %s", w.Code, strings.TrimSpace(w.Body.String()))
 	}
 	if registry.queries == 0 {
 		t.Fatal("the owner's grant was not read")
@@ -167,7 +167,7 @@ func TestAuthorizationMiddleware_aWalletWithNoGrantIsRefusedTheControlPlane(t *t
 	chain, reached := controlChain(g)
 
 	w := httptest.NewRecorder()
-	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/list", "0xstranger", "anchat"))
+	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/rate-limit", "0xstranger", "anchat"))
 
 	if *reached || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), CodeScopeMissing) {
 		t.Fatalf("reached %v, status %d, body %s; want 403 %s", *reached, w.Code, strings.TrimSpace(w.Body.String()), CodeScopeMissing)
@@ -186,9 +186,29 @@ func TestAuthorizationMiddleware_developerReachesDeployAndNotTheNamespace(t *tes
 
 	chain, reached = controlChain(g)
 	w = httptest.NewRecorder()
-	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/list", "0xdev", "anchat"))
+	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/rate-limit", "0xdev", "anchat"))
 	if *reached || w.Code != http.StatusForbidden {
-		t.Fatalf("a developer listed namespaces: reached %v status %d %s", *reached, w.Code, strings.TrimSpace(w.Body.String()))
+		t.Fatalf("a developer reached the namespace settings: reached %v status %d %s", *reached, w.Code, strings.TrimSpace(w.Body.String()))
+	}
+}
+
+// Listing the namespaces a wallet owns is about the wallet: a wallet holding no
+// grant where its session is (the lobby) reaches it, and a key does not
+// (stagenet e2e, 2026-09-30: the owner's list from the lobby was a 403).
+func TestAuthorizationMiddleware_namespaceListNeedsAWalletNotAGrant(t *testing.T) {
+	g, _ := controlPlaneGateway(t, "")
+	chain, reached := controlChain(g)
+	w := httptest.NewRecorder()
+	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/list", "0xstranger", "anchat"))
+	if !*reached {
+		t.Fatalf("a wallet with no grant was refused its own list: %d %s", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+
+	chain, reached = controlChain(g)
+	w = httptest.NewRecorder()
+	chain.ServeHTTP(w, grantWalletRequest(http.MethodGet, "/v1/namespace/list", "ak_notawallet", "anchat"))
+	if *reached {
+		t.Fatalf("a key-subject token reached the wallet's list: status %d", w.Code)
 	}
 }
 

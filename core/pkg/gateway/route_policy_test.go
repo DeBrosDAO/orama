@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -335,6 +336,26 @@ func TestRoutePolicy_theNodeSelfRegistrationPathsMatchTheContract(t *testing.T) 
 		if !found {
 			t.Errorf("pkg/nodeapi says a node posts to %s, and the gateway serves no such route — "+
 				"every node's registration would 404", path)
+		}
+	}
+}
+
+// Deleting and listing namespaces have handlers only on the index gateway.
+// Asked on ns-<name>, they used to be proxied to that namespace's gateway,
+// which answered 404 (stagenet e2e, 2026-09-30); they are served on the index,
+// with the namespace pinned from the subdomain.
+func TestDomainRouting_namespaceDeleteAndListStayOnTheIndex(t *testing.T) {
+	g := &Gateway{cfg: &Config{BaseDomain: "example.test"}}
+	for _, path := range []string{"/v1/namespace/delete", "/v1/namespace/list"} {
+		var pinned any
+		next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			pinned = r.Context().Value(CtxKeyNamespaceOverride)
+		})
+		r := httptest.NewRequest(http.MethodDelete, "https://ns-acme.example.test"+path, nil)
+		r.Host = "ns-acme.example.test"
+		g.domainRoutingMiddleware(next).ServeHTTP(httptest.NewRecorder(), r)
+		if pinned != "acme" {
+			t.Errorf("%s on ns-acme: served with namespace %v, want acme on the index gateway", path, pinned)
 		}
 	}
 }

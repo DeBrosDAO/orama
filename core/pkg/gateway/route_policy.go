@@ -205,9 +205,16 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(control(auth.DomainMembers, auth.ActionWrite), "/v1/deployments/grants")
 
 	// A namespace's own settings, and its deletion.
-	t.Add(control(auth.DomainNamespace, auth.ActionRead), "/v1/namespace/list")
+	//
+	// Deletion is MainGateway: it tears down the cluster a namespace gateway
+	// runs on, and only the index gateway has the handler, so proxied from
+	// ns-<name> it was a 404 (stagenet e2e, 2026-09-30). The namespace comes
+	// from the subdomain, and the credential must still belong to it.
+	namespaceDeletion := control(auth.DomainNamespace, auth.ActionWrite)
+	namespaceDeletion.MainGateway = true
+	t.Add(namespaceDeletion, "/v1/namespace/delete")
 	t.Add(control(auth.DomainNamespace, auth.ActionWrite),
-		"/v1/namespace/delete", "/v1/namespace/rate-limit", "/v1/namespace/session-policy",
+		"/v1/namespace/rate-limit", "/v1/namespace/session-policy",
 		"/v1/namespace/webrtc/enable", "/v1/namespace/webrtc/disable",
 		"/v1/namespace/webrtc/stealth/enable", "/v1/namespace/webrtc/stealth/disable")
 
@@ -293,6 +300,12 @@ func buildRoutePolicies() *routepolicy.Table {
 	// express "this wallet is an operator", and open mode includes wallets
 	// that hold no grant at all.
 	t.Add(routepolicy.Policy{Token: routepolicy.WalletToken}, "/v1/namespaces")
+
+	// Listing the namespaces a wallet owns is the same: it is about the
+	// wallet, not about the namespace its session happens to be in, and a
+	// wallet in the lobby holds no grant to require.
+	// MainGateway: the registry of who owns what is the index gateway's.
+	t.Add(routepolicy.Policy{Token: routepolicy.WalletToken, MainGateway: true}, "/v1/namespace/list")
 
 	// Scoped API-key management operates on the MAIN cluster registry, where
 	// keys are validated. A namespace gateway's own RQLite has no authoritative
