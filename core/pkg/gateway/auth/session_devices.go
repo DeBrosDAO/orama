@@ -194,11 +194,11 @@ func (s *Service) EnrolDevice(ctx context.Context, namespace, subject string, ke
 	if err != nil {
 		return nil, err
 	}
-	return s.settleEnrolment(ctx, namespace, subject, d, state, approvedBy)
+	return s.settleEnrolment(ctx, subject, d, state, approvedBy)
 }
 
 // settleEnrolment decides what an enrolment found already there means.
-func (s *Service) settleEnrolment(ctx context.Context, namespace, subject string, d *SessionDevice, want DeviceState, approvedBy string) (*SessionDevice, error) {
+func (s *Service) settleEnrolment(ctx context.Context, subject string, d *SessionDevice, want DeviceState, approvedBy string) (*SessionDevice, error) {
 	switch {
 	case d.Subject != subject:
 		return nil, ErrDeviceBelongsToAnother
@@ -208,7 +208,17 @@ func (s *Service) settleEnrolment(ctx context.Context, namespace, subject string
 		if err := s.activateDevice(ctx, d.ID, approvedBy); err != nil {
 			return nil, err
 		}
-		return s.Device(ctx, namespace, d.ID)
+		// The leader has acknowledged the activation, and reading the row
+		// back goes through the local node (level=none), which can still
+		// hold the pending row: a stale read there answered an approved
+		// device as still pending (stagenet, 2026-09-30).
+		activated := *d
+		activated.State = DeviceStateActive
+		activated.ActivatedAt = time.Now().UTC()
+		if approvedBy != "" {
+			activated.ApprovedBy = approvedBy
+		}
+		return &activated, nil
 	}
 	return d, nil
 }

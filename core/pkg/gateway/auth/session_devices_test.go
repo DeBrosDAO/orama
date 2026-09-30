@@ -290,3 +290,59 @@ func TestHasActiveDevice_ignoresPendingAndRevoked(t *testing.T) {
 		t.Errorf("another account's device was accepted as the caller's: %v", err)
 	}
 }
+
+// staleDeviceReads is a follower that has applied the device's pending row and
+// not yet the activation: the first read of a device is remembered and every
+// later read of it returns that snapshot.
+type staleDeviceReads struct {
+	*sqliteDatabase
+	snapshot *client.QueryResult
+}
+
+func (s *staleDeviceReads) Query(ctx context.Context, query string, args ...interface{}) (*client.QueryResult, error) {
+	if !strings.Contains(query, "FROM session_devices") || !strings.Contains(query, "WHERE id") {
+		return s.sqliteDatabase.Query(ctx, query, args...)
+	}
+	if s.snapshot == nil {
+		res, err := s.sqliteDatabase.Query(ctx, query, args...)
+		s.snapshot = res
+		return res, err
+	}
+	return s.snapshot, nil
+}
+
+func TestEnrolDevice_approvingAPendingDeviceIsActiveEvenWhenTheLocalReadIsStale(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	d := ed25519Device(t)
+	mustEnrol(t, s, deviceOwner, d, DeviceStatePending)
+	s.orm = hidingNet{db: &staleDeviceReads{sqliteDatabase: db}}
+	key, err := ParseDeviceKey([]byte(d.jwk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, err := s.EnrolDevice(context.Background(), "anchat", deviceOwner, key, "phone", DeviceStateActive, "approver")
+	if err != nil {
+		t.Fatalf("approving a pending device: %v", err)
+	}
+	if dev.State != DeviceStateActive || dev.ApprovedBy != "approver" {
+		t.Fatalf("an approved device answered %+v", dev)
+	}
+	s.orm = &sqliteNet{db: db}
+	got, err := s.Device(context.Background(), "anchat", d.id)
+	if err != nil || got.State != DeviceStateActive {
+		t.Fatalf("stored device = %+v, err %v", got, err)
+	}
+}
+
+func TestEnrolDevice_aRevokedDeviceIsStillRefusedOnApproval(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	d := ed25519Device(t)
+	mustEnrol(t, s, deviceOwner, d, DeviceStatePending)
+	if _, err := db.Query(context.Background(), `UPDATE session_devices SET state = 'revoked' WHERE id = ?`, d.id); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseDeviceKey([]byte(d.jwk))
+	if _, err := s.EnrolDevice(context.Background(), "anchat", deviceOwner, key, "phone", DeviceStateActive, ""); !errors.Is(err, ErrDeviceRevoked) {
+		t.Fatalf("err = %v, want ErrDeviceRevoked", err)
+	}
+}
