@@ -95,6 +95,8 @@ function assertUint64(value: Uint64Like, name: string): string {
 }
 
 function assertText(value: string, name: string, max = 128): string {
+  // Rejecting ASCII control characters is the point of this pattern.
+  // eslint-disable-next-line no-control-regex
   if (!value || value.length > max || /[\u0000-\u001f]/.test(value)) throw new Error(`${name} must be 1 to ${max} printable characters`);
   return value;
 }

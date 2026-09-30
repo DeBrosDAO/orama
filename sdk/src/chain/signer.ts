@@ -1,5 +1,5 @@
-import { secp256k1 } from "@noble/curves/secp256k1";
-import { sha256 } from "@noble/hashes/sha256";
+import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { addressFromPublicKey } from "./address";
 import { fromHex } from "./format";
 
@@ -34,7 +34,7 @@ export class LocalSigner implements OramaSigner {
 
   constructor(privateKey: Uint8Array | string) {
     const key = typeof privateKey === "string" ? fromHex(privateKey) : Uint8Array.from(privateKey);
-    if (key.length !== PRIVATE_KEY_BYTES || !secp256k1.utils.isValidPrivateKey(key)) {
+    if (key.length !== PRIVATE_KEY_BYTES || !secp256k1.utils.isValidSecretKey(key)) {
       throw new Error("not a valid secp256k1 private key: it must be 32 bytes in [1, n-1]");
     }
     this.#privateKey = key;
@@ -44,7 +44,7 @@ export class LocalSigner implements OramaSigner {
 
   async signDirect(signDoc: Uint8Array): Promise<Uint8Array> {
     const digest = sha256(signDoc);
-    return secp256k1.sign(digest, this.#privateKey, { lowS: true }).toCompactRawBytes();
+    return secp256k1.sign(digest, this.#privateKey, { lowS: true, prehash: false });
   }
 }
 
@@ -52,7 +52,7 @@ export class LocalSigner implements OramaSigner {
 export function verifyDirectSignature(publicKey: Uint8Array, signDoc: Uint8Array, signature: Uint8Array): boolean {
   if (signature.length !== 64) return false;
   try {
-    return secp256k1.verify(signature, sha256(signDoc), publicKey, { lowS: true });
+    return secp256k1.verify(signature, sha256(signDoc), publicKey, { lowS: true, prehash: false });
   } catch {
     return false;
   }

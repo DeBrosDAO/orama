@@ -17,7 +17,7 @@ describe.skipIf(!hasGateway())("Cache", () => {
       for (const key of keys.keys) {
         await client.cache.delete(testDMap, key);
       }
-    } catch (err) {
+    } catch {
       // Ignore errors during cleanup
     }
   }, 30000); // 30 second timeout for slow SCAN operations
