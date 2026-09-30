@@ -29,7 +29,11 @@ describe.skipIf(!onFleet || !hasChain)("chain read proxy", () => {
     const bad = [
       client().get("/v1/chain/abci_query"),
       client().get("/v1/chain/broadcast_tx_commit?tx=0x00"),
-      client().get("/v1/chain/../status"),
+      // A "../" segment is not sent: fetch resolves it before the request
+      // leaves (/v1/chain/../status arrives as /v1/status, a public route
+      // that answers 200). The handler's traversal refusal is a Go unit test
+      // (chainread handler_test.go).
+      client().get("/v1/chain/status/extra"),
       client().get("/v1/chain/block?height=abc"),
       client().get("/v1/chain/status?unexpected=1"),
       client().post("/v1/chain/status", {}),

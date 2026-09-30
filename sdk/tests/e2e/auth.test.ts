@@ -17,13 +17,14 @@ describe.skipIf(!hasGateway())("Auth", () => {
   });
 
   it("should switch API key and JWT", async () => {
-    const client = await createTestClient();
-
-    // Set API key
+    // A key is never a request's credential: it is exchanged for a token, and
+    // the token is what getToken() reports. So a client holding only a key has
+    // no token until the exchange, and a JWT set on it is the token at once.
     const apiKey = process.env.GATEWAY_API_KEY;
+    const client = createClient({ baseURL: getGatewayUrl(), apiKey });
     if (apiKey) {
       client.auth.setApiKey(apiKey);
-      expect(client.auth.getToken()).toBe(apiKey);
+      expect(client.auth.getToken()).toBeUndefined();
     }
 
     // Set JWT (even if invalid, should update the token)
