@@ -42,7 +42,10 @@ describe.skipIf(!onFleet)("sdk data plane", () => {
       dropped = true;
       const gone = await client.db.query(`SELECT * FROM ${table}`).catch((e) => e);
       expect(gone).toBeInstanceOf(SDKError);
-      expect((gone as SDKError).httpStatus).toBeLessThan(500);
+      // A statement SQLite rejects is INTERNAL (a 500) whatever it names: the
+      // error says the table is gone, the status class does not.
+      expect((gone as SDKError).httpStatus).toBeGreaterThanOrEqual(400);
+      expect(String((gone as SDKError).message)).toMatch(/no such table|not found|does not exist/i);
     } finally {
       if (!dropped) await client.db.dropTable(table);
     }
