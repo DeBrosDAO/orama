@@ -47,18 +47,25 @@ const (
 	freePortHigh = 30000
 )
 
+// freePortCursor hands successive calls distinct ports, so a test asking for
+// two gets two. It starts at an offset of the process id, so two test
+// processes probing the range at once start in different places.
+var freePortCursor = func() *atomic.Int32 {
+	c := new(atomic.Int32)
+	c.Store(int32(os.Getpid() % (freePortHigh - freePortLow)))
+	return c
+}()
+
 // freePort returns a port number nothing is listening on. It is taken from
 // below the ephemeral range: a port released by a ":0" listener is the next
 // one any concurrently running test process may be given, which made a "free"
 // port busy by the time it was checked.
-// Successive calls hand out distinct ports, so a test asking for two gets two.
-var freePortCursor atomic.Int32
-
 func freePort(t *testing.T) int {
 	t.Helper()
+	tries := 0
 	for {
-		port := freePortLow + int(freePortCursor.Add(1))
-		if port >= freePortHigh {
+		port := freePortLow + int(freePortCursor.Add(1))%(freePortHigh-freePortLow)
+		if tries++; tries > freePortHigh-freePortLow {
 			break
 		}
 		ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
