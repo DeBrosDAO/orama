@@ -119,10 +119,10 @@ func (m Messenger) route(ctx sdk.Context, msg sdk.Msg) (*sdk.Result, error) {
 func (m Messenger) pay(ctx sdk.Context, contract sdk.AccAddress, p *EarningsPay) ([]sdk.Event, [][]byte, [][]*codectypes.Any, error) {
 	recipient, err := sdk.AccAddressFromBech32(p.Recipient)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%w: earnings recipient: %v", ErrBadMessage, err)
+		return nil, nil, nil, ErrBadMessage.Wrapf("earnings recipient: %v", err)
 	}
 	if p.Amount.IsNil() || !p.Amount.IsPositive() {
-		return nil, nil, nil, fmt.Errorf("%w: earnings amount must be positive", ErrBadMessage)
+		return nil, nil, nil, ErrBadMessage.Wrap("earnings amount must be positive")
 	}
 	if err := m.earnings.PayEarnings(ctx, contract, recipient, sdk.NewCoin(params.BaseDenom, p.Amount)); err != nil {
 		return nil, nil, nil, err

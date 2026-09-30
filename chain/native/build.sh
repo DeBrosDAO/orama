@@ -16,8 +16,9 @@ mode="${1:-build}"
 here="$(cd "$(dirname "$0")" && pwd)"
 chain="$(cd "$here/.." && pwd)"
 target="x86_64-unknown-linux-musl"
-# 1.92 is the newest rustc the pinned wasmvm builds with here; src/probestack.rs supplies what it lost.
-toolchain="${RUST_TOOLCHAIN:-1.92.0}"
+# 1.98.1 is the newest stable rustc; the pinned wasmvm and the Orchard crates build with it.
+# src/probestack.rs still supplies __rust_probestack, which compiler_builtins only exports mangled.
+toolchain="${RUST_TOOLCHAIN:-1.98.1}"
 zig="${ORAMA_ZIG:-zig}"
 out="${OUT:-$chain/build/native}"
 

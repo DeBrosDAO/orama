@@ -1,9 +1,9 @@
 //! `__rust_probestack` for x86_64.
 //!
-//! wasmer_vm (inside libwasmvm) calls it from its stack-probe libcall. compiler_builtins provided it
-//! until rustc 1.8x and no longer does, while the Orchard verifier needs rustc 1.88 or newer, so a
-//! single toolchain cannot supply both. This is compiler_builtins' x86_64 routine unchanged: touch
-//! every page of the requested stack allocation in order, so the guard page is hit and not skipped.
+//! wasmer_vm (inside libwasmvm) calls it from its stack-probe libcall. compiler_builtins only exports
+//! it under a mangled name now, so the unmangled symbol wasmer_vm references is not defined. This is
+//! compiler_builtins' x86_64 routine unchanged: touch every page of the requested stack allocation in
+//! order, so the guard page is hit and not skipped.
 #[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(
     ".globl __rust_probestack",

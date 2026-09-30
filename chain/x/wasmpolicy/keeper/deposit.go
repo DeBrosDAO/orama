@@ -47,7 +47,7 @@ func (k Keeper) ApplyStateDelta(ctx context.Context, contract, payer sdk.AccAddr
 
 func (k Keeper) charge(ctx context.Context, contract, payer sdk.AccAddress, n uint64) error {
 	if payer.Empty() {
-		return fmt.Errorf("%w: contract %s grew by %d bytes", types.ErrDepositPayer, contract, n)
+		return types.ErrDepositPayer.Wrapf("contract %s grew by %d bytes", contract, n)
 	}
 	limits, err := k.Limits.Get(ctx)
 	if err != nil {
@@ -63,7 +63,7 @@ func (k Keeper) charge(ctx context.Context, contract, payer sdk.AccAddress, n ui
 		}
 	}
 	if uint64(len(chunks)) >= limits.MaxDepositChunks {
-		return fmt.Errorf("%w: contract %s has %d", types.ErrDepositLedgerFull, contract, len(chunks))
+		return types.ErrDepositLedgerFull.Wrapf("contract %s has %d", contract, len(chunks))
 	}
 	return k.newChunk(ctx, contract, payer, n, limits)
 }
@@ -118,7 +118,7 @@ func spendBudget(ctx context.Context, amount math.Int, limits types.Limits) erro
 	}
 	total := b.Locked.Add(amount)
 	if total.GT(limits.MaxDepositPerTx) {
-		return fmt.Errorf("%w: %s of %s", types.ErrDepositCap, total, limits.MaxDepositPerTx)
+		return types.ErrDepositCap.Wrapf("%s of %s", total, limits.MaxDepositPerTx)
 	}
 	b.Locked = total
 	return nil
