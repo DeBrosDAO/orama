@@ -13,7 +13,8 @@ import (
 
 // probeMain is a Go backend that reports, from inside its own sandbox, what
 // it can see and do. Every probe answers JSON {"ok": bool, "detail": "..."}
-// and never returns a secret: /read reports whether a file could be read, not
+// and never returns a secret: /cacheput writes one cache key with the app's
+// own token and reports the gateway's status; /read reports whether a file could be read, not
 // its bytes. VERSION is replaced per build so updates and rollbacks are
 // observable.
 const probeMain = `package main
@@ -130,6 +131,24 @@ func main() {
 		resp, err := gatewayClient().Do(req)
 		if err != nil {
 			reply(w, false, "renew: "+err.Error())
+			return
+		}
+		resp.Body.Close()
+		reply(w, resp.StatusCode == http.StatusOK, resp.Status)
+	})
+	http.HandleFunc("/cacheput", func(w http.ResponseWriter, r *http.Request) {
+		tok, err := os.ReadFile(os.Getenv("ORAMA_TOKEN_FILE"))
+		if err != nil {
+			reply(w, false, "token file: "+err.Error())
+			return
+		}
+		body, _ := json.Marshal(map[string]string{"dmap": r.URL.Query().Get("dmap"), "key": r.URL.Query().Get("key"), "value": "probe"})
+		req, _ := http.NewRequest(http.MethodPost, os.Getenv("ORAMA_GATEWAY_URL")+"/v1/cache/put", strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
+		resp, err := gatewayClient().Do(req)
+		if err != nil {
+			reply(w, false, "cache put: "+err.Error())
 			return
 		}
 		resp.Body.Close()

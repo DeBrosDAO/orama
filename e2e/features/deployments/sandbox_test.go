@@ -3,12 +3,14 @@
 package deployments
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
@@ -192,5 +194,28 @@ func TestDeployIdentity_workloadTokenRenews(t *testing.T) {
 		if r.Status == http.StatusOK {
 			t.Errorf("/v1/auth/renew renewed %s", who)
 		}
+	}
+}
+
+// TestDeployIdentity_aSelectorOnTheAppGrantNarrowsTheApp: the gateway reads a
+// workload's grant under its app principal, so a selector on it narrows the
+// app's own calls. The grant used to be looked up as a key's and never found:
+// the selector narrowed nothing (docs/AUTH.md "A workload's identity").
+func TestDeployIdentity_aSelectorOnTheAppGrantNarrowsTheApp(t *testing.T) {
+	t.Parallel()
+	tn := newTenant(t)
+	u := tn.deploy(t, "go", tenancy.WriteProbeApp(t, "narrow"), "narrowed")
+	tn.cli.MustOK(t, "app", "grants", "set", "narrowed", "runtime", "--resource", "cache:key=sessions/*")
+	serving(t, tn.app(u), "/health", "")
+	// The grant was written after the app started: the gateway reads it per
+	// request, through a cache that holds an answer for ten seconds.
+	eventually.Require(t, 3*time.Second, 2*time.Minute, "a key inside the app's selector is written", func() (bool, error) {
+		if a := probe(t, tn.app(u), "/cacheput", url.Values{"dmap": {"sessions"}, "key": {"k"}}); !a.OK {
+			return false, fmt.Errorf("%s", a.Detail)
+		}
+		return true, nil
+	})
+	if a := probe(t, tn.app(u), "/cacheput", url.Values{"dmap": {"tokens"}, "key": {"k"}}); a.OK || !strings.Contains(a.Detail, "403") {
+		t.Errorf("a key outside the app's selector: ok %v, %s; want 403", a.OK, a.Detail)
 	}
 }
