@@ -553,7 +553,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			IPFSAPIURL:            cfg.IPFSAPIURL,
 			ClusterSecret:         cfg.ClusterSecret,
 		}, deps.ORMClient, deps.GlobalORMClient)
-		gw.storageHandlers.StartCIDRefBackfill(gw.shutdownCtx, ownNamespace(cfg))
+		gw.storageHandlers.HoldUntilCIDRefBackfill() // the backfill itself starts once the schema is ready (afterReadySteps)
 	}
 
 	// Create adapter for auth handlers to use the client
