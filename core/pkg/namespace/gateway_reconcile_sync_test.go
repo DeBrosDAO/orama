@@ -136,8 +136,9 @@ func TestInstanceFromGatewayYAML_roundTripsEveryField(t *testing.T) {
 	y.IPFSReplicationFactor = 3
 	y.WebRTC.Enabled = true
 	y.WebRTC.SFUPort = 30000
+	y.BootstrapPeers = []string{"/ip4/10.0.0.2/tcp/4001/p2p/12D3KooWpeer"}
 	// Not carried by InstanceConfig: the host supplies them on re-render.
-	y.BootstrapPeers, y.EnableHTTPS, y.TLSCacheDir = nil, false, ""
+	y.EnableHTTPS, y.TLSCacheDir = false, ""
 
 	cfg, err := instanceFromGatewayYAML(y, "node-1")
 	if err != nil {
@@ -171,5 +172,22 @@ func fillStrings(v reflect.Value) {
 		case reflect.Struct:
 			fillStrings(f)
 		}
+	}
+}
+
+// The index gateway's network client dials these at start; a YAML without them
+// leaves its host with no peer, and /v1/network/status reports none. A gateway
+// written before the field existed is drift, so it is rewritten.
+func TestGatewayYAML_bootstrapPeersReachTheGatewayAndAreDrift(t *testing.T) {
+	peers := []string{"/ip4/10.0.0.2/tcp/4001/p2p/12D3KooWpeer"}
+	desired := gatewayYAMLFromInstance(gatewayspec.InstanceConfig{Namespace: "index", BootstrapPeers: peers},
+		"hmac", "/cluster-secret", "10.0.0.5:6001")
+	if !reflect.DeepEqual(desired.BootstrapPeers, peers) {
+		t.Fatalf("bootstrap_peers = %v, want %v", desired.BootstrapPeers, peers)
+	}
+	old := desired
+	old.BootstrapPeers = nil
+	if gatewayYAMLEqual(old, desired) {
+		t.Fatal("a config with no bootstrap_peers compared in sync with one that has them")
 	}
 }

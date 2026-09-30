@@ -75,6 +75,10 @@ type InstanceConfig struct {
 	OlricServers    []string
 	OlricTimeout    time.Duration
 	NodePeerID      string
+	// BootstrapPeers are the libp2p peers the gateway's network client dials
+	// at start (/ip4/.../tcp/.../p2p/<peer id>). Without them its host has no
+	// peer and /v1/network/status reports none.
+	BootstrapPeers []string
 	// StateDir is the gateway's private state directory
 	// (<oramaDir>/data/namespaces/<ns>/gateway). The spawner sets it from its
 	// namespace base when it renders the YAML; callers leave it empty.

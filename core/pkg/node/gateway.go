@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
+
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/multiformats/go-multiaddr"
 
 	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
@@ -47,9 +51,15 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 		olricServers = []string{net.JoinHostPort(rqliteEP.Host, fmt.Sprintf("%d", namespace.IndexOlricHTTPPort))}
 	}
 
+	bootstrapPeers, err := gatewayBootstrapPeers(n.hostRef(), rqliteEP.Host, n.config.Discovery.BootstrapPeers)
+	if err != nil {
+		return fmt.Errorf("index gateway: %w", err)
+	}
+
 	return sup.EnsureGateway(ctx, gatewayspec.InstanceConfig{
 		NodeID:                nodeID,
 		RQLiteDSN:             rqliteEP.BaseURL(),
+		BootstrapPeers:        bootstrapPeers,
 		BaseDomain:            n.config.HTTPGateway.BaseDomain,
 		OlricServers:          olricServers,
 		OlricTimeout:          n.config.HTTPGateway.OlricTimeout,
@@ -122,4 +132,42 @@ func (n *Node) discoverClusterPeers(cm *ipfs.ClusterConfigManager) error {
 	n.clusterCfgMu.Lock()
 	defer n.clusterCfgMu.Unlock()
 	return cm.DiscoverClusterPeersFromLibP2P(n.host)
+}
+
+// gatewayBootstrapPeers is the peer list the index gateway's libp2p client
+// dials: this node first, over its overlay address, then the configured
+// bootstrap peers. The node is always there and does the mesh discovery; the
+// configured list is empty on the genesis node and names one other node on the
+// rest, so a gateway bootstrapped from it alone reported no peers on the first
+// and lost them all when that one node was down.
+func gatewayBootstrapPeers(h host.Host, overlayIP string, configured []string) ([]string, error) {
+	if h == nil {
+		return nil, fmt.Errorf("this node's libp2p host is not running, so the gateway has no peer to bootstrap from")
+	}
+	self, err := overlayMultiaddr(h, overlayIP)
+	if err != nil {
+		return nil, err
+	}
+	peers := []string{self}
+	for _, p := range configured {
+		if p = strings.TrimSpace(p); p != "" && p != self {
+			peers = append(peers, p)
+		}
+	}
+	return peers, nil
+}
+
+// overlayMultiaddr is h's TCP listen address on overlayIP, with its peer id.
+func overlayMultiaddr(h host.Host, overlayIP string) (string, error) {
+	for _, a := range h.Addrs() {
+		ip, err := a.ValueForProtocol(multiaddr.P_IP4)
+		if err != nil || ip != overlayIP {
+			continue
+		}
+		if _, err := a.ValueForProtocol(multiaddr.P_TCP); err != nil {
+			continue
+		}
+		return fmt.Sprintf("%s/p2p/%s", a.String(), h.ID()), nil
+	}
+	return "", fmt.Errorf("this node's libp2p host listens on no TCP address on the overlay IP %s (listening on %v); check the node's listen addresses", overlayIP, h.Addrs())
 }
