@@ -89,34 +89,28 @@ func PublicKuboConfig(existing []byte, token string, declaredBytes uint64) ([]by
 			return nil, fmt.Errorf("parse public kubo config: %w", err)
 		}
 	}
-	identity := config["Identity"]
-
-	config["Addresses"] = map[string]interface{}{
-		"API":     []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSAPIPort)},
-		"Gateway": []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSGatewayPort)},
-		"Swarm": []string{
-			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", constants.GlobalIPFSSwarmPort),
-			fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", constants.GlobalIPFSSwarmPort),
-		},
-		"NoAnnounce": append([]string{}, publicSwarmFilters...),
+	// The sections below are merged into what ipfs init wrote, key by key:
+	// replacing a whole section drops what Kubo requires, such as
+	// Datastore.Spec, and the connection-manager defaults of the server
+	// profile.
+	addresses := section(config, "Addresses")
+	addresses["API"] = []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSAPIPort)}
+	addresses["Gateway"] = []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", constants.GlobalIPFSGatewayPort)}
+	addresses["Swarm"] = []string{
+		fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", constants.GlobalIPFSSwarmPort),
+		fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", constants.GlobalIPFSSwarmPort),
 	}
-	config["Swarm"] = map[string]interface{}{
-		"AddrFilters": append([]string{}, publicSwarmFilters...),
-	}
-	config["API"] = map[string]interface{}{
-		"Authorizations": map[string]interface{}{
-			ipfs.KuboAPIUser: map[string]interface{}{
-				"AuthSecret":   "bearer:" + token,
-				"AllowedPaths": append([]string{}, PublicAPIAllowedPaths...),
-			},
+	addresses["NoAnnounce"] = append([]string{}, publicSwarmFilters...)
+	section(config, "Swarm")["AddrFilters"] = append([]string{}, publicSwarmFilters...)
+	section(config, "API")["Authorizations"] = map[string]interface{}{
+		ipfs.KuboAPIUser: map[string]interface{}{
+			"AuthSecret":   "bearer:" + token,
+			"AllowedPaths": append([]string{}, PublicAPIAllowedPaths...),
 		},
 	}
-	config["Provide"] = map[string]interface{}{"Strategy": "pinned"}
-	config["Routing"] = map[string]interface{}{"Type": "dht"}
-	config["Datastore"] = map[string]interface{}{"StorageMax": PublicStorageMax(declaredBytes)}
-	if identity != nil {
-		config["Identity"] = identity
-	}
+	section(config, "Provide")["Strategy"] = "pinned"
+	section(config, "Routing")["Type"] = "dht"
+	section(config, "Datastore")["StorageMax"] = PublicStorageMax(declaredBytes)
 
 	out, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -126,6 +120,16 @@ func PublicKuboConfig(existing []byte, token string, declaredBytes uint64) ([]by
 		return nil, fmt.Errorf("public kubo config named a swarm key")
 	}
 	return out, nil
+}
+
+// section is config[key] as a map, created empty when absent or not an object.
+func section(config map[string]interface{}, key string) map[string]interface{} {
+	if m, ok := config[key].(map[string]interface{}); ok {
+		return m
+	}
+	m := map[string]interface{}{}
+	config[key] = m
+	return m
 }
 
 // WritePublicKuboFiles writes config, the RPC token, and an empty denylist

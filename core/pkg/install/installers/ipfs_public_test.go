@@ -168,3 +168,45 @@ func TestPublicKuboConfig_tokenAllowsOnlyWhatTheProviderAndGCCall(t *testing.T) 
 		}
 	}
 }
+
+// ipfs init --profile=server writes Datastore.Spec, which Kubo requires, and
+// connection-manager defaults. The public config used to replace whole
+// sections, so Kubo refused to start: "required Datastore.Spec entry missing
+// from config file" (stagenet, 2026-09-30).
+func TestPublicKuboConfig_keepsWhatIPFSInitWrote(t *testing.T) {
+	existing := []byte(`{
+  "Identity": {"PeerID": "12D3KooWtest", "PrivKey": "CAESQ..."},
+  "Datastore": {"StorageMax": "10GB", "GCPeriod": "1h",
+    "Spec": {"type": "mount", "mounts": [{"mountpoint": "/blocks", "type": "measure", "prefix": "flatfs.datastore"}]}},
+  "Swarm": {"ConnMgr": {"Type": "basic", "HighWater": 96}, "AddrFilters": null},
+  "Addresses": {"Announce": [], "API": "/ip4/127.0.0.1/tcp/5001"},
+  "API": {"HTTPHeaders": {}},
+  "Routing": {"AcceleratedDHTClient": false}
+}`)
+	out, err := PublicKuboConfig(existing, "tok123", 10<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["Datastore"]["Spec"] == nil || got["Datastore"]["GCPeriod"] != "1h" {
+		t.Errorf("Datastore lost what ipfs init wrote: %v", got["Datastore"])
+	}
+	if got["Datastore"]["StorageMax"] != PublicStorageMax(10<<30) {
+		t.Errorf("StorageMax = %v", got["Datastore"]["StorageMax"])
+	}
+	if got["Swarm"]["ConnMgr"] == nil || got["Swarm"]["AddrFilters"] == nil {
+		t.Errorf("Swarm = %v, want ConnMgr kept and AddrFilters set", got["Swarm"])
+	}
+	if got["Identity"]["PeerID"] != "12D3KooWtest" {
+		t.Errorf("Identity = %v", got["Identity"])
+	}
+	if got["Routing"]["Type"] != "dht" || got["Routing"]["AcceleratedDHTClient"] != false {
+		t.Errorf("Routing = %v", got["Routing"])
+	}
+	if got["API"]["Authorizations"] == nil || got["API"]["HTTPHeaders"] == nil {
+		t.Errorf("API = %v", got["API"])
+	}
+}
