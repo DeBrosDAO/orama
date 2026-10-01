@@ -86,7 +86,7 @@ func TestDeployBindMigration_allowsEachEnabledDeploymentItsPort(t *testing.T) {
 		port              int
 	}{{"node", "acme-web", 10200}, {"go", "acme-api", 10201}, {"npm", "acme-app", 10202}} {
 		got, ok := tr.dropIn(want.runtime, want.instance)
-		if !ok || got != privhelper.DeployBindDropIn(want.port) {
+		if !ok || got != privhelper.DeployBindDropIn(want.instance, want.port) {
 			t.Errorf("orama-deploy-%s@%s drop-in %q, want tcp:%d", want.runtime, want.instance, got, want.port)
 		}
 	}
@@ -98,7 +98,7 @@ func TestDeployBindMigration_allowsEachEnabledDeploymentItsPort(t *testing.T) {
 	if _, err := tr.m.run(); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
-	if got, _ := tr.dropIn("node", "acme-web"); got != privhelper.DeployBindDropIn(10200) {
+	if got, _ := tr.dropIn("node", "acme-web"); got != privhelper.DeployBindDropIn("acme-web", 10200) {
 		t.Errorf("second run changed the drop-in to %q", got)
 	}
 }

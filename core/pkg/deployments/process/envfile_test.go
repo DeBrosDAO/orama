@@ -19,6 +19,8 @@ type recordingStager struct {
 	token   map[string]string
 	ports   map[string]string // instance -> "<runtime>:<port>"
 	cleared []string
+	purged  []string
+	state   []string // what StateInstances lists
 	// log is every call in order, shared with a test's systemctl seam.
 	log []string
 }
@@ -39,6 +41,19 @@ func (r *recordingStager) AllowPort(instance string, runtime Runtime, port int) 
 	return nil
 }
 
+func (r *recordingStager) BuildUser(instance string) error {
+	r.log = append(r.log, "build-user "+instance)
+	return nil
+}
+
+func (r *recordingStager) PurgeState(instance string) error {
+	r.log = append(r.log, "purge "+instance)
+	r.purged = append(r.purged, instance)
+	return nil
+}
+
+func (r *recordingStager) StateInstances() ([]string, error) { return r.state, nil }
+
 func (r *recordingStager) SetToken(instance, token string) error {
 	r.token[instance] = token
 	return nil
@@ -46,6 +61,7 @@ func (r *recordingStager) SetToken(instance, token string) error {
 
 func (r *recordingStager) Clear(instance string) error {
 	r.cleared = append(r.cleared, instance)
+	r.log = append(r.log, "clear "+instance)
 	delete(r.env, instance)
 	delete(r.token, instance)
 	delete(r.ports, instance)

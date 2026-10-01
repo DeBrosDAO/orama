@@ -128,11 +128,17 @@ func (m *Manager) deploymentEnv(deployment *deployments.Deployment, serviceName 
 //
 // AllowPort writes the one port the instance's runtime unit may bind: the
 // templates deny every bind, and the port differs per deployment
-// (pkg/privhelper deploybind.go). Clear removes it with the rest.
+// (pkg/privhelper deploybind.go). BuildUser gives the instance's dependency
+// install a user of its own. PurgeState removes the state and cache directories
+// systemd keeps for the instance; StateInstances lists the instances that have
+// any. Clear removes the rest.
 type Stager interface {
 	SetEnv(instance, contents string) error
 	SetToken(instance, token string) error
 	AllowPort(instance string, runtime Runtime, port int) error
+	BuildUser(instance string) error
+	PurgeState(instance string) error
+	StateInstances() ([]string, error)
 	Clear(instance string) error
 }
 
@@ -150,6 +156,14 @@ func (HelperStager) SetToken(instance, token string) error {
 func (HelperStager) AllowPort(instance string, runtime Runtime, port int) error {
 	return privhelper.AllowDeploymentPort(instance, string(runtime), port)
 }
+
+func (HelperStager) BuildUser(instance string) error {
+	return privhelper.AllowDeploymentBuildUser(instance)
+}
+
+func (HelperStager) PurgeState(instance string) error { return privhelper.PurgeDeployment(instance) }
+
+func (HelperStager) StateInstances() ([]string, error) { return privhelper.DeploymentStateInstances() }
 
 func (HelperStager) Clear(instance string) error { return privhelper.ClearDeployment(instance) }
 
@@ -239,6 +253,14 @@ func (m *Manager) removeSecrets(serviceName string) error {
 		return fmt.Errorf("remove the environment and credential of %s: %w", serviceName, err)
 	}
 	return nil
+}
+
+// purgeState removes the state and cache directories of a stopped instance.
+func (m *Manager) purgeState(instance string) error {
+	if m.stager == nil {
+		return nil
+	}
+	return m.stager.PurgeState(instance)
 }
 
 // Start starts a deployment process
@@ -406,18 +428,28 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 	// There is no unit file to remove: the unit is a template instance, and
 	// the instance stops existing when nothing references it.
 
+	// What the build installed goes too, or it outlives the deployment — but
+	// only once the app is stopped: pulling its dependencies from under a
+	// process that is still running breaks it without stopping it. This comes
+	// before the secrets and drop-ins are cleared: the removal runs as the
+	// instance's build user, whose drop-in Clear deletes.
+	if stopErr == nil && UsesBuildOutput(deployment.Type) {
+		if err := m.ClearDependencies(deployment.Namespace, deployment.Name); err != nil {
+			errs = append(errs, fmt.Errorf("clear the installed dependencies of %s: %w", unit, err))
+		}
+	}
+
 	// The environment file holds the tenant's secrets. Leaving it behind
 	// leaves them on the node after the deployment is gone.
 	if err := m.removeSecrets(serviceName); err != nil {
 		errs = append(errs, fmt.Errorf("remove the secrets of %s, which are still on disk: %w", unit, err))
 	}
 
-	// What the build installed goes too, or it outlives the deployment — but
-	// only once the app is stopped: pulling its dependencies from under a
-	// process that is still running breaks it without stopping it.
-	if stopErr == nil && UsesBuildOutput(deployment.Type) {
-		if err := m.ClearDependencies(deployment.Namespace, deployment.Name); err != nil {
-			errs = append(errs, fmt.Errorf("clear the installed dependencies of %s: %w", unit, err))
+	// The tenant's own data — the state and cache directories systemd keeps
+	// for the unit — goes once the unit is stopped.
+	if stopErr == nil {
+		if err := m.purgeState(unitInstance(serviceName)); err != nil {
+			errs = append(errs, fmt.Errorf("remove the state and cache directories of %s, which are still on disk: %w", unit, err))
 		}
 	}
 

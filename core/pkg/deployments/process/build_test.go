@@ -47,12 +47,16 @@ func TestBuildUnitName_isAUnitOramaPrivhelperWillStart(t *testing.T) {
 // run by this process.
 func TestInstallDependencies_startsTheBuildUnit(t *testing.T) {
 	var started []string
-	m := &Manager{logger: zap.NewNop(), useSystemd: true, systemctl: startsOnly(func(unit string) error {
+	st := newRecordingStager()
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: st, systemctl: startsOnly(func(unit string) error {
 		started = append(started, unit)
 		return nil
 	})}
 	if err := m.InstallDependencies(context.Background(), "acme", "web", registryApp(t)); err != nil {
 		t.Fatalf("InstallDependencies: %v", err)
+	}
+	if len(st.log) != 1 || st.log[0] != "build-user acme-web" {
+		t.Fatalf("stager log %v, want the build's own user staged before it starts", st.log)
 	}
 	if len(started) != 1 || started[0] != "orama-deploy-build@acme-web.service" {
 		t.Fatalf("started %v, want exactly the build unit", started)
@@ -61,7 +65,7 @@ func TestInstallDependencies_startsTheBuildUnit(t *testing.T) {
 
 // A failed install fails the deploy, and says where npm's output is.
 func TestInstallDependencies_reportsAFailedBuild(t *testing.T) {
-	m := &Manager{logger: zap.NewNop(), useSystemd: true, systemctl: startsOnly(func(string) error {
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: newRecordingStager(), systemctl: startsOnly(func(string) error {
 		return errors.New("Job for orama-deploy-build@acme-web.service failed")
 	})}
 	err := m.InstallDependencies(context.Background(), "acme", "web", registryApp(t))
@@ -345,7 +349,7 @@ func TestInstallDependencies_refusesAGitDependencyBeforeTheBuild(t *testing.T) {
 // deployment has nothing installed and costs no call.
 func TestStop_clearsTheBuildOutputOfANodeDeployment(t *testing.T) {
 	var started []string
-	m := &Manager{logger: zap.NewNop(), useSystemd: true, systemctl: startsOnly(func(unit string) error {
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: newRecordingStager(), systemctl: startsOnly(func(unit string) error {
 		started = append(started, unit)
 		return nil
 	})}
@@ -428,5 +432,101 @@ func TestBuildTemplate_bindsNothing(t *testing.T) {
 	}
 	if len(deny) != 1 || deny[0] != "any" {
 		t.Errorf("SocketBindDeny = %q, want exactly any", deny)
+	}
+}
+
+// Without a user of its own the build would run as the template's one shared
+// user: it is refused, not started.
+func TestInstallDependencies_doesNotStartWithoutItsOwnUser(t *testing.T) {
+	started := false
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: noBuildUserStager{newRecordingStager()}, systemctl: startsOnly(func(string) error {
+		started = true
+		return nil
+	})}
+	if err := m.InstallDependencies(context.Background(), "acme", "web", registryApp(t)); err == nil {
+		t.Fatal("a build with no user of its own was accepted")
+	}
+	if started {
+		t.Fatal("the build unit was started under the template's shared user")
+	}
+	m.stager = nil
+	if err := m.InstallDependencies(context.Background(), "acme", "web", registryApp(t)); err == nil {
+		t.Fatal("a build with no stager was accepted")
+	}
+}
+
+type noBuildUserStager struct{ *recordingStager }
+
+func (noBuildUserStager) BuildUser(string) error { return errors.New("orama-privhelper: refused") }
+
+// A delete removes the tenant's state and cache directories, after the unit
+// stopped and the build output was cleared as the build user, and not while
+// the unit may still be running.
+func TestStop_removesTheStateDirectoriesOnceTheUnitStopped(t *testing.T) {
+	st := newRecordingStager()
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: st, systemctl: func(...string) error { return nil }}
+	node := &deployments.Deployment{Namespace: "acme", Name: "web", Type: deployments.DeploymentTypeNodeJSBackend}
+	if err := m.Stop(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"build-user acme-web", "clear acme-web", "purge acme-web"}
+	if strings.Join(st.log, "|") != strings.Join(want, "|") {
+		t.Errorf("stager calls %v, want %v", st.log, want)
+	}
+
+	st = newRecordingStager()
+	m = &Manager{logger: zap.NewNop(), useSystemd: true, stager: st, systemctl: func(args ...string) error {
+		if args[0] == "stop" {
+			return errors.New("canceled")
+		}
+		return nil
+	}}
+	if err := m.Stop(context.Background(), node); err == nil {
+		t.Fatal("a failed stop was reported as success")
+	}
+	if len(st.purged) != 0 {
+		t.Errorf("the directories of a unit that did not stop were removed: %v", st.purged)
+	}
+}
+
+// The clean unit removes what the build wrote, so it runs as the build's user.
+func TestClearDependencies_givesTheCleanUnitTheBuildUser(t *testing.T) {
+	st := newRecordingStager()
+	var calls []string
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: st, systemctl: func(args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		return nil
+	}}
+	if err := m.ClearDependencies("acme", "web"); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.log) != 1 || st.log[0] != "build-user acme-web" || len(calls) != 1 {
+		t.Errorf("stager %v, systemctl %v: the user must be staged before the clean unit starts", st.log, calls)
+	}
+}
+
+// The clean unit runs as the build user, whose drop-in the secrets' removal
+// deletes, so it runs before the secrets go.
+func TestStop_clearsTheDependenciesBeforeTheSecrets(t *testing.T) {
+	st := newRecordingStager()
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: st, systemctl: func(args ...string) error {
+		st.log = append(st.log, "systemctl "+strings.Join(args, " "))
+		return nil
+	}}
+	node := &deployments.Deployment{Namespace: "acme", Name: "web", Type: deployments.DeploymentTypeNodeJSBackend}
+	if err := m.Stop(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+	idx := func(want string) int {
+		for i, c := range st.log {
+			if c == want {
+				return i
+			}
+		}
+		t.Fatalf("no %q in %v", want, st.log)
+		return -1
+	}
+	if clean, clear := idx("systemctl start orama-deploy-clean@acme-web.service"), idx("clear acme-web"); clean > clear {
+		t.Errorf("the secrets were cleared before the dependencies: %v", st.log)
 	}
 }

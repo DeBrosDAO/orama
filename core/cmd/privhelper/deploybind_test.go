@@ -41,7 +41,7 @@ func TestDeploy_BindPortWritesTheDropInAndReloadsOnlyOnAChange(t *testing.T) {
 		t.Fatalf("bind-port: %+v", resp)
 	}
 	data, err := os.ReadFile(privhelper.DeployBindDropInPath(unitDir, "node", "acme-web"))
-	if err != nil || string(data) != privhelper.DeployBindDropIn(10200) {
+	if err != nil || string(data) != privhelper.DeployBindDropIn("acme-web", 10200) {
 		t.Fatalf("drop-in %q, %v", data, err)
 	}
 	if *reloads != 1 {
@@ -81,7 +81,7 @@ func TestDeploy_BindPortPutsTheDropInBackWhenTheReloadFails(t *testing.T) {
 		t.Fatalf("a failed reload reported %+v", resp)
 	}
 	data, _ := os.ReadFile(privhelper.DeployBindDropInPath(unitDir, "go", "acme-web"))
-	if string(data) != privhelper.DeployBindDropIn(10200) {
+	if string(data) != privhelper.DeployBindDropIn("acme-web", 10200) {
 		t.Errorf("after the failed reload the drop-in is %q, want the previous one", data)
 	}
 

@@ -67,7 +67,7 @@ func TestBindPort_NeedsNoInput(t *testing.T) {
 // then the one TCP port.
 func TestDeployBindDropIn_AllowsExactlyTheTCPPort(t *testing.T) {
 	var allows []string
-	for _, line := range strings.Split(DeployBindDropIn(10234), "\n") {
+	for _, line := range strings.Split(DeployBindDropIn("acme-web", 10234), "\n") {
 		if v, ok := strings.CutPrefix(line, "SocketBindAllow="); ok {
 			allows = append(allows, v)
 		}
@@ -75,7 +75,7 @@ func TestDeployBindDropIn_AllowsExactlyTheTCPPort(t *testing.T) {
 	if len(allows) != 2 || allows[0] != "" || allows[1] != "tcp:10234" {
 		t.Fatalf("allows %q, want a reset then tcp:10234", allows)
 	}
-	if !strings.Contains(DeployBindDropIn(10234), "[Service]\n") {
+	if !strings.Contains(DeployBindDropIn("acme-web", 10234), "[Service]\n") {
 		t.Error("no [Service] section: systemd would ignore the setting")
 	}
 }
@@ -104,7 +104,7 @@ func TestWriteDeployBind_WritesReportsAChangeAndIsIdempotent(t *testing.T) {
 		t.Fatalf("first write: prev %q, changed %v, err %v", prev, changed, err)
 	}
 	data, err := os.ReadFile(DeployBindDropInPath(unitDir, "node", "acme-web"))
-	if err != nil || string(data) != DeployBindDropIn(10200) {
+	if err != nil || string(data) != DeployBindDropIn("acme-web", 10200) {
 		t.Fatalf("drop-in %q, %v", data, err)
 	}
 
@@ -115,7 +115,7 @@ func TestWriteDeployBind_WritesReportsAChangeAndIsIdempotent(t *testing.T) {
 
 	// A new port replaces the old one; the old one is not kept.
 	prev, changed, err = WriteDeployBind(root, unitDir, "node", "acme-web", 10201)
-	if err != nil || !changed || string(prev) != DeployBindDropIn(10200) {
+	if err != nil || !changed || string(prev) != DeployBindDropIn("acme-web", 10200) {
 		t.Fatalf("new port: prev %q, changed %v, err %v", prev, changed, err)
 	}
 	data, _ = os.ReadFile(DeployBindDropInPath(unitDir, "node", "acme-web"))
@@ -188,7 +188,7 @@ func TestRestoreDeployBind_PutsBackWhatWasThere(t *testing.T) {
 	if err := RestoreDeployBind(root, unitDir, "go", "acme-api", prev); err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := os.ReadFile(path); string(data) != DeployBindDropIn(10200) {
+	if data, _ := os.ReadFile(path); string(data) != DeployBindDropIn("acme-api", 10200) {
 		t.Errorf("restored %q", data)
 	}
 }
@@ -242,5 +242,121 @@ func TestClearDeployBind_KeepsAnOperatorsDropIn(t *testing.T) {
 	}
 	if _, err := os.Stat(DeployBindDropInPath(unitDir, "node", "acme-web")); !os.IsNotExist(err) {
 		t.Errorf("ours is still there: %v", err)
+	}
+}
+
+// systemd names a DynamicUser after the template, so without a User= every
+// deployment of a runtime was one user and one uid. Each instance is one user,
+// derived from the instance alone: the port the caller names plays no part, so
+// a caller cannot run an instance as another's user by naming that one's port.
+func TestDeployBindDropIn_GivesEachDeploymentItsOwnUser(t *testing.T) {
+	userOf := func(instance string, port int) string {
+		for _, line := range strings.Split(DeployBindDropIn(instance, port), "\n") {
+			if v, ok := strings.CutPrefix(line, "User="); ok {
+				return v
+			}
+		}
+		return ""
+	}
+	a, b := userOf("acme-web", 10209), userOf("acme-api", 10210)
+	if a == "" || b == "" || a == b {
+		t.Fatalf("users %q and %q, want one distinct user per instance", a, b)
+	}
+	if a != DeployUserName("acme-web") {
+		t.Errorf("user %q, want %q", a, DeployUserName("acme-web"))
+	}
+	if again := userOf("acme-web", 10299); again != a {
+		t.Errorf("the user changed with the port: %q then %q", a, again)
+	}
+	longest := strings.Repeat("n", 64) + "-" + strings.Repeat("a", 64)
+	if n := len(DeployUserName(longest)); n > 31 {
+		t.Errorf("a user name of %d characters is longer than systemd accepts", n)
+	}
+	if DeployUserName("acme-web") == DeployBuildUserName("acme-web") {
+		t.Error("an instance's runtime and build users are the same")
+	}
+}
+
+// A drop-in written before the user was named is rewritten, so an upgrade
+// reaches the deployments already on a node.
+func TestWriteDeployBind_RewritesADropInWithoutAUser(t *testing.T) {
+	root, unitDir := bindTree(t)
+	path := DeployBindDropInPath(unitDir, "go", "acme-api")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := "[Service]\nSocketBindAllow=\nSocketBindAllow=tcp:10200\n"
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev, changed, err := WriteDeployBind(root, unitDir, "go", "acme-api", 10200)
+	if err != nil || !changed || string(prev) != old {
+		t.Fatalf("prev %q changed %v err %v, want the old drop-in replaced", prev, changed, err)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "User="+DeployUserName("acme-api")) {
+		t.Errorf("drop-in %q names no user", data)
+	}
+}
+
+func TestDeployBuildUserName_isDistinctPerInstanceAndFitsAUserName(t *testing.T) {
+	longest := strings.Repeat("n", 64) + "-" + strings.Repeat("a", 64)
+	seen := map[string]string{}
+	for _, instance := range []string{"acme-web", "acme-web2", "acme2-web", longest, "a"} {
+		name := DeployBuildUserName(instance)
+		if len(name) > 31 {
+			t.Errorf("%q is %d characters, more than a user name may have", name, len(name))
+		}
+		if other, dup := seen[name]; dup {
+			t.Errorf("%q and %q share the build user %q", instance, other, name)
+		}
+		seen[name] = instance
+	}
+	if DeployBuildUserName("acme-web") != DeployBuildUserName("acme-web") {
+		t.Error("the user of one instance changes between calls")
+	}
+}
+
+func TestWriteDeployBuildUser_writesTheUserOnlyAndIsIdempotent(t *testing.T) {
+	root, unitDir := bindTree(t)
+	if _, changed, err := WriteDeployBuildUser(root, unitDir, "acme-web"); err != nil || !changed {
+		t.Fatalf("first write: changed %v, err %v", changed, err)
+	}
+	for _, runtime := range []string{"build", "clean"} {
+		data, err := os.ReadFile(DeployBindDropInPath(unitDir, runtime, "acme-web"))
+		if err != nil || string(data) != DeployBuildDropIn("acme-web") {
+			t.Fatalf("%s drop-in %q, %v", runtime, data, err)
+		}
+		if strings.Contains(string(data), "SocketBind") || !strings.Contains(string(data), "User="+DeployBuildUserName("acme-web")) {
+			t.Errorf("%s drop-in %q, want the user and no bind rule", runtime, data)
+		}
+	}
+	if _, changed, err := WriteDeployBuildUser(root, unitDir, "acme-web"); err != nil || changed {
+		t.Errorf("second write: changed %v, err %v", changed, err)
+	}
+	if _, _, err := WriteDeployBuildUser(root, unitDir, "../etc"); err == nil {
+		t.Error("an invalid instance was written")
+	}
+	if err := ClearDeployBind(root, unitDir, "acme-web"); err != nil {
+		t.Fatal(err)
+	}
+	for _, runtime := range []string{"build", "clean"} {
+		if _, err := os.Stat(DeployBindDropInPath(unitDir, runtime, "acme-web")); !os.IsNotExist(err) {
+			t.Errorf("the %s drop-in survived a clear: %v", runtime, err)
+		}
+	}
+}
+
+func TestValidate_buildUser(t *testing.T) {
+	if _, err := Validate([]string{"deploy", "build-user", "acme-web"}); err != nil {
+		t.Errorf("build-user refused: %v", err)
+	}
+	for _, argv := range [][]string{
+		{"deploy", "build-user"},
+		{"deploy", "build-user", "../etc"},
+		{"deploy", "build-user", "acme-web", "extra"},
+	} {
+		if _, err := Validate(argv); err == nil {
+			t.Errorf("%q allowed", argv)
+		}
 	}
 }

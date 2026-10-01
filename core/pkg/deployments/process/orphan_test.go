@@ -82,6 +82,39 @@ func TestStopOrphan_stopsDisablesClearsSecretsAndDependencies(t *testing.T) {
 	if _, ok := st.token["acme-web"]; ok {
 		t.Error("the credential is still staged")
 	}
+	// The removal runs as the build user whose drop-in the clear deletes, and
+	// the tenant's directories go last, once the unit is stopped.
+	want = []string{"build-user acme-web", "clear acme-web", "purge acme-web"}
+	if strings.Join(st.log, "|") != strings.Join(want, "|") {
+		t.Errorf("stager calls %v, want %v", st.log, want)
+	}
+}
+
+func TestStopOrphan_keepsTheDirectoriesWhenTheUnitDidNotStop(t *testing.T) {
+	st := newRecordingStager()
+	m := &Manager{logger: zap.NewNop(), stager: st, systemctl: func(args ...string) error {
+		if args[0] == "stop" {
+			return errors.New("refused")
+		}
+		return nil
+	}}
+	if err := m.StopOrphan(RuntimeNode, "acme-web"); err == nil {
+		t.Fatal("a refused stop was reported as success")
+	}
+	if len(st.purged) != 0 {
+		t.Errorf("the directories of a unit that is still running were removed: %v", st.purged)
+	}
+}
+
+func TestPurgeOrphanState_refusesAnInvalidInstance(t *testing.T) {
+	st := newRecordingStager()
+	m := &Manager{logger: zap.NewNop(), stager: st}
+	if err := m.PurgeOrphanState("../etc"); err == nil || len(st.purged) != 0 {
+		t.Fatalf("err %v, purged %v: an invalid instance reached the helper", err, st.purged)
+	}
+	if err := m.PurgeOrphanState("acme-web"); err != nil || len(st.purged) != 1 {
+		t.Fatalf("err %v, purged %v", err, st.purged)
+	}
 }
 
 func TestStopOrphan_goRuntimeHasNoDependencies(t *testing.T) {
@@ -114,5 +147,24 @@ func TestStopOrphan_invalidInstance(t *testing.T) {
 	m := &Manager{logger: zap.NewNop(), systemctl: func(...string) error { t.Fatal("systemctl called"); return nil }}
 	if err := m.StopOrphan(RuntimeNode, "../etc"); err == nil {
 		t.Fatal("an invalid instance was accepted")
+	}
+}
+
+func TestActiveBuildInstances_listsBuildAndCleanUnitsOnly(t *testing.T) {
+	out := "orama-deploy-build@acme-web.service loaded active running x\n" +
+		"orama-deploy-clean@beta-api.service loaded activating start x\n" +
+		"orama-deploy-build@idle-one.service loaded inactive dead x\n" +
+		"orama-deploy-node@gamma-app.service loaded active running x\n"
+	m := &Manager{logger: zap.NewNop(), query: func(context.Context, ...string) ([]byte, error) { return []byte(out), nil }}
+	got, err := m.ActiveBuildInstances(context.Background())
+	if err != nil || strings.Join(got, ",") != "acme-web,beta-api" {
+		t.Fatalf("got %v, %v", got, err)
+	}
+}
+
+func TestActiveBuildInstances_reportsAFailedListing(t *testing.T) {
+	m := &Manager{logger: zap.NewNop(), query: queryFake(nil, errors.New("boom"))}
+	if _, err := m.ActiveBuildInstances(context.Background()); err == nil {
+		t.Fatal("a failed listing was reported as none active")
 	}
 }

@@ -42,11 +42,14 @@ func validateDeploy(args []string) error {
 	if len(args) > 0 && args[0] == deployBindPortOp {
 		return validateDeployBindPort(args)
 	}
+	if len(args) == 1 && args[0] == deployState {
+		return nil
+	}
 	if len(args) != 2 {
 		return fmt.Errorf("deploy takes an operation and an instance")
 	}
 	switch args[0] {
-	case deploySetEnv, deploySetToken, deployClear:
+	case deploySetEnv, deploySetToken, deployClear, deployBuildUserOp, deployPurge:
 	default:
 		return fmt.Errorf("deploy %q is not allowed", args[0])
 	}

@@ -89,7 +89,8 @@ type HealthChecker struct {
 	orphanUnits      RuntimeUnitManager
 	orphanDeployPath string
 	orphanSeen       map[string]time.Time
-	now              func() time.Time // nil means time.Now; tests set it
+	orphanStateSeen  map[string]time.Time // leftover state directories, likewise
+	now              func() time.Time     // nil means time.Now; tests set it
 }
 
 // NewHealthChecker creates a new health checker.

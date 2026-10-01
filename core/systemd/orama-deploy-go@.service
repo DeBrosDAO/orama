@@ -23,8 +23,11 @@ WorkingDirectory=/opt/orama/.orama/data/deployments/%i
 
 # DynamicUser is what gives each deployment its own identity: systemd allocates
 # a UID for the unit and reclaims it when the unit stops, so there is no
-# per-deployment account to create, leak, or forget to delete, and no two
-# deployments ever share a user.
+# per-deployment account to create, leak, or forget to delete. Left alone it
+# names the user after the template, so every instance would share one UID; the
+# per-instance orama-bind.conf drop-in sets User=orama-deploy-<16 hex digits of
+# SHA-256(instance)> to give each deployment a user of its own, derived by the
+# helper from the instance alone (pkg/privhelper deploybind.go).
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=yes

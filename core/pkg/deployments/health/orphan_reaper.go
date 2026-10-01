@@ -28,8 +28,14 @@ const (
 	// registry. A unit is taken on the second sweep that finds it.
 	orphanSweepInterval = 2 * time.Minute
 	// orphanMinAge is how old a unit's current life must be before it can be
-	// taken. A create writes the deployment row around the runtime start, so a
-	// unit that has just started may simply be ahead of its row.
+	// taken, and how long a state or cache directory must have been a
+	// candidate. A create writes the deployment row around the runtime start,
+	// so a unit that has just started may simply be ahead of its row; and a
+	// first deploy builds before any row exists. It must therefore exceed the
+	// longest a deploy or install can take (the build unit's
+	// TimeoutStartSec=240 inside the helper's five-minute limit), with room.
+	// The sweep also treats an instance with an active build or clean unit as
+	// live, whatever its age.
 	orphanMinAge = 10 * time.Minute
 	// maxOrphansPerSweep bounds what one sweep may stop.
 	maxOrphansPerSweep = 2
@@ -41,6 +47,9 @@ const (
 type RuntimeUnitManager interface {
 	ListRuntimeUnits(ctx context.Context) ([]process.RuntimeUnit, error)
 	StopOrphan(runtime process.Runtime, instance string) error
+	ActiveBuildInstances(ctx context.Context) ([]string, error)
+	StateInstances() ([]string, error)
+	PurgeOrphanState(instance string) error
 }
 
 // deploymentKey is the identity of a registry row.
@@ -108,6 +117,7 @@ func (hc *HealthChecker) reapOrphanUnits(ctx context.Context) error {
 	expected, err := hc.registeredInstances(ctx)
 	if err != nil {
 		hc.orphanSeen = nil
+		hc.orphanStateSeen = nil
 		return err
 	}
 	units, listErr := hc.orphanUnits.ListRuntimeUnits(ctx)
@@ -150,6 +160,66 @@ func (hc *HealthChecker) reapOrphanUnits(ctx context.Context) error {
 		}
 	}
 	hc.orphanSeen = seen
+	if listErr != nil {
+		// A unit that could not be listed may be the one that owns a
+		// directory: nothing is removed on a partial picture.
+		hc.orphanStateSeen = nil
+	} else if err := hc.reapOrphanState(ctx, expected, units, now); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// reapOrphanState removes the state and cache directories no deployment owns:
+// what a delete that predates their removal, or one whose stop was refused,
+// left on the node. An instance with a registry row keeps its directories, as
+// does one whose runtime, build or clean unit still exists (the unit reaper
+// above deals with the runtime ones); a
+// directory is taken on the second sweep that finds it, once it has been a
+// candidate for orphanMinAge. Every doubt means nothing is removed: a failed
+// listing, or a registry that could not be read, ends the sweep before here.
+func (hc *HealthChecker) reapOrphanState(ctx context.Context, expected map[string]bool, units []process.RuntimeUnit, now time.Time) error {
+	instances, err := hc.orphanUnits.StateInstances()
+	if err != nil {
+		hc.orphanStateSeen = nil
+		return fmt.Errorf("list the deployment directories for the orphan sweep: %w", err)
+	}
+	building, err := hc.orphanUnits.ActiveBuildInstances(ctx)
+	if err != nil {
+		hc.orphanStateSeen = nil
+		return fmt.Errorf("list the build units for the orphan sweep: %w", err)
+	}
+	running := make(map[string]bool, len(units)+len(building))
+	for _, u := range units {
+		running[u.Instance] = true
+	}
+	for _, instance := range building {
+		running[instance] = true
+	}
+	seen := make(map[string]time.Time)
+	var errs []error
+	purged := 0
+	for _, instance := range instances {
+		if expected[instance] || running[instance] {
+			continue
+		}
+		first, wasSeen := hc.orphanStateSeen[instance]
+		if !wasSeen {
+			first = now
+		}
+		seen[instance] = first
+		if !wasSeen || now.Sub(first) < orphanMinAge || purged >= maxOrphansPerSweep {
+			continue
+		}
+		purged++
+		delete(seen, instance)
+		hc.logger.Warn("Removing the state and cache directories of a deployment that no longer exists",
+			zap.String("instance", instance))
+		if err := hc.orphanUnits.PurgeOrphanState(instance); err != nil {
+			errs = append(errs, fmt.Errorf("remove the directories of the orphan %s: %w", instance, err))
+		}
+	}
+	hc.orphanStateSeen = seen
 	return errors.Join(errs...)
 }
 

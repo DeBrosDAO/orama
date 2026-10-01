@@ -14,10 +14,22 @@ import (
 )
 
 type fakeUnits struct {
-	units   []process.RuntimeUnit
-	listErr error
-	stopErr error
-	stopped []string
+	units    []process.RuntimeUnit
+	listErr  error
+	stopErr  error
+	stopped  []string
+	state    []string // what StateInstances lists
+	purged   []string
+	building []string // instances with an active build or clean unit
+}
+
+func (f *fakeUnits) ActiveBuildInstances(context.Context) ([]string, error) { return f.building, nil }
+
+func (f *fakeUnits) StateInstances() ([]string, error) { return f.state, nil }
+
+func (f *fakeUnits) PurgeOrphanState(instance string) error {
+	f.purged = append(f.purged, instance)
+	return nil
 }
 
 func (f *fakeUnits) ListRuntimeUnits(context.Context) ([]process.RuntimeUnit, error) {
@@ -254,5 +266,108 @@ func TestRemoveOrphanFiles_refusesAnInstanceThatLeavesTheBase(t *testing.T) {
 		if err := hc.removeOrphanFiles(inst); err == nil {
 			t.Errorf("instance %q was accepted", inst)
 		}
+	}
+}
+
+// A directory left by a deployment that no longer exists is removed on the
+// second sweep, after orphanMinAge; one with a row, or with a unit, never.
+func TestReapOrphanState_removesOnlyWhatNoDeploymentOwns(t *testing.T) {
+	units := &fakeUnits{
+		units: []process.RuntimeUnit{{Unit: "orama-deploy-go@still-running.service", Runtime: process.RuntimeGo, Instance: "still-running", Since: time.Now()}},
+		state: []string{"acme-web", "gone-app", "still-running"},
+	}
+	hc := newReaper(registryWith(liveRow), units)
+	now := time.Now()
+	hc.now = func() time.Time { return now }
+	for i := 0; i < 2; i++ {
+		if err := hc.reapOrphanUnits(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(units.purged) != 0 {
+		t.Fatalf("purged %v before the minimum age", units.purged)
+	}
+	now = now.Add(orphanMinAge + time.Minute)
+	if err := hc.reapOrphanUnits(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(units.purged) != 1 || units.purged[0] != "gone-app" {
+		t.Fatalf("purged %v, want only gone-app", units.purged)
+	}
+}
+
+func TestReapOrphanState_aDirectoryNotSeenTwiceIsKept(t *testing.T) {
+	units := &fakeUnits{state: []string{"gone-app"}}
+	hc := newReaper(registryWith(liveRow), units)
+	now := time.Now()
+	hc.now = func() time.Time { return now }
+	if err := hc.reapOrphanUnits(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(24 * time.Hour)
+	units.state = nil // gone from the listing, then back: the clock starts over
+	if err := hc.reapOrphanUnits(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	units.state = []string{"gone-app"}
+	if err := hc.reapOrphanUnits(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(units.purged) != 0 {
+		t.Errorf("purged %v", units.purged)
+	}
+}
+
+// A unit listing that failed is not a listing: the directory of an instance
+// whose unit could not be seen is left alone, however long it has been a
+// candidate.
+func TestReapOrphanState_aFailedUnitListingLeavesStateAlone(t *testing.T) {
+	units := &fakeUnits{state: []string{"gone-app"}, listErr: errors.New("systemctl timed out")}
+	hc := newReaper(registryWith(liveRow), units)
+	now := time.Now()
+	hc.now = func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		_ = hc.reapOrphanUnits(context.Background())
+		now = now.Add(orphanMinAge + time.Minute)
+	}
+	if len(units.purged) != 0 {
+		t.Fatalf("purged %v after a failed unit listing", units.purged)
+	}
+}
+
+// A registry that cannot be read resets the state candidates too, so the clock
+// of a directory starts over once the registry is back.
+func TestReapOrphanState_unreadableRegistryResetsTheStateCandidates(t *testing.T) {
+	units := &fakeUnits{state: []string{"gone-app"}}
+	db := registryWith(liveRow)
+	hc := newReaper(db, units)
+	now := time.Now()
+	hc.now = func() time.Time { return now }
+	_ = hc.reapOrphanUnits(context.Background()) // first sighting
+	db.queryFunc = func(interface{}, string, ...interface{}) error { return errors.New("rqlite down") }
+	_ = hc.reapOrphanUnits(context.Background())
+	db.queryFunc = registryWith(liveRow).queryFunc
+	now = now.Add(orphanMinAge + time.Minute)
+	_ = hc.reapOrphanUnits(context.Background()) // a first sighting again
+	if len(units.purged) != 0 {
+		t.Fatalf("purged %v across a registry failure", units.purged)
+	}
+}
+
+// A first deploy builds before its row exists: its build cache is not an
+// orphan's while the build or clean unit runs.
+func TestReapOrphanState_anActiveBuildUnitKeepsTheCache(t *testing.T) {
+	units := &fakeUnits{state: []string{"first-deploy", "gone-app"}, building: []string{"first-deploy"}}
+	hc := newReaper(registryWith(liveRow), units)
+	now := time.Now()
+	hc.now = func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		if err := hc.reapOrphanUnits(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(orphanMinAge + time.Minute)
+	}
+	if len(units.purged) != 1 || units.purged[0] != "gone-app" {
+		t.Fatalf("purged %v, want only gone-app", units.purged)
 	}
 }

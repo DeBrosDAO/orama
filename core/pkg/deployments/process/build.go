@@ -73,6 +73,9 @@ func (m *Manager) InstallDependencies(ctx context.Context, namespace, name, work
 	if !m.useSystemd {
 		return installDirect(ctx, workDir)
 	}
+	if err := m.giveBuildUser(InstanceName(namespace, name)); err != nil {
+		return err
+	}
 	unit := BuildUnitName(namespace, name)
 	if err := m.runOneshot(unit); err != nil {
 		return fmt.Errorf("npm install for %s failed (the node's journal has npm's output: journalctl -u %s): %w",
@@ -90,9 +93,25 @@ func (m *Manager) ClearDependencies(namespace, name string) error {
 	if !m.useSystemd {
 		return nil
 	}
+	if err := m.giveBuildUser(InstanceName(namespace, name)); err != nil {
+		return err
+	}
 	unit := CleanUnitName(namespace, name)
 	if err := m.runOneshot(unit); err != nil {
 		return fmt.Errorf("remove the installed dependencies of %s: %w", InstanceName(namespace, name), err)
+	}
+	return nil
+}
+
+// giveBuildUser gives the oneshot units of instance (the install, and the
+// removal of its output) a dynamic user of their own, so concurrent builds of
+// different tenants never share a uid.
+func (m *Manager) giveBuildUser(instance string) error {
+	if m.stager == nil {
+		return fmt.Errorf("no deployment stager is configured, so the build of %s cannot be given a user of its own", instance)
+	}
+	if err := m.stager.BuildUser(instance); err != nil {
+		return fmt.Errorf("give the build of %s a user of its own: %w", instance, err)
 	}
 	return nil
 }

@@ -162,6 +162,13 @@ func lockDeployBind() (*os.File, error) {
 // deploy stores or clears a deployment's environment, token and bind drop-ins
 // (arguments already validated).
 func deploy(args []string, input []byte) privhelper.Response {
+	if args[0] == "list-state" {
+		instances, err := privhelper.ListDeployState("/")
+		if err != nil {
+			return failure(err)
+		}
+		return privhelper.Response{Output: strings.Join(instances, "\n") + "\n"}
+	}
 	op, instance := args[0], args[1]
 	if err := privhelper.CheckDeployInput(op, input); err != nil {
 		return refused(err)
@@ -174,6 +181,10 @@ func deploy(args []string, input []byte) privhelper.Response {
 		err = deploysecrets.Write(deploysecrets.Dir, instance, deploysecrets.Token, input)
 	case "bind-port":
 		return deployBindPort(instance, args[2], args[3])
+	case "build-user":
+		return deployBuildUser(instance)
+	case "purge":
+		err = privhelper.PurgeDeployState("/", instance, systemdUnitActive)
 	default: // clear
 		err = errors.Join(deploysecrets.Clear(deploysecrets.Dir, instance), clearDeployBind(instance))
 	}
@@ -181,6 +192,25 @@ func deploy(args []string, input []byte) privhelper.Response {
 		return failure(err)
 	}
 	return privhelper.Response{Output: op + " " + instance + "\n"}
+}
+
+// systemdUnitActive reports whether systemd has unit running or starting. It
+// asks `systemctl is-active`, which prints the state and exits non-zero for
+// every state but "active"; only a failure to run it is an error. An unknown
+// unit prints "inactive" or "unknown", which is not running.
+func systemdUnitActive(unit string) (bool, error) {
+	resp := runTool(privhelper.ToolSystemctl, []string{"is-active", unit})
+	if resp.ExitCode == 1 && strings.HasPrefix(resp.Output, "orama-privhelper:") {
+		return false, errors.New(strings.TrimSpace(resp.Output))
+	}
+	switch strings.TrimSpace(resp.Output) {
+	case "active", "activating", "reloading", "deactivating":
+		return true, nil
+	case "inactive", "failed", "unknown":
+		return false, nil
+	default:
+		return false, fmt.Errorf("systemctl is-active %s answered %q", unit, strings.TrimSpace(resp.Output))
+	}
 }
 
 // clearDeployBind removes instance's bind drop-ins under the bind lock, so a
@@ -225,6 +255,37 @@ func deployBindPort(instance, runtime, portArg string) privhelper.Response {
 			runtime, instance, strings.TrimSpace(resp.Output)))
 	}
 	return privhelper.Response{Output: fmt.Sprintf("orama-deploy-%s@%s may bind tcp:%d\n", runtime, instance, port)}
+}
+
+// deployBuildUser writes the drop-in that gives the dependency install of
+// instance a user of its own and reloads systemd when it changed, with
+// deployBindPort's lock and rollback.
+func deployBuildUser(instance string) privhelper.Response {
+	lock, err := lockDeployBind()
+	if err != nil {
+		return failure(err)
+	}
+	defer lock.Close()
+	prev, changed, err := privhelper.WriteDeployBuildUser(deployBindRoot, deployBindUnitDir, instance)
+	if err != nil {
+		return failure(err)
+	}
+	if !changed {
+		return privhelper.Response{Output: fmt.Sprintf("orama-deploy-build@%s has its own user (unchanged)\n", instance)}
+	}
+	if resp := daemonReload(); resp.ExitCode != 0 {
+		var rerr error
+		for runtime, was := range prev {
+			rerr = errors.Join(rerr, privhelper.RestoreDeployBind(deployBindRoot, deployBindUnitDir, runtime, instance, was))
+		}
+		if rerr != nil {
+			return failure(fmt.Errorf("systemctl daemon-reload failed (%s) and the previous drop-in could not be put back: %w",
+				strings.TrimSpace(resp.Output), rerr))
+		}
+		return failure(fmt.Errorf("systemctl daemon-reload failed after writing the build user drop-in of %s; it was put back: %s",
+			instance, strings.TrimSpace(resp.Output)))
+	}
+	return privhelper.Response{Output: fmt.Sprintf("orama-deploy-build@%s has its own user\n", instance)}
 }
 
 // unitEnv stores or clears namespace units' env files (arguments already

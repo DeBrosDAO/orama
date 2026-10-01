@@ -75,6 +75,32 @@ func (m *Manager) ListRuntimeUnits(ctx context.Context) ([]RuntimeUnit, error) {
 	return units, errors.Join(errs...)
 }
 
+// buildUnit matches the oneshot units that install a deployment's dependencies
+// and remove them.
+var buildUnit = regexp.MustCompile(`^orama-deploy-(` + buildRuntime + `|` + cleanRuntime + `)@(.+)\.service$`)
+
+// ActiveBuildInstances lists the instances whose build or clean unit is active,
+// activating or failed (`systemctl list-units` without --all shows no other).
+// A first deploy runs its build before its deployments row exists, so the
+// instance has no row yet and its cache must not be taken for an orphan's.
+func (m *Manager) ActiveBuildInstances(ctx context.Context) ([]string, error) {
+	out, err := m.querySystemctl(ctx, "list-units", UnitPrefix+buildRuntime+"@*.service", UnitPrefix+cleanRuntime+"@*.service", "--plain", "--no-legend", "--no-pager")
+	if err != nil {
+		return nil, fmt.Errorf("list the deployment build units: %w", err)
+	}
+	var instances []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[2] == "inactive" {
+			continue
+		}
+		if match := buildUnit.FindStringSubmatch(fields[0]); match != nil {
+			instances = append(instances, match[2])
+		}
+	}
+	return instances, nil
+}
+
 // unitSince is the start of a unit's current life. A unit that cannot be dated
 // is an error, not "old": the reaper takes nothing it cannot date.
 func (m *Manager) unitSince(ctx context.Context, unit string) (time.Time, error) {
@@ -126,14 +152,43 @@ func (m *Manager) StopOrphan(runtime Runtime, instance string) error {
 	if err := m.systemdDisable(unit); err != nil {
 		errs = append(errs, fmt.Errorf("disable %s: %w", unit, err))
 	}
-	if err := m.removeSecrets(UnitPrefix + instance); err != nil {
-		errs = append(errs, fmt.Errorf("remove the secrets of %s, which are still on disk: %w", unit, err))
-	}
+	// The removal of the build output runs as the instance's build user, whose
+	// drop-in the secrets' removal deletes, so it comes first.
 	if stopErr == nil && runtime != RuntimeGo {
-		clean := fmt.Sprintf("%s%s@%s.service", UnitPrefix, cleanRuntime, instance)
-		if err := m.runOneshot(clean); err != nil {
+		if err := m.giveBuildUser(instance); err != nil {
+			errs = append(errs, err)
+		} else if err := m.runOneshot(fmt.Sprintf("%s%s@%s.service", UnitPrefix, cleanRuntime, instance)); err != nil {
 			errs = append(errs, fmt.Errorf("clear the installed dependencies of %s: %w", unit, err))
 		}
 	}
+	if err := m.removeSecrets(UnitPrefix + instance); err != nil {
+		errs = append(errs, fmt.Errorf("remove the secrets of %s, which are still on disk: %w", unit, err))
+	}
+	if stopErr == nil {
+		if err := m.purgeState(instance); err != nil {
+			errs = append(errs, fmt.Errorf("remove the state and cache directories of %s, which are still on disk: %w", unit, err))
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// PurgeOrphanState removes the state and cache directories of an instance no
+// deployment owns and no unit runs.
+func (m *Manager) PurgeOrphanState(instance string) error {
+	if !deploysecrets.ValidInstance(instance) {
+		return fmt.Errorf("%q is not a deployment instance", instance)
+	}
+	if m.stager == nil {
+		return fmt.Errorf("no deployment stager is configured, so the directories of %s cannot be removed", instance)
+	}
+	return m.stager.PurgeState(instance)
+}
+
+// StateInstances lists the instances with a state or cache directory on this
+// node.
+func (m *Manager) StateInstances() ([]string, error) {
+	if m.stager == nil {
+		return nil, errors.New("no deployment stager is configured, so the node's deployment directories cannot be listed")
+	}
+	return m.stager.StateInstances()
 }
