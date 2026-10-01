@@ -100,8 +100,23 @@ func TestMembers_aNewRoleReplacesTheOld(t *testing.T) {
 	if r := send(t, n.Client, http.MethodPost, pathQuery, tok, map[string]string{"sql": "SELECT 1"}); r.Status != http.StatusForbidden {
 		t.Errorf("the demoted developer's next query: want 403, got %d %s", r.Status, r.Body)
 	}
-	if out := n.CLI.MustOK(t, "members", "list").Stdout; !lineHas(out, w.Address(), roleReader) || lineHas(out, w.Address(), roleDev) {
-		t.Errorf("members list after the demotion does not show one reader grant:\n%s", out)
+	var list struct {
+		Members []struct {
+			Identifier string `json:"identifier"`
+			Role       string `json:"role"`
+		} `json:"members"`
+	}
+	if err := send(t, n.Owner.Client, http.MethodGet, pathMembers, n.Owner.Token(), nil).Expect(t, http.StatusOK).Decode(&list); err != nil {
+		t.Fatalf("decode the member list: %v", err)
+	}
+	var roles []string
+	for _, m := range list.Members {
+		if strings.EqualFold(m.Identifier, w.Address()) {
+			roles = append(roles, m.Role)
+		}
+	}
+	if len(roles) != 1 || roles[0] != roleReader {
+		t.Errorf("the demoted member is listed with %v; want one reader grant", roles)
 	}
 }
 
