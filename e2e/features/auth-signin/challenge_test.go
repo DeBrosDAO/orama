@@ -137,7 +137,7 @@ func TestChallenge_hostileWalletNeverServerError(t *testing.T) {
 	c := harness.GW(t)
 	hostile := []string{
 		"0x123", "not-a-wallet", "' OR 1=1 --", "../../etc/passwd",
-		"0x" + strings.Repeat("g", 40), "‮0x0000000000000000000000000000000000000000",
+		"0x" + strings.Repeat("g", 40), "\u202e0x0000000000000000000000000000000000000000",
 		"0xabc\u0000def", "é" + strings.Repeat("a", 40), strings.Repeat("0x", 4000),
 	}
 	for _, wlt := range hostile {

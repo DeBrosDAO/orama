@@ -15,7 +15,6 @@ import (
 type FilesystemProvisioner struct {
 	oramaHome string
 	oramaDir  string
-	logWriter interface{} // Can be io.Writer for logging
 }
 
 // NewFilesystemProvisioner creates a new provisioner

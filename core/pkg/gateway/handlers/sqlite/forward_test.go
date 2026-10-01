@@ -16,16 +16,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func fillIntField(dest interface{}, field string, value int) {
-	rv := reflect.ValueOf(dest).Elem()
-	elem := reflect.New(rv.Type().Elem()).Elem()
-	f := elem.FieldByName(field)
-	if f.IsValid() && f.CanSet() {
-		f.SetInt(int64(value))
-	}
-	rv.Set(reflect.Append(rv, elem))
-}
-
 func fillStringField(dest interface{}, field, value string) {
 	rv := reflect.ValueOf(dest).Elem()
 	elem := reflect.New(rv.Type().Elem()).Elem()

@@ -3,9 +3,7 @@ package gateway
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/srcscan"
 )
 
 func testLoggerForRegistry(t *testing.T) *logging.ColoredLogger {
@@ -162,41 +161,37 @@ func TestQueryStringCredentials_areReadInOnePlaceOnly(t *testing.T) {
 	found := map[string]bool{}
 	for dir, label := range dirs {
 		fset := token.NewFileSet()
-		pkgs, err := parser.ParseDir(fset, dir, func(fi fs.FileInfo) bool {
-			return !strings.HasSuffix(fi.Name(), "_test.go")
-		}, parser.ParseComments)
+		files, err := srcscan.ParseNonTest(fset, dir)
 		if err != nil {
 			continue // a directory that does not exist is not a finding
 		}
-		for _, pkg := range pkgs {
-			for path, file := range pkg.Files {
-				// A read whose result is compared straight to "" asks
-				// whether a parameter is present; it does not take the
-				// credential out. The diagnostics on the WebSocket reject
-				// path do exactly that, and they are not what this guards.
-				presence := map[ast.Node]bool{}
-				ast.Inspect(file, func(n ast.Node) bool {
-					bin, ok := n.(*ast.BinaryExpr)
-					if !ok || (bin.Op != token.NEQ && bin.Op != token.EQL) {
-						return true
-					}
-					for _, side := range []ast.Expr{bin.X, bin.Y} {
-						if lit, ok := side.(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `""` {
-							presence[bin.X] = true
-							presence[bin.Y] = true
-						}
-					}
+		for path, file := range files {
+			// A read whose result is compared straight to "" asks
+			// whether a parameter is present; it does not take the
+			// credential out. The diagnostics on the WebSocket reject
+			// path do exactly that, and they are not what this guards.
+			presence := map[ast.Node]bool{}
+			ast.Inspect(file, func(n ast.Node) bool {
+				bin, ok := n.(*ast.BinaryExpr)
+				if !ok || (bin.Op != token.NEQ && bin.Op != token.EQL) {
 					return true
-				})
+				}
+				for _, side := range []ast.Expr{bin.X, bin.Y} {
+					if lit, ok := side.(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `""` {
+						presence[bin.X] = true
+						presence[bin.Y] = true
+					}
+				}
+				return true
+			})
 
-				ast.Inspect(file, func(n ast.Node) bool {
-					if presence[n] || !readsCredentialFromQueryString(n) {
-						return true
-					}
-					found[label+"/"+path[strings.LastIndexByte(path, '/')+1:]] = true
+			ast.Inspect(file, func(n ast.Node) bool {
+				if presence[n] || !readsCredentialFromQueryString(n) {
 					return true
-				})
-			}
+				}
+				found[label+"/"+path[strings.LastIndexByte(path, '/')+1:]] = true
+				return true
+			})
 		}
 	}
 

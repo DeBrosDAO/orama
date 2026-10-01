@@ -80,7 +80,7 @@ func legacyRulesToRemove(rows []allowRow, sshPort int, wanted map[string]bool) [
 	}
 	var remove []string
 	for _, row := range rows {
-		if !legacy[legacyAllowRule{rule: row.rule, comment: row.comment}] {
+		if !legacy[legacyAllowRule(row)] {
 			continue
 		}
 		if wanted[row.rule] || rulePort(row.rule) == strconv.Itoa(sshPort) {

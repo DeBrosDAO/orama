@@ -2,7 +2,6 @@ package auth
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +59,6 @@ func TestWriteCredentialFile_narrowsAWiderExistingMode(t *testing.T) {
 func TestWriteCredentialFile_missingDirectoryIsAnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "absent", "credentials.json")
 	if err := writeCredentialFile(path, []byte("{}")); err == nil {
-		t.Fatal(fmt.Sprintf("writing into %s succeeded", path))
+		t.Fatalf("writing into %s succeeded", path)
 	}
 }

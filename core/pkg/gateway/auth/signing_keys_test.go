@@ -86,7 +86,7 @@ func TestKeyIDFor_isDerivedFromTheKey(t *testing.T) {
 	if KeyIDFor(pubA) == KeyIDFor(pubB) {
 		t.Error("two keys share a kid, so one gateway's tokens verify against the other's key")
 	}
-	if KeyIDFor(pubA) != KeyIDFor(pubA) {
+	if first, again := KeyIDFor(pubA), KeyIDFor(pubA); first != again {
 		t.Error("a key's id is not stable, so a token minted a moment ago names a key nobody can find")
 	}
 }

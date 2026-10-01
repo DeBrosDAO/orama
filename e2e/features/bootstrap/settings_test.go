@@ -94,7 +94,7 @@ func TestBootstrap_operatorCapCoversTheRun(t *testing.T) {
 // refusal that changes nothing, so a typo cannot close the run's creation.
 func TestBootstrap_invalidModeRefusedKeepsOpen(t *testing.T) {
 	cli := harness.CLI(t)
-	for _, bad := range []string{"", "OPEN", "open; DROP TABLE settings", "‮nepo", strings.Repeat("o", 4096)} {
+	for _, bad := range []string{"", "OPEN", "open; DROP TABLE settings", "\u202enepo", strings.Repeat("o", 4096)} {
 		res := infra.Run(t, cli, "cluster", "settings", "set", settingMode, bad)
 		if res.Exit == infra.ExitOK {
 			t.Errorf("mode %.40q was accepted: %s", bad, res.Stdout)

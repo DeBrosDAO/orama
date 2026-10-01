@@ -72,11 +72,11 @@ func getOlricMemberlistAddr(envDir string, root rootfs.Root, namespace string) (
 	case ip == nil:
 		// The config sits where its namespace's gateway can write: only an
 		// address is dialled, never a name, and never one it echoes back.
-		return "", fmt.Errorf("Olric config %s has a memberlist.bindAddr that is not an IP address", configPath)
+		return "", fmt.Errorf("olric config %s has a memberlist.bindAddr that is not an IP address", configPath)
 	case ip.IsUnspecified():
 		ip = net.IPv4(127, 0, 0, 1)
 	case !ip.IsLoopback() && !olricBindNet(netipFrom(ip)):
-		return "", fmt.Errorf("Olric config %s binds memberlist outside loopback and the WireGuard overlay", configPath)
+		return "", fmt.Errorf("olric config %s binds memberlist outside loopback and the WireGuard overlay", configPath)
 	}
 	return net.JoinHostPort(ip.String(), fmt.Sprint(cfg.Memberlist.BindPort)), nil
 }

@@ -154,7 +154,7 @@ func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData, lea
 	}
 
 	// 1.9 Num peers — use leader's /nodes as authoritative cluster size
-	if leaderNodes != nil && len(leaderNodes) > 0 {
+	if len(leaderNodes) > 0 {
 		expectedPeers := len(leaderNodes) - 1 // cluster members minus self
 		if expectedPeers < 0 {
 			expectedPeers = 0
@@ -166,7 +166,7 @@ func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData, lea
 			r = append(r, inspector.Warn("rqlite.num_peers", "Peer count matches cluster size", rqliteSub, node,
 				fmt.Sprintf("peers=%d but leader reports %d members", s.NumPeers, len(leaderNodes)), inspector.High))
 		}
-	} else if rq.Nodes != nil && len(rq.Nodes) > 0 {
+	} else if len(rq.Nodes) > 0 {
 		// Fallback: use node's own /nodes if leader data unavailable
 		expectedPeers := len(rq.Nodes) - 1
 		if expectedPeers < 0 {
@@ -566,7 +566,7 @@ func checkRQLiteCrossNode(data *inspector.ClusterData, leaderNodes map[string]*i
 	// 1.42 Quorum math — use leader's /nodes as authoritative voter source
 	voters := 0
 	reachableVoters := 0
-	if leaderNodes != nil && len(leaderNodes) > 0 {
+	if len(leaderNodes) > 0 {
 		for _, ln := range leaderNodes {
 			if ln.Voter {
 				voters++

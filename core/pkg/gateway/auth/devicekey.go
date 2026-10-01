@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -101,21 +100,19 @@ func parseP256(k jwk) (*DeviceKey, error) {
 	if errX != nil || errY != nil {
 		return nil, fmt.Errorf("%w: x and y must each be %d bytes of base64url", ErrDeviceKeyInvalid, p256CoordinateBytes)
 	}
-	// crypto/ecdh refuses a point that is not on the curve, which is the check
-	// that matters: an invalid point is how invalid-curve attacks start.
+	// ParseUncompressedPublicKey refuses a point that is not on the curve,
+	// which is the check that matters: an invalid point is how invalid-curve
+	// attacks start.
 	point := append(append([]byte{0x04}, x...), y...)
-	if _, err := ecdh.P256().NewPublicKey(point); err != nil {
+	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDeviceKeyInvalid, err)
 	}
 	canonical := `{"crv":"P-256","kty":"EC","x":"` + k.X + `","y":"` + k.Y + `"}`
 	return &DeviceKey{
 		id:        thumbprint(canonical),
 		canonical: canonical,
-		ecdsa: &ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     new(big.Int).SetBytes(x),
-			Y:     new(big.Int).SetBytes(y),
-		},
+		ecdsa:     pub,
 	}, nil
 }
 

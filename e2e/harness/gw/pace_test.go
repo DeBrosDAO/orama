@@ -198,11 +198,11 @@ func TestRawRequestPath_forms(t *testing.T) {
 
 func TestNewWithTLS_pacerFromFleetEnv(t *testing.T) {
 	t.Setenv(config.EnvState, filepath.Join(t.TempDir(), "state.json"))
-	c, err := NewWithTLS("https://gw.example", nil, nil)
+	_, err := NewWithTLS("https://gw.example", nil, nil)
 	if err == nil {
 		t.Fatal("fleet client without TLS accepted")
 	}
-	c, err = NewWithTLS("https://gw.example", testTLS(), nil)
+	c, err := NewWithTLS("https://gw.example", testTLS(), nil)
 	if err != nil || c.pacer == nil {
 		t.Fatalf("fleet client is not paced: %v", err)
 	}

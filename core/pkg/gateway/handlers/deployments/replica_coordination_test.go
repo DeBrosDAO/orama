@@ -24,8 +24,6 @@ func replicaTestService() *DeploymentService {
 	}
 }
 
-var replicaRoutes = []string{"setup", "update", "rollback", "teardown"}
-
 func replicaHandlers(h *ReplicaHandler) map[string]func(http.ResponseWriter, *http.Request) {
 	return map[string]func(http.ResponseWriter, *http.Request){
 		"setup": h.HandleSetup, "update": h.HandleUpdate, "rollback": h.HandleRollback, "teardown": h.HandleTeardown,

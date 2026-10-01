@@ -95,12 +95,12 @@ func TestStart_contextEndsProcess(t *testing.T) {
 }
 
 func TestStart_checkRefusalsAndStartFailure(t *testing.T) {
-	r, evDir := newRunner(t)
+	r, _ := newRunner(t)
 	r.AgentSock = ""
 	if _, err := r.Start(context.Background(), "version"); err == nil {
 		t.Fatal("empty agent socket accepted")
 	}
-	r, evDir = newRunner(t)
+	r, evDir := newRunner(t)
 	if err := os.Chmod(r.Bin, 0o644); err != nil {
 		t.Fatal(err)
 	}

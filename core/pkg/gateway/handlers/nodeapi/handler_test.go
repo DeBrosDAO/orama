@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	testSecret = "cluster-secret-for-tests"
 	// A real libp2p peer id: the handler refuses anything else, because this is
 	// what every consumer reads back out of the row.
 	testNodeID  = "12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEg"

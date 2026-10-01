@@ -55,9 +55,6 @@ const (
 	// single missed tick does not force a probe, short enough that a node which
 	// stopped heartbeating is probed on the next round.
 	freshHeartbeatWindow = 65 * time.Second
-
-	// sqlTimeLayout matches rqlite's datetime('now'), which is always UTC.
-	sqlTimeLayout = "2006-01-02 15:04:05"
 )
 
 // MetadataReader provides lifecycle metadata for peers. Implemented by

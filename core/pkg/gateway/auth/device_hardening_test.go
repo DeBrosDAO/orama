@@ -301,7 +301,7 @@ func TestGenerateBoundJWT_dropsTheBindingsNamesFromCustomClaims(t *testing.T) {
 }
 
 func TestCleanDeviceLabel_stripsWhatMakesOneLabelReadAsAnother(t *testing.T) {
-	if got := cleanDeviceLabel("Alice‮​phone\n"); got != "Alicephone" {
+	if got := cleanDeviceLabel("Alice\u202e\u200bphone\n"); got != "Alicephone" {
 		t.Errorf("cleanDeviceLabel = %q", got)
 	}
 	if got := cleanDeviceLabel(strings.Repeat("x", maxDeviceLabelLength+10)); len([]rune(got)) != maxDeviceLabelLength {

@@ -15,7 +15,8 @@ func TestAddPublishCount_untrackedReturnsNegative(t *testing.T) {
 	if got := AddPublishCount(context.Background(), 1); got != -1 {
 		t.Errorf("untracked ctx must return -1 (no enforcement); got %d", got)
 	}
-	if got := AddPublishCount(nil, 1); got != -1 {
+	var noCtx context.Context
+	if got := AddPublishCount(noCtx, 1); got != -1 {
 		t.Errorf("nil ctx must return -1; got %d", got)
 	}
 }

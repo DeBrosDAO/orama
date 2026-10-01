@@ -83,7 +83,7 @@ func newAPIAuthTransport(clusterAPIURL, clusterPassword, kuboAPIURL, kuboToken s
 	if kuboToken != "" {
 		u, err := url.Parse(kuboAPIURL)
 		if err != nil || u.Host == "" {
-			return nil, fmt.Errorf("Kubo API URL %q has no host to send the bearer to", kuboAPIURL)
+			return nil, fmt.Errorf("kubo API URL %q has no host to send the bearer to", kuboAPIURL)
 		}
 		t.kuboHost = u.Host
 	}

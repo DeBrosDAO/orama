@@ -24,7 +24,7 @@ var reservedNames = []string{"default", "index", "nameserver", "system", "orama"
 
 // invalidNames break `^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$` after lowercasing.
 var invalidNames = []string{"", "a", "-abc", "abc-", "ab_c", "ab.c", "ab c", strings.Repeat("a", 41),
-	"ünïcode", "‮abc", "ab\u0000c", "../etc", "' or 1=1--", "ée", "ab/cd", "%2e%2e"}
+	"ünïcode", "\u202eabc", "ab\u0000c", "../etc", "' or 1=1--", "ée", "ab/cd", "%2e%2e"}
 
 // createNamespace posts a creation request as bearer.
 func createNamespace(t testing.TB, c *gw.Client, bearer, name string) *gw.Response {

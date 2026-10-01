@@ -99,7 +99,7 @@ func TestAutoupdate_refusals(t *testing.T) {
 		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--window", "night"},
 		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--window", "1-24"},
 		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "auto", "--role", "validator"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "‮1.0.1"},
+		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "\u202e1.0.1"},
 	}
 	for _, args := range cases {
 		res := infra.Run(t, harness.CLI(t), args...)

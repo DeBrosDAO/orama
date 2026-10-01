@@ -84,7 +84,7 @@ func checkStoragePrivate(ctx context.Context, e *env) Result {
 	}
 	putCtx, cancel := context.WithTimeout(ctx, putWait+time.Minute)
 	defer cancel()
-	if out, err = runOrama(putCtx, e.orama, nil, "storage", "put", "--deal-id", fmt.Sprint(dealID), "--dir", fx.sealDir,
+	if _, err = runOrama(putCtx, e.orama, nil, "storage", "put", "--deal-id", fmt.Sprint(dealID), "--dir", fx.sealDir,
 		"--rpc", "http://"+rpc, "--wait", putWait.String()); err != nil {
 		return fail(storageName, "put deal %d: %v", dealID, err)
 	}

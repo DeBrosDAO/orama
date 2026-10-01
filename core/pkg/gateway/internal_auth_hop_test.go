@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/srcscan"
 )
 
 const testClusterSecret = "cluster-secret-for-tests"
@@ -398,34 +398,32 @@ func TestWithMiddleware_stripsForgedInternalAuthHeaders(t *testing.T) {
 // without a MAC.
 func TestEveryProxyHopSignsWhatItAsserts(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, parser.ParseComments)
+	files, err := srcscan.ParseNonTest(fset, ".")
 	if err != nil {
 		t.Fatalf("parse the gateway package: %v", err)
 	}
 
 	hops := 0
-	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			if strings.HasSuffix(path, "_test.go") {
-				continue
-			}
-			ast.Inspect(file, func(n ast.Node) bool {
-				block, ok := n.(*ast.BlockStmt)
-				if !ok {
-					return true
-				}
-				if !assertsInternalAuth(block) {
-					return true
-				}
-				hops++
-				if !identUsed(block, "signInternalAuthHeaders") {
-					t.Errorf("%s: internal auth is asserted without stamping a MAC over it, "+
-						"so the far end will strip every header set here",
-						fset.Position(block.Pos()))
-				}
-				return true
-			})
+	for path, file := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
 		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			block, ok := n.(*ast.BlockStmt)
+			if !ok {
+				return true
+			}
+			if !assertsInternalAuth(block) {
+				return true
+			}
+			hops++
+			if !identUsed(block, "signInternalAuthHeaders") {
+				t.Errorf("%s: internal auth is asserted without stamping a MAC over it, "+
+					"so the far end will strip every header set here",
+					fset.Position(block.Pos()))
+			}
+			return true
+		})
 	}
 
 	if hops != 2 {

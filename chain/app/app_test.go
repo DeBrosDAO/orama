@@ -126,7 +126,7 @@ func TestOramaApp_buildsAndValidatesDefaultGenesis(t *testing.T) {
 
 func TestUserToUserNoramaSendIsRefused(t *testing.T) {
 	oramaApp := buildTestApp(t)
-	ctx := oramaApp.NewUncachedContext(true, cmtprototypes.Header{})
+	ctx := sdk.NewContext(oramaApp.CommitMultiStore(), cmtprototypes.Header{}, true, oramaApp.Logger())
 	from := sdk.AccAddress(bytes.Repeat([]byte{1}, 20))
 	to := sdk.AccAddress(bytes.Repeat([]byte{2}, 20))
 	err := oramaApp.BankKeeper.SendCoins(ctx, from, to, sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1)))

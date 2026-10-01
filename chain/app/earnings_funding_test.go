@@ -46,7 +46,7 @@ func newEarningsOnlyChain(t *testing.T, earnings int64) earningsOnlyChain {
 	_, err = oramaApp.Commit()
 	require.NoError(t, err)
 
-	ctx := oramaApp.NewUncachedContext(false, cmtprototypes.Header{Height: 2, Time: genesisTime.Add(2 * time.Second)})
+	ctx := sdk.NewContext(oramaApp.CommitMultiStore(), cmtprototypes.Header{Height: 2, Time: genesisTime.Add(2 * time.Second)}, false, oramaApp.Logger())
 	addr := sdk.AccAddress(bytes.Repeat([]byte{0x42}, 20))
 	coin := sdk.NewCoin(params.BaseDenom, math.NewInt(earnings))
 	require.NoError(t, oramaApp.BankKeeper.MintCoins(ctx, emissiontypes.ModuleName, sdk.NewCoins(coin)))

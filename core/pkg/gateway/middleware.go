@@ -1478,7 +1478,6 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 		// Inject deployment context
 		markTrafficNamespace(r, deployment.Namespace)
 		ctx := context.WithValue(r.Context(), CtxKeyNamespaceOverride, deployment.Namespace)
-		ctx = context.WithValue(ctx, "deployment", deployment)
 
 		// Route based on deployment type
 		if deployment.Port == 0 {
@@ -1638,7 +1637,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 	if g.mwCache != nil {
 		if cached, ok := g.mwCache.GetNamespaceTargets(namespaceName); ok {
 			for _, t := range cached {
-				targets = append(targets, namespaceGatewayTarget{ip: t.ip, port: t.port})
+				targets = append(targets, namespaceGatewayTarget(t))
 			}
 		}
 	}
@@ -1668,7 +1667,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		if g.mwCache != nil {
 			cacheTargets := make([]gatewayTarget, len(targets))
 			for i, t := range targets {
-				cacheTargets[i] = gatewayTarget{ip: t.ip, port: t.port}
+				cacheTargets[i] = gatewayTarget(t)
 			}
 			g.mwCache.SetNamespaceTargets(namespaceName, cacheTargets)
 		}
@@ -1702,7 +1701,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 	}
 
 	// Consistent hashing for affinity (keeps WS subscribe/publish on same node)
-	affinityKey := namespaceName + "|" + validatedNamespace
+	var affinityKey string
 	if apiKey := extractAPIKey(r); apiKey != "" {
 		affinityKey = namespaceName + "|" + apiKey
 	} else if authz := strings.TrimSpace(r.Header.Get("Authorization")); authz != "" {

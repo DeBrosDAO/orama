@@ -130,7 +130,7 @@ func TestNodeEnrollRoute_refusesBadRequests(t *testing.T) {
 		{"loopback", gw.Req{Method: http.MethodPost, Path: enrollPath, Header: jsonCT, Body: body("127.0.0.1", garbageToken)}, http.StatusBadRequest},
 		{"ipv6", gw.Req{Method: http.MethodPost, Path: enrollPath, Header: jsonCT, Body: body("2001:db8::1", garbageToken)}, http.StatusBadRequest},
 		{"garbage token", gw.Req{Method: http.MethodPost, Path: enrollPath, Header: jsonCT, Body: body(public, garbageToken)}, http.StatusUnauthorized},
-		{"hostile token", gw.Req{Method: http.MethodPost, Path: enrollPath, Header: jsonCT, Body: body(public, `' OR 1=1 --‮`)}, http.StatusUnauthorized},
+		{"hostile token", gw.Req{Method: http.MethodPost, Path: enrollPath, Header: jsonCT, Body: body(public, "' OR 1=1 --\u202e")}, http.StatusUnauthorized},
 		{"over the limit", gw.Req{Method: http.MethodPost, Path: enrollPath, Header: jsonCT,
 			Body: append(append([]byte(`{"code":"`), bytes.Repeat([]byte("A"), enrollBodyLimit+1)...), `"}`...)}, http.StatusBadRequest},
 	}

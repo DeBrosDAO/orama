@@ -42,7 +42,7 @@ func TestHealth_publicShapeOnly(t *testing.T) {
 func TestHealth_hostileQueryNotReflected(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)
-	resp := c.MustSend(t, gw.Req{Path: "/health", Query: map[string][]string{"x": {strings.Repeat("‮<script>", 200)}}})
+	resp := c.MustSend(t, gw.Req{Path: "/health", Query: map[string][]string{"x": {strings.Repeat("\u202e<script>", 200)}}})
 	if resp.Status >= http.StatusInternalServerError {
 		t.Errorf("hostile query string broke /health: %d", resp.Status)
 	}

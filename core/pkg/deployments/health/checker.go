@@ -670,11 +670,7 @@ func (hc *HealthChecker) GetHealthStatus(ctx context.Context, deploymentID strin
 
 	checks := make([]HealthCheck, len(rows))
 	for i, row := range rows {
-		checks[i] = HealthCheck{
-			Status:         row.Status,
-			CheckedAt:      row.CheckedAt,
-			ResponseTimeMs: row.ResponseTimeMs,
-		}
+		checks[i] = HealthCheck(row)
 	}
 
 	return checks, nil

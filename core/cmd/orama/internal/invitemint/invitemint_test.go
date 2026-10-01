@@ -173,8 +173,7 @@ func TestMintAt_certificateMustVerifyForTheDomain(t *testing.T) {
 // server, so following it would succeed — and must not happen.
 func TestMintAt_doesNotFollowRedirects(t *testing.T) {
 	hits := 0
-	var srv *httptest.Server
-	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
 		if r.URL.Path == "/followed" {
 			_, _ = w.Write([]byte(`{"token":"` + strings.Repeat("ab", 32) + `"}`))

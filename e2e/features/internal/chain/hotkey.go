@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	"golang.org/x/crypto/ripemd160" //nolint:staticcheck // the account address hash of a Cosmos secp256k1 key
+	//lint:ignore SA1019 the account address hash of a Cosmos secp256k1 key is RIPEMD-160 by definition
+	"golang.org/x/crypto/ripemd160"
 )
 
 // HotKeyService is the service name of the binding a node's hot key signs to

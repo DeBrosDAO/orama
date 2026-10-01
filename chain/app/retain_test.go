@@ -14,6 +14,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/app"
 	archivetypes "github.com/DeBrosOfficial/network/chain/x/archive/types"
@@ -59,7 +60,7 @@ func runRetainChain(t *testing.T, lastArchived int64) map[int64]int64 {
 
 	// The genesis window cannot be shorter than 14 days of blocks, so the test writes a short
 	// one straight into the committed store, as x/archive would hold it after genesis.
-	ctx := oramaApp.NewUncachedContext(false, cmtprototypes.Header{Height: 1})
+	ctx := sdk.NewContext(oramaApp.CommitMultiStore(), cmtprototypes.Header{Height: 1}, false, oramaApp.Logger())
 	require.NoError(t, oramaApp.ArchiveKeeper.Params.Set(ctx, archivetypes.Params{RetentionWindowBlocks: retainTestWindow}))
 	require.NoError(t, oramaApp.ArchiveKeeper.LastArchivedHeight.Set(ctx, lastArchived))
 	for h := int64(2); h <= retainTestBlocks; h++ {

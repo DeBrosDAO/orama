@@ -171,16 +171,6 @@ func (f *fakeStakingKeeper) jail(t *testing.T, valoperAddr string) {
 	fv.powerIndexed = false
 }
 
-// setInvalidExRate marks a validator's token/share exchange rate invalid, mirroring a validator
-// that has been slashed to zero real tokens while delegator shares remain outstanding (security
-// review C1's "InvalidExRate" scenario).
-func (f *fakeStakingKeeper) setInvalidExRate(t *testing.T, valoperAddr string) {
-	t.Helper()
-	fv, ok := f.validators[valoperAddr]
-	require.True(t, ok, "validator %q must exist", valoperAddr)
-	fv.val.Tokens = math.ZeroInt()
-}
-
 // SetValidator and SetValidatorByConsAddr let InitGenesis register a bootstrap committee member's
 // validator record directly, exactly as the real staking keeper does (see
 // types.StakingKeeper's doc comment).
@@ -375,15 +365,4 @@ func testPubKey(seed byte) []byte {
 		pk[i] = seed
 	}
 	return pk
-}
-
-func (f *testFixture) initGenesis(t *testing.T, mutate func(*types.GenesisState)) []byte {
-	t.Helper()
-	gs := types.DefaultGenesisState()
-	if mutate != nil {
-		mutate(gs)
-	}
-	_, err := f.Keeper.InitGenesis(f.Ctx, *gs, f.Emission)
-	require.NoError(t, err)
-	return nil
 }

@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"sort"
 	"testing"
@@ -103,7 +104,7 @@ func (c *inclusionChain) extend() []byte { return c.extendAt(c.height) }
 
 func (c *inclusionChain) extendAt(height int64) []byte {
 	c.t.Helper()
-	resp, err := c.app.ExtendVote(nil, &abci.RequestExtendVote{Height: height, Hash: bytes.Repeat([]byte{1}, 32)})
+	resp, err := c.app.ExtendVote(context.Background(), &abci.RequestExtendVote{Height: height, Hash: bytes.Repeat([]byte{1}, 32)})
 	require.NoError(c.t, err)
 	c.verify(height, 0, resp.VoteExtension, abci.ResponseVerifyVoteExtension_ACCEPT)
 	return resp.VoteExtension
@@ -300,7 +301,7 @@ func TestInclusion_disabledBehavesAsBefore(t *testing.T) {
 
 			_, err := c.app.VerifyVoteExtension(&abci.RequestVerifyVoteExtension{Height: c.height, VoteExtension: nil})
 			require.Error(t, err, "BaseApp refuses vote extension calls while they are disabled")
-			_, err = c.app.ExtendVote(nil, &abci.RequestExtendVote{Height: c.height})
+			_, err = c.app.ExtendVote(context.Background(), &abci.RequestExtendVote{Height: c.height})
 			require.Error(t, err)
 
 			resp := c.finalize(block...)

@@ -101,7 +101,7 @@ func TestGoClientStorage_emptyAndUnicodeNames(t *testing.T) {
 	c := newClient(t, n, owner(n))
 	for name, data := range map[string][]byte{
 		"empty.txt":               {},
-		"‮שלום-é-\U0001f600.txt": []byte("unicode name"),
+		"\u202eשלום-é-\U0001f600.txt": []byte("unicode name"),
 	} {
 		up, err := c.Storage().Upload(t.Context(), bytes.NewReader(data), name)
 		if err != nil {

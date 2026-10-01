@@ -248,7 +248,8 @@ type OramaApp struct {
 
 	// isContract reports whether an address is a wasm contract, or is being funded as one by
 	// wasmd's instantiate. It is set by installWasm and is always false without the wasm VM.
-	isContract       func(ctx context.Context, addr sdk.AccAddress) bool
+	isContract func(ctx context.Context, addr sdk.AccAddress) bool
+	//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it
 	wasmModules      []module.AppModule
 	wasmGenesisOrder []string
 	uploadSunset     wasmpolicyante.UploadSunsetDecorator
@@ -565,6 +566,7 @@ func NewOramaApp(
 	app.installWasm(keys, appOpts)
 	app.BankKeeper.AppendSendRestriction(app.contractSend.Restrict)
 
+	//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it
 	baseModules := []module.AppModule{
 		genutil.NewAppModule(app.AccountKeeper, app.StakingKeeper, app, txConfig),
 		auth.NewAppModule(appCodec, app.AccountKeeper, authsims.RandomGenesisAccounts, nil),

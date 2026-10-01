@@ -64,7 +64,7 @@ func installFlagsRefused(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 		{[]string{"--vps-ip", n.PublicIP, "--base-domain", bd, "--operator-wallet", f.State.OperatorAddress, "--expect-archive-signers", f.State.OperatorAddress}, infra.ExitUsage, "for joining a cluster"},
 		{[]string{"--dry-run", "--vps-ip", "10.0.0.5", "--base-domain", bd}, infra.ExitFailure, "--vps-ip"},
 		{[]string{"--dry-run", "--vps-ip", "1.2.3.4.5", "--base-domain", bd}, infra.ExitFailure, "--vps-ip"},
-		{[]string{"--dry-run", "--vps-ip", "‮1.2.3.4", "--base-domain", bd}, infra.ExitFailure, "--vps-ip"},
+		{[]string{"--dry-run", "--vps-ip", "\u202e1.2.3.4", "--base-domain", bd}, infra.ExitFailure, "--vps-ip"},
 	}
 	for _, c := range cases {
 		out := infra.OnNode(t, f, n, append([]string{"node", "install"}, c.args...)...)

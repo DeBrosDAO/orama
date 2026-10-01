@@ -71,7 +71,7 @@ func GetCPUUsagePercent(ctx context.Context, interval time.Duration) (uint64, er
 	idle := float64(after.Idle - before.Idle)
 	total := float64(after.Total - before.Total)
 	if total == 0 {
-		return 0, errors.New("Failed to get CPU usage")
+		return 0, errors.New("failed to get CPU usage")
 	}
 	usagePercent := (1.0 - idle/total) * 100.0
 	return uint64(usagePercent), nil
@@ -86,7 +86,7 @@ func logSystemUsage(ctx context.Context, n *Node) (*memory.Stats, uint64) {
 	totalCpu, err := GetCPUUsagePercent(ctx, cpuSampleWindow)
 	if err != nil {
 		if ctx.Err() == nil {
-			n.logger.Error("Failed to get CPU usage", zap.Error(err))
+			n.logger.Error("failed to get CPU usage", zap.Error(err))
 		}
 		return mem, 0
 	}

@@ -85,7 +85,7 @@ func TestFunctionCommands_emptyNamespace(t *testing.T) {
 func TestFunctionCommands_nameIsValidated(t *testing.T) {
 	t.Parallel()
 	cli := harness.CLI(t).Isolated(t)
-	for _, name := range []string{"../../v1/namespace/list", "a/b", "9starts-with-digit", "has space", "tab\tname", "rtl‮"} {
+	for _, name := range []string{"../../v1/namespace/list", "a/b", "9starts-with-digit", "has space", "tab\tname", "rtl\u202e"} {
 		for _, verb := range []string{"get", "versions", "invoke", "logs", "enable"} {
 			res := infra.Run(t, cli, "function", verb, name)
 			if res.Exit != infra.ExitUsage {
@@ -130,7 +130,7 @@ func TestFunctionInit_scaffoldsProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{"../escape", "a/b", "9lives", "semi;colon", "‮evil"} {
+	for _, bad := range []string{"../escape", "a/b", "9lives", "semi;colon", "\u202eevil"} {
 		infra.ExpectRefused(t, infra.Run(t, cli, "function", "init", bad), "invalid function name")
 	}
 	after, err := os.ReadDir(cli.Home)

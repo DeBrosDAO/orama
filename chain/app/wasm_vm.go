@@ -107,6 +107,7 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 	wasmK = keeper
 	app.wasmKeeper = keeper
 	app.contractSend = ante.NewContractSendDecorator(isContract, moduleAccountNames())
+	//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it
 	app.wasmModules = []module.AppModule{
 		policyModule(app.WasmPolicyKeeper),
 		wasm.NewAppModule(app.appCodec, keeper, app.StakingKeeper, app.AccountKeeper, app.BankKeeper, app.MsgServiceRouter(), nil),
@@ -124,8 +125,6 @@ func (app *OramaApp) WasmContractKeeper() *wasmkeeper.PermissionedKeeper {
 	k := app.wasmKeeper.(*wasmkeeper.Keeper)
 	return wasmkeeper.NewDefaultPermissionKeeper(k)
 }
-
-func guardWasmClaim(servertypes.AppOptions) error { return nil }
 
 func guardWasmGenesis(map[string]json.RawMessage) error { return nil }
 

@@ -7,7 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/crypto/ripemd160" //nolint:staticcheck // the account address hash is RIPEMD-160
+	//lint:ignore SA1019 the account address hash is RIPEMD-160 by Cosmos definition; SHA-256 would derive other addresses
+	"golang.org/x/crypto/ripemd160"
 )
 
 func TestEncodeRegisterNode_matchesChainMarshal(t *testing.T) {

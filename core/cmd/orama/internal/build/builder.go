@@ -351,7 +351,7 @@ func (b *Builder) buildOlric() error {
 		"-ldflags", "-s -w",
 		"-trimpath",
 		"-o", filepath.Join(b.binDir, "olric-server"),
-		fmt.Sprintf("github.com/olric-data/olric/cmd/olric-server"))
+		"github.com/olric-data/olric/cmd/olric-server")
 	cmd.Dir = tmpDir
 	cmd.Env = append(b.crossEnv(),
 		"GOPROXY=https://proxy.golang.org|direct",

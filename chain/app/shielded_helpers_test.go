@@ -170,11 +170,6 @@ func addr(key cryptotypes.PrivKey) sdk.AccAddress { return sdk.AccAddress(key.Pu
 
 func (c *shieldedChain) aliceAddr() sdk.AccAddress { return addr(c.alice) }
 
-// validatorAddr is committee member 0's operator address, the validator the bond vector names.
-func (c *shieldedChain) validatorAddr() sdk.ValAddress {
-	return sdk.ValAddress(c.committee[0].account.PubKey().Address())
-}
-
 // block finalizes and commits the next block with these txs, proposed by committee member 0, and
 // returns the tx results.
 func (c *shieldedChain) block(t *testing.T, txs ...[]byte) []*abci.ExecTxResult {
@@ -230,17 +225,6 @@ func (c *shieldedChain) signed(t *testing.T, who cryptotypes.PrivKey, gas uint64
 	return b
 }
 
-// signerless builds a tx with no signature, no fee and exactly the given gas.
-func (c *shieldedChain) signerless(t *testing.T, gas uint64, msg sdk.Msg) []byte {
-	t.Helper()
-	b := c.app.TxConfig().NewTxBuilder()
-	require.NoError(t, b.SetMsgs(msg))
-	b.SetGasLimit(gas)
-	out, err := c.app.TxConfig().TxEncoder()(b.GetTx())
-	require.NoError(t, err)
-	return out
-}
-
 func poolKey() collections.Pair[uint32, []byte] {
 	return collections.Join(shieldedtypes.VintageOrchardV1, pool.NativeAsset[:])
 }
@@ -252,16 +236,6 @@ func shieldedTestBundle() []byte {
 	return b
 }
 
-// Short names the real-verifier tests share.
-type (
-	abciResult         = abci.ExecTxResult
-	cryptotypesPrivKey = cryptotypes.PrivKey
-)
-
-func cmtprotoHeader(height int64, at time.Time) cmtproto.Header {
-	return cmtproto.Header{Height: height, Time: at}
-}
-
 // defaultTestMinDelegation is x/power's minimum delegation for rewards in these tests: small
 // enough that the vectors' few-hundred-norama amounts are not dust. The default is 1 ORAMA.
 const defaultTestMinDelegation = 100
@@ -269,7 +243,3 @@ const defaultTestMinDelegation = 100
 type chainConfig struct{ minDelegation int64 }
 
 type chainOption func(*chainConfig)
-
-func withMinDelegation(n int64) chainOption { return func(c *chainConfig) { c.minDelegation = n } }
-
-func dbmMem() dbm.DB { return dbm.NewMemDB() }

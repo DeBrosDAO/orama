@@ -21,7 +21,7 @@ func TestFunctionNameCommands_refuseABadNameBeforeAnyRequest(t *testing.T) {
 		"triggers delete": {TriggersDeleteCmd, []string{"trigger-1"}},
 	}
 	for name, c := range commands {
-		for _, bad := range []string{"../../v1/namespace/list", "a/b", "9starts-with-digit", "has space", "tab\tname", "rtl‮", "-lead", ""} {
+		for _, bad := range []string{"../../v1/namespace/list", "a/b", "9starts-with-digit", "has space", "tab\tname", "rtl\u202e", "-lead", ""} {
 			if err := c.cmd.Args(c.cmd, append([]string{bad}, c.rest...)); err == nil || !strings.Contains(err.Error(), "invalid function name") {
 				t.Errorf("%s %q: %v, want an invalid function name refusal", name, bad, err)
 			}

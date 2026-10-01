@@ -127,12 +127,7 @@ func (h *Handlers) HandlePull(w http.ResponseWriter, r *http.Request) {
 		go func(idx int, gd guardian) {
 			defer wg.Done()
 
-			guardianReq := guardianPullRequest{
-				Identity:  req.Identity,
-				PubKey:    req.PubKey,
-				Signature: req.Signature,
-				Timestamp: req.Timestamp,
-			}
+			guardianReq := guardianPullRequest(req)
 			reqBody, _ := json.Marshal(guardianReq)
 
 			url := fmt.Sprintf("http://%s:%d/v1/vault/pull", gd.IP, gd.Port)

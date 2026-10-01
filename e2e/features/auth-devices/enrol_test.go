@@ -170,7 +170,7 @@ func TestDeviceSignIn_labelIsCleaned(t *testing.T) {
 	d := gw.NewDevice(t, wallet.AlgEd25519)
 	w := member(t, n, roleRuntime)
 	req := signInReq(t, c, w, n.Name, d)
-	req.DeviceLabel = "‮\u0000phone​" + strings.Repeat("é", 2*maxLabelRunes)
+	req.DeviceLabel = "\u202e\u0000phone\u200b" + strings.Repeat("é", 2*maxLabelRunes)
 	var s gw.Session
 	if err := postJSON(t, c, gw.PathVerify, "", req).Expect(t, http.StatusOK).Decode(&s); err != nil {
 		t.Fatal(err)
@@ -181,7 +181,7 @@ func TestDeviceSignIn_labelIsCleaned(t *testing.T) {
 		t.Fatalf("devices: %v %+v", err, listed)
 	}
 	label := listed[0].Label
-	if strings.ContainsAny(label, "‮\u0000​") || utf8.RuneCountInString(label) > maxLabelRunes || !strings.HasPrefix(label, "phone") {
+	if strings.ContainsAny(label, "\u202e\u0000\u200b") || utf8.RuneCountInString(label) > maxLabelRunes || !strings.HasPrefix(label, "phone") {
 		t.Fatalf("stored label %q (%d runes)", label, utf8.RuneCountInString(label))
 	}
 }

@@ -52,10 +52,10 @@ func TestCache_roundTripsEveryJSONType(t *testing.T) {
 		"object":       map[string]any{"name": "e2e", "nested": map[string]any{"n": 1.0}},
 		"array":        []any{"a", 2.0, false},
 		"empty-object": map[string]any{}, "empty-array": []any{},
-		"rtl":            "abc‮def\u0000ghi",
+		"rtl":            "abc\u202edef\u0000ghi",
 		"numeric-string": "123", "bool-string": "true", "null-string": "null", "json-string": `{"a":1}`,
 		"empty-string": "", "spaces": "  padded  ",
-		"unicode": "héllo ‮ 𝓊𝓃𝒾𝒸ℴ𝒹ℯ 漢字 é",
+		"unicode": "héllo \u202e 𝓊𝓃𝒾𝒸ℴ𝒹ℯ 漢字 é",
 	}
 	for key, v := range values {
 		if rec := postJSON(t, h.SetHandler, "/v1/cache/put", PutRequest{DMap: "types", Key: key, Value: v}); rec.Code != http.StatusOK {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -314,4 +315,55 @@ func serveTestProxy(t *testing.T, upstream, token string, owner socketOwnerFunc)
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
 	return ln.Addr().String(), refused
+}
+
+// The Rewrite-based proxy must behave as the single-host proxy it replaced:
+// the caller's Host and forwarding headers go through with the caller's
+// address appended, the path and query are joined to the upstream's, and the
+// bearer replaces whatever the caller sent.
+func TestKuboProxy_forwards_host_forwarding_headers_and_replaces_bearer(t *testing.T) {
+	var got *http.Request
+	up := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = r }))
+	t.Cleanup(up.Close)
+
+	h := kuboProxy(strings.TrimPrefix(up.URL, "http://"), "tok")
+	req := httptest.NewRequest(http.MethodPost, "http://caller.example/api/v0/id?arg=1", nil)
+	req.RemoteAddr = "192.0.2.7:4444"
+	req.Header.Set("Authorization", "Bearer attacker")
+	req.Header.Set("X-Forwarded-For", "203.0.113.5")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got == nil {
+		t.Fatal("upstream was not reached")
+	}
+	if got.Host != "caller.example" {
+		t.Errorf("Host = %q, want the caller's", got.Host)
+	}
+	if got.URL.Path != "/api/v0/id" || got.URL.RawQuery != "arg=1" {
+		t.Errorf("url = %s, want path and query preserved", got.URL)
+	}
+	if v := got.Header.Get("Authorization"); v != "Bearer tok" {
+		t.Errorf("Authorization = %q, want the proxy's bearer", v)
+	}
+	if v := got.Header.Get("X-Forwarded-For"); v != "203.0.113.5, 192.0.2.7" {
+		t.Errorf("X-Forwarded-For = %q, want the caller's address appended", v)
+	}
+	if v := got.Header.Get("X-Forwarded-Proto"); v != "https" {
+		t.Errorf("X-Forwarded-Proto = %q, want it passed through", v)
+	}
+}
+
+func TestKuboProxy_without_prior_forwarding_sets_only_the_caller(t *testing.T) {
+	var got *http.Request
+	up := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = r }))
+	t.Cleanup(up.Close)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v0/version", nil)
+	req.RemoteAddr = "192.0.2.7:4444"
+	kuboProxy(strings.TrimPrefix(up.URL, "http://"), "tok").ServeHTTP(httptest.NewRecorder(), req)
+
+	if got == nil || got.Header.Get("X-Forwarded-For") != "192.0.2.7" {
+		t.Fatalf("got %+v, want X-Forwarded-For 192.0.2.7", got)
+	}
 }

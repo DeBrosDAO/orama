@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"io/fs"
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/srcscan"
 	"go.uber.org/zap"
 )
 
@@ -203,27 +202,23 @@ func TestSystemOriginated_isOnlySetByGatewayInternalDispatchers(t *testing.T) {
 	roots := []string{".", "../serverless/triggers", "../serverless/hostfunctions", "../gateway"}
 	for _, root := range roots {
 		fset := token.NewFileSet()
-		pkgs, err := parser.ParseDir(fset, root, func(fi fs.FileInfo) bool {
-			return !strings.HasSuffix(fi.Name(), "_test.go")
-		}, parser.ParseComments)
+		files, err := srcscan.ParseNonTest(fset, root)
 		if err != nil {
 			t.Fatalf("parse %s: %v", root, err)
 		}
-		for _, pkg := range pkgs {
-			for path, file := range pkg.Files {
-				ast.Inspect(file, func(n ast.Node) bool {
-					kv, ok := n.(*ast.KeyValueExpr)
-					if !ok {
-						return true
-					}
-					ident, ok := kv.Key.(*ast.Ident)
-					if !ok || ident.Name != "SystemOriginated" {
-						return true
-					}
-					found[path]++
+		for path, file := range files {
+			ast.Inspect(file, func(n ast.Node) bool {
+				kv, ok := n.(*ast.KeyValueExpr)
+				if !ok {
 					return true
-				})
-			}
+				}
+				ident, ok := kv.Key.(*ast.Ident)
+				if !ok || ident.Name != "SystemOriginated" {
+					return true
+				}
+				found[path]++
+				return true
+			})
 		}
 	}
 

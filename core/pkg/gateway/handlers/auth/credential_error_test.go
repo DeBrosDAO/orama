@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +11,7 @@ import (
 	"testing"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/srcscan"
 )
 
 // A login against a namespace another wallet owns is the caller's answer, not a
@@ -89,7 +89,7 @@ func TestWriteCredentialError_otherFailuresStay500(t *testing.T) {
 // cannot be added without either handling it or failing here.
 func TestEveryCredentialCallSiteReportsRefusalProperly(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, parser.ParseComments)
+	files, err := srcscan.ParseNonTest(fset, ".")
 	if err != nil {
 		t.Fatalf("parse the handlers package: %v", err)
 	}
@@ -102,47 +102,45 @@ func TestEveryCredentialCallSiteReportsRefusalProperly(t *testing.T) {
 	var offenders []string
 	found := 0
 
-	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			if strings.HasSuffix(path, "_test.go") {
-				continue
-			}
-			ast.Inspect(file, func(n ast.Node) bool {
-				// The shape is: x, err := <recv>.<Credential>(...) followed by
-				// an `if err != nil` whose body reports the failure.
-				block, ok := n.(*ast.BlockStmt)
-				if !ok {
-					return true
-				}
-				for i, stmt := range block.List {
-					name := credentialCallName(stmt, credentialCalls)
-					if name == "" {
-						continue
-					}
-					found++
-					if i+1 >= len(block.List) {
-						offenders = append(offenders,
-							fmt.Sprintf("%s: %s is called and its error is not checked at all",
-								fset.Position(stmt.Pos()), name))
-						continue
-					}
-					handler, ok := block.List[i+1].(*ast.IfStmt)
-					if !ok {
-						offenders = append(offenders,
-							fmt.Sprintf("%s: %s is not followed by an error check",
-								fset.Position(stmt.Pos()), name))
-						continue
-					}
-					if !mentions(handler.Body, "writeCredentialError") {
-						offenders = append(offenders,
-							fmt.Sprintf("%s: %s reports its failure without writeCredentialError, "+
-								"so a namespace owned by another wallet comes back as a server error",
-								fset.Position(stmt.Pos()), name))
-					}
-				}
-				return true
-			})
+	for path, file := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
 		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			// The shape is: x, err := <recv>.<Credential>(...) followed by
+			// an `if err != nil` whose body reports the failure.
+			block, ok := n.(*ast.BlockStmt)
+			if !ok {
+				return true
+			}
+			for i, stmt := range block.List {
+				name := credentialCallName(stmt, credentialCalls)
+				if name == "" {
+					continue
+				}
+				found++
+				if i+1 >= len(block.List) {
+					offenders = append(offenders,
+						fmt.Sprintf("%s: %s is called and its error is not checked at all",
+							fset.Position(stmt.Pos()), name))
+					continue
+				}
+				handler, ok := block.List[i+1].(*ast.IfStmt)
+				if !ok {
+					offenders = append(offenders,
+						fmt.Sprintf("%s: %s is not followed by an error check",
+							fset.Position(stmt.Pos()), name))
+					continue
+				}
+				if !mentions(handler.Body, "writeCredentialError") {
+					offenders = append(offenders,
+						fmt.Sprintf("%s: %s reports its failure without writeCredentialError, "+
+							"so a namespace owned by another wallet comes back as a server error",
+							fset.Position(stmt.Pos()), name))
+				}
+			}
+			return true
+		})
 	}
 
 	if found == 0 {
@@ -195,7 +193,7 @@ func mentions(n ast.Node, name string) bool {
 // own. Neither is undone by the 403 that follows.
 func TestOwnershipIsCheckedBeforeAnythingIsIssued(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, parser.ParseComments)
+	files, err := srcscan.ParseNonTest(fset, ".")
 	if err != nil {
 		t.Fatalf("parse the handlers package: %v", err)
 	}
@@ -214,50 +212,48 @@ func TestOwnershipIsCheckedBeforeAnythingIsIssued(t *testing.T) {
 
 	checked := map[string]bool{}
 
-	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			if strings.HasSuffix(path, "_test.go") {
+	for path, file := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || !gated[fn.Name.Name] {
 				continue
 			}
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || !gated[fn.Name.Name] {
-					continue
-				}
-				checked[fn.Name.Name] = true
+			checked[fn.Name.Name] = true
 
-				gate := token.NoPos
-				firstCostly := token.NoPos
-				firstCostlyName := ""
-				ast.Inspect(fn, func(n ast.Node) bool {
-					call, ok := n.(*ast.CallExpr)
-					if !ok {
-						return true
-					}
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok {
-						return true
-					}
-					if sel.Sel.Name == "RequireNamespaceOwner" && gate == token.NoPos {
-						gate = call.Pos()
-					}
-					if costly[sel.Sel.Name] && firstCostly == token.NoPos {
-						firstCostly, firstCostlyName = call.Pos(), sel.Sel.Name
-					}
+			gate := token.NoPos
+			firstCostly := token.NoPos
+			firstCostlyName := ""
+			ast.Inspect(fn, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
 					return true
-				})
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if sel.Sel.Name == "RequireNamespaceOwner" && gate == token.NoPos {
+					gate = call.Pos()
+				}
+				if costly[sel.Sel.Name] && firstCostly == token.NoPos {
+					firstCostly, firstCostlyName = call.Pos(), sel.Sel.Name
+				}
+				return true
+			})
 
-				if gate == token.NoPos {
-					t.Errorf("%s never calls RequireNamespaceOwner, so any wallet may sign in "+
-						"to any namespace", fn.Name.Name)
-					continue
-				}
-				if firstCostly != token.NoPos && firstCostly < gate {
-					t.Errorf("%s calls %s at %s, before the ownership check at %s — a wallet that "+
-						"does not own the namespace leaves that behind",
-						fn.Name.Name, firstCostlyName,
-						fset.Position(firstCostly), fset.Position(gate))
-				}
+			if gate == token.NoPos {
+				t.Errorf("%s never calls RequireNamespaceOwner, so any wallet may sign in "+
+					"to any namespace", fn.Name.Name)
+				continue
+			}
+			if firstCostly != token.NoPos && firstCostly < gate {
+				t.Errorf("%s calls %s at %s, before the ownership check at %s — a wallet that "+
+					"does not own the namespace leaves that behind",
+					fn.Name.Name, firstCostlyName,
+					fset.Position(firstCostly), fset.Position(gate))
 			}
 		}
 	}

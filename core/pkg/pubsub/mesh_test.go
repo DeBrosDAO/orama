@@ -2,7 +2,6 @@ package pubsub
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -267,16 +266,6 @@ func TestMeshAPI_aServiceWithoutAMeshHasNoMeshRoutes(t *testing.T) {
 	if _, err := c.MeshSelf(context.Background()); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("err = %v, want 404", err)
 	}
-}
-
-func peerIDOf(t *testing.T, addr string) peer.ID {
-	t.Helper()
-	i := strings.LastIndex(addr, "/p2p/")
-	id, err := peer.Decode(addr[i+len("/p2p/"):])
-	if err != nil {
-		t.Fatal(fmt.Errorf("decode peer id in %q: %w", addr, err))
-	}
-	return id
 }
 
 // A node dials its ring successors and only allows its predecessors: B never

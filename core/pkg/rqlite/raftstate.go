@@ -10,6 +10,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	boltErrors "go.etcd.io/bbolt/errors"
 )
 
 // rqlite's on-disk layout (rqlite v10 store/store.go, rqlite/rqlite store/log).
@@ -55,7 +56,7 @@ func HasRaftState(dataDir string) (bool, error) {
 	}
 
 	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: raftDBLockTimeout})
-	if errors.Is(err, bolt.ErrTimeout) {
+	if errors.Is(err, boltErrors.ErrTimeout) {
 		return false, fmt.Errorf("%s: %w", path, ErrRaftStateLocked)
 	}
 	if err != nil {

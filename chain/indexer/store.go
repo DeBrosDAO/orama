@@ -23,8 +23,6 @@ const (
 	pfxTree    = "c/t/" // tree id → collection id
 	pfxListing = "k/l/" // listing id → listing
 	pfxBid     = "k/b/" // listing id, bid id → bidder
-
-	hashSize = 32
 )
 
 // Store is the on-disk index. Reads are safe while the follower writes.

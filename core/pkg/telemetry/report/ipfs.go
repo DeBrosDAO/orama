@@ -146,7 +146,7 @@ func collectIPFS() *IPFSReport {
 				Peers []interface{} `json:"Peers"`
 			}
 			if err := json.Unmarshal(body, &resp); err == nil {
-				r.BootstrapEmpty = resp.Peers == nil || len(resp.Peers) == 0
+				r.BootstrapEmpty = len(resp.Peers) == 0
 			} else {
 				// If we got a response but Peers is missing, treat as empty.
 				r.BootstrapEmpty = true

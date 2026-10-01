@@ -72,7 +72,7 @@ func txRefusals(t testing.TB) []refusal {
 		{"uppercase operator", replace(retire, "--operator", strings.ToUpper(operator)), "operator"},
 		{"no operator", without(retire, "--operator"), "operator"},
 		{"path traversal id", replace(retire, "--id", "../../x"), "must match"},
-		{"unicode id", replace(retire, "--id", "node‮1"), "must match"},
+		{"unicode id", replace(retire, "--id", "node\u202e1"), "must match"},
 		{"private endpoint", register("e2e.example.com", "--endpoint", "http://10.0.0.1"), "not a public address"},
 		{"no endpoint", register("e2e.example.com"), "endpoints"},
 		{"http metadata", register("e2e.example.com", "--endpoint", "https://e2e.example.com", "--metadata-uri", "http://e2e.example.com/m"), "https"},

@@ -8,8 +8,6 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/fees/types"
 )
 
-func dec(s string) math.LegacyDec { return math.LegacyMustNewDecFromStr(s) }
-
 func TestNextBaseFee_unchangedAtExactlyTarget(t *testing.T) {
 	p := types.DefaultParams()
 	current := math.NewInt(1_000)

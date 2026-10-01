@@ -88,7 +88,7 @@ func TestEphemeral_limitsAndDisconnect(t *testing.T) {
 		"empty key":        {map[string]any{"op": "eph_set", "topic": topic, "key": ""}, 0},
 		"empty topic":      {map[string]any{"op": "eph_set", "topic": "", "key": "k"}, 0},
 		"clear missing":    {map[string]any{"op": "eph_clear", "topic": topic, "key": "nope"}, 1},
-		"unicode key/data": {map[string]any{"op": "eph_set", "topic": topic, "key": "ユーザー‮", "payload": "\u0000ü"}, 1},
+		"unicode key/data": {map[string]any{"op": "eph_set", "topic": topic, "key": "ユーザー\u202e", "payload": "\u0000ü"}, 1},
 	}
 	for name, check := range checks {
 		if got := wsCall(t, conn, check.body)["ok"]; got != check.want {

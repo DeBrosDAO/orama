@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,7 +125,7 @@ func (a *Agent) waitReady(ctx context.Context, timeout time.Duration) error {
 	defer deadline.Stop()
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
-	lastErr := error(fs.ErrNotExist)
+	var lastErr error
 	for {
 		rf, err := readReady(a.Dir)
 		if err == nil {

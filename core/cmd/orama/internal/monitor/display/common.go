@@ -77,8 +77,3 @@ func writeUnreachable(b *strings.Builder, t view.Theme, snap *cluster.ClusterSna
 			view.Truncate(cs.Err, maxErrorChars*2))
 	}
 }
-
-// noData is the line shown when a view has nothing to list.
-func noData(b *strings.Builder, t view.Theme, what string) {
-	fmt.Fprintf(b, "%s%s\n", tableIndent, t.Muted.Render(what))
-}

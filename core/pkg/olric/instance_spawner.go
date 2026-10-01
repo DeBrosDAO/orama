@@ -426,7 +426,7 @@ func (is *InstanceSpawner) waitForPortReady(ctx context.Context, instance *Olric
 			return ctx.Err()
 		case <-instance.waitDone:
 			// Process exited before becoming ready
-			return fmt.Errorf("Olric process exited unexpectedly (pid %d)", instance.PID)
+			return fmt.Errorf("olric process exited unexpectedly (pid %d)", instance.PID)
 		case <-time.After(1 * time.Second):
 		}
 
@@ -448,7 +448,7 @@ func (is *InstanceSpawner) waitForPortReady(ctx context.Context, instance *Olric
 		return nil
 	}
 
-	return fmt.Errorf("Olric did not become ready within timeout")
+	return fmt.Errorf("olric did not become ready within timeout")
 }
 
 // monitorInstance monitors an instance and updates its status

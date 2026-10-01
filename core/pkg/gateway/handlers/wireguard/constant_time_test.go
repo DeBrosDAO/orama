@@ -2,11 +2,11 @@ package wireguard
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"io/fs"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/srcscan"
 )
 
 // A secret compared with == leaks its contents through timing, one byte at a
@@ -19,9 +19,7 @@ import (
 // in the package, which is what the fix replaced.
 func TestClusterSecret_isNeverComparedWithAnEqualityOperator(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, parser.ParseComments)
+	files, err := srcscan.ParseNonTest(fset, ".")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -72,28 +70,26 @@ func TestClusterSecret_isNeverComparedWithAnEqualityOperator(t *testing.T) {
 	}
 
 	checked := 0
-	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			ast.Inspect(file, func(n ast.Node) bool {
-				bin, ok := n.(*ast.BinaryExpr)
-				if !ok || (bin.Op != token.EQL && bin.Op != token.NEQ) {
-					return true
-				}
-				if !mentionsSecret(bin.X) && !mentionsSecret(bin.Y) {
-					return true
-				}
-				checked++
-				if isEmptyStringCheck(bin) || isConstantTimeResult(bin) {
-					return true
-				}
-				pos := fset.Position(bin.Pos())
-				t.Errorf("%s:%d compares a secret with %s. Use subtle.ConstantTimeCompare: "+
-					"every node on the mesh can make this comparison happen, and a byte-at-a-time "+
-					"timing difference is enough to recover the secret.",
-					path[strings.LastIndexByte(path, '/')+1:], pos.Line, bin.Op)
+	for path, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			bin, ok := n.(*ast.BinaryExpr)
+			if !ok || (bin.Op != token.EQL && bin.Op != token.NEQ) {
 				return true
-			})
-		}
+			}
+			if !mentionsSecret(bin.X) && !mentionsSecret(bin.Y) {
+				return true
+			}
+			checked++
+			if isEmptyStringCheck(bin) || isConstantTimeResult(bin) {
+				return true
+			}
+			pos := fset.Position(bin.Pos())
+			t.Errorf("%s:%d compares a secret with %s. Use subtle.ConstantTimeCompare: "+
+				"every node on the mesh can make this comparison happen, and a byte-at-a-time "+
+				"timing difference is enough to recover the secret.",
+				path[strings.LastIndexByte(path, '/')+1:], pos.Line, bin.Op)
+			return true
+		})
 	}
 
 	if checked == 0 {

@@ -19,6 +19,7 @@ func (app *OramaApp) mountWasmPolicy(keys map[string]*storetypes.KVStoreKey) {
 	app.uploadSunset = ante.NewUploadSunsetDecorator(app.WasmPolicyKeeper)
 }
 
+//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it
 func policyModule(k keeper.Keeper) module.AppModule {
 	return wasmpolicy.NewAppModule(k)
 }

@@ -2,12 +2,13 @@ package gateway
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/srcscan"
 )
 
 // /v1/auth/simple-key required that *some* API key was present, then took the
@@ -20,29 +21,27 @@ import (
 // convenience flag.
 func TestSimpleKeyRouteIsGone(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, parser.ParseComments)
+	files, err := srcscan.ParseNonTest(fset, ".")
 	if err != nil {
 		t.Fatalf("parse the gateway package: %v", err)
 	}
 
-	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			if strings.HasSuffix(path, "_test.go") {
-				continue
-			}
-			ast.Inspect(file, func(n ast.Node) bool {
-				lit, ok := n.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return true
-				}
-				if strings.Contains(lit.Value, "/v1/auth/simple-key") {
-					t.Errorf("%s: %s is registered again — it mints a key for a namespace "+
-						"named in the request body, authenticated by any key at all",
-						fset.Position(lit.Pos()), lit.Value)
-				}
-				return true
-			})
+	for path, file := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
 		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			if strings.Contains(lit.Value, "/v1/auth/simple-key") {
+				t.Errorf("%s: %s is registered again — it mints a key for a namespace "+
+					"named in the request body, authenticated by any key at all",
+					fset.Position(lit.Pos()), lit.Value)
+			}
+			return true
+		})
 	}
 }
 

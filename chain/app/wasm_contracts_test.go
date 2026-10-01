@@ -28,13 +28,6 @@ const (
 	codeVesting  = 5
 )
 
-func jsonOf(t *testing.T, v any) string {
-	t.Helper()
-	raw, err := json.Marshal(v)
-	require.NoError(t, err)
-	return string(raw)
-}
-
 func TestStandardCW20_instantiateTransferAndQuery(t *testing.T) {
 	c := newWasmChain(t, wasmChainOptions{users: 2})
 	alice, bob := c.users[0], c.users[1]

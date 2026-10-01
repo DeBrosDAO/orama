@@ -39,7 +39,7 @@ func badBodies(field string) map[string][]byte {
 		"missing field":   []byte(`{}`),
 		"empty value":     []byte(`{"` + field + `":""}`),
 		"garbage value":   []byte(`{"` + field + `":"not a multiaddr or a peer id"}`),
-		"unicode and NUL": []byte(`{"` + field + `":"/ip4/‮1.2.3.4\u0000/tcp/1"}`),
+		"unicode and NUL": []byte(`{"` + field + `":"/ip4/\u202e1.2.3.4\u0000/tcp/1"}`),
 		"huge value":      []byte(`{"` + field + `":"/` + strings.Repeat("a", hugeBody) + `"}`),
 	}
 }

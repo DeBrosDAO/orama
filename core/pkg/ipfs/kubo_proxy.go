@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -202,17 +203,36 @@ func reportRefused(err error) {
 	fmt.Fprintf(os.Stderr, "serve-ipfs-cluster: kubo proxy %v\n", err)
 }
 
+const forwardedForHeader = "X-Forwarded-For"
+
+// forwardingHeaders are the headers a ReverseProxy with Rewrite drops from the
+// outbound request unless they are copied back.
+var forwardingHeaders = []string{forwardedForHeader, "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"}
+
 // kuboProxy forwards to upstream and sets Kubo's bearer on every request,
 // replacing whatever the caller sent. The listener is the access check. The
 // inbound request's context is the upstream request's: when the connector
 // cancels and closes its connection, the upstream request is cancelled too.
 func kuboProxy(upstream, token string) http.Handler {
 	target := &url.URL{Scheme: "http", Host: upstream}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	base := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		base(r)
-		r.Header.Set("Authorization", "Bearer "+token)
-	}
+	proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(target)
+		// Keep what the single-host proxy did: the caller's Host goes through,
+		// and the forwarding headers the caller sent are passed on with the
+		// caller's address appended to X-Forwarded-For.
+		r.Out.Host = r.In.Host
+		for _, h := range forwardingHeaders {
+			if v, ok := r.In.Header[h]; ok {
+				r.Out.Header[h] = v
+			}
+		}
+		if clientIP, _, err := net.SplitHostPort(r.In.RemoteAddr); err == nil {
+			if prior, ok := r.Out.Header[forwardedForHeader]; ok {
+				clientIP = strings.Join(prior, ", ") + ", " + clientIP
+			}
+			r.Out.Header.Set(forwardedForHeader, clientIP)
+		}
+		r.Out.Header.Set("Authorization", "Bearer "+token)
+	}}
 	return proxy
 }

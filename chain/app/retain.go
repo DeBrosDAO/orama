@@ -5,6 +5,7 @@ import (
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
 // Commit persists the block and returns CometBFT's retain height gated by x/archive (C14).
@@ -23,7 +24,7 @@ func (app *OramaApp) Commit() (*abci.ResponseCommit, error) {
 		return resp, nil
 	}
 	height := app.LastBlockHeight()
-	ctx := app.NewUncachedContext(false, cmtproto.Header{Height: height})
+	ctx := sdk.NewContext(app.CommitMultiStore(), cmtproto.Header{Height: height}, false, app.Logger())
 	archived, err := app.ArchiveKeeper.RetainHeight(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the archive retain height at block %d: %w", height, err)

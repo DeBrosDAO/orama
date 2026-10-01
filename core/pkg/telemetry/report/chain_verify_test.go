@@ -181,8 +181,8 @@ func TestQueryChainRPC_validatorCountCapped(t *testing.T) {
 }
 
 func TestShortChainError_replacesUnprintableRunes(t *testing.T) {
-	got := shortChainError(fmt.Errorf("Internal error\x1b]0;owned\x07 ‮daolnwod​"))
-	if strings.ContainsAny(got, "\x1b\x07‮​") {
+	got := shortChainError(fmt.Errorf("Internal error\x1b]0;owned\x07 \u202edaolnwod\u200b"))
+	if strings.ContainsAny(got, "\x1b\x07\u202e\u200b") {
 		t.Errorf("unprintable runes survived: %q", got)
 	}
 	if !strings.HasPrefix(got, "Internal error?]0;owned? ?daolnwod?") {

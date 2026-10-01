@@ -101,9 +101,9 @@ func (hg *HTTPGateway) initializeRoutes() error {
 		// Set timeout on transport
 		if routeConfig.Timeout > 0 {
 			proxy.Transport = &http.Transport{
-				Dial: (&net.Dialer{
+				DialContext: (&net.Dialer{
 					Timeout: routeConfig.Timeout,
-				}).Dial,
+				}).DialContext,
 				ResponseHeaderTimeout: routeConfig.Timeout,
 			}
 		}

@@ -58,17 +58,6 @@ func newTestProviderKind(t *testing.T, bundle string, kind Kind, fake *fakePushC
 	}
 }
 
-// validP8 is a real-looking PEM-encoded EC P-256 private key. Not the
-// real one — generated for tests only. Used to validate the
-// happy-path constructor; New() will still fail because authKey parsing
-// will reject this synthetic key, so we don't use it for Send() tests.
-const validP8 = `-----BEGIN PRIVATE KEY-----
-MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg2pV1mEzh4n1mY3y4
-i7Ww8gJZ7lxFm6dlGn3PMOzCq2egCgYIKoZIzj0DAQehRANCAAS8Pn8VKWUe9wm8
-e1JFvSTSj1RxLm2sj8cKpFnSdF5g3kfQ9ueJmFVnZbR3VRJOzn0FNyEJYUkXOdYx
-PRIVATE_KEY_PLACEHOLDER==
------END PRIVATE KEY-----`
-
 // ---- Validator tests ------------------------------------------------
 
 func TestValidator_AcceptsWellFormedConfig(t *testing.T) {

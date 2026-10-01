@@ -3,13 +3,13 @@ package gateway
 import (
 	"encoding/json"
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/srcscan"
 )
 
 // A 401 had at least six causes and told them apart only by an English string,
@@ -130,44 +130,40 @@ func TestAuthCodes_keepTheSpellingsAlreadyShipped(t *testing.T) {
 // state this replaced. The two shapes exist so that cannot happen by accident.
 func TestRefusals_allGoThroughTheCodedWriter(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, parser.ParseComments)
+	files, err := srcscan.ParseNonTest(fset, ".")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 
 	found := 0
-	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			ast.Inspect(file, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				name, ok := call.Fun.(*ast.Ident)
-				if !ok || (name.Name != "writeError" && name.Name != "writeJSON") {
-					return true
-				}
-				// The status argument, when it is a refusal.
-				if len(call.Args) < 2 {
-					return true
-				}
-				sel, ok := call.Args[1].(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				if sel.Sel.Name != "StatusUnauthorized" && sel.Sel.Name != "StatusForbidden" {
-					return true
-				}
-				found++
-				pos := fset.Position(call.Pos())
-				t.Errorf("%s:%d writes a %s without a code. Use unauthorized() or forbidden() so the "+
-					"caller can tell this refusal from the five others that look the same.",
-					path[strings.LastIndexByte(path, '/')+1:], pos.Line, sel.Sel.Name)
+	for path, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
 				return true
-			})
-		}
+			}
+			name, ok := call.Fun.(*ast.Ident)
+			if !ok || (name.Name != "writeError" && name.Name != "writeJSON") {
+				return true
+			}
+			// The status argument, when it is a refusal.
+			if len(call.Args) < 2 {
+				return true
+			}
+			sel, ok := call.Args[1].(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if sel.Sel.Name != "StatusUnauthorized" && sel.Sel.Name != "StatusForbidden" {
+				return true
+			}
+			found++
+			pos := fset.Position(call.Pos())
+			t.Errorf("%s:%d writes a %s without a code. Use unauthorized() or forbidden() so the "+
+				"caller can tell this refusal from the five others that look the same.",
+				path[strings.LastIndexByte(path, '/')+1:], pos.Line, sel.Sel.Name)
+			return true
+		})
 	}
 	_ = found
 }

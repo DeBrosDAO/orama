@@ -147,9 +147,7 @@ func coloredConsoleEncoder(enableColors bool) zapcore.Encoder {
 			file = file[idx+1:]
 		}
 		// Remove .go extension for even more compact format
-		if strings.HasSuffix(file, ".go") {
-			file = file[:len(file)-3]
-		}
+		file = strings.TrimSuffix(file, ".go")
 		if enableColors {
 			enc.AppendString(fmt.Sprintf("%s%s%s", Dim, file, Reset))
 		} else {

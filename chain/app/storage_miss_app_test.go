@@ -47,18 +47,6 @@ func (c *wiringChain) requireModuleInvariants() {
 	require.True(c.t, nd.BalanceMatches && nd.ActiveRolesBonded && nd.CapacityBacked, nd.Detail)
 }
 
-// heldBy reports the slots of a deal that a node still holds.
-func (c *wiringChain) heldBy(dealID uint64, nodeID string) int {
-	c.t.Helper()
-	n := 0
-	for _, holder := range c.slotHolders(dealID) {
-		if holder == nodeID {
-			n++
-		}
-	}
-	return n
-}
-
 // Probation nodes have no bond. Before, the missing bond failed the miss row, the whole row was
 // rolled back, and a probation node that never proves kept its protocol slot forever. Here three
 // probation nodes take a protocol deal and never prove; through real FinalizeBlocks each is

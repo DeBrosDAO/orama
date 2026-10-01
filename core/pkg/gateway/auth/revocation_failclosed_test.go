@@ -193,8 +193,10 @@ func TestRevocationList_aHungReloadReleasesItsWaitersAtTheDeadline(t *testing.T)
 	}
 
 	close(release)
-	db.mu.Lock() // returns once the abandoned read has finished
-	db.mu.Unlock()
+	func() {
+		db.mu.Lock() // returns once the abandoned read has finished
+		defer db.mu.Unlock()
+	}()
 	list.mu.RLock()
 	defer list.mu.RUnlock()
 	if !list.lastRefresh.Equal(loadedAt) || len(list.bySubject) != 0 {

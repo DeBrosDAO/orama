@@ -168,7 +168,7 @@ func buildFieldIndex(t reflect.Type) map[string]int {
 	m := make(map[string]int)
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-		if f.IsExported() == false {
+		if !f.IsExported() {
 			continue
 		}
 		tag := f.Tag.Get("db")

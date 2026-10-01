@@ -41,7 +41,7 @@ func TestJoin_unknownTokenRefused(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	infra.ForgetPhantomOnCleanup(t, unusedPublicIP)
-	for _, tok := range []string{strings.Repeat("ab", 32), "' OR 1=1 --", strings.Repeat("0", 64), "‮" + strings.Repeat("f", 63)} {
+	for _, tok := range []string{strings.Repeat("ab", 32), "' OR 1=1 --", strings.Repeat("0", 64), "\u202e" + strings.Repeat("f", 63)} {
 		r := infra.Join(t, f.State.Nodes[0], infra.JoinBody{Token: tok, WGPublicKey: infra.NewWGKey(t), PublicIP: unusedPublicIP})
 		expectRefusal(t, r.Status, r.Body, http.StatusUnauthorized, infra.JoinUnknown)
 	}

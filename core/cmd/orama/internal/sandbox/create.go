@@ -191,7 +191,7 @@ func checkAgentReady() error {
 	status, err := client.Status(ctx)
 	if err != nil {
 		if rwagent.IsNotRunning(err) {
-			return fmt.Errorf("rootwallet agent is not reachable\n\n  Open the RootWallet desktop app and unlock it.")
+			return fmt.Errorf("rootwallet agent is not reachable\n\n  Open the RootWallet desktop app and unlock it")
 		}
 		return fmt.Errorf("rootwallet agent: %w", err)
 	}
@@ -208,12 +208,12 @@ func validateAgentStatus(status *rwagent.StatusResponse) error {
 		// requests parked on the unlock separately; this used to read the
 		// unlock count as if it were the prompt count.
 		if status.PendingApprovals > 0 {
-			return fmt.Errorf("rootwallet agent is locked\n\n  %d approval prompt(s) are already waiting in the RootWallet desktop app — answer them, then unlock it.", status.PendingApprovals)
+			return fmt.Errorf("rootwallet agent is locked\n\n  %d approval prompt(s) are already waiting in the RootWallet desktop app — answer them, then unlock it", status.PendingApprovals)
 		}
 		if status.PendingUnlocks > 0 {
-			return fmt.Errorf("rootwallet agent is locked\n\n  %d request(s) are already waiting for it — unlock it in the RootWallet desktop app.", status.PendingUnlocks)
+			return fmt.Errorf("rootwallet agent is locked\n\n  %d request(s) are already waiting for it — unlock it in the RootWallet desktop app", status.PendingUnlocks)
 		}
-		return fmt.Errorf("rootwallet agent is locked\n\n  Unlock it in the RootWallet desktop app.")
+		return fmt.Errorf("rootwallet agent is locked\n\n  Unlock it in the RootWallet desktop app")
 	}
 
 	if status.ConnectedApps == 0 {

@@ -118,7 +118,7 @@ func TestBuildFieldIndex(t *testing.T) {
 	})
 
 	t.Run("unexported fields are skipped", func(t *testing.T) {
-		idx := buildFieldIndex(reflect.TypeOf(structWithUnexported{}))
+		idx := buildFieldIndex(reflect.TypeOf(structWithUnexported{internal: "hidden"}))
 		assert.Equal(t, 0, idx["id"])
 		assert.Equal(t, 2, idx["name"])
 		_, hasInternal := idx["internal"]

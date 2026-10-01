@@ -87,7 +87,8 @@ func TestSanitizeProviderClaims_countAndSizeCapped(t *testing.T) {
 
 func TestResolveClaims_nilInvokerOrEmptyArgs(t *testing.T) {
 	p := newJWTClaimsProvider(nil, nil) // nil invoker disables the hook
-	if got := p.ResolveClaims(nil, "0xW", "ns"); got != nil {
+	var noCtx context.Context
+	if got := p.ResolveClaims(noCtx, "0xW", "ns"); got != nil {
 		t.Errorf("nil invoker must yield nil claims, got %v", got)
 	}
 }

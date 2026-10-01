@@ -215,7 +215,7 @@ func readSeen(path string) (Seen, error) {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return Seen{}, fmt.Errorf("parse the release rollback record %s: %w", path, err)
 	}
-	return Seen{SnapshotVersion: rec.SnapshotVersion}, nil
+	return Seen(rec), nil
 }
 
 // writeSeen replaces the rollback record atomically.
