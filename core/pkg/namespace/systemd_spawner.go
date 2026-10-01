@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
@@ -57,6 +58,23 @@ type SystemdSpawner struct {
 	// teardownServiceFn replaces the stop+disable+env removal of one WebRTC
 	// unit (TeardownSFU/TeardownTURN). Nil in production; set in tests.
 	teardownServiceFn func(namespace string, svc systemd.ServiceType) error
+
+	// namespaceLocks holds one *sync.Mutex per namespace: a teardown and a
+	// restore of the same namespace on this node take it, so a restore cannot
+	// start units a teardown is stopping (LockNamespace).
+	namespaceLocks sync.Map
+}
+
+// LockNamespace takes this node's lock on namespace and returns its release.
+// A teardown holds it from the first unit stopped to the last file removed. A
+// restore that decided from a registry read made before the namespace's delete
+// began used to start its units again between those two, after which they
+// held ports the registry had handed to the next namespace.
+func (s *SystemdSpawner) LockNamespace(namespace string) (unlock func()) {
+	m, _ := s.namespaceLocks.LoadOrStore(namespace, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // wildcardCertPaths returns the cert/key paths for the `*.<baseDomain>` wildcard

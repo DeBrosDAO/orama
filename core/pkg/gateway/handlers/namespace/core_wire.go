@@ -79,8 +79,7 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 	apiGateway.SetWebRTCManager(clusterManager)
 	apiGateway.SetRegistryDisownedSource(clusterManager.RegistryDisownedTenants)
 
-	systemdSpawner := namespacepkg.NewSystemdSpawner(baseDataDir, clusterSecretPath, logger)
-	apiGateway.SetSpawnHandler(NewSpawnHandler(systemdSpawner, clusterSecretPath, peerID, logger))
+	apiGateway.SetSpawnHandler(NewSpawnHandler(clusterManager.Spawner(), clusterSecretPath, peerID, logger))
 	deletes := NewDeleteHandler(clusterManager, ormClient, apiGateway.GetIPFSClient(), apiGateway.GetAuditLog(), logger)
 	deletes.SetClusterSecretPath(clusterSecretPath)
 	apiGateway.SetNamespaceDeleteHandler(deletes)

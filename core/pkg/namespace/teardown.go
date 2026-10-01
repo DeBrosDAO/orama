@@ -54,6 +54,13 @@ func (s *SystemdSpawner) TeardownNamespace(ctx context.Context, namespace string
 	if isPlatformNamespace(namespace) {
 		return fmt.Errorf("refusing to tear down %q: it is not a tenant namespace", namespace)
 	}
+	defer s.LockNamespace(namespace)()
+	return s.teardownNamespace(namespace)
+}
+
+// teardownNamespace is TeardownNamespace for a tenant namespace whose lock is
+// held.
+func (s *SystemdSpawner) teardownNamespace(namespace string) error {
 	s.logger.Info("Tearing down namespace on this node", zap.String("namespace", namespace))
 
 	teardownUnits := s.teardownUnitsFn
@@ -80,7 +87,11 @@ func (s *SystemdSpawner) TeardownNamespace(ctx context.Context, namespace string
 // its deployments — is removed too, so a namespace created again under the same
 // name does not inherit it. Nothing is removed if the teardown failed.
 func (s *SystemdSpawner) TeardownNamespaceAndData(ctx context.Context, namespace string) error {
-	if err := s.TeardownNamespace(ctx, namespace); err != nil {
+	if isPlatformNamespace(namespace) {
+		return fmt.Errorf("refusing to tear down %q: it is not a tenant namespace", namespace)
+	}
+	defer s.LockNamespace(namespace)()
+	if err := s.teardownNamespace(namespace); err != nil {
 		return err
 	}
 	removeData := s.removeTenantDataFn
@@ -110,8 +121,11 @@ func (cm *ClusterManager) teardownNamespaceOnNode(ctx context.Context, node stal
 // attempting all of them and joining the failures in node order. The nodes'
 // teardowns share nothing, and run one after another they made deleting a
 // namespace take the sum of every node's (a minute on three nodes, inside the
-// delete request) and grow with the cluster.
+// delete request) and grow with the cluster. A node listed more than once (a
+// membership row per role) is torn down once: concurrent teardowns of one node
+// would race on the same units and files.
 func (cm *ClusterManager) teardownNamespaceOnNodes(ctx context.Context, nodes []staleClusterNode, namespace string, scope cleanupScope) error {
+	nodes = distinctNodes(nodes)
 	errs := make([]error, len(nodes))
 	var wg sync.WaitGroup
 	for i, node := range nodes {
@@ -193,4 +207,18 @@ func (cm *ClusterManager) teardownWebRTCOnNode(ctx context.Context, nodeID, node
 		return fmt.Errorf("node %s has no overlay address recorded, so it cannot be asked to %s %s", nodeID, action, namespace)
 	}
 	return cm.sendStopRequest(ctx, nodeIP, action, namespace, nodeID, cleanupScope{ClusterID: clusterID})
+}
+
+// distinctNodes is nodes with each node id once, in first-seen order.
+func distinctNodes(nodes []staleClusterNode) []staleClusterNode {
+	seen := make(map[string]bool, len(nodes))
+	out := make([]staleClusterNode, 0, len(nodes))
+	for _, n := range nodes {
+		if seen[n.NodeID] {
+			continue
+		}
+		seen[n.NodeID] = true
+		out = append(out, n)
+	}
+	return out
 }

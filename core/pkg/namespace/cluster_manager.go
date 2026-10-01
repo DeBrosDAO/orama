@@ -1122,11 +1122,16 @@ func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *Nam
 // and DNS removal below still cover those nodes, and if one ever returns the
 // periodic sweep stops services it no longer holds an allocation for.
 const deprovisionActiveNodesQuery = `
-		SELECT ncn.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
+		SELECT DISTINCT ncn.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
 		FROM namespace_cluster_nodes ncn
 		JOIN dns_nodes dn ON ncn.node_id = dn.id
 		WHERE ncn.namespace_cluster_id = ? AND dn.status = 'active'
 	`
+
+// Spawner is the cluster manager's systemd spawner. The node's spawn handler
+// uses this one rather than its own, so a namespace's teardown and restore on
+// this node take the same lock (SystemdSpawner.LockNamespace).
+func (cm *ClusterManager) Spawner() *SystemdSpawner { return cm.systemdSpawner }
 
 // DeprovisionCluster tears down a namespace cluster on all nodes.
 // Stops and disables the namespace's units (Gateway, Olric, RQLite, WebRTC) on every
@@ -1732,6 +1737,21 @@ func (cm *ClusterManager) RestoreLocalClusters(ctx context.Context) error {
 
 // restoreClusterOnNode restores all processes for a single cluster on this node
 func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, namespaceName, localIP string) error {
+	// The list of clusters to restore was read before this one was reached, and
+	// the namespace may have begun its delete since. Under the namespace's lock
+	// a teardown is either done or not yet started; reading the status again
+	// here decides which.
+	defer cm.systemdSpawner.LockNamespace(namespaceName)()
+	cluster, err := cm.GetCluster(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("re-read cluster %s before restoring it: %w", clusterID, err)
+	}
+	if cluster == nil || cluster.Status != ClusterStatusReady {
+		cm.logger.Info("Not restoring a namespace cluster that is no longer ready",
+			zap.String("namespace", namespaceName), zap.String("cluster_id", clusterID))
+		return nil
+	}
+
 	cm.logger.Info("Restoring namespace cluster processes",
 		zap.String("namespace", namespaceName),
 		zap.String("cluster_id", clusterID),
