@@ -84,3 +84,31 @@ func TestLockNamespace_isPerNamespace(t *testing.T) {
 		t.Fatal("locking namespace b waited for namespace a")
 	}
 }
+
+// A teardown holds the namespace's lock while it stops units, so a restore
+// that takes it cannot run in between.
+func TestTeardownNamespace_holdsTheNamespaceLock(t *testing.T) {
+	inTeardown := make(chan struct{})
+	release := make(chan struct{})
+	s := newTeardownSpawner(func(string) error {
+		close(inTeardown)
+		<-release
+		return nil
+	}, func(string) error { return nil })
+
+	go func() { _ = s.TeardownNamespace(context.Background(), "acme") }()
+	<-inTeardown
+	locked := make(chan struct{})
+	go func() { s.LockNamespace("acme")(); close(locked) }()
+	select {
+	case <-locked:
+		t.Fatal("the namespace's lock was free while its teardown was stopping units")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-locked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lock was not released after the teardown")
+	}
+}

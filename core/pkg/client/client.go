@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	orerrors "github.com/DeBrosOfficial/network/pkg/errors"
 	"net"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/encryption"
+	orerrors "github.com/DeBrosOfficial/network/pkg/errors"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
