@@ -3,6 +3,7 @@
 package bootstrap
 
 import (
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 // What `orama cluster settings` prints (core/cmd/orama/internal/cmd/clustercmd/cluster.go).
 const (
 	settingMode = "namespace-creation"
+	settingCap  = "max-namespaces-per-wallet"
 	modeOpen    = "open"
 	openedLine  = "Namespace creation is open."
 )
@@ -49,6 +51,43 @@ func TestBootstrap_namespaceCreationOpenForTheRun(t *testing.T) {
 		t.Errorf("per-wallet cap %q is not a positive number:\n%s", got["max-namespaces-per-wallet"], show)
 	}
 	ns.New(t, harness.Fleet(t), ns.Options{Via: ns.ViaUser})
+}
+
+// TestBootstrap_operatorCapCoversTheRun raises the per-wallet namespace cap
+// when the run could need more than it allows, and does not restore it. Every
+// ViaOperator namespace is owned by the run's operator wallet, alongside what
+// it already owns; with the fleet's live-namespace cap above the default
+// per-wallet cap of ten, parallel packages were refused NAMESPACE_QUOTA.
+// It is not parallel, so it runs before this package's parallel tests.
+func TestBootstrap_operatorCapCoversTheRun(t *testing.T) {
+	f := harness.Fleet(t)
+	cli := harness.CLI(t)
+	live, err := ns.MaxLiveForTarget(os.LookupEnv, f.State.IsStagenet(), len(f.State.Nodes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := 0
+	for _, line := range strings.Split(cli.MustOK(t, "namespace", "list").Stdout, "\n")[1:] {
+		if strings.TrimSpace(line) != "" {
+			owned++
+		}
+	}
+	need := live + owned
+	show := cli.MustOK(t, "cluster", "settings", "show").Stdout
+	walletCap := 0
+	for _, m := range settingLine.FindAllStringSubmatch(show, -1) {
+		if m[1] == settingCap {
+			walletCap, _ = strconv.Atoi(m[2])
+		}
+	}
+	if walletCap >= need {
+		return
+	}
+	cli.MustOK(t, "cluster", "settings", "set", settingCap, strconv.Itoa(need))
+	after := cli.MustOK(t, "cluster", "settings", "show").Stdout
+	if !strings.Contains(after, settingCap+": "+strconv.Itoa(need)) {
+		t.Fatalf("the per-wallet cap was not raised to %d:\n%s", need, after)
+	}
 }
 
 // TestBootstrap_invalidModeRefusedKeepsOpen: a mode that does not exist is a

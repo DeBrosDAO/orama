@@ -216,8 +216,12 @@ Stage 1 (`bootstrap`) sets the cluster's namespace creation to `open` for the
 whole run and does not restore it: the fleet is disposable and torn down after
 the run, and every later stage relies on it. `ns.New(t, f, ns.Options{})`
 (`ViaUser`) then creates namespaces as fresh wallets without touching the
-creator allowlist. This is the only state a test changes and leaves changed;
-a test that needs another mode sets it and restores `open` in its cleanup.
+creator allowlist. It also raises the per-wallet namespace cap
+(`max-namespaces-per-wallet`) when the fleet's live-namespace cap plus what the
+run's operator already owns is above it, since every `ViaOperator` namespace is
+the operator's: on a fresh fleet the live cap is sixteen and the default
+per-wallet cap ten. These are the only state a test changes and leaves changed;
+a test that needs another value sets it and restores the one it found.
 
 ### Edge-case checklist (every feature, every route or command it covers)
 
