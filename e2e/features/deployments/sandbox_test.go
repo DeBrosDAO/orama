@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -41,7 +42,10 @@ func TestDeploySandbox_fromInside(t *testing.T) {
 	serving(t, tn.app(other), "/health", "")
 	// Each node that runs the app gives it its own PORT, and DNS is round
 	// robin: every probe goes to one node, or PORT would change between them.
-	c, oc := tn.pinnedToARunner(t, u, "sandbox"), tn.pinnedToARunner(t, other, "neighbour")
+	// The two apps are compared on a node that runs both: a dynamic user's uid
+	// is allocated per host, so the same number on two hosts proves nothing.
+	node := tn.sharedRunner(t, "sandbox", "neighbour")
+	c, oc := tn.app(u).PinTo(node.PublicIP), tn.app(other).PinTo(node.PublicIP)
 	uid, otherUID := probe(t, c, "/uid", nil).Detail, probe(t, oc, "/uid", nil).Detail
 	if strings.HasPrefix(uid, "0 ") || uid == otherUID {
 		t.Errorf("uids: app %q, neighbour %q; want non-root and distinct", uid, otherUID)
@@ -50,17 +54,27 @@ func TestDeploySandbox_fromInside(t *testing.T) {
 	tn.checkNetwork(t, c)
 }
 
-// pinnedToARunner returns a client for the app at appURL pinned to one node
-// that runs its unit, once replica setup (asynchronous) has left one there.
-func (tn *tenant) pinnedToARunner(t testing.TB, appURL, name string) *gw.Client {
+// sharedRunner is a node whose units of both apps are active, once replica
+// setup (asynchronous) has placed them. Each app runs on two of the three
+// nodes, so two apps always share one.
+func (tn *tenant) sharedRunner(t testing.TB, a, b string) fleet.Node {
 	t.Helper()
-	unit := "orama-deploy-go@" + tn.instance(name) + ".service"
-	var nodes []fleet.Node
-	eventually.Require(t, pollEvery, startBudget, unit+" to be active on a node", func() (bool, error) {
-		nodes = unitNodes(t, tn.f, unit)
-		return len(nodes) > 0, nil
+	unitA, unitB := "orama-deploy-go@"+tn.instance(a)+".service", "orama-deploy-go@"+tn.instance(b)+".service"
+	var shared fleet.Node
+	eventually.Require(t, pollEvery, startBudget, "a node running both "+unitA+" and "+unitB, func() (bool, error) {
+		runsB := map[string]bool{}
+		for _, n := range unitNodes(t, tn.f, unitB) {
+			runsB[n.Name] = true
+		}
+		for _, n := range unitNodes(t, tn.f, unitA) {
+			if runsB[n.Name] {
+				shared = n
+				return true, nil
+			}
+		}
+		return false, nil
 	})
-	return tn.app(appURL).PinTo(nodes[0].PublicIP)
+	return shared
 }
 
 // checkFiles: the app writes and reads back its state directory (the
@@ -161,10 +175,14 @@ func TestDeploySandbox_unitConfinement(t *testing.T) {
 		// each node's allow-list is compared with the PORT that node gives it.
 		port := probe(t, tn.app(u).PinTo(node.PublicIP), "/getenv", url.Values{"k": {"PORT"}}).Detail
 		props := tn.f.MustExec(t, node, "systemctl show "+unit+" -p DynamicUser,ProtectSystem,PrivateTmp,NoNewPrivileges,MemoryMax,TasksMax,SocketBindAllow,SocketBindDeny,UMask").Stdout
-		for _, want := range []string{"DynamicUser=yes", "ProtectSystem=strict", "PrivateTmp=yes", "NoNewPrivileges=yes", "UMask=0077", "SocketBindAllow=tcp:" + port} {
+		for _, want := range []string{"DynamicUser=yes", "ProtectSystem=strict", "PrivateTmp=yes", "NoNewPrivileges=yes", "UMask=0077"} {
 			if !strings.Contains(props, want) {
 				t.Errorf("%s: %s lacks %s:\n%s", node.Name, unit, want, props)
 			}
+		}
+		// systemd 252 prints the allow-list as tcp:PORT, 259 as tcpPORT.
+		if !regexp.MustCompile(`(?m)^SocketBindAllow=tcp:?` + regexp.QuoteMeta(port) + `$`).MatchString(props) {
+			t.Errorf("%s: %s does not allow binding tcp %s alone:\n%s", node.Name, unit, port, props)
 		}
 		for _, unlimited := range []string{"MemoryMax=infinity", "TasksMax=infinity"} {
 			if strings.Contains(props, unlimited) {
