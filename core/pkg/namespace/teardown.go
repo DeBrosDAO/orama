@@ -105,16 +105,41 @@ func (s *SystemdSpawner) TeardownNamespaceAndData(ctx context.Context, namespace
 }
 
 // teardownNamespaceOnNode tears a namespace down on one node, locally or
-// through the node's spawn endpoint. A failed remote teardown is recorded for
-// replay by sendStopRequest.
+// through the node's spawn endpoint. Whichever way it fails, the teardown is
+// recorded in namespace_pending_cleanup for replay, so a node that does not
+// confirm it is always owed it: a remote failure by sendStopRequest, a failure
+// on this node and a node with no overlay address here. A failure that could
+// not be recorded wraps errCleanupNotRecorded.
 func (cm *ClusterManager) teardownNamespaceOnNode(ctx context.Context, node staleClusterNode, namespace string, scope cleanupScope) error {
 	if node.NodeID == cm.localNodeID {
-		return cm.teardownLocal(ctx, namespace, scope.PurgeData)
+		return cm.teardownLocalRecorded(ctx, node.NodeID, node.InternalIP, namespace, scope)
 	}
 	if node.InternalIP == "" {
-		return fmt.Errorf("node %s has no overlay address recorded, so it cannot be asked to tear down %s", node.NodeID, namespace)
+		cause := fmt.Errorf("node %s has no overlay address recorded, so it cannot be asked to tear down %s", node.NodeID, namespace)
+		if rerr := cm.recordPendingCleanup(ctx, namespace, node.NodeID, "", teardownAction, scope, cause); rerr != nil {
+			return fmt.Errorf("%w; %w", cause, rerr)
+		}
+		return cause
 	}
 	return cm.sendStopRequest(ctx, node.InternalIP, teardownAction, namespace, node.NodeID, scope)
+}
+
+// teardownLocalRecorded tears a namespace down on this node and keeps the
+// pending-cleanup row of the node in step with the outcome: recorded when it
+// failed, cleared when it succeeded. nodeIP is where another node's replay
+// reaches this one.
+func (cm *ClusterManager) teardownLocalRecorded(ctx context.Context, nodeID, nodeIP, namespace string, scope cleanupScope) error {
+	err := cm.teardownLocal(ctx, namespace, scope.PurgeData)
+	if err == nil {
+		cm.clearPendingCleanup(ctx, namespace, nodeID, teardownAction)
+		return nil
+	}
+	cm.logger.Warn("Failed to tear down the namespace on this node; recording it for retry",
+		zap.String("namespace", namespace), zap.Error(err))
+	if rerr := cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, teardownAction, scope, err); rerr != nil {
+		return fmt.Errorf("%w; %w", err, rerr)
+	}
+	return err
 }
 
 // teardownNamespaceOnNodes tears a namespace down on every node at once,
@@ -125,6 +150,13 @@ func (cm *ClusterManager) teardownNamespaceOnNode(ctx context.Context, node stal
 // membership row per role) is torn down once: concurrent teardowns of one node
 // would race on the same units and files.
 func (cm *ClusterManager) teardownNamespaceOnNodes(ctx context.Context, nodes []staleClusterNode, namespace string, scope cleanupScope) error {
+	_, err := cm.teardownNamespaceOnNodesReport(ctx, nodes, namespace, scope)
+	return err
+}
+
+// teardownNamespaceOnNodesReport is teardownNamespaceOnNodes that also names
+// the nodes that did not confirm the teardown, in node order.
+func (cm *ClusterManager) teardownNamespaceOnNodesReport(ctx context.Context, nodes []staleClusterNode, namespace string, scope cleanupScope) ([]string, error) {
 	nodes = distinctNodes(nodes)
 	errs := make([]error, len(nodes))
 	var wg sync.WaitGroup
@@ -138,7 +170,13 @@ func (cm *ClusterManager) teardownNamespaceOnNodes(ctx context.Context, nodes []
 		}()
 	}
 	wg.Wait()
-	return errors.Join(errs...)
+	var unconfirmed []string
+	for i, err := range errs {
+		if err != nil {
+			unconfirmed = append(unconfirmed, nodes[i].NodeID)
+		}
+	}
+	return unconfirmed, errors.Join(errs...)
 }
 
 // refuseWebRTCTeardownOfPlatform is the refusal to tear down a WebRTC unit of

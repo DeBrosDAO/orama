@@ -176,6 +176,21 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A deleted namespace of this name that a node has not finished tearing
+	// down still has state there: refuse until the node confirms.
+	pending, err := h.pendingTeardownNodes(ctx, name)
+	if err != nil {
+		h.logger.Error("could not check whether the name is still being torn down", zap.Error(err))
+		writeCreateJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "the registry did not answer; try again",
+		})
+		return
+	}
+	if len(pending) > 0 {
+		refuseTeardownPending(w, name, pending)
+		return
+	}
+
 	owned, err := h.countOwned(ctx, wallet)
 	if err != nil {
 		h.logger.Error("could not count the wallet's namespaces", zap.Error(err))
@@ -255,7 +270,9 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // taken, and nothing but a delete would ever remove them.
 //
 // If the undo itself fails, the namespace stays and the answer says so: it is
-// then a namespace without a cluster, which its owner's delete removes.
+// then a namespace without a cluster, which its owner's delete removes. The
+// provisioner's error can carry node addresses and paths, so it goes to the log
+// and never into an answer.
 func (h *CreateHandler) refuseUnprovisioned(w http.ResponseWriter, r *http.Request, namespaceID int64, name string, cause error) {
 	h.logger.Error("namespace created but provisioning did not start",
 		zap.String("namespace", name), zap.Error(cause))
@@ -269,13 +286,13 @@ func (h *CreateHandler) refuseUnprovisioned(w http.ResponseWriter, r *http.Reque
 			Result:    auth.AuditSuccess,
 		})
 		writeCreateJSON(w, http.StatusInternalServerError, map[string]any{
-			"error": "the namespace's cluster could not be started (" + cause.Error() + ") and the namespace " +
+			"error": "the namespace's cluster could not be started and the namespace " +
 				"could not be removed again; delete namespace " + name + " to clear it",
 		})
 		return
 	}
 	writeCreateJSON(w, http.StatusServiceUnavailable, map[string]any{
-		"error": "the namespace's cluster could not be started, so nothing was created: " + cause.Error(),
+		"error": "the namespace's cluster could not be started, so nothing was created; try again",
 		"code":  ErrCodeNamespaceProvision,
 	})
 }

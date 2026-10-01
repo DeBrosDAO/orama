@@ -104,7 +104,7 @@ func TestCreate_failedUndoIsReported(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
 
-	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "no capacity") ||
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "no capacity") ||
 		!strings.Contains(w.Body.String(), "delete namespace myapp") {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}

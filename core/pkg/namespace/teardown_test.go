@@ -88,12 +88,14 @@ func TestTeardownNamespaceOnNode_remoteSendsTheTeardownAction(t *testing.T) {
 	}
 }
 
-func TestTeardownNamespaceOnNode_remoteWithoutAnOverlayAddressIsAnError(t *testing.T) {
+// A node that cannot be asked is still owed its teardown: the failure is
+// recorded for replay (which looks the address up again), not forgotten.
+func TestTeardownNamespaceOnNode_remoteWithoutAnOverlayAddressIsRecordedForReplay(t *testing.T) {
 	sw := newStaleSweep(nil, nil, false)
 
 	err := sw.cm.teardownNamespaceOnNode(context.Background(), staleClusterNode{NodeID: "n1"}, "acme", cleanupScope{})
-	if err == nil || len(sw.events) != 0 {
-		t.Fatalf("err = %v, events = %v; want an error and no request", err, sw.events)
+	if err == nil || sw.count("stop:") != 0 || sw.count("exec:INSERT INTO namespace_pending_cleanup") != 1 {
+		t.Fatalf("err = %v, events = %v; want an error, no request and one recorded cleanup", err, sw.events)
 	}
 }
 
@@ -107,7 +109,7 @@ func TestTeardownNamespaceOnNode_localUsesTheSpawner(t *testing.T) {
 	if err := sw.cm.teardownNamespaceOnNode(context.Background(), staleClusterNode{NodeID: "local"}, "acme", cleanupScope{}); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(tornDown, []string{"acme"}) || len(sw.events) != 0 {
+	if !reflect.DeepEqual(tornDown, []string{"acme"}) || sw.count("stop:") != 0 || sw.count("exec:INSERT INTO namespace_pending_cleanup") != 0 {
 		t.Fatalf("tornDown = %v, remote events = %v", tornDown, sw.events)
 	}
 }

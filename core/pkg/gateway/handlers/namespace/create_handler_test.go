@@ -35,6 +35,10 @@ type registry struct {
 	failNamespaceQuery bool
 	failOperators      bool
 	failCreators       bool
+	// pendingTeardown names the nodes still owed a cleanup for any name;
+	// failPendingQuery fails that read alone.
+	pendingTeardown  []string
+	failPendingQuery bool
 	// lostRace makes the namespace insert write nothing, as when another
 	// create of the same name committed after the existence check.
 	lostRace bool
@@ -83,6 +87,16 @@ func (r *registry) Query(_ context.Context, dest any, query string, args ...any)
 		}
 		if r.walletCap != "" {
 			add(operator.SettingMaxNamespacesPerWallet, r.walletCap)
+		}
+		return nil
+	case strings.Contains(query, "FROM namespace_pending_cleanup"):
+		if r.failPendingQuery {
+			return errString("registry unreachable")
+		}
+		for _, node := range r.pendingTeardown {
+			row := reflect.New(rows.Type().Elem()).Elem()
+			row.Field(0).SetString(node)
+			rows.Set(reflect.Append(rows, row))
 		}
 		return nil
 	case strings.Contains(query, "FROM operators"):
@@ -446,8 +460,8 @@ func TestCreate_provisioningThatDoesNotStartUndoesTheCreate(t *testing.T) {
 	if body["code"] != ErrCodeNamespaceProvision {
 		t.Errorf("code %v, want %s", body["code"], ErrCodeNamespaceProvision)
 	}
-	if reason, _ := body["error"].(string); !strings.Contains(reason, "no capacity") {
-		t.Errorf("the reason provisioning did not start is not reported: %q", reason)
+	if reason, _ := body["error"].(string); strings.Contains(reason, "no capacity") {
+		t.Errorf("the provisioner's error reached the client: %q", reason)
 	}
 	if _, ok := db.existing["myapp"]; ok {
 		t.Error("the namespace row was left behind")

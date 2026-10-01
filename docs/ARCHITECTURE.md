@@ -380,23 +380,45 @@ with its ports held, so the next sweep retries. Only when every teardown succeed
 does the guarded `UPDATE ... WHERE status = 'provisioning'` run, so exactly one
 node wins, and that node releases the port allocations and DNS records.
 
-A remote stop or teardown that fails is recorded in `namespace_pending_cleanup` and retried
+A stop or teardown that fails is recorded in `namespace_pending_cleanup` and retried
 every sweep, rather than logged. The unit keeps running and keeps holding a port
 the allocator has already released, and the next namespace given that port finds
-it occupied and joins a foreign raft group.
+it occupied and joins a foreign raft group. Every unconfirmed namespace teardown is
+recorded: a failed spawn request, a failure on the node the delete ran on (replayed
+by running the teardown locally, or through the node's spawn endpoint when another
+node is the one replaying) and a node with no overlay address (the replay looks the
+address up again). A teardown whose record cannot be written is not "owed": the
+delete fails 500 `retryable` with the cluster row kept.
+
+A row is retried every sweep for `pendingCleanupMaxAttempts` (30) failed attempts,
+then hourly: it is never dropped for failing. An exhausted row is logged at Error on
+each failed retry, and it keeps doing its two jobs until the node confirms: it
+refuses a create of the namespace's name and it keeps the node's port blocks
+reserved. There is no monitor alert on it yet; the Error log line is the signal.
 
 Deleting a namespace (`DELETE /v1/namespace/delete`) deprovisions the cluster and then removes
-the namespace row, its grants and its other per-namespace rows. The cluster row, ports,
-DNS and membership are removed even when a node does not confirm its teardown; the
-unconfirmed teardown is then in `namespace_pending_cleanup` and the delete carries on and
+the namespace row, its grants and its other per-namespace rows. The cluster row, DNS and
+membership are removed even when a node does not confirm its teardown, and so are
+the core and WebRTC port blocks of the nodes that confirmed. The port blocks of an
+unconfirmed node are kept, with the cluster row gone: the port allocator counts a
+block by node and range and never joins it to `namespace_clusters`, so the block
+stays taken until the replay of the teardown frees it (core and WebRTC) on
+success. The unconfirmed teardown is in `namespace_pending_cleanup` and the delete carries on and
 answers 200 with `"cleanup_pending": true` (the audit row has `teardown=pending`), because
 stopping there left the namespace row and its owner grant behind with no cluster, counted
 against the owner's cap. Any other deprovision failure answers 500 with `retryable: true`
 and leaves the namespace and its cluster row for the retry. A namespace with no cluster
 is deleted by the same call, which is also how a namespace left behind that way by an
-older release is cleared. A create whose provisioning does not start (503
-`NAMESPACE_PROVISION_FAILED`) removes the namespace row and owner grant it wrote, unless
-a cluster record exists for it.
+older release is cleared. A create of a name that still has a row in
+`namespace_pending_cleanup` on an active node answers 409
+`NAMESPACE_TEARDOWN_PENDING` (`retryable`, `Retry-After`), naming the nodes: the
+previous namespace of that name may still hold units, Olric data, env files and a
+data directory there, and a fresh start clears only the raft directory. A row whose
+node is no longer active does not hold the name (that node is not asked to tear
+anything down and reaps what it holds when it returns). A create whose provisioning
+does not start (503 `NAMESPACE_PROVISION_FAILED`) removes the namespace row and owner
+grant it wrote, unless a cluster record exists for it; the provisioner's error is
+logged, never returned to the caller.
 
 A teardown is destructive, so its replay is checked before it is sent. The row
 carries the cluster id the teardown was owed for and whether it was the

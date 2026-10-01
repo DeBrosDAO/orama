@@ -1036,7 +1036,9 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 			zap.String("action", action),
 			zap.Error(err),
 		)
-		cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, action, scope, err)
+		if rerr := cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, action, scope, err); rerr != nil {
+			return fmt.Errorf("%w; %w", err, rerr)
+		}
 	} else {
 		cm.clearPendingCleanup(ctx, namespace, nodeID, action)
 	}
@@ -1093,13 +1095,19 @@ func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *Nam
 	for i, node := range nodes {
 		members[i] = staleClusterNode{NodeID: node.NodeID, InternalIP: node.InternalIP}
 	}
-	if err := cm.teardownNamespaceOnNodes(ctx, members, cluster.NamespaceName, cleanupScope{ClusterID: cluster.ID}); err != nil {
-		cm.logger.Error("Rollback could not tear the namespace down on every node; the tenant reconciler reaps what is left",
-			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+	unconfirmed, err := cm.teardownNamespaceOnNodesReport(ctx, members, cluster.NamespaceName, cleanupScope{ClusterID: cluster.ID})
+	if err != nil {
+		cm.logger.Error("Rollback could not tear the namespace down on every node; the teardown is owed and replayed",
+			zap.String("namespace", cluster.NamespaceName), zap.Strings("unconfirmed_nodes", unconfirmed), zap.Error(err))
 	}
 
-	// Deallocate ports
-	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
+	// Deallocate the ports of the nodes that confirmed. An unconfirmed node's
+	// units may still hold theirs; its block is freed when the owed teardown is
+	// carried out.
+	if err := cm.releaseConfirmedAllocations(ctx, cluster.ID, unconfirmed); err != nil {
+		cm.logger.Error("Rollback could not free the ports of the failed cluster",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+	}
 
 	// Withdraw the DNS records and node membership. A rollback that left them
 	// leaked them for good: the nodes kept re-advertising a namespace that had
@@ -1135,13 +1143,16 @@ const deprovisionActiveNodesQuery = `
 func (cm *ClusterManager) Spawner() *SystemdSpawner { return cm.systemdSpawner }
 
 // ErrTeardownIncomplete is what DeprovisionCluster wraps when a node did not
-// confirm the teardown. The registry side is complete by then (cluster row,
-// ports, DNS and membership are gone) and what a node did not confirm is still
-// owed: a remote node has a namespace_pending_cleanup record that is replayed
-// until it succeeds, and a namespace the registry no longer assigns to a node is
-// reaped by that node's own tenant reconciler. The caller may therefore finish
-// deleting the namespace instead of asking for the delete to be retried, which
-// would find no cluster and do exactly that.
+// confirm the teardown. The registry side is complete by then (cluster row, DNS
+// and membership are gone, and the ports of the nodes that confirmed) and what a
+// node did not confirm is owed: every unconfirmed node has a
+// namespace_pending_cleanup record (a teardown whose record could not be written
+// is not this error), replayed by the tenant reconciler until the node confirms
+// it, retried hourly after pendingCleanupMaxAttempts failures and logged at
+// Error each time. Until then the node's port blocks stay reserved and a create
+// of the namespace's name is refused. The caller may therefore finish deleting
+// the namespace instead of asking for the delete to be retried, which would find
+// no cluster and do exactly that.
 var ErrTeardownIncomplete = errors.New("namespace not torn down on every node")
 
 // DeprovisionCluster tears down a namespace cluster on all nodes.
@@ -1172,10 +1183,10 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	// is no longer safe to reuse until the leftovers are dealt with.
 	var deprovisionDataErr error
 
-	// Set when a node did not confirm the teardown: its units may still hold their
-	// WebRTC ports, so those allocations are kept (the replay of the recorded
-	// teardown frees them) rather than handed to the next namespace.
-	var teardownIncomplete bool
+	// The nodes that did not confirm the teardown: their units may still hold
+	// their ports, so their core and WebRTC allocations are kept (the replay of
+	// the recorded teardown frees them) rather than handed to the next namespace.
+	var unconfirmed []string
 
 	// 1. Get cluster nodes WITH IPs (must happen before any DB deletion)
 	var clusterNodes []staleClusterNode
@@ -1201,20 +1212,22 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	// the tenant's data on disk still reported success — and re-creating a
 	// namespace of the same name then inherited its raft state. They are
 	// collected and surfaced; the caller decides, but it must be told.
-	if err := cm.teardownNamespaceOnNodes(ctx, clusterNodes, cluster.NamespaceName, cleanupScope{ClusterID: cluster.ID, PurgeData: true}); err != nil {
-		cm.logger.Error("Namespace was NOT torn down on every node — re-creating this namespace would inherit its state (bugboard #281)",
-			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
-		deprovisionDataErr = fmt.Errorf("%w: %w", ErrTeardownIncomplete, err)
-		teardownIncomplete = true
+	unconfirmed, teardownErr := cm.teardownNamespaceOnNodesReport(ctx, clusterNodes, cluster.NamespaceName, cleanupScope{ClusterID: cluster.ID, PurgeData: true})
+	if errors.Is(teardownErr, errCleanupNotRecorded) {
+		// Nothing owes the node its teardown, so the delete cannot finish: the
+		// cluster row stays, and the caller's retry tears down again.
+		return fmt.Errorf("namespace %s was not torn down on every node and the teardown owed could not be recorded, so it is kept for a retry: %w", cluster.NamespaceName, teardownErr)
+	}
+	if teardownErr != nil {
+		cm.logger.Error("Namespace was NOT torn down on every node; the teardown is owed and replayed, and re-creating the name is refused until it is done (bugboard #281)",
+			zap.String("namespace", cluster.NamespaceName), zap.Strings("unconfirmed_nodes", unconfirmed), zap.Error(teardownErr))
+		deprovisionDataErr = fmt.Errorf("%w: %w", ErrTeardownIncomplete, teardownErr)
 	}
 
-	// 4. Deallocate all ports (core + WebRTC)
-	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
-	if teardownIncomplete {
-		cm.logger.Error("Keeping the WebRTC allocations of a namespace that was not torn down on every node: its units may still hold the ports",
-			zap.String("namespace", cluster.NamespaceName), zap.String("cluster_id", cluster.ID))
-	} else if err := cm.webrtcPortAllocator.DeallocateAll(ctx, cluster.ID); err != nil {
-		deprovisionDataErr = fmt.Errorf("deallocate the WebRTC ports of namespace %s: %w", cluster.NamespaceName, err)
+	// 4. Free the ports (core + WebRTC) of every node that confirmed. A failure
+	// returns with the cluster row in place, so the caller's retry finds it.
+	if err := cm.releaseConfirmedAllocations(ctx, cluster.ID, unconfirmed); err != nil {
+		return fmt.Errorf("failed to free the ports of namespace %s: %w", cluster.NamespaceName, err)
 	}
 
 	// 5. Withdraw node membership, then the DNS records (gateway + TURN +
@@ -1228,10 +1241,6 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 
 	// 6. Explicitly delete child tables (FK cascades disabled in rqlite)
 	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_events WHERE namespace_cluster_id = ?`, cluster.ID)
-	cm.db.Exec(ctx, `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
-	if !teardownIncomplete {
-		cm.db.Exec(ctx, `DELETE FROM webrtc_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
-	}
 	cm.db.Exec(ctx, `DELETE FROM webrtc_rooms WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, cluster.ID)
 

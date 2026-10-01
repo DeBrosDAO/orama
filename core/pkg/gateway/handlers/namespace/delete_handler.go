@@ -164,6 +164,7 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 	// replay, so stopping would leave the namespace row and its owner grant
 	// behind with no cluster, counted against the owner's cap, and a retry of
 	// the delete would find nothing to deprovision and do what is done below.
+	// Creating the name again is refused (CreateHandler) until it has finished.
 	cleanupPending := false
 	if err := h.deprovisioner.DeprovisionCluster(r.Context(), namespaceID); err != nil {
 		if !errors.Is(err, namespacepkg.ErrTeardownIncomplete) {
