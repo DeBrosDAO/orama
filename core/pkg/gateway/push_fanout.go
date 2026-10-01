@@ -13,6 +13,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	pushntfy "github.com/DeBrosOfficial/network/pkg/push/providers/ntfy"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // defaultNtfyFanoutTTL bounds how long the active-push-node list is cached
@@ -45,33 +46,31 @@ type ntfyFanoutResolver struct {
 	cachedAt time.Time
 }
 
-// newNtfyFanoutResolver builds a resolver backed by the global dns_nodes table.
-func newNtfyFanoutResolver(globalDB client.NetworkClient, ttl time.Duration) *ntfyFanoutResolver {
+// activePushNodesSQL is every active node with a WireGuard internal IP: the
+// fan-out is a coordination call that must travel the overlay (the receiver
+// refuses any other source), so a node without one is never a target.
+const activePushNodesSQL = "SELECT id, internal_ip FROM dns_nodes WHERE status = 'active' AND internal_ip IS NOT NULL AND internal_ip != ''"
+
+// newNtfyFanoutResolver builds a resolver backed by the cluster registry's
+// dns_nodes. registry must be the registry handle (GlobalORMClient): on a
+// namespace gateway the network client and ORMClient read the namespace's own
+// RQLite, whose dns_nodes is empty, and every push then failed with "no
+// active push nodes".
+func newNtfyFanoutResolver(registry rqlite.Client, ttl time.Duration) *ntfyFanoutResolver {
 	return &ntfyFanoutResolver{
 		port: constants.GatewayAPIPort,
 		ttl:  ttl,
 		query: func(ctx context.Context) ([]ntfyFanoutNode, error) {
-			// Only nodes with a WireGuard internal IP: the fan-out is a
-			// coordination call that must travel the overlay (the receiver
-			// refuses any other source), so never fall back to ip_address.
-			const q = "SELECT id, internal_ip FROM dns_nodes WHERE status = 'active' AND internal_ip IS NOT NULL AND internal_ip != ''"
-			res, err := globalDB.Database().Query(client.WithInternalAuth(ctx), q)
-			if err != nil {
-				return nil, fmt.Errorf("query active push nodes: %w", err)
+			var rows []struct {
+				ID         string `db:"id"`
+				InternalIP string `db:"internal_ip"`
 			}
-			if res == nil {
-				return nil, nil
+			if err := registry.Query(client.WithInternalAuth(ctx), &rows, activePushNodesSQL); err != nil {
+				return nil, fmt.Errorf("query active push nodes in the registry: %w", err)
 			}
-			nodes := make([]ntfyFanoutNode, 0, len(res.Rows))
-			for _, row := range res.Rows {
-				if len(row) < 2 {
-					continue
-				}
-				id, _ := row[0].(string)
-				ip, _ := row[1].(string)
-				if id != "" && ip != "" {
-					nodes = append(nodes, ntfyFanoutNode{ID: id, InternalIP: ip})
-				}
+			nodes := make([]ntfyFanoutNode, 0, len(rows))
+			for _, r := range rows {
+				nodes = append(nodes, ntfyFanoutNode{ID: r.ID, InternalIP: r.InternalIP})
 			}
 			return nodes, nil
 		},

@@ -763,7 +763,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	//
 	// PushDispatcher (legacy) is set only when YAML defaults exist —
 	// kept for back-compat with code that hasn't migrated to Manager.
-	pushDispatcher, pushStore, pushManager, pushCfgStore, pushCredManager, err := buildPushDispatcher(cfg, deps.ORMClient, deps.Client, logger, ikm, deps.EncHolder)
+	pushDispatcher, pushStore, pushManager, pushCfgStore, pushCredManager, err := buildPushDispatcher(cfg, deps.ORMClient, deps.GlobalORMClient, logger, ikm, deps.EncHolder)
 	if err != nil {
 		// Non-fatal: log and continue. Functions calling push_send will get nil
 		// (silent no-op) and HTTP /v1/push/* endpoints return 503.
@@ -1255,7 +1255,7 @@ func appendRQLiteQueryParams(dsn string) string {
 func buildPushDispatcher(
 	cfg *Config,
 	db rqlite.Client,
-	globalDB client.NetworkClient,
+	registry rqlite.Client,
 	logger *logging.ColoredLogger,
 	ikm string,
 	holder *secrets.Holder,
@@ -1304,11 +1304,11 @@ func buildPushDispatcher(
 	// node's internal gateway, signed with a coordination MAC (never the public
 	// push host). The factory attaches it only to providers using the shared
 	// default base URL (a namespace pointing ntfy at its own server is never
-	// fanned across our cluster). nil globalDB or no default base URL → no
+	// fanned across our cluster). nil registry or no default base URL → no
 	// fan-out (provider publishes to the single base URL).
 	var ntfyFanout *ntfyFanoutResolver
-	if globalDB != nil && strings.TrimSpace(cfg.NtfyBaseURL) != "" {
-		ntfyFanout = newNtfyFanoutResolver(globalDB, defaultNtfyFanoutTTL)
+	if registry != nil && strings.TrimSpace(cfg.NtfyBaseURL) != "" {
+		ntfyFanout = newNtfyFanoutResolver(registry, defaultNtfyFanoutTTL)
 	}
 
 	// ProviderFactory turns a resolved Config into the right set of
