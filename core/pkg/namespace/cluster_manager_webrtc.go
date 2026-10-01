@@ -1444,6 +1444,36 @@ func (cm *ClusterManager) StartWebRTCReconciler(ctx context.Context) {
 	}()
 }
 
+// webrtcSweep is what the periodic sweep does for one namespace on this node.
+type webrtcSweep int
+
+const (
+	// webrtcSweepSkip: the config could not be read; nothing is touched.
+	webrtcSweepSkip webrtcSweep = iota
+	// webrtcSweepStopOrphans: WebRTC is not enabled, so a unit still running
+	// here with no allocation row is an orphan of an earlier enablement whose
+	// teardown failed. Its ports are invisible to the allocator, which hands
+	// them to the next namespace, whose SFU then crash-loops on "address
+	// already in use"; it is stopped on the same positive evidence as any
+	// unallocated unit. Enabling writes the config row and the allocation before
+	// it spawns anything, so a unit mid-enablement is never mistaken for one.
+	webrtcSweepStopOrphans
+	// webrtcSweepReconcile: WebRTC is enabled; reconcile allocations and units.
+	webrtcSweepReconcile
+)
+
+// webrtcSweepFor decides the sweep of a namespace from its config read.
+func webrtcSweepFor(cfg *WebRTCConfig, err error) webrtcSweep {
+	switch {
+	case err != nil:
+		return webrtcSweepSkip
+	case cfg == nil:
+		return webrtcSweepStopOrphans
+	default:
+		return webrtcSweepReconcile
+	}
+}
+
 // reconcileWebRTCForLocalNamespaces reconciles every namespace this node holds
 // local state for: first the cluster-wide assignments (coordinator-gated), then
 // this node's own services against its own allocations.
@@ -1517,8 +1547,14 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		cm.ensureNamespaceHostRecordIfServing(ctx, state)
 
 		webrtcCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName)
-		if werr != nil || webrtcCfg == nil {
-			continue // WebRTC not enabled for this namespace
+		switch webrtcSweepFor(webrtcCfg, werr) {
+		case webrtcSweepSkip:
+			cm.logger.Warn("WebRTC sweep skipped a namespace: its config could not be read",
+				zap.String("namespace", state.NamespaceName), zap.Error(werr))
+			continue
+		case webrtcSweepStopOrphans:
+			cm.stopUnallocatedWebRTCServices(ctx, state.ClusterID, state.NamespaceName)
+			continue
 		}
 		// The registry must hold what this node's SFU binds before anything
 		// below reads it: the allocator hands out ports from those rows, and the
