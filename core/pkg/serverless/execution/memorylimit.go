@@ -46,24 +46,38 @@ func checkMinMemory(compiled wazero.CompiledModule, limitMB int) error {
 // grow past limitBytes. memory.grow past the limit then returns -1 to the
 // guest (wazero treats a nil Reallocate as a failed grow), which is how a
 // guest sees any out-of-memory condition.
-type cappedAllocator struct{ limitBytes uint64 }
+type cappedAllocator struct {
+	limitBytes uint64
+	// startRefused is set when a memory's starting size was refused. wazero
+	// slices the buffer it asked for at instantiation without checking it, so a
+	// refused start panics there; ExecuteModule turns that one panic into an
+	// error. A memory that is not exported never reaches checkMinMemory.
+	startRefused *bool
+}
 
 func (a cappedAllocator) Allocate(capacity, _ uint64) experimental.LinearMemory {
 	if capacity > a.limitBytes {
 		capacity = a.limitBytes
 	}
-	return &cappedMemory{limitBytes: a.limitBytes, buf: make([]byte, 0, capacity)}
+	return &cappedMemory{limitBytes: a.limitBytes, buf: make([]byte, 0, capacity), startRefused: a.startRefused}
 }
 
 type cappedMemory struct {
-	limitBytes uint64
-	buf        []byte
+	limitBytes   uint64
+	buf          []byte
+	started      bool
+	startRefused *bool
 }
 
 // Reallocate implements experimental.LinearMemory. Memory never shrinks, so
 // bytes between len and cap are still the zeros make() gave them.
 func (m *cappedMemory) Reallocate(size uint64) []byte {
+	first := !m.started
+	m.started = true
 	if size > m.limitBytes {
+		if first && m.startRefused != nil {
+			*m.startRefused = true
+		}
 		return nil
 	}
 	if size <= uint64(cap(m.buf)) {
@@ -85,3 +99,9 @@ func (m *cappedMemory) Reallocate(size uint64) []byte {
 
 // Free implements experimental.LinearMemory.
 func (m *cappedMemory) Free() { m.buf = nil }
+
+// instantiateRefused is the error for a module whose memory could not start
+// within the function's limit.
+func instantiateRefused(limitMB int) error {
+	return fmt.Errorf("the module's memory needs more at start than the function's memory limit of %d MB", limitMB)
+}

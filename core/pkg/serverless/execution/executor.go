@@ -151,11 +151,13 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 
 	// Enforce the function's own memory limit for this invocation only: the
 	// allocator rides the instantiate ctx, so it never touches another function.
-	if limitMB := memoryLimitMBFrom(ctx); limitMB > 0 {
+	limitMB := memoryLimitMBFrom(ctx)
+	startRefused := false
+	if limitMB > 0 {
 		if err := checkMinMemory(compiled, limitMB); err != nil {
 			return nil, err
 		}
-		ctx = experimental.WithMemoryAllocator(ctx, cappedAllocator{limitBytes: uint64(limitMB) * bytesPerMB})
+		ctx = experimental.WithMemoryAllocator(ctx, cappedAllocator{limitBytes: uint64(limitMB) * bytesPerMB, startRefused: &startRefused})
 	}
 
 	if e.sem != nil {
@@ -181,7 +183,7 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 	// Time the instantiate so the engine can attribute cold-start vs handler
 	// work (bugboard #27 cold-start floor); no-op when no collector is attached.
 	instStart := time.Now()
-	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
+	instance, err := e.instantiate(ctx, compiled, moduleConfig, &startRefused, limitMB)
 	if t := instantiateTimingFrom(ctx); t != nil {
 		t.InstantiateNs = time.Since(instStart).Nanoseconds()
 	}
@@ -323,4 +325,20 @@ func (e *Executor) UnmarshalJSONFromGuest(mod api.Module, ptr, size uint32, v in
 		return fmt.Errorf("failed to read from guest memory")
 	}
 	return json.Unmarshal(data, v)
+}
+
+// instantiate instantiates compiled. A memory whose start the function's limit
+// refused makes wazero panic slicing the buffer it was denied; that panic, and
+// only that one, is the module not fitting its limit and is returned as an
+// error. Any other panic is not this package's to interpret and goes on.
+func (e *Executor) instantiate(ctx context.Context, compiled wazero.CompiledModule, cfg wazero.ModuleConfig, startRefused *bool, limitMB int) (instance api.Module, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if !*startRefused {
+				panic(r)
+			}
+			instance, err = nil, instantiateRefused(limitMB)
+		}
+	}()
+	return e.runtime.InstantiateModule(ctx, compiled, cfg)
 }

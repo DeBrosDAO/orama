@@ -130,3 +130,38 @@ func TestCappedMemory_reallocateBoundaries(t *testing.T) {
 		t.Error("Reallocate(0) must succeed")
 	}
 }
+
+// hiddenMemoryWasm is a module whose only memory is NOT exported and starts at
+// minPages, with an empty _start: checkMinMemory, which reads exported
+// memories, cannot see it.
+func hiddenMemoryWasm(minPages uint32) []byte {
+	mod := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	mod = append(mod, section(1, []byte{0x01, 0x60, 0x00, 0x00})...)
+	mod = append(mod, section(3, []byte{0x01, 0x00})...)
+	mod = append(mod, section(5, append([]byte{0x01, 0x00}, uleb(minPages)...))...)
+	mod = append(mod, section(7, []byte{0x01, 0x06, '_', 's', 't', 'a', 'r', 't', 0x00, 0x00})...)
+	body := append(uleb(2), 0x00, 0x0b) // no locals; end
+	return append(mod, section(10, append([]byte{0x01}, body...))...)
+}
+
+// A memory that is not exported and starts above the function's limit made
+// wazero panic on the start buffer the allocator refused, a panic any tenant
+// could cause by deploying such a module with a small limit. It is an error.
+func TestExecuteModule_hiddenMemoryAboveLimitIsAnErrorNotAPanic(t *testing.T) {
+	ctx := context.Background()
+	runtime := wazero.NewRuntime(ctx)
+	t.Cleanup(func() { _ = runtime.Close(ctx) })
+	compiled, err := runtime.CompileModule(ctx, hiddenMemoryWasm(64)) // 4 MB
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	ex := NewExecutor(runtime, zap.NewNop(), 0)
+	_, err = ex.ExecuteModule(WithMemoryLimitMB(ctx, 1), compiled, "hidden", nil)
+	if err == nil || !strings.Contains(err.Error(), "memory limit of 1 MB") {
+		t.Fatalf("a hidden 4 MB memory under a 1 MB limit answered %v, want the limit refusal", err)
+	}
+	// Within the limit the same module runs.
+	if _, err := ex.ExecuteModule(WithMemoryLimitMB(ctx, 8), compiled, "hidden-ok", nil); err != nil {
+		t.Fatalf("a hidden 4 MB memory under an 8 MB limit: %v", err)
+	}
+}
