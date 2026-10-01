@@ -80,13 +80,23 @@ func checkOlricPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
-	// 2.9-2.11 Log analysis: suspects
-	if ol.LogSuspects == 0 {
-		r = append(r, inspector.Pass("olric.log_suspects", "No suspect/failed members in logs", olricSub, node,
-			"no suspect messages in last hour", inspector.Critical))
+	// 2.9-2.11 Log analysis: a member memberlist declared failed is a failure.
+	// A suspicion alone is the protocol's first step and is refuted when the
+	// member answers; it is a warning, because a member that keeps being
+	// suspected is one that answers late (a starved or partitioned node).
+	if ol.LogDeadMarks == 0 {
+		r = append(r, inspector.Pass("olric.log_failed_members", "No members marked failed in logs", olricSub, node,
+			"no member marked failed in last hour", inspector.Critical))
 	} else {
-		r = append(r, inspector.Fail("olric.log_suspects", "No suspect/failed members in logs", olricSub, node,
-			fmt.Sprintf("%d suspect/failed messages in last hour", ol.LogSuspects), inspector.Critical))
+		r = append(r, inspector.Fail("olric.log_failed_members", "No members marked failed in logs", olricSub, node,
+			fmt.Sprintf("%d members marked failed in last hour", ol.LogDeadMarks), inspector.Critical))
+	}
+	if ol.LogSuspects == 0 {
+		r = append(r, inspector.Pass("olric.log_suspicions", "No suspected members in logs", olricSub, node,
+			"no suspect messages in last hour", inspector.Medium))
+	} else {
+		r = append(r, inspector.Warn("olric.log_suspicions", "No suspected members in logs", olricSub, node,
+			fmt.Sprintf("%d suspect messages in last hour (members answering late; refuted so far)", ol.LogSuspects), inspector.Medium))
 	}
 
 	// 2.13 Flapping detection

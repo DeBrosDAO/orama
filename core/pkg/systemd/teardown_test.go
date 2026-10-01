@@ -432,3 +432,28 @@ func TestTeardownService_aStoppedUnitThatNeverFailedNeedsNoReset(t *testing.T) {
 		t.Fatalf("err = %v, want nil: the unit is stopped and not failed", err)
 	}
 }
+
+// HasUnitEnv is what keeps a retired unit out of `orama node status`: it is
+// true while the env file exists and false once the file is cleared.
+func TestHasUnitEnv(t *testing.T) {
+	m, _ := newFakeManager(t)
+	if m.HasUnitEnv("acme", ServiceTypeSFU) {
+		t.Fatal("no env file was written, but HasUnitEnv is true")
+	}
+	owner := unitenv.Owner{UID: os.Getuid(), GID: os.Getgid()}
+	if err := unitenv.Write(m.unitEnvDir, "acme", string(ServiceTypeSFU), []byte("A=1\n"), owner); err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasUnitEnv("acme", ServiceTypeSFU) {
+		t.Fatal("the env file exists, but HasUnitEnv is false")
+	}
+	if m.HasUnitEnv("acme", ServiceTypeGateway) {
+		t.Fatal("another service's env file counted")
+	}
+	if err := unitenv.Clear(m.unitEnvDir, "acme", string(ServiceTypeSFU)); err != nil {
+		t.Fatal(err)
+	}
+	if m.HasUnitEnv("acme", ServiceTypeSFU) {
+		t.Fatal("a cleared env file still counts")
+	}
+}

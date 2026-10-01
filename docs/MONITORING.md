@@ -562,8 +562,8 @@ Both tools check cluster health, but they serve different purposes:
 
 | | `orama monitor` | `orama inspect` |
 |---|---|---|
-| **Data source** | The gateway's operator telemetry API (every node's `orama node report`, gathered in the cluster); `--ssh`: one SSH call per node | 15+ SSH commands per node per subsystem |
-| **Speed** | One API call; `--ssh` ~3-5s for full cluster | ~4-10s for full cluster |
+| **Data source** | The gateway's operator telemetry API (every node's `orama node report`, gathered in the cluster); `--ssh`: one SSH call per node | About 12 SSH sessions per node, sharing one connection |
+| **Speed** | One API call; `--ssh` ~3-5s for full cluster | ~10s for a full cluster on healthy nodes; a CPU-starved node takes longer, and `--timeout` (30s per node) is what it has |
 | **Output** | Live view, tables, JSON | Tables, JSON |
 | **Focus** | Real-time monitoring, alert detection | Deep diagnostic checks with pass/fail/warn |
 | **AI support** | `report` subcommand for LLM input | `--ai` flag for inline analysis |

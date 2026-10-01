@@ -1811,7 +1811,7 @@ func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clu
 		// A cheap read first: most units are inactive or allocated, and need
 		// no lock. The decision to stop is made again under it.
 		state, serr := cm.systemdSpawner.systemdMgr.ServiceState(namespaceName, svc.typ)
-		if serr != nil || !holdsOrMayRetakePorts(state) || !svc.gone() {
+		if serr != nil || !needsRetiring(state, cm.systemdSpawner.systemdMgr.HasUnitEnv(namespaceName, svc.typ)) || !svc.gone() {
 			continue
 		}
 		cm.stopServiceIfStillUnallocated(namespaceName, svc.typ, svc.gone)
@@ -1830,22 +1830,20 @@ func (cm *ClusterManager) stopServiceIfStillUnallocated(namespaceName string, ty
 		return
 	}
 	state, serr := cm.systemdSpawner.systemdMgr.ServiceState(namespaceName, typ)
-	if serr != nil || !holdsOrMayRetakePorts(state) {
+	if serr != nil || !needsRetiring(state, cm.systemdSpawner.systemdMgr.HasUnitEnv(namespaceName, typ)) {
 		return
 	}
-	cm.logger.Info("Stopping WebRTC service: this node no longer holds the allocation (bugboard #161)",
+	cm.logger.Info("Retiring WebRTC service: this node no longer holds the allocation (bugboard #161)",
 		zap.String("namespace", namespaceName), zap.String("service", string(typ)))
-	if serr := cm.systemdSpawner.systemdMgr.StopService(namespaceName, typ); serr != nil {
-		cm.logger.Warn("Failed to stop unallocated WebRTC service — its ports stay bound while the allocator considers them free",
-			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(serr))
+	// Stop, disable and remove the env file. A unit left enabled with
+	// Restart=always crash-looped on another namespace's ports hundreds of
+	// times. An env file left behind is how `orama node upgrade` rediscovers
+	// the unit and enables and starts it again, and how `orama node status`
+	// lists it as an inactive service of this node.
+	if terr := cm.systemdSpawner.retireSFU(namespaceName); terr != nil {
+		cm.logger.Warn("Failed to retire unallocated WebRTC service — its ports stay bound while the allocator considers them free, and it starts again on the next boot or upgrade",
+			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(terr))
 		return
-	}
-	// An enabled unit with Restart=always comes back on its own: one left
-	// enabled by an old release crash-looped on another namespace's ports
-	// hundreds of times after it was stopped, and on every boot after.
-	if derr := cm.systemdSpawner.systemdMgr.DisableServiceAndReload(namespaceName, typ); derr != nil {
-		cm.logger.Error("Stopped an unallocated WebRTC service but could not disable it; it starts again on the next boot",
-			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(derr))
 	}
 	// Verify it actually stopped. The allocator has already freed these ports,
 	// so a process that is still bound can collide with the next allocation
@@ -1855,6 +1853,14 @@ func (cm *ClusterManager) stopServiceIfStillUnallocated(namespaceName string, ty
 		cm.logger.Error("WebRTC service still active after stop — ports remain bound although the allocation was released; a later allocation on this host may collide",
 			zap.String("namespace", namespaceName), zap.String("service", string(typ)))
 	}
+}
+
+// needsRetiring reports whether an unallocated WebRTC unit has to be retired:
+// it holds or may retake ports, or its env file is still there. A stopped,
+// disabled unit with an env file is still provisioned as far as the upgrade and
+// `orama node status` are concerned, so inactive alone is not "retired".
+func needsRetiring(state systemd.ActiveState, hasEnv bool) bool {
+	return hasEnv || holdsOrMayRetakePorts(state)
 }
 
 // holdsOrMayRetakePorts reports whether a unit in state must be stopped when

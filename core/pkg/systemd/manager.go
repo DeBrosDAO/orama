@@ -774,6 +774,14 @@ func (m *Manager) envFilePath(namespace string, serviceType ServiceType) string 
 	return unitenv.Path(dir, namespace, string(serviceType))
 }
 
+// HasUnitEnv reports whether the service of namespace still has an env file:
+// the mark by which `orama node upgrade` and `orama node status` treat it as
+// provisioned on this node.
+func (m *Manager) HasUnitEnv(namespace string, serviceType ServiceType) bool {
+	_, err := os.Stat(m.envFilePath(namespace, serviceType))
+	return err == nil
+}
+
 // storeUnitEnv writes an env file into the root-owned tree: directly when
 // this process is root (the installer), otherwise through orama-privhelper.
 func storeUnitEnv(namespace, service, contents string) error {

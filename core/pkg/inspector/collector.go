@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,7 +58,25 @@ type NamespaceData struct {
 	GatewayStatus int    // HTTP status code from gateway health
 	SFUUp         bool   // SFU systemd service active (optional, WebRTC)
 	TURNUp        bool   // TURN systemd service active (optional, WebRTC)
+	// RegistryStatus is the status the cluster registry records for the
+	// namespace (namespace_clusters.status), "" when the registry could not be
+	// read or has no such namespace.
+	RegistryStatus string
 }
+
+// InTransition reports whether the registry says the namespace is being
+// created or deleted: its services come up and go away node by node, so a node
+// where they are not (yet, or any more) up is not unhealthy.
+func (n NamespaceData) InTransition() bool {
+	return n.RegistryStatus == registryStatusProvisioning || n.RegistryStatus == registryStatusDeprovisioning
+}
+
+// The namespace_clusters.status values of a namespace in transition
+// (namespace.ClusterStatusProvisioning, ClusterStatusDeprovisioning).
+const (
+	registryStatusProvisioning   = "provisioning"
+	registryStatusDeprovisioning = "deprovisioning"
+)
 
 // RQLiteData holds parsed RQLite status from a single node.
 type RQLiteData struct {
@@ -138,7 +157,8 @@ type OlricData struct {
 	Members       []string // memberlist member addresses
 	Coordinator   string   // current coordinator address
 	LogErrors     int      // error count in recent logs
-	LogSuspects   int      // "suspect" or "Marking as failed" count
+	LogDeadMarks  int      // "Marking <member> as failed": memberlist's verdict that a member is gone
+	LogSuspects   int      // memberlist suspicions (a failed probe, a refuted suspect message): the protocol's normal first step, refuted when the member answers
 	LogFlapping   int      // rapid join/leave count
 	ProcessMemMB  int      // RSS memory in MB
 	RestartCount  int      // NRestarts from systemd
@@ -253,10 +273,32 @@ func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose boo
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
+	// A short path under /tmp: the sockets in it must fit a unix socket name,
+	// which the long per-user directory of macOS does not leave room for.
+	controlDir, controlErr := os.MkdirTemp("/tmp", "orama-inspect-")
+	if controlErr == nil {
+		defer os.RemoveAll(controlDir)
+		defer func() {
+			for _, n := range nodes {
+				n.ControlDir = controlDir
+				closeSharedConnection(n)
+			}
+		}()
+	}
+
 	for _, node := range nodes {
 		wg.Add(1)
 		go func(n Node) {
 			defer wg.Done()
+			if controlErr != nil {
+				nd := &NodeData{Node: n}
+				nd.markUnreachable(fmt.Errorf("create the directory for shared ssh connections: %w", controlErr))
+				mu.Lock()
+				data.Nodes[n.Host] = nd
+				mu.Unlock()
+				return
+			}
+			n.ControlDir = controlDir
 			nd := collectNode(ctx, n, subsystems, verbose)
 			mu.Lock()
 			data.Nodes[n.Host] = nd
@@ -292,55 +334,57 @@ func collectNode(ctx context.Context, node Node, subsystems []string, verbose bo
 		return nd
 	}
 
-	if shouldCollect("rqlite") {
-		var err error
-		nd.RQLite, err = collectRQLite(ctx, node, verbose)
-		nd.recordFailure(SubsystemRQLite, err)
-	}
-	if shouldCollect("olric") {
-		var err error
-		nd.Olric, err = collectOlric(ctx, node)
-		nd.recordFailure(SubsystemOlric, err)
-	}
-	if shouldCollect("ipfs") {
-		var err error
-		nd.IPFS, err = collectIPFS(ctx, node)
-		nd.recordFailure(SubsystemIPFS, err)
-	}
-	if shouldCollect("dns") && node.IsNameserver() {
-		var err error
-		nd.DNS, err = collectDNS(ctx, node)
-		nd.recordFailure(SubsystemDNS, err)
-	}
+	// WireGuard goes first because the network probe pings its peers.
 	if shouldCollect("wireguard") || shouldCollect("wg") {
 		var err error
 		nd.WireGuard, err = collectWireGuard(ctx, node)
 		nd.recordFailure(SubsystemWireGuard, err)
 	}
-	if shouldCollect("system") {
-		var err error
+
+	var jobs []collectorJob
+	add := func(subsystem string, selected bool, run func() error) {
+		if selected {
+			jobs = append(jobs, collectorJob{subsystem, run})
+		}
+	}
+	add(SubsystemRQLite, shouldCollect("rqlite"), func() (err error) {
+		nd.RQLite, err = collectRQLite(ctx, node, verbose)
+		return err
+	})
+	add(SubsystemOlric, shouldCollect("olric"), func() (err error) {
+		nd.Olric, err = collectOlric(ctx, node)
+		return err
+	})
+	add(SubsystemIPFS, shouldCollect("ipfs"), func() (err error) {
+		nd.IPFS, err = collectIPFS(ctx, node)
+		return err
+	})
+	add(SubsystemDNS, shouldCollect("dns") && node.IsNameserver(), func() (err error) {
+		nd.DNS, err = collectDNS(ctx, node)
+		return err
+	})
+	add(SubsystemSystem, shouldCollect("system"), func() (err error) {
 		nd.System, err = collectSystem(ctx, node)
-		nd.recordFailure(SubsystemSystem, err)
-	}
-	if shouldCollect("network") {
-		var err error
+		return err
+	})
+	add(SubsystemNetwork, shouldCollect("network"), func() (err error) {
 		nd.Network, err = collectNetwork(ctx, node, nd.WireGuard)
-		nd.recordFailure(SubsystemNetwork, err)
-	}
-	if shouldCollect("tor") {
-		var err error
+		return err
+	})
+	add(SubsystemTor, shouldCollect("tor"), func() (err error) {
 		nd.Tor, err = collectTor(ctx, node)
-		nd.recordFailure(SubsystemTor, err)
-	}
-	if shouldCollect("global") {
-		var err error
+		return err
+	})
+	add(SubsystemGlobal, shouldCollect("global"), func() (err error) {
 		nd.Chain, nd.Global, err = collectGlobalNode(ctx, node)
-		nd.recordFailure(SubsystemGlobal, err)
-	}
+		return err
+	})
 	// Namespace collection — always collect if any subsystem is collected
-	var err error
-	nd.Namespaces, err = collectNamespaces(ctx, node)
-	nd.recordFailure(SubsystemNamespace, err)
+	add(SubsystemNamespace, true, func() (err error) {
+		nd.Namespaces, err = collectNamespaces(ctx, node)
+		return err
+	})
+	runCollectors(nd, jobs)
 
 	return nd
 }
@@ -602,19 +646,22 @@ echo "$SEP"
 (systemctl is-active --quiet orama-namespace-olric@index && echo active) || (systemctl is-active --quiet orama-olric && echo active) || echo inactive
 echo "$SEP"
 ss -tlnp 2>/dev/null | grep ':10103 ' | head -1
+LOG=$(journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null)
 echo "$SEP"
-journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
+printf '%s\n' "$LOG" | grep -ciE '(error|ERR)' || echo 0
 echo "$SEP"
-journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(suspect|marking.*(failed|dead))' || echo 0
+printf '%s\n' "$LOG" | grep -ciE 'marking.*(failed|dead)' || echo 0
 echo "$SEP"
-journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(memberlist.*(join|leave))' || echo 0
+printf '%s\n' "$LOG" | grep -iE 'suspect' | grep -civE 'marking.*(failed|dead)' || echo 0
+echo "$SEP"
+printf '%s\n' "$LOG" | grep -ciE '(memberlist.*(join|leave))' || echo 0
 echo "$SEP"
 systemctl show orama-namespace-olric@index --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
 ps -C olric-server -o rss= 2>/dev/null | head -1 || echo 0
 `
 	res := RunSSH(ctx, node, cmd)
-	parts, err := splitSections(res, 8)
+	parts, err := splitSections(res, 9)
 	if err != nil {
 		return nil, err
 	}
@@ -623,11 +670,12 @@ ps -C olric-server -o rss= 2>/dev/null | head -1 || echo 0
 	data.MemberlistUp = strings.TrimSpace(parts[2]) != ""
 
 	data.LogErrors = parseIntDefault(strings.TrimSpace(parts[3]), 0)
-	data.LogSuspects = parseIntDefault(strings.TrimSpace(parts[4]), 0)
-	data.LogFlapping = parseIntDefault(strings.TrimSpace(parts[5]), 0)
-	data.RestartCount = parseIntDefault(strings.TrimSpace(parts[6]), 0)
+	data.LogDeadMarks = parseIntDefault(strings.TrimSpace(parts[4]), 0)
+	data.LogSuspects = parseIntDefault(strings.TrimSpace(parts[5]), 0)
+	data.LogFlapping = parseIntDefault(strings.TrimSpace(parts[6]), 0)
+	data.RestartCount = parseIntDefault(strings.TrimSpace(parts[7]), 0)
 
-	rssKB := parseIntDefault(strings.TrimSpace(parts[7]), 0)
+	rssKB := parseIntDefault(strings.TrimSpace(parts[8]), 0)
 	data.ProcessMemMB = rssKB / 1024
 
 	return data, nil
@@ -931,10 +979,12 @@ func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 	}
 
 	cmd := `SEP="===INSPECTOR_SEP==="`
-	// Service statuses
-	for _, svc := range services {
-		cmd += fmt.Sprintf(` && echo "%s:$(systemctl is-active %s 2>/dev/null || echo inactive)"`, svc, svc)
-	}
+	// Service statuses: one systemctl call for all of them (it prints one state
+	// per unit, in order, "inactive" for a unit it does not know). One call per
+	// unit was fourteen round trips to a systemd that a starved node answers
+	// slowly.
+	cmd += ` && systemctl is-active ` + strings.Join(services, " ") + ` 2>/dev/null | awk -v names="` +
+		strings.Join(services, " ") + `" 'BEGIN{split(names,n," ")} {print n[NR]":"$0}'`
 	cmd += ` && echo "$SEP"`
 	cmd += ` && free -m | awk '/Mem:/{print $2","$3","$4} /Swap:/{print "SWAP:"$2","$3}'`
 	cmd += ` && echo "$SEP"`
@@ -1184,14 +1234,18 @@ echo "$SEP"
 
 func collectNamespaces(ctx context.Context, node Node) ([]NamespaceData, error) {
 	// Detect namespace services: orama-namespace-gateway@<name>.service
+	// The registry's status of every namespace comes in the same session: a
+	// namespace being created or deleted is not judged like a settled one.
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 systemctl list-units --type=service --all --no-pager --no-legend 'orama-namespace-gateway@*.service' 2>/dev/null | awk '{print $1}' | sed 's/orama-namespace-gateway@//;s/\.service//'
 echo "$SEP"
+` + rqlite.NodeShellCurl(inspectorSudo, `-sf -H 'Content-Type: application/json' -d '[["SELECT namespace_name, status FROM namespace_clusters"]]'`, "/db/query") + ` 2>/dev/null || echo '{"error":"unreachable"}'
+echo "$SEP"
 `
 	res := RunSSH(ctx, node, cmd)
-	parts, err := splitSections(res, 2)
+	parts, err := splitSections(res, 4)
 	if err != nil {
 		return nil, err
 	}
@@ -1207,6 +1261,7 @@ echo "$SEP"
 	if len(names) == 0 {
 		return nil, nil
 	}
+	registry := parseNamespaceRegistry(parts[2])
 
 	var nsCmd string
 	// A unit name that is not a namespace name is never put into a root
@@ -1261,7 +1316,39 @@ echo "$SEP"
 		}
 	}
 
-	return append(result, unprobed...), nil
+	result = append(result, unprobed...)
+	for i := range result {
+		result[i].RegistryStatus = registry[result[i].Name]
+	}
+	return result, nil
+}
+
+// parseNamespaceRegistry reads the answer of
+// SELECT namespace_name, status FROM namespace_clusters. An answer that is not
+// one (the node's rqlite was unreachable, an error) is an empty map: the
+// namespaces are then judged as settled ones, never excused.
+func parseNamespaceRegistry(raw string) map[string]string {
+	var resp struct {
+		Results []struct {
+			Values [][]interface{} `json:"values"`
+			Error  string          `json:"error"`
+		} `json:"results"`
+	}
+	registry := map[string]string{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &resp); err != nil || len(resp.Results) == 0 || resp.Results[0].Error != "" {
+		return registry
+	}
+	for _, row := range resp.Results[0].Values {
+		if len(row) != 2 {
+			continue
+		}
+		name, _ := row[0].(string)
+		status, _ := row[1].(string)
+		if name != "" {
+			registry[name] = status
+		}
+	}
+	return registry
 }
 
 // Parse helper functions

@@ -19,6 +19,10 @@ type Node struct {
 	// checking: the host key was pinned (orama node setup) and nothing else
 	// may answer. Empty keeps the operator's known_hosts with accept-new.
 	KnownHostsFile string
+	// ControlDir, when set, is a private directory where this node's SSH
+	// sessions share one connection (ssh ControlMaster). Collect sets it for
+	// the length of a collection.
+	ControlDir string
 }
 
 // HostKeyOptions returns the ssh -o arguments for the node's host-key policy.

@@ -295,6 +295,12 @@ func (s *SystemdSpawner) TeardownSFUOfCluster(ctx context.Context, namespace, no
 	if err := s.refuseOtherCluster(namespace, clusterID); err != nil {
 		return err
 	}
+	return s.retireSFU(namespace)
+}
+
+// retireSFU stops and disables the namespace's SFU and removes its env file and
+// its configs. The caller holds the namespace's lock.
+func (s *SystemdSpawner) retireSFU(namespace string) error {
 	if err := s.teardownWebRTCService(namespace, systemd.ServiceTypeSFU); err != nil {
 		return err
 	}
