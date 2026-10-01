@@ -377,6 +377,11 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 	}
 
 	unit, err := m.unitName(deployment)
+	if errors.Is(err, ErrServedNotRun) {
+		// A served deployment (static, Next.js export) has no unit to stop;
+		// deleting one must not fail on it.
+		return nil
+	}
 	if err != nil {
 		return err
 	}

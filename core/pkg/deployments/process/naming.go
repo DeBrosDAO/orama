@@ -1,6 +1,7 @@
 package process
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -135,6 +136,10 @@ func DeployDir(baseDeployPath, namespace, name string) string {
 	return baseDeployPath + "/" + InstanceName(namespace, name)
 }
 
+// ErrServedNotRun is RuntimeFor's answer for a deployment the gateway serves
+// rather than runs: it has no process and no unit.
+var ErrServedNotRun = errors.New("it is served rather than run")
+
 // RuntimeFor is the template that runs a deployment, and the entry point the
 // node template needs.
 //
@@ -160,6 +165,6 @@ func RuntimeFor(deployment *deployments.Deployment) (Runtime, string, error) {
 	case deployments.DeploymentTypeGoBackend:
 		return RuntimeGo, "", nil
 	default:
-		return "", "", fmt.Errorf("deployment type %q has no runtime: it is served rather than run", deployment.Type)
+		return "", "", fmt.Errorf("deployment type %q has no runtime: %w", deployment.Type, ErrServedNotRun)
 	}
 }
