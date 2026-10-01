@@ -66,6 +66,8 @@ esac
 
 # Keep equal to defaultQueryGasLimit in chain/cmd/oramad/cmd/commands.go.
 QUERY_GAS_LIMIT=2000000
+# Keep equal to defaultIAVLCacheSize in chain/cmd/oramad/cmd/commands.go.
+IAVL_CACHE_SIZE=100000
 DENOM="norama"
 # name:ssh-alias:public-ip. The public address is what peers and clients dial: the global services
 # run in a network namespace that cannot reach the WireGuard mesh, so the chain peers over the
@@ -543,6 +545,7 @@ configure_node() {
 		-e 's#^pruning-interval = .*#pruning-interval = \"10\"#' \
 		-e 's#^min-retain-blocks = .*#min-retain-blocks = 201600#' \
 		-e 's#^app-db-backend = .*#app-db-backend = \"pebbledb\"#' \
+		-e 's#^iavl-cache-size = .*#iavl-cache-size = $IAVL_CACHE_SIZE#' \
 		$HOME_DIR/config/app.toml"
 	assert_set "$alias" "$HOME_DIR/config/app.toml" "app-db-backend = \"pebbledb\"" "the app-db-backend"
 	# 201600 blocks is 14 days at 6 seconds (x/archive DefaultBlocksIn14Days). oramad's Commit
@@ -552,6 +555,10 @@ configure_node() {
 	# The public /v1/chain/query route reaches module queries; oramad init writes this gas limit
 	# (chain/cmd/oramad/cmd defaultQueryGasLimit) so one query cannot scan unbounded state.
 	assert_set "$alias" "$HOME_DIR/config/app.toml" "query-gas-limit = \"$QUERY_GAS_LIMIT\"" "the query gas limit"
+	# The SDK's IAVL cache default is sized for a host running nothing else; oramad init writes
+	# this one (chain/cmd/oramad/cmd defaultIAVLCacheSize), and a node whose app.toml predates it
+	# gets it here.
+	assert_set "$alias" "$HOME_DIR/config/app.toml" "iavl-cache-size = $IAVL_CACHE_SIZE" "the IAVL cache size"
 }
 
 # install_verifier puts the pinned out-of-process shielded verifier where oramad looks for it by

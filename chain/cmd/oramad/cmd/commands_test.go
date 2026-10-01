@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,5 +145,44 @@ func TestInitCometBFTConfig_rpcUnsafeIsOff(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "unsafe = false") || strings.Contains(string(body), "unsafe = true") {
 		t.Fatalf("the rendered config.toml does not keep rpc unsafe off:\n%s", body)
+	}
+}
+
+// The IAVL cache oramad init writes is sized for a host that shares its memory: the SDK default
+// took a 4 GB stagenet node to 98% in a day.
+func TestInitAppConfig_sizesTheIAVLCacheForASharedHost(t *testing.T) {
+	tmpl, cfg := initAppConfig()
+	srvCfg := cfg.(*serverconfig.Config)
+	if srvCfg.IAVLCacheSize != defaultIAVLCacheSize || defaultIAVLCacheSize >= serverconfig.DefaultConfig().IAVLCacheSize {
+		t.Fatalf("IAVLCacheSize = %d, want %d, below the SDK's %d", srvCfg.IAVLCacheSize, defaultIAVLCacheSize, serverconfig.DefaultConfig().IAVLCacheSize)
+	}
+	tpl, err := template.New("app.toml").Parse(tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := tpl.Execute(&out, srvCfg); err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("iavl-cache-size = %d", defaultIAVLCacheSize); !strings.Contains(out.String(), want) {
+		t.Fatalf("the rendered app.toml carries no %q:\n%s", want, grep(out.String(), "iavl-cache-size"))
+	}
+}
+
+// deploy.sh writes the same values into an app.toml that predates them; a value changed in one
+// place only would leave existing nodes on the old one.
+func TestStagenetDeploy_setsTheValuesOramadInitWrites(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "scripts", "stagenet", "deploy.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(raw)
+	for _, want := range []string{
+		fmt.Sprintf("\nQUERY_GAS_LIMIT=%d\n", defaultQueryGasLimit),
+		fmt.Sprintf("\nIAVL_CACHE_SIZE=%d\n", defaultIAVLCacheSize),
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("deploy.sh does not set %q", strings.TrimSpace(want))
+		}
 	}
 }

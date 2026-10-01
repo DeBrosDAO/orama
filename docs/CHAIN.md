@@ -1880,6 +1880,16 @@ or external RocksDB dependency), so it's the default until this is fixed upstrea
 If you ever see `"failed to load state at height N; version does not exist (latest height: N)"`
 from `oramad`, check `app-db-backend` in `config/app.toml` before looking anywhere else.
 
+## Memory: the IAVL cache and GOMEMLIMIT
+
+`oramad init` writes `iavl-cache-size = 100000` into `app.toml`, not the SDK's 781250. The SDK's
+figure is sized for a host that runs a validator and nothing else; on a 4 GB stagenet node that also
+runs IPFS and every namespace's services, the cache grew past half a gigabyte of live heap in a day.
+The chain unit also sets `GOMEMLIMIT=1GiB`, a soft limit: without it Go's collector let the heap reach
+twice what was live, and the node reached 98% memory. Over the limit the collector runs more often; it
+does not kill. `deploy.sh` sets `iavl-cache-size` on nodes whose `app.toml` predates it; elsewhere an
+existing `app.toml` keeps whatever value it has until it is edited.
+
 ## Running a localnet
 
 ```sh

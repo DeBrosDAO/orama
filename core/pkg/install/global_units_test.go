@@ -280,3 +280,13 @@ func TestGlobalUnits_kuboRPCHostIsThreadedThrough(t *testing.T) {
 		t.Errorf("provider ExecStart = %q", loop)
 	}
 }
+
+// The chain unit gives oramad a soft memory limit: without one Go's collector
+// let its heap reach twice what was live, and on a 4 GB stagenet node that
+// shares its memory with IPFS and every namespace, the node reached 98%.
+func TestRenderGlobalChainUnit_setsASoftMemoryLimit(t *testing.T) {
+	unit := RenderGlobalChainUnit("")
+	if !strings.Contains(unit, "\nEnvironment=GOMEMLIMIT="+constants.ChainGoMemLimit+"\n") {
+		t.Fatalf("the chain unit sets no GOMEMLIMIT:\n%s", unit)
+	}
+}

@@ -30,6 +30,14 @@ const (
 	ChainUser = "orama-chain"
 	// ChainDaemonName is the chain binary, cosmovisor's DAEMON_NAME.
 	ChainDaemonName = "oramad"
+
+	// ChainGoMemLimit is the chain unit's GOMEMLIMIT: a soft limit, so Go's
+	// collector works to keep oramad near it rather than letting the heap
+	// grow to twice what is live, which on a 4 GB node that shares its
+	// memory with IPFS and every namespace took the node to 98%. oramad's
+	// live heap is a few hundred megabytes; over the limit the collector
+	// runs more often, it does not kill.
+	ChainGoMemLimit = "1GiB"
 	// ChainDenom is the chain's base denom, which `oramad init` is given.
 	ChainDenom = "norama"
 	// ChainNodeKeyPath is CometBFT's node_key.json under ChainHome: the

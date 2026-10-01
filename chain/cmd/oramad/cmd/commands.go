@@ -55,6 +55,15 @@ const defaultMinGasPriceNorama = "0.000001"
 // chain/scripts/stagenet/deploy.sh sets the same value on nodes whose app.toml already exists.
 const defaultQueryGasLimit uint64 = 2_000_000
 
+// defaultIAVLCacheSize is how many IAVL tree nodes the store keeps in memory (app.toml
+// iavl-cache-size). The SDK's default, 781250, is sized for a host that runs a validator and
+// nothing else: on a 4 GB node that also runs IPFS and every namespace's services, that cache
+// grew past half a gigabyte of live heap in a day, and Go's collector, which lets the heap reach
+// twice what is live, took the node to 98% memory. 100000 nodes is about 60 MB. A read that
+// misses it is answered by pebble from disk. chain/scripts/stagenet/deploy.sh sets the same
+// value on nodes whose app.toml already exists.
+const defaultIAVLCacheSize uint64 = 100_000
+
 // requireQueryGasLimit makes `oramad start` refuse a node whose app.toml has no query-gas-limit
 // (0 means unbounded in the SDK) unless it runs a localnet: the node serves the public
 // /v1/chain/query route, and a query with no gas limit can scan the whole state.
@@ -131,6 +140,7 @@ func initAppConfig() (string, interface{}) {
 	srvCfg.MinGasPrices = defaultMinGasPriceNorama + params.BaseDenom
 	srvCfg.AppDBBackend = "pebbledb"
 	srvCfg.QueryGasLimit = defaultQueryGasLimit
+	srvCfg.IAVLCacheSize = defaultIAVLCacheSize
 	return serverconfig.DefaultConfigTemplate, srvCfg
 }
 

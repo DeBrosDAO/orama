@@ -93,8 +93,8 @@ func RenderGlobalChainUnit(persistentPeers string) string {
 	if persistentPeers != "" {
 		exec += " --p2p.persistent_peers " + persistentPeers
 	}
-	env := fmt.Sprintf("Environment=DAEMON_NAME=%s\nEnvironment=DAEMON_HOME=%s\nEnvironment=DAEMON_ALLOW_DOWNLOAD_BINARIES=false\nEnvironment=DAEMON_RESTART_AFTER_UPGRADE=true\nReadOnlyPaths=%s\n",
-		constants.ChainDaemonName, constants.ChainHome,
+	env := fmt.Sprintf("Environment=DAEMON_NAME=%s\nEnvironment=DAEMON_HOME=%s\nEnvironment=DAEMON_ALLOW_DOWNLOAD_BINARIES=false\nEnvironment=DAEMON_RESTART_AFTER_UPGRADE=true\nEnvironment=GOMEMLIMIT=%s\nReadOnlyPaths=%s\n",
+		constants.ChainDaemonName, constants.ChainHome, constants.ChainGoMemLimit,
 		strings.Join(cosmovisor.Layout{Home: constants.ChainHome}.ReadOnlyDirs(), " "))
 	return renderGlobalUnit(
 		"Orama L1 node (oramad under cosmovisor)",
