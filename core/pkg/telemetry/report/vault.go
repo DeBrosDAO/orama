@@ -88,12 +88,19 @@ func probeVaultStatus(ctx context.Context, url string, r *VaultReport) {
 func probeVaultHealth(ctx context.Context, url string, r *VaultReport) {
 	body, err := httpGet(ctx, url)
 	if err != nil {
+		r.Status = vaultStatusUnknown
 		return
 	}
 	var health struct {
 		Status string `json:"status"`
 	}
-	if json.Unmarshal(body, &health) == nil {
-		r.Status = health.Status
+	if json.Unmarshal(body, &health) != nil || health.Status == "" {
+		r.Status = vaultStatusUnknown
+		return
 	}
+	r.Status = health.Status
 }
+
+// vaultStatusUnknown is a vault health query that got no answer it could read,
+// said in the report rather than left as an empty status.
+const vaultStatusUnknown = "unknown"

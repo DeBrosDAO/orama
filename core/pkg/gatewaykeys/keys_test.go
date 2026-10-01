@@ -10,7 +10,7 @@ import (
 
 func TestWrite_rootOnlyAndReplaces(t *testing.T) {
 	dir := t.TempDir()
-	pem := []byte("-----BEGIN PRIVATE KEY-----\nYQ==\n-----END PRIVATE KEY-----\n")
+	pem := mustGenerate(t, constants.GatewayRSAKeyFileName)
 	if err := Write(dir, constants.IndexNamespace, constants.GatewayRSAKeyFileName, pem); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestEnsure_createsMissingKeysOnceAndNeverOverwrites(t *testing.T) {
 
 func TestEnsure_keepsAnExistingKeyAndCreatesOnlyTheMissingOne(t *testing.T) {
 	dir := t.TempDir()
-	existing := []byte("-----BEGIN RSA PRIVATE KEY-----\nYQ==\n-----END RSA PRIVATE KEY-----\n")
+	existing := mustGenerate(t, constants.GatewayRSAKeyFileName)
 	if err := Write(dir, constants.IndexNamespace, constants.GatewayRSAKeyFileName, existing); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,8 @@ func TestEnsure_keepsAnExistingKeyAndCreatesOnlyTheMissingOne(t *testing.T) {
 
 func TestEnsure_carriesTheStateDirectoryKeyForward(t *testing.T) {
 	dir := t.TempDir()
-	legacy := map[string][]byte{constants.GatewayRSAKeyFileName: []byte("legacy-rsa")}
+	legacyRSA := mustGenerate(t, constants.GatewayRSAKeyFileName)
+	legacy := map[string][]byte{constants.GatewayRSAKeyFileName: legacyRSA}
 	created, err := Ensure(dir, func(name string) ([]byte, error) { return legacy[name], nil })
 	if err != nil {
 		t.Fatal(err)
@@ -110,11 +111,11 @@ func TestEnsure_carriesTheStateDirectoryKeyForward(t *testing.T) {
 		t.Fatalf("created %v", created)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, constants.IndexNamespace, constants.GatewayRSAKeyFileName))
-	if string(got) != "legacy-rsa" {
+	if string(got) != string(legacyRSA) {
 		t.Fatalf("the migrated key is %q, want the one the old build was running with", got)
 	}
 	generated, _ := os.ReadFile(filepath.Join(dir, constants.IndexNamespace, constants.GatewayEdDSAKeyFileName))
-	if len(generated) == 0 || string(generated) == "legacy-rsa" {
+	if len(generated) == 0 || string(generated) == string(legacyRSA) {
 		t.Fatal("the key with no legacy copy was not generated")
 	}
 }
@@ -146,4 +147,44 @@ func TestGenerate_rejectsAnUnknownName(t *testing.T) {
 			t.Fatalf("Generate(%s): %d bytes, %v", name, len(pem), err)
 		}
 	}
+}
+
+// TestWrite_refusesAKeyOfTheWrongKind: a put the gateway could not load would
+// stop it at its next start, and Ensure never replaces a non-empty file.
+func TestWrite_refusesAKeyOfTheWrongKind(t *testing.T) {
+	dir := t.TempDir()
+	rsaPEM, err := Generate(constants.GatewayRSAKeyFileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edPEM, err := Generate(constants.GatewayEdDSAKeyFileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		file string
+		pem  []byte
+	}{
+		"not PEM":               {constants.GatewayEdDSAKeyFileName, []byte("not a key")},
+		"RSA under the Ed name": {constants.GatewayEdDSAKeyFileName, rsaPEM},
+		"Ed under the RSA name": {constants.GatewayRSAKeyFileName, edPEM},
+	} {
+		if err := Write(dir, constants.IndexNamespace, c.file, c.pem); err == nil {
+			t.Errorf("%s was written", name)
+		}
+	}
+	for file, pem := range map[string][]byte{constants.GatewayRSAKeyFileName: rsaPEM, constants.GatewayEdDSAKeyFileName: edPEM} {
+		if err := Write(dir, constants.IndexNamespace, file, pem); err != nil {
+			t.Errorf("a valid %s was refused: %v", file, err)
+		}
+	}
+}
+
+func mustGenerate(t *testing.T, name string) []byte {
+	t.Helper()
+	pem, err := Generate(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem
 }

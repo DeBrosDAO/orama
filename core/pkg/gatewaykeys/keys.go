@@ -68,6 +68,9 @@ func Write(dir, namespace, name string, keyPEM []byte) error {
 	if len(keyPEM) == 0 || len(keyPEM) > MaxPEM {
 		return fmt.Errorf("gateway key %s is %d bytes", name, len(keyPEM))
 	}
+	if err := validKeyPEM(name, keyPEM); err != nil {
+		return err
+	}
 	destDir := filepath.Join(dir, namespace)
 	if err := os.MkdirAll(destDir, dirMode); err != nil {
 		return fmt.Errorf("create %s: %w", destDir, err)
@@ -187,4 +190,29 @@ func Generate(name string) ([]byte, error) {
 		return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 	}
 	return nil, fmt.Errorf("gateway key %q is not a signing key", name)
+}
+
+// validKeyPEM refuses a key that is not the kind its name holds: a write the
+// gateway could not load would stop it at its next start, and Ensure never
+// replaces a non-empty file.
+func validKeyPEM(name string, keyPEM []byte) error {
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return fmt.Errorf("gateway key %s is not PEM", name)
+	}
+	switch name {
+	case constants.GatewayRSAKeyFileName:
+		if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
+			return fmt.Errorf("gateway key %s is not a PKCS#1 RSA private key: %w", name, err)
+		}
+	case constants.GatewayEdDSAKeyFileName:
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return fmt.Errorf("gateway key %s is not a PKCS#8 private key: %w", name, err)
+		}
+		if _, ok := key.(ed25519.PrivateKey); !ok {
+			return fmt.Errorf("gateway key %s is a %T, not an Ed25519 private key", name, key)
+		}
+	}
+	return nil
 }

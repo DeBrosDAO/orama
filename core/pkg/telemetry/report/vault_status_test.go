@@ -68,7 +68,7 @@ func TestProbeVaultHealth_setsTheStatusTheAlertsReadFrom(t *testing.T) {
 	}
 	r = &VaultReport{}
 	probeVaultHealth(context.Background(), "http://127.0.0.1:1", r)
-	if r.Status != "" {
-		t.Errorf("an unanswered health query set Status %q", r.Status)
+	if r.Status != vaultStatusUnknown {
+		t.Errorf("an unanswered health query left Status %q, want %q", r.Status, vaultStatusUnknown)
 	}
 }
