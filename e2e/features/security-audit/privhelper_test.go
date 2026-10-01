@@ -86,9 +86,10 @@ func TestPrivhelper_serverRefusesOutsideTheAllowList(t *testing.T) {
 
 // TestPrivhelper_socketAdmitsOnlyRootAndOrama: the socket is root:orama
 // 0660, so another account cannot even connect, and the orama account from
-// outside the two admitted units (an SSH session here, a tenant's gateway in
-// an attack) is refused by the unit check (docs/SECURITY.md: "authorised by
-// the systemd unit the caller runs in").
+// outside the two admitted units is refused by the unit check
+// (docs/SECURITY.md: "authorised by the systemd unit the caller runs in"): an
+// SSH session runs in no system.slice service, so the helper cannot name a
+// unit for it at all (privhelper.UnitFromCgroup).
 func TestPrivhelper_socketAdmitsOnlyRootAndOrama(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -101,8 +102,8 @@ func TestPrivhelper_socketAdmitsOnlyRootAndOrama(t *testing.T) {
 		if o := as("nobody", "nogroup"); o.Exit != edge.ExitRefused || !strings.Contains(o.Stderr, "cannot reach") {
 			t.Errorf("%s: nobody: exit %d %q, want a refused connection", n.Name, o.Exit, o.Stderr)
 		}
-		if o := as("orama", "orama"); o.Exit != edge.ExitRefused || !strings.Contains(o.Stdout+o.Stderr, "may not use the privileged helper") {
-			t.Errorf("%s: orama from a session: exit %d %q%q, want the unit refusal", n.Name, o.Exit, o.Stdout, o.Stderr)
+		if o := as("orama", "orama"); o.Exit != edge.ExitRefused || !strings.Contains(o.Stdout+o.Stderr, "cannot identify the caller") {
+			t.Errorf("%s: orama from a session: exit %d %q%q, want the refusal of a caller that runs in no system unit", n.Name, o.Exit, o.Stdout, o.Stderr)
 		}
 	}
 }
@@ -112,7 +113,13 @@ func TestPrivhelper_socketAdmitsOnlyRootAndOrama(t *testing.T) {
 // process. The shell leaves the cgroup when it exits.
 func inUnitCgroup(t *testing.T, f *fleet.Fleet, n fleet.Node, unit, cmd string) fleet.Output {
 	t.Helper()
-	procs := "/sys/fs/cgroup/system.slice/" + unit + "/cgroup.procs"
+	// The unit sits in its template's slice (system-orama\x2dnamespace\x2dgateway.slice),
+	// so its directory is whatever systemd reports as its ControlGroup.
+	cg := strings.TrimSpace(f.MustExec(t, n, "systemctl show -p ControlGroup --value "+fleet.ShellQuote(unit)).Stdout)
+	if !strings.HasPrefix(cg, "/system.slice/") {
+		t.Fatalf("%s: %s has ControlGroup %q, want one under /system.slice", n.Name, unit, cg)
+	}
+	procs := "/sys/fs/cgroup" + cg + "/cgroup.procs"
 	script := "echo $$ > " + fleet.ShellQuote(procs) + " && exec setpriv --reuid=orama --regid=orama --init-groups " + cmd
 	return f.Exec(t, n, "sh -c "+fleet.ShellQuote(script))
 }

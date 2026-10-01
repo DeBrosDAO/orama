@@ -49,10 +49,10 @@ func TestIsolation_everyUnitRunsAsItsAccount(t *testing.T) {
 
 // What the shell prints when the kernel refuses to open another process's
 // /proc/<pid>/environ: "Permission denied" where the entry is visible but
-// protected, "No such file or directory" where the unit's ProtectProc=invisible
+// protected, "No such file" (dash) or "No such file or directory" (bash) where the unit's ProtectProc=invisible
 // hides other accounts' processes altogether (the CoreDNS unit does). Either
 // way the read fails at the kernel, not in the shell or for a missing tool.
-var environRefusals = []string{"Permission denied", "No such file or directory"}
+var environRefusals = []string{"Permission denied", "No such file"}
 
 func refusedByKernel(stderr string) bool {
 	for _, r := range environRefusals {
