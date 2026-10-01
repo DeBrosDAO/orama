@@ -141,11 +141,20 @@ func (cm *ClusterManager) teardownNamespaceOnNodes(ctx context.Context, nodes []
 	return errors.Join(errs...)
 }
 
+// refuseWebRTCTeardownOfPlatform is the refusal to tear down a WebRTC unit of
+// the node's own instances. It is checked before the namespace's lock is taken.
+func refuseWebRTCTeardownOfPlatform(namespace string, svc systemd.ServiceType) error {
+	if isPlatformNamespace(namespace) {
+		return fmt.Errorf("refusing to tear down %s of %q: it is not a tenant namespace", svc, namespace)
+	}
+	return nil
+}
+
 // teardownWebRTCService stops and disables one WebRTC unit of a namespace and
 // removes its env file, through teardownServiceFn when a test replaces it.
 func (s *SystemdSpawner) teardownWebRTCService(namespace string, svc systemd.ServiceType) error {
-	if isPlatformNamespace(namespace) {
-		return fmt.Errorf("refusing to tear down %s of %q: it is not a tenant namespace", svc, namespace)
+	if err := refuseWebRTCTeardownOfPlatform(namespace, svc); err != nil {
+		return err
 	}
 	s.logger.Info("Tearing down WebRTC service via systemd",
 		zap.String("namespace", namespace), zap.String("service", string(svc)))
@@ -163,7 +172,14 @@ func (s *SystemdSpawner) teardownWebRTCService(namespace string, svc systemd.Ser
 // disabled, its env file and its config (which carries the TURN secret) are
 // removed. The upgrade restart discovers units from the env file, so without
 // this a namespace that turned WebRTC off got its SFU back on the next upgrade.
+//
+// It holds the namespace's lock, so the reconciler's start of the same unit
+// (spawnSFUIfDown) cannot land between the stop and the removal of its config.
 func (s *SystemdSpawner) TeardownSFU(ctx context.Context, namespace, nodeID string) error {
+	if err := refuseWebRTCTeardownOfPlatform(namespace, systemd.ServiceTypeSFU); err != nil {
+		return err
+	}
+	defer s.LockNamespace(namespace)()
 	if err := s.teardownWebRTCService(namespace, systemd.ServiceTypeSFU); err != nil {
 		return err
 	}
@@ -189,6 +205,10 @@ func (s *SystemdSpawner) TeardownSFU(ctx context.Context, namespace, nodeID stri
 // shared server is ReconcileHostTURN's job, which rewrites the tenant list
 // without restarting the process.
 func (s *SystemdSpawner) TeardownTURN(ctx context.Context, namespace, nodeID string) error {
+	if err := refuseWebRTCTeardownOfPlatform(namespace, systemd.ServiceTypeTURN); err != nil {
+		return err
+	}
+	defer s.LockNamespace(namespace)()
 	return s.teardownWebRTCService(namespace, systemd.ServiceTypeTURN)
 }
 

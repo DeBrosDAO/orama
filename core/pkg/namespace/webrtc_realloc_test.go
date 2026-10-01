@@ -251,9 +251,9 @@ func TestSpawnAllocatedWebRTCServices_refusesIncompleteLocalState(t *testing.T) 
 		systemdSpawner: &SystemdSpawner{systemdMgr: &systemd.Manager{}}}
 	// nil allocator: reaching the allocation read would panic.
 	cm.spawnAllocatedWebRTCServices(context.Background(),
-		&ClusterLocalState{NamespaceName: "ns", ClusterID: "c1", LocalIP: ""}, &WebRTCConfig{})
+		&ClusterLocalState{NamespaceName: "ns", ClusterID: "c1", LocalIP: ""})
 	cm.spawnAllocatedWebRTCServices(context.Background(),
-		&ClusterLocalState{NamespaceName: "ns", ClusterID: "c1", LocalIP: "10.0.0.2"}, &WebRTCConfig{})
+		&ClusterLocalState{NamespaceName: "ns", ClusterID: "c1", LocalIP: "10.0.0.2"})
 }
 
 // The spawn backoff must actually suppress a retry after a failure.

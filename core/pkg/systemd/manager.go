@@ -154,6 +154,11 @@ type Manager struct {
 	unitState    func(unit string) (unitState, error)
 	listUnitsCmd func(args ...string) ([]byte, error)
 
+	// stopWaitDeadline and stopPollInterval override the package constants of
+	// the same name. Zero in production; set in tests.
+	stopWaitDeadline time.Duration
+	stopPollInterval time.Duration
+
 	// deploymentsBase and sqliteBase override the directories beside the
 	// namespaces directory that hold tenant deployments and SQLite databases.
 	// Empty in production; set in tests.
@@ -429,6 +434,11 @@ func (m *Manager) StopService(namespace string, serviceType ServiceType) error {
 // failed. The teardown keeps a namespace's data when a unit could not be
 // stopped, so the answer comes from systemd's state, never from the wording of
 // the failure.
+//
+// A unit still deactivating when the stop command returns (the command gave up
+// before the job finished, or the job was issued by someone else) is waited for
+// up to stopWaitDeadline instead of being reported failed: the teardown that
+// follows deletes what the unit runs from.
 func (m *Manager) stopUnit(unit string) error {
 	m.logger.Info("Stopping systemd service", zap.String("service", unit))
 
@@ -441,11 +451,67 @@ func (m *Manager) stopUnit(unit string) error {
 	if stateErr != nil {
 		return fmt.Errorf("failed to stop %s: %w; output: %s (and its state could not be read: %v)", unit, err, string(output), stateErr)
 	}
+	if ActiveState(state.Active) == ActiveStateDeactivating {
+		var waitErr error
+		if state, waitErr = m.waitUnitStopped(unit); waitErr != nil {
+			return fmt.Errorf("failed to stop %s: %w; output: %s (and %v)", unit, err, string(output), waitErr)
+		}
+	}
 	if !state.loaded() || state.Active == activeStateInactive || state.Active == activeStateFailed {
 		m.logger.Debug("Service already stopped or not loaded", zap.String("service", unit), zap.String("active", state.Active))
 		return nil
 	}
 	return fmt.Errorf("failed to stop %s (still %s): %w; output: %s", unit, state.Active, err, string(output))
+}
+
+// stopWaitDeadline bounds how long stopUnit waits for a stop job still in
+// flight. It is above the longest TimeoutStopSec of a tenant unit (the SFU
+// drains for up to 45s, the RQLite for 60s), so a unit that is merely slow to
+// stop is waited for and only one systemd itself gave up on is reported.
+const stopWaitDeadline = 90 * time.Second
+
+// stopPollInterval is how often the state of a unit being stopped is read.
+const stopPollInterval = 500 * time.Millisecond
+
+// waitUnitStopped polls a deactivating unit until it leaves that state and
+// returns the state it left it in. It fails when the deadline passes with the
+// unit still deactivating, or when the state cannot be read.
+func (m *Manager) waitUnitStopped(unit string) (unitState, error) {
+	deadline, interval := m.stopWaitDeadline, m.stopPollInterval
+	if deadline == 0 {
+		deadline = stopWaitDeadline
+	}
+	if interval == 0 {
+		interval = stopPollInterval
+	}
+	start := time.Now()
+	for {
+		state, err := m.readUnitState(unit)
+		if err != nil {
+			return unitState{}, fmt.Errorf("the state of %s could not be read while waiting for it to stop: %w", unit, err)
+		}
+		if ActiveState(state.Active) != ActiveStateDeactivating {
+			return state, nil
+		}
+		if time.Since(start) >= deadline {
+			return state, fmt.Errorf("%s was still deactivating after %s", unit, deadline)
+		}
+		time.Sleep(interval)
+	}
+}
+
+// ServiceState is systemd's ActiveState of a namespace service. Unlike
+// IsServiceActive it does not fold deactivating and activating into "not
+// running": a caller deciding whether to start the unit must tell a stopped
+// unit from one on its way down or up. A unit systemd has not loaded is
+// reported inactive.
+func (m *Manager) ServiceState(namespace string, serviceType ServiceType) (ActiveState, error) {
+	unit := m.serviceName(namespace, serviceType)
+	state, err := m.readUnitState(unit)
+	if err != nil {
+		return "", fmt.Errorf("read the state of %s: %w", unit, err)
+	}
+	return ActiveState(state.Active), nil
 }
 
 // RestartService restarts a namespace service

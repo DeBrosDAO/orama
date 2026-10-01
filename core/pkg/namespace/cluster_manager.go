@@ -1161,6 +1161,11 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	// is no longer safe to reuse until the leftovers are dealt with.
 	var deprovisionDataErr error
 
+	// Set when a node did not confirm the teardown: its units may still hold their
+	// WebRTC ports, so those allocations are kept (the replay of the recorded
+	// teardown frees them) rather than handed to the next namespace.
+	var teardownIncomplete bool
+
 	// 1. Get cluster nodes WITH IPs (must happen before any DB deletion)
 	var clusterNodes []staleClusterNode
 	// Only fan teardown requests out to nodes that are still ACTIVE.
@@ -1189,11 +1194,17 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 		cm.logger.Error("Namespace was NOT torn down on every node — re-creating this namespace would inherit its state (bugboard #281)",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 		deprovisionDataErr = fmt.Errorf("namespace not torn down on every node: %w", err)
+		teardownIncomplete = true
 	}
 
 	// 4. Deallocate all ports (core + WebRTC)
 	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
-	cm.webrtcPortAllocator.DeallocateAll(ctx, cluster.ID)
+	if teardownIncomplete {
+		cm.logger.Error("Keeping the WebRTC allocations of a namespace that was not torn down on every node: its units may still hold the ports",
+			zap.String("namespace", cluster.NamespaceName), zap.String("cluster_id", cluster.ID))
+	} else if err := cm.webrtcPortAllocator.DeallocateAll(ctx, cluster.ID); err != nil {
+		deprovisionDataErr = fmt.Errorf("deallocate the WebRTC ports of namespace %s: %w", cluster.NamespaceName, err)
+	}
 
 	// 5. Withdraw node membership, then the DNS records (gateway + TURN +
 	// stealth). Membership first: a node's 30s sweep re-adds its own gateway
@@ -1207,7 +1218,9 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	// 6. Explicitly delete child tables (FK cascades disabled in rqlite)
 	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_events WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
-	cm.db.Exec(ctx, `DELETE FROM webrtc_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
+	if !teardownIncomplete {
+		cm.db.Exec(ctx, `DELETE FROM webrtc_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
+	}
 	cm.db.Exec(ctx, `DELETE FROM webrtc_rooms WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, cluster.ID)
 

@@ -13,6 +13,32 @@ const (
 	activeStateFailed   = "failed"
 )
 
+// ActiveState is systemd's ActiveState of a unit.
+type ActiveState string
+
+// The ActiveState values the platform decides on. Systemd also reports
+// "maintenance" and "refreshing", which are neither running nor on their way
+// in or out; they are not transitional here.
+const (
+	ActiveStateActive       ActiveState = "active"
+	ActiveStateActivating   ActiveState = "activating"
+	ActiveStateDeactivating ActiveState = "deactivating"
+	ActiveStateReloading    ActiveState = "reloading"
+	ActiveStateInactive     ActiveState = ActiveState(activeStateInactive)
+	ActiveStateFailed       ActiveState = ActiveState(activeStateFailed)
+)
+
+// Running reports whether the unit is up.
+func (a ActiveState) Running() bool { return a == ActiveStateActive }
+
+// Transitional reports whether a start, stop or reload job is in flight. Such a
+// unit is neither running nor stopped: a `systemctl start` issued now cancels a
+// pending stop job (the stop then fails with "Job canceled"), and one issued
+// during a start races it. A caller that would start a unit leaves it alone.
+func (a ActiveState) Transitional() bool {
+	return a == ActiveStateActivating || a == ActiveStateDeactivating || a == ActiveStateReloading
+}
+
 // unitState is what systemd reports about a unit: whether it is loaded, and
 // whether it is running.
 type unitState struct {

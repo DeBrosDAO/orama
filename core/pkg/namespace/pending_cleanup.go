@@ -198,9 +198,37 @@ func (cm *ClusterManager) replayPendingCleanups(ctx context.Context) error {
 				zap.String("node_id", r.NodeID),
 				zap.String("action", r.Action),
 				zap.Int("previous_attempts", r.Attempts))
+			if rerr := cm.releaseAllocationsOfCompletedTeardown(ctx, r); rerr != nil {
+				errs = append(errs, rerr)
+			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// releaseAllocationsOfCompletedTeardown frees the WebRTC allocations a teardown
+// that failed first kept (releaseWebRTCPorts): the unit holding those ports is
+// now gone. A cleanup that carries no cluster id predates the column and has
+// nothing to name the rows by.
+func (cm *ClusterManager) releaseAllocationsOfCompletedTeardown(ctx context.Context, r pendingCleanupRow) error {
+	if r.ClusterID == "" {
+		return nil
+	}
+	var services []string
+	switch r.Action {
+	case teardownSFUAction:
+		services = []string{"sfu"}
+	case teardownTURNAction:
+		services = []string{"turn"}
+	case teardownAction:
+		services = []string{"sfu", "turn"}
+	default:
+		return nil
+	}
+	if err := cm.releaseWebRTCPortsOfNode(ctx, r.ClusterID, r.NodeID, services...); err != nil {
+		return fmt.Errorf("release the WebRTC ports of %s on node %s after its teardown was completed: %w", r.Namespace, r.NodeID, err)
+	}
+	return nil
 }
 
 // withdrawPendingTeardowns deletes the destructive cleanups still owed for a

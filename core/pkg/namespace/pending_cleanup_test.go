@@ -39,10 +39,11 @@ func newRegistryRig(t *testing.T) *registryRig {
 	}
 	r := &registryRig{t: t, db: db, client: c}
 	r.cm = &ClusterManager{
-		db:           c,
-		logger:       zap.NewNop(),
-		localNodeID:  "coordinator",
-		provisioning: map[string]bool{},
+		db:                  c,
+		logger:              zap.NewNop(),
+		localNodeID:         "coordinator",
+		provisioning:        map[string]bool{},
+		webrtcPortAllocator: NewWebRTCPortAllocator(c, zap.NewNop()),
 		spawnRequestFn: func(_ context.Context, _ string, req map[string]interface{}) (*spawnResponse, error) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
