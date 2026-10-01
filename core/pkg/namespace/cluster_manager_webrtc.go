@@ -1751,7 +1751,7 @@ func (cm *ClusterManager) stopServiceIfStillUnallocated(namespaceName string, ty
 	// An enabled unit with Restart=always comes back on its own: one left
 	// enabled by an old release crash-looped on another namespace's ports
 	// hundreds of times after it was stopped, and on every boot after.
-	if derr := cm.systemdSpawner.systemdMgr.DisableService(namespaceName, typ); derr != nil {
+	if derr := cm.systemdSpawner.systemdMgr.DisableServiceAndReload(namespaceName, typ); derr != nil {
 		cm.logger.Error("Stopped an unallocated WebRTC service but could not disable it; it starts again on the next boot",
 			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(derr))
 	}

@@ -132,3 +132,22 @@ func TestUnitFromCgroup(t *testing.T) {
 		}
 	}
 }
+
+// Validate is the first gate; the gateway check does not lean on it for the
+// three-argument form.
+func TestAuthorizeGatewaySystemctl_threeArgsOnlyDisableNoReload(t *testing.T) {
+	unit := "orama-namespace-gateway@acme.service"
+	if err := authorizeGatewaySystemctl([]string{"disable", NoReloadFlag, unit}); err != nil {
+		t.Errorf("disable --no-reload refused: %v", err)
+	}
+	for _, args := range [][]string{
+		{"restart", NoReloadFlag, unit},
+		{"disable", "--now", unit},
+		{"enable", NoReloadFlag, unit},
+		{"stop", "--force", unit},
+	} {
+		if err := authorizeGatewaySystemctl(args); err == nil {
+			t.Errorf("%q was allowed", args)
+		}
+	}
+}

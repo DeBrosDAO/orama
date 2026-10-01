@@ -103,7 +103,11 @@ func authorizeGatewaySystemctl(args []string) error {
 	if len(args) > 0 && args[0] == "set-property" {
 		return nil // Validate allows it on deployment units only
 	}
-	if len(args) == 2 || len(args) == 3 { // Validate allows three only as disable --no-reload <unit>
+	if len(args) == 3 && (args[0] != "disable" || args[1] != NoReloadFlag) {
+		return fmt.Errorf("%s may not run systemctl %q; three arguments are only disable %s <unit>",
+			IndexGatewayUnit, strings.Join(args, " "), NoReloadFlag)
+	}
+	if len(args) == 2 || len(args) == 3 {
 		unit := args[len(args)-1]
 		if namespaceUnit.MatchString(unit) || deployUnit.MatchString(unit) || unit == hostTURNUnit {
 			return nil

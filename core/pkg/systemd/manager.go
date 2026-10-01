@@ -551,6 +551,20 @@ func (m *Manager) DisableService(namespace string, serviceType ServiceType) erro
 	return m.disableUnit(m.serviceName(namespace, serviceType))
 }
 
+// DisableServiceAndReload disables one service of a namespace that stays and
+// reloads systemd once, so the unit's cached UnitFileState reads disabled. A
+// caller disabling several units uses DisableService and reloads once itself.
+func (m *Manager) DisableServiceAndReload(namespace string, serviceType ServiceType) error {
+	unit := m.serviceName(namespace, serviceType)
+	if err := m.disableUnit(unit); err != nil {
+		return err
+	}
+	if err := m.ReloadDaemon(); err != nil {
+		return fmt.Errorf("reload systemd after disabling %s: %w", unit, err)
+	}
+	return nil
+}
+
 // disableUnit disables a unit without systemd's implicit daemon-reload. A
 // plain `systemctl disable` reloads every unit the node has, which is what
 // starved PID 1 when namespaces were torn down: five services each. The caller

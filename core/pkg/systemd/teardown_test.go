@@ -163,7 +163,7 @@ func TestTeardownServiceAndEnv_disablesAndRemovesTheEnv(t *testing.T) {
 	if err := m.TeardownServiceAndEnv("acme", ServiceTypeSFU); err != nil {
 		t.Fatal(err)
 	}
-	want := "stop orama-namespace-sfu@acme.service|disable --no-reload orama-namespace-sfu@acme.service"
+	want := "stop orama-namespace-sfu@acme.service|disable --no-reload orama-namespace-sfu@acme.service|daemon-reload"
 	if got := strings.Join(f.calls, "|"); got != want {
 		t.Fatalf("calls = %q, want %q", got, want)
 	}
@@ -290,5 +290,69 @@ func TestTeardownAllNamespaceServices_reportsAFailedReload(t *testing.T) {
 	}
 	if err := m.TeardownAllNamespaceServices("acme"); err == nil || !strings.Contains(err.Error(), "reload systemd") {
 		t.Fatalf("err = %v, want the reload failure", err)
+	}
+}
+
+// A single-service retire leaves the namespace in place, so nothing later
+// reloads systemd: the retire path reloads once itself.
+func TestTeardownServiceAndEnv_reloadsOnceAfterTheDisable(t *testing.T) {
+	m, f := newFakeManager(t)
+	m.clearUnitEnv = func(ns, svc string) error { return nil }
+
+	if err := m.TeardownServiceAndEnv("acme", ServiceTypeSFU); err != nil {
+		t.Fatal(err)
+	}
+	want := "stop orama-namespace-sfu@acme.service|disable --no-reload orama-namespace-sfu@acme.service|daemon-reload"
+	if got := strings.Join(f.calls, "|"); got != want {
+		t.Fatalf("calls = %q, want %q", got, want)
+	}
+}
+
+func TestTeardownServiceAndEnv_keepsTheEnvWhenTheReloadFails(t *testing.T) {
+	m, f := newFakeManager(t)
+	cleared := false
+	m.clearUnitEnv = func(ns, svc string) error { cleared = true; return nil }
+	m.runUnitCmd = func(args ...string) ([]byte, error) {
+		f.calls = append(f.calls, strings.Join(args, " "))
+		if args[0] == "daemon-reload" {
+			return []byte("Failed to reload"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	if err := m.TeardownServiceAndEnv("acme", ServiceTypeSFU); err == nil || !strings.Contains(err.Error(), "reload systemd") {
+		t.Fatalf("err = %v, want the reload failure", err)
+	}
+	if cleared {
+		t.Error("the env file was removed although the retire did not finish")
+	}
+}
+
+func TestDisableServiceAndReload_reloadsOnce(t *testing.T) {
+	m, f := newFakeManager(t)
+	if err := m.DisableServiceAndReload("acme", ServiceTypeSFU); err != nil {
+		t.Fatal(err)
+	}
+	want := "disable --no-reload orama-namespace-sfu@acme.service|daemon-reload"
+	if got := strings.Join(f.calls, "|"); got != want {
+		t.Fatalf("calls = %q, want %q", got, want)
+	}
+}
+
+func TestDisableServiceAndReload_noReloadWhenTheDisableFails(t *testing.T) {
+	m, f := newFakeManager(t)
+	m.runUnitCmd = func(args ...string) ([]byte, error) {
+		f.calls = append(f.calls, strings.Join(args, " "))
+		if args[0] == "disable" {
+			return []byte("boom"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	if err := m.DisableServiceAndReload("acme", ServiceTypeSFU); err == nil {
+		t.Fatal("want the disable failure")
+	}
+	for _, c := range f.calls {
+		if c == "daemon-reload" {
+			t.Errorf("reloaded after a failed disable: %v", f.calls)
+		}
 	}
 }

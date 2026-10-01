@@ -728,15 +728,15 @@ test -f /etc/coredns/Corefile && echo yes || echo no
 echo "$SEP"
 DOMAIN=$(sudo -n grep -oP '^\S+(?=\s*\{)' /etc/coredns/Corefile 2>/dev/null | grep -v '^\.' | head -1)
 echo "DOMAIN:${DOMAIN}"
-[ -n "$DOMAIN" ] && dig @127.0.0.1 SOA ${DOMAIN} +short 2>/dev/null | head -1
+[ -n "$DOMAIN" ] && dig @127.0.0.1 SOA "${DOMAIN}" +short 2>/dev/null | head -1
 echo "$SEP"
-[ -n "$DOMAIN" ] && dig @127.0.0.1 NS ${DOMAIN} +short 2>/dev/null
+[ -n "$DOMAIN" ] && dig @127.0.0.1 NS "${DOMAIN}" +short 2>/dev/null
 echo "$SEP"
-[ -n "$DOMAIN" ] && dig @127.0.0.1 A test-wildcard.${DOMAIN} +short 2>/dev/null | head -1
+[ -n "$DOMAIN" ] && dig @127.0.0.1 A "test-wildcard.${DOMAIN}" +short 2>/dev/null | head -1
 echo "$SEP"
-[ -n "$DOMAIN" ] && dig @127.0.0.1 A ${DOMAIN} +short 2>/dev/null | head -1
+[ -n "$DOMAIN" ] && dig @127.0.0.1 A "${DOMAIN}" +short 2>/dev/null | head -1
 echo "$SEP"
-echo | openssl s_client -servername ${DOMAIN} -connect localhost:443 2>/dev/null | openssl x509 -noout -dates 2>/dev/null | grep notAfter | cut -d= -f2
+echo | openssl s_client -servername "${DOMAIN}" -connect localhost:443 2>/dev/null | openssl x509 -noout -dates 2>/dev/null | grep notAfter | cut -d= -f2
 echo "$SEP"
 echo | openssl s_client -servername "*.${DOMAIN}" -connect localhost:443 2>/dev/null | openssl x509 -noout -dates 2>/dev/null | grep notAfter | cut -d= -f2
 echo "$SEP"

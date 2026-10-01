@@ -39,6 +39,11 @@ func (m *Manager) TeardownServiceAndEnv(namespace string, serviceType ServiceTyp
 	if err := m.TeardownService(namespace, serviceType); err != nil {
 		return err
 	}
+	// The namespace stays, so nothing later reloads systemd: reload here or the
+	// retired instance's cached UnitFileState keeps reading as enabled.
+	if err := m.ReloadDaemon(); err != nil {
+		return fmt.Errorf("reload systemd after retiring %s: %w", m.serviceName(namespace, serviceType), err)
+	}
 	if err := m.clearUnitEnv(namespace, string(serviceType)); err != nil {
 		return fmt.Errorf("remove the env file of %s: %w", m.serviceName(namespace, serviceType), err)
 	}
