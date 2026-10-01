@@ -9,11 +9,23 @@ import (
 	"time"
 )
 
-func collectVault() *VaultReport {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+// Each budget is its own: the status probe used to share one 5 s budget with
+// four shell commands run before it, and on a loaded node those spent it, so a
+// vault that answered was reported unresponsive and the cluster read
+// "degraded".
+const (
+	vaultDetailsTimeout = 5 * time.Second
+	vaultStatusTimeout  = 5 * time.Second
+)
 
+func collectVault() *VaultReport {
 	r := &VaultReport{}
+	statusCtx, cancelStatus := context.WithTimeout(context.Background(), vaultStatusTimeout)
+	probeVaultStatus(statusCtx, constants.LocalGatewayURL()+"/v1/vault/status", r)
+	cancelStatus()
+
+	ctx, cancel := context.WithTimeout(context.Background(), vaultDetailsTimeout)
+	defer cancel()
 
 	// 1. Service active
 	if out, err := runCmd(ctx, "systemctl", "is-active", "orama-namespace-vault@index"); err == nil && strings.TrimSpace(out) == "active" {
@@ -42,32 +54,28 @@ func collectVault() *VaultReport {
 		r.LogErrors, _ = strconv.Atoi(strings.TrimSpace(out))
 	}
 
-	// 5. Query vault status via gateway (provides guardian health)
-	if body, err := httpGet(ctx, constants.LocalGatewayURL()+"/v1/vault/status"); err == nil {
-		var status struct {
-			Guardians   int `json:"guardians"`
-			Healthy     int `json:"healthy"`
-			Threshold   int `json:"threshold"`
-			WriteQuorum int `json:"write_quorum"`
-		}
-		if json.Unmarshal(body, &status) == nil {
-			r.Responsive = true
-			r.Guardians = status.Guardians
-			r.Healthy = status.Healthy
-			r.Threshold = status.Threshold
-			r.WriteQuorum = status.WriteQuorum
-		}
-	}
-
-	// 6. Query vault health status
-	if body, err := httpGet(ctx, constants.LocalGatewayURL()+"/v1/vault/health"); err == nil {
-		var health struct {
-			Status string `json:"status"`
-		}
-		if json.Unmarshal(body, &health) == nil {
-			r.Status = health.Status
-		}
-	}
-
 	return r
+}
+
+// probeVaultStatus reads the guardian health the gateway reports for the vault
+// into r; a vault that answers is Responsive.
+func probeVaultStatus(ctx context.Context, url string, r *VaultReport) {
+	body, err := httpGet(ctx, url)
+	if err != nil {
+		return
+	}
+	var status struct {
+		Guardians   int `json:"guardians"`
+		Healthy     int `json:"healthy"`
+		Threshold   int `json:"threshold"`
+		WriteQuorum int `json:"write_quorum"`
+	}
+	if json.Unmarshal(body, &status) != nil {
+		return
+	}
+	r.Responsive = true
+	r.Guardians = status.Guardians
+	r.Healthy = status.Healthy
+	r.Threshold = status.Threshold
+	r.WriteQuorum = status.WriteQuorum
 }
