@@ -83,6 +83,12 @@ type HealthChecker struct {
 	rqliteDSN   string
 	reconciler  ReplicaReconciler
 	provisioner ReplicaProvisioner
+
+	// Orphan unit sweep (optional, set via SetOrphanReaper). orphanSeen holds
+	// each unit the previous sweep found, with when it was first found; only the sweep goroutine touches it.
+	orphanUnits RuntimeUnitManager
+	orphanSeen  map[string]time.Time
+	now         func() time.Time // nil means time.Now; tests set it
 }
 
 // NewHealthChecker creates a new health checker.
@@ -108,6 +114,7 @@ func (hc *HealthChecker) SetReconciler(rqliteDSN string, rc ReplicaReconciler, r
 // Start begins health monitoring with two periodic tasks:
 //  1. Every 30s: probe local replicas
 //  2. Every 5m: (leader-only) reconcile under-replicated deployments
+//  3. Every 2m, if enabled: stop runtime units no deployment owns
 func (hc *HealthChecker) Start(ctx context.Context) error {
 	hc.logger.Info("Starting health checker",
 		zap.Int("workers", hc.workers),
@@ -118,6 +125,12 @@ func (hc *HealthChecker) Start(ctx context.Context) error {
 	reconcileTicker := time.NewTicker(5 * time.Minute)
 	defer probeTicker.Stop()
 	defer reconcileTicker.Stop()
+	var orphanC <-chan time.Time
+	if hc.orphanUnits != nil {
+		orphanTicker := time.NewTicker(orphanSweepInterval)
+		defer orphanTicker.Stop()
+		orphanC = orphanTicker.C
+	}
 
 	for {
 		select {
@@ -130,6 +143,10 @@ func (hc *HealthChecker) Start(ctx context.Context) error {
 			}
 		case <-reconcileTicker.C:
 			hc.reconcileDeployments(ctx)
+		case <-orphanC:
+			if err := hc.reapOrphanUnits(ctx); err != nil {
+				hc.logger.Error("Orphan unit sweep failed", zap.Error(err))
+			}
 		}
 	}
 }

@@ -52,6 +52,10 @@ type Manager struct {
 	// runSystemctl, through orama-privhelper; a test sets it to watch the calls.
 	systemctl func(args ...string) error
 
+	// query runs a read-only systemctl command and returns its output. Nil
+	// means systemctl itself; a test sets it to describe the node's units.
+	query func(ctx context.Context, args ...string) ([]byte, error)
+
 	// For non-systemd mode: track running processes
 	processes   map[string]*exec.Cmd
 	processesMu sync.RWMutex
