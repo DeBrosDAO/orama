@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -57,5 +60,22 @@ func TestStagenetPins_neverNameASharedEnvironment(t *testing.T) {
 	}
 	if len(StagenetNodes) != 3 || len(StagenetIPs()) != 3 {
 		t.Fatalf("want 3 stagenet nodes, have %d", len(StagenetNodes))
+	}
+}
+
+// TestStagenetDefaultChainID_isWhatTheDeployScriptDeploys: the target's default
+// chain id drifted from the one deploy.sh deploys, and every chain-id assertion
+// of a stagenet run then failed against the real chain.
+func TestStagenetDefaultChainID_isWhatTheDeployScriptDeploys(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join("..", "..", "..", "chain", "scripts", "stagenet", "deploy.sh"))
+	if err != nil {
+		t.Fatalf("read the stagenet deploy script: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^CHAIN_ID="\$\{CHAIN_ID:-([a-z0-9-]+)\}"$`).FindSubmatch(script)
+	if m == nil {
+		t.Fatal(`deploy.sh no longer sets CHAIN_ID="${CHAIN_ID:-<default>}"`)
+	}
+	if got := string(m[1]); got != StagenetDefaultChainID {
+		t.Errorf("deploy.sh deploys %q by default, the target writes %q", got, StagenetDefaultChainID)
 	}
 }

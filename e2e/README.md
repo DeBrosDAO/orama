@@ -565,7 +565,7 @@ the CA bundle `~/orama-stagenet-handoff/le-staging-roots.pem`; the CLI HOME
 `stagenet` env); `core/bin/orama` as the CLI under test (build it first); the
 operator address from the dev RootWallet agent's `~/rwdev/ready.json` (that agent,
 `~/rwdev/agent.sock`, must be running and unlocked); the chain id
-`orama-stagenet-4` (`--chain-id` to change it) and the run id
+`orama-stagenet-1`, the default `CHAIN_ID` of `chain/scripts/stagenet/deploy.sh` (`--chain-id` to change it) and the run id
 `stagenet-<yyyymmdd>-<hhmmss>`; artifacts in `e2e/artifacts/stagenet-<ts>`. The
 host keys come from `ssh-keyscan` of the three addresses and are written to
 `<state>.known_hosts` only when your `~/.ssh/known_hosts` holds the same key for

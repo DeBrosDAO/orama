@@ -107,7 +107,7 @@ func TestWriteStagenetState_writesTheGuardedState(t *testing.T) {
 		t.Fatalf("the written state fails its own guards: %v", err)
 	}
 	if st.Target != config.TargetStagenet || st.RunID != "stagenet-20260930-101500" || st.OperatorAddress != testAddress ||
-		st.ChainID != "orama-stagenet-4" || st.ChainRPC != "http://198.18.0.2:31001" || len(st.Nodes) != 3 {
+		st.ChainID != "orama-stagenet-1" || st.ChainRPC != "http://198.18.0.2:31001" || len(st.Nodes) != 3 {
 		t.Fatalf("state %+v", st)
 	}
 	for i, want := range config.StagenetNodes {
