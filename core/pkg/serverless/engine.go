@@ -385,6 +385,7 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 		output, err = e.invokeReactor(execCtx, fn.WASMCID, fn.Name, input, instTiming)
 	} else {
 		execCtx = execution.WithNamespace(execCtx, fn.Namespace)
+		execCtx = execution.WithMemoryLimitMB(execCtx, e.memoryLimitMB(fn))
 		output, err = e.executor.ExecuteModule(execCtx, module, fn.Name, input)
 	}
 	executeDoneAt = time.Now()
@@ -539,6 +540,15 @@ func (e *Engine) GetCacheStats() (size int, capacity int) {
 // -----------------------------------------------------------------------------
 // Private methods
 // -----------------------------------------------------------------------------
+
+// memoryLimitMB returns the memory limit enforced on one invocation of fn: the
+// function's own limit, or the configured default when it has none stored.
+func (e *Engine) memoryLimitMB(fn *Function) int {
+	if fn.MemoryLimitMB > 0 {
+		return fn.MemoryLimitMB
+	}
+	return e.config.DefaultMemoryLimitMB
+}
 
 // checkMemoryLimits validates that a compiled module's memory declarations
 // don't exceed the configured maximum. Each WASM memory page is 64KB.

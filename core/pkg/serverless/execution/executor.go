@@ -11,6 +11,7 @@ import (
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental"
 	"go.uber.org/zap"
 )
 
@@ -147,6 +148,15 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		// crypto/rand (and auto-seeded math/rand) work. Same fix at
 		// engine.go for the persistent-WS path.
 		WithRandSource(cryptorand.Reader)
+
+	// Enforce the function's own memory limit for this invocation only: the
+	// allocator rides the instantiate ctx, so it never touches another function.
+	if limitMB := memoryLimitMBFrom(ctx); limitMB > 0 {
+		if err := checkMinMemory(compiled, limitMB); err != nil {
+			return nil, err
+		}
+		ctx = experimental.WithMemoryAllocator(ctx, cappedAllocator{limitBytes: uint64(limitMB) * bytesPerMB})
+	}
 
 	if e.sem != nil {
 		select {
