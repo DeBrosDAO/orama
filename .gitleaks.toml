@@ -23,11 +23,13 @@ description = "Unit tests: fake keys, tokens and passwords the test itself makes
 paths = [
   '''(^|/)core/cmd/gateway/config_secrets_test\.go$''',
   '''(^|/)core/cmd/orama/internal/audit_commands_test\.go$''',
+  '''(^|/)core/cmd/orama/internal/functions/status_errors_test\.go$''',
   '''(^|/)core/cmd/orama/internal/prod_commands_test\.go$''',
   '''(^|/)core/cmd/orama/internal/production/install/remote_args_test\.go$''',
   '''(^|/)core/pkg/config/decode_test\.go$''',
   '''(^|/)core/pkg/deployments/envcodec_test\.go$''',
   '''(^|/)core/pkg/gateway/handlers/auth/handlers_test\.go$''',
+  '''(^|/)core/pkg/gateway/scope_policy_test\.go$''',
   '''(^|/)core/pkg/gateway/handlers/deployments/env_at_rest_test\.go$''',
   '''(^|/)core/pkg/gateway/handlers/operator/authorize_test\.go$''',
   '''(^|/)core/pkg/gateway/handlers/serverless/audit_test\.go$''',
