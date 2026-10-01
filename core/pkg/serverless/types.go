@@ -80,12 +80,13 @@ const (
 // FunctionRegistry manages function metadata and bytecode storage.
 // Responsible for CRUD operations on function definitions.
 type FunctionRegistry interface {
-	// Register deploys a new function or updates an existing one.
-	// Returns the old function definition if it was updated, or nil if it was a new registration.
+	// Register deploys a function as a new version and keeps the versions before it.
+	// Returns the superseded (previously latest) version, or nil if it was a new registration.
 	Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) (*Function, error)
 
 	// Get retrieves a function by name and optional version.
-	// If version is 0, returns the latest version.
+	// If version is 0, returns the latest active version; otherwise exactly that
+	// version if it is active.
 	Get(ctx context.Context, namespace, name string, version int) (*Function, error)
 
 	// List returns all functions for a namespace.

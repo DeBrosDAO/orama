@@ -133,17 +133,17 @@ func (r *Registry) invalidateFn(namespace, name string) {
 	r.cacheMu.Unlock()
 }
 
-// invalidateEnv drops the cached env vars for a function ID. A redeploy REUSES
-// the existing function ID (Register: id = oldFn.ID) and rewrites env vars
-// under it, so without this an env-var change would be masked by the cache for
-// up to the TTL.
+// invalidateEnv drops the cached env vars for a function ID, so an env-var
+// rewrite is never masked by the cache for up to the TTL.
 func (r *Registry) invalidateEnv(functionID string) {
 	r.cacheMu.Lock()
 	delete(r.envCache, functionID)
 	r.cacheMu.Unlock()
 }
 
-// Register deploys a new function or updates an existing one.
+// Register deploys a function as a new version: the first deploy is version 1,
+// every later one inserts the next version and keeps the rows before it (up to
+// MaxRetainedFunctionVersions). It returns the version it superseded, or nil.
 func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) (*Function, error) {
 	if fn == nil {
 		return nil, &ValidationError{Field: "definition", Message: "cannot be nil"}
@@ -194,19 +194,16 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 	}
 
 	now := time.Now()
+	// Every deploy is a new row with its own id: the previous versions stay
+	// (migration 067), so `name@N` keeps resolving after `name@N+1` ships.
 	id := uuid.New().String()
 	version := 1
-
 	if oldFn != nil {
-		// Use existing ID and increment version
-		id = oldFn.ID
 		version = oldFn.Version + 1
 	}
 
-	// Use INSERT OR REPLACE to ensure we never hit UNIQUE constraint failures on (namespace, name).
-	// This handles both new registrations and overwriting existing (even inactive) functions.
 	query := `
-		INSERT OR REPLACE INTO functions (
+		INSERT INTO functions (
 			id, name, namespace, version, wasm_cid,
 			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
@@ -229,6 +226,10 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 
 	// Save environment variables
 	if err := r.saveEnvVars(ctx, id, fn.EnvVars); err != nil {
+		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
+	}
+
+	if err := r.adoptVersionState(ctx, fn.Namespace, fn.Name, id); err != nil {
 		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
 	}
 
@@ -286,9 +287,9 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
 			raw_http_response, ws_auth
 			FROM functions
-			WHERE namespace = ? AND name = ? AND version = ?
+			WHERE namespace = ? AND name = ? AND version = ? AND status = ?
 		`
-		args = []interface{}{namespace, name, version}
+		args = []interface{}{namespace, name, version, string(FunctionStatusActive)}
 	}
 
 	var functions []functionRow

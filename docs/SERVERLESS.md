@@ -667,7 +667,9 @@ To prevent infinite loops (function A publishes to topic → triggers function A
 
 ### Versioning
 
-Each deploy creates a new version. The WASM binary is stored in **IPFS** (content-addressed) and metadata is stored in **RQLite**.
+Each deploy creates a new version (1, 2, 3, ...) and keeps the ones before it.
+The WASM binary is stored in **IPFS** (content-addressed) and metadata is stored
+in **RQLite**, one `functions` row per version, keyed `(namespace, name, version)`.
 
 ```bash
 # List versions
@@ -676,6 +678,18 @@ orama function versions my-function
 # Invoke a specific version
 curl -X POST .../v1/functions/my-function@2/invoke
 ```
+
+- The **current** version is the highest version that is active. Invoking, the
+  WebSocket, `function list` and a trigger that fires all use it; `name@N` runs
+  exactly version N and answers 404 `function version not found` when N does not
+  exist, was pruned or is disabled.
+- Triggers (cron, pub/sub, database) follow the current version: a deploy moves
+  them to the new row.
+- The last **10** versions are kept. A deploy past that removes the oldest; its
+  invocation history stays readable under the function's name.
+- `delete` without a version, `disable` and `enable` act on every version of the
+  function. A deleted function's versions are no longer invocable, and the next
+  deploy continues the numbering.
 
 ### Invocation Logging
 
