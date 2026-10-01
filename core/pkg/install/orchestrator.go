@@ -161,6 +161,14 @@ func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 	}
 	ps.logf("  ✓ Basic dependencies available")
 
+	// Tenant deployments run as dynamic users, which resolve only through
+	// nss-systemd (nss_systemd.go). Fail here, not at a tenant's first deploy.
+	if err := EnsureDynamicUserNSS(); err != nil {
+		ps.logf("  ❌ Dynamic users cannot resolve on this host")
+		return err
+	}
+	ps.logf("  ✓ Dynamic users resolve (nss-systemd)")
+
 	// Check system resources
 	if ps.skipResourceChecks {
 		ps.logf("  ⚠️  Skipping system resource checks (disk, RAM, CPU) due to --ignore-resource-checks flag")
