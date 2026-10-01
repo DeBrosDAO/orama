@@ -98,6 +98,13 @@ func (ici *IPFSClusterInstaller) InitializeConfig(root rootfs.Root, clusterPath,
 // updateConfig updates the secret, the listeners, the IPFS port, and the peer
 // addresses in IPFS Cluster service.json. listenAddr is the peer-to-peer
 // listener (ClusterSwarmListenAddr).
+//
+// mDNS is off (clusterMDNSOff): peers are configured by address over the
+// WireGuard overlay, and ipfs-cluster's default of 10s answered multicast DNS
+// on 0.0.0.0:5353 and [::]:5353, a public listener on every node.
+// clusterMDNSOff is ipfs-cluster's mdns_interval that disables mDNS discovery.
+const clusterMDNSOff = "0s"
+
 func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, secret string, ipfsAPIPort int, listenAddr string, bootstrapClusterPeers []string) error {
 	serviceJSONPath := filepath.Join(clusterPath, "service.json")
 
@@ -117,6 +124,7 @@ func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, sec
 	if cluster, ok := config["cluster"].(map[string]interface{}); ok {
 		cluster["secret"] = secret
 		cluster["listen_multiaddress"] = []interface{}{listenAddr}
+		cluster["mdns_interval"] = clusterMDNSOff
 		// Configure peer addresses for cluster discovery
 		// This allows nodes to find and connect to each other
 		// Merge new peers with existing peers (preserves manually configured peers)
@@ -130,6 +138,7 @@ func (ici *IPFSClusterInstaller) updateConfig(root rootfs.Root, clusterPath, sec
 		clusterConfig := map[string]interface{}{
 			"secret":              secret,
 			"listen_multiaddress": []interface{}{listenAddr},
+			"mdns_interval":       clusterMDNSOff,
 		}
 		if len(bootstrapClusterPeers) > 0 {
 			clusterConfig["peer_addresses"] = bootstrapClusterPeers

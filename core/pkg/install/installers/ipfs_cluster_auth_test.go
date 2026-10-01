@@ -65,3 +65,23 @@ func TestUpdateConfig_serviceJSONIsPrivate(t *testing.T) {
 		t.Errorf("service.json mode %v, want %v", info.Mode().Perm(), os.FileMode(serviceJSONMode))
 	}
 }
+
+// ipfs-cluster's default mDNS (10s) answered multicast DNS on 0.0.0.0:5353 and
+// [::]:5353 on every node; peers are configured by overlay address, so install
+// turns it off, whether service.json already has a cluster section or not.
+func TestUpdateConfig_mdnsIsOff(t *testing.T) {
+	for name, initial := range map[string]string{
+		"existing section with the default": `{"cluster": {"mdns_interval": "10s"}}`,
+		"no cluster section":                `{}`,
+	} {
+		dir := t.TempDir()
+		writeServiceJSON(t, dir, initial)
+		ici := NewIPFSClusterInstaller("amd64", io.Discard)
+		if err := ici.updateConfig(rootfs.At(filepath.Dir(dir)), dir, "secret", 10107, testSwarmListen, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := field(readJSON(t, filepath.Join(dir, "service.json")), "cluster", "mdns_interval"); got != "0s" {
+			t.Errorf("%s: cluster.mdns_interval = %v, want 0s", name, got)
+		}
+	}
+}
