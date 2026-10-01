@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
@@ -144,7 +146,11 @@ func inspectNodes(nodes []inspector.Node, opts InspectOptions, stdout, stderr io
 	fmt.Fprintf(stderr, "...\n\n")
 
 	// Phase 1: Collect
-	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout+10*time.Second)
+	// Ctrl-C and SIGTERM cancel the collection instead of killing the process,
+	// so Collect closes the shared SSH connections and removes their directory.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	ctx, cancel := context.WithTimeout(sigCtx, opts.Timeout+10*time.Second)
 	defer cancel()
 
 	if opts.Verbose {
@@ -152,6 +158,9 @@ func inspectNodes(nodes []inspector.Node, opts InspectOptions, stdout, stderr io
 	}
 
 	data := inspector.Collect(ctx, nodes, subsystems, opts.Verbose)
+	if err := sigCtx.Err(); err != nil {
+		return fmt.Errorf("inspection interrupted: %w", err)
+	}
 
 	if opts.Verbose {
 		fmt.Fprintf(stderr, "Collection complete in %.1fs\n\n", data.Duration.Seconds())

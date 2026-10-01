@@ -1810,39 +1810,62 @@ func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clu
 	} {
 		// A cheap read first: most units are inactive or allocated, and need
 		// no lock. The decision to stop is made again under it.
-		state, serr := cm.systemdSpawner.systemdMgr.ServiceState(namespaceName, svc.typ)
-		if serr != nil || !needsRetiring(state, cm.systemdSpawner.systemdMgr.HasUnitEnv(namespaceName, svc.typ)) || !svc.gone() {
+		needs, nerr := cm.unitNeedsRetiring(namespaceName, svc.typ)
+		if nerr != nil {
+			cm.logger.Warn("Not retiring the WebRTC service: its state could not be read",
+				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)), zap.Error(nerr))
+			continue
+		}
+		if !needs || !svc.gone() {
 			continue
 		}
 		cm.stopServiceIfStillUnallocated(namespaceName, svc.typ, svc.gone)
 	}
 }
 
-// stopServiceIfStillUnallocated stops one WebRTC unit of the namespace on this
-// node, under the namespace's lock and on what the allocator says under it. The
-// sweep's first read of the allocation was made before the lock: an enable that
-// allocated and spawned in between has put the allocation back, and stopping on
-// the earlier read would stop the unit it just started.
+// unitNeedsRetiring reads the unit's state and env file. Either unreadable is
+// an error: a unit that cannot be read is left alone, never assumed gone.
+func (cm *ClusterManager) unitNeedsRetiring(namespaceName string, typ systemd.ServiceType) (bool, error) {
+	mgr := cm.systemdSpawner.systemdMgr
+	state, err := mgr.ServiceState(namespaceName, typ)
+	if err != nil {
+		return false, err
+	}
+	hasEnv, err := mgr.HasUnitEnv(namespaceName, typ)
+	if err != nil {
+		return false, err
+	}
+	return needsRetiring(state, hasEnv), nil
+}
+
+// stopServiceIfStillUnallocated retires one WebRTC unit of the namespace on
+// this node, under the namespace's lock and on what the allocator says under
+// it. The sweep's first read of the allocation was made before the lock: an
+// enable that allocated and spawned in between has put the allocation back, and
+// retiring on the earlier read would remove the unit it just started. The
+// spawn takes the same lock (SpawnSFU), so an enable is either wholly before
+// this check or wholly after the retirement.
 func (cm *ClusterManager) stopServiceIfStillUnallocated(namespaceName string, typ systemd.ServiceType, gone func() bool) {
 	defer cm.systemdSpawner.LockNamespace(namespaceName)()
 
-	if !gone() {
-		return
-	}
-	state, serr := cm.systemdSpawner.systemdMgr.ServiceState(namespaceName, typ)
-	if serr != nil || !needsRetiring(state, cm.systemdSpawner.systemdMgr.HasUnitEnv(namespaceName, typ)) {
-		return
-	}
-	cm.logger.Info("Retiring WebRTC service: this node no longer holds the allocation (bugboard #161)",
-		zap.String("namespace", namespaceName), zap.String("service", string(typ)))
-	// Stop, disable and remove the env file. A unit left enabled with
-	// Restart=always crash-looped on another namespace's ports hundreds of
-	// times. An env file left behind is how `orama node upgrade` rediscovers
-	// the unit and enables and starts it again, and how `orama node status`
-	// lists it as an inactive service of this node.
-	if terr := cm.systemdSpawner.retireSFU(namespaceName); terr != nil {
+	retired, err := retireIfUnallocated(gone,
+		func() (bool, error) { return cm.unitNeedsRetiring(namespaceName, typ) },
+		func() error {
+			cm.logger.Info("Retiring WebRTC service: this node no longer holds the allocation (bugboard #161)",
+				zap.String("namespace", namespaceName), zap.String("service", string(typ)))
+			// Stop, disable and remove the env file. A unit left enabled with
+			// Restart=always crash-looped on another namespace's ports hundreds
+			// of times. An env file left behind is how `orama node upgrade`
+			// rediscovers the unit and enables and starts it again, and how
+			// `orama node status` lists it as an inactive service of this node.
+			return cm.systemdSpawner.retireSFU(namespaceName)
+		})
+	if err != nil {
 		cm.logger.Warn("Failed to retire unallocated WebRTC service — its ports stay bound while the allocator considers them free, and it starts again on the next boot or upgrade",
-			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(terr))
+			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(err))
+		return
+	}
+	if !retired {
 		return
 	}
 	// Verify it actually stopped. The allocator has already freed these ports,
@@ -1853,6 +1876,23 @@ func (cm *ClusterManager) stopServiceIfStillUnallocated(namespaceName string, ty
 		cm.logger.Error("WebRTC service still active after stop — ports remain bound although the allocation was released; a later allocation on this host may collide",
 			zap.String("namespace", namespaceName), zap.String("service", string(typ)))
 	}
+}
+
+// retireIfUnallocated is the decision made under the namespace's lock: retire
+// only when the allocation is gone now and the unit still needs it. It reports
+// whether it retired.
+func retireIfUnallocated(gone func() bool, needs func() (bool, error), retire func() error) (bool, error) {
+	if !gone() {
+		return false, nil
+	}
+	n, err := needs()
+	if err != nil || !n {
+		return false, err
+	}
+	if err := retire(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // needsRetiring reports whether an unallocated WebRTC unit has to be retired:
@@ -2002,7 +2042,7 @@ func (cm *ClusterManager) spawnSFUIfDown(ctx context.Context, state *ClusterLoca
 	if unit.Running() || unit.Transitional() {
 		return
 	}
-	if serr := cm.systemdSpawner.SpawnSFU(ctx, state.NamespaceName, cm.localNodeID, SFUInstanceConfig{
+	if serr := cm.systemdSpawner.spawnSFULocked(ctx, state.NamespaceName, cm.localNodeID, SFUInstanceConfig{
 		Namespace:      state.NamespaceName,
 		NodeID:         cm.localNodeID,
 		ListenAddr:     fmt.Sprintf("%s:%d", state.LocalIP, blk.SFUSignalingPort),

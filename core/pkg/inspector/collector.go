@@ -62,12 +62,39 @@ type NamespaceData struct {
 	// namespace (namespace_clusters.status), "" when the registry could not be
 	// read or has no such namespace.
 	RegistryStatus string
+	// TransitionAge is how long the registry has had the namespace in
+	// provisioning or deprovisioning (its own clock): 0 when it is not, and
+	// UnknownTransitionAge when the registry's stamp could not be read.
+	TransitionAge time.Duration
 }
 
+// namespaceTransitionLimit is how long a namespace may be created or deleted
+// before it is judged like any other. The registry declares a provisioning
+// abandoned after 11 minutes (registry_retry.go: staleProvisioningAfter) and a
+// teardown after 12 (stale_deprovisioning.go: staleDeprovisioningAfter), and
+// takes either over; one still in transition after this is stuck, and a
+// namespace stuck for ever must not be skipped for ever.
+const namespaceTransitionLimit = 15 * time.Minute
+
+// UnknownTransitionAge marks a namespace in transition whose stamp could not be
+// read: it is judged, never excused on a guess.
+const UnknownTransitionAge time.Duration = -1
+
 // InTransition reports whether the registry says the namespace is being
-// created or deleted: its services come up and go away node by node, so a node
-// where they are not (yet, or any more) up is not unhealthy.
+// created or deleted, and has said so for less than namespaceTransitionLimit:
+// its services come up and go away node by node, so a node where they are not
+// (yet, or any more) up is not unhealthy.
 func (n NamespaceData) InTransition() bool {
+	return n.transitional() && n.TransitionAge >= 0 && n.TransitionAge < namespaceTransitionLimit
+}
+
+// StuckInTransition reports a namespace the registry has had in provisioning or
+// deprovisioning for longer than namespaceTransitionLimit.
+func (n NamespaceData) StuckInTransition() bool {
+	return n.transitional() && n.TransitionAge >= namespaceTransitionLimit
+}
+
+func (n NamespaceData) transitional() bool {
 	return n.RegistryStatus == registryStatusProvisioning || n.RegistryStatus == registryStatusDeprovisioning
 }
 
@@ -290,6 +317,17 @@ func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose boo
 		wg.Add(1)
 		go func(n Node) {
 			defer wg.Done()
+			// A panic outside the collectors (runCollectors recovers those) is
+			// one node's failure, not the end of the run and its cleanup.
+			defer func() {
+				if r := recover(); r != nil {
+					nd := &NodeData{Node: n}
+					nd.markUnreachable(fmt.Errorf("collecting the node panicked: %v", r))
+					mu.Lock()
+					data.Nodes[n.Host] = nd
+					mu.Unlock()
+				}
+			}()
 			if controlErr != nil {
 				nd := &NodeData{Node: n}
 				nd.markUnreachable(fmt.Errorf("create the directory for shared ssh connections: %w", controlErr))
@@ -1241,7 +1279,7 @@ SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 systemctl list-units --type=service --all --no-pager --no-legend 'orama-namespace-gateway@*.service' 2>/dev/null | awk '{print $1}' | sed 's/orama-namespace-gateway@//;s/\.service//'
 echo "$SEP"
-` + rqlite.NodeShellCurl(inspectorSudo, `-sf -H 'Content-Type: application/json' -d '[["SELECT namespace_name, status FROM namespace_clusters"]]'`, "/db/query") + ` 2>/dev/null || echo '{"error":"unreachable"}'
+` + rqlite.NodeShellCurl(inspectorSudo, `-sf -H 'Content-Type: application/json' -d '[["SELECT namespace_name, status, CAST(strftime('%s','now') - strftime('%s', CASE status WHEN 'deprovisioning' THEN deprovisioning_at ELSE provisioned_at END) AS INTEGER) FROM namespace_clusters"]]'`, "/db/query") + ` 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
 `
 	res := RunSSH(ctx, node, cmd)
@@ -1318,35 +1356,51 @@ echo "$SEP"
 
 	result = append(result, unprobed...)
 	for i := range result {
-		result[i].RegistryStatus = registry[result[i].Name]
+		entry := registry[result[i].Name]
+		result[i].RegistryStatus = entry.status
+		if result[i].transitional() {
+			result[i].TransitionAge = entry.age
+		}
 	}
 	return result, nil
 }
 
-// parseNamespaceRegistry reads the answer of
-// SELECT namespace_name, status FROM namespace_clusters. An answer that is not
-// one (the node's rqlite was unreachable, an error) is an empty map: the
-// namespaces are then judged as settled ones, never excused.
-func parseNamespaceRegistry(raw string) map[string]string {
+// registryEntry is what the registry says of one namespace.
+type registryEntry struct {
+	status string
+	age    time.Duration // time in the status, UnknownTransitionAge when unknown
+}
+
+// parseNamespaceRegistry reads the answer of the registry query: namespace
+// name, status, seconds since the status was stamped. An answer that is not one
+// (the node's rqlite was unreachable, an error) is an empty map: the
+// namespaces are then judged as settled ones, never excused. A stamp that is
+// missing or unreadable leaves the age unknown.
+func parseNamespaceRegistry(raw string) map[string]registryEntry {
 	var resp struct {
 		Results []struct {
 			Values [][]interface{} `json:"values"`
 			Error  string          `json:"error"`
 		} `json:"results"`
 	}
-	registry := map[string]string{}
+	registry := map[string]registryEntry{}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &resp); err != nil || len(resp.Results) == 0 || resp.Results[0].Error != "" {
 		return registry
 	}
 	for _, row := range resp.Results[0].Values {
-		if len(row) != 2 {
+		if len(row) != 3 {
 			continue
 		}
 		name, _ := row[0].(string)
 		status, _ := row[1].(string)
-		if name != "" {
-			registry[name] = status
+		if name == "" {
+			continue
 		}
+		entry := registryEntry{status: status, age: UnknownTransitionAge}
+		if secs, ok := row[2].(float64); ok && secs >= 0 {
+			entry.age = time.Duration(secs) * time.Second
+		}
+		registry[name] = entry
 	}
 	return registry
 }

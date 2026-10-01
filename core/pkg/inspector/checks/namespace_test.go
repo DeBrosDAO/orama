@@ -2,6 +2,7 @@ package checks
 
 import (
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
@@ -171,7 +172,7 @@ func TestCheckNamespace_InTransitionIsNotJudged(t *testing.T) {
 	for _, status := range []string{"provisioning", "deprovisioning"} {
 		t.Run(status, func(t *testing.T) {
 			nd := makeNodeData("1.1.1.1", "node")
-			nd.Namespaces = []inspector.NamespaceData{{Name: "e2e-x", RegistryStatus: status}}
+			nd.Namespaces = []inspector.NamespaceData{{Name: "e2e-x", RegistryStatus: status, TransitionAge: time.Minute}}
 			results := CheckNamespace(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
 			expectStatus(t, results, "ns.e2e-x.settled", inspector.StatusSkip)
 			expectStatus(t, results, "ns.e2e-x.all_healthy", inspector.StatusSkip)
@@ -196,4 +197,22 @@ func TestCheckNamespace_SettledOrUnknownIsJudged(t *testing.T) {
 			expectStatus(t, results, "ns.myapp.all_healthy", inspector.StatusFail)
 		})
 	}
+}
+
+// A namespace the registry has had in transition past the limit (the registry
+// itself would have taken it over by then) is stuck: it is judged, and said so.
+func TestCheckNamespace_StuckInTransitionIsJudged(t *testing.T) {
+	nd := makeNodeData("1.1.1.1", "node")
+	nd.Namespaces = []inspector.NamespaceData{{Name: "e2e-x", RegistryStatus: "deprovisioning", TransitionAge: time.Hour}}
+	results := CheckNamespace(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+	expectStatus(t, results, "ns.e2e-x.all_healthy", inspector.StatusFail)
+	expectStatus(t, results, "ns.e2e-x.transition_stuck", inspector.StatusFail)
+}
+
+// A transitional namespace whose stamp could not be read is judged, not excused.
+func TestCheckNamespace_UnknownTransitionAgeIsJudged(t *testing.T) {
+	nd := makeNodeData("1.1.1.1", "node")
+	nd.Namespaces = []inspector.NamespaceData{{Name: "e2e-x", RegistryStatus: "provisioning", TransitionAge: inspector.UnknownTransitionAge}}
+	results := CheckNamespace(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+	expectStatus(t, results, "ns.e2e-x.all_healthy", inspector.StatusFail)
 }

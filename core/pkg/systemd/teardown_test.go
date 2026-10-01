@@ -434,26 +434,54 @@ func TestTeardownService_aStoppedUnitThatNeverFailedNeedsNoReset(t *testing.T) {
 }
 
 // HasUnitEnv is what keeps a retired unit out of `orama node status`: it is
-// true while the env file exists and false once the file is cleared.
+// true while the env file exists and false once the file is cleared. Only a
+// missing file means "no env": a failure to look is an error.
 func TestHasUnitEnv(t *testing.T) {
 	m, _ := newFakeManager(t)
-	if m.HasUnitEnv("acme", ServiceTypeSFU) {
+	has := func(ns string, svc ServiceType) bool {
+		t.Helper()
+		ok, err := m.HasUnitEnv(ns, svc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if has("acme", ServiceTypeSFU) {
 		t.Fatal("no env file was written, but HasUnitEnv is true")
 	}
 	owner := unitenv.Owner{UID: os.Getuid(), GID: os.Getgid()}
 	if err := unitenv.Write(m.unitEnvDir, "acme", string(ServiceTypeSFU), []byte("A=1\n"), owner); err != nil {
 		t.Fatal(err)
 	}
-	if !m.HasUnitEnv("acme", ServiceTypeSFU) {
+	if !has("acme", ServiceTypeSFU) {
 		t.Fatal("the env file exists, but HasUnitEnv is false")
 	}
-	if m.HasUnitEnv("acme", ServiceTypeGateway) {
+	if has("acme", ServiceTypeGateway) {
 		t.Fatal("another service's env file counted")
 	}
 	if err := unitenv.Clear(m.unitEnvDir, "acme", string(ServiceTypeSFU)); err != nil {
 		t.Fatal(err)
 	}
-	if m.HasUnitEnv("acme", ServiceTypeSFU) {
+	if has("acme", ServiceTypeSFU) {
 		t.Fatal("a cleared env file still counts")
+	}
+}
+
+func TestHasUnitEnv_unreadableIsAnError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads every directory")
+	}
+	m, _ := newFakeManager(t)
+	owner := unitenv.Owner{UID: os.Getuid(), GID: os.Getgid()}
+	if err := unitenv.Write(m.unitEnvDir, "acme", string(ServiceTypeSFU), []byte("A=1\n"), owner); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(m.unitEnvDir, "acme")
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o755)
+	if ok, err := m.HasUnitEnv("acme", ServiceTypeSFU); err == nil || ok {
+		t.Fatalf("HasUnitEnv on an unreadable directory = %v, %v; want an error, not \"no env\"", ok, err)
 	}
 }

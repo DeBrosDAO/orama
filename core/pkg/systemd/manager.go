@@ -1,9 +1,11 @@
 package systemd
 
 import (
+	"errors"
 	"fmt"
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"github.com/DeBrosOfficial/network/pkg/unitenv"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -776,10 +778,18 @@ func (m *Manager) envFilePath(namespace string, serviceType ServiceType) string 
 
 // HasUnitEnv reports whether the service of namespace still has an env file:
 // the mark by which `orama node upgrade` and `orama node status` treat it as
-// provisioned on this node.
-func (m *Manager) HasUnitEnv(namespace string, serviceType ServiceType) bool {
-	_, err := os.Stat(m.envFilePath(namespace, serviceType))
-	return err == nil
+// provisioned on this node. Only a missing file means no env; any other failure
+// to look (permissions, I/O) is an error, never "no env file".
+func (m *Manager) HasUnitEnv(namespace string, serviceType ServiceType) (bool, error) {
+	path := m.envFilePath(namespace, serviceType)
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("look for the env file %s: %w", path, err)
 }
 
 // storeUnitEnv writes an env file into the root-owned tree: directly when

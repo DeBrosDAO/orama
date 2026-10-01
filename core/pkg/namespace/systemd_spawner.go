@@ -1171,8 +1171,22 @@ func writeSFUConfig(configPath string, cfg SFUInstanceConfig, gid int) error {
 	return nil
 }
 
-// SpawnSFU starts an SFU instance using systemd
+// SpawnSFU starts an SFU instance using systemd, under the namespace's lock.
+//
+// The lock is what keeps the stop sweep's retireSFU (which removes the unit's
+// env file and config) from landing between this write of them and the start:
+// the sweep decides on the allocation under the same lock, and an enable
+// commits its allocation before it spawns, so a sweep that gets the lock after
+// this call reads the allocation and leaves the unit alone, and one that got it
+// before is finished by the time the files are written. Callers that already
+// hold the lock use spawnSFULocked.
 func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string, cfg SFUInstanceConfig) error {
+	defer s.LockNamespace(namespace)()
+	return s.spawnSFULocked(ctx, namespace, nodeID, cfg)
+}
+
+// spawnSFULocked is SpawnSFU for a caller that holds the namespace's lock.
+func (s *SystemdSpawner) spawnSFULocked(ctx context.Context, namespace, nodeID string, cfg SFUInstanceConfig) error {
 	s.logger.Info("Spawning SFU via systemd",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID),

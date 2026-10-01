@@ -470,8 +470,8 @@ func buildOlricContext(data *ClusterData) string {
 		b.WriteString(fmt.Sprintf("### %s\n", host))
 		b.WriteString(fmt.Sprintf("  active=%v memberlist=%v members=%d coordinator=%s\n",
 			o.ServiceActive, o.MemberlistUp, o.MemberCount, o.Coordinator))
-		b.WriteString(fmt.Sprintf("  memory=%dMB restarts=%d log_errors=%d suspects=%d flapping=%d\n",
-			o.ProcessMemMB, o.RestartCount, o.LogErrors, o.LogSuspects, o.LogFlapping))
+		b.WriteString(fmt.Sprintf("  memory=%dMB restarts=%d log_errors=%d members_marked_failed=%d suspects=%d flapping=%d\n",
+			o.ProcessMemMB, o.RestartCount, o.LogErrors, o.LogDeadMarks, o.LogSuspects, o.LogFlapping))
 	}
 	return b.String()
 }
