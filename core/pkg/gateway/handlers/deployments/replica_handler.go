@@ -449,8 +449,12 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if owned {
+		// A replica whose unit could not be stopped is not torn down: the
+		// caller retries, and the port it holds is not released under it.
 		if err := h.processManager.Stop(ctx, deployment); err != nil {
-			h.logger.Warn("Failed to stop replica process", zap.Error(err))
+			h.logger.Error("Failed to stop the replica's unit; the teardown is refused", zap.Error(err))
+			http.Error(w, "Failed to stop the replica's unit; retry the teardown", http.StatusInternalServerError)
+			return
 		}
 		// Removing the directory releases the instance on this host.
 		if err := os.RemoveAll(deployPath); err != nil {

@@ -186,12 +186,18 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(control(auth.DomainDB, auth.ActionWrite),
 		"/v1/db/sqlite/create", "/v1/db/sqlite/query", "/v1/db/sqlite/delete", "/v1/db/sqlite/backup")
 
-	// Deployments: reading what is there, and changing it.
-	t.Add(control(auth.DomainDeploy, auth.ActionRead),
+	// Deployments: reading what is there, and changing it. Every deployment
+	// route is MainGateway: a deployment's units, logs and stats are this
+	// node's systemd, which only the index gateway may drive through the
+	// privileged helper. Served by a namespace gateway, a delete removed the
+	// rows and freed the port while the refused stop left the unit running on
+	// it, and the next deployment given the port crash-looped behind the old
+	// one (stagenet e2e, 2026-10-01).
+	t.Add(deploymentRoute(control(auth.DomainDeploy, auth.ActionRead)),
 		"/v1/deployments/list", "/v1/deployments/get", "/v1/deployments/versions",
 		"/v1/deployments/logs", "/v1/deployments/stats", "/v1/deployments/events",
 		"/v1/deployments/domains/list")
-	t.Add(control(auth.DomainDeploy, auth.ActionWrite),
+	t.Add(deploymentRoute(control(auth.DomainDeploy, auth.ActionWrite)),
 		"/v1/deployments/delete", "/v1/deployments/rollback",
 		"/v1/deployments/static/upload", "/v1/deployments/static/update",
 		"/v1/deployments/nextjs/upload", "/v1/deployments/nextjs/update",
@@ -202,9 +208,9 @@ func buildRoutePolicies() *routepolicy.Table {
 
 	// A deployment's environment is its secrets, and handing a deployment its
 	// grants is handing out authority — so that one is `members`, not `deploy`.
-	t.Add(control(auth.DomainSecrets, auth.ActionRead), "/v1/deployments/env")
-	t.Add(control(auth.DomainSecrets, auth.ActionWrite), "/v1/deployments/env/set")
-	t.Add(control(auth.DomainMembers, auth.ActionWrite), "/v1/deployments/grants")
+	t.Add(deploymentRoute(control(auth.DomainSecrets, auth.ActionRead)), "/v1/deployments/env")
+	t.Add(deploymentRoute(control(auth.DomainSecrets, auth.ActionWrite)), "/v1/deployments/env/set")
+	t.Add(deploymentRoute(control(auth.DomainMembers, auth.ActionWrite)), "/v1/deployments/grants")
 
 	// A namespace's own settings, and its deletion.
 	//
@@ -481,6 +487,14 @@ func networkDetailPolicy(r *http.Request) routepolicy.Policy {
 		return policyHandlerAuth
 	}
 	return operatorListRoute(control(auth.DomainOperator, auth.ActionRead))
+}
+
+// deploymentRoute keeps a deployment route on the index gateway even when it
+// is addressed to ns-<name>: the namespace still comes from the subdomain and
+// the credential must belong to it.
+func deploymentRoute(p routepolicy.Policy) routepolicy.Policy {
+	p.MainGateway = true
+	return p
 }
 
 // operatorListRoute keeps a route whose handler checks the operator list on the

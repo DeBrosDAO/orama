@@ -267,17 +267,25 @@ func (hc *HealthChecker) handleHealthy(ctx context.Context, dep deploymentRow) {
 					Type:      deployments.DeploymentType(dep.Type),
 					Port:      dep.Port,
 				}
+				// The replica row is what holds the port; a unit that is still
+				// running keeps it until the stop succeeds on a later pass.
 				if err := hc.processManager.Stop(ctx, d); err != nil {
-					hc.logger.Error("Failed to stop zombie deployment process", zap.Error(err))
+					hc.logger.Error("Failed to stop zombie deployment process; its replica is kept until it stops", zap.Error(err))
+					return
 				}
 			}
 
 			deleteQuery := `DELETE FROM deployment_replicas WHERE deployment_id = ? AND node_id = ? AND status = 'failed'`
-			hc.db.Exec(ctx, deleteQuery, dep.ID, hc.nodeID)
+			if _, err := hc.db.Exec(ctx, deleteQuery, dep.ID, hc.nodeID); err != nil {
+				hc.logger.Error("Failed to remove the stopped zombie's replica row", zap.String("deployment", dep.ID), zap.Error(err))
+				return
+			}
 
 			eventQuery := `INSERT INTO deployment_events (deployment_id, event_type, message, created_at) VALUES (?, 'zombie_replica_stopped', ?, ?)`
 			msg := fmt.Sprintf("Zombie replica on node %s stopped and removed (already at %d active replicas)", hc.nodeID, activeCount)
-			hc.db.Exec(ctx, eventQuery, dep.ID, msg, time.Now())
+			if _, err := hc.db.Exec(ctx, eventQuery, dep.ID, msg, time.Now()); err != nil {
+				hc.logger.Error("Failed to record the zombie replica's removal", zap.String("deployment", dep.ID), zap.Error(err))
+			}
 			return
 		}
 

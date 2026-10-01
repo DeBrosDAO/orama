@@ -299,8 +299,11 @@ func (h *ListHandler) removeLocalInstance(ctx context.Context, deployment *deplo
 		}
 	}
 
+	// A deployment whose unit could not be stopped keeps its rows and its
+	// port: freed while the unit still ran, the port went to the next
+	// deployment, which then crash-looped behind this one.
 	if err := h.processManager.Stop(ctx, deployment); err != nil {
-		h.logger.Warn("Failed to stop deployment service (may not exist)", zap.Error(err), zap.String("name", deployment.Name))
+		return fmt.Errorf("stop the deployment's unit: %w", err)
 	}
 	if deployDir == "" {
 		return nil

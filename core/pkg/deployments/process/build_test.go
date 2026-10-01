@@ -395,7 +395,9 @@ func startsOnly(start func(unit string) error) func(args ...string) error {
 }
 
 // A deployment whose unit did not stop is still running on its dependencies;
-// removing them from under it breaks it without stopping it.
+// removing them from under it breaks it without stopping it. And Stop says it
+// failed: it used to answer nil, and a delete then freed the port of a unit
+// that was still running on it.
 func TestStop_keepsTheBuildOutputWhenTheUnitDidNotStop(t *testing.T) {
 	var calls []string
 	m := &Manager{logger: zap.NewNop(), useSystemd: true, systemctl: func(args ...string) error {
@@ -406,8 +408,8 @@ func TestStop_keepsTheBuildOutputWhenTheUnitDidNotStop(t *testing.T) {
 		return nil
 	}}
 	node := &deployments.Deployment{Namespace: "acme", Name: "web", Type: deployments.DeploymentTypeNodeJSBackend}
-	if err := m.Stop(context.Background(), node); err != nil {
-		t.Fatalf("Stop: %v", err)
+	if err := m.Stop(context.Background(), node); err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("Stop of a unit that did not stop answered %v, want its failure", err)
 	}
 	for _, c := range calls {
 		if strings.Contains(c, "orama-deploy-clean@") {

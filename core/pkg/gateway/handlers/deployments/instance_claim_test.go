@@ -612,3 +612,31 @@ func TestWriteDeploymentNameError_existingInstanceIs409(t *testing.T) {
 		t.Errorf("status = %d, want 409", rec.Code)
 	}
 }
+
+// A delete whose stop the node refused keeps the deployment: its files stay,
+// and the error reaches the handler, which then frees no row and no port. On
+// stagenet a namespace gateway's stop was refused by the privileged helper,
+// the delete went on, and the next deployment given the port crash-looped
+// behind the still-running unit.
+func TestRemoveLocalInstance_aRefusedStopKeepsTheDeployment(t *testing.T) {
+	base := t.TempDir()
+	reg := registryWith(t, [2]string{"a", "web"})
+	if _, err := reg.claimInstance(context.Background(), base, "a", "web"); err != nil {
+		t.Fatal(err)
+	}
+	pm := process.NewManager(zap.NewNop(), process.Config{Systemctl: func(args ...string) error {
+		if args[0] == "stop" {
+			return errors.New("refused: this process may not use the privileged helper")
+		}
+		return nil
+	}})
+	h := NewListHandler(reg, pm, nil, zap.NewNop(), base)
+	dep := &deployments.Deployment{Namespace: "a", Name: "web", Type: deployments.DeploymentTypeGoBackend}
+
+	if err := h.removeLocalInstance(context.Background(), dep); err == nil {
+		t.Fatal("removeLocalInstance answered nil although the unit was not stopped")
+	}
+	if _, err := os.Stat(process.DeployDir(base, "a", "web")); err != nil {
+		t.Fatalf("the deployment's directory went although its unit still runs: %v", err)
+	}
+}

@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,6 +28,12 @@ type Config struct {
 	// BaseDomain is the cluster's domain, used to tell a deployment the URL of
 	// its own namespace's gateway.
 	BaseDomain string
+
+	// Systemctl, when set, runs each systemctl command on a deployment unit
+	// in place of orama-privhelper, and the manager drives units on any OS.
+	// Nil on a node; set by tests outside this package that need to see a
+	// stop refused.
+	Systemctl func(args ...string) error
 }
 
 // Manager manages deployment processes via systemd (Linux) or direct process spawning (macOS/other)
@@ -66,11 +73,12 @@ func (m *Manager) SetWorkloadTokenMinter(mint WorkloadTokenMinter) {
 // NewManager creates a new process manager
 func NewManager(logger *zap.Logger, cfg Config) *Manager {
 	// Use systemd only on Linux
-	useSystemd := runtime.GOOS == "linux"
+	useSystemd := runtime.GOOS == "linux" || cfg.Systemctl != nil
 
 	return &Manager{
 		logger:     logger,
 		useSystemd: useSystemd,
+		systemctl:  cfg.Systemctl,
 		stager:     cfg.Stager,
 		baseDomain: strings.TrimSpace(cfg.BaseDomain),
 		processes:  make(map[string]*exec.Cmd),
@@ -373,13 +381,17 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 		return err
 	}
 
+	// Every step is attempted and every failure returned. They used to be
+	// logged and Stop answered nil, so a delete whose stop the privileged
+	// helper refused freed the deployment's port while its unit kept running
+	// on it, and the next deployment given the port crash-looped behind it.
+	var errs []error
 	stopErr := m.systemdStop(unit)
 	if stopErr != nil {
-		m.logger.Warn("Failed to stop service", zap.Error(stopErr))
+		errs = append(errs, fmt.Errorf("stop %s: %w", unit, stopErr))
 	}
-
 	if err := m.systemdDisable(unit); err != nil {
-		m.logger.Warn("Failed to disable service", zap.Error(err))
+		errs = append(errs, fmt.Errorf("disable %s: %w", unit, err))
 	}
 
 	// There is no unit file to remove: the unit is a template instance, and
@@ -388,7 +400,7 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 	// The environment file holds the tenant's secrets. Leaving it behind
 	// leaves them on the node after the deployment is gone.
 	if err := m.removeSecrets(serviceName); err != nil {
-		m.logger.Error("the deployment's secrets are still on disk", zap.Error(err))
+		errs = append(errs, fmt.Errorf("remove the secrets of %s, which are still on disk: %w", unit, err))
 	}
 
 	// What the build installed goes too, or it outlives the deployment — but
@@ -396,11 +408,11 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 	// process that is still running breaks it without stopping it.
 	if stopErr == nil && UsesBuildOutput(deployment.Type) {
 		if err := m.ClearDependencies(deployment.Namespace, deployment.Name); err != nil {
-			m.logger.Error("the deployment's installed dependencies are still on disk", zap.Error(err))
+			errs = append(errs, fmt.Errorf("clear the installed dependencies of %s: %w", unit, err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // unitName is the template instance that runs a deployment.
