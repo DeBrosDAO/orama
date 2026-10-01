@@ -22,6 +22,7 @@ func collectVault() *VaultReport {
 	r := &VaultReport{}
 	statusCtx, cancelStatus := context.WithTimeout(context.Background(), vaultStatusTimeout)
 	probeVaultStatus(statusCtx, constants.LocalGatewayURL()+"/v1/vault/status", r)
+	probeVaultHealth(statusCtx, constants.LocalGatewayURL()+"/v1/vault/health", r)
 	cancelStatus()
 
 	ctx, cancel := context.WithTimeout(context.Background(), vaultDetailsTimeout)
@@ -78,4 +79,19 @@ func probeVaultStatus(ctx context.Context, url string, r *VaultReport) {
 	r.Healthy = status.Healthy
 	r.Threshold = status.Threshold
 	r.WriteQuorum = status.WriteQuorum
+}
+
+// probeVaultHealth reads the vault's overall health ("healthy", "degraded",
+// "unavailable") into r.Status, which the vault alerts are raised from.
+func probeVaultHealth(ctx context.Context, url string, r *VaultReport) {
+	body, err := httpGet(ctx, url)
+	if err != nil {
+		return
+	}
+	var health struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(body, &health) == nil {
+		r.Status = health.Status
+	}
 }

@@ -52,3 +52,23 @@ func TestCollectVault_statusHasItsOwnBudget(t *testing.T) {
 		t.Fatal("a vault answering inside the status budget read as unresponsive")
 	}
 }
+
+// TestProbeVaultHealth_setsTheStatusTheAlertsReadFrom: the rewrite that gave
+// the status probe its own budget dropped the health query, and the vault
+// unavailable/degraded alerts, which switch on Status, could never fire.
+func TestProbeVaultHealth_setsTheStatusTheAlertsReadFrom(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"status":"degraded"}`))
+	}))
+	defer srv.Close()
+	r := &VaultReport{}
+	probeVaultHealth(context.Background(), srv.URL, r)
+	if r.Status != "degraded" {
+		t.Fatalf("Status = %q, want degraded", r.Status)
+	}
+	r = &VaultReport{}
+	probeVaultHealth(context.Background(), "http://127.0.0.1:1", r)
+	if r.Status != "" {
+		t.Errorf("an unanswered health query set Status %q", r.Status)
+	}
+}
