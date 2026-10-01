@@ -84,6 +84,27 @@ func TestMembers_removalLandsOnTheNextRequest(t *testing.T) {
 	}
 }
 
+// TestMembers_aNewRoleReplacesTheOld: adding a member again with another role
+// changes their role. It used to add a second grant beside the first and the
+// older won, so a developer demoted to reader kept the database
+// (docs/AUTH.md "A member holds one grant").
+func TestMembers_aNewRoleReplacesTheOld(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	n := ns.New(t, f, ns.Options{})
+	w, tok := memberToken(t, n, roleDev, "")
+	send(t, n.Client, http.MethodPost, pathQuery, tok, map[string]string{"sql": "SELECT 1"}).Expect(t, http.StatusOK)
+	if r := grant(t, n, w.Address(), roleReader, ""); r.Status != http.StatusCreated {
+		t.Fatalf("demoting the developer to reader: %d %s", r.Status, r.Body)
+	}
+	if r := send(t, n.Client, http.MethodPost, pathQuery, tok, map[string]string{"sql": "SELECT 1"}); r.Status != http.StatusForbidden {
+		t.Errorf("the demoted developer's next query: want 403, got %d %s", r.Status, r.Body)
+	}
+	if out := n.CLI.MustOK(t, "members", "list").Stdout; !lineHas(out, w.Address(), roleReader) || lineHas(out, w.Address(), roleDev) {
+		t.Errorf("members list after the demotion does not show one reader grant:\n%s", out)
+	}
+}
+
 // TestMembers_transferIsOneStep: only the owner transfers; the new owner is
 // owner and the old one keeps admin, with no moment without an owner.
 func TestMembers_transferIsOneStep(t *testing.T) {

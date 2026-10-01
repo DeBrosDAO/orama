@@ -259,6 +259,35 @@ func (d *grantsDB) Query(_ context.Context, query string, args ...interface{}) (
 			resource: resource, expiresAt: expires, createdBy: createdBy,
 		})
 		return &client.QueryResult{Count: 1}, nil
+
+	case strings.Contains(query, "SELECT 1 FROM grants"):
+		principalID, nsID := toInt64(args[0]), getStringVal(args[1])
+		role, resource := getStringVal(args[2]), getStringVal(args[3])
+		for _, row := range d.rows {
+			if !row.revoked && row.principalID == principalID && row.namespaceID == nsID &&
+				row.role == role && row.resource == resource {
+				return rows(int64(1)), nil
+			}
+		}
+		return &client.QueryResult{}, nil
+
+	case strings.Contains(query, "UPDATE grants SET revoked_at"):
+		// retireOtherGrants: every live non-owner row but the one just written.
+		if d.failWrite {
+			return nil, errString("grant write failed")
+		}
+		principalID, nsID := toInt64(args[0]), getStringVal(args[1])
+		role, resource := getStringVal(args[2]), getStringVal(args[3])
+		for _, row := range d.rows {
+			if row.revoked || row.principalID != principalID || row.namespaceID != nsID || row.role == string(RoleOwner) {
+				continue
+			}
+			if row.role == role && row.resource == resource {
+				continue
+			}
+			row.revoked = true
+		}
+		return &client.QueryResult{Count: 1}, nil
 	}
 	return nil, errString("unexpected sql: " + query)
 }

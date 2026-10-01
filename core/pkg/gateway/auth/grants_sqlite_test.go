@@ -629,3 +629,89 @@ func TestListKeys_showsExpiryAndSuccession(t *testing.T) {
 		t.Errorf("the successor says it came from %d, want %d", keys[1].RotatedFrom, keys[0].ID)
 	}
 }
+
+// A namespace handed to a member and handed back. The heir held admin before
+// the transfer; that row stayed live beside the owner row it received, and
+// handing the namespace back then failed: keeping the heir as an admin hit the
+// unique index on the admin row it already had, and the "already granted"
+// check read the heir's oldest grant (owner) rather than that admin row.
+func TestTransferOwnership_toAMemberAndBackAgainstTheRealSchema(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	ctx := context.Background()
+
+	giveOwner(t, s, db, nsID, "0xcreator")
+	if err := s.Grant(ctx, GrantRequest{Namespace: "anchat", PrincipalType: PrincipalWallet, Identifier: "0xheir", Role: RoleAdmin}); err != nil {
+		t.Fatalf("add the heir: %v", err)
+	}
+	if err := s.TransferOwnership(ctx, "anchat", "0xcreator", "0xheir"); err != nil {
+		t.Fatalf("transfer to the heir: %v", err)
+	}
+	if err := s.TransferOwnership(ctx, "anchat", "0xheir", "0xcreator"); err != nil {
+		t.Fatalf("transfer back: %v", err)
+	}
+
+	for wallet, want := range map[string]Role{"0xcreator": RoleOwner, "0xheir": RoleAdmin} {
+		g, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, wallet)
+		if err != nil || g.Role != want {
+			t.Errorf("%s holds %v, %v; want %s", wallet, g, err, want)
+		}
+	}
+	var live int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM grants WHERE revoked_at IS NULL`).Scan(&live); err != nil {
+		t.Fatalf("count grants: %v", err)
+	}
+	if live != 2 {
+		t.Errorf("%d live grants; want the owner's and the heir's admin", live)
+	}
+}
+
+// Giving a member another role replaces the one they hold. It used to add a
+// second live row beside it, and the member kept whichever was older: a
+// demotion from admin to reader left an admin.
+func TestGrant_aNewRoleReplacesTheOldAgainstTheRealSchema(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	ctx := context.Background()
+
+	for _, step := range []struct {
+		role     Role
+		resource string
+	}{{RoleAdmin, ""}, {RoleReader, ""}, {RoleRuntime, "cache:key=sessions/*"}, {RoleRuntime, ""}} {
+		if err := s.Grant(ctx, GrantRequest{Namespace: "anchat", PrincipalType: PrincipalWallet, Identifier: "0xmember", Role: step.role, Resource: step.resource}); err != nil {
+			t.Fatalf("grant %s %q: %v", step.role, step.resource, err)
+		}
+		g, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, "0xmember")
+		if err != nil || g.Role != step.role || g.Resource != step.resource {
+			t.Fatalf("after granting %s %q the member holds %+v, %v", step.role, step.resource, g, err)
+		}
+		var live int
+		if err := db.db.QueryRow(`SELECT COUNT(*) FROM grants WHERE revoked_at IS NULL`).Scan(&live); err != nil {
+			t.Fatalf("count grants: %v", err)
+		}
+		if live != 1 {
+			t.Fatalf("after granting %s %q: %d live grants, want 1", step.role, step.resource, live)
+		}
+	}
+}
+
+// Rows written before a new role replaced the old one are resolved to the
+// latest: a member granted admin and then reader is a reader.
+func TestGrantIn_resolvesDuplicateLiveGrantsToTheNewest(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	ctx := context.Background()
+
+	principalID, err := s.ensurePrincipal(ctx, db, PrincipalWallet, "0xmember", "", "test")
+	if err != nil {
+		t.Fatalf("record the principal: %v", err)
+	}
+	for _, role := range []string{"admin", "reader"} {
+		if _, err := db.Query(client.WithInternalAuth(ctx),
+			"INSERT INTO grants(principal_id, namespace_id, role, created_by) VALUES (?, ?, ?, 'test')",
+			principalID, nsID, role); err != nil {
+			t.Fatalf("record %s: %v", role, err)
+		}
+	}
+	g, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, "0xmember")
+	if err != nil || g.Role != RoleReader {
+		t.Fatalf("the member holds %+v, %v; want the newer reader grant", g, err)
+	}
+}

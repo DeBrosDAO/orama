@@ -218,7 +218,8 @@ func (s *Service) GrantIn(ctx context.Context, db client.DatabaseClient, nsID in
 		    AND g.revoked_at IS NULL
 		    AND p.disabled_at IS NULL
 		    AND (g.expires_at IS NULL OR g.expires_at > datetime('now'))
-		  ORDER BY g.id LIMIT 1`,
+		  ORDER BY CASE WHEN g.role = 'owner' THEN 0 ELSE 1 END, g.id DESC
+		  LIMIT 1`,
 		nsID, string(ptype), identifier)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the grant for %s %q: %w", ptype, identifier, err)
@@ -375,11 +376,17 @@ func (s *Service) writeGrant(ctx context.Context, req GrantRequest) error {
 		// stops the same grant existing twice, so a second write of the same
 		// thing lands here rather than leaving two rows one revoke cannot
 		// clear.
-		existing, readErr := s.GrantIn(ctx, db, nsID, req.PrincipalType, identifier)
-		if readErr == nil && existing.Role == req.Role && existing.Resource == resource {
-			return nil
+		exists, readErr := liveGrantExists(ctx, db, principalID, nsID, req.Role, resource)
+		if readErr != nil {
+			return fmt.Errorf("failed to record the grant in namespace %q: %w (and could not tell whether it was already there: %v)", req.Namespace, err, readErr)
 		}
-		return fmt.Errorf("failed to record the grant in namespace %q: %w", req.Namespace, err)
+		if !exists {
+			return fmt.Errorf("failed to record the grant in namespace %q: %w", req.Namespace, err)
+		}
+		return retireOtherGrants(ctx, db, principalID, nsID, req.Role, resource)
+	}
+	if err := retireOtherGrants(ctx, db, principalID, nsID, req.Role, resource); err != nil {
+		return err
 	}
 
 	s.audit.Record(ctx, AuditEvent{
@@ -390,6 +397,40 @@ func (s *Service) writeGrant(ctx context.Context, req GrantRequest) error {
 		Result:    AuditSuccess,
 		Metadata:  map[string]string{"role": string(req.Role), "selector": resource},
 	})
+	return nil
+}
+
+// liveGrantExists reports whether the principal holds exactly this grant in
+// the namespace. Reading the principal's grant instead answered for whichever
+// of its rows was picked, which was not always the one being written.
+func liveGrantExists(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, role Role, resource string) (bool, error) {
+	res, err := db.Query(client.WithInternalAuth(ctx),
+		`SELECT 1 FROM grants
+		  WHERE principal_id = ? AND namespace_id = ? AND role = ? AND COALESCE(resource, '') = ?
+		    AND revoked_at IS NULL
+		  LIMIT 1`,
+		principalID, nsID, string(role), resource)
+	if err != nil {
+		return false, fmt.Errorf("failed to read the principal's grant: %w", err)
+	}
+	return res != nil && res.Count > 0 && len(res.Rows) > 0, nil
+}
+
+// retireOtherGrants revokes every live grant the principal holds in the
+// namespace other than the one just written, so a new role replaces the old
+// one. Writing a grant used to add a row beside the one already there, and
+// the principal kept the older: a member demoted from admin to reader stayed
+// an admin. The owner row is left alone: ownership moves by transfer, and the
+// outgoing owner holds owner and admin together for the length of one.
+func retireOtherGrants(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, role Role, resource string) error {
+	if _, err := db.Query(client.WithInternalAuth(ctx),
+		`UPDATE grants SET revoked_at = datetime('now')
+		  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL
+		    AND role != 'owner'
+		    AND NOT (role = ? AND COALESCE(resource, '') = ?)`,
+		principalID, nsID, string(role), resource); err != nil {
+		return fmt.Errorf("failed to retire the principal's previous grant: %w", err)
+	}
 	return nil
 }
 

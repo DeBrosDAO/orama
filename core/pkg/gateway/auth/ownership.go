@@ -219,6 +219,11 @@ func (s *Service) TransferOwnership(ctx context.Context, namespace, from, to str
 	if affected == 0 {
 		return fmt.Errorf("namespace %q has no owner to transfer", namespace)
 	}
+	// Ownership replaces whatever the new owner held before. A member's admin
+	// row left live beside it was what made handing the namespace back fail.
+	if err := retireOtherGrants(ctx, db, newOwnerID, nsID, RoleOwner, ""); err != nil {
+		return fmt.Errorf("namespace %q now belongs to %s, but %w", namespace, toWallet, err)
+	}
 
 	s.audit.Record(ctx, AuditEvent{
 		Namespace: namespace,
