@@ -267,6 +267,14 @@ func madeAfterProcessStart(ts int64, now time.Time) bool {
 	return ts >= threshold
 }
 
+// CoordinationStampsAcceptedAfter is the time after which a stamp made now is
+// one this process accepts: the end of the second it started in. A process
+// that signs and verifies its own stamps (a test binary; never two nodes)
+// waits for it, or its first stamps are refused as possibly older than it.
+func CoordinationStampsAcceptedAfter() time.Time {
+	return coordinationProcessStart.Truncate(time.Second).Add(time.Second)
+}
+
 var coordinationReplays = newReplayCache(coordinationReplayCapacity, coordinationReplayTTL)
 
 func newReplayCache(capacity int, ttl time.Duration) *replayCache {
