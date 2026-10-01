@@ -114,13 +114,6 @@ type Config struct {
 	ExpoAccessToken string // optional Expo access token
 }
 
-// isNamespaceGateway reports whether this process serves a tenant namespace
-// rather than the index.
-//
-// A tenant gateway is the one configured with a GlobalRQLiteDSN pointing at a
-// DIFFERENT database from its own: its RQLiteDSN is the namespace's rqlite and
-// GlobalRQLiteDSN is the cluster registry. The index gateway is its own
-// registry, so EnsureGateway leaves GlobalRQLiteDSN empty.
 // deploymentRegistry is the database every gateway's deployment family reads
 // and writes: the cluster registry. A deployment's rows, ports and home node
 // are cluster state, written by `orama deploy` through the main gateway and read
@@ -138,6 +131,13 @@ func runsDeploymentHealthChecker(cfg *Config) bool {
 	return !isNamespaceGateway(cfg)
 }
 
+// isNamespaceGateway reports whether this process serves a tenant namespace
+// rather than the index.
+//
+// A tenant gateway is the one configured with a GlobalRQLiteDSN pointing at a
+// DIFFERENT database from its own: its RQLiteDSN is the namespace's rqlite and
+// GlobalRQLiteDSN is the cluster registry. The index gateway is its own
+// registry, so EnsureGateway leaves GlobalRQLiteDSN empty.
 func isNamespaceGateway(cfg *Config) bool {
 	return cfg != nil && cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN
 }

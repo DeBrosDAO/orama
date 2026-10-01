@@ -155,7 +155,7 @@ var tablePlacement = map[string]tableNote{
 	// would turn an empty answer into "no such table" in that code path.
 	"invite_tokens":                {PlacementNamespace, TrustPlatform, "cluster join; the join, enrol and operator-invite handlers are built on ORMClient and mounted on every gateway (gateway.go, routes.go)"},
 	"wireguard_peers":              {PlacementNamespace, TrustPlatform, "mesh membership; the wireguard, node-API, join and enrol handlers are built on ORMClient and mounted on every gateway (gateway.go, routes.go)"},
-	"dns_records":                  {PlacementNamespace, TrustPlatform, "cluster DNS; a namespace gateway writes it through g.sqlDB (namespace_health.go) and its deployment service through ORMClient (deployments/service.go, domain_handler.go)"},
+	"dns_records":                  {PlacementNamespace, TrustPlatform, "cluster DNS; a namespace gateway writes it through g.sqlDB (namespace_health.go). The deployment service writes it in the registry on every gateway (gateway.go deploymentRegistry)"},
 	"dns_nodes":                    {PlacementNamespace, TrustPlatform, "cluster DNS; read on a namespace gateway through g.sqlDB (namespace_health.go) and by the deployment home-node and replica managers on ORMClient"},
 	"dns_nameservers":              {PlacementCluster, TrustPlatform, "read and written by the node process, CoreDNS (which dials the registry) and the CLI; no gateway package names it"},
 	"raft_evicted_nodes":           {PlacementCluster, TrustPlatform, "tombstones read and written only by the node process on its own index rqlite (eviction.go, the membership reconciler) and by the CLI; a namespace gateway never opens it"},
@@ -166,7 +166,7 @@ var tablePlacement = map[string]tableNote{
 	"namespace_cluster_events":     {PlacementCluster, TrustPlatform, "the cluster manager's log, written and read through cm.db, which exists only on the index gateway (WireCoreGateway)"},
 	"namespace_port_allocations":   {PlacementNamespace, TrustPlatform, "cluster port allocation; a namespace gateway reads it through g.sqlDB in the namespace health loop, which starts on every gateway (gateway.go)"},
 	"webrtc_port_allocations":      {PlacementCluster, TrustPlatform, "which node runs which SFU or TURN role; read through the registry handle (sfu_directory.go uses globalSQLDB) and written by the cluster manager on the index gateway"},
-	"global_deployment_subdomains": {PlacementNamespace, TrustPlatform, "subdomain ownership; the deployment service claims and releases subdomains on ORMClient, which is the tenant handle on a namespace gateway (deployments/service.go)"},
+	"global_deployment_subdomains": {PlacementNamespace, TrustPlatform, "subdomain ownership; the deployment service claims and releases subdomains in the registry on every gateway (gateway.go deploymentRegistry), so a tenant copy is unused; it stays placed here until no other namespace-gateway code is found to touch it"},
 	"namespace_pending_cleanup":    {PlacementCluster, TrustPlatform, "the tenant reconciler's retry queue, run by the cluster manager on the index gateway through cm.db"},
 }
 
