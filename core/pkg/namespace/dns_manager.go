@@ -3,6 +3,7 @@ package namespace
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -305,33 +306,51 @@ func (drm *DNSRecordManager) CreateTURNRecords(ctx context.Context, namespaceNam
 	tag := "namespace-turn:" + namespaceName
 	now := time.Now()
 	for _, host := range []string{fqdn, tlsFQDN} {
-		// Delete existing records for this host+namespace, then recreate.
-		deleteQuery := `DELETE FROM dns_records WHERE fqdn = ? AND namespace = ?`
-		_, _ = drm.db.Exec(internalCtx, deleteQuery, host, tag)
-
-		for _, ip := range turnIPs {
-			insertQuery := `
-				INSERT INTO dns_records (
-					fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			`
-			_, err := drm.db.Exec(internalCtx, insertQuery,
-				host, "A", ip, 60, tag, "cluster-manager", now, now,
-			)
-			if err != nil {
-				return &ClusterError{
-					Message: fmt.Sprintf("failed to create TURN DNS record %s -> %s", host, ip),
-					Cause:   err,
-				}
+		if err := drm.setTURNHostRecords(internalCtx, host, tag, turnIPs, now); err != nil {
+			return &ClusterError{
+				Message: fmt.Sprintf("failed to set TURN DNS records for %s", host),
+				Cause:   err,
 			}
 		}
 	}
 
-	drm.logger.Info("TURN DNS records created",
+	drm.logger.Info("TURN DNS records set",
 		zap.String("namespace", namespaceName),
 		zap.Int("record_count", len(turnIPs)*2),
 	)
+	return nil
+}
 
+// insertTURNRecordSQL adds one TURN A record unless that fqdn already holds
+// that address, which is what the unique index on (fqdn, record_type, value)
+// allows once. Args: fqdn, value, tag, created_at, updated_at, fqdn, value.
+const insertTURNRecordSQL = `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at)
+	SELECT ?, 'A', ?, 60, ?, 'cluster-manager', ?, ?
+	WHERE NOT EXISTS (SELECT 1 FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND value = ?)`
+
+// setTURNHostRecords makes host's TURN records for the namespace exactly ips.
+// It used to delete them all, ignoring a failed delete, and insert each
+// address plainly. The per-node reconciler adds the same rows additively, and
+// one that landed between the two failed the enable on the unique index
+// (stagenet e2e, 2026-10-01). Stale addresses go, missing ones are added, and
+// an address already there is left: run twice, or beside the reconciler, it
+// converges.
+func (drm *DNSRecordManager) setTURNHostRecords(ctx context.Context, host, tag string, ips []string, now time.Time) error {
+	args := []interface{}{host, tag}
+	placeholders := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		placeholders = append(placeholders, "?")
+		args = append(args, ip)
+	}
+	staleQuery := `DELETE FROM dns_records WHERE fqdn = ? AND namespace = ? AND value NOT IN (` + strings.Join(placeholders, ", ") + `)`
+	if _, err := drm.db.Exec(ctx, staleQuery, args...); err != nil {
+		return fmt.Errorf("remove the stale TURN records of %s: %w", host, err)
+	}
+	for _, ip := range ips {
+		if _, err := drm.db.Exec(ctx, insertTURNRecordSQL, host, ip, tag, now, now, host, ip); err != nil {
+			return fmt.Errorf("add TURN record %s -> %s: %w", host, ip, err)
+		}
+	}
 	return nil
 }
 
