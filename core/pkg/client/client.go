@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	orerrors "github.com/DeBrosOfficial/network/pkg/errors"
 	"net"
 	"strings"
 	"sync"
@@ -416,12 +417,12 @@ func (c *Client) requireAccess(ctx context.Context) error {
 
 	cfg := c.Config()
 	if cfg == nil || (strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.JWT) == "") {
-		return fmt.Errorf("access denied: API key or JWT required")
+		return orerrors.NewUnauthorizedError("access denied: API key or JWT required")
 	}
 	ns := c.getAppNamespace()
 	if v := ctx.Value(pubsub.CtxKeyNamespaceOverride); v != nil {
 		if s, ok := v.(string); ok && s != "" && s != ns {
-			return fmt.Errorf("access denied: namespace mismatch")
+			return orerrors.NewForbiddenError("namespace "+s, "access")
 		}
 	}
 	return nil

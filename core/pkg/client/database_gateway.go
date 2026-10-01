@@ -229,16 +229,6 @@ func (d *gatewayDatabaseClient) GetSchema(ctx context.Context) (*SchemaInfo, err
 	return schema, nil
 }
 
-// gatewayStatusError is a gateway answering with an error status.
-type gatewayStatusError struct {
-	status  int
-	message string
-}
-
-func (e *gatewayStatusError) Error() string {
-	return fmt.Sprintf("the gateway answered %d: %s", e.status, e.message)
-}
-
 func (d *gatewayDatabaseClient) post(ctx context.Context, path string, body any, out any) error {
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -290,18 +280,6 @@ func (d *gatewayDatabaseClient) do(req *http.Request, out any) error {
 		return &gatewayStatusError{status: resp.StatusCode, message: gatewayErrorMessage(raw)}
 	}
 	return nil
-}
-
-// gatewayErrorMessage is what a failing gateway said: the "error" of a JSON
-// body, else the body.
-func gatewayErrorMessage(raw []byte) string {
-	var body struct {
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(raw, &body) == nil && body.Error != "" {
-		return body.Error
-	}
-	return strings.TrimSpace(string(raw))
 }
 
 // decodeCell decodes one result value. An integer is an int64 and any other
