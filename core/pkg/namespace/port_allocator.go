@@ -50,6 +50,12 @@ func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID
 		return nil, fmt.Errorf("failed to check for an existing port block of cluster %s on node %s: %w", namespaceClusterID, nodeID, err)
 	}
 	if existingBlock != nil {
+		// A node evicted from this cluster while its teardown was unconfirmed
+		// keeps its block and owes the teardown (evictMemberAllocations). Given
+		// the cluster again, it must not be torn down under the member it is now.
+		if err := withdrawOwnPendingTeardown(ctx, npa.db, namespaceClusterID, nodeID); err != nil {
+			return nil, fmt.Errorf("allocate the port block of cluster %s on node %s: %w", namespaceClusterID, nodeID, err)
+		}
 		npa.logger.Debug("Port block already allocated",
 			zap.String("node_id", nodeID),
 			zap.String("namespace_cluster_id", namespaceClusterID),
@@ -323,26 +329,6 @@ func (npa *NamespacePortAllocator) DeallocatePortBlock(ctx context.Context, name
 	npa.logger.Info("Port block deallocated",
 		zap.String("namespace_cluster_id", namespaceClusterID),
 		zap.String("node_id", nodeID),
-	)
-
-	return nil
-}
-
-// DeallocateAllPortBlocks releases all port blocks for a namespace cluster
-func (npa *NamespacePortAllocator) DeallocateAllPortBlocks(ctx context.Context, namespaceClusterID string) error {
-	internalCtx := client.WithInternalAuth(ctx)
-
-	query := `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ?`
-	_, err := npa.db.Exec(internalCtx, query, namespaceClusterID)
-	if err != nil {
-		return &ClusterError{
-			Message: "failed to deallocate all port blocks",
-			Cause:   err,
-		}
-	}
-
-	npa.logger.Info("All port blocks deallocated",
-		zap.String("namespace_cluster_id", namespaceClusterID),
 	)
 
 	return nil

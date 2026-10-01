@@ -28,6 +28,9 @@ func TestPruneStaleClusterNodes_alsoDropsPortAllocation(t *testing.T) {
 			appendToSlice(dest, map[string]any{"ID": "cluster-1", "RQLiteNodeCount": 3})
 			return nil
 		}
+		if strings.Contains(query, "FROM dns_nodes") {
+			return nil // the node is gone from the registry: nothing to confirm
+		}
 		if query != staleClusterNodeSQL {
 			t.Fatalf("unexpected query: %s", query)
 		}

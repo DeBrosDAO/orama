@@ -481,7 +481,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ? AND pa.node_id != ?
+		WHERE pa.namespace_cluster_id = ? AND pa.node_id != ? ` + notOwedTeardownSQL + `
 	`
 	if err := cm.db.Query(ctx, &surviving, portsQuery, cluster.ID, deadNodeID); err != nil {
 		// Rollback port allocation
@@ -670,7 +670,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	}
 
 	// 13. Clean up dead node's port allocations and cluster assignments
-	cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, deadNodeID)
+	cm.evictMember(ctx, cluster.ID, cluster.NamespaceName, deadNodeID)
 	cm.removeClusterNodeAssignment(ctx, cluster.ID, deadNodeID)
 
 	// 14. Update cluster-state.json on all nodes
@@ -795,7 +795,7 @@ func (cm *ClusterManager) clusterStateInputs(ctx context.Context, cluster *Names
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ?
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
 		ORDER BY pa.node_id
 	`
 	if err := cm.db.Query(client.WithInternalAuth(ctx), &rows, query, cluster.ID); err != nil {
@@ -827,15 +827,18 @@ func (cm *ClusterManager) clusterStateInputs(ctx context.Context, cluster *Names
 	return nodes, blocks, nil
 }
 
-// removeStalePortAllocation drops a departed node's namespace_port_allocations
-// row (bugboard #280). The counterpart to removeClusterNodeAssignment: both rows
-// describe the same membership, and leaving one behind is what let stale nodes
-// survive in generated namespace gateway config.
-func (cm *ClusterManager) removeStalePortAllocation(ctx context.Context, clusterID, nodeID string) {
-	query := `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ? AND node_id = ?`
-	if _, err := cm.db.Exec(ctx, query, clusterID, nodeID); err != nil {
-		cm.logger.Warn("Failed to remove stale port allocation",
+// evictMember frees a departed node's port reservations (bugboard #280), once
+// its teardown is confirmed: the counterpart to removeClusterNodeAssignment, as
+// both rows describe the same membership, and leaving the allocation behind is
+// what let stale nodes survive in generated namespace gateway config. A node that
+// does not confirm keeps its reservations, owed to it in namespace_pending_cleanup
+// (evictMemberAllocations), and is left out of every read of the cluster's
+// members (notOwedTeardownSQL).
+func (cm *ClusterManager) evictMember(ctx context.Context, clusterID, namespace, nodeID string) {
+	if err := cm.evictMemberAllocations(ctx, clusterID, namespace, nodeID); err != nil {
+		cm.logger.Warn("Evicted cluster member keeps its port reservations",
 			zap.String("cluster_id", clusterID),
+			zap.String("namespace", namespace),
 			zap.String("node_id", nodeID),
 			zap.Error(err))
 	}
@@ -904,10 +907,14 @@ func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID 
 	// membership and port allocation, after which local restore has nothing
 	// to join and RepairCluster cannot bootstrap a leader. Leave the row;
 	// bounce is restore, not replace.
-	if cluster, err := cm.GetCluster(internalCtx, clusterID); err != nil {
-		cm.logger.Warn("Could not load cluster before pruning stale members — continuing",
-			zap.String("cluster_id", clusterID), zap.Error(err))
-	} else if cluster != nil && cluster.RQLiteNodeCount == 1 {
+	cluster, err := cm.GetCluster(internalCtx, clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("load cluster %s before pruning its stale members: %w", clusterID, err)
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster %s not found, so its stale members cannot be pruned", clusterID)
+	}
+	if cluster.RQLiteNodeCount == 1 {
 		cm.logger.Warn("not pruning members of a 1-node eval cluster; local restore needs the membership",
 			zap.String("cluster_id", clusterID),
 			zap.String("namespace", cluster.NamespaceName),
@@ -926,8 +933,8 @@ func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID 
 
 	removed := make([]string, 0, len(rows))
 	for _, r := range rows {
-		cm.removeClusterNodeAssignment(ctx, clusterID, r.NodeID)
-		// Bugboard #280: the port allocation must go too. Pruning only
+		// Bugboard #280: the port allocation must go too, once the node's
+		// teardown is confirmed (evictMember). Pruning only
 		// namespace_cluster_nodes left the allocation row behind, and that row is
 		// what cluster-state.json (and therefore the namespace gateway's
 		// olric_servers / rqlite join list) is built from — so a namespace kept
@@ -935,9 +942,10 @@ func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID 
 		// with Olric discovery aimed at two removed nodes: its cache was down on
 		// every gateway, and each gateway restart stalled for MINUTES timing out
 		// against them before it would bind.
-		cm.removeStalePortAllocation(ctx, clusterID, r.NodeID)
+		cm.evictMember(ctx, clusterID, cluster.NamespaceName, r.NodeID)
+		cm.removeClusterNodeAssignment(ctx, clusterID, r.NodeID)
 		removed = append(removed, r.NodeID)
-		cm.logger.Warn("Removed permanently-gone cluster node assignment and its port allocation (bugboard #173, #280)",
+		cm.logger.Warn("Removed permanently-gone cluster node assignment; its port allocation is freed or owed its teardown (bugboard #173, #280)",
 			zap.String("cluster_id", clusterID),
 			zap.String("node_id", r.NodeID))
 	}
@@ -1042,7 +1050,7 @@ func (cm *ClusterManager) updateClusterStateAfterRecovery(ctx context.Context, c
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ?
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
 	`
 	if err := cm.db.Query(ctx, &allPorts, query, cluster.ID); err != nil {
 		cm.logger.Warn("Failed to query ports for state update", zap.Error(err))
@@ -1223,7 +1231,7 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ?
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
 	`
 	if err := cm.db.Query(ctx, &surviving, portsQuery, cluster.ID); err != nil {
 		return fmt.Errorf("failed to query surviving node ports: %w", err)

@@ -468,3 +468,14 @@ func withdrawPendingTeardowns(ctx context.Context, db rqlite.Client, clusterID, 
 	}
 	return nil
 }
+
+// withdrawOwnPendingTeardown forgets the teardown a node still owes for this
+// very cluster, as the cluster is given the node again.
+func withdrawOwnPendingTeardown(ctx context.Context, db rqlite.Client, clusterID, nodeID string) error {
+	if _, err := db.Exec(client.WithInternalAuth(ctx),
+		`DELETE FROM namespace_pending_cleanup WHERE node_id = ? AND action = ? AND cluster_id = ?`,
+		nodeID, teardownAction, clusterID); err != nil {
+		return fmt.Errorf("withdraw the pending teardown of cluster %s on node %s: %w", clusterID, nodeID, err)
+	}
+	return nil
+}

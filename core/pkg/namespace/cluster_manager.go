@@ -340,7 +340,7 @@ func (cm *ClusterManager) liveRaftPeers(ctx context.Context, clusterID string) (
 		SELECT COALESCE(dn.internal_ip, dn.ip_address) as internal_ip, pa.rqlite_raft_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ?
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
 	`
 	if err := cm.db.Query(ctx, &rows, q, clusterID); err != nil {
 		return nil, err
@@ -1862,7 +1862,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 			pa.rqlite_http_port, pa.rqlite_raft_port, pa.olric_http_port, pa.olric_memberlist_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ?
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
 	`
 	if err := cm.db.Query(ctx, &allNodePorts, allPortsQuery, clusterID); err != nil {
 		return fmt.Errorf("failed to get all node ports: %w", err)

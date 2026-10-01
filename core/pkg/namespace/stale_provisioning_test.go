@@ -54,7 +54,9 @@ func newStaleSweep(stale []NamespaceCluster, nodes []staleClusterNode, lostRace 
 				sw.modif = args
 				*d = stale
 			case *[]staleClusterNode:
-				*d = nodes
+				if query == staleClusterNodesQuery {
+					*d = nodes
+				}
 			}
 			return nil
 		},

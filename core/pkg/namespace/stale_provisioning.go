@@ -39,6 +39,10 @@ const (
 	// is left out on purpose: a permanently departed node would otherwise pin
 	// every stale cluster it held in provisioning for ever.
 	//
+	// The inactive ones are not asked: a node silent for two minutes may be
+	// restarting or partitioned with its units still running, so its teardown is
+	// owed instead (staleClusterOwedNodesQuery) and its block stays reserved.
+	//
 	// Only the overlay address is used. The stop is a signed request in plain
 	// HTTP; sending it to a public address would carry it off the WireGuard
 	// mesh, so a node with none cannot be stopped and keeps its ports.
@@ -47,6 +51,14 @@ const (
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
 		WHERE pa.namespace_cluster_id = ? AND dn.status = 'active'`
+
+	// staleClusterOwedNodesQuery lists the registered nodes that hold a port
+	// block of the cluster and are not active: they cannot confirm a stop.
+	staleClusterOwedNodesQuery = `SELECT DISTINCT pa.node_id AS node_id,
+		COALESCE(dn.internal_ip, '') AS internal_ip
+		FROM namespace_port_allocations pa
+		JOIN dns_nodes dn ON pa.node_id = dn.id
+		WHERE pa.namespace_cluster_id = ? AND dn.status != 'active'`
 )
 
 type staleClusterNode struct {
@@ -117,7 +129,9 @@ func (cm *ClusterManager) isProvisioningLocally(namespaceName string) bool {
 //     are never released under a process that may still be bound to them, or
 //     the next namespace given the same block collides with it.
 //  2. The guarded UPDATE; exactly one node wins it.
-//  3. The winner releases the ports and withdraws DNS and membership.
+//  3. The winner releases the ports of the nodes that confirmed (every node
+//     but those owed a teardown, releaseAllocationsExceptOwed) and withdraws
+//     DNS and membership.
 func (cm *ClusterManager) failStaleCluster(ctx context.Context, c *NamespaceCluster, modifier string) error {
 	if err := cm.stopStaleClusterServices(ctx, c); err != nil {
 		return fmt.Errorf("stale provisioning cluster %s (%s) keeps its ports until its services are stopped: %w", c.ID, c.NamespaceName, err)
@@ -139,7 +153,7 @@ func (cm *ClusterManager) failStaleCluster(ctx context.Context, c *NamespaceClus
 		zap.Time("provisioned_at", c.ProvisionedAt))
 
 	var errs []error
-	if err := cm.portAllocator.DeallocateAllPortBlocks(ctx, c.ID); err != nil {
+	if err := cm.releaseAllocationsExceptOwed(ctx, c.ID, c.NamespaceName); err != nil {
 		errs = append(errs, err)
 	}
 	if err := cm.removeClusterServingRecords(ctx, c); err != nil {
@@ -153,7 +167,8 @@ func (cm *ClusterManager) failStaleCluster(ctx context.Context, c *NamespaceClus
 }
 
 // stopStaleClusterServices tears the cluster down on every active node holding
-// one of its port blocks, attempting all of them and joining the failures.
+// one of its port blocks, attempting all of them and joining the failures. An
+// inactive node cannot confirm it: its teardown is recorded as owed.
 // Teardown, not stop: the stale cluster is about to be marked failed, and a
 // failed cluster's units must not be left enabled for the next upgrade to start.
 func (cm *ClusterManager) stopStaleClusterServices(ctx context.Context, c *NamespaceCluster) error {
@@ -161,5 +176,18 @@ func (cm *ClusterManager) stopStaleClusterServices(ctx context.Context, c *Names
 	if err := cm.db.Query(ctx, &nodes, staleClusterNodesQuery, c.ID); err != nil {
 		return fmt.Errorf("failed to list the nodes of cluster %s: %w", c.ID, err)
 	}
-	return cm.teardownNamespaceOnNodes(ctx, nodes, c.NamespaceName, cleanupScope{ClusterID: c.ID})
+	scope := cleanupScope{ClusterID: c.ID}
+	errs := []error{cm.teardownNamespaceOnNodes(ctx, nodes, c.NamespaceName, scope)}
+
+	var inactive []staleClusterNode
+	if err := cm.db.Query(ctx, &inactive, staleClusterOwedNodesQuery, c.ID); err != nil {
+		return errors.Join(append(errs, fmt.Errorf("failed to list the inactive nodes of cluster %s: %w", c.ID, err))...)
+	}
+	for _, node := range inactive {
+		cause := fmt.Errorf("node %s is not active, so it cannot confirm the teardown of %s", node.NodeID, c.NamespaceName)
+		if err := cm.recordPendingCleanup(ctx, c.NamespaceName, node.NodeID, node.InternalIP, teardownAction, scope, cause); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

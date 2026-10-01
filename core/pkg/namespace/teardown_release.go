@@ -97,3 +97,39 @@ func (cm *ClusterManager) releaseAllocationsExceptOwed(ctx context.Context, clus
 	}
 	return cm.releaseConfirmedAllocations(ctx, clusterID, nodes)
 }
+
+// notOwedTeardownSQL narrows a read of port blocks (alias pa) to the blocks of
+// members the cluster still uses. The block of a member the cluster evicted
+// while its teardown was unconfirmed stays reserved until the recorded teardown
+// is carried out, but the node is no longer part of the cluster: it must not
+// reappear in the cluster state, the join lists or the surviving ports.
+const notOwedTeardownSQL = `AND NOT EXISTS (SELECT 1 FROM namespace_pending_cleanup pc
+		WHERE pc.node_id = pa.node_id AND pc.cluster_id = pa.namespace_cluster_id AND pc.action = '` + teardownAction + `')`
+
+// evictMemberAllocations ends a node's part in a cluster that lives on: the
+// namespace is torn down on the node, and its core port block and WebRTC
+// allocations are freed only once the node confirmed the stop (a response from
+// the node, or the result of the local stop), or is gone from the registry and
+// took its units with it. A node that did not confirm it (dead, unreachable, no
+// overlay address) is recorded in namespace_pending_cleanup with the cluster id,
+// which keeps its reservations until the replay carries the teardown out
+// (releaseOwedAllocations): freeing them under units that may still run hands
+// the ports to the next namespace (bugboard #275). The error says the teardown
+// is owed, not that the eviction failed.
+func (cm *ClusterManager) evictMemberAllocations(ctx context.Context, clusterID, namespace, nodeID string) error {
+	removed, err := cm.nodeRemoved(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	if !removed {
+		nodeIP := ""
+		if ips, ipErr := cm.getNodeIPs(ctx, nodeID); ipErr == nil {
+			nodeIP = ips.InternalIP
+		}
+		node := staleClusterNode{NodeID: nodeID, InternalIP: nodeIP}
+		if err := cm.teardownNamespaceOnNode(ctx, node, namespace, cleanupScope{ClusterID: clusterID}); err != nil {
+			return fmt.Errorf("the teardown of %s on evicted node %s is not confirmed, its ports stay reserved until it is replayed: %w", namespace, nodeID, err)
+		}
+	}
+	return releaseOwedAllocations(ctx, cm.db, clusterID, nodeID, teardownAction)
+}
