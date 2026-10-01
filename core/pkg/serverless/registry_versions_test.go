@@ -169,3 +169,36 @@ func TestRegister_prunesPastTheRetentionBound(t *testing.T) {
 		t.Errorf("the pruned version's invocation history must stay readable by name: %d rows, err %v", len(inv), err)
 	}
 }
+
+func TestRegister_pruningKeepsTheJobsOfAPrunedVersion(t *testing.T) {
+	r, db := newVersionedRegistry(t)
+	ctx := context.Background()
+	deployN(t, r, "fn", 1)
+	v1, err := r.Get(ctx, "ns", "fn", 1)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO function_jobs (id, function_id, status) VALUES ('j1', ?, 'completed')`, v1.ID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	deployN(t, r, "fn", MaxRetainedFunctionVersions)
+
+	var orphans int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM function_jobs WHERE function_id NOT IN (SELECT id FROM functions)`).Scan(&orphans); err != nil {
+		t.Fatalf("count orphans: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("%d jobs point at a pruned version", orphans)
+	}
+	var owner string
+	if err := db.QueryRow(`SELECT function_id FROM function_jobs WHERE id = 'j1'`).Scan(&owner); err != nil {
+		t.Fatalf("the pruned version's job is gone: %v", err)
+	}
+	v2, err := r.Get(ctx, "ns", "fn", 2)
+	if err != nil {
+		t.Fatalf("Get v2: %v", err)
+	}
+	if owner != v2.ID {
+		t.Errorf("job moved to %s; want the oldest kept version %s", owner, v2.ID)
+	}
+}

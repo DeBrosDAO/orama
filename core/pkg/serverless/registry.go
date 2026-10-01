@@ -195,7 +195,7 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 
 	now := time.Now()
 	// Every deploy is a new row with its own id: the previous versions stay
-	// (migration 067), so `name@N` keeps resolving after `name@N+1` ships.
+	// (migration 068), so `name@N` keeps resolving after `name@N+1` ships.
 	id := uuid.New().String()
 	version := 1
 	if oldFn != nil {

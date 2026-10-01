@@ -28,11 +28,14 @@ var triggerTables = []string{
 
 // historyTables hold what happened while a version was current. They stay with
 // the version that produced them until that version is pruned, when they move to
-// the oldest version kept: logs and invocations are read by function name, so
-// the history of a function is not cut short by retention.
+// the oldest version kept: logs, invocations and jobs are read by function name,
+// so the history of a function is not cut short by retention, and no row is left
+// pointing at a deleted version (rqlite runs without foreign keys, so ON DELETE
+// CASCADE never fires).
 var historyTables = []string{
 	"function_invocations",
 	"function_logs",
+	"function_jobs",
 }
 
 // versionIDRow scans one function row id.

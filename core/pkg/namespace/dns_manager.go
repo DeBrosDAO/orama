@@ -366,7 +366,7 @@ const ensureTURNRecordSQL = `INSERT INTO dns_records (fqdn, record_type, value, 
 // EnsureTURNRecordForNode additively upserts THIS node's TURN (and stealth) A
 // records so a live TURN node always advertises itself (bugboard #158).
 //
-// CreateTURNRecords is a one-shot DELETE+INSERT run only at WebRTC-enable time,
+// CreateTURNRecords sets the whole address set only at WebRTC-enable time,
 // and the #158 sweep only DELETES records for inactive nodes — so a TURN node
 // whose record was purged while it was briefly down (e.g. mid-deploy) never got
 // re-added, leaving the turn domain empty (NXDOMAIN → clients resolve no TURN

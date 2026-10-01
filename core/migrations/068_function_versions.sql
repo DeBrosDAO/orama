@@ -64,4 +64,4 @@ CREATE INDEX IF NOT EXISTS idx_functions_namespace ON functions(namespace);
 CREATE INDEX IF NOT EXISTS idx_functions_name ON functions(namespace, name);
 CREATE INDEX IF NOT EXISTS idx_functions_status ON functions(status);
 
-INSERT OR IGNORE INTO schema_migrations(version) VALUES (67);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (68);
