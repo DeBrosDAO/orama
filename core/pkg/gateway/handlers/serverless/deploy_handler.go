@@ -3,6 +3,7 @@ package serverless
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -143,6 +144,10 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 			zap.String("name", def.Name),
 			zap.Error(err),
 		)
+		if storeUnavailable(err) {
+			writeStoreError(w, "Failed to deploy function", err)
+			return
+		}
 		// Use the typed function-deploy code so clients can distinguish
 		// "registry rejected this binary" from generic 500s.
 		writeRPCError(w, http.StatusInternalServerError,
@@ -317,4 +322,21 @@ func writeStoreError(w http.ResponseWriter, what string, err error) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, what)
+}
+
+// storeUnavailable reports whether a failed deploy was the namespace database
+// not answering (no leader during an election, a timeout) rather than a
+// rejected function. Only the cause is classified: the DeployError text leads
+// with the function's name, and a function called "timeout-probe" must not read
+// as a deadline.
+func storeUnavailable(err error) bool {
+	var de *serverless.DeployError
+	if errors.As(err, &de) {
+		err = de.Cause
+	}
+	switch rqlite.ClassifyBatchError(err) {
+	case rqlite.BatchCodeUnavailable, rqlite.BatchCodeDeadlineExceeded:
+		return true
+	}
+	return false
 }
