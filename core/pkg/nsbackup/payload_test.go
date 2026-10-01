@@ -18,7 +18,7 @@ const (
 )
 
 func testDB() []byte {
-	return append([]byte(sqliteMagic), []byte("page data")...)
+	return append([]byte(SQLiteMagic), []byte("page data")...)
 }
 
 func testPayload() Payload {

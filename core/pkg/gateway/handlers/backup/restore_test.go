@@ -45,7 +45,7 @@ func TestRestoreHandler_round_trip_onto_another_cluster(t *testing.T) {
 	if strings.Join(dst.pins.sorted(), ",") != testCIDa+","+testCIDb {
 		t.Fatalf("pinned %v", dst.pins.pinned)
 	}
-	got := decryptOps(t, dst.db.batches[1], destRoot)
+	got := decryptOps(t, secretBatch(t, dst), destRoot)
 	want := map[string]string{
 		"UPDATE function_secrets SET encrypted_value = ? WHERE id = ? [1000000]":      "sk_live_1",
 		"UPDATE namespace_webrtc_config SET turn_shared_secret = ? WHERE id = ? [w1]": "legacy-plain",
@@ -62,6 +62,18 @@ func TestRestoreHandler_round_trip_onto_another_cluster(t *testing.T) {
 		strings.Join(dst.audit.actions, ",") != auth.AuditNamespaceRestored {
 		t.Fatalf("audit: src %v dst %v", src.audit.actions, dst.audit.actions)
 	}
+}
+
+// secretBatch is the batch of UPDATEs that wrote the restored secrets.
+func secretBatch(t *testing.T, r *rig) []rqlite.BatchOp {
+	t.Helper()
+	for _, b := range r.db.batches {
+		if len(b) > 0 && strings.HasPrefix(b[0].SQL, "UPDATE ") {
+			return b
+		}
+	}
+	t.Fatalf("no batch wrote secrets: %v", r.db.batches)
+	return nil
 }
 
 // decryptOps maps each UPDATE (with its ids) to its value opened under root.
@@ -160,8 +172,9 @@ func TestRestoreHandler_empty_pins_and_secrets(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	// The one write batch is the destination's quota being put back.
-	if len(dst.snap.loaded) != 1 || len(dst.db.batches) != 1 || len(dst.pins.pinned) != 0 {
+	// The write batches are the destination's quota put back and the scrub of
+	// the loaded image (plaintext keys, other namespaces' ownership rows).
+	if len(dst.snap.loaded) != 1 || len(dst.db.batches) != 3 || len(dst.pins.pinned) != 0 {
 		t.Fatalf("loads=%d batches=%d pins=%v", len(dst.snap.loaded), len(dst.db.batches), dst.pins.pinned)
 	}
 }

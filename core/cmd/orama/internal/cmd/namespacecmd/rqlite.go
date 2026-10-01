@@ -15,7 +15,13 @@ import (
 var rqliteCmd = &cobra.Command{
 	Use:   "rqlite",
 	Short: "Manage the namespace's internal RQLite database",
-	Long:  "Export and import the namespace's internal RQLite database (stores deployments, DNS records, API keys, etc.).",
+	Long: `Export and import the namespace's internal RQLite database: your own tables and the
+namespace's functions, function secrets, stored-object records, quotas and push and
+WebRTC settings. Keys, grants and deployments are in the cluster registry, not in it.
+
+Both go to the namespace's own gateway (the host 'orama auth login --namespace' stored).
+With ORAMA_TOKEN, set ORAMA_API_URL to that host (https://ns-<name>.<domain>): the
+environment's gateway does not serve them.`,
 }
 
 var rqliteExportCmd = &cobra.Command{
@@ -31,7 +37,16 @@ var rqliteImportCmd = &cobra.Command{
 	Long: `Replaces the namespace's entire RQLite database with the contents of the provided SQLite file.
 
 WARNING: This is a destructive operation. All existing data in the namespace's RQLite
-(deployments, DNS records, API keys, etc.) will be replaced with the imported file.`,
+(your tables, functions, function secrets, stored-object records, quotas and push and
+WebRTC settings) will be replaced with the imported file. The file must be a SQLite
+database, as 'export' writes; at most 256 MiB. Live keys and grants (in the cluster
+registry) are not replaced, and stale copies in the file are ignored. The namespace's
+storage quota stays as it was. The gateway checks the file before loading it and
+refuses (400, nothing written) one that is damaged or carries triggers, views over
+platform tables or stored-object records for content only other namespaces hold;
+it removes plaintext API keys and other namespaces' records an older file may carry,
+and checks again, after the load. One backup, restore, export or
+import runs at a time on a gateway.`,
 	RunE: rqliteImport,
 }
 
@@ -131,7 +146,7 @@ func rqliteImport(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("WARNING: This will REPLACE the entire RQLite database for namespace '%s'.\n", namespace)
-	fmt.Printf("All existing data (deployments, DNS records, API keys, etc.) will be lost.\n")
+	fmt.Printf("All existing data (your tables, functions, function secrets, stored-object records, push and WebRTC settings) will be lost.\n")
 	fmt.Printf("Importing from: %s (%d bytes)\n\n", input, info.Size())
 	fmt.Printf("Type the namespace name '%s' to confirm: ", namespace)
 
@@ -179,6 +194,7 @@ func rqliteImport(cmd *cobra.Command, args []string) error {
 
 // nsRQLiteAPIURL and nsRQLiteAuthToken resolve the gateway and its credential
 // through the one shared resolver, so a request can never carry another
-// gateway's key.
-func nsRQLiteAPIURL() (string, error)    { return shared.GetAPIURL() }
+// gateway's key. The database is the tenant's, which only the namespace's own
+// gateway serves.
+func nsRQLiteAPIURL() (string, error)    { return shared.NamespaceGatewayURL() }
 func nsRQLiteAuthToken() (string, error) { return shared.GetAuthToken() }

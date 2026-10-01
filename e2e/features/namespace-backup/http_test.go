@@ -5,7 +5,6 @@ package namespacebackup
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
-	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
@@ -30,11 +28,13 @@ const (
 	bulkRowBytes = 512 << 10
 )
 
-// TestBackup_roundTripRestoresDataAndKeys: a backup holds the namespace's
-// database; restoring it puts back the rows and the API keys as they were and
-// removes what was written after, and running the same restore again is safe
+// TestBackup_roundTripRestoresDataAndLeavesKeys: a backup holds the namespace's
+// database; restoring it puts the rows back as they were and removes what was
+// written after, and running the same restore again is safe. API keys are not
+// in that database (they are in the cluster registry), so a restore neither
+// brings back a revoked one nor removes one minted since the backup
 // (docs/CLI_REFERENCE.md "orama namespace restore"; handlers/backup).
-func TestBackup_roundTripRestoresDataAndKeys(t *testing.T) {
+func TestBackup_roundTripRestoresDataAndLeavesKeys(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
 	tenancy.NotesSeed(t, n, "alpha", "beta", "γάμμα \u202e")
@@ -63,13 +63,11 @@ func TestBackup_roundTripRestoresDataAndKeys(t *testing.T) {
 			t.Fatalf("after restore the rows are %v", got)
 		}
 	}
-	tenancy.Get(t, n.Client, "/v1/cache/health", tenancy.Cred{APIKey: before}).Expect(t, http.StatusOK)
-	eventually.Require(t, pollEvery, keyCacheBudget, "a key minted after the backup to stop working", func() (bool, error) {
-		if r := tenancy.Get(t, n.Client, "/v1/cache/health", tenancy.Cred{APIKey: after}); r.Status == http.StatusOK {
-			return false, errors.New("still served")
+	for name, key := range map[string]string{"before the backup": before, "minted after the backup": after} {
+		if r := tenancy.Get(t, n.Client, "/v1/cache/health", tenancy.Cred{APIKey: key}); r.Status != http.StatusOK {
+			t.Errorf("the key %s answered %d after the restore: a restore does not touch keys", name, r.Status)
 		}
-		return true, nil
-	})
+	}
 }
 
 // TestBackup_refusedBeforeAnyWrite: a restore sealed to the wrong key, a

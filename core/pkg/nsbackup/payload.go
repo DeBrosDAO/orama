@@ -35,8 +35,8 @@ const (
 	// hundred bytes a secret this is tens of thousands of secrets.
 	maxHeaderBytes = 8 << 20
 
-	// sqliteMagic is the first 16 bytes of every SQLite database file.
-	sqliteMagic = "SQLite format 3\x00"
+	// SQLiteMagic is the first 16 bytes of every SQLite database file.
+	SQLiteMagic = "SQLite format 3\x00"
 )
 
 // Limits on what one backup may hold. A backup is one nacl box, so the whole
@@ -154,7 +154,7 @@ func validateFrame(ns string, pins []string, stored int64, db []byte) error {
 	if !httputil.ValidateNamespace(ns) {
 		return fmt.Errorf("namespace %q is not a valid namespace name", ns)
 	}
-	if !bytes.HasPrefix(db, []byte(sqliteMagic)) {
+	if !bytes.HasPrefix(db, []byte(SQLiteMagic)) {
 		return fmt.Errorf("the RQLite snapshot is not a SQLite database")
 	}
 	if len(db) > MaxRQLiteBytes {

@@ -335,3 +335,76 @@ func TestAuthTokenFor_usesTheNamedNamespacesSession(t *testing.T) {
 		t.Fatalf("an unknown namespace: %v, want the auth exit naming the login", err)
 	}
 }
+
+// storeNamespaceCredential saves a session for namespace at gatewayURL, with
+// the host of the namespace's own gateway as login stores it.
+func storeNamespaceCredential(t *testing.T, home, gatewayURL, namespace, namespaceURL string) {
+	t.Helper()
+	dir := filepath.Join(home, ".orama")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	store := map[string]any{
+		"version": "2.0",
+		"gateways": map[string]any{
+			gatewayURL: map[string]any{
+				"credentials":   []map[string]any{{"api_key": "k", "namespace": namespace, "namespace_url": namespaceURL}},
+				"default_index": 0,
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(store, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "credentials.json"), data, 0600); err != nil {
+		t.Fatalf("write credentials.json: %v", err)
+	}
+}
+
+// Backup, restore and the raw database export are served only by a
+// namespace's own gateway; the stagenet e2e got 503 from the cluster gateway
+// because the CLI sent them to the environment's gateway.
+func TestNamespaceGatewayURL(t *testing.T) {
+	const cluster, nsHost = "https://cluster.example", "https://ns-acme.cluster.example"
+
+	t.Run("the namespace host login stored", func(t *testing.T) {
+		home := isolatedHome(t)
+		writeActiveEnvironment(t, home, "devnet", cluster)
+		storeNamespaceCredential(t, home, cluster, "acme", nsHost)
+		got, err := NamespaceGatewayURL()
+		if err != nil || got != nsHost {
+			t.Fatalf("got %q, %v; want %q", got, err, nsHost)
+		}
+	})
+	t.Run("no stored namespace host is the resolved gateway", func(t *testing.T) {
+		home := isolatedHome(t)
+		writeActiveEnvironment(t, home, "devnet", cluster)
+		storeNamespaceCredential(t, home, cluster, "acme", "")
+		got, err := NamespaceGatewayURL()
+		if err != nil || got != cluster {
+			t.Fatalf("got %q, %v; want %q", got, err, cluster)
+		}
+	})
+	t.Run("no credentials at all is the resolved gateway", func(t *testing.T) {
+		home := isolatedHome(t)
+		writeActiveEnvironment(t, home, "devnet", cluster)
+		got, err := NamespaceGatewayURL()
+		if err != nil || got != cluster {
+			t.Fatalf("got %q, %v; want %q", got, err, cluster)
+		}
+	})
+	t.Run("ORAMA_TOKEN keeps the gateway the operator named", func(t *testing.T) {
+		home := isolatedHome(t)
+		storeNamespaceCredential(t, home, nsHost, "acme", "https://elsewhere.example")
+		t.Setenv("ORAMA_API_URL", nsHost)
+		t.Setenv(TokenEnvVar, "tok")
+		got, err := NamespaceGatewayURL()
+		if err != nil || got != nsHost {
+			t.Fatalf("got %q, %v; want %q", got, err, nsHost)
+		}
+	})
+	t.Run("no gateway configured is an error", func(t *testing.T) {
+		isolatedHome(t)
+		if got, err := NamespaceGatewayURL(); err == nil {
+			t.Fatalf("got %q, want an error", got)
+		}
+	})
+}

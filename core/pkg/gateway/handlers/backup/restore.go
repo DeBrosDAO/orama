@@ -69,6 +69,10 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	if err := httputil.ExtendIO(w, httputil.TransferBudget); err != nil {
+		h.internalError(w, http.StatusInternalServerError, "namespace transfer could not be given its time budget", err)
+		return
+	}
 	req, ok := h.readRestore(w, r)
 	if !ok {
 		return
@@ -77,7 +81,11 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp, err := h.apply(r.Context(), req, plan)
+	// Detached: a client that goes away after the load began does not stop the
+	// scrub of what RQLite applied.
+	ctx, cancel := loadContext(r)
+	defer cancel()
+	resp, err := h.apply(ctx, req, plan)
 	if errors.Is(err, ErrOverQuota) {
 		httputil.WriteError(w, http.StatusRequestEntityTooLarge,
 			err.Error()+"; the database was replaced and no CID was pinned")
@@ -136,6 +144,8 @@ func (h *Handler) prepare(ctx context.Context, w http.ResponseWriter, req nsback
 	switch {
 	case err == nil:
 		return plan, true
+	case errors.Is(err, ErrImageRefused):
+		httputil.WriteError(w, http.StatusBadRequest, err.Error()+"; nothing was written")
 	case errors.Is(err, errBatchUnavailable):
 		h.internalError(w, http.StatusServiceUnavailable, errBatchUnavailable.Error()+"; nothing was written", err)
 	case errors.Is(err, nsbackup.ErrNotForKey):
@@ -159,6 +169,12 @@ func (h *Handler) plan(ctx context.Context, req nsbackup.RestoreRequest) (restor
 	}
 	ops, err := h.resealHere(req)
 	if err != nil {
+		return restorePlan{}, err
+	}
+	// Refuse a damaged image, or one carrying what a namespace may not, before
+	// RQLite has loaded it: afterwards every gateway of the namespace is
+	// serving writes against it.
+	if err := h.checkImageBytes(ctx, req.RQLite); err != nil {
 		return restorePlan{}, err
 	}
 	budget, err := h.readBudget(ctx)
@@ -224,11 +240,14 @@ func updateOp(col secrets.Column, value string, ids []string) rqlite.BatchOp {
 
 func (h *Handler) apply(ctx context.Context, req nsbackup.RestoreRequest, plan restorePlan) (RestoreResponse, error) {
 	resp := RestoreResponse{Namespace: req.Namespace, RQLiteBytes: len(req.RQLite), Pins: len(req.Pins), Secrets: len(plan.ops)}
-	if err := h.cfg.Snapshots.Load(ctx, req.RQLite); err != nil {
-		return resp, fmt.Errorf("load the RQLite snapshot: %w", err)
+	// A load that failed may still have been applied, so the scrub and the
+	// quota go back either way.
+	loadErr := h.cfg.Snapshots.Load(ctx, req.RQLite)
+	if err := h.finishLoad(ctx, plan.budget); err != nil {
+		return resp, errors.Join(loadErr, err)
 	}
-	if _, err := h.writeBatches(ctx, []rqlite.BatchOp{h.restoreBudgetOp(plan.budget)}); err != nil {
-		return resp, fmt.Errorf("put back this cluster's storage quota: %w", err)
+	if loadErr != nil {
+		return resp, fmt.Errorf("load the RQLite snapshot: %w", loadErr)
 	}
 	missing, err := h.writeBatches(ctx, plan.ops)
 	if err != nil {

@@ -22,6 +22,14 @@ import (
 //
 // Resolution order is environment variable, then the active environment in
 // ~/.orama/environments.json, then an error. See auth.ResolveGatewayURL.
+//
+// The one exception is NamespaceGatewayURL, for the routes only a namespace's
+// own gateway serves. The credential is still the one AuthToken derives from
+// the gateway GatewayURL resolves: a short-lived session of the signed-in
+// namespace, which the namespace's gateway verifies against the same cluster
+// key, never the API key that is stored for the cluster gateway. Pointing the
+// CLI at another gateway with ORAMA_API_URL still names both the URL and the
+// credential.
 
 // GatewayURL returns the gateway this command talks to. override, when
 // non-empty, comes from an explicit --gateway flag and wins over everything.
@@ -35,6 +43,34 @@ func GatewayURL(override string) (string, error) {
 // GetAPIURL returns the gateway URL for commands that have no --gateway flag.
 func GetAPIURL() (string, error) {
 	return GatewayURL("")
+}
+
+// NamespaceGatewayURL returns the namespace gateway the session is signed in
+// to, for the routes only a namespace's own gateway serves: its raw database
+// (/v1/rqlite/export and /import) and backup and restore. The gateway that
+// fronts the cluster answers those 503 or 403, because its database is the
+// registry and not the tenant's.
+//
+// The URL comes from the default credential, which login stored with the
+// namespace's host. With ORAMA_TOKEN, or a gateway with no stored namespace
+// host, it is the gateway GatewayURL resolves, so pointing ORAMA_API_URL at
+// the namespace's host still works.
+func NamespaceGatewayURL() (string, error) {
+	gatewayURL, err := GetAPIURL()
+	if err != nil {
+		return "", err
+	}
+	if envToken() != "" {
+		return gatewayURL, nil
+	}
+	store, err := auth.LoadEnhancedCredentials()
+	if err != nil {
+		return "", fmt.Errorf("failed to load credentials: %w", err)
+	}
+	if creds := store.GetDefaultCredential(gatewayURL); creds != nil && creds.NamespaceURL != "" {
+		return creds.NamespaceURL, nil
+	}
+	return gatewayURL, nil
 }
 
 // AuthToken returns the credential to send to the gateway that resolves from

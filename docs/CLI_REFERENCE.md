@@ -2377,6 +2377,10 @@ has pinned, and its secrets, decrypted by the cluster and sealed with the rest
 to the public key you give. The cluster never holds the private key and cannot
 open what it wrote. Keep the private key off the cluster.
 
+It goes to the namespace's own gateway (the host 'orama auth login --namespace'
+stored). With ORAMA_TOKEN, set ORAMA_API_URL to that host
+(https://ns-<name>.<domain>): the environment's gateway does not serve backup.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--key` | — | your X25519 backup public key, 64 hex characters |
@@ -2606,6 +2610,18 @@ the namespace over its storage quota on the destination, and it keeps the
 destination's quota rather than the one in the backup. It runs one backup or
 restore at a time and answers 429 while one is running.
 
+The live keys, grants and sessions (in the cluster's registry) are not
+restored: a restore neither brings back a key that was revoked nor removes one
+minted since. The backup's database still carries stale copies of those rows,
+which nothing reads. Before loading, the gateway checks the database image and
+refuses (400, nothing written) one that is damaged or carries triggers, views
+over platform tables or stored-object records for content only other namespaces
+hold; it removes plaintext API keys and other namespaces' records an older backup
+may carry, and checks again, after the load.
+
+With ORAMA_TOKEN, set ORAMA_API_URL to the namespace's gateway
+(https://ns-<name>.<domain>): the environment's gateway does not serve restore.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--dest-key` | — | destination gateway's restore public key, from 'orama namespace restore-key' |
@@ -2634,7 +2650,13 @@ Manage the namespace's internal RQLite database
 orama namespace rqlite
 ```
 
-Export and import the namespace's internal RQLite database (stores deployments, DNS records, API keys, etc.).
+Export and import the namespace's internal RQLite database: your own tables and the
+namespace's functions, function secrets, stored-object records, quotas and push and
+WebRTC settings. Keys, grants and deployments are in the cluster registry, not in it.
+
+Both go to the namespace's own gateway (the host 'orama auth login --namespace' stored).
+With ORAMA_TOKEN, set ORAMA_API_URL to that host (https://ns-<name>.<domain>): the
+environment's gateway does not serve them.
 
 Subcommands: `export`, `import`
 
@@ -2663,7 +2685,16 @@ orama namespace rqlite import [flags]
 Replaces the namespace's entire RQLite database with the contents of the provided SQLite file.
 
 WARNING: This is a destructive operation. All existing data in the namespace's RQLite
-(deployments, DNS records, API keys, etc.) will be replaced with the imported file.
+(your tables, functions, function secrets, stored-object records, quotas and push and
+WebRTC settings) will be replaced with the imported file. The file must be a SQLite
+database, as 'export' writes; at most 256 MiB. Live keys and grants (in the cluster
+registry) are not replaced, and stale copies in the file are ignored. The namespace's
+storage quota stays as it was. The gateway checks the file before loading it and
+refuses (400, nothing written) one that is damaged or carries triggers, views over
+platform tables or stored-object records for content only other namespaces hold;
+it removes plaintext API keys and other namespaces' records an older file may carry,
+and checks again, after the load. One backup, restore, export or
+import runs at a time on a gateway.
 
 | Flag | Default | Description |
 |------|---------|-------------|

@@ -100,9 +100,23 @@ func TestRestoreHandler_keeps_the_destination_quota(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", name, rec.Code, rec.Body)
 		}
-		first := dst.db.batches[0][0]
-		if !strings.HasPrefix(first.SQL, tc.want) || first.Args[0] != testNamespace {
-			t.Fatalf("%s: first write %q %v", name, first.SQL, first.Args)
+		// The quota goes back after the scrub, so no quota is written while a
+		// trigger of the image could still fire on it.
+		var all []rqlite.BatchOp
+		for _, b := range dst.db.batches {
+			all = append(all, b...)
+		}
+		quota, scrubbed := -1, -1
+		for i, op := range all {
+			if strings.HasPrefix(op.SQL, tc.want) && op.Args[0] == testNamespace {
+				quota = i
+			}
+			if strings.HasPrefix(op.SQL, "DELETE FROM api_keys") {
+				scrubbed = i
+			}
+		}
+		if quota < 0 || scrubbed < 0 || quota < scrubbed {
+			t.Fatalf("%s: quota write at %d, scrub at %d: %v", name, quota, scrubbed, all)
 		}
 	}
 }

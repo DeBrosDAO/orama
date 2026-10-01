@@ -57,9 +57,10 @@ func keyWorks(t testing.TB, n *ns.Namespace, key string, want bool) func() (bool
 }
 
 // requireCanary fails unless `orama namespace keys list`, which reads the
-// namespace's own key rows (no gateway cache in between), still lists the
-// canary key active: a restore that went through would have replaced the
-// key rows with the backup's, which predate it.
+// cluster registry (no gateway cache in between), still lists the canary key,
+// minted after the backups, active. No restore writes keys, so this holds
+// after every refusal and every success; it is the check that a refused
+// restore did not do something other than refuse.
 func requireCanary(t testing.TB, cli *oramacli.Runner, after string) {
 	t.Helper()
 	out := cli.MustOK(t, "namespace", "keys", "list").Stdout
@@ -68,7 +69,7 @@ func requireCanary(t testing.TB, cli *oramacli.Runner, after string) {
 			return
 		}
 	}
-	t.Fatalf("after %s the canary key is no longer listed active: a refused restore replaced the key rows:\n%s", after, out)
+	t.Fatalf("after %s the canary key is no longer listed active:\n%s", after, out)
 }
 
 func cliRestoreKey(t testing.TB, cli *oramacli.Runner) string {
@@ -93,7 +94,8 @@ func cliBackup(t testing.TB, cli *oramacli.Runner, k tenancy.BackupKey) string {
 
 // TestBackupCLI_backupAndRestore drives backup, restore-key and restore as an
 // operator: the file is sealed (0600, ORBK) to the given key, and restoring it
-// brings back the keys that existed and drops one minted after
+// puts the namespace's database back and leaves its keys, which are in the
+// cluster registry and not in the backup, as they are
 // (docs/CLI_REFERENCE.md "orama namespace backup", "orama namespace restore").
 func TestBackupCLI_backupAndRestore(t *testing.T) {
 	t.Parallel()
@@ -108,7 +110,7 @@ func TestBackupCLI_backupAndRestore(t *testing.T) {
 	if p := k.Open(t, blob); p.Namespace != n.Name {
 		t.Fatalf("the CLI's backup is of %q", p.Namespace)
 	}
-	dropped := cliKey(t, cli)
+	later := cliKey(t, cli)
 	dest := cliRestoreKey(t, cli)
 	if again := cliRestoreKey(t, cli); again != dest {
 		t.Fatalf("the restore key changed between two reads: %s, %s", dest, again)
@@ -120,7 +122,7 @@ func TestBackupCLI_backupAndRestore(t *testing.T) {
 		}
 	}
 	eventually.Require(t, pollEvery, keyCacheBudget, "the key from before the backup to work", keyWorks(t, n, kept, true))
-	eventually.Require(t, pollEvery, keyCacheBudget, "the key minted after the backup to be gone", keyWorks(t, n, dropped, false))
+	eventually.Require(t, pollEvery, keyCacheBudget, "the key minted after the backup to still work", keyWorks(t, n, later, true))
 }
 
 // TestBackupCLI_refusalsSendNothing: a wrong private key, a corrupt file, a
@@ -133,7 +135,7 @@ func TestBackupCLI_refusalsSendNothing(t *testing.T) {
 	a, b := pair[0], pair[1]
 	k := tenancy.NewBackupKey(t)
 	fileA, fileB := cliBackup(t, a.CLI, k), cliBackup(t, b.CLI, k)
-	// Minted after the backups: a restore of either would drop it.
+	// Minted after the backups; no restore may revoke it.
 	canary := cliKeyLabelled(t, a.CLI, canaryLabel)
 	corrupt := filepath.Join(t.TempDir(), "corrupt.orbk")
 	raw, _ := os.ReadFile(fileA)

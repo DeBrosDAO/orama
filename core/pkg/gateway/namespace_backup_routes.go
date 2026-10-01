@@ -29,6 +29,7 @@ func (g *Gateway) initNamespaceBackup(deps *Dependencies) {
 		Caller:            backupCaller,
 		Audit:             deps.AuthService.Audit(),
 		Logger:            g.logger.Logger,
+		Slot:              g.wholeDatabaseSlot(),
 	})
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral,
@@ -36,6 +37,7 @@ func (g *Gateway) initNamespaceBackup(deps *Dependencies) {
 		return
 	}
 	g.backupHandler = h
+	g.loadGuard = h
 }
 
 // backupCaller is the namespace the credential belongs to, and whether it is

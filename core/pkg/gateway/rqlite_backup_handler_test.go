@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/nsbackup"
 )
 
 func newRQLiteTestLogger() *logging.ColoredLogger {
@@ -149,7 +150,7 @@ func TestRqliteImportHandler_WrongContentType(t *testing.T) {
 }
 
 func TestRqliteImportHandler_Success(t *testing.T) {
-	importData := "fake-sqlite-binary-data"
+	importData := nsbackup.SQLiteMagic + "fake-sqlite-binary-data"
 	var receivedBody string
 
 	mockRQLite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +205,7 @@ func TestRqliteImportHandler_RQLiteError(t *testing.T) {
 		logger: newRQLiteTestLogger(),
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/rqlite/import", strings.NewReader("data"))
+	req := httptest.NewRequest(http.MethodPost, "/v1/rqlite/import", strings.NewReader(nsbackup.SQLiteMagic))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	rr := httptest.NewRecorder()
 	gw.rqliteImportHandler(rr, req)
@@ -224,11 +225,11 @@ func TestRqliteWholeDatabase_ownerOnlyOnANamespaceGateway(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer mockRQLite.Close()
-	gw := &Gateway{cfg: &Config{RQLiteDSN: mockRQLite.URL, ClientNamespace: "anchat"}, logger: newRQLiteTestLogger()}
+	gw := &Gateway{cfg: &Config{RQLiteDSN: mockRQLite.URL, ClientNamespace: "anchat"}, logger: newRQLiteTestLogger(), loadGuard: &fakeLoadGuard{}}
 
 	requests := func(role auth.Role) []*http.Request {
 		exp := httptest.NewRequest(http.MethodGet, "/v1/rqlite/export", nil)
-		imp := httptest.NewRequest(http.MethodPost, "/v1/rqlite/import", strings.NewReader("db"))
+		imp := httptest.NewRequest(http.MethodPost, "/v1/rqlite/import", strings.NewReader(nsbackup.SQLiteMagic))
 		imp.Header.Set("Content-Type", "application/octet-stream")
 		out := []*http.Request{}
 		for _, r := range []*http.Request{exp, imp} {

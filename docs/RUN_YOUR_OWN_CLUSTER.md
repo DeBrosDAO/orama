@@ -163,12 +163,53 @@ own encryption root, checks the quota again against the restored storage
 table, and pins the CIDs, eight at a time, within ten minutes. A failure after
 the database was replaced says so; running the same restore again is safe.
 
-Each gateway runs one backup or restore at a time and answers 429 while one is
-running. A backup and its restore request are held in memory whole (one nacl
-box), so they are capped: a namespace database over 256 MiB, more than 50,000
-pinned CIDs, or more than 8 MiB of pins and secrets together is refused with
-413. While it seals a backup the gateway holds about three copies of the
-database.
+The live keys, grants and sessions are not restored: they are in the cluster's
+registry, not in the namespace's database. A key revoked since the backup stays
+revoked and one minted since still works; mint the keys the new cluster needs
+with `orama namespace keys create`. The backup's database still carries stale
+copies of those rows, which nothing reads.
+
+A database image (a restore's, or an `orama namespace rqlite import`'s) is
+checked before RQLite loads it, because once loaded every gateway of the
+namespace serves writes against it. The gateway writes it to a temporary file
+and opens it read-only in SQLite. It refuses the image with 400, writing
+nothing, unless it is an intact SQLite database with no trigger (tenant SQL
+cannot create one), no view over a platform table, and no stored-object record
+naming content that the registry records only against other namespaces (such a
+record would let you read another tenant's content). Older backups may still
+carry plaintext `api_keys` rows and stored-object records of other namespaces;
+nothing reads them, so they are accepted. After the load the gateway removes
+them, checks again for anything above as a backstop, and only then puts the
+destination's storage quota back; both run detached from your connection, so hanging up
+after the upload does not skip them. It cannot check the `size_bytes` of the
+records it keeps: no gateway call reports a pinned object's size, so the storage
+quota counts them as the image says. Functions, their triggers and the other
+rows the namespace's gateway reads from its own database come back as the image
+has them.
+
+Each gateway runs one whole-database transfer at a time (`backup`, `restore`,
+`rqlite export`, `rqlite import`) and answers 429 while one is running. A backup
+and its restore request are held in memory whole (one nacl box), so they are
+capped: a namespace database over 256 MiB, more than 50,000 pinned CIDs, or
+more than 8 MiB of pins and secrets together is refused with 413, and so is an
+`rqlite import` over 256 MiB. A request announcing more than that (a restore:
+256 MiB plus its headers) is refused 413 at the cluster gateway before any of
+it is sent on; one that does not announce its length is refused 413 once it has
+sent more than that. (The cluster gateway's own `/v1/rqlite/import`, an
+operator's replacement of the registry, is streamed with no cap and no check
+beyond the SQLite header.) While it seals a backup the gateway holds about three copies of
+the database.
+
+These four routes run on the namespace's own gateway, so `orama namespace
+backup`, `restore`, `restore-key` and `rqlite export` and `import` go to the
+namespace host you signed in to (`ns-<name>.<domain>`), not to the
+environment's gateway. With `ORAMA_TOKEN`, set `ORAMA_API_URL` to that host. A
+gateway's HTTP server cuts every other request off 60 seconds after its headers
+(reading) and 120 seconds after its handler starts (writing). On these four
+routes, both the cluster gateway's proxy and the namespace gateway move both
+deadlines to five minutes from the start of the request, and the proxy waits at
+most five minutes: a transfer slower than that fails, and a database of 256 MiB
+needs about 1 MiB/s.
 
 RQLite 8 forwards `/db/backup` and `/db/load` from a follower to the leader
 itself. The gateway never follows a redirect from RQLite (a redirected POST

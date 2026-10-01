@@ -135,6 +135,12 @@ type Gateway struct {
 
 	// Namespace backup and restore; nil on the cluster gateway.
 	backupHandler *backuphandlers.Handler
+	// loadGuard brackets an RQLite import on a namespace gateway; it is the
+	// backup handler, and nil where that is not mounted.
+	loadGuard loadGuarder
+	// transferSlot is the one whole-database transfer a gateway runs at a time.
+	transferSlot     *backuphandlers.Slot
+	transferSlotOnce sync.Once
 
 	pubsubHandlers *pubsubhandlers.PubSubHandlers
 	pushHandlers   *pushhandlers.Handlers

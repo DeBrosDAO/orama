@@ -27,7 +27,11 @@ var backupCmd = &cobra.Command{
 	Long: `Ask the namespace gateway for a backup: its RQLite snapshot, the CIDs it
 has pinned, and its secrets, decrypted by the cluster and sealed with the rest
 to the public key you give. The cluster never holds the private key and cannot
-open what it wrote. Keep the private key off the cluster.`,
+open what it wrote. Keep the private key off the cluster.
+
+It goes to the namespace's own gateway (the host 'orama auth login --namespace'
+stored). With ORAMA_TOKEN, set ORAMA_API_URL to that host
+(https://ns-<name>.<domain>): the environment's gateway does not serve backup.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		keyHex, _ := cmd.Flags().GetString("key")
 		outPath, _ := cmd.Flags().GetString("out")
@@ -84,7 +88,19 @@ corrupt file or a different namespace stops before anything is sent.
 The gateway also refuses, before writing anything, a restore that would put
 the namespace over its storage quota on the destination, and it keeps the
 destination's quota rather than the one in the backup. It runs one backup or
-restore at a time and answers 429 while one is running.`,
+restore at a time and answers 429 while one is running.
+
+The live keys, grants and sessions (in the cluster's registry) are not
+restored: a restore neither brings back a key that was revoked nor removes one
+minted since. The backup's database still carries stale copies of those rows,
+which nothing reads. Before loading, the gateway checks the database image and
+refuses (400, nothing written) one that is damaged or carries triggers, views
+over platform tables or stored-object records for content only other namespaces
+hold; it removes plaintext API keys and other namespaces' records an older backup
+may carry, and checks again, after the load.
+
+With ORAMA_TOKEN, set ORAMA_API_URL to the namespace's gateway
+(https://ns-<name>.<domain>): the environment's gateway does not serve restore.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		gw, err := resolveGateway()
 		if err != nil {
@@ -121,8 +137,10 @@ func gatewayHTTPClient() *http.Client {
 	return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsutil.GetTLSConfig()}}
 }
 
+// resolveGateway is the namespace's own gateway: backup and restore are served
+// nowhere else (the gateway that fronts the cluster refuses them).
 func resolveGateway() (gatewayTarget, error) {
-	url, err := shared.GetAPIURL()
+	url, err := shared.NamespaceGatewayURL()
 	if err != nil {
 		return gatewayTarget{}, err
 	}

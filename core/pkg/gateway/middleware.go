@@ -42,10 +42,7 @@ func isLongRunningProxyPath(p string) bool {
 	switch {
 	case strings.HasPrefix(p, "/v1/storage/upload"),
 		strings.HasPrefix(p, "/v1/storage/pin"),
-		p == "/v1/namespace/backup",
-		p == "/v1/namespace/restore",
-		p == "/v1/rqlite/export",
-		p == "/v1/rqlite/import",
+		isWholeDatabasePath(p),
 		// Deploys reach a namespace gateway through this proxy since bugboard
 		// #427, and the handler itself allows the upload a minute.
 		p == "/v1/functions",
@@ -1815,14 +1812,14 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if refuseOversizedProxyBody(w, r) {
+	if refuseOversizedProxyBody(w, r) || !extendTransferDeadlines(w, r) {
 		return
 	}
 
 	// Proxy regular HTTP request to the namespace gateway
 	targetURL := proxyTargetURL("http://"+targetHost, r.URL)
 
-	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "failed to create namespace gateway proxy request",
 			zap.String("namespace", namespaceName),
@@ -1891,7 +1888,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 	// proper TIMEOUT envelope reaches the client first.
 	proxyTimeout := 30 * time.Second
 	if isLongRunningProxyPath(r.URL.Path) {
-		proxyTimeout = 300 * time.Second
+		proxyTimeout = longProxyTimeout
 	}
 
 	// Execute proxy request using shared transport for connection pooling

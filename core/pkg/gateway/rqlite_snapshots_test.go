@@ -105,3 +105,49 @@ func TestRQLiteImportHandler_refuses_a_redirect_and_hides_the_dsn(t *testing.T) 
 		t.Fatal("the redirect was followed")
 	}
 }
+
+func TestRQLiteImportHandler_refuses_a_body_that_is_not_a_sqlite_file(t *testing.T) {
+	for name, body := range map[string]string{
+		"garbage":         "not a database",
+		"empty":           "",
+		"short":           "SQLite format",
+		"a sql dump":      "BEGIN TRANSACTION;\nUPDATE grants SET role='owner';\nCOMMIT;\n",
+		"magic not first": " SQLite format 3\x00rows",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var loads atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { loads.Add(1) }))
+			defer srv.Close()
+			g := newTestGateway(t)
+			g.cfg = &Config{RQLiteDSN: srv.URL}
+			req := httptest.NewRequest(http.MethodPost, "/v1/rqlite/import", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/octet-stream")
+			rec := httptest.NewRecorder()
+			g.rqliteImportHandler(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+			if loads.Load() != 0 {
+				t.Fatal("RQLite was asked to load a body that is not a database")
+			}
+		})
+	}
+}
+
+func TestRQLiteImportHandler_sends_the_whole_file_to_RQLite(t *testing.T) {
+	file := "SQLite format 3\x00" + strings.Repeat("page", 4096)
+	var got []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+	}))
+	defer srv.Close()
+	g := newTestGateway(t)
+	g.cfg = &Config{RQLiteDSN: srv.URL}
+	req := httptest.NewRequest(http.MethodPost, "/v1/rqlite/import", strings.NewReader(file))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rec := httptest.NewRecorder()
+	g.rqliteImportHandler(rec, req)
+	if rec.Code != http.StatusOK || string(got) != file {
+		t.Fatalf("%d, RQLite received %d of %d bytes", rec.Code, len(got), len(file))
+	}
+}

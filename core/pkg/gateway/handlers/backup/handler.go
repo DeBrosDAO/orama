@@ -64,29 +64,44 @@ type Config struct {
 	Caller            Caller
 	Audit             Auditor
 	Logger            *zap.Logger
+	// Slot is shared with the gateway's other whole-database routes. Nil gets
+	// a slot of its own.
+	Slot *Slot
+}
+
+// Slot admits one whole-database transfer at a time on a gateway: a backup, a
+// restore, an RQLite export or an RQLite import. Each holds a snapshot of the
+// database in memory or keeps a connection to RQLite open for minutes, so one
+// owner could otherwise run as many as the gateway would accept.
+type Slot struct{ busy chan struct{} }
+
+// NewSlot returns a free Slot.
+func NewSlot() *Slot { return &Slot{busy: make(chan struct{}, 1)} }
+
+// Begin takes the slot, or writes 429 and returns false when a transfer is
+// running.
+func (s *Slot) Begin(w http.ResponseWriter) (release func(), ok bool) {
+	select {
+	case s.busy <- struct{}{}:
+		return func() { <-s.busy }, true
+	default:
+		w.Header().Set("Retry-After", retryAfterSeconds)
+		httputil.WriteError(w, http.StatusTooManyRequests,
+			"another backup, restore, export or import is running on this gateway; try again when it has finished")
+		return nil, false
+	}
 }
 
 // Handler serves /v1/namespace/backup, /v1/namespace/restore-key and
 // /v1/namespace/restore.
 type Handler struct {
-	cfg Config
-	// busy admits one backup or restore at a time on this gateway: each holds
-	// a whole snapshot in memory several times over.
-	busy chan struct{}
+	cfg  Config
+	slot *Slot
 }
 
-// begin takes the gateway's one backup/restore slot, or writes 429 and
-// returns false when another is running.
+// begin takes the gateway's one transfer slot.
 func (h *Handler) begin(w http.ResponseWriter) (release func(), ok bool) {
-	select {
-	case h.busy <- struct{}{}:
-		return func() { <-h.busy }, true
-	default:
-		w.Header().Set("Retry-After", retryAfterSeconds)
-		httputil.WriteError(w, http.StatusTooManyRequests,
-			"another backup or restore is running on this gateway; try again when it has finished")
-		return nil, false
-	}
+	return h.slot.Begin(w)
 }
 
 // retryAfterSeconds is what a refused backup or restore is told to wait.
@@ -110,7 +125,11 @@ func New(cfg Config) (*Handler, error) {
 	if cfg.ReplicationFactor <= 0 {
 		return nil, fmt.Errorf("namespace backup: IPFS replication factor must be positive, got %d", cfg.ReplicationFactor)
 	}
-	return &Handler{cfg: cfg, busy: make(chan struct{}, 1)}, nil
+	slot := cfg.Slot
+	if slot == nil {
+		slot = NewSlot()
+	}
+	return &Handler{cfg: cfg, slot: slot}, nil
 }
 
 // authorize writes a refusal and returns false unless the caller's credential

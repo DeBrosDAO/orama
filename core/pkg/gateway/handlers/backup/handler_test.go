@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -33,7 +36,7 @@ const (
 var (
 	sourceRoot = secrets.Root{CurrentID: "1", CurrentIKM: strings.Repeat("s", 64)}
 	destRoot   = secrets.Root{CurrentID: "1", CurrentIKM: strings.Repeat("d", 64)}
-	testDB     = append([]byte("SQLite format 3\x00"), []byte("tables")...)
+	testDB     = mustImage("CREATE TABLE notes (v TEXT)", "INSERT INTO notes VALUES ('a')")
 )
 
 type fakeDB struct {
@@ -97,13 +100,22 @@ func (f *fakeDB) Batch(_ context.Context, ops []rqlite.BatchOp) (*rqlite.BatchRe
 type fakeSnap struct {
 	db        []byte
 	backupErr error
+	loadErr   error
 	loaded    [][]byte
+	// loadCtxErr is the context's error as Load saw it.
+	loadCtxErr error
+	// onLoad runs inside Load, before it answers.
+	onLoad func()
 }
 
 func (f *fakeSnap) Backup(context.Context) ([]byte, error) { return f.db, f.backupErr }
-func (f *fakeSnap) Load(_ context.Context, db []byte) error {
+func (f *fakeSnap) Load(ctx context.Context, db []byte) error {
 	f.loaded = append(f.loaded, db)
-	return nil
+	if f.onLoad != nil {
+		f.onLoad()
+	}
+	f.loadCtxErr = ctx.Err()
+	return f.loadErr
 }
 
 type fakePins struct {
@@ -282,3 +294,35 @@ func assertNothingWritten(t *testing.T, r *rig) {
 }
 
 var errBoom = errors.New("boom")
+
+// buildImage is a real SQLite database file made by running stmts.
+func buildImage(stmts ...string) ([]byte, error) {
+	dir, err := os.MkdirTemp("", "image-test")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "i.db")
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, err
+	}
+	for _, q := range stmts {
+		if _, err := db.Exec(q); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("%s: %w", q, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+func mustImage(stmts ...string) []byte {
+	b, err := buildImage(stmts...)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
