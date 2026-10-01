@@ -449,7 +449,10 @@ claimed_by = ?`: a lease that lapsed mid-replay and was taken by another gateway
 not erased by the first one's release. A gateway that read the row before
 another replayed and failed it finds the attempt count changed and leaves the row
 to the next sweep, so `attempts` counts one replay per sweep, not one per gateway,
-and the destructive request is sent by one gateway at a time.
+and the destructive request is sent by one gateway at a time. A row whose action
+the spawn handler does not implement (`ReplayableCleanupActions`; an older release
+wrote `stop-all`, which no node ever accepted) is dropped with a warning after it is
+claimed: nothing is sent and no allocation is released.
 
 The destructive actions also carry `cluster_id` in the spawn request, and the
 node's spawn handler refuses one (409, `ErrClusterMismatch`) when the node's own
