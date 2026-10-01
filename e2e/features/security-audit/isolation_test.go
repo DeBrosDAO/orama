@@ -134,8 +134,8 @@ func TestIsolation_noGlobalIPv6(t *testing.T) {
 
 // TestIsolation_kernelHardening: core dumps of setuid programs off and
 // ptrace restricted to descendants (docs/SECURITY.md "RAM-to-disk":
-// fs.suid_dumpable=0; kernel.yama.ptrace_scope >= 1 is Ubuntu's default,
-// relied on by the environ boundary above).
+// fs.suid_dumpable=0 and kernel.yama.ptrace_scope=1, both written by the
+// installer's sysctl drop-in; the environ boundary above relies on the second).
 func TestIsolation_kernelHardening(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

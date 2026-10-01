@@ -608,6 +608,8 @@ Guest `mlock`/`mlockall` is **not** used in the Go services. `mlock(2)` does not
 
 The control that keeps secrets off the **block device** is cgroup `MemorySwapMax=0` on secret-bearing units, plus install-time `swapoff` / `fs.suid_dumpable=0` / systemd-coredump `Storage=none`. That does **not** stop a RAM snapshot or provider VM-suspend.
 
+The same install-time drop-in (`/etc/sysctl.d/99-orama-ram-hygiene.conf`, applied with `sysctl -p`; an install or upgrade fails if it cannot be applied) sets `kernel.yama.ptrace_scope=1`, so a process can attach only to its own descendants. Ubuntu ships that value; Debian ships 0, under which any orama daemon could attach to any other and read its memory.
+
 ## Orama L1: declared limits of contracts (owner decision O-B)
 
 The Orama L1 (`chain/`, [CHAIN.md](CHAIN.md)) makes every ORAMA payment between users a shielded one:

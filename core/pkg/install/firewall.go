@@ -353,19 +353,31 @@ func (fp *FirewallProvisioner) persistIPv6Disable() error {
 	return nil
 }
 
-// persistRAMHygiene turns off swap, disables suid core dumps, and stops
-// systemd-coredump from writing crash images to disk (bugboard #233).
+// ramHygieneSysctlPath is the sysctl drop-in persistRAMHygiene writes.
+const ramHygieneSysctlPath = "/etc/sysctl.d/99-orama-ram-hygiene.conf"
+
+// ramHygieneSysctl keeps secret-bearing pages off the block device and stops
+// one process from reading another's memory. Ubuntu ships ptrace_scope=1;
+// Debian ships 0, which lets any orama daemon attach to any other.
+const ramHygieneSysctl = "# Orama: keep secret-bearing pages off the block device and out of other processes\n" +
+	"fs.suid_dumpable = 0\n" +
+	"kernel.yama.ptrace_scope = 1\n"
+
+// persistRAMHygiene turns off swap, disables suid core dumps, restricts ptrace
+// to descendants, and stops systemd-coredump from writing crash images to disk
+// (bugboard #233).
 func (fp *FirewallProvisioner) persistRAMHygiene() error {
 	_ = exec.Command("swapoff", "-a").Run()
 	_ = exec.Command("systemctl", "mask", "swap.target").Run()
 
-	sysctl := "# Orama: keep secret-bearing pages off the block device\nfs.suid_dumpable = 0\n"
-	cmd := exec.Command("tee", "/etc/sysctl.d/99-orama-ram-hygiene.conf")
-	cmd.Stdin = strings.NewReader(sysctl)
+	cmd := exec.Command("tee", ramHygieneSysctlPath)
+	cmd.Stdin = strings.NewReader(ramHygieneSysctl)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to write ram-hygiene sysctl: %w\n%s", err, string(output))
 	}
-	_ = exec.Command("sysctl", "--system").Run()
+	if output, err := exec.Command("sysctl", "-p", ramHygieneSysctlPath).CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to apply %s: %w\n%s", ramHygieneSysctlPath, err, string(output))
+	}
 
 	if err := exec.Command("mkdir", "-p", "/etc/systemd/coredump.conf.d").Run(); err != nil {
 		return fmt.Errorf("mkdir coredump.conf.d: %w", err)

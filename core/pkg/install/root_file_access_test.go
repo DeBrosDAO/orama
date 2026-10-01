@@ -76,7 +76,7 @@ var rootFileAccessAllowed = map[string]string{
 	"pkg/install/checks.go (*ResourceChecker) CheckRAM os.ReadFile(\"/proc/meminfo\")":                                                      allowSys,
 	"pkg/install/firewall.go (*FirewallProvisioner) persistIPv6Disable exec.Command(\"tee\", \"/etc/sysctl.d/99-orama-disable-ipv6.conf\")": allowEtc,
 	"pkg/install/firewall.go (*FirewallProvisioner) persistRAMHygiene exec.Command(\"mkdir\", \"-p\", \"/etc/systemd/coredump.conf.d\")":    allowEtc,
-	"pkg/install/firewall.go (*FirewallProvisioner) persistRAMHygiene exec.Command(\"tee\", \"/etc/sysctl.d/99-orama-ram-hygiene.conf\")":   allowEtc,
+	"pkg/install/firewall.go (*FirewallProvisioner) persistRAMHygiene exec.Command(\"tee\", ramHygieneSysctlPath)":                          allowEtc,
 	"pkg/install/firewall.go (*FirewallProvisioner) persistRAMHygiene exec.Command(\"tee\", \"/etc/systemd/coredump.conf.d/orama.conf\")":   allowEtc,
 	"pkg/install/installers/anyone_legacy.go (*LegacyAnyoneCleaner) Remove os.RemoveAll(path)":                                              allowAnyone,
 	"pkg/install/installers/caddy.go (*CaddyInstaller) Configure os.MkdirAll(configDir)":                                                    allowEtc,
