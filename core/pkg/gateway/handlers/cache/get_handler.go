@@ -3,7 +3,6 @@ package cache
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,7 +10,7 @@ import (
 
 	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
-	olriclib "github.com/olric-data/olric"
+	"github.com/DeBrosOfficial/network/pkg/olric"
 	"go.uber.org/zap"
 )
 
@@ -85,7 +84,7 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 	gr, err := dm.Get(ctx, req.Key)
 	if err != nil {
 		// Check for key not found error - handle both wrapped and direct errors
-		if errors.Is(err, olriclib.ErrKeyNotFound) || err.Error() == "key not found" || strings.Contains(err.Error(), "key not found") {
+		if olric.IsKeyNotFound(err) {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
 		}
@@ -198,7 +197,7 @@ func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			// Skip keys that are not found - don't include them in results
 			// This matches the SDK's expectation that only found keys are returned
-			if err == olriclib.ErrKeyNotFound {
+			if olric.IsKeyNotFound(err) {
 				continue
 			}
 			// For other errors, log but continue with other keys

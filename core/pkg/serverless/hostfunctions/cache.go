@@ -44,7 +44,7 @@ func (h *HostFunctions) CacheGet(ctx context.Context, key string) ([]byte, error
 	}
 
 	result, err := dm.Get(ctx, key)
-	if errors.Is(err, olriclib.ErrKeyNotFound) {
+	if olric.IsKeyNotFound(err) {
 		return nil, &serverless.HostFunctionError{Function: "cache_get", Cause: fmt.Errorf("%w: %w", serverless.ErrCacheMiss, err)}
 	}
 	if err != nil {

@@ -25,6 +25,13 @@ const (
 	// table distribution take a few hundred milliseconds on loopback.
 	clusterFormTimeout = 15 * time.Second
 
+	// clusterProbeTimeout bounds one readiness probe round.
+	clusterProbeTimeout = 5 * time.Second
+
+	// clusterProbeKeys is how many keys each member writes in a probe round:
+	// enough that the keys land on every member's partitions.
+	clusterProbeKeys = 16
+
 	// clusterPollInterval is how often the cluster is asked whether it formed.
 	clusterPollInterval = 50 * time.Millisecond
 )
@@ -75,16 +82,32 @@ func StartCluster(t *testing.T, n int) []*Server {
 	return members
 }
 
-// waitForCluster fails the test unless, within clusterFormTimeout, every member
-// reports all n members and owns partitions. A cluster that has not formed
-// answers from one member, which is the single-member case a cluster test
-// exists to get away from.
+// waitForCluster fails the test unless, within clusterFormTimeout, every
+// member's routing table names every member as a partition owner and a key
+// written through any member reads back through every other. A cluster that
+// has not formed answers from one member, which is the single-member case a
+// cluster test exists to get away from.
+//
+// It asks through cluster clients only. Olric's own Stats call walks the member
+// list while the cluster is still adding to it, which the race detector reports
+// as a data race inside Olric (v0.7.4 routingtable Members.Range against Add),
+// and Olric replaces the memberlist event delegate, so neither is usable to
+// watch the cluster form.
 func waitForCluster(t *testing.T, members []*Server) {
 	t.Helper()
+	clients := make([]*olriclib.ClusterClient, len(members))
+	for i, m := range members {
+		c, err := olriclib.NewClusterClient([]string{m.Addr})
+		if err != nil {
+			t.Fatalf("olrictest: failed to create a cluster client on %s: %v", m.Addr, err)
+		}
+		clients[i] = c
+		t.Cleanup(func() { _ = c.Close(context.Background()) })
+	}
 	deadline := time.Now().Add(clusterFormTimeout)
 	var last string
 	for {
-		last = clusterGap(members)
+		last = clusterGap(clients, members)
 		if last == "" {
 			return
 		}
@@ -96,19 +119,41 @@ func waitForCluster(t *testing.T, members []*Server) {
 }
 
 // clusterGap says what is missing from a formed cluster, or "" when nothing is.
-func clusterGap(members []*Server) string {
-	ctx, cancel := context.WithTimeout(context.Background(), clusterFormTimeout)
+func clusterGap(clients []*olriclib.ClusterClient, members []*Server) string {
+	ctx, cancel := context.WithTimeout(context.Background(), clusterProbeTimeout)
 	defer cancel()
-	for _, m := range members {
-		st, err := m.EmbeddedClient().Stats(ctx, m.Addr)
+	rt, err := clients[0].RoutingTable(ctx)
+	if err != nil {
+		return fmt.Sprintf("member %s cannot report its routing table: %v", members[0].Addr, err)
+	}
+	owners := make(map[string]bool)
+	for _, route := range rt {
+		for _, o := range route.PrimaryOwners {
+			owners[o] = true
+		}
+	}
+	if len(owners) != len(members) {
+		return fmt.Sprintf("%d of %d members own partitions", len(owners), len(members))
+	}
+	for i, writer := range clients {
+		dm, err := writer.NewDMap("olrictest-probe")
 		if err != nil {
-			return fmt.Sprintf("member %s cannot report its stats: %v", m.Addr, err)
+			return fmt.Sprintf("member %s cannot open the probe DMap: %v", members[i].Addr, err)
 		}
-		if len(st.ClusterMembers) != len(members) {
-			return fmt.Sprintf("member %s sees %d of %d members", m.Addr, len(st.ClusterMembers), len(members))
-		}
-		if len(st.Partitions) == 0 {
-			return fmt.Sprintf("member %s owns no partitions yet", m.Addr)
+		for k := 0; k < clusterProbeKeys; k++ {
+			key := fmt.Sprintf("probe-%d-%d", i, k)
+			if err := dm.Put(ctx, key, k); err != nil {
+				return fmt.Sprintf("member %s cannot write %s: %v", members[i].Addr, key, err)
+			}
+			for j, reader := range clients {
+				rdm, err := reader.NewDMap("olrictest-probe")
+				if err != nil {
+					return fmt.Sprintf("member %s cannot open the probe DMap: %v", members[j].Addr, err)
+				}
+				if _, err := rdm.Get(ctx, key); err != nil {
+					return fmt.Sprintf("member %s cannot read %s written through %s: %v", members[j].Addr, key, members[i].Addr, err)
+				}
+			}
 		}
 	}
 	return ""

@@ -633,7 +633,7 @@ orama function secrets delete APNS_KEY_ID --force
 
 ## PubSub Triggers
 
-Triggers let functions react to events automatically. When a message is published to a PubSub topic, all functions with a trigger on that topic are invoked asynchronously.
+Triggers let functions react to events automatically. When a message is published to a PubSub topic, all functions with a trigger on that topic are invoked asynchronously. Each publish fires a trigger once across the namespace's gateways: every gateway that subscribes to the topic receives the message, and the first to claim it in the namespace's Olric dispatches while the others skip. Two byte-identical publishes within 30 seconds count as one, and if Olric cannot be reached the claim is skipped and a gateway fires on its own, so a duplicate is possible then (the gateway logs `PubSub dispatch dedup degraded`).
 
 ### CLI Commands
 

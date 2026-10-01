@@ -3,14 +3,13 @@ package cache
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
-	olriclib "github.com/olric-data/olric"
+	"github.com/DeBrosOfficial/network/pkg/olric"
 )
 
 // DeleteHandler handles cache DELETE requests for removing a key from a distributed map.
@@ -87,14 +86,14 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	// there. Reading the count turned every delete of a key held on another
 	// member into "key not found".
 	if _, err := dm.Get(ctx, req.Key); err != nil {
-		if isKeyNotFound(err) {
+		if olric.IsKeyNotFound(err) {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
 		}
 		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to look the key up", err)
 		return
 	}
-	if _, err := dm.Delete(ctx, req.Key); err != nil && !isKeyNotFound(err) {
+	if _, err := dm.Delete(ctx, req.Key); err != nil && !olric.IsKeyNotFound(err) {
 		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to delete key", err)
 		return
 	}
@@ -104,9 +103,4 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 		"key":    req.Key,
 		"dmap":   req.DMap,
 	})
-}
-
-// isKeyNotFound reports Olric's missing-key answer, wrapped or not.
-func isKeyNotFound(err error) bool {
-	return errors.Is(err, olriclib.ErrKeyNotFound) || strings.Contains(err.Error(), "key not found")
 }

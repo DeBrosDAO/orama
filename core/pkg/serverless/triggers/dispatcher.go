@@ -4,11 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/aggregator"
@@ -656,7 +656,7 @@ func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic s
 	if err == nil {
 		return true // we claimed it → dispatch
 	}
-	if errors.Is(err, olriclib.ErrKeyFound) {
+	if olric.IsKeyFound(err) {
 		return false // another node already claimed it → skip
 	}
 	// Any other (transient) error: fail-open and fire rather than risk a

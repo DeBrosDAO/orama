@@ -49,7 +49,7 @@ func TestHostHTTPFetch_ssrfMatrix(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
 	const fn = "e2e-fetch"
-	deploy(t, fx, fnSpec{name: fn, yaml: "timeout: 120\n"})
+	deploy(t, fx, fnSpec{name: fn, yaml: "timeout: 60\n"})
 	if res := sub(call(t, fx, fn, map[string]any{"op": "fetch", "url": "https://example.com/"}), "result"); res["status"] != float64(http.StatusOK) {
 		t.Fatalf("control: fetching https://example.com/ returned %v", res)
 	}
@@ -174,7 +174,7 @@ func TestHostDB_batchLimitsAndTransactions(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
 	const fn = "e2e-batch"
-	deploy(t, fx, fnSpec{name: fn, yaml: "memory: 256\ntimeout: 120\n"})
+	deploy(t, fx, fnSpec{name: fn, yaml: "memory: 256\ntimeout: 60\n"})
 	call(t, fx, fn, map[string]any{"op": "db_exec", "sql": "CREATE TABLE IF NOT EXISTS e2e_b (id INTEGER PRIMARY KEY, v TEXT UNIQUE)"})
 	if res := call(t, fx, fn, map[string]any{"op": "db_tx", "ops": inserts(maxStatements, "ok")}); res["committed"] != true {
 		t.Errorf("100 statements: %v", trim(res))

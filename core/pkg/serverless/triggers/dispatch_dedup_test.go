@@ -2,8 +2,10 @@ package triggers
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 )
 
@@ -53,5 +55,47 @@ func TestClaimDispatch_failsOpenWhenNoOlric(t *testing.T) {
 	d := &PubSubDispatcher{logger: zap.NewNop()} // olricClient nil
 	if !d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x")) {
 		t.Error("claimDispatch must fail-open (true) when Olric is unavailable — a dropped wake is worse than a dup")
+	}
+}
+
+// messageOnlyDMap answers a Put the way a gateway's cluster client does for a
+// key another gateway already claimed: an error carrying the text "key found"
+// but not the olriclib sentinel, because the client process never registered
+// the server's error codes.
+type messageOnlyDMap struct {
+	olriclib.DMap
+	putErr error
+}
+
+func (m messageOnlyDMap) Put(context.Context, string, interface{}, ...olriclib.PutOption) error {
+	return m.putErr
+}
+
+type messageOnlyClient struct {
+	olriclib.Client
+	dm olriclib.DMap
+}
+
+func (c messageOnlyClient) NewDMap(string, ...olriclib.DMapOption) (olriclib.DMap, error) {
+	return c.dm, nil
+}
+
+func TestClaimDispatch_loserOfTheClusterClaimSkips(t *testing.T) {
+	d := &PubSubDispatcher{
+		logger:      zap.NewNop(),
+		olricClient: messageOnlyClient{dm: messageOnlyDMap{putErr: errors.New("key found")}},
+	}
+	if d.claimDispatch(context.Background(), "ns", "orders", []byte("x")) {
+		t.Error("a node whose claim lost to another node's must skip, got dispatch")
+	}
+}
+
+func TestClaimDispatch_transientOlricErrorStillFiresOpen(t *testing.T) {
+	d := &PubSubDispatcher{
+		logger:      zap.NewNop(),
+		olricClient: messageOnlyClient{dm: messageOnlyDMap{putErr: errors.New("write quorum cannot be reached")}},
+	}
+	if !d.claimDispatch(context.Background(), "ns", "orders", []byte("x")) {
+		t.Error("an Olric outage must fail open, got skip")
 	}
 }

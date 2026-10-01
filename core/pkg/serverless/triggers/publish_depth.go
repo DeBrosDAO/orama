@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/olric"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 )
@@ -71,7 +72,7 @@ func (s olricDepthStore) get(ctx context.Context, key string) (int, bool, error)
 		return 0, false, fmt.Errorf("failed to open DMap %s: %w", publishDepthDMap, err)
 	}
 	gr, err := dm.Get(ctx, key)
-	if errors.Is(err, olriclib.ErrKeyNotFound) {
+	if olric.IsKeyNotFound(err) {
 		return 0, false, nil
 	}
 	if err != nil {

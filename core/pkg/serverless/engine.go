@@ -824,7 +824,7 @@ type discardWriter struct{}
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero.CompiledModule, error) {
-	return e.moduleCache.GetOrCompute(wasmCID, func() (wazero.CompiledModule, error) {
+	return e.moduleCache.GetOrCompute(ctx, wasmCID, func() (wazero.CompiledModule, error) {
 		// Fetch WASM bytes from registry
 		wasmBytes, err := e.registry.GetWASMBytes(ctx, wasmCID)
 		if err != nil {
