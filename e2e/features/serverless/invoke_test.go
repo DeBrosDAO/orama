@@ -194,6 +194,7 @@ func TestInvoke_concurrencyBounded(t *testing.T) {
 	c := fx.c.PinTo(fx.f.State.Nodes[0].PublicIP)
 	var wg sync.WaitGroup
 	statuses := make([]int, burst)
+	errs := make([]error, burst)
 	start := time.Now()
 	for i := 0; i < burst; i++ {
 		wg.Add(1)
@@ -201,13 +202,19 @@ func TestInvoke_concurrencyBounded(t *testing.T) {
 			defer wg.Done()
 			r, err := c.Send(t.Context(), gw.Req{Method: http.MethodPost, Path: "/v1/functions/e2e-busy/invoke", Bearer: fx.admin,
 				Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"op":"spin","ms":4000}`)})
-			if err == nil {
-				statuses[i] = r.Status
+			if err != nil {
+				errs[i] = err
+				return
 			}
+			statuses[i] = r.Status
 		}(i)
 	}
 	wg.Wait()
 	for i, s := range statuses {
+		if errs[i] != nil {
+			t.Errorf("invocation %d got no answer after %s: %v", i, time.Since(start).Round(time.Second), errs[i])
+			continue
+		}
 		if s != http.StatusOK && s != http.StatusTooManyRequests {
 			t.Errorf("invocation %d: %d", i, s)
 		}

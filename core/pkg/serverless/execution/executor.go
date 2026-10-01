@@ -96,6 +96,39 @@ func (e *Executor) nsSlot(ns string) chan struct{} {
 	return ch
 }
 
+// acquire takes ns's slot, then a process-wide one, and returns the release of
+// both. The namespace slot comes first: a burst from one namespace queues on
+// its own slot without holding a process-wide token, so it cannot take every
+// token while it waits and starve the other namespaces.
+func (e *Executor) acquire(ctx context.Context, ns string) (func(), error) {
+	slot := e.nsSlot(ns)
+	if slot != nil {
+		select {
+		case slot <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if e.sem != nil {
+		select {
+		case e.sem <- struct{}{}:
+		case <-ctx.Done():
+			if slot != nil {
+				<-slot
+			}
+			return nil, ctx.Err()
+		}
+	}
+	return func() {
+		if e.sem != nil {
+			<-e.sem
+		}
+		if slot != nil {
+			<-slot
+		}
+	}, nil
+}
+
 // ExecuteModule instantiates and runs a WASM module with the given input.
 // The invocation's identity rides ctx; there is nothing to set on the host
 // services, which hold no per-invocation state.
@@ -160,24 +193,11 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		ctx = experimental.WithMemoryAllocator(ctx, cappedAllocator{limitBytes: uint64(limitMB) * bytesPerMB, startRefused: &startRefused})
 	}
 
-	if e.sem != nil {
-		select {
-		case e.sem <- struct{}{}:
-			defer func() { <-e.sem }()
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	release, err := e.acquire(ctx, namespaceFrom(ctx))
+	if err != nil {
+		return nil, err
 	}
-	if ns := namespaceFrom(ctx); ns != "" {
-		if slot := e.nsSlot(ns); slot != nil {
-			select {
-			case slot <- struct{}{}:
-				defer func() { <-slot }()
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-	}
+	defer release()
 
 	// Instantiate and run the module (WASI _start will be called automatically).
 	// Time the instantiate so the engine can attribute cold-start vs handler
