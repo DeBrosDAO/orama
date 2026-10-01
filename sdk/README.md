@@ -341,6 +341,8 @@ const healthy = await client.network.health();
 
 #### Get Network Status
 
+Operators only: a key or session that is not on the cluster's operator list is refused `403 NOT_AN_OPERATOR`.
+
 ```typescript
 const status = await client.network.status();
 console.log(status.node_id, status.connected, status.peer_count);

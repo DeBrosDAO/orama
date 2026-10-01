@@ -37,7 +37,7 @@ async function main() {
 
   // Create table
   await client.db.createTable(
-    `CREATE TABLE IF NOT EXISTS users (
+    `CREATE TABLE IF NOT EXISTS basic_usage_users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
@@ -48,14 +48,14 @@ async function main() {
 
   // Insert data
   const result = await client.db.exec(
-    'INSERT INTO users (name, email) VALUES (?, ?)',
+    'INSERT INTO basic_usage_users (name, email) VALUES (?, ?)',
     ['Alice Johnson', 'alice@example.com']
   );
   console.log(`✓ Inserted user with ID: ${result.last_insert_id}`);
 
   // Query data
   const users = await client.db.query(
-    'SELECT * FROM users WHERE email = ?',
+    'SELECT * FROM basic_usage_users WHERE email = ?',
     ['alice@example.com']
   );
   console.log('✓ Found users:', users);
@@ -105,11 +105,14 @@ async function main() {
   const healthy = await client.network.health();
   console.log(`✓ Gateway health: ${healthy ? 'OK' : 'FAIL'}`);
 
-  const status = await client.network.status();
-  console.log(`✓ Network status: ${status.peer_count} peers connected`);
+  // network.status() and network.peers() are an operator's: a namespace key is
+  // refused 403 NOT_AN_OPERATOR, so they are not part of this example.
 
   console.log('\n--- Example completed successfully ---');
 }
 
 // Run example
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

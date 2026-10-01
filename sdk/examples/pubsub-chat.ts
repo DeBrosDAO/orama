@@ -152,4 +152,7 @@ async function main() {
   console.log('\n--- Chat example completed ---');
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

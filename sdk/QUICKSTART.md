@@ -46,6 +46,8 @@ sub.close();
 **Network:**
 ```typescript
 const healthy = await client.network.health();
+// network.status() and network.peers() are for cluster operators; other
+// credentials are refused 403 NOT_AN_OPERATOR.
 const status = await client.network.status();
 ```
 
