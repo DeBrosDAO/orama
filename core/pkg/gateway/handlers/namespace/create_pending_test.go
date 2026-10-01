@@ -13,8 +13,8 @@ import (
 const internalCause = "dial tcp 10.0.0.7:4001: /opt/orama/data/acme: connection refused"
 
 // A name whose previous namespace a node has not finished tearing down is
-// refused with a retryable 409 that names the nodes and nothing else, and
-// nothing is written or provisioned.
+// refused with a retryable 409 that names the name and no node (any permitted
+// wallet can ask about any name), and nothing is written or provisioned.
 func TestCreate_refusesANameStillBeingTornDown(t *testing.T) {
 	db := newRegistry()
 	db.pendingTeardown = []string{"node-a", "node-b"}
@@ -31,8 +31,8 @@ func TestCreate_refusesANameStillBeingTornDown(t *testing.T) {
 	if body["code"] != ErrCodeNamespaceTeardownPending || body["retryable"] != true {
 		t.Errorf("body = %v, want the teardown-pending code and retryable", body)
 	}
-	if msg, _ := body["error"].(string); !strings.Contains(msg, "node-a, node-b") || !strings.Contains(msg, "myapp") {
-		t.Errorf("error %q does not name the name and the nodes", msg)
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "myapp") || strings.Contains(msg, "node-a") || strings.Contains(msg, "node-b") {
+		t.Errorf("error %q must name the namespace and no node", msg)
 	}
 	if w.Header().Get("Retry-After") == "" {
 		t.Error("no Retry-After on a retryable refusal")
@@ -86,7 +86,7 @@ func TestCreate_pendingCleanupHoldsTheNameOnlyWhileTheNodeIsActive(t *testing.T)
 		h.ServeHTTP(w, createRequest("0xowner", "myapp"))
 		return w
 	}
-	if w := create(); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "n1") {
+	if w := create(); w.Code != http.StatusConflict || strings.Contains(w.Body.String(), "n1") {
 		t.Fatalf("an exhausted cleanup did not hold the name: %d %s", w.Code, w.Body.String())
 	}
 	if n := countRows(t, db, `SELECT COUNT(*) FROM namespaces WHERE name = 'myapp'`); n != 0 {

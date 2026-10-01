@@ -187,7 +187,9 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(pending) > 0 {
-		refuseTeardownPending(w, name, pending)
+		h.logger.Info("refused a create while the previous namespace of the name is torn down",
+			zap.String("namespace", name), zap.Strings("nodes", pending))
+		refuseTeardownPending(w, name)
 		return
 	}
 

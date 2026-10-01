@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 )
 
 // ErrCodeNamespaceTeardownPending is returned when a namespace of that name was
@@ -44,12 +43,13 @@ func (h *CreateHandler) pendingTeardownNodes(ctx context.Context, name string) (
 }
 
 // refuseTeardownPending answers 409 for a name whose previous namespace is
-// still being torn down: retryable, and naming only the nodes.
-func refuseTeardownPending(w http.ResponseWriter, name string, nodes []string) {
+// still being torn down: retryable. The nodes go to the log, not the caller:
+// any wallet the creation policy permits can ask about any name.
+func refuseTeardownPending(w http.ResponseWriter, name string) {
 	w.Header().Set("Retry-After", fmt.Sprint(teardownPendingRetryAfterSeconds))
 	writeCreateJSON(w, http.StatusConflict, map[string]any{
-		"error": fmt.Sprintf("the previous namespace named %s is still being torn down on node(s) %s; "+
-			"try again once that has finished", name, strings.Join(nodes, ", ")),
+		"error": fmt.Sprintf("the previous namespace named %s is still being torn down; "+
+			"try again once that has finished", name),
 		"code":      ErrCodeNamespaceTeardownPending,
 		"retryable": true,
 	})

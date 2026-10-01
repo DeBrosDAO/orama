@@ -411,7 +411,8 @@ and leaves the namespace and its cluster row for the retry. A namespace with no 
 is deleted by the same call, which is also how a namespace left behind that way by an
 older release is cleared. A create of a name that still has a row in
 `namespace_pending_cleanup` on an active node answers 409
-`NAMESPACE_TEARDOWN_PENDING` (`retryable`, `Retry-After`), naming the nodes: the
+`NAMESPACE_TEARDOWN_PENDING` (`retryable`, `Retry-After`; the nodes are logged,
+not returned, since any permitted wallet can ask about any name): the
 previous namespace of that name may still hold units, Olric data, env files and a
 data directory there, and a fresh start clears only the raft directory. A row whose
 node is no longer active does not hold the name (that node is not asked to tear
