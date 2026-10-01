@@ -90,7 +90,9 @@ func statusOf(resp *gw.Response, err error) string {
 }
 
 // deleteViaOperator deletes from the isolated HOME and waits until the
-// namespace is no longer listed and its gateway stops serving.
+// namespace is no longer listed and its gateway stops serving. A refused
+// sign-in or delete is retried until TeardownBudget; a delete that answered an
+// error but took effect is noticed by the namespace no longer being listed.
 func (n *Namespace) deleteViaOperator(t testing.TB, shared *oramacli.Runner) {
 	t.Helper()
 	if n.removed {
@@ -98,21 +100,39 @@ func (n *Namespace) deleteViaOperator(t testing.TB, shared *oramacli.Runner) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), TeardownBudget)
 	defer cancel()
-	for _, args := range [][]string{{"auth", "login", "--namespace", n.Name}, {"namespace", "delete", "--force"}} {
-		res, err := n.CLI.Run(ctx, args...)
-		if err != nil || res.Exit != 0 {
-			t.Errorf("cleanup: orama %v failed (exit %d), namespace %s may leak: %v %s", args, res.Exit, n.Name, err, res.Stderr)
-			return
-		}
-	}
-	err := eventually.Poll(ctx, PollInterval, TeardownBudget, "namespace "+n.Name+" to be gone", func() (bool, error) {
+	deleted := false
+	err := eventually.Poll(ctx, teardownInterval, TeardownBudget, "namespace "+n.Name+" to be deleted and gone", func() (bool, error) {
 		_, err := listedStatus(ctx, shared, n.Name)
-		if !errors.Is(err, errNotListed) {
-			return false, fmt.Errorf("still listed (or list failed): %v", err)
+		if err != nil && !errors.Is(err, errNotListed) {
+			return false, fmt.Errorf("list failed: %w", err)
+		}
+		if !deleted && err == nil {
+			if err := n.signInAndDelete(ctx); err != nil {
+				return false, err
+			}
+			deleted = true
+			return false, errors.New("deleted, waiting for it to be unlisted")
+		}
+		if err == nil {
+			return false, errors.New("still listed")
 		}
 		return n.gatewayGone(ctx)
 	})
 	if err != nil {
-		t.Errorf("cleanup: teardown of %s not verified: %v", n.Name, err)
+		t.Errorf("cleanup: teardown of %s not verified, it may leak (the runner removes what is left when the package exits): %v", n.Name, err)
 	}
+}
+
+// signInAndDelete signs the isolated HOME in to the namespace and deletes it.
+func (n *Namespace) signInAndDelete(ctx context.Context) error {
+	for _, args := range [][]string{{"auth", "login", "--namespace", n.Name}, {"namespace", "delete", "--force"}} {
+		res, err := n.CLI.Run(ctx, args...)
+		if err != nil {
+			return fmt.Errorf("orama %v: %w", args, err)
+		}
+		if res.Exit != 0 {
+			return fmt.Errorf("orama %v exited %d: %s", args, res.Exit, res.Stderr)
+		}
+	}
+	return nil
 }

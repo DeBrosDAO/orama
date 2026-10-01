@@ -137,7 +137,9 @@ func (n *Namespace) status(ctx context.Context) (*ClusterStatus, error) {
 }
 
 // deleteViaUser deletes the namespace as its owner and waits until the status
-// route no longer knows the cluster and the namespace gateway stops serving.
+// route no longer knows the cluster and the namespace gateway stops serving. A
+// refused sign-in or delete is retried until TeardownBudget; a delete that
+// answered an error but took effect is noticed by the status route's 404.
 func (n *Namespace) deleteViaUser(t testing.TB) {
 	t.Helper()
 	if n.removed {
@@ -145,21 +147,44 @@ func (n *Namespace) deleteViaUser(t testing.TB) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), TeardownBudget)
 	defer cancel()
+	deleted := false
+	err := eventually.Poll(ctx, teardownInterval, TeardownBudget, "namespace "+n.Name+" to be deleted and gone", func() (bool, error) {
+		if !deleted {
+			if err := n.deleteUnlessGone(ctx); err != nil {
+				return false, err
+			}
+			deleted = true
+		}
+		return n.goneNow(ctx)
+	})
+	if err != nil {
+		t.Errorf("cleanup: teardown of %s not verified, it may leak (the runner removes what is left when the package exits): %v", n.Name, err)
+	}
+}
+
+// deleteUnlessGone deletes the namespace as its owner, signing in first when
+// the owner has no session; a cluster the status route no longer knows needs
+// nothing.
+func (n *Namespace) deleteUnlessGone(ctx context.Context) error {
+	if _, err := n.status(ctx); isNotFound(err) {
+		return nil
+	}
 	if n.Owner.Session == nil {
 		s, err := n.Owner.Client.SignIn(ctx, n.Owner.Wallet, n.Name, n.Owner.Device)
 		if err != nil {
-			t.Errorf("cleanup: cannot sign in to delete namespace %s, it may leak: %v", n.Name, err)
-			return
+			return fmt.Errorf("cannot sign in to delete the namespace: %w", err)
 		}
 		n.Owner.Session = s
 	}
 	if _, err := n.Owner.Client.JSON(ctx, http.MethodDelete, PathDelete, n.Owner.Token(), nil, nil); err != nil {
-		t.Errorf("cleanup: failed to delete namespace %s: %v", n.Name, err)
-		return
+		return fmt.Errorf("failed to delete the namespace: %w", err)
 	}
-	if err := n.pollGone(ctx); err != nil {
-		t.Errorf("cleanup: teardown of %s not verified: %v", n.Name, err)
-	}
+	return nil
+}
+
+func isNotFound(err error) bool {
+	var se *gw.StatusError
+	return errors.As(err, &se) && se.Status == http.StatusNotFound
 }
 
 // MarkRemoved records that something other than the owner (an operator's
@@ -179,14 +204,17 @@ func (n *Namespace) MarkRemoved(t testing.TB) {
 // pollGone waits until the namespace's cluster status is 404 and its gateway
 // no longer serves /health.
 func (n *Namespace) pollGone(ctx context.Context) error {
-	return eventually.Poll(ctx, PollInterval, TeardownBudget, "namespace "+n.Name+" to be gone", func() (bool, error) {
-		_, err := n.status(ctx)
-		var se *gw.StatusError
-		if !errors.As(err, &se) || se.Status != http.StatusNotFound {
-			return false, fmt.Errorf("status route still answers for cluster %s: %v", n.ClusterID, err)
-		}
-		return n.gatewayGone(ctx)
+	return eventually.Poll(ctx, teardownInterval, TeardownBudget, "namespace "+n.Name+" to be gone", func() (bool, error) {
+		return n.goneNow(ctx)
 	})
+}
+
+// goneNow is one check of pollGone.
+func (n *Namespace) goneNow(ctx context.Context) (bool, error) {
+	if _, err := n.status(ctx); !isNotFound(err) {
+		return false, fmt.Errorf("status route still answers for cluster %s: %v", n.ClusterID, err)
+	}
+	return n.gatewayGone(ctx)
 }
 
 // gatewayGone reports whether the namespace gateway stopped serving health.

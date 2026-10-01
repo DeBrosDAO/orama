@@ -273,6 +273,59 @@ func TestRun_restoresNodesAfterEachDestructivePackage(t *testing.T) {
 	}
 }
 
+// TestRun_afterPackageRunsAfterEveryPackageWhateverItsExit: the hook sees
+// each package's own evidence dir after a pass, a failure and a stopped run,
+// on a context the stop does not reach; its failure fails that package.
+func TestRun_afterPackageRunsAfterEveryPackageWhateverItsExit(t *testing.T) {
+	fe := &fakeExec{exit: map[string]int{"./features/b": 1}}
+	r := newRunner(t, fe)
+	var mu sync.Mutex
+	dirs := map[string]bool{}
+	r.AfterPackage = func(ctx context.Context, dir string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if ctx.Err() != nil {
+			t.Error("the hook ran on a cancelled context")
+		}
+		dirs[filepath.Base(dir)] = true
+		if strings.HasSuffix(dir, "stage-01-c") {
+			return fmt.Errorf("namespace e2e-x may be leaked")
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	steps, _ := Plan(testStages(), []manifest.Manifest{{ID: "a", Stage: 1}, {ID: "b", Stage: 1}, {ID: "c", Stage: 1}})
+	cancel() // the run is stopped: a package that was running still gets its cleanup
+	if err := os.MkdirAll(filepath.Join(r.ArtifactDir, GoTestDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	run := r.runStep(ctx, steps[0])
+	for _, id := range []string{"stage-01-a", "stage-01-b", "stage-01-c"} {
+		if !dirs[id] {
+			t.Errorf("no cleanup after %s (ran for %v)", id, dirs)
+		}
+	}
+	for _, p := range run.Packages {
+		if (p.Feature == "c") != strings.Contains(p.Error, "may be leaked") {
+			t.Errorf("package %s error %q", p.Feature, p.Error)
+		}
+	}
+}
+
+func TestRerun_afterPackageRunsForTheRerunToo(t *testing.T) {
+	fe := &fakeExec{}
+	r := newRunner(t, fe)
+	var dirs []string
+	r.AfterPackage = func(_ context.Context, dir string) error { dirs = append(dirs, dir); return nil }
+	if _, err := r.Rerun(context.Background(), []FailedTest{{Feature: "a", Test: "TestX"}}, Duration(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(dirs) != 1 || !strings.Contains(dirs[0], RerunDir) {
+		t.Fatalf("hook dirs %v", dirs)
+	}
+}
+
 func TestWorstCase_parallelOnceDestructiveEach(t *testing.T) {
 	steps, _ := Plan(testStages(), []manifest.Manifest{{ID: "a", Stage: 1}, {ID: "b", Stage: 1},
 		{ID: "k1", Stage: 1, Destructive: true}, {ID: "k2", Stage: 2, Destructive: true}})

@@ -90,6 +90,11 @@ func cmdRun(parent context.Context, args []string) (int, error) {
 		return exitFail, err
 	}
 	rs.bugs = *bugs
+	release, err := holdRun(rs.cfg.ArtifactDir)
+	if err != nil {
+		return exitFail, err
+	}
+	defer release()
 	return rs.run(ctx, parent, *keep)
 }
 

@@ -25,7 +25,7 @@ evidence in the report when it fails.
 ```
 e2e/
   go.mod                 own module (github.com/DeBrosOfficial/network/e2e), replaces ../core
-  cmd/e2e-fleet/         the runner: run, provision, test, teardown, sweep, report, coverage, hook, target
+  cmd/e2e-fleet/         the runner: run, provision, test, teardown, sweep, sweep-namespaces, report, coverage, hook, target
   harness/               what tests import (below); provision/hetzner/cloudflare/agent/sshx provision the fleet
   harness/broker/        the runner's credential broker (DNS TXT, extras, eval clusters) on a unix socket
   harness/monitor/       `orama monitor report --json` types and the cluster predicates
@@ -377,6 +377,48 @@ slots is never starved by a stream of single ones.
 `(*Slots).Release()` are the primitive. `features/internal/tenancy` keeps its
 own per-package cap on top, and its `Reserve`/`Namespaces` take the fleet
 slots with `ns.Hold` before anything is created.
+**A namespace is never left behind.** A test's own cleanup runs once, and a
+cleanup that meets a refusal the gateway says is temporary (`retry shortly`,
+`retry the delete`, a sign-in rate limited for a minute, a TLS timeout) used to
+give up and leave the namespace holding port blocks and processes on every
+node (stagenet, 2026-10-01: nine leaked `e2e-*` namespaces). So three layers
+stand behind each other:
+
+1. The teardown (`deleteViaUser`, `deleteViaOperator`) retries until
+   `TeardownBudget`, and a delete that answered an error but took effect is
+   noticed (status 404 / no longer listed) instead of repeated.
+2. **The namespace ledger** (`harness/nsledger`). `ns.UniqueName` (every test
+   names its namespaces with it) records the name, with the time, in
+   `namespaces.ledger` in the package's evidence directory *before* the namespace
+   exists (only `e2e-` names, only harness-generated ones: a name a test picks
+   itself through `ns.Options.Name` may be a namespace it does not own, and is not
+   tracked; the remover also refuses any name without the `e2e-` prefix, whatever
+   a ledger line says). After every package process exits, whatever its exit (a pass, a
+   failure, a stage budget cut, a kill), the runner (`Runner.AfterPackage`,
+   `cmd/e2e-fleet/nsleftovers.go`) removes each recorded namespace that still
+   exists with `orama cluster namespace remove <name> --reason ... --force` as the
+   run's operator (it works for a throwaway wallet's namespace too), retrying a
+   refusal for 10 minutes per namespace (30 for the package) and marking it gone
+   in the ledger. A refusal waiting cannot fix (401, 403 and other 4xx but 404, 408,
+   409 and 429) is not retried; a 404 means gone. A torn ledger line is reported
+   and skipped, the others are still removed. A
+   namespace it cannot remove fails the package's runner error and stays in the
+   ledger. Tests that create a namespace without `ns.UniqueName` must record it
+   with `nsledger.RecordFromEnv(os.LookupEnv, name, time.Now())`.
+3. `e2e-fleet sweep-namespaces [--max-age 4h] [--listed]` removes what ledgers
+   still hold of runs whose runner died before layer 2 ran (a SIGKILL of the
+   runner, a closed session): on the stagenet target every `stagenet-*` run
+   directory next to the state's, otherwise the state's own run. It signs the
+   operator in on stagenet, and only touches ledger entries older than
+   `--max-age` (default 4h: over the longest stage, 180m, plus the 10m stop
+   grace). Every `run` and `test` holds a shared flock on `<run dir>/run.lock`
+   while it runs; the sweep skips the run directories whose lock is held, so a
+   live package's namespaces are never taken whatever their age, and `--listed` is
+   refused while any run directory is held. `--listed` also removes every `e2e-*` namespace the operator's
+   wallet owns that no ledger names (leftovers from before the ledger; their age
+   is unknown, so run it only when no test run is in progress). Unlike `sweep`
+   it destroys no server and works on the stagenet state.
+
 `ViaUser` (default) creates it as a fresh wallet (adding it to the creator
 allowlist when the cluster's mode is `allowlist`; failing in `operators` mode);
 `Namespace.Owner` is that wallet signed in to the namespace, `Namespace.Client`
@@ -586,7 +628,8 @@ under `~/.rootwallet`), the CLI HOME, CA bundle and SSH key above. Anything else
 including devnet/testnet names and domains or a fleet state carrying
 `"target": "stagenet"`, is refused with every mismatch listed. The constants
 live in `harness/config/stagenet.go`. `run`, `provision`, `teardown`, `sweep`
-and `hook destroy|break|provision` refuse a stagenet state when
+and `hook destroy|break|provision` refuse a stagenet state (`sweep-namespaces`
+works on it: it removes test namespaces, never a server or cloud resource) when
 `E2E_FLEET_STATE` names it; `test` starts no broker (`E2E_BROKER_SOCK` is unset),
 so `harness.ExtraNode`, `ExtraCluster`, `DNSTXT`, `CustomDomain` and
 `harness.Broker` skip the test with `harness.SkipNotApplicable` (the stagenet

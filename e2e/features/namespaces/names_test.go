@@ -5,12 +5,15 @@ package namespaces
 import (
 	"crypto/rand"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
+	"github.com/DeBrosOfficial/network/e2e/harness/nsledger"
 )
 
 // reservedNames are the platform's (create_handler.go reservedNamespaces;
@@ -59,6 +62,10 @@ func TestNamespaceName_boundariesAccepted(t *testing.T) {
 	f := harness.Fleet(t)
 	long := ns.UniqueName(t.Name())
 	long += strings.Repeat("x", 40-len(long))
+	// The padded name is the one created, so it is the one the ledger must hold.
+	if err := nsledger.RecordFromEnv(os.LookupEnv, long, time.Now()); err != nil {
+		t.Fatalf("failed to record namespace %s in the ledger: %v", long, err)
+	}
 	short := strings.ToLower(rand.Text()[:2])
 	tenancy.Reserve(t, f, 2)
 	for _, name := range []string{long, short} {

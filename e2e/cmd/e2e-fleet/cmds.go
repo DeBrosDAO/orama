@@ -99,6 +99,11 @@ func cmdTest(parent context.Context, args []string) (int, error) {
 	} else if _, err := runTTL(lay, os.LookupEnv); err != nil {
 		return exitFail, err
 	}
+	release, err := holdRun(st.ArtifactDir)
+	if err != nil {
+		return exitFail, err
+	}
+	defer release()
 	steps, err := planStages(lay)
 	if err != nil {
 		return exitFail, err

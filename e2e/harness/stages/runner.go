@@ -59,6 +59,13 @@ type Runner struct {
 	// tagged iptables rules and restores NTP). Its failure is the package's
 	// runner error. nil does nothing.
 	AfterDestructive func(ctx context.Context) error
+	// AfterPackage runs after every package process exits, whatever its exit
+	// (a pass, a failure, a stage budget cut, a kill), with the package's
+	// evidence directory, on a context the run's cancellation does not reach.
+	// cmd/e2e-fleet removes the namespaces the package recorded in its
+	// ledger and left behind. Its failure is the package's runner error.
+	// nil does nothing.
+	AfterPackage func(ctx context.Context, evidenceDir string) error
 	// Redactor returns the run's redactor, read afresh after each package
 	// (feature processes register the credentials they mint in the run's
 	// token registry). nil redacts the built-in patterns only.
@@ -220,6 +227,12 @@ func (r *Runner) execTo(ctx context.Context, rel, evDir string, args []string, b
 	msgs := []string{}
 	if err != nil {
 		msgs = append(msgs, err.Error())
+	}
+	if r.AfterPackage != nil {
+		if aerr := r.AfterPackage(context.WithoutCancel(ctx), evAbs); aerr != nil {
+			r.Logf("cleaning up after %s failed: %v", rel, aerr)
+			msgs = append(msgs, "cleaning up after the package failed: "+aerr.Error())
+		}
 	}
 	if rerr := r.redactOutputs(rel); rerr != nil {
 		msgs = append(msgs, rerr.Error())

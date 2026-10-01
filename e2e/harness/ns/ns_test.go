@@ -14,7 +14,9 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth/siw"
 
+	"github.com/DeBrosOfficial/network/e2e/harness/config"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
+	"github.com/DeBrosOfficial/network/e2e/harness/nsledger"
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
@@ -32,6 +34,24 @@ func TestUniqueName_validAndUnique(t *testing.T) {
 	if !strings.HasPrefix(a, "e2e-") || a[:12] != b[:12] {
 		t.Fatalf("names %s %s do not share the test hash", a, b)
 	}
+}
+
+// TestUniqueName_recordsTheNameInThePackageLedger: every namespace a test
+// names is tracked before it exists, so the runner can remove it whatever
+// happens to the test's own cleanup.
+func TestUniqueName_recordsTheNameInThePackageLedger(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(config.EnvEvidenceDir, dir)
+	name := UniqueName("TestY")
+	got, err := nsledger.Pending(filepath.Join(dir, nsledger.FileName))
+	if err != nil || len(got) != 1 || got[0].Namespace != name {
+		t.Fatalf("ledger %+v %v, want %s", got, err, name)
+	}
+}
+
+func TestUniqueName_withoutAnEvidenceDirWritesNothing(t *testing.T) {
+	t.Setenv(config.EnvEvidenceDir, "")
+	UniqueName("TestZ")
 }
 
 func TestValidName_cases(t *testing.T) {
@@ -64,6 +84,11 @@ type fakeNS struct {
 	queryOK  bool
 	deleted  bool
 	healthOK bool
+	// failDeletes is how many deletes are refused with a retryable 503
+	// first; deleteTakesEffect makes those refused deletes take effect anyway.
+	failDeletes       int
+	deleteTakesEffect bool
+	deleteCalls       int
 }
 
 func (f *fakeNS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +120,13 @@ func (f *fakeNS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(`{"rows":[[1]]}`))
 	case PathDelete:
+		f.deleteCalls++
+		if f.failDeletes > 0 {
+			f.failDeletes--
+			f.deleted, f.healthOK = f.deleted || f.deleteTakesEffect, f.healthOK && !f.deleteTakesEffect
+			http.Error(w, `{"error":"retry shortly","retryable":true}`, http.StatusServiceUnavailable)
+			return
+		}
 		f.deleted, f.healthOK = true, false
 		_, _ = w.Write([]byte(`{"status":"deleted"}`))
 	case PathHealth:
@@ -166,6 +198,39 @@ func TestDeleteViaUser_verifiesTeardown(t *testing.T) {
 	n.deleteViaUser(t)
 	if !f.deleted {
 		t.Fatal("namespace not deleted")
+	}
+}
+
+// fastTeardown shortens the wait between teardown attempts for the test.
+func fastTeardown(t *testing.T) {
+	t.Helper()
+	old := teardownInterval
+	teardownInterval = time.Millisecond
+	t.Cleanup(func() { teardownInterval = old })
+}
+
+// TestDeleteViaUser_retriesARefusedDelete: a delete the gateway refuses with
+// a retryable answer is tried again; one attempt left the namespace on the
+// cluster (stagenet 2026-10-01: "retry shortly", "retry the delete").
+func TestDeleteViaUser_retriesARefusedDelete(t *testing.T) {
+	fastTeardown(t)
+	f := &fakeNS{statuses: []string{"ready"}, healthOK: true, failDeletes: 2}
+	n := fakeNamespace(t, f)
+	n.deleteViaUser(t)
+	if !f.deleted || f.deleteCalls != 3 {
+		t.Fatalf("deleted=%v after %d delete calls, want deleted after 3", f.deleted, f.deleteCalls)
+	}
+}
+
+// TestDeleteViaUser_aDeleteThatTookEffectIsNotRepeated: the delete answered
+// 503 but the cluster went away; the teardown notices and finishes.
+func TestDeleteViaUser_aDeleteThatTookEffectIsNotRepeated(t *testing.T) {
+	fastTeardown(t)
+	f := &fakeNS{statuses: []string{"ready"}, healthOK: true, failDeletes: 5, deleteTakesEffect: true}
+	n := fakeNamespace(t, f)
+	n.deleteViaUser(t)
+	if f.deleteCalls != 1 {
+		t.Fatalf("%d delete calls, want 1: the namespace was already gone after the first", f.deleteCalls)
 	}
 }
 

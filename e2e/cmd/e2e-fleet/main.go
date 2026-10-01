@@ -7,13 +7,14 @@
 //	e2e-fleet test [--stage N] [--resume]
 //	e2e-fleet teardown
 //	e2e-fleet sweep [--max-age 6h] [--force]
+//	e2e-fleet sweep-namespaces [--max-age 4h] [--listed]
 //	e2e-fleet report [--bug-drafts]
 //	e2e-fleet coverage [--json]
 //	e2e-fleet target stagenet --out <state.json> [--chain-id ID]
 //	e2e-fleet hook destroy <host> | break <host> | provision [--name N] [--location L]
 //
-// Against the existing stagenet cluster only `target`, `test`, `report` and
-// `coverage` work: `run`, `provision`, `teardown`, `sweep` and `hook` refuse a
+// Against the existing stagenet cluster only `target`, `test`, `report`,
+// `coverage` and `sweep-namespaces` work: `run`, `provision`, `teardown`, `sweep` and `hook` refuse a
 // stagenet state (see stagenet.go).
 //
 // Secrets (HCLOUD_TOKEN, CF_API_TOKEN, CF_ZONE) come from the environment that
@@ -53,15 +54,16 @@ type command struct {
 
 func commands() map[string]command {
 	return map[string]command{
-		"run":       {"provision, test every stage, collect, report, always tear down", cmdRun},
-		"provision": {"preflight and provision a fleet; prints the state path", cmdProvision},
-		"test":      {"run stages against the fleet in " + "E2E_FLEET_STATE", cmdTest},
-		"teardown":  {"tear down the fleet in E2E_FLEET_STATE", cmdTeardown},
-		"sweep":     {"delete every e2e resource older than --max-age", cmdSweep},
-		"report":    {"rebuild the report from the artifact dir", cmdReport},
-		"coverage":  {"run the coverage gate (no servers)", cmdCoverage},
-		"target":    {"write the state file of an existing cluster: target stagenet --out <state.json>", cmdTarget},
-		"hook":      {"lifecycle hooks: destroy <host> | break <host> | provision", cmdHook},
+		"run":              {"provision, test every stage, collect, report, always tear down", cmdRun},
+		"provision":        {"preflight and provision a fleet; prints the state path", cmdProvision},
+		"test":             {"run stages against the fleet in " + "E2E_FLEET_STATE", cmdTest},
+		"teardown":         {"tear down the fleet in E2E_FLEET_STATE", cmdTeardown},
+		"sweep":            {"delete every e2e resource older than --max-age", cmdSweep},
+		"sweep-namespaces": {"remove the test namespaces older than --max-age that runs left on the cluster in E2E_FLEET_STATE", cmdSweepNamespaces},
+		"report":           {"rebuild the report from the artifact dir", cmdReport},
+		"coverage":         {"run the coverage gate (no servers)", cmdCoverage},
+		"target":           {"write the state file of an existing cluster: target stagenet --out <state.json>", cmdTarget},
+		"hook":             {"lifecycle hooks: destroy <host> | break <host> | provision", cmdHook},
 		// broker-serve is started by run and test, never by hand.
 		cmdBrokerServeName: {"internal: the broker child `run` and `test` start (credentials on fd 3)", cmdBrokerServe},
 	}

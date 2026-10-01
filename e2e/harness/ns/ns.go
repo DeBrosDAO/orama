@@ -12,12 +12,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
+	"github.com/DeBrosOfficial/network/e2e/harness/nsledger"
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
@@ -35,6 +37,13 @@ const (
 	// randomSuffixLength is how many base32 characters make a name unique.
 	randomSuffixLength = 6
 )
+
+// teardownInterval is how long a teardown waits between attempts. A
+// teardown is retried until TeardownBudget: the gateway refuses a delete it
+// can answer later ("retry shortly", "retry the delete") and rate limits a
+// sign-in for a minute, and a cleanup that gave up on the first refusal left
+// the namespace on the cluster. Tests shorten it.
+var teardownInterval = PollInterval
 
 // Via says who creates the namespace.
 type Via int
@@ -103,10 +112,20 @@ func New(t testing.TB, f *fleet.Fleet, opts Options) *Namespace {
 }
 
 // UniqueName is "e2e-" + a hash of the test name + random bytes: stable enough
-// to find in logs, unique across parallel tests and re-runs.
+// to find in logs, unique across parallel tests and re-runs. Tests name their
+// namespaces with it, and it records the name in the package's namespace
+// ledger (package nsledger), so the runner removes what is left of the
+// namespace when the package exits, however it exits. A name a test chooses
+// itself (ns.Options.Name) is not recorded: it may be a namespace the test
+// does not own. It panics when the
+// ledger cannot be written: a namespace nobody tracks would leak silently.
 func UniqueName(testName string) string {
 	sum := sha256.Sum256([]byte(testName))
-	return "e2e-" + hex.EncodeToString(sum[:4]) + "-" + strings.ToLower(rand.Text()[:randomSuffixLength])
+	name := "e2e-" + hex.EncodeToString(sum[:4]) + "-" + strings.ToLower(rand.Text()[:randomSuffixLength])
+	if err := nsledger.RecordFromEnv(os.LookupEnv, name, time.Now()); err != nil {
+		panic(fmt.Sprintf("failed to record namespace %s in the ledger: %v", name, err))
+	}
+	return name
 }
 
 // ValidName mirrors the gateway's rule, so a bad name fails before a request.
