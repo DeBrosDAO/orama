@@ -27,10 +27,13 @@ const (
 	maxNtfyRelayErrBody = 512
 )
 
-// ntfyTopicPattern is ntfy's own topic rule: one path segment of letters,
-// digits, '_' and '-', at most 64 characters. Anything else would address a
-// different ntfy route than the topic route.
-var ntfyTopicPattern = regexp.MustCompile(`^[-_A-Za-z0-9]{1,64}$`)
+// ntfyTopicPattern is ntfy's publish path: a topic, one segment of letters,
+// digits, '_' and '-', at most 64 characters, optionally followed by a sequence
+// ID of the same kind (ntfy 2.28 reads POST /<topic>/<sequence-id> as a publish
+// to <topic> that updates that message). A device token "T/user" is that form,
+// and the relay refused it, so every push to such a device failed. Anything
+// else would address a different ntfy route than the publish route.
+var ntfyTopicPattern = regexp.MustCompile(`^[-_A-Za-z0-9]{1,64}(/[-_A-Za-z0-9]{1,64})?$`)
 
 // ntfyRelayHeaders are the publish headers relayed to the local ntfy: the ones
 // the ntfy provider sets (pkg/push/providers/ntfy). Nothing else is forwarded,
@@ -68,7 +71,7 @@ func (g *Gateway) handleInternalNtfyPublish(w http.ResponseWriter, r *http.Reque
 	}
 	topic := strings.TrimPrefix(r.URL.Path, pushntfy.FanoutPathPrefix)
 	if !ntfyTopicPattern.MatchString(topic) {
-		writeError(w, http.StatusBadRequest, "topic must be one path segment of letters, digits, '_' or '-', at most 64 characters")
+		writeError(w, http.StatusBadRequest, "topic must be one path segment of letters, digits, '_' or '-', at most 64 characters, optionally followed by /<sequence-id> of the same kind")
 		return
 	}
 	body, err := io.ReadAll(r.Body)

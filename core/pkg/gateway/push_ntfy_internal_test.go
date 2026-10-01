@@ -141,9 +141,9 @@ func TestHandleInternalNtfyPublish_refuses(t *testing.T) {
 			},
 			code: http.StatusUnauthorized,
 		},
-		"a topic with a second segment": {
+		"a path past the topic and its sequence ID": {
 			req: func(t *testing.T) *http.Request {
-				return relayRequest(t, "a/b", "x", coordinationTestNode, "10.0.0.7:41000")
+				return relayRequest(t, "a/b/c", "x", coordinationTestNode, "10.0.0.7:41000")
 			},
 			code: http.StatusBadRequest,
 		},
@@ -254,4 +254,35 @@ func TestFanoutPathPrefix_isADeclaredRoute(t *testing.T) {
 		}
 	}
 	t.Fatalf("the provider posts to %s, which the gateway does not route", pushntfy.FanoutPathPrefix)
+}
+
+// TestHandleInternalNtfyPublish_aSequenceIDIsRelayedToItsTopic: ntfy reads
+// POST /<topic>/<sequence-id> as a publish to <topic>; a device token "T/user"
+// is that form, and the relay answered 400, so every push to it failed (502).
+func TestHandleInternalNtfyPublish_aSequenceIDIsRelayedToItsTopic(t *testing.T) {
+	srv, rec := newFakeLocalNtfy(t, http.StatusOK)
+	g := relayGateway(srv.URL)
+	w := httptest.NewRecorder()
+	g.handleInternalNtfyPublish(w, relayRequest(t, "up_abc/user", "payload", coordinationTestNode, "10.0.0.7:41000"))
+	if w.Code != http.StatusOK || rec.path != "/up_abc/user" {
+		t.Fatalf("status %d path %q; want 200 and /up_abc/user relayed as is", w.Code, rec.path)
+	}
+}
+
+func TestNtfyTopicPattern_onlyTheTopicAndSequenceForms(t *testing.T) {
+	for topic, want := range map[string]bool{
+		"up_abc-123":            true,
+		"up_abc/user":           true,
+		"a/b/c":                 false,
+		"/up":                   false,
+		"up/":                   false,
+		"up/../json":            false,
+		"up/x?y":                false,
+		"":                      false,
+		strings.Repeat("a", 65): false,
+	} {
+		if got := ntfyTopicPattern.MatchString(topic); got != want {
+			t.Errorf("%q: %v, want %v", topic, got, want)
+		}
+	}
 }
