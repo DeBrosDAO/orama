@@ -154,6 +154,7 @@ func TestActiveBuildInstances_listsBuildAndCleanUnitsOnly(t *testing.T) {
 	out := "orama-deploy-build@acme-web.service loaded active running x\n" +
 		"orama-deploy-clean@beta-api.service loaded activating start x\n" +
 		"orama-deploy-build@idle-one.service loaded inactive dead x\n" +
+		"orama-deploy-build@broke-it.service loaded failed failed x\n" +
 		"orama-deploy-node@gamma-app.service loaded active running x\n"
 	m := &Manager{logger: zap.NewNop(), query: func(context.Context, ...string) ([]byte, error) { return []byte(out), nil }}
 	got, err := m.ActiveBuildInstances(context.Background())

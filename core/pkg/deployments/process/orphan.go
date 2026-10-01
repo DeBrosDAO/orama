@@ -79,8 +79,11 @@ func (m *Manager) ListRuntimeUnits(ctx context.Context) ([]RuntimeUnit, error) {
 // and remove them.
 var buildUnit = regexp.MustCompile(`^orama-deploy-(` + buildRuntime + `|` + cleanRuntime + `)@(.+)\.service$`)
 
-// ActiveBuildInstances lists the instances whose build or clean unit is active,
-// activating or failed (`systemctl list-units` without --all shows no other).
+// ActiveBuildInstances lists the instances whose build or clean unit is
+// running. A failed unit is not: it has finished and reported its failure, and
+// runOneshot resets it, so one still listed as failed is a leftover whose
+// cache must be swept like any other orphan's (`systemctl list-units` without
+// --all shows only loaded units).
 // A first deploy runs its build before its deployments row exists, so the
 // instance has no row yet and its cache must not be taken for an orphan's.
 func (m *Manager) ActiveBuildInstances(ctx context.Context) ([]string, error) {
@@ -91,7 +94,7 @@ func (m *Manager) ActiveBuildInstances(ctx context.Context) ([]string, error) {
 	var instances []string
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 3 || fields[2] == "inactive" {
+		if len(fields) < 3 || fields[2] == "inactive" || fields[2] == activeStateFailed {
 			continue
 		}
 		if match := buildUnit.FindStringSubmatch(fields[0]); match != nil {

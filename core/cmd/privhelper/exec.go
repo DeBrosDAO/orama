@@ -375,8 +375,11 @@ func removePeer(conf *wireguard.Conf, allowedIP string) privhelper.Response {
 	return privhelper.Response{Output: fmt.Sprintf("removed %d live and %d persisted peers for %s\n", removedLive, removedConf, allowedIP)}
 }
 
-// runTool runs a tool from its fixed path with a fixed environment.
-func runTool(tool string, args []string) privhelper.Response {
+// runTool runs a tool; a variable so a test can stand in for systemctl.
+var runTool = runToolAtFixedPath
+
+// runToolAtFixedPath runs a tool from its fixed path with a fixed environment.
+func runToolAtFixedPath(tool string, args []string) privhelper.Response {
 	bin := ""
 	for _, p := range toolPaths[tool] {
 		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {

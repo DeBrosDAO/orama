@@ -78,7 +78,7 @@ var legacyUnits = map[string]bool{
 // service.
 const NoReloadFlag = "--no-reload"
 
-var unitVerbs = map[string]bool{"start": true, "stop": true, "restart": true, "enable": true, "disable": true}
+var unitVerbs = map[string]bool{"start": true, "stop": true, "restart": true, "enable": true, "disable": true, "reset-failed": true}
 
 // globalUnits are the host units a global node may start, stop, restart, or
 // ask the status (or is-active state) of. The list is exact: orama-global-evil is not on it, and

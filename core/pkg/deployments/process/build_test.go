@@ -530,3 +530,47 @@ func TestStop_clearsTheDependenciesBeforeTheSecrets(t *testing.T) {
 		t.Errorf("the secrets were cleared before the dependencies: %v", st.log)
 	}
 }
+
+// A failed oneshot has reported its failure through the start's error; left in
+// the failed state it would stay in list-units, so the failure is reset.
+func TestInstallDependencies_resetsAFailedBuildUnit(t *testing.T) {
+	var calls []string
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: newRecordingStager(), systemctl: func(args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "start" {
+			return errors.New("Job failed")
+		}
+		return nil
+	}}
+	if err := m.InstallDependencies(context.Background(), "acme", "web", registryApp(t)); err == nil {
+		t.Fatal("a failed build was reported as success")
+	}
+	want := "start orama-deploy-build@acme-web.service,reset-failed orama-deploy-build@acme-web.service"
+	if strings.Join(calls, ",") != want {
+		t.Errorf("calls %v, want start then reset-failed", calls)
+	}
+}
+
+func TestInstallDependencies_successDoesNotReset(t *testing.T) {
+	var calls []string
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: newRecordingStager(), systemctl: func(args ...string) error {
+		calls = append(calls, args[0])
+		return nil
+	}}
+	if err := m.InstallDependencies(context.Background(), "acme", "web", registryApp(t)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(calls, ",") != "start" {
+		t.Errorf("calls %v, want start only", calls)
+	}
+}
+
+func TestClearDependencies_resetsAFailedCleanUnitAndReportsBothFailures(t *testing.T) {
+	m := &Manager{logger: zap.NewNop(), useSystemd: true, stager: newRecordingStager(), systemctl: func(args ...string) error {
+		return errors.New(args[0] + " refused")
+	}}
+	err := m.ClearDependencies("acme", "web")
+	if err == nil || !strings.Contains(err.Error(), "start refused") || !strings.Contains(err.Error(), "reset-failed refused") {
+		t.Fatalf("both failures must be reported: %v", err)
+	}
+}

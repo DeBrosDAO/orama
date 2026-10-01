@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -117,9 +118,18 @@ func (m *Manager) giveBuildUser(instance string) error {
 }
 
 // runOneshot runs a oneshot unit to completion: `systemctl start` of one
-// returns when its command has exited, with its status.
+// returns when its command has exited, with its status. A unit that failed has
+// reported its failure through that error, so it is reset: left in the failed
+// state it would stay in `systemctl list-units` for good.
 func (m *Manager) runOneshot(unit string) error {
-	return m.runSystemctl("start", unit)
+	err := m.runSystemctl("start", unit)
+	if err == nil {
+		return nil
+	}
+	if resetErr := m.runSystemctl("reset-failed", unit); resetErr != nil {
+		return errors.Join(err, fmt.Errorf("reset the failed state of %s: %w", unit, resetErr))
+	}
+	return err
 }
 
 // installDirect runs npm in workDir, for a gateway without systemd.

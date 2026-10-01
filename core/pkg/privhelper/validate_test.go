@@ -49,6 +49,7 @@ func TestValidate_AllowsWhatTheNodeRuns(t *testing.T) {
 		{"systemctl", "enable", "orama-namespace-ipfs-gc@index.timer"},
 		{"systemctl", "disable", "orama-namespace-wireguard@index.service"},
 		{"systemctl", "start", "orama-deploy-node@acme-web.service"},
+		{"systemctl", "reset-failed", "orama-deploy-build@acme-web.service"},
 		{"systemctl", "restart", "orama-deploy-go@my_ns-api-v2.service"},
 		{"systemctl", "set-property", "orama-deploy-npm@acme-web.service", "MemoryMax=512M"},
 		{"systemctl", "set-property", "orama-deploy-npm@acme-web.service", "MemoryMax=512M", "CPUQuota=150%"},
@@ -246,5 +247,16 @@ func TestValidate_disableNoReloadKeepsTheUnitRules(t *testing.T) {
 	// wg-quick may still only be disabled.
 	if _, err := Validate([]string{"systemctl", "stop", "--no-reload", "wg-quick@wg0.service"}); err == nil {
 		t.Error("stop --no-reload wg-quick was allowed")
+	}
+}
+
+func TestValidate_resetFailedOnlyOnDeploymentAndNamespaceUnits(t *testing.T) {
+	for _, unit := range []string{"sshd.service", "wg-quick@wg0.service", "orama-olric.service", "orama-global-chain.service"} {
+		if _, err := Validate([]string{"systemctl", "reset-failed", unit}); err == nil {
+			t.Errorf("reset-failed %s was allowed", unit)
+		}
+	}
+	if _, err := Validate([]string{"systemctl", "reset-failed"}); err == nil {
+		t.Error("reset-failed without a unit was allowed")
 	}
 }

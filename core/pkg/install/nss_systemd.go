@@ -261,10 +261,13 @@ func containsString(list []string, s string) bool {
 const (
 	aptGetPath = "/usr/bin/apt-get"
 	aptPath    = "/usr/sbin:/usr/bin:/sbin:/bin"
+	// aptLockTimeout is how long apt-get waits for a dpkg lock another apt
+	// (unattended-upgrades) holds before it fails.
+	aptLockTimeout = "DPkg::Lock::Timeout=60"
 )
 
 func aptInstall(pkg string) error {
-	cmd := exec.Command(aptGetPath, "install", "-y", "-qq", pkg)
+	cmd := exec.Command(aptGetPath, "-o", aptLockTimeout, "install", "-y", "-qq", pkg)
 	cmd.Env = []string{"DEBIAN_FRONTEND=noninteractive", "PATH=" + aptPath}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s install %s: %w: %s", aptGetPath, pkg, err, strings.TrimSpace(string(out)))

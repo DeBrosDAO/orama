@@ -451,7 +451,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	// 3. Get all current cluster nodes and their info
 	clusterNodes, err := cm.getClusterNodes(ctx, cluster.ID)
 	if err != nil {
-		return fmt.Errorf("failed to get cluster nodes: %w", err)
+		return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to get cluster nodes: %w", err))
 	}
 
 	// Build exclude list (all current cluster members)
@@ -463,7 +463,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	// 4. Select replacement node
 	replacement, err := cm.nodeSelector.SelectReplacementNode(ctx, excludeIDs)
 	if err != nil {
-		return fmt.Errorf("failed to select replacement node: %w", err)
+		return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to select replacement node: %w", err))
 	}
 
 	cm.logger.Info("Selected replacement node",
@@ -475,7 +475,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	// 5. Allocate ports on replacement node
 	portBlock, blockOwed, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID, BlueprintTenant())
 	if err != nil {
-		return fmt.Errorf("failed to allocate ports on replacement node: %w", err)
+		return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to allocate ports on replacement node: %w", err))
 	}
 
 	// 6. Get surviving nodes' port info
@@ -486,14 +486,16 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ? AND pa.node_id != ? AND pa.node_id != ? ` + notOwedTeardownSQL + `
+		WHERE pa.namespace_cluster_id = ? AND pa.node_id != ? AND pa.node_id != ? AND dn.status = 'active' ` + notOwedTeardownSQL + `
 	`
 	// The replacement already holds its port block but is not in raft yet: it
-	// is neither a survivor to ask nor a voter to count towards quorum.
+	// is neither a survivor to ask nor a voter to count towards quorum. A member
+	// whose node is no longer active is no voter either, so a second dead member
+	// cannot make guardRaftRemoval think a lost quorum still stands.
 	if err := cm.db.Query(ctx, &surviving, portsQuery, cluster.ID, deadNodeID, replacement.NodeID); err != nil {
 		// Rollback port allocation
 		cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
-		return fmt.Errorf("failed to query surviving node ports: %w", err)
+		return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to query surviving node ports: %w", err))
 	}
 
 	// 7. Determine dead node's roles
@@ -513,13 +515,13 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 		deadIPs, err := cm.getNodeIPs(ctx, deadNodeID)
 		if err != nil {
 			cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
-			return fmt.Errorf("failed to address dead node %s in raft: %w", deadNodeID, err)
+			return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to address dead node %s in raft: %w", deadNodeID, err))
 		}
 		if deadNodeRaftPort > 0 {
 			deadRaftAddr := net.JoinHostPort(deadIPs.InternalIP, strconv.Itoa(deadNodeRaftPort))
 			if err := cm.removeDeadNodeFromRaft(ctx, deadRaftAddr, surviving); err != nil {
 				cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
-				return fmt.Errorf("failed to remove dead node %s from raft: %w", deadNodeID, err)
+				return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to remove dead node %s from raft: %w", deadNodeID, err))
 			}
 		}
 	}
@@ -772,6 +774,20 @@ func (cm *ClusterManager) rollbackPortBlock(ctx context.Context, cluster *Namesp
 		cm.logger.Error("Rolled-back replacement keeps its port block but its teardown could not be recorded",
 			zap.String("cluster_id", cluster.ID), zap.String("node_id", replacement.NodeID), zap.Error(err))
 	}
+}
+
+// abortReplacement records why the replacement of a dead member stopped, in
+// place of the "recovery in progress" the cluster was marked with when it began:
+// nothing is recovering, and an operator reading the status must be told what
+// to fix. It returns cause, the error ReplaceClusterNode answers with.
+func (cm *ClusterManager) abortReplacement(ctx context.Context, cluster *NamespaceCluster, deadNodeID string, cause error) error {
+	msg := fmt.Sprintf("Replacement of dead node %s was aborted, the cluster stays degraded until it is retried: %v", deadNodeID, cause)
+	if err := cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDegraded, msg); err != nil {
+		cm.logger.Warn("Failed to record the aborted replacement on the cluster",
+			zap.String("cluster_id", cluster.ID), zap.Error(err))
+	}
+	cm.logEvent(ctx, cluster.ID, EventClusterDegraded, deadNodeID, msg, nil)
+	return cause
 }
 
 // removeClusterNodeAssignment deletes all node assignments for a node in a cluster.
