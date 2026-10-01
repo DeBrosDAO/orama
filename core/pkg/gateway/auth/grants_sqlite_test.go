@@ -715,3 +715,99 @@ func TestGrantIn_resolvesDuplicateLiveGrantsToTheNewest(t *testing.T) {
 		t.Fatalf("the member holds %+v, %v; want the newer reader grant", g, err)
 	}
 }
+
+func liveGrantCount(t *testing.T, db *sqliteDatabase) int {
+	t.Helper()
+	var n int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM grants WHERE revoked_at IS NULL`).Scan(&n); err != nil {
+		t.Fatalf("count grants: %v", err)
+	}
+	return n
+}
+
+// The unique index does not look at the expiry, so granting again a grant
+// whose expiry has passed hit it and was reported as done while the grant
+// stayed expired.
+func TestGrant_againAfterItExpiredRenewsItAgainstTheRealSchema(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	ctx := context.Background()
+
+	req := GrantRequest{Namespace: "anchat", PrincipalType: PrincipalWallet, Identifier: "0xmember", Role: RoleRuntime}
+	if err := s.Grant(ctx, req); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	if _, err := db.db.Exec(`UPDATE grants SET expires_at = datetime('now', '-1 hour')`); err != nil {
+		t.Fatalf("expire the grant: %v", err)
+	}
+	if _, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, "0xmember"); err == nil {
+		t.Fatal("an expired grant still counted")
+	}
+	if err := s.Grant(ctx, req); err != nil {
+		t.Fatalf("grant again: %v", err)
+	}
+	if g, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, "0xmember"); err != nil || g.Role != RoleRuntime {
+		t.Fatalf("after granting again the member holds %+v, %v", g, err)
+	}
+	if n := liveGrantCount(t, db); n != 1 {
+		t.Errorf("%d unrevoked grants, want 1", n)
+	}
+}
+
+// Two writes racing for one principal each retire what is older than the
+// newest row, so both keep the same one and the member is never left without
+// a grant.
+func TestKeepNewestGrant_interleavedWritersKeepTheSameRow(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	ctx := context.Background()
+
+	principalID, err := s.ensurePrincipal(ctx, db, PrincipalWallet, "0xmember", "", "test")
+	if err != nil {
+		t.Fatalf("record the principal: %v", err)
+	}
+	for _, role := range []string{"admin", "reader"} {
+		if _, err := db.Query(client.WithInternalAuth(ctx),
+			"INSERT INTO grants(principal_id, namespace_id, role, created_by) VALUES (?, ?, ?, 'test')",
+			principalID, nsID, role); err != nil {
+			t.Fatalf("record %s: %v", role, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := keepNewestGrant(ctx, db, principalID, nsID); err != nil {
+			t.Fatalf("writer %d: %v", i+1, err)
+		}
+	}
+	if n := liveGrantCount(t, db); n != 1 {
+		t.Fatalf("%d live grants after both writers, want 1", n)
+	}
+	if g, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, "0xmember"); err != nil || g.Role != RoleReader {
+		t.Errorf("the member holds %+v, %v; want the newest (reader)", g, err)
+	}
+}
+
+// Rows written before a new role replaced the old one: granting the older
+// one again makes it the grant that counts.
+func TestGrant_anOlderDuplicateGrantedAgainBecomesTheGrantAgainstTheRealSchema(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	ctx := context.Background()
+
+	principalID, err := s.ensurePrincipal(ctx, db, PrincipalWallet, "0xmember", "", "test")
+	if err != nil {
+		t.Fatalf("record the principal: %v", err)
+	}
+	for _, role := range []string{"admin", "reader"} {
+		if _, err := db.Query(client.WithInternalAuth(ctx),
+			"INSERT INTO grants(principal_id, namespace_id, role, created_by) VALUES (?, ?, ?, 'test')",
+			principalID, nsID, role); err != nil {
+			t.Fatalf("record %s: %v", role, err)
+		}
+	}
+	if err := s.Grant(ctx, GrantRequest{Namespace: "anchat", PrincipalType: PrincipalWallet, Identifier: "0xmember", Role: RoleAdmin}); err != nil {
+		t.Fatalf("grant admin again: %v", err)
+	}
+	if g, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, "0xmember"); err != nil || g.Role != RoleAdmin {
+		t.Errorf("the member holds %+v, %v; want admin", g, err)
+	}
+	if n := liveGrantCount(t, db); n != 1 {
+		t.Errorf("%d live grants, want 1", n)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -376,16 +377,12 @@ func (s *Service) writeGrant(ctx context.Context, req GrantRequest) error {
 		// stops the same grant existing twice, so a second write of the same
 		// thing lands here rather than leaving two rows one revoke cannot
 		// clear.
-		exists, readErr := liveGrantExists(ctx, db, principalID, nsID, req.Role, resource)
-		if readErr != nil {
-			return fmt.Errorf("failed to record the grant in namespace %q: %w (and could not tell whether it was already there: %v)", req.Namespace, err, readErr)
+		if err := s.regrant(ctx, db, principalID, nsID, req, resource, expires, err); err != nil {
+			return err
 		}
-		if !exists {
-			return fmt.Errorf("failed to record the grant in namespace %q: %w", req.Namespace, err)
-		}
-		return retireOtherGrants(ctx, db, principalID, nsID, req.Role, resource)
+		return keepNewestGrant(ctx, db, principalID, nsID)
 	}
-	if err := retireOtherGrants(ctx, db, principalID, nsID, req.Role, resource); err != nil {
+	if err := keepNewestGrant(ctx, db, principalID, nsID); err != nil {
 		return err
 	}
 
@@ -400,36 +397,120 @@ func (s *Service) writeGrant(ctx context.Context, req GrantRequest) error {
 	return nil
 }
 
-// liveGrantExists reports whether the principal holds exactly this grant in
-// the namespace. Reading the principal's grant instead answered for whichever
-// of its rows was picked, which was not always the one being written.
-func liveGrantExists(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, role Role, resource string) (bool, error) {
+// regrant handles a grant write the unique index refused: the principal
+// already holds a live row of this role and selector. When it is their newest
+// and carries the requested expiry it stands. Otherwise it is written again:
+// a newer row beside it (written before a new role replaced the old one) would
+// win over it, and a row whose expiry differs — or has passed, which the index
+// does not see — is not the grant asked for.
+func (s *Service) regrant(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, req GrantRequest, resource string, expires interface{}, insertErr error) error {
+	id, storedExpiry, found, err := liveGrantID(ctx, db, principalID, nsID, req.Role, resource)
+	if err != nil {
+		return fmt.Errorf("failed to record the grant in namespace %q: %w (and could not tell whether it was already there: %v)", req.Namespace, insertErr, err)
+	}
+	if !found {
+		return fmt.Errorf("failed to record the grant in namespace %q: %w", req.Namespace, insertErr)
+	}
+	newest, _, err := newestLiveGrantID(ctx, db, principalID, nsID)
+	if err != nil {
+		return err
+	}
+	if id == newest && storedExpiry == getStringVal(expires) {
+		return nil
+	}
+	if _, err := db.Query(client.WithInternalAuth(ctx),
+		`UPDATE grants SET revoked_at = datetime('now') WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("failed to replace the grant in namespace %q: %w", req.Namespace, err)
+	}
+	var resourceValue interface{}
+	if resource != "" {
+		resourceValue = resource
+	}
+	if _, err := db.Query(client.WithInternalAuth(ctx),
+		`INSERT INTO grants(principal_id, namespace_id, role, resource, expires_at, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		principalID, nsID, string(req.Role), resourceValue, expires, req.CreatedBy); err != nil {
+		return fmt.Errorf("failed to record the grant in namespace %q: %w", req.Namespace, err)
+	}
+	return nil
+}
+
+// liveGrantID is the id and expiry of the principal's unrevoked grant of this
+// role and selector, expired or not: the unique index is what refused the
+// write, and it does not look at the expiry.
+func liveGrantID(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, role Role, resource string) (int64, string, bool, error) {
 	res, err := db.Query(client.WithInternalAuth(ctx),
-		`SELECT 1 FROM grants
+		`SELECT id, COALESCE(expires_at, '') FROM grants
 		  WHERE principal_id = ? AND namespace_id = ? AND role = ? AND COALESCE(resource, '') = ?
 		    AND revoked_at IS NULL
 		  LIMIT 1`,
 		principalID, nsID, string(role), resource)
 	if err != nil {
-		return false, fmt.Errorf("failed to read the principal's grant: %w", err)
+		return 0, "", false, fmt.Errorf("failed to read the principal's grant: %w", err)
 	}
-	return res != nil && res.Count > 0 && len(res.Rows) > 0, nil
+	id, found, err := firstID(res)
+	if err != nil || !found {
+		return 0, "", found, err
+	}
+	expiry := ""
+	if len(res.Rows[0]) > 1 {
+		expiry = getStringVal(res.Rows[0][1])
+	}
+	return id, expiry, true, nil
 }
 
-// retireOtherGrants revokes every live grant the principal holds in the
-// namespace other than the one just written, so a new role replaces the old
-// one. Writing a grant used to add a row beside the one already there, and
-// the principal kept the older: a member demoted from admin to reader stayed
-// an admin. The owner row is left alone: ownership moves by transfer, and the
-// outgoing owner holds owner and admin together for the length of one.
-func retireOtherGrants(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, role Role, resource string) error {
+// newestLiveGrantID is the id of the principal's newest live grant other than
+// ownership.
+func newestLiveGrantID(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}) (int64, bool, error) {
+	res, err := db.Query(client.WithInternalAuth(ctx),
+		`SELECT MAX(id) FROM grants
+		  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL AND role != 'owner'`,
+		principalID, nsID)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to read the principal's newest grant: %w", err)
+	}
+	return firstID(res)
+}
+
+func firstID(res *client.QueryResult) (int64, bool, error) {
+	if res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 || res.Rows[0][0] == nil {
+		return 0, false, nil
+	}
+	id, err := strconv.ParseInt(getStringVal(res.Rows[0][0]), 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("a grant id %v is not a number: %w", res.Rows[0][0], err)
+	}
+	return id, true, nil
+}
+
+// keepNewestGrant revokes every live grant the principal holds in the
+// namespace but the newest, so a new role replaces the old one. Writing a
+// grant used to add a row beside the one already there and the principal kept
+// the older: a member demoted from admin to reader stayed an admin. It is one
+// statement keyed on the newest id, so two writes racing for one principal
+// both keep the same row instead of each retiring the other's. The owner row is
+// left alone: ownership moves by transfer, and the outgoing owner holds owner
+// and admin together for the length of one.
+func keepNewestGrant(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}) error {
 	if _, err := db.Query(client.WithInternalAuth(ctx),
 		`UPDATE grants SET revoked_at = datetime('now')
-		  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL
-		    AND role != 'owner'
-		    AND NOT (role = ? AND COALESCE(resource, '') = ?)`,
-		principalID, nsID, string(role), resource); err != nil {
+		  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL AND role != 'owner'
+		    AND id < (SELECT MAX(id) FROM grants
+		               WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL AND role != 'owner')`,
+		principalID, nsID, principalID, nsID); err != nil {
 		return fmt.Errorf("failed to retire the principal's previous grant: %w", err)
+	}
+	return nil
+}
+
+// retireNonOwnerGrants revokes every live grant but ownership the principal
+// holds in the namespace: what a new owner held before is replaced by it.
+func retireNonOwnerGrants(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}) error {
+	if _, err := db.Query(client.WithInternalAuth(ctx),
+		`UPDATE grants SET revoked_at = datetime('now')
+		  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL AND role != 'owner'`,
+		principalID, nsID); err != nil {
+		return fmt.Errorf("failed to retire the new owner's previous grant: %w", err)
 	}
 	return nil
 }

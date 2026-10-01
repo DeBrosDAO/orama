@@ -463,7 +463,7 @@ orama members transfer 0xabc…      # the owner, and only the owner
 ```
 
 A member holds one grant. Adding a member who already holds one replaces it
-with the new role and selector, so `members add` is also how a role is
+with the new role, selector and expiry, so `members add` is also how a role is
 changed or a selector removed.
 
 Ownership is transferred rather than granted, and it is one step: the outgoing

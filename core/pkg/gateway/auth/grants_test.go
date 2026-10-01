@@ -140,6 +140,7 @@ type grantsDB struct {
 }
 
 type grantRow struct {
+	id          int64
 	principalID int64
 	namespaceID string
 	role        string
@@ -255,34 +256,63 @@ func (d *grantsDB) Query(_ context.Context, query string, args ...interface{}) (
 			}
 		}
 		d.rows = append(d.rows, &grantRow{
+			id:          int64(len(d.rows) + 1),
 			principalID: principalID, namespaceID: nsID, role: role,
 			resource: resource, expiresAt: expires, createdBy: createdBy,
 		})
 		return &client.QueryResult{Count: 1}, nil
 
-	case strings.Contains(query, "SELECT 1 FROM grants"):
+	case strings.Contains(query, "SELECT id, COALESCE(expires_at"):
 		principalID, nsID := toInt64(args[0]), getStringVal(args[1])
 		role, resource := getStringVal(args[2]), getStringVal(args[3])
 		for _, row := range d.rows {
 			if !row.revoked && row.principalID == principalID && row.namespaceID == nsID &&
 				row.role == role && row.resource == resource {
-				return rows(int64(1)), nil
+				return &client.QueryResult{Count: 1, Rows: [][]interface{}{{row.id, row.expiresAt}}}, nil
 			}
 		}
 		return &client.QueryResult{}, nil
 
+	case strings.Contains(query, "SELECT MAX(id) FROM grants"):
+		principalID, nsID := toInt64(args[0]), getStringVal(args[1])
+		var newest int64
+		for _, row := range d.rows {
+			if !row.revoked && row.principalID == principalID && row.namespaceID == nsID && row.role != string(RoleOwner) && row.id > newest {
+				newest = row.id
+			}
+		}
+		if newest == 0 {
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{nil}}}, nil
+		}
+		return rows(newest), nil
+
+	case strings.Contains(query, "UPDATE grants SET revoked_at = datetime('now') WHERE id = ?"):
+		id := toInt64(args[0])
+		for _, row := range d.rows {
+			if row.id == id {
+				row.revoked = true
+			}
+		}
+		return &client.QueryResult{Count: 1}, nil
+
 	case strings.Contains(query, "UPDATE grants SET revoked_at"):
-		// retireOtherGrants: every live non-owner row but the one just written.
+		// keepNewestGrant (an id below the newest) and retireNonOwnerGrants.
 		if d.failWrite {
 			return nil, errString("grant write failed")
 		}
 		principalID, nsID := toInt64(args[0]), getStringVal(args[1])
-		role, resource := getStringVal(args[2]), getStringVal(args[3])
+		keepNewest := strings.Contains(query, "MAX(id)")
+		var newest int64
+		for _, row := range d.rows {
+			if !row.revoked && row.principalID == principalID && row.namespaceID == nsID && row.role != string(RoleOwner) && row.id > newest {
+				newest = row.id
+			}
+		}
 		for _, row := range d.rows {
 			if row.revoked || row.principalID != principalID || row.namespaceID != nsID || row.role == string(RoleOwner) {
 				continue
 			}
-			if row.role == role && row.resource == resource {
+			if keepNewest && row.id == newest {
 				continue
 			}
 			row.revoked = true
