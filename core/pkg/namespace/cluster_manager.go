@@ -123,6 +123,12 @@ type ClusterManager struct {
 	// production; set in tests so the removal paths run without an rqlited.
 	raftRemoveFn func(ctx context.Context, via survivingNodePorts, raftID string) error
 
+	// resuming holds the clusters whose abandoned teardown this process is
+	// carrying on (resumeStaleDeprovisioning); resumeWG lets a test wait for them.
+	resumeMu sync.Mutex
+	resuming map[string]bool
+	resumeWG sync.WaitGroup
+
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
 	provisioning   map[string]bool // namespace -> in progress
@@ -1206,6 +1212,13 @@ const deprovisionActiveNodesQuery = `
 // this node take the same lock (SystemdSpawner.LockNamespace).
 func (cm *ClusterManager) Spawner() *SystemdSpawner { return cm.systemdSpawner }
 
+// DeprovisionTimeout bounds one teardown of a namespace cluster, whoever runs
+// it: the delete request's handler, or the reconciler resuming an abandoned one.
+// Neither may be bound to anything shorter-lived than the teardown itself: a
+// client that disconnects mid-delete cancelled the request context half way and
+// left the cluster in 'deprovisioning' for ever.
+const DeprovisionTimeout = 10 * time.Minute
+
 // ErrTeardownIncomplete is what DeprovisionCluster wraps when a node did not
 // confirm the teardown. The registry side is complete by then (cluster row, DNS
 // and membership are gone, and the ports of the nodes that confirmed) and what a
@@ -1239,7 +1252,13 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	)
 
 	cm.logEvent(ctx, cluster.ID, EventDeprovisionStarted, "", "Cluster deprovisioning started", nil)
-	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDeprovisioning, "")
+	// The status is what stops this node's own restore and WebRTC sweeps from
+	// starting the services being torn down, and the stamp is what lets another
+	// node resume the teardown if this one stops. A teardown that could not
+	// record either does not begin: nothing has been touched yet.
+	if err := cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDeprovisioning, ""); err != nil {
+		return fmt.Errorf("failed to mark namespace %s as deprovisioning, so its teardown was not started: %w", cluster.NamespaceName, err)
+	}
 
 	// Set when the namespace's data directory could not be removed on some node
 	// (bugboard #281). The control-plane teardown still completes — leaving half
@@ -1288,6 +1307,8 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 		deprovisionDataErr = fmt.Errorf("%w: %w", ErrTeardownIncomplete, teardownErr)
 	}
 
+	cm.refreshDeprovisionLease(ctx, cluster.ID)
+
 	// 4. Free the ports (core + WebRTC) of every node that confirmed. A failure
 	// returns with the cluster row in place, so the caller's retry finds it.
 	if err := cm.releaseConfirmedAllocations(ctx, cluster.ID, unconfirmed); err != nil {
@@ -1299,9 +1320,11 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	// record for every cluster it is still a member of, so deleting DNS first
 	// left a window in which the record came straight back. A failure aborts
 	// here, with the cluster row still in place, so the caller's retry finds it.
+	cm.refreshDeprovisionLease(ctx, cluster.ID)
 	if err := cm.removeClusterServingRecords(ctx, cluster); err != nil {
 		return fmt.Errorf("failed to remove the DNS records of namespace %s: %w", cluster.NamespaceName, err)
 	}
+	cm.refreshDeprovisionLease(ctx, cluster.ID)
 
 	// 6. Explicitly delete child tables (FK cascades disabled in rqlite)
 	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_events WHERE namespace_cluster_id = ?`, cluster.ID)
@@ -1447,6 +1470,11 @@ func (cm *ClusterManager) updateClusterStatus(ctx context.Context, clusterID str
 	if status == ClusterStatusReady {
 		query = `UPDATE namespace_clusters SET status = ?, ready_at = ?, error_message = '' WHERE id = ?`
 		args = []interface{}{status, time.Now(), clusterID}
+	} else if status == ClusterStatusDeprovisioning {
+		// Stamped by the registry's clock, as provisioned_at is: the stale
+		// sweep compares it with the registry's own "now".
+		query = `UPDATE namespace_clusters SET status = ?, error_message = ?, deprovisioning_at = CURRENT_TIMESTAMP WHERE id = ?`
+		args = []interface{}{status, errorMsg, clusterID}
 	} else {
 		query = `UPDATE namespace_clusters SET status = ?, error_message = ? WHERE id = ?`
 		args = []interface{}{status, errorMsg, clusterID}

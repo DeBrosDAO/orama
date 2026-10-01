@@ -1513,6 +1513,12 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		if cerr != nil || cluster == nil || cluster.ID != state.ClusterID {
 			continue
 		}
+		// A cluster being deprovisioned (or failed) is not swept: pruning,
+		// re-allocating WebRTC ports and starting services for a namespace that
+		// is being deleted re-creates what its teardown is removing.
+		if cluster.Status != ClusterStatusReady && cluster.Status != ClusterStatusDegraded {
+			continue
+		}
 
 		// Prune permanently-gone cluster-node rows before anything else reads
 		// membership (bugboard #173). Unconditional — not WebRTC-specific, and
@@ -1839,6 +1845,20 @@ func (cm *ClusterManager) spawnAllocatedWebRTCServices(ctx context.Context, stat
 	cm.spawnSFUIfDown(ctx, state, turnDomain)
 }
 
+// clusterStillServes reports whether the registry holds the cluster as ready or
+// degraded: the only states in which a node starts its services. One that is
+// being deprovisioned, failed, or gone is not started for, and a registry that
+// cannot be read starts nothing.
+func (cm *ClusterManager) clusterStillServes(ctx context.Context, clusterID string) bool {
+	cluster, err := cm.GetCluster(ctx, clusterID)
+	if err != nil {
+		cm.logger.Warn("Not starting WebRTC services: the cluster's status could not be read",
+			zap.String("cluster_id", clusterID), zap.Error(err))
+		return false
+	}
+	return cluster != nil && (cluster.Status == ClusterStatusReady || cluster.Status == ClusterStatusDegraded)
+}
+
 // serviceActiveState is the systemd query spawnSFUIfDown decides on. A variable
 // so tests can present a unit in any state on a host without systemd.
 var serviceActiveState = func(m *systemd.Manager, namespace string, serviceType systemd.ServiceType) (systemd.ActiveState, error) {
@@ -1860,6 +1880,18 @@ var serviceActiveState = func(m *systemd.Manager, namespace string, serviceType 
 // cancel it. An unreadable state starts nothing for the same reason.
 func (cm *ClusterManager) spawnSFUIfDown(ctx context.Context, state *ClusterLocalState, turnDomain string) {
 	defer cm.systemdSpawner.LockNamespace(state.NamespaceName)()
+
+	// The sweep chose this namespace before the lock was free, and a delete of
+	// the namespace holds the lock for the whole of its teardown on this node (an
+	// SFU drains for up to 45s). The registry keeps the namespace's WebRTC
+	// config and this node's SFU allocation until every node has confirmed, so
+	// they still read "start it" when the teardown lets go: the SFU was started
+	// into a namespace whose data was just deleted, and, depending on olric,
+	// pulled that unit up too, which then crash-looped on its missing env file.
+	// Only a cluster that is still serving is started for.
+	if !cm.clusterStillServes(ctx, state.ClusterID) {
+		return
+	}
 
 	webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 	if err != nil || webrtcCfg == nil {

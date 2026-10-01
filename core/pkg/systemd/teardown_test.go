@@ -24,13 +24,13 @@ func TestStopService_keepsTheUnitEnabled(t *testing.T) {
 	}
 }
 
-func TestTeardownService_stopsThenDisables(t *testing.T) {
+func TestTeardownService_stopsDisablesThenResetsTheFailedState(t *testing.T) {
 	m, f := newFakeManager(t)
 
 	if err := m.TeardownService("acme", ServiceTypeGateway); err != nil {
 		t.Fatal(err)
 	}
-	want := "stop orama-namespace-gateway@acme.service|disable --no-reload orama-namespace-gateway@acme.service"
+	want := "stop orama-namespace-gateway@acme.service|disable --no-reload orama-namespace-gateway@acme.service|reset-failed orama-namespace-gateway@acme.service"
 	if got := strings.Join(f.calls, "|"); got != want {
 		t.Fatalf("calls = %q, want %q", got, want)
 	}
@@ -163,7 +163,7 @@ func TestTeardownServiceAndEnv_disablesAndRemovesTheEnv(t *testing.T) {
 	if err := m.TeardownServiceAndEnv("acme", ServiceTypeSFU); err != nil {
 		t.Fatal(err)
 	}
-	want := "stop orama-namespace-sfu@acme.service|disable --no-reload orama-namespace-sfu@acme.service|daemon-reload"
+	want := "stop orama-namespace-sfu@acme.service|disable --no-reload orama-namespace-sfu@acme.service|reset-failed orama-namespace-sfu@acme.service|daemon-reload"
 	if got := strings.Join(f.calls, "|"); got != want {
 		t.Fatalf("calls = %q, want %q", got, want)
 	}
@@ -210,7 +210,8 @@ func TestTeardownServiceAndEnv_reportsAnEnvRemovalFailure(t *testing.T) {
 // systemd keeps listing an instance after it was stopped and disabled. Such a
 // unit is not a namespace on this node: counting it made the orphan sweep tear
 // the same removed namespace down on every pass, spending its per-sweep cap.
-// A running unit, or a stopped but enabled one (it starts at boot), counts.
+// A running unit, a stopped but enabled one (it starts at boot) and a failed
+// one (systemd keeps it loaded until a teardown resets it) count.
 func TestLocalTenantNamespaces_aStoppedDisabledUnitIsNotANamespace(t *testing.T) {
 	m, _ := newFakeManager(t)
 	m.listUnitsCmd = func(...string) ([]byte, error) {
@@ -234,8 +235,8 @@ func TestLocalTenantNamespaces_aStoppedDisabledUnitIsNotANamespace(t *testing.T)
 		t.Fatal(err)
 	}
 	sort.Strings(got)
-	if !reflect.DeepEqual(got, []string{"boots", "running"}) {
-		t.Fatalf("got %v, want [boots running]: a stopped, disabled unit is not a namespace", got)
+	if !reflect.DeepEqual(got, []string{"boots", "crashed", "running"}) {
+		t.Fatalf("got %v, want [boots crashed running]: a stopped, disabled unit is not a namespace, a failed one is", got)
 	}
 }
 
@@ -302,7 +303,7 @@ func TestTeardownServiceAndEnv_reloadsOnceAfterTheDisable(t *testing.T) {
 	if err := m.TeardownServiceAndEnv("acme", ServiceTypeSFU); err != nil {
 		t.Fatal(err)
 	}
-	want := "stop orama-namespace-sfu@acme.service|disable --no-reload orama-namespace-sfu@acme.service|daemon-reload"
+	want := "stop orama-namespace-sfu@acme.service|disable --no-reload orama-namespace-sfu@acme.service|reset-failed orama-namespace-sfu@acme.service|daemon-reload"
 	if got := strings.Join(f.calls, "|"); got != want {
 		t.Fatalf("calls = %q, want %q", got, want)
 	}
@@ -354,5 +355,59 @@ func TestDisableServiceAndReload_noReloadWhenTheDisableFails(t *testing.T) {
 		if c == "daemon-reload" {
 			t.Errorf("reloaded after a failed disable: %v", f.calls)
 		}
+	}
+}
+
+// A unit that failed stays loaded and listed after it is stopped and disabled,
+// and the orphan sweep never saw it (a failed, disabled unit was "not live"), so
+// a removed namespace's failed unit stayed in systemctl for good. The teardown
+// resets it.
+func TestTeardownAllNamespaceServices_resetsTheFailedStateOfEveryService(t *testing.T) {
+	m, f := newFakeManager(t)
+
+	if err := m.TeardownAllNamespaceServices("acme"); err != nil {
+		t.Fatal(err)
+	}
+	reset := map[string]bool{}
+	for _, c := range f.calls {
+		if unit, ok := strings.CutPrefix(c, "reset-failed "); ok {
+			reset[unit] = true
+		}
+	}
+	for _, st := range []ServiceType{ServiceTypeRQLite, ServiceTypeOlric, ServiceTypeGateway, ServiceTypeSFU, ServiceTypeTURN} {
+		if unit := m.serviceName("acme", st); !reset[unit] {
+			t.Errorf("%s kept its failed state (calls %v)", unit, f.calls)
+		}
+	}
+}
+
+func TestTeardownService_aFailedResetIsReported(t *testing.T) {
+	m, _ := newFakeManager(t)
+	m.runUnitCmd = func(args ...string) ([]byte, error) {
+		if args[0] == "reset-failed" {
+			return []byte("helper refused"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	m.unitState = func(string) (unitState, error) { return unitState{Load: "loaded", Active: "failed"}, nil }
+
+	err := m.TeardownService("acme", ServiceTypeRQLite)
+	if err == nil || !strings.Contains(err.Error(), "orama-namespace-rqlite@acme.service") {
+		t.Fatalf("err = %v, want the reset-failed failure", err)
+	}
+}
+
+func TestTeardownService_aUnitSystemdDoesNotKnowNeedsNoReset(t *testing.T) {
+	m, _ := newFakeManager(t)
+	m.runUnitCmd = func(args ...string) ([]byte, error) {
+		if args[0] == "reset-failed" {
+			return []byte("Unit not loaded"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	m.unitState = func(string) (unitState, error) { return unitState{Load: "not-found", Active: "inactive"}, nil }
+
+	if err := m.TeardownService("acme", ServiceTypeRQLite); err != nil {
+		t.Fatalf("err = %v, want nil: nothing is loaded under that name", err)
 	}
 }

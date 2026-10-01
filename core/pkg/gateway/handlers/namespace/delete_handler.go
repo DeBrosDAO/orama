@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
@@ -20,6 +21,12 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
+
+// removeTimeout bounds a whole namespace removal: the cluster teardown
+// (namespacepkg.DeprovisionTimeout, which the reconciler's takeover of an
+// abandoned one is timed against) and the cleanup of deployments, content
+// references and rows after it.
+const removeTimeout = namespacepkg.DeprovisionTimeout + 5*time.Minute
 
 // NamespaceDeprovisioner is the interface for deprovisioning namespace clusters
 type NamespaceDeprovisioner interface {
@@ -39,6 +46,59 @@ type DeleteHandler struct {
 	// clusterSecretPath is where the cluster secret the replica teardown calls
 	// are stamped with is read from, per call, as the spawn requests do.
 	clusterSecretPath string
+
+	// removing holds the namespaces this process is removing, so a client that
+	// retries a delete the first request is still carrying out is refused
+	// without touching the registry (which refuses it across gateways).
+	removingMu sync.Mutex
+	removing   map[string]bool
+}
+
+const (
+	// ErrCodeDeleteInProgress is the code of the 409 a second delete of a
+	// namespace gets while the first still runs.
+	ErrCodeDeleteInProgress = "NAMESPACE_DELETE_IN_PROGRESS"
+
+	// deleteInProgressRetryAfterSeconds is that refusal's Retry-After.
+	deleteInProgressRetryAfterSeconds = 15
+
+	// releaseClaimTimeout bounds the write that gives back a failed attempt's
+	// teardown claim; it runs on its own context, since the removal's may be
+	// the one that expired.
+	releaseClaimTimeout = 10 * time.Second
+)
+
+// beginRemoving records ns as being removed by this process, false if it
+// already is.
+func (h *DeleteHandler) beginRemoving(ns string) bool {
+	h.removingMu.Lock()
+	defer h.removingMu.Unlock()
+	if h.removing == nil {
+		h.removing = make(map[string]bool)
+	}
+	if h.removing[ns] {
+		return false
+	}
+	h.removing[ns] = true
+	return true
+}
+
+func (h *DeleteHandler) endRemoving(ns string) {
+	h.removingMu.Lock()
+	defer h.removingMu.Unlock()
+	delete(h.removing, ns)
+}
+
+// refuseDeleteInProgress answers 409 to a delete of a namespace whose removal is
+// already running. The first request keeps running when its client leaves, so a
+// client that retries is expected.
+func refuseDeleteInProgress(w http.ResponseWriter, ns string) {
+	w.Header().Set("Retry-After", fmt.Sprint(deleteInProgressRetryAfterSeconds))
+	writeDeleteResponse(w, http.StatusConflict, map[string]interface{}{
+		"error":     fmt.Sprintf("namespace %s is already being deleted; retry shortly to see it finished", ns),
+		"code":      ErrCodeDeleteInProgress,
+		"retryable": true,
+	})
 }
 
 // SetClusterSecretPath sets where the replica teardown calls get their key.
@@ -102,9 +162,25 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 		return
 	}
 
+	// The removal is owned by this handler, not by the request: a client that
+	// disconnects mid-delete (a killed CLI, a proxy timeout) cancels the request
+	// context, and every step below that used it stopped where it was: the stop
+	// sent to a node failed "context canceled", and so did the write recording
+	// that failure for replay, which left a cluster in 'deprovisioning' with no
+	// teardown owed to anyone. The values of the request (the namespace override,
+	// the auth the registry writes carry) are kept; its cancellation is not.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), removeTimeout)
+	defer cancel()
+
+	if !h.beginRemoving(ns) {
+		refuseDeleteInProgress(w, ns)
+		return
+	}
+	defer h.endRemoving(ns)
+
 	// Resolve namespace ID
 	var rows []map[string]interface{}
-	if err := h.ormClient.Query(r.Context(), &rows, "SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns); err != nil || len(rows) == 0 {
+	if err := h.ormClient.Query(ctx, &rows, "SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns); err != nil || len(rows) == 0 {
 		writeDeleteResponse(w, http.StatusNotFound, map[string]interface{}{"error": "namespace not found"})
 		return
 	}
@@ -131,7 +207,7 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 	// namespace's content: deleting first and finding out later would leave the
 	// cluster torn down and another tenant's pin possibly removed. The namespace
 	// being deleted does not count against its own readiness.
-	if err := h.refs.CheckReady(r.Context(), ns); err != nil {
+	if err := h.refs.CheckReady(ctx, ns); err != nil {
 		h.logger.Error("Namespace delete refused: the cluster reference index cannot be trusted yet",
 			zap.String("namespace", ns), zap.Error(err))
 		writeDeleteResponse(w, http.StatusServiceUnavailable, map[string]interface{}{
@@ -145,9 +221,18 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 	// trail as well as logged: a removal that stopped half way is exactly what
 	// someone will later ask about. The response carries a fixed message; the
 	// detail (driver and registry text) is only logged.
+	// claimed is set once BeginDeprovision has given this attempt the claim.
+	claimed := false
 	failed := func(stage, message string, err error) {
 		h.logger.Error("Namespace removal failed", zap.String("namespace", ns), zap.String("stage", stage), zap.Error(err))
-		h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		// A cluster that is still there must not stay refused for the rest of
+		// the window by the claim this attempt took, or the retry it asks for
+		// would be answered 409. Only a claim this attempt holds is given back:
+		// a claim that failed may be another teardown's, which must keep it.
+		if claimed {
+			h.releaseClaim(ctx, ns, namespaceID)
+		}
+		h.audit.RecordFromRequest(ctx, r, auth.AuditEvent{
 			Actor:    auth.ActorFromRequest(r),
 			Action:   action,
 			Resource: ns,
@@ -166,7 +251,20 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 	// the delete would find nothing to deprovision and do what is done below.
 	// Creating the name again is refused (CreateHandler) until it has finished.
 	cleanupPending := false
-	if err := h.deprovisioner.DeprovisionCluster(r.Context(), namespaceID); err != nil {
+	if err := namespacepkg.BeginDeprovision(ctx, h.ormClient, namespaceID); err != nil {
+		if errors.Is(err, namespacepkg.ErrDeprovisionInProgress) {
+			h.logger.Warn("Namespace delete refused: a teardown of its cluster is already running", zap.String("namespace", ns))
+			refuseDeleteInProgress(w, ns)
+			return
+		}
+		failed("deprovision", "the namespace's cluster could not be claimed for deprovisioning; retry the delete", err)
+		return
+	}
+	claimed = true
+	deprovisionCtx, cancelDeprovision := context.WithTimeout(ctx, namespacepkg.DeprovisionTimeout)
+	err := h.deprovisioner.DeprovisionCluster(deprovisionCtx, namespaceID)
+	cancelDeprovision()
+	if err != nil {
 		if !errors.Is(err, namespacepkg.ErrTeardownIncomplete) {
 			failed("deprovision", "the namespace's cluster could not be deprovisioned; retry the delete", err)
 			return
@@ -177,20 +275,20 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 	}
 
 	// 2. Clean up deployments (teardown replicas on all nodes, unpin IPFS, delete DB records)
-	h.cleanupDeployments(r.Context(), ns)
+	h.cleanupDeployments(ctx, ns)
 
 	// 3. Unpin IPFS content from ipfs_content_ownership (separate from deployment CIDs)
-	if err := h.unpinNamespaceContent(r.Context(), ns); err != nil {
+	if err := h.unpinNamespaceContent(ctx, ns); err != nil {
 		failed("release-ipfs-references", "the namespace's IPFS references could not be released; retry the delete", err)
 		return
 	}
 
 	// 4. Clean up global tables that use namespace TEXT (not FK cascade)
-	h.cleanupGlobalTables(r.Context(), ns)
+	h.cleanupGlobalTables(ctx, ns)
 
 	// 5. Delete FK children explicitly (ON DELETE CASCADE is decorative:
 	// rqlited is not started with -fk, bugboard #164). Check every error.
-	if err := h.deleteNamespaceRows(r.Context(), namespaceID, ns); err != nil {
+	if err := h.deleteNamespaceRows(ctx, namespaceID, ns); err != nil {
 		failed("delete-rows", "the namespace's records could not be deleted; retry the delete", err)
 		return
 	}
@@ -201,7 +299,7 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 	// that outlives its namespace is inert: nothing counts a namespace that is
 	// not in the registry, and a namespace recreated under the name only skips a
 	// backfill it has no content for.
-	if err := h.refs.RemoveMarker(r.Context(), ns); err != nil {
+	if err := h.refs.RemoveMarker(ctx, ns); err != nil {
 		h.logger.Error("Namespace deleted, but its reference index marker could not be removed; it is inert", zap.String("namespace", ns), zap.Error(err))
 	}
 
@@ -219,7 +317,7 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 		resp["cleanup_pending"] = true
 		metadata = withTeardownPending(metadata)
 	}
-	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+	h.audit.RecordFromRequest(ctx, r, auth.AuditEvent{
 		Actor:    auth.ActorFromRequest(r),
 		Action:   action,
 		Resource: ns,
@@ -460,4 +558,16 @@ func writeDeleteResponse(w http.ResponseWriter, status int, resp map[string]inte
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(resp)
+}
+
+// releaseClaim gives back the teardown claim of a removal that failed, on a
+// context of its own: the removal's may have expired, which is often why it
+// failed.
+func (h *DeleteHandler) releaseClaim(ctx context.Context, ns string, namespaceID int64) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseClaimTimeout)
+	defer cancel()
+	if err := namespacepkg.ReleaseDeprovision(rctx, h.ormClient, namespaceID); err != nil {
+		h.logger.Error("Could not release the teardown claim after a failed removal; a retry is refused until the window ends",
+			zap.String("namespace", ns), zap.Error(err))
+	}
 }

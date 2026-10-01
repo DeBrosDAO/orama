@@ -98,6 +98,12 @@ func (s *SystemdSpawner) TeardownNamespaceOfCluster(ctx context.Context, namespa
 		return fmt.Errorf("refusing to tear down %q: it is not a tenant namespace", namespace)
 	}
 	defer s.LockNamespace(namespace)()
+	// The lock is where this waits longest (another holder may be draining an
+	// SFU for up to 45s); a teardown whose caller has given up by the time it is
+	// free is not begun, so the caller's record of it as unconfirmed is true.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("teardown of namespace %s not begun, its caller gave up while it waited for the namespace's lock: %w", namespace, err)
+	}
 	if err := s.refuseOtherCluster(namespace, clusterID); err != nil {
 		return err
 	}

@@ -3,6 +3,8 @@
 package namespaces
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
@@ -24,6 +27,11 @@ import (
 // dnsTeardownBudget bounds the removal of the namespace's DNS records from the
 // registry after the delete.
 const dnsTeardownBudget = ns.TeardownBudget
+
+// deprovisioningPollEvery is how often the client-leaving test looks for the
+// cluster's deprovisioning state: a teardown lasts seconds, so a slower poll
+// could miss the window it has to act in.
+const deprovisioningPollEvery = 200 * time.Millisecond
 
 // exitAborted is the CLI's exit code for a declined confirmation
 // (core/cmd/orama/internal/clierr CodeAborted; e2e/README.md exit codes).
@@ -229,4 +237,58 @@ func TestNamespaceDelete_cliNeedsConfirmation(t *testing.T) {
 		t.Fatalf("after an unconfirmed delete %s is not listed ready: %+v", n.Name, rows)
 	}
 	tenancy.Get(t, n.Client, "/health", tenancy.Cred{}).Expect(t, http.StatusOK)
+}
+
+// TestNamespaceDelete_survivesTheClientLeaving: a client that disconnects while
+// the delete runs (a killed CLI, a proxy timeout) does not stop it: the
+// teardown runs on a context of the removal's own, so the namespace is gone
+// afterwards on every node, and a second delete sent while the first still runs
+// is refused 409 NAMESPACE_DELETE_IN_PROGRESS, retryable (docs/ARCHITECTURE.md,
+// namespace delete). The cluster is 'deprovisioning' from the moment the
+// teardown starts, which is what the test waits on before it cuts the client.
+func TestNamespaceDelete_survivesTheClientLeaving(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	tenancy.Reserve(t, f, 1)
+	n := adopted(t, f)
+
+	sendCtx, leave := context.WithCancel(t.Context())
+	defer leave()
+	left := make(chan error, 1)
+	go func() {
+		_, err := n.Client.Send(sendCtx, gw.Req{Method: http.MethodDelete, Path: tenancy.PathDelete, Bearer: n.Owner.Token()})
+		left <- err
+	}()
+
+	eventually.Require(t, deprovisioningPollEvery, ns.TeardownBudget, n.Name+" to begin deprovisioning", func() (bool, error) {
+		st, err := tenancy.Status(t.Context(), n.Owner.Client, n.ClusterID)
+		if err != nil {
+			return false, fmt.Errorf("the delete finished before it could be interrupted: %w", err)
+		}
+		return st.Status == "deprovisioning", nil
+	})
+
+	// A client that retries while the first delete runs.
+	second := tenancy.Send(t, n.Client, http.MethodDelete, tenancy.PathDelete, tenancy.Owner(n), nil)
+	if second.Status != http.StatusConflict {
+		t.Fatalf("a second delete while the first runs: want 409, got %d: %.300s", second.Status, second.Body)
+	}
+	var refusal struct {
+		Code      string `json:"code"`
+		Retryable bool   `json:"retryable"`
+	}
+	if err := json.Unmarshal(second.Body, &refusal); err != nil || refusal.Code != "NAMESPACE_DELETE_IN_PROGRESS" || !refusal.Retryable {
+		t.Fatalf("the refusal is not a retryable NAMESPACE_DELETE_IN_PROGRESS: %.300s", second.Body)
+	}
+	if second.Header.Get("Retry-After") == "" {
+		t.Error("the 409 carries no Retry-After")
+	}
+
+	leave()
+	if err := <-left; err == nil {
+		t.Log("the first delete answered before the client left; the disconnect was not exercised")
+	}
+	eventually.Require(t, pollEvery, ns.TeardownBudget, n.Name+" to be gone after its client left", func() (bool, error) {
+		return tenancy.Gone(t.Context(), n)
+	})
 }

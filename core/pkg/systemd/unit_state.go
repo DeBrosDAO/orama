@@ -53,12 +53,14 @@ type unitState struct {
 // starts on its own (at boot, or when its target is reached).
 var unitFileStatesThatStart = map[string]bool{"enabled": true, "enabled-runtime": true}
 
-// live reports whether the unit can run: it is running or on its way, or it is
-// enabled and so starts on the next boot. A loaded unit that is neither — an
-// instance systemd still remembers after it was stopped and disabled — can
-// never start again on its own.
+// live reports whether the unit is something a teardown still has to deal
+// with: it is running or on its way, it failed (systemd keeps a failed unit
+// loaded and listed until its failed state is reset, which only a teardown does),
+// or it is enabled and so starts on the next boot. A loaded unit that is none
+// of those — an instance systemd still remembers after it was stopped and
+// disabled — can never start again on its own, and a reload forgets it.
 func (s unitState) live() bool {
-	if s.Active != activeStateInactive && s.Active != activeStateFailed {
+	if s.Active != activeStateInactive {
 		return true
 	}
 	return unitFileStatesThatStart[s.UnitFile]

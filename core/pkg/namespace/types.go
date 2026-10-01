@@ -172,6 +172,9 @@ type NamespaceCluster struct {
 	LastHealthCheck  *time.Time `json:"last_health_check,omitempty" db:"last_health_check"`
 	ErrorMessage     string     `json:"error_message,omitempty" db:"error_message"`
 	RetryCount       int        `json:"retry_count" db:"retry_count"`
+	// DeprovisioningAt is when a teardown last claimed the cluster (registry
+	// clock); see resumeStaleDeprovisioning.
+	DeprovisioningAt *time.Time `json:"-" db:"deprovisioning_at"`
 
 	// Populated by queries, not stored directly
 	Nodes []ClusterNode `json:"nodes,omitempty"`

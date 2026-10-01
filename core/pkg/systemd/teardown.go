@@ -23,11 +23,38 @@ var tenantTeardownOrder = []ServiceType{
 // `orama node upgrade` (which enables and restarts every discovered namespace
 // unit) or boot brings it straight back. A namespace that is going away must
 // not be brought back, so its units are disabled as they are stopped.
+//
+// A unit that failed stays loaded in the failed state, listed by systemctl and
+// never garbage-collected, until its failed state is reset: stopping and
+// disabling it leaves it there. The teardown resets it, so a removed namespace
+// leaves no unit behind.
 func (m *Manager) TeardownService(namespace string, serviceType ServiceType) error {
 	if err := m.StopService(namespace, serviceType); err != nil {
 		return err
 	}
-	return m.DisableService(namespace, serviceType)
+	if err := m.DisableService(namespace, serviceType); err != nil {
+		return err
+	}
+	return m.resetFailedUnit(m.serviceName(namespace, serviceType))
+}
+
+// resetFailedUnit clears the failed state of a unit that has been stopped and
+// disabled. `systemctl reset-failed` on a unit that is not failed is a no-op; on
+// one systemd does not know it fails, which is success only when systemd
+// confirms nothing is loaded under that name.
+func (m *Manager) resetFailedUnit(unit string) error {
+	output, err := m.runUnit("reset-failed", unit)
+	if err == nil {
+		return nil
+	}
+	state, stateErr := m.readUnitState(unit)
+	if stateErr != nil {
+		return fmt.Errorf("failed to reset the failed state of %s: %w; output: %s (and its state could not be read: %v)", unit, err, string(output), stateErr)
+	}
+	if !state.loaded() {
+		return nil
+	}
+	return fmt.Errorf("failed to reset the failed state of %s: %w; output: %s", unit, err, string(output))
 }
 
 // TeardownServiceAndEnv retires one service of a namespace that stays: it is

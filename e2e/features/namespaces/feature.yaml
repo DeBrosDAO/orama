@@ -67,3 +67,4 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-namespace-repair: repair runs on a node and is refused elsewhere"
     - "docs/CLI_REFERENCE.md#orama-members-transfer: only the owner transfers; the old owner keeps admin"
     - "docs/API_SURFACE.md#namespace-management: deleting a namespace removes its units, data, DNS names, ports and keys"
+    - "docs/ARCHITECTURE.md: a namespace delete runs on a context of its own, so a client that disconnects mid-delete does not stop it, and a second delete while the first runs is refused 409 NAMESPACE_DELETE_IN_PROGRESS (retryable)"

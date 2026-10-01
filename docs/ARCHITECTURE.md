@@ -473,7 +473,51 @@ stopping there left the namespace row and its owner grant behind with no cluster
 against the owner's cap. Any other deprovision failure answers 500 with `retryable: true`
 and leaves the namespace and its cluster row for the retry. A namespace with no cluster
 is deleted by the same call, which is also how a namespace left behind that way by an
-older release is cleared. A create of a name that still has a row in
+older release is cleared.
+
+**A delete runs to its end whatever its client does.** The removal runs on a context of
+its own, not the request's (`context.WithoutCancel`, bounded by `removeTimeout`, 15
+minutes, of which the cluster teardown gets `DeprovisionTimeout`, 10): a client that
+disconnects mid-delete (a killed CLI) does not cancel the stop sent to a node or the write
+that records a failed stop for replay. The response is still the synchronous one above.
+A teardown on this node does not begin once its caller's context is done (checked when
+the namespace's lock is free).
+
+**One teardown per namespace at a time.** The delete first claims the cluster
+(`BeginDeprovision`): one guarded UPDATE marks it `deprovisioning` and stamps
+`namespace_clusters.deprovisioning_at` (registry clock), unless a teardown already owns it
+(`deprovisioning` with a stamp younger than 12 minutes, `DeprovisionTimeout` plus two),
+which answers **409 `NAMESPACE_DELETE_IN_PROGRESS`**, `retryable`, with `Retry-After`. The
+guard is in the registry, so it holds across gateways, and a process also refuses a second
+delete of a namespace it is already removing. A client whose first request is still
+running after it left retries into this 409; the first one finishes, and the retry after
+it gets 404 (the namespace is gone). A delete that fails releases the claim it took (only one it holds, on a context of its
+own), so its retry is not refused. The cluster stays `deprovisioning`, so a client that
+does not retry still has its delete finished: the reconciler resumes the teardown once the
+released claim is past the window. `DeprovisionCluster` refuses to start if it cannot mark the cluster, and
+re-stamps it between its steps (after the node fan-out, the port release, the membership
+and DNS withdrawal), so a slow teardown that is alive keeps the cluster.
+
+**An abandoned teardown is resumed.** A cluster still `deprovisioning` whose stamp is older
+than the 12-minute window (the node that took the delete restarted or lost the registry)
+is claimed by one node's tenant reconciler sweep (`resumeStaleDeprovisioning`, a guarded
+UPDATE of the stamp, which is also why it cannot take a cluster from a live delete) and
+torn down again by `DeprovisionCluster`. The sweep only claims: each resume runs on its own
+goroutine, at most two per node and one per cluster, so a cluster of unreachable nodes
+never holds up the sweep's restores and replays; a cluster with no free slot is left for
+the next sweep. A cluster marked by a node on the previous release has no stamp, and its
+delete may still be running there: the sweep stamps it with the registry's now and resumes
+it only after a whole window without a refresh. A resume finishes the cluster (units,
+ports, DNS, membership, row); the namespace row, deployments and grants belong to the
+delete request and stay until the delete is repeated, which finds no cluster and finishes
+them. A cluster that is not `ready` or `degraded` is not restored and not swept by the
+WebRTC reconciler, and `spawnSFUIfDown` re-reads its status under the namespace's lock:
+the registry keeps the WebRTC config and the SFU allocation until every node has
+confirmed, so a start queued behind a teardown would otherwise run when the teardown lets
+go, start the SFU into a deleted namespace and, through the unit's dependency, pull up an
+olric unit with no env file.
+
+A create of a name that still has a row in
 `namespace_pending_cleanup` on an active node answers 409
 `NAMESPACE_TEARDOWN_PENDING` (`retryable`, `Retry-After`; the nodes are logged,
 not returned, since any permitted wallet can ask about any name): the
@@ -615,9 +659,9 @@ is reconciled, not stopped (see `docs/WEBRTC.md`).
 The backstop is the tenant reconciler's orphan sweep (`reapOrphanedTenants`,
 every 60s on every node). It lists the tenant namespaces with state on the node
 (a data directory with a provisioned tenant unit, or a tenant unit instance
-that is running or starting, or enabled — systemd keeps listing an instance it
+that is running or starting, failed, or enabled — systemd keeps listing an instance it
 has stopped and disabled, and such a unit cannot start again, so it is not
-counted) and tears down each one the registry assigns nothing of to this node
+counted; a failed one stays loaded until its failed state is reset, so it is) and tears down each one the registry assigns nothing of to this node
 (no `namespace_cluster_nodes` and no `namespace_port_allocations` row for it,
 in any cluster of that name). Teardown is destructive, so it acts only when the
 registry read succeeded (a leader read, like every registry read of the cluster
@@ -635,7 +679,9 @@ their streak and follow on later sweeps). A node with a single tenant cannot be
 cross-checked that way and relies on the two-sweep rule and the cap. The tenant
 data is purged too only when the registry holds no cluster of that name at all;
 a namespace that lives on other nodes is only torn down here. Each teardown is
-logged at warn with the reason. At boot, `RestoreLocalClustersFromDisk` judges a
+logged at warn with the reason. A unit teardown is stop, disable, then `systemctl
+reset-failed` (`systemd.Manager.TeardownService`): stopping and disabling a unit that
+failed leaves it loaded and listed as `failed` for good. At boot, `RestoreLocalClustersFromDisk` judges a
 namespace by **cluster id**, not by name: a node the registry assigns to that
 cluster — by membership or by port allocation (recovery writes the allocation
 first and the membership after the spawn, so a node rebooting in between holds
