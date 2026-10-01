@@ -182,11 +182,13 @@ func wrapBrokerExit(err error) error {
 	return fmt.Errorf("the broker child failed: %w", err)
 }
 
-// featureHome creates <workDir>/feature-home, empty and 0700, the HOME of
-// feature processes: go, git, pnpm and tinygo need one, and it must be
-// neither the owner's real home nor the test agent's.
-func featureHome(workDir string) (string, error) {
-	home := filepath.Join(workDir, featureHomeName)
+// featureHome creates <state>.feature-home beside the state file, empty and
+// 0700, the HOME of feature processes: go, git, pnpm and tinygo need one, and
+// it must be neither the owner's real home nor the test agent's. It is named
+// after the state file, so two runs whose states share a directory never
+// empty each other's HOME.
+func featureHome(statePath string) (string, error) {
+	home := strings.TrimSuffix(statePath, filepath.Ext(statePath)) + "." + featureHomeName
 	if err := os.RemoveAll(home); err != nil {
 		return "", fmt.Errorf("failed to empty the feature HOME %s: %w", home, err)
 	}

@@ -172,7 +172,7 @@ func withBroker(ctx context.Context, lay layout, st *fleet.State, statePath stri
 	if err := prefetchModules(ctx, lay); err != nil {
 		return err
 	}
-	home, err := featureHome(filepath.Dir(statePath))
+	home, err := featureHome(statePath)
 	if err != nil {
 		return err
 	}

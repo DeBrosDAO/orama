@@ -794,9 +794,10 @@ stale waivers).
   `XDG_*`, `INFISICAL_*` or a secret variable. The runner resolves `GOPATH`,
   `GOMODCACHE` and `GOCACHE` with `go env` when unset, and adds
   `E2E_FLEET_STATE`, `E2E_STRICT`, `E2E_EVIDENCE_DIR`, `E2E_BROKER_SOCK` and
-  **`HOME=<work dir>/feature-home`**: an empty 0700 directory, recreated for
-  each `run`/`test`, which is neither the owner's home nor the test agent's,
-  so go, git, pnpm and tinygo have a home to write to.
+  **`HOME=<state file without its extension>.feature-home`**: an empty 0700
+  directory beside the state, recreated for each `run`/`test`, which is neither
+  the owner's home nor the test agent's, so go, git, pnpm and tinygo have a home
+  to write to. Two runs with their own state files can run at once.
 - `E2E_SANDBOX=1` (Linux, needs `bwrap`) runs every feature package under
   bubblewrap with the owner's real home hidden behind an empty tmpfs and only
   the repository, the work dir and the Go caches bound back. It is

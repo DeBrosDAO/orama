@@ -89,19 +89,44 @@ func TestBrokerMaxServers_parse(t *testing.T) {
 	}
 }
 
+// TestFeatureHome_twoStatesInOneDirectoryKeepTheirOwn: two runs whose state
+// files share a directory ran at once, and the second emptied and failed to
+// recreate the first's HOME.
+func TestFeatureHome_twoStatesInOneDirectoryKeepTheirOwn(t *testing.T) {
+	work := t.TempDir()
+	a, err := featureHome(filepath.Join(work, "a.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a, "in-use"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := featureHome(filepath.Join(work, "b.json"))
+	if err != nil {
+		t.Fatalf("the second run could not make its HOME: %v", err)
+	}
+	if a == b {
+		t.Fatalf("both runs got %s", a)
+	}
+	if _, err := os.Stat(filepath.Join(a, "in-use")); err != nil {
+		t.Fatalf("the second run emptied the first run's HOME: %v", err)
+	}
+}
+
 // TestFeatureHome_emptyPrivateNotTheRealHome: feature processes get an
 // empty 0700 HOME inside the work dir, recreated empty each time; it is
 // neither the owner's home nor anything under it.
 func TestFeatureHome_emptyPrivateNotTheRealHome(t *testing.T) {
 	work := t.TempDir()
-	home, err := featureHome(work)
+	state := filepath.Join(work, "state.json")
+	home, err := featureHome(state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(home, "stale"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if home, err = featureHome(work); err != nil {
+	if home, err = featureHome(state); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(home)
