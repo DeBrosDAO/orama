@@ -468,7 +468,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	)
 
 	// 5. Allocate ports on replacement node
-	portBlock, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID, BlueprintTenant())
+	portBlock, blockOwed, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID, BlueprintTenant())
 	if err != nil {
 		return fmt.Errorf("failed to allocate ports on replacement node: %w", err)
 	}
@@ -485,7 +485,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	`
 	if err := cm.db.Query(ctx, &surviving, portsQuery, cluster.ID, deadNodeID); err != nil {
 		// Rollback port allocation
-		cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, replacement.NodeID)
+		cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
 		return fmt.Errorf("failed to query surviving node ports: %w", err)
 	}
 
@@ -670,8 +670,8 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	}
 
 	// 13. Clean up dead node's port allocations and cluster assignments
-	cm.evictMember(ctx, cluster.ID, cluster.NamespaceName, deadNodeID)
 	cm.removeClusterNodeAssignment(ctx, cluster.ID, deadNodeID)
+	cm.evictMember(ctx, cluster.ID, cluster.NamespaceName, deadNodeID)
 
 	// 14. Update cluster-state.json on all nodes
 	cm.updateClusterStateAfterRecovery(ctx, cluster)
@@ -738,6 +738,27 @@ func (cm *ClusterManager) updateClusterNodeStatus(ctx context.Context, clusterID
 	query := `UPDATE namespace_cluster_nodes SET status = ?, updated_at = ? WHERE namespace_cluster_id = ? AND node_id = ?`
 	_, err := cm.db.Exec(ctx, query, status, time.Now().UTC().Format("2006-01-02 15:04:05"), clusterID, nodeID)
 	return err
+}
+
+// rollbackPortBlock undoes the port allocation of a replacement the cluster did
+// not get. A block that was newly allocated is freed. One that was owed a
+// teardown (the node had been evicted from this cluster with its stop
+// unconfirmed, and AllocatePortBlock withdrew that) may still have units on it:
+// it is not freed, and the teardown is owed again (#275).
+func (cm *ClusterManager) rollbackPortBlock(ctx context.Context, cluster *NamespaceCluster, replacement *NodeCapacity, owed bool) {
+	if !owed {
+		if err := cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, replacement.NodeID); err != nil {
+			cm.logger.Warn("Failed to free the port block of a replacement that was rolled back",
+				zap.String("cluster_id", cluster.ID), zap.String("node_id", replacement.NodeID), zap.Error(err))
+		}
+		return
+	}
+	cause := fmt.Errorf("node %s was given cluster %s again and the add was rolled back, so its earlier teardown is owed again", replacement.NodeID, cluster.ID)
+	if err := cm.recordPendingCleanup(ctx, cluster.NamespaceName, replacement.NodeID, replacement.InternalIP, teardownAction,
+		cleanupScope{ClusterID: cluster.ID}, cause); err != nil {
+		cm.logger.Error("Rolled-back replacement keeps its port block but its teardown could not be recorded",
+			zap.String("cluster_id", cluster.ID), zap.String("node_id", replacement.NodeID), zap.Error(err))
+	}
 }
 
 // removeClusterNodeAssignment deletes all node assignments for a node in a cluster.
@@ -942,8 +963,8 @@ func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID 
 		// with Olric discovery aimed at two removed nodes: its cache was down on
 		// every gateway, and each gateway restart stalled for MINUTES timing out
 		// against them before it would bind.
-		cm.evictMember(ctx, clusterID, cluster.NamespaceName, r.NodeID)
 		cm.removeClusterNodeAssignment(ctx, clusterID, r.NodeID)
+		cm.evictMember(ctx, clusterID, cluster.NamespaceName, r.NodeID)
 		removed = append(removed, r.NodeID)
 		cm.logger.Warn("Removed permanently-gone cluster node assignment; its port allocation is freed or owed its teardown (bugboard #173, #280)",
 			zap.String("cluster_id", clusterID),
@@ -1318,7 +1339,7 @@ func (cm *ClusterManager) addNodeToCluster(
 	)
 
 	// 2. Allocate ports on the new node
-	portBlock, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID, BlueprintTenant())
+	portBlock, blockOwed, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID, BlueprintTenant())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to allocate ports on new node: %w", err)
 	}
@@ -1350,7 +1371,7 @@ func (cm *ClusterManager) addNodeToCluster(
 		_, spawnErr = cm.spawnRQLiteRemote(ctx, replacement.InternalIP, rqliteCfg)
 	}
 	if spawnErr != nil {
-		cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, replacement.NodeID)
+		cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
 		return nil, nil, fmt.Errorf("failed to spawn RQLite follower: %w", spawnErr)
 	}
 	cm.insertClusterNode(ctx, cluster.ID, replacement.NodeID, NodeRoleRQLiteFollower, portBlock)

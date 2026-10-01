@@ -12,10 +12,12 @@ import (
 // clusterAssignedQuery counts this node's assignment to one cluster id: a
 // membership row, or a port allocation. Recovery and provisioning write the
 // allocation first and the membership after the node's services are spawned, so
-// a node that reboots in between has the allocation only.
+// a node that reboots in between has the allocation only. An allocation the
+// cluster owes a teardown for (notOwedTeardownSQL) is not an assignment: the
+// node was evicted from the cluster, and what it still holds is to be torn down.
 const clusterAssignedQuery = `SELECT (
 		(SELECT COUNT(*) FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? AND node_id = ?) +
-		(SELECT COUNT(*) FROM namespace_port_allocations WHERE namespace_cluster_id = ? AND node_id = ?)
+		(SELECT COUNT(*) FROM namespace_port_allocations pa WHERE pa.namespace_cluster_id = ? AND pa.node_id = ? ` + notOwedTeardownSQL + `)
 	) AS count`
 
 // restoreAssigned reports whether a namespace found in this node's local state

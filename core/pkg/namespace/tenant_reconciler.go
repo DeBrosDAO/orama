@@ -244,7 +244,8 @@ func tenantReconcileCoordinator(liveNodeIDs []string) string {
 // desiredLocalConfig derives what this node's Olric and gateway configs SHOULD
 // contain for a cluster, from the live membership.
 //
-// Returns nil when this node has no port allocation for the cluster, which is
+// Returns nil when this node has no port allocation for the cluster (one the
+// cluster owes a teardown for is none, notOwedTeardownSQL), which is
 // not an error: the assignment is either being torn down or not yet allocated,
 // and neither is a reason to touch a running service.
 func (cm *ClusterManager) desiredLocalConfig(ctx context.Context, clusterID string) (*localServiceConfig, error) {
@@ -252,7 +253,7 @@ func (cm *ClusterManager) desiredLocalConfig(ctx context.Context, clusterID stri
 
 	var mine []PortBlock
 	if err := cm.db.Query(internalCtx, &mine,
-		`SELECT * FROM namespace_port_allocations WHERE namespace_cluster_id = ? AND node_id = ?`,
+		`SELECT pa.* FROM namespace_port_allocations pa WHERE pa.namespace_cluster_id = ? AND pa.node_id = ? `+notOwedTeardownSQL,
 		clusterID, cm.localNodeID); err != nil {
 		return nil, fmt.Errorf("read this node's port allocation: %w", err)
 	}

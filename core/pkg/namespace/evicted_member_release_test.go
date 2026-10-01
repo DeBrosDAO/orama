@@ -29,6 +29,7 @@ func newEvictRig(t *testing.T) *registryRig {
 func TestEvictMemberAllocations_anUnconfirmedTeardownKeepsTheBlockAndIsOwed(t *testing.T) {
 	r := newEvictRig(t)
 	r.sendErr = errors.New("node unreachable")
+	r.exec(`DELETE FROM namespace_cluster_nodes WHERE node_id = 'node1'`) // evicted members leave the membership first
 
 	err := r.cm.evictMemberAllocations(context.Background(), "c1", "acme", "node1")
 	if err == nil {
@@ -127,15 +128,20 @@ func TestPruneStaleClusterNodes_aMemberThatDoesNotConfirmKeepsItsBlock(t *testin
 	}
 }
 
-func TestPruneStaleClusterNodes_aMemberThatConfirmsLosesItsBlock(t *testing.T) {
+// An inactive member cannot answer: it is not asked (a request to it blocks for
+// the whole spawn timeout), its teardown is owed and its block stays.
+func TestPruneStaleClusterNodes_anInactiveMemberIsNotAskedAndItsTeardownIsOwed(t *testing.T) {
 	r := newEvictRig(t)
 	r.exec(`UPDATE dns_nodes SET status = 'inactive', last_seen = datetime('now', '-1 hour') WHERE id = 'node1'`)
 
 	if _, err := r.cm.pruneStaleClusterNodes(context.Background(), "c1"); err != nil {
 		t.Fatal(err)
 	}
-	if r.portBlocks()["node1"] || r.pendingCount() != 0 {
-		t.Errorf("blocks = %v, pending = %d, want the confirmed node's block freed", r.portBlocks(), r.pendingCount())
+	if got := r.sent(); len(got) != 0 {
+		t.Errorf("requests = %v, want none to the inactive node", got)
+	}
+	if !r.portBlocks()["node1"] || r.pendingCount() != 1 {
+		t.Errorf("blocks = %v, pending = %d, want the block kept and the teardown owed", r.portBlocks(), r.pendingCount())
 	}
 }
 
@@ -147,8 +153,10 @@ func TestAllocatePortBlock_givenToTheClusterAgainWithdrawsItsOwnOwedTeardown(t *
 	_ = r.cm.evictMemberAllocations(context.Background(), "c1", "acme", "node1")
 	r.cm.portAllocator = NewNamespacePortAllocator(r.client, r.cm.logger)
 
-	if _, err := r.cm.portAllocator.AllocatePortBlock(context.Background(), "node1", "c1", BlueprintTenant()); err != nil {
+	if _, owed, err := r.cm.portAllocator.AllocatePortBlock(context.Background(), "node1", "c1", BlueprintTenant()); err != nil {
 		t.Fatal(err)
+	} else if !owed {
+		t.Error("the block given back was not reported as owed")
 	}
 	if r.pendingCount() != 0 {
 		t.Error("the teardown owed for this very cluster survived the node being given the cluster again")

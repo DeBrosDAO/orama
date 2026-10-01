@@ -390,13 +390,25 @@ node replaced by `ReplaceClusterNode`, and a member silent for 15 minutes pruned
 `pruneStaleClusterNodes`. The namespace is torn down on the node
 (`evictMemberAllocations`), and its core and WebRTC allocations are freed only when
 the node confirmed the stop (the node's response, or the local stop result) or is
-no longer in `dns_nodes`. Otherwise the teardown is recorded in
+no longer in `dns_nodes`. A node that is not `active` in `dns_nodes` is not asked at
+all (a request to it would block for the spawn timeout, node after node): its teardown
+is recorded without being sent. Otherwise the teardown is recorded in
 `namespace_pending_cleanup` with the cluster id and the reservations stay until the
 replay frees them, because freeing them under running units hands the ports to the
 next namespace (bugboard #275). The evicted member is no longer a member: the reads
 that build the cluster state, the join lists and the surviving ports skip a block
-whose node owes a teardown for that cluster (`notOwedTeardownSQL`). Giving the
-node the same cluster again withdraws the teardown it owes for it.
+whose node owes a teardown for that cluster (`notOwedTeardownSQL`): the node's own
+assignment reads (`clusterAssignedQuery`, `restoreClusterOnNode`, `desiredLocalConfig`)
+apply it too, while the allocators' capacity reads still count the block. The
+membership row is removed before the teardown is recorded, so the owed row never
+coexists with the membership it evicts. Giving the node the same cluster again
+withdraws the teardown it owes for it (`AllocatePortBlock`, which also reports that
+the block it hands back was owed): a rollback of that add (`rollbackPortBlock`) records
+the teardown again instead of freeing the block, since the units may still run. A
+replay re-confirms, just before sending and again before freeing, that its row is
+still there and still claimed by it, and drops a teardown owed for a node that is a
+member of that very cluster again (not another incarnation) without sending it or
+freeing the block.
 
 A stop or teardown that fails is recorded in `namespace_pending_cleanup` and retried
 every sweep, rather than logged. The unit keeps running and keeps holding a port

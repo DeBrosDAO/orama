@@ -171,14 +171,14 @@ func TestDeprovisionCluster_keepsThePortBlockOfAnUnconfirmedNodeAndTheAllocatorH
 		t.Fatal("the cluster row was kept")
 	}
 
-	got, err := r.cm.portAllocator.AllocatePortBlock(context.Background(), "node1", "c-new", BlueprintTenant())
+	got, _, err := r.cm.portAllocator.AllocatePortBlock(context.Background(), "node1", "c-new", BlueprintTenant())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.PortStart <= 10004 {
 		t.Errorf("the new namespace was given ports from %d, inside the block of the namespace still being torn down", got.PortStart)
 	}
-	if free, err := r.cm.portAllocator.AllocatePortBlock(context.Background(), "node2", "c-new", BlueprintTenant()); err != nil || free.PortStart != 10000 {
+	if free, _, err := r.cm.portAllocator.AllocatePortBlock(context.Background(), "node2", "c-new", BlueprintTenant()); err != nil || free.PortStart != 10000 {
 		t.Errorf("node2's confirmed block was not freed: %v %v", free, err)
 	}
 

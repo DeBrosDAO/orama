@@ -200,6 +200,34 @@ func (cm *ClusterManager) pendingCleanupSuperseded(ctx context.Context, r pendin
 	return n > 0, nil
 }
 
+// isClusterMember reports whether the registry lists the node as a member of the
+// cluster. A cleanup owed for the cluster on a node that is a member of it was
+// withdrawn by the node being given the cluster again (AllocatePortBlock), or
+// is about to be: the member is live, and the cleanup is not to be sent.
+func (cm *ClusterManager) isClusterMember(ctx context.Context, clusterID, nodeID string) (bool, error) {
+	if clusterID == "" {
+		return false, nil
+	}
+	n, err := cm.countRows(ctx, `SELECT COUNT(*) AS count FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? AND node_id = ?`,
+		clusterID, nodeID)
+	if err != nil {
+		return false, fmt.Errorf("check whether node %s is a member of cluster %s: %w", nodeID, clusterID, err)
+	}
+	return n > 0, nil
+}
+
+// holdsPendingClaim reports whether the row is still there and still claimed
+// with token. A row withdrawn since it was read (the node was given the cluster
+// again) or claimed by another gateway after this one's lease lapsed is not this
+// replay's to act on.
+func (cm *ClusterManager) holdsPendingClaim(ctx context.Context, r pendingCleanupRow, token string) (bool, error) {
+	n, err := cm.countRows(ctx, `SELECT COUNT(*) AS count FROM namespace_pending_cleanup WHERE id = ? AND claimed_by = ?`, r.ID, token)
+	if err != nil {
+		return false, fmt.Errorf("confirm the claim on the pending %s of %s on node %s: %w", r.Action, r.Namespace, r.NodeID, err)
+	}
+	return n > 0, nil
+}
+
 // countRows runs a COUNT(*) AS count query.
 func (cm *ClusterManager) countRows(ctx context.Context, query string, args ...any) (int, error) {
 	var rows []struct {
@@ -358,6 +386,29 @@ func (cm *ClusterManager) replayRow(ctx context.Context, r pendingCleanupRow) er
 			// freeing them leaves the new one's alone.
 			return cm.settleCleanup(ctx, r)
 		}
+		// The same cluster given the node again is not another incarnation, so
+		// the check above does not see it: the node is a member of the cluster
+		// the teardown was owed for. Its block is the live member's, not freed.
+		member, err := cm.isClusterMember(ctx, r.ClusterID, r.NodeID)
+		if err != nil {
+			return err
+		}
+		if member {
+			cm.logger.Warn("Dropping a pending teardown: the node is a member of that very cluster again, and the teardown would delete the live member",
+				zap.String("namespace", r.Namespace),
+				zap.String("node_id", r.NodeID),
+				zap.String("action", r.Action),
+				zap.String("cluster_id", r.ClusterID))
+			return cm.clearPendingCleanupRow(ctx, r)
+		}
+	}
+	// The re-add may have withdrawn the row after it was read and claimed.
+	held, err := cm.holdsPendingClaim(ctx, r, token)
+	if err != nil {
+		return err
+	}
+	if !held {
+		return nil
 	}
 	// replayCleanup records a failure itself and leaves the row of a success in
 	// place, for settleCleanup to clear once the allocations are freed.
@@ -370,6 +421,15 @@ func (cm *ClusterManager) replayRow(ctx context.Context, r pendingCleanupRow) er
 		zap.String("node_id", r.NodeID),
 		zap.String("action", r.Action),
 		zap.Int("previous_attempts", r.Attempts))
+	held, err = cm.holdsPendingClaim(ctx, r, token)
+	if err != nil {
+		return err
+	}
+	if !held {
+		// Withdrawn while the teardown was on the wire: the node was given the
+		// cluster again and its block is the live member's.
+		return nil
+	}
 	return cm.settleCleanup(ctx, r)
 }
 
@@ -423,6 +483,13 @@ func (cm *ClusterManager) releaseAllocationsOfCompletedTeardown(ctx context.Cont
 	if r.ClusterID == "" {
 		return nil
 	}
+	member, err := cm.isClusterMember(ctx, r.ClusterID, r.NodeID)
+	if err != nil {
+		return err
+	}
+	if member {
+		return nil
+	}
 	if err := releaseOwedAllocations(ctx, cm.db, r.ClusterID, r.NodeID, r.Action); err != nil {
 		return fmt.Errorf("release the ports of %s on node %s after its cleanup was settled: %w", r.Namespace, r.NodeID, err)
 	}
@@ -470,12 +537,19 @@ func withdrawPendingTeardowns(ctx context.Context, db rqlite.Client, clusterID, 
 }
 
 // withdrawOwnPendingTeardown forgets the teardown a node still owes for this
-// very cluster, as the cluster is given the node again.
-func withdrawOwnPendingTeardown(ctx context.Context, db rqlite.Client, clusterID, nodeID string) error {
-	if _, err := db.Exec(client.WithInternalAuth(ctx),
+// very cluster, as the cluster is given the node again. It reports whether there
+// was one: the block the node is given back was then owed, its units may still
+// run, and a rollback of the add must owe the teardown again rather than free it.
+func withdrawOwnPendingTeardown(ctx context.Context, db rqlite.Client, clusterID, nodeID string) (bool, error) {
+	res, err := db.Exec(client.WithInternalAuth(ctx),
 		`DELETE FROM namespace_pending_cleanup WHERE node_id = ? AND action = ? AND cluster_id = ?`,
-		nodeID, teardownAction, clusterID); err != nil {
-		return fmt.Errorf("withdraw the pending teardown of cluster %s on node %s: %w", clusterID, nodeID, err)
+		nodeID, teardownAction, clusterID)
+	if err != nil {
+		return false, fmt.Errorf("withdraw the pending teardown of cluster %s on node %s: %w", clusterID, nodeID, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read the withdrawal of the pending teardown of cluster %s on node %s: %w", clusterID, nodeID, err)
+	}
+	return n > 0, nil
 }

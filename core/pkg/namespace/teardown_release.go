@@ -122,14 +122,40 @@ func (cm *ClusterManager) evictMemberAllocations(ctx context.Context, clusterID,
 		return err
 	}
 	if !removed {
-		nodeIP := ""
-		if ips, ipErr := cm.getNodeIPs(ctx, nodeID); ipErr == nil {
-			nodeIP = ips.InternalIP
-		}
-		node := staleClusterNode{NodeID: nodeID, InternalIP: nodeIP}
-		if err := cm.teardownNamespaceOnNode(ctx, node, namespace, cleanupScope{ClusterID: clusterID}); err != nil {
-			return fmt.Errorf("the teardown of %s on evicted node %s is not confirmed, its ports stay reserved until it is replayed: %w", namespace, nodeID, err)
+		if err := cm.teardownEvictedMember(ctx, clusterID, namespace, nodeID); err != nil {
+			return err
 		}
 	}
 	return releaseOwedAllocations(ctx, cm.db, clusterID, nodeID, teardownAction)
+}
+
+// teardownEvictedMember tears the namespace down on a registered node that left
+// the cluster. A node that is not active is not asked: it cannot answer, and a
+// request to it blocks for the whole spawn timeout, node after node when a
+// cluster loses several. Its teardown is recorded as owed without being sent
+// (stopStaleClusterServices does the same).
+func (cm *ClusterManager) teardownEvictedMember(ctx context.Context, clusterID, namespace, nodeID string) error {
+	scope := cleanupScope{ClusterID: clusterID}
+	nodeIP := ""
+	if ips, ipErr := cm.getNodeIPs(ctx, nodeID); ipErr == nil {
+		nodeIP = ips.InternalIP
+	}
+	if nodeID != cm.localNodeID {
+		inactive, err := cm.countRows(ctx, `SELECT COUNT(*) AS count FROM dns_nodes WHERE id = ? AND status != 'active'`, nodeID)
+		if err != nil {
+			return fmt.Errorf("check whether evicted node %s is active: %w", nodeID, err)
+		}
+		if inactive > 0 {
+			cause := fmt.Errorf("node %s is not active, so it cannot confirm the teardown of %s", nodeID, namespace)
+			if err := cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, teardownAction, scope, cause); err != nil {
+				return err
+			}
+			return fmt.Errorf("the teardown of %s on evicted node %s is owed, its ports stay reserved until it is replayed: %w", namespace, nodeID, cause)
+		}
+	}
+	node := staleClusterNode{NodeID: nodeID, InternalIP: nodeIP}
+	if err := cm.teardownNamespaceOnNode(ctx, node, namespace, scope); err != nil {
+		return fmt.Errorf("the teardown of %s on evicted node %s is not confirmed, its ports stay reserved until it is replayed: %w", namespace, nodeID, err)
+	}
+	return nil
 }

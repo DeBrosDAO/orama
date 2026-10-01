@@ -326,7 +326,7 @@ func TestAllocatePortBlock_withdrawsThePendingTeardownsOfThatNamespaceOnThatNode
 	r.pending("acme", "node1", "stop-rqlite", "", false)      // not destructive, not ours to withdraw
 
 	npa := NewNamespacePortAllocator(r.client, zap.NewNop())
-	if _, err := npa.AllocatePortBlock(context.Background(), "node1", "c-new", BlueprintTenant()); err != nil {
+	if _, _, err := npa.AllocatePortBlock(context.Background(), "node1", "c-new", BlueprintTenant()); err != nil {
 		t.Fatal(err)
 	}
 

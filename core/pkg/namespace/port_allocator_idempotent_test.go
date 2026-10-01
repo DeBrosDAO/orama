@@ -52,7 +52,7 @@ func TestAllocatePortBlock_committed_insert_with_lost_reply_returns_the_existing
 		func() error { committed.Store(true); return errUniqueClusterNode },
 	)
 
-	got, err := npa.AllocatePortBlock(context.Background(), "n1", "c1", BlueprintTenant())
+	got, _, err := npa.AllocatePortBlock(context.Background(), "n1", "c1", BlueprintTenant())
 	if err != nil {
 		t.Fatalf("a retry whose first insert committed must succeed, got %v", err)
 	}
@@ -65,7 +65,7 @@ func TestAllocatePortBlock_existing_block_is_returned_without_insert(t *testing.
 	want := &PortBlock{ID: "b1", PortStart: 10005}
 	npa, db := allocatorMock(func() *PortBlock { return want }, nil, func() error { return nil })
 
-	got, err := npa.AllocatePortBlock(context.Background(), "n1", "c1", BlueprintTenant())
+	got, _, err := npa.AllocatePortBlock(context.Background(), "n1", "c1", BlueprintTenant())
 	if err != nil || got.ID != "b1" {
 		t.Fatalf("got %+v, %v; want the existing block", got, err)
 	}
@@ -78,7 +78,7 @@ func TestAllocatePortBlock_lookup_error_is_reported_not_ignored(t *testing.T) {
 	boom := errors.New("registry unreachable")
 	npa, db := allocatorMock(func() *PortBlock { return nil }, boom, func() error { return nil })
 
-	_, err := npa.AllocatePortBlock(context.Background(), "n1", "c1", BlueprintTenant())
+	_, _, err := npa.AllocatePortBlock(context.Background(), "n1", "c1", BlueprintTenant())
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want it to wrap the lookup failure", err)
 	}
@@ -98,7 +98,7 @@ func TestAllocatePortBlock_lost_race_for_a_block_retries_and_succeeds(t *testing
 			return nil
 		})
 
-	got, err := npa.AllocatePortBlock(context.Background(), "n1", "c1", BlueprintTenant())
+	got, _, err := npa.AllocatePortBlock(context.Background(), "n1", "c1", BlueprintTenant())
 	if err != nil || got == nil {
 		t.Fatalf("got %v, %v; want a block after one lost race", got, err)
 	}
@@ -114,7 +114,7 @@ func TestAllocatePortBlock_backoff_stops_at_ctx_end(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := npa.AllocatePortBlock(ctx, "n1", "c1", BlueprintTenant())
+	_, _, err := npa.AllocatePortBlock(ctx, "n1", "c1", BlueprintTenant())
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want deadline exceeded", err)
 	}

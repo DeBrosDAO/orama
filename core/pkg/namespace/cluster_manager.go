@@ -1612,7 +1612,9 @@ func (cm *ClusterManager) selectNodesWaitingForLeader(ctx context.Context, count
 func (cm *ClusterManager) allocatePortsWaitingForLeader(ctx context.Context, nodeID, clusterID string, bp Blueprint) (*PortBlock, error) {
 	var block *PortBlock
 	err := retryWhileNoLeader(ctx, cm.logger, "allocate ports", func(ctx context.Context) (err error) {
-		block, err = cm.portAllocator.AllocatePortBlock(ctx, nodeID, clusterID, bp)
+		// A new cluster's id has no owed teardown to withdraw: its blocks are
+		// always its own, and a rollback may free them.
+		block, _, err = cm.portAllocator.AllocatePortBlock(ctx, nodeID, clusterID, bp)
 		return err
 	})
 	return block, err
@@ -1835,7 +1837,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 
 	// Get port allocation for this node
 	var portBlocks []PortBlock
-	portQuery := `SELECT * FROM namespace_port_allocations WHERE namespace_cluster_id = ? AND node_id = ?`
+	portQuery := `SELECT pa.* FROM namespace_port_allocations pa WHERE pa.namespace_cluster_id = ? AND pa.node_id = ? ` + notOwedTeardownSQL
 	if err := cm.db.Query(ctx, &portBlocks, portQuery, clusterID, cm.localNodeID); err != nil || len(portBlocks) == 0 {
 		return fmt.Errorf("no port allocation found for cluster %s on node %s", clusterID, cm.localNodeID)
 	}

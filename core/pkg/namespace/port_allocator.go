@@ -42,26 +42,32 @@ const (
 // is returned as is. That covers a retry after an ambiguous failure whose first
 // INSERT had in fact committed, including the case where the retry's own INSERT
 // is what hits UNIQUE(namespace_cluster_id, node_id).
-func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID, namespaceClusterID string, bp Blueprint) (*PortBlock, error) {
+//
+// owed reports that the block returned was the one an evicted member kept while
+// its teardown was unconfirmed (and the owed teardown was withdrawn): units may
+// still run on it, so an add that is rolled back must owe the teardown again
+// (rollbackPortBlock) instead of freeing the block.
+func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID, namespaceClusterID string, bp Blueprint) (*PortBlock, bool, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
 	existingBlock, err := npa.GetPortBlock(ctx, namespaceClusterID, nodeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check for an existing port block of cluster %s on node %s: %w", namespaceClusterID, nodeID, err)
+		return nil, false, fmt.Errorf("failed to check for an existing port block of cluster %s on node %s: %w", namespaceClusterID, nodeID, err)
 	}
 	if existingBlock != nil {
 		// A node evicted from this cluster while its teardown was unconfirmed
 		// keeps its block and owes the teardown (evictMemberAllocations). Given
 		// the cluster again, it must not be torn down under the member it is now.
-		if err := withdrawOwnPendingTeardown(ctx, npa.db, namespaceClusterID, nodeID); err != nil {
-			return nil, fmt.Errorf("allocate the port block of cluster %s on node %s: %w", namespaceClusterID, nodeID, err)
+		owed, err := withdrawOwnPendingTeardown(ctx, npa.db, namespaceClusterID, nodeID)
+		if err != nil {
+			return nil, false, fmt.Errorf("allocate the port block of cluster %s on node %s: %w", namespaceClusterID, nodeID, err)
 		}
 		npa.logger.Debug("Port block already allocated",
 			zap.String("node_id", nodeID),
 			zap.String("namespace_cluster_id", namespaceClusterID),
 			zap.Int("port_start", existingBlock.PortStart),
 		)
-		return existingBlock, nil
+		return existingBlock, owed, nil
 	}
 
 	retryDelay := portAllocInitialBackoff
@@ -75,20 +81,20 @@ func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID
 				zap.Int("port_end", block.PortEnd),
 				zap.Int("attempt", attempt),
 			)
-			return block, nil
+			return block, false, nil
 		}
 		if !isConflictError(err) {
-			return nil, err
+			return nil, false, err
 		}
 
 		// A conflict is either another cluster taking the block first (retry
 		// with fresh ranges) or this very allocation already being recorded.
 		existing, getErr := npa.GetPortBlock(ctx, namespaceClusterID, nodeID)
 		if getErr != nil {
-			return nil, fmt.Errorf("port allocation conflicted (%v) and the existing block of cluster %s on node %s could not be read: %w", err, namespaceClusterID, nodeID, getErr)
+			return nil, false, fmt.Errorf("port allocation conflicted (%v) and the existing block of cluster %s on node %s could not be read: %w", err, namespaceClusterID, nodeID, getErr)
 		}
 		if existing != nil {
-			return existing, nil
+			return existing, false, nil
 		}
 
 		npa.logger.Debug("Port allocation conflict, retrying",
@@ -101,13 +107,13 @@ func (npa *NamespacePortAllocator) AllocatePortBlock(ctx context.Context, nodeID
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, fmt.Errorf("port allocation for cluster %s on node %s abandoned after %d conflicts: %w", namespaceClusterID, nodeID, attempt, ctx.Err())
+			return nil, false, fmt.Errorf("port allocation for cluster %s on node %s abandoned after %d conflicts: %w", namespaceClusterID, nodeID, attempt, ctx.Err())
 		case <-timer.C:
 		}
 		retryDelay *= 2
 	}
 
-	return nil, &ClusterError{
+	return nil, false, &ClusterError{
 		Message: fmt.Sprintf("failed to allocate port block after %d retries", portAllocMaxAttempts),
 	}
 }
