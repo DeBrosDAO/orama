@@ -633,10 +633,7 @@ func (b *Builder) downloadIPFS() error {
 	url := fmt.Sprintf("https://dist.ipfs.tech/kubo/%s/%s", constants.IPFSKuboVersion, tarball)
 	tarPath := filepath.Join(b.tmpDir, tarball)
 
-	if err := downloadFile(url, tarPath); err != nil {
-		return err
-	}
-	if err := verifyPinnedSHA256(tarPath, tarball, arch, constants.IPFSKuboTarballSHA256); err != nil {
+	if err := fetchPinned(url, tarPath, tarball, arch, constants.IPFSKuboTarballSHA256); err != nil {
 		return err
 	}
 
@@ -657,10 +654,7 @@ func (b *Builder) downloadRQLite() error {
 	url := fmt.Sprintf("https://github.com/rqlite/rqlite/releases/download/v%s/%s", constants.RQLiteVersion, tarball)
 	tarPath := filepath.Join(b.tmpDir, tarball)
 
-	if err := downloadFile(url, tarPath); err != nil {
-		return err
-	}
-	if err := verifyPinnedSHA256(tarPath, tarball, arch, constants.RQLiteTarballSHA256); err != nil {
+	if err := fetchPinned(url, tarPath, tarball, arch, constants.RQLiteTarballSHA256); err != nil {
 		return err
 	}
 
