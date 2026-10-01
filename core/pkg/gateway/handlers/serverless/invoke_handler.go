@@ -2,6 +2,7 @@ package serverless
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -145,7 +146,13 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Return the function's output directly if it's JSON
+	writeInvocationOutput(w, resp)
+}
+
+// writeInvocationOutput writes a successful invocation: the function's raw
+// HTTP response when it set one, its output as it is when that is JSON, and
+// otherwise the output wrapped with the request id, status and duration.
+func writeInvocationOutput(w http.ResponseWriter, resp *serverless.InvokeResponse) {
 	w.Header().Set("X-Request-ID", resp.RequestID)
 	w.Header().Set("X-Duration-Ms", strconv.FormatInt(resp.DurationMS, 10))
 
@@ -170,8 +177,11 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Try to detect if output is JSON
-	if len(resp.Output) > 0 && (resp.Output[0] == '{' || resp.Output[0] == '[') {
+	// Output that is JSON is the function's answer and is returned as it is.
+	// The test used to be its first byte, '{' or '[', so any other JSON value —
+	// null, a number, a string, true — came back wrapped in the envelope: a
+	// function that returned null (a refused database call) read as an object.
+	if json.Valid(resp.Output) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write(resp.Output)

@@ -816,6 +816,13 @@ const client = createClient({
 const result = await client.functions.invoke("my-function", { name: "World" });
 ```
 
+A function whose output is JSON — any JSON value, `null`, a number or a string as
+much as an object — is answered with that output as it is
+(`Content-Type: application/json`). Output that is not JSON is wrapped:
+`{"request_id", "output", "status", "duration_ms"}`. An anonymous invocation on
+`ns-<name>` runs in that namespace; on the cluster's own host it must name one
+(`/v1/invoke/<namespace>/<function>`).
+
 Invoking needs the `invoke` grant, which the `invoke-only` and `app-runtime` key
 profiles both carry; deploying, secrets and triggers are control-plane and need
 an `admin` key. See [TS_SDK.md](TS_SDK.md), and
