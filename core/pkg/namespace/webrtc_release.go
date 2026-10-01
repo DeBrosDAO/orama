@@ -23,7 +23,7 @@ type webrtcUnit struct {
 // a unit (the node was unreachable, or systemd would not stop it in time) puts
 // that unit in retained: its row stays, and the caller reports the failure. The
 // row is freed when the teardown is eventually carried out
-// (releaseWebRTCPortsOfNode, from the pending-cleanup replay) or by running the
+// (releaseOwedAllocations, from the pending-cleanup replay) or by running the
 // disable again.
 func (cm *ClusterManager) releaseWebRTCPorts(ctx context.Context, clusterID string, retained []webrtcUnit) error {
 	if len(retained) == 0 {
@@ -48,18 +48,6 @@ func (cm *ClusterManager) releaseWebRTCPorts(ctx context.Context, clusterID stri
 			continue
 		}
 		if err := cm.webrtcPortAllocator.DeallocateByNode(ctx, clusterID, u.NodeID, u.ServiceType); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// releaseWebRTCPortsOfNode frees the WebRTC allocations a cluster holds on one
-// node, once a teardown that was owed there has been carried out.
-func (cm *ClusterManager) releaseWebRTCPortsOfNode(ctx context.Context, clusterID, nodeID string, serviceTypes ...string) error {
-	var errs []error
-	for _, svc := range serviceTypes {
-		if err := cm.webrtcPortAllocator.DeallocateByNode(ctx, clusterID, nodeID, svc); err != nil {
 			errs = append(errs, err)
 		}
 	}

@@ -74,7 +74,7 @@ func (r *registryRig) cluster(id, namespace string) {
 func (r *registryRig) allocation(cluster, node string) {
 	n := r.id()
 	r.exec(`INSERT INTO namespace_port_allocations (id, node_id, namespace_cluster_id, port_start, port_end, rqlite_http_port, rqlite_raft_port, olric_http_port, olric_memberlist_port, gateway_http_port)
-		VALUES (?, ?, ?, 1, 5, 1, 2, 3, 4, 5)`, fmt.Sprint("p", n), node, cluster)
+		VALUES (?, ?, ?, ?, ?, 1, 2, 3, 4, 5)`, fmt.Sprint("p", n), node, cluster, 100*n, 100*n+4)
 }
 
 func (r *registryRig) membership(cluster, node string) {
@@ -87,8 +87,17 @@ func (r *registryRig) webrtc(cluster, node, serviceType string) {
 		fmt.Sprint("w", r.id()), node, cluster, serviceType)
 }
 
+// registerNode puts a node in dns_nodes, as a node that is part of the cluster
+// is: a pending cleanup of a node with no row there is dropped as the cleanup
+// of a removed node.
+func (r *registryRig) registerNode(node string) {
+	r.exec(`INSERT OR IGNORE INTO dns_nodes (id, ip_address, internal_ip, status) VALUES (?, '192.0.2.1', ?, 'active')`,
+		node, "10.0.0."+node[len(node)-1:])
+}
+
 // pending writes a row as recordPendingCleanup does.
 func (r *registryRig) pending(namespace, node, action, cluster string, purge bool) {
+	r.registerNode(node)
 	r.cm.recordPendingCleanup(context.Background(), namespace, node, "10.0.0."+node[len(node)-1:], action,
 		cleanupScope{ClusterID: cluster, PurgeData: purge}, errors.New("node unreachable"))
 }

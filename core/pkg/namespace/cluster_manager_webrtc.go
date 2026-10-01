@@ -484,11 +484,7 @@ func (cm *ClusterManager) getClusterNodesWithIPs(ctx context.Context, clusterID 
 
 	nodes := make([]clusterNodeInfo, len(rows))
 	for i, r := range rows {
-		nodes[i] = clusterNodeInfo{
-			NodeID:     r.NodeID,
-			InternalIP: r.InternalIP,
-			PublicIP:   r.PublicIP,
-		}
+		nodes[i] = clusterNodeInfo(r)
 	}
 	return nodes, nil
 }
@@ -1720,32 +1716,52 @@ func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clu
 			return definitelyUnallocated(cm.webrtcPortAllocator.GetSFUPorts(ctx, clusterID, cm.localNodeID))
 		}},
 	} {
+		// A cheap read first: most units are inactive or allocated, and need
+		// no lock. The decision to stop is made again under it.
 		state, serr := cm.systemdSpawner.systemdMgr.ServiceState(namespaceName, svc.typ)
 		if serr != nil || !holdsOrMayRetakePorts(state) || !svc.gone() {
 			continue
 		}
-		cm.logger.Info("Stopping WebRTC service: this node no longer holds the allocation (bugboard #161)",
-			zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)))
-		if serr := cm.systemdSpawner.systemdMgr.StopService(namespaceName, svc.typ); serr != nil {
-			cm.logger.Warn("Failed to stop unallocated WebRTC service — its ports stay bound while the allocator considers them free",
-				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)), zap.Error(serr))
-			continue
-		}
-		// An enabled unit with Restart=always comes back on its own: one left
-		// enabled by an old release crash-looped on another namespace's ports
-		// hundreds of times after it was stopped, and on every boot after.
-		if derr := cm.systemdSpawner.systemdMgr.DisableService(namespaceName, svc.typ); derr != nil {
-			cm.logger.Error("Stopped an unallocated WebRTC service but could not disable it; it starts again on the next boot",
-				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)), zap.Error(derr))
-		}
-		// Verify it actually stopped. The allocator has already freed these ports,
-		// so a process that is still bound can collide with the next allocation
-		// (an overlapping relay range, or 3478 taken from under another
-		// namespace). A failed stop must be loud, not assumed.
-		if stillUp, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, svc.typ); stillUp {
-			cm.logger.Error("WebRTC service still active after stop — ports remain bound although the allocation was released; a later allocation on this host may collide",
-				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)))
-		}
+		cm.stopServiceIfStillUnallocated(namespaceName, svc.typ, svc.gone)
+	}
+}
+
+// stopServiceIfStillUnallocated stops one WebRTC unit of the namespace on this
+// node, under the namespace's lock and on what the allocator says under it. The
+// sweep's first read of the allocation was made before the lock: an enable that
+// allocated and spawned in between has put the allocation back, and stopping on
+// the earlier read would stop the unit it just started.
+func (cm *ClusterManager) stopServiceIfStillUnallocated(namespaceName string, typ systemd.ServiceType, gone func() bool) {
+	defer cm.systemdSpawner.LockNamespace(namespaceName)()
+
+	if !gone() {
+		return
+	}
+	state, serr := cm.systemdSpawner.systemdMgr.ServiceState(namespaceName, typ)
+	if serr != nil || !holdsOrMayRetakePorts(state) {
+		return
+	}
+	cm.logger.Info("Stopping WebRTC service: this node no longer holds the allocation (bugboard #161)",
+		zap.String("namespace", namespaceName), zap.String("service", string(typ)))
+	if serr := cm.systemdSpawner.systemdMgr.StopService(namespaceName, typ); serr != nil {
+		cm.logger.Warn("Failed to stop unallocated WebRTC service — its ports stay bound while the allocator considers them free",
+			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(serr))
+		return
+	}
+	// An enabled unit with Restart=always comes back on its own: one left
+	// enabled by an old release crash-looped on another namespace's ports
+	// hundreds of times after it was stopped, and on every boot after.
+	if derr := cm.systemdSpawner.systemdMgr.DisableService(namespaceName, typ); derr != nil {
+		cm.logger.Error("Stopped an unallocated WebRTC service but could not disable it; it starts again on the next boot",
+			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(derr))
+	}
+	// Verify it actually stopped. The allocator has already freed these ports,
+	// so a process that is still bound can collide with the next allocation
+	// (an overlapping relay range, or 3478 taken from under another
+	// namespace). A failed stop must be loud, not assumed.
+	if stillUp, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, typ); stillUp {
+		cm.logger.Error("WebRTC service still active after stop — ports remain bound although the allocation was released; a later allocation on this host may collide",
+			zap.String("namespace", namespaceName), zap.String("service", string(typ)))
 	}
 }
 

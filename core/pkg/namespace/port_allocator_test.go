@@ -50,18 +50,14 @@ func newMockRQLiteClient() *mockRQLiteClient {
 
 func (m *mockRQLiteClient) Query(ctx context.Context, dest any, query string, args ...any) error {
 	ifaceArgs := make([]interface{}, len(args))
-	for i, a := range args {
-		ifaceArgs[i] = a
-	}
+	copy(ifaceArgs, args)
 	m.queryCalls = append(m.queryCalls, mockQueryCall{Query: query, Args: ifaceArgs})
 	return nil
 }
 
 func (m *mockRQLiteClient) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	ifaceArgs := make([]interface{}, len(args))
-	for i, a := range args {
-		ifaceArgs[i] = a
-	}
+	copy(ifaceArgs, args)
 	m.execCalls = append(m.execCalls, mockExecCall{Query: query, Args: ifaceArgs})
 	if err, ok := m.execResults[query]; ok {
 		return nil, err

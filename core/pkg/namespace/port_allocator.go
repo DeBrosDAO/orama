@@ -206,7 +206,13 @@ func (npa *NamespacePortAllocator) allocatedRanges(ctx context.Context, nodeID s
 			Count int `db:"count"`
 		}
 		countQuery := `SELECT COUNT(DISTINCT id) as count FROM dns_nodes WHERE ip_address = ?`
-		if err := npa.db.Query(ctx, &sameIPCount, countQuery, nodeInfos[0].IPAddress); err == nil && len(sameIPCount) > 0 && sameIPCount[0].Count > 1 {
+		if err = npa.db.Query(ctx, &sameIPCount, countQuery, nodeInfos[0].IPAddress); err != nil {
+			return nil, &ClusterError{
+				Message: "failed to count nodes sharing IP " + nodeInfos[0].IPAddress,
+				Cause:   err,
+			}
+		}
+		if len(sameIPCount) > 0 && sameIPCount[0].Count > 1 {
 			query := `
 				SELECT npa.port_start, npa.port_end
 				FROM namespace_port_allocations npa

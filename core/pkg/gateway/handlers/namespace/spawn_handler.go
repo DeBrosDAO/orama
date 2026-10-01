@@ -3,6 +3,7 @@ package namespace
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -27,6 +28,13 @@ type SpawnRequest struct {
 	// namespace's tenant data (SQLite databases, deployment directories): the
 	// namespace is being deleted, not moved or rolled back.
 	PurgeData bool `json:"purge_data,omitempty"`
+
+	// ClusterID, with a teardown-* action, is the cluster the teardown was asked
+	// for. The node refuses it when its own state says the namespace here belongs
+	// to another cluster: the name was created again, and the teardown would
+	// delete the new namespace. Absent from a sender on the previous release,
+	// whose teardown is then carried out as before.
+	ClusterID string `json:"cluster_id,omitempty"`
 
 	// RQLite config (when action = "spawn-rqlite")
 	RQLiteHTTPPort    int      `json:"rqlite_http_port,omitempty"`
@@ -395,13 +403,8 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// purge_data is the namespace's delete: its SQLite databases and
 		// deployment directories go too. A node on the previous release ignores
 		// the field and keeps them.
-		teardown := h.systemdSpawner.TeardownNamespace
-		if req.PurgeData {
-			teardown = h.systemdSpawner.TeardownNamespaceAndData
-		}
-		if err := teardown(ctx, req.Namespace); err != nil {
-			h.logger.Error("Failed to tear down namespace", zap.Error(err))
-			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+		if err := h.systemdSpawner.TeardownNamespaceOfCluster(ctx, req.Namespace, req.ClusterID, req.PurgeData); err != nil {
+			h.writeTeardownFailure(w, "Failed to tear down namespace", err)
 			return
 		}
 		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
@@ -435,18 +438,16 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case "teardown-sfu":
 		// Stop, disable and remove the env/config: a restart must not find it.
-		if err := h.systemdSpawner.TeardownSFU(ctx, req.Namespace, req.NodeID); err != nil {
-			h.logger.Error("Failed to tear down SFU instance", zap.Error(err))
-			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+		if err := h.systemdSpawner.TeardownSFUOfCluster(ctx, req.Namespace, req.NodeID, req.ClusterID); err != nil {
+			h.writeTeardownFailure(w, "Failed to tear down SFU instance", err)
 			return
 		}
 		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
 
 	case "teardown-turn":
 		// Retires only the legacy per-namespace unit, never the shared host TURN.
-		if err := h.systemdSpawner.TeardownTURN(ctx, req.Namespace, req.NodeID); err != nil {
-			h.logger.Error("Failed to tear down TURN instance", zap.Error(err))
-			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+		if err := h.systemdSpawner.TeardownTURNOfCluster(ctx, req.Namespace, req.NodeID, req.ClusterID); err != nil {
+			h.writeTeardownFailure(w, "Failed to tear down TURN instance", err)
 			return
 		}
 		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
@@ -462,6 +463,18 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: fmt.Sprintf("unknown action: %s", req.Action)})
 	}
+}
+
+// writeTeardownFailure answers a failed teardown: 409 when it was refused
+// because the namespace on this node belongs to another cluster, 500 otherwise.
+func (h *SpawnHandler) writeTeardownFailure(w http.ResponseWriter, msg string, err error) {
+	if errors.Is(err, namespacepkg.ErrClusterMismatch) {
+		h.logger.Warn(msg, zap.Error(err))
+		writeSpawnResponse(w, http.StatusConflict, SpawnResponse{Error: err.Error()})
+		return
+	}
+	h.logger.Error(msg, zap.Error(err))
+	writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 }
 
 func writeSpawnResponse(w http.ResponseWriter, status int, resp SpawnResponse) {

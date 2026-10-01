@@ -435,8 +435,46 @@ nothing is sent. Allocating a port block (or WebRTC ports) to a node for a
 namespace also deletes the destructive rows owed there for that namespace. One
 window remains: an allocation written between the replay's check and its request
 reaching the node; the spawn that follows an allocation takes seconds, the
-window is one round trip. The `stop-*` rows are not checked: a repeated stop is
-harmless.
+window is one round trip, and the receiving node closes it (below). The `stop-*`
+rows are not checked: a repeated stop is harmless.
+
+Every gateway runs the reconciler, so every gateway reads the same rows. A
+replayer first **claims** a row: `claimed_until` (migration 069) is set by an
+`UPDATE` that matches one claimer only, on the row's id, the attempt count it was
+read with and a free or lapsed lease (`pendingCleanupClaimLease`, 5 minutes, so a
+gateway that died holding one blocks the row for that long and no longer). The
+claim is given back when the replay ends. A gateway that read the row before
+another replayed and failed it finds the attempt count changed and leaves the row
+to the next sweep, so `attempts` counts one replay per sweep, not one per gateway,
+and the destructive request is sent by one gateway at a time.
+
+The destructive actions also carry `cluster_id` in the spawn request, and the
+node's spawn handler refuses one (409, `ErrClusterMismatch`) when the node's own
+`cluster-state.json` names another cluster for the namespace, under the namespace's
+lock: a replay that lands after the name was created again on the node cannot tear
+the new namespace down. A request with no `cluster_id` (a sender on the previous
+release) and a node with no state file are carried out as before; a state file that
+cannot be parsed is refused, since the node cannot say whose namespace it holds.
+The state is written once the new cluster's services are up, so before that the
+claim and the registry check are what cover the node.
+
+A row leaves the table only after the allocations it kept are freed: a replay that
+succeeded, a teardown dropped because the namespace was created again on the node,
+and a row withdrawn when the namespace is given the node again all delete the
+reservations of the **row's** cluster id on that node (core block for
+`teardown-namespace`, WebRTC rows of the type for the others) and then the row. A
+release that fails keeps the row, and the next sweep repeats it; the new
+incarnation's blocks are keyed by its own cluster id and are not touched. The
+failed-cluster path of `CheckNamespaceCluster` frees the cluster's blocks the same
+way, except those of a node still owed a teardown of it.
+
+A row whose node has no row in `dns_nodes` at all was removed from the cluster, and
+its units went with it: it is dropped (logged at Warn) and its blocks are freed. A
+node that is only offline or inactive still has its row, and its cleanup stays owed.
+
+Every spawn or stop request is refused, before anything is sent, when its target
+address is not inside the WireGuard overlay (`constants.WireGuardOverlay()`); for a
+teardown the refusal is a failed send, so the row is kept.
 
 **A removed namespace is removed, not stopped.** `orama node upgrade` enables
 and restarts every namespace unit it finds on disk (a namespace directory with a

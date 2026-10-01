@@ -122,3 +122,60 @@ func TestAllocatePortBlock_backoff_stops_at_ctx_end(t *testing.T) {
 		t.Fatalf("backoff ignored ctx: took %v", elapsed)
 	}
 }
+
+// sharedIPMock answers the node-IP lookup with ip, the shared-IP count with
+// count, and fails the query whose text contains failOn (if non-empty).
+func sharedIPMock(ip string, count int, failOn string, boom error) *NamespacePortAllocator {
+	db := &recoveryMockDB{
+		queryFunc: func(dest any, query string, _ ...any) error {
+			if failOn != "" && strings.Contains(query, failOn) {
+				return boom
+			}
+			switch d := dest.(type) {
+			case *[]struct {
+				IPAddress string `db:"ip_address"`
+			}:
+				*d = []struct {
+					IPAddress string `db:"ip_address"`
+				}{{IPAddress: ip}}
+			case *[]struct {
+				Count int `db:"count"`
+			}:
+				*d = []struct {
+					Count int `db:"count"`
+				}{{Count: count}}
+			}
+			return nil
+		},
+	}
+	return NewNamespacePortAllocator(db, zap.NewNop())
+}
+
+func TestAllocatedRanges_shared_ip_count_error_is_reported(t *testing.T) {
+	boom := errors.New("count unreachable")
+	npa := sharedIPMock("1.2.3.4", 2, "COUNT(DISTINCT id)", boom)
+
+	_, err := npa.allocatedRanges(context.Background(), "n1")
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap the count failure", err)
+	}
+}
+
+func TestAllocatedRanges_shared_ip_range_query_error_is_reported(t *testing.T) {
+	boom := errors.New("ranges unreachable")
+	npa := sharedIPMock("1.2.3.4", 2, "JOIN dns_nodes", boom)
+
+	_, err := npa.allocatedRanges(context.Background(), "n1")
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap the range query failure", err)
+	}
+}
+
+func TestAllocatedRanges_shared_ip_with_no_allocations_is_empty(t *testing.T) {
+	npa := sharedIPMock("1.2.3.4", 2, "", nil)
+
+	got, err := npa.allocatedRanges(context.Background(), "n1")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("got %v, %v; want no ranges and no error", got, err)
+	}
+}

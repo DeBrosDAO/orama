@@ -2,6 +2,7 @@ package namespace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -51,11 +52,7 @@ func isPlatformNamespace(namespace string) bool {
 // caller (or the tenant reconciler's orphan sweep) tries again instead of
 // deleting the files out from under a running process.
 func (s *SystemdSpawner) TeardownNamespace(ctx context.Context, namespace string) error {
-	if isPlatformNamespace(namespace) {
-		return fmt.Errorf("refusing to tear down %q: it is not a tenant namespace", namespace)
-	}
-	defer s.LockNamespace(namespace)()
-	return s.teardownNamespace(namespace)
+	return s.TeardownNamespaceOfCluster(ctx, namespace, "", false)
 }
 
 // teardownNamespace is TeardownNamespace for a tenant namespace whose lock is
@@ -87,12 +84,28 @@ func (s *SystemdSpawner) teardownNamespace(namespace string) error {
 // its deployments — is removed too, so a namespace created again under the same
 // name does not inherit it. Nothing is removed if the teardown failed.
 func (s *SystemdSpawner) TeardownNamespaceAndData(ctx context.Context, namespace string) error {
+	return s.TeardownNamespaceOfCluster(ctx, namespace, "", true)
+}
+
+// TeardownNamespaceOfCluster is TeardownNamespace, or TeardownNamespaceAndData
+// when purgeData, for a teardown that was asked for one incarnation of the
+// namespace: clusterID is that cluster's id. The teardown is refused, with
+// ErrClusterMismatch, when this node's own state says the namespace here
+// belongs to another cluster (see refuseOtherCluster). An empty clusterID is a
+// request from a sender that does not name one, and is carried out as before.
+func (s *SystemdSpawner) TeardownNamespaceOfCluster(ctx context.Context, namespace, clusterID string, purgeData bool) error {
 	if isPlatformNamespace(namespace) {
 		return fmt.Errorf("refusing to tear down %q: it is not a tenant namespace", namespace)
 	}
 	defer s.LockNamespace(namespace)()
+	if err := s.refuseOtherCluster(namespace, clusterID); err != nil {
+		return err
+	}
 	if err := s.teardownNamespace(namespace); err != nil {
 		return err
+	}
+	if !purgeData {
+		return nil
 	}
 	removeData := s.removeTenantDataFn
 	if removeData == nil {
@@ -100,6 +113,45 @@ func (s *SystemdSpawner) TeardownNamespaceAndData(ctx context.Context, namespace
 	}
 	if err := removeData(namespace); err != nil {
 		return fmt.Errorf("remove the tenant data of namespace %s: %w", namespace, err)
+	}
+	return nil
+}
+
+// ErrClusterMismatch marks a teardown refused because this node holds the
+// namespace for another cluster than the one the teardown was asked for.
+var ErrClusterMismatch = errors.New("the namespace on this node belongs to another cluster")
+
+// refuseOtherCluster is the receiving side of the incarnation guard. A teardown
+// owed for a deleted namespace can reach a node after the name was created again
+// there; it deletes the units and data of whatever is on the node, so it would
+// destroy the new namespace. The node's cluster-state.json carries the id of the
+// cluster it serves: a teardown asked for another cluster is refused. With no
+// state file there is nothing to compare, and the teardown goes ahead; a request
+// that names no cluster is not checked. The state is written once the new
+// cluster's services are up, so the sender's claim and its registry check are
+// what cover the window before it. A state file that cannot be read is an error
+// too: the node cannot say whose it is. Call it with the namespace's lock held.
+func (s *SystemdSpawner) refuseOtherCluster(namespace, clusterID string) error {
+	if clusterID == "" {
+		return nil
+	}
+	path := filepath.Join(s.namespaceBase, namespace, "cluster-state.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s to check whose namespace %s is on this node: %w", path, namespace, err)
+	}
+	var state struct {
+		ClusterID string `json:"cluster_id"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Errorf("parse %s to check whose namespace %s is on this node: %w", path, namespace, err)
+	}
+	if state.ClusterID != "" && state.ClusterID != clusterID {
+		return fmt.Errorf("%w: refusing the teardown of %s asked for cluster %s, the node holds it for cluster %s",
+			ErrClusterMismatch, namespace, clusterID, state.ClusterID)
 	}
 	return nil
 }
@@ -129,9 +181,19 @@ func (cm *ClusterManager) teardownNamespaceOnNode(ctx context.Context, node stal
 // failed, cleared when it succeeded. nodeIP is where another node's replay
 // reaches this one.
 func (cm *ClusterManager) teardownLocalRecorded(ctx context.Context, nodeID, nodeIP, namespace string, scope cleanupScope) error {
+	if err := cm.teardownLocalKeepingRow(ctx, nodeID, nodeIP, namespace, scope); err != nil {
+		return err
+	}
+	cm.clearPendingCleanup(ctx, namespace, nodeID, teardownAction)
+	return nil
+}
+
+// teardownLocalKeepingRow is teardownLocalRecorded that leaves the row of a
+// success in place: the replay frees the allocations the row stands for before
+// it clears it (settleCleanup).
+func (cm *ClusterManager) teardownLocalKeepingRow(ctx context.Context, nodeID, nodeIP, namespace string, scope cleanupScope) error {
 	err := cm.teardownLocal(ctx, namespace, scope.PurgeData)
 	if err == nil {
-		cm.clearPendingCleanup(ctx, namespace, nodeID, teardownAction)
 		return nil
 	}
 	cm.logger.Warn("Failed to tear down the namespace on this node; recording it for retry",
@@ -214,10 +276,19 @@ func (s *SystemdSpawner) teardownWebRTCService(namespace string, svc systemd.Ser
 // It holds the namespace's lock, so the reconciler's start of the same unit
 // (spawnSFUIfDown) cannot land between the stop and the removal of its config.
 func (s *SystemdSpawner) TeardownSFU(ctx context.Context, namespace, nodeID string) error {
+	return s.TeardownSFUOfCluster(ctx, namespace, nodeID, "")
+}
+
+// TeardownSFUOfCluster is TeardownSFU for a teardown asked for one cluster; it
+// is refused like TeardownNamespaceOfCluster.
+func (s *SystemdSpawner) TeardownSFUOfCluster(ctx context.Context, namespace, nodeID, clusterID string) error {
 	if err := refuseWebRTCTeardownOfPlatform(namespace, systemd.ServiceTypeSFU); err != nil {
 		return err
 	}
 	defer s.LockNamespace(namespace)()
+	if err := s.refuseOtherCluster(namespace, clusterID); err != nil {
+		return err
+	}
 	if err := s.teardownWebRTCService(namespace, systemd.ServiceTypeSFU); err != nil {
 		return err
 	}
@@ -243,10 +314,19 @@ func (s *SystemdSpawner) TeardownSFU(ctx context.Context, namespace, nodeID stri
 // shared server is ReconcileHostTURN's job, which rewrites the tenant list
 // without restarting the process.
 func (s *SystemdSpawner) TeardownTURN(ctx context.Context, namespace, nodeID string) error {
+	return s.TeardownTURNOfCluster(ctx, namespace, nodeID, "")
+}
+
+// TeardownTURNOfCluster is TeardownTURN for a teardown asked for one cluster; it
+// is refused like TeardownNamespaceOfCluster.
+func (s *SystemdSpawner) TeardownTURNOfCluster(ctx context.Context, namespace, nodeID, clusterID string) error {
 	if err := refuseWebRTCTeardownOfPlatform(namespace, systemd.ServiceTypeTURN); err != nil {
 		return err
 	}
 	defer s.LockNamespace(namespace)()
+	if err := s.refuseOtherCluster(namespace, clusterID); err != nil {
+		return err
+	}
 	return s.teardownWebRTCService(namespace, systemd.ServiceTypeTURN)
 }
 

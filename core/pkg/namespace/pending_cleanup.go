@@ -29,6 +29,12 @@ const pendingCleanupExhaustedRetry = "-1 hours"
 // pendingCleanupBatch is how many pending cleanups one sweep replays.
 const pendingCleanupBatch = 50
 
+// pendingCleanupClaimLease is the SQLite datetime modifier for how long a
+// gateway's claim on a pending cleanup holds. It has to outlast one replay (the
+// spawn request's 60 second timeout and the bookkeeping around it); a gateway
+// that dies holding a claim blocks the row for this long and no longer.
+const pendingCleanupClaimLease = "+5 minutes"
+
 // cleanupScope says what a remote request was owed for.
 //
 // ClusterID is the incarnation of the namespace the request was made for. A
@@ -100,7 +106,19 @@ func (cm *ClusterManager) clearPendingCleanup(ctx context.Context, namespace, no
 	}
 }
 
+// clearPendingCleanupRow forgets the cleanup of one row, only if it is still the
+// one that was replayed: a row recorded again for another incarnation of the
+// namespace keeps its own.
+func (cm *ClusterManager) clearPendingCleanupRow(ctx context.Context, r pendingCleanupRow) error {
+	if _, err := cm.db.Exec(client.WithInternalAuth(ctx),
+		`DELETE FROM namespace_pending_cleanup WHERE id = ? AND cluster_id = ?`, r.ID, r.ClusterID); err != nil {
+		return fmt.Errorf("clear the completed %s of %s on node %s: %w", r.Action, r.Namespace, r.NodeID, err)
+	}
+	return nil
+}
+
 type pendingCleanupRow struct {
+	ID        int64  `db:"id"`
 	Namespace string `db:"namespace"`
 	NodeID    string `db:"node_id"`
 	NodeIP    string `db:"node_ip"`
@@ -184,8 +202,9 @@ func (cm *ClusterManager) countRows(ctx context.Context, query string, args ...a
 func (cm *ClusterManager) replayPendingCleanups(ctx context.Context) error {
 	var rows []pendingCleanupRow
 	if err := cm.db.Query(client.WithInternalAuth(ctx), &rows,
-		`SELECT namespace, node_id, node_ip, action, cluster_id, purge_data, attempts FROM namespace_pending_cleanup
-		  WHERE attempts < ? OR last_attempt_at IS NULL OR last_attempt_at <= datetime('now', ?)
+		`SELECT id, namespace, node_id, node_ip, action, cluster_id, purge_data, attempts FROM namespace_pending_cleanup
+		  WHERE (attempts < ? OR last_attempt_at IS NULL OR last_attempt_at <= datetime('now', ?))
+		    AND (claimed_until IS NULL OR claimed_until <= datetime('now'))
 		  ORDER BY created_at LIMIT ?`, pendingCleanupMaxAttempts, pendingCleanupExhaustedRetry, pendingCleanupBatch); err != nil {
 		return fmt.Errorf("read pending cleanups: %w", err)
 	}
@@ -199,10 +218,87 @@ func (cm *ClusterManager) replayPendingCleanups(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// claimPendingCleanup takes the lease on a row, and reports whether this
+// gateway got it. The tenant reconciler runs on every node's gateway, so every
+// gateway reads the same rows: the claim is an UPDATE that matches for one of
+// them only. It matches the attempt count the row was read with, so a gateway
+// that read the row before another one replayed and failed it finds the row
+// changed and leaves it to the next sweep.
+func (cm *ClusterManager) claimPendingCleanup(ctx context.Context, r pendingCleanupRow) (bool, error) {
+	res, err := cm.db.Exec(client.WithInternalAuth(ctx), `
+		UPDATE namespace_pending_cleanup SET claimed_until = datetime('now', ?)
+		 WHERE id = ? AND attempts = ? AND cluster_id = ?
+		   AND (claimed_until IS NULL OR claimed_until <= datetime('now'))`,
+		pendingCleanupClaimLease, r.ID, r.Attempts, r.ClusterID)
+	if err != nil {
+		return false, fmt.Errorf("claim the pending %s of %s on node %s: %w", r.Action, r.Namespace, r.NodeID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read the claim of the pending %s of %s on node %s: %w", r.Action, r.Namespace, r.NodeID, err)
+	}
+	return n == 1, nil
+}
+
+// releasePendingClaim gives the lease back so the next sweep can retry at once.
+// A failure is only logged: the lease lapses by itself.
+func (cm *ClusterManager) releasePendingClaim(ctx context.Context, r pendingCleanupRow) {
+	if _, err := cm.db.Exec(client.WithInternalAuth(context.WithoutCancel(ctx)),
+		`UPDATE namespace_pending_cleanup SET claimed_until = NULL WHERE id = ?`, r.ID); err != nil {
+		cm.logger.Warn("Could not release the claim on a pending cleanup; it lapses by itself",
+			zap.String("namespace", r.Namespace), zap.String("node_id", r.NodeID), zap.Error(err))
+	}
+}
+
+// nodeRemoved reports whether the registry has no record of the node at all: a
+// node deleted from dns_nodes was removed from the cluster, and its units went
+// with it. A node that is merely offline or inactive still has its row, and its
+// cleanup stays owed.
+func (cm *ClusterManager) nodeRemoved(ctx context.Context, nodeID string) (bool, error) {
+	if nodeID == cm.localNodeID {
+		return false, nil
+	}
+	n, err := cm.countRows(ctx, `SELECT COUNT(*) AS count FROM dns_nodes WHERE id = ?`, nodeID)
+	if err != nil {
+		return false, fmt.Errorf("check whether node %s is still registered: %w", nodeID, err)
+	}
+	return n == 0, nil
+}
+
+// settleCleanup ends a cleanup that no longer has to be sent: the allocations it
+// kept are freed first, and only then is the row forgotten. The other order
+// loses the ports for good when freeing them fails: nothing is left that owes
+// them, and the allocators never look at a block whose cluster is gone.
+func (cm *ClusterManager) settleCleanup(ctx context.Context, r pendingCleanupRow) error {
+	if err := cm.releaseAllocationsOfCompletedTeardown(ctx, r); err != nil {
+		return err
+	}
+	return cm.clearPendingCleanupRow(ctx, r)
+}
+
 // replayRow replays one pending cleanup. The error it returns is a failure of
-// the registry's side (the supersession check, freeing allocations); a cleanup
-// the node did not confirm is recorded again and logged, not returned.
+// the registry's side (the claim, the supersession check, freeing allocations);
+// a cleanup the node did not confirm is recorded again and logged, not
+// returned.
 func (cm *ClusterManager) replayRow(ctx context.Context, r pendingCleanupRow) error {
+	claimed, err := cm.claimPendingCleanup(ctx, r)
+	if err != nil || !claimed {
+		return err
+	}
+	defer cm.releasePendingClaim(ctx, r)
+
+	removed, err := cm.nodeRemoved(ctx, r.NodeID)
+	if err != nil {
+		return err
+	}
+	if removed {
+		cm.logger.Warn("Dropping a pending cleanup: its node is no longer registered, so it was removed from the cluster and its units went with it",
+			zap.String("namespace", r.Namespace),
+			zap.String("node_id", r.NodeID),
+			zap.String("action", r.Action),
+			zap.String("cluster_id", r.ClusterID))
+		return cm.settleCleanup(ctx, r)
+	}
 	if isDestructiveCleanup(r.Action) {
 		superseded, err := cm.pendingCleanupSuperseded(ctx, r)
 		if err != nil {
@@ -214,12 +310,13 @@ func (cm *ClusterManager) replayRow(ctx context.Context, r pendingCleanupRow) er
 				zap.String("node_id", r.NodeID),
 				zap.String("action", r.Action),
 				zap.String("cluster_id", r.ClusterID))
-			cm.clearPendingCleanup(ctx, r.Namespace, r.NodeID, r.Action)
-			return nil
+			// The old incarnation's blocks are keyed by its own cluster id, so
+			// freeing them leaves the new one's alone.
+			return cm.settleCleanup(ctx, r)
 		}
 	}
-	// replayCleanup records or clears the row itself, so the outcome is
-	// persisted whichever way it goes.
+	// replayCleanup records a failure itself and leaves the row of a success in
+	// place, for settleCleanup to clear once the allocations are freed.
 	if err := cm.replayCleanup(ctx, r); err != nil {
 		cm.logExhaustedCleanup(r, err)
 		return nil
@@ -229,7 +326,7 @@ func (cm *ClusterManager) replayRow(ctx context.Context, r pendingCleanupRow) er
 		zap.String("node_id", r.NodeID),
 		zap.String("action", r.Action),
 		zap.Int("previous_attempts", r.Attempts))
-	return cm.releaseAllocationsOfCompletedTeardown(ctx, r)
+	return cm.settleCleanup(ctx, r)
 }
 
 // replayCleanup carries out one owed cleanup on its node and records the
@@ -239,7 +336,7 @@ func (cm *ClusterManager) replayRow(ctx context.Context, r pendingCleanupRow) er
 func (cm *ClusterManager) replayCleanup(ctx context.Context, r pendingCleanupRow) error {
 	scope := cleanupScope{ClusterID: r.ClusterID, PurgeData: r.PurgeData != 0}
 	if r.NodeID == cm.localNodeID && r.Action == teardownAction {
-		return cm.teardownLocalRecorded(ctx, r.NodeID, r.NodeIP, r.Namespace, scope)
+		return cm.teardownLocalKeepingRow(ctx, r.NodeID, r.NodeIP, r.Namespace, scope)
 	}
 	ip := r.NodeIP
 	if ip == "" {
@@ -253,7 +350,7 @@ func (cm *ClusterManager) replayCleanup(ctx context.Context, r pendingCleanupRow
 		}
 		ip = resolved
 	}
-	return cm.sendStopRequest(ctx, ip, r.Action, r.Namespace, r.NodeID, scope)
+	return cm.sendStopKeepingRow(ctx, ip, r.Action, r.Namespace, r.NodeID, scope)
 }
 
 // logExhaustedCleanup says, at Error, that a cleanup has failed as many times as
@@ -282,35 +379,39 @@ func (cm *ClusterManager) releaseAllocationsOfCompletedTeardown(ctx context.Cont
 	if r.ClusterID == "" {
 		return nil
 	}
-	var services []string
-	switch r.Action {
-	case teardownSFUAction:
-		services = []string{"sfu"}
-	case teardownTURNAction:
-		services = []string{"turn"}
-	case teardownAction:
-		services = []string{"sfu", "turn"}
-	default:
-		return nil
-	}
-	if err := cm.releaseWebRTCPortsOfNode(ctx, r.ClusterID, r.NodeID, services...); err != nil {
-		return fmt.Errorf("release the WebRTC ports of %s on node %s after its teardown was completed: %w", r.Namespace, r.NodeID, err)
-	}
-	if r.Action != teardownAction {
-		return nil
-	}
-	if err := cm.releaseCorePortBlockOfNode(ctx, r.ClusterID, r.NodeID); err != nil {
-		return fmt.Errorf("release the port block of %s on node %s after its teardown was completed: %w", r.Namespace, r.NodeID, err)
+	if err := releaseOwedAllocations(ctx, cm.db, r.ClusterID, r.NodeID, r.Action); err != nil {
+		return fmt.Errorf("release the ports of %s on node %s after its cleanup was settled: %w", r.Namespace, r.NodeID, err)
 	}
 	return nil
 }
 
 // withdrawPendingTeardowns deletes the destructive cleanups still owed for a
 // namespace on a node, as the namespace is given that node: they belong to an
-// incarnation that is gone.
+// incarnation that is gone. The allocations that incarnation kept for the node
+// are freed first (they are keyed by its cluster id, so clusterID's own are not
+// touched): with the row gone nothing would owe them.
 func withdrawPendingTeardowns(ctx context.Context, db rqlite.Client, clusterID, nodeID string, actions ...string) error {
+	ctx = client.WithInternalAuth(ctx)
 	for _, action := range actions {
-		if _, err := db.Exec(client.WithInternalAuth(ctx), `
+		var owed []struct {
+			ClusterID string `db:"cluster_id"`
+		}
+		if err := db.Query(ctx, &owed, `
+			SELECT cluster_id FROM namespace_pending_cleanup
+			 WHERE node_id = ? AND action = ?
+			   AND namespace = (SELECT namespace_name FROM namespace_clusters WHERE id = ?)`,
+			nodeID, action, clusterID); err != nil {
+			return fmt.Errorf("read the pending %s of node %s: %w", action, nodeID, err)
+		}
+		for _, o := range owed {
+			if o.ClusterID == "" || o.ClusterID == clusterID {
+				continue
+			}
+			if err := releaseOwedAllocations(ctx, db, o.ClusterID, nodeID, action); err != nil {
+				return fmt.Errorf("release the ports of cluster %s on node %s before withdrawing its pending %s: %w", o.ClusterID, nodeID, action, err)
+			}
+		}
+		if _, err := db.Exec(ctx, `
 			DELETE FROM namespace_pending_cleanup
 			 WHERE node_id = ? AND action = ?
 			   AND namespace = (SELECT namespace_name FROM namespace_clusters WHERE id = ?)`,

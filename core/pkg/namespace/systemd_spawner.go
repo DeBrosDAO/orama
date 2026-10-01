@@ -587,9 +587,9 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 	if cfg.BindAddr == "" || cfg.BindAddr == "0.0.0.0" {
 		wgIP, err := getWireGuardIP()
 		if err != nil {
-			return fmt.Errorf("Olric BindAddr is %q and failed to detect WireGuard IP: %w", cfg.BindAddr, err)
+			return fmt.Errorf("olric BindAddr is %q and failed to detect WireGuard IP: %w", cfg.BindAddr, err)
 		}
-		s.logger.Warn("Olric BindAddr was invalid, resolved from wg0",
+		s.logger.Warn("olric BindAddr was invalid, resolved from wg0",
 			zap.String("original", cfg.BindAddr),
 			zap.String("resolved", wgIP),
 			zap.String("namespace", namespace))
@@ -639,7 +639,7 @@ func (s *SystemdSpawner) SpawnOlric(ctx context.Context, namespace, nodeID strin
 
 	// Wait for service to be active
 	if err := s.waitForService(ctx, namespace, systemd.ServiceTypeOlric, 30*time.Second); err != nil {
-		return fmt.Errorf("Olric service did not become active: %w", err)
+		return fmt.Errorf("olric service did not become active: %w", err)
 	}
 
 	s.logger.Info("Olric spawned successfully via systemd",
@@ -728,7 +728,7 @@ func (s *SystemdSpawner) SpawnGateway(ctx context.Context, namespace, nodeID str
 
 	// Wait for service to be active
 	if err := s.waitForService(ctx, namespace, systemd.ServiceTypeGateway, 30*time.Second); err != nil {
-		return fmt.Errorf("Gateway service did not become active: %w", err)
+		return fmt.Errorf("gateway service did not become active: %w", err)
 	}
 
 	s.logger.Info("Gateway spawned successfully via systemd",

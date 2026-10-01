@@ -9,12 +9,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -938,10 +940,25 @@ type spawnResponse struct {
 	PID     int    `json:"pid,omitempty"`
 }
 
+// requireOverlayTarget refuses a spawn target outside the WireGuard overlay.
+// The request is stamped with the cluster secret's key and carries DSNs and
+// secrets: an address read from a registry row must not be able to send it to
+// a host off the mesh.
+func requireOverlayTarget(nodeIP string) error {
+	addr, err := netip.ParseAddr(nodeIP)
+	if err != nil || !constants.WireGuardOverlay().Contains(addr) {
+		return fmt.Errorf("refusing to send a spawn request to %q: it is not an address inside the WireGuard overlay %s", nodeIP, constants.WireGuardOverlay())
+	}
+	return nil
+}
+
 // sendSpawnRequest sends a spawn/stop request to a remote node's spawn endpoint
 func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, req map[string]interface{}) (*spawnResponse, error) {
 	if cm.spawnRequestFn != nil {
 		return cm.spawnRequestFn(ctx, nodeIP, req)
+	}
+	if err := requireOverlayTarget(nodeIP); err != nil {
+		return nil, err
 	}
 	targetNodeID, _ := req["node_id"].(string)
 	if targetNodeID == "" {
@@ -1014,9 +1031,27 @@ func (cm *ClusterManager) stopGatewayOnNode(ctx context.Context, nodeID, nodeIP,
 	}
 }
 
-// sendStopRequest sends a stop or teardown request to a remote node. scope is
-// what the request is owed for, kept with the retry record of a failed one.
+// sendStopRequest sends a stop or teardown request to a remote node and, once
+// the node confirms it, forgets the retry record of it. scope is what the
+// request is owed for, kept with the retry record of a failed one.
 func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string, scope cleanupScope) error {
+	err := cm.sendStopKeepingRow(ctx, nodeIP, action, namespace, nodeID, scope)
+	if err == nil {
+		cm.clearPendingCleanup(ctx, namespace, nodeID, action)
+	}
+	return err
+}
+
+// sendStopKeepingRow is sendStopRequest that leaves the retry record of a
+// success in place: the replay frees the allocations the record stands for
+// before it clears it (settleCleanup).
+//
+// A destructive action carries the cluster id it is owed for. A teardown deletes
+// state, and the name may have been created again on the node since the request
+// was made: the node refuses a teardown whose cluster id is not the one its own
+// state belongs to. A node on the previous release does not read the field and
+// tears down as before.
+func (cm *ClusterManager) sendStopKeepingRow(ctx context.Context, nodeIP, action, namespace, nodeID string, scope cleanupScope) error {
 	req := map[string]interface{}{
 		"action":    action,
 		"namespace": namespace,
@@ -1024,6 +1059,9 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 	}
 	if scope.PurgeData && action == teardownAction {
 		req["purge_data"] = true
+	}
+	if scope.ClusterID != "" && isDestructiveCleanup(action) {
+		req["cluster_id"] = scope.ClusterID
 	}
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, req)
 	if err != nil {
@@ -1039,8 +1077,6 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 		if rerr := cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, action, scope, err); rerr != nil {
 			return fmt.Errorf("%w; %w", err, rerr)
 		}
-	} else {
-		cm.clearPendingCleanup(ctx, namespace, nodeID, action)
 	}
 	return err
 }
@@ -1475,11 +1511,15 @@ func (cm *ClusterManager) CheckNamespaceCluster(ctx context.Context, namespaceNa
 		if err := cm.removeClusterServingRecords(ctx, cluster); err != nil {
 			return "", "", false, fmt.Errorf("failed to clean up the failed cluster of namespace %s: %w", namespaceName, err)
 		}
+		// Free its port reservations, except those of a node still owed a
+		// teardown of it: that node's units may still hold them, and its
+		// replay frees them. Before the row goes, so a failure is retried.
+		if err := cm.releaseAllocationsExceptOwed(ctx, cluster.ID, namespaceName); err != nil {
+			return "", "", false, fmt.Errorf("failed to free the ports of the failed cluster of namespace %s: %w", namespaceName, err)
+		}
 		// Delete the failed cluster record
 		query := `DELETE FROM namespace_clusters WHERE id = ?`
 		cm.db.Exec(ctx, query, cluster.ID)
-		// Also clean up any port allocations
-		cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
 		return "", "", true, nil
 	}
 
@@ -1994,14 +2034,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 	// Save local state to disk for future restarts without DB dependency
 	var stateNodes []ClusterLocalStateNode
 	for _, np := range allNodePorts {
-		stateNodes = append(stateNodes, ClusterLocalStateNode{
-			NodeID:              np.NodeID,
-			InternalIP:          np.InternalIP,
-			RQLiteHTTPPort:      np.RQLiteHTTPPort,
-			RQLiteRaftPort:      np.RQLiteRaftPort,
-			OlricHTTPPort:       np.OlricHTTPPort,
-			OlricMemberlistPort: np.OlricMemberlistPort,
-		})
+		stateNodes = append(stateNodes, ClusterLocalStateNode(np))
 	}
 	localState := &ClusterLocalState{
 		ClusterID:     clusterID,
