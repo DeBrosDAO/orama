@@ -11,11 +11,11 @@ import (
 )
 
 // tenantReloadInterval is how often the shared server re-reads its config file
-// to pick up tenants that were added or removed. It matches the cert reload
-// cadence: both are "a file on disk changed and we must notice without a
-// restart", and a namespace enabling WebRTC can tolerate up to this much delay
-// before its clients can authenticate.
-const tenantReloadInterval = 15 * time.Second
+// to pick up tenants that were added or removed. Enabling WebRTC advertises the
+// relay once its host has written the tenant set, so this is the window in which
+// a client's credentials can still be refused; it is kept short, and a tick
+// costs the parse of one small file.
+const tenantReloadInterval = 2 * time.Second
 
 // tenantSet is an immutable snapshot of who this server serves. It is swapped
 // wholesale under lock rather than mutated, so an in-flight authHandler always
@@ -114,7 +114,7 @@ func (s *Server) stealthCertFor(host string) (*certReloader, bool) {
 //
 // Reuse is not just an optimisation: a reloader holds the parsed certificate, so
 // rebuilding one on every reload would re-read every tenant's cert from disk on
-// a 15s tick, and a transient read error would take a working tenant's stealth
+// a tick, and a transient read error would take a working tenant's stealth
 // endpoint down. Only genuinely new hostnames are loaded.
 func (s *Server) buildTenantSet(cfg *Config, prev *tenantSet) (*tenantSet, []*stealthCert, error) {
 	tenants := cfg.ResolvedTenants()
@@ -188,7 +188,7 @@ func (s *Server) buildTenantSet(cfg *Config, prev *tenantSet) (*tenantSet, []*st
 		// watcher. The watcher is NOT started here: buildTenantSet can still fail
 		// after this point, and a goroutine started for a set that is never
 		// installed is never referenced again — one leak per failed reload, every
-		// 15s, forever. startPendingWatchers runs once the set is live.
+		// tick, forever. startPendingWatchers runs once the set is live.
 		set.byHost[host] = &stealthCert{reloader: r, stop: make(chan struct{})}
 		pending = append(pending, set.byHost[host])
 	}

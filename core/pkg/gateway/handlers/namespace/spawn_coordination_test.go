@@ -2,6 +2,8 @@ package namespace
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -164,5 +166,42 @@ func TestDeleteHandler_replicaTeardownIsStampedForItsNode(t *testing.T) {
 	missing.SetClusterSecretPath(filepath.Join(t.TempDir(), "absent"))
 	if err := missing.signReplicaTeardown(httptest.NewRequest(http.MethodPost, "/x", nil), "node-2"); err == nil {
 		t.Fatal("signed without a cluster secret")
+	}
+}
+
+type fakeHostTURN struct {
+	err error
+	ns  string
+}
+
+func (f *fakeHostTURN) ConfirmHostTURN(_ context.Context, namespace string) error {
+	f.ns = namespace
+	return f.err
+}
+
+func TestSpawnHandler_reconcileHostTURN(t *testing.T) {
+	body := `{"action":"reconcile-host-turn","namespace":"acme","node_id":"n1"}`
+	for name, tc := range map[string]struct {
+		confirmer *fakeHostTURN
+		want      int
+	}{
+		"confirmed":     {&fakeHostTURN{}, http.StatusOK},
+		"not served":    {&fakeHostTURN{err: errors.New("does not serve acme")}, http.StatusInternalServerError},
+		"no reconciler": {nil, http.StatusInternalServerError},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, key := coordHandler(t)
+			if tc.confirmer != nil {
+				h.SetHostTURN(tc.confirmer)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, spawnRequestWith(t, key, body))
+			if w.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+			if tc.confirmer != nil && tc.confirmer.ns != "acme" {
+				t.Errorf("confirmed namespace %q, want acme", tc.confirmer.ns)
+			}
+		})
 	}
 }

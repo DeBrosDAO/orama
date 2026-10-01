@@ -149,7 +149,7 @@ func TestIsDeploymentNameConflict(t *testing.T) {
 	for msg, want := range map[string]bool{
 		"UNIQUE constraint failed: deployments.namespace, deployments.name": true,
 		"UNIQUE constraint failed: deployments.subdomain":                   false,
-		"database is locked":                                                false,
+		"database is locked": false,
 	} {
 		if got := isDeploymentNameConflict(errors.New(msg)); got != want {
 			t.Errorf("%q: %v, want %v", msg, got, want)

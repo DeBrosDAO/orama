@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -169,9 +170,23 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	// This host's part is not deferred: if it cannot apply the tenant set now,
 	// it will not on the next tick either, and enabling WebRTC is refused
 	// rather than reported done.
-	if _, err := cm.ReconcileHostTURN(ctx); err != nil {
+	served, err := cm.ReconcileHostTURN(ctx)
+	if err != nil {
 		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
 		return fmt.Errorf("failed to reconcile this host's shared TURN server for namespace %s: %w", namespaceName, err)
+	}
+	// Every other TURN host is asked to apply its tenant set now, so the relays
+	// are serving when this returns, and only hosts that confirmed are
+	// advertised. Without the ask a host picks the namespace up on its next
+	// sweep, up to a minute later, while the DNS record and the credentials
+	// already point clients at it: its relay rejected them ("TURN credential for
+	// a namespace this server does not serve") and every relay-only call
+	// failed ICE. A host that did not confirm advertises itself once its own
+	// sweep has it serving.
+	confirmedTURNIPs := cm.confirmTURNHosts(ctx, namespaceName, turnNodes, served)
+	if len(confirmedTURNIPs) == 0 {
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+		return fmt.Errorf("no TURN host confirmed it serves namespace %s; WebRTC is not enabled", namespaceName)
 	}
 	if len(turnNodes) > 0 {
 		cm.logger.Info("TURN allocated; hosts converge on their next reconcile",
@@ -218,11 +233,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	}
 
 	// 13. Create TURN DNS records
-	var turnIPs []string
-	for _, node := range turnNodes {
-		turnIPs = append(turnIPs, node.PublicIP)
-	}
-	if err := cm.dnsManager.CreateTURNRecords(ctx, namespaceName, turnIPs); err != nil {
+	if err := cm.dnsManager.CreateTURNRecords(ctx, namespaceName, confirmedTURNIPs); err != nil {
 		cm.logger.Error("Failed to create TURN DNS records, aborting WebRTC enablement",
 			zap.String("namespace", namespaceName),
 			zap.Error(err))
@@ -247,6 +258,35 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	)
 
 	return nil
+}
+
+// confirmTURNHosts returns the public IPs of the TURN nodes that are serving the
+// namespace: this node when its own reconcile served it, each other node when
+// it confirmed after applying its tenant set. A node that cannot be reached, or
+// runs a release that does not know the request, is left out and logged; its
+// own sweep advertises it once it serves.
+func (cm *ClusterManager) confirmTURNHosts(ctx context.Context, namespaceName string, turnNodes []clusterNodeInfo, served []string) []string {
+	var ips []string
+	for _, node := range turnNodes {
+		if node.NodeID == cm.localNodeID {
+			if slices.Contains(served, namespaceName) {
+				ips = append(ips, node.PublicIP)
+			}
+			continue
+		}
+		_, err := cm.sendSpawnRequest(ctx, node.InternalIP, map[string]interface{}{
+			"action":    spawnActionReconcileHostTURN,
+			"namespace": namespaceName,
+			"node_id":   node.NodeID,
+		})
+		if err != nil {
+			cm.logger.Warn("A TURN host did not confirm it serves the namespace; it is advertised once its own sweep has it serving",
+				zap.String("namespace", namespaceName), zap.String("node_id", node.NodeID), zap.Error(err))
+			continue
+		}
+		ips = append(ips, node.PublicIP)
+	}
+	return ips
 }
 
 // DisableWebRTC disables WebRTC for a namespace cluster.

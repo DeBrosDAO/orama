@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -95,6 +96,25 @@ func (cm *ClusterManager) ReconcileHostTURN(ctx context.Context) ([]string, erro
 		return nil, cm.stopHostTURNAndLegacyUnits(ctx)
 	}
 	return cm.applyHostTURN(ctx, tenants)
+}
+
+// spawnActionReconcileHostTURN is the spawn request that asks a host to apply
+// its shared TURN tenant set now and confirm it serves one namespace.
+const spawnActionReconcileHostTURN = "reconcile-host-turn"
+
+// ConfirmHostTURN reconciles this host's shared TURN server and returns nil only
+// when the namespace is one of the tenants it is configured to relay for. It is
+// what a coordinator's reconcile-host-turn request runs, so the host applies its
+// own tenant set (config is never pushed between hosts) and answers for it.
+func (cm *ClusterManager) ConfirmHostTURN(ctx context.Context, namespace string) error {
+	served, err := cm.ReconcileHostTURN(ctx)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(served, namespace) {
+		return fmt.Errorf("this host's shared TURN server does not serve namespace %s (serving %v)", namespace, served)
+	}
+	return nil
 }
 
 // applyHostTURN writes the shared config for a non-empty tenant set and makes

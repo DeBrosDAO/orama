@@ -20,7 +20,7 @@ import (
 
 // SpawnRequest represents a request to spawn or stop a namespace instance
 type SpawnRequest struct {
-	Action    string `json:"action"` // spawn-{rqlite,olric,gateway,sfu,turn}, stop-{rqlite,olric,gateway,sfu,turn}, teardown-{namespace,sfu,turn}, save-cluster-state, delete-cluster-state
+	Action    string `json:"action"` // spawn-{rqlite,olric,gateway,sfu,turn}, stop-{rqlite,olric,gateway,sfu,turn}, teardown-{namespace,sfu,turn}, save-cluster-state, delete-cluster-state, reconcile-host-turn
 	Namespace string `json:"namespace"`
 	NodeID    string `json:"node_id"`
 
@@ -121,7 +121,19 @@ type SpawnHandler struct {
 	// the node_id in its body; a request for any other node is refused, so a
 	// stamped request captured on its way to one node cannot act on another.
 	nodeID string
+	// hostTURN applies this host's shared TURN tenant set and confirms the
+	// namespace is served (action = "reconcile-host-turn").
+	hostTURN HostTURNConfirmer
 }
+
+// HostTURNConfirmer reconciles the host's shared TURN server and reports an
+// error unless it serves the namespace.
+type HostTURNConfirmer interface {
+	ConfirmHostTURN(ctx context.Context, namespace string) error
+}
+
+// SetHostTURN wires the confirmer for the "reconcile-host-turn" action.
+func (h *SpawnHandler) SetHostTURN(c HostTURNConfirmer) { h.hostTURN = c }
 
 // NewSpawnHandler creates a new spawn handler
 func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, clusterSecretPath, nodeID string, logger *zap.Logger) *SpawnHandler {
@@ -440,6 +452,18 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Stop, disable and remove the env/config: a restart must not find it.
 		if err := h.systemdSpawner.TeardownSFUOfCluster(ctx, req.Namespace, req.NodeID, req.ClusterID); err != nil {
 			h.writeTeardownFailure(w, "Failed to tear down SFU instance", err)
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "reconcile-host-turn":
+		if h.hostTURN == nil {
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: "this node has no shared TURN reconciler"})
+			return
+		}
+		if err := h.hostTURN.ConfirmHostTURN(ctx, req.Namespace); err != nil {
+			h.logger.Error("Failed to confirm the shared TURN server serves the namespace", zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}
 		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})

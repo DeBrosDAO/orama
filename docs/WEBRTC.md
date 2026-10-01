@@ -59,7 +59,7 @@ orama namespace disable webrtc --namespace myapp
 3. Allocates WebRTC port blocks on each node (SFU signaling + media range, TURN relay range)
 4. Spawns TURN on 2 nodes (selected by capacity)
 5. Spawns SFU on all 3 nodes
-6. Creates DNS A records pointing to TURN node public IPs: `turn.ns-{name}.{baseDomain}` (plain UDP/TCP TURN) and `turn-{name}.{baseDomain}` (single-label TLS host for TURNS, covered by the `*.{baseDomain}` wildcard cert)
+6. Asks every other TURN host to apply its tenant set now (`reconcile-host-turn`) and creates DNS A records pointing to the public IPs of the TURN nodes that confirmed they serve the namespace (a node that did not confirm is advertised by its own sweep once it serves; enabling fails if none confirmed): `turn.ns-{name}.{baseDomain}` (plain UDP/TCP TURN) and `turn-{name}.{baseDomain}` (single-label TLS host for TURNS, covered by the `*.{baseDomain}` wildcard cert)
 7. Updates cluster state on all nodes (for cold-boot restoration)
 
 ### What happens on disable:
@@ -311,7 +311,7 @@ the shared server resolves each one to its own HMAC secret; a namespace it does 
 serve is rejected rather than falling back to any default.
 
 The tenant list lives in `/opt/orama/.orama/data/turn/turn.yaml` (mode 0600 — it holds
-every tenant's HMAC secret) and is re-read by the running process (~15s). Namespaces
+every tenant's HMAC secret) and is re-read by the running process (~2s). Namespaces
 are added and removed without a restart, because restarting drops every tenant's
 active relays on that host.
 
