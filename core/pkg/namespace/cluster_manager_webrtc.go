@@ -1720,8 +1720,8 @@ func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clu
 			return definitelyUnallocated(cm.webrtcPortAllocator.GetSFUPorts(ctx, clusterID, cm.localNodeID))
 		}},
 	} {
-		running, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, svc.typ)
-		if !running || !svc.gone() {
+		state, serr := cm.systemdSpawner.systemdMgr.ServiceState(namespaceName, svc.typ)
+		if serr != nil || !holdsOrMayRetakePorts(state) || !svc.gone() {
 			continue
 		}
 		cm.logger.Info("Stopping WebRTC service: this node no longer holds the allocation (bugboard #161)",
@@ -1730,6 +1730,13 @@ func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clu
 			cm.logger.Warn("Failed to stop unallocated WebRTC service — its ports stay bound while the allocator considers them free",
 				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)), zap.Error(serr))
 			continue
+		}
+		// An enabled unit with Restart=always comes back on its own: one left
+		// enabled by an old release crash-looped on another namespace's ports
+		// hundreds of times after it was stopped, and on every boot after.
+		if derr := cm.systemdSpawner.systemdMgr.DisableService(namespaceName, svc.typ); derr != nil {
+			cm.logger.Error("Stopped an unallocated WebRTC service but could not disable it; it starts again on the next boot",
+				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)), zap.Error(derr))
 		}
 		// Verify it actually stopped. The allocator has already freed these ports,
 		// so a process that is still bound can collide with the next allocation
@@ -1740,6 +1747,14 @@ func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clu
 				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)))
 		}
 	}
+}
+
+// holdsOrMayRetakePorts reports whether a unit in state must be stopped when
+// its allocation is gone: running, starting, restarting or failed (systemd
+// restarts a failed Restart=always unit). Reading only "active" missed a unit
+// crash-looping on ports another namespace now holds.
+func holdsOrMayRetakePorts(state systemd.ActiveState) bool {
+	return state != "" && state != systemd.ActiveStateInactive
 }
 
 // webrtcSpawnBackoff is how long a namespace is skipped after a failed spawn.

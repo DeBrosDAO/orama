@@ -3,6 +3,8 @@ package namespace
 import (
 	"errors"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // TestWebRTCSweepFor: an unreadable config touches nothing; a namespace with
@@ -24,6 +26,23 @@ func TestWebRTCSweepFor(t *testing.T) {
 	for _, c := range cases {
 		if got := webrtcSweepFor(c.cfg, c.err); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestHoldsOrMayRetakePorts: a crash-looping orphan SFU (activating, or failed
+// between restarts) was never stopped because only "active" counted.
+func TestHoldsOrMayRetakePorts(t *testing.T) {
+	for state, want := range map[systemd.ActiveState]bool{
+		systemd.ActiveStateActive:       true,
+		systemd.ActiveStateActivating:   true,
+		systemd.ActiveStateFailed:       true,
+		systemd.ActiveStateDeactivating: true,
+		systemd.ActiveStateInactive:     false,
+		"":                              false,
+	} {
+		if got := holdsOrMayRetakePorts(state); got != want {
+			t.Errorf("%q: %v, want %v", state, got, want)
 		}
 	}
 }
