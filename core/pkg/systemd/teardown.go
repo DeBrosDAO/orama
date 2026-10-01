@@ -61,6 +61,13 @@ func (m *Manager) TeardownAllNamespaceServices(namespace string) error {
 			errs = append(errs, err)
 		}
 	}
+	// One reload for the namespace, not one per service: systemd caches a
+	// loaded unit's UnitFileState, so an instance it still remembers (failed)
+	// would read as enabled after a --no-reload disable and LocalTenantNamespaces
+	// would keep counting the namespace until the next reload.
+	if err := m.ReloadDaemon(); err != nil {
+		errs = append(errs, fmt.Errorf("reload systemd after tearing down namespace %s: %w", namespace, err))
+	}
 	return errors.Join(errs...)
 }
 

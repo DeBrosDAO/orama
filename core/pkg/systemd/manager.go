@@ -551,13 +551,17 @@ func (m *Manager) DisableService(namespace string, serviceType ServiceType) erro
 	return m.disableUnit(m.serviceName(namespace, serviceType))
 }
 
-// disableUnit disables a unit. A failed disable is success only when systemd
+// disableUnit disables a unit without systemd's implicit daemon-reload. A
+// plain `systemctl disable` reloads every unit the node has, which is what
+// starved PID 1 when namespaces were torn down: five services each. The caller
+// has stopped the unit; removing the enablement symlinks is all disable has to
+// do, and a caller that removed a unit file reloads once itself. A failed disable is success only when systemd
 // has no such unit loaded: a unit that exists and could not be disabled is one
 // the next upgrade or boot starts again.
 func (m *Manager) disableUnit(unit string) error {
 	m.logger.Info("Disabling systemd service", zap.String("service", unit))
 
-	output, err := m.runUnit("disable", unit)
+	output, err := m.runUnit("disable", privhelper.NoReloadFlag, unit)
 	if err == nil {
 		m.logger.Info("Service disabled successfully", zap.String("service", unit))
 		return nil

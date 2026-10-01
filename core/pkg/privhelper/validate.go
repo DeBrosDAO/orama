@@ -72,6 +72,12 @@ var legacyUnits = map[string]bool{
 	"wg-quick@wg0.service":       true,
 }
 
+// NoReloadFlag is the one flag the helper accepts on a systemctl verb:
+// `systemctl disable --no-reload <unit>`. Plain disable makes systemd reload
+// every unit it knows, and a node tearing namespaces down does that once per
+// service.
+const NoReloadFlag = "--no-reload"
+
 var unitVerbs = map[string]bool{"start": true, "stop": true, "restart": true, "enable": true, "disable": true}
 
 // globalUnits are the host units a global node may start, stop, restart, or
@@ -144,10 +150,10 @@ func validateSystemctl(args []string) error {
 	if !unitVerbs[verb] {
 		return fmt.Errorf("systemctl %q is not allowed", verb)
 	}
-	if len(args) != 2 {
-		return fmt.Errorf("systemctl %s takes exactly one unit", verb)
+	unit, err := systemctlUnit(args)
+	if err != nil {
+		return err
 	}
-	unit := args[1]
 	switch {
 	case namespaceUnit.MatchString(unit), deployUnit.MatchString(unit), unit == hostTURNUnit:
 		return nil
@@ -164,6 +170,20 @@ func validateSystemctl(args []string) error {
 			return fmt.Errorf("global unit %s may only be started, stopped, restarted, or queried", unit)
 		}
 		return fmt.Errorf("unit %q is not an Orama unit", unit)
+	}
+}
+
+// systemctlUnit is the unit a unit verb names. The only form with a flag is
+// `disable --no-reload <unit>`; the flag is accepted before the unit and for
+// no other verb.
+func systemctlUnit(args []string) (string, error) {
+	switch {
+	case len(args) == 2:
+		return args[1], nil
+	case len(args) == 3 && args[0] == "disable" && args[1] == NoReloadFlag:
+		return args[2], nil
+	default:
+		return "", fmt.Errorf("systemctl %s takes exactly one unit (disable also takes %s before it)", args[0], NoReloadFlag)
 	}
 }
 

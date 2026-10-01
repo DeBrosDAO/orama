@@ -49,6 +49,7 @@ func TestAuthorize_theNodeKeepsWhatItRuns(t *testing.T) {
 		{"wireguard", "remove-peer", "10.0.0.9/32"},
 		{"systemctl", "restart", "orama-namespace-rqlite@index.service"},
 		{"systemctl", "disable", "wg-quick@wg0.service"},
+		{"systemctl", "disable", "--no-reload", "orama-namespace-rqlite@acme.service"},
 		{"systemctl", "stop", "orama-olric.service"},
 		{"unitenv", "set", "index", "pubsub"},
 		{"deploy", "set-token", "alice-web"},
@@ -73,6 +74,8 @@ func TestAuthorize_theClusterGateway(t *testing.T) {
 		{"unitenv", "clear", "alice"},
 		{"deploy", "set-env", "alice-web"},
 		{"ufw", "allow", "49152:65535/udp"},
+		{"systemctl", "disable", "--no-reload", "orama-namespace-gateway@acme.service"},
+		{"systemctl", "disable", "--no-reload", "orama-deploy-node@acme-web.service"},
 		// A join, an enrolment and a node removal act on one peer at once.
 		{"wireguard", "add-peer", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "203.0.113.1:51820", "10.0.0.9/32"},
 		{"wireguard", "remove-peer", "10.0.0.9/32"},
@@ -86,6 +89,8 @@ func TestAuthorize_theClusterGateway(t *testing.T) {
 		{"wireguard", "persist-peers"},
 		{"systemctl", "disable", "wg-quick@wg0.service"},
 		{"systemctl", "stop", "caddy.service"},
+		{"systemctl", "disable", "--no-reload", "wg-quick@wg0.service"},
+		{"systemctl", "disable", "--no-reload", "caddy.service"},
 	}
 	for _, argv := range refused {
 		if err := Authorize(Caller{UID: oramaUID, Unit: IndexGatewayUnit}, mustValidate(t, argv...)); err == nil {

@@ -103,8 +103,8 @@ func authorizeGatewaySystemctl(args []string) error {
 	if len(args) > 0 && args[0] == "set-property" {
 		return nil // Validate allows it on deployment units only
 	}
-	if len(args) == 2 {
-		unit := args[1]
+	if len(args) == 2 || len(args) == 3 { // Validate allows three only as disable --no-reload <unit>
+		unit := args[len(args)-1]
 		if namespaceUnit.MatchString(unit) || deployUnit.MatchString(unit) || unit == hostTURNUnit {
 			return nil
 		}

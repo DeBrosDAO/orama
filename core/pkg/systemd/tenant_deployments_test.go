@@ -54,7 +54,7 @@ func TestStopDeploymentServicesForNamespace_leavesANamespaceWithTheSamePrefixAlo
 	}
 	calls := strings.Join(f.calls, "|")
 	if !strings.Contains(calls, "stop orama-deploy-node@acme-web.service") ||
-		!strings.Contains(calls, "disable orama-deploy-node@acme-web.service") {
+		!strings.Contains(calls, "disable --no-reload orama-deploy-node@acme-web.service") {
 		t.Fatalf("acme's deployment was not stopped and disabled: %v", f.calls)
 	}
 	if strings.Contains(calls, "acme-corp") {

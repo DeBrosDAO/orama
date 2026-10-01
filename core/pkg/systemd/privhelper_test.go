@@ -31,6 +31,12 @@ func TestPrivHelper_allowsEveryNamespaceUnitTheManagerDrives(t *testing.T) {
 			}
 		}
 	}
+	for _, st := range allServiceTypes {
+		unit := m.serviceName("index", st)
+		if _, err := privhelper.Validate([]string{privhelper.ToolSystemctl, "disable", privhelper.NoReloadFlag, unit}); err != nil {
+			t.Errorf("helper refuses the manager's disable of %s: %v", unit, err)
+		}
+	}
 	for _, verb := range []string{"start", "stop", "restart", "enable"} {
 		if _, err := privhelper.Validate([]string{privhelper.ToolSystemctl, verb, HostTURNServiceName}); err != nil {
 			t.Errorf("helper refuses systemctl %s %s: %v", verb, HostTURNServiceName, err)

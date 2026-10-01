@@ -193,3 +193,58 @@ func TestValidate_unitEnvRefusesUnitsNotRunAsOrama(t *testing.T) {
 		}
 	}
 }
+
+// Teardown disables with --no-reload so systemd does not reload every unit per
+// service. That is the only flag the helper takes, and only on disable, before
+// the unit.
+func TestValidate_disableNoReload(t *testing.T) {
+	for _, unit := range []string{
+		"orama-namespace-rqlite@acme.service",
+		"orama-namespace-gateway@acme",
+		"orama-deploy-node@acme-web.service",
+		"orama-turn.service",
+		"orama-olric.service",
+		"wg-quick@wg0.service",
+	} {
+		inv, err := Validate([]string{"systemctl", "disable", "--no-reload", unit})
+		if err != nil {
+			t.Errorf("disable --no-reload %s refused: %v", unit, err)
+			continue
+		}
+		if len(inv.Args) != 3 || inv.Args[1] != NoReloadFlag {
+			t.Errorf("args = %q, want them passed through unchanged", inv.Args)
+		}
+	}
+}
+
+func TestValidate_disableNoReloadKeepsTheUnitRules(t *testing.T) {
+	for _, argv := range [][]string{
+		{"systemctl", "disable", "--no-reload", "sshd.service"},
+		{"systemctl", "disable", "--no-reload", "orama-namespace-rqlite@../x.service"},
+		{"systemctl", "disable", "--no-reload", "orama-global-chain.service"},
+		{"systemctl", "disable", "--no-reload", ""},
+		// Flag in another position, other flags, other verbs.
+		{"systemctl", "disable", "orama-turn.service", "--no-reload"},
+		{"systemctl", "--no-reload", "disable", "orama-turn.service"},
+		{"systemctl", "disable", "--now", "orama-turn.service"},
+		{"systemctl", "disable", "--no-reload", "--now", "orama-turn.service"},
+		{"systemctl", "disable", "--now", "--no-reload", "orama-turn.service"},
+		{"systemctl", "disable", "--no-reload=yes", "orama-turn.service"},
+		{"systemctl", "disable", "--NO-RELOAD", "orama-turn.service"},
+		{"systemctl", "disable", "--no-reload"},
+		{"systemctl", "disable", "--no-reload", "orama-turn.service", "orama-olric.service"},
+		{"systemctl", "enable", "--no-reload", "orama-turn.service"},
+		{"systemctl", "stop", "--no-reload", "orama-turn.service"},
+		{"systemctl", "start", "--no-reload", "orama-turn.service"},
+		{"systemctl", "daemon-reload", "--no-reload"},
+		{"systemctl", "mask", "--no-reload", "orama-turn.service"},
+	} {
+		if _, err := Validate(argv); err == nil {
+			t.Errorf("%q was allowed", argv)
+		}
+	}
+	// wg-quick may still only be disabled.
+	if _, err := Validate([]string{"systemctl", "stop", "--no-reload", "wg-quick@wg0.service"}); err == nil {
+		t.Error("stop --no-reload wg-quick was allowed")
+	}
+}

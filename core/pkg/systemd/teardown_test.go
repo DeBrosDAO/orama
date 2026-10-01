@@ -30,7 +30,7 @@ func TestTeardownService_stopsThenDisables(t *testing.T) {
 	if err := m.TeardownService("acme", ServiceTypeGateway); err != nil {
 		t.Fatal(err)
 	}
-	want := "stop orama-namespace-gateway@acme.service|disable orama-namespace-gateway@acme.service"
+	want := "stop orama-namespace-gateway@acme.service|disable --no-reload orama-namespace-gateway@acme.service"
 	if got := strings.Join(f.calls, "|"); got != want {
 		t.Fatalf("calls = %q, want %q", got, want)
 	}
@@ -47,7 +47,7 @@ func TestTeardownAllNamespaceServices_disablesEveryTenantService(t *testing.T) {
 	}
 	disabled := map[string]bool{}
 	for _, c := range f.calls {
-		if unit, ok := strings.CutPrefix(c, "disable "); ok {
+		if unit, ok := strings.CutPrefix(c, "disable --no-reload "); ok {
 			disabled[unit] = true
 		}
 	}
@@ -69,7 +69,7 @@ func TestTeardownAllNamespaceServices_reportsAFailedDisableAndContinues(t *testi
 	m, f := newFakeManager(t)
 	m.runUnitCmd = func(args ...string) ([]byte, error) {
 		f.calls = append(f.calls, strings.Join(args, " "))
-		if args[0] == "disable" && strings.Contains(args[1], "olric") {
+		if args[0] == "disable" && strings.Contains(args[len(args)-1], "olric") {
 			return []byte("Failed to disable unit"), errors.New("exit status 1")
 		}
 		return nil, nil
@@ -79,7 +79,7 @@ func TestTeardownAllNamespaceServices_reportsAFailedDisableAndContinues(t *testi
 	if err == nil || !strings.Contains(err.Error(), "orama-namespace-olric@acme.service") {
 		t.Fatalf("err = %v, want the olric disable failure", err)
 	}
-	if !strings.Contains(strings.Join(f.calls, "|"), "disable orama-namespace-rqlite@acme.service") {
+	if !strings.Contains(strings.Join(f.calls, "|"), "disable --no-reload orama-namespace-rqlite@acme.service") {
 		t.Fatalf("rqlite was not torn down after olric failed: %v", f.calls)
 	}
 }
@@ -163,7 +163,7 @@ func TestTeardownServiceAndEnv_disablesAndRemovesTheEnv(t *testing.T) {
 	if err := m.TeardownServiceAndEnv("acme", ServiceTypeSFU); err != nil {
 		t.Fatal(err)
 	}
-	want := "stop orama-namespace-sfu@acme.service|disable orama-namespace-sfu@acme.service"
+	want := "stop orama-namespace-sfu@acme.service|disable --no-reload orama-namespace-sfu@acme.service"
 	if got := strings.Join(f.calls, "|"); got != want {
 		t.Fatalf("calls = %q, want %q", got, want)
 	}
@@ -247,5 +247,48 @@ func TestLocalTenantNamespaces_anUnreadableUnitStateIsAnError(t *testing.T) {
 	m.unitState = func(string) (unitState, error) { return unitState{}, errors.New("systemctl show failed") }
 	if _, err := m.LocalTenantNamespaces(); err == nil {
 		t.Fatal("an unreadable unit state was treated as an answer")
+	}
+}
+
+// A disable reloads systemd unless told not to, and a namespace's five
+// services made five reloads. Every disable passes --no-reload, and the
+// namespace is reloaded once at the end.
+func TestTeardownAllNamespaceServices_reloadsOnceNotPerService(t *testing.T) {
+	m, f := newFakeManager(t)
+
+	if err := m.TeardownAllNamespaceServices("acme"); err != nil {
+		t.Fatal(err)
+	}
+	reloads, disables := 0, 0
+	for _, c := range f.calls {
+		switch {
+		case c == "daemon-reload":
+			reloads++
+		case strings.HasPrefix(c, "disable "):
+			disables++
+			if !strings.HasPrefix(c, "disable --no-reload orama-namespace-") {
+				t.Errorf("disable without --no-reload: %q", c)
+			}
+		}
+	}
+	if disables != len(tenantTeardownOrder) {
+		t.Errorf("disables = %d, want %d (calls %v)", disables, len(tenantTeardownOrder), f.calls)
+	}
+	if reloads != 1 || f.calls[len(f.calls)-1] != "daemon-reload" {
+		t.Errorf("want exactly one daemon-reload, last; calls %v", f.calls)
+	}
+}
+
+func TestTeardownAllNamespaceServices_reportsAFailedReload(t *testing.T) {
+	m, f := newFakeManager(t)
+	m.runUnitCmd = func(args ...string) ([]byte, error) {
+		f.calls = append(f.calls, strings.Join(args, " "))
+		if args[0] == "daemon-reload" {
+			return []byte("Failed to reload"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	if err := m.TeardownAllNamespaceServices("acme"); err == nil || !strings.Contains(err.Error(), "reload systemd") {
+		t.Fatalf("err = %v, want the reload failure", err)
 	}
 }
