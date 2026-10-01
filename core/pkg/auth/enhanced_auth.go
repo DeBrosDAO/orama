@@ -159,7 +159,10 @@ func (store *EnhancedCredentialStore) Save() error {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
 
-	return os.WriteFile(credPath, data, 0600)
+	if err := writeCredentialFile(credPath, data); err != nil {
+		return fmt.Errorf("failed to write credentials file: %w", err)
+	}
+	return nil
 }
 
 // AddCredential adds a new credential for the gateway, or replaces the one for

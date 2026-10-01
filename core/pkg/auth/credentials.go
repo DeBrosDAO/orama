@@ -111,11 +111,9 @@ func (store *CredentialStore) SaveCredentials() error {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
 
-	// Write with restricted permissions (readable only by owner)
-	if err := os.WriteFile(credPath, data, 0600); err != nil {
+	if err := writeCredentialFile(credPath, data); err != nil {
 		return fmt.Errorf("failed to write credentials file: %w", err)
 	}
-
 	return nil
 }
 
