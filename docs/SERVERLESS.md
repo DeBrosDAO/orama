@@ -67,8 +67,9 @@ timeout: 30             # Execution timeout in seconds (1-60, default: 30)
                         # (retryable). The code "TIMEOUT" (HTTP 504) appears
                         # only when the namespace-proxy budget is exceeded.
 retry:
-  count: 0              # Retry attempts on failure (default: 0 = never retry;
-                        # a negative count or delay is refused 400 VALIDATION_FAILED)
+  count: 0              # Retry attempts on failure (0-5, default: 0 = never retry;
+                        # a count above the gateway's max_retry_count or a negative
+                        # count or delay is refused 400 VALIDATION_FAILED)
   delay: 5              # Seconds between retries (default: 5)
 env:                    # Environment variables (accessible via get_env)
   MY_VAR: "value"

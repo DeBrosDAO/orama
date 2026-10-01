@@ -962,7 +962,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		authService.Audit(),
 		logger.Logger,
 	)
-	deps.ServerlessHandlers.SetFunctionLimits(engineCfg.MaxMemoryLimitMB, engineCfg.MaxTimeoutSeconds)
+	deps.ServerlessHandlers.SetFunctionLimits(engineCfg.MaxMemoryLimitMB, engineCfg.MaxTimeoutSeconds, engineCfg.MaxRetryCount)
 	if isNamespaceGateway(cfg) {
 		deps.ServerlessHandlers.SetServedNamespace(cfg.ClientNamespace)
 	}

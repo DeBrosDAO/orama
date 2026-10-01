@@ -59,15 +59,16 @@ func (h *ServerlessHandlers) validateDefinitionLimits(def *serverless.FunctionDe
 	if err := checkDeployInt(fieldTimeoutSeconds, def.TimeoutSeconds, h.maxTimeoutSeconds, 0); err != nil {
 		return err
 	}
-	if err := checkDeployInt(fieldRetryCount, def.RetryCount, noMaximum, 0); err != nil {
+	if err := checkDeployInt(fieldRetryCount, def.RetryCount, h.maxRetryCount, minRetryValue); err != nil {
 		return err
 	}
-	return checkDeployInt(fieldRetryDelaySeconds, def.RetryDelaySeconds, noMaximum, 0)
+	return checkDeployInt(fieldRetryDelaySeconds, def.RetryDelaySeconds, noMaximum, minRetryValue)
 }
 
 // SetFunctionLimits sets the ceilings a deploy is checked against: the
 // engine's configured maxima, which are what an invocation is clamped to.
-func (h *ServerlessHandlers) SetFunctionLimits(maxMemoryLimitMB, maxTimeoutSeconds int) {
+func (h *ServerlessHandlers) SetFunctionLimits(maxMemoryLimitMB, maxTimeoutSeconds, maxRetryCount int) {
 	h.maxMemoryLimitMB = maxMemoryLimitMB
 	h.maxTimeoutSeconds = maxTimeoutSeconds
+	h.maxRetryCount = maxRetryCount
 }

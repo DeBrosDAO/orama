@@ -66,7 +66,7 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 			def.TimeoutSeconds, limitErr = parseDeployInt(fieldTimeoutSeconds, v, minLimitValue, h.maxTimeoutSeconds)
 		}
 		if v := r.FormValue(fieldRetryCount); v != "" && limitErr == nil {
-			def.RetryCount, limitErr = parseDeployInt(fieldRetryCount, v, minRetryValue, noMaximum)
+			def.RetryCount, limitErr = parseDeployInt(fieldRetryCount, v, minRetryValue, h.maxRetryCount)
 		}
 		if v := r.FormValue(fieldRetryDelaySeconds); v != "" && limitErr == nil {
 			def.RetryDelaySeconds, limitErr = parseDeployInt(fieldRetryDelaySeconds, v, minRetryValue, noMaximum)

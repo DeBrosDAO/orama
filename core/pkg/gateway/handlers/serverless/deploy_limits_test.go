@@ -137,7 +137,7 @@ func TestDeployFunction_refusesNegativeRetries(t *testing.T) {
 func TestDeployFunction_usesConfiguredMaxima(t *testing.T) {
 	reg := &recordingRegistry{mockRegistry: newMockRegistry()}
 	h := newTestHandlers(reg)
-	h.SetFunctionLimits(128, 60)
+	h.SetFunctionLimits(128, 60, 5)
 
 	rec := httptest.NewRecorder()
 	h.DeployFunction(rec, limitsDeployRequest(t, "", map[string]string{"timeout_seconds": "61"}))
@@ -149,5 +149,17 @@ func TestDeployFunction_usesConfiguredMaxima(t *testing.T) {
 	h.DeployFunction(rec, limitsDeployRequest(t, "", map[string]string{"memory_limit_mb": "129"}))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("memory 129 over a 128 MB maximum: status = %d, want 400", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.DeployFunction(rec, limitsDeployRequest(t, `{"retry_count":6}`, nil))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "retry_count") {
+		t.Fatalf("retry_count 6 over a maximum of 5: status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.DeployFunction(rec, limitsDeployRequest(t, "", map[string]string{"retry_count": "5"}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("retry_count at the maximum: status = %d, want 201: %s", rec.Code, rec.Body.String())
 	}
 }

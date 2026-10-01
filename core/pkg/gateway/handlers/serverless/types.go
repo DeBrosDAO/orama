@@ -34,6 +34,7 @@ type ServerlessHandlers struct {
 	// defaults so a handler nobody configured still refuses an absurd limit.
 	maxMemoryLimitMB  int
 	maxTimeoutSeconds int
+	maxRetryCount     int
 	invoker           *serverless.Invoker
 	engine            *serverless.Engine // for persistent WS instantiation
 	registry          serverless.FunctionRegistry
@@ -91,6 +92,7 @@ func NewServerlessHandlers(
 	return &ServerlessHandlers{
 		maxMemoryLimitMB:  defaults.MaxMemoryLimitMB,
 		maxTimeoutSeconds: defaults.MaxTimeoutSeconds,
+		maxRetryCount:     defaults.MaxRetryCount,
 		invoker:           invoker,
 		engine:            engine,
 		registry:          registry,
