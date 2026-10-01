@@ -12,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
+	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -47,6 +48,9 @@ const (
 	// ErrCodeNamespaceProvision is returned when the namespace's cluster could
 	// not be started and the create was undone.
 	ErrCodeNamespaceProvision = "NAMESPACE_PROVISION_FAILED"
+	// ErrCodeNamespaceCapacity is returned when the fleet has no node with room
+	// for the namespace's cluster, which asking again does not change.
+	ErrCodeNamespaceCapacity = "NAMESPACE_CAPACITY"
 )
 
 // namespaceName is what a namespace may be called.
@@ -290,6 +294,14 @@ func (h *CreateHandler) refuseUnprovisioned(w http.ResponseWriter, r *http.Reque
 		writeCreateJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": "the namespace's cluster could not be started and the namespace " +
 				"could not be removed again; delete namespace " + name + " to clear it",
+		})
+		return
+	}
+	if errors.Is(cause, namespacepkg.ErrInsufficientNodes) {
+		writeCreateJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "no node has room for another namespace cluster, so nothing was created; " +
+				"retrying does not help until a namespace is deleted or a node is added",
+			"code": ErrCodeNamespaceCapacity,
 		})
 		return
 	}

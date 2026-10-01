@@ -15,6 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
+	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -468,6 +469,30 @@ func TestCreate_provisioningThatDoesNotStartUndoesTheCreate(t *testing.T) {
 	}
 	if db.owned["0xowner"] != 0 {
 		t.Errorf("the wallet still owns %d namespaces", db.owned["0xowner"])
+	}
+}
+
+// A fleet with no node that has room says so, with a code of its own: "try
+// again" is wrong advice when every node is full.
+func TestCreate_noNodeWithRoomIsACapacityRefusal(t *testing.T) {
+	db := newRegistry()
+	h := NewCreateHandler(db, &recordingProvisioner{err: fmt.Errorf("select: %w", namespacepkg.ErrInsufficientNodes)}, nil, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503: %s", w.Code, w.Body.String())
+	}
+	body := decodeCreate(t, w)
+	if body["code"] != ErrCodeNamespaceCapacity {
+		t.Errorf("code %v, want %s", body["code"], ErrCodeNamespaceCapacity)
+	}
+	if reason, _ := body["error"].(string); strings.Contains(reason, "try again") {
+		t.Errorf("a full fleet was told to try again: %q", reason)
+	}
+	if _, ok := db.existing["myapp"]; ok {
+		t.Error("the namespace row was left behind")
 	}
 }
 
